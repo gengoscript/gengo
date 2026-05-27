@@ -1,29 +1,52 @@
-# gengo syntax highlighting for GNU nano
-# Load via:
-#   include "/abs/path/to/gengo.nanorc"
-
 syntax "gengo" "\.gengo$"
 
-# Comments
-color brightblack "(^|[[:space:]])//.*$"
+color brightblack "//.*$"
 
-# Keywords and literals
-color brightblue "\<(if|else|for|in|switch|case|default|return|func|struct|import|break|continue)\>"
-color magenta "\<(true|false|null|undefined)\>"
+color brightblue "\<if\>"
+color brightblue "\<else\>"
+color brightblue "\<for\>"
+color brightblue "\<in\>"
+color brightblue "\<switch\>"
+color brightblue "\<case\>"
+color brightblue "\<default\>"
+color brightblue "\<return\>"
+color brightblue "\<func\>"
+color brightblue "\<struct\>"
+color brightblue "\<import\>"
+color brightblue "\<break\>"
+color brightblue "\<continue\>"
 
-# Builtin conversion identifiers
-color cyan "\<(int|float|bool)\>"
+color magenta "\<true\>"
+color magenta "\<false\>"
+color magenta "\<null\>"
+color magenta "\<undefined\>"
 
-# Numbers
-color yellow "\<[-+]?[0-9]+(\.[0-9]+)?\>"
+color cyan "\<int\>"
+color cyan "\<float\>"
+color cyan "\<bool\>"
 
-# Rune literals: `x`
-color brightmagenta "`[^`\n]+`"
+color yellow "\<[0-9]+\>"
+color yellow "\<[0-9]+\.[0-9]+\>"
 
-# Strings (escaped and raw)
-color green "\"([^\"\\]|\\.)*\""
-color green "'[^'\n]*'"
+color green "\"[^\"]*\""
+color green "'[^']*'"
+color brightmagenta "`[^`]*`"
 
-# Operators and punctuation
-color brightred "(:=|\+\+|--|<<=|>>=|<<|>>|&&|\|\||==|!=|<=|>=|\+=|-=|\*=|/=|%=|&=|\|=|\^=|[=+\-*/%&|^~!<>?:.,;()\[\]{}])"
-
+color brightred ":="
+color brightred "=="
+color brightred "!="
+color brightred "<="
+color brightred ">="
+color brightred "&&"
+color brightred "||"
+color brightred "<<"
+color brightred ">>"
+color brightred "\+="
+color brightred "-="
+color brightred "\*="
+color brightred "/="
+color brightred "%="
+color brightred "&="
+color brightred "\|="
+color brightred "\^="
+color brightred "[=+*/%&|^~!<>?:.,;(){}\[\]-]"
