@@ -1,0 +1,6 @@
+std := import("std")
+a := [1, 2, 3, 4, 5]
+std.io.println(a[1:4])
+std.io.println(a[:2])
+std.io.println(a[3:])
+std.io.println(a[:])

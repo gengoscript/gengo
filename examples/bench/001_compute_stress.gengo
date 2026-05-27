@@ -1,0 +1,65 @@
+std := import("std")
+
+struct Grid {
+  size: int,
+  data: array
+}
+
+func is_prime(n) {
+  if n <= 1 { return false }
+  if n <= 3 { return true }
+  if n % 2 == 0 || n % 3 == 0 { return false }
+  for i := 5; i * i <= n; i += 6 {
+    if n % i == 0 || n % (i + 2) == 0 {
+      return false
+    }
+  }
+  return true
+}
+
+std.io.println("Starting compute intense benchmark...")
+
+primes := []
+candidate := 2
+for std.core.len(primes) < 300 {
+  if is_prime(candidate) {
+    primes = std.core.append(primes, candidate)
+  }
+  candidate += 1
+}
+
+std.io.println("Generated 300 primes.")
+std.io.println("Last prime found:")
+std.io.println(primes[299])
+
+grid := Grid{ size: 20, data: [] }
+for i := 0; i < 400; i += 1 {
+  prime_factor := primes[i % 300]
+  val := (i * prime_factor) % 1000
+  grid.data = std.core.append(grid.data, val)
+}
+
+std.io.println("Grid populated. Total elements:")
+std.io.println(std.core.len(grid.data))
+
+checksum := 0
+for cycle := 0; cycle < 50; cycle += 1 {
+  next_data := []
+  for idx := 0; idx < 400; idx += 1 {
+    target_idx := (idx + cycle) % 400
+    current_val := grid.data[target_idx]
+    new_val := (current_val + cycle) % 777
+    next_data = std.core.append(next_data, new_val)
+    if idx % 10 == 0 {
+      checksum += new_val
+    }
+  }
+  grid.data = next_data
+  if cycle % 10 == 0 {
+    std.core.gc()
+  }
+}
+
+std.io.println("Computation complete!")
+std.io.println("Final Checksum:")
+std.io.println(checksum)

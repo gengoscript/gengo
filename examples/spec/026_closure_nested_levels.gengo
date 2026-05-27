@@ -1,0 +1,13 @@
+std := import("std")
+
+outer := func(a) {
+  return func(b) {
+    return func(c) {
+      return a + b + c
+    }
+  }
+}
+
+f := outer(1)
+g := f(2)
+std.io.println(g(3))

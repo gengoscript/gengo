@@ -1,0 +1,13 @@
+std := import("std")
+
+make_counter := func() {
+  s := 0
+  return func(x) {
+    s += x
+    return s
+  }
+}
+
+c := make_counter()
+std.io.println(c(2))
+std.io.println(c(3))

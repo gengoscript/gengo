@@ -1,0 +1,29 @@
+# gengo syntax highlighting for GNU nano
+# Load via:
+#   include "/abs/path/to/gengo.nanorc"
+
+syntax "gengo" "\.gengo$"
+
+# Comments
+color brightblack "(^|[[:space:]])//.*$"
+
+# Keywords and literals
+color brightblue "\<(if|else|for|in|switch|case|default|return|func|struct|import|break|continue)\>"
+color magenta "\<(true|false|null|undefined)\>"
+
+# Builtin conversion identifiers
+color cyan "\<(int|float|bool)\>"
+
+# Numbers
+color yellow "\<[-+]?[0-9]+(\.[0-9]+)?\>"
+
+# Rune literals: `x`
+color brightmagenta "`[^`\n]+`"
+
+# Strings (escaped and raw)
+color green "\"([^\"\\]|\\.)*\""
+color green "'[^'\n]*'"
+
+# Operators and punctuation
+color brightred "(:=|\+\+|--|<<=|>>=|<<|>>|&&|\|\||==|!=|<=|>=|\+=|-=|\*=|/=|%=|&=|\|=|\^=|[=+\-*/%&|^~!<>?:.,;()\[\]{}])"
+

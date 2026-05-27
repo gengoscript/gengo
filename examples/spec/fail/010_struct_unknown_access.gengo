@@ -1,0 +1,4 @@
+std := import("std")
+struct User { id }
+u := User{ id: 1 }
+std.io.println(u.name)

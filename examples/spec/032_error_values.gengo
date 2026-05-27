@@ -1,0 +1,8 @@
+std := import("std")
+
+err := std.core.error("boom")
+std.io.println(std.core.is_error(err))
+std.io.println(err)
+
+x := 123
+std.io.println(std.core.is_error(x))

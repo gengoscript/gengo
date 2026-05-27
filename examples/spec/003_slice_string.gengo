@@ -1,0 +1,6 @@
+std := import("std")
+s := "hello world"
+std.io.println(s[1:5])
+std.io.println(s[:5])
+std.io.println(s[6:])
+std.io.println(s[:])

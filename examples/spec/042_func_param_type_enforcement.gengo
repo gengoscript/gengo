@@ -1,0 +1,14 @@
+std := import("std")
+
+struct User { name: string }
+
+func sum(a int, b: int) {
+  return a + b
+}
+
+typed_closure := func(u User) {
+  return u.name
+}
+
+std.io.println(sum(10, 20))
+std.io.println(typed_closure(User{ name: "ok" }))

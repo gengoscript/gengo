@@ -1,0 +1,5 @@
+std := import("std")
+
+std.io.println(`A`)
+std.io.println(`å`)
+std.io.println(`🙂`)

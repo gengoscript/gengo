@@ -1,0 +1,12 @@
+std := import("std")
+
+raw := 'α\\n
+       'β🙂'
+esc := "x\n
+       "y"
+
+m := { `A`: std.conv.to_string(`🙂`), "k": raw + esc }
+
+std.io.println(std.core.len(m["k"]))
+std.io.println(std.core.bytelen(m["k"]))
+std.io.println(m[`A`])

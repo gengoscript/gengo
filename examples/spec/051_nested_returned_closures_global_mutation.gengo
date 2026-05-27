@@ -1,0 +1,25 @@
+std := import("std")
+
+g := 10
+
+func outer(seed int) {
+  local := seed
+  return func(step int) {
+    mid := step
+    return func(delta int) {
+      local += delta
+      mid += 1
+      g += local + mid
+      return g
+    }
+  }
+}
+
+mk := outer(2)
+a := mk(3)
+b := mk(7)
+
+std.io.println(a(1))
+std.io.println(a(2))
+std.io.println(b(1))
+std.io.println(g)

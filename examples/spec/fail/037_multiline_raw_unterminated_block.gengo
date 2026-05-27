@@ -1,0 +1,7 @@
+std := import("std")
+
+s := 'raw start
+   'continues
+   'still no close
+
+std.io.println(s)

@@ -1,0 +1,9 @@
+std := import("std")
+s := ""
+for i := 0; i < 200; i += 1 {
+  s = s + "a"
+  if i % 25 == 0 {
+    std.core.gc()
+  }
+}
+std.io.println(std.core.len(s))

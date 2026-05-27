@@ -1,0 +1,5 @@
+func needs_int(x int) {
+  return x
+}
+
+needs_int("nope")

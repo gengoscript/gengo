@@ -1,0 +1,14 @@
+std := import("std")
+
+s := "åäö🙂漢字" // 6 runes
+sum := 0
+
+for n := 0; n < 12000; n += 1 {
+    for i := 0; i <= 6; i += 1 {
+        p := s[0:i]
+        sum += std.core.bytelen(p)
+    }
+}
+
+std.io.println("UTF8 slice heavy")
+std.io.println(sum)

@@ -1,0 +1,18 @@
+std := import("std")
+
+struct Addr { city: string }
+struct User { id: int, name: string, active: bool, score: float, tags: array, meta: map, addr: Addr }
+
+u := User{
+  id: 7,
+  name: "mikael",
+  active: true,
+  score: 3.5,
+  tags: [1, 2],
+  meta: {x: 1},
+  addr: Addr{ city: "stockholm" }
+}
+
+u.id = 8
+u.score = 4.25
+std.io.println(u.id, u.addr.city)

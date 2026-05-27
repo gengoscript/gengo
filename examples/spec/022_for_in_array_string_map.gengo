@@ -1,0 +1,25 @@
+std := import("std")
+
+sum := 0
+for x in [1, 2, 3] {
+  sum += x
+}
+std.io.println(sum)
+
+s := "ab"
+out := ""
+for ch in s {
+  out += ch
+}
+std.io.println(out)
+
+m := {a: 1, b: 2}
+acc := 0
+for k, v in m {
+  if k == "a" {
+    acc += v
+  } else if k == "b" {
+    acc += v
+  }
+}
+std.io.println(acc)

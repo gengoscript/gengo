@@ -1,0 +1,5 @@
+std := import("std")
+a := [1,2]
+a = std.core.append(a, 3, 4)
+std.io.println(std.core.len(a))
+std.io.println(a[3])

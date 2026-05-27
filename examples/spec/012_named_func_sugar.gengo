@@ -1,0 +1,7 @@
+std := import("std")
+
+func add(a, b) {
+    return a + b
+}
+
+std.io.println(add(10, 32))

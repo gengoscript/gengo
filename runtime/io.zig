@@ -1,0 +1,154 @@
+const sc = @import("libsc");
+const vmod = @import("../lang/value.zig");
+const Value = vmod.Value;
+
+const stdout_fd: i32 = 1;
+const stderr_fd: i32 = 2;
+
+pub fn write(s: []const u8) void {
+    _ = sc.fd.writeAll(stdout_fd, s);
+}
+
+pub fn werr(s: []const u8) void {
+    _ = sc.fd.writeAll(stderr_fd, s);
+}
+
+pub fn writeUint(v: u64) void {
+    if (v == 0) {
+        write("0");
+        return;
+    }
+    var buf: [24]u8 = undefined;
+    var n = v;
+    var len: usize = 0;
+    while (n > 0) {
+        buf[len] = '0' + @as(u8, @intCast(n % 10));
+        len += 1;
+        n /= 10;
+    }
+    var i: usize = 0;
+    while (i < len / 2) : (i += 1) {
+        const t = buf[i];
+        buf[i] = buf[len - 1 - i];
+        buf[len - 1 - i] = t;
+    }
+    write(buf[0..len]);
+}
+
+pub fn writeInt(v: i64) void {
+    if (v < 0) {
+        write("-");
+        writeUint(@intCast(-v));
+    } else writeUint(@intCast(v));
+}
+
+pub fn writeF64(v: f64) void {
+    if (v != v) {
+        write("NaN");
+        return;
+    }
+    var n = v;
+    if (n < 0.0) {
+        write("-");
+        n = -n;
+    }
+    if (n < 1.8446744073709552e19) {
+        const tr = @trunc(n);
+        if (tr == n) {
+            writeUint(@intFromFloat(tr));
+            return;
+        }
+    }
+    const ip = @trunc(n);
+    writeUint(@intFromFloat(ip));
+    write(".");
+    var frac = n - ip;
+    var digits: [10]u8 = undefined;
+    var dlen: usize = 0;
+    var i: usize = 0;
+    while (i < 6) : (i += 1) {
+        frac *= 10.0;
+        const d = @trunc(frac);
+        digits[dlen] = '0' + @as(u8, @intFromFloat(d));
+        dlen += 1;
+        frac -= d;
+    }
+    while (dlen > 1 and digits[dlen - 1] == '0') dlen -= 1;
+    write(digits[0..dlen]);
+}
+
+pub fn printValue(v: Value) void {
+    switch (v) {
+        .number => |n| writeF64(n),
+        .rune => |r| writeUint(r),
+        .boolean => |b| write(if (b) "true" else "false"),
+        .string => |s| write(s),
+        .error_value => |s| {
+            write("error(");
+            write(s);
+            write(")");
+        },
+        .null => write("undefined"),
+        .object => |obj| switch (obj.*) {
+            .dyn_string => |s| write(s),
+            .array, .array_managed => |items| {
+                write("[");
+                for (items, 0..) |item, i| {
+                    if (i > 0) write(", ");
+                    printValue(item);
+                }
+                write("]");
+            },
+            .map, .map_managed => |items| {
+                write("{");
+                for (items, 0..) |item, i| {
+                    if (i > 0) write(", ");
+                    switch (item.key) {
+                        .string => |s| write(s),
+                        else => printValue(item.key),
+                    }
+                    write(": ");
+                    printValue(item.value);
+                }
+                write("}");
+            },
+            .map_hashed => |hm| {
+                write("{");
+                for (hm.entries[0..hm.len], 0..) |item, i| {
+                    if (i > 0) write(", ");
+                    switch (item.key) {
+                        .string => |s| write(s),
+                        else => printValue(item.key),
+                    }
+                    write(": ");
+                    printValue(item.value);
+                }
+                write("}");
+            },
+            .function => write("<func>"),
+            .closure => write("<closure>"),
+            .cell => write("<cell>"),
+            .native_function => write("<native-func>"),
+            .struct_type => |st| {
+                write("<struct ");
+                write(st.name);
+                write(">");
+            },
+            .struct_instance => |inst| {
+                write(inst.typ.struct_type.name);
+                write("{");
+                for (inst.fields, 0..) |item, i| {
+                    if (i > 0) write(", ");
+                    switch (item.key) {
+                        .string => |s| write(s),
+                        else => printValue(item.key),
+                    }
+                    write(": ");
+                    printValue(item.value);
+                }
+                write("}");
+            },
+            .iterator => write("<iter>"),
+        },
+    }
+}

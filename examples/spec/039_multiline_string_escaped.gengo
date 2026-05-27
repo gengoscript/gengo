@@ -1,0 +1,7 @@
+std := import("std")
+
+s := "Line 1\n
+     "Line 2 with \"quotes\"
+     "Line 3"
+
+std.io.println(s)

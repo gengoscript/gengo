@@ -1,0 +1,2 @@
+func takes_rune(x rune) { return x }
+takes_rune("no")

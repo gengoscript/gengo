@@ -1,0 +1,8 @@
+std := import("std")
+arr := []
+for i := 0; i < 200; i += 1 {
+  arr = std.core.append(arr, { i: i })
+}
+std.core.gc()
+std.io.println(std.core.len(arr))
+std.io.println(std.core.gc_live_objects() > 0)

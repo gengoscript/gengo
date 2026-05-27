@@ -1,0 +1,11 @@
+std := import("std")
+
+s := "åäö"
+std.io.println(std.core.len(s))
+std.io.println(std.core.bytelen(s))
+std.io.println(s[1])
+std.io.println(s[1:3])
+for i, ch in s {
+  std.io.println(i)
+  std.io.println(ch)
+}

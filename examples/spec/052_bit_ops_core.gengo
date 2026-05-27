@@ -1,0 +1,13 @@
+std := import("std")
+
+x := 10
+y := 12
+std.io.println(x & y)
+std.io.println(x | y)
+std.io.println(x ^ y)
+std.io.println(~x)
+std.io.println(x << 1)
+std.io.println(y >> 2)
+
+r := `A`
+std.io.println(r & 15)

@@ -1,0 +1,2 @@
+struct X { name: string }
+x := X{ name: null }

@@ -1,0 +1,7 @@
+std := import("std")
+
+std.io.println(std.conv.to_int(3.9))
+std.io.println(std.conv.to_float("12.5"))
+std.io.println(std.conv.to_bool(""))
+std.io.println(std.conv.to_bool("x"))
+std.io.println(std.conv.to_string(null))

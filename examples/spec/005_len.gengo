@@ -1,0 +1,6 @@
+std := import("std")
+a := [1, 2, 3]
+m := {a: 1, b: 2}
+std.io.println(std.core.len("abc"))
+std.io.println(std.core.len(a))
+std.io.println(std.core.len(m))

@@ -1,0 +1,21 @@
+std := import("std")
+
+x := 10
+x &= 12
+std.io.println(x)
+x |= 1
+std.io.println(x)
+x ^= 3
+std.io.println(x)
+x <<= 2
+std.io.println(x)
+x >>= 1
+std.io.println(x)
+
+obj := { n: 8, arr: [16], m: { "k": 32 } }
+obj.n >>= 1
+obj.arr[0] <<= 1
+obj.m["k"] ^= 7
+std.io.println(obj.n)
+std.io.println(obj.arr[0])
+std.io.println(obj.m.k)

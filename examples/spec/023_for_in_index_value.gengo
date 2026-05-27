@@ -1,0 +1,8 @@
+std := import("std")
+
+sum := 0
+for i, v in [10, 20, 30] {
+  sum += i
+  sum += v
+}
+std.io.println(sum)

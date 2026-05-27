@@ -1,0 +1,14 @@
+std := import("std")
+
+x := 2
+switch x {
+  case 1 { std.io.println("one") }
+  case 2 { std.io.println("two") }
+  default { std.io.println("other") }
+}
+
+y := "q"
+switch y {
+  case "x" { std.io.println("x") }
+  default { std.io.println("d") }
+}

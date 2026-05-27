@@ -1,0 +1,2 @@
+struct User { addr: Addr }
+struct Addr { city: string }

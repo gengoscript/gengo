@@ -1,0 +1,2 @@
+struct User { id: int }
+struct User { id: int }

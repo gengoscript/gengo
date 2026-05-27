@@ -1,0 +1,7 @@
+std := import("std")
+
+struct User { id, name, active }
+u := User{ id: 7, name: "mikael", active: true }
+std.io.println(u.name)
+u.name = "mk"
+std.io.println(u.name, std.core.len(u))

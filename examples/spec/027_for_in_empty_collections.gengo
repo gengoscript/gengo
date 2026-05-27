@@ -1,0 +1,13 @@
+std := import("std")
+
+n := 0
+for x in [] {
+  n += 1
+}
+for x in "" {
+  n += 1
+}
+for k, v in {} {
+  n += 1
+}
+std.io.println(n)

@@ -1,0 +1,2 @@
+struct X { id: int|string }
+x := X{ id: true }

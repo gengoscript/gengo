@@ -1,0 +1,12 @@
+std := import("std")
+
+func divmod(n, d) {
+  return n / d, n % d
+}
+
+q, r := divmod(15, 5)
+std.io.println(q)
+std.io.println(r)
+
+a, b := 1, 2
+std.io.println(a + b)

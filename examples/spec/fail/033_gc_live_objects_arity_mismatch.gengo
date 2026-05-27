@@ -1,0 +1,2 @@
+std := import("std")
+std.core.gc_live_objects(1)

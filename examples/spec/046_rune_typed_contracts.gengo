@@ -1,0 +1,8 @@
+std := import("std")
+
+struct Glyph { ch: rune }
+func takes_rune(x rune) { return x }
+
+g := Glyph{ ch: `å` }
+std.io.println(g.ch)
+std.io.println(takes_rune(`🙂`))

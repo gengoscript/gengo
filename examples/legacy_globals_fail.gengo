@@ -1,0 +1,2 @@
+// Expected: compile-time undefined variable (legacy globals removed)
+println(len([1, 2, 3]))

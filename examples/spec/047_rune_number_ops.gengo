@@ -1,0 +1,7 @@
+std := import("std")
+
+r := `A`
+std.io.println(r + 1)
+std.io.println(r > 60)
+std.io.println(bool(r))
+std.io.println(int(r))

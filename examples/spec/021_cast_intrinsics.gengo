@@ -1,0 +1,7 @@
+std := import("std")
+
+std.io.println(int(3.9))
+std.io.println(int(-3.9))
+std.io.println(float(true), float(false))
+std.io.println(bool(0), bool(2))
+std.io.println(int(true), int(false))

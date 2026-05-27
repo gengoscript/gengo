@@ -1,0 +1,6 @@
+std := import("std")
+
+a := [1, 2]
+b := std.core.append(a, 3, 4)
+std.io.println(a)
+std.io.println(b)

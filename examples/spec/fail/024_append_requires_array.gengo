@@ -1,0 +1,2 @@
+std := import("std")
+std.core.append(1, 2)

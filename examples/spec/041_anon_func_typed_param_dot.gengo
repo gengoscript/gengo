@@ -1,0 +1,15 @@
+std := import("std")
+
+struct Target { value: int }
+
+func test_named(t Target) {
+  std.io.println(t.value)
+}
+
+test_anon := func(t Target) {
+  std.io.println(t.value)
+}
+
+obj := Target{ value: 100 }
+test_named(obj)
+test_anon(obj)

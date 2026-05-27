@@ -1,0 +1,15 @@
+std := import("std")
+
+s := ""
+for i := 0; i < 1200; i += 1 {
+  s = s + "xy"
+  if i % 8 == 0 {
+    std.core.gc()
+  }
+}
+
+stats := std.core.gc_stats()
+std.io.println(stats.heap_used_bytes > 0)
+std.io.println(stats.heap_size_bytes >= stats.heap_used_bytes)
+std.io.println(stats.live_objects >= 0)
+std.io.println(std.core.len(s) > 0)

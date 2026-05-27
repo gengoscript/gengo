@@ -1,0 +1,2 @@
+f := func(a) { return a }
+f()

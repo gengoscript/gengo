@@ -1,0 +1,3 @@
+struct User { name: string }
+u := User{ name: "a" }
+u.nope("x")

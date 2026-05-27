@@ -1,0 +1,5 @@
+func pair() {
+  return 1, 2
+}
+
+a, b, c := pair()

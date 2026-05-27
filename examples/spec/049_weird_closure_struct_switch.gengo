@@ -1,0 +1,20 @@
+std := import("std")
+
+struct Box { tag: rune, n: int }
+
+func mk(seed int) {
+  acc := seed
+  return func(b Box) {
+    switch b.n % 3 {
+      case 0 { acc += b.n }
+      case 1 { acc += int(b.tag) }
+      default { acc += std.core.len(std.conv.to_string(b.tag)) }
+    }
+    return acc
+  }
+}
+
+f := mk(5)
+std.io.println(f(Box{ tag: `å`, n: 4 }))
+std.io.println(f(Box{ tag: `🙂`, n: 2 }))
+std.io.println(f(Box{ tag: `A`, n: 6 }))

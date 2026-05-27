@@ -1,0 +1,7 @@
+std := import("std")
+
+s := "A
+   B
+   "C"
+
+std.io.println(s)

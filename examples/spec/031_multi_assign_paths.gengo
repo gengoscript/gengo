@@ -1,0 +1,9 @@
+std := import("std")
+
+obj := { a: { b: 0 }, arr: [0, 0], m: { "k": 0 } }
+
+obj.a.b, obj.arr[1], obj.m["k"] = 11, 22, 33
+
+std.io.println(obj.a.b)
+std.io.println(obj.arr[1])
+std.io.println(obj.m.k)

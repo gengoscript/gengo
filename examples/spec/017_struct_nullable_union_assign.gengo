@@ -1,0 +1,9 @@
+std := import("std")
+
+struct X { v: ?int|string }
+x := X{ v: null }
+std.io.println(x.v)
+x.v = 9
+std.io.println(x.v)
+x.v = "s"
+std.io.println(x.v)

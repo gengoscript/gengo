@@ -1,0 +1,15 @@
+std := import("std")
+
+s := ""
+for i := 0; i < 800; i += 1 {
+  s = s + "abcd"
+  if std.core.len(s) > 64 {
+    s = s[std.core.len(s)-32:]
+  }
+  if i % 20 == 0 {
+    std.core.gc()
+  }
+}
+
+std.io.println(std.core.len(s))
+std.io.println(std.core.gc_live_objects() > 0)

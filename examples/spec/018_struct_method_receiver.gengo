@@ -1,0 +1,11 @@
+std := import("std")
+
+struct User { name: string }
+
+func (u User) rename(name: string) {
+    u.name = name
+}
+
+u := User{ name: "a" }
+u.rename("b")
+std.io.println(u.name)

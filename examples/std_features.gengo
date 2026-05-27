@@ -1,0 +1,23 @@
+std := import("std")
+
+nums := [1, 2, 3, 4, 5]
+mid := nums[1:4]
+msg := "hello world"
+sub := msg[0:5]
+
+m := {a: 1, b: 2}
+std.io.println(mid)
+std.io.println(sub)
+std.io.println(m["a"], std.core.len(m), std.core.len(sub))
+
+sum := 0
+for i := 0; i < 10; i++ {
+    if i == 3 {
+        continue
+    }
+    if i == 7 {
+        break
+    }
+    sum += i
+}
+std.io.println(sum)

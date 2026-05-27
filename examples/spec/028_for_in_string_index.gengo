@@ -1,0 +1,9 @@
+std := import("std")
+
+sum := 0
+for i, ch in "abc" {
+  if ch == "a" { sum += i }
+  if ch == "b" { sum += i }
+  if ch == "c" { sum += i }
+}
+std.io.println(sum)

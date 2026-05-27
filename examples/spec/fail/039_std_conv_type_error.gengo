@@ -1,0 +1,2 @@
+std := import("std")
+std.conv.to_float("abc")

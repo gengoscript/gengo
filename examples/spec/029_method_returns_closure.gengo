@@ -1,0 +1,16 @@
+std := import("std")
+
+struct Counter { value: int }
+
+func (c Counter) adder(delta: int) {
+  return func(x) {
+    c.value += delta
+    c.value += x
+    return c.value
+  }
+}
+
+c := Counter{ value: 1 }
+f := c.adder(2)
+std.io.println(f(3))
+std.io.println(f(1))

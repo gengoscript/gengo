@@ -1,0 +1,2 @@
+struct User { id }
+u := User{ id: 1, extra: 2 }

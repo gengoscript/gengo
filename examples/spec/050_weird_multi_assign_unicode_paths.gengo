@@ -1,0 +1,9 @@
+std := import("std")
+
+obj := { a: { b: [`A`, `🙂`] }, m: {} }
+
+obj.m["ζ"], obj.a.b[0] = std.conv.to_string(`å`), `B`
+
+std.io.println(obj.m["ζ"])
+std.io.println(std.conv.to_string(obj.a.b[0]))
+std.io.println(std.core.len(std.conv.to_string(obj.a.b[1])))

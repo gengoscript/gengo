@@ -1,0 +1,17 @@
+std := import("std")
+
+sum := 0
+arr := []
+
+for i := 0; i < 80; i += 1 {
+  v := (i * 7 + 3) % 97
+  arr = std.core.append(arr, v)
+}
+
+for i := 0; i < std.core.len(arr); i += 1 {
+  sum += arr[i]
+}
+
+std.io.println("Tiny-safe benchmark")
+std.io.println(std.core.len(arr))
+std.io.println(sum)
