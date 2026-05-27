@@ -37,3 +37,12 @@ make test
 - File extension is `.gengo`.
 - `import("std")` is the supported builtin namespace.
 - Language behavior may change as the project evolves.
+
+## Browser Playground
+
+A GitHub Pages playground is included under `playground/`.
+
+- It runs the WASI `gengo-test.wasm` in-browser.
+- It mounts your script as an in-memory file (`script.gengo`) and executes it.
+
+After pushing to `main`, the Pages workflow publishes the site.
