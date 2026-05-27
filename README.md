@@ -1,4 +1,4 @@
-# gengo
+# Gengo (言語)
 
 gengo is a small embeddable scripting language/runtime implemented in Zig.
 
@@ -15,7 +15,7 @@ make wasi
 Run a script:
 
 ```bash
-wasmtime --dir / ./gengo-test.wasm -- examples/simple_math.gengo
+wasmtime --dir . ./gengo-test.wasm -- examples/simple_math.gengo
 ```
 
 Run conformance tests:

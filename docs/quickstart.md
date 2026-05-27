@@ -5,33 +5,33 @@
 Default (dev preset):
 
 ```bash
-make -C userland/cmd/gengo config-dev
-make -C userland/cmd/gengo wasi
+make config-dev
+make wasi
 ```
 
 Tiny preset:
 
 ```bash
-make -C userland/cmd/gengo wasi-tiny
+make wasi-tiny
 ```
 
 Stress preset:
 
 ```bash
-make -C userland/cmd/gengo wasi-stress
+make wasi-stress
 ```
 
 ## Run a Script
 
 ```bash
-wasmtime --dir . userland/cmd/gengo/gengo-test.wasm -- path/to/script.gengo
+wasmtime --dir . ./gengo-test.wasm -- path/to/script.gengo
 ```
 
 With backend selection:
 
 ```bash
-wasmtime --dir . userland/cmd/gengo/gengo-test.wasm -- --backend embedded path/to/script.gengo
-wasmtime --dir . userland/cmd/gengo/gengo-test.wasm -- --backend host path/to/script.gengo
+wasmtime --dir . ./gengo-test.wasm -- --backend embedded path/to/script.gengo
+wasmtime --dir . ./gengo-test.wasm -- --backend host path/to/script.gengo
 ```
 
 ## Conformance
@@ -39,13 +39,13 @@ wasmtime --dir . userland/cmd/gengo/gengo-test.wasm -- --backend host path/to/sc
 `test` always resets to dev preset first.
 
 ```bash
-make -C userland/cmd/gengo test
+make test
 ```
 
 ## Host/Embedded Parity
 
 ```bash
-make -C userland/cmd/gengo parity
+make parity
 ```
 
 ## Benchmarks
@@ -53,20 +53,20 @@ make -C userland/cmd/gengo parity
 Default:
 
 ```bash
-make -C userland/cmd/gengo bench
+make bench
 ```
 
 Tiny and stress presets:
 
 ```bash
-make -C userland/cmd/gengo bench-tiny
-make -C userland/cmd/gengo bench-stress
+make bench-tiny
+make bench-stress
 ```
 
 With benchmark timing/throughput logs:
 
 ```bash
-GENGO_BENCH_STATS=1 make -C userland/cmd/gengo bench-tiny
+GENGO_BENCH_STATS=1 make bench-tiny
 ```
 
 ## Common Gotchas
@@ -74,7 +74,7 @@ GENGO_BENCH_STATS=1 make -C userland/cmd/gengo bench-tiny
 - If behavior looks memory-constrained unexpectedly, re-apply dev preset:
 
 ```bash
-make -C userland/cmd/gengo config-dev
+make config-dev
 ```
 
 - Bench cases may define `.policy` with `ALLOW_OOM` to mark expected low-memory failures.
@@ -82,7 +82,7 @@ make -C userland/cmd/gengo config-dev
 ## Nano Syntax Highlighting
 
 ```bash
-echo 'include "/home/mikael/Project/github/shellcraft/userland/cmd/gengo/docs/gengo.nanorc"' >> ~/.nanorc
+echo 'include "./docs/gengo.nanorc"' >> ~/.nanorc
 ```
 
 ## Next Step

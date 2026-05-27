@@ -93,7 +93,7 @@ gengo v0 is considered baseline-complete when:
 
 1. all items in Sections 1-4 are `done` except explicitly deferred by design note,
 2. conformance suite covers each capability with pass/fail assertions,
-3. CI runs `make -C userland/cmd/gengo test` on every PR touching gengo.
+3. CI runs `make test` on every PR touching gengo.
 
 ## 10. Change History
 

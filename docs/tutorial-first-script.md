@@ -5,20 +5,20 @@ This walkthrough takes you from build to a working script with verified output.
 ## 1. Build gengo (dev preset)
 
 ```bash
-make -C userland/cmd/gengo config-dev
-make -C userland/cmd/gengo wasi
+make config-dev
+make wasi
 ```
 
 Expected tail output:
 
 ```text
-Built /.../userland/cmd/gengo/gengo-test.wasm
-Run with: wasmtime --dir / /.../userland/cmd/gengo/gengo-test.wasm -- <script>
+Built /..././gengo-test.wasm
+Run with: wasmtime --dir / /..././gengo-test.wasm -- <script>
 ```
 
 ## 2. Create a script
 
-Create `userland/cmd/gengo/examples/hello_tutorial.gengo`:
+Create `examples/hello_tutorial.gengo`:
 
 ```gengo
 std := import("std")
@@ -36,7 +36,7 @@ std.io.println(nums[1])
 ## 3. Run it
 
 ```bash
-wasmtime --dir . userland/cmd/gengo/gengo-test.wasm -- userland/cmd/gengo/examples/hello_tutorial.gengo
+wasmtime --dir . ./gengo-test.wasm -- examples/hello_tutorial.gengo
 ```
 
 Expected output:
@@ -67,7 +67,7 @@ greet(User{ name: "Mikael", initial: `M` })
 Run again:
 
 ```bash
-wasmtime --dir . userland/cmd/gengo/gengo-test.wasm -- userland/cmd/gengo/examples/hello_tutorial.gengo
+wasmtime --dir . ./gengo-test.wasm -- examples/hello_tutorial.gengo
 ```
 
 Expected output:
@@ -81,19 +81,19 @@ Mikael M
 Run conformance:
 
 ```bash
-make -C userland/cmd/gengo test
+make test
 ```
 
 Run backend parity checks:
 
 ```bash
-make -C userland/cmd/gengo parity
+make parity
 ```
 
 Run tiny benchmark lane:
 
 ```bash
-make -C userland/cmd/gengo bench-tiny
+make bench-tiny
 ```
 
 Notes:

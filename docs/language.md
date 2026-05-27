@@ -1,6 +1,6 @@
 # gengo Language (Current Behavior)
 
-This document defines the current language behavior implemented by `userland/cmd/gengo`.
+This document defines the current language behavior implemented by gengo.
 It is intentionally versioned by implementation reality, not Tengo compatibility.
 
 Companion guides:
@@ -211,15 +211,15 @@ Current module map:
   - `runtime/config_tiny.zig`
   - `runtime/config_stress.zig`
 - Make targets:
-  - `make -C userland/cmd/gengo config-dev`
-  - `make -C userland/cmd/gengo config-tiny`
-  - `make -C userland/cmd/gengo config-stress`
-  - `make -C userland/cmd/gengo wasi-tiny`
-  - `make -C userland/cmd/gengo wasi-stress`
-  - `make -C userland/cmd/gengo bench`
-  - `make -C userland/cmd/gengo bench-tiny`
-  - `make -C userland/cmd/gengo bench-stress`
-  - `make -C userland/cmd/gengo parity`
+  - `make config-dev`
+  - `make config-tiny`
+  - `make config-stress`
+  - `make wasi-tiny`
+  - `make wasi-stress`
+  - `make bench`
+  - `make bench-tiny`
+  - `make bench-stress`
+  - `make parity`
 - Bench cases may include `.policy` files:
   - `ALLOW_OOM` means runtime `OutOfMemory` is treated as expected for that bench case.
   - if `GENGO_BENCH_STATS=1`, bench runner prints elapsed time and optional ops/sec (when `.ops` file exists).

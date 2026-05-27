@@ -22,9 +22,7 @@ jobs:
           echo "$HOME/.wasmtime/bin" >> "$GITHUB_PATH"
 
       - name: Build WASI binary
-        working-directory: userland/cmd/gengo
         run: make wasi
 
       - name: Run conformance tests
-        working-directory: userland/cmd/gengo
         run: make test

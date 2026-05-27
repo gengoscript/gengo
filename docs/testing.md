@@ -5,7 +5,7 @@
 Run full conformance suite:
 
 ```bash
-make -C userland/cmd/gengo test
+make test
 ```
 
 Notes:
@@ -18,7 +18,7 @@ Notes:
 Run embedded vs host-backend parity checks:
 
 ```bash
-make -C userland/cmd/gengo parity
+make parity
 ```
 
 Notes:
@@ -30,15 +30,15 @@ Notes:
 Run benchmarks:
 
 ```bash
-make -C userland/cmd/gengo bench
-make -C userland/cmd/gengo bench-tiny
-make -C userland/cmd/gengo bench-stress
+make bench
+make bench-tiny
+make bench-stress
 ```
 
 Timing and throughput mode:
 
 ```bash
-GENGO_BENCH_STATS=1 make -C userland/cmd/gengo bench
+GENGO_BENCH_STATS=1 make bench
 ```
 
 Bench files:

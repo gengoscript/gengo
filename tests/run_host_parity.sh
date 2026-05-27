@@ -13,7 +13,7 @@ fi
 
 if [[ ! -f "$WASM" ]]; then
   echo "missing wasm binary: $WASM"
-  echo "run: make -C userland/cmd/gengo wasi"
+  echo "run: make wasi"
   exit 1
 fi
 
