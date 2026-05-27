@@ -50,3 +50,12 @@ color brightred "&="
 color brightred "\|="
 color brightred "\^="
 color brightred "[=+*/%&|^~!<>?:.,;(){}\[\]-]"
+
+# Approximation for gengo multiline string continuation lines
+# (line begins with optional indentation then quote marker)
+color green "^[[:space:]]*\".*$"
+color green "^[[:space:]]*'.*$"
+
+# Open string to end-of-line (for gengo multiline starts)
+color green "\"[^\"]*$"
+color green "'[^']*$"
