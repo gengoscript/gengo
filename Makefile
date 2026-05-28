@@ -1,8 +1,8 @@
-CMD_NAME := gengo
-include ../common.mk
-
 GENGO_DIR := $(abspath .)
 SHIM      := $(GENGO_DIR)/libsc_wasi.zig
+ZIG ?= zig
+ZIG_GLOBAL_CACHE_DIR ?= /tmp/zig-cache
+ZIG_LOCAL_CACHE_DIR ?= /tmp/zig-local-cache
 # WASI build — runs under wasmtime for local testing.
 # Usage:  make wasi                      → produces gengo-test.wasm
 #         wasmtime --dir / gengo-test.wasm -- script.tengo
@@ -14,12 +14,9 @@ wasi:
 		-target wasm32-wasi \
 		-fno-entry -rdynamic \
 		-O Debug \
-		--dep libsc --dep x11 \
+		--dep libsc \
 		-Mroot="$(GENGO_DIR)/main.zig" \
-		--dep libsc --dep x11_proto \
-		-Mx11="$(SHIM)" \
 		-Mlibsc="$(SHIM)" \
-		-Mx11_proto="$(REPO_ROOT)/third_party/zig-x11-proto/src/root.zig" \
 		-femit-bin="$(GENGO_DIR)/gengo-test.wasm"
 	@echo "Built $(GENGO_DIR)/gengo-test.wasm"
 	@echo "Run with: wasmtime --dir / $(GENGO_DIR)/gengo-test.wasm -- <script>"
@@ -32,12 +29,9 @@ wasi-release:
 		-target wasm32-wasi \
 		-fno-entry -rdynamic \
 		-O ReleaseFast \
-		--dep libsc --dep x11 \
+		--dep libsc \
 		-Mroot="$(GENGO_DIR)/main.zig" \
-		--dep libsc --dep x11_proto \
-		-Mx11="$(SHIM)" \
 		-Mlibsc="$(SHIM)" \
-		-Mx11_proto="$(REPO_ROOT)/third_party/zig-x11-proto/src/root.zig" \
 		-femit-bin="$(GENGO_DIR)/gengo-test.wasm"
 	@echo "Built $(GENGO_DIR)/gengo-test.wasm (ReleaseFast)"
 	@echo "Run with: wasmtime --dir / $(GENGO_DIR)/gengo-test.wasm -- <script>"
