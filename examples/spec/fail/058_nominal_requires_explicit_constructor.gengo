@@ -1,0 +1,6 @@
+type UserId is string
+
+func take_user(id UserId) {
+}
+
+take_user("u-1")

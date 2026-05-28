@@ -1,0 +1,12 @@
+type Status is enum {
+    pending,
+}
+
+type Other is enum {
+    pending_other,
+}
+
+func show(s Status) {
+}
+
+show(Other.pending_other)

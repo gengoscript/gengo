@@ -1,0 +1,16 @@
+std := import("std")
+
+type Month is int range 1..12
+type Day is int range 1..31
+type UserId is string
+type OrderId is string
+
+m := Month(12)
+d := Day(7)
+u := UserId("u-1")
+o := OrderId("o-1")
+
+std.io.println(m)
+std.io.println(d)
+std.io.println(u)
+std.io.println(o)

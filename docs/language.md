@@ -77,7 +77,8 @@ x := "hello world
 
 ## 4. Variables and Assignment
 
-- Declaration: `name := expr`
+- Mutable declaration: `name := expr` or `var name := expr`
+- Immutable binding: `const name := expr`
 - Assignment: `name = expr`
 - Multi-declaration destructure: `a, b := expr`
 - Multi-assignment destructure: `a, b = expr`
@@ -89,6 +90,10 @@ x := "hello world
     - indexed path with literal index/key (`arr[0]`, `m["k"]`, and mixed chains)
 - Compound assignment: `+=`, `-=`, `*=`, `/=`
 - Increment/decrement: `x++`, `x--`
+- `const` enforcement:
+  - reassignment to const binding is compile error (`AssignToConst`)
+  - includes `=`, compound assign, `++/--`, and direct multi-assign targets
+  - const is shallow (interior map/array/struct mutations via paths are still allowed)
 
 ## 5. Expressions and Operators
 
@@ -156,6 +161,10 @@ Implemented operators:
 
 - Function literal: `func(args...) { ... }`
 - Named function declaration sugar: `func name(args...) { ... }`
+- Variadic params (declaration-side):
+  - `func sum(...xs int) int { ... }`
+  - variadic parameter must be last
+  - call-site spread (`xs...`) is not supported
 - Parameter annotations currently support both forms:
   - `func f(x: T) { ... }`
   - `func f(x T) { ... }`
@@ -170,6 +179,10 @@ Current module map:
 - `std.io.println(...args)`
   - prints values and newline
   - returns `null`
+- `std.io.printf(fmt, ...args)`
+  - verbs: `%v`, `%s`, `%d`, `%f`, `%t`, `%%`
+  - arity mismatch: `ArityMismatch`
+  - verb type mismatch: `TypeError`
 - `std.core.len(x)`
   - supports string, array, map, struct instance
   - returns number length
@@ -228,16 +241,13 @@ Current module map:
   - `runtime/config_dev.zig` (default)
   - `runtime/config_tiny.zig`
   - `runtime/config_stress.zig`
-- Make targets:
-  - `make config-dev`
-  - `make config-tiny`
-  - `make config-stress`
-  - `make wasi-tiny`
-  - `make wasi-stress`
-  - `make bench`
-  - `make bench-tiny`
-  - `make bench-stress`
-  - `make parity`
+- Build/test entrypoints:
+  - `zig build -Dpreset=dev wasi`
+  - `zig build -Dpreset=tiny wasi`
+  - `zig build -Dpreset=stress wasi`
+  - `zig build -Dpreset=dev test`
+  - `zig build -Dpreset=dev bench`
+  - `zig build -Dpreset=dev parity`
 - Bench cases may include `.policy` files:
   - `ALLOW_OOM` means runtime `OutOfMemory` is treated as expected for that bench case.
   - if `GENGO_BENCH_STATS=1`, bench runner prints elapsed time and optional ops/sec (when `.ops` file exists).
@@ -252,3 +262,28 @@ Current module map:
   - input source buffer: `128 KiB`
 - Managed allocations use fixed class sizes; one managed block currently cannot exceed `32 KiB` even if total heap has room.
 - Only `import("std")` is currently supported.
+
+## 12. Named Types and Ranges
+
+- Named scalar types:
+  - `type UserId is string`
+  - `type OrderId is string`
+- Range subtypes:
+  - `type Month is int range 1..12`
+  - `type Percent is float range 0.0..1.0`
+- Constructor semantics:
+  - `Month(12)` succeeds
+  - `Month(13)` raises `RangeError`
+- Nominal semantics:
+  - named types are not interchangeable, even with same base type
+  - explicit constructor is required (`UserId("u-1")`)
+
+## 13. Enums
+
+- Declaration:
+  - `type Status is enum { pending, approved, denied }`
+- Qualified member access:
+  - `Status.pending`
+  - `Status.approved`
+- Unqualified member names are not implicitly global.
+- Enum values are nominal; different enum types are not interchangeable.

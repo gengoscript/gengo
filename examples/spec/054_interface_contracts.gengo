@@ -1,0 +1,31 @@
+std := import("std")
+
+interface Parser {
+    parse(src string) (int, error)
+    name() string
+    reset()
+}
+
+struct Csv { value: int }
+
+func (c Csv) parse(src string) (int, error) {
+    return c.value, std.core.error("e")
+}
+
+func (c Csv) name() string {
+    return "csv"
+}
+
+func (c Csv) reset() {
+    return
+}
+
+func use(p Parser) {
+    n, e := p.parse("x")
+    std.io.println(n)
+    std.io.println(std.core.is_error(e))
+    std.io.println(p.name())
+    p.reset()
+}
+
+use(Csv{ value: 7 })

@@ -14,6 +14,13 @@ Only `import("std")` is supported.
 - Prints arguments and trailing newline.
 - Returns `null`.
 
+### `std.io.printf(fmt, ...args)`
+- `fmt` is string.
+- Supported verbs: `%v`, `%s`, `%d`, `%f`, `%t`, `%%`.
+- Errors:
+  - `ArityMismatch` when placeholder count and args differ
+  - `TypeError` when arg type does not match verb
+
 ## std.core
 
 ### `std.core.len(x)`

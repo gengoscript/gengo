@@ -17,6 +17,10 @@ const TT = token.TT;
 const Token = token.Token;
 const Object = value_mod.Object;
 const StructTypeObj = value_mod.StructTypeObj;
+const InterfaceMethodSpec = value_mod.InterfaceMethodSpec;
+const InterfaceTypeObj = value_mod.InterfaceTypeObj;
+const NamedTypeObj = value_mod.NamedTypeObj;
+const NamedTypeBase = value_mod.NamedTypeBase;
 const Value = value_mod.Value;
 
 const MaxLocals = 64;
@@ -25,8 +29,11 @@ const MaxLoopDepth = 16;
 const MaxLoopBreaks = 128;
 const MaxTypeAlts = 8;
 const MaxStructTypes = 128;
+const MaxInterfaceTypes = 128;
+const MaxNamedTypes = 256;
 const MaxSwitchJumps = 256;
 const MaxUpvalues = 64;
+const MaxGlobalConsts = 512;
 
 const Prec = enum(u8) {
     none,
@@ -49,7 +56,10 @@ const Prec = enum(u8) {
     }
 };
 
-const Local = struct { name: []const u8 };
+const Local = struct {
+    name: []const u8,
+    is_const: bool = false,
+};
 const Upvalue = struct { name: []const u8, index: u8, from_upvalue: bool };
 const FuncInfo = struct {
     locals: [MaxLocals]Local = undefined,
@@ -66,6 +76,15 @@ const LoopCtx = struct {
 };
 
 const StructTypeInfo = struct {
+    name: []const u8,
+};
+const InterfaceTypeInfo = struct {
+    name: []const u8,
+};
+const NamedTypeInfo = struct {
+    name: []const u8,
+};
+const GlobalConstInfo = struct {
     name: []const u8,
 };
 
@@ -92,6 +111,12 @@ pub const Compiler = struct {
     loop_depth: u8 = 0,
     struct_types: [MaxStructTypes]StructTypeInfo = undefined,
     struct_type_count: usize = 0,
+    interface_types: [MaxInterfaceTypes]InterfaceTypeInfo = undefined,
+    interface_type_count: usize = 0,
+    named_types: [MaxNamedTypes]NamedTypeInfo = undefined,
+    named_type_count: usize = 0,
+    global_consts: [MaxGlobalConsts]GlobalConstInfo = undefined,
+    global_const_count: usize = 0,
 
     pub fn init(src: []const u8) Compiler {
         return .{ .lex = .{ .src = src } };
@@ -100,6 +125,9 @@ pub const Compiler = struct {
     pub fn compile(self: *Compiler) !void {
         chunk.reset();
         self.struct_type_count = 0;
+        self.interface_type_count = 0;
+        self.named_type_count = 0;
+        self.global_const_count = 0;
         self.advance();
         while (!self.check(.eof)) try self.decl();
         try chunk.emitOp(.halt, self.prev.line);
@@ -113,11 +141,56 @@ pub const Compiler = struct {
         return false;
     }
 
+    fn hasInterfaceType(self: *Compiler, name: []const u8) bool {
+        var i: usize = 0;
+        while (i < self.interface_type_count) : (i += 1) {
+            if (common.streq(self.interface_types[i].name, name)) return true;
+        }
+        return false;
+    }
+
+    fn hasGlobalConst(self: *Compiler, name: []const u8) bool {
+        var i: usize = 0;
+        while (i < self.global_const_count) : (i += 1) {
+            if (common.streq(self.global_consts[i].name, name)) return true;
+        }
+        return false;
+    }
+
+    fn addGlobalConst(self: *Compiler, name: []const u8) !void {
+        if (self.hasGlobalConst(name)) return;
+        if (self.global_const_count >= MaxGlobalConsts) return error.TooManyGlobals;
+        self.global_consts[self.global_const_count] = .{ .name = name };
+        self.global_const_count += 1;
+    }
+
     fn addStructType(self: *Compiler, name: []const u8) !void {
         if (self.hasStructType(name)) return error.DuplicateStructType;
         if (self.struct_type_count >= MaxStructTypes) return error.TooManyStructTypes;
         self.struct_types[self.struct_type_count] = .{ .name = name };
         self.struct_type_count += 1;
+    }
+
+    fn addInterfaceType(self: *Compiler, name: []const u8) !void {
+        if (self.hasInterfaceType(name)) return error.DuplicateInterfaceType;
+        if (self.interface_type_count >= MaxInterfaceTypes) return error.TooManyInterfaceTypes;
+        self.interface_types[self.interface_type_count] = .{ .name = name };
+        self.interface_type_count += 1;
+    }
+
+    fn hasNamedType(self: *Compiler, name: []const u8) bool {
+        var i: usize = 0;
+        while (i < self.named_type_count) : (i += 1) {
+            if (common.streq(self.named_types[i].name, name)) return true;
+        }
+        return false;
+    }
+
+    fn addNamedType(self: *Compiler, name: []const u8) !void {
+        if (self.hasNamedType(name)) return error.DuplicateNamedType;
+        if (self.named_type_count >= MaxNamedTypes) return error.TooManyNamedTypes;
+        self.named_types[self.named_type_count] = .{ .name = name };
+        self.named_type_count += 1;
     }
 
     fn inFunc(self: *Compiler) bool {
@@ -139,13 +212,24 @@ pub const Compiler = struct {
         return null;
     }
 
-    fn defineLocal(self: *Compiler, name: []const u8) !u8 {
+    fn defineLocal(self: *Compiler, name: []const u8, is_const: bool) !u8 {
         const scope = self.currentScope();
         if (scope.local_count >= MaxLocals) return error.TooManyLocals;
         const slot = scope.local_count;
-        scope.locals[slot] = .{ .name = name };
+        scope.locals[slot] = .{ .name = name, .is_const = is_const };
         scope.local_count += 1;
         return slot;
+    }
+
+    fn resolveLocalConst(self: *Compiler, name: []const u8) ?bool {
+        if (!self.inFunc()) return null;
+        const scope = self.currentScope();
+        var i: u8 = scope.local_count;
+        while (i > 0) {
+            i -= 1;
+            if (common.streq(scope.locals[i].name, name)) return scope.locals[i].is_const;
+        }
+        return null;
     }
 
     fn emitGetVar(self: *Compiler, name: Token) !void {
@@ -173,6 +257,36 @@ pub const Compiler = struct {
     fn resolveUpvalue(self: *Compiler, name: []const u8) ?u8 {
         if (self.scope_depth < 2) return null;
         return self.resolveUpvalueForScope(self.scope_depth - 1, name);
+    }
+
+    fn resolveUpvalueConstForScope(self: *Compiler, scope_index: u8, name: []const u8) ?bool {
+        if (scope_index == 0) return null;
+        const enclosing_index: u8 = scope_index - 1;
+        const enclosing = &self.scopes[enclosing_index];
+        var i: u8 = enclosing.local_count;
+        while (i > 0) {
+            i -= 1;
+            if (common.streq(enclosing.locals[i].name, name)) return enclosing.locals[i].is_const;
+        }
+        if (enclosing_index == 0) return null;
+        return self.resolveUpvalueConstForScope(enclosing_index, name);
+    }
+
+    fn resolveUpvalueConst(self: *Compiler, name: []const u8) ?bool {
+        if (self.scope_depth < 2) return null;
+        return self.resolveUpvalueConstForScope(self.scope_depth - 1, name);
+    }
+
+    fn ensureMutableBinding(self: *Compiler, name: Token) !void {
+        if (self.resolveLocalConst(name.src)) |is_const| {
+            if (is_const) return error.AssignToConst;
+            return;
+        }
+        if (self.resolveUpvalueConst(name.src)) |is_const| {
+            if (is_const) return error.AssignToConst;
+            return;
+        }
+        if (self.hasGlobalConst(name.src)) return error.AssignToConst;
     }
 
     fn addUpvalueToScope(self: *Compiler, scope_index: u8, name: []const u8, index: u8, from_upvalue: bool) ?u8 {
@@ -258,9 +372,17 @@ pub const Compiler = struct {
 
     fn decl(self: *Compiler) anyerror!void {
         if (self.check(.ident) and self.peekTT() == .colon_eq) {
-            try self.varDecl();
+            try self.varDecl(false, false);
+        } else if (self.match(.kw_var)) {
+            try self.varDecl(true, false);
+        } else if (self.match(.kw_const)) {
+            try self.varDecl(true, true);
         } else if (self.check(.kw_struct)) {
             try self.structDecl();
+        } else if (self.check(.kw_interface)) {
+            try self.interfaceDecl();
+        } else if (self.check(.kw_type)) {
+            try self.namedTypeDecl();
         } else if (self.check(.kw_func) and self.isMethodDecl()) {
             try self.methodDecl();
         } else if (self.check(.kw_func) and self.isNamedFuncDecl()) {
@@ -268,6 +390,207 @@ pub const Compiler = struct {
         } else {
             try self.stmt();
         }
+    }
+
+    fn interfaceDecl(self: *Compiler) !void {
+        const kw = self.cur;
+        self.advance(); // interface
+        if (self.cur.typ != .ident) return error.UnexpectedToken;
+        const name = self.cur;
+        try self.addInterfaceType(name.src);
+        self.advance();
+        try self.consume(.lbrace);
+
+        var methods_tmp: [MaxLocals]InterfaceMethodSpec = undefined;
+        var mcount: u8 = 0;
+        while (!self.check(.rbrace)) {
+            if (self.cur.typ != .ident) return error.UnexpectedToken;
+            if (mcount >= MaxLocals) return error.TooManyFields;
+            const mname = self.cur.src;
+            self.advance();
+            try self.consume(.lparen);
+
+            var ptypes_tmp: [MaxLocals]FieldTypeSpec = undefined;
+            var arity: u8 = 0;
+            var is_variadic = false;
+            var variadic_type: FieldTypeSpec = undefined;
+            var has_typed_params = false;
+            const any_alts = heap.bump(FieldTypeAlt, 1) orelse return error.OutOfMemory;
+            any_alts[0] = .{ .typ = .any };
+            const any_spec: FieldTypeSpec = .{ .alts = any_alts[0..1] };
+            variadic_type = any_spec;
+            if (!self.check(.rparen)) {
+                while (true) {
+                    const vari = self.match(.ellipsis);
+                    if (self.cur.typ != .ident) return error.UnexpectedToken;
+                    self.advance(); // param name
+                    var ptype: FieldTypeSpec = any_spec;
+                    if (self.match(.colon)) {
+                        ptype = try self.parseFieldTypeSpec();
+                        has_typed_params = true;
+                    } else if (self.cur.typ == .question or self.cur.typ == .ident) {
+                        ptype = try self.parseFieldTypeSpec();
+                        has_typed_params = true;
+                    }
+                    ptypes_tmp[arity] = ptype;
+                    arity += 1;
+                    if (vari) {
+                        is_variadic = true;
+                        variadic_type = ptype;
+                        break;
+                    }
+                    if (!self.match(.comma)) break;
+                }
+            }
+            try self.consume(.rparen);
+
+            var returns_tmp: [MaxLocals]FieldTypeSpec = undefined;
+            var rcount: u8 = 0;
+            var has_typed_returns = false;
+            if (self.match(.lparen)) {
+                while (true) {
+                    returns_tmp[rcount] = try self.parseFieldTypeSpec();
+                    rcount += 1;
+                    has_typed_returns = true;
+                    if (!self.match(.comma)) break;
+                }
+                try self.consume(.rparen);
+            } else if (self.cur.typ == .question or self.cur.typ == .ident) {
+                returns_tmp[0] = try self.parseFieldTypeSpec();
+                rcount = 1;
+                has_typed_returns = true;
+            }
+
+            const ptypes = heap.bump(FieldTypeSpec, arity) orelse return error.OutOfMemory;
+            var pi: usize = 0;
+            while (pi < arity) : (pi += 1) ptypes[pi] = ptypes_tmp[pi];
+            const rtypes = heap.bump(FieldTypeSpec, rcount) orelse return error.OutOfMemory;
+            var ri: usize = 0;
+            while (ri < rcount) : (ri += 1) rtypes[ri] = returns_tmp[ri];
+
+            methods_tmp[mcount] = .{
+                .name = mname,
+                .arity = arity,
+                .is_variadic = is_variadic,
+                .variadic_type = variadic_type,
+                .param_types = ptypes[0..arity],
+                .return_types = rtypes[0..rcount],
+                .has_typed_params = has_typed_params,
+                .has_typed_returns = has_typed_returns,
+            };
+            mcount += 1;
+            self.matchOpt(.comma);
+        }
+        try self.consume(.rbrace);
+        const methods = heap.bump(InterfaceMethodSpec, mcount) orelse return error.OutOfMemory;
+        var i: usize = 0;
+        while (i < mcount) : (i += 1) methods[i] = methods_tmp[i];
+        const it = heap.allocObject() orelse return error.OutOfMemory;
+        it.* = .{ .interface_type = InterfaceTypeObj{ .name = name.src, .methods = methods[0..mcount] } };
+        try chunk.emitConst(.{ .object = it }, kw.line);
+        if (self.inFunc()) {
+            _ = try self.defineLocal(name.src, false);
+        } else {
+            const idx = try chunk.addConst(.{ .string = name.src });
+            try chunk.emit2(@intFromEnum(Op.def_global), idx, kw.line);
+        }
+        self.matchOpt(.semicolon);
+    }
+
+    fn parseSignedNumber(self: *Compiler) !f64 {
+        var sign: f64 = 1.0;
+        if (self.match(.minus)) sign = -1.0;
+        if (self.cur.typ != .number) return error.UnexpectedToken;
+        const n = common.parseFloat(self.cur.src) orelse return error.BadNumber;
+        self.advance();
+        return sign * n;
+    }
+
+    fn namedTypeDecl(self: *Compiler) !void {
+        const kw = self.cur;
+        self.advance(); // type
+        if (self.cur.typ != .ident) return error.UnexpectedToken;
+        const name = self.cur.src;
+        try self.addNamedType(name);
+        self.advance();
+        try self.consume(.kw_is);
+        if (self.check(.kw_enum)) {
+            self.advance();
+            try self.consume(.lbrace);
+            var members_tmp: [MaxLocals][]const u8 = undefined;
+            var mcount: u8 = 0;
+            if (!self.check(.rbrace)) {
+                while (true) {
+                    if (self.cur.typ != .ident) return error.UnexpectedToken;
+                    members_tmp[mcount] = self.cur.src;
+                    mcount += 1;
+                    self.advance();
+                    if (!self.match(.comma)) break;
+                    if (self.check(.rbrace)) break;
+                }
+            }
+            try self.consume(.rbrace);
+            const members = heap.bump([]const u8, mcount) orelse return error.OutOfMemory;
+            var mi: usize = 0;
+            while (mi < mcount) : (mi += 1) members[mi] = members_tmp[mi];
+            const et = heap.allocObject() orelse return error.OutOfMemory;
+            et.* = .{ .enum_type = .{ .name = name, .members = members[0..mcount] } };
+            try chunk.emitConst(.{ .object = et }, kw.line);
+            if (self.inFunc()) {
+                _ = try self.defineLocal(name, false);
+            } else {
+                const idx = try chunk.addConst(.{ .string = name });
+                try chunk.emit2(@intFromEnum(Op.def_global), idx, kw.line);
+            }
+            self.matchOpt(.semicolon);
+            return;
+        }
+
+        if (self.cur.typ != .ident) return error.UnexpectedToken;
+        const base_name = self.cur.src;
+        self.advance();
+
+        var base: NamedTypeBase = undefined;
+        if (common.streq(base_name, "int")) {
+            base = .int;
+        } else if (common.streq(base_name, "float")) {
+            base = .float;
+        } else if (common.streq(base_name, "string")) {
+            base = .string;
+        } else if (common.streq(base_name, "bool")) {
+            base = .bool;
+        } else if (common.streq(base_name, "rune")) {
+            base = .rune;
+        } else return error.UnexpectedToken;
+
+        var has_range = false;
+        var min: f64 = 0;
+        var max: f64 = 0;
+        if (self.match(.kw_range)) {
+            if (!(base == .int or base == .float or base == .rune)) return error.UnexpectedToken;
+            has_range = true;
+            min = try self.parseSignedNumber();
+            try self.consume(.dotdot);
+            max = try self.parseSignedNumber();
+            if (min > max) return error.RangeError;
+        }
+
+        const nt = heap.allocObject() orelse return error.OutOfMemory;
+        nt.* = .{ .named_type = NamedTypeObj{
+            .name = name,
+            .base = base,
+            .has_range = has_range,
+            .min = min,
+            .max = max,
+        } };
+        try chunk.emitConst(.{ .object = nt }, kw.line);
+        if (self.inFunc()) {
+            _ = try self.defineLocal(name, false);
+        } else {
+            const idx = try chunk.addConst(.{ .string = name });
+            try chunk.emit2(@intFromEnum(Op.def_global), idx, kw.line);
+        }
+        self.matchOpt(.semicolon);
     }
 
     fn isMethodDecl(self: *Compiler) bool {
@@ -343,7 +666,7 @@ pub const Compiler = struct {
         try chunk.emitConst(.{ .object = st }, kw.line);
 
         if (self.inFunc()) {
-            _ = try self.defineLocal(name.src);
+            _ = try self.defineLocal(name.src, false);
         } else {
             const idx = try chunk.addConst(.{ .string = name.src });
             try chunk.emit2(@intFromEnum(Op.def_global), idx, kw.line);
@@ -377,15 +700,21 @@ pub const Compiler = struct {
                 alt = .{ .typ = .boolean };
             } else if (common.streq(tname, "string")) {
                 alt = .{ .typ = .string };
+            } else if (common.streq(tname, "error")) {
+                alt = .{ .typ = .error_t };
             } else if (common.streq(tname, "array")) {
                 alt = .{ .typ = .array };
             } else if (common.streq(tname, "map")) {
                 alt = .{ .typ = .map };
+            } else if (self.hasInterfaceType(tname)) {
+                alt = .{ .typ = .interface_t, .interface_name = tname };
+            } else if (self.hasNamedType(tname)) {
+                alt = .{ .typ = .named_t, .named_name = tname };
             }
 
             var i: u8 = 0;
             while (i < count) : (i += 1) {
-                if (tmp[i].typ == alt.typ and common.streq(tmp[i].struct_name, alt.struct_name)) break;
+                if (tmp[i].typ == alt.typ and common.streq(tmp[i].struct_name, alt.struct_name) and common.streq(tmp[i].interface_name, alt.interface_name) and common.streq(tmp[i].named_name, alt.named_name)) break;
             }
             if (i == count) {
                 if (count >= MaxTypeAlts) return error.TooManyTypeAlternatives;
@@ -423,7 +752,7 @@ pub const Compiler = struct {
         try self.funcLit();
 
         if (self.inFunc()) {
-            _ = try self.defineLocal(name.src);
+            _ = try self.defineLocal(name.src, false);
         } else {
             const idx = try chunk.addConst(.{ .string = name.src });
             try chunk.emit2(@intFromEnum(Op.def_global), idx, kw.line);
@@ -457,7 +786,7 @@ pub const Compiler = struct {
         const key = key_buf[0..total];
 
         if (self.inFunc()) {
-            _ = try self.defineLocal(key);
+            _ = try self.defineLocal(key, false);
         } else {
             const idx = try chunk.addConst(.{ .string = key });
             try chunk.emit2(@intFromEnum(Op.def_global), idx, kw.line);
@@ -465,16 +794,19 @@ pub const Compiler = struct {
         self.matchOpt(.semicolon);
     }
 
-    fn varDecl(self: *Compiler) !void {
+    fn varDecl(self: *Compiler, has_keyword: bool, is_const: bool) !void {
+        if (has_keyword and self.cur.typ != .ident) return error.UnexpectedToken;
         const name = self.cur;
         self.advance();
         try self.consume(.colon_eq);
         try self.expr();
         if (self.inFunc()) {
-            _ = try self.defineLocal(name.src);
+            _ = try self.defineLocal(name.src, is_const);
         } else {
+            if (!is_const and self.hasGlobalConst(name.src)) return error.AssignToConst;
             const idx = try chunk.addConst(.{ .string = name.src });
             try chunk.emit2(@intFromEnum(Op.def_global), idx, name.line);
+            if (is_const) try self.addGlobalConst(name.src);
         }
         self.matchOpt(.semicolon);
     }
@@ -650,7 +982,7 @@ pub const Compiler = struct {
                 var pre_i: u8 = 0;
                 while (pre_i < count) : (pre_i += 1) {
                     try chunk.emitOp(.null_val, names[pre_i].line);
-                    _ = try self.defineLocal(names[pre_i].src);
+                    _ = try self.defineLocal(names[pre_i].src, false);
                 }
             }
         } else {
@@ -676,6 +1008,7 @@ pub const Compiler = struct {
                     try chunk.emit2(@intFromEnum(Op.def_global), idx, names[i].line);
                 }
             } else {
+                if (targets[i].step_count == 0) try self.ensureMutableBinding(targets[i].root);
                 const vidx = try chunk.addConst(.{ .string = MultiAssignValueScratch });
                 try chunk.emitOp(.dup, targets[i].root.line);
                 try chunk.emit2(@intFromEnum(Op.tuple_get), i, targets[i].root.line);
@@ -765,6 +1098,7 @@ pub const Compiler = struct {
 
     fn incrStmt(self: *Compiler) !void {
         const name = self.cur;
+        try self.ensureMutableBinding(name);
         self.advance();
         const is_inc = self.cur.typ == .plus_plus;
         self.advance();
@@ -777,6 +1111,7 @@ pub const Compiler = struct {
 
     fn compoundStmt(self: *Compiler) !void {
         const name = self.cur;
+        try self.ensureMutableBinding(name);
         self.advance();
         const op_tok = self.cur;
         self.advance();
@@ -802,6 +1137,7 @@ pub const Compiler = struct {
 
     fn assignStmt(self: *Compiler) !void {
         const name = self.cur;
+        try self.ensureMutableBinding(name);
         self.advance();
         try self.consume(.eq);
         try self.expr();
@@ -934,7 +1270,11 @@ pub const Compiler = struct {
 
         if (self.hasInitSemicolon()) {
             if (self.check(.ident) and self.peekTT() == .colon_eq) {
-                try self.varDecl();
+                try self.varDecl(false, false);
+            } else if (self.match(.kw_var)) {
+                try self.varDecl(true, false);
+            } else if (self.match(.kw_const)) {
+                try self.varDecl(true, true);
             } else if (self.check(.ident) and self.peekTT() == .eq) {
                 try self.assignStmt();
             } else {
@@ -1001,7 +1341,7 @@ pub const Compiler = struct {
     fn declareLoopVar(self: *Compiler, name: Token) !void {
         if (self.inFunc()) {
             try chunk.emitOp(.null_val, name.line);
-            _ = try self.defineLocal(name.src);
+            _ = try self.defineLocal(name.src, false);
         } else {
             try chunk.emitOp(.null_val, name.line);
             const idx = try chunk.addConst(.{ .string = name.src });
@@ -1144,7 +1484,11 @@ pub const Compiler = struct {
         const local_base: u8 = if (self.inFunc()) self.currentScope().local_count else 0;
 
         if (self.match(.semicolon)) {} else if (self.check(.ident) and self.peekTT() == .colon_eq) {
-            try self.varDecl();
+            try self.varDecl(false, false);
+        } else if (self.match(.kw_var)) {
+            try self.varDecl(true, false);
+        } else if (self.match(.kw_const)) {
+            try self.varDecl(true, true);
         } else if (self.check(.ident) and self.peekTT() == .eq) {
             try self.assignStmt();
         } else {
@@ -1222,10 +1566,13 @@ pub const Compiler = struct {
         var param_names: [MaxLocals][]const u8 = undefined;
         var param_types: [MaxLocals]FieldTypeSpec = undefined;
         var arity: u8 = 0;
+        var is_variadic = false;
+        var variadic_type: FieldTypeSpec = undefined;
 
         const any_alts = heap.bump(FieldTypeAlt, 1) orelse return error.OutOfMemory;
         any_alts[0] = .{ .typ = .any };
         const any_spec: FieldTypeSpec = .{ .alts = any_alts[0..1] };
+        variadic_type = any_spec;
 
         if (prefix.len > MaxLocals) return error.TooManyParams;
         var pi0: usize = 0;
@@ -1238,6 +1585,7 @@ pub const Compiler = struct {
         if (!self.check(.rparen)) {
             while (true) {
                 if (arity >= MaxLocals) return error.TooManyParams;
+                const vari = self.match(.ellipsis);
                 if (self.cur.typ != .ident) return error.UnexpectedToken;
                 param_names[arity] = self.cur.src;
                 var ptype: FieldTypeSpec = any_spec;
@@ -1250,10 +1598,32 @@ pub const Compiler = struct {
                     ptype = try self.parseFieldTypeSpec();
                 }
                 param_types[arity - 1] = ptype;
+                if (vari) {
+                    is_variadic = true;
+                    variadic_type = ptype;
+                    break;
+                }
                 if (!self.match(.comma)) break;
             }
         }
         try self.consume(.rparen);
+
+        var return_types: [MaxLocals]FieldTypeSpec = undefined;
+        var return_count: u8 = 0;
+        var has_typed_returns = false;
+        if (self.match(.lparen)) {
+            while (true) {
+                return_types[return_count] = try self.parseFieldTypeSpec();
+                return_count += 1;
+                has_typed_returns = true;
+                if (!self.match(.comma)) break;
+            }
+            try self.consume(.rparen);
+        } else if (self.cur.typ == .question or self.cur.typ == .ident) {
+            return_types[0] = try self.parseFieldTypeSpec();
+            return_count = 1;
+            has_typed_returns = true;
+        }
 
         const jump_over = try chunk.emitJump(.jump, self.prev.line);
         const func_ip = chunk.codeLen();
@@ -1265,7 +1635,7 @@ pub const Compiler = struct {
 
         var pi: u8 = 0;
         while (pi < arity) : (pi += 1) {
-            scope.locals[pi] = .{ .name = param_names[pi] };
+            scope.locals[pi] = .{ .name = param_names[pi], .is_const = false };
         }
         scope.local_count = arity;
 
@@ -1300,13 +1670,21 @@ pub const Compiler = struct {
             }
         }
 
+        const rtypes = heap.bump(FieldTypeSpec, return_count) orelse return error.OutOfMemory;
+        var rti: u8 = 0;
+        while (rti < return_count) : (rti += 1) rtypes[rti] = return_types[rti];
+
         const func_obj = heap.allocObject() orelse return error.OutOfMemory;
         func_obj.* = .{ .function = .{
             .ip = func_ip,
             .arity = arity,
+            .is_variadic = is_variadic,
+            .variadic_type = variadic_type,
             .capture_slots = slots[0..uv_count],
             .param_types = ptypes[0..arity],
             .has_typed_params = has_typed_params,
+            .return_types = rtypes[0..return_count],
+            .has_typed_returns = has_typed_returns,
         } };
         const cidx = try chunk.addConst(.{ .object = func_obj });
         try chunk.emit2(@intFromEnum(Op.make_closure), cidx, self.prev.line);

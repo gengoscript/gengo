@@ -30,6 +30,17 @@ greet(u)
 
 Raw multiline strings use `'` with the same continuation/termination shape and keep backslashes literally.
 
+Additional current syntax/features:
+- `var` / `const` bindings (`:=` remains first-class mutable declaration syntax)
+- variadic params: `func sum(...xs int) int { ... }`
+- `std.io.printf("%s %d", "x", 1)`
+- nominal/range types:
+  - `type Month is int range 1..12`
+  - `type UserId is string`
+- enums with qualified members:
+  - `type Status is enum { pending, approved, denied }`
+  - `Status.pending`
+
 ## Toolchain
 
 - Zig: `0.16.0` (matches CI)

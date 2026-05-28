@@ -1,0 +1,15 @@
+interface Parser {
+    parse(src string) (int, error)
+}
+
+struct Csv {}
+
+func (c Csv) parse(src string) string {
+    return "nope"
+}
+
+func use(p Parser) {
+    p.parse("x")
+}
+
+use(Csv{})

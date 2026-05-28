@@ -151,6 +151,27 @@ pub fn printValue(v: Value) void {
                 write(st.name);
                 write(">");
             },
+            .interface_type => |it| {
+                write("<interface ");
+                write(it.name);
+                write(">");
+            },
+            .named_type => |nt| {
+                write("<type ");
+                write(nt.name);
+                write(">");
+            },
+            .named_value => |nv| {
+                printValue(nv.value);
+            },
+            .enum_type => |et| {
+                write("<enum ");
+                write(et.name);
+                write(">");
+            },
+            .enum_value => |ev| {
+                write(ev.name);
+            },
             .struct_instance => |inst| {
                 write(inst.typ.struct_type.name);
                 write("{");

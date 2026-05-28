@@ -1,0 +1,8 @@
+type UserId is string
+type OrderId is string
+
+func take_user(id UserId) {
+}
+
+oid := OrderId("o-1")
+take_user(oid)

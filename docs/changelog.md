@@ -20,6 +20,20 @@ This changelog tracks notable language/runtime changes by implementation date.
   - typed run/call result contracts for compile/runtime errors.
 - Added embedding API validation runner (`embedding_runner.zig`) and hooked it into `zig build test`.
 
+### Language
+- Added `var` and `const` bindings while keeping `:=` as first-class mutable declaration syntax.
+- Added const binding enforcement (`AssignToConst`) for reassignment, compound assign, inc/dec, and direct multi-assign targets.
+- Added declaration-side variadics (`...args`) with typed variadic argument enforcement.
+- Added `std.io.printf(fmt, ...args)` with `%v`, `%s`, `%d`, `%f`, `%t`, and `%%`.
+- Added Ada-inspired nominal scalar and range types:
+  - `type Name is Base`
+  - `type Name is int|float|rune range a..b`
+- Added runtime named-type constructors and range checks (`RangeError` on violation).
+- Added enums:
+  - `type Status is enum { ... }`
+  - qualified member access (`Status.pending`)
+  - unqualified enum members no longer implicit globals.
+
 ### Benchmarks
 - Added runtime call overhead benchmark:
   - `examples/bench/008_runtime_call_overhead.gengo`

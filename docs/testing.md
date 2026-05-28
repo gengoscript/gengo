@@ -5,7 +5,7 @@
 Run full conformance suite:
 
 ```bash
-make test
+WASMTIME_BIN=/path/to/wasmtime zig build -Dpreset=dev test
 ```
 
 Notes:
@@ -18,7 +18,7 @@ Notes:
 Run embedded vs host-backend parity checks:
 
 ```bash
-make parity
+WASMTIME_BIN=/path/to/wasmtime zig build -Dpreset=dev parity
 ```
 
 Notes:
@@ -30,15 +30,15 @@ Notes:
 Run benchmarks:
 
 ```bash
-make bench
-make bench-tiny
-make bench-stress
+WASMTIME_BIN=/path/to/wasmtime zig build -Dpreset=dev bench
+WASMTIME_BIN=/path/to/wasmtime zig build -Dpreset=tiny bench
+WASMTIME_BIN=/path/to/wasmtime GENGO_BENCH_INCLUDE_STRESS=1 zig build -Dpreset=stress bench
 ```
 
 Timing and throughput mode:
 
 ```bash
-GENGO_BENCH_STATS=1 make bench
+WASMTIME_BIN=/path/to/wasmtime GENGO_BENCH_STATS=1 zig build -Dpreset=dev bench
 ```
 
 Bench files:

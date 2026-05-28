@@ -1,0 +1,14 @@
+std := import("std")
+
+func sum(...xs int) int {
+    t := 0
+    for i, v in xs {
+        t += v
+    }
+    return t
+}
+
+std.io.println(sum())
+std.io.println(sum(1, 2, 3))
+std.io.printf("%s %d %f %t %%", "n", 7, 3.5, true)
+std.io.println("")

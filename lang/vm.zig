@@ -16,6 +16,7 @@ const FieldTypeAlt = @import("value.zig").FieldTypeAlt;
 const FieldTypeTag = @import("value.zig").FieldTypeTag;
 const StructFieldSpec = @import("value.zig").StructFieldSpec;
 const FieldTypeSpec = @import("value.zig").FieldTypeSpec;
+const InterfaceMethodSpec = @import("value.zig").InterfaceMethodSpec;
 const IterObj = @import("value.zig").IterObj;
 const ClosureObj = @import("value.zig").ClosureObj;
 
@@ -39,6 +40,7 @@ const RuneCacheMax = 8192;
 
 const NativeFnId = enum(u8) {
     io_println = 1,
+    io_printf = 15,
     core_len = 2,
     core_append = 3,
     core_error = 4,
@@ -291,13 +293,17 @@ fn makeNative(id: NativeFnId, arity: u8) !Value {
 fn buildStdModule() !*Object {
     if (vmState().std_module) |m| return m;
 
-    const io_items = heap.bump(MapEntry, 1) orelse return error.OutOfMemory;
+    const io_items = heap.bump(MapEntry, 2) orelse return error.OutOfMemory;
     io_items[0] = .{
         .key = .{ .string = "println" },
         .value = try makeNative(.io_println, 255),
     };
+    io_items[1] = .{
+        .key = .{ .string = "printf" },
+        .value = try makeNative(.io_printf, 255),
+    };
     const io_obj = try vmAllocObject();
-    io_obj.* = .{ .map = io_items[0..1] };
+    io_obj.* = .{ .map = io_items[0..2] };
 
     const core_items = heap.bump(MapEntry, 9) orelse return error.OutOfMemory;
     core_items[0] = .{
@@ -415,6 +421,10 @@ fn markObject(obj: *Object) void {
                 markValue(inst.fields[i].value);
             }
         },
+        .named_value => |nv| {
+            markObject(nv.typ);
+            markValue(nv.value);
+        },
         .iterator => |it| switch (it.kind) {
             .array => {
                 var i: usize = 0;
@@ -429,7 +439,8 @@ fn markObject(obj: *Object) void {
             },
             .string => {},
         },
-        .dyn_string, .function, .native_function, .struct_type => {},
+        .enum_value => |ev| markObject(ev.typ),
+        .dyn_string, .function, .native_function, .struct_type, .interface_type, .named_type, .enum_type => {},
     }
 }
 
@@ -722,6 +733,45 @@ fn nativeByteLen(v: Value) !Value {
     return .{ .number = @floatFromInt(n) };
 }
 
+fn nativePrintf(start: usize, argc: u8) !void {
+    if (argc < 1) return error.ArityMismatch;
+    const fmt_v = vmState().stack[start];
+    const fmt = try asStringValue(fmt_v);
+    var ai: usize = 1;
+    var i: usize = 0;
+    while (i < fmt.len) {
+        const c = fmt[i];
+        if (c != '%') {
+            io.write(fmt[i .. i + 1]);
+            i += 1;
+            continue;
+        }
+        if (i + 1 >= fmt.len) return error.TypeError;
+        const spec = fmt[i + 1];
+        if (spec == '%') {
+            io.write("%");
+            i += 2;
+            continue;
+        }
+        if (ai >= @as(usize, argc)) return error.ArityMismatch;
+        const arg = vmState().stack[start + ai];
+        ai += 1;
+        switch (spec) {
+            'v' => io.printValue(arg),
+            's' => io.write(try asStringValue(arg)),
+            'd' => io.writeInt(try valueAsInt(arg)),
+            'f' => io.writeF64(try valueAsNumber(arg)),
+            't' => {
+                if (arg != .boolean) return error.TypeError;
+                io.write(if (arg.boolean) "true" else "false");
+            },
+            else => return error.TypeError,
+        }
+        i += 2;
+    }
+    if (ai != @as(usize, argc)) return error.ArityMismatch;
+}
+
 fn nativeAppend(start: usize, argc: u8) !Value {
     if (argc < 1) return error.ArityMismatch;
     const first = vmState().stack[start];
@@ -904,10 +954,156 @@ fn matchesTypeAlt(v: Value, alt: FieldTypeAlt) bool {
         .rune_t => v == .rune,
         .boolean => v == .boolean,
         .string => isStringValue(v),
+        .error_t => v == .error_value,
         .array => v == .object and isArrayObject(v.object),
         .map => v == .object and isMapObject(v.object),
         .struct_t => v == .object and v.object.* == .struct_instance and common.streq(v.object.struct_instance.typ.struct_type.name, alt.struct_name),
+        .interface_t => matchesInterfaceType(v, alt.interface_name),
+        .named_t => v == .object and switch (v.object.*) {
+            .named_value => common.streq(v.object.named_value.typ.named_type.name, alt.named_name),
+            .enum_value => common.streq(v.object.enum_value.typ.enum_type.name, alt.named_name),
+            else => false,
+        },
     };
+}
+
+fn makeNamedValue(typ_obj: *Object, inner: Value) !Value {
+    const obj = try vmAllocObject();
+    obj.* = .{ .named_value = .{ .typ = typ_obj, .value = inner } };
+    return .{ .object = obj };
+}
+
+fn constructNamedType(typ_obj: *Object, arg: Value) !Value {
+    if (typ_obj.* != .named_type) return error.TypeError;
+    const nt = typ_obj.named_type;
+    var base_v: Value = undefined;
+    switch (nt.base) {
+        .int => {
+            const n = try valueAsNumber(arg);
+            if (@trunc(n) != n) return error.TypeError;
+            base_v = .{ .number = n };
+            if (nt.has_range and (n < nt.min or n > nt.max)) return error.RangeError;
+        },
+        .float => {
+            const n = try valueAsNumber(arg);
+            base_v = .{ .number = n };
+            if (nt.has_range and (n < nt.min or n > nt.max)) return error.RangeError;
+        },
+        .rune => {
+            const r: u21 = switch (arg) {
+                .rune => |rv| rv,
+                .number => |n| blk: {
+                    const t = @trunc(n);
+                    if (t != n or t < 0) return error.TypeError;
+                    break :blk @intFromFloat(t);
+                },
+                else => return error.TypeError,
+            };
+            const rf: f64 = @floatFromInt(r);
+            base_v = .{ .rune = r };
+            if (nt.has_range and (rf < nt.min or rf > nt.max)) return error.RangeError;
+        },
+        .string => {
+            if (!isStringValue(arg)) return error.TypeError;
+            const s = try asStringValue(arg);
+            base_v = try makeDynString(s);
+        },
+        .bool => {
+            if (arg != .boolean) return error.TypeError;
+            base_v = arg;
+        },
+    }
+    return makeNamedValue(typ_obj, base_v);
+}
+
+fn interfaceMethodMatches(m: InterfaceMethodSpec, f: @import("value.zig").FuncObj) bool {
+    if (m.is_variadic != f.is_variadic) return false;
+    var f_param_start: usize = 0;
+    if (f.arity == m.arity + 1 and f.param_types.len == m.param_types.len + 1) {
+        // Struct receiver methods are compiled with an implicit first parameter.
+        f_param_start = 1;
+    } else if (m.arity != f.arity) {
+        return false;
+    }
+    if (m.has_typed_params != f.has_typed_params) return false;
+    if (m.has_typed_returns != f.has_typed_returns) return false;
+    if (m.param_types.len + f_param_start != f.param_types.len) return false;
+    if (m.return_types.len != f.return_types.len) return false;
+    if (m.is_variadic) {
+        const ma = m.variadic_type.alts;
+        const fa = f.variadic_type.alts;
+        if (ma.len != fa.len) return false;
+        var vai: usize = 0;
+        while (vai < ma.len) : (vai += 1) {
+            if (ma[vai].typ != fa[vai].typ) return false;
+            switch (ma[vai].typ) {
+                .struct_t => if (!common.streq(ma[vai].struct_name, fa[vai].struct_name)) return false,
+                .interface_t => if (!common.streq(ma[vai].interface_name, fa[vai].interface_name)) return false,
+                .named_t => if (!common.streq(ma[vai].named_name, fa[vai].named_name)) return false,
+                else => {},
+            }
+        }
+    }
+    var i: usize = 0;
+    while (i < m.param_types.len) : (i += 1) {
+        const ma = m.param_types[i].alts;
+        const fa = f.param_types[f_param_start + i].alts;
+        if (ma.len != fa.len) return false;
+        var ai: usize = 0;
+        while (ai < ma.len) : (ai += 1) {
+            if (ma[ai].typ != fa[ai].typ) return false;
+            switch (ma[ai].typ) {
+                .struct_t => if (!common.streq(ma[ai].struct_name, fa[ai].struct_name)) return false,
+                .interface_t => if (!common.streq(ma[ai].interface_name, fa[ai].interface_name)) return false,
+                .named_t => if (!common.streq(ma[ai].named_name, fa[ai].named_name)) return false,
+                else => {},
+            }
+        }
+    }
+    i = 0;
+    while (i < m.return_types.len) : (i += 1) {
+        const ma = m.return_types[i].alts;
+        const fa = f.return_types[i].alts;
+        if (ma.len != fa.len) return false;
+        var ai: usize = 0;
+        while (ai < ma.len) : (ai += 1) {
+            if (ma[ai].typ != fa[ai].typ) return false;
+            switch (ma[ai].typ) {
+                .struct_t => if (!common.streq(ma[ai].struct_name, fa[ai].struct_name)) return false,
+                .interface_t => if (!common.streq(ma[ai].interface_name, fa[ai].interface_name)) return false,
+                .named_t => if (!common.streq(ma[ai].named_name, fa[ai].named_name)) return false,
+                else => {},
+            }
+        }
+    }
+    return true;
+}
+
+fn matchesInterfaceType(v: Value, iname: []const u8) bool {
+    if (!(v == .object and v.object.* == .struct_instance)) return false;
+    const tname = v.object.struct_instance.typ.struct_type.name;
+    const iv = globals.get(iname) orelse return false;
+    if (!(iv == .object and iv.object.* == .interface_type)) return false;
+    const it = iv.object.interface_type;
+    var mi: usize = 0;
+    while (mi < it.methods.len) : (mi += 1) {
+        const m = it.methods[mi];
+        const total = tname.len + 1 + m.name.len;
+        if (total > 128) return false;
+        var key_buf: [128]u8 = undefined;
+        @memcpy(key_buf[0..tname.len], tname);
+        key_buf[tname.len] = '.';
+        @memcpy(key_buf[tname.len + 1 .. total], m.name);
+        const fnv = globals.get(key_buf[0..total]) orelse return false;
+        if (!(fnv == .object and (fnv.object.* == .function or fnv.object.* == .closure))) return false;
+        const f = switch (fnv.object.*) {
+            .function => |ff| ff,
+            .closure => |cl| cl.func.function,
+            else => return false,
+        };
+        if (!interfaceMethodMatches(m, f)) return false;
+    }
+    return true;
 }
 
 fn matchesFieldType(v: Value, spec: StructFieldSpec) bool {
@@ -924,11 +1120,42 @@ fn matchesTypeSpec(v: Value, spec: FieldTypeSpec) bool {
 
 fn enforceFuncArgTypes(f: @import("value.zig").FuncObj, argc: u8) !void {
     if (!f.has_typed_params) return;
+    const fixed: usize = if (f.is_variadic) f.arity - 1 else f.arity;
     var i: usize = 0;
-    while (i < @as(usize, argc)) : (i += 1) {
+    while (i < fixed) : (i += 1) {
         const arg = vmState().stack[vmState().stack_top - argc + i];
         if (!matchesTypeSpec(arg, f.param_types[i])) return error.TypeError;
     }
+    if (f.is_variadic) {
+        while (i < @as(usize, argc)) : (i += 1) {
+            const arg = vmState().stack[vmState().stack_top - argc + i];
+            if (!matchesTypeSpec(arg, f.variadic_type)) return error.TypeError;
+        }
+    }
+}
+
+fn enforceFuncReturnTypes(f: @import("value.zig").FuncObj, retval: Value) !void {
+    if (!f.has_typed_returns) return;
+    if (f.return_types.len == 0) return;
+    if (f.return_types.len == 1) {
+        if (!matchesTypeSpec(retval, f.return_types[0])) return error.TypeError;
+        return;
+    }
+    if (!(retval == .object and isArrayObject(retval.object))) return error.TypeError;
+    const arr = asArraySlice(retval.object);
+    if (arr.len != f.return_types.len) return error.ArityMismatch;
+    var i: usize = 0;
+    while (i < arr.len) : (i += 1) {
+        if (!matchesTypeSpec(arr[i], f.return_types[i])) return error.TypeError;
+    }
+}
+
+fn frameFuncSig(func_obj: *Object) !@import("value.zig").FuncObj {
+    return switch (func_obj.*) {
+        .function => |f| f,
+        .closure => |cl| cl.func.function,
+        else => error.NotAFunction,
+    };
 }
 
 fn wireFromValue(v: Value) !host_abi.ValueWire {
@@ -1094,6 +1321,15 @@ fn callNative(nf: NativeFuncObj, argc: u8) !void {
             _ = try vmPop();
             try vmPush(.null);
         },
+        .io_printf => {
+            if (!vmState().policy.allow_io) return error.PermissionDenied;
+            const start = vmState().stack_top - argc;
+            try nativePrintf(start, argc);
+            var j: usize = 0;
+            while (j < @as(usize, argc)) : (j += 1) _ = try vmPop();
+            _ = try vmPop();
+            try vmPush(.null);
+        },
         .core_len => {
             if (argc != nf.arity) return error.ArityMismatch;
             if (vmState().policy.native_backend == .host) {
@@ -1254,18 +1490,38 @@ fn callNative(nf: NativeFuncObj, argc: u8) !void {
     }
 }
 
+fn prepareVariadicCall(f: @import("value.zig").FuncObj, argc: u8) !void {
+    if (!f.is_variadic) return;
+    const fixed: usize = f.arity - 1;
+    if (argc < fixed) return error.ArityMismatch;
+    const start = vmState().stack_top - argc;
+    const extra: usize = argc - fixed;
+    const arr_obj = try vmAllocObject();
+    try pushTempRoot(.{ .object = arr_obj });
+    defer popTempRoot();
+    const items = try vmAllocManagedSlice(Value, extra);
+    var i: usize = 0;
+    while (i < extra) : (i += 1) items[i] = vmState().stack[start + fixed + i];
+    arr_obj.* = .{ .array_managed = items[0..extra] };
+    vmState().stack[start + fixed] = .{ .object = arr_obj };
+    vmState().stack_top = start + fixed + 1;
+}
+
 fn performCall(argc: u8) !void {
     const func_val = vmState().stack[vmState().stack_top - argc - 1];
     if (func_val != .object) return error.NotAFunction;
     const obj = func_val.object;
     switch (obj.*) {
         .function => |f| {
-            if (f.arity != argc) return error.ArityMismatch;
+            if (f.is_variadic) {
+                if (argc < f.arity - 1) return error.ArityMismatch;
+            } else if (f.arity != argc) return error.ArityMismatch;
             if (f.has_typed_params) try enforceFuncArgTypes(f, argc);
+            try prepareVariadicCall(f, argc);
             if (vmState().frame_top >= MaxFrames) return error.CallStackOverflow;
             vmState().frames[vmState().frame_top] = .{
                 .ret_ip = vmState().ip,
-                .base = vmState().stack_top - argc,
+                .base = vmState().stack_top - f.arity,
                 .closure = null,
                 .func_obj = obj,
             };
@@ -1274,12 +1530,15 @@ fn performCall(argc: u8) !void {
         },
         .closure => |cl| {
             const f = cl.func.function;
-            if (f.arity != argc) return error.ArityMismatch;
+            if (f.is_variadic) {
+                if (argc < f.arity - 1) return error.ArityMismatch;
+            } else if (f.arity != argc) return error.ArityMismatch;
             if (f.has_typed_params) try enforceFuncArgTypes(f, argc);
+            try prepareVariadicCall(f, argc);
             if (vmState().frame_top >= MaxFrames) return error.CallStackOverflow;
             vmState().frames[vmState().frame_top] = .{
                 .ret_ip = vmState().ip,
-                .base = vmState().stack_top - argc,
+                .base = vmState().stack_top - f.arity,
                 .closure = obj,
                 .func_obj = cl.func,
             };
@@ -1288,6 +1547,14 @@ fn performCall(argc: u8) !void {
         },
         .native_function => |nf| {
             try callNative(nf, argc);
+        },
+        .named_type => {
+            if (argc != 1) return error.ArityMismatch;
+            const arg = vmState().stack[vmState().stack_top - 1];
+            const out = try constructNamedType(obj, arg);
+            _ = try vmPop();
+            _ = try vmPop();
+            try vmPush(out);
         },
         else => return error.NotAFunction,
     }
@@ -1319,6 +1586,7 @@ fn trySelfTailCall(argc: u8) !bool {
     if (callee_obj.* == .closure) {
         if (frame.closure == null or frame.closure.? != callee_obj) return false;
         const f = callee_obj.closure.func.function;
+        if (f.is_variadic) return false;
         if (f.arity != argc) return false;
         if (f.has_typed_params) try enforceFuncArgTypes(f, argc);
         // Rewrite current frame arg/local prefix with new args.
@@ -1334,6 +1602,7 @@ fn trySelfTailCall(argc: u8) !bool {
         if (frame.closure != null) return false;
         if (frame.func_obj != callee_obj) return false;
         const f = callee_obj.function;
+        if (f.is_variadic) return false;
         if (f.arity != argc) return false;
         if (f.has_typed_params) try enforceFuncArgTypes(f, argc);
         var i: usize = 0;
@@ -1818,6 +2087,23 @@ pub fn run() !void {
                             const idx = findFieldIndex(inst.typ.struct_type.fields, key) orelse return error.UnknownStructField;
                             try vmPush(inst.fields[idx].value);
                         },
+                        .enum_type => |et| {
+                            const key = try expectStringKey(idx_v);
+                            var ei: usize = 0;
+                            while (ei < et.members.len) : (ei += 1) {
+                                if (common.streq(et.members[ei], key)) {
+                                    const ev = try vmAllocObject();
+                                    ev.* = .{ .enum_value = .{
+                                        .typ = obj,
+                                        .name = et.members[ei],
+                                        .ordinal = @intCast(ei),
+                                    } };
+                                    try vmPush(.{ .object = ev });
+                                    break;
+                                }
+                            }
+                            if (ei == et.members.len) return error.UnknownStructField;
+                        },
                         else => return error.TypeError,
                     },
                     .string => |s| {
@@ -2039,6 +2325,8 @@ pub fn run() !void {
                 const retval = try vmPop();
                 vmState().frame_top -= 1;
                 const frame = vmState().frames[vmState().frame_top];
+                const fsig = try frameFuncSig(frame.func_obj);
+                try enforceFuncReturnTypes(fsig, retval);
                 vmState().stack_top = frame.base - 1;
                 vmState().ip = frame.ret_ip;
                 try vmPush(retval);

@@ -1,0 +1,19 @@
+std := import("std")
+
+type Status is enum {
+    pending,
+    approved,
+    denied,
+}
+
+func show(s Status) {
+    switch s {
+        case Status.pending { std.io.println("p") }
+        case Status.approved { std.io.println("a") }
+        default { std.io.println("d") }
+    }
+}
+
+show(Status.pending)
+show(Status.approved)
+show(Status.denied)

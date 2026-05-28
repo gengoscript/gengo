@@ -5,8 +5,7 @@ This walkthrough takes you from build to a working script with verified output.
 ## 1. Build gengo (dev preset)
 
 ```bash
-make config-dev
-make wasi
+zig build -Dpreset=dev wasi
 ```
 
 Expected tail output:
@@ -81,21 +80,20 @@ Mikael M
 Run conformance:
 
 ```bash
-make test
+WASMTIME_BIN=/path/to/wasmtime zig build -Dpreset=dev test
 ```
 
 Run backend parity checks:
 
 ```bash
-make parity
+WASMTIME_BIN=/path/to/wasmtime zig build -Dpreset=dev parity
 ```
 
 Run tiny benchmark lane:
 
 ```bash
-make bench-tiny
+WASMTIME_BIN=/path/to/wasmtime zig build -Dpreset=tiny bench
 ```
 
 Notes:
-- `test` always re-applies `config-dev` first.
-- `bench-tiny` includes expected low-memory behavior for selected bench cases.
+- `bench`/`bench-tiny` include policy-driven expected low-memory behavior for selected bench cases.

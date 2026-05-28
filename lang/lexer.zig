@@ -28,7 +28,7 @@ pub const Lexer = struct {
             ',' => self.tok(.comma),
             ';' => self.tok(.semicolon),
             ':' => self.tok(if (self.eat('=')) .colon_eq else .colon),
-            '.' => self.tok(.dot),
+            '.' => self.tok(if (self.eat('.')) (if (self.eat('.')) .ellipsis else .dotdot) else .dot),
             '?' => self.tok(.question),
             '+' => self.tok(if (self.eat('+')) .plus_plus else if (self.eat('=')) .plus_eq else .plus),
             '-' => self.tok(if (self.eat('-')) .minus_minus else if (self.eat('=')) .minus_eq else .minus),
@@ -72,7 +72,7 @@ pub const Lexer = struct {
         while (common.isAlphaNum(self.peek())) _ = self.adv();
         const text = self.src[self.start..self.pos];
         const tt: TT =
-            if (common.streq(text, "true")) .kw_true else if (common.streq(text, "false")) .kw_false else if (common.streq(text, "null") or common.streq(text, "undefined")) .kw_null else if (common.streq(text, "if")) .kw_if else if (common.streq(text, "else")) .kw_else else if (common.streq(text, "for")) .kw_for else if (common.streq(text, "in")) .kw_in else if (common.streq(text, "switch")) .kw_switch else if (common.streq(text, "case")) .kw_case else if (common.streq(text, "default")) .kw_default else if (common.streq(text, "return")) .kw_return else if (common.streq(text, "func")) .kw_func else if (common.streq(text, "struct")) .kw_struct else if (common.streq(text, "import")) .kw_import else if (common.streq(text, "break")) .kw_break else if (common.streq(text, "continue")) .kw_continue else .ident;
+            if (common.streq(text, "true")) .kw_true else if (common.streq(text, "false")) .kw_false else if (common.streq(text, "null") or common.streq(text, "undefined")) .kw_null else if (common.streq(text, "if")) .kw_if else if (common.streq(text, "else")) .kw_else else if (common.streq(text, "for")) .kw_for else if (common.streq(text, "in")) .kw_in else if (common.streq(text, "switch")) .kw_switch else if (common.streq(text, "case")) .kw_case else if (common.streq(text, "default")) .kw_default else if (common.streq(text, "return")) .kw_return else if (common.streq(text, "func")) .kw_func else if (common.streq(text, "struct")) .kw_struct else if (common.streq(text, "interface")) .kw_interface else if (common.streq(text, "type")) .kw_type else if (common.streq(text, "is")) .kw_is else if (common.streq(text, "range")) .kw_range else if (common.streq(text, "enum")) .kw_enum else if (common.streq(text, "import")) .kw_import else if (common.streq(text, "var")) .kw_var else if (common.streq(text, "const")) .kw_const else if (common.streq(text, "break")) .kw_break else if (common.streq(text, "continue")) .kw_continue else .ident;
         return self.tok(tt);
     }
 

@@ -1,0 +1,5 @@
+func f(...xs int, y int) int {
+    return y
+}
+
+f(1, 2)

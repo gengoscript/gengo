@@ -1,0 +1,10 @@
+interface Parser {
+    name() string
+}
+
+struct X { v: int }
+
+func use(p Parser) {
+}
+
+use(X{ v: 1 })

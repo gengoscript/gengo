@@ -1,0 +1,5 @@
+func f() string {
+    return 123
+}
+
+f()
