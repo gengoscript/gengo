@@ -10,14 +10,14 @@ Project status: early-stage and intentionally evolving.
 std := import("std")
 
 struct User {
-    id: int
-    name: string
+    id: int,
+    name: string,
     bio: ?string
 }
 
 func greet(u User) {
-    # Multiline escaped string:
-    # open with ", continue with " at same column, close on last line with ".
+    // Multiline escaped string:
+    // open with ", continue with " at same column, close on last line with ".
     msg := "Hello,
            "this is gengo
            "User:"
