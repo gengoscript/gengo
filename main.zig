@@ -1,9 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const Compiler = @import("lang/compiler.zig").Compiler;
-const globals = @import("lang/globals.zig");
-const heap = @import("runtime/heap.zig");
+const Runtime = @import("runtime/runtime.zig").Runtime;
 const io = @import("runtime/io.zig");
 const vm = @import("lang/vm.zig");
 const cfg = @import("runtime/config.zig");
@@ -144,25 +142,19 @@ export fn _start() void {
         src = g_src_buf[0..total];
     }
 
-    globals.reset();
-    vm.reset();
-    vm.setPolicy(.{ .allow_io = true, .native_backend = backend });
-    heap.reset();
-
-    var compiler = Compiler.init(src);
-    compiler.compile() catch |err| {
-        io.werr("gengo: compile error on line ");
-        io.writeInt(@intCast(compiler.prev.line));
-        io.werr(": ");
-        io.werr(@errorName(err));
-        io.werr("\n");
-        die(1);
-    };
-
-    vm.run() catch |err| {
-        io.werr("gengo: runtime error: ");
-        io.werr(@errorName(err));
-        io.werr("\n");
+    var runtime = Runtime.withPolicy(.{ .allow_io = true, .native_backend = backend });
+    runtime.run(src) catch |err| {
+        if (runtime.last_compile_line != 0) {
+            io.werr("gengo: compile error on line ");
+            io.writeInt(@intCast(runtime.last_compile_line));
+            io.werr(": ");
+            io.werr(@errorName(err));
+            io.werr("\n");
+        } else {
+            io.werr("gengo: runtime error: ");
+            io.werr(@errorName(err));
+            io.werr("\n");
+        }
         die(1);
     };
 
