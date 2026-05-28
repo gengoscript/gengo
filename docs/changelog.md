@@ -15,6 +15,10 @@ This changelog tracks notable language/runtime changes by implementation date.
   - `heap`
   - `vm`
 - Removed snapshot/restore-based runtime copy-back path and switched to active-state pointer activation.
+- Added host-facing embedding layer:
+  - `runtime/api.zig`
+  - typed run/call result contracts for compile/runtime errors.
+- Added embedding API validation runner (`embedding_runner.zig`) and hooked it into `zig build test`.
 
 ### Benchmarks
 - Added runtime call overhead benchmark:

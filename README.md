@@ -70,6 +70,7 @@ WASMTIME_BIN=/path/to/wasmtime zig build -Dpreset=dev test
 - Language behavior may change as the project evolves.
 - Runtime defaults are small by design (see `docs/language.md` limits section).
 - Managed heap allocations are class-based; a single managed block is currently capped at `32 KiB`.
+- Embedding API guide: `docs/embedding.md` (`runtime/api.zig`).
 
 ## Browser Playground
 

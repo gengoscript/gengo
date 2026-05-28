@@ -11,6 +11,7 @@ Companion guides:
 - `docs/host-abi.md`
 - `docs/host-abi-v2-plan.md`
 - `docs/changelog.md`
+- `docs/embedding.md`
 
 ## 1. Positioning
 

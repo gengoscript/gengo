@@ -41,26 +41,31 @@ fn makeWasiBuildStep(
     return cmd;
 }
 
-fn makeUnitRunStep(
+fn makeWasiRunnerStep(
     b: *std.Build,
+    root: []const u8,
+    out_name: []const u8,
     depends_on: ?*std.Build.Step.Run,
 ) *std.Build.Step.Run {
     const cmd = b.addSystemCommand(&.{
         "bash",
         "-lc",
-        \\set -eu
-        \\ZIG="${ZIG:-zig}"
-        \\WASMTIME_BIN="${WASMTIME_BIN:-wasmtime}"
-        \\ZIG_GLOBAL_CACHE_DIR="${ZIG_GLOBAL_CACHE_DIR:-/tmp/zig-cache}"
-        \\ZIG_LOCAL_CACHE_DIR="${ZIG_LOCAL_CACHE_DIR:-/tmp/zig-local-cache}"
-        \\"$ZIG" build-exe \
-        \\  -target wasm32-wasi \
-        \\  -fno-entry -rdynamic \
-        \\  -O Debug \
-        \\  -Mroot="vm_safety_runner.zig" \
-        \\  -femit-bin="vm-safety.wasm"
-        \\"$WASMTIME_BIN" --dir / ./vm-safety.wasm
-        ,
+        b.fmt(
+            \\set -eu
+            \\ZIG="${{ZIG:-zig}}"
+            \\WASMTIME_BIN="${{WASMTIME_BIN:-wasmtime}}"
+            \\ZIG_GLOBAL_CACHE_DIR="${{ZIG_GLOBAL_CACHE_DIR:-/tmp/zig-cache}}"
+            \\ZIG_LOCAL_CACHE_DIR="${{ZIG_LOCAL_CACHE_DIR:-/tmp/zig-local-cache}}"
+            \\"$ZIG" build-exe \
+            \\  -target wasm32-wasi \
+            \\  -fno-entry -rdynamic \
+            \\  -O Debug \
+            \\  -Mroot="{s}" \
+            \\  -femit-bin="{s}"
+            \\"$WASMTIME_BIN" --dir / ./"{s}"
+            ,
+            .{ root, out_name, out_name },
+        ),
     });
     if (depends_on) |d| cmd.step.dependOn(&d.step);
     return cmd;
@@ -74,7 +79,8 @@ pub fn build(b: *std.Build) void {
     const preset = makePresetStep(b, preset_opt);
     const wasi = makeWasiBuildStep(b, "wasi", "Debug", "gengo-test.wasm", "main.zig", preset);
     const wasi_release = makeWasiBuildStep(b, "wasi-release", "ReleaseFast", "gengo-test.wasm", "main.zig", preset);
-    const unit = makeUnitRunStep(b, preset);
+    const vm_safety = makeWasiRunnerStep(b, "vm_safety_runner.zig", "vm-safety.wasm", preset);
+    const embedding = makeWasiRunnerStep(b, "embedding_runner.zig", "embedding.wasm", preset);
 
     const conformance = b.addSystemCommand(&.{
         "bash",
@@ -83,8 +89,9 @@ pub fn build(b: *std.Build) void {
     });
     conformance.step.dependOn(&wasi.step);
 
-    const test_step = b.step("test", "Run VM safety and conformance tests");
-    test_step.dependOn(&unit.step);
+    const test_step = b.step("test", "Run runtime safety, embedding API, and conformance tests");
+    test_step.dependOn(&vm_safety.step);
+    test_step.dependOn(&embedding.step);
     test_step.dependOn(&conformance.step);
 
     const bench = b.addSystemCommand(&.{
@@ -120,6 +127,7 @@ pub fn build(b: *std.Build) void {
     const wasi_release_step = b.step("wasi-release", "Build WASI runtime (ReleaseFast)");
     wasi_release_step.dependOn(&wasi_release.step);
 
-    const unit_step = b.step("unit", "Run VM safety checks");
-    unit_step.dependOn(&unit.step);
+    const unit_step = b.step("unit", "Run VM safety and embedding API checks");
+    unit_step.dependOn(&vm_safety.step);
+    unit_step.dependOn(&embedding.step);
 }
