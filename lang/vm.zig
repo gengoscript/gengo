@@ -82,6 +82,35 @@ const NativeFnId = enum(u8) {
 };
 const MaxNativeArgs = 255;
 
+pub const State = struct {
+    policy: Policy = .{},
+    stack: [MaxStack]Value = undefined,
+    stack_top: usize = 0,
+    ip: usize = 0,
+    frames: [MaxFrames]Frame = undefined,
+    frame_top: usize = 0,
+    std_module: ?*Object = null,
+    host_checked: bool = false,
+    host_caps: u64 = 0,
+    next_gc_objects: usize = 256,
+    next_gc_heap_bytes: usize = heap.HeapSize / 2,
+    call_depth_target: ?usize = null,
+    temp_roots: [MaxTempRoots]Value = undefined,
+    temp_root_top: usize = 0,
+    rune_cache_ptr: usize = 0,
+    rune_cache_byte_len: usize = 0,
+    rune_cache_rune_len: usize = 0,
+    rune_cache_valid: bool = false,
+    rune_cache_overflow: bool = false,
+    rune_cache_offsets: [RuneCacheMax]usize = undefined,
+    gc_runs: u64 = 0,
+    gc_time_ns: u64 = 0,
+    alloc_object_calls: u64 = 0,
+    alloc_managed_slice_calls: u64 = 0,
+    alloc_managed_bytes_calls: u64 = 0,
+    ops_budget_remaining: ?u64 = null,
+};
+
 pub fn reset() void {
     g_stack_top = 0;
     g_ip = 0;
@@ -2034,6 +2063,66 @@ pub fn run() !void {
             .halt => return,
         }
     }
+}
+
+pub fn snapshot() State {
+    return .{
+        .policy = g_policy,
+        .stack = g_stack,
+        .stack_top = g_stack_top,
+        .ip = g_ip,
+        .frames = g_frames,
+        .frame_top = g_frame_top,
+        .std_module = g_std_module,
+        .host_checked = g_host_checked,
+        .host_caps = g_host_caps,
+        .next_gc_objects = g_next_gc_objects,
+        .next_gc_heap_bytes = g_next_gc_heap_bytes,
+        .call_depth_target = g_call_depth_target,
+        .temp_roots = g_temp_roots,
+        .temp_root_top = g_temp_root_top,
+        .rune_cache_ptr = g_rune_cache_ptr,
+        .rune_cache_byte_len = g_rune_cache_byte_len,
+        .rune_cache_rune_len = g_rune_cache_rune_len,
+        .rune_cache_valid = g_rune_cache_valid,
+        .rune_cache_overflow = g_rune_cache_overflow,
+        .rune_cache_offsets = g_rune_cache_offsets,
+        .gc_runs = g_gc_runs,
+        .gc_time_ns = g_gc_time_ns,
+        .alloc_object_calls = g_alloc_object_calls,
+        .alloc_managed_slice_calls = g_alloc_managed_slice_calls,
+        .alloc_managed_bytes_calls = g_alloc_managed_bytes_calls,
+        .ops_budget_remaining = g_ops_budget_remaining,
+    };
+}
+
+pub fn restore(state: State) void {
+    g_policy = state.policy;
+    g_stack = state.stack;
+    g_stack_top = state.stack_top;
+    g_ip = state.ip;
+    g_frames = state.frames;
+    g_frame_top = state.frame_top;
+    g_std_module = state.std_module;
+    g_host_checked = state.host_checked;
+    g_host_caps = state.host_caps;
+    g_next_gc_objects = state.next_gc_objects;
+    g_next_gc_heap_bytes = state.next_gc_heap_bytes;
+    g_call_depth_target = state.call_depth_target;
+    g_temp_roots = state.temp_roots;
+    g_temp_root_top = state.temp_root_top;
+    g_rune_cache_ptr = state.rune_cache_ptr;
+    g_rune_cache_byte_len = state.rune_cache_byte_len;
+    g_rune_cache_rune_len = state.rune_cache_rune_len;
+    g_rune_cache_valid = state.rune_cache_valid;
+    g_rune_cache_overflow = state.rune_cache_overflow;
+    g_rune_cache_offsets = state.rune_cache_offsets;
+    g_gc_runs = state.gc_runs;
+    g_gc_time_ns = state.gc_time_ns;
+    g_alloc_object_calls = state.alloc_object_calls;
+    g_alloc_managed_slice_calls = state.alloc_managed_slice_calls;
+    g_alloc_managed_bytes_calls = state.alloc_managed_bytes_calls;
+    g_ops_budget_remaining = state.ops_budget_remaining;
 }
 
 // makeString allocates a heap-owned copy of s. Use this when passing host

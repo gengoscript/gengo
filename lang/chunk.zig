@@ -12,6 +12,14 @@ pub var g_consts: [MaxConst]Value = undefined;
 pub var g_code_len: usize = 0;
 pub var g_const_count: usize = 0;
 
+pub const State = struct {
+    code: [MaxCode]u8 = undefined,
+    lines: [MaxCode]u16 = undefined,
+    consts: [MaxConst]Value = undefined,
+    code_len: usize = 0,
+    const_count: usize = 0,
+};
+
 pub fn reset() void {
     g_code_len = 0;
     g_const_count = 0;
@@ -75,4 +83,22 @@ pub fn emitLoop(loop_start: usize, line: u32) !void {
     if (offset > 0xffff) return error.LoopTooLarge;
     try emitByte(@intCast((offset >> 8) & 0xff), line);
     try emitByte(@intCast(offset & 0xff), line);
+}
+
+pub fn snapshot() State {
+    return .{
+        .code = g_code,
+        .lines = g_lines,
+        .consts = g_consts,
+        .code_len = g_code_len,
+        .const_count = g_const_count,
+    };
+}
+
+pub fn restore(state: State) void {
+    g_code = state.code;
+    g_lines = state.lines;
+    g_consts = state.consts;
+    g_code_len = state.code_len;
+    g_const_count = state.const_count;
 }

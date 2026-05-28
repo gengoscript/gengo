@@ -11,6 +11,11 @@ const GEntry = struct {
 var g_entries: [TableSize]GEntry = undefined;
 var g_globals_len: usize = 0;
 
+pub const State = struct {
+    entries: [TableSize]GEntry = undefined,
+    globals_len: usize = 0,
+};
+
 fn slotFor(name: []const u8) ?usize {
     const mask: usize = TableSize - 1;
     var idx: usize = @intCast(common.hashBytes(name) & mask);
@@ -101,4 +106,16 @@ pub fn debugSlotCount() usize {
         if (g_entries[slot].occupied) n += 1;
     }
     return n;
+}
+
+pub fn snapshot() State {
+    return .{
+        .entries = g_entries,
+        .globals_len = g_globals_len,
+    };
+}
+
+pub fn restore(state: State) void {
+    g_entries = state.entries;
+    g_globals_len = state.globals_len;
 }

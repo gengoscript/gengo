@@ -3,6 +3,8 @@ const std = @import("std");
 const chunk = @import("lang/chunk.zig");
 const globals = @import("lang/globals.zig");
 const heap = @import("runtime/heap.zig");
+const Runtime = @import("runtime/runtime.zig").Runtime;
+const Value = @import("lang/value.zig").Value;
 const vm = @import("lang/vm.zig");
 
 fn writeAll(fd: std.os.wasi.fd_t, s: []const u8) void {
@@ -85,6 +87,28 @@ fn runInstructionBudgetExceeded() !void {
     return error.TestFailed;
 }
 
+fn runRuntimeIsolation() !void {
+    var rt1 = Runtime.init();
+    rt1.setPolicy(.{ .allow_io = false, .native_backend = .embedded });
+    try rt1.run(
+        \\x := 11
+        \\func read() { return x }
+    );
+
+    var rt2 = Runtime.init();
+    rt2.setPolicy(.{ .allow_io = false, .native_backend = .embedded });
+    try rt2.run(
+        \\x := 99
+        \\func read() { return x }
+    );
+
+    const v1 = try rt1.callGlobal("read", &[_]Value{});
+    if (v1 != .number or v1.number != 11) return error.TestFailed;
+
+    const v2 = try rt2.callGlobal("read", &[_]Value{});
+    if (v2 != .number or v2.number != 99) return error.TestFailed;
+}
+
 export fn _start() void {
     runStackUnderflow() catch {
         std.os.wasi.proc_exit(1);
@@ -99,6 +123,9 @@ export fn _start() void {
         std.os.wasi.proc_exit(1);
     };
     runInstructionBudgetExceeded() catch {
+        std.os.wasi.proc_exit(1);
+    };
+    runRuntimeIsolation() catch {
         std.os.wasi.proc_exit(1);
     };
     out("vm-safety OK\n");

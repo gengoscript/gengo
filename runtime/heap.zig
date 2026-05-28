@@ -20,6 +20,18 @@ const ClassSizes = [_]usize{ 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 
 const ManagedAlign: usize = 16;
 var g_free_blocks: [ClassCount]?*u8 = [_]?*u8{null} ** ClassCount;
 
+pub const State = struct {
+    heap: [HeapSize]u8 align(16) = undefined,
+    heap_pos: usize = 0,
+    obj_pool: [MaxObjects]Object = undefined,
+    obj_marked: [MaxObjects]bool = [_]bool{false} ** MaxObjects,
+    obj_live: [MaxObjects]bool = [_]bool{false} ** MaxObjects,
+    obj_next_free: [MaxObjects]u16 = undefined,
+    obj_free_head: u16 = 0,
+    obj_live_count: usize = 0,
+    free_blocks: [ClassCount]?*u8 = [_]?*u8{null} ** ClassCount,
+};
+
 pub fn reset() void {
     g_heap_pos = 0;
     var c: usize = 0;
@@ -164,4 +176,30 @@ pub fn liveObjectCount() usize {
 
 pub fn usedBytes() usize {
     return g_heap_pos;
+}
+
+pub fn snapshot() State {
+    return .{
+        .heap = g_heap,
+        .heap_pos = g_heap_pos,
+        .obj_pool = g_obj_pool,
+        .obj_marked = g_obj_marked,
+        .obj_live = g_obj_live,
+        .obj_next_free = g_obj_next_free,
+        .obj_free_head = g_obj_free_head,
+        .obj_live_count = g_obj_live_count,
+        .free_blocks = g_free_blocks,
+    };
+}
+
+pub fn restore(state: State) void {
+    g_heap = state.heap;
+    g_heap_pos = state.heap_pos;
+    g_obj_pool = state.obj_pool;
+    g_obj_marked = state.obj_marked;
+    g_obj_live = state.obj_live;
+    g_obj_next_free = state.obj_next_free;
+    g_obj_free_head = state.obj_free_head;
+    g_obj_live_count = state.obj_live_count;
+    g_free_blocks = state.free_blocks;
 }
