@@ -8,22 +8,22 @@ const Value = @import("../lang/value.zig").Value;
 pub const Runtime = struct {
     policy: vm.Policy = .{},
     last_compile_line: u32 = 0,
-    chunk_state: chunk.State = undefined,
-    globals_state: globals.State = undefined,
+    chunk_state: chunk.State = .{},
+    globals_state: globals.State = .{},
     heap_state: heap.State = undefined,
     vm_state: vm.State = undefined,
 
     pub fn init() Runtime {
+        var rt: Runtime = .{};
+        chunk.setActive(&rt.chunk_state);
+        globals.setActive(&rt.globals_state);
         chunk.reset();
         globals.reset();
         vm.reset();
         heap.reset();
-        return .{
-            .chunk_state = chunk.snapshot(),
-            .globals_state = globals.snapshot(),
-            .heap_state = heap.snapshot(),
-            .vm_state = vm.snapshot(),
-        };
+        rt.heap_state = heap.snapshot();
+        rt.vm_state = vm.snapshot();
+        return rt;
     }
 
     pub fn withPolicy(policy: vm.Policy) Runtime {
@@ -69,15 +69,13 @@ pub const Runtime = struct {
     }
 
     fn activate(self: *Runtime) void {
-        chunk.restore(self.chunk_state);
-        globals.restore(self.globals_state);
+        chunk.setActive(&self.chunk_state);
+        globals.setActive(&self.globals_state);
         heap.restore(self.heap_state);
         vm.restore(self.vm_state);
     }
 
     fn capture(self: *Runtime) void {
-        self.chunk_state = chunk.snapshot();
-        self.globals_state = globals.snapshot();
         self.heap_state = heap.snapshot();
         self.vm_state = vm.snapshot();
     }

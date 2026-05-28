@@ -1032,7 +1032,7 @@ pub const Compiler = struct {
         try self.expr(); // iterable
         try chunk.emitOp(.iter_init, self.prev.line);
 
-        const loop_start = chunk.g_code_len;
+        const loop_start = chunk.codeLen();
         try self.pushLoop(loop_start, local_base);
         try chunk.emitOp(if (vname == null) .iter_next1 else .iter_next2, self.prev.line);
         const exit_j = try chunk.emitJump(.jump_if_false, self.prev.line);
@@ -1123,7 +1123,7 @@ pub const Compiler = struct {
     }
 
     fn whileForStmt(self: *Compiler) anyerror!void {
-        const loop_start = chunk.g_code_len;
+        const loop_start = chunk.codeLen();
         try self.pushLoop(loop_start, self.loopKeepBase());
         try self.expr();
         try self.consume(.lbrace);
@@ -1153,7 +1153,7 @@ pub const Compiler = struct {
             try self.consume(.semicolon);
         }
 
-        var loop_start = chunk.g_code_len;
+        var loop_start = chunk.codeLen();
         var exit_j: ?usize = null;
 
         if (!self.match(.semicolon)) {
@@ -1165,7 +1165,7 @@ pub const Compiler = struct {
 
         if (!self.check(.lbrace)) {
             const body_j = try chunk.emitJump(.jump, self.prev.line);
-            const post_start = chunk.g_code_len;
+            const post_start = chunk.codeLen();
             if (self.check(.ident) and (self.peekTT() == .plus_plus or self.peekTT() == .minus_minus)) {
                 try self.incrStmt();
             } else if (self.check(.ident) and self.peekTT() == .eq) {
@@ -1256,7 +1256,7 @@ pub const Compiler = struct {
         try self.consume(.rparen);
 
         const jump_over = try chunk.emitJump(.jump, self.prev.line);
-        const func_ip = chunk.g_code_len;
+        const func_ip = chunk.codeLen();
 
         if (self.scope_depth >= MaxScopes) return error.TooManyNestedFunctions;
         self.scopes[self.scope_depth] = .{};
