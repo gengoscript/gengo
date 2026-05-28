@@ -112,21 +112,24 @@ fn vmPush(v: Value) !void {
     g_stack[g_stack_top] = v;
     g_stack_top += 1;
 }
-fn vmPop() Value {
+fn vmPop() !Value {
+    if (g_stack_top == 0) return error.StackUnderflow;
     g_stack_top -= 1;
     return g_stack[g_stack_top];
 }
-fn vmPeek(dist: usize) Value {
+fn vmPeek(dist: usize) !Value {
+    if (dist >= g_stack_top) return error.StackUnderflow;
     return g_stack[g_stack_top - 1 - dist];
 }
-fn vmByte() u8 {
+fn vmByte() !u8 {
+    if (g_ip >= chunk.g_code.len) return error.BytecodeOutOfBounds;
     const b = chunk.g_code[g_ip];
     g_ip += 1;
     return b;
 }
-fn vmShort() usize {
-    const hi: usize = vmByte();
-    const lo: usize = vmByte();
+fn vmShort() !usize {
+    const hi: usize = try vmByte();
+    const lo: usize = try vmByte();
     return (hi << 8) | lo;
 }
 
@@ -139,8 +142,10 @@ fn pushTempRoot(v: Value) !void {
 fn popTempRoot() void {
     if (g_temp_root_top > 0) g_temp_root_top -= 1;
 }
-fn vmConst() Value {
-    return chunk.g_consts[vmByte()];
+fn vmConst() !Value {
+    const idx = try vmByte();
+    if (idx >= chunk.g_consts.len) return error.BadConstantIndex;
+    return chunk.g_consts[idx];
 }
 
 fn vmIndexFromVal(v: Value) !usize {
@@ -1054,8 +1059,8 @@ fn callNative(nf: NativeFuncObj, argc: u8) !void {
                         .failed => return error.HostNativeFailed,
                     }
                     var j: usize = 0;
-                    while (j < @as(usize, argc)) : (j += 1) _ = vmPop();
-                    _ = vmPop();
+                    while (j < @as(usize, argc)) : (j += 1) _ = try vmPop();
+                    _ = try vmPop();
                     try vmPush(.null);
                     return;
                 }
@@ -1065,8 +1070,8 @@ fn callNative(nf: NativeFuncObj, argc: u8) !void {
             while (i < @as(usize, argc)) : (i += 1) io.printValue(g_stack[start + i]);
             io.write("\n");
             var j: usize = 0;
-            while (j < @as(usize, argc)) : (j += 1) _ = vmPop();
-            _ = vmPop();
+            while (j < @as(usize, argc)) : (j += 1) _ = try vmPop();
+            _ = try vmPop();
             try vmPush(.null);
         },
         .core_len => {
@@ -1093,16 +1098,16 @@ fn callNative(nf: NativeFuncObj, argc: u8) !void {
                         .failed => return error.HostNativeFailed,
                     }
                     const out = try valueFromWire(out_wire);
-                    _ = vmPop();
-                    _ = vmPop();
+                    _ = try vmPop();
+                    _ = try vmPop();
                     try vmPush(out);
                     return;
                 }
             }
             const arg = g_stack[g_stack_top - 1];
             const out = try nativeLen(arg);
-            _ = vmPop();
-            _ = vmPop();
+            _ = try vmPop();
+            _ = try vmPop();
             try vmPush(out);
         },
         .core_append => {
@@ -1134,16 +1139,16 @@ fn callNative(nf: NativeFuncObj, argc: u8) !void {
                     }
                     const out = try valueFromWire(out_wire);
                     var j: usize = 0;
-                    while (j < @as(usize, argc)) : (j += 1) _ = vmPop();
-                    _ = vmPop();
+                    while (j < @as(usize, argc)) : (j += 1) _ = try vmPop();
+                    _ = try vmPop();
                     try vmPush(out);
                     return;
                 }
             }
             const out = try nativeAppend(start, argc);
             var j: usize = 0;
-            while (j < @as(usize, argc)) : (j += 1) _ = vmPop();
-            _ = vmPop();
+            while (j < @as(usize, argc)) : (j += 1) _ = try vmPop();
+            _ = try vmPop();
             try vmPush(out);
         },
         .core_error => {
@@ -1152,78 +1157,78 @@ fn callNative(nf: NativeFuncObj, argc: u8) !void {
             const msg = try asStringValue(arg);
             const copy = heap.bump(u8, msg.len) orelse return error.OutOfMemory;
             @memcpy(copy[0..msg.len], msg);
-            _ = vmPop();
-            _ = vmPop();
+            _ = try vmPop();
+            _ = try vmPop();
             try vmPush(.{ .error_value = copy[0..msg.len] });
         },
         .core_is_error => {
             if (argc != nf.arity) return error.ArityMismatch;
             const arg = g_stack[g_stack_top - 1];
-            _ = vmPop();
-            _ = vmPop();
+            _ = try vmPop();
+            _ = try vmPop();
             try vmPush(.{ .boolean = arg == .error_value });
         },
         .core_gc => {
             if (argc != nf.arity) return error.ArityMismatch;
             collectGarbage();
-            _ = vmPop();
+            _ = try vmPop();
             try vmPush(.null);
         },
         .core_gc_live_objects => {
             if (argc != nf.arity) return error.ArityMismatch;
-            _ = vmPop();
+            _ = try vmPop();
             try vmPush(.{ .number = @floatFromInt(heap.liveObjectCount()) });
         },
         .core_gc_stats => {
             if (argc != nf.arity) return error.ArityMismatch;
             const out = try nativeGcStats();
-            _ = vmPop();
+            _ = try vmPop();
             try vmPush(out);
         },
         .core_gc_stats_ext => {
             if (argc != nf.arity) return error.ArityMismatch;
             const out = try nativeGcStatsExt();
-            _ = vmPop();
+            _ = try vmPop();
             try vmPush(out);
         },
         .core_bytelen => {
             if (argc != nf.arity) return error.ArityMismatch;
             const arg = g_stack[g_stack_top - 1];
             const out = try nativeByteLen(arg);
-            _ = vmPop();
-            _ = vmPop();
+            _ = try vmPop();
+            _ = try vmPop();
             try vmPush(out);
         },
         .conv_to_int => {
             if (argc != nf.arity) return error.ArityMismatch;
             const arg = g_stack[g_stack_top - 1];
             const out = try nativeConvToInt(arg);
-            _ = vmPop();
-            _ = vmPop();
+            _ = try vmPop();
+            _ = try vmPop();
             try vmPush(out);
         },
         .conv_to_float => {
             if (argc != nf.arity) return error.ArityMismatch;
             const arg = g_stack[g_stack_top - 1];
             const out = try nativeConvToFloat(arg);
-            _ = vmPop();
-            _ = vmPop();
+            _ = try vmPop();
+            _ = try vmPop();
             try vmPush(out);
         },
         .conv_to_bool => {
             if (argc != nf.arity) return error.ArityMismatch;
             const arg = g_stack[g_stack_top - 1];
             const out = try nativeConvToBool(arg);
-            _ = vmPop();
-            _ = vmPop();
+            _ = try vmPop();
+            _ = try vmPop();
             try vmPush(out);
         },
         .conv_to_string => {
             if (argc != nf.arity) return error.ArityMismatch;
             const arg = g_stack[g_stack_top - 1];
             const out = try nativeConvToString(arg);
-            _ = vmPop();
-            _ = vmPop();
+            _ = try vmPop();
+            _ = try vmPop();
             try vmPush(out);
         },
     }
@@ -1424,35 +1429,37 @@ fn iterNext2(it: *IterObj) !void {
 
 pub fn run() !void {
     while (true) {
-        const op: Op = @enumFromInt(vmByte());
+        const op_raw = try vmByte();
+        if (op_raw >= std.meta.fields(Op).len) return error.BadOpcode;
+        const op: Op = @enumFromInt(op_raw);
         switch (op) {
-            .constant => try vmPush(vmConst()),
+            .constant => try vmPush(try vmConst()),
             .null_val => try vmPush(.null),
             .true_val => try vmPush(.{ .boolean = true }),
             .false_val => try vmPush(.{ .boolean = false }),
-            .dup => try vmPush(vmPeek(0)),
+            .dup => try vmPush(try vmPeek(0)),
             .dup2 => {
-                try vmPush(vmPeek(1));
-                try vmPush(vmPeek(1));
+                try vmPush(try vmPeek(1));
+                try vmPush(try vmPeek(1));
             },
-            .pop => _ = vmPop(),
+            .pop => _ = try vmPop(),
 
             .def_global => {
-                const name = vmConst().string;
-                try globals.def(name, vmPop());
+                const name = (try vmConst()).string;
+                try globals.def(name, try vmPop());
             },
             .get_global => {
-                const name = vmConst().string;
+                const name = (try vmConst()).string;
                 try vmPush(globals.get(name) orelse return error.UndefinedVariable);
             },
             .set_global => {
-                const name = vmConst().string;
-                const val = vmPop();
+                const name = (try vmConst()).string;
+                const val = try vmPop();
                 if (!globals.set(name, val)) return error.UndefinedVariable;
             },
 
             .get_local => {
-                const slot = vmByte();
+                const slot = try vmByte();
                 const base = g_frames[g_frame_top - 1].base;
                 const v = g_stack[base + slot];
                 if (v == .object and v.object.* == .cell) {
@@ -1462,9 +1469,9 @@ pub fn run() !void {
                 }
             },
             .set_local => {
-                const slot = vmByte();
+                const slot = try vmByte();
                 const base = g_frames[g_frame_top - 1].base;
-                const val = vmPop();
+                const val = try vmPop();
                 const cur = g_stack[base + slot];
                 if (cur == .object and cur.object.* == .cell) {
                     cur.object.cell.value = val;
@@ -1473,7 +1480,7 @@ pub fn run() !void {
                 }
             },
             .get_upvalue => {
-                const idx = vmByte();
+                const idx = try vmByte();
                 const frame = g_frames[g_frame_top - 1];
                 const cl = frame.closure orelse return error.TypeError;
                 if (cl.* != .closure) return error.TypeError;
@@ -1482,19 +1489,19 @@ pub fn run() !void {
                 try vmPush(cell.cell.value);
             },
             .set_upvalue => {
-                const idx = vmByte();
+                const idx = try vmByte();
                 const frame = g_frames[g_frame_top - 1];
                 const cl = frame.closure orelse return error.TypeError;
                 if (cl.* != .closure) return error.TypeError;
                 if (idx >= cl.closure.upvalues.len) return error.TypeError;
-                const val = vmPop();
+                const val = try vmPop();
                 const cell = cl.closure.upvalues[idx];
                 cell.cell.value = val;
             },
 
             .add => {
-                const b = vmPop();
-                const a = vmPop();
+                const b = try vmPop();
+                const a = try vmPop();
                 if (isStringValue(a) and isStringValue(b)) {
                     const sa = try asStringValue(a);
                     const sb = try asStringValue(b);
@@ -1506,62 +1513,62 @@ pub fn run() !void {
                 }
             },
             .sub => {
-                const b = vmPop();
-                const a = vmPop();
+                const b = try vmPop();
+                const a = try vmPop();
                 const an = try valueAsNumber(a);
                 const bn = try valueAsNumber(b);
                 try vmPush(.{ .number = an - bn });
             },
             .mul => {
-                const b = vmPop();
-                const a = vmPop();
+                const b = try vmPop();
+                const a = try vmPop();
                 const an = try valueAsNumber(a);
                 const bn = try valueAsNumber(b);
                 try vmPush(.{ .number = an * bn });
             },
             .div => {
-                const b = vmPop();
-                const a = vmPop();
+                const b = try vmPop();
+                const a = try vmPop();
                 const an = try valueAsNumber(a);
                 const bn = try valueAsNumber(b);
                 try vmPush(.{ .number = an / bn });
             },
             .mod => {
-                const b = vmPop();
-                const a = vmPop();
+                const b = try vmPop();
+                const a = try vmPop();
                 const an = try valueAsNumber(a);
                 const bn = try valueAsNumber(b);
                 try vmPush(.{ .number = common.fmod(an, bn) });
             },
             .bit_and => {
-                const b = vmPop();
-                const a = vmPop();
+                const b = try vmPop();
+                const a = try vmPop();
                 const an = try valueAsInt(a);
                 const bn = try valueAsInt(b);
                 try vmPush(.{ .number = @floatFromInt(an & bn) });
             },
             .bit_or => {
-                const b = vmPop();
-                const a = vmPop();
+                const b = try vmPop();
+                const a = try vmPop();
                 const an = try valueAsInt(a);
                 const bn = try valueAsInt(b);
                 try vmPush(.{ .number = @floatFromInt(an | bn) });
             },
             .bit_xor => {
-                const b = vmPop();
-                const a = vmPop();
+                const b = try vmPop();
+                const a = try vmPop();
                 const an = try valueAsInt(a);
                 const bn = try valueAsInt(b);
                 try vmPush(.{ .number = @floatFromInt(an ^ bn) });
             },
             .bit_not => {
-                const v = vmPop();
+                const v = try vmPop();
                 const n = try valueAsInt(v);
                 try vmPush(.{ .number = @floatFromInt(~n) });
             },
             .shl => {
-                const b = vmPop();
-                const a = vmPop();
+                const b = try vmPop();
+                const a = try vmPop();
                 const an = try valueAsInt(a);
                 const bn = try valueAsInt(b);
                 if (bn < 0) return error.RangeError;
@@ -1569,8 +1576,8 @@ pub fn run() !void {
                 try vmPush(.{ .number = @floatFromInt(an << shift) });
             },
             .shr => {
-                const b = vmPop();
-                const a = vmPop();
+                const b = try vmPop();
+                const a = try vmPop();
                 const an = try valueAsInt(a);
                 const bn = try valueAsInt(b);
                 if (bn < 0) return error.RangeError;
@@ -1578,7 +1585,7 @@ pub fn run() !void {
                 try vmPush(.{ .number = @floatFromInt(an >> shift) });
             },
             .cast_int => {
-                const v = vmPop();
+                const v = try vmPop();
                 switch (v) {
                     .number => |n| try vmPush(.{ .number = @trunc(n) }),
                     .rune => |r| try vmPush(.{ .number = @floatFromInt(r) }),
@@ -1587,7 +1594,7 @@ pub fn run() !void {
                 }
             },
             .cast_float => {
-                const v = vmPop();
+                const v = try vmPop();
                 switch (v) {
                     .number => |n| try vmPush(.{ .number = n }),
                     .rune => |r| try vmPush(.{ .number = @floatFromInt(r) }),
@@ -1596,7 +1603,7 @@ pub fn run() !void {
                 }
             },
             .cast_bool => {
-                const v = vmPop();
+                const v = try vmPop();
                 switch (v) {
                     .number => |n| try vmPush(.{ .boolean = n != 0.0 }),
                     .rune => |r| try vmPush(.{ .boolean = r != 0 }),
@@ -1605,33 +1612,33 @@ pub fn run() !void {
                 }
             },
             .neg => {
-                const v = vmPop();
+                const v = try vmPop();
                 const n = try valueAsNumber(v);
                 try vmPush(.{ .number = -n });
             },
-            .not => try vmPush(.{ .boolean = !vmPop().isTruthy() }),
+            .not => try vmPush(.{ .boolean = !(try vmPop()).isTruthy() }),
             .eq => {
-                const b = vmPop();
-                const a = vmPop();
+                const b = try vmPop();
+                const a = try vmPop();
                 try vmPush(.{ .boolean = Value.equals(a, b) });
             },
             .gt => {
-                const b = vmPop();
-                const a = vmPop();
+                const b = try vmPop();
+                const a = try vmPop();
                 const an = try valueAsNumber(a);
                 const bn = try valueAsNumber(b);
                 try vmPush(.{ .boolean = an > bn });
             },
             .lt => {
-                const b = vmPop();
-                const a = vmPop();
+                const b = try vmPop();
+                const a = try vmPop();
                 const an = try valueAsNumber(a);
                 const bn = try valueAsNumber(b);
                 try vmPush(.{ .boolean = an < bn });
             },
 
             .build_array => {
-                const count = vmByte();
+                const count = try vmByte();
                 const obj = try vmAllocObject();
                 try pushTempRoot(.{ .object = obj });
                 defer popTempRoot();
@@ -1639,13 +1646,13 @@ pub fn run() !void {
                 var i: usize = count;
                 while (i > 0) {
                     i -= 1;
-                    items[i] = vmPop();
+                    items[i] = try vmPop();
                 }
                 obj.* = .{ .array_managed = items[0..count] };
                 try vmPush(.{ .object = obj });
             },
             .build_map => {
-                const count = vmByte();
+                const count = try vmByte();
                 const obj = try vmAllocObject();
                 try pushTempRoot(.{ .object = obj });
                 defer popTempRoot();
@@ -1653,8 +1660,8 @@ pub fn run() !void {
                 var i: usize = count;
                 while (i > 0) {
                     i -= 1;
-                    const val = vmPop();
-                    const key = vmPop();
+                    const val = try vmPop();
+                    const key = try vmPop();
                     items[i] = .{ .key = key, .value = val };
                 }
                 const bcount = mapBucketsForCount(count);
@@ -1664,7 +1671,7 @@ pub fn run() !void {
                 try vmPush(.{ .object = obj });
             },
             .build_tuple => {
-                const count = vmByte();
+                const count = try vmByte();
                 const obj = try vmAllocObject();
                 try pushTempRoot(.{ .object = obj });
                 defer popTempRoot();
@@ -1672,23 +1679,23 @@ pub fn run() !void {
                 var i: usize = count;
                 while (i > 0) {
                     i -= 1;
-                    items[i] = vmPop();
+                    items[i] = try vmPop();
                 }
                 obj.* = .{ .array_managed = items[0..count] };
                 try vmPush(.{ .object = obj });
             },
             .build_struct_instance => {
-                const count = vmByte();
+                const count = try vmByte();
                 const supplied_ptr = heap.bump(MapEntry, count) orelse return error.OutOfMemory;
                 const supplied = supplied_ptr[0..count];
                 var i: usize = count;
                 while (i > 0) {
                     i -= 1;
-                    const val = vmPop();
-                    const key = vmPop();
+                    const val = try vmPop();
+                    const key = try vmPop();
                     supplied[i] = .{ .key = key, .value = val };
                 }
-                const typ_v = vmPop();
+                const typ_v = try vmPop();
                 if (typ_v != .object or typ_v.object.* != .struct_type) return error.TypeError;
                 const st = typ_v.object.struct_type;
 
@@ -1726,30 +1733,30 @@ pub fn run() !void {
                 try vmPush(.{ .object = obj });
             },
             .tuple_check_arity => {
-                const expect = vmByte();
-                const tup = vmPeek(0);
+                const expect = try vmByte();
+                const tup = try vmPeek(0);
                 if (tup != .object or !isArrayObject(tup.object)) return error.TypeError;
                 if (asArraySlice(tup.object).len != expect) return error.ArityMismatch;
             },
             .tuple_get => {
-                const idx = vmByte();
-                const tup = vmPop();
+                const idx = try vmByte();
+                const tup = try vmPop();
                 if (tup != .object or !isArrayObject(tup.object)) return error.TypeError;
                 const a = asArraySlice(tup.object);
                 if (idx >= a.len) return error.ArityMismatch;
                 try vmPush(a[idx]);
             },
             .tuple_get_keep => {
-                const idx = vmByte();
-                const tup = vmPeek(0);
+                const idx = try vmByte();
+                const tup = try vmPeek(0);
                 if (tup != .object or !isArrayObject(tup.object)) return error.TypeError;
                 const a = asArraySlice(tup.object);
                 if (idx >= a.len) return error.ArityMismatch;
                 try vmPush(a[idx]);
             },
             .get_index => {
-                const idx_v = vmPop();
-                const container = vmPop();
+                const idx_v = try vmPop();
+                const container = try vmPop();
                 switch (container) {
                     .object => |obj| switch (obj.*) {
                         .dyn_string => |s| {
@@ -1799,9 +1806,9 @@ pub fn run() !void {
                 }
             },
             .set_index => {
-                const val = vmPop();
-                const idx_v = vmPop();
-                const container = vmPop();
+                const val = try vmPop();
+                const idx_v = try vmPop();
+                const container = try vmPop();
                 if (container != .object) return error.TypeError;
                 switch (container.object.*) {
                     .array, .array_managed => {
@@ -1843,15 +1850,15 @@ pub fn run() !void {
                 }
             },
             .get_slice => {
-                const flags = vmByte();
+                const flags = try vmByte();
                 const has_start = (flags & 0b01) != 0;
                 const has_end = (flags & 0b10) != 0;
 
                 var end_v: Value = .null;
                 var start_v: Value = .null;
-                if (has_end) end_v = vmPop();
-                if (has_start) start_v = vmPop();
-                const container = vmPop();
+                if (has_end) end_v = try vmPop();
+                if (has_start) start_v = try vmPop();
+                const container = try vmPop();
 
                 switch (container) {
                     .string => |s| {
@@ -1892,21 +1899,21 @@ pub fn run() !void {
                 try vmPush(.{ .object = std_obj });
             },
             .iter_init => {
-                const v = vmPop();
+                const v = try vmPop();
                 try vmPush(try iterInit(v));
             },
             .iter_next1 => {
-                const itv = vmPeek(0);
+                const itv = try vmPeek(0);
                 if (itv != .object or itv.object.* != .iterator) return error.TypeError;
                 try iterNext1(&itv.object.iterator);
             },
             .iter_next2 => {
-                const itv = vmPeek(0);
+                const itv = try vmPeek(0);
                 if (itv != .object or itv.object.* != .iterator) return error.TypeError;
                 try iterNext2(&itv.object.iterator);
             },
             .make_closure => {
-                const f = vmConst();
+                const f = try vmConst();
                 if (f != .object or f.object.* != .function) return error.TypeError;
                 const proto = f.object.function;
                 const ups = heap.bump(*Object, proto.capture_slots.len) orelse return error.OutOfMemory;
@@ -1940,8 +1947,8 @@ pub fn run() !void {
                 try vmPush(.{ .object = clo });
             },
             .invoke_method => {
-                const mname = vmConst().string;
-                const argc = vmByte();
+                const mname = (try vmConst()).string;
+                const argc = try vmByte();
                 const recv_idx = g_stack_top - argc - 1;
                 const recv = g_stack[recv_idx];
                 if (recv != .object) return error.NotAMethodReceiver;
@@ -1986,26 +1993,26 @@ pub fn run() !void {
             },
 
             .jump => {
-                const off = vmShort();
+                const off = try vmShort();
                 g_ip += off;
             },
             .jump_if_false => {
-                const off = vmShort();
-                if (!vmPeek(0).isTruthy()) g_ip += off;
+                const off = try vmShort();
+                if (!(try vmPeek(0)).isTruthy()) g_ip += off;
             },
             .loop => {
-                const off = vmShort();
+                const off = try vmShort();
                 g_ip -= off;
             },
 
             .call => {
-                const argc = vmByte();
+                const argc = try vmByte();
                 if (try trySelfTailCall(argc)) continue;
                 try performCall(argc);
             },
             .ret => {
                 if (g_frame_top == 0) return error.ReturnAtTopLevel;
-                const retval = vmPop();
+                const retval = try vmPop();
                 g_frame_top -= 1;
                 const frame = g_frames[g_frame_top];
                 g_stack_top = frame.base - 1;
@@ -2047,5 +2054,5 @@ pub fn callGlobal(name: []const u8, args: []const Value) !Value {
     defer g_call_depth_target = prev_target;
 
     try run();
-    return vmPop();
+    return try vmPop();
 }
