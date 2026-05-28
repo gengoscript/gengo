@@ -10,7 +10,7 @@ pub const Runtime = struct {
     last_compile_line: u32 = 0,
     chunk_state: chunk.State = .{},
     globals_state: globals.State = .{},
-    heap_state: heap.State = undefined,
+    heap_state: heap.State = .{},
     vm_state: vm.State = undefined,
 
     pub fn init() Runtime {
@@ -19,9 +19,9 @@ pub const Runtime = struct {
         globals.setActive(&rt.globals_state);
         chunk.reset();
         globals.reset();
+        heap.setActive(&rt.heap_state);
         vm.reset();
         heap.reset();
-        rt.heap_state = heap.snapshot();
         rt.vm_state = vm.snapshot();
         return rt;
     }
@@ -71,12 +71,11 @@ pub const Runtime = struct {
     fn activate(self: *Runtime) void {
         chunk.setActive(&self.chunk_state);
         globals.setActive(&self.globals_state);
-        heap.restore(self.heap_state);
+        heap.setActive(&self.heap_state);
         vm.restore(self.vm_state);
     }
 
     fn capture(self: *Runtime) void {
-        self.heap_state = heap.snapshot();
         self.vm_state = vm.snapshot();
     }
 };
