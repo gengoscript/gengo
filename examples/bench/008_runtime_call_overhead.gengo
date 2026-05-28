@@ -1,0 +1,13 @@
+std := import("std")
+
+func inc(x) {
+    return x + 1
+}
+
+n := 0
+for i := 0; i < 200000; i++ {
+    n = inc(n)
+}
+
+std.io.println("runtime-call-overhead")
+std.io.println(n)

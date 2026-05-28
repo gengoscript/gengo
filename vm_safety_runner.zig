@@ -107,6 +107,31 @@ fn runRuntimeIsolation() !void {
 
     const v2 = try rt2.callGlobal("read", &[_]Value{});
     if (v2 != .number or v2.number != 99) return error.TestFailed;
+
+    // Interleaved calls into both runtimes should preserve each runtime's
+    // independent mutable state.
+    try rt1.run(
+        \\counter := 0
+        \\func bump() {
+        \\    counter += 1
+        \\    return counter
+        \\}
+    );
+    try rt2.run(
+        \\counter := 100
+        \\func bump() {
+        \\    counter += 2
+        \\    return counter
+        \\}
+    );
+    const a1 = try rt1.callGlobal("bump", &[_]Value{});
+    const b1 = try rt2.callGlobal("bump", &[_]Value{});
+    const a2 = try rt1.callGlobal("bump", &[_]Value{});
+    const b2 = try rt2.callGlobal("bump", &[_]Value{});
+    if (a1 != .number or a1.number != 1) return error.TestFailed;
+    if (b1 != .number or b1.number != 102) return error.TestFailed;
+    if (a2 != .number or a2.number != 2) return error.TestFailed;
+    if (b2 != .number or b2.number != 104) return error.TestFailed;
 }
 
 export fn _start() void {

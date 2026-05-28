@@ -32,37 +32,9 @@ pub const Policy = struct {
     max_ops: ?u64 = null,
 };
 
-var g_policy: Policy = .{};
-
-var g_stack: [MaxStack]Value = undefined;
-var g_stack_top: usize = 0;
-var g_ip: usize = 0;
-
 const Frame = struct { ret_ip: usize, base: usize, closure: ?*Object, func_obj: *Object };
-var g_frames: [MaxFrames]Frame = undefined;
-var g_frame_top: usize = 0;
-var g_std_module: ?*Object = null;
-var g_host_checked: bool = false;
-var g_host_caps: u64 = 0;
-var g_next_gc_objects: usize = 256;
-var g_next_gc_heap_bytes: usize = heap.HeapSize / 2;
-var g_call_depth_target: ?usize = null;
 const MaxTempRoots = 128;
-var g_temp_roots: [MaxTempRoots]Value = undefined;
-var g_temp_root_top: usize = 0;
 const RuneCacheMax = 8192;
-var g_rune_cache_ptr: usize = 0;
-var g_rune_cache_byte_len: usize = 0;
-var g_rune_cache_rune_len: usize = 0;
-var g_rune_cache_valid: bool = false;
-var g_rune_cache_overflow: bool = false;
-var g_rune_cache_offsets: [RuneCacheMax]usize = undefined;
-var g_gc_runs: u64 = 0;
-var g_gc_time_ns: u64 = 0;
-var g_alloc_object_calls: u64 = 0;
-var g_alloc_managed_slice_calls: u64 = 0;
-var g_alloc_managed_bytes_calls: u64 = 0;
-var g_ops_budget_remaining: ?u64 = null;
 
 const NativeFnId = enum(u8) {
     io_println = 1,
@@ -111,53 +83,64 @@ pub const State = struct {
     ops_budget_remaining: ?u64 = null,
 };
 
+var g_default_state: State = .{};
+var g_state: *State = &g_default_state;
+
+inline fn vmState() *State {
+    return g_state;
+}
+
+pub fn setActive(state: *State) void {
+    g_state = state;
+}
+
 pub fn reset() void {
-    g_stack_top = 0;
-    g_ip = 0;
-    g_frame_top = 0;
-    g_std_module = null;
-    g_host_checked = false;
-    g_host_caps = 0;
-    g_next_gc_objects = 256;
-    g_next_gc_heap_bytes = heap.HeapSize / 2;
-    g_call_depth_target = null;
-    g_temp_root_top = 0;
-    g_rune_cache_ptr = 0;
-    g_rune_cache_byte_len = 0;
-    g_rune_cache_rune_len = 0;
-    g_rune_cache_valid = false;
-    g_rune_cache_overflow = false;
-    g_gc_runs = 0;
-    g_gc_time_ns = 0;
-    g_alloc_object_calls = 0;
-    g_alloc_managed_slice_calls = 0;
-    g_alloc_managed_bytes_calls = 0;
-    g_ops_budget_remaining = null;
+    vmState().stack_top = 0;
+    vmState().ip = 0;
+    vmState().frame_top = 0;
+    vmState().std_module = null;
+    vmState().host_checked = false;
+    vmState().host_caps = 0;
+    vmState().next_gc_objects = 256;
+    vmState().next_gc_heap_bytes = heap.HeapSize / 2;
+    vmState().call_depth_target = null;
+    vmState().temp_root_top = 0;
+    vmState().rune_cache_ptr = 0;
+    vmState().rune_cache_byte_len = 0;
+    vmState().rune_cache_rune_len = 0;
+    vmState().rune_cache_valid = false;
+    vmState().rune_cache_overflow = false;
+    vmState().gc_runs = 0;
+    vmState().gc_time_ns = 0;
+    vmState().alloc_object_calls = 0;
+    vmState().alloc_managed_slice_calls = 0;
+    vmState().alloc_managed_bytes_calls = 0;
+    vmState().ops_budget_remaining = null;
 }
 
 pub fn setPolicy(policy: Policy) void {
-    g_policy = policy;
-    g_ops_budget_remaining = policy.max_ops;
+    vmState().policy = policy;
+    vmState().ops_budget_remaining = policy.max_ops;
 }
 
 fn vmPush(v: Value) !void {
-    if (g_stack_top >= MaxStack) return error.StackOverflow;
-    g_stack[g_stack_top] = v;
-    g_stack_top += 1;
+    if (vmState().stack_top >= MaxStack) return error.StackOverflow;
+    vmState().stack[vmState().stack_top] = v;
+    vmState().stack_top += 1;
 }
 fn vmPop() !Value {
-    if (g_stack_top == 0) return error.StackUnderflow;
-    g_stack_top -= 1;
-    return g_stack[g_stack_top];
+    if (vmState().stack_top == 0) return error.StackUnderflow;
+    vmState().stack_top -= 1;
+    return vmState().stack[vmState().stack_top];
 }
 fn vmPeek(dist: usize) !Value {
-    if (dist >= g_stack_top) return error.StackUnderflow;
-    return g_stack[g_stack_top - 1 - dist];
+    if (dist >= vmState().stack_top) return error.StackUnderflow;
+    return vmState().stack[vmState().stack_top - 1 - dist];
 }
 fn vmByte() !u8 {
-    if (g_ip >= chunk.codeLen()) return error.BytecodeOutOfBounds;
-    const b = chunk.codeByteAt(g_ip);
-    g_ip += 1;
+    if (vmState().ip >= chunk.codeLen()) return error.BytecodeOutOfBounds;
+    const b = chunk.codeByteAt(vmState().ip);
+    vmState().ip += 1;
     return b;
 }
 fn vmShort() !usize {
@@ -167,13 +150,13 @@ fn vmShort() !usize {
 }
 
 fn pushTempRoot(v: Value) !void {
-    if (g_temp_root_top >= MaxTempRoots) return error.StackOverflow;
-    g_temp_roots[g_temp_root_top] = v;
-    g_temp_root_top += 1;
+    if (vmState().temp_root_top >= MaxTempRoots) return error.StackOverflow;
+    vmState().temp_roots[vmState().temp_root_top] = v;
+    vmState().temp_root_top += 1;
 }
 
 fn popTempRoot() void {
-    if (g_temp_root_top > 0) g_temp_root_top -= 1;
+    if (vmState().temp_root_top > 0) vmState().temp_root_top -= 1;
 }
 fn vmConst() !Value {
     const idx = try vmByte();
@@ -258,34 +241,34 @@ fn utf8ByteOffsetForRuneIndex(s: []const u8, rune_idx: usize) !usize {
 }
 
 fn ensureRuneCache(s: []const u8) !void {
-    if (g_rune_cache_valid and g_rune_cache_ptr == @intFromPtr(s.ptr) and g_rune_cache_byte_len == s.len) return;
-    g_rune_cache_ptr = @intFromPtr(s.ptr);
-    g_rune_cache_byte_len = s.len;
-    g_rune_cache_rune_len = 0;
-    g_rune_cache_valid = true;
-    g_rune_cache_overflow = false;
+    if (vmState().rune_cache_valid and vmState().rune_cache_ptr == @intFromPtr(s.ptr) and vmState().rune_cache_byte_len == s.len) return;
+    vmState().rune_cache_ptr = @intFromPtr(s.ptr);
+    vmState().rune_cache_byte_len = s.len;
+    vmState().rune_cache_rune_len = 0;
+    vmState().rune_cache_valid = true;
+    vmState().rune_cache_overflow = false;
     var i: usize = 0;
     while (i < s.len) {
-        if (g_rune_cache_rune_len < RuneCacheMax) {
-            g_rune_cache_offsets[g_rune_cache_rune_len] = i;
+        if (vmState().rune_cache_rune_len < RuneCacheMax) {
+            vmState().rune_cache_offsets[vmState().rune_cache_rune_len] = i;
         } else {
-            g_rune_cache_overflow = true;
+            vmState().rune_cache_overflow = true;
         }
         i += try utf8NextRuneByteLen(s, i);
-        g_rune_cache_rune_len += 1;
+        vmState().rune_cache_rune_len += 1;
     }
 }
 
 fn utf8RuneCountCached(s: []const u8) !usize {
     try ensureRuneCache(s);
-    return g_rune_cache_rune_len;
+    return vmState().rune_cache_rune_len;
 }
 
 fn utf8ByteOffsetForRuneIndexCached(s: []const u8, rune_idx: usize) !usize {
     try ensureRuneCache(s);
-    if (rune_idx == g_rune_cache_rune_len) return s.len;
-    if (rune_idx > g_rune_cache_rune_len) return error.IndexOutOfBounds;
-    if (!g_rune_cache_overflow and rune_idx < RuneCacheMax) return g_rune_cache_offsets[rune_idx];
+    if (rune_idx == vmState().rune_cache_rune_len) return s.len;
+    if (rune_idx > vmState().rune_cache_rune_len) return error.IndexOutOfBounds;
+    if (!vmState().rune_cache_overflow and rune_idx < RuneCacheMax) return vmState().rune_cache_offsets[rune_idx];
     return utf8ByteOffsetForRuneIndex(s, rune_idx);
 }
 
@@ -302,7 +285,7 @@ fn makeNative(id: NativeFnId, arity: u8) !Value {
 }
 
 fn buildStdModule() !*Object {
-    if (g_std_module) |m| return m;
+    if (vmState().std_module) |m| return m;
 
     const io_items = heap.bump(MapEntry, 1) orelse return error.OutOfMemory;
     io_items[0] = .{
@@ -388,7 +371,7 @@ fn buildStdModule() !*Object {
 
     const std_obj = try vmAllocObject();
     std_obj.* = .{ .map = std_items[0..3] };
-    g_std_module = std_obj;
+    vmState().std_module = std_obj;
     return std_obj;
 }
 
@@ -449,84 +432,84 @@ fn markObject(obj: *Object) void {
 fn collectGarbage() void {
     const t0 = monoNowNs();
     var i: usize = 0;
-    while (i < g_stack_top) : (i += 1) markValue(g_stack[i]);
+    while (i < vmState().stack_top) : (i += 1) markValue(vmState().stack[i]);
 
     i = 0;
     while (i < globals.len()) : (i += 1) markValue(globals.valueAt(i));
 
-    if (g_std_module) |m| markObject(m);
+    if (vmState().std_module) |m| markObject(m);
 
     i = 0;
-    while (i < g_temp_root_top) : (i += 1) markValue(g_temp_roots[i]);
+    while (i < vmState().temp_root_top) : (i += 1) markValue(vmState().temp_roots[i]);
 
     i = 0;
     while (i < chunk.constCount()) : (i += 1) markValue(chunk.constAt(i));
 
     heap.sweepObjects();
     const t1 = monoNowNs();
-    g_gc_runs += 1;
-    if (t1 > t0) g_gc_time_ns += @intCast(t1 - t0);
+    vmState().gc_runs += 1;
+    if (t1 > t0) vmState().gc_time_ns += @intCast(t1 - t0);
 }
 
 fn vmAllocObject() !*Object {
-    if (heap.liveObjectCount() >= g_next_gc_objects) {
+    if (heap.liveObjectCount() >= vmState().next_gc_objects) {
         collectGarbage();
         const live = heap.liveObjectCount();
-        g_next_gc_objects = (live * 2) + 64;
+        vmState().next_gc_objects = (live * 2) + 64;
     }
     if (heap.allocObject()) |o| {
-        g_alloc_object_calls += 1;
+        vmState().alloc_object_calls += 1;
         return o;
     }
     collectGarbage();
     const live = heap.liveObjectCount();
-    g_next_gc_objects = (live * 2) + 64;
+    vmState().next_gc_objects = (live * 2) + 64;
     if (heap.allocObject()) |o| {
-        g_alloc_object_calls += 1;
+        vmState().alloc_object_calls += 1;
         return o;
     }
     return error.OutOfMemory;
 }
 
 fn vmAllocManagedSlice(comptime T: type, n: usize) ![]T {
-    if (heap.usedBytes() >= g_next_gc_heap_bytes) {
+    if (heap.usedBytes() >= vmState().next_gc_heap_bytes) {
         collectGarbage();
         const used = heap.usedBytes();
         const step = heap.HeapSize / 4;
-        g_next_gc_heap_bytes = if (used + step > heap.HeapSize) heap.HeapSize else used + step;
+        vmState().next_gc_heap_bytes = if (used + step > heap.HeapSize) heap.HeapSize else used + step;
     }
     if (heap.allocManagedSlice(T, n)) |s| {
-        g_alloc_managed_slice_calls += 1;
+        vmState().alloc_managed_slice_calls += 1;
         return s;
     }
     collectGarbage();
     const used = heap.usedBytes();
     const step = heap.HeapSize / 4;
-    g_next_gc_heap_bytes = if (used + step > heap.HeapSize) heap.HeapSize else used + step;
+    vmState().next_gc_heap_bytes = if (used + step > heap.HeapSize) heap.HeapSize else used + step;
     if (heap.allocManagedSlice(T, n)) |s| {
-        g_alloc_managed_slice_calls += 1;
+        vmState().alloc_managed_slice_calls += 1;
         return s;
     }
     return error.OutOfMemory;
 }
 
 fn vmAllocManagedBytes(n: usize) ![]u8 {
-    if (heap.usedBytes() >= g_next_gc_heap_bytes) {
+    if (heap.usedBytes() >= vmState().next_gc_heap_bytes) {
         collectGarbage();
         const used = heap.usedBytes();
         const step = heap.HeapSize / 4;
-        g_next_gc_heap_bytes = if (used + step > heap.HeapSize) heap.HeapSize else used + step;
+        vmState().next_gc_heap_bytes = if (used + step > heap.HeapSize) heap.HeapSize else used + step;
     }
     if (heap.allocBytesManaged(n)) |s| {
-        g_alloc_managed_bytes_calls += 1;
+        vmState().alloc_managed_bytes_calls += 1;
         return s;
     }
     collectGarbage();
     const used = heap.usedBytes();
     const step = heap.HeapSize / 4;
-    g_next_gc_heap_bytes = if (used + step > heap.HeapSize) heap.HeapSize else used + step;
+    vmState().next_gc_heap_bytes = if (used + step > heap.HeapSize) heap.HeapSize else used + step;
     if (heap.allocBytesManaged(n)) |s| {
-        g_alloc_managed_bytes_calls += 1;
+        vmState().alloc_managed_bytes_calls += 1;
         return s;
     }
     return error.OutOfMemory;
@@ -737,7 +720,7 @@ fn nativeByteLen(v: Value) !Value {
 
 fn nativeAppend(start: usize, argc: u8) !Value {
     if (argc < 1) return error.ArityMismatch;
-    const first = g_stack[start];
+    const first = vmState().stack[start];
     if (first != .object or !isArrayObject(first.object)) return error.TypeError;
     const base = asArraySlice(first.object);
     const extra: usize = argc - 1;
@@ -748,7 +731,7 @@ fn nativeAppend(start: usize, argc: u8) !Value {
     @memcpy(out[0..base.len], base);
     var i: usize = 0;
     while (i < extra) : (i += 1) {
-        out[base.len + i] = g_stack[start + 1 + i];
+        out[base.len + i] = vmState().stack[start + 1 + i];
     }
     obj.* = .{ .array_managed = out[0 .. base.len + extra] };
     return .{ .object = obj };
@@ -794,23 +777,23 @@ fn nativeGcStatsExt() !Value {
     };
     items[3] = .{
         .key = .{ .string = "gc_runs" },
-        .value = .{ .number = @floatFromInt(g_gc_runs) },
+        .value = .{ .number = @floatFromInt(vmState().gc_runs) },
     };
     items[4] = .{
         .key = .{ .string = "gc_time_ns" },
-        .value = .{ .number = @floatFromInt(g_gc_time_ns) },
+        .value = .{ .number = @floatFromInt(vmState().gc_time_ns) },
     };
     items[5] = .{
         .key = .{ .string = "alloc_object_calls" },
-        .value = .{ .number = @floatFromInt(g_alloc_object_calls) },
+        .value = .{ .number = @floatFromInt(vmState().alloc_object_calls) },
     };
     items[6] = .{
         .key = .{ .string = "alloc_managed_slice_calls" },
-        .value = .{ .number = @floatFromInt(g_alloc_managed_slice_calls) },
+        .value = .{ .number = @floatFromInt(vmState().alloc_managed_slice_calls) },
     };
     items[7] = .{
         .key = .{ .string = "alloc_managed_bytes_calls" },
-        .value = .{ .number = @floatFromInt(g_alloc_managed_bytes_calls) },
+        .value = .{ .number = @floatFromInt(vmState().alloc_managed_bytes_calls) },
     };
     obj.* = .{ .map = items[0..8] };
     return .{ .object = obj };
@@ -939,7 +922,7 @@ fn enforceFuncArgTypes(f: @import("value.zig").FuncObj, argc: u8) !void {
     if (!f.has_typed_params) return;
     var i: usize = 0;
     while (i < @as(usize, argc)) : (i += 1) {
-        const arg = g_stack[g_stack_top - argc + i];
+        const arg = vmState().stack[vmState().stack_top - argc + i];
         if (!matchesTypeSpec(arg, f.param_types[i])) return error.TypeError;
     }
 }
@@ -1019,8 +1002,8 @@ fn wireNumberToU64(w: host_abi.ValueWire) !u64 {
 }
 
 fn ensureHostReady() !void {
-    if (g_policy.native_backend != .host) return;
-    if (g_host_checked) return;
+    if (vmState().policy.native_backend != .host) return;
+    if (vmState().host_checked) return;
 
     var out: host_abi.ValueWire = .{
         .tag = @intFromEnum(host_abi.WireTag.null),
@@ -1038,8 +1021,8 @@ fn ensureHostReady() !void {
         .unsupported => {
             // No host import available: remain in host mode but with zero
             // host-dispatched capabilities so VM-local implementations are used.
-            g_host_caps = 0;
-            g_host_checked = true;
+            vmState().host_caps = 0;
+            vmState().host_checked = true;
             return;
         },
         .denied => return error.PermissionDenied,
@@ -1057,23 +1040,23 @@ fn ensureHostReady() !void {
         .bad_args => return error.HostNativeBadArgs,
         .failed => return error.HostNativeFailed,
     }
-    g_host_caps = try wireNumberToU64(out);
-    g_host_checked = true;
+    vmState().host_caps = try wireNumberToU64(out);
+    vmState().host_checked = true;
 }
 
 fn callNative(nf: NativeFuncObj, argc: u8) !void {
     switch (@as(NativeFnId, @enumFromInt(nf.id))) {
         .io_println => {
-            if (!g_policy.allow_io) return error.PermissionDenied;
-            if (g_policy.native_backend == .host) {
+            if (!vmState().policy.allow_io) return error.PermissionDenied;
+            if (vmState().policy.native_backend == .host) {
                 try ensureHostReady();
-                if ((g_host_caps & host_abi.CAP_IO_PRINTLN) != 0) {
+                if ((vmState().host_caps & host_abi.CAP_IO_PRINTLN) != 0) {
                     if (argc > MaxNativeArgs) return error.ArityMismatch;
-                    const start = g_stack_top - argc;
+                    const start = vmState().stack_top - argc;
                     var args_wire: [MaxNativeArgs]host_abi.ValueWire = undefined;
                     var i: usize = 0;
                     while (i < @as(usize, argc)) : (i += 1) {
-                        args_wire[i] = try wireFromValue(g_stack[start + i]);
+                        args_wire[i] = try wireFromValue(vmState().stack[start + i]);
                     }
                     var out: host_abi.ValueWire = .{
                         .tag = @intFromEnum(host_abi.WireTag.null),
@@ -1098,9 +1081,9 @@ fn callNative(nf: NativeFuncObj, argc: u8) !void {
                     return;
                 }
             }
-            const start = g_stack_top - argc;
+            const start = vmState().stack_top - argc;
             var i: usize = 0;
-            while (i < @as(usize, argc)) : (i += 1) io.printValue(g_stack[start + i]);
+            while (i < @as(usize, argc)) : (i += 1) io.printValue(vmState().stack[start + i]);
             io.write("\n");
             var j: usize = 0;
             while (j < @as(usize, argc)) : (j += 1) _ = try vmPop();
@@ -1109,11 +1092,11 @@ fn callNative(nf: NativeFuncObj, argc: u8) !void {
         },
         .core_len => {
             if (argc != nf.arity) return error.ArityMismatch;
-            if (g_policy.native_backend == .host) {
+            if (vmState().policy.native_backend == .host) {
                 try ensureHostReady();
-                if ((g_host_caps & host_abi.CAP_CORE_LEN) != 0) {
+                if ((vmState().host_caps & host_abi.CAP_CORE_LEN) != 0) {
                     var arg_wire: [1]host_abi.ValueWire = undefined;
-                    arg_wire[0] = try wireFromValue(g_stack[g_stack_top - 1]);
+                    arg_wire[0] = try wireFromValue(vmState().stack[vmState().stack_top - 1]);
                     var out_wire: host_abi.ValueWire = .{
                         .tag = @intFromEnum(host_abi.WireTag.null),
                         .flags = 0,
@@ -1137,22 +1120,22 @@ fn callNative(nf: NativeFuncObj, argc: u8) !void {
                     return;
                 }
             }
-            const arg = g_stack[g_stack_top - 1];
+            const arg = vmState().stack[vmState().stack_top - 1];
             const out = try nativeLen(arg);
             _ = try vmPop();
             _ = try vmPop();
             try vmPush(out);
         },
         .core_append => {
-            const start = g_stack_top - argc;
-            if (g_policy.native_backend == .host) {
+            const start = vmState().stack_top - argc;
+            if (vmState().policy.native_backend == .host) {
                 try ensureHostReady();
-                if ((g_host_caps & host_abi.CAP_CORE_APPEND) != 0) {
+                if ((vmState().host_caps & host_abi.CAP_CORE_APPEND) != 0) {
                     if (argc > MaxNativeArgs) return error.ArityMismatch;
                     var args_wire: [MaxNativeArgs]host_abi.ValueWire = undefined;
                     var i: usize = 0;
                     while (i < @as(usize, argc)) : (i += 1) {
-                        args_wire[i] = try wireFromValue(g_stack[start + i]);
+                        args_wire[i] = try wireFromValue(vmState().stack[start + i]);
                     }
                     var out_wire: host_abi.ValueWire = .{
                         .tag = @intFromEnum(host_abi.WireTag.null),
@@ -1186,7 +1169,7 @@ fn callNative(nf: NativeFuncObj, argc: u8) !void {
         },
         .core_error => {
             if (argc != nf.arity) return error.ArityMismatch;
-            const arg = g_stack[g_stack_top - 1];
+            const arg = vmState().stack[vmState().stack_top - 1];
             const msg = try asStringValue(arg);
             const copy = heap.bump(u8, msg.len) orelse return error.OutOfMemory;
             @memcpy(copy[0..msg.len], msg);
@@ -1196,7 +1179,7 @@ fn callNative(nf: NativeFuncObj, argc: u8) !void {
         },
         .core_is_error => {
             if (argc != nf.arity) return error.ArityMismatch;
-            const arg = g_stack[g_stack_top - 1];
+            const arg = vmState().stack[vmState().stack_top - 1];
             _ = try vmPop();
             _ = try vmPop();
             try vmPush(.{ .boolean = arg == .error_value });
@@ -1226,7 +1209,7 @@ fn callNative(nf: NativeFuncObj, argc: u8) !void {
         },
         .core_bytelen => {
             if (argc != nf.arity) return error.ArityMismatch;
-            const arg = g_stack[g_stack_top - 1];
+            const arg = vmState().stack[vmState().stack_top - 1];
             const out = try nativeByteLen(arg);
             _ = try vmPop();
             _ = try vmPop();
@@ -1234,7 +1217,7 @@ fn callNative(nf: NativeFuncObj, argc: u8) !void {
         },
         .conv_to_int => {
             if (argc != nf.arity) return error.ArityMismatch;
-            const arg = g_stack[g_stack_top - 1];
+            const arg = vmState().stack[vmState().stack_top - 1];
             const out = try nativeConvToInt(arg);
             _ = try vmPop();
             _ = try vmPop();
@@ -1242,7 +1225,7 @@ fn callNative(nf: NativeFuncObj, argc: u8) !void {
         },
         .conv_to_float => {
             if (argc != nf.arity) return error.ArityMismatch;
-            const arg = g_stack[g_stack_top - 1];
+            const arg = vmState().stack[vmState().stack_top - 1];
             const out = try nativeConvToFloat(arg);
             _ = try vmPop();
             _ = try vmPop();
@@ -1250,7 +1233,7 @@ fn callNative(nf: NativeFuncObj, argc: u8) !void {
         },
         .conv_to_bool => {
             if (argc != nf.arity) return error.ArityMismatch;
-            const arg = g_stack[g_stack_top - 1];
+            const arg = vmState().stack[vmState().stack_top - 1];
             const out = try nativeConvToBool(arg);
             _ = try vmPop();
             _ = try vmPop();
@@ -1258,7 +1241,7 @@ fn callNative(nf: NativeFuncObj, argc: u8) !void {
         },
         .conv_to_string => {
             if (argc != nf.arity) return error.ArityMismatch;
-            const arg = g_stack[g_stack_top - 1];
+            const arg = vmState().stack[vmState().stack_top - 1];
             const out = try nativeConvToString(arg);
             _ = try vmPop();
             _ = try vmPop();
@@ -1268,36 +1251,36 @@ fn callNative(nf: NativeFuncObj, argc: u8) !void {
 }
 
 fn performCall(argc: u8) !void {
-    const func_val = g_stack[g_stack_top - argc - 1];
+    const func_val = vmState().stack[vmState().stack_top - argc - 1];
     if (func_val != .object) return error.NotAFunction;
     const obj = func_val.object;
     switch (obj.*) {
         .function => |f| {
             if (f.arity != argc) return error.ArityMismatch;
             if (f.has_typed_params) try enforceFuncArgTypes(f, argc);
-            if (g_frame_top >= MaxFrames) return error.CallStackOverflow;
-            g_frames[g_frame_top] = .{
-                .ret_ip = g_ip,
-                .base = g_stack_top - argc,
+            if (vmState().frame_top >= MaxFrames) return error.CallStackOverflow;
+            vmState().frames[vmState().frame_top] = .{
+                .ret_ip = vmState().ip,
+                .base = vmState().stack_top - argc,
                 .closure = null,
                 .func_obj = obj,
             };
-            g_frame_top += 1;
-            g_ip = f.ip;
+            vmState().frame_top += 1;
+            vmState().ip = f.ip;
         },
         .closure => |cl| {
             const f = cl.func.function;
             if (f.arity != argc) return error.ArityMismatch;
             if (f.has_typed_params) try enforceFuncArgTypes(f, argc);
-            if (g_frame_top >= MaxFrames) return error.CallStackOverflow;
-            g_frames[g_frame_top] = .{
-                .ret_ip = g_ip,
-                .base = g_stack_top - argc,
+            if (vmState().frame_top >= MaxFrames) return error.CallStackOverflow;
+            vmState().frames[vmState().frame_top] = .{
+                .ret_ip = vmState().ip,
+                .base = vmState().stack_top - argc,
                 .closure = obj,
                 .func_obj = cl.func,
             };
-            g_frame_top += 1;
-            g_ip = f.ip;
+            vmState().frame_top += 1;
+            vmState().ip = f.ip;
         },
         .native_function => |nf| {
             try callNative(nf, argc);
@@ -1307,28 +1290,28 @@ fn performCall(argc: u8) !void {
 }
 
 fn writeFrameLocal(abs_slot: usize, v: Value) void {
-    const cur = g_stack[abs_slot];
+    const cur = vmState().stack[abs_slot];
     if (cur == .object and cur.object.* == .cell) {
         cur.object.cell.value = v;
     } else {
-        g_stack[abs_slot] = v;
+        vmState().stack[abs_slot] = v;
     }
 }
 
 fn trySelfTailCall(argc: u8) !bool {
-    if (g_frame_top == 0) return false;
+    if (vmState().frame_top == 0) return false;
     // Tail position pattern emitted by compiler: `call <argc>` followed by `ret`.
-    if (g_ip >= chunk.codeLen()) return false;
-    const next_op: Op = @enumFromInt(chunk.codeByteAt(g_ip));
+    if (vmState().ip >= chunk.codeLen()) return false;
+    const next_op: Op = @enumFromInt(chunk.codeByteAt(vmState().ip));
     if (next_op != .ret) return false;
 
-    const callee_idx = g_stack_top - argc - 1;
-    const func_val = g_stack[callee_idx];
+    const callee_idx = vmState().stack_top - argc - 1;
+    const func_val = vmState().stack[callee_idx];
     if (func_val != .object) return false;
     const callee_obj = func_val.object;
 
-    const frame_idx = g_frame_top - 1;
-    const frame = g_frames[frame_idx];
+    const frame_idx = vmState().frame_top - 1;
+    const frame = vmState().frames[frame_idx];
     if (callee_obj.* == .closure) {
         if (frame.closure == null or frame.closure.? != callee_obj) return false;
         const f = callee_obj.closure.func.function;
@@ -1337,10 +1320,10 @@ fn trySelfTailCall(argc: u8) !bool {
         // Rewrite current frame arg/local prefix with new args.
         var i: usize = 0;
         while (i < argc) : (i += 1) {
-            writeFrameLocal(frame.base + i, g_stack[callee_idx + 1 + i]);
+            writeFrameLocal(frame.base + i, vmState().stack[callee_idx + 1 + i]);
         }
-        g_stack_top = frame.base + argc;
-        g_ip = f.ip;
+        vmState().stack_top = frame.base + argc;
+        vmState().ip = f.ip;
         return true;
     }
     if (callee_obj.* == .function) {
@@ -1351,10 +1334,10 @@ fn trySelfTailCall(argc: u8) !bool {
         if (f.has_typed_params) try enforceFuncArgTypes(f, argc);
         var i: usize = 0;
         while (i < argc) : (i += 1) {
-            writeFrameLocal(frame.base + i, g_stack[callee_idx + 1 + i]);
+            writeFrameLocal(frame.base + i, vmState().stack[callee_idx + 1 + i]);
         }
-        g_stack_top = frame.base + argc;
-        g_ip = f.ip;
+        vmState().stack_top = frame.base + argc;
+        vmState().ip = f.ip;
         return true;
     }
     return false;
@@ -1462,9 +1445,9 @@ fn iterNext2(it: *IterObj) !void {
 
 pub fn run() !void {
     while (true) {
-        if (g_ops_budget_remaining) |remaining| {
+        if (vmState().ops_budget_remaining) |remaining| {
             if (remaining == 0) return error.InstructionBudgetExceeded;
-            g_ops_budget_remaining = remaining - 1;
+            vmState().ops_budget_remaining = remaining - 1;
         }
         const op_raw = try vmByte();
         if (op_raw >= std.meta.fields(Op).len) return error.BadOpcode;
@@ -1497,8 +1480,8 @@ pub fn run() !void {
 
             .get_local => {
                 const slot = try vmByte();
-                const base = g_frames[g_frame_top - 1].base;
-                const v = g_stack[base + slot];
+                const base = vmState().frames[vmState().frame_top - 1].base;
+                const v = vmState().stack[base + slot];
                 if (v == .object and v.object.* == .cell) {
                     try vmPush(v.object.cell.value);
                 } else {
@@ -1507,18 +1490,18 @@ pub fn run() !void {
             },
             .set_local => {
                 const slot = try vmByte();
-                const base = g_frames[g_frame_top - 1].base;
+                const base = vmState().frames[vmState().frame_top - 1].base;
                 const val = try vmPop();
-                const cur = g_stack[base + slot];
+                const cur = vmState().stack[base + slot];
                 if (cur == .object and cur.object.* == .cell) {
                     cur.object.cell.value = val;
                 } else {
-                    g_stack[base + slot] = val;
+                    vmState().stack[base + slot] = val;
                 }
             },
             .get_upvalue => {
                 const idx = try vmByte();
-                const frame = g_frames[g_frame_top - 1];
+                const frame = vmState().frames[vmState().frame_top - 1];
                 const cl = frame.closure orelse return error.TypeError;
                 if (cl.* != .closure) return error.TypeError;
                 if (idx >= cl.closure.upvalues.len) return error.TypeError;
@@ -1527,7 +1510,7 @@ pub fn run() !void {
             },
             .set_upvalue => {
                 const idx = try vmByte();
-                const frame = g_frames[g_frame_top - 1];
+                const frame = vmState().frames[vmState().frame_top - 1];
                 const cl = frame.closure orelse return error.TypeError;
                 if (cl.* != .closure) return error.TypeError;
                 if (idx >= cl.closure.upvalues.len) return error.TypeError;
@@ -1954,8 +1937,8 @@ pub fn run() !void {
                 if (f != .object or f.object.* != .function) return error.TypeError;
                 const proto = f.object.function;
                 const ups = heap.bump(*Object, proto.capture_slots.len) orelse return error.OutOfMemory;
-                if (g_frame_top == 0 and proto.capture_slots.len != 0) return error.TypeError;
-                const frame = if (g_frame_top == 0) Frame{ .ret_ip = 0, .base = 0, .closure = null, .func_obj = f.object } else g_frames[g_frame_top - 1];
+                if (vmState().frame_top == 0 and proto.capture_slots.len != 0) return error.TypeError;
+                const frame = if (vmState().frame_top == 0) Frame{ .ret_ip = 0, .base = 0, .closure = null, .func_obj = f.object } else vmState().frames[vmState().frame_top - 1];
                 var i: usize = 0;
                 while (i < proto.capture_slots.len) : (i += 1) {
                     const enc = proto.capture_slots[i];
@@ -1968,14 +1951,14 @@ pub fn run() !void {
                         ups[i] = pcl.closure.upvalues[idx];
                     } else {
                         const abs = frame.base + idx;
-                        const cur = g_stack[abs];
+                        const cur = vmState().stack[abs];
                         if (cur == .object and cur.object.* == .cell) {
                             ups[i] = cur.object;
                             continue;
                         }
                         const cell = try vmAllocObject();
                         cell.* = .{ .cell = .{ .value = cur } };
-                        g_stack[abs] = .{ .object = cell };
+                        vmState().stack[abs] = .{ .object = cell };
                         ups[i] = cell;
                     }
                 }
@@ -1986,8 +1969,8 @@ pub fn run() !void {
             .invoke_method => {
                 const mname = (try vmConst()).string;
                 const argc = try vmByte();
-                const recv_idx = g_stack_top - argc - 1;
-                const recv = g_stack[recv_idx];
+                const recv_idx = vmState().stack_top - argc - 1;
+                const recv = vmState().stack[recv_idx];
                 if (recv != .object) return error.NotAMethodReceiver;
                 switch (recv.object.*) {
                     .struct_instance => |inst| {
@@ -2000,15 +1983,15 @@ pub fn run() !void {
                         const key = key_buf[0..total];
 
                         const func = globals.get(key) orelse return error.UnknownMethod;
-                        if (g_stack_top >= MaxStack) return error.StackOverflow;
-                        var i: usize = g_stack_top;
+                        if (vmState().stack_top >= MaxStack) return error.StackOverflow;
+                        var i: usize = vmState().stack_top;
                         while (i > recv_idx + 1) {
-                            g_stack[i] = g_stack[i - 1];
+                            vmState().stack[i] = vmState().stack[i - 1];
                             i -= 1;
                         }
-                        g_stack_top += 1;
-                        g_stack[recv_idx] = func;
-                        g_stack[recv_idx + 1] = recv;
+                        vmState().stack_top += 1;
+                        vmState().stack[recv_idx] = func;
+                        vmState().stack[recv_idx + 1] = recv;
                         try performCall(argc + 1);
                     },
                     .map, .map_managed, .map_hashed => {
@@ -2022,7 +2005,7 @@ pub fn run() !void {
                             }
                         }
                         const func = maybe orelse return error.UnknownMethod;
-                        g_stack[recv_idx] = func;
+                        vmState().stack[recv_idx] = func;
                         try performCall(argc);
                     },
                     else => return error.NotAMethodReceiver,
@@ -2031,15 +2014,15 @@ pub fn run() !void {
 
             .jump => {
                 const off = try vmShort();
-                g_ip += off;
+                vmState().ip += off;
             },
             .jump_if_false => {
                 const off = try vmShort();
-                if (!(try vmPeek(0)).isTruthy()) g_ip += off;
+                if (!(try vmPeek(0)).isTruthy()) vmState().ip += off;
             },
             .loop => {
                 const off = try vmShort();
-                g_ip -= off;
+                vmState().ip -= off;
             },
 
             .call => {
@@ -2048,15 +2031,15 @@ pub fn run() !void {
                 try performCall(argc);
             },
             .ret => {
-                if (g_frame_top == 0) return error.ReturnAtTopLevel;
+                if (vmState().frame_top == 0) return error.ReturnAtTopLevel;
                 const retval = try vmPop();
-                g_frame_top -= 1;
-                const frame = g_frames[g_frame_top];
-                g_stack_top = frame.base - 1;
-                g_ip = frame.ret_ip;
+                vmState().frame_top -= 1;
+                const frame = vmState().frames[vmState().frame_top];
+                vmState().stack_top = frame.base - 1;
+                vmState().ip = frame.ret_ip;
                 try vmPush(retval);
-                if (g_call_depth_target) |d| {
-                    if (g_frame_top == d) return;
+                if (vmState().call_depth_target) |d| {
+                    if (vmState().frame_top == d) return;
                 }
             },
 
@@ -2066,63 +2049,11 @@ pub fn run() !void {
 }
 
 pub fn snapshot() State {
-    return .{
-        .policy = g_policy,
-        .stack = g_stack,
-        .stack_top = g_stack_top,
-        .ip = g_ip,
-        .frames = g_frames,
-        .frame_top = g_frame_top,
-        .std_module = g_std_module,
-        .host_checked = g_host_checked,
-        .host_caps = g_host_caps,
-        .next_gc_objects = g_next_gc_objects,
-        .next_gc_heap_bytes = g_next_gc_heap_bytes,
-        .call_depth_target = g_call_depth_target,
-        .temp_roots = g_temp_roots,
-        .temp_root_top = g_temp_root_top,
-        .rune_cache_ptr = g_rune_cache_ptr,
-        .rune_cache_byte_len = g_rune_cache_byte_len,
-        .rune_cache_rune_len = g_rune_cache_rune_len,
-        .rune_cache_valid = g_rune_cache_valid,
-        .rune_cache_overflow = g_rune_cache_overflow,
-        .rune_cache_offsets = g_rune_cache_offsets,
-        .gc_runs = g_gc_runs,
-        .gc_time_ns = g_gc_time_ns,
-        .alloc_object_calls = g_alloc_object_calls,
-        .alloc_managed_slice_calls = g_alloc_managed_slice_calls,
-        .alloc_managed_bytes_calls = g_alloc_managed_bytes_calls,
-        .ops_budget_remaining = g_ops_budget_remaining,
-    };
+    return vmState().*;
 }
 
 pub fn restore(state: State) void {
-    g_policy = state.policy;
-    g_stack = state.stack;
-    g_stack_top = state.stack_top;
-    g_ip = state.ip;
-    g_frames = state.frames;
-    g_frame_top = state.frame_top;
-    g_std_module = state.std_module;
-    g_host_checked = state.host_checked;
-    g_host_caps = state.host_caps;
-    g_next_gc_objects = state.next_gc_objects;
-    g_next_gc_heap_bytes = state.next_gc_heap_bytes;
-    g_call_depth_target = state.call_depth_target;
-    g_temp_roots = state.temp_roots;
-    g_temp_root_top = state.temp_root_top;
-    g_rune_cache_ptr = state.rune_cache_ptr;
-    g_rune_cache_byte_len = state.rune_cache_byte_len;
-    g_rune_cache_rune_len = state.rune_cache_rune_len;
-    g_rune_cache_valid = state.rune_cache_valid;
-    g_rune_cache_overflow = state.rune_cache_overflow;
-    g_rune_cache_offsets = state.rune_cache_offsets;
-    g_gc_runs = state.gc_runs;
-    g_gc_time_ns = state.gc_time_ns;
-    g_alloc_object_calls = state.alloc_object_calls;
-    g_alloc_managed_slice_calls = state.alloc_managed_slice_calls;
-    g_alloc_managed_bytes_calls = state.alloc_managed_bytes_calls;
-    g_ops_budget_remaining = state.ops_budget_remaining;
+    vmState().* = state;
 }
 
 // makeString allocates a heap-owned copy of s. Use this when passing host
@@ -2143,12 +2074,12 @@ pub fn callGlobal(name: []const u8, args: []const Value) !Value {
     try vmPush(fn_val);
     for (args) |a| try vmPush(a);
 
-    const depth_before = g_frame_top;
+    const depth_before = vmState().frame_top;
     try performCall(@intCast(args.len));
 
-    const prev_target = g_call_depth_target;
-    g_call_depth_target = depth_before;
-    defer g_call_depth_target = prev_target;
+    const prev_target = vmState().call_depth_target;
+    vmState().call_depth_target = depth_before;
+    defer vmState().call_depth_target = prev_target;
 
     try run();
     return try vmPop();
