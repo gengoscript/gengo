@@ -2048,14 +2048,6 @@ pub fn run() !void {
     }
 }
 
-pub fn snapshot() State {
-    return vmState().*;
-}
-
-pub fn restore(state: State) void {
-    vmState().* = state;
-}
-
 // makeString allocates a heap-owned copy of s. Use this when passing host
 // strings as args so the script can safely store them across Dispatch calls.
 pub fn makeString(s: []const u8) !Value {

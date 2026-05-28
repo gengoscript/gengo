@@ -108,14 +108,6 @@ pub fn debugSlotCount() usize {
     return n;
 }
 
-pub fn snapshot() State {
-    return g_state.*;
-}
-
-pub fn restore(state: State) void {
-    g_state.* = state;
-}
-
 pub fn setActive(state: *State) void {
     g_state = state;
 }

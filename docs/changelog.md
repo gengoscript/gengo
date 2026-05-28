@@ -2,6 +2,24 @@
 
 This changelog tracks notable language/runtime changes by implementation date.
 
+## 2026-05-28
+
+### Runtime / VM
+- Added runtime instruction budget guard:
+  - CLI flag `--max-ops <N>`
+  - runtime error `InstructionBudgetExceeded` when budget is exhausted.
+- Added `Runtime`-level isolation validation with interleaved multi-runtime mutable-call checks.
+- Migrated runtime state ownership to per-instance activation model across:
+  - `chunk`
+  - `globals`
+  - `heap`
+  - `vm`
+- Removed snapshot/restore-based runtime copy-back path and switched to active-state pointer activation.
+
+### Benchmarks
+- Added runtime call overhead benchmark:
+  - `examples/bench/008_runtime_call_overhead.gengo`
+
 ## 2026-05-27
 
 ### Language

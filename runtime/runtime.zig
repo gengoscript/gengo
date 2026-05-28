@@ -42,14 +42,11 @@ pub const Runtime = struct {
         vm.reset();
         heap.reset();
         chunk.reset();
-        self.capture();
     }
 
     pub fn run(self: *Runtime, src: []const u8) !void {
         self.last_compile_line = 0;
         self.reset();
-        self.activate();
-        defer self.capture();
         vm.setPolicy(self.policy);
 
         var compiler = Compiler.init(src);
@@ -63,7 +60,6 @@ pub const Runtime = struct {
 
     pub fn callGlobal(self: *Runtime, name: []const u8, args: []const Value) !Value {
         self.activate();
-        defer self.capture();
         vm.setPolicy(self.policy);
         return vm.callGlobal(name, args);
     }
@@ -75,7 +71,4 @@ pub const Runtime = struct {
         vm.setActive(&self.vm_state);
     }
 
-    fn capture(self: *Runtime) void {
-        _ = self;
-    }
 };

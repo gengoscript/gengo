@@ -172,11 +172,3 @@ pub fn liveObjectCount() usize {
 pub fn usedBytes() usize {
     return g_state.heap_pos;
 }
-
-pub fn snapshot() State {
-    return g_state.*;
-}
-
-pub fn restore(state: State) void {
-    g_state.* = state;
-}

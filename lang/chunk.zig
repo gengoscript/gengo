@@ -86,14 +86,6 @@ pub fn emitLoop(loop_start: usize, line: u32) !void {
     try emitByte(@intCast(offset & 0xff), line);
 }
 
-pub fn snapshot() State {
-    return g_state.*;
-}
-
-pub fn restore(state: State) void {
-    g_state.* = state;
-}
-
 pub fn codeLen() usize {
     return g_state.code_len;
 }
