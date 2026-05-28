@@ -122,7 +122,7 @@ fn vmPeek(dist: usize) !Value {
     return g_stack[g_stack_top - 1 - dist];
 }
 fn vmByte() !u8 {
-    if (g_ip >= chunk.g_code.len) return error.BytecodeOutOfBounds;
+    if (g_ip >= chunk.g_code_len) return error.BytecodeOutOfBounds;
     const b = chunk.g_code[g_ip];
     g_ip += 1;
     return b;
@@ -144,7 +144,7 @@ fn popTempRoot() void {
 }
 fn vmConst() !Value {
     const idx = try vmByte();
-    if (idx >= chunk.g_consts.len) return error.BadConstantIndex;
+    if (idx >= chunk.g_const_count) return error.BadConstantIndex;
     return chunk.g_consts[idx];
 }
 

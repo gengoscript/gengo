@@ -4,7 +4,7 @@ ZIG_GLOBAL_CACHE_DIR ?= /tmp/zig-cache
 ZIG_LOCAL_CACHE_DIR ?= /tmp/zig-local-cache
 # WASI build — runs under wasmtime for local testing.
 # Usage:  make wasi                      → produces gengo-test.wasm
-#         wasmtime --dir / gengo-test.wasm -- script.tengo
+#         wasmtime --dir / gengo-test.wasm -- script.gengo
 .PHONY: wasi
 wasi:
 	ZIG_GLOBAL_CACHE_DIR=$(ZIG_GLOBAL_CACHE_DIR) \
@@ -64,6 +64,18 @@ conformance: wasi
 
 .PHONY: test
 test: config-dev conformance
+
+.PHONY: unit
+unit:
+	ZIG_GLOBAL_CACHE_DIR=$(ZIG_GLOBAL_CACHE_DIR) \
+	ZIG_LOCAL_CACHE_DIR=$(ZIG_LOCAL_CACHE_DIR) \
+	$(ZIG) build-exe \
+		-target wasm32-wasi \
+		-fno-entry -rdynamic \
+		-O Debug \
+		-Mroot="$(GENGO_DIR)/vm_safety_runner.zig" \
+		-femit-bin="$(GENGO_DIR)/vm-safety.wasm"
+	@WASMTIME_BIN="$${WASMTIME_BIN:-wasmtime}" "$${WASMTIME_BIN}" --dir / "$(GENGO_DIR)/vm-safety.wasm"
 
 .PHONY: bench
 bench: config-dev wasi

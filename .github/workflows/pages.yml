@@ -17,6 +17,8 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      WASMTIME_VERSION: v45.0.0
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -28,7 +30,8 @@ jobs:
 
       - name: Run conformance tests
         run: |
-          curl -sSf https://wasmtime.dev/install.sh | bash
+          curl -sSf https://wasmtime.dev/install.sh | bash -s -- "$WASMTIME_VERSION"
+          make unit
           WASMTIME_BIN="$HOME/.wasmtime/bin/wasmtime" make test
 
       - name: Build WASM runtime
