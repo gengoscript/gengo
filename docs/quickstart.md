@@ -1,5 +1,10 @@
 # gengo Quickstart
 
+## Required Tools
+
+- Zig `0.16.0` (same version used by CI)
+- wasmtime (WASI preview1)
+
 ## Build
 
 Default (dev preset):
@@ -78,6 +83,7 @@ make config-dev
 ```
 
 - Bench cases may define `.policy` with `ALLOW_OOM` to mark expected low-memory failures.
+- Heap OOM can happen even with free bytes available when a single requested managed block exceeds the current class cap (`32 KiB`).
 
 ## Nano Syntax Highlighting
 

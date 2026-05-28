@@ -4,6 +4,11 @@ gengo is a small embeddable scripting language/runtime implemented in Zig.
 
 Project status: early-stage and intentionally evolving.
 
+## Toolchain
+
+- Zig: `0.16.0` (matches CI)
+- wasmtime: recent preview1-compatible release
+
 ## Quick Start
 
 Build the WASI runtime:
@@ -37,6 +42,8 @@ make test
 - File extension is `.gengo`.
 - `import("std")` is the supported builtin namespace.
 - Language behavior may change as the project evolves.
+- Runtime defaults are small by design (see `docs/language.md` limits section).
+- Managed heap allocations are class-based; a single managed block is currently capped at `32 KiB`.
 
 ## Browser Playground
 

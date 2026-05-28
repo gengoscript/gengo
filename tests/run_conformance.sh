@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -uo pipefail
+set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WASM="$ROOT_DIR/gengo-test.wasm"
@@ -29,6 +29,11 @@ while IFS= read -r script; do
   rel_script="${script#$ROOT_DIR/}"
   out_file="${base}.out"
   got_file="${base}.got"
+  if [[ ! -f "$out_file" ]]; then
+    echo "missing expected output file: $out_file"
+    errors=$((errors + 1))
+    continue
+  fi
   echo "[PASS-CASE] $rel_script"
   if ! "$WASMTIME_BIN" --dir . "$WASM" -- "$rel_script" > "$got_file" 2>&1; then
     echo "PASS-CASE execution failed unexpectedly: $rel_script"
@@ -48,15 +53,23 @@ while IFS= read -r script; do
   rel_script="${script#$ROOT_DIR/}"
   err_file="${base}.err"
   got_file="${base}.got"
+  if [[ ! -f "$err_file" ]]; then
+    echo "missing expected error file: $err_file"
+    errors=$((errors + 1))
+    continue
+  fi
   needle="$(cat "$err_file")"
   echo "[FAIL-CASE] $rel_script"
-  "$WASMTIME_BIN" --dir . "$WASM" -- "$rel_script" > "$got_file" 2>&1
-  rc=$?
+  if "$WASMTIME_BIN" --dir . "$WASM" -- "$rel_script" > "$got_file" 2>&1; then
+    rc=0
+  else
+    rc=$?
+  fi
   if [[ $rc -eq 0 ]]; then
     echo "Expected failure but script succeeded: $rel_script"
     cat "$got_file"
     errors=$((errors + 1))
-  elif ! grep -q "$needle" "$got_file"; then
+  elif ! grep -Fq -- "$needle" "$got_file"; then
     echo "Expected error token '$needle' not found for $rel_script"
     cat "$got_file"
     errors=$((errors + 1))

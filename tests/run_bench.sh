@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -uo pipefail
+set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WASM="$ROOT_DIR/gengo-test.wasm"
@@ -39,6 +39,11 @@ while IFS= read -r script; do
   policy_file="${base}.policy"
   ops_file="${base}.ops"
   got_file="${base}.got"
+  if [[ ! -f "$out_file" ]]; then
+    echo "missing expected output file: $out_file"
+    errors=$((errors + 1))
+    continue
+  fi
   allow_oom=0
   if [[ -f "$policy_file" ]] && grep -q "ALLOW_OOM" "$policy_file"; then
     allow_oom=1

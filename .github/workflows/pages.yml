@@ -26,6 +26,12 @@ jobs:
         with:
           version: 0.16.0
 
+      - name: Run conformance tests
+        run: |
+          curl -sSf https://wasmtime.dev/install.sh | bash
+          echo "$HOME/.wasmtime/bin" >> "$GITHUB_PATH"
+          make test
+
       - name: Build WASM runtime
         run: make wasi-release
 
@@ -35,6 +41,7 @@ jobs:
           mkdir -p _site
           cp playground/index.html _site/index.html
           cp playground/playground.js _site/playground.js
+          cp playground/worker.js _site/worker.js
           cp gengo-test.wasm _site/gengo-test.wasm
 
       - name: Upload Pages Artifact

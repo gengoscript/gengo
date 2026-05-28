@@ -232,4 +232,5 @@ Current module map:
   - VM value stack: `512`
   - call frames: `32`
   - input source buffer: `128 KiB`
+- Managed allocations use fixed class sizes; one managed block currently cannot exceed `32 KiB` even if total heap has room.
 - Only `import("std")` is currently supported.
