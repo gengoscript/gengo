@@ -10,20 +10,19 @@
 Default (dev preset):
 
 ```bash
-make config-dev
-make wasi
+zig build -Dpreset=dev wasi
 ```
 
 Tiny preset:
 
 ```bash
-make wasi-tiny
+zig build -Dpreset=tiny wasi
 ```
 
 Stress preset:
 
 ```bash
-make wasi-stress
+zig build -Dpreset=stress wasi
 ```
 
 ## Run a Script
@@ -44,13 +43,13 @@ wasmtime --dir . ./gengo-test.wasm -- --backend host path/to/script.gengo
 `test` always resets to dev preset first.
 
 ```bash
-make test
+WASMTIME_BIN=/path/to/wasmtime zig build -Dpreset=dev test
 ```
 
 ## Host/Embedded Parity
 
 ```bash
-make parity
+WASMTIME_BIN=/path/to/wasmtime zig build -Dpreset=dev parity
 ```
 
 ## Benchmarks
@@ -58,20 +57,20 @@ make parity
 Default:
 
 ```bash
-make bench
+WASMTIME_BIN=/path/to/wasmtime zig build -Dpreset=dev bench
 ```
 
 Tiny and stress presets:
 
 ```bash
-make bench-tiny
-make bench-stress
+WASMTIME_BIN=/path/to/wasmtime zig build -Dpreset=tiny bench
+WASMTIME_BIN=/path/to/wasmtime GENGO_BENCH_INCLUDE_STRESS=1 zig build -Dpreset=stress bench
 ```
 
 With benchmark timing/throughput logs:
 
 ```bash
-GENGO_BENCH_STATS=1 make bench-tiny
+WASMTIME_BIN=/path/to/wasmtime GENGO_BENCH_STATS=1 zig build -Dpreset=tiny bench
 ```
 
 ## Common Gotchas
@@ -79,7 +78,7 @@ GENGO_BENCH_STATS=1 make bench-tiny
 - If behavior looks memory-constrained unexpectedly, re-apply dev preset:
 
 ```bash
-make config-dev
+zig build -Dpreset=dev wasi
 ```
 
 - Bench cases may define `.policy` with `ALLOW_OOM` to mark expected low-memory failures.

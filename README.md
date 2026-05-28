@@ -14,7 +14,7 @@ Project status: early-stage and intentionally evolving.
 Build the WASI runtime:
 
 ```bash
-make wasi
+zig build -Dpreset=dev wasi
 ```
 
 Run a script:
@@ -26,7 +26,7 @@ wasmtime --dir . ./gengo-test.wasm -- examples/simple_math.gengo
 Run conformance tests:
 
 ```bash
-make test
+WASMTIME_BIN=/path/to/wasmtime zig build -Dpreset=dev test
 ```
 
 ## Repo Layout

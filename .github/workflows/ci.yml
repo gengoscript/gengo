@@ -24,10 +24,10 @@ jobs:
           echo "$HOME/.wasmtime/bin" >> "$GITHUB_PATH"
 
       - name: Run VM safety unit tests
-        run: make unit
+        run: zig build unit
 
       - name: Build WASI binary
-        run: make wasi
+        run: zig build -Dpreset=dev wasi
 
       - name: Run conformance tests
-        run: make test
+        run: zig build -Dpreset=dev test

@@ -31,11 +31,11 @@ jobs:
       - name: Run conformance tests
         run: |
           curl -sSf https://wasmtime.dev/install.sh | bash -s -- "$WASMTIME_VERSION"
-          make unit
-          WASMTIME_BIN="$HOME/.wasmtime/bin/wasmtime" make test
+          WASMTIME_BIN="$HOME/.wasmtime/bin/wasmtime" zig build unit
+          WASMTIME_BIN="$HOME/.wasmtime/bin/wasmtime" zig build -Dpreset=dev test
 
       - name: Build WASM runtime
-        run: make wasi-release
+        run: zig build -Dpreset=dev wasi-release
 
       - name: Assemble site
         run: |
