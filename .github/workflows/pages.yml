@@ -30,7 +30,7 @@ jobs:
 
       - name: Run conformance tests
         run: |
-          curl -sSf https://wasmtime.dev/install.sh | bash -s -- "$WASMTIME_VERSION"
+          curl -sSf https://wasmtime.dev/install.sh | bash -s -- --version "$WASMTIME_VERSION"
           WASMTIME_BIN="$HOME/.wasmtime/bin/wasmtime" zig build unit
           WASMTIME_BIN="$HOME/.wasmtime/bin/wasmtime" zig build -Dpreset=dev test
 

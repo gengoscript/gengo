@@ -20,7 +20,7 @@ jobs:
 
       - name: Install wasmtime
         run: |
-          curl -sSf https://wasmtime.dev/install.sh | bash -s -- "$WASMTIME_VERSION"
+          curl -sSf https://wasmtime.dev/install.sh | bash -s -- --version "$WASMTIME_VERSION"
           echo "$HOME/.wasmtime/bin" >> "$GITHUB_PATH"
 
       - name: Run VM safety unit tests
