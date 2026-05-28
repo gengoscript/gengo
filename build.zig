@@ -130,4 +130,19 @@ pub fn build(b: *std.Build) void {
     const unit_step = b.step("unit", "Run VM safety and embedding API checks");
     unit_step.dependOn(&vm_safety.step);
     unit_step.dependOn(&embedding.step);
+
+    const host_embed = b.addSystemCommand(&.{
+        "bash",
+        "-lc",
+        \\set -eu
+        \\ZIG="${ZIG:-zig}"
+        \\ZIG_GLOBAL_CACHE_DIR="${ZIG_GLOBAL_CACHE_DIR:-/tmp/zig-cache}"
+        \\ZIG_LOCAL_CACHE_DIR="${ZIG_LOCAL_CACHE_DIR:-/tmp/zig-local-cache}"
+        \\"$ZIG" build-exe -O Debug -Mroot="embed_host_example.zig" -femit-bin="embed-host-example"
+        \\./embed-host-example
+        ,
+    });
+    host_embed.step.dependOn(&preset.step);
+    const embed_example_step = b.step("embed-example", "Build and run native host embedding example");
+    embed_example_step.dependOn(&host_embed.step);
 }

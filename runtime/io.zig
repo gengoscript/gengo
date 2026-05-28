@@ -1,15 +1,24 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const vmod = @import("../lang/value.zig");
 const Value = vmod.Value;
 
-fn writeAllFd(fd: std.os.wasi.fd_t, s: []const u8) void {
-    var off: usize = 0;
-    while (off < s.len) {
-        var iov = [1]std.os.wasi.ciovec_t{.{ .base = s[off..].ptr, .len = s.len - off }};
-        var wrote: usize = 0;
-        const rc = std.os.wasi.fd_write(fd, &iov, iov.len, &wrote);
-        if (rc != .SUCCESS or wrote == 0) return;
-        off += wrote;
+fn writeAllFd(fd: u8, s: []const u8) void {
+    if (comptime builtin.os.tag == .wasi) {
+        var off: usize = 0;
+        while (off < s.len) {
+            var iov = [1]std.os.wasi.ciovec_t{.{ .base = s[off..].ptr, .len = s.len - off }};
+            var wrote: usize = 0;
+            const rc = std.os.wasi.fd_write(fd, &iov, iov.len, &wrote);
+            if (rc != .SUCCESS or wrote == 0) return;
+            off += wrote;
+        }
+        return;
+    }
+    if (fd == 2) {
+        std.debug.print("{s}", .{s});
+    } else {
+        std.debug.print("{s}", .{s});
     }
 }
 

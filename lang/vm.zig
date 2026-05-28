@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const chunk = @import("chunk.zig");
 const common = @import("common.zig");
 const globals = @import("globals.zig");
@@ -273,6 +274,9 @@ fn utf8ByteOffsetForRuneIndexCached(s: []const u8, rune_idx: usize) !usize {
 }
 
 fn monoNowNs() u64 {
+    if (comptime builtin.os.tag != .wasi) {
+        return 0;
+    }
     var ns: std.os.wasi.timestamp_t = 0;
     if (std.os.wasi.clock_time_get(.MONOTONIC, 1, &ns) != .SUCCESS) return 0;
     return ns;

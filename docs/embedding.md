@@ -24,6 +24,17 @@
 3. `const call_res = rt.call("fn_name", args);`
 4. `rt.reset();` (optional, clears runtime state)
 
+## Native Host Example
+
+Build and run the native Zig embedding example:
+
+```bash
+zig build -Dpreset=dev embed-example
+```
+
+Source:
+- `embed_host_example.zig`
+
 ## Examples
 
 Run script:
