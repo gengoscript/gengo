@@ -1,5 +1,4 @@
 GENGO_DIR := $(abspath .)
-SHIM      := $(GENGO_DIR)/libsc_wasi.zig
 ZIG ?= zig
 ZIG_GLOBAL_CACHE_DIR ?= /tmp/zig-cache
 ZIG_LOCAL_CACHE_DIR ?= /tmp/zig-local-cache
@@ -14,9 +13,7 @@ wasi:
 		-target wasm32-wasi \
 		-fno-entry -rdynamic \
 		-O Debug \
-		--dep libsc \
 		-Mroot="$(GENGO_DIR)/main.zig" \
-		-Mlibsc="$(SHIM)" \
 		-femit-bin="$(GENGO_DIR)/gengo-test.wasm"
 	@echo "Built $(GENGO_DIR)/gengo-test.wasm"
 	@echo "Run with: wasmtime --dir / $(GENGO_DIR)/gengo-test.wasm -- <script>"
@@ -29,9 +26,7 @@ wasi-release:
 		-target wasm32-wasi \
 		-fno-entry -rdynamic \
 		-O ReleaseFast \
-		--dep libsc \
 		-Mroot="$(GENGO_DIR)/main.zig" \
-		-Mlibsc="$(SHIM)" \
 		-femit-bin="$(GENGO_DIR)/gengo-test.wasm"
 	@echo "Built $(GENGO_DIR)/gengo-test.wasm (ReleaseFast)"
 	@echo "Run with: wasmtime --dir / $(GENGO_DIR)/gengo-test.wasm -- <script>"

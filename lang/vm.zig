@@ -1,5 +1,4 @@
 const std = @import("std");
-const sc = @import("libsc");
 const chunk = @import("chunk.zig");
 const common = @import("common.zig");
 const globals = @import("globals.zig");
@@ -253,12 +252,9 @@ fn utf8ByteOffsetForRuneIndexCached(s: []const u8, rune_idx: usize) !usize {
 }
 
 fn monoNowNs() u64 {
-    if (comptime @hasDecl(sc, "time")) {
-        const t = sc.time.now(sc.time.Clock.monotonic);
-        if (t.errno != .OK or t.ns <= 0) return 0;
-        return @intCast(t.ns);
-    }
-    return 0;
+    var ns: std.os.wasi.timestamp_t = 0;
+    if (std.os.wasi.clock_time_get(.MONOTONIC, 1, &ns) != .SUCCESS) return 0;
+    return ns;
 }
 
 fn makeNative(id: NativeFnId, arity: u8) !Value {

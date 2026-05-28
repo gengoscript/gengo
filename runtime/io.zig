@@ -1,16 +1,24 @@
-const sc = @import("libsc");
+const std = @import("std");
 const vmod = @import("../lang/value.zig");
 const Value = vmod.Value;
 
-const stdout_fd: i32 = 1;
-const stderr_fd: i32 = 2;
+fn writeAllFd(fd: std.os.wasi.fd_t, s: []const u8) void {
+    var off: usize = 0;
+    while (off < s.len) {
+        var iov = [1]std.os.wasi.ciovec_t{.{ .base = s[off..].ptr, .len = s.len - off }};
+        var wrote: usize = 0;
+        const rc = std.os.wasi.fd_write(fd, &iov, iov.len, &wrote);
+        if (rc != .SUCCESS or wrote == 0) return;
+        off += wrote;
+    }
+}
 
 pub fn write(s: []const u8) void {
-    _ = sc.fd.writeAll(stdout_fd, s);
+    writeAllFd(1, s);
 }
 
 pub fn werr(s: []const u8) void {
-    _ = sc.fd.writeAll(stderr_fd, s);
+    writeAllFd(2, s);
 }
 
 pub fn writeUint(v: u64) void {
