@@ -4,6 +4,32 @@ gengo is a small embeddable scripting language/runtime implemented in Zig.
 
 Project status: early-stage and intentionally evolving.
 
+## Language Example
+
+```gengo
+std := import("std")
+
+struct User {
+    id: int
+    name: string
+    bio: ?string
+}
+
+func greet(u User) {
+    # Multiline escaped string:
+    # open with ", continue with " at same column, close on last line with ".
+    msg := "Hello,
+           "this is gengo
+           "User:"
+    std.io.println(msg + " " + u.name)
+}
+
+u := User{ id: 7, name: "user", bio: "こんにちは" }
+greet(u)
+```
+
+Raw multiline strings use `'` with the same continuation/termination shape and keep backslashes literally.
+
 ## Toolchain
 
 - Zig: `0.16.0` (matches CI)
