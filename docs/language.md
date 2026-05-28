@@ -219,6 +219,7 @@ Current module map:
 - Runtime execution is instance-scoped:
   - `Runtime` owns separate `chunk`, `globals`, `heap`, and `vm` states.
   - Runtime switching is pointer activation (`setActive`) rather than state snapshot copying.
+  - Current model supports isolated instances and interleaved calls, but not concurrent execution of multiple runtimes on different threads.
 - Optional runtime instruction budget is available via CLI flag:
   - `--max-ops <N>`
   - Exceeding budget returns runtime error `InstructionBudgetExceeded`.
