@@ -38,6 +38,12 @@ wasmtime --dir . ./gengo-test.wasm -- --backend embedded path/to/script.gengo
 wasmtime --dir . ./gengo-test.wasm -- --backend host path/to/script.gengo
 ```
 
+With instruction budget (runtime step cap):
+
+```bash
+wasmtime --dir . ./gengo-test.wasm -- --max-ops 100000 path/to/script.gengo
+```
+
 ## Conformance
 
 `test` always resets to dev preset first.

@@ -29,6 +29,7 @@ pub const Policy = struct {
 
     allow_io: bool = true,
     native_backend: NativeBackend = .embedded,
+    max_ops: ?u64 = null,
 };
 
 var g_policy: Policy = .{};
@@ -61,6 +62,7 @@ var g_gc_time_ns: u64 = 0;
 var g_alloc_object_calls: u64 = 0;
 var g_alloc_managed_slice_calls: u64 = 0;
 var g_alloc_managed_bytes_calls: u64 = 0;
+var g_ops_budget_remaining: ?u64 = null;
 
 const NativeFnId = enum(u8) {
     io_println = 1,
@@ -101,10 +103,12 @@ pub fn reset() void {
     g_alloc_object_calls = 0;
     g_alloc_managed_slice_calls = 0;
     g_alloc_managed_bytes_calls = 0;
+    g_ops_budget_remaining = null;
 }
 
 pub fn setPolicy(policy: Policy) void {
     g_policy = policy;
+    g_ops_budget_remaining = policy.max_ops;
 }
 
 fn vmPush(v: Value) !void {
@@ -1429,6 +1433,10 @@ fn iterNext2(it: *IterObj) !void {
 
 pub fn run() !void {
     while (true) {
+        if (g_ops_budget_remaining) |remaining| {
+            if (remaining == 0) return error.InstructionBudgetExceeded;
+            g_ops_budget_remaining = remaining - 1;
+        }
         const op_raw = try vmByte();
         if (op_raw >= std.meta.fields(Op).len) return error.BadOpcode;
         const op: Op = @enumFromInt(op_raw);

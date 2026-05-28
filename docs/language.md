@@ -216,6 +216,9 @@ Current module map:
 - Host-backed natives currently include `io.println`, `core.len`, and `core.append`.
 - If host import is unavailable, host backend gracefully falls back to VM-local behavior.
 - VM-local natives (`core.error`, `core.is_error`, `core.gc`, `core.gc_live_objects`, `core.gc_stats`, `conv.*`) run identically in embedded and host backends.
+- Optional runtime instruction budget is available via CLI flag:
+  - `--max-ops <N>`
+  - Exceeding budget returns runtime error `InstructionBudgetExceeded`.
 - Runtime limits are build-time configurable via preset config files:
   - `runtime/config_dev.zig` (default)
   - `runtime/config_tiny.zig`

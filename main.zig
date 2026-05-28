@@ -90,6 +90,7 @@ export fn _start() void {
     var src: []const u8 = undefined;
     var script_index: usize = 1;
     var backend: vm.Policy.NativeBackend = .embedded;
+    var max_ops: ?u64 = null;
     while (script_index < argv.len) {
         const a = argv[script_index];
         if (a.len == 2 and a[0] == '-' and a[1] == '-') {
@@ -112,6 +113,21 @@ export fn _start() void {
                 io.werr("\n");
                 die(1);
             }
+            script_index += 2;
+            continue;
+        }
+        if (std.mem.eql(u8, a, "--max-ops")) {
+            if (script_index + 1 >= argv.len) {
+                io.werr("gengo: --max-ops requires value\n");
+                die(1);
+            }
+            const v = argv[script_index + 1];
+            max_ops = std.fmt.parseUnsigned(u64, v, 10) catch {
+                io.werr("gengo: invalid --max-ops value: ");
+                io.werr(v);
+                io.werr("\n");
+                die(1);
+            };
             script_index += 2;
             continue;
         }
@@ -142,7 +158,11 @@ export fn _start() void {
         src = g_src_buf[0..total];
     }
 
-    var runtime = Runtime.withPolicy(.{ .allow_io = true, .native_backend = backend });
+    var runtime = Runtime.withPolicy(.{
+        .allow_io = true,
+        .native_backend = backend,
+        .max_ops = max_ops,
+    });
     runtime.run(src) catch |err| {
         if (runtime.last_compile_line != 0) {
             io.werr("gengo: compile error on line ");

@@ -76,6 +76,15 @@ fn runBadOpcode() !void {
     return error.TestFailed;
 }
 
+fn runInstructionBudgetExceeded() !void {
+    resetAll();
+    vm.setPolicy(.{ .allow_io = false, .native_backend = .embedded, .max_ops = 1 });
+    try chunk.emitOp(.null_val, 1);
+    try chunk.emitOp(.halt, 1);
+    vm.run() catch |e| return expectError("instruction-budget", error.InstructionBudgetExceeded, e);
+    return error.TestFailed;
+}
+
 export fn _start() void {
     runStackUnderflow() catch {
         std.os.wasi.proc_exit(1);
@@ -87,6 +96,9 @@ export fn _start() void {
         std.os.wasi.proc_exit(1);
     };
     runBadOpcode() catch {
+        std.os.wasi.proc_exit(1);
+    };
+    runInstructionBudgetExceeded() catch {
         std.os.wasi.proc_exit(1);
     };
     out("vm-safety OK\n");
