@@ -33,9 +33,10 @@ runBtn.onclick = async () => {
       new OpenFile(new File([])), // stdin
       ConsoleStdout.lineBuffered((line) => write(line + "\n")), // stdout
       ConsoleStdout.lineBuffered((line) => write(line + "\n")), // stderr
-      new PreopenDirectory(".", {
-        "script.gengo": new File(encoder.encode(script)),
-      }),
+      new PreopenDirectory(
+        ".",
+        new Map([["script.gengo", new File(encoder.encode(script))]]),
+      ),
     ];
 
     const wasi = new WASI(["gengo-test.wasm", "script.gengo"], [], fds);
