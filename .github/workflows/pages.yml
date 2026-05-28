@@ -29,8 +29,7 @@ jobs:
       - name: Run conformance tests
         run: |
           curl -sSf https://wasmtime.dev/install.sh | bash
-          echo "$HOME/.wasmtime/bin" >> "$GITHUB_PATH"
-          make test
+          WASMTIME_BIN="$HOME/.wasmtime/bin/wasmtime" make test
 
       - name: Build WASM runtime
         run: make wasi-release
