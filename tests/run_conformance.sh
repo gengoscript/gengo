@@ -5,10 +5,10 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WASM="$ROOT_DIR/gengo-test.wasm"
 PASS_DIR="$ROOT_DIR/examples/spec"
 FAIL_DIR="$ROOT_DIR/examples/spec/fail"
-REPO_ROOT="$(cd "$ROOT_DIR/../../.." && pwd)"
+WASMTIME_BIN="${WASMTIME_BIN:-wasmtime}"
 
-if ! command -v wasmtime >/dev/null 2>&1; then
-  echo "wasmtime not found in PATH"
+if ! command -v "$WASMTIME_BIN" >/dev/null 2>&1; then
+  echo "wasmtime not found: $WASMTIME_BIN"
   exit 1
 fi
 
@@ -22,16 +22,15 @@ pass_count=0
 fail_count=0
 errors=0
 
-cd "$REPO_ROOT"
+cd "$ROOT_DIR"
 
 while IFS= read -r script; do
   base="${script%.gengo}"
-  rel_script="${script#$REPO_ROOT/}"
-  rel_base="${base#$REPO_ROOT/}"
-  out_file="${rel_base}.out"
-  got_file="${rel_base}.got"
+  rel_script="${script#$ROOT_DIR/}"
+  out_file="${base}.out"
+  got_file="${base}.got"
   echo "[PASS-CASE] $rel_script"
-  if ! wasmtime --dir . "$WASM" -- "$rel_script" > "$got_file" 2>&1; then
+  if ! "$WASMTIME_BIN" --dir . "$WASM" -- "$rel_script" > "$got_file" 2>&1; then
     echo "PASS-CASE execution failed unexpectedly: $rel_script"
     cat "$got_file"
     errors=$((errors + 1))
@@ -46,13 +45,12 @@ done < <(find "$PASS_DIR" -maxdepth 1 -type f -name '*.gengo' | sort)
 
 while IFS= read -r script; do
   base="${script%.gengo}"
-  rel_script="${script#$REPO_ROOT/}"
-  rel_base="${base#$REPO_ROOT/}"
-  err_file="${rel_base}.err"
-  got_file="${rel_base}.got"
+  rel_script="${script#$ROOT_DIR/}"
+  err_file="${base}.err"
+  got_file="${base}.got"
   needle="$(cat "$err_file")"
   echo "[FAIL-CASE] $rel_script"
-  wasmtime --dir . "$WASM" -- "$rel_script" > "$got_file" 2>&1
+  "$WASMTIME_BIN" --dir . "$WASM" -- "$rel_script" > "$got_file" 2>&1
   rc=$?
   if [[ $rc -eq 0 ]]; then
     echo "Expected failure but script succeeded: $rel_script"

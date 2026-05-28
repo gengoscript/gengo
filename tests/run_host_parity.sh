@@ -4,10 +4,10 @@ set -uo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WASM="$ROOT_DIR/gengo-test.wasm"
 PARITY_DIR="$ROOT_DIR/examples/parity"
-REPO_ROOT="$(cd "$ROOT_DIR/../../.." && pwd)"
+WASMTIME_BIN="${WASMTIME_BIN:-wasmtime}"
 
-if ! command -v wasmtime >/dev/null 2>&1; then
-  echo "wasmtime not found in PATH"
+if ! command -v "$WASMTIME_BIN" >/dev/null 2>&1; then
+  echo "wasmtime not found: $WASMTIME_BIN"
   exit 1
 fi
 
@@ -19,21 +19,21 @@ fi
 
 errors=0
 count=0
-cd "$REPO_ROOT"
+cd "$ROOT_DIR"
 
 while IFS= read -r script; do
-  rel_script="${script#$REPO_ROOT/}"
-  got_emb="${rel_script%.gengo}.embedded.got"
-  got_host="${rel_script%.gengo}.host.got"
+  rel_script="${script#$ROOT_DIR/}"
+  got_emb="${script%.gengo}.embedded.got"
+  got_host="${script%.gengo}.host.got"
   echo "[PARITY] $rel_script"
-  if ! wasmtime --dir . "$WASM" -- --backend embedded "$rel_script" > "$got_emb" 2>&1; then
+  if ! "$WASMTIME_BIN" --dir . "$WASM" -- --backend embedded "$rel_script" > "$got_emb" 2>&1; then
     echo "embedded backend failed: $rel_script"
     cat "$got_emb"
     errors=$((errors + 1))
     rm -f "$got_emb" "$got_host"
     continue
   fi
-  if ! wasmtime --dir . "$WASM" -- --backend host "$rel_script" > "$got_host" 2>&1; then
+  if ! "$WASMTIME_BIN" --dir . "$WASM" -- --backend host "$rel_script" > "$got_host" 2>&1; then
     echo "host backend failed: $rel_script"
     cat "$got_host"
     errors=$((errors + 1))

@@ -4,10 +4,10 @@ set -uo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WASM="$ROOT_DIR/gengo-test.wasm"
 BENCH_DIR="$ROOT_DIR/examples/bench"
-REPO_ROOT="$(cd "$ROOT_DIR/../../.." && pwd)"
+WASMTIME_BIN="${WASMTIME_BIN:-wasmtime}"
 
-if ! command -v wasmtime >/dev/null 2>&1; then
-  echo "wasmtime not found in PATH"
+if ! command -v "$WASMTIME_BIN" >/dev/null 2>&1; then
+  echo "wasmtime not found: $WASMTIME_BIN"
   exit 1
 fi
 
@@ -20,7 +20,7 @@ fi
 pass_count=0
 errors=0
 
-cd "$REPO_ROOT"
+cd "$ROOT_DIR"
 
 BENCH_INCLUDE_STRESS="${GENGO_BENCH_INCLUDE_STRESS:-0}"
 BENCH_FILTER="${GENGO_BENCH_FILTER:-}"
@@ -34,12 +34,11 @@ while IFS= read -r script; do
     continue
   fi
   base="${script%.gengo}"
-  rel_script="${script#$REPO_ROOT/}"
-  rel_base="${base#$REPO_ROOT/}"
-  out_file="${rel_base}.out"
-  policy_file="${rel_base}.policy"
-  ops_file="${rel_base}.ops"
-  got_file="${rel_base}.got"
+  rel_script="${script#$ROOT_DIR/}"
+  out_file="${base}.out"
+  policy_file="${base}.policy"
+  ops_file="${base}.ops"
+  got_file="${base}.got"
   allow_oom=0
   if [[ -f "$policy_file" ]] && grep -q "ALLOW_OOM" "$policy_file"; then
     allow_oom=1
@@ -50,7 +49,7 @@ while IFS= read -r script; do
   if [[ "$BENCH_STATS" == "1" ]]; then
     start_ns="$(date +%s%N)"
   fi
-  if ! wasmtime --dir . "$WASM" -- "$rel_script" > "$got_file" 2>&1; then
+  if ! "$WASMTIME_BIN" --dir . "$WASM" -- "$rel_script" > "$got_file" 2>&1; then
     if [[ $allow_oom -eq 1 ]] && grep -q "OutOfMemory" "$got_file"; then
       echo "BENCH expected OOM accepted: $rel_script"
       pass_count=$((pass_count + 1))
