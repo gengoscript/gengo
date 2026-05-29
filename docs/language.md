@@ -79,6 +79,12 @@ x := "hello world
 
 - Mutable declaration: `name := expr` or `var name := expr`
 - Immutable binding: `const name := expr`
+- Typed mutable declaration: `var name: Type = expr`
+- Typed immutable binding: `const name: Type = expr`
+  - Currently enforced for `int`, `float`, `bool`, and named types.
+- Named types can use other named scalar types as base:
+  - `type Integer is int range -2147483648 .. 2147483647`
+  - `type Age is Integer range 0 .. 100`
 - Assignment: `name = expr`
 - Multi-declaration destructure: `a, b := expr`
 - Multi-assignment destructure: `a, b = expr`
@@ -89,6 +95,8 @@ x := "hello world
     - property path (`obj.k.subk`)
     - indexed path with literal index/key (`arr[0]`, `m["k"]`, and mixed chains)
 - Compound assignment: `+=`, `-=`, `*=`, `/=`
+  - Named numeric types (`type Age is int ...`) participate in numeric compound ops.
+  - Result is revalidated against the named type constraints.
 - Increment/decrement: `x++`, `x--`
 - `const` enforcement:
   - reassignment to const binding is compile error (`AssignToConst`)

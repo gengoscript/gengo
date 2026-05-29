@@ -83,6 +83,10 @@ const InterfaceTypeInfo = struct {
 };
 const NamedTypeInfo = struct {
     name: []const u8,
+    base: NamedTypeBase,
+    has_range: bool,
+    min: f64,
+    max: f64,
 };
 const GlobalConstInfo = struct {
     name: []const u8,
@@ -186,10 +190,18 @@ pub const Compiler = struct {
         return false;
     }
 
-    fn addNamedType(self: *Compiler, name: []const u8) !void {
-        if (self.hasNamedType(name)) return error.DuplicateNamedType;
+    fn getNamedTypeInfo(self: *Compiler, name: []const u8) ?NamedTypeInfo {
+        var i: usize = 0;
+        while (i < self.named_type_count) : (i += 1) {
+            if (common.streq(self.named_types[i].name, name)) return self.named_types[i];
+        }
+        return null;
+    }
+
+    fn addNamedType(self: *Compiler, info: NamedTypeInfo) !void {
+        if (self.hasNamedType(info.name)) return error.DuplicateNamedType;
         if (self.named_type_count >= MaxNamedTypes) return error.TooManyNamedTypes;
-        self.named_types[self.named_type_count] = .{ .name = name };
+        self.named_types[self.named_type_count] = info;
         self.named_type_count += 1;
     }
 
@@ -511,10 +523,17 @@ pub const Compiler = struct {
         self.advance(); // type
         if (self.cur.typ != .ident) return error.UnexpectedToken;
         const name = self.cur.src;
-        try self.addNamedType(name);
+        if (self.hasNamedType(name)) return error.DuplicateNamedType;
         self.advance();
         try self.consume(.kw_is);
         if (self.check(.kw_enum)) {
+            try self.addNamedType(.{
+                .name = name,
+                .base = .string,
+                .has_range = false,
+                .min = 0,
+                .max = 0,
+            });
             self.advance();
             try self.consume(.lbrace);
             var members_tmp: [MaxLocals][]const u8 = undefined;
@@ -551,6 +570,9 @@ pub const Compiler = struct {
         self.advance();
 
         var base: NamedTypeBase = undefined;
+        var parent_has_range = false;
+        var parent_min: f64 = 0;
+        var parent_max: f64 = 0;
         if (common.streq(base_name, "int")) {
             base = .int;
         } else if (common.streq(base_name, "float")) {
@@ -561,6 +583,11 @@ pub const Compiler = struct {
             base = .bool;
         } else if (common.streq(base_name, "rune")) {
             base = .rune;
+        } else if (self.getNamedTypeInfo(base_name)) |parent| {
+            base = parent.base;
+            parent_has_range = parent.has_range;
+            parent_min = parent.min;
+            parent_max = parent.max;
         } else return error.UnexpectedToken;
 
         var has_range = false;
@@ -574,6 +601,25 @@ pub const Compiler = struct {
             max = try self.parseSignedNumber();
             if (min > max) return error.RangeError;
         }
+        if (parent_has_range) {
+            if (has_range) {
+                if (min < parent_min) min = parent_min;
+                if (max > parent_max) max = parent_max;
+                if (min > max) return error.RangeError;
+            } else {
+                has_range = true;
+                min = parent_min;
+                max = parent_max;
+            }
+        }
+
+        try self.addNamedType(.{
+            .name = name,
+            .base = base,
+            .has_range = has_range,
+            .min = min,
+            .max = max,
+        });
 
         const nt = heap.allocObject() orelse return error.OutOfMemory;
         nt.* = .{ .named_type = NamedTypeObj{
@@ -798,8 +844,32 @@ pub const Compiler = struct {
         if (has_keyword and self.cur.typ != .ident) return error.UnexpectedToken;
         const name = self.cur;
         self.advance();
-        try self.consume(.colon_eq);
-        try self.expr();
+        if (self.match(.colon_eq)) {
+            try self.expr();
+        } else if (has_keyword and self.match(.colon)) {
+            if (self.cur.typ != .ident) return error.UnexpectedToken;
+            const type_name = self.cur.src;
+            self.advance();
+            try self.consume(.eq);
+            if (common.streq(type_name, "int") or common.streq(type_name, "float") or common.streq(type_name, "bool")) {
+                try self.expr();
+                if (common.streq(type_name, "int")) {
+                    try chunk.emitOp(.cast_int, name.line);
+                } else if (common.streq(type_name, "float")) {
+                    try chunk.emitOp(.cast_float, name.line);
+                } else {
+                    try chunk.emitOp(.cast_bool, name.line);
+                }
+            } else {
+                if (!self.hasNamedType(type_name)) return error.UnknownTypeName;
+                const tidx = try chunk.addConst(.{ .string = type_name });
+                try chunk.emit2(@intFromEnum(Op.get_global), tidx, name.line);
+                try self.expr();
+                try chunk.emit2(@intFromEnum(Op.call), 1, name.line);
+            }
+        } else {
+            return error.UnexpectedToken;
+        }
         if (self.inFunc()) {
             _ = try self.defineLocal(name.src, is_const);
         } else {

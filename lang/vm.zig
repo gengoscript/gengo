@@ -197,6 +197,10 @@ fn valueAsNumber(v: Value) !f64 {
     return switch (v) {
         .number => |n| n,
         .rune => |r| @floatFromInt(r),
+        .object => |o| switch (o.*) {
+            .named_value => |nv| valueAsNumber(nv.value),
+            else => error.TypeError,
+        },
         else => error.TypeError,
     };
 }
@@ -209,8 +213,31 @@ fn valueAsInt(v: Value) !i64 {
             break :blk @intFromFloat(t);
         },
         .rune => |r| @intCast(r),
+        .object => |o| switch (o.*) {
+            .named_value => |nv| valueAsInt(nv.value),
+            else => error.TypeError,
+        },
         else => error.TypeError,
     };
+}
+
+fn namedTypeCarrier(a: Value, b: Value) !?*Object {
+    var ta: ?*Object = null;
+    var tb: ?*Object = null;
+    if (a == .object and a.object.* == .named_value) ta = a.object.named_value.typ;
+    if (b == .object and b.object.* == .named_value) tb = b.object.named_value.typ;
+    if (ta != null and tb != null and ta.? != tb.?) return error.TypeError;
+    return if (ta != null) ta else tb;
+}
+
+fn pushNumericResultWithCarrier(a: Value, b: Value, n: f64) !void {
+    const carrier = try namedTypeCarrier(a, b);
+    if (carrier) |typ| {
+        const wrapped = try constructNamedType(typ, .{ .number = n });
+        try vmPush(wrapped);
+    } else {
+        try vmPush(.{ .number = n });
+    }
 }
 
 fn utf8NextRuneByteLen(s: []const u8, byte_idx: usize) !usize {
@@ -1802,7 +1829,7 @@ pub fn run() !void {
                 } else {
                     const an = try valueAsNumber(a);
                     const bn = try valueAsNumber(b);
-                    try vmPush(.{ .number = an + bn });
+                    try pushNumericResultWithCarrier(a, b, an + bn);
                 }
             },
             .sub => {
@@ -1810,49 +1837,49 @@ pub fn run() !void {
                 const a = try vmPop();
                 const an = try valueAsNumber(a);
                 const bn = try valueAsNumber(b);
-                try vmPush(.{ .number = an - bn });
+                try pushNumericResultWithCarrier(a, b, an - bn);
             },
             .mul => {
                 const b = try vmPop();
                 const a = try vmPop();
                 const an = try valueAsNumber(a);
                 const bn = try valueAsNumber(b);
-                try vmPush(.{ .number = an * bn });
+                try pushNumericResultWithCarrier(a, b, an * bn);
             },
             .div => {
                 const b = try vmPop();
                 const a = try vmPop();
                 const an = try valueAsNumber(a);
                 const bn = try valueAsNumber(b);
-                try vmPush(.{ .number = an / bn });
+                try pushNumericResultWithCarrier(a, b, an / bn);
             },
             .mod => {
                 const b = try vmPop();
                 const a = try vmPop();
                 const an = try valueAsNumber(a);
                 const bn = try valueAsNumber(b);
-                try vmPush(.{ .number = common.fmod(an, bn) });
+                try pushNumericResultWithCarrier(a, b, common.fmod(an, bn));
             },
             .bit_and => {
                 const b = try vmPop();
                 const a = try vmPop();
                 const an = try valueAsInt(a);
                 const bn = try valueAsInt(b);
-                try vmPush(.{ .number = @floatFromInt(an & bn) });
+                try pushNumericResultWithCarrier(a, b, @floatFromInt(an & bn));
             },
             .bit_or => {
                 const b = try vmPop();
                 const a = try vmPop();
                 const an = try valueAsInt(a);
                 const bn = try valueAsInt(b);
-                try vmPush(.{ .number = @floatFromInt(an | bn) });
+                try pushNumericResultWithCarrier(a, b, @floatFromInt(an | bn));
             },
             .bit_xor => {
                 const b = try vmPop();
                 const a = try vmPop();
                 const an = try valueAsInt(a);
                 const bn = try valueAsInt(b);
-                try vmPush(.{ .number = @floatFromInt(an ^ bn) });
+                try pushNumericResultWithCarrier(a, b, @floatFromInt(an ^ bn));
             },
             .bit_not => {
                 const v = try vmPop();
@@ -1866,7 +1893,7 @@ pub fn run() !void {
                 const bn = try valueAsInt(b);
                 if (bn < 0) return error.RangeError;
                 const shift: u6 = @intCast(@min(bn, 63));
-                try vmPush(.{ .number = @floatFromInt(an << shift) });
+                try pushNumericResultWithCarrier(a, b, @floatFromInt(an << shift));
             },
             .shr => {
                 const b = try vmPop();
@@ -1875,7 +1902,7 @@ pub fn run() !void {
                 const bn = try valueAsInt(b);
                 if (bn < 0) return error.RangeError;
                 const shift: u6 = @intCast(@min(bn, 63));
-                try vmPush(.{ .number = @floatFromInt(an >> shift) });
+                try pushNumericResultWithCarrier(a, b, @floatFromInt(an >> shift));
             },
             .cast_int => {
                 const v = try vmPop();

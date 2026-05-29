@@ -1,0 +1,17 @@
+std := import("std")
+
+type Integer is int range -2147483648 .. 2147483647
+type Age is Integer range 0 .. 100
+
+x := Age(99)
+x += 1
+std.io.println(x)
+
+x -= 50
+std.io.println(x)
+
+x *= 2
+std.io.println(x)
+
+x /= 2
+std.io.println(x)
