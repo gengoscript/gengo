@@ -1,12 +1,12 @@
 std := import("std")
 
-interface Parser {
+type Parser interface {
     parse(src string) (int, error)
     name() string
     reset()
 }
 
-struct Csv { value: int }
+type Csv struct { value: int }
 
 func (c Csv) parse(src string) (int, error) {
     return c.value, std.core.error("e")

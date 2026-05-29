@@ -1,2 +1,2 @@
-struct User { id: int }
+type User struct { id: int }
 u := User{ id: "x" }

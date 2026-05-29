@@ -1,8 +1,8 @@
-type Status is enum {
+type Status enum {
     pending,
 }
 
-type Other is enum {
+type Other enum {
     pending_other,
 }
 

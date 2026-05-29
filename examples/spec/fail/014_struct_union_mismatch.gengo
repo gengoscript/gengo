@@ -1,2 +1,2 @@
-struct X { id: int|string }
+type X struct { id: int|string }
 x := X{ id: true }

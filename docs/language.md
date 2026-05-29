@@ -83,8 +83,8 @@ x := "hello world
 - Typed immutable binding: `const name: Type = expr`
   - Currently enforced for `int`, `float`, `bool`, and named types.
 - Named types can use other named scalar types as base:
-  - `type Integer is int range -2147483648 .. 2147483647`
-  - `type Age is Integer range 0 .. 100`
+  - `type Integer int range -2147483648 .. 2147483647`
+  - `type Age Integer range 0 .. 100`
 - Assignment: `name = expr`
 - Multi-declaration destructure: `a, b := expr`
 - Multi-assignment destructure: `a, b = expr`
@@ -95,7 +95,7 @@ x := "hello world
     - property path (`obj.k.subk`)
     - indexed path with literal index/key (`arr[0]`, `m["k"]`, and mixed chains)
 - Compound assignment: `+=`, `-=`, `*=`, `/=`
-  - Named numeric types (`type Age is int ...`) participate in numeric compound ops.
+  - Named numeric types (`type Age int ...`) participate in numeric compound ops.
   - Result is revalidated against the named type constraints.
 - Increment/decrement: `x++`, `x--`
 - `const` enforcement:
@@ -140,8 +140,8 @@ Implemented operators:
 - Field values are dynamic. Reassigning a field to another type can make later nested access fail at runtime (for example, `obj.a = 11` then `obj.a.b` raises `TypeError`).
 
 ### Structs
-- Declaration: `struct Name { field1, field2, ... }`
-- Optional typed fields: `struct User { id: int, name: string, addr: Addr }`
+- Declaration: `type Name struct { field1, field2, ... }`
+- Optional typed fields: `type User struct { id: int, name: string, addr: Addr }`
 - Nullable types: `?T` (example: `nick: ?string`)
 - Union types: `A|B` (example: `id: int|string`)
 - Struct type references require prior declaration (no forward/self references).
@@ -275,11 +275,11 @@ Current module map:
 ## 12. Named Types and Ranges
 
 - Named scalar types:
-  - `type UserId is string`
-  - `type OrderId is string`
+  - `type UserId string`
+  - `type OrderId string`
 - Range subtypes:
-  - `type Month is int range 1..12`
-  - `type Percent is float range 0.0..1.0`
+  - `type Month int range 1..12`
+  - `type Percent float range 0.0..1.0`
 - Constructor semantics:
   - `Month(12)` succeeds
   - `Month(13)` raises `RangeError`
@@ -290,7 +290,7 @@ Current module map:
 ## 13. Enums
 
 - Declaration:
-  - `type Status is enum { pending, approved, denied }`
+  - `type Status enum { pending, approved, denied }`
 - Qualified member access:
   - `Status.pending`
   - `Status.approved`

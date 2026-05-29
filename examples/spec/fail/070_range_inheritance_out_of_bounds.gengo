@@ -1,2 +1,2 @@
-type Age is int range 0..200
-type Young is Age range -10..5
+type Age int range 0..200
+type Young Age range -10..5

@@ -1,1 +1,1 @@
-struct Bad { v: int|Nope }
+type Bad struct { v: int|Nope }

@@ -1,5 +1,5 @@
-type UserId is string
-type OrderId is string
+type UserId string
+type OrderId string
 
 func take_user(id UserId) {
 }

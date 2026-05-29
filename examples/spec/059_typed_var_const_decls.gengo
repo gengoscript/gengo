@@ -1,6 +1,6 @@
 std := import("std")
 
-type Age is int range 0 .. 100
+type Age int range 0 .. 100
 
 var x: Age = 10
 const y: Age = 20

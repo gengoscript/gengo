@@ -1,4 +1,4 @@
-type Status is enum {
+type Status enum {
     pending,
     approved,
 }

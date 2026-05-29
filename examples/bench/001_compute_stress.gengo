@@ -1,6 +1,6 @@
 std := import("std")
 
-struct Grid {
+type Grid struct {
   size: int,
   data: array
 }

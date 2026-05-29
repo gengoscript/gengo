@@ -1,260 +1,56 @@
 const std = @import("std");
-const builtin = @import("builtin");
 const chunk = @import("chunk.zig");
 const common = @import("common.zig");
 const globals = @import("globals.zig");
 const heap = @import("../runtime/heap.zig");
-const host_abi = @import("../runtime/host_abi.zig");
-const io = @import("../runtime/io.zig");
 const cfg = @import("../runtime/config.zig");
 const Op = @import("op.zig").Op;
 const Value = @import("value.zig").Value;
 const Object = @import("value.zig").Object;
 const MapEntry = @import("value.zig").MapEntry;
-const NativeFuncObj = @import("value.zig").NativeFuncObj;
-const FieldTypeAlt = @import("value.zig").FieldTypeAlt;
-const FieldTypeTag = @import("value.zig").FieldTypeTag;
-const StructFieldSpec = @import("value.zig").StructFieldSpec;
-const FieldTypeSpec = @import("value.zig").FieldTypeSpec;
-const InterfaceMethodSpec = @import("value.zig").InterfaceMethodSpec;
 const IterObj = @import("value.zig").IterObj;
 const ClosureObj = @import("value.zig").ClosureObj;
 
-const MaxStack = cfg.max_stack;
-const MaxFrames = cfg.max_frames;
+const vms = @import("vm_state.zig");
+const vmgc = @import("vm_gc.zig");
+const vmmap = @import("vm_map.zig");
+const vmstr = @import("vm_string.zig");
+const vmtyp = @import("vm_types.zig");
+const vmnative = @import("vm_native.zig");
 
-pub const Policy = struct {
-    pub const NativeBackend = enum {
-        embedded,
-        host,
-    };
+// ── Public re-exports (external callers import from vm.zig unchanged) ─────────
 
-    allow_io: bool = true,
-    native_backend: NativeBackend = .embedded,
-    max_ops: ?u64 = null,
-};
+pub const Policy = vms.Policy;
+pub const State = vms.State;
+pub const PanicFrame = vms.PanicFrame;
+pub const MaxFrames = vms.MaxFrames;
 
-const Frame = struct { ret_ip: usize, base: usize, closure: ?*Object, func_obj: *Object, defer_base: usize };
-const MaxTempRoots = 128;
-const RuneCacheMax = 8192;
+pub const setActive = vms.setActive;
+pub const reset = vms.reset;
+pub const setPolicy = vms.setPolicy;
+pub const currentLine = vms.currentLine;
+pub const currentCol = vms.currentCol;
+pub const panicLine = vms.panicLine;
+pub const panicCol = vms.panicCol;
+pub const panicFrames = vms.panicFrames;
 
-const NativeFnId = enum(u8) {
-    io_println = 1,
-    io_printf = 15,
-    core_len = 2,
-    core_append = 3,
-    core_error = 4,
-    core_is_error = 5,
-    core_gc = 6,
-    core_gc_live_objects = 7,
-    core_gc_stats = 8,
-    core_bytelen = 9,
-    conv_to_int = 10,
-    conv_to_float = 11,
-    conv_to_bool = 12,
-    conv_to_string = 13,
-    core_gc_stats_ext = 14,
-};
-const MaxNativeArgs = 255;
+// ── Aliases for hot-path readability in runInner ──────────────────────────────
 
-pub const State = struct {
-    policy: Policy = .{},
-    stack: [MaxStack]Value = undefined,
-    stack_top: usize = 0,
-    ip: usize = 0,
-    frames: [MaxFrames]Frame = undefined,
-    frame_top: usize = 0,
-    std_module: ?*Object = null,
-    host_checked: bool = false,
-    host_caps: u64 = 0,
-    next_gc_objects: usize = 256,
-    next_gc_heap_bytes: usize = heap.HeapSize / 2,
-    call_depth_target: ?usize = null,
-    temp_roots: [MaxTempRoots]Value = undefined,
-    temp_root_top: usize = 0,
-    rune_cache_ptr: usize = 0,
-    rune_cache_byte_len: usize = 0,
-    rune_cache_rune_len: usize = 0,
-    rune_cache_valid: bool = false,
-    rune_cache_overflow: bool = false,
-    rune_cache_offsets: [RuneCacheMax]usize = undefined,
-    gc_runs: u64 = 0,
-    gc_time_ns: u64 = 0,
-    alloc_object_calls: u64 = 0,
-    alloc_managed_slice_calls: u64 = 0,
-    alloc_managed_bytes_calls: u64 = 0,
-    ops_budget_remaining: ?u64 = null,
-    defer_stack: [cfg.max_defers]Value = undefined,
-    defer_top: usize = 0,
-    panic_line: u32 = 0,
-    panic_col: u16 = 0,
-    panic_frames: [MaxFrames]PanicFrame = undefined,
-    panic_depth: usize = 0,
-};
+const vmState = vms.vmState;
+const vmPush = vms.vmPush;
+const vmPop = vms.vmPop;
+const vmPeek = vms.vmPeek;
+const vmByte = vms.vmByte;
+const vmShort = vms.vmShort;
+const vmConst = vms.vmConst;
+const pushTempRoot = vms.pushTempRoot;
+const popTempRoot = vms.popTempRoot;
+const vmAllocObject = vmgc.vmAllocObject;
+const vmAllocManagedSlice = vmgc.vmAllocManagedSlice;
+const makeDynString = vmgc.makeDynString;
+const concatDynString = vmgc.concatDynString;
 
-pub const PanicFrame = struct { line: u16, name: []const u8 };
-
-var g_default_state: State = .{};
-var g_state: *State = &g_default_state;
-
-inline fn vmState() *State {
-    return g_state;
-}
-
-pub fn setActive(state: *State) void {
-    g_state = state;
-}
-
-pub fn reset() void {
-    vmState().stack_top = 0;
-    vmState().ip = 0;
-    vmState().frame_top = 0;
-    vmState().std_module = null;
-    vmState().host_checked = false;
-    vmState().host_caps = 0;
-    vmState().next_gc_objects = 256;
-    vmState().next_gc_heap_bytes = heap.HeapSize / 2;
-    vmState().call_depth_target = null;
-    vmState().temp_root_top = 0;
-    vmState().rune_cache_ptr = 0;
-    vmState().rune_cache_byte_len = 0;
-    vmState().rune_cache_rune_len = 0;
-    vmState().rune_cache_valid = false;
-    vmState().rune_cache_overflow = false;
-    vmState().gc_runs = 0;
-    vmState().gc_time_ns = 0;
-    vmState().alloc_object_calls = 0;
-    vmState().alloc_managed_slice_calls = 0;
-    vmState().alloc_managed_bytes_calls = 0;
-    vmState().ops_budget_remaining = null;
-    vmState().defer_top = 0;
-    vmState().panic_line = 0;
-    vmState().panic_col = 0;
-    vmState().panic_depth = 0;
-}
-
-pub fn setPolicy(policy: Policy) void {
-    vmState().policy = policy;
-    vmState().ops_budget_remaining = policy.max_ops;
-}
-
-pub fn currentLine() u32 {
-    const len = chunk.codeLen();
-    if (len == 0) return 0;
-    const idx: usize = if (vmState().ip == 0) 0 else @min(vmState().ip - 1, len - 1);
-    return chunk.lineAt(idx);
-}
-
-pub fn currentCol() u16 {
-    const len = chunk.codeLen();
-    if (len == 0) return 0;
-    const idx: usize = if (vmState().ip == 0) 0 else @min(vmState().ip - 1, len - 1);
-    return chunk.colAt(idx);
-}
-
-pub fn panicLine() u32 { return vmState().panic_line; }
-pub fn panicCol() u16 { return vmState().panic_col; }
-pub fn panicFrames() []const PanicFrame { return vmState().panic_frames[0..vmState().panic_depth]; }
-
-fn vmPush(v: Value) !void {
-    if (vmState().stack_top >= MaxStack) return error.StackOverflow;
-    vmState().stack[vmState().stack_top] = v;
-    vmState().stack_top += 1;
-}
-fn vmPop() !Value {
-    if (vmState().stack_top == 0) return error.StackUnderflow;
-    vmState().stack_top -= 1;
-    return vmState().stack[vmState().stack_top];
-}
-fn vmPeek(dist: usize) !Value {
-    if (dist >= vmState().stack_top) return error.StackUnderflow;
-    return vmState().stack[vmState().stack_top - 1 - dist];
-}
-fn vmByte() !u8 {
-    if (vmState().ip >= chunk.codeLen()) return error.BytecodeOutOfBounds;
-    const b = chunk.codeByteAt(vmState().ip);
-    vmState().ip += 1;
-    return b;
-}
-fn vmShort() !usize {
-    const hi: usize = try vmByte();
-    const lo: usize = try vmByte();
-    return (hi << 8) | lo;
-}
-
-fn pushTempRoot(v: Value) !void {
-    if (vmState().temp_root_top >= MaxTempRoots) return error.StackOverflow;
-    vmState().temp_roots[vmState().temp_root_top] = v;
-    vmState().temp_root_top += 1;
-}
-
-fn popTempRoot() void {
-    if (vmState().temp_root_top > 0) vmState().temp_root_top -= 1;
-}
-fn vmConst() !Value {
-    const idx = try vmByte();
-    if (idx >= chunk.constCount()) return error.BadConstantIndex;
-    return chunk.constAt(idx);
-}
-
-fn vmIndexFromVal(v: Value) !usize {
-    const n: f64 = switch (v) {
-        .number => |x| x,
-        .rune => |x| @floatFromInt(x),
-        else => return error.TypeError,
-    };
-    if (n < 0) return error.IndexOutOfBounds;
-    const f = @trunc(n);
-    if (f != n) return error.TypeError;
-    return @intFromFloat(f);
-}
-
-fn vmSliceIndex(v: Value, upper: usize) !usize {
-    const n: f64 = switch (v) {
-        .number => |x| x,
-        .rune => |x| @floatFromInt(x),
-        else => return error.TypeError,
-    };
-    if (n < 0) return error.IndexOutOfBounds;
-    const f = @trunc(n);
-    if (f != n) return error.TypeError;
-    const idx: usize = @intFromFloat(f);
-    if (idx > upper) return error.IndexOutOfBounds;
-    return idx;
-}
-
-fn valueAsNumber(v: Value) !f64 {
-    return switch (v) {
-        .number => |n| n,
-        .rune => |r| @floatFromInt(r),
-        .object => |o| switch (o.*) {
-            .named_value => |nv| valueAsNumber(nv.value),
-            else => error.TypeError,
-        },
-        else => error.TypeError,
-    };
-}
-
-fn valueAsInt(v: Value) !i64 {
-    return switch (v) {
-        .number => |n| blk: {
-            const t = @trunc(n);
-            if (t != n) return error.TypeError;
-            break :blk @intFromFloat(t);
-        },
-        .rune => |r| @intCast(r),
-        .object => |o| switch (o.*) {
-            .named_value => |nv| valueAsInt(nv.value),
-            else => error.TypeError,
-        },
-        else => error.TypeError,
-    };
-}
-
-fn unboxNamed(v: Value) Value {
-    if (v == .object and v.object.* == .named_value) return v.object.named_value.value;
-    return v;
-}
+// ── Private helpers used only in the execution core ───────────────────────────
 
 fn namedTypeCarrier(a: Value, b: Value) !?*Object {
     var ta: ?*Object = null;
@@ -268,1279 +64,10 @@ fn namedTypeCarrier(a: Value, b: Value) !?*Object {
 fn pushNumericResultWithCarrier(a: Value, b: Value, n: f64) !void {
     const carrier = try namedTypeCarrier(a, b);
     if (carrier) |typ| {
-        const wrapped = try constructNamedType(typ, .{ .number = n });
+        const wrapped = try vmtyp.constructNamedType(typ, .{ .number = n });
         try vmPush(wrapped);
     } else {
         try vmPush(.{ .number = n });
-    }
-}
-
-fn utf8NextRuneByteLen(s: []const u8, byte_idx: usize) !usize {
-    if (byte_idx >= s.len) return error.IndexOutOfBounds;
-    const w = std.unicode.utf8ByteSequenceLength(s[byte_idx]) catch return error.TypeError;
-    const width: usize = @intCast(w);
-    if (byte_idx + width > s.len) return error.TypeError;
-    _ = std.unicode.utf8Decode(s[byte_idx .. byte_idx + width]) catch return error.TypeError;
-    return width;
-}
-
-fn utf8RuneCount(s: []const u8) !usize {
-    var count: usize = 0;
-    var i: usize = 0;
-    while (i < s.len) {
-        i += try utf8NextRuneByteLen(s, i);
-        count += 1;
-    }
-    return count;
-}
-
-fn utf8ByteOffsetForRuneIndex(s: []const u8, rune_idx: usize) !usize {
-    var r: usize = 0;
-    var i: usize = 0;
-    while (i < s.len and r < rune_idx) {
-        i += try utf8NextRuneByteLen(s, i);
-        r += 1;
-    }
-    if (r != rune_idx) return error.IndexOutOfBounds;
-    return i;
-}
-
-fn ensureRuneCache(s: []const u8) !void {
-    if (vmState().rune_cache_valid and vmState().rune_cache_ptr == @intFromPtr(s.ptr) and vmState().rune_cache_byte_len == s.len) return;
-    vmState().rune_cache_ptr = @intFromPtr(s.ptr);
-    vmState().rune_cache_byte_len = s.len;
-    vmState().rune_cache_rune_len = 0;
-    vmState().rune_cache_valid = true;
-    vmState().rune_cache_overflow = false;
-    var i: usize = 0;
-    while (i < s.len) {
-        if (vmState().rune_cache_rune_len < RuneCacheMax) {
-            vmState().rune_cache_offsets[vmState().rune_cache_rune_len] = i;
-        } else {
-            vmState().rune_cache_overflow = true;
-        }
-        i += try utf8NextRuneByteLen(s, i);
-        vmState().rune_cache_rune_len += 1;
-    }
-}
-
-fn utf8RuneCountCached(s: []const u8) !usize {
-    try ensureRuneCache(s);
-    return vmState().rune_cache_rune_len;
-}
-
-fn utf8ByteOffsetForRuneIndexCached(s: []const u8, rune_idx: usize) !usize {
-    try ensureRuneCache(s);
-    if (rune_idx == vmState().rune_cache_rune_len) return s.len;
-    if (rune_idx > vmState().rune_cache_rune_len) return error.IndexOutOfBounds;
-    if (!vmState().rune_cache_overflow and rune_idx < RuneCacheMax) return vmState().rune_cache_offsets[rune_idx];
-    return utf8ByteOffsetForRuneIndex(s, rune_idx);
-}
-
-fn monoNowNs() u64 {
-    if (comptime builtin.os.tag != .wasi) {
-        return 0;
-    }
-    var ns: std.os.wasi.timestamp_t = 0;
-    if (std.os.wasi.clock_time_get(.MONOTONIC, 1, &ns) != .SUCCESS) return 0;
-    return ns;
-}
-
-fn makeNative(id: NativeFnId, arity: u8) !Value {
-    const obj = try vmAllocObject();
-    obj.* = .{ .native_function = .{ .id = @intFromEnum(id), .arity = arity } };
-    return .{ .object = obj };
-}
-
-fn buildStdModule() !*Object {
-    if (vmState().std_module) |m| return m;
-
-    const io_items = heap.bump(MapEntry, 2) orelse return error.OutOfMemory;
-    io_items[0] = .{
-        .key = .{ .string = "println" },
-        .value = try makeNative(.io_println, 255),
-    };
-    io_items[1] = .{
-        .key = .{ .string = "printf" },
-        .value = try makeNative(.io_printf, 255),
-    };
-    const io_obj = try vmAllocObject();
-    io_obj.* = .{ .map = io_items[0..2] };
-
-    const core_items = heap.bump(MapEntry, 9) orelse return error.OutOfMemory;
-    core_items[0] = .{
-        .key = .{ .string = "len" },
-        .value = try makeNative(.core_len, 1),
-    };
-    core_items[1] = .{
-        .key = .{ .string = "append" },
-        .value = try makeNative(.core_append, 255),
-    };
-    core_items[2] = .{
-        .key = .{ .string = "error" },
-        .value = try makeNative(.core_error, 1),
-    };
-    core_items[3] = .{
-        .key = .{ .string = "is_error" },
-        .value = try makeNative(.core_is_error, 1),
-    };
-    core_items[4] = .{
-        .key = .{ .string = "gc" },
-        .value = try makeNative(.core_gc, 0),
-    };
-    core_items[5] = .{
-        .key = .{ .string = "gc_live_objects" },
-        .value = try makeNative(.core_gc_live_objects, 0),
-    };
-    core_items[6] = .{
-        .key = .{ .string = "gc_stats" },
-        .value = try makeNative(.core_gc_stats, 0),
-    };
-    core_items[7] = .{
-        .key = .{ .string = "bytelen" },
-        .value = try makeNative(.core_bytelen, 1),
-    };
-    core_items[8] = .{
-        .key = .{ .string = "gc_stats_ext" },
-        .value = try makeNative(.core_gc_stats_ext, 0),
-    };
-    const core_obj = try vmAllocObject();
-    core_obj.* = .{ .map = core_items[0..9] };
-
-    const conv_items = heap.bump(MapEntry, 4) orelse return error.OutOfMemory;
-    conv_items[0] = .{
-        .key = .{ .string = "to_int" },
-        .value = try makeNative(.conv_to_int, 1),
-    };
-    conv_items[1] = .{
-        .key = .{ .string = "to_float" },
-        .value = try makeNative(.conv_to_float, 1),
-    };
-    conv_items[2] = .{
-        .key = .{ .string = "to_bool" },
-        .value = try makeNative(.conv_to_bool, 1),
-    };
-    conv_items[3] = .{
-        .key = .{ .string = "to_string" },
-        .value = try makeNative(.conv_to_string, 1),
-    };
-    const conv_obj = try vmAllocObject();
-    conv_obj.* = .{ .map = conv_items[0..4] };
-
-    const std_items = heap.bump(MapEntry, 3) orelse return error.OutOfMemory;
-    std_items[0] = .{
-        .key = .{ .string = "io" },
-        .value = .{ .object = io_obj },
-    };
-    std_items[1] = .{
-        .key = .{ .string = "core" },
-        .value = .{ .object = core_obj },
-    };
-    std_items[2] = .{
-        .key = .{ .string = "conv" },
-        .value = .{ .object = conv_obj },
-    };
-
-    const std_obj = try vmAllocObject();
-    std_obj.* = .{ .map = std_items[0..3] };
-    vmState().std_module = std_obj;
-    return std_obj;
-}
-
-fn markValue(v: Value) void {
-    if (v == .object) markObject(v.object);
-}
-
-fn markObject(obj: *Object) void {
-    if (!heap.isObjectLive(obj)) return;
-    if (heap.isObjectMarked(obj)) return;
-    heap.markObject(obj);
-    switch (obj.*) {
-        .array, .array_managed => {
-            const items = asArraySlice(obj);
-            var i: usize = 0;
-            while (i < items.len) : (i += 1) markValue(items[i]);
-        },
-        .map, .map_managed, .map_hashed => {
-            const items = asMapSlice(obj);
-            var i: usize = 0;
-            while (i < items.len) : (i += 1) {
-                markValue(items[i].key);
-                markValue(items[i].value);
-            }
-        },
-        .closure => |cl| {
-            markObject(cl.func);
-            var i: usize = 0;
-            while (i < cl.upvalues.len) : (i += 1) markObject(cl.upvalues[i]);
-        },
-        .cell => |c| markValue(c.value),
-        .struct_instance => |inst| {
-            markObject(inst.typ);
-            var i: usize = 0;
-            while (i < inst.fields.len) : (i += 1) {
-                markValue(inst.fields[i].key);
-                markValue(inst.fields[i].value);
-            }
-        },
-        .named_value => |nv| {
-            markObject(nv.typ);
-            markValue(nv.value);
-        },
-        .iterator => |it| {
-            if (it.source) |src| markObject(src);
-        },
-        .enum_value => |ev| markObject(ev.typ),
-        .dyn_string, .function, .native_function, .struct_type, .interface_type, .named_type, .enum_type => {},
-    }
-}
-
-fn collectGarbage() void {
-    const t0 = monoNowNs();
-    var i: usize = 0;
-    while (i < vmState().stack_top) : (i += 1) markValue(vmState().stack[i]);
-
-    i = 0;
-    while (i < globals.len()) : (i += 1) markValue(globals.valueAt(i));
-
-    if (vmState().std_module) |m| markObject(m);
-
-    i = 0;
-    while (i < vmState().temp_root_top) : (i += 1) markValue(vmState().temp_roots[i]);
-
-    i = 0;
-    while (i < chunk.constCount()) : (i += 1) markValue(chunk.constAt(i));
-
-    i = 0;
-    while (i < vmState().defer_top) : (i += 1) markValue(vmState().defer_stack[i]);
-
-    heap.sweepObjects();
-    const t1 = monoNowNs();
-    vmState().gc_runs += 1;
-    if (t1 > t0) vmState().gc_time_ns += @intCast(t1 - t0);
-}
-
-fn vmAllocObject() !*Object {
-    if (heap.liveObjectCount() >= vmState().next_gc_objects) {
-        collectGarbage();
-        const live = heap.liveObjectCount();
-        vmState().next_gc_objects = (live * 2) + 64;
-    }
-    if (heap.allocObject()) |o| {
-        vmState().alloc_object_calls += 1;
-        return o;
-    }
-    collectGarbage();
-    const live = heap.liveObjectCount();
-    vmState().next_gc_objects = (live * 2) + 64;
-    if (heap.allocObject()) |o| {
-        vmState().alloc_object_calls += 1;
-        return o;
-    }
-    return error.OutOfMemory;
-}
-
-fn vmAllocManagedSlice(comptime T: type, n: usize) ![]T {
-    if (heap.usedBytes() >= vmState().next_gc_heap_bytes) {
-        collectGarbage();
-        const used = heap.usedBytes();
-        const step = heap.HeapSize / 4;
-        vmState().next_gc_heap_bytes = if (used + step > heap.HeapSize) heap.HeapSize else used + step;
-    }
-    if (heap.allocManagedSlice(T, n)) |s| {
-        vmState().alloc_managed_slice_calls += 1;
-        return s;
-    }
-    collectGarbage();
-    const used = heap.usedBytes();
-    const step = heap.HeapSize / 4;
-    vmState().next_gc_heap_bytes = if (used + step > heap.HeapSize) heap.HeapSize else used + step;
-    if (heap.allocManagedSlice(T, n)) |s| {
-        vmState().alloc_managed_slice_calls += 1;
-        return s;
-    }
-    return error.OutOfMemory;
-}
-
-fn vmAllocManagedBytes(n: usize) ![]u8 {
-    if (heap.usedBytes() >= vmState().next_gc_heap_bytes) {
-        collectGarbage();
-        const used = heap.usedBytes();
-        const step = heap.HeapSize / 4;
-        vmState().next_gc_heap_bytes = if (used + step > heap.HeapSize) heap.HeapSize else used + step;
-    }
-    if (heap.allocBytesManaged(n)) |s| {
-        vmState().alloc_managed_bytes_calls += 1;
-        return s;
-    }
-    collectGarbage();
-    const used = heap.usedBytes();
-    const step = heap.HeapSize / 4;
-    vmState().next_gc_heap_bytes = if (used + step > heap.HeapSize) heap.HeapSize else used + step;
-    if (heap.allocBytesManaged(n)) |s| {
-        vmState().alloc_managed_bytes_calls += 1;
-        return s;
-    }
-    return error.OutOfMemory;
-}
-
-fn isStringValue(v: Value) bool {
-    return v == .string or (v == .object and v.object.* == .dyn_string);
-}
-
-fn isArrayObject(obj: *Object) bool {
-    return switch (obj.*) {
-        .array, .array_managed => true,
-        else => false,
-    };
-}
-
-fn asArraySlice(obj: *Object) []Value {
-    return switch (obj.*) {
-        .array => |s| s,
-        .array_managed => |s| s,
-        else => unreachable,
-    };
-}
-
-fn isMapObject(obj: *Object) bool {
-    return switch (obj.*) {
-        .map, .map_managed, .map_hashed => true,
-        else => false,
-    };
-}
-
-fn asMapSlice(obj: *Object) []MapEntry {
-    return switch (obj.*) {
-        .map => |s| s,
-        .map_managed => |s| s,
-        .map_hashed => |hm| hm.entries[0..hm.len],
-        else => unreachable,
-    };
-}
-
-fn asStringValue(v: Value) ![]const u8 {
-    if (v == .string) return v.string;
-    if (v == .object and v.object.* == .dyn_string) return v.object.dyn_string;
-    return error.TypeError;
-}
-
-fn mapKeyEquals(a: Value, b: Value) bool {
-    if (isStringValue(a) and isStringValue(b)) {
-        const sa = asStringValue(a) catch return false;
-        const sb = asStringValue(b) catch return false;
-        return common.streq(sa, sb);
-    }
-    return Value.equals(a, b);
-}
-
-fn mapHashValue(v: Value) u64 {
-    return switch (v) {
-        .number => |n| @bitCast(n),
-        .rune => |r| @as(u64, r) *% 11400714819323198485,
-        .boolean => |b| if (b) 0x9e3779b97f4a7c15 else 0x94d049bb133111eb,
-        .string => |s| common.hashBytes(s),
-        .error_value => |s| common.hashBytes(s),
-        .object => |o| @intFromPtr(o),
-        .null => 0xcbf29ce484222325,
-    };
-}
-
-fn mapBucketsForCount(entry_count: usize) usize {
-    const n: usize = if (entry_count < 4) 8 else entry_count * 2;
-    var p: usize = 1;
-    while (p < n) p <<= 1;
-    return p;
-}
-
-fn mapFindHashedIndex(entries: []MapEntry, buckets: []i32, key: Value) ?usize {
-    if (buckets.len == 0) return null;
-    const mask = buckets.len - 1;
-    var idx: usize = @intCast(mapHashValue(key) & mask);
-    var probes: usize = 0;
-    while (probes < buckets.len) : (probes += 1) {
-        const b = buckets[idx];
-        if (b < 0) return null;
-        const ei: usize = @intCast(b);
-        if (ei < entries.len and mapKeyEquals(entries[ei].key, key)) return ei;
-        idx = (idx + 1) & mask;
-    }
-    return null;
-}
-
-fn mapBuildHashedBuckets(entries: []MapEntry, buckets: []i32) void {
-    var i: usize = 0;
-    while (i < buckets.len) : (i += 1) buckets[i] = -1;
-    if (buckets.len == 0) return;
-    const mask = buckets.len - 1;
-    i = 0;
-    while (i < entries.len) : (i += 1) {
-        var idx: usize = @intCast(mapHashValue(entries[i].key) & mask);
-        var probes: usize = 0;
-        while (probes < buckets.len) : (probes += 1) {
-            const cur = buckets[idx];
-            if (cur < 0) {
-                buckets[idx] = @intCast(i);
-                break;
-            }
-            const curi: usize = @intCast(cur);
-            if (mapKeyEquals(entries[curi].key, entries[i].key)) {
-                // Preserve first-in semantics for duplicate keys.
-                break;
-            }
-            idx = (idx + 1) & mask;
-        }
-    }
-}
-
-fn mapInsertHashed(obj: *Object, key: Value, val: Value) !void {
-    if (obj.* != .map_hashed) return error.TypeError;
-
-    if (obj.map_hashed.buckets.len == 0 or
-        obj.map_hashed.len >= obj.map_hashed.entries.len or
-        ((obj.map_hashed.len + 1) * 10 >= obj.map_hashed.buckets.len * 7))
-    {
-        try pushTempRoot(.{ .object = obj });
-        defer popTempRoot();
-
-        const old = obj.map_hashed;
-        const new_len = old.len + 1;
-        const new_cap = if (old.entries.len < 8) 8 else old.entries.len * 2;
-        const out_cap = if (new_cap < new_len) new_len else new_cap;
-        const out_entries = try vmAllocManagedSlice(MapEntry, out_cap);
-        if (old.len > 0) @memcpy(out_entries[0..old.len], old.entries[0..old.len]);
-        const bcount = mapBucketsForCount(out_cap);
-        const out_buckets = try vmAllocManagedSlice(i32, bcount);
-        mapBuildHashedBuckets(out_entries[0..old.len], out_buckets);
-        obj.* = .{ .map_hashed = .{ .entries = out_entries[0..out_cap], .len = old.len, .buckets = out_buckets } };
-    }
-
-    var hm = &obj.map_hashed;
-    const mask = hm.buckets.len - 1;
-    var slot: usize = @intCast(mapHashValue(key) & mask);
-    var probes: usize = 0;
-    while (probes < hm.buckets.len) : (probes += 1) {
-        const b = hm.buckets[slot];
-        if (b < 0) {
-            const ei = hm.len;
-            hm.entries[ei] = .{ .key = key, .value = val };
-            hm.buckets[slot] = @intCast(ei);
-            hm.len += 1;
-            return;
-        }
-        const ei: usize = @intCast(b);
-        if (ei < hm.len and mapKeyEquals(hm.entries[ei].key, key)) {
-            hm.entries[ei].value = val;
-            return;
-        }
-        slot = (slot + 1) & mask;
-    }
-    return error.OutOfMemory;
-}
-
-fn makeDynString(s: []const u8) !Value {
-    const obj = try vmAllocObject();
-    try pushTempRoot(.{ .object = obj });
-    defer popTempRoot();
-    const buf = try vmAllocManagedBytes(s.len);
-    @memcpy(buf[0..s.len], s);
-    obj.* = .{ .dyn_string = buf[0..s.len] };
-    return .{ .object = obj };
-}
-
-fn concatDynString(a: []const u8, b: []const u8) !Value {
-    const obj = try vmAllocObject();
-    try pushTempRoot(.{ .object = obj });
-    defer popTempRoot();
-    const total = a.len + b.len;
-    const buf = try vmAllocManagedBytes(total);
-    @memcpy(buf[0..a.len], a);
-    @memcpy(buf[a.len..total], b);
-    obj.* = .{ .dyn_string = buf[0..total] };
-    return .{ .object = obj };
-}
-
-fn nativeLen(v: Value) !Value {
-    const n: usize = switch (v) {
-        .string => |s| try utf8RuneCountCached(s),
-        .object => |obj| switch (obj.*) {
-            .dyn_string => |s| try utf8RuneCountCached(s),
-            .array, .array_managed => asArraySlice(obj).len,
-            .map, .map_managed, .map_hashed => asMapSlice(obj).len,
-            .struct_instance => |s| s.fields.len,
-            else => return error.TypeError,
-        },
-        else => return error.TypeError,
-    };
-    return .{ .number = @floatFromInt(n) };
-}
-
-fn nativeByteLen(v: Value) !Value {
-    const n: usize = switch (v) {
-        .string => |s| s.len,
-        .object => |obj| switch (obj.*) {
-            .dyn_string => |s| s.len,
-            else => return error.TypeError,
-        },
-        else => return error.TypeError,
-    };
-    return .{ .number = @floatFromInt(n) };
-}
-
-fn nativePrintf(start: usize, argc: u8) !void {
-    if (argc < 1) return error.ArityMismatch;
-    const fmt_v = vmState().stack[start];
-    const fmt = try asStringValue(fmt_v);
-    var ai: usize = 1;
-    var i: usize = 0;
-    while (i < fmt.len) {
-        const c = fmt[i];
-        if (c != '%') {
-            io.write(fmt[i .. i + 1]);
-            i += 1;
-            continue;
-        }
-        if (i + 1 >= fmt.len) return error.TypeError;
-        const spec = fmt[i + 1];
-        if (spec == '%') {
-            io.write("%");
-            i += 2;
-            continue;
-        }
-        if (ai >= @as(usize, argc)) return error.ArityMismatch;
-        const arg = vmState().stack[start + ai];
-        ai += 1;
-        switch (spec) {
-            'v' => io.printValue(arg),
-            's' => io.write(try asStringValue(arg)),
-            'd' => io.writeInt(try valueAsInt(arg)),
-            'f' => io.writeF64(try valueAsNumber(arg)),
-            't' => {
-                if (arg != .boolean) return error.TypeError;
-                io.write(if (arg.boolean) "true" else "false");
-            },
-            else => return error.TypeError,
-        }
-        i += 2;
-    }
-    if (ai != @as(usize, argc)) return error.ArityMismatch;
-}
-
-fn nativeAppend(start: usize, argc: u8) !Value {
-    if (argc < 1) return error.ArityMismatch;
-    const first = vmState().stack[start];
-    if (first != .object or !isArrayObject(first.object)) return error.TypeError;
-    const base = asArraySlice(first.object);
-    const extra: usize = argc - 1;
-    const obj = try vmAllocObject();
-    try pushTempRoot(.{ .object = obj });
-    defer popTempRoot();
-    const out = try vmAllocManagedSlice(Value, base.len + extra);
-    @memcpy(out[0..base.len], base);
-    var i: usize = 0;
-    while (i < extra) : (i += 1) {
-        out[base.len + i] = vmState().stack[start + 1 + i];
-    }
-    obj.* = .{ .array_managed = out[0 .. base.len + extra] };
-    return .{ .object = obj };
-}
-
-fn nativeGcStats() !Value {
-    const obj = try vmAllocObject();
-    try pushTempRoot(.{ .object = obj });
-    defer popTempRoot();
-    const items = heap.bump(MapEntry, 3) orelse return error.OutOfMemory;
-    items[0] = .{
-        .key = .{ .string = "heap_used_bytes" },
-        .value = .{ .number = @floatFromInt(heap.usedBytes()) },
-    };
-    items[1] = .{
-        .key = .{ .string = "heap_size_bytes" },
-        .value = .{ .number = @floatFromInt(heap.HeapSize) },
-    };
-    items[2] = .{
-        .key = .{ .string = "live_objects" },
-        .value = .{ .number = @floatFromInt(heap.liveObjectCount()) },
-    };
-    obj.* = .{ .map = items[0..3] };
-    return .{ .object = obj };
-}
-
-fn nativeGcStatsExt() !Value {
-    const obj = try vmAllocObject();
-    try pushTempRoot(.{ .object = obj });
-    defer popTempRoot();
-    const items = heap.bump(MapEntry, 8) orelse return error.OutOfMemory;
-    items[0] = .{
-        .key = .{ .string = "heap_used_bytes" },
-        .value = .{ .number = @floatFromInt(heap.usedBytes()) },
-    };
-    items[1] = .{
-        .key = .{ .string = "heap_size_bytes" },
-        .value = .{ .number = @floatFromInt(heap.HeapSize) },
-    };
-    items[2] = .{
-        .key = .{ .string = "live_objects" },
-        .value = .{ .number = @floatFromInt(heap.liveObjectCount()) },
-    };
-    items[3] = .{
-        .key = .{ .string = "gc_runs" },
-        .value = .{ .number = @floatFromInt(vmState().gc_runs) },
-    };
-    items[4] = .{
-        .key = .{ .string = "gc_time_ns" },
-        .value = .{ .number = @floatFromInt(vmState().gc_time_ns) },
-    };
-    items[5] = .{
-        .key = .{ .string = "alloc_object_calls" },
-        .value = .{ .number = @floatFromInt(vmState().alloc_object_calls) },
-    };
-    items[6] = .{
-        .key = .{ .string = "alloc_managed_slice_calls" },
-        .value = .{ .number = @floatFromInt(vmState().alloc_managed_slice_calls) },
-    };
-    items[7] = .{
-        .key = .{ .string = "alloc_managed_bytes_calls" },
-        .value = .{ .number = @floatFromInt(vmState().alloc_managed_bytes_calls) },
-    };
-    obj.* = .{ .map = items[0..8] };
-    return .{ .object = obj };
-}
-
-fn nativeConvToInt(v: Value) !Value {
-    switch (v) {
-        .number => |n| {
-            const tr = @trunc(n);
-            return .{ .number = tr };
-        },
-        .rune => |r| return .{ .number = @floatFromInt(r) },
-        .boolean => |b| return .{ .number = if (b) 1 else 0 },
-        .string => |s| {
-            const n = common.parseFloat(s) orelse return error.TypeError;
-            const tr = @trunc(n);
-            return .{ .number = tr };
-        },
-        .object => |o| {
-            if (o.* == .dyn_string) {
-                const n = common.parseFloat(o.dyn_string) orelse return error.TypeError;
-                const tr = @trunc(n);
-                return .{ .number = tr };
-            }
-            return error.TypeError;
-        },
-        else => return error.TypeError,
-    }
-}
-
-fn nativeConvToFloat(v: Value) !Value {
-    switch (v) {
-        .number => |n| return .{ .number = n },
-        .rune => |r| return .{ .number = @floatFromInt(r) },
-        .boolean => |b| return .{ .number = if (b) 1 else 0 },
-        .string => |s| {
-            const n = common.parseFloat(s) orelse return error.TypeError;
-            return .{ .number = n };
-        },
-        .object => |o| {
-            if (o.* == .dyn_string) {
-                const n = common.parseFloat(o.dyn_string) orelse return error.TypeError;
-                return .{ .number = n };
-            }
-            return error.TypeError;
-        },
-        else => return error.TypeError,
-    }
-}
-
-fn nativeConvToBool(v: Value) !Value {
-    switch (v) {
-        .boolean => |b| return .{ .boolean = b },
-        .number => |n| return .{ .boolean = n != 0.0 },
-        .rune => |r| return .{ .boolean = r != 0 },
-        .string => |s| return .{ .boolean = s.len != 0 },
-        .error_value => |e| return .{ .boolean = e.len != 0 },
-        .null => return .{ .boolean = false },
-        .object => return .{ .boolean = true },
-    }
-}
-
-fn nativeConvToString(v: Value) !Value {
-    switch (v) {
-        .string => |s| return makeDynString(s),
-        .object => |o| {
-            if (o.* == .dyn_string) return makeDynString(o.dyn_string);
-            return error.TypeError;
-        },
-        .boolean => |b| return makeDynString(if (b) "true" else "false"),
-        .number => |n| {
-            var buf: [64]u8 = undefined;
-            const s = std.fmt.bufPrint(buf[0..], "{d}", .{n}) catch return error.TypeError;
-            return makeDynString(s);
-        },
-        .rune => |r| {
-            var buf: [4]u8 = undefined;
-            const n = std.unicode.utf8Encode(r, buf[0..]) catch return error.TypeError;
-            return makeDynString(buf[0..n]);
-        },
-        .null => return makeDynString("null"),
-        .error_value => |e| return makeDynString(e),
-    }
-}
-
-fn expectStringKey(v: Value) ![]const u8 {
-    return asStringValue(v);
-}
-
-fn findFieldIndex(fields: []const StructFieldSpec, key: []const u8) ?usize {
-    var i: usize = 0;
-    while (i < fields.len) : (i += 1) {
-        if (common.streq(fields[i].name, key)) return i;
-    }
-    return null;
-}
-
-fn matchesTypeAlt(v: Value, alt: FieldTypeAlt) bool {
-    return switch (alt.typ) {
-        .any => true,
-        .null_t => v == .null,
-        .int => (v == .number and @trunc(v.number) == v.number) or v == .rune,
-        .float => v == .number or v == .rune,
-        .rune_t => v == .rune,
-        .boolean => v == .boolean,
-        .string => isStringValue(v),
-        .error_t => v == .error_value,
-        .array => v == .object and isArrayObject(v.object),
-        .map => v == .object and isMapObject(v.object),
-        .struct_t => v == .object and v.object.* == .struct_instance and common.streq(v.object.struct_instance.typ.struct_type.name, alt.struct_name),
-        .interface_t => matchesInterfaceType(v, alt.interface_name),
-        .named_t => v == .object and switch (v.object.*) {
-            .named_value => common.streq(v.object.named_value.typ.named_type.name, alt.named_name),
-            .enum_value => common.streq(v.object.enum_value.typ.enum_type.name, alt.named_name),
-            else => false,
-        },
-    };
-}
-
-fn makeNamedValue(typ_obj: *Object, inner: Value) !Value {
-    const obj = try vmAllocObject();
-    obj.* = .{ .named_value = .{ .typ = typ_obj, .value = inner } };
-    return .{ .object = obj };
-}
-
-fn constructNamedType(typ_obj: *Object, arg: Value) !Value {
-    if (typ_obj.* != .named_type) return error.TypeError;
-    const nt = typ_obj.named_type;
-    var base_v: Value = undefined;
-    switch (nt.base) {
-        .int => {
-            const n = try valueAsNumber(arg);
-            if (@trunc(n) != n) return error.TypeError;
-            base_v = .{ .number = n };
-            if (nt.has_range and (n < nt.min or n > nt.max)) return error.RangeError;
-        },
-        .float => {
-            const n = try valueAsNumber(arg);
-            base_v = .{ .number = n };
-            if (nt.has_range and (n < nt.min or n > nt.max)) return error.RangeError;
-        },
-        .rune => {
-            const r: u21 = switch (arg) {
-                .rune => |rv| rv,
-                .number => |n| blk: {
-                    const t = @trunc(n);
-                    if (t != n or t < 0) return error.TypeError;
-                    break :blk @intFromFloat(t);
-                },
-                else => return error.TypeError,
-            };
-            const rf: f64 = @floatFromInt(r);
-            base_v = .{ .rune = r };
-            if (nt.has_range and (rf < nt.min or rf > nt.max)) return error.RangeError;
-        },
-        .string => {
-            if (!isStringValue(arg)) return error.TypeError;
-            const s = try asStringValue(arg);
-            base_v = try makeDynString(s);
-        },
-        .bool => {
-            if (arg != .boolean) return error.TypeError;
-            base_v = arg;
-        },
-    }
-    return makeNamedValue(typ_obj, base_v);
-}
-
-fn interfaceMethodMatches(m: InterfaceMethodSpec, f: @import("value.zig").FuncObj) bool {
-    if (m.is_variadic != f.is_variadic) return false;
-    var f_param_start: usize = 0;
-    if (f.arity == m.arity + 1 and f.param_types.len == m.param_types.len + 1) {
-        // Struct receiver methods are compiled with an implicit first parameter.
-        f_param_start = 1;
-    } else if (m.arity != f.arity) {
-        return false;
-    }
-    if (m.has_typed_params != f.has_typed_params) return false;
-    if (m.has_typed_returns != f.has_typed_returns) return false;
-    if (m.param_types.len + f_param_start != f.param_types.len) return false;
-    if (m.return_types.len != f.return_types.len) return false;
-    if (m.is_variadic) {
-        const ma = m.variadic_type.alts;
-        const fa = f.variadic_type.alts;
-        if (ma.len != fa.len) return false;
-        var vai: usize = 0;
-        while (vai < ma.len) : (vai += 1) {
-            if (ma[vai].typ != fa[vai].typ) return false;
-            switch (ma[vai].typ) {
-                .struct_t => if (!common.streq(ma[vai].struct_name, fa[vai].struct_name)) return false,
-                .interface_t => if (!common.streq(ma[vai].interface_name, fa[vai].interface_name)) return false,
-                .named_t => if (!common.streq(ma[vai].named_name, fa[vai].named_name)) return false,
-                else => {},
-            }
-        }
-    }
-    var i: usize = 0;
-    while (i < m.param_types.len) : (i += 1) {
-        const ma = m.param_types[i].alts;
-        const fa = f.param_types[f_param_start + i].alts;
-        if (ma.len != fa.len) return false;
-        var ai: usize = 0;
-        while (ai < ma.len) : (ai += 1) {
-            if (ma[ai].typ != fa[ai].typ) return false;
-            switch (ma[ai].typ) {
-                .struct_t => if (!common.streq(ma[ai].struct_name, fa[ai].struct_name)) return false,
-                .interface_t => if (!common.streq(ma[ai].interface_name, fa[ai].interface_name)) return false,
-                .named_t => if (!common.streq(ma[ai].named_name, fa[ai].named_name)) return false,
-                else => {},
-            }
-        }
-    }
-    i = 0;
-    while (i < m.return_types.len) : (i += 1) {
-        const ma = m.return_types[i].alts;
-        const fa = f.return_types[i].alts;
-        if (ma.len != fa.len) return false;
-        var ai: usize = 0;
-        while (ai < ma.len) : (ai += 1) {
-            if (ma[ai].typ != fa[ai].typ) return false;
-            switch (ma[ai].typ) {
-                .struct_t => if (!common.streq(ma[ai].struct_name, fa[ai].struct_name)) return false,
-                .interface_t => if (!common.streq(ma[ai].interface_name, fa[ai].interface_name)) return false,
-                .named_t => if (!common.streq(ma[ai].named_name, fa[ai].named_name)) return false,
-                else => {},
-            }
-        }
-    }
-    return true;
-}
-
-fn matchesInterfaceType(v: Value, iname: []const u8) bool {
-    if (!(v == .object and v.object.* == .struct_instance)) return false;
-    const tname = v.object.struct_instance.typ.struct_type.name;
-    const iv = globals.get(iname) orelse return false;
-    if (!(iv == .object and iv.object.* == .interface_type)) return false;
-    const it = iv.object.interface_type;
-    var mi: usize = 0;
-    while (mi < it.methods.len) : (mi += 1) {
-        const m = it.methods[mi];
-        const total = tname.len + 1 + m.name.len;
-        if (total > 128) return false;
-        var key_buf: [128]u8 = undefined;
-        @memcpy(key_buf[0..tname.len], tname);
-        key_buf[tname.len] = '.';
-        @memcpy(key_buf[tname.len + 1 .. total], m.name);
-        const fnv = globals.get(key_buf[0..total]) orelse return false;
-        if (!(fnv == .object and (fnv.object.* == .function or fnv.object.* == .closure))) return false;
-        const f = switch (fnv.object.*) {
-            .function => |ff| ff,
-            .closure => |cl| cl.func.function,
-            else => return false,
-        };
-        if (!interfaceMethodMatches(m, f)) return false;
-    }
-    return true;
-}
-
-fn matchesFieldType(v: Value, spec: StructFieldSpec) bool {
-    return matchesTypeSpec(v, spec.typ);
-}
-
-fn matchesTypeSpec(v: Value, spec: FieldTypeSpec) bool {
-    var i: usize = 0;
-    while (i < spec.alts.len) : (i += 1) {
-        if (matchesTypeAlt(v, spec.alts[i])) return true;
-    }
-    return false;
-}
-
-fn enforceFuncArgTypes(f: @import("value.zig").FuncObj, argc: u8) !void {
-    if (!f.has_typed_params) return;
-    const fixed: usize = if (f.is_variadic) f.arity - 1 else f.arity;
-    var i: usize = 0;
-    while (i < fixed) : (i += 1) {
-        const arg = vmState().stack[vmState().stack_top - argc + i];
-        if (!matchesTypeSpec(arg, f.param_types[i])) return error.TypeError;
-    }
-    if (f.is_variadic) {
-        while (i < @as(usize, argc)) : (i += 1) {
-            const arg = vmState().stack[vmState().stack_top - argc + i];
-            if (!matchesTypeSpec(arg, f.variadic_type)) return error.TypeError;
-        }
-    }
-}
-
-fn enforceFuncReturnTypes(f: @import("value.zig").FuncObj, retval: Value) !void {
-    if (!f.has_typed_returns) return;
-    if (f.return_types.len == 0) return;
-    if (f.return_types.len == 1) {
-        if (!matchesTypeSpec(retval, f.return_types[0])) return error.TypeError;
-        return;
-    }
-    if (!(retval == .object and isArrayObject(retval.object))) return error.TypeError;
-    const arr = asArraySlice(retval.object);
-    if (arr.len != f.return_types.len) return error.ArityMismatch;
-    var i: usize = 0;
-    while (i < arr.len) : (i += 1) {
-        if (!matchesTypeSpec(arr[i], f.return_types[i])) return error.TypeError;
-    }
-}
-
-fn frameFuncSig(func_obj: *Object) !@import("value.zig").FuncObj {
-    return switch (func_obj.*) {
-        .function => |f| f,
-        .closure => |cl| cl.func.function,
-        else => error.NotAFunction,
-    };
-}
-
-fn wireFromValue(v: Value) !host_abi.ValueWire {
-    return switch (v) {
-        .null => .{
-            .tag = @intFromEnum(host_abi.WireTag.null),
-            .flags = 0,
-            .reserved = 0,
-            .payload = 0,
-            .len = 0,
-            .reserved2 = 0,
-        },
-        .boolean => |b| .{
-            .tag = @intFromEnum(host_abi.WireTag.boolean),
-            .flags = 0,
-            .reserved = 0,
-            .payload = if (b) 1 else 0,
-            .len = 0,
-            .reserved2 = 0,
-        },
-        .number => |n| .{
-            .tag = @intFromEnum(host_abi.WireTag.number),
-            .flags = 0,
-            .reserved = 0,
-            .payload = @bitCast(n),
-            .len = 0,
-            .reserved2 = 0,
-        },
-        .rune => |r| .{
-            .tag = @intFromEnum(host_abi.WireTag.number),
-            .flags = 0,
-            .reserved = 0,
-            .payload = @bitCast(@as(f64, @floatFromInt(r))),
-            .len = 0,
-            .reserved2 = 0,
-        },
-        .string => |s| .{
-            .tag = @intFromEnum(host_abi.WireTag.string),
-            .flags = 0,
-            .reserved = 0,
-            .payload = @intFromPtr(s.ptr),
-            .len = @intCast(s.len),
-            .reserved2 = 0,
-        },
-        .object => |o| if (o.* == .dyn_string) .{
-            .tag = @intFromEnum(host_abi.WireTag.string),
-            .flags = 0,
-            .reserved = 0,
-            .payload = @intFromPtr(o.dyn_string.ptr),
-            .len = @intCast(o.dyn_string.len),
-            .reserved2 = 0,
-        } else return error.UnsupportedHostValueType,
-        else => return error.UnsupportedHostValueType,
-    };
-}
-
-fn valueFromWire(w: host_abi.ValueWire) !Value {
-    const tag: host_abi.WireTag = @enumFromInt(w.tag);
-    return switch (tag) {
-        .null => .null,
-        .boolean => .{ .boolean = w.payload != 0 },
-        .number => .{ .number = @bitCast(w.payload) },
-        .string => return error.UnsupportedHostReturnType,
-    };
-}
-
-fn wireNumberToU64(w: host_abi.ValueWire) !u64 {
-    const tag: host_abi.WireTag = @enumFromInt(w.tag);
-    if (tag != .number) return error.HostNativeBadReturnType;
-    const n: f64 = @bitCast(w.payload);
-    if (n < 0) return error.HostNativeBadReturnValue;
-    const tr = @trunc(n);
-    if (tr != n) return error.HostNativeBadReturnValue;
-    return @intFromFloat(tr);
-}
-
-fn ensureHostReady() !void {
-    if (vmState().policy.native_backend != .host) return;
-    if (vmState().host_checked) return;
-
-    var out: host_abi.ValueWire = .{
-        .tag = @intFromEnum(host_abi.WireTag.null),
-        .flags = 0,
-        .reserved = 0,
-        .payload = 0,
-        .len = 0,
-        .reserved2 = 0,
-    };
-
-    var empty: [0]host_abi.ValueWire = .{};
-    const st_ver = host_abi.nativeCall(.abi_version, empty[0..], &out);
-    switch (st_ver) {
-        .ok => {},
-        .unsupported => {
-            // No host import available: remain in host mode but with zero
-            // host-dispatched capabilities so VM-local implementations are used.
-            vmState().host_caps = 0;
-            vmState().host_checked = true;
-            return;
-        },
-        .denied => return error.PermissionDenied,
-        .bad_args => return error.HostNativeBadArgs,
-        .failed => return error.HostNativeFailed,
-    }
-    const version = try wireNumberToU64(out);
-    if (version != host_abi.ABI_VERSION) return error.HostAbiVersionMismatch;
-
-    const st_caps = host_abi.nativeCall(.host_caps, empty[0..], &out);
-    switch (st_caps) {
-        .ok => {},
-        .unsupported => return error.HostNativeUnsupported,
-        .denied => return error.PermissionDenied,
-        .bad_args => return error.HostNativeBadArgs,
-        .failed => return error.HostNativeFailed,
-    }
-    vmState().host_caps = try wireNumberToU64(out);
-    vmState().host_checked = true;
-}
-
-fn callNative(nf: NativeFuncObj, argc: u8) !void {
-    switch (@as(NativeFnId, @enumFromInt(nf.id))) {
-        .io_println => {
-            if (!vmState().policy.allow_io) return error.PermissionDenied;
-            if (vmState().policy.native_backend == .host) {
-                try ensureHostReady();
-                if ((vmState().host_caps & host_abi.CAP_IO_PRINTLN) != 0) {
-                    if (argc > MaxNativeArgs) return error.ArityMismatch;
-                    const start = vmState().stack_top - argc;
-                    var args_wire: [MaxNativeArgs]host_abi.ValueWire = undefined;
-                    var i: usize = 0;
-                    while (i < @as(usize, argc)) : (i += 1) {
-                        args_wire[i] = try wireFromValue(vmState().stack[start + i]);
-                    }
-                    var out: host_abi.ValueWire = .{
-                        .tag = @intFromEnum(host_abi.WireTag.null),
-                        .flags = 0,
-                        .reserved = 0,
-                        .payload = 0,
-                        .len = 0,
-                        .reserved2 = 0,
-                    };
-                    const st = host_abi.nativeCall(.io_println, args_wire[0..argc], &out);
-                    switch (st) {
-                        .ok => {},
-                        .unsupported => return error.HostNativeUnsupported,
-                        .denied => return error.PermissionDenied,
-                        .bad_args => return error.HostNativeBadArgs,
-                        .failed => return error.HostNativeFailed,
-                    }
-                    var j: usize = 0;
-                    while (j < @as(usize, argc)) : (j += 1) _ = try vmPop();
-                    _ = try vmPop();
-                    try vmPush(.null);
-                    return;
-                }
-            }
-            const start = vmState().stack_top - argc;
-            var i: usize = 0;
-            while (i < @as(usize, argc)) : (i += 1) io.printValue(vmState().stack[start + i]);
-            io.write("\n");
-            var j: usize = 0;
-            while (j < @as(usize, argc)) : (j += 1) _ = try vmPop();
-            _ = try vmPop();
-            try vmPush(.null);
-        },
-        .io_printf => {
-            if (!vmState().policy.allow_io) return error.PermissionDenied;
-            const start = vmState().stack_top - argc;
-            try nativePrintf(start, argc);
-            var j: usize = 0;
-            while (j < @as(usize, argc)) : (j += 1) _ = try vmPop();
-            _ = try vmPop();
-            try vmPush(.null);
-        },
-        .core_len => {
-            if (argc != nf.arity) return error.ArityMismatch;
-            if (vmState().policy.native_backend == .host) {
-                try ensureHostReady();
-                if ((vmState().host_caps & host_abi.CAP_CORE_LEN) != 0) {
-                    var arg_wire: [1]host_abi.ValueWire = undefined;
-                    arg_wire[0] = try wireFromValue(vmState().stack[vmState().stack_top - 1]);
-                    var out_wire: host_abi.ValueWire = .{
-                        .tag = @intFromEnum(host_abi.WireTag.null),
-                        .flags = 0,
-                        .reserved = 0,
-                        .payload = 0,
-                        .len = 0,
-                        .reserved2 = 0,
-                    };
-                    const st = host_abi.nativeCall(.core_len, arg_wire[0..], &out_wire);
-                    switch (st) {
-                        .ok => {},
-                        .unsupported => return error.HostNativeUnsupported,
-                        .denied => return error.PermissionDenied,
-                        .bad_args => return error.HostNativeBadArgs,
-                        .failed => return error.HostNativeFailed,
-                    }
-                    const out = try valueFromWire(out_wire);
-                    _ = try vmPop();
-                    _ = try vmPop();
-                    try vmPush(out);
-                    return;
-                }
-            }
-            const arg = vmState().stack[vmState().stack_top - 1];
-            const out = try nativeLen(arg);
-            _ = try vmPop();
-            _ = try vmPop();
-            try vmPush(out);
-        },
-        .core_append => {
-            const start = vmState().stack_top - argc;
-            if (vmState().policy.native_backend == .host) {
-                try ensureHostReady();
-                if ((vmState().host_caps & host_abi.CAP_CORE_APPEND) != 0) {
-                    if (argc > MaxNativeArgs) return error.ArityMismatch;
-                    var args_wire: [MaxNativeArgs]host_abi.ValueWire = undefined;
-                    var i: usize = 0;
-                    while (i < @as(usize, argc)) : (i += 1) {
-                        args_wire[i] = try wireFromValue(vmState().stack[start + i]);
-                    }
-                    var out_wire: host_abi.ValueWire = .{
-                        .tag = @intFromEnum(host_abi.WireTag.null),
-                        .flags = 0,
-                        .reserved = 0,
-                        .payload = 0,
-                        .len = 0,
-                        .reserved2 = 0,
-                    };
-                    const st = host_abi.nativeCall(.core_append, args_wire[0..argc], &out_wire);
-                    switch (st) {
-                        .ok => {},
-                        .unsupported => return error.HostNativeUnsupported,
-                        .denied => return error.PermissionDenied,
-                        .bad_args => return error.HostNativeBadArgs,
-                        .failed => return error.HostNativeFailed,
-                    }
-                    const out = try valueFromWire(out_wire);
-                    var j: usize = 0;
-                    while (j < @as(usize, argc)) : (j += 1) _ = try vmPop();
-                    _ = try vmPop();
-                    try vmPush(out);
-                    return;
-                }
-            }
-            const out = try nativeAppend(start, argc);
-            var j: usize = 0;
-            while (j < @as(usize, argc)) : (j += 1) _ = try vmPop();
-            _ = try vmPop();
-            try vmPush(out);
-        },
-        .core_error => {
-            if (argc != nf.arity) return error.ArityMismatch;
-            const arg = vmState().stack[vmState().stack_top - 1];
-            const msg = try asStringValue(arg);
-            const copy = heap.bump(u8, msg.len) orelse return error.OutOfMemory;
-            @memcpy(copy[0..msg.len], msg);
-            _ = try vmPop();
-            _ = try vmPop();
-            try vmPush(.{ .error_value = copy[0..msg.len] });
-        },
-        .core_is_error => {
-            if (argc != nf.arity) return error.ArityMismatch;
-            const arg = vmState().stack[vmState().stack_top - 1];
-            _ = try vmPop();
-            _ = try vmPop();
-            try vmPush(.{ .boolean = arg == .error_value });
-        },
-        .core_gc => {
-            if (argc != nf.arity) return error.ArityMismatch;
-            collectGarbage();
-            _ = try vmPop();
-            try vmPush(.null);
-        },
-        .core_gc_live_objects => {
-            if (argc != nf.arity) return error.ArityMismatch;
-            _ = try vmPop();
-            try vmPush(.{ .number = @floatFromInt(heap.liveObjectCount()) });
-        },
-        .core_gc_stats => {
-            if (argc != nf.arity) return error.ArityMismatch;
-            const out = try nativeGcStats();
-            _ = try vmPop();
-            try vmPush(out);
-        },
-        .core_gc_stats_ext => {
-            if (argc != nf.arity) return error.ArityMismatch;
-            const out = try nativeGcStatsExt();
-            _ = try vmPop();
-            try vmPush(out);
-        },
-        .core_bytelen => {
-            if (argc != nf.arity) return error.ArityMismatch;
-            const arg = vmState().stack[vmState().stack_top - 1];
-            const out = try nativeByteLen(arg);
-            _ = try vmPop();
-            _ = try vmPop();
-            try vmPush(out);
-        },
-        .conv_to_int => {
-            if (argc != nf.arity) return error.ArityMismatch;
-            const arg = vmState().stack[vmState().stack_top - 1];
-            const out = try nativeConvToInt(arg);
-            _ = try vmPop();
-            _ = try vmPop();
-            try vmPush(out);
-        },
-        .conv_to_float => {
-            if (argc != nf.arity) return error.ArityMismatch;
-            const arg = vmState().stack[vmState().stack_top - 1];
-            const out = try nativeConvToFloat(arg);
-            _ = try vmPop();
-            _ = try vmPop();
-            try vmPush(out);
-        },
-        .conv_to_bool => {
-            if (argc != nf.arity) return error.ArityMismatch;
-            const arg = vmState().stack[vmState().stack_top - 1];
-            const out = try nativeConvToBool(arg);
-            _ = try vmPop();
-            _ = try vmPop();
-            try vmPush(out);
-        },
-        .conv_to_string => {
-            if (argc != nf.arity) return error.ArityMismatch;
-            const arg = vmState().stack[vmState().stack_top - 1];
-            const out = try nativeConvToString(arg);
-            _ = try vmPop();
-            _ = try vmPop();
-            try vmPush(out);
-        },
     }
 }
 
@@ -1570,9 +97,9 @@ fn performCall(argc: u8) !void {
             if (f.is_variadic) {
                 if (argc < f.arity - 1) return error.ArityMismatch;
             } else if (f.arity != argc) return error.ArityMismatch;
-            if (f.has_typed_params) try enforceFuncArgTypes(f, argc);
+            if (f.has_typed_params) try vmtyp.enforceFuncArgTypes(f, argc);
             try prepareVariadicCall(f, argc);
-            if (vmState().frame_top >= MaxFrames) return error.CallStackOverflow;
+            if (vmState().frame_top >= vms.MaxFrames) return error.CallStackOverflow;
             vmState().frames[vmState().frame_top] = .{
                 .ret_ip = vmState().ip,
                 .base = vmState().stack_top - f.arity,
@@ -1588,9 +115,9 @@ fn performCall(argc: u8) !void {
             if (f.is_variadic) {
                 if (argc < f.arity - 1) return error.ArityMismatch;
             } else if (f.arity != argc) return error.ArityMismatch;
-            if (f.has_typed_params) try enforceFuncArgTypes(f, argc);
+            if (f.has_typed_params) try vmtyp.enforceFuncArgTypes(f, argc);
             try prepareVariadicCall(f, argc);
-            if (vmState().frame_top >= MaxFrames) return error.CallStackOverflow;
+            if (vmState().frame_top >= vms.MaxFrames) return error.CallStackOverflow;
             vmState().frames[vmState().frame_top] = .{
                 .ret_ip = vmState().ip,
                 .base = vmState().stack_top - f.arity,
@@ -1602,12 +129,12 @@ fn performCall(argc: u8) !void {
             vmState().ip = f.ip;
         },
         .native_function => |nf| {
-            try callNative(nf, argc);
+            try vmnative.callNative(nf, argc);
         },
         .named_type => {
             if (argc != 1) return error.ArityMismatch;
             const arg = vmState().stack[vmState().stack_top - 1];
-            const out = try constructNamedType(obj, arg);
+            const out = try vmtyp.constructNamedType(obj, arg);
             _ = try vmPop();
             _ = try vmPop();
             try vmPush(out);
@@ -1644,8 +171,7 @@ fn trySelfTailCall(argc: u8) !bool {
         const f = callee_obj.closure.func.function;
         if (f.is_variadic) return false;
         if (f.arity != argc) return false;
-        if (f.has_typed_params) try enforceFuncArgTypes(f, argc);
-        // Rewrite current frame arg/local prefix with new args.
+        if (f.has_typed_params) try vmtyp.enforceFuncArgTypes(f, argc);
         var i: usize = 0;
         while (i < argc) : (i += 1) {
             writeFrameLocal(frame.base + i, vmState().stack[callee_idx + 1 + i]);
@@ -1660,7 +186,7 @@ fn trySelfTailCall(argc: u8) !bool {
         const f = callee_obj.function;
         if (f.is_variadic) return false;
         if (f.arity != argc) return false;
-        if (f.has_typed_params) try enforceFuncArgTypes(f, argc);
+        if (f.has_typed_params) try vmtyp.enforceFuncArgTypes(f, argc);
         var i: usize = 0;
         while (i < argc) : (i += 1) {
             writeFrameLocal(frame.base + i, vmState().stack[callee_idx + 1 + i]);
@@ -1677,8 +203,8 @@ fn iterInit(v: Value) !Value {
     switch (v) {
         .object => |o| switch (o.*) {
             .dyn_string => |s| obj.* = .{ .iterator = .{ .kind = .string, .index = 0, .string = s, .string_managed = true, .source = o } },
-            .array, .array_managed => obj.* = .{ .iterator = .{ .kind = .array, .index = 0, .array = asArraySlice(o), .source = o } },
-            .map, .map_managed, .map_hashed => obj.* = .{ .iterator = .{ .kind = .map, .index = 0, .map = asMapSlice(o), .source = o } },
+            .array, .array_managed => obj.* = .{ .iterator = .{ .kind = .array, .index = 0, .array = vms.asArraySlice(o), .source = o } },
+            .map, .map_managed, .map_hashed => obj.* = .{ .iterator = .{ .kind = .map, .index = 0, .map = vms.asMapSlice(o), .source = o } },
             else => return error.TypeError,
         },
         .string => |s| obj.* = .{ .iterator = .{ .kind = .string, .index = 0, .string = s, .string_managed = false } },
@@ -1705,8 +231,8 @@ fn iterNext1(it: *IterObj) !void {
                 return;
             }
             const ridx = it.rune_index;
-            const start = try utf8ByteOffsetForRuneIndexCached(it.string, ridx);
-            const end = try utf8ByteOffsetForRuneIndexCached(it.string, ridx + 1);
+            const start = try vmstr.utf8ByteOffsetForRuneIndexCached(it.string, ridx);
+            const end = try vmstr.utf8ByteOffsetForRuneIndexCached(it.string, ridx + 1);
             if (it.string_managed) {
                 try vmPush(try makeDynString(it.string[start..end]));
             } else {
@@ -1747,8 +273,8 @@ fn iterNext2(it: *IterObj) !void {
                 return;
             }
             const ridx = it.rune_index;
-            const start = try utf8ByteOffsetForRuneIndexCached(it.string, ridx);
-            const end = try utf8ByteOffsetForRuneIndexCached(it.string, ridx + 1);
+            const start = try vmstr.utf8ByteOffsetForRuneIndexCached(it.string, ridx);
+            const end = try vmstr.utf8ByteOffsetForRuneIndexCached(it.string, ridx + 1);
             try vmPush(.{ .number = @floatFromInt(it.rune_index) });
             if (it.string_managed) {
                 try vmPush(try makeDynString(it.string[start..end]));
@@ -1851,77 +377,77 @@ fn runInner() !void {
             .add => {
                 const b = try vmPop();
                 const a = try vmPop();
-                if (isStringValue(a) and isStringValue(b)) {
-                    const sa = try asStringValue(a);
-                    const sb = try asStringValue(b);
+                if (vms.isStringValue(a) and vms.isStringValue(b)) {
+                    const sa = try vms.asStringValue(a);
+                    const sb = try vms.asStringValue(b);
                     try vmPush(try concatDynString(sa, sb));
                 } else {
-                    const an = try valueAsNumber(a);
-                    const bn = try valueAsNumber(b);
+                    const an = try vms.valueAsNumber(a);
+                    const bn = try vms.valueAsNumber(b);
                     try pushNumericResultWithCarrier(a, b, an + bn);
                 }
             },
             .sub => {
                 const b = try vmPop();
                 const a = try vmPop();
-                const an = try valueAsNumber(a);
-                const bn = try valueAsNumber(b);
+                const an = try vms.valueAsNumber(a);
+                const bn = try vms.valueAsNumber(b);
                 try pushNumericResultWithCarrier(a, b, an - bn);
             },
             .mul => {
                 const b = try vmPop();
                 const a = try vmPop();
-                const an = try valueAsNumber(a);
-                const bn = try valueAsNumber(b);
+                const an = try vms.valueAsNumber(a);
+                const bn = try vms.valueAsNumber(b);
                 try pushNumericResultWithCarrier(a, b, an * bn);
             },
             .div => {
                 const b = try vmPop();
                 const a = try vmPop();
-                const an = try valueAsNumber(a);
-                const bn = try valueAsNumber(b);
+                const an = try vms.valueAsNumber(a);
+                const bn = try vms.valueAsNumber(b);
                 if (bn == 0.0) return error.DivisionByZero;
                 try pushNumericResultWithCarrier(a, b, an / bn);
             },
             .mod => {
                 const b = try vmPop();
                 const a = try vmPop();
-                const an = try valueAsNumber(a);
-                const bn = try valueAsNumber(b);
+                const an = try vms.valueAsNumber(a);
+                const bn = try vms.valueAsNumber(b);
                 if (bn == 0.0) return error.DivisionByZero;
                 try pushNumericResultWithCarrier(a, b, common.fmod(an, bn));
             },
             .bit_and => {
                 const b = try vmPop();
                 const a = try vmPop();
-                const an = try valueAsInt(a);
-                const bn = try valueAsInt(b);
+                const an = try vms.valueAsInt(a);
+                const bn = try vms.valueAsInt(b);
                 try pushNumericResultWithCarrier(a, b, @floatFromInt(an & bn));
             },
             .bit_or => {
                 const b = try vmPop();
                 const a = try vmPop();
-                const an = try valueAsInt(a);
-                const bn = try valueAsInt(b);
+                const an = try vms.valueAsInt(a);
+                const bn = try vms.valueAsInt(b);
                 try pushNumericResultWithCarrier(a, b, @floatFromInt(an | bn));
             },
             .bit_xor => {
                 const b = try vmPop();
                 const a = try vmPop();
-                const an = try valueAsInt(a);
-                const bn = try valueAsInt(b);
+                const an = try vms.valueAsInt(a);
+                const bn = try vms.valueAsInt(b);
                 try pushNumericResultWithCarrier(a, b, @floatFromInt(an ^ bn));
             },
             .bit_not => {
                 const v = try vmPop();
-                const n = try valueAsInt(v);
+                const n = try vms.valueAsInt(v);
                 try vmPush(.{ .number = @floatFromInt(~n) });
             },
             .shl => {
                 const b = try vmPop();
                 const a = try vmPop();
-                const an = try valueAsInt(a);
-                const bn = try valueAsInt(b);
+                const an = try vms.valueAsInt(a);
+                const bn = try vms.valueAsInt(b);
                 if (bn < 0) return error.RangeError;
                 const shift: u6 = @intCast(@min(bn, 63));
                 try pushNumericResultWithCarrier(a, b, @floatFromInt(an << shift));
@@ -1929,14 +455,14 @@ fn runInner() !void {
             .shr => {
                 const b = try vmPop();
                 const a = try vmPop();
-                const an = try valueAsInt(a);
-                const bn = try valueAsInt(b);
+                const an = try vms.valueAsInt(a);
+                const bn = try vms.valueAsInt(b);
                 if (bn < 0) return error.RangeError;
                 const shift: u6 = @intCast(@min(bn, 63));
                 try pushNumericResultWithCarrier(a, b, @floatFromInt(an >> shift));
             },
             .cast_int => {
-                const v = unboxNamed(try vmPop());
+                const v = vms.unboxNamed(try vmPop());
                 switch (v) {
                     .number => |n| try vmPush(.{ .number = @trunc(n) }),
                     .rune => |r| try vmPush(.{ .number = @floatFromInt(r) }),
@@ -1945,7 +471,7 @@ fn runInner() !void {
                 }
             },
             .cast_float => {
-                const v = unboxNamed(try vmPop());
+                const v = vms.unboxNamed(try vmPop());
                 switch (v) {
                     .number => |n| try vmPush(.{ .number = n }),
                     .rune => |r| try vmPush(.{ .number = @floatFromInt(r) }),
@@ -1954,7 +480,7 @@ fn runInner() !void {
                 }
             },
             .cast_bool => {
-                const v = unboxNamed(try vmPop());
+                const v = vms.unboxNamed(try vmPop());
                 switch (v) {
                     .number => |n| try vmPush(.{ .boolean = n != 0.0 }),
                     .rune => |r| try vmPush(.{ .boolean = r != 0 }),
@@ -1963,12 +489,12 @@ fn runInner() !void {
                 }
             },
             .cast_string => {
-                const v = unboxNamed(try vmPop());
-                try vmPush(try nativeConvToString(v));
+                const v = vms.unboxNamed(try vmPop());
+                try vmPush(try vmnative.nativeConvToString(v));
             },
             .neg => {
                 const v = try vmPop();
-                const n = try valueAsNumber(v);
+                const n = try vms.valueAsNumber(v);
                 try vmPush(.{ .number = -n });
             },
             .not => try vmPush(.{ .boolean = !(try vmPop()).isTruthy() }),
@@ -1980,15 +506,15 @@ fn runInner() !void {
             .gt => {
                 const b = try vmPop();
                 const a = try vmPop();
-                const an = try valueAsNumber(a);
-                const bn = try valueAsNumber(b);
+                const an = try vms.valueAsNumber(a);
+                const bn = try vms.valueAsNumber(b);
                 try vmPush(.{ .boolean = an > bn });
             },
             .lt => {
                 const b = try vmPop();
                 const a = try vmPop();
-                const an = try valueAsNumber(a);
-                const bn = try valueAsNumber(b);
+                const an = try vms.valueAsNumber(a);
+                const bn = try vms.valueAsNumber(b);
                 try vmPush(.{ .boolean = an < bn });
             },
 
@@ -2019,9 +545,9 @@ fn runInner() !void {
                     const key = try vmPop();
                     items[i] = .{ .key = key, .value = val };
                 }
-                const bcount = mapBucketsForCount(count);
+                const bcount = vmmap.mapBucketsForCount(count);
                 const buckets = try vmAllocManagedSlice(i32, bcount);
-                mapBuildHashedBuckets(items[0..count], buckets);
+                vmmap.mapBuildHashedBuckets(items[0..count], buckets);
                 obj.* = .{ .map_hashed = .{ .entries = items[0..count], .len = count, .buckets = buckets } };
                 try vmPush(.{ .object = obj });
             },
@@ -2062,11 +588,11 @@ fn runInner() !void {
 
                 var si: usize = 0;
                 while (si < supplied.len) : (si += 1) {
-                    const key_s = try expectStringKey(supplied[si].key);
-                    const idx = findFieldIndex(st.fields, key_s) orelse return error.UnknownStructField;
+                    const key_s = try vms.asStringValue(supplied[si].key);
+                    const idx = vmtyp.findFieldIndex(st.fields, key_s) orelse return error.UnknownStructField;
                     if (seen[idx]) return error.DuplicateField;
                     seen[idx] = true;
-                    if (!matchesFieldType(supplied[si].value, st.fields[idx])) return error.StructFieldTypeMismatch;
+                    if (!vmtyp.matchesFieldType(supplied[si].value, st.fields[idx])) return error.StructFieldTypeMismatch;
                     inst_fields[idx] = .{
                         .key = .{ .string = st.fields[idx].name },
                         .value = supplied[si].value,
@@ -2090,22 +616,22 @@ fn runInner() !void {
             .tuple_check_arity => {
                 const expect = try vmByte();
                 const tup = try vmPeek(0);
-                if (tup != .object or !isArrayObject(tup.object)) return error.TypeError;
-                if (asArraySlice(tup.object).len != expect) return error.ArityMismatch;
+                if (tup != .object or !vms.isArrayObject(tup.object)) return error.TypeError;
+                if (vms.asArraySlice(tup.object).len != expect) return error.ArityMismatch;
             },
             .tuple_get => {
                 const idx = try vmByte();
                 const tup = try vmPop();
-                if (tup != .object or !isArrayObject(tup.object)) return error.TypeError;
-                const a = asArraySlice(tup.object);
+                if (tup != .object or !vms.isArrayObject(tup.object)) return error.TypeError;
+                const a = vms.asArraySlice(tup.object);
                 if (idx >= a.len) return error.ArityMismatch;
                 try vmPush(a[idx]);
             },
             .tuple_get_keep => {
                 const idx = try vmByte();
                 const tup = try vmPeek(0);
-                if (tup != .object or !isArrayObject(tup.object)) return error.TypeError;
-                const a = asArraySlice(tup.object);
+                if (tup != .object or !vms.isArrayObject(tup.object)) return error.TypeError;
+                const a = vms.asArraySlice(tup.object);
                 if (idx >= a.len) return error.ArityMismatch;
                 try vmPush(a[idx]);
             },
@@ -2115,22 +641,22 @@ fn runInner() !void {
                 switch (container) {
                     .object => |obj| switch (obj.*) {
                         .dyn_string => |s| {
-                            const ridx = try vmIndexFromVal(idx_v);
-                            const start = try utf8ByteOffsetForRuneIndexCached(s, ridx);
-                            const w = try utf8NextRuneByteLen(s, start);
+                            const ridx = try vms.vmIndexFromVal(idx_v);
+                            const start = try vmstr.utf8ByteOffsetForRuneIndexCached(s, ridx);
+                            const w = try vmstr.utf8NextRuneByteLen(s, start);
                             try vmPush(try makeDynString(s[start .. start + w]));
                         },
                         .array, .array_managed => {
-                            const items = asArraySlice(obj);
-                            const idx = try vmIndexFromVal(idx_v);
+                            const items = vms.asArraySlice(obj);
+                            const idx = try vms.vmIndexFromVal(idx_v);
                             if (idx >= items.len) return error.IndexOutOfBounds;
                             try vmPush(items[idx]);
                         },
                         .map, .map_managed => {
-                            const items = asMapSlice(obj);
+                            const items = vms.asMapSlice(obj);
                             var i: usize = 0;
                             while (i < items.len) : (i += 1) {
-                                if (mapKeyEquals(items[i].key, idx_v)) {
+                                if (vmmap.mapKeyEquals(items[i].key, idx_v)) {
                                     try vmPush(items[i].value);
                                     break;
                                 }
@@ -2138,19 +664,19 @@ fn runInner() !void {
                             if (i == items.len) try vmPush(.null);
                         },
                         .map_hashed => |hm| {
-                            if (mapFindHashedIndex(hm.entries[0..hm.len], hm.buckets, idx_v)) |fi| {
+                            if (vmmap.mapFindHashedIndex(hm.entries[0..hm.len], hm.buckets, idx_v)) |fi| {
                                 try vmPush(hm.entries[fi].value);
                             } else {
                                 try vmPush(.null);
                             }
                         },
                         .struct_instance => |inst| {
-                            const key = try expectStringKey(idx_v);
-                            const idx = findFieldIndex(inst.typ.struct_type.fields, key) orelse return error.UnknownStructField;
+                            const key = try vms.asStringValue(idx_v);
+                            const idx = vmtyp.findFieldIndex(inst.typ.struct_type.fields, key) orelse return error.UnknownStructField;
                             try vmPush(inst.fields[idx].value);
                         },
                         .enum_type => |et| {
-                            const key = try expectStringKey(idx_v);
+                            const key = try vms.asStringValue(idx_v);
                             var ei: usize = 0;
                             while (ei < et.members.len) : (ei += 1) {
                                 if (common.streq(et.members[ei], key)) {
@@ -2169,9 +695,9 @@ fn runInner() !void {
                         else => return error.TypeError,
                     },
                     .string => |s| {
-                        const ridx = try vmIndexFromVal(idx_v);
-                        const start = try utf8ByteOffsetForRuneIndexCached(s, ridx);
-                        const w = try utf8NextRuneByteLen(s, start);
+                        const ridx = try vms.vmIndexFromVal(idx_v);
+                        const start = try vmstr.utf8ByteOffsetForRuneIndexCached(s, ridx);
+                        const w = try vmstr.utf8NextRuneByteLen(s, start);
                         try vmPush(.{ .string = s[start .. start + w] });
                     },
                     else => return error.TypeError,
@@ -2184,17 +710,17 @@ fn runInner() !void {
                 if (container != .object) return error.TypeError;
                 switch (container.object.*) {
                     .array, .array_managed => {
-                        const items = asArraySlice(container.object);
-                        const idx = try vmIndexFromVal(idx_v);
+                        const items = vms.asArraySlice(container.object);
+                        const idx = try vms.vmIndexFromVal(idx_v);
                         if (idx >= items.len) return error.IndexOutOfBounds;
                         items[idx] = val;
                     },
                     .map, .map_managed => {
-                        const items = asMapSlice(container.object);
+                        const items = vms.asMapSlice(container.object);
                         var i: usize = 0;
                         var updated = false;
                         while (i < items.len) : (i += 1) {
-                            if (mapKeyEquals(items[i].key, idx_v)) {
+                            if (vmmap.mapKeyEquals(items[i].key, idx_v)) {
                                 items[i].value = val;
                                 updated = true;
                                 break;
@@ -2210,12 +736,12 @@ fn runInner() !void {
                         }
                     },
                     .map_hashed => {
-                        try mapInsertHashed(container.object, idx_v, val);
+                        try vmmap.mapInsertHashed(container.object, idx_v, val);
                     },
                     .struct_instance => |inst| {
-                        const key = try expectStringKey(idx_v);
-                        const idx = findFieldIndex(inst.typ.struct_type.fields, key) orelse return error.UnknownStructField;
-                        if (!matchesFieldType(val, inst.typ.struct_type.fields[idx])) return error.StructFieldTypeMismatch;
+                        const key = try vms.asStringValue(idx_v);
+                        const idx = vmtyp.findFieldIndex(inst.typ.struct_type.fields, key) orelse return error.UnknownStructField;
+                        if (!vmtyp.matchesFieldType(val, inst.typ.struct_type.fields[idx])) return error.StructFieldTypeMismatch;
                         inst.fields[idx].value = val;
                     },
                     else => return error.TypeError,
@@ -2234,28 +760,28 @@ fn runInner() !void {
 
                 switch (container) {
                     .string => |s| {
-                        const rune_len = try utf8RuneCountCached(s);
-                        const start_r: usize = if (has_start) try vmSliceIndex(start_v, rune_len) else 0;
-                        const end_r: usize = if (has_end) try vmSliceIndex(end_v, rune_len) else rune_len;
+                        const rune_len = try vmstr.utf8RuneCountCached(s);
+                        const start_r: usize = if (has_start) try vms.vmSliceIndex(start_v, rune_len) else 0;
+                        const end_r: usize = if (has_end) try vms.vmSliceIndex(end_v, rune_len) else rune_len;
                         if (start_r > end_r) return error.IndexOutOfBounds;
-                        const start_b = try utf8ByteOffsetForRuneIndexCached(s, start_r);
-                        const end_b = try utf8ByteOffsetForRuneIndexCached(s, end_r);
+                        const start_b = try vmstr.utf8ByteOffsetForRuneIndexCached(s, start_r);
+                        const end_b = try vmstr.utf8ByteOffsetForRuneIndexCached(s, end_r);
                         try vmPush(.{ .string = s[start_b..end_b] });
                     },
                     .object => |obj| switch (obj.*) {
                         .dyn_string => |s| {
-                            const rune_len = try utf8RuneCountCached(s);
-                            const start_r: usize = if (has_start) try vmSliceIndex(start_v, rune_len) else 0;
-                            const end_r: usize = if (has_end) try vmSliceIndex(end_v, rune_len) else rune_len;
+                            const rune_len = try vmstr.utf8RuneCountCached(s);
+                            const start_r: usize = if (has_start) try vms.vmSliceIndex(start_v, rune_len) else 0;
+                            const end_r: usize = if (has_end) try vms.vmSliceIndex(end_v, rune_len) else rune_len;
                             if (start_r > end_r) return error.IndexOutOfBounds;
-                            const start_b = try utf8ByteOffsetForRuneIndexCached(s, start_r);
-                            const end_b = try utf8ByteOffsetForRuneIndexCached(s, end_r);
+                            const start_b = try vmstr.utf8ByteOffsetForRuneIndexCached(s, start_r);
+                            const end_b = try vmstr.utf8ByteOffsetForRuneIndexCached(s, end_r);
                             try vmPush(try makeDynString(s[start_b..end_b]));
                         },
                         .array, .array_managed => {
-                            const items = asArraySlice(obj);
-                            const start: usize = if (has_start) try vmSliceIndex(start_v, items.len) else 0;
-                            const end: usize = if (has_end) try vmSliceIndex(end_v, items.len) else items.len;
+                            const items = vms.asArraySlice(obj);
+                            const start: usize = if (has_start) try vms.vmSliceIndex(start_v, items.len) else 0;
+                            const end: usize = if (has_end) try vms.vmSliceIndex(end_v, items.len) else items.len;
                             if (start > end) return error.IndexOutOfBounds;
                             const out = try vmAllocObject();
                             out.* = .{ .array = items[start..end] };
@@ -2267,7 +793,7 @@ fn runInner() !void {
                 }
             },
             .import_std => {
-                const std_obj = try buildStdModule();
+                const std_obj = try vmnative.buildStdModule();
                 try vmPush(.{ .object = std_obj });
             },
             .iter_init => {
@@ -2290,7 +816,7 @@ fn runInner() !void {
                 const proto = f.object.function;
                 const ups = heap.bump(*Object, proto.capture_slots.len) orelse return error.OutOfMemory;
                 if (vmState().frame_top == 0 and proto.capture_slots.len != 0) return error.TypeError;
-                const frame = if (vmState().frame_top == 0) Frame{ .ret_ip = 0, .base = 0, .closure = null, .func_obj = f.object, .defer_base = 0 } else vmState().frames[vmState().frame_top - 1];
+                const frame = if (vmState().frame_top == 0) vms.Frame{ .ret_ip = 0, .base = 0, .closure = null, .func_obj = f.object, .defer_base = 0 } else vmState().frames[vmState().frame_top - 1];
                 var i: usize = 0;
                 while (i < proto.capture_slots.len) : (i += 1) {
                     const enc = proto.capture_slots[i];
@@ -2335,7 +861,7 @@ fn runInner() !void {
                         const key = key_buf[0..total];
 
                         const func = globals.get(key) orelse return error.UnknownMethod;
-                        if (vmState().stack_top >= MaxStack) return error.StackOverflow;
+                        if (vmState().stack_top >= vms.MaxStack) return error.StackOverflow;
                         var i: usize = vmState().stack_top;
                         while (i > recv_idx + 1) {
                             vmState().stack[i] = vmState().stack[i - 1];
@@ -2347,11 +873,11 @@ fn runInner() !void {
                         try performCall(argc + 1);
                     },
                     .map, .map_managed, .map_hashed => {
-                        const items = asMapSlice(recv.object);
+                        const items = vms.asMapSlice(recv.object);
                         var i: usize = 0;
                         var maybe: ?Value = null;
                         while (i < items.len) : (i += 1) {
-                            if (isStringValue(items[i].key) and common.streq(try asStringValue(items[i].key), mname)) {
+                            if (vms.isStringValue(items[i].key) and common.streq(try vms.asStringValue(items[i].key), mname)) {
                                 maybe = items[i].value;
                                 break;
                             }
@@ -2420,12 +946,12 @@ fn runInner() !void {
                         pass_recv = true;
                     },
                     .map, .map_managed, .map_hashed => {
-                        const map_items = asMapSlice(recv.object);
+                        const map_items = vms.asMapSlice(recv.object);
                         var found: ?Value = null;
                         var mi: usize = 0;
                         while (mi < map_items.len) : (mi += 1) {
-                            if (isStringValue(map_items[mi].key)) {
-                                const ks = asStringValue(map_items[mi].key) catch continue;
+                            if (vms.isStringValue(map_items[mi].key)) {
+                                const ks = vms.asStringValue(map_items[mi].key) catch continue;
                                 if (common.streq(ks, mname)) { found = map_items[mi].value; break; }
                             }
                         }
@@ -2453,20 +979,18 @@ fn runInner() !void {
                 if (vmState().frame_top == 0) return error.ReturnAtTopLevel;
                 const retval = try vmPop();
                 const frame_defer_base = vmState().frames[vmState().frame_top - 1].defer_base;
-                // Execute deferred calls in LIFO order before popping the frame.
                 try pushTempRoot(retval);
                 while (vmState().defer_top > frame_defer_base) {
                     vmState().defer_top -= 1;
                     const deferred = vmState().defer_stack[vmState().defer_top];
                     try pushTempRoot(deferred);
-                    const arr = asArraySlice(deferred.object);
+                    const arr = vms.asArraySlice(deferred.object);
                     if (arr.len > 0) {
                         const dargc: u8 = @intCast(arr.len - 1);
                         var di: usize = 0;
                         while (di < arr.len) : (di += 1) try vmPush(arr[di]);
                         const depth_before = vmState().frame_top;
                         try performCall(dargc);
-                        // Native calls complete inline (no new frame); only run() for bytecode calls.
                         if (vmState().frame_top > depth_before) {
                             const prev_target = vmState().call_depth_target;
                             vmState().call_depth_target = depth_before;
@@ -2480,8 +1004,8 @@ fn runInner() !void {
                 popTempRoot();
                 vmState().frame_top -= 1;
                 const frame = vmState().frames[vmState().frame_top];
-                const fsig = try frameFuncSig(frame.func_obj);
-                try enforceFuncReturnTypes(fsig, retval);
+                const fsig = try vmtyp.frameFuncSig(frame.func_obj);
+                try vmtyp.enforceFuncReturnTypes(fsig, retval);
                 vmState().stack_top = frame.base - 1;
                 vmState().ip = frame.ret_ip;
                 try vmPush(retval);
@@ -2495,10 +1019,8 @@ fn runInner() !void {
     }
 }
 
-// runDeferredCall fires a single captured deferred call (an array [fn, arg0..argN-1]).
-// Errors from the callee are silently discarded so unwind always completes.
 fn runDeferredCall(deferred: Value) void {
-    const arr = asArraySlice(deferred.object);
+    const arr = vms.asArraySlice(deferred.object);
     if (arr.len == 0) return;
     const dargc: u8 = @intCast(arr.len - 1);
     var di: usize = 0;
@@ -2514,18 +1036,14 @@ fn runDeferredCall(deferred: Value) void {
     _ = vmPop() catch {};
 }
 
-// runPanicUnwind fires all deferred calls for each active frame (LIFO within each frame,
-// innermost frame first), pops those frames, then re-returns the original error.
-// This gives Go-style semantics: defers always run, even when a panic propagates.
 fn runPanicUnwind(orig_err: anyerror) anyerror!void {
-    // Capture error location and call stack before we unwind (unwind changes ip/frames).
     if (vmState().panic_line == 0) {
         vmState().panic_line = currentLine();
         vmState().panic_col = currentCol();
         const stop_depth = vmState().call_depth_target orelse 0;
         var depth: usize = 0;
         var fi: usize = vmState().frame_top;
-        while (fi > stop_depth and depth < MaxFrames) {
+        while (fi > stop_depth and depth < vms.MaxFrames) {
             fi -= 1;
             const frame = vmState().frames[fi];
             const call_ip = if (frame.ret_ip > 0) frame.ret_ip - 1 else 0;
@@ -2554,18 +1072,16 @@ fn runPanicUnwind(orig_err: anyerror) anyerror!void {
     return orig_err;
 }
 
+// ── Public API ────────────────────────────────────────────────────────────────
+
 pub fn run() anyerror!void {
     runInner() catch |err| return runPanicUnwind(err);
 }
 
-// makeString allocates a heap-owned copy of s. Use this when passing host
-// strings as args so the script can safely store them across Dispatch calls.
 pub fn makeString(s: []const u8) !Value {
-    return makeDynString(s);
+    return vmgc.makeDynString(s);
 }
 
-// callGlobal looks up a top-level function by name and calls it with the
-// provided args. The VM's global state (module-level variables) persists across calls.
 pub fn callGlobal(name: []const u8, args: []const Value) !Value {
     const fn_val = globals.get(name) orelse return error.NotDefined;
     if (fn_val != .object) return error.NotAFunction;

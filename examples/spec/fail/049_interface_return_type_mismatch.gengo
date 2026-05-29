@@ -1,8 +1,8 @@
-interface Parser {
+type Parser interface {
     parse(src string) (int, error)
 }
 
-struct Csv {}
+type Csv struct {}
 
 func (c Csv) parse(src string) (int, error) {
     return 1, "bad"

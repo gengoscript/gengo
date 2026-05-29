@@ -1,6 +1,6 @@
 std := import("std")
 
-struct User { id, name, active }
+type User struct { id, name, active }
 u := User{ id: 7, name: "mikael", active: true }
 std.io.println(u.name)
 u.name = "mk"

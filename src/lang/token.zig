@@ -19,7 +19,6 @@ pub const TT = enum {
     kw_struct,
     kw_interface,
     kw_type,
-    kw_is,
     kw_range,
     kw_enum,
     kw_import,

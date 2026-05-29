@@ -1,2 +1,2 @@
-struct User { addr: Addr }
-struct Addr { city: string }
+type User struct { addr: Addr }
+type Addr struct { city: string }

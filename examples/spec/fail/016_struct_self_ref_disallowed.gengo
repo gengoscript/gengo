@@ -1,1 +1,1 @@
-struct Node { next: Node }
+type Node struct { next: Node }

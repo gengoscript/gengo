@@ -1,7 +1,7 @@
 std := import("std")
 
-type UserId is string
-type Age is int range 0 .. 100
+type UserId string
+type Age int range 0 .. 100
 
 func takes_string(s: string) {
     std.io.println(s)

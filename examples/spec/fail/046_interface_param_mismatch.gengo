@@ -1,8 +1,8 @@
-interface Parser {
+type Parser interface {
     name() string
 }
 
-struct X { v: int }
+type X struct { v: int }
 
 func use(p Parser) {
 }

@@ -1,4 +1,4 @@
-type UserId is string
+type UserId string
 
 func take_user(id UserId) {
 }

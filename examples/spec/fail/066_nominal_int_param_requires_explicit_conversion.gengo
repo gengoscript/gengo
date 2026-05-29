@@ -1,4 +1,4 @@
-type Age is int range 0 .. 100
+type Age int range 0 .. 100
 func takes_int(x: int) {
     return x
 }

@@ -406,10 +406,6 @@ pub const Compiler = struct {
             try self.varDecl(true, false);
         } else if (self.match(.kw_const)) {
             try self.varDecl(true, true);
-        } else if (self.check(.kw_struct)) {
-            try self.structDecl();
-        } else if (self.check(.kw_interface)) {
-            try self.interfaceDecl();
         } else if (self.check(.kw_type)) {
             try self.namedTypeDecl();
         } else if (self.check(.kw_func) and self.isMethodDecl()) {
@@ -421,13 +417,8 @@ pub const Compiler = struct {
         }
     }
 
-    fn interfaceDecl(self: *Compiler) !void {
-        const kw = self.cur;
-        self.advance(); // interface
-        if (self.cur.typ != .ident) return error.UnexpectedToken;
-        const name = self.cur;
+    fn interfaceDeclBody(self: *Compiler, kw: Token, name: Token) !void {
         try self.addInterfaceType(name.src);
-        self.advance();
         try self.consume(.lbrace);
 
         var methods_tmp: [MaxLocals]InterfaceMethodSpec = undefined;
@@ -539,10 +530,12 @@ pub const Compiler = struct {
         const kw = self.cur;
         self.advance(); // type
         if (self.cur.typ != .ident) return error.UnexpectedToken;
-        const name = self.cur.src;
+        const name_tok = self.cur;
+        self.advance(); // name
+        if (self.match(.kw_struct)) return self.structDeclBody(kw, name_tok);
+        if (self.match(.kw_interface)) return self.interfaceDeclBody(kw, name_tok);
+        const name = name_tok.src;
         if (self.hasNamedType(name)) return error.DuplicateNamedType;
-        self.advance();
-        try self.consume(.kw_is);
         if (self.check(.kw_enum)) {
             try self.addNamedType(.{
                 .name = name,
@@ -670,13 +663,8 @@ pub const Compiler = struct {
         return t6.typ == .lparen;
     }
 
-    fn structDecl(self: *Compiler) !void {
-        const kw = self.cur;
-        self.advance(); // struct
-        if (self.cur.typ != .ident) return error.UnexpectedToken;
-        const name = self.cur;
+    fn structDeclBody(self: *Compiler, kw: Token, name: Token) !void {
         try self.addStructType(name.src);
-        self.advance(); // name
         try self.consume(.lbrace);
 
         var field_specs: [MaxLocals]StructFieldSpec = undefined;

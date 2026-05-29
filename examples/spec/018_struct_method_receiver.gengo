@@ -1,6 +1,6 @@
 std := import("std")
 
-struct User { name: string }
+type User struct { name: string }
 
 func (u User) rename(name: string) {
     u.name = name

@@ -1,6 +1,6 @@
 std := import("std")
 
-type Status is enum {
+type Status enum {
     pending,
     approved,
     denied,
