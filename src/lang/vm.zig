@@ -34,7 +34,7 @@ pub const Policy = struct {
     max_ops: ?u64 = null,
 };
 
-const Frame = struct { ret_ip: usize, base: usize, closure: ?*Object, func_obj: *Object };
+const Frame = struct { ret_ip: usize, base: usize, closure: ?*Object, func_obj: *Object, defer_base: usize };
 const MaxTempRoots = 128;
 const RuneCacheMax = 8192;
 
@@ -84,7 +84,15 @@ pub const State = struct {
     alloc_managed_slice_calls: u64 = 0,
     alloc_managed_bytes_calls: u64 = 0,
     ops_budget_remaining: ?u64 = null,
+    defer_stack: [cfg.max_defers]Value = undefined,
+    defer_top: usize = 0,
+    panic_line: u32 = 0,
+    panic_col: u16 = 0,
+    panic_frames: [MaxFrames]PanicFrame = undefined,
+    panic_depth: usize = 0,
 };
+
+pub const PanicFrame = struct { line: u16, name: []const u8 };
 
 var g_default_state: State = .{};
 var g_state: *State = &g_default_state;
@@ -119,6 +127,10 @@ pub fn reset() void {
     vmState().alloc_managed_slice_calls = 0;
     vmState().alloc_managed_bytes_calls = 0;
     vmState().ops_budget_remaining = null;
+    vmState().defer_top = 0;
+    vmState().panic_line = 0;
+    vmState().panic_col = 0;
+    vmState().panic_depth = 0;
 }
 
 pub fn setPolicy(policy: Policy) void {
@@ -132,6 +144,17 @@ pub fn currentLine() u32 {
     const idx: usize = if (vmState().ip == 0) 0 else @min(vmState().ip - 1, len - 1);
     return chunk.lineAt(idx);
 }
+
+pub fn currentCol() u16 {
+    const len = chunk.codeLen();
+    if (len == 0) return 0;
+    const idx: usize = if (vmState().ip == 0) 0 else @min(vmState().ip - 1, len - 1);
+    return chunk.colAt(idx);
+}
+
+pub fn panicLine() u32 { return vmState().panic_line; }
+pub fn panicCol() u16 { return vmState().panic_col; }
+pub fn panicFrames() []const PanicFrame { return vmState().panic_frames[0..vmState().panic_depth]; }
 
 fn vmPush(v: Value) !void {
     if (vmState().stack_top >= MaxStack) return error.StackOverflow;
@@ -464,19 +487,8 @@ fn markObject(obj: *Object) void {
             markObject(nv.typ);
             markValue(nv.value);
         },
-        .iterator => |it| switch (it.kind) {
-            .array => {
-                var i: usize = 0;
-                while (i < it.array.len) : (i += 1) markValue(it.array[i]);
-            },
-            .map => {
-                var i: usize = 0;
-                while (i < it.map.len) : (i += 1) {
-                    markValue(it.map[i].key);
-                    markValue(it.map[i].value);
-                }
-            },
-            .string => {},
+        .iterator => |it| {
+            if (it.source) |src| markObject(src);
         },
         .enum_value => |ev| markObject(ev.typ),
         .dyn_string, .function, .native_function, .struct_type, .interface_type, .named_type, .enum_type => {},
@@ -498,6 +510,9 @@ fn collectGarbage() void {
 
     i = 0;
     while (i < chunk.constCount()) : (i += 1) markValue(chunk.constAt(i));
+
+    i = 0;
+    while (i < vmState().defer_top) : (i += 1) markValue(vmState().defer_stack[i]);
 
     heap.sweepObjects();
     const t1 = monoNowNs();
@@ -1563,6 +1578,7 @@ fn performCall(argc: u8) !void {
                 .base = vmState().stack_top - f.arity,
                 .closure = null,
                 .func_obj = obj,
+                .defer_base = vmState().defer_top,
             };
             vmState().frame_top += 1;
             vmState().ip = f.ip;
@@ -1580,6 +1596,7 @@ fn performCall(argc: u8) !void {
                 .base = vmState().stack_top - f.arity,
                 .closure = obj,
                 .func_obj = cl.func,
+                .defer_base = vmState().defer_top,
             };
             vmState().frame_top += 1;
             vmState().ip = f.ip;
@@ -1659,9 +1676,9 @@ fn iterInit(v: Value) !Value {
     const obj = try vmAllocObject();
     switch (v) {
         .object => |o| switch (o.*) {
-            .dyn_string => |s| obj.* = .{ .iterator = .{ .kind = .string, .index = 0, .string = s, .string_managed = true } },
-            .array, .array_managed => obj.* = .{ .iterator = .{ .kind = .array, .index = 0, .array = asArraySlice(o) } },
-            .map, .map_managed, .map_hashed => obj.* = .{ .iterator = .{ .kind = .map, .index = 0, .map = asMapSlice(o) } },
+            .dyn_string => |s| obj.* = .{ .iterator = .{ .kind = .string, .index = 0, .string = s, .string_managed = true, .source = o } },
+            .array, .array_managed => obj.* = .{ .iterator = .{ .kind = .array, .index = 0, .array = asArraySlice(o), .source = o } },
+            .map, .map_managed, .map_hashed => obj.* = .{ .iterator = .{ .kind = .map, .index = 0, .map = asMapSlice(o), .source = o } },
             else => return error.TypeError,
         },
         .string => |s| obj.* = .{ .iterator = .{ .kind = .string, .index = 0, .string = s, .string_managed = false } },
@@ -1755,7 +1772,7 @@ fn iterNext2(it: *IterObj) !void {
     }
 }
 
-pub fn run() !void {
+fn runInner() !void {
     while (true) {
         if (vmState().ops_budget_remaining) |remaining| {
             if (remaining == 0) return error.InstructionBudgetExceeded;
@@ -1782,12 +1799,12 @@ pub fn run() !void {
             },
             .get_global => {
                 const name = (try vmConst()).string;
-                try vmPush(globals.get(name) orelse return error.UndefinedVariable);
+                try vmPush(globals.get(name) orelse return error.NotDefined);
             },
             .set_global => {
                 const name = (try vmConst()).string;
                 const val = try vmPop();
-                if (!globals.set(name, val)) return error.UndefinedVariable;
+                if (!globals.set(name, val)) return error.NotDefined;
             },
 
             .get_local => {
@@ -1863,6 +1880,7 @@ pub fn run() !void {
                 const a = try vmPop();
                 const an = try valueAsNumber(a);
                 const bn = try valueAsNumber(b);
+                if (bn == 0.0) return error.DivisionByZero;
                 try pushNumericResultWithCarrier(a, b, an / bn);
             },
             .mod => {
@@ -1870,6 +1888,7 @@ pub fn run() !void {
                 const a = try vmPop();
                 const an = try valueAsNumber(a);
                 const bn = try valueAsNumber(b);
+                if (bn == 0.0) return error.DivisionByZero;
                 try pushNumericResultWithCarrier(a, b, common.fmod(an, bn));
             },
             .bit_and => {
@@ -2271,7 +2290,7 @@ pub fn run() !void {
                 const proto = f.object.function;
                 const ups = heap.bump(*Object, proto.capture_slots.len) orelse return error.OutOfMemory;
                 if (vmState().frame_top == 0 and proto.capture_slots.len != 0) return error.TypeError;
-                const frame = if (vmState().frame_top == 0) Frame{ .ret_ip = 0, .base = 0, .closure = null, .func_obj = f.object } else vmState().frames[vmState().frame_top - 1];
+                const frame = if (vmState().frame_top == 0) Frame{ .ret_ip = 0, .base = 0, .closure = null, .func_obj = f.object, .defer_base = 0 } else vmState().frames[vmState().frame_top - 1];
                 var i: usize = 0;
                 while (i < proto.capture_slots.len) : (i += 1) {
                     const enc = proto.capture_slots[i];
@@ -2363,9 +2382,102 @@ pub fn run() !void {
                 if (try trySelfTailCall(argc)) continue;
                 try performCall(argc);
             },
+            .defer_call => {
+                const argc = try vmByte();
+                if (vmState().defer_top >= cfg.max_defers) return error.DeferStackOverflow;
+                const total: usize = @as(usize, argc) + 1;
+                const start = vmState().stack_top - total;
+                const arr_obj = try vmAllocObject();
+                try pushTempRoot(.{ .object = arr_obj });
+                defer popTempRoot();
+                const items = try vmAllocManagedSlice(Value, total);
+                var di: usize = 0;
+                while (di < total) : (di += 1) items[di] = vmState().stack[start + di];
+                arr_obj.* = .{ .array_managed = items[0..total] };
+                vmState().defer_stack[vmState().defer_top] = .{ .object = arr_obj };
+                vmState().defer_top += 1;
+                vmState().stack_top -= total;
+            },
+            .defer_invoke_method => {
+                const mname = (try vmConst()).string;
+                const argc = try vmByte();
+                if (vmState().defer_top >= cfg.max_defers) return error.DeferStackOverflow;
+                const recv_idx = vmState().stack_top - @as(usize, argc) - 1;
+                const recv = vmState().stack[recv_idx];
+                if (recv != .object) return error.NotAMethodReceiver;
+                var func: Value = undefined;
+                var pass_recv: bool = undefined;
+                switch (recv.object.*) {
+                    .struct_instance => |inst| {
+                        const tname = inst.typ.struct_type.name;
+                        const key_total = tname.len + 1 + mname.len;
+                        if (key_total > 128) return error.NotAMethodReceiver;
+                        var key_buf: [128]u8 = undefined;
+                        @memcpy(key_buf[0..tname.len], tname);
+                        key_buf[tname.len] = '.';
+                        @memcpy(key_buf[tname.len + 1 .. key_total], mname);
+                        func = globals.get(key_buf[0..key_total]) orelse return error.UnknownMethod;
+                        pass_recv = true;
+                    },
+                    .map, .map_managed, .map_hashed => {
+                        const map_items = asMapSlice(recv.object);
+                        var found: ?Value = null;
+                        var mi: usize = 0;
+                        while (mi < map_items.len) : (mi += 1) {
+                            if (isStringValue(map_items[mi].key)) {
+                                const ks = asStringValue(map_items[mi].key) catch continue;
+                                if (common.streq(ks, mname)) { found = map_items[mi].value; break; }
+                            }
+                        }
+                        func = found orelse return error.UnknownMethod;
+                        pass_recv = false;
+                    },
+                    else => return error.NotAMethodReceiver,
+                }
+                const extra: usize = if (pass_recv) 1 else 0;
+                const total: usize = 1 + extra + @as(usize, argc);
+                const arr_obj = try vmAllocObject();
+                try pushTempRoot(.{ .object = arr_obj });
+                defer popTempRoot();
+                const items = try vmAllocManagedSlice(Value, total);
+                items[0] = func;
+                if (pass_recv) items[1] = recv;
+                var ai: usize = 0;
+                while (ai < argc) : (ai += 1) items[1 + extra + ai] = vmState().stack[recv_idx + 1 + ai];
+                arr_obj.* = .{ .array_managed = items[0..total] };
+                vmState().defer_stack[vmState().defer_top] = .{ .object = arr_obj };
+                vmState().defer_top += 1;
+                vmState().stack_top = recv_idx;
+            },
             .ret => {
                 if (vmState().frame_top == 0) return error.ReturnAtTopLevel;
                 const retval = try vmPop();
+                const frame_defer_base = vmState().frames[vmState().frame_top - 1].defer_base;
+                // Execute deferred calls in LIFO order before popping the frame.
+                try pushTempRoot(retval);
+                while (vmState().defer_top > frame_defer_base) {
+                    vmState().defer_top -= 1;
+                    const deferred = vmState().defer_stack[vmState().defer_top];
+                    try pushTempRoot(deferred);
+                    const arr = asArraySlice(deferred.object);
+                    if (arr.len > 0) {
+                        const dargc: u8 = @intCast(arr.len - 1);
+                        var di: usize = 0;
+                        while (di < arr.len) : (di += 1) try vmPush(arr[di]);
+                        const depth_before = vmState().frame_top;
+                        try performCall(dargc);
+                        // Native calls complete inline (no new frame); only run() for bytecode calls.
+                        if (vmState().frame_top > depth_before) {
+                            const prev_target = vmState().call_depth_target;
+                            vmState().call_depth_target = depth_before;
+                            defer vmState().call_depth_target = prev_target;
+                            try run();
+                        }
+                        _ = try vmPop();
+                    }
+                    popTempRoot();
+                }
+                popTempRoot();
                 vmState().frame_top -= 1;
                 const frame = vmState().frames[vmState().frame_top];
                 const fsig = try frameFuncSig(frame.func_obj);
@@ -2383,6 +2495,69 @@ pub fn run() !void {
     }
 }
 
+// runDeferredCall fires a single captured deferred call (an array [fn, arg0..argN-1]).
+// Errors from the callee are silently discarded so unwind always completes.
+fn runDeferredCall(deferred: Value) void {
+    const arr = asArraySlice(deferred.object);
+    if (arr.len == 0) return;
+    const dargc: u8 = @intCast(arr.len - 1);
+    var di: usize = 0;
+    while (di < arr.len) : (di += 1) vmPush(arr[di]) catch return;
+    const depth_before = vmState().frame_top;
+    performCall(dargc) catch return;
+    if (vmState().frame_top > depth_before) {
+        const prev_target = vmState().call_depth_target;
+        vmState().call_depth_target = depth_before;
+        defer vmState().call_depth_target = prev_target;
+        run() catch {};
+    }
+    _ = vmPop() catch {};
+}
+
+// runPanicUnwind fires all deferred calls for each active frame (LIFO within each frame,
+// innermost frame first), pops those frames, then re-returns the original error.
+// This gives Go-style semantics: defers always run, even when a panic propagates.
+fn runPanicUnwind(orig_err: anyerror) anyerror!void {
+    // Capture error location and call stack before we unwind (unwind changes ip/frames).
+    if (vmState().panic_line == 0) {
+        vmState().panic_line = currentLine();
+        vmState().panic_col = currentCol();
+        const stop_depth = vmState().call_depth_target orelse 0;
+        var depth: usize = 0;
+        var fi: usize = vmState().frame_top;
+        while (fi > stop_depth and depth < MaxFrames) {
+            fi -= 1;
+            const frame = vmState().frames[fi];
+            const call_ip = if (frame.ret_ip > 0) frame.ret_ip - 1 else 0;
+            const fname = switch (frame.func_obj.*) {
+                .function => |f| f.name,
+                .closure => |cl| cl.func.function.name,
+                else => "",
+            };
+            vmState().panic_frames[depth] = .{ .line = chunk.lineAt(call_ip), .name = fname };
+            depth += 1;
+        }
+        vmState().panic_depth = depth;
+    }
+    const stop_depth = vmState().call_depth_target orelse 0;
+    while (vmState().frame_top > stop_depth) {
+        const frame_defer_base = vmState().frames[vmState().frame_top - 1].defer_base;
+        while (vmState().defer_top > frame_defer_base) {
+            vmState().defer_top -= 1;
+            runDeferredCall(vmState().defer_stack[vmState().defer_top]);
+        }
+        vmState().frame_top -= 1;
+        const frame = vmState().frames[vmState().frame_top];
+        vmState().stack_top = if (frame.base > 0) frame.base - 1 else 0;
+        vmState().ip = frame.ret_ip;
+    }
+    return orig_err;
+}
+
+pub fn run() anyerror!void {
+    runInner() catch |err| return runPanicUnwind(err);
+}
+
 // makeString allocates a heap-owned copy of s. Use this when passing host
 // strings as args so the script can safely store them across Dispatch calls.
 pub fn makeString(s: []const u8) !Value {
@@ -2390,10 +2565,9 @@ pub fn makeString(s: []const u8) !Value {
 }
 
 // callGlobal looks up a top-level function by name and calls it with the
-// provided args. Returns .null if the function does not exist (silent no-op).
-// The VM's global state (module-level variables) persists across calls.
+// provided args. The VM's global state (module-level variables) persists across calls.
 pub fn callGlobal(name: []const u8, args: []const Value) !Value {
-    const fn_val = globals.get(name) orelse return .null;
+    const fn_val = globals.get(name) orelse return error.NotDefined;
     if (fn_val != .object) return error.NotAFunction;
     const obj = fn_val.object;
     if (obj.* != .function and obj.* != .closure) return error.NotAFunction;

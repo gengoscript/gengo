@@ -1,0 +1,44 @@
+std := import("std")
+
+func basic_defer() {
+    defer std.io.println("deferred")
+    std.io.println("body")
+}
+
+func lifo_order() {
+    defer std.io.println("first")
+    defer std.io.println("second")
+    std.io.println("body")
+}
+
+func captures_arg_by_value(x) {
+    defer std.io.println(x)
+    x = 99
+    std.io.println("changed")
+}
+
+func defers_in_loop() {
+    for i := 0; i < 3; i++ {
+        defer std.io.println(i)
+    }
+    std.io.println("after loop")
+}
+
+func defer_before_return() {
+    defer std.io.println("defer")
+    return 42
+}
+
+func closure_sees_updated_value() {
+    x := 10
+    defer (func() { std.io.println(x) })()
+    x = 20
+    std.io.println("body")
+}
+
+basic_defer()
+lifo_order()
+captures_arg_by_value(7)
+defers_in_loop()
+std.io.println(defer_before_return())
+closure_sees_updated_value()

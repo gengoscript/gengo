@@ -19,7 +19,6 @@ color brightblue "\<continue\>"
 color magenta "\<true\>"
 color magenta "\<false\>"
 color magenta "\<null\>"
-color magenta "\<undefined\>"
 
 color cyan "\<int\>"
 color cyan "\<float\>"

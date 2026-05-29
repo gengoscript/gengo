@@ -35,7 +35,7 @@ Implemented value kinds:
 - `boolean`
 - `string`
 - `error` (first-class error value)
-- `null` (also tokenized as `undefined`)
+- `null`
 - `array`
 - `map`
 - nominal struct types and struct instances

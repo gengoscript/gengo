@@ -1,0 +1,51 @@
+std := import("std")
+core := std.core
+
+// Single named return
+func identity(v any) (out any) {
+    out = v
+    return
+}
+
+// Multiple named returns: result and error pattern
+func divide(a, b) (result any, err any) {
+    if b == 0 {
+        err = core.error("division by zero")
+        return
+    }
+    result = a / b
+    return
+}
+
+// Named return modified in conditional branches
+func sign(n int) (s string) {
+    if n > 0 {
+        s = "positive"
+    } else if n < 0 {
+        s = "negative"
+    } else {
+        s = "zero"
+    }
+    return
+}
+
+// Explicit return overrides named returns
+func always42() (x int) {
+    x = 99
+    return 42
+}
+
+std.io.println(identity(123))
+std.io.println(identity("hello"))
+
+r1, e1 := divide(10, 2)
+std.io.printf("result=%v err=%v\n", r1, e1)
+
+r2, e2 := divide(7, 0)
+std.io.printf("result=%v err=%v\n", r2, e2)
+
+std.io.println(sign(5))
+std.io.println(sign(-3))
+std.io.println(sign(0))
+
+std.io.println(always42())

@@ -5,10 +5,15 @@ const heap = @import("heap.zig");
 const vm = @import("../lang/vm.zig");
 const Value = @import("../lang/value.zig").Value;
 
+const MaxFrames = @import("../runtime/config.zig").max_frames;
+
 pub const Runtime = struct {
     policy: vm.Policy = .{},
     last_compile_line: u32 = 0,
     last_runtime_line: u32 = 0,
+    last_runtime_col: u16 = 0,
+    panic_frames: [MaxFrames]vm.PanicFrame = undefined,
+    panic_depth: usize = 0,
     chunk_state: chunk.State = .{},
     globals_state: globals.State = .{},
     heap_state: heap.State = .{},
@@ -58,7 +63,12 @@ pub const Runtime = struct {
         };
 
         vm.run() catch |err| {
-            self.last_runtime_line = vm.currentLine();
+            self.last_runtime_line = vm.panicLine();
+            self.last_runtime_col = vm.panicCol();
+            const pf = vm.panicFrames();
+            self.panic_depth = pf.len;
+            var fi: usize = 0;
+            while (fi < pf.len) : (fi += 1) self.panic_frames[fi] = pf[fi];
             return err;
         };
     }
@@ -66,7 +76,15 @@ pub const Runtime = struct {
     pub fn callGlobal(self: *Runtime, name: []const u8, args: []const Value) !Value {
         self.activate();
         vm.setPolicy(self.policy);
-        return vm.callGlobal(name, args);
+        return vm.callGlobal(name, args) catch |err| {
+            self.last_runtime_line = vm.panicLine();
+            self.last_runtime_col = vm.panicCol();
+            const pf = vm.panicFrames();
+            self.panic_depth = pf.len;
+            var fi: usize = 0;
+            while (fi < pf.len) : (fi += 1) self.panic_frames[fi] = pf[fi];
+            return err;
+        };
     }
 
     fn activate(self: *Runtime) void {

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-WASM="$ROOT_DIR/gengo-test.wasm"
+WASM="$ROOT_DIR/build/gengo-test.wasm"
 BENCH_DIR="$ROOT_DIR/examples/bench"
 WASMTIME_BIN="${WASMTIME_BIN:-wasmtime}"
 

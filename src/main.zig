@@ -80,6 +80,42 @@ fn openReadOnly(path: []const u8) !std.os.wasi.fd_t {
     return fd;
 }
 
+// printSourceLine prints a Rust-style source snippet for the given 1-based line and column.
+// col == 0 means no caret.
+fn printSourceLine(src: []const u8, line: u32, col: u32) void {
+    // Find the start of the requested line.
+    var cur_line: u32 = 1;
+    var line_start: usize = 0;
+    var i: usize = 0;
+    while (i < src.len and cur_line < line) : (i += 1) {
+        if (src[i] == '\n') {
+            cur_line += 1;
+            line_start = i + 1;
+        }
+    }
+    if (cur_line != line) return; // line out of range
+
+    // Find end of line.
+    var line_end = line_start;
+    while (line_end < src.len and src[line_end] != '\n') : (line_end += 1) {}
+    const text = src[line_start..line_end];
+
+    // Print line number gutter and source text.
+    io.werr("   ");
+    io.writeInt(@intCast(line));
+    io.werr(" | ");
+    io.werr(text);
+    io.werr("\n");
+
+    // Print caret line if col is known.
+    if (col > 0) {
+        io.werr("     | ");
+        var c: u32 = 1;
+        while (c < col) : (c += 1) io.werr(" ");
+        io.werr("^\n");
+    }
+}
+
 export fn _start() void {
     var argv_storage: [MaxArgs][]const u8 = undefined;
     const argv = collectArgs(&argv_storage) catch {
@@ -167,23 +203,48 @@ export fn _start() void {
     });
     runtime.run(src) catch |err| {
         if (runtime.last_compile_line != 0) {
-            io.werr("gengo: compile error in ");
-            io.werr(script_name);
-            io.werr(" on line ");
-            io.writeInt(@intCast(runtime.last_compile_line));
-            io.werr(": ");
+            io.werr("gengo: compile error: ");
             io.werr(@errorName(err));
+            io.werr("\n  --> ");
+            io.werr(script_name);
+            io.werr(":");
+            io.writeInt(@intCast(runtime.last_compile_line));
             io.werr("\n");
+            printSourceLine(src, runtime.last_compile_line, 0);
         } else if (runtime.last_runtime_line != 0) {
-            io.werr("gengo: runtime error in ");
+            io.werr("gengo: panic: ");
+            io.werr(@errorName(err));
+            io.werr("\n  --> ");
             io.werr(script_name);
             io.werr(":");
             io.writeInt(@intCast(runtime.last_runtime_line));
-            io.werr(": ");
-            io.werr(@errorName(err));
+            if (runtime.last_runtime_col != 0) {
+                io.werr(":");
+                io.writeInt(@intCast(runtime.last_runtime_col));
+            }
             io.werr("\n");
+            printSourceLine(src, runtime.last_runtime_line, runtime.last_runtime_col);
+            // Stack trace (innermost call site first, skip entry if no callers)
+            if (runtime.panic_depth > 0) {
+                io.werr("stack trace:\n");
+                var fi: usize = 0;
+                while (fi < runtime.panic_depth) : (fi += 1) {
+                    const pf = runtime.panic_frames[fi];
+                    io.werr("    ");
+                    if (pf.name.len > 0) {
+                        io.werr(pf.name);
+                        io.werr("() called from ");
+                    } else {
+                        io.werr("called from ");
+                    }
+                    io.werr(script_name);
+                    io.werr(":");
+                    io.writeInt(@intCast(pf.line));
+                    io.werr("\n");
+                }
+            }
         } else {
-            io.werr("gengo: runtime error: ");
+            io.werr("gengo: panic: ");
             io.werr(@errorName(err));
             io.werr("\n");
         }

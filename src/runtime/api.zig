@@ -2,6 +2,8 @@ const rt_mod = @import("runtime.zig");
 const vm = @import("../lang/vm.zig");
 const Value = @import("../lang/value.zig").Value;
 
+const MaxFrames = @import("config.zig").max_frames;
+
 pub const Config = struct {
     allow_io: bool = true,
     native_backend: vm.Policy.NativeBackend = .embedded,
@@ -16,6 +18,9 @@ pub const CompileError = struct {
 pub const RuntimeError = struct {
     kind: anyerror,
     line: u32 = 0,
+    col: u16 = 0,
+    frames: [MaxFrames]vm.PanicFrame = undefined,
+    frame_count: usize = 0,
 };
 
 pub const RuntimeResult = union(enum) {
@@ -56,20 +61,14 @@ pub const Runtime = struct {
                     .kind = err,
                 } };
             }
-            return .{ .runtime_error = .{
-                .kind = err,
-                .line = self.inner.last_runtime_line,
-            } };
+            return .{ .runtime_error = runtimeError(err, &self.inner) };
         };
         return .ok;
     }
 
     pub fn call(self: *Runtime, name: []const u8, args: []const Value) RuntimeResultWithValue {
         const out = self.inner.callGlobal(name, args) catch |err| {
-            return .{ .runtime_error = .{
-                .kind = err,
-                .line = self.inner.last_runtime_line,
-            } };
+            return .{ .runtime_error = runtimeError(err, &self.inner) };
         };
         return .{ .ok = out };
     }
@@ -79,3 +78,15 @@ pub const RuntimeResultWithValue = union(enum) {
     ok: Value,
     runtime_error: RuntimeError,
 };
+
+fn runtimeError(err: anyerror, rt: *rt_mod.Runtime) RuntimeError {
+    var e = RuntimeError{
+        .kind = err,
+        .line = rt.last_runtime_line,
+        .col = rt.last_runtime_col,
+        .frame_count = rt.panic_depth,
+    };
+    var fi: usize = 0;
+    while (fi < rt.panic_depth) : (fi += 1) e.frames[fi] = rt.panic_frames[fi];
+    return e;
+}

@@ -64,6 +64,10 @@ pub fn writeF64(v: f64) void {
         write("NaN");
         return;
     }
+    if (std.math.isInf(v)) {
+        write(if (v > 0) "Inf" else "-Inf");
+        return;
+    }
     var n = v;
     if (n < 0.0) {
         write("-");
@@ -105,7 +109,7 @@ pub fn printValue(v: Value) void {
             write(s);
             write(")");
         },
-        .null => write("undefined"),
+        .null => write("null"),
         .object => |obj| switch (obj.*) {
             .dyn_string => |s| write(s),
             .array, .array_managed => |items| {

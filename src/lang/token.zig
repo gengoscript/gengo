@@ -27,6 +27,7 @@ pub const TT = enum {
     kw_const,
     kw_break,
     kw_continue,
+    kw_defer,
     lparen,
     rparen,
     lbrace,
@@ -76,4 +77,4 @@ pub const TT = enum {
     minus_minus,
 };
 
-pub const Token = struct { typ: TT, src: []const u8, line: u32 };
+pub const Token = struct { typ: TT, src: []const u8, line: u32, col: u32 };

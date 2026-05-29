@@ -10,6 +10,8 @@ pub const FuncObj = struct {
     has_typed_params: bool,
     return_types: []FieldTypeSpec,
     has_typed_returns: bool,
+    name: []const u8 = "",
+    named_return_count: u8 = 0,
 };
 pub const MapEntry = struct { key: Value, value: Value };
 pub const MapHashedObj = struct { entries: []MapEntry, len: usize, buckets: []i32 };
@@ -77,6 +79,7 @@ pub const IterObj = struct {
     string: []const u8 = "",
     string_managed: bool = false,
     map: []MapEntry = &[_]MapEntry{},
+    source: ?*Object = null,
 };
 
 pub const ObjTag = enum { array, array_managed, map, map_managed, map_hashed, dyn_string, function, closure, cell, native_function, struct_type, interface_type, named_type, named_value, enum_type, enum_value, struct_instance, iterator };

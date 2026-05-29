@@ -1,0 +1,14 @@
+std := import("std")
+
+func outer() {
+    defer std.io.println("outer defer")
+    inner()
+}
+
+func inner() {
+    defer std.io.println("inner defer")
+    x := 10 / 0
+    std.io.println(x)
+}
+
+outer()

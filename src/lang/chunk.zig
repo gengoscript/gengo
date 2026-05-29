@@ -9,9 +9,11 @@ pub const MaxConst = 256;
 pub const State = struct {
     code: [MaxCode]u8 = undefined,
     lines: [MaxCode]u16 = undefined,
+    cols: [MaxCode]u16 = undefined,
     consts: [MaxConst]Value = undefined,
     code_len: usize = 0,
     const_count: usize = 0,
+    pending_col: u16 = 0,
 };
 
 var g_default_state: State = .{};
@@ -26,10 +28,15 @@ pub fn reset() void {
     g_state.const_count = 0;
 }
 
+pub fn setCol(col: u32) void {
+    g_state.pending_col = @intCast(@min(col, 0xffff));
+}
+
 pub fn emitByte(b: u8, line: u32) !void {
     if (g_state.code_len >= MaxCode) return error.ChunkFull;
     g_state.code[g_state.code_len] = b;
     g_state.lines[g_state.code_len] = @intCast(if (line > 0xffff) 0xffff else line);
+    g_state.cols[g_state.code_len] = g_state.pending_col;
     g_state.code_len += 1;
 }
 
@@ -100,6 +107,10 @@ pub fn codeByteAt(i: usize) u8 {
 
 pub fn lineAt(i: usize) u16 {
     return g_state.lines[i];
+}
+
+pub fn colAt(i: usize) u16 {
+    return g_state.cols[i];
 }
 
 pub fn constAt(i: usize) Value {

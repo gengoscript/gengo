@@ -1,0 +1,8 @@
+123
+hello
+result=5 err=null
+result=null err=error(division by zero)
+positive
+negative
+zero
+42

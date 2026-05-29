@@ -66,11 +66,15 @@ const FuncInfo = struct {
     local_count: u8 = 0,
     upvalues: [MaxUpvalues]Upvalue = undefined,
     upvalue_count: u8 = 0,
+    named_return_base: u8 = 0,
+    named_return_count: u8 = 0,
 };
 
 const LoopCtx = struct {
     continue_target: usize,
-    local_keep: u8,
+    local_keep: u8,    // target local count for break (outer scope, below loop vars)
+    body_keep: u8,     // target local count for continue (above loop vars, below body locals)
+    iter_pops: u8,     // non-local pops for break between body_keep and local_keep (e.g. iterator)
     break_offsets: [MaxLoopBreaks]usize = undefined,
     break_count: usize = 0,
 };
@@ -121,6 +125,8 @@ pub const Compiler = struct {
     named_type_count: usize = 0,
     global_consts: [MaxGlobalConsts]GlobalConstInfo = undefined,
     global_const_count: usize = 0,
+    last_func_obj: ?*@import("value.zig").Object = null,
+    peek_tok: ?Token = null,
 
     pub fn init(src: []const u8) Compiler {
         return .{ .lex = .{ .src = src } };
@@ -245,6 +251,7 @@ pub const Compiler = struct {
     }
 
     fn emitGetVar(self: *Compiler, name: Token) !void {
+        chunk.setCol(name.col);
         if (self.resolveLocal(name.src)) |slot| {
             try chunk.emit2(@intFromEnum(Op.get_local), slot, name.line);
         } else if (self.resolveUpvalue(name.src)) |uv| {
@@ -347,11 +354,13 @@ pub const Compiler = struct {
         return self.currentScope().local_count;
     }
 
-    fn pushLoop(self: *Compiler, continue_target: usize, local_keep: u8) !void {
+    fn pushLoop(self: *Compiler, continue_target: usize, local_keep: u8, body_keep: u8, iter_pops: u8) !void {
         if (self.loop_depth >= MaxLoopDepth) return error.TooManyNestedLoops;
         self.loops[self.loop_depth] = .{
             .continue_target = continue_target,
             .local_keep = local_keep,
+            .body_keep = body_keep,
+            .iter_pops = iter_pops,
         };
         self.loop_depth += 1;
     }
@@ -368,18 +377,26 @@ pub const Compiler = struct {
     fn emitBreak(self: *Compiler, line: u32) !void {
         if (self.loop_depth == 0) return error.BreakOutsideLoop;
         const loop = self.currentLoop();
+        // Save so code after the if-break block sees the correct local count (non-break path).
+        const saved: u8 = if (self.inFunc()) self.currentScope().local_count else 0;
+        try self.cleanupLocals(loop.body_keep, line);
+        var p: u8 = 0;
+        while (p < loop.iter_pops) : (p += 1) try chunk.emitOp(.pop, line);
         try self.cleanupLocals(loop.local_keep, line);
         const off = try chunk.emitJump(.jump, line);
         if (loop.break_count >= MaxLoopBreaks) return error.TooManyBreaksInLoop;
         loop.break_offsets[loop.break_count] = off;
         loop.break_count += 1;
+        if (self.inFunc()) self.currentScope().local_count = saved;
     }
 
     fn emitContinue(self: *Compiler, line: u32) !void {
         if (self.loop_depth == 0) return error.ContinueOutsideLoop;
         const loop = self.currentLoop();
-        try self.cleanupLocals(loop.local_keep, line);
+        const saved: u8 = if (self.inFunc()) self.currentScope().local_count else 0;
+        try self.cleanupLocals(loop.body_keep, line);
         try chunk.emitLoop(loop.continue_target, line);
+        if (self.inFunc()) self.currentScope().local_count = saved;
     }
 
     fn decl(self: *Compiler) anyerror!void {
@@ -603,9 +620,7 @@ pub const Compiler = struct {
         }
         if (parent_has_range) {
             if (has_range) {
-                if (min < parent_min) min = parent_min;
-                if (max > parent_max) max = parent_max;
-                if (min > max) return error.RangeError;
+                if (min < parent_min or max > parent_max) return error.RangeError;
             } else {
                 has_range = true;
                 min = parent_min;
@@ -736,7 +751,9 @@ pub const Compiler = struct {
             self.advance();
 
             var alt: FieldTypeAlt = .{ .typ = .struct_t, .struct_name = tname };
-            if (common.streq(tname, "int")) {
+            if (common.streq(tname, "any")) {
+                alt = .{ .typ = .any };
+            } else if (common.streq(tname, "int")) {
                 alt = .{ .typ = .int };
             } else if (common.streq(tname, "float")) {
                 alt = .{ .typ = .float };
@@ -796,6 +813,7 @@ pub const Compiler = struct {
 
         // current token is '('; funcLit emits the function value on stack
         try self.funcLit();
+        if (self.last_func_obj) |fo| fo.function.name = name.src;
 
         if (self.inFunc()) {
             _ = try self.defineLocal(name.src, false);
@@ -830,6 +848,7 @@ pub const Compiler = struct {
         key_buf[recv_type.len] = '.';
         @memcpy(key_buf[recv_type.len + 1 .. total], method_name);
         const key = key_buf[0..total];
+        if (self.last_func_obj) |fo| fo.function.name = key;
 
         if (self.inFunc()) {
             _ = try self.defineLocal(key, false);
@@ -1090,6 +1109,76 @@ pub const Compiler = struct {
         self.matchOpt(.semicolon);
     }
 
+    fn deferStmt(self: *Compiler) !void {
+        if (!self.inFunc()) return error.DeferOutsideFunction;
+        // Parse the callee: a primary expression followed by any chain of
+        // .prop and [index] accesses, stopping before the outermost call '('.
+        self.advance();
+        const pfx = self.prev.typ;
+        switch (pfx) {
+            .ident => try self.varExpr(self.prev),
+            .kw_func => try self.funcLit(),
+            .lparen => {
+                try self.expr();
+                try self.consume(.rparen);
+            },
+            else => return error.ExpectedExpression,
+        }
+        // Consume chained .prop and [index]; when .prop( is seen it's a deferred method call.
+        while (true) {
+            if (self.cur.typ == .lbracket) {
+                const line = self.cur.line;
+                self.advance();
+                try self.expr();
+                try self.consume(.rbracket);
+                try chunk.emitOp(.get_index, line);
+            } else if (self.cur.typ == .dot) {
+                self.advance();
+                if (self.cur.typ != .ident) return error.ExpectedPropertyName;
+                const prop = self.cur;
+                self.advance();
+                if (self.cur.typ == .lparen) {
+                    self.advance(); // consume '('
+                    var argc: u8 = 0;
+                    if (!self.check(.rparen)) {
+                        while (true) {
+                            if (argc == 255) return error.TooManyElements;
+                            try self.expr();
+                            argc += 1;
+                            if (!self.match(.comma)) break;
+                        }
+                    }
+                    try self.consume(.rparen);
+                    const midx = try chunk.addConst(.{ .string = prop.src });
+                    try chunk.emitByte(@intFromEnum(Op.defer_invoke_method), prop.line);
+                    try chunk.emitByte(midx, prop.line);
+                    try chunk.emitByte(argc, prop.line);
+                    self.matchOpt(.semicolon);
+                    return;
+                }
+                try chunk.emitConst(.{ .string = prop.src }, prop.line);
+                try chunk.emitOp(.get_index, prop.line);
+            } else {
+                break;
+            }
+        }
+        // Deferred regular call.
+        if (!self.match(.lparen)) return error.DeferRequiresCall;
+        const call_line = self.prev.line;
+        var argc: u8 = 0;
+        if (!self.check(.rparen)) {
+            while (true) {
+                if (argc == 255) return error.TooManyElements;
+                try self.expr();
+                argc += 1;
+                if (!self.match(.comma)) break;
+            }
+        }
+        try self.consume(.rparen);
+        try chunk.emit2(@intFromEnum(Op.defer_call), argc, call_line);
+        self.matchOpt(.semicolon);
+    }
+
     fn stmt(self: *Compiler) anyerror!void {
         if (self.match(.kw_break)) {
             try self.emitBreak(self.prev.line);
@@ -1103,6 +1192,10 @@ pub const Compiler = struct {
         }
         if (self.match(.kw_return)) {
             try self.returnStmt();
+            return;
+        }
+        if (self.match(.kw_defer)) {
+            try self.deferStmt();
             return;
         }
         if (self.match(.kw_if)) {
@@ -1157,12 +1250,15 @@ pub const Compiler = struct {
 
     fn returnStmt(self: *Compiler) !void {
         if (!self.inFunc()) return error.ReturnOutsideFunction;
+        const line = self.prev.line;
+        const scope = self.currentScope();
         if (self.check(.rbrace) or self.check(.eof) or self.check(.semicolon)) {
-            try chunk.emitOp(.null_val, self.prev.line);
+            // Bare return: use named return variables if present, otherwise null.
+            try emitImplicitReturn(scope, line);
         } else {
             _ = try self.emitExprListTuple();
         }
-        try chunk.emitOp(.ret, self.prev.line);
+        try chunk.emitOp(.ret, line);
         self.matchOpt(.semicolon);
     }
 
@@ -1441,9 +1537,17 @@ pub const Compiler = struct {
 
         try self.expr(); // iterable
         try chunk.emitOp(.iter_init, self.prev.line);
+        // Claim a hidden local slot for the iterator so that body locals land on the
+        // correct stack offsets. Without this, body-local slot N resolves to the iterator
+        // object instead of the actual value.
+        const in_func = self.inFunc();
+        if (in_func) self.currentScope().local_count += 1;
+        const body_keep: u8 = if (in_func) self.currentScope().local_count else 0;
 
         const loop_start = chunk.codeLen();
-        try self.pushLoop(loop_start, local_base);
+        // In functions the hidden local slot is cleaned up by cleanupLocals; at top-level
+        // cleanupLocals is a no-op so an explicit pop is still needed (iter_pops=1).
+        try self.pushLoop(loop_start, local_base, body_keep, if (in_func) @as(u8, 0) else @as(u8, 1));
         try chunk.emitOp(if (vname == null) .iter_next1 else .iter_next2, self.prev.line);
         const exit_j = try chunk.emitJump(.jump_if_false, self.prev.line);
         try chunk.emitOp(.pop, self.prev.line); // pop condition true
@@ -1463,15 +1567,14 @@ pub const Compiler = struct {
 
         try chunk.patchJump(exit_j);
         try chunk.emitOp(.pop, self.prev.line); // pop false condition
-        try chunk.emitOp(.pop, self.prev.line); // pop iterator
+        if (!in_func) try chunk.emitOp(.pop, self.prev.line); // pop iterator (top-level only)
+        try self.cleanupLocals(local_base, self.prev.line);
 
         const loop = self.popLoop();
         var i: usize = 0;
         while (i < loop.break_count) : (i += 1) {
             try chunk.patchJump(loop.break_offsets[i]);
         }
-
-        try self.cleanupLocals(local_base, self.prev.line);
     }
 
     fn switchStmt(self: *Compiler) anyerror!void {
@@ -1534,7 +1637,7 @@ pub const Compiler = struct {
 
     fn whileForStmt(self: *Compiler) anyerror!void {
         const loop_start = chunk.codeLen();
-        try self.pushLoop(loop_start, self.loopKeepBase());
+        try self.pushLoop(loop_start, self.loopKeepBase(), self.loopKeepBase(), 0);
         try self.expr();
         try self.consume(.lbrace);
         const exit_j = try chunk.emitJump(.jump_if_false, self.prev.line);
@@ -1601,7 +1704,7 @@ pub const Compiler = struct {
             try chunk.patchJump(body_j);
         }
 
-        try self.pushLoop(loop_start, self.loopKeepBase());
+        try self.pushLoop(loop_start, local_base, self.loopKeepBase(), 0);
         try self.consume(.lbrace);
         try self.block();
         try chunk.emitLoop(loop_start, self.prev.line);
@@ -1611,13 +1714,13 @@ pub const Compiler = struct {
             try chunk.emitOp(.pop, self.prev.line);
         }
 
+        try self.cleanupLocals(local_base, self.prev.line);
+
         const loop = self.popLoop();
         var i: usize = 0;
         while (i < loop.break_count) : (i += 1) {
             try chunk.patchJump(loop.break_offsets[i]);
         }
-
-        try self.cleanupLocals(local_base, self.prev.line);
     }
 
     fn block(self: *Compiler) anyerror!void {
@@ -1625,6 +1728,22 @@ pub const Compiler = struct {
         while (!self.check(.rbrace) and !self.check(.eof)) try self.decl();
         try self.consume(.rbrace);
         try self.cleanupLocals(local_base, self.prev.line);
+    }
+
+    // Emit the value for a bare `return` (or fall-off-end) given the current function scope.
+    // Named returns: collect the named locals. No named returns: push null.
+    fn emitImplicitReturn(scope: *FuncInfo, line: u32) !void {
+        if (scope.named_return_count == 0) {
+            try chunk.emitOp(.null_val, line);
+        } else if (scope.named_return_count == 1) {
+            try chunk.emit2(@intFromEnum(Op.get_local), scope.named_return_base, line);
+        } else {
+            var ri: u8 = 0;
+            while (ri < scope.named_return_count) : (ri += 1) {
+                try chunk.emit2(@intFromEnum(Op.get_local), scope.named_return_base + ri, line);
+            }
+            try chunk.emit2(@intFromEnum(Op.build_tuple), scope.named_return_count, line);
+        }
     }
 
     fn funcLit(self: *Compiler) anyerror!void {
@@ -1679,16 +1798,28 @@ pub const Compiler = struct {
         try self.consume(.rparen);
 
         var return_types: [MaxLocals]FieldTypeSpec = undefined;
+        var return_names: [MaxLocals][]const u8 = undefined;
         var return_count: u8 = 0;
         var has_typed_returns = false;
+        var named_return_count: u8 = 0;
+
         if (self.match(.lparen)) {
+            // Detect named vs anonymous: named if first entry is 'ident type_start'.
+            const is_named = self.cur.typ == .ident and
+                (self.peekToken().typ == .ident or self.peekToken().typ == .question);
             while (true) {
+                if (is_named) {
+                    if (self.cur.typ != .ident) return error.UnexpectedToken;
+                    return_names[return_count] = self.cur.src;
+                    self.advance();
+                }
                 return_types[return_count] = try self.parseFieldTypeSpec();
                 return_count += 1;
                 has_typed_returns = true;
                 if (!self.match(.comma)) break;
             }
             try self.consume(.rparen);
+            if (is_named) named_return_count = return_count;
         } else if (self.cur.typ == .question or self.cur.typ == .ident) {
             return_types[0] = try self.parseFieldTypeSpec();
             return_count = 1;
@@ -1709,13 +1840,27 @@ pub const Compiler = struct {
         }
         scope.local_count = arity;
 
+        // Named return variables occupy slots [arity .. arity+named_return_count).
+        // They are initialized to null; the function body can assign them before a bare return.
+        if (named_return_count > 0) {
+            scope.named_return_base = arity;
+            scope.named_return_count = named_return_count;
+            var ri: u8 = 0;
+            while (ri < named_return_count) : (ri += 1) {
+                scope.locals[arity + ri] = .{ .name = return_names[ri], .is_const = false };
+                scope.local_count += 1;
+                try chunk.emitOp(.null_val, func_ip);
+            }
+        }
+
         try self.consume(.lbrace);
-        const body_local_base = arity;
+        const body_local_base: u8 = arity + named_return_count;
         while (!self.check(.rbrace) and !self.check(.eof)) try self.decl();
         try self.consume(.rbrace);
         try self.cleanupLocals(body_local_base, self.prev.line);
 
-        try chunk.emitOp(.null_val, self.prev.line);
+        // Implicit return: bare named returns or null.
+        try emitImplicitReturn(scope, self.prev.line);
         try chunk.emitOp(.ret, self.prev.line);
 
         self.scope_depth -= 1;
@@ -1755,7 +1900,9 @@ pub const Compiler = struct {
             .has_typed_params = has_typed_params,
             .return_types = rtypes[0..return_count],
             .has_typed_returns = has_typed_returns,
+            .named_return_count = named_return_count,
         } };
+        self.last_func_obj = func_obj;
         const cidx = try chunk.addConst(.{ .object = func_obj });
         try chunk.emit2(@intFromEnum(Op.make_closure), cidx, self.prev.line);
     }
@@ -1928,6 +2075,7 @@ pub const Compiler = struct {
 
     fn infixExpr(self: *Compiler, tt: TT) anyerror!void {
         const line = self.prev.line;
+        const col = self.prev.col;
 
         if (tt == .dot) {
             if (self.cur.typ != .ident) return error.ExpectedPropertyName;
@@ -1992,6 +2140,7 @@ pub const Compiler = struct {
                 }
             }
             try self.consume(.rparen);
+            chunk.setCol(col);
             try chunk.emit2(@intFromEnum(Op.call), argc, line);
             return;
         }
@@ -2015,6 +2164,7 @@ pub const Compiler = struct {
         }
 
         try self.parsePrecedence(p.next());
+        chunk.setCol(col);
         switch (tt) {
             .plus => try chunk.emitOp(.add, line),
             .minus => try chunk.emitOp(.sub, line),
@@ -2047,7 +2197,18 @@ pub const Compiler = struct {
 
     fn advance(self: *Compiler) void {
         self.prev = self.cur;
-        self.cur = self.lex.next();
+        if (self.peek_tok) |t| {
+            self.cur = t;
+            self.peek_tok = null;
+        } else {
+            self.cur = self.lex.next();
+        }
+        chunk.setCol(self.prev.col);
+    }
+
+    fn peekToken(self: *Compiler) Token {
+        if (self.peek_tok == null) self.peek_tok = self.lex.next();
+        return self.peek_tok.?;
     }
     fn check(self: *Compiler, tt: TT) bool {
         return self.cur.typ == tt;

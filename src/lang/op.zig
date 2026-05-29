@@ -53,6 +53,8 @@ pub const Op = enum(u8) {
     jump_if_false,
     loop,
     call,
+    defer_call,
+    defer_invoke_method,
     ret,
     halt,
 };

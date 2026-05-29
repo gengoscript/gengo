@@ -8,6 +8,7 @@ pub const Lexer = struct {
     start: usize = 0,
     pos: usize = 0,
     line: u32 = 1,
+    line_start: usize = 0,
     str_pool: [128 * 1024]u8 = undefined,
     str_pool_pos: usize = 0,
 
@@ -57,6 +58,7 @@ pub const Lexer = struct {
                 '\n' => {
                     self.line += 1;
                     _ = self.adv();
+                    self.line_start = self.pos;
                 },
                 '/' => {
                     if (self.peekNext() == '/') {
@@ -72,7 +74,7 @@ pub const Lexer = struct {
         while (common.isAlphaNum(self.peek())) _ = self.adv();
         const text = self.src[self.start..self.pos];
         const tt: TT =
-            if (common.streq(text, "true")) .kw_true else if (common.streq(text, "false")) .kw_false else if (common.streq(text, "null") or common.streq(text, "undefined")) .kw_null else if (common.streq(text, "if")) .kw_if else if (common.streq(text, "else")) .kw_else else if (common.streq(text, "for")) .kw_for else if (common.streq(text, "in")) .kw_in else if (common.streq(text, "switch")) .kw_switch else if (common.streq(text, "case")) .kw_case else if (common.streq(text, "default")) .kw_default else if (common.streq(text, "return")) .kw_return else if (common.streq(text, "func")) .kw_func else if (common.streq(text, "struct")) .kw_struct else if (common.streq(text, "interface")) .kw_interface else if (common.streq(text, "type")) .kw_type else if (common.streq(text, "is")) .kw_is else if (common.streq(text, "range")) .kw_range else if (common.streq(text, "enum")) .kw_enum else if (common.streq(text, "import")) .kw_import else if (common.streq(text, "var")) .kw_var else if (common.streq(text, "const")) .kw_const else if (common.streq(text, "break")) .kw_break else if (common.streq(text, "continue")) .kw_continue else .ident;
+            if (common.streq(text, "true")) .kw_true else if (common.streq(text, "false")) .kw_false else if (common.streq(text, "null")) .kw_null else if (common.streq(text, "if")) .kw_if else if (common.streq(text, "else")) .kw_else else if (common.streq(text, "for")) .kw_for else if (common.streq(text, "in")) .kw_in else if (common.streq(text, "switch")) .kw_switch else if (common.streq(text, "case")) .kw_case else if (common.streq(text, "default")) .kw_default else if (common.streq(text, "return")) .kw_return else if (common.streq(text, "func")) .kw_func else if (common.streq(text, "struct")) .kw_struct else if (common.streq(text, "interface")) .kw_interface else if (common.streq(text, "type")) .kw_type else if (common.streq(text, "is")) .kw_is else if (common.streq(text, "range")) .kw_range else if (common.streq(text, "enum")) .kw_enum else if (common.streq(text, "import")) .kw_import else if (common.streq(text, "var")) .kw_var else if (common.streq(text, "const")) .kw_const else if (common.streq(text, "break")) .kw_break else if (common.streq(text, "continue")) .kw_continue else if (common.streq(text, "defer")) .kw_defer else .ident;
         return self.tok(tt);
     }
 
@@ -127,7 +129,9 @@ pub const Lexer = struct {
     }
 
     fn tokString(self: *Lexer, start_out: usize) Token {
-        return .{ .typ = .string, .src = self.str_pool[start_out..self.str_pool_pos], .line = self.line };
+        // Use lineStartFor(self.start) so multiline strings use the opening-quote line.
+        const ls = self.lineStartFor(self.start);
+        return .{ .typ = .string, .src = self.str_pool[start_out..self.str_pool_pos], .line = self.line, .col = @intCast(self.start - ls + 1) };
     }
 
     fn strLit(self: *Lexer, quote: u8) Token {
@@ -151,6 +155,7 @@ pub const Lexer = struct {
             if (c == '\n') {
                 _ = self.adv();
                 self.line += 1;
+                self.line_start = self.pos;
                 if (self.consumeContinuationMarker(quote, open_col)) {
                     if (!just_emitted_escape_nl) {
                         if (!self.outByte('\n')) return self.tok(.eof);
@@ -180,7 +185,7 @@ pub const Lexer = struct {
     }
 
     fn tok(self: *Lexer, tt: TT) Token {
-        return .{ .typ = tt, .src = self.src[self.start..self.pos], .line = self.line };
+        return .{ .typ = tt, .src = self.src[self.start..self.pos], .line = self.line, .col = @intCast((self.start -| self.line_start) + 1) };
     }
     fn adv(self: *Lexer) u8 {
         const c = self.src[self.pos];

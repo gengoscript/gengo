@@ -1,0 +1,27 @@
+std := import("std")
+
+func make_string(n) {
+    s := ""
+    for i := 0; i < n; i++ {
+        s += "x"
+    }
+    return s
+}
+
+sum := 0
+for x in [10, 20, 30] {
+    _ := make_string(50)
+    sum += x
+}
+std.io.println(sum)
+
+func iter_inline_with_alloc() {
+    acc := 0
+    for x in [1, 2, 3, 4, 5] {
+        _ := make_string(40)
+        acc += x
+    }
+    return acc
+}
+
+std.io.println(iter_inline_with_alloc())
