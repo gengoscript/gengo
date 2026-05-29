@@ -31,8 +31,9 @@ jobs:
       - name: Run conformance tests
         run: |
           curl -sSf https://wasmtime.dev/install.sh | bash -s -- --version "$WASMTIME_VERSION"
-          WASMTIME_BIN="$HOME/.wasmtime/bin/wasmtime" zig build unit
-          WASMTIME_BIN="$HOME/.wasmtime/bin/wasmtime" zig build -Dpreset=dev test
+          WASMTIME="$HOME/.wasmtime/bin/wasmtime"
+          zig build -Dwasmtime="$WASMTIME" unit
+          zig build -Dpreset=dev -Dwasmtime="$WASMTIME" test
 
       - name: Build WASM runtime
         run: zig build -Dpreset=dev wasi-release
