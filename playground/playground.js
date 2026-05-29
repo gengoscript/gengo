@@ -17,23 +17,23 @@ function decodeCode(str) {
 const samples = {
   hello: `std := import("std")
 std.io.println("Hello, Gengo!")`,
+
   math: `std := import("std")
 x := 10
 y := 20
 z := (x + y) * 2 / 5
 std.io.printf("x: %d, y: %d, z: %d\\n", x, y, z)
 std.io.println("z is even:", z % 2 == 0)`,
+
   structs: `std := import("std")
-type Point struct {
-    x int
-    y int
-}
+type Point struct { x: int, y: int }
 func (p Point) squaredLen() int {
     return p.x*p.x + p.y*p.y
 }
 p := Point{x: 3, y: 4}
 std.io.printf("Point: (%d, %d)\\n", p.x, p.y)
 std.io.printf("Squared length: %d\\n", p.squaredLen())`,
+
   loops: `std := import("std")
 sum := 0
 for i := 1; i <= 10; i++ {
@@ -45,13 +45,145 @@ names := ["Alice", "Bob", "Charlie"]
 for name in names {
     std.io.printf("Hello, %s!\\n", name)
 }`,
+
   defer: `std := import("std")
 func process() {
     defer std.io.println("cleanup done")
     std.io.println("doing work")
     std.io.println("more work")
 }
-process()`
+process()`,
+
+  closures: `std := import("std")
+
+func makeCounter(start) {
+    n := start
+    return func() {
+        n += 1
+        return n
+    }
+}
+
+a := makeCounter(0)
+b := makeCounter(10)
+
+for i := 0; i < 4; i++ {
+    std.io.printf("a=%d  b=%d\\n", a(), b())
+}`,
+
+  enums: `std := import("std")
+
+type Direction enum { north, south, east, west }
+
+func label(d Direction) string {
+    switch d {
+        case Direction.north { return "North" }
+        case Direction.south { return "South" }
+        case Direction.east  { return "East"  }
+        default              { return "West"  }
+    }
+}
+
+func opposite(d Direction) Direction {
+    switch d {
+        case Direction.north { return Direction.south }
+        case Direction.south { return Direction.north }
+        case Direction.east  { return Direction.west  }
+        default              { return Direction.east  }
+    }
+}
+
+dirs := [Direction.north, Direction.east, Direction.south, Direction.west]
+for d in dirs {
+    opp := opposite(d)
+    std.io.printf("%s -> %s\\n", label(d), label(opp))
+}`,
+
+  named_types: `std := import("std")
+
+type Celsius    float range -273.15..1000.0
+type Fahrenheit float range -459.67..1832.0
+
+func toFahrenheit(c Celsius) Fahrenheit {
+    return Fahrenheit(float(c) * 9.0 / 5.0 + 32.0)
+}
+
+temps := [Celsius(-40.0), Celsius(0.0), Celsius(20.0), Celsius(100.0)]
+for t in temps {
+    f := toFahrenheit(t)
+    std.io.printf("%f C = %f F\\n", float(t), float(f))
+}`,
+
+  interfaces: `std := import("std")
+
+type Shape interface {
+    area() float
+    perimeter() float
+}
+
+type Rect   struct { w: float, h: float }
+type Square struct { side: float }
+
+func (r Rect)   area() float      { return r.w * r.h }
+func (r Rect)   perimeter() float { return 2.0 * (r.w + r.h) }
+func (s Square) area() float      { return s.side * s.side }
+func (s Square) perimeter() float { return 4.0 * s.side }
+
+func describe(s Shape) {
+    std.io.printf("area=%f  perimeter=%f\\n", s.area(), s.perimeter())
+}
+
+describe(Rect{w: 4.0, h: 3.0})
+describe(Square{side: 5.0})`,
+
+  errors: `std := import("std")
+
+func safeDivide(a float, b float) {
+    if b == 0.0 {
+        return 0.0, std.core.error("division by zero")
+    }
+    return a / b, null
+}
+
+pairs := [[10.0, 4.0], [7.0, 0.0], [9.0, 3.0]]
+for pair in pairs {
+    result, err := safeDivide(pair[0], pair[1])
+    if std.core.is_error(err) {
+        std.io.printf("%f / %f = error\\n", pair[0], pair[1])
+    } else {
+        std.io.printf("%f / %f = %f\\n", pair[0], pair[1], result)
+    }
+}`,
+
+  maps: `std := import("std")
+
+words := ["apple", "banana", "apple", "cherry", "banana", "apple"]
+counts := {}
+for w in words {
+    if counts[w] == null {
+        counts[w] = 1
+    } else {
+        counts[w] = counts[w] + 1
+    }
+}
+
+keys := ["apple", "banana", "cherry"]
+for k in keys {
+    std.io.printf("%s: %d\\n", k, counts[k])
+}`,
+
+  strings: `std := import("std")
+
+s := "Hello, 世界"
+std.io.printf("rune count : %d\\n", std.core.len(s))
+std.io.printf("byte count : %d\\n", std.core.bytelen(s))
+std.io.printf("first five : %s\\n", s[0:5])
+std.io.printf("last two   : %s\\n", s[7:9])
+
+std.io.println("characters:")
+for i, ch in s {
+    std.io.printf("  [%d] %s\\n", i, ch)
+}`
 };
 
 const MaxOutputBytes = 128 * 1024;
