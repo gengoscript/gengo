@@ -6,6 +6,7 @@ const lexer_mod = @import("lexer.zig");
 const op_mod = @import("op.zig");
 const token = @import("token.zig");
 const value_mod = @import("value.zig");
+const ct = @import("compiler_types.zig");
 
 const Lexer = lexer_mod.Lexer;
 const FieldTypeAlt = value_mod.FieldTypeAlt;
@@ -23,91 +24,28 @@ const NamedTypeObj = value_mod.NamedTypeObj;
 const NamedTypeBase = value_mod.NamedTypeBase;
 const Value = value_mod.Value;
 
-const MaxLocals = 64;
-const MaxScopes = 8;
-const MaxLoopDepth = 16;
-const MaxLoopBreaks = 128;
-const MaxTypeAlts = 8;
-const MaxStructTypes = 128;
-const MaxInterfaceTypes = 128;
-const MaxNamedTypes = 256;
-const MaxSwitchJumps = 256;
-const MaxUpvalues = 64;
-const MaxGlobalConsts = 512;
+const MaxLocals = ct.MaxLocals;
+const MaxScopes = ct.MaxScopes;
+const MaxLoopDepth = ct.MaxLoopDepth;
+const MaxLoopBreaks = ct.MaxLoopBreaks;
+const MaxTypeAlts = ct.MaxTypeAlts;
+const MaxStructTypes = ct.MaxStructTypes;
+const MaxInterfaceTypes = ct.MaxInterfaceTypes;
+const MaxNamedTypes = ct.MaxNamedTypes;
+const MaxSwitchJumps = ct.MaxSwitchJumps;
+const MaxUpvalues = ct.MaxUpvalues;
+const MaxGlobalConsts = ct.MaxGlobalConsts;
 
-const Prec = enum(u8) {
-    none,
-    assign,
-    or_,
-    and_,
-    eq_,
-    bit_or,
-    bit_xor,
-    bit_and,
-    shift,
-    cmp,
-    term,
-    factor,
-    unary,
-    call,
-    primary,
-    fn next(self: Prec) Prec {
-        return @enumFromInt(@intFromEnum(self) + 1);
-    }
-};
-
-const Local = struct {
-    name: []const u8,
-    is_const: bool = false,
-};
-const Upvalue = struct { name: []const u8, index: u8, from_upvalue: bool };
-const FuncInfo = struct {
-    locals: [MaxLocals]Local = undefined,
-    local_count: u8 = 0,
-    upvalues: [MaxUpvalues]Upvalue = undefined,
-    upvalue_count: u8 = 0,
-    named_return_base: u8 = 0,
-    named_return_count: u8 = 0,
-};
-
-const LoopCtx = struct {
-    continue_target: usize,
-    local_keep: u8,    // target local count for break (outer scope, below loop vars)
-    body_keep: u8,     // target local count for continue (above loop vars, below body locals)
-    iter_pops: u8,     // non-local pops for break between body_keep and local_keep (e.g. iterator)
-    break_offsets: [MaxLoopBreaks]usize = undefined,
-    break_count: usize = 0,
-};
-
-const StructTypeInfo = struct {
-    name: []const u8,
-};
-const InterfaceTypeInfo = struct {
-    name: []const u8,
-};
-const NamedTypeInfo = struct {
-    name: []const u8,
-    base: NamedTypeBase,
-    has_range: bool,
-    min: f64,
-    max: f64,
-};
-const GlobalConstInfo = struct {
-    name: []const u8,
-};
-
-const AssignTargetStep = union(enum) {
-    dot_name: []const u8,
-    index_number: f64,
-    index_string: []const u8,
-};
-
-const AssignTarget = struct {
-    root: Token,
-    step_start: u16,
-    step_count: u8,
-};
-const MultiAssignValueScratch = "__gengo_tmp_value";
+const Prec = ct.Prec;
+const Local = ct.Local;
+const Upvalue = ct.Upvalue;
+const FuncInfo = ct.FuncInfo;
+const LoopCtx = ct.LoopCtx;
+const NamedTypeInfo = ct.NamedTypeInfo;
+const AssignTargetStep = ct.AssignTargetStep;
+const AssignTarget = ct.AssignTarget;
+const MultiAssignValueScratch = ct.MultiAssignValueScratch;
+const TypeRegistry = ct.TypeRegistry;
 
 pub const Compiler = struct {
     lex: Lexer,
@@ -117,14 +55,7 @@ pub const Compiler = struct {
     scope_depth: u8 = 0,
     loops: [MaxLoopDepth]LoopCtx = undefined,
     loop_depth: u8 = 0,
-    struct_types: [MaxStructTypes]StructTypeInfo = undefined,
-    struct_type_count: usize = 0,
-    interface_types: [MaxInterfaceTypes]InterfaceTypeInfo = undefined,
-    interface_type_count: usize = 0,
-    named_types: [MaxNamedTypes]NamedTypeInfo = undefined,
-    named_type_count: usize = 0,
-    global_consts: [MaxGlobalConsts]GlobalConstInfo = undefined,
-    global_const_count: usize = 0,
+    registry: TypeRegistry = .{},
     last_func_obj: ?*@import("value.zig").Object = null,
     peek_tok: ?Token = null,
 
@@ -134,81 +65,10 @@ pub const Compiler = struct {
 
     pub fn compile(self: *Compiler) !void {
         chunk.reset();
-        self.struct_type_count = 0;
-        self.interface_type_count = 0;
-        self.named_type_count = 0;
-        self.global_const_count = 0;
+        self.registry.reset();
         self.advance();
         while (!self.check(.eof)) try self.decl();
         try chunk.emitOp(.halt, self.prev.line);
-    }
-
-    fn hasStructType(self: *Compiler, name: []const u8) bool {
-        var i: usize = 0;
-        while (i < self.struct_type_count) : (i += 1) {
-            if (common.streq(self.struct_types[i].name, name)) return true;
-        }
-        return false;
-    }
-
-    fn hasInterfaceType(self: *Compiler, name: []const u8) bool {
-        var i: usize = 0;
-        while (i < self.interface_type_count) : (i += 1) {
-            if (common.streq(self.interface_types[i].name, name)) return true;
-        }
-        return false;
-    }
-
-    fn hasGlobalConst(self: *Compiler, name: []const u8) bool {
-        var i: usize = 0;
-        while (i < self.global_const_count) : (i += 1) {
-            if (common.streq(self.global_consts[i].name, name)) return true;
-        }
-        return false;
-    }
-
-    fn addGlobalConst(self: *Compiler, name: []const u8) !void {
-        if (self.hasGlobalConst(name)) return;
-        if (self.global_const_count >= MaxGlobalConsts) return error.TooManyGlobals;
-        self.global_consts[self.global_const_count] = .{ .name = name };
-        self.global_const_count += 1;
-    }
-
-    fn addStructType(self: *Compiler, name: []const u8) !void {
-        if (self.hasStructType(name)) return error.DuplicateStructType;
-        if (self.struct_type_count >= MaxStructTypes) return error.TooManyStructTypes;
-        self.struct_types[self.struct_type_count] = .{ .name = name };
-        self.struct_type_count += 1;
-    }
-
-    fn addInterfaceType(self: *Compiler, name: []const u8) !void {
-        if (self.hasInterfaceType(name)) return error.DuplicateInterfaceType;
-        if (self.interface_type_count >= MaxInterfaceTypes) return error.TooManyInterfaceTypes;
-        self.interface_types[self.interface_type_count] = .{ .name = name };
-        self.interface_type_count += 1;
-    }
-
-    fn hasNamedType(self: *Compiler, name: []const u8) bool {
-        var i: usize = 0;
-        while (i < self.named_type_count) : (i += 1) {
-            if (common.streq(self.named_types[i].name, name)) return true;
-        }
-        return false;
-    }
-
-    fn getNamedTypeInfo(self: *Compiler, name: []const u8) ?NamedTypeInfo {
-        var i: usize = 0;
-        while (i < self.named_type_count) : (i += 1) {
-            if (common.streq(self.named_types[i].name, name)) return self.named_types[i];
-        }
-        return null;
-    }
-
-    fn addNamedType(self: *Compiler, info: NamedTypeInfo) !void {
-        if (self.hasNamedType(info.name)) return error.DuplicateNamedType;
-        if (self.named_type_count >= MaxNamedTypes) return error.TooManyNamedTypes;
-        self.named_types[self.named_type_count] = info;
-        self.named_type_count += 1;
     }
 
     fn inFunc(self: *Compiler) bool {
@@ -305,7 +165,7 @@ pub const Compiler = struct {
             if (is_const) return error.AssignToConst;
             return;
         }
-        if (self.hasGlobalConst(name.src)) return error.AssignToConst;
+        if (self.registry.hasGlobalConst(name.src)) return error.AssignToConst;
     }
 
     fn addUpvalueToScope(self: *Compiler, scope_index: u8, name: []const u8, index: u8, from_upvalue: bool) ?u8 {
@@ -418,7 +278,7 @@ pub const Compiler = struct {
     }
 
     fn interfaceDeclBody(self: *Compiler, kw: Token, name: Token) !void {
-        try self.addInterfaceType(name.src);
+        try self.registry.addInterfaceType(name.src);
         try self.consume(.lbrace);
 
         var methods_tmp: [MaxLocals]InterfaceMethodSpec = undefined;
@@ -535,9 +395,9 @@ pub const Compiler = struct {
         if (self.match(.kw_struct)) return self.structDeclBody(kw, name_tok);
         if (self.match(.kw_interface)) return self.interfaceDeclBody(kw, name_tok);
         const name = name_tok.src;
-        if (self.hasNamedType(name)) return error.DuplicateNamedType;
+        if (self.registry.hasNamedType(name)) return error.DuplicateNamedType;
         if (self.check(.kw_enum)) {
-            try self.addNamedType(.{
+            try self.registry.addNamedType(.{
                 .name = name,
                 .base = .string,
                 .has_range = false,
@@ -593,7 +453,7 @@ pub const Compiler = struct {
             base = .bool;
         } else if (common.streq(base_name, "rune")) {
             base = .rune;
-        } else if (self.getNamedTypeInfo(base_name)) |parent| {
+        } else if (self.registry.getNamedTypeInfo(base_name)) |parent| {
             base = parent.base;
             parent_has_range = parent.has_range;
             parent_min = parent.min;
@@ -621,7 +481,7 @@ pub const Compiler = struct {
             }
         }
 
-        try self.addNamedType(.{
+        try self.registry.addNamedType(.{
             .name = name,
             .base = base,
             .has_range = has_range,
@@ -664,7 +524,7 @@ pub const Compiler = struct {
     }
 
     fn structDeclBody(self: *Compiler, kw: Token, name: Token) !void {
-        try self.addStructType(name.src);
+        try self.registry.addStructType(name.src);
         try self.consume(.lbrace);
 
         var field_specs: [MaxLocals]StructFieldSpec = undefined;
@@ -689,7 +549,7 @@ pub const Compiler = struct {
                         if (alt.typ == .struct_t) {
                             // Policy: no forward refs and no self refs.
                             if (common.streq(alt.struct_name, name.src)) return error.UnknownStructType;
-                            if (!self.hasStructType(alt.struct_name)) return error.UnknownStructType;
+                            if (!self.registry.hasStructType(alt.struct_name)) return error.UnknownStructType;
                         }
                     }
                 } else {
@@ -757,9 +617,9 @@ pub const Compiler = struct {
                 alt = .{ .typ = .array };
             } else if (common.streq(tname, "map")) {
                 alt = .{ .typ = .map };
-            } else if (self.hasInterfaceType(tname)) {
+            } else if (self.registry.hasInterfaceType(tname)) {
                 alt = .{ .typ = .interface_t, .interface_name = tname };
-            } else if (self.hasNamedType(tname)) {
+            } else if (self.registry.hasNamedType(tname)) {
                 alt = .{ .typ = .named_t, .named_name = tname };
             }
 
@@ -868,7 +728,7 @@ pub const Compiler = struct {
                     try chunk.emitOp(.cast_bool, name.line);
                 }
             } else {
-                if (!self.hasNamedType(type_name)) return error.UnknownTypeName;
+                if (!self.registry.hasNamedType(type_name)) return error.UnknownTypeName;
                 const tidx = try chunk.addConst(.{ .string = type_name });
                 try chunk.emit2(@intFromEnum(Op.get_global), tidx, name.line);
                 try self.expr();
@@ -880,10 +740,10 @@ pub const Compiler = struct {
         if (self.inFunc()) {
             _ = try self.defineLocal(name.src, is_const);
         } else {
-            if (!is_const and self.hasGlobalConst(name.src)) return error.AssignToConst;
+            if (!is_const and self.registry.hasGlobalConst(name.src)) return error.AssignToConst;
             const idx = try chunk.addConst(.{ .string = name.src });
             try chunk.emit2(@intFromEnum(Op.def_global), idx, name.line);
-            if (is_const) try self.addGlobalConst(name.src);
+            if (is_const) try self.registry.addGlobalConst(name.src);
         }
         self.matchOpt(.semicolon);
     }
