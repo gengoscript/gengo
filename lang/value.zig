@@ -127,6 +127,12 @@ pub const Value = union(VTag) {
         if (a == .object and b == .object and a.object.* == .enum_value and b.object.* == .enum_value) {
             return a.object.enum_value.typ == b.object.enum_value.typ and a.object.enum_value.ordinal == b.object.enum_value.ordinal;
         }
+        if (a == .object and b == .object and a.object.* == .named_value and b.object.* == .named_value) {
+            const an = a.object.named_value;
+            const bn = b.object.named_value;
+            if (an.typ != bn.typ) return false;
+            return equals(an.value, bn.value);
+        }
         if (@as(VTag, a) != @as(VTag, b)) return false;
         return switch (a) {
             .number => |x| x == b.number,
