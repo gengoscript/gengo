@@ -28,11 +28,12 @@ type Point struct {
     x int
     y int
 }
-func (p Point) distance() float {
-    return std.math.sqrt(p.x*p.x + p.y*p.y)
+func (p Point) squaredLen() int {
+    return p.x*p.x + p.y*p.y
 }
 p := Point{x: 3, y: 4}
-std.io.printf("Distance: %.2f\\n", p.distance())`,
+std.io.printf("Point: (%d, %d)\\n", p.x, p.y)
+std.io.printf("Squared length: %d\\n", p.squaredLen())`,
   loops: `std := import("std")
 sum := 0
 for i := 1; i <= 10; i++ {
@@ -45,11 +46,12 @@ for name in names {
     std.io.printf("Hello, %s!\\n", name)
 }`,
   defer: `std := import("std")
-func testDefer() {
-    defer std.io.println("World")
-    std.io.print("Hello ")
+func process() {
+    defer std.io.println("cleanup done")
+    std.io.println("doing work")
+    std.io.println("more work")
 }
-testDefer() // prints "Hello World"`
+process()`
 };
 
 const MaxOutputBytes = 128 * 1024;
@@ -69,7 +71,7 @@ require(['vs/editor/editor.main'], function () {
   monaco.languages.setMonarchTokensProvider('gengo', {
     keywords: [
       'true', 'false', 'null', 'if', 'else', 'for', 'in', 'switch', 'case',
-      'default', 'return', 'func', 'struct', 'interface', 'type', 'is',
+      'default', 'return', 'func', 'struct', 'interface', 'type',
       'range', 'enum', 'import', 'var', 'const', 'break', 'continue', 'defer'
     ],
     typeKeywords: ['int', 'float', 'bool', 'string', 'rune'],
