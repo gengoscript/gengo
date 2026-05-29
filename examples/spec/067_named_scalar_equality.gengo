@@ -1,7 +1,7 @@
 std := import("std")
 
-type UserId is string
-type Age is int range 0 .. 100
+type UserId string
+type Age int range 0 .. 100
 
 id1 := UserId("u-1")
 id2 := UserId("u-1")
