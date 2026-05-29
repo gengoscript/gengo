@@ -1,0 +1,6 @@
+type Age is int range 0 .. 100
+func takes_int(x: int) {
+    return x
+}
+age := Age(42)
+takes_int(age)

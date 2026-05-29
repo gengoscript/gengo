@@ -118,8 +118,9 @@ Implemented operators:
   - `x[a:]`
   - `x[:]`
 
-- Cast intrinsics: `int(x)`, `float(x)`, `bool(x)`
-  - currently accept number/rune/boolean inputs
+- Cast intrinsics: `int(x)`, `float(x)`, `bool(x)`, `string(x)`
+  - numeric/bool casts accept number/rune/boolean and named scalars with compatible underlying values
+  - `string(x)` supports string/number/rune/boolean/error/null and named string scalars
   - unsupported source types raise `TypeError`
 
 ## 6. Collections and Structs

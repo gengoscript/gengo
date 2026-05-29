@@ -8,6 +8,7 @@ const Value = @import("../lang/value.zig").Value;
 pub const Runtime = struct {
     policy: vm.Policy = .{},
     last_compile_line: u32 = 0,
+    last_runtime_line: u32 = 0,
     chunk_state: chunk.State = .{},
     globals_state: globals.State = .{},
     heap_state: heap.State = .{},
@@ -46,6 +47,7 @@ pub const Runtime = struct {
 
     pub fn run(self: *Runtime, src: []const u8) !void {
         self.last_compile_line = 0;
+        self.last_runtime_line = 0;
         self.reset();
         vm.setPolicy(self.policy);
 
@@ -55,7 +57,10 @@ pub const Runtime = struct {
             return err;
         };
 
-        try vm.run();
+        vm.run() catch |err| {
+            self.last_runtime_line = vm.currentLine();
+            return err;
+        };
     }
 
     pub fn callGlobal(self: *Runtime, name: []const u8, args: []const Value) !Value {

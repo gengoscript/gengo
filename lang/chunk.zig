@@ -98,6 +98,10 @@ pub fn codeByteAt(i: usize) u8 {
     return g_state.code[i];
 }
 
+pub fn lineAt(i: usize) u16 {
+    return g_state.lines[i];
+}
+
 pub fn constAt(i: usize) Value {
     return g_state.consts[i];
 }

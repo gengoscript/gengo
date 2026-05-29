@@ -1,0 +1,18 @@
+std := import("std")
+
+type UserId is string
+type Age is int range 0 .. 100
+
+func takes_string(s: string) {
+    std.io.println(s)
+}
+
+func takes_int(x: int) {
+    std.io.println(x)
+}
+
+id := UserId("u-1")
+age := Age(42)
+
+takes_string(string(id))
+takes_int(int(age))

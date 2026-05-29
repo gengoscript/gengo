@@ -88,6 +88,7 @@ export fn _start() void {
     };
 
     var src: []const u8 = undefined;
+    var script_name: []const u8 = "<stdin>";
     var script_index: usize = 1;
     var backend: vm.Policy.NativeBackend = .embedded;
     var max_ops: ?u64 = null;
@@ -142,6 +143,7 @@ export fn _start() void {
         src = g_src_buf[0..total];
     } else {
         const path = argv[script_index];
+        script_name = path;
         const fd = openReadOnly(path) catch {
             io.werr("gengo: cannot open: ");
             io.werr(path);
@@ -165,8 +167,18 @@ export fn _start() void {
     });
     runtime.run(src) catch |err| {
         if (runtime.last_compile_line != 0) {
-            io.werr("gengo: compile error on line ");
+            io.werr("gengo: compile error in ");
+            io.werr(script_name);
+            io.werr(" on line ");
             io.writeInt(@intCast(runtime.last_compile_line));
+            io.werr(": ");
+            io.werr(@errorName(err));
+            io.werr("\n");
+        } else if (runtime.last_runtime_line != 0) {
+            io.werr("gengo: runtime error in ");
+            io.werr(script_name);
+            io.werr(":");
+            io.writeInt(@intCast(runtime.last_runtime_line));
             io.werr(": ");
             io.werr(@errorName(err));
             io.werr("\n");

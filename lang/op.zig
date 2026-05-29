@@ -27,6 +27,7 @@ pub const Op = enum(u8) {
     cast_int,
     cast_float,
     cast_bool,
+    cast_string,
     neg,
     not,
     eq,

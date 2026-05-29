@@ -126,6 +126,13 @@ pub fn setPolicy(policy: Policy) void {
     vmState().ops_budget_remaining = policy.max_ops;
 }
 
+pub fn currentLine() u32 {
+    const len = chunk.codeLen();
+    if (len == 0) return 0;
+    const idx: usize = if (vmState().ip == 0) 0 else @min(vmState().ip - 1, len - 1);
+    return chunk.lineAt(idx);
+}
+
 fn vmPush(v: Value) !void {
     if (vmState().stack_top >= MaxStack) return error.StackOverflow;
     vmState().stack[vmState().stack_top] = v;
@@ -219,6 +226,11 @@ fn valueAsInt(v: Value) !i64 {
         },
         else => error.TypeError,
     };
+}
+
+fn unboxNamed(v: Value) Value {
+    if (v == .object and v.object.* == .named_value) return v.object.named_value.value;
+    return v;
 }
 
 fn namedTypeCarrier(a: Value, b: Value) !?*Object {
@@ -1905,7 +1917,7 @@ pub fn run() !void {
                 try pushNumericResultWithCarrier(a, b, @floatFromInt(an >> shift));
             },
             .cast_int => {
-                const v = try vmPop();
+                const v = unboxNamed(try vmPop());
                 switch (v) {
                     .number => |n| try vmPush(.{ .number = @trunc(n) }),
                     .rune => |r| try vmPush(.{ .number = @floatFromInt(r) }),
@@ -1914,7 +1926,7 @@ pub fn run() !void {
                 }
             },
             .cast_float => {
-                const v = try vmPop();
+                const v = unboxNamed(try vmPop());
                 switch (v) {
                     .number => |n| try vmPush(.{ .number = n }),
                     .rune => |r| try vmPush(.{ .number = @floatFromInt(r) }),
@@ -1923,13 +1935,17 @@ pub fn run() !void {
                 }
             },
             .cast_bool => {
-                const v = try vmPop();
+                const v = unboxNamed(try vmPop());
                 switch (v) {
                     .number => |n| try vmPush(.{ .boolean = n != 0.0 }),
                     .rune => |r| try vmPush(.{ .boolean = r != 0 }),
                     .boolean => |b| try vmPush(.{ .boolean = b }),
                     else => return error.TypeError,
                 }
+            },
+            .cast_string => {
+                const v = unboxNamed(try vmPop());
+                try vmPush(try nativeConvToString(v));
             },
             .neg => {
                 const v = try vmPop();

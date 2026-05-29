@@ -15,6 +15,7 @@ pub const CompileError = struct {
 
 pub const RuntimeError = struct {
     kind: anyerror,
+    line: u32 = 0,
 };
 
 pub const RuntimeResult = union(enum) {
@@ -55,14 +56,20 @@ pub const Runtime = struct {
                     .kind = err,
                 } };
             }
-            return .{ .runtime_error = .{ .kind = err } };
+            return .{ .runtime_error = .{
+                .kind = err,
+                .line = self.inner.last_runtime_line,
+            } };
         };
         return .ok;
     }
 
     pub fn call(self: *Runtime, name: []const u8, args: []const Value) RuntimeResultWithValue {
         const out = self.inner.callGlobal(name, args) catch |err| {
-            return .{ .runtime_error = .{ .kind = err } };
+            return .{ .runtime_error = .{
+                .kind = err,
+                .line = self.inner.last_runtime_line,
+            } };
         };
         return .{ .ok = out };
     }

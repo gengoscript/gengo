@@ -1823,15 +1823,17 @@ pub const Compiler = struct {
     }
 
     fn varExpr(self: *Compiler, name: Token) !void {
-        if ((common.streq(name.src, "int") or common.streq(name.src, "float") or common.streq(name.src, "bool")) and self.match(.lparen)) {
+        if ((common.streq(name.src, "int") or common.streq(name.src, "float") or common.streq(name.src, "bool") or common.streq(name.src, "string")) and self.match(.lparen)) {
             try self.expr();
             try self.consume(.rparen);
             if (common.streq(name.src, "int")) {
                 try chunk.emitOp(.cast_int, name.line);
             } else if (common.streq(name.src, "float")) {
                 try chunk.emitOp(.cast_float, name.line);
-            } else {
+            } else if (common.streq(name.src, "bool")) {
                 try chunk.emitOp(.cast_bool, name.line);
+            } else {
+                try chunk.emitOp(.cast_string, name.line);
             }
             return;
         }
