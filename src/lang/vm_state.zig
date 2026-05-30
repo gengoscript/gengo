@@ -106,6 +106,21 @@ pub fn reset() void {
     vmState().panic_depth = 0;
 }
 
+// Reset only execution state; preserve globals, heap, GC objects, and std_module.
+// Used by the REPL to run successive lines with shared state.
+pub fn resetExec() void {
+    vmState().stack_top = 0;
+    vmState().ip = 0;
+    vmState().frame_top = 0;
+    vmState().call_depth_target = null;
+    vmState().temp_root_top = 0;
+    vmState().defer_top = 0;
+    vmState().ops_budget_remaining = null;
+    vmState().panic_line = 0;
+    vmState().panic_col = 0;
+    vmState().panic_depth = 0;
+}
+
 pub fn setPolicy(policy: Policy) void {
     vmState().policy = policy;
     vmState().ops_budget_remaining = policy.max_ops;

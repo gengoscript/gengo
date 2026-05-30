@@ -74,6 +74,36 @@ fn readSource(maybe_path: ?[]const u8, buf: []u8) !usize {
     }
 }
 
+// Returns true if fd 0 (stdin) is an interactive terminal.
+// On WASI always false. On Linux uses TCGETS ioctl. Other native targets: false.
+fn stdinIsTerminal() bool {
+    if (comptime builtin.os.tag == .wasi) return false;
+    if (comptime builtin.os.tag == .linux) {
+        const TCGETS: usize = 0x5401;
+        var buf: [64]u8 align(8) = undefined;
+        const rc = std.os.linux.syscall3(.ioctl, 0, TCGETS, @intFromPtr(&buf));
+        return rc == 0;
+    }
+    return false;
+}
+
+// Read one line from stdin into buf (without the newline).
+// Returns null on EOF with no data. Never called on WASI (stdinIsTerminal = false).
+fn readLine(buf: []u8) ?[]const u8 {
+    if (comptime builtin.os.tag == .wasi) return null;
+    var n: usize = 0;
+    while (n < buf.len) {
+        var ch: [1]u8 = undefined;
+        const r = std.posix.read(std.posix.STDIN_FILENO, &ch) catch return if (n > 0) buf[0..n] else null;
+        if (r == 0) return if (n > 0) buf[0..n] else null;
+        if (ch[0] == '\n') return buf[0..n];
+        if (ch[0] == '\r') continue;
+        buf[n] = ch[0];
+        n += 1;
+    }
+    return buf[0..n];
+}
+
 // printSourceLine prints a Rust-style source snippet for the given 1-based line and column.
 // col == 0 means no caret.
 fn printSourceLine(src: []const u8, line: u32, col: u32) void {
@@ -158,6 +188,32 @@ fn runCli(argv: []const []const u8) void {
     if (argv.len > script_index) {
         script_path = argv[script_index];
         script_name = argv[script_index];
+    }
+
+    // REPL: enter interactive mode when no file is given and stdin is a terminal.
+    if (script_path == null and stdinIsTerminal()) {
+        var repl_rt = Runtime.withPolicy(.{
+            .allow_io = true,
+            .native_backend = backend,
+            .max_ops = max_ops,
+        });
+        io.write("Gengo REPL  (Ctrl+D to exit)\n");
+        while (true) {
+            io.write("> ");
+            const line = readLine(g_src_buf[0..]) orelse break;
+            if (line.len == 0) continue;
+            repl_rt.runIncremental(line) catch |err| {
+                if (repl_rt.last_compile_line != 0) {
+                    io.werr("compile error: ");
+                } else {
+                    io.werr("error: ");
+                }
+                io.werr(@errorName(err));
+                io.werr("\n");
+            };
+        }
+        io.write("\n");
+        die(0);
     }
 
     const total = readSource(script_path, &g_src_buf) catch {

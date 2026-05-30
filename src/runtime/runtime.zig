@@ -73,6 +73,33 @@ pub const Runtime = struct {
         };
     }
 
+    // Run src without resetting globals or heap — allows successive REPL lines
+    // to share definitions and allocated objects.
+    pub fn runIncremental(self: *Runtime, src: []const u8) !void {
+        self.last_compile_line = 0;
+        self.last_runtime_line = 0;
+        self.activate();
+        vm.setPolicy(self.policy);
+        chunk.reset();
+        vm.resetExec();
+
+        var compiler = Compiler.init(src);
+        compiler.compile() catch |err| {
+            self.last_compile_line = compiler.prev.line;
+            return err;
+        };
+
+        vm.run() catch |err| {
+            self.last_runtime_line = vm.panicLine();
+            self.last_runtime_col = vm.panicCol();
+            const pf = vm.panicFrames();
+            self.panic_depth = pf.len;
+            var fi: usize = 0;
+            while (fi < pf.len) : (fi += 1) self.panic_frames[fi] = pf[fi];
+            return err;
+        };
+    }
+
     pub fn callGlobal(self: *Runtime, name: []const u8, args: []const Value) !Value {
         self.activate();
         vm.setPolicy(self.policy);

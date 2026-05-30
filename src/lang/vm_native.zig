@@ -27,6 +27,20 @@ const NativeFnId = enum(u8) {
     conv_to_bool = 12,
     conv_to_string = 13,
     core_gc_stats_ext = 14,
+    math_abs = 16,
+    math_sqrt = 17,
+    math_floor = 18,
+    math_ceil = 19,
+    math_round = 20,
+    math_sin = 21,
+    math_cos = 22,
+    math_tan = 23,
+    math_log = 24,
+    math_log2 = 25,
+    math_log10 = 26,
+    math_pow = 27,
+    math_min = 28,
+    math_max = 29,
 };
 const MaxNativeArgs = 255;
 
@@ -111,7 +125,28 @@ pub fn buildStdModule() !*Object {
     const conv_obj = try vmgc.vmAllocObject();
     conv_obj.* = .{ .map = conv_items[0..4] };
 
-    const std_items = heap.bump(MapEntry, 3) orelse return error.OutOfMemory;
+    const math_items = heap.bump(MapEntry, 17) orelse return error.OutOfMemory;
+    math_items[0]  = .{ .key = .{ .string = "abs"   }, .value = try makeNative(.math_abs,   1) };
+    math_items[1]  = .{ .key = .{ .string = "sqrt"  }, .value = try makeNative(.math_sqrt,  1) };
+    math_items[2]  = .{ .key = .{ .string = "floor" }, .value = try makeNative(.math_floor, 1) };
+    math_items[3]  = .{ .key = .{ .string = "ceil"  }, .value = try makeNative(.math_ceil,  1) };
+    math_items[4]  = .{ .key = .{ .string = "round" }, .value = try makeNative(.math_round, 1) };
+    math_items[5]  = .{ .key = .{ .string = "sin"   }, .value = try makeNative(.math_sin,   1) };
+    math_items[6]  = .{ .key = .{ .string = "cos"   }, .value = try makeNative(.math_cos,   1) };
+    math_items[7]  = .{ .key = .{ .string = "tan"   }, .value = try makeNative(.math_tan,   1) };
+    math_items[8]  = .{ .key = .{ .string = "log"   }, .value = try makeNative(.math_log,   1) };
+    math_items[9]  = .{ .key = .{ .string = "log2"  }, .value = try makeNative(.math_log2,  1) };
+    math_items[10] = .{ .key = .{ .string = "log10" }, .value = try makeNative(.math_log10, 1) };
+    math_items[11] = .{ .key = .{ .string = "pow"   }, .value = try makeNative(.math_pow,   2) };
+    math_items[12] = .{ .key = .{ .string = "min"   }, .value = try makeNative(.math_min,   2) };
+    math_items[13] = .{ .key = .{ .string = "max"   }, .value = try makeNative(.math_max,   2) };
+    math_items[14] = .{ .key = .{ .string = "pi"    }, .value = .{ .number = std.math.pi } };
+    math_items[15] = .{ .key = .{ .string = "e"     }, .value = .{ .number = std.math.e  } };
+    math_items[16] = .{ .key = .{ .string = "inf"   }, .value = .{ .number = std.math.inf(f64) } };
+    const math_obj = try vmgc.vmAllocObject();
+    math_obj.* = .{ .map = math_items[0..17] };
+
+    const std_items = heap.bump(MapEntry, 4) orelse return error.OutOfMemory;
     std_items[0] = .{
         .key = .{ .string = "io" },
         .value = .{ .object = io_obj },
@@ -124,9 +159,13 @@ pub fn buildStdModule() !*Object {
         .key = .{ .string = "conv" },
         .value = .{ .object = conv_obj },
     };
+    std_items[3] = .{
+        .key = .{ .string = "math" },
+        .value = .{ .object = math_obj },
+    };
 
     const std_obj = try vmgc.vmAllocObject();
-    std_obj.* = .{ .map = std_items[0..3] };
+    std_obj.* = .{ .map = std_items[0..4] };
     vms.vmState().std_module = std_obj;
     return std_obj;
 }
@@ -688,6 +727,93 @@ pub fn callNative(nf: NativeFuncObj, argc: u8) !void {
             _ = try vms.vmPop();
             _ = try vms.vmPop();
             try vms.vmPush(out);
+        },
+        .math_abs => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const n = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .number = @abs(n) });
+        },
+        .math_sqrt => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const n = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .number = @sqrt(n) });
+        },
+        .math_floor => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const n = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .number = @floor(n) });
+        },
+        .math_ceil => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const n = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .number = @ceil(n) });
+        },
+        .math_round => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const n = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .number = @round(n) });
+        },
+        .math_sin => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const n = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .number = @sin(n) });
+        },
+        .math_cos => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const n = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .number = @cos(n) });
+        },
+        .math_tan => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const n = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .number = std.math.tan(n) });
+        },
+        .math_log => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const n = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .number = @log(n) });
+        },
+        .math_log2 => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const n = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .number = @log2(n) });
+        },
+        .math_log10 => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const n = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .number = @log10(n) });
+        },
+        .math_pow => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const b = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            const a = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 2]);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .number = std.math.pow(f64, a, b) });
+        },
+        .math_min => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const b = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            const a = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 2]);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .number = @min(a, b) });
+        },
+        .math_max => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const b = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            const a = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 2]);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .number = @max(a, b) });
         },
     }
 }

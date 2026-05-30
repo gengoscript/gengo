@@ -27,6 +27,7 @@ pub const MaxFrames = vms.MaxFrames;
 
 pub const setActive = vms.setActive;
 pub const reset = vms.reset;
+pub const resetExec = vms.resetExec;
 pub const setPolicy = vms.setPolicy;
 pub const currentLine = vms.currentLine;
 pub const currentCol = vms.currentCol;
