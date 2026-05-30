@@ -1697,7 +1697,7 @@ pub const Compiler = struct {
             while (ri < named_return_count) : (ri += 1) {
                 scope.locals[arity + ri] = .{ .name = return_names[ri], .is_const = false };
                 scope.local_count += 1;
-                try chunk.emitOp(.null_val, func_ip);
+                try chunk.emitOp(.null_val, @intCast(func_ip));
             }
         }
 

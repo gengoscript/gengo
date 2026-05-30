@@ -73,6 +73,28 @@ pub fn build(b: *std.Build) void {
     const parity_step = b.step("parity", "Run host/embedded parity tests");
     parity_step.dependOn(&parity.step);
 
+    // ── Native CLI ────────────────────────────────────────────────────────────
+
+    const optimize = b.standardOptimizeOption(.{});
+    const native_exe = b.addExecutable(.{
+        .name = "gengo",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = b.graph.host,
+            .optimize = optimize,
+        }),
+    });
+    native_exe.step.dependOn(&preset.step);
+    const install_native = b.addInstallArtifact(native_exe, .{});
+
+    const cli_step = b.step("cli", "Build native CLI binary (zig-out/bin/gengo)");
+    cli_step.dependOn(&install_native.step);
+
+    const run_native = b.addRunArtifact(native_exe);
+    if (b.args) |args| run_native.addArgs(args);
+    const run_step = b.step("run", "Run a script with the native CLI (-- script.gengo)");
+    run_step.dependOn(&run_native.step);
+
     // ── Native embed example ──────────────────────────────────────────────────
 
     const host_embed_mod = b.createModule(.{

@@ -15,11 +15,7 @@ fn writeAllFd(fd: u8, s: []const u8) void {
         }
         return;
     }
-    if (fd == 2) {
-        std.debug.print("{s}", .{s});
-    } else {
-        std.debug.print("{s}", .{s});
-    }
+    _ = std.posix.system.write(@intCast(fd), s.ptr, s.len);
 }
 
 pub fn write(s: []const u8) void {

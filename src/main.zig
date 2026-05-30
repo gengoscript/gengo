@@ -9,7 +9,6 @@ const cfg = @import("runtime/config.zig");
 const MaxArgs = 32;
 const ArgBufSize = 4096;
 const MaxInput = cfg.max_input_bytes;
-const WasiCwdFd: std.os.wasi.fd_t = 3;
 
 var g_src_buf: [MaxInput]u8 = undefined;
 
@@ -20,70 +19,64 @@ fn die(code: u32) noreturn {
     std.process.exit(@intCast(code));
 }
 
-fn collectArgs(argv_out: *[MaxArgs][]const u8) ![]const []const u8 {
+// Read a file (or stdin when maybe_path is null) into buf, returning bytes read.
+fn readSource(maybe_path: ?[]const u8, buf: []u8) !usize {
     if (comptime builtin.os.tag == .wasi) {
-        var argc: usize = 0;
-        var argv_buf_size: usize = 0;
-        if (std.os.wasi.args_sizes_get(&argc, &argv_buf_size) != .SUCCESS) return error.ArgsReadFailed;
-        if (argc > MaxArgs or argv_buf_size > ArgBufSize) return error.ArgsTooLarge;
-
-        var argv_ptrs: [MaxArgs][*:0]u8 = undefined;
-        var argv_buf: [ArgBufSize]u8 = undefined;
-        if (std.os.wasi.args_get(argv_ptrs[0..argc].ptr, argv_buf[0..argv_buf_size].ptr) != .SUCCESS) return error.ArgsReadFailed;
-
-        for (0..argc) |i| argv_out[i] = std.mem.span(argv_ptrs[i]);
-        return argv_out[0..argc];
+        const WasiCwdFd: std.os.wasi.fd_t = 3;
+        var fd: std.os.wasi.fd_t = 0; // stdin by default
+        if (maybe_path) |p| {
+            const rc = std.os.wasi.path_open(
+                WasiCwdFd,
+                .{},
+                p.ptr,
+                p.len,
+                .{},
+                std.os.wasi.rights_t{
+                    .FD_READ = true,
+                    .FD_SEEK = true,
+                    .FD_TELL = true,
+                    .FD_FILESTAT_GET = true,
+                },
+                .{},
+                .{},
+                &fd,
+            );
+            if (rc != .SUCCESS) return error.OpenFailed;
+        }
+        defer if (maybe_path != null) {
+            _ = std.os.wasi.fd_close(fd);
+        };
+        var total: usize = 0;
+        while (total < buf.len) {
+            var iov = [1]std.os.wasi.iovec_t{.{ .base = buf[total..].ptr, .len = buf.len - total }};
+            var nread: usize = 0;
+            const rc = std.os.wasi.fd_read(fd, &iov, iov.len, &nread);
+            if (rc != .SUCCESS) return error.ReadFailed;
+            if (nread == 0) break;
+            total += nread;
+        }
+        return total;
+    } else {
+        const fd: std.posix.fd_t = if (maybe_path) |p|
+            try std.posix.openat(std.posix.AT.FDCWD, p, .{}, 0)
+        else
+            std.posix.STDIN_FILENO;
+        defer if (maybe_path != null) {
+            _ = std.posix.system.close(fd);
+        };
+        var total: usize = 0;
+        while (total < buf.len) {
+            const n = try std.posix.read(fd, buf[total..]);
+            if (n == 0) break;
+            total += n;
+        }
+        return total;
     }
-    var it = std.process.args();
-    var n: usize = 0;
-    while (it.next()) |a| {
-        if (n >= MaxArgs) return error.ArgsTooLarge;
-        argv_out[n] = a;
-        n += 1;
-    }
-    return argv_out[0..n];
-}
-
-fn readAllFd(fd: std.os.wasi.fd_t, out: []u8) !usize {
-    var total: usize = 0;
-    while (total < out.len) {
-        var iov = [1]std.os.wasi.iovec_t{.{ .base = out[total..].ptr, .len = out.len - total }};
-        var nread: usize = 0;
-        const rc = std.os.wasi.fd_read(fd, &iov, iov.len, &nread);
-        if (rc != .SUCCESS) return error.ReadFailed;
-        if (nread == 0) break;
-        total += nread;
-    }
-    return total;
-}
-
-fn openReadOnly(path: []const u8) !std.os.wasi.fd_t {
-    var fd: std.os.wasi.fd_t = undefined;
-    const rights = std.os.wasi.rights_t{
-        .FD_READ = true,
-        .FD_SEEK = true,
-        .FD_TELL = true,
-        .FD_FILESTAT_GET = true,
-    };
-    const rc = std.os.wasi.path_open(
-        WasiCwdFd,
-        .{},
-        path.ptr,
-        path.len,
-        .{},
-        rights,
-        .{},
-        .{},
-        &fd,
-    );
-    if (rc != .SUCCESS) return error.OpenFailed;
-    return fd;
 }
 
 // printSourceLine prints a Rust-style source snippet for the given 1-based line and column.
 // col == 0 means no caret.
 fn printSourceLine(src: []const u8, line: u32, col: u32) void {
-    // Find the start of the requested line.
     var cur_line: u32 = 1;
     var line_start: usize = 0;
     var i: usize = 0;
@@ -93,21 +86,18 @@ fn printSourceLine(src: []const u8, line: u32, col: u32) void {
             line_start = i + 1;
         }
     }
-    if (cur_line != line) return; // line out of range
+    if (cur_line != line) return;
 
-    // Find end of line.
     var line_end = line_start;
     while (line_end < src.len and src[line_end] != '\n') : (line_end += 1) {}
     const text = src[line_start..line_end];
 
-    // Print line number gutter and source text.
     io.werr("   ");
     io.writeInt(@intCast(line));
     io.werr(" | ");
     io.werr(text);
     io.werr("\n");
 
-    // Print caret line if col is known.
     if (col > 0) {
         io.werr("     | ");
         var c: u32 = 1;
@@ -116,14 +106,8 @@ fn printSourceLine(src: []const u8, line: u32, col: u32) void {
     }
 }
 
-export fn _start() void {
-    var argv_storage: [MaxArgs][]const u8 = undefined;
-    const argv = collectArgs(&argv_storage) catch {
-        io.werr("gengo: cannot read args\n");
-        die(1);
-    };
-
-    var src: []const u8 = undefined;
+fn runCli(argv: []const []const u8) void {
+    var script_path: ?[]const u8 = null;
     var script_name: []const u8 = "<stdin>";
     var script_index: usize = 1;
     var backend: vm.Policy.NativeBackend = .embedded;
@@ -171,30 +155,22 @@ export fn _start() void {
         break;
     }
 
-    if (argv.len <= script_index) {
-        const total = readAllFd(0, g_src_buf[0..]) catch {
-            io.werr("gengo: cannot read stdin\n");
-            die(1);
-        };
-        src = g_src_buf[0..total];
-    } else {
-        const path = argv[script_index];
-        script_name = path;
-        const fd = openReadOnly(path) catch {
-            io.werr("gengo: cannot open: ");
-            io.werr(path);
-            io.werr("\n");
-            die(1);
-        };
-        defer _ = std.os.wasi.fd_close(fd);
-        const total = readAllFd(fd, g_src_buf[0..]) catch {
-            io.werr("gengo: cannot read: ");
-            io.werr(path);
-            io.werr("\n");
-            die(1);
-        };
-        src = g_src_buf[0..total];
+    if (argv.len > script_index) {
+        script_path = argv[script_index];
+        script_name = argv[script_index];
     }
+
+    const total = readSource(script_path, &g_src_buf) catch {
+        if (script_path) |p| {
+            io.werr("gengo: cannot open: ");
+            io.werr(p);
+        } else {
+            io.werr("gengo: cannot read stdin");
+        }
+        io.werr("\n");
+        die(1);
+    };
+    const src = g_src_buf[0..total];
 
     var runtime = Runtime.withPolicy(.{
         .allow_io = true,
@@ -224,7 +200,6 @@ export fn _start() void {
             }
             io.werr("\n");
             printSourceLine(src, runtime.last_runtime_line, runtime.last_runtime_col);
-            // Stack trace (innermost call site first, skip entry if no callers)
             if (runtime.panic_depth > 0) {
                 io.werr("stack trace:\n");
                 var fi: usize = 0;
@@ -252,4 +227,41 @@ export fn _start() void {
     };
 
     die(0);
+}
+
+// Zig 0.16 start.zig auto-exports _start for WASM and calls main().
+// On WASM, init.args.vector is void — collect args via WASI syscalls instead.
+// On native, Zig runtime populates init.args.vector from OS argv.
+pub fn main(init: std.process.Init.Minimal) void {
+    var argv_storage: [MaxArgs][]const u8 = undefined;
+    var n: usize = 0;
+
+    if (comptime builtin.os.tag == .wasi) {
+        var argc: usize = 0;
+        var argv_buf_size: usize = 0;
+        if (std.os.wasi.args_sizes_get(&argc, &argv_buf_size) != .SUCCESS) {
+            io.werr("gengo: cannot read args\n");
+            die(1);
+        }
+        if (argc > MaxArgs or argv_buf_size > ArgBufSize) {
+            io.werr("gengo: args too large\n");
+            die(1);
+        }
+        var argv_ptrs: [MaxArgs][*:0]u8 = undefined;
+        var argv_buf: [ArgBufSize]u8 = undefined;
+        if (std.os.wasi.args_get(argv_ptrs[0..argc].ptr, argv_buf[0..argv_buf_size].ptr) != .SUCCESS) {
+            io.werr("gengo: cannot read args\n");
+            die(1);
+        }
+        for (0..argc) |i| argv_storage[i] = std.mem.span(argv_ptrs[i]);
+        n = argc;
+    } else {
+        for (init.args.vector) |arg| {
+            if (n >= MaxArgs) break;
+            argv_storage[n] = std.mem.span(arg);
+            n += 1;
+        }
+    }
+
+    runCli(argv_storage[0..n]);
 }
