@@ -28,6 +28,7 @@ pub const Frame = struct {
     closure: ?*Object,
     func_obj: *Object,
     defer_base: usize,
+    has_typed_returns: bool,
 };
 
 pub const PanicFrame = struct { line: u16, name: []const u8 };

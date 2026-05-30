@@ -107,6 +107,7 @@ fn performCall(argc: u8) !void {
                 .closure = null,
                 .func_obj = obj,
                 .defer_base = vmState().defer_top,
+                .has_typed_returns = f.has_typed_returns,
             };
             vmState().frame_top += 1;
             vmState().ip = f.ip;
@@ -125,6 +126,7 @@ fn performCall(argc: u8) !void {
                 .closure = obj,
                 .func_obj = cl.func,
                 .defer_base = vmState().defer_top,
+                .has_typed_returns = f.has_typed_returns,
             };
             vmState().frame_top += 1;
             vmState().ip = f.ip;
@@ -817,7 +819,7 @@ fn runInner() !void {
                 const proto = f.object.function;
                 const ups = heap.bump(*Object, proto.capture_slots.len) orelse return error.OutOfMemory;
                 if (vmState().frame_top == 0 and proto.capture_slots.len != 0) return error.TypeError;
-                const frame = if (vmState().frame_top == 0) vms.Frame{ .ret_ip = 0, .base = 0, .closure = null, .func_obj = f.object, .defer_base = 0 } else vmState().frames[vmState().frame_top - 1];
+                const frame = if (vmState().frame_top == 0) vms.Frame{ .ret_ip = 0, .base = 0, .closure = null, .func_obj = f.object, .defer_base = 0, .has_typed_returns = false } else vmState().frames[vmState().frame_top - 1];
                 var i: usize = 0;
                 while (i < proto.capture_slots.len) : (i += 1) {
                     const enc = proto.capture_slots[i];
@@ -979,9 +981,24 @@ fn runInner() !void {
             .ret => {
                 if (vmState().frame_top == 0) return error.ReturnAtTopLevel;
                 const retval = try vmPop();
-                const frame_defer_base = vmState().frames[vmState().frame_top - 1].defer_base;
+                const fi = vmState().frame_top - 1;
+                const frame = &vmState().frames[fi];
+
+                // Fast path: no defers pending, no return-type checks (the common case).
+                if (vmState().defer_top == frame.defer_base and !frame.has_typed_returns) {
+                    vmState().frame_top = fi;
+                    vmState().stack_top = frame.base - 1;
+                    vmState().ip = frame.ret_ip;
+                    try vmPush(retval);
+                    if (vmState().call_depth_target) |d| {
+                        if (vmState().frame_top == d) return;
+                    }
+                    continue;
+                }
+
+                // Slow path: run defers and/or enforce return types.
                 try pushTempRoot(retval);
-                while (vmState().defer_top > frame_defer_base) {
+                while (vmState().defer_top > frame.defer_base) {
                     vmState().defer_top -= 1;
                     const deferred = vmState().defer_stack[vmState().defer_top];
                     try pushTempRoot(deferred);
@@ -1003,10 +1020,11 @@ fn runInner() !void {
                     popTempRoot();
                 }
                 popTempRoot();
-                vmState().frame_top -= 1;
-                const frame = vmState().frames[vmState().frame_top];
-                const fsig = try vmtyp.frameFuncSig(frame.func_obj);
-                try vmtyp.enforceFuncReturnTypes(fsig, retval);
+                vmState().frame_top = fi;
+                if (frame.has_typed_returns) {
+                    const fsig = try vmtyp.frameFuncSig(frame.func_obj);
+                    try vmtyp.enforceFuncReturnTypes(fsig, retval);
+                }
                 vmState().stack_top = frame.base - 1;
                 vmState().ip = frame.ret_ip;
                 try vmPush(retval);
