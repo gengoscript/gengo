@@ -95,6 +95,20 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run a script with the native CLI (-- script.gengo)");
     run_step.dependOn(&run_native.step);
 
+    const native_release_exe = b.addExecutable(.{
+        .name = "gengo",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = b.graph.host,
+            .optimize = .ReleaseFast,
+        }),
+    });
+    native_release_exe.step.dependOn(&preset.step);
+    const install_native_release = b.addInstallArtifact(native_release_exe, .{});
+
+    const cli_release_step = b.step("cli-release", "Build native CLI binary (ReleaseFast)");
+    cli_release_step.dependOn(&install_native_release.step);
+
     // ── Native embed example ──────────────────────────────────────────────────
 
     const host_embed_mod = b.createModule(.{
