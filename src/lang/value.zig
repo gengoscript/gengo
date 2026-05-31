@@ -79,6 +79,7 @@ pub const NamedTypeObj = struct {
     min: f64 = 0,
     max: f64 = 0,
     parent_name: ?[]const u8 = null,   // non-null for subtype declarations
+    parent_obj: ?*Object = null,       // lazily resolved from parent_name at runtime
     elem_spec: ?FieldTypeSpec = null,  // for array_t: element type
     key_spec: ?FieldTypeSpec = null,   // for map_t: key type
     val_spec: ?FieldTypeSpec = null,   // for map_t: value type

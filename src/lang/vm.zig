@@ -54,15 +54,11 @@ const concatDynString = vmgc.concatDynString;
 // ── Private helpers used only in the execution core ───────────────────────────
 
 fn namedTypeIsSubOf(sub: *Object, ancestor: *Object) bool {
-    if (sub.* != .named_type) return false;
-    var cur: ?[]const u8 = sub.named_type.parent_name;
-    while (cur) |pname| {
-        const pval = globals.get(pname) orelse return false;
-        if (!(pval == .object and pval.object.* == .named_type)) return false;
-        if (pval.object == ancestor) return true;
-        cur = pval.object.named_type.parent_name;
+    var cur = vmtyp.resolveParentType(sub) orelse return false;
+    while (true) {
+        if (cur == ancestor) return true;
+        cur = vmtyp.resolveParentType(cur) orelse return false;
     }
-    return false;
 }
 
 fn namedTypeCarrier(a: Value, b: Value) !?*Object {
@@ -181,6 +177,7 @@ fn performCall(argc: u8) !void {
 }
 
 fn writeFrameLocal(abs_slot: usize, v: Value) void {
+    std.debug.assert(abs_slot < vms.MaxStack);
     const cur = vmState().stack[abs_slot];
     if (cur == .object and cur.object.* == .cell) {
         cur.object.cell.value = v;
@@ -929,7 +926,15 @@ fn runInner() !void {
                             const ext = try vmAllocManagedSlice(MapEntry, items.len + 1);
                             @memcpy(ext[0..items.len], items);
                             ext[items.len] = .{ .key = idx_v, .value = val };
-                            container.object.* = .{ .map_managed = ext[0 .. items.len + 1] };
+                            const new_len = items.len + 1;
+                            container.object.* = .{ .map_managed = ext[0..new_len] };
+                            // Auto-promote to hashed map once linear scan becomes expensive.
+                            if (new_len > 8) {
+                                const bcount = vmmap.mapBucketsForCount(new_len);
+                                const buckets = try vmAllocManagedSlice(i32, bcount);
+                                vmmap.mapBuildHashedBuckets(ext[0..new_len], buckets);
+                                container.object.* = .{ .map_hashed = .{ .entries = ext[0..new_len], .len = new_len, .buckets = buckets } };
+                            }
                         }
                     },
                     .map_hashed => {
@@ -1052,7 +1057,8 @@ fn runInner() !void {
                     .struct_instance => |inst| {
                         const tname = inst.typ.struct_type.name;
                         const total = tname.len + 1 + mname.len;
-                        const key_buf = heap.bump(u8, total) orelse return error.OutOfMemory;
+                        if (total > 128) return error.NotAMethodReceiver;
+                        var key_buf: [128]u8 = undefined;
                         @memcpy(key_buf[0..tname.len], tname);
                         key_buf[tname.len] = '.';
                         @memcpy(key_buf[tname.len + 1 .. total], mname);

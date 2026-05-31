@@ -66,7 +66,8 @@ fn markObject(obj: *Object) void {
             markValue(vv.payload);
         },
         .variant_ctor => |vc| markObject(vc.typ),
-        .dyn_string, .function, .native_function, .struct_type, .interface_type, .named_type, .enum_type => {},
+        .named_type => |nt| { if (nt.parent_obj) |p| markObject(p); },
+        .dyn_string, .function, .native_function, .struct_type, .interface_type, .enum_type => {},
     }
 }
 

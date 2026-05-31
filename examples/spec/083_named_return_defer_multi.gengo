@@ -1,0 +1,21 @@
+std := import("std")
+
+func splitAndTriple(x int) (a int, b int) {
+    defer func() {
+        a = a * 3
+        b = b * 3
+    }()
+    return x, x + 1
+}
+
+func addSuffix(s string) (out string) {
+    defer func() {
+        out = out + "!"
+    }()
+    return s
+}
+
+a, b := splitAndTriple(4)
+std.io.println(a)
+std.io.println(b)
+std.io.println(addSuffix("hello"))

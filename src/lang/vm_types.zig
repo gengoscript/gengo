@@ -10,17 +10,24 @@ const StructFieldSpec = @import("value.zig").StructFieldSpec;
 const InterfaceMethodSpec = @import("value.zig").InterfaceMethodSpec;
 const FuncObj = @import("value.zig").FuncObj;
 
+// Resolve and cache the parent type pointer, avoiding repeated globals lookups.
+pub fn resolveParentType(obj: *Object) ?*Object {
+    if (obj.* != .named_type) return null;
+    if (obj.named_type.parent_obj) |cached| return cached;
+    const pname = obj.named_type.parent_name orelse return null;
+    const pval = globals.get(pname) orelse return null;
+    if (!(pval == .object and pval.object.* == .named_type)) return null;
+    obj.named_type.parent_obj = pval.object;
+    return pval.object;
+}
+
 pub fn namedTypeIsOrExtends(typ_obj: *Object, target_name: []const u8) bool {
     if (typ_obj.* != .named_type) return false;
-    if (common.streq(typ_obj.named_type.name, target_name)) return true;
-    var cur: ?[]const u8 = typ_obj.named_type.parent_name;
-    while (cur) |pname| {
-        if (common.streq(pname, target_name)) return true;
-        const pval = globals.get(pname) orelse return false;
-        if (!(pval == .object and pval.object.* == .named_type)) return false;
-        cur = pval.object.named_type.parent_name;
+    var cur: *Object = typ_obj;
+    while (true) {
+        if (common.streq(cur.named_type.name, target_name)) return true;
+        cur = resolveParentType(cur) orelse return false;
     }
-    return false;
 }
 
 pub fn findFieldIndex(fields: []const StructFieldSpec, key: []const u8) ?usize {
