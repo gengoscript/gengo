@@ -30,12 +30,16 @@ pub const FieldTypeTag = enum {
     struct_t,
     interface_t,
     named_t,
+    variant_t,
 };
 pub const FieldTypeAlt = struct {
     typ: FieldTypeTag,
     struct_name: []const u8 = "",
     interface_name: []const u8 = "",
     named_name: []const u8 = "",
+    elem_spec: ?FieldTypeSpec = null,  // for array[T]
+    key_spec: ?FieldTypeSpec = null,   // for map[K,V]
+    val_spec: ?FieldTypeSpec = null,   // for map[K,V]
 };
 pub const FieldTypeSpec = struct {
     alts: []FieldTypeAlt,
@@ -57,13 +61,27 @@ pub const InterfaceMethodSpec = struct {
     has_typed_returns: bool,
 };
 pub const InterfaceTypeObj = struct { name: []const u8, methods: []InterfaceMethodSpec };
-pub const NamedTypeBase = enum { int, float, string, bool, rune };
+pub const VariantArmSpec = struct {
+    name: []const u8,
+    has_payload: bool = false,
+    payload_name: []const u8 = "",
+    payload_type: ?FieldTypeSpec = null,
+};
+pub const VariantTypeObj = struct { name: []const u8, arms: []const VariantArmSpec };
+pub const VariantValueObj = struct { typ: *Object, tag: []const u8, ordinal: usize, payload: Value };
+pub const VariantCtorObj = struct { typ: *Object, tag: []const u8, ordinal: usize, payload_type: ?FieldTypeSpec };
+
+pub const NamedTypeBase = enum { int, float, string, bool, rune, array_t, map_t };
 pub const NamedTypeObj = struct {
     name: []const u8,
     base: NamedTypeBase,
-    has_range: bool,
-    min: f64,
-    max: f64,
+    has_range: bool = false,
+    min: f64 = 0,
+    max: f64 = 0,
+    parent_name: ?[]const u8 = null,   // non-null for subtype declarations
+    elem_spec: ?FieldTypeSpec = null,  // for array_t: element type
+    key_spec: ?FieldTypeSpec = null,   // for map_t: key type
+    val_spec: ?FieldTypeSpec = null,   // for map_t: value type
 };
 pub const NamedValueObj = struct { typ: *Object, value: Value };
 pub const EnumTypeObj = struct { name: []const u8, members: []const []const u8 };
@@ -83,7 +101,7 @@ pub const IterObj = struct {
     source: ?*Object = null,
 };
 
-pub const ObjTag = enum { array, array_managed, map, map_managed, map_hashed, dyn_string, function, closure, cell, native_function, struct_type, interface_type, named_type, named_value, enum_type, enum_value, struct_instance, iterator };
+pub const ObjTag = enum { array, array_managed, map, map_managed, map_hashed, dyn_string, function, closure, cell, native_function, struct_type, interface_type, named_type, named_value, enum_type, enum_value, struct_instance, iterator, variant_type, variant_value, variant_ctor };
 pub const Object = union(ObjTag) {
     array: []Value,
     array_managed: []Value,
@@ -103,6 +121,9 @@ pub const Object = union(ObjTag) {
     enum_value: EnumValueObj,
     struct_instance: StructInstanceObj,
     iterator: IterObj,
+    variant_type: VariantTypeObj,
+    variant_value: VariantValueObj,
+    variant_ctor: VariantCtorObj,
 };
 
 pub const VTag = enum { number, rune, boolean, string, error_value, object, null };
@@ -136,6 +157,13 @@ pub const Value = union(VTag) {
             const bn = b.object.named_value;
             if (an.typ != bn.typ) return false;
             return equals(an.value, bn.value);
+        }
+        if (a == .object and b == .object and a.object.* == .variant_value and b.object.* == .variant_value) {
+            const av = a.object.variant_value;
+            const bv = b.object.variant_value;
+            if (av.typ != bv.typ) return false;
+            if (!common.streq(av.tag, bv.tag)) return false;
+            return equals(av.payload, bv.payload);
         }
         if (@as(VTag, a) != @as(VTag, b)) return false;
         return switch (a) {

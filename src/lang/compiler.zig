@@ -22,6 +22,8 @@ const InterfaceMethodSpec = value_mod.InterfaceMethodSpec;
 const InterfaceTypeObj = value_mod.InterfaceTypeObj;
 const NamedTypeObj = value_mod.NamedTypeObj;
 const NamedTypeBase = value_mod.NamedTypeBase;
+const VariantArmSpec = value_mod.VariantArmSpec;
+const VariantTypeObj = value_mod.VariantTypeObj;
 const Value = value_mod.Value;
 
 const MaxLocals = ct.MaxLocals;
@@ -32,6 +34,7 @@ const MaxTypeAlts = ct.MaxTypeAlts;
 const MaxStructTypes = ct.MaxStructTypes;
 const MaxInterfaceTypes = ct.MaxInterfaceTypes;
 const MaxNamedTypes = ct.MaxNamedTypes;
+const MaxVariantTypes = ct.MaxVariantTypes;
 const MaxSwitchJumps = ct.MaxSwitchJumps;
 const MaxUpvalues = ct.MaxUpvalues;
 const MaxGlobalConsts = ct.MaxGlobalConsts;
@@ -268,6 +271,8 @@ pub const Compiler = struct {
             try self.varDecl(true, true);
         } else if (self.check(.kw_type)) {
             try self.namedTypeDecl();
+        } else if (self.check(.kw_subtype)) {
+            try self.subtypeDecl();
         } else if (self.check(.kw_func) and self.isMethodDecl()) {
             try self.methodDecl();
         } else if (self.check(.kw_func) and self.isNamedFuncDecl()) {
@@ -383,6 +388,128 @@ pub const Compiler = struct {
         return sign * n;
     }
 
+    fn variantDeclBody(self: *Compiler, kw: Token, name_tok: Token) !void {
+        const name = name_tok.src;
+        if (self.registry.hasVariantType(name)) return error.DuplicateVariantType;
+        try self.registry.addVariantType(name);
+        try self.consume(.lbrace);
+        var arms_tmp: [MaxLocals]VariantArmSpec = undefined;
+        var arm_count: u8 = 0;
+        if (!self.check(.rbrace)) {
+            while (true) {
+                if (self.cur.typ != .ident) return error.UnexpectedToken;
+                const arm_name = self.cur.src;
+                self.advance();
+                var has_payload = false;
+                var payload_name: []const u8 = "";
+                var payload_type: ?FieldTypeSpec = null;
+                if (self.match(.lparen)) {
+                    has_payload = true;
+                    // Disambiguate: `armName(fieldName Type)` vs `armName(Type)`
+                    // If two idents before `)`: first is field name, second is type.
+                    if (self.cur.typ == .ident) {
+                        var lx2 = self.lex;
+                        const peek = lx2.next();
+                        if (peek.typ == .ident) {
+                            payload_name = self.cur.src;
+                            self.advance();
+                        }
+                    }
+                    payload_type = try self.parseFieldTypeSpec();
+                    try self.consume(.rparen);
+                }
+                if (arm_count >= MaxLocals) return error.TooManyLocals;
+                arms_tmp[arm_count] = .{
+                    .name = arm_name,
+                    .has_payload = has_payload,
+                    .payload_name = payload_name,
+                    .payload_type = payload_type,
+                };
+                arm_count += 1;
+                if (!self.match(.comma)) break;
+                if (self.check(.rbrace)) break;
+            }
+        }
+        try self.consume(.rbrace);
+        const arms = heap.bump(VariantArmSpec, arm_count) orelse return error.OutOfMemory;
+        var ai: usize = 0;
+        while (ai < arm_count) : (ai += 1) arms[ai] = arms_tmp[ai];
+        const vt = heap.allocObject() orelse return error.OutOfMemory;
+        vt.* = .{ .variant_type = VariantTypeObj{ .name = name, .arms = arms[0..arm_count] } };
+        try chunk.emitConst(.{ .object = vt }, kw.line);
+        if (self.inFunc()) {
+            _ = try self.defineLocal(name, false);
+        } else {
+            const idx = try chunk.addConst(.{ .string = name });
+            try chunk.emit2(@intFromEnum(Op.def_global), idx, kw.line);
+        }
+        self.matchOpt(.semicolon);
+    }
+
+    fn subtypeDecl(self: *Compiler) !void {
+        const kw = self.cur;
+        self.advance(); // subtype
+        if (self.cur.typ != .ident) return error.UnexpectedToken;
+        const name_tok = self.cur;
+        self.advance(); // name
+        const name = name_tok.src;
+
+        if (self.cur.typ != .ident) return error.UnexpectedToken;
+        const parent_name = self.cur.src;
+        self.advance(); // parent name
+
+        const parent_info = self.registry.getNamedTypeInfo(parent_name) orelse return error.UnexpectedToken;
+        if (parent_info.base != .int and parent_info.base != .float and parent_info.base != .rune)
+            return error.UnexpectedToken;
+        if (self.registry.hasNamedType(name)) return error.DuplicateNamedType;
+
+        const base = parent_info.base;
+        var has_range = parent_info.has_range;
+        var min: f64 = parent_info.min;
+        var max: f64 = parent_info.max;
+
+        if (self.match(.kw_range)) {
+            if (!(base == .int or base == .float or base == .rune)) return error.UnexpectedToken;
+            const new_min = try self.parseSignedNumber();
+            try self.consume(.dotdot);
+            const new_max = try self.parseSignedNumber();
+            if (new_min > new_max) return error.RangeError;
+            if (parent_info.has_range) {
+                if (new_min < parent_info.min or new_max > parent_info.max) return error.RangeError;
+            }
+            has_range = true;
+            min = new_min;
+            max = new_max;
+        }
+
+        try self.registry.addNamedType(.{
+            .name = name,
+            .base = base,
+            .has_range = has_range,
+            .min = min,
+            .max = max,
+            .parent_name = parent_name,
+        });
+
+        const nt = heap.allocObject() orelse return error.OutOfMemory;
+        nt.* = .{ .named_type = NamedTypeObj{
+            .name = name,
+            .base = base,
+            .has_range = has_range,
+            .min = min,
+            .max = max,
+            .parent_name = parent_name,
+        } };
+        try chunk.emitConst(.{ .object = nt }, kw.line);
+        if (self.inFunc()) {
+            _ = try self.defineLocal(name, false);
+        } else {
+            const idx = try chunk.addConst(.{ .string = name });
+            try chunk.emit2(@intFromEnum(Op.def_global), idx, kw.line);
+        }
+        self.matchOpt(.semicolon);
+    }
+
     fn namedTypeDecl(self: *Compiler) !void {
         const kw = self.cur;
         self.advance(); // type
@@ -391,6 +518,7 @@ pub const Compiler = struct {
         self.advance(); // name
         if (self.match(.kw_struct)) return self.structDeclBody(kw, name_tok);
         if (self.match(.kw_interface)) return self.interfaceDeclBody(kw, name_tok);
+        if (self.match(.kw_variant)) return self.variantDeclBody(kw, name_tok);
         const name = name_tok.src;
         if (self.registry.hasNamedType(name)) return error.DuplicateNamedType;
         if (self.check(.kw_enum)) {
@@ -450,6 +578,45 @@ pub const Compiler = struct {
             base = .bool;
         } else if (common.streq(base_name, "rune")) {
             base = .rune;
+        } else if (common.streq(base_name, "array")) {
+            var es: ?FieldTypeSpec = null;
+            if (self.match(.lbracket)) {
+                es = try self.parseFieldTypeSpec();
+                try self.consume(.rbracket);
+            }
+            try self.registry.addNamedType(.{ .name = name, .base = .array_t, .elem_spec = es });
+            const nt = heap.allocObject() orelse return error.OutOfMemory;
+            nt.* = .{ .named_type = NamedTypeObj{ .name = name, .base = .array_t, .elem_spec = es } };
+            try chunk.emitConst(.{ .object = nt }, kw.line);
+            if (self.inFunc()) {
+                _ = try self.defineLocal(name, false);
+            } else {
+                const idx = try chunk.addConst(.{ .string = name });
+                try chunk.emit2(@intFromEnum(Op.def_global), idx, kw.line);
+            }
+            self.matchOpt(.semicolon);
+            return;
+        } else if (common.streq(base_name, "map")) {
+            var ks: ?FieldTypeSpec = null;
+            var vs: ?FieldTypeSpec = null;
+            if (self.match(.lbracket)) {
+                ks = try self.parseFieldTypeSpec();
+                try self.consume(.comma);
+                vs = try self.parseFieldTypeSpec();
+                try self.consume(.rbracket);
+            }
+            try self.registry.addNamedType(.{ .name = name, .base = .map_t, .key_spec = ks, .val_spec = vs });
+            const nt = heap.allocObject() orelse return error.OutOfMemory;
+            nt.* = .{ .named_type = NamedTypeObj{ .name = name, .base = .map_t, .key_spec = ks, .val_spec = vs } };
+            try chunk.emitConst(.{ .object = nt }, kw.line);
+            if (self.inFunc()) {
+                _ = try self.defineLocal(name, false);
+            } else {
+                const idx = try chunk.addConst(.{ .string = name });
+                try chunk.emit2(@intFromEnum(Op.def_global), idx, kw.line);
+            }
+            self.matchOpt(.semicolon);
+            return;
         } else if (self.registry.getNamedTypeInfo(base_name)) |parent| {
             base = parent.base;
             parent_has_range = parent.has_range;
@@ -614,13 +781,28 @@ pub const Compiler = struct {
             } else if (common.streq(tname, "error")) {
                 alt = .{ .typ = .error_t };
             } else if (common.streq(tname, "array")) {
-                alt = .{ .typ = .array };
+                var es: ?FieldTypeSpec = null;
+                if (self.match(.lbracket)) {
+                    es = try self.parseFieldTypeSpec();
+                    try self.consume(.rbracket);
+                }
+                alt = .{ .typ = .array, .elem_spec = es };
             } else if (common.streq(tname, "map")) {
-                alt = .{ .typ = .map };
+                var ks: ?FieldTypeSpec = null;
+                var vs: ?FieldTypeSpec = null;
+                if (self.match(.lbracket)) {
+                    ks = try self.parseFieldTypeSpec();
+                    try self.consume(.comma);
+                    vs = try self.parseFieldTypeSpec();
+                    try self.consume(.rbracket);
+                }
+                alt = .{ .typ = .map, .key_spec = ks, .val_spec = vs };
             } else if (self.registry.hasInterfaceType(tname)) {
                 alt = .{ .typ = .interface_t, .interface_name = tname };
             } else if (self.registry.hasNamedType(tname)) {
                 alt = .{ .typ = .named_t, .named_name = tname };
+            } else if (self.registry.hasVariantType(tname)) {
+                alt = .{ .typ = .variant_t, .named_name = tname };
             }
 
             var i: u8 = 0;
@@ -1152,6 +1334,21 @@ pub const Compiler = struct {
         if (self.check(.rbrace) or self.check(.eof) or self.check(.semicolon)) {
             // Bare return: use named return variables if present, otherwise null.
             try emitImplicitReturn(scope, line);
+        } else if (scope.named_return_count > 0) {
+            // Named-return function with explicit value(s): assign to the named return
+            // slots first so deferred closures can observe and modify them.
+            if (scope.named_return_count == 1) {
+                try self.expr();
+                try chunk.emit2(@intFromEnum(Op.set_local), scope.named_return_base, line);
+            } else {
+                var ri: u8 = 0;
+                while (ri < scope.named_return_count) : (ri += 1) {
+                    if (ri > 0) try self.consume(.comma);
+                    try self.expr();
+                    try chunk.emit2(@intFromEnum(Op.set_local), scope.named_return_base + ri, line);
+                }
+            }
+            try emitImplicitReturn(scope, line);
         } else {
             _ = try self.emitExprListTuple();
         }
@@ -1484,18 +1681,62 @@ pub const Compiler = struct {
 
         while (!self.check(.rbrace) and !self.check(.eof)) {
             if (self.match(.kw_case)) {
-                try chunk.emitOp(.dup, self.prev.line);
-                try self.expr();
-                try chunk.emitOp(.eq, self.prev.line);
-                const next_case = try chunk.emitJump(.jump_if_false, self.prev.line);
-                try chunk.emitOp(.pop, self.prev.line);
-                try self.consume(.lbrace);
-                try self.block();
-                if (end_count >= MaxSwitchJumps) return error.TooManySwitchCases;
-                end_jumps[end_count] = try chunk.emitJump(.jump, self.prev.line);
-                end_count += 1;
-                try chunk.patchJump(next_case);
-                try chunk.emitOp(.pop, self.prev.line);
+                if (self.check(.dot)) {
+                    // Variant arm pattern: case .arm_name { } or case .arm_name(binding) { }
+                    const dot_line = self.cur.line;
+                    self.advance(); // consume '.'
+                    if (self.cur.typ != .ident) return error.UnexpectedToken;
+                    const arm_name_tok = self.cur;
+                    self.advance(); // consume arm name
+                    var binding: ?[]const u8 = null;
+                    if (self.match(.lparen)) {
+                        if (self.cur.typ != .ident) return error.UnexpectedToken;
+                        binding = self.cur.src;
+                        self.advance();
+                        try self.consume(.rparen);
+                    }
+                    // Emit: dup, variant_check arm_name, jump_if_false [H]
+                    try chunk.emitOp(.dup, dot_line);
+                    const arm_const_idx = try chunk.addConst(.{ .string = arm_name_tok.src });
+                    try chunk.emit2(@intFromEnum(Op.variant_check), @intCast(arm_const_idx), dot_line);
+                    const next_case = try chunk.emitJump(.jump_if_false, dot_line);
+                    try chunk.emitOp(.pop, dot_line); // pop bool (match case)
+                    // Handle switch value and optional binding
+                    const local_before = if (self.inFunc()) self.currentScope().local_count else 0;
+                    if (binding != null) {
+                        try chunk.emitOp(.variant_payload, dot_line);
+                        if (self.inFunc()) {
+                            _ = try self.defineLocal(binding.?, false);
+                        } else {
+                            const bidx = try chunk.addConst(.{ .string = binding.? });
+                            try chunk.emit2(@intFromEnum(Op.def_global), bidx, dot_line);
+                        }
+                    } else {
+                        try chunk.emitOp(.pop, dot_line); // discard switch value
+                    }
+                    try self.consume(.lbrace);
+                    try self.block();
+                    try self.cleanupLocals(local_before, self.prev.line);
+                    if (end_count >= MaxSwitchJumps) return error.TooManySwitchCases;
+                    end_jumps[end_count] = try chunk.emitJump(.jump, self.prev.line);
+                    end_count += 1;
+                    try chunk.patchJump(next_case);
+                    try chunk.emitOp(.pop, self.prev.line); // pop bool (no-match case)
+                } else {
+                    // Regular value case
+                    try chunk.emitOp(.dup, self.prev.line);
+                    try self.expr();
+                    try chunk.emitOp(.eq, self.prev.line);
+                    const next_case = try chunk.emitJump(.jump_if_false, self.prev.line);
+                    try chunk.emitOp(.pop, self.prev.line);
+                    try self.consume(.lbrace);
+                    try self.block();
+                    if (end_count >= MaxSwitchJumps) return error.TooManySwitchCases;
+                    end_jumps[end_count] = try chunk.emitJump(.jump, self.prev.line);
+                    end_count += 1;
+                    try chunk.patchJump(next_case);
+                    try chunk.emitOp(.pop, self.prev.line);
+                }
                 continue;
             }
 

@@ -1,0 +1,10 @@
+Decision.allow
+Decision.deny(not authorised)
+allowed
+denied:not authorised
+ok:42
+err:not found
+pending
+Decision
+allow
+needs approval

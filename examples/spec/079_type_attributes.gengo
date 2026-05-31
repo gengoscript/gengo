@@ -1,0 +1,39 @@
+std := import("std")
+
+type Month int range 1..12
+type Score float range 0.0..100.0
+type Status enum { active, inactive, pending }
+
+// Named scalar type attributes
+std.io.println(Month.name)
+std.io.println(Month.first)
+std.io.println(Month.last)
+std.io.println(Score.first)
+std.io.println(Score.last)
+
+// first/last return named values usable in comparisons
+m := Month(6)
+std.io.println(m >= Month.first)
+std.io.println(m <= Month.last)
+
+// clamp using type attributes
+func clampMonth(n int) Month {
+    if n < Month.first { return Month.first }
+    if n > Month.last { return Month.last }
+    return Month(n)
+}
+std.io.println(clampMonth(0))
+std.io.println(clampMonth(6))
+std.io.println(clampMonth(15))
+
+// Enum type attributes
+std.io.println(Status.name)
+std.io.println(Status.first)
+std.io.println(Status.last)
+
+// values returns all members as an array
+vals := Status.values
+std.io.println(std.core.len(vals))
+for v in vals {
+    std.io.println(v)
+}

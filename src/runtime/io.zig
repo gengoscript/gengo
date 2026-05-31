@@ -212,6 +212,26 @@ pub fn printValue(v: Value) void {
                 write("}");
             },
             .iterator => write("<iter>"),
+            .variant_type => |vt| {
+                write("<variant ");
+                write(vt.name);
+                write(">");
+            },
+            .variant_ctor => |vc| {
+                write(vc.typ.variant_type.name);
+                write(".");
+                write(vc.tag);
+            },
+            .variant_value => |vv| {
+                write(vv.typ.variant_type.name);
+                write(".");
+                write(vv.tag);
+                if (vv.payload != .null) {
+                    write("(");
+                    printValue(vv.payload);
+                    write(")");
+                }
+            },
         },
     }
 }

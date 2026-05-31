@@ -1,0 +1,6 @@
+type Percent int range 0..100
+subtype FailingGrade Percent range 0..59
+
+func onlyFailing(g FailingGrade) { }
+
+onlyFailing(Percent(70))

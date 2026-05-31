@@ -6,6 +6,7 @@ const io = @import("../runtime/io.zig");
 const vms = @import("vm_state.zig");
 const vmgc = @import("vm_gc.zig");
 const vmmap = @import("vm_map.zig");
+const vmtyp = @import("vm_types.zig");
 const vmstr = @import("vm_string.zig");
 const Value = @import("value.zig").Value;
 const Object = @import("value.zig").Object;
@@ -231,7 +232,8 @@ pub fn buildStdModule() !*Object {
 }
 
 fn nativeLen(v: Value) !Value {
-    const n: usize = switch (v) {
+    const uv = vms.unboxNamed(v);
+    const n: usize = switch (uv) {
         .string => |s| try vmstr.utf8RuneCountCached(s),
         .object => |obj| switch (obj.*) {
             .dyn_string => |s| try vmstr.utf8RuneCountCached(s),
@@ -533,8 +535,21 @@ fn nativeStrIndexOf(s: []const u8, sub: []const u8) !Value {
 fn nativeAppend(start: usize, argc: u8) !Value {
     if (argc < 1) return error.ArityMismatch;
     const first = vms.vmState().stack[start];
-    if (first != .object or !vms.isArrayObject(first.object)) return error.TypeError;
-    const base = vms.asArraySlice(first.object);
+    // Unbox named array types and check element constraints
+    const is_named = first == .object and first.object.* == .named_value and
+        first.object.named_value.typ.* == .named_type and
+        first.object.named_value.typ.named_type.base == .array_t;
+    const arr_val = if (is_named) first.object.named_value.value else first;
+    if (arr_val != .object or !vms.isArrayObject(arr_val.object)) return error.TypeError;
+    if (is_named) {
+        if (first.object.named_value.typ.named_type.elem_spec) |es| {
+            var ei: usize = 1;
+            while (ei < argc) : (ei += 1) {
+                if (!vmtyp.matchesTypeSpec(vms.vmState().stack[start + ei], es)) return error.TypeError;
+            }
+        }
+    }
+    const base = vms.asArraySlice(arr_val.object);
     const extra: usize = argc - 1;
     const obj = try vmgc.vmAllocObject();
     obj.* = .{ .array = &[_]Value{} };
@@ -547,6 +562,7 @@ fn nativeAppend(start: usize, argc: u8) !Value {
         out[base.len + i] = vms.vmState().stack[start + 1 + i];
     }
     obj.* = .{ .array_managed = out[0 .. base.len + extra] };
+    if (is_named) return vmtyp.makeNamedValue(first.object.named_value.typ, .{ .object = obj });
     return .{ .object = obj };
 }
 
@@ -997,7 +1013,7 @@ pub fn callNative(nf: NativeFuncObj, argc: u8) !void {
         .core_delete => {
             if (argc != nf.arity) return error.ArityMismatch;
             const top = vms.vmState().stack_top;
-            const m_val = vms.vmState().stack[top - 2];
+            const m_val = vms.unboxNamed(vms.vmState().stack[top - 2]);
             const key = vms.vmState().stack[top - 1];
             if (m_val != .object) return error.TypeError;
             const out = try nativeDelete(m_val.object, key);
@@ -1009,7 +1025,7 @@ pub fn callNative(nf: NativeFuncObj, argc: u8) !void {
         .core_has => {
             if (argc != nf.arity) return error.ArityMismatch;
             const top = vms.vmState().stack_top;
-            const m_val = vms.vmState().stack[top - 2];
+            const m_val = vms.unboxNamed(vms.vmState().stack[top - 2]);
             const key = vms.vmState().stack[top - 1];
             if (m_val != .object) return error.TypeError;
             const out = try nativeHas(m_val.object, key);
@@ -1020,7 +1036,7 @@ pub fn callNative(nf: NativeFuncObj, argc: u8) !void {
         },
         .core_keys => {
             if (argc != nf.arity) return error.ArityMismatch;
-            const m_val = vms.vmState().stack[vms.vmState().stack_top - 1];
+            const m_val = vms.unboxNamed(vms.vmState().stack[vms.vmState().stack_top - 1]);
             if (m_val != .object) return error.TypeError;
             const out = try nativeKeys(m_val.object);
             _ = try vms.vmPop();
@@ -1029,7 +1045,7 @@ pub fn callNative(nf: NativeFuncObj, argc: u8) !void {
         },
         .core_values => {
             if (argc != nf.arity) return error.ArityMismatch;
-            const m_val = vms.vmState().stack[vms.vmState().stack_top - 1];
+            const m_val = vms.unboxNamed(vms.vmState().stack[vms.vmState().stack_top - 1]);
             if (m_val != .object) return error.TypeError;
             const out = try nativeValues(m_val.object);
             _ = try vms.vmPop();
@@ -1039,7 +1055,7 @@ pub fn callNative(nf: NativeFuncObj, argc: u8) !void {
         .core_contains => {
             if (argc != nf.arity) return error.ArityMismatch;
             const top = vms.vmState().stack_top;
-            const arr_val = vms.vmState().stack[top - 2];
+            const arr_val = vms.unboxNamed(vms.vmState().stack[top - 2]);
             const needle = vms.vmState().stack[top - 1];
             if (arr_val != .object) return error.TypeError;
             const out = try nativeContains(arr_val.object, needle);
@@ -1051,7 +1067,7 @@ pub fn callNative(nf: NativeFuncObj, argc: u8) !void {
         .core_remove => {
             if (argc != nf.arity) return error.ArityMismatch;
             const top = vms.vmState().stack_top;
-            const arr_val = vms.vmState().stack[top - 2];
+            const arr_val = vms.unboxNamed(vms.vmState().stack[top - 2]);
             const idx_val = vms.vmState().stack[top - 1];
             if (arr_val != .object) return error.TypeError;
             const out = try nativeRemove(arr_val.object, idx_val);

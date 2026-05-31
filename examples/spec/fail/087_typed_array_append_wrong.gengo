@@ -1,0 +1,7 @@
+std := import("std")
+
+type Point struct { x float, y float }
+type Points array[Point]
+
+pts := Points([Point{x: 1.0, y: 2.0}])
+_ := std.core.append(pts, "not a point")

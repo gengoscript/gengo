@@ -60,6 +60,12 @@ fn markObject(obj: *Object) void {
             if (it.source) |src| markObject(src);
         },
         .enum_value => |ev| markObject(ev.typ),
+        .variant_type => {},
+        .variant_value => |vv| {
+            markObject(vv.typ);
+            markValue(vv.payload);
+        },
+        .variant_ctor => |vc| markObject(vc.typ),
         .dyn_string, .function, .native_function, .struct_type, .interface_type, .named_type, .enum_type => {},
     }
 }

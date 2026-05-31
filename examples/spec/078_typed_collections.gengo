@@ -1,0 +1,37 @@
+std := import("std")
+
+type Point struct { x float, y float }
+type Points array[Point]
+type Index map[string, Point]
+
+// Construct named collection types
+pts := Points([Point{x: 1.0, y: 2.0}, Point{x: 3.0, y: 4.0}])
+std.io.println(std.core.len(pts))
+
+// Element access
+p := pts[0]
+std.io.println(p.x)
+
+// Iteration
+for pt in pts {
+    std.io.println(pt.y)
+}
+
+// append preserves named type
+pts2 := std.core.append(pts, Point{x: 5.0, y: 6.0})
+std.io.println(std.core.len(pts2))
+
+// Named map type
+idx := Index({"origin": Point{x: 0.0, y: 0.0}})
+std.io.println(idx["origin"].x)
+
+// Anonymous typed annotation in function param
+func sumX(ps array[Point]) float {
+    total float = 0.0
+    for p in ps {
+        total += p.x
+    }
+    return total
+}
+
+std.io.println(sumX([Point{x: 1.0, y: 0.0}, Point{x: 2.0, y: 0.0}]))

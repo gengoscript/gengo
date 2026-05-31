@@ -1,0 +1,24 @@
+std := import("std")
+
+type Percent int range 0..100
+subtype FailingGrade Percent range 0..59
+
+f FailingGrade = FailingGrade(20)
+p Percent = Percent(30)
+
+// sub + sub -> sub (range-checked against subtype)
+ss := f + FailingGrade(15)
+std.io.println(ss)
+
+// sub + parent -> parent (range-checked against parent)
+sp := f + p
+std.io.println(sp)
+
+// parent + sub -> parent
+ps := p + f
+std.io.println(ps)
+
+// sub compared to parent (compatible)
+std.io.println(f < p)
+std.io.println(p > f)
+std.io.println(FailingGrade(30) == Percent(30))

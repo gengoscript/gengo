@@ -1,0 +1,2 @@
+type Percent int range 0..100
+subtype BadGrade Percent range 0..150

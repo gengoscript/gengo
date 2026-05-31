@@ -1,0 +1,4 @@
+type Point struct { x float, y float }
+type Points array[Point]
+
+_ := Points([Point{x: 1.0, y: 2.0}, "not a point"])

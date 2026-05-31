@@ -1,0 +1,7 @@
+type Point struct { x float, y float }
+
+func sumX(ps array[Point]) float {
+    return 0.0
+}
+
+sumX([Point{x: 1.0, y: 0.0}, 42])

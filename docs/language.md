@@ -123,6 +123,80 @@ Implemented operators:
   - `string(x)` supports string/number/rune/boolean/error/null and named string scalars
   - unsupported source types raise `TypeError`
 
+### Named scalar operator rules
+
+Named scalar types form nominal domains inside expressions:
+
+| Operands | Result |
+|---|---|
+| `T op T` | `T`, range-checked |
+| `T op base` | `T`, range-checked |
+| `base op T` | `T`, range-checked |
+| `T op U` (different named types) | `TypeError` |
+| `-T` | `T`, range-checked |
+| `T cmp T` | `bool` |
+| `T cmp base` | `bool` (compares underlying value) |
+| `T cmp U` (different named types) | `TypeError` |
+
+The explicit escape hatch is a cast: `int(age) + int(score)` is always legal.
+
+### Subtype declarations
+
+`subtype` creates a constrained view of an existing named scalar type with explicit ancestry tracking:
+
+```gengo
+type Percent int range 0..100
+subtype FailingGrade Percent range 0..59
+subtype PassingGrade Percent range 60..100
+```
+
+The `range` clause is optional; if omitted the subtype inherits the parent's full range. The subtype range must lie within the parent's range (compile-time `RangeError` otherwise).
+
+**Widening (implicit):** A subtype is accepted anywhere its parent or any ancestor is expected:
+```gengo
+func showPercent(v Percent) { std.io.println(v) }
+showPercent(FailingGrade(40))  // OK
+```
+
+**Narrowing (explicit):** Assigning a parent value into a subtype variable requires the subtype constructor call, which range-checks at runtime:
+```gengo
+narrow FailingGrade = FailingGrade(Percent(30))  // OK: 30 in 0..59
+```
+
+**Subtype arithmetic rules:**
+
+| Operands | Result |
+|---|---|
+| `T_sub op T_sub` | `T_sub`, range-checked |
+| `T_sub op T_parent` | `T_parent`, range-checked against parent |
+| `T_parent op T_sub` | `T_parent`, range-checked against parent |
+| `T_sub op T_sibling` | `TypeError` |
+| `T_sub cmp T_parent` | `bool` |
+| `T_sub cmp T_sibling` | `TypeError` |
+
+Siblings (subtypes with the same parent but no ancestry relationship between them) do not implicitly unify — use explicit casts to the common parent type.
+
+### Type attributes
+
+Type objects expose read-only attributes via `.` access:
+
+**Named scalar types:**
+
+| Attribute | Returns | Requires |
+|---|---|---|
+| `T.name` | `string` — type name | any named type |
+| `T.first` | Named value `T(min)` | range constraint |
+| `T.last` | Named value `T(max)` | range constraint |
+
+**Enum types:**
+
+| Attribute | Returns |
+|---|---|
+| `T.name` | `string` — type name |
+| `T.first` | First enum value (ordinal 0) |
+| `T.last` | Last enum value |
+| `T.values` | `array` of all values in declaration order |
+
 ## 6. Collections and Structs
 
 ### Arrays

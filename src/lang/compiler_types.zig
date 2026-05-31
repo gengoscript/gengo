@@ -4,6 +4,7 @@ const value_mod = @import("value.zig");
 
 pub const Token = token.Token;
 pub const NamedTypeBase = value_mod.NamedTypeBase;
+pub const FieldTypeSpec = value_mod.FieldTypeSpec;
 
 pub const MaxLocals = 64;
 pub const MaxScopes = 8;
@@ -13,6 +14,7 @@ pub const MaxTypeAlts = 8;
 pub const MaxStructTypes = 128;
 pub const MaxInterfaceTypes = 128;
 pub const MaxNamedTypes = 256;
+pub const MaxVariantTypes = 128;
 pub const MaxSwitchJumps = 256;
 pub const MaxUpvalues = 64;
 pub const MaxGlobalConsts = 512;
@@ -79,12 +81,17 @@ pub const MultiAssignValueScratch = "__gengo_tmp_value";
 
 const StructTypeInfo = struct { name: []const u8 };
 const InterfaceTypeInfo = struct { name: []const u8 };
+const VariantTypeInfo = struct { name: []const u8 };
 pub const NamedTypeInfo = struct {
     name: []const u8,
     base: NamedTypeBase,
-    has_range: bool,
-    min: f64,
-    max: f64,
+    has_range: bool = false,
+    min: f64 = 0,
+    max: f64 = 0,
+    parent_name: ?[]const u8 = null,
+    elem_spec: ?FieldTypeSpec = null,
+    key_spec: ?FieldTypeSpec = null,
+    val_spec: ?FieldTypeSpec = null,
 };
 const GlobalConstInfo = struct { name: []const u8 };
 
@@ -95,6 +102,8 @@ pub const TypeRegistry = struct {
     interface_type_count: usize = 0,
     named_types: [MaxNamedTypes]NamedTypeInfo = undefined,
     named_type_count: usize = 0,
+    variant_types: [MaxVariantTypes]VariantTypeInfo = undefined,
+    variant_type_count: usize = 0,
     global_consts: [MaxGlobalConsts]GlobalConstInfo = undefined,
     global_const_count: usize = 0,
 
@@ -102,6 +111,7 @@ pub const TypeRegistry = struct {
         self.struct_type_count = 0;
         self.interface_type_count = 0;
         self.named_type_count = 0;
+        self.variant_type_count = 0;
         self.global_const_count = 0;
     }
 
@@ -171,5 +181,20 @@ pub const TypeRegistry = struct {
         if (self.named_type_count >= MaxNamedTypes) return error.TooManyNamedTypes;
         self.named_types[self.named_type_count] = info;
         self.named_type_count += 1;
+    }
+
+    pub fn hasVariantType(self: *TypeRegistry, name: []const u8) bool {
+        var i: usize = 0;
+        while (i < self.variant_type_count) : (i += 1) {
+            if (common.streq(self.variant_types[i].name, name)) return true;
+        }
+        return false;
+    }
+
+    pub fn addVariantType(self: *TypeRegistry, name: []const u8) !void {
+        if (self.hasVariantType(name)) return error.DuplicateVariantType;
+        if (self.variant_type_count >= MaxVariantTypes) return error.TooManyVariantTypes;
+        self.variant_types[self.variant_type_count] = .{ .name = name };
+        self.variant_type_count += 1;
     }
 };

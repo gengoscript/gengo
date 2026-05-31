@@ -28,6 +28,8 @@ pub const TT = enum {
     kw_continue,
     kw_defer,
     kw_assert,
+    kw_variant,
+    kw_subtype,
     kw_trap,
     lparen,
     rparen,

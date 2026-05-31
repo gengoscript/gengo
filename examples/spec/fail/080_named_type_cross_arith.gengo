@@ -1,0 +1,6 @@
+type Age int range 0..100
+type Score int range 0..100
+
+age := Age(20)
+score := Score(10)
+_ := age + score

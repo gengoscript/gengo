@@ -1,0 +1,4 @@
+type Age int range 0..100
+type Score int range 0..100
+
+_ := Age(10) == Score(10)

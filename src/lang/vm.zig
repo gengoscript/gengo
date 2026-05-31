@@ -53,13 +53,30 @@ const concatDynString = vmgc.concatDynString;
 
 // ── Private helpers used only in the execution core ───────────────────────────
 
+fn namedTypeIsSubOf(sub: *Object, ancestor: *Object) bool {
+    if (sub.* != .named_type) return false;
+    var cur: ?[]const u8 = sub.named_type.parent_name;
+    while (cur) |pname| {
+        const pval = globals.get(pname) orelse return false;
+        if (!(pval == .object and pval.object.* == .named_type)) return false;
+        if (pval.object == ancestor) return true;
+        cur = pval.object.named_type.parent_name;
+    }
+    return false;
+}
+
 fn namedTypeCarrier(a: Value, b: Value) !?*Object {
     var ta: ?*Object = null;
     var tb: ?*Object = null;
     if (a == .object and a.object.* == .named_value) ta = a.object.named_value.typ;
     if (b == .object and b.object.* == .named_value) tb = b.object.named_value.typ;
-    if (ta != null and tb != null and ta.? != tb.?) return error.TypeError;
-    return if (ta != null) ta else tb;
+    if (ta == null and tb == null) return null;
+    if (ta == null) return tb;
+    if (tb == null) return ta;
+    if (ta.? == tb.?) return ta;
+    if (namedTypeIsSubOf(ta.?, tb.?)) return tb.?;
+    if (namedTypeIsSubOf(tb.?, ta.?)) return ta.?;
+    return error.TypeError;
 }
 
 fn pushNumericResultWithCarrier(a: Value, b: Value, n: f64) !void {
@@ -142,6 +159,23 @@ fn performCall(argc: u8) !void {
             _ = try vmPop();
             try vmPush(out);
         },
+        .variant_ctor => |vc| {
+            if (argc != 1) return error.ArityMismatch;
+            const payload = vmState().stack[vmState().stack_top - 1];
+            if (vc.payload_type) |pt| {
+                if (!vmtyp.matchesTypeSpec(payload, pt)) return error.TypeError;
+            }
+            const vv = try vmAllocObject();
+            vv.* = .{ .variant_value = .{
+                .typ = vc.typ,
+                .tag = vc.tag,
+                .ordinal = vc.ordinal,
+                .payload = payload,
+            }};
+            _ = try vmPop();
+            _ = try vmPop();
+            try vmPush(.{ .object = vv });
+        },
         else => return error.NotAFunction,
     }
 }
@@ -203,7 +237,8 @@ fn trySelfTailCall(argc: u8) !bool {
 
 fn iterInit(v: Value) !Value {
     const obj = try vmAllocObject();
-    switch (v) {
+    const iv = if (v == .object and v.object.* == .named_value) v.object.named_value.value else v;
+    switch (iv) {
         .object => |o| switch (o.*) {
             .dyn_string => |s| obj.* = .{ .iterator = .{ .kind = .string, .index = 0, .string = s, .string_managed = true, .source = o } },
             .array, .array_managed => obj.* = .{ .iterator = .{ .kind = .array, .index = 0, .array = vms.asArraySlice(o), .source = o } },
@@ -444,7 +479,12 @@ fn runInner() !void {
             .bit_not => {
                 const v = try vmPop();
                 const n = try vms.valueAsInt(v);
-                try vmPush(.{ .number = @floatFromInt(~n) });
+                const result: f64 = @floatFromInt(~n);
+                if (v == .object and v.object.* == .named_value) {
+                    try vmPush(try vmtyp.constructNamedType(v.object.named_value.typ, .{ .number = result }));
+                } else {
+                    try vmPush(.{ .number = result });
+                }
             },
             .shl => {
                 const b = try vmPop();
@@ -522,17 +562,38 @@ fn runInner() !void {
             .neg => {
                 const v = try vmPop();
                 const n = try vms.valueAsNumber(v);
-                try vmPush(.{ .number = -n });
+                if (v == .object and v.object.* == .named_value) {
+                    try vmPush(try vmtyp.constructNamedType(v.object.named_value.typ, .{ .number = -n }));
+                } else {
+                    try vmPush(.{ .number = -n });
+                }
             },
             .not => try vmPush(.{ .boolean = !(try vmPop()).isTruthy() }),
             .eq => {
                 const b = try vmPop();
                 const a = try vmPop();
-                try vmPush(.{ .boolean = Value.equals(a, b) });
+                const a_named = a == .object and a.object.* == .named_value;
+                const b_named = b == .object and b.object.* == .named_value;
+                if (a_named and b_named and a.object.named_value.typ != b.object.named_value.typ) {
+                    const ta = a.object.named_value.typ;
+                    const tb = b.object.named_value.typ;
+                    if (!namedTypeIsSubOf(ta, tb) and !namedTypeIsSubOf(tb, ta)) return error.TypeError;
+                }
+                // Unwrap named values for cross named-vs-raw comparison
+                const ea = if (a_named) a.object.named_value.value else a;
+                const eb = if (b_named) b.object.named_value.value else b;
+                try vmPush(.{ .boolean = Value.equals(ea, eb) });
             },
             .gt => {
                 const b = try vmPop();
                 const a = try vmPop();
+                const a_named = a == .object and a.object.* == .named_value;
+                const b_named = b == .object and b.object.* == .named_value;
+                if (a_named and b_named and a.object.named_value.typ != b.object.named_value.typ) {
+                    const ta = a.object.named_value.typ;
+                    const tb = b.object.named_value.typ;
+                    if (!namedTypeIsSubOf(ta, tb) and !namedTypeIsSubOf(tb, ta)) return error.TypeError;
+                }
                 const an = try vms.valueAsNumber(a);
                 const bn = try vms.valueAsNumber(b);
                 try vmPush(.{ .boolean = an > bn });
@@ -540,6 +601,13 @@ fn runInner() !void {
             .lt => {
                 const b = try vmPop();
                 const a = try vmPop();
+                const a_named = a == .object and a.object.* == .named_value;
+                const b_named = b == .object and b.object.* == .named_value;
+                if (a_named and b_named and a.object.named_value.typ != b.object.named_value.typ) {
+                    const ta = a.object.named_value.typ;
+                    const tb = b.object.named_value.typ;
+                    if (!namedTypeIsSubOf(ta, tb) and !namedTypeIsSubOf(tb, ta)) return error.TypeError;
+                }
                 const an = try vms.valueAsNumber(a);
                 const bn = try vms.valueAsNumber(b);
                 try vmPush(.{ .boolean = an < bn });
@@ -670,7 +738,11 @@ fn runInner() !void {
             },
             .get_index => {
                 const idx_v = try vmPop();
-                const container = try vmPop();
+                const raw = try vmPop();
+                const container = if (raw == .object and raw.object.* == .named_value)
+                    raw.object.named_value.value
+                else
+                    raw;
                 switch (container) {
                     .object => |obj| switch (obj.*) {
                         .dyn_string => |s| {
@@ -710,20 +782,91 @@ fn runInner() !void {
                         },
                         .enum_type => |et| {
                             const key = try vms.asStringValue(idx_v);
-                            var ei: usize = 0;
-                            while (ei < et.members.len) : (ei += 1) {
-                                if (common.streq(et.members[ei], key)) {
+                            if (common.streq(key, "name")) {
+                                try vmPush(.{ .string = et.name });
+                            } else if (common.streq(key, "first")) {
+                                if (et.members.len == 0) return error.IndexOutOfBounds;
+                                const ev = try vmAllocObject();
+                                ev.* = .{ .enum_value = .{ .typ = obj, .name = et.members[0], .ordinal = 0 } };
+                                try vmPush(.{ .object = ev });
+                            } else if (common.streq(key, "last")) {
+                                if (et.members.len == 0) return error.IndexOutOfBounds;
+                                const last = et.members.len - 1;
+                                const ev = try vmAllocObject();
+                                ev.* = .{ .enum_value = .{ .typ = obj, .name = et.members[last], .ordinal = @intCast(last) } };
+                                try vmPush(.{ .object = ev });
+                            } else if (common.streq(key, "values")) {
+                                const arr_obj = try vmAllocObject();
+                                arr_obj.* = .{ .array = &[_]Value{} };
+                                try pushTempRoot(.{ .object = arr_obj });
+                                defer popTempRoot();
+                                const items = try vmAllocManagedSlice(Value, et.members.len);
+                                var ei: usize = 0;
+                                while (ei < et.members.len) : (ei += 1) {
                                     const ev = try vmAllocObject();
-                                    ev.* = .{ .enum_value = .{
-                                        .typ = obj,
-                                        .name = et.members[ei],
-                                        .ordinal = @intCast(ei),
-                                    } };
-                                    try vmPush(.{ .object = ev });
-                                    break;
+                                    ev.* = .{ .enum_value = .{ .typ = obj, .name = et.members[ei], .ordinal = @intCast(ei) } };
+                                    items[ei] = .{ .object = ev };
+                                    arr_obj.* = .{ .array_managed = items[0 .. ei + 1] };
                                 }
+                                try vmPush(.{ .object = arr_obj });
+                            } else {
+                                var ei: usize = 0;
+                                while (ei < et.members.len) : (ei += 1) {
+                                    if (common.streq(et.members[ei], key)) {
+                                        const ev = try vmAllocObject();
+                                        ev.* = .{ .enum_value = .{ .typ = obj, .name = et.members[ei], .ordinal = @intCast(ei) } };
+                                        try vmPush(.{ .object = ev });
+                                        break;
+                                    }
+                                }
+                                if (ei == et.members.len) return error.UnknownStructField;
                             }
-                            if (ei == et.members.len) return error.UnknownStructField;
+                        },
+                        .named_type => |nt| {
+                            const key = try vms.asStringValue(idx_v);
+                            if (common.streq(key, "name")) {
+                                try vmPush(.{ .string = nt.name });
+                            } else if (common.streq(key, "first")) {
+                                if (!nt.has_range) return error.TypeError;
+                                try vmPush(try vmtyp.makeNamedValue(obj, .{ .number = nt.min }));
+                            } else if (common.streq(key, "last")) {
+                                if (!nt.has_range) return error.TypeError;
+                                try vmPush(try vmtyp.makeNamedValue(obj, .{ .number = nt.max }));
+                            } else return error.UnknownStructField;
+                        },
+                        .variant_type => |vt| {
+                            const key = try vms.asStringValue(idx_v);
+                            if (common.streq(key, "name")) {
+                                try vmPush(.{ .string = vt.name });
+                            } else {
+                                var vi: usize = 0;
+                                while (vi < vt.arms.len) : (vi += 1) {
+                                    if (common.streq(vt.arms[vi].name, key)) {
+                                        const arm = vt.arms[vi];
+                                        if (arm.has_payload) {
+                                            const ctor = try vmAllocObject();
+                                            ctor.* = .{ .variant_ctor = .{
+                                                .typ = obj,
+                                                .tag = arm.name,
+                                                .ordinal = vi,
+                                                .payload_type = arm.payload_type,
+                                            }};
+                                            try vmPush(.{ .object = ctor });
+                                        } else {
+                                            const vv = try vmAllocObject();
+                                            vv.* = .{ .variant_value = .{
+                                                .typ = obj,
+                                                .tag = arm.name,
+                                                .ordinal = vi,
+                                                .payload = .null,
+                                            }};
+                                            try vmPush(.{ .object = vv });
+                                        }
+                                        break;
+                                    }
+                                }
+                                if (vi == vt.arms.len) return error.UnknownStructField;
+                            }
                         },
                         else => return error.TypeError,
                     },
@@ -739,7 +882,28 @@ fn runInner() !void {
             .set_index => {
                 const val = try vmPop();
                 const idx_v = try vmPop();
-                const container = try vmPop();
+                const raw_c = try vmPop();
+                // Unbox named collection; enforce element/key/value type constraints
+                const is_named_c = raw_c == .object and raw_c.object.* == .named_value;
+                const container = if (is_named_c) raw_c.object.named_value.value else raw_c;
+                if (is_named_c) {
+                    const nv = raw_c.object.named_value;
+                    if (nv.typ.* == .named_type) {
+                        const nt = nv.typ.named_type;
+                        if (nt.base == .array_t) {
+                            if (nt.elem_spec) |es| {
+                                if (!vmtyp.matchesTypeSpec(val, es)) return error.TypeError;
+                            }
+                        } else if (nt.base == .map_t) {
+                            if (nt.key_spec) |ks| {
+                                if (!vmtyp.matchesTypeSpec(idx_v, ks)) return error.TypeError;
+                            }
+                            if (nt.val_spec) |vs| {
+                                if (!vmtyp.matchesTypeSpec(val, vs)) return error.TypeError;
+                            }
+                        }
+                    }
+                }
                 if (container != .object) return error.TypeError;
                 switch (container.object.*) {
                     .array, .array_managed => {
@@ -920,6 +1084,32 @@ fn runInner() !void {
                         vmState().stack[recv_idx] = func;
                         try performCall(argc);
                     },
+                    .variant_type => |vt| {
+                        var vi: usize = 0;
+                        while (vi < vt.arms.len) : (vi += 1) {
+                            if (common.streq(vt.arms[vi].name, mname)) break;
+                        }
+                        if (vi == vt.arms.len) return error.UnknownStructField;
+                        const arm = vt.arms[vi];
+                        if (arm.has_payload) {
+                            if (argc != 1) return error.ArityMismatch;
+                            const payload = vmState().stack[vmState().stack_top - 1];
+                            if (arm.payload_type) |pt| {
+                                if (!vmtyp.matchesTypeSpec(payload, pt)) return error.TypeError;
+                            }
+                            const vv = try vmAllocObject();
+                            vv.* = .{ .variant_value = .{ .typ = recv.object, .tag = arm.name, .ordinal = vi, .payload = payload } };
+                            var i: usize = @as(usize, argc) + 1;
+                            while (i > 0) : (i -= 1) { _ = try vmPop(); }
+                            try vmPush(.{ .object = vv });
+                        } else {
+                            if (argc != 0) return error.ArityMismatch;
+                            const vv = try vmAllocObject();
+                            vv.* = .{ .variant_value = .{ .typ = recv.object, .tag = arm.name, .ordinal = vi, .payload = .null } };
+                            _ = try vmPop(); // pop recv
+                            try vmPush(.{ .object = vv });
+                        }
+                    },
                     else => return error.NotAMethodReceiver,
                 }
             },
@@ -968,6 +1158,20 @@ fn runInner() !void {
                         return error.TrapFired;
                     },
                 }
+            },
+
+            .variant_check => {
+                const arm = (try vms.vmConst()).string;
+                const v = try vmPop();
+                const matches = v == .object and v.object.* == .variant_value and
+                    common.streq(v.object.variant_value.tag, arm);
+                try vmPush(.{ .boolean = matches });
+            },
+
+            .variant_payload => {
+                const v = try vmPop();
+                if (v != .object or v.object.* != .variant_value) return error.TypeError;
+                try vmPush(v.object.variant_value.payload);
             },
 
             .defer_call => {
@@ -1039,7 +1243,7 @@ fn runInner() !void {
             },
             .ret => {
                 if (vmState().frame_top == 0) return error.ReturnAtTopLevel;
-                const retval = try vmPop();
+                var retval = try vmPop();
                 const fi = vmState().frame_top - 1;
                 const frame = &vmState().frames[fi];
 
@@ -1078,11 +1282,37 @@ fn runInner() !void {
                     }
                     popTempRoot();
                 }
+                // Re-read named return slots: deferred functions may have modified them.
+                const fsig_ret = vmtyp.frameFuncSig(frame.func_obj) catch null;
+                if (fsig_ret) |fsig| {
+                    if (fsig.named_return_count > 0) {
+                        popTempRoot(); // drop old retval from GC roots
+                        const nrbase = frame.base + fsig.arity;
+                        if (fsig.named_return_count == 1) {
+                            const raw = vmState().stack[nrbase];
+                            retval = if (raw == .object and raw.object.* == .cell) raw.object.cell.value else raw;
+                        } else {
+                            const nrc: usize = fsig.named_return_count;
+                            const arr_obj = try vmAllocObject();
+                            arr_obj.* = .{ .array = &[_]Value{} };
+                            try pushTempRoot(.{ .object = arr_obj });
+                            const items = try vmAllocManagedSlice(Value, nrc);
+                            var ri: usize = 0;
+                            while (ri < nrc) : (ri += 1) {
+                                const raw = vmState().stack[nrbase + ri];
+                                items[ri] = if (raw == .object and raw.object.* == .cell) raw.object.cell.value else raw;
+                            }
+                            arr_obj.* = .{ .array_managed = items[0..nrc] };
+                            popTempRoot();
+                            retval = .{ .object = arr_obj };
+                        }
+                        try pushTempRoot(retval);
+                    }
+                }
                 popTempRoot();
                 vmState().frame_top = fi;
                 if (frame.has_typed_returns) {
-                    const fsig = try vmtyp.frameFuncSig(frame.func_obj);
-                    try vmtyp.enforceFuncReturnTypes(fsig, retval);
+                    if (fsig_ret) |fsig| try vmtyp.enforceFuncReturnTypes(fsig, retval);
                 }
                 vmState().stack_top = frame.base - 1;
                 vmState().ip = frame.ret_ip;

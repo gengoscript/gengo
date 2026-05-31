@@ -2,6 +2,156 @@
 
 This changelog tracks notable language/runtime changes by implementation date.
 
+## 2026-05-31 (5)
+
+### Type System — Subtype Declarations (Stage 3)
+
+Subtypes create a constrained view of an existing named scalar type with an explicit, tracked ancestry relationship.
+
+**Declaration syntax:**
+```gengo
+type Percent int range 0..100
+subtype FailingGrade Percent range 0..59
+subtype PassingGrade Percent range 60..100
+```
+
+The `range` clause is optional; if omitted the subtype inherits the parent's range. The subtype's range must lie within the parent's range (compile-time `RangeError` if violated).
+
+**Widening (implicit, safe):** A subtype value is accepted anywhere its parent (or any ancestor) type is expected:
+```gengo
+func showPercent(v Percent) { std.io.println(v) }
+showPercent(FailingGrade(40))  // OK: FailingGrade widens to Percent
+```
+
+**Narrowing (explicit, range-checked):** Assigning a parent value to a subtype variable requires an explicit constructor call:
+```gengo
+base Percent = Percent(30)
+narrow FailingGrade = FailingGrade(base)  // range-checked at runtime
+```
+
+**Arithmetic with subtypes:**
+- `T_sub op T_sub → T_sub`, range-checked against the subtype's range
+- `T_sub op T_parent → T_parent`, range-checked against the parent's range
+- `T_parent op T_sub → T_parent`, same
+- `T_sub op T_sibling → TypeError` (siblings of the same parent do not implicitly unify)
+
+**Comparison with subtypes:**
+- `T_sub cmp T_parent → bool` and `T_parent cmp T_sub → bool` are allowed
+- `T_sub cmp T_sibling → TypeError`
+
+**Type attributes** (`T.name`, `T.first`, `T.last`) work on subtypes and reflect the subtype's own name and range.
+
+## 2026-05-31 (4)
+
+### Type System — Variants + Pattern-Matching Switch (Stage 5)
+
+**Variant type declarations:**
+```gengo
+type Decision variant {
+    allow,
+    deny(reason string),
+    review(reason string)
+}
+```
+Each arm may have zero or one payload (optionally with a field name for documentation). Multiple fields can be composed via a struct payload.
+
+**Construction:**
+- Payload-less arm: `Decision.allow` — returns a variant value directly
+- Payload arm: `Decision.deny("msg")` — calls the arm constructor with the payload; type-checked at construction
+
+**Pattern-matching switch** with `.arm_name` patterns:
+```gengo
+switch d {
+    case .allow { std.io.println("allowed") }
+    case .deny(reason) { std.io.println("denied:", reason) }
+    default { }
+}
+```
+The `.` prefix signals a variant arm pattern. Inside a function, the binding variable (`reason`) is a scoped local; at global scope it becomes a global.
+
+**Type annotations:** `func handle(d Decision)` enforces that arguments are `Decision` variant values.
+
+**Type attribute:** `Decision.name` returns the type name string.
+
+**printValue:** variant values print as `TypeName.tag` or `TypeName.tag(payload)`.
+
+**New opcodes:** `variant_check` (pop dup'd value, push bool matching arm tag), `variant_payload` (pop variant value, push payload).
+
+## 2026-05-31 (3)
+
+### Type System — Type Attributes (Stage 4)
+
+Type objects now expose read-only attributes via `.name` property access.
+
+**Named scalar types** (`type T int/float/... [range lo..hi]`):
+- `T.name` → string name of the type
+- `T.first` → named value `T(min)` — requires a range constraint, TypeError otherwise
+- `T.last` → named value `T(max)` — same
+
+`T.first` and `T.last` return proper named values so they can be used directly wherever a `T` is expected, including comparisons and return statements:
+```gengo
+func clampMonth(n int) Month {
+    if n < Month.first { return Month.first }
+    if n > Month.last { return Month.last }
+    return Month(n)
+}
+```
+
+**Enum types** (`type T enum { a, b, ... }`):
+- `T.name` → string name of the type
+- `T.first` → first enum value (ordinal 0)
+- `T.last` → last enum value
+- `T.values` → `array` of all enum values in declaration order
+
+## 2026-05-31 (2)
+
+### Type System — Typed Collections (Stage 2)
+
+**Type annotations:**
+- `array[T]` — typed array annotation; any array whose elements all satisfy `T`
+- `map[K, V]` — typed map annotation; any map whose keys satisfy `K` and values satisfy `V`
+- Unparametrized `array` and `map` continue to work as before (accept any element types)
+
+**Named collection types:**
+- `type Users array[User]` — nominal array type; only `Users([...])` produces a `Users` value
+- `type Index map[string, User]` — nominal map type; same pattern
+- Construction validates all elements/keys/values against the declared constraints
+
+**Enforcement points:**
+- Function parameters: `func f(ps array[Point])` rejects arrays with non-Point elements
+- Struct fields: `type Batch struct { users Users, }` rejects non-Users values at assignment
+- `std.core.append`: element type is checked when appending to a named array; named type is preserved in the return value
+- Index assignment (`users[0] = x`): element type is checked on named array types
+- Map insertion (`idx["k"] = v`): key and value types are checked on named map types
+
+**All std.core collection functions** (`len`, `append`, `contains`, `remove`, `has`, `delete`, `keys`, `values`) transparently handle named collection types by unboxing.
+
+## 2026-05-31
+
+### Type System — Named Scalar Operator Enforcement (Stage 1)
+
+Named scalar types now form proper nominal domains inside expressions, not just at
+variable/field/parameter boundaries.
+
+**Arithmetic rules:**
+- `T op T → T`, result range-checked against the named type constraints
+- `T op base → T`, result range-checked
+- `base op T → T`, result range-checked
+- `T op U → TypeError` when T and U are different named types
+
+**Comparison rules:**
+- `T cmp T → bool`
+- `T cmp base → bool` (compares underlying value; e.g. `Age(20) == 20` is `true`)
+- `base cmp T → bool`
+- `T cmp U → TypeError` when T and U are different named types
+
+**Unary operators:**
+- `-T → T`, range-checked (e.g. `-Age(5)` is `RangeError` if range is `0..100`)
+- `~T → T`, range-checked
+
+**Explicit conversion remains the sanctioned escape hatch:**
+- `int(age) + int(score)` is always allowed; the cast strips the named domain
+
 ## 2026-05-30
 
 ### Language

@@ -1,0 +1,5 @@
+type Decision variant { allow, deny(string) }
+
+func handle(d Decision) { }
+
+handle(42)

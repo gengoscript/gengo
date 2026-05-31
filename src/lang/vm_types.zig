@@ -10,6 +10,19 @@ const StructFieldSpec = @import("value.zig").StructFieldSpec;
 const InterfaceMethodSpec = @import("value.zig").InterfaceMethodSpec;
 const FuncObj = @import("value.zig").FuncObj;
 
+pub fn namedTypeIsOrExtends(typ_obj: *Object, target_name: []const u8) bool {
+    if (typ_obj.* != .named_type) return false;
+    if (common.streq(typ_obj.named_type.name, target_name)) return true;
+    var cur: ?[]const u8 = typ_obj.named_type.parent_name;
+    while (cur) |pname| {
+        if (common.streq(pname, target_name)) return true;
+        const pval = globals.get(pname) orelse return false;
+        if (!(pval == .object and pval.object.* == .named_type)) return false;
+        cur = pval.object.named_type.parent_name;
+    }
+    return false;
+}
+
 pub fn findFieldIndex(fields: []const StructFieldSpec, key: []const u8) ?usize {
     var i: usize = 0;
     while (i < fields.len) : (i += 1) {
@@ -28,15 +41,40 @@ pub fn matchesTypeAlt(v: Value, alt: FieldTypeAlt) bool {
         .boolean => v == .boolean,
         .string => vms.isStringValue(v),
         .error_t => v == .error_value,
-        .array => v == .object and vms.isArrayObject(v.object),
-        .map => v == .object and vms.isMapObject(v.object),
+        .array => blk: {
+            if (!(v == .object and vms.isArrayObject(v.object))) break :blk false;
+            if (alt.elem_spec) |es| {
+                const items = vms.asArraySlice(v.object);
+                var i: usize = 0;
+                while (i < items.len) : (i += 1) {
+                    if (!matchesTypeSpec(items[i], es)) break :blk false;
+                }
+            }
+            break :blk true;
+        },
+        .map => blk: {
+            if (!(v == .object and vms.isMapObject(v.object))) break :blk false;
+            if (alt.key_spec) |ks| {
+                const entries = vms.asMapSlice(v.object);
+                var i: usize = 0;
+                while (i < entries.len) : (i += 1) {
+                    if (!matchesTypeSpec(entries[i].key, ks)) break :blk false;
+                    if (alt.val_spec) |vs| {
+                        if (!matchesTypeSpec(entries[i].value, vs)) break :blk false;
+                    }
+                }
+            }
+            break :blk true;
+        },
         .struct_t => v == .object and v.object.* == .struct_instance and common.streq(v.object.struct_instance.typ.struct_type.name, alt.struct_name),
         .interface_t => matchesInterfaceType(v, alt.interface_name),
         .named_t => v == .object and switch (v.object.*) {
-            .named_value => common.streq(v.object.named_value.typ.named_type.name, alt.named_name),
+            .named_value => namedTypeIsOrExtends(v.object.named_value.typ, alt.named_name),
             .enum_value => common.streq(v.object.enum_value.typ.enum_type.name, alt.named_name),
             else => false,
         },
+        .variant_t => v == .object and v.object.* == .variant_value and
+            common.streq(v.object.variant_value.typ.variant_type.name, alt.named_name),
     };
 }
 
@@ -186,6 +224,31 @@ pub fn constructNamedType(typ_obj: *Object, arg: Value) !Value {
         .bool => {
             if (arg != .boolean) return error.TypeError;
             base_v = arg;
+        },
+        .array_t => {
+            if (!(arg == .object and vms.isArrayObject(arg.object))) return error.TypeError;
+            if (nt.elem_spec) |es| {
+                const items = vms.asArraySlice(arg.object);
+                var i: usize = 0;
+                while (i < items.len) : (i += 1) {
+                    if (!matchesTypeSpec(items[i], es)) return error.TypeError;
+                }
+            }
+            return makeNamedValue(typ_obj, arg);
+        },
+        .map_t => {
+            if (!(arg == .object and vms.isMapObject(arg.object))) return error.TypeError;
+            if (nt.key_spec) |ks| {
+                const entries = vms.asMapSlice(arg.object);
+                var i: usize = 0;
+                while (i < entries.len) : (i += 1) {
+                    if (!matchesTypeSpec(entries[i].key, ks)) return error.TypeError;
+                    if (nt.val_spec) |vs| {
+                        if (!matchesTypeSpec(entries[i].value, vs)) return error.TypeError;
+                    }
+                }
+            }
+            return makeNamedValue(typ_obj, arg);
         },
     }
     return makeNamedValue(typ_obj, base_v);

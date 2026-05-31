@@ -1,0 +1,35 @@
+std := import("std")
+
+type Age int range 0..100
+type Score int range 0..100
+
+age := Age(20)
+score := Age(10)
+
+// T op T -> T
+x := age + score
+std.io.println(x)
+
+// T op base -> T
+y := age + 1
+std.io.println(y)
+
+// base op T -> T
+z := 1 + age
+std.io.println(z)
+
+// T op T subtraction
+d := Age(30) - Age(5)
+std.io.println(d)
+
+// T op T multiplication
+m := Age(3) * Age(4)
+std.io.println(m)
+
+// T op T division
+q := Age(20) / Age(4)
+std.io.println(q)
+
+// neg preserves carrier
+n := -Age(0)
+std.io.println(n)

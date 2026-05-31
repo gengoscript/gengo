@@ -60,6 +60,8 @@ pub const Op = enum(u8) {
     op_assert,
     op_assert_msg,
     op_trap_check,
+    variant_check,   // u8 const_idx: pop dup'd value, push bool (tag match)
+    variant_payload, // pop variant_value, push payload
     ret,
     halt,
 };

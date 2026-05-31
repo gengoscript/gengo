@@ -1,0 +1,6 @@
+type Result variant {
+    ok(int),
+    err(string)
+}
+
+_ := Result.ok("not an int")

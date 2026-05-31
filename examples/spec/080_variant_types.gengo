@@ -1,0 +1,63 @@
+std := import("std")
+
+type Decision variant {
+    allow,
+    deny(reason string),
+    review(reason string)
+}
+
+type Result variant {
+    ok(value int),
+    err(msg string),
+    pending
+}
+
+// Construction: no-payload arm
+d1 := Decision.allow
+std.io.println(d1)
+
+// Construction: payload arm via ctor call
+d2 := Decision.deny("not authorised")
+std.io.println(d2)
+
+// Pattern matching: no payload
+switch d1 {
+    case .allow { std.io.println("allowed") }
+    case .deny(r) { std.io.println("denied:", r) }
+    case .review(r) { std.io.println("review:", r) }
+}
+
+// Pattern matching: with payload binding
+switch d2 {
+    case .allow { std.io.println("allowed") }
+    case .deny(r) { std.io.println("denied:", r) }
+    case .review(r) { std.io.println("review:", r) }
+}
+
+// Result type
+r1 := Result.ok(42)
+r2 := Result.err("not found")
+r3 := Result.pending
+
+for r in [r1, r2, r3] {
+    switch r {
+        case .ok(v) { std.io.println("ok:", v) }
+        case .err(m) { std.io.println("err:", m) }
+        case .pending { std.io.println("pending") }
+    }
+}
+
+// Type attribute
+std.io.println(Decision.name)
+
+// Variant as typed function parameter
+func describe(d Decision) string {
+    switch d {
+        case .allow { return "allow" }
+        case .deny(r) { return r }
+        case .review(r) { return r }
+    }
+    return "unknown"
+}
+std.io.println(describe(Decision.allow))
+std.io.println(describe(Decision.review("needs approval")))
