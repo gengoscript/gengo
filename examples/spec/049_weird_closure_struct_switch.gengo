@@ -1,6 +1,6 @@
 std := import("std")
 
-type Box struct { tag: rune, n: int }
+type Box struct { tag rune, n int }
 
 func mk(seed int) {
   acc := seed

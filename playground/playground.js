@@ -26,7 +26,7 @@ std.io.printf("x: %d, y: %d, z: %d\\n", x, y, z)
 std.io.println("z is even:", z % 2 == 0)`,
 
   structs: `std := import("std")
-type Point struct { x: int, y: int }
+type Point struct { x int, y int }
 func (p Point) squaredLen() int {
     return p.x*p.x + p.y*p.y
 }
@@ -56,7 +56,7 @@ process()`,
 
   closures: `std := import("std")
 
-func makeCounter(start) {
+func makeCounter(start int) {
     n := start
     return func() {
         n += 1
@@ -121,8 +121,8 @@ type Shape interface {
     perimeter() float
 }
 
-type Rect   struct { w: float, h: float }
-type Square struct { side: float }
+type Rect   struct { w float, h float }
+type Square struct { side float }
 
 func (r Rect)   area() float      { return r.w * r.h }
 func (r Rect)   perimeter() float { return 2.0 * (r.w + r.h) }
@@ -156,21 +156,91 @@ for pair in pairs {
 }`,
 
   maps: `std := import("std")
+core := std.core
 
-words := ["apple", "banana", "apple", "cherry", "banana", "apple"]
-counts := {}
-for w in words {
-    if counts[w] == null {
-        counts[w] = 1
-    } else {
-        counts[w] = counts[w] + 1
+scores := {alice: 95, bob: 82, carol: 78, dave: 91}
+
+std.io.println(core.has(scores, "alice"))
+std.io.println(core.has(scores, "eve"))
+
+removed := core.delete(scores, "dave")
+std.io.printf("removed dave: %d\\n", removed)
+std.io.printf("remaining: %d\\n", core.len(scores))
+
+ks := core.keys(scores)
+for k in ks {
+    std.io.printf("%s: %d\\n", k, scores[k])
+}`,
+
+  arrays: `std := import("std")
+core := std.core
+
+nums := [3, 1, 4, 1, 5, 9, 2, 6]
+
+std.io.println(core.contains(nums, 5))
+std.io.println(core.contains(nums, 7))
+
+without_first := core.remove(nums, 0)
+std.io.printf("after remove: len=%d first=%d\\n",
+    core.len(without_first),
+    without_first[0],
+)
+
+evens := []
+for n in nums {
+    if n % 2 == 0 {
+        evens = core.append(evens, n)
+    }
+}
+std.io.println(evens)`,
+
+  trap_binding: `std := import("std")
+
+func parseInt(s string) {
+    n := 0
+    for i, ch in s {
+        if ch < "0" || ch > "9" {
+            return 0, std.core.error("invalid char at " + std.conv.to_string(i))
+        }
+        n = n * 10 + int(std.core.len(ch))
+    }
+    return n, null
+}
+
+func process(inputs [any]) {
+    defer func() {
+        err := std.core.recover()
+        if err != null {
+            std.io.println("caught:", err)
+        }
+    }()
+
+    for s in inputs {
+        n, trap := parseInt(s)
+        std.io.printf("parsed: %d\\n", n)
     }
 }
 
-keys := ["apple", "banana", "cherry"]
-for k in keys {
-    std.io.printf("%s: %d\\n", k, counts[k])
-}`,
+process(["123", "456", "78x"])
+std.io.println("done")`,
+
+  string_ops: `std := import("std")
+s := std.string
+
+csv := "alice,bob,carol,dave"
+names := s.split(csv, ",")
+std.io.printf("names: %d\\n", std.core.len(names))
+std.io.println(s.join(names, " | "))
+
+std.io.println(s.trim("  hello world  "))
+std.io.println(s.upper("gengo"))
+std.io.println(s.lower("GENGO"))
+
+std.io.println(s.starts_with("gengo", "gen"))
+std.io.println(s.ends_with("gengo", "go"))
+
+std.io.printf("index of 'world': %d\\n", s.index_of("hello world", "world"))
+std.io.printf("index of 'xyz':   %d\\n", s.index_of("hello world", "xyz"))`,
 
   strings: `std := import("std")
 
@@ -204,7 +274,7 @@ require(['vs/editor/editor.main'], function () {
     keywords: [
       'true', 'false', 'null', 'if', 'else', 'for', 'in', 'switch', 'case',
       'default', 'return', 'func', 'struct', 'interface', 'type',
-      'range', 'enum', 'import', 'var', 'const', 'break', 'continue', 'defer'
+      'range', 'enum', 'import', 'const', 'break', 'continue', 'defer', 'assert', 'trap'
     ],
     typeKeywords: ['int', 'float', 'bool', 'string', 'rune'],
     operators: [

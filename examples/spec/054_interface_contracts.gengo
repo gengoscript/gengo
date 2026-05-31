@@ -6,7 +6,7 @@ type Parser interface {
     reset()
 }
 
-type Csv struct { value: int }
+type Csv struct { value int }
 
 func (c Csv) parse(src string) (int, error) {
     return c.value, std.core.error("e")

@@ -262,8 +262,8 @@ pub const Compiler = struct {
     fn decl(self: *Compiler) anyerror!void {
         if (self.check(.ident) and self.peekTT() == .colon_eq) {
             try self.varDecl(false, false);
-        } else if (self.match(.kw_var)) {
-            try self.varDecl(true, false);
+        } else if (self.check(.ident) and self.isTypedVarDecl()) {
+            try self.varDecl(false, false);
         } else if (self.match(.kw_const)) {
             try self.varDecl(true, true);
         } else if (self.check(.kw_type)) {
@@ -304,14 +304,9 @@ pub const Compiler = struct {
                     const vari = self.match(.ellipsis);
                     if (self.cur.typ != .ident) return error.UnexpectedToken;
                     self.advance(); // param name
-                    var ptype: FieldTypeSpec = any_spec;
-                    if (self.match(.colon)) {
-                        ptype = try self.parseFieldTypeSpec();
-                        has_typed_params = true;
-                    } else if (self.cur.typ == .question or self.cur.typ == .ident) {
-                        ptype = try self.parseFieldTypeSpec();
-                        has_typed_params = true;
-                    }
+                    if (self.cur.typ != .question and self.cur.typ != .ident) return error.ExpectedTypeAnnotation;
+                    const ptype: FieldTypeSpec = try self.parseFieldTypeSpec();
+                    if (!(ptype.alts.len == 1 and ptype.alts[0].typ == .any)) has_typed_params = true;
                     ptypes_tmp[arity] = ptype;
                     arity += 1;
                     if (vari) {
@@ -320,6 +315,7 @@ pub const Compiler = struct {
                         break;
                     }
                     if (!self.match(.comma)) break;
+                    if (self.check(.rparen)) break;
                 }
             }
             try self.consume(.rparen);
@@ -333,6 +329,7 @@ pub const Compiler = struct {
                     rcount += 1;
                     has_typed_returns = true;
                     if (!self.match(.comma)) break;
+                    if (self.check(.rparen)) break;
                 }
                 try self.consume(.rparen);
             } else if (self.cur.typ == .question or self.cur.typ == .ident) {
@@ -531,6 +528,7 @@ pub const Compiler = struct {
         var count: u8 = 0;
         if (!self.check(.rbrace)) {
             while (true) {
+                const field_is_const = self.match(.kw_const);
                 if (self.cur.typ != .ident) return error.UnexpectedToken;
                 if (count >= MaxLocals) return error.TooManyFields;
                 const fname = self.cur.src;
@@ -540,8 +538,9 @@ pub const Compiler = struct {
                 }
                 self.advance();
 
-                var spec = StructFieldSpec{ .name = fname, .typ = .{ .alts = &[_]FieldTypeAlt{} } };
-                if (self.match(.colon)) {
+                var spec = StructFieldSpec{ .name = fname, .typ = .{ .alts = &[_]FieldTypeAlt{} }, .is_const = field_is_const };
+                if (self.cur.typ == .ident or self.cur.typ == .question) {
+                    // Space syntax: field type  (colon no longer used)
                     spec.typ = try self.parseFieldTypeSpec();
                     var ti: usize = 0;
                     while (ti < spec.typ.alts.len) : (ti += 1) {
@@ -561,6 +560,7 @@ pub const Compiler = struct {
                 field_specs[count] = spec;
                 count += 1;
                 if (!self.match(.comma)) break;
+                if (self.check(.rbrace)) break;
             }
         }
         try self.consume(.rbrace);
@@ -713,10 +713,10 @@ pub const Compiler = struct {
         self.advance();
         if (self.match(.colon_eq)) {
             try self.expr();
-        } else if (has_keyword and self.match(.colon)) {
-            if (self.cur.typ != .ident) return error.UnexpectedToken;
-            const type_name = self.cur.src;
-            self.advance();
+        } else if (self.cur.typ == .ident or self.cur.typ == .question) {
+            // Space-syntax typed form: name Type = expr  (no keyword required)
+            const type_name = if (self.cur.typ == .ident) self.cur.src else "";
+            _ = try self.parseFieldTypeSpec();
             try self.consume(.eq);
             if (common.streq(type_name, "int") or common.streq(type_name, "float") or common.streq(type_name, "bool")) {
                 try self.expr();
@@ -727,12 +727,32 @@ pub const Compiler = struct {
                 } else {
                     try chunk.emitOp(.cast_bool, name.line);
                 }
-            } else {
-                if (!self.registry.hasNamedType(type_name)) return error.UnknownTypeName;
+            } else if (type_name.len > 0 and self.registry.hasNamedType(type_name)) {
                 const tidx = try chunk.addConst(.{ .string = type_name });
                 try chunk.emit2(@intFromEnum(Op.get_global), tidx, name.line);
                 try self.expr();
                 try chunk.emit2(@intFromEnum(Op.call), 1, name.line);
+            } else if (common.streq(type_name, "string")) {
+                try self.expr();
+                try chunk.emitOp(.cast_string, name.line);
+            } else if (common.streq(type_name, "rune")) {
+                try self.expr();
+                try chunk.emitOp(.cast_rune, name.line);
+            } else if (common.streq(type_name, "array")) {
+                try self.expr();
+                try chunk.emit2(@intFromEnum(Op.assert_type), 1, name.line);
+            } else if (common.streq(type_name, "map")) {
+                try self.expr();
+                try chunk.emit2(@intFromEnum(Op.assert_type), 2, name.line);
+            } else if (common.streq(type_name, "error")) {
+                try self.expr();
+                try chunk.emit2(@intFromEnum(Op.assert_type), 3, name.line);
+            } else if (type_name.len == 0 or common.streq(type_name, "any") or
+                       self.registry.hasInterfaceType(type_name) or
+                       self.registry.hasStructType(type_name)) {
+                try self.expr();
+            } else {
+                return error.UnknownTypeName;
             }
         } else {
             return error.UnexpectedToken;
@@ -757,7 +777,7 @@ pub const Compiler = struct {
         while (t.typ != .eof) {
             if (t.line > start_line) return false;
             if (expect_ident) {
-                if (t.typ != .ident) return false;
+                if (t.typ != .ident and t.typ != .kw_trap) return false;
                 expect_ident = false;
                 t = lx.next();
                 continue;
@@ -802,7 +822,7 @@ pub const Compiler = struct {
     fn parseNameList(self: *Compiler, out: *[MaxLocals]Token) !u8 {
         var count: u8 = 0;
         while (true) {
-            if (self.cur.typ != .ident) return error.UnexpectedToken;
+            if (self.cur.typ != .ident and self.cur.typ != .kw_trap) return error.UnexpectedToken;
             if (count >= MaxLocals) return error.TooManyLocals;
             out[count] = self.cur;
             count += 1;
@@ -918,6 +938,7 @@ pub const Compiler = struct {
             if (self.inFunc()) {
                 var pre_i: u8 = 0;
                 while (pre_i < count) : (pre_i += 1) {
+                    if (names[pre_i].typ == .kw_trap) continue;
                     try chunk.emitOp(.null_val, names[pre_i].line);
                     _ = try self.defineLocal(names[pre_i].src, false);
                 }
@@ -936,9 +957,12 @@ pub const Compiler = struct {
         var i: u8 = 0;
         while (i < count) : (i += 1) {
             if (is_decl) {
+                const is_trap_slot = names[i].typ == .kw_trap;
                 try chunk.emitOp(.dup, names[i].line);
                 try chunk.emit2(@intFromEnum(Op.tuple_get), i, names[i].line);
-                if (self.inFunc()) {
+                if (is_trap_slot) {
+                    try chunk.emitOp(.op_trap_check, names[i].line);
+                } else if (self.inFunc()) {
                     try self.emitSetVar(names[i]);
                 } else {
                     const idx = try chunk.addConst(.{ .string = names[i].src });
@@ -994,6 +1018,7 @@ pub const Compiler = struct {
                             try self.expr();
                             argc += 1;
                             if (!self.match(.comma)) break;
+                            if (self.check(.rparen)) break;
                         }
                     }
                     try self.consume(.rparen);
@@ -1046,6 +1071,10 @@ pub const Compiler = struct {
             try self.deferStmt();
             return;
         }
+        if (self.match(.kw_assert)) {
+            try self.assertStmt();
+            return;
+        }
         if (self.match(.kw_if)) {
             try self.ifStmt();
             return;
@@ -1057,6 +1086,14 @@ pub const Compiler = struct {
         if (self.match(.kw_switch)) {
             try self.switchStmt();
             return;
+        }
+
+        if (self.check(.kw_trap)) {
+            if (self.peekTT() == .comma and self.isMultiBind(.colon_eq)) {
+                try self.multiBindStmt(true);
+                return;
+            }
+            return error.UnexpectedToken;
         }
 
         if (self.check(.ident)) {
@@ -1093,6 +1130,18 @@ pub const Compiler = struct {
 
         try self.expr();
         try chunk.emitOp(.pop, self.prev.line);
+        self.matchOpt(.semicolon);
+    }
+
+    fn assertStmt(self: *Compiler) !void {
+        const line = self.prev.line;
+        try self.expr();
+        if (self.match(.comma)) {
+            try self.expr();
+            try chunk.emitOp(.op_assert_msg, line);
+        } else {
+            try chunk.emitOp(.op_assert, line);
+        }
         self.matchOpt(.semicolon);
     }
 
@@ -1285,8 +1334,8 @@ pub const Compiler = struct {
         if (self.hasInitSemicolon()) {
             if (self.check(.ident) and self.peekTT() == .colon_eq) {
                 try self.varDecl(false, false);
-            } else if (self.match(.kw_var)) {
-                try self.varDecl(true, false);
+            } else if (self.check(.ident) and self.isTypedVarDecl()) {
+                try self.varDecl(false, false);
             } else if (self.match(.kw_const)) {
                 try self.varDecl(true, true);
             } else if (self.check(.ident) and self.peekTT() == .eq) {
@@ -1506,8 +1555,8 @@ pub const Compiler = struct {
 
         if (self.match(.semicolon)) {} else if (self.check(.ident) and self.peekTT() == .colon_eq) {
             try self.varDecl(false, false);
-        } else if (self.match(.kw_var)) {
-            try self.varDecl(true, false);
+        } else if (self.check(.ident) and self.isTypedVarDecl()) {
+            try self.varDecl(false, false);
         } else if (self.match(.kw_const)) {
             try self.varDecl(true, true);
         } else if (self.check(.ident) and self.peekTT() == .eq) {
@@ -1602,6 +1651,7 @@ pub const Compiler = struct {
         try self.consume(.lparen);
         var param_names: [MaxLocals][]const u8 = undefined;
         var param_types: [MaxLocals]FieldTypeSpec = undefined;
+        var param_const: [MaxLocals]bool = [_]bool{false} ** MaxLocals;
         var arity: u8 = 0;
         var is_variadic = false;
         var variadic_type: FieldTypeSpec = undefined;
@@ -1623,17 +1673,14 @@ pub const Compiler = struct {
             while (true) {
                 if (arity >= MaxLocals) return error.TooManyParams;
                 const vari = self.match(.ellipsis);
+                const p_is_const = self.match(.kw_const);
                 if (self.cur.typ != .ident) return error.UnexpectedToken;
                 param_names[arity] = self.cur.src;
-                var ptype: FieldTypeSpec = any_spec;
+                param_const[arity] = p_is_const;
                 arity += 1;
                 self.advance();
-                if (self.match(.colon)) {
-                    ptype = try self.parseFieldTypeSpec();
-                } else if (self.cur.typ == .question or self.cur.typ == .ident) {
-                    // Also support `name Type` (and `name ?Type`) parameter annotations.
-                    ptype = try self.parseFieldTypeSpec();
-                }
+                if (self.cur.typ != .question and self.cur.typ != .ident) return error.ExpectedTypeAnnotation;
+                const ptype: FieldTypeSpec = try self.parseFieldTypeSpec();
                 param_types[arity - 1] = ptype;
                 if (vari) {
                     is_variadic = true;
@@ -1641,6 +1688,7 @@ pub const Compiler = struct {
                     break;
                 }
                 if (!self.match(.comma)) break;
+                if (self.check(.rparen)) break;
             }
         }
         try self.consume(.rparen);
@@ -1665,6 +1713,7 @@ pub const Compiler = struct {
                 return_count += 1;
                 has_typed_returns = true;
                 if (!self.match(.comma)) break;
+                if (self.check(.rparen)) break;
             }
             try self.consume(.rparen);
             if (is_named) named_return_count = return_count;
@@ -1684,7 +1733,7 @@ pub const Compiler = struct {
 
         var pi: u8 = 0;
         while (pi < arity) : (pi += 1) {
-            scope.locals[pi] = .{ .name = param_names[pi], .is_const = false };
+            scope.locals[pi] = .{ .name = param_names[pi], .is_const = param_const[pi] };
         }
         scope.local_count = arity;
 
@@ -1867,6 +1916,7 @@ pub const Compiler = struct {
                 try self.expr();
                 count += 1;
                 if (!self.match(.comma)) break;
+                if (self.check(.rbrace)) break;
             }
         }
         try self.consume(.rbrace);
@@ -1881,6 +1931,7 @@ pub const Compiler = struct {
                 if (count == 255) return error.TooManyElements;
                 count += 1;
                 if (!self.match(.comma)) break;
+                if (self.check(.rbracket)) break;
             }
         }
         try self.consume(.rbracket);
@@ -1905,6 +1956,7 @@ pub const Compiler = struct {
                 try self.expr();
                 count += 1;
                 if (!self.match(.comma)) break;
+                if (self.check(.rbrace)) break;
             }
         }
         try self.consume(.rbrace);
@@ -1936,6 +1988,7 @@ pub const Compiler = struct {
                         try self.expr();
                         argc += 1;
                         if (!self.match(.comma)) break;
+                        if (self.check(.rparen)) break;
                     }
                 }
                 try self.consume(.rparen);
@@ -1985,6 +2038,7 @@ pub const Compiler = struct {
                     try self.expr();
                     argc += 1;
                     if (!self.match(.comma)) break;
+                    if (self.check(.rparen)) break;
                 }
             }
             try self.consume(.rparen);
@@ -2079,6 +2133,22 @@ pub const Compiler = struct {
     fn peekTT(self: *Compiler) TT {
         var lx = self.lex;
         return lx.next().typ;
+    }
+
+    // Returns true when the current token is a var name followed by a type and '='.
+    // Matches: name type = expr  (space-syntax typed declaration, no keyword needed)
+    fn isTypedVarDecl(self: *Compiler) bool {
+        var lx = self.lex;
+        var t = lx.next(); // token after the var name
+        if (t.typ == .question) t = lx.next(); // skip optional nullable prefix
+        if (t.typ != .ident) return false;
+        t = lx.next(); // token after the type ident
+        while (t.typ == .pipe) { // skip union alternatives: | type ...
+            t = lx.next();
+            if (t.typ != .ident) return false;
+            t = lx.next();
+        }
+        return t.typ == .eq;
     }
 
     fn importExpr(self: *Compiler) !void {

@@ -66,6 +66,12 @@ pub const State = struct {
     panic_col: u16 = 0,
     panic_frames: [MaxFrames]PanicFrame = undefined,
     panic_depth: usize = 0,
+    is_panicking: bool = false,
+    panic_value: Value = .null,
+    recovered: bool = false,
+    pending_panic_message: ?[]const u8 = null,
+    pending_panic_value: Value = .null,
+    has_pending_panic_value: bool = false,
 };
 
 var g_default_state: State = .{};
@@ -105,6 +111,11 @@ pub fn reset() void {
     vmState().panic_line = 0;
     vmState().panic_col = 0;
     vmState().panic_depth = 0;
+    vmState().is_panicking = false;
+    vmState().panic_value = .null;
+    vmState().recovered = false;
+    vmState().pending_panic_message = null;
+    vmState().has_pending_panic_value = false;
 }
 
 // Reset only execution state; preserve globals, heap, GC objects, and std_module.
@@ -120,6 +131,11 @@ pub fn resetExec() void {
     vmState().panic_line = 0;
     vmState().panic_col = 0;
     vmState().panic_depth = 0;
+    vmState().is_panicking = false;
+    vmState().panic_value = .null;
+    vmState().recovered = false;
+    vmState().pending_panic_message = null;
+    vmState().has_pending_panic_value = false;
 }
 
 pub fn setPolicy(policy: Policy) void {

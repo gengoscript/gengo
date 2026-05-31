@@ -2,7 +2,7 @@ type Parser interface {
     name() string
 }
 
-type X struct { v: int }
+type X struct { v int }
 
 func use(p Parser) {
 }

@@ -1,6 +1,6 @@
 std := import("std")
 
-func divmod(n, d) {
+func divmod(n int, d int) {
   return n / d, n % d
 }
 

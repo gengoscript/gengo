@@ -1,8 +1,8 @@
 std := import("std")
 
-type User struct { name: string }
+type User struct { name string }
 
-func (u User) rename(name: string) {
+func (u User) rename(name string) {
     u.name = name
 }
 

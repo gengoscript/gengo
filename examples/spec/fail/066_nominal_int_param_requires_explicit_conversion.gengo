@@ -1,5 +1,5 @@
 type Age int range 0 .. 100
-func takes_int(x: int) {
+func takes_int(x int) {
     return x
 }
 age := Age(42)

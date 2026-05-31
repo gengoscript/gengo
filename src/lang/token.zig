@@ -27,6 +27,8 @@ pub const TT = enum {
     kw_break,
     kw_continue,
     kw_defer,
+    kw_assert,
+    kw_trap,
     lparen,
     rparen,
     lbrace,

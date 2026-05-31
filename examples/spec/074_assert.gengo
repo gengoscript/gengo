@@ -1,0 +1,40 @@
+std := import("std")
+core := std.core
+
+// Basic: passing assert does nothing
+assert 1 + 1 == 2
+assert true
+std.io.println("basic ok")
+
+// Assert with message (passing)
+assert 10 > 5, "ten must be greater than five"
+std.io.println("message ok")
+
+// Assert in function, failure recovered
+func checked(x int) {
+    defer func() {
+        e := core.recover()
+        if core.is_error(e) {
+            std.io.println(e)
+        }
+    }()
+    assert x > 0, "x must be positive"
+}
+
+checked(1)
+std.io.println("checked(1) done")
+checked(-1)
+std.io.println("checked(-1) done")
+
+// Assert without message: panic value is AssertionFailed
+func no_msg() {
+    defer func() {
+        e := core.recover()
+        if core.is_error(e) {
+            std.io.println(e)
+        }
+    }()
+    assert false
+}
+no_msg()
+std.io.println("no_msg done")

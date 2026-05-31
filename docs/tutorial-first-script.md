@@ -55,7 +55,7 @@ Replace script contents with:
 ```gengo
 std := import("std")
 
-struct User { name: string, initial: rune }
+type User struct { name string, initial rune }
 func greet(u User) {
   std.io.println(u.name, std.conv.to_string(u.initial))
 }

@@ -1,2 +1,2 @@
-f := func(a) { return a }
+f := func(a any) { return a }
 f()

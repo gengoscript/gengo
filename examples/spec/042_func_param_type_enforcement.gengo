@@ -1,8 +1,8 @@
 std := import("std")
 
-type User struct { name: string }
+type User struct { name string }
 
-func sum(a int, b: int) {
+func sum(a int, b int) {
   return a + b
 }
 

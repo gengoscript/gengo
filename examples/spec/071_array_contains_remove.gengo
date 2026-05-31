@@ -1,0 +1,25 @@
+std := import("std")
+core := std.core
+
+a := [10, 20, 30, 40, 50]
+
+std.io.println(core.contains(a, 30))
+std.io.println(core.contains(a, 99))
+
+b := core.remove(a, 2)
+std.io.println(core.len(b))
+std.io.println(b[0])
+std.io.println(b[1])
+std.io.println(b[2])
+std.io.println(b[3])
+
+// remove first element
+c := core.remove(a, 0)
+std.io.println(c[0])
+
+// remove last element
+d := core.remove(a, 4)
+std.io.println(d[3])
+
+// original unchanged
+std.io.println(core.len(a))

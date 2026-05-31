@@ -1,1 +1,1 @@
-type User struct { addr: Addr }
+type User struct { addr Addr }

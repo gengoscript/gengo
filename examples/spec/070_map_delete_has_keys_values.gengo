@@ -1,0 +1,32 @@
+std := import("std")
+core := std.core
+
+// has: key presence without null ambiguity
+m := {a: 1, b: 2, c: 3}
+std.io.println(core.has(m, "a"))
+std.io.println(core.has(m, "z"))
+
+// delete: removes key, returns removed value
+removed := core.delete(m, "b")
+std.io.println(removed)
+std.io.println(core.has(m, "b"))
+std.io.println(core.len(m))
+
+// keys and values
+m2 := {x: 10, y: 20}
+ks := core.keys(m2)
+vs := core.values(m2)
+std.io.println(core.len(ks))
+std.io.println(core.len(vs))
+std.io.println(ks[0])
+std.io.println(vs[0])
+
+// delete missing key returns null
+std.io.println(core.delete(m2, "missing"))
+
+// has/delete on larger (hashed) map
+big := {a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8, i: 9}
+std.io.println(core.has(big, "e"))
+core.delete(big, "e")
+std.io.println(core.has(big, "e"))
+std.io.println(core.len(big))

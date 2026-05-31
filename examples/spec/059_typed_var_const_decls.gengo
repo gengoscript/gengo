@@ -2,11 +2,11 @@ std := import("std")
 
 type Age int range 0 .. 100
 
-var x: Age = 10
-const y: Age = 20
-var i: int = 3.9
-var f: float = 7
-var b: bool = 1
+x Age = 10
+const y Age = 20
+i int = 3.9
+f float = 7
+b bool = 1
 
 std.io.println(x)
 std.io.println(y)

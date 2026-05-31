@@ -1,0 +1,7 @@
+basic ok
+message ok
+checked(1) done
+error(x must be positive)
+checked(-1) done
+error(AssertionFailed)
+no_msg done

@@ -28,6 +28,8 @@ pub const Op = enum(u8) {
     cast_float,
     cast_bool,
     cast_string,
+    cast_rune,
+    assert_type, // operand byte: 1=array 2=map 3=error
     neg,
     not,
     eq,
@@ -55,6 +57,9 @@ pub const Op = enum(u8) {
     call,
     defer_call,
     defer_invoke_method,
+    op_assert,
+    op_assert_msg,
+    op_trap_check,
     ret,
     halt,
 };

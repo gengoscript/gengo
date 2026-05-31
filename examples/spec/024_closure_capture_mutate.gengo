@@ -2,7 +2,7 @@ std := import("std")
 
 make_counter := func() {
   s := 0
-  return func(x) {
+  return func(x int) {
     s += x
     return s
   }

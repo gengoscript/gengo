@@ -8,7 +8,7 @@ func identity(v any) (out any) {
 }
 
 // Multiple named returns: result and error pattern
-func divide(a, b) (result any, err any) {
+func divide(a float, b float) (result float, err ?error) {
     if b == 0 {
         err = core.error("division by zero")
         return

@@ -1,0 +1,30 @@
+std := import("std")
+
+// string: coerces like int/float/bool
+s string = 42
+std.io.println(s)
+
+s2 string = true
+std.io.println(s2)
+
+s3 string = "hello"
+std.io.println(s3)
+
+// rune: coerces number to rune code point
+r rune = 65
+std.io.println(r)
+
+r2 rune = `Z`
+std.io.println(r2)
+
+// array: enforces type
+a array = [1, 2, 3]
+std.io.println(std.core.len(a))
+
+// map: enforces type
+m map = {x: 1, y: 2}
+std.io.println(std.core.len(m))
+
+// error: enforces type
+e error = std.core.error("oops")
+std.io.println(std.core.is_error(e))

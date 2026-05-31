@@ -2,6 +2,23 @@
 
 This changelog tracks notable language/runtime changes by implementation date.
 
+## 2026-05-30
+
+### Language
+- Removed `var` keyword. Mutable typed declarations now use bare space syntax: `x int = 10`.
+- Made function parameter types mandatory. Untyped params (`func f(x)`) are now a compile error.
+  - Use `any` to explicitly accept any type: `func f(x any)`.
+- `any` is now a first-class predeclared type equivalent to an empty interface. Every value satisfies it.
+- Fixed GC corruption in `build_array`, `build_map`, and `build_tuple`: objects are now initialised to a valid empty state immediately after allocation, before any subsequent allocation that could trigger collection.
+
+### Type Syntax (space everywhere, colon removed)
+- All type annotations now use space syntax uniformly:
+  - Struct fields: `type S struct { x int, y int }` (colon form `x: int` removed)
+  - Function params: `func f(a int, b int)` (colon form `a: int` removed)
+  - Typed variable declarations: `x int = 10` (colon form `x: int = 10` removed)
+  - Single return: `func f(a int) int`
+  - Multi-return: `func f() (result float, err ?error)` (parens required for 2+ returns)
+
 ## 2026-05-28
 
 ### Runtime / VM
@@ -21,16 +38,16 @@ This changelog tracks notable language/runtime changes by implementation date.
 - Added embedding API validation runner (`embedding_runner.zig`) and hooked it into `zig build test`.
 
 ### Language
-- Added `var` and `const` bindings while keeping `:=` as first-class mutable declaration syntax.
+- Added `const` immutable bindings while keeping `:=` as first-class mutable declaration syntax.
 - Added const binding enforcement (`AssignToConst`) for reassignment, compound assign, inc/dec, and direct multi-assign targets.
 - Added declaration-side variadics (`...args`) with typed variadic argument enforcement.
 - Added `std.io.printf(fmt, ...args)` with `%v`, `%s`, `%d`, `%f`, `%t`, and `%%`.
 - Added Ada-inspired nominal scalar and range types:
-  - `type Name is Base`
-  - `type Name is int|float|rune range a..b`
+  - `type Name Base`
+  - `type Name int range a..b`
 - Added runtime named-type constructors and range checks (`RangeError` on violation).
 - Added enums:
-  - `type Status is enum { ... }`
+  - `type Status enum { ... }`
   - qualified member access (`Status.pending`)
   - unqualified enum members no longer implicit globals.
 

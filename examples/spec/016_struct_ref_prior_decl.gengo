@@ -1,5 +1,5 @@
 std := import("std")
-type Addr struct { city: string }
-type User struct { addr: Addr }
+type Addr struct { city string }
+type User struct { addr Addr }
 u := User{ addr: Addr{ city: "x" } }
 std.io.println(u.addr.city)

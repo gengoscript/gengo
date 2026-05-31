@@ -1,0 +1,48 @@
+std := import("std")
+
+func safeDivide(a float, b float) {
+    if b == 0.0 {
+        return 0.0, std.core.error("division by zero")
+    }
+    return a / b, null
+}
+
+func withRecover() {
+    defer func() {
+        payload := std.core.recover()
+        if payload != null {
+            std.io.println("caught:", payload)
+        }
+    }()
+
+    result, trap := safeDivide(10.0, 0.0)
+    std.io.println("unreachable:", result)
+}
+
+// null passes through — no trap
+result, trap := safeDivide(10.0, 2.0)
+std.io.printf("result: %f\n", result)
+
+// non-null triggers trap, caught by defer/recover
+withRecover()
+
+// trap with a plain string (non-error value)
+func mayFail(fail bool) {
+    if fail {
+        return null, "something went wrong"
+    }
+    return 42, null
+}
+
+func withStringTrap() {
+    defer func() {
+        payload := std.core.recover()
+        if payload != null {
+            std.io.println("string trap caught:", payload)
+        }
+    }()
+    val, trap := mayFail(true)
+    std.io.println("unreachable:", val)
+}
+
+withStringTrap()

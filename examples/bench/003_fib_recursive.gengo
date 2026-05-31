@@ -1,6 +1,6 @@
 std := import("std")
 
-fib := func(x) {
+fib := func(x int) {
     if x == 0 {
         return 0
     } else if x == 1 {

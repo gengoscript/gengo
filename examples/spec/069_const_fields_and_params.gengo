@@ -1,0 +1,26 @@
+std := import("std")
+
+type Point struct { const x int, const y int }
+
+func (p Point) sum() int {
+    return p.x + p.y
+}
+
+p := Point{ x: 3, y: 4 }
+std.io.println(p.sum())
+std.io.println(p.x)
+
+// const param: cannot be reassigned inside the function
+func double(const n int) int {
+    return n * 2
+}
+
+std.io.println(double(5))
+
+// mixed: one const, one mutable param
+func scale(const factor int, n int) int {
+    n = n * factor
+    return n
+}
+
+std.io.println(scale(3, 7))

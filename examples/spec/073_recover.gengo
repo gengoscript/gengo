@@ -1,0 +1,27 @@
+std := import("std")
+core := std.core
+
+func safe(trigger bool) {
+    defer func() {
+        e := core.recover()
+        if core.is_error(e) {
+            std.io.println("recovered")
+        }
+    }()
+    if trigger {
+        a := []
+        _ = a[0]
+    }
+}
+
+// Normal call: defer runs, recover() returns null, no "recovered" message
+safe(false)
+std.io.println("after safe(false)")
+
+// Panic call: defer runs, recover() returns error, execution continues
+safe(true)
+std.io.println("after safe(true)")
+
+// recover() outside a panic returns null
+e := core.recover()
+std.io.println(e == null)

@@ -1,6 +1,6 @@
 std := import("std")
 
-type Target struct { value: int }
+type Target struct { value int }
 
 func test_named(t Target) {
   std.io.println(t.value)

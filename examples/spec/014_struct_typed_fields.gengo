@@ -1,7 +1,7 @@
 std := import("std")
 
-type Addr struct { city: string }
-type User struct { id: int, name: string, active: bool, score: float, tags: array, meta: map, addr: Addr }
+type Addr struct { city string }
+type User struct { id int, name string, active bool, score float, tags array, meta map, addr Addr }
 
 u := User{
   id: 7,

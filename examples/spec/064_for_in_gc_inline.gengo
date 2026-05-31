@@ -1,6 +1,6 @@
 std := import("std")
 
-func make_string(n) {
+func make_string(n int) {
     s := ""
     for i := 0; i < n; i++ {
         s += "x"

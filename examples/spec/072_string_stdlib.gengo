@@ -1,0 +1,39 @@
+std := import("std")
+s := std.string
+
+// split / join
+parts := s.split("hello world foo", " ")
+std.io.println(parts[0])
+std.io.println(parts[1])
+std.io.println(parts[2])
+std.io.println(std.core.len(parts))
+
+joined := s.join(parts, "-")
+std.io.println(joined)
+
+// trim
+std.io.println(s.trim("  hello  "))
+std.io.println(s.trim("\t\nhello\r\n"))
+
+// upper / lower
+std.io.println(s.upper("Hello World"))
+std.io.println(s.lower("Hello World"))
+
+// starts_with / ends_with
+std.io.println(s.starts_with("gengo", "gen"))
+std.io.println(s.starts_with("gengo", "go"))
+std.io.println(s.ends_with("gengo", "go"))
+std.io.println(s.ends_with("gengo", "gen"))
+
+// index_of
+std.io.println(s.index_of("hello world", "world"))
+std.io.println(s.index_of("hello world", "xyz"))
+
+// split by rune (empty sep)
+runes := s.split("abc", "")
+std.io.println(std.core.len(runes))
+std.io.println(runes[0])
+std.io.println(runes[2])
+
+// Unicode: index_of returns rune index
+std.io.println(s.index_of("日本語", "語"))

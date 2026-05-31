@@ -1,11 +1,11 @@
 std := import("std")
 
 type Grid struct {
-  size: int,
-  data: array
+  size int,
+  data array
 }
 
-func is_prime(n) {
+func is_prime(n int) {
   if n <= 1 { return false }
   if n <= 3 { return true }
   if n % 2 == 0 || n % 3 == 0 { return false }

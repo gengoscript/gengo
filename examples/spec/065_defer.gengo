@@ -11,7 +11,7 @@ func lifo_order() {
     std.io.println("body")
 }
 
-func captures_arg_by_value(x) {
+func captures_arg_by_value(x int) {
     defer std.io.println(x)
     x = 99
     std.io.println("changed")

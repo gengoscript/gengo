@@ -1,2 +1,2 @@
-type X struct { name: string }
+type X struct { name string }
 x := X{ name: null }

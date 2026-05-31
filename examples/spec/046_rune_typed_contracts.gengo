@@ -1,6 +1,6 @@
 std := import("std")
 
-type Glyph struct { ch: rune }
+type Glyph struct { ch rune }
 func takes_rune(x rune) { return x }
 
 g := Glyph{ ch: `å` }

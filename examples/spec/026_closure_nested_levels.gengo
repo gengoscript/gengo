@@ -1,8 +1,8 @@
 std := import("std")
 
-outer := func(a) {
-  return func(b) {
-    return func(c) {
+outer := func(a int) {
+  return func(b int) {
+    return func(c int) {
       return a + b + c
     }
   }

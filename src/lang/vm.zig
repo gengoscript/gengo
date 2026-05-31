@@ -495,6 +495,30 @@ fn runInner() !void {
                 const v = vms.unboxNamed(try vmPop());
                 try vmPush(try vmnative.nativeConvToString(v));
             },
+            .cast_rune => {
+                const v = vms.unboxNamed(try vmPop());
+                const r: u21 = switch (v) {
+                    .rune => |rv| rv,
+                    .number => |n| blk: {
+                        const t = @trunc(n);
+                        if (t != n or t < 0 or t > 0x10FFFF) return error.TypeError;
+                        break :blk @intFromFloat(t);
+                    },
+                    else => return error.TypeError,
+                };
+                try vmPush(.{ .rune = r });
+            },
+            .assert_type => {
+                const tag = try vmByte();
+                const v = try vmPeek(0);
+                const ok = switch (tag) {
+                    1 => v == .object and vms.isArrayObject(v.object),
+                    2 => v == .object and vms.isMapObject(v.object),
+                    3 => v == .error_value,
+                    else => return error.TypeError,
+                };
+                if (!ok) return error.TypeError;
+            },
             .neg => {
                 const v = try vmPop();
                 const n = try vms.valueAsNumber(v);
@@ -524,6 +548,7 @@ fn runInner() !void {
             .build_array => {
                 const count = try vmByte();
                 const obj = try vmAllocObject();
+                obj.* = .{ .array = &[_]Value{} }; // must init before temp root: GC may run during slice alloc
                 try pushTempRoot(.{ .object = obj });
                 defer popTempRoot();
                 const items = try vmAllocManagedSlice(Value, count);
@@ -538,6 +563,7 @@ fn runInner() !void {
             .build_map => {
                 const count = try vmByte();
                 const obj = try vmAllocObject();
+                obj.* = .{ .map = &[_]MapEntry{} }; // must init before temp root: GC may run during slice alloc
                 try pushTempRoot(.{ .object = obj });
                 defer popTempRoot();
                 const items = try vmAllocManagedSlice(MapEntry, count);
@@ -548,6 +574,9 @@ fn runInner() !void {
                     const key = try vmPop();
                     items[i] = .{ .key = key, .value = val };
                 }
+                // Point obj at items before allocating buckets so GC can trace the entries
+                // (they are no longer on the stack after vmPop above).
+                obj.* = .{ .map = items[0..count] };
                 const bcount = vmmap.mapBucketsForCount(count);
                 const buckets = try vmAllocManagedSlice(i32, bcount);
                 vmmap.mapBuildHashedBuckets(items[0..count], buckets);
@@ -557,6 +586,7 @@ fn runInner() !void {
             .build_tuple => {
                 const count = try vmByte();
                 const obj = try vmAllocObject();
+                obj.* = .{ .array = &[_]Value{} }; // must init before temp root: GC may run during slice alloc
                 try pushTempRoot(.{ .object = obj });
                 defer popTempRoot();
                 const items = try vmAllocManagedSlice(Value, count);
@@ -744,6 +774,7 @@ fn runInner() !void {
                     .struct_instance => |inst| {
                         const key = try vms.asStringValue(idx_v);
                         const idx = vmtyp.findFieldIndex(inst.typ.struct_type.fields, key) orelse return error.UnknownStructField;
+                        if (inst.typ.struct_type.fields[idx].is_const) return error.AssignToConst;
                         if (!vmtyp.matchesFieldType(val, inst.typ.struct_type.fields[idx])) return error.StructFieldTypeMismatch;
                         inst.fields[idx].value = val;
                     },
@@ -911,6 +942,34 @@ fn runInner() !void {
                 if (try trySelfTailCall(argc)) continue;
                 try performCall(argc);
             },
+            .op_assert => {
+                const cond = try vmPop();
+                if (cond != .boolean) return error.TypeError;
+                if (!cond.boolean) return error.AssertionFailed;
+            },
+
+            .op_assert_msg => {
+                const msg_val = try vmPop();
+                const cond = try vmPop();
+                if (cond != .boolean) return error.TypeError;
+                if (!cond.boolean) {
+                    vmState().pending_panic_message = vms.asStringValue(msg_val) catch "AssertionFailed";
+                    return error.AssertionFailed;
+                }
+            },
+
+            .op_trap_check => {
+                const val = try vmPop();
+                switch (val) {
+                    .null => {},
+                    else => {
+                        vmState().pending_panic_value = val;
+                        vmState().has_pending_panic_value = true;
+                        return error.TrapFired;
+                    },
+                }
+            },
+
             .defer_call => {
                 const argc = try vmByte();
                 if (vmState().defer_top >= cfg.max_defers) return error.DeferStackOverflow;
@@ -1038,7 +1097,7 @@ fn runInner() !void {
     }
 }
 
-fn runDeferredCall(deferred: Value) void {
+fn runDeferredCall(deferred: Value) anyerror!void {
     const arr = vms.asArraySlice(deferred.object);
     if (arr.len == 0) return;
     const dargc: u8 = @intCast(arr.len - 1);
@@ -1050,12 +1109,28 @@ fn runDeferredCall(deferred: Value) void {
         const prev_target = vmState().call_depth_target;
         vmState().call_depth_target = depth_before;
         defer vmState().call_depth_target = prev_target;
-        run() catch {};
+        try run();
     }
     _ = vmPop() catch {};
 }
 
 fn runPanicUnwind(orig_err: anyerror) anyerror!void {
+    var current_err = orig_err;
+    vmState().recovered = false;
+    vmState().panic_line = 0;
+    vmState().panic_col = 0;
+    vmState().panic_depth = 0;
+    vmState().is_panicking = true;
+    if (vmState().has_pending_panic_value) {
+        vmState().panic_value = vmState().pending_panic_value;
+        vmState().has_pending_panic_value = false;
+    } else if (vmState().pending_panic_message) |msg| {
+        vmState().panic_value = .{ .error_value = msg };
+        vmState().pending_panic_message = null;
+    } else {
+        vmState().panic_value = .{ .error_value = @errorName(orig_err) };
+    }
+
     if (vmState().panic_line == 0) {
         vmState().panic_line = currentLine();
         vmState().panic_col = currentCol();
@@ -1081,14 +1156,35 @@ fn runPanicUnwind(orig_err: anyerror) anyerror!void {
         const frame_defer_base = vmState().frames[vmState().frame_top - 1].defer_base;
         while (vmState().defer_top > frame_defer_base) {
             vmState().defer_top -= 1;
-            runDeferredCall(vmState().defer_stack[vmState().defer_top]);
+            runDeferredCall(vmState().defer_stack[vmState().defer_top]) catch |new_err| {
+                if (!vmState().recovered) {
+                    current_err = new_err;
+                    vmState().panic_value = .{ .error_value = @errorName(new_err) };
+                }
+            };
+            if (vmState().recovered) break;
+        }
+        if (vmState().recovered) {
+            vmState().recovered = false;
+            vmState().is_panicking = false;
+            vmState().panic_line = 0;
+            vmState().panic_col = 0;
+            vmState().panic_depth = 0;
+            vmState().defer_top = frame_defer_base;
+            vmState().frame_top -= 1;
+            const frame = vmState().frames[vmState().frame_top];
+            vmState().stack_top = if (frame.base > 0) frame.base - 1 else 0;
+            vmState().ip = frame.ret_ip;
+            vmPush(.null) catch {};
+            return run();
         }
         vmState().frame_top -= 1;
         const frame = vmState().frames[vmState().frame_top];
         vmState().stack_top = if (frame.base > 0) frame.base - 1 else 0;
         vmState().ip = frame.ret_ip;
     }
-    return orig_err;
+    vmState().is_panicking = false;
+    return current_err;
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────

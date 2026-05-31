@@ -1,5 +1,5 @@
 std := import("std")
-add := func(a, b) {
+add := func(a int, b int) {
     return a + b
 }
 std.io.println(add(3, 4))

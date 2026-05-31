@@ -1,6 +1,6 @@
 std := import("std")
 
-func add(a, b) {
+func add(a int, b int) {
     return a + b
 }
 

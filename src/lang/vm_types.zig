@@ -210,6 +210,8 @@ pub fn enforceFuncArgTypes(f: FuncObj, argc: u8) !void {
 pub fn enforceFuncReturnTypes(f: FuncObj, retval: Value) !void {
     if (!f.has_typed_returns) return;
     if (f.return_types.len == 0) return;
+    // Named returns are programmer-controlled and may be null-initialized; skip enforcement.
+    if (f.named_return_count > 0) return;
     if (f.return_types.len == 1) {
         if (!matchesTypeSpec(retval, f.return_types[0])) return error.TypeError;
         return;

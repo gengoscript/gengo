@@ -2,8 +2,8 @@ std := import("std")
 
 mk := func() {
   x := 0
-  inc := func(n) { x += n; return x }
-  dec := func(n) { x -= n; return x }
+  inc := func(n int) { x += n; return x }
+  dec := func(n int) { x -= n; return x }
   return [inc, dec]
 }
 

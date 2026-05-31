@@ -1,9 +1,9 @@
 std := import("std")
 
-type Counter struct { value: int }
+type Counter struct { value int }
 
-func (c Counter) adder(delta: int) {
-  return func(x) {
+func (c Counter) adder(delta int) {
+  return func(x int) {
     c.value += delta
     c.value += x
     return c.value

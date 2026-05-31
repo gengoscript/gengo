@@ -1,6 +1,6 @@
 std := import("std")
 
-type X struct { v: ?int|string }
+type X struct { v ?int|string }
 x := X{ v: null }
 std.io.println(x.v)
 x.v = 9

@@ -1,1 +1,1 @@
-type Bad struct { v: int| }
+type Bad struct { v int| }

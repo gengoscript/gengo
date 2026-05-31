@@ -1,5 +1,5 @@
 type UserId string
-func takes_string(s: string) {
+func takes_string(s string) {
     return s
 }
 id := UserId("u-1")

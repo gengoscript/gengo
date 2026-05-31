@@ -77,11 +77,11 @@ x := "hello world
 
 ## 4. Variables and Assignment
 
-- Mutable declaration: `name := expr` or `var name := expr`
+- Mutable declaration: `name := expr`
 - Immutable binding: `const name := expr`
-- Typed mutable declaration: `var name: Type = expr`
-- Typed immutable binding: `const name: Type = expr`
-  - Currently enforced for `int`, `float`, `bool`, and named types.
+- Typed mutable declaration: `name Type = expr`
+- Typed immutable binding: `const name Type = expr`
+  - Enforced for `int`, `float`, `bool`, and named types.
 - Named types can use other named scalar types as base:
   - `type Integer int range -2147483648 .. 2147483647`
   - `type Age Integer range 0 .. 100`
@@ -141,9 +141,9 @@ Implemented operators:
 
 ### Structs
 - Declaration: `type Name struct { field1, field2, ... }`
-- Optional typed fields: `type User struct { id: int, name: string, addr: Addr }`
-- Nullable types: `?T` (example: `nick: ?string`)
-- Union types: `A|B` (example: `id: int|string`)
+- Typed fields use space syntax: `type User struct { id int, name string, addr Addr }`
+- Nullable types: `?T` (example: `nick ?string`)
+- Union types: `A|B` (example: `id int|string`)
 - Struct type references require prior declaration (no forward/self references).
 - Duplicate struct type names are compile errors.
 - Construction: `Name{ field1: value1, field2: value2 }`
@@ -162,9 +162,33 @@ Implemented operators:
 - `for` loops:
   - condition style: `for cond { ... }`
   - C-style: `for init; cond; post { ... }`
-  - sequence/map iteration: `for x in seq { ... }`, `for k, v in seq_or_map { ... }`
+  - value iteration: `for x in seq { ... }` — works for arrays, maps, and strings
+  - indexed/keyed iteration: `for i, v in seq { ... }` — second form with two variables:
+    - **array**: `i` is the 0-based numeric index, `v` is the element
+    - **map**: `i` is the string key, `v` is the value
+    - **string**: `i` is the rune index, `v` is the rune as a single-character string
 - `break` and `continue` supported inside loops.
 - `return` supported inside functions.
+- `assert condition` — panics with `AssertionFailed` if `condition` is false.
+- `assert condition, "message"` — panics with the given message string if `condition` is false.
+  - The panic value is an `error` value; it can be caught with `std.core.recover()` inside a `defer`.
+  - `condition` must evaluate to `boolean`; a non-boolean condition raises `TypeError`.
+- `value, trap := expr` — trap binding in multi-return destructure.
+  - `trap` is a contextual keyword valid only as a binding target in `:=` destructure.
+  - If the corresponding return slot is `null`, execution continues normally (no binding is created).
+  - If the corresponding return slot is any non-`null` value, that value becomes the VM panic payload and the unwind path runs (same as `assert`).
+  - `trap` introduces no local variable; it is not readable after the line.
+  - Recovery uses the same `defer` / `std.core.recover()` mechanism as `assert`.
+  - Example:
+    ```gengo
+    defer func() {
+        err := std.core.recover()
+        if err != null { std.io.println("caught:", err) }
+    }()
+    file,   trap := open(path)
+    data,   trap := readAll(file)
+    config, trap := parseConfig(data)
+    ```
 
 ## 8. Functions
 
@@ -174,9 +198,8 @@ Implemented operators:
   - `func sum(...xs int) int { ... }`
   - variadic parameter must be last
   - call-site spread (`xs...`) is not supported
-- Parameter annotations currently support both forms:
-  - `func f(x: T) { ... }`
-  - `func f(x T) { ... }`
+- Parameter types are mandatory (space syntax): `func f(x T) { ... }`
+  - Use `any` to explicitly opt out of enforcement: `func f(x any) { ... }`
 - Parameter types are enforced at call-time; mismatches raise `TypeError`.
 - Calls with strict arity checking.
 - Return supports multiple values: `return a, b, c`
@@ -212,11 +235,79 @@ Current module map:
 - `std.core.gc_live_objects()`
   - returns current live object count as `number`
   - includes runtime object-backed strings created by operations such as concatenation/slicing/indexing
+- `std.core.contains(arr, value)`
+  - returns `true` if `value` is present in array `arr`, else `false`
+  - raises `TypeError` if `arr` is not an array
+- `std.core.remove(arr, index)`
+  - returns a new array with the element at `index` removed
+  - raises `IndexOutOfBounds` if `index` is out of range
+  - raises `TypeError` if `arr` is not an array
+- `std.core.delete(m, key)`
+  - removes `key` from map `m` in place
+  - returns the removed value, or `null` if key was not present
+  - raises `TypeError` if `m` is not a map
+- `std.core.has(m, key)`
+  - returns `true` if `key` exists in map `m`, else `false`
+  - unambiguous alternative to `m[key] == null` when `null` is a valid value
+  - raises `TypeError` if `m` is not a map
+- `std.core.keys(m)`
+  - returns an array of all keys in map `m`
+  - raises `TypeError` if `m` is not a map
+- `std.core.values(m)`
+  - returns an array of all values in map `m`
+  - raises `TypeError` if `m` is not a map
 - `std.core.gc_stats()`
   - returns a map with:
     - `heap_used_bytes`
     - `heap_size_bytes`
     - `live_objects`
+- `std.string.split(s, sep)`
+  - splits string `s` by separator `sep`; returns array of strings
+  - if `sep` is empty, splits into individual UTF-8 characters
+- `std.string.join(arr, sep)`
+  - concatenates array of strings `arr` with separator `sep` between each
+  - raises `TypeError` if `arr` is not an array or any element is not a string
+- `std.string.trim(s)`
+  - removes leading and trailing ASCII whitespace (space, tab, `\n`, `\r`)
+  - returns trimmed string
+- `std.string.upper(s)`
+  - returns copy of `s` with ASCII letters uppercased; non-ASCII bytes are unchanged
+- `std.string.lower(s)`
+  - returns copy of `s` with ASCII letters lowercased; non-ASCII bytes are unchanged
+- `std.string.starts_with(s, prefix)`
+  - returns `true` if `s` begins with `prefix`
+- `std.string.ends_with(s, suffix)`
+  - returns `true` if `s` ends with `suffix`
+- `std.string.index_of(s, sub)`
+  - returns rune index of first occurrence of `sub` in `s`, or `-1` if not found
+- `std.math.abs(x)`
+  - absolute value of `x`
+- `std.math.sqrt(x)`
+  - square root of `x`
+- `std.math.floor(x)`
+  - largest integer not greater than `x`
+- `std.math.ceil(x)`
+  - smallest integer not less than `x`
+- `std.math.round(x)`
+  - nearest integer, rounding half away from zero
+- `std.math.sin(x)` / `std.math.cos(x)` / `std.math.tan(x)`
+  - trigonometric functions; argument in radians
+- `std.math.log(x)`
+  - natural logarithm (base *e*)
+- `std.math.log2(x)`
+  - base-2 logarithm
+- `std.math.log10(x)`
+  - base-10 logarithm
+- `std.math.pow(base, exp)`
+  - `base` raised to the power `exp`
+- `std.math.min(a, b)` / `std.math.max(a, b)`
+  - minimum / maximum of two numbers
+- `std.math.pi`
+  - π ≈ 3.14159265358979… (constant, not a function)
+- `std.math.e`
+  - Euler's number ≈ 2.71828182845904… (constant, not a function)
+- `std.math.inf`
+  - positive infinity (constant, not a function)
 - `std.conv.to_int(x)`
   - converts number/boolean/string to integer `number` (truncate semantics)
   - invalid input raises `TypeError`
