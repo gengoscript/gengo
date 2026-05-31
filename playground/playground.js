@@ -196,18 +196,14 @@ std.io.println(evens)`,
 
   trap_binding: `std := import("std")
 
-func parseInt(s string) {
-    n := 0
-    for i, ch in s {
-        if ch < "0" || ch > "9" {
-            return 0, std.core.error("invalid char at " + std.conv.to_string(i))
-        }
-        n = n * 10 + int(std.core.len(ch))
+func safeDivide(a float, b float) {
+    if b == 0.0 {
+        return 0.0, std.core.error("division by zero")
     }
-    return n, null
+    return a / b, null
 }
 
-func process(inputs [any]) {
+func runAll(pairs any) {
     defer func() {
         err := std.core.recover()
         if err != null {
@@ -215,13 +211,13 @@ func process(inputs [any]) {
         }
     }()
 
-    for s in inputs {
-        n, trap := parseInt(s)
-        std.io.printf("parsed: %d\\n", n)
+    for pair in pairs {
+        result, trap := safeDivide(pair[0], pair[1])
+        std.io.printf("%.1f / %.1f = %.2f\\n", pair[0], pair[1], result)
     }
 }
 
-process(["123", "456", "78x"])
+runAll([[10.0, 2.0], [9.0, 3.0], [5.0, 0.0], [8.0, 4.0]])
 std.io.println("done")`,
 
   string_ops: `std := import("std")

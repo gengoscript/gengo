@@ -270,28 +270,48 @@ fn nativePrintf(start: usize, argc: u8) !void {
             i += 1;
             continue;
         }
-        if (i + 1 >= fmt.len) return error.TypeError;
-        const spec = fmt[i + 1];
-        if (spec == '%') {
+        i += 1;
+        if (i >= fmt.len) return error.TypeError;
+        if (fmt[i] == '%') {
             io.write("%");
-            i += 2;
+            i += 1;
             continue;
         }
         if (ai >= @as(usize, argc)) return error.ArityMismatch;
         const arg = vms.vmState().stack[start + ai];
         ai += 1;
+        // Skip flags: -, +, space, 0, #
+        while (i < fmt.len and (fmt[i] == '-' or fmt[i] == '+' or fmt[i] == ' ' or fmt[i] == '0' or fmt[i] == '#')) i += 1;
+        // Skip width digits
+        while (i < fmt.len and fmt[i] >= '0' and fmt[i] <= '9') i += 1;
+        // Optional .precision
+        var precision: ?usize = null;
+        if (i < fmt.len and fmt[i] == '.') {
+            i += 1;
+            var prec: usize = 0;
+            while (i < fmt.len and fmt[i] >= '0' and fmt[i] <= '9') {
+                prec = prec * 10 + (fmt[i] - '0');
+                i += 1;
+            }
+            precision = prec;
+        }
+        if (i >= fmt.len) return error.TypeError;
+        const spec = fmt[i];
+        i += 1;
         switch (spec) {
             'v' => io.printValue(arg),
             's' => io.write(try vms.asStringValue(arg)),
             'd' => io.writeInt(try vms.valueAsInt(arg)),
-            'f' => io.writeF64(try vms.valueAsNumber(arg)),
+            'f' => {
+                const n = try vms.valueAsNumber(arg);
+                if (precision) |prec| io.writeF64Prec(n, prec) else io.writeF64(n);
+            },
             't' => {
                 if (arg != .boolean) return error.TypeError;
                 io.write(if (arg.boolean) "true" else "false");
             },
             else => return error.TypeError,
         }
-        i += 2;
     }
     if (ai != @as(usize, argc)) return error.ArityMismatch;
 }

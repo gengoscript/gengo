@@ -31,22 +31,28 @@ printArea(Rect{w: 4.0, h: 3.0})
 ```gengo
 std := import("std")
 
-// Named types with range constraints
-type Celsius float range -273.15..1000.0
-
-// Multi-return with trap binding — panics on error, caught by defer/recover
-func parseTemp(s string) {
-    defer func() {
-        err := std.core.recover()
-        if err != null { std.io.println("bad input:", err) }
-    }()
-
-    n, trap := std.conv.to_float(s)
-    std.io.printf("%.1f °C\n", float(Celsius(n)))
+func safeDivide(a float, b float) {
+    if b == 0.0 {
+        return 0.0, std.core.error("division by zero")
+    }
+    return a / b, null
 }
 
-parseTemp("98.6")
-parseTemp("not a number")
+// trap binding: null passes through, non-null panics into defer/recover
+func runAll(pairs any) {
+    defer func() {
+        err := std.core.recover()
+        if err != null { std.io.println("caught:", err) }
+    }()
+
+    for pair in pairs {
+        result, trap := safeDivide(pair[0], pair[1])
+        std.io.printf("%.1f / %.1f = %.2f\n", pair[0], pair[1], result)
+    }
+}
+
+runAll([[10.0, 2.0], [9.0, 3.0], [5.0, 0.0]])
+std.io.println("done")
 ```
 
 ## Features

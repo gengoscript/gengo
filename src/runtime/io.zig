@@ -55,6 +55,31 @@ pub fn writeInt(v: i64) void {
     } else writeUint(@intCast(v));
 }
 
+pub fn writeF64Prec(v: f64, prec: usize) void {
+    if (v != v) { write("NaN"); return; }
+    if (std.math.isInf(v)) { write(if (v > 0) "Inf" else "-Inf"); return; }
+    var n = v;
+    if (n < 0.0) { write("-"); n = -n; }
+    var scale: f64 = 1.0;
+    var pi: usize = 0;
+    while (pi < prec) : (pi += 1) scale *= 10.0;
+    const scaled = @round(n * scale);
+    const int_part: u64 = @intFromFloat(@trunc(scaled / scale));
+    const frac_raw: u64 = @intFromFloat(@mod(scaled, scale));
+    writeUint(int_part);
+    if (prec == 0) return;
+    write(".");
+    var digits: [20]u8 = undefined;
+    var j: usize = prec;
+    var fp = frac_raw;
+    while (j > 0) {
+        j -= 1;
+        digits[j] = '0' + @as(u8, @intCast(fp % 10));
+        fp /= 10;
+    }
+    write(digits[0..prec]);
+}
+
 pub fn writeF64(v: f64) void {
     if (v != v) {
         write("NaN");
