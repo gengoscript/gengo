@@ -120,8 +120,7 @@ pub const Compiler = struct {
         } else if (self.resolveUpvalue(name.src)) |uv| {
             try chunk.emit2(@intFromEnum(Op.get_upvalue), uv, name.line);
         } else {
-            const idx = try chunk.addConst(.{ .string = name.src });
-            try chunk.emit2(@intFromEnum(Op.get_global), idx, name.line);
+            try chunk.emitOpConst(.get_global, .{ .string = name.src }, name.line);
         }
     }
 
@@ -131,8 +130,7 @@ pub const Compiler = struct {
         } else if (self.resolveUpvalue(name.src)) |uv| {
             try chunk.emit2(@intFromEnum(Op.set_upvalue), uv, name.line);
         } else {
-            const idx = try chunk.addConst(.{ .string = name.src });
-            try chunk.emit2(@intFromEnum(Op.set_global), idx, name.line);
+            try chunk.emitOpConst(.set_global, .{ .string = name.src }, name.line);
         }
     }
 
@@ -373,8 +371,7 @@ pub const Compiler = struct {
         if (self.inFunc()) {
             _ = try self.defineLocal(name.src, false);
         } else {
-            const idx = try chunk.addConst(.{ .string = name.src });
-            try chunk.emit2(@intFromEnum(Op.def_global), idx, kw.line);
+            try chunk.emitOpConst(.def_global, .{ .string = name.src }, kw.line);
         }
         self.matchOpt(.semicolon);
     }
@@ -440,8 +437,7 @@ pub const Compiler = struct {
         if (self.inFunc()) {
             _ = try self.defineLocal(name, false);
         } else {
-            const idx = try chunk.addConst(.{ .string = name });
-            try chunk.emit2(@intFromEnum(Op.def_global), idx, kw.line);
+            try chunk.emitOpConst(.def_global, .{ .string = name }, kw.line);
         }
         self.matchOpt(.semicolon);
     }
@@ -504,8 +500,7 @@ pub const Compiler = struct {
         if (self.inFunc()) {
             _ = try self.defineLocal(name, false);
         } else {
-            const idx = try chunk.addConst(.{ .string = name });
-            try chunk.emit2(@intFromEnum(Op.def_global), idx, kw.line);
+            try chunk.emitOpConst(.def_global, .{ .string = name }, kw.line);
         }
         self.matchOpt(.semicolon);
     }
@@ -553,8 +548,7 @@ pub const Compiler = struct {
             if (self.inFunc()) {
                 _ = try self.defineLocal(name, false);
             } else {
-                const idx = try chunk.addConst(.{ .string = name });
-                try chunk.emit2(@intFromEnum(Op.def_global), idx, kw.line);
+                try chunk.emitOpConst(.def_global, .{ .string = name }, kw.line);
             }
             self.matchOpt(.semicolon);
             return;
@@ -591,8 +585,7 @@ pub const Compiler = struct {
             if (self.inFunc()) {
                 _ = try self.defineLocal(name, false);
             } else {
-                const idx = try chunk.addConst(.{ .string = name });
-                try chunk.emit2(@intFromEnum(Op.def_global), idx, kw.line);
+                try chunk.emitOpConst(.def_global, .{ .string = name }, kw.line);
             }
             self.matchOpt(.semicolon);
             return;
@@ -612,8 +605,7 @@ pub const Compiler = struct {
             if (self.inFunc()) {
                 _ = try self.defineLocal(name, false);
             } else {
-                const idx = try chunk.addConst(.{ .string = name });
-                try chunk.emit2(@intFromEnum(Op.def_global), idx, kw.line);
+                try chunk.emitOpConst(.def_global, .{ .string = name }, kw.line);
             }
             self.matchOpt(.semicolon);
             return;
@@ -665,8 +657,7 @@ pub const Compiler = struct {
         if (self.inFunc()) {
             _ = try self.defineLocal(name, false);
         } else {
-            const idx = try chunk.addConst(.{ .string = name });
-            try chunk.emit2(@intFromEnum(Op.def_global), idx, kw.line);
+            try chunk.emitOpConst(.def_global, .{ .string = name }, kw.line);
         }
         self.matchOpt(.semicolon);
     }
@@ -744,8 +735,7 @@ pub const Compiler = struct {
         if (self.inFunc()) {
             _ = try self.defineLocal(name.src, false);
         } else {
-            const idx = try chunk.addConst(.{ .string = name.src });
-            try chunk.emit2(@intFromEnum(Op.def_global), idx, kw.line);
+            try chunk.emitOpConst(.def_global, .{ .string = name.src }, kw.line);
         }
         self.matchOpt(.semicolon);
     }
@@ -848,8 +838,7 @@ pub const Compiler = struct {
         if (self.inFunc()) {
             _ = try self.defineLocal(name.src, false);
         } else {
-            const idx = try chunk.addConst(.{ .string = name.src });
-            try chunk.emit2(@intFromEnum(Op.def_global), idx, kw.line);
+            try chunk.emitOpConst(.def_global, .{ .string = name.src }, kw.line);
         }
         self.matchOpt(.semicolon);
     }
@@ -883,8 +872,7 @@ pub const Compiler = struct {
         if (self.inFunc()) {
             _ = try self.defineLocal(key, false);
         } else {
-            const idx = try chunk.addConst(.{ .string = key });
-            try chunk.emit2(@intFromEnum(Op.def_global), idx, kw.line);
+            try chunk.emitOpConst(.def_global, .{ .string = key }, kw.line);
         }
         self.matchOpt(.semicolon);
     }
@@ -910,8 +898,7 @@ pub const Compiler = struct {
                     try chunk.emitOp(.cast_bool, name.line);
                 }
             } else if (type_name.len > 0 and self.registry.hasNamedType(type_name)) {
-                const tidx = try chunk.addConst(.{ .string = type_name });
-                try chunk.emit2(@intFromEnum(Op.get_global), tidx, name.line);
+                try chunk.emitOpConst(.get_global, .{ .string = type_name }, name.line);
                 try self.expr();
                 try chunk.emit2(@intFromEnum(Op.call), 1, name.line);
             } else if (common.streq(type_name, "string")) {
@@ -943,8 +930,7 @@ pub const Compiler = struct {
             _ = try self.defineLocal(name.src, is_const);
         } else {
             if (!is_const and self.registry.hasGlobalConst(name.src)) return error.AssignToConst;
-            const idx = try chunk.addConst(.{ .string = name.src });
-            try chunk.emit2(@intFromEnum(Op.def_global), idx, name.line);
+            try chunk.emitOpConst(.def_global, .{ .string = name.src }, name.line);
             if (is_const) try self.registry.addGlobalConst(name.src);
         }
         self.matchOpt(.semicolon);
@@ -1078,9 +1064,9 @@ pub const Compiler = struct {
     }
 
     fn emitAssignTargetPath(self: *Compiler, target: AssignTarget, all_steps: []const AssignTargetStep) !void {
-        const vidx = try chunk.addConst(.{ .string = MultiAssignValueScratch });
+        const vidx: u16 = try chunk.addConst(.{ .string = MultiAssignValueScratch });
         if (target.step_count == 0) {
-            try chunk.emit2(@intFromEnum(Op.get_global), vidx, target.root.line);
+            try chunk.emitConstIdx(.get_global, vidx, target.root.line);
             try self.emitSetVar(target.root);
             return;
         }
@@ -1103,7 +1089,7 @@ pub const Compiler = struct {
             .index_number => |n| try chunk.emitConst(.{ .number = n }, target.root.line),
             .index_string => |s| try chunk.emitConst(.{ .string = s }, target.root.line),
         }
-        try chunk.emit2(@intFromEnum(Op.get_global), vidx, target.root.line);
+        try chunk.emitConstIdx(.get_global, vidx, target.root.line);
         try chunk.emitOp(.set_index, target.root.line);
     }
 
@@ -1147,15 +1133,14 @@ pub const Compiler = struct {
                 } else if (self.inFunc()) {
                     try self.emitSetVar(names[i]);
                 } else {
-                    const idx = try chunk.addConst(.{ .string = names[i].src });
-                    try chunk.emit2(@intFromEnum(Op.def_global), idx, names[i].line);
+                    try chunk.emitOpConst(.def_global, .{ .string = names[i].src }, names[i].line);
                 }
             } else {
                 if (targets[i].step_count == 0) try self.ensureMutableBinding(targets[i].root);
-                const vidx = try chunk.addConst(.{ .string = MultiAssignValueScratch });
+                const vidx: u16 = try chunk.addConst(.{ .string = MultiAssignValueScratch });
                 try chunk.emitOp(.dup, targets[i].root.line);
                 try chunk.emit2(@intFromEnum(Op.tuple_get), i, targets[i].root.line);
-                try chunk.emit2(@intFromEnum(Op.def_global), vidx, targets[i].root.line);
+                try chunk.emitConstIdx(.def_global, vidx, targets[i].root.line);
                 try self.emitAssignTargetPath(targets[i], steps[0..step_count]);
             }
         }
@@ -1204,10 +1189,7 @@ pub const Compiler = struct {
                         }
                     }
                     try self.consume(.rparen);
-                    const midx = try chunk.addConst(.{ .string = prop.src });
-                    try chunk.emitByte(@intFromEnum(Op.defer_invoke_method), prop.line);
-                    try chunk.emitByte(midx, prop.line);
-                    try chunk.emitByte(argc, prop.line);
+                    try chunk.emitDeferInvokeMethod(prop.src, argc, prop.line);
                     self.matchOpt(.semicolon);
                     return;
                 }
@@ -1604,8 +1586,7 @@ pub const Compiler = struct {
             _ = try self.defineLocal(name.src, false);
         } else {
             try chunk.emitOp(.null_val, name.line);
-            const idx = try chunk.addConst(.{ .string = name.src });
-            try chunk.emit2(@intFromEnum(Op.def_global), idx, name.line);
+            try chunk.emitOpConst(.def_global, .{ .string = name.src }, name.line);
         }
     }
 
@@ -1697,8 +1678,7 @@ pub const Compiler = struct {
                     }
                     // Emit: dup, variant_check arm_name, jump_if_false [H]
                     try chunk.emitOp(.dup, dot_line);
-                    const arm_const_idx = try chunk.addConst(.{ .string = arm_name_tok.src });
-                    try chunk.emit2(@intFromEnum(Op.variant_check), @intCast(arm_const_idx), dot_line);
+                    try chunk.emitOpConst(.variant_check, .{ .string = arm_name_tok.src }, dot_line);
                     const next_case = try chunk.emitJump(.jump_if_false, dot_line);
                     try chunk.emitOp(.pop, dot_line); // pop bool (match case)
                     // Handle switch value and optional binding
@@ -1708,8 +1688,7 @@ pub const Compiler = struct {
                         if (self.inFunc()) {
                             _ = try self.defineLocal(binding.?, false);
                         } else {
-                            const bidx = try chunk.addConst(.{ .string = binding.? });
-                            try chunk.emit2(@intFromEnum(Op.def_global), bidx, dot_line);
+                            try chunk.emitOpConst(.def_global, .{ .string = binding.? }, dot_line);
                         }
                     } else {
                         try chunk.emitOp(.pop, dot_line); // discard switch value
@@ -2041,8 +2020,8 @@ pub const Compiler = struct {
             .named_return_count = named_return_count,
         } };
         self.last_func_obj = func_obj;
-        const cidx = try chunk.addConst(.{ .object = func_obj });
-        try chunk.emit2(@intFromEnum(Op.make_closure), cidx, self.prev.line);
+        const cidx: u16 = try chunk.addConst(.{ .object = func_obj });
+        try chunk.emitConstIdx(.make_closure, cidx, self.prev.line);
     }
 
     fn skipTypeSpec(self: *Compiler) !void {
@@ -2233,10 +2212,7 @@ pub const Compiler = struct {
                     }
                 }
                 try self.consume(.rparen);
-                const midx = try chunk.addConst(.{ .string = prop.src });
-                try chunk.emitByte(@intFromEnum(Op.invoke_method), line);
-                try chunk.emitByte(midx, line);
-                try chunk.emitByte(argc, line);
+                try chunk.emitInvokeMethod(prop.src, argc, line);
                 return;
             }
             try chunk.emitConst(.{ .string = prop.src }, line);

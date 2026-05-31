@@ -354,6 +354,9 @@ Current module map:
   - returns `true` if `s` ends with `suffix`
 - `std.string.index_of(s, sub)`
   - returns rune index of first occurrence of `sub` in `s`, or `-1` if not found
+- `std.string.builder()`
+  - creates a mutable string accumulator; use `.write(s)`, `.str()`, `.reset()`
+  - amortized O(total_bytes) append cost; avoids O(n²) from repeated `s = s + piece`
 - `std.math.abs(x)`
   - absolute value of `x`
 - `std.math.sqrt(x)`

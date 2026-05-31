@@ -102,7 +102,12 @@ pub const IterObj = struct {
     source: ?*Object = null,
 };
 
-pub const ObjTag = enum { array, array_managed, map, map_managed, map_hashed, dyn_string, function, closure, cell, native_function, struct_type, interface_type, named_type, named_value, enum_type, enum_value, struct_instance, iterator, variant_type, variant_value, variant_ctor };
+pub const StringBuilderObj = struct {
+    buf: []u8,   // managed bytes (full class-size block)
+    len: usize,  // bytes actually written
+};
+
+pub const ObjTag = enum { array, array_managed, map, map_managed, map_hashed, dyn_string, function, closure, cell, native_function, struct_type, interface_type, named_type, named_value, enum_type, enum_value, struct_instance, iterator, variant_type, variant_value, variant_ctor, string_builder };
 pub const Object = union(ObjTag) {
     array: []Value,
     array_managed: []Value,
@@ -125,6 +130,7 @@ pub const Object = union(ObjTag) {
     variant_type: VariantTypeObj,
     variant_value: VariantValueObj,
     variant_ctor: VariantCtorObj,
+    string_builder: StringBuilderObj,
 };
 
 pub const VTag = enum { number, rune, boolean, string, error_value, object, null };

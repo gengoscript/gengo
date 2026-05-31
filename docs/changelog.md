@@ -2,6 +2,33 @@
 
 This changelog tracks notable language/runtime changes by implementation date.
 
+## 2026-05-31 (6)
+
+### VM — Iterative GC Marking
+
+Replaced the recursive `markObject` traversal with an explicit worklist-based marking phase. A file-local `mark_worklist[MaxObjects]` array holds pending objects; each object is marked *before* being queued, so it can never appear twice. The previous recursion depth was proportional to the live-object graph depth (worst case MaxObjects = 2048 frames), which could overflow the native stack in WASM for pathological inputs. The new approach processes all reachable objects in bounded O(live_objects) iterations with no recursion.
+
+### VM — `std.string.builder`
+
+New `std.string.builder()` native that creates a mutable string accumulator backed by the managed heap's size-class allocator. Internal buffer doubles (via the next size class) each time the content overflows capacity, giving O(total_bytes) total work for N appends versus O(N²) for repeated `s = s + piece` concatenation.
+
+```gengo
+std := import("std")
+b := std.string.builder()
+b.write("hello")
+b.write(", world")
+std.io.println(b.str())   // "hello, world"
+b.reset()
+b.write("again")
+std.io.println(b.str())   // "again"
+```
+
+Methods: `.write(s string)`, `.str() string`, `.reset()`.
+
+### Compiler/VM — Constant pool expanded to 512 (u16 indices)
+
+Constant indices are now encoded as 2-byte big-endian `u16` values instead of 1 byte. The pool limit rises from 256 to 512 unique constants per compilation unit. String constants continue to be deduplicated, so the effective headroom for large scripts is significantly higher. All opcode sequences that reference the constant pool (`constant`, `def_global`, `get_global`, `set_global`, `make_closure`, `invoke_method`, `defer_invoke_method`, `variant_check`) now consume one extra byte per reference.
+
 ## 2026-05-31 (5)
 
 ### Type System — Subtype Declarations (Stage 3)

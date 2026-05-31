@@ -1116,6 +1116,34 @@ fn runInner() !void {
                             try vmPush(.{ .object = vv });
                         }
                     },
+                    .string_builder => |*sb| {
+                        if (common.streq(mname, "write")) {
+                            if (argc != 1) return error.ArityMismatch;
+                            const s_bytes = try vms.asStringValue(vmState().stack[recv_idx + 1]);
+                            const needed = sb.len + s_bytes.len;
+                            if (needed > sb.buf.len) {
+                                // Grow: receiver stays on stack so GC keeps the object alive.
+                                const new_buf = try vmgc.vmAllocManagedBytes(needed);
+                                @memcpy(new_buf[0..sb.len], sb.buf[0..sb.len]);
+                                heap.freeBytesManaged(sb.buf);
+                                sb.buf = new_buf;
+                            }
+                            @memcpy(sb.buf[sb.len..][0..s_bytes.len], s_bytes);
+                            sb.len = needed;
+                            vmState().stack_top = recv_idx;
+                            try vmPush(.null);
+                        } else if (common.streq(mname, "str")) {
+                            if (argc != 0) return error.ArityMismatch;
+                            const result = try makeDynString(sb.buf[0..sb.len]);
+                            vmState().stack_top = recv_idx;
+                            try vmPush(result);
+                        } else if (common.streq(mname, "reset")) {
+                            if (argc != 0) return error.ArityMismatch;
+                            sb.len = 0;
+                            vmState().stack_top = recv_idx;
+                            try vmPush(.null);
+                        } else return error.UnknownMethod;
+                    },
                     else => return error.NotAMethodReceiver,
                 }
             },

@@ -202,7 +202,7 @@ pub fn popTempRoot() void {
 }
 
 pub fn vmConst() !Value {
-    const idx = try vmByte();
+    const idx = try vmShort();
     if (idx >= chunk.constCount()) return error.BadConstantIndex;
     return chunk.constAt(idx);
 }

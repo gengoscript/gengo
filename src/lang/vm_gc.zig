@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const chunk = @import("chunk.zig");
 const globals = @import("globals.zig");
 const heap = @import("../runtime/heap.zig");
+const cfg = @import("../runtime/config.zig");
 const vms = @import("vm_state.zig");
 const Value = @import("value.zig").Value;
 const Object = @import("value.zig").Object;
@@ -16,70 +17,88 @@ pub fn monoNowNs() u64 {
     return ns;
 }
 
-fn markValue(v: Value) void {
-    if (v == .object) markObject(v.object);
-}
+// Iterative mark worklist — each live object is pushed at most once (we mark
+// before pushing, so duplicates are never enqueued).
+var mark_worklist: [cfg.max_objects]*Object = undefined;
+var mark_worklist_top: usize = 0;
 
-fn markObject(obj: *Object) void {
+fn markObjectQueue(obj: *Object) void {
     if (!heap.isObjectLive(obj)) return;
     if (heap.isObjectMarked(obj)) return;
     heap.markObject(obj);
-    switch (obj.*) {
-        .array, .array_managed => {
-            const items = vms.asArraySlice(obj);
-            var i: usize = 0;
-            while (i < items.len) : (i += 1) markValue(items[i]);
-        },
-        .map, .map_managed, .map_hashed => {
-            const items = vms.asMapSlice(obj);
-            var i: usize = 0;
-            while (i < items.len) : (i += 1) {
-                markValue(items[i].key);
-                markValue(items[i].value);
-            }
-        },
-        .closure => |cl| {
-            markObject(cl.func);
-            var i: usize = 0;
-            while (i < cl.upvalues.len) : (i += 1) markObject(cl.upvalues[i]);
-        },
-        .cell => |c| markValue(c.value),
-        .struct_instance => |inst| {
-            markObject(inst.typ);
-            var i: usize = 0;
-            while (i < inst.fields.len) : (i += 1) {
-                markValue(inst.fields[i].key);
-                markValue(inst.fields[i].value);
-            }
-        },
-        .named_value => |nv| {
-            markObject(nv.typ);
-            markValue(nv.value);
-        },
-        .iterator => |it| {
-            if (it.source) |src| markObject(src);
-        },
-        .enum_value => |ev| markObject(ev.typ),
-        .variant_type => {},
-        .variant_value => |vv| {
-            markObject(vv.typ);
-            markValue(vv.payload);
-        },
-        .variant_ctor => |vc| markObject(vc.typ),
-        .named_type => |nt| { if (nt.parent_obj) |p| markObject(p); },
-        .dyn_string, .function, .native_function, .struct_type, .interface_type, .enum_type => {},
+    mark_worklist[mark_worklist_top] = obj;
+    mark_worklist_top += 1;
+}
+
+fn markValue(v: Value) void {
+    if (v == .object) markObjectQueue(v.object);
+}
+
+fn drainMarkQueue() void {
+    while (mark_worklist_top > 0) {
+        mark_worklist_top -= 1;
+        const obj = mark_worklist[mark_worklist_top];
+        switch (obj.*) {
+            .array, .array_managed => {
+                const items = vms.asArraySlice(obj);
+                var i: usize = 0;
+                while (i < items.len) : (i += 1) markValue(items[i]);
+            },
+            .map, .map_managed, .map_hashed => {
+                const items = vms.asMapSlice(obj);
+                var i: usize = 0;
+                while (i < items.len) : (i += 1) {
+                    markValue(items[i].key);
+                    markValue(items[i].value);
+                }
+            },
+            .closure => |cl| {
+                markObjectQueue(cl.func);
+                var i: usize = 0;
+                while (i < cl.upvalues.len) : (i += 1) markObjectQueue(cl.upvalues[i]);
+            },
+            .cell => |c| markValue(c.value),
+            .struct_instance => |inst| {
+                markObjectQueue(inst.typ);
+                var i: usize = 0;
+                while (i < inst.fields.len) : (i += 1) {
+                    markValue(inst.fields[i].key);
+                    markValue(inst.fields[i].value);
+                }
+            },
+            .named_value => |nv| {
+                markObjectQueue(nv.typ);
+                markValue(nv.value);
+            },
+            .iterator => |it| {
+                if (it.source) |src| markObjectQueue(src);
+            },
+            .enum_value => |ev| markObjectQueue(ev.typ),
+            .variant_type => {},
+            .variant_value => |vv| {
+                markObjectQueue(vv.typ);
+                markValue(vv.payload);
+            },
+            .variant_ctor => |vc| markObjectQueue(vc.typ),
+            .named_type => |nt| { if (nt.parent_obj) |p| markObjectQueue(p); },
+            // No GC-traced children; backing bytes are freed by the sweep.
+            .dyn_string, .function, .native_function, .struct_type, .interface_type,
+            .enum_type, .string_builder => {},
+        }
     }
 }
 
 pub fn collectGarbage() void {
     const t0 = monoNowNs();
+    mark_worklist_top = 0;
+
     var i: usize = 0;
     while (i < vms.vmState().stack_top) : (i += 1) markValue(vms.vmState().stack[i]);
 
     i = 0;
     while (i < globals.len()) : (i += 1) markValue(globals.valueAt(i));
 
-    if (vms.vmState().std_module) |m| markObject(m);
+    if (vms.vmState().std_module) |m| markObjectQueue(m);
 
     i = 0;
     while (i < vms.vmState().temp_root_top) : (i += 1) markValue(vms.vmState().temp_roots[i]);
@@ -89,6 +108,8 @@ pub fn collectGarbage() void {
 
     i = 0;
     while (i < vms.vmState().defer_top) : (i += 1) markValue(vms.vmState().defer_stack[i]);
+
+    drainMarkQueue();
 
     heap.sweepObjects();
     const t1 = monoNowNs();

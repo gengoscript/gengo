@@ -3,8 +3,9 @@ const Value = @import("value.zig").Value;
 const common = @import("common.zig");
 
 pub const MaxCode = 16384;
-// Bytecode currently encodes constant indexes as a single byte.
-pub const MaxConst = 256;
+// Constant indices are encoded as two bytes (big-endian u16), supporting up to 512 distinct
+// values per compilation unit. Previously the limit was 256 (single-byte index).
+pub const MaxConst = 512;
 
 pub const State = struct {
     code: [MaxCode]u8 = undefined,
@@ -49,8 +50,22 @@ pub fn emit2(a: u8, b: u8, line: u32) !void {
     try emitByte(b, line);
 }
 
-pub fn addConst(v: Value) !u8 {
-    // Deduplicate string constants to stay within the 256-slot limit.
+// Emit opcode + 2-byte constant index (big-endian).
+pub fn emitConstIdx(op: Op, idx: u16, line: u32) !void {
+    try emitByte(@intFromEnum(op), line);
+    try emitByte(@intCast((idx >> 8) & 0xff), line);
+    try emitByte(@intCast(idx & 0xff), line);
+}
+
+// Add constant v and emit opcode + its 2-byte index.
+pub fn emitOpConst(op: Op, v: Value, line: u32) !void {
+    const idx = try addConst(v);
+    try emitConstIdx(op, idx, line);
+}
+
+// Deduplicate + store constant; return its 2-byte index.
+pub fn addConst(v: Value) !u16 {
+    // Deduplicate string constants to conserve slots.
     if (v == .string) {
         var i: usize = 0;
         while (i < g_state.const_count) : (i += 1) {
@@ -66,9 +81,27 @@ pub fn addConst(v: Value) !u8 {
     return @intCast(idx);
 }
 
+// Emit .constant opcode + 2-byte index.
 pub fn emitConst(v: Value, line: u32) !void {
-    const idx = try addConst(v);
-    try emit2(@intFromEnum(Op.constant), idx, line);
+    try emitOpConst(.constant, v, line);
+}
+
+// Helpers for invoke_method / defer_invoke_method which interleave a const index
+// with a separate argc byte: op + idx_hi + idx_lo + argc.
+pub fn emitInvokeMethod(name: []const u8, argc: u8, line: u32) !void {
+    const idx = try addConst(.{ .string = name });
+    try emitByte(@intFromEnum(Op.invoke_method), line);
+    try emitByte(@intCast((idx >> 8) & 0xff), line);
+    try emitByte(@intCast(idx & 0xff), line);
+    try emitByte(argc, line);
+}
+
+pub fn emitDeferInvokeMethod(name: []const u8, argc: u8, line: u32) !void {
+    const idx = try addConst(.{ .string = name });
+    try emitByte(@intFromEnum(Op.defer_invoke_method), line);
+    try emitByte(@intCast((idx >> 8) & 0xff), line);
+    try emitByte(@intCast(idx & 0xff), line);
+    try emitByte(argc, line);
 }
 
 pub fn emitJump(op: Op, line: u32) !usize {

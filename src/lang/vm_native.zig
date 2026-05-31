@@ -44,6 +44,7 @@ const NativeFnId = enum(u8) {
     str_ends_with = 42,
     str_index_of = 43,
     core_recover = 44,
+    str_builder_new = 45,
     math_abs = 16,
     math_sqrt = 17,
     math_floor = 18,
@@ -191,7 +192,7 @@ pub fn buildStdModule() !*Object {
     const math_obj = try vmgc.vmAllocObject();
     math_obj.* = .{ .map = math_items[0..17] };
 
-    const str_items = heap.bump(MapEntry, 8) orelse return error.OutOfMemory;
+    const str_items = heap.bump(MapEntry, 9) orelse return error.OutOfMemory;
     str_items[0] = .{ .key = .{ .string = "split" },       .value = try makeNative(.str_split,       2) };
     str_items[1] = .{ .key = .{ .string = "join" },        .value = try makeNative(.str_join,        2) };
     str_items[2] = .{ .key = .{ .string = "trim" },        .value = try makeNative(.str_trim,        1) };
@@ -200,8 +201,9 @@ pub fn buildStdModule() !*Object {
     str_items[5] = .{ .key = .{ .string = "starts_with" }, .value = try makeNative(.str_starts_with, 2) };
     str_items[6] = .{ .key = .{ .string = "ends_with" },   .value = try makeNative(.str_ends_with,   2) };
     str_items[7] = .{ .key = .{ .string = "index_of" },    .value = try makeNative(.str_index_of,    2) };
+    str_items[8] = .{ .key = .{ .string = "builder" },     .value = try makeNative(.str_builder_new, 0) };
     const str_obj = try vmgc.vmAllocObject();
-    str_obj.* = .{ .map = str_items[0..8] };
+    str_obj.* = .{ .map = str_items[0..9] };
 
     const std_items = heap.bump(MapEntry, 5) orelse return error.OutOfMemory;
     std_items[0] = .{
@@ -1264,6 +1266,13 @@ pub fn callNative(nf: NativeFuncObj, argc: u8) !void {
             const out = try nativeStrIndexOf(s, sub);
             _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
             try vms.vmPush(out);
+        },
+        .str_builder_new => {
+            if (argc != 0) return error.ArityMismatch;
+            const obj = try vmgc.vmAllocObject();
+            obj.* = .{ .string_builder = .{ .buf = &[_]u8{}, .len = 0 } };
+            _ = try vms.vmPop();
+            try vms.vmPush(.{ .object = obj });
         },
     }
 }

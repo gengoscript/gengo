@@ -232,6 +232,7 @@ pub fn printValue(v: Value) void {
                     write(")");
                 }
             },
+            .string_builder => write("<builder>"),
         },
     }
 }
