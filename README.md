@@ -1,94 +1,164 @@
 # Gengo (言語)
 
-gengo is a small embeddable scripting language/runtime implemented in Zig.
+A small embeddable scripting language implemented in Zig. Single-pass Pratt compiler → bytecode VM. Runs natively or as a WASI module.
+
+**[Try it in the browser →](https://gengoscript.github.io/gengo/)**
 
 Project status: early-stage and intentionally evolving.
 
-## Language Example
+## Language at a Glance
 
 ```gengo
 std := import("std")
 
-type User struct {
-    id int,
-    name string,
-    bio ?string
+type Shape interface {
+    area() float
 }
 
-func greet(u User) {
-    // Multiline escaped string:
-    // open with ", continue with " at same column, close on last line with ".
-    msg := "Hello,
-           "this is gengo
-           "User:"
-    std.io.println(msg + " " + u.name)
+type Rect struct { w float, h float }
+
+func (r Rect) area() float {
+    return r.w * r.h
 }
 
-u := User{ id: 7, name: "user", bio: "こんにちは" }
-greet(u)
+func printArea(s Shape) {
+    std.io.printf("area: %f\n", s.area())
+}
+
+printArea(Rect{w: 4.0, h: 3.0})
 ```
 
-Raw multiline strings use `'` with the same continuation/termination shape and keep backslashes literally.
+```gengo
+std := import("std")
 
-Additional current syntax/features:
-- `const` immutable bindings; `:=` is first-class mutable declaration syntax
-- explicit typed declarations: `x int = 10`, `const x int = 10`
-- mandatory typed params: `func sum(...xs int) int { ... }`
-- `std.io.printf("%s %d", "x", 1)`
-- nominal/range types:
-  - `type Month int range 1..12`
-  - `type UserId string`
-- enums with qualified members:
-  - `type Status enum { pending, approved, denied }`
-  - `Status.pending`
+// Named types with range constraints
+type Celsius float range -273.15..1000.0
 
-## Toolchain
+// Multi-return with trap binding — panics on error, caught by defer/recover
+func parseTemp(s string) {
+    defer func() {
+        err := std.core.recover()
+        if err != null { std.io.println("bad input:", err) }
+    }()
 
-- Zig: `0.16.0` (matches CI)
-- wasmtime: recent preview1-compatible release
+    n, trap := std.conv.to_float(s)
+    std.io.printf("%.1f °C\n", float(Celsius(n)))
+}
+
+parseTemp("98.6")
+parseTemp("not a number")
+```
+
+## Features
+
+**Types**
+- Structs with typed fields, nullable (`?T`), union (`A|B`), and method receivers
+- Interfaces with structural satisfaction checking
+- Enums with qualified member access (`Status.pending`)
+- Named scalar types: `type UserId string`, `type Month int range 1..12`
+- First-class `error` values; `any` as the empty interface
+
+**Functions**
+- Typed parameters (mandatory); `any` to opt out
+- Variadic: `func sum(...xs int) int`
+- Multi-return: `return value, err`
+- Named return variables: `func f() (result float, err ?error)`
+- Closures with upvalue capture
+
+**Error Handling**
+- `defer` — runs on function exit in LIFO order
+- `std.core.recover()` — intercepts panics from inside a defer
+- `assert condition` / `assert condition, "message"` — panic if false
+- `x, trap := f()` — panic if the bound slot is non-null, pass through if null
+
+**Control Flow**
+- `if / else if / else` with optional init statement
+- `for cond`, `for init; cond; post`, `for v in seq`, `for i, v in seq`
+- `switch expr { case v { } default { } }`
+- `break`, `continue`, `return`
+
+**Declarations**
+- `x := expr` — inferred mutable
+- `x Type = expr` — explicit typed mutable
+- `const x Type = expr` — immutable
+- `_` discard in destructure: `val, _ := f()`
+
+## Standard Library
+
+| Namespace | Functions |
+|---|---|
+| `std.io` | `println`, `printf` |
+| `std.core` | `len`, `bytelen`, `append`, `contains`, `remove`, `has`, `delete`, `keys`, `values`, `error`, `is_error`, `recover`, `gc`, `gc_live_objects`, `gc_stats` |
+| `std.string` | `split`, `join`, `trim`, `upper`, `lower`, `starts_with`, `ends_with`, `index_of` |
+| `std.math` | `abs`, `sqrt`, `floor`, `ceil`, `round`, `sin`, `cos`, `tan`, `log`, `log2`, `log10`, `pow`, `min`, `max`, `pi`, `e`, `inf` |
+| `std.conv` | `to_int`, `to_float`, `to_bool`, `to_string` |
 
 ## Quick Start
 
-Build the WASI runtime:
+**Native CLI** (recommended for development):
+
+```bash
+zig build -Dpreset=dev cli
+./zig-out/bin/gengo script.gengo
+```
+
+**WASI runtime** (for browser/sandboxed embedding):
 
 ```bash
 zig build -Dpreset=dev wasi
+wasmtime --dir . ./zig-out/lib/gengo-test.wasm -- script.gengo
 ```
 
-Run a script:
+**Conformance tests:**
 
 ```bash
-wasmtime --dir . ./gengo-test.wasm -- examples/simple_math.gengo
+zig build -Dpreset=dev test
 ```
 
-Run conformance tests:
+**Benchmarks:**
 
 ```bash
-WASMTIME_BIN=/path/to/wasmtime zig build -Dpreset=dev test
+zig build -Dpreset=dev bench
 ```
+
+## Build Presets
+
+| Preset | Use |
+|---|---|
+| `dev` | Default — generous limits, debug-friendly |
+| `tiny` | Minimal heap and stack for constrained embedding |
+| `stress` | Tight limits to catch edge cases in tests |
+
+Pass with `-Dpreset=<name>` to any build step.
+
+## Toolchain
+
+- Zig `0.16.0`
+- wasmtime (any recent preview1-compatible release) — only needed for WASM target
 
 ## Repo Layout
 
-- `lang/`: lexer, compiler, bytecode, VM logic
-- `runtime/`: runtime services, host ABI, memory
-- `examples/`: spec, fail-cases, benchmarks, parity cases
-- `docs/`: language and runtime docs
-- `tests/`: harness scripts used by `make test` / `make bench`
+```
+src/
+  lang/        lexer, compiler, bytecode, VM
+  runtime/     heap, GC, host ABI, embedding API
+examples/
+  spec/        conformance pass-cases (+ .out expected output)
+  spec/fail/   conformance fail-cases (+ .err expected error)
+  bench/       benchmark scripts
+docs/          language reference, embedding guide, changelog
+playground/    browser playground (GitHub Pages)
+```
+
+## Embedding
+
+Gengo is designed to be embedded in Zig hosts. See `docs/embedding.md` and `src/runtime/api.zig`.
+
+Runtime limits (heap, stack, call depth, etc.) are configured via preset files in `src/runtime/`.
 
 ## Notes
 
-- File extension is `.gengo`.
-- `import("std")` is the supported builtin namespace.
-- Language behavior may change as the project evolves.
-- Runtime defaults are small by design (see `docs/language.md` limits section).
-- Managed heap allocations are class-based; a single managed block is currently capped at `32 KiB`.
-- Embedding API guide: `docs/embedding.md` (`runtime/api.zig`).
-
-## Browser Playground
-
-A GitHub Pages playground is included under `playground/`.
-
-- It runs the WASI `gengo-test.wasm` in-browser.
-- It mounts your script as an in-memory file (`script.gengo`) and executes it.
-
-After pushing to `main`, the Pages workflow publishes the site.
+- File extension: `.gengo`
+- Only `import("std")` is currently supported; file imports are planned
+- A single managed heap block is capped at 32 KiB regardless of total heap size
+- Language surface is still evolving; breaking changes are expected
