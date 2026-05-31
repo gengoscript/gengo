@@ -59,7 +59,7 @@ pub const State = struct {
     alloc_object_calls: u64 = 0,
     alloc_managed_slice_calls: u64 = 0,
     alloc_managed_bytes_calls: u64 = 0,
-    ops_budget_remaining: ?u64 = null,
+    ops_budget_remaining: u64 = std.math.maxInt(u64),
     defer_stack: [cfg.max_defers]Value = undefined,
     defer_top: usize = 0,
     panic_line: u32 = 0,
@@ -106,7 +106,7 @@ pub fn reset() void {
     vmState().alloc_object_calls = 0;
     vmState().alloc_managed_slice_calls = 0;
     vmState().alloc_managed_bytes_calls = 0;
-    vmState().ops_budget_remaining = null;
+    vmState().ops_budget_remaining = std.math.maxInt(u64);
     vmState().defer_top = 0;
     vmState().panic_line = 0;
     vmState().panic_col = 0;
@@ -127,7 +127,7 @@ pub fn resetExec() void {
     vmState().call_depth_target = null;
     vmState().temp_root_top = 0;
     vmState().defer_top = 0;
-    vmState().ops_budget_remaining = null;
+    vmState().ops_budget_remaining = std.math.maxInt(u64);
     vmState().panic_line = 0;
     vmState().panic_col = 0;
     vmState().panic_depth = 0;
@@ -140,7 +140,7 @@ pub fn resetExec() void {
 
 pub fn setPolicy(policy: Policy) void {
     vmState().policy = policy;
-    vmState().ops_budget_remaining = policy.max_ops;
+    vmState().ops_budget_remaining = policy.max_ops orelse std.math.maxInt(u64);
 }
 
 pub fn currentLine() u32 {

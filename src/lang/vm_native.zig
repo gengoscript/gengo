@@ -326,8 +326,7 @@ fn nativeDelete(m_obj: *Object, key: Value) !Value {
             while (fi < items.len) : (fi += 1) {
                 if (vmmap.mapKeyEquals(items[fi].key, key)) {
                     const removed = items[fi].value;
-                    var j: usize = fi;
-                    while (j < items.len - 1) : (j += 1) items[j] = items[j + 1];
+                    items[fi] = items[items.len - 1];
                     m_obj.* = .{ .map = items[0 .. items.len - 1] };
                     return removed;
                 }
@@ -340,8 +339,7 @@ fn nativeDelete(m_obj: *Object, key: Value) !Value {
             while (fi < items.len) : (fi += 1) {
                 if (vmmap.mapKeyEquals(items[fi].key, key)) {
                     const removed = items[fi].value;
-                    var j: usize = fi;
-                    while (j < items.len - 1) : (j += 1) items[j] = items[j + 1];
+                    items[fi] = items[items.len - 1];
                     m_obj.* = .{ .map_managed = items[0 .. items.len - 1] };
                     return removed;
                 }
@@ -352,8 +350,7 @@ fn nativeDelete(m_obj: *Object, key: Value) !Value {
             const hm = &m_obj.map_hashed;
             const idx = vmmap.mapFindHashedIndex(hm.entries[0..hm.len], hm.buckets, key) orelse return .null;
             const removed = hm.entries[idx].value;
-            var j: usize = idx;
-            while (j < hm.len - 1) : (j += 1) hm.entries[j] = hm.entries[j + 1];
+            hm.entries[idx] = hm.entries[hm.len - 1];
             hm.len -= 1;
             vmmap.mapBuildHashedBuckets(hm.entries[0..hm.len], hm.buckets);
             return removed;

@@ -335,9 +335,9 @@ fn iterNext2(it: *IterObj) !void {
 
 fn runInner() !void {
     while (true) {
-        if (vmState().ops_budget_remaining) |remaining| {
-            if (remaining == 0) return error.InstructionBudgetExceeded;
-            vmState().ops_budget_remaining = remaining - 1;
+        if (vmState().ops_budget_remaining < std.math.maxInt(u64)) {
+            if (vmState().ops_budget_remaining == 0) return error.InstructionBudgetExceeded;
+            vmState().ops_budget_remaining -= 1;
         }
         const op_raw = try vmByte();
         if (op_raw >= std.meta.fields(Op).len) return error.BadOpcode;
