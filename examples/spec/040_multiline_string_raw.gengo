@@ -1,7 +1,8 @@
 std := import("std")
 
-s := 'C:\Users\Paths\Without\Escapes
-     'Embedded "double quotes" are raw literal text
-     'End of block'
+s :=
+    \\C:\Users\Paths\Without\Escapes
+    \\Embedded "double quotes" are raw literal text
+    \\End of block
 
-std.io.println(s)
+std.io.print(s)

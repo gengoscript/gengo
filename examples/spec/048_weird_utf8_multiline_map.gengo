@@ -1,9 +1,10 @@
 std := import("std")
 
-raw := 'α\\n
-       'β🙂'
-esc := "x\n
-       "y"
+raw :=
+    \\α\n
+    \\β🙂
+
+esc := "x\ny"
 
 m := { `A`: std.conv.to_string(`🙂`), "k": raw + esc }
 

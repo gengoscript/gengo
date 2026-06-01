@@ -47,6 +47,7 @@ pub const Lexer = struct {
             '"' => self.strLit('"'),
             '\'' => self.strLit('\''),
             '`' => self.runeLit(),
+            '\\' => if (self.eat('\\')) self.multilineStrLit() else self.tok(.eof),
             else => self.tok(.eof),
         };
     }
@@ -112,66 +113,59 @@ pub const Lexer = struct {
         };
     }
 
-    fn consumeContinuationMarker(self: *Lexer, quote: u8, open_col: usize) bool {
-        if (self.atEnd()) return false;
-        const line_start = self.pos;
-        var i: usize = 0;
-        while (i < open_col) : (i += 1) {
-            const p = line_start + i;
-            if (p >= self.src.len) return false;
-            const c = self.src[p];
-            if (!(c == ' ' or c == '\t')) return false;
-        }
-        const qpos = line_start + open_col;
-        if (qpos >= self.src.len or self.src[qpos] != quote) return false;
-        self.pos = qpos + 1;
-        return true;
-    }
-
     fn tokString(self: *Lexer, start_out: usize) Token {
-        // Use lineStartFor(self.start) so multiline strings use the opening-quote line.
         const ls = self.lineStartFor(self.start);
         return .{ .typ = .string, .src = self.str_pool[start_out..self.str_pool_pos], .line = self.line, .col = @intCast(self.start - ls + 1) };
     }
 
     fn strLit(self: *Lexer, quote: u8) Token {
         const start_out = self.str_pool_pos;
-        const open_col = self.start - self.lineStartFor(self.start);
-        var just_emitted_escape_nl = false;
         while (!self.atEnd()) {
             const c = self.peek();
             if (c == quote) {
                 _ = self.adv();
                 return self.tokString(start_out);
             }
+            if (c == '\n') return self.tok(.eof);
             if (quote == '"' and c == '\\') {
                 _ = self.adv();
                 if (self.atEnd()) return self.tok(.eof);
                 const esc = self.adv();
                 if (!self.outEscaped(esc)) return self.tok(.eof);
-                just_emitted_escape_nl = esc == 'n';
                 continue;
-            }
-            if (c == '\n') {
-                _ = self.adv();
-                self.line += 1;
-                self.line_start = self.pos;
-                if (self.consumeContinuationMarker(quote, open_col)) {
-                    if (!just_emitted_escape_nl) {
-                        if (!self.outByte('\n')) return self.tok(.eof);
-                    }
-                    just_emitted_escape_nl = false;
-                    continue;
-                }
-                // Multiline blocks require an explicit same-column continuation
-                // marker on every continued line.
-                return self.tok(.eof);
             }
             _ = self.adv();
             if (!self.outByte(c)) return self.tok(.eof);
-            just_emitted_escape_nl = false;
         }
         return self.tok(.eof);
+    }
+
+    fn multilineStrLit(self: *Lexer) Token {
+        const start_out = self.str_pool_pos;
+        while (true) {
+            // Read content to end of line; no escape processing
+            while (!self.atEnd() and self.peek() != '\n') {
+                const c = self.adv();
+                if (!self.outByte(c)) return self.tok(.eof);
+            }
+            if (self.atEnd()) break;
+            _ = self.adv(); // consume '\n'
+            self.line += 1;
+            self.line_start = self.pos;
+            if (!self.outByte('\n')) return self.tok(.eof);
+            // Skip leading whitespace on next line
+            while (!self.atEnd() and (self.peek() == ' ' or self.peek() == '\t')) {
+                _ = self.adv();
+            }
+            // Continue only if next line starts with '\\'
+            if (!self.atEnd() and self.peek() == '\\' and self.peekNext() == '\\') {
+                _ = self.adv();
+                _ = self.adv();
+                continue;
+            }
+            break;
+        }
+        return self.tokString(start_out);
     }
 
     fn runeLit(self: *Lexer) Token {

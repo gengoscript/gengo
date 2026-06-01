@@ -15,6 +15,7 @@ const NativeFuncObj = @import("value.zig").NativeFuncObj;
 
 const NativeFnId = enum(u8) {
     io_println = 1,
+    io_print = 46,
     io_printf = 15,
     core_len = 2,
     core_append = 3,
@@ -71,7 +72,7 @@ fn makeNative(id: NativeFnId, arity: u8) !Value {
 pub fn buildStdModule() !*Object {
     if (vms.vmState().std_module) |m| return m;
 
-    const io_items = heap.bump(MapEntry, 2) orelse return error.OutOfMemory;
+    const io_items = heap.bump(MapEntry, 3) orelse return error.OutOfMemory;
     io_items[0] = .{
         .key = .{ .string = "println" },
         .value = try makeNative(.io_println, 255),
@@ -80,8 +81,12 @@ pub fn buildStdModule() !*Object {
         .key = .{ .string = "printf" },
         .value = try makeNative(.io_printf, 255),
     };
+    io_items[2] = .{
+        .key = .{ .string = "print" },
+        .value = try makeNative(.io_print, 255),
+    };
     const io_obj = try vmgc.vmAllocObject();
-    io_obj.* = .{ .map = io_items[0..2] };
+    io_obj.* = .{ .map = io_items[0..3] };
 
     const core_items = heap.bump(MapEntry, 16) orelse return error.OutOfMemory;
     core_items[0] = .{
@@ -867,6 +872,16 @@ pub fn callNative(nf: NativeFuncObj, argc: u8) !void {
             var i: usize = 0;
             while (i < @as(usize, argc)) : (i += 1) io.printValue(vms.vmState().stack[start + i]);
             io.write("\n");
+            var j: usize = 0;
+            while (j < @as(usize, argc)) : (j += 1) _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            try vms.vmPush(.null);
+        },
+        .io_print => {
+            if (!vms.vmState().policy.allow_io) return error.PermissionDenied;
+            const start = vms.vmState().stack_top - argc;
+            var i: usize = 0;
+            while (i < @as(usize, argc)) : (i += 1) io.printValue(vms.vmState().stack[start + i]);
             var j: usize = 0;
             while (j < @as(usize, argc)) : (j += 1) _ = try vms.vmPop();
             _ = try vms.vmPop();
