@@ -1579,13 +1579,11 @@ pub const Compiler = struct {
         try self.expr();
         try self.consume(.lbrace);
 
-        const then_j = try chunk.emitJump(.jump_if_false, self.prev.line);
-        try chunk.emitOp(.pop, self.prev.line);
+        const then_j = try chunk.emitJump(.jif_pop, self.prev.line);
         try self.block();
 
         const else_j = try chunk.emitJump(.jump, self.prev.line);
         try chunk.patchJump(then_j);
-        try chunk.emitOp(.pop, self.prev.line);
 
         if (self.match(.kw_else)) {
             if (self.match(.kw_if)) {
@@ -1674,8 +1672,7 @@ pub const Compiler = struct {
         // cleanupLocals is a no-op so an explicit pop is still needed (iter_pops=1).
         try self.pushLoop(loop_start, local_base, body_keep, if (in_func) @as(u8, 0) else @as(u8, 1));
         try chunk.emitOp(if (vname == null) .iter_next1 else .iter_next2, self.prev.line);
-        const exit_j = try chunk.emitJump(.jump_if_false, self.prev.line);
-        try chunk.emitOp(.pop, self.prev.line); // pop condition true
+        const exit_j = try chunk.emitJump(.jif_pop, self.prev.line);
 
         if (vname) |vn| {
             // stack: iter, key, value
@@ -1691,7 +1688,6 @@ pub const Compiler = struct {
         try chunk.emitLoop(loop_start, self.prev.line);
 
         try chunk.patchJump(exit_j);
-        try chunk.emitOp(.pop, self.prev.line); // pop false condition
         if (!in_func) try chunk.emitOp(.pop, self.prev.line); // pop iterator (top-level only)
         try self.cleanupLocals(local_base, self.prev.line);
 
@@ -1729,8 +1725,7 @@ pub const Compiler = struct {
                     // Emit: dup, variant_check arm_name, jump_if_false [H]
                     try chunk.emitOp(.dup, dot_line);
                     try chunk.emitOpConst(.variant_check, .{ .string = arm_name_tok.src }, dot_line);
-                    const next_case = try chunk.emitJump(.jump_if_false, dot_line);
-                    try chunk.emitOp(.pop, dot_line); // pop bool (match case)
+                    const next_case = try chunk.emitJump(.jif_pop, dot_line);
                     // Handle switch value and optional binding
                     const local_before = if (self.inFunc()) self.currentScope().local_count else 0;
                     if (binding != null) {
@@ -1750,21 +1745,18 @@ pub const Compiler = struct {
                     end_jumps[end_count] = try chunk.emitJump(.jump, self.prev.line);
                     end_count += 1;
                     try chunk.patchJump(next_case);
-                    try chunk.emitOp(.pop, self.prev.line); // pop bool (no-match case)
                 } else {
                     // Regular value case
                     try chunk.emitOp(.dup, self.prev.line);
                     try self.expr();
                     try chunk.emitOp(.eq, self.prev.line);
-                    const next_case = try chunk.emitJump(.jump_if_false, self.prev.line);
-                    try chunk.emitOp(.pop, self.prev.line);
+                    const next_case = try chunk.emitJump(.jif_pop, self.prev.line);
                     try self.consume(.lbrace);
                     try self.block();
                     if (end_count >= MaxSwitchJumps) return error.TooManySwitchCases;
                     end_jumps[end_count] = try chunk.emitJump(.jump, self.prev.line);
                     end_count += 1;
                     try chunk.patchJump(next_case);
-                    try chunk.emitOp(.pop, self.prev.line);
                 }
                 continue;
             }
@@ -1807,12 +1799,10 @@ pub const Compiler = struct {
         try self.pushLoop(loop_start, self.loopKeepBase(), self.loopKeepBase(), 0);
         try self.expr();
         try self.consume(.lbrace);
-        const exit_j = try chunk.emitJump(.jump_if_false, self.prev.line);
-        try chunk.emitOp(.pop, self.prev.line);
+        const exit_j = try chunk.emitJump(.jif_pop, self.prev.line);
         try self.block();
         try chunk.emitLoop(loop_start, self.prev.line);
         try chunk.patchJump(exit_j);
-        try chunk.emitOp(.pop, self.prev.line);
         const loop = self.popLoop();
         var i: usize = 0;
         while (i < loop.break_count) : (i += 1) {
@@ -1843,8 +1833,7 @@ pub const Compiler = struct {
         if (!self.match(.semicolon)) {
             try self.expr();
             try self.consume(.semicolon);
-            exit_j = try chunk.emitJump(.jump_if_false, self.prev.line);
-            try chunk.emitOp(.pop, self.prev.line);
+            exit_j = try chunk.emitJump(.jif_pop, self.prev.line);
         }
 
         if (!self.check(.lbrace)) {
@@ -1878,7 +1867,6 @@ pub const Compiler = struct {
 
         if (exit_j) |j| {
             try chunk.patchJump(j);
-            try chunk.emitOp(.pop, self.prev.line);
         }
 
         try self.cleanupLocals(local_base, self.prev.line);

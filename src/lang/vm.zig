@@ -1194,6 +1194,11 @@ fn runInner() !void {
                 const off = try vmShort();
                 if (!(try vmPeek(0)).isTruthy()) vmState().ip += off;
             },
+            .jif_pop => {
+                const off = try vmShort();
+                const cond = try vmPop();
+                if (!cond.isTruthy()) vmState().ip += off;
+            },
             .loop => {
                 const off = try vmShort();
                 vmState().ip -= off;

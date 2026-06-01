@@ -53,6 +53,7 @@ pub const Op = enum(u8) {
     import_std,
     jump,
     jump_if_false,
+    jif_pop,     // pop condition then jump if it was falsy; used by if/while/for/switch
     loop,
     call,
     defer_call,
