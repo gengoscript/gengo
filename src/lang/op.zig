@@ -23,6 +23,12 @@ pub const Op = enum(u8) {
     const_sub,
     const_add,
     const_lt,
+    // Triple-fused get_local+constant+binop. Same 5-byte layout as
+    // get_local(2) + const_eq/sub(3). The middle byte (the original const_eq/sub
+    // opcode, now a skip byte) is read and discarded by the VM.
+    // Emitted when get_local immediately precedes a const_eq or const_sub.
+    get_local_const_eq,
+    get_local_const_sub,
     div,
     mod,
     bit_and,

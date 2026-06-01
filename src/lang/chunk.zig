@@ -18,6 +18,11 @@ pub const State = struct {
     // Peephole: track position of last `constant` instruction for const-op fusion.
     last_const_code_pos: ?usize = null,
     last_const_idx: u16 = 0,
+    // Peephole: track position of last `get_local` instruction (2 bytes: op + slot).
+    // Used for triple-fusion: get_local + constant + eq/sub → get_local_const_eq/sub.
+    // Verified via arithmetic (gl_pos + 2 == const_pos) rather than code inspection
+    // to avoid false positives from data bytes of preceding instructions.
+    last_get_local_code_pos: ?usize = null,
 };
 
 var g_default_state: State = .{};
@@ -49,6 +54,9 @@ pub fn emitOp(op: Op, line: u32) !void {
 }
 
 pub fn emit2(a: u8, b: u8, line: u32) !void {
+    if (a == @intFromEnum(Op.get_local)) {
+        g_state.last_get_local_code_pos = g_state.code_len;
+    }
     try emitByte(a, line);
     try emitByte(b, line);
 }
@@ -75,6 +83,8 @@ pub fn emitOpConst(op: Op, v: Value, line: u32) !void {
 // Emit a binary op, fusing with a preceding `constant` instruction when possible.
 // If the last emitted instruction was `constant k`, replaces it in-place with
 // const_eq/const_sub/const_add/const_lt (same bytecode layout, different opcode byte).
+// If the instruction before that was `get_local`, further fuses to
+// get_local_const_eq / get_local_const_sub (triple fusion, same 5-byte layout).
 pub fn emitBinOpFused(op: Op, line: u32) !void {
     if (g_state.last_const_code_pos) |pos| {
         if (pos + 3 == g_state.code_len) {
@@ -87,6 +97,24 @@ pub fn emitBinOpFused(op: Op, line: u32) !void {
             };
             if (fused) |fop| {
                 g_state.code[pos] = @intFromEnum(fop);
+                // Triple fusion: get_local (2 bytes) must be provably the instruction
+                // immediately before the constant — use position arithmetic, not a
+                // code-byte inspect, to avoid false positives from preceding data bytes.
+                if (g_state.last_get_local_code_pos) |gl_pos| {
+                    if (gl_pos + 2 == pos) {
+                        const triple: ?Op = switch (fop) {
+                            .const_eq  => .get_local_const_eq,
+                            .const_sub => .get_local_const_sub,
+                            else       => null,
+                        };
+                        if (triple) |top| {
+                            g_state.code[gl_pos] = @intFromEnum(top);
+                            // Layout: [top][slot][fop_byte(skip)][idx_hi][idx_lo]
+                            // code[gl_pos+1] = slot, code[pos] = fop (skip byte),
+                            // code[pos+1..+2] = const_idx — all unchanged.
+                        }
+                    }
+                }
                 g_state.last_const_code_pos = null;
                 return;
             }

@@ -662,6 +662,41 @@ fn runInner() !void {
                 const kn = try vms.valueAsNumber(k);
                 try pushNumericResultWithCarrier(a, k, an - kn);
             },
+
+            // Triple-fused: get_local + constant + eq/sub.
+            // Bytecode: [op][slot][skip][idx_hi][idx_lo]
+            // The skip byte (was const_eq/sub opcode) is always present in well-formed
+            // bytecode; advance IP directly to avoid the bounds check in vmByte().
+            .get_local_const_eq => {
+                const slot = try vmByte();
+                vmState().ip += 1; // skip the embedded const_eq opcode byte
+                const k = chunk.constAt(try vmShort());
+                const base = vmState().frames[vmState().frame_top - 1].base;
+                var a = vmState().stack[base + slot];
+                if (a == .object and a.object.* == .cell) a = a.object.cell.value;
+                const a_named = a == .object and a.object.* == .named_value;
+                const k_named = k == .object and k.object.* == .named_value;
+                if (a_named and k_named and a.object.named_value.typ != k.object.named_value.typ) {
+                    const ta = a.object.named_value.typ;
+                    const tk = k.object.named_value.typ;
+                    if (!namedTypeIsSubOf(ta, tk) and !namedTypeIsSubOf(tk, ta)) return error.TypeError;
+                }
+                const ea = if (a_named) a.object.named_value.value else a;
+                const ek = if (k_named) k.object.named_value.value else k;
+                try vmPush(.{ .boolean = Value.equals(ea, ek) });
+            },
+            .get_local_const_sub => {
+                const slot = try vmByte();
+                vmState().ip += 1; // skip the embedded const_sub opcode byte
+                const k = chunk.constAt(try vmShort());
+                const base = vmState().frames[vmState().frame_top - 1].base;
+                var a = vmState().stack[base + slot];
+                if (a == .object and a.object.* == .cell) a = a.object.cell.value;
+                const an = try vms.valueAsNumber(a);
+                const kn = try vms.valueAsNumber(k);
+                try pushNumericResultWithCarrier(a, k, an - kn);
+            },
+
             .const_add => {
                 const k = chunk.constAt(try vmShort());
                 const a = try vmPop();
