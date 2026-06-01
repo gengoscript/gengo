@@ -22,7 +22,13 @@ pub fn mapHashValue(v: Value) u64 {
         .boolean => |b| if (b) 0x9e3779b97f4a7c15 else 0x94d049bb133111eb,
         .string => |s| common.hashBytes(s),
         .error_value => |s| common.hashBytes(s),
-        .object => |o| @intFromPtr(o),
+        // dyn_string keys must hash by content, not pointer, so that a static .string
+        // literal and a heap-allocated dyn_string with the same content land in the
+        // same bucket and are found by mapFindHashedIndex.
+        .object => |o| switch (o.*) {
+            .dyn_string => |s| common.hashBytes(s),
+            else => @intFromPtr(o),
+        },
         .null => 0xcbf29ce484222325,
     };
 }

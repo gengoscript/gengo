@@ -1398,6 +1398,15 @@ pub const Compiler = struct {
 
     fn assignStmt(self: *Compiler) !void {
         const name = self.cur;
+        // `_` is the blank identifier: evaluate and discard.
+        if (common.streq(name.src, "_")) {
+            self.advance();
+            try self.consume(.eq);
+            try self.expr();
+            try chunk.emitOp(.pop, name.line);
+            self.matchOpt(.semicolon);
+            return;
+        }
         try self.ensureMutableBinding(name);
         self.advance();
         try self.consume(.eq);

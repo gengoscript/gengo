@@ -2083,11 +2083,47 @@ fn runPanicUnwind(orig_err: anyerror) anyerror!void {
             vmState().panic_col = 0;
             vmState().panic_depth = 0;
             vmState().defer_top = frame_defer_base;
+
+            // Determine the recovered function's return arity before unwinding its frame.
+            // If the function returns multiple values, callers expect a tuple; pushing a
+            // bare null causes tuple_check_arity to throw TypeError.
+            const rec_fobj = vmState().frames[vmState().frame_top - 1].func_obj;
+            const rec_base = vmState().frames[vmState().frame_top - 1].base;
+            const rec_fn: ?*@import("value.zig").FuncObj = switch (rec_fobj.*) {
+                .function => &rec_fobj.function,
+                .closure => |*cl| &cl.func.function,
+                else => null,
+            };
+            const ret_count: usize = if (rec_fn) |f| f.return_types.len else 1;
+            const named_ret: u8 = if (rec_fn) |f| f.named_return_count else 0;
+            const rec_arity: u8 = if (rec_fn) |f| f.arity else 0;
+
             vmState().frame_top -= 1;
             const frame = vmState().frames[vmState().frame_top];
             vmState().stack_top = if (frame.base > 0) frame.base - 1 else 0;
             vmState().ip = frame.ret_ip;
-            vmPush(.null) catch {};
+
+            if (ret_count <= 1) {
+                vmPush(.null) catch {};
+            } else recover_ret: {
+                // Multi-value return: build a tuple of the right size.
+                // Named returns: use the values from the (still-readable) stack slots;
+                // unnamed returns: fill with null.
+                const n: u8 = if (named_ret > 0) named_ret else @intCast(ret_count);
+                const tup_obj = vmAllocObject() catch { vmPush(.null) catch {}; break :recover_ret; };
+                tup_obj.* = .{ .array = &[_]Value{} };
+                const items = vmAllocManagedSlice(Value, n) catch { vmPush(.null) catch {}; break :recover_ret; };
+                if (named_ret > 0) {
+                    var ri: u8 = 0;
+                    while (ri < named_ret) : (ri += 1)
+                        items[ri] = vmState().stack[rec_base + rec_arity + ri];
+                } else {
+                    var ri: u8 = 0;
+                    while (ri < n) : (ri += 1) items[ri] = .null;
+                }
+                tup_obj.* = .{ .array_managed = items };
+                vmPush(.{ .object = tup_obj }) catch { vmPush(.null) catch {}; break :recover_ret; };
+            }
             return run();
         }
         vmState().frame_top -= 1;
