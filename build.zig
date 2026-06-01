@@ -7,6 +7,11 @@ pub fn build(b: *std.Build) void {
         std.mem.eql(u8, preset_opt, "stress");
     if (!valid) @panic("invalid -Dpreset, expected dev|tiny|stress");
 
+    const perf_opt = b.option(bool, "perf", "Enable performance counters (outputs PERF: lines to stderr)") orelse false;
+    const build_opts = b.addOptions();
+    build_opts.addOption(bool, "perf", perf_opt);
+    const build_opts_mod = build_opts.createModule();
+
     const wasmtime_opt = b.option([]const u8, "wasmtime", "path to wasmtime binary") orelse "wasmtime";
 
     // Copy preset config file into place.
@@ -22,19 +27,19 @@ pub fn build(b: *std.Build) void {
 
     // ── Main runtime ──────────────────────────────────────────────────────────
 
-    const gengo_debug = addWasmExe(b, "gengo-test", "src/main.zig", wasm_target, .Debug, &preset.step);
-    const gengo_release = addWasmExe(b, "gengo-test", "src/main.zig", wasm_target, .ReleaseFast, &preset.step);
+    const gengo_debug = addWasmExe(b, "gengo-test", "src/main.zig", wasm_target, .Debug, &preset.step, build_opts_mod);
+    const gengo_release = addWasmExe(b, "gengo-test", "src/main.zig", wasm_target, .ReleaseFast, &preset.step, build_opts_mod);
 
     const install_debug = installWasm(b, gengo_debug, "gengo-test.wasm");
     const install_release = installWasm(b, gengo_release, "gengo-test.wasm");
 
     // ── Test runners (build + run immediately, no permanent artifact) ─────────
 
-    const vm_safety_exe = addWasmExe(b, "vm-safety-runner", "src/vm_safety_runner.zig", wasm_target, .Debug, &preset.step);
+    const vm_safety_exe = addWasmExe(b, "vm-safety-runner", "src/vm_safety_runner.zig", wasm_target, .Debug, &preset.step, build_opts_mod);
     const run_vm_safety = b.addSystemCommand(&.{ wasmtime_opt, "--dir", "/" });
     run_vm_safety.addArtifactArg(vm_safety_exe);
 
-    const embedding_exe = addWasmExe(b, "embedding-runner", "src/embedding_runner.zig", wasm_target, .Debug, &preset.step);
+    const embedding_exe = addWasmExe(b, "embedding-runner", "src/embedding_runner.zig", wasm_target, .Debug, &preset.step, build_opts_mod);
     const run_embedding = b.addSystemCommand(&.{ wasmtime_opt, "--dir", "/" });
     run_embedding.addArtifactArg(embedding_exe);
 
@@ -69,6 +74,16 @@ pub fn build(b: *std.Build) void {
     const bench_release_step = b.step("bench-release", "Run benchmark suite (ReleaseFast)");
     bench_release_step.dependOn(&bench_release.step);
 
+    // bench-perf: perf-instrumented debug build; outputs PERF: lines to stderr
+    const perf_opts = b.addOptions();
+    perf_opts.addOption(bool, "perf", true);
+    const perf_opts_mod = perf_opts.createModule();
+    const gengo_perf = addWasmExe(b, "gengo-perf", "src/main.zig", wasm_target, .Debug, &preset.step, perf_opts_mod);
+    const install_perf = installWasmAs(b, gengo_perf, "gengo-perf.wasm");
+    const bench_perf = scriptStep(b, "bash", "./scripts/perf/run.sh", &install_perf.step, wasmtime_opt);
+    const bench_perf_step = b.step("bench-perf", "Run benchmarks with perf counters (PERF: lines on stderr)");
+    bench_perf_step.dependOn(&bench_perf.step);
+
     const parity = scriptStep(b, "bash", "./tests/run_host_parity.sh", &install_debug.step, wasmtime_opt);
     const parity_step = b.step("parity", "Run host/embedded parity tests");
     parity_step.dependOn(&parity.step);
@@ -76,14 +91,13 @@ pub fn build(b: *std.Build) void {
     // ── Native CLI ────────────────────────────────────────────────────────────
 
     const optimize = b.standardOptimizeOption(.{});
-    const native_exe = b.addExecutable(.{
-        .name = "gengo",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/main.zig"),
-            .target = b.graph.host,
-            .optimize = optimize,
-        }),
+    const native_mod = b.createModule(.{
+        .root_source_file = b.path("src/main.zig"),
+        .target = b.graph.host,
+        .optimize = optimize,
     });
+    native_mod.addImport("build_options", build_opts_mod);
+    const native_exe = b.addExecutable(.{ .name = "gengo", .root_module = native_mod });
     native_exe.step.dependOn(&preset.step);
     const install_native = b.addInstallArtifact(native_exe, .{});
 
@@ -95,14 +109,13 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run a script with the native CLI (-- script.gengo)");
     run_step.dependOn(&run_native.step);
 
-    const native_release_exe = b.addExecutable(.{
-        .name = "gengo",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/main.zig"),
-            .target = b.graph.host,
-            .optimize = .ReleaseFast,
-        }),
+    const native_release_mod = b.createModule(.{
+        .root_source_file = b.path("src/main.zig"),
+        .target = b.graph.host,
+        .optimize = .ReleaseFast,
     });
+    native_release_mod.addImport("build_options", build_opts_mod);
+    const native_release_exe = b.addExecutable(.{ .name = "gengo", .root_module = native_release_mod });
     native_release_exe.step.dependOn(&preset.step);
     const install_native_release = b.addInstallArtifact(native_release_exe, .{});
 
@@ -116,6 +129,7 @@ pub fn build(b: *std.Build) void {
         .target = b.graph.host,
         .optimize = .Debug,
     });
+    host_embed_mod.addImport("build_options", build_opts_mod);
     const host_embed_exe = b.addExecutable(.{
         .name = "embed-host-example",
         .root_module = host_embed_mod,
@@ -133,12 +147,14 @@ fn addWasmExe(
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     depends_on: *std.Build.Step,
+    opts_mod: *std.Build.Module,
 ) *std.Build.Step.Compile {
     const mod = b.createModule(.{
         .root_source_file = b.path(root),
         .target = target,
         .optimize = optimize,
     });
+    mod.addImport("build_options", opts_mod);
     const exe = b.addExecutable(.{
         .name = name,
         .root_module = mod,
@@ -150,6 +166,14 @@ fn addWasmExe(
 }
 
 fn installWasm(
+    b: *std.Build,
+    exe: *std.Build.Step.Compile,
+    dest_name: []const u8,
+) *std.Build.Step.Run {
+    return installWasmAs(b, exe, dest_name);
+}
+
+fn installWasmAs(
     b: *std.Build,
     exe: *std.Build.Step.Compile,
     dest_name: []const u8,

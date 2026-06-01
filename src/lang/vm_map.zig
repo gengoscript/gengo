@@ -1,6 +1,7 @@
 const common = @import("common.zig");
 const vms = @import("vm_state.zig");
 const vmgc = @import("vm_gc.zig");
+const vmperf = @import("vm_perf.zig");
 const Value = @import("value.zig").Value;
 const Object = @import("value.zig").Object;
 const MapEntry = @import("value.zig").MapEntry;
@@ -40,11 +41,15 @@ pub fn mapFindHashedIndex(entries: []MapEntry, buckets: []i32, key: Value) ?usiz
     var probes: usize = 0;
     while (probes < buckets.len) : (probes += 1) {
         const b = buckets[idx];
-        if (b < 0) return null;
+        if (b < 0) { vmperf.countMapProbe(probes + 1); return null; }
         const ei: usize = @intCast(b);
-        if (ei < entries.len and mapKeyEquals(entries[ei].key, key)) return ei;
+        if (ei < entries.len and mapKeyEquals(entries[ei].key, key)) {
+            vmperf.countMapProbe(probes + 1);
+            return ei;
+        }
         idx = (idx + 1) & mask;
     }
+    vmperf.countMapProbe(probes);
     return null;
 }
 

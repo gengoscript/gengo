@@ -831,7 +831,10 @@ fn ensureHostReady() !void {
 
 // ── Native function dispatch ──────────────────────────────────────────────────
 
+const vmperf = @import("vm_perf.zig");
+
 pub fn callNative(nf: NativeFuncObj, argc: u8) !void {
+    vmperf.countHostcall(nf.id);
     switch (@as(NativeFnId, @enumFromInt(nf.id))) {
         .io_println => {
             if (!vms.vmState().policy.allow_io) return error.PermissionDenied;

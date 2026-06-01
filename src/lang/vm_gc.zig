@@ -5,6 +5,7 @@ const globals = @import("globals.zig");
 const heap = @import("../runtime/heap.zig");
 const cfg = @import("../runtime/config.zig");
 const vms = @import("vm_state.zig");
+const vmperf = @import("vm_perf.zig");
 const Value = @import("value.zig").Value;
 const Object = @import("value.zig").Object;
 
@@ -111,7 +112,10 @@ pub fn collectGarbage() void {
 
     drainMarkQueue();
 
+    const marked_count = heap.liveObjectCount();
     heap.sweepObjects();
+    const swept_count = marked_count - heap.liveObjectCount();
+    vmperf.countGCSweep(marked_count, swept_count);
     const t1 = monoNowNs();
     vms.vmState().gc_runs += 1;
     if (t1 > t0) vms.vmState().gc_time_ns += @intCast(t1 - t0);

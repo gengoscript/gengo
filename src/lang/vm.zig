@@ -17,6 +17,7 @@ const vmmap = @import("vm_map.zig");
 const vmstr = @import("vm_string.zig");
 const vmtyp = @import("vm_types.zig");
 const vmnative = @import("vm_native.zig");
+const vmperf = @import("vm_perf.zig");
 
 // ── Public re-exports (external callers import from vm.zig unchanged) ─────────
 
@@ -341,6 +342,7 @@ fn runInner() !void {
         }
         const op_raw = try vmByte();
         if (op_raw >= std.meta.fields(Op).len) return error.BadOpcode;
+        vmperf.countOp(op_raw);
         const op: Op = @enumFromInt(op_raw);
         switch (op) {
             .constant => try vmPush(try vmConst()),
@@ -415,6 +417,7 @@ fn runInner() !void {
                 if (vms.isStringValue(a) and vms.isStringValue(b)) {
                     const sa = try vms.asStringValue(a);
                     const sb = try vms.asStringValue(b);
+                    vmperf.countStringConcat(sa.len + sb.len);
                     try vmPush(try concatDynString(sa, sb));
                 } else {
                     const an = try vms.valueAsNumber(a);
@@ -1505,6 +1508,7 @@ fn runInner() !void {
                 vmState().stack_top = recv_idx;
             },
             .ret => {
+                vmperf.breakOpChain();
                 if (vmState().frame_top == 0) return error.ReturnAtTopLevel;
                 var retval = try vmPop();
                 const fi = vmState().frame_top - 1;
@@ -1585,7 +1589,7 @@ fn runInner() !void {
                 }
             },
 
-            .halt => return,
+            .halt => { vmperf.breakOpChain(); return; },
         }
     }
 }

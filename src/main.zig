@@ -4,6 +4,8 @@ const builtin = @import("builtin");
 const Runtime = @import("runtime/runtime.zig").Runtime;
 const io = @import("runtime/io.zig");
 const vm = @import("lang/vm.zig");
+const vmperf = @import("lang/vm_perf.zig");
+const vms = @import("lang/vm_state.zig");
 const cfg = @import("runtime/config.zig");
 
 const MaxArgs = 32;
@@ -234,6 +236,10 @@ fn runCli(argv: []const []const u8) void {
         .max_ops = max_ops,
     });
     runtime.run(src) catch |err| {
+        vmperf.printSummary(vms.vmState().gc_runs, vms.vmState().gc_time_ns,
+            vms.vmState().alloc_object_calls, vms.vmState().alloc_managed_slice_calls,
+            vms.vmState().alloc_managed_bytes_calls);
+
         if (runtime.last_compile_line != 0) {
             io.werr("gengo: compile error: ");
             io.werr(@errorName(err));
@@ -282,6 +288,9 @@ fn runCli(argv: []const []const u8) void {
         die(1);
     };
 
+    vmperf.printSummary(vms.vmState().gc_runs, vms.vmState().gc_time_ns,
+        vms.vmState().alloc_object_calls, vms.vmState().alloc_managed_slice_calls,
+        vms.vmState().alloc_managed_bytes_calls);
     die(0);
 }
 
