@@ -15,6 +15,9 @@ pub const State = struct {
     code_len: usize = 0,
     const_count: usize = 0,
     pending_col: u16 = 0,
+    // Peephole: track position of last `constant` instruction for const-op fusion.
+    last_const_code_pos: ?usize = null,
+    last_const_idx: u16 = 0,
 };
 
 var g_default_state: State = .{};
@@ -60,7 +63,37 @@ pub fn emitConstIdx(op: Op, idx: u16, line: u32) !void {
 // Add constant v and emit opcode + its 2-byte index.
 pub fn emitOpConst(op: Op, v: Value, line: u32) !void {
     const idx = try addConst(v);
+    if (op == .constant) {
+        g_state.last_const_code_pos = g_state.code_len;
+        g_state.last_const_idx = idx;
+    } else {
+        g_state.last_const_code_pos = null;
+    }
     try emitConstIdx(op, idx, line);
+}
+
+// Emit a binary op, fusing with a preceding `constant` instruction when possible.
+// If the last emitted instruction was `constant k`, replaces it in-place with
+// const_eq/const_sub/const_add/const_lt (same bytecode layout, different opcode byte).
+pub fn emitBinOpFused(op: Op, line: u32) !void {
+    if (g_state.last_const_code_pos) |pos| {
+        if (pos + 3 == g_state.code_len) {
+            const fused: ?Op = switch (op) {
+                .eq  => .const_eq,
+                .sub => .const_sub,
+                .add => .const_add,
+                .lt  => .const_lt,
+                else => null,
+            };
+            if (fused) |fop| {
+                g_state.code[pos] = @intFromEnum(fop);
+                g_state.last_const_code_pos = null;
+                return;
+            }
+        }
+    }
+    g_state.last_const_code_pos = null;
+    try emitOp(op, line);
 }
 
 // Deduplicate + store constant; return its 2-byte index.

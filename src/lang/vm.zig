@@ -640,6 +640,60 @@ fn runInner() !void {
                 try vmPush(.{ .boolean = an < bn });
             },
 
+            // Fused const+op: reads rhs constant, pops lhs from stack.
+            .const_eq => {
+                const k = chunk.constAt(try vmShort());
+                const a = try vmPop();
+                const a_named = a == .object and a.object.* == .named_value;
+                const k_named = k == .object and k.object.* == .named_value;
+                if (a_named and k_named and a.object.named_value.typ != k.object.named_value.typ) {
+                    const ta = a.object.named_value.typ;
+                    const tk = k.object.named_value.typ;
+                    if (!namedTypeIsSubOf(ta, tk) and !namedTypeIsSubOf(tk, ta)) return error.TypeError;
+                }
+                const ea = if (a_named) a.object.named_value.value else a;
+                const ek = if (k_named) k.object.named_value.value else k;
+                try vmPush(.{ .boolean = Value.equals(ea, ek) });
+            },
+            .const_sub => {
+                const k = chunk.constAt(try vmShort());
+                const a = try vmPop();
+                const an = try vms.valueAsNumber(a);
+                const kn = try vms.valueAsNumber(k);
+                try pushNumericResultWithCarrier(a, k, an - kn);
+            },
+            .const_add => {
+                const k = chunk.constAt(try vmShort());
+                const a = try vmPop();
+                if (vms.isStringValue(a) and vms.isStringValue(k)) {
+                    try pushTempRoot(a);
+                    const sa = try vms.asStringValue(a);
+                    const sk = try vms.asStringValue(k);
+                    vmperf.countStringConcat(sa.len + sk.len);
+                    const result = concatDynString(sa, sk);
+                    popTempRoot();
+                    try vmPush(try result);
+                } else {
+                    const an = try vms.valueAsNumber(a);
+                    const kn = try vms.valueAsNumber(k);
+                    try pushNumericResultWithCarrier(a, k, an + kn);
+                }
+            },
+            .const_lt => {
+                const k = chunk.constAt(try vmShort());
+                const a = try vmPop();
+                const a_named = a == .object and a.object.* == .named_value;
+                const k_named = k == .object and k.object.* == .named_value;
+                if (a_named and k_named and a.object.named_value.typ != k.object.named_value.typ) {
+                    const ta = a.object.named_value.typ;
+                    const tk = k.object.named_value.typ;
+                    if (!namedTypeIsSubOf(ta, tk) and !namedTypeIsSubOf(tk, ta)) return error.TypeError;
+                }
+                const an = try vms.valueAsNumber(a);
+                const kn = try vms.valueAsNumber(k);
+                try vmPush(.{ .boolean = an < kn });
+            },
+
             .build_array => {
                 const count = try vmByte();
                 const obj = try vmAllocObject();

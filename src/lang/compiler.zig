@@ -1749,7 +1749,7 @@ pub const Compiler = struct {
                     // Regular value case
                     try chunk.emitOp(.dup, self.prev.line);
                     try self.expr();
-                    try chunk.emitOp(.eq, self.prev.line);
+                    try chunk.emitBinOpFused(.eq, self.prev.line);
                     const next_case = try chunk.emitJump(.jif_pop, self.prev.line);
                     try self.consume(.lbrace);
                     try self.block();
@@ -2324,27 +2324,27 @@ pub const Compiler = struct {
         try self.parsePrecedence(p.next());
         chunk.setCol(col);
         switch (tt) {
-            .plus => try chunk.emitOp(.add, line),
-            .minus => try chunk.emitOp(.sub, line),
-            .star => try chunk.emitOp(.mul, line),
+            .plus  => try chunk.emitBinOpFused(.add, line),
+            .minus => try chunk.emitBinOpFused(.sub, line),
+            .star  => try chunk.emitOp(.mul, line),
             .slash => try chunk.emitOp(.div, line),
             .percent => try chunk.emitOp(.mod, line),
-            .amp => try chunk.emitOp(.bit_and, line),
-            .pipe => try chunk.emitOp(.bit_or, line),
+            .amp   => try chunk.emitOp(.bit_and, line),
+            .pipe  => try chunk.emitOp(.bit_or, line),
             .caret => try chunk.emitOp(.bit_xor, line),
             .lt_lt => try chunk.emitOp(.shl, line),
             .gt_gt => try chunk.emitOp(.shr, line),
-            .eq_eq => try chunk.emitOp(.eq, line),
+            .eq_eq => try chunk.emitBinOpFused(.eq, line),
             .bang_eq => {
-                try chunk.emitOp(.eq, line);
+                try chunk.emitBinOpFused(.eq, line);
                 try chunk.emitOp(.not, line);
             },
             .gt => try chunk.emitOp(.gt, line),
             .gt_eq => {
-                try chunk.emitOp(.lt, line);
+                try chunk.emitBinOpFused(.lt, line);
                 try chunk.emitOp(.not, line);
             },
-            .lt => try chunk.emitOp(.lt, line),
+            .lt => try chunk.emitBinOpFused(.lt, line),
             .lt_eq => {
                 try chunk.emitOp(.gt, line);
                 try chunk.emitOp(.not, line);

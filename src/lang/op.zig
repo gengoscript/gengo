@@ -16,6 +16,13 @@ pub const Op = enum(u8) {
     add,
     sub,
     mul,
+    // Fused constant+binop: reads u16 const_idx, pops TOS (left operand),
+    // applies op with the constant as right operand, pushes result.
+    // Emitted by the peephole when `constant k` immediately precedes the op.
+    const_eq,
+    const_sub,
+    const_add,
+    const_lt,
     div,
     mod,
     bit_and,
