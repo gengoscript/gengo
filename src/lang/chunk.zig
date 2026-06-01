@@ -211,6 +211,19 @@ pub fn patchJump(offset: usize) !void {
 }
 
 pub fn emitLoop(loop_start: usize, line: u32) !void {
+    // Peephole: if the last emitted instruction is set_global (5 bytes), fuse it with
+    // the back-edge into set_global_loop (same 5 bytes, different opcode + 2-byte offset).
+    if (g_state.code_len >= 5 and
+        g_state.code[g_state.code_len - 5] == @intFromEnum(Op.set_global))
+    {
+        g_state.last_const_code_pos = null; // invalidate const peephole
+        g_state.code[g_state.code_len - 5] = @intFromEnum(Op.set_global_loop);
+        const offset = g_state.code_len - loop_start + 2;
+        if (offset > 0xffff) return error.LoopTooLarge;
+        try emitByte(@intCast((offset >> 8) & 0xff), line);
+        try emitByte(@intCast(offset & 0xff), line);
+        return;
+    }
     try emitOp(.loop, line);
     const offset = g_state.code_len - loop_start + 2;
     if (offset > 0xffff) return error.LoopTooLarge;

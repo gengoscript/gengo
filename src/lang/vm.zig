@@ -1305,6 +1305,40 @@ fn runInner() !void {
                 }
             },
 
+            // Fused set_global + loop back-edge.
+            // Bytecode: [op][name_hi][name_lo][ic_hi][ic_lo][off_hi][off_lo]
+            // IC layout and patch offsets are identical to set_global.
+            .set_global_loop => {
+                const name_idx = try vmShort();
+                const ic_base = vmState().ip;
+                const ic_slot: u16 = @intCast(try vmShort());
+                const val = try vmPop();
+                if (ic_slot != 0xFFFF) {
+                    globals.setAt(ic_slot, val);
+                } else {
+                    const name = chunk.constAt(name_idx).string;
+                    const slot = globals.findSlot(name) orelse return error.NotDefined;
+                    chunk.patchByte(ic_base,     @intCast((slot >> 8) & 0xFF));
+                    chunk.patchByte(ic_base + 1, @intCast(slot & 0xFF));
+                    globals.setAt(slot, val);
+                }
+                const off = try vmShort();
+                vmState().ip -= off;
+                // Same inline get_global as loop: skip one dispatch if warm.
+                const jip = vmState().ip;
+                if (jip + 5 <= chunk.codeLen() and
+                    chunk.codeByteAt(jip) == @intFromEnum(Op.get_global))
+                {
+                    const ic_slot2: u16 = @intCast(
+                        (@as(usize, chunk.codeByteAt(jip + 3)) << 8) | chunk.codeByteAt(jip + 4),
+                    );
+                    if (ic_slot2 != 0xffff) {
+                        vmState().ip += 5;
+                        try vmPush(globals.getAt(ic_slot2));
+                    }
+                }
+            },
+
             .call => {
                 const argc = try vmByte();
                 if (try trySelfTailCall(argc)) continue;

@@ -60,8 +60,9 @@ pub const Op = enum(u8) {
     import_std,
     jump,
     jump_if_false,
-    jif_pop,     // pop condition then jump if it was falsy; used by if/while/for/switch
+    jif_pop,          // pop condition then jump if it was falsy; used by if/while/for/switch
     loop,
+    set_global_loop,  // fused: set_global (5 bytes) + loop back-edge (2 bytes); same IC layout
     call,
     defer_call,
     defer_invoke_method,
