@@ -205,6 +205,15 @@ pub fn emitGetField(name: []const u8, line: u32) !void {
     try emitByte(0xff, line);
     try emitByte(0xff, line);
     try emitByte(0xff, line);
+    // Peephole: get_local immediately before get_field → get_local_get_field (8 bytes, 1 dispatch).
+    // Layout: [get_local_get_field][slot][get_field(skip)][name_hi][name_lo][ic_hi][ic_lo][ic_fidx]
+    if (g_state.last_get_local_code_pos) |gl_pos| {
+        if (gl_pos + 8 == g_state.code_len) {
+            g_state.code[gl_pos] = @intFromEnum(Op.get_local_get_field);
+            g_state.last_get_local_code_pos = null;
+            g_state.last_const_code_pos = null;
+        }
+    }
 }
 
 // Emit set_field: op + name_idx(2) + ic_type(2, cold=0xFFFF) + ic_fidx(1, cold=0xFF).
@@ -250,6 +259,20 @@ pub fn emitJump(op: Op, line: u32) !usize {
                 try emitByte(0xff, line);
                 try emitByte(0xff, line);
                 g_state.last_triple_eq_pos = null;
+                return g_state.code_len - 2;
+            }
+        }
+        // Quad fusion: get_local + const_lt immediately preceding jif_pop →
+        // get_local_const_lt_jif_pop (7 bytes). Detected via last_get_local_code_pos
+        // + byte inspection of code[gl_pos+2]; no intermediate triple opcode needed.
+        if (g_state.last_get_local_code_pos) |gl_pos| {
+            if (gl_pos + 5 == g_state.code_len and
+                g_state.code[gl_pos + 2] == @intFromEnum(Op.const_lt))
+            {
+                g_state.code[gl_pos] = @intFromEnum(Op.get_local_const_lt_jif_pop);
+                try emitByte(0xff, line);
+                try emitByte(0xff, line);
+                g_state.last_get_local_code_pos = null;
                 return g_state.code_len - 2;
             }
         }

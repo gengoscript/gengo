@@ -789,6 +789,176 @@ fn runInner() !void {
                 if (!Value.equals(ea, ek)) vmState().ip += off;
             },
 
+            // Quad-fused: get_local + const_lt + jif_pop.
+            // Bytecode: [op][slot][skip][idx_hi][idx_lo][jmp_hi][jmp_lo]
+            .get_local_const_lt_jif_pop => {
+                const slot = try vmByte();
+                vmState().ip += 1; // skip embedded const_lt opcode byte
+                const k = chunk.constAt(try vmShort());
+                const off = try vmShort();
+                const base = vmState().frames[vmState().frame_top - 1].base;
+                var a = vmState().stack[base + slot];
+                if (a == .object and a.object.* == .cell) a = a.object.cell.value;
+                const a_named = a == .object and a.object.* == .named_value;
+                const k_named = k == .object and k.object.* == .named_value;
+                if (a_named and k_named and a.object.named_value.typ != k.object.named_value.typ) {
+                    const ta = a.object.named_value.typ;
+                    const tk = k.object.named_value.typ;
+                    if (!namedTypeIsSubOf(ta, tk) and !namedTypeIsSubOf(tk, ta)) return error.TypeError;
+                }
+                const an = try vms.valueAsNumber(if (a_named) a.object.named_value.value else a);
+                const kn = try vms.valueAsNumber(if (k_named) k.object.named_value.value else k);
+                if (!(an < kn)) vmState().ip += off;
+            },
+
+            // Fused: get_local + get_field. 8-byte layout:
+            // [op][slot][skip=get_field_byte][name_hi][name_lo][ic_type_hi][ic_type_lo][ic_fidx]
+            .get_local_get_field => {
+                const slot = try vmByte();
+                vmState().ip += 1; // skip embedded get_field opcode byte
+                const name_idx = try vmShort();
+                const ic_base = vmState().ip;
+                const ic_type_idx = try vmShort();
+                const ic_fidx = try vmByte();
+                const frame_base = vmState().frames[vmState().frame_top - 1].base;
+                var raw = vmState().stack[frame_base + slot];
+                if (raw == .object and raw.object.* == .cell) raw = raw.object.cell.value;
+                const container = if (raw == .object and raw.object.* == .named_value)
+                    raw.object.named_value.value
+                else
+                    raw;
+                if (container != .object) return error.TypeError;
+                const obj = container.object;
+                switch (obj.*) {
+                    .struct_instance => |inst| {
+                        const tpi = heap.objectPoolIndex(inst.typ);
+                        if (ic_type_idx == @as(usize, tpi) and ic_fidx != 0xFF) {
+                            try vmPush(inst.fields[ic_fidx].value);
+                        } else {
+                            const name = chunk.constAt(name_idx).string;
+                            const fi = vmtyp.findFieldIndex(inst.typ.struct_type.fields, name) orelse return error.UnknownStructField;
+                            if (fi <= 0xFE) {
+                                chunk.patchByte(ic_base,     @intCast((tpi >> 8) & 0xFF));
+                                chunk.patchByte(ic_base + 1, @intCast(tpi & 0xFF));
+                                chunk.patchByte(ic_base + 2, @intCast(fi));
+                            }
+                            try vmPush(inst.fields[fi].value);
+                        }
+                    },
+                    .map, .map_managed => {
+                        const name = chunk.constAt(name_idx).string;
+                        const items = vms.asMapSlice(obj);
+                        const key_v = Value{ .string = name };
+                        var i: usize = 0;
+                        while (i < items.len) : (i += 1) {
+                            if (vmmap.mapKeyEquals(items[i].key, key_v)) {
+                                try vmPush(items[i].value);
+                                break;
+                            }
+                        }
+                        if (i == items.len) try vmPush(.null);
+                    },
+                    .map_hashed => |hm| {
+                        const name = chunk.constAt(name_idx).string;
+                        const key_v = Value{ .string = name };
+                        if (vmmap.mapFindHashedIndex(hm.entries[0..hm.len], hm.buckets, key_v)) |fi| {
+                            try vmPush(hm.entries[fi].value);
+                        } else {
+                            try vmPush(.null);
+                        }
+                    },
+                    .enum_type => |et| {
+                        const name = chunk.constAt(name_idx).string;
+                        if (common.streq(name, "name")) {
+                            try vmPush(.{ .string = et.name });
+                        } else if (common.streq(name, "first")) {
+                            if (et.members.len == 0) return error.IndexOutOfBounds;
+                            const ev = try vmAllocObject();
+                            ev.* = .{ .enum_value = .{ .typ = obj, .name = et.members[0], .ordinal = 0 } };
+                            try vmPush(.{ .object = ev });
+                        } else if (common.streq(name, "last")) {
+                            if (et.members.len == 0) return error.IndexOutOfBounds;
+                            const last_i = et.members.len - 1;
+                            const ev = try vmAllocObject();
+                            ev.* = .{ .enum_value = .{ .typ = obj, .name = et.members[last_i], .ordinal = @intCast(last_i) } };
+                            try vmPush(.{ .object = ev });
+                        } else if (common.streq(name, "values")) {
+                            const arr_obj = try vmAllocObject();
+                            arr_obj.* = .{ .array = &[_]Value{} };
+                            try pushTempRoot(.{ .object = arr_obj });
+                            defer popTempRoot();
+                            const items = try vmAllocManagedSlice(Value, et.members.len);
+                            var ei: usize = 0;
+                            while (ei < et.members.len) : (ei += 1) {
+                                const ev = try vmAllocObject();
+                                ev.* = .{ .enum_value = .{ .typ = obj, .name = et.members[ei], .ordinal = @intCast(ei) } };
+                                items[ei] = .{ .object = ev };
+                                arr_obj.* = .{ .array_managed = items[0 .. ei + 1] };
+                            }
+                            try vmPush(.{ .object = arr_obj });
+                        } else {
+                            var ei: usize = 0;
+                            while (ei < et.members.len) : (ei += 1) {
+                                if (common.streq(et.members[ei], name)) {
+                                    const ev = try vmAllocObject();
+                                    ev.* = .{ .enum_value = .{ .typ = obj, .name = et.members[ei], .ordinal = @intCast(ei) } };
+                                    try vmPush(.{ .object = ev });
+                                    break;
+                                }
+                            }
+                            if (ei == et.members.len) return error.UnknownStructField;
+                        }
+                    },
+                    .named_type => |nt| {
+                        const name = chunk.constAt(name_idx).string;
+                        if (common.streq(name, "name")) {
+                            try vmPush(.{ .string = nt.name });
+                        } else if (common.streq(name, "first")) {
+                            if (!nt.has_range) return error.TypeError;
+                            try vmPush(try vmtyp.makeNamedValue(obj, .{ .number = nt.min }));
+                        } else if (common.streq(name, "last")) {
+                            if (!nt.has_range) return error.TypeError;
+                            try vmPush(try vmtyp.makeNamedValue(obj, .{ .number = nt.max }));
+                        } else return error.UnknownStructField;
+                    },
+                    .variant_type => |vt| {
+                        const name = chunk.constAt(name_idx).string;
+                        if (common.streq(name, "name")) {
+                            try vmPush(.{ .string = vt.name });
+                        } else {
+                            var vi: usize = 0;
+                            while (vi < vt.arms.len) : (vi += 1) {
+                                if (common.streq(vt.arms[vi].name, name)) {
+                                    const arm = vt.arms[vi];
+                                    if (arm.has_payload) {
+                                        const ctor = try vmAllocObject();
+                                        ctor.* = .{ .variant_ctor = .{
+                                            .typ = obj,
+                                            .tag = arm.name,
+                                            .ordinal = vi,
+                                            .payload_type = arm.payload_type,
+                                        }};
+                                        try vmPush(.{ .object = ctor });
+                                    } else {
+                                        const vv = try vmAllocObject();
+                                        vv.* = .{ .variant_value = .{
+                                            .typ = obj,
+                                            .tag = arm.name,
+                                            .ordinal = vi,
+                                            .payload = .null,
+                                        }};
+                                        try vmPush(.{ .object = vv });
+                                    }
+                                    break;
+                                }
+                            }
+                            if (vi == vt.arms.len) return error.UnknownStructField;
+                        }
+                    },
+                    else => return error.TypeError,
+                }
+            },
+
             .const_add => {
                 const k = chunk.constAt(try vmShort());
                 const a = try vmPop();
