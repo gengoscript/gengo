@@ -54,6 +54,11 @@ pub const State = struct {
     rune_cache_valid: bool = false,
     rune_cache_overflow: bool = false,
     rune_cache_offsets: [RuneCacheMax]usize = undefined,
+    // String accumulation buffer: const_add uses this to avoid N-1 intermediate
+    // allocations in pure string-constant chains ("a"+"b"+"c"+...).
+    // str_acc_len > 0 means TOS holds a .string view into str_acc[0..str_acc_len].
+    str_acc: [4096]u8 = undefined,
+    str_acc_len: usize = 0,
     gc_runs: u64 = 0,
     gc_time_ns: u64 = 0,
     alloc_object_calls: u64 = 0,
@@ -101,6 +106,7 @@ pub fn reset() void {
     vmState().rune_cache_rune_len = 0;
     vmState().rune_cache_valid = false;
     vmState().rune_cache_overflow = false;
+    vmState().str_acc_len = 0;
     vmState().gc_runs = 0;
     vmState().gc_time_ns = 0;
     vmState().alloc_object_calls = 0;
@@ -126,6 +132,7 @@ pub fn resetExec() void {
     vmState().frame_top = 0;
     vmState().call_depth_target = null;
     vmState().temp_root_top = 0;
+    vmState().str_acc_len = 0;
     vmState().defer_top = 0;
     vmState().ops_budget_remaining = std.math.maxInt(u64);
     vmState().panic_line = 0;
