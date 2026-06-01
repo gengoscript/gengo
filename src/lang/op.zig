@@ -62,6 +62,8 @@ pub const Op = enum(u8) {
     op_trap_check,
     variant_check,   // u8 const_idx: pop dup'd value, push bool (tag match)
     variant_payload, // pop variant_value, push payload
+    get_field,       // u16:name_const_idx, u16:ic_type_pool_idx, u8:ic_field_idx — struct field read with inline cache
+    set_field,       // u16:name_const_idx, u16:ic_type_pool_idx, u8:ic_field_idx — struct field write with inline cache
     ret,
     halt,
 };

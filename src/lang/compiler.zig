@@ -1076,21 +1076,35 @@ pub const Compiler = struct {
         while (i + 1 < target.step_count) : (i += 1) {
             const st = all_steps[target.step_start + i];
             switch (st) {
-                .dot_name => |name| try chunk.emitConst(.{ .string = name }, target.root.line),
-                .index_number => |n| try chunk.emitConst(.{ .number = n }, target.root.line),
-                .index_string => |s| try chunk.emitConst(.{ .string = s }, target.root.line),
+                .dot_name => |name| try chunk.emitGetField(name, target.root.line),
+                .index_number => |n| {
+                    try chunk.emitConst(.{ .number = n }, target.root.line);
+                    try chunk.emitOp(.get_index, target.root.line);
+                },
+                .index_string => |s| {
+                    try chunk.emitConst(.{ .string = s }, target.root.line);
+                    try chunk.emitOp(.get_index, target.root.line);
+                },
             }
-            try chunk.emitOp(.get_index, target.root.line);
         }
 
         const last = all_steps[target.step_start + target.step_count - 1];
         switch (last) {
-            .dot_name => |name| try chunk.emitConst(.{ .string = name }, target.root.line),
-            .index_number => |n| try chunk.emitConst(.{ .number = n }, target.root.line),
-            .index_string => |s| try chunk.emitConst(.{ .string = s }, target.root.line),
+            .dot_name => |name| {
+                try chunk.emitConstIdx(.get_global, vidx, target.root.line);
+                try chunk.emitSetField(name, target.root.line);
+            },
+            .index_number => |n| {
+                try chunk.emitConst(.{ .number = n }, target.root.line);
+                try chunk.emitConstIdx(.get_global, vidx, target.root.line);
+                try chunk.emitOp(.set_index, target.root.line);
+            },
+            .index_string => |s| {
+                try chunk.emitConst(.{ .string = s }, target.root.line);
+                try chunk.emitConstIdx(.get_global, vidx, target.root.line);
+                try chunk.emitOp(.set_index, target.root.line);
+            },
         }
-        try chunk.emitConstIdx(.get_global, vidx, target.root.line);
-        try chunk.emitOp(.set_index, target.root.line);
     }
 
     fn multiBindStmt(self: *Compiler, is_decl: bool) !void {
@@ -1193,8 +1207,7 @@ pub const Compiler = struct {
                     self.matchOpt(.semicolon);
                     return;
                 }
-                try chunk.emitConst(.{ .string = prop.src }, prop.line);
-                try chunk.emitOp(.get_index, prop.line);
+                try chunk.emitGetField(prop.src, prop.line);
             } else {
                 break;
             }
@@ -1450,21 +1463,36 @@ pub const Compiler = struct {
         self.advance();
         try self.emitGetVar(root);
 
+        // Track the kind of the last accessor so we can emit get_field/set_field for
+        // dot accesses and the old constant+get_index/set_index path for bracket accesses.
+        const LastKind = enum { dot_name, bracket };
+        var last_kind: LastKind = .bracket;
+        var last_name: []const u8 = undefined;
+        var last_line: u32 = 0;
+
         while (true) {
             if (self.match(.dot)) {
                 if (self.cur.typ != .ident) return error.ExpectedPropertyName;
                 const prop = self.cur;
                 self.advance();
-                try chunk.emitConst(.{ .string = prop.src }, prop.line);
-                if (self.check(.eq) or self.check(.plus_eq) or self.check(.minus_eq) or self.check(.star_eq) or self.check(.slash_eq) or self.check(.percent_eq) or self.check(.amp_eq) or self.check(.pipe_eq) or self.check(.caret_eq) or self.check(.lt_lt_eq) or self.check(.gt_gt_eq)) break;
-                try chunk.emitOp(.get_index, prop.line);
+                if (self.check(.eq) or self.check(.plus_eq) or self.check(.minus_eq) or self.check(.star_eq) or self.check(.slash_eq) or self.check(.percent_eq) or self.check(.amp_eq) or self.check(.pipe_eq) or self.check(.caret_eq) or self.check(.lt_lt_eq) or self.check(.gt_gt_eq)) {
+                    // This is the last step — record name, do NOT push key, break.
+                    last_kind = .dot_name;
+                    last_name = prop.src;
+                    last_line = prop.line;
+                    break;
+                }
+                try chunk.emitGetField(prop.src, prop.line);
                 continue;
             }
 
             if (self.match(.lbracket)) {
                 try self.expr();
                 try self.consume(.rbracket);
-                if (self.check(.eq) or self.check(.plus_eq) or self.check(.minus_eq) or self.check(.star_eq) or self.check(.slash_eq) or self.check(.percent_eq) or self.check(.amp_eq) or self.check(.pipe_eq) or self.check(.caret_eq) or self.check(.lt_lt_eq) or self.check(.gt_gt_eq)) break;
+                if (self.check(.eq) or self.check(.plus_eq) or self.check(.minus_eq) or self.check(.star_eq) or self.check(.slash_eq) or self.check(.percent_eq) or self.check(.amp_eq) or self.check(.pipe_eq) or self.check(.caret_eq) or self.check(.lt_lt_eq) or self.check(.gt_gt_eq)) {
+                    last_kind = .bracket;
+                    break;
+                }
                 try chunk.emitOp(.get_index, self.prev.line);
                 continue;
             }
@@ -1473,18 +1501,18 @@ pub const Compiler = struct {
         }
 
         const op_tok = self.cur;
+
         if (self.match(.eq)) {
             try self.expr();
-            try chunk.emitOp(.set_index, self.prev.line);
+            switch (last_kind) {
+                .dot_name => try chunk.emitSetField(last_name, last_line),
+                .bracket => try chunk.emitOp(.set_index, self.prev.line),
+            }
             self.matchOpt(.semicolon);
             return;
         }
 
         if (self.match(.plus_eq) or self.match(.minus_eq) or self.match(.star_eq) or self.match(.slash_eq) or self.match(.percent_eq) or self.match(.amp_eq) or self.match(.pipe_eq) or self.match(.caret_eq) or self.match(.lt_lt_eq) or self.match(.gt_gt_eq)) {
-            // duplicate container+key pair to read old value, then compute and write back
-            try chunk.emitOp(.dup2, op_tok.line);
-            try chunk.emitOp(.get_index, op_tok.line); // old value
-            try self.expr();
             const op: Op = switch (op_tok.typ) {
                 .plus_eq => .add,
                 .minus_eq => .sub,
@@ -1498,8 +1526,24 @@ pub const Compiler = struct {
                 .gt_gt_eq => .shr,
                 else => return error.UnexpectedToken,
             };
-            try chunk.emitOp(op, op_tok.line);
-            try chunk.emitOp(.set_index, op_tok.line);
+            switch (last_kind) {
+                .dot_name => {
+                    // Stack: container. Dup it, read old value with get_field, compute, write back.
+                    try chunk.emitOp(.dup, op_tok.line);
+                    try chunk.emitGetField(last_name, last_line);
+                    try self.expr();
+                    try chunk.emitOp(op, op_tok.line);
+                    try chunk.emitSetField(last_name, op_tok.line);
+                },
+                .bracket => {
+                    // Stack: container, key. Dup pair, read old value, compute, write back.
+                    try chunk.emitOp(.dup2, op_tok.line);
+                    try chunk.emitOp(.get_index, op_tok.line);
+                    try self.expr();
+                    try chunk.emitOp(op, op_tok.line);
+                    try chunk.emitOp(.set_index, op_tok.line);
+                },
+            }
             self.matchOpt(.semicolon);
             return;
         }
@@ -2215,8 +2259,7 @@ pub const Compiler = struct {
                 try chunk.emitInvokeMethod(prop.src, argc, line);
                 return;
             }
-            try chunk.emitConst(.{ .string = prop.src }, line);
-            try chunk.emitOp(.get_index, line);
+            try chunk.emitGetField(prop.src, line);
             return;
         }
 

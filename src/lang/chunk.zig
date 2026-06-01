@@ -86,14 +86,44 @@ pub fn emitConst(v: Value, line: u32) !void {
     try emitOpConst(.constant, v, line);
 }
 
+pub fn patchByte(offset: usize, val: u8) void {
+    g_state.code[offset] = val;
+}
+
+// Emit get_field: op + name_idx(2) + ic_type(2, cold=0xFFFF) + ic_fidx(1, cold=0xFF).
+pub fn emitGetField(name: []const u8, line: u32) !void {
+    const idx = try addConst(.{ .string = name });
+    try emitByte(@intFromEnum(Op.get_field), line);
+    try emitByte(@intCast((idx >> 8) & 0xff), line);
+    try emitByte(@intCast(idx & 0xff), line);
+    try emitByte(0xff, line);
+    try emitByte(0xff, line);
+    try emitByte(0xff, line);
+}
+
+// Emit set_field: op + name_idx(2) + ic_type(2, cold=0xFFFF) + ic_fidx(1, cold=0xFF).
+pub fn emitSetField(name: []const u8, line: u32) !void {
+    const idx = try addConst(.{ .string = name });
+    try emitByte(@intFromEnum(Op.set_field), line);
+    try emitByte(@intCast((idx >> 8) & 0xff), line);
+    try emitByte(@intCast(idx & 0xff), line);
+    try emitByte(0xff, line);
+    try emitByte(0xff, line);
+    try emitByte(0xff, line);
+}
+
 // Helpers for invoke_method / defer_invoke_method which interleave a const index
-// with a separate argc byte: op + idx_hi + idx_lo + argc.
+// with a separate argc byte: op + idx_hi + idx_lo + argc + ic_type(2) + ic_func(2).
 pub fn emitInvokeMethod(name: []const u8, argc: u8, line: u32) !void {
     const idx = try addConst(.{ .string = name });
     try emitByte(@intFromEnum(Op.invoke_method), line);
     try emitByte(@intCast((idx >> 8) & 0xff), line);
     try emitByte(@intCast(idx & 0xff), line);
     try emitByte(argc, line);
+    try emitByte(0xff, line); // ic_type hi (cold)
+    try emitByte(0xff, line); // ic_type lo (cold)
+    try emitByte(0xff, line); // ic_func hi (cold)
+    try emitByte(0xff, line); // ic_func lo (cold)
 }
 
 pub fn emitDeferInvokeMethod(name: []const u8, argc: u8, line: u32) !void {

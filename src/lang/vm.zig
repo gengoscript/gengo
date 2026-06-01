@@ -1050,21 +1050,37 @@ fn runInner() !void {
             .invoke_method => {
                 const mname = (try vmConst()).string;
                 const argc = try vmByte();
+                const ic_base = vmState().ip;
+                const ic_type_idx = try vmShort(); // ic_type pool index (0xFFFF = cold)
+                const ic_func_idx = try vmShort(); // ic_func pool index (0xFFFF = cold)
                 const recv_idx = vmState().stack_top - argc - 1;
                 const recv = vmState().stack[recv_idx];
                 if (recv != .object) return error.NotAMethodReceiver;
                 switch (recv.object.*) {
                     .struct_instance => |inst| {
-                        const tname = inst.typ.struct_type.name;
-                        const total = tname.len + 1 + mname.len;
-                        if (total > 128) return error.NotAMethodReceiver;
-                        var key_buf: [128]u8 = undefined;
-                        @memcpy(key_buf[0..tname.len], tname);
-                        key_buf[tname.len] = '.';
-                        @memcpy(key_buf[tname.len + 1 .. total], mname);
-                        const key = key_buf[0..total];
-
-                        const func = globals.get(key) orelse return error.UnknownMethod;
+                        const tpi = heap.objectPoolIndex(inst.typ);
+                        var func: Value = undefined;
+                        if (ic_type_idx == @as(usize, tpi) and ic_func_idx != 0xFFFF) {
+                            func = .{ .object = heap.objectAt(@intCast(ic_func_idx)) };
+                        } else {
+                            const tname = inst.typ.struct_type.name;
+                            const total = tname.len + 1 + mname.len;
+                            if (total > 128) return error.NotAMethodReceiver;
+                            var key_buf: [128]u8 = undefined;
+                            @memcpy(key_buf[0..tname.len], tname);
+                            key_buf[tname.len] = '.';
+                            @memcpy(key_buf[tname.len + 1 .. total], mname);
+                            func = globals.get(key_buf[0..total]) orelse return error.UnknownMethod;
+                            if (func == .object) {
+                                const fpi = heap.objectPoolIndex(func.object);
+                                if (fpi != 0xFFFF) {
+                                    chunk.patchByte(ic_base + 0, @intCast((tpi >> 8) & 0xFF));
+                                    chunk.patchByte(ic_base + 1, @intCast(tpi & 0xFF));
+                                    chunk.patchByte(ic_base + 2, @intCast((fpi >> 8) & 0xFF));
+                                    chunk.patchByte(ic_base + 3, @intCast(fpi & 0xFF));
+                                }
+                            }
+                        }
                         if (vmState().stack_top >= vms.MaxStack) return error.StackOverflow;
                         var i: usize = vmState().stack_top;
                         while (i > recv_idx + 1) {
@@ -1206,6 +1222,220 @@ fn runInner() !void {
                 const v = try vmPop();
                 if (v != .object or v.object.* != .variant_value) return error.TypeError;
                 try vmPush(v.object.variant_value.payload);
+            },
+
+            .get_field => {
+                const name_idx = try vmShort();
+                const ic_base = vmState().ip;
+                const ic_type_idx = try vmShort();
+                const ic_fidx = try vmByte();
+                const name = chunk.constAt(name_idx).string;
+                const raw = try vmPop();
+                const container = if (raw == .object and raw.object.* == .named_value)
+                    raw.object.named_value.value
+                else
+                    raw;
+                if (container != .object) return error.TypeError;
+                const obj = container.object;
+                switch (obj.*) {
+                    .struct_instance => |inst| {
+                        const tpi = heap.objectPoolIndex(inst.typ);
+                        if (ic_type_idx == @as(usize, tpi) and ic_fidx != 0xFF) {
+                            try vmPush(inst.fields[ic_fidx].value);
+                        } else {
+                            const fi = vmtyp.findFieldIndex(inst.typ.struct_type.fields, name) orelse return error.UnknownStructField;
+                            if (fi <= 0xFE) {
+                                chunk.patchByte(ic_base,     @intCast((tpi >> 8) & 0xFF));
+                                chunk.patchByte(ic_base + 1, @intCast(tpi & 0xFF));
+                                chunk.patchByte(ic_base + 2, @intCast(fi));
+                            }
+                            try vmPush(inst.fields[fi].value);
+                        }
+                    },
+                    .map, .map_managed => {
+                        const items = vms.asMapSlice(obj);
+                        const key_v = Value{ .string = name };
+                        var i: usize = 0;
+                        while (i < items.len) : (i += 1) {
+                            if (vmmap.mapKeyEquals(items[i].key, key_v)) {
+                                try vmPush(items[i].value);
+                                break;
+                            }
+                        }
+                        if (i == items.len) try vmPush(.null);
+                    },
+                    .map_hashed => |hm| {
+                        const key_v = Value{ .string = name };
+                        if (vmmap.mapFindHashedIndex(hm.entries[0..hm.len], hm.buckets, key_v)) |fi| {
+                            try vmPush(hm.entries[fi].value);
+                        } else {
+                            try vmPush(.null);
+                        }
+                    },
+                    .enum_type => |et| {
+                        if (common.streq(name, "name")) {
+                            try vmPush(.{ .string = et.name });
+                        } else if (common.streq(name, "first")) {
+                            if (et.members.len == 0) return error.IndexOutOfBounds;
+                            const ev = try vmAllocObject();
+                            ev.* = .{ .enum_value = .{ .typ = obj, .name = et.members[0], .ordinal = 0 } };
+                            try vmPush(.{ .object = ev });
+                        } else if (common.streq(name, "last")) {
+                            if (et.members.len == 0) return error.IndexOutOfBounds;
+                            const last_i = et.members.len - 1;
+                            const ev = try vmAllocObject();
+                            ev.* = .{ .enum_value = .{ .typ = obj, .name = et.members[last_i], .ordinal = @intCast(last_i) } };
+                            try vmPush(.{ .object = ev });
+                        } else if (common.streq(name, "values")) {
+                            const arr_obj = try vmAllocObject();
+                            arr_obj.* = .{ .array = &[_]Value{} };
+                            try pushTempRoot(.{ .object = arr_obj });
+                            defer popTempRoot();
+                            const items = try vmAllocManagedSlice(Value, et.members.len);
+                            var ei: usize = 0;
+                            while (ei < et.members.len) : (ei += 1) {
+                                const ev = try vmAllocObject();
+                                ev.* = .{ .enum_value = .{ .typ = obj, .name = et.members[ei], .ordinal = @intCast(ei) } };
+                                items[ei] = .{ .object = ev };
+                                arr_obj.* = .{ .array_managed = items[0 .. ei + 1] };
+                            }
+                            try vmPush(.{ .object = arr_obj });
+                        } else {
+                            var ei: usize = 0;
+                            while (ei < et.members.len) : (ei += 1) {
+                                if (common.streq(et.members[ei], name)) {
+                                    const ev = try vmAllocObject();
+                                    ev.* = .{ .enum_value = .{ .typ = obj, .name = et.members[ei], .ordinal = @intCast(ei) } };
+                                    try vmPush(.{ .object = ev });
+                                    break;
+                                }
+                            }
+                            if (ei == et.members.len) return error.UnknownStructField;
+                        }
+                    },
+                    .named_type => |nt| {
+                        if (common.streq(name, "name")) {
+                            try vmPush(.{ .string = nt.name });
+                        } else if (common.streq(name, "first")) {
+                            if (!nt.has_range) return error.TypeError;
+                            try vmPush(try vmtyp.makeNamedValue(obj, .{ .number = nt.min }));
+                        } else if (common.streq(name, "last")) {
+                            if (!nt.has_range) return error.TypeError;
+                            try vmPush(try vmtyp.makeNamedValue(obj, .{ .number = nt.max }));
+                        } else return error.UnknownStructField;
+                    },
+                    .variant_type => |vt| {
+                        if (common.streq(name, "name")) {
+                            try vmPush(.{ .string = vt.name });
+                        } else {
+                            var vi: usize = 0;
+                            while (vi < vt.arms.len) : (vi += 1) {
+                                if (common.streq(vt.arms[vi].name, name)) {
+                                    const arm = vt.arms[vi];
+                                    if (arm.has_payload) {
+                                        const ctor = try vmAllocObject();
+                                        ctor.* = .{ .variant_ctor = .{
+                                            .typ = obj,
+                                            .tag = arm.name,
+                                            .ordinal = vi,
+                                            .payload_type = arm.payload_type,
+                                        }};
+                                        try vmPush(.{ .object = ctor });
+                                    } else {
+                                        const vv = try vmAllocObject();
+                                        vv.* = .{ .variant_value = .{
+                                            .typ = obj,
+                                            .tag = arm.name,
+                                            .ordinal = vi,
+                                            .payload = .null,
+                                        }};
+                                        try vmPush(.{ .object = vv });
+                                    }
+                                    break;
+                                }
+                            }
+                            if (vi == vt.arms.len) return error.UnknownStructField;
+                        }
+                    },
+                    else => return error.TypeError,
+                }
+            },
+
+            .set_field => {
+                const name_idx = try vmShort();
+                const ic_base = vmState().ip;
+                const ic_type_idx = try vmShort();
+                const ic_fidx = try vmByte();
+                const name = chunk.constAt(name_idx).string;
+                const val = try vmPop();
+                const raw_c = try vmPop();
+                const is_named_c = raw_c == .object and raw_c.object.* == .named_value;
+                const container = if (is_named_c) raw_c.object.named_value.value else raw_c;
+                if (is_named_c) {
+                    const nv = raw_c.object.named_value;
+                    if (nv.typ.* == .named_type) {
+                        const nt = nv.typ.named_type;
+                        if (nt.base == .map_t) {
+                            if (nt.val_spec) |vs| {
+                                if (!vmtyp.matchesTypeSpec(val, vs)) return error.TypeError;
+                            }
+                        }
+                    }
+                }
+                if (container != .object) return error.TypeError;
+                switch (container.object.*) {
+                    .struct_instance => |inst| {
+                        const tpi = heap.objectPoolIndex(inst.typ);
+                        var fi: usize = undefined;
+                        if (ic_type_idx == @as(usize, tpi) and ic_fidx != 0xFF) {
+                            fi = ic_fidx;
+                        } else {
+                            const found = vmtyp.findFieldIndex(inst.typ.struct_type.fields, name) orelse return error.UnknownStructField;
+                            fi = found;
+                            if (found <= 0xFE) {
+                                chunk.patchByte(ic_base,     @intCast((tpi >> 8) & 0xFF));
+                                chunk.patchByte(ic_base + 1, @intCast(tpi & 0xFF));
+                                chunk.patchByte(ic_base + 2, @intCast(found));
+                            }
+                        }
+                        if (inst.typ.struct_type.fields[fi].is_const) return error.AssignToConst;
+                        if (!vmtyp.matchesFieldType(val, inst.typ.struct_type.fields[fi])) return error.StructFieldTypeMismatch;
+                        inst.fields[fi].value = val;
+                    },
+                    .map, .map_managed => {
+                        const items = vms.asMapSlice(container.object);
+                        const key_v = Value{ .string = name };
+                        var i: usize = 0;
+                        var updated = false;
+                        while (i < items.len) : (i += 1) {
+                            if (vmmap.mapKeyEquals(items[i].key, key_v)) {
+                                items[i].value = val;
+                                updated = true;
+                                break;
+                            }
+                        }
+                        if (!updated) {
+                            try pushTempRoot(container);
+                            defer popTempRoot();
+                            const ext = try vmAllocManagedSlice(MapEntry, items.len + 1);
+                            @memcpy(ext[0..items.len], items);
+                            ext[items.len] = .{ .key = .{ .string = name }, .value = val };
+                            const new_len = items.len + 1;
+                            container.object.* = .{ .map_managed = ext[0..new_len] };
+                            if (new_len > 8) {
+                                const bcount = vmmap.mapBucketsForCount(new_len);
+                                const buckets = try vmAllocManagedSlice(i32, bcount);
+                                vmmap.mapBuildHashedBuckets(ext[0..new_len], buckets);
+                                container.object.* = .{ .map_hashed = .{ .entries = ext[0..new_len], .len = new_len, .buckets = buckets } };
+                            }
+                        }
+                    },
+                    .map_hashed => {
+                        const key_v = Value{ .string = name };
+                        try vmmap.mapInsertHashed(container.object, key_v, val);
+                    },
+                    else => return error.TypeError,
+                }
             },
 
             .defer_call => {

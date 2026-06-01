@@ -124,6 +124,17 @@ fn objectIndex(ptr: *Object) ?usize {
     return idx;
 }
 
+// Returns the object pool index (0..MaxObjects-1) or 0xFFFF if ptr is not in the pool.
+pub fn objectPoolIndex(ptr: *Object) u16 {
+    const idx = objectIndex(ptr) orelse return 0xFFFF;
+    return @intCast(idx);
+}
+
+// Returns a pointer to the object at the given pool index.
+pub fn objectAt(idx: u16) *Object {
+    return &g_state.obj_pool[idx];
+}
+
 pub fn markObject(ptr: *Object) void {
     const idx = objectIndex(ptr) orelse return;
     if (!g_state.obj_live[idx]) return;
