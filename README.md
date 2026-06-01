@@ -95,7 +95,7 @@ parseTemp("-300.0")
 
 | Namespace | Functions |
 |---|---|
-| `std.io` | `println`, `printf` |
+| `std.io` | `print`, `println`, `printf` |
 | `std.core` | `len`, `bytelen`, `append`, `contains`, `remove`, `has`, `delete`, `keys`, `values`, `error`, `is_error`, `recover`, `gc`, `gc_live_objects`, `gc_stats` |
 | `std.string` | `split`, `join`, `trim`, `upper`, `lower`, `starts_with`, `ends_with`, `index_of` |
 | `std.math` | `abs`, `sqrt`, `floor`, `ceil`, `round`, `sin`, `cos`, `tan`, `log`, `log2`, `log10`, `pow`, `min`, `max`, `pi`, `e`, `inf` |

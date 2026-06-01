@@ -11,7 +11,11 @@ Only `import("std")` is supported.
 ## std.io
 
 ### `std.io.println(...args)`
-- Prints arguments and trailing newline.
+- Prints arguments followed by a newline.
+- Returns `null`.
+
+### `std.io.print(...args)`
+- Prints arguments without a trailing newline.
 - Returns `null`.
 
 ### `std.io.printf(fmt, ...args)`

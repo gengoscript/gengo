@@ -4,6 +4,32 @@ This changelog tracks notable language/runtime changes by implementation date.
 
 ## 2026-06-01
 
+### Language — Zig-style `\\` Multiline Strings
+
+Multiline string literals now use `\\` prefix on each line, identical to Zig.
+
+- Content after `\\` is taken **literally** — no escape processing.
+- Each line contributes its content plus a trailing newline (including the last line).
+- Consecutive `\\` lines at any indentation are joined into a single string value.
+- A blank line or any non-`\\` line terminates the literal.
+
+```gengo
+msg :=
+    \\Hello, world!
+    \\Escape seqs like \n and \t are NOT processed.
+    \\Quotes like "this" need no backslash.
+
+std.io.print(msg)
+```
+
+The old continuation-marker multiline syntax (repeating the opening quote at the
+same indentation column) has been removed. Single-line `"..."` and `'...'`
+strings are unchanged; they now reject embedded newlines rather than silently
+treating them as a continuation attempt.
+
+**New:** `std.io.print(...args)` — prints without a trailing newline, useful
+when printing `\\` multiline strings that already end with `\n`.
+
 ### VM — Monomorphic Inline Caches for Struct Access
 
 Three self-patching call-site caches eliminate the dominant hot-path costs for

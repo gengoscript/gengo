@@ -45,25 +45,29 @@ Implemented value kinds:
 
 ### String Literals
 - Standard escaped strings use double quotes: `"..."`.
-- Raw strings use single quotes: `'...'` (no escape processing).
-- Multiline strings are supported for both quote styles.
-  - Start with `"` (or `'`) on the first line.
-  - Continuation requires each next line to place the matching quote marker at the same indentation column as the opening quote.
-  - The last content line ends with the closing quote.
-  - The continuation marker and host indentation to its left are stripped.
-  - Newlines between continuation lines are preserved.
+  - Supports `\n`, `\t`, `\r`, `\\`, `\"`, `\'`.
+  - Must fit on a single line; embedded newlines are a syntax error.
+- Raw strings use single quotes: `'...'` (no escape processing; single-line only).
+- Multiline raw strings use `\\` prefix on each line (Zig-style):
+  - No escape processing — content is taken literally.
+  - Each line contributes its content plus a trailing newline (including the last line).
+  - Consecutive `\\` lines at any indentation level are joined into one string value.
+  - Blank lines or non-`\\` lines terminate the literal.
 - Strings are UTF-8 sequences.
   - `std.core.len(s)` counts Unicode code points (runes), not bytes.
   - `s[i]` indexes by rune position.
   - `s[a:b]` slices by rune positions.
   - `for ch in s` and `for i, ch in s` iterate by rune (with `i` as rune index).
 
-Example multiline escaped string:
+Example multiline string:
 
 ```gengo
-x := "hello world
-     "why are you like this world
-     "I've done you no harm"
+msg :=
+    \\Hello, world!
+    \\Escape seqs like \n and \t are NOT processed.
+    \\Quotes like "this" need no backslash.
+
+std.io.print(msg)
 ```
 
 ### Rune Literals

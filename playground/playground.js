@@ -220,6 +220,18 @@ func runAll(pairs any) {
 runAll([[10.0, 2.0], [9.0, 3.0], [5.0, 0.0], [8.0, 4.0]])
 std.io.println("done")`,
 
+  multiline: `std := import("std")
+
+// Use \\\\ to start a multiline string line.
+// Content is raw — escape sequences are not processed.
+
+msg :=
+    \\\\Hello, Gengo!
+    \\\\Escape sequences \\n and \\t are NOT processed.
+    \\\\Quotes like "this" need no backslash.
+
+std.io.print(msg)`,
+
   string_ops: `std := import("std")
 s := std.string
 
@@ -300,10 +312,10 @@ require(['vs/editor/editor.main'], function () {
         [/\d*\.\d+([eE][\-+]?\d+)?/, 'number.float'],
         [/\d+/, 'number'],
         [/[;,.]/, 'delimiter'],
+        [/\\\\.*$/, 'string'],
         [/"([^"\\]|\\.)*$/, 'string.invalid'],
         [/"/, { token: 'string.quote', bracket: '@open', next: '@string' }],
-        [/'[^\\']'/, 'string'],
-        [/(')(@escapes)(')/, ['string', 'string.escape', 'string']],
+        [/'[^']*'/, 'string'],
         [/'/, 'string.invalid']
       ],
       string: [
