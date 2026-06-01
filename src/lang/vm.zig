@@ -334,6 +334,75 @@ fn iterNext2(it: *IterObj) !void {
     }
 }
 
+// Slow-path return: handles defers and/or typed-return enforcement.
+// Returns true if runInner should stop (call_depth_target reached), false to continue.
+// Fast-path returns (no defers, no typed returns) are inlined in the ret/ret_const handlers.
+fn retSlowPath(retval_in: Value) !bool {
+    var retval = retval_in;
+    const fi = vmState().frame_top - 1;
+    const frame = &vmState().frames[fi];
+    try pushTempRoot(retval);
+    while (vmState().defer_top > frame.defer_base) {
+        vmState().defer_top -= 1;
+        const deferred = vmState().defer_stack[vmState().defer_top];
+        try pushTempRoot(deferred);
+        const arr = vms.asArraySlice(deferred.object);
+        if (arr.len > 0) {
+            const dargc: u8 = @intCast(arr.len - 1);
+            var di: usize = 0;
+            while (di < arr.len) : (di += 1) try vmPush(arr[di]);
+            const depth_before = vmState().frame_top;
+            try performCall(dargc);
+            if (vmState().frame_top > depth_before) {
+                const prev_target = vmState().call_depth_target;
+                vmState().call_depth_target = depth_before;
+                defer vmState().call_depth_target = prev_target;
+                try run();
+            }
+            _ = try vmPop();
+        }
+        popTempRoot();
+    }
+    const fsig_ret = vmtyp.frameFuncSig(frame.func_obj) catch null;
+    if (fsig_ret) |fsig| {
+        if (fsig.named_return_count > 0) {
+            popTempRoot();
+            const nrbase = frame.base + fsig.arity;
+            if (fsig.named_return_count == 1) {
+                const raw = vmState().stack[nrbase];
+                retval = if (raw == .object and raw.object.* == .cell) raw.object.cell.value else raw;
+            } else {
+                const nrc: usize = fsig.named_return_count;
+                const arr_obj = try vmAllocObject();
+                arr_obj.* = .{ .array = &[_]Value{} };
+                try pushTempRoot(.{ .object = arr_obj });
+                const items = try vmAllocManagedSlice(Value, nrc);
+                var ri: usize = 0;
+                while (ri < nrc) : (ri += 1) {
+                    const raw = vmState().stack[nrbase + ri];
+                    items[ri] = if (raw == .object and raw.object.* == .cell) raw.object.cell.value else raw;
+                }
+                arr_obj.* = .{ .array_managed = items[0..nrc] };
+                popTempRoot();
+                retval = .{ .object = arr_obj };
+            }
+            try pushTempRoot(retval);
+        }
+    }
+    popTempRoot();
+    vmState().frame_top = fi;
+    if (frame.has_typed_returns) {
+        if (fsig_ret) |fsig| try vmtyp.enforceFuncReturnTypes(fsig, retval);
+    }
+    vmState().stack_top = frame.base - 1;
+    vmState().ip = frame.ret_ip;
+    try vmPush(retval);
+    if (vmState().call_depth_target) |d| {
+        if (vmState().frame_top == d) return true;
+    }
+    return false;
+}
+
 fn runInner() !void {
     while (true) {
         if (vmState().ops_budget_remaining < std.math.maxInt(u64)) {
@@ -1728,11 +1797,9 @@ fn runInner() !void {
             .ret => {
                 vmperf.breakOpChain();
                 if (vmState().frame_top == 0) return error.ReturnAtTopLevel;
-                var retval = try vmPop();
+                const retval = try vmPop();
                 const fi = vmState().frame_top - 1;
                 const frame = &vmState().frames[fi];
-
-                // Fast path: no defers pending, no return-type checks (the common case).
                 if (vmState().defer_top == frame.defer_base and !frame.has_typed_returns) {
                     vmState().frame_top = fi;
                     vmState().stack_top = frame.base - 1;
@@ -1743,68 +1810,28 @@ fn runInner() !void {
                     }
                     continue;
                 }
+                if (try retSlowPath(retval)) return;
+            },
 
-                // Slow path: run defers and/or enforce return types.
-                try pushTempRoot(retval);
-                while (vmState().defer_top > frame.defer_base) {
-                    vmState().defer_top -= 1;
-                    const deferred = vmState().defer_stack[vmState().defer_top];
-                    try pushTempRoot(deferred);
-                    const arr = vms.asArraySlice(deferred.object);
-                    if (arr.len > 0) {
-                        const dargc: u8 = @intCast(arr.len - 1);
-                        var di: usize = 0;
-                        while (di < arr.len) : (di += 1) try vmPush(arr[di]);
-                        const depth_before = vmState().frame_top;
-                        try performCall(dargc);
-                        if (vmState().frame_top > depth_before) {
-                            const prev_target = vmState().call_depth_target;
-                            vmState().call_depth_target = depth_before;
-                            defer vmState().call_depth_target = prev_target;
-                            try run();
-                        }
-                        _ = try vmPop();
+            // Fused constant+ret: reads idx, pushes constant, returns.
+            // Emitted when `constant k` immediately precedes `ret`.
+            .ret_const => {
+                vmperf.breakOpChain();
+                if (vmState().frame_top == 0) return error.ReturnAtTopLevel;
+                const k = chunk.constAt(try vmShort());
+                const fi = vmState().frame_top - 1;
+                const frame = &vmState().frames[fi];
+                if (vmState().defer_top == frame.defer_base and !frame.has_typed_returns) {
+                    vmState().frame_top = fi;
+                    vmState().stack_top = frame.base - 1;
+                    vmState().ip = frame.ret_ip;
+                    try vmPush(k);
+                    if (vmState().call_depth_target) |d| {
+                        if (vmState().frame_top == d) return;
                     }
-                    popTempRoot();
+                    continue;
                 }
-                // Re-read named return slots: deferred functions may have modified them.
-                const fsig_ret = vmtyp.frameFuncSig(frame.func_obj) catch null;
-                if (fsig_ret) |fsig| {
-                    if (fsig.named_return_count > 0) {
-                        popTempRoot(); // drop old retval from GC roots
-                        const nrbase = frame.base + fsig.arity;
-                        if (fsig.named_return_count == 1) {
-                            const raw = vmState().stack[nrbase];
-                            retval = if (raw == .object and raw.object.* == .cell) raw.object.cell.value else raw;
-                        } else {
-                            const nrc: usize = fsig.named_return_count;
-                            const arr_obj = try vmAllocObject();
-                            arr_obj.* = .{ .array = &[_]Value{} };
-                            try pushTempRoot(.{ .object = arr_obj });
-                            const items = try vmAllocManagedSlice(Value, nrc);
-                            var ri: usize = 0;
-                            while (ri < nrc) : (ri += 1) {
-                                const raw = vmState().stack[nrbase + ri];
-                                items[ri] = if (raw == .object and raw.object.* == .cell) raw.object.cell.value else raw;
-                            }
-                            arr_obj.* = .{ .array_managed = items[0..nrc] };
-                            popTempRoot();
-                            retval = .{ .object = arr_obj };
-                        }
-                        try pushTempRoot(retval);
-                    }
-                }
-                popTempRoot();
-                vmState().frame_top = fi;
-                if (frame.has_typed_returns) {
-                    if (fsig_ret) |fsig| try vmtyp.enforceFuncReturnTypes(fsig, retval);
-                }
-                vmState().stack_top = frame.base - 1;
-                vmState().ip = frame.ret_ip;
-                try vmPush(retval);
-                if (vmState().call_depth_target) |d| {
-                    if (vmState().frame_top == d) return;
-                }
+                if (try retSlowPath(k)) return;
             },
 
             .halt => { vmperf.breakOpChain(); return; },

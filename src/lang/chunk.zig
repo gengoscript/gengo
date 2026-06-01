@@ -53,6 +53,16 @@ pub fn emitByte(b: u8, line: u32) !void {
 }
 
 pub fn emitOp(op: Op, line: u32) !void {
+    // Peephole: constant k immediately preceding ret → ret_const k (3 bytes, 1 dispatch).
+    if (op == .ret) {
+        if (g_state.last_const_code_pos) |pos| {
+            if (pos + 3 == g_state.code_len) {
+                g_state.code[pos] = @intFromEnum(Op.ret_const);
+                g_state.last_const_code_pos = null;
+                return; // ret_const reuses the 3-byte constant slot; no extra byte needed
+            }
+        }
+    }
     return emitByte(@intFromEnum(op), line);
 }
 
