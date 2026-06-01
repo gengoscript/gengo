@@ -1,5 +1,7 @@
 pub const TT = enum {
     eof,
+    err_invalid_char,
+    err_unterminated_string,
     ident,
     number,
     string,

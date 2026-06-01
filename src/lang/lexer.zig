@@ -47,8 +47,8 @@ pub const Lexer = struct {
             '"' => self.strLit('"'),
             '\'' => self.strLit('\''),
             '`' => self.runeLit(),
-            '\\' => if (self.eat('\\')) self.multilineStrLit() else self.tok(.eof),
-            else => self.tok(.eof),
+            '\\' => if (self.eat('\\')) self.multilineStrLit() else self.tok(.err_invalid_char),
+            else => self.tok(.err_invalid_char),
         };
     }
 
@@ -126,18 +126,18 @@ pub const Lexer = struct {
                 _ = self.adv();
                 return self.tokString(start_out);
             }
-            if (c == '\n') return self.tok(.eof);
+            if (c == '\n') return self.tok(.err_unterminated_string);
             if (quote == '"' and c == '\\') {
                 _ = self.adv();
-                if (self.atEnd()) return self.tok(.eof);
+                if (self.atEnd()) return self.tok(.err_unterminated_string);
                 const esc = self.adv();
-                if (!self.outEscaped(esc)) return self.tok(.eof);
+                if (!self.outEscaped(esc)) return self.tok(.err_unterminated_string);
                 continue;
             }
             _ = self.adv();
-            if (!self.outByte(c)) return self.tok(.eof);
+            if (!self.outByte(c)) return self.tok(.err_unterminated_string);
         }
-        return self.tok(.eof);
+        return self.tok(.err_unterminated_string);
     }
 
     fn multilineStrLit(self: *Lexer) Token {
@@ -170,10 +170,10 @@ pub const Lexer = struct {
 
     fn runeLit(self: *Lexer) Token {
         while (!self.atEnd() and self.peek() != '`') {
-            if (self.peek() == '\n') return self.tok(.eof);
+            if (self.peek() == '\n') return self.tok(.err_unterminated_string);
             _ = self.adv();
         }
-        if (self.atEnd()) return self.tok(.eof);
+        if (self.atEnd()) return self.tok(.err_unterminated_string);
         _ = self.adv(); // closing backtick
         return self.tok(.rune);
     }

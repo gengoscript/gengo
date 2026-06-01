@@ -11,11 +11,11 @@
 - `api.Runtime`
 - `api.RuntimeResult`
   - `.ok`
-  - `.compile_error { line, kind }`
-  - `.runtime_error { kind }`
+  - `.compile_error { line: u32, kind: anyerror }`
+  - `.runtime_error { kind: anyerror, line: u32, col: u16, frames: [max_frames]PanicFrame, frame_count: usize }`
 - `api.RuntimeResultWithValue`
   - `.ok: Value`
-  - `.runtime_error { kind }`
+  - `.runtime_error { kind: anyerror, line: u32, col: u16, frames: [max_frames]PanicFrame, frame_count: usize }`
 
 ## Lifecycle
 
@@ -44,7 +44,7 @@ var rt = api.Runtime.init(.{ .allow_io = false });
 switch (rt.run("x := 1")) {
     .ok => {},
     .compile_error => |e| { /* e.line, e.kind */ },
-    .runtime_error => |e| { /* e.kind */ },
+    .runtime_error => |e| { /* e.kind, e.line, e.col, e.frames[0..e.frame_count] */ },
 }
 ```
 

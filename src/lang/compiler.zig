@@ -70,7 +70,11 @@ pub const Compiler = struct {
         chunk.reset();
         self.registry.reset();
         self.advance();
-        while (!self.check(.eof)) try self.decl();
+        while (!self.check(.eof)) {
+            if (self.cur.typ == .err_invalid_char) return error.InvalidChar;
+            if (self.cur.typ == .err_unterminated_string) return error.UnterminatedString;
+            try self.decl();
+        }
         try chunk.emitOp(.halt, self.prev.line);
     }
 
@@ -1175,6 +1179,8 @@ pub const Compiler = struct {
                 try self.expr();
                 try self.consume(.rparen);
             },
+            .err_invalid_char => return error.InvalidChar,
+            .err_unterminated_string => return error.UnterminatedString,
             else => return error.ExpectedExpression,
         }
         // Consume chained .prop and [index]; when .prop( is seen it's a deferred method call.
@@ -2102,6 +2108,8 @@ pub const Compiler = struct {
             .lbrace => try self.mapLit(),
             .kw_func => try self.funcLit(),
             .kw_import => try self.importExpr(),
+            .err_invalid_char => return error.InvalidChar,
+            .err_unterminated_string => return error.UnterminatedString,
             else => return error.ExpectedExpression,
         }
         while (@intFromEnum(p) <= @intFromEnum(tokPrec(self.cur.typ))) {
