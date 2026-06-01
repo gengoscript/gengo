@@ -697,6 +697,29 @@ fn runInner() !void {
                 try pushNumericResultWithCarrier(a, k, an - kn);
             },
 
+            // Quad-fused: get_local + constant + eq + jif_pop.
+            // Bytecode: [op][slot][skip][idx_hi][idx_lo][jmp_hi][jmp_lo]
+            // Reads offset first (advancing IP past the full instruction), then branches.
+            .get_local_const_eq_jif_pop => {
+                const slot = try vmByte();
+                vmState().ip += 1; // skip
+                const k = chunk.constAt(try vmShort());
+                const off = try vmShort();
+                const base = vmState().frames[vmState().frame_top - 1].base;
+                var a = vmState().stack[base + slot];
+                if (a == .object and a.object.* == .cell) a = a.object.cell.value;
+                const a_named = a == .object and a.object.* == .named_value;
+                const k_named = k == .object and k.object.* == .named_value;
+                if (a_named and k_named and a.object.named_value.typ != k.object.named_value.typ) {
+                    const ta = a.object.named_value.typ;
+                    const tk = k.object.named_value.typ;
+                    if (!namedTypeIsSubOf(ta, tk) and !namedTypeIsSubOf(tk, ta)) return error.TypeError;
+                }
+                const ea = if (a_named) a.object.named_value.value else a;
+                const ek = if (k_named) k.object.named_value.value else k;
+                if (!Value.equals(ea, ek)) vmState().ip += off;
+            },
+
             .const_add => {
                 const k = chunk.constAt(try vmShort());
                 const a = try vmPop();

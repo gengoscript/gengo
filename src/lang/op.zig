@@ -29,6 +29,10 @@ pub const Op = enum(u8) {
     // Emitted when get_local immediately precedes a const_eq or const_sub.
     get_local_const_eq,
     get_local_const_sub,
+    // Quad-fused get_local+constant+eq+jif_pop: 7-byte conditional branch.
+    // Layout: [op][slot][skip][idx_hi][idx_lo][jmp_hi][jmp_lo]
+    // Emitted when get_local_const_eq immediately precedes jif_pop.
+    get_local_const_eq_jif_pop,
     div,
     mod,
     bit_and,

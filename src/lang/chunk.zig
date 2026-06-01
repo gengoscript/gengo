@@ -23,6 +23,9 @@ pub const State = struct {
     // Verified via arithmetic (gl_pos + 2 == const_pos) rather than code inspection
     // to avoid false positives from data bytes of preceding instructions.
     last_get_local_code_pos: ?usize = null,
+    // Peephole: position of the last get_local_const_eq triple-fused instruction.
+    // Used for quad-fusion: get_local_const_eq + jif_pop → get_local_const_eq_jif_pop.
+    last_triple_eq_pos: ?usize = null,
 };
 
 var g_default_state: State = .{};
@@ -112,6 +115,9 @@ pub fn emitBinOpFused(op: Op, line: u32) !void {
                             // Layout: [top][slot][fop_byte(skip)][idx_hi][idx_lo]
                             // code[gl_pos+1] = slot, code[pos] = fop (skip byte),
                             // code[pos+1..+2] = const_idx — all unchanged.
+                            if (top == .get_local_const_eq) {
+                                g_state.last_triple_eq_pos = gl_pos;
+                            }
                         }
                     }
                 }
@@ -225,6 +231,19 @@ pub fn emitDeferInvokeMethod(name: []const u8, argc: u8, line: u32) !void {
 }
 
 pub fn emitJump(op: Op, line: u32) !usize {
+    // Quad fusion: get_local_const_eq immediately preceding jif_pop →
+    // get_local_const_eq_jif_pop (7 bytes, saves 1 dispatch per conditional check).
+    if (op == .jif_pop) {
+        if (g_state.last_triple_eq_pos) |tp| {
+            if (tp + 5 == g_state.code_len) {
+                g_state.code[tp] = @intFromEnum(Op.get_local_const_eq_jif_pop);
+                try emitByte(0xff, line);
+                try emitByte(0xff, line);
+                g_state.last_triple_eq_pos = null;
+                return g_state.code_len - 2;
+            }
+        }
+    }
     try emitOp(op, line);
     try emitByte(0xff, line);
     try emitByte(0xff, line);
