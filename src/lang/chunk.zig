@@ -90,6 +90,35 @@ pub fn patchByte(offset: usize, val: u8) void {
     g_state.code[offset] = val;
 }
 
+// Emit get_global: op + name_idx(2) + ic_slot(2, cold=0xFFFF).
+pub fn emitGetGlobal(name: []const u8, line: u32) !void {
+    const idx = try addConst(.{ .string = name });
+    try emitByte(@intFromEnum(Op.get_global), line);
+    try emitByte(@intCast((idx >> 8) & 0xff), line);
+    try emitByte(@intCast(idx & 0xff), line);
+    try emitByte(0xff, line);
+    try emitByte(0xff, line);
+}
+
+// Emit get_global when constant index is already known.
+pub fn emitGetGlobalIdx(idx: u16, line: u32) !void {
+    try emitByte(@intFromEnum(Op.get_global), line);
+    try emitByte(@intCast((idx >> 8) & 0xff), line);
+    try emitByte(@intCast(idx & 0xff), line);
+    try emitByte(0xff, line);
+    try emitByte(0xff, line);
+}
+
+// Emit set_global: op + name_idx(2) + ic_slot(2, cold=0xFFFF).
+pub fn emitSetGlobal(name: []const u8, line: u32) !void {
+    const idx = try addConst(.{ .string = name });
+    try emitByte(@intFromEnum(Op.set_global), line);
+    try emitByte(@intCast((idx >> 8) & 0xff), line);
+    try emitByte(@intCast(idx & 0xff), line);
+    try emitByte(0xff, line);
+    try emitByte(0xff, line);
+}
+
 // Emit get_field: op + name_idx(2) + ic_type(2, cold=0xFFFF) + ic_fidx(1, cold=0xFF).
 pub fn emitGetField(name: []const u8, line: u32) !void {
     const idx = try addConst(.{ .string = name });

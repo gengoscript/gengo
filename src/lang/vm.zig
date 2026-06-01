@@ -361,13 +361,33 @@ fn runInner() !void {
                 try globals.def(name, try vmPop());
             },
             .get_global => {
-                const name = (try vmConst()).string;
-                try vmPush(globals.get(name) orelse return error.NotDefined);
+                const name_idx = try vmShort();
+                const ic_base = vmState().ip;
+                const ic_slot: u16 = @intCast(try vmShort());
+                if (ic_slot != 0xFFFF) {
+                    try vmPush(globals.getAt(ic_slot));
+                } else {
+                    const name = chunk.constAt(name_idx).string;
+                    const slot = globals.findSlot(name) orelse return error.NotDefined;
+                    chunk.patchByte(ic_base,     @intCast((slot >> 8) & 0xFF));
+                    chunk.patchByte(ic_base + 1, @intCast(slot & 0xFF));
+                    try vmPush(globals.getAt(slot));
+                }
             },
             .set_global => {
-                const name = (try vmConst()).string;
+                const name_idx = try vmShort();
+                const ic_base = vmState().ip;
+                const ic_slot: u16 = @intCast(try vmShort());
                 const val = try vmPop();
-                if (!globals.set(name, val)) return error.NotDefined;
+                if (ic_slot != 0xFFFF) {
+                    globals.setAt(ic_slot, val);
+                } else {
+                    const name = chunk.constAt(name_idx).string;
+                    const slot = globals.findSlot(name) orelse return error.NotDefined;
+                    chunk.patchByte(ic_base,     @intCast((slot >> 8) & 0xFF));
+                    chunk.patchByte(ic_base + 1, @intCast(slot & 0xFF));
+                    globals.setAt(slot, val);
+                }
             },
 
             .get_local => {

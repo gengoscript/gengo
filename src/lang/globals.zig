@@ -52,6 +52,19 @@ pub fn get(name: []const u8) ?Value {
     return g_state.entries[idx].value;
 }
 
+// Returns the raw table slot index, or null if name not found. Used by IC.
+pub fn findSlot(name: []const u8) ?u16 {
+    return if (slotFor(name)) |idx| @intCast(idx) else null;
+}
+
+pub fn getAt(slot: u16) Value {
+    return g_state.entries[slot].value;
+}
+
+pub fn setAt(slot: u16, value: Value) void {
+    g_state.entries[slot].value = value;
+}
+
 pub fn has(name: []const u8) bool {
     return slotFor(name) != null;
 }

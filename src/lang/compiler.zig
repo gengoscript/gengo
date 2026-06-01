@@ -124,7 +124,7 @@ pub const Compiler = struct {
         } else if (self.resolveUpvalue(name.src)) |uv| {
             try chunk.emit2(@intFromEnum(Op.get_upvalue), uv, name.line);
         } else {
-            try chunk.emitOpConst(.get_global, .{ .string = name.src }, name.line);
+            try chunk.emitGetGlobal(name.src, name.line);
         }
     }
 
@@ -134,7 +134,7 @@ pub const Compiler = struct {
         } else if (self.resolveUpvalue(name.src)) |uv| {
             try chunk.emit2(@intFromEnum(Op.set_upvalue), uv, name.line);
         } else {
-            try chunk.emitOpConst(.set_global, .{ .string = name.src }, name.line);
+            try chunk.emitSetGlobal(name.src, name.line);
         }
     }
 
@@ -902,7 +902,7 @@ pub const Compiler = struct {
                     try chunk.emitOp(.cast_bool, name.line);
                 }
             } else if (type_name.len > 0 and self.registry.hasNamedType(type_name)) {
-                try chunk.emitOpConst(.get_global, .{ .string = type_name }, name.line);
+                try chunk.emitGetGlobal(type_name, name.line);
                 try self.expr();
                 try chunk.emit2(@intFromEnum(Op.call), 1, name.line);
             } else if (common.streq(type_name, "string")) {
@@ -1070,7 +1070,7 @@ pub const Compiler = struct {
     fn emitAssignTargetPath(self: *Compiler, target: AssignTarget, all_steps: []const AssignTargetStep) !void {
         const vidx: u16 = try chunk.addConst(.{ .string = MultiAssignValueScratch });
         if (target.step_count == 0) {
-            try chunk.emitConstIdx(.get_global, vidx, target.root.line);
+            try chunk.emitGetGlobalIdx(vidx, target.root.line);
             try self.emitSetVar(target.root);
             return;
         }
@@ -1095,17 +1095,17 @@ pub const Compiler = struct {
         const last = all_steps[target.step_start + target.step_count - 1];
         switch (last) {
             .dot_name => |name| {
-                try chunk.emitConstIdx(.get_global, vidx, target.root.line);
+                try chunk.emitGetGlobalIdx(vidx, target.root.line);
                 try chunk.emitSetField(name, target.root.line);
             },
             .index_number => |n| {
                 try chunk.emitConst(.{ .number = n }, target.root.line);
-                try chunk.emitConstIdx(.get_global, vidx, target.root.line);
+                try chunk.emitGetGlobalIdx(vidx, target.root.line);
                 try chunk.emitOp(.set_index, target.root.line);
             },
             .index_string => |s| {
                 try chunk.emitConst(.{ .string = s }, target.root.line);
-                try chunk.emitConstIdx(.get_global, vidx, target.root.line);
+                try chunk.emitGetGlobalIdx(vidx, target.root.line);
                 try chunk.emitOp(.set_index, target.root.line);
             },
         }
