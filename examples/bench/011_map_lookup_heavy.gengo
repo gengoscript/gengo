@@ -1,0 +1,18 @@
+std := import("std")
+
+// Build a hashed map then do many string-key lookups.
+// All map literals produce map_hashed; exercises mapFindHashedIndex.
+m := {
+    "alpha": 1, "bravo": 2, "charlie": 3, "delta": 4, "echo": 5,
+    "foxtrot": 6, "golf": 7, "hotel": 8, "india": 9, "juliet": 10,
+    "kilo": 11, "lima": 12, "mike": 13, "november": 14, "oscar": 15,
+    "papa": 16, "quebec": 17, "romeo": 18, "sierra": 19, "tango": 20,
+}
+
+total := 0
+i := 0
+for ; i < 200000; i++ {
+    total = total + m["alpha"] + m["echo"] + m["juliet"] + m["tango"]
+}
+
+std.io.println(total)

@@ -1,0 +1,13 @@
+std := import("std")
+
+// Chain concatenation: 7 intermediate strings per iteration.
+// Each + allocates a temporary; with string-builder lowering this
+// becomes a single allocation of 8 bytes per iteration.
+total := 0
+i := 0
+for ; i < 200000; i++ {
+    s := "a" + "b" + "c" + "d" + "e" + "f" + "g" + "h"
+    total = total + std.core.len(s)
+}
+
+std.io.println(total)

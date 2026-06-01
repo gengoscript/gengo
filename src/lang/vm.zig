@@ -435,10 +435,17 @@ fn runInner() !void {
                 const b = try vmPop();
                 const a = try vmPop();
                 if (vms.isStringValue(a) and vms.isStringValue(b)) {
+                    // a and b are off the Gengo stack; protect them so GC inside
+                    // concatDynString can't free their backing bytes before the copy.
+                    try pushTempRoot(a);
+                    try pushTempRoot(b);
                     const sa = try vms.asStringValue(a);
                     const sb = try vms.asStringValue(b);
                     vmperf.countStringConcat(sa.len + sb.len);
-                    try vmPush(try concatDynString(sa, sb));
+                    const result = concatDynString(sa, sb);
+                    popTempRoot();
+                    popTempRoot();
+                    try vmPush(try result);
                 } else {
                     const an = try vms.valueAsNumber(a);
                     const bn = try vms.valueAsNumber(b);
