@@ -1289,6 +1289,20 @@ fn runInner() !void {
             .loop => {
                 const off = try vmShort();
                 vmState().ip -= off;
+                // If the back-edge target is a warm get_global IC, execute it inline
+                // to save one full dispatch iteration per loop cycle.
+                const jip = vmState().ip;
+                if (jip + 5 <= chunk.codeLen() and
+                    chunk.codeByteAt(jip) == @intFromEnum(Op.get_global))
+                {
+                    const ic_slot: u16 = @intCast(
+                        (@as(usize, chunk.codeByteAt(jip + 3)) << 8) | chunk.codeByteAt(jip + 4),
+                    );
+                    if (ic_slot != 0xffff) {
+                        vmState().ip += 5;
+                        try vmPush(globals.getAt(ic_slot));
+                    }
+                }
             },
 
             .call => {
