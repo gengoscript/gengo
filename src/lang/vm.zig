@@ -665,36 +665,36 @@ fn runInner() !void {
             },
             .build_struct_instance => {
                 const count = try vmByte();
-                const supplied_ptr = heap.bump(MapEntry, count) orelse return error.OutOfMemory;
-                const supplied = supplied_ptr[0..count];
-                var i: usize = count;
-                while (i > 0) {
-                    i -= 1;
-                    const val = try vmPop();
-                    const key = try vmPop();
-                    supplied[i] = .{ .key = key, .value = val };
-                }
-                const typ_v = try vmPop();
-                if (typ_v != .object or typ_v.object.* != .struct_type) return error.TypeError;
-                const st = typ_v.object.struct_type;
+                // Peek at the struct type below the count*2 key-value pairs.
+                const typ_stack_dist = @as(usize, count) * 2;
+                if (vmState().stack_top <= typ_stack_dist) return error.StackUnderflow;
+                const typ_peek = vmState().stack[vmState().stack_top - 1 - typ_stack_dist];
+                if (typ_peek != .object or typ_peek.object.* != .struct_type) return error.TypeError;
+                const st = typ_peek.object.struct_type;
+                if (st.fields.len > 255) return error.TooManyStructFields;
 
-                const seen_ptr = heap.bump(bool, st.fields.len) orelse return error.OutOfMemory;
-                const seen = seen_ptr[0..st.fields.len];
-                for (seen) |*b| b.* = false;
-                const inst_fields_ptr = heap.bump(MapEntry, st.fields.len) orelse return error.OutOfMemory;
-                const inst_fields = inst_fields_ptr[0..st.fields.len];
+                // Allocate managed field storage and the object while all values are still on
+                // the stack so GC (if triggered) can trace them as roots. No heap temporaries
+                // are used — key-value pairs are read directly from their stack positions.
+                const inst_fields = try vmAllocManagedSlice(MapEntry, st.fields.len);
+                const obj = try vmAllocObject();
+                try pushTempRoot(.{ .object = obj });
+                defer popTempRoot();
+                obj.* = .{ .array = &[_]Value{} }; // valid placeholder until finalised below
 
-                var si: usize = 0;
-                while (si < supplied.len) : (si += 1) {
-                    const key_s = try vms.asStringValue(supplied[si].key);
+                // key-value pairs occupy stack[base .. base + count*2); type is at base-1.
+                const base = vmState().stack_top - typ_stack_dist;
+                var seen: [255]bool = [_]bool{false} ** 255;
+                var ci: usize = 0;
+                while (ci < count) : (ci += 1) {
+                    const key = vmState().stack[base + ci * 2];
+                    const val = vmState().stack[base + ci * 2 + 1];
+                    const key_s = try vms.asStringValue(key);
                     const idx = vmtyp.findFieldIndex(st.fields, key_s) orelse return error.UnknownStructField;
                     if (seen[idx]) return error.DuplicateField;
                     seen[idx] = true;
-                    if (!vmtyp.matchesFieldType(supplied[si].value, st.fields[idx])) return error.StructFieldTypeMismatch;
-                    inst_fields[idx] = .{
-                        .key = .{ .string = st.fields[idx].name },
-                        .value = supplied[si].value,
-                    };
+                    if (!vmtyp.matchesFieldType(val, st.fields[idx])) return error.StructFieldTypeMismatch;
+                    inst_fields[idx] = .{ .key = .{ .string = st.fields[idx].name }, .value = val };
                 }
 
                 var mi: usize = 0;
@@ -702,12 +702,11 @@ fn runInner() !void {
                     if (!seen[mi]) return error.MissingStructField;
                 }
 
-                const obj = try vmAllocObject();
+                // Discard type + key-value pairs from the stack in one step.
+                vmState().stack_top -= typ_stack_dist + 1;
+
                 obj.* = .{
-                    .struct_instance = .{
-                        .typ = typ_v.object,
-                        .fields = inst_fields,
-                    },
+                    .struct_instance = .{ .typ = typ_peek.object, .fields = inst_fields },
                 };
                 try vmPush(.{ .object = obj });
             },

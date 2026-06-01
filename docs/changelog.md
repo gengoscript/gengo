@@ -2,6 +2,34 @@
 
 This changelog tracks notable language/runtime changes by implementation date.
 
+## 2026-06-01
+
+### VM — Monomorphic Inline Caches for Struct Access
+
+Three self-patching call-site caches eliminate the dominant hot-path costs for
+struct-heavy code.
+
+**`get_field` / `set_field` opcodes** replace `constant(name) + get_index` /
+`constant(name) + set_index` for all dot-access (`.field`) reads and writes.
+Each instruction embeds a 2-byte type-pool index and 1-byte field index as a
+cold slot (0xFFFF / 0xFF). The first execution does a `findFieldIndex` linear
+scan and writes the results back into the live bytecode. Every subsequent call
+to the same struct type reads the cached slot index directly — O(1) instead of
+O(fields).
+
+**`invoke_method` IC** — four bytes appended after `argc` (ic_type:u16,
+ic_func:u16) cache the struct type and resolved function object pool indices.
+On a hit the function value is fetched directly, skipping the
+`"TypeName.method"` string construction and `globals.get()` hash lookup.
+
+All non-struct access paths (maps, enum types, named types, variant types) fall
+through to the existing logic; the IC bytes are simply read and discarded.
+
+Compiler: `infixExpr`, `deferStmt`, `emitAssignTargetPath`, and
+`propertyAssignStmt` updated. `propertyAssignStmt` refactored to track last
+step kind; compound assignment (`+=` etc.) on a dot field now emits
+`dup + get_field + expr + op + set_field` instead of `dup2 + get_index + …`.
+
 ## 2026-05-31 (6)
 
 ### VM — Iterative GC Marking

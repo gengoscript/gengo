@@ -167,6 +167,7 @@ pub fn sweepObjects() void {
                 freeManagedSlice(@import("../lang/value.zig").MapEntry, g_state.obj_pool[i].map_hashed.entries);
                 freeManagedSlice(i32, g_state.obj_pool[i].map_hashed.buckets);
             },
+            .struct_instance => freeManagedSlice(@import("../lang/value.zig").MapEntry, g_state.obj_pool[i].struct_instance.fields),
             .string_builder => freeBytesManaged(g_state.obj_pool[i].string_builder.buf),
             else => {},
         }
