@@ -121,19 +121,22 @@ pub fn collectGarbage() void {
     if (t1 > t0) vms.vmState().gc_time_ns += @intCast(t1 - t0);
 }
 
+fn nextGcObjects(live: usize) usize {
+    const raw = (live * 2) + cfg.gc_object_step;
+    return if (raw >= heap.MaxObjects) heap.MaxObjects - 1 else raw;
+}
+
 pub fn vmAllocObject() !*Object {
     if (heap.liveObjectCount() >= vms.vmState().next_gc_objects) {
         collectGarbage();
-        const live = heap.liveObjectCount();
-        vms.vmState().next_gc_objects = (live * 2) + 64;
+        vms.vmState().next_gc_objects = nextGcObjects(heap.liveObjectCount());
     }
     if (heap.allocObject()) |o| {
         vms.vmState().alloc_object_calls += 1;
         return o;
     }
     collectGarbage();
-    const live = heap.liveObjectCount();
-    vms.vmState().next_gc_objects = (live * 2) + 64;
+    vms.vmState().next_gc_objects = nextGcObjects(heap.liveObjectCount());
     if (heap.allocObject()) |o| {
         vms.vmState().alloc_object_calls += 1;
         return o;

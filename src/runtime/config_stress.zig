@@ -4,3 +4,4 @@ pub const max_stack: usize = 2048;
 pub const max_frames: usize = 128;
 pub const max_input_bytes: usize = 512 * 1024;
 pub const max_defers: usize = 512;
+pub const gc_object_step: usize = 512;
