@@ -1,7 +1,7 @@
 123
 hello
 result=5 err=null
-result=null err=error(division by zero)
+result=0 err=error(division by zero)
 positive
 negative
 zero

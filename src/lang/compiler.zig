@@ -50,6 +50,22 @@ const AssignTarget = ct.AssignTarget;
 const MultiAssignValueScratch = ct.MultiAssignValueScratch;
 const TypeRegistry = ct.TypeRegistry;
 
+pub const ImportResolverFn = *const fn (ctx: *anyopaque, importer_path: []const u8, import_name: []const u8) anyerror![]const u8;
+
+pub const CompilerOptions = struct {
+    module_path: []const u8 = "",
+    module_prefix: []const u8 = "",
+    module_struct_name: []const u8 = "",
+    module_global_name: []const u8 = "",
+    module_ctx: ?*anyopaque = null,
+    resolve_import: ?ImportResolverFn = null,
+};
+
+const ExportEntry = struct {
+    name: []const u8,
+    global_name: []const u8,
+};
+
 pub const Compiler = struct {
     lex: Lexer,
     prev: Token = undefined,
@@ -61,21 +77,51 @@ pub const Compiler = struct {
     registry: TypeRegistry = .{},
     last_func_obj: ?*@import("value.zig").Object = null,
     peek_tok: ?Token = null,
+    options: CompilerOptions = .{},
+    exports: [MaxLocals]ExportEntry = undefined,
+    export_count: u8 = 0,
 
-    pub fn init(src: []const u8) Compiler {
-        return .{ .lex = .{ .src = src } };
+    pub fn init(src: []const u8, options: CompilerOptions) Compiler {
+        return .{ .lex = .{ .src = src }, .options = options };
     }
 
-    pub fn compile(self: *Compiler) !void {
-        chunk.reset();
+    pub fn compile(self: *Compiler, emit_halt: bool) !void {
         self.registry.reset();
+        self.export_count = 0;
         self.advance();
         while (!self.check(.eof)) {
             if (self.cur.typ == .err_invalid_char) return error.InvalidChar;
             if (self.cur.typ == .err_unterminated_string) return error.UnterminatedString;
             try self.decl();
         }
-        try chunk.emitOp(.halt, self.prev.line);
+        if (emit_halt) try chunk.emitOp(.halt, self.prev.line);
+    }
+
+    pub fn emitModuleObject(self: *Compiler) !void {
+        if (self.options.module_global_name.len == 0) return;
+
+        const any_alts = heap.bump(FieldTypeAlt, 1) orelse return error.OutOfMemory;
+        any_alts[0] = .{ .typ = .any };
+        const any_spec: FieldTypeSpec = .{ .alts = any_alts[0..1] };
+
+        const fields = heap.bump(StructFieldSpec, self.export_count) orelse return error.OutOfMemory;
+        var i: usize = 0;
+        while (i < self.export_count) : (i += 1) {
+            fields[i] = .{ .name = self.exports[i].name, .typ = any_spec, .is_const = true };
+        }
+
+        const st = heap.allocObject() orelse return error.OutOfMemory;
+        const struct_name = if (self.options.module_struct_name.len != 0) self.options.module_struct_name else self.options.module_prefix;
+        st.* = .{ .struct_type = StructTypeObj{ .name = self.copyName(self.moduleBaseName()) catch struct_name, .qualified_name = struct_name, .fields = fields[0..self.export_count] } };
+        try chunk.emitConst(.{ .object = st }, self.prev.line);
+
+        i = 0;
+        while (i < self.export_count) : (i += 1) {
+            try chunk.emitConst(.{ .string = self.exports[i].name }, self.prev.line);
+            try chunk.emitGetGlobal(self.exports[i].global_name, self.prev.line);
+        }
+        try chunk.emit2(@intFromEnum(Op.build_struct_instance), self.export_count, self.prev.line);
+        try chunk.emitOpConst(.def_global, .{ .string = self.options.module_global_name }, self.prev.line);
     }
 
     fn inFunc(self: *Compiler) bool {
@@ -124,7 +170,7 @@ pub const Compiler = struct {
         } else if (self.resolveUpvalue(name.src)) |uv| {
             try chunk.emit2(@intFromEnum(Op.get_upvalue), uv, name.line);
         } else {
-            try chunk.emitGetGlobal(name.src, name.line);
+            try chunk.emitGetGlobal(try self.qualifyGlobalName(name.src), name.line);
         }
     }
 
@@ -134,7 +180,7 @@ pub const Compiler = struct {
         } else if (self.resolveUpvalue(name.src)) |uv| {
             try chunk.emit2(@intFromEnum(Op.set_upvalue), uv, name.line);
         } else {
-            try chunk.emitSetGlobal(name.src, name.line);
+            try chunk.emitSetGlobal(try self.qualifyGlobalName(name.src), name.line);
         }
     }
 
@@ -265,26 +311,51 @@ pub const Compiler = struct {
     }
 
     fn decl(self: *Compiler) anyerror!void {
-        if (self.check(.ident) and self.peekTT() == .colon_eq) {
+        if (self.match(.kw_pub)) {
+            if (self.inFunc()) return error.InvalidPubTarget;
+            try self.pubDecl();
+        } else if (self.check(.ident) and self.peekTT() == .colon_eq) {
             try self.varDecl(false, false);
         } else if (self.check(.ident) and self.isTypedVarDecl()) {
             try self.varDecl(false, false);
         } else if (self.match(.kw_const)) {
             try self.varDecl(true, true);
         } else if (self.check(.kw_type)) {
-            try self.namedTypeDecl();
+            try self.namedTypeDecl(false);
         } else if (self.check(.kw_subtype)) {
-            try self.subtypeDecl();
+            try self.subtypeDecl(false);
         } else if (self.check(.kw_func) and self.isMethodDecl()) {
             try self.methodDecl();
         } else if (self.check(.kw_func) and self.isNamedFuncDecl()) {
-            try self.namedFuncDecl();
+            try self.namedFuncDecl(false);
         } else {
             try self.stmt();
         }
     }
 
-    fn interfaceDeclBody(self: *Compiler, kw: Token, name: Token) !void {
+    fn pubDecl(self: *Compiler) !void {
+        if (self.match(.kw_const)) {
+            const name = self.cur.src;
+            try self.varDecl(true, true);
+            try self.addExport(name, try self.qualifyGlobalName(name));
+            return;
+        }
+        if (self.check(.kw_type)) {
+            try self.namedTypeDecl(true);
+            return;
+        }
+        if (self.check(.kw_subtype)) {
+            try self.subtypeDecl(true);
+            return;
+        }
+        if (self.check(.kw_func) and self.isNamedFuncDecl()) {
+            try self.namedFuncDecl(true);
+            return;
+        }
+        return error.InvalidPubTarget;
+    }
+
+    fn interfaceDeclBody(self: *Compiler, kw: Token, name: Token, is_pub: bool) !void {
         try self.registry.addInterfaceType(name.src);
         try self.consume(.lbrace);
 
@@ -293,7 +364,7 @@ pub const Compiler = struct {
         while (!self.check(.rbrace)) {
             if (self.cur.typ != .ident) return error.UnexpectedToken;
             if (mcount >= MaxLocals) return error.TooManyFields;
-            const mname = self.cur.src;
+            const mname = try self.copyName(self.cur.src);
             self.advance();
             try self.consume(.lparen);
 
@@ -369,13 +440,15 @@ pub const Compiler = struct {
         const methods = heap.bump(InterfaceMethodSpec, mcount) orelse return error.OutOfMemory;
         var i: usize = 0;
         while (i < mcount) : (i += 1) methods[i] = methods_tmp[i];
+        const qname = try self.qualifyTypeName(name.src);
         const it = heap.allocObject() orelse return error.OutOfMemory;
-        it.* = .{ .interface_type = InterfaceTypeObj{ .name = name.src, .methods = methods[0..mcount] } };
+        it.* = .{ .interface_type = InterfaceTypeObj{ .name = try self.copyName(name.src), .qualified_name = qname, .methods = methods[0..mcount] } };
         try chunk.emitConst(.{ .object = it }, kw.line);
         if (self.inFunc()) {
             _ = try self.defineLocal(name.src, false);
         } else {
-            try chunk.emitOpConst(.def_global, .{ .string = name.src }, kw.line);
+            try chunk.emitOpConst(.def_global, .{ .string = qname }, kw.line);
+            if (is_pub) try self.addExport(name.src, qname);
         }
         self.matchOpt(.semicolon);
     }
@@ -389,7 +462,7 @@ pub const Compiler = struct {
         return sign * n;
     }
 
-    fn variantDeclBody(self: *Compiler, kw: Token, name_tok: Token) !void {
+    fn variantDeclBody(self: *Compiler, kw: Token, name_tok: Token, is_pub: bool) !void {
         const name = name_tok.src;
         if (self.registry.hasVariantType(name)) return error.DuplicateVariantType;
         try self.registry.addVariantType(name);
@@ -399,7 +472,7 @@ pub const Compiler = struct {
         if (!self.check(.rbrace)) {
             while (true) {
                 if (self.cur.typ != .ident) return error.UnexpectedToken;
-                const arm_name = self.cur.src;
+                const arm_name = try self.copyName(self.cur.src);
                 self.advance();
                 var has_payload = false;
                 var payload_name: []const u8 = "";
@@ -412,7 +485,7 @@ pub const Compiler = struct {
                         var lx2 = self.lex;
                         const peek = lx2.next();
                         if (peek.typ == .ident) {
-                            payload_name = self.cur.src;
+                            payload_name = try self.copyName(self.cur.src);
                             self.advance();
                         }
                     }
@@ -435,18 +508,20 @@ pub const Compiler = struct {
         const arms = heap.bump(VariantArmSpec, arm_count) orelse return error.OutOfMemory;
         var ai: usize = 0;
         while (ai < arm_count) : (ai += 1) arms[ai] = arms_tmp[ai];
+        const qname = try self.qualifyTypeName(name);
         const vt = heap.allocObject() orelse return error.OutOfMemory;
-        vt.* = .{ .variant_type = VariantTypeObj{ .name = name, .arms = arms[0..arm_count] } };
+        vt.* = .{ .variant_type = VariantTypeObj{ .name = try self.copyName(name), .qualified_name = qname, .arms = arms[0..arm_count] } };
         try chunk.emitConst(.{ .object = vt }, kw.line);
         if (self.inFunc()) {
             _ = try self.defineLocal(name, false);
         } else {
-            try chunk.emitOpConst(.def_global, .{ .string = name }, kw.line);
+            try chunk.emitOpConst(.def_global, .{ .string = qname }, kw.line);
+            if (is_pub) try self.addExport(name, qname);
         }
         self.matchOpt(.semicolon);
     }
 
-    fn subtypeDecl(self: *Compiler) !void {
+    fn subtypeDecl(self: *Compiler, is_pub: bool) !void {
         const kw = self.cur;
         self.advance(); // subtype
         if (self.cur.typ != .ident) return error.UnexpectedToken;
@@ -491,35 +566,40 @@ pub const Compiler = struct {
             .parent_name = parent_name,
         });
 
+        const qname = try self.qualifyTypeName(name);
+        const qparent = try self.qualifyTypeName(parent_name);
         const nt = heap.allocObject() orelse return error.OutOfMemory;
         nt.* = .{ .named_type = NamedTypeObj{
-            .name = name,
+            .name = try self.copyName(name),
+            .qualified_name = qname,
             .base = base,
             .has_range = has_range,
             .min = min,
             .max = max,
-            .parent_name = parent_name,
+            .parent_name = qparent,
         } };
         try chunk.emitConst(.{ .object = nt }, kw.line);
         if (self.inFunc()) {
             _ = try self.defineLocal(name, false);
         } else {
-            try chunk.emitOpConst(.def_global, .{ .string = name }, kw.line);
+            try chunk.emitOpConst(.def_global, .{ .string = qname }, kw.line);
+            if (is_pub) try self.addExport(name, qname);
         }
         self.matchOpt(.semicolon);
     }
 
-    fn namedTypeDecl(self: *Compiler) !void {
+    fn namedTypeDecl(self: *Compiler, is_pub: bool) !void {
         const kw = self.cur;
         self.advance(); // type
         if (self.cur.typ != .ident) return error.UnexpectedToken;
         const name_tok = self.cur;
         self.advance(); // name
-        if (self.match(.kw_struct)) return self.structDeclBody(kw, name_tok);
-        if (self.match(.kw_interface)) return self.interfaceDeclBody(kw, name_tok);
-        if (self.match(.kw_variant)) return self.variantDeclBody(kw, name_tok);
+        if (self.match(.kw_struct)) return self.structDeclBody(kw, name_tok, is_pub);
+        if (self.match(.kw_interface)) return self.interfaceDeclBody(kw, name_tok, is_pub);
+        if (self.match(.kw_variant)) return self.variantDeclBody(kw, name_tok, is_pub);
         const name = name_tok.src;
         if (self.registry.hasNamedType(name)) return error.DuplicateNamedType;
+        const qname = try self.qualifyTypeName(name);
         if (self.check(.kw_enum)) {
             try self.registry.addNamedType(.{
                 .name = name,
@@ -535,7 +615,7 @@ pub const Compiler = struct {
             if (!self.check(.rbrace)) {
                 while (true) {
                     if (self.cur.typ != .ident) return error.UnexpectedToken;
-                    members_tmp[mcount] = self.cur.src;
+                    members_tmp[mcount] = try self.copyName(self.cur.src);
                     mcount += 1;
                     self.advance();
                     if (!self.match(.comma)) break;
@@ -547,12 +627,13 @@ pub const Compiler = struct {
             var mi: usize = 0;
             while (mi < mcount) : (mi += 1) members[mi] = members_tmp[mi];
             const et = heap.allocObject() orelse return error.OutOfMemory;
-            et.* = .{ .enum_type = .{ .name = name, .members = members[0..mcount] } };
+            et.* = .{ .enum_type = .{ .name = try self.copyName(name), .qualified_name = qname, .members = members[0..mcount] } };
             try chunk.emitConst(.{ .object = et }, kw.line);
             if (self.inFunc()) {
                 _ = try self.defineLocal(name, false);
             } else {
-                try chunk.emitOpConst(.def_global, .{ .string = name }, kw.line);
+                try chunk.emitOpConst(.def_global, .{ .string = qname }, kw.line);
+                if (is_pub) try self.addExport(name, qname);
             }
             self.matchOpt(.semicolon);
             return;
@@ -584,12 +665,13 @@ pub const Compiler = struct {
             }
             try self.registry.addNamedType(.{ .name = name, .base = .array_t, .elem_spec = es });
             const nt = heap.allocObject() orelse return error.OutOfMemory;
-            nt.* = .{ .named_type = NamedTypeObj{ .name = name, .base = .array_t, .elem_spec = es } };
+            nt.* = .{ .named_type = NamedTypeObj{ .name = try self.copyName(name), .qualified_name = qname, .base = .array_t, .elem_spec = es } };
             try chunk.emitConst(.{ .object = nt }, kw.line);
             if (self.inFunc()) {
                 _ = try self.defineLocal(name, false);
             } else {
-                try chunk.emitOpConst(.def_global, .{ .string = name }, kw.line);
+                try chunk.emitOpConst(.def_global, .{ .string = qname }, kw.line);
+                if (is_pub) try self.addExport(name, qname);
             }
             self.matchOpt(.semicolon);
             return;
@@ -604,12 +686,13 @@ pub const Compiler = struct {
             }
             try self.registry.addNamedType(.{ .name = name, .base = .map_t, .key_spec = ks, .val_spec = vs });
             const nt = heap.allocObject() orelse return error.OutOfMemory;
-            nt.* = .{ .named_type = NamedTypeObj{ .name = name, .base = .map_t, .key_spec = ks, .val_spec = vs } };
+            nt.* = .{ .named_type = NamedTypeObj{ .name = try self.copyName(name), .qualified_name = qname, .base = .map_t, .key_spec = ks, .val_spec = vs } };
             try chunk.emitConst(.{ .object = nt }, kw.line);
             if (self.inFunc()) {
                 _ = try self.defineLocal(name, false);
             } else {
-                try chunk.emitOpConst(.def_global, .{ .string = name }, kw.line);
+                try chunk.emitOpConst(.def_global, .{ .string = qname }, kw.line);
+                if (is_pub) try self.addExport(name, qname);
             }
             self.matchOpt(.semicolon);
             return;
@@ -651,7 +734,8 @@ pub const Compiler = struct {
 
         const nt = heap.allocObject() orelse return error.OutOfMemory;
         nt.* = .{ .named_type = NamedTypeObj{
-            .name = name,
+            .name = try self.copyName(name),
+            .qualified_name = qname,
             .base = base,
             .has_range = has_range,
             .min = min,
@@ -661,7 +745,8 @@ pub const Compiler = struct {
         if (self.inFunc()) {
             _ = try self.defineLocal(name, false);
         } else {
-            try chunk.emitOpConst(.def_global, .{ .string = name }, kw.line);
+            try chunk.emitOpConst(.def_global, .{ .string = qname }, kw.line);
+            if (is_pub) try self.addExport(name, qname);
         }
         self.matchOpt(.semicolon);
     }
@@ -682,7 +767,7 @@ pub const Compiler = struct {
         return t6.typ == .lparen;
     }
 
-    fn structDeclBody(self: *Compiler, kw: Token, name: Token) !void {
+    fn structDeclBody(self: *Compiler, kw: Token, name: Token, is_pub: bool) !void {
         try self.registry.addStructType(name.src);
         try self.consume(.lbrace);
 
@@ -693,7 +778,7 @@ pub const Compiler = struct {
                 const field_is_const = self.match(.kw_const);
                 if (self.cur.typ != .ident) return error.UnexpectedToken;
                 if (count >= MaxLocals) return error.TooManyFields;
-                const fname = self.cur.src;
+                const fname = try self.copyName(self.cur.src);
                 var i: u8 = 0;
                 while (i < count) : (i += 1) {
                     if (common.streq(field_specs[i].name, fname)) return error.DuplicateField;
@@ -709,8 +794,9 @@ pub const Compiler = struct {
                         const alt = spec.typ.alts[ti];
                         if (alt.typ == .struct_t) {
                             // Policy: no forward refs and no self refs.
-                            if (common.streq(alt.struct_name, name.src)) return error.UnknownStructType;
-                            if (!self.registry.hasStructType(alt.struct_name)) return error.UnknownStructType;
+                            const qself = try self.qualifyTypeName(name.src);
+                            if (common.streq(alt.struct_name, qself)) return error.UnknownStructType;
+                            if (!self.isKnownLocalStructType(alt.struct_name)) return error.UnknownStructType;
                         }
                     }
                 } else {
@@ -732,14 +818,16 @@ pub const Compiler = struct {
         while (i < count) : (i += 1) {
             fields[i] = field_specs[i];
         }
+        const qname = try self.qualifyTypeName(name.src);
         const st = heap.allocObject() orelse return error.OutOfMemory;
-        st.* = .{ .struct_type = StructTypeObj{ .name = name.src, .fields = fields[0..count] } };
+        st.* = .{ .struct_type = StructTypeObj{ .name = try self.copyName(name.src), .qualified_name = qname, .fields = fields[0..count] } };
         try chunk.emitConst(.{ .object = st }, kw.line);
 
         if (self.inFunc()) {
             _ = try self.defineLocal(name.src, false);
         } else {
-            try chunk.emitOpConst(.def_global, .{ .string = name.src }, kw.line);
+            try chunk.emitOpConst(.def_global, .{ .string = qname }, kw.line);
+            if (is_pub) try self.addExport(name.src, qname);
         }
         self.matchOpt(.semicolon);
     }
@@ -791,12 +879,14 @@ pub const Compiler = struct {
                     try self.consume(.rbracket);
                 }
                 alt = .{ .typ = .map, .key_spec = ks, .val_spec = vs };
+            } else if (self.registry.hasStructTypeLocal(tname)) {
+                alt = .{ .typ = .struct_t, .struct_name = try self.qualifyTypeName(tname) };
             } else if (self.registry.hasInterfaceType(tname)) {
-                alt = .{ .typ = .interface_t, .interface_name = tname };
+                alt = .{ .typ = .interface_t, .interface_name = try self.qualifyTypeName(tname) };
             } else if (self.registry.hasNamedType(tname)) {
-                alt = .{ .typ = .named_t, .named_name = tname };
+                alt = .{ .typ = .named_t, .named_name = try self.qualifyTypeName(tname) };
             } else if (self.registry.hasVariantType(tname)) {
-                alt = .{ .typ = .variant_t, .named_name = tname };
+                alt = .{ .typ = .variant_t, .named_name = try self.qualifyTypeName(tname) };
             }
 
             var i: u8 = 0;
@@ -828,7 +918,7 @@ pub const Compiler = struct {
         return t2.typ == .lparen;
     }
 
-    fn namedFuncDecl(self: *Compiler) !void {
+    fn namedFuncDecl(self: *Compiler, is_pub: bool) !void {
         const kw = self.cur;
         self.advance(); // consume 'func'
         if (self.cur.typ != .ident) return error.UnexpectedToken;
@@ -842,7 +932,9 @@ pub const Compiler = struct {
         if (self.inFunc()) {
             _ = try self.defineLocal(name.src, false);
         } else {
-            try chunk.emitOpConst(.def_global, .{ .string = name.src }, kw.line);
+            const qname = try self.qualifyGlobalName(name.src);
+            try chunk.emitOpConst(.def_global, .{ .string = qname }, kw.line);
+            if (is_pub) try self.addExport(name.src, qname);
         }
         self.matchOpt(.semicolon);
     }
@@ -865,11 +957,12 @@ pub const Compiler = struct {
         var prefix: [1][]const u8 = .{recv_name};
         try self.compileFuncWithPrefix(prefix[0..]);
 
-        const total = recv_type.len + 1 + method_name.len;
+        const qrecv_type = try self.qualifyTypeName(recv_type);
+        const total = qrecv_type.len + 1 + method_name.len;
         const key_buf = heap.bump(u8, total) orelse return error.OutOfMemory;
-        @memcpy(key_buf[0..recv_type.len], recv_type);
-        key_buf[recv_type.len] = '.';
-        @memcpy(key_buf[recv_type.len + 1 .. total], method_name);
+        @memcpy(key_buf[0..qrecv_type.len], qrecv_type);
+        key_buf[qrecv_type.len] = '.';
+        @memcpy(key_buf[qrecv_type.len + 1 .. total], method_name);
         const key = key_buf[0..total];
         if (self.last_func_obj) |fo| fo.function.name = key;
 
@@ -902,7 +995,7 @@ pub const Compiler = struct {
                     try chunk.emitOp(.cast_bool, name.line);
                 }
             } else if (type_name.len > 0 and self.registry.hasNamedType(type_name)) {
-                try chunk.emitGetGlobal(type_name, name.line);
+                try chunk.emitGetGlobal(try self.qualifyTypeName(type_name), name.line);
                 try self.expr();
                 try chunk.emit2(@intFromEnum(Op.call), 1, name.line);
             } else if (common.streq(type_name, "string")) {
@@ -922,7 +1015,7 @@ pub const Compiler = struct {
                 try chunk.emit2(@intFromEnum(Op.assert_type), 3, name.line);
             } else if (type_name.len == 0 or common.streq(type_name, "any") or
                        self.registry.hasInterfaceType(type_name) or
-                       self.registry.hasStructType(type_name)) {
+                       self.registry.hasStructTypeLocal(type_name)) {
                 try self.expr();
             } else {
                 return error.UnknownTypeName;
@@ -934,7 +1027,7 @@ pub const Compiler = struct {
             _ = try self.defineLocal(name.src, is_const);
         } else {
             if (!is_const and self.registry.hasGlobalConst(name.src)) return error.AssignToConst;
-            try chunk.emitOpConst(.def_global, .{ .string = name.src }, name.line);
+            try chunk.emitOpConst(.def_global, .{ .string = try self.qualifyGlobalName(name.src) }, name.line);
             if (is_const) try self.registry.addGlobalConst(name.src);
         }
         self.matchOpt(.semicolon);
@@ -1151,7 +1244,7 @@ pub const Compiler = struct {
                 } else if (self.inFunc()) {
                     try self.emitSetVar(names[i]);
                 } else {
-                    try chunk.emitOpConst(.def_global, .{ .string = names[i].src }, names[i].line);
+                    try chunk.emitOpConst(.def_global, .{ .string = try self.qualifyGlobalName(names[i].src) }, names[i].line);
                 }
             } else {
                 if (targets[i].step_count == 0) try self.ensureMutableBinding(targets[i].root);
@@ -1643,7 +1736,7 @@ pub const Compiler = struct {
             _ = try self.defineLocal(name.src, false);
         } else {
             try chunk.emitOp(.null_val, name.line);
-            try chunk.emitOpConst(.def_global, .{ .string = name.src }, name.line);
+            try chunk.emitOpConst(.def_global, .{ .string = try self.qualifyGlobalName(name.src) }, name.line);
         }
     }
 
@@ -1742,7 +1835,7 @@ pub const Compiler = struct {
                         if (self.inFunc()) {
                             _ = try self.defineLocal(binding.?, false);
                         } else {
-                            try chunk.emitOpConst(.def_global, .{ .string = binding.? }, dot_line);
+                            try chunk.emitOpConst(.def_global, .{ .string = try self.qualifyGlobalName(binding.?) }, dot_line);
                         }
                     } else {
                         try chunk.emitOp(.pop, dot_line); // discard switch value
@@ -1755,11 +1848,14 @@ pub const Compiler = struct {
                     end_count += 1;
                     try chunk.patchJump(next_case);
                 } else {
-                    // Regular value case
+                    // Regular value case: dup switch-val, compare, jif_pop to next case.
+                    // If matched (no jump), pop the switch-val before running the body so
+                    // the stack is balanced on the jump-to-end path.
                     try chunk.emitOp(.dup, self.prev.line);
                     try self.expr();
                     try chunk.emitBinOpFused(.eq, self.prev.line);
                     const next_case = try chunk.emitJump(.jif_pop, self.prev.line);
+                    try chunk.emitOp(.pop, self.prev.line); // consume the switch value
                     try self.consume(.lbrace);
                     try self.block();
                     if (end_count >= MaxSwitchJumps) return error.TooManySwitchCases;
@@ -1773,6 +1869,8 @@ pub const Compiler = struct {
             if (self.match(.kw_default)) {
                 if (saw_default) return error.DuplicateDefaultCase;
                 saw_default = true;
+                // Pop the switch value that is still on the stack when default is reached.
+                try chunk.emitOp(.pop, self.prev.line);
                 try self.consume(.lbrace);
                 try self.block();
                 if (end_count >= MaxSwitchJumps) return error.TooManySwitchCases;
@@ -2005,7 +2103,9 @@ pub const Compiler = struct {
         scope.local_count = arity;
 
         // Named return variables occupy slots [arity .. arity+named_return_count).
-        // They are initialized to null; the function body can assign them before a bare return.
+        // Scalar types (int, float, bool, string) are zero-initialised so that
+        // compound-assignment operators (+=, etc.) work without a prior explicit
+        // assignment. Other types (nullable, any, complex) are initialised to null.
         if (named_return_count > 0) {
             scope.named_return_base = arity;
             scope.named_return_count = named_return_count;
@@ -2013,7 +2113,21 @@ pub const Compiler = struct {
             while (ri < named_return_count) : (ri += 1) {
                 scope.locals[arity + ri] = .{ .name = return_names[ri], .is_const = false };
                 scope.local_count += 1;
-                try chunk.emitOp(.null_val, @intCast(func_ip));
+                const rt = return_types[ri];
+                if (rt.alts.len == 1) {
+                    switch (rt.alts[0].typ) {
+                        .int, .float, .rune_t =>
+                            try chunk.emitConst(.{ .number = 0.0 }, @intCast(func_ip)),
+                        .boolean =>
+                            try chunk.emitOp(.false_val, @intCast(func_ip)),
+                        .string =>
+                            try chunk.emitConst(.{ .string = "" }, @intCast(func_ip)),
+                        else =>
+                            try chunk.emitOp(.null_val, @intCast(func_ip)),
+                    }
+                } else {
+                    try chunk.emitOp(.null_val, @intCast(func_ip));
+                }
             }
         }
 
@@ -2265,6 +2379,9 @@ pub const Compiler = struct {
                 return;
             }
             try chunk.emitGetField(prop.src, line);
+            if (self.check(.lbrace) and self.looksLikeStructLiteral()) {
+                try self.structInstanceLitAfterValue(prop.line);
+            }
             return;
         }
 
@@ -2400,6 +2517,31 @@ pub const Compiler = struct {
         return lx.next().typ;
     }
 
+    fn qualifyGlobalName(self: *Compiler, name: []const u8) ![]const u8 {
+        if (self.options.module_prefix.len == 0) return name;
+        const total = self.options.module_prefix.len + 1 + name.len;
+        const buf = heap.bump(u8, total) orelse return error.OutOfMemory;
+        @memcpy(buf[0..self.options.module_prefix.len], self.options.module_prefix);
+        buf[self.options.module_prefix.len] = '.';
+        @memcpy(buf[self.options.module_prefix.len + 1 .. total], name);
+        return buf[0..total];
+    }
+
+    fn qualifyTypeName(self: *Compiler, name: []const u8) ![]const u8 {
+        return self.qualifyGlobalName(name);
+    }
+
+    fn addExport(self: *Compiler, name: []const u8, global_name: []const u8) !void {
+        const stable_name = try self.copyName(name);
+        var i: usize = 0;
+        while (i < self.export_count) : (i += 1) {
+            if (common.streq(self.exports[i].name, stable_name)) return error.DuplicateExport;
+        }
+        if (self.export_count >= MaxLocals) return error.TooManyFields;
+        self.exports[self.export_count] = .{ .name = stable_name, .global_name = global_name };
+        self.export_count += 1;
+    }
+
     // Returns true when the current token is a var name followed by a type and '='.
     // Matches: name type = expr  (space-syntax typed declaration, no keyword needed)
     fn isTypedVarDecl(self: *Compiler) bool {
@@ -2422,8 +2564,65 @@ pub const Compiler = struct {
         const name = self.cur.src;
         self.advance();
         try self.consume(.rparen);
-        if (!common.streq(name, "std")) return error.UnsupportedImportModule;
-        try chunk.emitOp(.import_std, self.prev.line);
+        if (common.streq(name, "std")) {
+            try chunk.emitOp(.import_std, self.prev.line);
+            return;
+        }
+        const ctx = self.options.module_ctx orelse return error.UnsupportedImportModule;
+        const resolver = self.options.resolve_import orelse return error.UnsupportedImportModule;
+        const mod_name = try resolver(ctx, self.options.module_path, name);
+        try chunk.emitGetGlobal(mod_name, self.prev.line);
+    }
+
+    fn structInstanceLitAfterValue(self: *Compiler, line: u32) !void {
+        try self.consume(.lbrace);
+        var count: u8 = 0;
+        if (!self.check(.rbrace)) {
+            while (true) {
+                if (count == 255) return error.TooManyElements;
+                if (self.check(.ident)) {
+                    const key_tok = self.cur;
+                    self.advance();
+                    try chunk.emitConst(.{ .string = key_tok.src }, key_tok.line);
+                } else if (self.check(.string)) {
+                    try chunk.emitConst(.{ .string = self.cur.src }, self.cur.line);
+                    self.advance();
+                } else return error.UnexpectedToken;
+                try self.consume(.colon);
+                try self.expr();
+                count += 1;
+                if (!self.match(.comma)) break;
+                if (self.check(.rbrace)) break;
+            }
+        }
+        try self.consume(.rbrace);
+        try chunk.emit2(@intFromEnum(Op.build_struct_instance), count, line);
+    }
+
+    fn copyName(self: *Compiler, name: []const u8) ![]const u8 {
+        _ = self;
+        const out = heap.bump(u8, name.len) orelse return error.OutOfMemory;
+        @memcpy(out[0..name.len], name);
+        return out[0..name.len];
+    }
+
+    fn moduleBaseName(self: *Compiler) []const u8 {
+        const path = self.options.module_path;
+        if (path.len == 0) return "module";
+        var end = path.len;
+        while (end > 0 and path[end - 1] != '/') : (end -= 1) {}
+        const base = path[end..];
+        if (std.mem.endsWith(u8, base, ".gengo")) return base[0 .. base.len - 6];
+        return base;
+    }
+
+    fn isKnownLocalStructType(self: *Compiler, name: []const u8) bool {
+        if (self.registry.hasStructTypeLocal(name)) return true;
+        var i = name.len;
+        while (i > 0) : (i -= 1) {
+            if (name[i - 1] == '.') return self.registry.hasStructTypeLocal(name[i..]);
+        }
+        return false;
     }
 };
 

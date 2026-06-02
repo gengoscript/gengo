@@ -176,10 +176,14 @@ pub fn vmAllocManagedBytes(n: usize) ![]u8 {
         collectGarbage();
         vms.vmState().next_gc_heap_bytes = gcStepThreshold(heap.usedBytes());
     }
-    // Proactive GC: before bumping a large slab (≥4096 B) when the heap is
-    // already over half full, collect first so freed blocks refill the free
+    // Proactive GC: before bumping a medium/large slab when the heap is
+    // already over 25% full, collect first so freed blocks refill the free
     // list and we avoid growing the bump at all.
-    if (n >= 4096 and heap.wouldBump(n) and heap.usedBytes() * 2 >= heap.HeapSize) {
+    // Thresholds: ≥2048 B at >25%, ≥4096 B at >12.5% (the tighter bound is
+    // the one the caller already checked via next_gc_heap_bytes so these only
+    // fire when the free list for that class is actually empty).
+    const used = heap.usedBytes();
+    if (n >= 2048 and heap.wouldBump(n) and used * 4 >= heap.HeapSize) {
         collectGarbage();
         vms.vmState().next_gc_heap_bytes = gcStepThreshold(heap.usedBytes());
     }

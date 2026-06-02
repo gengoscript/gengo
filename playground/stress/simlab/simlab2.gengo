@@ -1,0 +1,470 @@
+std := import("std")
+
+// ---------- Enums ----------
+type Priority enum { low, medium, high, critical }
+type Phase    enum { boot, running, draining, stopped }
+
+// ---------- Named scalar types ----------
+type Tick     int   range 0..1000000
+type WorkerId int   range 1..1024
+type Load     int   range 0..10000
+type Latency  float range 0.0..1000000.0
+
+type RetryLimit       int range 0..8
+subtype AggressiveRetry  RetryLimit range 4..8
+subtype ConservativeRetry RetryLimit range 0..3
+
+// ---------- Structs ----------
+type Stats struct {
+    processed    int,
+    failed       int,
+    retried      int,
+    dropped      int,
+    peakQueue    int,
+    totalLatency Latency,
+}
+
+type Worker struct {
+    id      WorkerId,
+    busy    bool,
+    handled int,
+}
+
+type Job struct {
+    id       int,
+    owner    WorkerId,
+    cost     Load,
+    priority Priority,
+    attempts int,
+    payload  string,
+}
+
+// Named collection type exercises the typed-collection path.
+type JobQueue array[Job]
+
+// ---------- Variant ----------
+type Event variant {
+    spawn(w Worker),
+    submit(j Job),
+    finish(id WorkerId),
+    fail(j Job),
+    tick(t Tick),
+    phase_change(p Phase),
+    shutdown,
+}
+
+// ---------- Retry policy ----------
+type RetryPolicy interface {
+    nextDelay(attempt int) int
+    shouldDrop(attempt int) bool
+}
+
+type ExpBackoff   struct { limit RetryLimit, base int }
+type FixedBackoff struct { limit RetryLimit, delay int }
+
+func (p ExpBackoff) nextDelay(attempt int) int {
+    d := p.base
+    i := 0
+    for i < attempt {
+        d = d * 2
+        if d > 256 { return 256 }
+        i += 1
+    }
+    return d
+}
+
+func (p ExpBackoff) shouldDrop(attempt int) bool {
+    return attempt > int(p.limit)
+}
+
+func (p FixedBackoff) nextDelay(attempt int) int {
+    _ = attempt
+    return p.delay
+}
+
+func (p FixedBackoff) shouldDrop(attempt int) bool {
+    return attempt > int(p.limit)
+}
+
+// ---------- Variadic: merge many Stats into one ----------
+// Exercises variadic call path and for-in over a variadic array parameter.
+func mergeStats(...sts Stats) Stats {
+    out := Stats{
+        processed: 0, failed: 0, retried: 0,
+        dropped: 0, peakQueue: 0, totalLatency: Latency(0.0),
+    }
+    for s in sts {
+        out.processed += s.processed
+        out.failed    += s.failed
+        out.retried   += s.retried
+        out.dropped   += s.dropped
+        if s.peakQueue > out.peakQueue { out.peakQueue = s.peakQueue }
+        out.totalLatency = Latency(float(out.totalLatency) + float(s.totalLatency))
+    }
+    return out
+}
+
+// ---------- Named returns + defer that modifies them ----------
+// The defer func() captures highCount and total as upvalues and mutates them.
+// This exercises: named-return slots, defer capturing named-return upvalues,
+// for-in over named collection type, enum switch on Priority.
+func summarize(jobs JobQueue) (highCount int, total int) {
+    defer func() {
+        if highCount > total { highCount = total }
+    }()
+    for job in jobs {
+        total += 1
+        switch job.priority {
+            case Priority.high     { highCount += 1 }
+            case Priority.critical { highCount += 1 }
+            default {}
+        }
+    }
+    return
+}
+
+// ---------- Enum switch helper ----------
+func describePhase(ph Phase) string {
+    switch ph {
+        case Phase.boot     { return "boot" }
+        case Phase.running  { return "running" }
+        case Phase.draining { return "draining" }
+        case Phase.stopped  { return "stopped" }
+        default { return "?" }
+    }
+}
+
+// ---------- Type-attribute clamp ----------
+func clampTick(n int) Tick {
+    if n < int(Tick.first) { return Tick.first }
+    if n > int(Tick.last)  { return Tick.last }
+    return Tick(n)
+}
+
+// ---------- Per-worker policy builder ----------
+// Returns a map whose values are RetryPolicy interface values.
+// Exercises: for-in over array, interface struct stored as map value.
+func buildPolicies(workers array[Worker]) map {
+    out := {}
+    for w in workers {
+        wk := std.conv.to_string(int(w.id))
+        if int(w.id) % 2 == 0 {
+            out[wk] = FixedBackoff{ limit: ConservativeRetry(2), delay: 4 }
+        } else {
+            out[wk] = ExpBackoff{ limit: AggressiveRetry(5), base: 1 }
+        }
+    }
+    return out
+}
+
+// ---------- for-in with break ----------
+// Returns how many jobs at the front of the queue have cost <= threshold
+// before the first job exceeding it. Exercises break-from-for-in.
+func countUntilExpensive(jobs JobQueue, threshold int) int {
+    count := 0
+    for job in jobs {
+        if int(job.cost) > threshold { break }
+        count += 1
+    }
+    return count
+}
+
+// ---------- for-in + enum switch + continue from default ----------
+// The `continue` inside `default` applies to the enclosing for-in.
+// This stresses continue-target resolution across a nested switch.
+func highPriorityJobs(jobs JobQueue) JobQueue {
+    result := []
+    for job in jobs {
+        switch job.priority {
+            case Priority.high     { result = std.core.append(result, job) }
+            case Priority.critical { result = std.core.append(result, job) }
+            default { continue }
+        }
+    }
+    return JobQueue(result)
+}
+
+// ---------- Queue helpers ----------
+func workerKey(id WorkerId) string {
+    return std.conv.to_string(int(id))
+}
+
+func queuePush(q array[Event], e Event) array[Event] {
+    return std.core.append(q, e)
+}
+
+func queuePop(q array[Event]) (Event, array[Event], ?error) {
+    if std.core.len(q) == 0 {
+        return Event.shutdown, q, std.core.error("empty queue")
+    }
+    first := q[0]
+    rest  := std.core.remove(q, 0)
+    return first, rest, null
+}
+
+func updatePeak(st Stats, qlen int) Stats {
+    if qlen > st.peakQueue { st.peakQueue = qlen }
+    return st
+}
+
+func shouldFail(job Job, now Tick) bool {
+    x := (job.id * 31) + (job.attempts * 17) + int(now)
+    return (x % 11) == 0
+}
+
+func scheduleJob(policy RetryPolicy, job Job) (int, bool) {
+    drop := policy.shouldDrop(job.attempts)
+    if drop { return 0, true }
+    return policy.nextDelay(job.attempts), false
+}
+
+// ---------- Simulation ----------
+func runSim(initialWorkers array[Worker], jobs JobQueue, maxTicks Tick, policies map) (Stats, ?error) {
+    defer func() {
+        rec := std.core.recover()
+        if rec != null {
+            std.io.println("recover in runSim:", rec)
+        }
+    }()
+
+    workers := {}
+    queue   := []
+    delayed := {}
+    now Tick = Tick(0)
+    st := Stats{
+        processed: 0, failed: 0, retried: 0,
+        dropped: 0, peakQueue: 0, totalLatency: Latency(0.0),
+    }
+
+    // for-in over array: exercises iter_init + iter_next1 on plain array
+    for w in initialWorkers {
+        assert int(w.id) >= int(WorkerId.first), "worker id below minimum"
+        assert int(w.id) <= int(WorkerId.last),  "worker id above maximum"
+        workers[workerKey(w.id)] = w
+        queue = queuePush(queue, Event.spawn(w))
+    }
+
+    queue = queuePush(queue, Event.phase_change(Phase.running))
+
+    // for-in over named collection type (JobQueue)
+    for j in jobs {
+        queue = queuePush(queue, Event.submit(j))
+    }
+
+    for int(now) < int(maxTicks) {
+        if std.core.has(delayed, int(now)) {
+            due := delayed[int(now)]
+            // for-in with continue nested inside the outer C-style for loop.
+            // The continue targets the inner for-in, not the outer loop.
+            for dj in due {
+                if dj.attempts > int(RetryLimit.last) { continue }
+                queue = queuePush(queue, Event.submit(dj))
+            }
+            _ = std.core.delete(delayed, int(now))
+        }
+
+        st = updatePeak(st, std.core.len(queue))
+        if std.core.len(queue) == 0 {
+            now = Tick(int(now) + 1)
+            continue
+        }
+
+        ev, nq, qerr := queuePop(queue)
+        queue = nq
+        if qerr != null { return st, qerr }
+
+        switch ev {
+            case .spawn(w) {
+                workers[workerKey(w.id)] = w
+            }
+            case .phase_change(ph) {
+                _ = describePhase(ph)
+            }
+            case .submit(job) {
+                wk := workerKey(job.owner)
+                if !std.core.has(workers, wk) {
+                    st.failed += 1
+                    continue
+                }
+                w := workers[wk]
+                if w.busy {
+                    pol RetryPolicy = ExpBackoff{ limit: AggressiveRetry(5), base: 1 }
+                    if std.core.has(policies, wk) {
+                        pol = policies[wk]
+                    }
+                    d, drop := scheduleJob(pol, job)
+                    if drop {
+                        st.dropped += 1
+                        continue
+                    }
+                    tgt := int(now) + d
+                    if !std.core.has(delayed, tgt) { delayed[tgt] = [] }
+                    delayed[tgt] = std.core.append(delayed[tgt], job)
+                    st.retried += 1
+                    continue
+                }
+                w.busy = true
+                workers[wk] = w
+                if shouldFail(job, now) {
+                    queue = queuePush(queue, Event.fail(job))
+                } else {
+                    queue = queuePush(queue, Event.finish(job.owner))
+                    // float arithmetic: Load (named int) -> int -> float, added to Latency (named float)
+                    st.totalLatency = Latency(float(st.totalLatency) + float(int(job.cost)) * 0.1)
+                }
+            }
+            case .finish(id) {
+                wk := workerKey(id)
+                if std.core.has(workers, wk) {
+                    w := workers[wk]
+                    w.busy = false
+                    w.handled += 1
+                    workers[wk] = w
+                    st.processed += 1
+                }
+            }
+            case .fail(job) {
+                st.failed += 1
+                wk := workerKey(job.owner)
+                if std.core.has(workers, wk) {
+                    w := workers[wk]
+                    w.busy = false
+                    workers[wk] = w
+                }
+                job.attempts += 1
+                pol RetryPolicy = ExpBackoff{ limit: AggressiveRetry(5), base: 1 }
+                if std.core.has(policies, wk) {
+                    pol = policies[wk]
+                }
+                d, drop := scheduleJob(pol, job)
+                if drop {
+                    st.dropped += 1
+                    continue
+                }
+                tgt := int(now) + d
+                if !std.core.has(delayed, tgt) { delayed[tgt] = [] }
+                delayed[tgt] = std.core.append(delayed[tgt], job)
+                st.retried += 1
+            }
+            case .tick(t) {
+                now = t
+            }
+            default {}
+        }
+
+        now = Tick(int(now) + 1)
+    }
+
+    return st, null
+}
+
+// ---------- Report ----------
+func report(label string, st Stats) {
+    b := std.string.builder()
+    b.write(label)
+    b.write("\n")
+    b.write("  processed=")
+    b.write(std.conv.to_string(st.processed))
+    b.write(" failed=")
+    b.write(std.conv.to_string(st.failed))
+    b.write(" retried=")
+    b.write(std.conv.to_string(st.retried))
+    b.write(" dropped=")
+    b.write(std.conv.to_string(st.dropped))
+    b.write(" peak_queue=")
+    b.write(std.conv.to_string(st.peakQueue))
+    b.write("\n")
+    std.io.print(b.str())
+    std.io.printf("  latency=%f\n", float(st.totalLatency))
+}
+
+func main() {
+    workers := [
+        Worker{ id: WorkerId(1), busy: false, handled: 0 },
+        Worker{ id: WorkerId(2), busy: false, handled: 0 },
+        Worker{ id: WorkerId(3), busy: false, handled: 0 },
+    ]
+
+    // Build 150 jobs with Priority field.
+    jobs := []
+    i := 0
+    for i < 150 {
+        owner := (i % 3) + 1
+        cost  := (i % 40) + 1
+        pri   := Priority.medium
+        if i % 5 == 0  { pri = Priority.high }
+        if i % 11 == 0 { pri = Priority.critical }
+        payload := "job-" + std.conv.to_string(i) + "-🙂"
+        jobs = std.core.append(jobs, Job{
+            id:       i + 1,
+            owner:    WorkerId(owner),
+            cost:     Load(cost),
+            priority: pri,
+            attempts: 0,
+            payload:  payload,
+        })
+        i += 1
+    }
+    jq := JobQueue(jobs)
+
+    // Named returns + defer that modifies them.
+    highCount, total := summarize(jq)
+    std.io.printf("high+critical: %d of %d\n", highCount, total)
+
+    // for-in with break on named collection.
+    cheap := countUntilExpensive(jq, 20)
+    std.io.printf("jobs with cost<=20 before first expensive: %d\n", cheap)
+
+    // for-in + enum switch + continue from default.
+    hp := highPriorityJobs(jq)
+    std.io.printf("high-priority jobs: %d\n", std.core.len(hp))
+
+    // Type attributes: .name, .first, .last, .values.
+    std.io.printf("Tick.name=%s range %d..%d\n", Tick.name, int(Tick.first), int(Tick.last))
+    std.io.printf("Priority values: %d\n", std.core.len(Priority.values))
+
+    // for-in over enum .values with enum switch.
+    b := std.string.builder()
+    b.write("phases:")
+    for ph in Phase.values {
+        b.write(" ")
+        b.write(describePhase(ph))
+    }
+    std.io.println(b.str())
+
+    // Interface values stored in a map; for k, v in map iteration.
+    policies := buildPolicies(workers)
+    polCount := 0
+    for k, v in policies {
+        _ = k
+        _ = v
+        polCount += 1
+    }
+    std.io.printf("policies (k,v iterated): %d\n", polCount)
+
+    // Variadic function call: mergeStats exercises variadic array creation
+    // and for-in over the resulting variadic parameter.
+    zero := Stats{
+        processed: 0, failed: 0, retried: 0,
+        dropped: 0, peakQueue: 5, totalLatency: Latency(1.0),
+    }
+    merged := mergeStats(zero, zero, zero)
+    std.io.printf("merged peak=%d latency=%f\n", merged.peakQueue, float(merged.totalLatency))
+
+    // for-in over plain array.
+    evenCount := 0
+    for w in workers {
+        if int(w.id) % 2 == 0 { evenCount += 1 }
+    }
+    std.io.printf("even-id workers: %d\n", evenCount)
+
+    // Primary simulation with per-worker policies passed in.
+    st, simerr := runSim(workers, jq, clampTick(1200), policies)
+    if simerr != null {
+        std.io.println("sim error:", simerr)
+        return
+    }
+    report("simlab2 report", st)
+}
+
+main()
