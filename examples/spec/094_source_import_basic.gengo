@@ -1,0 +1,8 @@
+std := import("std")
+math := import("./modules/basic/math")
+
+p := math.Point{ x: 4, y: 5 }
+
+std.io.println(math.add(3, 4))
+std.io.println(math.version)
+std.io.println(p.x + p.y)

@@ -1,0 +1,7 @@
+func helper() int {
+    return 123
+}
+
+pub func public_value() int {
+    return helper()
+}

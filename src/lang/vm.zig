@@ -38,6 +38,10 @@ pub const panicFrames = vms.panicFrames;
 
 // ── Aliases for hot-path readability in runInner ──────────────────────────────
 
+fn isModuleNamespaceStruct(typ: *Object) bool {
+    return typ.* == .struct_type and std.mem.startsWith(u8, typ.struct_type.qualified_name, "@module_type:");
+}
+
 const vmState = vms.vmState;
 const vmPush = vms.vmPush;
 const vmPop = vms.vmPop;
@@ -1467,18 +1471,28 @@ fn runInner() !void {
                     .struct_instance => |inst| {
                         const tpi = heap.objectPoolIndex(inst.typ);
                         var func: Value = undefined;
+                        var pass_recv = true;
                         if (ic_type_idx == @as(usize, tpi) and ic_func_idx != 0xFFFF) {
                             func = .{ .object = heap.objectAt(@intCast(ic_func_idx)) };
                         } else {
-                            const tname = inst.typ.struct_type.name;
+                            const tname = inst.typ.struct_type.qualified_name;
                             const total = tname.len + 1 + mname.len;
-                            if (total > 128) return error.NotAMethodReceiver;
-                            var key_buf: [128]u8 = undefined;
+                            if (total > 512) return error.NotAMethodReceiver;
+                            var key_buf: [512]u8 = undefined;
                             @memcpy(key_buf[0..tname.len], tname);
                             key_buf[tname.len] = '.';
                             @memcpy(key_buf[tname.len + 1 .. total], mname);
-                            func = globals.get(key_buf[0..total]) orelse return error.UnknownMethod;
-                            if (func == .object) {
+                            if (globals.get(key_buf[0..total])) |method_func| {
+                                func = method_func;
+                            } else {
+                                const fi = vmtyp.findFieldIndex(inst.typ.struct_type.fields, mname) orelse {
+                                    if (isModuleNamespaceStruct(inst.typ)) return error.UnknownStructField;
+                                    return error.UnknownMethod;
+                                };
+                                func = inst.fields[fi].value;
+                                pass_recv = false;
+                            }
+                            if (pass_recv and func == .object) {
                                 const fpi = heap.objectPoolIndex(func.object);
                                 if (fpi != 0xFFFF) {
                                     chunk.patchByte(ic_base + 0, @intCast((tpi >> 8) & 0xFF));
@@ -1488,16 +1502,21 @@ fn runInner() !void {
                                 }
                             }
                         }
-                        if (vmState().stack_top >= vms.MaxStack) return error.StackOverflow;
-                        var i: usize = vmState().stack_top;
-                        while (i > recv_idx + 1) {
-                            vmState().stack[i] = vmState().stack[i - 1];
-                            i -= 1;
+                        if (pass_recv) {
+                            if (vmState().stack_top >= vms.MaxStack) return error.StackOverflow;
+                            var i: usize = vmState().stack_top;
+                            while (i > recv_idx + 1) {
+                                vmState().stack[i] = vmState().stack[i - 1];
+                                i -= 1;
+                            }
+                            vmState().stack_top += 1;
+                            vmState().stack[recv_idx] = func;
+                            vmState().stack[recv_idx + 1] = recv;
+                            try performCall(argc + 1);
+                        } else {
+                            vmState().stack[recv_idx] = func;
+                            try performCall(argc);
                         }
-                        vmState().stack_top += 1;
-                        vmState().stack[recv_idx] = func;
-                        vmState().stack[recv_idx + 1] = recv;
-                        try performCall(argc + 1);
                     },
                     .map, .map_managed, .map_hashed => {
                         const items = vms.asMapSlice(recv.object);
@@ -1926,15 +1945,24 @@ fn runInner() !void {
                 var pass_recv: bool = undefined;
                 switch (recv.object.*) {
                     .struct_instance => |inst| {
-                        const tname = inst.typ.struct_type.name;
+                        const tname = inst.typ.struct_type.qualified_name;
                         const key_total = tname.len + 1 + mname.len;
-                        if (key_total > 128) return error.NotAMethodReceiver;
-                        var key_buf: [128]u8 = undefined;
+                        if (key_total > 512) return error.NotAMethodReceiver;
+                        var key_buf: [512]u8 = undefined;
                         @memcpy(key_buf[0..tname.len], tname);
                         key_buf[tname.len] = '.';
                         @memcpy(key_buf[tname.len + 1 .. key_total], mname);
-                        func = globals.get(key_buf[0..key_total]) orelse return error.UnknownMethod;
-                        pass_recv = true;
+                        if (globals.get(key_buf[0..key_total])) |method_func| {
+                            func = method_func;
+                            pass_recv = true;
+                        } else {
+                            const fi = vmtyp.findFieldIndex(inst.typ.struct_type.fields, mname) orelse {
+                                if (isModuleNamespaceStruct(inst.typ)) return error.UnknownStructField;
+                                return error.UnknownMethod;
+                            };
+                            func = inst.fields[fi].value;
+                            pass_recv = false;
+                        }
                     },
                     .map, .map_managed, .map_hashed => {
                         const map_items = vms.asMapSlice(recv.object);

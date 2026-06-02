@@ -1,0 +1,4 @@
+std := import("std")
+math := import("../fail_modules/private/math")
+
+std.io.println(math.helper())

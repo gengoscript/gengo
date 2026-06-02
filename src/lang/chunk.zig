@@ -1,6 +1,7 @@
 const Op = @import("op.zig").Op;
 const Value = @import("value.zig").Value;
 const common = @import("common.zig");
+const heap = @import("../runtime/heap.zig");
 
 pub const MaxCode = 16384;
 // Constant indices are encoded as two bytes (big-endian u16), supporting up to 512 distinct
@@ -143,6 +144,7 @@ pub fn emitBinOpFused(op: Op, line: u32) !void {
 // Deduplicate + store constant; return its 2-byte index.
 pub fn addConst(v: Value) !u16 {
     // Deduplicate string constants to conserve slots.
+    var to_store = v;
     if (v == .string) {
         var i: usize = 0;
         while (i < g_state.const_count) : (i += 1) {
@@ -150,10 +152,13 @@ pub fn addConst(v: Value) !u16 {
                 return @intCast(i);
             }
         }
+        const copy = heap.bump(u8, v.string.len) orelse return error.OutOfMemory;
+        @memcpy(copy[0..v.string.len], v.string);
+        to_store = .{ .string = copy[0..v.string.len] };
     }
     if (g_state.const_count >= MaxConst) return error.TooManyConstants;
     const idx = g_state.const_count;
-    g_state.consts[idx] = v;
+    g_state.consts[idx] = to_store;
     g_state.const_count += 1;
     return @intCast(idx);
 }

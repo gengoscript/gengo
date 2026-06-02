@@ -20,8 +20,13 @@ Companion guides:
 
 ## 2. Modules and Builtins
 
-- The only supported import module is `"std"`.
-- `import("std")` returns a module map with namespaces.
+- `import("std")` returns a standard-library module map with namespaces.
+- Relative source imports are supported, for example `import("./math")`.
+- Source modules resolve in this order:
+  - exact path
+  - path plus `.gengo`
+  - path plus `/mod.gengo`
+- Source modules return struct-backed namespace objects containing `pub` exports.
 - Builtins must be called via namespace access (dot + call), for example:
   - `std.io.println(...)`
   - `std.core.len(x)`
@@ -442,7 +447,7 @@ Current module map:
   - call frames: `64`
   - input source buffer: `128 KiB`
 - Managed allocations use fixed class sizes; one managed block currently cannot exceed `32 KiB` even if total heap has room.
-- Only `import("std")` is currently supported.
+- Source imports require a file-backed runtime entrypoint; pathless embedding calls still only support `std`.
 
 ## 12. Named Types and Ranges
 

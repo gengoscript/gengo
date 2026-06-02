@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 
 const Runtime = @import("runtime/runtime.zig").Runtime;
 const io = @import("runtime/io.zig");
+const source_io = @import("runtime/source_io.zig");
 const vm = @import("lang/vm.zig");
 const vmperf = @import("lang/vm_perf.zig");
 const vms = @import("lang/vm_state.zig");
@@ -23,57 +24,26 @@ fn die(code: u32) noreturn {
 
 // Read a file (or stdin when maybe_path is null) into buf, returning bytes read.
 fn readSource(maybe_path: ?[]const u8, buf: []u8) !usize {
+    if (maybe_path) |p| return source_io.readFile(p, buf);
     if (comptime builtin.os.tag == .wasi) {
-        const WasiCwdFd: std.os.wasi.fd_t = 3;
-        var fd: std.os.wasi.fd_t = 0; // stdin by default
-        if (maybe_path) |p| {
-            const rc = std.os.wasi.path_open(
-                WasiCwdFd,
-                .{},
-                p.ptr,
-                p.len,
-                .{},
-                std.os.wasi.rights_t{
-                    .FD_READ = true,
-                    .FD_SEEK = true,
-                    .FD_TELL = true,
-                    .FD_FILESTAT_GET = true,
-                },
-                .{},
-                .{},
-                &fd,
-            );
-            if (rc != .SUCCESS) return error.OpenFailed;
-        }
-        defer if (maybe_path != null) {
-            _ = std.os.wasi.fd_close(fd);
-        };
         var total: usize = 0;
         while (total < buf.len) {
             var iov = [1]std.os.wasi.iovec_t{.{ .base = buf[total..].ptr, .len = buf.len - total }};
             var nread: usize = 0;
-            const rc = std.os.wasi.fd_read(fd, &iov, iov.len, &nread);
+            const rc = std.os.wasi.fd_read(0, &iov, iov.len, &nread);
             if (rc != .SUCCESS) return error.ReadFailed;
             if (nread == 0) break;
             total += nread;
         }
         return total;
-    } else {
-        const fd: std.posix.fd_t = if (maybe_path) |p|
-            try std.posix.openat(std.posix.AT.FDCWD, p, .{}, 0)
-        else
-            std.posix.STDIN_FILENO;
-        defer if (maybe_path != null) {
-            _ = std.posix.system.close(fd);
-        };
-        var total: usize = 0;
-        while (total < buf.len) {
-            const n = try std.posix.read(fd, buf[total..]);
-            if (n == 0) break;
-            total += n;
-        }
-        return total;
     }
+    var total: usize = 0;
+    while (total < buf.len) {
+        const n = try std.posix.read(std.posix.STDIN_FILENO, buf[total..]);
+        if (n == 0) break;
+        total += n;
+    }
+    return total;
 }
 
 // Returns true if fd 0 (stdin) is an interactive terminal.
@@ -235,20 +205,23 @@ fn runCli(argv: []const []const u8) void {
         .native_backend = backend,
         .max_ops = max_ops,
     });
-    runtime.run(src) catch |err| {
+    (if (script_path) |p| runtime.runPath(src, p) else runtime.run(src)) catch |err| {
         vmperf.printSummary(vms.vmState().gc_runs, vms.vmState().gc_time_ns,
             vms.vmState().alloc_object_calls, vms.vmState().alloc_managed_slice_calls,
             vms.vmState().alloc_managed_bytes_calls);
 
         if (runtime.last_compile_line != 0) {
+            const compile_path = if (runtime.lastCompilePath().len != 0) runtime.lastCompilePath() else script_name;
             io.werr("gengo: compile error: ");
             io.werr(@errorName(err));
             io.werr("\n  --> ");
-            io.werr(script_name);
+            io.werr(compile_path);
             io.werr(":");
             io.writeInt(@intCast(runtime.last_compile_line));
             io.werr("\n");
-            printSourceLine(src, runtime.last_compile_line, 0);
+            if (std.mem.eql(u8, compile_path, script_name)) {
+                printSourceLine(src, runtime.last_compile_line, 0);
+            }
         } else if (runtime.last_runtime_line != 0) {
             io.werr("gengo: panic: ");
             io.werr(@errorName(err));

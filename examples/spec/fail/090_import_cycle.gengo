@@ -1,0 +1,3 @@
+a := import("../fail_modules/cycle/a")
+
+a.value()

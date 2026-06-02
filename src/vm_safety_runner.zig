@@ -92,14 +92,14 @@ fn runRuntimeIsolation() !void {
     rt1.setPolicy(.{ .allow_io = false, .native_backend = .embedded });
     try rt1.run(
         \\x := 11
-        \\func read() { return x }
+        \\func read() int { return x }
     );
 
     var rt2 = Runtime.init();
     rt2.setPolicy(.{ .allow_io = false, .native_backend = .embedded });
     try rt2.run(
         \\x := 99
-        \\func read() { return x }
+        \\func read() int { return x }
     );
 
     const v1 = try rt1.callGlobal("read", &[_]Value{});
@@ -112,14 +112,14 @@ fn runRuntimeIsolation() !void {
     // independent mutable state.
     try rt1.run(
         \\counter := 0
-        \\func bump() {
+        \\func bump() int {
         \\    counter += 1
         \\    return counter
         \\}
     );
     try rt2.run(
         \\counter := 100
-        \\func bump() {
+        \\func bump() int {
         \\    counter += 2
         \\    return counter
         \\}

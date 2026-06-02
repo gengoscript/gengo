@@ -33,6 +33,7 @@ pub const TT = enum {
     kw_variant,
     kw_subtype,
     kw_trap,
+    kw_pub,
     lparen,
     rparen,
     lbrace,

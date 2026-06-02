@@ -6,7 +6,7 @@
 std := import("std")
 ```
 
-Only `import("std")` is supported.
+`std` is always available via `import("std")`. Relative source imports are separate and return struct-backed module objects.
 
 ## std.io
 

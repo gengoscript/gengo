@@ -2,6 +2,7 @@ const Compiler = @import("../lang/compiler.zig").Compiler;
 const chunk = @import("../lang/chunk.zig");
 const globals = @import("../lang/globals.zig");
 const heap = @import("heap.zig");
+const module_compile = @import("../lang/module_compile.zig");
 const vm = @import("../lang/vm.zig");
 const Value = @import("../lang/value.zig").Value;
 
@@ -10,6 +11,8 @@ const MaxFrames = @import("../runtime/config.zig").max_frames;
 pub const Runtime = struct {
     policy: vm.Policy = .{},
     last_compile_line: u32 = 0,
+    last_compile_path_buf: [module_compile.MaxModulePathBytes]u8 = undefined,
+    last_compile_path_len: usize = 0,
     last_runtime_line: u32 = 0,
     last_runtime_col: u16 = 0,
     panic_frames: [MaxFrames]vm.PanicFrame = undefined,
@@ -51,16 +54,40 @@ pub const Runtime = struct {
     }
 
     pub fn run(self: *Runtime, src: []const u8) !void {
+        return self.runPath(src, "");
+    }
+
+    pub fn runPath(self: *Runtime, src: []const u8, path: []const u8) !void {
+        return self.runPathWithProvider(src, path, .filesystem);
+    }
+
+    pub fn runPathWithSources(self: *Runtime, src: []const u8, path: []const u8, sources: []const module_compile.SourceEntry) !void {
+        return self.runPathWithProvider(src, path, .{ .table = sources });
+    }
+
+    pub fn runPathWithProvider(self: *Runtime, src: []const u8, path: []const u8, provider: module_compile.SourceProvider) !void {
         self.last_compile_line = 0;
+        self.last_compile_path_len = 0;
         self.last_runtime_line = 0;
         self.reset();
         vm.setPolicy(self.policy);
 
-        var compiler = Compiler.init(src);
-        compiler.compile() catch |err| {
-            self.last_compile_line = compiler.prev.line;
-            return err;
-        };
+        if (path.len != 0) {
+            var session: module_compile.Session = .{};
+            session.provider = provider;
+            session.compileRoot(path, src) catch |err| {
+                self.last_compile_line = if (session.last_error_line != 0) session.last_error_line else 1;
+                self.setLastCompilePath(session.last_error_path);
+                return err;
+            };
+        } else {
+            var compiler = Compiler.init(src, .{});
+            compiler.compile(true) catch |err| {
+                self.last_compile_line = compiler.prev.line;
+                self.setLastCompilePath("");
+                return err;
+            };
+        }
 
         vm.run() catch |err| {
             self.last_runtime_line = vm.panicLine();
@@ -77,15 +104,17 @@ pub const Runtime = struct {
     // to share definitions and allocated objects.
     pub fn runIncremental(self: *Runtime, src: []const u8) !void {
         self.last_compile_line = 0;
+        self.last_compile_path_len = 0;
         self.last_runtime_line = 0;
         self.activate();
         vm.setPolicy(self.policy);
         chunk.reset();
         vm.resetExec();
 
-        var compiler = Compiler.init(src);
-        compiler.compile() catch |err| {
+        var compiler = Compiler.init(src, .{});
+        compiler.compile(true) catch |err| {
             self.last_compile_line = compiler.prev.line;
+            self.setLastCompilePath("");
             return err;
         };
 
@@ -119,6 +148,15 @@ pub const Runtime = struct {
         globals.setActive(&self.globals_state);
         heap.setActive(&self.heap_state);
         vm.setActive(&self.vm_state);
+    }
+
+    pub fn lastCompilePath(self: *Runtime) []const u8 {
+        return self.last_compile_path_buf[0..self.last_compile_path_len];
+    }
+
+    fn setLastCompilePath(self: *Runtime, path: []const u8) void {
+        self.last_compile_path_len = @min(path.len, self.last_compile_path_buf.len);
+        @memcpy(self.last_compile_path_buf[0..self.last_compile_path_len], path[0..self.last_compile_path_len]);
     }
 
 };

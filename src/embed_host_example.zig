@@ -7,7 +7,7 @@ pub fn main() !void {
 
     const setup = rt.run(
         \\counter := 0
-        \\func bump(delta) {
+        \\func bump(delta int) int {
         \\    counter += delta
         \\    return counter
         \\}

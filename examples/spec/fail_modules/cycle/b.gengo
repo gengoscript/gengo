@@ -1,0 +1,5 @@
+pub func value() int {
+    return a.value()
+}
+
+a := import("./a")

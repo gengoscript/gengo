@@ -1,0 +1,4 @@
+std := import("std")
+pkg := import("./modules/pkg")
+
+std.io.println(pkg.answer())

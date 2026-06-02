@@ -38,7 +38,7 @@ fn expectCompileError() void {
 fn expectRuntimeError() void {
     var rt = api.Runtime.init(.{ .allow_io = false });
     const res = rt.run(
-        \\func bad() { return 1 + "x" }
+        \\func bad() int { return 1 + "x" }
     );
     switch (res) {
         .ok => {},
@@ -57,7 +57,7 @@ fn expectCallAndStatePersistence() void {
     var rt = api.Runtime.init(.{ .allow_io = false });
     const res = rt.run(
         \\counter := 0
-        \\func bump() {
+        \\func bump() int {
         \\    counter += 1
         \\    return counter
         \\}
@@ -89,11 +89,96 @@ fn expectMaxOps() void {
     }
 }
 
+const MemorySourceSet = struct {
+    entries: []const api.SourceEntry,
+};
+
+fn loadMemorySource(ctx: *anyopaque, path: []const u8) anyerror!?[]const u8 {
+    const set: *const MemorySourceSet = @ptrCast(@alignCast(ctx));
+    for (set.entries) |entry| {
+        if (std.mem.eql(u8, entry.path, path)) return entry.source;
+    }
+    return null;
+}
+
+fn expectRunPathWithSources() void {
+    const sources = [_]api.SourceEntry{
+        .{
+            .path = "app/pkg/mod.gengo",
+            .source =
+                \\pub func answer() int {
+                \\    return 42
+                \\}
+            ,
+        },
+    };
+    var rt = api.Runtime.init(.{
+        .allow_io = false,
+        .module_sources = &sources,
+    });
+    const res = rt.runPath(
+        \\pkg := import("./pkg")
+        \\func read() int {
+        \\    return pkg.answer()
+        \\}
+    , "app/main.gengo");
+    switch (res) {
+        .ok => {},
+        else => fail("embedding FAIL: runPathWithSources setup failed\n"),
+    }
+    const call_res = rt.call("read", &[_]Value{});
+    switch (call_res) {
+        .ok => |v| {
+            if (v != .number or v.number != 42) fail("embedding FAIL: runPathWithSources result\n");
+        },
+        else => fail("embedding FAIL: expected runPathWithSources call success\n"),
+    }
+}
+
+fn expectRunPathWithSourceProvider() void {
+    const entries = [_]api.SourceEntry{
+        .{
+            .path = "mem/math.gengo",
+            .source =
+                \\pub func add(a int, b int) int {
+                \\    return a + b
+                \\}
+            ,
+        },
+    };
+    const set = MemorySourceSet{ .entries = &entries };
+    var rt = api.Runtime.init(.{ .allow_io = false });
+    const res = rt.runPathWithSourceProvider(
+        \\math := import("./math")
+        \\func read() int {
+        \\    return math.add(20, 22)
+        \\}
+    , "mem/main.gengo", .{
+        .callback = .{
+            .ctx = @constCast(&set),
+            .load = loadMemorySource,
+        },
+    });
+    switch (res) {
+        .ok => {},
+        else => fail("embedding FAIL: runPathWithSourceProvider setup failed\n"),
+    }
+    const call_res = rt.call("read", &[_]Value{});
+    switch (call_res) {
+        .ok => |v| {
+            if (v != .number or v.number != 42) fail("embedding FAIL: runPathWithSourceProvider result\n");
+        },
+        else => fail("embedding FAIL: expected runPathWithSourceProvider call success\n"),
+    }
+}
+
 export fn _start() void {
     expectCompileError();
     expectRuntimeError();
     expectCallAndStatePersistence();
     expectMaxOps();
+    expectRunPathWithSources();
+    expectRunPathWithSourceProvider();
     out("embedding-api OK\n");
     std.os.wasi.proc_exit(0);
 }

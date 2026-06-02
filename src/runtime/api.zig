@@ -1,6 +1,8 @@
 const rt_mod = @import("runtime.zig");
 const vm = @import("../lang/vm.zig");
 const Value = @import("../lang/value.zig").Value;
+pub const SourceEntry = @import("../lang/module_compile.zig").SourceEntry;
+pub const SourceProvider = @import("../lang/module_compile.zig").SourceProvider;
 
 const MaxFrames = @import("config.zig").max_frames;
 
@@ -8,6 +10,8 @@ pub const Config = struct {
     allow_io: bool = true,
     native_backend: vm.Policy.NativeBackend = .embedded,
     max_ops: ?u64 = null,
+    module_sources: []const SourceEntry = &.{},
+    module_source_provider: ?SourceProvider = null,
 };
 
 pub const CompileError = struct {
@@ -31,6 +35,8 @@ pub const RuntimeResult = union(enum) {
 
 pub const Runtime = struct {
     inner: rt_mod.Runtime,
+    module_sources: []const SourceEntry = &.{},
+    module_source_provider: ?SourceProvider = null,
 
     pub fn init(config: Config) Runtime {
         const inner = rt_mod.Runtime.withPolicy(.{
@@ -38,7 +44,11 @@ pub const Runtime = struct {
             .native_backend = config.native_backend,
             .max_ops = config.max_ops,
         });
-        return .{ .inner = inner };
+        return .{
+            .inner = inner,
+            .module_sources = config.module_sources,
+            .module_source_provider = config.module_source_provider,
+        };
     }
 
     pub fn reset(self: *Runtime) void {
@@ -51,10 +61,51 @@ pub const Runtime = struct {
             .native_backend = config.native_backend,
             .max_ops = config.max_ops,
         });
+        self.module_sources = config.module_sources;
+        self.module_source_provider = config.module_source_provider;
     }
 
     pub fn run(self: *Runtime, src: []const u8) RuntimeResult {
         self.inner.run(src) catch |err| {
+            if (self.inner.last_compile_line != 0) {
+                return .{ .compile_error = .{
+                    .line = self.inner.last_compile_line,
+                    .kind = err,
+                } };
+            }
+            return .{ .runtime_error = runtimeError(err, &self.inner) };
+        };
+        return .ok;
+    }
+
+    pub fn runPath(self: *Runtime, src: []const u8, path: []const u8) RuntimeResult {
+        self.inner.runPathWithProvider(src, path, defaultSourceProvider(self)) catch |err| {
+            if (self.inner.last_compile_line != 0) {
+                return .{ .compile_error = .{
+                    .line = self.inner.last_compile_line,
+                    .kind = err,
+                } };
+            }
+            return .{ .runtime_error = runtimeError(err, &self.inner) };
+        };
+        return .ok;
+    }
+
+    pub fn runPathWithSources(self: *Runtime, src: []const u8, path: []const u8, sources: []const SourceEntry) RuntimeResult {
+        self.inner.runPathWithSources(src, path, sources) catch |err| {
+            if (self.inner.last_compile_line != 0) {
+                return .{ .compile_error = .{
+                    .line = self.inner.last_compile_line,
+                    .kind = err,
+                } };
+            }
+            return .{ .runtime_error = runtimeError(err, &self.inner) };
+        };
+        return .ok;
+    }
+
+    pub fn runPathWithSourceProvider(self: *Runtime, src: []const u8, path: []const u8, provider: SourceProvider) RuntimeResult {
+        self.inner.runPathWithProvider(src, path, provider) catch |err| {
             if (self.inner.last_compile_line != 0) {
                 return .{ .compile_error = .{
                     .line = self.inner.last_compile_line,
@@ -78,6 +129,12 @@ pub const RuntimeResultWithValue = union(enum) {
     ok: Value,
     runtime_error: RuntimeError,
 };
+
+fn defaultSourceProvider(self: *const Runtime) SourceProvider {
+    if (self.module_source_provider) |provider| return provider;
+    if (self.module_sources.len != 0) return .{ .table = self.module_sources };
+    return .filesystem;
+}
 
 fn runtimeError(err: anyerror, rt: *rt_mod.Runtime) RuntimeError {
     var e = RuntimeError{
