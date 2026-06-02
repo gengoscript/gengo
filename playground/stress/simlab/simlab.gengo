@@ -1,0 +1,313 @@
+std := import("std")
+
+// ---------- Domain types ----------
+type Tick int range 0..1000000
+type WorkerId int range 1..1024
+type Load int range 0..10000
+
+type RetryLimit int range 0..8
+subtype AggressiveRetry RetryLimit range 4..8
+subtype ConservativeRetry RetryLimit range 0..3
+
+type Stats struct {
+    processed int,
+    failed int,
+    retried int,
+    dropped int,
+    peakQueue int,
+}
+
+type Worker struct {
+    id WorkerId,
+    cap Load,
+    busy bool,
+    handled int,
+}
+
+type Job struct {
+    id int,
+    owner WorkerId,
+    cost Load,
+    attempts int,
+    payload string,
+}
+
+type Event variant {
+    spawn(w Worker),
+    submit(j Job),
+    finish(id WorkerId),
+    fail(j Job),
+    tick(t Tick),
+    shutdown,
+}
+
+type RetryPolicy interface {
+    nextDelay(attempt int) int
+    shouldDrop(attempt int) bool
+}
+
+type ExpBackoff struct { limit RetryLimit, base int }
+
+type FixedBackoff struct { limit RetryLimit, delay int }
+
+func (p ExpBackoff) nextDelay(attempt int) int {
+    // simple 2^attempt growth with cap
+    d := p.base
+    i := 0
+    for i < attempt {
+        d = d * 2
+        if d > 256 { return 256 }
+        i += 1
+    }
+    return d
+}
+
+func (p ExpBackoff) shouldDrop(attempt int) bool {
+    return attempt > int(p.limit)
+}
+
+func (p FixedBackoff) nextDelay(attempt int) int {
+    _ := attempt
+    return p.delay
+}
+
+func (p FixedBackoff) shouldDrop(attempt int) bool {
+    return attempt > int(p.limit)
+}
+
+// ---------- Utilities ----------
+func assertWorker(w Worker) {
+    assert int(w.id) >= 1, "worker id must be >= 1"
+    assert int(w.cap) >= 0, "capacity must be non-negative"
+}
+
+func mkWorker(id int, cap int) Worker {
+    return Worker{ id: WorkerId(id), cap: Load(cap), busy: false, handled: 0 }
+}
+
+func mkJob(id int, owner int, cost int, payload string) Job {
+    return Job{
+        id: id,
+        owner: WorkerId(owner),
+        cost: Load(cost),
+        attempts: 0,
+        payload: payload,
+    }
+}
+
+func queuePush(q []Event, e Event) []Event {
+    return std.core.append(q, e)
+}
+
+func queuePop(q []Event) (Event, []Event, ?error) {
+    if std.core.len(q) == 0 {
+        return Event.shutdown, q, std.core.error("empty queue")
+    }
+    first := q[0]
+    rest := std.core.remove(q, 0)
+    return first, rest, null
+}
+
+func updatePeak(st Stats, qlen int) Stats {
+    if qlen > st.peakQueue { st.peakQueue = qlen }
+    return st
+}
+
+func workerKey(id WorkerId) string {
+    return std.conv.to_string(int(id))
+}
+
+func shouldFail(job Job, now Tick) bool {
+    // deterministic chaos: combines job id, attempts, and time
+    x := (job.id * 31) + (job.attempts * 17) + int(now)
+    return (x % 11) == 0
+}
+
+func scheduleJob(policy RetryPolicy, job Job) (int, bool) {
+    drop := policy.shouldDrop(job.attempts)
+    if drop { return 0, true }
+    return policy.nextDelay(job.attempts), false
+}
+
+func runSim(initialWorkers []Worker, initialJobs []Job, maxTicks Tick) (Stats, ?error) {
+    defer func() {
+        // Recovery surface for trap/assert panics.
+        rec := std.core.recover()
+        if rec != null {
+            std.io.println("recover in runSim:", rec)
+        }
+    }()
+
+    // mutable state
+    workers := {}
+    queue := []
+    delayed := {}
+    now Tick = Tick(0)
+    st := Stats{ processed: 0, failed: 0, retried: 0, dropped: 0, peakQueue: 0 }
+
+    // choose policy through interface value
+    p RetryPolicy = ExpBackoff{ limit: AggressiveRetry(5), base: 1 }
+
+    // boot workers + jobs
+    i := 0
+    for i < std.core.len(initialWorkers) {
+        w := initialWorkers[i]
+        assertWorker(w)
+        workers[workerKey(w.id)] = w
+        queue = queuePush(queue, Event.spawn(w))
+        i += 1
+    }
+
+    j := 0
+    for j < std.core.len(initialJobs) {
+        queue = queuePush(queue, Event.submit(initialJobs[j]))
+        j += 1
+    }
+
+    for int(now) < int(maxTicks) {
+        // move delayed jobs scheduled for this tick into queue
+        if std.core.has(delayed, int(now)) {
+            due := delayed[int(now)]
+            di := 0
+            for di < std.core.len(due) {
+                queue = queuePush(queue, Event.submit(due[di]))
+                di += 1
+            }
+            _ = std.core.delete(delayed, int(now))
+        }
+
+        st = updatePeak(st, std.core.len(queue))
+        if std.core.len(queue) == 0 {
+            now = Tick(int(now) + 1)
+            continue
+        }
+
+        ev, nq, qerr := queuePop(queue)
+        queue = nq
+        if qerr != null {
+            return st, qerr
+        }
+
+        switch ev {
+            case .spawn(w) {
+                workers[workerKey(w.id)] = w
+            }
+            case .submit(job) {
+                wk := workerKey(job.owner)
+                if !std.core.has(workers, wk) {
+                    st.failed += 1
+                    continue
+                }
+                w := workers[wk]
+                if w.busy {
+                    // worker busy: delay
+                    d, drop := scheduleJob(p, job)
+                    if drop {
+                        st.dropped += 1
+                        continue
+                    }
+                    tgt := int(now) + d
+                    if !std.core.has(delayed, tgt) {
+                        delayed[tgt] = []
+                    }
+                    delayed[tgt] = std.core.append(delayed[tgt], job)
+                    st.retried += 1
+                    continue
+                }
+
+                // claim worker, then emit either fail or finish
+                w.busy = true
+                workers[wk] = w
+                if shouldFail(job, now) {
+                    queue = queuePush(queue, Event.fail(job))
+                } else {
+                    queue = queuePush(queue, Event.finish(job.owner))
+                }
+            }
+            case .finish(id) {
+                wk := workerKey(id)
+                if std.core.has(workers, wk) {
+                    w := workers[wk]
+                    w.busy = false
+                    w.handled += 1
+                    workers[wk] = w
+                    st.processed += 1
+                }
+            }
+            case .fail(job) {
+                st.failed += 1
+                wk := workerKey(job.owner)
+                if std.core.has(workers, wk) {
+                    w := workers[wk]
+                    w.busy = false
+                    workers[wk] = w
+                }
+                job.attempts += 1
+                d, drop := scheduleJob(p, job)
+                if drop {
+                    st.dropped += 1
+                    continue
+                }
+                tgt := int(now) + d
+                if !std.core.has(delayed, tgt) {
+                    delayed[tgt] = []
+                }
+                delayed[tgt] = std.core.append(delayed[tgt], job)
+                st.retried += 1
+            }
+            case .tick(t) {
+                now = t
+            }
+            default {
+            }
+        }
+
+        now = Tick(int(now) + 1)
+    }
+
+    return st, null
+}
+
+func report(st Stats) {
+    b := std.string.builder()
+    b.write("simlab report\n")
+    b.write("processed=")
+    b.write(std.conv.to_string(st.processed))
+    b.write(" failed=")
+    b.write(std.conv.to_string(st.failed))
+    b.write(" retried=")
+    b.write(std.conv.to_string(st.retried))
+    b.write(" dropped=")
+    b.write(std.conv.to_string(st.dropped))
+    b.write(" peak_queue=")
+    b.write(std.conv.to_string(st.peakQueue))
+    std.io.print(b.str())
+}
+
+func main() {
+    workers := [
+        mkWorker(1, 50),
+        mkWorker(2, 80),
+        mkWorker(3, 30),
+    ]
+
+    jobs := []
+    i := 0
+    for i < 250 {
+        owner := (i % 3) + 1
+        cost := (i % 40) + 1
+        payload := "job-" + std.conv.to_string(i) + "-🙂"
+        jobs = std.core.append(jobs, mkJob(i + 1, owner, cost, payload))
+        i += 1
+    }
+
+    st, simerr := runSim(workers, jobs, Tick(1200))
+    if simerr != null {
+        std.io.println("sim error:", simerr)
+        return
+    }
+
+    report(st)
+}
+
+main()

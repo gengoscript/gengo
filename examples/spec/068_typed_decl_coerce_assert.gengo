@@ -17,12 +17,12 @@ std.io.println(r)
 r2 rune = `Z`
 std.io.println(r2)
 
-// array: enforces type
-a array = [1, 2, 3]
+// []T: enforces sequence type
+a []int = [1, 2, 3]
 std.io.println(std.core.len(a))
 
-// map: enforces type
-m map = {x: 1, y: 2}
+// map[K]V: enforces map type
+m map[string]int = {x: 1, y: 2}
 std.io.println(std.core.len(m))
 
 // error: enforces type

@@ -40,7 +40,7 @@ type Job struct {
 }
 
 // Named collection type exercises the typed-collection path.
-type JobQueue array[Job]
+type JobQueue []Job
 
 // ---------- Variant ----------
 type Event variant {
@@ -144,7 +144,7 @@ func clampTick(n int) Tick {
 // ---------- Per-worker policy builder ----------
 // Returns a map whose values are RetryPolicy interface values.
 // Exercises: for-in over array, interface struct stored as map value.
-func buildPolicies(workers array[Worker]) map {
+func buildPolicies(workers []Worker) map[string]any {
     out := {}
     for w in workers {
         wk := std.conv.to_string(int(w.id))
@@ -189,11 +189,11 @@ func workerKey(id WorkerId) string {
     return std.conv.to_string(int(id))
 }
 
-func queuePush(q array[Event], e Event) array[Event] {
+func queuePush(q []Event, e Event) []Event {
     return std.core.append(q, e)
 }
 
-func queuePop(q array[Event]) (Event, array[Event], ?error) {
+func queuePop(q []Event) (Event, []Event, ?error) {
     if std.core.len(q) == 0 {
         return Event.shutdown, q, std.core.error("empty queue")
     }
@@ -219,7 +219,7 @@ func scheduleJob(policy RetryPolicy, job Job) (int, bool) {
 }
 
 // ---------- Simulation ----------
-func runSim(initialWorkers array[Worker], jobs JobQueue, maxTicks Tick, policies map) (Stats, ?error) {
+func runSim(initialWorkers []Worker, jobs JobQueue, maxTicks Tick, policies map[string]any) (Stats, ?error) {
     defer func() {
         rec := std.core.recover()
         if rec != null {

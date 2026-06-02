@@ -1,6 +1,6 @@
 std := import("std")
 
-func sum_until_sentinel(arr array) int {
+func sum_until_sentinel(arr []int) int {
     acc := 0
     for x in arr {
         if x == 99 { break }
@@ -9,7 +9,7 @@ func sum_until_sentinel(arr array) int {
     return acc
 }
 
-func sum_skip_zero(arr array) int {
+func sum_skip_zero(arr []int) int {
     acc := 0
     for x in arr {
         if x == 0 { continue }
@@ -18,7 +18,7 @@ func sum_skip_zero(arr array) int {
     return acc
 }
 
-func count_kv_before_sentinel(m map) int {
+func count_kv_before_sentinel(m map[string]int) int {
     count := 0
     for k, v in m {
         if k == "stop" { break }
@@ -55,7 +55,7 @@ func sum_cfor_with_continue(n int) int {
     return s
 }
 
-func sum_with_local_in_break_block(arr array) int {
+func sum_with_local_in_break_block(arr []int) int {
     acc := 0
     for x in arr {
         if x == 99 {
@@ -68,7 +68,7 @@ func sum_with_local_in_break_block(arr array) int {
     return acc
 }
 
-func sum_body_local(arr array) int {
+func sum_body_local(arr []int) int {
     acc := 0
     for x in arr {
         doubled := x * 2

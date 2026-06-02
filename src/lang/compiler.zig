@@ -382,7 +382,7 @@ pub const Compiler = struct {
                     const vari = self.match(.ellipsis);
                     if (self.cur.typ != .ident) return error.UnexpectedToken;
                     self.advance(); // param name
-                    if (self.cur.typ != .question and self.cur.typ != .ident and self.cur.typ != .kw_func) return error.ExpectedTypeAnnotation;
+                    if (self.cur.typ != .question and self.cur.typ != .ident and self.cur.typ != .kw_func and self.cur.typ != .lbracket) return error.ExpectedTypeAnnotation;
                     const ptype: FieldTypeSpec = try self.parseFieldTypeSpec();
                     if (!(ptype.alts.len == 1 and ptype.alts[0].typ == .any)) has_typed_params = true;
                     ptypes_tmp[arity] = ptype;
@@ -410,7 +410,7 @@ pub const Compiler = struct {
                     if (self.check(.rparen)) break;
                 }
                 try self.consume(.rparen);
-            } else if (self.cur.typ == .question or self.cur.typ == .ident or self.cur.typ == .kw_func) {
+            } else if (self.cur.typ == .question or self.cur.typ == .ident or self.cur.typ == .kw_func or self.cur.typ == .lbracket) {
                 returns_tmp[0] = try self.parseFieldTypeSpec();
                 rcount = 1;
                 has_typed_returns = true;
@@ -639,6 +639,25 @@ pub const Compiler = struct {
             return;
         }
 
+        if (self.cur.typ == .lbracket) {
+            // type Name []T — named slice type
+            self.advance(); // consume '['
+            try self.consume(.rbracket); // consume ']'
+            const es: FieldTypeSpec = try self.parseFieldTypeSpec();
+            try self.registry.addNamedType(.{ .name = name, .base = .array_t, .elem_spec = es });
+            const nt = heap.allocObject() orelse return error.OutOfMemory;
+            nt.* = .{ .named_type = NamedTypeObj{ .name = try self.copyName(name), .qualified_name = qname, .base = .array_t, .elem_spec = es } };
+            try chunk.emitConst(.{ .object = nt }, kw.line);
+            if (self.inFunc()) {
+                _ = try self.defineLocal(name, false);
+            } else {
+                try chunk.emitOpConst(.def_global, .{ .string = qname }, kw.line);
+                if (is_pub) try self.addExport(name, qname);
+            }
+            self.matchOpt(.semicolon);
+            return;
+        }
+
         if (self.cur.typ != .ident) return error.UnexpectedToken;
         const base_name = self.cur.src;
         self.advance();
@@ -658,32 +677,12 @@ pub const Compiler = struct {
         } else if (common.streq(base_name, "rune")) {
             base = .rune;
         } else if (common.streq(base_name, "array")) {
-            var es: ?FieldTypeSpec = null;
-            if (self.match(.lbracket)) {
-                es = try self.parseFieldTypeSpec();
-                try self.consume(.rbracket);
-            }
-            try self.registry.addNamedType(.{ .name = name, .base = .array_t, .elem_spec = es });
-            const nt = heap.allocObject() orelse return error.OutOfMemory;
-            nt.* = .{ .named_type = NamedTypeObj{ .name = try self.copyName(name), .qualified_name = qname, .base = .array_t, .elem_spec = es } };
-            try chunk.emitConst(.{ .object = nt }, kw.line);
-            if (self.inFunc()) {
-                _ = try self.defineLocal(name, false);
-            } else {
-                try chunk.emitOpConst(.def_global, .{ .string = qname }, kw.line);
-                if (is_pub) try self.addExport(name, qname);
-            }
-            self.matchOpt(.semicolon);
-            return;
+            return error.UnexpectedToken; // use []T syntax: type Name []T
         } else if (common.streq(base_name, "map")) {
-            var ks: ?FieldTypeSpec = null;
-            var vs: ?FieldTypeSpec = null;
-            if (self.match(.lbracket)) {
-                ks = try self.parseFieldTypeSpec();
-                try self.consume(.comma);
-                vs = try self.parseFieldTypeSpec();
-                try self.consume(.rbracket);
-            }
+            try self.consume(.lbracket);
+            const ks = try self.parseFieldTypeSpec();
+            try self.consume(.rbracket);
+            const vs = try self.parseFieldTypeSpec();
             try self.registry.addNamedType(.{ .name = name, .base = .map_t, .key_spec = ks, .val_spec = vs });
             const nt = heap.allocObject() orelse return error.OutOfMemory;
             nt.* = .{ .named_type = NamedTypeObj{ .name = try self.copyName(name), .qualified_name = qname, .base = .map_t, .key_spec = ks, .val_spec = vs } };
@@ -786,7 +785,7 @@ pub const Compiler = struct {
                 self.advance();
 
                 var spec = StructFieldSpec{ .name = fname, .typ = .{ .alts = &[_]FieldTypeAlt{} }, .is_const = field_is_const };
-                if (self.cur.typ == .ident or self.cur.typ == .question) {
+                if (self.cur.typ == .ident or self.cur.typ == .question or self.cur.typ == .kw_func or self.cur.typ == .lbracket) {
                     // Space syntax: field type  (colon no longer used)
                     spec.typ = try self.parseFieldTypeSpec();
                     var ti: usize = 0;
@@ -844,7 +843,15 @@ pub const Compiler = struct {
 
         while (true) {
             var alt: FieldTypeAlt = undefined;
-            if (self.cur.typ == .kw_func) {
+            if (self.cur.typ == .lbracket) {
+                // SliceType: []T
+                self.advance(); // consume '['
+                try self.consume(.rbracket); // consume ']'
+                const es = try self.parseFieldTypeSpec();
+                const ep = heap.bump(FieldTypeSpec, 1) orelse return error.OutOfMemory;
+                ep[0] = es;
+                alt = .{ .typ = .array, .elem_spec = ep[0] };
+            } else if (self.cur.typ == .kw_func) {
                 self.advance(); // consume 'func'
                 try self.consume(.lparen);
                 var func_params_tmp: [MaxLocals]FieldTypeSpec = undefined;
@@ -870,7 +877,7 @@ pub const Compiler = struct {
                         if (self.check(.rparen)) break;
                     }
                     try self.consume(.rparen);
-                } else if (self.cur.typ == .question or self.cur.typ == .ident or self.cur.typ == .kw_func) {
+                } else if (self.cur.typ == .question or self.cur.typ == .ident or self.cur.typ == .kw_func or self.cur.typ == .lbracket) {
                     func_returns_tmp[0] = try self.parseFieldTypeSpec();
                     func_return_count = 1;
                 }
@@ -908,20 +915,16 @@ pub const Compiler = struct {
             } else if (common.streq(tname, "error")) {
                 alt = .{ .typ = .error_t };
             } else if (common.streq(tname, "array")) {
-                var es: ?FieldTypeSpec = null;
-                if (self.match(.lbracket)) {
-                    es = try self.parseFieldTypeSpec();
-                    try self.consume(.rbracket);
-                }
-                alt = .{ .typ = .array, .elem_spec = es };
+                return error.UnexpectedToken; // use []T syntax instead
             } else if (common.streq(tname, "map")) {
                 var ks: ?FieldTypeSpec = null;
                 var vs: ?FieldTypeSpec = null;
                 if (self.match(.lbracket)) {
                     ks = try self.parseFieldTypeSpec();
-                    try self.consume(.comma);
-                    vs = try self.parseFieldTypeSpec();
                     try self.consume(.rbracket);
+                    vs = try self.parseFieldTypeSpec();
+                } else {
+                    return error.UnexpectedToken; // bare map not allowed; use map[K]V
                 }
                 alt = .{ .typ = .map, .key_spec = ks, .val_spec = vs };
             } else if (self.registry.hasStructTypeLocal(tname)) {
@@ -1026,6 +1029,12 @@ pub const Compiler = struct {
         self.advance();
         if (self.match(.colon_eq)) {
             try self.expr();
+        } else if (self.cur.typ == .lbracket) {
+            // Space-syntax slice type: name []T = expr
+            _ = try self.parseFieldTypeSpec();
+            try self.consume(.eq);
+            try self.expr();
+            try chunk.emit2(@intFromEnum(Op.assert_type), 1, name.line);
         } else if (self.cur.typ == .kw_func) {
             // Space-syntax func type annotation: name func(T...) R = expr
             _ = try self.parseFieldTypeSpec();
@@ -1056,9 +1065,9 @@ pub const Compiler = struct {
                 try self.expr();
                 try chunk.emitOp(.cast_rune, name.line);
             } else if (common.streq(type_name, "array")) {
-                try self.expr();
-                try chunk.emit2(@intFromEnum(Op.assert_type), 1, name.line);
+                return error.UnexpectedToken; // use []T syntax
             } else if (common.streq(type_name, "map")) {
+                // map[K]V typed decl: type was parsed above, just assert it's a map
                 try self.expr();
                 try chunk.emit2(@intFromEnum(Op.assert_type), 2, name.line);
             } else if (common.streq(type_name, "error")) {
@@ -2096,7 +2105,7 @@ pub const Compiler = struct {
                 param_const[arity] = p_is_const;
                 arity += 1;
                 self.advance();
-                if (self.cur.typ != .question and self.cur.typ != .ident and self.cur.typ != .kw_func) return error.ExpectedTypeAnnotation;
+                if (self.cur.typ != .question and self.cur.typ != .ident and self.cur.typ != .kw_func and self.cur.typ != .lbracket) return error.ExpectedTypeAnnotation;
                 const ptype: FieldTypeSpec = try self.parseFieldTypeSpec();
                 param_types[arity - 1] = ptype;
                 if (vari) {
@@ -2119,7 +2128,7 @@ pub const Compiler = struct {
         if (self.match(.lparen)) {
             // Detect named vs anonymous: named if first entry is 'ident type_start'.
             const is_named_returns = self.cur.typ == .ident and
-                (self.peekToken().typ == .ident or self.peekToken().typ == .question or self.peekToken().typ == .kw_func);
+                (self.peekToken().typ == .ident or self.peekToken().typ == .question or self.peekToken().typ == .kw_func or self.peekToken().typ == .lbracket);
             while (true) {
                 if (is_named_returns) {
                     if (self.cur.typ != .ident) return error.UnexpectedToken;
@@ -2134,7 +2143,7 @@ pub const Compiler = struct {
             }
             try self.consume(.rparen);
             if (is_named_returns) named_return_count = return_count;
-        } else if (self.cur.typ == .question or self.cur.typ == .ident or self.cur.typ == .kw_func) {
+        } else if (self.cur.typ == .question or self.cur.typ == .ident or self.cur.typ == .kw_func or self.cur.typ == .lbracket) {
             return_types[0] = try self.parseFieldTypeSpec();
             return_count = 1;
             has_typed_returns = true;
@@ -2602,6 +2611,24 @@ pub const Compiler = struct {
         var lx = self.lex;
         var t = lx.next(); // token after the var name
         if (t.typ == .question) t = lx.next(); // skip optional nullable prefix
+        if (t.typ == .lbracket) {
+            // []T = expr — must start with exactly '[]' (empty bracket pair)
+            t = lx.next();
+            if (t.typ != .rbracket) return false;
+            // depth-scan element type to find '='
+            var depth: i32 = 0;
+            t = lx.next();
+            while (true) {
+                switch (t.typ) {
+                    .lparen, .lbracket => depth += 1,
+                    .rparen, .rbracket => depth -= 1,
+                    .eq => if (depth == 0) return true,
+                    .lbrace, .semicolon, .eof => return false,
+                    else => {},
+                }
+                t = lx.next();
+            }
+        }
         if (t.typ == .kw_func) {
             // func(T...) R = expr: scan forward tracking paren depth to find '='
             var depth: i32 = 0;
@@ -2618,6 +2645,20 @@ pub const Compiler = struct {
         }
         if (t.typ != .ident) return false;
         t = lx.next(); // token after the type ident
+        // Skip map[K]V or other parameterized types with brackets
+        if (t.typ == .lbracket) {
+            var depth: i32 = 0;
+            while (true) {
+                switch (t.typ) {
+                    .lparen, .lbracket => depth += 1,
+                    .rparen, .rbracket => { depth -= 1; if (depth < 0) return false; },
+                    .eq => if (depth == 0) return true,
+                    .lbrace, .semicolon, .eof => return false,
+                    else => {},
+                }
+                t = lx.next();
+            }
+        }
         while (t.typ == .pipe) { // skip union alternatives: | type ...
             t = lx.next();
             if (t.typ != .ident) return false;

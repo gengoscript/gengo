@@ -1,1 +1,1 @@
-x array = "not an array"
+x []any = "not an array"

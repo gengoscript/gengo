@@ -1,8 +1,8 @@
 std := import("std")
 
 type Point struct { x float, y float }
-type Points array[Point]
-type Index map[string, Point]
+type Points []Point
+type Index map[string]Point
 
 // Construct named collection types
 pts := Points([Point{x: 1.0, y: 2.0}, Point{x: 3.0, y: 4.0}])
@@ -26,7 +26,7 @@ idx := Index({"origin": Point{x: 0.0, y: 0.0}})
 std.io.println(idx["origin"].x)
 
 // Anonymous typed annotation in function param
-func sumX(ps array[Point]) float {
+func sumX(ps []Point) float {
     total float = 0.0
     for p in ps {
         total += p.x
