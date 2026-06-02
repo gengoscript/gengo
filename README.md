@@ -16,6 +16,63 @@ Goal: a pragmatic language you can embed and run in a sandboxed environment, wit
 
 Project status: early and still evolving. Breaking changes are expected while the language and runtime are being tightened.
 
+## Embedding the WASM
+
+Download `gengo-test.wasm` from the [latest release](https://github.com/gengoscript/gengo/releases) or build it with `zig build wasi`.
+
+**Browser** — pass the script as a virtual file using [`@bjorn3/browser_wasi_shim`](https://www.npmjs.com/package/@bjorn3/browser_wasi_shim):
+
+```js
+import { WASI, File, OpenFile, ConsoleStdout, PreopenDirectory }
+  from "https://cdn.jsdelivr.net/npm/@bjorn3/browser_wasi_shim@0.3.0/+esm";
+
+const script = `std := import("std")
+std.io.println("hello from Gengo!")`;
+
+const enc  = new TextEncoder();
+const fds  = [
+  new OpenFile(new File([])),
+  ConsoleStdout.lineBuffered(line => console.log(line)),
+  ConsoleStdout.lineBuffered(line => console.error(line)),
+  new PreopenDirectory(".", new Map([["script.gengo", new File(enc.encode(script))]])),
+];
+
+const wasi = new WASI(["gengo-test.wasm", "script.gengo"], [], fds);
+const wasm = await WebAssembly.instantiateStreaming(fetch("gengo-test.wasm"), {
+  wasi_snapshot_preview1: wasi.wasiImport,
+});
+wasi.start(wasm.instance);
+```
+
+**Node.js 22+** — use the built-in `node:wasi` module:
+
+```js
+import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+
+const script = `std := import("std")\nstd.io.println("hello from Gengo!")`;
+
+// write script to a temp file, or use a real path
+import { writeFileSync } from "node:fs";
+writeFileSync("/tmp/script.gengo", script);
+
+const wasi = new WASI({
+  version: "preview1",
+  args: ["gengo-test.wasm", "script.gengo"],
+  preopens: { ".": "/tmp" },
+});
+
+const wasm = await WebAssembly.compile(readFileSync("gengo-test.wasm"));
+const instance = await WebAssembly.instantiate(wasm, wasi.getImportObject());
+wasi.start(instance);
+```
+
+**wasmtime CLI** — run a script directly from the shell:
+
+```bash
+wasmtime --dir . gengo-test.wasm script.gengo
+```
+
 ## Example
 
 ```gengo
