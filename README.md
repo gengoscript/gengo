@@ -1,4 +1,4 @@
-# gengo
+# Gengo (言語)
 
 Embeddable scripting language implemented in Zig.
 
