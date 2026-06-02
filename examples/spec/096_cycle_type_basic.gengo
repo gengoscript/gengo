@@ -1,0 +1,15 @@
+std := import("std")
+
+type Step int cycle 1..16
+type Hour int cycle 1..12
+
+x := Step(16)
+x++
+std.io.println(x)
+x--
+std.io.println(x)
+std.io.println(Step.first)
+std.io.println(Step.last)
+std.io.println(Step.name)
+std.io.println(Hour(12) + Hour(1))
+std.io.println(Hour(1) - Hour(2))

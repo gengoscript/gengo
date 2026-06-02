@@ -83,7 +83,7 @@ fn namedTypeCarrier(a: Value, b: Value) !?*Object {
 fn pushNumericResultWithCarrier(a: Value, b: Value, n: f64) !void {
     const carrier = try namedTypeCarrier(a, b);
     if (carrier) |typ| {
-        const wrapped = try vmtyp.constructNamedType(typ, .{ .number = n });
+        const wrapped = try vmtyp.coerceNamedTypeResult(typ, .{ .number = n });
         try vmPush(wrapped);
     } else {
         try vmPush(.{ .number = n });
@@ -582,7 +582,7 @@ fn runInner() !void {
                 const n = try vms.valueAsInt(v);
                 const result: f64 = @floatFromInt(~n);
                 if (v == .object and v.object.* == .named_value) {
-                    try vmPush(try vmtyp.constructNamedType(v.object.named_value.typ, .{ .number = result }));
+                    try vmPush(try vmtyp.coerceNamedTypeResult(v.object.named_value.typ, .{ .number = result }));
                 } else {
                     try vmPush(.{ .number = result });
                 }
@@ -664,7 +664,7 @@ fn runInner() !void {
                 const v = try vmPop();
                 const n = try vms.valueAsNumber(v);
                 if (v == .object and v.object.* == .named_value) {
-                    try vmPush(try vmtyp.constructNamedType(v.object.named_value.typ, .{ .number = -n }));
+                    try vmPush(try vmtyp.coerceNamedTypeResult(v.object.named_value.typ, .{ .number = -n }));
                 } else {
                     try vmPush(.{ .number = -n });
                 }

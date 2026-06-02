@@ -462,6 +462,20 @@ pub const Compiler = struct {
         return sign * n;
     }
 
+    fn parseConstraintBounds(self: *Compiler) !struct { is_cycle: bool, min: f64, max: f64 } {
+        const is_cycle = if (self.match(.kw_range))
+            false
+        else if (self.match(.kw_cycle))
+            true
+        else
+            return error.UnexpectedToken;
+        const min = try self.parseSignedNumber();
+        try self.consume(.dotdot);
+        const max = try self.parseSignedNumber();
+        if (min > max) return error.RangeError;
+        return .{ .is_cycle = is_cycle, .min = min, .max = max };
+    }
+
     fn variantDeclBody(self: *Compiler, kw: Token, name_tok: Token, is_pub: bool) !void {
         const name = name_tok.src;
         if (self.registry.hasVariantType(name)) return error.DuplicateVariantType;
@@ -540,27 +554,27 @@ pub const Compiler = struct {
 
         const base = parent_info.base;
         var has_range = parent_info.has_range;
+        var is_cycle = parent_info.is_cycle;
         var min: f64 = parent_info.min;
         var max: f64 = parent_info.max;
 
-        if (self.match(.kw_range)) {
-            if (!(base == .int or base == .float or base == .rune)) return error.UnexpectedToken;
-            const new_min = try self.parseSignedNumber();
-            try self.consume(.dotdot);
-            const new_max = try self.parseSignedNumber();
-            if (new_min > new_max) return error.RangeError;
+        if (self.check(.kw_range) or self.check(.kw_cycle)) {
+            const constraint = try self.parseConstraintBounds();
+            if (constraint.is_cycle and base != .int) return error.UnexpectedToken;
             if (parent_info.has_range) {
-                if (new_min < parent_info.min or new_max > parent_info.max) return error.RangeError;
+                if (constraint.min < parent_info.min or constraint.max > parent_info.max) return error.RangeError;
             }
             has_range = true;
-            min = new_min;
-            max = new_max;
+            is_cycle = constraint.is_cycle;
+            min = constraint.min;
+            max = constraint.max;
         }
 
         try self.registry.addNamedType(.{
             .name = name,
             .base = base,
             .has_range = has_range,
+            .is_cycle = is_cycle,
             .min = min,
             .max = max,
             .parent_name = parent_name,
@@ -574,6 +588,7 @@ pub const Compiler = struct {
             .qualified_name = qname,
             .base = base,
             .has_range = has_range,
+            .is_cycle = is_cycle,
             .min = min,
             .max = max,
             .parent_name = qparent,
@@ -605,6 +620,7 @@ pub const Compiler = struct {
                 .name = name,
                 .base = .string,
                 .has_range = false,
+                .is_cycle = false,
                 .min = 0,
                 .max = 0,
             });
@@ -664,6 +680,7 @@ pub const Compiler = struct {
 
         var base: NamedTypeBase = undefined;
         var parent_has_range = false;
+        var parent_is_cycle = false;
         var parent_min: f64 = 0;
         var parent_max: f64 = 0;
         if (common.streq(base_name, "int")) {
@@ -698,26 +715,29 @@ pub const Compiler = struct {
         } else if (self.registry.getNamedTypeInfo(base_name)) |parent| {
             base = parent.base;
             parent_has_range = parent.has_range;
+            parent_is_cycle = parent.is_cycle;
             parent_min = parent.min;
             parent_max = parent.max;
         } else return error.UnexpectedToken;
 
         var has_range = false;
+        var is_cycle = false;
         var min: f64 = 0;
         var max: f64 = 0;
-        if (self.match(.kw_range)) {
-            if (!(base == .int or base == .float or base == .rune)) return error.UnexpectedToken;
+        if (self.check(.kw_range) or self.check(.kw_cycle)) {
+            const constraint = try self.parseConstraintBounds();
+            if (constraint.is_cycle and base != .int) return error.UnexpectedToken;
             has_range = true;
-            min = try self.parseSignedNumber();
-            try self.consume(.dotdot);
-            max = try self.parseSignedNumber();
-            if (min > max) return error.RangeError;
+            is_cycle = constraint.is_cycle;
+            min = constraint.min;
+            max = constraint.max;
         }
         if (parent_has_range) {
             if (has_range) {
                 if (min < parent_min or max > parent_max) return error.RangeError;
             } else {
                 has_range = true;
+                is_cycle = parent_is_cycle;
                 min = parent_min;
                 max = parent_max;
             }
@@ -727,6 +747,7 @@ pub const Compiler = struct {
             .name = name,
             .base = base,
             .has_range = has_range,
+            .is_cycle = is_cycle,
             .min = min,
             .max = max,
         });
@@ -737,6 +758,7 @@ pub const Compiler = struct {
             .qualified_name = qname,
             .base = base,
             .has_range = has_range,
+            .is_cycle = is_cycle,
             .min = min,
             .max = max,
         } };

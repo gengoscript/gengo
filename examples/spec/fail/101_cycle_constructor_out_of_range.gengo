@@ -1,0 +1,5 @@
+std := import("std")
+
+type Step int cycle 1..16
+
+std.io.println(Step(17))

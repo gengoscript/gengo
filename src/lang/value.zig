@@ -80,6 +80,7 @@ pub const NamedTypeObj = struct {
     qualified_name: []const u8,
     base: NamedTypeBase,
     has_range: bool = false,
+    is_cycle: bool = false,
     min: f64 = 0,
     max: f64 = 0,
     parent_name: ?[]const u8 = null,   // non-null for subtype declarations

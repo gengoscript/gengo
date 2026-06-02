@@ -205,6 +205,13 @@ pub fn makeNamedValue(typ_obj: *Object, inner: Value) !Value {
     return .{ .object = obj };
 }
 
+fn wrapCycleValue(min: f64, max: f64, n: f64) f64 {
+    const span = (max - min) + 1.0;
+    var offset = common.fmod(n - min, span);
+    if (offset < 0) offset += span;
+    return min + offset;
+}
+
 pub fn constructNamedType(typ_obj: *Object, arg: Value) !Value {
     if (typ_obj.* != .named_type) return error.TypeError;
     const nt = typ_obj.named_type;
@@ -271,6 +278,17 @@ pub fn constructNamedType(typ_obj: *Object, arg: Value) !Value {
         },
     }
     return makeNamedValue(typ_obj, base_v);
+}
+
+pub fn coerceNamedTypeResult(typ_obj: *Object, arg: Value) !Value {
+    if (typ_obj.* != .named_type) return error.TypeError;
+    const nt = typ_obj.named_type;
+    if (!nt.is_cycle) return constructNamedType(typ_obj, arg);
+    if (nt.base != .int) return error.TypeError;
+    const n = try vms.valueAsNumber(arg);
+    if (@trunc(n) != n) return error.TypeError;
+    const wrapped = wrapCycleValue(nt.min, nt.max, n);
+    return makeNamedValue(typ_obj, .{ .number = wrapped });
 }
 
 pub fn enforceFuncArgTypes(f: FuncObj, argc: u8) !void {

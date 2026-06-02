@@ -48,7 +48,7 @@ pub func add(a int, b int) int {
 - interfaces
 - enums
 - variant types
-- named scalar types and subtypes with range constraints
+- named scalar types and subtypes with range constraints, plus cyclic integer domains
 - arrays, maps, strings, runes, errors, `null`, `any`
 - closures
 - multi-return functions
