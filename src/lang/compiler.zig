@@ -548,6 +548,52 @@ pub const Compiler = struct {
         self.advance(); // parent name
 
         const parent_info = self.registry.getNamedTypeInfo(parent_name) orelse return error.UnexpectedToken;
+
+        // Handle enum subtype: subtype Weekend_Days Days { Saturday, Sunday }
+        if (parent_info.base == .enum_t) {
+            if (self.registry.hasNamedType(name)) return error.DuplicateNamedType;
+            const qname = try self.qualifyTypeName(name);
+            const qparent = try self.qualifyTypeName(parent_name);
+            try self.registry.addNamedType(.{
+                .name = name,
+                .base = .enum_t,
+                .parent_name = parent_name,
+            });
+            try self.consume(.lbrace);
+            var members_tmp: [MaxLocals][]const u8 = undefined;
+            var mcount: u8 = 0;
+            if (!self.check(.rbrace)) {
+                while (true) {
+                    if (self.cur.typ != .ident) return error.UnexpectedToken;
+                    members_tmp[mcount] = try self.copyName(self.cur.src);
+                    mcount += 1;
+                    self.advance();
+                    if (!self.match(.comma)) break;
+                    if (self.check(.rbrace)) break;
+                }
+            }
+            try self.consume(.rbrace);
+            const members = heap.bump([]const u8, mcount) orelse return error.OutOfMemory;
+            var mi: usize = 0;
+            while (mi < mcount) : (mi += 1) members[mi] = members_tmp[mi];
+            const et = heap.allocObject() orelse return error.OutOfMemory;
+            et.* = .{ .enum_type = .{
+                .name = try self.copyName(name),
+                .qualified_name = qname,
+                .members = members[0..mcount],
+                .parent_name = qparent,
+            } };
+            try chunk.emitConst(.{ .object = et }, kw.line);
+            if (self.inFunc()) {
+                _ = try self.defineLocal(name, false);
+            } else {
+                try chunk.emitOpConst(.def_global, .{ .string = qname }, kw.line);
+                if (is_pub) try self.addExport(name, qname);
+            }
+            self.matchOpt(.semicolon);
+            return;
+        }
+
         if (parent_info.base != .int and parent_info.base != .float and parent_info.base != .rune)
             return error.UnexpectedToken;
         if (self.registry.hasNamedType(name)) return error.DuplicateNamedType;
@@ -618,7 +664,7 @@ pub const Compiler = struct {
         if (self.check(.kw_enum)) {
             try self.registry.addNamedType(.{
                 .name = name,
-                .base = .string,
+                .base = .enum_t,
                 .has_range = false,
                 .is_cycle = false,
                 .min = 0,
@@ -2412,13 +2458,7 @@ pub const Compiler = struct {
             while (true) {
                 if (count == 255) return error.TooManyElements;
 
-                if (self.check(.ident)) {
-                    const key_tok = self.cur;
-                    self.advance();
-                    try chunk.emitConst(.{ .string = key_tok.src }, key_tok.line);
-                } else {
-                    try self.expr();
-                }
+                try self.expr();
 
                 try self.consume(.colon);
                 try self.expr();
@@ -2532,6 +2572,13 @@ pub const Compiler = struct {
             return;
         }
 
+        // ** is right-associative: recurse at same level so 2**3**2 = 2**(3**2)
+        if (tt == .star_star) {
+            try self.parsePrecedence(p);
+            chunk.setCol(col);
+            try chunk.emitOp(.pow, line);
+            return;
+        }
         try self.parsePrecedence(p.next());
         chunk.setCol(col);
         switch (tt) {
@@ -2769,6 +2816,7 @@ fn tokPrec(tt: TT) Prec {
         .lt, .lt_eq, .gt, .gt_eq => .cmp,
         .plus, .minus => .term,
         .star, .slash, .percent => .factor,
+        .star_star => .power,
         .lbracket, .lparen, .dot => .call,
         else => .none,
     };

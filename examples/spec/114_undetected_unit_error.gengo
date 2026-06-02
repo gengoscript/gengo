@@ -1,0 +1,5 @@
+std := import("std")
+dist_metric := 100.0
+dist_imperial := (dist_metric * 1609.0) / 1000.0
+dist_imperial = dist_metric
+std.io.println(dist_imperial)

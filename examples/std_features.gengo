@@ -5,7 +5,7 @@ mid := nums[1:4]
 msg := "hello world"
 sub := msg[0:5]
 
-m := {a: 1, b: 2}
+m := {"a": 1, "b": 2}
 std.io.println(mid)
 std.io.println(sub)
 std.io.println(m["a"], std.core.len(m), std.core.len(sub))

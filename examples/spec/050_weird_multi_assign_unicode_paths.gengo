@@ -1,6 +1,6 @@
 std := import("std")
 
-obj := { a: { b: [`A`, `🙂`] }, m: {} }
+obj := { "a": { "b": [`A`, `🙂`] }, "m": {} }
 
 obj.m["ζ"], obj.a.b[0] = std.conv.to_string(`å`), `B`
 

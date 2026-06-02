@@ -79,7 +79,7 @@ func sum_body_local(arr []int) int {
 
 std.io.println(sum_until_sentinel([1, 2, 99, 3, 4]))
 std.io.println(sum_skip_zero([1, 0, 2, 0, 3]))
-std.io.println(count_kv_before_sentinel({a: 10, b: 20, stop: 0, c: 30}))
+std.io.println(count_kv_before_sentinel({"a": 10, "b": 20, "stop": 0, "c": 30}))
 std.io.println(test_after_break_code_runs())
 std.io.println(sum_cfor_with_break(10))
 std.io.println(sum_cfor_with_continue(6))

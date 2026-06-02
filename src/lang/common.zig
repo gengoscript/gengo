@@ -15,32 +15,45 @@ pub fn hashBytes(s: []const u8) u64 {
     return h;
 }
 
+const std = @import("std");
+
 pub fn parseFloat(s: []const u8) ?f64 {
     if (s.len == 0) return null;
     var i: usize = 0;
     var neg = false;
-    if (s[i] == '-') {
-        neg = true;
-        i += 1;
-    }
+    if (s[i] == '-') { neg = true; i += 1; }
     if (i >= s.len or s[i] < '0' or s[i] > '9') return null;
     var ip: f64 = 0;
-    while (i < s.len and s[i] >= '0' and s[i] <= '9') {
-        ip = ip * 10.0 + @as(f64, @floatFromInt(s[i] - '0'));
-        i += 1;
+    while (i < s.len and (s[i] == '_' or (s[i] >= '0' and s[i] <= '9'))) : (i += 1) {
+        if (s[i] != '_') ip = ip * 10.0 + @as(f64, @floatFromInt(s[i] - '0'));
     }
     var fp: f64 = 0;
     var fd: f64 = 1;
     if (i < s.len and s[i] == '.') {
         i += 1;
-        while (i < s.len and s[i] >= '0' and s[i] <= '9') {
-            fp = fp * 10.0 + @as(f64, @floatFromInt(s[i] - '0'));
-            fd *= 10.0;
-            i += 1;
+        while (i < s.len and (s[i] == '_' or (s[i] >= '0' and s[i] <= '9'))) : (i += 1) {
+            if (s[i] != '_') {
+                fp = fp * 10.0 + @as(f64, @floatFromInt(s[i] - '0'));
+                fd *= 10.0;
+            }
+        }
+    }
+    var exp: f64 = 0;
+    var exp_neg = false;
+    if (i < s.len and (s[i] == 'e' or s[i] == 'E')) {
+        i += 1;
+        if (i < s.len and s[i] == '-') { exp_neg = true; i += 1; }
+        else if (i < s.len and s[i] == '+') i += 1;
+        while (i < s.len and s[i] >= '0' and s[i] <= '9') : (i += 1) {
+            exp = exp * 10.0 + @as(f64, @floatFromInt(s[i] - '0'));
         }
     }
     if (i != s.len) return null;
     var r = ip + fp / fd;
+    if (exp != 0) {
+        const scale = std.math.pow(f64, 10.0, exp);
+        if (exp_neg) r /= scale else r *= scale;
+    }
     if (neg) r = -r;
     return r;
 }

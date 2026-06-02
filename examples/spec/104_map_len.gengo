@@ -1,6 +1,6 @@
 std := import("std")
 
-m := {a: 1, b: 2, c: 3}
+m := {"a": 1, "b": 2, "c": 3}
 std.io.println(m.len)
 
 m.d = 4

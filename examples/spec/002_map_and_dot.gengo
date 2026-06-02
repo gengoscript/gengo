@@ -1,4 +1,4 @@
 std := import("std")
-m := {a: {b: 9}, "x": 3}
+m := {"a": {"b": 9}, "x": 3}
 std.io.println(m.a.b)
 std.io.println(m["x"])

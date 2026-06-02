@@ -6,6 +6,8 @@ const examplesEl = document.getElementById("examples");
 const statusEl = document.getElementById("status");
 const execInfoEl = document.getElementById("exec-info");
 
+const encoder = new TextEncoder();
+
 function encodeCode(str) {
   return btoa(encodeURIComponent(str).replace(/%([0-9A-F]{2})/g, (match, p1) => String.fromCharCode('0x' + p1)));
 }
@@ -158,7 +160,7 @@ for pair in pairs {
   maps: `std := import("std")
 core := std.core
 
-scores := {alice: 95, bob: 82, carol: 78, dave: 91}
+scores := {"alice": 95, "bob": 82, "carol": 78, "dave": 91}
 
 std.io.println(core.has(scores, "alice"))
 std.io.println(core.has(scores, "eve"))
@@ -261,7 +263,163 @@ std.io.printf("last two   : %s\\n", s[7:9])
 std.io.println("characters:")
 for i, ch in s {
     std.io.printf("  [%d] %s\\n", i, ch)
-}`
+}`,
+
+  simlab: `std := import("std")
+
+type Tick int range 0..1000000
+type WorkerId int range 1..1024
+type Load int range 0..10000
+
+type Stats struct {
+    processed int,
+    failed int,
+    retried int,
+    dropped int,
+    peakQueue int,
+}
+
+type Worker struct {
+    id WorkerId,
+    cap Load,
+    busy bool,
+    handled int,
+}
+
+type Job struct {
+    id int,
+    owner WorkerId,
+    cost Load,
+    attempts int,
+    payload string,
+}
+
+type Event variant {
+    spawn(w Worker),
+    submit(j Job),
+    finish(id WorkerId),
+    fail(j Job),
+    tick(t Tick),
+    shutdown,
+}
+
+type RetryPolicy interface {
+    nextDelay(attempt int) int
+    shouldDrop(attempt int) bool
+}
+
+type ExpBackoff struct { limit int, base int }
+
+func (p ExpBackoff) nextDelay(attempt int) int {
+    d := p.base
+    i := 0
+    for i < attempt {
+        d = d * 2
+        if d > 256 { return 256 }
+        i += 1
+    }
+    return d
+}
+
+func (p ExpBackoff) shouldDrop(attempt int) bool {
+    return attempt > p.limit
+}
+
+func mkWorker(id int, cap int) Worker {
+    return Worker{ id: WorkerId(id), cap: Load(cap), busy: false, handled: 0 }
+}
+
+func mkJob(id int, owner int, cost int, payload string) Job {
+    return Job{
+        id: id,
+        owner: WorkerId(owner),
+        cost: Load(cost),
+        attempts: 0,
+        payload: payload,
+    }
+}
+
+func runSim(initialWorkers []Worker, initialJobs []Job, maxTicks Tick) Stats {
+    workers := {}
+    queue := []
+    delayed := {}
+    now := 0
+    st := Stats{ processed: 0, failed: 0, retried: 0, dropped: 0, peakQueue: 0 }
+    p := ExpBackoff{ limit: 5, base: 1 }
+
+    for w in initialWorkers {
+        workers[std.conv.to_string(int(w.id))] = w
+        queue = std.core.append(queue, Event.spawn(w))
+    }
+    for j in initialJobs {
+        queue = std.core.append(queue, Event.submit(j))
+    }
+
+    for now < int(maxTicks) {
+        if std.core.has(delayed, now) {
+            for j in delayed[now] {
+                queue = std.core.append(queue, Event.submit(j))
+            }
+            _ = std.core.delete(delayed, now)
+        }
+
+        if std.core.len(queue) > st.peakQueue { st.peakQueue = std.core.len(queue) }
+        if std.core.len(queue) == 0 {
+            now += 1
+            continue
+        }
+
+        ev := queue[0]
+        queue = std.core.remove(queue, 0)
+
+        switch ev {
+            case .spawn(w) {
+                workers[std.conv.to_string(int(w.id))] = w
+            }
+            case .submit(job) {
+                wk := std.conv.to_string(int(job.owner))
+                w := workers[wk]
+                if w.busy {
+                    if p.shouldDrop(job.attempts) {
+                        st.dropped += 1
+                        continue
+                    }
+                    tgt := now + p.nextDelay(job.attempts)
+                    if !std.core.has(delayed, tgt) { delayed[tgt] = [] }
+                    delayed[tgt] = std.core.append(delayed[tgt], job)
+                    st.retried += 1
+                    continue
+                }
+                w.busy = true
+                workers[wk] = w
+                queue = std.core.append(queue, Event.finish(job.owner))
+            }
+            case .finish(id) {
+                wk := std.conv.to_string(int(id))
+                w := workers[wk]
+                w.busy = false
+                w.handled += 1
+                workers[wk] = w
+                st.processed += 1
+            }
+            default {}
+        }
+        now += 1
+    }
+    return st
+}
+
+func main() {
+    workers := [mkWorker(1, 50), mkWorker(2, 80)]
+    jobs := []
+    for i := 0; i < 100; i++ {
+        jobs = std.core.append(jobs, mkJob(i, (i % 2) + 1, 10, "data"))
+    }
+    st := runSim(workers, jobs, Tick(1000))
+    std.io.printf("Processed: %d, Dropped: %d, Peak: %d\\n", st.processed, st.dropped, st.peakQueue)
+}
+
+main()`
 };
 
 const MaxOutputBytes = 128 * 1024;
@@ -273,6 +431,10 @@ let outputBytes = 0;
 let editor = null;
 let startTime = 0;
 
+// Disable buttons until Monaco is ready
+runBtn.disabled = true;
+shareBtn.disabled = true;
+
 // Initialize Monaco
 require.config({ paths: { vs: 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs' } });
 require(['vs/editor/editor.main'], function () {
@@ -281,16 +443,17 @@ require(['vs/editor/editor.main'], function () {
   monaco.languages.setMonarchTokensProvider('gengo', {
     keywords: [
       'true', 'false', 'null', 'if', 'else', 'for', 'in', 'switch', 'case',
-      'default', 'return', 'func', 'struct', 'interface', 'type',
+      'default', 'return', 'func', 'struct', 'interface', 'type', 'subtype', 'variant',
       'range', 'enum', 'import', 'const', 'break', 'continue', 'defer', 'assert', 'trap'
     ],
-    typeKeywords: ['int', 'float', 'bool', 'string', 'rune'],
+    typeKeywords: ['int', 'float', 'bool', 'string', 'rune', 'any', 'error'],
     operators: [
       '=', '>', '<', '!', '~', '?', ':', '==', '<=', '>=', '!=',
       '&&', '||', '++', '--', '+', '-', '*', '/', '&', '|', '^', '%',
       '<<', '>>', '+=', '-=', '*=', '/=', '%=', '&=', '|=', '^=', ':=', '..', '...'
     ],
     symbols: /[=><!~?:&|+\-*\/\^%]+/,
+    escapes: /\\(?:[abfnrtv\\"']|x[0-9A-Fa-f]{1,4}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8})/,
     tokenizer: {
       root: [
         [/[a-z_$][\w$]*/, {
@@ -300,6 +463,7 @@ require(['vs/editor/editor.main'], function () {
             '@default': 'identifier'
           }
         }],
+        [/\.[a-z_$][\w$]*/, 'type.identifier'],
         [/[A-Z][\w$]*/, 'type.identifier'],
         { include: '@whitespace' },
         [/[{}()\[\]]/, '@brackets'],
@@ -336,7 +500,6 @@ require(['vs/editor/editor.main'], function () {
         [/[\/*]/, 'comment']
       ],
     },
-    escapes: /\\(?:[abfnrtv\\"']|x[0-9A-Fa-f]{1,4}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8})/
   });
 
   monaco.editor.defineTheme('gengo-dark', {
@@ -360,8 +523,14 @@ require(['vs/editor/editor.main'], function () {
     }
   });
 
+  // Load code from URL or LocalStorage
+  const urlParams = new URLSearchParams(window.location.search);
+  const codeParam = urlParams.get('code');
+  const savedCode = localStorage.getItem('gengo_playground_code');
+  const initialCode = codeParam ? decodeCode(codeParam) : (savedCode || samples.hello);
+
   editor = monaco.editor.create(document.getElementById('editor'), {
-    value: samples.hello,
+    value: initialCode,
     language: 'gengo',
     theme: 'gengo-dark',
     automaticLayout: true,
@@ -374,16 +543,13 @@ require(['vs/editor/editor.main'], function () {
     fixedOverflowWidgets: true
   });
 
-  // Handle sharing URL
-  const urlParams = new URLSearchParams(window.location.search);
-  const codeParam = urlParams.get('code');
-  if (codeParam) {
-    try {
-      editor.setValue(decodeCode(codeParam));
-    } catch (e) {
-      console.error("Failed to decode code param", e);
-    }
-  }
+  editor.onDidChangeModelContent(() => {
+    localStorage.setItem('gengo_playground_code', editor.getValue());
+  });
+
+  // Enable buttons
+  runBtn.disabled = false;
+  shareBtn.disabled = false;
 
   // Keyboard shortcut
   window.addEventListener('keydown', (e) => {
@@ -394,7 +560,7 @@ require(['vs/editor/editor.main'], function () {
 });
 
 function appendOutput(text, isError = false) {
-  const n = new TextEncoder().encode(text).length;
+  const n = encoder.encode(text).length;
   if (outputBytes >= MaxOutputBytes) return;
   
   const span = document.createElement("span");
@@ -403,6 +569,8 @@ function appendOutput(text, isError = false) {
   if (outputBytes + n > MaxOutputBytes) {
     const remaining = MaxOutputBytes - outputBytes;
     if (remaining > 0) {
+      // Note: simple slice might cut a multi-byte character, 
+      // but for output display this is acceptable.
       span.textContent = text.slice(0, remaining);
     }
     const truncated = document.createElement("div");
@@ -427,7 +595,10 @@ function setIdle(status = "Idle", isError = false) {
     clearTimeout(runTimer);
     runTimer = null;
   }
-  worker = null;
+  if (worker) {
+    worker.terminate();
+    worker = null;
+  }
   
   statusEl.innerHTML = `<span class="badge ${isError ? 'error' : 'success'}">${status}</span>`;
   const duration = ((performance.now() - startTime) / 1000).toFixed(2);
@@ -435,14 +606,14 @@ function setIdle(status = "Idle", isError = false) {
 }
 
 function stopRun(reason) {
-  if (worker) worker.terminate();
   setIdle(reason || "Stopped", true);
 }
 
 function startWorker(script) {
   startTime = performance.now();
   execInfoEl.textContent = "";
-  worker = new Worker("./worker.js", { type: "module" });
+  worker = new Worker("./worker.js?v=8781a43a", { type: "module" });
+  let hasStderr = false;
 
   worker.onmessage = (evt) => {
     const msg = evt.data;
@@ -451,11 +622,16 @@ function startWorker(script) {
       return;
     }
     if (msg.kind === "stderr") {
+      hasStderr = true;
       appendOutput(msg.text, true);
       return;
     }
     if (msg.kind === "done") {
-      setIdle("Success");
+      if (hasStderr) {
+        setIdle("Error", true);
+      } else {
+        setIdle("Success");
+      }
       return;
     }
     if (msg.kind === "error") {
@@ -478,12 +654,12 @@ function startWorker(script) {
 }
 
 runBtn.onclick = () => {
-  if (worker) return;
+  if (worker || !editor) return;
   runBtn.disabled = true;
   stopBtn.disabled = false;
   outEl.innerHTML = "";
   outputBytes = 0;
-  statusEl.innerHTML = `<span class="badge" style="color: var(--ink-muted)">Running...</span>`;
+  statusEl.innerHTML = `<span class="badge" style="color: var(--ink-muted); background: rgba(255,255,255,0.05)">Running...</span>`;
   startWorker(editor.getValue());
 };
 
@@ -492,22 +668,32 @@ stopBtn.onclick = () => {
   stopRun("Stopped");
 };
 
-shareBtn.onclick = () => {
-  const code = encodeCode(editor.getValue());
+function updateUrl(code) {
   const url = new URL(window.location);
-  url.searchParams.set('code', code);
+  url.searchParams.set('code', encodeCode(code));
   window.history.pushState({}, '', url);
+}
+
+shareBtn.onclick = () => {
+  if (!editor) return;
+  const code = editor.getValue();
+  updateUrl(code);
   
   // Quick visual feedback
-  const originalText = shareBtn.innerHTML;
-  shareBtn.innerHTML = "Copied!";
-  navigator.clipboard.writeText(url.toString());
-  setTimeout(() => shareBtn.innerHTML = originalText, 2000);
+  const originalContent = shareBtn.innerHTML;
+  shareBtn.innerHTML = `
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+    Copied!
+  `;
+  navigator.clipboard.writeText(window.location.href);
+  setTimeout(() => shareBtn.innerHTML = originalContent, 2000);
 };
 
 examplesEl.onchange = () => {
+  if (!editor) return;
   const val = examplesEl.value;
   if (samples[val]) {
     editor.setValue(samples[val]);
+    updateUrl(samples[val]);
   }
 };

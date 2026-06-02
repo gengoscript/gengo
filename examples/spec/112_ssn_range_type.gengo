@@ -1,0 +1,7 @@
+std := import("std")
+type Social_Security_Number int range 0..999_99_9999
+ssn := Social_Security_Number(555_55_5555)
+i := 42
+std.io.println(ssn)
+std.io.println(Social_Security_Number(i))
+std.io.println(int(ssn))

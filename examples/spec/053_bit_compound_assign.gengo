@@ -12,7 +12,7 @@ std.io.println(x)
 x >>= 1
 std.io.println(x)
 
-obj := { n: 8, arr: [16], m: { "k": 32 } }
+obj := { "n": 8, "arr": [16], "m": { "k": 32 } }
 obj.n >>= 1
 obj.arr[0] <<= 1
 obj.m["k"] ^= 7

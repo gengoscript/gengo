@@ -1,0 +1,13 @@
+std := import("std")
+type Months enum { January, February, March, April, May, June, July, August, September, October, November, December }
+type Day_t int range 1..31
+type Year_t int range 1..3000
+type Date struct {
+    Day   Day_t,
+    Month Months,
+    Year  Year_t
+}
+d := Date{ Day: Day_t(15), Month: Months.January, Year: Year_t(2012) }
+std.io.println(d.Day)
+std.io.println(d.Month)
+std.io.println(d.Year)

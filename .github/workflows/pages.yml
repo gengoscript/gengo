@@ -38,6 +38,9 @@ jobs:
       - name: Build WASM runtime
         run: zig build -Dpreset=dev wasi-release
 
+      - name: Update playground cache version
+        run: bash playground/deploy.sh
+
       - name: Assemble site
         run: |
           rm -rf _site
@@ -45,7 +48,7 @@ jobs:
           cp playground/index.html _site/index.html
           cp playground/playground.js _site/playground.js
           cp playground/worker.js _site/worker.js
-          cp build/gengo-test.wasm _site/gengo-test.wasm
+          cp playground/gengo-test.wasm _site/gengo-test.wasm
 
       - name: Upload Pages Artifact
         uses: actions/upload-pages-artifact@v3

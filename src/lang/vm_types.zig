@@ -10,6 +10,17 @@ const StructFieldSpec = @import("value.zig").StructFieldSpec;
 const InterfaceMethodSpec = @import("value.zig").InterfaceMethodSpec;
 const FuncObj = @import("value.zig").FuncObj;
 
+// Resolve and cache the parent enum type pointer for enum subtypes.
+pub fn resolveEnumParent(obj: *Object) ?*Object {
+    if (obj.* != .enum_type) return null;
+    if (obj.enum_type.parent) |cached| return cached;
+    const pname = obj.enum_type.parent_name orelse return null;
+    const pval = globals.get(pname) orelse return null;
+    if (!(pval == .object and pval.object.* == .enum_type)) return null;
+    obj.enum_type.parent = pval.object;
+    return pval.object;
+}
+
 // Resolve and cache the parent type pointer, avoiding repeated globals lookups.
 pub fn resolveParentType(obj: *Object) ?*Object {
     if (obj.* != .named_type) return null;
@@ -77,7 +88,18 @@ pub fn matchesTypeAlt(v: Value, alt: FieldTypeAlt) bool {
         .interface_t => matchesInterfaceType(v, alt.interface_name),
         .named_t => v == .object and switch (v.object.*) {
             .named_value => namedTypeIsOrExtends(v.object.named_value.typ, alt.named_name),
-            .enum_value => common.streq(v.object.enum_value.typ.enum_type.qualified_name, alt.named_name),
+            .enum_value => blk: {
+                if (common.streq(v.object.enum_value.typ.enum_type.qualified_name, alt.named_name)) break :blk true;
+                const sub_val = globals.get(alt.named_name) orelse break :blk false;
+                if (!(sub_val == .object and sub_val.object.* == .enum_type)) break :blk false;
+                if (sub_val.object.enum_type.parent_name == null) break :blk false;
+                const parent_obj = resolveEnumParent(sub_val.object) orelse break :blk false;
+                if (parent_obj != v.object.enum_value.typ) break :blk false;
+                for (sub_val.object.enum_type.members) |m| {
+                    if (common.streq(m, v.object.enum_value.name)) break :blk true;
+                }
+                break :blk false;
+            },
             else => false,
         },
         .variant_t => v == .object and v.object.* == .variant_value and
@@ -276,6 +298,7 @@ pub fn constructNamedType(typ_obj: *Object, arg: Value) !Value {
             }
             return makeNamedValue(typ_obj, arg);
         },
+        .enum_t => return error.TypeError,
     }
     return makeNamedValue(typ_obj, base_v);
 }

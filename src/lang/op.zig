@@ -44,6 +44,7 @@ pub const Op = enum(u8) {
     get_local_get_field,
     div,
     mod,
+    pow,
     bit_and,
     bit_or,
     bit_xor,

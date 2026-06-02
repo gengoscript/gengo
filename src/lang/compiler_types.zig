@@ -32,6 +32,7 @@ pub const Prec = enum(u8) {
     cmp,
     term,
     factor,
+    power,
     unary,
     call,
     primary,

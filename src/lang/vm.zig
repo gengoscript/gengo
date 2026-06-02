@@ -108,6 +108,45 @@ fn prepareVariadicCall(f: @import("value.zig").FuncObj, argc: u8) !void {
     vmState().stack_top = start + fixed + 1;
 }
 
+// Allocate an enum_value for `member_name` on `obj` (an enum_type object).
+// For subtypes, the value's typ pointer is the PARENT enum and ordinal is the
+// parent's ordinal, so two values from different subtypes of the same parent
+// compare equal.  Returns error.UnknownStructField if the name is not a member.
+fn enumTypeAllocValue(obj: *Object, member_name: []const u8) !Value {
+    const et = &obj.enum_type;
+    if (et.parent_name != null) {
+        // Subtype: first validate the name is in the subset members.
+        var in_sub = false;
+        for (et.members) |m| {
+            if (common.streq(m, member_name)) { in_sub = true; break; }
+        }
+        if (!in_sub) return error.UnknownStructField;
+        // Resolve parent and find the ordinal there.
+        const parent_obj = vmtyp.resolveEnumParent(obj) orelse return error.UnknownStructField;
+        const parent_members = parent_obj.enum_type.members;
+        var pi: usize = 0;
+        while (pi < parent_members.len) : (pi += 1) {
+            if (common.streq(parent_members[pi], member_name)) {
+                const ev = try vmAllocObject();
+                ev.* = .{ .enum_value = .{ .typ = parent_obj, .name = parent_members[pi], .ordinal = @intCast(pi) } };
+                return .{ .object = ev };
+            }
+        }
+        return error.UnknownStructField;
+    } else {
+        // Regular enum.
+        var ei: usize = 0;
+        while (ei < et.members.len) : (ei += 1) {
+            if (common.streq(et.members[ei], member_name)) {
+                const ev = try vmAllocObject();
+                ev.* = .{ .enum_value = .{ .typ = obj, .name = et.members[ei], .ordinal = @intCast(ei) } };
+                return .{ .object = ev };
+            }
+        }
+        return error.UnknownStructField;
+    }
+}
+
 fn performCall(argc: u8) !void {
     const func_val = vmState().stack[vmState().stack_top - argc - 1];
     if (func_val != .object) return error.NotAFunction;
@@ -160,6 +199,22 @@ fn performCall(argc: u8) !void {
             _ = try vmPop();
             _ = try vmPop();
             try vmPush(out);
+        },
+        .enum_type => |et| {
+            if (et.parent_name == null) return error.NotAFunction;
+            if (argc != 1) return error.ArityMismatch;
+            const arg = vmState().stack[vmState().stack_top - 1];
+            if (arg != .object or arg.object.* != .enum_value) return error.TypeError;
+            const parent_obj = vmtyp.resolveEnumParent(obj) orelse return error.TypeError;
+            if (arg.object.enum_value.typ != parent_obj) return error.TypeError;
+            var found = false;
+            for (et.members) |m| {
+                if (common.streq(m, arg.object.enum_value.name)) { found = true; break; }
+            }
+            if (!found) return error.RangeError;
+            _ = try vmPop();
+            _ = try vmPop();
+            try vmPush(arg);
         },
         .variant_ctor => |vc| {
             if (argc != 1) return error.ArityMismatch;
@@ -254,6 +309,10 @@ fn iterInit(v: Value) !Value {
             .dyn_string => |s| obj.* = .{ .iterator = .{ .kind = .string, .index = 0, .string = s, .string_managed = true, .source = o } },
             .array, .array_managed => obj.* = .{ .iterator = .{ .kind = .array, .index = 0, .array = vms.asArraySlice(o), .source = o } },
             .map, .map_managed, .map_hashed => obj.* = .{ .iterator = .{ .kind = .map, .index = 0, .map = vms.asMapSlice(o), .source = o } },
+            .named_type => |nt| {
+                if (!nt.has_range) return error.TypeError;
+                obj.* = .{ .iterator = .{ .kind = .range, .index = 0, .range_current = nt.min, .range_max = nt.max, .source = o } };
+            },
             else => return error.TypeError,
         },
         .string => |s| obj.* = .{ .iterator = .{ .kind = .string, .index = 0, .string = s, .string_managed = false } },
@@ -301,6 +360,17 @@ fn iterNext1(it: *IterObj) !void {
             try vmPush(k);
             try vmPush(.{ .boolean = true });
         },
+        .range => {
+            if (it.range_current > it.range_max) {
+                try vmPush(.{ .boolean = false });
+                return;
+            }
+            const typ_obj = it.source.?;
+            const val = try vmtyp.makeNamedValue(typ_obj, .{ .number = it.range_current });
+            it.range_current += 1.0;
+            try vmPush(val);
+            try vmPush(.{ .boolean = true });
+        },
     }
 }
 
@@ -344,6 +414,7 @@ fn iterNext2(it: *IterObj) !void {
             it.index += 1;
             try vmPush(.{ .boolean = true });
         },
+        .range => return error.TypeError,
     }
 }
 
@@ -563,6 +634,13 @@ fn runInner() !void {
                 const bn = try vms.valueAsNumber(b);
                 if (bn == 0.0) return error.DivisionByZero;
                 try pushNumericResultWithCarrier(a, b, common.fmod(an, bn));
+            },
+            .pow => {
+                const b = try vmPop();
+                const a = try vmPop();
+                const an = try vms.valueAsNumber(a);
+                const bn = try vms.valueAsNumber(b);
+                try pushNumericResultWithCarrier(a, b, std.math.pow(f64, an, bn));
             },
             .bit_and => {
                 const b = try vmPop();
@@ -905,15 +983,10 @@ fn runInner() !void {
                             try vmPush(.{ .string = et.name });
                         } else if (common.streq(name, "first")) {
                             if (et.members.len == 0) return error.IndexOutOfBounds;
-                            const ev = try vmAllocObject();
-                            ev.* = .{ .enum_value = .{ .typ = obj, .name = et.members[0], .ordinal = 0 } };
-                            try vmPush(.{ .object = ev });
+                            try vmPush(try enumTypeAllocValue(obj, et.members[0]));
                         } else if (common.streq(name, "last")) {
                             if (et.members.len == 0) return error.IndexOutOfBounds;
-                            const last_i = et.members.len - 1;
-                            const ev = try vmAllocObject();
-                            ev.* = .{ .enum_value = .{ .typ = obj, .name = et.members[last_i], .ordinal = @intCast(last_i) } };
-                            try vmPush(.{ .object = ev });
+                            try vmPush(try enumTypeAllocValue(obj, et.members[et.members.len - 1]));
                         } else if (common.streq(name, "values")) {
                             const arr_obj = try vmAllocObject();
                             arr_obj.* = .{ .array = &[_]Value{} };
@@ -922,23 +995,12 @@ fn runInner() !void {
                             const items = try vmAllocManagedSlice(Value, et.members.len);
                             var ei: usize = 0;
                             while (ei < et.members.len) : (ei += 1) {
-                                const ev = try vmAllocObject();
-                                ev.* = .{ .enum_value = .{ .typ = obj, .name = et.members[ei], .ordinal = @intCast(ei) } };
-                                items[ei] = .{ .object = ev };
+                                items[ei] = try enumTypeAllocValue(obj, et.members[ei]);
                                 arr_obj.* = .{ .array_managed = items[0 .. ei + 1] };
                             }
                             try vmPush(.{ .object = arr_obj });
                         } else {
-                            var ei: usize = 0;
-                            while (ei < et.members.len) : (ei += 1) {
-                                if (common.streq(et.members[ei], name)) {
-                                    const ev = try vmAllocObject();
-                                    ev.* = .{ .enum_value = .{ .typ = obj, .name = et.members[ei], .ordinal = @intCast(ei) } };
-                                    try vmPush(.{ .object = ev });
-                                    break;
-                                }
-                            }
-                            if (ei == et.members.len) return error.UnknownStructField;
+                            try vmPush(try enumTypeAllocValue(obj, name));
                         }
                     },
                     .named_type => |nt| {
@@ -1227,15 +1289,10 @@ fn runInner() !void {
                                 try vmPush(.{ .string = et.name });
                             } else if (common.streq(key, "first")) {
                                 if (et.members.len == 0) return error.IndexOutOfBounds;
-                                const ev = try vmAllocObject();
-                                ev.* = .{ .enum_value = .{ .typ = obj, .name = et.members[0], .ordinal = 0 } };
-                                try vmPush(.{ .object = ev });
+                                try vmPush(try enumTypeAllocValue(obj, et.members[0]));
                             } else if (common.streq(key, "last")) {
                                 if (et.members.len == 0) return error.IndexOutOfBounds;
-                                const last = et.members.len - 1;
-                                const ev = try vmAllocObject();
-                                ev.* = .{ .enum_value = .{ .typ = obj, .name = et.members[last], .ordinal = @intCast(last) } };
-                                try vmPush(.{ .object = ev });
+                                try vmPush(try enumTypeAllocValue(obj, et.members[et.members.len - 1]));
                             } else if (common.streq(key, "values")) {
                                 const arr_obj = try vmAllocObject();
                                 arr_obj.* = .{ .array = &[_]Value{} };
@@ -1244,23 +1301,12 @@ fn runInner() !void {
                                 const items = try vmAllocManagedSlice(Value, et.members.len);
                                 var ei: usize = 0;
                                 while (ei < et.members.len) : (ei += 1) {
-                                    const ev = try vmAllocObject();
-                                    ev.* = .{ .enum_value = .{ .typ = obj, .name = et.members[ei], .ordinal = @intCast(ei) } };
-                                    items[ei] = .{ .object = ev };
+                                    items[ei] = try enumTypeAllocValue(obj, et.members[ei]);
                                     arr_obj.* = .{ .array_managed = items[0 .. ei + 1] };
                                 }
                                 try vmPush(.{ .object = arr_obj });
                             } else {
-                                var ei: usize = 0;
-                                while (ei < et.members.len) : (ei += 1) {
-                                    if (common.streq(et.members[ei], key)) {
-                                        const ev = try vmAllocObject();
-                                        ev.* = .{ .enum_value = .{ .typ = obj, .name = et.members[ei], .ordinal = @intCast(ei) } };
-                                        try vmPush(.{ .object = ev });
-                                        break;
-                                    }
-                                }
-                                if (ei == et.members.len) return error.UnknownStructField;
+                                try vmPush(try enumTypeAllocValue(obj, key));
                             }
                         },
                         .named_type => |nt| {
@@ -1816,15 +1862,10 @@ fn runInner() !void {
                             try vmPush(.{ .string = et.name });
                         } else if (common.streq(name, "first")) {
                             if (et.members.len == 0) return error.IndexOutOfBounds;
-                            const ev = try vmAllocObject();
-                            ev.* = .{ .enum_value = .{ .typ = obj, .name = et.members[0], .ordinal = 0 } };
-                            try vmPush(.{ .object = ev });
+                            try vmPush(try enumTypeAllocValue(obj, et.members[0]));
                         } else if (common.streq(name, "last")) {
                             if (et.members.len == 0) return error.IndexOutOfBounds;
-                            const last_i = et.members.len - 1;
-                            const ev = try vmAllocObject();
-                            ev.* = .{ .enum_value = .{ .typ = obj, .name = et.members[last_i], .ordinal = @intCast(last_i) } };
-                            try vmPush(.{ .object = ev });
+                            try vmPush(try enumTypeAllocValue(obj, et.members[et.members.len - 1]));
                         } else if (common.streq(name, "values")) {
                             const arr_obj = try vmAllocObject();
                             arr_obj.* = .{ .array = &[_]Value{} };
@@ -1833,23 +1874,12 @@ fn runInner() !void {
                             const items = try vmAllocManagedSlice(Value, et.members.len);
                             var ei: usize = 0;
                             while (ei < et.members.len) : (ei += 1) {
-                                const ev = try vmAllocObject();
-                                ev.* = .{ .enum_value = .{ .typ = obj, .name = et.members[ei], .ordinal = @intCast(ei) } };
-                                items[ei] = .{ .object = ev };
+                                items[ei] = try enumTypeAllocValue(obj, et.members[ei]);
                                 arr_obj.* = .{ .array_managed = items[0 .. ei + 1] };
                             }
                             try vmPush(.{ .object = arr_obj });
                         } else {
-                            var ei: usize = 0;
-                            while (ei < et.members.len) : (ei += 1) {
-                                if (common.streq(et.members[ei], name)) {
-                                    const ev = try vmAllocObject();
-                                    ev.* = .{ .enum_value = .{ .typ = obj, .name = et.members[ei], .ordinal = @intCast(ei) } };
-                                    try vmPush(.{ .object = ev });
-                                    break;
-                                }
-                            }
-                            if (ei == et.members.len) return error.UnknownStructField;
+                            try vmPush(try enumTypeAllocValue(obj, name));
                         }
                     },
                     .named_type => |nt| {

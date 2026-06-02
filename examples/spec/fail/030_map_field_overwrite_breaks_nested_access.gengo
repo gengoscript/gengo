@@ -1,4 +1,4 @@
 std := import("std")
-obj := { a: { b: 0 } }
+obj := { "a": { "b": 0 } }
 obj.a = 11
 std.io.println(obj.a.b)

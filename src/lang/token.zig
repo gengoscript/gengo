@@ -51,6 +51,7 @@ pub const TT = enum {
     plus,
     minus,
     star,
+    star_star,
     slash,
     percent,
     tilde,

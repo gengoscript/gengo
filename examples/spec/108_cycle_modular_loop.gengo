@@ -1,0 +1,10 @@
+std := import("std")
+type Mod_Int int cycle 0..31
+a := Mod_Int(20)
+b := Mod_Int(15)
+m := a + b
+i := 1
+for i <= m {
+    std.io.println("Hello, World!")
+    i++
+}

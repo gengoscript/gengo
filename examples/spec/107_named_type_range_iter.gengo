@@ -1,0 +1,5 @@
+std := import("std")
+type My_Int int range -1..20
+for i in My_Int {
+    std.io.println(i)
+}

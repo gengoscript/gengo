@@ -1,0 +1,8 @@
+std := import("std")
+type Days enum { Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday }
+subtype Weekend_Days Days { Saturday, Sunday }
+std.io.println(Weekend_Days.Saturday == Days.Saturday)
+std.io.println(Weekend_Days.Sunday == Days.Sunday)
+std.io.println(Weekend_Days.Saturday)
+std.io.println(Weekend_Days.first)
+std.io.println(Weekend_Days.last)

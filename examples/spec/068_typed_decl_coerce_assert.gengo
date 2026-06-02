@@ -22,7 +22,7 @@ a []int = [1, 2, 3]
 std.io.println(std.core.len(a))
 
 // map[K]V: enforces map type
-m map[string]int = {x: 1, y: 2}
+m map[string]int = {"x": 1, "y": 2}
 std.io.println(std.core.len(m))
 
 // error: enforces type

@@ -1,0 +1,2 @@
+type Social_Security_Number int range 0..999_99_9999
+invalid := Social_Security_Number(-1)

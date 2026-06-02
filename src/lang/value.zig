@@ -76,7 +76,7 @@ pub const VariantCtorObj = struct { typ: *Object, tag: []const u8, ordinal: usiz
 pub const NamedTypeFnKind = enum { succ, pred };
 pub const NamedTypeFnObj = struct { typ: *Object, kind: NamedTypeFnKind };
 
-pub const NamedTypeBase = enum { int, float, string, bool, rune, array_t, map_t };
+pub const NamedTypeBase = enum { int, float, string, bool, rune, array_t, map_t, enum_t };
 pub const NamedTypeObj = struct {
     name: []const u8,
     qualified_name: []const u8,
@@ -92,12 +92,18 @@ pub const NamedTypeObj = struct {
     val_spec: ?FieldTypeSpec = null,   // for map_t: value type
 };
 pub const NamedValueObj = struct { typ: *Object, value: Value };
-pub const EnumTypeObj = struct { name: []const u8, qualified_name: []const u8, members: []const []const u8 };
+pub const EnumTypeObj = struct {
+    name: []const u8,
+    qualified_name: []const u8,
+    members: []const []const u8,
+    parent_name: ?[]const u8 = null,  // non-null marks enum subtype
+    parent: ?*Object = null,           // lazily resolved parent pointer
+};
 pub const EnumValueObj = struct { typ: *Object, name: []const u8, ordinal: i64 };
 pub const StructInstanceObj = struct { typ: *Object, fields: []MapEntry };
 pub const CellObj = struct { value: Value };
 pub const ClosureObj = struct { func: *Object, upvalues: []*Object };
-pub const IterKind = enum { array, string, map };
+pub const IterKind = enum { array, string, map, range };
 pub const IterObj = struct {
     kind: IterKind,
     index: usize,
@@ -107,6 +113,8 @@ pub const IterObj = struct {
     string_managed: bool = false,
     map: []MapEntry = &[_]MapEntry{},
     source: ?*Object = null,
+    range_current: f64 = 0,
+    range_max: f64 = 0,
 };
 
 pub const StringBuilderObj = struct {

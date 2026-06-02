@@ -1,0 +1,9 @@
+std := import("std")
+type My_Int int range 0..1000
+tab := [My_Int(2), My_Int(3), My_Int(5), My_Int(7), My_Int(11)]
+i, v := 0, null
+for i, v in tab {
+    if i > 0 { std.io.print(" ") }
+    std.io.print(v)
+}
+std.io.println("")

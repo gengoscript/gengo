@@ -4,6 +4,13 @@ self.onmessage = async (evt) => {
   const script = evt.data?.script ?? "";
   const post = (kind, payload) => self.postMessage({ kind, ...payload });
 
+  let finished = false;
+  const finish = (kind, payload) => {
+    if (finished) return;
+    finished = true;
+    post(kind, payload);
+  };
+
   try {
     const encoder = new TextEncoder();
     const fds = [
@@ -14,15 +21,32 @@ self.onmessage = async (evt) => {
     ];
 
     const wasi = new WASI(["gengo-test.wasm", "script.gengo"], [], fds);
-    const res = await fetch("./gengo-test.wasm");
-    if (!res.ok) throw new Error(`Failed to fetch wasm: ${res.status}`);
+    const res = await fetch("./gengo-test.wasm", { cache: "no-store" });
+    if (!res.ok) throw new Error(`Failed to fetch wasm: \${res.status}`);
 
     const wasm = await WebAssembly.instantiateStreaming(res, {
       wasi_snapshot_preview1: wasi.wasiImport,
     });
-    wasi.start(wasm.instance);
-    post("done", {});
+
+    try {
+      const exitCode = wasi.start(wasm.instance);
+      if (exitCode === 0 || exitCode === undefined) {
+        finish("done", {});
+      } else {
+        finish("error", { error: `Exit code \${exitCode}` });
+      }
+    } catch (err) {
+      if (err && (err.name === "ProcExitError" || err.code !== undefined)) {
+        if (err.code === 0) {
+          finish("done", {});
+        } else {
+          finish("error", { error: `Exit code \${err.code}` });
+        }
+      } else {
+        throw err;
+      }
+    }
   } catch (err) {
-    post("error", { error: String(err) });
+    finish("error", { error: String(err.stack || err) });
   }
 };

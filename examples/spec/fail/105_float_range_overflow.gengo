@@ -1,0 +1,2 @@
+type T_Norm float range -1.0..1.0
+a := T_Norm(2.0)

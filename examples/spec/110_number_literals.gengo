@@ -1,0 +1,6 @@
+std := import("std")
+std.io.println(1_000_000)
+std.io.println(1.5e3)
+std.io.println(621.371e-6 * 1e6)
+std.io.println(2e10)
+std.io.println(1.5E+2)

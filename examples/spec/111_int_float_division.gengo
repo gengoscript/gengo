@@ -1,0 +1,5 @@
+std := import("std")
+a := 3
+b := 2
+std.io.println(a / b)        // 1.5  (Gengo: always float division)
+std.io.println(int(a / b))   // 1    (explicit truncation, like Ada's Integer division)
