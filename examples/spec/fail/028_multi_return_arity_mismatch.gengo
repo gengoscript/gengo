@@ -1,4 +1,4 @@
-func pair() {
+func pair() (int, int) {
   return 1, 2
 }
 

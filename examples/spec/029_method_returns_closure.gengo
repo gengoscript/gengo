@@ -2,7 +2,7 @@ std := import("std")
 
 type Counter struct { value int }
 
-func (c Counter) adder(delta int) {
+func (c Counter) adder(delta int) func(int) int {
   return func(x int) {
     c.value += delta
     c.value += x

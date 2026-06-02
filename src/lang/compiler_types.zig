@@ -52,6 +52,8 @@ pub const FuncInfo = struct {
     upvalue_count: u8 = 0,
     named_return_base: u8 = 0,
     named_return_count: u8 = 0,
+    is_named: bool = false,
+    has_typed_returns: bool = false,
 };
 
 pub const LoopCtx = struct {
@@ -121,6 +123,10 @@ pub const TypeRegistry = struct {
             if (common.streq(self.struct_types[i].name, name)) return true;
         }
         return false;
+    }
+
+    pub fn hasStructTypeLocal(self: *TypeRegistry, name: []const u8) bool {
+        return self.hasStructType(name);
     }
 
     pub fn hasInterfaceType(self: *TypeRegistry, name: []const u8) bool {

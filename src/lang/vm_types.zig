@@ -25,7 +25,7 @@ pub fn namedTypeIsOrExtends(typ_obj: *Object, target_name: []const u8) bool {
     if (typ_obj.* != .named_type) return false;
     var cur: *Object = typ_obj;
     while (true) {
-        if (common.streq(cur.named_type.name, target_name)) return true;
+        if (common.streq(cur.named_type.qualified_name, target_name)) return true;
         cur = resolveParentType(cur) orelse return false;
     }
 }
@@ -73,15 +73,27 @@ pub fn matchesTypeAlt(v: Value, alt: FieldTypeAlt) bool {
             }
             break :blk true;
         },
-        .struct_t => v == .object and v.object.* == .struct_instance and common.streq(v.object.struct_instance.typ.struct_type.name, alt.struct_name),
+        .struct_t => v == .object and v.object.* == .struct_instance and common.streq(v.object.struct_instance.typ.struct_type.qualified_name, alt.struct_name),
         .interface_t => matchesInterfaceType(v, alt.interface_name),
         .named_t => v == .object and switch (v.object.*) {
             .named_value => namedTypeIsOrExtends(v.object.named_value.typ, alt.named_name),
-            .enum_value => common.streq(v.object.enum_value.typ.enum_type.name, alt.named_name),
+            .enum_value => common.streq(v.object.enum_value.typ.enum_type.qualified_name, alt.named_name),
             else => false,
         },
         .variant_t => v == .object and v.object.* == .variant_value and
-            common.streq(v.object.variant_value.typ.variant_type.name, alt.named_name),
+            common.streq(v.object.variant_value.typ.variant_type.qualified_name, alt.named_name),
+        .func_t => blk: {
+            if (!(v == .object and (v.object.* == .function or v.object.* == .closure))) break :blk false;
+            if (alt.func_params) |ps| {
+                const arity: usize = switch (v.object.*) {
+                    .function => |f| f.arity,
+                    .closure => |cl| cl.func.function.arity,
+                    else => break :blk false,
+                };
+                if (arity != ps.len) break :blk false;
+            }
+            break :blk true;
+        },
     };
 }
 
@@ -162,7 +174,7 @@ pub fn interfaceMethodMatches(m: InterfaceMethodSpec, f: FuncObj) bool {
 
 pub fn matchesInterfaceType(v: Value, iname: []const u8) bool {
     if (!(v == .object and v.object.* == .struct_instance)) return false;
-    const tname = v.object.struct_instance.typ.struct_type.name;
+    const tname = v.object.struct_instance.typ.struct_type.qualified_name;
     const iv = globals.get(iname) orelse return false;
     if (!(iv == .object and iv.object.* == .interface_type)) return false;
     const it = iv.object.interface_type;
@@ -170,8 +182,8 @@ pub fn matchesInterfaceType(v: Value, iname: []const u8) bool {
     while (mi < it.methods.len) : (mi += 1) {
         const m = it.methods[mi];
         const total = tname.len + 1 + m.name.len;
-        if (total > 128) return false;
-        var key_buf: [128]u8 = undefined;
+        if (total > 512) return false;
+        var key_buf: [512]u8 = undefined;
         @memcpy(key_buf[0..tname.len], tname);
         key_buf[tname.len] = '.';
         @memcpy(key_buf[tname.len + 1 .. total], m.name);

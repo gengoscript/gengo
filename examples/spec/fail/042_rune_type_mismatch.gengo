@@ -1,2 +1,2 @@
-func takes_rune(x rune) { return x }
+func takes_rune(x rune) rune { return x }
 takes_rune("no")

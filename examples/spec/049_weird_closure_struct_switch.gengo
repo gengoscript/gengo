@@ -2,7 +2,7 @@ std := import("std")
 
 type Box struct { tag rune, n int }
 
-func mk(seed int) {
+func mk(seed int) func(Box) int {
   acc := seed
   return func(b Box) {
     switch b.n % 3 {

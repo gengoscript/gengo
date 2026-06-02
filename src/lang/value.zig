@@ -31,15 +31,18 @@ pub const FieldTypeTag = enum {
     interface_t,
     named_t,
     variant_t,
+    func_t,
 };
 pub const FieldTypeAlt = struct {
     typ: FieldTypeTag,
     struct_name: []const u8 = "",
     interface_name: []const u8 = "",
     named_name: []const u8 = "",
-    elem_spec: ?FieldTypeSpec = null,  // for array[T]
-    key_spec: ?FieldTypeSpec = null,   // for map[K,V]
-    val_spec: ?FieldTypeSpec = null,   // for map[K,V]
+    elem_spec: ?FieldTypeSpec = null,      // for array[T]
+    key_spec: ?FieldTypeSpec = null,       // for map[K,V]
+    val_spec: ?FieldTypeSpec = null,       // for map[K,V]
+    func_params: ?[]const FieldTypeSpec = null,  // for func(T...) R
+    func_returns: ?[]const FieldTypeSpec = null, // for func(T...) R
 };
 pub const FieldTypeSpec = struct {
     alts: []FieldTypeAlt,
@@ -49,7 +52,7 @@ pub const StructFieldSpec = struct {
     typ: FieldTypeSpec,
     is_const: bool = false,
 };
-pub const StructTypeObj = struct { name: []const u8, fields: []StructFieldSpec };
+pub const StructTypeObj = struct { name: []const u8, qualified_name: []const u8, fields: []StructFieldSpec };
 pub const InterfaceMethodSpec = struct {
     name: []const u8,
     arity: u8,
@@ -60,20 +63,21 @@ pub const InterfaceMethodSpec = struct {
     has_typed_params: bool,
     has_typed_returns: bool,
 };
-pub const InterfaceTypeObj = struct { name: []const u8, methods: []InterfaceMethodSpec };
+pub const InterfaceTypeObj = struct { name: []const u8, qualified_name: []const u8, methods: []InterfaceMethodSpec };
 pub const VariantArmSpec = struct {
     name: []const u8,
     has_payload: bool = false,
     payload_name: []const u8 = "",
     payload_type: ?FieldTypeSpec = null,
 };
-pub const VariantTypeObj = struct { name: []const u8, arms: []const VariantArmSpec };
+pub const VariantTypeObj = struct { name: []const u8, qualified_name: []const u8, arms: []const VariantArmSpec };
 pub const VariantValueObj = struct { typ: *Object, tag: []const u8, ordinal: usize, payload: Value };
 pub const VariantCtorObj = struct { typ: *Object, tag: []const u8, ordinal: usize, payload_type: ?FieldTypeSpec };
 
 pub const NamedTypeBase = enum { int, float, string, bool, rune, array_t, map_t };
 pub const NamedTypeObj = struct {
     name: []const u8,
+    qualified_name: []const u8,
     base: NamedTypeBase,
     has_range: bool = false,
     min: f64 = 0,
@@ -85,7 +89,7 @@ pub const NamedTypeObj = struct {
     val_spec: ?FieldTypeSpec = null,   // for map_t: value type
 };
 pub const NamedValueObj = struct { typ: *Object, value: Value };
-pub const EnumTypeObj = struct { name: []const u8, members: []const []const u8 };
+pub const EnumTypeObj = struct { name: []const u8, qualified_name: []const u8, members: []const []const u8 };
 pub const EnumValueObj = struct { typ: *Object, name: []const u8, ordinal: i64 };
 pub const StructInstanceObj = struct { typ: *Object, fields: []MapEntry };
 pub const CellObj = struct { value: Value };

@@ -1,6 +1,6 @@
 std := import("std")
 
-func sum_until_sentinel(arr array) {
+func sum_until_sentinel(arr array) int {
     acc := 0
     for x in arr {
         if x == 99 { break }
@@ -9,7 +9,7 @@ func sum_until_sentinel(arr array) {
     return acc
 }
 
-func sum_skip_zero(arr array) {
+func sum_skip_zero(arr array) int {
     acc := 0
     for x in arr {
         if x == 0 { continue }
@@ -18,7 +18,7 @@ func sum_skip_zero(arr array) {
     return acc
 }
 
-func count_kv_before_sentinel(m map) {
+func count_kv_before_sentinel(m map) int {
     count := 0
     for k, v in m {
         if k == "stop" { break }
@@ -27,7 +27,7 @@ func count_kv_before_sentinel(m map) {
     return count
 }
 
-func test_after_break_code_runs() {
+func test_after_break_code_runs() int {
     count := 0
     for x in [1, 2, 3] {
         if x == 2 { break }
@@ -37,7 +37,7 @@ func test_after_break_code_runs() {
     return count
 }
 
-func sum_cfor_with_break(n int) {
+func sum_cfor_with_break(n int) int {
     s := 0
     for i := 0; i < n; i++ {
         if i == 5 { break }
@@ -46,7 +46,7 @@ func sum_cfor_with_break(n int) {
     return s
 }
 
-func sum_cfor_with_continue(n int) {
+func sum_cfor_with_continue(n int) int {
     s := 0
     for i := 0; i < n; i++ {
         if i == 3 { continue }
@@ -55,7 +55,7 @@ func sum_cfor_with_continue(n int) {
     return s
 }
 
-func sum_with_local_in_break_block(arr array) {
+func sum_with_local_in_break_block(arr array) int {
     acc := 0
     for x in arr {
         if x == 99 {
@@ -68,7 +68,7 @@ func sum_with_local_in_break_block(arr array) {
     return acc
 }
 
-func sum_body_local(arr array) {
+func sum_body_local(arr array) int {
     acc := 0
     for x in arr {
         doubled := x * 2

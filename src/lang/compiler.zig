@@ -382,7 +382,7 @@ pub const Compiler = struct {
                     const vari = self.match(.ellipsis);
                     if (self.cur.typ != .ident) return error.UnexpectedToken;
                     self.advance(); // param name
-                    if (self.cur.typ != .question and self.cur.typ != .ident) return error.ExpectedTypeAnnotation;
+                    if (self.cur.typ != .question and self.cur.typ != .ident and self.cur.typ != .kw_func) return error.ExpectedTypeAnnotation;
                     const ptype: FieldTypeSpec = try self.parseFieldTypeSpec();
                     if (!(ptype.alts.len == 1 and ptype.alts[0].typ == .any)) has_typed_params = true;
                     ptypes_tmp[arity] = ptype;
@@ -410,7 +410,7 @@ pub const Compiler = struct {
                     if (self.check(.rparen)) break;
                 }
                 try self.consume(.rparen);
-            } else if (self.cur.typ == .question or self.cur.typ == .ident) {
+            } else if (self.cur.typ == .question or self.cur.typ == .ident or self.cur.typ == .kw_func) {
                 returns_tmp[0] = try self.parseFieldTypeSpec();
                 rcount = 1;
                 has_typed_returns = true;
@@ -843,11 +843,56 @@ pub const Compiler = struct {
         }
 
         while (true) {
+            var alt: FieldTypeAlt = undefined;
+            if (self.cur.typ == .kw_func) {
+                self.advance(); // consume 'func'
+                try self.consume(.lparen);
+                var func_params_tmp: [MaxLocals]FieldTypeSpec = undefined;
+                var func_param_count: u8 = 0;
+                if (!self.check(.rparen)) {
+                    while (true) {
+                        if (func_param_count >= MaxLocals) return error.TooManyParams;
+                        func_params_tmp[func_param_count] = try self.parseFieldTypeSpec();
+                        func_param_count += 1;
+                        if (!self.match(.comma)) break;
+                        if (self.check(.rparen)) break;
+                    }
+                }
+                try self.consume(.rparen);
+                var func_returns_tmp: [MaxLocals]FieldTypeSpec = undefined;
+                var func_return_count: u8 = 0;
+                if (self.match(.lparen)) {
+                    while (true) {
+                        if (func_return_count >= MaxLocals) return error.TooManyParams;
+                        func_returns_tmp[func_return_count] = try self.parseFieldTypeSpec();
+                        func_return_count += 1;
+                        if (!self.match(.comma)) break;
+                        if (self.check(.rparen)) break;
+                    }
+                    try self.consume(.rparen);
+                } else if (self.cur.typ == .question or self.cur.typ == .ident or self.cur.typ == .kw_func) {
+                    func_returns_tmp[0] = try self.parseFieldTypeSpec();
+                    func_return_count = 1;
+                }
+                const fp = if (func_param_count > 0) blk: {
+                    const ps = heap.bump(FieldTypeSpec, func_param_count) orelse return error.OutOfMemory;
+                    var ii: u8 = 0;
+                    while (ii < func_param_count) : (ii += 1) ps[ii] = func_params_tmp[ii];
+                    break :blk ps[0..func_param_count];
+                } else @as([]FieldTypeSpec, &.{});
+                const fr = if (func_return_count > 0) blk: {
+                    const rs = heap.bump(FieldTypeSpec, func_return_count) orelse return error.OutOfMemory;
+                    var ii: u8 = 0;
+                    while (ii < func_return_count) : (ii += 1) rs[ii] = func_returns_tmp[ii];
+                    break :blk rs[0..func_return_count];
+                } else @as([]FieldTypeSpec, &.{});
+                alt = .{ .typ = .func_t, .func_params = fp, .func_returns = fr };
+            } else {
             if (self.cur.typ != .ident) return error.UnexpectedToken;
             const tname = self.cur.src;
             self.advance();
 
-            var alt: FieldTypeAlt = .{ .typ = .struct_t, .struct_name = tname };
+            alt = .{ .typ = .struct_t, .struct_name = tname };
             if (common.streq(tname, "any")) {
                 alt = .{ .typ = .any };
             } else if (common.streq(tname, "int")) {
@@ -888,6 +933,7 @@ pub const Compiler = struct {
             } else if (self.registry.hasVariantType(tname)) {
                 alt = .{ .typ = .variant_t, .named_name = try self.qualifyTypeName(tname) };
             }
+            } // end else (ident type)
 
             var i: u8 = 0;
             while (i < count) : (i += 1) {
@@ -925,8 +971,8 @@ pub const Compiler = struct {
         const name = self.cur;
         self.advance(); // consume function name
 
-        // current token is '('; funcLit emits the function value on stack
-        try self.funcLit();
+        // current token is '('; compile as a named function for return-type enforcement
+        try self.compileFuncWithPrefix(&[_][]const u8{}, true);
         if (self.last_func_obj) |fo| fo.function.name = name.src;
 
         if (self.inFunc()) {
@@ -955,7 +1001,7 @@ pub const Compiler = struct {
         self.advance();
 
         var prefix: [1][]const u8 = .{recv_name};
-        try self.compileFuncWithPrefix(prefix[0..]);
+        try self.compileFuncWithPrefix(prefix[0..], true);
 
         const qrecv_type = try self.qualifyTypeName(recv_type);
         const total = qrecv_type.len + 1 + method_name.len;
@@ -979,6 +1025,11 @@ pub const Compiler = struct {
         const name = self.cur;
         self.advance();
         if (self.match(.colon_eq)) {
+            try self.expr();
+        } else if (self.cur.typ == .kw_func) {
+            // Space-syntax func type annotation: name func(T...) R = expr
+            _ = try self.parseFieldTypeSpec();
+            try self.consume(.eq);
             try self.expr();
         } else if (self.cur.typ == .ident or self.cur.typ == .question) {
             // Space-syntax typed form: name Type = expr  (no keyword required)
@@ -1444,6 +1495,7 @@ pub const Compiler = struct {
             }
             try emitImplicitReturn(scope, line);
         } else {
+            if (scope.is_named and !scope.has_typed_returns) return error.MissingReturnType;
             _ = try self.emitExprListTuple();
         }
         try chunk.emitOp(.ret, line);
@@ -2009,10 +2061,10 @@ pub const Compiler = struct {
     }
 
     fn funcLit(self: *Compiler) anyerror!void {
-        try self.compileFuncWithPrefix(&[_][]const u8{});
+        try self.compileFuncWithPrefix(&[_][]const u8{}, false);
     }
 
-    fn compileFuncWithPrefix(self: *Compiler, prefix: []const []const u8) anyerror!void {
+    fn compileFuncWithPrefix(self: *Compiler, prefix: []const []const u8, is_named: bool) anyerror!void {
         try self.consume(.lparen);
         var param_names: [MaxLocals][]const u8 = undefined;
         var param_types: [MaxLocals]FieldTypeSpec = undefined;
@@ -2044,7 +2096,7 @@ pub const Compiler = struct {
                 param_const[arity] = p_is_const;
                 arity += 1;
                 self.advance();
-                if (self.cur.typ != .question and self.cur.typ != .ident) return error.ExpectedTypeAnnotation;
+                if (self.cur.typ != .question and self.cur.typ != .ident and self.cur.typ != .kw_func) return error.ExpectedTypeAnnotation;
                 const ptype: FieldTypeSpec = try self.parseFieldTypeSpec();
                 param_types[arity - 1] = ptype;
                 if (vari) {
@@ -2066,10 +2118,10 @@ pub const Compiler = struct {
 
         if (self.match(.lparen)) {
             // Detect named vs anonymous: named if first entry is 'ident type_start'.
-            const is_named = self.cur.typ == .ident and
-                (self.peekToken().typ == .ident or self.peekToken().typ == .question);
+            const is_named_returns = self.cur.typ == .ident and
+                (self.peekToken().typ == .ident or self.peekToken().typ == .question or self.peekToken().typ == .kw_func);
             while (true) {
-                if (is_named) {
+                if (is_named_returns) {
                     if (self.cur.typ != .ident) return error.UnexpectedToken;
                     return_names[return_count] = self.cur.src;
                     self.advance();
@@ -2081,8 +2133,8 @@ pub const Compiler = struct {
                 if (self.check(.rparen)) break;
             }
             try self.consume(.rparen);
-            if (is_named) named_return_count = return_count;
-        } else if (self.cur.typ == .question or self.cur.typ == .ident) {
+            if (is_named_returns) named_return_count = return_count;
+        } else if (self.cur.typ == .question or self.cur.typ == .ident or self.cur.typ == .kw_func) {
             return_types[0] = try self.parseFieldTypeSpec();
             return_count = 1;
             has_typed_returns = true;
@@ -2095,6 +2147,8 @@ pub const Compiler = struct {
         self.scopes[self.scope_depth] = .{};
         self.scope_depth += 1;
         const scope = self.currentScope();
+        scope.is_named = is_named;
+        scope.has_typed_returns = has_typed_returns;
 
         var pi: u8 = 0;
         while (pi < arity) : (pi += 1) {
@@ -2548,6 +2602,20 @@ pub const Compiler = struct {
         var lx = self.lex;
         var t = lx.next(); // token after the var name
         if (t.typ == .question) t = lx.next(); // skip optional nullable prefix
+        if (t.typ == .kw_func) {
+            // func(T...) R = expr: scan forward tracking paren depth to find '='
+            var depth: i32 = 0;
+            while (true) {
+                switch (t.typ) {
+                    .lparen, .lbracket => depth += 1,
+                    .rparen, .rbracket => depth -= 1,
+                    .eq => if (depth == 0) return true,
+                    .lbrace, .semicolon, .eof => return false,
+                    else => {},
+                }
+                t = lx.next();
+            }
+        }
         if (t.typ != .ident) return false;
         t = lx.next(); // token after the type ident
         while (t.typ == .pipe) { // skip union alternatives: | type ...

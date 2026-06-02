@@ -1,6 +1,6 @@
 std := import("std")
 
-func safeDivide(a float, b float) {
+func safeDivide(a float, b float) (float, ?error) {
     if b == 0.0 {
         return 0.0, std.core.error("division by zero")
     }
@@ -27,7 +27,7 @@ std.io.printf("result: %f\n", result)
 withRecover()
 
 // trap with a plain string (non-error value)
-func mayFail(fail bool) {
+func mayFail(fail bool) (?int, ?string) {
     if fail {
         return null, "something went wrong"
     }

@@ -1,4 +1,4 @@
-func needs_int(x int) {
+func needs_int(x int) int {
   return x
 }
 

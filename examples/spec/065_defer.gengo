@@ -24,7 +24,7 @@ func defers_in_loop() {
     std.io.println("after loop")
 }
 
-func defer_before_return() {
+func defer_before_return() int {
     defer std.io.println("defer")
     return 42
 }

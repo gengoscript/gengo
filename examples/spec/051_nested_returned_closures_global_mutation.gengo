@@ -2,7 +2,7 @@ std := import("std")
 
 g := 10
 
-func outer(seed int) {
+func outer(seed int) func(int) func(int) int {
   local := seed
   return func(step int) {
     mid := step

@@ -1,7 +1,7 @@
 std := import("std")
 
 type Glyph struct { ch rune }
-func takes_rune(x rune) { return x }
+func takes_rune(x rune) rune { return x }
 
 g := Glyph{ ch: `å` }
 std.io.println(g.ch)
