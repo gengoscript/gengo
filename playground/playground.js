@@ -56,7 +56,7 @@ process()`,
 
   closures: `std := import("std")
 
-func makeCounter(start int) {
+func makeCounter(start int) func() int {
     n := start
     return func() {
         n += 1
@@ -138,7 +138,7 @@ describe(Square{side: 5.0})`,
 
   errors: `std := import("std")
 
-func safeDivide(a float, b float) {
+func safeDivide(a float, b float) (float, ?error) {
     if b == 0.0 {
         return 0.0, std.core.error("division by zero")
     }
@@ -196,7 +196,7 @@ std.io.println(evens)`,
 
   trap_binding: `std := import("std")
 
-func safeDivide(a float, b float) {
+func safeDivide(a float, b float) (float, ?error) {
     if b == 0.0 {
         return 0.0, std.core.error("division by zero")
     }
