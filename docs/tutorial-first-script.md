@@ -11,8 +11,8 @@ zig build -Dpreset=dev wasi
 Expected tail output:
 
 ```text
-Built /..././gengo-test.wasm
-Run with: wasmtime --dir / /..././gengo-test.wasm -- <script>
+Built /..././gengo-runtime.wasm
+Run with: wasmtime --dir / /..././gengo-runtime.wasm -- <script>
 ```
 
 ## 2. Create a script
@@ -35,7 +35,7 @@ std.io.println(nums[1])
 ## 3. Run it
 
 ```bash
-wasmtime --dir . ./gengo-test.wasm -- examples/hello_tutorial.gengo
+wasmtime --dir . ./gengo-runtime.wasm -- examples/hello_tutorial.gengo
 ```
 
 Expected output:
@@ -66,7 +66,7 @@ greet(User{ name: "Mikael", initial: `M` })
 Run again:
 
 ```bash
-wasmtime --dir . ./gengo-test.wasm -- examples/hello_tutorial.gengo
+wasmtime --dir . ./gengo-runtime.wasm -- examples/hello_tutorial.gengo
 ```
 
 Expected output:

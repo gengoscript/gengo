@@ -48,7 +48,7 @@ jobs:
           cp playground/index.html _site/index.html
           cp playground/playground.js _site/playground.js
           cp playground/worker.js _site/worker.js
-          cp playground/gengo-test.wasm _site/gengo-test.wasm
+          cp playground/gengo-runtime.wasm _site/gengo-runtime.wasm
 
       - name: Upload Pages Artifact
         uses: actions/upload-pages-artifact@v3

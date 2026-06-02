@@ -612,7 +612,7 @@ function stopRun(reason) {
 function startWorker(script) {
   startTime = performance.now();
   execInfoEl.textContent = "";
-  worker = new Worker("./worker.js?v=8781a43a", { type: "module" });
+  worker = new Worker("./worker.js?v=41806c7c", { type: "module" });
   let hasStderr = false;
 
   worker.onmessage = (evt) => {

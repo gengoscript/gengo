@@ -27,11 +27,11 @@ pub fn build(b: *std.Build) void {
 
     // ── Main runtime ──────────────────────────────────────────────────────────
 
-    const gengo_debug = addWasmExe(b, "gengo-test", "src/main.zig", wasm_target, .Debug, &preset.step, build_opts_mod);
-    const gengo_release = addWasmExe(b, "gengo-test", "src/main.zig", wasm_target, .ReleaseFast, &preset.step, build_opts_mod);
+    const gengo_debug = addWasmExe(b, "gengo-runtime", "src/main.zig", wasm_target, .Debug, &preset.step, build_opts_mod);
+    const gengo_release = addWasmExe(b, "gengo-runtime", "src/main.zig", wasm_target, .ReleaseFast, &preset.step, build_opts_mod);
 
-    const install_debug = installWasm(b, gengo_debug, "gengo-test.wasm");
-    const install_release = installWasm(b, gengo_release, "gengo-test.wasm");
+    const install_debug = installWasm(b, gengo_debug, "gengo-runtime.wasm");
+    const install_release = installWasm(b, gengo_release, "gengo-runtime.wasm");
 
     // ── Test runners (build + run immediately, no permanent artifact) ─────────
 

@@ -3,5 +3,5 @@ zig-out/
 .zig-cache/
 *.swp
 *.wasm
-!playground/gengo-test.wasm
+!playground/gengo-runtime.wasm
 embed-host-example

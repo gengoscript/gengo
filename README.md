@@ -18,7 +18,7 @@ Project status: early and still evolving. Breaking changes are expected while th
 
 ## Embedding the WASM
 
-Download `gengo-test.wasm` from the [latest release](https://github.com/gengoscript/gengo/releases) or build it with `zig build wasi`.
+Download `gengo-runtime.wasm` from the [latest release](https://github.com/gengoscript/gengo/releases) or build it with `zig build wasi`.
 
 **Browser** — pass the script as a virtual file using [`@bjorn3/browser_wasi_shim`](https://www.npmjs.com/package/@bjorn3/browser_wasi_shim):
 
@@ -37,8 +37,8 @@ const fds  = [
   new PreopenDirectory(".", new Map([["script.gengo", new File(enc.encode(script))]])),
 ];
 
-const wasi = new WASI(["gengo-test.wasm", "script.gengo"], [], fds);
-const wasm = await WebAssembly.instantiateStreaming(fetch("gengo-test.wasm"), {
+const wasi = new WASI(["gengo-runtime.wasm", "script.gengo"], [], fds);
+const wasm = await WebAssembly.instantiateStreaming(fetch("gengo-runtime.wasm"), {
   wasi_snapshot_preview1: wasi.wasiImport,
 });
 wasi.start(wasm.instance);
@@ -58,11 +58,11 @@ writeFileSync("/tmp/script.gengo", script);
 
 const wasi = new WASI({
   version: "preview1",
-  args: ["gengo-test.wasm", "script.gengo"],
+  args: ["gengo-runtime.wasm", "script.gengo"],
   preopens: { ".": "/tmp" },
 });
 
-const wasm = await WebAssembly.compile(readFileSync("gengo-test.wasm"));
+const wasm = await WebAssembly.compile(readFileSync("gengo-runtime.wasm"));
 const instance = await WebAssembly.instantiate(wasm, wasi.getImportObject());
 wasi.start(instance);
 ```
@@ -70,7 +70,7 @@ wasi.start(instance);
 **wasmtime CLI** — run a script directly from the shell:
 
 ```bash
-wasmtime --dir . gengo-test.wasm script.gengo
+wasmtime --dir . gengo-runtime.wasm script.gengo
 ```
 
 ## Example
@@ -136,7 +136,7 @@ Build the WASI runtime:
 
 ```bash
 zig build -Dpreset=dev wasi
-wasmtime --dir . ./build/gengo-test.wasm -- script.gengo
+wasmtime --dir . ./build/gengo-runtime.wasm -- script.gengo
 ```
 
 Run tests:

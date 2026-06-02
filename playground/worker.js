@@ -20,8 +20,8 @@ self.onmessage = async (evt) => {
       new PreopenDirectory(".", new Map([["script.gengo", new File(encoder.encode(script))]])),
     ];
 
-    const wasi = new WASI(["gengo-test.wasm", "script.gengo"], [], fds);
-    const res = await fetch("./gengo-test.wasm", { cache: "no-store" });
+    const wasi = new WASI(["gengo-runtime.wasm", "script.gengo"], [], fds);
+    const res = await fetch("./gengo-runtime.wasm", { cache: "no-store" });
     if (!res.ok) throw new Error(`Failed to fetch wasm: \${res.status}`);
 
     const wasm = await WebAssembly.instantiateStreaming(res, {
