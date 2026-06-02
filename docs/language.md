@@ -94,7 +94,7 @@ std.io.print(msg)
 - Named types can use other named scalar types as base:
   - `type Integer int range -2147483648 .. 2147483647`
   - `type Age Integer range 0 .. 100`
-  - `type Hour int cycle 1 .. 12`
+  - `type Hour int cycle 0 .. 23`
 - Assignment: `name = expr`
 - Multi-declaration destructure: `a, b := expr`
 - Multi-assignment destructure: `a, b = expr`
@@ -155,22 +155,22 @@ The explicit escape hatch is a cast: `int(age) + int(score)` is always legal.
 Named integer types may use `cycle` instead of `range`:
 
 ```gengo
-type Hour int cycle 1..12
+type Hour int cycle 0..23
 type Step int cycle 1..16
 ```
 
 - `cycle` is only supported for `int`-based named types.
-- Constructors remain strict: `Hour(13)` raises `RangeError`.
+- Constructors remain strict: `Hour(24)` raises `RangeError`.
 - Arithmetic results on values of the cyclic type wrap back into the declared domain.
 - `++` and `--` therefore wrap as well.
 
 Examples:
 
 ```gengo
-h := Hour(12)
-std.io.println(h + Hour(1)) // 1
+h := Hour(23)
+std.io.println(h + Hour(1)) // 0
 h++
-std.io.println(h)           // 1
+std.io.println(h)           // 0
 ```
 
 ### Subtype declarations
