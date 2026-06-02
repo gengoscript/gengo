@@ -481,6 +481,7 @@ fn nativeStrJoin(arr_obj: *Object, sep: []const u8) !Value {
     var total: usize = sep.len * (items.len - 1);
     for (items) |v| total += (try vms.asStringValue(v)).len;
     const obj = try vmgc.vmAllocObject();
+    obj.* = .{ .dyn_string = &[_]u8{} }; // safe tag before GC can run
     try vms.pushTempRoot(.{ .object = obj });
     defer vms.popTempRoot();
     const buf = try vmgc.vmAllocManagedBytes(total);
@@ -504,6 +505,7 @@ fn nativeStrTrim(s: []const u8) !Value {
 
 fn nativeStrUpper(s: []const u8) !Value {
     const obj = try vmgc.vmAllocObject();
+    obj.* = .{ .dyn_string = &[_]u8{} }; // safe tag before GC can run
     try vms.pushTempRoot(.{ .object = obj });
     defer vms.popTempRoot();
     const buf = try vmgc.vmAllocManagedBytes(s.len);
@@ -514,6 +516,7 @@ fn nativeStrUpper(s: []const u8) !Value {
 
 fn nativeStrLower(s: []const u8) !Value {
     const obj = try vmgc.vmAllocObject();
+    obj.* = .{ .dyn_string = &[_]u8{} }; // safe tag before GC can run
     try vms.pushTempRoot(.{ .object = obj });
     defer vms.popTempRoot();
     const buf = try vmgc.vmAllocManagedBytes(s.len);

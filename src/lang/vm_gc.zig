@@ -147,18 +147,14 @@ pub fn vmAllocObject() !*Object {
 pub fn vmAllocManagedSlice(comptime T: type, n: usize) ![]T {
     if (heap.usedBytes() >= vms.vmState().next_gc_heap_bytes) {
         collectGarbage();
-        const used = heap.usedBytes();
-        const step = heap.HeapSize / 4;
-        vms.vmState().next_gc_heap_bytes = if (used + step > heap.HeapSize) heap.HeapSize else used + step;
+        vms.vmState().next_gc_heap_bytes = gcStepThreshold(heap.usedBytes());
     }
     if (heap.allocManagedSlice(T, n)) |s| {
         vms.vmState().alloc_managed_slice_calls += 1;
         return s;
     }
     collectGarbage();
-    const used = heap.usedBytes();
-    const step = heap.HeapSize / 4;
-    vms.vmState().next_gc_heap_bytes = if (used + step > heap.HeapSize) heap.HeapSize else used + step;
+    vms.vmState().next_gc_heap_bytes = gcStepThreshold(heap.usedBytes());
     if (heap.allocManagedSlice(T, n)) |s| {
         vms.vmState().alloc_managed_slice_calls += 1;
         return s;
@@ -166,21 +162,33 @@ pub fn vmAllocManagedSlice(comptime T: type, n: usize) ![]T {
     return error.OutOfMemory;
 }
 
+fn gcStepThreshold(used: usize) usize {
+    // Shrink the step as the heap fills so GC keeps firing even when the bump
+    // pointer is near the top. HeapSize/4 at low usage, HeapSize/16 at >75%.
+    const sz = heap.HeapSize;
+    const step = if (used * 4 > sz * 3) sz / 16 else sz / 4;
+    const next = used + step;
+    return if (next >= sz) sz - sz / 16 else next;
+}
+
 pub fn vmAllocManagedBytes(n: usize) ![]u8 {
     if (heap.usedBytes() >= vms.vmState().next_gc_heap_bytes) {
         collectGarbage();
-        const used = heap.usedBytes();
-        const step = heap.HeapSize / 4;
-        vms.vmState().next_gc_heap_bytes = if (used + step > heap.HeapSize) heap.HeapSize else used + step;
+        vms.vmState().next_gc_heap_bytes = gcStepThreshold(heap.usedBytes());
+    }
+    // Proactive GC: before bumping a large slab (≥4096 B) when the heap is
+    // already over half full, collect first so freed blocks refill the free
+    // list and we avoid growing the bump at all.
+    if (n >= 4096 and heap.wouldBump(n) and heap.usedBytes() * 2 >= heap.HeapSize) {
+        collectGarbage();
+        vms.vmState().next_gc_heap_bytes = gcStepThreshold(heap.usedBytes());
     }
     if (heap.allocBytesManaged(n)) |s| {
         vms.vmState().alloc_managed_bytes_calls += 1;
         return s;
     }
     collectGarbage();
-    const used = heap.usedBytes();
-    const step = heap.HeapSize / 4;
-    vms.vmState().next_gc_heap_bytes = if (used + step > heap.HeapSize) heap.HeapSize else used + step;
+    vms.vmState().next_gc_heap_bytes = gcStepThreshold(heap.usedBytes());
     if (heap.allocBytesManaged(n)) |s| {
         vms.vmState().alloc_managed_bytes_calls += 1;
         return s;
@@ -190,6 +198,7 @@ pub fn vmAllocManagedBytes(n: usize) ![]u8 {
 
 pub fn makeDynString(s: []const u8) !Value {
     const obj = try vmAllocObject();
+    obj.* = .{ .dyn_string = &[_]u8{} }; // safe tag before GC can run
     try vms.pushTempRoot(.{ .object = obj });
     defer vms.popTempRoot();
     const buf = try vmAllocManagedBytes(s.len);
@@ -200,6 +209,7 @@ pub fn makeDynString(s: []const u8) !Value {
 
 pub fn concatDynString(a: []const u8, b: []const u8) !Value {
     const obj = try vmAllocObject();
+    obj.* = .{ .dyn_string = &[_]u8{} }; // safe tag before GC can run
     try vms.pushTempRoot(.{ .object = obj });
     defer vms.popTempRoot();
     const total = a.len + b.len;

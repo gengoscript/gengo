@@ -52,6 +52,15 @@ fn classIndexFor(n: usize) ?usize {
     return null;
 }
 
+// Returns true if allocating n bytes would expand the bump pointer (i.e., the
+// slab free list for the class has no available block). Callers can use this
+// to decide whether to run GC proactively before a large allocation.
+pub fn wouldBump(n: usize) bool {
+    if (n == 0) return false;
+    const ci = classIndexFor(n) orelse return false; // too large for slab → handled separately
+    return g_state.free_blocks[ci] == null;
+}
+
 pub fn bump(comptime T: type, n: usize) ?[*]T {
     const al: usize = @alignOf(T);
     const mask: usize = al - 1;

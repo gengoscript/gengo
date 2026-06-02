@@ -93,6 +93,7 @@ fn prepareVariadicCall(f: @import("value.zig").FuncObj, argc: u8) !void {
     const start = vmState().stack_top - argc;
     const extra: usize = argc - fixed;
     const arr_obj = try vmAllocObject();
+    arr_obj.* = .{ .array = &[_]Value{} }; // safe tag before GC can run
     try pushTempRoot(.{ .object = arr_obj });
     defer popTempRoot();
     const items = try vmAllocManagedSlice(Value, extra);
@@ -1903,6 +1904,7 @@ fn runInner() !void {
                 const total: usize = @as(usize, argc) + 1;
                 const start = vmState().stack_top - total;
                 const arr_obj = try vmAllocObject();
+                arr_obj.* = .{ .array = &[_]Value{} }; // safe tag before GC can run
                 try pushTempRoot(.{ .object = arr_obj });
                 defer popTempRoot();
                 const items = try vmAllocManagedSlice(Value, total);
