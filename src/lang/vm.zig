@@ -178,6 +178,14 @@ fn performCall(argc: u8) !void {
             _ = try vmPop();
             try vmPush(.{ .object = vv });
         },
+        .named_type_fn => |nf| {
+            if (argc != 1) return error.ArityMismatch;
+            const arg = vmState().stack[vmState().stack_top - 1];
+            const out = try vmtyp.applyNamedTypeFn(nf.typ, nf.kind, arg);
+            _ = try vmPop();
+            _ = try vmPop();
+            try vmPush(out);
+        },
         else => return error.NotAFunction,
     }
 }
@@ -835,6 +843,16 @@ fn runInner() !void {
                 if (container != .object) return error.TypeError;
                 const obj = container.object;
                 switch (obj.*) {
+                    .array, .array_managed => {
+                        const name = chunk.constAt(name_idx).string;
+                        const items = vms.asArraySlice(obj);
+                        if (common.streq(name, "first")) {
+                            try vmPush(.{ .number = 0 });
+                        } else if (common.streq(name, "last")) {
+                            if (items.len == 0) return error.IndexOutOfBounds;
+                            try vmPush(.{ .number = @floatFromInt(items.len - 1) });
+                        } else return error.TypeError;
+                    },
                     .struct_instance => |inst| {
                         const tpi = heap.objectPoolIndex(inst.typ);
                         if (ic_type_idx == @as(usize, tpi) and ic_fidx != 0xFF) {
@@ -852,24 +870,33 @@ fn runInner() !void {
                     },
                     .map, .map_managed => {
                         const name = chunk.constAt(name_idx).string;
-                        const items = vms.asMapSlice(obj);
-                        const key_v = Value{ .string = name };
-                        var i: usize = 0;
-                        while (i < items.len) : (i += 1) {
-                            if (vmmap.mapKeyEquals(items[i].key, key_v)) {
-                                try vmPush(items[i].value);
-                                break;
+                        if (common.streq(name, "len")) {
+                            const items = vms.asMapSlice(obj);
+                            try vmPush(.{ .number = @floatFromInt(items.len) });
+                        } else {
+                            const items = vms.asMapSlice(obj);
+                            const key_v = Value{ .string = name };
+                            var i: usize = 0;
+                            while (i < items.len) : (i += 1) {
+                                if (vmmap.mapKeyEquals(items[i].key, key_v)) {
+                                    try vmPush(items[i].value);
+                                    break;
+                                }
                             }
+                            if (i == items.len) try vmPush(.null);
                         }
-                        if (i == items.len) try vmPush(.null);
                     },
                     .map_hashed => |hm| {
                         const name = chunk.constAt(name_idx).string;
-                        const key_v = Value{ .string = name };
-                        if (vmmap.mapFindHashedIndex(hm.entries[0..hm.len], hm.buckets, key_v)) |fi| {
-                            try vmPush(hm.entries[fi].value);
+                        if (common.streq(name, "len")) {
+                            try vmPush(.{ .number = @floatFromInt(hm.len) });
                         } else {
-                            try vmPush(.null);
+                            const key_v = Value{ .string = name };
+                            if (vmmap.mapFindHashedIndex(hm.entries[0..hm.len], hm.buckets, key_v)) |fi| {
+                                try vmPush(hm.entries[fi].value);
+                            } else {
+                                try vmPush(.null);
+                            }
                         }
                     },
                     .enum_type => |et| {
@@ -924,6 +951,12 @@ fn runInner() !void {
                         } else if (common.streq(name, "last")) {
                             if (!nt.has_range) return error.TypeError;
                             try vmPush(try vmtyp.makeNamedValue(obj, .{ .number = nt.max }));
+                        } else if (common.streq(name, "succ") or common.streq(name, "pred")) {
+                            if (!nt.has_range) return error.TypeError;
+                            const fn_obj = try vmAllocObject();
+                            const kind: @import("value.zig").NamedTypeFnKind = if (common.streq(name, "succ")) .succ else .pred;
+                            fn_obj.* = .{ .named_type_fn = .{ .typ = obj, .kind = kind } };
+                            try vmPush(.{ .object = fn_obj });
                         } else return error.UnknownStructField;
                     },
                     .variant_type => |vt| {
@@ -1558,6 +1591,15 @@ fn runInner() !void {
                             try vmPush(.{ .object = vv });
                         }
                     },
+                    .named_type => {
+                        if (argc != 1) return error.ArityMismatch;
+                        if (!common.streq(mname, "succ") and !common.streq(mname, "pred")) return error.UnknownMethod;
+                        const kind: @import("value.zig").NamedTypeFnKind = if (common.streq(mname, "succ")) .succ else .pred;
+                        const arg = vmState().stack[recv_idx + 1];
+                        const out = try vmtyp.applyNamedTypeFn(recv.object, kind, arg);
+                        vmState().stack_top = recv_idx;
+                        try vmPush(out);
+                    },
                     .string_builder => |*sb| {
                         if (common.streq(mname, "write")) {
                             if (argc != 1) return error.ArityMismatch;
@@ -1717,6 +1759,15 @@ fn runInner() !void {
                 if (container != .object) return error.TypeError;
                 const obj = container.object;
                 switch (obj.*) {
+                    .array, .array_managed => {
+                        const items = vms.asArraySlice(obj);
+                        if (common.streq(name, "first")) {
+                            try vmPush(.{ .number = 0 });
+                        } else if (common.streq(name, "last")) {
+                            if (items.len == 0) return error.IndexOutOfBounds;
+                            try vmPush(.{ .number = @floatFromInt(items.len - 1) });
+                        } else return error.TypeError;
+                    },
                     .struct_instance => |inst| {
                         const tpi = heap.objectPoolIndex(inst.typ);
                         if (ic_type_idx == @as(usize, tpi) and ic_fidx != 0xFF) {
@@ -1732,23 +1783,32 @@ fn runInner() !void {
                         }
                     },
                     .map, .map_managed => {
-                        const items = vms.asMapSlice(obj);
-                        const key_v = Value{ .string = name };
-                        var i: usize = 0;
-                        while (i < items.len) : (i += 1) {
-                            if (vmmap.mapKeyEquals(items[i].key, key_v)) {
-                                try vmPush(items[i].value);
-                                break;
+                        if (common.streq(name, "len")) {
+                            const items = vms.asMapSlice(obj);
+                            try vmPush(.{ .number = @floatFromInt(items.len) });
+                        } else {
+                            const items = vms.asMapSlice(obj);
+                            const key_v = Value{ .string = name };
+                            var i: usize = 0;
+                            while (i < items.len) : (i += 1) {
+                                if (vmmap.mapKeyEquals(items[i].key, key_v)) {
+                                    try vmPush(items[i].value);
+                                    break;
+                                }
                             }
+                            if (i == items.len) try vmPush(.null);
                         }
-                        if (i == items.len) try vmPush(.null);
                     },
                     .map_hashed => |hm| {
-                        const key_v = Value{ .string = name };
-                        if (vmmap.mapFindHashedIndex(hm.entries[0..hm.len], hm.buckets, key_v)) |fi| {
-                            try vmPush(hm.entries[fi].value);
+                        if (common.streq(name, "len")) {
+                            try vmPush(.{ .number = @floatFromInt(hm.len) });
                         } else {
-                            try vmPush(.null);
+                            const key_v = Value{ .string = name };
+                            if (vmmap.mapFindHashedIndex(hm.entries[0..hm.len], hm.buckets, key_v)) |fi| {
+                                try vmPush(hm.entries[fi].value);
+                            } else {
+                                try vmPush(.null);
+                            }
                         }
                     },
                     .enum_type => |et| {
@@ -1801,6 +1861,12 @@ fn runInner() !void {
                         } else if (common.streq(name, "last")) {
                             if (!nt.has_range) return error.TypeError;
                             try vmPush(try vmtyp.makeNamedValue(obj, .{ .number = nt.max }));
+                        } else if (common.streq(name, "succ") or common.streq(name, "pred")) {
+                            if (!nt.has_range) return error.TypeError;
+                            const fn_obj = try vmAllocObject();
+                            const kind: @import("value.zig").NamedTypeFnKind = if (common.streq(name, "succ")) .succ else .pred;
+                            fn_obj.* = .{ .named_type_fn = .{ .typ = obj, .kind = kind } };
+                            try vmPush(.{ .object = fn_obj });
                         } else return error.UnknownStructField;
                     },
                     .variant_type => |vt| {

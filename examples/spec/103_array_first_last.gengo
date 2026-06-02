@@ -1,0 +1,7 @@
+std := import("std")
+
+a := [10, 20, 30, 40, 50]
+std.io.println(a.first)
+std.io.println(a.last)
+std.io.println(a[a.first])
+std.io.println(a[a.last])

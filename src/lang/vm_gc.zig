@@ -81,6 +81,7 @@ fn drainMarkQueue() void {
                 markValue(vv.payload);
             },
             .variant_ctor => |vc| markObjectQueue(vc.typ),
+            .named_type_fn => |nf| markObjectQueue(nf.typ),
             .named_type => |nt| { if (nt.parent_obj) |p| markObjectQueue(p); },
             // No GC-traced children; backing bytes are freed by the sweep.
             .dyn_string, .function, .native_function, .struct_type, .interface_type,

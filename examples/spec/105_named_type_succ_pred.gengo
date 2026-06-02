@@ -1,0 +1,11 @@
+std := import("std")
+
+type Step int cycle 1..16
+type Score int range 1..100
+
+std.io.println(Step.succ(Step(16)))
+std.io.println(Step.pred(Step(1)))
+std.io.println(Step.succ(Step(8)))
+
+std.io.println(Score.succ(Score(50)))
+std.io.println(Score.pred(Score(50)))

@@ -73,6 +73,8 @@ pub const VariantArmSpec = struct {
 pub const VariantTypeObj = struct { name: []const u8, qualified_name: []const u8, arms: []const VariantArmSpec };
 pub const VariantValueObj = struct { typ: *Object, tag: []const u8, ordinal: usize, payload: Value };
 pub const VariantCtorObj = struct { typ: *Object, tag: []const u8, ordinal: usize, payload_type: ?FieldTypeSpec };
+pub const NamedTypeFnKind = enum { succ, pred };
+pub const NamedTypeFnObj = struct { typ: *Object, kind: NamedTypeFnKind };
 
 pub const NamedTypeBase = enum { int, float, string, bool, rune, array_t, map_t };
 pub const NamedTypeObj = struct {
@@ -112,7 +114,7 @@ pub const StringBuilderObj = struct {
     len: usize,  // bytes actually written
 };
 
-pub const ObjTag = enum { array, array_managed, map, map_managed, map_hashed, dyn_string, function, closure, cell, native_function, struct_type, interface_type, named_type, named_value, enum_type, enum_value, struct_instance, iterator, variant_type, variant_value, variant_ctor, string_builder };
+pub const ObjTag = enum { array, array_managed, map, map_managed, map_hashed, dyn_string, function, closure, cell, native_function, struct_type, interface_type, named_type, named_value, enum_type, enum_value, struct_instance, iterator, variant_type, variant_value, variant_ctor, named_type_fn, string_builder };
 pub const Object = union(ObjTag) {
     array: []Value,
     array_managed: []Value,
@@ -135,6 +137,7 @@ pub const Object = union(ObjTag) {
     variant_type: VariantTypeObj,
     variant_value: VariantValueObj,
     variant_ctor: VariantCtorObj,
+    named_type_fn: NamedTypeFnObj,
     string_builder: StringBuilderObj,
 };
 

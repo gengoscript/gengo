@@ -291,6 +291,22 @@ pub fn coerceNamedTypeResult(typ_obj: *Object, arg: Value) !Value {
     return makeNamedValue(typ_obj, .{ .number = wrapped });
 }
 
+pub fn applyNamedTypeFn(typ_obj: *Object, kind: @import("value.zig").NamedTypeFnKind, arg: Value) !Value {
+    if (typ_obj.* != .named_type) return error.TypeError;
+    const nt = typ_obj.named_type;
+    if (!nt.has_range) return error.TypeError;
+    const inner = if (arg == .object and arg.object.* == .named_value) arg.object.named_value.value else arg;
+    const n = try vms.valueAsNumber(inner);
+    const delta: f64 = if (kind == .succ) 1.0 else -1.0;
+    const result = n + delta;
+    if (nt.is_cycle) {
+        return makeNamedValue(typ_obj, .{ .number = wrapCycleValue(nt.min, nt.max, result) });
+    } else {
+        if (result < nt.min or result > nt.max) return error.RangeError;
+        return makeNamedValue(typ_obj, .{ .number = result });
+    }
+}
+
 pub fn enforceFuncArgTypes(f: FuncObj, argc: u8) !void {
     if (!f.has_typed_params) return;
     const fixed: usize = if (f.is_variadic) f.arity - 1 else f.arity;
