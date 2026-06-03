@@ -1,13 +1,14 @@
 # Gengo Bytecode Cache — File Format Specification
 
 **Status:** Draft  
-**Version:** 0.3  
+**Version:** 0.4  
 **Scope:** GBC artifact only (see §2 for artifact class definitions)
 
 **Revision history**
 - 0.1 — Initial draft
-- 0.2 — Rename `stdlib_hash` → `module_provider_hash`; add `resolved_id` and `artifact_hash` to dependency entries; add `bytecode_length` and `local_count` to function entries; add `Bool` and `Rune` constant tags; rewrite `FieldTypeAlt` as per-tag encodings; fix `options_hash` canonical encoding widths; remove mutual-exclusion rule for `CHECKED_ARITHMETIC`/`OPTIMISED` from format; clarify header-size compatibility (no smaller-than-required); reorder validation phases; note f64 bounds limitation; note script/module philosophy
-- 0.3 — Fix body-offset bug (`8 + header_size`, not `header_size`); make `artifact_hash` advisory with full-validation requirement; clarify `SEC_DEPENDENCY_TABLE` records direct imports only; allow `SEC_EXPORTS` with `export_count = 0` for `ENTRY_MODULE`; make `variadic_type` conditional on `is_variadic` in `FunctionEntry` and `InterfaceMethod`; add `alt_count >= 1` constraint to `TypeSpec`; add `DEBUG_INFO` inverse rule; hash full `u32le(flags)` not `flags_low_byte` in `options_hash`; add future `INT (i64)` constant tag note; add domain separation and length prefixes to `source_graph_hash` and `module_provider_hash` hash inputs
+- 0.2 — Rename `stdlib_hash` → `module_provider_hash`; add `resolved_id` and `artifact_body_hash` to dependency entries; add `bytecode_length` and `local_count` to function entries; add `Bool` and `Rune` constant tags; rewrite `FieldTypeAlt` as per-tag encodings; fix `options_hash` canonical encoding widths; remove mutual-exclusion rule for `CHECKED_ARITHMETIC`/`OPTIMISED` from format; clarify header-size compatibility (no smaller-than-required); reorder validation phases; note f64 bounds limitation; note script/module philosophy
+- 0.4 — Fix "inclusive" wording on half-open range; add `bytes` primitive; wrap domain labels in `str()`; remove `hash32(SHA-256(...))` redundancy; rename `artifact_hash` → `artifact_body_hash` with body-only scope note; add Phase 4 general content-validity check; add §11.2 implementation-defined limits; define `ENTRY_SCRIPT` importability rule
+- 0.3 — Fix body-offset bug (`8 + header_size`, not `header_size`); make `artifact_body_hash` advisory with full-validation requirement; clarify `SEC_DEPENDENCY_TABLE` records direct imports only; allow `SEC_EXPORTS` with `export_count = 0` for `ENTRY_MODULE`; make `variadic_type` conditional on `is_variadic` in `FunctionEntry` and `InterfaceMethod`; add `alt_count >= 1` constraint to `TypeSpec`; add `DEBUG_INFO` inverse rule; hash full `u32le(flags)` not `flags_low_byte` in `options_hash`; add future `INT (i64)` constant tag note; add domain separation and length prefixes to `source_graph_hash` and `module_provider_hash` hash inputs
 
 ---
 
@@ -45,7 +46,8 @@
 10. [Native Function Resolution](#10-native-function-resolution)
 11. [Validation Rules](#11-validation-rules)
     - 11.1 [Validation Phases](#111-validation-phases)
-    - 11.2 [Error Handling](#112-error-handling)
+    - 11.2 [Implementation-Defined Limits](#112-implementation-defined-limits)
+    - 11.3 [Error Handling](#113-error-handling)
 12. [Version Compatibility Policy](#12-version-compatibility-policy)
 13. [Dependency and Module Graph Hashing](#13-dependency-and-module-graph-hashing)
 14. [Future: GSI Artifact Class](#14-future-gsi-artifact-class)
@@ -102,7 +104,8 @@ All multi-byte integers are **little-endian**. No big-endian variant of this for
 | `i64` | 8 bytes | Signed 64-bit integer, little-endian, two's complement |
 | `f64` | 8 bytes | IEEE 754 double-precision, little-endian |
 | `bool8` | 1 byte | `0x00` = false, `0x01` = true; any other value is invalid |
-| `str` | variable | `u32` byte-length followed by UTF-8 bytes; no null terminator |
+| `str` | variable | `u32` byte-length followed by UTF-8 bytes; no null terminator. UTF-8 validity must be checked on load. |
+| `bytes` | variable | `u32` byte-length followed by raw bytes; no encoding requirement. Use for binary blobs (e.g. stdlib binary) where UTF-8 is not guaranteed. |
 | `hash32` | 32 bytes | SHA-256 digest |
 
 Arrays are encoded as `u32` element count followed by elements. Optional fields are encoded as `bool8` present-flag followed by value if flag is `0x01`.
@@ -135,7 +138,7 @@ Arrays are encoded as `u32` element count followed by elements. Optional fields 
 └─────────────────────────────┘
 ```
 
-The magic bytes appear at file offset 0 and are not part of the header. The header begins at offset 8. The body begins at file offset `8 + header_size`. The body checksum covers all bytes at file offsets `[8 + header_size, 8 + header_size + body_length)` inclusive.
+The magic bytes appear at file offset 0 and are not part of the header. The header begins at offset 8. The body begins at file offset `8 + header_size`. The body checksum covers the half-open byte range `[8 + header_size, 8 + header_size + body_length)` — that is, exactly `body_length` bytes starting at the body start.
 
 ---
 
@@ -223,8 +226,8 @@ All other values are reserved and must cause rejection.
 | Value | Constant | Description |
 |-------|----------|-------------|
 | `0x0000` | `ENTRY_UNSPECIFIED` | Invalid; reject. |
-| `0x0001` | `ENTRY_SCRIPT` | Module with executable top-level body. No required EXPORTS section, but may have one if public declarations exist. |
-| `0x0002` | `ENTRY_MODULE` | Importable module artifact. Must have an EXPORTS section; `export_count` may be zero. |
+| `0x0001` | `ENTRY_SCRIPT` | Module with executable top-level body. No required EXPORTS section, but may have one if public declarations exist. May be imported by other artifacts if and only if it has an EXPORTS section with at least one entry; importing it runs top-level initialization exactly once. |
+| `0x0002` | `ENTRY_MODULE` | Importable module artifact. Must have an EXPORTS section; `export_count` may be zero. Top-level code (if any) runs once on first import. |
 | `0x0003` | `ENTRY_REPL_CELL` | REPL fragment. Depends on ambient REPL state; not independently loadable. |
 | `0x0004` | `ENTRY_TEST` | Test artifact. |
 
@@ -236,10 +239,12 @@ See §1 for the rationale for treating scripts and modules as the same underlyin
 
 All inputs to `source_graph_hash` are length-prefixed using `str` encoding (§3) to prevent segmentation ambiguity — two different input sequences must not produce the same concatenated byte string. A domain label is prepended so this hash cannot be confused with hashes of other structures.
 
+All inputs are length-prefixed using `str` or `bytes` encoding (§3) to prevent segmentation ambiguity. A domain label is prepended so this hash cannot be confused with hashes of other structures.
+
 For a single-file source with no file imports:
 ```
 source_graph_hash = SHA-256(
-  "GENGO_SOURCE_GRAPH_V1" ||
+  str("GENGO_SOURCE_GRAPH_V1") ||
   str(root_source_utf8)
 )
 ```
@@ -247,12 +252,12 @@ source_graph_hash = SHA-256(
 For a source that imports other files (once file imports are implemented):
 ```
 source_graph_hash = SHA-256(
-  "GENGO_SOURCE_GRAPH_V1"    ||
-  str(root_source_utf8)      ||
-  u32le(file_dep_count)      ||
+  str("GENGO_SOURCE_GRAPH_V1")      ||
+  str(root_source_utf8)             ||
+  u32le(file_dep_count)             ||
   for each resolved file dependency in stable topological order:
-    str(resolved_id_utf8)    ||
-    hash32(dep_source_hash)
+    str(resolved_id_utf8)           ||
+    SHA-256(dep_source_utf8)
 )
 ```
 
@@ -278,13 +283,13 @@ module_provider_hash = vm_fingerprint
 Once stdlib ships as a separate binary or module providers become independently versioned:
 ```
 module_provider_hash = SHA-256(
-  "GENGO_MODULE_PROVIDER_V1"            ||
-  str(stdlib_binary)                    ||
-  str(provider_registry_canonical_encoding)
+  str("GENGO_MODULE_PROVIDER_V1")               ||
+  bytes(stdlib_binary)                          ||
+  bytes(provider_registry_canonical_encoding)
 )
 ```
 
-Inputs are length-prefixed (`str` encoding, §3) to prevent segmentation ambiguity.
+`stdlib_binary` uses `bytes` (not `str`) because a compiled binary is not required to be valid UTF-8. All inputs are length-prefixed to prevent segmentation ambiguity.
 
 Rationale for a separate field: `vm_fingerprint` covers the VM instruction interpreter; `module_provider_hash` covers what the bytecode can call. When these are the same binary they are the same value, but they must remain separate fields to allow them to evolve independently.
 
@@ -570,7 +575,7 @@ DependencyEntry {
   resolved_id       : str      // canonical module identity; see below
   kind              : u8       // 0=STDLIB 1=FILE 2=HOST_PROVIDED
   source_hash       : hash32   // SHA-256 of dependency source; all zeros for STDLIB
-  artifact_hash     : hash32   // SHA-256 of dependency's GBC artifact; all zeros if unavailable
+  artifact_body_hash     : hash32   // SHA-256 of dependency's GBC artifact; all zeros if unavailable
   qualified_prefix  : str      // prefix used for symbols from this import in the compiled output
 }
 ```
@@ -590,9 +595,11 @@ For `kind = STDLIB`, `source_hash` is all zeros — stdlib is covered by `module
 
 For `kind = FILE`, the loader must re-read the dependency source at the path implied by `resolved_id` and verify that `SHA-256(current_source) == source_hash`. If the hashes differ, the root artifact is stale.
 
-`artifact_hash` is the SHA-256 of the dependency's compiled GBC artifact body, if available at compile time. Set to all zeros when not available.
+`artifact_body_hash` is the SHA-256 of the dependency's compiled GBC artifact **body bytes** (the bytes covered by `body_checksum`, not the whole file), if available at compile time. Set to all zeros when not available.
 
-`artifact_hash` is **advisory**. A loader may use it to locate a candidate dependency artifact, but must still perform full validation on that artifact — checking its header, `source_graph_hash`, `vm_fingerprint`, `module_provider_hash`, `options_hash`, and body checksum — before trusting it. A matching `artifact_hash` alone is not sufficient: the body checksum is xxHash64 (corruption detection only), and the artifact may still be stale with respect to the current runtime or options.
+Note: body-only means two artifacts with identical body content but different headers (different `vm_fingerprint`, `options_hash`, `language_version`, etc.) will share the same `artifact_body_hash`. This is acceptable only because the field is advisory and full validation is mandatory before trusting it.
+
+`artifact_body_hash` is **advisory**. A loader may use it to locate a candidate dependency artifact, but must still perform full validation on that artifact — all 27 checks from §11.1 — before trusting it. A matching `artifact_body_hash` alone is not sufficient.
 
 ### 8.8 DEBUG\_SPANS (optional)
 
@@ -807,8 +814,17 @@ Requires reading `SEC_DEPENDENCY_TABLE` and querying external state (filesystem,
 | # | Check | Failure |
 |---|-------|---------|
 | 26 | All native imports in `SEC_NATIVE_IMPORTS` resolve with matching arities | `NativeBindingNotFound(id)` or `NativeArityMismatch(id, ...)` |
+| 27 | All known sections parse without error and all internal cross-references are in range | `MalformedSection(section_id)` |
 
-### 11.2 Error Handling
+Check 27 covers at minimum: function `bytecode_offset + bytecode_length` within `SEC_BYTECODE`; `name_constant_idx` is `0xFFFFFFFF` or a `STRING` constant; all constant indices in bytecode within `constant_count`; export `qualified_name` strings are non-empty; debug scope `function_idx` within `function_count`; debug `bytecode_offset` within `SEC_BYTECODE`; `RUNE` constants in range 0–0x10FFFF; all `bool8` fields are `0x00` or `0x01`; `TypeSpec.alt_count >= 1`. Loaders are not required to exhaustively validate every bytecode instruction, but must validate all metadata structures.
+
+### 11.2 Implementation-Defined Limits
+
+Loaders must impose implementation-defined upper bounds on all count and size fields to prevent malicious or corrupt cache files from causing excessive memory allocation. The spec does not mandate specific values, but loaders must document and enforce limits on at minimum: `section_count`, `constant_count`, `function_count`, `type_count`, `native_import_count`, `export_count`, `dependency_count`, `span_count`, `scope_count`, individual `str` and `bytes` lengths, `TypeSpec.alt_count`, and `FunctionEntry.local_count`.
+
+Exceeding an implementation-defined limit must be treated as a validation failure (reject and recompile), not a recoverable error.
+
+### 11.3 Error Handling
 
 On any validation failure:
 
@@ -864,7 +880,7 @@ Adding a new option means appending bytes to the encoding and bumping the encodi
 **Baseline (single file, no file imports):**
 ```
 source_graph_hash = SHA-256(
-  "GENGO_SOURCE_GRAPH_V1" ||
+  str("GENGO_SOURCE_GRAPH_V1") ||
   str(root_source_utf8)
 )
 ```
@@ -872,16 +888,16 @@ source_graph_hash = SHA-256(
 **With file imports:**
 ```
 source_graph_hash = SHA-256(
-  "GENGO_SOURCE_GRAPH_V1"    ||
-  str(root_source_utf8)      ||
-  u32le(file_dep_count)      ||
+  str("GENGO_SOURCE_GRAPH_V1")      ||
+  str(root_source_utf8)             ||
+  u32le(file_dep_count)             ||
   for each resolved file dependency in stable topological order:
-    str(resolved_id_utf8)    ||
-    hash32(SHA-256(dep_source_utf8))
+    str(resolved_id_utf8)           ||
+    SHA-256(dep_source_utf8)
 )
 ```
 
-All inputs use `str` encoding (§3: `u32le` length prefix + UTF-8 bytes) to prevent segmentation ambiguity between inputs. The `resolved_id` (not the `written_specifier`) is used in the hash input, because two different written specifiers may resolve to the same module. The topological order must be canonical and deterministic.
+All textual inputs use `str` encoding (§3: `u32le` length prefix + UTF-8 bytes) to prevent segmentation ambiguity. The dependency source is included as its raw SHA-256 digest (32 bytes, no length prefix needed — the size is fixed). The `resolved_id` (not the `written_specifier`) is used because two different written specifiers may resolve to the same module. The topological order must be canonical and deterministic.
 
 Each module artifact stores `source_graph_hash` covering only its own transitive file dependencies. This allows per-module cache invalidation: changing `math.gengo` invalidates `math.gbc` and the GBC of any module that imports it, but not unrelated modules.
 
