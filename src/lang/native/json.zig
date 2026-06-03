@@ -1,0 +1,158 @@
+const std = @import("std");
+const heap = @import("../../runtime/heap.zig");
+const vms = @import("../vm_state.zig");
+const vmgc = @import("../vm_gc.zig");
+const vmmap = @import("../vm_map.zig");
+const Value = @import("../value.zig").Value;
+const Object = @import("../value.zig").Object;
+const MapEntry = @import("../value.zig").MapEntry;
+
+const JsonAllocator = struct {
+    fn allocFn(ctx: *anyopaque, len: usize, ptr_align: std.mem.Alignment, ra: usize) ?[*]u8 {
+        _ = ctx; _ = ra;
+        if (ptr_align.toByteUnits() > 16) return null;
+        return @ptrCast(heap.allocBytesManaged(len) orelse return null);
+    }
+    fn resizeFn(ctx: *anyopaque, buf: []u8, buf_align: std.mem.Alignment, new_len: usize, ra: usize) bool {
+        _ = ctx; _ = buf_align; _ = ra;
+        if (new_len <= buf.len) return true;
+        return false;
+    }
+    fn remapFn(ctx: *anyopaque, buf: []u8, buf_align: std.mem.Alignment, new_len: usize, ra: usize) ?[*]u8 {
+        _ = ctx; _ = buf_align; _ = ra;
+        if (new_len <= buf.len) return buf.ptr;
+        return null;
+    }
+    fn freeFn(ctx: *anyopaque, buf: []u8, buf_align: std.mem.Alignment, ra: usize) void {
+        _ = ctx; _ = buf_align; _ = ra;
+        heap.freeBytesManaged(buf);
+    }
+    pub fn allocator() std.mem.Allocator {
+        return .{
+            .ptr = undefined,
+            .vtable = &.{
+                .alloc = &allocFn,
+                .resize = &resizeFn,
+                .remap = &remapFn,
+                .free = &freeFn,
+            },
+        };
+    }
+};
+
+fn jsonValueToGengo(jv: std.json.Value) !Value {
+    return switch (jv) {
+        .null => .null,
+        .bool => |b| .{ .boolean = b },
+        .integer => |i| .{ .number = @floatFromInt(i) },
+        .float => |f| .{ .number = f },
+        .number_string => |s| .{ .number = try std.fmt.parseFloat(f64, s) },
+        .string => |s| try vmgc.makeDynString(s),
+        .array => |arr| {
+            const n = arr.items.len;
+            if (n == 0) {
+                const obj = try vmgc.vmAllocObject();
+                obj.* = .{ .array_managed = &[_]Value{} };
+                return .{ .object = obj };
+            }
+            const obj = try vmgc.vmAllocObject();
+            obj.* = .{ .array = &[_]Value{} };
+            try vms.pushTempRoot(.{ .object = obj });
+            defer vms.popTempRoot();
+            const items = try vmgc.vmAllocManagedSlice(Value, n);
+            for (0..n) |i| {
+                items[i] = try jsonValueToGengo(arr.items[i]);
+            }
+            obj.* = .{ .array_managed = items[0..n] };
+            return .{ .object = obj };
+        },
+        .object => |obj_map| {
+            const n = obj_map.keys().len;
+            if (n == 0) {
+                const obj = try vmgc.vmAllocObject();
+                obj.* = .{ .map = &[_]MapEntry{} };
+                return .{ .object = obj };
+            }
+            const obj = try vmgc.vmAllocObject();
+            obj.* = .{ .map = &[_]MapEntry{} };
+            try vms.pushTempRoot(.{ .object = obj });
+            defer vms.popTempRoot();
+            const items = try vmgc.vmAllocManagedSlice(MapEntry, n);
+            const keys = obj_map.keys();
+            const vals = obj_map.values();
+            for (0..n) |i| {
+                items[i] = .{
+                    .key = try vmgc.makeDynString(keys[i]),
+                    .value = try jsonValueToGengo(vals[i]),
+                };
+            }
+            obj.* = .{ .map = items[0..n] };
+            const bcount = vmmap.mapBucketsForCount(n);
+            const buckets = try vmgc.vmAllocManagedSlice(i32, bcount);
+            vmmap.mapBuildHashedBuckets(items[0..n], buckets);
+            obj.* = .{ .map_hashed = .{ .entries = items[0..n], .len = n, .buckets = buckets } };
+            return .{ .object = obj };
+        },
+    };
+}
+
+fn jsonStringifyValue(s: *std.json.Stringify, gv: Value) !void {
+    const uv = vms.unboxNamed(gv);
+    switch (uv) {
+        .null => try s.write(null),
+        .boolean => |b| try s.write(b),
+        .number => |n| try s.write(n),
+        .rune => |r| try s.write(@as(i64, @intCast(r))),
+        .string => |str| try s.write(str),
+        .object => |obj| switch (obj.*) {
+            .dyn_string => |str| try s.write(str),
+            .array, .array_managed => {
+                try s.beginArray();
+                for (vms.asArraySlice(obj)) |item| {
+                    try jsonStringifyValue(s, item);
+                }
+                try s.endArray();
+            },
+            .map, .map_managed, .map_hashed => {
+                try s.beginObject();
+                for (vms.asMapSlice(obj)) |entry| {
+                    const key = vms.unboxNamed(entry.key);
+                    const key_str = try vms.asStringValue(key);
+                    try s.objectField(key_str);
+                    try jsonStringifyValue(s, entry.value);
+                }
+                try s.endObject();
+            },
+            else => try s.write(null),
+        },
+        .error_value => try s.write(null),
+    }
+}
+
+pub fn jsonParseNative() !Value {
+    const arg = vms.vmState().stack[vms.vmState().stack_top - 1];
+    const src = try vms.asStringValue(arg);
+    const alloc = JsonAllocator.allocator();
+    const parsed = std.json.parseFromSlice(std.json.Value, alloc, src, .{}) catch return error.TypeError;
+    defer parsed.deinit();
+    return jsonValueToGengo(parsed.value);
+}
+
+pub fn jsonStringifyNative() !Value {
+    const arg = vms.vmState().stack[vms.vmState().stack_top - 1];
+    var out: std.Io.Writer.Allocating = .init(JsonAllocator.allocator());
+    defer out.deinit();
+    var s = std.json.Stringify{ .writer = &out.writer, .options = .{} };
+    jsonStringifyValue(&s, arg) catch return error.TypeError;
+    const buf = out.written();
+    return vmgc.makeDynString(buf);
+}
+
+pub fn jsonValidNative() !Value {
+    const arg = vms.vmState().stack[vms.vmState().stack_top - 1];
+    const src = try vms.asStringValue(arg);
+    const alloc = JsonAllocator.allocator();
+    const parsed = std.json.parseFromSlice(std.json.Value, alloc, src, .{}) catch return .{ .boolean = false };
+    parsed.deinit();
+    return .{ .boolean = true };
+}
