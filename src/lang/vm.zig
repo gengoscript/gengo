@@ -510,10 +510,11 @@ fn opGetLocalGetField() !void {
             const name = chunk.constAt(name_idx).string;
             const items = vms.asArraySlice(obj);
             if (common.streq(name, "first")) {
-                try vmPush(.{ .number = 0 });
+                if (items.len == 0) return error.IndexOutOfBounds;
+                try vmPush(items[0]);
             } else if (common.streq(name, "last")) {
                 if (items.len == 0) return error.IndexOutOfBounds;
-                try vmPush(.{ .number = @floatFromInt(items.len - 1) });
+                try vmPush(items[items.len - 1]);
             } else return error.TypeError;
         },
         .struct_instance => |inst| {
@@ -1038,6 +1039,19 @@ fn opInvokeMethod() !void {
             vmState().stack[recv_idx + 1] = recv;
             try performCall(argc + 1);
         },
+        .array, .array_managed => {
+            if (argc != 0) return error.ArityMismatch;
+            const items = vms.asArraySlice(recv.object);
+            if (common.streq(mname, "first")) {
+                if (items.len == 0) return error.IndexOutOfBounds;
+                vmState().stack_top = recv_idx;
+                try vmPush(items[0]);
+            } else if (common.streq(mname, "last")) {
+                if (items.len == 0) return error.IndexOutOfBounds;
+                vmState().stack_top = recv_idx;
+                try vmPush(items[items.len - 1]);
+            } else return error.UnknownMethod;
+        },
         else => return error.NotAMethodReceiver,
     }
 }
@@ -1059,10 +1073,11 @@ fn opGetField() !void {
         .array, .array_managed => {
             const items = vms.asArraySlice(obj);
             if (common.streq(name, "first")) {
-                try vmPush(.{ .number = 0 });
+                if (items.len == 0) return error.IndexOutOfBounds;
+                try vmPush(items[0]);
             } else if (common.streq(name, "last")) {
                 if (items.len == 0) return error.IndexOutOfBounds;
-                try vmPush(.{ .number = @floatFromInt(items.len - 1) });
+                try vmPush(items[items.len - 1]);
             } else return error.TypeError;
         },
         .struct_instance => |inst| {
