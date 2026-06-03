@@ -246,6 +246,10 @@ fn runCli(argv: []const []const u8) void {
         } else if (runtime.last_runtime_line != 0) {
             io.werr("gengo: panic: ");
             io.werr(@errorName(err));
+            if (runtime.last_runtime_msg_len > 0) {
+                io.werr(": ");
+                io.werr(runtime.last_runtime_msg_buf[0..runtime.last_runtime_msg_len]);
+            }
             io.werr("\n  --> ");
             io.werr(script_name);
             io.werr(":");

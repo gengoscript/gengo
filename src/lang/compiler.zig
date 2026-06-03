@@ -980,7 +980,7 @@ pub const Compiler = struct {
                 const fname = try self.copyName(self.cur.src);
                 var i: u8 = 0;
                 while (i < count) : (i += 1) {
-                    if (common.streq(field_specs[i].name, fname)) return error.DuplicateField;
+                    if (common.streq(field_specs[i].name, fname)) { self.setErr("duplicate field name '{s}'", .{fname}); return error.DuplicateField; }
                 }
                 self.advance();
 
@@ -1198,7 +1198,7 @@ pub const Compiler = struct {
         if (self.cur.typ != .ident) return self.err("expected identifier, found {s}", .{self.tokenName(self.cur.typ)});
         const recv_type = self.cur.src;
         self.advance();
-        if (self.registry.hasInterfaceType(recv_type)) return error.MethodOnInterface;
+        if (self.registry.hasInterfaceType(recv_type)) { self.setErr("cannot define method on interface type '{s}'", .{recv_type}); return error.MethodOnInterface; }
         try self.consume(.rparen);
         if (self.cur.typ != .ident) return self.err("expected identifier, found {s}", .{self.tokenName(self.cur.typ)});
         const method_name = self.cur.src;
@@ -1525,7 +1525,7 @@ pub const Compiler = struct {
     // ── Statement parsing ────────────────────────────────────────────────────────
 
     fn deferStmt(self: *Compiler) !void {
-        if (!self.inFunc()) return error.DeferOutsideFunction;
+        if (!self.inFunc()) { self.setErr("'defer' outside of function", .{}); return error.DeferOutsideFunction; }
         // Parse the callee: a primary expression followed by any chain of
         // .prop and [index] accesses, stopping before the outermost call '('.
         self.advance();
@@ -1577,7 +1577,7 @@ pub const Compiler = struct {
             }
         }
         // Deferred regular call.
-        if (!self.match(.lparen)) return error.DeferRequiresCall;
+        if (!self.match(.lparen)) { self.setErr("'defer' requires a function call expression", .{}); return error.DeferRequiresCall; }
         const call_line = self.prev.line;
         var argc: u8 = 0;
         if (!self.check(.rparen)) {
@@ -1687,7 +1687,7 @@ pub const Compiler = struct {
     }
 
     fn returnStmt(self: *Compiler) !void {
-        if (!self.inFunc()) return error.ReturnOutsideFunction;
+        if (!self.inFunc()) { self.setErr("'return' outside of function", .{}); return error.ReturnOutsideFunction; }
         const line = self.prev.line;
         const scope = self.currentScope();
         if (self.check(.rbrace) or self.check(.eof) or self.check(.semicolon)) {

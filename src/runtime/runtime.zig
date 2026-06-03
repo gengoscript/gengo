@@ -119,6 +119,9 @@ pub const Runtime = struct {
             self.panic_depth = pf.len;
             var fi: usize = 0;
             while (fi < pf.len) : (fi += 1) self.panic_frames[fi] = pf[fi];
+            const emsg = vm.runtimeErrMsg();
+            self.last_runtime_msg_len = @intCast(emsg.len);
+            @memcpy(self.last_runtime_msg_buf[0..emsg.len], emsg);
             return err;
         };
     }
@@ -161,6 +164,9 @@ pub const Runtime = struct {
             self.panic_depth = pf.len;
             var fi: usize = 0;
             while (fi < pf.len) : (fi += 1) self.panic_frames[fi] = pf[fi];
+            const emsg = vm.runtimeErrMsg();
+            self.last_runtime_msg_len = @intCast(emsg.len);
+            @memcpy(self.last_runtime_msg_buf[0..emsg.len], emsg);
             return err;
         };
     }
@@ -178,6 +184,9 @@ pub const Runtime = struct {
             self.panic_depth = pf.len;
             var fi: usize = 0;
             while (fi < pf.len) : (fi += 1) self.panic_frames[fi] = pf[fi];
+            const emsg = vm.runtimeErrMsg();
+            self.last_runtime_msg_len = @intCast(emsg.len);
+            @memcpy(self.last_runtime_msg_buf[0..emsg.len], emsg);
             return err;
         };
     }

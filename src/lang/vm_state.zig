@@ -77,6 +77,8 @@ pub const State = struct {
     pending_panic_message: ?[]const u8 = null,
     pending_panic_value: Value = .null,
     has_pending_panic_value: bool = false,
+    runtime_err_buf: [256]u8 = undefined,
+    runtime_err_len: u16 = 0,
 };
 
 var g_default_state: State = .{};
@@ -122,6 +124,7 @@ pub fn reset() void {
     vmState().recovered = false;
     vmState().pending_panic_message = null;
     vmState().has_pending_panic_value = false;
+    vmState().runtime_err_len = 0;
 }
 
 // Reset only execution state; preserve globals, heap, GC objects, and std_module.
@@ -143,6 +146,16 @@ pub fn resetExec() void {
     vmState().recovered = false;
     vmState().pending_panic_message = null;
     vmState().has_pending_panic_value = false;
+    vmState().runtime_err_len = 0;
+}
+
+pub fn setRuntimeErr(comptime fmt: []const u8, args: anytype) void {
+    const s = std.fmt.bufPrint(&vmState().runtime_err_buf, fmt, args) catch return;
+    vmState().runtime_err_len = @intCast(s.len);
+}
+
+pub fn runtimeErrMsg() []const u8 {
+    return vmState().runtime_err_buf[0..vmState().runtime_err_len];
 }
 
 pub fn setPolicy(policy: Policy) void {

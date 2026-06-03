@@ -35,6 +35,7 @@ pub const currentCol = vms.currentCol;
 pub const panicLine = vms.panicLine;
 pub const panicCol = vms.panicCol;
 pub const panicFrames = vms.panicFrames;
+pub const runtimeErrMsg = vms.runtimeErrMsg;
 
 // ── Aliases for hot-path readability in runInner ──────────────────────────────
 
@@ -663,7 +664,10 @@ fn opGetIndex() !void {
             .array, .array_managed => {
                 const items = vms.asArraySlice(obj);
                 const idx = try vms.vmIndexFromVal(idx_v);
-                if (idx >= items.len) return error.IndexOutOfBounds;
+                if (idx >= items.len) {
+                    vms.setRuntimeErr("index {} out of bounds for array of length {}", .{ idx, items.len });
+                    return error.IndexOutOfBounds;
+                }
                 try vmPush(items[idx]);
             },
             .map, .map_managed => {
@@ -803,7 +807,10 @@ fn opSetIndex() !void {
         .array, .array_managed => {
             const items = vms.asArraySlice(container.object);
             const idx = try vms.vmIndexFromVal(idx_v);
-            if (idx >= items.len) return error.IndexOutOfBounds;
+            if (idx >= items.len) {
+                vms.setRuntimeErr("index {} out of bounds for array of length {}", .{ idx, items.len });
+                return error.IndexOutOfBounds;
+            }
             items[idx] = val;
         },
         .map, .map_managed => {
@@ -1513,7 +1520,7 @@ fn runInner() !void {
                 const a = try vmPop();
                 const an = try vms.valueAsNumber(a);
                 const bn = try vms.valueAsNumber(b);
-                if (bn == 0.0) return error.DivisionByZero;
+                if (bn == 0.0) { vms.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
                 try pushNumericResultWithCarrier(a, b, an / bn);
             },
             .mod => {
@@ -1521,7 +1528,7 @@ fn runInner() !void {
                 const a = try vmPop();
                 const an = try vms.valueAsNumber(a);
                 const bn = try vms.valueAsNumber(b);
-                if (bn == 0.0) return error.DivisionByZero;
+                if (bn == 0.0) { vms.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
                 try pushNumericResultWithCarrier(a, b, common.fmod(an, bn));
             },
             .pow => {
