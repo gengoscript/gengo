@@ -86,9 +86,9 @@ const NativeFnId = enum(u8) {
     rand_between = 63,
     rand_seed = 64,
     rand_choice = 65,
-    json_parse = 50,
-    json_stringify = 51,
-    json_valid = 52,
+    json_parse = 66,
+    json_stringify = 67,
+    json_valid = 68,
 };
 const MaxNativeArgs = 255;
 const NamespaceEntry = struct {
