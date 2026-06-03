@@ -1674,6 +1674,60 @@ fn runInner() !void {
                             try vmPush(.null);
                         } else return error.UnknownMethod;
                     },
+                    .named_value => |nv| {
+                        const tname = switch (nv.typ.*) {
+                            .named_type => |nt| nt.qualified_name,
+                            else => return error.NotAMethodReceiver,
+                        };
+                        const total = tname.len + 1 + mname.len;
+                        if (total > 512) return error.NotAMethodReceiver;
+                        var key_buf: [512]u8 = undefined;
+                        @memcpy(key_buf[0..tname.len], tname);
+                        key_buf[tname.len] = '.';
+                        @memcpy(key_buf[tname.len + 1 .. total], mname);
+                        const func = globals.get(key_buf[0..total]) orelse return error.UnknownMethod;
+                        if (vmState().stack_top >= vms.MaxStack) return error.StackOverflow;
+                        var si: usize = vmState().stack_top;
+                        while (si > recv_idx + 1) : (si -= 1) vmState().stack[si] = vmState().stack[si - 1];
+                        vmState().stack_top += 1;
+                        vmState().stack[recv_idx] = func;
+                        vmState().stack[recv_idx + 1] = recv;
+                        try performCall(argc + 1);
+                    },
+                    .enum_value => |ev| {
+                        const tname = ev.typ.enum_type.qualified_name;
+                        const total = tname.len + 1 + mname.len;
+                        if (total > 512) return error.NotAMethodReceiver;
+                        var key_buf: [512]u8 = undefined;
+                        @memcpy(key_buf[0..tname.len], tname);
+                        key_buf[tname.len] = '.';
+                        @memcpy(key_buf[tname.len + 1 .. total], mname);
+                        const func = globals.get(key_buf[0..total]) orelse return error.UnknownMethod;
+                        if (vmState().stack_top >= vms.MaxStack) return error.StackOverflow;
+                        var si: usize = vmState().stack_top;
+                        while (si > recv_idx + 1) : (si -= 1) vmState().stack[si] = vmState().stack[si - 1];
+                        vmState().stack_top += 1;
+                        vmState().stack[recv_idx] = func;
+                        vmState().stack[recv_idx + 1] = recv;
+                        try performCall(argc + 1);
+                    },
+                    .variant_value => |vv| {
+                        const tname = vv.typ.variant_type.qualified_name;
+                        const total = tname.len + 1 + mname.len;
+                        if (total > 512) return error.NotAMethodReceiver;
+                        var key_buf: [512]u8 = undefined;
+                        @memcpy(key_buf[0..tname.len], tname);
+                        key_buf[tname.len] = '.';
+                        @memcpy(key_buf[tname.len + 1 .. total], mname);
+                        const func = globals.get(key_buf[0..total]) orelse return error.UnknownMethod;
+                        if (vmState().stack_top >= vms.MaxStack) return error.StackOverflow;
+                        var si: usize = vmState().stack_top;
+                        while (si > recv_idx + 1) : (si -= 1) vmState().stack[si] = vmState().stack[si - 1];
+                        vmState().stack_top += 1;
+                        vmState().stack[recv_idx] = func;
+                        vmState().stack[recv_idx + 1] = recv;
+                        try performCall(argc + 1);
+                    },
                     else => return error.NotAMethodReceiver,
                 }
             },
@@ -2072,6 +2126,42 @@ fn runInner() !void {
                         }
                         func = found orelse return error.UnknownMethod;
                         pass_recv = false;
+                    },
+                    .named_value => |nv| {
+                        const tname = switch (nv.typ.*) {
+                            .named_type => |nt| nt.qualified_name,
+                            else => return error.NotAMethodReceiver,
+                        };
+                        const key_total = tname.len + 1 + mname.len;
+                        if (key_total > 512) return error.NotAMethodReceiver;
+                        var key_buf: [512]u8 = undefined;
+                        @memcpy(key_buf[0..tname.len], tname);
+                        key_buf[tname.len] = '.';
+                        @memcpy(key_buf[tname.len + 1 .. key_total], mname);
+                        func = globals.get(key_buf[0..key_total]) orelse return error.UnknownMethod;
+                        pass_recv = true;
+                    },
+                    .enum_value => |ev| {
+                        const tname = ev.typ.enum_type.qualified_name;
+                        const key_total = tname.len + 1 + mname.len;
+                        if (key_total > 512) return error.NotAMethodReceiver;
+                        var key_buf: [512]u8 = undefined;
+                        @memcpy(key_buf[0..tname.len], tname);
+                        key_buf[tname.len] = '.';
+                        @memcpy(key_buf[tname.len + 1 .. key_total], mname);
+                        func = globals.get(key_buf[0..key_total]) orelse return error.UnknownMethod;
+                        pass_recv = true;
+                    },
+                    .variant_value => |vv| {
+                        const tname = vv.typ.variant_type.qualified_name;
+                        const key_total = tname.len + 1 + mname.len;
+                        if (key_total > 512) return error.NotAMethodReceiver;
+                        var key_buf: [512]u8 = undefined;
+                        @memcpy(key_buf[0..tname.len], tname);
+                        key_buf[tname.len] = '.';
+                        @memcpy(key_buf[tname.len + 1 .. key_total], mname);
+                        func = globals.get(key_buf[0..key_total]) orelse return error.UnknownMethod;
+                        pass_recv = true;
                     },
                     else => return error.NotAMethodReceiver,
                 }

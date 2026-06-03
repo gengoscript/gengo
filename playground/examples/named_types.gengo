@@ -19,9 +19,9 @@ for c in temps {
     std.io.printf("%.1f C = %.1f F\n", float(c), float(toFahrenheit(c)))
 }
 
-// Succ and pred navigate within the valid range.
+// Succ and pred navigate within the valid range (called on the type, not the value).
 m := Month(6)
-std.io.printf("month %d -> prev=%d  next=%d\n", int(m), int(m.pred()), int(m.succ()))
+std.io.printf("month %d -> prev=%d  next=%d\n", int(m), int(Month.pred(m)), int(Month.succ(m)))
 
 // Iterate all values of a named integer type.
 std.io.print("all months:")

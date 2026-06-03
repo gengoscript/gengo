@@ -1,6 +1,6 @@
 // Structs group related fields into a single named type. Methods are ordinary
-// functions with a receiver — defined outside the struct body, any type can
-// have them. This receiver-based method syntax is borrowed from Go.
+// functions with a receiver — any user-defined named type can have them, not
+// just structs. This receiver-based method syntax is borrowed from Go.
 // https://en.wikipedia.org/wiki/Struct_(C_programming_language)
 
 std := import("std")
