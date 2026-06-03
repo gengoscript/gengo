@@ -47,6 +47,40 @@ std := import("std")
 ### `std.core.is_error(v)`
 - Returns `true` iff `v` is an error value
 
+### `std.core.type_of(v)`
+- Returns stable runtime type name
+- Plain scalars report names like `int`, `float`, `bool`, `string`, `error`, `null`
+- Named values and struct instances report their declared type name
+
+### `std.core.is_int(v)`
+- `true` for integral numbers and named integer values
+
+### `std.core.is_float(v)`
+- `true` for non-integral numbers and named float values
+
+### `std.core.is_string(v)`
+- `true` for strings and named string values
+
+### `std.core.is_array(v)`
+- `true` for arrays and named array values
+
+### `std.core.is_map(v)`
+- `true` for maps and named map values
+
+### `std.core.is_struct(v)`
+- `true` for struct instances
+
+### `std.core.is_null(v)`
+- `true` only for `null`
+
+### `std.core.deep_equal(a, b)`
+- Structural equality for arrays, maps, struct instances, named values, variants, strings, and scalars
+- Map comparison is by key/value content, not insertion order
+
+### `std.core.clone(v)`
+- Deep clone for arrays, maps, struct instances, named values, variants, and strings
+- Immutable scalar values are returned unchanged
+
 ### `std.core.gc()`
 - Triggers GC
 - Returns `null`
@@ -76,3 +110,48 @@ std := import("std")
 ### `std.conv.to_string(x)`
 - Converts number/rune/boolean/null/string/error to string
 - Errors: `TypeError` on unsupported input
+
+## std.string
+
+### `std.string.split(s, sep)`
+- Splits `s` by `sep`
+- Empty `sep` splits into UTF-8 runes
+
+### `std.string.join(arr, sep)`
+- Joins array of strings with separator `sep`
+
+### `std.string.trim(s)`
+- Trims leading and trailing ASCII whitespace
+
+### `std.string.upper(s)`
+- Uppercases ASCII letters
+
+### `std.string.lower(s)`
+- Lowercases ASCII letters
+
+### `std.string.starts_with(s, prefix)`
+- Returns `true` iff `s` begins with `prefix`
+
+### `std.string.ends_with(s, suffix)`
+- Returns `true` iff `s` ends with `suffix`
+
+### `std.string.index_of(s, sub)`
+- Returns rune index of first occurrence, or `-1`
+
+### `std.string.last_index_of(s, sub)`
+- Returns rune index of last occurrence, or `-1`
+
+### `std.string.replace(s, old, new)`
+- Replaces all non-overlapping occurrences of `old` with `new`
+- Empty `old` returns `s` unchanged
+
+### `std.string.repeat(s, n)`
+- Returns `s` repeated `n` times
+- `n < 0` raises `RangeError`
+
+### `std.string.split_once(s, sep)`
+- Returns `(head, tail)` split on the first occurrence of `sep`
+- Returns `(null, null)` if `sep` is not present
+
+### `std.string.builder()`
+- Creates mutable string builder with `.write`, `.str`, and `.reset`

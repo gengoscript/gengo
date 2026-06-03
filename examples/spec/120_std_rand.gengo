@@ -1,0 +1,22 @@
+std := import("std")
+
+std.rand.seed(42)
+
+f := std.rand.float()
+std.io.println(f >= 0.0 && f < 1.0)
+
+n := std.rand.intn(10)
+std.io.println(n >= 0 && n < 10)
+
+b := std.rand.between(5, 5)
+std.io.println(b)
+
+arr := [10, 20, 30]
+c := std.rand.choice(arr)
+std.io.println(c == 10 || c == 20 || c == 30)
+
+std.rand.seed(99)
+x := std.rand.intn(100)
+y := std.rand.intn(100)
+std.io.println(x >= 0 && x < 100)
+std.io.println(y >= 0 && y < 100)

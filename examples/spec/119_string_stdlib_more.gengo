@@ -1,0 +1,15 @@
+std := import("std")
+s := std.string
+
+std.io.println(s.replace("one two two", "two", "xx"))
+std.io.println(s.replace("abc", "", "x"))
+std.io.println(s.last_index_of("banana", "na"))
+std.io.println(s.last_index_of("banana", "zz"))
+std.io.println(s.repeat("ha", 3))
+std.io.println(s.repeat("x", 0))
+head, tail := s.split_once("alpha=beta=gamma", "=")
+std.io.println(head)
+std.io.println(tail)
+miss_head, miss_tail := s.split_once("alpha", "/")
+std.io.println(miss_head)
+std.io.println(miss_tail)

@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const common = @import("common.zig");
 const heap = @import("../runtime/heap.zig");
 const host_abi = @import("../runtime/host_abi.zig");
@@ -42,6 +43,16 @@ const NativeFnId = enum(u8) {
     core_values = 33,
     core_contains = 34,
     core_remove = 35,
+    core_type_of = 47,
+    core_is_int = 48,
+    core_is_float = 49,
+    core_is_string = 50,
+    core_is_array = 51,
+    core_is_map = 52,
+    core_is_struct = 53,
+    core_is_null = 54,
+    core_deep_equal = 55,
+    core_clone = 56,
     str_split = 36,
     str_join = 37,
     str_trim = 38,
@@ -50,6 +61,10 @@ const NativeFnId = enum(u8) {
     str_starts_with = 41,
     str_ends_with = 42,
     str_index_of = 43,
+    str_replace = 57,
+    str_last_index_of = 58,
+    str_repeat = 59,
+    str_split_once = 60,
     core_recover = 44,
     str_builder_new = 45,
     math_abs = 16,
@@ -66,6 +81,11 @@ const NativeFnId = enum(u8) {
     math_pow = 27,
     math_min = 28,
     math_max = 29,
+    rand_float = 61,
+    rand_intn = 62,
+    rand_between = 63,
+    rand_seed = 64,
+    rand_choice = 65,
 };
 const MaxNativeArgs = 255;
 const NamespaceEntry = struct {
@@ -115,6 +135,58 @@ fn makeNamespace(display_name: []const u8, qualified_name: []const u8, entries: 
     return inst_obj;
 }
 
+var g_prng: std.Random.DefaultPrng = undefined;
+var g_prng_ready: bool = false;
+
+fn randRng() std.Random {
+    if (!g_prng_ready) {
+        var seed: u64 = undefined;
+        const seed_bytes = std.mem.asBytes(&seed);
+        if (comptime builtin.os.tag == .wasi) {
+            _ = std.os.wasi.random_get(seed_bytes.ptr, seed_bytes.len);
+        } else if (comptime builtin.os.tag == .linux) {
+            _ = std.os.linux.getrandom(seed_bytes.ptr, seed_bytes.len, 0);
+        } else {
+            seed = @intFromPtr(&g_prng) ^ 0xdeadbeef_cafebabe;
+        }
+        g_prng = std.Random.DefaultPrng.init(seed);
+        g_prng_ready = true;
+    }
+    return g_prng.random();
+}
+
+fn nativeRandFloat() Value {
+    return .{ .number = randRng().float(f64) };
+}
+
+fn nativeRandIntn(n_val: Value) !Value {
+    const n = try vms.valueAsInt(n_val);
+    if (n <= 0) return error.RangeError;
+    return .{ .number = @floatFromInt(randRng().intRangeLessThan(i64, 0, n)) };
+}
+
+fn nativeRandBetween(lo_val: Value, hi_val: Value) !Value {
+    const lo = try vms.valueAsInt(lo_val);
+    const hi = try vms.valueAsInt(hi_val);
+    if (lo > hi) return error.RangeError;
+    return .{ .number = @floatFromInt(randRng().intRangeAtMost(i64, lo, hi)) };
+}
+
+fn nativeRandSeed(n_val: Value) !void {
+    const n = try vms.valueAsInt(n_val);
+    const seed: u64 = @bitCast(n);
+    g_prng = std.Random.DefaultPrng.init(seed);
+    g_prng_ready = true;
+}
+
+fn nativeRandChoice(arr_obj: *Object) !Value {
+    if (!vms.isArrayObject(arr_obj)) return error.TypeError;
+    const items = vms.asArraySlice(arr_obj);
+    if (items.len == 0) return error.RangeError;
+    const idx = randRng().intRangeLessThan(usize, 0, items.len);
+    return items[idx];
+}
+
 pub fn buildStdModule() !*Object {
     if (vms.vmState().std_module) |m| return m;
 
@@ -132,6 +204,16 @@ pub fn buildStdModule() !*Object {
         .{ .name = "append", .value = try makeNative(.core_append, 255) },
         .{ .name = "error", .value = try makeNative(.core_error, 1) },
         .{ .name = "is_error", .value = try makeNative(.core_is_error, 1) },
+        .{ .name = "type_of", .value = try makeNative(.core_type_of, 1) },
+        .{ .name = "is_int", .value = try makeNative(.core_is_int, 1) },
+        .{ .name = "is_float", .value = try makeNative(.core_is_float, 1) },
+        .{ .name = "is_string", .value = try makeNative(.core_is_string, 1) },
+        .{ .name = "is_array", .value = try makeNative(.core_is_array, 1) },
+        .{ .name = "is_map", .value = try makeNative(.core_is_map, 1) },
+        .{ .name = "is_struct", .value = try makeNative(.core_is_struct, 1) },
+        .{ .name = "is_null", .value = try makeNative(.core_is_null, 1) },
+        .{ .name = "deep_equal", .value = try makeNative(.core_deep_equal, 2) },
+        .{ .name = "clone", .value = try makeNative(.core_clone, 1) },
         .{ .name = "gc", .value = try makeNative(.core_gc, 0) },
         .{ .name = "gc_live_objects", .value = try makeNative(.core_gc_live_objects, 0) },
         .{ .name = "gc_stats", .value = try makeNative(.core_gc_stats, 0) },
@@ -182,6 +264,17 @@ pub fn buildStdModule() !*Object {
     try vms.pushTempRoot(.{ .object = math_obj });
     defer vms.popTempRoot();
 
+    const rand_entries = [_]NamespaceEntry{
+        .{ .name = "float", .value = try makeNative(.rand_float, 0) },
+        .{ .name = "intn", .value = try makeNative(.rand_intn, 1) },
+        .{ .name = "between", .value = try makeNative(.rand_between, 2) },
+        .{ .name = "seed", .value = try makeNative(.rand_seed, 1) },
+        .{ .name = "choice", .value = try makeNative(.rand_choice, 1) },
+    };
+    const rand_obj = try makeNamespace("rand", "@module_type:std.rand", &rand_entries);
+    try vms.pushTempRoot(.{ .object = rand_obj });
+    defer vms.popTempRoot();
+
     const string_entries = [_]NamespaceEntry{
         .{ .name = "split", .value = try makeNative(.str_split, 2) },
         .{ .name = "join", .value = try makeNative(.str_join, 2) },
@@ -191,6 +284,10 @@ pub fn buildStdModule() !*Object {
         .{ .name = "starts_with", .value = try makeNative(.str_starts_with, 2) },
         .{ .name = "ends_with", .value = try makeNative(.str_ends_with, 2) },
         .{ .name = "index_of", .value = try makeNative(.str_index_of, 2) },
+        .{ .name = "replace", .value = try makeNative(.str_replace, 3) },
+        .{ .name = "last_index_of", .value = try makeNative(.str_last_index_of, 2) },
+        .{ .name = "repeat", .value = try makeNative(.str_repeat, 2) },
+        .{ .name = "split_once", .value = try makeNative(.str_split_once, 2) },
         .{ .name = "builder", .value = try makeNative(.str_builder_new, 0) },
     };
     const string_obj = try makeNamespace("string", "@module_type:std.string", &string_entries);
@@ -202,6 +299,7 @@ pub fn buildStdModule() !*Object {
         .{ .name = "core", .value = .{ .object = core_obj } },
         .{ .name = "conv", .value = .{ .object = conv_obj } },
         .{ .name = "math", .value = .{ .object = math_obj } },
+        .{ .name = "rand", .value = .{ .object = rand_obj } },
         .{ .name = "string", .value = .{ .object = string_obj } },
     };
     const std_obj = try makeNamespace("std", "@module_type:std", &std_entries);
@@ -514,6 +612,429 @@ fn nativeStrIndexOf(s: []const u8, sub: []const u8) !Value {
     const byte_idx = std.mem.indexOf(u8, s, sub) orelse return .{ .number = -1.0 };
     const rune_idx = try vmstr.utf8RuneCount(s[0..byte_idx]);
     return .{ .number = @floatFromInt(rune_idx) };
+}
+
+const MaxDeepVisits = 1024;
+
+const DeepEqVisit = struct {
+    a: *Object,
+    b: *Object,
+};
+
+const CloneVisit = struct {
+    src: *Object,
+    dst: *Object,
+};
+
+fn makeTuple2(a: Value, b: Value) !Value {
+    const obj = try vmgc.vmAllocObject();
+    obj.* = .{ .array = &[_]Value{} };
+    try vms.pushTempRoot(.{ .object = obj });
+    defer vms.popTempRoot();
+    const items = try vmgc.vmAllocManagedSlice(Value, 2);
+    items[0] = a;
+    items[1] = b;
+    obj.* = .{ .array_managed = items[0..2] };
+    return .{ .object = obj };
+}
+
+fn isIntegralNumber(n: f64) bool {
+    return @trunc(n) == n;
+}
+
+fn rootNamedType(typ_obj: *Object) *Object {
+    var cur = typ_obj;
+    while (vmtyp.resolveParentType(cur)) |parent| cur = parent;
+    return cur;
+}
+
+fn isNamedBase(v: Value, base: @import("value.zig").NamedTypeBase) bool {
+    if (!(v == .object and v.object.* == .named_value)) return false;
+    return rootNamedType(v.object.named_value.typ).named_type.base == base;
+}
+
+fn nativeTypeNameValue(v: Value) Value {
+    return switch (v) {
+        .number => |n| .{ .string = if (isIntegralNumber(n)) "int" else "float" },
+        .rune => .{ .string = "rune" },
+        .boolean => .{ .string = "bool" },
+        .string => .{ .string = "string" },
+        .error_value => .{ .string = "error" },
+        .null => .{ .string = "null" },
+        .object => |obj| switch (obj.*) {
+            .dyn_string => .{ .string = "string" },
+            .array, .array_managed => .{ .string = "array" },
+            .map, .map_managed, .map_hashed => .{ .string = "map" },
+            .native_function => .{ .string = "native_func" },
+            .function, .closure, .named_type_fn => .{ .string = "func" },
+            .struct_type => |st| .{ .string = st.name },
+            .interface_type => |it| .{ .string = it.name },
+            .named_type => |nt| .{ .string = nt.name },
+            .named_value => |nv| .{ .string = rootNamedType(nv.typ).named_type.name },
+            .enum_type => |et| .{ .string = et.name },
+            .enum_value => |ev| .{ .string = ev.typ.enum_type.name },
+            .struct_instance => |inst| .{ .string = inst.typ.struct_type.name },
+            .iterator => .{ .string = "iterator" },
+            .variant_type => |vt| .{ .string = vt.name },
+            .variant_value => |vv| .{ .string = vv.typ.variant_type.name },
+            .variant_ctor => |vc| .{ .string = vc.typ.variant_type.name },
+            .string_builder => .{ .string = "string_builder" },
+            .cell => .{ .string = "cell" },
+        },
+    };
+}
+
+fn nativeIsInt(v: Value) Value {
+    return .{ .boolean = switch (v) {
+        .number => |n| isIntegralNumber(n),
+        .object => isNamedBase(v, .int),
+        else => false,
+    } };
+}
+
+fn nativeIsFloat(v: Value) Value {
+    return .{ .boolean = switch (v) {
+        .number => |n| !isIntegralNumber(n),
+        .object => isNamedBase(v, .float),
+        else => false,
+    } };
+}
+
+fn nativeIsString(v: Value) Value {
+    return .{ .boolean = vms.isStringValue(v) or isNamedBase(v, .string) };
+}
+
+fn nativeIsArray(v: Value) Value {
+    return .{ .boolean = (v == .object and vms.isArrayObject(v.object)) or isNamedBase(v, .array_t) };
+}
+
+fn nativeIsMap(v: Value) Value {
+    return .{ .boolean = (v == .object and vms.isMapObject(v.object)) or isNamedBase(v, .map_t) };
+}
+
+fn nativeIsStruct(v: Value) Value {
+    return .{ .boolean = v == .object and v.object.* == .struct_instance };
+}
+
+fn nativeIsNull(v: Value) Value {
+    return .{ .boolean = v == .null };
+}
+
+fn hasVisitedPair(a: *Object, b: *Object, visits: []const DeepEqVisit, visit_len: usize) bool {
+    var i: usize = 0;
+    while (i < visit_len) : (i += 1) {
+        const p = visits[i];
+        if ((p.a == a and p.b == b) or (p.a == b and p.b == a)) return true;
+    }
+    return false;
+}
+
+fn appendVisitedPair(a: *Object, b: *Object, visits: []DeepEqVisit, visit_len: *usize) !void {
+    if (visit_len.* >= visits.len) return error.OutOfMemory;
+    visits[visit_len.*] = .{ .a = a, .b = b };
+    visit_len.* += 1;
+}
+
+fn deepEqualMap(a_entries: []const MapEntry, b_entries: []const MapEntry, visits: []DeepEqVisit, visit_len: *usize) anyerror!bool {
+    if (a_entries.len != b_entries.len) return false;
+    const used = heap.bump(bool, b_entries.len) orelse return error.OutOfMemory;
+    @memset(used[0..b_entries.len], false);
+    for (a_entries) |ae| {
+        var matched = false;
+        var i: usize = 0;
+        while (i < b_entries.len) : (i += 1) {
+            if (used[i]) continue;
+            if (!try deepEqualValue(ae.key, b_entries[i].key, visits, visit_len)) continue;
+            if (!try deepEqualValue(ae.value, b_entries[i].value, visits, visit_len)) continue;
+            used[i] = true;
+            matched = true;
+            break;
+        }
+        if (!matched) return false;
+    }
+    return true;
+}
+
+fn deepEqualObject(a: *Object, b: *Object, visits: []DeepEqVisit, visit_len: *usize) anyerror!bool {
+    if (a == b) return true;
+    if (std.meta.activeTag(a.*) != std.meta.activeTag(b.*)) {
+        if ((a.* == .array or a.* == .array_managed) and (b.* == .array or b.* == .array_managed)) {
+            // handled below
+        } else if (vms.isMapObject(a) and vms.isMapObject(b)) {
+            return try deepEqualMap(vms.asMapSlice(a), vms.asMapSlice(b), visits, visit_len);
+        } else {
+            return false;
+        }
+    }
+    if (hasVisitedPair(a, b, visits, visit_len.*)) return true;
+    switch (a.*) {
+        .array, .array_managed => {
+            try appendVisitedPair(a, b, visits, visit_len);
+            const aa = vms.asArraySlice(a);
+            const bb = vms.asArraySlice(b);
+            if (aa.len != bb.len) return false;
+            for (aa, 0..) |item, i| {
+                if (!try deepEqualValue(item, bb[i], visits, visit_len)) return false;
+            }
+            return true;
+        },
+        .map, .map_managed, .map_hashed => {
+            try appendVisitedPair(a, b, visits, visit_len);
+            return deepEqualMap(vms.asMapSlice(a), vms.asMapSlice(b), visits, visit_len);
+        },
+        .dyn_string => return common.streq(a.dyn_string, b.dyn_string),
+        .function, .closure, .iterator => return a == b,
+        .cell => return try deepEqualValue(a.cell.value, b.cell.value, visits, visit_len),
+        .native_function => |anf| {
+            const bnf = b.native_function;
+            return anf.id == bnf.id and anf.arity == bnf.arity;
+        },
+        .struct_type => |ast| return common.streq(ast.qualified_name, b.struct_type.qualified_name),
+        .interface_type => |ait| return common.streq(ait.qualified_name, b.interface_type.qualified_name),
+        .named_type => |ant| return common.streq(ant.qualified_name, b.named_type.qualified_name),
+        .named_value => |anv| {
+            if (anv.typ != b.named_value.typ) return false;
+            try appendVisitedPair(a, b, visits, visit_len);
+            return try deepEqualValue(anv.value, b.named_value.value, visits, visit_len);
+        },
+        .enum_type => |aet| return common.streq(aet.qualified_name, b.enum_type.qualified_name),
+        .enum_value => |aev| {
+            const bev = b.enum_value;
+            return aev.typ == bev.typ and aev.ordinal == bev.ordinal;
+        },
+        .struct_instance => |asi| {
+            const bsi = b.struct_instance;
+            if (asi.typ != bsi.typ) return false;
+            try appendVisitedPair(a, b, visits, visit_len);
+            if (asi.fields.len != bsi.fields.len) return false;
+            var i: usize = 0;
+            while (i < asi.fields.len) : (i += 1) {
+                if (!common.streq(asi.fields[i].key.string, bsi.fields[i].key.string)) return false;
+                if (!try deepEqualValue(asi.fields[i].value, bsi.fields[i].value, visits, visit_len)) return false;
+            }
+            return true;
+        },
+        .variant_type => |avt| return common.streq(avt.qualified_name, b.variant_type.qualified_name),
+        .variant_value => |avv| {
+            const bvv = b.variant_value;
+            if (avv.typ != bvv.typ or !common.streq(avv.tag, bvv.tag)) return false;
+            try appendVisitedPair(a, b, visits, visit_len);
+            return try deepEqualValue(avv.payload, bvv.payload, visits, visit_len);
+        },
+        .variant_ctor => |avc| {
+            const bvc = b.variant_ctor;
+            return avc.typ == bvc.typ and avc.ordinal == bvc.ordinal and common.streq(avc.tag, bvc.tag);
+        },
+        .named_type_fn => |anf| {
+            const bnf = b.named_type_fn;
+            return anf.typ == bnf.typ and anf.kind == bnf.kind;
+        },
+        .string_builder => |asb| return common.streq(asb.buf[0..asb.len], b.string_builder.buf[0..b.string_builder.len]),
+    }
+}
+
+fn deepEqualValue(a: Value, b: Value, visits: []DeepEqVisit, visit_len: *usize) anyerror!bool {
+    if (a == .string and b == .object and b.object.* == .dyn_string) return common.streq(a.string, b.object.dyn_string);
+    if (b == .string and a == .object and a.object.* == .dyn_string) return common.streq(a.object.dyn_string, b.string);
+    if (a == .object and b == .object) return deepEqualObject(a.object, b.object, visits, visit_len);
+    if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
+    return switch (a) {
+        .number => |x| x == b.number,
+        .rune => |x| x == b.rune,
+        .boolean => |x| x == b.boolean,
+        .string => |x| common.streq(x, b.string),
+        .error_value => |x| common.streq(x, b.error_value),
+        .null => true,
+        .object => unreachable,
+    };
+}
+
+fn nativeDeepEqual(a: Value, b: Value) !Value {
+    var visits: [MaxDeepVisits]DeepEqVisit = undefined;
+    var visit_len: usize = 0;
+    return .{ .boolean = try deepEqualValue(a, b, visits[0..], &visit_len) };
+}
+
+fn cloneFindExisting(src: *Object, visits: []const CloneVisit, visit_len: usize) ?*Object {
+    var i: usize = 0;
+    while (i < visit_len) : (i += 1) {
+        if (visits[i].src == src) return visits[i].dst;
+    }
+    return null;
+}
+
+fn cloneRemember(src: *Object, dst: *Object, visits: []CloneVisit, visit_len: *usize) !void {
+    if (visit_len.* >= visits.len) return error.OutOfMemory;
+    visits[visit_len.*] = .{ .src = src, .dst = dst };
+    visit_len.* += 1;
+}
+
+fn cloneValue(v: Value, visits: []CloneVisit, visit_len: *usize) anyerror!Value {
+    return switch (v) {
+        .string => |s| try vmgc.makeDynString(s),
+        .object => |obj| try cloneObject(obj, visits, visit_len),
+        else => v,
+    };
+}
+
+fn cloneObject(src: *Object, visits: []CloneVisit, visit_len: *usize) anyerror!Value {
+    if (cloneFindExisting(src, visits, visit_len.*)) |cached| return .{ .object = cached };
+    switch (src.*) {
+        .array, .array_managed => {
+            const out_obj = try vmgc.vmAllocObject();
+            out_obj.* = .{ .array = &[_]Value{} };
+            try vms.pushTempRoot(.{ .object = out_obj });
+            defer vms.popTempRoot();
+            try cloneRemember(src, out_obj, visits, visit_len);
+            const items = vms.asArraySlice(src);
+            const out = try vmgc.vmAllocManagedSlice(Value, items.len);
+            for (out) |*slot| slot.* = .null;
+            out_obj.* = .{ .array_managed = out[0..items.len] };
+            for (items, 0..) |item, i| out[i] = try cloneValue(item, visits, visit_len);
+            return .{ .object = out_obj };
+        },
+        .map, .map_managed, .map_hashed => {
+            const out_obj = try vmgc.vmAllocObject();
+            out_obj.* = .{ .map = &[_]MapEntry{} };
+            try vms.pushTempRoot(.{ .object = out_obj });
+            defer vms.popTempRoot();
+            try cloneRemember(src, out_obj, visits, visit_len);
+            const entries = vms.asMapSlice(src);
+            const out = try vmgc.vmAllocManagedSlice(MapEntry, entries.len);
+            for (out) |*slot| slot.* = .{ .key = .null, .value = .null };
+            out_obj.* = .{ .map_managed = out[0..entries.len] };
+            for (entries, 0..) |entry, i| {
+                out[i].key = try cloneValue(entry.key, visits, visit_len);
+                out[i].value = try cloneValue(entry.value, visits, visit_len);
+            }
+            return .{ .object = out_obj };
+        },
+        .dyn_string => |s| return vmgc.makeDynString(s),
+        .function,
+        .closure,
+        .native_function,
+        .struct_type,
+        .interface_type,
+        .named_type,
+        .enum_type,
+        .iterator,
+        .variant_type,
+        .variant_ctor,
+        .named_type_fn,
+        .string_builder,
+        => return .{ .object = src },
+        .cell => return .{ .object = src },
+        .named_value => |nv| {
+            const out_obj = try vmgc.vmAllocObject();
+            out_obj.* = .{ .array = &[_]Value{} };
+            try vms.pushTempRoot(.{ .object = out_obj });
+            defer vms.popTempRoot();
+            try cloneRemember(src, out_obj, visits, visit_len);
+            out_obj.* = .{ .named_value = .{ .typ = nv.typ, .value = try cloneValue(nv.value, visits, visit_len) } };
+            return .{ .object = out_obj };
+        },
+        .enum_value => |ev| {
+            const out_obj = try vmgc.vmAllocObject();
+            out_obj.* = .{ .enum_value = ev };
+            return .{ .object = out_obj };
+        },
+        .struct_instance => |inst| {
+            const out_obj = try vmgc.vmAllocObject();
+            out_obj.* = .{ .array = &[_]Value{} };
+            try vms.pushTempRoot(.{ .object = out_obj });
+            defer vms.popTempRoot();
+            try cloneRemember(src, out_obj, visits, visit_len);
+            const fields = try vmgc.vmAllocManagedSlice(MapEntry, inst.fields.len);
+            for (fields) |*slot| slot.* = .{ .key = .null, .value = .null };
+            out_obj.* = .{ .struct_instance = .{ .typ = inst.typ, .fields = fields } };
+            for (inst.fields, 0..) |field, i| {
+                fields[i].key = field.key;
+                fields[i].value = try cloneValue(field.value, visits, visit_len);
+            }
+            return .{ .object = out_obj };
+        },
+        .variant_value => |vv| {
+            const out_obj = try vmgc.vmAllocObject();
+            out_obj.* = .{ .array = &[_]Value{} };
+            try vms.pushTempRoot(.{ .object = out_obj });
+            defer vms.popTempRoot();
+            try cloneRemember(src, out_obj, visits, visit_len);
+            out_obj.* = .{ .variant_value = .{
+                .typ = vv.typ,
+                .tag = vv.tag,
+                .ordinal = vv.ordinal,
+                .payload = try cloneValue(vv.payload, visits, visit_len),
+            } };
+            return .{ .object = out_obj };
+        },
+    }
+}
+
+fn nativeClone(v: Value) !Value {
+    var visits: [MaxDeepVisits]CloneVisit = undefined;
+    var visit_len: usize = 0;
+    return cloneValue(v, visits[0..], &visit_len);
+}
+
+fn nativeStrReplace(s: []const u8, old: []const u8, new: []const u8) !Value {
+    if (old.len == 0) return vmgc.makeDynString(s);
+    var count: usize = 0;
+    var i: usize = 0;
+    while (std.mem.indexOfPos(u8, s, i, old)) |pos| {
+        count += 1;
+        i = pos + old.len;
+    }
+    if (count == 0) return vmgc.makeDynString(s);
+    const total = s.len + count * new.len - count * old.len;
+    const obj = try vmgc.vmAllocObject();
+    obj.* = .{ .dyn_string = &[_]u8{} };
+    try vms.pushTempRoot(.{ .object = obj });
+    defer vms.popTempRoot();
+    const buf = try vmgc.vmAllocManagedBytes(total);
+    var src_i: usize = 0;
+    var dst_i: usize = 0;
+    while (std.mem.indexOfPos(u8, s, src_i, old)) |pos| {
+        @memcpy(buf[dst_i .. dst_i + (pos - src_i)], s[src_i..pos]);
+        dst_i += pos - src_i;
+        @memcpy(buf[dst_i .. dst_i + new.len], new);
+        dst_i += new.len;
+        src_i = pos + old.len;
+    }
+    @memcpy(buf[dst_i .. dst_i + (s.len - src_i)], s[src_i..]);
+    obj.* = .{ .dyn_string = buf[0..total] };
+    return .{ .object = obj };
+}
+
+fn nativeStrLastIndexOf(s: []const u8, sub: []const u8) !Value {
+    const byte_idx = std.mem.lastIndexOf(u8, s, sub) orelse return .{ .number = -1.0 };
+    const rune_idx = try vmstr.utf8RuneCount(s[0..byte_idx]);
+    return .{ .number = @floatFromInt(rune_idx) };
+}
+
+fn nativeStrRepeat(s: []const u8, count_v: Value) !Value {
+    const n = try vms.valueAsInt(count_v);
+    if (n < 0) return error.RangeError;
+    if (n == 0) return vmgc.makeDynString("");
+    const count: usize = @intCast(n);
+    const total = s.len * count;
+    const obj = try vmgc.vmAllocObject();
+    obj.* = .{ .dyn_string = &[_]u8{} };
+    try vms.pushTempRoot(.{ .object = obj });
+    defer vms.popTempRoot();
+    const buf = try vmgc.vmAllocManagedBytes(total);
+    var pos: usize = 0;
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        @memcpy(buf[pos .. pos + s.len], s);
+        pos += s.len;
+    }
+    obj.* = .{ .dyn_string = buf[0..total] };
+    return .{ .object = obj };
+}
+
+fn nativeStrSplitOnce(s: []const u8, sep: []const u8) !Value {
+    const pos = std.mem.indexOf(u8, s, sep) orelse return makeTuple2(.null, .null);
+    return makeTuple2(.{ .string = s[0..pos] }, .{ .string = s[pos + sep.len ..] });
 }
 
 fn nativeAppend(start: usize, argc: u8) !Value {
@@ -973,6 +1494,79 @@ pub fn callNative(nf: NativeFuncObj, argc: u8) !void {
             _ = try vms.vmPop();
             try vms.vmPush(.{ .boolean = arg == .error_value });
         },
+        .core_type_of => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const arg = vms.vmState().stack[vms.vmState().stack_top - 1];
+            const out = nativeTypeNameValue(arg);
+            _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .core_is_int => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const out = nativeIsInt(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .core_is_float => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const out = nativeIsFloat(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .core_is_string => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const out = nativeIsString(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .core_is_array => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const out = nativeIsArray(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .core_is_map => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const out = nativeIsMap(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .core_is_struct => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const out = nativeIsStruct(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .core_is_null => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const out = nativeIsNull(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .core_deep_equal => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const out = try nativeDeepEqual(vms.vmState().stack[top - 2], vms.vmState().stack[top - 1]);
+            _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .core_clone => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const out = try nativeClone(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
         .core_gc => {
             if (argc != nf.arity) return error.ArityMismatch;
             vmgc.collectGarbage();
@@ -1265,12 +1859,82 @@ pub fn callNative(nf: NativeFuncObj, argc: u8) !void {
             _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
             try vms.vmPush(out);
         },
+        .str_replace => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const s = try vms.asStringValue(vms.vmState().stack[top - 3]);
+            const old = try vms.asStringValue(vms.vmState().stack[top - 2]);
+            const new = try vms.asStringValue(vms.vmState().stack[top - 1]);
+            const out = try nativeStrReplace(s, old, new);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .str_last_index_of => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const s = try vms.asStringValue(vms.vmState().stack[top - 2]);
+            const sub = try vms.asStringValue(vms.vmState().stack[top - 1]);
+            const out = try nativeStrLastIndexOf(s, sub);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .str_repeat => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const s = try vms.asStringValue(vms.vmState().stack[top - 2]);
+            const out = try nativeStrRepeat(s, vms.vmState().stack[top - 1]);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .str_split_once => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const s = try vms.asStringValue(vms.vmState().stack[top - 2]);
+            const sep = try vms.asStringValue(vms.vmState().stack[top - 1]);
+            const out = try nativeStrSplitOnce(s, sep);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
         .str_builder_new => {
             if (argc != 0) return error.ArityMismatch;
             const obj = try vmgc.vmAllocObject();
             obj.* = .{ .string_builder = .{ .buf = &[_]u8{}, .len = 0 } };
             _ = try vms.vmPop();
             try vms.vmPush(.{ .object = obj });
+        },
+        .rand_float => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            _ = try vms.vmPop();
+            try vms.vmPush(nativeRandFloat());
+        },
+        .rand_intn => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const n_val = vms.vmState().stack[vms.vmState().stack_top - 1];
+            const out = try nativeRandIntn(n_val);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .rand_between => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const out = try nativeRandBetween(vms.vmState().stack[top - 2], vms.vmState().stack[top - 1]);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .rand_seed => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const n_val = vms.vmState().stack[vms.vmState().stack_top - 1];
+            try nativeRandSeed(n_val);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.null);
+        },
+        .rand_choice => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const arr_val = vms.unboxNamed(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            if (arr_val != .object) return error.TypeError;
+            const out = try nativeRandChoice(arr_val.object);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(out);
         },
     }
 }

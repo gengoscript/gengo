@@ -336,6 +336,14 @@ Current namespace surface:
   - returns an `error` value (`error(msg)` when printed)
 - `std.core.is_error(v)`
   - returns `true` if `v` is an `error` value, else `false`
+- `std.core.type_of(v)`
+  - returns stable runtime type name such as `int`, `float`, `string`, `null`, or a declared type name like `Point`
+- `std.core.is_int(v)`, `std.core.is_float(v)`, `std.core.is_string(v)`, `std.core.is_array(v)`, `std.core.is_map(v)`, `std.core.is_struct(v)`, `std.core.is_null(v)`
+  - runtime classification helpers for scripts and embeddings
+- `std.core.deep_equal(a, b)`
+  - structural equality for arrays, maps, struct instances, named values, variants, strings, and scalars
+- `std.core.clone(v)`
+  - deep clone for arrays, maps, struct instances, named values, variants, and strings
 - `std.core.gc()`
   - triggers mark-sweep collection for heap objects
   - returns `null`
@@ -387,6 +395,16 @@ Current namespace surface:
   - returns `true` if `s` ends with `suffix`
 - `std.string.index_of(s, sub)`
   - returns rune index of first occurrence of `sub` in `s`, or `-1` if not found
+- `std.string.last_index_of(s, sub)`
+  - returns rune index of last occurrence of `sub` in `s`, or `-1` if not found
+- `std.string.replace(s, old, new)`
+  - replaces all non-overlapping occurrences of `old` with `new`
+- `std.string.repeat(s, n)`
+  - repeats `s` exactly `n` times
+  - raises `RangeError` when `n < 0`
+- `std.string.split_once(s, sep)`
+  - returns `(head, tail)` split at the first `sep`
+  - returns `(null, null)` if `sep` is absent
 - `std.string.builder()`
   - creates a mutable string accumulator; use `.write(s)`, `.str()`, `.reset()`
   - amortized O(total_bytes) append cost; avoids O(n²) from repeated `s = s + piece`

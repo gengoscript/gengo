@@ -1,0 +1,45 @@
+std := import("std")
+core := std.core
+
+type Age int range 0..120
+type Label string
+type Points []int
+type Scores map[string]int
+type Step int cycle 1..16
+type User struct { name string, score int }
+
+age := Age(7)
+label := Label("ok")
+pts := Points([1, 2])
+scores := Scores({"a": 1})
+step := Step(16)
+user := User{name: "mikael", score: 9}
+
+std.io.println(core.type_of(1))
+std.io.println(core.type_of(1.5))
+std.io.println(core.type_of(age))
+std.io.println(core.type_of(user))
+std.io.println(core.type_of(null))
+std.io.println(core.is_int(1))
+std.io.println(core.is_int(age))
+std.io.println(core.is_float(1.5))
+std.io.println(core.is_string(label))
+std.io.println(core.is_array(pts))
+std.io.println(core.is_map(scores))
+std.io.println(core.is_struct(user))
+std.io.println(core.is_null(null))
+std.io.println(step)
+
+box := {
+  "nums": [1, 2],
+  "user": user,
+  "tag": label,
+}
+copy := core.clone(box)
+std.io.println(core.deep_equal(box, copy))
+copy["nums"] = core.append(copy["nums"], 3)
+copy["user"] = User{name: "mikael", score: 10}
+std.io.println(core.deep_equal(box, copy))
+std.io.println(core.len(box["nums"]))
+std.io.println(core.len(copy["nums"]))
+std.io.println(copy["user"].score)
