@@ -20,7 +20,7 @@ Companion guides:
 
 ## 2. Modules and Builtins
 
-- `import("std")` returns a standard-library module map with namespaces.
+- `import("std")` returns a standard-library namespace object with nested namespaces.
 - Relative source imports are supported, for example `import("./math")`.
 - Source modules resolve in this order:
   - exact path
@@ -314,7 +314,7 @@ Type objects expose read-only attributes via `.` access:
 
 ## 9. Standard Library (`std`)
 
-Current module map:
+Current namespace surface:
 - `std.io.println(...args)`
   - prints values and newline
   - returns `null`

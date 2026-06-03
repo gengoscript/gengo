@@ -12,6 +12,10 @@ const Value = @import("value.zig").Value;
 const Object = @import("value.zig").Object;
 const MapEntry = @import("value.zig").MapEntry;
 const NativeFuncObj = @import("value.zig").NativeFuncObj;
+const FieldTypeAlt = @import("value.zig").FieldTypeAlt;
+const FieldTypeSpec = @import("value.zig").FieldTypeSpec;
+const StructFieldSpec = @import("value.zig").StructFieldSpec;
+const StructTypeObj = @import("value.zig").StructTypeObj;
 
 const NativeFnId = enum(u8) {
     io_println = 1,
@@ -62,6 +66,10 @@ const NativeFnId = enum(u8) {
     math_max = 29,
 };
 const MaxNativeArgs = 255;
+const NamespaceEntry = struct {
+    name: []const u8,
+    value: Value,
+};
 
 fn makeNative(id: NativeFnId, arity: u8) !Value {
     const obj = try vmgc.vmAllocObject();
@@ -69,171 +77,132 @@ fn makeNative(id: NativeFnId, arity: u8) !Value {
     return .{ .object = obj };
 }
 
+fn makeNamespace(display_name: []const u8, qualified_name: []const u8, entries: []const NamespaceEntry) !*Object {
+    const any_alts = heap.bump(FieldTypeAlt, 1) orelse return error.OutOfMemory;
+    any_alts[0] = .{ .typ = .any };
+    const any_spec: FieldTypeSpec = .{ .alts = any_alts[0..1] };
+
+    const field_specs = heap.bump(StructFieldSpec, entries.len) orelse return error.OutOfMemory;
+    var i: usize = 0;
+    while (i < entries.len) : (i += 1) {
+        field_specs[i] = .{ .name = entries[i].name, .typ = any_spec, .is_const = true };
+    }
+
+    const typ_obj = try vmgc.vmAllocObject();
+    try vms.pushTempRoot(.{ .object = typ_obj });
+    defer vms.popTempRoot();
+    typ_obj.* = .{ .struct_type = StructTypeObj{
+        .name = display_name,
+        .qualified_name = qualified_name,
+        .fields = field_specs[0..entries.len],
+    } };
+
+    const inst_fields = try vmgc.vmAllocManagedSlice(MapEntry, entries.len);
+    const inst_obj = try vmgc.vmAllocObject();
+    try vms.pushTempRoot(.{ .object = inst_obj });
+    defer vms.popTempRoot();
+    inst_obj.* = .{ .struct_instance = .{ .typ = typ_obj, .fields = inst_fields } };
+
+    i = 0;
+    while (i < entries.len) : (i += 1) {
+        inst_fields[i] = .{
+            .key = .{ .string = entries[i].name },
+            .value = entries[i].value,
+        };
+    }
+    return inst_obj;
+}
+
 pub fn buildStdModule() !*Object {
     if (vms.vmState().std_module) |m| return m;
 
-    const io_items = heap.bump(MapEntry, 3) orelse return error.OutOfMemory;
-    io_items[0] = .{
-        .key = .{ .string = "println" },
-        .value = try makeNative(.io_println, 255),
+    const io_entries = [_]NamespaceEntry{
+        .{ .name = "println", .value = try makeNative(.io_println, 255) },
+        .{ .name = "printf", .value = try makeNative(.io_printf, 255) },
+        .{ .name = "print", .value = try makeNative(.io_print, 255) },
     };
-    io_items[1] = .{
-        .key = .{ .string = "printf" },
-        .value = try makeNative(.io_printf, 255),
-    };
-    io_items[2] = .{
-        .key = .{ .string = "print" },
-        .value = try makeNative(.io_print, 255),
-    };
-    const io_obj = try vmgc.vmAllocObject();
-    io_obj.* = .{ .map = io_items[0..3] };
+    const io_obj = try makeNamespace("io", "@module_type:std.io", &io_entries);
+    try vms.pushTempRoot(.{ .object = io_obj });
+    defer vms.popTempRoot();
 
-    const core_items = heap.bump(MapEntry, 16) orelse return error.OutOfMemory;
-    core_items[0] = .{
-        .key = .{ .string = "len" },
-        .value = try makeNative(.core_len, 1),
+    const core_entries = [_]NamespaceEntry{
+        .{ .name = "len", .value = try makeNative(.core_len, 1) },
+        .{ .name = "append", .value = try makeNative(.core_append, 255) },
+        .{ .name = "error", .value = try makeNative(.core_error, 1) },
+        .{ .name = "is_error", .value = try makeNative(.core_is_error, 1) },
+        .{ .name = "gc", .value = try makeNative(.core_gc, 0) },
+        .{ .name = "gc_live_objects", .value = try makeNative(.core_gc_live_objects, 0) },
+        .{ .name = "gc_stats", .value = try makeNative(.core_gc_stats, 0) },
+        .{ .name = "bytelen", .value = try makeNative(.core_bytelen, 1) },
+        .{ .name = "gc_stats_ext", .value = try makeNative(.core_gc_stats_ext, 0) },
+        .{ .name = "delete", .value = try makeNative(.core_delete, 2) },
+        .{ .name = "has", .value = try makeNative(.core_has, 2) },
+        .{ .name = "keys", .value = try makeNative(.core_keys, 1) },
+        .{ .name = "values", .value = try makeNative(.core_values, 1) },
+        .{ .name = "contains", .value = try makeNative(.core_contains, 2) },
+        .{ .name = "remove", .value = try makeNative(.core_remove, 2) },
+        .{ .name = "recover", .value = try makeNative(.core_recover, 0) },
     };
-    core_items[1] = .{
-        .key = .{ .string = "append" },
-        .value = try makeNative(.core_append, 255),
-    };
-    core_items[2] = .{
-        .key = .{ .string = "error" },
-        .value = try makeNative(.core_error, 1),
-    };
-    core_items[3] = .{
-        .key = .{ .string = "is_error" },
-        .value = try makeNative(.core_is_error, 1),
-    };
-    core_items[4] = .{
-        .key = .{ .string = "gc" },
-        .value = try makeNative(.core_gc, 0),
-    };
-    core_items[5] = .{
-        .key = .{ .string = "gc_live_objects" },
-        .value = try makeNative(.core_gc_live_objects, 0),
-    };
-    core_items[6] = .{
-        .key = .{ .string = "gc_stats" },
-        .value = try makeNative(.core_gc_stats, 0),
-    };
-    core_items[7] = .{
-        .key = .{ .string = "bytelen" },
-        .value = try makeNative(.core_bytelen, 1),
-    };
-    core_items[8] = .{
-        .key = .{ .string = "gc_stats_ext" },
-        .value = try makeNative(.core_gc_stats_ext, 0),
-    };
-    core_items[9] = .{
-        .key = .{ .string = "delete" },
-        .value = try makeNative(.core_delete, 2),
-    };
-    core_items[10] = .{
-        .key = .{ .string = "has" },
-        .value = try makeNative(.core_has, 2),
-    };
-    core_items[11] = .{
-        .key = .{ .string = "keys" },
-        .value = try makeNative(.core_keys, 1),
-    };
-    core_items[12] = .{
-        .key = .{ .string = "values" },
-        .value = try makeNative(.core_values, 1),
-    };
-    core_items[13] = .{
-        .key = .{ .string = "contains" },
-        .value = try makeNative(.core_contains, 2),
-    };
-    core_items[14] = .{
-        .key = .{ .string = "remove" },
-        .value = try makeNative(.core_remove, 2),
-    };
-    core_items[15] = .{
-        .key = .{ .string = "recover" },
-        .value = try makeNative(.core_recover, 0),
-    };
-    const core_obj = try vmgc.vmAllocObject();
-    core_obj.* = .{ .map = core_items[0..16] };
+    const core_obj = try makeNamespace("core", "@module_type:std.core", &core_entries);
+    try vms.pushTempRoot(.{ .object = core_obj });
+    defer vms.popTempRoot();
 
-    const conv_items = heap.bump(MapEntry, 4) orelse return error.OutOfMemory;
-    conv_items[0] = .{
-        .key = .{ .string = "to_int" },
-        .value = try makeNative(.conv_to_int, 1),
+    const conv_entries = [_]NamespaceEntry{
+        .{ .name = "to_int", .value = try makeNative(.conv_to_int, 1) },
+        .{ .name = "to_float", .value = try makeNative(.conv_to_float, 1) },
+        .{ .name = "to_bool", .value = try makeNative(.conv_to_bool, 1) },
+        .{ .name = "to_string", .value = try makeNative(.conv_to_string, 1) },
     };
-    conv_items[1] = .{
-        .key = .{ .string = "to_float" },
-        .value = try makeNative(.conv_to_float, 1),
-    };
-    conv_items[2] = .{
-        .key = .{ .string = "to_bool" },
-        .value = try makeNative(.conv_to_bool, 1),
-    };
-    conv_items[3] = .{
-        .key = .{ .string = "to_string" },
-        .value = try makeNative(.conv_to_string, 1),
-    };
-    const conv_obj = try vmgc.vmAllocObject();
-    conv_obj.* = .{ .map = conv_items[0..4] };
+    const conv_obj = try makeNamespace("conv", "@module_type:std.conv", &conv_entries);
+    try vms.pushTempRoot(.{ .object = conv_obj });
+    defer vms.popTempRoot();
 
-    const math_items = heap.bump(MapEntry, 17) orelse return error.OutOfMemory;
-    math_items[0]  = .{ .key = .{ .string = "abs"   }, .value = try makeNative(.math_abs,   1) };
-    math_items[1]  = .{ .key = .{ .string = "sqrt"  }, .value = try makeNative(.math_sqrt,  1) };
-    math_items[2]  = .{ .key = .{ .string = "floor" }, .value = try makeNative(.math_floor, 1) };
-    math_items[3]  = .{ .key = .{ .string = "ceil"  }, .value = try makeNative(.math_ceil,  1) };
-    math_items[4]  = .{ .key = .{ .string = "round" }, .value = try makeNative(.math_round, 1) };
-    math_items[5]  = .{ .key = .{ .string = "sin"   }, .value = try makeNative(.math_sin,   1) };
-    math_items[6]  = .{ .key = .{ .string = "cos"   }, .value = try makeNative(.math_cos,   1) };
-    math_items[7]  = .{ .key = .{ .string = "tan"   }, .value = try makeNative(.math_tan,   1) };
-    math_items[8]  = .{ .key = .{ .string = "log"   }, .value = try makeNative(.math_log,   1) };
-    math_items[9]  = .{ .key = .{ .string = "log2"  }, .value = try makeNative(.math_log2,  1) };
-    math_items[10] = .{ .key = .{ .string = "log10" }, .value = try makeNative(.math_log10, 1) };
-    math_items[11] = .{ .key = .{ .string = "pow"   }, .value = try makeNative(.math_pow,   2) };
-    math_items[12] = .{ .key = .{ .string = "min"   }, .value = try makeNative(.math_min,   2) };
-    math_items[13] = .{ .key = .{ .string = "max"   }, .value = try makeNative(.math_max,   2) };
-    math_items[14] = .{ .key = .{ .string = "pi"    }, .value = .{ .number = std.math.pi } };
-    math_items[15] = .{ .key = .{ .string = "e"     }, .value = .{ .number = std.math.e  } };
-    math_items[16] = .{ .key = .{ .string = "inf"   }, .value = .{ .number = std.math.inf(f64) } };
-    const math_obj = try vmgc.vmAllocObject();
-    math_obj.* = .{ .map = math_items[0..17] };
+    const math_entries = [_]NamespaceEntry{
+        .{ .name = "abs", .value = try makeNative(.math_abs, 1) },
+        .{ .name = "sqrt", .value = try makeNative(.math_sqrt, 1) },
+        .{ .name = "floor", .value = try makeNative(.math_floor, 1) },
+        .{ .name = "ceil", .value = try makeNative(.math_ceil, 1) },
+        .{ .name = "round", .value = try makeNative(.math_round, 1) },
+        .{ .name = "sin", .value = try makeNative(.math_sin, 1) },
+        .{ .name = "cos", .value = try makeNative(.math_cos, 1) },
+        .{ .name = "tan", .value = try makeNative(.math_tan, 1) },
+        .{ .name = "log", .value = try makeNative(.math_log, 1) },
+        .{ .name = "log2", .value = try makeNative(.math_log2, 1) },
+        .{ .name = "log10", .value = try makeNative(.math_log10, 1) },
+        .{ .name = "pow", .value = try makeNative(.math_pow, 2) },
+        .{ .name = "min", .value = try makeNative(.math_min, 2) },
+        .{ .name = "max", .value = try makeNative(.math_max, 2) },
+        .{ .name = "pi", .value = .{ .number = std.math.pi } },
+        .{ .name = "e", .value = .{ .number = std.math.e } },
+        .{ .name = "inf", .value = .{ .number = std.math.inf(f64) } },
+    };
+    const math_obj = try makeNamespace("math", "@module_type:std.math", &math_entries);
+    try vms.pushTempRoot(.{ .object = math_obj });
+    defer vms.popTempRoot();
 
-    const str_items = heap.bump(MapEntry, 9) orelse return error.OutOfMemory;
-    str_items[0] = .{ .key = .{ .string = "split" },       .value = try makeNative(.str_split,       2) };
-    str_items[1] = .{ .key = .{ .string = "join" },        .value = try makeNative(.str_join,        2) };
-    str_items[2] = .{ .key = .{ .string = "trim" },        .value = try makeNative(.str_trim,        1) };
-    str_items[3] = .{ .key = .{ .string = "upper" },       .value = try makeNative(.str_upper,       1) };
-    str_items[4] = .{ .key = .{ .string = "lower" },       .value = try makeNative(.str_lower,       1) };
-    str_items[5] = .{ .key = .{ .string = "starts_with" }, .value = try makeNative(.str_starts_with, 2) };
-    str_items[6] = .{ .key = .{ .string = "ends_with" },   .value = try makeNative(.str_ends_with,   2) };
-    str_items[7] = .{ .key = .{ .string = "index_of" },    .value = try makeNative(.str_index_of,    2) };
-    str_items[8] = .{ .key = .{ .string = "builder" },     .value = try makeNative(.str_builder_new, 0) };
-    const str_obj = try vmgc.vmAllocObject();
-    str_obj.* = .{ .map = str_items[0..9] };
+    const string_entries = [_]NamespaceEntry{
+        .{ .name = "split", .value = try makeNative(.str_split, 2) },
+        .{ .name = "join", .value = try makeNative(.str_join, 2) },
+        .{ .name = "trim", .value = try makeNative(.str_trim, 1) },
+        .{ .name = "upper", .value = try makeNative(.str_upper, 1) },
+        .{ .name = "lower", .value = try makeNative(.str_lower, 1) },
+        .{ .name = "starts_with", .value = try makeNative(.str_starts_with, 2) },
+        .{ .name = "ends_with", .value = try makeNative(.str_ends_with, 2) },
+        .{ .name = "index_of", .value = try makeNative(.str_index_of, 2) },
+        .{ .name = "builder", .value = try makeNative(.str_builder_new, 0) },
+    };
+    const string_obj = try makeNamespace("string", "@module_type:std.string", &string_entries);
+    try vms.pushTempRoot(.{ .object = string_obj });
+    defer vms.popTempRoot();
 
-    const std_items = heap.bump(MapEntry, 5) orelse return error.OutOfMemory;
-    std_items[0] = .{
-        .key = .{ .string = "io" },
-        .value = .{ .object = io_obj },
+    const std_entries = [_]NamespaceEntry{
+        .{ .name = "io", .value = .{ .object = io_obj } },
+        .{ .name = "core", .value = .{ .object = core_obj } },
+        .{ .name = "conv", .value = .{ .object = conv_obj } },
+        .{ .name = "math", .value = .{ .object = math_obj } },
+        .{ .name = "string", .value = .{ .object = string_obj } },
     };
-    std_items[1] = .{
-        .key = .{ .string = "core" },
-        .value = .{ .object = core_obj },
-    };
-    std_items[2] = .{
-        .key = .{ .string = "conv" },
-        .value = .{ .object = conv_obj },
-    };
-    std_items[3] = .{
-        .key = .{ .string = "math" },
-        .value = .{ .object = math_obj },
-    };
-    std_items[4] = .{
-        .key = .{ .string = "string" },
-        .value = .{ .object = str_obj },
-    };
-
-    const std_obj = try vmgc.vmAllocObject();
-    std_obj.* = .{ .map = std_items[0..5] };
+    const std_obj = try makeNamespace("std", "@module_type:std", &std_entries);
     vms.vmState().std_module = std_obj;
     return std_obj;
 }

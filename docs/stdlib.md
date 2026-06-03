@@ -6,7 +6,7 @@
 std := import("std")
 ```
 
-`std` is always available via `import("std")`. Relative source imports are separate and return struct-backed module objects.
+`std` is always available via `import("std")` and is exposed as a struct-backed namespace object. Relative source imports use the same namespace model.
 
 ## std.io
 
