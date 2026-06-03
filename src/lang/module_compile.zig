@@ -132,7 +132,7 @@ pub const Session = struct {
         });
         compiler.compile(false) catch |err| {
             self.last_error_path = self.modules[idx].path();
-            self.last_error_line = compiler.prev.line;
+            self.last_error_line = if (compiler.err_line != 0) compiler.err_line else compiler.prev.line;
             self.copyCompilerError(&compiler);
             return err;
         };

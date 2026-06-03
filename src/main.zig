@@ -94,6 +94,10 @@ fn printSourceLine(src: []const u8, line: u32, col: u32) void {
     while (line_end < src.len and src[line_end] != '\n') : (line_end += 1) {}
     const text = src[line_start..line_end];
 
+    var digit_count: usize = 0;
+    var tmp = line;
+    if (tmp == 0) { digit_count = 1; } else { while (tmp > 0) : (tmp /= 10) digit_count += 1; }
+
     io.werr("   ");
     io.writeInt(@intCast(line));
     io.werr(" | ");
@@ -101,7 +105,10 @@ fn printSourceLine(src: []const u8, line: u32, col: u32) void {
     io.werr("\n");
 
     if (col > 0) {
-        io.werr("     | ");
+        io.werr("   ");
+        var di: usize = 0;
+        while (di < digit_count) : (di += 1) io.werr(" ");
+        io.werr(" | ");
         var c: u32 = 1;
         while (c < col) : (c += 1) io.werr(" ");
         io.werr("^\n");

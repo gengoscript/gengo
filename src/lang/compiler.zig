@@ -83,6 +83,7 @@ pub const Compiler = struct {
     err_msg_buf: [512]u8 = undefined,
     err_msg_len: u16 = 0,
     err_col: u16 = 0,
+    err_line: u32 = 0,
 
     // ── Lifecycle ────────────────────────────────────────────────────────────────
 
@@ -95,6 +96,7 @@ pub const Compiler = struct {
         self.export_count = 0;
         self.err_msg_len = 0;
         self.err_col = 0;
+        self.err_line = 0;
         self.advance();
         while (!self.check(.eof)) {
             if (self.cur.typ == .err_invalid_char) {
@@ -122,6 +124,7 @@ pub const Compiler = struct {
     fn err(self: *Compiler, comptime fmt: []const u8, args: anytype) anyerror {
         self.setErr(fmt, args);
         self.err_col = @intCast(self.cur.col);
+        self.err_line = self.cur.line;
         return error.UnexpectedToken;
     }
 
@@ -2790,6 +2793,7 @@ pub const Compiler = struct {
         }
         self.setErr("expected {s}, found {s}", .{ self.tokenName(tt), self.tokenName(self.cur.typ) });
         self.err_col = @intCast(self.cur.col);
+        self.err_line = self.cur.line;
         return error.UnexpectedToken;
     }
     fn peekTT(self: *Compiler) TT {

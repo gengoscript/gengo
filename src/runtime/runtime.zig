@@ -102,7 +102,7 @@ pub const Runtime = struct {
                 .resolve_import = module_compile.Session.resolveImportOpaque,
             });
             compiler.compile(true) catch |err| {
-                self.last_compile_line = compiler.prev.line;
+                self.last_compile_line = if (compiler.err_line != 0) compiler.err_line else compiler.prev.line;
                 self.last_compile_col = compiler.err_col;
                 self.last_compile_msg_len = compiler.err_msg_len;
                 @memcpy(self.last_compile_msg_buf[0..compiler.err_msg_len], compiler.err_msg_buf[0..compiler.err_msg_len]);
