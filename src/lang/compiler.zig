@@ -740,7 +740,10 @@ pub const Compiler = struct {
             const constraint = try self.parseConstraintBounds();
             if (constraint.is_cycle and base != .int) return self.err("'cycle' constraint requires integer base type", .{});
             if (parent_info.has_range) {
-                if (constraint.min < parent_info.min or constraint.max > parent_info.max) return error.RangeError;
+                if (constraint.min < parent_info.min or constraint.max > parent_info.max) {
+                    self.setErr("range {d}..{d} exceeds parent type bounds {d}..{d}", .{ constraint.min, constraint.max, parent_info.min, parent_info.max });
+                    return error.RangeError;
+                }
             }
             has_range = true;
             is_cycle = constraint.is_cycle;
@@ -1709,7 +1712,7 @@ pub const Compiler = struct {
             }
             try emitImplicitReturn(scope, line);
         } else {
-            if (scope.is_named and !scope.has_typed_returns) return error.MissingReturnType;
+            if (scope.is_named and !scope.has_typed_returns) { self.setErr("named-return function must declare return types", .{}); return error.MissingReturnType; }
             _ = try self.emitExprListTuple();
         }
         try chunk.emitOp(.ret, line);
@@ -2133,7 +2136,7 @@ pub const Compiler = struct {
             }
 
             if (self.match(.kw_default)) {
-                if (saw_default) return error.DuplicateDefaultCase;
+                if (saw_default) { self.setErr("duplicate 'default' case in switch", .{}); return error.DuplicateDefaultCase; }
                 saw_default = true;
                 // Pop the switch value that is still on the stack when default is reached.
                 try chunk.emitOp(.pop, self.prev.line);
@@ -2814,7 +2817,7 @@ pub const Compiler = struct {
         const stable_name = try self.copyName(name);
         var i: usize = 0;
         while (i < self.export_count) : (i += 1) {
-            if (common.streq(self.exports[i].name, stable_name)) return error.DuplicateExport;
+            if (common.streq(self.exports[i].name, stable_name)) { self.setErr("duplicate export name '{s}'", .{stable_name}); return error.DuplicateExport; }
         }
         if (self.export_count >= MaxLocals) { self.setErr("too many fields (max {d})", .{MaxLocals}); return error.TooManyFields; }
         self.exports[self.export_count] = .{ .name = stable_name, .global_name = global_name };

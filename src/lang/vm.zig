@@ -155,8 +155,8 @@ fn performCall(argc: u8) !void {
     switch (obj.*) {
         .function => |f| {
             if (f.is_variadic) {
-                if (argc < f.arity - 1) return error.ArityMismatch;
-            } else if (f.arity != argc) return error.ArityMismatch;
+                if (argc < f.arity - 1) { vms.setRuntimeErr("expected at least {} argument(s), got {}", .{ f.arity - 1, argc }); return error.ArityMismatch; }
+            } else if (f.arity != argc) { vms.setRuntimeErr("expected {} argument(s), got {}", .{ f.arity, argc }); return error.ArityMismatch; }
             if (f.has_typed_params) try vmtyp.enforceFuncArgTypes(f, argc);
             try prepareVariadicCall(f, argc);
             if (vmState().frame_top >= vms.MaxFrames) return error.CallStackOverflow;
@@ -174,8 +174,8 @@ fn performCall(argc: u8) !void {
         .closure => |cl| {
             const f = cl.func.function;
             if (f.is_variadic) {
-                if (argc < f.arity - 1) return error.ArityMismatch;
-            } else if (f.arity != argc) return error.ArityMismatch;
+                if (argc < f.arity - 1) { vms.setRuntimeErr("expected at least {} argument(s), got {}", .{ f.arity - 1, argc }); return error.ArityMismatch; }
+            } else if (f.arity != argc) { vms.setRuntimeErr("expected {} argument(s), got {}", .{ f.arity, argc }); return error.ArityMismatch; }
             if (f.has_typed_params) try vmtyp.enforceFuncArgTypes(f, argc);
             try prepareVariadicCall(f, argc);
             if (vmState().frame_top >= vms.MaxFrames) return error.CallStackOverflow;
@@ -524,7 +524,10 @@ fn opGetLocalGetField() !void {
                 try vmPush(inst.fields[ic_fidx].value);
             } else {
                 const name = chunk.constAt(name_idx).string;
-                const fi = vmtyp.findFieldIndex(inst.typ.struct_type.fields, name) orelse return error.UnknownStructField;
+                const fi = vmtyp.findFieldIndex(inst.typ.struct_type.fields, name) orelse {
+                    vms.setRuntimeErr("no field '{s}' on type '{s}'", .{ name, inst.typ.struct_type.name });
+                    return error.UnknownStructField;
+                };
                 if (fi <= 0xFE) {
                     chunk.patchByte(ic_base,     @intCast((tpi >> 8) & 0xFF));
                     chunk.patchByte(ic_base + 1, @intCast(tpi & 0xFF));
@@ -846,8 +849,11 @@ fn opSetIndex() !void {
         },
         .struct_instance => |inst| {
             const key = try vms.asStringValue(idx_v);
-            const idx = vmtyp.findFieldIndex(inst.typ.struct_type.fields, key) orelse return error.UnknownStructField;
-            if (inst.typ.struct_type.fields[idx].is_const) return error.AssignToConst;
+            const idx = vmtyp.findFieldIndex(inst.typ.struct_type.fields, key) orelse {
+                vms.setRuntimeErr("no field '{s}' on type '{s}'", .{ key, inst.typ.struct_type.name });
+                return error.UnknownStructField;
+            };
+            if (inst.typ.struct_type.fields[idx].is_const) { vms.setRuntimeErr("field '{s}' of '{s}' is const", .{ key, inst.typ.struct_type.name }); return error.AssignToConst; }
             if (!vmtyp.matchesFieldType(val, inst.typ.struct_type.fields[idx])) return error.StructFieldTypeMismatch;
             inst.fields[idx].value = val;
         },
@@ -1092,7 +1098,10 @@ fn opGetField() !void {
             if (ic_type_idx == @as(usize, tpi) and ic_fidx != 0xFF) {
                 try vmPush(inst.fields[ic_fidx].value);
             } else {
-                const fi = vmtyp.findFieldIndex(inst.typ.struct_type.fields, name) orelse return error.UnknownStructField;
+                const fi = vmtyp.findFieldIndex(inst.typ.struct_type.fields, name) orelse {
+                    vms.setRuntimeErr("no field '{s}' on type '{s}'", .{ name, inst.typ.struct_type.name });
+                    return error.UnknownStructField;
+                };
                 if (fi <= 0xFE) {
                     chunk.patchByte(ic_base,     @intCast((tpi >> 8) & 0xFF));
                     chunk.patchByte(ic_base + 1, @intCast(tpi & 0xFF));
@@ -1238,7 +1247,10 @@ fn opSetField() !void {
             if (ic_type_idx == @as(usize, tpi) and ic_fidx != 0xFF) {
                 fi = ic_fidx;
             } else {
-                const found = vmtyp.findFieldIndex(inst.typ.struct_type.fields, name) orelse return error.UnknownStructField;
+                const found = vmtyp.findFieldIndex(inst.typ.struct_type.fields, name) orelse {
+                    vms.setRuntimeErr("no field '{s}' on type '{s}'", .{ name, inst.typ.struct_type.name });
+                    return error.UnknownStructField;
+                };
                 fi = found;
                 if (found <= 0xFE) {
                     chunk.patchByte(ic_base,     @intCast((tpi >> 8) & 0xFF));
@@ -1246,7 +1258,7 @@ fn opSetField() !void {
                     chunk.patchByte(ic_base + 2, @intCast(found));
                 }
             }
-            if (inst.typ.struct_type.fields[fi].is_const) return error.AssignToConst;
+            if (inst.typ.struct_type.fields[fi].is_const) { vms.setRuntimeErr("field '{s}' of '{s}' is const", .{ name, inst.typ.struct_type.name }); return error.AssignToConst; }
             if (!vmtyp.matchesFieldType(val, inst.typ.struct_type.fields[fi])) return error.StructFieldTypeMismatch;
             inst.fields[fi].value = val;
         },
@@ -1417,7 +1429,10 @@ fn runInner() !void {
                     try vmPush(globals.getAt(ic_slot));
                 } else {
                     const name = chunk.constAt(name_idx).string;
-                    const slot = globals.findSlot(name) orelse return error.NotDefined;
+                    const slot = globals.findSlot(name) orelse {
+                        vms.setRuntimeErr("'{s}' is not defined", .{name});
+                        return error.NotDefined;
+                    };
                     chunk.patchByte(ic_base,     @intCast((slot >> 8) & 0xFF));
                     chunk.patchByte(ic_base + 1, @intCast(slot & 0xFF));
                     try vmPush(globals.getAt(slot));
@@ -1940,8 +1955,11 @@ fn runInner() !void {
                     const key = vmState().stack[base + ci * 2];
                     const val = vmState().stack[base + ci * 2 + 1];
                     const key_s = try vms.asStringValue(key);
-                    const idx = vmtyp.findFieldIndex(st.fields, key_s) orelse return error.UnknownStructField;
-                    if (seen[idx]) return error.DuplicateField;
+                    const idx = vmtyp.findFieldIndex(st.fields, key_s) orelse {
+                        vms.setRuntimeErr("no field '{s}' on type '{s}'", .{ key_s, st.name });
+                        return error.UnknownStructField;
+                    };
+                    if (seen[idx]) { vms.setRuntimeErr("duplicate field '{s}' in struct literal", .{key_s}); return error.DuplicateField; }
                     seen[idx] = true;
                     if (!vmtyp.matchesFieldType(val, st.fields[idx])) return error.StructFieldTypeMismatch;
                     inst_fields[idx] = .{ .key = .{ .string = st.fields[idx].name }, .value = val };
@@ -1949,7 +1967,7 @@ fn runInner() !void {
 
                 var mi: usize = 0;
                 while (mi < st.fields.len) : (mi += 1) {
-                    if (!seen[mi]) return error.MissingStructField;
+                    if (!seen[mi]) { vms.setRuntimeErr("missing required field '{s}' in struct literal", .{st.fields[mi].name}); return error.MissingStructField; }
                 }
 
                 // Discard type + key-value pairs from the stack in one step.
