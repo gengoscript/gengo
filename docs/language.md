@@ -63,6 +63,12 @@ Implemented value kinds:
   - `s[a:b]` slices by rune positions.
   - `for ch in s` and `for i, ch in s` iterate by rune (with `i` as rune index).
 
+### Number Literals
+- Decimal integer: `42`, `-17`
+- Decimal float: `3.14`, `-0.5`
+- Scientific notation: `1.5e3` (= 1500.0), `2.5e-1`, `1.5E+2`
+- Digit separators: `1_000_000`, `999_99_9999` — underscores are ignored and may appear anywhere in the digit sequence
+
 Example multiline string:
 
 ```gengo
@@ -219,6 +225,12 @@ Type objects expose read-only attributes via `.` access:
 | `T.name` | `string` — type name | any named type |
 | `T.first` | Named value `T(min)` | range constraint |
 | `T.last` | Named value `T(max)` | range constraint |
+| `T.succ(v)` | Named value immediately after `v` in sequence | range or cycle |
+| `T.pred(v)` | Named value immediately before `v` in sequence | range or cycle |
+
+`succ` and `pred` are called on the **type**, not the value: `Month.succ(m)`, not `m.succ()`.
+For range types, `succ` at `T.last` and `pred` at `T.first` raise `RangeError`.
+For cycle types, `succ`/`pred` wrap around.
 
 **Enum types:**
 
@@ -235,6 +247,9 @@ Type objects expose read-only attributes via `.` access:
 - Literal: `[1, 2, 3]`
 - Index read/write supported.
 - Slicing supported.
+- `arr.first` — the index of the first element, always `0`
+- `arr.last` — the index of the last element (`len - 1`); raises `IndexOutOfBounds` on an empty array
+- Use `arr[arr.first]` and `arr[arr.last]` to read the first or last element.
 
 ### Maps
 - Literal supports identifier keys and expression keys:
@@ -243,6 +258,7 @@ Type objects expose read-only attributes via `.` access:
 - Index read supported: `m[key]`
 - Missing key read returns `null`.
 - Index write updates existing keys or inserts a new key if no existing entry matches.
+- `m.len` — number of entries (equivalent to `std.core.len(m)`).
 - Field values are dynamic. Reassigning a field to another type can make later nested access fail at runtime (for example, `obj.a = 11` then `obj.a.b` raises `TypeError`).
 
 ### Structs
@@ -275,6 +291,12 @@ Type objects expose read-only attributes via `.` access:
     - **string**: `i` is the rune index, `v` is the rune as a single-character string
 - `break` and `continue` supported inside loops.
 - `return` supported inside functions.
+- `defer expr` — schedules `expr` to execute when the enclosing function exits, whether by normal return or panic unwind.
+  - Multiple defers run in LIFO order (last declared, first executed).
+  - The expression is evaluated at the `defer` statement; a closure `defer` captures the environment at call time.
+  - Common patterns:
+    - `defer std.io.println("done")` — deferred expression call
+    - `defer (func() { std.io.println(x) })()` — deferred inline closure (captures `x` by reference)
 - `assert condition` — panics with `AssertionFailed` if `condition` is false.
 - `assert condition, "message"` — panics with the given message string if `condition` is false.
   - The panic value is an `error` value; it can be caught with `std.core.recover()` inside a `defer`.
@@ -300,6 +322,10 @@ Type objects expose read-only attributes via `.` access:
 
 - Function literal: `func(args...) { ... }`
 - Named function declaration sugar: `func name(args...) { ... }`
+- Method declarations: `func (recv TypeName) method(args...) returnType { ... }`
+  - Allowed on any user-defined named type: structs, named scalars, enums, variants.
+  - Not allowed on interface types or base types directly.
+  - Registered globally as `TypeName.method`; called via `value.method(args)`.
 - Variadic params (declaration-side):
   - `func sum(...xs int) int { ... }`
   - variadic parameter must be last
@@ -316,6 +342,9 @@ Type objects expose read-only attributes via `.` access:
 Current namespace surface:
 - `std.io.println(...args)`
   - prints values and newline
+  - returns `null`
+- `std.io.print(...args)`
+  - prints values without a trailing newline
   - returns `null`
 - `std.io.printf(fmt, ...args)`
   - verbs: `%v`, `%s`, `%d`, `%f`, `%t`, `%%`
@@ -335,6 +364,10 @@ Current namespace surface:
   - returns an `error` value (`error(msg)` when printed)
 - `std.core.is_error(v)`
   - returns `true` if `v` is an `error` value, else `false`
+- `std.core.recover()`
+  - called inside a `defer` function during a panic unwind
+  - returns the panic payload (an `error` value) and marks the panic as recovered
+  - returns `null` if not currently unwinding, or if the panic was already recovered
 - `std.core.type_of(v)`
   - returns stable runtime type name such as `int`, `float`, `string`, `null`, or a declared type name like `Point`
 - `std.core.is_int(v)`, `std.core.is_float(v)`, `std.core.is_string(v)`, `std.core.is_array(v)`, `std.core.is_map(v)`, `std.core.is_struct(v)`, `std.core.is_null(v)`
@@ -435,6 +468,17 @@ Current namespace surface:
   - Euler's number ≈ 2.71828182845904… (constant, not a function)
 - `std.math.inf`
   - positive infinity (constant, not a function)
+- `std.rand.float()`
+  - uniform `float` in `[0.0, 1.0)`
+  - auto-seeds from OS entropy on first call
+- `std.rand.intn(n)`
+  - uniform `int` in `[0, n)`; traps with `RangeError` if `n ≤ 0`
+- `std.rand.between(lo, hi)`
+  - uniform `int` in `[lo, hi]` inclusive; traps with `RangeError` if `lo > hi`
+- `std.rand.seed(n)`
+  - seeds the global PRNG with `n`; useful for reproducible sequences
+- `std.rand.choice(arr)`
+  - returns a random element from `arr`; traps with `RangeError` on empty array
 - `std.conv.to_int(x)`
   - converts number/boolean/string to integer `number` (truncate semantics)
   - invalid input raises `TypeError`
@@ -514,3 +558,93 @@ Current namespace surface:
   - `Status.approved`
 - Unqualified member names are not implicitly global.
 - Enum values are nominal; different enum types are not interchangeable.
+
+### Enum Subtypes
+
+`subtype` constrains the member set of an existing enum:
+
+```gengo
+type Days enum { Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday }
+subtype Weekend_Days Days { Saturday, Sunday }
+```
+
+- Members must be a strict subset of the parent enum's members.
+- Subtype values are equal to their parent equivalents: `Weekend_Days.Saturday == Days.Saturday`.
+- Type attributes (`name`, `first`, `last`, `values`) work on enum subtypes.
+- A subtype value is accepted anywhere its parent type is expected.
+
+## 14. Variant Types
+
+Variant types define a closed set of tagged alternatives, each optionally carrying a single typed payload.
+
+### Declaration
+
+```gengo
+type Result variant {
+    ok(value int),
+    err(msg string),
+    pending
+}
+```
+
+- Arms with a payload use `tag(field Type)` syntax.
+- Arms without a payload are bare names.
+
+### Construction
+
+```gengo
+r1 := Result.ok(42)
+r2 := Result.err("not found")
+r3 := Result.pending
+```
+
+Payload arms are called as constructors; no-payload arms are accessed directly.
+
+### Pattern Matching
+
+Variant values are matched with `switch`:
+
+```gengo
+switch r1 {
+    case .ok(v)  { std.io.println("ok:", v) }
+    case .err(m) { std.io.println("err:", m) }
+    case .pending { std.io.println("pending") }
+}
+```
+
+- Each `case` arm binds the payload to a local variable when present.
+- `default {}` handles any unmatched arm.
+- Exhaustive matching is not enforced at compile time; a missing arm at runtime is a `TypeError`.
+
+### Type Attributes
+
+| Attribute | Returns |
+|---|---|
+| `T.name` | `string` — the type name |
+
+### Methods
+
+Methods may be declared on variant types using standard receiver syntax:
+
+```gengo
+func (r Result) ok_value() int {
+    switch r {
+        case .ok(v) { return v }
+        default { return 0 }
+    }
+}
+```
+
+### As Function Parameters
+
+Variant types are accepted as typed function parameters and return types:
+
+```gengo
+func describe(r Result) string {
+    switch r {
+        case .ok(v)  { return std.conv.to_string(v) }
+        case .err(m) { return m }
+        case .pending { return "pending" }
+    }
+    return ""
+}

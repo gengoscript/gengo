@@ -47,6 +47,11 @@ std := import("std")
 ### `std.core.is_error(v)`
 - Returns `true` iff `v` is an error value
 
+### `std.core.recover()`
+- Called inside a `defer` function during a panic unwind
+- Returns the panic payload (an `error` value) and marks the panic as recovered
+- Returns `null` if not unwinding or if already recovered
+
 ### `std.core.type_of(v)`
 - Returns stable runtime type name
 - Plain scalars report names like `int`, `float`, `bool`, `string`, `error`, `null`
@@ -155,3 +160,25 @@ std := import("std")
 
 ### `std.string.builder()`
 - Creates mutable string builder with `.write`, `.str`, and `.reset`
+
+## std.rand
+
+### `std.rand.float()`
+- Uniform float in `[0.0, 1.0)`
+- Auto-seeds from OS entropy on first call
+
+### `std.rand.intn(n)`
+- Uniform int in `[0, n)`
+- Errors: `RangeError` if `n ≤ 0`
+
+### `std.rand.between(lo, hi)`
+- Uniform int in `[lo, hi]` inclusive
+- Errors: `RangeError` if `lo > hi`
+
+### `std.rand.seed(n)`
+- Seeds the global PRNG with `n`
+- Useful for reproducible test sequences
+
+### `std.rand.choice(arr)`
+- Returns a random element from `arr`
+- Errors: `RangeError` on empty array, `TypeError` if not an array

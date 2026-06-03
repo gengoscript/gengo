@@ -58,7 +58,7 @@ Return value from `gengo_native_call`:
 VM behavior:
 
 - In host backend, VM queries `abi_version` and `host_caps` before first host native use.
-- If required capability bit is missing, VM raises `HostCapabilityMissing`.
+- If a capability bit is absent, the VM falls back to its embedded implementation for that native; no error is raised.
 - Natives that are VM-local (for example `core.gc`, `core.gc_stats`, `core.error`, `std.conv.*`) execute in guest VM in both `embedded` and `host` backends.
 
 ## Safety Notes
