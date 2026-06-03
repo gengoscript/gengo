@@ -177,11 +177,24 @@ fn runCli(argv: []const []const u8) void {
             repl_rt.runIncremental(line) catch |err| {
                 if (repl_rt.last_compile_line != 0) {
                     io.werr("compile error: ");
+                    if (repl_rt.last_compile_msg_len > 0) {
+                        io.werr(repl_rt.last_compile_msg_buf[0..repl_rt.last_compile_msg_len]);
+                        io.werr("\n     --> line ");
+                        io.writeInt(@intCast(repl_rt.last_compile_line));
+                        if (repl_rt.last_compile_col > 0) {
+                            io.werr(":");
+                            io.writeInt(@intCast(repl_rt.last_compile_col));
+                        }
+                        io.werr("\n");
+                    } else {
+                        io.werr(@errorName(err));
+                        io.werr("\n");
+                    }
                 } else {
                     io.werr("error: ");
+                    io.werr(@errorName(err));
+                    io.werr("\n");
                 }
-                io.werr(@errorName(err));
-                io.werr("\n");
             };
         }
         io.write("\n");
@@ -214,13 +227,21 @@ fn runCli(argv: []const []const u8) void {
             const compile_path = if (runtime.lastCompilePath().len != 0) runtime.lastCompilePath() else script_name;
             io.werr("gengo: compile error: ");
             io.werr(@errorName(err));
+            if (runtime.last_compile_msg_len > 0) {
+                io.werr(": ");
+                io.werr(runtime.last_compile_msg_buf[0..runtime.last_compile_msg_len]);
+            }
             io.werr("\n  --> ");
             io.werr(compile_path);
             io.werr(":");
             io.writeInt(@intCast(runtime.last_compile_line));
+            if (runtime.last_compile_col > 0) {
+                io.werr(":");
+                io.writeInt(@intCast(runtime.last_compile_col));
+            }
             io.werr("\n");
             if (std.mem.eql(u8, compile_path, script_name)) {
-                printSourceLine(src, runtime.last_compile_line, 0);
+                printSourceLine(src, runtime.last_compile_line, runtime.last_compile_col);
             }
         } else if (runtime.last_runtime_line != 0) {
             io.werr("gengo: panic: ");

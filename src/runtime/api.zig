@@ -16,13 +16,16 @@ pub const Config = struct {
 
 pub const CompileError = struct {
     line: u32,
+    col: u16 = 0,
     kind: anyerror,
+    msg: []const u8 = "",
 };
 
 pub const RuntimeError = struct {
     kind: anyerror,
     line: u32 = 0,
     col: u16 = 0,
+    msg: []const u8 = "",
     frames: [MaxFrames]vm.PanicFrame = undefined,
     frame_count: usize = 0,
 };
@@ -68,10 +71,7 @@ pub const Runtime = struct {
     pub fn run(self: *Runtime, src: []const u8) RuntimeResult {
         self.inner.run(src) catch |err| {
             if (self.inner.last_compile_line != 0) {
-                return .{ .compile_error = .{
-                    .line = self.inner.last_compile_line,
-                    .kind = err,
-                } };
+                return .{ .compile_error = compileError(err, &self.inner) };
             }
             return .{ .runtime_error = runtimeError(err, &self.inner) };
         };
@@ -81,10 +81,7 @@ pub const Runtime = struct {
     pub fn runPath(self: *Runtime, src: []const u8, path: []const u8) RuntimeResult {
         self.inner.runPathWithProvider(src, path, defaultSourceProvider(self)) catch |err| {
             if (self.inner.last_compile_line != 0) {
-                return .{ .compile_error = .{
-                    .line = self.inner.last_compile_line,
-                    .kind = err,
-                } };
+                return .{ .compile_error = compileError(err, &self.inner) };
             }
             return .{ .runtime_error = runtimeError(err, &self.inner) };
         };
@@ -94,10 +91,7 @@ pub const Runtime = struct {
     pub fn runPathWithSources(self: *Runtime, src: []const u8, path: []const u8, sources: []const SourceEntry) RuntimeResult {
         self.inner.runPathWithSources(src, path, sources) catch |err| {
             if (self.inner.last_compile_line != 0) {
-                return .{ .compile_error = .{
-                    .line = self.inner.last_compile_line,
-                    .kind = err,
-                } };
+                return .{ .compile_error = compileError(err, &self.inner) };
             }
             return .{ .runtime_error = runtimeError(err, &self.inner) };
         };
@@ -107,10 +101,7 @@ pub const Runtime = struct {
     pub fn runPathWithSourceProvider(self: *Runtime, src: []const u8, path: []const u8, provider: SourceProvider) RuntimeResult {
         self.inner.runPathWithProvider(src, path, provider) catch |err| {
             if (self.inner.last_compile_line != 0) {
-                return .{ .compile_error = .{
-                    .line = self.inner.last_compile_line,
-                    .kind = err,
-                } };
+                return .{ .compile_error = compileError(err, &self.inner) };
             }
             return .{ .runtime_error = runtimeError(err, &self.inner) };
         };
@@ -136,11 +127,21 @@ fn defaultSourceProvider(self: *const Runtime) SourceProvider {
     return .filesystem;
 }
 
+fn compileError(err: anyerror, rt: *rt_mod.Runtime) CompileError {
+    return .{
+        .line = rt.last_compile_line,
+        .col = rt.last_compile_col,
+        .kind = err,
+        .msg = if (rt.last_compile_msg_len > 0) rt.last_compile_msg_buf[0..rt.last_compile_msg_len] else "",
+    };
+}
+
 fn runtimeError(err: anyerror, rt: *rt_mod.Runtime) RuntimeError {
     var e = RuntimeError{
         .kind = err,
         .line = rt.last_runtime_line,
         .col = rt.last_runtime_col,
+        .msg = if (rt.last_runtime_msg_len > 0) rt.last_runtime_msg_buf[0..rt.last_runtime_msg_len] else "",
         .frame_count = rt.panic_depth,
     };
     var fi: usize = 0;

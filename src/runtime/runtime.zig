@@ -14,8 +14,13 @@ pub const Runtime = struct {
     last_compile_line: u32 = 0,
     last_compile_path_buf: [module_compile.MaxModulePathBytes]u8 = undefined,
     last_compile_path_len: usize = 0,
+    last_compile_col: u16 = 0,
+    last_compile_msg_buf: [512]u8 = undefined,
+    last_compile_msg_len: u16 = 0,
     last_runtime_line: u32 = 0,
     last_runtime_col: u16 = 0,
+    last_runtime_msg_buf: [512]u8 = undefined,
+    last_runtime_msg_len: u16 = 0,
     panic_frames: [MaxFrames]vm.PanicFrame = undefined,
     panic_depth: usize = 0,
     chunk_state: chunk.State = .{},
@@ -69,7 +74,12 @@ pub const Runtime = struct {
     pub fn runPathWithProvider(self: *Runtime, src: []const u8, path: []const u8, provider: module_compile.SourceProvider) !void {
         self.last_compile_line = 0;
         self.last_compile_path_len = 0;
+        self.last_compile_col = 0;
+        self.last_compile_msg_len = 0;
         self.last_runtime_line = 0;
+        self.last_runtime_col = 0;
+        self.last_runtime_msg_len = 0;
+        self.panic_depth = 0;
         self.reset();
         vm.setPolicy(self.policy);
 
@@ -78,6 +88,9 @@ pub const Runtime = struct {
             session.provider = provider;
             session.compileRoot(path, src) catch |err| {
                 self.last_compile_line = if (session.last_error_line != 0) session.last_error_line else 1;
+                self.last_compile_col = session.last_error_col;
+                self.last_compile_msg_len = session.last_error_msg_len;
+                @memcpy(self.last_compile_msg_buf[0..session.last_error_msg_len], session.last_error_msg_buf[0..session.last_error_msg_len]);
                 self.setLastCompilePath(session.last_error_path);
                 return err;
             };
@@ -90,6 +103,9 @@ pub const Runtime = struct {
             });
             compiler.compile(true) catch |err| {
                 self.last_compile_line = compiler.prev.line;
+                self.last_compile_col = compiler.err_col;
+                self.last_compile_msg_len = compiler.err_msg_len;
+                @memcpy(self.last_compile_msg_buf[0..compiler.err_msg_len], compiler.err_msg_buf[0..compiler.err_msg_len]);
                 self.setLastCompilePath("");
                 return err;
             };
@@ -112,7 +128,12 @@ pub const Runtime = struct {
     pub fn runIncremental(self: *Runtime, src: []const u8) !void {
         self.last_compile_line = 0;
         self.last_compile_path_len = 0;
+        self.last_compile_col = 0;
+        self.last_compile_msg_len = 0;
         self.last_runtime_line = 0;
+        self.last_runtime_col = 0;
+        self.last_runtime_msg_len = 0;
+        self.panic_depth = 0;
         self.activate();
         vm.setPolicy(self.policy);
         chunk.reset();
@@ -125,6 +146,9 @@ pub const Runtime = struct {
         });
         compiler.compile(true) catch |err| {
             self.last_compile_line = compiler.prev.line;
+            self.last_compile_col = compiler.err_col;
+            self.last_compile_msg_len = compiler.err_msg_len;
+            @memcpy(self.last_compile_msg_buf[0..compiler.err_msg_len], compiler.err_msg_buf[0..compiler.err_msg_len]);
             self.setLastCompilePath("");
             return err;
         };
@@ -144,6 +168,9 @@ pub const Runtime = struct {
     pub fn callGlobal(self: *Runtime, name: []const u8, args: []const Value) !Value {
         self.activate();
         vm.setPolicy(self.policy);
+        self.last_compile_line = 0;
+        self.last_compile_col = 0;
+        self.last_compile_msg_len = 0;
         return vm.callGlobal(name, args) catch |err| {
             self.last_runtime_line = vm.panicLine();
             self.last_runtime_col = vm.panicCol();

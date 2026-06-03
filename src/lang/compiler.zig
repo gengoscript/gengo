@@ -80,6 +80,9 @@ pub const Compiler = struct {
     options: CompilerOptions = .{},
     exports: [MaxLocals]ExportEntry = undefined,
     export_count: u8 = 0,
+    err_msg_buf: [512]u8 = undefined,
+    err_msg_len: u16 = 0,
+    err_col: u16 = 0,
 
     // ── Lifecycle ────────────────────────────────────────────────────────────────
 
@@ -90,13 +93,126 @@ pub const Compiler = struct {
     pub fn compile(self: *Compiler, emit_halt: bool) !void {
         self.registry.reset();
         self.export_count = 0;
+        self.err_msg_len = 0;
+        self.err_col = 0;
         self.advance();
         while (!self.check(.eof)) {
-            if (self.cur.typ == .err_invalid_char) return error.InvalidChar;
-            if (self.cur.typ == .err_unterminated_string) return error.UnterminatedString;
+            if (self.cur.typ == .err_invalid_char) {
+                self.setErr("invalid character '{c}'", .{self.cur.src[0]});
+                self.err_col = @intCast(self.cur.col);
+                return error.InvalidChar;
+            }
+            if (self.cur.typ == .err_unterminated_string) {
+                self.setErr("unterminated string literal", .{});
+                self.err_col = @intCast(self.cur.col);
+                return error.UnterminatedString;
+            }
             try self.decl();
         }
         if (emit_halt) try chunk.emitOp(.halt, self.prev.line);
+    }
+
+    // ── Error reporting helpers ──────────────────────────────────────────────────
+
+    fn setErr(self: *Compiler, comptime fmt: []const u8, args: anytype) void {
+        const s = std.fmt.bufPrint(self.err_msg_buf[0..], fmt, args) catch "error";
+        self.err_msg_len = @intCast(s.len);
+    }
+
+    fn err(self: *Compiler, comptime fmt: []const u8, args: anytype) anyerror {
+        self.setErr(fmt, args);
+        self.err_col = @intCast(self.cur.col);
+        return error.UnexpectedToken;
+    }
+
+    fn tokenName(self: *Compiler, tt: TT) []const u8 {
+        _ = self;
+        return switch (tt) {
+            .eof => "end of file",
+            .err_invalid_char => "invalid character",
+            .err_unterminated_string => "unterminated string",
+            .ident => "identifier",
+            .number => "number",
+            .string => "string",
+            .rune => "rune literal",
+            .kw_true => "'true'",
+            .kw_false => "'false'",
+            .kw_null => "'null'",
+            .kw_if => "'if'",
+            .kw_else => "'else'",
+            .kw_for => "'for'",
+            .kw_in => "'in'",
+            .kw_switch => "'switch'",
+            .kw_case => "'case'",
+            .kw_default => "'default'",
+            .kw_return => "'return'",
+            .kw_func => "'func'",
+            .kw_struct => "'struct'",
+            .kw_interface => "'interface'",
+            .kw_type => "'type'",
+            .kw_range => "'range'",
+            .kw_cycle => "'cycle'",
+            .kw_enum => "'enum'",
+            .kw_import => "'import'",
+            .kw_var => "'var'",
+            .kw_const => "'const'",
+            .kw_break => "'break'",
+            .kw_continue => "'continue'",
+            .kw_defer => "'defer'",
+            .kw_assert => "'assert'",
+            .kw_trap => "'trap'",
+            .kw_variant => "'variant'",
+            .kw_subtype => "'subtype'",
+            .kw_pub => "'pub'",
+            .lparen => "'('",
+            .rparen => "')'",
+            .lbrace => "'{'",
+            .rbrace => "'}'",
+            .lbracket => "'['",
+            .rbracket => "']'",
+            .comma => "','",
+            .semicolon => "';'",
+            .colon => "':'",
+            .dot => "'.'",
+            .dotdot => "'..'",
+            .ellipsis => "'...'",
+            .question => "'?'",
+            .plus => "'+'",
+            .minus => "'-'",
+            .star => "'*'",
+            .star_star => "'**'",
+            .slash => "'/'",
+            .percent => "'%'",
+            .tilde => "'~'",
+            .caret => "'^'",
+            .amp => "'&'",
+            .bang => "'!'",
+            .pipe => "'|'",
+            .amp_amp => "'&&'",
+            .pipe_pipe => "'||'",
+            .bang_eq => "'!='",
+            .eq => "'='",
+            .eq_eq => "'=='",
+            .lt => "'<'",
+            .lt_eq => "'<='",
+            .gt => "'>'",
+            .gt_eq => "'>='",
+            .colon_eq => ":='",
+            .plus_eq => "'+='",
+            .minus_eq => "'-='",
+            .star_eq => "'*='",
+            .slash_eq => "'/='",
+            .percent_eq => "'%='",
+            .amp_eq => "'&='",
+            .pipe_eq => "'|='",
+            .caret_eq => "'^='",
+            .lt_lt => "'<<'",
+            .gt_gt => "'>>'",
+            .lt_lt_eq => "'<<='",
+            .gt_gt_eq => "'>>='",
+            .plus_plus => "'++'",
+            .minus_minus => "'--'",
+        };
     }
 
     pub fn emitModuleObject(self: *Compiler) !void {
@@ -149,7 +265,7 @@ pub const Compiler = struct {
 
     fn defineLocal(self: *Compiler, name: []const u8, is_const: bool) !u8 {
         const scope = self.currentScope();
-        if (scope.local_count >= MaxLocals) return error.TooManyLocals;
+        if (scope.local_count >= MaxLocals) { self.setErr("too many local variables (max {d})", .{MaxLocals}); return error.TooManyLocals; }
         const slot = scope.local_count;
         scope.locals[slot] = .{ .name = name, .is_const = is_const };
         scope.local_count += 1;
@@ -213,14 +329,14 @@ pub const Compiler = struct {
 
     fn ensureMutableBinding(self: *Compiler, name: Token) !void {
         if (self.resolveLocalConst(name.src)) |is_const| {
-            if (is_const) return error.AssignToConst;
+            if (is_const) { self.setErr("cannot assign to const variable '{s}'", .{name.src}); return error.AssignToConst; }
             return;
         }
         if (self.resolveUpvalueConst(name.src)) |is_const| {
-            if (is_const) return error.AssignToConst;
+            if (is_const) { self.setErr("cannot assign to const variable '{s}'", .{name.src}); return error.AssignToConst; }
             return;
         }
-        if (self.registry.hasGlobalConst(name.src)) return error.AssignToConst;
+        if (self.registry.hasGlobalConst(name.src)) { self.setErr("cannot assign to const variable '{s}'", .{name.src}); return error.AssignToConst; }
     }
 
     fn addUpvalueToScope(self: *Compiler, scope_index: u8, name: []const u8, index: u8, from_upvalue: bool) ?u8 {
@@ -272,7 +388,7 @@ pub const Compiler = struct {
     }
 
     fn pushLoop(self: *Compiler, continue_target: usize, local_keep: u8, body_keep: u8, iter_pops: u8) !void {
-        if (self.loop_depth >= MaxLoopDepth) return error.TooManyNestedLoops;
+        if (self.loop_depth >= MaxLoopDepth) { self.setErr("too many nested loops (max {d})", .{MaxLoopDepth}); return error.TooManyNestedLoops; }
         self.loops[self.loop_depth] = .{
             .continue_target = continue_target,
             .local_keep = local_keep,
@@ -292,7 +408,7 @@ pub const Compiler = struct {
     }
 
     fn emitBreak(self: *Compiler, line: u32) !void {
-        if (self.loop_depth == 0) return error.BreakOutsideLoop;
+        if (self.loop_depth == 0) { self.setErr("'break' outside of loop", .{}); return error.BreakOutsideLoop; }
         const loop = self.currentLoop();
         // Save so code after the if-break block sees the correct local count (non-break path).
         const saved: u8 = if (self.inFunc()) self.currentScope().local_count else 0;
@@ -301,14 +417,14 @@ pub const Compiler = struct {
         while (p < loop.iter_pops) : (p += 1) try chunk.emitOp(.pop, line);
         try self.cleanupLocals(loop.local_keep, line);
         const off = try chunk.emitJump(.jump, line);
-        if (loop.break_count >= MaxLoopBreaks) return error.TooManyBreaksInLoop;
+        if (loop.break_count >= MaxLoopBreaks) { self.setErr("too many 'break' statements in loop (max {d})", .{MaxLoopBreaks}); return error.TooManyBreaksInLoop; }
         loop.break_offsets[loop.break_count] = off;
         loop.break_count += 1;
         if (self.inFunc()) self.currentScope().local_count = saved;
     }
 
     fn emitContinue(self: *Compiler, line: u32) !void {
-        if (self.loop_depth == 0) return error.ContinueOutsideLoop;
+        if (self.loop_depth == 0) { self.setErr("'continue' outside of loop", .{}); return error.ContinueOutsideLoop; }
         const loop = self.currentLoop();
         const saved: u8 = if (self.inFunc()) self.currentScope().local_count else 0;
         try self.cleanupLocals(loop.body_keep, line);
@@ -320,7 +436,7 @@ pub const Compiler = struct {
 
     fn decl(self: *Compiler) anyerror!void {
         if (self.match(.kw_pub)) {
-            if (self.inFunc()) return error.InvalidPubTarget;
+            if (self.inFunc()) { self.setErr("invalid 'pub' target", .{}); return error.InvalidPubTarget; }
             try self.pubDecl();
         } else if (self.check(.ident) and self.peekTT() == .colon_eq) {
             try self.varDecl(false, false);
@@ -360,7 +476,7 @@ pub const Compiler = struct {
             try self.namedFuncDecl(true);
             return;
         }
-        return error.InvalidPubTarget;
+        return { self.setErr("invalid 'pub' target", .{}); return error.InvalidPubTarget; };
     }
 
     // ── Type declarations ────────────────────────────────────────────────────────
@@ -372,8 +488,8 @@ pub const Compiler = struct {
         var methods_tmp: [MaxLocals]InterfaceMethodSpec = undefined;
         var mcount: u8 = 0;
         while (!self.check(.rbrace)) {
-            if (self.cur.typ != .ident) return error.UnexpectedToken;
-            if (mcount >= MaxLocals) return error.TooManyFields;
+            if (self.cur.typ != .ident) return self.err("expected identifier, found {s}", .{self.tokenName(self.cur.typ)});
+            if (mcount >= MaxLocals) { self.setErr("too many fields (max {d})", .{MaxLocals}); return error.TooManyFields; }
             const mname = try self.copyName(self.cur.src);
             self.advance();
             try self.consume(.lparen);
@@ -390,9 +506,9 @@ pub const Compiler = struct {
             if (!self.check(.rparen)) {
                 while (true) {
                     const vari = self.match(.ellipsis);
-                    if (self.cur.typ != .ident) return error.UnexpectedToken;
+                    if (self.cur.typ != .ident) return self.err("expected identifier, found {s}", .{self.tokenName(self.cur.typ)});
                     self.advance(); // param name
-                    if (self.cur.typ != .question and self.cur.typ != .ident and self.cur.typ != .kw_func and self.cur.typ != .lbracket) return error.ExpectedTypeAnnotation;
+                    if (self.cur.typ != .question and self.cur.typ != .ident and self.cur.typ != .kw_func and self.cur.typ != .lbracket) { self.setErr("expected type annotation, found {s}", .{self.tokenName(self.cur.typ)}); return error.ExpectedTypeAnnotation; }
                     const ptype: FieldTypeSpec = try self.parseFieldTypeSpec();
                     if (!(ptype.alts.len == 1 and ptype.alts[0].typ == .any)) has_typed_params = true;
                     ptypes_tmp[arity] = ptype;
@@ -466,8 +582,11 @@ pub const Compiler = struct {
     fn parseSignedNumber(self: *Compiler) !f64 {
         var sign: f64 = 1.0;
         if (self.match(.minus)) sign = -1.0;
-        if (self.cur.typ != .number) return error.UnexpectedToken;
-        const n = common.parseFloat(self.cur.src) orelse return error.BadNumber;
+        if (self.cur.typ != .number) return self.err("expected number, found {s}", .{self.tokenName(self.cur.typ)});
+        const n = common.parseFloat(self.cur.src) orelse {
+            self.setErr("invalid number literal '{s}'", .{self.cur.src});
+            return error.BadNumber;
+        };
         self.advance();
         return sign * n;
     }
@@ -478,24 +597,27 @@ pub const Compiler = struct {
         else if (self.match(.kw_cycle))
             true
         else
-            return error.UnexpectedToken;
+            return self.err("expected 'range' or 'cycle', found {s}", .{self.tokenName(self.cur.typ)});
         const min = try self.parseSignedNumber();
         try self.consume(.dotdot);
         const max = try self.parseSignedNumber();
-        if (min > max) return error.RangeError;
+        if (min > max) {
+            self.setErr("range minimum ({d}) must not exceed maximum ({d})", .{ min, max });
+            return error.RangeError;
+        }
         return .{ .is_cycle = is_cycle, .min = min, .max = max };
     }
 
     fn variantDeclBody(self: *Compiler, kw: Token, name_tok: Token, is_pub: bool) !void {
         const name = name_tok.src;
-        if (self.registry.hasVariantType(name)) return error.DuplicateVariantType;
+        if (self.registry.hasVariantType(name)) { self.setErr("duplicate variant type name '{s}'", .{name}); return error.DuplicateVariantType; }
         try self.registry.addVariantType(name);
         try self.consume(.lbrace);
         var arms_tmp: [MaxLocals]VariantArmSpec = undefined;
         var arm_count: u8 = 0;
         if (!self.check(.rbrace)) {
             while (true) {
-                if (self.cur.typ != .ident) return error.UnexpectedToken;
+                if (self.cur.typ != .ident) return self.err("expected identifier, found {s}", .{self.tokenName(self.cur.typ)});
                 const arm_name = try self.copyName(self.cur.src);
                 self.advance();
                 var has_payload = false;
@@ -516,7 +638,7 @@ pub const Compiler = struct {
                     payload_type = try self.parseFieldTypeSpec();
                     try self.consume(.rparen);
                 }
-                if (arm_count >= MaxLocals) return error.TooManyLocals;
+                if (arm_count >= MaxLocals) { self.setErr("too many local variables (max {d})", .{MaxLocals}); return error.TooManyLocals; }
                 arms_tmp[arm_count] = .{
                     .name = arm_name,
                     .has_payload = has_payload,
@@ -548,20 +670,20 @@ pub const Compiler = struct {
     fn subtypeDecl(self: *Compiler, is_pub: bool) !void {
         const kw = self.cur;
         self.advance(); // subtype
-        if (self.cur.typ != .ident) return error.UnexpectedToken;
+        if (self.cur.typ != .ident) return self.err("expected identifier, found {s}", .{self.tokenName(self.cur.typ)});
         const name_tok = self.cur;
         self.advance(); // name
         const name = name_tok.src;
 
-        if (self.cur.typ != .ident) return error.UnexpectedToken;
+        if (self.cur.typ != .ident) return self.err("expected identifier, found {s}", .{self.tokenName(self.cur.typ)});
         const parent_name = self.cur.src;
         self.advance(); // parent name
 
-        const parent_info = self.registry.getNamedTypeInfo(parent_name) orelse return error.UnexpectedToken;
+        const parent_info = self.registry.getNamedTypeInfo(parent_name) orelse { self.setErr("unknown type '{s}'", .{parent_name}); return error.UnexpectedToken; };
 
         // Handle enum subtype: subtype Weekend_Days Days { Saturday, Sunday }
         if (parent_info.base == .enum_t) {
-            if (self.registry.hasNamedType(name)) return error.DuplicateNamedType;
+            if (self.registry.hasNamedType(name)) { self.setErr("duplicate type name '{s}'", .{name}); return error.DuplicateNamedType; }
             const qname = try self.qualifyTypeName(name);
             const qparent = try self.qualifyTypeName(parent_name);
             try self.registry.addNamedType(.{
@@ -574,7 +696,7 @@ pub const Compiler = struct {
             var mcount: u8 = 0;
             if (!self.check(.rbrace)) {
                 while (true) {
-                    if (self.cur.typ != .ident) return error.UnexpectedToken;
+                    if (self.cur.typ != .ident) return self.err("expected identifier, found {s}", .{self.tokenName(self.cur.typ)});
                     members_tmp[mcount] = try self.copyName(self.cur.src);
                     mcount += 1;
                     self.advance();
@@ -605,8 +727,8 @@ pub const Compiler = struct {
         }
 
         if (parent_info.base != .int and parent_info.base != .float and parent_info.base != .rune)
-            return error.UnexpectedToken;
-        if (self.registry.hasNamedType(name)) return error.DuplicateNamedType;
+            return self.err("subtype parent must be numeric type (int, float, or rune)", .{});
+        if (self.registry.hasNamedType(name)) { self.setErr("duplicate type name '{s}'", .{name}); return error.DuplicateNamedType; }
 
         const base = parent_info.base;
         var has_range = parent_info.has_range;
@@ -616,7 +738,7 @@ pub const Compiler = struct {
 
         if (self.check(.kw_range) or self.check(.kw_cycle)) {
             const constraint = try self.parseConstraintBounds();
-            if (constraint.is_cycle and base != .int) return error.UnexpectedToken;
+            if (constraint.is_cycle and base != .int) return self.err("'cycle' constraint requires integer base type", .{});
             if (parent_info.has_range) {
                 if (constraint.min < parent_info.min or constraint.max > parent_info.max) return error.RangeError;
             }
@@ -662,14 +784,14 @@ pub const Compiler = struct {
     fn namedTypeDecl(self: *Compiler, is_pub: bool) !void {
         const kw = self.cur;
         self.advance(); // type
-        if (self.cur.typ != .ident) return error.UnexpectedToken;
+        if (self.cur.typ != .ident) return self.err("expected identifier, found {s}", .{self.tokenName(self.cur.typ)});
         const name_tok = self.cur;
         self.advance(); // name
         if (self.match(.kw_struct)) return self.structDeclBody(kw, name_tok, is_pub);
         if (self.match(.kw_interface)) return self.interfaceDeclBody(kw, name_tok, is_pub);
         if (self.match(.kw_variant)) return self.variantDeclBody(kw, name_tok, is_pub);
         const name = name_tok.src;
-        if (self.registry.hasNamedType(name)) return error.DuplicateNamedType;
+        if (self.registry.hasNamedType(name)) { self.setErr("duplicate type name '{s}'", .{name}); return error.DuplicateNamedType; }
         const qname = try self.qualifyTypeName(name);
         if (self.check(.kw_enum)) {
             try self.registry.addNamedType(.{
@@ -686,7 +808,7 @@ pub const Compiler = struct {
             var mcount: u8 = 0;
             if (!self.check(.rbrace)) {
                 while (true) {
-                    if (self.cur.typ != .ident) return error.UnexpectedToken;
+                    if (self.cur.typ != .ident) return self.err("expected identifier, found {s}", .{self.tokenName(self.cur.typ)});
                     members_tmp[mcount] = try self.copyName(self.cur.src);
                     mcount += 1;
                     self.advance();
@@ -730,7 +852,7 @@ pub const Compiler = struct {
             return;
         }
 
-        if (self.cur.typ != .ident) return error.UnexpectedToken;
+        if (self.cur.typ != .ident) return self.err("expected identifier, found {s}", .{self.tokenName(self.cur.typ)});
         const base_name = self.cur.src;
         self.advance();
 
@@ -750,7 +872,7 @@ pub const Compiler = struct {
         } else if (common.streq(base_name, "rune")) {
             base = .rune;
         } else if (common.streq(base_name, "array")) {
-            return error.UnexpectedToken; // use []T syntax: type Name []T
+            return self.err("use '[]T' syntax for array types", .{});
         } else if (common.streq(base_name, "map")) {
             try self.consume(.lbracket);
             const ks = try self.parseFieldTypeSpec();
@@ -774,7 +896,7 @@ pub const Compiler = struct {
             parent_is_cycle = parent.is_cycle;
             parent_min = parent.min;
             parent_max = parent.max;
-        } else return error.UnexpectedToken;
+        } else return self.err("unknown type '{s}'", .{base_name});
 
         var has_range = false;
         var is_cycle = false;
@@ -782,7 +904,7 @@ pub const Compiler = struct {
         var max: f64 = 0;
         if (self.check(.kw_range) or self.check(.kw_cycle)) {
             const constraint = try self.parseConstraintBounds();
-            if (constraint.is_cycle and base != .int) return error.UnexpectedToken;
+            if (constraint.is_cycle and base != .int) return self.err("'cycle' constraint requires integer base type", .{});
             has_range = true;
             is_cycle = constraint.is_cycle;
             min = constraint.min;
@@ -853,8 +975,8 @@ pub const Compiler = struct {
         if (!self.check(.rbrace)) {
             while (true) {
                 const field_is_const = self.match(.kw_const);
-                if (self.cur.typ != .ident) return error.UnexpectedToken;
-                if (count >= MaxLocals) return error.TooManyFields;
+                if (self.cur.typ != .ident) return self.err("expected identifier, found {s}", .{self.tokenName(self.cur.typ)});
+                if (count >= MaxLocals) { self.setErr("too many fields (max {d})", .{MaxLocals}); return error.TooManyFields; }
                 const fname = try self.copyName(self.cur.src);
                 var i: u8 = 0;
                 while (i < count) : (i += 1) {
@@ -872,8 +994,8 @@ pub const Compiler = struct {
                         if (alt.typ == .struct_t) {
                             // Policy: no forward refs and no self refs.
                             const qself = try self.qualifyTypeName(name.src);
-                            if (common.streq(alt.struct_name, qself)) return error.UnknownStructType;
-                            if (!self.isKnownLocalStructType(alt.struct_name)) return error.UnknownStructType;
+                            if (common.streq(alt.struct_name, qself)) { self.setErr("unknown struct type '{s}'", .{alt.struct_name}); return error.UnknownStructType; }
+                            if (!self.isKnownLocalStructType(alt.struct_name)) { self.setErr("unknown struct type '{s}'", .{alt.struct_name}); return error.UnknownStructType; }
                         }
                     }
                 } else {
@@ -914,7 +1036,7 @@ pub const Compiler = struct {
         var count: u8 = 0;
 
         if (self.match(.question)) {
-            if (count >= MaxTypeAlts) return error.TooManyTypeAlternatives;
+                if (count >= MaxTypeAlts) { self.setErr("too many type alternatives (max {d})", .{MaxTypeAlts}); return error.TooManyTypeAlternatives; }
             tmp[count] = .{ .typ = .null_t };
             count += 1;
         }
@@ -936,7 +1058,7 @@ pub const Compiler = struct {
                 var func_param_count: u8 = 0;
                 if (!self.check(.rparen)) {
                     while (true) {
-                        if (func_param_count >= MaxLocals) return error.TooManyParams;
+                        if (func_param_count >= MaxLocals) { self.setErr("too many parameters (max {d})", .{MaxLocals}); return error.TooManyParams; }
                         func_params_tmp[func_param_count] = try self.parseFieldTypeSpec();
                         func_param_count += 1;
                         if (!self.match(.comma)) break;
@@ -948,7 +1070,7 @@ pub const Compiler = struct {
                 var func_return_count: u8 = 0;
                 if (self.match(.lparen)) {
                     while (true) {
-                        if (func_return_count >= MaxLocals) return error.TooManyParams;
+                        if (func_return_count >= MaxLocals) { self.setErr("too many parameters (max {d})", .{MaxLocals}); return error.TooManyParams; }
                         func_returns_tmp[func_return_count] = try self.parseFieldTypeSpec();
                         func_return_count += 1;
                         if (!self.match(.comma)) break;
@@ -973,7 +1095,7 @@ pub const Compiler = struct {
                 } else @as([]FieldTypeSpec, &.{});
                 alt = .{ .typ = .func_t, .func_params = fp, .func_returns = fr };
             } else {
-            if (self.cur.typ != .ident) return error.UnexpectedToken;
+            if (self.cur.typ != .ident) return self.err("expected identifier, found {s}", .{self.tokenName(self.cur.typ)});
             const tname = self.cur.src;
             self.advance();
 
@@ -993,7 +1115,7 @@ pub const Compiler = struct {
             } else if (common.streq(tname, "error")) {
                 alt = .{ .typ = .error_t };
             } else if (common.streq(tname, "array")) {
-                return error.UnexpectedToken; // use []T syntax instead
+                return self.err("use '[]T' syntax for array types", .{});
             } else if (common.streq(tname, "map")) {
                 var ks: ?FieldTypeSpec = null;
                 var vs: ?FieldTypeSpec = null;
@@ -1002,7 +1124,7 @@ pub const Compiler = struct {
                     try self.consume(.rbracket);
                     vs = try self.parseFieldTypeSpec();
                 } else {
-                    return error.UnexpectedToken; // bare map not allowed; use map[K]V
+                    return self.err("use 'map[K]V' syntax for map types", .{});
                 }
                 alt = .{ .typ = .map, .key_spec = ks, .val_spec = vs };
             } else if (self.registry.hasStructTypeLocal(tname)) {
@@ -1021,7 +1143,7 @@ pub const Compiler = struct {
                 if (tmp[i].typ == alt.typ and common.streq(tmp[i].struct_name, alt.struct_name) and common.streq(tmp[i].interface_name, alt.interface_name) and common.streq(tmp[i].named_name, alt.named_name)) break;
             }
             if (i == count) {
-                if (count >= MaxTypeAlts) return error.TooManyTypeAlternatives;
+                if (count >= MaxTypeAlts) { self.setErr("too many type alternatives (max {d})", .{MaxTypeAlts}); return error.TooManyTypeAlternatives; }
                 tmp[count] = alt;
                 count += 1;
             }
@@ -1048,7 +1170,7 @@ pub const Compiler = struct {
     fn namedFuncDecl(self: *Compiler, is_pub: bool) !void {
         const kw = self.cur;
         self.advance(); // consume 'func'
-        if (self.cur.typ != .ident) return error.UnexpectedToken;
+        if (self.cur.typ != .ident) return self.err("expected identifier, found {s}", .{self.tokenName(self.cur.typ)});
         const name = self.cur;
         self.advance(); // consume function name
 
@@ -1070,15 +1192,15 @@ pub const Compiler = struct {
         const kw = self.cur;
         self.advance(); // func
         try self.consume(.lparen);
-        if (self.cur.typ != .ident) return error.UnexpectedToken;
+        if (self.cur.typ != .ident) return self.err("expected identifier, found {s}", .{self.tokenName(self.cur.typ)});
         const recv_name = self.cur.src;
         self.advance();
-        if (self.cur.typ != .ident) return error.UnexpectedToken;
+        if (self.cur.typ != .ident) return self.err("expected identifier, found {s}", .{self.tokenName(self.cur.typ)});
         const recv_type = self.cur.src;
         self.advance();
         if (self.registry.hasInterfaceType(recv_type)) return error.MethodOnInterface;
         try self.consume(.rparen);
-        if (self.cur.typ != .ident) return error.UnexpectedToken;
+        if (self.cur.typ != .ident) return self.err("expected identifier, found {s}", .{self.tokenName(self.cur.typ)});
         const method_name = self.cur.src;
         self.advance();
 
@@ -1105,7 +1227,7 @@ pub const Compiler = struct {
     // ── Variable declarations ────────────────────────────────────────────────────
 
     fn varDecl(self: *Compiler, has_keyword: bool, is_const: bool) !void {
-        if (has_keyword and self.cur.typ != .ident) return error.UnexpectedToken;
+        if (has_keyword and self.cur.typ != .ident) return self.err("expected identifier, found {s}", .{self.tokenName(self.cur.typ)});
         const name = self.cur;
         self.advance();
         if (self.match(.colon_eq)) {
@@ -1146,7 +1268,7 @@ pub const Compiler = struct {
                 try self.expr();
                 try chunk.emitOp(.cast_rune, name.line);
             } else if (common.streq(type_name, "array")) {
-                return error.UnexpectedToken; // use []T syntax
+                return self.err("use '[]T' syntax for array types", .{});
             } else if (common.streq(type_name, "map")) {
                 // map[K]V typed decl: type was parsed above, just assert it's a map
                 try self.expr();
@@ -1159,15 +1281,15 @@ pub const Compiler = struct {
                        self.registry.hasStructTypeLocal(type_name)) {
                 try self.expr();
             } else {
-                return error.UnknownTypeName;
+                return { self.setErr("unknown type name '{s}'", .{type_name}); return error.UnknownTypeName; };
             }
         } else {
-            return error.UnexpectedToken;
+            return self.err("expected expression, found {s}", .{self.tokenName(self.cur.typ)});
         }
         if (self.inFunc()) {
             _ = try self.defineLocal(name.src, is_const);
         } else {
-            if (!is_const and self.registry.hasGlobalConst(name.src)) return error.AssignToConst;
+            if (!is_const and self.registry.hasGlobalConst(name.src)) { self.setErr("cannot assign to const variable '{s}'", .{name.src}); return error.AssignToConst; }
             try chunk.emitOpConst(.def_global, .{ .string = try self.qualifyGlobalName(name.src) }, name.line);
             if (is_const) try self.registry.addGlobalConst(name.src);
         }
@@ -1228,8 +1350,8 @@ pub const Compiler = struct {
     fn parseNameList(self: *Compiler, out: *[MaxLocals]Token) !u8 {
         var count: u8 = 0;
         while (true) {
-            if (self.cur.typ != .ident and self.cur.typ != .kw_trap) return error.UnexpectedToken;
-            if (count >= MaxLocals) return error.TooManyLocals;
+            if (self.cur.typ != .ident and self.cur.typ != .kw_trap) return self.err("expected identifier or 'trap', found {s}", .{self.tokenName(self.cur.typ)});
+            if (count >= MaxLocals) { self.setErr("too many local variables (max {d})", .{MaxLocals}); return error.TooManyLocals; }
             out[count] = self.cur;
             count += 1;
             self.advance();
@@ -1243,7 +1365,7 @@ pub const Compiler = struct {
         try self.expr();
         count += 1;
         while (self.match(.comma)) {
-            if (count == 255) return error.TooManyElements;
+            if (count == 255) { self.setErr("too many elements (max {d})", .{MaxLocals}); return error.TooManyElements; }
             try self.expr();
             count += 1;
         }
@@ -1255,23 +1377,23 @@ pub const Compiler = struct {
         var tcount: u8 = 0;
         var scount: u16 = 0;
         while (true) {
-            if (self.cur.typ != .ident) return error.UnexpectedToken;
-            if (tcount >= MaxLocals) return error.TooManyLocals;
+            if (self.cur.typ != .ident) return self.err("expected identifier, found {s}", .{self.tokenName(self.cur.typ)});
+            if (tcount >= MaxLocals) { self.setErr("too many local variables (max {d})", .{MaxLocals}); return error.TooManyLocals; }
             const root = self.cur;
             self.advance();
             const start = scount;
 
             while (true) {
                 if (self.match(.dot)) {
-                    if (self.cur.typ != .ident) return error.ExpectedPropertyName;
-                    if (scount >= steps.len) return error.TooManyElements;
+                    if (self.cur.typ != .ident) { self.setErr("expected property name, found {s}", .{self.tokenName(self.cur.typ)}); return error.ExpectedPropertyName; }
+                    if (scount >= steps.len) { self.setErr("too many elements (max {d})", .{MaxLocals}); return error.TooManyElements; }
                     steps[scount] = .{ .dot_name = self.cur.src };
                     scount += 1;
                     self.advance();
                     continue;
                 }
                 if (self.match(.lbracket)) {
-                    if (scount >= steps.len) return error.TooManyElements;
+                    if (scount >= steps.len) { self.setErr("too many elements (max {d})", .{MaxLocals}); return error.TooManyElements; }
                     if (self.cur.typ == .number) {
                         const n = common.parseFloat(self.cur.src) orelse return error.BadNumber;
                         steps[scount] = .{ .index_number = n };
@@ -1282,7 +1404,7 @@ pub const Compiler = struct {
                         scount += 1;
                         self.advance();
                     } else {
-                        return error.UnexpectedToken;
+                        return self.err("expected number or string index, found {s}", .{self.tokenName(self.cur.typ)});
                     }
                     try self.consume(.rbracket);
                     continue;
@@ -1354,7 +1476,7 @@ pub const Compiler = struct {
 
         if (is_decl) {
             count = try self.parseNameList(&names);
-            if (count < 2) return error.UnexpectedToken;
+            if (count < 2) return self.err("multi-assign requires at least two targets", .{});
             if (self.inFunc()) {
                 var pre_i: u8 = 0;
                 while (pre_i < count) : (pre_i += 1) {
@@ -1367,7 +1489,7 @@ pub const Compiler = struct {
             const parsed = try self.parseAssignTargetList(&targets, &steps);
             count = parsed.target_count;
             step_count = parsed.step_count;
-            if (count < 2) return error.UnexpectedToken;
+            if (count < 2) return self.err("multi-assign requires at least two targets", .{});
         }
 
         try self.consume(if (is_decl) .colon_eq else .eq);
@@ -1417,7 +1539,7 @@ pub const Compiler = struct {
             },
             .err_invalid_char => return error.InvalidChar,
             .err_unterminated_string => return error.UnterminatedString,
-            else => return error.ExpectedExpression,
+            else => { self.setErr("expected expression, found {s}", .{self.tokenName(self.cur.typ)}); return error.ExpectedExpression; },
         }
         // Consume chained .prop and [index]; when .prop( is seen it's a deferred method call.
         while (true) {
@@ -1429,7 +1551,7 @@ pub const Compiler = struct {
                 try chunk.emitOp(.get_index, line);
             } else if (self.cur.typ == .dot) {
                 self.advance();
-                if (self.cur.typ != .ident) return error.ExpectedPropertyName;
+                if (self.cur.typ != .ident) { self.setErr("expected property name, found {s}", .{self.tokenName(self.cur.typ)}); return error.ExpectedPropertyName; }
                 const prop = self.cur;
                 self.advance();
                 if (self.cur.typ == .lparen) {
@@ -1437,7 +1559,7 @@ pub const Compiler = struct {
                     var argc: u8 = 0;
                     if (!self.check(.rparen)) {
                         while (true) {
-                            if (argc == 255) return error.TooManyElements;
+                            if (argc == 255) { self.setErr("too many elements (max {d})", .{MaxLocals}); return error.TooManyElements; }
                             try self.expr();
                             argc += 1;
                             if (!self.match(.comma)) break;
@@ -1460,7 +1582,7 @@ pub const Compiler = struct {
         var argc: u8 = 0;
         if (!self.check(.rparen)) {
             while (true) {
-                if (argc == 255) return error.TooManyElements;
+                if (argc == 255) { self.setErr("too many elements (max {d})", .{MaxLocals}); return error.TooManyElements; }
                 try self.expr();
                 argc += 1;
                 if (!self.match(.comma)) break;
@@ -1512,7 +1634,7 @@ pub const Compiler = struct {
                 try self.multiBindStmt(true);
                 return;
             }
-            return error.UnexpectedToken;
+            return self.err("expected expression, found {s}", .{self.tokenName(self.cur.typ)});
         }
 
         if (self.check(.ident)) {
@@ -1626,7 +1748,7 @@ pub const Compiler = struct {
             .caret_eq => .bit_xor,
             .lt_lt_eq => .shl,
             .gt_gt_eq => .shr,
-            else => return error.UnexpectedToken,
+            else => return self.err("unsupported compound assignment operator", .{}),
         };
         try chunk.emitOp(op, op_tok.line);
         try self.emitSetVar(name);
@@ -1724,7 +1846,7 @@ pub const Compiler = struct {
 
         while (true) {
             if (self.match(.dot)) {
-                if (self.cur.typ != .ident) return error.ExpectedPropertyName;
+                if (self.cur.typ != .ident) { self.setErr("expected property name, found {s}", .{self.tokenName(self.cur.typ)}); return error.ExpectedPropertyName; }
                 const prop = self.cur;
                 self.advance();
                 if (self.check(.eq) or self.check(.plus_eq) or self.check(.minus_eq) or self.check(.star_eq) or self.check(.slash_eq) or self.check(.percent_eq) or self.check(.amp_eq) or self.check(.pipe_eq) or self.check(.caret_eq) or self.check(.lt_lt_eq) or self.check(.gt_gt_eq)) {
@@ -1749,7 +1871,7 @@ pub const Compiler = struct {
                 continue;
             }
 
-            return error.UnexpectedToken;
+            return self.err("expected '.' or '[', found {s}", .{self.tokenName(self.cur.typ)});
         }
 
         const op_tok = self.cur;
@@ -1776,7 +1898,7 @@ pub const Compiler = struct {
                 .caret_eq => .bit_xor,
                 .lt_lt_eq => .shl,
                 .gt_gt_eq => .shr,
-                else => return error.UnexpectedToken,
+                else => return self.err("unsupported compound assignment operator", .{}),
             };
             switch (last_kind) {
                 .dot_name => {
@@ -1800,7 +1922,7 @@ pub const Compiler = struct {
             return;
         }
 
-        return error.UnexpectedToken;
+        return self.err("unsupported compound assignment operator", .{});
     }
 
     fn ifStmt(self: *Compiler) anyerror!void {
@@ -1890,12 +2012,12 @@ pub const Compiler = struct {
 
     fn forInStmt(self: *Compiler) anyerror!void {
         const local_base: u8 = if (self.inFunc()) self.currentScope().local_count else 0;
-        if (self.cur.typ != .ident) return error.UnexpectedToken;
+        if (self.cur.typ != .ident) return self.err("expected identifier, found {s}", .{self.tokenName(self.cur.typ)});
         const kname = self.cur;
         self.advance();
         var vname: ?Token = null;
         if (self.match(.comma)) {
-            if (self.cur.typ != .ident) return error.UnexpectedToken;
+            if (self.cur.typ != .ident) return self.err("expected identifier, found {s}", .{self.tokenName(self.cur.typ)});
             vname = self.cur;
             self.advance();
         }
@@ -1958,12 +2080,12 @@ pub const Compiler = struct {
                     // Variant arm pattern: case .arm_name { } or case .arm_name(binding) { }
                     const dot_line = self.cur.line;
                     self.advance(); // consume '.'
-                    if (self.cur.typ != .ident) return error.UnexpectedToken;
+                    if (self.cur.typ != .ident) return self.err("expected identifier, found {s}", .{self.tokenName(self.cur.typ)});
                     const arm_name_tok = self.cur;
                     self.advance(); // consume arm name
                     var binding: ?[]const u8 = null;
                     if (self.match(.lparen)) {
-                        if (self.cur.typ != .ident) return error.UnexpectedToken;
+                        if (self.cur.typ != .ident) return self.err("expected identifier, found {s}", .{self.tokenName(self.cur.typ)});
                         binding = self.cur.src;
                         self.advance();
                         try self.consume(.rparen);
@@ -1987,7 +2109,7 @@ pub const Compiler = struct {
                     try self.consume(.lbrace);
                     try self.block();
                     try self.cleanupLocals(local_before, self.prev.line);
-                    if (end_count >= MaxSwitchJumps) return error.TooManySwitchCases;
+                    if (end_count >= MaxSwitchJumps) { self.setErr("too many switch cases (max {d})", .{MaxSwitchJumps}); return error.TooManySwitchCases; }
                     end_jumps[end_count] = try chunk.emitJump(.jump, self.prev.line);
                     end_count += 1;
                     try chunk.patchJump(next_case);
@@ -2002,7 +2124,7 @@ pub const Compiler = struct {
                     try chunk.emitOp(.pop, self.prev.line); // consume the switch value
                     try self.consume(.lbrace);
                     try self.block();
-                    if (end_count >= MaxSwitchJumps) return error.TooManySwitchCases;
+                    if (end_count >= MaxSwitchJumps) { self.setErr("too many switch cases (max {d})", .{MaxSwitchJumps}); return error.TooManySwitchCases; }
                     end_jumps[end_count] = try chunk.emitJump(.jump, self.prev.line);
                     end_count += 1;
                     try chunk.patchJump(next_case);
@@ -2017,13 +2139,13 @@ pub const Compiler = struct {
                 try chunk.emitOp(.pop, self.prev.line);
                 try self.consume(.lbrace);
                 try self.block();
-                if (end_count >= MaxSwitchJumps) return error.TooManySwitchCases;
+                if (end_count >= MaxSwitchJumps) { self.setErr("too many switch cases (max {d})", .{MaxSwitchJumps}); return error.TooManySwitchCases; }
                 end_jumps[end_count] = try chunk.emitJump(.jump, self.prev.line);
                 end_count += 1;
                 continue;
             }
 
-            return error.UnexpectedToken;
+            return self.err("expected 'case' or 'default', found {s}", .{self.tokenName(self.cur.typ)});
         }
 
         try self.consume(.rbrace);
@@ -2172,7 +2294,7 @@ pub const Compiler = struct {
         const any_spec: FieldTypeSpec = .{ .alts = any_alts[0..1] };
         variadic_type = any_spec;
 
-        if (prefix.len > MaxLocals) return error.TooManyParams;
+        if (prefix.len > MaxLocals) { self.setErr("too many parameters (max {d})", .{MaxLocals}); return error.TooManyParams; }
         var pi0: usize = 0;
         while (pi0 < prefix.len) : (pi0 += 1) {
             param_names[arity] = prefix[pi0];
@@ -2182,15 +2304,15 @@ pub const Compiler = struct {
 
         if (!self.check(.rparen)) {
             while (true) {
-                if (arity >= MaxLocals) return error.TooManyParams;
+                if (arity >= MaxLocals) { self.setErr("too many parameters (max {d})", .{MaxLocals}); return error.TooManyParams; }
                 const vari = self.match(.ellipsis);
                 const p_is_const = self.match(.kw_const);
-                if (self.cur.typ != .ident) return error.UnexpectedToken;
+                if (self.cur.typ != .ident) return self.err("expected identifier, found {s}", .{self.tokenName(self.cur.typ)});
                 param_names[arity] = self.cur.src;
                 param_const[arity] = p_is_const;
                 arity += 1;
                 self.advance();
-                if (self.cur.typ != .question and self.cur.typ != .ident and self.cur.typ != .kw_func and self.cur.typ != .lbracket) return error.ExpectedTypeAnnotation;
+                if (self.cur.typ != .question and self.cur.typ != .ident and self.cur.typ != .kw_func and self.cur.typ != .lbracket) { self.setErr("expected type annotation, found {s}", .{self.tokenName(self.cur.typ)}); return error.ExpectedTypeAnnotation; }
                 const ptype: FieldTypeSpec = try self.parseFieldTypeSpec();
                 param_types[arity - 1] = ptype;
                 if (vari) {
@@ -2216,7 +2338,7 @@ pub const Compiler = struct {
                 (self.peekToken().typ == .ident or self.peekToken().typ == .question or self.peekToken().typ == .kw_func or self.peekToken().typ == .lbracket);
             while (true) {
                 if (is_named_returns) {
-                    if (self.cur.typ != .ident) return error.UnexpectedToken;
+                    if (self.cur.typ != .ident) return self.err("expected identifier, found {s}", .{self.tokenName(self.cur.typ)});
                     return_names[return_count] = self.cur.src;
                     self.advance();
                 }
@@ -2337,10 +2459,10 @@ pub const Compiler = struct {
 
     fn skipTypeSpec(self: *Compiler) !void {
         _ = self.match(.question);
-        if (self.cur.typ != .ident) return error.UnexpectedToken;
+        if (self.cur.typ != .ident) return self.err("expected identifier, found {s}", .{self.tokenName(self.cur.typ)});
         self.advance();
         while (self.match(.pipe)) {
-            if (self.cur.typ != .ident) return error.UnexpectedToken;
+            if (self.cur.typ != .ident) return self.err("expected identifier, found {s}", .{self.tokenName(self.cur.typ)});
             self.advance();
         }
     }
@@ -2371,7 +2493,7 @@ pub const Compiler = struct {
             .kw_import => try self.importExpr(),
             .err_invalid_char => return error.InvalidChar,
             .err_unterminated_string => return error.UnterminatedString,
-            else => return error.ExpectedExpression,
+            else => { self.setErr("expected expression, found {s}", .{self.tokenName(self.cur.typ)}); return error.ExpectedExpression; },
         }
         while (@intFromEnum(p) <= @intFromEnum(tokPrec(self.cur.typ))) {
             self.advance();
@@ -2390,12 +2512,12 @@ pub const Compiler = struct {
 
     fn runeLitExpr(self: *Compiler) !void {
         const raw = self.prev.src;
-        if (raw.len < 3) return error.UnexpectedToken; // `x`
+        if (raw.len < 3) return self.err("rune literal must contain exactly one codepoint", .{});
         const body = raw[1 .. raw.len - 1];
         var it = std.unicode.Utf8View.init(body) catch return error.TypeError;
         var iter = it.iterator();
-        const cp = iter.nextCodepoint() orelse return error.UnexpectedToken;
-        if (iter.nextCodepoint() != null) return error.UnexpectedToken;
+        const cp = iter.nextCodepoint() orelse return self.err("rune literal must contain exactly one codepoint", .{});
+        if (iter.nextCodepoint() != null) return self.err("rune literal must contain exactly one codepoint", .{});
         try chunk.emitConst(.{ .rune = @intCast(cp) }, self.prev.line);
     }
 
@@ -2436,7 +2558,7 @@ pub const Compiler = struct {
         var count: u8 = 0;
         if (!self.check(.rbrace)) {
             while (true) {
-                if (count == 255) return error.TooManyElements;
+                if (count == 255) { self.setErr("too many elements (max {d})", .{MaxLocals}); return error.TooManyElements; }
                 if (self.check(.ident)) {
                     const key_tok = self.cur;
                     self.advance();
@@ -2444,7 +2566,7 @@ pub const Compiler = struct {
                 } else if (self.check(.string)) {
                     try chunk.emitConst(.{ .string = self.cur.src }, self.cur.line);
                     self.advance();
-                } else return error.UnexpectedToken;
+                } else return self.err("expected identifier or string key, found {s}", .{self.tokenName(self.cur.typ)});
                 try self.consume(.colon);
                 try self.expr();
                 count += 1;
@@ -2461,7 +2583,7 @@ pub const Compiler = struct {
         if (!self.check(.rbracket)) {
             while (true) {
                 try self.expr();
-                if (count == 255) return error.TooManyElements;
+                if (count == 255) { self.setErr("too many elements (max {d})", .{MaxLocals}); return error.TooManyElements; }
                 count += 1;
                 if (!self.match(.comma)) break;
                 if (self.check(.rbracket)) break;
@@ -2475,7 +2597,7 @@ pub const Compiler = struct {
         var count: u8 = 0;
         if (!self.check(.rbrace)) {
             while (true) {
-                if (count == 255) return error.TooManyElements;
+                if (count == 255) { self.setErr("too many elements (max {d})", .{MaxLocals}); return error.TooManyElements; }
 
                 try self.expr();
 
@@ -2505,7 +2627,7 @@ pub const Compiler = struct {
         const col = self.prev.col;
 
         if (tt == .dot) {
-            if (self.cur.typ != .ident) return error.ExpectedPropertyName;
+            if (self.cur.typ != .ident) { self.setErr("expected property name, found {s}", .{self.tokenName(self.cur.typ)}); return error.ExpectedPropertyName; }
             const prop = self.cur;
             self.advance();
             if (self.match(.lparen)) {
@@ -2663,6 +2785,8 @@ pub const Compiler = struct {
             self.advance();
             return;
         }
+        self.setErr("expected {s}, found {s}", .{ self.tokenName(tt), self.tokenName(self.cur.typ) });
+        self.err_col = @intCast(self.cur.col);
         return error.UnexpectedToken;
     }
     fn peekTT(self: *Compiler) TT {
@@ -2692,7 +2816,7 @@ pub const Compiler = struct {
         while (i < self.export_count) : (i += 1) {
             if (common.streq(self.exports[i].name, stable_name)) return error.DuplicateExport;
         }
-        if (self.export_count >= MaxLocals) return error.TooManyFields;
+        if (self.export_count >= MaxLocals) { self.setErr("too many fields (max {d})", .{MaxLocals}); return error.TooManyFields; }
         self.exports[self.export_count] = .{ .name = stable_name, .global_name = global_name };
         self.export_count += 1;
     }
@@ -2761,12 +2885,12 @@ pub const Compiler = struct {
 
     fn importExpr(self: *Compiler) !void {
         try self.consume(.lparen);
-        if (self.cur.typ != .string) return error.ExpectedStringLiteral;
+        if (self.cur.typ != .string) { self.setErr("expected string literal, found {s}", .{self.tokenName(self.cur.typ)}); return error.ExpectedStringLiteral; }
         const name = self.cur.src;
         self.advance();
         try self.consume(.rparen);
-        const ctx = self.options.module_ctx orelse return error.UnsupportedImportModule;
-        const resolver = self.options.resolve_import orelse return error.UnsupportedImportModule;
+        const ctx = self.options.module_ctx orelse { self.setErr("unsupported import module '{s}'", .{name}); return error.UnsupportedImportModule; };
+        const resolver = self.options.resolve_import orelse { self.setErr("unsupported import module '{s}'", .{name}); return error.UnsupportedImportModule; };
         const mod_name = try resolver(ctx, self.options.module_path, name);
         try chunk.emitGetGlobal(mod_name, self.prev.line);
     }
@@ -2776,7 +2900,7 @@ pub const Compiler = struct {
         var count: u8 = 0;
         if (!self.check(.rbrace)) {
             while (true) {
-                if (count == 255) return error.TooManyElements;
+                if (count == 255) { self.setErr("too many elements (max {d})", .{MaxLocals}); return error.TooManyElements; }
                 if (self.check(.ident)) {
                     const key_tok = self.cur;
                     self.advance();
@@ -2784,7 +2908,7 @@ pub const Compiler = struct {
                 } else if (self.check(.string)) {
                     try chunk.emitConst(.{ .string = self.cur.src }, self.cur.line);
                     self.advance();
-                } else return error.UnexpectedToken;
+                } else return self.err("expected identifier or string key, found {s}", .{self.tokenName(self.cur.typ)});
                 try self.consume(.colon);
                 try self.expr();
                 count += 1;

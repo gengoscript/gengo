@@ -55,13 +55,24 @@ pub const Session = struct {
     source_buf: [cfg.max_input_bytes]u8 = undefined,
     last_error_path: []const u8 = "",
     last_error_line: u32 = 0,
+    last_error_col: u16 = 0,
+    last_error_msg_buf: [512]u8 = undefined,
+    last_error_msg_len: u16 = 0,
     provider: SourceProvider = .filesystem,
+
+    fn copyCompilerError(self: *Session, compiler: *Compiler) void {
+        self.last_error_col = compiler.err_col;
+        @memcpy(self.last_error_msg_buf[0..compiler.err_msg_len], compiler.err_msg_buf[0..compiler.err_msg_len]);
+        self.last_error_msg_len = compiler.err_msg_len;
+    }
 
     pub fn compileRoot(self: *Session, root_path: []const u8, src: []const u8) !void {
         chunk.reset();
         self.module_count = 0;
         self.last_error_path = "";
         self.last_error_line = 0;
+        self.last_error_col = 0;
+        self.last_error_msg_len = 0;
         const idx = try self.beginModule(root_path, true);
         errdefer self.module_count = idx;
 
@@ -122,6 +133,7 @@ pub const Session = struct {
         compiler.compile(false) catch |err| {
             self.last_error_path = self.modules[idx].path();
             self.last_error_line = compiler.prev.line;
+            self.copyCompilerError(&compiler);
             return err;
         };
         try compiler.emitModuleObject();
