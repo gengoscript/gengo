@@ -12,7 +12,7 @@ The intended model is:
 - native filesystem loading is supported for the CLI
 - WASM loading is supported through an optional source provider or preloaded sources
 
-This is a gengo-native module design. It should not try to restore Tengo module compatibility.
+This is a gengo-native module design.
 
 ## Current State
 

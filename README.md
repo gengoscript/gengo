@@ -121,7 +121,7 @@ pub func add(a int, b int) int {
 - good WASM story
 - simple implementation that is still worth optimizing
 
-This is not trying to preserve Tengo compatibility. The language is defined by the implementation in this repository.
+The language is defined by the implementation in this repository.
 
 ## Quick Start
 

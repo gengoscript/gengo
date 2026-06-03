@@ -3,8 +3,7 @@
 This document defines the **minimum capability baseline** for `gengo v0`.
 
 Important:
-- `tengolang.com.txt` is used as a **yardstick for capability coverage**, not as a compatibility contract.
-- gengo semantics may differ when that improves clarity, contracts, or safety.
+- gengo semantics may differ from other languages when that improves clarity, contracts, or safety.
 
 ## Status Legend
 
@@ -64,9 +63,9 @@ Important:
 8. Dynamic string GC lifecycle coverage: `done`
 9. Build-time tunable runtime limits via presets: `done`
 
-## 6. Yardstick Mapping (`tengolang.com.txt`)
+## 6. Capability Coverage Buckets
 
-The sample requires these buckets to be v0-ready:
+The v0-ready capability requirements:
 
 1. nested data + slicing: `done`
 2. higher-order sequence operations via iteration + closures: `done`
@@ -81,7 +80,7 @@ The sample requires these buckets to be v0-ready:
 
 ## 8. Non-Goals for v0
 
-1. Full Tengo module compatibility (`import("fmt")`, etc.)
+1. Cross-language module compatibility (`import("fmt")`-style aliases)
 2. Global compatibility aliases that dilute `std` namespacing
 3. Silent weakening of struct contracts
 4. try/catch-style exception syntax

@@ -1,7 +1,7 @@
 # gengo Language (Current Behavior)
 
 This document defines the current language behavior implemented by gengo.
-It is intentionally versioned by implementation reality, not Tengo compatibility.
+It is intentionally versioned by implementation reality.
 
 Companion guides:
 - `docs/tutorial-first-script.md`
@@ -15,7 +15,6 @@ Companion guides:
 
 ## 1. Positioning
 
-- `gengo` is a Tengo-inspired language, but compatibility is not guaranteed.
 - Breaking changes are expected while the language surface is still being defined.
 
 ## 2. Modules and Builtins
