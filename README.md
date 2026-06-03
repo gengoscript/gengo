@@ -193,3 +193,15 @@ Use `-Dpreset=<name>` with build commands.
 - [docs/stdlib.md](docs/stdlib.md)
 - [docs/embedding.md](docs/embedding.md)
 - [docs/changelog.md](docs/changelog.md)
+
+## A note on authorship
+
+Gengo is built almost entirely with the help of LLMs. It is tested, as any present-day software should be, but this is not an artisanally hand-carved compiler lovingly shaped by a lone language monk in a candlelit workshop while listening to smooth jazz.
+
+Expect pragmatic choices, occasional rough edges, and parts of the codebase that may look like several enthusiastic monkeys tried to type on the keyboard all at once. Because, in several ways, they did.
+
+If software with substantial LLM involvement gives you hives, moral discomfort, or a sudden urge to rewrite everything from first principles, this project may not be for you. That is fine. For everyone else: issues, tests, bug reports, and patches are welcome.
+
+That said, please do not send five commits in ten minutes, each with a single spelling fix or a style-guide preference. Small fixes are welcome, but batch them, make them useful, and expect taste calls to remain taste calls.
+
+Judgment on what goes into this alphabet soup remains with me for now.
