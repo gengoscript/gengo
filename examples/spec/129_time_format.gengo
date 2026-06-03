@@ -1,0 +1,15 @@
+std := import("std")
+t := std.time.from_unix(1700000000)
+
+// All format verbs
+std.io.println(t.format("%Y-%m-%d %H:%M:%S"))
+std.io.println(t.format("%L ms"))
+std.io.println(t.format("%A"))
+std.io.println(t.format("%a"))
+std.io.println(t.format("%B"))
+std.io.println(t.format("%b"))
+std.io.println(t.format("%%"))
+
+// Parse round-trip
+t2 := std.time.parse("2023-11-15 10:30:00", "%Y-%m-%d %H:%M:%S")
+std.io.println(t2.format("%Y-%m-%d %H:%M:%S"))

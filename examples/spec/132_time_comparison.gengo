@@ -1,0 +1,19 @@
+std := import("std")
+t := std.time.from_unix(1700000000)
+t2 := std.time.from_unix(1700000000)
+t3 := std.time.from_unix(1700003600)
+z := std.time.from_unix(0)
+
+// before, after, equal
+std.io.println(t.before(t3))
+std.io.println(t3.after(t))
+std.io.println(t.equal(t2))
+std.io.println(z.is_zero())
+
+// Comparison operators via underlying int
+std.io.println(t < t3)
+std.io.println(t3 > t)
+std.io.println(t == t2)
+
+std.io.println(t < t2)
+std.io.println(t3 > t3)

@@ -1,0 +1,20 @@
+std := import("std")
+time := std.time
+
+// from_unix (seconds)
+t2 := time.from_unix(1700000000)
+std.io.println(t2.unix())
+std.io.println(t2.unix_ms())
+std.io.println(std.core.type_of(t2))
+
+// from_unix_ms
+t3 := time.from_unix_ms(1700000000000)
+std.io.println(t3.unix())
+std.io.println(t3.unix_ms())
+
+// Duration constants
+std.io.println(time.ms)
+std.io.println(time.second)
+std.io.println(time.minute)
+std.io.println(time.hour)
+std.io.println(time.day)

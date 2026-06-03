@@ -236,3 +236,51 @@ Go-style text templates with `{{` / `}}` delimiters.
 | `{{/* comment */}}` | Comment (emits nothing) |
 
 Note: `range` iteration is reserved syntax but not yet executed (v1 always takes the else/empty branch).
+
+## std.Time / std.time
+
+`std.Time` is a named type over `int`. Raw value is milliseconds since Unix epoch, UTC. All arithmetic and comparison operators work through the underlying `int`.
+
+### `std.time` — constructors and utilities
+
+| Function | Returns | Notes |
+|---|---|---|
+| `std.time.now()` | `std.Time` | Current wall time |
+| `std.time.from_unix(sec)` | `std.Time` | Integer seconds → Time |
+| `std.time.from_unix_ms(ms)` | `std.Time` | Integer milliseconds → Time |
+| `std.time.parse(str, fmt)` | `std.Time` | Errors: `TypeError`/`RangeError` on bad input |
+| `std.time.sleep(ms)` | `null` | Best-effort; uses `poll_oneoff` on WASI |
+
+**Duration constants** (plain `int`, milliseconds):
+`std.time.ms` `std.time.second` `std.time.minute` `std.time.hour` `std.time.day`
+
+### Methods on `std.Time`
+
+| Method | Returns | Notes |
+|---|---|---|
+| `.unix()` | `int` | Whole seconds since epoch |
+| `.unix_ms()` | `int` | Same as raw value |
+| `.parts()` | `map` | Keys: `year month day hour min sec ms weekday` (0=Sunday) |
+| `.format(fmt)` | `string` | |
+| `.add_ms(n)` | `std.Time` | |
+| `.add_s(n)` | `std.Time` | |
+| `.add_m(n)` | `std.Time` | |
+| `.add_h(n)` | `std.Time` | |
+| `.sub(t2)` | `int` | ms difference, may be negative |
+| `.before(t2)` | `bool` | |
+| `.after(t2)` | `bool` | |
+| `.equal(t2)` | `bool` | |
+| `.is_zero()` | `bool` | |
+
+### Format verbs
+
+| Verb | Output | Verb | Output |
+|---|---|---|---|
+| `%Y` | year (4 digits) | `%H` | hour `00`–`23` |
+| `%m` | month `01`–`12` | `%M` | minute `00`–`59` |
+| `%d` | day `01`–`31` | `%S` | second `00`–`59` |
+| `%L` | millisecond `000`–`999` | `%A` | weekday name |
+| `%a` | short weekday | `%B` | month name |
+| `%b` | short month | `%%` | literal `%` |
+
+`parse` accepts: `%Y %m %d %H %M %S` only. All times are UTC.

@@ -1,0 +1,17 @@
+std := import("std")
+t := std.time.from_unix(1700000000)
+
+// add_ms, add_s, add_m, add_h
+std.io.println(t.add_ms(500).unix_ms())
+std.io.println(t.add_s(3600).unix())
+std.io.println(t.add_m(60).unix())
+std.io.println(t.add_h(1).unix())
+
+// sub
+t2 := t.add_s(3600)
+diff := t2.sub(t)
+std.io.println(diff)
+
+// Named type arithmetic
+std.io.println(std.core.type_of(t + 1000))
+std.io.println(t + 1000)

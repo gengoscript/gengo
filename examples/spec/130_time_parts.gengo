@@ -1,0 +1,12 @@
+std := import("std")
+t := std.time.from_unix(1700000000)
+
+p := t.parts()
+std.io.println(p.year)
+std.io.println(p.month)
+std.io.println(p.day)
+std.io.println(p.hour)
+std.io.println(p.min)
+std.io.println(p.sec)
+std.io.println(p.ms)
+std.io.println(p.weekday)

@@ -1,0 +1,2 @@
+std := import("std")
+std.time.parse("abc", "%Y")
