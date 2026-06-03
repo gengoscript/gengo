@@ -183,7 +183,7 @@ fn installWasmAs(
     exe: *std.Build.Step.Compile,
     dest_name: []const u8,
 ) *std.Build.Step.Run {
-    const step = b.addSystemCommand(&.{ "bash", "-c", "mkdir -p build && cp \"$1\" \"build/$2\"", "--" });
+    const step = b.addSystemCommand(&.{ "bash", "-c", "mkdir -p build && cp \"$1\" \"build/$2\" && if command -v wasm-opt >/dev/null 2>&1; then wasm-opt -O3 --strip-debug \"build/$2\" -o \"build/$2\"; fi", "--" });
     step.addFileArg(exe.getEmittedBin());
     step.addArg(dest_name);
     return step;
