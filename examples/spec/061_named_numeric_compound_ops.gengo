@@ -3,6 +3,11 @@ std := import("std")
 type Integer int range -2147483648 .. 2147483647
 type Age Integer range 0 .. 100
 
+// Boundary construction (from range inheritance)
+std.io.println(Age(0))
+std.io.println(Age(100))
+
+// Compound ops
 x := Age(99)
 x += 1
 std.io.println(x)

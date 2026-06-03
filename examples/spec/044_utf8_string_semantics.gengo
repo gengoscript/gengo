@@ -9,3 +9,10 @@ for i, ch in s {
   std.io.println(i)
   std.io.println(ch)
 }
+
+// Slice forms: half-open, prefix, suffix, full copy
+a := "hello world"
+std.io.println(a[1:5])
+std.io.println(a[:5])
+std.io.println(a[6:])
+std.io.println(a[:])
