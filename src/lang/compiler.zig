@@ -2742,10 +2742,6 @@ pub const Compiler = struct {
         const name = self.cur.src;
         self.advance();
         try self.consume(.rparen);
-        if (common.streq(name, "std")) {
-            try chunk.emitOp(.import_std, self.prev.line);
-            return;
-        }
         const ctx = self.options.module_ctx orelse return error.UnsupportedImportModule;
         const resolver = self.options.resolve_import orelse return error.UnsupportedImportModule;
         const mod_name = try resolver(ctx, self.options.module_path, name);

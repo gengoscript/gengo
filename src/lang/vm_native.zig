@@ -3,6 +3,8 @@ const common = @import("common.zig");
 const heap = @import("../runtime/heap.zig");
 const host_abi = @import("../runtime/host_abi.zig");
 const io = @import("../runtime/io.zig");
+const globals = @import("globals.zig");
+const module_compile = @import("module_compile.zig");
 const vms = @import("vm_state.zig");
 const vmgc = @import("vm_gc.zig");
 const vmmap = @import("vm_map.zig");
@@ -205,6 +207,12 @@ pub fn buildStdModule() !*Object {
     const std_obj = try makeNamespace("std", "@module_type:std", &std_entries);
     vms.vmState().std_module = std_obj;
     return std_obj;
+}
+
+pub fn installStdGlobal() !void {
+    if (globals.has(module_compile.StdModuleGlobalName)) return;
+    const std_obj = try buildStdModule();
+    try globals.def(module_compile.StdModuleGlobalName, .{ .object = std_obj });
 }
 
 fn nativeLen(v: Value) !Value {

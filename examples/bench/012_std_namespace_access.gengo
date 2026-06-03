@@ -1,0 +1,9 @@
+std := import("std")
+
+total := 0
+for i := -100000; i < 100000; i++ {
+    total = total + std.math.abs(i)
+}
+
+std.io.println("std-namespace-access")
+std.io.println(total)

@@ -4,6 +4,7 @@ const globals = @import("../lang/globals.zig");
 const heap = @import("heap.zig");
 const module_compile = @import("../lang/module_compile.zig");
 const vm = @import("../lang/vm.zig");
+const vmnative = @import("../lang/vm_native.zig");
 const Value = @import("../lang/value.zig").Value;
 
 const MaxFrames = @import("../runtime/config.zig").max_frames;
@@ -81,7 +82,12 @@ pub const Runtime = struct {
                 return err;
             };
         } else {
-            var compiler = Compiler.init(src, .{});
+            var session: module_compile.Session = .{};
+            session.provider = provider;
+            var compiler = Compiler.init(src, .{
+                .module_ctx = &session,
+                .resolve_import = module_compile.Session.resolveImportOpaque,
+            });
             compiler.compile(true) catch |err| {
                 self.last_compile_line = compiler.prev.line;
                 self.setLastCompilePath("");
@@ -89,6 +95,7 @@ pub const Runtime = struct {
             };
         }
 
+        try vmnative.installStdGlobal();
         vm.run() catch |err| {
             self.last_runtime_line = vm.panicLine();
             self.last_runtime_col = vm.panicCol();
@@ -111,13 +118,18 @@ pub const Runtime = struct {
         chunk.reset();
         vm.resetExec();
 
-        var compiler = Compiler.init(src, .{});
+        var session: module_compile.Session = .{};
+        var compiler = Compiler.init(src, .{
+            .module_ctx = &session,
+            .resolve_import = module_compile.Session.resolveImportOpaque,
+        });
         compiler.compile(true) catch |err| {
             self.last_compile_line = compiler.prev.line;
             self.setLastCompilePath("");
             return err;
         };
 
+        try vmnative.installStdGlobal();
         vm.run() catch |err| {
             self.last_runtime_line = vm.panicLine();
             self.last_runtime_col = vm.panicCol();

@@ -1485,10 +1485,6 @@ fn runInner() !void {
                     else => return error.TypeError,
                 }
             },
-            .import_std => {
-                const std_obj = try vmnative.buildStdModule();
-                try vmPush(.{ .object = std_obj });
-            },
             .iter_init => {
                 const v = try vmPop();
                 try vmPush(try iterInit(v));

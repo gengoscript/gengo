@@ -12,6 +12,8 @@ const source_io = @import("../runtime/source_io.zig");
 pub const MaxModules = 64;
 pub const MaxImportsPerModule = 64;
 pub const MaxModulePathBytes = 256;
+pub const StdModulePath = "std";
+pub const StdModuleGlobalName = "@module:std";
 
 pub const SourceEntry = struct {
     path: []const u8,
@@ -70,6 +72,7 @@ pub const Session = struct {
     pub fn resolveImportOpaque(ctx: *anyopaque, importer_path: []const u8, import_name: []const u8) anyerror![]const u8 {
         const self: *Session = @ptrCast(@alignCast(ctx));
         const resolved = try self.resolveImportPath(importer_path, import_name);
+        if (common.streq(resolved, StdModulePath)) return StdModuleGlobalName;
         try self.compileModuleFromPath(resolved);
         return self.moduleGlobalName(resolved) orelse return error.ImportNotFound;
     }
@@ -222,6 +225,7 @@ pub const Session = struct {
     }
 
     fn resolveImportPath(self: *Session, importer_path: []const u8, import_name: []const u8) ![]const u8 {
+        if (common.streq(import_name, StdModulePath)) return StdModulePath;
         if (import_name.len == 0) return error.ImportNotFound;
         if (!(import_name[0] == '.')) return error.UnsupportedImportModule;
 

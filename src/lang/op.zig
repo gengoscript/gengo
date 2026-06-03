@@ -77,7 +77,6 @@ pub const Op = enum(u8) {
     iter_next2,
     make_closure,
     invoke_method,
-    import_std,
     jump,
     jump_if_false,
     jif_pop,          // pop condition then jump if it was falsy; used by if/while/for/switch
