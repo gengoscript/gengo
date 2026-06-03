@@ -115,6 +115,50 @@ fn printSourceLine(src: []const u8, line: u32, col: u32) void {
     }
 }
 
+// Isolated to keep runCli's frame small. Runtime is heap-allocated because its
+// size grows with the active preset and can exceed the WASM shadow stack limit.
+fn runReplMode(backend: vm.Policy.NativeBackend, max_ops: ?u64) noreturn {
+    const repl_rt = std.heap.page_allocator.create(Runtime) catch {
+        io.werr("gengo: out of memory\n");
+        die(1);
+    };
+    repl_rt.initWithPolicy(.{
+        .allow_io = true,
+        .native_backend = backend,
+        .max_ops = max_ops,
+    });
+    io.write("Gengo REPL  (Ctrl+D to exit)\n");
+    while (true) {
+        io.write("> ");
+        const line = readLine(g_src_buf[0..]) orelse break;
+        if (line.len == 0) continue;
+        repl_rt.runIncremental(line) catch |err| {
+            if (repl_rt.last_compile_line != 0) {
+                io.werr("compile error: ");
+                if (repl_rt.last_compile_msg_len > 0) {
+                    io.werr(repl_rt.last_compile_msg_buf[0..repl_rt.last_compile_msg_len]);
+                    io.werr("\n     --> line ");
+                    io.writeInt(@intCast(repl_rt.last_compile_line));
+                    if (repl_rt.last_compile_col > 0) {
+                        io.werr(":");
+                        io.writeInt(@intCast(repl_rt.last_compile_col));
+                    }
+                    io.werr("\n");
+                } else {
+                    io.werr(@errorName(err));
+                    io.werr("\n");
+                }
+            } else {
+                io.werr("error: ");
+                io.werr(@errorName(err));
+                io.werr("\n");
+            }
+        };
+    }
+    io.write("\n");
+    die(0);
+}
+
 fn runCli(argv: []const []const u8) void {
     var script_path: ?[]const u8 = null;
     var script_name: []const u8 = "<stdin>";
@@ -170,42 +214,9 @@ fn runCli(argv: []const []const u8) void {
     }
 
     // REPL: enter interactive mode when no file is given and stdin is a terminal.
+    // Runs in a separate function so this frame never holds two Runtimes at once.
     if (script_path == null and stdinIsTerminal()) {
-        var repl_rt = Runtime.withPolicy(.{
-            .allow_io = true,
-            .native_backend = backend,
-            .max_ops = max_ops,
-        });
-        io.write("Gengo REPL  (Ctrl+D to exit)\n");
-        while (true) {
-            io.write("> ");
-            const line = readLine(g_src_buf[0..]) orelse break;
-            if (line.len == 0) continue;
-            repl_rt.runIncremental(line) catch |err| {
-                if (repl_rt.last_compile_line != 0) {
-                    io.werr("compile error: ");
-                    if (repl_rt.last_compile_msg_len > 0) {
-                        io.werr(repl_rt.last_compile_msg_buf[0..repl_rt.last_compile_msg_len]);
-                        io.werr("\n     --> line ");
-                        io.writeInt(@intCast(repl_rt.last_compile_line));
-                        if (repl_rt.last_compile_col > 0) {
-                            io.werr(":");
-                            io.writeInt(@intCast(repl_rt.last_compile_col));
-                        }
-                        io.werr("\n");
-                    } else {
-                        io.werr(@errorName(err));
-                        io.werr("\n");
-                    }
-                } else {
-                    io.werr("error: ");
-                    io.werr(@errorName(err));
-                    io.werr("\n");
-                }
-            };
-        }
-        io.write("\n");
-        die(0);
+        runReplMode(backend, max_ops);
     }
 
     const total = readSource(script_path, &g_src_buf) catch {
@@ -220,7 +231,11 @@ fn runCli(argv: []const []const u8) void {
     };
     const src = g_src_buf[0..total];
 
-    var runtime = Runtime.withPolicy(.{
+    const runtime = std.heap.page_allocator.create(Runtime) catch {
+        io.werr("gengo: out of memory\n");
+        die(1);
+    };
+    runtime.initWithPolicy(.{
         .allow_io = true,
         .native_backend = backend,
         .max_ops = max_ops,

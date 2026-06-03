@@ -88,15 +88,16 @@ fn runInstructionBudgetExceeded() !void {
 }
 
 fn runRuntimeIsolation() !void {
-    var rt1 = Runtime.init();
-    rt1.setPolicy(.{ .allow_io = false, .native_backend = .embedded });
+    const alloc = std.heap.page_allocator;
+    const rt1 = try alloc.create(Runtime);
+    rt1.initWithPolicy(.{ .allow_io = false, .native_backend = .embedded });
     try rt1.run(
         \\x := 11
         \\func read() int { return x }
     );
 
-    var rt2 = Runtime.init();
-    rt2.setPolicy(.{ .allow_io = false, .native_backend = .embedded });
+    const rt2 = try alloc.create(Runtime);
+    rt2.initWithPolicy(.{ .allow_io = false, .native_backend = .embedded });
     try rt2.run(
         \\x := 99
         \\func read() int { return x }

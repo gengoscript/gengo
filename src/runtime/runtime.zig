@@ -1,3 +1,4 @@
+const std = @import("std");
 const Compiler = @import("../lang/compiler.zig").Compiler;
 const chunk = @import("../lang/chunk.zig");
 const globals = @import("../lang/globals.zig");
@@ -45,6 +46,22 @@ pub const Runtime = struct {
         var rt = init();
         rt.policy = policy;
         return rt;
+    }
+
+    // Initialize this Runtime in-place without allocating a large stack temporary.
+    // Use this instead of withPolicy() when the Runtime is already heap-allocated
+    // or when the shadow stack is too small to hold a temporary copy (e.g. WASM with large presets).
+    pub fn initWithPolicy(self: *Runtime, policy: vm.Policy) void {
+        @memset(std.mem.asBytes(self), 0);
+        self.policy = policy;
+        chunk.setActive(&self.chunk_state);
+        globals.setActive(&self.globals_state);
+        chunk.reset();
+        globals.reset();
+        heap.setActive(&self.heap_state);
+        vm.setActive(&self.vm_state);
+        vm.reset();
+        heap.reset();
     }
 
     pub fn setPolicy(self: *Runtime, policy: vm.Policy) void {

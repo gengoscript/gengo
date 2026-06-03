@@ -54,6 +54,18 @@ pub const Runtime = struct {
         };
     }
 
+    // In-place initializer: no large stack temporary. Use when the Runtime is
+    // heap-allocated and the shadow stack cannot hold a full Runtime value.
+    pub fn initWithPolicy(self: *Runtime, config: Config) void {
+        self.inner.initWithPolicy(.{
+            .allow_io = config.allow_io,
+            .native_backend = config.native_backend,
+            .max_ops = config.max_ops,
+        });
+        self.module_sources = config.module_sources;
+        self.module_source_provider = config.module_source_provider;
+    }
+
     pub fn reset(self: *Runtime) void {
         self.inner.reset();
     }

@@ -200,6 +200,7 @@ fn addWasmExe(
     });
     exe.entry = .disabled;
     exe.rdynamic = true;
+    exe.stack_size = 4 * 1024 * 1024;
     exe.step.dependOn(depends_on);
     return exe;
 }

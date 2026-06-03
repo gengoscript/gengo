@@ -21,8 +21,14 @@ fn fail(msg: []const u8) noreturn {
     std.os.wasi.proc_exit(1);
 }
 
+fn makeRt(config: api.Config) *api.Runtime {
+    const rt = std.heap.page_allocator.create(api.Runtime) catch fail("embedding: out of memory\n");
+    rt.initWithPolicy(config);
+    return rt;
+}
+
 fn expectCompileError() void {
-    var rt = api.Runtime.init(.{ .allow_io = false });
+    const rt = makeRt(.{ .allow_io = false });
     const res = rt.run(
         \\std := import("std")
         \\x :=
@@ -36,7 +42,7 @@ fn expectCompileError() void {
 }
 
 fn expectRuntimeError() void {
-    var rt = api.Runtime.init(.{ .allow_io = false });
+    const rt = makeRt(.{ .allow_io = false });
     const res = rt.run(
         \\func bad() int { return 1 + "x" }
     );
@@ -54,7 +60,7 @@ fn expectRuntimeError() void {
 }
 
 fn expectCallAndStatePersistence() void {
-    var rt = api.Runtime.init(.{ .allow_io = false });
+    const rt = makeRt(.{ .allow_io = false });
     const res = rt.run(
         \\counter := 0
         \\func bump() int {
@@ -76,7 +82,7 @@ fn expectCallAndStatePersistence() void {
 }
 
 fn expectMaxOps() void {
-    var rt = api.Runtime.init(.{ .allow_io = false, .max_ops = 64 });
+    const rt = makeRt(.{ .allow_io = false, .max_ops = 64 });
     const res = rt.run(
         \\for true {
         \\}
@@ -112,7 +118,7 @@ fn expectRunPathWithSources() void {
             ,
         },
     };
-    var rt = api.Runtime.init(.{
+    const rt = makeRt(.{
         .allow_io = false,
         .module_sources = &sources,
     });
@@ -147,7 +153,7 @@ fn expectRunPathWithSourceProvider() void {
         },
     };
     const set = MemorySourceSet{ .entries = &entries };
-    var rt = api.Runtime.init(.{ .allow_io = false });
+    const rt = makeRt(.{ .allow_io = false });
     const res = rt.runPathWithSourceProvider(
         \\math := import("./math")
         \\func read() int {
