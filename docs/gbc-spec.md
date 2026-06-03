@@ -1,8 +1,12 @@
 # Gengo Bytecode Cache — File Format Specification
 
 **Status:** Draft  
-**Version:** 0.1  
+**Version:** 0.2  
 **Scope:** GBC artifact only (see §2 for artifact class definitions)
+
+**Revision history**
+- 0.1 — Initial draft
+- 0.2 — Rename `stdlib_hash` → `module_provider_hash`; add `resolved_id` and `artifact_hash` to dependency entries; add `bytecode_length` and `local_count` to function entries; add `Bool` and `Rune` constant tags; rewrite `FieldTypeAlt` as per-tag encodings; fix `options_hash` canonical encoding widths; remove mutual-exclusion rule for `CHECKED_ARITHMETIC`/`OPTIMISED` from format; clarify header-size compatibility (no smaller-than-required); reorder validation phases; note f64 bounds limitation; note script/module philosophy
 
 ---
 
@@ -39,7 +43,7 @@
    - 9.2 [FieldTypeAlt](#92-fieldtypealt)
 10. [Native Function Resolution](#10-native-function-resolution)
 11. [Validation Rules](#11-validation-rules)
-    - 11.1 [Ordered Checks](#111-ordered-checks)
+    - 11.1 [Validation Phases](#111-validation-phases)
     - 11.2 [Error Handling](#112-error-handling)
 12. [Version Compatibility Policy](#12-version-compatibility-policy)
 13. [Dependency and Module Graph Hashing](#13-dependency-and-module-graph-hashing)
@@ -62,6 +66,10 @@ Loading a valid GBC file into a fresh VM must be equivalent to compiling the ori
 ### What a GBC file is not
 
 A GBC file is not a **snapshot** of a running VM. Serialising the live object heap, global variable values, open file handles, allocator state, or GC metadata is explicitly out of scope for this format. That is a separate artifact class (§14).
+
+### Script vs module philosophy
+
+The intent is that every Gengo source file is module-shaped. An `ENTRY_SCRIPT` artifact is a module that also carries executable top-level code — it is not a fundamentally different kind of entity. The distinction is operational (how the host runs it) rather than structural (what the artifact contains). Future versions of this format should converge `ENTRY_SCRIPT` and `ENTRY_MODULE`: a script is a module with an entrypoint, and a module with public declarations is importable regardless of whether it also has a top-level body.
 
 ---
 
@@ -126,7 +134,7 @@ Arrays are encoded as `u32` element count followed by elements. Optional fields 
 └─────────────────────────────┘
 ```
 
-The magic bytes appear at file offset 0 and are not part of the header. The header begins at offset 8. The body begins at offset `header_size` (as stored in the header). The body checksum in the header covers all bytes from `header_size` to `header_size + body_length - 1`.
+The magic bytes appear at file offset 0 and are not part of the header. The header begins at offset 8. The body begins at offset `header_size` (as stored in the header). The body checksum covers all bytes from offset `header_size` through `header_size + body_length - 1` inclusive.
 
 ---
 
@@ -139,7 +147,7 @@ The magic bytes appear at file offset 0 and are not part of the header. The head
 
 8 bytes, at file offset 0.
 
-The high bit of the first byte (`\x89`) flags this as a binary file and causes rejection by any tool treating it as ASCII text. The `\r\n` sequence (`0D 0A`) followed by `\n` (`0A`) is designed to detect line-ending mangling: any text-mode copy operation that converts `\r\n` to `\n` or `\n` to `\r\n` will corrupt this pattern and be caught on load. The `\x1a` is the MS-DOS end-of-file marker; its presence prevents some tools from reading the file as text. This design is borrowed from PNG.
+The high bit of the first byte (`\x89`) flags this as a binary file and causes rejection by any tool treating it as ASCII text. The `\r\n` sequence (`0D 0A`) followed by `\n` (`0A`) detects line-ending mangling: any text-mode copy operation that converts `\r\n` to `\n` or vice versa will corrupt this pattern. The `\x1a` is the MS-DOS end-of-file marker and prevents some tools from reading the file as text. This design is borrowed from PNG.
 
 A loader must reject any file whose first 8 bytes do not exactly match this sequence.
 
@@ -147,15 +155,17 @@ A loader must reject any file whose first 8 bytes do not exactly match this sequ
 
 ## 6. Header
 
-The header begins at file offset 8. Its size is given by the `header_size` field at offset 8. The header includes the `header_size` field itself.
+The header begins at file offset 8. Its total size in bytes — including the `header_size` field itself and the magic is not included — is given by `header_size`.
 
-A loader that reads a header with `header_size` larger than it knows about must skip the unknown trailing bytes rather than rejecting the file, unless `header_version` indicates a breaking change. A loader that reads a header with `header_size` smaller than the current layout must treat all missing fields as having their defined default values (typically zero).
+**Forward compatibility:** If a loader reads a header whose `header_size` is larger than the layout this document defines, it must skip the unknown trailing bytes (treating them as reserved). It must not reject the file solely because of a larger header, provided `header_version` is within the supported range.
+
+**No smaller-than-required headers:** `header_size` must be at least the minimum size required by `header_version`. Smaller-than-required headers are invalid and must be rejected. Defaulting missing hash fields to zero is not permitted — a missing `vm_fingerprint`, `source_graph_hash`, or `options_hash` would produce false cache hits.
 
 ### 6.1 Field Definitions
 
 | File offset | Header offset | Size | Type | Field | Description |
 |-------------|---------------|------|------|-------|-------------|
-| 8 | 0 | 2 | `u16` | `header_size` | Total header size in bytes including this field. Current value: 192. |
+| 8 | 0 | 2 | `u16` | `header_size` | Total header size in bytes. Current minimum for `header_version` 1: 192. |
 | 10 | 2 | 2 | `u16` | `header_version` | Version of this header layout. Current value: 1. |
 | 12 | 4 | 2 | `u16` | `format_major` | Bytecode format major version. |
 | 14 | 6 | 2 | `u16` | `format_minor` | Bytecode format minor version. |
@@ -165,27 +175,27 @@ A loader that reads a header with `header_size` larger than it knows about must 
 | 24 | 16 | 4 | `u32` | `target_id` | Target platform identifier. See §6.3. |
 | 28 | 20 | 4 | `u32` | `backend_id` | Bytecode backend identifier. See §6.4. |
 | 32 | 24 | 2 | `u16` | `entry_kind` | Entry kind of this artifact. See §6.5. |
-| 34 | 26 | 6 | — | `_reserved` | Must be zero. Reject if nonzero on load. |
-| 40 | 32 | 8 | `i64` | `compiled_at` | Unix timestamp (seconds) of compilation. Debug and logging only. Never used for cache invalidation. |
+| 34 | 26 | 6 | — | `_reserved` | Must be zero. Reject if nonzero. |
+| 40 | 32 | 8 | `i64` | `compiled_at` | Unix timestamp (seconds) of compilation. **Debug and logging only. Never used for cache invalidation.** |
 | 48 | 40 | 32 | `hash32` | `source_graph_hash` | SHA-256 of the source graph. See §6.6. |
-| 80 | 72 | 32 | `hash32` | `vm_fingerprint` | SHA-256 identifying the runtime VM. See §6.6. |
-| 112 | 104 | 32 | `hash32` | `stdlib_hash` | SHA-256 identifying the stdlib/module-provider. See §6.6. |
-| 144 | 136 | 32 | `hash32` | `options_hash` | SHA-256 of the canonical compiler options. See §6.6. |
+| 80 | 72 | 32 | `hash32` | `vm_fingerprint` | SHA-256 identifying the runtime VM binary. See §6.6. |
+| 112 | 104 | 32 | `hash32` | `module_provider_hash` | SHA-256 identifying the module provider / stdlib. See §6.6. |
+| 144 | 136 | 32 | `hash32` | `options_hash` | SHA-256 of the canonical compiler options encoding. See §6.6. |
 | 176 | 168 | 8 | `u64` | `body_length` | Length of the body in bytes. |
 | 184 | 176 | 8 | `u64` | `body_checksum` | xxHash64 of the body bytes. |
 
-Total defined header size: **192 bytes** (file offset 8 through 199 inclusive).
+Total defined header size for `header_version` 1: **192 bytes** (file offsets 8–199 inclusive).
 
 ### 6.2 Flags Bitfield
 
 | Bit | Mask | Name | Description |
 |-----|------|------|-------------|
-| 0 | `0x0001` | `DEBUG_INFO` | DEBUG\_SPANS and/or DEBUG\_NAMES sections are present. |
+| 0 | `0x0001` | `DEBUG_INFO` | `DEBUG_SPANS` and/or `DEBUG_NAMES` sections are present. |
 | 1 | `0x0002` | `CHECKED_ARITHMETIC` | Range constraint checks are enabled (dev/checked mode). |
 | 2 | `0x0004` | `OPTIMISED` | Compiled with optimisation enabled (release mode). |
 | 3–31 | — | `RESERVED` | Must be zero. Reject if any reserved bit is set. |
 
-`CHECKED_ARITHMETIC` and `OPTIMISED` must not both be set simultaneously.
+`CHECKED_ARITHMETIC` and `OPTIMISED` are independent flags. The compiler may reject that combination at invocation time as a policy decision, but the format imposes no such restriction. Both bits set is a valid encoding that a loader must accept if the compiler permits it.
 
 ### 6.3 Target Identifiers
 
@@ -212,16 +222,18 @@ All other values are reserved and must cause rejection.
 | Value | Constant | Description |
 |-------|----------|-------------|
 | `0x0000` | `ENTRY_UNSPECIFIED` | Invalid; reject. |
-| `0x0001` | `ENTRY_SCRIPT` | Top-level script. No explicit exports. Globals are file-private. |
-| `0x0002` | `ENTRY_MODULE` | Module artifact. Has an EXPORTS section. Importable by other modules. |
+| `0x0001` | `ENTRY_SCRIPT` | Module with executable top-level body. No required EXPORTS section, but may have one if public declarations exist. |
+| `0x0002` | `ENTRY_MODULE` | Importable module artifact. Must have an EXPORTS section. |
 | `0x0003` | `ENTRY_REPL_CELL` | REPL fragment. Depends on ambient REPL state; not independently loadable. |
 | `0x0004` | `ENTRY_TEST` | Test artifact. |
+
+See §1 for the rationale for treating scripts and modules as the same underlying shape.
 
 ### 6.6 Hash Fields
 
 **`source_graph_hash`**
 
-For a single-file source with no non-stdlib imports:
+For a single-file source with no file imports:
 ```
 source_graph_hash = SHA-256(source_text_utf8)
 ```
@@ -230,44 +242,46 @@ For a source that imports other files (once file imports are implemented):
 ```
 source_graph_hash = SHA-256(
   root_source_text_utf8 ||
-  for each resolved import in topological order:
-    resolved_specifier_utf8 || SHA-256(dependency_source_text_utf8)
+  for each resolved file dependency in stable topological order:
+    resolved_id_utf8 || source_hash_of_dependency
 )
 ```
 
-The stdlib is not included in `source_graph_hash` because it is covered by `stdlib_hash`. The hashing order is canonical (topological, stable) and must not depend on filesystem ordering or discovery order.
+The stdlib is not included in `source_graph_hash` because it is covered by `module_provider_hash`. The topological ordering must be canonical and must not depend on filesystem ordering, discovery order, or any non-deterministic factor.
 
 **`vm_fingerprint`**
 
-For WASM32\_WASI targets, this is `SHA-256(gengo-runtime.wasm)` — the same hash computed by `playground/deploy.sh`. For other targets, it is a build-ID or host-supplied ABI fingerprint agreed upon between compiler and loader.
+For `TARGET_WASM32_WASI`: `SHA-256(gengo-runtime.wasm)` — the same hash computed by `playground/deploy.sh`.
 
-The vm\_fingerprint must change whenever the bytecode instruction set changes, the opcode encoding changes, the native function binding table changes, or any other change would cause existing bytecode to execute differently.
+For other targets: a build-ID, git commit hash, or host-supplied ABI fingerprint agreed upon between compiler and loader. The important property is that this value changes whenever the bytecode instruction set changes, opcode encoding changes, native function binding table changes, or any other change would cause existing bytecode to produce different results.
 
-**`stdlib_hash`**
+This field is named `vm_fingerprint` rather than "runtime WASM hash" because it must work for non-WASM targets.
 
-When the stdlib is compiled into the runtime binary (current state), set `stdlib_hash` to the same value as `vm_fingerprint`. When the stdlib ships as a separate module provider, set `stdlib_hash` to `SHA-256(stdlib_binary)` independently.
+**`module_provider_hash`**
+
+Identifies the set of modules and native bindings available at runtime.
+
+For the current runtime, where `std` and all native providers are compiled into the runtime binary:
+```
+module_provider_hash = vm_fingerprint
+```
+
+Once stdlib ships as a separate binary or module providers become independently versioned:
+```
+module_provider_hash = SHA-256(stdlib_binary || provider_registry_canonical_encoding)
+```
+
+Rationale for a separate field: `vm_fingerprint` covers the VM instruction interpreter; `module_provider_hash` covers what the bytecode can call. When these are the same binary they are the same value, but they must remain separate fields to allow them to evolve independently.
 
 **`options_hash`**
 
-SHA-256 of a canonical encoding of all compiler options that affect code generation. The canonical encoding is:
-
-```
-options_hash = SHA-256(
-  u8(target_id) ||
-  u8(backend_id) ||
-  u8(1 if CHECKED_ARITHMETIC else 0) ||
-  u8(1 if OPTIMISED else 0)
-  [... additional options appended as they are added ...]
-)
-```
-
-The canonical encoding must be appended to, never reordered. New options are appended with a defined default value that preserves the hash of existing option sets if the new option is at its default.
+SHA-256 of the canonical compiler options encoding (see §12 for encoding rules). Must change whenever any option that affects code generation changes.
 
 ---
 
 ## 7. Body Structure
 
-The body begins at file byte offset `header_size` and is exactly `body_length` bytes long. The body checksum in the header must equal `xxHash64(body_bytes)` before any further parsing.
+The body begins at file byte offset `header_size` and is exactly `body_length` bytes long. The `body_checksum` must equal `xxHash64(body_bytes)`. The checksum must be verified before any section is parsed.
 
 ### 7.1 Section Table
 
@@ -289,36 +303,36 @@ SectionEntry {
 }
 ```
 
-Section data begins at `body_start + entry.offset`. Sections may appear in any order. The section table itself has no minimum ordering requirement, but by convention sections are written in the order listed in §7.2.
+Section data begins at `body_start + entry.offset`. Sections may appear in any order. The section table itself has no required ordering, but by convention sections are written in the order listed in §7.2.
 
-Offsets must not overlap. A loader must reject a file where any two sections have overlapping byte ranges.
+Section byte ranges must not overlap. A loader must reject a file where any two sections have overlapping byte ranges.
 
 ### 7.2 Section Identifiers
 
-| `section_id` | Constant | Required | Description |
-|--------------|----------|----------|-------------|
-| `0x0001` | `SEC_BYTECODE` | Yes | Raw instruction stream. |
-| `0x0002` | `SEC_CONSTANTS` | Yes | Constant pool. |
-| `0x0003` | `SEC_FUNCTIONS` | Yes | Function metadata table. |
-| `0x0004` | `SEC_NATIVE_IMPORTS` | Yes | Native function binding declarations. |
-| `0x0005` | `SEC_EXPORTS` | MODULE only | Exported name table. |
-| `0x0006` | `SEC_TYPES` | Yes | Type definitions (struct, named, enum, interface, variant). |
-| `0x0007` | `SEC_DEPENDENCY_TABLE` | Yes | Import specifiers and dependency hashes. |
-| `0x0100` | `SEC_DEBUG_SPANS` | No | Source location spans for each instruction. |
-| `0x0101` | `SEC_DEBUG_NAMES` | No | Variable and local names for debugging. |
-| `0x8000`–`0xFFFF` | Vendor | No | Vendor or extension sections. |
+| `section_id` | Constant | Entry kinds | Description |
+|--------------|----------|-------------|-------------|
+| `0x0001` | `SEC_BYTECODE` | All | Raw instruction stream. |
+| `0x0002` | `SEC_CONSTANTS` | All | Constant pool. |
+| `0x0003` | `SEC_FUNCTIONS` | All | Function metadata table. |
+| `0x0004` | `SEC_NATIVE_IMPORTS` | All | Native function binding declarations. |
+| `0x0005` | `SEC_EXPORTS` | MODULE, optionally SCRIPT | Exported name table. |
+| `0x0006` | `SEC_TYPES` | All | Type definitions. |
+| `0x0007` | `SEC_DEPENDENCY_TABLE` | All | Import specifiers and dependency hashes. |
+| `0x0100` | `SEC_DEBUG_SPANS` | All (opt.) | Source location spans per instruction. |
+| `0x0101` | `SEC_DEBUG_NAMES` | All (opt.) | Variable names for debugging. |
+| `0x8000`–`0xFFFF` | Vendor | — | Vendor or extension sections. |
 
 ### 7.3 Required vs Optional Sections
 
-The `flags` field of each `SectionEntry` controls handling of unknown sections:
+The low bit of the `flags` field in each `SectionEntry` controls handling of unknown sections:
 
-| Bit | Name | Description |
-|-----|------|-------------|
+| Bit | Name | Meaning |
+|-----|------|---------|
 | 0 | `REQUIRED` | Loader must reject if it does not understand this section. |
 
-If `REQUIRED` is not set and the loader does not recognise `section_id`, it must skip the section silently. This enables forward-compatible extensions.
+If `REQUIRED` is not set and the loader does not recognise `section_id`, it must skip the section silently.
 
-All sections in §7.2 marked "Yes" must be present with `REQUIRED` set. A loader must reject a file missing any required section.
+All sections marked "All" in §7.2 must be present with `REQUIRED` set. `SEC_EXPORTS` must be present and REQUIRED for `ENTRY_MODULE`; for `ENTRY_SCRIPT` it is optional and may be absent.
 
 ---
 
@@ -326,45 +340,38 @@ All sections in §7.2 marked "Yes" must be present with `REQUIRED` set. A loader
 
 ### 8.1 BYTECODE
 
-The raw instruction stream as emitted by the compiler. This is an opaque byte sequence from the perspective of the format; its interpretation is defined by the bytecode instruction set reference for the `format_major`/`format_minor` version pair.
+The raw instruction stream as emitted by the compiler. Opaque to the format; its interpretation is defined by the instruction set reference for the `format_major`/`format_minor` version pair.
 
 ```
 bytecode_bytes : [section.length]u8
 ```
 
-No wrapper. The section length equals the number of instruction bytes.
-
-Function entries in SEC\_FUNCTIONS reference byte offsets into this section.
+No wrapper. Section length equals the number of instruction bytes. Function entries in `SEC_FUNCTIONS` reference byte offsets and lengths within this section.
 
 ### 8.2 CONSTANTS
 
-The constant pool. Each constant is prefixed by a tag byte.
+The constant pool.
 
 ```
 constant_count : u32
 constants      : [constant_count]Constant
 ```
 
-Each `Constant`:
+Each `Constant` is a tag byte followed by tag-specific data:
 
-```
-Constant {
-  tag   : u8
-  value : ...  // tag-dependent
-}
-```
+| Tag | Value | Data | Description |
+|-----|-------|------|-------------|
+| `NUMBER` | `0x01` | `f64` | IEEE 754 double. |
+| `STRING` | `0x02` | `str` | UTF-8 string. |
+| `NULL` | `0x03` | — | No data bytes. |
+| `BOOL` | `0x04` | `bool8` | Boolean value. |
+| `RUNE` | `0x05` | `u32` | Unicode code point (0–0x10FFFF). Reject values outside this range. |
 
-| Tag | Value | Encoding |
-|-----|-------|----------|
-| `0x01` | Number | `f64` (8 bytes) |
-| `0x02` | String | `str` (u32 length + UTF-8 bytes) |
-| `0x03` | Null | No value bytes. |
-
-Constants are indexed from 0. Instructions that reference constants by index use `u16` or `u32` indices as specified in the instruction set.
+Constants are indexed from 0. Instructions reference constants by `u16` or `u32` index as defined in the instruction set.
 
 ### 8.3 FUNCTIONS
 
-The function metadata table. Each entry describes one compiled function (including closures and anonymous functions).
+Metadata for every compiled function, including closures and anonymous functions.
 
 ```
 function_count : u32
@@ -375,28 +382,32 @@ Each `FunctionEntry`:
 
 ```
 FunctionEntry {
-  name_constant_idx    : u32    // constant index for string name; 0xFFFFFFFF = anonymous
-  bytecode_offset      : u32    // byte offset into BYTECODE section
-  arity                : u8
-  is_variadic          : bool8
-  variadic_type        : TypeSpec
-  has_typed_params     : bool8
-  has_typed_returns    : bool8
-  named_return_count   : u8
-  param_type_count     : u16
-  param_types          : [param_type_count]TypeSpec
-  return_type_count    : u16
-  return_types         : [return_type_count]TypeSpec
-  capture_slot_count   : u8
-  capture_slots        : [capture_slot_count]u8
+  name_constant_idx  : u32      // index into CONSTANTS for name str; 0xFFFFFFFF = anonymous
+  bytecode_offset    : u32      // byte offset into BYTECODE section
+  bytecode_length    : u32      // byte length of this function's instructions
+  local_count        : u16      // number of local variable slots (includes parameters)
+  arity              : u8
+  is_variadic        : bool8
+  variadic_type      : TypeSpec
+  has_typed_params   : bool8
+  has_typed_returns  : bool8
+  named_return_count : u8
+  param_type_count   : u16
+  param_types        : [param_type_count]TypeSpec
+  return_type_count  : u16
+  return_types       : [return_type_count]TypeSpec
+  capture_slot_count : u8
+  capture_slots      : [capture_slot_count]u8
 }
 ```
 
-Function indices in this table are referenced by the bytecode via the instruction set (e.g., `make_closure` instructions).
+`bytecode_offset + bytecode_length` must not exceed the length of the `SEC_BYTECODE` section. Function byte ranges within BYTECODE may overlap (closures sharing outer code are not required to be separate ranges), but each `FunctionEntry` must reference a valid byte range.
+
+`local_count` includes parameter slots. The VM uses this to allocate the call frame.
 
 ### 8.4 NATIVE\_IMPORTS
 
-Declarations of all native (host-provided) functions referenced by this artifact. Native functions must be resolved symbolically at load time; they are never stored as raw function pointers or integer IDs that could become stale.
+Declarations of all native (host-provided) functions referenced by this artifact. Native functions are resolved symbolically at load time; they are never stored as raw function pointers or implementation-internal integer IDs.
 
 ```
 native_import_count : u32
@@ -413,15 +424,13 @@ NativeImportEntry {
 }
 ```
 
-On load, the runtime looks up each `symbolic_id` in the current native function registry. If any declared import is not found, or if `arity` does not match, the load must fail with an explicit error naming the missing binding. The loader must not partially initialise the VM and then attempt to run.
+On load, the runtime looks up each `symbolic_id` in the current native function registry. If not found, or if `arity` does not match the current binding, the load must fail (see §10).
 
-Native import entries are referenced by index from bytecode instructions that invoke native functions. The index in the GBC file may differ from the `NativeFuncObj.id` used internally; the loader builds the mapping table at load time.
-
-**Rationale:** Storing numeric native IDs directly (as currently used in the VM) would make artifacts silently incorrect after any reordering of the native function table. Symbolic IDs make the dependency explicit and detectable.
+Native import entries are referenced by index from bytecode instructions. The GBC index may differ from the runtime's internal native ID; the loader builds the mapping table at load time before any bytecode executes.
 
 ### 8.5 EXPORTS
 
-Present only for `ENTRY_MODULE` artifacts. Lists the public names this module exports and the qualified global name each refers to.
+Present for `ENTRY_MODULE` artifacts; optional for `ENTRY_SCRIPT`. Lists the public names this artifact exports.
 
 ```
 export_count : u32
@@ -432,82 +441,104 @@ Each `ExportEntry`:
 
 ```
 ExportEntry {
-  exported_name    : str   // the name importers use
-  qualified_name   : str   // the internal qualified global name
+  exported_name  : str   // the name importers use
+  qualified_name : str   // the internal qualified global name
 }
 ```
 
 ### 8.6 TYPES
 
-All user-defined types declared in this artifact. Serialised before bytecode execution so the runtime can resolve type metadata without running any bytecode.
+All user-defined types declared in this artifact. Serialised so the runtime can resolve type metadata without executing any bytecode.
 
 ```
 type_count : u32
 types      : [type_count]TypeEntry
 ```
 
-Each `TypeEntry` begins with a kind tag:
+Each `TypeEntry` begins with a kind byte:
 
 ```
 TypeEntry {
-  kind           : u8    // see table below
+  kind           : u8
   name           : str
   qualified_name : str
-  // kind-specific fields follow
+  // kind-specific fields follow (see below)
 }
 ```
 
-| Kind | Value | Description |
-|------|-------|-------------|
-| `STRUCT` | `0x01` | Struct type |
-| `NAMED` | `0x02` | Named scalar type (int, float, string, etc.) |
-| `ENUM` | `0x03` | Enum type |
-| `INTERFACE` | `0x04` | Interface type |
-| `VARIANT` | `0x05` | Variant (tagged union) type |
+| Kind | Value |
+|------|-------|
+| `STRUCT` | `0x01` |
+| `NAMED` | `0x02` |
+| `ENUM` | `0x03` |
+| `INTERFACE` | `0x04` |
+| `VARIANT` | `0x05` |
 
-Kind-specific fields:
-
-**STRUCT** (`0x01`):
+**STRUCT** (`0x01`) — after common fields:
 ```
-  field_count : u16
-  fields      : [field_count]StructField
+field_count : u16
+fields      : [field_count]StructField
 ```
 Each `StructField`: `name : str`, `type : TypeSpec`, `is_const : bool8`
 
-**NAMED** (`0x02`):
+**NAMED** (`0x02`) — after common fields:
 ```
-  base        : u8     // 0=int, 1=float, 2=string, 3=bool, 4=rune, 5=array, 6=map, 7=enum
-  has_range   : bool8
-  is_cycle    : bool8
-  min         : f64    // meaningful only if has_range
-  max         : f64    // meaningful only if has_range
-  parent_name : str    // empty string if no parent
-```
-
-**ENUM** (`0x03`):
-```
-  member_count : u16
-  members      : [member_count]str
-  parent_name  : str   // empty if not a subtype
+base        : u8      // 0=int 1=float 2=string 3=bool 4=rune 5=array 6=map 7=enum_t
+has_range   : bool8
+is_cycle    : bool8
+min         : f64     // present only if has_range; see note below
+max         : f64     // present only if has_range; see note below
+parent_name : str     // empty if not a subtype
 ```
 
-**INTERFACE** (`0x04`):
-```
-  method_count : u16
-  methods      : [method_count]InterfaceMethod
-```
-Each `InterfaceMethod`: `name : str`, `arity : u8`, `is_variadic : bool8`, `variadic_type : TypeSpec`, `param_type_count : u16`, `param_types : [...]TypeSpec`, `return_type_count : u16`, `return_types : [...]TypeSpec`, `has_typed_params : bool8`, `has_typed_returns : bool8`
+> **v1 limitation:** Range bounds are stored as `f64` regardless of whether the base type is integer or float. This matches the current VM's internal representation but loses exact representation for integers whose absolute value exceeds 2^53. A future format version should introduce a tagged `Bound` encoding. Until then, implementations must not define integer-typed named types with range bounds outside ±2^53, and loaders should reject such artifacts.
 
-**VARIANT** (`0x05`):
+**ENUM** (`0x03`) — after common fields:
 ```
-  arm_count : u16
-  arms      : [arm_count]VariantArm
+member_count : u16
+members      : [member_count]str
+parent_name  : str   // empty if not a subtype
 ```
-Each `VariantArm`: `name : str`, `has_payload : bool8`, `payload_name : str`, `payload_type_present : bool8`, `payload_type : TypeSpec` (if present)
+
+**INTERFACE** (`0x04`) — after common fields:
+```
+method_count : u16
+methods      : [method_count]InterfaceMethod
+```
+Each `InterfaceMethod`:
+```
+InterfaceMethod {
+  name              : str
+  arity             : u8
+  is_variadic       : bool8
+  variadic_type     : TypeSpec
+  has_typed_params  : bool8
+  has_typed_returns : bool8
+  param_type_count  : u16
+  param_types       : [param_type_count]TypeSpec
+  return_type_count : u16
+  return_types      : [return_type_count]TypeSpec
+}
+```
+
+**VARIANT** (`0x05`) — after common fields:
+```
+arm_count : u16
+arms      : [arm_count]VariantArm
+```
+Each `VariantArm`:
+```
+VariantArm {
+  name              : str
+  has_payload       : bool8
+  payload_name      : str        // present only if has_payload
+  payload_type      : TypeSpec   // present only if has_payload
+}
+```
 
 ### 8.7 DEPENDENCY\_TABLE
 
-Declares all imports made by this source, including their resolved specifiers and source hashes for cache validation.
+Declares every import made by this source, with both the written specifier and its canonical resolved identity.
 
 ```
 dependency_count : u32
@@ -518,20 +549,35 @@ Each `DependencyEntry`:
 
 ```
 DependencyEntry {
-  specifier        : str     // as written in source, e.g. "std" or "./math"
-  kind             : u8      // 0=STDLIB, 1=FILE, 2=HOST_PROVIDED
-  source_hash      : hash32  // SHA-256 of dependency source; all zeros for STDLIB
-  qualified_prefix : str     // the prefix used for symbols from this import
+  written_specifier : str      // as it appears in source, e.g. "std" or "./math"
+  resolved_id       : str      // canonical module identity; see below
+  kind              : u8       // 0=STDLIB 1=FILE 2=HOST_PROVIDED
+  source_hash       : hash32   // SHA-256 of dependency source; all zeros for STDLIB
+  artifact_hash     : hash32   // SHA-256 of dependency's GBC artifact; all zeros if unavailable
+  qualified_prefix  : str      // prefix used for symbols from this import in the compiled output
 }
 ```
 
-For `STDLIB` dependencies, `source_hash` is all zeros. Stdlib is covered by `stdlib_hash` in the header. For `FILE` dependencies, `source_hash` is `SHA-256(resolved_source_text_utf8)` and must match the hash of the actual file at load time.
+**`resolved_id`** is the canonical identity of the dependency as determined by the module resolver at compile time. It must be stable across equivalent resolutions (symlinks, `../` normalisations, etc. must all produce the same `resolved_id` for the same logical module). Suggested URI-style format:
 
-If any FILE dependency's actual source hash does not match, the artifact is stale and the root source must be recompiled.
+| Kind | Example `resolved_id` |
+|------|----------------------|
+| STDLIB | `std://io`, `std://core` |
+| File (WASI) | `file:///project/src/math.gengo` |
+| File (browser/virtual FS) | `mem://playground/math.gengo` |
+| Host-provided | `host://app/config` |
+
+The exact URI scheme is host-defined. The loader must compare `resolved_id` strings exactly (byte-for-byte) and must not perform path normalisation on load; normalisation is a compile-time responsibility.
+
+For `kind = STDLIB`, `source_hash` is all zeros — stdlib is covered by `module_provider_hash` in the header.
+
+For `kind = FILE`, the loader must re-read the dependency source at the path implied by `resolved_id` and verify that `SHA-256(current_source) == source_hash`. If the hashes differ, the root artifact is stale.
+
+`artifact_hash` is the SHA-256 of the dependency's own compiled GBC file, if available. Set to all zeros when not available. This enables per-module cache validation without re-reading source: if `artifact_hash` is nonzero and the dependency's GBC file has a matching body checksum, source re-reading may be skipped.
 
 ### 8.8 DEBUG\_SPANS (optional)
 
-Maps each bytecode instruction (by byte offset) to a source location. Present only when the `DEBUG_INFO` flag is set.
+Maps bytecode instruction offsets to source locations. Present only when the `DEBUG_INFO` flag is set.
 
 ```
 span_count : u32
@@ -548,11 +594,11 @@ DebugSpan {
 }
 ```
 
-Spans are in ascending `bytecode_offset` order. Not every instruction requires a span entry; a loader looking up a location for offset `X` uses the last span entry with `bytecode_offset <= X`.
+Entries are in ascending `bytecode_offset` order. Not every instruction requires a span entry. A loader looking up a location for offset `X` uses the last span entry with `bytecode_offset <= X`.
 
 ### 8.9 DEBUG\_NAMES (optional)
 
-Maps local variable slot indices to human-readable names. Present only when the `DEBUG_INFO` flag is set.
+Maps local variable slot indices to human-readable names. Present only when `DEBUG_INFO` is set.
 
 ```
 scope_count : u32
@@ -563,20 +609,13 @@ Each `DebugScope`:
 
 ```
 DebugScope {
-  function_idx  : u32    // index into FUNCTIONS section
-  local_count   : u16
-  locals        : [local_count]DebugLocal
+  function_idx : u32   // index into FUNCTIONS section
+  local_count  : u16
+  locals       : [local_count]DebugLocal
 }
 ```
 
-Each `DebugLocal`:
-
-```
-DebugLocal {
-  slot  : u8
-  name  : str
-}
-```
+Each `DebugLocal`: `slot : u8`, `name : str`
 
 ---
 
@@ -584,7 +623,7 @@ DebugLocal {
 
 ### 9.1 TypeSpec
 
-A `TypeSpec` describes a field or parameter type annotation. It is a list of alternatives (union types).
+A `TypeSpec` encodes a type annotation, which may be a union of alternatives.
 
 ```
 TypeSpec {
@@ -595,126 +634,170 @@ TypeSpec {
 
 ### 9.2 FieldTypeAlt
 
+Each alternative is a tag byte followed by tag-specific fields. Only the fields listed for a given tag are present; no others are written or expected.
+
+**`ANY` (`0x00`)** — no additional fields.
+
+**`NULL_T` (`0x01`)** — no additional fields.
+
+**`INT` (`0x02`)** — no additional fields.
+
+**`FLOAT` (`0x03`)** — no additional fields.
+
+**`RUNE_T` (`0x04`)** — no additional fields.
+
+**`BOOLEAN` (`0x05`)** — no additional fields.
+
+**`STRING` (`0x06`)** — no additional fields.
+
+**`ERROR_T` (`0x07`)** — no additional fields.
+
+**`ARRAY` (`0x08`)**:
 ```
-FieldTypeAlt {
-  tag            : u8    // see table
-  struct_name    : str   // tag=STRUCT_T
-  interface_name : str   // tag=INTERFACE_T
-  named_name     : str   // tag=NAMED_T or VARIANT_T
-  // for ARRAY_T: elem_spec present
-  elem_spec_present : bool8
-  elem_spec         : TypeSpec  // if elem_spec_present
-  // for MAP_T: key_spec and val_spec present
-  key_spec_present  : bool8
-  key_spec          : TypeSpec  // if key_spec_present
-  val_spec_present  : bool8
-  val_spec          : TypeSpec  // if val_spec_present
-  // for FUNC_T: param and return types
-  func_param_count  : u16
-  func_params       : [func_param_count]TypeSpec
-  func_return_count : u16
-  func_returns      : [func_return_count]TypeSpec
-}
+elem_spec_present : bool8
+elem_spec         : TypeSpec   // only if elem_spec_present
 ```
 
-Fields that are irrelevant for a given tag are not written. Writers must omit them; readers must not expect them. The tag determines exactly which fields are present.
+**`MAP` (`0x09`)**:
+```
+key_spec_present : bool8
+key_spec         : TypeSpec   // only if key_spec_present
+val_spec_present : bool8
+val_spec         : TypeSpec   // only if val_spec_present
+```
 
-| Tag | Value | Relevant fields |
-|-----|-------|----------------|
-| `ANY` | `0x00` | none |
-| `NULL_T` | `0x01` | none |
-| `INT` | `0x02` | none |
-| `FLOAT` | `0x03` | none |
-| `RUNE_T` | `0x04` | none |
-| `BOOLEAN` | `0x05` | none |
-| `STRING` | `0x06` | none |
-| `ERROR_T` | `0x07` | none |
-| `ARRAY` | `0x08` | `elem_spec_present`, `elem_spec` |
-| `MAP` | `0x09` | `key_spec_present`, `key_spec`, `val_spec_present`, `val_spec` |
-| `STRUCT_T` | `0x0A` | `struct_name` |
-| `INTERFACE_T` | `0x0B` | `interface_name` |
-| `NAMED_T` | `0x0C` | `named_name` |
-| `VARIANT_T` | `0x0D` | `named_name` |
-| `FUNC_T` | `0x0E` | `func_param_count`, `func_params`, `func_return_count`, `func_returns` |
+**`STRUCT_T` (`0x0A`)**:
+```
+struct_name : str
+```
+
+**`INTERFACE_T` (`0x0B`)**:
+```
+interface_name : str
+```
+
+**`NAMED_T` (`0x0C`)**:
+```
+named_name : str
+```
+
+**`VARIANT_T` (`0x0D`)**:
+```
+named_name : str
+```
+
+**`FUNC_T` (`0x0E`)**:
+```
+func_param_count  : u16
+func_params       : [func_param_count]TypeSpec
+func_return_count : u16
+func_returns      : [func_return_count]TypeSpec
+```
 
 ---
 
 ## 10. Native Function Resolution
 
-Native functions are referenced by the `NATIVE_IMPORTS` section using stable symbolic identifiers. The current mapping from symbolic ID to internal numeric ID is the responsibility of the loader, not the format.
+Native functions are stored as stable symbolic identifiers in `SEC_NATIVE_IMPORTS`. The mapping from symbolic ID to internal runtime ID is the loader's responsibility, established at load time.
 
-The canonical symbolic ID format is:
+The canonical symbolic ID format:
 
 ```
 <module>.<submodule>.<function>
 ```
 
-Examples from the current stdlib:
+Current examples:
 - `std.io.println`
 - `std.io.printf`
 - `std.core.len`
 - `std.core.append`
+- `std.core.recover`
 - `std.conv.to_string`
 
-The loader resolution procedure:
+### Loader resolution procedure
 
-1. For each `NativeImportEntry` in `NATIVE_IMPORTS`:
+1. For each entry in `SEC_NATIVE_IMPORTS` (in index order):
    a. Look up `symbolic_id` in the current native function registry.
    b. If not found: fail with `NativeBindingNotFound(symbolic_id)`.
-   c. If found but `arity` does not match: fail with `NativeArityMismatch(symbolic_id, declared, actual)`.
+   c. If found but `arity` does not match the current binding: fail with `NativeArityMismatch(symbolic_id, declared_arity, actual_arity)`.
    d. Record the mapping: GBC native index → runtime native ID.
-2. Patch or redirect all bytecode references using this mapping before any execution begins.
+2. Patch or redirect all bytecode references through this mapping before any execution begins.
 
-If any native binding fails to resolve, the entire load must be aborted. Partial loading is not permitted.
+If any binding fails, abort the load entirely. Partial loading is not permitted.
 
-**Do not store internal native function IDs (such as `NativeFuncObj.id : u8`) in GBC files.** These are runtime implementation details that may be renumbered without a format version change. Only symbolic IDs are stable across runtime rebuilds that do not change the function ABI.
+**Do not store internal numeric native IDs in GBC files.** The current VM uses `NativeFuncObj { id: u8 }` internally. This is an implementation detail that may be renumbered without a format version bump. Only symbolic IDs are stable.
 
 ---
 
 ## 11. Validation Rules
 
-### 11.1 Ordered Checks
+### 11.1 Validation Phases
 
-A loader must apply these checks in order. On any failure it must abort loading, report the specific failure, and not return a partially initialised VM.
+Validation proceeds in four phases. Failure at any point aborts loading with a specific error. Do not proceed to a later phase after a failure.
+
+**Phase 1 — Structural/header integrity**
+
+These checks require no content interpretation beyond reading fixed-offset bytes.
 
 | # | Check | Failure |
 |---|-------|---------|
 | 1 | Magic bytes match exactly | `InvalidMagic` |
-| 2 | `header_size >= 192` and file is at least `header_size` bytes past the magic | `TruncatedHeader` |
-| 3 | `header_version == 1` (or within supported range) | `UnsupportedHeaderVersion(n)` |
-| 4 | Reserved bytes in header are all zero | `NonZeroReserved` |
-| 5 | `format_major` matches loader's supported major | `FormatMajorMismatch(artifact, runtime)` |
-| 6 | `format_minor <= loader's format_minor` | `FormatMinorTooNew(artifact, runtime)` |
-| 7 | `language_major` matches loader's language major | `LanguageMajorMismatch(artifact, runtime)` |
-| 8 | `language_minor <= loader's language_minor` | `LanguageMinorTooNew(artifact, runtime)` |
-| 9 | `target_id` is a known value and matches the current runtime target | `TargetMismatch(artifact, runtime)` |
-| 10 | `backend_id` is a known value and matches the current runtime backend | `BackendMismatch(artifact, runtime)` |
-| 11 | `entry_kind` is a known value | `UnknownEntryKind(n)` |
-| 12 | `flags` reserved bits are all zero | `UnknownFlags` |
-| 13 | `body_length` bytes are present after the header | `TruncatedBody` |
-| 14 | `xxHash64(body_bytes) == body_checksum` | `BodyChecksumMismatch` |
-| 15 | `source_graph_hash` matches computed source graph hash | `SourceGraphStale` |
-| 16 | `vm_fingerprint` matches current runtime VM fingerprint | `VMFingerprintMismatch` |
-| 17 | `stdlib_hash` matches current stdlib fingerprint | `StdlibFingerprintMismatch` |
-| 18 | `options_hash` matches current compiler options | `CompilerOptionsMismatch` |
-| 19 | All `REQUIRED` sections are present | `MissingRequiredSection(id)` |
-| 20 | No two sections have overlapping byte ranges | `SectionOverlap` |
-| 21 | All FILE dependency source hashes match on disk | `DependencyStale(specifier)` |
-| 22 | All native imports resolve successfully | `NativeBindingNotFound(id)` or `NativeArityMismatch(id, ...)` |
+| 2 | File is at least `8 + header_size` bytes | `TruncatedHeader` |
+| 3 | `header_version` is within the supported range | `UnsupportedHeaderVersion(n)` |
+| 4 | `header_size >= 192` (minimum for `header_version` 1) | `HeaderTooSmall` |
+| 5 | Reserved bytes in header are all zero | `NonZeroReserved` |
+| 6 | `format_major` matches loader's supported major | `FormatMajorMismatch(artifact, loader)` |
+| 7 | `format_minor <= loader's format_minor` | `FormatMinorTooNew(artifact, loader)` |
+| 8 | `language_major` matches loader's language major | `LanguageMajorMismatch(artifact, loader)` |
+| 9 | `language_minor <= loader's language_minor` | `LanguageMinorTooNew(artifact, loader)` |
+| 10 | `target_id` is a known value and matches current runtime target | `TargetMismatch(artifact, runtime)` |
+| 11 | `backend_id` is a known value and matches current runtime backend | `BackendMismatch(artifact, runtime)` |
+| 12 | `entry_kind` is a known non-zero value | `UnknownEntryKind(n)` |
+| 13 | `flags` reserved bits are all zero | `UnknownFlags` |
+| 14 | File contains at least `header_size + body_length` bytes | `TruncatedBody` |
+| 15 | `xxHash64(body_bytes) == body_checksum` | `BodyChecksumMismatch` |
 
-Checks 1–14 are structural integrity checks and must be performed before any content is interpreted. Checks 15–18 are staleness checks and govern cache validity. Checks 19–22 are content validity checks.
+**Phase 2 — Section table validation**
+
+Parse the section table from the body. The body checksum (check 15) guarantees the section table has not been corrupted.
+
+| # | Check | Failure |
+|---|-------|---------|
+| 16 | Section table is parseable (count reasonable, entries fit within body) | `MalformedSectionTable` |
+| 17 | All sections marked REQUIRED and listed in §7.2 as required for this entry kind are present | `MissingRequiredSection(section_id)` |
+| 18 | No two sections have overlapping byte ranges | `SectionOverlap(id_a, id_b)` |
+| 19 | All section data falls within the body bounds | `SectionOutOfBounds(section_id)` |
+
+**Phase 3 — Cache validity / staleness**
+
+Requires reading `SEC_DEPENDENCY_TABLE` and querying external state (filesystem, runtime version). Parse the dependency table before computing source graph hash.
+
+| # | Check | Failure |
+|---|-------|---------|
+| 20 | `SEC_DEPENDENCY_TABLE` is parseable | `MalformedDependencyTable` |
+| 21 | For each FILE dependency: `SHA-256(current_source) == entry.source_hash` | `DependencyStale(resolved_id)` |
+| 22 | `source_graph_hash` matches the computed source graph hash | `SourceGraphStale` |
+| 23 | `vm_fingerprint` matches the current runtime VM fingerprint | `VMFingerprintMismatch` |
+| 24 | `module_provider_hash` matches the current module provider fingerprint | `ModuleProviderMismatch` |
+| 25 | `options_hash` matches the current compiler options hash | `CompilerOptionsMismatch` |
+
+**Phase 4 — Content validity**
+
+| # | Check | Failure |
+|---|-------|---------|
+| 26 | All native imports in `SEC_NATIVE_IMPORTS` resolve with matching arities | `NativeBindingNotFound(id)` or `NativeArityMismatch(id, ...)` |
 
 ### 11.2 Error Handling
 
 On any validation failure:
 
-- Report the specific failure reason (from the table above) with enough context for a human to diagnose the problem.
-- Do not attempt to use the artifact partially.
-- Do not fall back to "best effort" loading.
-- Signal to the caller that recompilation is needed.
-- Do not delete the artifact automatically; leave that decision to the caller.
+- Report the specific failure with enough context for a human to diagnose (section ID, specifier, version numbers, etc.).
+- Do not attempt partial loading or partial VM initialisation.
+- Do not fall back to "best effort" interpretation of a corrupt or stale artifact.
+- Signal to the caller that recompilation is required.
+- Do not delete the artifact; leave eviction decisions to the caller.
 
-**The `compiled_at` timestamp must never be used as a cache key or for invalidation.** It exists solely for human-readable diagnostic output such as "this cache is N days old."
+**`compiled_at` must never be used for cache invalidation.** It exists solely for diagnostic output ("this artifact is N days old").
 
 ---
 
@@ -722,101 +805,128 @@ On any validation failure:
 
 ### Format versions (`format_major`, `format_minor`)
 
-- **Major bump**: Any breaking change to the binary layout, instruction encoding, section format, or primitive encoding. A loader must reject artifacts with a different `format_major`.
-- **Minor bump**: Backward-compatible addition, such as a new optional section ID or a new optional field appended to an existing section. A loader may load artifacts with `format_minor <= current`. A loader must reject artifacts with `format_minor > current` (features it does not understand may be required).
+- **Major bump:** Any breaking change to binary layout, instruction encoding, section format, or primitive encoding. A loader must reject artifacts with a different `format_major`.
+- **Minor bump:** Backward-compatible addition (e.g., new optional section ID, new optional trailing field in an existing section). A loader may accept artifacts with `format_minor <= loader's`. A loader must reject artifacts with `format_minor > loader's`.
 
 ### Language versions (`language_major`, `language_minor`)
 
-- **Major bump**: Breaking language change. A loader must reject artifacts compiled for a different `language_major`.
-- **Minor bump**: Additive language change. A loader may load artifacts with `language_minor <= current`. An artifact compiled for a newer minor than the current runtime must be rejected because it may depend on instructions or type features not yet present.
+- **Major bump:** Breaking language change. Loader must reject a different `language_major`.
+- **Minor bump:** Additive language change. A loader may accept artifacts with `language_minor <= loader's`. Artifacts compiled for a newer minor must be rejected — they may depend on instructions or type features not yet present.
 
 ### Header version (`header_version`)
 
-- Bumped only when the header layout itself changes in a backward-incompatible way.
-- Readers should skip unknown trailing bytes (those beyond the known header size) if `header_version` is within a supported range.
+Bumped when the header layout changes in a backward-incompatible way (field removed, field reordered, field meaning changed). New fields appended to the end of the header do not require a `header_version` bump if the existing minimum size rule allows readers to skip them.
+
+### `options_hash` canonical encoding
+
+The canonical encoding for `options_hash` is a byte string computed as:
+
+```
+options_encoding_v1 = SHA-256(
+  u8(1)            ||   // encoding version, currently 1
+  u32le(target_id) ||
+  u32le(backend_id) ||
+  u8(flags_low_byte)    // lower 8 bits of the flags field
+)
+```
+
+Integer widths in this encoding match the header field widths (§6.1). Do not use `u8` for fields declared as `u32` in the header.
+
+Adding a new option means appending bytes to the encoding and bumping the encoding version byte. This changes `options_hash` for all existing option sets regardless of the new option's value. This is intentional: accept that adding an option invalidates existing artifacts rather than attempting to preserve old hashes by conditionally omitting default-valued options. The encoding version byte gives loaders a mechanism to distinguish old encodings if a migration path is needed.
 
 ---
 
 ## 13. Dependency and Module Graph Hashing
 
-The `source_graph_hash` must cover the entire set of source inputs that affected the compiled artifact. Hashing only the root source is insufficient once file imports exist.
+`source_graph_hash` must cover the entire set of source inputs that affected this compiled artifact.
 
-**Computation for SCRIPT artifacts with no file imports (current baseline):**
+**Baseline (single file, no file imports):**
 ```
-source_graph_hash = SHA-256(root_source_utf8_bytes)
+source_graph_hash = SHA-256(root_source_utf8)
 ```
 
-**Computation once file imports are implemented:**
+**With file imports:**
 ```
 inputs = []
-inputs.append(root_source_utf8_bytes)
-for each resolved file import in stable topological order:
-    inputs.append(utf8(resolved_specifier))
-    inputs.append(SHA-256(dependency_source_utf8_bytes))
+inputs.append(root_source_utf8)
+for each resolved file dependency in stable topological order:
+    inputs.append(utf8(resolved_id))
+    inputs.append(SHA-256(dependency_source_utf8))
 source_graph_hash = SHA-256(concat(inputs))
 ```
 
-The topological order must be canonical and not depend on discovery order, filesystem ordering, or any other non-deterministic factor.
+The topological order must be canonical and deterministic. The `resolved_id` (not the `written_specifier`) is used in the hash input, because two different written specifiers may resolve to the same module.
 
-Each individual module artifact also stores its own `source_graph_hash` covering only its own source and its own transitive file dependencies. This allows per-module cache invalidation: changing `math.gengo` invalidates only `math.gbc` and the GBC of any module that imports it, not all modules in the project.
+Each module artifact stores `source_graph_hash` covering only its own transitive file dependencies. This allows per-module cache invalidation: changing `math.gengo` invalidates `math.gbc` and the GBC of any module that imports it, but not unrelated modules.
 
 ---
 
 ## 14. Future: GSI Artifact Class
 
-A **Gengo Snapshot Image** (`.gsi`) would contain all of the above plus a serialised representation of the live VM state at a checkpoint: the object heap, the global variable table, initialised type instances, and GC metadata.
+A **Gengo Snapshot Image** (`.gsi`) would contain all GBC content plus a serialised representation of live VM state at a checkpoint. The GSI format would reuse the GBC header with a different entry kind or a distinct magic sequence, and add sections for:
 
-The GSI format would reuse the GBC header structure with a different entry kind or magic sequence, and add the following additional sections:
+- `SEC_HEAP_SNAPSHOT` — Object pool serialised with pointer swizzling (pointers replaced by pool indices).
+- `SEC_GLOBALS_SNAPSHOT` — Global variable table with values as pool references or primitives.
+- `SEC_GC_METADATA` — GC generation, root set, finalisers.
 
-- `SEC_HEAP_SNAPSHOT`: Object pool serialised with pointer swizzling (pointers replaced by pool indices).
-- `SEC_GLOBALS_SNAPSHOT`: Snapshot of the global variable table with values serialised as heap pool references or primitive values.
-- `SEC_GC_METADATA`: GC generation, root set, finalisers.
+Additional header fields would be needed: `heap_layout_version`, `gc_generation_at_snapshot`.
 
-Additional header fields would be required:
-- `heap_layout_version`: Independent version of the heap serialisation format.
-- `gc_generation`: GC generation counter at snapshot time.
+Open questions that must be resolved before GSI is designed:
 
-Additional open questions that must be resolved before GSI is designed:
-- Are native functions at their initialised state or symbolic-only?
-- Are open WASI file handles serialisable, or must they be re-opened on load?
+- Are closures capturing heap objects fully serialisable, or must they be restricted?
+- Are open WASI resources (file handles, sockets) preserved, closed, or flagged as invalid?
 - Are interned strings part of the heap snapshot or rebuilt from the constant pool?
-- What is the native resource policy for a GSI that contains open resources?
-- Can closures capture objects that are not serialisable?
+- Can host objects (opaque to the VM) be serialised?
+- What happens if the GC layout changes between the runtime that wrote the snapshot and the runtime that reads it?
 
-**Do not design GSI until GBC is stable and in production use.** The complexity of GSI is an order of magnitude higher. Premature convergence of the two formats produces a format that does neither job well.
+**Do not design GSI until GBC is stable and in production use.**
 
 ---
 
 ## 15. Non-Goals for GBC v1
 
-The following are explicitly out of scope for the current format version:
-
-- **Heap serialisation.** Live object state is not part of GBC.
-- **Cross-compilation.** A GBC file produced for `TARGET_WASM32_WASI` is not loadable on `TARGET_NATIVE_X86_64`.
-- **Linking.** GBC files are not linkable into larger artifacts in v1. Each artifact is self-contained.
-- **Streaming loading.** The body checksum must be verified before any section is parsed. Streaming section parsing before checksum verification is not permitted.
-- **Partial invalidation.** If any header check fails, the entire artifact is invalid. There is no partial cache hit.
-- **Automatic cache management.** The format specifies how to validate artifacts, not where to store them or how to evict them. Cache location and eviction are host responsibilities.
-- **Encryption or signing.** The body checksum is integrity-only, not authentication. Authenticating the source of an artifact is a host responsibility.
+- **Heap serialisation.** Live VM state is not part of GBC.
+- **Cross-compilation.** A `TARGET_WASM32_WASI` artifact is not loadable as `TARGET_NATIVE_X86_64`.
+- **Linking.** GBC files are not linkable in v1. Each artifact is self-contained.
+- **Streaming loading.** The body checksum must be verified before any section is parsed.
+- **Partial cache hits.** Failing any validation check invalidates the entire artifact.
+- **Automatic cache management.** The format specifies validation, not storage location or eviction policy.
+- **Authentication.** The body checksum detects corruption, not tampering. Authenticating artifact provenance is a host responsibility.
+- **Tagged integer bounds.** Range bounds are `f64` in v1. Exact integer bounds above 2^53 are a v2 concern.
 
 ---
 
 ## 16. Rationale Notes
 
 **Why SHA-256 for identity hashes and xxHash64 for the body checksum?**
-SHA-256 for `source_graph_hash`, `vm_fingerprint`, `stdlib_hash`, and `options_hash` because these are cache keys that must be collision-resistant — a collision would cause a stale artifact to be silently accepted. xxHash64 for the body checksum because its purpose is corruption detection, not adversarial resistance, and it is significantly faster to compute over large bodies.
+SHA-256 for `source_graph_hash`, `vm_fingerprint`, `module_provider_hash`, and `options_hash` because these are cache keys that must be collision-resistant — a collision would silently accept a stale artifact. xxHash64 for the body checksum because its purpose is corruption detection, not adversarial resistance, and it is significantly faster to compute over large bodies.
 
-**Why not use timestamps for cache invalidation?**
-Timestamps are unreliable: network filesystems, backups, `touch`, version control operations, and timezone changes all produce incorrect timestamps. Python's `.pyc` format used timestamps for decades and caused persistent debugging confusion. Content hashes are definitive.
+**Why not timestamps for cache invalidation?**
+Timestamps are unreliable: network filesystems, backups, `touch`, version control operations, and timezone changes all corrupt them. Python's `.pyc` format used timestamps for years and caused debugging pain. Content hashes are definitive.
 
-**Why a separate `format_major`/`format_minor` distinct from `language_major`/`language_minor`?**
-The bytecode format can remain stable across multiple language minor versions. Conversely, an internal VM optimisation (e.g., adding a new fused opcode) requires a format bump without any user-visible language change. Keeping them independent prevents unnecessary cache invalidation.
+**Why separate `format_major`/`format_minor` from `language_major`/`language_minor`?**
+The bytecode format can be stable across multiple language minor versions, and an internal VM optimisation (e.g., a new fused opcode) may require a format bump without any user-visible language change. Independent versioning prevents unnecessary cache invalidation.
+
+**Why `module_provider_hash` rather than `stdlib_hash`?**
+"stdlib" is too narrow. Once host providers, virtual modules, or separately versioned builtins exist, a field named `stdlib_hash` would become a misnomer. `module_provider_hash` is abstract enough to cover stdlib, host ABI declarations, and any future module registry without a field rename that would require a header version bump.
 
 **Why `header_size`?**
-A fixed-size header cannot be extended without a breaking format change. With `header_size`, new fields can be appended and older readers can skip them (for backward-compatible additions) or reject cleanly (for breaking additions signalled by `header_version`). The cost is two bytes. The cost of omitting it is a locked header forever.
+A fixed-size header cannot be extended without a breaking format change. With `header_size`, new fields can be appended. The cost is two bytes. The cost of omitting it is a permanently frozen header.
 
 **Why symbolic native IDs rather than numeric ones?**
-The current VM stores native functions as `NativeFuncObj { id: u8, arity: u8 }`. If the native function table is reordered — even without changing the ABI of any individual function — all stored numeric IDs become wrong. Since `vm_fingerprint` changes on any runtime rebuild, this is currently safe: stale numeric IDs are rejected before they can cause incorrect behaviour. However, symbolic IDs allow the runtime to reorder its internal table without a `vm_fingerprint` change, reducing unnecessary cache invalidation in the future.
+The VM currently stores native functions as `NativeFuncObj { id: u8 }`. Reordering the native table — even without changing any individual function's ABI — would silently corrupt all stored numeric IDs. Symbolic IDs make the dependency explicit and give the loader a chance to detect and report the problem rather than silently calling the wrong function.
 
 **Why not raw Zig struct serialisation?**
-Zig struct layout is not guaranteed across compiler versions, target architectures, or even across different compilation flags. Field padding, alignment, and order are implementation details. Defining an explicit canonical encoding in this document means the format is stable independent of the Zig compiler version used to build the runtime.
+Zig struct layout is not guaranteed across compiler versions, targets, or compilation flags. Field padding and ordering are implementation details. An explicit canonical encoding defined here remains stable regardless of the Zig compiler version used to build the runtime.
+
+**Why `bytecode_length` in FUNCTIONS?**
+Without it, determining where a function's instructions end requires inferring from surrounding entries, which is fragile and fails for non-sorted tables. An explicit length makes each function entry self-describing and enables a validator to check that all function ranges lie within the BYTECODE section.
+
+**Why `resolved_id` in DEPENDENCY\_TABLE?**
+The written specifier (`./math`, `../lib/math`, symlinked paths) is not a stable canonical identity. Two different written specifiers can resolve to the same module; the same written specifier in different compilation contexts can resolve to different modules. Canonical identity is established by the resolver at compile time and must be recorded explicitly so the loader can validate it without re-running resolution.
+
+**Why remove the `CHECKED_ARITHMETIC`/`OPTIMISED` mutual exclusion from the format?**
+Build modes are policy decisions for the compiler tool, not invariants that the file format should enforce. The format records what flags were active; it does not constrain which flag combinations are meaningful. A future build mode that combines checked arithmetic with optimisation should not require a format version bump to accommodate.
+
+**Why not promise that appending a default-valued option preserves the old `options_hash`?**
+It is mathematically impossible: appending any bytes to the hash input changes the output. Attempting to preserve old hashes by conditionally omitting default-valued options produces subtle bugs when the "default" changes. The correct approach is to accept that adding an option changes the hash (triggering recompilation) and use the encoding version byte as an explicit migration mechanism if backward compatibility is needed.
