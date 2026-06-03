@@ -1,21 +1,27 @@
+// Arrays (slices) are ordered, resizable sequences. Gengo arrays are immutable
+// by default — core library functions return new arrays rather than mutating in
+// place, making data flow explicit and easy to reason about.
+// https://en.wikipedia.org/wiki/Dynamic_array
+
 std := import("std")
 core := std.core
 
-nums := [3, 1, 4, 1, 5, 9, 2, 6]
+primes := [2, 3, 5, 7, 11, 13, 17, 19]
 
-std.io.println(core.contains(nums, 5))
-std.io.println(core.contains(nums, 7))
+std.io.printf("length: %d\n", core.len(primes))
+std.io.printf("first:  %d\n", primes.first())
+std.io.printf("last:   %d\n", primes.last())
+std.io.println("slice [2:5]:", primes[2:5])
 
-without_first := core.remove(nums, 0)
-std.io.printf("after remove: len=%d first=%d\n",
-    core.len(without_first),
-    without_first[0],
-)
+// append and remove return new arrays; the original is unchanged.
+more  := core.append(primes, 23)
+fewer := core.remove(primes, 0)
+std.io.printf("after append: last=%d  len=%d\n",  more.last(),   core.len(more))
+std.io.printf("after remove: first=%d len=%d\n", fewer.first(), core.len(fewer))
 
+// Filter: build a new array from matching elements.
 evens := []
-for n in nums {
-    if n % 2 == 0 {
-        evens = core.append(evens, n)
-    }
+for n in primes {
+    if n % 2 == 0 { evens = core.append(evens, n) }
 }
-std.io.println(evens)
+std.io.println("even primes:", evens)

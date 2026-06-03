@@ -1,3 +1,8 @@
+// A closure is a function that captures variables from its surrounding scope,
+// keeping them alive even after the outer function has returned. This enables
+// stateful callbacks and factory functions without using global state.
+// https://en.wikipedia.org/wiki/Closure_(computer_programming)
+
 std := import("std")
 
 func makeCounter(start int) func() int {
@@ -8,9 +13,10 @@ func makeCounter(start int) func() int {
     }
 }
 
+// Two independent counters share the same code but each holds its own state.
 a := makeCounter(0)
 b := makeCounter(10)
 
-for i := 0; i < 4; i++ {
+for i := 0; i < 5; i++ {
     std.io.printf("a=%d  b=%d\n", a(), b())
 }

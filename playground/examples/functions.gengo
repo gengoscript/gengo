@@ -1,0 +1,37 @@
+// Functions are first-class values and can return multiple results at once.
+// Multiple return values — and the (result, error) idiom built on them —
+// are borrowed from Go.
+// https://en.wikipedia.org/wiki/First-class_function
+
+std := import("std")
+
+func factorial(n int) int {
+    if n <= 1 { return 1 }
+    return n * factorial(n - 1)
+}
+
+// Multiple return values — caller unpacks with :=
+func divmod(a int, b int) (int, int) {
+    return int(a / b), a % b
+}
+
+func minMax(nums []int) (int, int) {
+    lo := nums[0]
+    hi := nums[0]
+    for n in nums {
+        if n < lo { lo = n }
+        if n > hi { hi = n }
+    }
+    return lo, hi
+}
+
+for i := 0; i <= 7; i++ {
+    std.io.printf("%d! = %d\n", i, factorial(i))
+}
+
+q, r := divmod(17, 5)
+std.io.printf("17 / 5 = %d remainder %d\n", q, r)
+
+nums := [5, 2, 8, 1, 9, 3]
+lo, hi := minMax(nums)
+std.io.printf("min=%d  max=%d\n", lo, hi)

@@ -1,2 +1,7 @@
+// The entry point of a Gengo program is the top level — no mandatory main()
+// function is required. The standard library is loaded explicitly with import(),
+// keeping the global namespace clean. Import syntax is borrowed from Go.
+// https://en.wikipedia.org/wiki/Entry_point
+
 std := import("std")
 std.io.println("Hello, Gengo!")

@@ -1,0 +1,38 @@
+// Control flow directs which instructions execute and in what order.
+// Gengo's for loop covers three styles: C-style, condition-only, and range.
+// The range for-in with an optional index variable is borrowed from Go.
+// https://en.wikipedia.org/wiki/Control_flow
+
+std := import("std")
+
+// C-style: accumulate 1..10
+sum := 0
+for i := 1; i <= 10; i++ {
+    sum += i
+}
+std.io.printf("sum 1..10 = %d\n", sum)
+
+// Condition-only (while-style): first power of 2 >= 1000
+n := 1
+for n < 1000 {
+    n *= 2
+}
+std.io.printf("first 2^k >= 1000: %d\n", n)
+
+// Range with index
+langs := ["Go", "Zig", "Ada", "Gengo"]
+for i, lang in langs {
+    std.io.printf("  %d: %s\n", i, lang)
+}
+
+// if/else chain
+score := 82
+if score >= 90 {
+    std.io.println("grade: A")
+} else if score >= 80 {
+    std.io.println("grade: B")
+} else if score >= 70 {
+    std.io.println("grade: C")
+} else {
+    std.io.println("grade: F")
+}

@@ -1,8 +1,38 @@
+// Structs group related fields into a single named type. Methods are ordinary
+// functions with a receiver — defined outside the struct body, any type can
+// have them. This receiver-based method syntax is borrowed from Go.
+// https://en.wikipedia.org/wiki/Struct_(C_programming_language)
+
 std := import("std")
+
 type Point struct { x int, y int }
-func (p Point) squaredLen() int {
-    return p.x*p.x + p.y*p.y
+
+func (p Point) scale(f int) Point {
+    return Point{x: p.x * f, y: p.y * f}
 }
+
+func (p Point) add(q Point) Point {
+    return Point{x: p.x + q.x, y: p.y + q.y}
+}
+
+func (p Point) squaredDist(q Point) int {
+    dx := q.x - p.x
+    dy := q.y - p.y
+    return dx*dx + dy*dy
+}
+
+type Rect struct { min Point, max Point }
+
+func (r Rect) width()  int { return r.max.x - r.min.x }
+func (r Rect) height() int { return r.max.y - r.min.y }
+func (r Rect) area()   int { return r.width() * r.height() }
+
 p := Point{x: 3, y: 4}
-std.io.printf("Point: (%d, %d)\n", p.x, p.y)
-std.io.printf("Squared length: %d\n", p.squaredLen())
+q := p.scale(2)
+std.io.printf("p=(%d,%d)  2p=(%d,%d)\n", p.x, p.y, q.x, q.y)
+
+origin := Point{x: 0, y: 0}
+std.io.printf("squared dist to origin: %d\n", p.squaredDist(origin))
+
+r := Rect{min: Point{x: 1, y: 1}, max: Point{x: 7, y: 4}}
+std.io.printf("rect %dx%d  area=%d\n", r.width(), r.height(), r.area())

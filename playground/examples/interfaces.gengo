@@ -1,21 +1,34 @@
+// An interface lists method signatures. Any type that implements all the methods
+// satisfies the interface automatically — no "implements" keyword is needed.
+// This implicit structural typing (duck typing) is borrowed from Go.
+// https://en.wikipedia.org/wiki/Protocol_(object-oriented_programming)
+
 std := import("std")
 
 type Shape interface {
-    area() float
+    area()      float
     perimeter() float
+    name()      string
 }
 
+type Circle struct { radius float }
 type Rect   struct { w float, h float }
-type Square struct { side float }
 
-func (r Rect)   area() float      { return r.w * r.h }
-func (r Rect)   perimeter() float { return 2.0 * (r.w + r.h) }
-func (s Square) area() float      { return s.side * s.side }
-func (s Square) perimeter() float { return 4.0 * s.side }
+func (c Circle) area()      float  { return 3.14159 * c.radius * c.radius }
+func (c Circle) perimeter() float  { return 2.0 * 3.14159 * c.radius }
+func (c Circle) name()      string { return "circle" }
 
-func describe(s Shape) {
-    std.io.printf("area=%f  perimeter=%f\n", s.area(), s.perimeter())
+func (r Rect) area()      float  { return r.w * r.h }
+func (r Rect) perimeter() float  { return 2.0 * (r.w + r.h) }
+func (r Rect) name()      string { return "rect" }
+
+// report accepts any value that satisfies the Shape interface.
+func report(s Shape) {
+    std.io.printf("%s: area=%.2f  perimeter=%.2f\n",
+        s.name(), s.area(), s.perimeter())
 }
 
-describe(Rect{w: 4.0, h: 3.0})
-describe(Square{side: 5.0})
+report(Circle{radius: 5.0})
+report(Circle{radius: 1.0})
+report(Rect{w: 4.0, h: 3.0})
+report(Rect{w: 10.0, h: 2.0})

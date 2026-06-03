@@ -1,11 +1,23 @@
+// Multiline strings use a \\ prefix on each line. Content is completely raw:
+// no escape sequences are processed and quotes need no backslash. Leading
+// whitespace before \\ is stripped. This syntax is borrowed from Zig.
+// https://en.wikipedia.org/wiki/Here_document
+
 std := import("std")
 
-// Use \\ to start a multiline string line.
-// Content is raw — escape sequences are not processed.
+// Embedding structured text without escape noise.
+config :=
+    \\{
+    \\  "host": "localhost",
+    \\  "port": 8080,
+    \\  "debug": true
+    \\}
 
-msg :=
-    \\Hello, Gengo!
-    \\Escape sequences \n and \t are NOT processed.
-    \\Quotes like "this" need no backslash.
+std.io.print(config)
 
-std.io.print(msg)
+// Prose — quotes and apostrophes need no escaping at all.
+note :=
+    \\She said "hello" and he replied "goodbye".
+    \\Escape sequences like \n and \t are printed literally here.
+
+std.io.print(note)

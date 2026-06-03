@@ -1,0 +1,41 @@
+// Defer schedules a function to run when the surrounding function exits,
+// regardless of how — useful for guaranteed cleanup. Recover catches runtime
+// traps (range violations, panics) from within a deferred function.
+// Both defer and recover are borrowed from Go.
+// https://en.wikipedia.org/wiki/Resource_acquisition_is_initialization
+
+std := import("std")
+
+// Defer runs at function exit even if the function returns early.
+func processFile(name string) {
+    defer std.io.printf("closed: %s\n", name)
+    std.io.printf("opened: %s\n", name)
+    std.io.println("processing...")
+}
+
+processFile("data.csv")
+processFile("report.txt")
+
+// Recover catches a runtime trap — here a named-type range violation.
+type Percent int range 0..100
+
+func process(values []int) {
+    defer func() {
+        err := std.core.recover()
+        if err != null {
+            std.io.println("recovered:", err)
+        }
+    }()
+    for v in values {
+        p := Percent(v)
+        std.io.printf("  %d%%\n", int(p))
+    }
+}
+
+std.io.println("valid batch:")
+process([10, 50, 75, 100])
+
+std.io.println("invalid batch (150 is out of 0..100):")
+process([10, 50, 150])
+
+std.io.println("program continues after trap")

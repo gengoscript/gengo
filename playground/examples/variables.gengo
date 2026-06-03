@@ -1,0 +1,24 @@
+// Variables hold typed values; Gengo infers the type from the initialiser.
+// Integer division yields an exact fraction rather than truncating — use int()
+// to discard the fractional part. The := short declaration is borrowed from Go.
+// https://en.wikipedia.org/wiki/Type_inference
+
+std := import("std")
+
+x    := 42
+pi   := 3.14159
+msg  := "Gengo"
+flag := true
+
+std.io.printf("x=%d  pi=%.5f  msg=%s\n", x, pi, msg)
+std.io.println("flag:", flag)
+
+// Integer division is exact — not truncated like C, Go, or Python 2.
+a := 10
+b := 3
+std.io.printf("10 / 3      = %f\n", a / b)
+std.io.printf("int(10 / 3) = %d\n", int(a / b))
+
+// Integers and floats are distinct — explicit conversion is required.
+std.io.printf("float(42) = %f\n", float(x))
+std.io.printf("int(pi)   = %d\n", int(pi))

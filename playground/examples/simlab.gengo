@@ -1,3 +1,8 @@
+// A discrete-event simulation combining structs, variants, interfaces, closures,
+// named types, and maps. Jobs are submitted to workers; busy workers cause retries
+// with exponential backoff; jobs that exhaust retries are dropped.
+// https://en.wikipedia.org/wiki/Discrete-event_simulation
+
 std := import("std")
 
 type Tick int range 0..1000000
@@ -149,7 +154,8 @@ func main() {
         jobs = std.core.append(jobs, mkJob(i, (i % 2) + 1, 10, "data"))
     }
     st := runSim(workers, jobs, Tick(1000))
-    std.io.printf("Processed: %d, Dropped: %d, Peak: %d\n", st.processed, st.dropped, st.peakQueue)
+    std.io.printf("Processed: %d, Dropped: %d, Peak queue: %d\n",
+        st.processed, st.dropped, st.peakQueue)
 }
 
 main()
