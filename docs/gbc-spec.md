@@ -1,12 +1,13 @@
 # Gengo Bytecode Cache — File Format Specification
 
 **Status:** Draft  
-**Version:** 0.2  
+**Version:** 0.3  
 **Scope:** GBC artifact only (see §2 for artifact class definitions)
 
 **Revision history**
 - 0.1 — Initial draft
 - 0.2 — Rename `stdlib_hash` → `module_provider_hash`; add `resolved_id` and `artifact_hash` to dependency entries; add `bytecode_length` and `local_count` to function entries; add `Bool` and `Rune` constant tags; rewrite `FieldTypeAlt` as per-tag encodings; fix `options_hash` canonical encoding widths; remove mutual-exclusion rule for `CHECKED_ARITHMETIC`/`OPTIMISED` from format; clarify header-size compatibility (no smaller-than-required); reorder validation phases; note f64 bounds limitation; note script/module philosophy
+- 0.3 — Fix body-offset bug (`8 + header_size`, not `header_size`); make `artifact_hash` advisory with full-validation requirement; clarify `SEC_DEPENDENCY_TABLE` records direct imports only; allow `SEC_EXPORTS` with `export_count = 0` for `ENTRY_MODULE`; make `variadic_type` conditional on `is_variadic` in `FunctionEntry` and `InterfaceMethod`; add `alt_count >= 1` constraint to `TypeSpec`; add `DEBUG_INFO` inverse rule; hash full `u32le(flags)` not `flags_low_byte` in `options_hash`; add future `INT (i64)` constant tag note; add domain separation and length prefixes to `source_graph_hash` and `module_provider_hash` hash inputs
 
 ---
 
@@ -134,7 +135,7 @@ Arrays are encoded as `u32` element count followed by elements. Optional fields 
 └─────────────────────────────┘
 ```
 
-The magic bytes appear at file offset 0 and are not part of the header. The header begins at offset 8. The body begins at offset `header_size` (as stored in the header). The body checksum covers all bytes from offset `header_size` through `header_size + body_length - 1` inclusive.
+The magic bytes appear at file offset 0 and are not part of the header. The header begins at offset 8. The body begins at file offset `8 + header_size`. The body checksum covers all bytes at file offsets `[8 + header_size, 8 + header_size + body_length)` inclusive.
 
 ---
 
@@ -190,7 +191,7 @@ Total defined header size for `header_version` 1: **192 bytes** (file offsets 8�
 
 | Bit | Mask | Name | Description |
 |-----|------|------|-------------|
-| 0 | `0x0001` | `DEBUG_INFO` | `DEBUG_SPANS` and/or `DEBUG_NAMES` sections are present. |
+| 0 | `0x0001` | `DEBUG_INFO` | At least one of `DEBUG_SPANS` or `DEBUG_NAMES` sections is present. If either section is present, this flag must be set. If this flag is set, at least one debug section must be present. |
 | 1 | `0x0002` | `CHECKED_ARITHMETIC` | Range constraint checks are enabled (dev/checked mode). |
 | 2 | `0x0004` | `OPTIMISED` | Compiled with optimisation enabled (release mode). |
 | 3–31 | — | `RESERVED` | Must be zero. Reject if any reserved bit is set. |
@@ -223,7 +224,7 @@ All other values are reserved and must cause rejection.
 |-------|----------|-------------|
 | `0x0000` | `ENTRY_UNSPECIFIED` | Invalid; reject. |
 | `0x0001` | `ENTRY_SCRIPT` | Module with executable top-level body. No required EXPORTS section, but may have one if public declarations exist. |
-| `0x0002` | `ENTRY_MODULE` | Importable module artifact. Must have an EXPORTS section. |
+| `0x0002` | `ENTRY_MODULE` | Importable module artifact. Must have an EXPORTS section; `export_count` may be zero. |
 | `0x0003` | `ENTRY_REPL_CELL` | REPL fragment. Depends on ambient REPL state; not independently loadable. |
 | `0x0004` | `ENTRY_TEST` | Test artifact. |
 
@@ -233,17 +234,25 @@ See §1 for the rationale for treating scripts and modules as the same underlyin
 
 **`source_graph_hash`**
 
+All inputs to `source_graph_hash` are length-prefixed using `str` encoding (§3) to prevent segmentation ambiguity — two different input sequences must not produce the same concatenated byte string. A domain label is prepended so this hash cannot be confused with hashes of other structures.
+
 For a single-file source with no file imports:
 ```
-source_graph_hash = SHA-256(source_text_utf8)
+source_graph_hash = SHA-256(
+  "GENGO_SOURCE_GRAPH_V1" ||
+  str(root_source_utf8)
+)
 ```
 
 For a source that imports other files (once file imports are implemented):
 ```
 source_graph_hash = SHA-256(
-  root_source_text_utf8 ||
+  "GENGO_SOURCE_GRAPH_V1"    ||
+  str(root_source_utf8)      ||
+  u32le(file_dep_count)      ||
   for each resolved file dependency in stable topological order:
-    resolved_id_utf8 || source_hash_of_dependency
+    str(resolved_id_utf8)    ||
+    hash32(dep_source_hash)
 )
 ```
 
@@ -268,8 +277,14 @@ module_provider_hash = vm_fingerprint
 
 Once stdlib ships as a separate binary or module providers become independently versioned:
 ```
-module_provider_hash = SHA-256(stdlib_binary || provider_registry_canonical_encoding)
+module_provider_hash = SHA-256(
+  "GENGO_MODULE_PROVIDER_V1"            ||
+  str(stdlib_binary)                    ||
+  str(provider_registry_canonical_encoding)
+)
 ```
+
+Inputs are length-prefixed (`str` encoding, §3) to prevent segmentation ambiguity.
 
 Rationale for a separate field: `vm_fingerprint` covers the VM instruction interpreter; `module_provider_hash` covers what the bytecode can call. When these are the same binary they are the same value, but they must remain separate fields to allow them to evolve independently.
 
@@ -281,7 +296,7 @@ SHA-256 of the canonical compiler options encoding (see §12 for encoding rules)
 
 ## 7. Body Structure
 
-The body begins at file byte offset `header_size` and is exactly `body_length` bytes long. The `body_checksum` must equal `xxHash64(body_bytes)`. The checksum must be verified before any section is parsed.
+The body begins at file byte offset `8 + header_size` and is exactly `body_length` bytes long. The `body_checksum` must equal `xxHash64(body_bytes)`. The checksum must be verified before any section is parsed.
 
 ### 7.1 Section Table
 
@@ -367,6 +382,8 @@ Each `Constant` is a tag byte followed by tag-specific data:
 | `BOOL` | `0x04` | `bool8` | Boolean value. |
 | `RUNE` | `0x05` | `u32` | Unicode code point (0–0x10FFFF). Reject values outside this range. |
 
+> **Reserved tag `INT` (`0x06`, `i64`):** Not used in v1 — the current VM represents all numbers as `f64` internally. This tag is reserved for a future format version when the VM gains a distinct integer representation. Writers must not emit it; loaders must reject it.
+
 Constants are indexed from 0. Instructions reference constants by `u16` or `u32` index as defined in the instruction set.
 
 ### 8.3 FUNCTIONS
@@ -388,7 +405,7 @@ FunctionEntry {
   local_count        : u16      // number of local variable slots (includes parameters)
   arity              : u8
   is_variadic        : bool8
-  variadic_type      : TypeSpec
+  variadic_type      : TypeSpec   // present only if is_variadic
   has_typed_params   : bool8
   has_typed_returns  : bool8
   named_return_count : u8
@@ -430,7 +447,7 @@ Native import entries are referenced by index from bytecode instructions. The GB
 
 ### 8.5 EXPORTS
 
-Present for `ENTRY_MODULE` artifacts; optional for `ENTRY_SCRIPT`. Lists the public names this artifact exports.
+Required for `ENTRY_MODULE` artifacts (with `export_count` ≥ 0); optional for `ENTRY_SCRIPT`. A module with no public declarations must still include this section with `export_count = 0`. Lists the public names this artifact exports.
 
 ```
 export_count : u32
@@ -511,7 +528,7 @@ InterfaceMethod {
   name              : str
   arity             : u8
   is_variadic       : bool8
-  variadic_type     : TypeSpec
+  variadic_type     : TypeSpec   // present only if is_variadic
   has_typed_params  : bool8
   has_typed_returns : bool8
   param_type_count  : u16
@@ -538,7 +555,7 @@ VariantArm {
 
 ### 8.7 DEPENDENCY\_TABLE
 
-Declares every import made by this source, with both the written specifier and its canonical resolved identity.
+Declares the **direct** imports made by this source — those that appear explicitly in the source text — with both the written specifier and its canonical resolved identity. Transitive dependencies are not listed here; their identity is captured through `source_graph_hash` in the header and through the dependency artifacts' own `DEPENDENCY_TABLE` sections.
 
 ```
 dependency_count : u32
@@ -573,7 +590,9 @@ For `kind = STDLIB`, `source_hash` is all zeros — stdlib is covered by `module
 
 For `kind = FILE`, the loader must re-read the dependency source at the path implied by `resolved_id` and verify that `SHA-256(current_source) == source_hash`. If the hashes differ, the root artifact is stale.
 
-`artifact_hash` is the SHA-256 of the dependency's own compiled GBC file, if available. Set to all zeros when not available. This enables per-module cache validation without re-reading source: if `artifact_hash` is nonzero and the dependency's GBC file has a matching body checksum, source re-reading may be skipped.
+`artifact_hash` is the SHA-256 of the dependency's compiled GBC artifact body, if available at compile time. Set to all zeros when not available.
+
+`artifact_hash` is **advisory**. A loader may use it to locate a candidate dependency artifact, but must still perform full validation on that artifact — checking its header, `source_graph_hash`, `vm_fingerprint`, `module_provider_hash`, `options_hash`, and body checksum — before trusting it. A matching `artifact_hash` alone is not sufficient: the body checksum is xxHash64 (corruption detection only), and the artifact may still be stale with respect to the current runtime or options.
 
 ### 8.8 DEBUG\_SPANS (optional)
 
@@ -631,6 +650,8 @@ TypeSpec {
   alts      : [alt_count]FieldTypeAlt
 }
 ```
+
+`alt_count` must be ≥ 1. An empty alternative set is invalid and must be rejected. Duplicate alternatives (two alts with the same tag and identical fields) are not permitted; loaders should reject them. The order of alternatives is not semantically significant but must be consistent between compiler and loader.
 
 ### 9.2 FieldTypeAlt
 
@@ -754,7 +775,7 @@ These checks require no content interpretation beyond reading fixed-offset bytes
 | 11 | `backend_id` is a known value and matches current runtime backend | `BackendMismatch(artifact, runtime)` |
 | 12 | `entry_kind` is a known non-zero value | `UnknownEntryKind(n)` |
 | 13 | `flags` reserved bits are all zero | `UnknownFlags` |
-| 14 | File contains at least `header_size + body_length` bytes | `TruncatedBody` |
+| 14 | File is at least `8 + header_size + body_length` bytes | `TruncatedBody` |
 | 15 | `xxHash64(body_bytes) == body_checksum` | `BodyChecksumMismatch` |
 
 **Phase 2 — Section table validation**
@@ -823,14 +844,14 @@ The canonical encoding for `options_hash` is a byte string computed as:
 
 ```
 options_encoding_v1 = SHA-256(
-  u8(1)            ||   // encoding version, currently 1
-  u32le(target_id) ||
+  u8(1)             ||   // encoding version, currently 1
+  u32le(target_id)  ||
   u32le(backend_id) ||
-  u8(flags_low_byte)    // lower 8 bits of the flags field
+  u32le(flags)           // full flags field; all bits, including currently reserved ones
 )
 ```
 
-Integer widths in this encoding match the header field widths (§6.1). Do not use `u8` for fields declared as `u32` in the header.
+Integer widths match the header field widths (§6.1). The full `flags` field is hashed rather than a truncated byte, so future codegen-affecting flags in any bit position are automatically included without requiring an encoding version bump.
 
 Adding a new option means appending bytes to the encoding and bumping the encoding version byte. This changes `options_hash` for all existing option sets regardless of the new option's value. This is intentional: accept that adding an option invalidates existing artifacts rather than attempting to preserve old hashes by conditionally omitting default-valued options. The encoding version byte gives loaders a mechanism to distinguish old encodings if a migration path is needed.
 
@@ -842,20 +863,25 @@ Adding a new option means appending bytes to the encoding and bumping the encodi
 
 **Baseline (single file, no file imports):**
 ```
-source_graph_hash = SHA-256(root_source_utf8)
+source_graph_hash = SHA-256(
+  "GENGO_SOURCE_GRAPH_V1" ||
+  str(root_source_utf8)
+)
 ```
 
 **With file imports:**
 ```
-inputs = []
-inputs.append(root_source_utf8)
-for each resolved file dependency in stable topological order:
-    inputs.append(utf8(resolved_id))
-    inputs.append(SHA-256(dependency_source_utf8))
-source_graph_hash = SHA-256(concat(inputs))
+source_graph_hash = SHA-256(
+  "GENGO_SOURCE_GRAPH_V1"    ||
+  str(root_source_utf8)      ||
+  u32le(file_dep_count)      ||
+  for each resolved file dependency in stable topological order:
+    str(resolved_id_utf8)    ||
+    hash32(SHA-256(dep_source_utf8))
+)
 ```
 
-The topological order must be canonical and deterministic. The `resolved_id` (not the `written_specifier`) is used in the hash input, because two different written specifiers may resolve to the same module.
+All inputs use `str` encoding (§3: `u32le` length prefix + UTF-8 bytes) to prevent segmentation ambiguity between inputs. The `resolved_id` (not the `written_specifier`) is used in the hash input, because two different written specifiers may resolve to the same module. The topological order must be canonical and deterministic.
 
 Each module artifact stores `source_graph_hash` covering only its own transitive file dependencies. This allows per-module cache invalidation: changing `math.gengo` invalidates `math.gbc` and the GBC of any module that imports it, but not unrelated modules.
 
