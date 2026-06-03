@@ -2,6 +2,23 @@
 
 This changelog tracks notable language/runtime changes by implementation date.
 
+## 2026-06-03
+
+### Build — Native Zig Test/Bench Runners
+
+Replaced all shell-script test/bench harnesses with native Zig executables built and run directly by `build.zig`:
+
+- `src/test_runner.zig` — unified runner for conformance, benchmarks, and parity tests
+- `src/bench_perf_runner.zig` — perf-counter benchmark runner
+
+Removed:
+- `tests/run_conformance.sh`
+- `tests/run_bench.sh`
+- `tests/run_host_parity.sh`
+- `scripts/perf/run.sh`
+
+No `WASMTIME_BIN` environment variable is required. The `-Dwasmtime=` build option (default `wasmtime`) is passed directly to the native runners.
+
 ## 2026-06-01
 
 ### Language — Zig-style `\\` Multiline Strings

@@ -49,13 +49,13 @@ wasmtime --dir . ./build/gengo-runtime.wasm -- --max-ops 100000 path/to/script.g
 `test` always resets to dev preset first.
 
 ```bash
-WASMTIME_BIN=/path/to/wasmtime zig build -Dpreset=dev test
+zig build -Dpreset=dev test
 ```
 
 ## Host/Embedded Parity
 
 ```bash
-WASMTIME_BIN=/path/to/wasmtime zig build -Dpreset=dev parity
+zig build -Dpreset=dev parity
 ```
 
 ## Benchmarks
@@ -63,20 +63,20 @@ WASMTIME_BIN=/path/to/wasmtime zig build -Dpreset=dev parity
 Default:
 
 ```bash
-WASMTIME_BIN=/path/to/wasmtime zig build -Dpreset=dev bench
+zig build -Dpreset=dev bench
 ```
 
 Tiny and stress presets:
 
 ```bash
-WASMTIME_BIN=/path/to/wasmtime zig build -Dpreset=tiny bench
-WASMTIME_BIN=/path/to/wasmtime GENGO_BENCH_INCLUDE_STRESS=1 zig build -Dpreset=stress bench
+zig build -Dpreset=tiny bench
+zig build -Dpreset=stress bench
 ```
 
 With benchmark timing/throughput logs:
 
 ```bash
-WASMTIME_BIN=/path/to/wasmtime GENGO_BENCH_STATS=1 zig build -Dpreset=tiny bench
+GENGO_BENCH_STATS=1 zig build -Dpreset=tiny bench
 ```
 
 ## Common Gotchas

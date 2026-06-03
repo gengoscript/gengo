@@ -1,6 +1,6 @@
 std := import("std")
 
-func inc(x int) {
+func inc(x int) int {
     return x + 1
 }
 

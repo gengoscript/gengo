@@ -43,11 +43,23 @@ pub fn build(b: *std.Build) void {
     const run_embedding = b.addSystemCommand(&.{ wasmtime_opt, "--dir", "/" });
     run_embedding.addArtifactArg(embedding_exe);
 
+    // ── Native test runner (replaces bash scripts) ────────────────────────────
+
+    const test_runner_mod = b.createModule(.{
+        .root_source_file = b.path("src/test_runner.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    test_runner_mod.link_libc = true;
+    const test_runner_exe = b.addExecutable(.{ .name = "test-runner", .root_module = test_runner_mod });
+
     // ── Conformance ───────────────────────────────────────────────────────────
 
-    const conformance = b.addSystemCommand(&.{ "bash", "./tests/run_conformance.sh" });
-    conformance.step.dependOn(&install_debug.step);
-    conformance.setEnvironmentVariable("WASMTIME_BIN", wasmtime_opt);
+    const run_conformance = b.addRunArtifact(test_runner_exe);
+    run_conformance.step.dependOn(&install_debug.step);
+    run_conformance.addArg("conformance");
+    run_conformance.addArg(wasmtime_opt);
+    run_conformance.addArg("build/gengo-runtime.wasm");
 
     // ── Named steps ───────────────────────────────────────────────────────────
 
@@ -69,15 +81,23 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run runtime safety, embedding API, and conformance tests");
     test_step.dependOn(&run_vm_safety.step);
     test_step.dependOn(&run_embedding.step);
-    test_step.dependOn(&conformance.step);
+    test_step.dependOn(&run_conformance.step);
 
-    const bench = scriptStep(b, "bash", "./tests/run_bench.sh", &install_debug.step, wasmtime_opt);
+    const run_bench = b.addRunArtifact(test_runner_exe);
+    run_bench.step.dependOn(&install_debug.step);
+    run_bench.addArg("bench");
+    run_bench.addArg(wasmtime_opt);
+    run_bench.addArg("build/gengo-runtime.wasm");
     const bench_step = b.step("bench", "Run benchmark suite");
-    bench_step.dependOn(&bench.step);
+    bench_step.dependOn(&run_bench.step);
 
-    const bench_release = scriptStep(b, "bash", "./tests/run_bench.sh", &install_release.step, wasmtime_opt);
+    const run_bench_release = b.addRunArtifact(test_runner_exe);
+    run_bench_release.step.dependOn(&install_release.step);
+    run_bench_release.addArg("bench");
+    run_bench_release.addArg(wasmtime_opt);
+    run_bench_release.addArg("build/gengo-runtime.wasm");
     const bench_release_step = b.step("bench-release", "Run benchmark suite (ReleaseFast)");
-    bench_release_step.dependOn(&bench_release.step);
+    bench_release_step.dependOn(&run_bench_release.step);
 
     // bench-perf: perf-instrumented debug build; outputs PERF: lines to stderr
     const perf_opts = b.addOptions();
@@ -85,13 +105,27 @@ pub fn build(b: *std.Build) void {
     const perf_opts_mod = perf_opts.createModule();
     const gengo_perf = addWasmExe(b, "gengo-perf", "src/main.zig", wasm_target, .Debug, &preset.step, perf_opts_mod);
     const install_perf = installWasmAs(b, gengo_perf, "gengo-perf.wasm");
-    const bench_perf = scriptStep(b, "bash", "./scripts/perf/run.sh", &install_perf.step, wasmtime_opt);
-    const bench_perf_step = b.step("bench-perf", "Run benchmarks with perf counters (PERF: lines on stderr)");
-    bench_perf_step.dependOn(&bench_perf.step);
 
-    const parity = scriptStep(b, "bash", "./tests/run_host_parity.sh", &install_debug.step, wasmtime_opt);
+    const bench_perf_runner_mod = b.createModule(.{
+        .root_source_file = b.path("src/bench_perf_runner.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    bench_perf_runner_mod.link_libc = true;
+    const bench_perf_runner_exe = b.addExecutable(.{ .name = "bench-perf-runner", .root_module = bench_perf_runner_mod });
+    const run_bench_perf = b.addRunArtifact(bench_perf_runner_exe);
+    run_bench_perf.step.dependOn(&install_perf.step);
+    run_bench_perf.addArg(wasmtime_opt);
+    const bench_perf_step = b.step("bench-perf", "Run benchmarks with perf counters (PERF: lines on stderr)");
+    bench_perf_step.dependOn(&run_bench_perf.step);
+
+    const run_parity = b.addRunArtifact(test_runner_exe);
+    run_parity.step.dependOn(&install_debug.step);
+    run_parity.addArg("parity");
+    run_parity.addArg(wasmtime_opt);
+    run_parity.addArg("build/gengo-runtime.wasm");
     const parity_step = b.step("parity", "Run host/embedded parity tests");
-    parity_step.dependOn(&parity.step);
+    parity_step.dependOn(&run_parity.step);
 
     // ── Native CLI ────────────────────────────────────────────────────────────
 
@@ -189,15 +223,4 @@ fn installWasmAs(
     return step;
 }
 
-fn scriptStep(
-    b: *std.Build,
-    shell: []const u8,
-    script: []const u8,
-    depends_on: *std.Build.Step,
-    wasmtime: []const u8,
-) *std.Build.Step.Run {
-    const step = b.addSystemCommand(&.{ shell, script });
-    step.step.dependOn(depends_on);
-    step.setEnvironmentVariable("WASMTIME_BIN", wasmtime);
-    return step;
-}
+

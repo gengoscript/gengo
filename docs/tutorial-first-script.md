@@ -80,19 +80,19 @@ Mikael M
 Run conformance:
 
 ```bash
-WASMTIME_BIN=/path/to/wasmtime zig build -Dpreset=dev test
+zig build -Dpreset=dev test
 ```
 
 Run backend parity checks:
 
 ```bash
-WASMTIME_BIN=/path/to/wasmtime zig build -Dpreset=dev parity
+zig build -Dpreset=dev parity
 ```
 
 Run tiny benchmark lane:
 
 ```bash
-WASMTIME_BIN=/path/to/wasmtime zig build -Dpreset=tiny bench
+zig build -Dpreset=tiny bench
 ```
 
 Notes:
