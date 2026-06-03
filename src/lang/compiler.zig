@@ -81,6 +81,8 @@ pub const Compiler = struct {
     exports: [MaxLocals]ExportEntry = undefined,
     export_count: u8 = 0,
 
+    // ── Lifecycle ────────────────────────────────────────────────────────────────
+
     pub fn init(src: []const u8, options: CompilerOptions) Compiler {
         return .{ .lex = .{ .src = src }, .options = options };
     }
@@ -123,6 +125,8 @@ pub const Compiler = struct {
         try chunk.emit2(@intFromEnum(Op.build_struct_instance), self.export_count, self.prev.line);
         try chunk.emitOpConst(.def_global, .{ .string = self.options.module_global_name }, self.prev.line);
     }
+
+    // ── Scope and variable resolution ────────────────────────────────────────────
 
     fn inFunc(self: *Compiler) bool {
         return self.scope_depth > 0;
@@ -260,6 +264,8 @@ pub const Compiler = struct {
         }
     }
 
+    // ── Loop context ─────────────────────────────────────────────────────────────
+
     fn loopKeepBase(self: *Compiler) u8 {
         if (!self.inFunc()) return 0;
         return self.currentScope().local_count;
@@ -310,6 +316,8 @@ pub const Compiler = struct {
         if (self.inFunc()) self.currentScope().local_count = saved;
     }
 
+    // ── Top-level dispatch ───────────────────────────────────────────────────────
+
     fn decl(self: *Compiler) anyerror!void {
         if (self.match(.kw_pub)) {
             if (self.inFunc()) return error.InvalidPubTarget;
@@ -354,6 +362,8 @@ pub const Compiler = struct {
         }
         return error.InvalidPubTarget;
     }
+
+    // ── Type declarations ────────────────────────────────────────────────────────
 
     fn interfaceDeclBody(self: *Compiler, kw: Token, name: Token, is_pub: bool) !void {
         try self.registry.addInterfaceType(name.src);
@@ -1092,6 +1102,8 @@ pub const Compiler = struct {
         self.matchOpt(.semicolon);
     }
 
+    // ── Variable declarations ────────────────────────────────────────────────────
+
     fn varDecl(self: *Compiler, has_keyword: bool, is_const: bool) !void {
         if (has_keyword and self.cur.typ != .ident) return error.UnexpectedToken;
         const name = self.cur;
@@ -1387,6 +1399,8 @@ pub const Compiler = struct {
         try chunk.emitOp(.pop, self.prev.line);
         self.matchOpt(.semicolon);
     }
+
+    // ── Statement parsing ────────────────────────────────────────────────────────
 
     fn deferStmt(self: *Compiler) !void {
         if (!self.inFunc()) return error.DeferOutsideFunction;
@@ -2115,6 +2129,8 @@ pub const Compiler = struct {
         }
     }
 
+    // ── Block and function bodies ────────────────────────────────────────────────
+
     fn block(self: *Compiler) anyerror!void {
         const local_base: u8 = if (self.inFunc()) self.currentScope().local_count else 0;
         while (!self.check(.rbrace) and !self.check(.eof)) try self.decl();
@@ -2316,6 +2332,8 @@ pub const Compiler = struct {
         const cidx: u16 = try chunk.addConst(.{ .object = func_obj });
         try chunk.emitConstIdx(.make_closure, cidx, self.prev.line);
     }
+
+    // ── Expression parsing (Pratt) ───────────────────────────────────────────────
 
     fn skipTypeSpec(self: *Compiler) !void {
         _ = self.match(.question);
@@ -2612,6 +2630,8 @@ pub const Compiler = struct {
         }
     }
 
+    // ── Token helpers ────────────────────────────────────────────────────────────
+
     fn advance(self: *Compiler) void {
         self.prev = self.cur;
         if (self.peek_tok) |t| {
@@ -2649,6 +2669,8 @@ pub const Compiler = struct {
         var lx = self.lex;
         return lx.next().typ;
     }
+
+    // ── Module and name helpers ──────────────────────────────────────────────────
 
     fn qualifyGlobalName(self: *Compiler, name: []const u8) ![]const u8 {
         if (self.options.module_prefix.len == 0) return name;
