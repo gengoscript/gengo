@@ -1,0 +1,30 @@
+std := import("std")
+tmpl := std.template
+
+// If true
+r := tmpl.render("{{if .flag}}yes{{end}}", {"flag": true})
+std.io.println(r)
+
+// If false
+r = tmpl.render("{{if .flag}}yes{{end}}", {"flag": false})
+std.io.println(r)
+
+// If/else true
+r = tmpl.render("{{if .flag}}yes{{else}}no{{end}}", {"flag": true})
+std.io.println(r)
+
+// If/else false
+r = tmpl.render("{{if .flag}}yes{{else}}no{{end}}", {"flag": false})
+std.io.println(r)
+
+// With block
+r = tmpl.render("{{with .x}}inner: {{.}}{{end}}", {"x": "val"})
+std.io.println(r)
+
+// Nested if
+r = tmpl.render("{{if .a}}{{if .b}}ab{{end}}{{end}}", {"a": true, "b": true})
+std.io.println(r)
+
+// Chained field in if condition
+r = tmpl.render("{{if .nested.flag}}deep{{end}}", {"nested": {"flag": true}})
+std.io.println(r)

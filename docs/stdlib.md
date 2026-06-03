@@ -198,3 +198,41 @@ std := import("std")
 
 ### `std.json.valid(s)`
 - Returns `true` if `s` is valid JSON, `false` otherwise
+
+## std.template
+
+Go-style text templates with `{{` / `}}` delimiters.
+
+### `std.template.render(src, data)`
+- Parses and executes `src` against `data` in one call
+- Returns the rendered string
+- Errors: `InvalidTemplate` on malformed template, `TypeError` on type mismatch
+
+### `std.template.parse(src)`
+- Compiles `src` into a reusable `Template` object
+- Errors: `InvalidTemplate` on malformed template
+
+### `Template.execute(data)`
+- Executes a compiled template against `data`
+- Returns the rendered string
+
+### `std.template.valid(src)`
+- Returns `true` if `src` is a well-formed template, `false` otherwise
+
+### `std.template.add_func(tmpl, name, fn)`
+- Registers a named function on a compiled template for use in `{{call_fn}}` tags
+- Returns `null`
+
+### Syntax
+
+| Tag | Description |
+|-----|-------------|
+| `{{.field}}` | Field/key access on current context |
+| `{{.a.b}}` | Chained field access |
+| `{{.}}` | Current context value |
+| `{{if .expr}}…{{end}}` | Conditional block |
+| `{{if .expr}}…{{else}}…{{end}}` | Conditional with else |
+| `{{with .expr}}…{{end}}` | Scoped context block |
+| `{{/* comment */}}` | Comment (emits nothing) |
+
+Note: `range` iteration is reserved syntax but not yet executed (v1 always takes the else/empty branch).

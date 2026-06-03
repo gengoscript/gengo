@@ -1,0 +1,18 @@
+std := import("std")
+tmpl := std.template
+
+// Basic text output
+result := tmpl.render("Hello, World!", {})
+std.io.println(result)
+
+// Field access
+result = tmpl.render("Hello {{.name}}!", {"name": "Alice"})
+std.io.println(result)
+
+// Multiple fields
+result = tmpl.render("{{.greeting}}, {{.name}}!", {"greeting": "Hello", "name": "Bob"})
+std.io.println(result)
+
+// Chained field access
+result = tmpl.render("{{.a.b}}", {"a": {"b": "nested"}})
+std.io.println(result)

@@ -1,0 +1,24 @@
+std := import("std")
+tmpl := std.template
+
+// Parse + execute (compiled template)
+t := tmpl.parse("Hello {{.name}}!")
+r := t.execute({"name": "Compiled"})
+std.io.println(r)
+
+// Reuse
+r = t.execute({"name": "Again"})
+std.io.println(r)
+
+// Valid
+std.io.println(tmpl.valid("{{.ok}}"))
+std.io.println(tmpl.valid("{{broken"))
+
+// Comments
+r = tmpl.render("a{{/* comment */}}b", {})
+std.io.println(r)
+
+// Dot context with various types
+std.io.println(tmpl.render("{{.}}", "str"))
+std.io.println(tmpl.render("{{.}}", null))
+std.io.println(tmpl.render("{{.}}", true))
