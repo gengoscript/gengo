@@ -22,7 +22,7 @@ self.onmessage = async (evt) => {
 
     const wasi = new WASI(["gengo-runtime.wasm", "script.gengo"], [], fds);
     const res = await fetch("./gengo-runtime.wasm", { cache: "no-store" });
-    if (!res.ok) throw new Error(`Failed to fetch wasm: \${res.status}`);
+    if (!res.ok) throw new Error(`Failed to fetch wasm: ${res.status}`);
 
     const wasm = await WebAssembly.instantiateStreaming(res, {
       wasi_snapshot_preview1: wasi.wasiImport,
@@ -33,14 +33,14 @@ self.onmessage = async (evt) => {
       if (exitCode === 0 || exitCode === undefined) {
         finish("done", {});
       } else {
-        finish("error", { error: `Exit code \${exitCode}` });
+        finish("error", { error: `Exit code ${exitCode}` });
       }
     } catch (err) {
       if (err && (err.name === "ProcExitError" || err.code !== undefined)) {
         if (err.code === 0) {
           finish("done", {});
         } else {
-          finish("error", { error: `Exit code \${err.code}` });
+          finish("error", { error: `Exit code ${err.code}` });
         }
       } else {
         throw err;

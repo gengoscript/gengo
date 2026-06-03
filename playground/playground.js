@@ -212,7 +212,7 @@ function startWorker(script) {
     if (msg.kind === "stdout") { appendOutput(msg.text); return; }
     if (msg.kind === "stderr") { hasStderr = true; appendOutput(msg.text, true); return; }
     if (msg.kind === "done") { setIdle(hasStderr ? "Error" : "Success", hasStderr); return; }
-    if (msg.kind === "error") { appendOutput(String(msg.error) + "\n", true); setIdle("Error", true); }
+    if (msg.kind === "error") { setIdle("Error", true); return; }
   };
 
   worker.onerror = function (err) {
