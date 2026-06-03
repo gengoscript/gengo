@@ -1,0 +1,15 @@
+std := import("std")
+json := std.json
+
+// Roundtrip: parse then stringify
+src := "{\"name\":\"Alice\",\"items\":[1,2,3]}"
+data := json.parse(src)
+out := json.stringify(data)
+std.io.println(out)
+
+// Roundtrip with map literal
+m := {"key": "value", "num": 99}
+str := json.stringify(m)
+parsed := json.parse(str)
+std.io.println(parsed["key"])
+std.io.println(parsed["num"])

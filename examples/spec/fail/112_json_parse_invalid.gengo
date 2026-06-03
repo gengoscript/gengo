@@ -1,0 +1,5 @@
+std := import("std")
+json := std.json
+
+// Invalid JSON should panic
+json.parse("not json")

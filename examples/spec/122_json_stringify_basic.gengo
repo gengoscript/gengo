@@ -1,0 +1,23 @@
+std := import("std")
+json := std.json
+
+// Stringify basic types
+std.io.println(json.stringify(null))
+std.io.println(json.stringify(true))
+std.io.println(json.stringify(false))
+std.io.println(json.stringify(42))
+std.io.println(json.stringify(3.14))
+std.io.println(json.stringify("hello"))
+std.io.println(json.stringify("with\"quotes\""))
+
+// Stringify array
+arr := [1, 2, 3]
+std.io.println(json.stringify(arr))
+
+// Stringify map
+m := {"a": 1, "b": 2}
+std.io.println(json.stringify(m))
+
+// Stringify nested
+nested := {"user": {"id": 42}, "tags": ["a", "b"]}
+std.io.println(json.stringify(nested))

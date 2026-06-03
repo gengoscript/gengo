@@ -1,0 +1,10 @@
+std := import("std")
+json := std.json
+
+std.io.println(json.valid("{\"a\":1}"))
+std.io.println(json.valid("not json"))
+std.io.println(json.valid("[]"))
+std.io.println(json.valid(""))
+std.io.println(json.valid("null"))
+std.io.println(json.valid("42"))
+std.io.println(json.valid("\"hello\""))

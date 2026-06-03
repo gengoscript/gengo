@@ -1,0 +1,33 @@
+std := import("std")
+json := std.json
+
+// Parse basic JSON
+data := json.parse("{\"name\":\"Alice\",\"age\":30,\"active\":true,\"score\":null}")
+std.io.println(data["name"])
+std.io.println(data["age"])
+std.io.println(data["active"])
+std.io.println(data["score"])
+
+// Array
+arr := json.parse("[1,2,3,\"hello\"]")
+std.io.println(arr[0])
+std.io.println(arr[3])
+
+// Nested
+nested := json.parse("{\"user\":{\"id\":42},\"tags\":[\"a\",\"b\"]}")
+std.io.println(nested["user"]["id"])
+std.io.println(nested["tags"][1])
+
+// Empty
+std.io.println(std.core.len(json.parse("[]")))
+std.io.println(std.core.len(json.parse("{}")))
+
+// String with escapes
+esc := json.parse("{\"msg\":\"hello\\nworld\\t!\"}")
+std.io.println(esc["msg"])
+
+// Numbers
+nums := json.parse("{\"int\":42,\"neg\":-7,\"float\":3.14}")
+std.io.println(nums["int"])
+std.io.println(nums["neg"])
+std.io.println(nums["float"])

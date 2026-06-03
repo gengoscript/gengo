@@ -182,3 +182,19 @@ std := import("std")
 ### `std.rand.choice(arr)`
 - Returns a random element from `arr`
 - Errors: `RangeError` on empty array, `TypeError` if not an array
+
+## std.json
+
+### `std.json.parse(s)`
+- Parses a JSON string and returns the corresponding gengo value
+- JSON null → `null`, booleans → `bool`, numbers → `number`, strings → `string`, arrays → array, objects → map
+- Errors: `TypeError` on invalid JSON
+
+### `std.json.stringify(v)`
+- Serializes a gengo value to a JSON string
+- Arrays → JSON arrays, maps → JSON objects (string keys required), scalars → JSON primitives
+- Non-serializable values (struct instances, closures, etc.) emit `null`
+- Returns `string`
+
+### `std.json.valid(s)`
+- Returns `true` if `s` is valid JSON, `false` otherwise

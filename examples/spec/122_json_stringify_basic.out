@@ -1,0 +1,10 @@
+null
+true
+false
+42
+3.14
+"hello"
+"with\"quotes\""
+[1,2,3]
+{"a":1,"b":2}
+{"user":{"id":42},"tags":["a","b"]}
