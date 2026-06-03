@@ -1,0 +1,15 @@
+std := import("std")
+
+// base64 encode/decode roundtrip
+b := std.base64.encode("hello")
+std.io.println(b)
+std.io.println(std.base64.decode(b))
+// single byte (padding = 2)
+std.io.println(std.base64.encode("h"))
+std.io.println(std.base64.decode("aA=="))
+// empty
+std.io.println(std.base64.encode(""))
+// URL-safe
+bu := std.base64.url_encode("hello")
+std.io.println(bu)
+std.io.println(std.base64.url_decode(bu))

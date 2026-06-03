@@ -1,0 +1,6 @@
+std := import("std")
+
+// time extended - add_date is deterministic
+t := std.time.from_unix(1700000000)
+add := t.add_date(1, 2, 3)
+std.io.println(add.unix())

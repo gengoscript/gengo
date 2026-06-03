@@ -1,0 +1,14 @@
+std := import("std")
+
+// rand extended - test shape, not exact values
+p := std.rand.perm(5)
+std.io.println(std.core.len(p))
+std.io.println(p[0] >= 0 && p[0] < 5)
+std.io.println(p[1] >= 0 && p[1] < 5)
+std.io.println(p[2] >= 0 && p[2] < 5)
+std.io.println(p[3] >= 0 && p[3] < 5)
+std.io.println(p[4] >= 0 && p[4] < 5)
+
+// norm_float returns a number
+n := std.rand.norm_float()
+std.io.println(std.core.is_float(n))

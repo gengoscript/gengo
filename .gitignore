@@ -5,3 +5,4 @@ zig-out/
 *.wasm
 !playground/gengo-runtime.wasm
 embed-host-example
+test_epoch

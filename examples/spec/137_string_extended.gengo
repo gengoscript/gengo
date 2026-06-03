@@ -1,0 +1,18 @@
+std := import("std")
+
+// Extended string functions
+s := std.string
+std.io.println(s.count("hello world", "l"))
+std.io.println(s.count("hello", "xyz"))
+std.io.println(s.fields("a b c"))
+std.io.println(s.fields("  foo   bar  "))
+std.io.println(s.pad_left("42", 5, "0"))
+std.io.println(s.pad_left("hello", 3, "-"))
+std.io.println(s.pad_right("42", 5, "X"))
+std.io.println(s.pad_right("hello", 3, "-"))
+std.io.println(s.equal_fold("Hello", "hello"))
+std.io.println(s.equal_fold("abc", "ABC"))
+std.io.println(s.equal_fold("hello", "world"))
+std.io.println(s.contains_any("hello", "xyz"))
+std.io.println(s.contains_any("hello", "hx"))
+std.io.println(s.contains_any("hello", ""))

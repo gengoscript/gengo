@@ -143,6 +143,40 @@ const NativeFnId = enum(u8) {
     time_after = 89,
     time_equal = 90,
     time_is_zero = 91,
+    io_sprintf = 92,
+    math_acos = 93,
+    math_asin = 94,
+    math_atan = 95,
+    math_atan2 = 96,
+    math_cosh = 97,
+    math_sinh = 98,
+    math_tanh = 99,
+    math_exp = 100,
+    math_exp2 = 101,
+    math_trunc = 102,
+    math_cbrt = 103,
+    math_hypot = 104,
+    math_mod = 105,
+    math_nan = 106,
+    math_is_nan = 107,
+    math_is_inf = 108,
+    hex_encode = 109,
+    hex_decode = 110,
+    base64_encode = 111,
+    base64_decode = 112,
+    base64_url_encode = 113,
+    base64_url_decode = 114,
+    str_count = 115,
+    str_fields = 116,
+    str_pad_left = 117,
+    str_pad_right = 118,
+    str_equal_fold = 119,
+    str_contains_any = 120,
+    rand_perm = 121,
+    rand_norm_float = 122,
+    time_since = 123,
+    time_until = 124,
+    time_add_date = 125,
 };
 const MaxNativeArgs = 255;
 const NamespaceEntry = struct {
@@ -501,6 +535,7 @@ pub fn buildStdModule() !*Object {
     if (vms.vmState().std_module) |m| return m;
 
     const io_entries = [_]NamespaceEntry{
+        .{ .name = "sprintf", .value = try makeNative(.io_sprintf, 255) },
         .{ .name = "println", .value = try makeNative(.io_println, 255) },
         .{ .name = "printf", .value = try makeNative(.io_printf, 255) },
         .{ .name = "print", .value = try makeNative(.io_print, 255) },
@@ -566,8 +601,25 @@ pub fn buildStdModule() !*Object {
         .{ .name = "pow", .value = try makeNative(.math_pow, 2) },
         .{ .name = "min", .value = try makeNative(.math_min, 2) },
         .{ .name = "max", .value = try makeNative(.math_max, 2) },
+        .{ .name = "acos", .value = try makeNative(.math_acos, 1) },
+        .{ .name = "asin", .value = try makeNative(.math_asin, 1) },
+        .{ .name = "atan", .value = try makeNative(.math_atan, 1) },
+        .{ .name = "atan2", .value = try makeNative(.math_atan2, 2) },
+        .{ .name = "cosh", .value = try makeNative(.math_cosh, 1) },
+        .{ .name = "sinh", .value = try makeNative(.math_sinh, 1) },
+        .{ .name = "tanh", .value = try makeNative(.math_tanh, 1) },
+        .{ .name = "exp", .value = try makeNative(.math_exp, 1) },
+        .{ .name = "exp2", .value = try makeNative(.math_exp2, 1) },
+        .{ .name = "trunc", .value = try makeNative(.math_trunc, 1) },
+        .{ .name = "cbrt", .value = try makeNative(.math_cbrt, 1) },
+        .{ .name = "hypot", .value = try makeNative(.math_hypot, 2) },
+        .{ .name = "mod", .value = try makeNative(.math_mod, 2) },
+        .{ .name = "nan", .value = try makeNative(.math_nan, 0) },
+        .{ .name = "is_nan", .value = try makeNative(.math_is_nan, 1) },
+        .{ .name = "is_inf", .value = try makeNative(.math_is_inf, 2) },
         .{ .name = "pi", .value = .{ .number = std.math.pi } },
         .{ .name = "e", .value = .{ .number = std.math.e } },
+        .{ .name = "phi", .value = .{ .number = 1.618033988749895 } },
         .{ .name = "inf", .value = .{ .number = std.math.inf(f64) } },
     };
     const math_obj = try makeNamespace("math", "@module_type:std.math", &math_entries);
@@ -580,6 +632,8 @@ pub fn buildStdModule() !*Object {
         .{ .name = "between", .value = try makeNative(.rand_between, 2) },
         .{ .name = "seed", .value = try makeNative(.rand_seed, 1) },
         .{ .name = "choice", .value = try makeNative(.rand_choice, 1) },
+        .{ .name = "perm", .value = try makeNative(.rand_perm, 1) },
+        .{ .name = "norm_float", .value = try makeNative(.rand_norm_float, 0) },
     };
     const rand_obj = try makeNamespace("rand", "@module_type:std.rand", &rand_entries);
     try vms.pushTempRoot(.{ .object = rand_obj });
@@ -599,6 +653,12 @@ pub fn buildStdModule() !*Object {
         .{ .name = "repeat", .value = try makeNative(.str_repeat, 2) },
         .{ .name = "split_once", .value = try makeNative(.str_split_once, 2) },
         .{ .name = "builder", .value = try makeNative(.str_builder_new, 0) },
+        .{ .name = "count", .value = try makeNative(.str_count, 2) },
+        .{ .name = "fields", .value = try makeNative(.str_fields, 1) },
+        .{ .name = "pad_left", .value = try makeNative(.str_pad_left, 3) },
+        .{ .name = "pad_right", .value = try makeNative(.str_pad_right, 3) },
+        .{ .name = "equal_fold", .value = try makeNative(.str_equal_fold, 2) },
+        .{ .name = "contains_any", .value = try makeNative(.str_contains_any, 2) },
     };
     const string_obj = try makeNamespace("string", "@module_type:std.string", &string_entries);
     try vms.pushTempRoot(.{ .object = string_obj });
@@ -640,6 +700,8 @@ pub fn buildStdModule() !*Object {
         .{ .name = "from_unix_ms", .value = try makeNative(.time_from_unix_ms, 1) },
         .{ .name = "parse", .value = try makeNative(.time_parse, 2) },
         .{ .name = "sleep", .value = try makeNative(.time_sleep, 1) },
+        .{ .name = "since", .value = try makeNative(.time_since, 1) },
+        .{ .name = "until", .value = try makeNative(.time_until, 1) },
         .{ .name = "ms", .value = .{ .number = 1 } },
         .{ .name = "second", .value = .{ .number = 1000 } },
         .{ .name = "minute", .value = .{ .number = 60_000 } },
@@ -649,6 +711,24 @@ pub fn buildStdModule() !*Object {
     };
     const time_obj = try makeNamespace("time", "@module_type:std.time", &time_entries);
     try vms.pushTempRoot(.{ .object = time_obj });
+    defer vms.popTempRoot();
+
+    const hex_entries = [_]NamespaceEntry{
+        .{ .name = "encode", .value = try makeNative(.hex_encode, 1) },
+        .{ .name = "decode", .value = try makeNative(.hex_decode, 1) },
+    };
+    const hex_obj = try makeNamespace("hex", "@module_type:std.hex", &hex_entries);
+    try vms.pushTempRoot(.{ .object = hex_obj });
+    defer vms.popTempRoot();
+
+    const base64_entries = [_]NamespaceEntry{
+        .{ .name = "encode", .value = try makeNative(.base64_encode, 1) },
+        .{ .name = "decode", .value = try makeNative(.base64_decode, 1) },
+        .{ .name = "url_encode", .value = try makeNative(.base64_url_encode, 1) },
+        .{ .name = "url_decode", .value = try makeNative(.base64_url_decode, 1) },
+    };
+    const base64_obj = try makeNamespace("base64", "@module_type:std.base64", &base64_entries);
+    try vms.pushTempRoot(.{ .object = base64_obj });
     defer vms.popTempRoot();
 
     const std_entries = [_]NamespaceEntry{
@@ -661,6 +741,8 @@ pub fn buildStdModule() !*Object {
         .{ .name = "json", .value = .{ .object = json_obj } },
         .{ .name = "template", .value = .{ .object = template_obj } },
         .{ .name = "time", .value = .{ .object = time_obj } },
+        .{ .name = "hex", .value = .{ .object = hex_obj } },
+        .{ .name = "base64", .value = .{ .object = base64_obj } },
         .{ .name = "Time", .value = .{ .object = time_type_obj } },
     };
     const std_obj = try makeNamespace("std", "@module_type:std", &std_entries);
@@ -701,6 +783,9 @@ pub fn installStdGlobal() !void {
             .{ .name = "after",     .id = .time_after,     .arity = 2 },
             .{ .name = "equal",     .id = .time_equal,     .arity = 2 },
             .{ .name = "is_zero",   .id = .time_is_zero,   .arity = 1 },
+            .{ .name = "since",     .id = .time_since,     .arity = 1 },
+            .{ .name = "until",     .id = .time_until,     .arity = 1 },
+            .{ .name = "add_date",  .id = .time_add_date,  .arity = 4 },
         };
         for (time_methods) |m| {
             const needed = TimeTypeQualifiedName.len + 1 + m.name.len;
@@ -714,6 +799,338 @@ pub fn installStdGlobal() !void {
             }
         }
     }
+}
+
+fn sprintValue(buf_or_null: ?[]u8, v: Value) !usize {
+    switch (v) {
+        .null => {
+            if (buf_or_null) |buf| @memcpy(buf[0..4], "null");
+            return 4;
+        },
+        .boolean => |b| {
+            const s = if (b) "true" else "false";
+            if (buf_or_null) |buf| @memcpy(buf[0..s.len], s);
+            return s.len;
+        },
+        .number => |n| {
+            if (n == @trunc(n) and !std.math.isInf(n) and n == n) {
+                const i = @as(i64, @intFromFloat(n));
+                var tmp: [32]u8 = undefined;
+                const s = std.fmt.bufPrint(tmp[0..], "{d}", .{i}) catch return error.TypeError;
+                if (buf_or_null) |buf| @memcpy(buf[0..s.len], s);
+                return s.len;
+            }
+            if (n != n) {
+                if (buf_or_null) |buf| @memcpy(buf[0..3], "NaN");
+                return 3;
+            }
+            if (std.math.isInf(n)) {
+                const s = if (n > 0) "Inf" else "-Inf";
+                if (buf_or_null) |buf| @memcpy(buf[0..s.len], s);
+                return s.len;
+            }
+            var tmp: [64]u8 = undefined;
+            const s = std.fmt.bufPrint(tmp[0..], "{d}", .{n}) catch return error.TypeError;
+            if (buf_or_null) |buf| @memcpy(buf[0..s.len], s);
+            return s.len;
+        },
+        .string => |s| {
+            if (buf_or_null) |buf| @memcpy(buf[0..s.len], s);
+            return s.len;
+        },
+        .rune => |r| {
+            var tmp: [4]u8 = undefined;
+            const n = try std.unicode.utf8Encode(r, &tmp);
+            if (buf_or_null) |buf| @memcpy(buf[0..n], tmp[0..n]);
+            return n;
+        },
+        .error_value => |s| {
+            const prefix = "error(";
+            const suffix = ")";
+            const len = prefix.len + s.len + suffix.len;
+            if (buf_or_null) |buf| {
+                @memcpy(buf[0..prefix.len], prefix);
+                @memcpy(buf[prefix.len..][0..s.len], s);
+                @memcpy(buf[prefix.len + s.len..][0..suffix.len], suffix);
+            }
+            return len;
+        },
+        .object => |obj| switch (obj.*) {
+            .dyn_string => |s| {
+                if (buf_or_null) |buf| @memcpy(buf[0..s.len], s);
+                return s.len;
+            },
+            .array, .array_managed => {
+                const items = vms.asArraySlice(obj);
+                var len: usize = 1;
+                var needs_comma = false;
+                for (items) |item| {
+                    if (needs_comma) len += 2;
+                    len += try sprintValue(null, item);
+                    needs_comma = true;
+                }
+                len += 1;
+                if (buf_or_null) |buf| {
+                    var pos: usize = 0;
+                    buf[pos] = '['; pos += 1;
+                    needs_comma = false;
+                    for (items) |item| {
+                        if (needs_comma) { @memcpy(buf[pos..][0..2], ", "); pos += 2; }
+                        pos += try sprintValue(buf[pos..], item);
+                        needs_comma = true;
+                    }
+                    buf[pos] = ']';
+                }
+                return len;
+            },
+            .map, .map_managed, .map_hashed => {
+                const items = vms.asMapSlice(obj);
+                var len: usize = 1;
+                var needs_comma = false;
+                for (items) |item| {
+                    if (needs_comma) len += 2;
+                    len += try sprintValue(null, item.key);
+                    len += 2;
+                    len += try sprintValue(null, item.value);
+                    needs_comma = true;
+                }
+                len += 1;
+                if (buf_or_null) |buf| {
+                    var pos: usize = 0;
+                    buf[pos] = '{'; pos += 1;
+                    needs_comma = false;
+                    for (items) |item| {
+                        if (needs_comma) { @memcpy(buf[pos..][0..2], ", "); pos += 2; }
+                        pos += try sprintValue(buf[pos..], item.key);
+                        @memcpy(buf[pos..][0..2], ": "); pos += 2;
+                        pos += try sprintValue(buf[pos..], item.value);
+                        needs_comma = true;
+                    }
+                    buf[pos] = '}';
+                }
+                return len;
+            },
+            .named_value => |nv| return try sprintValue(buf_or_null, nv.value),
+            .function => {
+                if (buf_or_null) |buf| @memcpy(buf[0..6], "<func>");
+                return 6;
+            },
+            .closure => {
+                if (buf_or_null) |buf| @memcpy(buf[0..9], "<closure>");
+                return 9;
+            },
+            .native_function => {
+                if (buf_or_null) |buf| @memcpy(buf[0..13], "<native-func>");
+                return 13;
+            },
+            .struct_type => |st| {
+                const prefix = "<struct ";
+                const suffix = ">";
+                const len = prefix.len + st.name.len + suffix.len;
+                if (buf_or_null) |buf| {
+                    @memcpy(buf[0..prefix.len], prefix);
+                    @memcpy(buf[prefix.len..][0..st.name.len], st.name);
+                    @memcpy(buf[prefix.len + st.name.len..][0..suffix.len], suffix);
+                }
+                return len;
+            },
+            .named_type => |nt| {
+                const prefix = "<type ";
+                const suffix = ">";
+                const len = prefix.len + nt.name.len + suffix.len;
+                if (buf_or_null) |buf| {
+                    @memcpy(buf[0..prefix.len], prefix);
+                    @memcpy(buf[prefix.len..][0..nt.name.len], nt.name);
+                    @memcpy(buf[prefix.len + nt.name.len..][0..suffix.len], suffix);
+                }
+                return len;
+            },
+            .struct_instance => |inst| {
+                const prefix = "<struct ";
+                const suffix = ">";
+                const len = prefix.len + inst.typ.struct_type.name.len + suffix.len;
+                if (buf_or_null) |buf| {
+                    @memcpy(buf[0..prefix.len], prefix);
+                    @memcpy(buf[prefix.len..][0..inst.typ.struct_type.name.len], inst.typ.struct_type.name);
+                    @memcpy(buf[prefix.len + inst.typ.struct_type.name.len..][0..suffix.len], suffix);
+                }
+                return len;
+            },
+            .interface_type => |it| {
+                const prefix = "<interface ";
+                const suffix = ">";
+                const len = prefix.len + it.name.len + suffix.len;
+                if (buf_or_null) |buf| {
+                    @memcpy(buf[0..prefix.len], prefix);
+                    @memcpy(buf[prefix.len..][0..it.name.len], it.name);
+                    @memcpy(buf[prefix.len + it.name.len..][0..suffix.len], suffix);
+                }
+                return len;
+            },
+            .enum_type => |et| {
+                const prefix = "<enum ";
+                const suffix = ">";
+                const len = prefix.len + et.name.len + suffix.len;
+                if (buf_or_null) |buf| {
+                    @memcpy(buf[0..prefix.len], prefix);
+                    @memcpy(buf[prefix.len..][0..et.name.len], et.name);
+                    @memcpy(buf[prefix.len + et.name.len..][0..suffix.len], suffix);
+                }
+                return len;
+            },
+            .enum_value => |ev| {
+                if (buf_or_null) |buf| @memcpy(buf[0..ev.name.len], ev.name);
+                return ev.name.len;
+            },
+            else => {
+                if (buf_or_null) |buf| @memcpy(buf[0..4], "null");
+                return 4;
+            },
+        },
+    }
+}
+
+fn nativeSprintf(start: usize, argc: u8) !Value {
+    if (argc < 1) return error.ArityMismatch;
+    const fmt_v = vms.vmState().stack[start];
+    const fmt = try vms.asStringValue(fmt_v);
+    var ai: usize = 1;
+
+    var total: usize = 0;
+    var i: usize = 0;
+    while (i < fmt.len) {
+        const c = fmt[i];
+        if (c != '%') {
+            total += 1;
+            i += 1;
+            continue;
+        }
+        i += 1;
+        if (i >= fmt.len) return error.TypeError;
+        if (fmt[i] == '%') {
+            total += 1;
+            i += 1;
+            continue;
+        }
+        if (ai >= @as(usize, argc)) return error.ArityMismatch;
+        const arg = vms.vmState().stack[start + ai];
+        ai += 1;
+        while (i < fmt.len and (fmt[i] == '-' or fmt[i] == '+' or fmt[i] == ' ' or fmt[i] == '0' or fmt[i] == '#')) i += 1;
+        while (i < fmt.len and fmt[i] >= '0' and fmt[i] <= '9') i += 1;
+        if (i < fmt.len and fmt[i] == '.') {
+            i += 1;
+            while (i < fmt.len and fmt[i] >= '0' and fmt[i] <= '9') i += 1;
+        }
+        if (i >= fmt.len) return error.TypeError;
+        const spec = fmt[i];
+        i += 1;
+        switch (spec) {
+            'v' => total += try sprintValue(null, arg),
+            's' => total += (try vms.asStringValue(arg)).len,
+            'd' => {
+                const n = try vms.valueAsInt(arg);
+                var tmp: [24]u8 = undefined;
+                total += (std.fmt.bufPrint(tmp[0..], "{d}", .{n}) catch return error.TypeError).len;
+            },
+            'x' => {
+                const n = try vms.valueAsInt(arg);
+                var tmp: [24]u8 = undefined;
+                total += (std.fmt.bufPrint(tmp[0..], "{x}", .{n}) catch return error.TypeError).len;
+            },
+            'X' => {
+                const n = try vms.valueAsInt(arg);
+                var tmp: [24]u8 = undefined;
+                total += (std.fmt.bufPrint(tmp[0..], "{X}", .{n}) catch return error.TypeError).len;
+            },
+            'f' => {
+                const n = try vms.valueAsNumber(arg);
+                var tmp: [64]u8 = undefined;
+                total += (std.fmt.bufPrint(tmp[0..], "{d}", .{n}) catch return error.TypeError).len;
+            },
+            't' => {
+                if (arg != .boolean) return error.TypeError;
+                total += if (arg.boolean) 4 else 5;
+            },
+            else => return error.TypeError,
+        }
+    }
+    if (ai != @as(usize, argc)) return error.ArityMismatch;
+
+    const obj = try vmgc.vmAllocObject();
+    obj.* = .{ .dyn_string = &[_]u8{} };
+    try vms.pushTempRoot(.{ .object = obj });
+    defer vms.popTempRoot();
+    const buf = try vmgc.vmAllocManagedBytes(total);
+
+    var pos: usize = 0;
+    ai = 1;
+    i = 0;
+    while (i < fmt.len) {
+        const c = fmt[i];
+        if (c != '%') {
+            buf[pos] = fmt[i];
+            pos += 1;
+            i += 1;
+            continue;
+        }
+        i += 1;
+        if (fmt[i] == '%') {
+            buf[pos] = '%';
+            pos += 1;
+            i += 1;
+            continue;
+        }
+        const arg = vms.vmState().stack[start + ai];
+        ai += 1;
+        while (i < fmt.len and (fmt[i] == '-' or fmt[i] == '+' or fmt[i] == ' ' or fmt[i] == '0' or fmt[i] == '#')) i += 1;
+        while (i < fmt.len and fmt[i] >= '0' and fmt[i] <= '9') i += 1;
+        if (i < fmt.len and fmt[i] == '.') {
+            i += 1;
+            while (i < fmt.len and fmt[i] >= '0' and fmt[i] <= '9') i += 1;
+        }
+        if (i >= fmt.len) return error.TypeError;
+        const spec2 = fmt[i];
+        i += 1;
+        switch (spec2) {
+            'v' => {
+                pos += try sprintValue(buf[pos..], arg);
+            },
+            's' => {
+                const s = try vms.asStringValue(arg);
+                @memcpy(buf[pos..][0..s.len], s);
+                pos += s.len;
+            },
+            'd' => {
+                const n = try vms.valueAsInt(arg);
+                const written = std.fmt.bufPrint(buf[pos..], "{d}", .{n}) catch return error.TypeError;
+                pos += written.len;
+            },
+            'x' => {
+                const n = try vms.valueAsInt(arg);
+                const written = std.fmt.bufPrint(buf[pos..], "{x}", .{n}) catch return error.TypeError;
+                pos += written.len;
+            },
+            'X' => {
+                const n = try vms.valueAsInt(arg);
+                const written = std.fmt.bufPrint(buf[pos..], "{X}", .{n}) catch return error.TypeError;
+                pos += written.len;
+            },
+            'f' => {
+                const n = try vms.valueAsNumber(arg);
+                const written = std.fmt.bufPrint(buf[pos..], "{d}", .{n}) catch return error.TypeError;
+                pos += written.len;
+            },
+            't' => {
+                const s = if (arg.boolean) "true" else "false";
+                @memcpy(buf[pos..][0..s.len], s);
+                pos += s.len;
+            },
+            else => unreachable,
+        }
+    }
+
+    obj.* = .{ .dyn_string = buf[0..pos] };
+    return .{ .object = obj };
 }
 
 fn nativeLen(v: Value) !Value {
@@ -789,6 +1206,16 @@ fn nativePrintf(start: usize, argc: u8) !void {
             'v' => io.printValue(arg),
             's' => io.write(try vms.asStringValue(arg)),
             'd' => io.writeInt(try vms.valueAsInt(arg)),
+            'x' => {
+                const n = try vms.valueAsInt(arg);
+                var tmp: [24]u8 = undefined;
+                io.write((std.fmt.bufPrint(tmp[0..], "{x}", .{n}) catch unreachable));
+            },
+            'X' => {
+                const n = try vms.valueAsInt(arg);
+                var tmp: [24]u8 = undefined;
+                io.write((std.fmt.bufPrint(tmp[0..], "{X}", .{n}) catch unreachable));
+            },
             'f' => {
                 const n = try vms.valueAsNumber(arg);
                 if (precision) |prec| io.writeF64Prec(n, prec) else io.writeF64(n);
@@ -1438,6 +1865,110 @@ fn nativeStrRepeat(s: []const u8, count_v: Value) !Value {
 fn nativeStrSplitOnce(s: []const u8, sep: []const u8) !Value {
     const pos = std.mem.indexOf(u8, s, sep) orelse return makeTuple2(.null, .null);
     return makeTuple2(.{ .string = s[0..pos] }, .{ .string = s[pos + sep.len ..] });
+}
+
+fn nativeStrCount(s: []const u8, sub: []const u8) Value {
+    return .{ .number = @floatFromInt(std.mem.count(u8, s, sub)) };
+}
+
+fn nativeStrFields(s: []const u8) !Value {
+    var count: usize = 0;
+    var i: usize = 0;
+    while (i < s.len) {
+        while (i < s.len and (s[i] == ' ' or s[i] == '\t' or s[i] == '\n' or s[i] == '\r' or s[i] == 0x0b or s[i] == 0x0c)) i += 1;
+        if (i >= s.len) break;
+        count += 1;
+        while (i < s.len and s[i] != ' ' and s[i] != '\t' and s[i] != '\n' and s[i] != '\r' and s[i] != 0x0b and s[i] != 0x0c) i += 1;
+    }
+    const arr_obj = try vmgc.vmAllocObject();
+    arr_obj.* = .{ .array = &[_]Value{} };
+    try vms.pushTempRoot(.{ .object = arr_obj });
+    defer vms.popTempRoot();
+    if (count > 0) {
+        const pieces = try vmgc.vmAllocManagedSlice(Value, count);
+        var pi: usize = 0;
+        i = 0;
+        while (i < s.len) {
+            while (i < s.len and (s[i] == ' ' or s[i] == '\t' or s[i] == '\n' or s[i] == '\r' or s[i] == 0x0b or s[i] == 0x0c)) i += 1;
+            if (i >= s.len) break;
+            const start = i;
+            while (i < s.len and s[i] != ' ' and s[i] != '\t' and s[i] != '\n' and s[i] != '\r' and s[i] != 0x0b and s[i] != 0x0c) i += 1;
+            const piece = try vmgc.makeDynString(s[start..i]);
+            pieces[pi] = piece;
+            pi += 1;
+        }
+        arr_obj.* = .{ .array_managed = pieces[0..count] };
+    }
+    return .{ .object = arr_obj };
+}
+
+fn nativeStrPadLeft(s: []const u8, n_v: Value, pad: []const u8) !Value {
+    const n = try vms.valueAsInt(n_v);
+    if (n < 0) return error.RangeError;
+    const width: usize = @intCast(n);
+    if (width <= s.len or pad.len == 0) return vmgc.makeDynString(s);
+    const pad_needed = width - s.len;
+    const total = width;
+    const obj = try vmgc.vmAllocObject();
+    obj.* = .{ .dyn_string = &[_]u8{} };
+    try vms.pushTempRoot(.{ .object = obj });
+    defer vms.popTempRoot();
+    const buf = try vmgc.vmAllocManagedBytes(total);
+    var pos: usize = 0;
+    while (pos + pad.len <= pad_needed) {
+        @memcpy(buf[pos..][0..pad.len], pad);
+        pos += pad.len;
+    }
+    if (pos < pad_needed) {
+        @memcpy(buf[pos..][0 .. pad_needed - pos], pad[0 .. pad_needed - pos]);
+        pos = pad_needed;
+    }
+    @memcpy(buf[pos..][0..s.len], s);
+    obj.* = .{ .dyn_string = buf[0..total] };
+    return .{ .object = obj };
+}
+
+fn nativeStrPadRight(s: []const u8, n_v: Value, pad: []const u8) !Value {
+    const n = try vms.valueAsInt(n_v);
+    if (n < 0) return error.RangeError;
+    const width: usize = @intCast(n);
+    if (width <= s.len or pad.len == 0) return vmgc.makeDynString(s);
+    const total = width;
+    const obj = try vmgc.vmAllocObject();
+    obj.* = .{ .dyn_string = &[_]u8{} };
+    try vms.pushTempRoot(.{ .object = obj });
+    defer vms.popTempRoot();
+    const buf = try vmgc.vmAllocManagedBytes(total);
+    var pos: usize = 0;
+    @memcpy(buf[pos..][0..s.len], s);
+    pos += s.len;
+    while (pos + pad.len <= width) {
+        @memcpy(buf[pos..][0..pad.len], pad);
+        pos += pad.len;
+    }
+    if (pos < width) {
+        @memcpy(buf[pos..][0 .. width - pos], pad[0 .. width - pos]);
+    }
+    obj.* = .{ .dyn_string = buf[0..total] };
+    return .{ .object = obj };
+}
+
+fn nativeStrEqualFold(s: []const u8, t: []const u8) Value {
+    if (s.len != t.len) return .{ .boolean = false };
+    var i: usize = 0;
+    while (i < s.len) : (i += 1) {
+        if (std.ascii.toLower(s[i]) != std.ascii.toLower(t[i])) return .{ .boolean = false };
+    }
+    return .{ .boolean = true };
+}
+
+fn nativeStrContainsAny(s: []const u8, chars: []const u8) Value {
+    for (s) |c| {
+        for (chars) |ch| {
+            if (c == ch) return .{ .boolean = true };
+        }
+    }
+    return .{ .boolean = false };
 }
 
 fn nativeAppend(start: usize, argc: u8) !Value {
@@ -2374,6 +2905,223 @@ fn jsonValidNative() !Value {
     return .{ .boolean = true };
 }
 
+// ── Hex helpers ────────────────────────────────────────────────────────────────
+
+fn nativeHexEncode(s: []const u8) !Value {
+    const hex_chars = "0123456789abcdef";
+    const total = s.len * 2;
+    const obj = try vmgc.vmAllocObject();
+    obj.* = .{ .dyn_string = &[_]u8{} };
+    try vms.pushTempRoot(.{ .object = obj });
+    defer vms.popTempRoot();
+    const buf = try vmgc.vmAllocManagedBytes(total);
+    for (s, 0..) |byte, i| {
+        buf[i * 2] = hex_chars[byte >> 4];
+        buf[i * 2 + 1] = hex_chars[byte & 0xF];
+    }
+    obj.* = .{ .dyn_string = buf[0..total] };
+    return .{ .object = obj };
+}
+
+fn nativeHexDecode(s: []const u8) !Value {
+    if (s.len % 2 != 0) return error.TypeError;
+    const total = s.len / 2;
+    const obj = try vmgc.vmAllocObject();
+    obj.* = .{ .dyn_string = &[_]u8{} };
+    try vms.pushTempRoot(.{ .object = obj });
+    defer vms.popTempRoot();
+    const buf = try vmgc.vmAllocManagedBytes(total);
+    for (0..total) |i| {
+        const hi = try hexNibble(s[i * 2]);
+        const lo = try hexNibble(s[i * 2 + 1]);
+        buf[i] = (hi << 4) | lo;
+    }
+    obj.* = .{ .dyn_string = buf[0..total] };
+    return .{ .object = obj };
+}
+
+fn hexNibble(c: u8) !u8 {
+    return switch (c) {
+        '0'...'9' => c - '0',
+        'a'...'f' => c - 'a' + 10,
+        'A'...'F' => c - 'A' + 10,
+        else => error.TypeError,
+    };
+}
+
+// ── Base64 helpers ─────────────────────────────────────────────────────────────
+
+fn nativeBase64Encode(s: []const u8, url_safe: bool) !Value {
+    const alphabet = if (url_safe)
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+    else
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const total = ((s.len + 2) / 3) * 4;
+    const obj = try vmgc.vmAllocObject();
+    obj.* = .{ .dyn_string = &[_]u8{} };
+    try vms.pushTempRoot(.{ .object = obj });
+    defer vms.popTempRoot();
+    const buf = try vmgc.vmAllocManagedBytes(total);
+    var i: usize = 0;
+    var pos: usize = 0;
+    while (i + 3 <= s.len) {
+        const b0 = s[i];
+        const b1 = s[i + 1];
+        const b2 = s[i + 2];
+        buf[pos] = alphabet[b0 >> 2];
+        buf[pos + 1] = alphabet[((b0 << 4) | (b1 >> 4)) & 0x3F];
+        buf[pos + 2] = alphabet[((b1 << 2) | (b2 >> 6)) & 0x3F];
+        buf[pos + 3] = alphabet[b2 & 0x3F];
+        i += 3;
+        pos += 4;
+    }
+    const rem = s.len - i;
+    if (rem == 1) {
+        const b0 = s[i];
+        buf[pos] = alphabet[b0 >> 2];
+        buf[pos + 1] = alphabet[(b0 << 4) & 0x3F];
+        buf[pos + 2] = '=';
+        buf[pos + 3] = '=';
+    } else if (rem == 2) {
+        const b0 = s[i];
+        const b1 = s[i + 1];
+        buf[pos] = alphabet[b0 >> 2];
+        buf[pos + 1] = alphabet[((b0 << 4) | (b1 >> 4)) & 0x3F];
+        buf[pos + 2] = alphabet[(b1 << 2) & 0x3F];
+        buf[pos + 3] = '=';
+    }
+    obj.* = .{ .dyn_string = buf[0..total] };
+    return .{ .object = obj };
+}
+
+fn b64Unpack(c: u8) !u6 {
+    return switch (c) {
+        'A'...'Z' => @as(u6, @intCast(c - 'A')),
+        'a'...'z' => @as(u6, @intCast(c - 'a' + 26)),
+        '0'...'9' => @as(u6, @intCast(c - '0' + 52)),
+        '+' => 62,
+        '-' => 62,
+        '/' => 63,
+        '_' => 63,
+        else => error.TypeError,
+    };
+}
+
+fn nativeBase64Decode(s: []const u8, url_safe: bool) !Value {
+    _ = url_safe;
+    if (s.len % 4 != 0) return error.TypeError;
+    var pad: usize = 0;
+    if (s.len >= 2 and s[s.len - 1] == '=') pad += 1;
+    if (s.len >= 2 and s[s.len - 2] == '=') pad += 1;
+    const total = (s.len / 4) * 3 - pad;
+    const obj = try vmgc.vmAllocObject();
+    obj.* = .{ .dyn_string = &[_]u8{} };
+    try vms.pushTempRoot(.{ .object = obj });
+    defer vms.popTempRoot();
+    const buf = try vmgc.vmAllocManagedBytes(total);
+    var i: usize = 0;
+    var pos: usize = 0;
+    const end = s.len - pad;
+    while (i + 4 <= end) {
+        const a = try b64Unpack(s[i]);
+        const b = try b64Unpack(s[i + 1]);
+        const c = try b64Unpack(s[i + 2]);
+        const d = try b64Unpack(s[i + 3]);
+        buf[pos] = (@as(u8, a) << 2) | (b >> 4);
+        buf[pos + 1] = (@as(u8, b) << 4) | (c >> 2);
+        buf[pos + 2] = (@as(u8, c) << 6) | d;
+        i += 4;
+        pos += 3;
+    }
+    if (end < s.len) {
+        const a = try b64Unpack(s[end - (4 - pad)]);
+        const b = try b64Unpack(s[end - (4 - pad) + 1]);
+        if (pad == 1) {
+            const c = try b64Unpack(s[end - (4 - pad) + 2]);
+            buf[pos] = (@as(u8, a) << 2) | (b >> 4);
+            buf[pos + 1] = (@as(u8, b) << 4) | (c >> 2);
+        } else {
+            buf[pos] = (@as(u8, a) << 2) | (b >> 4);
+        }
+    }
+    obj.* = .{ .dyn_string = buf[0..total] };
+    return .{ .object = obj };
+}
+
+// ── Random helpers ─────────────────────────────────────────────────────────────
+
+fn nativeRandPerm(n_v: Value) !Value {
+    const n = try vms.valueAsInt(n_v);
+    if (n < 0) return error.RangeError;
+    const size: usize = @intCast(n);
+    const arr_obj = try vmgc.vmAllocObject();
+    arr_obj.* = .{ .array = &[_]Value{} };
+    try vms.pushTempRoot(.{ .object = arr_obj });
+    defer vms.popTempRoot();
+    const items = try vmgc.vmAllocManagedSlice(Value, size);
+    for (0..size) |j| items[j] = .{ .number = @floatFromInt(j) };
+    // Fisher-Yates shuffle
+    var i: usize = size;
+    while (i > 1) {
+        i -= 1;
+        const j = randRng().intRangeLessThan(usize, 0, i + 1);
+        const tmp = items[i];
+        items[i] = items[j];
+        items[j] = tmp;
+    }
+    arr_obj.* = .{ .array_managed = items[0..size] };
+    return .{ .object = arr_obj };
+}
+
+fn nativeRandNormFloat() Value {
+    // Box-Muller transform
+    const u1_val = randRng().float(f64);
+    const u2_val = randRng().float(f64);
+    const r = @sqrt(-2.0 * @log(u1_val));
+    const theta = 2.0 * std.math.pi * u2_val;
+    return .{ .number = r * @cos(theta) };
+}
+
+// ── Time add_date helper ───────────────────────────────────────────────────────
+
+fn daysInMonth(year: i32, month: u8) u8 {
+    return switch (month) {
+        1, 3, 5, 7, 8, 10, 12 => 31,
+        4, 6, 9, 11 => 30,
+        2 => if (@rem(year, 4) == 0 and (@rem(year, 100) != 0 or @rem(year, 400) == 0)) 29 else 28,
+        else => 30,
+    };
+}
+
+fn timeAddDate(ms: f64, y_delta: i32, m_delta: i32, d_delta: i32) !Value {
+    const parts = timeEpochMsToParts(ms);
+    var year = parts.year;
+    var month = @as(i32, parts.month);
+    var day = @as(i32, parts.day);
+    month += m_delta;
+    year += y_delta;
+    while (month > 12) { month -= 12; year += 1; }
+    while (month < 1) { month += 12; year -= 1; }
+    const dim = daysInMonth(year, @intCast(month));
+    if (day > dim) day = dim;
+    day += d_delta;
+    while (day > 31) {
+        const d = daysInMonth(year, @intCast(month));
+        if (day <= d) break;
+        day -= d;
+        month += 1;
+        if (month > 12) { month -= 12; year += 1; }
+    }
+    while (day < 1) {
+        month -= 1;
+        if (month < 1) { month += 12; year -= 1; }
+        day += daysInMonth(year, @intCast(month));
+    }
+    const secs = timeCalendarToEpochSecs(year, @intCast(month), @intCast(day), parts.hour, parts.min, parts.sec);
+    const new_ms = @as(f64, @floatFromInt(secs)) * 1000.0 + @as(f64, parts.ms);
+    return timeBuildObj(new_ms);
+}
+
 // ── Native function dispatch ──────────────────────────────────────────────────
 
 const vmperf = @import("vm_perf.zig");
@@ -2443,6 +3191,14 @@ pub fn callNative(nf: NativeFuncObj, argc: u8) !void {
             while (j < @as(usize, argc)) : (j += 1) _ = try vms.vmPop();
             _ = try vms.vmPop();
             try vms.vmPush(.null);
+        },
+        .io_sprintf => {
+            const start = vms.vmState().stack_top - argc;
+            const out = try nativeSprintf(start, argc);
+            var j: usize = 0;
+            while (j < @as(usize, argc)) : (j += 1) _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            try vms.vmPush(out);
         },
         .core_len => {
             if (argc != nf.arity) return error.ArityMismatch;
@@ -2838,6 +3594,107 @@ pub fn callNative(nf: NativeFuncObj, argc: u8) !void {
             _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
             try vms.vmPush(.{ .number = @max(a, b) });
         },
+        .math_acos => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const n = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .number = std.math.acos(n) });
+        },
+        .math_asin => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const n = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .number = std.math.asin(n) });
+        },
+        .math_atan => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const n = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .number = std.math.atan(n) });
+        },
+        .math_atan2 => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const x = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            const y = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 2]);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .number = std.math.atan2(y, x) });
+        },
+        .math_cosh => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const n = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .number = std.math.cosh(n) });
+        },
+        .math_sinh => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const n = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .number = std.math.sinh(n) });
+        },
+        .math_tanh => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const n = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .number = std.math.tanh(n) });
+        },
+        .math_exp => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const n = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .number = std.math.exp(n) });
+        },
+        .math_exp2 => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const n = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .number = std.math.exp2(n) });
+        },
+        .math_trunc => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const n = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .number = @trunc(n) });
+        },
+        .math_cbrt => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const n = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .number = std.math.cbrt(n) });
+        },
+        .math_hypot => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const q = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            const p = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 2]);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .number = std.math.hypot(p, q) });
+        },
+        .math_mod => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const y = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            const x = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 2]);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .number = @mod(x, y) });
+        },
+        .math_nan => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            _ = try vms.vmPop();
+            try vms.vmPush(.{ .number = std.math.nan(f64) });
+        },
+        .math_is_nan => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const n = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .boolean = std.math.isNan(n) });
+        },
+        .math_is_inf => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const sign_v = vms.vmState().stack[vms.vmState().stack_top - 1];
+            const n = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 2]);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            const sign = try vms.valueAsInt(sign_v);
+            const result = if (sign == 0) std.math.isInf(n) else if (sign > 0) std.math.isPositiveInf(n) else std.math.isNegativeInf(n);
+            try vms.vmPush(.{ .boolean = result });
+        },
         .str_split => {
             if (argc != nf.arity) return error.ArityMismatch;
             const top = vms.vmState().stack_top;
@@ -3000,6 +3857,111 @@ pub fn callNative(nf: NativeFuncObj, argc: u8) !void {
             _ = try vms.vmPop();
             _ = try vms.vmPop();
             try vms.vmPush(out);
+        },
+        .hex_encode => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const s = try vms.asStringValue(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            const out = try nativeHexEncode(s);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .hex_decode => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const s = try vms.asStringValue(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            const out = try nativeHexDecode(s);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .base64_encode => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const s = try vms.asStringValue(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            const out = try nativeBase64Encode(s, false);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .base64_decode => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const s = try vms.asStringValue(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            const out = try nativeBase64Decode(s, false);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .base64_url_encode => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const s = try vms.asStringValue(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            const out = try nativeBase64Encode(s, true);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .base64_url_decode => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const s = try vms.asStringValue(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            const out = try nativeBase64Decode(s, true);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .str_count => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const s = try vms.asStringValue(vms.vmState().stack[top - 2]);
+            const sub = try vms.asStringValue(vms.vmState().stack[top - 1]);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(nativeStrCount(s, sub));
+        },
+        .str_fields => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const s = try vms.asStringValue(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            const out = try nativeStrFields(s);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .str_pad_left => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const s = try vms.asStringValue(vms.vmState().stack[top - 3]);
+            const n_v = vms.vmState().stack[top - 2];
+            const pad = try vms.asStringValue(vms.vmState().stack[top - 1]);
+            const out = try nativeStrPadLeft(s, n_v, pad);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .str_pad_right => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const s = try vms.asStringValue(vms.vmState().stack[top - 3]);
+            const n_v = vms.vmState().stack[top - 2];
+            const pad = try vms.asStringValue(vms.vmState().stack[top - 1]);
+            const out = try nativeStrPadRight(s, n_v, pad);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .str_equal_fold => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const s = try vms.asStringValue(vms.vmState().stack[top - 2]);
+            const t = try vms.asStringValue(vms.vmState().stack[top - 1]);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(nativeStrEqualFold(s, t));
+        },
+        .str_contains_any => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const s = try vms.asStringValue(vms.vmState().stack[top - 2]);
+            const chars = try vms.asStringValue(vms.vmState().stack[top - 1]);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(nativeStrContainsAny(s, chars));
+        },
+        .rand_perm => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const n_v = vms.vmState().stack[vms.vmState().stack_top - 1];
+            const out = try nativeRandPerm(n_v);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .rand_norm_float => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            _ = try vms.vmPop();
+            try vms.vmPush(nativeRandNormFloat());
         },
         .template_parse => {
             if (argc != nf.arity) return error.ArityMismatch;
@@ -3259,6 +4221,35 @@ pub fn callNative(nf: NativeFuncObj, argc: u8) !void {
             const ms = try timeGetMs(recv);
             _ = try vms.vmPop(); _ = try vms.vmPop();
             try vms.vmPush(.{ .boolean = ms == 0 });
+        },
+        .time_since => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const recv = vms.vmState().stack[vms.vmState().stack_top - 1];
+            const ms = try timeGetMs(recv);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .number = timeNowMs() - ms });
+        },
+        .time_until => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const recv = vms.vmState().stack[vms.vmState().stack_top - 1];
+            const ms = try timeGetMs(recv);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .number = ms - timeNowMs() });
+        },
+        .time_add_date => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const recv = vms.vmState().stack[top - 4];
+            const y_v = vms.vmState().stack[top - 3];
+            const m_v = vms.vmState().stack[top - 2];
+            const d_v = vms.vmState().stack[top - 1];
+            const ms = try timeGetMs(recv);
+            const y = try vms.valueAsInt(y_v);
+            const m = try vms.valueAsInt(m_v);
+            const d = try vms.valueAsInt(d_v);
+            const out = try timeAddDate(ms, @intCast(y), @intCast(m), @intCast(d));
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(out);
         },
     }
 }

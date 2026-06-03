@@ -1,0 +1,8 @@
+hello world
+int -42
+hex ff FF
+float 3.14
+bool true false
+value 42 hi true null
+%
+multi test 100 ab

@@ -1,0 +1,8 @@
+std := import("std")
+
+// hex encode/decode roundtrip
+h := std.hex.encode("hello")
+std.io.println(h)
+std.io.println(std.hex.decode(h))
+std.io.println(std.hex.decode("48656c6c6f"))
+std.io.println(std.hex.encode(""))
