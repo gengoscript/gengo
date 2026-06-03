@@ -1066,6 +1066,7 @@ pub const Compiler = struct {
         if (self.cur.typ != .ident) return error.UnexpectedToken;
         const recv_type = self.cur.src;
         self.advance();
+        if (self.registry.hasInterfaceType(recv_type)) return error.MethodOnInterface;
         try self.consume(.rparen);
         if (self.cur.typ != .ident) return error.UnexpectedToken;
         const method_name = self.cur.src;

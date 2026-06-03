@@ -1,0 +1,2 @@
+type Shape interface { area() float }
+func (s Shape) fval() float { return 0.0 }
