@@ -1,0 +1,8 @@
+std := import("std")
+type Point struct { x int, y int }
+func (p Point) squaredLen() int {
+    return p.x*p.x + p.y*p.y
+}
+p := Point{x: 3, y: 4}
+std.io.printf("Point: (%d, %d)\n", p.x, p.y)
+std.io.printf("Squared length: %d\n", p.squaredLen())

@@ -1,0 +1,21 @@
+std := import("std")
+
+type Shape interface {
+    area() float
+    perimeter() float
+}
+
+type Rect   struct { w float, h float }
+type Square struct { side float }
+
+func (r Rect)   area() float      { return r.w * r.h }
+func (r Rect)   perimeter() float { return 2.0 * (r.w + r.h) }
+func (s Square) area() float      { return s.side * s.side }
+func (s Square) perimeter() float { return 4.0 * s.side }
+
+func describe(s Shape) {
+    std.io.printf("area=%f  perimeter=%f\n", s.area(), s.perimeter())
+}
+
+describe(Rect{w: 4.0, h: 3.0})
+describe(Square{side: 5.0})

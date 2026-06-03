@@ -1,0 +1,11 @@
+std := import("std")
+sum := 0
+for i := 1; i <= 10; i++ {
+    sum += i
+}
+std.io.printf("Sum of 1..10: %d\n", sum)
+
+names := ["Alice", "Bob", "Charlie"]
+for name in names {
+    std.io.printf("Hello, %s!\n", name)
+}

@@ -1,0 +1,12 @@
+std := import("std")
+
+s := "Hello, 世界"
+std.io.printf("rune count : %d\n", std.core.len(s))
+std.io.printf("byte count : %d\n", std.core.bytelen(s))
+std.io.printf("first five : %s\n", s[0:5])
+std.io.printf("last two   : %s\n", s[7:9])
+
+std.io.println("characters:")
+for i, ch in s {
+    std.io.printf("  [%d] %s\n", i, ch)
+}

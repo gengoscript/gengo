@@ -1,0 +1,11 @@
+std := import("std")
+
+// Use \\ to start a multiline string line.
+// Content is raw — escape sequences are not processed.
+
+msg :=
+    \\Hello, Gengo!
+    \\Escape sequences \n and \t are NOT processed.
+    \\Quotes like "this" need no backslash.
+
+std.io.print(msg)

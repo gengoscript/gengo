@@ -1,0 +1,27 @@
+std := import("std")
+
+type Direction enum { north, south, east, west }
+
+func label(d Direction) string {
+    switch d {
+        case Direction.north { return "North" }
+        case Direction.south { return "South" }
+        case Direction.east  { return "East"  }
+        default              { return "West"  }
+    }
+}
+
+func opposite(d Direction) Direction {
+    switch d {
+        case Direction.north { return Direction.south }
+        case Direction.south { return Direction.north }
+        case Direction.east  { return Direction.west  }
+        default              { return Direction.east  }
+    }
+}
+
+dirs := [Direction.north, Direction.east, Direction.south, Direction.west]
+for d in dirs {
+    opp := opposite(d)
+    std.io.printf("%s -> %s\n", label(d), label(opp))
+}

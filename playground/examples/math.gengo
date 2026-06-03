@@ -1,0 +1,6 @@
+std := import("std")
+x := 10
+y := 20
+z := (x + y) * 2 / 5
+std.io.printf("x: %d, y: %d, z: %d\n", x, y, z)
+std.io.println("z is even:", z % 2 == 0)

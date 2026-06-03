@@ -1,0 +1,14 @@
+std := import("std")
+
+type Celsius    float range -273.15..1000.0
+type Fahrenheit float range -459.67..1832.0
+
+func toFahrenheit(c Celsius) Fahrenheit {
+    return Fahrenheit(float(c) * 9.0 / 5.0 + 32.0)
+}
+
+temps := [Celsius(-40.0), Celsius(0.0), Celsius(20.0), Celsius(100.0)]
+for t in temps {
+    f := toFahrenheit(t)
+    std.io.printf("%f C = %f F\n", float(t), float(f))
+}

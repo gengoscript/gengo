@@ -1,0 +1,25 @@
+std := import("std")
+
+func safeDivide(a float, b float) (float, ?error) {
+    if b == 0.0 {
+        return 0.0, std.core.error("division by zero")
+    }
+    return a / b, null
+}
+
+func runAll(pairs any) {
+    defer func() {
+        err := std.core.recover()
+        if err != null {
+            std.io.println("caught:", err)
+        }
+    }()
+
+    for pair in pairs {
+        result, trap := safeDivide(pair[0], pair[1])
+        std.io.printf("%.1f / %.1f = %.2f\n", pair[0], pair[1], result)
+    }
+}
+
+runAll([[10.0, 2.0], [9.0, 3.0], [5.0, 0.0], [8.0, 4.0]])
+std.io.println("done")

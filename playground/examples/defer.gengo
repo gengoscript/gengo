@@ -1,0 +1,7 @@
+std := import("std")
+func process() {
+    defer std.io.println("cleanup done")
+    std.io.println("doing work")
+    std.io.println("more work")
+}
+process()

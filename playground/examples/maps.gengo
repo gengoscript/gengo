@@ -1,0 +1,16 @@
+std := import("std")
+core := std.core
+
+scores := {"alice": 95, "bob": 82, "carol": 78, "dave": 91}
+
+std.io.println(core.has(scores, "alice"))
+std.io.println(core.has(scores, "eve"))
+
+removed := core.delete(scores, "dave")
+std.io.printf("removed dave: %d\n", removed)
+std.io.printf("remaining: %d\n", core.len(scores))
+
+ks := core.keys(scores)
+for k in ks {
+    std.io.printf("%s: %d\n", k, scores[k])
+}

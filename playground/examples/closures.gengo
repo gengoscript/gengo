@@ -1,0 +1,16 @@
+std := import("std")
+
+func makeCounter(start int) func() int {
+    n := start
+    return func() {
+        n += 1
+        return n
+    }
+}
+
+a := makeCounter(0)
+b := makeCounter(10)
+
+for i := 0; i < 4; i++ {
+    std.io.printf("a=%d  b=%d\n", a(), b())
+}
