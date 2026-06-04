@@ -4,10 +4,14 @@
 // then finds the shortest path with BFS. Every cell is reachable from
 // every other cell — the maze is a spanning tree of the grid.
 //
-// Features used:
-//   maps as a 2D grid  ·  std.rand.perm for random neighbour selection
-//   explicit stacks for iterative DFS and BFS  ·  named constants
-//   closures for grid helpers  ·  variant-style cell values
+// The killer feature: Row and Col are named range types. Constructing
+// an out-of-bounds coordinate is a runtime error — invalid grid positions
+// are unrepresentable. The bounds checks before Row()/Col() construction
+// are what prevent the panic; remove one and the type catches it instead
+// of silently wrapping or corrupting memory.
+//
+// Passing (col, row) where (row, col) is expected is also caught at
+// call time — Row and Col are distinct types, not interchangeable ints.
 
 std := import("std")
 
@@ -19,17 +23,21 @@ const H    int = 8
 const COLS int = 21   // 2·W + 1
 const ROWS int = 17   // 2·H + 1
 
+// Coordinate types. Row(17) or Col(21) would panic at construction.
+type Row int range 0..16
+type Col int range 0..20
+
 const WALL  int = 0
 const OPEN  int = 1
 const START int = 2
 const END   int = 3
 const PATH  int = 4
 
-func key(r int, c int) string {
-    return std.conv.to_string(r) + "," + std.conv.to_string(c)
+func key(r Row, c Col) string {
+    return std.conv.to_string(int(r)) + "," + std.conv.to_string(int(c))
 }
 
-func gget(grid any, r int, c int) int {
+func gget(grid any, r Row, c Col) int {
     v := grid[key(r, c)]
     if v == null { return WALL }
     return int(v)
@@ -41,7 +49,7 @@ func makeGrid() any {
     for r < ROWS {
         c := 0
         for c < COLS {
-            grid[key(r, c)] = WALL
+            grid[key(Row(r), Col(c))] = WALL
             c += 1
         }
         r += 1
@@ -52,35 +60,23 @@ func makeGrid() any {
 // Iterative DFS — carves a perfect maze by randomly visiting unvisited
 // cell-neighbours two steps away and removing the wall between them.
 func generate(grid any) {
-    grid[key(1, 1)] = OPEN
+    grid[key(Row(1), Col(1))] = OPEN
     stackR := [1]
     stackC := [1]
 
     for std.core.len(stackR) > 0 {
         top := std.core.len(stackR) - 1
-        r   := int(stackR[top])
-        c   := int(stackC[top])
+        ri  := int(stackR[top])
+        ci  := int(stackC[top])
 
-        nrs := []
-        ncs := []
-        if r - 2 >= 0 && gget(grid, r-2, c) == WALL {
-            nrs = std.core.append(nrs, r-2)
-            ncs = std.core.append(ncs, c)
-        }
-        if r + 2 < ROWS && gget(grid, r+2, c) == WALL {
-            nrs = std.core.append(nrs, r+2)
-            ncs = std.core.append(ncs, c)
-        }
-        if c - 2 >= 0 && gget(grid, r, c-2) == WALL {
-            nrs = std.core.append(nrs, r)
-            ncs = std.core.append(ncs, c-2)
-        }
-        if c + 2 < COLS && gget(grid, r, c+2) == WALL {
-            nrs = std.core.append(nrs, r)
-            ncs = std.core.append(ncs, c+2)
-        }
+        nris := []
+        ncis := []
+        if ri - 2 >= 0    && gget(grid, Row(ri-2), Col(ci)) == WALL { nris = std.core.append(nris, ri-2); ncis = std.core.append(ncis, ci)    }
+        if ri + 2 < ROWS  && gget(grid, Row(ri+2), Col(ci)) == WALL { nris = std.core.append(nris, ri+2); ncis = std.core.append(ncis, ci)    }
+        if ci - 2 >= 0    && gget(grid, Row(ri), Col(ci-2)) == WALL { nris = std.core.append(nris, ri);   ncis = std.core.append(ncis, ci-2)  }
+        if ci + 2 < COLS  && gget(grid, Row(ri), Col(ci+2)) == WALL { nris = std.core.append(nris, ri);   ncis = std.core.append(ncis, ci+2)  }
 
-        cnt := std.core.len(nrs)
+        cnt := std.core.len(nris)
         if cnt == 0 {
             stackR = std.core.remove(stackR, top)
             stackC = std.core.remove(stackC, top)
@@ -89,71 +85,76 @@ func generate(grid any) {
 
         perm := std.rand.perm(cnt)
         idx  := int(perm[0])
-        nr   := int(nrs[idx])
-        nc   := int(ncs[idx])
+        nri  := int(nris[idx])
+        nci  := int(ncis[idx])
 
-        // carve through the wall that sits between current cell and neighbour
-        grid[key(int((r+nr)/2), int((c+nc)/2))] = OPEN
-        grid[key(nr, nc)] = OPEN
-        stackR = std.core.append(stackR, nr)
-        stackC = std.core.append(stackC, nc)
+        // Wall sits at the midpoint; both coordinates are valid by construction
+        // since we checked bounds before reaching this point.
+        wr := Row(int((ri + nri) / 2))
+        wc := Col(int((ci + nci) / 2))
+        grid[key(wr, wc)] = OPEN
+        grid[key(Row(nri), Col(nci))] = OPEN
+        stackR = std.core.append(stackR, nri)
+        stackC = std.core.append(stackC, nci)
     }
 }
 
 // BFS from (1,1) to (ROWS-2, COLS-2); records parent of each visited cell.
 func bfs(grid any, parentR any, parentC any) {
     visited := {}
-    sk      := key(1, 1)
-    visited[sk]  = true
-    parentR[sk]  = 1
-    parentC[sk]  = 1
+    sk      := key(Row(1), Col(1))
+    visited[sk] = true
+    parentR[sk] = 1
+    parentC[sk] = 1
     qr := [1]
     qc := [1]
 
     for std.core.len(qr) > 0 {
-        r  := int(qr[0])
-        c  := int(qc[0])
+        ri := int(qr[0])
+        ci := int(qc[0])
         qr  = std.core.remove(qr, 0)
         qc  = std.core.remove(qc, 0)
 
-        if r == ROWS - 2 && c == COLS - 2 { break }
+        if ri == ROWS - 2 && ci == COLS - 2 { break }
 
-        drs := [r-1, r+1, r,   r  ]
-        dcs := [c,   c,   c-1, c+1]
-        i   := 0
+        dris := [ri-1, ri+1, ri,   ri  ]
+        dcis := [ci,   ci,   ci-1, ci+1]
+        i    := 0
         for i < 4 {
-            nr := int(drs[i])
-            nc := int(dcs[i])
-            i  += 1
-            if nr < 0 || nr >= ROWS || nc < 0 || nc >= COLS { continue }
+            nri := int(dris[i])
+            nci := int(dcis[i])
+            i   += 1
+            if nri < 0 || nri >= ROWS || nci < 0 || nci >= COLS { continue }
+            nr := Row(nri)
+            nc := Col(nci)
             if gget(grid, nr, nc) == WALL { continue }
             k := key(nr, nc)
             if visited[k] != null { continue }
-            visited[k]   = true
-            parentR[k]   = r
-            parentC[k]   = c
-            qr = std.core.append(qr, nr)
-            qc = std.core.append(qc, nc)
+            visited[k] = true
+            parentR[k] = ri
+            parentC[k] = ci
+            qr = std.core.append(qr, nri)
+            qc = std.core.append(qc, nci)
         }
     }
 }
 
 // Walk the parent chain from end back to start, marking the solution path.
 func markPath(grid any, parentR any, parentC any) int {
-    r     := ROWS - 2
-    c     := COLS - 2
+    ri    := ROWS - 2
+    ci    := COLS - 2
     steps := 0
-    for !(r == 1 && c == 1) {
-        k  := key(r, c)
+    for !(ri == 1 && ci == 1) {
+        k  := key(Row(ri), Col(ci))
         grid[k] = PATH
-        pr := int(parentR[k])
-        pc := int(parentC[k])
-        r   = pr
-        c   = pc
+        pri := int(parentR[k])
+        pci := int(parentC[k])
+        ri   = pri
+        ci   = pci
         steps += 1
     }
-    grid[key(1,      1     )] = START
-    grid[key(ROWS-2, COLS-2)] = END
+    grid[key(Row(1),      Col(1)     )] = START
+    grid[key(Row(ROWS-2), Col(COLS-2))] = END
     return steps
 }
 
@@ -162,7 +163,7 @@ func printMaze(grid any) {
     for r < ROWS {
         c := 0
         for c < COLS {
-            v := gget(grid, r, c)
+            v := gget(grid, Row(r), Col(c))
             if      v == WALL  { std.io.print("██") }
             else if v == OPEN  { std.io.print("  ") }
             else if v == PATH  { std.io.print("··") }
