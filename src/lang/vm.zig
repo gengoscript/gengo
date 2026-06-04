@@ -256,9 +256,8 @@ fn writeFrameLocal(abs_slot: usize, v: Value) void {
     }
 }
 
-fn trySelfTailCall(argc: u8) !bool {
+fn tryTailCall(argc: u8) !bool {
     if (vmState().frame_top == 0) return false;
-    // Tail position pattern emitted by compiler: `call <argc>` followed by `ret`.
     if (vmState().ip >= chunk.codeLen()) return false;
     const next_op: Op = @enumFromInt(chunk.codeByteAt(vmState().ip));
     if (next_op != .ret) return false;
@@ -269,10 +268,10 @@ fn trySelfTailCall(argc: u8) !bool {
     const callee_obj = func_val.object;
 
     const frame_idx = vmState().frame_top - 1;
-    const frame = vmState().frames[frame_idx];
+    const frame = &vmState().frames[frame_idx];
     if (callee_obj.* == .closure) {
-        if (frame.closure == null or frame.closure.? != callee_obj) return false;
-        const f = callee_obj.closure.func.function;
+        const cl = callee_obj.closure;
+        const f = cl.func.function;
         if (f.is_variadic) return false;
         if (f.arity != argc) return false;
         if (f.has_typed_params) try vmtyp.enforceFuncArgTypes(f, argc);
@@ -280,13 +279,13 @@ fn trySelfTailCall(argc: u8) !bool {
         while (i < argc) : (i += 1) {
             writeFrameLocal(frame.base + i, vmState().stack[callee_idx + 1 + i]);
         }
+        frame.closure = callee_obj;
+        frame.func_obj = cl.func;
         vmState().stack_top = frame.base + argc;
         vmState().ip = f.ip;
         return true;
     }
     if (callee_obj.* == .function) {
-        if (frame.closure != null) return false;
-        if (frame.func_obj != callee_obj) return false;
         const f = callee_obj.function;
         if (f.is_variadic) return false;
         if (f.arity != argc) return false;
@@ -295,6 +294,8 @@ fn trySelfTailCall(argc: u8) !bool {
         while (i < argc) : (i += 1) {
             writeFrameLocal(frame.base + i, vmState().stack[callee_idx + 1 + i]);
         }
+        frame.closure = null;
+        frame.func_obj = callee_obj;
         vmState().stack_top = frame.base + argc;
         vmState().ip = f.ip;
         return true;
@@ -2165,7 +2166,7 @@ fn runInner() !void {
 
             .call => {
                 const argc = try vmByte();
-                if (try trySelfTailCall(argc)) continue;
+                if (try tryTailCall(argc)) continue;
                 try performCall(argc);
             },
             .op_assert => {

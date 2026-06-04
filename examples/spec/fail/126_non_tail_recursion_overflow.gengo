@@ -1,0 +1,9 @@
+std := import("std")
+
+// Non-tail recursion: the call is NOT in tail position (need to add n to result)
+func sum(n int) int {
+    if n == 0 { return 0 }
+    return n + sum(n - 1)
+}
+
+std.io.println(sum(10000))
