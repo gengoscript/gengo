@@ -1050,13 +1050,33 @@ pub const Compiler = struct {
         while (true) {
             var alt: FieldTypeAlt = undefined;
             if (self.cur.typ == .lbracket) {
-                // SliceType: []T
                 self.advance(); // consume '['
-                try self.consume(.rbracket); // consume ']'
-                const es = try self.parseFieldTypeSpec();
-                const ep = heap.bump(FieldTypeSpec, 1) orelse return error.OutOfMemory;
-                ep[0] = es;
-                alt = .{ .typ = .array, .elem_spec = ep[0] };
+                if (self.check(.rbracket)) {
+                    // SliceType: []T
+                    self.advance(); // consume ']'
+                    const es = try self.parseFieldTypeSpec();
+                    const ep = heap.bump(FieldTypeSpec, 1) orelse return error.OutOfMemory;
+                    ep[0] = es;
+                    alt = .{ .typ = .array, .elem_spec = ep[0] };
+                } else {
+                    // [T] array or [K]V map
+                    const first_spec = try self.parseFieldTypeSpec();
+                    try self.consume(.rbracket);
+                    if (self.cur.typ == .ident or self.cur.typ == .kw_func or self.cur.typ == .lbracket or self.cur.typ == .question) {
+                        // [K]V map
+                        const second_spec = try self.parseFieldTypeSpec();
+                        const kp = heap.bump(FieldTypeSpec, 1) orelse return error.OutOfMemory;
+                        kp[0] = first_spec;
+                        const vp = heap.bump(FieldTypeSpec, 1) orelse return error.OutOfMemory;
+                        vp[0] = second_spec;
+                        alt = .{ .typ = .map, .key_spec = kp[0], .val_spec = vp[0] };
+                    } else {
+                        // [T] array
+                        const ep = heap.bump(FieldTypeSpec, 1) orelse return error.OutOfMemory;
+                        ep[0] = first_spec;
+                        alt = .{ .typ = .array, .elem_spec = ep[0] };
+                    }
+                }
             } else if (self.cur.typ == .kw_func) {
                 self.advance(); // consume 'func'
                 try self.consume(.lparen);
@@ -1239,11 +1259,15 @@ pub const Compiler = struct {
         if (self.match(.colon_eq)) {
             try self.expr();
         } else if (self.cur.typ == .lbracket) {
-            // Space-syntax slice type: name []T = expr
-            _ = try self.parseFieldTypeSpec();
+            // Space-syntax composite type: name []T = expr, [T] = expr, or [K]V = expr
+            const ts = try self.parseFieldTypeSpec();
             try self.consume(.eq);
             try self.expr();
-            try chunk.emit2(@intFromEnum(Op.assert_type), 1, name.line);
+            if (ts.alts.len > 0 and ts.alts[0].typ == .map) {
+                try chunk.emit2(@intFromEnum(Op.assert_type), 2, name.line);
+            } else {
+                try chunk.emit2(@intFromEnum(Op.assert_type), 1, name.line);
+            }
         } else if (self.cur.typ == .kw_func) {
             // Space-syntax func type annotation: name func(T...) R = expr
             _ = try self.parseFieldTypeSpec();
@@ -2835,12 +2859,36 @@ pub const Compiler = struct {
         var t = lx.next(); // token after the var name
         if (t.typ == .question) t = lx.next(); // skip optional nullable prefix
         if (t.typ == .lbracket) {
-            // []T = expr — must start with exactly '[]' (empty bracket pair)
-            t = lx.next();
-            if (t.typ != .rbracket) return false;
-            // depth-scan element type to find '='
+            t = lx.next(); // token after '['
+            if (t.typ == .rbracket) {
+                // []T = expr: scan element type for '='
+                var depth: i32 = 0;
+                t = lx.next();
+                while (true) {
+                    switch (t.typ) {
+                        .lparen, .lbracket => depth += 1,
+                        .rparen, .rbracket => depth -= 1,
+                        .eq => if (depth == 0) return true,
+                        .lbrace, .semicolon, .eof => return false,
+                        else => {},
+                    }
+                    t = lx.next();
+                }
+            }
+            if (t.typ != .ident and t.typ != .kw_func and t.typ != .lbracket and t.typ != .question) return false;
+            // [T] or [K]V: scan through type(s) to matching ']'
             var depth: i32 = 0;
-            t = lx.next();
+            while (t.typ != .rbracket or depth > 0) {
+                switch (t.typ) {
+                    .lparen, .lbracket => depth += 1,
+                    .rparen, .rbracket => depth -= 1,
+                    .lbrace, .semicolon, .eof => return false,
+                    else => {},
+                }
+                t = lx.next();
+            }
+            t = lx.next(); // consume ']'
+            // Scan forward for '=' at depth 0 (handles [K]V where V follows ']')
             while (true) {
                 switch (t.typ) {
                     .lparen, .lbracket => depth += 1,

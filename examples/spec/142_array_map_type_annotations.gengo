@@ -1,0 +1,47 @@
+std := import("std")
+
+// 1. [T] array in function param
+func sum(xs [int]) int {
+    total := 0
+    for x in xs {
+        total += x
+    }
+    return total
+}
+std.io.println(sum([1, 2, 3]))
+
+// 2. [K]V map in function param
+func get(m [string]int, k string) int {
+    return m[k]
+}
+std.io.println(get({"a": 10, "b": 20}, "b"))
+
+// 3. [T] typed decl
+xs [int] = [4, 5, 6]
+total := 0
+for x in xs {
+    total += x
+}
+std.io.println(total)
+
+// 4. [K]V typed decl
+m [string]int = {"x": 100, "y": 200}
+std.io.println(m["x"] + m["y"])
+
+// 5. Nested [[int]]
+func flatten(xs [[int]]) int {
+    total := 0
+    for inner in xs {
+        for x in inner {
+            total += x
+        }
+    }
+    return total
+}
+std.io.println(flatten([[1, 2], [3, 4]]))
+
+// 6. []T still works (regression)
+func first(xs []int) int {
+    return xs[0]
+}
+std.io.println(first([99]))
