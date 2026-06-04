@@ -1495,6 +1495,14 @@ fn runInner() !void {
                 const cell = cl.closure.upvalues[idx];
                 cell.cell.value = val;
             },
+            .close_upvalue => {
+                const slot = try vmByte();
+                const base = vmState().frames[vmState().frame_top - 1].base;
+                const v = vmState().stack[base + slot];
+                if (v == .object and v.object.* == .cell) {
+                    vmState().stack[base + slot] = v.object.cell.value;
+                }
+            },
 
             .add => {
                 const b = try vmPop();
@@ -1656,7 +1664,10 @@ fn runInner() !void {
                     3 => v == .error_value,
                     else => return error.TypeError,
                 };
-                if (!ok) return error.TypeError;
+                if (!ok) {
+                    vms.setRuntimeErr("assert_type tag={d} failed for v={s}", .{tag, @tagName(v)});
+                    return error.TypeError;
+                }
             },
             .neg => {
                 const v = try vmPop();

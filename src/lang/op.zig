@@ -13,6 +13,7 @@ pub const Op = enum(u8) {
     set_local,
     get_upvalue,
     set_upvalue,
+    close_upvalue,   // u8: local slot — move cell value back to stack, giving next iteration a fresh capture
     add,
     sub,
     mul,

@@ -62,6 +62,7 @@ pub const Local = struct {
     name: []const u8,
     is_const: bool = false,
     from_std: bool = false,
+    is_captured: bool = false,
     type_check: TypeCheck = .{ .none = {} },
 };
 pub const Upvalue = struct { name: []const u8, index: u8, from_upvalue: bool };

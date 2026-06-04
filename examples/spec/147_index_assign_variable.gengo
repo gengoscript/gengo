@@ -1,0 +1,18 @@
+m := {"a": 1}
+k := "a"
+m[k] = 10
+assert(m["a"] == 10)
+
+// compound assignment also works
+m[k] += 5
+assert(m["a"] == 15)
+
+// literal key still works
+m["a"] = 1
+assert(m["a"] == 1)
+
+// array index with variable
+arr := [10, 20, 30]
+i := 1
+arr[i] = 99
+assert(arr[1] == 99)
