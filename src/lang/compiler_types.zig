@@ -41,10 +41,28 @@ pub const Prec = enum(u8) {
     }
 };
 
+pub const PrimType = enum {
+    int,
+    float,
+    bool,
+    string,
+    rune,
+};
+
+pub const TypeCheck = union(enum) {
+    none: void,
+    prim: PrimType,
+    named: []const u8,
+    assert_arr: void,
+    assert_map: void,
+    assert_err: void,
+};
+
 pub const Local = struct {
     name: []const u8,
     is_const: bool = false,
     from_std: bool = false,
+    type_check: TypeCheck = .{ .none = {} },
 };
 pub const Upvalue = struct { name: []const u8, index: u8, from_upvalue: bool };
 pub const FuncInfo = struct {

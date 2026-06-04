@@ -1,0 +1,28 @@
+std := import("std")
+
+// int truncates float on reassignment
+i int = 3
+i = 9.7
+std.io.println(i)
+
+// float coerces int on reassignment
+f float = 1.5
+f = 3
+std.io.println(f)
+
+// compound assignment truncates
+n int = 5
+n += 3.7
+std.io.println(n)
+
+// named return truncates
+func add3() (n int) {
+    n = 3.9
+    return
+}
+std.io.println(add3())
+
+// string reassignment works
+s string = "hello"
+s = "world"
+std.io.println(s)

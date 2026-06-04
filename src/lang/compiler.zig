@@ -50,6 +50,7 @@ const AssignTargetStep = ct.AssignTargetStep;
 const AssignTarget = ct.AssignTarget;
 const MultiAssignValueScratch = ct.MultiAssignValueScratch;
 const TypeRegistry = ct.TypeRegistry;
+const TypeCheck = ct.TypeCheck;
 
 pub const ImportResolverFn = *const fn (ctx: *anyopaque, importer_path: []const u8, import_name: []const u8) anyerror![]const u8;
 
@@ -89,6 +90,9 @@ pub const Compiler = struct {
     std_namespace_path: ?[]const u8 = null,
     std_module_global_names: [MaxLocals][]const u8 = undefined,
     std_module_global_count: u8 = 0,
+    typed_global_names: [MaxLocals][]const u8 = undefined,
+    typed_global_type_checks: [MaxLocals]TypeCheck = undefined,
+    typed_global_count: u8 = 0,
 
     // ── Lifecycle ────────────────────────────────────────────────────────────────
 
@@ -324,6 +328,41 @@ pub const Compiler = struct {
             try chunk.emit2(@intFromEnum(Op.set_upvalue), uv, name.line);
         } else {
             try chunk.emitSetGlobal(try self.qualifyGlobalName(name.src), name.line);
+        }
+    }
+
+    fn getLocalTypeCheck(self: *Compiler, name: []const u8) ?TypeCheck {
+        if (self.resolveLocal(name)) |slot| {
+            return self.currentScope().locals[slot].type_check;
+        }
+        const qname = self.qualifyGlobalName(name) catch return null;
+        var i: u8 = 0;
+        while (i < self.typed_global_count) : (i += 1) {
+            if (common.streq(self.typed_global_names[i], qname)) return self.typed_global_type_checks[i];
+        }
+        return null;
+    }
+
+    fn emitVarTypeProlog(_: *Compiler, tc: TypeCheck, line: u32) !void {
+        if (tc == .named) {
+            try chunk.emitGetGlobal(tc.named, line);
+        }
+    }
+
+    fn emitVarTypeEpilog(_: *Compiler, tc: TypeCheck, line: u32) !void {
+        switch (tc) {
+            .none => {},
+            .prim => |p| try chunk.emitOp(switch (p) {
+                .int => .cast_int,
+                .float => .cast_float,
+                .bool => .cast_bool,
+                .string => .cast_string,
+                .rune => .cast_rune,
+            }, line),
+            .named => try chunk.emit2(@intFromEnum(Op.call), 1, line),
+            .assert_arr => try chunk.emit2(@intFromEnum(Op.assert_type), 1, line),
+            .assert_map => try chunk.emit2(@intFromEnum(Op.assert_type), 2, line),
+            .assert_err => try chunk.emit2(@intFromEnum(Op.assert_type), 3, line),
         }
     }
 
@@ -1276,25 +1315,25 @@ pub const Compiler = struct {
         if (has_keyword and self.cur.typ != .ident) return self.err("expected identifier, found {s}", .{self.tokenName(self.cur.typ)});
         const name = self.cur;
         self.advance();
+        var inferred_type_check: TypeCheck = .{ .none = {} };
         if (self.match(.colon_eq)) {
             try self.expr();
         } else if (self.cur.typ == .lbracket) {
-            // Space-syntax composite type: name []T = expr, [T] = expr, or [K]V = expr
             const ts = try self.parseFieldTypeSpec();
             try self.consume(.eq);
             try self.expr();
             if (ts.alts.len > 0 and ts.alts[0].typ == .map) {
                 try chunk.emit2(@intFromEnum(Op.assert_type), 2, name.line);
+                inferred_type_check = .{ .assert_map = {} };
             } else {
                 try chunk.emit2(@intFromEnum(Op.assert_type), 1, name.line);
+                inferred_type_check = .{ .assert_arr = {} };
             }
         } else if (self.cur.typ == .kw_func) {
-            // Space-syntax func type annotation: name func(T...) R = expr
             _ = try self.parseFieldTypeSpec();
             try self.consume(.eq);
             try self.expr();
         } else if (self.cur.typ == .ident or self.cur.typ == .question) {
-            // Space-syntax typed form: name Type = expr  (no keyword required)
             const type_name = if (self.cur.typ == .ident) self.cur.src else "";
             _ = try self.parseFieldTypeSpec();
             try self.consume(.eq);
@@ -1302,30 +1341,38 @@ pub const Compiler = struct {
                 try self.expr();
                 if (common.streq(type_name, "int")) {
                     try chunk.emitOp(.cast_int, name.line);
+                    inferred_type_check = .{ .prim = .int };
                 } else if (common.streq(type_name, "float")) {
                     try chunk.emitOp(.cast_float, name.line);
+                    inferred_type_check = .{ .prim = .float };
                 } else {
                     try chunk.emitOp(.cast_bool, name.line);
+                    inferred_type_check = .{ .prim = .bool };
                 }
             } else if (type_name.len > 0 and self.registry.hasNamedType(type_name)) {
-                try chunk.emitGetGlobal(try self.qualifyTypeName(type_name), name.line);
+                const qtype = try self.qualifyTypeName(type_name);
+                try chunk.emitGetGlobal(qtype, name.line);
                 try self.expr();
                 try chunk.emit2(@intFromEnum(Op.call), 1, name.line);
+                inferred_type_check = .{ .named = qtype };
             } else if (common.streq(type_name, "string")) {
                 try self.expr();
                 try chunk.emitOp(.cast_string, name.line);
+                inferred_type_check = .{ .prim = .string };
             } else if (common.streq(type_name, "rune")) {
                 try self.expr();
                 try chunk.emitOp(.cast_rune, name.line);
+                inferred_type_check = .{ .prim = .rune };
             } else if (common.streq(type_name, "array")) {
                 return self.err("use '[]T' syntax for array types", .{});
             } else if (common.streq(type_name, "map")) {
-                // map[K]V typed decl: type was parsed above, just assert it's a map
                 try self.expr();
                 try chunk.emit2(@intFromEnum(Op.assert_type), 2, name.line);
+                inferred_type_check = .{ .assert_map = {} };
             } else if (common.streq(type_name, "error")) {
                 try self.expr();
                 try chunk.emit2(@intFromEnum(Op.assert_type), 3, name.line);
+                inferred_type_check = .{ .assert_err = {} };
             } else if (type_name.len == 0 or common.streq(type_name, "any") or
                        self.registry.hasInterfaceType(type_name) or
                        self.registry.hasStructTypeLocal(type_name)) {
@@ -1338,14 +1385,20 @@ pub const Compiler = struct {
         }
         if (self.inFunc()) {
             const slot = try self.defineLocal(name.src, is_const);
+            self.currentScope().locals[slot].type_check = inferred_type_check;
             if (self.std_namespace_path != null and self.std_namespace_path.?.len == 0) {
                 self.currentScope().locals[slot].from_std = true;
             }
         } else {
             if (!is_const and self.registry.hasGlobalConst(name.src)) { self.setErr("cannot assign to const variable '{s}'", .{name.src}); return error.AssignToConst; }
-            try chunk.emitOpConst(.def_global, .{ .string = try self.qualifyGlobalName(name.src) }, name.line);
+            const qname = try self.qualifyGlobalName(name.src);
+            try chunk.emitOpConst(.def_global, .{ .string = qname }, name.line);
+            if (inferred_type_check != .none and self.typed_global_count < MaxLocals) {
+                self.typed_global_names[self.typed_global_count] = qname;
+                self.typed_global_type_checks[self.typed_global_count] = inferred_type_check;
+                self.typed_global_count += 1;
+            }
             if (self.std_namespace_path != null and self.std_namespace_path.?.len == 0) {
-                const qname = try self.qualifyGlobalName(name.src);
                 if (self.std_module_global_count < MaxLocals) {
                     self.std_module_global_names[self.std_module_global_count] = qname;
                     self.std_module_global_count += 1;
@@ -1758,12 +1811,14 @@ pub const Compiler = struct {
             // slots first so deferred closures can observe and modify them.
             if (scope.named_return_count == 1) {
                 try self.expr();
+                try self.emitVarTypeEpilog(scope.locals[scope.named_return_base].type_check, line);
                 try chunk.emit2(@intFromEnum(Op.set_local), scope.named_return_base, line);
             } else {
                 var ri: u8 = 0;
                 while (ri < scope.named_return_count) : (ri += 1) {
                     if (ri > 0) try self.consume(.comma);
                     try self.expr();
+                    try self.emitVarTypeEpilog(scope.locals[scope.named_return_base + ri].type_check, line);
                     try chunk.emit2(@intFromEnum(Op.set_local), scope.named_return_base + ri, line);
                 }
             }
@@ -1785,6 +1840,8 @@ pub const Compiler = struct {
         try self.emitGetVar(name);
         try chunk.emitConst(.{ .number = 1.0 }, name.line);
         try chunk.emitOp(if (is_inc) .add else .sub, name.line);
+        const tc = self.getLocalTypeCheck(name.src);
+        if (tc) |t| try self.emitVarTypeEpilog(t, name.line);
         try self.emitSetVar(name);
         self.matchOpt(.semicolon);
     }
@@ -1811,13 +1868,14 @@ pub const Compiler = struct {
             else => return self.err("unsupported compound assignment operator", .{}),
         };
         try chunk.emitOp(op, op_tok.line);
+        const tc = self.getLocalTypeCheck(name.src);
+        if (tc) |t| try self.emitVarTypeEpilog(t, op_tok.line);
         try self.emitSetVar(name);
         self.matchOpt(.semicolon);
     }
 
     fn assignStmt(self: *Compiler) !void {
         const name = self.cur;
-        // `_` is the blank identifier: evaluate and discard.
         if (common.streq(name.src, "_")) {
             self.advance();
             try self.consume(.eq);
@@ -1829,7 +1887,10 @@ pub const Compiler = struct {
         try self.ensureMutableBinding(name);
         self.advance();
         try self.consume(.eq);
+        const tc = self.getLocalTypeCheck(name.src);
+        if (tc) |t| try self.emitVarTypeProlog(t, name.line);
         try self.expr();
+        if (tc) |t| try self.emitVarTypeEpilog(t, name.line);
         try self.emitSetVar(name);
         self.matchOpt(.semicolon);
     }
@@ -2441,7 +2502,21 @@ pub const Compiler = struct {
             scope.named_return_count = named_return_count;
             var ri: u8 = 0;
             while (ri < named_return_count) : (ri += 1) {
-                scope.locals[arity + ri] = .{ .name = return_names[ri], .is_const = false };
+                const rc: TypeCheck = if (return_types[ri].alts.len == 1) blk: {
+                    switch (return_types[ri].alts[0].typ) {
+                        .int => break :blk .{ .prim = .int },
+                        .float => break :blk .{ .prim = .float },
+                        .boolean => break :blk .{ .prim = .bool },
+                        .string => break :blk .{ .prim = .string },
+                        .rune_t => break :blk .{ .prim = .rune },
+                        .named_t => break :blk .{ .named = return_types[ri].alts[0].named_name },
+                        .array => break :blk .{ .assert_arr = {} },
+                        .map => break :blk .{ .assert_map = {} },
+                        .error_t => break :blk .{ .assert_err = {} },
+                        else => break :blk .{ .none = {} },
+                    }
+                } else .{ .none = {} };
+                scope.locals[arity + ri] = .{ .name = return_names[ri], .is_const = false, .type_check = rc };
                 scope.local_count += 1;
                 const rt = return_types[ri];
                 if (rt.alts.len == 1) {
