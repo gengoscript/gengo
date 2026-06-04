@@ -2,7 +2,7 @@ type Percent int range 0..100
 subtype FailingGrade Percent range 0..59
 subtype PassingGrade Percent range 60..100
 
-f FailingGrade = FailingGrade(40)
-g PassingGrade = PassingGrade(70)
+var f FailingGrade = FailingGrade(40)
+var g PassingGrade = PassingGrade(70)
 
 _ := f + g

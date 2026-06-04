@@ -1,4 +1,4 @@
 std := import("std")
 
-i int = 3
+var i int = 3
 i = "hello"

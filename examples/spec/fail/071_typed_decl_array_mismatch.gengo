@@ -1,1 +1,1 @@
-x []any = "not an array"
+var x []any = "not an array"

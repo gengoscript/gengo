@@ -5,8 +5,8 @@ subtype FailingGrade Percent range 0..59
 subtype PassingGrade Percent range 60..100
 
 // Construction and printing
-f FailingGrade = FailingGrade(40)
-p PassingGrade = PassingGrade(85)
+var f FailingGrade = FailingGrade(40)
+var p PassingGrade = PassingGrade(85)
 std.io.println(f)
 std.io.println(p)
 
@@ -19,8 +19,8 @@ showPercent(p)
 showPercent(Percent(50))
 
 // Explicit narrowing cast
-base Percent = Percent(30)
-narrow FailingGrade = FailingGrade(base)
+var base Percent = Percent(30)
+var narrow FailingGrade = FailingGrade(base)
 std.io.println(narrow)
 
 // Type attributes

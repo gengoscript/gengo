@@ -505,9 +505,9 @@ pub const Compiler = struct {
         if (self.match(.kw_pub)) {
             if (self.inFunc()) { self.setErr("invalid 'pub' target", .{}); return error.InvalidPubTarget; }
             try self.pubDecl();
+        } else if (self.match(.kw_var)) {
+            try self.varDecl(true, false);
         } else if (self.check(.ident) and self.peekTT() == .colon_eq) {
-            try self.varDecl(false, false);
-        } else if (self.check(.ident) and self.isTypedVarDecl()) {
             try self.varDecl(false, false);
         } else if (self.match(.kw_const)) {
             try self.varDecl(true, true);
@@ -1316,6 +1316,26 @@ pub const Compiler = struct {
 
     // ── Variable declarations ────────────────────────────────────────────────────
 
+    fn emitZeroValue(_: *Compiler, tc: TypeCheck, line: u32) !void {
+        switch (tc) {
+            .none => try chunk.emitOp(.null_val, line),
+            .prim => |p| switch (p) {
+                .int, .float => try chunk.emitConst(.{ .number = 0.0 }, line),
+                .bool => try chunk.emitOp(.false_val, line),
+                .string => try chunk.emitConst(.{ .string = "" }, line),
+                .rune => try chunk.emitConst(.{ .number = 0.0 }, line),
+            },
+            .assert_arr => try chunk.emit2(@intFromEnum(Op.build_array), 0, line),
+            .assert_map => try chunk.emit2(@intFromEnum(Op.build_map), 0, line),
+            .assert_err => try chunk.emitOp(.null_val, line),
+            .named => {
+                try chunk.emitOp(.null_val, line);
+                try chunk.emitGetGlobal(tc.named, line);
+                try chunk.emit2(@intFromEnum(Op.call), 1, line);
+            },
+        }
+    }
+
     fn varDecl(self: *Compiler, has_keyword: bool, is_const: bool) !void {
         if (has_keyword and self.cur.typ != .ident) return self.err("expected identifier, found {s}", .{self.tokenName(self.cur.typ)});
         const name = self.cur;
@@ -1325,65 +1345,95 @@ pub const Compiler = struct {
             try self.expr();
         } else if (self.cur.typ == .lbracket) {
             const ts = try self.parseFieldTypeSpec();
-            try self.consume(.eq);
-            try self.expr();
             if (ts.alts.len > 0 and ts.alts[0].typ == .map) {
-                try chunk.emit2(@intFromEnum(Op.assert_type), 2, name.line);
                 inferred_type_check = .{ .assert_map = {} };
             } else {
-                try chunk.emit2(@intFromEnum(Op.assert_type), 1, name.line);
                 inferred_type_check = .{ .assert_arr = {} };
+            }
+            if (self.match(.eq)) {
+                try self.expr();
+            } else if (has_keyword and !is_const) {
+                try self.emitZeroValue(inferred_type_check, name.line);
+            } else {
+                return self.err("expected '=', found {s}", .{self.tokenName(self.cur.typ)});
+            }
+            if (ts.alts.len > 0 and ts.alts[0].typ == .map) {
+                try chunk.emit2(@intFromEnum(Op.assert_type), 2, name.line);
+            } else {
+                try chunk.emit2(@intFromEnum(Op.assert_type), 1, name.line);
             }
         } else if (self.cur.typ == .kw_func) {
             _ = try self.parseFieldTypeSpec();
-            try self.consume(.eq);
-            try self.expr();
+            if (self.match(.eq)) {
+                try self.expr();
+            } else if (has_keyword and !is_const) {
+                try chunk.emitOp(.null_val, name.line);
+            } else {
+                return self.err("expected '=', found {s}", .{self.tokenName(self.cur.typ)});
+            }
         } else if (self.cur.typ == .ident or self.cur.typ == .question) {
             const type_name = if (self.cur.typ == .ident) self.cur.src else "";
             _ = try self.parseFieldTypeSpec();
-            try self.consume(.eq);
             if (common.streq(type_name, "int") or common.streq(type_name, "float") or common.streq(type_name, "bool")) {
-                try self.expr();
                 if (common.streq(type_name, "int")) {
-                    try chunk.emitOp(.cast_int, name.line);
                     inferred_type_check = .{ .prim = .int };
                 } else if (common.streq(type_name, "float")) {
-                    try chunk.emitOp(.cast_float, name.line);
                     inferred_type_check = .{ .prim = .float };
                 } else {
-                    try chunk.emitOp(.cast_bool, name.line);
                     inferred_type_check = .{ .prim = .bool };
                 }
             } else if (type_name.len > 0 and self.registry.hasNamedType(type_name)) {
-                const qtype = try self.qualifyTypeName(type_name);
-                try chunk.emitGetGlobal(qtype, name.line);
-                try self.expr();
-                try chunk.emit2(@intFromEnum(Op.call), 1, name.line);
-                inferred_type_check = .{ .named = qtype };
+                inferred_type_check = .{ .named = try self.qualifyTypeName(type_name) };
             } else if (common.streq(type_name, "string")) {
-                try self.expr();
-                try chunk.emitOp(.cast_string, name.line);
                 inferred_type_check = .{ .prim = .string };
             } else if (common.streq(type_name, "rune")) {
-                try self.expr();
-                try chunk.emitOp(.cast_rune, name.line);
                 inferred_type_check = .{ .prim = .rune };
             } else if (common.streq(type_name, "array")) {
                 return self.err("use '[]T' syntax for array types", .{});
             } else if (common.streq(type_name, "map")) {
-                try self.expr();
-                try chunk.emit2(@intFromEnum(Op.assert_type), 2, name.line);
                 inferred_type_check = .{ .assert_map = {} };
             } else if (common.streq(type_name, "error")) {
-                try self.expr();
-                try chunk.emit2(@intFromEnum(Op.assert_type), 3, name.line);
                 inferred_type_check = .{ .assert_err = {} };
             } else if (type_name.len == 0 or common.streq(type_name, "any") or
                        self.registry.hasInterfaceType(type_name) or
                        self.registry.hasStructTypeLocal(type_name)) {
-                try self.expr();
+                // No type check for these types
             } else {
                 return { self.setErr("unknown type name '{s}'", .{type_name}); return error.UnknownTypeName; };
+            }
+            // Named-type constructor must be pushed before the argument value
+            // because performCall expects the callee at stack[top - argc - 1].
+            if (inferred_type_check == .named) {
+                try chunk.emitGetGlobal(inferred_type_check.named, name.line);
+            }
+            if (self.match(.eq)) {
+                try self.expr();
+                if (inferred_type_check == .prim) {
+                    switch (inferred_type_check.prim) {
+                        .int => try chunk.emitOp(.cast_int, name.line),
+                        .float => try chunk.emitOp(.cast_float, name.line),
+                        .bool => try chunk.emitOp(.cast_bool, name.line),
+                        .string => try chunk.emitOp(.cast_string, name.line),
+                        .rune => try chunk.emitOp(.cast_rune, name.line),
+                    }
+                } else if (inferred_type_check == .named) {
+                    try chunk.emit2(@intFromEnum(Op.call), 1, name.line);
+                } else if (inferred_type_check == .assert_map) {
+                    try chunk.emit2(@intFromEnum(Op.assert_type), 2, name.line);
+                } else if (inferred_type_check == .assert_err) {
+                    try chunk.emit2(@intFromEnum(Op.assert_type), 3, name.line);
+                }
+            } else if (has_keyword and !is_const and inferred_type_check != .none) {
+                if (inferred_type_check == .named) {
+                    try chunk.emitOp(.null_val, name.line);
+                    try chunk.emit2(@intFromEnum(Op.call), 1, name.line);
+                } else {
+                    try self.emitZeroValue(inferred_type_check, name.line);
+                }
+            } else if (has_keyword and !is_const and inferred_type_check == .none) {
+                try chunk.emitOp(.null_val, name.line);
+            } else {
+                return self.err("expected '=', found {s}", .{self.tokenName(self.cur.typ)});
             }
         } else {
             return self.err("expected expression, found {s}", .{self.tokenName(self.cur.typ)});
@@ -1744,6 +1794,10 @@ pub const Compiler = struct {
         }
         if (self.match(.kw_switch)) {
             try self.switchStmt();
+            return;
+        }
+        if (self.match(.kw_var)) {
+            try self.varDecl(true, false);
             return;
         }
 

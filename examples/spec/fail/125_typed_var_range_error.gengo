@@ -1,5 +1,5 @@
 std := import("std")
 
 type Age int range 0..120
-a Age = 25
+var a Age = 25
 a = 150

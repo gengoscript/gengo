@@ -3,8 +3,8 @@ std := import("std")
 type Percent int range 0..100
 subtype FailingGrade Percent range 0..59
 
-f FailingGrade = FailingGrade(20)
-p Percent = Percent(30)
+var f FailingGrade = FailingGrade(20)
+var p Percent = Percent(30)
 
 // sub + sub -> sub (range-checked against subtype)
 ss := f + FailingGrade(15)

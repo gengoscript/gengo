@@ -17,7 +17,7 @@ func get(m [string]int, k string) int {
 std.io.println(get({"a": 10, "b": 20}, "b"))
 
 // 3. [T] typed decl
-xs [int] = [4, 5, 6]
+var xs [int] = [4, 5, 6]
 total := 0
 for x in xs {
     total += x
@@ -25,7 +25,7 @@ for x in xs {
 std.io.println(total)
 
 // 4. [K]V typed decl
-m [string]int = {"x": 100, "y": 200}
+var m [string]int = {"x": 100, "y": 200}
 std.io.println(m["x"] + m["y"])
 
 // 5. Nested [[int]]

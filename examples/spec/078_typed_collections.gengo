@@ -27,7 +27,7 @@ std.io.println(idx["origin"].x)
 
 // Anonymous typed annotation in function param
 func sumX(ps []Point) float {
-    total float = 0.0
+    var total float = 0.0
     for p in ps {
         total += p.x
     }

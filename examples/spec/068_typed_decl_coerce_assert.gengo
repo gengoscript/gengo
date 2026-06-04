@@ -1,30 +1,30 @@
 std := import("std")
 
 // string: coerces like int/float/bool
-s string = 42
+var s string = 42
 std.io.println(s)
 
-s2 string = true
+var s2 string = true
 std.io.println(s2)
 
-s3 string = "hello"
+var s3 string = "hello"
 std.io.println(s3)
 
 // rune: coerces number to rune code point
-r rune = 65
+var r rune = 65
 std.io.println(r)
 
-r2 rune = `Z`
+var r2 rune = `Z`
 std.io.println(r2)
 
 // []T: enforces sequence type
-a []int = [1, 2, 3]
+var a []int = [1, 2, 3]
 std.io.println(std.core.len(a))
 
 // map[K]V: enforces map type
-m map[string]int = {"x": 1, "y": 2}
+var m map[string]int = {"x": 1, "y": 2}
 std.io.println(std.core.len(m))
 
 // error: enforces type
-e error = std.core.error("oops")
+var e error = std.core.error("oops")
 std.io.println(std.core.is_error(e))

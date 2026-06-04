@@ -1,1 +1,1 @@
-x rune = "not a rune"
+var x rune = "not a rune"

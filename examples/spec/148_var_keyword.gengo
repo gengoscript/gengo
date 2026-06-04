@@ -1,0 +1,39 @@
+std := import("std")
+
+// var with explicit value
+var i int = 5
+std.io.println(i)
+
+var f float = 3.14
+std.io.println(f)
+
+var b bool = true
+std.io.println(b)
+
+var s string = "hello"
+std.io.println(s)
+
+var a []int = [1, 2, 3]
+std.io.println(a[0])
+
+var m [string]int = {"a": 10}
+std.io.println(m["a"])
+
+// var with zero value
+var z_i int
+std.io.println(z_i)
+
+var z_f float
+std.io.println(z_f)
+
+var z_b bool
+std.io.println(z_b)
+
+var z_s string
+std.io.println(z_s)
+
+var z_a []int
+std.io.println(std.core.len(z_a))
+
+var z_m [string]int
+std.io.println(z_m.len)
