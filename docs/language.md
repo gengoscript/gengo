@@ -297,6 +297,7 @@ For cycle types, `succ`/`pred` wrap around.
   - Common patterns:
     - `defer std.io.println("done")` — deferred expression call
     - `defer (func() { std.io.println(x) })()` — deferred inline closure (captures `x` by reference)
+  - Deferred closures can read and mutate named return values (see Named return values below).
 - `assert condition` — panics with `AssertionFailed` if `condition` is false.
 - `assert condition, "message"` — panics with the given message string if `condition` is false.
   - The panic value is an `error` value; it can be caught with `std.core.recover()` inside a `defer`.
@@ -336,6 +337,31 @@ For cycle types, `succ`/`pred` wrap around.
 - Calls with strict arity checking.
 - Return supports multiple values: `return a, b, c`
 - Nested functions supported within configured limits.
+- **Named return values**: return slots can be given names and types in the signature.
+  - Syntax: `func f() (result int) { ... }` or multiple: `func f() (a int, b string) { ... }`
+  - Named returns are pre-declared as local variables, zero-initialised before the body runs.
+  - A bare `return` (no arguments) returns the current values of all named slots.
+  - `return expr` still works — it assigns to the first named slot and returns.
+  - **Defers can read and mutate named return values** — the named slots remain live through
+    the defer phase, so a deferred closure can observe or change the final return value:
+    ```gengo
+    func double() (result int) {
+        result = 10
+        defer (func() { result = result * 2 })()
+        return result  // defer runs after return: caller receives 20
+    }
+    ```
+  - Multiple defers run LIFO and each sees the value left by the previous defer:
+    ```gengo
+    func compute() (result int) {
+        result = 1
+        defer (func() { result = result + 100 })()  // runs third  → 160
+        defer (func() { result = result * 10 })()   // runs second → 60
+        defer (func() { result = result + 5 })()    // runs first  → 6
+        return result
+    }
+    // compute() == 160
+    ```
 
 ## 9. Standard Library (`std`)
 
