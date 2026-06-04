@@ -1,0 +1,65 @@
+std := import("std")
+
+// Closures inside loops must capture independent values per iteration.
+
+// for-in with explicit copy
+func test_for_in_copy() {
+    funcs := []
+    items := [10, 20, 30]
+    for v in items {
+        captured := v
+        funcs = std.core.append(funcs, func() int { return captured })
+    }
+    std.io.println(funcs[0](), funcs[1](), funcs[2]())
+}
+test_for_in_copy()
+
+// for-with-condition with explicit copy
+func test_for_copy() {
+    funcs := []
+    i := 0
+    for i < 3 {
+        captured := i
+        funcs = std.core.append(funcs, func() int { return captured })
+        i += 1
+    }
+    std.io.println(funcs[0](), funcs[1](), funcs[2]())
+}
+test_for_copy()
+
+// Multiple captured vars per iteration
+func test_multi_capture() {
+    funcs_a := []
+    funcs_b := []
+    i := 0
+    for i < 3 {
+        a := i
+        b := i * 10
+        funcs_a = std.core.append(funcs_a, func() int { return a })
+        funcs_b = std.core.append(funcs_b, func() int { return b })
+        i += 1
+    }
+    std.io.println(funcs_a[0](), funcs_a[1](), funcs_a[2]())
+    std.io.println(funcs_b[0](), funcs_b[1](), funcs_b[2]())
+}
+test_multi_capture()
+
+// Nested loops with closures
+func test_nested() {
+    outer := []
+    i := 0
+    for i < 2 {
+        oi := i
+        inner := []
+        j := 0
+        for j < 2 {
+            ij := j
+            inner = std.core.append(inner, func() int { return oi * 10 + ij })
+            j += 1
+        }
+        outer = std.core.append(outer, inner)
+        i += 1
+    }
+    std.io.println(outer[0][0](), outer[0][1](), outer[1][0](), outer[1][1]())
+}
+test_nested()

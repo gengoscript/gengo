@@ -424,6 +424,7 @@ pub const Compiler = struct {
         while (i > 0) {
             i -= 1;
             if (common.streq(enclosing.locals[i].name, name)) {
+                enclosing.locals[i].is_captured = true;
                 return self.addUpvalueToScope(scope_index, name, i, false);
             }
         }
@@ -437,6 +438,10 @@ pub const Compiler = struct {
         if (!self.inFunc()) return;
         const scope = self.currentScope();
         while (scope.local_count > base) {
+            const idx = scope.local_count - 1;
+            if (scope.locals[idx].is_captured) {
+                try chunk.emit2(@intFromEnum(Op.close_upvalue), idx, line);
+            }
             try chunk.emitOp(.pop, line);
             scope.local_count -= 1;
         }
@@ -2968,6 +2973,9 @@ pub const Compiler = struct {
         var t = lx.next(); // token after the var name
         if (t.typ == .question) t = lx.next(); // skip optional nullable prefix
         if (t.typ == .lbracket) {
+            // No space between name and '[' → index expression (e.g. m[k] = v),
+            // not a typed declaration (e.g. m [int] = v).
+            if (self.cur.col + self.cur.src.len == t.col) return false;
             t = lx.next(); // token after '['
             if (t.typ == .rbracket) {
                 // []T = expr: scan element type for '='
