@@ -1,4 +1,4 @@
-// Maze generator &&solver.
+// Maze generator and solver.
 //
 // Generates a perfect maze using iterative DFS (recursive backtracker),
 // then finds the shortest path with BFS. Every cell is reachable from
@@ -63,19 +63,19 @@ func generate(grid any) {
 
         nrs := []
         ncs := []
-        if r - 2 >= 0 &&gget(grid, r-2, c) == WALL {
+        if r - 2 >= 0 && gget(grid, r-2, c) == WALL {
             nrs = std.core.append(nrs, r-2)
             ncs = std.core.append(ncs, c)
         }
-        if r + 2 < ROWS &&gget(grid, r+2, c) == WALL {
+        if r + 2 < ROWS && gget(grid, r+2, c) == WALL {
             nrs = std.core.append(nrs, r+2)
             ncs = std.core.append(ncs, c)
         }
-        if c - 2 >= 0 &&gget(grid, r, c-2) == WALL {
+        if c - 2 >= 0 && gget(grid, r, c-2) == WALL {
             nrs = std.core.append(nrs, r)
             ncs = std.core.append(ncs, c-2)
         }
-        if c + 2 < COLS &&gget(grid, r, c+2) == WALL {
+        if c + 2 < COLS && gget(grid, r, c+2) == WALL {
             nrs = std.core.append(nrs, r)
             ncs = std.core.append(ncs, c+2)
         }
@@ -92,7 +92,7 @@ func generate(grid any) {
         nr   := int(nrs[idx])
         nc   := int(ncs[idx])
 
-        // carve through the wall that sits between current cell &&neighbour
+        // carve through the wall that sits between current cell and neighbour
         grid[key(int((r+nr)/2), int((c+nc)/2))] = OPEN
         grid[key(nr, nc)] = OPEN
         stackR = std.core.append(stackR, nr)
@@ -116,7 +116,7 @@ func bfs(grid any, parentR any, parentC any) {
         qr  = std.core.remove(qr, 0)
         qc  = std.core.remove(qc, 0)
 
-        if r == ROWS - 2 &&c == COLS - 2 { break }
+        if r == ROWS - 2 && c == COLS - 2 { break }
 
         drs := [r-1, r+1, r,   r  ]
         dcs := [c,   c,   c-1, c+1]
@@ -125,7 +125,7 @@ func bfs(grid any, parentR any, parentC any) {
             nr := int(drs[i])
             nc := int(dcs[i])
             i  += 1
-            if nr < 0 ||nr >= ROWS ||nc < 0 ||nc >= COLS { continue }
+            if nr < 0 || nr >= ROWS || nc < 0 || nc >= COLS { continue }
             if gget(grid, nr, nc) == WALL { continue }
             k := key(nr, nc)
             if visited[k] != null { continue }
@@ -143,7 +143,7 @@ func markPath(grid any, parentR any, parentC any) int {
     r     := ROWS - 2
     c     := COLS - 2
     steps := 0
-    for !(r == 1 &&c == 1) {
+    for !(r == 1 && c == 1) {
         k  := key(r, c)
         grid[k] = PATH
         pr := int(parentR[k])
