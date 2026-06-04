@@ -230,7 +230,7 @@ func runSim(initialWorkers []Worker, jobs JobQueue, maxTicks Tick, policies map[
     workers := {}
     queue   := []
     delayed := {}
-    now Tick = Tick(0)
+    var now Tick = Tick(0)
     st := Stats{
         processed: 0, failed: 0, retried: 0,
         dropped: 0, peakQueue: 0, totalLatency: Latency(0.0),
@@ -288,7 +288,7 @@ func runSim(initialWorkers []Worker, jobs JobQueue, maxTicks Tick, policies map[
                 }
                 w := workers[wk]
                 if w.busy {
-                    pol RetryPolicy = ExpBackoff{ limit: AggressiveRetry(5), base: 1 }
+                    var pol RetryPolicy = ExpBackoff{ limit: AggressiveRetry(5), base: 1 }
                     if std.core.has(policies, wk) {
                         pol = policies[wk]
                     }
@@ -332,7 +332,7 @@ func runSim(initialWorkers []Worker, jobs JobQueue, maxTicks Tick, policies map[
                     workers[wk] = w
                 }
                 job.attempts += 1
-                pol RetryPolicy = ExpBackoff{ limit: AggressiveRetry(5), base: 1 }
+                var pol RetryPolicy = ExpBackoff{ limit: AggressiveRetry(5), base: 1 }
                 if std.core.has(policies, wk) {
                     pol = policies[wk]
                 }

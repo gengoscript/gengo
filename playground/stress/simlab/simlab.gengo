@@ -142,11 +142,11 @@ func runSim(initialWorkers []Worker, initialJobs []Job, maxTicks Tick) (Stats, ?
     workers := {}
     queue := []
     delayed := {}
-    now Tick = Tick(0)
+    var now Tick = Tick(0)
     st := Stats{ processed: 0, failed: 0, retried: 0, dropped: 0, peakQueue: 0 }
 
     // choose policy through interface value
-    p RetryPolicy = ExpBackoff{ limit: AggressiveRetry(5), base: 1 }
+    var p RetryPolicy = ExpBackoff{ limit: AggressiveRetry(5), base: 1 }
 
     // boot workers + jobs
     i := 0
