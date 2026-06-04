@@ -317,7 +317,7 @@ fn runCli(argv: []const []const u8) void {
     vmperf.printSummary(vms.vmState().gc_runs, vms.vmState().gc_time_ns,
         vms.vmState().alloc_object_calls, vms.vmState().alloc_managed_slice_calls,
         vms.vmState().alloc_managed_bytes_calls);
-    die(0);
+    die(if (runtime.test_failed) 1 else 0);
 }
 
 // Zig 0.16 start.zig auto-exports _start for WASM and calls main().

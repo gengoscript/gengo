@@ -32,6 +32,7 @@ pub const Runtime = struct {
     vm_state: vm.State = .{},
     test_count: u8 = 0,
     test_names: [MaxTests][]const u8 = undefined,
+    test_failed: bool = false,
 
     pub fn init() Runtime {
         var rt: Runtime = .{};
@@ -102,6 +103,7 @@ pub const Runtime = struct {
         self.last_runtime_msg_len = 0;
         self.panic_depth = 0;
         self.test_count = 0;
+        self.test_failed = false;
         self.reset();
         vm.setPolicy(self.policy);
 
@@ -194,6 +196,7 @@ pub const Runtime = struct {
             io.werr(" passed, ");
             io.writeInt(@intCast(failed));
             io.werr(" failed\n");
+            if (failed > 0) self.test_failed = true;
         }
     }
 
