@@ -30,7 +30,7 @@ pub const State = struct {
 };
 
 var g_default_state: State = .{};
-var g_state: *State = &g_default_state;
+pub var g_state: *State = &g_default_state;
 
 pub fn setActive(state: *State) void {
     g_state = state;

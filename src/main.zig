@@ -165,6 +165,7 @@ fn runCli(argv: []const []const u8) void {
     var script_index: usize = 1;
     var backend: vm.Policy.NativeBackend = .embedded;
     var max_ops: ?u64 = null;
+    var test_mode: bool = false;
     while (script_index < argv.len) {
         const a = argv[script_index];
         if (a.len == 2 and a[0] == '-' and a[1] == '-') {
@@ -205,6 +206,11 @@ fn runCli(argv: []const []const u8) void {
             script_index += 2;
             continue;
         }
+        if (std.mem.eql(u8, a, "--test")) {
+            test_mode = true;
+            script_index += 1;
+            continue;
+        }
         break;
     }
 
@@ -240,7 +246,7 @@ fn runCli(argv: []const []const u8) void {
         .native_backend = backend,
         .max_ops = max_ops,
     });
-    (if (script_path) |p| runtime.runPath(src, p) else runtime.run(src)) catch |err| {
+    runtime.runPathWithProvider(src, if (script_path) |p| p else "", .filesystem, test_mode) catch |err| {
         vmperf.printSummary(vms.vmState().gc_runs, vms.vmState().gc_time_ns,
             vms.vmState().alloc_object_calls, vms.vmState().alloc_managed_slice_calls,
             vms.vmState().alloc_managed_bytes_calls);

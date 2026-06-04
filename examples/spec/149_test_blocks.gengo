@@ -1,0 +1,21 @@
+std := import("std")
+
+func add(a int, b int) int {
+    return a + b
+}
+
+test "add is commutative" {
+    assert add(1, 2) == add(2, 1)
+}
+
+func mul(a int, b int) int {
+    return a * b
+}
+
+test "mul by zero" {
+    assert mul(5, 0) == 0
+}
+
+// test blocks should be ignored during normal execution
+std.io.println(add(3, 4))
+std.io.println(mul(3, 4))

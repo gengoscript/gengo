@@ -29,6 +29,7 @@ const keyword_map = std.StaticStringMap(TT).initComptime(.{
     .{ "struct",    .kw_struct },
     .{ "subtype",   .kw_subtype },
     .{ "switch",    .kw_switch },
+    .{ "test",      .kw_test },
     .{ "trap",      .kw_trap },
     .{ "true",      .kw_true },
     .{ "type",      .kw_type },

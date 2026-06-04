@@ -3,12 +3,14 @@ const Compiler = @import("../lang/compiler.zig").Compiler;
 const chunk = @import("../lang/chunk.zig");
 const globals = @import("../lang/globals.zig");
 const heap = @import("heap.zig");
+const io = @import("io.zig");
 const module_compile = @import("../lang/module_compile.zig");
 const vm = @import("../lang/vm.zig");
 const vmnative = @import("../lang/vm_native.zig");
 const Value = @import("../lang/value.zig").Value;
 
 const MaxFrames = @import("../runtime/config.zig").max_frames;
+const MaxTests = 64;
 
 pub const Runtime = struct {
     policy: vm.Policy = .{},
@@ -28,6 +30,8 @@ pub const Runtime = struct {
     globals_state: globals.State = .{},
     heap_state: heap.State = .{},
     vm_state: vm.State = .{},
+    test_count: u8 = 0,
+    test_names: [MaxTests][]const u8 = undefined,
 
     pub fn init() Runtime {
         var rt: Runtime = .{};
@@ -81,14 +85,14 @@ pub const Runtime = struct {
     }
 
     pub fn runPath(self: *Runtime, src: []const u8, path: []const u8) !void {
-        return self.runPathWithProvider(src, path, .filesystem);
+        return self.runPathWithProvider(src, path, .filesystem, false);
     }
 
     pub fn runPathWithSources(self: *Runtime, src: []const u8, path: []const u8, sources: []const module_compile.SourceEntry) !void {
-        return self.runPathWithProvider(src, path, .{ .table = sources });
+        return self.runPathWithProvider(src, path, .{ .table = sources }, false);
     }
 
-    pub fn runPathWithProvider(self: *Runtime, src: []const u8, path: []const u8, provider: module_compile.SourceProvider) !void {
+    pub fn runPathWithProvider(self: *Runtime, src: []const u8, path: []const u8, provider: module_compile.SourceProvider, test_mode: bool) !void {
         self.last_compile_line = 0;
         self.last_compile_path_len = 0;
         self.last_compile_col = 0;
@@ -97,12 +101,14 @@ pub const Runtime = struct {
         self.last_runtime_col = 0;
         self.last_runtime_msg_len = 0;
         self.panic_depth = 0;
+        self.test_count = 0;
         self.reset();
         vm.setPolicy(self.policy);
 
         if (path.len != 0) {
             var session: module_compile.Session = .{};
             session.provider = provider;
+            session.test_mode = test_mode;
             session.compileRoot(path, src) catch |err| {
                 self.last_compile_line = if (session.last_error_line != 0) session.last_error_line else 1;
                 self.last_compile_col = session.last_error_col;
@@ -111,12 +117,20 @@ pub const Runtime = struct {
                 self.setLastCompilePath(session.last_error_path);
                 return err;
             };
+            if (test_mode) {
+                self.test_count = session.test_count;
+                var ti: usize = 0;
+                while (ti < session.test_count) : (ti += 1) {
+                    self.test_names[ti] = session.test_names[ti];
+                }
+            }
         } else {
             var session: module_compile.Session = .{};
             session.provider = provider;
             var compiler = Compiler.init(src, .{
                 .module_ctx = &session,
                 .resolve_import = module_compile.Session.resolveImportOpaque,
+                .test_mode = test_mode,
             });
             compiler.compile(true) catch |err| {
                 self.last_compile_line = if (compiler.err_line != 0) compiler.err_line else compiler.prev.line;
@@ -126,6 +140,13 @@ pub const Runtime = struct {
                 self.setLastCompilePath("");
                 return err;
             };
+            if (test_mode) {
+                self.test_count = compiler.test_count;
+                var ti: usize = 0;
+                while (ti < compiler.test_count) : (ti += 1) {
+                    self.test_names[ti] = compiler.test_names[ti];
+                }
+            }
         }
 
         try vmnative.installStdGlobal();
@@ -141,6 +162,39 @@ pub const Runtime = struct {
             @memcpy(self.last_runtime_msg_buf[0..emsg.len], emsg);
             return err;
         };
+
+        if (test_mode and self.test_count > 0) {
+            var passed: u8 = 0;
+            var failed: u8 = 0;
+            var ti: u8 = 0;
+            while (ti < self.test_count) : (ti += 1) {
+                var name_buf: [32]u8 = undefined;
+                const name = std.fmt.bufPrint(&name_buf, "__test_{d}", .{ti}) catch continue;
+                _ = vm.callGlobal(name, &[_]Value{}) catch |err| {
+                    failed += 1;
+                    io.werr("FAIL: ");
+                    io.werr(self.test_names[ti]);
+                    io.werr(": ");
+                    io.werr(@errorName(err));
+                    const emsg = vm.runtimeErrMsg();
+                    if (emsg.len > 0) {
+                        io.werr(": ");
+                        io.werr(emsg);
+                    }
+                    io.werr("\n");
+                    continue;
+                };
+                passed += 1;
+                io.werr("PASS: ");
+                io.werr(self.test_names[ti]);
+                io.werr("\n");
+            }
+            io.werr("\n");
+            io.writeInt(@intCast(passed));
+            io.werr(" passed, ");
+            io.writeInt(@intCast(failed));
+            io.werr(" failed\n");
+        }
     }
 
     // Run src without resetting globals or heap — allows successive REPL lines

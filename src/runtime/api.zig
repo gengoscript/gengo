@@ -91,7 +91,7 @@ pub const Runtime = struct {
     }
 
     pub fn runPath(self: *Runtime, src: []const u8, path: []const u8) RuntimeResult {
-        self.inner.runPathWithProvider(src, path, defaultSourceProvider(self)) catch |err| {
+        self.inner.runPathWithProvider(src, path, defaultSourceProvider(self), false) catch |err| {
             if (self.inner.last_compile_line != 0) {
                 return .{ .compile_error = compileError(err, &self.inner) };
             }
@@ -111,7 +111,7 @@ pub const Runtime = struct {
     }
 
     pub fn runPathWithSourceProvider(self: *Runtime, src: []const u8, path: []const u8, provider: SourceProvider) RuntimeResult {
-        self.inner.runPathWithProvider(src, path, provider) catch |err| {
+        self.inner.runPathWithProvider(src, path, provider, false) catch |err| {
             if (self.inner.last_compile_line != 0) {
                 return .{ .compile_error = compileError(err, &self.inner) };
             }

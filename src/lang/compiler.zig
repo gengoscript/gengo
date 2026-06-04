@@ -61,6 +61,7 @@ pub const CompilerOptions = struct {
     module_global_name: []const u8 = "",
     module_ctx: ?*anyopaque = null,
     resolve_import: ?ImportResolverFn = null,
+    test_mode: bool = false,
 };
 
 const ExportEntry = struct {
@@ -93,6 +94,9 @@ pub const Compiler = struct {
     typed_global_names: [MaxLocals][]const u8 = undefined,
     typed_global_type_checks: [MaxLocals]TypeCheck = undefined,
     typed_global_count: u8 = 0,
+
+    test_names: [MaxLocals][]const u8 = undefined,
+    test_count: u8 = 0,
 
     // ── Lifecycle ────────────────────────────────────────────────────────────────
 
@@ -176,6 +180,7 @@ pub const Compiler = struct {
             .kw_variant => "'variant'",
             .kw_subtype => "'subtype'",
             .kw_pub => "'pub'",
+            .kw_test => "'test'",
             .lparen => "'('",
             .rparen => "')'",
             .lbrace => "'{'",
@@ -505,6 +510,8 @@ pub const Compiler = struct {
         if (self.match(.kw_pub)) {
             if (self.inFunc()) { self.setErr("invalid 'pub' target", .{}); return error.InvalidPubTarget; }
             try self.pubDecl();
+        } else if (self.match(.kw_test)) {
+            try self.testDecl();
         } else if (self.match(.kw_var)) {
             try self.varDecl(true, false);
         } else if (self.check(.ident) and self.peekTT() == .colon_eq) {
@@ -522,6 +529,72 @@ pub const Compiler = struct {
         } else {
             try self.stmt();
         }
+    }
+
+    fn testDecl(self: *Compiler) !void {
+        const line = self.prev.line;
+        if (self.cur.typ != .string) return self.err("expected test name string, found {s}", .{self.tokenName(self.cur.typ)});
+        const label = self.cur.src;
+        self.advance();
+
+        if (!self.options.test_mode) {
+            // Normal mode: parse the body but discard emitted code.
+            var tmp_state: chunk.State = .{};
+            const saved_state = chunk.g_state;
+            chunk.setActive(&tmp_state);
+            defer chunk.setActive(saved_state);
+
+            try self.consume(.lbrace);
+            while (!self.check(.rbrace) and !self.check(.eof)) try self.decl();
+            try self.consume(.rbrace);
+            return;
+        }
+
+        // Test mode: emit the test block as a zero-arity function.
+        if (self.test_count >= MaxLocals) return self.err("too many test blocks (max {d})", .{MaxLocals});
+        const idx = self.test_count;
+        self.test_count += 1;
+        self.test_names[idx] = label;
+
+        const name_buf = heap.bump(u8, 32) orelse return error.OutOfMemory;
+        const name_str = std.fmt.bufPrint(name_buf[0..32], "__test_{d}", .{idx}) catch return error.OutOfMemory;
+
+        const jump_over = try chunk.emitJump(.jump, line);
+        const func_ip = chunk.codeLen();
+
+        if (self.scope_depth >= MaxScopes) return error.TooManyNestedFunctions;
+        self.scopes[self.scope_depth] = .{};
+        self.scope_depth += 1;
+        const scope = self.currentScope();
+        scope.is_named = false;
+        scope.has_typed_returns = false;
+
+        try self.consume(.lbrace);
+        while (!self.check(.rbrace) and !self.check(.eof)) try self.decl();
+        try self.consume(.rbrace);
+        try self.cleanupLocals(0, self.prev.line);
+        try chunk.emitOp(.ret, self.prev.line);
+
+        self.scope_depth -= 1;
+        try chunk.patchJump(jump_over);
+
+        const func_obj = heap.allocObject() orelse return error.OutOfMemory;
+        func_obj.* = .{ .function = .{
+            .ip = func_ip,
+            .arity = 0,
+            .is_variadic = false,
+            .variadic_type = .{ .alts = @constCast(&[_]FieldTypeAlt{.{ .typ = .any }}) },
+            .capture_slots = &[_]u8{},
+            .param_types = &[_]FieldTypeSpec{},
+            .has_typed_params = false,
+            .return_types = &[_]FieldTypeSpec{},
+            .has_typed_returns = false,
+            .named_return_count = 0,
+        } };
+        self.last_func_obj = func_obj;
+        const cidx: u16 = try chunk.addConst(.{ .object = func_obj });
+        try chunk.emitConstIdx(.make_closure, cidx, self.prev.line);
+        try chunk.emitOpConst(.def_global, .{ .string = name_str }, line);
     }
 
     fn pubDecl(self: *Compiler) !void {

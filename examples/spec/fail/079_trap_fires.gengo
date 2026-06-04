@@ -4,9 +4,9 @@ func f() (?any, ?error) {
     return null, std.core.error("something failed")
 }
 
-func test() {
+func runTest() {
     val, trap := f()
     std.io.println("unreachable:", val)
 }
 
-test()
+runTest()

@@ -59,6 +59,9 @@ pub const Session = struct {
     last_error_msg_buf: [512]u8 = undefined,
     last_error_msg_len: u16 = 0,
     provider: SourceProvider = .filesystem,
+    test_mode: bool = false,
+    test_count: u8 = 0,
+    test_names: [64][]const u8 = undefined,
 
     fn copyCompilerError(self: *Session, compiler: *Compiler) void {
         self.last_error_col = compiler.err_col;
@@ -129,6 +132,7 @@ pub const Session = struct {
             .module_global_name = self.modules[idx].global_name,
             .module_ctx = self,
             .resolve_import = resolveImportOpaque,
+            .test_mode = if (emit_halt) self.test_mode else false,
         });
         compiler.compile(false) catch |err| {
             self.last_error_path = self.modules[idx].path();
@@ -136,6 +140,13 @@ pub const Session = struct {
             self.copyCompilerError(&compiler);
             return err;
         };
+        if (emit_halt and self.test_mode) {
+            self.test_count = compiler.test_count;
+            var ti: usize = 0;
+            while (ti < compiler.test_count) : (ti += 1) {
+                self.test_names[ti] = compiler.test_names[ti];
+            }
+        }
         try compiler.emitModuleObject();
         if (emit_halt) try chunk.emitOp(.halt, compiler.prev.line);
         self.modules[idx].state = .compiled;
