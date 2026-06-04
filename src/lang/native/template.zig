@@ -370,9 +370,11 @@ pub fn tplParse(src_val: Value, src: []const u8) !Value {
                         .range_block => {
                             if (entry.else_idx != std.math.maxInt(usize)) {
                                 jmp[entry.else_idx] = .{ .number = @floatFromInt(idx) };
+                                jmp[entry.if_idx] = .{ .number = @floatFromInt(entry.else_idx + 1) };
+                            } else {
+                                jmp[entry.if_idx] = .{ .number = @floatFromInt(idx) };
                             }
-                            jmp[entry.if_idx] = .{ .number = @floatFromInt(idx) };
-                            scope_pop = -1;
+                            scope_pop = -2;
                         },
                         .with_block => {
                             jmp[entry.if_idx] = .{ .number = @floatFromInt(idx) };
@@ -426,6 +428,12 @@ pub fn tplParse(src_val: Value, src: []const u8) !Value {
     return .{ .object = obj };
 }
 
+const IterState = struct {
+    items: []Value,
+    index: usize,
+    body_ip: usize,
+};
+
 pub fn tplExec(tmpl: *Object, data: Value) !Value {
     const ops_v = tplFieldValue(tmpl, "__ops");
     const args_v = tplFieldValue(tmpl, "__args");
@@ -446,6 +454,8 @@ pub fn tplExec(tmpl: *Object, data: Value) !Value {
     var dot_stack: [256]Value = undefined;
     var scope_top: usize = 0;
     dot_stack[scope_top] = data;
+    var iter_stack: [64]IterState = undefined;
+    var iter_top: usize = 0;
 
     while (ip < ops.len) {
         const op_v = ops[ip];
@@ -501,14 +511,50 @@ pub fn tplExec(tmpl: *Object, data: Value) !Value {
             },
             .end => {
                 const jv = jmps[ip];
-                if (jv == .number and jv.number < 0) {
+                if (jv == .number and jv.number == -2) {
+                    if (iter_top > 0) {
+                        const iter_idx = iter_top - 1;
+                        iter_stack[iter_idx].index += 1;
+                        if (iter_stack[iter_idx].index < iter_stack[iter_idx].items.len) {
+                            dot_stack[scope_top] = iter_stack[iter_idx].items[iter_stack[iter_idx].index];
+                            ip = iter_stack[iter_idx].body_ip;
+                        } else {
+                            iter_top -= 1;
+                            if (scope_top > 0) scope_top -= 1;
+                            ip += 1;
+                        }
+                    } else {
+                        ip += 1;
+                    }
+                } else if (jv == .number and jv.number < 0) {
                     const pop = @as(usize, @intFromFloat(-jv.number));
                     if (scope_top >= pop) scope_top -= pop;
+                    ip += 1;
+                } else {
+                    ip += 1;
                 }
-                ip += 1;
             },
             .range_begin => {
-                ip = @intFromFloat(jmps[ip].number);
+                const rval = try tplEvalExpr(arg, dot_stack[scope_top], funcs_v);
+                if (rval == .object) {
+                    const obj = rval.object;
+                    if (tplIsArray(obj)) {
+                        const items = tplAsArraySlice(obj);
+                        if (items.len > 0) {
+                            iter_stack[iter_top] = .{ .items = items, .index = 0, .body_ip = ip + 1 };
+                            iter_top += 1;
+                            scope_top += 1;
+                            dot_stack[scope_top] = items[0];
+                            ip += 1;
+                        } else {
+                            ip = @intFromFloat(jmps[ip].number);
+                        }
+                    } else {
+                        ip = @intFromFloat(jmps[ip].number);
+                    }
+                } else {
+                    ip = @intFromFloat(jmps[ip].number);
+                }
             },
             .range_else => {
                 ip = @intFromFloat(jmps[ip].number);

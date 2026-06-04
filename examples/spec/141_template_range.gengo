@@ -1,0 +1,28 @@
+std := import("std")
+tmpl := std.template
+
+// Range over non-empty array
+r := tmpl.render("{{range .items}}{{.}}{{end}}", {"items": ["a", "b", "c"]})
+std.io.println(r)
+
+// Range over empty array (no else, should output nothing)
+r = tmpl.render("{{range .items}}x{{end}}", {"items": []})
+std.io.println(r)
+
+// Range with else (empty array)
+r = tmpl.render("{{range .items}}{{.}}{{else}}empty{{end}}", {"items": []})
+std.io.println(r)
+
+// Range with else (non-empty array)
+r = tmpl.render("{{range .items}}{{.}}{{else}}empty{{end}}", {"items": ["x", "y"]})
+std.io.println(r)
+
+// Range over array of maps, access fields
+r = tmpl.render("{{range .items}}{{.name}}{{end}}", {"items": [{"name": "Alice"}, {"name": "Bob"}]})
+std.io.println(r)
+
+// Nested range
+r = tmpl.render("{{range .rows}}{{range .}}{{.}}{{end}}{{end}}", {"rows": [["a", "b"], ["c", "d"]]})
+std.io.println(r)
+
+std.io.println("ok")
