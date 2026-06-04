@@ -86,4 +86,17 @@ assert(std.regexp.match(re, "hello"))
 m := std.regexp.find(re, "hello")
 assert(m == "ll")
 
+// object method call syntax
+re2 := std.regexp.compile("abc")
+assert(re2.match("abcdef"))
+assert(!re2.match("xyz"))
+m2 := re2.find("abcdef")
+assert(m2 == "abc")
+all2 := re2.find_all("abcabc")
+assert(std.core.len(all2) == 2)
+r2 := re2.replace("abcabc", "x")
+assert(r2 == "xx")
+parts2 := re2.split("abcXabcYabc")
+assert(std.core.len(parts2) == 3)
+
 std.io.println("ok")
