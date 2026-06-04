@@ -1,0 +1,89 @@
+std := import("std")
+
+// regexp.match
+assert(std.regexp.match("hello", "hello world"))
+assert(!std.regexp.match("hello", "world"))
+assert(std.regexp.match("^hello", "hello world"))
+assert(!std.regexp.match("^world", "hello world"))
+assert(std.regexp.match("world$", "hello world"))
+assert(!std.regexp.match("hello$", "hello world"))
+assert(std.regexp.match("h.llo", "hello"))
+assert(!std.regexp.match("h.llo", "hllo"))
+assert(std.regexp.match("he*llo", "hllo"))
+assert(std.regexp.match("he*llo", "hello"))
+assert(std.regexp.match("he*llo", "heeeello"))
+assert(std.regexp.match("he+llo", "hello"))
+assert(!std.regexp.match("he+llo", "hllo"))
+assert(std.regexp.match("he?llo", "hello"))
+assert(std.regexp.match("he?llo", "hllo"))
+assert(!std.regexp.match("he?llo", "heello"))
+
+// character classes
+assert(std.regexp.match("[abc]", "a"))
+assert(!std.regexp.match("[abc]", "d"))
+assert(std.regexp.match("[a-z]", "m"))
+assert(!std.regexp.match("[a-z]", "3"))
+assert(std.regexp.match("[a-z0-9]", "5"))
+assert(!std.regexp.match("[^abc]", "a"))
+assert(std.regexp.match("[^abc]", "d"))
+assert(std.regexp.match("[a-z]+", "hello"))
+
+// shorthand classes
+assert(std.regexp.match("\\d+", "123"))
+assert(!std.regexp.match("\\d+", "abc"))
+assert(std.regexp.match("\\w+", "hello_123"))
+assert(std.regexp.match("\\s", " "))
+assert(!std.regexp.match("\\D", "1"))
+assert(std.regexp.match("\\D", "a"))
+assert(std.regexp.match("\\W", "!"))
+
+// alternation
+assert(std.regexp.match("a|b", "a"))
+assert(std.regexp.match("a|b", "b"))
+assert(!std.regexp.match("a|b", "c"))
+assert(std.regexp.match("cat|dog", "dog"))
+assert(!std.regexp.match("cat|dog", "bird"))
+assert(std.regexp.match("(a|b)c", "ac"))
+assert(std.regexp.match("(a|b)c", "bc"))
+assert(!std.regexp.match("(a|b)c", "cc"))
+
+// groups
+assert(std.regexp.match("(ab)+", "abab"))
+assert(std.regexp.match("(ab)+", "aba"))
+
+// find
+found := std.regexp.find("world", "hello world")
+assert(std.core.is_string(found))
+assert(found == "world")
+assert(std.regexp.find("xyz", "hello world") == null)
+
+all := std.regexp.find_all("a", "banana")
+assert(std.core.len(all) == 3)
+assert(all[0] == "a")
+assert(all[1] == "a")
+assert(all[2] == "a")
+
+// replace
+r := std.regexp.replace("world", "hello world", "there")
+assert(r == "hello there")
+r = std.regexp.replace("a", "banana", "o")
+assert(r == "bonono")
+r = std.regexp.replace("xyz", "hello", "!")
+assert(r == "hello")
+
+// split
+parts := std.regexp.split(",", "a,b,c")
+assert(std.core.len(parts) == 3)
+
+parts = std.regexp.split(" ", "hello world")
+assert(std.core.len(parts) == 2)
+assert(parts[0] == "hello")
+assert(parts[1] == "world")
+
+// compile and use object
+re := std.regexp.compile("l+")
+assert(std.regexp.match(re, "hello"))
+m := std.regexp.find(re, "hello")
+assert(m == "ll")
+
+std.io.println("ok")

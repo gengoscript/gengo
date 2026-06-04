@@ -1,0 +1,2 @@
+std := import("std")
+std.regexp.match("(abc", "test")

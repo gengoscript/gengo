@@ -29,10 +29,12 @@ const string_mod = @import("string.zig");
 const io_mod = @import("io.zig");
 const json_mod = @import("json.zig");
 const template_mod = @import("template.zig");
+const regexp_mod = @import("regexp.zig");
 const host_abi_mod = @import("host_abi.zig");
 
 const TemplateTypeQualifiedName = "@std.template.obj";
 const TimeTypeQualifiedName = "@std.time.obj";
+const RegexpTypeQualifiedName = "@std.regexp.obj";
 
 const NativeFnId = enum(u8) {
     io_println = 1,
@@ -160,6 +162,17 @@ const NativeFnId = enum(u8) {
     time_since = 123,
     time_until = 124,
     time_add_date = 125,
+    re_match = 126,
+    re_find = 127,
+    re_find_all = 128,
+    re_replace = 129,
+    re_split = 130,
+    re_compile = 131,
+    re_obj_match = 132,
+    re_obj_find = 133,
+    re_obj_find_all = 134,
+    re_obj_replace = 135,
+    re_obj_split = 136,
 };
 const MaxNativeArgs = 255;
 const NamespaceEntry = struct {
@@ -403,6 +416,23 @@ pub fn buildStdModule() !*Object {
     try vms.pushTempRoot(.{ .object = base64_obj });
     defer vms.popTempRoot();
 
+    const regexp_type_obj = try regexp_mod.reGetType();
+    try vms.pushTempRoot(.{ .object = regexp_type_obj });
+    defer vms.popTempRoot();
+
+    const regexp_entries = [_]NamespaceEntry{
+        .{ .name = "match", .value = try makeNative(.re_match, 2) },
+        .{ .name = "find", .value = try makeNative(.re_find, 2) },
+        .{ .name = "find_all", .value = try makeNative(.re_find_all, 2) },
+        .{ .name = "replace", .value = try makeNative(.re_replace, 3) },
+        .{ .name = "split", .value = try makeNative(.re_split, 2) },
+        .{ .name = "compile", .value = try makeNative(.re_compile, 1) },
+        .{ .name = "__type", .value = .{ .object = regexp_type_obj } },
+    };
+    const regexp_obj = try makeNamespace("regexp", "@module_type:std.regexp", &regexp_entries);
+    try vms.pushTempRoot(.{ .object = regexp_obj });
+    defer vms.popTempRoot();
+
     const std_entries = [_]NamespaceEntry{
         .{ .name = "io", .value = .{ .object = io_obj } },
         .{ .name = "core", .value = .{ .object = core_obj } },
@@ -415,7 +445,9 @@ pub fn buildStdModule() !*Object {
         .{ .name = "time", .value = .{ .object = time_obj } },
         .{ .name = "hex", .value = .{ .object = hex_obj } },
         .{ .name = "base64", .value = .{ .object = base64_obj } },
+        .{ .name = "regexp", .value = .{ .object = regexp_obj } },
         .{ .name = "Time", .value = .{ .object = time_type_obj } },
+        .{ .name = "Regexp", .value = .{ .object = regexp_type_obj } },
     };
     const std_obj = try makeNamespace("std", "@module_type:std", &std_entries);
     vms.vmState().std_module = std_obj;
@@ -465,6 +497,26 @@ pub fn installStdGlobal() !void {
             @memcpy(kbuf[0..TimeTypeQualifiedName.len], TimeTypeQualifiedName);
             kbuf[TimeTypeQualifiedName.len] = '.';
             @memcpy(kbuf[TimeTypeQualifiedName.len + 1 .. needed], m.name);
+            if (!globals.has(kbuf)) {
+                const n = try makeNative(m.id, m.arity);
+                try globals.def(kbuf, n);
+            }
+        }
+    }
+    {
+        const regexp_methods = [_]struct { name: []const u8, id: NativeFnId, arity: u8 }{
+            .{ .name = "match",    .id = .re_obj_match,    .arity = 2 },
+            .{ .name = "find",     .id = .re_obj_find,     .arity = 2 },
+            .{ .name = "find_all", .id = .re_obj_find_all, .arity = 2 },
+            .{ .name = "replace",  .id = .re_obj_replace,  .arity = 3 },
+            .{ .name = "split",    .id = .re_obj_split,    .arity = 2 },
+        };
+        for (regexp_methods) |m| {
+            const needed = RegexpTypeQualifiedName.len + 1 + m.name.len;
+            const kbuf = (heap.bump(u8, needed) orelse return)[0..needed];
+            @memcpy(kbuf[0..RegexpTypeQualifiedName.len], RegexpTypeQualifiedName);
+            kbuf[RegexpTypeQualifiedName.len] = '.';
+            @memcpy(kbuf[RegexpTypeQualifiedName.len + 1 .. needed], m.name);
             if (!globals.has(kbuf)) {
                 const n = try makeNative(m.id, m.arity);
                 try globals.def(kbuf, n);
@@ -1555,6 +1607,110 @@ pub fn callNative(nf: NativeFuncObj, argc: u8) !void {
             const out = try time_mod.timeAddDate(ms, @intCast(y), @intCast(m), @intCast(d));
             _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
             try vms.vmPush(out);
+        },
+        .re_match => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const pattern_val = vms.vmState().stack[top - 2];
+            const s_val = vms.vmState().stack[top - 1];
+            const result = try regexp_mod.nativeReMatch(pattern_val, s_val);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(result);
+        },
+        .re_find => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const pattern_val = vms.vmState().stack[top - 2];
+            const s_val = vms.vmState().stack[top - 1];
+            const result = try regexp_mod.nativeReFind(pattern_val, s_val);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(result);
+        },
+        .re_find_all => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const pattern_val = vms.vmState().stack[top - 2];
+            const s_val = vms.vmState().stack[top - 1];
+            const result = try regexp_mod.nativeReFindAll(pattern_val, s_val);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(result);
+        },
+        .re_replace => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const pattern_val = vms.vmState().stack[top - 3];
+            const s_val = vms.vmState().stack[top - 2];
+            const repl_val = vms.vmState().stack[top - 1];
+            const result = try regexp_mod.nativeReReplace(pattern_val, s_val, repl_val);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(result);
+        },
+        .re_split => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const pattern_val = vms.vmState().stack[top - 2];
+            const s_val = vms.vmState().stack[top - 1];
+            const result = try regexp_mod.nativeReSplit(pattern_val, s_val);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(result);
+        },
+        .re_compile => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const pattern_val = vms.vmState().stack[vms.vmState().stack_top - 1];
+            const result = try regexp_mod.nativeReCompile(pattern_val);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(result);
+        },
+        .re_obj_match => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const recv = vms.vmState().stack[top - 2];
+            const s_val = vms.vmState().stack[top - 1];
+            const pattern = try regexp_mod.reGetPattern(recv);
+            const result = try regexp_mod.nativeReMatch(.{ .string = pattern }, s_val);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(result);
+        },
+        .re_obj_find => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const recv = vms.vmState().stack[top - 2];
+            const s_val = vms.vmState().stack[top - 1];
+            const pattern = try regexp_mod.reGetPattern(recv);
+            const result = try regexp_mod.nativeReFind(.{ .string = pattern }, s_val);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(result);
+        },
+        .re_obj_find_all => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const recv = vms.vmState().stack[top - 2];
+            const s_val = vms.vmState().stack[top - 1];
+            const pattern = try regexp_mod.reGetPattern(recv);
+            const result = try regexp_mod.nativeReFindAll(.{ .string = pattern }, s_val);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(result);
+        },
+        .re_obj_replace => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const recv = vms.vmState().stack[top - 3];
+            const s_val = vms.vmState().stack[top - 2];
+            const repl_val = vms.vmState().stack[top - 1];
+            const pattern = try regexp_mod.reGetPattern(recv);
+            const result = try regexp_mod.nativeReReplace(.{ .string = pattern }, s_val, repl_val);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(result);
+        },
+        .re_obj_split => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const recv = vms.vmState().stack[top - 2];
+            const s_val = vms.vmState().stack[top - 1];
+            const pattern = try regexp_mod.reGetPattern(recv);
+            const result = try regexp_mod.nativeReSplit(.{ .string = pattern }, s_val);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(result);
         },
     }
 }
