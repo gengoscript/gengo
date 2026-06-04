@@ -1,0 +1,5 @@
+std := import("std")
+
+std.io.println("ok")
+std.io.print("ok\n")
+std.io.println(std.core.len([1, 2, 3]))

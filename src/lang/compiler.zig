@@ -7,6 +7,7 @@ const op_mod = @import("op.zig");
 const token = @import("token.zig");
 const value_mod = @import("value.zig");
 const ct = @import("compiler_types.zig");
+const std_schema = @import("std_schema.zig");
 
 const Lexer = lexer_mod.Lexer;
 const FieldTypeAlt = value_mod.FieldTypeAlt;
@@ -84,6 +85,10 @@ pub const Compiler = struct {
     err_msg_len: u16 = 0,
     err_col: u16 = 0,
     err_line: u32 = 0,
+
+    std_namespace_path: ?[]const u8 = null,
+    std_module_global_names: [MaxLocals][]const u8 = undefined,
+    std_module_global_count: u8 = 0,
 
     // ── Lifecycle ────────────────────────────────────────────────────────────────
 
@@ -290,11 +295,26 @@ pub const Compiler = struct {
         chunk.setCol(name.col);
         if (self.resolveLocal(name.src)) |slot| {
             try chunk.emit2(@intFromEnum(Op.get_local), slot, name.line);
+            if (self.currentScope().locals[slot].from_std) {
+                self.std_namespace_path = "";
+            }
         } else if (self.resolveUpvalue(name.src)) |uv| {
             try chunk.emit2(@intFromEnum(Op.get_upvalue), uv, name.line);
         } else {
-            try chunk.emitGetGlobal(try self.qualifyGlobalName(name.src), name.line);
+            const qname = try self.qualifyGlobalName(name.src);
+            try chunk.emitGetGlobal(qname, name.line);
+            if (self.isStdModuleGlobal(qname)) {
+                self.std_namespace_path = "";
+            }
         }
+    }
+
+    fn isStdModuleGlobal(self: *Compiler, name: []const u8) bool {
+        var i: u8 = 0;
+        while (i < self.std_module_global_count) : (i += 1) {
+            if (common.streq(self.std_module_global_names[i], name)) return true;
+        }
+        return false;
     }
 
     fn emitSetVar(self: *Compiler, name: Token) !void {
@@ -1317,10 +1337,20 @@ pub const Compiler = struct {
             return self.err("expected expression, found {s}", .{self.tokenName(self.cur.typ)});
         }
         if (self.inFunc()) {
-            _ = try self.defineLocal(name.src, is_const);
+            const slot = try self.defineLocal(name.src, is_const);
+            if (self.std_namespace_path != null and self.std_namespace_path.?.len == 0) {
+                self.currentScope().locals[slot].from_std = true;
+            }
         } else {
             if (!is_const and self.registry.hasGlobalConst(name.src)) { self.setErr("cannot assign to const variable '{s}'", .{name.src}); return error.AssignToConst; }
             try chunk.emitOpConst(.def_global, .{ .string = try self.qualifyGlobalName(name.src) }, name.line);
+            if (self.std_namespace_path != null and self.std_namespace_path.?.len == 0) {
+                const qname = try self.qualifyGlobalName(name.src);
+                if (self.std_module_global_count < MaxLocals) {
+                    self.std_module_global_names[self.std_module_global_count] = qname;
+                    self.std_module_global_count += 1;
+                }
+            }
             if (is_const) try self.registry.addGlobalConst(name.src);
         }
         self.matchOpt(.semicolon);
@@ -2498,6 +2528,7 @@ pub const Compiler = struct {
     }
 
     fn expr(self: *Compiler) !void {
+        self.std_namespace_path = null;
         try self.parsePrecedence(.assign);
     }
 
@@ -2671,9 +2702,11 @@ pub const Compiler = struct {
                     }
                 }
                 try self.consume(.rparen);
+                try self.checkStdNamespaceField(prop.src, line);
                 try chunk.emitInvokeMethod(prop.src, argc, line);
                 return;
             }
+            try self.checkStdNamespaceField(prop.src, line);
             try chunk.emitGetField(prop.src, line);
             if (self.check(.lbrace) and self.looksLikeStructLiteral()) {
                 try self.structInstanceLitAfterValue(prop.line);
@@ -2681,6 +2714,7 @@ pub const Compiler = struct {
             return;
         }
 
+        self.std_namespace_path = null;
         if (tt == .lbracket) {
             if (self.match(.colon)) {
                 var flags: u8 = 0;
@@ -2938,6 +2972,24 @@ pub const Compiler = struct {
         return t.typ == .eq;
     }
 
+    fn checkStdNamespaceField(self: *Compiler, field: []const u8, line: u32) !void {
+        const path = self.std_namespace_path orelse return;
+        const kind = std_schema.lookup(path, field) orelse {
+            self.setErr("unknown field '{s}' in std{s}{s}", .{
+                field,
+                if (path.len > 0) "." else "",
+                if (path.len > 0) path else "",
+            });
+            self.err_line = line;
+            self.err_col = @intCast(self.prev.col);
+            return error.UnknownField;
+        };
+        switch (kind) {
+            .namespace => self.std_namespace_path = field,
+            .function, .value => self.std_namespace_path = null,
+        }
+    }
+
     fn importExpr(self: *Compiler) !void {
         try self.consume(.lparen);
         if (self.cur.typ != .string) { self.setErr("expected string literal, found {s}", .{self.tokenName(self.cur.typ)}); return error.ExpectedStringLiteral; }
@@ -2948,6 +3000,9 @@ pub const Compiler = struct {
         const resolver = self.options.resolve_import orelse { self.setErr("unsupported import module '{s}'", .{name}); return error.UnsupportedImportModule; };
         const mod_name = try resolver(ctx, self.options.module_path, name);
         try chunk.emitGetGlobal(mod_name, self.prev.line);
+        if (common.streq(name, "std") and common.streq(mod_name, "@module:std")) {
+            self.std_namespace_path = "";
+        }
     }
 
     fn structInstanceLitAfterValue(self: *Compiler, line: u32) !void {
