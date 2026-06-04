@@ -21,7 +21,7 @@ func describe(s Shape) {
                 c.radius, 3.14159 * c.radius * c.radius)
         }
         case .rect(r) {
-            std.io.printf("rect    %gx%g  area=%.2f\n",
+            std.io.printf("rect    %.1fx%.1f  area=%.2f\n",
                 r.w, r.h, r.w * r.h)
         }
         default {
