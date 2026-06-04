@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+G="$ROOT/zig-out/bin/gengo"
+
+fail=0
+
+run() {
+    echo "→ $*"
+    if ! "$@"; then
+        echo "FAILED: $*"
+        fail=1
+    fi
+}
+
+echo "=== pre-push checks ==="
+
+run zig build -Dpreset=dev test
+run zig build -Dpreset=dev parity
+run zig build -Dpreset=dev cli
+
+echo "→ playground and example scripts..."
+for f in \
+    examples/simple_math.gengo \
+    examples/roundtrip_stdlib.gengo \
+    examples/std_features.gengo \
+    playground/examples/*.gengo \
+    playground/stress/simlab/*.gengo; do
+    if ! "$G" "$f" > /dev/null 2>&1; then
+        echo "  FAIL: $f"
+        fail=1
+    else
+        echo "  OK:   $f"
+    fi
+done
+
+if [ "$fail" -ne 0 ]; then
+    echo "=== pre-push FAILED — push blocked ==="
+    exit 1
+fi
+
+echo "=== all checks passed ==="
