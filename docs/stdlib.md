@@ -249,7 +249,6 @@ Note: `range` iteration is reserved syntax but not yet executed (v1 always takes
 | `std.time.from_unix(sec)` | `std.Time` | Integer seconds → Time |
 | `std.time.from_unix_ms(ms)` | `std.Time` | Integer milliseconds → Time |
 | `std.time.parse(str, fmt)` | `std.Time` | Errors: `TypeError`/`RangeError` on bad input |
-| `std.time.sleep(ms)` | `null` | Best-effort; uses `poll_oneoff` on WASI |
 
 **Duration constants** (plain `int`, milliseconds):
 `std.time.ms` `std.time.second` `std.time.minute` `std.time.hour` `std.time.day`

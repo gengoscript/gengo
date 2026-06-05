@@ -171,7 +171,6 @@ pub const time_entries = [_]Entry{
     .{ .name = "from_unix", .kind = .function },
     .{ .name = "from_unix_ms", .kind = .function },
     .{ .name = "parse", .kind = .function },
-    .{ .name = "sleep", .kind = .function },
     .{ .name = "since", .kind = .function },
     .{ .name = "until", .kind = .function },
     .{ .name = "ms", .kind = .value },

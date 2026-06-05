@@ -8,7 +8,6 @@ const Object = @import("../value.zig").Object;
 const w32 = std.os.windows;
 
 extern "kernel32" fn GetSystemTimeAsFileTime(lpSystemTimeAsFileTime: *w32.FILETIME) callconv(.winapi) void;
-extern "kernel32" fn Sleep(dwMilliseconds: w32.DWORD) callconv(.winapi) void;
 
 const TimeTypeQualifiedName = "@std.time.obj";
 var time_type_cache: ?*Object = null;
@@ -293,40 +292,6 @@ pub fn timeNowMs() f64 {
     _ = std.posix.system.clock_gettime(.REALTIME, &ts);
     const total_ms = @as(u64, @intCast(ts.sec)) * 1000 + @as(u64, @intCast(ts.nsec)) / 1_000_000;
     return @floatFromInt(total_ms);
-}
-
-pub fn timeSleep(ms: f64) !void {
-    if (ms < 0) return error.RangeError;
-    if (ms == 0) return;
-    if (comptime builtin.os.tag == .wasi) {
-        const s = @as(u64, @intFromFloat(ms)) / 1000;
-        const subsec_ns = @as(u64, @intFromFloat(ms)) % 1000 * 1_000_000;
-        var timer: std.os.wasi.subscription_t = .{
-            .userdata = 0,
-            .u = .{
-                .tag = .CLOCK,
-                .u = .{
-                    .clock = .{
-                        .id = .MONOTONIC,
-                        .timeout = s * 1_000_000_000 + subsec_ns,
-                        .precision = 0,
-                        .flags = 0,
-                    },
-                },
-            },
-        };
-        var event: std.os.wasi.event_t = undefined;
-        var nevents: usize = 0;
-        _ = std.os.wasi.poll_oneoff(&timer, &event, 1, &nevents);
-        return;
-    }
-    if (comptime builtin.os.tag == .windows) {
-        const dword_ms: w32.DWORD = @intCast(@as(u64, @intFromFloat(ms)));
-        Sleep(dword_ms);
-        return;
-    }
-    var ts = std.posix.timespec{ .sec = @intCast(@as(u64, @intFromFloat(ms)) / 1000), .nsec = @as(isize, @intCast(@as(u64, @intFromFloat(ms)) % 1000 * 1_000_000)) };
-    _ = std.posix.system.nanosleep(&ts, null);
 }
 
 fn isLeap(year: i32) bool {

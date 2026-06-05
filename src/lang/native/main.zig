@@ -115,8 +115,7 @@ const NativeFnId = enum(u8) {
     time_from_unix = 75,
     time_from_unix_ms = 76,
     time_parse = 77,
-    time_sleep = 78,
-    time_unix = 79,
+    time_unix = 78,
     time_unix_ms = 80,
     time_parts = 81,
     time_format = 82,
@@ -412,7 +411,6 @@ pub fn buildStdModule() !*Object {
         .{ .name = "from_unix", .value = try makeNative(.time_from_unix, 1) },
         .{ .name = "from_unix_ms", .value = try makeNative(.time_from_unix_ms, 1) },
         .{ .name = "parse", .value = try makeNative(.time_parse, 2) },
-        .{ .name = "sleep", .value = try makeNative(.time_sleep, 1) },
         .{ .name = "since", .value = try makeNative(.time_since, 1) },
         .{ .name = "until", .value = try makeNative(.time_until, 1) },
         .{ .name = "ms", .value = .{ .number = 1 } },
@@ -1487,14 +1485,6 @@ pub fn callNative(nf: NativeFuncObj, argc: u8) !void {
             const out = try time_mod.timeParseStr(s, fmt);
             _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
             try vms.vmPush(out);
-        },
-        .time_sleep => {
-            if (argc != nf.arity) return error.ArityMismatch;
-            const ms_v = vms.vmState().stack[vms.vmState().stack_top - 1];
-            const ms = try vms.valueAsNumber(ms_v);
-            try time_mod.timeSleep(ms);
-            _ = try vms.vmPop(); _ = try vms.vmPop();
-            try vms.vmPush(.null);
         },
         .time_unix => {
             if (argc != nf.arity) return error.ArityMismatch;
