@@ -36,8 +36,10 @@ pub fn build(b: *std.Build) void {
     // ── Engine (WASM exports for host embedding) ─────────────────────────────
 
     const engine_debug = addWasmExe(b, "gengo-engine", "src/engine.zig", wasm_target, .Debug, &preset.step, build_opts_mod);
+    const engine_release = addWasmExe(b, "gengo-engine", "src/engine.zig", wasm_target, .ReleaseFast, &preset.step, build_opts_mod);
 
     const install_engine_debug = installWasm(b, engine_debug, "gengo-engine.wasm");
+    const install_engine_release = installWasm(b, engine_release, "gengo-engine.wasm");
 
     // ── Test runners (build + run immediately, no permanent artifact) ─────────
 
@@ -81,6 +83,9 @@ pub fn build(b: *std.Build) void {
 
     const engine_build_step = b.step("engine-build", "Build engine WASM module (Debug)");
     engine_build_step.dependOn(&install_engine_debug.step);
+
+    const engine_release_step = b.step("engine-release", "Build engine WASM module (ReleaseFast)");
+    engine_release_step.dependOn(&install_engine_release.step);
 
     const deploy_cmd = b.addSystemCommand(&.{ "bash", "playground/deploy.sh" });
     deploy_cmd.step.dependOn(&install_engine_debug.step);
@@ -145,11 +150,12 @@ pub fn build(b: *std.Build) void {
 
     // ── Native CLI ────────────────────────────────────────────────────────────
 
-    const optimize = b.standardOptimizeOption(.{});
+    const native_target = b.standardTargetOptions(.{ .default_target = .{ .cpu_arch = .x86_64, .os_tag = .linux } });
+
     const native_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
-        .target = b.graph.host,
-        .optimize = optimize,
+        .target = native_target,
+        .optimize = .Debug,
     });
     native_mod.addImport("build_options", build_opts_mod);
     const native_exe = b.addExecutable(.{ .name = "gengo", .root_module = native_mod });
@@ -166,15 +172,15 @@ pub fn build(b: *std.Build) void {
 
     const native_release_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
-        .target = b.graph.host,
-        .optimize = .ReleaseFast,
+        .target = native_target,
+        .optimize = .ReleaseSafe,
     });
     native_release_mod.addImport("build_options", build_opts_mod);
     const native_release_exe = b.addExecutable(.{ .name = "gengo", .root_module = native_release_mod });
     native_release_exe.step.dependOn(&preset.step);
     const install_native_release = b.addInstallArtifact(native_release_exe, .{});
 
-    const cli_release_step = b.step("cli-release", "Build native CLI binary (ReleaseFast)");
+    const cli_release_step = b.step("cli-release", "Build native CLI binary (ReleaseSafe)");
     cli_release_step.dependOn(&install_native_release.step);
 
     // ── Native embed example ──────────────────────────────────────────────────

@@ -35,8 +35,10 @@ jobs:
           zig build -Dwasmtime="$WASMTIME" unit
           zig build -Dpreset=dev -Dwasmtime="$WASMTIME" test
 
-      - name: Build WASM runtime
-        run: zig build -Dpreset=dev wasi-release
+      - name: Build WASM artifacts
+        run: |
+          zig build -Dpreset=dev wasi-release
+          zig build -Dpreset=dev engine-release
 
       - name: Update playground cache version
         run: bash playground/deploy.sh
@@ -48,7 +50,7 @@ jobs:
           cp playground/index.html _site/index.html
           cp playground/playground.js _site/playground.js
           cp playground/worker.js _site/worker.js
-          cp playground/gengo-runtime.wasm _site/gengo-runtime.wasm
+          cp playground/gengo-engine.wasm _site/gengo-engine.wasm
           cp -r playground/examples _site/examples
 
       - name: Upload Pages Artifact
