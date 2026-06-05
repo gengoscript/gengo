@@ -1,0 +1,5 @@
+std := import("std")
+type Positive float predicate func(x) { return x > 0.0 }
+p := Positive(3.14)
+std.io.println(float(p))
+std.io.println(float(Positive(0.001)))

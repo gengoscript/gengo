@@ -23,6 +23,7 @@ const keyword_map = std.StaticStringMap(TT).initComptime(.{
     .{ "in",        .kw_in },
     .{ "interface", .kw_interface },
     .{ "null",      .kw_null },
+    .{ "predicate", .kw_predicate },
     .{ "pub",       .kw_pub },
     .{ "range",     .kw_range },
     .{ "return",    .kw_return },

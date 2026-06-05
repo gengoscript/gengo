@@ -86,6 +86,7 @@ fn pushNumericResultWithCarrier(a: Value, b: Value, n: f64) !void {
     const carrier = try namedTypeCarrier(a, b);
     if (carrier) |typ| {
         const wrapped = try vmtyp.coerceNamedTypeResult(typ, .{ .number = n });
+        try checkNamedTypePredicate(typ, wrapped.object.named_value.value);
         try vmPush(wrapped);
     } else {
         try vmPush(.{ .number = n });
@@ -149,6 +150,17 @@ fn enumTypeAllocValue(obj: *Object, member_name: []const u8) !Value {
     }
 }
 
+fn checkNamedTypePredicate(nt_obj: *Object, inner: Value) !void {
+    const nt = nt_obj.named_type;
+    if (nt.predicate) |pred| {
+        const result = try callFunction(.{ .object = pred }, &[_]Value{inner});
+        if (result != .boolean or !result.boolean) {
+            vms.setRuntimeErr("predicate failed for {s}", .{nt.name});
+            return error.PredicateFailed;
+        }
+    }
+}
+
 fn performCall(argc: u8) !void {
     const func_val = vmState().stack[vmState().stack_top - argc - 1];
     if (func_val != .object) return error.NotAFunction;
@@ -198,6 +210,9 @@ fn performCall(argc: u8) !void {
             if (argc != 1) return error.ArityMismatch;
             const arg = vmState().stack[vmState().stack_top - 1];
             const out = try vmtyp.constructNamedType(obj, arg);
+            if (obj.named_type.predicate) |_| {
+                try checkNamedTypePredicate(obj, out.object.named_value.value);
+            }
             _ = try vmPop();
             _ = try vmPop();
             try vmPush(out);
@@ -1599,7 +1614,9 @@ fn runInner() !void {
                 const n = try vms.valueAsInt(v);
                 const result: f64 = @floatFromInt(~n);
                 if (v == .object and v.object.* == .named_value) {
-                    try vmPush(try vmtyp.coerceNamedTypeResult(v.object.named_value.typ, .{ .number = result }));
+                    const wrapped = try vmtyp.coerceNamedTypeResult(v.object.named_value.typ, .{ .number = result });
+                    try checkNamedTypePredicate(v.object.named_value.typ, wrapped.object.named_value.value);
+                    try vmPush(wrapped);
                 } else {
                     try vmPush(.{ .number = result });
                 }
@@ -1689,7 +1706,9 @@ fn runInner() !void {
                 const v = try vmPop();
                 const n = try vms.valueAsNumber(v);
                 if (v == .object and v.object.* == .named_value) {
-                    try vmPush(try vmtyp.coerceNamedTypeResult(v.object.named_value.typ, .{ .number = -n }));
+                    const wrapped = try vmtyp.coerceNamedTypeResult(v.object.named_value.typ, .{ .number = -n });
+                    try checkNamedTypePredicate(v.object.named_value.typ, wrapped.object.named_value.value);
+                    try vmPush(wrapped);
                 } else {
                     try vmPush(.{ .number = -n });
                 }
@@ -2192,6 +2211,13 @@ fn runInner() !void {
                         try vmPush(globals.getAt(ic_slot2));
                     }
                 }
+            },
+
+            .set_named_predicate => {
+                const pred = try vmPop();
+                const nt_val = vmState().stack[vmState().stack_top - 1];
+                if (nt_val != .object or nt_val.object.* != .named_type) return error.TypeError;
+                nt_val.object.named_type.predicate = if (pred == .null) null else pred.object;
             },
 
             .call => {

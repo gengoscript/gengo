@@ -200,6 +200,7 @@ pub const Compiler = struct {
             .kw_subtype => "'subtype'",
             .kw_pub => "'pub'",
             .kw_test => "'test'",
+            .kw_predicate => "'predicate'",
             .lparen => "'('",
             .rparen => "')'",
             .lbrace => "'{'",
@@ -1111,6 +1112,26 @@ pub const Compiler = struct {
             }
         }
 
+        var predicate_obj: ?*Object = null;
+        var predicate_uv_count: u8 = 0;
+
+        if (self.match(.kw_predicate)) {
+            if (base == .array_t or base == .map_t or base == .enum_t) {
+                return self.err("predicate not supported for collection or enum types", .{});
+            }
+            try self.consume(.kw_func);
+            predicate_uv_count = try self.compileFuncWithPrefix(&[_][]const u8{}, false, base);
+            const func_obj = self.last_func_obj orelse return error.NotAFunction;
+            if (predicate_uv_count == 0) {
+                const cl = heap.allocObject() orelse return error.OutOfMemory;
+                cl.* = .{ .closure = .{ .func = func_obj, .upvalues = &[_]*Object{} } };
+                predicate_obj = cl;
+            } else {
+                const cidx: u16 = try chunk.addConst(.{ .object = func_obj });
+                try chunk.emitConstIdx(.make_closure, cidx, self.prev.line);
+            }
+        }
+
         try self.registry.addNamedType(.{
             .name = name,
             .base = base,
@@ -1129,8 +1150,12 @@ pub const Compiler = struct {
             .is_cycle = is_cycle,
             .min = min,
             .max = max,
+            .predicate = predicate_obj,
         } };
         try chunk.emitConst(.{ .object = nt }, kw.line);
+        if (predicate_uv_count > 0) {
+            try chunk.emitOp(.set_named_predicate, kw.line);
+        }
         if (self.inFunc()) {
             _ = try self.defineLocal(name, false);
         } else {
@@ -1385,7 +1410,7 @@ pub const Compiler = struct {
         self.advance(); // consume function name
 
         // current token is '('; compile as a named function for return-type enforcement
-        try self.compileFuncWithPrefix(&[_][]const u8{}, true);
+        _ = try self.compileFuncWithPrefix(&[_][]const u8{}, true, null);
         if (self.last_func_obj) |fo| fo.function.name = name.src;
 
         if (self.inFunc()) {
@@ -1415,7 +1440,7 @@ pub const Compiler = struct {
         self.advance();
 
         var prefix: [1][]const u8 = .{recv_name};
-        try self.compileFuncWithPrefix(prefix[0..], true);
+        _ = try self.compileFuncWithPrefix(prefix[0..], true, null);
 
         const qrecv_type = try self.qualifyTypeName(recv_type);
         const total = qrecv_type.len + 1 + method_name.len;
@@ -2619,10 +2644,10 @@ pub const Compiler = struct {
     }
 
     fn funcLit(self: *Compiler) anyerror!void {
-        try self.compileFuncWithPrefix(&[_][]const u8{}, false);
+        _ = try self.compileFuncWithPrefix(&[_][]const u8{}, false, null);
     }
 
-    fn compileFuncWithPrefix(self: *Compiler, prefix: []const []const u8, is_named: bool) anyerror!void {
+    fn compileFuncWithPrefix(self: *Compiler, prefix: []const []const u8, is_named: bool, predicate_base: ?NamedTypeBase) anyerror!u8 {
         try self.consume(.lparen);
         var param_names: [MaxLocals][]const u8 = undefined;
         var param_types: [MaxLocals]FieldTypeSpec = undefined;
@@ -2647,13 +2672,34 @@ pub const Compiler = struct {
         if (!self.check(.rparen)) {
             while (true) {
                 if (arity >= MaxLocals) { self.setErr("too many parameters (max {d})", .{MaxLocals}); return error.TooManyParams; }
-                const vari = self.match(.ellipsis);
-                const p_is_const = self.match(.kw_const);
+                const vari = if (predicate_base != null) false else self.match(.ellipsis);
+                const p_is_const = if (predicate_base != null) false else self.match(.kw_const);
                 if (self.cur.typ != .ident) return self.err("expected identifier, found {s}", .{self.tokenName(self.cur.typ)});
                 param_names[arity] = self.cur.src;
                 param_const[arity] = p_is_const;
                 arity += 1;
                 self.advance();
+                if (predicate_base) |pb| {
+                    // Predicate mode: type annotation is optional; infer from base type
+                    if (self.cur.typ == .question or self.cur.typ == .ident or self.cur.typ == .kw_func or self.cur.typ == .lbracket) {
+                        const ptype: FieldTypeSpec = try self.parseFieldTypeSpec();
+                        param_types[arity - 1] = ptype;
+                    } else {
+                        const alt = heap.bump(FieldTypeAlt, 1) orelse return error.OutOfMemory;
+                        alt[0] = switch (pb) {
+                            .int => .{ .typ = .int },
+                            .float => .{ .typ = .float },
+                            .string => .{ .typ = .string },
+                            .bool => .{ .typ = .boolean },
+                            .rune => .{ .typ = .rune_t },
+                            else => .{ .typ = .any },
+                        };
+                        param_types[arity - 1] = .{ .alts = alt[0..1] };
+                    }
+                    if (!self.match(.comma)) break;
+                    if (self.check(.rparen)) break;
+                    continue;
+                }
                 if (self.cur.typ != .question and self.cur.typ != .ident and self.cur.typ != .kw_func and self.cur.typ != .lbracket) { self.setErr("expected type annotation, found {s}", .{self.tokenName(self.cur.typ)}); return error.ExpectedTypeAnnotation; }
                 const ptype: FieldTypeSpec = try self.parseFieldTypeSpec();
                 param_types[arity - 1] = ptype;
@@ -2674,7 +2720,13 @@ pub const Compiler = struct {
         var has_typed_returns = false;
         var named_return_count: u8 = 0;
 
-        if (self.match(.lparen)) {
+        if (predicate_base != null) {
+            const alt = heap.bump(FieldTypeAlt, 1) orelse return error.OutOfMemory;
+            alt[0] = .{ .typ = .boolean };
+            return_types[0] = .{ .alts = alt[0..1] };
+            return_count = 1;
+            has_typed_returns = true;
+        } else if (self.match(.lparen)) {
             // Detect named vs anonymous: named if first entry is 'ident type_start'.
             const is_named_returns = self.cur.typ == .ident and
                 (self.peekToken().typ == .ident or self.peekToken().typ == .question or self.peekToken().typ == .kw_func or self.peekToken().typ == .lbracket);
@@ -2810,8 +2862,11 @@ pub const Compiler = struct {
             .named_return_count = named_return_count,
         } };
         self.last_func_obj = func_obj;
-        const cidx: u16 = try chunk.addConst(.{ .object = func_obj });
-        try chunk.emitConstIdx(.make_closure, cidx, self.prev.line);
+        if (predicate_base == null) {
+            const cidx: u16 = try chunk.addConst(.{ .object = func_obj });
+            try chunk.emitConstIdx(.make_closure, cidx, self.prev.line);
+        }
+        return uv_count;
     }
 
     // ── Expression parsing (Pratt) ───────────────────────────────────────────────

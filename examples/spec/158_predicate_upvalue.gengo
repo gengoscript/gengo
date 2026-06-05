@@ -1,0 +1,8 @@
+std := import("std")
+min_val := 10
+max_val := 20
+type Bounded int predicate func(x) { return x >= min_val && x <= max_val }
+p := Bounded(15)
+std.io.println(int(p))
+std.io.println(int(Bounded(10)))
+std.io.println(int(Bounded(20)))
