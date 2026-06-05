@@ -1448,23 +1448,36 @@ pub const Compiler = struct {
             try self.expr();
         } else if (self.cur.typ == .lbracket) {
             const ts = try self.parseFieldTypeSpec();
-            if (ts.alts.len > 0 and ts.alts[0].typ == .map) {
-                inferred_type_check = .{ .assert_map = {} };
+            const is_map = ts.alts.len > 0 and ts.alts[0].typ == .map;
+            const nt = heap.allocObject() orelse return error.OutOfMemory;
+            if (is_map) {
+                nt.* = .{ .named_type = .{
+                    .name = "", .qualified_name = "",
+                    .base = .map_t,
+                    .key_spec = ts.alts[0].key_spec,
+                    .val_spec = ts.alts[0].val_spec,
+                } };
             } else {
-                inferred_type_check = .{ .assert_arr = {} };
+                nt.* = .{ .named_type = .{
+                    .name = "", .qualified_name = "",
+                    .base = .array_t,
+                    .elem_spec = ts.alts[0].elem_spec,
+                } };
             }
+            try chunk.emitConst(.{ .object = nt }, name.line);
             if (self.match(.eq)) {
                 try self.expr();
             } else if (has_keyword and !is_const) {
-                try self.emitZeroValue(inferred_type_check, name.line);
+                if (is_map) {
+                    try chunk.emit2(@intFromEnum(Op.build_map), 0, name.line);
+                } else {
+                    try chunk.emit2(@intFromEnum(Op.build_array), 0, name.line);
+                }
             } else {
                 return self.err("expected '=', found {s}", .{self.tokenName(self.cur.typ)});
             }
-            if (ts.alts.len > 0 and ts.alts[0].typ == .map) {
-                try chunk.emit2(@intFromEnum(Op.assert_type), 2, name.line);
-            } else {
-                try chunk.emit2(@intFromEnum(Op.assert_type), 1, name.line);
-            }
+            inferred_type_check = .{ .none = {} };
+            try chunk.emit2(@intFromEnum(Op.call), 1, name.line);
         } else if (self.cur.typ == .kw_func) {
             _ = try self.parseFieldTypeSpec();
             if (self.match(.eq)) {
