@@ -1,10 +1,21 @@
 const std = @import("std");
 const api = @import("runtime/api.zig");
 const host_abi = @import("runtime/host_abi.zig");
+const io = @import("runtime/io.zig");
 const vm = @import("lang/vm.zig");
 const Value = @import("lang/value.zig").Value;
 const ValueWire = host_abi.ValueWire;
 const WireTag = host_abi.WireTag;
+
+extern "env" fn gengo_write(ptr: [*]const u8, len: i32, is_stderr: i32) void;
+
+fn engineWrite(s: []const u8) void {
+    gengo_write(s.ptr, @intCast(s.len), 0);
+}
+
+fn engineWerr(s: []const u8) void {
+    gengo_write(s.ptr, @intCast(s.len), 1);
+}
 
 const MaxEngines = 64;
 const MaxSources = 64;
@@ -30,7 +41,8 @@ const Engine = struct {
     string_scratch_len: u16 = 0,
 
     fn init() Engine {
-        return .{ .runtime = api.Runtime.init(.{ .allow_io = false }) };
+        io.setWriteOverrides(engineWrite, engineWerr);
+        return .{ .runtime = api.Runtime.init(.{ .allow_io = true }) };
     }
 
     fn setError(self: *Engine, msg: []const u8) void {
@@ -227,7 +239,7 @@ export fn engine_add_source(handle: i32, path_ptr: i32, path_len: i32, src_ptr: 
     engine.source_count = sc + 1;
 
     engine.runtime = api.Runtime.init(.{
-        .allow_io = false,
+        .allow_io = true,
         .module_sources = engine.source_entries[0..engine.source_count],
     });
 
