@@ -4,5 +4,14 @@ zig-out/
 *.swp
 *.wasm
 !playground/gengo-runtime.wasm
+!playground/gengo-engine.wasm
 embed-host-example
 test_epoch
+
+# Agent working directories
+.claude/
+.cursor/
+.aider/
+.continue/
+.copilot/
+.codeium/
