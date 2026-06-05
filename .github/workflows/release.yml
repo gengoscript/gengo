@@ -55,23 +55,23 @@ jobs:
 
       - name: Build linux-x86_64
         run: |
-          zig build -Dtarget=x86_64-linux cli-release
+          zig build -Dpreset=dev -Dtarget=x86_64-linux cli-release
           strip zig-out/bin/gengo 2>/dev/null || true
           cp zig-out/bin/gengo dist/gengo-linux-x86_64
 
       - name: Build linux-aarch64
         run: |
-          zig build -Dtarget=aarch64-linux cli-release
+          zig build -Dpreset=dev -Dtarget=aarch64-linux cli-release
           cp zig-out/bin/gengo dist/gengo-linux-aarch64
 
       - name: Build macos-x86_64
         run: |
-          zig build -Dtarget=x86_64-macos cli-release
+          zig build -Dpreset=dev -Dtarget=x86_64-macos cli-release
           cp zig-out/bin/gengo dist/gengo-macos-x86_64
 
       - name: Build macos-aarch64
         run: |
-          zig build -Dtarget=aarch64-macos cli-release
+          zig build -Dpreset=dev -Dtarget=aarch64-macos cli-release
           cp zig-out/bin/gengo dist/gengo-macos-aarch64
 
       # Windows requires POSIX-free I/O and time paths — tracked in issue #26.
