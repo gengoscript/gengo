@@ -79,7 +79,10 @@ jobs:
           zig build -Dpreset=dev -Dtarget=aarch64-macos cli-release
           cp zig-out/bin/gengo dist/gengo-macos-aarch64
 
-      # Windows requires POSIX-free I/O and time paths — tracked in issue #26.
+      - name: Build windows-x86_64
+        run: |
+          zig build -Dpreset=dev -Dtarget=x86_64-windows cli-release
+          cp zig-out/bin/gengo.exe dist/gengo-windows-x86_64.exe
 
       # ── Release ────────────────────────────────────────────────────
 
