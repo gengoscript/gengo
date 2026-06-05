@@ -1,5 +1,6 @@
 const std = @import("std");
 const api = @import("runtime/api.zig");
+const io = @import("runtime/io.zig");
 const Value = @import("lang/value.zig").Value;
 
 fn writeAll(fd: std.os.wasi.fd_t, s: []const u8) void {
@@ -14,6 +15,19 @@ fn writeAll(fd: std.os.wasi.fd_t, s: []const u8) void {
 
 fn out(s: []const u8) void { writeAll(1, s); }
 fn fail(msg: []const u8) noreturn { writeAll(2, msg); std.os.wasi.proc_exit(1); }
+
+var capture_buf: [4096]u8 = undefined;
+var capture_len: usize = 0;
+
+fn captureWrite(s: []const u8) void {
+    const avail = @min(s.len, capture_buf.len - capture_len);
+    @memcpy(capture_buf[capture_len..][0..avail], s[0..avail]);
+    capture_len += avail;
+}
+
+fn captureWerr(s: []const u8) void {
+    _ = s;
+}
 
 fn makeRt(config: api.Config) *api.Runtime {
     const rt = std.heap.page_allocator.create(api.Runtime) catch fail("engine: out of memory\n");
@@ -153,6 +167,29 @@ fn testLastError() void {
     out("  last_error: OK\n");
 }
 
+fn testIO() void {
+    // Install capture hooks, run a script that prints, verify output.
+    io.setWriteOverrides(captureWrite, captureWerr);
+    defer io.clearWriteOverrides();
+
+    capture_len = 0;
+
+    const rt = initWithAllowIO(true);
+    const res = rt.run(
+        \\std := import("std")
+        \\std.io.println("hello from engine")
+    );
+    switch (res) {
+        .ok => {},
+        .compile_error => fail("engine FAIL: io compile error\n"),
+        .runtime_error => fail("engine FAIL: io runtime error\n"),
+    }
+
+    if (capture_len == 0) fail("engine FAIL: io produced no output\n");
+
+    out("  std.io hook: OK\n");
+}
+
 export fn _start() void {
     out("engine runner:\n");
     testInitDestroy();
@@ -162,6 +199,7 @@ export fn _start() void {
     testCallWithArgs();
     testReset();
     testLastError();
+    testIO();
     out("engine-api OK\n");
     std.os.wasi.proc_exit(0);
 }
