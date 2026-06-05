@@ -1,0 +1,2 @@
+type Positive float predicate func(x) { return x > 0.0 }
+p := Positive(-1.0)

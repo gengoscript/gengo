@@ -90,6 +90,7 @@ pub const NamedTypeObj = struct {
     elem_spec: ?FieldTypeSpec = null,  // for array_t: element type
     key_spec: ?FieldTypeSpec = null,   // for map_t: key type
     val_spec: ?FieldTypeSpec = null,   // for map_t: value type
+    predicate: ?*Object = null,          // predicate closure (null if unconstrained)
 };
 pub const NamedValueObj = struct { typ: *Object, value: Value };
 pub const EnumTypeObj = struct {

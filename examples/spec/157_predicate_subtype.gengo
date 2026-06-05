@@ -1,0 +1,8 @@
+std := import("std")
+type Port int predicate func(x) { return x >= 1 && x <= 65535 }
+p := Port(80)
+q := Port(443)
+std.io.println(int(p))
+std.io.println(int(q))
+std.io.println(int(Port(1)))
+std.io.println(int(Port(65535)))
