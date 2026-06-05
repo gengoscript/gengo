@@ -1,6 +1,26 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+const w32 = std.os.windows;
+
+extern "kernel32" fn CreateFileA(
+    lpFileName: [*:0]const u8,
+    dwDesiredAccess: w32.DWORD,
+    dwShareMode: w32.DWORD,
+    lpSecurityAttributes: ?*anyopaque,
+    dwCreationDisposition: w32.DWORD,
+    dwFlagsAndAttributes: w32.DWORD,
+    hTemplateFile: w32.HANDLE,
+) callconv(.winapi) w32.HANDLE;
+extern "kernel32" fn ReadFile(
+    hFile: w32.HANDLE,
+    lpBuffer: *anyopaque,
+    nNumberOfBytesToRead: w32.DWORD,
+    lpNumberOfBytesRead: ?*w32.DWORD,
+    lpOverlapped: ?*anyopaque,
+) callconv(.winapi) w32.BOOL;
+extern "kernel32" fn CloseHandle(hObject: w32.HANDLE) callconv(.winapi) w32.BOOL;
+
 pub fn readFile(path: []const u8, buf: []u8) !usize {
     if (comptime builtin.os.tag == .wasi) {
         const WasiCwdFd: std.os.wasi.fd_t = 3;
@@ -34,16 +54,49 @@ pub fn readFile(path: []const u8, buf: []u8) !usize {
             total += nread;
         }
         return total;
-    } else {
-        const fd = try std.posix.openat(std.posix.AT.FDCWD, path, .{}, 0);
-        defer _ = std.posix.system.close(fd);
+    }
+    if (comptime builtin.os.tag == .windows) {
+        const GENERIC_READ: w32.DWORD = 0x80000000;
+        const FILE_SHARE_READ: w32.DWORD = 0x00000001;
+        const OPEN_EXISTING: w32.DWORD = 3;
+        const FILE_ATTRIBUTE_NORMAL: w32.DWORD = 0x00000080;
+        const INVALID_HANDLE_VALUE: w32.HANDLE = @ptrFromInt(@as(usize, @bitCast(@as(isize, -1))));
+
+        var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+        if (path.len >= path_buf.len) return error.NameTooLong;
+        @memcpy(path_buf[0..path.len], path);
+        path_buf[path.len] = 0;
+
+        const handle = CreateFileA(
+            &path_buf,
+            GENERIC_READ,
+            FILE_SHARE_READ,
+            null,
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            null,
+        );
+        if (handle == INVALID_HANDLE_VALUE) return error.OpenFailed;
+        defer _ = CloseHandle(handle);
 
         var total: usize = 0;
         while (total < buf.len) {
-            const n = try std.posix.read(fd, buf[total..]);
-            if (n == 0) break;
-            total += n;
+            var nread: w32.DWORD = 0;
+            const to_read: w32.DWORD = @intCast(buf.len - total);
+            const ok = ReadFile(handle, &buf[total], to_read, &nread, null);
+            if (!ok.toBool() or nread == 0) break;
+            total += nread;
         }
         return total;
     }
+    const fd = try std.posix.openat(std.posix.AT.FDCWD, path, .{}, 0);
+    defer _ = std.posix.system.close(fd);
+
+    var total: usize = 0;
+    while (total < buf.len) {
+        const n = try std.posix.read(fd, buf[total..]);
+        if (n == 0) break;
+        total += n;
+    }
+    return total;
 }

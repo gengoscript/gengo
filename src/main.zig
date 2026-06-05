@@ -1,6 +1,17 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+const w32 = std.os.windows;
+
+extern "kernel32" fn GetStdHandle(nStdHandle: w32.DWORD) callconv(.winapi) w32.HANDLE;
+extern "kernel32" fn ReadFile(
+    hFile: w32.HANDLE,
+    lpBuffer: *anyopaque,
+    nNumberOfBytesToRead: w32.DWORD,
+    lpNumberOfBytesRead: ?*w32.DWORD,
+    lpOverlapped: ?*anyopaque,
+) callconv(.winapi) w32.BOOL;
+
 const Runtime = @import("runtime/runtime.zig").Runtime;
 const io = @import("runtime/io.zig");
 const source_io = @import("runtime/source_io.zig");
@@ -37,6 +48,19 @@ fn readSource(maybe_path: ?[]const u8, buf: []u8) !usize {
         }
         return total;
     }
+    if (comptime builtin.os.tag == .windows) {
+        const STD_INPUT_HANDLE: w32.DWORD = 0xFFFFFFF6;
+        const handle = GetStdHandle(STD_INPUT_HANDLE);
+        var total: usize = 0;
+        while (total < buf.len) {
+            var nread: w32.DWORD = 0;
+            const to_read: w32.DWORD = @intCast(buf.len - total);
+            const ok = ReadFile(handle, &buf[total], to_read, &nread, null);
+            if (!ok.toBool() or nread == 0) break;
+            total += nread;
+        }
+        return total;
+    }
     var total: usize = 0;
     while (total < buf.len) {
         const n = try std.posix.read(std.posix.STDIN_FILENO, buf[total..]);
@@ -63,6 +87,22 @@ fn stdinIsTerminal() bool {
 // Returns null on EOF with no data. Never called on WASI (stdinIsTerminal = false).
 fn readLine(buf: []u8) ?[]const u8 {
     if (comptime builtin.os.tag == .wasi) return null;
+    if (comptime builtin.os.tag == .windows) {
+        const STD_INPUT_HANDLE: w32.DWORD = 0xFFFFFFF6;
+        const handle = GetStdHandle(STD_INPUT_HANDLE);
+        var n: usize = 0;
+        while (n < buf.len) {
+            var ch: [1]u8 = undefined;
+            var nread: w32.DWORD = 0;
+            const ok = ReadFile(handle, &ch, 1, &nread, null);
+            if (!ok.toBool() or nread == 0) return if (n > 0) buf[0..n] else null;
+            if (ch[0] == '\n') return buf[0..n];
+            if (ch[0] == '\r') continue;
+            buf[n] = ch[0];
+            n += 1;
+        }
+        return buf[0..n];
+    }
     var n: usize = 0;
     while (n < buf.len) {
         var ch: [1]u8 = undefined;
