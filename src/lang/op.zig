@@ -95,5 +95,6 @@ pub const Op = enum(u8) {
     set_field,       // u16:name_const_idx, u16:ic_type_pool_idx, u8:ic_field_idx — struct field write with inline cache
     ret,
     ret_const,       // fused constant+ret: [op][idx_hi][idx_lo]; same 3-byte layout as `constant k`
+    repl_print,      // REPL-only: print TOS if not null, then pop
     halt,
 };

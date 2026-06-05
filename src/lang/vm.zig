@@ -18,6 +18,7 @@ const vmstr = @import("vm_string.zig");
 const vmtyp = @import("vm_types.zig");
 const vmnative = @import("vm_native.zig");
 const vmperf = @import("vm_perf.zig");
+const io = @import("../runtime/io.zig");
 
 // ── Public re-exports (external callers import from vm.zig unchanged) ─────────
 
@@ -1419,6 +1420,14 @@ fn runInner() !void {
                 try vmPush(try vmPeek(1));
             },
             .pop => _ = try vmPop(),
+
+            .repl_print => {
+                const v = try vmPop();
+                if (v != .null) {
+                    io.printValue(v);
+                    io.write("\n");
+                }
+            },
 
             .def_global => {
                 const name = (try vmConst()).string;
