@@ -63,6 +63,9 @@ pub const CompilerOptions = struct {
     resolve_import: ?ImportResolverFn = null,
     has_module_export: ?*const fn (ctx: *anyopaque, path: []const u8, field: []const u8) bool = null,
     test_mode: bool = false,
+    repl_mode: bool = false,
+    check_global_exists: ?*const fn (ctx: *anyopaque, name: []const u8) bool = null,
+    check_global_ctx: ?*anyopaque = null,
 };
 
 const ExportEntry = struct {
@@ -103,6 +106,9 @@ pub const Compiler = struct {
     test_names: [MaxLocals][]const u8 = undefined,
     test_count: u8 = 0,
 
+    repl_expr_ok: bool = true,
+    repl_expr_pop_pos: ?usize = null,
+
     // ── Lifecycle ────────────────────────────────────────────────────────────────
 
     pub fn init(src: []const u8, options: CompilerOptions) Compiler {
@@ -115,6 +121,8 @@ pub const Compiler = struct {
         self.err_msg_len = 0;
         self.err_col = 0;
         self.err_line = 0;
+        self.repl_expr_ok = true;
+        self.repl_expr_pop_pos = null;
         self.advance();
         while (!self.check(.eof)) {
             if (self.cur.typ == .err_invalid_char) {
@@ -127,7 +135,13 @@ pub const Compiler = struct {
                 self.err_col = @intCast(self.cur.col);
                 return error.UnterminatedString;
             }
+            self.repl_expr_ok = true;
             try self.decl();
+        }
+        if (self.options.repl_mode) {
+            if (self.repl_expr_pop_pos) |pos| {
+                chunk.g_state.code[pos] = @intFromEnum(Op.repl_print);
+            }
         }
         if (emit_halt) try chunk.emitOp(.halt, self.prev.line);
     }
@@ -600,8 +614,11 @@ pub const Compiler = struct {
         scope.has_typed_returns = false;
 
         try self.consume(.lbrace);
+        const saved = self.repl_expr_ok;
+        self.repl_expr_ok = false;
         while (!self.check(.rbrace) and !self.check(.eof)) try self.decl();
         try self.consume(.rbrace);
+        self.repl_expr_ok = saved;
         try self.cleanupLocals(0, self.prev.line);
         try chunk.emitOp(.ret, self.prev.line);
 
@@ -1566,6 +1583,14 @@ pub const Compiler = struct {
         } else {
             if (!is_const and self.registry.hasGlobalConst(name.src)) { self.setErr("cannot assign to const variable '{s}'", .{name.src}); return error.AssignToConst; }
             const qname = try self.qualifyGlobalName(name.src);
+            if (self.options.repl_mode and inferred_type_check != .none) {
+                if (self.options.check_global_exists) |checker| {
+                    if (checker(self.options.check_global_ctx.?, qname)) {
+                        self.setErr("cannot redeclare global '{s}' with a different type", .{name.src});
+                        return error.RedeclareGlobal;
+                    }
+                }
+            }
             try chunk.emitOpConst(.def_global, .{ .string = qname }, name.line);
             if (inferred_type_check != .none and self.typed_global_count < MaxLocals) {
                 self.typed_global_names[self.typed_global_count] = qname;
@@ -1888,6 +1913,10 @@ pub const Compiler = struct {
     }
 
     fn stmt(self: *Compiler) anyerror!void {
+        const saved = self.repl_expr_ok;
+        defer self.repl_expr_ok = saved;
+        self.repl_expr_ok = false;
+
         if (self.match(.kw_break)) {
             try self.emitBreak(self.prev.line);
             self.matchOpt(.semicolon);
@@ -1967,8 +1996,12 @@ pub const Compiler = struct {
             }
         }
 
+        self.repl_expr_ok = saved;
         try self.expr();
         try chunk.emitOp(.pop, self.prev.line);
+        if (self.options.repl_mode and self.repl_expr_ok) {
+            self.repl_expr_pop_pos = chunk.codeLen() - 1;
+        }
         self.matchOpt(.semicolon);
     }
 
@@ -2560,10 +2593,13 @@ pub const Compiler = struct {
     // ── Block and function bodies ────────────────────────────────────────────────
 
     fn block(self: *Compiler) anyerror!void {
+        const saved = self.repl_expr_ok;
+        self.repl_expr_ok = false;
         const local_base: u8 = if (self.inFunc()) self.currentScope().local_count else 0;
         while (!self.check(.rbrace) and !self.check(.eof)) try self.decl();
         try self.consume(.rbrace);
         try self.cleanupLocals(local_base, self.prev.line);
+        self.repl_expr_ok = saved;
     }
 
     // Emit the value for a bare `return` (or fall-off-end) given the current function scope.
@@ -2722,9 +2758,12 @@ pub const Compiler = struct {
         }
 
         try self.consume(.lbrace);
+        const saved = self.repl_expr_ok;
+        self.repl_expr_ok = false;
         const body_local_base: u8 = arity + named_return_count;
         while (!self.check(.rbrace) and !self.check(.eof)) try self.decl();
         try self.consume(.rbrace);
+        self.repl_expr_ok = saved;
         try self.cleanupLocals(body_local_base, self.prev.line);
 
         // Implicit return: bare named returns or null.

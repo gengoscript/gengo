@@ -9,6 +9,11 @@ const vm = @import("../lang/vm.zig");
 const vmnative = @import("../lang/vm_native.zig");
 const Value = @import("../lang/value.zig").Value;
 
+fn checkGlobalExists(ctx: *anyopaque, name: []const u8) bool {
+    _ = ctx;
+    return globals.has(name);
+}
+
 const MaxFrames = @import("../runtime/config.zig").max_frames;
 const MaxTests = 64;
 
@@ -220,6 +225,9 @@ pub const Runtime = struct {
         var compiler = Compiler.init(src, .{
             .module_ctx = &session,
             .resolve_import = module_compile.Session.resolveImportOpaque,
+            .repl_mode = true,
+            .check_global_exists = checkGlobalExists,
+            .check_global_ctx = @ptrFromInt(1),
         });
         compiler.compile(true) catch |err| {
             self.last_compile_line = compiler.prev.line;
