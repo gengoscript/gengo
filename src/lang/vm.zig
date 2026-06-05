@@ -2444,3 +2444,15 @@ pub fn callGlobal(name: []const u8, args: []const Value) !Value {
     try run();
     return try vmPop();
 }
+
+pub fn callFunction(func_val: Value, args: []const Value) anyerror!Value {
+    try vmPush(func_val);
+    for (args) |a| try vmPush(a);
+    const depth_before = vmState().frame_top;
+    try performCall(@intCast(args.len));
+    const prev_target = vmState().call_depth_target;
+    vmState().call_depth_target = depth_before;
+    defer vmState().call_depth_target = prev_target;
+    try run();
+    return try vmPop();
+}

@@ -12,6 +12,7 @@ const vmmap = @import("../vm_map.zig");
 const vmtyp = @import("../vm_types.zig");
 const vmstr = @import("../vm_string.zig");
 const vmperf = @import("../vm_perf.zig");
+const vm = @import("../vm.zig");
 const Value = @import("../value.zig").Value;
 const Object = @import("../value.zig").Object;
 const MapEntry = @import("../value.zig").MapEntry;
@@ -173,12 +174,37 @@ const NativeFnId = enum(u8) {
     re_obj_find_all = 134,
     re_obj_replace = 135,
     re_obj_split = 136,
+    math_clamp = 137,
+    math_sign = 138,
+    sort_asc = 139,
+    sort_desc = 140,
+    sort_by = 141,
+    array_filter = 142,
+    array_map = 143,
+    array_reduce = 144,
+    array_slice = 145,
+    array_zip = 146,
+    array_flat = 147,
 };
 const MaxNativeArgs = 255;
 const NamespaceEntry = struct {
     name: []const u8,
     value: Value,
 };
+
+fn valueLessThan(a: Value, b: Value) !bool {
+    if (a == .number and b == .number) return a.number < b.number;
+    if (a == .string and b == .string) return std.mem.lessThan(u8, a.string, b.string);
+    if (a == .boolean and b == .boolean) return !a.boolean and b.boolean;
+    return @intFromEnum(a) < @intFromEnum(b);
+}
+
+fn valueGreaterThan(a: Value, b: Value) !bool {
+    if (a == .number and b == .number) return a.number > b.number;
+    if (a == .string and b == .string) return std.mem.lessThan(u8, b.string, a.string);
+    if (a == .boolean and b == .boolean) return a.boolean and !b.boolean;
+    return @intFromEnum(a) > @intFromEnum(b);
+}
 
 fn makeNative(id: NativeFnId, arity: u8) !Value {
     const obj = try vmgc.vmAllocObject();
@@ -311,6 +337,8 @@ pub fn buildStdModule() !*Object {
         .{ .name = "pi", .value = .{ .number = std.math.pi } },
         .{ .name = "e", .value = .{ .number = std.math.e } },
         .{ .name = "phi", .value = .{ .number = 1.618033988749895 } },
+        .{ .name = "clamp", .value = try makeNative(.math_clamp, 3) },
+        .{ .name = "sign", .value = try makeNative(.math_sign, 1) },
         .{ .name = "inf", .value = .{ .number = std.math.inf(f64) } },
     };
     const math_obj = try makeNamespace("math", "@module_type:std.math", &math_entries);
@@ -433,6 +461,27 @@ pub fn buildStdModule() !*Object {
     try vms.pushTempRoot(.{ .object = regexp_obj });
     defer vms.popTempRoot();
 
+    const sort_entries = [_]NamespaceEntry{
+        .{ .name = "asc", .value = try makeNative(.sort_asc, 1) },
+        .{ .name = "desc", .value = try makeNative(.sort_desc, 1) },
+        .{ .name = "by", .value = try makeNative(.sort_by, 2) },
+    };
+    const sort_obj = try makeNamespace("sort", "@module_type:std.sort", &sort_entries);
+    try vms.pushTempRoot(.{ .object = sort_obj });
+    defer vms.popTempRoot();
+
+    const array_entries = [_]NamespaceEntry{
+        .{ .name = "filter", .value = try makeNative(.array_filter, 2) },
+        .{ .name = "map", .value = try makeNative(.array_map, 2) },
+        .{ .name = "reduce", .value = try makeNative(.array_reduce, 3) },
+        .{ .name = "slice", .value = try makeNative(.array_slice, 3) },
+        .{ .name = "zip", .value = try makeNative(.array_zip, 2) },
+        .{ .name = "flat", .value = try makeNative(.array_flat, 1) },
+    };
+    const array_obj = try makeNamespace("array", "@module_type:std.array", &array_entries);
+    try vms.pushTempRoot(.{ .object = array_obj });
+    defer vms.popTempRoot();
+
     const std_entries = [_]NamespaceEntry{
         .{ .name = "io", .value = .{ .object = io_obj } },
         .{ .name = "core", .value = .{ .object = core_obj } },
@@ -446,6 +495,8 @@ pub fn buildStdModule() !*Object {
         .{ .name = "hex", .value = .{ .object = hex_obj } },
         .{ .name = "base64", .value = .{ .object = base64_obj } },
         .{ .name = "regexp", .value = .{ .object = regexp_obj } },
+        .{ .name = "sort", .value = .{ .object = sort_obj } },
+        .{ .name = "array", .value = .{ .object = array_obj } },
         .{ .name = "Time", .value = .{ .object = time_type_obj } },
         .{ .name = "Regexp", .value = .{ .object = regexp_type_obj } },
     };
@@ -1711,6 +1762,263 @@ pub fn callNative(nf: NativeFuncObj, argc: u8) !void {
             const result = try regexp_mod.nativeReSplit(.{ .string = pattern }, s_val);
             _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
             try vms.vmPush(result);
+        },
+        .math_clamp => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const max = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            const min = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 2]);
+            const v = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 3]);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .number = @min(@max(v, min), max) });
+        },
+        .math_sign => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const n = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            const sign: f64 = if (n > 0) 1.0 else if (n < 0) -1.0 else 0.0;
+            try vms.vmPush(.{ .number = sign });
+        },
+        .sort_asc => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const arr_val = vms.vmState().stack[vms.vmState().stack_top - 1];
+            if (arr_val != .object) return error.TypeError;
+            const arr_obj = arr_val.object;
+            if (!vms.isArrayObject(arr_obj)) return error.TypeError;
+            var items = try vms.cloneArraySlice(arr_obj);
+            const n = items.len;
+            if (n > 1) {
+                var i: usize = 1;
+                while (i < n) : (i += 1) {
+                    const key = items[i];
+                    var j: usize = i;
+                    while (j > 0 and try valueGreaterThan(items[j - 1], key)) : (j -= 1) {
+                        items[j] = items[j - 1];
+                    }
+                    items[j] = key;
+                }
+            }
+            const out_obj = try vmgc.vmAllocObject();
+            out_obj.* = .{ .array_managed = items[0..n] };
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .object = out_obj });
+        },
+        .sort_desc => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const arr_val = vms.vmState().stack[vms.vmState().stack_top - 1];
+            if (arr_val != .object) return error.TypeError;
+            const arr_obj = arr_val.object;
+            if (!vms.isArrayObject(arr_obj)) return error.TypeError;
+            var items = try vms.cloneArraySlice(arr_obj);
+            const n = items.len;
+            if (n > 1) {
+                var i: usize = 1;
+                while (i < n) : (i += 1) {
+                    const key = items[i];
+                    var j: usize = i;
+                    while (j > 0 and try valueLessThan(items[j - 1], key)) : (j -= 1) {
+                        items[j] = items[j - 1];
+                    }
+                    items[j] = key;
+                }
+            }
+            const out_obj = try vmgc.vmAllocObject();
+            out_obj.* = .{ .array_managed = items[0..n] };
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .object = out_obj });
+        },
+        .sort_by => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const fn_val = vms.vmState().stack[vms.vmState().stack_top - 1];
+            const arr_val = vms.vmState().stack[vms.vmState().stack_top - 2];
+            if (arr_val != .object) return error.TypeError;
+            const arr_obj = arr_val.object;
+            if (!vms.isArrayObject(arr_obj)) return error.TypeError;
+            var items = try vms.cloneArraySlice(arr_obj);
+            const n = items.len;
+            if (n > 1) {
+                var i: usize = 1;
+                while (i < n) : (i += 1) {
+                    const key = items[i];
+                    var j: usize = i;
+                    while (j > 0) : (j -= 1) {
+                        const cmp = try vm.callFunction(fn_val, &.{ items[j - 1], key });
+                        const less = if (cmp == .number) cmp.number < 0 else cmp.isTruthy();
+                        if (less) break;
+                        items[j] = items[j - 1];
+                    }
+                    items[j] = key;
+                }
+            }
+            const out_obj = try vmgc.vmAllocObject();
+            out_obj.* = .{ .array_managed = items[0..n] };
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .object = out_obj });
+        },
+        .array_filter => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const fn_val = vms.vmState().stack[vms.vmState().stack_top - 1];
+            const arr_val = vms.vmState().stack[vms.vmState().stack_top - 2];
+            if (arr_val != .object) return error.TypeError;
+            const arr_obj = arr_val.object;
+            if (!vms.isArrayObject(arr_obj)) return error.TypeError;
+            const items = vms.asArraySlice(arr_obj);
+            const out_obj = try vmgc.vmAllocObject();
+            out_obj.* = .{ .array = &[_]Value{} };
+            try vms.pushTempRoot(.{ .object = out_obj });
+            defer vms.popTempRoot();
+            var count: usize = 0;
+            for (items) |item| {
+                const ok = try vm.callFunction(fn_val, &.{item});
+                if (ok.isTruthy()) count += 1;
+            }
+            if (count > 0) {
+                const out = try vmgc.vmAllocManagedSlice(Value, count);
+                var idx: usize = 0;
+                for (items) |item| {
+                    const ok = try vm.callFunction(fn_val, &.{item});
+                    if (ok.isTruthy()) {
+                        out[idx] = item;
+                        idx += 1;
+                    }
+                }
+                out_obj.* = .{ .array_managed = out[0..count] };
+            }
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .object = out_obj });
+        },
+        .array_map => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const fn_val = vms.vmState().stack[vms.vmState().stack_top - 1];
+            const arr_val = vms.vmState().stack[vms.vmState().stack_top - 2];
+            if (arr_val != .object) return error.TypeError;
+            const arr_obj = arr_val.object;
+            if (!vms.isArrayObject(arr_obj)) return error.TypeError;
+            const items = vms.asArraySlice(arr_obj);
+            const out_obj = try vmgc.vmAllocObject();
+            out_obj.* = .{ .array = &[_]Value{} };
+            try vms.pushTempRoot(.{ .object = out_obj });
+            defer vms.popTempRoot();
+            if (items.len > 0) {
+                const out = try vmgc.vmAllocManagedSlice(Value, items.len);
+                for (items, 0..) |item, i| {
+                    out[i] = try vm.callFunction(fn_val, &.{item});
+                }
+                out_obj.* = .{ .array_managed = out[0..items.len] };
+            }
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .object = out_obj });
+        },
+        .array_reduce => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const init_val = vms.vmState().stack[vms.vmState().stack_top - 1];
+            const fn_val = vms.vmState().stack[vms.vmState().stack_top - 2];
+            const arr_val = vms.vmState().stack[vms.vmState().stack_top - 3];
+            if (arr_val != .object) return error.TypeError;
+            const arr_obj = arr_val.object;
+            if (!vms.isArrayObject(arr_obj)) return error.TypeError;
+            const items = vms.asArraySlice(arr_obj);
+            var acc = init_val;
+            try vms.pushTempRoot(acc);
+            defer vms.popTempRoot();
+            for (items) |item| {
+                acc = try vm.callFunction(fn_val, &.{ acc, item });
+            }
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(acc);
+        },
+        .array_slice => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const to_val = vms.vmState().stack[vms.vmState().stack_top - 1];
+            const from_val = vms.vmState().stack[vms.vmState().stack_top - 2];
+            const arr_val = vms.vmState().stack[vms.vmState().stack_top - 3];
+            if (arr_val != .object) return error.TypeError;
+            const arr_obj = arr_val.object;
+            if (!vms.isArrayObject(arr_obj)) return error.TypeError;
+            const items = vms.asArraySlice(arr_obj);
+            const from = try vms.valueAsInt(from_val);
+            const to = try vms.valueAsInt(to_val);
+            if (from < 0 or to > @as(i64, @intCast(items.len)) or from > to) return error.IndexOutOfBounds;
+            const from_u: usize = @intCast(from);
+            const to_u: usize = @intCast(to);
+            const out_obj = try vmgc.vmAllocObject();
+            out_obj.* = .{ .array = &[_]Value{} };
+            try vms.pushTempRoot(.{ .object = out_obj });
+            defer vms.popTempRoot();
+            const slice_len = to_u - from_u;
+            if (slice_len > 0) {
+                const out = try vmgc.vmAllocManagedSlice(Value, slice_len);
+                @memcpy(out[0..slice_len], items[from_u..to_u]);
+                out_obj.* = .{ .array_managed = out[0..slice_len] };
+            }
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .object = out_obj });
+        },
+        .array_zip => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const b_val = vms.vmState().stack[vms.vmState().stack_top - 1];
+            const a_val = vms.vmState().stack[vms.vmState().stack_top - 2];
+            if (a_val != .object or b_val != .object) return error.TypeError;
+            const a_obj = a_val.object;
+            const b_obj = b_val.object;
+            if (!vms.isArrayObject(a_obj) or !vms.isArrayObject(b_obj)) return error.TypeError;
+            const a_items = vms.asArraySlice(a_obj);
+            const b_items = vms.asArraySlice(b_obj);
+            const pair_count = @min(a_items.len, b_items.len);
+            const out_obj = try vmgc.vmAllocObject();
+            out_obj.* = .{ .array = &[_]Value{} };
+            try vms.pushTempRoot(.{ .object = out_obj });
+            defer vms.popTempRoot();
+            if (pair_count > 0) {
+                const out = try vmgc.vmAllocManagedSlice(Value, pair_count);
+                for (0..pair_count) |i| {
+                    const pair = try vmgc.vmAllocObject();
+                    const pair_items = try vmgc.vmAllocManagedSlice(Value, 2);
+                    pair_items[0] = a_items[i];
+                    pair_items[1] = b_items[i];
+                    pair.* = .{ .array_managed = pair_items[0..2] };
+                    out[i] = .{ .object = pair };
+                }
+                out_obj.* = .{ .array_managed = out[0..pair_count] };
+            }
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .object = out_obj });
+        },
+        .array_flat => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const arr_val = vms.vmState().stack[vms.vmState().stack_top - 1];
+            if (arr_val != .object) return error.TypeError;
+            const arr_obj = arr_val.object;
+            if (!vms.isArrayObject(arr_obj)) return error.TypeError;
+            const items = vms.asArraySlice(arr_obj);
+            var total: usize = 0;
+            for (items) |item| {
+                if (item == .object and vms.isArrayObject(item.object)) {
+                    total += vms.asArraySlice(item.object).len;
+                } else {
+                    total += 1;
+                }
+            }
+            const out_obj = try vmgc.vmAllocObject();
+            out_obj.* = .{ .array = &[_]Value{} };
+            try vms.pushTempRoot(.{ .object = out_obj });
+            defer vms.popTempRoot();
+            if (total > 0) {
+                const out = try vmgc.vmAllocManagedSlice(Value, total);
+                var idx: usize = 0;
+                for (items) |item| {
+                    if (item == .object and vms.isArrayObject(item.object)) {
+                        const sub = vms.asArraySlice(item.object);
+                        @memcpy(out[idx..][0..sub.len], sub);
+                        idx += sub.len;
+                    } else {
+                        out[idx] = item;
+                        idx += 1;
+                    }
+                }
+                out_obj.* = .{ .array_managed = out[0..total] };
+            }
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .object = out_obj });
         },
     }
 }

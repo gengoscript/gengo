@@ -1,0 +1,32 @@
+std := import("std")
+a := std.array
+
+// std.array.filter
+even := func(v int) { return v % 2 == 0 }
+std.io.println(a.filter([1, 2, 3, 4, 5, 6], even))
+std.io.println(a.filter([], even))
+
+// std.array.map
+double := func(v int) { return v * 2 }
+std.io.println(a.map([1, 2, 3], double))
+std.io.println(a.map([], double))
+
+// std.array.reduce
+sum := func(acc int, v int) { return acc + v }
+std.io.println(a.reduce([1, 2, 3, 4, 5], sum, 0))
+std.io.println(a.reduce([], sum, 42))
+
+// std.array.slice
+std.io.println(a.slice([1, 2, 3, 4, 5], 1, 4))
+std.io.println(a.slice([1, 2, 3], 0, 3))
+std.io.println(a.slice([1, 2, 3], 0, 0))
+
+// std.array.zip
+std.io.println(a.zip([1, 2, 3], ["a", "b", "c"]))
+std.io.println(a.zip([1, 2], ["x"]))
+std.io.println(a.zip([], [1, 2, 3]))
+
+// std.array.flat
+std.io.println(a.flat([[1, 2], [3, 4], [5]]))
+std.io.println(a.flat([[], [1], [2, 3]]))
+std.io.println(a.flat([]))
