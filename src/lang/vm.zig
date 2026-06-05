@@ -427,6 +427,8 @@ fn retSlowPath(retval_in: Value) !bool {
     var retval = retval_in;
     const fi = vmState().frame_top - 1;
     const frame = &vmState().frames[fi];
+    const saved_temp_root = vmState().temp_root_top;
+    defer vmState().temp_root_top = saved_temp_root;
     try pushTempRoot(retval);
     while (vmState().defer_top > frame.defer_base) {
         vmState().defer_top -= 1;
@@ -1614,7 +1616,12 @@ fn runInner() !void {
             .cast_int => {
                 const v = vms.unboxNamed(try vmPop());
                 switch (v) {
-                    .number => |n| try vmPush(.{ .number = @trunc(n) }),
+                    .number => |n| {
+                        if (!std.math.isFinite(n) or
+                            n < @as(f64, @floatFromInt(std.math.minInt(i64))) or
+                            n >= @as(f64, @floatFromInt(std.math.maxInt(i64)))) return error.RangeError;
+                        try vmPush(.{ .number = @trunc(n) });
+                    },
                     .rune => |r| try vmPush(.{ .number = @floatFromInt(r) }),
                     .boolean => |b| try vmPush(.{ .number = if (b) 1 else 0 }),
                     else => return error.TypeError,
