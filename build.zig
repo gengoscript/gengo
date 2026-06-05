@@ -79,13 +79,14 @@ pub fn build(b: *std.Build) void {
     const wasi_release_step = b.step("wasi-release", "Build WASI runtime (ReleaseFast)");
     wasi_release_step.dependOn(&install_release.step);
 
-    const deploy_cmd = b.addSystemCommand(&.{ "bash", "playground/deploy.sh" });
-    deploy_cmd.step.dependOn(&install_debug.step);
-    const deploy_step = b.step("deploy", "Build WASI runtime and deploy to playground with cache-busted version");
-    deploy_step.dependOn(&deploy_cmd.step);
-
     const engine_build_step = b.step("engine-build", "Build engine WASM module (Debug)");
     engine_build_step.dependOn(&install_engine_debug.step);
+
+    const deploy_cmd = b.addSystemCommand(&.{ "bash", "playground/deploy.sh" });
+    deploy_cmd.step.dependOn(&install_engine_debug.step);
+    const deploy_step = b.step("deploy", "Build engine WASM module and deploy to playground with cache-busted version");
+    deploy_step.dependOn(&deploy_cmd.step);
+
 
     const unit_step = b.step("unit", "Run VM safety, embedding, and engine API checks");
     unit_step.dependOn(&run_vm_safety.step);

@@ -168,7 +168,6 @@ fn testLastError() void {
 }
 
 fn testIO() void {
-    // Install capture hooks, run a script that prints, verify output.
     io.setWriteOverrides(captureWrite, captureWerr);
     defer io.clearWriteOverrides();
 
