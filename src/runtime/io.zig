@@ -30,6 +30,7 @@ fn writeAllFd(fd: u8, s: []const u8) void {
         }
         return;
     }
+
     _ = std.posix.system.write(@intCast(fd), s.ptr, s.len);
 }
 

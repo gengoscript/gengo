@@ -346,6 +346,21 @@ pub fn main(init: std.process.Init.Minimal) void {
         }
         for (0..argc) |i| argv_storage[i] = std.mem.span(argv_ptrs[i]);
         n = argc;
+    } else if (comptime builtin.os.tag == .windows) {
+        // On Windows, init.args.vector is []const u16 (WTF-16 command line).
+        // Use Args.Iterator which parses and converts to WTF-8 strings.
+        var utf8_bufs: [MaxArgs][512]u8 = undefined;
+        var iter = std.process.Args.Iterator.initAllocator(init.args, std.heap.page_allocator) catch die(1);
+        defer iter.deinit();
+        while (iter.next()) |arg| {
+            if (n >= MaxArgs) break;
+            const len = @min(arg.len, utf8_bufs[n].len);
+            @memcpy(utf8_bufs[n][0..len], arg[0..len]);
+            argv_storage[n] = utf8_bufs[n][0..len];
+            n += 1;
+        }
+        runCli(argv_storage[0..n]);
+        return;
     } else {
         for (init.args.vector) |arg| {
             if (n >= MaxArgs) break;
