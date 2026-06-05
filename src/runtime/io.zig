@@ -3,6 +3,21 @@ const builtin = @import("builtin");
 const vmod = @import("../lang/value.zig");
 const Value = vmod.Value;
 
+pub const WriteFn = *const fn (s: []const u8) void;
+
+var write_override: ?WriteFn = null;
+var werr_override: ?WriteFn = null;
+
+pub fn setWriteOverrides(w: WriteFn, e: WriteFn) void {
+    write_override = w;
+    werr_override = e;
+}
+
+pub fn clearWriteOverrides() void {
+    write_override = null;
+    werr_override = null;
+}
+
 fn writeAllFd(fd: u8, s: []const u8) void {
     if (comptime builtin.os.tag == .wasi) {
         var off: usize = 0;
@@ -19,10 +34,12 @@ fn writeAllFd(fd: u8, s: []const u8) void {
 }
 
 pub fn write(s: []const u8) void {
+    if (write_override) |f| return f(s);
     writeAllFd(1, s);
 }
 
 pub fn werr(s: []const u8) void {
+    if (werr_override) |f| return f(s);
     writeAllFd(2, s);
 }
 

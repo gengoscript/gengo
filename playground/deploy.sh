@@ -2,11 +2,11 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-WASM_SRC="build/gengo-runtime.wasm"
-WASM_DST="playground/gengo-runtime.wasm"
+WASM_SRC="build/gengo-engine.wasm"
+WASM_DST="playground/gengo-engine.wasm"
 
 if [ ! -f "$WASM_SRC" ]; then
-  echo "error: $WASM_SRC not found — run 'zig build wasi' first" >&2
+  echo "error: $WASM_SRC not found — run 'zig build engine-build' first" >&2
   exit 1
 fi
 

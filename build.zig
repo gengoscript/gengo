@@ -33,6 +33,12 @@ pub fn build(b: *std.Build) void {
     const install_debug = installWasm(b, gengo_debug, "gengo-runtime.wasm");
     const install_release = installWasm(b, gengo_release, "gengo-runtime.wasm");
 
+    // ── Engine (WASM exports for host embedding) ─────────────────────────────
+
+    const engine_debug = addWasmExe(b, "gengo-engine", "src/engine.zig", wasm_target, .Debug, &preset.step, build_opts_mod);
+
+    const install_engine_debug = installWasm(b, engine_debug, "gengo-engine.wasm");
+
     // ── Test runners (build + run immediately, no permanent artifact) ─────────
 
     const vm_safety_exe = addWasmExe(b, "vm-safety-runner", "src/vm_safety_runner.zig", wasm_target, .Debug, &preset.step, build_opts_mod);
@@ -42,6 +48,10 @@ pub fn build(b: *std.Build) void {
     const embedding_exe = addWasmExe(b, "embedding-runner", "src/embedding_runner.zig", wasm_target, .Debug, &preset.step, build_opts_mod);
     const run_embedding = b.addSystemCommand(&.{ wasmtime_opt, "--dir", "/" });
     run_embedding.addArtifactArg(embedding_exe);
+
+    const engine_runner_exe = addWasmExe(b, "engine-runner", "src/engine_runner.zig", wasm_target, .Debug, &preset.step, build_opts_mod);
+    const run_engine_runner = b.addSystemCommand(&.{ wasmtime_opt, "--dir", "/" });
+    run_engine_runner.addArtifactArg(engine_runner_exe);
 
     // ── Native test runner (replaces bash scripts) ────────────────────────────
 
@@ -69,18 +79,24 @@ pub fn build(b: *std.Build) void {
     const wasi_release_step = b.step("wasi-release", "Build WASI runtime (ReleaseFast)");
     wasi_release_step.dependOn(&install_release.step);
 
+    const engine_build_step = b.step("engine-build", "Build engine WASM module (Debug)");
+    engine_build_step.dependOn(&install_engine_debug.step);
+
     const deploy_cmd = b.addSystemCommand(&.{ "bash", "playground/deploy.sh" });
-    deploy_cmd.step.dependOn(&install_debug.step);
-    const deploy_step = b.step("deploy", "Build WASI runtime and deploy to playground with cache-busted version");
+    deploy_cmd.step.dependOn(&install_engine_debug.step);
+    const deploy_step = b.step("deploy", "Build engine WASM module and deploy to playground with cache-busted version");
     deploy_step.dependOn(&deploy_cmd.step);
 
-    const unit_step = b.step("unit", "Run VM safety and embedding API checks");
+    const unit_step = b.step("unit", "Run VM safety, embedding, and engine API checks");
     unit_step.dependOn(&run_vm_safety.step);
     unit_step.dependOn(&run_embedding.step);
+    unit_step.dependOn(&run_engine_runner.step);
 
-    const test_step = b.step("test", "Run runtime safety, embedding API, and conformance tests");
+    const test_step = b.step("test", "Run runtime safety, embedding, engine, and conformance tests");
     test_step.dependOn(&run_vm_safety.step);
     test_step.dependOn(&run_embedding.step);
+    test_step.dependOn(&run_engine_runner.step);
+    test_step.dependOn(&install_engine_debug.step);
     test_step.dependOn(&run_conformance.step);
 
     const run_bench = b.addRunArtifact(test_runner_exe);
