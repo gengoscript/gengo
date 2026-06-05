@@ -3,6 +3,17 @@ const builtin = @import("builtin");
 const vmod = @import("../lang/value.zig");
 const Value = vmod.Value;
 
+const w32 = std.os.windows;
+
+extern "kernel32" fn GetStdHandle(nStdHandle: w32.DWORD) callconv(.winapi) w32.HANDLE;
+extern "kernel32" fn WriteFile(
+    hFile: w32.HANDLE,
+    lpBuffer: [*]const u8,
+    nNumberOfBytesToWrite: w32.DWORD,
+    lpNumberOfBytesWritten: ?*w32.DWORD,
+    lpOverlapped: ?*anyopaque,
+) callconv(.winapi) w32.BOOL;
+
 pub const WriteFn = *const fn (s: []const u8) void;
 
 var write_override: ?WriteFn = null;
@@ -28,6 +39,18 @@ fn writeAllFd(fd: u8, s: []const u8) void {
             if (rc != .SUCCESS or wrote == 0) return;
             off += wrote;
         }
+        return;
+    }
+
+    if (comptime builtin.os.tag == .windows) {
+        const STD_OUTPUT_HANDLE: w32.DWORD = 0xFFFFFFF5;
+        const STD_ERROR_HANDLE: w32.DWORD = 0xFFFFFFF4;
+        const handle = switch (fd) {
+            1 => GetStdHandle(STD_OUTPUT_HANDLE),
+            2 => GetStdHandle(STD_ERROR_HANDLE),
+            else => return,
+        };
+        _ = WriteFile(handle, s.ptr, @intCast(s.len), null, null);
         return;
     }
 

@@ -5,6 +5,11 @@ const vmgc = @import("../vm_gc.zig");
 const Value = @import("../value.zig").Value;
 const Object = @import("../value.zig").Object;
 
+const w32 = std.os.windows;
+
+extern "kernel32" fn GetSystemTimeAsFileTime(lpSystemTimeAsFileTime: *w32.FILETIME) callconv(.winapi) void;
+extern "kernel32" fn Sleep(dwMilliseconds: w32.DWORD) callconv(.winapi) void;
+
 const TimeTypeQualifiedName = "@std.time.obj";
 var time_type_cache: ?*Object = null;
 
@@ -273,6 +278,17 @@ pub fn timeNowMs() f64 {
         }
         return 0;
     }
+    if (comptime builtin.os.tag == .windows) {
+        var ft: w32.FILETIME = undefined;
+        GetSystemTimeAsFileTime(&ft);
+        const raw = (@as(u64, ft.dwHighDateTime) << 32) | @as(u64, ft.dwLowDateTime);
+        const unix_epoch_diff: u64 = 11644473600000000000;
+        const total_ms = if (raw >= unix_epoch_diff)
+            @divFloor(raw - unix_epoch_diff, 10000)
+        else
+            0;
+        return @floatFromInt(total_ms);
+    }
     var ts: std.posix.timespec = undefined;
     _ = std.posix.system.clock_gettime(.REALTIME, &ts);
     const total_ms = @as(u64, @intCast(ts.sec)) * 1000 + @as(u64, @intCast(ts.nsec)) / 1_000_000;
@@ -302,10 +318,15 @@ pub fn timeSleep(ms: f64) !void {
         var event: std.os.wasi.event_t = undefined;
         var nevents: usize = 0;
         _ = std.os.wasi.poll_oneoff(&timer, &event, 1, &nevents);
-    } else {
-        var ts = std.posix.timespec{ .sec = @intCast(@as(u64, @intFromFloat(ms)) / 1000), .nsec = @as(isize, @intCast(@as(u64, @intFromFloat(ms)) % 1000 * 1_000_000)) };
-        _ = std.posix.system.nanosleep(&ts, null);
+        return;
     }
+    if (comptime builtin.os.tag == .windows) {
+        const dword_ms: w32.DWORD = @intCast(@as(u64, @intFromFloat(ms)));
+        Sleep(dword_ms);
+        return;
+    }
+    var ts = std.posix.timespec{ .sec = @intCast(@as(u64, @intFromFloat(ms)) / 1000), .nsec = @as(isize, @intCast(@as(u64, @intFromFloat(ms)) % 1000 * 1_000_000)) };
+    _ = std.posix.system.nanosleep(&ts, null);
 }
 
 fn isLeap(year: i32) bool {
