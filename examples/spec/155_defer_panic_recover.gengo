@@ -1,0 +1,22 @@
+std := import("std")
+core := std.core
+
+func panicking_defer() {
+    defer std.io.println("defer runs")
+    defer func() { std.io.println("inner defer") }()
+    std.io.println("before panic")
+}
+
+func defer_with_recover() {
+    defer func() {
+        e := core.recover()
+        std.io.println(core.is_error(e))
+    }()
+    defer std.io.println("middle defer")
+    std.io.println("body")
+    _ = []int{}[0]
+}
+
+panicking_defer()
+defer_with_recover()
+std.io.println("done")

@@ -1,0 +1,7 @@
+before panic
+inner defer
+defer runs
+body
+middle defer
+true
+done
