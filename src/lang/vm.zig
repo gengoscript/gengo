@@ -1614,7 +1614,12 @@ fn runInner() !void {
             .cast_int => {
                 const v = vms.unboxNamed(try vmPop());
                 switch (v) {
-                    .number => |n| try vmPush(.{ .number = @trunc(n) }),
+                    .number => |n| {
+                        if (!std.math.isFinite(n) or
+                            n < @as(f64, @floatFromInt(std.math.minInt(i64))) or
+                            n >= @as(f64, @floatFromInt(std.math.maxInt(i64)))) return error.RangeError;
+                        try vmPush(.{ .number = @trunc(n) });
+                    },
                     .rune => |r| try vmPush(.{ .number = @floatFromInt(r) }),
                     .boolean => |b| try vmPush(.{ .number = if (b) 1 else 0 }),
                     else => return error.TypeError,
