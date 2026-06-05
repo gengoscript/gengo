@@ -62,6 +62,7 @@ pub const Local = struct {
     name: []const u8,
     is_const: bool = false,
     from_std: bool = false,
+    import_module_path: ?[]const u8 = null,
     is_captured: bool = false,
     type_check: TypeCheck = .{ .none = {} },
 };

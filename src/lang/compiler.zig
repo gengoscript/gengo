@@ -61,6 +61,7 @@ pub const CompilerOptions = struct {
     module_global_name: []const u8 = "",
     module_ctx: ?*anyopaque = null,
     resolve_import: ?ImportResolverFn = null,
+    has_module_export: ?*const fn (ctx: *anyopaque, path: []const u8, field: []const u8) bool = null,
     test_mode: bool = false,
 };
 
@@ -91,6 +92,10 @@ pub const Compiler = struct {
     std_namespace_path: ?[]const u8 = null,
     std_module_global_names: [MaxLocals][]const u8 = undefined,
     std_module_global_count: u8 = 0,
+    import_module_path: ?[]const u8 = null,
+    import_module_global_qnames: [MaxLocals][]const u8 = undefined,
+    import_module_global_paths: [MaxLocals][]const u8 = undefined,
+    import_module_global_count: u8 = 0,
     typed_global_names: [MaxLocals][]const u8 = undefined,
     typed_global_type_checks: [MaxLocals]TypeCheck = undefined,
     typed_global_count: u8 = 0,
@@ -304,16 +309,33 @@ pub const Compiler = struct {
         chunk.setCol(name.col);
         if (self.resolveLocal(name.src)) |slot| {
             try chunk.emit2(@intFromEnum(Op.get_local), slot, name.line);
-            if (self.currentScope().locals[slot].from_std) {
+            const local = self.currentScope().locals[slot];
+            if (local.from_std) {
                 self.std_namespace_path = "";
+                self.import_module_path = null;
+            } else if (local.import_module_path) |path| {
+                self.import_module_path = path;
+                self.std_namespace_path = null;
+            } else {
+                self.std_namespace_path = null;
+                self.import_module_path = null;
             }
         } else if (self.resolveUpvalue(name.src)) |uv| {
             try chunk.emit2(@intFromEnum(Op.get_upvalue), uv, name.line);
+            self.std_namespace_path = null;
+            self.import_module_path = null;
         } else {
             const qname = try self.qualifyGlobalName(name.src);
             try chunk.emitGetGlobal(qname, name.line);
             if (self.isStdModuleGlobal(qname)) {
                 self.std_namespace_path = "";
+                self.import_module_path = null;
+            } else if (self.getImportModuleGlobalPath(qname)) |path| {
+                self.import_module_path = path;
+                self.std_namespace_path = null;
+            } else {
+                self.std_namespace_path = null;
+                self.import_module_path = null;
             }
         }
     }
@@ -324,6 +346,14 @@ pub const Compiler = struct {
             if (common.streq(self.std_module_global_names[i], name)) return true;
         }
         return false;
+    }
+
+    fn getImportModuleGlobalPath(self: *Compiler, name: []const u8) ?[]const u8 {
+        var i: u8 = 0;
+        while (i < self.import_module_global_count) : (i += 1) {
+            if (common.streq(self.import_module_global_qnames[i], name)) return self.import_module_global_paths[i];
+        }
+        return null;
     }
 
     fn emitSetVar(self: *Compiler, name: Token) !void {
@@ -1517,6 +1547,9 @@ pub const Compiler = struct {
             if (self.std_namespace_path != null and self.std_namespace_path.?.len == 0) {
                 self.currentScope().locals[slot].from_std = true;
             }
+            if (self.import_module_path) |path| {
+                self.currentScope().locals[slot].import_module_path = path;
+            }
         } else {
             if (!is_const and self.registry.hasGlobalConst(name.src)) { self.setErr("cannot assign to const variable '{s}'", .{name.src}); return error.AssignToConst; }
             const qname = try self.qualifyGlobalName(name.src);
@@ -1530,6 +1563,13 @@ pub const Compiler = struct {
                 if (self.std_module_global_count < MaxLocals) {
                     self.std_module_global_names[self.std_module_global_count] = qname;
                     self.std_module_global_count += 1;
+                }
+            }
+            if (self.import_module_path) |path| {
+                if (self.import_module_global_count < MaxLocals) {
+                    self.import_module_global_qnames[self.import_module_global_count] = qname;
+                    self.import_module_global_paths[self.import_module_global_count] = path;
+                    self.import_module_global_count += 1;
                 }
             }
             if (is_const) try self.registry.addGlobalConst(name.src);
@@ -2910,10 +2950,12 @@ pub const Compiler = struct {
                 }
                 try self.consume(.rparen);
                 try self.checkStdNamespaceField(prop.src, line);
+                try self.checkImportModuleField(prop.src, line);
                 try chunk.emitInvokeMethod(prop.src, argc, line);
                 return;
             }
             try self.checkStdNamespaceField(prop.src, line);
+            try self.checkImportModuleField(prop.src, line);
             try chunk.emitGetField(prop.src, line);
             if (self.check(.lbrace) and self.looksLikeStructLiteral()) {
                 try self.structInstanceLitAfterValue(prop.line);
@@ -2922,6 +2964,7 @@ pub const Compiler = struct {
         }
 
         self.std_namespace_path = null;
+        self.import_module_path = null;
         if (tt == .lbracket) {
             if (self.match(.colon)) {
                 var flags: u8 = 0;
@@ -3198,6 +3241,18 @@ pub const Compiler = struct {
             .namespace => self.std_namespace_path = field,
             .function, .value => self.std_namespace_path = null,
         }
+        self.import_module_path = null;
+    }
+
+    fn checkImportModuleField(self: *Compiler, field: []const u8, line: u32) !void {
+        const path = self.import_module_path orelse return;
+        self.import_module_path = null;
+        const cb = self.options.has_module_export orelse return;
+        if (cb(self.options.module_ctx.?, path, field)) return;
+        self.setErr("unknown field '{s}' in module '{s}'", .{ field, path });
+        self.err_line = line;
+        self.err_col = @intCast(self.prev.col);
+        return error.UnknownField;
     }
 
     fn importExpr(self: *Compiler) !void {
@@ -3212,6 +3267,10 @@ pub const Compiler = struct {
         try chunk.emitGetGlobal(mod_name, self.prev.line);
         if (common.streq(name, "std") and common.streq(mod_name, "@module:std")) {
             self.std_namespace_path = "";
+            self.import_module_path = null;
+        } else if (mod_name.len > 8 and std.mem.startsWith(u8, mod_name, "@module:")) {
+            self.import_module_path = mod_name[8..];
+            self.std_namespace_path = null;
         }
     }
 

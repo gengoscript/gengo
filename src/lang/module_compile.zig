@@ -36,6 +36,8 @@ const ModuleState = enum {
     compiled,
 };
 
+const MaxModuleExports = 64;
+
 const ModuleRecord = struct {
     path_len: usize = 0,
     path_buf: [MaxModulePathBytes]u8 = undefined,
@@ -43,6 +45,8 @@ const ModuleRecord = struct {
     prefix: []const u8 = "",
     struct_name: []const u8 = "",
     state: ModuleState = .loading,
+    export_names: [MaxModuleExports][]const u8 = undefined,
+    export_count: u8 = 0,
 
     fn path(self: *const ModuleRecord) []const u8 {
         return self.path_buf[0..self.path_len];
@@ -132,6 +136,7 @@ pub const Session = struct {
             .module_global_name = self.modules[idx].global_name,
             .module_ctx = self,
             .resolve_import = resolveImportOpaque,
+            .has_module_export = hasModuleExport,
             .test_mode = if (emit_halt) self.test_mode else false,
         });
         compiler.compile(false) catch |err| {
@@ -146,6 +151,11 @@ pub const Session = struct {
             while (ti < compiler.test_count) : (ti += 1) {
                 self.test_names[ti] = compiler.test_names[ti];
             }
+        }
+        self.modules[idx].export_count = compiler.export_count;
+        var ei: u8 = 0;
+        while (ei < compiler.export_count) : (ei += 1) {
+            self.modules[idx].export_names[ei] = compiler.exports[ei].name;
         }
         try compiler.emitModuleObject();
         if (emit_halt) try chunk.emitOp(.halt, compiler.prev.line);
@@ -305,6 +315,17 @@ pub const Session = struct {
         };
     }
 };
+
+pub fn hasModuleExport(ctx: *anyopaque, path: []const u8, field: []const u8) bool {
+    const self: *Session = @ptrCast(@alignCast(ctx));
+    const idx = self.findModule(path) orelse return false;
+    const exports = &self.modules[idx];
+    var i: u8 = 0;
+    while (i < exports.export_count) : (i += 1) {
+        if (common.streq(exports.export_names[i], field)) return true;
+    }
+    return false;
+}
 
 fn containsPath(paths: []const [MaxModulePathBytes]u8, lens: []const usize, needle: []const u8) bool {
     var i: usize = 0;
