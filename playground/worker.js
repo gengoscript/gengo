@@ -31,8 +31,8 @@ self.onmessage = async (evt) => {
         const view = new DataView(memory.buffer);
         view.setUint8(buf, 2); // filetype = character_device
         view.setUint16(buf + 2, 0, true); // flags
-        view.setUint64(buf + 8, 0, true); // rights_base
-        view.setUint64(buf + 16, 0, true); // rights_inheriting
+        view.setBigUint64(buf + 8, 0n, true); // rights_base
+        view.setBigUint64(buf + 16, 0n, true); // rights_inheriting
         return 0;
       },
       fd_filestat_get: (fd, buf) => {
