@@ -1,0 +1,73 @@
+std := import("std")
+
+// Multiple for-in loops with break in same function — leaked iterators would
+// corrupt the stack and cause wrong results across successive calls.
+func multi_break() int {
+    s := 0
+    for v in [1, 2, 3] {
+        if v == 2 { break }
+        s += v
+    }
+    for v in [10, 20, 30] {
+        if v == 20 { break }
+        s += v
+    }
+    for v in [100, 200, 300] {
+        if v == 200 { break }
+        s += v
+    }
+    return s
+}
+
+// For-in with break at top level followed by another for-in.
+top := 0
+for v in [1, 2, 3] {
+    if v == 2 { break }
+    top += v
+}
+top += 100
+for v in [10, 20, 30] {
+    if v == 20 { break }
+    top += v
+}
+
+// Break from for-in with index+value.
+func multi_break_kv() int {
+    m := {"a": 1, "b": 2, "c": 3, "d": 4}
+    s := 0
+    for k, v in m {
+        if k == "c" { break }
+        s += v
+    }
+    // Second for-in to verify stack is clean
+    for k, v in {"x": 10, "y": 20} {
+        if k == "y" { break }
+        s += v
+    }
+    return s
+}
+
+// Break inside a nested scope with local variables.
+func break_with_nested_local() int {
+    s := 0
+    for v in [1, 2, 3, 4, 5] {
+        if v == 3 {
+            inner := v * 10
+            s += inner
+            break
+        }
+        s += v
+    }
+    s += 100
+    // Second loop to verify no stack corruption
+    for v in [1000, 2000] {
+        if v == 2000 { break }
+        s += v
+    }
+    return s
+}
+
+std.io.println(multi_break())
+std.io.println(top)
+std.io.println(multi_break_kv())
+std.io.println(break_with_nested_local())
