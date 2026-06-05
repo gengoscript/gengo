@@ -99,7 +99,7 @@ fn printSourceLine(src: []const u8, line: u32, col: u32) void {
     if (tmp == 0) { digit_count = 1; } else { while (tmp > 0) : (tmp /= 10) digit_count += 1; }
 
     io.werr("   ");
-    io.writeInt(@intCast(line));
+    io.werrInt(@intCast(line));
     io.werr(" | ");
     io.werr(text);
     io.werr("\n");
@@ -138,10 +138,10 @@ fn runReplMode(backend: vm.Policy.NativeBackend, max_ops: ?u64) noreturn {
                 if (repl_rt.last_compile_msg_len > 0) {
                     io.werr(repl_rt.last_compile_msg_buf[0..repl_rt.last_compile_msg_len]);
                     io.werr("\n     --> line ");
-                    io.writeInt(@intCast(repl_rt.last_compile_line));
+                    io.werrInt(@intCast(repl_rt.last_compile_line));
                     if (repl_rt.last_compile_col > 0) {
                         io.werr(":");
-                        io.writeInt(@intCast(repl_rt.last_compile_col));
+                        io.werrInt(@intCast(repl_rt.last_compile_col));
                     }
                     io.werr("\n");
                 } else {
@@ -262,10 +262,10 @@ fn runCli(argv: []const []const u8) void {
             io.werr("\n  --> ");
             io.werr(compile_path);
             io.werr(":");
-            io.writeInt(@intCast(runtime.last_compile_line));
+            io.werrInt(@intCast(runtime.last_compile_line));
             if (runtime.last_compile_col > 0) {
                 io.werr(":");
-                io.writeInt(@intCast(runtime.last_compile_col));
+                io.werrInt(@intCast(runtime.last_compile_col));
             }
             io.werr("\n");
             if (std.mem.eql(u8, compile_path, script_name)) {
@@ -281,10 +281,10 @@ fn runCli(argv: []const []const u8) void {
             io.werr("\n  --> ");
             io.werr(script_name);
             io.werr(":");
-            io.writeInt(@intCast(runtime.last_runtime_line));
+            io.werrInt(@intCast(runtime.last_runtime_line));
             if (runtime.last_runtime_col != 0) {
                 io.werr(":");
-                io.writeInt(@intCast(runtime.last_runtime_col));
+                io.werrInt(@intCast(runtime.last_runtime_col));
             }
             io.werr("\n");
             printSourceLine(src, runtime.last_runtime_line, runtime.last_runtime_col);
@@ -302,7 +302,7 @@ fn runCli(argv: []const []const u8) void {
                     }
                     io.werr(script_name);
                     io.werr(":");
-                    io.writeInt(@intCast(pf.line));
+                    io.werrInt(@intCast(pf.line));
                     io.werr("\n");
                 }
             }

@@ -72,6 +72,35 @@ pub fn writeInt(v: i64) void {
     } else writeUint(@intCast(v));
 }
 
+fn werrUint(v: u64) void {
+    if (v == 0) {
+        werr("0");
+        return;
+    }
+    var buf: [24]u8 = undefined;
+    var n = v;
+    var len: usize = 0;
+    while (n > 0) {
+        buf[len] = '0' + @as(u8, @intCast(n % 10));
+        len += 1;
+        n /= 10;
+    }
+    var i: usize = 0;
+    while (i < len / 2) : (i += 1) {
+        const t = buf[i];
+        buf[i] = buf[len - 1 - i];
+        buf[len - 1 - i] = t;
+    }
+    werr(buf[0..len]);
+}
+
+pub fn werrInt(v: i64) void {
+    if (v < 0) {
+        werr("-");
+        werrUint(@intCast(-v));
+    } else werrUint(@intCast(v));
+}
+
 pub fn writeF64Prec(v: f64, prec: usize) void {
     if (v != v) { write("NaN"); return; }
     if (std.math.isInf(v)) { write(if (v > 0) "Inf" else "-Inf"); return; }
