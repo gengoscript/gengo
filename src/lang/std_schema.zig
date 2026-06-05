@@ -32,6 +32,8 @@ pub const top_level_entries = [_]Entry{
     .{ .name = "hex", .kind = .namespace },
     .{ .name = "base64", .kind = .namespace },
     .{ .name = "regexp", .kind = .namespace },
+    .{ .name = "sort", .kind = .namespace },
+    .{ .name = "array", .kind = .namespace },
     .{ .name = "Time", .kind = .value },
     .{ .name = "Regexp", .kind = .value },
 };
@@ -113,6 +115,8 @@ pub const math_entries = [_]Entry{
     .{ .name = "pi", .kind = .value },
     .{ .name = "e", .kind = .value },
     .{ .name = "phi", .kind = .value },
+    .{ .name = "clamp", .kind = .function },
+    .{ .name = "sign", .kind = .function },
     .{ .name = "inf", .kind = .value },
 };
 
@@ -211,6 +215,23 @@ pub const namespaces = [_]Namespace{
     .{ .name = "hex", .entries = &hex_entries },
     .{ .name = "base64", .entries = &base64_entries },
     .{ .name = "regexp", .entries = &regexp_entries },
+    .{ .name = "sort", .entries = &sort_entries },
+    .{ .name = "array", .entries = &array_entries },
+};
+
+pub const sort_entries = [_]Entry{
+    .{ .name = "asc", .kind = .function },
+    .{ .name = "desc", .kind = .function },
+    .{ .name = "by", .kind = .function },
+};
+
+pub const array_entries = [_]Entry{
+    .{ .name = "filter", .kind = .function },
+    .{ .name = "map", .kind = .function },
+    .{ .name = "reduce", .kind = .function },
+    .{ .name = "slice", .kind = .function },
+    .{ .name = "zip", .kind = .function },
+    .{ .name = "flat", .kind = .function },
 };
 
 pub fn lookup(namespace: []const u8, field: []const u8) ?EntryKind {

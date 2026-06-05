@@ -1,0 +1,13 @@
+std := import("std")
+m := std.math
+
+// std.math.clamp
+std.io.println(m.clamp(5, 1, 10))
+std.io.println(m.clamp(0, 1, 10))
+std.io.println(m.clamp(20, 1, 10))
+std.io.println(m.clamp(5, 5, 5))
+
+// std.math.sign
+std.io.println(m.sign(42))
+std.io.println(m.sign(-3))
+std.io.println(m.sign(0))

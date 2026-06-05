@@ -307,6 +307,14 @@ pub fn asArraySlice(obj: *Object) []Value {
     };
 }
 
+pub fn cloneArraySlice(obj: *Object) ![]Value {
+    const items = asArraySlice(obj);
+    if (items.len == 0) return &[_]Value{};
+    const out = heap.allocManagedSlice(Value, items.len) orelse return error.OutOfMemory;
+    @memcpy(out[0..items.len], items);
+    return out[0..items.len];
+}
+
 pub fn isMapObject(obj: *Object) bool {
     return switch (obj.*) {
         .map, .map_managed, .map_hashed => true,
