@@ -26,6 +26,11 @@ jobs:
           curl -sSf https://wasmtime.dev/install.sh | bash -s -- --version "$WASMTIME_VERSION"
           echo "$HOME/.wasmtime/bin" >> "$GITHUB_PATH"
 
+      - name: Install wasm-opt
+        run: |
+          curl -sL https://github.com/WebAssembly/binaryen/releases/download/version_129/binaryen-version_129-x86_64-linux.tar.gz | tar xz
+          echo "$PWD/binaryen-version_129/bin" >> "$GITHUB_PATH"
+
       # ── Gate: run conformance before building release artifacts ─────
 
       - name: Run unit tests
