@@ -1,0 +1,91 @@
+name: gengo-release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      WASMTIME_VERSION: v45.0.0
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Install wasmtime
+        run: |
+          curl -sSf https://wasmtime.dev/install.sh | bash -s -- --version "$WASMTIME_VERSION"
+          echo "$HOME/.wasmtime/bin" >> "$GITHUB_PATH"
+
+      # ── Gate: run conformance before building release artifacts ─────
+
+      - name: Run unit tests
+        run: zig build -Dpreset=dev unit
+
+      - name: Build WASI runtime (Debug)
+        run: zig build -Dpreset=dev wasi
+
+      - name: Run conformance tests
+        run: zig build -Dpreset=dev test
+
+      # ── WASM artifacts ──────────────────────────────────────────────
+
+      - name: Build gengo-runtime.wasm (ReleaseFast)
+        run: zig build -Dpreset=dev wasi-release
+
+      - name: Build gengo-engine.wasm (ReleaseFast)
+        run: zig build -Dpreset=dev engine-release
+
+      - name: Stage WASM artifacts
+        run: |
+          mkdir -p dist
+          cp build/gengo-runtime.wasm dist/gengo-runtime.wasm
+          cp build/gengo-engine.wasm dist/gengo-engine.wasm
+
+      # ── Native CLI per target ──────────────────────────────────────
+
+      - name: Build linux-x86_64
+        run: |
+          zig build -Dtarget=x86_64-linux cli-release
+          strip zig-out/bin/gengo 2>/dev/null || true
+          cp zig-out/bin/gengo dist/gengo-linux-x86_64
+
+      - name: Build linux-aarch64
+        run: |
+          zig build -Dtarget=aarch64-linux cli-release
+          cp zig-out/bin/gengo dist/gengo-linux-aarch64
+
+      - name: Build macos-x86_64
+        run: |
+          zig build -Dtarget=x86_64-macos cli-release
+          cp zig-out/bin/gengo dist/gengo-macos-x86_64
+
+      - name: Build macos-aarch64
+        run: |
+          zig build -Dtarget=aarch64-macos cli-release
+          cp zig-out/bin/gengo dist/gengo-macos-aarch64
+
+      - name: Build windows-x86_64
+        run: |
+          zig build -Dtarget=x86_64-windows cli-release
+          cp zig-out/bin/gengo.exe dist/gengo-windows-x86_64.exe
+
+      # ── Release ────────────────────────────────────────────────────
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --title "${{ github.ref_name }}" \
+            --notes "See [CHANGELOG](docs/changelog.md) for details." \
+            dist/*
