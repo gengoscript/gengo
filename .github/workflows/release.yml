@@ -28,8 +28,8 @@ jobs:
 
       - name: Install wasm-opt
         run: |
-          curl -sL https://github.com/WebAssembly/binaryen/releases/download/version_129/binaryen-version_129-x86_64-linux.tar.gz | tar xz
-          echo "$PWD/binaryen-version_129/bin" >> "$GITHUB_PATH"
+          curl -sL https://github.com/WebAssembly/binaryen/releases/download/version_130/binaryen-version_130-x86_64-linux.tar.gz | tar xz
+          echo "$PWD/binaryen-version_130/bin" >> "$GITHUB_PATH"
 
       # ── Gate: run conformance before building release artifacts ─────
 
