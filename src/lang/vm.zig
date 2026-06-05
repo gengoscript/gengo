@@ -2077,7 +2077,10 @@ fn runInner() !void {
                 const f = try vmConst();
                 if (f != .object or f.object.* != .function) return error.TypeError;
                 const proto = f.object.function;
-                const ups = heap.bump(*Object, proto.capture_slots.len) orelse return error.OutOfMemory;
+                const ups = if (heap.bump(*Object, proto.capture_slots.len)) |u| u else blk: {
+                    vmgc.collectGarbage();
+                    break :blk (heap.bump(*Object, proto.capture_slots.len) orelse return error.OutOfMemory);
+                };
                 if (vmState().frame_top == 0 and proto.capture_slots.len != 0) return error.TypeError;
                 const frame = if (vmState().frame_top == 0) vms.Frame{ .ret_ip = 0, .base = 0, .closure = null, .func_obj = f.object, .defer_base = 0, .has_typed_returns = false } else vmState().frames[vmState().frame_top - 1];
                 var i: usize = 0;
