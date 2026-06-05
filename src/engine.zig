@@ -27,7 +27,14 @@ const SourceEntry = struct {
     src: []const u8,
 };
 
-var engines: [MaxEngines]?Engine = .{null} ** MaxEngines;
+// Explicit active flag avoids ?Engine optional which would require a large
+// stack temporary when assigning — the Runtime inside Engine is too large
+// for the WASM shadow stack (see runtime.zig initWithPolicy comment).
+const EngineSlot = struct {
+    active: bool = false,
+    engine: Engine = undefined,
+};
+var engine_slots: [MaxEngines]EngineSlot = [_]EngineSlot{.{}} ** MaxEngines;
 
 const Engine = struct {
     runtime: api.Runtime,
@@ -37,18 +44,42 @@ const Engine = struct {
     src_bufs: [MaxSources][4096]u8 = undefined,
     last_error: [MaxErrorLen]u8 = undefined,
     last_error_len: u16 = 0,
+    last_error_line: u32 = 0,
+    last_error_col: u16 = 0,
     string_scratch: [MaxStringScratch]u8 = undefined,
     string_scratch_len: u16 = 0,
 
-    fn init() Engine {
+    fn initInPlace(self: *Engine) void {
+        self.source_count = 0;
+        self.last_error_len = 0;
+        self.last_error_line = 0;
+        self.last_error_col = 0;
+        self.runtime.initWithPolicy(.{ .allow_io = true });
         io.setWriteOverrides(engineWrite, engineWerr);
-        return .{ .runtime = api.Runtime.init(.{ .allow_io = true }) };
     }
 
     fn setError(self: *Engine, msg: []const u8) void {
-        const len = @min(@as(usize, @intCast(msg.len)), self.last_error.len);
+        const len = @min(msg.len, self.last_error.len);
         @memcpy(self.last_error[0..len], msg[0..len]);
         self.last_error_len = @intCast(len);
+    }
+
+    fn setCompileError(self: *Engine, e: api.CompileError) void {
+        self.last_error_line = e.line;
+        self.last_error_col = e.col;
+        const s = std.fmt.bufPrint(&self.last_error, "compile error: {s}: {s}", .{
+            @errorName(e.kind), e.msg,
+        }) catch "";
+        self.last_error_len = @intCast(s.len);
+    }
+
+    fn setRuntimeError(self: *Engine, e: api.RuntimeError) void {
+        self.last_error_line = e.line;
+        self.last_error_col = e.col;
+        const s = std.fmt.bufPrint(&self.last_error, "panic: {s}: {s}", .{
+            @errorName(e.kind), e.msg,
+        }) catch "";
+        self.last_error_len = @intCast(s.len);
     }
 
     fn setStringScratch(self: *Engine, data: []const u8) []const u8 {
@@ -62,7 +93,8 @@ const Engine = struct {
 fn getEngine(handle: i32) ?*Engine {
     if (handle <= 0 or handle > MaxEngines) return null;
     const idx = @as(usize, @intCast(handle - 1));
-    return if (engines[idx]) |*e| e else null;
+    if (!engine_slots[idx].active) return null;
+    return &engine_slots[idx].engine;
 }
 
 fn wasmSlice(ptr: i32, len: i32) []const u8 {
@@ -135,9 +167,10 @@ fn valueToWireWithScratch(val: Value, scratch: *Engine) ValueWire {
 }
 
 export fn engine_init() i32 {
-    for (&engines, 0..) |*slot, i| {
-        if (slot.* == null) {
-            slot.* = Engine.init();
+    for (&engine_slots, 0..) |*slot, i| {
+        if (!slot.active) {
+            slot.engine.initInPlace();
+            slot.active = true;
             return @as(i32, @intCast(i + 1));
         }
     }
@@ -146,7 +179,7 @@ export fn engine_init() i32 {
 
 export fn engine_destroy(handle: i32) void {
     const idx = if (handle > 0 and handle <= MaxEngines) @as(usize, @intCast(handle - 1)) else return;
-    engines[idx] = null;
+    engine_slots[idx].active = false;
 }
 
 export fn engine_run(handle: i32, src_ptr: i32, src_len: i32) i32 {
@@ -156,11 +189,11 @@ export fn engine_run(handle: i32, src_ptr: i32, src_len: i32) i32 {
     return switch (res) {
         .ok => 0,
         .compile_error => |e| {
-            engine.setError(e.msg);
+            engine.setCompileError(e);
             return -1;
         },
         .runtime_error => |e| {
-            engine.setError(e.msg);
+            engine.setRuntimeError(e);
             return -2;
         },
     };
@@ -174,11 +207,11 @@ export fn engine_run_path(handle: i32, src_ptr: i32, src_len: i32, path_ptr: i32
     return switch (res) {
         .ok => 0,
         .compile_error => |e| {
-            engine.setError(e.msg);
+            engine.setCompileError(e);
             return -1;
         },
         .runtime_error => |e| {
-            engine.setError(e.msg);
+            engine.setRuntimeError(e);
             return -2;
         },
     };
@@ -208,7 +241,7 @@ export fn engine_call(handle: i32, name_ptr: i32, name_len: i32, args_ptr: i32, 
             return 0;
         },
         .runtime_error => |e| {
-            engine.setError(e.msg);
+            engine.setRuntimeError(e);
             return -2;
         },
     };
@@ -238,7 +271,7 @@ export fn engine_add_source(handle: i32, path_ptr: i32, path_len: i32, src_ptr: 
     engine.source_entries[sc] = .{ .path = path_buf[0..plen], .source = src_buf[0..slen] };
     engine.source_count = sc + 1;
 
-    engine.runtime = api.Runtime.init(.{
+    engine.runtime.initWithPolicy(.{
         .allow_io = true,
         .module_sources = engine.source_entries[0..engine.source_count],
     });
@@ -254,4 +287,14 @@ export fn engine_last_error(handle: i32, out_ptr: i32, out_max_len: i32) i32 {
         @memcpy(dest, engine.last_error[0..len]);
     }
     return engine.last_error_len;
+}
+
+export fn engine_last_error_line(handle: i32) i32 {
+    const engine = getEngine(handle) orelse return 0;
+    return @intCast(engine.last_error_line);
+}
+
+export fn engine_last_error_col(handle: i32) i32 {
+    const engine = getEngine(handle) orelse return 0;
+    return @intCast(engine.last_error_col);
 }

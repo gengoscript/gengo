@@ -204,7 +204,7 @@ function stopRun(reason) {
 function startWorker(script) {
   startTime = performance.now();
   execInfoEl.textContent = "";
-  worker = new Worker("./worker.js?v=89b05004", { type: "module" });
+  worker = new Worker("./worker.js?v=825db98b", { type: "module" });
   let hasStderr = false;
 
   worker.onmessage = function (evt) {
@@ -212,7 +212,7 @@ function startWorker(script) {
     if (msg.kind === "stdout") { appendOutput(msg.text); return; }
     if (msg.kind === "stderr") { hasStderr = true; appendOutput(msg.text, true); return; }
     if (msg.kind === "done") { setIdle(hasStderr ? "Error" : "Success", hasStderr); return; }
-    if (msg.kind === "error") { setIdle("Error", true); return; }
+    if (msg.kind === "error") { appendOutput((msg.error || "unknown error") + "\n", true); setIdle("Error", true); return; }
   };
 
   worker.onerror = function (err) {
