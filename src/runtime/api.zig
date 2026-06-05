@@ -126,6 +126,16 @@ pub const Runtime = struct {
         };
         return .{ .ok = out };
     }
+
+    pub fn runIncremental(self: *Runtime, src: []const u8) RuntimeResult {
+        self.inner.runIncremental(src) catch |err| {
+            if (self.inner.last_compile_line != 0) {
+                return .{ .compile_error = compileError(err, &self.inner) };
+            }
+            return .{ .runtime_error = runtimeError(err, &self.inner) };
+        };
+        return .ok;
+    }
 };
 
 pub const RuntimeResultWithValue = union(enum) {

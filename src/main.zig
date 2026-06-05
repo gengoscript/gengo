@@ -175,19 +175,17 @@ fn runReplMode(backend: vm.Policy.NativeBackend, max_ops: ?u64) noreturn {
         repl_rt.runIncremental(line) catch |err| {
             if (repl_rt.last_compile_line != 0) {
                 io.werr("compile error: ");
+                io.werr(@errorName(err));
                 if (repl_rt.last_compile_msg_len > 0) {
+                    io.werr(": ");
                     io.werr(repl_rt.last_compile_msg_buf[0..repl_rt.last_compile_msg_len]);
-                    io.werr("\n     --> line ");
-                    io.werrInt(@intCast(repl_rt.last_compile_line));
-                    if (repl_rt.last_compile_col > 0) {
-                        io.werr(":");
-                        io.werrInt(@intCast(repl_rt.last_compile_col));
-                    }
-                    io.werr("\n");
-                } else {
-                    io.werr(@errorName(err));
-                    io.werr("\n");
                 }
+                io.werr("\n  --> repl:");
+                io.werrInt(@intCast(repl_rt.last_compile_line));
+                io.werr(":");
+                io.werrInt(@intCast(repl_rt.last_compile_col));
+                io.werr("\n");
+                printSourceLine(line, repl_rt.last_compile_line, repl_rt.last_compile_col);
             } else {
                 io.werr("error: ");
                 io.werr(@errorName(err));

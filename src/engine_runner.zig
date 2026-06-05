@@ -189,6 +189,29 @@ fn testIO() void {
     out("  std.io hook: OK\n");
 }
 
+fn testReplIncremental() void {
+    const rt = initWithAllowIO(false);
+
+    // Basic incremental compilation: declarations persist
+    const r1 = rt.runIncremental("x := 10");
+    if (r1 != .ok) fail("engine FAIL: repl init\n");
+
+    const r2 = rt.runIncremental("x = 20");
+    if (r2 != .ok) fail("engine FAIL: repl update\n");
+
+    const r3 = rt.runIncremental("x");
+    if (r3 != .ok) fail("engine FAIL: repl expr\n");
+
+    // Typed redeclaration of existing global should error
+    const r4 = rt.runIncremental("var x int := 30");
+    switch (r4) {
+        .compile_error => {},
+        else => fail("engine FAIL: expected redeclare error\n"),
+    }
+
+    out("  repl incremental: OK\n");
+}
+
 export fn _start() void {
     out("engine runner:\n");
     testInitDestroy();
@@ -199,6 +222,7 @@ export fn _start() void {
     testReset();
     testLastError();
     testIO();
+    testReplIncremental();
     out("engine-api OK\n");
     std.os.wasi.proc_exit(0);
 }
