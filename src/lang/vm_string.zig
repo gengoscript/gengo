@@ -37,7 +37,6 @@ pub fn ensureRuneCache(s: []const u8) !void {
     st.rune_cache_ptr = @intFromPtr(s.ptr);
     st.rune_cache_byte_len = s.len;
     st.rune_cache_rune_len = 0;
-    st.rune_cache_valid = true;
     st.rune_cache_overflow = false;
     var i: usize = 0;
     while (i < s.len) {
@@ -49,6 +48,7 @@ pub fn ensureRuneCache(s: []const u8) !void {
         i += try utf8NextRuneByteLen(s, i);
         st.rune_cache_rune_len += 1;
     }
+    st.rune_cache_valid = true;
 }
 
 pub fn utf8RuneCountCached(s: []const u8) !usize {
@@ -61,6 +61,6 @@ pub fn utf8ByteOffsetForRuneIndexCached(s: []const u8, rune_idx: usize) !usize {
     const st = vms.vmState();
     if (rune_idx == st.rune_cache_rune_len) return s.len;
     if (rune_idx > st.rune_cache_rune_len) return error.IndexOutOfBounds;
-    if (!st.rune_cache_overflow and rune_idx < vms.RuneCacheMax) return st.rune_cache_offsets[rune_idx];
+    if (rune_idx < vms.RuneCacheMax) return st.rune_cache_offsets[rune_idx];
     return utf8ByteOffsetForRuneIndex(s, rune_idx);
 }

@@ -1,0 +1,9 @@
+std := import("std")
+sb := std.string.builder()
+for i := 0; i < 9000; i++ {
+    sb.write("a")
+}
+s := sb.str()
+std.io.println(s[0:3])
+std.io.println(s[8191:8193])
+std.io.println(s[8998:9000])
