@@ -72,7 +72,7 @@ fn drainMarkQueue() void {
                 markValue(nv.value);
             },
             .iterator => |it| {
-                if (it.source) |src| markObjectQueue(src);
+                if (it.source) |src| if (heap.isObjectLive(src)) markObjectQueue(src);
             },
             .enum_value => |ev| markObjectQueue(ev.typ),
             .variant_type => {},
