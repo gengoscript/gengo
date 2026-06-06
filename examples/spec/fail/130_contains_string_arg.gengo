@@ -1,0 +1,2 @@
+std := import("std")
+std.core.contains("hello@world", "@")

@@ -136,6 +136,7 @@ pub const string_entries = [_]Entry{
     .{ .name = "trim", .kind = .function },
     .{ .name = "upper", .kind = .function },
     .{ .name = "lower", .kind = .function },
+    .{ .name = "contains", .kind = .function },
     .{ .name = "starts_with", .kind = .function },
     .{ .name = "ends_with", .kind = .function },
     .{ .name = "index_of", .kind = .function },

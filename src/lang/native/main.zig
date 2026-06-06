@@ -156,6 +156,7 @@ const NativeFnId = enum(u8) {
     str_pad_left = 117,
     str_pad_right = 118,
     str_equal_fold = 119,
+    str_contains = 148,
     str_contains_any = 120,
     rand_perm = 121,
     rand_norm_float = 122,
@@ -363,6 +364,7 @@ pub fn buildStdModule() !*Object {
         .{ .name = "trim", .value = try makeNative(.str_trim, 1) },
         .{ .name = "upper", .value = try makeNative(.str_upper, 1) },
         .{ .name = "lower", .value = try makeNative(.str_lower, 1) },
+        .{ .name = "contains", .value = try makeNative(.str_contains, 2) },
         .{ .name = "starts_with", .value = try makeNative(.str_starts_with, 2) },
         .{ .name = "ends_with", .value = try makeNative(.str_ends_with, 2) },
         .{ .name = "index_of", .value = try makeNative(.str_index_of, 2) },
@@ -1182,6 +1184,14 @@ pub fn callNative(nf: NativeFuncObj, argc: u8) !void {
             const out = try string_mod.nativeStrLower(s);
             _ = try vms.vmPop(); _ = try vms.vmPop();
             try vms.vmPush(out);
+        },
+        .str_contains => {
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const s = try vms.asStringValue(vms.vmState().stack[top - 2]);
+            const sub = try vms.asStringValue(vms.vmState().stack[top - 1]);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(string_mod.nativeStrContains(s, sub));
         },
         .str_starts_with => {
             if (argc != nf.arity) return error.ArityMismatch;

@@ -99,6 +99,10 @@ pub fn nativeStrLower(s: []const u8) !Value {
     return .{ .object = obj };
 }
 
+pub fn nativeStrContains(s: []const u8, sub: []const u8) Value {
+    return .{ .boolean = std.mem.indexOf(u8, s, sub) != null };
+}
+
 pub fn nativeStrStartsWith(s: []const u8, prefix: []const u8) Value {
     return .{ .boolean = std.mem.startsWith(u8, s, prefix) };
 }

@@ -1,0 +1,8 @@
+std := import("std")
+str := std.string
+
+std.io.println(str.contains("hello@world", "@"))
+std.io.println(str.contains("hello", "xyz"))
+std.io.println(str.contains("hello", ""))
+std.io.println(str.contains("", ""))
+std.io.println(str.contains("hello", "hello"))

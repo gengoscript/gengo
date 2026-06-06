@@ -115,6 +115,7 @@ pub fn nativeValues(m_obj: *Object) !Value {
 }
 
 pub fn nativeContains(arr_obj: *Object, needle: Value) !Value {
+    if (!vms.isArrayObject(arr_obj)) return error.TypeError;
     const items = vms.asArraySlice(arr_obj);
     for (items) |item| {
         const eq = try nativeDeepEqual(item, needle);
