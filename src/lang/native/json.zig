@@ -6,6 +6,8 @@ const vmmap = @import("../vm_map.zig");
 const Value = @import("../value.zig").Value;
 const Object = @import("../value.zig").Object;
 const MapEntry = @import("../value.zig").MapEntry;
+const NativeFnId = @import("native_ids.zig").NativeFnId;
+const NativeFuncObj = @import("../value.zig").NativeFuncObj;
 
 const JsonAllocator = struct {
     fn allocFn(ctx: *anyopaque, len: usize, ptr_align: std.mem.Alignment, ra: usize) ?[*]u8 {
@@ -155,4 +157,34 @@ pub fn jsonValidNative() !Value {
     const parsed = std.json.parseFromSlice(std.json.Value, alloc, src, .{}) catch return .{ .boolean = false };
     parsed.deinit();
     return .{ .boolean = true };
+}
+
+pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
+    switch (@as(NativeFnId, @enumFromInt(nf.id))) {
+        .json_parse => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const out = try jsonParseNative();
+            _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .json_stringify => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const out = try jsonStringifyNative();
+            _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .json_valid => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const out = try jsonValidNative();
+            _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        else => {},
+    }
 }

@@ -9,6 +9,8 @@ const FieldTypeAlt = @import("../value.zig").FieldTypeAlt;
 const FieldTypeSpec = @import("../value.zig").FieldTypeSpec;
 const StructFieldSpec = @import("../value.zig").StructFieldSpec;
 const StructTypeObj = @import("../value.zig").StructTypeObj;
+const NativeFnId = @import("native_ids.zig").NativeFnId;
+const NativeFuncObj = @import("../value.zig").NativeFuncObj;
 
 const TemplateTypeQualifiedName = "@std.template.obj";
 
@@ -620,5 +622,63 @@ pub fn tplAddFunc(tmpl_obj: *Object, name: []const u8, func_val: Value) !void {
             funcs_obj.* = .{ .map_managed = new_items[0 .. m.len + 1] };
         },
         else => return error.TypeError,
+    }
+}
+
+pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
+    switch (@as(NativeFnId, @enumFromInt(nf.id))) {
+        .template_add_func => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const tmpl_val = vms.vmState().stack[top - 3];
+            const name_val = vms.vmState().stack[top - 2];
+            const func_val = vms.vmState().stack[top - 1];
+            if (tmpl_val != .object) return error.TypeError;
+            const name = try vms.asStringValue(name_val);
+            try tplAddFunc(tmpl_val.object, name, func_val);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.null);
+        },
+        .template_execute => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const tmpl_val = vms.vmState().stack[top - 2];
+            const data = vms.vmState().stack[top - 1];
+            if (tmpl_val != .object) return error.TypeError;
+            const out = try tplExec(tmpl_val.object, data);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .template_parse => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const src_val = vms.vmState().stack[vms.vmState().stack_top - 1];
+            const src = try vms.asStringValue(src_val);
+            const out = try tplParse(src_val, src);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .template_render => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const src_val = vms.vmState().stack[top - 2];
+            const data = vms.vmState().stack[top - 1];
+            const src = try vms.asStringValue(src_val);
+            const out = try tplRender(src_val, src, data);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .template_valid => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const src = try vms.asStringValue(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            const is_valid = tplValid(src);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .boolean = is_valid });
+        },
+        else => {},
     }
 }

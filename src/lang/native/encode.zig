@@ -2,6 +2,8 @@ const std = @import("std");
 const vms = @import("../vm_state.zig");
 const vmgc = @import("../vm_gc.zig");
 const Value = @import("../value.zig").Value;
+const NativeFnId = @import("native_ids.zig").NativeFnId;
+const NativeFuncObj = @import("../value.zig").NativeFuncObj;
 
 pub fn nativeHexEncode(s: []const u8) !Value {
     const obj = try vmgc.vmAllocObject();
@@ -136,4 +138,58 @@ pub fn nativeBase64Decode(s: []const u8, url_safe: bool) !Value {
     }
     obj.* = .{ .dyn_string = buf[0..out_len] };
     return .{ .object = obj };
+}
+
+pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
+    switch (@as(NativeFnId, @enumFromInt(nf.id))) {
+        .base64_decode => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const s = try vms.asStringValue(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            const out = try nativeBase64Decode(s, false);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .base64_encode => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const s = try vms.asStringValue(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            const out = try nativeBase64Encode(s, false);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .base64_url_decode => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const s = try vms.asStringValue(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            const out = try nativeBase64Decode(s, true);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .base64_url_encode => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const s = try vms.asStringValue(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            const out = try nativeBase64Encode(s, true);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .hex_decode => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const s = try vms.asStringValue(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            const out = try nativeHexDecode(s);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .hex_encode => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const s = try vms.asStringValue(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            const out = try nativeHexEncode(s);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        else => {},
+    }
 }

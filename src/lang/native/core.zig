@@ -10,6 +10,11 @@ const Value = @import("../value.zig").Value;
 const Object = @import("../value.zig").Object;
 const MapEntry = @import("../value.zig").MapEntry;
 const StructFieldSpec = @import("../value.zig").StructFieldSpec;
+const NativeFnId = @import("native_ids.zig").NativeFnId;
+const NativeFuncObj = @import("../value.zig").NativeFuncObj;
+const host_abi = @import("../../runtime/host_abi.zig");
+const host_abi_mod = @import("host_abi.zig");
+const MaxNativeArgs = @import("native_ids.zig").MaxNativeArgs;
 
 pub fn nativeLen(v: Value) !Value {
     const uv = vms.unboxNamed(v);
@@ -614,5 +619,340 @@ fn cloneObject(src: *Object, visits: []CloneVisit, visit_len: *usize) anyerror!V
             out_obj.* = .{ .variant_value = .{ .typ = vv.typ, .tag = vv.tag, .ordinal = vv.ordinal, .payload = try cloneValue(vv.payload, visits, visit_len) } };
             return .{ .object = out_obj };
         },
+    }
+}
+
+pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
+    switch (@as(NativeFnId, @enumFromInt(nf.id))) {
+        .core_append => {
+
+            const start = vms.vmState().stack_top - argc;
+            if (vms.vmState().policy.native_backend == .host) {
+                try host_abi_mod.ensureHostReady();
+                if ((vms.vmState().host_caps & host_abi.CAP_CORE_APPEND) != 0) {
+                    if (argc > MaxNativeArgs) return error.ArityMismatch;
+                    var args_wire: [MaxNativeArgs]host_abi.ValueWire = undefined;
+                    var i: usize = 0;
+                    while (i < @as(usize, argc)) : (i += 1) {
+                        args_wire[i] = try host_abi_mod.wireFromValue(vms.vmState().stack[start + i]);
+                    }
+                    var out_wire: host_abi.ValueWire = .{
+                        .tag = @intFromEnum(host_abi.WireTag.null),
+                        .flags = 0,
+                        .reserved = 0,
+                        .payload = 0,
+                        .len = 0,
+                        .reserved2 = 0,
+                    };
+                    const st = host_abi.nativeCall(.core_append, args_wire[0..argc], &out_wire);
+                    switch (st) {
+                        .ok => {},
+                        .unsupported => return error.HostNativeUnsupported,
+                        .denied => return error.PermissionDenied,
+                        .bad_args => return error.HostNativeBadArgs,
+                        .failed => return error.HostNativeFailed,
+                    }
+                    const out = try host_abi_mod.valueFromWire(out_wire);
+                    var j: usize = 0;
+                    while (j < @as(usize, argc)) : (j += 1) _ = try vms.vmPop();
+                    _ = try vms.vmPop();
+                    try vms.vmPush(out);
+                    return;
+                }
+            }
+            const out = try nativeAppend(start, argc);
+            var j: usize = 0;
+            while (j < @as(usize, argc)) : (j += 1) _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .core_bytelen => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            if (vms.vmState().policy.native_backend == .host) {
+                try host_abi_mod.ensureHostReady();
+                if ((vms.vmState().host_caps & host_abi.CAP_CORE_BYTELEN) != 0) {
+                    var arg_wire: [1]host_abi.ValueWire = undefined;
+                    arg_wire[0] = try host_abi_mod.wireFromValue(vms.vmState().stack[vms.vmState().stack_top - 1]);
+                    var out_wire: host_abi.ValueWire = .{
+                        .tag = @intFromEnum(host_abi.WireTag.null),
+                        .flags = 0,
+                        .reserved = 0,
+                        .payload = 0,
+                        .len = 0,
+                        .reserved2 = 0,
+                    };
+                    const st = host_abi.nativeCall(.core_bytelen, arg_wire[0..], &out_wire);
+                    switch (st) {
+                        .ok => {},
+                        .unsupported => return error.HostNativeUnsupported,
+                        .denied => return error.PermissionDenied,
+                        .bad_args => return error.HostNativeBadArgs,
+                        .failed => return error.HostNativeFailed,
+                    }
+                    const out = try host_abi_mod.valueFromWire(out_wire);
+                    _ = try vms.vmPop();
+                    _ = try vms.vmPop();
+                    try vms.vmPush(out);
+                    return;
+                }
+            }
+            const arg = vms.vmState().stack[vms.vmState().stack_top - 1];
+            const out = try nativeByteLen(arg);
+            _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .core_clone => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const out = try nativeClone(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .core_contains => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const arr_val = vms.unboxNamed(vms.vmState().stack[top - 2]);
+            const needle = vms.vmState().stack[top - 1];
+            if (arr_val != .object) return error.TypeError;
+            const out = try nativeContains(arr_val.object, needle);
+            _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .core_deep_equal => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const out = try nativeDeepEqual(vms.vmState().stack[top - 2], vms.vmState().stack[top - 1]);
+            _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .core_delete => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const m_val = vms.unboxNamed(vms.vmState().stack[top - 2]);
+            const key = vms.vmState().stack[top - 1];
+            if (m_val != .object) return error.TypeError;
+            const out = try nativeDelete(m_val.object, key);
+            _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .core_error => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const arg = vms.vmState().stack[vms.vmState().stack_top - 1];
+            const msg = try vms.asStringValue(arg);
+            const copy = heap.bump(u8, msg.len) orelse return error.OutOfMemory;
+            @memcpy(copy[0..msg.len], msg);
+            _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            try vms.vmPush(.{ .error_value = copy[0..msg.len] });
+        },
+        .core_gc => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            vmgc.collectGarbage();
+            _ = try vms.vmPop();
+            try vms.vmPush(.null);
+        },
+        .core_gc_live_objects => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            _ = try vms.vmPop();
+            try vms.vmPush(.{ .number = @floatFromInt(heap.liveObjectCount()) });
+        },
+        .core_gc_stats => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const out = try nativeGcStats();
+            _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .core_gc_stats_ext => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const out = try nativeGcStatsExt();
+            _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .core_has => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const m_val = vms.unboxNamed(vms.vmState().stack[top - 2]);
+            const key = vms.vmState().stack[top - 1];
+            if (m_val != .object) return error.TypeError;
+            const out = try nativeHas(m_val.object, key);
+            _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .core_is_array => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const out = nativeIsArray(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .core_is_error => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const arg = vms.vmState().stack[vms.vmState().stack_top - 1];
+            _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            try vms.vmPush(.{ .boolean = arg == .error_value });
+        },
+        .core_is_float => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const out = nativeIsFloat(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .core_is_int => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const out = nativeIsInt(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .core_is_map => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const out = nativeIsMap(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .core_is_null => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const out = nativeIsNull(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .core_is_string => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const out = nativeIsString(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .core_is_struct => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const out = nativeIsStruct(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .core_keys => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const m_val = vms.unboxNamed(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            if (m_val != .object) return error.TypeError;
+            const out = try nativeKeys(m_val.object);
+            _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .core_len => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            if (vms.vmState().policy.native_backend == .host) {
+                try host_abi_mod.ensureHostReady();
+                if ((vms.vmState().host_caps & host_abi.CAP_CORE_LEN) != 0) {
+                    var arg_wire: [1]host_abi.ValueWire = undefined;
+                    arg_wire[0] = try host_abi_mod.wireFromValue(vms.vmState().stack[vms.vmState().stack_top - 1]);
+                    var out_wire: host_abi.ValueWire = .{
+                        .tag = @intFromEnum(host_abi.WireTag.null),
+                        .flags = 0,
+                        .reserved = 0,
+                        .payload = 0,
+                        .len = 0,
+                        .reserved2 = 0,
+                    };
+                    const st = host_abi.nativeCall(.core_len, arg_wire[0..], &out_wire);
+                    switch (st) {
+                        .ok => {},
+                        .unsupported => return error.HostNativeUnsupported,
+                        .denied => return error.PermissionDenied,
+                        .bad_args => return error.HostNativeBadArgs,
+                        .failed => return error.HostNativeFailed,
+                    }
+                    const out = try host_abi_mod.valueFromWire(out_wire);
+                    _ = try vms.vmPop();
+                    _ = try vms.vmPop();
+                    try vms.vmPush(out);
+                    return;
+                }
+            }
+            const arg = vms.vmState().stack[vms.vmState().stack_top - 1];
+            const out = try nativeLen(arg);
+            _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .core_recover => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            _ = try vms.vmPop();
+            if (vms.vmState().is_panicking and !vms.vmState().recovered) {
+                const pv = vms.vmState().panic_value;
+                vms.vmState().recovered = true;
+                try vms.vmPush(pv);
+            } else {
+                try vms.vmPush(.null);
+            }
+        },
+        .core_remove => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const arr_val = vms.unboxNamed(vms.vmState().stack[top - 2]);
+            const idx_val = vms.vmState().stack[top - 1];
+            if (arr_val != .object) return error.TypeError;
+            const out = try nativeRemove(arr_val.object, idx_val);
+            _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .core_type_of => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const arg = vms.vmState().stack[vms.vmState().stack_top - 1];
+            const out = nativeTypeNameValue(arg);
+            _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .core_values => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const m_val = vms.unboxNamed(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            if (m_val != .object) return error.TypeError;
+            const out = try nativeValues(m_val.object);
+            _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        else => {},
     }
 }

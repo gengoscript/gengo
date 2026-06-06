@@ -5,6 +5,8 @@ const vms = @import("../vm_state.zig");
 const vmgc = @import("../vm_gc.zig");
 const Value = @import("../value.zig").Value;
 const Object = @import("../value.zig").Object;
+const NativeFnId = @import("native_ids.zig").NativeFnId;
+const NativeFuncObj = @import("../value.zig").NativeFuncObj;
 
 const RegexpQualifiedName = "@std.regexp.obj";
 const MaxPatternLen = 4096;
@@ -532,4 +534,125 @@ pub fn nativeReCompile(pattern_val: Value) !Value {
     const alts = try parseAlts(alloc, pattern, 0, pattern.len);
     freeAlts(alts);
     return try reBuildObj(pattern);
+}
+
+pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
+    switch (@as(NativeFnId, @enumFromInt(nf.id))) {
+        .re_compile => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const pattern_val = vms.vmState().stack[vms.vmState().stack_top - 1];
+            const result = try nativeReCompile(pattern_val);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(result);
+        },
+        .re_find => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const pattern_val = vms.vmState().stack[top - 2];
+            const s_val = vms.vmState().stack[top - 1];
+            const result = try nativeReFind(pattern_val, s_val);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(result);
+        },
+        .re_find_all => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const pattern_val = vms.vmState().stack[top - 2];
+            const s_val = vms.vmState().stack[top - 1];
+            const result = try nativeReFindAll(pattern_val, s_val);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(result);
+        },
+        .re_match => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const pattern_val = vms.vmState().stack[top - 2];
+            const s_val = vms.vmState().stack[top - 1];
+            const result = try nativeReMatch(pattern_val, s_val);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(result);
+        },
+        .re_obj_find => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const recv = vms.vmState().stack[top - 2];
+            const s_val = vms.vmState().stack[top - 1];
+            const pattern = try reGetPattern(recv);
+            const result = try nativeReFind(.{ .string = pattern }, s_val);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(result);
+        },
+        .re_obj_find_all => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const recv = vms.vmState().stack[top - 2];
+            const s_val = vms.vmState().stack[top - 1];
+            const pattern = try reGetPattern(recv);
+            const result = try nativeReFindAll(.{ .string = pattern }, s_val);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(result);
+        },
+        .re_obj_match => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const recv = vms.vmState().stack[top - 2];
+            const s_val = vms.vmState().stack[top - 1];
+            const pattern = try reGetPattern(recv);
+            const result = try nativeReMatch(.{ .string = pattern }, s_val);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(result);
+        },
+        .re_obj_replace => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const recv = vms.vmState().stack[top - 3];
+            const s_val = vms.vmState().stack[top - 2];
+            const repl_val = vms.vmState().stack[top - 1];
+            const pattern = try reGetPattern(recv);
+            const result = try nativeReReplace(.{ .string = pattern }, s_val, repl_val);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(result);
+        },
+        .re_obj_split => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const recv = vms.vmState().stack[top - 2];
+            const s_val = vms.vmState().stack[top - 1];
+            const pattern = try reGetPattern(recv);
+            const result = try nativeReSplit(.{ .string = pattern }, s_val);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(result);
+        },
+        .re_replace => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const pattern_val = vms.vmState().stack[top - 3];
+            const s_val = vms.vmState().stack[top - 2];
+            const repl_val = vms.vmState().stack[top - 1];
+            const result = try nativeReReplace(pattern_val, s_val, repl_val);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(result);
+        },
+        .re_split => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const pattern_val = vms.vmState().stack[top - 2];
+            const s_val = vms.vmState().stack[top - 1];
+            const result = try nativeReSplit(pattern_val, s_val);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(result);
+        },
+        else => {},
+    }
 }

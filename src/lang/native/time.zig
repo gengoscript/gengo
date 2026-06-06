@@ -4,6 +4,9 @@ const vms = @import("../vm_state.zig");
 const vmgc = @import("../vm_gc.zig");
 const Value = @import("../value.zig").Value;
 const Object = @import("../value.zig").Object;
+const MapEntry = @import("../value.zig").MapEntry;
+const NativeFnId = @import("native_ids.zig").NativeFnId;
+const NativeFuncObj = @import("../value.zig").NativeFuncObj;
 
 const w32 = std.os.windows;
 
@@ -329,4 +332,221 @@ pub fn timeAddDate(ms: f64, y_delta: i32, m_delta: i32, d_delta: i32) !Value {
     const epoch_secs = timeCalendarToEpochSecs(new_y, @as(u8, @intCast(new_m)), @as(u8, @intCast(new_d)), p.hour, p.min, p.sec);
     const new_ms = @as(f64, @floatFromInt(epoch_secs)) * 1000.0 + @as(f64, @floatFromInt(p.ms));
     return timeBuildObj(new_ms);
+}
+
+pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
+    switch (@as(NativeFnId, @enumFromInt(nf.id))) {
+        .time_add_date => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const recv = vms.vmState().stack[top - 4];
+            const y_v = vms.vmState().stack[top - 3];
+            const m_v = vms.vmState().stack[top - 2];
+            const d_v = vms.vmState().stack[top - 1];
+            const ms = try timeGetMs(recv);
+            const y = try vms.valueAsInt(y_v);
+            const m = try vms.valueAsInt(m_v);
+            const d = try vms.valueAsInt(d_v);
+            const out = try timeAddDate(ms, @intCast(y), @intCast(m), @intCast(d));
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .time_add_h => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const recv = vms.vmState().stack[top - 2];
+            const n = try vms.valueAsNumber(vms.vmState().stack[top - 1]);
+            const ms = try timeGetMs(recv);
+            if (@trunc(n) != n) return error.TypeError;
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(try timeBuildObj(ms + n * 3_600_000));
+        },
+        .time_add_m => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const recv = vms.vmState().stack[top - 2];
+            const n = try vms.valueAsNumber(vms.vmState().stack[top - 1]);
+            const ms = try timeGetMs(recv);
+            if (@trunc(n) != n) return error.TypeError;
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(try timeBuildObj(ms + n * 60_000));
+        },
+        .time_add_ms => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const recv = vms.vmState().stack[top - 2];
+            const n = try vms.valueAsNumber(vms.vmState().stack[top - 1]);
+            const ms = try timeGetMs(recv);
+            if (@trunc(n) != n) return error.TypeError;
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(try timeBuildObj(ms + n));
+        },
+        .time_add_s => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const recv = vms.vmState().stack[top - 2];
+            const n = try vms.valueAsNumber(vms.vmState().stack[top - 1]);
+            const ms = try timeGetMs(recv);
+            if (@trunc(n) != n) return error.TypeError;
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(try timeBuildObj(ms + n * 1000));
+        },
+        .time_after => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const recv = vms.vmState().stack[top - 2];
+            const other = vms.vmState().stack[top - 1];
+            const ms_a = try timeGetMs(recv);
+            const ms_b = try timeGetMs(other);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .boolean = ms_a > ms_b });
+        },
+        .time_before => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const recv = vms.vmState().stack[top - 2];
+            const other = vms.vmState().stack[top - 1];
+            const ms_a = try timeGetMs(recv);
+            const ms_b = try timeGetMs(other);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .boolean = ms_a < ms_b });
+        },
+        .time_equal => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const recv = vms.vmState().stack[top - 2];
+            const other = vms.vmState().stack[top - 1];
+            const ms_a = try timeGetMs(recv);
+            const ms_b = try timeGetMs(other);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .boolean = ms_a == ms_b });
+        },
+        .time_format => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const recv = vms.vmState().stack[top - 2];
+            const fmt = try vms.asStringValue(vms.vmState().stack[top - 1]);
+            const ms = try timeGetMs(recv);
+            const out = try timeFormatStr(ms, fmt);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .time_from_unix => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const sec = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            if (@trunc(sec) != sec) return error.TypeError;
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(try timeBuildObj(sec * 1000));
+        },
+        .time_from_unix_ms => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const ms = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            if (@trunc(ms) != ms) return error.TypeError;
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(try timeBuildObj(ms));
+        },
+        .time_is_zero => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const recv = vms.vmState().stack[vms.vmState().stack_top - 1];
+            const ms = try timeGetMs(recv);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .boolean = ms == 0 });
+        },
+        .time_now => {
+
+            if (argc != 0) return error.ArityMismatch;
+            _ = try vms.vmPop();
+            try vms.vmPush(try timeBuildObj(timeNowMs()));
+        },
+        .time_parse => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const s = try vms.asStringValue(vms.vmState().stack[top - 2]);
+            const fmt = try vms.asStringValue(vms.vmState().stack[top - 1]);
+            const out = try timeParseStr(s, fmt);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .time_parts => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const recv = vms.vmState().stack[vms.vmState().stack_top - 1];
+            const ms = try timeGetMs(recv);
+            const p = timeEpochMsToParts(ms);
+            const field_count = 8;
+            const entries = try vmgc.vmAllocManagedSlice(MapEntry, field_count);
+            const obj = try vmgc.vmAllocObject();
+            obj.* = .{ .map = &[_]MapEntry{} };
+            try vms.pushTempRoot(.{ .object = obj });
+            defer vms.popTempRoot();
+            entries[0] = .{ .key = .{ .string = "year" }, .value = .{ .number = @floatFromInt(p.year) } };
+            entries[1] = .{ .key = .{ .string = "month" }, .value = .{ .number = @floatFromInt(p.month) } };
+            entries[2] = .{ .key = .{ .string = "day" }, .value = .{ .number = @floatFromInt(p.day) } };
+            entries[3] = .{ .key = .{ .string = "hour" }, .value = .{ .number = @floatFromInt(p.hour) } };
+            entries[4] = .{ .key = .{ .string = "min" }, .value = .{ .number = @floatFromInt(p.min) } };
+            entries[5] = .{ .key = .{ .string = "sec" }, .value = .{ .number = @floatFromInt(p.sec) } };
+            entries[6] = .{ .key = .{ .string = "ms" }, .value = .{ .number = @floatFromInt(p.ms) } };
+            entries[7] = .{ .key = .{ .string = "weekday" }, .value = .{ .number = @floatFromInt(p.weekday) } };
+            obj.* = .{ .map_managed = entries[0..field_count] };
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .object = obj });
+        },
+        .time_since => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const recv = vms.vmState().stack[vms.vmState().stack_top - 1];
+            const ms = try timeGetMs(recv);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .number = timeNowMs() - ms });
+        },
+        .time_sub => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const recv = vms.vmState().stack[top - 2];
+            const other = vms.vmState().stack[top - 1];
+            const ms_a = try timeGetMs(recv);
+            const ms_b = try timeGetMs(other);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .number = ms_a - ms_b });
+        },
+        .time_unix => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const recv = vms.vmState().stack[vms.vmState().stack_top - 1];
+            const ms = try timeGetMs(recv);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .number = @floor(ms / 1000) });
+        },
+        .time_unix_ms => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const recv = vms.vmState().stack[vms.vmState().stack_top - 1];
+            const ms = try timeGetMs(recv);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .number = ms });
+        },
+        .time_until => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const recv = vms.vmState().stack[vms.vmState().stack_top - 1];
+            const ms = try timeGetMs(recv);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .number = ms - timeNowMs() });
+        },
+        else => {},
+    }
 }

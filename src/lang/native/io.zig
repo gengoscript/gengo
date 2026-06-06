@@ -6,6 +6,11 @@ const heap = @import("../../runtime/heap.zig");
 const Value = @import("../value.zig").Value;
 const Object = @import("../value.zig").Object;
 const MapEntry = @import("../value.zig").MapEntry;
+const NativeFnId = @import("native_ids.zig").NativeFnId;
+const NativeFuncObj = @import("../value.zig").NativeFuncObj;
+const host_abi = @import("../../runtime/host_abi.zig");
+const host_abi_mod = @import("host_abi.zig");
+const MaxNativeArgs = @import("native_ids.zig").MaxNativeArgs;
 
 pub fn sprintValue(buf_or_null: ?[]u8, v: Value) !usize {
     switch (v) {
@@ -401,4 +406,85 @@ pub fn nativePrintf(start: usize, argc: u8) !void {
         }
     }
     if (ai != @as(usize, argc)) return error.ArityMismatch;
+}
+
+pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
+    switch (@as(NativeFnId, @enumFromInt(nf.id))) {
+        .io_print => {
+
+            if (!vms.vmState().policy.allow_io) return error.PermissionDenied;
+            const start = vms.vmState().stack_top - argc;
+            var i: usize = 0;
+            while (i < @as(usize, argc)) : (i += 1) io.printValue(vms.vmState().stack[start + i]);
+            var j: usize = 0;
+            while (j < @as(usize, argc)) : (j += 1) _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            try vms.vmPush(.null);
+        },
+        .io_printf => {
+
+            if (!vms.vmState().policy.allow_io) return error.PermissionDenied;
+            const start = vms.vmState().stack_top - argc;
+            try nativePrintf(start, argc);
+            var j: usize = 0;
+            while (j < @as(usize, argc)) : (j += 1) _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            try vms.vmPush(.null);
+        },
+        .io_println => {
+
+            if (!vms.vmState().policy.allow_io) return error.PermissionDenied;
+            if (vms.vmState().policy.native_backend == .host) {
+                try host_abi_mod.ensureHostReady();
+                if ((vms.vmState().host_caps & host_abi.CAP_IO_PRINTLN) != 0) {
+                    if (argc > MaxNativeArgs) return error.ArityMismatch;
+                    const start = vms.vmState().stack_top - argc;
+                    var args_wire: [MaxNativeArgs]host_abi.ValueWire = undefined;
+                    var i: usize = 0;
+                    while (i < @as(usize, argc)) : (i += 1) {
+                        args_wire[i] = try host_abi_mod.wireFromValue(vms.vmState().stack[start + i]);
+                    }
+                    var out: host_abi.ValueWire = .{
+                        .tag = @intFromEnum(host_abi.WireTag.null),
+                        .flags = 0,
+                        .reserved = 0,
+                        .payload = 0,
+                        .len = 0,
+                        .reserved2 = 0,
+                    };
+                    const st = host_abi.nativeCall(.io_println, args_wire[0..argc], &out);
+                    switch (st) {
+                        .ok => {},
+                        .unsupported => return error.HostNativeUnsupported,
+                        .denied => return error.PermissionDenied,
+                        .bad_args => return error.HostNativeBadArgs,
+                        .failed => return error.HostNativeFailed,
+                    }
+                    var j: usize = 0;
+                    while (j < @as(usize, argc)) : (j += 1) _ = try vms.vmPop();
+                    _ = try vms.vmPop();
+                    try vms.vmPush(.null);
+                    return;
+                }
+            }
+            const start = vms.vmState().stack_top - argc;
+            var i: usize = 0;
+            while (i < @as(usize, argc)) : (i += 1) io.printValue(vms.vmState().stack[start + i]);
+            io.write("\n");
+            var j: usize = 0;
+            while (j < @as(usize, argc)) : (j += 1) _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            try vms.vmPush(.null);
+        },
+        .io_sprintf => {
+
+            const start = vms.vmState().stack_top - argc;
+            const out = try nativeSprintf(start, argc);
+            var j: usize = 0;
+            while (j < @as(usize, argc)) : (j += 1) _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        else => {},
+    }
 }
