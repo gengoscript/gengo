@@ -87,6 +87,42 @@ pub fn build(b: *std.Build) void {
     const engine_release_step = b.step("engine-release", "Build engine WASM module (ReleaseFast)");
     engine_release_step.dependOn(&install_engine_release.step);
 
+    // ── Engine (native shared library for host embedding) ──────────────────────
+
+    const engine_native_mod = b.createModule(.{
+        .root_source_file = b.path("src/engine.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    engine_native_mod.addImport("build_options", build_opts_mod);
+    const engine_native = b.addLibrary(.{
+        .linkage = .dynamic,
+        .name = "gengo-engine",
+        .root_module = engine_native_mod,
+    });
+    engine_native.step.dependOn(&preset.step);
+    const install_engine_native = b.addInstallArtifact(engine_native, .{});
+
+    const engine_native_release_mod = b.createModule(.{
+        .root_source_file = b.path("src/engine.zig"),
+        .target = b.graph.host,
+        .optimize = .ReleaseFast,
+    });
+    engine_native_release_mod.addImport("build_options", build_opts_mod);
+    const engine_native_release = b.addLibrary(.{
+        .linkage = .dynamic,
+        .name = "gengo-engine",
+        .root_module = engine_native_release_mod,
+    });
+    engine_native_release.step.dependOn(&preset.step);
+    const install_engine_native_release = b.addInstallArtifact(engine_native_release, .{});
+
+    const engine_native_step = b.step("engine-native", "Build native shared library (Debug)");
+    engine_native_step.dependOn(&install_engine_native.step);
+
+    const engine_native_release_step = b.step("engine-native-release", "Build native shared library (ReleaseFast)");
+    engine_native_release_step.dependOn(&install_engine_native_release.step);
+
     const deploy_cmd = b.addSystemCommand(&.{ "bash", "playground/deploy.sh" });
     deploy_cmd.step.dependOn(&install_engine_debug.step);
     const deploy_step = b.step("deploy", "Build engine WASM module and deploy to playground with cache-busted version");

@@ -29,7 +29,7 @@ pub fn clearWriteOverrides() void {
     werr_override = null;
 }
 
-fn writeAllFd(fd: u8, s: []const u8) void {
+pub fn writeAllFd(fd: u8, s: []const u8) void {
     if (comptime builtin.os.tag == .wasi) {
         var off: usize = 0;
         while (off < s.len) {

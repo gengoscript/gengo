@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const api = @import("runtime/api.zig");
 const heap = @import("runtime/heap.zig");
 const host_abi = @import("runtime/host_abi.zig");
@@ -13,14 +14,31 @@ const MapEntry = @import("lang/value.zig").MapEntry;
 const ValueWire = host_abi.ValueWire;
 const WireTag = host_abi.WireTag;
 
-extern "env" fn gengo_write(ptr: [*]const u8, len: i32, is_stderr: i32) void;
+const is_wasm = builtin.target.cpu.arch == .wasm32;
+const WriteCallback = *const fn (ptr: [*]const u8, len: i32, is_stderr: i32) callconv(.c) void;
+var write_callback: ?WriteCallback = null;
+
+const WriteImpl = if (is_wasm) struct {
+    extern "env" fn gengo_write(ptr: [*]const u8, len: i32, is_stderr: i32) void;
+    pub fn write(ptr: [*]const u8, len: i32, is_stderr: i32) void {
+        gengo_write(ptr, len, is_stderr);
+    }
+} else struct {
+    pub fn write(ptr: [*]const u8, len: i32, is_stderr: i32) void {
+        if (write_callback) |cb| {
+            cb(ptr, len, is_stderr);
+        } else {
+            io.writeAllFd(if (is_stderr != 0) 2 else 1, ptr[0..@intCast(len)]);
+        }
+    }
+};
 
 fn engineWrite(s: []const u8) void {
-    gengo_write(s.ptr, @intCast(s.len), 0);
+    WriteImpl.write(s.ptr, @intCast(s.len), 0);
 }
 
 fn engineWerr(s: []const u8) void {
-    gengo_write(s.ptr, @intCast(s.len), 1);
+    WriteImpl.write(s.ptr, @intCast(s.len), 1);
 }
 
 const MaxEngines = 64;
@@ -458,4 +476,10 @@ export fn engine_last_error_line(handle: i32) i32 {
 export fn engine_last_error_col(handle: i32) i32 {
     const engine = getEngine(handle) orelse return 0;
     return @intCast(engine.last_error_col);
+}
+
+export fn engine_set_write_fn(handle: i32, callback: ?WriteCallback) void {
+    if (comptime is_wasm) return;
+    _ = getEngine(handle) orelse return;
+    write_callback = callback;
 }
