@@ -15,6 +15,10 @@ const ValueWire = host_abi.ValueWire;
 const WireTag = host_abi.WireTag;
 
 const is_wasm = builtin.target.cpu.arch == .wasm32;
+// On WASM all pointers are 32-bit offsets into linear memory; on native they are
+// full-width host pointers.  All exported functions use PtrInt for pointer params
+// so the C header can declare them as `const char *` / `void *` on both targets.
+const PtrInt = if (is_wasm) i32 else usize;
 const WriteCallback = *const fn (ptr: [*]const u8, len: i32, is_stderr: i32) callconv(.c) void;
 var write_callback: ?WriteCallback = null;
 
@@ -55,7 +59,7 @@ const SourceEntry = struct {
 };
 
 const HostModuleFuncDef = struct {
-    name_ptr: u32,
+    name_ptr: PtrInt,
     name_len: u32,
     arity: u32,
 };
@@ -148,12 +152,12 @@ fn getEngine(handle: i32) ?*Engine {
     return &engine_slots[idx].engine;
 }
 
-fn wasmSlice(ptr: i32, len: i32) []const u8 {
+fn wasmSlice(ptr: PtrInt, len: i32) []const u8 {
     if (len <= 0) return "";
     return @as([*]u8, @ptrFromInt(@as(usize, @intCast(ptr))))[0..@as(usize, @intCast(len))];
 }
 
-fn wasmSliceMut(ptr: i32, len: i32) []u8 {
+fn wasmSliceMut(ptr: PtrInt, len: i32) []u8 {
     if (len <= 0) return "";
     return @as([*]u8, @ptrFromInt(@as(usize, @intCast(ptr))))[0..@as(usize, @intCast(len))];
 }
@@ -301,7 +305,7 @@ export fn engine_destroy(handle: i32) void {
     engine_slots[idx].active = false;
 }
 
-export fn engine_run(handle: i32, src_ptr: i32, src_len: i32) i32 {
+export fn engine_run(handle: i32, src_ptr: PtrInt, src_len: i32) i32 {
     const engine = getEngine(handle) orelse return -1;
     const src = wasmSlice(src_ptr, src_len);
     setupHostModules(engine);
@@ -319,7 +323,7 @@ export fn engine_run(handle: i32, src_ptr: i32, src_len: i32) i32 {
     };
 }
 
-export fn engine_run_path(handle: i32, src_ptr: i32, src_len: i32, path_ptr: i32, path_len: i32) i32 {
+export fn engine_run_path(handle: i32, src_ptr: PtrInt, src_len: i32, path_ptr: PtrInt, path_len: i32) i32 {
     const engine = getEngine(handle) orelse return -1;
     const src = wasmSlice(src_ptr, src_len);
     const path = wasmSlice(path_ptr, path_len);
@@ -338,7 +342,7 @@ export fn engine_run_path(handle: i32, src_ptr: i32, src_len: i32, path_ptr: i32
     };
 }
 
-export fn engine_call(handle: i32, name_ptr: i32, name_len: i32, args_ptr: i32, argc: i32, out_ptr: i32) i32 {
+export fn engine_call(handle: i32, name_ptr: PtrInt, name_len: i32, args_ptr: PtrInt, argc: i32, out_ptr: PtrInt) i32 {
     const engine = getEngine(handle) orelse return -1;
     const name = wasmSlice(name_ptr, name_len);
     setupHostModules(engine);
@@ -374,7 +378,7 @@ export fn engine_reset(handle: i32) void {
     engine.runtime.reset();
 }
 
-export fn engine_add_source(handle: i32, path_ptr: i32, path_len: i32, src_ptr: i32, src_len: i32) i32 {
+export fn engine_add_source(handle: i32, path_ptr: PtrInt, path_len: i32, src_ptr: PtrInt, src_len: i32) i32 {
     const engine = getEngine(handle) orelse return -1;
     if (engine.source_count >= MaxSources) return -3;
 
@@ -411,7 +415,7 @@ fn validateModuleName(name: []const u8) bool {
     return true;
 }
 
-export fn engine_register_module(handle: i32, name_ptr: i32, name_len: i32, funcs_ptr: i32, funcs_count: i32) i32 {
+export fn engine_register_module(handle: i32, name_ptr: PtrInt, name_len: i32, funcs_ptr: PtrInt, funcs_count: i32) i32 {
     const engine = getEngine(handle) orelse return -1;
     if (engine.host_module_count >= MaxHostModules) return -3;
     if (funcs_count < 0 or funcs_count > MaxHostModuleFuncs) return -4;
@@ -425,7 +429,7 @@ export fn engine_register_module(handle: i32, name_ptr: i32, name_len: i32, func
 
     const func_defs = @as([*]const HostModuleFuncDef, @ptrFromInt(@as(usize, @intCast(funcs_ptr))))[0..@as(usize, @intCast(funcs_count))];
     for (func_defs, 0..) |fd, i| {
-        const fname = wasmSlice(@intCast(fd.name_ptr), @intCast(fd.name_len));
+        const fname = wasmSlice(fd.name_ptr, @intCast(fd.name_len));
         const flen = @min(@as(usize, @intCast(fname.len)), engine.host_module_func_name_bufs[engine.host_module_count][i].len);
         @memcpy(engine.host_module_func_name_bufs[engine.host_module_count][i][0..flen], fname[0..flen]);
         engine.host_module_func_name_lens[engine.host_module_count][i] = flen;
@@ -458,7 +462,7 @@ fn setupHostModules(engine: *Engine) void {
     });
 }
 
-export fn engine_last_error(handle: i32, out_ptr: i32, out_max_len: i32) i32 {
+export fn engine_last_error(handle: i32, out_ptr: PtrInt, out_max_len: i32) i32 {
     const engine = getEngine(handle) orelse return 0;
     const len = @min(@as(usize, @intCast(engine.last_error_len)), @as(usize, @intCast(@max(out_max_len, 0))));
     if (len > 0 and out_ptr != 0) {

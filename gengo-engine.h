@@ -35,9 +35,9 @@ typedef struct {
 /* ── Host module function descriptor ──────────────────────────────────────── */
 
 typedef struct {
-    uint32_t name_ptr;
-    uint32_t name_len;
-    uint32_t arity;
+    uintptr_t name_ptr; /* pointer to the function name string */
+    uint32_t  name_len;
+    uint32_t  arity;
 } gengo_host_module_func_def_t;
 
 /* ── Write callback (native target only) ──────────────────────────────────── */
