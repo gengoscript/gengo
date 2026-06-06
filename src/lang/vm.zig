@@ -2220,7 +2220,7 @@ fn runInner() !void {
                 const pred = try vmPop();
                 const nt_val = vmState().stack[vmState().stack_top - 1];
                 if (nt_val != .object or nt_val.object.* != .named_type) return error.TypeError;
-                nt_val.object.named_type.predicate = if (pred == .null) null else pred.object;
+                nt_val.object.named_type.predicate = if (pred == .null) null else if (pred == .object) pred.object else return error.TypeError;
             },
 
             .call => {

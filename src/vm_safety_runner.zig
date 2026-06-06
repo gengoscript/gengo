@@ -87,6 +87,22 @@ fn runInstructionBudgetExceeded() !void {
     return error.TestFailed;
 }
 
+fn runSetNamedPredicateTypeError() !void {
+    resetAll();
+    const nt = heap.allocObject() orelse return error.OutOfMemory;
+    nt.* = .{ .named_type = .{
+        .name = "TestType",
+        .qualified_name = "TestType",
+        .base = .int,
+    } };
+    try chunk.emitConst(.{ .object = nt }, 1);
+    try chunk.emitConst(.{ .number = 42 }, 1);
+    try chunk.emitOp(.set_named_predicate, 1);
+    try chunk.emitOp(.halt, 1);
+    vm.run() catch |e| return expectError("set-named-predicate-type-error", error.TypeError, e);
+    return error.TestFailed;
+}
+
 fn runRuntimeIsolation() !void {
     const alloc = std.heap.page_allocator;
     const rt1 = try alloc.create(Runtime);
@@ -149,6 +165,9 @@ export fn _start() void {
         std.os.wasi.proc_exit(1);
     };
     runInstructionBudgetExceeded() catch {
+        std.os.wasi.proc_exit(1);
+    };
+    runSetNamedPredicateTypeError() catch {
         std.os.wasi.proc_exit(1);
     };
     runRuntimeIsolation() catch {
