@@ -85,6 +85,13 @@ zig build -Dpreset=dev engine-build
 # produces build/gengo-engine.wasm
 ```
 
+Build the native shared library:
+
+```bash
+zig build -Dpreset=dev engine-native
+# produces zig-out/lib/libgengo-engine.so (Linux)
+```
+
 Run tests:
 
 ```bash
@@ -163,7 +170,7 @@ wasmtime --dir . gengo-runtime.wasm script.gengo
 
 Build with `zig build -Dpreset=dev engine-build` — produces `build/gengo-engine.wasm`.
 
-The engine exposes 8 exports over WASM linear memory:
+The engine exposes the following exports over WASM linear memory (also available in the native shared library via `gengo-engine.h`):
 
 | Export | Description |
 |---|---|
@@ -174,11 +181,36 @@ The engine exposes 8 exports over WASM linear memory:
 | `engine_call(handle, name_ptr, name_len, args_ptr, argc, out_ptr) → i32` | Call a named function |
 | `engine_reset(handle)` | Clear runtime state, reuse handle |
 | `engine_add_source(handle, path_ptr, path_len, src_ptr, src_len) → i32` | Register an in-memory module |
+| `engine_register_module(handle, name_ptr, name_len, funcs_ptr, funcs_count) → i32` | Register a host-defined module |
+| `engine_set_write_fn(handle, callback)` | Set write callback (native target) |
 | `engine_last_error(handle, out_ptr, max_len) → i32` | Retrieve last error message |
+| `engine_last_error_line(handle) → i32` | Source line of last error (1-based) |
+| `engine_last_error_col(handle) → i32` | Column of last error (1-based) |
 
-Up to 64 engine instances may be live at once. Values cross the boundary as `ValueWire` — a 24-byte struct encoding null, boolean, number, and string.
+Up to 64 engine instances may be live at once. Values cross the boundary as `ValueWire` — a 24-byte struct encoding null, boolean, number, string, array, and map.
 
 See [docs/engine-api.md](docs/engine-api.md) for the full ABI reference including `ValueWire` layout, return codes, and JavaScript helpers.
+
+## Native Shared Library
+
+`libgengo-engine` is the same API as `gengo-engine.wasm` compiled as a native shared library for in-process embedding from C, C++, or any FFI.
+
+```bash
+zig build -Dpreset=dev engine-native
+# zig-out/lib/libgengo-engine.so
+```
+
+Include `gengo-engine.h` and link against the library. On 64-bit hosts all pointer parameters are `uintptr_t`.
+
+## TypeScript SDK
+
+`sdk/typescript/` provides a typed TypeScript wrapper around `gengo-engine.wasm`:
+
+```bash
+cd sdk/typescript && npm install && npm run build
+```
+
+It exports a `GengoEngine` class with typed `GVal` encoding so you do not need to manipulate `ValueWire` directly.
 
 ## Zig Embedding
 

@@ -2,6 +2,156 @@
 
 This changelog tracks notable language/runtime changes by implementation date.
 
+## 2026-06-06
+
+### Language — Predicate Subtypes
+
+Named types may include a predicate body that is evaluated at construction time:
+
+```gengo
+type Port int predicate func(x) { return x >= 1 && x <= 65535 }
+p := Port(80)    // ok
+p2 := Port(0)    // PredicateViolation
+```
+
+- The predicate function takes the raw value and must return `boolean`.
+- Construction raises `PredicateViolation` if the predicate returns `false`.
+- The body compiles as a closure and may capture variables from the enclosing scope.
+
+### Language — `std.string.contains` + `std.core.contains` TypeError
+
+- `std.string.contains(s, sub)` — new function; returns `true` if `sub` appears anywhere in `s`.
+- `std.core.contains(arr, value)` now raises `TypeError` when the first argument is not an array.
+
+### Embedding — Host ABI v2
+
+Extended host ABI with five new call IDs for `std.conv.*` and `std.core.bytelen`:
+
+| ID | Name |
+|----|------|
+| `5` | `core_bytelen` |
+| `6` | `conv_to_int` |
+| `7` | `conv_to_float` |
+| `8` | `conv_to_bool` |
+| `9` | `conv_to_string` |
+
+ABI version bumped to `2`. Capability bits `3`–`7` guard the new calls; the VM falls back to embedded implementations when a capability bit is absent.
+
+### Embedding — Host-Defined Module Registration
+
+Host code can register named modules that Gengo scripts import by name:
+
+```c
+gengo_host_module_func_def_t funcs[] = {
+    { .name_ptr = (uintptr_t)"add", .name_len = 3, .arity = 2 },
+};
+engine_register_module(handle, "mylib", 5, funcs, 1);
+```
+
+Scripts import with the `@module:` prefix: `mylib := import("@module:mylib")`. Calls are dispatched via the host's `nativeCallRaw` implementation.
+
+New engine exports: `engine_register_module`, `engine_set_write_fn`, `engine_last_error_line`, `engine_last_error_col`.
+
+### Embedding — ValueWire Arrays and Maps
+
+Two new `ValueWire` tags:
+
+| Tag | Name | `payload` | `len` |
+|-----|------|-----------|-------|
+| `4` | `array` | pointer to element sequence in engine memory | element count |
+| `5` | `map` | pointer to interleaved key/value pairs in engine memory | pair count |
+
+### Embedding — Native Shared Library (`libgengo-engine`)
+
+New build targets produce a native shared library with the same API as `gengo-engine.wasm`:
+
+```bash
+zig build -Dpreset=dev engine-native          # debug build
+zig build -Dpreset=dev engine-native-release  # optimised build
+```
+
+Output: `zig-out/lib/libgengo-engine.so` (Linux), `.dylib` (macOS), `.dll` (Windows).
+
+The C header `gengo-engine.h` documents the full API. All pointer parameters use `uintptr_t` so the API is correct on 64-bit hosts as well as 32-bit WASM.
+
+`engine_set_write_fn` must be called to receive output; the native target has no WASM import shim to capture writes.
+
+### Embedding — TypeScript SDK
+
+`sdk/typescript/` — a TypeScript wrapper for `gengo-engine.wasm` with a typed `GVal` encoding/decoding layer and a high-level `GengoEngine` class.
+
+### REPL Improvements
+
+- **Auto-print** — top-level expression results are automatically printed in the interactive session.
+- **Typed redeclaration detection** — redeclaring a typed global with a conflicting type is now a compile error.
+- **Error display** — compile errors show the source line with a caret pointing at the bad token.
+
+Invoke the REPL by running `gengo` with no arguments on an interactive terminal.
+
+### Platform — Windows Native CLI
+
+The native CLI now builds and runs on Windows without libc (`no-libc` mode). Release CI re-enabled for `x86_64-windows`.
+
+### Removed — `std.time.sleep`
+
+`std.time.sleep` was removed from the standard library.
+
+---
+
+## 2026-06-05
+
+### Language — Compile-time Field Validation on Imported Modules
+
+The compiler now validates field accesses on imported module namespaces at compile time. Accessing a name that is not exported by the module raises a `CompileError` instead of silently producing `null` at runtime.
+
+### Runtime — Typed Array Element Enforcement
+
+Variable declarations typed as `[T]` (e.g., `items [int] = ...`) now enforce element types on every assignment, not only at initial construction.
+
+### VM / GC Bug Fixes
+
+- GC marking: verify that an iterator's source object is live before tracing its children (#28).
+- GC: retry closure upvalue bump allocation after triggering a collection (#27).
+- `for-in break`: correctly clean up the iteration stack frame to avoid a stack leak (#29).
+- `cast_int` from float: bounds-check before truncating to prevent integer wrap-around (#30).
+- Rune cache: fix overflow flag and validity ordering for strings near the cache boundary (#31).
+- Defer + panic: release temp GC roots when `retSlowPath` fails mid-defer execution (#32).
+
+---
+
+## 2026-06-04
+
+### Language — Tail-Call Optimization
+
+Self-recursive and mutually recursive tail calls are now compiled into back-edge jumps rather than new call frames. Deep recursion (tested at 10 000 levels) no longer overflows the call stack.
+
+### Standard Library — `std.regexp`
+
+Regular expression matching with a backtracking NFA engine:
+
+```gengo
+std := import("std")
+assert(std.regexp.match("^hello", "hello world"))
+found := std.regexp.find("world", "hello world")  // "world"
+all   := std.regexp.find_all("a", "banana")        // ["a", "a", "a"]
+r     := std.regexp.replace("world", "hello world", "there")
+parts := std.regexp.split(",", "a,b,c")            // ["a", "b", "c"]
+```
+
+`std.regexp.compile(pattern)` returns a reusable compiled regexp object that also supports method-call syntax (`re.match(s)`, `re.find(s)`, etc.).
+
+Errors: `InvalidRegexp` on a malformed pattern.
+
+Supported syntax: `.` `*` `+` `?` `^` `$` `|` `()` `[...]` `[^...]` character classes and ranges, `\d` `\D` `\w` `\W` `\s` `\S` shorthands.
+
+### Standard Library — `std.io.sprintf`
+
+`std.io.sprintf(fmt, ...args)` — like `std.io.printf` but returns the formatted string instead of printing it.
+
+Additional verb: `%x` / `%X` — hexadecimal integer.
+
+---
+
 ## 2026-06-03
 
 ### Build — Native Zig Test/Bench Runners

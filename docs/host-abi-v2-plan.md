@@ -1,5 +1,7 @@
 # gengo Host ABI v2 Plan
 
+> **Status: implemented** (`a918f30`). This document is the original design record. For the current ABI definition see `docs/host-abi.md`.
+
 ## Goal
 
 Close parity gaps for host-dispatched std natives while preserving current v1 compatibility.

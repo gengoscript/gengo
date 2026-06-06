@@ -10,7 +10,8 @@
 Default (dev preset):
 
 ```bash
-zig build -Dpreset=dev wasi
+zig build -Dpreset=dev wasi    # WASM/WASI runtime
+zig build -Dpreset=dev cli     # native CLI binary
 ```
 
 Tiny preset:
@@ -25,7 +26,41 @@ Stress preset:
 zig build -Dpreset=stress wasi
 ```
 
-## Run a Script
+## Native CLI
+
+```bash
+zig build -Dpreset=dev cli
+./zig-out/bin/gengo script.gengo
+```
+
+Run with no arguments on an interactive terminal to start the REPL:
+
+```bash
+./zig-out/bin/gengo
+# Gengo REPL  (Ctrl+D to exit)
+```
+
+The REPL auto-prints the value of top-level expressions.
+
+## Engine Libraries
+
+WASM engine:
+
+```bash
+zig build -Dpreset=dev engine-build
+# build/gengo-engine.wasm
+```
+
+Native shared library (C/C++ FFI, same API as WASM):
+
+```bash
+zig build -Dpreset=dev engine-native
+# zig-out/lib/libgengo-engine.so  (Linux)
+```
+
+See `gengo-engine.h` for the C API and `docs/engine-api.md` for the full reference.
+
+## Run a Script (WASI)
 
 ```bash
 wasmtime --dir . ./build/gengo-runtime.wasm -- path/to/script.gengo

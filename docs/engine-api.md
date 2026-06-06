@@ -1,6 +1,11 @@
 # Gengo Engine API
 
-`gengo-engine.wasm` exposes a C-compatible WASM API for host-driven embedding. It is the primary integration point for non-Zig hosts (JavaScript, Python, Rust FFI, etc.) that need to run and call Gengo scripts from a WebAssembly host.
+The engine exposes a C-compatible API for host-driven embedding. It is the primary integration point for non-Zig hosts (JavaScript, Python, C/C++, Rust FFI, etc.).
+
+Two delivery targets share the same API:
+
+- **`gengo-engine.wasm`** — WebAssembly library for browser or WASI hosts
+- **`libgengo-engine.so/.dylib/.dll`** — native shared library for in-process embedding
 
 For Zig hosts, use `runtime/api.zig` directly — see `docs/embedding.md`.
 
@@ -30,6 +35,14 @@ if (handle === 0) throw new Error("engine pool exhausted");
 ### `engine_destroy(handle: i32) → void`
 
 Releases the engine instance identified by `handle`. The handle is invalid after this call.
+
+---
+
+### `engine_set_write_fn(handle: i32, callback: fn(ptr, len, is_stderr) → void) → void`
+
+Registers a write callback for the engine. In the WASM target the host provides `gengo_write` as a WASM import instead. In the native shared library target this must be called before any `engine_run`; without it output goes to stdout/stderr directly.
+
+Passing `NULL` resets to direct stdout/stderr output.
 
 ---
 
@@ -128,6 +141,31 @@ instance.exports.engine_add_source(
 
 ---
 
+### `engine_register_module(handle: i32, name_ptr: i32, name_len: i32, funcs_ptr: i32, funcs_count: i32) → i32`
+
+Registers a host-defined module that Gengo scripts can import using the `@module:` prefix.
+
+```js
+// In Gengo: mylib := import("@module:mylib")
+```
+
+`funcs_ptr` points to an array of `funcs_count` function descriptors, each 16 bytes:
+
+| Offset | Size | Field | Description |
+|--------|------|-------|-------------|
+| 0 | 4/8 | `name_ptr` | Pointer to function name string (`i32` in WASM, `uintptr_t` in native) |
+| 4/8 | 4 | `name_len` | Byte length of function name |
+| 8/12 | 4 | `arity` | Number of arguments the function takes |
+
+Returns:
+- `0` — registered successfully
+- `-1` — invalid handle
+- `-3` — module table full
+- `-4` — `funcs_count` out of range
+- `-5` — invalid module name
+
+---
+
 ### `engine_last_error(handle: i32, out_ptr: i32, out_max_len: i32) → i32`
 
 Copies the last error message into `out_ptr`. Returns the number of bytes written (0 if no error or invalid handle). The message is not null-terminated.
@@ -139,6 +177,18 @@ function readError(handle) {
     return new TextDecoder().decode(new Uint8Array(mem.buffer, buf, n));
 }
 ```
+
+---
+
+### `engine_last_error_line(handle: i32) → i32`
+
+Returns the 1-based source line of the last error, or `0` if no error.
+
+---
+
+### `engine_last_error_col(handle: i32) → i32`
+
+Returns the 1-based column of the last error, or `0` if no error.
 
 ---
 
@@ -162,9 +212,13 @@ function readError(handle) {
 | 0     | `null`    | ignored                  | 0     |
 | 1     | `boolean` | `1` = true, `0` = false  | 0     |
 | 2     | `number`  | IEEE 754 double (`f64`)  | 0     |
-| 3     | `string`  | WASM memory pointer      | byte length |
+| 3     | `string`  | pointer into engine memory | byte length |
+| 4     | `array`   | pointer to element sequence in engine memory | element count |
+| 5     | `map`     | pointer to interleaved key/value `ValueWire` pairs in engine memory | pair count |
 
 For string return values from `engine_call`, the pointer points into the engine's internal scratch buffer. Copy the bytes out before making another call.
+
+For array and map values, elements are laid out contiguously in engine memory as `ValueWire` structs. Map entries are interleaved: key wire, value wire, key wire, value wire, … for `len` pairs total.
 
 ### JavaScript helper (minimal)
 
@@ -238,12 +292,31 @@ Each engine handle is independent. Multiple handles may be used from the same ho
 
 ## Build
 
+### WASM
+
 ```bash
 zig build -Dpreset=dev engine-build
 # produces: build/gengo-engine.wasm
 ```
 
-To run the engine integration tests:
+### Native Shared Library
+
+```bash
+zig build -Dpreset=dev engine-native          # debug
+zig build -Dpreset=dev engine-native-release  # optimised
+# produces: zig-out/lib/libgengo-engine.so  (Linux)
+#                         libgengo-engine.dylib (macOS)
+#                         gengo-engine.dll      (Windows)
+```
+
+Link against the library and include `gengo-engine.h`. All pointer parameters use `uintptr_t` and work correctly on both 32-bit and 64-bit hosts.
+
+**Native-specific notes:**
+
+- Call `engine_set_write_fn(handle, callback)` before running any script to capture output; without it output goes directly to stdout/stderr.
+- `engine_set_write_fn` is a no-op in the WASM target (the host provides `gengo_write` as a WASM import).
+
+### Engine Integration Tests
 
 ```bash
 zig build -Dpreset=dev unit

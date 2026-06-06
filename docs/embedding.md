@@ -10,6 +10,9 @@
 - `max_ops: ?u64 = null`
 - `module_sources: []const api.SourceEntry = &.{}`
 - `module_source_provider: ?api.SourceProvider = null`
+- `host_modules: []const api.HostModuleDesc = &.{}`
+  - each entry has a module name and a slice of `HostModuleFuncDesc` (name + arity)
+  - scripts import with `@module:` prefix: `mymod := import("@module:mymod")`
 - `api.Runtime`
 - `api.RuntimeResult`
   - `.ok`

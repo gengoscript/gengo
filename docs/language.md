@@ -26,6 +26,7 @@ Companion guides:
   - path plus `.gengo`
   - path plus `/mod.gengo`
 - Source modules return struct-backed namespace objects containing `pub` exports.
+- Field accesses on imported module objects are validated at compile time; accessing a name that is not exported raises a `CompileError`.
 - Builtins must be called via namespace access (dot + call), for example:
   - `std.io.println(...)`
   - `std.core.len(x)`
@@ -463,6 +464,9 @@ Current namespace surface:
 - `std.string.split_once(s, sep)`
   - returns `(head, tail)` split at the first `sep`
   - returns `(null, null)` if `sep` is absent
+- `std.string.contains(s, sub)`
+  - returns `true` if `s` contains `sub` as a substring, else `false`
+  - empty `sub` always returns `true`
 - `std.string.builder()`
   - creates a mutable string accumulator; use `.write(s)`, `.str()`, `.reset()`
   - amortized O(total_bytes) append cost; avoids O(n²) from repeated `s = s + piece`
@@ -574,6 +578,27 @@ Current namespace surface:
 - Nominal semantics:
   - named types are not interchangeable, even with same base type
   - explicit constructor is required (`UserId("u-1")`)
+
+### Predicate Subtypes
+
+Named types may include a predicate body that is evaluated at construction time:
+
+```gengo
+type Port int predicate func(x) { return x >= 1 && x <= 65535 }
+p := Port(80)    // ok
+p2 := Port(0)    // PredicateViolation
+```
+
+- The predicate function takes one parameter (the raw value) and must return `boolean`.
+- If the predicate returns `false`, construction raises `PredicateViolation`.
+- Predicates may be combined with `range` constraints; both are checked.
+- The body compiles as a closure and may capture variables from the enclosing scope:
+
+```gengo
+min_val := 10
+max_val := 20
+type Bounded int predicate func(x) { return x >= min_val && x <= max_val }
+```
 
 ## 13. Enums
 

@@ -20,10 +20,14 @@ std := import("std")
 
 ### `std.io.printf(fmt, ...args)`
 - `fmt` is string.
-- Supported verbs: `%v`, `%s`, `%d`, `%f`, `%t`, `%%`.
+- Supported verbs: `%v`, `%s`, `%d`, `%f`, `%t`, `%x`, `%X`, `%%`.
 - Errors:
   - `ArityMismatch` when placeholder count and args differ
   - `TypeError` when arg type does not match verb
+
+### `std.io.sprintf(fmt, ...args)`
+- Like `std.io.printf` but returns the formatted string instead of printing it.
+- Same verbs and error semantics as `std.io.printf`.
 
 ## std.core
 
@@ -158,8 +162,44 @@ std := import("std")
 - Returns `(head, tail)` split on the first occurrence of `sep`
 - Returns `(null, null)` if `sep` is not present
 
+### `std.string.contains(s, sub)`
+- Returns `true` if `sub` appears anywhere in `s`, else `false`
+- Empty `sub` always returns `true`
+
 ### `std.string.builder()`
 - Creates mutable string builder with `.write`, `.str`, and `.reset`
+
+## std.math
+
+### `std.math.abs(x)`
+- Absolute value of `x`
+
+### `std.math.sqrt(x)`
+- Square root of `x`
+
+### `std.math.floor(x)` / `std.math.ceil(x)` / `std.math.round(x)`
+- Floor, ceiling, nearest integer (half-away-from-zero)
+
+### `std.math.sin(x)` / `std.math.cos(x)` / `std.math.tan(x)`
+- Trigonometric functions; argument in radians
+
+### `std.math.log(x)` / `std.math.log2(x)` / `std.math.log10(x)`
+- Natural, base-2, and base-10 logarithms
+
+### `std.math.pow(base, exp)`
+- `base` raised to the power `exp`
+
+### `std.math.min(a, b)` / `std.math.max(a, b)`
+- Minimum / maximum of two numbers
+
+### `std.math.pi`
+- π ≈ 3.14159265358979… (constant)
+
+### `std.math.e`
+- Euler's number ≈ 2.71828182845904… (constant)
+
+### `std.math.inf`
+- Positive infinity (constant)
 
 ## std.rand
 
@@ -198,6 +238,33 @@ std := import("std")
 
 ### `std.json.valid(s)`
 - Returns `true` if `s` is valid JSON, `false` otherwise
+
+## std.regexp
+
+Backtracking NFA engine. All functions accept either a pattern string or a compiled regexp object returned by `std.regexp.compile`.
+
+Supported syntax: `.` `*` `+` `?` `^` `$` `|` `()` `[...]` `[^...]` character ranges, `\d` `\D` `\w` `\W` `\s` `\S` shorthands.
+
+Errors: `InvalidRegexp` on a malformed pattern.
+
+### `std.regexp.match(pattern, s)`
+- Returns `true` if `pattern` matches anywhere in `s`
+
+### `std.regexp.find(pattern, s)`
+- Returns the first matching substring, or `null` if not found
+
+### `std.regexp.find_all(pattern, s)`
+- Returns array of all non-overlapping matches
+
+### `std.regexp.replace(pattern, s, repl)`
+- Replaces first occurrence of `pattern` in `s` with `repl`; returns new string
+
+### `std.regexp.split(pattern, s)`
+- Splits `s` at each match of `pattern`; returns array of strings
+
+### `std.regexp.compile(pattern)`
+- Compiles `pattern` into a reusable regexp object
+- The object supports method-call syntax: `re.match(s)`, `re.find(s)`, `re.find_all(s)`, `re.replace(s, repl)`, `re.split(s)`
 
 ## std.template
 
