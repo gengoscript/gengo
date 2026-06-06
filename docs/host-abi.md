@@ -1,6 +1,9 @@
-# gengo Host ABI v1
+# gengo Host ABI v2
 
-This document defines the current host bridge used when gengo VM native backend is set to `host`.
+This document defines the host bridge used when gengo VM native backend is set to `host`.
+
+**Version 2** adds `core_bytelen` and `std.conv.*` dispatch on top of the v1 base.  
+See `docs/host-abi-v2-plan.md` for the design doc.
 
 ## Import
 
@@ -19,7 +22,7 @@ The guest imports one function from module `gengo_host`:
 - `len: u32`
 - `reserved2: u32`
 
-Supported tags currently:
+Supported tags:
 
 - `0`: null
 - `1`: boolean (`payload` is `0` or `1`)
@@ -38,28 +41,43 @@ Return value from `gengo_native_call`:
 
 ## Call IDs
 
-- `0`: `abi_version` (no args, returns number)
-- `1`: `io_println` (variadic args, returns null)
-- `2`: `core_len` (1 arg, returns number)
-- `3`: `host_caps` (no args, returns number bitmask)
-- `4`: `core_append` (variadic args, returns array value)
+| ID | Name | Args | Returns |
+|----|------|------|---------|
+| `0` | `abi_version` | none | number |
+| `1` | `io_println` | variadic | null |
+| `2` | `core_len` | 1 | number |
+| `3` | `host_caps` | none | number (bitmask) |
+| `4` | `core_append` | variadic | array value |
+| `5` | `core_bytelen` | 1 | number |
+| `6` | `conv_to_int` | 1 | number |
+| `7` | `conv_to_float` | 1 | number |
+| `8` | `conv_to_bool` | 1 | boolean |
+| `9` | `conv_to_string` | 1 | string |
 
 ## ABI Version
 
-- Current ABI version is `1`.
+- Current ABI version is `2`.
 - VM rejects host mode if `abi_version` does not match exactly.
+- ABI `1` hosts can be upgraded by adding the new call IDs and capability bits; the version check is the only breaking gate.
 
 ## Capability Bits (`host_caps`)
 
-- bit `0` (`1 << 0`): supports `io_println`
-- bit `1` (`1 << 1`): supports `core_len`
-- bit `2` (`1 << 2`): supports `core_append`
+| Bit | Constant | Native |
+|-----|----------|--------|
+| `0` (`1 << 0`) | `CAP_IO_PRINTLN` | `io_println` |
+| `1` (`1 << 1`) | `CAP_CORE_LEN` | `core_len` |
+| `2` (`1 << 2`) | `CAP_CORE_APPEND` | `core_append` |
+| `3` (`1 << 3`) | `CAP_CORE_BYTELEN` | `core_bytelen` |
+| `4` (`1 << 4`) | `CAP_CONV_TO_INT` | `conv_to_int` |
+| `5` (`1 << 5`) | `CAP_CONV_TO_FLOAT` | `conv_to_float` |
+| `6` (`1 << 6`) | `CAP_CONV_TO_BOOL` | `conv_to_bool` |
+| `7` (`1 << 7`) | `CAP_CONV_TO_STRING` | `conv_to_string` |
 
 VM behavior:
 
 - In host backend, VM queries `abi_version` and `host_caps` before first host native use.
 - If a capability bit is absent, the VM falls back to its embedded implementation for that native; no error is raised.
-- Natives that are VM-local (for example `core.gc`, `core.gc_stats`, `core.error`, `std.conv.*`) execute in guest VM in both `embedded` and `host` backends.
+- Natives that are VM-local (for example `core.gc`, `core.gc_stats`, `core.error`) execute in guest VM in both `embedded` and `host` backends.
 
 ## Safety Notes
 
