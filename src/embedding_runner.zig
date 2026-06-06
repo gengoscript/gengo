@@ -141,6 +141,25 @@ fn expectRunPathWithSources() void {
     }
 }
 
+fn expectPredicatePanicLocation() void {
+    const rt = makeRt(.{ .allow_io = false });
+    const res = rt.run(
+        \\type Bad int predicate func(x) {
+        \\    arr := []
+        \\    return arr[0] == x
+        \\}
+        \\b := Bad(5)
+    );
+    switch (res) {
+        .runtime_error => |e| {
+            // The actual fault is on line 3 (arr[0] inside predicate body),
+            // not line 5 (the Bad(5) constructor call site).
+            if (e.line != 3) fail("embedding FAIL: predicate panic line wrong\n");
+        },
+        else => fail("embedding FAIL: expected runtime_error from predicate panic\n"),
+    }
+}
+
 fn expectRunPathWithSourceProvider() void {
     const entries = [_]api.SourceEntry{
         .{
@@ -184,6 +203,7 @@ export fn _start() void {
     expectCallAndStatePersistence();
     expectMaxOps();
     expectRunPathWithSources();
+    expectPredicatePanicLocation();
     expectRunPathWithSourceProvider();
     out("embedding-api OK\n");
     std.os.wasi.proc_exit(0);

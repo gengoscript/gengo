@@ -153,7 +153,12 @@ fn enumTypeAllocValue(obj: *Object, member_name: []const u8) !Value {
 fn checkNamedTypePredicate(nt_obj: *Object, inner: Value) !void {
     const nt = nt_obj.named_type;
     if (nt.predicate) |pred| {
-        const result = try callFunction(.{ .object = pred }, &[_]Value{inner});
+        const result = callFunction(.{ .object = pred }, &[_]Value{inner}) catch |err| {
+            if (err != error.PredicateFailed) {
+                vms.setRuntimeErr("{s}: inside predicate for {s}", .{ @errorName(err), nt.name });
+            }
+            return err;
+        };
         if (result != .boolean or !result.boolean) {
             vms.setRuntimeErr("predicate failed for {s}", .{nt.name});
             return error.PredicateFailed;
@@ -2357,9 +2362,13 @@ fn runDeferredCall(deferred: Value) anyerror!void {
 fn runPanicUnwind(orig_err: anyerror) anyerror!void {
     var current_err = orig_err;
     vmState().recovered = false;
-    vmState().panic_line = 0;
-    vmState().panic_col = 0;
-    vmState().panic_depth = 0;
+    // If panic_line is already non-zero, a deeper run() has already captured the
+    // true fault location (e.g. inside a predicate body). Preserve it rather than
+    // overwriting with the outer call site (e.g. the named-type constructor call).
+    if (vmState().panic_line == 0) {
+        vmState().panic_col = 0;
+        vmState().panic_depth = 0;
+    }
     vmState().is_panicking = true;
     if (vmState().has_pending_panic_value) {
         vmState().panic_value = vmState().pending_panic_value;
