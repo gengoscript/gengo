@@ -3046,6 +3046,8 @@ pub const Compiler = struct {
             const prop = self.cur;
             self.advance();
             if (self.match(.lparen)) {
+                try self.checkStdNamespaceField(prop.src, line);
+                try self.checkImportModuleField(prop.src, line);
                 var argc: u8 = 0;
                 if (!self.check(.rparen)) {
                     while (true) {
@@ -3056,8 +3058,6 @@ pub const Compiler = struct {
                     }
                 }
                 try self.consume(.rparen);
-                try self.checkStdNamespaceField(prop.src, line);
-                try self.checkImportModuleField(prop.src, line);
                 try chunk.emitInvokeMethod(prop.src, argc, line);
                 return;
             }
