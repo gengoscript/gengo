@@ -2,6 +2,9 @@ const std = @import("std");
 const api = @import("runtime/api.zig");
 const io = @import("runtime/io.zig");
 const Value = @import("lang/value.zig").Value;
+const Object = @import("lang/value.zig").Object;
+const vms = @import("lang/vm_state.zig");
+const vmgc = @import("lang/vm_gc.zig");
 
 fn writeAll(fd: std.os.wasi.fd_t, s: []const u8) void {
     var off: usize = 0;
@@ -189,6 +192,38 @@ fn testIO() void {
     out("  std.io hook: OK\n");
 }
 
+fn testHostModules() void {
+    const host_funcs = [_]api.HostModuleFuncDesc{
+        .{ .name = "query", .arity = 2, .call_id = 0x1000 },
+        .{ .name = "insert", .arity = 1, .call_id = 0x1001 },
+    };
+    const host_mods = [_]api.HostModuleDesc{
+        .{ .name = "mydb", .functions = &host_funcs },
+    };
+    const rt = makeRt(.{ .allow_io = false, .native_backend = .host, .host_modules = &host_mods });
+
+    const res = rt.run(
+        \\db := import("mydb")
+        \\func testQuery() {
+        \\    _ = db.query("SELECT 1", [])
+        \\}
+    );
+    switch (res) {
+        .ok => {},
+        else => fail("engine FAIL: host module compile failed\n"),
+    }
+
+    // Calling a host function should produce a runtime error
+    // (no real host backend is available in WASI test environment)
+    const call_res = rt.call("testQuery", &.{});
+    switch (call_res) {
+        .runtime_error => {},
+        else => fail("engine FAIL: expected runtime error for host call\n"),
+    }
+
+    out("  host modules: OK\n");
+}
+
 fn testReplIncremental() void {
     const rt = initWithAllowIO(false);
 
@@ -212,6 +247,88 @@ fn testReplIncremental() void {
     out("  repl incremental: OK\n");
 }
 
+fn testArrayWireResult() void {
+    const rt = initWithAllowIO(false);
+    const res = rt.run(
+        \\func makeArr() []int { return [1, 2, 3] }
+    );
+    if (res != .ok) fail("engine FAIL: array_wire setup\n");
+
+    // engine_call returns Value, not wire - access array directly
+    const call_res = rt.call("makeArr", &.{});
+    switch (call_res) {
+        .ok => |v| {
+            if (v != .object) fail("engine FAIL: expected object\n");
+            const items = vms.asArraySlice(v.object);
+            if (items.len != 3) fail("engine FAIL: expected 3 items\n");
+            if (items[0] != .number or items[0].number != 1) fail("engine FAIL: expected 1\n");
+            if (items[1] != .number or items[1].number != 2) fail("engine FAIL: expected 2\n");
+            if (items[2] != .number or items[2].number != 3) fail("engine FAIL: expected 3\n");
+        },
+        else => fail("engine FAIL: array_wire call\n"),
+    }
+
+    out("  array wire result: OK\n");
+}
+
+fn testMapWireResult() void {
+    const rt = initWithAllowIO(false);
+    const res = rt.run(
+        \\m := {"a": 1, "b": 2}
+        \\func readMap(k string) int { return m[k] }
+    );
+    if (res != .ok) fail("engine FAIL: map_wire setup\n");
+
+    const call_res = rt.call("readMap", &.{.{ .string = "b" }});
+    switch (call_res) {
+        .ok => |v| {
+            if (v != .number or v.number != 2) fail("engine FAIL: expected 2\n");
+        },
+        else => fail("engine FAIL: map_wire call\n"),
+    }
+
+    // Also verify the global map is accessible
+    const global_m = rt.call("readMap", &.{.{ .string = "a" }});
+    switch (global_m) {
+        .ok => |v| {
+            if (v != .number or v.number != 1) fail("engine FAIL: expected 1\n");
+        },
+        else => fail("engine FAIL: map_wire call a\n"),
+    }
+
+    out("  map wire result: OK\n");
+}
+
+fn testHostModuleArrayArgs() void {
+    const host_funcs = [_]api.HostModuleFuncDesc{
+        .{ .name = "process", .arity = 2, .call_id = 0x1002 },
+    };
+    const host_mods = [_]api.HostModuleDesc{
+        .{ .name = "proc", .functions = &host_funcs },
+    };
+    const rt = makeRt(.{ .allow_io = false, .native_backend = .host, .host_modules = &host_mods });
+
+    const res = rt.run(
+        \\p := import("proc")
+        \\func testArr() {
+        \\    _ = p.process([1, 2, 3], {"k": "v"})
+        \\}
+    );
+    switch (res) {
+        .ok => {},
+        else => fail("engine FAIL: host_module_array compile failed\n"),
+    }
+
+    // Call should produce runtime error (no real host backend)
+    const call_res = rt.call("testArr", &.{});
+    switch (call_res) {
+        .runtime_error => {},
+        else => fail("engine FAIL: expected runtime error\n"),
+    }
+
+    out("  host module array args: OK\n");
+}
+
 export fn _start() void {
     out("engine runner:\n");
     testInitDestroy();
@@ -223,6 +340,10 @@ export fn _start() void {
     testLastError();
     testIO();
     testReplIncremental();
+    testHostModules();
+    testArrayWireResult();
+    testMapWireResult();
+    testHostModuleArrayArgs();
     out("engine-api OK\n");
     std.os.wasi.proc_exit(0);
 }

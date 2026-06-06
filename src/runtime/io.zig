@@ -241,6 +241,7 @@ pub fn printValue(v: Value) void {
             .closure => write("<closure>"),
             .cell => write("<cell>"),
             .native_function => write("<native-func>"),
+            .host_module_function => write("<host-func>"),
             .struct_type => |st| {
                 write("<struct ");
                 write(st.name);

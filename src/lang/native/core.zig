@@ -303,6 +303,7 @@ pub fn nativeTypeNameValue(v: Value) Value {
             .array, .array_managed => .{ .string = "array" },
             .map, .map_managed, .map_hashed => .{ .string = "map" },
             .native_function => .{ .string = "native_func" },
+            .host_module_function => .{ .string = "host_func" },
             .function, .closure, .named_type_fn => .{ .string = "func" },
             .struct_type => |st| .{ .string = st.name },
             .interface_type => |it| .{ .string = it.name },
@@ -464,6 +465,7 @@ fn deepEqualObject(a: *Object, b: *Object, visits: []DeepEqVisit, visit_len: *us
         .function, .closure, .iterator => return a == b,
         .cell => return try deepEqualValue(a.cell.value, b.cell.value, visits, visit_len),
         .native_function => |anf| { const bnf = b.native_function; return anf.id == bnf.id and anf.arity == bnf.arity; },
+        .host_module_function => |ahf| { const bhf = b.host_module_function; return ahf.call_id == bhf.call_id and ahf.arity == bhf.arity; },
         .struct_type => |ast| return common.streq(ast.qualified_name, b.struct_type.qualified_name),
         .interface_type => |ait| return common.streq(ait.qualified_name, b.interface_type.qualified_name),
         .named_type => |ant| return common.streq(ant.qualified_name, b.named_type.qualified_name),
@@ -571,7 +573,7 @@ fn cloneObject(src: *Object, visits: []CloneVisit, visit_len: *usize) anyerror!V
             return .{ .object = out_obj };
         },
         .dyn_string => |s| return vmgc.makeDynString(s),
-        .function, .closure, .native_function, .struct_type, .interface_type,
+        .function, .closure, .native_function, .host_module_function, .struct_type, .interface_type,
         .named_type, .enum_type, .iterator, .variant_type, .variant_ctor,
         .named_type_fn, .string_builder, .cell => return .{ .object = src },
         .named_value => |nv| {

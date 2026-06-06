@@ -53,6 +53,21 @@ const ModuleRecord = struct {
     }
 };
 
+pub const HostModuleEntry = struct {
+    name: []const u8,
+};
+
+pub const HostModuleFuncDesc = struct {
+    name: []const u8,
+    arity: u8,
+    call_id: u16,
+};
+
+pub const HostModuleDesc = struct {
+    name: []const u8,
+    functions: []const HostModuleFuncDesc,
+};
+
 pub const Session = struct {
     modules: [MaxModules]ModuleRecord = undefined,
     module_count: usize = 0,
@@ -63,6 +78,7 @@ pub const Session = struct {
     last_error_msg_buf: [512]u8 = undefined,
     last_error_msg_len: u16 = 0,
     provider: SourceProvider = .filesystem,
+    host_module_names: []const []const u8 = &.{},
     test_mode: bool = false,
     test_count: u8 = 0,
     test_names: [64][]const u8 = undefined,
@@ -87,10 +103,20 @@ pub const Session = struct {
         try self.compileBegunModule(idx, src, true);
     }
 
+    fn isHostModule(self: *Session, name: []const u8) bool {
+        for (self.host_module_names) |hm| {
+            if (common.streq(hm, name)) return true;
+        }
+        return false;
+    }
+
     pub fn resolveImportOpaque(ctx: *anyopaque, importer_path: []const u8, import_name: []const u8) anyerror![]const u8 {
         const self: *Session = @ptrCast(@alignCast(ctx));
         const resolved = try self.resolveImportPath(importer_path, import_name);
         if (common.streq(resolved, StdModulePath)) return StdModuleGlobalName;
+        if (self.isHostModule(resolved)) {
+            return try self.makePrefixedName("@module:", resolved);
+        }
         try self.compileModuleFromPath(resolved);
         return self.moduleGlobalName(resolved) orelse return error.ImportNotFound;
     }
@@ -190,6 +216,7 @@ pub const Session = struct {
                     const rp = lex.next();
                     if (rp.typ != .rparen) continue;
                     if (common.streq(name.src, "std")) continue;
+                    if (self.isHostModule(name.src)) continue;
                     const resolved = try self.resolveImportPath(importer_path, name.src);
                     if (count >= MaxImportsPerModule) {
                         self.last_error_path = importer_path;
@@ -260,6 +287,7 @@ pub const Session = struct {
     fn resolveImportPath(self: *Session, importer_path: []const u8, import_name: []const u8) ![]const u8 {
         if (common.streq(import_name, StdModulePath)) return StdModulePath;
         if (import_name.len == 0) return error.ImportNotFound;
+        if (self.isHostModule(import_name)) return import_name;
         if (!(import_name[0] == '.')) return error.UnsupportedImportModule;
 
         const base_dir = dirname(importer_path);

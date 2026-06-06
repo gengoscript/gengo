@@ -3,6 +3,8 @@ const vm = @import("../lang/vm.zig");
 const Value = @import("../lang/value.zig").Value;
 pub const SourceEntry = @import("../lang/module_compile.zig").SourceEntry;
 pub const SourceProvider = @import("../lang/module_compile.zig").SourceProvider;
+pub const HostModuleFuncDesc = @import("../lang/module_compile.zig").HostModuleFuncDesc;
+pub const HostModuleDesc = @import("../lang/module_compile.zig").HostModuleDesc;
 
 const MaxFrames = @import("config.zig").max_frames;
 
@@ -12,6 +14,7 @@ pub const Config = struct {
     max_ops: ?u64 = null,
     module_sources: []const SourceEntry = &.{},
     module_source_provider: ?SourceProvider = null,
+    host_modules: []const HostModuleDesc = &.{},
 };
 
 pub const CompileError = struct {
@@ -40,17 +43,20 @@ pub const Runtime = struct {
     inner: rt_mod.Runtime,
     module_sources: []const SourceEntry = &.{},
     module_source_provider: ?SourceProvider = null,
+    host_modules: []const HostModuleDesc = &.{},
 
     pub fn init(config: Config) Runtime {
-        const inner = rt_mod.Runtime.withPolicy(.{
+        var inner = rt_mod.Runtime.withPolicy(.{
             .allow_io = config.allow_io,
             .native_backend = config.native_backend,
             .max_ops = config.max_ops,
         });
+        inner.host_modules = config.host_modules;
         return .{
             .inner = inner,
             .module_sources = config.module_sources,
             .module_source_provider = config.module_source_provider,
+            .host_modules = config.host_modules,
         };
     }
 
@@ -62,8 +68,10 @@ pub const Runtime = struct {
             .native_backend = config.native_backend,
             .max_ops = config.max_ops,
         });
+        self.inner.host_modules = config.host_modules;
         self.module_sources = config.module_sources;
         self.module_source_provider = config.module_source_provider;
+        self.host_modules = config.host_modules;
     }
 
     pub fn reset(self: *Runtime) void {
@@ -76,8 +84,10 @@ pub const Runtime = struct {
             .native_backend = config.native_backend,
             .max_ops = config.max_ops,
         });
+        self.inner.host_modules = config.host_modules;
         self.module_sources = config.module_sources;
         self.module_source_provider = config.module_source_provider;
+        self.host_modules = config.host_modules;
     }
 
     pub fn run(self: *Runtime, src: []const u8) RuntimeResult {

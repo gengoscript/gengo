@@ -206,6 +206,9 @@ fn performCall(argc: u8) !void {
         .native_function => |nf| {
             try vmnative.callNative(nf, argc);
         },
+        .host_module_function => |hmf| {
+            try vmnative.callHostModule(hmf, argc);
+        },
         .named_type => {
             if (argc != 1) return error.ArityMismatch;
             const arg = vmState().stack[vmState().stack_top - 1];

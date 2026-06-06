@@ -5,6 +5,8 @@ pub const WireTag = enum(u8) {
     boolean = 1,
     number = 2,
     string = 3,
+    array = 4,
+    map = 5,
 };
 
 pub const ValueWire = extern struct {
@@ -52,11 +54,15 @@ fn hasHostImport() bool {
 }
 
 pub fn nativeCall(id: HostCall, args: []const ValueWire, out: *ValueWire) CallStatus {
+    return nativeCallRaw(@intFromEnum(id), args, out);
+}
+
+pub fn nativeCallRaw(id: u16, args: []const ValueWire, out: *ValueWire) CallStatus {
     if (!comptime hasHostImport()) return .unsupported;
     const Host = struct {
         extern "gengo_host" fn gengo_native_call(id: u16, args_ptr: [*]const ValueWire, argc: u16, out_ptr: *ValueWire) i32;
     };
-    const rc = Host.gengo_native_call(@intFromEnum(id), args.ptr, @intCast(args.len), out);
+    const rc = Host.gengo_native_call(id, args.ptr, @intCast(args.len), out);
     return switch (rc) {
         0 => .ok,
         1 => .unsupported,

@@ -16,6 +16,7 @@ pub const FuncObj = struct {
 pub const MapEntry = struct { key: Value, value: Value };
 pub const MapHashedObj = struct { entries: []MapEntry, len: usize, buckets: []i32 };
 pub const NativeFuncObj = struct { id: u8, arity: u8 };
+pub const HostModuleFuncObj = struct { call_id: u16, arity: u8 };
 pub const FieldTypeTag = enum {
     any,
     null_t,
@@ -123,7 +124,7 @@ pub const StringBuilderObj = struct {
     len: usize,  // bytes actually written
 };
 
-pub const ObjTag = enum { array, array_managed, map, map_managed, map_hashed, dyn_string, function, closure, cell, native_function, struct_type, interface_type, named_type, named_value, enum_type, enum_value, struct_instance, iterator, variant_type, variant_value, variant_ctor, named_type_fn, string_builder };
+pub const ObjTag = enum { array, array_managed, map, map_managed, map_hashed, dyn_string, function, closure, cell, native_function, host_module_function, struct_type, interface_type, named_type, named_value, enum_type, enum_value, struct_instance, iterator, variant_type, variant_value, variant_ctor, named_type_fn, string_builder };
 pub const Object = union(ObjTag) {
     array: []Value,
     array_managed: []Value,
@@ -135,6 +136,7 @@ pub const Object = union(ObjTag) {
     closure: ClosureObj,
     cell: CellObj,
     native_function: NativeFuncObj,
+    host_module_function: HostModuleFuncObj,
     struct_type: StructTypeObj,
     interface_type: InterfaceTypeObj,
     named_type: NamedTypeObj,

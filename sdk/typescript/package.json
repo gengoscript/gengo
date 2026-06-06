@@ -1,0 +1,31 @@
+{
+  "name": "@gengo/engine",
+  "version": "0.1.0",
+  "description": "Gengo embeddable scripting engine — TypeScript SDK for the WASM runtime",
+  "keywords": ["gengo", "scripting", "wasm", "engine", "embed"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/anomalyco/gengo"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist/",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "tsc"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  }
+}

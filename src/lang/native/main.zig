@@ -17,6 +17,7 @@ const Value = @import("../value.zig").Value;
 const Object = @import("../value.zig").Object;
 const MapEntry = @import("../value.zig").MapEntry;
 const NativeFuncObj = @import("../value.zig").NativeFuncObj;
+const HostModuleFuncObj = @import("../value.zig").HostModuleFuncObj;
 const FieldTypeAlt = @import("../value.zig").FieldTypeAlt;
 const FieldTypeSpec = @import("../value.zig").FieldTypeSpec;
 const StructFieldSpec = @import("../value.zig").StructFieldSpec;
@@ -574,6 +575,95 @@ pub fn installStdGlobal() !void {
             }
         }
     }
+}
+
+pub fn installHostModules(host_modules: []const module_compile.HostModuleDesc) !void {
+    for (host_modules) |hm| {
+        const global_name_buf = (heap.bump(u8, 9 + hm.name.len) orelse return)[0..9 + hm.name.len];
+        global_name_buf[0] = '@';
+        @memcpy(global_name_buf[1..8], "module:");
+        @memcpy(global_name_buf[8..][0..hm.name.len], hm.name);
+        const global_name = global_name_buf[0..8 + hm.name.len];
+        if (globals.has(global_name)) continue;
+
+        const entries = hm.functions;
+        const any_alts = heap.bump(FieldTypeAlt, 1) orelse return;
+        any_alts[0] = .{ .typ = .any };
+        const any_spec: FieldTypeSpec = .{ .alts = any_alts[0..1] };
+
+        const field_specs = (heap.bump(StructFieldSpec, entries.len) orelse return)[0..entries.len];
+        for (field_specs, 0..) |*fs, i| {
+            fs.* = .{ .name = entries[i].name, .typ = any_spec, .is_const = true };
+        }
+
+        const qual_name_buf = (heap.bump(u8, 13 + hm.name.len) orelse return)[0..13 + hm.name.len];
+        @memcpy(qual_name_buf[0..13], "@module_type:");
+        @memcpy(qual_name_buf[13..][0..hm.name.len], hm.name);
+        const qualified_name = qual_name_buf[0..13 + hm.name.len];
+
+        const typ_obj = try vmgc.vmAllocObject();
+        try vms.pushTempRoot(.{ .object = typ_obj });
+        defer vms.popTempRoot();
+        typ_obj.* = .{ .struct_type = StructTypeObj{
+            .name = hm.name,
+            .qualified_name = qualified_name,
+            .fields = field_specs[0..entries.len],
+        } };
+
+        const inst_fields = try vmgc.vmAllocManagedSlice(MapEntry, entries.len);
+        const inst_obj = try vmgc.vmAllocObject();
+        try vms.pushTempRoot(.{ .object = inst_obj });
+        defer vms.popTempRoot();
+        inst_obj.* = .{ .struct_instance = .{ .typ = typ_obj, .fields = inst_fields } };
+
+        for (inst_fields, 0..) |*fld, i| {
+            const func_obj = try vmgc.vmAllocObject();
+            func_obj.* = .{ .host_module_function = .{
+                .call_id = entries[i].call_id,
+                .arity = entries[i].arity,
+            } };
+            fld.* = .{
+                .key = .{ .string = entries[i].name },
+                .value = .{ .object = func_obj },
+            };
+        }
+
+        try globals.def(global_name, .{ .object = inst_obj });
+    }
+}
+
+pub fn callHostModule(hmf: HostModuleFuncObj, argc: u8) !void {
+    if (hmf.arity != 255 and hmf.arity != argc) return error.ArityMismatch;
+    if (argc > MaxNativeArgs) return error.ArityMismatch;
+    if (vms.vmState().policy.native_backend != .host) return error.HostNativeUnsupported;
+    try host_abi_mod.ensureHostReady();
+    const start = vms.vmState().stack_top - argc;
+    var args_wire: [MaxNativeArgs]host_abi.ValueWire = undefined;
+    var i: usize = 0;
+    while (i < @as(usize, argc)) : (i += 1) {
+        args_wire[i] = try host_abi_mod.wireFromValue(vms.vmState().stack[start + i]);
+    }
+    var out_wire: host_abi.ValueWire = .{
+        .tag = @intFromEnum(host_abi.WireTag.null),
+        .flags = 0,
+        .reserved = 0,
+        .payload = 0,
+        .len = 0,
+        .reserved2 = 0,
+    };
+    const st = host_abi.nativeCallRaw(hmf.call_id, args_wire[0..argc], &out_wire);
+    switch (st) {
+        .ok => {},
+        .unsupported => return error.HostNativeUnsupported,
+        .denied => return error.PermissionDenied,
+        .bad_args => return error.HostNativeBadArgs,
+        .failed => return error.HostNativeFailed,
+    }
+    var j: usize = 0;
+    while (j < @as(usize, argc)) : (j += 1) _ = try vms.vmPop();
+    _ = try vms.vmPop();
+    const out = try host_abi_mod.valueFromWire(out_wire);
+    try vms.vmPush(out);
 }
 
 pub fn callNative(nf: NativeFuncObj, argc: u8) !void {

@@ -1,9 +1,15 @@
 const std = @import("std");
 const api = @import("runtime/api.zig");
+const heap = @import("runtime/heap.zig");
 const host_abi = @import("runtime/host_abi.zig");
 const io = @import("runtime/io.zig");
+const module_compile = @import("lang/module_compile.zig");
 const vm = @import("lang/vm.zig");
+const vms = @import("lang/vm_state.zig");
+const vmgc = @import("lang/vm_gc.zig");
 const Value = @import("lang/value.zig").Value;
+const Object = @import("lang/value.zig").Object;
+const MapEntry = @import("lang/value.zig").MapEntry;
 const ValueWire = host_abi.ValueWire;
 const WireTag = host_abi.WireTag;
 
@@ -19,12 +25,28 @@ fn engineWerr(s: []const u8) void {
 
 const MaxEngines = 64;
 const MaxSources = 64;
+const MaxHostModules = 16;
+const MaxHostModuleFuncs = 64;
 const MaxErrorLen = 512;
 const MaxStringScratch = 4096;
+const HostModuleCallIdBase = 0x1000;
 
 const SourceEntry = struct {
     path: []const u8,
     src: []const u8,
+};
+
+const HostModuleFuncDef = struct {
+    name_ptr: u32,
+    name_len: u32,
+    arity: u32,
+};
+
+const HostModuleEntry = struct {
+    name: [64]u8 = undefined,
+    name_len: usize = 0,
+    funcs: [MaxHostModuleFuncs]module_compile.HostModuleFuncDesc = undefined,
+    func_count: u8 = 0,
 };
 
 // Explicit active flag avoids ?Engine optional which would require a large
@@ -42,15 +64,26 @@ const Engine = struct {
     source_count: u8 = 0,
     path_bufs: [MaxSources][256]u8 = undefined,
     src_bufs: [MaxSources][4096]u8 = undefined,
+    host_module_entries: [MaxHostModules]HostModuleEntry = undefined,
+    host_module_count: u8 = 0,
+    next_host_call_id: u16 = HostModuleCallIdBase,
+    // Owned copies of HostModuleDesc for passing to runtime
+    host_module_descs: [MaxHostModules]module_compile.HostModuleDesc = undefined,
+    host_module_func_name_bufs: [MaxHostModules][MaxHostModuleFuncs][64]u8 = undefined,
+    host_module_func_name_lens: [MaxHostModules][MaxHostModuleFuncs]usize = undefined,
     last_error: [MaxErrorLen]u8 = undefined,
     last_error_len: u16 = 0,
     last_error_line: u32 = 0,
     last_error_col: u16 = 0,
     string_scratch: [MaxStringScratch]u8 = undefined,
     string_scratch_len: u16 = 0,
+    wire_elem_buf: [256]ValueWire = undefined,
+    wire_elem_count: u16 = 0,
 
     fn initInPlace(self: *Engine) void {
         self.source_count = 0;
+        self.host_module_count = 0;
+        self.next_host_call_id = HostModuleCallIdBase;
         self.last_error_len = 0;
         self.last_error_line = 0;
         self.last_error_col = 0;
@@ -117,6 +150,37 @@ fn wireToValue(wire: ValueWire) Value {
             const data = @as([*]u8, @ptrFromInt(@as(usize, @intCast(wire.payload))))[0..@as(usize, @intCast(wire.len))];
             return vm.makeString(data) catch Value.null;
         },
+        @intFromEnum(WireTag.array) => {
+            const count = wire.len;
+            const elem_wires = @as([*]const ValueWire, @ptrFromInt(@as(usize, @intCast(wire.payload))))[0..count];
+            const arr_obj = vmgc.vmAllocObject() catch return Value.null;
+            arr_obj.* = .{ .array = &[_]Value{} };
+            vms.pushTempRoot(.{ .object = arr_obj }) catch return Value.null;
+            defer vms.popTempRoot();
+            const items = vmgc.vmAllocManagedSlice(Value, count) catch return Value.null;
+            for (elem_wires, 0..) |ew, i| {
+                items[i] = wireToValue(ew);
+            }
+            arr_obj.* = .{ .array_managed = items[0..count] };
+            return .{ .object = arr_obj };
+        },
+        @intFromEnum(WireTag.map) => {
+            const count = wire.len;
+            const pair_wires = @as([*]const ValueWire, @ptrFromInt(@as(usize, @intCast(wire.payload))))[0 .. count * 2];
+            const map_obj = vmgc.vmAllocObject() catch return Value.null;
+            map_obj.* = .{ .map = &[_]MapEntry{} };
+            vms.pushTempRoot(.{ .object = map_obj }) catch return Value.null;
+            defer vms.popTempRoot();
+            const entries = vmgc.vmAllocManagedSlice(MapEntry, count) catch return Value.null;
+            for (0..count) |i| {
+                entries[i] = .{
+                    .key = wireToValue(pair_wires[i * 2]),
+                    .value = wireToValue(pair_wires[i * 2 + 1]),
+                };
+            }
+            map_obj.* = .{ .map_managed = entries[0..count] };
+            return .{ .object = map_obj };
+        },
         else => .null,
     };
 }
@@ -138,11 +202,26 @@ fn valueToWire(val: Value) ValueWire {
         .boolean => |b| makeWire(@intFromEnum(WireTag.boolean), @intFromBool(b), 0),
         .number => |n| makeWire(@intFromEnum(WireTag.number), @bitCast(@as(f64, n)), 0),
         .string => |s| makeWire(@intFromEnum(WireTag.string), @intFromPtr(s.ptr), @intCast(s.len)),
-        .object => |obj| {
-            if (obj.* == .dyn_string) {
-                return makeWire(@intFromEnum(WireTag.string), @intFromPtr(obj.dyn_string.ptr), @intCast(obj.dyn_string.len));
-            }
-            return makeWire(@intFromEnum(WireTag.null), 0, 0);
+        .object => |obj| switch (obj.*) {
+            .dyn_string => makeWire(@intFromEnum(WireTag.string), @intFromPtr(obj.dyn_string.ptr), @intCast(obj.dyn_string.len)),
+            .array, .array_managed => {
+                const items = vms.asArraySlice(obj);
+                const wires = (heap.bump(ValueWire, items.len) orelse return makeWire(@intFromEnum(WireTag.null), 0, 0))[0..items.len];
+                for (items, 0..) |item, i| {
+                    wires[i] = valueToWire(item);
+                }
+                return makeWire(@intFromEnum(WireTag.array), @intFromPtr(wires.ptr), @intCast(items.len));
+            },
+            .map, .map_managed, .map_hashed => {
+                const entries = vms.asMapSlice(obj);
+                const wires = (heap.bump(ValueWire, entries.len * 2) orelse return makeWire(@intFromEnum(WireTag.null), 0, 0))[0 .. entries.len * 2];
+                for (entries, 0..) |entry, i| {
+                    wires[i * 2] = valueToWire(entry.key);
+                    wires[i * 2 + 1] = valueToWire(entry.value);
+                }
+                return makeWire(@intFromEnum(WireTag.map), @intFromPtr(wires.ptr), @intCast(entries.len));
+            },
+            else => makeWire(@intFromEnum(WireTag.null), 0, 0),
         },
         else => makeWire(@intFromEnum(WireTag.null), 0, 0),
     };
@@ -154,13 +233,35 @@ fn valueToWireWithScratch(val: Value, scratch: *Engine) ValueWire {
             const stable = scratch.setStringScratch(s);
             return makeWire(@intFromEnum(WireTag.string), @intFromPtr(stable.ptr), @intCast(stable.len));
         },
-        .object => |obj| {
-            if (obj.* == .dyn_string) {
+        .object => |obj| switch (obj.*) {
+            .dyn_string => {
                 const s = obj.dyn_string;
                 const stable = scratch.setStringScratch(s);
                 return makeWire(@intFromEnum(WireTag.string), @intFromPtr(stable.ptr), @intCast(stable.len));
-            }
-            return valueToWire(val);
+            },
+            .array, .array_managed => {
+                const items = vms.asArraySlice(obj);
+                const count = @min(items.len, scratch.wire_elem_buf.len);
+                const wires = &scratch.wire_elem_buf;
+                scratch.wire_elem_count = @intCast(count);
+                for (items[0..count], 0..) |item, i| {
+                    wires[i] = valueToWire(item);
+                }
+                return makeWire(@intFromEnum(WireTag.array), @intFromPtr(wires.ptr), @intCast(count));
+            },
+            .map, .map_managed, .map_hashed => {
+                const entries = vms.asMapSlice(obj);
+                const max_entries = scratch.wire_elem_buf.len / 2;
+                const count = @min(entries.len, max_entries);
+                const wires = &scratch.wire_elem_buf;
+                scratch.wire_elem_count = @intCast(count * 2);
+                for (entries[0..count], 0..) |entry, i| {
+                    wires[i * 2] = valueToWire(entry.key);
+                    wires[i * 2 + 1] = valueToWire(entry.value);
+                }
+                return makeWire(@intFromEnum(WireTag.map), @intFromPtr(wires.ptr), @intCast(count));
+            },
+            else => return valueToWire(val),
         },
         else => return valueToWire(val),
     }
@@ -185,6 +286,7 @@ export fn engine_destroy(handle: i32) void {
 export fn engine_run(handle: i32, src_ptr: i32, src_len: i32) i32 {
     const engine = getEngine(handle) orelse return -1;
     const src = wasmSlice(src_ptr, src_len);
+    setupHostModules(engine);
     const res = engine.runtime.run(src);
     return switch (res) {
         .ok => 0,
@@ -203,6 +305,7 @@ export fn engine_run_path(handle: i32, src_ptr: i32, src_len: i32, path_ptr: i32
     const engine = getEngine(handle) orelse return -1;
     const src = wasmSlice(src_ptr, src_len);
     const path = wasmSlice(path_ptr, path_len);
+    setupHostModules(engine);
     const res = engine.runtime.runPath(src, path);
     return switch (res) {
         .ok => 0,
@@ -220,6 +323,7 @@ export fn engine_run_path(handle: i32, src_ptr: i32, src_len: i32, path_ptr: i32
 export fn engine_call(handle: i32, name_ptr: i32, name_len: i32, args_ptr: i32, argc: i32, out_ptr: i32) i32 {
     const engine = getEngine(handle) orelse return -1;
     const name = wasmSlice(name_ptr, name_len);
+    setupHostModules(engine);
 
     var args: [64]Value = undefined;
     const arg_count = @min(@as(usize, @intCast(@max(argc, 0))), args.len);
@@ -277,6 +381,63 @@ export fn engine_add_source(handle: i32, path_ptr: i32, path_len: i32, src_ptr: 
     });
 
     return 0;
+}
+
+fn validateModuleName(name: []const u8) bool {
+    if (name.len == 0 or name.len > 64) return false;
+    if (name[0] == '@') return false;
+    for (name) |c| {
+        if (c == '.') return false;
+        if (c < ' ' or c > '~') return false;
+    }
+    return true;
+}
+
+export fn engine_register_module(handle: i32, name_ptr: i32, name_len: i32, funcs_ptr: i32, funcs_count: i32) i32 {
+    const engine = getEngine(handle) orelse return -1;
+    if (engine.host_module_count >= MaxHostModules) return -3;
+    if (funcs_count < 0 or funcs_count > MaxHostModuleFuncs) return -4;
+
+    const name = wasmSlice(name_ptr, name_len);
+    if (!validateModuleName(name)) return -5;
+
+    const slot = &engine.host_module_entries[engine.host_module_count];
+    slot.name_len = @min(@as(usize, @intCast(name.len)), slot.name.len);
+    @memcpy(slot.name[0..slot.name_len], name[0..slot.name_len]);
+
+    const func_defs = @as([*]const HostModuleFuncDef, @ptrFromInt(@as(usize, @intCast(funcs_ptr))))[0..@as(usize, @intCast(funcs_count))];
+    for (func_defs, 0..) |fd, i| {
+        const fname = wasmSlice(@intCast(fd.name_ptr), @intCast(fd.name_len));
+        const flen = @min(@as(usize, @intCast(fname.len)), engine.host_module_func_name_bufs[engine.host_module_count][i].len);
+        @memcpy(engine.host_module_func_name_bufs[engine.host_module_count][i][0..flen], fname[0..flen]);
+        engine.host_module_func_name_lens[engine.host_module_count][i] = flen;
+        const call_id = engine.next_host_call_id;
+        engine.next_host_call_id += 1;
+        slot.funcs[i] = .{
+            .name = engine.host_module_func_name_bufs[engine.host_module_count][i][0..flen],
+            .arity = @intCast(fd.arity),
+            .call_id = call_id,
+        };
+    }
+    slot.func_count = @intCast(funcs_count);
+    engine.host_module_count += 1;
+    return 0;
+}
+
+fn setupHostModules(engine: *Engine) void {
+    var desc_count: u8 = 0;
+    while (desc_count < engine.host_module_count) : (desc_count += 1) {
+        const entry = &engine.host_module_entries[desc_count];
+        engine.host_module_descs[desc_count] = .{
+            .name = entry.name[0..entry.name_len],
+            .functions = entry.funcs[0..entry.func_count],
+        };
+    }
+    engine.runtime.setConfig(.{
+        .allow_io = true,
+        .module_sources = engine.source_entries[0..engine.source_count],
+        .host_modules = engine.host_module_descs[0..desc_count],
+    });
 }
 
 export fn engine_last_error(handle: i32, out_ptr: i32, out_max_len: i32) i32 {
