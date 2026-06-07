@@ -1,13 +1,10 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const vms = @import("../vm_state.zig");
 const vmgc = @import("../vm_gc.zig");
 const Value = @import("../value.zig").Value;
 const NativeFnId = @import("native_ids.zig").NativeFnId;
 const NativeFuncObj = @import("../value.zig").NativeFuncObj;
-
-fn ioContext() std.Io {
-    return std.Io.Threaded.global_single_threaded.io();
-}
 
 pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
     switch (@as(NativeFnId, @enumFromInt(nf.id))) {
@@ -20,7 +17,9 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             };
             _ = try vms.vmPop();
 
-            const io_ctx = ioContext();
+            if (comptime builtin.os.tag == .wasi) return error.CapabilityNotAvailable;
+
+            const io_ctx = std.Io.Threaded.global_single_threaded.io();
             const contents = std.Io.Dir.cwd().readFileAlloc(io_ctx, path, std.heap.page_allocator, .limited(1 << 20)) catch return error.CapabilityError;
             defer std.heap.page_allocator.free(contents);
 
@@ -36,7 +35,9 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             };
             _ = try vms.vmPop();
 
-            const io_ctx = ioContext();
+            if (comptime builtin.os.tag == .wasi) return error.CapabilityNotAvailable;
+
+            const io_ctx = std.Io.Threaded.global_single_threaded.io();
             std.Io.Dir.cwd().access(io_ctx, path, .{}) catch |err| switch (err) {
                 error.FileNotFound => {
                     try vms.vmPush(.{ .boolean = false });

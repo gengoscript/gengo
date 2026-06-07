@@ -1,13 +1,10 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const vms = @import("../vm_state.zig");
 const vmgc = @import("../vm_gc.zig");
 const Value = @import("../value.zig").Value;
 const NativeFnId = @import("native_ids.zig").NativeFnId;
 const NativeFuncObj = @import("../value.zig").NativeFuncObj;
-
-fn ioContext() std.Io {
-    return std.Io.Threaded.global_single_threaded.io();
-}
 
 pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
     switch (@as(NativeFnId, @enumFromInt(nf.id))) {
@@ -20,7 +17,9 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             };
             _ = try vms.vmPop();
 
-            const io_ctx = ioContext();
+            if (comptime builtin.os.tag == .wasi) return error.CapabilityNotAvailable;
+
+            const io_ctx = std.Io.Threaded.global_single_threaded.io();
             var client = std.http.Client{
                 .allocator = std.heap.page_allocator,
                 .io = io_ctx,
