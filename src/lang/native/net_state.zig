@@ -1,11 +1,12 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const net = std.Io.net;
 
 const MaxConns = 16;
 
 const NetConn = struct {
     id: u32,
-    socket: if (builtin.os.tag == .wasi) void else std.posix.fd_t,
+    stream: if (builtin.os.tag == .wasi) void else net.Stream,
 };
 
 var g_next_id: u32 = 1;
@@ -14,9 +15,10 @@ var g_conn_count: usize = 0;
 
 pub fn netReset() void {
     if (comptime builtin.os.tag == .wasi) return;
+    const io_ctx = ioContext();
     var i: usize = 0;
     while (i < g_conn_count) : (i += 1) {
-        std.posix.close(g_conns[i].socket);
+        g_conns[i].stream.close(io_ctx);
     }
     g_conn_count = 0;
     g_next_id = 1;
@@ -30,7 +32,6 @@ pub fn netDial(network: []const u8, address: []const u8) !u32 {
     if (comptime builtin.os.tag == .wasi) return error.CapabilityNotAvailable;
     if (g_conn_count >= MaxConns) return error.CapabilityError;
 
-    // Only TCP is supported in the built-in handler
     if (!std.mem.eql(u8, network, "tcp") and
         !std.mem.eql(u8, network, "tcp4") and
         !std.mem.eql(u8, network, "tcp6"))
@@ -38,54 +39,18 @@ pub fn netDial(network: []const u8, address: []const u8) !u32 {
         return error.CapabilityError;
     }
 
-    // Parse host:port
-    const colon = std.mem.lastIndexOfScalar(u8, address, ':');
-    if (colon == null) return error.CapabilityError;
-    const host = address[0..colon.?];
-    const port_str = address[colon.? + 1..];
+    const colon = std.mem.lastIndexOfScalar(u8, address, ':') orelse return error.CapabilityError;
+    const host = address[0..colon];
+    const port_str = address[colon + 1 ..];
     const port = std.fmt.parseUnsigned(u16, port_str, 10) catch return error.CapabilityError;
 
     const io_ctx = ioContext();
-    const ip = std.Io.net.IpAddress.resolve(io_ctx, host, port) catch return error.CapabilityError;
-
-    const family: i32 = switch (ip) {
-        .ip4 => std.posix.AF.INET,
-        .ip6 => std.posix.AF.INET6,
-    };
-    const socket_fd = std.posix.socket(family, std.posix.SOCK.STREAM, 0) catch return error.CapabilityError;
-    errdefer std.posix.close(socket_fd);
-
-    var addr_storage: std.posix.sockaddr.storage = undefined;
-    var addr_len: std.posix.socklen_t = undefined;
-    switch (ip) {
-        .ip4 => |ip4| {
-            const addr: *std.posix.sockaddr.in = @ptrCast(&addr_storage);
-            addr.* = .{
-                .family = std.posix.AF.INET,
-                .port = std.mem.nativeToBig(u16, ip4.port),
-                .addr = std.mem.nativeToBig(u32, @as(u32, @bitCast(ip4.bytes))),
-                .zero = [_]u8{0} ** 8,
-            };
-            addr_len = @sizeOf(std.posix.sockaddr.in);
-        },
-        .ip6 => |ip6| {
-            const addr: *std.posix.sockaddr.in6 = @ptrCast(&addr_storage);
-            addr.* = .{
-                .family = std.posix.AF.INET6,
-                .port = std.mem.nativeToBig(u16, ip6.port),
-                .flowinfo = 0,
-                .addr = ip6.bytes,
-                .scope_id = 0,
-            };
-            addr_len = @sizeOf(std.posix.sockaddr.in6);
-        },
-    }
-
-    std.posix.connect(socket_fd, @ptrCast(&addr_storage), addr_len) catch return error.CapabilityError;
+    const ip = net.IpAddress.parse(host, port) catch return error.CapabilityError;
+    const stream = ip.connect(io_ctx, .{ .mode = .stream }) catch return error.CapabilityError;
 
     const id = g_next_id;
     g_next_id += 1;
-    g_conns[g_conn_count] = .{ .id = id, .socket = socket_fd };
+    g_conns[g_conn_count] = .{ .id = id, .stream = stream };
     g_conn_count += 1;
     return id;
 }
@@ -116,8 +81,7 @@ pub fn netRead(id: u32, max_bytes: usize) ![]u8 {
     const buf = std.heap.page_allocator.alloc(u8, max_bytes) catch return error.OutOfMemory;
     errdefer std.heap.page_allocator.free(buf);
 
-    const n = std.posix.read(conn.socket, buf) catch return error.CapabilityError;
-
+    const n = std.posix.read(conn.stream.socket.handle, buf) catch return error.CapabilityError;
     const out = std.heap.page_allocator.realloc(buf, n) catch return error.OutOfMemory;
     return out;
 }
@@ -126,7 +90,8 @@ pub fn netWrite(id: u32, data: []const u8) !usize {
     if (comptime builtin.os.tag == .wasi) return error.CapabilityNotAvailable;
     const conn = findConn(id) orelse return error.CapabilityError;
 
-    const n = std.posix.write(conn.socket, data) catch return error.CapabilityError;
+    const io_ctx = ioContext();
+    const n = io_ctx.vtable.netWrite(io_ctx.userdata, conn.stream.socket.handle, data, &.{}, 0) catch return error.CapabilityError;
     return n;
 }
 
@@ -134,21 +99,20 @@ pub fn netClose(id: u32) !void {
     if (comptime builtin.os.tag == .wasi) return error.CapabilityNotAvailable;
     const conn = findConn(id) orelse return error.CapabilityError;
 
-    std.posix.close(conn.socket);
+    const io_ctx = ioContext();
+    conn.stream.close(io_ctx);
     removeConn(id);
 }
 
 pub fn netLocalAddr(id: u32) ![]u8 {
     if (comptime builtin.os.tag == .wasi) return error.CapabilityNotAvailable;
-    const conn = findConn(id) orelse return error.CapabilityError;
-    _ = conn;
+    _ = findConn(id) orelse return error.CapabilityError;
     return "";
 }
 
 pub fn netRemoteAddr(id: u32) ![]u8 {
     if (comptime builtin.os.tag == .wasi) return error.CapabilityNotAvailable;
-    const conn = findConn(id) orelse return error.CapabilityError;
-    _ = conn;
+    _ = findConn(id) orelse return error.CapabilityError;
     return "";
 }
 
