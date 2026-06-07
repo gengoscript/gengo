@@ -349,5 +349,10 @@ pub fn asMapSlice(obj: *Object) []MapEntry {
 pub fn asStringValue(v: Value) ![]const u8 {
     if (v == .string) return v.string;
     if (v == .object and v.object.* == .dyn_string) return v.object.dyn_string;
+    if (v == .object and v.object.* == .named_value) {
+        const nv = v.object.named_value;
+        if (nv.typ.* == .named_type and nv.typ.named_type.base == .string)
+            return asStringValue(nv.value);
+    }
     return error.TypeError;
 }

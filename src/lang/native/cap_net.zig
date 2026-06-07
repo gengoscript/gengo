@@ -49,14 +49,8 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             if (argc != 2) return error.ArityMismatch;
             const arg1 = try vms.vmPop();
             const arg0 = try vms.vmPop();
-            const network = switch (arg0) {
-                .string => |s| s,
-                else => return error.TypeError,
-            };
-            const address = switch (arg1) {
-                .string => |s| s,
-                else => return error.TypeError,
-            };
+            const network = vms.asStringValue(arg0) catch return error.TypeError;
+            const address = vms.asStringValue(arg1) catch return error.TypeError;
             _ = try vms.vmPop();
 
             const id = net_state.netDial(network, address) catch return error.CapabilityError;
@@ -89,10 +83,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                 .number => |n| @as(u32, @intFromFloat(n)),
                 else => return error.TypeError,
             };
-            const data = switch (arg1) {
-                .string => |s| s,
-                else => return error.TypeError,
-            };
+            const data = vms.asStringValue(arg1) catch return error.TypeError;
             _ = try vms.vmPop();
 
             const n = net_state.netWrite(id, data) catch return error.CapabilityError;
