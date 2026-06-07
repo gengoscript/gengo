@@ -10,7 +10,7 @@ extern "kernel32" fn CreateFileA(
     lpSecurityAttributes: ?*anyopaque,
     dwCreationDisposition: w32.DWORD,
     dwFlagsAndAttributes: w32.DWORD,
-    hTemplateFile: w32.HANDLE,
+    hTemplateFile: ?w32.HANDLE,
 ) callconv(.winapi) w32.HANDLE;
 extern "kernel32" fn ReadFile(
     hFile: w32.HANDLE,
@@ -62,7 +62,7 @@ pub fn readFile(path: []const u8, buf: []u8) !usize {
         const FILE_ATTRIBUTE_NORMAL: w32.DWORD = 0x00000080;
         const INVALID_HANDLE_VALUE: w32.HANDLE = @ptrFromInt(@as(usize, @bitCast(@as(isize, -1))));
 
-        var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+        var path_buf: [std.fs.max_path_bytes:0]u8 = undefined;
         if (path.len >= path_buf.len) return error.NameTooLong;
         @memcpy(path_buf[0..path.len], path);
         path_buf[path.len] = 0;
