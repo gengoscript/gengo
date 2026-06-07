@@ -58,6 +58,18 @@ const vmAllocManagedSlice = vmgc.vmAllocManagedSlice;
 const makeDynString = vmgc.makeDynString;
 const concatDynString = vmgc.concatDynString;
 
+fn panicMessageFromValue(v: Value) []const u8 {
+    if (v == .string) return v.string;
+    if (v == .object and v.object.* == .dyn_string) return v.object.dyn_string;
+    if (v == .number) {
+        return std.fmt.bufPrint(&vmState().str_acc, "{d}", .{v.number}) catch "AssertionFailed";
+    }
+    if (v == .boolean) return if (v.boolean) "true" else "false";
+    if (v == .null) return "null";
+    if (v == .error_value) return v.error_value;
+    return "AssertionFailed";
+}
+
 // ── Private helpers used only in the execution core ───────────────────────────
 
 fn namedTypeIsSubOf(sub: *Object, ancestor: *Object) bool {
@@ -396,7 +408,9 @@ fn iterNext1(it: *IterObj) !void {
             }
             const typ_obj = it.source.?;
             const val = try vmtyp.makeNamedValue(typ_obj, .{ .number = it.range_current });
-            it.range_current += 1.0;
+            const next = it.range_current + 1.0;
+            if (next == it.range_current) return error.RangeError;
+            it.range_current = next;
             try vmPush(val);
             try vmPush(.{ .boolean = true });
         },
@@ -483,6 +497,7 @@ fn retSlowPath(retval_in: Value) !bool {
         if (fsig.named_return_count > 0) {
             popTempRoot();
             const nrbase = frame.base + fsig.arity;
+            if (nrbase >= vms.MaxStack) return error.StackOverflow;
             if (fsig.named_return_count == 1) {
                 const raw = vmState().stack[nrbase];
                 retval = if (raw == .object and raw.object.* == .cell) raw.object.cell.value else raw;
@@ -494,6 +509,7 @@ fn retSlowPath(retval_in: Value) !bool {
                 const items = try vmAllocManagedSlice(Value, nrc);
                 var ri: usize = 0;
                 while (ri < nrc) : (ri += 1) {
+                    if (nrbase + ri >= vms.MaxStack) return error.StackOverflow;
                     const raw = vmState().stack[nrbase + ri];
                     items[ri] = if (raw == .object and raw.object.* == .cell) raw.object.cell.value else raw;
                 }
@@ -528,6 +544,7 @@ fn opGetLocalGetField() !void {
     const ic_type_idx = try vmShort();
     const ic_fidx = try vmByte();
     const frame_base = vmState().frames[vmState().frame_top - 1].base;
+    if (frame_base + slot >= vms.MaxStack) return error.StackOverflow;
     var raw = vmState().stack[frame_base + slot];
     if (raw == .object and raw.object.* == .cell) raw = raw.object.cell.value;
     const container = if (raw == .object and raw.object.* == .named_value)
@@ -1540,6 +1557,7 @@ fn runInner() !void {
             .get_local => {
                 const slot = try vmByte();
                 const base = vmState().frames[vmState().frame_top - 1].base;
+                if (base + slot >= vms.MaxStack) return error.StackOverflow;
                 const v = vmState().stack[base + slot];
                 if (v == .object and v.object.* == .cell) {
                     try vmPush(v.object.cell.value);
@@ -1550,6 +1568,7 @@ fn runInner() !void {
             .set_local => {
                 const slot = try vmByte();
                 const base = vmState().frames[vmState().frame_top - 1].base;
+                if (base + slot >= vms.MaxStack) return error.StackOverflow;
                 const val = try vmPop();
                 const cur = vmState().stack[base + slot];
                 if (cur == .object and cur.object.* == .cell) {
@@ -1580,6 +1599,7 @@ fn runInner() !void {
             .close_upvalue => {
                 const slot = try vmByte();
                 const base = vmState().frames[vmState().frame_top - 1].base;
+                if (base + slot >= vms.MaxStack) return error.StackOverflow;
                 const v = vmState().stack[base + slot];
                 if (v == .object and v.object.* == .cell) {
                     vmState().stack[base + slot] = v.object.cell.value;
@@ -1649,26 +1669,34 @@ fn runInner() !void {
                 const a = try vmPop();
                 const an = try vms.valueAsInt(a);
                 const bn = try vms.valueAsInt(b);
-                try pushNumericResultWithCarrier(a, b, @floatFromInt(an & bn));
+                const result = an & bn;
+                if (result > (1 << 53) or result < -(1 << 53)) return error.RangeError;
+                try pushNumericResultWithCarrier(a, b, @floatFromInt(result));
             },
             .bit_or => {
                 const b = try vmPop();
                 const a = try vmPop();
                 const an = try vms.valueAsInt(a);
                 const bn = try vms.valueAsInt(b);
-                try pushNumericResultWithCarrier(a, b, @floatFromInt(an | bn));
+                const result = an | bn;
+                if (result > (1 << 53) or result < -(1 << 53)) return error.RangeError;
+                try pushNumericResultWithCarrier(a, b, @floatFromInt(result));
             },
             .bit_xor => {
                 const b = try vmPop();
                 const a = try vmPop();
                 const an = try vms.valueAsInt(a);
                 const bn = try vms.valueAsInt(b);
-                try pushNumericResultWithCarrier(a, b, @floatFromInt(an ^ bn));
+                const result = an ^ bn;
+                if (result > (1 << 53) or result < -(1 << 53)) return error.RangeError;
+                try pushNumericResultWithCarrier(a, b, @floatFromInt(result));
             },
             .bit_not => {
                 const v = try vmPop();
                 const n = try vms.valueAsInt(v);
-                const result: f64 = @floatFromInt(~n);
+                const raw = ~n;
+                if (raw > (1 << 53) or raw < -(1 << 53)) return error.RangeError;
+                const result: f64 = @floatFromInt(raw);
                 if (v == .object and v.object.* == .named_value) {
                     const wrapped = try vmtyp.coerceNamedTypeResult(v.object.named_value.typ, .{ .number = result });
                     try checkNamedTypePredicate(v.object.named_value.typ, wrapped.object.named_value.value);
@@ -1684,7 +1712,9 @@ fn runInner() !void {
                 const bn = try vms.valueAsInt(b);
                 if (bn < 0) return error.RangeError;
                 const shift: u6 = @intCast(@min(bn, 63));
-                try pushNumericResultWithCarrier(a, b, @floatFromInt(an << shift));
+                const result = an << shift;
+                if (result > (1 << 53) or result < -(1 << 53)) return error.RangeError;
+                try pushNumericResultWithCarrier(a, b, @floatFromInt(result));
             },
             .shr => {
                 const b = try vmPop();
@@ -1693,7 +1723,9 @@ fn runInner() !void {
                 const bn = try vms.valueAsInt(b);
                 if (bn < 0) return error.RangeError;
                 const shift: u6 = @intCast(@min(bn, 63));
-                try pushNumericResultWithCarrier(a, b, @floatFromInt(an >> shift));
+                const result = an >> shift;
+                if (result > (1 << 53) or result < -(1 << 53)) return error.RangeError;
+                try pushNumericResultWithCarrier(a, b, @floatFromInt(result));
             },
             .cast_int => {
                 const v = vms.unboxNamed(try vmPop());
@@ -1702,7 +1734,10 @@ fn runInner() !void {
                         if (!std.math.isFinite(n) or
                             n < @as(f64, @floatFromInt(std.math.minInt(i64))) or
                             n >= @as(f64, @floatFromInt(std.math.maxInt(i64)))) return error.RangeError;
-                        try vmPush(.{ .number = @trunc(n) });
+                        const t = @trunc(n);
+                        const as_i64: i64 = @intFromFloat(t);
+                        if (@as(f64, @floatFromInt(as_i64)) != t) return error.RangeError;
+                        try vmPush(.{ .number = t });
                     },
                     .rune => |r| try vmPush(.{ .number = @floatFromInt(r) }),
                     .boolean => |b| try vmPush(.{ .number = if (b) 1 else 0 }),
@@ -1846,6 +1881,7 @@ fn runInner() !void {
                 vmState().ip += 1; // skip the embedded const_eq opcode byte
                 const k = chunk.constAt(try vmShort());
                 const base = vmState().frames[vmState().frame_top - 1].base;
+                if (base + slot >= vms.MaxStack) return error.StackOverflow;
                 var a = vmState().stack[base + slot];
                 if (a == .object and a.object.* == .cell) a = a.object.cell.value;
                 const a_named = a == .object and a.object.* == .named_value;
@@ -1864,6 +1900,7 @@ fn runInner() !void {
                 vmState().ip += 1; // skip the embedded const_sub opcode byte
                 const k = chunk.constAt(try vmShort());
                 const base = vmState().frames[vmState().frame_top - 1].base;
+                if (base + slot >= vms.MaxStack) return error.StackOverflow;
                 var a = vmState().stack[base + slot];
                 if (a == .object and a.object.* == .cell) a = a.object.cell.value;
                 const an = try vms.valueAsNumber(a);
@@ -1880,6 +1917,7 @@ fn runInner() !void {
                 const k = chunk.constAt(try vmShort());
                 const off = try vmShort();
                 const base = vmState().frames[vmState().frame_top - 1].base;
+                if (base + slot >= vms.MaxStack) return error.StackOverflow;
                 var a = vmState().stack[base + slot];
                 if (a == .object and a.object.* == .cell) a = a.object.cell.value;
                 const a_named = a == .object and a.object.* == .named_value;
@@ -1902,6 +1940,7 @@ fn runInner() !void {
                 const k = chunk.constAt(try vmShort());
                 const off = try vmShort();
                 const base = vmState().frames[vmState().frame_top - 1].base;
+                if (base + slot >= vms.MaxStack) return error.StackOverflow;
                 var a = vmState().stack[base + slot];
                 if (a == .object and a.object.* == .cell) a = a.object.cell.value;
                 const a_named = a == .object and a.object.* == .named_value;
@@ -1933,6 +1972,7 @@ fn runInner() !void {
                         (@intFromPtr(a.string.ptr) == @intFromPtr(&acc[0]));
                     const sa: []const u8 = if (is_acc) acc[0..state.str_acc_len] else try vms.asStringValue(a);
                     const new_len = sa.len + sk.len;
+                    if (new_len < sa.len) return error.TooManyConstants;
                     if (new_len <= acc.len) {
                         // Fast path: accumulate in the buffer, push a .string view.
                         if (!is_acc) @memcpy(acc[0..sa.len], sa);
@@ -2281,6 +2321,7 @@ fn runInner() !void {
                         ups[i] = pcl.closure.upvalues[idx];
                     } else {
                         const abs = frame.base + idx;
+                        if (abs >= vms.MaxStack) return error.StackOverflow;
                         const cur = vmState().stack[abs];
                         if (cur == .object and cur.object.* == .cell) {
                             ups[i] = cur.object;
@@ -2387,7 +2428,7 @@ fn runInner() !void {
                 const cond = try vmPop();
                 if (cond != .boolean) return error.TypeError;
                 if (!cond.boolean) {
-                    vmState().pending_panic_message = vms.asStringValue(msg_val) catch "AssertionFailed";
+                    vmState().pending_panic_message = panicMessageFromValue(msg_val);
                     return error.AssertionFailed;
                 }
             },
@@ -2607,7 +2648,7 @@ fn runPanicUnwind(orig_err: anyerror) anyerror!void {
                 // Multi-value return: build a tuple of the right size.
                 // Named returns: use the values from the (still-readable) stack slots;
                 // unnamed returns: fill with null.
-                const n: u8 = if (named_ret > 0) named_ret else @intCast(ret_count);
+                const n: u8 = if (named_ret > 0) named_ret else @intCast(@min(ret_count, 255));
                 const tup_obj = vmAllocObject() catch { vmPush(.null) catch {}; break :recover_ret; };
                 tup_obj.* = .{ .array = &[_]Value{} };
                 const items = vmAllocManagedSlice(Value, n) catch { vmPush(.null) catch {}; break :recover_ret; };
@@ -2649,6 +2690,7 @@ pub fn callGlobal(name: []const u8, args: []const Value) !Value {
     const obj = fn_val.object;
     if (obj.* != .function and obj.* != .closure) return error.NotAFunction;
 
+    if (args.len > 255) return error.ArityMismatch;
     try vmPush(fn_val);
     for (args) |a| try vmPush(a);
 
@@ -2664,6 +2706,7 @@ pub fn callGlobal(name: []const u8, args: []const Value) !Value {
 }
 
 pub fn callFunction(func_val: Value, args: []const Value) anyerror!Value {
+    if (args.len > 255) return error.ArityMismatch;
     try vmPush(func_val);
     for (args) |a| try vmPush(a);
     const depth_before = vmState().frame_top;

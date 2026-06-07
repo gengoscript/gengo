@@ -270,6 +270,8 @@ pub fn valueAsInt(v: Value) !i64 {
         .number => |n| blk: {
             const t = @trunc(n);
             if (t != n) return error.TypeError;
+            if (t < @as(f64, @floatFromInt(std.math.minInt(i64))) or
+                t >= @as(f64, @floatFromInt(std.math.maxInt(i64)))) return error.TypeError;
             break :blk @intFromFloat(t);
         },
         .rune => |r| @intCast(r),

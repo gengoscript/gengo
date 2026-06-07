@@ -616,7 +616,11 @@ fn cloneObject(src: *Object, visits: []CloneVisit, visit_len: *usize) anyerror!V
             try vms.pushTempRoot(.{ .object = out_obj });
             defer vms.popTempRoot();
             try cloneRemember(src, out_obj, visits, visit_len);
-            out_obj.* = .{ .variant_value = .{ .typ = vv.typ, .tag = vv.tag, .ordinal = vv.ordinal, .payload = try cloneValue(vv.payload, visits, visit_len) } };
+            var shared = try vmgc.vmAllocManagedSlice(Value, vv.shared_values.len);
+            for (vv.shared_values, 0..) |sv, i| shared[i] = try cloneValue(sv, visits, visit_len);
+            var arm = try vmgc.vmAllocManagedSlice(Value, vv.arm_fields.len);
+            for (vv.arm_fields, 0..) |af, i| arm[i] = try cloneValue(af, visits, visit_len);
+            out_obj.* = .{ .variant_value = .{ .typ = vv.typ, .tag = vv.tag, .ordinal = vv.ordinal, .payload = try cloneValue(vv.payload, visits, visit_len), .shared_values = shared, .arm_fields = arm } };
             return .{ .object = out_obj };
         },
     }

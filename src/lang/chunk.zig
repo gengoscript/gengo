@@ -73,11 +73,11 @@ pub fn emitOp(op: Op, line: u32) !void {
 }
 
 pub fn emit2(a: u8, b: u8, line: u32) !void {
-    if (a == @intFromEnum(Op.get_local)) {
-        g_state.last_get_local_code_pos = g_state.code_len;
-    }
     try emitByte(a, line);
     try emitByte(b, line);
+    if (a == @intFromEnum(Op.get_local)) {
+        g_state.last_get_local_code_pos = g_state.code_len - 2;
+    }
 }
 
 // Emit opcode + 2-byte constant index (big-endian).
@@ -90,13 +90,13 @@ pub fn emitConstIdx(op: Op, idx: u16, line: u32) !void {
 // Add constant v and emit opcode + its 2-byte index.
 pub fn emitOpConst(op: Op, v: Value, line: u32) !void {
     const idx = try addConst(v);
+    try emitConstIdx(op, idx, line);
     if (op == .constant) {
-        g_state.last_const_code_pos = g_state.code_len;
+        g_state.last_const_code_pos = g_state.code_len - 3;
         g_state.last_const_idx = idx;
     } else {
         g_state.last_const_code_pos = null;
     }
-    try emitConstIdx(op, idx, line);
 }
 
 // Emit a binary op, fusing with a preceding `constant` instruction when possible.

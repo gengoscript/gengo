@@ -1,0 +1,14 @@
+std := import("std")
+core := std.core
+
+type Box variant {
+    label string,
+    cube { side float }
+}
+
+b1 := Box.cube { label: "hello", side: 5.0 }
+b2 := core.clone(b1)
+
+std.io.println(b2.label)
+std.io.println(b2.side)
+std.io.println("done")

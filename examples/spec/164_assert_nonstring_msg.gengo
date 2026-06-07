@@ -1,0 +1,15 @@
+std := import("std")
+core := std.core
+
+func test_assert_msg() {
+    defer func() {
+        e := core.recover()
+        if core.is_error(e) {
+            std.io.println(e)
+        }
+    }()
+    assert false, 42
+}
+
+test_assert_msg()
+std.io.println("done")

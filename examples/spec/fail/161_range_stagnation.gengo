@@ -1,0 +1,5 @@
+type NearMax int range 9007199254740990..9007199254740995
+
+for i in NearMax {
+    _ = i
+}
