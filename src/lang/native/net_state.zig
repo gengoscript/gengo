@@ -27,13 +27,31 @@ fn ioContext() std.Io {
     return std.Io.Threaded.global_single_threaded.io();
 }
 
-fn getsockname(sock: std.posix.socket_t, addr: *std.posix.sockaddr, addrlen: *std.posix.socklen_t) !void {
-    const rc = std.os.linux.getsockname(sock, addr, addrlen);
-    if (std.os.linux.errno(rc) != .SUCCESS) return error.CapabilityError;
+// std.posix.system is std.os.linux on Linux (raw syscalls, no libc needed)
+// and std.c on macOS (libc always linked on Darwin). Both have getsockname.
+// On Windows this code is never compiled — Windows path stubs below.
+fn posixGetsockname(sock: std.posix.socket_t, addr: *std.posix.sockaddr, addrlen: *std.posix.socklen_t) !void {
+    const rc = std.posix.system.getsockname(sock, addr, addrlen);
+    if (std.posix.errno(rc) != .SUCCESS) return error.CapabilityError;
+}
+
+fn posixGetpeername(sock: std.posix.socket_t, addr: *std.posix.sockaddr, addrlen: *std.posix.socklen_t) !void {
+    const rc = std.posix.system.getpeername(sock, addr, addrlen);
+    if (std.posix.errno(rc) != .SUCCESS) return error.CapabilityError;
+}
+
+fn posixSetSockOptTimeval(fd: std.posix.socket_t, optname: u32, ms: i64) !void {
+    if (ms < 0) return error.CapabilityError;
+    const sec = @divTrunc(ms, 1000);
+    const usec = @mod(ms, 1000) * 1000;
+    const tv = std.posix.timeval{ .sec = sec, .usec = usec };
+    const opt: []const u8 = std.mem.asBytes(&tv);
+    const rc = std.posix.system.setsockopt(fd, std.posix.SOL.SOCKET, optname, opt.ptr, @intCast(opt.len));
+    if (std.posix.errno(rc) != .SUCCESS) return error.CapabilityError;
 }
 
 fn formatIp4Address(port: u16, ip_bytes: [4]u8) ![]u8 {
-    var buf: [64]u8 = undefined;
+    var buf: [32]u8 = undefined;
     const s = std.fmt.bufPrint(&buf, "{d}.{d}.{d}.{d}:{d}", .{
         ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3], port,
     }) catch return error.CapabilityError;
@@ -56,22 +74,10 @@ fn formatIp6Address(port: u16, ip_bytes: [16]u8) ![]u8 {
     return std.heap.page_allocator.dupe(u8, s) catch return error.OutOfMemory;
 }
 
-fn setSockOptTimeval(fd: std.posix.socket_t, optname: u32, ms: i64) !void {
-    if (ms < 0) return error.CapabilityError;
-    const sec = @divTrunc(ms, 1000);
-    const usec = @mod(ms, 1000) * 1000;
-    const tv = std.posix.timeval{
-        .sec = sec,
-        .usec = usec,
-    };
-    try std.posix.setsockopt(fd, std.posix.SOL.SOCKET, optname, std.mem.asBytes(&tv));
-}
-
 pub fn netDial(network: []const u8, address: []const u8) !u32 {
     if (comptime builtin.os.tag == .wasi) return error.CapabilityNotAvailable;
     if (g_conn_count >= MaxConns) return error.CapabilityError;
 
-    // Only TCP is supported in the built-in handler
     if (!std.mem.eql(u8, network, "tcp") and
         !std.mem.eql(u8, network, "tcp4") and
         !std.mem.eql(u8, network, "tcp6"))
@@ -79,16 +85,13 @@ pub fn netDial(network: []const u8, address: []const u8) !u32 {
         return error.CapabilityError;
     }
 
-    // Parse host:port
-    const colon = std.mem.lastIndexOfScalar(u8, address, ':');
-    if (colon == null) return error.CapabilityError;
-    const host = address[0..colon.?];
-    const port_str = address[colon.? + 1..];
+    const colon = std.mem.lastIndexOfScalar(u8, address, ':') orelse return error.CapabilityError;
+    const host = address[0..colon];
+    const port_str = address[colon + 1 ..];
     const port = std.fmt.parseUnsigned(u16, port_str, 10) catch return error.CapabilityError;
 
     const io_ctx = ioContext();
 
-    // Validate and resolve hostname using DNS lookup
     std.Io.net.HostName.validate(host) catch return error.CapabilityError;
     const host_name = std.Io.net.HostName{ .bytes = host };
 
@@ -103,9 +106,7 @@ pub fn netDial(network: []const u8, address: []const u8) !u32 {
             error.Closed => break,
         };
         switch (result) {
-            .address => |addr| {
-                if (ip == null) ip = addr;
-            },
+            .address => |addr| { if (ip == null) ip = addr; },
             .canonical_name => {},
         }
     }
@@ -146,7 +147,9 @@ pub fn netRead(id: u32, max_bytes: usize) ![]u8 {
     const buf = std.heap.page_allocator.alloc(u8, max_bytes) catch return error.OutOfMemory;
     errdefer std.heap.page_allocator.free(buf);
 
-    const n = std.posix.read(conn.socket, buf) catch return error.CapabilityError;
+    const io_ctx = ioContext();
+    var slices = [1][]u8{buf};
+    const n = io_ctx.vtable.netRead(io_ctx.userdata, conn.socket, &slices) catch return error.CapabilityError;
 
     const out = std.heap.page_allocator.realloc(buf, n) catch return error.OutOfMemory;
     return out;
@@ -172,73 +175,66 @@ pub fn netClose(id: u32) !void {
 
 pub fn netLocalAddr(id: u32) ![]u8 {
     if (comptime builtin.os.tag == .wasi) return error.CapabilityNotAvailable;
+    if (comptime builtin.os.tag == .windows) return error.CapabilityError; // TODO: Winsock
     const conn = findConn(id) orelse return error.CapabilityError;
 
     var addr_storage: std.posix.sockaddr.storage = undefined;
     var addr_len: std.posix.socklen_t = @sizeOf(std.posix.sockaddr.storage);
-    try getsockname(conn.socket, @ptrCast(&addr_storage), &addr_len);
+    try posixGetsockname(conn.socket, @ptrCast(&addr_storage), &addr_len);
 
-    switch (addr_storage.family) {
-        std.posix.AF.INET => {
+    return switch (addr_storage.family) {
+        std.posix.AF.INET => blk: {
             const addr: *const std.posix.sockaddr.in = @ptrCast(&addr_storage);
-            return formatIp4Address(
-                std.mem.bigToNative(u16, addr.port),
-                std.mem.asBytes(&addr.addr).*,
-            );
+            break :blk formatIp4Address(std.mem.bigToNative(u16, addr.port), std.mem.asBytes(&addr.addr).*);
         },
-        std.posix.AF.INET6 => {
+        std.posix.AF.INET6 => blk: {
             const addr: *const std.posix.sockaddr.in6 = @ptrCast(&addr_storage);
-            return formatIp6Address(
-                std.mem.bigToNative(u16, addr.port),
-                addr.addr,
-            );
+            break :blk formatIp6Address(std.mem.bigToNative(u16, addr.port), addr.addr);
         },
-        else => return error.CapabilityError,
-    }
+        else => error.CapabilityError,
+    };
 }
 
 pub fn netRemoteAddr(id: u32) ![]u8 {
     if (comptime builtin.os.tag == .wasi) return error.CapabilityNotAvailable;
+    if (comptime builtin.os.tag == .windows) return error.CapabilityError; // TODO: Winsock
     const conn = findConn(id) orelse return error.CapabilityError;
 
     var addr_storage: std.posix.sockaddr.storage = undefined;
     var addr_len: std.posix.socklen_t = @sizeOf(std.posix.sockaddr.storage);
-    std.posix.getpeername(conn.socket, @ptrCast(&addr_storage), &addr_len) catch return error.CapabilityError;
+    try posixGetpeername(conn.socket, @ptrCast(&addr_storage), &addr_len);
 
-    switch (addr_storage.family) {
-        std.posix.AF.INET => {
+    return switch (addr_storage.family) {
+        std.posix.AF.INET => blk: {
             const addr: *const std.posix.sockaddr.in = @ptrCast(&addr_storage);
-            return formatIp4Address(
-                std.mem.bigToNative(u16, addr.port),
-                std.mem.asBytes(&addr.addr).*,
-            );
+            break :blk formatIp4Address(std.mem.bigToNative(u16, addr.port), std.mem.asBytes(&addr.addr).*);
         },
-        std.posix.AF.INET6 => {
+        std.posix.AF.INET6 => blk: {
             const addr: *const std.posix.sockaddr.in6 = @ptrCast(&addr_storage);
-            return formatIp6Address(
-                std.mem.bigToNative(u16, addr.port),
-                addr.addr,
-            );
+            break :blk formatIp6Address(std.mem.bigToNative(u16, addr.port), addr.addr);
         },
-        else => return error.CapabilityError,
-    }
+        else => error.CapabilityError,
+    };
 }
 
 pub fn netSetDeadline(id: u32, ms: i64) !void {
     if (comptime builtin.os.tag == .wasi) return error.CapabilityNotAvailable;
+    if (comptime builtin.os.tag == .windows) return error.CapabilityError; // TODO: Winsock SO_RCVTIMEO DWORD
     const conn = findConn(id) orelse return error.CapabilityError;
-    try setSockOptTimeval(conn.socket, @intCast(std.posix.SO.RCVTIMEO), ms);
-    try setSockOptTimeval(conn.socket, @intCast(std.posix.SO.SNDTIMEO), ms);
+    try posixSetSockOptTimeval(conn.socket, @intCast(std.posix.SO.RCVTIMEO), ms);
+    try posixSetSockOptTimeval(conn.socket, @intCast(std.posix.SO.SNDTIMEO), ms);
 }
 
 pub fn netSetReadDeadline(id: u32, ms: i64) !void {
     if (comptime builtin.os.tag == .wasi) return error.CapabilityNotAvailable;
+    if (comptime builtin.os.tag == .windows) return error.CapabilityError; // TODO: Winsock SO_RCVTIMEO DWORD
     const conn = findConn(id) orelse return error.CapabilityError;
-    try setSockOptTimeval(conn.socket, @intCast(std.posix.SO.RCVTIMEO), ms);
+    try posixSetSockOptTimeval(conn.socket, @intCast(std.posix.SO.RCVTIMEO), ms);
 }
 
 pub fn netSetWriteDeadline(id: u32, ms: i64) !void {
     if (comptime builtin.os.tag == .wasi) return error.CapabilityNotAvailable;
+    if (comptime builtin.os.tag == .windows) return error.CapabilityError; // TODO: Winsock SO_SNDTIMEO DWORD
     const conn = findConn(id) orelse return error.CapabilityError;
-    try setSockOptTimeval(conn.socket, @intCast(std.posix.SO.SNDTIMEO), ms);
+    try posixSetSockOptTimeval(conn.socket, @intCast(std.posix.SO.SNDTIMEO), ms);
 }
