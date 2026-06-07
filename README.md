@@ -1,26 +1,36 @@
 # Gengo (言語)
 
-Gengo is an embeddable sandboxed scripting engine. You write the host application. Your users write Gengo scripts. The engine runs those scripts in a controlled environment where you decide what they can see, call, and consume.
+Gengo is a small embeddable scripting engine.
+
+You write the host application. Your users write Gengo scripts. The engine runs those scripts in a controlled environment, where the host decides what scripts are allowed to see, call, and consume.
 
 **[Try it in the browser](https://gengoscript.github.io/gengo/)**
 
-*Early stage. Language and runtime are still being tightened; breaking changes are expected.*
+Gengo is still early. The language and runtime are being tightened, and breaking changes should be expected.
 
 ---
 
-## The problem it solves
+## Why it exists
 
-You want users to define logic — validation rules, transformation pipelines, policy decisions, configuration behavior — without shipping a new binary every time the rules change and without trusting arbitrary code with your process.
+Sometimes you want users to define logic without rebuilding or redeploying the host application every time that logic changes.
 
-The usual answers are: embed Lua (good runtime, weak types), embed Python (too heavy, no isolation), write a DSL (expensive, limited), or use JSON/YAML (not a language). Gengo is a fourth option: a small scripting VM with a type system designed for domain constraints, a hard execution budget, isolated instances, and WASM as a first-class deployment target.
+That might mean validation rules, transformation steps, policy decisions, configuration behavior, or small bits of domain-specific automation.
+
+The usual options all have trade-offs.
+
+Lua is small and embeddable, but its type system is loose. Python is familiar, but heavy and awkward to isolate properly. A custom DSL can fit the problem well, but costs real time to design and maintain. JSON and YAML are useful for data, but they are not programming languages.
+
+Gengo sits somewhere in the middle: a small scripting VM with explicit host integration, a domain-oriented type system, hard execution limits, isolated runtime instances, and WASM as a primary target.
 
 ---
 
-## What makes it different
+## What Gengo gives you
 
-**Constrained execution.** Every engine instance runs under a configurable instruction budget. Scripts that loop forever or recurse without bound are terminated, not hung. Memory limits are set at build time via presets (`dev`, `tiny`, `stress`).
+**Constrained execution.**
+Each engine instance runs with a configurable instruction budget. A script that loops forever or recurses without bound is stopped instead of hanging the host process. Memory limits are selected at build time through presets such as `dev`, `tiny`, and `stress`.
 
-**Domain-safe types.** The type system enforces constraints at the boundary, not in ad-hoc validation code:
+**Domain-safe types.**
+Gengo is built around the idea that domain constraints should live in the type system when possible, not in scattered validation code.
 
 ```gengo
 type Port      int range 1..65535
@@ -36,19 +46,22 @@ type AlertRule variant {
 }
 ```
 
-A script author constructing `Port(0)` or `Severity(10)` gets a runtime error at the constructor, not a silent bad value downstream. `AlertRule.Metric` values always carry valid `Severity` and `string` fields. The host never receives out-of-range data from a well-typed script.
+If a script tries to construct `Port(0)` or `Severity(10)`, it fails at the point of construction. The bad value does not drift further into the system and become the host’s problem later.
 
-**Host modules.** The host exposes named functions to scripts. Scripts can only call what you register. There is no ambient I/O, no filesystem, no network — unless you add it.
+**Host modules.**
+The host exposes named functions to scripts. Scripts can only call what the host registers. There is no ambient filesystem, network access, or process I/O unless the host deliberately provides it.
 
-**Isolated instances.** Up to 64 engine instances may be live simultaneously, each with its own heap, state, and module table. One script crashing does not affect others.
+**Isolated instances.**
+Multiple engine instances can run side by side, each with its own heap, state, and module table. One script failing does not poison the others.
 
-**WASM-first, native too.** The engine ships as `gengo-engine.wasm` for sandboxed browser/edge deployment and as `libgengo-engine.so` for in-process native embedding. Both expose the same C API.
+**WASM and native embedding.**
+Gengo can be built as `gengo-engine.wasm` for browser, edge, and other sandboxed environments, or as `libgengo-engine.so` for native in-process embedding. Both expose the same C-style API.
 
 ---
 
 ## Integration example
 
-A host application in Zig loads a user-supplied validation script, enforces an instruction budget, and calls a function to validate a record:
+A Zig host application can load a user script, set an execution budget, expose a small host module, and call a function from the script.
 
 ```zig
 const api = @import("src/runtime/api.zig");
@@ -60,8 +73,8 @@ fn lookup_category(args: []const api.Value) anyerror!api.Value {
 }
 
 var rt = api.Runtime.init(.{
-    .allow_io   = false,       // no println, no file access
-    .max_ops    = 50_000,      // terminate runaway scripts
+    .allow_io   = false,
+    .max_ops    = 50_000,
     .host_modules = &.{.{
         .name  = "@module:host",
         .funcs = &.{.{ .name = "lookup_category", .arity = 1 }},
@@ -78,7 +91,7 @@ const verdict = rt.call("validate", &.{
 });
 ```
 
-The user's script:
+The user script might look like this:
 
 ```gengo
 host := import("@module:host")
@@ -86,86 +99,91 @@ host := import("@module:host")
 type Severity int range 0..5
 
 pub func validate(severity int, source string) bool {
-    s := Severity(severity)      // enforced: 0–5 or runtime error
+    s := Severity(severity)
     cat := host.lookup_category(source)
     return s >= 3 && cat == "network"
 }
 ```
 
-The host never receives a severity outside 0–5 from this script. If the user writes `Severity(99)`, the engine throws before `validate` returns.
+If `severity` is outside `0..5`, the script fails while constructing `Severity`. The host does not receive a supposedly valid result built from invalid domain data.
 
 ---
 
 ## Engine artifacts
 
-Gengo ships two artifacts:
+Gengo currently builds two main engine artifacts.
 
-**`gengo-runtime.wasm`** — a WASI executable. Feed it a script path, get stdout/stderr back. Zero host integration required. Use this for CLI tooling, CI runners, or anywhere you want WASM sandboxing without writing embedding code.
+**`gengo-runtime.wasm`** is a WASI executable. Give it a script path and it runs the script. This is useful for CLI tooling, CI runners, tests, and simple sandboxed execution where you do not need a custom embedding layer.
 
-**`gengo-engine.wasm`** — a library for programmatic embedding. The host drives execution through exported functions against WASM linear memory. Supports multiple isolated instances, typed function calls, host module registration, and in-memory source tables.
+**`gengo-engine.wasm`** is the embeddable engine. The host drives execution through exported functions and WASM linear memory. It supports multiple isolated instances, typed calls, host module registration, and in-memory source tables.
 
-The same API is available as `libgengo-engine.so` for native in-process embedding via C FFI.
+The same engine API is also available as `libgengo-engine.so` for native embedding through C FFI.
 
 ### Engine API
 
-| Export | Description |
-|---|---|
-| `engine_init() → i32` | Allocate an engine instance; returns handle |
-| `engine_destroy(handle)` | Free the instance |
-| `engine_run(handle, src_ptr, src_len) → i32` | Compile and run a script |
-| `engine_run_path(handle, src_ptr, src_len, path_ptr, path_len) → i32` | Run with a root path for relative imports |
-| `engine_call(handle, name_ptr, name_len, args_ptr, argc, out_ptr) → i32` | Call a named exported function |
-| `engine_reset(handle)` | Clear runtime state, reuse handle |
-| `engine_add_source(handle, path_ptr, path_len, src_ptr, src_len) → i32` | Register an in-memory module |
-| `engine_register_module(handle, name_ptr, name_len, funcs_ptr, funcs_count) → i32` | Register a host-defined module |
-| `engine_set_write_fn(handle, callback)` | Set write callback (native target) |
-| `engine_last_error(handle, out_ptr, max_len) → i32` | Retrieve last error message |
-| `engine_last_error_line(handle) → i32` | Source line of last error (1-based) |
-| `engine_last_error_col(handle) → i32` | Column of last error (1-based) |
+| Export                                                                             | Description                                 |
+| ---------------------------------------------------------------------------------- | ------------------------------------------- |
+| `engine_init() → i32`                                                              | Allocate an engine instance; returns handle |
+| `engine_destroy(handle)`                                                           | Free the instance                           |
+| `engine_run(handle, src_ptr, src_len) → i32`                                       | Compile and run a script                    |
+| `engine_run_path(handle, src_ptr, src_len, path_ptr, path_len) → i32`              | Run with a root path for relative imports   |
+| `engine_call(handle, name_ptr, name_len, args_ptr, argc, out_ptr) → i32`           | Call a named exported function              |
+| `engine_reset(handle)`                                                             | Clear runtime state, reuse handle           |
+| `engine_add_source(handle, path_ptr, path_len, src_ptr, src_len) → i32`            | Register an in-memory module                |
+| `engine_register_module(handle, name_ptr, name_len, funcs_ptr, funcs_count) → i32` | Register a host-defined module              |
+| `engine_set_write_fn(handle, callback)`                                            | Set write callback for the native target    |
+| `engine_last_error(handle, out_ptr, max_len) → i32`                                | Retrieve the last error message             |
+| `engine_last_error_line(handle) → i32`                                             | Source line of last error, 1-based          |
+| `engine_last_error_col(handle) → i32`                                              | Source column of last error, 1-based        |
 
-Values cross the boundary as `ValueWire` — a 24-byte struct encoding null, boolean, number, string, array, and map.
+Values cross the boundary as `ValueWire`, a 24-byte struct encoding null, booleans, numbers, strings, arrays, and maps.
 
 See [docs/engine-api.md](docs/engine-api.md) for the full ABI reference and JavaScript helpers.
 
-### TypeScript SDK
+---
 
-`sdk/typescript/` wraps `gengo-engine.wasm` with typed `GVal` encoding so you do not manipulate `ValueWire` directly:
+## TypeScript SDK
+
+The TypeScript SDK in `sdk/typescript/` wraps `gengo-engine.wasm` and handles `GVal` encoding, so you do not have to work with `ValueWire` directly.
 
 ```bash
-cd sdk/typescript && npm install && npm run build
+cd sdk/typescript
+npm install
+npm run build
 ```
 
 ---
 
 ## The language
 
-Gengo is intentionally Go-adjacent in syntax. The goal is that anyone who has read Go can read a Gengo script without a tutorial.
+Gengo uses a Go-adjacent syntax on purpose. Someone who has read Go should be able to read basic Gengo code without much ceremony.
 
-### Type system
+The type system is the main point of the language. In addition to structs, interfaces, and variants, Gengo includes:
 
-The interesting part. Beyond structs, interfaces, and variants, Gengo has:
+* **Named scalar types** — `type UserId string`, `type Temperature float`
+* **Range types** — `type Port int range 1..65535`
+* **Cyclic types** — `type Weekday int cycle 0..6`
+* **Predicate subtypes** — `type EventCode int predicate func(x) { return x % 2 == 0 }`
+* **Variant records** — variants with shared fields, plus arm-specific fields accessed through pattern matching
 
-- **Named scalar types** — `type UserId string`, `type Temperature float`. Distinct types that require explicit conversion; you cannot pass a `UserId` where a plain `string` is expected.
-- **Range types** — `type Port int range 1..65535`. Construction enforces the range at runtime.
-- **Cyclic types** — `type Weekday int cycle 0..6`. Arithmetic wraps rather than overflows.
-- **Predicate subtypes** — `type EventCode int predicate func(x) { return x % 2 == 0 }`. Arbitrary invariant enforced at construction.
-- **Variant records** — variants with shared fields unconditionally accessible across all arms, plus arm-specific fields gated behind pattern matching.
-
-These exist because a scripting engine for domain logic needs to encode domain constraints in the type system, not in validation code scattered across both sides of the host/script boundary.
+These features are there because domain scripting often needs stronger boundaries than “just pass a map and validate it later.”
 
 ### Feature summary
 
-- structs, methods, interfaces (structural typing), enums
-- variant types with single-payload and multi-field arms, variant records with shared fields
-- closures with upvalue capture
-- multi-return functions and named return values
-- `var`/`const` with type annotations, typed arrays and maps
-- `defer`, `recover`, `assert`, `trap`
-- `for`, `for-in`, `switch` with pattern matching
-- tail-call optimisation (self and mutual)
-- in-source `test` blocks
-- multi-file modules with `pub` visibility
-- `std` library: `std.io`, `std.core`, `std.string`, `std.math`, `std.conv`, `std.rand`, `std.json`, `std.template`, `std.regexp`, `std.time`
+Gengo currently includes:
+
+* structs, methods, interfaces, and enums
+* variant types, including multi-field arms and shared fields
+* closures with upvalue capture
+* multi-return functions and named return values
+* `var` and `const`, with type annotations
+* typed arrays and maps
+* `defer`, `recover`, `assert`, and `trap`
+* `for`, `for-in`, and `switch` with pattern matching
+* tail-call optimisation for self and mutual recursion
+* in-source `test` blocks
+* multi-file modules with `pub` visibility
+* a standard library covering core utilities, strings, math, conversion, random values, JSON, templates, regex, time, and basic I/O
 
 ---
 
@@ -195,9 +213,15 @@ zig build -Dpreset=dev test
 zig build -Dpreset=dev bench
 ```
 
-Run `./zig-out/bin/gengo` with no arguments on an interactive terminal to start the REPL.
+Run the CLI with no arguments on an interactive terminal to start the REPL.
 
-### Browser (WASI runner)
+```bash
+./zig-out/bin/gengo
+```
+
+---
+
+## Browser WASI runner
 
 ```js
 import { WASI, File, OpenFile, ConsoleStdout, PreopenDirectory }
@@ -225,11 +249,11 @@ wasi.start(wasm.instance);
 
 ## Build presets
 
-| Preset | Purpose |
-|--------|---------|
-| `dev` | Default development limits |
-| `tiny` | Tighter heap and stack limits for constrained embedding |
-| `stress` | Reduced limits for edge-case testing |
+| Preset   | Purpose                                                 |
+| -------- | ------------------------------------------------------- |
+| `dev`    | Default development limits                              |
+| `tiny`   | Tighter heap and stack limits for constrained embedding |
+| `stress` | Reduced limits for edge-case testing                    |
 
 Use `-Dpreset=<name>` with any build command.
 
@@ -237,11 +261,11 @@ Use `-Dpreset=<name>` with any build command.
 
 ## Repo layout
 
-```
+```text
 src/lang/         lexer, compiler, bytecode, VM
 src/runtime/      heap, GC, runtime, Zig embedding API
 src/engine.zig    WASM/native engine exports
-examples/spec/    conformance cases (pass and fail)
+examples/spec/    conformance cases, both pass and fail
 examples/bench/   benchmark programs
 docs/             language, stdlib, embedding, engine API, changelog
 sdk/typescript/   TypeScript wrapper for gengo-engine.wasm
@@ -250,29 +274,33 @@ playground/       browser playground
 
 ## Toolchain
 
-- Zig `0.16.0`
-- wasmtime for WASI testing and execution
+* Zig `0.16.0`
+* wasmtime for WASI testing and execution
 
 ## Docs
 
-- [docs/language.md](docs/language.md)
-- [docs/stdlib.md](docs/stdlib.md)
-- [docs/embedding.md](docs/embedding.md)
-- [docs/engine-api.md](docs/engine-api.md)
-- [docs/changelog.md](docs/changelog.md)
+* [docs/language.md](docs/language.md)
+* [docs/stdlib.md](docs/stdlib.md)
+* [docs/embedding.md](docs/embedding.md)
+* [docs/engine-api.md](docs/engine-api.md)
+* [docs/changelog.md](docs/changelog.md)
 
 ---
 
 ## A note on authorship
 
-Gengo is built almost entirely with the help of LLMs. It is tested, as any present-day software should be, but this is not an artisanally hand-carved compiler lovingly shaped by a lone language monk in a candlelit workshop while listening to smooth jazz.
+Gengo has been built with substantial help from LLMs.
 
-Expect pragmatic choices, occasional rough edges, and parts of the codebase that may look like several enthusiastic monkeys tried to type on the keyboard all at once. Because, in several ways, they did.
+That is worth saying plainly. It is tested, and it should be judged by the same standard as any other software: what it does, how well it is specified, how reliably it behaves, and how maintainable the code is in practice.
 
-If software with substantial LLM involvement gives you hives, moral discomfort, or a sudden urge to rewrite everything from first principles, this project may not be for you. That is fine. For everyone else: issues, tests, bug reports, and patches are welcome.
+It is not, however, an artisanally hand-carved compiler produced by a lone language monk in a candlelit room while smooth jazz plays in the background.
 
-And if you feel a pressing need to rebalance the cosmic ledger, consider donating to serious climate work instead of buying that thing you don't actually need.
+Expect pragmatic choices. Expect some rough edges. Expect parts of the codebase that look like several enthusiastic monkeys were given keyboards and a deadline. In several ways, they were.
 
-That said, please do not send five commits in ten minutes, each with a single spelling fix or a style-guide preference. Small fixes are welcome, but batch them, make them useful, and expect taste calls to remain taste calls.
+If software with meaningful LLM involvement gives you hives, moral discomfort, or the sudden urge to rewrite everything from first principles, this project may not be for you. That is fine.
+
+For everyone else: issues, tests, bug reports, and useful patches are welcome.
+
+A small request: please do not send five commits in ten minutes, each fixing one spelling mistake or expressing one style preference. Small fixes are welcome, but batch them, make them useful, and expect taste calls to remain taste calls.
 
 Judgment on what goes into this alphabet soup remains with me for now.
