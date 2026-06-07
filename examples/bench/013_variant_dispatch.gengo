@@ -1,0 +1,27 @@
+std := import("std")
+
+type Shape variant {
+    Circle(r int),
+    Rect(w int),
+    Triangle(b int)
+}
+
+func area(s Shape) int {
+    switch s {
+        case .Circle(r) { return r * r * 3 }
+        case .Rect(w) { return w * w }
+        case .Triangle(b) { return b * b * 1 }
+    }
+    return 0
+}
+
+total := 0
+for i := 0; i < 200000; i++ {
+    c := Shape.Circle(i % 10)
+    r := Shape.Rect(i % 7)
+    t := Shape.Triangle(i % 5)
+    total = total + area(c) + area(r) + area(t)
+}
+
+std.io.println("variant-dispatch")
+std.io.println(total)

@@ -1,0 +1,14 @@
+std := import("std")
+
+type Port int range 1..65535
+type Score int range 0..100
+
+total := 0
+for i := 0; i < 200000; i++ {
+    p := Port((i % 65534) + 1)
+    s := Score(i % 101)
+    total = total + int(p) + int(s)
+}
+
+std.io.println("named-type-range")
+std.io.println(total)
