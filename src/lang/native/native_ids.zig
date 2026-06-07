@@ -150,6 +150,15 @@ pub const NativeFnId = enum(u8) {
     array_flat = 147,
 
     cap_net_get = 160,
+    cap_net_dial = 163,
+    cap_net_read = 164,
+    cap_net_write = 165,
+    cap_net_close = 166,
+    cap_net_local_addr = 167,
+    cap_net_remote_addr = 168,
+    cap_net_set_deadline = 169,
+    cap_net_set_read_deadline = 170,
+    cap_net_set_write_deadline = 171,
 
     cap_fs_read = 161,
     cap_fs_exists = 162,

@@ -7,6 +7,7 @@ const io = @import("io.zig");
 const module_compile = @import("../lang/module_compile.zig");
 const vm = @import("../lang/vm.zig");
 const vmnative = @import("../lang/vm_native.zig");
+const net_state = @import("../lang/native/net_state.zig");
 const Value = @import("../lang/value.zig").Value;
 
 fn checkGlobalExists(ctx: *anyopaque, name: []const u8) bool {
@@ -82,6 +83,7 @@ pub const Runtime = struct {
 
     pub fn reset(self: *Runtime) void {
         self.activate();
+        net_state.netReset();
         globals.reset();
         vm.reset();
         heap.reset();

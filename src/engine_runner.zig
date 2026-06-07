@@ -329,6 +329,30 @@ fn testHostModuleArrayArgs() void {
     out("  host module array args: OK\n");
 }
 
+fn testNetCapability() void {
+    const rt = makeRt(.{ .allow_io = false, .capabilities = &.{"net"} });
+
+    const res = rt.run(
+        \\net := import("@cap:net")
+        \\func testDial() {
+        \\    _ = net.dial("tcp", "127.0.0.1:1")
+        \\}
+    );
+    switch (res) {
+        .ok => {},
+        else => fail("engine FAIL: net capability compile failed\n"),
+    }
+
+    // On WASM, dial returns CapabilityNotAvailable at runtime
+    const call_res = rt.call("testDial", &.{});
+    switch (call_res) {
+        .runtime_error => {},
+        else => fail("engine FAIL: expected runtime error for net.dial on WASM\n"),
+    }
+
+    out("  net capability: OK\n");
+}
+
 export fn _start() void {
     out("engine runner:\n");
     testInitDestroy();
@@ -344,6 +368,7 @@ export fn _start() void {
     testArrayWireResult();
     testMapWireResult();
     testHostModuleArrayArgs();
+    testNetCapability();
     out("engine-api OK\n");
     std.os.wasi.proc_exit(0);
 }

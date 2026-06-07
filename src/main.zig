@@ -157,7 +157,7 @@ fn printSourceLine(src: []const u8, line: u32, col: u32) void {
 
 // Isolated to keep runCli's frame small. Runtime is heap-allocated because its
 // size grows with the active preset and can exceed the WASM shadow stack limit.
-fn runReplMode(backend: vm.Policy.NativeBackend, max_ops: ?u64) noreturn {
+fn runReplMode(backend: vm.Policy.NativeBackend, max_ops: ?u64, caps: []const []const u8) noreturn {
     const repl_rt = std.heap.page_allocator.create(Runtime) catch {
         io.werr("gengo: out of memory\n");
         die(1);
@@ -167,6 +167,7 @@ fn runReplMode(backend: vm.Policy.NativeBackend, max_ops: ?u64) noreturn {
         .native_backend = backend,
         .max_ops = max_ops,
     });
+    repl_rt.enabled_capabilities = caps;
     io.write("Gengo REPL  (Ctrl+D to exit)\n");
     while (true) {
         io.write("> ");
@@ -204,6 +205,8 @@ fn runCli(argv: []const []const u8) void {
     var backend: vm.Policy.NativeBackend = .embedded;
     var max_ops: ?u64 = null;
     var test_mode: bool = false;
+    var cap_names: [8][]const u8 = undefined;
+    var cap_count: usize = 0;
     while (script_index < argv.len) {
         const a = argv[script_index];
         if (a.len == 2 and a[0] == '-' and a[1] == '-') {
@@ -244,6 +247,20 @@ fn runCli(argv: []const []const u8) void {
             script_index += 2;
             continue;
         }
+        if (std.mem.eql(u8, a, "--cap")) {
+            if (script_index + 1 >= argv.len) {
+                io.werr("gengo: --cap requires value\n");
+                die(1);
+            }
+            if (cap_count >= cap_names.len) {
+                io.werr("gengo: too many --cap flags\n");
+                die(1);
+            }
+            cap_names[cap_count] = argv[script_index + 1];
+            cap_count += 1;
+            script_index += 2;
+            continue;
+        }
         if (std.mem.eql(u8, a, "--test")) {
             test_mode = true;
             script_index += 1;
@@ -260,7 +277,7 @@ fn runCli(argv: []const []const u8) void {
     // REPL: enter interactive mode when no file is given and stdin is a terminal.
     // Runs in a separate function so this frame never holds two Runtimes at once.
     if (script_path == null and stdinIsTerminal()) {
-        runReplMode(backend, max_ops);
+        runReplMode(backend, max_ops, if (cap_count > 0) cap_names[0..cap_count] else &.{});
     }
 
     const total = readSource(script_path, &g_src_buf) catch {
@@ -284,6 +301,9 @@ fn runCli(argv: []const []const u8) void {
         .native_backend = backend,
         .max_ops = max_ops,
     });
+    if (cap_count > 0) {
+        runtime.enabled_capabilities = cap_names[0..cap_count];
+    }
     runtime.runPathWithProvider(src, if (script_path) |p| p else "", .filesystem, test_mode) catch |err| {
         vmperf.printSummary(vms.vmState().gc_runs, vms.vmState().gc_time_ns,
             vms.vmState().alloc_object_calls, vms.vmState().alloc_managed_slice_calls,

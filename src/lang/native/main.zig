@@ -603,6 +603,9 @@ pub fn callNative(nf: NativeFuncObj, argc: u8) !void {
         .array_filter, .array_map, .array_reduce, .array_slice, .array_zip, .array_flat => return array_mod.dispatch(nf, argc),
         .sort_asc, .sort_desc, .sort_by => return sort_mod.dispatch(nf, argc),
         .cap_net_get => return cap_net_mod.dispatch(nf, argc),
+        .cap_net_dial, .cap_net_read, .cap_net_write, .cap_net_close,
+        .cap_net_local_addr, .cap_net_remote_addr,
+        .cap_net_set_deadline, .cap_net_set_read_deadline, .cap_net_set_write_deadline => return cap_net_mod.dispatch(nf, argc),
         .cap_fs_read, .cap_fs_exists => return cap_fs_mod.dispatch(nf, argc),
     }
 }
