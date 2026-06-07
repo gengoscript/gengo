@@ -160,7 +160,9 @@ pub fn netWrite(id: u32, data: []const u8) !usize {
     const conn = findConn(id) orelse return error.CapabilityError;
 
     const io_ctx = ioContext();
-    const n = io_ctx.vtable.netWrite(io_ctx.userdata, conn.socket, data, &.{}, 0) catch return error.CapabilityError;
+    // vtable netWrite: header, data[][]u8, splat. Pass payload as sole data element, splat=1.
+    const write_slices = [1][]const u8{data};
+    const n = io_ctx.vtable.netWrite(io_ctx.userdata, conn.socket, &.{}, &write_slices, 1) catch return error.CapabilityError;
     return n;
 }
 
