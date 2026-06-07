@@ -337,17 +337,41 @@ fn testNetCapability() void {
         \\func testDial() {
         \\    _ = net.dial("tcp", "127.0.0.1:1")
         \\}
+        \\func testLocalAddr() {
+        \\    _ = net.localAddr(1)
+        \\}
+        \\func testRemoteAddr() {
+        \\    _ = net.remoteAddr(1)
+        \\}
+        \\func testDeadline() {
+        \\    net.setDeadline(1, 1000)
+        \\}
     );
     switch (res) {
         .ok => {},
         else => fail("engine FAIL: net capability compile failed\n"),
     }
 
-    // On WASM, dial returns CapabilityNotAvailable at runtime
-    const call_res = rt.call("testDial", &.{});
-    switch (call_res) {
+    // On WASM, all net socket functions return CapabilityNotAvailable at runtime
+    const dial_res = rt.call("testDial", &.{});
+    switch (dial_res) {
         .runtime_error => {},
         else => fail("engine FAIL: expected runtime error for net.dial on WASM\n"),
+    }
+    const local_res = rt.call("testLocalAddr", &.{});
+    switch (local_res) {
+        .runtime_error => {},
+        else => fail("engine FAIL: expected runtime error for net.localAddr on WASM\n"),
+    }
+    const remote_res = rt.call("testRemoteAddr", &.{});
+    switch (remote_res) {
+        .runtime_error => {},
+        else => fail("engine FAIL: expected runtime error for net.remoteAddr on WASM\n"),
+    }
+    const deadline_res = rt.call("testDeadline", &.{});
+    switch (deadline_res) {
+        .runtime_error => {},
+        else => fail("engine FAIL: expected runtime error for net.setDeadline on WASM\n"),
     }
 
     out("  net capability: OK\n");
