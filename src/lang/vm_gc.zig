@@ -79,6 +79,8 @@ fn drainMarkQueue() void {
             .variant_value => |vv| {
                 markObjectQueue(vv.typ);
                 markValue(vv.payload);
+                for (vv.shared_values) |sv| markValue(sv);
+                for (vv.arm_fields) |af| markValue(af);
             },
             .variant_ctor => |vc| markObjectQueue(vc.typ),
             .named_type_fn => |nf| markObjectQueue(nf.typ),

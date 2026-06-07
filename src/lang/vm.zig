@@ -97,6 +97,7 @@ fn prepareVariadicCall(f: @import("value.zig").FuncObj, argc: u8) !void {
     if (!f.is_variadic) return;
     const fixed: usize = f.arity - 1;
     if (argc < fixed) return error.ArityMismatch;
+    if (vmState().stack_top < @as(usize, argc)) return error.StackUnderflow;
     const start = vmState().stack_top - argc;
     const extra: usize = argc - fixed;
     const arr_obj = try vmAllocObject();
@@ -167,6 +168,7 @@ fn checkNamedTypePredicate(nt_obj: *Object, inner: Value) !void {
 }
 
 fn performCall(argc: u8) !void {
+    if (vmState().stack_top < @as(usize, argc) + 1) return error.StackUnderflow;
     const func_val = vmState().stack[vmState().stack_top - argc - 1];
     if (func_val != .object) return error.NotAFunction;
     const obj = func_val.object;
@@ -286,6 +288,7 @@ fn tryTailCall(argc: u8) !bool {
     const next_op: Op = @enumFromInt(chunk.codeByteAt(vmState().ip));
     if (next_op != .ret) return false;
 
+    if (vmState().stack_top < @as(usize, argc) + 1) return error.StackUnderflow;
     const callee_idx = vmState().stack_top - argc - 1;
     const func_val = vmState().stack[callee_idx];
     if (func_val != .object) return false;
@@ -506,7 +509,7 @@ fn retSlowPath(retval_in: Value) !bool {
     if (frame.has_typed_returns) {
         if (fsig_ret) |fsig| try vmtyp.enforceFuncReturnTypes(fsig, retval);
     }
-    vmState().stack_top = frame.base - 1;
+    vmState().stack_top = if (frame.base > 0) frame.base - 1 else 0;
     vmState().ip = frame.ret_ip;
     try vmPush(retval);
     if (vmState().call_depth_target) |d| {
@@ -916,6 +919,7 @@ fn opInvokeMethod() !void {
     const ic_base = vmState().ip;
     const ic_type_idx = try vmShort(); // ic_type pool index (0xFFFF = cold)
     const ic_func_idx = try vmShort(); // ic_func pool index (0xFFFF = cold)
+    if (vmState().stack_top < @as(usize, argc) + 1) return error.StackUnderflow;
     const recv_idx = vmState().stack_top - argc - 1;
     const recv = vmState().stack[recv_idx];
     if (recv != .object) return error.NotAMethodReceiver;
@@ -1372,6 +1376,7 @@ fn opDeferInvokeMethod() !void {
     const mname = (try vmConst()).string;
     const argc = try vmByte();
     if (vmState().defer_top >= cfg.max_defers) return error.DeferStackOverflow;
+    if (vmState().stack_top < @as(usize, argc) + 1) return error.StackUnderflow;
     const recv_idx = vmState().stack_top - @as(usize, argc) - 1;
     const recv = vmState().stack[recv_idx];
     if (recv != .object) return error.NotAMethodReceiver;
@@ -2461,7 +2466,7 @@ fn runInner() !void {
                 const frame = &vmState().frames[fi];
                 if (vmState().defer_top == frame.defer_base and !frame.has_typed_returns) {
                     vmState().frame_top = fi;
-                    vmState().stack_top = frame.base - 1;
+                    vmState().stack_top = if (frame.base > 0) frame.base - 1 else 0;
                     vmState().ip = frame.ret_ip;
                     try vmPush(retval);
                     if (vmState().call_depth_target) |d| {
@@ -2482,7 +2487,7 @@ fn runInner() !void {
                 const frame = &vmState().frames[fi];
                 if (vmState().defer_top == frame.defer_base and !frame.has_typed_returns) {
                     vmState().frame_top = fi;
-                    vmState().stack_top = frame.base - 1;
+                    vmState().stack_top = if (frame.base > 0) frame.base - 1 else 0;
                     vmState().ip = frame.ret_ip;
                     try vmPush(k);
                     if (vmState().call_depth_target) |d| {
