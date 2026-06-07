@@ -647,7 +647,8 @@ fn opGetLocalGetField() !void {
                 while (vi < vt.arms.len) : (vi += 1) {
                     if (common.streq(vt.arms[vi].name, name)) {
                         const arm = vt.arms[vi];
-                        if (arm.has_payload) {
+                        const has_shared = vt.shared_fields.len > 0;
+                        if (arm.has_payload or has_shared) {
                             const ctor = try vmAllocObject();
                             ctor.* = .{ .variant_ctor = .{
                                 .typ = obj,
@@ -671,6 +672,27 @@ fn opGetLocalGetField() !void {
                 }
                 if (vi == vt.arms.len) return error.UnknownStructField;
             }
+        },
+        .variant_value => |vv| {
+            const vt = vv.typ.variant_type;
+            const vvn = chunk.constAt(name_idx).string;
+            if (vmtyp.findFieldIndex(vt.shared_fields, vvn)) |idx| {
+                try vmPush(vv.shared_values[idx]);
+                return;
+            }
+            const arm = vt.arms[vv.ordinal];
+            if (arm.fields.len > 0) {
+                for (arm.fields, 0..) |af, afi| {
+                    if (common.streq(af.name, vvn)) {
+                        try vmPush(vv.arm_fields[afi]);
+                        return;
+                    }
+                }
+            } else if (arm.has_payload and common.streq(arm.payload_name, vvn)) {
+                try vmPush(vv.payload);
+                return;
+            }
+            return error.TypeError;
         },
         else => return error.TypeError,
     }
@@ -1216,7 +1238,8 @@ fn opGetField() !void {
                 while (vi < vt.arms.len) : (vi += 1) {
                     if (common.streq(vt.arms[vi].name, name)) {
                         const arm = vt.arms[vi];
-                        if (arm.has_payload) {
+                        const has_shared = vt.shared_fields.len > 0;
+                        if (arm.has_payload or has_shared) {
                             const ctor = try vmAllocObject();
                             ctor.* = .{ .variant_ctor = .{
                                 .typ = obj,
@@ -1240,6 +1263,26 @@ fn opGetField() !void {
                 }
                 if (vi == vt.arms.len) return error.UnknownStructField;
             }
+        },
+        .variant_value => |vv| {
+            const vt = vv.typ.variant_type;
+            if (vmtyp.findFieldIndex(vt.shared_fields, name)) |idx| {
+                try vmPush(vv.shared_values[idx]);
+                return;
+            }
+            const arm = vt.arms[vv.ordinal];
+            if (arm.fields.len > 0) {
+                for (arm.fields, 0..) |af, afi| {
+                    if (common.streq(af.name, name)) {
+                        try vmPush(vv.arm_fields[afi]);
+                        return;
+                    }
+                }
+            } else if (arm.has_payload and common.streq(arm.payload_name, name)) {
+                try vmPush(vv.payload);
+                return;
+            }
+            return error.TypeError;
         },
         else => return error.TypeError,
     }
@@ -1985,53 +2028,148 @@ fn runInner() !void {
             },
             .build_struct_instance => {
                 const count = try vmByte();
-                // Peek at the struct type below the count*2 key-value pairs.
                 const typ_stack_dist = @as(usize, count) * 2;
                 if (vmState().stack_top <= typ_stack_dist) return error.StackUnderflow;
                 const typ_peek = vmState().stack[vmState().stack_top - 1 - typ_stack_dist];
-                if (typ_peek != .object or typ_peek.object.* != .struct_type) return error.TypeError;
-                const st = typ_peek.object.struct_type;
-                if (st.fields.len > 255) return error.TooManyStructFields;
+                if (typ_peek != .object) return error.TypeError;
 
-                // Allocate managed field storage and the object while all values are still on
-                // the stack so GC (if triggered) can trace them as roots. No heap temporaries
-                // are used — key-value pairs are read directly from their stack positions.
-                const inst_fields = try vmAllocManagedSlice(MapEntry, st.fields.len);
-                const obj = try vmAllocObject();
-                try pushTempRoot(.{ .object = obj });
-                defer popTempRoot();
-                obj.* = .{ .array = &[_]Value{} }; // valid placeholder until finalised below
+                if (typ_peek.object.* == .variant_ctor) {
+                    const vc = typ_peek.object.variant_ctor;
+                    const vt = vc.typ.variant_type;
+                    const arm = vt.arms[vc.ordinal];
+                    const shared_count = vt.shared_fields.len;
+                    const arm_field_count = arm.fields.len;
 
-                // key-value pairs occupy stack[base .. base + count*2); type is at base-1.
-                const base = vmState().stack_top - typ_stack_dist;
-                var seen: [255]bool = [_]bool{false} ** 255;
-                var ci: usize = 0;
-                while (ci < count) : (ci += 1) {
-                    const key = vmState().stack[base + ci * 2];
-                    const val = vmState().stack[base + ci * 2 + 1];
-                    const key_s = try vms.asStringValue(key);
-                    const idx = vmtyp.findFieldIndex(st.fields, key_s) orelse {
-                        vms.setRuntimeErr("no field '{s}' on type '{s}'", .{ key_s, st.name });
-                        return error.UnknownStructField;
+                    const obj = try vmAllocObject();
+                    try pushTempRoot(.{ .object = obj });
+                    defer popTempRoot();
+                    obj.* = .{ .array = &[_]Value{} };
+
+                    const base = vmState().stack_top - typ_stack_dist;
+                    const shared_vals = try vmAllocManagedSlice(Value, shared_count);
+                    const arm_vals = if (arm_field_count > 0) try vmAllocManagedSlice(Value, arm_field_count) else @as([]Value, &.{});
+
+                    if (arm.has_payload and arm_field_count == 0) {
+                        // Single-payload arm with shared fields
+                        var shared_seen: [255]bool = [_]bool{false} ** 255;
+                        var payload_val: Value = .null;
+                        var payload_seen = false;
+                        var ci: usize = 0;
+                        while (ci < count) : (ci += 1) {
+                            const key = vmState().stack[base + ci * 2];
+                            const val = vmState().stack[base + ci * 2 + 1];
+                            const key_s = try vms.asStringValue(key);
+                            if (vmtyp.findFieldIndex(vt.shared_fields, key_s)) |idx| {
+                                if (shared_seen[idx]) { vms.setRuntimeErr("duplicate field '{s}' in variant literal", .{key_s}); return error.DuplicateField; }
+                                shared_seen[idx] = true;
+                                shared_vals[idx] = val;
+                            } else if (common.streq(key_s, arm.payload_name)) {
+                                if (payload_seen) { vms.setRuntimeErr("duplicate field '{s}' in variant literal", .{key_s}); return error.DuplicateField; }
+                                payload_seen = true;
+                                payload_val = val;
+                            } else {
+                                vms.setRuntimeErr("no field '{s}' on variant '{s}'", .{ key_s, arm.name });
+                                return error.UnknownStructField;
+                            }
+                        }
+                        var si: usize = 0;
+                        while (si < shared_count) : (si += 1) {
+                            if (!shared_seen[si]) { vms.setRuntimeErr("missing required field '{s}' in variant literal", .{vt.shared_fields[si].name}); return error.MissingStructField; }
+                        }
+                        if (arm.has_payload and !payload_seen) { vms.setRuntimeErr("missing required field '{s}' in variant literal", .{arm.payload_name}); return error.MissingStructField; }
+
+                        vmState().stack_top -= typ_stack_dist + 1;
+                        obj.* = .{ .variant_value = .{
+                            .typ = vc.typ,
+                            .tag = vc.tag,
+                            .ordinal = vc.ordinal,
+                            .payload = payload_val,
+                            .shared_values = shared_vals[0..shared_count],
+                        } };
+                    } else {
+                        // Record arm (multi-field arm)
+                        const total_fields = shared_count + arm_field_count;
+                        var seen: [255]bool = [_]bool{false} ** 255;
+                        var ci: usize = 0;
+                        while (ci < count) : (ci += 1) {
+                            const key = vmState().stack[base + ci * 2];
+                            const val = vmState().stack[base + ci * 2 + 1];
+                            const key_s = try vms.asStringValue(key);
+                            if (vmtyp.findFieldIndex(vt.shared_fields, key_s)) |idx| {
+                                if (seen[idx]) { vms.setRuntimeErr("duplicate field '{s}' in variant literal", .{key_s}); return error.DuplicateField; }
+                                seen[idx] = true;
+                                shared_vals[idx] = val;
+                            } else if (vmtyp.findFieldIndex(arm.fields, key_s)) |idx| {
+                                const seen_idx = shared_count + idx;
+                                if (seen[seen_idx]) { vms.setRuntimeErr("duplicate field '{s}' in variant literal", .{key_s}); return error.DuplicateField; }
+                                seen[seen_idx] = true;
+                                arm_vals[idx] = val;
+                            } else {
+                                vms.setRuntimeErr("no field '{s}' on variant '{s}'", .{ key_s, arm.name });
+                                return error.UnknownStructField;
+                            }
+                        }
+                        var fi: usize = 0;
+                        while (fi < total_fields) : (fi += 1) {
+                            if (!seen[fi]) {
+                                const fname = if (fi < shared_count) vt.shared_fields[fi].name else arm.fields[fi - shared_count].name;
+                                vms.setRuntimeErr("missing required field '{s}' in variant literal", .{fname});
+                                return error.MissingStructField;
+                            }
+                        }
+
+                        vmState().stack_top -= typ_stack_dist + 1;
+                        obj.* = .{ .variant_value = .{
+                            .typ = vc.typ,
+                            .tag = vc.tag,
+                            .ordinal = vc.ordinal,
+                            .payload = .null,
+                            .shared_values = shared_vals[0..shared_count],
+                            .arm_fields = arm_vals[0..arm_field_count],
+                        } };
+                    }
+                    try vmPush(.{ .object = obj });
+                } else if (typ_peek.object.* == .struct_type) {
+                    const st = typ_peek.object.struct_type;
+                    if (st.fields.len > 255) return error.TooManyStructFields;
+
+                    const inst_fields = try vmAllocManagedSlice(MapEntry, st.fields.len);
+                    const obj = try vmAllocObject();
+                    try pushTempRoot(.{ .object = obj });
+                    defer popTempRoot();
+                    obj.* = .{ .array = &[_]Value{} };
+
+                    const base = vmState().stack_top - typ_stack_dist;
+                    var seen: [255]bool = [_]bool{false} ** 255;
+                    var ci: usize = 0;
+                    while (ci < count) : (ci += 1) {
+                        const key = vmState().stack[base + ci * 2];
+                        const val = vmState().stack[base + ci * 2 + 1];
+                        const key_s = try vms.asStringValue(key);
+                        const idx = vmtyp.findFieldIndex(st.fields, key_s) orelse {
+                            vms.setRuntimeErr("no field '{s}' on type '{s}'", .{ key_s, st.name });
+                            return error.UnknownStructField;
+                        };
+                        if (seen[idx]) { vms.setRuntimeErr("duplicate field '{s}' in struct literal", .{key_s}); return error.DuplicateField; }
+                        seen[idx] = true;
+                        if (!vmtyp.matchesFieldType(val, st.fields[idx])) return error.StructFieldTypeMismatch;
+                        inst_fields[idx] = .{ .key = .{ .string = st.fields[idx].name }, .value = val };
+                    }
+
+                    var mi: usize = 0;
+                    while (mi < st.fields.len) : (mi += 1) {
+                        if (!seen[mi]) { vms.setRuntimeErr("missing required field '{s}' in struct literal", .{st.fields[mi].name}); return error.MissingStructField; }
+                    }
+
+                    vmState().stack_top -= typ_stack_dist + 1;
+
+                    obj.* = .{
+                        .struct_instance = .{ .typ = typ_peek.object, .fields = inst_fields },
                     };
-                    if (seen[idx]) { vms.setRuntimeErr("duplicate field '{s}' in struct literal", .{key_s}); return error.DuplicateField; }
-                    seen[idx] = true;
-                    if (!vmtyp.matchesFieldType(val, st.fields[idx])) return error.StructFieldTypeMismatch;
-                    inst_fields[idx] = .{ .key = .{ .string = st.fields[idx].name }, .value = val };
+                    try vmPush(.{ .object = obj });
+                } else {
+                    return error.TypeError;
                 }
-
-                var mi: usize = 0;
-                while (mi < st.fields.len) : (mi += 1) {
-                    if (!seen[mi]) { vms.setRuntimeErr("missing required field '{s}' in struct literal", .{st.fields[mi].name}); return error.MissingStructField; }
-                }
-
-                // Discard type + key-value pairs from the stack in one step.
-                vmState().stack_top -= typ_stack_dist + 1;
-
-                obj.* = .{
-                    .struct_instance = .{ .typ = typ_peek.object, .fields = inst_fields },
-                };
-                try vmPush(.{ .object = obj });
             },
             .tuple_check_arity => {
                 const expect = try vmByte();
@@ -2270,9 +2408,27 @@ fn runInner() !void {
             },
 
             .variant_payload => {
-                const v = try vmPop();
+                const v = try vmPeek(0);
                 if (v != .object or v.object.* != .variant_value) return error.TypeError;
-                try vmPush(v.object.variant_value.payload);
+                const vv = v.object.variant_value;
+                const arm = vv.typ.variant_type.arms[vv.ordinal];
+                _ = try vmPop();
+                if (arm.fields.len > 0) {
+                    const map_obj = try vmAllocObject();
+                    map_obj.* = .{ .map = &[_]MapEntry{} };
+                    try pushTempRoot(.{ .object = map_obj });
+                    defer popTempRoot();
+                    const items = try vmAllocManagedSlice(MapEntry, arm.fields.len);
+                    var fi: usize = 0;
+                    while (fi < arm.fields.len) : (fi += 1) {
+                        const fv = vv.arm_fields[fi];
+                        items[fi] = .{ .key = .{ .string = arm.fields[fi].name }, .value = fv };
+                    }
+                    map_obj.* = .{ .map = items[0..arm.fields.len] };
+                    try vmPush(.{ .object = map_obj });
+                } else {
+                    try vmPush(vv.payload);
+                }
             },
 
             .get_field => try opGetField(),

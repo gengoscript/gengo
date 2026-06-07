@@ -297,7 +297,14 @@ pub fn printValue(v: Value) void {
                 write(vv.typ.variant_type.name);
                 write(".");
                 write(vv.tag);
-                if (vv.payload != .null) {
+                if (vv.arm_fields.len > 0) {
+                    write("(");
+                    for (vv.arm_fields, 0..) |f, i| {
+                        if (i > 0) write(", ");
+                        printValue(f);
+                    }
+                    write(")");
+                } else if (vv.payload != .null) {
                     write("(");
                     printValue(vv.payload);
                     write(")");

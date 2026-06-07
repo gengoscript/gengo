@@ -193,6 +193,64 @@ pub fn sprintValue(buf_or_null: ?[]u8, v: Value) !usize {
                 if (buf_or_null) |buf| @memcpy(buf[0..ev.name.len], ev.name);
                 return ev.name.len;
             },
+            .variant_type => |vt| {
+                const prefix = "<variant ";
+                const suffix = ">";
+                const len = prefix.len + vt.name.len + suffix.len;
+                if (buf_or_null) |buf| {
+                    @memcpy(buf[0..prefix.len], prefix);
+                    @memcpy(buf[prefix.len..][0..vt.name.len], vt.name);
+                    @memcpy(buf[prefix.len + vt.name.len..][0..suffix.len], suffix);
+                }
+                return len;
+            },
+            .variant_ctor => |vc| {
+                const tn = vc.typ.variant_type.name;
+                const dot = ".";
+                const len = tn.len + dot.len + vc.tag.len;
+                if (buf_or_null) |buf| {
+                    @memcpy(buf[0..tn.len], tn);
+                    @memcpy(buf[tn.len..][0..dot.len], dot);
+                    @memcpy(buf[tn.len + dot.len..][0..vc.tag.len], vc.tag);
+                }
+                return len;
+            },
+            .variant_value => |vv| {
+                const tn = vv.typ.variant_type.name;
+                const dot = ".";
+                var inner_len: usize = 0;
+                if (vv.arm_fields.len > 0) {
+                    for (vv.arm_fields) |f| {
+                        inner_len += try sprintValue(null, f);
+                    }
+                    inner_len += (vv.arm_fields.len - 1) * 2; // ", " separators
+                } else if (vv.payload != .null) {
+                    inner_len = try sprintValue(null, vv.payload);
+                }
+                const open = if (vv.payload != .null or vv.arm_fields.len > 0) "(" else "";
+                const close = if (vv.payload != .null or vv.arm_fields.len > 0) ")" else "";
+                const len = tn.len + dot.len + vv.tag.len + open.len + inner_len + close.len;
+                if (buf_or_null) |buf| {
+                    @memcpy(buf[0..tn.len], tn);
+                    @memcpy(buf[tn.len..][0..dot.len], dot);
+                    const tag_start = tn.len + dot.len;
+                    @memcpy(buf[tag_start..][0..vv.tag.len], vv.tag);
+                    var pos = tag_start + vv.tag.len;
+                    if (open.len > 0) {
+                        buf[pos] = '('; pos += 1;
+                        if (vv.arm_fields.len > 0) {
+                            for (vv.arm_fields, 0..) |f, fi| {
+                                if (fi > 0) { @memcpy(buf[pos..][0..2], ", "); pos += 2; }
+                                pos += try sprintValue(buf[pos..], f);
+                            }
+                        } else {
+                            pos += try sprintValue(buf[pos..], vv.payload);
+                        }
+                        buf[pos] = ')'; pos += 1;
+                    }
+                }
+                return len;
+            },
             else => {
                 if (buf_or_null) |buf| @memcpy(buf[0..4], "null");
                 return 4;

@@ -70,9 +70,10 @@ pub const VariantArmSpec = struct {
     has_payload: bool = false,
     payload_name: []const u8 = "",
     payload_type: ?FieldTypeSpec = null,
+    fields: []const StructFieldSpec = &[_]StructFieldSpec{},
 };
-pub const VariantTypeObj = struct { name: []const u8, qualified_name: []const u8, arms: []const VariantArmSpec };
-pub const VariantValueObj = struct { typ: *Object, tag: []const u8, ordinal: usize, payload: Value };
+pub const VariantTypeObj = struct { name: []const u8, qualified_name: []const u8, arms: []const VariantArmSpec, shared_fields: []const StructFieldSpec = &[_]StructFieldSpec{} };
+pub const VariantValueObj = struct { typ: *Object, tag: []const u8, ordinal: usize, payload: Value, shared_values: []const Value = &[_]Value{}, arm_fields: []const Value = &[_]Value{} };
 pub const VariantCtorObj = struct { typ: *Object, tag: []const u8, ordinal: usize, payload_type: ?FieldTypeSpec };
 pub const NamedTypeFnKind = enum { succ, pred };
 pub const NamedTypeFnObj = struct { typ: *Object, kind: NamedTypeFnKind };

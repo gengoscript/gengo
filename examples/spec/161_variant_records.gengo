@@ -1,0 +1,43 @@
+std := import("std")
+
+type Shape variant {
+    x float,
+    y float,
+    circle { radius float },
+    rect { width float, height float },
+    point
+}
+
+// Construction: all three arm types with shared fields
+s1 := Shape.circle { x: 1, y: 2, radius: 5 }
+std.io.println(s1.x)
+std.io.println(s1.y)
+
+s2 := Shape.rect { x: 0, y: 0, width: 10, height: 20 }
+std.io.println(s2.x)
+std.io.println(s2.y)
+
+// No-payload arm with shared fields
+s3 := Shape.point { x: 3, y: 4 }
+std.io.println(s3.x)
+std.io.println(s3.y)
+
+// Traditional single-payload arm (no shared fields) still works
+type Result variant {
+    ok(value int),
+    err(msg string),
+    pending
+}
+
+r1 := Result.ok(42)
+std.io.println(r1)
+
+// Pattern matching with shared field access inside switch
+for shape in [s1, s2, s3] {
+    std.io.print("pos(", shape.x, ",", shape.y, ") ")
+    switch shape {
+        case .circle(f) { std.io.println("r=", f.radius) }
+        case .rect(f) { std.io.println("rect") }
+        case .point { std.io.println("point") }
+    }
+}

@@ -791,20 +791,22 @@ pub fn variantDeclBody(c: anytype, kw: Token, name_tok: Token, is_pub: bool) !vo
     if (c.registry.hasVariantType(name)) { c.setErr("duplicate variant type name '{s}'", .{name}); return error.DuplicateVariantType; }
     try c.registry.addVariantType(name);
     try c.consume(.lbrace);
+
+    var shared_tmp: [MaxLocals]StructFieldSpec = undefined;
+    var shared_count: u8 = 0;
     var arms_tmp: [MaxLocals]VariantArmSpec = undefined;
     var arm_count: u8 = 0;
+
     if (!c.check(.rbrace)) {
         while (true) {
             if (c.cur.typ != .ident) return c.err("expected identifier, found {s}", .{c.tokenName(c.cur.typ)});
-            const arm_name = try c.copyName(c.cur.src);
+            const entry_name = try c.copyName(c.cur.src);
             c.advance();
-            var has_payload = false;
-            var payload_name: []const u8 = "";
-            var payload_type: ?FieldTypeSpec = null;
+
             if (c.match(.lparen)) {
-                has_payload = true;
-                // Disambiguate: `armName(fieldName Type)` vs `armName(Type)`
-                // If two idents before `)`: first is field name, second is type.
+                // Single-payload arm: name(payloadType) or name(fieldName Type)
+                var payload_name: []const u8 = "";
+                var payload_type: ?FieldTypeSpec = null;
                 if (c.cur.typ == .ident) {
                     var lx2 = c.lex;
                     const peek = lx2.next();
@@ -815,26 +817,85 @@ pub fn variantDeclBody(c: anytype, kw: Token, name_tok: Token, is_pub: bool) !vo
                 }
                 payload_type = try parseFieldTypeSpec(c, );
                 try c.consume(.rparen);
+                if (arm_count >= MaxLocals) { c.setErr("too many local variables (max {d})", .{MaxLocals}); return error.TooManyLocals; }
+                arms_tmp[arm_count] = .{
+                    .name = entry_name,
+                    .has_payload = true,
+                    .payload_name = payload_name,
+                    .payload_type = payload_type,
+                };
+                arm_count += 1;
+            } else if (c.match(.lbrace)) {
+                // Record arm: name { field1 type1, field2 type2, ... }
+                var field_specs: [MaxLocals]StructFieldSpec = undefined;
+                var field_count: u8 = 0;
+                if (!c.check(.rbrace)) {
+                    while (true) {
+                        if (c.cur.typ != .ident) return c.err("expected identifier, found {s}", .{c.tokenName(c.cur.typ)});
+                        if (field_count >= MaxLocals) { c.setErr("too many fields (max {d})", .{MaxLocals}); return error.TooManyFields; }
+                        const fname = try c.copyName(c.cur.src);
+                        c.advance();
+                        var spec = StructFieldSpec{ .name = fname, .typ = .{ .alts = &[_]FieldTypeAlt{} } };
+                        if (c.cur.typ == .ident or c.cur.typ == .question or c.cur.typ == .kw_func or c.cur.typ == .lbracket) {
+                            spec.typ = try parseFieldTypeSpec(c, );
+                        }
+                        field_specs[field_count] = spec;
+                        field_count += 1;
+                        if (!c.match(.comma)) break;
+                        if (c.check(.rbrace)) break;
+                    }
+                }
+                try c.consume(.rbrace);
+                const fields = heap.bump(StructFieldSpec, field_count) orelse return error.OutOfMemory;
+                var fi: usize = 0;
+                while (fi < field_count) : (fi += 1) fields[fi] = field_specs[fi];
+                if (arm_count >= MaxLocals) { c.setErr("too many local variables (max {d})", .{MaxLocals}); return error.TooManyLocals; }
+                arms_tmp[arm_count] = .{
+                    .name = entry_name,
+                    .has_payload = field_count > 0,
+                    .fields = fields[0..field_count],
+                };
+                arm_count += 1;
+            } else if (c.cur.typ == .comma or c.cur.typ == .rbrace) {
+                // No-payload arm: name
+                if (arm_count >= MaxLocals) { c.setErr("too many local variables (max {d})", .{MaxLocals}); return error.TooManyLocals; }
+                arms_tmp[arm_count] = .{ .name = entry_name };
+                arm_count += 1;
+            } else if (c.cur.typ == .ident or c.cur.typ == .question or c.cur.typ == .kw_func or c.cur.typ == .lbracket) {
+                // Shared field: name type
+                if (shared_count >= MaxLocals) { c.setErr("too many fields (max {d})", .{MaxLocals}); return error.TooManyFields; }
+                const spec = StructFieldSpec{ .name = entry_name, .typ = try parseFieldTypeSpec(c, ) };
+                shared_tmp[shared_count] = spec;
+                shared_count += 1;
+            } else {
+                return c.err("expected type, '(', or ',' after '{s}'", .{entry_name});
             }
-            if (arm_count >= MaxLocals) { c.setErr("too many local variables (max {d})", .{MaxLocals}); return error.TooManyLocals; }
-            arms_tmp[arm_count] = .{
-                .name = arm_name,
-                .has_payload = has_payload,
-                .payload_name = payload_name,
-                .payload_type = payload_type,
-            };
-            arm_count += 1;
+
             if (!c.match(.comma)) break;
             if (c.check(.rbrace)) break;
         }
     }
     try c.consume(.rbrace);
+
+    const shared_fields = if (shared_count > 0) blk: {
+        const sf = heap.bump(StructFieldSpec, shared_count) orelse return error.OutOfMemory;
+        var si: usize = 0;
+        while (si < shared_count) : (si += 1) sf[si] = shared_tmp[si];
+        break :blk sf[0..shared_count];
+    } else @as([]const StructFieldSpec, &.{});
+
     const arms = heap.bump(VariantArmSpec, arm_count) orelse return error.OutOfMemory;
     var ai: usize = 0;
     while (ai < arm_count) : (ai += 1) arms[ai] = arms_tmp[ai];
+
     const qname = try c.qualifyTypeName(name);
     const vt = heap.allocObject() orelse return error.OutOfMemory;
-    vt.* = .{ .variant_type = VariantTypeObj{ .name = try c.copyName(name), .qualified_name = qname, .arms = arms[0..arm_count] } };
+    vt.* = .{ .variant_type = VariantTypeObj{
+        .name = try c.copyName(name),
+        .qualified_name = qname,
+        .arms = arms[0..arm_count],
+        .shared_fields = shared_fields,
+    } };
     try chunk.emitConst(.{ .object = vt }, kw.line);
     if (c.inFunc()) {
         _ = try c.defineLocal(name, false);
