@@ -148,6 +148,11 @@ pub const NativeFnId = enum(u8) {
     array_slice = 145,
     array_zip = 146,
     array_flat = 147,
+
+    cap_net_get = 160,
+
+    cap_fs_read = 161,
+    cap_fs_exists = 162,
 };
 
 pub const MaxNativeArgs = 255;

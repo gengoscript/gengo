@@ -37,6 +37,8 @@ const math_mod = @import("math.zig");
 const conv_mod = @import("conv.zig");
 const array_mod = @import("array.zig");
 const sort_mod = @import("sort.zig");
+const cap_net_mod = @import("cap_net.zig");
+const cap_fs_mod = @import("cap_fs.zig");
 
 const TemplateTypeQualifiedName = "@std.template.obj";
 const TimeTypeQualifiedName = "@std.time.obj";
@@ -477,6 +479,61 @@ pub fn installHostModules(host_modules: []const module_compile.HostModuleDesc) !
     }
 }
 
+pub fn installCapabilityModules(cap_modules: []const module_compile.CapModuleDesc) !void {
+    for (cap_modules) |cm| {
+        const global_name_buf = (heap.bump(u8, 6 + cm.name.len) orelse return)[0..6 + cm.name.len];
+        global_name_buf[0] = '@';
+        @memcpy(global_name_buf[1..5], "cap:");
+        @memcpy(global_name_buf[5..][0..cm.name.len], cm.name);
+        const global_name = global_name_buf[0..5 + cm.name.len];
+        if (globals.has(global_name)) continue;
+
+        const entries = cm.functions;
+        const any_alts = heap.bump(FieldTypeAlt, 1) orelse return;
+        any_alts[0] = .{ .typ = .any };
+        const any_spec: FieldTypeSpec = .{ .alts = any_alts[0..1] };
+
+        const field_specs = (heap.bump(StructFieldSpec, entries.len) orelse return)[0..entries.len];
+        for (field_specs, 0..) |*fs, i| {
+            fs.* = .{ .name = entries[i].name, .typ = any_spec, .is_const = true };
+        }
+
+        const qual_name_buf = (heap.bump(u8, 10 + cm.name.len) orelse return)[0..10 + cm.name.len];
+        @memcpy(qual_name_buf[0..10], "@cap_type:");
+        @memcpy(qual_name_buf[10..][0..cm.name.len], cm.name);
+        const qualified_name = qual_name_buf[0..10 + cm.name.len];
+
+        const typ_obj = try vmgc.vmAllocObject();
+        try vms.pushTempRoot(.{ .object = typ_obj });
+        defer vms.popTempRoot();
+        typ_obj.* = .{ .struct_type = StructTypeObj{
+            .name = cm.name,
+            .qualified_name = qualified_name,
+            .fields = field_specs[0..entries.len],
+        } };
+
+        const inst_fields = try vmgc.vmAllocManagedSlice(MapEntry, entries.len);
+        const inst_obj = try vmgc.vmAllocObject();
+        try vms.pushTempRoot(.{ .object = inst_obj });
+        defer vms.popTempRoot();
+        inst_obj.* = .{ .struct_instance = .{ .typ = typ_obj, .fields = inst_fields } };
+
+        for (inst_fields, 0..) |*fld, i| {
+            const func_obj = try vmgc.vmAllocObject();
+            func_obj.* = .{ .native_function = .{
+                .id = entries[i].native_id,
+                .arity = entries[i].arity,
+            } };
+            fld.* = .{
+                .key = .{ .string = entries[i].name },
+                .value = .{ .object = func_obj },
+            };
+        }
+
+        try globals.def(global_name, .{ .object = inst_obj });
+    }
+}
+
 pub fn callHostModule(hmf: HostModuleFuncObj, argc: u8) !void {
     if (hmf.arity != 255 and hmf.arity != argc) return error.ArityMismatch;
     if (argc > MaxNativeArgs) return error.ArityMismatch;
@@ -545,6 +602,8 @@ pub fn callNative(nf: NativeFuncObj, argc: u8) !void {
         .re_obj_match, .re_obj_find, .re_obj_find_all, .re_obj_replace, .re_obj_split => return regexp_mod.dispatch(nf, argc),
         .array_filter, .array_map, .array_reduce, .array_slice, .array_zip, .array_flat => return array_mod.dispatch(nf, argc),
         .sort_asc, .sort_desc, .sort_by => return sort_mod.dispatch(nf, argc),
+        .cap_net_get => return cap_net_mod.dispatch(nf, argc),
+        .cap_fs_read, .cap_fs_exists => return cap_fs_mod.dispatch(nf, argc),
     }
 }
 

@@ -68,6 +68,34 @@ pub const HostModuleDesc = struct {
     functions: []const HostModuleFuncDesc,
 };
 
+pub const CapModuleFuncDesc = struct {
+    name: []const u8,
+    arity: u8,
+    native_id: u8,
+};
+
+pub const CapModuleDesc = struct {
+    name: []const u8,
+    functions: []const CapModuleFuncDesc,
+};
+
+pub const cap_net_desc: CapModuleDesc = .{
+    .name = "net",
+    .functions = &.{.{ .name = "get", .arity = 1, .native_id = 160 }},
+};
+
+pub const cap_fs_desc: CapModuleDesc = .{
+    .name = "fs",
+    .functions = &.{
+        .{ .name = "read", .arity = 1, .native_id = 161 },
+        .{ .name = "exists", .arity = 1, .native_id = 162 },
+    },
+};
+
+pub const AllCapabilities = &.{ cap_net_desc, cap_fs_desc };
+
+pub const MaxCapabilities = 16;
+
 pub const Session = struct {
     modules: [MaxModules]ModuleRecord = undefined,
     module_count: usize = 0,
@@ -79,6 +107,8 @@ pub const Session = struct {
     last_error_msg_len: u16 = 0,
     provider: SourceProvider = .filesystem,
     host_module_names: []const []const u8 = &.{},
+    enabled_capabilities: []const []const u8 = &.{},
+    capability_modules: []const CapModuleDesc = &.{},
     test_mode: bool = false,
     test_count: u8 = 0,
     test_names: [64][]const u8 = undefined,
@@ -87,6 +117,13 @@ pub const Session = struct {
         self.last_error_col = compiler.err_col;
         @memcpy(self.last_error_msg_buf[0..compiler.err_msg_len], compiler.err_msg_buf[0..compiler.err_msg_len]);
         self.last_error_msg_len = compiler.err_msg_len;
+    }
+
+    fn isCapabilityEnabled(self: *Session, name: []const u8) bool {
+        for (self.enabled_capabilities) |cap| {
+            if (common.streq(cap, name)) return true;
+        }
+        return false;
     }
 
     pub fn compileRoot(self: *Session, root_path: []const u8, src: []const u8) !void {
@@ -112,6 +149,14 @@ pub const Session = struct {
 
     pub fn resolveImportOpaque(ctx: *anyopaque, importer_path: []const u8, import_name: []const u8) anyerror![]const u8 {
         const self: *Session = @ptrCast(@alignCast(ctx));
+        // Capability imports: @cap:<name>
+        if (import_name.len > 5 and std.mem.startsWith(u8, import_name, "@cap:")) {
+            const cap_name = import_name[5..];
+            if (self.isCapabilityEnabled(cap_name)) {
+                return try self.makePrefixedName("@cap:", cap_name);
+            }
+            return error.CapabilityNotEnabled;
+        }
         const resolved = try self.resolveImportPath(importer_path, import_name);
         if (common.streq(resolved, StdModulePath)) return StdModuleGlobalName;
         if (self.isHostModule(resolved)) {
@@ -217,6 +262,7 @@ pub const Session = struct {
                     if (rp.typ != .rparen) continue;
                     if (common.streq(name.src, "std")) continue;
                     if (self.isHostModule(name.src)) continue;
+                    if (name.src.len > 5 and std.mem.startsWith(u8, name.src, "@cap:")) continue;
                     const resolved = try self.resolveImportPath(importer_path, name.src);
                     if (count >= MaxImportsPerModule) {
                         self.last_error_path = importer_path;
@@ -346,7 +392,18 @@ pub const Session = struct {
 
 pub fn hasModuleExport(ctx: *anyopaque, path: []const u8, field: []const u8) bool {
     const self: *Session = @ptrCast(@alignCast(ctx));
-    const idx = self.findModule(path) orelse return false;
+    const idx = self.findModule(path) orelse {
+        // Check capability modules
+        for (self.capability_modules) |cm| {
+            if (common.streq(cm.name, path)) {
+                for (cm.functions) |func| {
+                    if (common.streq(func.name, field)) return true;
+                }
+                return false;
+            }
+        }
+        return false;
+    };
     const exports = &self.modules[idx];
     var i: u8 = 0;
     while (i < exports.export_count) : (i += 1) {

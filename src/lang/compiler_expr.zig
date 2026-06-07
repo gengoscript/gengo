@@ -71,6 +71,9 @@ pub fn importExpr(c: anytype) !void {
     } else if (mod_name.len > 8 and std.mem.startsWith(u8, mod_name, "@module:")) {
         c.import_module_path = mod_name[8..];
         c.std_namespace_path = null;
+    } else if (mod_name.len > 5 and std.mem.startsWith(u8, mod_name, "@cap:")) {
+        c.import_module_path = mod_name[5..];
+        c.std_namespace_path = null;
     }
 }
 

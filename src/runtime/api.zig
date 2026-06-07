@@ -15,6 +15,7 @@ pub const Config = struct {
     module_sources: []const SourceEntry = &.{},
     module_source_provider: ?SourceProvider = null,
     host_modules: []const HostModuleDesc = &.{},
+    capabilities: []const []const u8 = &.{},
 };
 
 pub const CompileError = struct {
@@ -44,6 +45,7 @@ pub const Runtime = struct {
     module_sources: []const SourceEntry = &.{},
     module_source_provider: ?SourceProvider = null,
     host_modules: []const HostModuleDesc = &.{},
+    capabilities: []const []const u8 = &.{},
 
     pub fn init(config: Config) Runtime {
         var inner = rt_mod.Runtime.withPolicy(.{
@@ -52,11 +54,13 @@ pub const Runtime = struct {
             .max_ops = config.max_ops,
         });
         inner.host_modules = config.host_modules;
+        inner.enabled_capabilities = config.capabilities;
         return .{
             .inner = inner,
             .module_sources = config.module_sources,
             .module_source_provider = config.module_source_provider,
             .host_modules = config.host_modules,
+            .capabilities = config.capabilities,
         };
     }
 
@@ -69,9 +73,11 @@ pub const Runtime = struct {
             .max_ops = config.max_ops,
         });
         self.inner.host_modules = config.host_modules;
+        self.inner.enabled_capabilities = config.capabilities;
         self.module_sources = config.module_sources;
         self.module_source_provider = config.module_source_provider;
         self.host_modules = config.host_modules;
+        self.capabilities = config.capabilities;
     }
 
     pub fn reset(self: *Runtime) void {
@@ -85,9 +91,11 @@ pub const Runtime = struct {
             .max_ops = config.max_ops,
         });
         self.inner.host_modules = config.host_modules;
+        self.inner.enabled_capabilities = config.capabilities;
         self.module_sources = config.module_sources;
         self.module_source_provider = config.module_source_provider;
         self.host_modules = config.host_modules;
+        self.capabilities = config.capabilities;
     }
 
     pub fn run(self: *Runtime, src: []const u8) RuntimeResult {

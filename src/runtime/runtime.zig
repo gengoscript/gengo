@@ -20,6 +20,7 @@ const MaxTests = 64;
 pub const Runtime = struct {
     policy: vm.Policy = .{},
     host_modules: []const module_compile.HostModuleDesc = &.{},
+    enabled_capabilities: []const []const u8 = &.{},
     last_compile_line: u32 = 0,
     last_compile_path_buf: [module_compile.MaxModulePathBytes]u8 = undefined,
     last_compile_path_len: usize = 0,
@@ -120,10 +121,13 @@ pub const Runtime = struct {
             break :blk names;
         };
 
+        const all_caps: []const module_compile.CapModuleDesc = if (self.enabled_capabilities.len > 0) module_compile.AllCapabilities else &[_]module_compile.CapModuleDesc{};
         if (path.len != 0) {
             var session: module_compile.Session = .{};
             session.provider = provider;
             session.host_module_names = hm_names;
+            session.enabled_capabilities = self.enabled_capabilities;
+            session.capability_modules = all_caps;
             session.test_mode = test_mode;
             session.compileRoot(path, src) catch |err| {
                 self.last_compile_line = if (session.last_error_line != 0) session.last_error_line else 1;
@@ -144,6 +148,8 @@ pub const Runtime = struct {
             var session: module_compile.Session = .{};
             session.provider = provider;
             session.host_module_names = hm_names;
+            session.enabled_capabilities = self.enabled_capabilities;
+            session.capability_modules = all_caps;
             var compiler = Compiler.init(src, .{
                 .module_ctx = &session,
                 .resolve_import = module_compile.Session.resolveImportOpaque,
@@ -168,6 +174,7 @@ pub const Runtime = struct {
 
         try vmnative.installStdGlobal();
         try vmnative.installHostModules(self.host_modules);
+        try vmnative.installCapabilityModules(all_caps);
         vm.run() catch |err| {
             self.last_runtime_line = vm.panicLine();
             self.last_runtime_col = vm.panicCol();
@@ -232,7 +239,10 @@ pub const Runtime = struct {
         chunk.reset();
         vm.resetExec();
 
+        const repl_caps: []const module_compile.CapModuleDesc = if (self.enabled_capabilities.len > 0) module_compile.AllCapabilities else &[_]module_compile.CapModuleDesc{};
         var session: module_compile.Session = .{};
+        session.enabled_capabilities = self.enabled_capabilities;
+        session.capability_modules = repl_caps;
         var compiler = Compiler.init(src, .{
             .module_ctx = &session,
             .resolve_import = module_compile.Session.resolveImportOpaque,
@@ -251,6 +261,7 @@ pub const Runtime = struct {
 
         try vmnative.installStdGlobal();
         try vmnative.installHostModules(self.host_modules);
+        try vmnative.installCapabilityModules(repl_caps);
         vm.run() catch |err| {
             self.last_runtime_line = vm.panicLine();
             self.last_runtime_col = vm.panicCol();

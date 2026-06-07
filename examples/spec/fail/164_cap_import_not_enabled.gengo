@@ -1,0 +1,5 @@
+net := import("@cap:net")
+
+func main() {
+    println("should not compile")
+}
