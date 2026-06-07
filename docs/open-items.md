@@ -24,17 +24,7 @@ This becomes more relevant once the module system is used heavily. At that point
 
 ---
 
-## 3. Predicate Closure GC Bug
-
-**Status:** open (#47).
-
-Predicate subtypes constructed inside a loop fail with `NotAFunction: inside predicate for X` after roughly 100–200 iterations. The predicate closure is being collected by the GC during the loop. Range-based named types (`type Port int range 1..65535`) are not affected.
-
-Workaround: use range constraints instead of predicate closures for long-loop scenarios.
-
----
-
-## 4. Exit Criteria
+## 3. Exit Criteria
 
 1. All core capabilities are `done` and covered by conformance cases.
 2. Conformance suite runs in CI on every PR.
@@ -50,3 +40,4 @@ Workaround: use range constraints instead of predicate closures for long-loop sc
 | Tail-call optimisation (self + mutual recursion) | Implemented: `e3cca78` |
 | Multi-field variant arms (#45) | Implemented: `2b486d5` |
 | Variant records — shared fields in variants (#46) | Implemented: `2b486d5` |
+| Predicate closure collected by GC in long loops (#47) | Fixed: `21f85bd` |

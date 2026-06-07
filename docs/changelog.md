@@ -6,6 +6,7 @@ This changelog tracks notable language/runtime changes by implementation date.
 
 - **Variant records**: variant types may now declare bare shared fields alongside arm declarations. Shared fields are unconditionally accessible on any value of the type without a match. Construction supplies shared and arm-specific fields together in one struct literal.
 - **Multi-field variant arms**: variant arms may now use `{ field Type, ... }` syntax to carry a struct-like record payload. The payload struct is bound in pattern matching and accessed via dot.
+- **fix**: predicate closure no longer collected by GC in long loops (`NotAFunction: inside predicate for X`). The `named_type` GC mark path now traces the predicate field.
 
 ## 2026-06-06
 
