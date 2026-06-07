@@ -1,0 +1,29 @@
+std := import("std")
+
+// Variant with shared string field (heap-allocated) and objects in payload
+type Container variant {
+    name string,
+    box { items []int },
+    tagged { extra map[string]int }
+}
+
+c1 := Container.box { name: "hello", items: [1, 2, 3] }
+c2 := Container.tagged { name: "world", extra: {"a": 1, "b": 2} }
+
+// Several GC cycles to stress the variant_value tracing for shared_values and arm_fields
+std.core.gc()
+
+// Shared field must survive GC
+std.io.println(c1.name)
+std.io.println(c2.name)
+
+// Arm payload fields must survive GC
+for item in c1.items {
+    std.io.println(item)
+}
+
+std.core.gc()
+
+c2extra := c2.extra
+std.io.println(c2extra["a"])
+std.io.println(c2extra["b"])

@@ -39,6 +39,11 @@ pub fn setActive(state: *State) void {
 pub fn reset() void {
     g_state.code_len = 0;
     g_state.const_count = 0;
+    g_state.pending_col = 0;
+    g_state.last_const_code_pos = null;
+    g_state.last_const_idx = 0;
+    g_state.last_get_local_code_pos = null;
+    g_state.last_triple_eq_pos = null;
 }
 
 pub fn setCol(col: u32) void {
