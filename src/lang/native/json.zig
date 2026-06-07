@@ -3,9 +3,10 @@ const heap = @import("../../runtime/heap.zig");
 const vms = @import("../vm_state.zig");
 const vmgc = @import("../vm_gc.zig");
 const vmmap = @import("../vm_map.zig");
-const Value = @import("../value.zig").Value;
-const Object = @import("../value.zig").Object;
-const MapEntry = @import("../value.zig").MapEntry;
+const vmod = @import("../value.zig");
+const Value = vmod.Value;
+const Object = vmod.Object;
+const MapEntry = vmod.MapEntry;
 const NativeFnId = @import("native_ids.zig").NativeFnId;
 const NativeFuncObj = @import("../value.zig").NativeFuncObj;
 
@@ -99,12 +100,18 @@ fn jsonValueToGengo(jv: std.json.Value) !Value {
 }
 
 fn jsonStringifyValue(s: *std.json.Stringify, gv: Value) !void {
+    if (vmod.decimalRawAndScale(gv)) |drs| {
+        var tmp: [64]u8 = undefined;
+        const str = vmod.formatDecimalString(drs.raw, drs.scale, &tmp);
+        try s.writer.writeAll(str);
+        return;
+    }
     const uv = vms.unboxNamed(gv);
     switch (uv) {
         .null => try s.write(null),
         .boolean => |b| try s.write(b),
         .number => |n| try s.write(n),
-        .decimal => |d| try s.write(d),
+        .decimal => unreachable,
         .rune => |r| try s.write(@as(i64, @intCast(r))),
         .string => |str| try s.write(str),
         .object => |obj| switch (obj.*) {

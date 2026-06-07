@@ -6,12 +6,13 @@ const vmgc = @import("../vm_gc.zig");
 const vmmap = @import("../vm_map.zig");
 const vmtyp = @import("../vm_types.zig");
 const vmstr = @import("../vm_string.zig");
-const Value = @import("../value.zig").Value;
-const Object = @import("../value.zig").Object;
-const MapEntry = @import("../value.zig").MapEntry;
-const StructFieldSpec = @import("../value.zig").StructFieldSpec;
+const vmod = @import("../value.zig");
+const Value = vmod.Value;
+const Object = vmod.Object;
+const MapEntry = vmod.MapEntry;
+const StructFieldSpec = vmod.StructFieldSpec;
 const NativeFnId = @import("native_ids.zig").NativeFnId;
-const NativeFuncObj = @import("../value.zig").NativeFuncObj;
+const NativeFuncObj = vmod.NativeFuncObj;
 const host_abi = @import("../../runtime/host_abi.zig");
 const host_abi_mod = @import("host_abi.zig");
 const MaxNativeArgs = @import("native_ids.zig").MaxNativeArgs;
@@ -274,6 +275,11 @@ pub fn nativeConvToBool(v: Value) !Value {
 }
 
 pub fn nativeConvToString(v: Value) !Value {
+    if (vmod.decimalRawAndScale(v)) |drs| {
+        var buf: [64]u8 = undefined;
+        const s = vmod.formatDecimalString(drs.raw, drs.scale, &buf);
+        return vmgc.makeDynString(s);
+    }
     return switch (v) {
         .string => |s| vmgc.makeDynString(s),
         .object => |o| {
@@ -286,11 +292,7 @@ pub fn nativeConvToString(v: Value) !Value {
             const s = std.fmt.bufPrint(buf[0..], "{d}", .{n}) catch return error.TypeError;
             return vmgc.makeDynString(s);
         },
-        .decimal => |d| {
-            var buf: [64]u8 = undefined;
-            const s = std.fmt.bufPrint(buf[0..], "{d}", .{d}) catch return error.TypeError;
-            return vmgc.makeDynString(s);
-        },
+        .decimal => unreachable,
         .rune => |r| {
             var buf: [4]u8 = undefined;
             const n = std.unicode.utf8Encode(r, buf[0..]) catch return error.TypeError;

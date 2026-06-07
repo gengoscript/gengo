@@ -1,0 +1,15 @@
+std := import("std")
+json := std.json
+
+type Money decimal 2
+
+// Values with binary-imprecise decimal representations
+std.io.println(Money(1.23))
+std.io.println(Money(0.01))
+std.io.println(Money(10.99))
+std.io.println(Money(3.33))
+std.io.println(string(Money(1.23)))
+std.io.println(json.stringify(Money(1.23)))
+
+// Consistency: println and string() must match
+std.io.println("done")

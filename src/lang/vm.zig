@@ -5,11 +5,12 @@ const globals = @import("globals.zig");
 const heap = @import("../runtime/heap.zig");
 const cfg = @import("../runtime/config.zig");
 const Op = @import("op.zig").Op;
-const Value = @import("value.zig").Value;
-const Object = @import("value.zig").Object;
-const MapEntry = @import("value.zig").MapEntry;
-const IterObj = @import("value.zig").IterObj;
-const ClosureObj = @import("value.zig").ClosureObj;
+const vmod = @import("value.zig");
+const Value = vmod.Value;
+const Object = vmod.Object;
+const MapEntry = vmod.MapEntry;
+const IterObj = vmod.IterObj;
+const ClosureObj = vmod.ClosureObj;
 
 const vms = @import("vm_state.zig");
 const vmgc = @import("vm_gc.zig");
@@ -1774,7 +1775,18 @@ fn runInner() !void {
                 try pushNumericResultWithCarrier(a, b, @floatFromInt(result));
             },
             .cast_int => {
-                const v = vms.unboxNamed(try vmPop());
+                const raw = try vmPop();
+                if (vmod.decimalLogicalNumber(raw)) |n| {
+                    if (!std.math.isFinite(n) or
+                        n < @as(f64, @floatFromInt(std.math.minInt(i64))) or
+                        n >= @as(f64, @floatFromInt(std.math.maxInt(i64)))) return error.RangeError;
+                    const t = @trunc(n);
+                    const as_i64: i64 = @intFromFloat(t);
+                    if (@as(f64, @floatFromInt(as_i64)) != t) return error.RangeError;
+                    try vmPush(.{ .number = t });
+                    continue;
+                }
+                const v = vms.unboxNamed(raw);
                 switch (v) {
                     .number => |n| {
                         if (!std.math.isFinite(n) or
@@ -1792,7 +1804,12 @@ fn runInner() !void {
                 }
             },
             .cast_float => {
-                const v = vms.unboxNamed(try vmPop());
+                const raw = try vmPop();
+                if (vmod.decimalLogicalNumber(raw)) |n| {
+                    try vmPush(.{ .number = n });
+                    continue;
+                }
+                const v = vms.unboxNamed(raw);
                 switch (v) {
                     .number => |n| try vmPush(.{ .number = n }),
                     .decimal => |d| try vmPush(.{ .number = @floatFromInt(d) }),
@@ -1824,7 +1841,12 @@ fn runInner() !void {
                 }
             },
             .cast_string => {
-                const v = vms.unboxNamed(try vmPop());
+                const raw = try vmPop();
+                if (vmod.decimalLogicalNumber(raw)) |n| {
+                    try vmPush(try vmnative.nativeConvToString(.{ .number = n }));
+                    continue;
+                }
+                const v = vms.unboxNamed(raw);
                 try vmPush(try vmnative.nativeConvToString(v));
             },
             .cast_rune => {

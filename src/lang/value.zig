@@ -1,3 +1,4 @@
+const std = @import("std");
 const common = @import("common.zig");
 
 pub const FuncObj = struct {
@@ -209,3 +210,77 @@ pub const Value = union(VTag) {
         };
     }
 };
+
+pub fn decimalScaledToFloat(raw: i64, scale: u8) f64 {
+    if (scale == 0) return @floatFromInt(raw);
+    const factor = std.math.pow(f64, 10.0, @floatFromInt(scale));
+    return @as(f64, @floatFromInt(raw)) / factor;
+}
+
+pub fn decimalLogicalNumber(v: Value) ?f64 {
+    return switch (v) {
+        .decimal => |d| decimalScaledToFloat(d, 0),
+        .object => |obj| switch (obj.*) {
+            .named_value => |nv| {
+                if (nv.typ.* == .named_type and nv.typ.named_type.base == .decimal and nv.value == .decimal) {
+                    return decimalScaledToFloat(nv.value.decimal, nv.typ.named_type.scale);
+                }
+                return decimalLogicalNumber(nv.value);
+            },
+            else => null,
+        },
+        else => null,
+    };
+}
+
+pub fn decimalRawAndScale(v: Value) ?struct { raw: i64, scale: u8 } {
+    return switch (v) {
+        .decimal => |d| .{ .raw = d, .scale = 0 },
+        .object => |obj| switch (obj.*) {
+            .named_value => |nv| {
+                if (nv.typ.* == .named_type and nv.typ.named_type.base == .decimal and nv.value == .decimal) {
+                    return .{ .raw = nv.value.decimal, .scale = nv.typ.named_type.scale };
+                }
+                return decimalRawAndScale(nv.value);
+            },
+            else => null,
+        },
+        else => null,
+    };
+}
+
+pub fn formatDecimalString(raw: i64, scale: u8, buf: []u8) []u8 {
+    if (scale == 0) {
+        return std.fmt.bufPrint(buf, "{d}", .{raw}) catch &[_]u8{};
+    }
+    const negative = raw < 0;
+    const raw128: i128 = raw;
+    const abs_raw: i128 = if (raw128 < 0) -raw128 else raw128;
+    var factor: i128 = 1;
+    var i: u8 = 0;
+    while (i < scale) : (i += 1) factor *= 10;
+    const int_part = @divTrunc(abs_raw, factor);
+    const frac_raw = @mod(abs_raw, factor);
+    var pos: usize = 0;
+    if (negative) {
+        buf[pos] = '-';
+        pos += 1;
+    }
+    const int_str = std.fmt.bufPrint(buf[pos..], "{d}", .{@as(i64, @intCast(int_part))}) catch "";
+    pos += int_str.len;
+    buf[pos] = '.';
+    pos += 1;
+    var frac_buf: [20]u8 = undefined;
+    const frac_digits = std.fmt.bufPrint(&frac_buf, "{d}", .{@as(i64, @intCast(frac_raw))}) catch "";
+    const pad_len = scale - frac_digits.len;
+    var j: usize = 0;
+    while (j < pad_len) : (j += 1) {
+        buf[pos] = '0';
+        pos += 1;
+    }
+    @memcpy(buf[pos..pos + frac_digits.len], frac_digits);
+    pos += frac_digits.len;
+    while (pos > 0 and buf[pos - 1] == '0') pos -= 1;
+    if (pos > 0 and buf[pos - 1] == '.') pos -= 1;
+    return buf[0..pos];
+}

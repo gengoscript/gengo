@@ -190,9 +190,15 @@ pub fn writeF64(v: f64) void {
 }
 
 pub fn printValue(v: Value) void {
+    if (vmod.decimalRawAndScale(v)) |drs| {
+        var tmp: [64]u8 = undefined;
+        const s = vmod.formatDecimalString(drs.raw, drs.scale, &tmp);
+        write(s);
+        return;
+    }
     switch (v) {
         .number => |n| writeF64(n),
-        .decimal => |d| writeF64(@as(f64, @floatFromInt(d))),
+        .decimal => unreachable,
         .rune => |r| writeUint(r),
         .boolean => |b| write(if (b) "true" else "false"),
         .string => |s| write(s),

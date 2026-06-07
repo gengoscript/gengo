@@ -1,4 +1,5 @@
 std := import("std")
+json := std.json
 
 // Basic decimal type declaration
 type Money decimal 2
@@ -39,6 +40,13 @@ std.io.println(f)
 // Conversion to int (truncates fractional part)
 i := int(Money(4.99))
 std.io.println(i)
+
+// Conversion to string uses logical decimal value
+s := string(Money(4.25))
+std.io.println(s)
+
+// JSON uses logical decimal value
+std.io.println(json.stringify(Money(9.99)))
 
 // Done
 std.io.println("done")

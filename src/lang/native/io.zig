@@ -13,6 +13,12 @@ const host_abi_mod = @import("host_abi.zig");
 const MaxNativeArgs = @import("native_ids.zig").MaxNativeArgs;
 
 pub fn sprintValue(buf_or_null: ?[]u8, v: Value) !usize {
+    if (@import("../value.zig").decimalRawAndScale(v)) |drs| {
+        var tmp: [64]u8 = undefined;
+        const s = @import("../value.zig").formatDecimalString(drs.raw, drs.scale, &tmp);
+        if (buf_or_null) |buf| @memcpy(buf[0..s.len], s);
+        return s.len;
+    }
     switch (v) {
         .null => {
             if (buf_or_null) |buf| @memcpy(buf[0..4], "null");
@@ -23,12 +29,7 @@ pub fn sprintValue(buf_or_null: ?[]u8, v: Value) !usize {
             if (buf_or_null) |buf| @memcpy(buf[0..s.len], s);
             return s.len;
         },
-        .decimal => |d| {
-            var tmp: [32]u8 = undefined;
-            const s = std.fmt.bufPrint(tmp[0..], "{d}", .{d}) catch return error.TypeError;
-            if (buf_or_null) |buf| @memcpy(buf[0..s.len], s);
-            return s.len;
-        },
+        .decimal => unreachable,
         .number => |n| {
             if (n == @trunc(n) and !std.math.isInf(n) and n == n) {
                 const i = @as(i64, @intFromFloat(n));
