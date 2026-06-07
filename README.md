@@ -1,122 +1,203 @@
 # Gengo (言語)
 
-Embeddable scripting language implemented in Zig.
-
-It compiles in one pass to bytecode and runs on a VM.
-
-Goal: a pragmatic language you can embed and run in a sandboxed environment, with WASM as a first-class target.
+Gengo is an embeddable sandboxed scripting engine. You write the host application. Your users write Gengo scripts. The engine runs those scripts in a controlled environment where you decide what they can see, call, and consume.
 
 **[Try it in the browser](https://gengoscript.github.io/gengo/)**
 
-Project status: early and still evolving. Breaking changes are expected while the language and runtime are being tightened.
+*Early stage. Language and runtime are still being tightened; breaking changes are expected.*
 
-## Example
+---
 
-```gengo
-std := import("std")
-math := import("./math")
+## The problem it solves
 
-type Point struct {
-    x int
-    y int
-}
+You want users to define logic — validation rules, transformation pipelines, policy decisions, configuration behavior — without shipping a new binary every time the rules change and without trusting arbitrary code with your process.
 
-func (p Point) sum() int {
-    return p.x + p.y
-}
+The usual answers are: embed Lua (good runtime, weak types), embed Python (too heavy, no isolation), write a DSL (expensive, limited), or use JSON/YAML (not a language). Gengo is a fourth option: a small scripting VM with a type system designed for domain constraints, a hard execution budget, isolated instances, and WASM as a first-class deployment target.
 
-p := Point{ x: 3, y: 4 }
-std.io.println(math.add(p.sum(), 10))
-```
+---
+
+## What makes it different
+
+**Constrained execution.** Every engine instance runs under a configurable instruction budget. Scripts that loop forever or recurse without bound are terminated, not hung. Memory limits are set at build time via presets (`dev`, `tiny`, `stress`).
+
+**Domain-safe types.** The type system enforces constraints at the boundary, not in ad-hoc validation code:
 
 ```gengo
-// math.gengo
-pub func add(a int, b int) int {
-    return a + b
+type Port      int range 1..65535
+type Severity  int range 0..5
+type EventCode int predicate func(x) { return x % 2 == 0 }
+
+type AlertRule variant {
+    threshold  Severity,
+    source     string,
+    Metric   { name string,  limit int },
+    Webhook  { url string,   retry int },
+    Discard
 }
 ```
 
-## What It Has
+A script author constructing `Port(0)` or `Severity(10)` gets a runtime error at the constructor, not a silent bad value downstream. `AlertRule.Metric` values always carry valid `Severity` and `string` fields. The host never receives out-of-range data from a well-typed script.
 
-- structs and methods
-- interfaces (structural/duck typing)
-- enums
-- variant types (tagged unions with typed payloads)
-- named scalar types and subtypes with range constraints, plus cyclic integer domains
-- arrays, maps, strings, runes, errors, `null`, `any`
-- closures with proper upvalue capture
-- multi-return functions and named return values
-- `var`/`const` declarations with type annotations
-- `defer`, `recover`, `assert`, `trap`
-- `for`, `for-in`, `switch`
-- in-source `test` blocks (`--test` flag)
-- `std` library: `std.io`, `std.core`, `std.string`, `std.math`, `std.conv`, `std.rand`, `std.json`, `std.template`, `std.regexp`, `std.time`
-- multi-file modules via `import("./path")` with `pub` visibility
+**Host modules.** The host exposes named functions to scripts. Scripts can only call what you register. There is no ambient I/O, no filesystem, no network — unless you add it.
 
-## What It Is Aiming For
+**Isolated instances.** Up to 64 engine instances may be live simultaneously, each with its own heap, state, and module table. One script crashing does not affect others.
 
-- embeddable by default
-- predictable sandboxed execution
-- good WASM story
-- simple implementation that is still worth optimizing
+**WASM-first, native too.** The engine ships as `gengo-engine.wasm` for sandboxed browser/edge deployment and as `libgengo-engine.so` for in-process native embedding. Both expose the same C API.
 
-The language is defined by the implementation in this repository.
+---
 
-## Quick Start
+## Integration example
 
-Build the native CLI:
+A host application in Zig loads a user-supplied validation script, enforces an instruction budget, and calls a function to validate a record:
+
+```zig
+const api = @import("src/runtime/api.zig");
+
+// Host-defined function the script is allowed to call
+fn lookup_category(args: []const api.Value) anyerror!api.Value {
+    // ... safe lookup against host data ...
+    return api.Value{ .string = "network" };
+}
+
+var rt = api.Runtime.init(.{
+    .allow_io   = false,       // no println, no file access
+    .max_ops    = 50_000,      // terminate runaway scripts
+    .host_modules = &.{.{
+        .name  = "@module:host",
+        .funcs = &.{.{ .name = "lookup_category", .arity = 1 }},
+    }},
+});
+
+// Load the user's script once
+const result = rt.run(user_script_source);
+
+// Call the script's exported function on each record
+const verdict = rt.call("validate", &.{
+    api.Value{ .number = record.severity },
+    api.Value{ .string = record.source },
+});
+```
+
+The user's script:
+
+```gengo
+host := import("@module:host")
+
+type Severity int range 0..5
+
+pub func validate(severity int, source string) bool {
+    s := Severity(severity)      // enforced: 0–5 or runtime error
+    cat := host.lookup_category(source)
+    return s >= 3 && cat == "network"
+}
+```
+
+The host never receives a severity outside 0–5 from this script. If the user writes `Severity(99)`, the engine throws before `validate` returns.
+
+---
+
+## Engine artifacts
+
+Gengo ships two artifacts:
+
+**`gengo-runtime.wasm`** — a WASI executable. Feed it a script path, get stdout/stderr back. Zero host integration required. Use this for CLI tooling, CI runners, or anywhere you want WASM sandboxing without writing embedding code.
+
+**`gengo-engine.wasm`** — a library for programmatic embedding. The host drives execution through exported functions against WASM linear memory. Supports multiple isolated instances, typed function calls, host module registration, and in-memory source tables.
+
+The same API is available as `libgengo-engine.so` for native in-process embedding via C FFI.
+
+### Engine API
+
+| Export | Description |
+|---|---|
+| `engine_init() → i32` | Allocate an engine instance; returns handle |
+| `engine_destroy(handle)` | Free the instance |
+| `engine_run(handle, src_ptr, src_len) → i32` | Compile and run a script |
+| `engine_run_path(handle, src_ptr, src_len, path_ptr, path_len) → i32` | Run with a root path for relative imports |
+| `engine_call(handle, name_ptr, name_len, args_ptr, argc, out_ptr) → i32` | Call a named exported function |
+| `engine_reset(handle)` | Clear runtime state, reuse handle |
+| `engine_add_source(handle, path_ptr, path_len, src_ptr, src_len) → i32` | Register an in-memory module |
+| `engine_register_module(handle, name_ptr, name_len, funcs_ptr, funcs_count) → i32` | Register a host-defined module |
+| `engine_set_write_fn(handle, callback)` | Set write callback (native target) |
+| `engine_last_error(handle, out_ptr, max_len) → i32` | Retrieve last error message |
+| `engine_last_error_line(handle) → i32` | Source line of last error (1-based) |
+| `engine_last_error_col(handle) → i32` | Column of last error (1-based) |
+
+Values cross the boundary as `ValueWire` — a 24-byte struct encoding null, boolean, number, string, array, and map.
+
+See [docs/engine-api.md](docs/engine-api.md) for the full ABI reference and JavaScript helpers.
+
+### TypeScript SDK
+
+`sdk/typescript/` wraps `gengo-engine.wasm` with typed `GVal` encoding so you do not manipulate `ValueWire` directly:
 
 ```bash
+cd sdk/typescript && npm install && npm run build
+```
+
+---
+
+## The language
+
+Gengo is intentionally Go-adjacent in syntax. The goal is that anyone who has read Go can read a Gengo script without a tutorial.
+
+### Type system
+
+The interesting part. Beyond structs, interfaces, and variants, Gengo has:
+
+- **Named scalar types** — `type UserId string`, `type Temperature float`. Distinct types that require explicit conversion; you cannot pass a `UserId` where a plain `string` is expected.
+- **Range types** — `type Port int range 1..65535`. Construction enforces the range at runtime.
+- **Cyclic types** — `type Weekday int cycle 0..6`. Arithmetic wraps rather than overflows.
+- **Predicate subtypes** — `type EventCode int predicate func(x) { return x % 2 == 0 }`. Arbitrary invariant enforced at construction.
+- **Variant records** — variants with shared fields unconditionally accessible across all arms, plus arm-specific fields gated behind pattern matching.
+
+These exist because a scripting engine for domain logic needs to encode domain constraints in the type system, not in validation code scattered across both sides of the host/script boundary.
+
+### Feature summary
+
+- structs, methods, interfaces (structural typing), enums
+- variant types with single-payload and multi-field arms, variant records with shared fields
+- closures with upvalue capture
+- multi-return functions and named return values
+- `var`/`const` with type annotations, typed arrays and maps
+- `defer`, `recover`, `assert`, `trap`
+- `for`, `for-in`, `switch` with pattern matching
+- tail-call optimisation (self and mutual)
+- in-source `test` blocks
+- multi-file modules with `pub` visibility
+- `std` library: `std.io`, `std.core`, `std.string`, `std.math`, `std.conv`, `std.rand`, `std.json`, `std.template`, `std.regexp`, `std.time`
+
+---
+
+## Quick start
+
+```bash
+# Native CLI
 zig build -Dpreset=dev cli
 ./zig-out/bin/gengo script.gengo
-```
 
-Build the WASI runtime:
-
-```bash
+# WASI runtime
 zig build -Dpreset=dev wasi
 wasmtime --dir . ./build/gengo-runtime.wasm -- script.gengo
-```
 
-Build the engine WASM:
-
-```bash
+# Engine WASM
 zig build -Dpreset=dev engine-build
-# produces build/gengo-engine.wasm
-```
+# → build/gengo-engine.wasm
 
-Build the native shared library:
-
-```bash
+# Native shared library
 zig build -Dpreset=dev engine-native
-# produces zig-out/lib/libgengo-engine.so (Linux)
-```
+# → zig-out/lib/libgengo-engine.so
 
-Run tests:
-
-```bash
+# Tests
 zig build -Dpreset=dev test
-```
 
-Run benchmarks:
-
-```bash
+# Benchmarks
 zig build -Dpreset=dev bench
 ```
 
-## WASM Artifacts
+Run `./zig-out/bin/gengo` with no arguments on an interactive terminal to start the REPL.
 
-Gengo ships two WASM artifacts for different deployment scenarios:
-
-**`gengo-runtime.wasm`** — a WASI executable for running scripts in WASI-capable environments (wasmtime, wasmer, any WASI runtime) with zero host integration work. Feed it a script, get stdout/stderr back. No ability to call individual functions or maintain state across invocations. Use this when you want WASM sandboxing without writing host code.
-
-**`gengo-engine.wasm`** — a library for programmatic embedding. The host calls exported functions (`engine_init`, `engine_run`, `engine_call`, …) directly against WASM linear memory, provides an I/O hook for capturing output, and manages engine instances explicitly. Supports multiple isolated instances, typed function calls, and in-memory module tables. Use this when you need to drive execution from the host.
-
-## gengo-runtime.wasm (WASI Runner)
-
-Download from the [latest release](https://github.com/gengoscript/gengo/releases) or build with `zig build -Dpreset=dev wasi`.
-
-**Browser** — pass the script as a virtual file using [`@bjorn3/browser_wasi_shim`](https://www.npmjs.com/package/@bjorn3/browser_wasi_shim):
+### Browser (WASI runner)
 
 ```js
 import { WASI, File, OpenFile, ConsoleStdout, PreopenDirectory }
@@ -125,8 +206,8 @@ import { WASI, File, OpenFile, ConsoleStdout, PreopenDirectory }
 const script = `std := import("std")
 std.io.println("hello from Gengo!")`;
 
-const enc  = new TextEncoder();
-const fds  = [
+const enc = new TextEncoder();
+const fds = [
   new OpenFile(new File([])),
   ConsoleStdout.lineBuffered(line => console.log(line)),
   ConsoleStdout.lineBuffered(line => console.error(line)),
@@ -140,109 +221,32 @@ const wasm = await WebAssembly.instantiateStreaming(fetch("gengo-runtime.wasm"),
 wasi.start(wasm.instance);
 ```
 
-**Node.js 22+** — use the built-in `node:wasi` module:
+---
 
-```js
-import { readFileSync, writeFileSync } from "node:fs";
-import { WASI } from "node:wasi";
+## Build presets
 
-const script = `std := import("std")\nstd.io.println("hello from Gengo!")`;
-writeFileSync("/tmp/script.gengo", script);
+| Preset | Purpose |
+|--------|---------|
+| `dev` | Default development limits |
+| `tiny` | Tighter heap and stack limits for constrained embedding |
+| `stress` | Reduced limits for edge-case testing |
 
-const wasi = new WASI({
-  version: "preview1",
-  args: ["gengo-runtime.wasm", "script.gengo"],
-  preopens: { ".": "/tmp" },
-});
+Use `-Dpreset=<name>` with any build command.
 
-const wasm = await WebAssembly.compile(readFileSync("gengo-runtime.wasm"));
-const instance = await WebAssembly.instantiate(wasm, wasi.getImportObject());
-wasi.start(instance);
+---
+
+## Repo layout
+
 ```
-
-**wasmtime CLI** — run a script directly from the shell:
-
-```bash
-wasmtime --dir . gengo-runtime.wasm script.gengo
+src/lang/         lexer, compiler, bytecode, VM
+src/runtime/      heap, GC, runtime, Zig embedding API
+src/engine.zig    WASM/native engine exports
+examples/spec/    conformance cases (pass and fail)
+examples/bench/   benchmark programs
+docs/             language, stdlib, embedding, engine API, changelog
+sdk/typescript/   TypeScript wrapper for gengo-engine.wasm
+playground/       browser playground
 ```
-
-## gengo-engine.wasm (Host Embedding)
-
-Build with `zig build -Dpreset=dev engine-build` — produces `build/gengo-engine.wasm`.
-
-The engine exposes the following exports over WASM linear memory (also available in the native shared library via `gengo-engine.h`):
-
-| Export | Description |
-|---|---|
-| `engine_init() → i32` | Allocate an engine instance; returns handle |
-| `engine_destroy(handle)` | Free the instance |
-| `engine_run(handle, src_ptr, src_len) → i32` | Compile and run a script |
-| `engine_run_path(handle, src_ptr, src_len, path_ptr, path_len) → i32` | Run with a root path for relative imports |
-| `engine_call(handle, name_ptr, name_len, args_ptr, argc, out_ptr) → i32` | Call a named function |
-| `engine_reset(handle)` | Clear runtime state, reuse handle |
-| `engine_add_source(handle, path_ptr, path_len, src_ptr, src_len) → i32` | Register an in-memory module |
-| `engine_register_module(handle, name_ptr, name_len, funcs_ptr, funcs_count) → i32` | Register a host-defined module |
-| `engine_set_write_fn(handle, callback)` | Set write callback (native target) |
-| `engine_last_error(handle, out_ptr, max_len) → i32` | Retrieve last error message |
-| `engine_last_error_line(handle) → i32` | Source line of last error (1-based) |
-| `engine_last_error_col(handle) → i32` | Column of last error (1-based) |
-
-Up to 64 engine instances may be live at once. Values cross the boundary as `ValueWire` — a 24-byte struct encoding null, boolean, number, string, array, and map.
-
-See [docs/engine-api.md](docs/engine-api.md) for the full ABI reference including `ValueWire` layout, return codes, and JavaScript helpers.
-
-## Native Shared Library
-
-`libgengo-engine` is the same API as `gengo-engine.wasm` compiled as a native shared library for in-process embedding from C, C++, or any FFI.
-
-```bash
-zig build -Dpreset=dev engine-native
-# zig-out/lib/libgengo-engine.so
-```
-
-Include `gengo-engine.h` and link against the library. On 64-bit hosts all pointer parameters are `uintptr_t`.
-
-## TypeScript SDK
-
-`sdk/typescript/` provides a typed TypeScript wrapper around `gengo-engine.wasm`:
-
-```bash
-cd sdk/typescript && npm install && npm run build
-```
-
-It exports a `GengoEngine` class with typed `GVal` encoding so you do not need to manipulate `ValueWire` directly.
-
-## Zig Embedding
-
-The Zig embedding API lives in `src/runtime/api.zig`.
-
-It supports:
-
-- running a script and calling exported globals
-- instruction budgets
-- relative imports with a root path
-- in-memory module tables
-- host-provided source callbacks
-
-See [docs/embedding.md](docs/embedding.md).
-
-## Build Presets
-
-- `dev`: default development preset
-- `tiny`: tighter limits for constrained embedding
-- `stress`: tighter limits for edge-case testing
-
-Use `-Dpreset=<name>` with build commands.
-
-## Repo Layout
-
-- `src/lang/`: lexer, compiler, bytecode, VM
-- `src/runtime/`: heap, GC, runtime, Zig embedding API
-- `src/engine.zig`: WASM engine exports
-- `examples/spec/`: conformance cases
-- `examples/bench/`: benchmark programs
-- `docs/`: language, stdlib, embedding, engine API, changelog
-- `playground/`: browser playground
 
 ## Toolchain
 
@@ -256,6 +260,8 @@ Use `-Dpreset=<name>` with build commands.
 - [docs/embedding.md](docs/embedding.md)
 - [docs/engine-api.md](docs/engine-api.md)
 - [docs/changelog.md](docs/changelog.md)
+
+---
 
 ## A note on authorship
 
