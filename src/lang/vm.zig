@@ -1842,8 +1842,10 @@ fn runInner() !void {
             },
             .cast_string => {
                 const raw = try vmPop();
-                if (vmod.decimalLogicalNumber(raw)) |n| {
-                    try vmPush(try vmnative.nativeConvToString(.{ .number = n }));
+                if (vmod.decimalRawAndScale(raw)) |drs| {
+                    var buf: [64]u8 = undefined;
+                    const s = vmod.formatDecimalString(drs.raw, drs.scale, &buf);
+                    try vmPush(try vmgc.makeDynString(s));
                     continue;
                 }
                 const v = vms.unboxNamed(raw);
