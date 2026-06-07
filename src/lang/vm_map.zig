@@ -18,6 +18,7 @@ pub fn mapKeyEquals(a: Value, b: Value) bool {
 pub fn mapHashValue(v: Value) u64 {
     return switch (v) {
         .number => |n| @bitCast(n),
+        .decimal => |d| @bitCast(@as(f64, @floatFromInt(d))),
         .rune => |r| @as(u64, r) *% 11400714819323198485,
         .boolean => |b| if (b) 0x9e3779b97f4a7c15 else 0x94d049bb133111eb,
         .string => |s| common.hashBytes(s),

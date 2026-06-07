@@ -192,6 +192,7 @@ pub fn writeF64(v: f64) void {
 pub fn printValue(v: Value) void {
     switch (v) {
         .number => |n| writeF64(n),
+        .decimal => |d| writeF64(@as(f64, @floatFromInt(d))),
         .rune => |r| writeUint(r),
         .boolean => |b| write(if (b) "true" else "false"),
         .string => |s| write(s),

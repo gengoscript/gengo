@@ -1,0 +1,3 @@
+// Division by zero for decimal
+type Money decimal 2
+_ = Money(9.99) / 0

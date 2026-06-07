@@ -1,0 +1,44 @@
+std := import("std")
+
+// Basic decimal type declaration
+type Money decimal 2
+
+// Construction from float literal (scaled by 100)
+m1 := Money(9.99)
+std.io.println(m1)
+
+// Construction from int literal (exact)
+m2 := Money(10)
+std.io.println(m2)
+
+// Same-type addition (exact)
+m3 := Money(1.50) + Money(2.50)
+std.io.println(m3)
+
+// Same-type subtraction (exact)
+m4 := Money(5.00) - Money(2.25)
+std.io.println(m4)
+
+// Multiply by int (exact)
+m5 := Money(3.50) * 2
+std.io.println(m5)
+
+// Division truncates to scale
+m6 := Money(9.99) / 3
+std.io.println(m6)
+
+// Range constraint
+type Percent decimal 2 range 0..1
+p1 := Percent(0.50)
+std.io.println(p1)
+
+// Conversion to float
+f := float(Money(4.25))
+std.io.println(f)
+
+// Conversion to int (truncates fractional part)
+i := int(Money(4.99))
+std.io.println(i)
+
+// Done
+std.io.println("done")

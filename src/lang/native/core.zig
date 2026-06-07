@@ -264,6 +264,7 @@ pub fn nativeConvToBool(v: Value) !Value {
     return .{ .boolean = switch (v) {
         .boolean => |b| b,
         .number => |n| n != 0.0,
+        .decimal => |d| d != 0,
         .rune => |r| r != 0,
         .string => |s| s.len != 0,
         .error_value => |e| e.len != 0,
@@ -285,6 +286,11 @@ pub fn nativeConvToString(v: Value) !Value {
             const s = std.fmt.bufPrint(buf[0..], "{d}", .{n}) catch return error.TypeError;
             return vmgc.makeDynString(s);
         },
+        .decimal => |d| {
+            var buf: [64]u8 = undefined;
+            const s = std.fmt.bufPrint(buf[0..], "{d}", .{d}) catch return error.TypeError;
+            return vmgc.makeDynString(s);
+        },
         .rune => |r| {
             var buf: [4]u8 = undefined;
             const n = std.unicode.utf8Encode(r, buf[0..]) catch return error.TypeError;
@@ -298,6 +304,7 @@ pub fn nativeConvToString(v: Value) !Value {
 pub fn nativeTypeNameValue(v: Value) Value {
     return switch (v) {
         .number => |n| .{ .string = if (isIntegralNumber(n)) "int" else "float" },
+        .decimal => .{ .string = "decimal" },
         .rune => .{ .string = "rune" },
         .boolean => .{ .string = "bool" },
         .string => .{ .string = "string" },
@@ -516,6 +523,7 @@ fn deepEqualValue(a: Value, b: Value, visits: []DeepEqVisit, visit_len: *usize) 
     if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
     return switch (a) {
         .number => |x| x == b.number,
+        .decimal => |x| x == b.decimal,
         .rune => |x| x == b.rune,
         .boolean => |x| x == b.boolean,
         .string => |x| common.streq(x, b.string),

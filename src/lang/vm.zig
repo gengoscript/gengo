@@ -94,6 +94,27 @@ fn namedTypeCarrier(a: Value, b: Value) !?*Object {
     return error.TypeError;
 }
 
+fn decimalOpValues(a: Value, b: Value) ?struct { lhs: i64, rhs: i64, typ: *Object } {
+    if (a == .object and a.object.* == .named_value and
+        b == .object and b.object.* == .named_value and
+        a.object.named_value.typ == b.object.named_value.typ and
+        a.object.named_value.typ.named_type.base == .decimal)
+    {
+        return .{
+            .lhs = vms.valueAsDecimal(a.object.named_value.value) catch return null,
+            .rhs = vms.valueAsDecimal(b.object.named_value.value) catch return null,
+            .typ = a.object.named_value.typ,
+        };
+    }
+    return null;
+}
+
+fn pushDecimalResultWithCarrier(typ: *Object, d: i64) !void {
+    const wrapped = try vmtyp.coerceNamedTypeResult(typ, .{ .decimal = d });
+    try checkNamedTypePredicate(typ, wrapped.object.named_value.value);
+    try vmPush(wrapped);
+}
+
 fn pushNumericResultWithCarrier(a: Value, b: Value, n: f64) !void {
     const carrier = try namedTypeCarrier(a, b);
     if (carrier) |typ| {
@@ -1621,6 +1642,8 @@ fn runInner() !void {
                     popTempRoot();
                     popTempRoot();
                     try vmPush(try result);
+                } else if (decimalOpValues(a, b)) |dop| {
+                    try pushDecimalResultWithCarrier(dop.typ, dop.lhs + dop.rhs);
                 } else {
                     const an = try vms.valueAsNumber(a);
                     const bn = try vms.valueAsNumber(b);
@@ -1630,24 +1653,47 @@ fn runInner() !void {
             .sub => {
                 const b = try vmPop();
                 const a = try vmPop();
-                const an = try vms.valueAsNumber(a);
-                const bn = try vms.valueAsNumber(b);
-                try pushNumericResultWithCarrier(a, b, an - bn);
+                if (decimalOpValues(a, b)) |dop| {
+                    try pushDecimalResultWithCarrier(dop.typ, dop.lhs - dop.rhs);
+                } else {
+                    const an = try vms.valueAsNumber(a);
+                    const bn = try vms.valueAsNumber(b);
+                    try pushNumericResultWithCarrier(a, b, an - bn);
+                }
             },
             .mul => {
                 const b = try vmPop();
                 const a = try vmPop();
-                const an = try vms.valueAsNumber(a);
-                const bn = try vms.valueAsNumber(b);
-                try pushNumericResultWithCarrier(a, b, an * bn);
+                if (decimalOpValues(a, b)) |_| {
+                    return error.TypeError;
+                } else if (a == .object and a.object.* == .named_value and a.object.named_value.typ.named_type.base == .decimal and b == .number and @trunc(b.number) == b.number) {
+                    const d = vms.valueAsDecimal(a.object.named_value.value) catch return error.TypeError;
+                    try pushDecimalResultWithCarrier(a.object.named_value.typ, d * @as(i64, @intFromFloat(b.number)));
+                } else if (b == .object and b.object.* == .named_value and b.object.named_value.typ.named_type.base == .decimal and a == .number and @trunc(a.number) == a.number) {
+                    const d = vms.valueAsDecimal(b.object.named_value.value) catch return error.TypeError;
+                    try pushDecimalResultWithCarrier(b.object.named_value.typ, d * @as(i64, @intFromFloat(a.number)));
+                } else {
+                    const an = try vms.valueAsNumber(a);
+                    const bn = try vms.valueAsNumber(b);
+                    try pushNumericResultWithCarrier(a, b, an * bn);
+                }
             },
             .div => {
                 const b = try vmPop();
                 const a = try vmPop();
-                const an = try vms.valueAsNumber(a);
-                const bn = try vms.valueAsNumber(b);
-                if (bn == 0.0) { vms.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
-                try pushNumericResultWithCarrier(a, b, an / bn);
+                if (decimalOpValues(a, b)) |_| {
+                    return error.TypeError;
+                } else if (a == .object and a.object.* == .named_value and a.object.named_value.typ.named_type.base == .decimal and b == .number and @trunc(b.number) == b.number) {
+                    const d = vms.valueAsDecimal(a.object.named_value.value) catch return error.TypeError;
+                    const divisor = @as(i64, @intFromFloat(b.number));
+                    if (divisor == 0) { vms.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
+                    try pushDecimalResultWithCarrier(a.object.named_value.typ, @divTrunc(d, divisor));
+                } else {
+                    const an = try vms.valueAsNumber(a);
+                    const bn = try vms.valueAsNumber(b);
+                    if (bn == 0.0) { vms.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
+                    try pushNumericResultWithCarrier(a, b, an / bn);
+                }
             },
             .mod => {
                 const b = try vmPop();
@@ -1739,6 +1785,7 @@ fn runInner() !void {
                         if (@as(f64, @floatFromInt(as_i64)) != t) return error.RangeError;
                         try vmPush(.{ .number = t });
                     },
+                    .decimal => |d| try vmPush(.{ .number = @floatFromInt(d) }),
                     .rune => |r| try vmPush(.{ .number = @floatFromInt(r) }),
                     .boolean => |b| try vmPush(.{ .number = if (b) 1 else 0 }),
                     else => return error.TypeError,
@@ -1748,8 +1795,22 @@ fn runInner() !void {
                 const v = vms.unboxNamed(try vmPop());
                 switch (v) {
                     .number => |n| try vmPush(.{ .number = n }),
+                    .decimal => |d| try vmPush(.{ .number = @floatFromInt(d) }),
                     .rune => |r| try vmPush(.{ .number = @floatFromInt(r) }),
                     .boolean => |b| try vmPush(.{ .number = if (b) 1.0 else 0.0 }),
+                    else => return error.TypeError,
+                }
+            },
+            .cast_decimal => {
+                const v = vms.unboxNamed(try vmPop());
+                switch (v) {
+                    .number => |n| {
+                        if (!std.math.isFinite(n)) return error.TypeError;
+                        try vmPush(.{ .decimal = @intFromFloat(@trunc(n)) });
+                    },
+                    .decimal => |d| try vmPush(.{ .decimal = d }),
+                    .rune => |r| try vmPush(.{ .decimal = @intCast(r) }),
+                    .boolean => |b| try vmPush(.{ .decimal = if (b) 1 else 0 }),
                     else => return error.TypeError,
                 }
             },

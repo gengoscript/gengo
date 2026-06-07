@@ -23,6 +23,12 @@ pub fn sprintValue(buf_or_null: ?[]u8, v: Value) !usize {
             if (buf_or_null) |buf| @memcpy(buf[0..s.len], s);
             return s.len;
         },
+        .decimal => |d| {
+            var tmp: [32]u8 = undefined;
+            const s = std.fmt.bufPrint(tmp[0..], "{d}", .{d}) catch return error.TypeError;
+            if (buf_or_null) |buf| @memcpy(buf[0..s.len], s);
+            return s.len;
+        },
         .number => |n| {
             if (n == @trunc(n) and !std.math.isInf(n) and n == n) {
                 const i = @as(i64, @intFromFloat(n));

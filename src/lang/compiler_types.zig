@@ -44,6 +44,7 @@ pub const Prec = enum(u8) {
 pub const PrimType = enum {
     int,
     float,
+    decimal,
     bool,
     string,
     rune,
@@ -111,6 +112,7 @@ pub const NamedTypeInfo = struct {
     base: NamedTypeBase,
     has_range: bool = false,
     is_cycle: bool = false,
+    scale: u8 = 0,
     min: f64 = 0,
     max: f64 = 0,
     parent_name: ?[]const u8 = null,

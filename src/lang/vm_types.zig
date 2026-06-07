@@ -1,3 +1,4 @@
+const std = @import("std");
 const common = @import("common.zig");
 const globals = @import("globals.zig");
 const vms = @import("vm_state.zig");
@@ -55,6 +56,7 @@ pub fn matchesTypeAlt(v: Value, alt: FieldTypeAlt) bool {
         .null_t => v == .null,
         .int => (v == .number and @trunc(v.number) == v.number) or v == .rune,
         .float => v == .number or v == .rune,
+        .decimal_t => v == .decimal,
         .rune_t => v == .rune,
         .boolean => v == .boolean,
         .string => vms.isStringValue(v),
@@ -249,6 +251,20 @@ pub fn constructNamedType(typ_obj: *Object, arg: Value) !Value {
             const n = try vms.valueAsNumber(arg);
             base_v = .{ .number = n };
             if (nt.has_range and (n < nt.min or n > nt.max)) return error.RangeError;
+        },
+        .decimal => {
+            const scale = nt.scale;
+            const factor = std.math.pow(f64, 10.0, @floatFromInt(scale));
+            const scaled: i64 = switch (arg) {
+                .number => |n| @intFromFloat(@round(n * factor)),
+                .decimal => |d| d,
+                else => return error.TypeError,
+            };
+            base_v = .{ .decimal = scaled };
+            if (nt.has_range) {
+                const fv = @as(f64, @floatFromInt(scaled)) / factor;
+                if (fv < nt.min or fv > nt.max) return error.RangeError;
+            }
         },
         .rune => {
             const r: u21 = switch (arg) {

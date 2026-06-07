@@ -408,6 +408,7 @@ pub const Compiler = struct {
             .prim => |p| try chunk.emitOp(switch (p) {
                 .int => .cast_int,
                 .float => .cast_float,
+                .decimal => .cast_decimal,
                 .bool => .cast_bool,
                 .string => .cast_string,
                 .rune => .cast_rune,

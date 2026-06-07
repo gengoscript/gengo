@@ -230,6 +230,7 @@ pub fn vmConst() !Value {
 pub fn vmIndexFromVal(v: Value) !usize {
     const n: f64 = switch (v) {
         .number => |x| x,
+        .decimal => |x| @floatFromInt(x),
         .rune => |x| @floatFromInt(x),
         else => return error.TypeError,
     };
@@ -242,6 +243,7 @@ pub fn vmIndexFromVal(v: Value) !usize {
 pub fn vmSliceIndex(v: Value, upper: usize) !usize {
     const n: f64 = switch (v) {
         .number => |x| x,
+        .decimal => |x| @floatFromInt(x),
         .rune => |x| @floatFromInt(x),
         else => return error.TypeError,
     };
@@ -259,6 +261,17 @@ pub fn valueAsNumber(v: Value) !f64 {
         .rune => |r| @floatFromInt(r),
         .object => |o| switch (o.*) {
             .named_value => |nv| valueAsNumber(nv.value),
+            else => error.TypeError,
+        },
+        else => error.TypeError,
+    };
+}
+
+pub fn valueAsDecimal(v: Value) !i64 {
+    return switch (v) {
+        .decimal => |d| d,
+        .object => |o| switch (o.*) {
+            .named_value => |nv| valueAsDecimal(nv.value),
             else => error.TypeError,
         },
         else => error.TypeError,

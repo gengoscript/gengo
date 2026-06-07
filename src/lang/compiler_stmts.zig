@@ -192,6 +192,7 @@ pub fn compileFuncWithPrefix(c: anytype, prefix: []const []const u8, is_named: b
                     alt[0] = switch (pb) {
                         .int => .{ .typ = .int },
                         .float => .{ .typ = .float },
+                        .decimal => .{ .typ = .decimal_t },
                         .string => .{ .typ = .string },
                         .bool => .{ .typ = .boolean },
                         .rune => .{ .typ = .rune_t },
@@ -282,6 +283,7 @@ pub fn compileFuncWithPrefix(c: anytype, prefix: []const []const u8, is_named: b
                 switch (return_types[ri].alts[0].typ) {
                     .int => break :blk .{ .prim = .int },
                     .float => break :blk .{ .prim = .float },
+                    .decimal_t => break :blk .{ .prim = .decimal },
                     .boolean => break :blk .{ .prim = .bool },
                     .string => break :blk .{ .prim = .string },
                     .rune_t => break :blk .{ .prim = .rune },
@@ -299,6 +301,8 @@ pub fn compileFuncWithPrefix(c: anytype, prefix: []const []const u8, is_named: b
                 switch (rt.alts[0].typ) {
                     .int, .float, .rune_t =>
                         try chunk.emitConst(.{ .number = 0.0 }, @intCast(func_ip)),
+                    .decimal_t =>
+                        try chunk.emitConst(.{ .decimal = 0 }, @intCast(func_ip)),
                     .boolean =>
                         try chunk.emitOp(.false_val, @intCast(func_ip)),
                     .string =>
@@ -1341,6 +1345,7 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
                 switch (inferred_type_check.prim) {
                     .int => try chunk.emitOp(.cast_int, name.line),
                     .float => try chunk.emitOp(.cast_float, name.line),
+                    .decimal => try chunk.emitOp(.cast_decimal, name.line),
                     .bool => try chunk.emitOp(.cast_bool, name.line),
                     .string => try chunk.emitOp(.cast_string, name.line),
                     .rune => try chunk.emitOp(.cast_rune, name.line),

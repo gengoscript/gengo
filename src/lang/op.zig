@@ -54,6 +54,7 @@ pub const Op = enum(u8) {
     shr,
     cast_int,
     cast_float,
+    cast_decimal,
     cast_bool,
     cast_string,
     cast_rune,

@@ -22,6 +22,7 @@ pub const FieldTypeTag = enum {
     null_t,
     int,
     float,
+    decimal_t,
     rune_t,
     boolean,
     string,
@@ -78,13 +79,14 @@ pub const VariantCtorObj = struct { typ: *Object, tag: []const u8, ordinal: usiz
 pub const NamedTypeFnKind = enum { succ, pred };
 pub const NamedTypeFnObj = struct { typ: *Object, kind: NamedTypeFnKind };
 
-pub const NamedTypeBase = enum { int, float, string, bool, rune, array_t, map_t, enum_t };
+pub const NamedTypeBase = enum { int, float, decimal, string, bool, rune, array_t, map_t, enum_t };
 pub const NamedTypeObj = struct {
     name: []const u8,
     qualified_name: []const u8,
     base: NamedTypeBase,
     has_range: bool = false,
     is_cycle: bool = false,
+    scale: u8 = 0,
     min: f64 = 0,
     max: f64 = 0,
     parent_name: ?[]const u8 = null,   // non-null for subtype declarations
@@ -153,9 +155,10 @@ pub const Object = union(ObjTag) {
     string_builder: StringBuilderObj,
 };
 
-pub const VTag = enum { number, rune, boolean, string, error_value, object, null };
+pub const VTag = enum { number, decimal, rune, boolean, string, error_value, object, null };
 pub const Value = union(VTag) {
     number: f64,
+    decimal: i64,
     rune: u21,
     boolean: bool,
     string: []const u8,
@@ -167,6 +170,7 @@ pub const Value = union(VTag) {
         return switch (self) {
             .boolean => |b| b,
             .rune => |r| r != 0,
+            .decimal => |d| d != 0,
             .null => false,
             else => true,
         };
@@ -195,6 +199,7 @@ pub const Value = union(VTag) {
         if (@as(VTag, a) != @as(VTag, b)) return false;
         return switch (a) {
             .number => |x| x == b.number,
+            .decimal => |x| x == b.decimal,
             .rune => |x| x == b.rune,
             .boolean => |x| x == b.boolean,
             .string => |x| common.streq(x, b.string),

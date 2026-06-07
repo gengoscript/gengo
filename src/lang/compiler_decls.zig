@@ -40,6 +40,7 @@ pub fn emitZeroValue(_: anytype, tc: TypeCheck, line: u32) !void {
         .none => try chunk.emitOp(.null_val, line),
         .prim => |p| switch (p) {
             .int, .float => try chunk.emitConst(.{ .number = 0.0 }, line),
+            .decimal => try chunk.emitConst(.{ .decimal = 0 }, line),
             .bool => try chunk.emitOp(.false_val, line),
             .string => try chunk.emitConst(.{ .string = "" }, line),
             .rune => try chunk.emitConst(.{ .number = 0.0 }, line),
@@ -318,6 +319,8 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
         base = .int;
     } else if (common.streq(base_name, "float")) {
         base = .float;
+    } else if (common.streq(base_name, "decimal")) {
+        base = .decimal;
     } else if (common.streq(base_name, "string")) {
         base = .string;
     } else if (common.streq(base_name, "bool")) {
@@ -350,6 +353,15 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
         parent_min = parent.min;
         parent_max = parent.max;
     } else return c.err("unknown type '{s}'", .{base_name});
+
+    var scale: u8 = 0;
+    if (base == .decimal) {
+        if (c.cur.typ != .number) return c.err("decimal type requires a scale (e.g., decimal 2)", .{});
+        const scale_val = common.parseFloat(c.cur.src) orelse return c.err("decimal scale must be a number", .{});
+        if (scale_val < 0 or scale_val > 18 or @trunc(scale_val) != scale_val) return c.err("decimal scale must be an integer between 0 and 18", .{});
+        scale = @intFromFloat(scale_val);
+        c.advance();
+    }
 
     var has_range = false;
     var is_cycle = false;
@@ -399,6 +411,7 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
         .base = base,
         .has_range = has_range,
         .is_cycle = is_cycle,
+        .scale = scale,
         .min = min,
         .max = max,
     });
@@ -407,6 +420,7 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
     nt.* = .{ .named_type = NamedTypeObj{
         .name = try c.copyName(name),
         .qualified_name = qname,
+        .scale = scale,
         .base = base,
         .has_range = has_range,
         .is_cycle = is_cycle,

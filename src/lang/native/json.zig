@@ -104,6 +104,7 @@ fn jsonStringifyValue(s: *std.json.Stringify, gv: Value) !void {
         .null => try s.write(null),
         .boolean => |b| try s.write(b),
         .number => |n| try s.write(n),
+        .decimal => |d| try s.write(d),
         .rune => |r| try s.write(@as(i64, @intCast(r))),
         .string => |str| try s.write(str),
         .object => |obj| switch (obj.*) {
