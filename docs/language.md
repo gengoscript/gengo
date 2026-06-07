@@ -626,7 +626,7 @@ subtype Weekend_Days Days { Saturday, Sunday }
 
 ## 14. Variant Types
 
-Variant types define a closed set of tagged alternatives, each optionally carrying a single typed payload.
+Variant types define a closed set of tagged alternatives, each optionally carrying a payload.
 
 ### Declaration
 
@@ -638,7 +638,7 @@ type Result variant {
 }
 ```
 
-- Arms with a payload use `tag(field Type)` syntax.
+- Arms with a single payload use `tag(field Type)` syntax.
 - Arms without a payload are bare names.
 
 ### Construction
@@ -666,6 +666,74 @@ switch r1 {
 - Each `case` arm binds the payload to a local variable when present.
 - `default {}` handles any unmatched arm.
 - Exhaustive matching is not enforced at compile time; a missing arm at runtime is a `TypeError`.
+
+### Multi-field Arms
+
+An arm can carry a struct-like record of named fields using `{ }` syntax:
+
+```gengo
+type Shape variant {
+    circle { radius float },
+    rect   { width float, height float },
+    point
+}
+```
+
+Construction supplies all fields in a struct literal:
+
+```gengo
+s := Shape.circle { radius: 5.0 }
+r := Shape.rect { width: 10.0, height: 20.0 }
+```
+
+In a match arm, the payload struct is bound to a variable and accessed via dot:
+
+```gengo
+switch s {
+    case .circle(f) { std.io.println(f.radius) }
+    case .rect(f)   { std.io.println(f.width, f.height) }
+    case .point     { std.io.println("point") }
+}
+```
+
+### Variant Records (Shared Fields)
+
+A variant may declare bare fields directly in its body alongside arm declarations. These **shared fields** are present on every value of the type and are accessible without a match:
+
+```gengo
+type Shape variant {
+    x float,
+    y float,
+    circle { radius float },
+    rect   { width float, height float },
+    point
+}
+```
+
+Shared fields and arm declarations may appear in any order. Construction supplies all fields — shared and arm-specific — in one struct literal:
+
+```gengo
+s := Shape.circle { x: 1.0, y: 2.0, radius: 5.0 }
+p := Shape.point  { x: 3.0, y: 4.0 }
+```
+
+Shared fields are accessible directly on any value, no match required:
+
+```gengo
+draw_at(s.x, s.y)
+```
+
+They remain accessible inside match arms alongside arm-specific fields:
+
+```gengo
+switch s {
+    case .circle(f) { std.io.println("r=", f.radius, "at", s.x, s.y) }
+    case .rect(f)   { std.io.println("rect at", s.x, s.y) }
+    case .point     { std.io.println("point at", s.x, s.y) }
+}
+```
+
+Shared field names and arm field names must not overlap within the same type — a duplicate name is a compile error.
 
 ### Type Attributes
 

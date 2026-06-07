@@ -2,6 +2,11 @@
 
 This changelog tracks notable language/runtime changes by implementation date.
 
+## 2026-06-07
+
+- **Variant records**: variant types may now declare bare shared fields alongside arm declarations. Shared fields are unconditionally accessible on any value of the type without a match. Construction supplies shared and arm-specific fields together in one struct literal.
+- **Multi-field variant arms**: variant arms may now use `{ field Type, ... }` syntax to carry a struct-like record payload. The payload struct is bound in pattern matching and accessed via dot.
+
 ## 2026-06-06
 
 ### Language — Predicate Subtypes
