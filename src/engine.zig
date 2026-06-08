@@ -10,6 +10,7 @@ const vms = @import("lang/vm_state.zig");
 const vmgc = @import("lang/vm_gc.zig");
 const net_state = @import("lang/native/net_state.zig");
 const http_state = @import("lang/native/http_state.zig");
+const cfg = @import("runtime/config.zig");
 const Value = @import("lang/value.zig").Value;
 const Object = @import("lang/value.zig").Object;
 const MapEntry = @import("lang/value.zig").MapEntry;
@@ -104,7 +105,7 @@ const Engine = struct {
     wire_elem_buf: [256]ValueWire = undefined,
     wire_elem_count: u16 = 0,
 
-    fn initInPlace(self: *Engine) void {
+    fn initInPlaceDefault(self: *Engine) void {
         self.source_count = 0;
         self.host_module_count = 0;
         self.next_host_call_id = HostModuleCallIdBase;
@@ -113,6 +114,29 @@ const Engine = struct {
         self.last_error_col = 0;
         self.runtime.initWithPolicy(.{ .allow_io = true });
         io.setWriteOverrides(engineWrite, engineWerr);
+    }
+
+    fn initInPlaceWithConfig(self: *Engine, ic: InstanceConfig) void {
+        self.source_count = 0;
+        self.host_module_count = 0;
+        self.next_host_call_id = HostModuleCallIdBase;
+        self.last_error_len = 0;
+        self.last_error_line = 0;
+        self.last_error_col = 0;
+        const max_ops: ?u64 = if (ic.max_ops < 0) null else @intCast(ic.max_ops);
+        self.runtime.inner.initWithConfig(
+            .{ .allow_io = ic.allow_io, .max_ops = max_ops },
+            ic.heap_size_bytes,
+            ic.max_objects,
+            ic.max_stack,
+            ic.max_frames,
+            ic.max_defers,
+        );
+        io.setWriteOverrides(engineWrite, engineWerr);
+    }
+
+    fn deinitInPlace(self: *Engine) void {
+        self.runtime.inner.deinit();
     }
 
     fn setError(self: *Engine, msg: []const u8) void {
@@ -291,10 +315,54 @@ fn valueToWireWithScratch(val: Value, scratch: *Engine) ValueWire {
     }
 }
 
+pub const InstanceConfig = extern struct {
+    heap_size_bytes: usize,
+    max_objects: usize,
+    max_stack: usize,
+    max_frames: usize,
+    max_defers: usize,
+    max_ops: i64, // -1 means null (unlimited)
+    allow_io: bool,
+};
+
+fn validateCeiling(name: []const u8, requested: usize, ceiling: usize) bool {
+    if (requested > ceiling) {
+        // TODO: populate engine_last_error with a meaningful message
+        _ = name;
+        return false;
+    }
+    return true;
+}
+
 export fn engine_init() i32 {
     for (&engine_slots, 0..) |*slot, i| {
         if (!slot.active) {
-            slot.engine.initInPlace();
+            slot.engine.initInPlaceDefault();
+            slot.active = true;
+            return @as(i32, @intCast(i + 1));
+        }
+    }
+    return 0;
+}
+
+export fn engine_init_with_config(config_ptr: PtrInt) i32 {
+    const config = @as(*const InstanceConfig, @ptrFromInt(@as(usize, @intCast(config_ptr)))).*;
+
+    const ceiling_heap = cfg.heap_size_bytes;
+    const ceiling_objects = cfg.max_objects;
+    const ceiling_stack = cfg.max_stack;
+    const ceiling_frames = cfg.max_frames;
+    const ceiling_defers = cfg.max_defers;
+
+    if (!validateCeiling("heap_size_bytes", config.heap_size_bytes, ceiling_heap)) return -3;
+    if (!validateCeiling("max_objects", config.max_objects, ceiling_objects)) return -3;
+    if (!validateCeiling("max_stack", config.max_stack, ceiling_stack)) return -3;
+    if (!validateCeiling("max_frames", config.max_frames, ceiling_frames)) return -3;
+    if (!validateCeiling("max_defers", config.max_defers, ceiling_defers)) return -3;
+
+    for (&engine_slots, 0..) |*slot, i| {
+        if (!slot.active) {
+            slot.engine.initInPlaceWithConfig(config);
             slot.active = true;
             return @as(i32, @intCast(i + 1));
         }
@@ -304,6 +372,7 @@ export fn engine_init() i32 {
 
 export fn engine_destroy(handle: i32) void {
     const idx = if (handle > 0 and handle <= MaxEngines) @as(usize, @intCast(handle - 1)) else return;
+    engine_slots[idx].engine.deinitInPlace();
     engine_slots[idx].active = false;
 }
 

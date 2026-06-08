@@ -203,7 +203,7 @@ pub fn nativeGcStats() !Value {
     defer vms.popTempRoot();
     const items = heap.bump(MapEntry, 3) orelse return error.OutOfMemory;
     items[0] = .{ .key = .{ .string = "heap_used_bytes" }, .value = .{ .number = @floatFromInt(heap.usedBytes()) } };
-    items[1] = .{ .key = .{ .string = "heap_size_bytes" }, .value = .{ .number = @floatFromInt(heap.HeapSize) } };
+    items[1] = .{ .key = .{ .string = "heap_size_bytes" }, .value = .{ .number = @floatFromInt(heap.g_state.heap.len) } };
     items[2] = .{ .key = .{ .string = "live_objects" }, .value = .{ .number = @floatFromInt(heap.liveObjectCount()) } };
     obj.* = .{ .map = items[0..3] };
     return .{ .object = obj };
@@ -215,7 +215,7 @@ pub fn nativeGcStatsExt() !Value {
     defer vms.popTempRoot();
     const items = heap.bump(MapEntry, 8) orelse return error.OutOfMemory;
     items[0] = .{ .key = .{ .string = "heap_used_bytes" }, .value = .{ .number = @floatFromInt(heap.usedBytes()) } };
-    items[1] = .{ .key = .{ .string = "heap_size_bytes" }, .value = .{ .number = @floatFromInt(heap.HeapSize) } };
+    items[1] = .{ .key = .{ .string = "heap_size_bytes" }, .value = .{ .number = @floatFromInt(heap.g_state.heap.len) } };
     items[2] = .{ .key = .{ .string = "live_objects" }, .value = .{ .number = @floatFromInt(heap.liveObjectCount()) } };
     items[3] = .{ .key = .{ .string = "gc_runs" }, .value = .{ .number = @floatFromInt(vms.vmState().gc_runs) } };
     items[4] = .{ .key = .{ .string = "gc_time_ns" }, .value = .{ .number = @floatFromInt(vms.vmState().gc_time_ns) } };

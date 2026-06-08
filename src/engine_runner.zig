@@ -602,6 +602,29 @@ fn mockHttpFetch(req: *const http_state.GengoHttpRequest, resp: *http_state.Geng
     return 0;
 }
 
+fn testInitWithConfig() void {
+    // Create a runtime with custom (but valid) resource limits.
+    // On WASM this falls back to preset backing arrays; on native it
+    // allocates per-instance buffers of the requested size.
+    const rt = std.heap.page_allocator.create(api.Runtime) catch fail("engine: out of memory\n");
+    rt.initWithPolicy(.{
+        .allow_io = true,
+        .heap_size_bytes = 64 * 1024,
+        .max_objects = 256,
+        .max_stack = 128,
+        .max_frames = 32,
+        .max_defers = 64,
+    });
+
+    const res = rt.run("std := import(\"std\")\nstd.io.println(42)");
+    switch (res) {
+        .ok => {},
+        .compile_error => |e| { writeAll(2, "engine FAIL: config compile: "); writeAll(2, e.msg); writeAll(2, "\n"); std.os.wasi.proc_exit(1); },
+        .runtime_error => |e| { writeAll(2, "engine FAIL: config runtime: "); writeAll(2, e.msg); writeAll(2, "\n"); std.os.wasi.proc_exit(1); },
+    }
+    out("  init_with_config: OK\n");
+}
+
 fn testHttpCapability() void {
     var state: MockHttpState = .{};
     http_state.setHttpHandler(&mockHttpFetch, @ptrCast(&state));
@@ -798,6 +821,7 @@ export fn _start() void {
     testHostModuleArrayArgs();
     testNetCapability();
     testNetCapabilityHandlers();
+    testInitWithConfig();
     testHttpCapability();
     out("engine-api OK\n");
     runCapHttpConformance();

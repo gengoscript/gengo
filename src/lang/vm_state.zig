@@ -5,11 +5,23 @@ const cfg = @import("../runtime/config.zig");
 const Value = @import("value.zig").Value;
 const Object = @import("value.zig").Object;
 const MapEntry = @import("value.zig").MapEntry;
+const builtin = @import("builtin");
 
+// Preset ceilings — these are the maximum any instance may request.
 pub const MaxStack = cfg.max_stack;
 pub const MaxFrames = cfg.max_frames;
 pub const MaxTempRoots = 128;
 pub const RuneCacheMax = 8192;
+
+// On WASM, keep preset-sized backing arrays for the slices.
+const WasmBacking = if (builtin.target.cpu.arch == .wasm32) struct {
+    stack: [MaxStack]Value = undefined,
+    frames: [MaxFrames]Frame = undefined,
+    defer_stack: [cfg.max_defers]Value = undefined,
+    panic_frames: [MaxFrames]PanicFrame = undefined,
+} else struct {};
+
+var g_wasm_backing: WasmBacking = .{};
 
 pub const Policy = struct {
     pub const NativeBackend = enum {
@@ -35,16 +47,17 @@ pub const PanicFrame = struct { line: u16, name: []const u8 };
 
 pub const State = struct {
     policy: Policy = .{},
-    stack: [MaxStack]Value = undefined,
+    stack: []Value = &[_]Value{},
     stack_top: usize = 0,
     ip: usize = 0,
-    frames: [MaxFrames]Frame = undefined,
+    frames: []Frame = &[_]Frame{},
     frame_top: usize = 0,
     std_module: ?*Object = null,
     host_checked: bool = false,
     host_caps: u64 = 0,
+    configured_heap_size: usize = 0,
     next_gc_objects: usize = 256,
-    next_gc_heap_bytes: usize = heap.HeapSize / 2,
+    next_gc_heap_bytes: usize = 0,
     call_depth_target: ?usize = null,
     temp_roots: [MaxTempRoots]Value = undefined,
     temp_root_top: usize = 0,
@@ -54,9 +67,6 @@ pub const State = struct {
     rune_cache_valid: bool = false,
     rune_cache_overflow: bool = false,
     rune_cache_offsets: [RuneCacheMax]usize = undefined,
-    // String accumulation buffer: const_add uses this to avoid N-1 intermediate
-    // allocations in pure string-constant chains ("a"+"b"+"c"+...).
-    // str_acc_len > 0 means TOS holds a .string view into str_acc[0..str_acc_len].
     str_acc: [4096]u8 = undefined,
     str_acc_len: usize = 0,
     gc_runs: u64 = 0,
@@ -65,11 +75,11 @@ pub const State = struct {
     alloc_managed_slice_calls: u64 = 0,
     alloc_managed_bytes_calls: u64 = 0,
     ops_budget_remaining: u64 = std.math.maxInt(u64),
-    defer_stack: [cfg.max_defers]Value = undefined,
+    defer_stack: []Value = &[_]Value{},
     defer_top: usize = 0,
     panic_line: u32 = 0,
     panic_col: u16 = 0,
-    panic_frames: [MaxFrames]PanicFrame = undefined,
+    panic_frames: []PanicFrame = &[_]PanicFrame{},
     panic_depth: usize = 0,
     is_panicking: bool = false,
     panic_value: Value = .null,
@@ -79,6 +89,42 @@ pub const State = struct {
     has_pending_panic_value: bool = false,
     runtime_err_buf: [256]u8 = undefined,
     runtime_err_len: u16 = 0,
+
+    pub fn init(self: *State, max_stack: usize, max_frames: usize, max_defers: usize, heap_size: usize) !void {
+        if (comptime builtin.target.cpu.arch == .wasm32) {
+            self.stack = &g_wasm_backing.stack;
+            self.frames = &g_wasm_backing.frames;
+            self.defer_stack = &g_wasm_backing.defer_stack;
+            self.panic_frames = &g_wasm_backing.panic_frames;
+        } else {
+            self.stack = try std.heap.page_allocator.alloc(Value, max_stack);
+            self.frames = try std.heap.page_allocator.alloc(Frame, max_frames);
+            self.defer_stack = try std.heap.page_allocator.alloc(Value, max_defers);
+            self.panic_frames = try std.heap.page_allocator.alloc(PanicFrame, max_frames);
+        }
+        self.configured_heap_size = heap_size;
+        self.next_gc_heap_bytes = heap_size / 2;
+        self.* = .{
+            .stack = self.stack,
+            .frames = self.frames,
+            .defer_stack = self.defer_stack,
+            .panic_frames = self.panic_frames,
+            .configured_heap_size = self.configured_heap_size,
+            .next_gc_heap_bytes = self.next_gc_heap_bytes,
+        };
+    }
+
+    pub fn deinit(self: *State) void {
+        if (comptime builtin.target.cpu.arch == .wasm32) {
+            self.* = .{};
+            return;
+        }
+        if (self.stack.len > 0) std.heap.page_allocator.free(self.stack);
+        if (self.frames.len > 0) std.heap.page_allocator.free(self.frames);
+        if (self.defer_stack.len > 0) std.heap.page_allocator.free(self.defer_stack);
+        if (self.panic_frames.len > 0) std.heap.page_allocator.free(self.panic_frames);
+        self.* = .{};
+    }
 };
 
 var g_default_state: State = .{};
@@ -89,10 +135,16 @@ pub inline fn vmState() *State {
 }
 
 pub fn setActive(state: *State) void {
+    if (state.stack.len == 0 and state == &g_default_state) {
+        _ = state.init(MaxStack, MaxFrames, cfg.max_defers, heap.HeapSize) catch {};
+    }
     g_state = state;
 }
 
 pub fn reset() void {
+    if (vmState().stack.len == 0 and vmState() == &g_default_state) {
+        _ = g_default_state.init(MaxStack, MaxFrames, cfg.max_defers, heap.HeapSize) catch {};
+    }
     vmState().stack_top = 0;
     vmState().ip = 0;
     vmState().frame_top = 0;
@@ -100,7 +152,7 @@ pub fn reset() void {
     vmState().host_checked = false;
     vmState().host_caps = 0;
     vmState().next_gc_objects = 256;
-    vmState().next_gc_heap_bytes = heap.HeapSize / 2;
+    vmState().next_gc_heap_bytes = if (vmState().configured_heap_size > 0) vmState().configured_heap_size / 2 else heap.HeapSize / 2;
     vmState().call_depth_target = null;
     vmState().temp_root_top = 0;
     vmState().rune_cache_ptr = 0;
@@ -182,9 +234,10 @@ pub fn panicCol() u16 { return vmState().panic_col; }
 pub fn panicFrames() []const PanicFrame { return vmState().panic_frames[0..vmState().panic_depth]; }
 
 pub fn vmPush(v: Value) !void {
-    if (vmState().stack_top >= MaxStack) return error.StackOverflow;
-    vmState().stack[vmState().stack_top] = v;
-    vmState().stack_top += 1;
+    const st = vmState();
+    if (st.stack_top >= st.stack.len) return error.StackOverflow;
+    st.stack[st.stack_top] = v;
+    st.stack_top += 1;
 }
 
 pub fn vmPop() !Value {

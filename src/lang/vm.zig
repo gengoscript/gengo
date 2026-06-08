@@ -26,7 +26,7 @@ const io = @import("../runtime/io.zig");
 pub const Policy = vms.Policy;
 pub const State = vms.State;
 pub const PanicFrame = vms.PanicFrame;
-pub const MaxFrames = vms.MaxFrames;
+pub const MaxFrames = vmState().frames.len;
 
 pub const setActive = vms.setActive;
 pub const reset = vms.reset;
@@ -213,7 +213,7 @@ fn performCall(argc: u8) !void {
             } else if (f.arity != argc) { vms.setRuntimeErr("expected {} argument(s), got {}", .{ f.arity, argc }); return error.ArityMismatch; }
             if (f.has_typed_params) try vmtyp.enforceFuncArgTypes(f, argc);
             try prepareVariadicCall(f, argc);
-            if (vmState().frame_top >= vms.MaxFrames) return error.CallStackOverflow;
+            if (vmState().frame_top >= vmState().frames.len) return error.CallStackOverflow;
             vmState().frames[vmState().frame_top] = .{
                 .ret_ip = vmState().ip,
                 .base = vmState().stack_top - f.arity,
@@ -232,7 +232,7 @@ fn performCall(argc: u8) !void {
             } else if (f.arity != argc) { vms.setRuntimeErr("expected {} argument(s), got {}", .{ f.arity, argc }); return error.ArityMismatch; }
             if (f.has_typed_params) try vmtyp.enforceFuncArgTypes(f, argc);
             try prepareVariadicCall(f, argc);
-            if (vmState().frame_top >= vms.MaxFrames) return error.CallStackOverflow;
+            if (vmState().frame_top >= vmState().frames.len) return error.CallStackOverflow;
             vmState().frames[vmState().frame_top] = .{
                 .ret_ip = vmState().ip,
                 .base = vmState().stack_top - f.arity,
@@ -307,7 +307,7 @@ fn performCall(argc: u8) !void {
 }
 
 fn writeFrameLocal(abs_slot: usize, v: Value) void {
-    std.debug.assert(abs_slot < vms.MaxStack);
+    std.debug.assert(abs_slot < vmState().stack.len);
     const cur = vmState().stack[abs_slot];
     if (cur == .object and cur.object.* == .cell) {
         cur.object.cell.value = v;
@@ -519,7 +519,7 @@ fn retSlowPath(retval_in: Value) !bool {
         if (fsig.named_return_count > 0) {
             popTempRoot();
             const nrbase = frame.base + fsig.arity;
-            if (nrbase >= vms.MaxStack) return error.StackOverflow;
+            if (nrbase >= vmState().stack.len) return error.StackOverflow;
             if (fsig.named_return_count == 1) {
                 const raw = vmState().stack[nrbase];
                 retval = if (raw == .object and raw.object.* == .cell) raw.object.cell.value else raw;
@@ -531,7 +531,7 @@ fn retSlowPath(retval_in: Value) !bool {
                 const items = try vmAllocManagedSlice(Value, nrc);
                 var ri: usize = 0;
                 while (ri < nrc) : (ri += 1) {
-                    if (nrbase + ri >= vms.MaxStack) return error.StackOverflow;
+                    if (nrbase + ri >= vmState().stack.len) return error.StackOverflow;
                     const raw = vmState().stack[nrbase + ri];
                     items[ri] = if (raw == .object and raw.object.* == .cell) raw.object.cell.value else raw;
                 }
@@ -566,7 +566,7 @@ fn opGetLocalGetField() !void {
     const ic_type_idx = try vmShort();
     const ic_fidx = try vmByte();
     const frame_base = vmState().frames[vmState().frame_top - 1].base;
-    if (frame_base + slot >= vms.MaxStack) return error.StackOverflow;
+    if (frame_base + slot >= vmState().stack.len) return error.StackOverflow;
     var raw = vmState().stack[frame_base + slot];
     if (raw == .object and raw.object.* == .cell) raw = raw.object.cell.value;
     const container = if (raw == .object and raw.object.* == .named_value)
@@ -998,7 +998,7 @@ fn opInvokeMethod() !void {
                 }
             }
             if (pass_recv) {
-                if (vmState().stack_top >= vms.MaxStack) return error.StackOverflow;
+                if (vmState().stack_top >= vmState().stack.len) return error.StackOverflow;
                 var i: usize = vmState().stack_top;
                 while (i > recv_idx + 1) {
                     vmState().stack[i] = vmState().stack[i - 1];
@@ -1102,7 +1102,7 @@ fn opInvokeMethod() !void {
             key_buf[tname.len] = '.';
             @memcpy(key_buf[tname.len + 1 .. total], mname);
             const func = globals.get(key_buf[0..total]) orelse return error.UnknownMethod;
-            if (vmState().stack_top >= vms.MaxStack) return error.StackOverflow;
+            if (vmState().stack_top >= vmState().stack.len) return error.StackOverflow;
             var si: usize = vmState().stack_top;
             while (si > recv_idx + 1) : (si -= 1) vmState().stack[si] = vmState().stack[si - 1];
             vmState().stack_top += 1;
@@ -1119,7 +1119,7 @@ fn opInvokeMethod() !void {
             key_buf[tname.len] = '.';
             @memcpy(key_buf[tname.len + 1 .. total], mname);
             const func = globals.get(key_buf[0..total]) orelse return error.UnknownMethod;
-            if (vmState().stack_top >= vms.MaxStack) return error.StackOverflow;
+            if (vmState().stack_top >= vmState().stack.len) return error.StackOverflow;
             var si: usize = vmState().stack_top;
             while (si > recv_idx + 1) : (si -= 1) vmState().stack[si] = vmState().stack[si - 1];
             vmState().stack_top += 1;
@@ -1136,7 +1136,7 @@ fn opInvokeMethod() !void {
             key_buf[tname.len] = '.';
             @memcpy(key_buf[tname.len + 1 .. total], mname);
             const func = globals.get(key_buf[0..total]) orelse return error.UnknownMethod;
-            if (vmState().stack_top >= vms.MaxStack) return error.StackOverflow;
+            if (vmState().stack_top >= vmState().stack.len) return error.StackOverflow;
             var si: usize = vmState().stack_top;
             while (si > recv_idx + 1) : (si -= 1) vmState().stack[si] = vmState().stack[si - 1];
             vmState().stack_top += 1;
@@ -1414,7 +1414,7 @@ fn opSetField() !void {
 fn opDeferInvokeMethod() !void {
     const mname = (try vmConst()).string;
     const argc = try vmByte();
-    if (vmState().defer_top >= cfg.max_defers) return error.DeferStackOverflow;
+    if (vmState().defer_top >= vmState().defer_stack.len) return error.DeferStackOverflow;
     if (vmState().stack_top < @as(usize, argc) + 1) return error.StackUnderflow;
     const recv_idx = vmState().stack_top - @as(usize, argc) - 1;
     const recv = vmState().stack[recv_idx];
@@ -1579,7 +1579,7 @@ fn runInner() !void {
             .get_local => {
                 const slot = try vmByte();
                 const base = vmState().frames[vmState().frame_top - 1].base;
-                if (base + slot >= vms.MaxStack) return error.StackOverflow;
+                if (base + slot >= vmState().stack.len) return error.StackOverflow;
                 const v = vmState().stack[base + slot];
                 if (v == .object and v.object.* == .cell) {
                     try vmPush(v.object.cell.value);
@@ -1590,7 +1590,7 @@ fn runInner() !void {
             .set_local => {
                 const slot = try vmByte();
                 const base = vmState().frames[vmState().frame_top - 1].base;
-                if (base + slot >= vms.MaxStack) return error.StackOverflow;
+                if (base + slot >= vmState().stack.len) return error.StackOverflow;
                 const val = try vmPop();
                 const cur = vmState().stack[base + slot];
                 if (cur == .object and cur.object.* == .cell) {
@@ -1621,7 +1621,7 @@ fn runInner() !void {
             .close_upvalue => {
                 const slot = try vmByte();
                 const base = vmState().frames[vmState().frame_top - 1].base;
-                if (base + slot >= vms.MaxStack) return error.StackOverflow;
+                if (base + slot >= vmState().stack.len) return error.StackOverflow;
                 const v = vmState().stack[base + slot];
                 if (v == .object and v.object.* == .cell) {
                     vmState().stack[base + slot] = v.object.cell.value;
@@ -1966,7 +1966,7 @@ fn runInner() !void {
                 vmState().ip += 1; // skip the embedded const_eq opcode byte
                 const k = chunk.constAt(try vmShort());
                 const base = vmState().frames[vmState().frame_top - 1].base;
-                if (base + slot >= vms.MaxStack) return error.StackOverflow;
+                if (base + slot >= vmState().stack.len) return error.StackOverflow;
                 var a = vmState().stack[base + slot];
                 if (a == .object and a.object.* == .cell) a = a.object.cell.value;
                 const a_named = a == .object and a.object.* == .named_value;
@@ -1985,7 +1985,7 @@ fn runInner() !void {
                 vmState().ip += 1; // skip the embedded const_sub opcode byte
                 const k = chunk.constAt(try vmShort());
                 const base = vmState().frames[vmState().frame_top - 1].base;
-                if (base + slot >= vms.MaxStack) return error.StackOverflow;
+                if (base + slot >= vmState().stack.len) return error.StackOverflow;
                 var a = vmState().stack[base + slot];
                 if (a == .object and a.object.* == .cell) a = a.object.cell.value;
                 const an = try vms.valueAsNumber(a);
@@ -2002,7 +2002,7 @@ fn runInner() !void {
                 const k = chunk.constAt(try vmShort());
                 const off = try vmShort();
                 const base = vmState().frames[vmState().frame_top - 1].base;
-                if (base + slot >= vms.MaxStack) return error.StackOverflow;
+                if (base + slot >= vmState().stack.len) return error.StackOverflow;
                 var a = vmState().stack[base + slot];
                 if (a == .object and a.object.* == .cell) a = a.object.cell.value;
                 const a_named = a == .object and a.object.* == .named_value;
@@ -2025,7 +2025,7 @@ fn runInner() !void {
                 const k = chunk.constAt(try vmShort());
                 const off = try vmShort();
                 const base = vmState().frames[vmState().frame_top - 1].base;
-                if (base + slot >= vms.MaxStack) return error.StackOverflow;
+                if (base + slot >= vmState().stack.len) return error.StackOverflow;
                 var a = vmState().stack[base + slot];
                 if (a == .object and a.object.* == .cell) a = a.object.cell.value;
                 const a_named = a == .object and a.object.* == .named_value;
@@ -2406,7 +2406,7 @@ fn runInner() !void {
                         ups[i] = pcl.closure.upvalues[idx];
                     } else {
                         const abs = frame.base + idx;
-                        if (abs >= vms.MaxStack) return error.StackOverflow;
+                        if (abs >= vmState().stack.len) return error.StackOverflow;
                         const cur = vmState().stack[abs];
                         if (cur == .object and cur.object.* == .cell) {
                             ups[i] = cur.object;
@@ -2568,7 +2568,7 @@ fn runInner() !void {
 
             .defer_call => {
                 const argc = try vmByte();
-                if (vmState().defer_top >= cfg.max_defers) return error.DeferStackOverflow;
+                if (vmState().defer_top >= vmState().defer_stack.len) return error.DeferStackOverflow;
                 const total: usize = @as(usize, argc) + 1;
                 const start = vmState().stack_top - total;
                 const arr_obj = try vmAllocObject();
@@ -2673,7 +2673,7 @@ fn runPanicUnwind(orig_err: anyerror) anyerror!void {
         const stop_depth = vmState().call_depth_target orelse 0;
         var depth: usize = 0;
         var fi: usize = vmState().frame_top;
-        while (fi > stop_depth and depth < vms.MaxFrames) {
+        while (fi > stop_depth and depth < vmState().frames.len) {
             fi -= 1;
             const frame = vmState().frames[fi];
             const call_ip = if (frame.ret_ip > 0) frame.ret_ip - 1 else 0;

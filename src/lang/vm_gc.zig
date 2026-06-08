@@ -129,8 +129,10 @@ pub fn collectGarbage() void {
 }
 
 fn nextGcObjects(live: usize) usize {
-    const raw = (live * 2) + cfg.gc_object_step;
-    return if (raw >= heap.MaxObjects) heap.MaxObjects - 1 else raw;
+    const obj_step = cfg.gc_object_step;
+    const max_obj = heap.g_state.maxObjects();
+    const raw = (live * 2) + obj_step;
+    return if (raw >= max_obj) max_obj - 1 else raw;
 }
 
 pub fn vmAllocObject() !*Object {
@@ -172,7 +174,7 @@ pub fn vmAllocManagedSlice(comptime T: type, n: usize) ![]T {
 fn gcStepThreshold(used: usize) usize {
     // Shrink the step as the heap fills so GC keeps firing even when the bump
     // pointer is near the top. HeapSize/4 at low usage, HeapSize/16 at >75%.
-    const sz = heap.HeapSize;
+    const sz = heap.g_state.heap.len;
     const step = if (used * 4 > sz * 3) sz / 16 else sz / 4;
     const next = used + step;
     return if (next >= sz) sz - sz / 16 else next;
@@ -190,7 +192,7 @@ pub fn vmAllocManagedBytes(n: usize) ![]u8 {
     // the one the caller already checked via next_gc_heap_bytes so these only
     // fire when the free list for that class is actually empty).
     const used = heap.usedBytes();
-    if (n >= 2048 and heap.wouldBump(n) and used * 4 >= heap.HeapSize) {
+    if (n >= 2048 and heap.wouldBump(n) and used * 4 >= heap.g_state.heap.len) {
         collectGarbage();
         vms.vmState().next_gc_heap_bytes = gcStepThreshold(heap.usedBytes());
     }

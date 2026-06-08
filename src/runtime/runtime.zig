@@ -6,8 +6,10 @@ const heap = @import("heap.zig");
 const io = @import("io.zig");
 const module_compile = @import("../lang/module_compile.zig");
 const vm = @import("../lang/vm.zig");
+const vms = @import("../lang/vm_state.zig");
 const vmnative = @import("../lang/vm_native.zig");
 const net_state = @import("../lang/native/net_state.zig");
+const cfg = @import("config.zig");
 const Value = @import("../lang/value.zig").Value;
 
 fn checkGlobalExists(ctx: *anyopaque, name: []const u8) bool {
@@ -65,8 +67,14 @@ pub const Runtime = struct {
     // Use this instead of withPolicy() when the Runtime is already heap-allocated
     // or when the shadow stack is too small to hold a temporary copy (e.g. WASM with large presets).
     pub fn initWithPolicy(self: *Runtime, policy: vm.Policy) void {
+        initWithConfig(self, policy, heap.HeapSize, heap.MaxObjects, vms.MaxStack, vms.MaxFrames, cfg.max_defers);
+    }
+
+    pub fn initWithConfig(self: *Runtime, policy: vm.Policy, heap_size: usize, max_objects: usize, max_stack: usize, max_frames: usize, max_defers: usize) void {
         @memset(std.mem.asBytes(self), 0);
         self.policy = policy;
+        self.heap_state.init(heap_size, max_objects) catch return;
+        self.vm_state.init(max_stack, max_frames, max_defers, heap_size) catch return;
         chunk.setActive(&self.chunk_state);
         globals.setActive(&self.globals_state);
         chunk.reset();
@@ -75,6 +83,11 @@ pub const Runtime = struct {
         vm.setActive(&self.vm_state);
         vm.reset();
         heap.reset();
+    }
+
+    pub fn deinit(self: *Runtime) void {
+        self.vm_state.deinit();
+        self.heap_state.deinit();
     }
 
     pub fn setPolicy(self: *Runtime, policy: vm.Policy) void {

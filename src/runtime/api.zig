@@ -7,11 +7,17 @@ pub const HostModuleFuncDesc = @import("../lang/module_compile.zig").HostModuleF
 pub const HostModuleDesc = @import("../lang/module_compile.zig").HostModuleDesc;
 
 const MaxFrames = @import("config.zig").max_frames;
+const cfg = @import("config.zig");
 
 pub const Config = struct {
     allow_io: bool = true,
     native_backend: vm.Policy.NativeBackend = .embedded,
     max_ops: ?u64 = null,
+    heap_size_bytes: usize = cfg.heap_size_bytes,
+    max_objects: usize = cfg.max_objects,
+    max_stack: usize = cfg.max_stack,
+    max_frames: usize = cfg.max_frames,
+    max_defers: usize = cfg.max_defers,
     module_sources: []const SourceEntry = &.{},
     module_source_provider: ?SourceProvider = null,
     host_modules: []const HostModuleDesc = &.{},
@@ -67,11 +73,18 @@ pub const Runtime = struct {
     // In-place initializer: no large stack temporary. Use when the Runtime is
     // heap-allocated and the shadow stack cannot hold a full Runtime value.
     pub fn initWithPolicy(self: *Runtime, config: Config) void {
-        self.inner.initWithPolicy(.{
-            .allow_io = config.allow_io,
-            .native_backend = config.native_backend,
-            .max_ops = config.max_ops,
-        });
+        self.inner.initWithConfig(
+            .{
+                .allow_io = config.allow_io,
+                .native_backend = config.native_backend,
+                .max_ops = config.max_ops,
+            },
+            config.heap_size_bytes,
+            config.max_objects,
+            config.max_stack,
+            config.max_frames,
+            config.max_defers,
+        );
         self.inner.host_modules = config.host_modules;
         self.inner.enabled_capabilities = config.capabilities;
         self.module_sources = config.module_sources;
