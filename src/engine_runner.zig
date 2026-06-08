@@ -5,6 +5,7 @@ const Value = @import("lang/value.zig").Value;
 const Object = @import("lang/value.zig").Object;
 const vms = @import("lang/vm_state.zig");
 const vmgc = @import("lang/vm_gc.zig");
+const net_state = @import("lang/native/net_state.zig");
 
 fn writeAll(fd: std.os.wasi.fd_t, s: []const u8) void {
     var off: usize = 0;
@@ -380,6 +381,174 @@ fn testNetCapability() void {
     out("  net capability: OK\n");
 }
 
+const MockNetState = struct {
+    dial_called: bool = false,
+    read_called: bool = false,
+    write_called: bool = false,
+    close_called: bool = false,
+    local_addr_called: bool = false,
+    remote_addr_called: bool = false,
+    deadline_called: bool = false,
+    read_deadline_called: bool = false,
+    write_deadline_called: bool = false,
+    closed: bool = false,
+    dial_network: [64]u8 = undefined,
+    dial_network_len: usize = 0,
+    dial_address: [64]u8 = undefined,
+    dial_address_len: usize = 0,
+    written_data: [64]u8 = undefined,
+    written_len: usize = 0,
+};
+
+fn mockDial(network: [*]const u8, network_len: usize, address: [*]const u8, address_len: usize, out_handle: *i32, userdata: *anyopaque) callconv(.c) i32 {
+    const s: *MockNetState = @ptrCast(@alignCast(userdata));
+    s.dial_called = true;
+    s.dial_network_len = @min(network_len, s.dial_network.len);
+    @memcpy(s.dial_network[0..s.dial_network_len], network[0..s.dial_network_len]);
+    s.dial_address_len = @min(address_len, s.dial_address.len);
+    @memcpy(s.dial_address[0..s.dial_address_len], address[0..s.dial_address_len]);
+    out_handle.* = 42;
+    return 0;
+}
+
+fn mockRead(handle: i32, buf: [*]u8, max_bytes: i32, userdata: *anyopaque) callconv(.c) i32 {
+    _ = handle;
+    const s: *MockNetState = @ptrCast(@alignCast(userdata));
+    if (s.closed) return -1;
+    s.read_called = true;
+    const test_data = "hello from mock";
+    const n = @min(@as(usize, @intCast(max_bytes)), test_data.len);
+    @memcpy(buf[0..n], test_data[0..n]);
+    return @intCast(n);
+}
+
+fn mockWrite(handle: i32, data: [*]const u8, len: i32, userdata: *anyopaque) callconv(.c) i32 {
+    _ = handle;
+    const s: *MockNetState = @ptrCast(@alignCast(userdata));
+    if (s.closed) return -1;
+    s.write_called = true;
+    s.written_len = @min(@as(usize, @intCast(len)), s.written_data.len);
+    @memcpy(s.written_data[0..s.written_len], data[0..s.written_len]);
+    return len;
+}
+
+fn mockClose(handle: i32, userdata: *anyopaque) callconv(.c) void {
+    _ = handle;
+    const s: *MockNetState = @ptrCast(@alignCast(userdata));
+    s.close_called = true;
+    s.closed = true;
+}
+
+fn mockLocalAddr(handle: i32, buf: [*]u8, buf_len: i32, userdata: *anyopaque) callconv(.c) void {
+    _ = handle;
+    const s: *MockNetState = @ptrCast(@alignCast(userdata));
+    s.local_addr_called = true;
+    const addr = "127.0.0.1:54321";
+    const n = @min(@as(usize, @intCast(buf_len)), addr.len);
+    @memcpy(buf[0..n], addr);
+}
+
+fn mockRemoteAddr(handle: i32, buf: [*]u8, buf_len: i32, userdata: *anyopaque) callconv(.c) void {
+    _ = handle;
+    const s: *MockNetState = @ptrCast(@alignCast(userdata));
+    s.remote_addr_called = true;
+    const addr = "127.0.0.1:9999";
+    const n = @min(@as(usize, @intCast(buf_len)), addr.len);
+    @memcpy(buf[0..n], addr);
+}
+
+fn mockSetDeadline(handle: i32, ms: i64, userdata: *anyopaque) callconv(.c) void {
+    const s: *MockNetState = @ptrCast(@alignCast(userdata));
+    _ = handle;
+    _ = ms;
+    s.deadline_called = true;
+}
+
+fn mockSetReadDeadline(handle: i32, ms: i64, userdata: *anyopaque) callconv(.c) void {
+    const s: *MockNetState = @ptrCast(@alignCast(userdata));
+    _ = handle;
+    _ = ms;
+    s.read_deadline_called = true;
+}
+
+fn mockSetWriteDeadline(handle: i32, ms: i64, userdata: *anyopaque) callconv(.c) void {
+    const s: *MockNetState = @ptrCast(@alignCast(userdata));
+    _ = handle;
+    _ = ms;
+    s.write_deadline_called = true;
+}
+
+fn testNetCapabilityHandlers() void {
+    var state = MockNetState{};
+
+    const handlers = net_state.GengoNetHandlers{
+        .dial = &mockDial,
+        .read = &mockRead,
+        .write = &mockWrite,
+        .close = &mockClose,
+        .local_addr = &mockLocalAddr,
+        .remote_addr = &mockRemoteAddr,
+        .set_deadline = &mockSetDeadline,
+        .set_read_deadline = &mockSetReadDeadline,
+        .set_write_deadline = &mockSetWriteDeadline,
+    };
+    net_state.setNetHandlers(handlers, @ptrCast(&state));
+
+    const rt = makeRt(.{ .allow_io = false, .capabilities = &.{"net"} });
+
+    const test_src =
+        \\net := import("@cap:net")
+        \\func testAll() {
+        \\    conn := net.dial("tcp", "127.0.0.1:9999")
+        \\    _ = conn.read(100)
+        \\    _ = conn.write("hello from gengo")
+        \\    _ = conn.local_addr()
+        \\    _ = conn.remote_addr()
+        \\    conn.set_deadline(5000)
+        \\    conn.set_read_deadline(3000)
+        \\    conn.set_write_deadline(4000)
+        \\    conn.close()
+        \\}
+        \\func testUseAfterClose() {
+        \\    conn := net.dial("tcp", "127.0.0.1:9999")
+        \\    conn.close()
+        \\    _ = conn.read(10)
+        \\}
+    ;
+    const res = rt.run(test_src);
+    switch (res) {
+        .ok => {},
+        .compile_error => |e| { writeAll(2, "engine FAIL: net handler compile: "); writeAll(2, e.msg); writeAll(2, "\n"); std.os.wasi.proc_exit(1); },
+        .runtime_error => |e| { writeAll(2, "engine FAIL: net handler runtime: "); writeAll(2, e.msg); writeAll(2, "\n"); std.os.wasi.proc_exit(1); },
+    }
+
+    const all_res = rt.call("testAll", &.{});
+    switch (all_res) {
+        .ok => {
+            if (!state.dial_called) fail("engine FAIL: handler dial not called\n");
+            if (!state.read_called) fail("engine FAIL: handler read not called\n");
+            if (!state.write_called) fail("engine FAIL: handler write not called\n");
+            if (!state.close_called) fail("engine FAIL: handler close not called\n");
+            if (!state.local_addr_called) fail("engine FAIL: handler local_addr not called\n");
+            if (!state.remote_addr_called) fail("engine FAIL: handler remote_addr not called\n");
+            if (!state.deadline_called) fail("engine FAIL: handler set_deadline not called\n");
+            if (!state.read_deadline_called) fail("engine FAIL: handler set_read_deadline not called\n");
+            if (!state.write_deadline_called) fail("engine FAIL: handler set_write_deadline not called\n");
+        },
+        .runtime_error => fail("engine FAIL: handler test unexpected error\n"),
+    }
+
+    {
+        const uac_res = rt.call("testUseAfterClose", &.{});
+        switch (uac_res) {
+            .runtime_error => {},
+            else => fail("engine FAIL: expected runtime error for use-after-close\n"),
+        }
+    }
+
+    out("  net capability handlers: OK\n");
+}
+
 export fn _start() void {
     out("engine runner:\n");
     testInitDestroy();
@@ -396,6 +565,7 @@ export fn _start() void {
     testMapWireResult();
     testHostModuleArrayArgs();
     testNetCapability();
+    testNetCapabilityHandlers();
     out("engine-api OK\n");
     std.os.wasi.proc_exit(0);
 }

@@ -169,11 +169,92 @@ fn runConformance(alloc: std.mem.Allocator, wasmtime: []const u8, wasm_path: []c
         }
     }
 
+    // Capability tests (with --cap net --cap fs)
+    const cap_flags = "--cap net --cap fs";
+    runCapTests(alloc, wasmtime, wasm_path, "examples/spec/cap", cap_flags, &errors, &pass_count, &fail_count);
+    runCapTests(alloc, wasmtime, wasm_path, "examples/spec/cap/fail", cap_flags, &errors, &pass_count, &fail_count);
+
     if (errors != 0) {
         std.debug.print("Conformance FAILED: {d} pass-cases, {d} fail-cases, {d} errors\n", .{ pass_count, fail_count, errors });
         std.process.exit(1);
     }
     std.debug.print("Conformance OK: {d} pass-cases, {d} fail-cases\n", .{ pass_count, fail_count });
+}
+
+fn runCapTests(alloc: std.mem.Allocator, wasmtime: []const u8, wasm_path: []const u8, dir: []const u8, flags: []const u8, errors: *usize, pass_count: *usize, fail_count: *usize) void {
+    var cap_cases: [MaxCases][]const u8 = undefined;
+    const cap_count = collectGengoFiles(alloc, dir, &cap_cases) catch return;
+    for (cap_cases[0..cap_count]) |path| {
+        defer alloc.free(path);
+        const base = path[0 .. path.len - 6];
+        const out_path = std.fmt.allocPrint(alloc, "{s}.out", .{base}) catch return;
+        defer alloc.free(out_path);
+
+        if (fileExists(out_path)) {
+            std.debug.print("[PASS-CASE] {s}\n", .{path});
+            const pass_result = runWasmtimeWithFlags(alloc, wasmtime, wasm_path, path, flags);
+            const stdout_data = pass_result[0];
+            const failed = pass_result[1];
+            defer alloc.free(stdout_data);
+            if (failed) {
+                std.debug.print("PASS-CASE cap execution failed: {s}\n", .{path});
+                errors.* += 1;
+                continue;
+            }
+            const expected_data = readFileAlloc(alloc, out_path, MaxOutputBytes) catch |err| {
+                std.debug.print("PASS-CASE cap cannot read .out: {s} ({s})\n", .{ out_path, @errorName(err) });
+                errors.* += 1;
+                continue;
+            };
+            defer alloc.free(expected_data);
+            if (!std.mem.eql(u8, expected_data, stdout_data)) {
+                std.debug.print("PASS-CASE cap output mismatch: {s}\n", .{path});
+                errors.* += 1;
+                continue;
+            }
+            pass_count.* += 1;
+        } else {
+            const err_path = std.fmt.allocPrint(alloc, "{s}.err", .{base}) catch return;
+            defer alloc.free(err_path);
+            if (!fileExists(err_path)) {
+                continue;
+            }
+            std.debug.print("[FAIL-CASE] {s}\n", .{path});
+            const fail_result = runWasmtimeWithFlags(alloc, wasmtime, wasm_path, path, flags);
+            const got_data = fail_result[0];
+            const failed = fail_result[1];
+            defer alloc.free(got_data);
+            if (!failed) {
+                std.debug.print("Expected cap failure but script succeeded: {s}\n", .{path});
+                errors.* += 1;
+                continue;
+            }
+            const err_content = readFileAlloc(alloc, err_path, 1024) catch |err| {
+                std.debug.print("cannot read .err file: {s} ({s})\n", .{ err_path, @errorName(err) });
+                errors.* += 1;
+                continue;
+            };
+            defer alloc.free(err_content);
+            var found = false;
+            var err_start: usize = 0;
+            while (err_start < err_content.len) {
+                const nl = std.mem.indexOfScalar(u8, err_content[err_start..], '\n') orelse err_content.len;
+                const line = err_content[err_start..nl];
+                err_start = nl + 1;
+                if (line.len == 0) continue;
+                if (std.mem.indexOf(u8, got_data, line) != null) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                std.debug.print("Expected cap error token not found for {s}\n", .{path});
+                errors.* += 1;
+                continue;
+            }
+            fail_count.* += 1;
+        }
+    }
 }
 
 // ── Bench ──────────────────────────────────────────────────────────────────
@@ -364,7 +445,14 @@ fn runWasmtime(alloc: std.mem.Allocator, wasmtime: []const u8, wasm_path: []cons
 }
 
 fn runWasmtimeExtra(alloc: std.mem.Allocator, wasmtime: []const u8, wasm_path: []const u8, extra: []const u8) struct { []const u8, bool } {
-    const cmd = std.fmt.allocPrint(alloc, "{s} --dir . {s} -- {s}", .{ wasmtime, wasm_path, extra }) catch return .{ "", true };
+    return runWasmtimeWithFlags(alloc, wasmtime, wasm_path, extra, "");
+}
+
+fn runWasmtimeWithFlags(alloc: std.mem.Allocator, wasmtime: []const u8, wasm_path: []const u8, extra: []const u8, flags: []const u8) struct { []const u8, bool } {
+    const cmd = if (flags.len == 0)
+        std.fmt.allocPrint(alloc, "{s} --dir . {s} -- {s}", .{ wasmtime, wasm_path, extra }) catch return .{ "", true }
+    else
+        std.fmt.allocPrint(alloc, "{s} --dir . {s} -- {s} {s}", .{ wasmtime, wasm_path, flags, extra }) catch return .{ "", true };
     defer alloc.free(cmd);
 
     var stdout_pipe: [2]std.c.fd_t = undefined;

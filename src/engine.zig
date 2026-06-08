@@ -8,6 +8,7 @@ const module_compile = @import("lang/module_compile.zig");
 const vm = @import("lang/vm.zig");
 const vms = @import("lang/vm_state.zig");
 const vmgc = @import("lang/vm_gc.zig");
+const net_state = @import("lang/native/net_state.zig");
 const Value = @import("lang/value.zig").Value;
 const Object = @import("lang/value.zig").Object;
 const MapEntry = @import("lang/value.zig").MapEntry;
@@ -486,4 +487,11 @@ export fn engine_set_write_fn(handle: i32, callback: ?WriteCallback) void {
     if (comptime is_wasm) return;
     _ = getEngine(handle) orelse return;
     write_callback = callback;
+}
+
+export fn engine_set_net_handlers(handle: i32, handlers: ?*const net_state.GengoNetHandlers, userdata: *anyopaque) void {
+    _ = getEngine(handle) orelse return;
+    if (handlers) |h| {
+        net_state.setNetHandlers(h.*, userdata);
+    }
 }

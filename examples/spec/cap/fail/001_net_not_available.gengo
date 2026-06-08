@@ -1,0 +1,2 @@
+net := import("@cap:net")
+net.dial("tcp", "")

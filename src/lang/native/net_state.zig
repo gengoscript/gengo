@@ -5,6 +5,7 @@ const MaxConns = 16;
 
 const NetConn = struct {
     id: u32,
+    host_handle: i32,
     socket: if (builtin.os.tag == .wasi) void else std.posix.socket_t,
 };
 
@@ -12,7 +13,46 @@ var g_next_id: u32 = 1;
 var g_conns: [MaxConns]NetConn = undefined;
 var g_conn_count: usize = 0;
 
+/// C-compatible struct matching GengoNetHandlers in the C API.
+/// All function pointers are required when set — the entire struct
+/// must be valid or operations fall back to the built-in implementation.
+pub const GengoNetHandlers = extern struct {
+    dial: ?*const fn (network: [*]const u8, network_len: usize, address: [*]const u8, address_len: usize, out_handle: *i32, userdata: *anyopaque) callconv(.c) i32,
+    read: ?*const fn (handle: i32, buf: [*]u8, max_bytes: i32, userdata: *anyopaque) callconv(.c) i32,
+    write: ?*const fn (handle: i32, data: [*]const u8, len: i32, userdata: *anyopaque) callconv(.c) i32,
+    close: ?*const fn (handle: i32, userdata: *anyopaque) callconv(.c) void,
+    local_addr: ?*const fn (handle: i32, buf: [*]u8, buf_len: i32, userdata: *anyopaque) callconv(.c) void,
+    remote_addr: ?*const fn (handle: i32, buf: [*]u8, buf_len: i32, userdata: *anyopaque) callconv(.c) void,
+    set_deadline: ?*const fn (handle: i32, ms: i64, userdata: *anyopaque) callconv(.c) void,
+    set_read_deadline: ?*const fn (handle: i32, ms: i64, userdata: *anyopaque) callconv(.c) void,
+    set_write_deadline: ?*const fn (handle: i32, ms: i64, userdata: *anyopaque) callconv(.c) void,
+};
+
+const HandlerSet = struct {
+    callbacks: GengoNetHandlers,
+    userdata: *anyopaque,
+};
+
+var g_net_handlers: ?HandlerSet = null;
+
+pub fn setNetHandlers(handlers: GengoNetHandlers, userdata: *anyopaque) void {
+    g_net_handlers = .{ .callbacks = handlers, .userdata = userdata };
+}
+
+pub fn hasHandlers() bool {
+    return g_net_handlers != null;
+}
+
 pub fn netReset() void {
+    if (g_net_handlers) |h| {
+        var i: usize = 0;
+        while (i < g_conn_count) : (i += 1) {
+            if (h.callbacks.close) |close_fn| close_fn(g_conns[i].host_handle, h.userdata);
+        }
+        g_conn_count = 0;
+        g_next_id = 1;
+        return;
+    }
     if (comptime builtin.os.tag == .wasi) return;
     const io_ctx = ioContext();
     var i: usize = 0;
@@ -75,6 +115,21 @@ fn formatIp6Address(port: u16, ip_bytes: [16]u8) ![]u8 {
 }
 
 pub fn netDial(network: []const u8, address: []const u8) !u32 {
+    if (g_net_handlers) |h| {
+        if (g_conn_count >= MaxConns) return error.CapabilityError;
+        var out_handle: i32 = undefined;
+        const rc = (h.callbacks.dial orelse return error.CapabilityError)(
+            network.ptr, @intCast(network.len),
+            address.ptr, @intCast(address.len),
+            &out_handle, h.userdata,
+        );
+        if (rc < 0) return error.CapabilityError;
+        const id = g_next_id;
+        g_next_id += 1;
+        g_conns[g_conn_count] = .{ .id = id, .host_handle = out_handle, .socket = undefined };
+        g_conn_count += 1;
+        return id;
+    }
     if (comptime builtin.os.tag == .wasi) return error.CapabilityNotAvailable;
     if (g_conn_count >= MaxConns) return error.CapabilityError;
 
@@ -116,7 +171,7 @@ pub fn netDial(network: []const u8, address: []const u8) !u32 {
 
     const id = g_next_id;
     g_next_id += 1;
-    g_conns[g_conn_count] = .{ .id = id, .socket = stream.socket.handle };
+    g_conns[g_conn_count] = .{ .id = id, .host_handle = 0, .socket = stream.socket.handle };
     g_conn_count += 1;
     return id;
 }
@@ -141,6 +196,21 @@ fn removeConn(id: u32) void {
 }
 
 pub fn netRead(id: u32, max_bytes: usize) ![]u8 {
+    if (g_net_handlers) |h| {
+        const conn = findConn(id) orelse return error.CapabilityError;
+        const buf = std.heap.page_allocator.alloc(u8, max_bytes) catch return error.OutOfMemory;
+        errdefer std.heap.page_allocator.free(buf);
+        const clamped: i32 = if (max_bytes > std.math.maxInt(i32)) std.math.maxInt(i32) else @intCast(max_bytes);
+        const n = (h.callbacks.read orelse return error.CapabilityError)(
+            conn.host_handle, buf.ptr, clamped, h.userdata,
+        );
+        if (n < 0) {
+            std.heap.page_allocator.free(buf);
+            return error.CapabilityError;
+        }
+        const out = std.heap.page_allocator.realloc(buf, @intCast(n)) catch return error.OutOfMemory;
+        return out;
+    }
     if (comptime builtin.os.tag == .wasi) return error.CapabilityNotAvailable;
     const conn = findConn(id) orelse return error.CapabilityError;
 
@@ -156,6 +226,14 @@ pub fn netRead(id: u32, max_bytes: usize) ![]u8 {
 }
 
 pub fn netWrite(id: u32, data: []const u8) !usize {
+    if (g_net_handlers) |h| {
+        const conn = findConn(id) orelse return error.CapabilityError;
+        const n = (h.callbacks.write orelse return error.CapabilityError)(
+            conn.host_handle, data.ptr, @intCast(@min(data.len, @as(usize, std.math.maxInt(i32)))), h.userdata,
+        );
+        if (n < 0) return error.CapabilityError;
+        return @intCast(n);
+    }
     if (comptime builtin.os.tag == .wasi) return error.CapabilityNotAvailable;
     const conn = findConn(id) orelse return error.CapabilityError;
 
@@ -167,6 +245,12 @@ pub fn netWrite(id: u32, data: []const u8) !usize {
 }
 
 pub fn netClose(id: u32) !void {
+    if (g_net_handlers) |h| {
+        const conn = findConn(id) orelse return error.CapabilityError;
+        if (h.callbacks.close) |close_fn| close_fn(conn.host_handle, h.userdata);
+        removeConn(id);
+        return;
+    }
     if (comptime builtin.os.tag == .wasi) return error.CapabilityNotAvailable;
     const conn = findConn(id) orelse return error.CapabilityError;
 
@@ -176,6 +260,13 @@ pub fn netClose(id: u32) !void {
 }
 
 pub fn netLocalAddr(id: u32) ![]u8 {
+    if (g_net_handlers) |h| {
+        const conn = findConn(id) orelse return error.CapabilityError;
+        var buf: [128]u8 = std.mem.zeroes([128]u8);
+        (h.callbacks.local_addr orelse return error.CapabilityError)(conn.host_handle, &buf, @intCast(buf.len), h.userdata);
+        const len = std.mem.indexOfScalar(u8, buf[0..], 0) orelse buf.len;
+        return std.heap.page_allocator.dupe(u8, buf[0..len]) catch return error.OutOfMemory;
+    }
     if (comptime builtin.os.tag == .wasi) return error.CapabilityNotAvailable;
     if (comptime builtin.os.tag == .windows) return error.CapabilityError; // TODO: Winsock
     const conn = findConn(id) orelse return error.CapabilityError;
@@ -198,6 +289,13 @@ pub fn netLocalAddr(id: u32) ![]u8 {
 }
 
 pub fn netRemoteAddr(id: u32) ![]u8 {
+    if (g_net_handlers) |h| {
+        const conn = findConn(id) orelse return error.CapabilityError;
+        var buf: [128]u8 = std.mem.zeroes([128]u8);
+        (h.callbacks.remote_addr orelse return error.CapabilityError)(conn.host_handle, &buf, @intCast(buf.len), h.userdata);
+        const len = std.mem.indexOfScalar(u8, buf[0..], 0) orelse buf.len;
+        return std.heap.page_allocator.dupe(u8, buf[0..len]) catch return error.OutOfMemory;
+    }
     if (comptime builtin.os.tag == .wasi) return error.CapabilityNotAvailable;
     if (comptime builtin.os.tag == .windows) return error.CapabilityError; // TODO: Winsock
     const conn = findConn(id) orelse return error.CapabilityError;
@@ -220,6 +318,11 @@ pub fn netRemoteAddr(id: u32) ![]u8 {
 }
 
 pub fn netSetDeadline(id: u32, ms: i64) !void {
+    if (g_net_handlers) |h| {
+        const conn = findConn(id) orelse return error.CapabilityError;
+        if (h.callbacks.set_deadline) |fn_ptr| fn_ptr(conn.host_handle, ms, h.userdata);
+        return;
+    }
     if (comptime builtin.os.tag == .wasi) return error.CapabilityNotAvailable;
     if (comptime builtin.os.tag == .windows) return error.CapabilityError; // TODO: Winsock SO_RCVTIMEO DWORD
     const conn = findConn(id) orelse return error.CapabilityError;
@@ -228,6 +331,11 @@ pub fn netSetDeadline(id: u32, ms: i64) !void {
 }
 
 pub fn netSetReadDeadline(id: u32, ms: i64) !void {
+    if (g_net_handlers) |h| {
+        const conn = findConn(id) orelse return error.CapabilityError;
+        if (h.callbacks.set_read_deadline) |fn_ptr| fn_ptr(conn.host_handle, ms, h.userdata);
+        return;
+    }
     if (comptime builtin.os.tag == .wasi) return error.CapabilityNotAvailable;
     if (comptime builtin.os.tag == .windows) return error.CapabilityError; // TODO: Winsock SO_RCVTIMEO DWORD
     const conn = findConn(id) orelse return error.CapabilityError;
@@ -235,6 +343,11 @@ pub fn netSetReadDeadline(id: u32, ms: i64) !void {
 }
 
 pub fn netSetWriteDeadline(id: u32, ms: i64) !void {
+    if (g_net_handlers) |h| {
+        const conn = findConn(id) orelse return error.CapabilityError;
+        if (h.callbacks.set_write_deadline) |fn_ptr| fn_ptr(conn.host_handle, ms, h.userdata);
+        return;
+    }
     if (comptime builtin.os.tag == .wasi) return error.CapabilityNotAvailable;
     if (comptime builtin.os.tag == .windows) return error.CapabilityError; // TODO: Winsock SO_SNDTIMEO DWORD
     const conn = findConn(id) orelse return error.CapabilityError;
