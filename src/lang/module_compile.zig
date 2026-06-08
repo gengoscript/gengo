@@ -83,14 +83,6 @@ pub const cap_net_desc: CapModuleDesc = .{
     .name = "net",
     .functions = &.{
         .{ .name = "dial", .arity = 2, .native_id = 163 },
-        .{ .name = "read", .arity = 2, .native_id = 164 },
-        .{ .name = "write", .arity = 2, .native_id = 165 },
-        .{ .name = "close", .arity = 1, .native_id = 166 },
-        .{ .name = "local_addr", .arity = 1, .native_id = 167 },
-        .{ .name = "remote_addr", .arity = 1, .native_id = 168 },
-        .{ .name = "set_deadline", .arity = 2, .native_id = 169 },
-        .{ .name = "set_read_deadline", .arity = 2, .native_id = 170 },
-        .{ .name = "set_write_deadline", .arity = 2, .native_id = 171 },
     },
 };
 

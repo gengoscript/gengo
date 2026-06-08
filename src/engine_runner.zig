@@ -338,13 +338,16 @@ fn testNetCapability() void {
         \\    _ = net.dial("tcp", "127.0.0.1:1")
         \\}
         \\func testLocalAddr() {
-        \\    _ = net.localAddr(1)
+        \\    conn := net.dial("tcp", "127.0.0.1:1")
+        \\    _ = conn.local_addr()
         \\}
         \\func testRemoteAddr() {
-        \\    _ = net.remoteAddr(1)
+        \\    conn := net.dial("tcp", "127.0.0.1:1")
+        \\    _ = conn.remote_addr()
         \\}
         \\func testDeadline() {
-        \\    net.setDeadline(1, 1000)
+        \\    conn := net.dial("tcp", "127.0.0.1:1")
+        \\    conn.set_deadline(1000)
         \\}
     );
     switch (res) {
@@ -361,17 +364,17 @@ fn testNetCapability() void {
     const local_res = rt.call("testLocalAddr", &.{});
     switch (local_res) {
         .runtime_error => {},
-        else => fail("engine FAIL: expected runtime error for net.localAddr on WASM\n"),
+        else => fail("engine FAIL: expected runtime error for conn.local_addr on WASM\n"),
     }
     const remote_res = rt.call("testRemoteAddr", &.{});
     switch (remote_res) {
         .runtime_error => {},
-        else => fail("engine FAIL: expected runtime error for net.remoteAddr on WASM\n"),
+        else => fail("engine FAIL: expected runtime error for conn.remote_addr on WASM\n"),
     }
     const deadline_res = rt.call("testDeadline", &.{});
     switch (deadline_res) {
         .runtime_error => {},
-        else => fail("engine FAIL: expected runtime error for net.setDeadline on WASM\n"),
+        else => fail("engine FAIL: expected runtime error for conn.set_deadline on WASM\n"),
     }
 
     out("  net capability: OK\n");

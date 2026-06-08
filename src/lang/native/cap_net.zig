@@ -6,6 +6,24 @@ const Value = @import("../value.zig").Value;
 const NativeFnId = @import("native_ids.zig").NativeFnId;
 const NativeFuncObj = @import("../value.zig").NativeFuncObj;
 const net_state = @import("net_state.zig");
+const globals = @import("../globals.zig");
+const MapEntry = @import("../value.zig").MapEntry;
+
+fn extractHandle(arg: Value) !u32 {
+    const obj = switch (arg) {
+        .object => |o| o,
+        else => return error.TypeError,
+    };
+    const fields = switch (obj.*) {
+        .struct_instance => |inst| inst.fields,
+        else => return error.TypeError,
+    };
+    const handle_val = fields[0].value;
+    return switch (handle_val) {
+        .number => |n| @as(u32, @intFromFloat(n)),
+        else => return error.TypeError,
+    };
+}
 
 fn ioContext() std.Io {
     return std.Io.Threaded.global_single_threaded.io();
@@ -54,16 +72,26 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             _ = try vms.vmPop();
 
             const id = net_state.netDial(network, address) catch return error.CapabilityError;
-            try vms.vmPush(.{ .number = @floatFromInt(id) });
+
+            const conn_type_val = globals.get("@cap_type:net.Conn") orelse return error.CapabilityError;
+            const conn_type_obj = switch (conn_type_val) {
+                .object => |o| o,
+                else => return error.CapabilityError,
+            };
+
+            const inst_fields = try vmgc.vmAllocManagedSlice(MapEntry, 1);
+            const inst_obj = try vmgc.vmAllocObject();
+            try vms.pushTempRoot(.{ .object = inst_obj });
+            defer vms.popTempRoot();
+            inst_obj.* = .{ .struct_instance = .{ .typ = conn_type_obj, .fields = inst_fields } };
+            inst_fields[0] = .{ .key = .{ .string = "_handle" }, .value = .{ .number = @floatFromInt(id) } };
+            try vms.vmPush(.{ .object = inst_obj });
         },
         .cap_net_read => {
             if (argc != 2) return error.ArityMismatch;
             const arg1 = try vms.vmPop();
             const arg0 = try vms.vmPop();
-            const id = switch (arg0) {
-                .number => |n| @as(u32, @intFromFloat(n)),
-                else => return error.TypeError,
-            };
+            const id = try extractHandle(arg0);
             const max_bytes = switch (arg1) {
                 .number => |n| @as(usize, @intFromFloat(n)),
                 else => return error.TypeError,
@@ -79,10 +107,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             if (argc != 2) return error.ArityMismatch;
             const arg1 = try vms.vmPop();
             const arg0 = try vms.vmPop();
-            const id = switch (arg0) {
-                .number => |n| @as(u32, @intFromFloat(n)),
-                else => return error.TypeError,
-            };
+            const id = try extractHandle(arg0);
             const data = vms.asStringValue(arg1) catch return error.TypeError;
             _ = try vms.vmPop();
 
@@ -92,10 +117,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
         .cap_net_close => {
             if (argc != 1) return error.ArityMismatch;
             const arg0 = try vms.vmPop();
-            const id = switch (arg0) {
-                .number => |n| @as(u32, @intFromFloat(n)),
-                else => return error.TypeError,
-            };
+            const id = try extractHandle(arg0);
             _ = try vms.vmPop();
 
             net_state.netClose(id) catch return error.CapabilityError;
@@ -104,10 +126,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
         .cap_net_local_addr => {
             if (argc != 1) return error.ArityMismatch;
             const arg0 = try vms.vmPop();
-            const id = switch (arg0) {
-                .number => |n| @as(u32, @intFromFloat(n)),
-                else => return error.TypeError,
-            };
+            const id = try extractHandle(arg0);
             _ = try vms.vmPop();
 
             const addr = net_state.netLocalAddr(id) catch return error.CapabilityError;
@@ -117,10 +136,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
         .cap_net_remote_addr => {
             if (argc != 1) return error.ArityMismatch;
             const arg0 = try vms.vmPop();
-            const id = switch (arg0) {
-                .number => |n| @as(u32, @intFromFloat(n)),
-                else => return error.TypeError,
-            };
+            const id = try extractHandle(arg0);
             _ = try vms.vmPop();
 
             const addr = net_state.netRemoteAddr(id) catch return error.CapabilityError;
@@ -131,10 +147,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             if (argc != 2) return error.ArityMismatch;
             const arg1 = try vms.vmPop();
             const arg0 = try vms.vmPop();
-            const id = switch (arg0) {
-                .number => |n| @as(u32, @intFromFloat(n)),
-                else => return error.TypeError,
-            };
+            const id = try extractHandle(arg0);
             const ms = switch (arg1) {
                 .number => |n| @as(i64, @intFromFloat(n)),
                 else => return error.TypeError,
@@ -148,10 +161,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             if (argc != 2) return error.ArityMismatch;
             const arg1 = try vms.vmPop();
             const arg0 = try vms.vmPop();
-            const id = switch (arg0) {
-                .number => |n| @as(u32, @intFromFloat(n)),
-                else => return error.TypeError,
-            };
+            const id = try extractHandle(arg0);
             const ms = switch (arg1) {
                 .number => |n| @as(i64, @intFromFloat(n)),
                 else => return error.TypeError,
@@ -165,10 +175,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             if (argc != 2) return error.ArityMismatch;
             const arg1 = try vms.vmPop();
             const arg0 = try vms.vmPop();
-            const id = switch (arg0) {
-                .number => |n| @as(u32, @intFromFloat(n)),
-                else => return error.TypeError,
-            };
+            const id = try extractHandle(arg0);
             const ms = switch (arg1) {
                 .number => |n| @as(i64, @intFromFloat(n)),
                 else => return error.TypeError,
