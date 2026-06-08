@@ -400,7 +400,7 @@ const MockNetState = struct {
     written_len: usize = 0,
 };
 
-fn mockDial(network: [*]const u8, network_len: usize, address: [*]const u8, address_len: usize, out_handle: *i32, userdata: *anyopaque) callconv(.c) i32 {
+fn mockDial(network: [*]const u8, network_len: usize, address: [*]const u8, address_len: usize, out_handle: *i32, userdata: ?*anyopaque) callconv(.c) i32 {
     const s: *MockNetState = @ptrCast(@alignCast(userdata));
     s.dial_called = true;
     s.dial_network_len = @min(network_len, s.dial_network.len);
@@ -411,7 +411,7 @@ fn mockDial(network: [*]const u8, network_len: usize, address: [*]const u8, addr
     return 0;
 }
 
-fn mockRead(handle: i32, buf: [*]u8, max_bytes: i32, userdata: *anyopaque) callconv(.c) i32 {
+fn mockRead(handle: i32, buf: [*]u8, max_bytes: i32, userdata: ?*anyopaque) callconv(.c) i32 {
     _ = handle;
     const s: *MockNetState = @ptrCast(@alignCast(userdata));
     if (s.closed) return -1;
@@ -422,7 +422,7 @@ fn mockRead(handle: i32, buf: [*]u8, max_bytes: i32, userdata: *anyopaque) callc
     return @intCast(n);
 }
 
-fn mockWrite(handle: i32, data: [*]const u8, len: i32, userdata: *anyopaque) callconv(.c) i32 {
+fn mockWrite(handle: i32, data: [*]const u8, len: i32, userdata: ?*anyopaque) callconv(.c) i32 {
     _ = handle;
     const s: *MockNetState = @ptrCast(@alignCast(userdata));
     if (s.closed) return -1;
@@ -432,14 +432,14 @@ fn mockWrite(handle: i32, data: [*]const u8, len: i32, userdata: *anyopaque) cal
     return len;
 }
 
-fn mockClose(handle: i32, userdata: *anyopaque) callconv(.c) void {
+fn mockClose(handle: i32, userdata: ?*anyopaque) callconv(.c) void {
     _ = handle;
     const s: *MockNetState = @ptrCast(@alignCast(userdata));
     s.close_called = true;
     s.closed = true;
 }
 
-fn mockLocalAddr(handle: i32, buf: [*]u8, buf_len: i32, userdata: *anyopaque) callconv(.c) void {
+fn mockLocalAddr(handle: i32, buf: [*]u8, buf_len: i32, userdata: ?*anyopaque) callconv(.c) void {
     _ = handle;
     const s: *MockNetState = @ptrCast(@alignCast(userdata));
     s.local_addr_called = true;
@@ -448,7 +448,7 @@ fn mockLocalAddr(handle: i32, buf: [*]u8, buf_len: i32, userdata: *anyopaque) ca
     @memcpy(buf[0..n], addr);
 }
 
-fn mockRemoteAddr(handle: i32, buf: [*]u8, buf_len: i32, userdata: *anyopaque) callconv(.c) void {
+fn mockRemoteAddr(handle: i32, buf: [*]u8, buf_len: i32, userdata: ?*anyopaque) callconv(.c) void {
     _ = handle;
     const s: *MockNetState = @ptrCast(@alignCast(userdata));
     s.remote_addr_called = true;
@@ -457,21 +457,21 @@ fn mockRemoteAddr(handle: i32, buf: [*]u8, buf_len: i32, userdata: *anyopaque) c
     @memcpy(buf[0..n], addr);
 }
 
-fn mockSetDeadline(handle: i32, ms: i64, userdata: *anyopaque) callconv(.c) void {
+fn mockSetDeadline(handle: i32, ms: i64, userdata: ?*anyopaque) callconv(.c) void {
     const s: *MockNetState = @ptrCast(@alignCast(userdata));
     _ = handle;
     _ = ms;
     s.deadline_called = true;
 }
 
-fn mockSetReadDeadline(handle: i32, ms: i64, userdata: *anyopaque) callconv(.c) void {
+fn mockSetReadDeadline(handle: i32, ms: i64, userdata: ?*anyopaque) callconv(.c) void {
     const s: *MockNetState = @ptrCast(@alignCast(userdata));
     _ = handle;
     _ = ms;
     s.read_deadline_called = true;
 }
 
-fn mockSetWriteDeadline(handle: i32, ms: i64, userdata: *anyopaque) callconv(.c) void {
+fn mockSetWriteDeadline(handle: i32, ms: i64, userdata: ?*anyopaque) callconv(.c) void {
     const s: *MockNetState = @ptrCast(@alignCast(userdata));
     _ = handle;
     _ = ms;

@@ -17,25 +17,25 @@ var g_conn_count: usize = 0;
 /// All function pointers are required when set — the entire struct
 /// must be valid or operations fall back to the built-in implementation.
 pub const GengoNetHandlers = extern struct {
-    dial: ?*const fn (network: [*]const u8, network_len: usize, address: [*]const u8, address_len: usize, out_handle: *i32, userdata: *anyopaque) callconv(.c) i32,
-    read: ?*const fn (handle: i32, buf: [*]u8, max_bytes: i32, userdata: *anyopaque) callconv(.c) i32,
-    write: ?*const fn (handle: i32, data: [*]const u8, len: i32, userdata: *anyopaque) callconv(.c) i32,
-    close: ?*const fn (handle: i32, userdata: *anyopaque) callconv(.c) void,
-    local_addr: ?*const fn (handle: i32, buf: [*]u8, buf_len: i32, userdata: *anyopaque) callconv(.c) void,
-    remote_addr: ?*const fn (handle: i32, buf: [*]u8, buf_len: i32, userdata: *anyopaque) callconv(.c) void,
-    set_deadline: ?*const fn (handle: i32, ms: i64, userdata: *anyopaque) callconv(.c) void,
-    set_read_deadline: ?*const fn (handle: i32, ms: i64, userdata: *anyopaque) callconv(.c) void,
-    set_write_deadline: ?*const fn (handle: i32, ms: i64, userdata: *anyopaque) callconv(.c) void,
+    dial: ?*const fn (network: [*]const u8, network_len: usize, address: [*]const u8, address_len: usize, out_handle: *i32, userdata: ?*anyopaque) callconv(.c) i32,
+    read: ?*const fn (handle: i32, buf: [*]u8, max_bytes: i32, userdata: ?*anyopaque) callconv(.c) i32,
+    write: ?*const fn (handle: i32, data: [*]const u8, len: i32, userdata: ?*anyopaque) callconv(.c) i32,
+    close: ?*const fn (handle: i32, userdata: ?*anyopaque) callconv(.c) void,
+    local_addr: ?*const fn (handle: i32, buf: [*]u8, buf_len: i32, userdata: ?*anyopaque) callconv(.c) void,
+    remote_addr: ?*const fn (handle: i32, buf: [*]u8, buf_len: i32, userdata: ?*anyopaque) callconv(.c) void,
+    set_deadline: ?*const fn (handle: i32, ms: i64, userdata: ?*anyopaque) callconv(.c) void,
+    set_read_deadline: ?*const fn (handle: i32, ms: i64, userdata: ?*anyopaque) callconv(.c) void,
+    set_write_deadline: ?*const fn (handle: i32, ms: i64, userdata: ?*anyopaque) callconv(.c) void,
 };
 
 const HandlerSet = struct {
     callbacks: GengoNetHandlers,
-    userdata: *anyopaque,
+    userdata: ?*anyopaque,
 };
 
 var g_net_handlers: ?HandlerSet = null;
 
-pub fn setNetHandlers(handlers: GengoNetHandlers, userdata: *anyopaque) void {
+pub fn setNetHandlers(handlers: GengoNetHandlers, userdata: ?*anyopaque) void {
     g_net_handlers = .{ .callbacks = handlers, .userdata = userdata };
 }
 

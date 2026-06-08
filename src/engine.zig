@@ -489,7 +489,7 @@ export fn engine_set_write_fn(handle: i32, callback: ?WriteCallback) void {
     write_callback = callback;
 }
 
-export fn engine_set_net_handlers(handle: i32, handlers: ?*const net_state.GengoNetHandlers, userdata: *anyopaque) void {
+export fn engine_set_net_handlers(handle: i32, handlers: ?*const net_state.GengoNetHandlers, userdata: ?*anyopaque) void {
     _ = getEngine(handle) orelse return;
     if (handlers) |h| {
         net_state.setNetHandlers(h.*, userdata);
