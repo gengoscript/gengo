@@ -431,7 +431,7 @@ pub fn tplParse(src_val: Value, src: []const u8) !Value {
 }
 
 const IterState = struct {
-    items: []Value,
+    items: *Object,
     index: usize,
     body_ip: usize,
 };
@@ -516,9 +516,10 @@ pub fn tplExec(tmpl: *Object, data: Value) !Value {
                 if (jv == .number and jv.number == -2) {
                     if (iter_top > 0) {
                         const iter_idx = iter_top - 1;
+                        const slice = tplAsArraySlice(iter_stack[iter_idx].items);
                         iter_stack[iter_idx].index += 1;
-                        if (iter_stack[iter_idx].index < iter_stack[iter_idx].items.len) {
-                            dot_stack[scope_top] = iter_stack[iter_idx].items[iter_stack[iter_idx].index];
+                        if (iter_stack[iter_idx].index < slice.len) {
+                            dot_stack[scope_top] = slice[iter_stack[iter_idx].index];
                             ip = iter_stack[iter_idx].body_ip;
                         } else {
                             iter_top -= 1;
@@ -541,12 +542,11 @@ pub fn tplExec(tmpl: *Object, data: Value) !Value {
                 if (rval == .object) {
                     const obj = rval.object;
                     if (tplIsArray(obj)) {
-                        const items = tplAsArraySlice(obj);
-                        if (items.len > 0) {
-                            iter_stack[iter_top] = .{ .items = items, .index = 0, .body_ip = ip + 1 };
+                        if (tplAsArraySlice(obj).len > 0) {
+                            iter_stack[iter_top] = .{ .items = obj, .index = 0, .body_ip = ip + 1 };
                             iter_top += 1;
                             scope_top += 1;
-                            dot_stack[scope_top] = items[0];
+                            dot_stack[scope_top] = tplAsArraySlice(obj)[0];
                             ip += 1;
                         } else {
                             ip = @intFromFloat(jmps[ip].number);
@@ -576,6 +576,8 @@ pub fn tplExec(tmpl: *Object, data: Value) !Value {
 pub fn tplRender(src_val: Value, src: []const u8, data: Value) !Value {
     const tmpl_val = try tplParse(src_val, src);
     if (tmpl_val != .object) return error.TypeError;
+    try vms.pushTempRoot(tmpl_val);
+    defer vms.popTempRoot();
     return try tplExec(tmpl_val.object, data);
 }
 
