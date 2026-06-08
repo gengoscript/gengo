@@ -1,0 +1,9 @@
+std := import("std")
+http := import("@cap:http")
+resp := http.fetch("https://example.com/api", {
+    "method": "PUT",
+    "body": "put-body",
+    "timeout_ms": 5000,
+})
+std.io.println(resp.status)
+std.io.println(resp.ok)

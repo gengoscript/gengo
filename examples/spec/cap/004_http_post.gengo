@@ -1,0 +1,4 @@
+std := import("std")
+http := import("@cap:http")
+resp := http.post("https://example.com/api", "{\"key\":\"value\"}")
+std.io.println(resp.status)

@@ -1,0 +1,5 @@
+std := import("std")
+http := import("@cap:http")
+resp := http.get("https://example.com/404")
+std.io.println(resp.status)
+std.io.println(resp.ok)

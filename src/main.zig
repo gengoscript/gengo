@@ -19,6 +19,7 @@ const vm = @import("lang/vm.zig");
 const vmperf = @import("lang/vm_perf.zig");
 const vms = @import("lang/vm_state.zig");
 const cfg = @import("runtime/config.zig");
+const http_state = @import("lang/native/http_state.zig");
 
 const MaxArgs = 32;
 const ArgBufSize = 4096;
@@ -198,6 +199,18 @@ fn runReplMode(backend: vm.Policy.NativeBackend, max_ops: ?u64, caps: []const []
     die(0);
 }
 
+fn mockHttpFetchForTests(req: *const http_state.GengoHttpRequest, resp: *http_state.GengoHttpResponse, userdata: ?*anyopaque) callconv(.c) c_int {
+    _ = userdata;
+    const url = std.mem.span(req.url);
+    if (url.len == 0) return -1;
+    const test_body = "{\"status\":\"ok\"}";
+    resp.status = if (std.mem.containsAtLeast(u8, url, 1, "404")) 404 else 200;
+    resp.body = test_body.ptr;
+    resp.body_len = @intCast(test_body.len);
+    resp.headers = .{ .keys = null, .values = null, .count = 0 };
+    return 0;
+}
+
 fn runCli(argv: []const []const u8) void {
     var script_path: ?[]const u8 = null;
     var script_name: []const u8 = "<stdin>";
@@ -205,6 +218,7 @@ fn runCli(argv: []const []const u8) void {
     var backend: vm.Policy.NativeBackend = .embedded;
     var max_ops: ?u64 = null;
     var test_mode: bool = false;
+    var mock_http: bool = false;
     var cap_names: [8][]const u8 = undefined;
     var cap_count: usize = 0;
     while (script_index < argv.len) {
@@ -261,6 +275,11 @@ fn runCli(argv: []const []const u8) void {
             script_index += 2;
             continue;
         }
+        if (std.mem.eql(u8, a, "--mock-http")) {
+            mock_http = true;
+            script_index += 1;
+            continue;
+        }
         if (std.mem.eql(u8, a, "--test")) {
             test_mode = true;
             script_index += 1;
@@ -303,6 +322,9 @@ fn runCli(argv: []const []const u8) void {
     });
     if (cap_count > 0) {
         runtime.enabled_capabilities = cap_names[0..cap_count];
+    }
+    if (mock_http) {
+        http_state.setHttpHandler(&mockHttpFetchForTests, null);
     }
     runtime.runPathWithProvider(src, if (script_path) |p| p else "", .filesystem, test_mode) catch |err| {
         vmperf.printSummary(vms.vmState().gc_runs, vms.vmState().gc_time_ns,
