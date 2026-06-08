@@ -410,6 +410,11 @@ For cycle types, `succ`/`pred` wrap around.
 - `std.string.count(s, sub)` — count of non-overlapping occurrences of `sub` in `s`
 - `std.string.replace(s, old, new)` — replace all non-overlapping occurrences
 - `std.string.trim(s)` — strip leading and trailing ASCII whitespace
+- `std.string.trim_left(s, cutset)` — strip leading bytes that appear in `cutset`
+- `std.string.trim_right(s, cutset)` — strip trailing bytes that appear in `cutset`
+- `std.string.trim_prefix(s, prefix)` — remove `prefix` if present; return `s` unchanged otherwise
+- `std.string.trim_suffix(s, suffix)` — remove `suffix` if present; return `s` unchanged otherwise
+- `std.string.split_n(s, sep, n)` — split into at most `n` parts; last part contains the remainder
 - `std.string.fields(s)` — split on any whitespace, collapsing runs; returns array of non-empty tokens
 - `std.string.upper(s)` — ASCII uppercase
 - `std.string.lower(s)` — ASCII lowercase
@@ -481,7 +486,8 @@ For cycle types, `succ`/`pred` wrap around.
 ### std.json
 
 - `std.json.parse(s)` — parse JSON string; returns array/map/number/string/boolean/null
-- `std.json.stringify(v)` — serialize value to JSON string
+- `std.json.stringify(v)` — serialize value to compact JSON string
+- `std.json.indent(s, indent)` — pretty-print JSON `s` with the given indent string (`"\t"`, `" "`, `"  "` etc.)
 - `std.json.valid(s)` — `true` if `s` is valid JSON
 
 ### std.time
@@ -495,6 +501,7 @@ All times are opaque `Time` objects. Internal representation is milliseconds sin
 - `std.time.parse(s, fmt)` — parse string with format; raises `ParseError` on mismatch
 - `std.time.since(t)` — milliseconds elapsed since `t` (equivalent to `std.time.now().sub(t)`)
 - `std.time.until(t)` — milliseconds until `t`
+- `std.time.parse_duration(s)` — parse a duration string like `"1h30m"`, `"300ms"`, `"2.5s"` into milliseconds; supports `ns`, `us`/`µs`, `ms`, `s`, `m`, `h`
 
 **Methods on Time values**
 - `t.unix()` — Unix timestamp in seconds
@@ -557,6 +564,11 @@ All functions return a **new** array; the original is not modified.
 - `std.array.slice(arr, from, to)` — sub-array `[from, to)` (exclusive end); raises `IndexOutOfBounds` on invalid range
 - `std.array.zip(a, b)` — array of two-element arrays `[a[i], b[i]]`; truncates to the shorter input
 - `std.array.flat(arr)` — one-level flatten: array elements that are arrays are inlined; non-array elements are kept as-is
+- `std.array.find(arr, fn)` — first element where `fn(v)` is truthy, or `null`
+- `std.array.find_index(arr, fn)` — index of first match, or `-1`
+- `std.array.all(arr, fn)` — `true` if `fn(v)` is truthy for every element
+- `std.array.any(arr, fn)` — `true` if `fn(v)` is truthy for at least one element
+- `std.array.chunk(arr, size)` — split into sub-arrays of length `size` (last chunk may be shorter); raises `RangeError` if `size ≤ 0`
 
 ## 10. Runtime/Backend Notes
 
