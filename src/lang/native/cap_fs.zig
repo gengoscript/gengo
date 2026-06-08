@@ -19,8 +19,18 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
 
             if (comptime builtin.os.tag == .wasi) return error.CapabilityNotAvailable;
 
-            const io_ctx = std.Io.Threaded.global_single_threaded.io();
-            const contents = std.Io.Dir.cwd().readFileAlloc(io_ctx, path, std.heap.page_allocator, .limited(1 << 20)) catch return error.CapabilityError;
+            const fd = std.posix.openat(std.posix.AT.FDCWD, path, .{ .ACCMODE = .RDONLY, .CLOEXEC = true }, 0) catch return error.CapabilityError;
+            defer _ = std.posix.system.close(fd);
+
+            var buf: std.ArrayList(u8) = .empty;
+            defer buf.deinit(std.heap.page_allocator);
+            var temp: [4096]u8 = undefined;
+            while (true) {
+                const n = std.posix.read(fd, &temp) catch return error.CapabilityError;
+                if (n == 0) break;
+                buf.appendSlice(std.heap.page_allocator, temp[0..n]) catch return error.CapabilityError;
+            }
+            const contents = buf.toOwnedSlice(std.heap.page_allocator) catch return error.CapabilityError;
             defer std.heap.page_allocator.free(contents);
 
             const out = try vmgc.makeDynString(contents);
@@ -37,14 +47,14 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
 
             if (comptime builtin.os.tag == .wasi) return error.CapabilityNotAvailable;
 
-            const io_ctx = std.Io.Threaded.global_single_threaded.io();
-            std.Io.Dir.cwd().access(io_ctx, path, .{}) catch |err| switch (err) {
+            const fd = std.posix.openat(std.posix.AT.FDCWD, path, .{ .ACCMODE = .RDONLY, .CLOEXEC = true }, 0) catch |err| switch (err) {
                 error.FileNotFound => {
                     try vms.vmPush(.{ .boolean = false });
                     return;
                 },
                 else => return error.CapabilityError,
             };
+            _ = std.posix.system.close(fd);
             try vms.vmPush(.{ .boolean = true });
         },
         else => unreachable,
