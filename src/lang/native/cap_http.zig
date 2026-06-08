@@ -84,7 +84,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             var result = http_state.httpFetch("GET", url, null, null, 0) catch {
                 return error.CapabilityError;
             };
-            defer result.headers.deinit();
+            defer result.deinit();
 
             const resp_val = try buildResponseStruct(result.status, result.body, result.headers, result.ok);
             try vms.vmPush(resp_val);
@@ -100,7 +100,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             var result = http_state.httpFetch("POST", url, body, null, 0) catch {
                 return error.CapabilityError;
             };
-            defer result.headers.deinit();
+            defer result.deinit();
 
             const resp_val = try buildResponseStruct(result.status, result.body, result.headers, result.ok);
             try vms.vmPush(resp_val);
@@ -173,7 +173,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             var result = http_state.httpFetch(method, url, body, req_headers, timeout_ms) catch {
                 return error.CapabilityError;
             };
-            defer result.headers.deinit();
+            defer result.deinit();
 
             const resp_val = try buildResponseStruct(result.status, result.body, result.headers, result.ok);
             try vms.vmPush(resp_val);

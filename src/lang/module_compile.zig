@@ -404,9 +404,10 @@ pub const Session = struct {
 pub fn hasModuleExport(ctx: *anyopaque, path: []const u8, field: []const u8) bool {
     const self: *Session = @ptrCast(@alignCast(ctx));
     const idx = self.findModule(path) orelse {
-        // Check capability modules
+        // Check capability modules — path is "@cap:<name>", cm.name is "<name>"
+        const cap_key = if (std.mem.startsWith(u8, path, "@cap:")) path[5..] else path;
         for (self.capability_modules) |cm| {
-            if (common.streq(cm.name, path)) {
+            if (common.streq(cm.name, cap_key)) {
                 for (cm.functions) |func| {
                     if (common.streq(func.name, field)) return true;
                 }

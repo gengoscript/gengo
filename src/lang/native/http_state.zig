@@ -6,6 +6,12 @@ pub const HttpResult = struct {
     body: []const u8,
     headers: std.StringHashMap([]const u8),
     ok: bool,
+    body_needs_free: bool = false,
+
+    pub fn deinit(self: *HttpResult) void {
+        if (self.body_needs_free) std.heap.page_allocator.free(self.body);
+        self.headers.deinit();
+    }
 };
 
 /// C-compatible struct for HTTP headers in the host API.
@@ -195,7 +201,6 @@ fn httpFetchBuiltin(
     defer client.deinit();
 
     var writer: std.Io.Writer.Allocating = .init(std.heap.page_allocator);
-    defer writer.deinit();
 
     // Build extra headers if provided
     var extra_headers: [16]std.http.Header = undefined;
@@ -222,17 +227,17 @@ fn httpFetchBuiltin(
         break :blk .GET;
     };
 
-    const payload: ?[]const u8 = maybe_body;
-
     const res = client.fetch(.{
         .location = .{ .url = url },
         .method = method_enum,
-        .payload = if (payload) |p| p else "",
+        .payload = if (maybe_body) |p| p else null,
         .extra_headers = if (extra_header_count > 0) extra_headers[0..extra_header_count] else &.{},
         .response_writer = &writer.writer,
     }) catch return error.CapabilityError;
 
-    const resp_body = writer.written();
+    // Copy body out before writer.deinit() frees the underlying buffer.
+    const resp_body = std.heap.page_allocator.dupe(u8, writer.written()) catch "";
+    writer.deinit();
 
     var resp_headers = std.StringHashMap([]const u8).init(std.heap.page_allocator);
     errdefer resp_headers.deinit();
@@ -248,5 +253,6 @@ fn httpFetchBuiltin(
         .body = resp_body,
         .headers = resp_headers,
         .ok = ok,
+        .body_needs_free = true,
     };
 }
