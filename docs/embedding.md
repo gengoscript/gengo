@@ -4,15 +4,26 @@
 
 ## Types
 
-- `api.Config`
-- `allow_io: bool = true`
-- `native_backend: vm.Policy.NativeBackend = .embedded`
-- `max_ops: ?u64 = null`
-- `module_sources: []const api.SourceEntry = &.{}`
-- `module_source_provider: ?api.SourceProvider = null`
-- `host_modules: []const api.HostModuleDesc = &.{}`
-  - each entry has a module name and a slice of `HostModuleFuncDesc` (name + arity)
-  - scripts import with `@module:` prefix: `mymod := import("@module:mymod")`
+### `api.Config`
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `allow_io` | `bool` | `true` | Allow `std.io` output |
+| `native_backend` | `vm.Policy.NativeBackend` | `.embedded` | Native dispatch backend |
+| `max_ops` | `?u64` | `null` | Instruction budget; `null` = unlimited |
+| `module_sources` | `[]const api.SourceEntry` | `&.{}` | In-memory source table for `import("./...")` |
+| `module_source_provider` | `?api.SourceProvider` | `null` | Dynamic source callback (wins over `module_sources`) |
+| `host_modules` | `[]const api.HostModuleDesc` | `&.{}` | Host-defined modules importable via `@module:` prefix |
+| `capabilities` | `[]const []const u8` | `&.{}` | Enabled capability names (e.g. `&.{"http", "fs"}`) |
+| `heap_size_bytes` | `usize` | preset default | Gengo heap size in bytes |
+| `max_objects` | `usize` | preset default | Maximum live GC objects |
+| `max_stack` | `usize` | preset default | VM value stack depth |
+| `max_frames` | `usize` | preset default | Call frame limit |
+| `max_defers` | `usize` | preset default | Defer stack depth |
+| `allocator` | `std.mem.Allocator` | `page_allocator` | Allocator for per-instance backing memory (native only) |
+
+### Other types
+
 - `api.Runtime`
 - `api.RuntimeResult`
   - `.ok`
@@ -24,10 +35,11 @@
 
 ## Lifecycle
 
-1. `var rt = api.Runtime.init(config);`
+1. `var rt: api.Runtime = undefined; rt.initWithPolicy(config);`  (or `api.Runtime.init(config)`)
 2. `const run_res = rt.run(src);`
 3. `const call_res = rt.call("fn_name", args);`
-4. `rt.reset();` (optional, clears runtime state)
+4. `rt.reset();` — optional; clears globals, heap, and call stack so the handle can run a fresh script
+5. `rt.deinit();` — frees per-instance backing memory; required when using a custom `allocator`
 
 If the embedded script should be allowed to resolve relative source imports, use `rt.runPath(src, "path/to/root.gengo")` instead of `rt.run(src)`.
 
@@ -164,6 +176,77 @@ var rt = api.Runtime.init(.{ .allow_io = false, .max_ops = 10000 });
 const res = rt.run("for {}");
 // res is .runtime_error with InstructionBudgetExceeded
 ```
+
+## Capabilities
+
+Scripts can access system capabilities (`@cap:http`, `@cap:fs`, `@cap:net`) only when the host enables them. Pass capability names in `api.Config.capabilities`:
+
+```zig
+var rt: api.Runtime = undefined;
+rt.initWithPolicy(.{
+    .allow_io = true,
+    .capabilities = &.{ "http", "fs" },
+});
+```
+
+### HTTP capability handler
+
+By default the native CLI provides a built-in HTTP implementation. For embedding, register a custom handler via `http_state.setHttpHandler` to route HTTP calls through your own networking stack:
+
+```zig
+const http_state = @import("lang/native/http_state.zig");
+
+fn myHttpFetch(
+    req: *const http_state.GengoHttpRequest,
+    out: *http_state.GengoHttpResponse,
+    userdata: ?*anyopaque,
+) callconv(.c) c_int {
+    _ = userdata;
+    // populate out.status, out.body, out.body_len, out.headers
+    out.status = 200;
+    const body = "hello";
+    out.body = body.ptr;
+    out.body_len = @intCast(body.len);
+    out.headers = .{ .keys = null, .values = null, .count = 0 };
+    return 0; // 0 = success; negative = network error
+}
+
+http_state.setHttpHandler(&myHttpFetch, null);
+```
+
+`GengoHttpRequest` fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `method` | `[*:0]const u8` | HTTP method (null-terminated) |
+| `url` | `[*:0]const u8` | Full URL (null-terminated) |
+| `body` | `[*]const u8` | Request body bytes (may be empty) |
+| `body_len` | `c_int` | Length of `body` in bytes |
+| `headers` | `GengoHttpHeaders` | Request headers |
+| `timeout_ms` | `i64` | Timeout in ms; `0` = no timeout |
+
+### Net capability handlers
+
+For `@cap:net`, register a `GengoNetHandlers` struct with all socket-level callbacks:
+
+```zig
+const net_state = @import("lang/native/net_state.zig");
+
+const handlers = net_state.GengoNetHandlers{
+    .dial   = myDial,
+    .read   = myRead,
+    .write  = myWrite,
+    .close  = myClose,
+    .local_addr    = myLocalAddr,
+    .remote_addr   = myRemoteAddr,
+    .set_deadline       = mySetDeadline,
+    .set_read_deadline  = mySetReadDeadline,
+    .set_write_deadline = mySetWriteDeadline,
+};
+net_state.setNetHandlers(handlers, null);
+```
+
+If no handler is registered the built-in POSIX socket implementation is used on native targets; on WASM `CapabilityNotAvailable` is raised.
 
 ## Concurrency Contract
 

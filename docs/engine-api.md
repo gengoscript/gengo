@@ -32,6 +32,43 @@ if (handle === 0) throw new Error("engine pool exhausted");
 
 ---
 
+### `engine_init_with_config(config_ptr: i32) → i32`
+
+Like `engine_init` but accepts a pointer to an `InstanceConfig` struct in WASM memory, allowing per-instance resource limits to be set below the preset ceiling.
+
+`InstanceConfig` layout (all fields are `u64` / `i64`, little-endian, packed sequentially):
+
+| Offset | Field | Type | Description |
+|--------|-------|------|-------------|
+| 0 | `heap_size_bytes` | `u64` | Gengo heap size in bytes (≤ preset ceiling) |
+| 8 | `max_objects` | `u64` | Max live GC objects |
+| 16 | `max_stack` | `u64` | VM value stack depth |
+| 24 | `max_frames` | `u64` | Call frame limit |
+| 32 | `max_defers` | `u64` | Defer stack depth |
+| 40 | `max_ops` | `i64` | Instruction budget; `-1` = unlimited |
+| 48 | `allow_io` | `u8` | `1` = allow `std.io`, `0` = suppress |
+
+Returns:
+- `>= 1` — handle on success
+- `0` — pool exhausted
+- `-3` — a field exceeds the preset ceiling; call `engine_last_error(0, ...)` to retrieve the message
+
+```js
+const cfg = allocBytes(mem, 56);
+const view = new DataView(mem.buffer);
+view.setBigUint64(cfg +  0, 65536n, true);  // heap_size_bytes
+view.setBigUint64(cfg +  8, 256n,   true);  // max_objects
+view.setBigUint64(cfg + 16, 128n,   true);  // max_stack
+view.setBigUint64(cfg + 24, 32n,    true);  // max_frames
+view.setBigUint64(cfg + 32, 64n,    true);  // max_defers
+view.setBigInt64 (cfg + 40, -1n,    true);  // max_ops (unlimited)
+view.setUint8    (cfg + 48, 1);              // allow_io
+const handle = instance.exports.engine_init_with_config(cfg);
+if (handle <= 0) throw new Error("engine init failed");
+```
+
+---
+
 ### `engine_destroy(handle: i32) → void`
 
 Releases the engine instance identified by `handle`. The handle is invalid after this call.
@@ -166,9 +203,77 @@ Returns:
 
 ---
 
+### `engine_set_http_handler(handle: i32, callback: ptr, userdata: ptr) → void`
+
+Registers a host HTTP implementation for `@cap:http`. The `callback` must match the C signature:
+
+```c
+int callback(
+    const GengoHttpRequest* req,
+    GengoHttpResponse*      out,
+    void*                   userdata
+);
+```
+
+Return `0` on success, negative on network failure (script receives `CapabilityError`).
+
+`GengoHttpRequest` (all strings are pointer + length pairs, not null-terminated in the struct, but `method` and `url` are also null-terminated as a convenience):
+
+| Field | C type | Description |
+|---|---|---|
+| `method` | `const char*` | HTTP method (also null-terminated) |
+| `url` | `const char*` | Full URL (also null-terminated) |
+| `body` | `const char*` | Request body bytes |
+| `body_len` | `int` | Length of `body`; `0` if no body |
+| `headers.keys` | `const char**` | Null-terminated header name strings |
+| `headers.values` | `const char**` | Null-terminated header value strings |
+| `headers.count` | `int` | Number of header pairs |
+| `timeout_ms` | `int64_t` | Timeout in ms; `0` = no timeout |
+
+The host fills `GengoHttpResponse`:
+
+| Field | C type | Description |
+|---|---|---|
+| `status` | `int` | HTTP status code |
+| `body` | `const char*` | Response body pointer (must remain valid until callback returns) |
+| `body_len` | `int` | Response body byte length |
+| `headers.*` | same shape | Response headers (may be null/0) |
+
+Pass `NULL` for `callback` to remove the handler and revert to the built-in implementation.
+
+---
+
+### `engine_set_net_handlers(handle: i32, handlers: ptr, userdata: ptr) → void`
+
+Registers host-side socket callbacks for `@cap:net`. `handlers` points to a `GengoNetHandlers` struct:
+
+```c
+typedef struct {
+    int   (*dial)(const char* network, size_t net_len,
+                  const char* address, size_t addr_len,
+                  int* out_handle, void* userdata);
+    int   (*read)(int handle, char* buf, int max_bytes, void* userdata);
+    int   (*write)(int handle, const char* data, int len, void* userdata);
+    void  (*close)(int handle, void* userdata);
+    void  (*local_addr)(int handle, char* buf, int buf_len, void* userdata);
+    void  (*remote_addr)(int handle, char* buf, int buf_len, void* userdata);
+    void  (*set_deadline)(int handle, int64_t ms, void* userdata);
+    void  (*set_read_deadline)(int handle, int64_t ms, void* userdata);
+    void  (*set_write_deadline)(int handle, int64_t ms, void* userdata);
+} GengoNetHandlers;
+```
+
+`dial` returns `0` on success (writing a host-side connection handle to `*out_handle`), negative on error. `read` returns the number of bytes read, or negative on error. `write` returns 0 on success, negative on error.
+
+Pass `NULL` for `handlers` to remove the handler and revert to the built-in POSIX implementation (native targets only; WASM returns `CapabilityNotAvailable` without a handler).
+
+---
+
 ### `engine_last_error(handle: i32, out_ptr: i32, out_max_len: i32) → i32`
 
-Copies the last error message into `out_ptr`. Returns the number of bytes written (0 if no error or invalid handle). The message is not null-terminated.
+Copies the last error message into `out_ptr`. Returns the number of bytes written (0 if no error). The message is not null-terminated.
+
+When `engine_init_with_config` returns `-3` (ceiling exceeded), there is no valid handle. Pass `handle = 0` to retrieve the init-time error message.
 
 ```js
 function readError(handle) {
@@ -219,6 +324,25 @@ Returns the 1-based column of the last error, or `0` if no error.
 For string return values from `engine_call`, the pointer points into the engine's internal scratch buffer. Copy the bytes out before making another call.
 
 For array and map values, elements are laid out contiguously in engine memory as `ValueWire` structs. Map entries are interleaved: key wire, value wire, key wire, value wire, … for `len` pairs total.
+
+**Gengo → wire type mapping:**
+
+| Gengo type | Wire tag | Notes |
+|---|---|---|
+| `null` | `null` | |
+| `bool` | `boolean` | |
+| `number` | `number` | |
+| `rune` | `number` | Unicode code point value |
+| `decimal` | `number` | Converted to `f64` |
+| `string` | `string` | |
+| `array` | `array` | Elements recursively serialized |
+| `map` | `map` | Entries recursively serialized |
+| struct instance | `map` | Field names as string keys |
+| named scalar | unwrapped | Serialized as the underlying number/string |
+| enum value | `string` | The enum member name |
+| `error` | — | Serialization fails; `engine_call` returns `-2` |
+
+If a function returns an `error` value, `engine_call` returns `-2`. Use `engine_last_error` to retrieve a description.
 
 ### JavaScript helper (minimal)
 

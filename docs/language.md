@@ -369,7 +369,127 @@ For cycle types, `succ`/`pred` wrap around.
 
 The standard library is documented separately in [`docs/stdlib.md`](stdlib.md).
 
-## 10. Runtime/Backend Notes
+## 10. Capability Imports (`@cap:*`)
+
+Capabilities are opt-in system integrations that scripts import using the `@cap:` prefix. A capability is only available if the host or CLI explicitly enables it — accessing a disabled or unsupported capability raises `CapabilityNotAvailable` at runtime.
+
+```gengo
+http := import("@cap:http")
+fs   := import("@cap:fs")
+net  := import("@cap:net")
+```
+
+**CLI usage:** pass `--cap <name>` for each capability required:
+
+```sh
+gengo --cap http --cap fs script.gengo
+```
+
+**Embedding:** pass capability names in the host config (see `docs/embedding.md`).
+
+---
+
+### `@cap:http`
+
+High-level HTTP client. All functions return an `http.Response` struct.
+
+**`http.Response` fields:**
+
+| Field | Type | Description |
+|---|---|---|
+| `status` | `int` | HTTP status code (e.g. `200`, `404`) |
+| `body` | `string` | Response body as a UTF-8 string |
+| `headers` | `map` | Response headers, lower-cased keys |
+| `ok` | `bool` | `true` if status is 200–299 |
+
+**Functions:**
+
+```gengo
+http := import("@cap:http")
+
+// GET
+resp := http.get("https://api.example.com/items")
+if resp.ok {
+    std.io.println(resp.body)
+}
+
+// POST with a body string
+resp2 := http.post("https://api.example.com/items", '{"name":"x"}')
+
+// Full control via fetch
+resp3 := http.fetch("https://api.example.com/items", {
+    method:     "PUT",
+    body:       '{"name":"y"}',
+    timeout_ms: 5000,
+    headers:    { "Authorization": "Bearer token123" },
+})
+std.io.println(resp3.status)
+```
+
+`http.fetch` options map:
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `method` | `string` | `"GET"` | HTTP method |
+| `body` | `string` | `null` | Request body |
+| `timeout_ms` | `int` | `0` (no timeout) | Timeout in milliseconds |
+| `headers` | `map` | `{}` | Additional request headers |
+
+---
+
+### `@cap:fs`
+
+Local filesystem access (read-only for now).
+
+```gengo
+fs := import("@cap:fs")
+
+// Read a file — returns its contents as a string, or raises CapabilityError
+src := fs.read("/etc/hostname")
+std.io.println(src)
+
+// Check existence — returns bool
+if fs.exists("/tmp/data.json") {
+    data := fs.read("/tmp/data.json")
+}
+```
+
+---
+
+### `@cap:net`
+
+Low-level TCP/UDP connections. Suitable for custom protocols, raw socket work, or wrapping a higher-level protocol that `@cap:http` does not cover.
+
+```gengo
+net := import("@cap:net")
+
+// dial opens a connection; returns a connection object
+conn := net.dial("tcp", "example.com:80")
+
+// Send bytes
+net.write(conn, "GET / HTTP/1.0\r\nHost: example.com\r\n\r\n")
+
+// Read up to N bytes — returns string
+data := net.read(conn, 4096)
+std.io.println(data)
+
+// Deadlines (milliseconds from now; 0 = clear)
+net.set_deadline(conn, 5000)
+net.set_read_deadline(conn, 3000)
+net.set_write_deadline(conn, 3000)
+
+// Addresses
+std.io.println(net.local_addr(conn))
+std.io.println(net.remote_addr(conn))
+
+net.close(conn)
+```
+
+The `network` argument to `net.dial` is `"tcp"`, `"tcp4"`, `"tcp6"`, `"udp"`, etc. (Go-style network strings).
+
+---
+
+## 12. Runtime/Backend Notes
 
 - Native functions are dispatched through VM native IDs.
 - Two backend modes exist:
@@ -401,7 +521,7 @@ The standard library is documented separately in [`docs/stdlib.md`](stdlib.md).
   - `ALLOW_OOM` means runtime `OutOfMemory` is treated as expected for that bench case.
   - if `GENGO_BENCH_STATS=1`, bench runner prints elapsed time and optional ops/sec (when `.ops` file exists).
 
-## 11. Current Known Limits
+## 13. Current Known Limits
 
 - Resource limits are fixed-size per active preset (defaults shown):
   - heap arena: `512 KiB`
@@ -412,7 +532,7 @@ The standard library is documented separately in [`docs/stdlib.md`](stdlib.md).
 - Managed allocations use fixed class sizes; one managed block currently cannot exceed `32 KiB` even if total heap has room.
 - Source imports require a file-backed runtime entrypoint; pathless embedding calls still only support `std`.
 
-## 12. Named Types and Ranges
+## 14. Named Types and Ranges
 
 - Named scalar types:
   - `type UserId string`
@@ -448,7 +568,7 @@ max_val := 20
 type Bounded int predicate func(x) { return x >= min_val && x <= max_val }
 ```
 
-## 13. Enums
+## 15. Enums
 
 - Declaration:
   - `type Status enum { pending, approved, denied }`
@@ -472,7 +592,7 @@ subtype Weekend_Days Days { Saturday, Sunday }
 - Type attributes (`name`, `first`, `last`, `values`) work on enum subtypes.
 - A subtype value is accepted anywhere its parent type is expected.
 
-## 14. Variant Types
+## 16. Variant Types
 
 Variant types define a closed set of tagged alternatives, each optionally carrying a payload.
 
