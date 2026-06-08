@@ -283,6 +283,7 @@ For cycle types, `succ`/`pred` wrap around.
 - `switch` with block-style cases (no fallthrough):
   - `switch expr { case value { ... } default { ... } }`
 - `for` loops:
+  - infinite loop: `for { ... }` — runs until `break`
   - condition style: `for cond { ... }`
   - C-style: `for init; cond; post { ... }`
   - value iteration: `for x in seq { ... }` — works for arrays, maps, and strings

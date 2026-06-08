@@ -1,0 +1,18 @@
+std := import("std")
+
+n := 0
+for {
+    n++
+    if n == 5 { break }
+}
+std.io.println(n)
+
+sum := 0
+i := 0
+for {
+    i++
+    if i > 10 { break }
+    if i % 2 == 0 { continue }
+    sum += i
+}
+std.io.println(sum)

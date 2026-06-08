@@ -161,7 +161,7 @@ Enforce operation budget:
 
 ```zig
 var rt = api.Runtime.init(.{ .allow_io = false, .max_ops = 10000 });
-const res = rt.run("for true {}");
+const res = rt.run("for {}");
 // res is .runtime_error with InstructionBudgetExceeded
 ```
 

@@ -1419,12 +1419,18 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
 pub fn whileForStmt(c: anytype) anyerror!void {
     const loop_start = chunk.codeLen();
     try c.pushLoop(loop_start, c.loopKeepBase(), c.loopKeepBase(), 0);
-    try c.expr();
-    try c.consume(.lbrace);
-    const exit_j = try chunk.emitJump(.jif_pop, c.prev.line);
+    const infinite = c.check(.lbrace);
+    var exit_j: usize = 0;
+    if (!infinite) {
+        try c.expr();
+        try c.consume(.lbrace);
+        exit_j = try chunk.emitJump(.jif_pop, c.prev.line);
+    } else {
+        try c.consume(.lbrace);
+    }
     try block(c, );
     try chunk.emitLoop(loop_start, c.prev.line);
-    try chunk.patchJump(exit_j);
+    if (!infinite) try chunk.patchJump(exit_j);
     const loop = c.popLoop();
     var i: usize = 0;
     while (i < loop.break_count) : (i += 1) {
