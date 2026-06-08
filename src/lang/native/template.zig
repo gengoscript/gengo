@@ -142,6 +142,13 @@ fn tplValToDynStr(v: Value) !Value {
     };
 }
 
+fn tplAppendValToBuilder(sb_obj: *Object, val: Value) !void {
+    const sv = try tplValToDynStr(val);
+    try vms.pushTempRoot(sv);
+    defer vms.popTempRoot();
+    try tplAppendToBuilder(sb_obj, try tplAsStringVal(sv));
+}
+
 fn tplAppendToBuilder(sb_obj: *Object, s: []const u8) !void {
     if (s.len == 0) return;
     const needed = sb_obj.string_builder.len + s.len;
@@ -262,6 +269,15 @@ fn tplParseTag(tag: []const u8) !struct { op: TplOp, arg: Value } {
 }
 
 fn tplBuildObj(src_val: Value, ops: []Value, args: []Value, jmp: []Value) !*Object {
+    // Push any GC objects in args as temp roots before any allocation that could
+    // trigger GC. Without this, chain-path arrays from tplSplitPath stored in
+    // args[] are unreachable during GC and get collected.
+    const args_root_base = vms.vmState().temp_root_top;
+    for (args) |arg| {
+        if (arg == .object) try vms.pushTempRoot(arg);
+    }
+    defer vms.vmState().temp_root_top = args_root_base;
+
     const any_alts = heap.bump(FieldTypeAlt, 1) orelse return error.OutOfMemory;
     any_alts[0] = .{ .typ = .any };
     const any_spec: FieldTypeSpec = .{ .alts = any_alts[0..1] };
@@ -431,7 +447,7 @@ pub fn tplParse(src_val: Value, src: []const u8) !Value {
 }
 
 const IterState = struct {
-    items: []Value,
+    arr: *Object,
     index: usize,
     body_ip: usize,
 };
@@ -474,9 +490,7 @@ pub fn tplExec(tmpl: *Object, data: Value) !Value {
             .field => {
                 const fname = try tplAsStringVal(arg);
                 const val = try tplResolveField(dot_stack[scope_top], fname);
-                const sv = try tplValToDynStr(val);
-                const s = try tplAsStringVal(sv);
-                try tplAppendToBuilder(sb_obj, s);
+                try tplAppendValToBuilder(sb_obj, val);
                 ip += 1;
             },
             .chain => {
@@ -486,15 +500,11 @@ pub fn tplExec(tmpl: *Object, data: Value) !Value {
                     const name = try tplAsStringVal(item);
                     cur = try tplResolveField(cur, name);
                 }
-                const sv = try tplValToDynStr(cur);
-                const s = try tplAsStringVal(sv);
-                try tplAppendToBuilder(sb_obj, s);
+                try tplAppendValToBuilder(sb_obj, cur);
                 ip += 1;
             },
             .root_ref => {
-                const sv = try tplValToDynStr(dot_stack[scope_top]);
-                const s = try tplAsStringVal(sv);
-                try tplAppendToBuilder(sb_obj, s);
+                try tplAppendValToBuilder(sb_obj, dot_stack[scope_top]);
                 ip += 1;
             },
             .var_ref, .call_fn, .assign, .break_inst, .continue_inst => {
@@ -517,8 +527,9 @@ pub fn tplExec(tmpl: *Object, data: Value) !Value {
                     if (iter_top > 0) {
                         const iter_idx = iter_top - 1;
                         iter_stack[iter_idx].index += 1;
-                        if (iter_stack[iter_idx].index < iter_stack[iter_idx].items.len) {
-                            dot_stack[scope_top] = iter_stack[iter_idx].items[iter_stack[iter_idx].index];
+                        const iter_items = tplAsArraySlice(iter_stack[iter_idx].arr);
+                        if (iter_stack[iter_idx].index < iter_items.len) {
+                            dot_stack[scope_top] = iter_items[iter_stack[iter_idx].index];
                             ip = iter_stack[iter_idx].body_ip;
                         } else {
                             iter_top -= 1;
@@ -543,7 +554,7 @@ pub fn tplExec(tmpl: *Object, data: Value) !Value {
                     if (tplIsArray(obj)) {
                         const items = tplAsArraySlice(obj);
                         if (items.len > 0) {
-                            iter_stack[iter_top] = .{ .items = items, .index = 0, .body_ip = ip + 1 };
+                            iter_stack[iter_top] = .{ .arr = obj, .index = 0, .body_ip = ip + 1 };
                             iter_top += 1;
                             scope_top += 1;
                             dot_stack[scope_top] = items[0];
@@ -576,6 +587,8 @@ pub fn tplExec(tmpl: *Object, data: Value) !Value {
 pub fn tplRender(src_val: Value, src: []const u8, data: Value) !Value {
     const tmpl_val = try tplParse(src_val, src);
     if (tmpl_val != .object) return error.TypeError;
+    try vms.pushTempRoot(tmpl_val);
+    defer vms.popTempRoot();
     return try tplExec(tmpl_val.object, data);
 }
 
