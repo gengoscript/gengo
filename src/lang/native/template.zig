@@ -142,6 +142,13 @@ fn tplValToDynStr(v: Value) !Value {
     };
 }
 
+fn tplAppendValToBuilder(sb_obj: *Object, val: Value) !void {
+    const sv = try tplValToDynStr(val);
+    try vms.pushTempRoot(sv);
+    defer vms.popTempRoot();
+    try tplAppendToBuilder(sb_obj, try tplAsStringVal(sv));
+}
+
 fn tplAppendToBuilder(sb_obj: *Object, s: []const u8) !void {
     if (s.len == 0) return;
     const needed = sb_obj.string_builder.len + s.len;
@@ -474,9 +481,7 @@ pub fn tplExec(tmpl: *Object, data: Value) !Value {
             .field => {
                 const fname = try tplAsStringVal(arg);
                 const val = try tplResolveField(dot_stack[scope_top], fname);
-                const sv = try tplValToDynStr(val);
-                const s = try tplAsStringVal(sv);
-                try tplAppendToBuilder(sb_obj, s);
+                try tplAppendValToBuilder(sb_obj, val);
                 ip += 1;
             },
             .chain => {
@@ -486,15 +491,11 @@ pub fn tplExec(tmpl: *Object, data: Value) !Value {
                     const name = try tplAsStringVal(item);
                     cur = try tplResolveField(cur, name);
                 }
-                const sv = try tplValToDynStr(cur);
-                const s = try tplAsStringVal(sv);
-                try tplAppendToBuilder(sb_obj, s);
+                try tplAppendValToBuilder(sb_obj, cur);
                 ip += 1;
             },
             .root_ref => {
-                const sv = try tplValToDynStr(dot_stack[scope_top]);
-                const s = try tplAsStringVal(sv);
-                try tplAppendToBuilder(sb_obj, s);
+                try tplAppendValToBuilder(sb_obj, dot_stack[scope_top]);
                 ip += 1;
             },
             .var_ref, .call_fn, .assign, .break_inst, .continue_inst => {
