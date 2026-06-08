@@ -507,6 +507,7 @@ All times are opaque `Time` objects. Internal representation is milliseconds sin
 - `t.unix()` — Unix timestamp in seconds
 - `t.unix_ms()` — Unix timestamp in milliseconds
 - `t.parts()` — map with `year`, `month` (1–12), `day` (1–31), `hour` (0–23), `min` (0–59), `sec` (0–59), `ms` (0–999), `weekday` (0=Sunday … 6=Saturday)
+- `t.iso_week()` — map with `year` and `week` (1–53) per ISO 8601; `year` may differ from the calendar year at year boundaries
 - `t.format(fmt)` — format as string using strftime-style directives
 - `t.add_ms(n)`, `t.add_s(n)`, `t.add_m(n)`, `t.add_h(n)` — add milliseconds / seconds / minutes / hours
 - `t.add_date(years, months, days)` — add calendar units (handles month-length and leap-year rules)
