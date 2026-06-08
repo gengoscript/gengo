@@ -1,3 +1,4 @@
+const std = @import("std");
 const rt_mod = @import("runtime.zig");
 const vm = @import("../lang/vm.zig");
 const Value = @import("../lang/value.zig").Value;
@@ -22,6 +23,7 @@ pub const Config = struct {
     module_source_provider: ?SourceProvider = null,
     host_modules: []const HostModuleDesc = &.{},
     capabilities: []const []const u8 = &.{},
+    allocator: std.mem.Allocator = std.heap.page_allocator,
 };
 
 pub const CompileError = struct {
@@ -84,6 +86,7 @@ pub const Runtime = struct {
             config.max_stack,
             config.max_frames,
             config.max_defers,
+            config.allocator,
         );
         self.inner.host_modules = config.host_modules;
         self.inner.enabled_capabilities = config.capabilities;
@@ -91,6 +94,10 @@ pub const Runtime = struct {
         self.module_source_provider = config.module_source_provider;
         self.host_modules = config.host_modules;
         self.capabilities = config.capabilities;
+    }
+
+    pub fn deinit(self: *Runtime) void {
+        self.inner.deinit();
     }
 
     pub fn reset(self: *Runtime) void {

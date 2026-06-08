@@ -89,21 +89,24 @@ pub const State = struct {
     has_pending_panic_value: bool = false,
     runtime_err_buf: [256]u8 = undefined,
     runtime_err_len: u16 = 0,
+    allocator: std.mem.Allocator = std.heap.page_allocator,
 
-    pub fn init(self: *State, max_stack: usize, max_frames: usize, max_defers: usize, heap_size: usize) !void {
+    pub fn init(self: *State, max_stack: usize, max_frames: usize, max_defers: usize, heap_size: usize, allocator: std.mem.Allocator) !void {
+        self.allocator = allocator;
         if (comptime builtin.target.cpu.arch == .wasm32) {
             self.stack = &g_wasm_backing.stack;
             self.frames = &g_wasm_backing.frames;
             self.defer_stack = &g_wasm_backing.defer_stack;
             self.panic_frames = &g_wasm_backing.panic_frames;
         } else {
-            self.stack = try std.heap.page_allocator.alloc(Value, max_stack);
-            self.frames = try std.heap.page_allocator.alloc(Frame, max_frames);
-            self.defer_stack = try std.heap.page_allocator.alloc(Value, max_defers);
-            self.panic_frames = try std.heap.page_allocator.alloc(PanicFrame, max_frames);
+            self.stack = try allocator.alloc(Value, max_stack);
+            self.frames = try allocator.alloc(Frame, max_frames);
+            self.defer_stack = try allocator.alloc(Value, max_defers);
+            self.panic_frames = try allocator.alloc(PanicFrame, max_frames);
         }
         self.configured_heap_size = heap_size;
         self.next_gc_heap_bytes = heap_size / 2;
+        const saved_allocator = self.allocator;
         self.* = .{
             .stack = self.stack,
             .frames = self.frames,
@@ -111,6 +114,7 @@ pub const State = struct {
             .panic_frames = self.panic_frames,
             .configured_heap_size = self.configured_heap_size,
             .next_gc_heap_bytes = self.next_gc_heap_bytes,
+            .allocator = saved_allocator,
         };
     }
 
@@ -119,10 +123,10 @@ pub const State = struct {
             self.* = .{};
             return;
         }
-        if (self.stack.len > 0) std.heap.page_allocator.free(self.stack);
-        if (self.frames.len > 0) std.heap.page_allocator.free(self.frames);
-        if (self.defer_stack.len > 0) std.heap.page_allocator.free(self.defer_stack);
-        if (self.panic_frames.len > 0) std.heap.page_allocator.free(self.panic_frames);
+        if (self.stack.len > 0) self.allocator.free(self.stack);
+        if (self.frames.len > 0) self.allocator.free(self.frames);
+        if (self.defer_stack.len > 0) self.allocator.free(self.defer_stack);
+        if (self.panic_frames.len > 0) self.allocator.free(self.panic_frames);
         self.* = .{};
     }
 };
@@ -136,14 +140,14 @@ pub inline fn vmState() *State {
 
 pub fn setActive(state: *State) void {
     if (state.stack.len == 0 and state == &g_default_state) {
-        _ = state.init(MaxStack, MaxFrames, cfg.max_defers, heap.HeapSize) catch {};
+        _ = state.init(MaxStack, MaxFrames, cfg.max_defers, heap.HeapSize, state.allocator) catch {};
     }
     g_state = state;
 }
 
 pub fn reset() void {
     if (vmState().stack.len == 0 and vmState() == &g_default_state) {
-        _ = g_default_state.init(MaxStack, MaxFrames, cfg.max_defers, heap.HeapSize) catch {};
+        _ = g_default_state.init(MaxStack, MaxFrames, cfg.max_defers, heap.HeapSize, vmState().allocator) catch {};
     }
     vmState().stack_top = 0;
     vmState().ip = 0;

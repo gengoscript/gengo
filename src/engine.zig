@@ -131,6 +131,7 @@ const Engine = struct {
             ic.max_stack,
             ic.max_frames,
             ic.max_defers,
+            std.heap.page_allocator,
         );
         io.setWriteOverrides(engineWrite, engineWerr);
     }

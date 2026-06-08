@@ -33,8 +33,10 @@ pub const State = struct {
     obj_free_head: u16 = 0xffff,
     obj_live_count: usize = 0,
     free_blocks: [ClassCount]?*u8 = [_]?*u8{null} ** ClassCount,
+    allocator: std.mem.Allocator = std.heap.page_allocator,
 
-    pub fn init(self: *State, heap_size: usize, max_objects: usize) !void {
+    pub fn init(self: *State, heap_size: usize, max_objects: usize, allocator: std.mem.Allocator) !void {
+        self.allocator = allocator;
         if (comptime builtin.target.cpu.arch == .wasm32) {
             self.heap = &g_wasm_backing.heap;
             self.obj_pool = &g_wasm_backing.obj_pool;
@@ -42,11 +44,11 @@ pub const State = struct {
             self.obj_live = &g_wasm_backing.obj_live;
             self.obj_next_free = &g_wasm_backing.obj_next_free;
         } else {
-            self.heap = try std.heap.page_allocator.alignedAlloc(u8, .@"16", heap_size);
-            self.obj_pool = try std.heap.page_allocator.alloc(Object, max_objects);
-            self.obj_marked = try std.heap.page_allocator.alloc(bool, max_objects);
-            self.obj_live = try std.heap.page_allocator.alloc(bool, max_objects);
-            self.obj_next_free = try std.heap.page_allocator.alloc(u16, max_objects);
+            self.heap = try allocator.alignedAlloc(u8, .@"16", heap_size);
+            self.obj_pool = try allocator.alloc(Object, max_objects);
+            self.obj_marked = try allocator.alloc(bool, max_objects);
+            self.obj_live = try allocator.alloc(bool, max_objects);
+            self.obj_next_free = try allocator.alloc(u16, max_objects);
         }
 
         self.obj_free_head = 0;
@@ -71,11 +73,11 @@ pub const State = struct {
             self.* = .{};
             return;
         }
-        if (self.heap.len > 0) std.heap.page_allocator.free(self.heap);
-        if (self.obj_pool.len > 0) std.heap.page_allocator.free(self.obj_pool);
-        if (self.obj_marked.len > 0) std.heap.page_allocator.free(self.obj_marked);
-        if (self.obj_live.len > 0) std.heap.page_allocator.free(self.obj_live);
-        if (self.obj_next_free.len > 0) std.heap.page_allocator.free(self.obj_next_free);
+        if (self.heap.len > 0) self.allocator.free(self.heap);
+        if (self.obj_pool.len > 0) self.allocator.free(self.obj_pool);
+        if (self.obj_marked.len > 0) self.allocator.free(self.obj_marked);
+        if (self.obj_live.len > 0) self.allocator.free(self.obj_live);
+        if (self.obj_next_free.len > 0) self.allocator.free(self.obj_next_free);
         self.* = .{};
     }
 
@@ -89,14 +91,14 @@ pub var g_state: *State = &g_default_state;
 
 pub fn setActive(state: *State) void {
     if (state.obj_pool.len == 0 and state == &g_default_state) {
-        _ = state.init(HeapSize, MaxObjects) catch {};
+        _ = state.init(HeapSize, MaxObjects, state.allocator) catch {};
     }
     g_state = state;
 }
 
 pub fn reset() void {
     if (g_state.obj_pool.len == 0 and g_state == &g_default_state) {
-        _ = g_default_state.init(HeapSize, MaxObjects) catch {};
+        _ = g_default_state.init(HeapSize, MaxObjects, g_state.allocator) catch {};
     }
     g_state.heap_pos = 0;
     var c: usize = 0;
