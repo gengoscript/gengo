@@ -1261,7 +1261,7 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
     const name = c.cur;
     c.advance();
     var inferred_type_check: TypeCheck = .{ .none = {} };
-    if (c.match(.colon_eq)) {
+    if (c.match(.colon_eq) or c.match(.eq)) {
         try c.expr();
     } else if (c.cur.typ == .lbracket) {
         const ts = try c.parseFieldTypeSpec();

@@ -1,0 +1,19 @@
+std := import("std")
+
+const a = 10
+const b = "hello"
+const c = [1, 2, 3]
+
+func run() {
+    const x = 42
+    const y = "world"
+    const z = [4, 5, 6]
+    std.io.println(string(x))
+    std.io.println(y)
+    std.io.println(string(std.core.len(z)))
+}
+
+std.io.println(string(a))
+std.io.println(b)
+std.io.println(string(std.core.len(c)))
+run()
