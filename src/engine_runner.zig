@@ -694,6 +694,93 @@ fn testHttpCapability() void {
     out("  http capability: OK\n");
 }
 
+// fd 3 = preopened "/" (--dir /), fd 4 = preopened "." (--dir .) from build.zig
+const cwd_preopen_fd: std.os.wasi.fd_t = 4;
+
+fn readFileWasi(alloc: std.mem.Allocator, path: []const u8) ![]u8 {
+    const wasi = std.os.wasi;
+    var file_fd: wasi.fd_t = undefined;
+    const rc = wasi.path_open(
+        cwd_preopen_fd,
+        .{},
+        path.ptr, path.len,
+        .{},
+        .{ .FD_READ = true, .FD_SEEK = true },
+        .{ .FD_READ = true, .FD_SEEK = true },
+        .{},
+        &file_fd,
+    );
+    if (rc != .SUCCESS) return error.FileNotFound;
+    defer _ = wasi.fd_close(file_fd);
+
+    var data: []u8 = try alloc.alloc(u8, 0);
+    var buf: [4096]u8 = undefined;
+    while (true) {
+        var iov = [1]wasi.iovec_t{.{ .base = &buf, .len = buf.len }};
+        var nread: usize = 0;
+        const rrc = wasi.fd_read(file_fd, &iov, 1, &nread);
+        if (rrc != .SUCCESS or nread == 0) break;
+        const old_len = data.len;
+        data = try alloc.realloc(data, old_len + nread);
+        @memcpy(data[old_len..][0..nread], buf[0..nread]);
+    }
+    return data;
+}
+
+fn runCapHttpConformance() void {
+    const alloc = std.heap.page_allocator;
+    const spec_dir = "examples/spec/cap/http";
+    const cases = [_][]const u8{ "003_http_get", "004_http_post", "005_http_non2xx", "006_http_error" };
+
+    var state: MockHttpState = .{};
+    http_state.setHttpHandler(&mockHttpFetch, @ptrCast(&state));
+    defer http_state.resetHandler();
+
+    const rt = makeRt(.{ .allow_io = true, .capabilities = &.{"http"} });
+
+    var pass: usize = 0;
+    var fail_count: usize = 0;
+
+    for (cases) |name| {
+        const src_path = std.fmt.allocPrint(alloc, "{s}/{s}.gengo", .{ spec_dir, name }) catch continue;
+        defer alloc.free(src_path);
+        const out_path = std.fmt.allocPrint(alloc, "{s}/{s}.out", .{ spec_dir, name }) catch continue;
+        defer alloc.free(out_path);
+
+        const src = readFileWasi(alloc, src_path) catch continue;
+        defer alloc.free(src);
+        const expected = readFileWasi(alloc, out_path) catch continue;
+        defer alloc.free(expected);
+
+        capture_len = 0;
+        state = .{};
+        rt.reset();
+        rt.setConfig(.{ .allow_io = true, .capabilities = &.{"http"} });
+        io.setWriteOverrides(captureWrite, captureWerr);
+
+        const res = rt.runPath(src, src_path);
+        const ok = switch (res) {
+            .ok => std.mem.eql(u8, capture_buf[0..capture_len], expected),
+            else => false,
+        };
+
+        out(if (ok) "  [PASS-CASE] " else "  [FAIL-CASE] ");
+        out(src_path);
+        out("\n");
+        if (ok) pass += 1 else fail_count += 1;
+    }
+
+    io.clearWriteOverrides();
+
+    if (fail_count > 0) {
+        out("cap/http conformance FAILED\n");
+        std.os.wasi.proc_exit(1);
+    }
+    if (pass > 0) {
+        out("  cap/http conformance OK\n");
+    }
+}
+
 export fn _start() void {
     out("engine runner:\n");
     testInitDestroy();
@@ -713,5 +800,6 @@ export fn _start() void {
     testNetCapabilityHandlers();
     testHttpCapability();
     out("engine-api OK\n");
+    runCapHttpConformance();
     std.os.wasi.proc_exit(0);
 }

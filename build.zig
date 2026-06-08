@@ -52,7 +52,7 @@ pub fn build(b: *std.Build) void {
     run_embedding.addArtifactArg(embedding_exe);
 
     const engine_runner_exe = addWasmExe(b, "engine-runner", "src/engine_runner.zig", wasm_target, .Debug, &preset.step, build_opts_mod);
-    const run_engine_runner = b.addSystemCommand(&.{ wasmtime_opt, "--dir", "/" });
+    const run_engine_runner = b.addSystemCommand(&.{ wasmtime_opt, "--dir", "/", "--dir", "." });
     run_engine_runner.addArtifactArg(engine_runner_exe);
 
     // ── Native test runner (replaces bash scripts) ────────────────────────────
