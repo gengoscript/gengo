@@ -269,6 +269,31 @@ fn tplParseTag(tag: []const u8) !struct { op: TplOp, arg: Value } {
 }
 
 fn tplBuildObj(src_val: Value, ops: []Value, args: []Value, jmp: []Value) !*Object {
+    // Wrap ops/args/jmp in GC-traced objects BEFORE any GC-triggering allocation.
+    // The Values in these slices contain .object pointers (e.g. chain-path arrays
+    // from tplSplitPath) that would become unreachable if GC fires during a later
+    // vmAllocObject or vmAllocManagedSlice call in this function.
+    const ops_obj = try vmgc.vmAllocObject();
+    ops_obj.* = .{ .array = &[_]Value{} };
+    try vms.pushTempRoot(.{ .object = ops_obj });
+    defer vms.popTempRoot();
+    ops_obj.* = .{ .array_managed = ops };
+
+    const args_obj = try vmgc.vmAllocObject();
+    args_obj.* = .{ .array = &[_]Value{} };
+    try vms.pushTempRoot(.{ .object = args_obj });
+    defer vms.popTempRoot();
+    args_obj.* = .{ .array_managed = args };
+
+    const jmp_obj = try vmgc.vmAllocObject();
+    jmp_obj.* = .{ .array = &[_]Value{} };
+    try vms.pushTempRoot(.{ .object = jmp_obj });
+    defer vms.popTempRoot();
+    jmp_obj.* = .{ .array_managed = jmp };
+
+    // All remaining allocations are now safe: the managed slices are reachable
+    // through their wrapper objects.
+
     const any_alts = heap.bump(FieldTypeAlt, 1) orelse return error.OutOfMemory;
     any_alts[0] = .{ .typ = .any };
     const any_spec: FieldTypeSpec = .{ .alts = any_alts[0..1] };
@@ -294,24 +319,6 @@ fn tplBuildObj(src_val: Value, ops: []Value, args: []Value, jmp: []Value) !*Obje
     try vms.pushTempRoot(.{ .object = inst_obj });
     defer vms.popTempRoot();
     inst_obj.* = .{ .struct_instance = .{ .typ = typ_obj, .fields = inst_fields } };
-
-    const ops_obj = try vmgc.vmAllocObject();
-    ops_obj.* = .{ .array = &[_]Value{} };
-    try vms.pushTempRoot(.{ .object = ops_obj });
-    defer vms.popTempRoot();
-    ops_obj.* = .{ .array_managed = ops };
-
-    const args_obj = try vmgc.vmAllocObject();
-    args_obj.* = .{ .array = &[_]Value{} };
-    try vms.pushTempRoot(.{ .object = args_obj });
-    defer vms.popTempRoot();
-    args_obj.* = .{ .array_managed = args };
-
-    const jmp_obj = try vmgc.vmAllocObject();
-    jmp_obj.* = .{ .array = &[_]Value{} };
-    try vms.pushTempRoot(.{ .object = jmp_obj });
-    defer vms.popTempRoot();
-    jmp_obj.* = .{ .array_managed = jmp };
 
     const funcs_obj = try vmgc.vmAllocObject();
     funcs_obj.* = .{ .map = &[_]MapEntry{} };
