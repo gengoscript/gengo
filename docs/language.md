@@ -367,160 +367,196 @@ For cycle types, `succ`/`pred` wrap around.
 
 ## 9. Standard Library (`std`)
 
-Current namespace surface:
-- `std.io.println(...args)`
-  - prints values and newline
-  - returns `null`
-- `std.io.print(...args)`
-  - prints values without a trailing newline
-  - returns `null`
-- `std.io.printf(fmt, ...args)`
-  - verbs: `%v`, `%s`, `%d`, `%f`, `%t`, `%%`
-  - arity mismatch: `ArityMismatch`
-  - verb type mismatch: `TypeError`
-- `std.core.len(x)`
-  - supports string, array, map, struct instance
-  - returns number length
-- `std.core.bytelen(s)`
-  - supports string values
-  - returns raw UTF-8 byte length
-- `std.core.append(arr, ...items)`
-  - first argument must be array
-  - returns a new array with appended elements
-- `std.core.error(msg)`
-  - `msg` must be string
-  - returns an `error` value (`error(msg)` when printed)
-- `std.core.is_error(v)`
-  - returns `true` if `v` is an `error` value, else `false`
-- `std.core.recover()`
-  - called inside a `defer` function during a panic unwind
-  - returns the panic payload (an `error` value) and marks the panic as recovered
-  - returns `null` if not currently unwinding, or if the panic was already recovered
-- `std.core.type_of(v)`
-  - returns stable runtime type name such as `int`, `float`, `string`, `null`, or a declared type name like `Point`
-- `std.core.is_int(v)`, `std.core.is_float(v)`, `std.core.is_string(v)`, `std.core.is_array(v)`, `std.core.is_map(v)`, `std.core.is_struct(v)`, `std.core.is_null(v)`
-  - runtime classification helpers for scripts and embeddings
-- `std.core.deep_equal(a, b)`
-  - structural equality for arrays, maps, struct instances, named values, variants, strings, and scalars
-- `std.core.clone(v)`
-  - deep clone for arrays, maps, struct instances, named values, variants, and strings
-- `std.core.gc()`
-  - triggers mark-sweep collection for heap objects
-  - returns `null`
-- `std.core.gc_live_objects()`
-  - returns current live object count as `number`
-  - includes runtime object-backed strings created by operations such as concatenation/slicing/indexing
-- `std.core.contains(arr, value)`
-  - returns `true` if `value` is present in array `arr`, else `false`
-  - raises `TypeError` if `arr` is not an array
-- `std.core.remove(arr, index)`
-  - returns a new array with the element at `index` removed
-  - raises `IndexOutOfBounds` if `index` is out of range
-  - raises `TypeError` if `arr` is not an array
-- `std.core.delete(m, key)`
-  - removes `key` from map `m` in place
-  - returns the removed value, or `null` if key was not present
-  - raises `TypeError` if `m` is not a map
-- `std.core.has(m, key)`
-  - returns `true` if `key` exists in map `m`, else `false`
-  - unambiguous alternative to `m[key] == null` when `null` is a valid value
-  - raises `TypeError` if `m` is not a map
-- `std.core.keys(m)`
-  - returns an array of all keys in map `m`
-  - raises `TypeError` if `m` is not a map
-- `std.core.values(m)`
-  - returns an array of all values in map `m`
-  - raises `TypeError` if `m` is not a map
-- `std.core.gc_stats()`
-  - returns a map with:
-    - `heap_used_bytes`
-    - `heap_size_bytes`
-    - `live_objects`
-- `std.string.split(s, sep)`
-  - splits string `s` by separator `sep`; returns array of strings
-  - if `sep` is empty, splits into individual UTF-8 characters
-- `std.string.join(arr, sep)`
-  - concatenates array of strings `arr` with separator `sep` between each
-  - raises `TypeError` if `arr` is not an array or any element is not a string
-- `std.string.trim(s)`
-  - removes leading and trailing ASCII whitespace (space, tab, `\n`, `\r`)
-  - returns trimmed string
-- `std.string.upper(s)`
-  - returns copy of `s` with ASCII letters uppercased; non-ASCII bytes are unchanged
-- `std.string.lower(s)`
-  - returns copy of `s` with ASCII letters lowercased; non-ASCII bytes are unchanged
-- `std.string.starts_with(s, prefix)`
-  - returns `true` if `s` begins with `prefix`
-- `std.string.ends_with(s, suffix)`
-  - returns `true` if `s` ends with `suffix`
-- `std.string.index_of(s, sub)`
-  - returns rune index of first occurrence of `sub` in `s`, or `-1` if not found
-- `std.string.last_index_of(s, sub)`
-  - returns rune index of last occurrence of `sub` in `s`, or `-1` if not found
-- `std.string.replace(s, old, new)`
-  - replaces all non-overlapping occurrences of `old` with `new`
-- `std.string.repeat(s, n)`
-  - repeats `s` exactly `n` times
-  - raises `RangeError` when `n < 0`
-- `std.string.split_once(s, sep)`
-  - returns `(head, tail)` split at the first `sep`
-  - returns `(null, null)` if `sep` is absent
-- `std.string.contains(s, sub)`
-  - returns `true` if `s` contains `sub` as a substring, else `false`
-  - empty `sub` always returns `true`
-- `std.string.builder()`
-  - creates a mutable string accumulator; use `.write(s)`, `.str()`, `.reset()`
-  - amortized O(total_bytes) append cost; avoids O(n²) from repeated `s = s + piece`
-- `std.math.abs(x)`
-  - absolute value of `x`
-- `std.math.sqrt(x)`
-  - square root of `x`
-- `std.math.floor(x)`
-  - largest integer not greater than `x`
-- `std.math.ceil(x)`
-  - smallest integer not less than `x`
-- `std.math.round(x)`
-  - nearest integer, rounding half away from zero
-- `std.math.sin(x)` / `std.math.cos(x)` / `std.math.tan(x)`
-  - trigonometric functions; argument in radians
-- `std.math.log(x)`
-  - natural logarithm (base *e*)
-- `std.math.log2(x)`
-  - base-2 logarithm
-- `std.math.log10(x)`
-  - base-10 logarithm
-- `std.math.pow(base, exp)`
-  - `base` raised to the power `exp`
-- `std.math.min(a, b)` / `std.math.max(a, b)`
-  - minimum / maximum of two numbers
-- `std.math.pi`
-  - π ≈ 3.14159265358979… (constant, not a function)
-- `std.math.e`
-  - Euler's number ≈ 2.71828182845904… (constant, not a function)
-- `std.math.inf`
-  - positive infinity (constant, not a function)
-- `std.rand.float()`
-  - uniform `float` in `[0.0, 1.0)`
-  - auto-seeds from OS entropy on first call
-- `std.rand.intn(n)`
-  - uniform `int` in `[0, n)`; traps with `RangeError` if `n ≤ 0`
-- `std.rand.between(lo, hi)`
-  - uniform `int` in `[lo, hi]` inclusive; traps with `RangeError` if `lo > hi`
-- `std.rand.seed(n)`
-  - seeds the global PRNG with `n`; useful for reproducible sequences
-- `std.rand.choice(arr)`
-  - returns a random element from `arr`; traps with `RangeError` on empty array
-- `std.conv.to_int(x)`
-  - converts number/boolean/string to integer `number` (truncate semantics)
-  - invalid input raises `TypeError`
-- `std.conv.to_float(x)`
-  - converts number/boolean/string to floating `number`
-  - invalid input raises `TypeError`
-- `std.conv.to_bool(x)`
-  - truthy conversion to boolean
-- `std.conv.to_string(x)`
-  - converts number/boolean/null/string/error to string
-  - unsupported input raises `TypeError`
+### std.io
+
+- `std.io.println(...args)` — prints values and a trailing newline; returns `null`
+- `std.io.print(...args)` — prints values without a trailing newline; returns `null`
+- `std.io.printf(fmt, ...args)` — formatted print; verbs: `%v %s %d %f %t %%`; raises `ArityMismatch` or `TypeError` on bad input
+- `std.io.sprintf(fmt, ...args)` — same as `printf` but returns the formatted string
+
+### std.core
+
+- `std.core.len(x)` — rune/element count for string, array, map, or struct instance
+- `std.core.bytelen(s)` — raw UTF-8 byte length of a string
+- `std.core.append(arr, ...items)` — returns a new array with items appended
+- `std.core.contains(arr, value)` — `true` if `value` is in array `arr`; raises `TypeError` if not array
+- `std.core.remove(arr, index)` — returns new array with element at `index` removed; raises `IndexOutOfBounds` or `TypeError`
+- `std.core.delete(m, key)` — removes `key` from map in place; returns removed value or `null`
+- `std.core.has(m, key)` — `true` if `key` exists in map; unambiguous when `null` is a valid value
+- `std.core.keys(m)` — array of all map keys
+- `std.core.values(m)` — array of all map values
+- `std.core.error(msg)` — creates an `error` value from string `msg`
+- `std.core.is_error(v)` — `true` if `v` is an error value
+- `std.core.recover()` — inside a `defer` during panic unwind: returns the panic payload and marks it recovered; returns `null` otherwise
+- `std.core.type_of(v)` — runtime type name: `"int"`, `"float"`, `"string"`, `"null"`, or a declared type name
+- `std.core.is_int(v)`, `std.core.is_float(v)`, `std.core.is_string(v)`, `std.core.is_array(v)`, `std.core.is_map(v)`, `std.core.is_struct(v)`, `std.core.is_null(v)` — runtime type predicates
+- `std.core.deep_equal(a, b)` — structural equality for arrays, maps, structs, named values, variants, strings, and scalars
+- `std.core.clone(v)` — deep clone
+- `std.core.gc()` — trigger mark-sweep GC; returns `null`
+- `std.core.gc_live_objects()` — current live heap object count
+- `std.core.gc_stats()` — map with `heap_used_bytes`, `heap_size_bytes`, `live_objects`
+
+### std.string
+
+- `std.string.split(s, sep)` — split by separator; empty `sep` splits into individual UTF-8 characters
+- `std.string.split_once(s, sep)` — returns `(head, tail)` at first occurrence; `(null, null)` if absent
+- `std.string.join(arr, sep)` — join string array with separator
+- `std.string.contains(s, sub)` — substring presence; empty `sub` always `true`
+- `std.string.contains_any(s, chars)` — `true` if any character in `chars` appears in `s`
+- `std.string.starts_with(s, prefix)` — prefix check
+- `std.string.ends_with(s, suffix)` — suffix check
+- `std.string.index_of(s, sub)` — rune index of first occurrence, or `-1`
+- `std.string.last_index_of(s, sub)` — rune index of last occurrence, or `-1`
+- `std.string.count(s, sub)` — count of non-overlapping occurrences of `sub` in `s`
+- `std.string.replace(s, old, new)` — replace all non-overlapping occurrences
+- `std.string.trim(s)` — strip leading and trailing ASCII whitespace
+- `std.string.fields(s)` — split on any whitespace, collapsing runs; returns array of non-empty tokens
+- `std.string.upper(s)` — ASCII uppercase
+- `std.string.lower(s)` — ASCII lowercase
+- `std.string.equal_fold(s, t)` — case-insensitive equality (ASCII)
+- `std.string.repeat(s, n)` — repeat `s` exactly `n` times; raises `RangeError` when `n < 0`
+- `std.string.pad_left(s, n, pad)` — left-pad `s` to length `n` using string `pad`
+- `std.string.pad_right(s, n, pad)` — right-pad `s` to length `n` using string `pad`
+- `std.string.builder()` — mutable accumulator with `.write(s)`, `.str()`, `.reset()`; avoids O(n²) from repeated concatenation
+
+### std.math
+
+**Rounding**
+- `std.math.floor(x)` — round toward −∞
+- `std.math.ceil(x)` — round toward +∞
+- `std.math.round(x)` — nearest integer, half away from zero
+- `std.math.trunc(x)` — round toward zero (drop fractional part)
+
+**Roots and powers**
+- `std.math.sqrt(x)`, `std.math.cbrt(x)` — square root, cube root
+- `std.math.pow(base, exp)` — `base ** exp` (also available as the `**` operator)
+- `std.math.exp(x)`, `std.math.exp2(x)` — *e*^x and 2^x
+- `std.math.hypot(p, q)` — sqrt(p² + q²) without overflow
+
+**Logarithms**
+- `std.math.log(x)` — natural log (base *e*)
+- `std.math.log2(x)` — base-2 log
+- `std.math.log10(x)` — base-10 log
+
+**Trigonometry**
+- `std.math.sin(x)`, `std.math.cos(x)`, `std.math.tan(x)` — trig; argument in radians
+- `std.math.asin(x)`, `std.math.acos(x)`, `std.math.atan(x)` — inverse trig; result in radians
+- `std.math.atan2(y, x)` — angle of vector (x, y); result in radians
+
+**Hyperbolic**
+- `std.math.sinh(x)`, `std.math.cosh(x)`, `std.math.tanh(x)`
+
+**Misc**
+- `std.math.abs(x)` — absolute value
+- `std.math.min(a, b)`, `std.math.max(a, b)` — minimum / maximum
+- `std.math.clamp(v, min, max)` — constrain `v` to `[min, max]`
+- `std.math.sign(x)` — `-1`, `0`, or `1`
+- `std.math.mod(x, y)` — floating-point remainder (IEEE 754)
+- `std.math.nan()` — IEEE 754 NaN value
+- `std.math.is_nan(x)` — `true` if `x` is NaN
+- `std.math.is_inf(x, sign)` — `true` if `x` is infinite; `sign > 0` tests +∞, `sign < 0` tests −∞, `sign == 0` tests either
+
+**Constants**
+- `std.math.pi` — π
+- `std.math.e` — Euler's number
+- `std.math.inf` — positive infinity
+
+### std.rand
+
+- `std.rand.float()` — uniform float in `[0.0, 1.0)`
+- `std.rand.intn(n)` — uniform int in `[0, n)`; raises `RangeError` if `n ≤ 0`
+- `std.rand.between(lo, hi)` — uniform int in `[lo, hi]` inclusive; raises `RangeError` if `lo > hi`
+- `std.rand.choice(arr)` — random element from array; raises `RangeError` on empty array
+- `std.rand.perm(n)` — array containing a random permutation of `[0, n)`
+- `std.rand.norm_float()` — sample from standard normal distribution (mean 0, stddev 1)
+- `std.rand.seed(n)` — seed the global PRNG for reproducible sequences
+
+### std.conv
+
+- `std.conv.to_int(x)` — number/boolean/string → integer (truncate semantics); raises `TypeError` on invalid input
+- `std.conv.to_float(x)` — number/boolean/string → float; raises `TypeError` on invalid input
+- `std.conv.to_bool(x)` — truthy conversion to boolean
+- `std.conv.to_string(x)` — number/boolean/null/string/error → string; raises `TypeError` on unsupported input
+
+### std.json
+
+- `std.json.parse(s)` — parse JSON string; returns array/map/number/string/boolean/null
+- `std.json.stringify(v)` — serialize value to JSON string
+- `std.json.valid(s)` — `true` if `s` is valid JSON
+
+### std.time
+
+All times are opaque `Time` objects. Internal representation is milliseconds since the Unix epoch (UTC).
+
+**Construction**
+- `std.time.now()` — current time
+- `std.time.from_unix(sec)` — from Unix seconds (integer)
+- `std.time.from_unix_ms(ms)` — from Unix milliseconds (integer)
+- `std.time.parse(s, fmt)` — parse string with format; raises `ParseError` on mismatch
+- `std.time.since(t)` — milliseconds elapsed since `t` (equivalent to `std.time.now().sub(t)`)
+- `std.time.until(t)` — milliseconds until `t`
+
+**Methods on Time values**
+- `t.unix()` — Unix timestamp in seconds
+- `t.unix_ms()` — Unix timestamp in milliseconds
+- `t.parts()` — map with `year`, `month` (1–12), `day` (1–31), `hour` (0–23), `min` (0–59), `sec` (0–59), `ms` (0–999), `weekday` (0=Sunday … 6=Saturday)
+- `t.format(fmt)` — format as string using strftime-style directives
+- `t.add_ms(n)`, `t.add_s(n)`, `t.add_m(n)`, `t.add_h(n)` — add milliseconds / seconds / minutes / hours
+- `t.add_date(years, months, days)` — add calendar units (handles month-length and leap-year rules)
+- `t.sub(other)` — difference in milliseconds
+- `t.before(other)`, `t.after(other)`, `t.equal(other)` — comparison
+- `t.is_zero()` — `true` if the time is the zero value (Unix epoch)
+- `t.since()` — milliseconds elapsed since `t`
+- `t.until()` — milliseconds until `t`
+
+### std.regexp
+
+- `std.regexp.match(pattern, s)` — `true` if `s` contains a match for `pattern`
+- `std.regexp.find(pattern, s)` — first match as a map `{text, begin, end}`, or `null`
+- `std.regexp.find_all(pattern, s)` — array of all matches, each a map `{text, begin, end}`
+- `std.regexp.replace(pattern, s, repl)` — replace all matches with `repl`
+- `std.regexp.split(pattern, s)` — split `s` by pattern; returns array of strings
+- `std.regexp.compile(pattern)` — returns a `Regexp` object for repeated use; raises on invalid pattern
+  - `r.match(s)`, `r.find(s)`, `r.find_all(s)`, `r.replace(s, repl)`, `r.split(s)` — same semantics as above
+
+### std.template
+
+- `std.template.parse(tmpl)` — compile a template string; raises on invalid syntax
+- `std.template.render(tmpl, data)` — render template with data map; returns string
+- `std.template.execute(tmpl, data)` — alias for `render`
+- `std.template.valid(tmpl)` — `true` if the template string parses without error
+- `std.template.add_func(tmpl, name, fn)` — register a custom function callable from within the template
+
+### std.hex
+
+- `std.hex.encode(s)` — encode string to lowercase hex
+- `std.hex.decode(s)` — decode hex string; raises on invalid input
+
+### std.base64
+
+- `std.base64.encode(s)` — standard Base64 encode
+- `std.base64.decode(s)` — standard Base64 decode; raises on invalid input
+- `std.base64.url_encode(s)` — URL-safe Base64 encode (uses `-_` instead of `+/`)
+- `std.base64.url_decode(s)` — URL-safe Base64 decode
+
+### std.sort
+
+All sort functions return a **new** array; the original is not modified.
+
+- `std.sort.asc(arr)` — sort ascending (numbers by value, strings lexicographically)
+- `std.sort.desc(arr)` — sort descending
+- `std.sort.by(arr, fn)` — sort by comparator `fn(a, b)`: negative means `a` before `b`, positive means `b` before `a`, zero means equal; a boolean return value is also accepted (`true` = `a` before `b`)
+
+### std.array
+
+All functions return a **new** array; the original is not modified.
+
+- `std.array.filter(arr, fn)` — elements where `fn(v)` is truthy
+- `std.array.map(arr, fn)` — transform each element with `fn(v)`
+- `std.array.reduce(arr, fn, init)` — fold left: `fn(acc, v)` starting from `init`
+- `std.array.slice(arr, from, to)` — sub-array `[from, to)` (exclusive end); raises `IndexOutOfBounds` on invalid range
+- `std.array.zip(a, b)` — array of two-element arrays `[a[i], b[i]]`; truncates to the shorter input
+- `std.array.flat(arr)` — one-level flatten: array elements that are arrays are inlined; non-array elements are kept as-is
 
 ## 10. Runtime/Backend Notes
 
