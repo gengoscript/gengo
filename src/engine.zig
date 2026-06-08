@@ -245,19 +245,22 @@ fn makeWire(tag: u8, payload: u64, len: u32) ValueWire {
     };
 }
 
-fn valueToWire(val: Value) ValueWire {
+fn valueToWire(val: Value) !ValueWire {
     return switch (val) {
         .null => makeWire(@intFromEnum(WireTag.null), 0, 0),
         .boolean => |b| makeWire(@intFromEnum(WireTag.boolean), @intFromBool(b), 0),
         .number => |n| makeWire(@intFromEnum(WireTag.number), @bitCast(@as(f64, n)), 0),
+        .decimal => |d| makeWire(@intFromEnum(WireTag.number), @bitCast(@as(f64, @floatFromInt(d))), 0),
+        .rune => |r| makeWire(@intFromEnum(WireTag.number), @bitCast(@as(f64, @floatFromInt(r))), 0),
         .string => |s| makeWire(@intFromEnum(WireTag.string), @intFromPtr(s.ptr), @intCast(s.len)),
+        .error_value => error.WireSerializeError,
         .object => |obj| switch (obj.*) {
             .dyn_string => makeWire(@intFromEnum(WireTag.string), @intFromPtr(obj.dyn_string.ptr), @intCast(obj.dyn_string.len)),
             .array, .array_managed => {
                 const items = vms.asArraySlice(obj);
                 const wires = (heap.bump(ValueWire, items.len) orelse return makeWire(@intFromEnum(WireTag.null), 0, 0))[0..items.len];
                 for (items, 0..) |item, i| {
-                    wires[i] = valueToWire(item);
+                    wires[i] = try valueToWire(item);
                 }
                 return makeWire(@intFromEnum(WireTag.array), @intFromPtr(wires.ptr), @intCast(items.len));
             },
@@ -265,18 +268,28 @@ fn valueToWire(val: Value) ValueWire {
                 const entries = vms.asMapSlice(obj);
                 const wires = (heap.bump(ValueWire, entries.len * 2) orelse return makeWire(@intFromEnum(WireTag.null), 0, 0))[0 .. entries.len * 2];
                 for (entries, 0..) |entry, i| {
-                    wires[i * 2] = valueToWire(entry.key);
-                    wires[i * 2 + 1] = valueToWire(entry.value);
+                    wires[i * 2] = try valueToWire(entry.key);
+                    wires[i * 2 + 1] = try valueToWire(entry.value);
                 }
                 return makeWire(@intFromEnum(WireTag.map), @intFromPtr(wires.ptr), @intCast(entries.len));
             },
+            .struct_instance => {
+                const entries = obj.struct_instance.fields;
+                const wires = (heap.bump(ValueWire, entries.len * 2) orelse return makeWire(@intFromEnum(WireTag.null), 0, 0))[0 .. entries.len * 2];
+                for (entries, 0..) |entry, i| {
+                    wires[i * 2] = try valueToWire(entry.key);
+                    wires[i * 2 + 1] = try valueToWire(entry.value);
+                }
+                return makeWire(@intFromEnum(WireTag.map), @intFromPtr(wires.ptr), @intCast(entries.len));
+            },
+            .named_value => |nv| return valueToWire(nv.value),
+            .enum_value => |ev| makeWire(@intFromEnum(WireTag.string), @intFromPtr(ev.name.ptr), @intCast(ev.name.len)),
             else => makeWire(@intFromEnum(WireTag.null), 0, 0),
         },
-        else => makeWire(@intFromEnum(WireTag.null), 0, 0),
     };
 }
 
-fn valueToWireWithScratch(val: Value, scratch: *Engine) ValueWire {
+fn valueToWireWithScratch(val: Value, scratch: *Engine) !ValueWire {
     switch (val) {
         .string => |s| {
             const stable = scratch.setStringScratch(s);
@@ -294,7 +307,7 @@ fn valueToWireWithScratch(val: Value, scratch: *Engine) ValueWire {
                 const wires = &scratch.wire_elem_buf;
                 scratch.wire_elem_count = @intCast(count);
                 for (items[0..count], 0..) |item, i| {
-                    wires[i] = valueToWire(item);
+                    wires[i] = try valueToWire(item);
                 }
                 return makeWire(@intFromEnum(WireTag.array), @intFromPtr(wires.ptr), @intCast(count));
             },
@@ -305,14 +318,26 @@ fn valueToWireWithScratch(val: Value, scratch: *Engine) ValueWire {
                 const wires = &scratch.wire_elem_buf;
                 scratch.wire_elem_count = @intCast(count * 2);
                 for (entries[0..count], 0..) |entry, i| {
-                    wires[i * 2] = valueToWire(entry.key);
-                    wires[i * 2 + 1] = valueToWire(entry.value);
+                    wires[i * 2] = try valueToWire(entry.key);
+                    wires[i * 2 + 1] = try valueToWire(entry.value);
                 }
                 return makeWire(@intFromEnum(WireTag.map), @intFromPtr(wires.ptr), @intCast(count));
             },
-            else => return valueToWire(val),
+            .struct_instance => {
+                const entries = obj.struct_instance.fields;
+                const max_entries = scratch.wire_elem_buf.len / 2;
+                const count = @min(entries.len, max_entries);
+                const wires = &scratch.wire_elem_buf;
+                scratch.wire_elem_count = @intCast(count * 2);
+                for (entries[0..count], 0..) |entry, i| {
+                    wires[i * 2] = try valueToWire(entry.key);
+                    wires[i * 2 + 1] = try valueToWire(entry.value);
+                }
+                return makeWire(@intFromEnum(WireTag.map), @intFromPtr(wires.ptr), @intCast(count));
+            },
+            else => return try valueToWire(val),
         },
-        else => return valueToWire(val),
+        else => return try valueToWire(val),
     }
 }
 
@@ -432,7 +457,10 @@ export fn engine_call(handle: i32, name_ptr: PtrInt, name_len: i32, args_ptr: Pt
 
     return switch (res) {
         .ok => |val| {
-            const wire = valueToWireWithScratch(val, engine);
+            const wire = valueToWireWithScratch(val, engine) catch |err| {
+                engine.setRuntimeError(.{ .kind = err, .msg = "value cannot be serialized to wire" });
+                return -2;
+            };
             if (out_ptr != 0) {
                 @as(*ValueWire, @ptrFromInt(@as(usize, @intCast(out_ptr)))).* = wire;
             }

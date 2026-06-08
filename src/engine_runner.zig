@@ -625,6 +625,131 @@ fn testInitWithConfig() void {
     out("  init_with_config: OK\n");
 }
 
+fn testStructReturn() void {
+    const rt = initWithAllowIO(false);
+    const res = rt.run(
+        \\type Point struct { x int, y int }
+        \\func makePoint() Point {
+        \\    return Point{x: 1, y: 2}
+        \\}
+    );
+    if (res != .ok) fail("engine FAIL: struct return setup\n");
+
+    const call_res = rt.call("makePoint", &[_]Value{});
+    switch (call_res) {
+        .ok => |v| {
+            if (v != .object or v.object.* != .struct_instance) fail("engine FAIL: struct return type\n");
+            const fields = v.object.struct_instance.fields;
+            if (fields.len != 2) fail("engine FAIL: struct field count\n");
+            // fields are MapEntry with string keys
+            var found_x = false;
+            var found_y = false;
+            for (fields) |f| {
+                const key = switch (f.key) {
+                    .string => |s| s,
+                    .object => |o| if (o.* == .dyn_string) o.dyn_string else fail("engine FAIL: struct bad key type\n"),
+                    else => fail("engine FAIL: struct bad key type\n"),
+                };
+                if (std.mem.eql(u8, key, "x")) {
+                    if (f.value != .number or f.value.number != 1) fail("engine FAIL: struct x field\n");
+                    found_x = true;
+                } else if (std.mem.eql(u8, key, "y")) {
+                    if (f.value != .number or f.value.number != 2) fail("engine FAIL: struct y field\n");
+                    found_y = true;
+                }
+            }
+            if (!found_x or !found_y) fail("engine FAIL: struct missing fields\n");
+        },
+        .runtime_error => |e| {
+            writeAll(2, "struct call runtime: "); writeAll(2, e.msg); writeAll(2, "\n");
+            fail("engine FAIL: struct call failed\n");
+        },
+    }
+    out("  struct return: OK\n");
+}
+
+fn testRuneReturn() void {
+    const rt = initWithAllowIO(false);
+    const res = rt.run(
+        \\func makeRune() rune {
+        \\    return `A`
+        \\}
+    );
+    if (res != .ok) {
+        switch (res) {
+            .compile_error => |e| { writeAll(2, "rune setup compile: "); writeAll(2, e.msg); writeAll(2, "\n"); },
+            .runtime_error => |e| { writeAll(2, "rune setup runtime: "); writeAll(2, e.msg); writeAll(2, "\n"); },
+            else => {},
+        }
+        fail("engine FAIL: rune return setup\n");
+    }
+
+    const call_res = rt.call("makeRune", &[_]Value{});
+    switch (call_res) {
+        .ok => |v| {
+            if (v != .rune or v.rune != 'A') fail("engine FAIL: rune return value\n");
+        },
+        .runtime_error => |e| {
+            writeAll(2, "rune call runtime: ");
+            writeAll(2, @errorName(e.kind));
+            writeAll(2, ": ");
+            writeAll(2, e.msg);
+            writeAll(2, "\n");
+            fail("engine FAIL: rune call failed\n");
+        },
+    }
+    out("  rune return: OK\n");
+}
+
+fn testNamedTypeReturn() void {
+    const rt = initWithAllowIO(false);
+    const res = rt.run(
+        \\type Meter int
+        \\func makeMeter() Meter {
+        \\    return Meter(5)
+        \\}
+    );
+    if (res != .ok) fail("engine FAIL: named type return setup\n");
+
+    const call_res = rt.call("makeMeter", &[_]Value{});
+    switch (call_res) {
+        .ok => |v| {
+            if (v != .object or v.object.* != .named_value) fail("engine FAIL: named type return type\n");
+            const inner = v.object.named_value.value;
+            if (inner != .number or inner.number != 5) fail("engine FAIL: named type inner value\n");
+        },
+        .runtime_error => |e| {
+            writeAll(2, "named type call runtime: "); writeAll(2, e.msg); writeAll(2, "\n");
+            fail("engine FAIL: named type call failed\n");
+        },
+    }
+    out("  named type return: OK\n");
+}
+
+fn testErrorReturn() void {
+    const rt = initWithAllowIO(false);
+    const res = rt.run(
+        \\std := import("std")
+        \\func makeError() error {
+        \\    return std.core.error("boom")
+        \\}
+    );
+    if (res != .ok) fail("engine FAIL: error return setup\n");
+
+    const call_res = rt.call("makeError", &[_]Value{});
+    switch (call_res) {
+        .ok => |v| {
+            if (v != .error_value) fail("engine FAIL: error return type\n");
+            if (!std.mem.eql(u8, v.error_value, "boom")) fail("engine FAIL: error return message\n");
+        },
+        .runtime_error => |e| {
+            writeAll(2, "error call runtime: "); writeAll(2, e.msg); writeAll(2, "\n");
+            fail("engine FAIL: error call failed\n");
+        },
+    }
+    out("  error return: OK\n");
+}
+
 fn testHttpCapability() void {
     var state: MockHttpState = .{};
     http_state.setHttpHandler(&mockHttpFetch, @ptrCast(&state));
@@ -822,6 +947,10 @@ export fn _start() void {
     testNetCapability();
     testNetCapabilityHandlers();
     testInitWithConfig();
+    testStructReturn();
+    testRuneReturn();
+    testNamedTypeReturn();
+    testErrorReturn();
     testHttpCapability();
     out("engine-api OK\n");
     runCapHttpConformance();
