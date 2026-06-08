@@ -228,7 +228,7 @@ fn httpFetchBuiltin(
         .location = .{ .url = url },
         .method = method_enum,
         .payload = if (payload) |p| p else "",
-        .headers = if (extra_header_count > 0) extra_headers[0..extra_header_count] else &.{},
+        .extra_headers = if (extra_header_count > 0) extra_headers[0..extra_header_count] else &.{},
         .response_writer = &writer.writer,
     }) catch return error.CapabilityError;
 
