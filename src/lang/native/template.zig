@@ -552,12 +552,11 @@ pub fn tplExec(tmpl: *Object, data: Value) !Value {
                 if (rval == .object) {
                     const obj = rval.object;
                     if (tplIsArray(obj)) {
-                        const items = tplAsArraySlice(obj);
-                        if (items.len > 0) {
+                        if (tplAsArraySlice(obj).len > 0) {
                             iter_stack[iter_top] = .{ .arr = obj, .index = 0, .body_ip = ip + 1 };
                             iter_top += 1;
                             scope_top += 1;
-                            dot_stack[scope_top] = items[0];
+                            dot_stack[scope_top] = tplAsArraySlice(obj)[0];
                             ip += 1;
                         } else {
                             ip = @intFromFloat(jmps[ip].number);

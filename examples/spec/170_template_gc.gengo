@@ -1,0 +1,25 @@
+std := import("std")
+tmpl := std.template
+
+// Test that template objects survive GC
+// This exercises the code path where tmpl_val must be rooted across tplExec
+t := tmpl.parse("{{range .}}{{.}}{{end}}")
+
+r := tmpl.execute(t, ["a", "b", "c"])
+std.io.println(r)
+
+// Force GC — t should still be valid
+std.core.gc()
+
+r = tmpl.execute(t, ["x", "y"])
+std.io.println(r)
+
+// Full render after GC
+r = tmpl.render("Hello {{.name}}!", {"name": "World"})
+std.io.println(r)
+
+// Render with range after GC
+r = tmpl.render("{{range .items}}{{.}}{{end}}", {"items": ["p", "q"]})
+std.io.println(r)
+
+std.io.println("ok")
