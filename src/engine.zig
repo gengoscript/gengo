@@ -56,6 +56,10 @@ const MaxErrorLen = 512;
 const MaxStringScratch = 4096;
 const HostModuleCallIdBase = 0x1000;
 
+// Init-time error buffer: populated when engine_init_with_config fails validation.
+var g_init_error: [MaxErrorLen]u8 = undefined;
+var g_init_error_len: u16 = 0;
+
 const SourceEntry = struct {
     path: []const u8,
     src: []const u8,
@@ -353,14 +357,15 @@ pub const InstanceConfig = extern struct {
 
 fn validateCeiling(name: []const u8, requested: usize, ceiling: usize) bool {
     if (requested > ceiling) {
-        // TODO: populate engine_last_error with a meaningful message
-        _ = name;
+        const s = std.fmt.bufPrint(&g_init_error, "config exceeds preset ceiling: {s} ({d} > {d})", .{ name, requested, ceiling }) catch "";
+        g_init_error_len = @intCast(s.len);
         return false;
     }
     return true;
 }
 
 export fn engine_init() i32 {
+    g_init_error_len = 0;
     for (&engine_slots, 0..) |*slot, i| {
         if (!slot.active) {
             slot.engine.initInPlaceDefault();
@@ -372,6 +377,7 @@ export fn engine_init() i32 {
 }
 
 export fn engine_init_with_config(config_ptr: PtrInt) i32 {
+    g_init_error_len = 0;
     const config = @as(*const InstanceConfig, @ptrFromInt(@as(usize, @intCast(config_ptr)))).*;
 
     const ceiling_heap = cfg.heap_size_bytes;
@@ -563,13 +569,22 @@ fn setupHostModules(engine: *Engine) void {
 }
 
 export fn engine_last_error(handle: i32, out_ptr: PtrInt, out_max_len: i32) i32 {
-    const engine = getEngine(handle) orelse return 0;
-    const len = @min(@as(usize, @intCast(engine.last_error_len)), @as(usize, @intCast(@max(out_max_len, 0))));
+    const engine = getEngine(handle);
+    if (engine) |e| {
+        const len = @min(@as(usize, @intCast(e.last_error_len)), @as(usize, @intCast(@max(out_max_len, 0))));
+        if (len > 0 and out_ptr != 0) {
+            const dest = wasmSliceMut(out_ptr, @intCast(len));
+            @memcpy(dest, e.last_error[0..len]);
+        }
+        return e.last_error_len;
+    }
+    // Fall back to init-time error when handle is 0 or invalid.
+    const len = @min(@as(usize, @intCast(g_init_error_len)), @as(usize, @intCast(@max(out_max_len, 0))));
     if (len > 0 and out_ptr != 0) {
         const dest = wasmSliceMut(out_ptr, @intCast(len));
-        @memcpy(dest, engine.last_error[0..len]);
+        @memcpy(dest, g_init_error[0..len]);
     }
-    return engine.last_error_len;
+    return g_init_error_len;
 }
 
 export fn engine_last_error_line(handle: i32) i32 {
