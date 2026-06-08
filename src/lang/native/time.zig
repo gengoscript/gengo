@@ -336,36 +336,78 @@ pub fn timeAddDate(ms: f64, y_delta: i32, m_delta: i32, d_delta: i32) !Value {
 
 pub fn parseDuration(s: []const u8) !f64 {
     if (s.len == 0) return error.ParseError;
-    var total_ms: f64 = 0;
     var i: usize = 0;
-    var negative = false;
-    if (i < s.len and s[i] == '-') { negative = true; i += 1; }
+    var neg = false;
+
+    // optional sign
+    if (s[0] == '-') { neg = true; i = 1; }
+    else if (s[0] == '+') { i = 1; }
+
+    // special case: bare zero requires no unit (matches Go)
+    if (i < s.len and s[i] == '0' and i + 1 == s.len) return 0.0;
+
     if (i >= s.len) return error.ParseError;
+
+    var total_ms: f64 = 0;
+
     while (i < s.len) {
-        // parse numeric part (integer or decimal)
-        const num_start = i;
-        while (i < s.len and (s[i] >= '0' and s[i] <= '9')) : (i += 1) {}
+        // each component must start with a digit or '.'
+        if (s[i] != '.' and (s[i] < '0' or s[i] > '9')) return error.ParseError;
+
+        // integer part — accumulate into u64 to avoid float parsing edge cases
+        var whole: u64 = 0;
+        var frac_val: u64 = 0;
+        var frac_exp: u64 = 1;
+        var has_digits = false;
+
+        while (i < s.len and s[i] >= '0' and s[i] <= '9') : (i += 1) {
+            has_digits = true;
+            whole = whole *% 10 +% @as(u64, s[i] - '0');
+        }
+
+        // optional fractional part; "1.s" is valid (trailing dot, no frac digits)
         if (i < s.len and s[i] == '.') {
             i += 1;
-            while (i < s.len and (s[i] >= '0' and s[i] <= '9')) : (i += 1) {}
+            while (i < s.len and s[i] >= '0' and s[i] <= '9') : (i += 1) {
+                has_digits = true;
+                if (frac_exp < 1_000_000_000_000_000_000) {
+                    frac_val = frac_val * 10 + @as(u64, s[i] - '0');
+                    frac_exp *= 10;
+                }
+            }
         }
-        if (i == num_start) return error.ParseError;
-        const num = std.fmt.parseFloat(f64, s[num_start..i]) catch return error.ParseError;
-        // parse unit
+
+        if (!has_digits) return error.ParseError;
+
+        const num: f64 = @as(f64, @floatFromInt(whole)) +
+            @as(f64, @floatFromInt(frac_val)) / @as(f64, @floatFromInt(frac_exp));
+
+        // unit: scan until next digit or '.'; works for ASCII and multi-byte UTF-8
         const unit_start = i;
-        while (i < s.len and s[i] >= 'a' and s[i] <= 'z') : (i += 1) {}
-        if (i < s.len and i < s.len and s[i] == 's' and i == unit_start) { i += 1; }
+        while (i < s.len) {
+            const b = s[i];
+            if ((b >= '0' and b <= '9') or b == '.') break;
+            i += 1;
+        }
+        if (i == unit_start) return error.ParseError; // missing unit
+
         const unit = s[unit_start..i];
-        const ms: f64 = if (std.mem.eql(u8, unit, "ns")) num / 1_000_000
-            else if (std.mem.eql(u8, unit, "us") or std.mem.eql(u8, unit, "µs")) num / 1_000
-            else if (std.mem.eql(u8, unit, "ms")) num
-            else if (std.mem.eql(u8, unit, "s")) num * 1_000
-            else if (std.mem.eql(u8, unit, "m")) num * 60_000
-            else if (std.mem.eql(u8, unit, "h")) num * 3_600_000
+        const multiplier: f64 =
+            if (std.mem.eql(u8, unit, "ns"))   1.0 / 1_000_000.0
+            else if (std.mem.eql(u8, unit, "us") or
+                     std.mem.eql(u8, unit, "\xc2\xb5s") or  // µs  U+00B5
+                     std.mem.eql(u8, unit, "\xce\xbcs"))     // μs  U+03BC
+                1.0 / 1_000.0
+            else if (std.mem.eql(u8, unit, "ms"))   1.0
+            else if (std.mem.eql(u8, unit, "s"))    1_000.0
+            else if (std.mem.eql(u8, unit, "m"))    60_000.0
+            else if (std.mem.eql(u8, unit, "h"))    3_600_000.0
             else return error.ParseError;
-        total_ms += ms;
+
+        total_ms += num * multiplier;
     }
-    return if (negative) -total_ms else total_ms;
+
+    return if (neg) -total_ms else total_ms;
 }
 
 pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {

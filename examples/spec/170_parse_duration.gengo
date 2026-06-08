@@ -1,0 +1,33 @@
+std := import("std")
+t := std.time
+
+// basic units
+std.io.println(t.parse_duration("1h"))
+std.io.println(t.parse_duration("1m"))
+std.io.println(t.parse_duration("1s"))
+std.io.println(t.parse_duration("1ms"))
+std.io.println(t.parse_duration("1us"))
+std.io.println(t.parse_duration("1ns"))
+
+// fractional
+std.io.println(t.parse_duration("1.5h"))
+std.io.println(t.parse_duration("0.5s"))
+std.io.println(t.parse_duration(".5s"))
+std.io.println(t.parse_duration("1.s"))
+
+// compound
+std.io.println(t.parse_duration("2h45m30s"))
+std.io.println(t.parse_duration("1h0m0s"))
+
+// sign
+std.io.println(t.parse_duration("-1s"))
+std.io.println(t.parse_duration("+1s"))
+
+// bare zero
+std.io.println(t.parse_duration("0"))
+std.io.println(t.parse_duration("-0"))
+std.io.println(t.parse_duration("+0"))
+
+// µs and μs (U+00B5 and U+03BC)
+std.io.println(t.parse_duration("1µs"))
+std.io.println(t.parse_duration("1μs"))
