@@ -302,6 +302,77 @@ pub fn nativeStrContainsAny(s: []const u8, chars: []const u8) Value {
     return .{ .boolean = false };
 }
 
+fn inCutset(c: u8, cutset: []const u8) bool {
+    for (cutset) |ch| if (c == ch) return true;
+    return false;
+}
+
+pub fn nativeStrTrimLeft(s: []const u8, cutset: []const u8) !Value {
+    var i: usize = 0;
+    while (i < s.len and inCutset(s[i], cutset)) : (i += 1) {}
+    return vmgc.makeDynString(s[i..]);
+}
+
+pub fn nativeStrTrimRight(s: []const u8, cutset: []const u8) !Value {
+    var i: usize = s.len;
+    while (i > 0 and inCutset(s[i - 1], cutset)) : (i -= 1) {}
+    return vmgc.makeDynString(s[0..i]);
+}
+
+pub fn nativeStrTrimPrefix(s: []const u8, prefix: []const u8) !Value {
+    if (std.mem.startsWith(u8, s, prefix)) return vmgc.makeDynString(s[prefix.len..]);
+    return vmgc.makeDynString(s);
+}
+
+pub fn nativeStrTrimSuffix(s: []const u8, suffix: []const u8) !Value {
+    if (std.mem.endsWith(u8, s, suffix)) return vmgc.makeDynString(s[0 .. s.len - suffix.len]);
+    return vmgc.makeDynString(s);
+}
+
+pub fn nativeStrSplitN(s: []const u8, sep: []const u8, n_v: Value) !Value {
+    const n = try vms.valueAsInt(n_v);
+    if (n < 0) return error.RangeError;
+    const max: usize = @intCast(n);
+    if (max == 0) {
+        const obj = try vmgc.vmAllocObject();
+        obj.* = .{ .array = &[_]Value{} };
+        return .{ .object = obj };
+    }
+    // Count pieces (up to max)
+    var count: usize = 0;
+    if (sep.len == 0) {
+        count = @min(s.len, max);
+    } else {
+        var pos: usize = 0;
+        count = 1;
+        while (count < max) {
+            const idx = std.mem.indexOf(u8, s[pos..], sep) orelse break;
+            count += 1;
+            pos += idx + sep.len;
+        }
+    }
+    const arr_obj = try vmgc.vmAllocObject();
+    arr_obj.* = .{ .array = &[_]Value{} };
+    try vms.pushTempRoot(.{ .object = arr_obj });
+    defer vms.popTempRoot();
+    const pieces = try vmgc.vmAllocManagedSlice(Value, count);
+    if (sep.len == 0) {
+        for (0..count) |i| pieces[i] = try vmgc.makeDynString(s[i .. i + 1]);
+    } else {
+        var pos: usize = 0;
+        var pi: usize = 0;
+        while (pi + 1 < count) {
+            const idx = std.mem.indexOf(u8, s[pos..], sep).?;
+            pieces[pi] = try vmgc.makeDynString(s[pos .. pos + idx]);
+            pos += idx + sep.len;
+            pi += 1;
+        }
+        pieces[pi] = try vmgc.makeDynString(s[pos..]);
+    }
+    arr_obj.* = .{ .array_managed = pieces[0..count] };
+    return .{ .object = arr_obj };
+}
+
 pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
     switch (@as(NativeFnId, @enumFromInt(nf.id))) {
         .str_builder_new => {
@@ -489,6 +560,57 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const s = try vms.asStringValue(vms.vmState().stack[vms.vmState().stack_top - 1]);
             const out = try nativeStrUpper(s);
             _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .str_trim_left => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const s = try vms.asStringValue(vms.vmState().stack[top - 2]);
+            const cutset = try vms.asStringValue(vms.vmState().stack[top - 1]);
+            const out = try nativeStrTrimLeft(s, cutset);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .str_trim_right => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const s = try vms.asStringValue(vms.vmState().stack[top - 2]);
+            const cutset = try vms.asStringValue(vms.vmState().stack[top - 1]);
+            const out = try nativeStrTrimRight(s, cutset);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .str_trim_prefix => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const s = try vms.asStringValue(vms.vmState().stack[top - 2]);
+            const prefix = try vms.asStringValue(vms.vmState().stack[top - 1]);
+            const out = try nativeStrTrimPrefix(s, prefix);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .str_trim_suffix => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const s = try vms.asStringValue(vms.vmState().stack[top - 2]);
+            const suffix = try vms.asStringValue(vms.vmState().stack[top - 1]);
+            const out = try nativeStrTrimSuffix(s, suffix);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .str_split_n => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const top = vms.vmState().stack_top;
+            const s = try vms.asStringValue(vms.vmState().stack[top - 3]);
+            const sep = try vms.asStringValue(vms.vmState().stack[top - 2]);
+            const n_v = vms.vmState().stack[top - 1];
+            const out = try nativeStrSplitN(s, sep, n_v);
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
             try vms.vmPush(out);
         },
         else => {},

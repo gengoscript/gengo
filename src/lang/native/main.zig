@@ -227,6 +227,11 @@ pub fn buildStdModule() !*Object {
         .{ .name = "pad_right", .value = try makeNative(.str_pad_right, 3) },
         .{ .name = "equal_fold", .value = try makeNative(.str_equal_fold, 2) },
         .{ .name = "contains_any", .value = try makeNative(.str_contains_any, 2) },
+        .{ .name = "trim_left",    .value = try makeNative(.str_trim_left, 2) },
+        .{ .name = "trim_right",   .value = try makeNative(.str_trim_right, 2) },
+        .{ .name = "trim_prefix",  .value = try makeNative(.str_trim_prefix, 2) },
+        .{ .name = "trim_suffix",  .value = try makeNative(.str_trim_suffix, 2) },
+        .{ .name = "split_n",      .value = try makeNative(.str_split_n, 3) },
     };
     const string_obj = try makeNamespace("string", "@module_type:std.string", &string_entries);
     try vms.pushTempRoot(.{ .object = string_obj });
@@ -236,6 +241,7 @@ pub fn buildStdModule() !*Object {
         .{ .name = "parse", .value = try makeNative(.json_parse, 1) },
         .{ .name = "stringify", .value = try makeNative(.json_stringify, 1) },
         .{ .name = "valid", .value = try makeNative(.json_valid, 1) },
+        .{ .name = "indent", .value = try makeNative(.json_indent, 2) },
     };
     const json_obj = try makeNamespace("json", "@module_type:std.json", &json_entries);
     try vms.pushTempRoot(.{ .object = json_obj });
@@ -263,6 +269,7 @@ pub fn buildStdModule() !*Object {
         .{ .name = "parse", .value = try makeNative(.time_parse, 2) },
         .{ .name = "since", .value = try makeNative(.time_since, 1) },
         .{ .name = "until", .value = try makeNative(.time_until, 1) },
+        .{ .name = "parse_duration", .value = try makeNative(.time_parse_duration, 1) },
         .{ .name = "ms", .value = .{ .number = 1 } },
         .{ .name = "second", .value = .{ .number = 1000 } },
         .{ .name = "minute", .value = .{ .number = 60_000 } },
@@ -325,6 +332,11 @@ pub fn buildStdModule() !*Object {
         .{ .name = "slice", .value = try makeNative(.array_slice, 3) },
         .{ .name = "zip", .value = try makeNative(.array_zip, 2) },
         .{ .name = "flat", .value = try makeNative(.array_flat, 1) },
+        .{ .name = "find", .value = try makeNative(.array_find, 2) },
+        .{ .name = "find_index", .value = try makeNative(.array_find_index, 2) },
+        .{ .name = "all", .value = try makeNative(.array_all, 2) },
+        .{ .name = "any", .value = try makeNative(.array_any, 2) },
+        .{ .name = "chunk", .value = try makeNative(.array_chunk, 2) },
     };
     const array_obj = try makeNamespace("array", "@module_type:std.array", &array_entries);
     try vms.pushTempRoot(.{ .object = array_obj });
@@ -631,8 +643,9 @@ pub fn callNative(nf: NativeFuncObj, argc: u8) !void {
         .str_split, .str_join, .str_trim, .str_upper, .str_lower, .str_contains,
         .str_starts_with, .str_ends_with, .str_index_of, .str_replace, .str_last_index_of,
         .str_repeat, .str_split_once, .str_builder_new, .str_count, .str_fields, .str_pad_left,
-        .str_pad_right, .str_equal_fold, .str_contains_any => return string_mod.dispatch(nf, argc),
-        .json_parse, .json_stringify, .json_valid => return json_mod.dispatch(nf, argc),
+        .str_pad_right, .str_equal_fold, .str_contains_any,
+        .str_trim_left, .str_trim_right, .str_trim_prefix, .str_trim_suffix, .str_split_n => return string_mod.dispatch(nf, argc),
+        .json_parse, .json_stringify, .json_valid, .json_indent => return json_mod.dispatch(nf, argc),
         .hex_encode, .hex_decode, .base64_encode, .base64_decode, .base64_url_encode,
         .base64_url_decode => return encode_mod.dispatch(nf, argc),
         .template_parse, .template_execute, .template_add_func, .template_render,
@@ -640,10 +653,11 @@ pub fn callNative(nf: NativeFuncObj, argc: u8) !void {
         .time_now, .time_from_unix, .time_from_unix_ms, .time_parse, .time_unix, .time_unix_ms,
         .time_parts, .time_format, .time_add_ms, .time_add_s, .time_add_m, .time_add_h,
         .time_sub, .time_before, .time_after, .time_equal, .time_is_zero, .time_since,
-        .time_until, .time_add_date => return time_mod.dispatch(nf, argc),
+        .time_until, .time_add_date, .time_parse_duration => return time_mod.dispatch(nf, argc),
         .re_match, .re_find, .re_find_all, .re_replace, .re_split, .re_compile,
         .re_obj_match, .re_obj_find, .re_obj_find_all, .re_obj_replace, .re_obj_split => return regexp_mod.dispatch(nf, argc),
-        .array_filter, .array_map, .array_reduce, .array_slice, .array_zip, .array_flat => return array_mod.dispatch(nf, argc),
+        .array_filter, .array_map, .array_reduce, .array_slice, .array_zip, .array_flat,
+        .array_find, .array_find_index, .array_all, .array_any, .array_chunk => return array_mod.dispatch(nf, argc),
         .sort_asc, .sort_desc, .sort_by => return sort_mod.dispatch(nf, argc),
         .cap_net_get => return cap_net_mod.dispatch(nf, argc),
         .cap_net_dial, .cap_net_read, .cap_net_write, .cap_net_close,

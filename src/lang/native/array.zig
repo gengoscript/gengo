@@ -181,6 +181,107 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
             try vms.vmPush(.{ .object = out_obj });
         },
+        .array_find => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const fn_val = vms.vmState().stack[vms.vmState().stack_top - 1];
+            const arr_val = vms.vmState().stack[vms.vmState().stack_top - 2];
+            if (arr_val != .object) return error.TypeError;
+            const arr_obj = arr_val.object;
+            if (!vms.isArrayObject(arr_obj)) return error.TypeError;
+            const items = vms.asArraySlice(arr_obj);
+            var result: Value = .null;
+            for (items) |item| {
+                const ok = try vm.callFunction(fn_val, &.{item});
+                if (ok.isTruthy()) { result = item; break; }
+            }
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(result);
+        },
+        .array_find_index => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const fn_val = vms.vmState().stack[vms.vmState().stack_top - 1];
+            const arr_val = vms.vmState().stack[vms.vmState().stack_top - 2];
+            if (arr_val != .object) return error.TypeError;
+            const arr_obj = arr_val.object;
+            if (!vms.isArrayObject(arr_obj)) return error.TypeError;
+            const items = vms.asArraySlice(arr_obj);
+            var result: Value = .{ .number = -1 };
+            for (items, 0..) |item, i| {
+                const ok = try vm.callFunction(fn_val, &.{item});
+                if (ok.isTruthy()) { result = .{ .number = @floatFromInt(i) }; break; }
+            }
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(result);
+        },
+        .array_all => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const fn_val = vms.vmState().stack[vms.vmState().stack_top - 1];
+            const arr_val = vms.vmState().stack[vms.vmState().stack_top - 2];
+            if (arr_val != .object) return error.TypeError;
+            const arr_obj = arr_val.object;
+            if (!vms.isArrayObject(arr_obj)) return error.TypeError;
+            const items = vms.asArraySlice(arr_obj);
+            var result = true;
+            for (items) |item| {
+                const ok = try vm.callFunction(fn_val, &.{item});
+                if (!ok.isTruthy()) { result = false; break; }
+            }
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .boolean = result });
+        },
+        .array_any => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const fn_val = vms.vmState().stack[vms.vmState().stack_top - 1];
+            const arr_val = vms.vmState().stack[vms.vmState().stack_top - 2];
+            if (arr_val != .object) return error.TypeError;
+            const arr_obj = arr_val.object;
+            if (!vms.isArrayObject(arr_obj)) return error.TypeError;
+            const items = vms.asArraySlice(arr_obj);
+            var result = false;
+            for (items) |item| {
+                const ok = try vm.callFunction(fn_val, &.{item});
+                if (ok.isTruthy()) { result = true; break; }
+            }
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .boolean = result });
+        },
+        .array_chunk => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const size_val = vms.vmState().stack[vms.vmState().stack_top - 1];
+            const arr_val = vms.vmState().stack[vms.vmState().stack_top - 2];
+            if (arr_val != .object) return error.TypeError;
+            const arr_obj = arr_val.object;
+            if (!vms.isArrayObject(arr_obj)) return error.TypeError;
+            const size = try vms.valueAsInt(size_val);
+            if (size <= 0) return error.RangeError;
+            const sz: usize = @intCast(size);
+            const items = vms.asArraySlice(arr_obj);
+            const chunk_count = if (items.len == 0) 0 else (items.len + sz - 1) / sz;
+            const out_obj = try vmgc.vmAllocObject();
+            out_obj.* = .{ .array = &[_]Value{} };
+            try vms.pushTempRoot(.{ .object = out_obj });
+            defer vms.popTempRoot();
+            if (chunk_count > 0) {
+                const out = try vmgc.vmAllocManagedSlice(Value, chunk_count);
+                for (0..chunk_count) |ci| {
+                    const from = ci * sz;
+                    const to = @min(from + sz, items.len);
+                    const chunk_obj = try vmgc.vmAllocObject();
+                    const chunk_items = try vmgc.vmAllocManagedSlice(Value, to - from);
+                    @memcpy(chunk_items, items[from..to]);
+                    chunk_obj.* = .{ .array_managed = chunk_items };
+                    out[ci] = .{ .object = chunk_obj };
+                }
+                out_obj.* = .{ .array_managed = out[0..chunk_count] };
+            }
+            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .object = out_obj });
+        },
         else => {},
     }
 }

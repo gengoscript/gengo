@@ -167,6 +167,27 @@ pub fn jsonValidNative() !Value {
     return .{ .boolean = true };
 }
 
+pub fn jsonIndentNative() !Value {
+    const top = vms.vmState().stack_top;
+    const src = try vms.asStringValue(vms.vmState().stack[top - 2]);
+    const indent_str = try vms.asStringValue(vms.vmState().stack[top - 1]);
+    const alloc = JsonAllocator.allocator();
+    const parsed = std.json.parseFromSlice(std.json.Value, alloc, src, .{}) catch return error.TypeError;
+    defer parsed.deinit();
+    var out: std.Io.Writer.Allocating = .init(alloc);
+    defer out.deinit();
+    const Ws = @TypeOf(@as(std.json.Stringify.Options, .{}).whitespace);
+    const ws: Ws = if (std.mem.eql(u8, indent_str, "\t")) .indent_tab
+        else if (std.mem.eql(u8, indent_str, " ")) .indent_1
+        else if (std.mem.eql(u8, indent_str, "   ")) .indent_3
+        else if (std.mem.eql(u8, indent_str, "        ")) .indent_8
+        else if (std.mem.eql(u8, indent_str, "    ")) .indent_4
+        else .indent_2;
+    var s = std.json.Stringify{ .writer = &out.writer, .options = .{ .whitespace = ws } };
+    try s.write(parsed.value);
+    return vmgc.makeDynString(out.written());
+}
+
 pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
     switch (@as(NativeFnId, @enumFromInt(nf.id))) {
         .json_parse => {
@@ -189,6 +210,15 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
 
             if (argc != nf.arity) return error.ArityMismatch;
             const out = try jsonValidNative();
+            _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            try vms.vmPush(out);
+        },
+        .json_indent => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const out = try jsonIndentNative();
+            _ = try vms.vmPop();
             _ = try vms.vmPop();
             _ = try vms.vmPop();
             try vms.vmPush(out);

@@ -334,6 +334,40 @@ pub fn timeAddDate(ms: f64, y_delta: i32, m_delta: i32, d_delta: i32) !Value {
     return timeBuildObj(new_ms);
 }
 
+pub fn parseDuration(s: []const u8) !f64 {
+    if (s.len == 0) return error.ParseError;
+    var total_ms: f64 = 0;
+    var i: usize = 0;
+    var negative = false;
+    if (i < s.len and s[i] == '-') { negative = true; i += 1; }
+    if (i >= s.len) return error.ParseError;
+    while (i < s.len) {
+        // parse numeric part (integer or decimal)
+        const num_start = i;
+        while (i < s.len and (s[i] >= '0' and s[i] <= '9')) : (i += 1) {}
+        if (i < s.len and s[i] == '.') {
+            i += 1;
+            while (i < s.len and (s[i] >= '0' and s[i] <= '9')) : (i += 1) {}
+        }
+        if (i == num_start) return error.ParseError;
+        const num = std.fmt.parseFloat(f64, s[num_start..i]) catch return error.ParseError;
+        // parse unit
+        const unit_start = i;
+        while (i < s.len and s[i] >= 'a' and s[i] <= 'z') : (i += 1) {}
+        if (i < s.len and i < s.len and s[i] == 's' and i == unit_start) { i += 1; }
+        const unit = s[unit_start..i];
+        const ms: f64 = if (std.mem.eql(u8, unit, "ns")) num / 1_000_000
+            else if (std.mem.eql(u8, unit, "us") or std.mem.eql(u8, unit, "µs")) num / 1_000
+            else if (std.mem.eql(u8, unit, "ms")) num
+            else if (std.mem.eql(u8, unit, "s")) num * 1_000
+            else if (std.mem.eql(u8, unit, "m")) num * 60_000
+            else if (std.mem.eql(u8, unit, "h")) num * 3_600_000
+            else return error.ParseError;
+        total_ms += ms;
+    }
+    return if (negative) -total_ms else total_ms;
+}
+
 pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
     switch (@as(NativeFnId, @enumFromInt(nf.id))) {
         .time_add_date => {
@@ -546,6 +580,14 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const ms = try timeGetMs(recv);
             _ = try vms.vmPop(); _ = try vms.vmPop();
             try vms.vmPush(.{ .number = ms - timeNowMs() });
+        },
+        .time_parse_duration => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const s = try vms.asStringValue(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            const ms = try parseDuration(s);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(.{ .number = ms });
         },
         else => {},
     }
