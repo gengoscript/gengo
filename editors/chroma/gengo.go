@@ -37,7 +37,7 @@ var Gengo = chroma.MustNewLexer(
 				{`^\\\\`, chroma.StringOther, chroma.Push("multiline")},
 
 				// Rune literals
-				{`` `[^`]` `` `, chroma.StringChar, nil},
+				{"`[^`]`", chroma.StringChar, nil},
 
 				// Whitespace
 				{`\s+`, chroma.TextWhitespace, nil},

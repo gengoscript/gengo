@@ -37,8 +37,7 @@ function gengo(hljs) {
 
   var RUNE = {
     className: 'string',
-    begin: /`/,
-    end: /`/,
+    match: /`[^`]`/,
   };
 
   var NUMBER = {

@@ -18,7 +18,6 @@ syn match gengoOperator "&\||\|\^\|~\|<<\|>>"
 syn match gengoOperator "=\|:=\|+=\|-=\|*=\|/=\|%="
 syn match gengoOperator "&=\||=\|^=\|<<=\|>>="
 syn match gengoOperator "\.\|\.\.\|\.\.\.\|?"
-syn match gengoOperator "::"
 
 syn match gengoDelimiter "[(),{}\[\];:]"
 
@@ -31,7 +30,7 @@ syn match gengoMultiline "^\\\\.*$"
 
 syn region gengoRune matchgroup=gengoRuneDelim start='`' end='`'
 
-syn match gengoNumber '\<-\=\d\(_\d\)*\.\=\d*\d\(_\d\)*\=\([eE][+-]\=\d\+\)\='
+syn match gengoNumber '\<-\=\d[0-9_]*\(\.[0-9][0-9_]*\)\=\([eE][+-]\=\d\+\)\>'
 
 syn match gengoComment "//.*$"
 

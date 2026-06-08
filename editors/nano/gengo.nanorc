@@ -1,25 +1,25 @@
 syntax "gengo" "\.gengo$"
 
 ## Keywords
-icolor brightyellow "(\<(assert|break|case|const|continue|cycle|default|defer|else|enum|false|for|func|if|import|in|interface|null|predicate|pub|range|return|struct|subtype|switch|test|trap|true|type|var|variant)\>)"
+color brightyellow "(\<(assert|break|case|const|continue|cycle|default|defer|else|enum|false|for|func|if|import|in|interface|null|predicate|pub|range|return|struct|subtype|switch|test|trap|true|type|var|variant)\>)"
 
 ## Built-in types
-icolor brightcyan "(\<(int|float|bool|string|any)\>)"
+color brightcyan "(\<(int|float|bool|string|any)\>)"
 
 ## Numbers (decimal integer, float, scientific)
-icolor brightmagenta "\<-\?[0-9][0-9_]*\(\.[0-9][0-9_]*\)\?\([eE][+-]\?[0-9]\+\)\?\>"
+color brightmagenta "\<-\?[0-9][0-9_]*\(\.[0-9][0-9_]*\)\?\([eE][+-]\?[0-9]\+\)\?\>"
 
 ## Rune literals
-icolor brightgreen "`[^`]`"
+color brightgreen "`[^`]`"
 
 ## Double-quoted strings
-icolor brightgreen ""[^"]*""
+color brightgreen ""[^"]*""
 
 ## Single-quoted raw strings
-icolor brightgreen "'[^']*'"
+color brightgreen "'[^']*'"
 
 ## Multiline raw string lines
-icolor brightgreen "^\\\\"
+color brightgreen "^\\\\"
 
 ## Comments
-icolor brightblue "//.*$"
+color brightblue "//.*$"
