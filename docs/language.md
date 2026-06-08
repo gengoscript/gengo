@@ -501,7 +501,7 @@ All times are opaque `Time` objects. Internal representation is milliseconds sin
 - `std.time.parse(s, fmt)` — parse string with format; raises `ParseError` on mismatch
 - `std.time.since(t)` — milliseconds elapsed since `t` (equivalent to `std.time.now().sub(t)`)
 - `std.time.until(t)` — milliseconds until `t`
-- `std.time.parse_duration(s)` — parse a duration string like `"1h30m"`, `"300ms"`, `"2.5s"` into milliseconds; supports `ns`, `us`/`µs`, `ms`, `s`, `m`, `h`
+- `std.time.parse_duration(s)` — parse a duration string into milliseconds; matches Go's `time.ParseDuration` — optional leading `+`/`-`, each component is `<number><unit>`, fractions allowed (`.5s`, `1.5h`), bare `"0"` valid; units: `ns`, `us`/`µs`/`μs`, `ms`, `s`, `m`, `h`
 
 **Methods on Time values**
 - `t.unix()` — Unix timestamp in seconds
