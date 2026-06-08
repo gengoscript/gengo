@@ -42,7 +42,7 @@ pub const State = struct {
             self.obj_live = &g_wasm_backing.obj_live;
             self.obj_next_free = &g_wasm_backing.obj_next_free;
         } else {
-            self.heap = try std.heap.page_allocator.alignedAlloc(u8, 16, heap_size);
+            self.heap = try std.heap.page_allocator.alignedAlloc(u8, .@"16", heap_size);
             self.obj_pool = try std.heap.page_allocator.alloc(Object, max_objects);
             self.obj_marked = try std.heap.page_allocator.alloc(bool, max_objects);
             self.obj_live = try std.heap.page_allocator.alloc(bool, max_objects);
