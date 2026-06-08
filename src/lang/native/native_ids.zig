@@ -163,7 +163,6 @@ pub const NativeFnId = enum(u8) {
     time_parse_duration = 183,
     time_iso_week = 184,
 
-    cap_net_get = 160,
     cap_net_dial = 163,
     cap_net_read = 164,
     cap_net_write = 165,
@@ -176,6 +175,10 @@ pub const NativeFnId = enum(u8) {
 
     cap_fs_read = 161,
     cap_fs_exists = 162,
+
+    cap_http_get = 185,
+    cap_http_post = 186,
+    cap_http_fetch = 187,
 };
 
 pub const MaxNativeArgs = 255;

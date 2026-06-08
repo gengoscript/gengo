@@ -31,38 +31,6 @@ fn ioContext() std.Io {
 
 pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
     switch (@as(NativeFnId, @enumFromInt(nf.id))) {
-        .cap_net_get => {
-            if (argc != 1) return error.ArityMismatch;
-            const arg0 = try vms.vmPop();
-            const url = switch (arg0) {
-                .string => |s| s,
-                else => return error.TypeError,
-            };
-            _ = try vms.vmPop();
-
-            if (comptime builtin.os.tag == .wasi) return error.CapabilityNotAvailable;
-
-            const io_ctx = ioContext();
-            var client = std.http.Client{
-                .allocator = std.heap.page_allocator,
-                .io = io_ctx,
-            };
-            defer client.deinit();
-
-            var writer: std.Io.Writer.Allocating = .init(std.heap.page_allocator);
-            defer writer.deinit();
-
-            const res = client.fetch(.{
-                .location = .{ .url = url },
-                .response_writer = &writer.writer,
-            }) catch return error.CapabilityError;
-
-            if (res.status.class() != .success) return error.CapabilityError;
-
-            const body = writer.written();
-            const out = try vmgc.makeDynString(body);
-            try vms.vmPush(out);
-        },
         .cap_net_dial => {
             if (argc != 2) return error.ArityMismatch;
             const arg1 = try vms.vmPop();

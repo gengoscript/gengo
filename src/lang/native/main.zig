@@ -39,6 +39,7 @@ const array_mod = @import("array.zig");
 const sort_mod = @import("sort.zig");
 const cap_net_mod = @import("cap_net.zig");
 const cap_fs_mod = @import("cap_fs.zig");
+const cap_http_mod = @import("cap_http.zig");
 
 const TemplateTypeQualifiedName = "@std.template.obj";
 const TimeTypeQualifiedName = "@std.time.obj";
@@ -545,6 +546,10 @@ pub fn installCapabilityModules(cap_modules: []const module_compile.CapModuleDes
 
         try globals.def(global_name, .{ .object = inst_obj });
 
+        if (std.mem.eql(u8, cm.name, "http") and !globals.has("@cap_type:http.Response")) {
+            try cap_http_mod.registerResponseType();
+        }
+
         if (std.mem.eql(u8, cm.name, "net") and !globals.has("@cap_type:net.Conn")) {
             const conn_qual_name = "@cap_type:net.Conn";
 
@@ -660,11 +665,11 @@ pub fn callNative(nf: NativeFuncObj, argc: u8) !void {
         .array_filter, .array_map, .array_reduce, .array_slice, .array_zip, .array_flat,
         .array_find, .array_find_index, .array_all, .array_any, .array_chunk => return array_mod.dispatch(nf, argc),
         .sort_asc, .sort_desc, .sort_by => return sort_mod.dispatch(nf, argc),
-        .cap_net_get => return cap_net_mod.dispatch(nf, argc),
         .cap_net_dial, .cap_net_read, .cap_net_write, .cap_net_close,
         .cap_net_local_addr, .cap_net_remote_addr,
         .cap_net_set_deadline, .cap_net_set_read_deadline, .cap_net_set_write_deadline => return cap_net_mod.dispatch(nf, argc),
         .cap_fs_read, .cap_fs_exists => return cap_fs_mod.dispatch(nf, argc),
+        .cap_http_get, .cap_http_post, .cap_http_fetch => return cap_http_mod.dispatch(nf, argc),
     }
 }
 

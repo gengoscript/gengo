@@ -6,6 +6,7 @@ const Object = @import("lang/value.zig").Object;
 const vms = @import("lang/vm_state.zig");
 const vmgc = @import("lang/vm_gc.zig");
 const net_state = @import("lang/native/net_state.zig");
+const http_state = @import("lang/native/http_state.zig");
 
 fn writeAll(fd: std.os.wasi.fd_t, s: []const u8) void {
     var off: usize = 0;
@@ -549,6 +550,150 @@ fn testNetCapabilityHandlers() void {
     out("  net capability handlers: OK\n");
 }
 
+const MockHttpState = struct {
+    get_called: bool = false,
+    post_called: bool = false,
+    fetch_called: bool = false,
+    last_method: [8]u8 = undefined,
+    last_method_len: usize = 0,
+    last_url: [128]u8 = undefined,
+    last_url_len: usize = 0,
+    last_body: [256]u8 = undefined,
+    last_body_len: usize = 0,
+    fail_next: bool = false,
+};
+
+fn mockHttpFetch(req: *const http_state.GengoHttpRequest, resp: *http_state.GengoHttpResponse, userdata: ?*anyopaque) callconv(.c) c_int {
+    const s: *MockHttpState = @ptrCast(@alignCast(userdata));
+    const method = std.mem.span(req.method);
+    const url = std.mem.span(req.url);
+
+    s.last_method_len = @min(method.len, s.last_method.len);
+    @memcpy(s.last_method[0..s.last_method_len], method[0..s.last_method_len]);
+    s.last_url_len = @min(url.len, s.last_url.len);
+    @memcpy(s.last_url[0..s.last_url_len], url[0..s.last_url_len]);
+
+    if (req.body_len > 0) {
+        const bl = @min(@as(usize, @intCast(req.body_len)), s.last_body.len);
+        @memcpy(s.last_body[0..bl], req.body[0..bl]);
+        s.last_body_len = bl;
+    } else {
+        s.last_body_len = 0;
+    }
+
+    if (std.mem.eql(u8, method, "GET")) {
+        s.get_called = true;
+    } else if (std.mem.eql(u8, method, "POST")) {
+        s.post_called = true;
+    } else {
+        s.fetch_called = true;
+    }
+
+    if (s.fail_next) {
+        s.fail_next = false;
+        return -1;
+    }
+
+    const test_body = "{\"status\":\"ok\"}";
+    resp.status = if (std.mem.containsAtLeast(u8, url, 1, "404")) 404 else 200;
+    resp.body = test_body.ptr;
+    resp.body_len = @intCast(test_body.len);
+    resp.headers = .{ .keys = null, .values = null, .count = 0 };
+    return 0;
+}
+
+fn testHttpCapability() void {
+    var state: MockHttpState = .{};
+    http_state.setHttpHandler(&mockHttpFetch, @ptrCast(&state));
+
+    const rt = makeRt(.{ .allow_io = true, .capabilities = &.{"http"} });
+
+    const test_src =
+        \\std := import("std")
+        \\http := import("@cap:http")
+        \\func testGet() {
+        \\    resp := http.get("https://example.com/data")
+        \\    std.io.println(resp.status)
+        \\    std.io.println(resp.ok)
+        \\    std.io.println(resp.body)
+        \\}
+        \\func testPost() {
+        \\    resp := http.post("https://example.com/api", "{\"key\":\"value\"}")
+        \\    std.io.println(resp.status)
+        \\}
+        \\func testFetch() {
+        \\    resp := http.fetch("https://example.com/api", {
+        \\        "method": "PUT",
+        \\        "body": "put-body",
+        \\        "timeout_ms": 5000,
+        \\    })
+        \\    std.io.println(resp.status)
+        \\}
+        \\func testNotFound() {
+        \\    resp := http.get("https://example.com/404")
+        \\    std.io.println(resp.status)
+        \\    std.io.println(resp.ok)
+        \\}
+        \\func testFailure() {
+        \\    resp := http.get("https://fail.example.com/")
+        \\    std.io.println(resp.status)
+        \\}
+    ;
+
+    const res = rt.run(test_src);
+    switch (res) {
+        .ok => {},
+        .compile_error => |e| { writeAll(2, "engine FAIL: http handler compile: "); writeAll(2, e.msg); writeAll(2, "\n"); std.os.wasi.proc_exit(1); },
+        .runtime_error => |e| { writeAll(2, "engine FAIL: http handler runtime: "); writeAll(2, e.msg); writeAll(2, "\n"); std.os.wasi.proc_exit(1); },
+    }
+
+    const get_res = rt.call("testGet", &.{});
+    switch (get_res) {
+        .ok => {
+            if (!state.get_called) fail("engine FAIL: http handler get not called\n");
+            if (!std.mem.eql(u8, state.last_method[0..state.last_method_len], "GET")) fail("engine FAIL: expected GET method\n");
+            if (!std.mem.eql(u8, state.last_url[0..state.last_url_len], "https://example.com/data")) fail("engine FAIL: unexpected GET url\n");
+        },
+        .runtime_error => fail("engine FAIL: http get unexpected error\n"),
+    }
+
+    const post_res = rt.call("testPost", &.{});
+    switch (post_res) {
+        .ok => {
+            if (!state.post_called) fail("engine FAIL: http handler post not called\n");
+            if (!std.mem.eql(u8, state.last_method[0..state.last_method_len], "POST")) fail("engine FAIL: expected POST method\n");
+            if (!std.mem.eql(u8, state.last_body[0..state.last_body_len], "{\"key\":\"value\"}")) fail("engine FAIL: unexpected POST body\n");
+        },
+        .runtime_error => fail("engine FAIL: http post unexpected error\n"),
+    }
+
+    const fetch_res = rt.call("testFetch", &.{});
+    switch (fetch_res) {
+        .ok => {
+            if (!state.fetch_called) fail("engine FAIL: http handler fetch not called\n");
+            if (!std.mem.eql(u8, state.last_method[0..state.last_method_len], "PUT")) fail("engine FAIL: expected PUT method\n");
+            if (!std.mem.eql(u8, state.last_body[0..state.last_body_len], "put-body")) fail("engine FAIL: unexpected fetch body\n");
+        },
+        .runtime_error => fail("engine FAIL: http fetch unexpected error\n"),
+    }
+
+    const nf_res = rt.call("testNotFound", &.{});
+    switch (nf_res) {
+        .ok => {},
+        .runtime_error => fail("engine FAIL: http 404 should not be an error\n"),
+    }
+
+    state.fail_next = true;
+    const fail_res = rt.call("testFailure", &.{});
+    switch (fail_res) {
+        .runtime_error => {},
+        else => fail("engine FAIL: expected runtime error for network failure\n"),
+    }
+
+    http_state.resetHandler();
+    out("  http capability: OK\n");
+}
+
 export fn _start() void {
     out("engine runner:\n");
     testInitDestroy();
@@ -566,6 +711,7 @@ export fn _start() void {
     testHostModuleArrayArgs();
     testNetCapability();
     testNetCapabilityHandlers();
+    testHttpCapability();
     out("engine-api OK\n");
     std.os.wasi.proc_exit(0);
 }

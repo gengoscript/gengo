@@ -169,8 +169,8 @@ fn runConformance(alloc: std.mem.Allocator, wasmtime: []const u8, wasm_path: []c
         }
     }
 
-    // Capability tests (with --cap net --cap fs)
-    const cap_flags = "--cap net --cap fs";
+    // Capability tests (with --cap net --cap fs --cap http)
+    const cap_flags = "--cap net --cap fs --cap http";
     runCapTests(alloc, wasmtime, wasm_path, "examples/spec/cap", cap_flags, &errors, &pass_count, &fail_count);
     runCapTests(alloc, wasmtime, wasm_path, "examples/spec/cap/fail", cap_flags, &errors, &pass_count, &fail_count);
 

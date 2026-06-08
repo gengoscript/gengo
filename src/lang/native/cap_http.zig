@@ -1,0 +1,201 @@
+const std = @import("std");
+const builtin = @import("builtin");
+const heap = @import("../../runtime/heap.zig");
+const vms = @import("../vm_state.zig");
+const vmgc = @import("../vm_gc.zig");
+const Value = @import("../value.zig").Value;
+const NativeFnId = @import("native_ids.zig").NativeFnId;
+const NativeFuncObj = @import("../value.zig").NativeFuncObj;
+const http_state = @import("http_state.zig");
+const globals = @import("../globals.zig");
+const MapEntry = @import("../value.zig").MapEntry;
+const Object = @import("../value.zig").Object;
+const FieldTypeAlt = @import("../value.zig").FieldTypeAlt;
+const FieldTypeSpec = @import("../value.zig").FieldTypeSpec;
+const StructFieldSpec = @import("../value.zig").StructFieldSpec;
+const StructTypeObj = @import("../value.zig").StructTypeObj;
+
+const ResponseTypeQualifiedName = "@cap_type:http.Response";
+
+fn vmsAsString(val: Value) ![]const u8 {
+    return switch (val) {
+        .string => |s| s,
+        else => error.TypeError,
+    };
+}
+
+fn buildResponseStruct(status: i32, body: []const u8, hdr_map: std.StringHashMap([]const u8), ok: bool) !Value {
+    const resp_type_val = globals.get(ResponseTypeQualifiedName) orelse return error.CapabilityError;
+    const resp_type_obj = switch (resp_type_val) {
+        .object => |o| o,
+        else => return error.CapabilityError,
+    };
+
+    const inst_fields = try vmgc.vmAllocManagedSlice(MapEntry, 4);
+    const inst_obj = try vmgc.vmAllocObject();
+    try vms.pushTempRoot(.{ .object = inst_obj });
+    defer vms.popTempRoot();
+    inst_obj.* = .{ .struct_instance = .{ .typ = resp_type_obj, .fields = inst_fields } };
+
+    // body
+    const body_val = try vmgc.makeDynString(body);
+
+    // headers map
+    const hdr_count = hdr_map.count();
+    const hdr_entries = try vmgc.vmAllocManagedSlice(MapEntry, hdr_count);
+    const hdr_obj = try vmgc.vmAllocObject();
+    try vms.pushTempRoot(.{ .object = hdr_obj });
+    defer vms.popTempRoot();
+    hdr_obj.* = .{ .map = &[_]MapEntry{} };
+    {
+        var it = hdr_map.iterator();
+        var i: usize = 0;
+        while (it.next()) |entry| : (i += 1) {
+            const key_val = try vmgc.makeDynString(entry.key_ptr.*);
+            const val_val = try vmgc.makeDynString(entry.value_ptr.*);
+            hdr_entries[i] = .{ .key = key_val, .value = val_val };
+        }
+    }
+    hdr_obj.* = .{ .map_managed = hdr_entries };
+
+    inst_fields[0] = .{ .key = .{ .string = "status" }, .value = .{ .number = @floatFromInt(status) } };
+    inst_fields[1] = .{ .key = .{ .string = "body" }, .value = body_val };
+    inst_fields[2] = .{ .key = .{ .string = "headers" }, .value = .{ .object = hdr_obj } };
+    inst_fields[3] = .{ .key = .{ .string = "ok" }, .value = .{ .boolean = ok } };
+
+    return .{ .object = inst_obj };
+}
+
+pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
+    switch (@as(NativeFnId, @enumFromInt(nf.id))) {
+        .cap_http_get => {
+            if (argc != 1) return error.ArityMismatch;
+            const arg0 = try vms.vmPop();
+            const url = try vmsAsString(arg0);
+            _ = try vms.vmPop();
+
+            var result = http_state.httpFetch("GET", url, null, null, 0) catch {
+                return error.CapabilityError;
+            };
+            defer result.headers.deinit();
+
+            const resp_val = try buildResponseStruct(result.status, result.body, result.headers, result.ok);
+            try vms.vmPush(resp_val);
+        },
+        .cap_http_post => {
+            if (argc != 2) return error.ArityMismatch;
+            const arg1 = try vms.vmPop();
+            const arg0 = try vms.vmPop();
+            const url = try vmsAsString(arg0);
+            const body = try vmsAsString(arg1);
+            _ = try vms.vmPop();
+
+            var result = http_state.httpFetch("POST", url, body, null, 0) catch {
+                return error.CapabilityError;
+            };
+            defer result.headers.deinit();
+
+            const resp_val = try buildResponseStruct(result.status, result.body, result.headers, result.ok);
+            try vms.vmPush(resp_val);
+        },
+        .cap_http_fetch => {
+            if (argc != 2) return error.ArityMismatch;
+            const arg1 = try vms.vmPop();
+            const arg0 = try vms.vmPop();
+            const url = try vmsAsString(arg0);
+            const opts = switch (arg1) {
+                .object => |o| o,
+                else => return error.TypeError,
+            };
+            _ = try vms.vmPop();
+
+            // Extract options from the map
+            var method: []const u8 = "GET";
+            var body: ?[]const u8 = null;
+            var timeout_ms: i64 = 0;
+            var req_headers = std.StringHashMap([]const u8).init(std.heap.page_allocator);
+            defer req_headers.deinit();
+
+            switch (opts.*) {
+                .map, .map_managed, .map_hashed => {
+                    const entries = vms.asMapSlice(opts);
+                    for (entries) |entry| {
+                        const key = switch (entry.key) {
+                        .string => |s| s,
+                            else => continue,
+                        };
+                        if (std.mem.eql(u8, key, "method")) {
+                            method = switch (entry.value) {
+                        .string => |s| s,
+                                else => return error.TypeError,
+                            };
+                        } else if (std.mem.eql(u8, key, "body")) {
+                            const b = switch (entry.value) {
+                        .string => |s| s,
+                                else => return error.TypeError,
+                            };
+                            body = b;
+                        } else if (std.mem.eql(u8, key, "timeout_ms")) {
+                            timeout_ms = switch (entry.value) {
+                                .number => |n| @as(i64, @intFromFloat(n)),
+                                else => return error.TypeError,
+                            };
+                        } else if (std.mem.eql(u8, key, "headers")) {
+                            const hdr_obj = switch (entry.value) {
+                                .object => |o| o,
+                                else => return error.TypeError,
+                            };
+                            const hdr_entries = vms.asMapSlice(hdr_obj);
+                            for (hdr_entries) |he| {
+                                const hk = switch (he.key) {
+                                    .string => |s| s,
+                                    else => continue,
+                                };
+                                const hv = switch (he.value) {
+                                    .string => |s| s,
+                                    else => continue,
+                                };
+                                try req_headers.put(hk, hv);
+                            }
+                        }
+                    }
+                },
+                else => return error.TypeError,
+            }
+
+            var result = http_state.httpFetch(method, url, body, req_headers, timeout_ms) catch {
+                return error.CapabilityError;
+            };
+            defer result.headers.deinit();
+
+            const resp_val = try buildResponseStruct(result.status, result.body, result.headers, result.ok);
+            try vms.vmPush(resp_val);
+        },
+        else => unreachable,
+    }
+}
+
+pub fn registerResponseType() !void {
+    if (globals.has(ResponseTypeQualifiedName)) return;
+
+    const any_alts = heap.bump(FieldTypeAlt, 1) orelse return error.OutOfMemory;
+    any_alts[0] = .{ .typ = .any };
+    const any_spec: FieldTypeSpec = .{ .alts = any_alts[0..1] };
+
+    const field_specs = (heap.bump(StructFieldSpec, 4) orelse return error.OutOfMemory)[0..4];
+    field_specs[0] = .{ .name = "status", .typ = any_spec, .is_const = true };
+    field_specs[1] = .{ .name = "body", .typ = any_spec, .is_const = true };
+    field_specs[2] = .{ .name = "headers", .typ = any_spec, .is_const = true };
+    field_specs[3] = .{ .name = "ok", .typ = any_spec, .is_const = true };
+
+    const typ_obj = try vmgc.vmAllocObject();
+    try vms.pushTempRoot(.{ .object = typ_obj });
+    defer vms.popTempRoot();
+    typ_obj.* = .{ .struct_type = StructTypeObj{
+        .name = "Response",
+        .qualified_name = ResponseTypeQualifiedName,
+        .fields = field_specs,
+    } };
+
+    try globals.def(ResponseTypeQualifiedName, .{ .object = typ_obj });
+}

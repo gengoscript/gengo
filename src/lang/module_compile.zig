@@ -94,7 +94,16 @@ pub const cap_fs_desc: CapModuleDesc = .{
     },
 };
 
-pub const AllCapabilities = &.{ cap_net_desc, cap_fs_desc };
+pub const cap_http_desc: CapModuleDesc = .{
+    .name = "http",
+    .functions = &.{
+        .{ .name = "get", .arity = 1, .native_id = 185 },
+        .{ .name = "post", .arity = 2, .native_id = 186 },
+        .{ .name = "fetch", .arity = 2, .native_id = 187 },
+    },
+};
+
+pub const AllCapabilities = &.{ cap_net_desc, cap_fs_desc, cap_http_desc };
 
 pub const MaxCapabilities = 16;
 

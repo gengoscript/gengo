@@ -9,6 +9,7 @@ const vm = @import("lang/vm.zig");
 const vms = @import("lang/vm_state.zig");
 const vmgc = @import("lang/vm_gc.zig");
 const net_state = @import("lang/native/net_state.zig");
+const http_state = @import("lang/native/http_state.zig");
 const Value = @import("lang/value.zig").Value;
 const Object = @import("lang/value.zig").Object;
 const MapEntry = @import("lang/value.zig").MapEntry;
@@ -493,5 +494,12 @@ export fn engine_set_net_handlers(handle: i32, handlers: ?*const net_state.Gengo
     _ = getEngine(handle) orelse return;
     if (handlers) |h| {
         net_state.setNetHandlers(h.*, userdata);
+    }
+}
+
+export fn engine_set_http_handler(handle: i32, callback: ?http_state.GengoHttpFetchFn, userdata: ?*anyopaque) void {
+    _ = getEngine(handle) orelse return;
+    if (callback) |cb| {
+        http_state.setHttpHandler(cb, userdata);
     }
 }
