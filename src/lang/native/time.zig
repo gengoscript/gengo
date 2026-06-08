@@ -334,6 +334,53 @@ pub fn timeAddDate(ms: f64, y_delta: i32, m_delta: i32, d_delta: i32) !Value {
     return timeBuildObj(new_ms);
 }
 
+pub fn timeIsoWeek(ms: f64) !Value {
+    const p = timeEpochMsToParts(ms);
+    // ISO weekday: Mon=1 .. Sun=7 (p.weekday is Sun=0 .. Sat=6)
+    const iso_dow: i64 = if (p.weekday == 0) 7 else @as(i64, p.weekday);
+    // ordinal day of year (1-based)
+    const doy: i64 = blk: {
+        const month_starts = [_]i32{ 0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334 };
+        var d: i64 = @as(i64, month_starts[p.month - 1]) + @as(i64, p.day);
+        if (p.month > 2 and isLeap(p.year)) d += 1;
+        break :blk d;
+    };
+    // Thursday of this ISO week: shift so Thursday (iso_dow=4) is the anchor
+    const thursday_doy = doy + (4 - iso_dow);
+    var iso_year: i32 = p.year;
+    var week_thursday_doy = thursday_doy;
+    if (thursday_doy < 1) {
+        // Thursday is in previous year
+        iso_year -= 1;
+        const prev_year_days: i64 = if (isLeap(iso_year)) 366 else 365;
+        week_thursday_doy = thursday_doy + prev_year_days;
+    } else {
+        const this_year_days: i64 = if (isLeap(p.year)) 366 else 365;
+        if (thursday_doy > this_year_days) {
+            iso_year += 1;
+            week_thursday_doy = thursday_doy - this_year_days;
+        }
+    }
+    // ISO week number: week containing Jan 4 is week 1; Jan 4 is always in week 1
+    // Jan 1 of iso_year day-of-week → find offset of first Thursday
+    const jan1_epoch_secs = timeCalendarToEpochSecs(iso_year, 1, 1, 0, 0, 0);
+    const jan1_dow_raw: i64 = @intCast(@mod(@divFloor(jan1_epoch_secs, 86400) + 4, 7)); // 0=Sun..6=Sat
+    const jan1_iso_dow: i64 = if (jan1_dow_raw == 0) 7 else jan1_dow_raw;
+    // doy of first Thursday of iso_year
+    const first_thursday_doy: i64 = 1 + @mod(4 - jan1_iso_dow, 7);
+    const week: i64 = @divFloor(week_thursday_doy - first_thursday_doy, 7) + 1;
+
+    const entries = try vmgc.vmAllocManagedSlice(MapEntry, 2);
+    const obj = try vmgc.vmAllocObject();
+    obj.* = .{ .map = &[_]MapEntry{} };
+    try vms.pushTempRoot(.{ .object = obj });
+    defer vms.popTempRoot();
+    entries[0] = .{ .key = .{ .string = "year" }, .value = .{ .number = @floatFromInt(iso_year) } };
+    entries[1] = .{ .key = .{ .string = "week" }, .value = .{ .number = @floatFromInt(week) } };
+    obj.* = .{ .map_managed = entries[0..2] };
+    return .{ .object = obj };
+}
+
 pub fn parseDuration(s: []const u8) !f64 {
     if (s.len == 0) return error.ParseError;
     var i: usize = 0;
@@ -630,6 +677,15 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const ms = try parseDuration(s);
             _ = try vms.vmPop(); _ = try vms.vmPop();
             try vms.vmPush(.{ .number = ms });
+        },
+        .time_iso_week => {
+
+            if (argc != nf.arity) return error.ArityMismatch;
+            const recv = vms.vmState().stack[vms.vmState().stack_top - 1];
+            const ms = try timeGetMs(recv);
+            const out = try timeIsoWeek(ms);
+            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPush(out);
         },
         else => {},
     }

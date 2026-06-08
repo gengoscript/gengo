@@ -401,6 +401,7 @@ pub fn installStdGlobal() !void {
             .{ .name = "since",     .id = .time_since,     .arity = 1 },
             .{ .name = "until",     .id = .time_until,     .arity = 1 },
             .{ .name = "add_date",  .id = .time_add_date,  .arity = 4 },
+            .{ .name = "iso_week",  .id = .time_iso_week,  .arity = 1 },
         };
         for (time_methods) |m| {
             const needed = TimeTypeQualifiedName.len + 1 + m.name.len;
@@ -653,7 +654,7 @@ pub fn callNative(nf: NativeFuncObj, argc: u8) !void {
         .time_now, .time_from_unix, .time_from_unix_ms, .time_parse, .time_unix, .time_unix_ms,
         .time_parts, .time_format, .time_add_ms, .time_add_s, .time_add_m, .time_add_h,
         .time_sub, .time_before, .time_after, .time_equal, .time_is_zero, .time_since,
-        .time_until, .time_add_date, .time_parse_duration => return time_mod.dispatch(nf, argc),
+        .time_until, .time_add_date, .time_parse_duration, .time_iso_week => return time_mod.dispatch(nf, argc),
         .re_match, .re_find, .re_find_all, .re_replace, .re_split, .re_compile,
         .re_obj_match, .re_obj_find, .re_obj_find_all, .re_obj_replace, .re_obj_split => return regexp_mod.dispatch(nf, argc),
         .array_filter, .array_map, .array_reduce, .array_slice, .array_zip, .array_flat,

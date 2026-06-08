@@ -1,0 +1,29 @@
+std := import("std")
+t := std.time
+s := std.conv.to_string
+
+check := func(label string, ms float) {
+  r := t.from_unix_ms(ms).iso_week()
+  std.io.println(label + ": year=" + s(r.year) + " week=" + s(r.week))
+}
+
+// ordinary mid-year date
+check("2015-06-15", t.parse("2015-06-15", "%Y-%m-%d").unix_ms())
+
+// week 1 of the new year
+check("2015-01-01", t.parse("2015-01-01", "%Y-%m-%d").unix_ms())
+
+// last day of year belongs to next ISO year's week 1
+check("2014-12-31", t.parse("2014-12-31", "%Y-%m-%d").unix_ms())
+
+// first days of 2016 belong to ISO 2015 week 53
+check("2016-01-03", t.parse("2016-01-03", "%Y-%m-%d").unix_ms())
+
+// 2020-12-31 is ISO 2020 week 53
+check("2020-12-31", t.parse("2020-12-31", "%Y-%m-%d").unix_ms())
+
+// 2021-01-01 still in ISO 2020 week 53
+check("2021-01-01", t.parse("2021-01-01", "%Y-%m-%d").unix_ms())
+
+// 2021-01-04 is ISO 2021 week 1
+check("2021-01-04", t.parse("2021-01-04", "%Y-%m-%d").unix_ms())
