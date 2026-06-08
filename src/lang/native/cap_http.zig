@@ -37,26 +37,33 @@ fn buildResponseStruct(status: i32, body: []const u8, hdr_map: std.StringHashMap
     defer vms.popTempRoot();
     inst_obj.* = .{ .struct_instance = .{ .typ = resp_type_obj, .fields = inst_fields } };
 
-    // body
+    // body — root it immediately so it survives header allocations below
     const body_val = try vmgc.makeDynString(body);
+    try vms.pushTempRoot(body_val);
+    defer vms.popTempRoot();
 
-    // headers map
+    // headers map — pre-init entries to .null so GC can safely trace mid-loop
     const hdr_count = hdr_map.count();
     const hdr_entries = try vmgc.vmAllocManagedSlice(MapEntry, hdr_count);
+    for (hdr_entries) |*e| e.* = .{ .key = .null, .value = .null };
     const hdr_obj = try vmgc.vmAllocObject();
+    hdr_obj.* = .{ .map = &[_]MapEntry{} };
     try vms.pushTempRoot(.{ .object = hdr_obj });
     defer vms.popTempRoot();
-    hdr_obj.* = .{ .map = &[_]MapEntry{} };
+    // Assign map_managed before the loop so GC traces completed entries each iteration
+    hdr_obj.* = .{ .map_managed = hdr_entries };
     {
         var it = hdr_map.iterator();
         var i: usize = 0;
         while (it.next()) |entry| : (i += 1) {
             const key_val = try vmgc.makeDynString(entry.key_ptr.*);
+            // Root key_val across the val allocation so GC can't collect it
+            try vms.pushTempRoot(key_val);
+            defer vms.popTempRoot();
             const val_val = try vmgc.makeDynString(entry.value_ptr.*);
             hdr_entries[i] = .{ .key = key_val, .value = val_val };
         }
     }
-    hdr_obj.* = .{ .map_managed = hdr_entries };
 
     inst_fields[0] = .{ .key = .{ .string = "status" }, .value = .{ .number = @floatFromInt(status) } };
     inst_fields[1] = .{ .key = .{ .string = "body" }, .value = body_val };
