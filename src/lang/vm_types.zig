@@ -256,7 +256,12 @@ pub fn constructNamedType(typ_obj: *Object, arg: Value) !Value {
             const scale = nt.scale;
             const factor = std.math.pow(f64, 10.0, @floatFromInt(scale));
             const scaled: i64 = switch (arg) {
-                .number => |n| @intFromFloat(@round(n * factor)),
+                .number => |n| blk: {
+                    const raw = @round(n * factor);
+                    if (!std.math.isFinite(raw)) return error.TypeError;
+                    if (raw < -std.math.pow(f64, 2.0, 63.0) or raw >= std.math.pow(f64, 2.0, 63.0)) return error.TypeError;
+                    break :blk @intFromFloat(raw);
+                },
                 .decimal => |d| d,
                 else => return error.TypeError,
             };
@@ -338,6 +343,7 @@ pub fn applyNamedTypeFn(typ_obj: *Object, kind: @import("value.zig").NamedTypeFn
     const n = try vms.valueAsNumber(inner);
     const delta: f64 = if (kind == .succ) 1.0 else -1.0;
     const result = n + delta;
+    if (result == n) { vms.setRuntimeErr("cannot increment non-finite or very large value", .{}); return error.RangeError; }
     if (nt.is_cycle) {
         return makeNamedValue(typ_obj, .{ .number = wrapCycleValue(nt.min, nt.max, result) });
     } else {
