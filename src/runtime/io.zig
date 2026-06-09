@@ -134,8 +134,12 @@ pub fn writeF64Prec(v: f64, prec: usize) void {
     var pi: usize = 0;
     while (pi < prec) : (pi += 1) scale *= 10.0;
     const scaled = @round(n * scale);
-    const int_part: u64 = @intFromFloat(@trunc(scaled / scale));
-    const frac_raw: u64 = @intFromFloat(@mod(scaled, scale));
+    const scaled_div = @trunc(scaled / scale);
+    if (scaled_div < 0 or scaled_div >= std.math.pow(f64, 2.0, 64.0)) { write("?"); return; }
+    const int_part: u64 = @intFromFloat(scaled_div);
+    const frac_mod = @mod(scaled, scale);
+    if (frac_mod < 0 or frac_mod >= std.math.pow(f64, 2.0, 64.0)) { write("?"); return; }
+    const frac_raw: u64 = @intFromFloat(frac_mod);
     writeUint(int_part);
     if (prec == 0) return;
     write(".");
@@ -164,14 +168,15 @@ pub fn writeF64(v: f64) void {
         write("-");
         n = -n;
     }
-    if (n < 1.8446744073709552e19) {
-        const tr = @trunc(n);
-        if (tr == n) {
-            writeUint(@intFromFloat(tr));
-            return;
-        }
-    }
     const ip = @trunc(n);
+    if (ip < 0 or ip >= std.math.pow(f64, 2.0, 64.0)) {
+        write("?");
+        return;
+    }
+    if (ip == n) {
+        writeUint(@intFromFloat(ip));
+        return;
+    }
     writeUint(@intFromFloat(ip));
     write(".");
     var frac = n - ip;
