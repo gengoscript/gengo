@@ -11,9 +11,6 @@ pub fn build(b: *std.Build) void {
     const cap_net_opt = b.option(bool, "cap_net", "Include cap:net capability") orelse true;
     const cap_http_opt = b.option(bool, "cap_http", "Include cap:http capability") orelse true;
     const cap_fs_opt = b.option(bool, "cap_fs", "Include cap:fs capability") orelse true;
-    if (cap_http_opt and !cap_net_opt) {
-        @panic("cap:http requires cap:net; enable cap:net or disable cap:http");
-    }
     const build_opts = b.addOptions();
     build_opts.addOption(bool, "perf", perf_opt);
     build_opts.addOption(bool, "cap_net", cap_net_opt);
