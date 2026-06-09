@@ -1605,6 +1605,7 @@ fn runInner() !void {
             },
 
             .get_local => {
+                if (vmState().frame_top == 0) return error.StackUnderflow;
                 const slot = try vmByte();
                 const base = vmState().frames[vmState().frame_top - 1].base;
                 if (base + slot >= vmState().stack.len) return error.StackOverflow;
@@ -1616,6 +1617,7 @@ fn runInner() !void {
                 }
             },
             .set_local => {
+                if (vmState().frame_top == 0) return error.StackUnderflow;
                 const slot = try vmByte();
                 const base = vmState().frames[vmState().frame_top - 1].base;
                 if (base + slot >= vmState().stack.len) return error.StackOverflow;
@@ -1628,6 +1630,7 @@ fn runInner() !void {
                 }
             },
             .get_upvalue => {
+                if (vmState().frame_top == 0) return error.StackUnderflow;
                 const idx = try vmByte();
                 const frame = vmState().frames[vmState().frame_top - 1];
                 const cl = frame.closure orelse return error.TypeError;
@@ -1637,6 +1640,7 @@ fn runInner() !void {
                 try vmPush(cell.cell.value);
             },
             .set_upvalue => {
+                if (vmState().frame_top == 0) return error.StackUnderflow;
                 const idx = try vmByte();
                 const frame = vmState().frames[vmState().frame_top - 1];
                 const cl = frame.closure orelse return error.TypeError;
@@ -1647,6 +1651,7 @@ fn runInner() !void {
                 cell.cell.value = val;
             },
             .close_upvalue => {
+                if (vmState().frame_top == 0) return error.StackUnderflow;
                 const slot = try vmByte();
                 const base = vmState().frames[vmState().frame_top - 1].base;
                 if (base + slot >= vmState().stack.len) return error.StackOverflow;
@@ -1808,6 +1813,9 @@ fn runInner() !void {
                 const bn = try vms.valueAsInt(b);
                 if (bn < 0) return error.RangeError;
                 const shift: u6 = @intCast(@min(bn, 63));
+                // Prevent signed left-shift overflow: if magnitude exceeds what i64 can hold after shift.
+                if (an > 0 and an > (@as(i64, std.math.maxInt(i64)) >> shift)) return error.RangeError;
+                if (an < 0 and an < (@as(i64, std.math.minInt(i64)) >> shift)) return error.RangeError;
                 const result = an << shift;
                 if (result > (1 << 53) or result < -(1 << 53)) return error.RangeError;
                 try pushNumericResultWithCarrier(a, b, @floatFromInt(result), .int);
@@ -2026,6 +2034,7 @@ fn runInner() !void {
             // The skip byte (was const_eq/sub opcode) is always present in well-formed
             // bytecode; advance IP directly to avoid the bounds check in vmByte().
             .get_local_const_eq => {
+                if (vmState().frame_top == 0) return error.StackUnderflow;
                 const slot = try vmByte();
                 vmState().ip += 1; // skip the embedded const_eq opcode byte
                 const k = try chunk.constAt(try vmShort());
@@ -2045,6 +2054,7 @@ fn runInner() !void {
                 try vmPush(.{ .boolean = Value.equals(ea, ek) });
             },
             .get_local_const_sub => {
+                if (vmState().frame_top == 0) return error.StackUnderflow;
                 const slot = try vmByte();
                 vmState().ip += 1; // skip the embedded const_sub opcode byte
                 const k = try chunk.constAt(try vmShort());
@@ -2061,6 +2071,7 @@ fn runInner() !void {
             // Bytecode: [op][slot][skip][idx_hi][idx_lo][jmp_hi][jmp_lo]
             // Reads offset first (advancing IP past the full instruction), then branches.
             .get_local_const_eq_jif_pop => {
+                if (vmState().frame_top == 0) return error.StackUnderflow;
                 const slot = try vmByte();
                 vmState().ip += 1; // skip
                 const k = try chunk.constAt(try vmShort());
@@ -2084,6 +2095,7 @@ fn runInner() !void {
             // Quad-fused: get_local + const_lt + jif_pop.
             // Bytecode: [op][slot][skip][idx_hi][idx_lo][jmp_hi][jmp_lo]
             .get_local_const_lt_jif_pop => {
+                if (vmState().frame_top == 0) return error.StackUnderflow;
                 const slot = try vmByte();
                 vmState().ip += 1; // skip embedded const_lt opcode byte
                 const k = try chunk.constAt(try vmShort());
@@ -2107,7 +2119,10 @@ fn runInner() !void {
 
             // Fused: get_local + get_field. 8-byte layout:
             // [op][slot][skip=get_field_byte][name_hi][name_lo][ic_type_hi][ic_type_lo][ic_fidx]
-            .get_local_get_field => try opGetLocalGetField(),
+            .get_local_get_field => {
+                if (vmState().frame_top == 0) return error.StackUnderflow;
+                try opGetLocalGetField();
+            },
 
             .const_add => {
                 const k = try chunk.constAt(try vmShort());

@@ -55,6 +55,10 @@ pub fn build(b: *std.Build) void {
     const run_engine_runner = b.addSystemCommand(&.{ wasmtime_opt, "--dir", "/", "--dir", "." });
     run_engine_runner.addArtifactArg(engine_runner_exe);
 
+    const fuzz_runner_exe = addWasmExe(b, "fuzz-runner", "src/fuzz_runner.zig", wasm_target, .Debug, &preset.step, build_opts_mod);
+    const run_fuzz_runner = b.addSystemCommand(&.{ wasmtime_opt, "--dir", "/" });
+    run_fuzz_runner.addArtifactArg(fuzz_runner_exe);
+
     // ── Native test runner (replaces bash scripts) ────────────────────────────
 
     const test_runner_mod = b.createModule(.{
@@ -128,10 +132,11 @@ pub fn build(b: *std.Build) void {
     unit_step.dependOn(&run_embedding.step);
     unit_step.dependOn(&run_engine_runner.step);
 
-    const test_step = b.step("test", "Run runtime safety, embedding, engine, and conformance tests");
+    const test_step = b.step("test", "Run runtime safety, embedding, engine, fuzz, and conformance tests");
     test_step.dependOn(&run_vm_safety.step);
     test_step.dependOn(&run_embedding.step);
     test_step.dependOn(&run_engine_runner.step);
+    test_step.dependOn(&run_fuzz_runner.step);
     test_step.dependOn(&install_engine_debug.step);
     test_step.dependOn(&run_conformance.step);
 
@@ -170,6 +175,9 @@ pub fn build(b: *std.Build) void {
     run_bench_perf.addArg(wasmtime_opt);
     const bench_perf_step = b.step("bench-perf", "Run benchmarks with perf counters (PERF: lines on stderr)");
     bench_perf_step.dependOn(&run_bench_perf.step);
+
+    const fuzz_step = b.step("fuzz", "Run fuzz tests (compiler, VM, and boundary inputs)");
+    fuzz_step.dependOn(&run_fuzz_runner.step);
 
     const run_parity = b.addRunArtifact(test_runner_exe);
     run_parity.step.dependOn(&install_debug.step);
