@@ -304,7 +304,6 @@ examples/spec/    conformance cases, both pass and fail
 examples/bench/   benchmark programs
 docs/             language, stdlib, embedding, engine API, changelog
 sdk/typescript/   TypeScript wrapper for gengo-engine.wasm
-playground/       browser playground
 ```
 
 ## Toolchain
