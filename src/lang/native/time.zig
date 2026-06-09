@@ -49,6 +49,9 @@ pub fn timeGetMs(val: Value) !f64 {
 }
 
 pub fn timeEpochMsToParts(ms: f64) struct { year: i32, month: u8, day: u8, hour: u8, min: u8, sec: u8, ms: u16, weekday: u8 } {
+    if (ms < @as(f64, @floatFromInt(std.math.minInt(i64))) or ms >= std.math.pow(f64, 2.0, 63.0)) {
+        return .{ .year = 0, .month = 1, .day = 1, .hour = 0, .min = 0, .sec = 0, .ms = 0, .weekday = 0 };
+    }
     const ms_int = @as(i64, @intFromFloat(ms));
     const total_secs = @divFloor(ms_int, 1000);
     const ms_part = @as(u16, @intCast(@rem(ms_int, 1000)));

@@ -32,6 +32,7 @@ pub fn sprintValue(buf_or_null: ?[]u8, v: Value) !usize {
         .decimal => unreachable,
         .number => |n| {
             if (n == @trunc(n) and !std.math.isInf(n) and n == n) {
+                if (n < @as(f64, @floatFromInt(std.math.minInt(i64))) or n >= std.math.pow(f64, 2.0, 63.0)) return error.TypeError;
                 const i = @as(i64, @intFromFloat(n));
                 var tmp: [32]u8 = undefined;
                 const s = std.fmt.bufPrint(tmp[0..], "{d}", .{i}) catch return error.TypeError;

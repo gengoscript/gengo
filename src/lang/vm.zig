@@ -1838,7 +1838,10 @@ fn runInner() !void {
                 switch (v) {
                     .number => |n| {
                         if (!std.math.isFinite(n)) return error.TypeError;
-                        try vmPush(.{ .decimal = @intFromFloat(@trunc(n)) });
+                        const t = @trunc(n);
+                        if (t < @as(f64, @floatFromInt(std.math.minInt(i64))) or
+                            t >= std.math.pow(f64, 2.0, 63.0)) return error.TypeError;
+                        try vmPush(.{ .decimal = @intFromFloat(t) });
                     },
                     .decimal => |d| try vmPush(.{ .decimal = d }),
                     .rune => |r| try vmPush(.{ .decimal = @intCast(r) }),

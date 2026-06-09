@@ -294,6 +294,7 @@ pub fn vmIndexFromVal(v: Value) !usize {
     if (n < 0) return error.IndexOutOfBounds;
     const f = @trunc(n);
     if (f != n) return error.TypeError;
+    if (f > @as(f64, @floatFromInt(std.math.maxInt(usize)))) return error.IndexOutOfBounds;
     return @intFromFloat(f);
 }
 
@@ -307,6 +308,7 @@ pub fn vmSliceIndex(v: Value, upper: usize) !usize {
     if (n < 0) return error.IndexOutOfBounds;
     const f = @trunc(n);
     if (f != n) return error.TypeError;
+    if (f > @as(f64, @floatFromInt(std.math.maxInt(usize)))) return error.IndexOutOfBounds;
     const idx: usize = @intFromFloat(f);
     if (idx > upper) return error.IndexOutOfBounds;
     return idx;
