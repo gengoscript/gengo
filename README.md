@@ -317,6 +317,7 @@ playground/       browser playground
 * [docs/language.md](docs/language.md)
 * [docs/stdlib.md](docs/stdlib.md)
 * [docs/embedding.md](docs/embedding.md)
+* [docs/security.md](docs/security.md)
 * [docs/engine-api.md](docs/engine-api.md)
 * [docs/changelog.md](docs/changelog.md)
 
