@@ -973,6 +973,7 @@ fn opInvokeMethod() !void {
             var func: Value = undefined;
             var pass_recv = true;
             if (ic_type_idx == @as(usize, tpi) and ic_func_idx != 0xFFFF) {
+                if (ic_func_idx >= heap.MaxObjects) return error.NotAMethodReceiver;
                 func = .{ .object = heap.objectAt(@intCast(ic_func_idx)) };
             } else {
                 const tname = inst.typ.struct_type.qualified_name;
