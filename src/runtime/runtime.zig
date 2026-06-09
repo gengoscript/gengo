@@ -12,9 +12,21 @@ const net_state = @import("../lang/native/net_state.zig");
 const cfg = @import("config.zig");
 const Value = @import("../lang/value.zig").Value;
 
+const common = @import("../lang/common.zig");
+const MaxGlobalConsts = @import("../lang/compiler_types.zig").MaxGlobalConsts;
+
 fn checkGlobalExists(ctx: *anyopaque, name: []const u8) bool {
     _ = ctx;
     return globals.has(name);
+}
+
+fn checkGlobalIsConst(ctx: *anyopaque, name: []const u8) bool {
+    const self: *Runtime = @ptrCast(@alignCast(ctx));
+    var i: usize = 0;
+    while (i < self.repl_const_count) : (i += 1) {
+        if (common.streq(self.repl_const_names[i], name)) return true;
+    }
+    return false;
 }
 
 const MaxFrames = @import("../runtime/config.zig").max_frames;
@@ -43,6 +55,10 @@ pub const Runtime = struct {
     test_count: u8 = 0,
     test_names: [MaxTests][]const u8 = undefined,
     test_failed: bool = false,
+    repl_const_names: [MaxGlobalConsts][]const u8 = undefined,
+    repl_const_name_buf: [MaxGlobalConsts * 64]u8 = undefined,
+    repl_const_name_buf_used: usize = 0,
+    repl_const_count: usize = 0,
 
     pub fn init() Runtime {
         var rt: Runtime = .{};
@@ -263,7 +279,8 @@ pub const Runtime = struct {
             .resolve_import = module_compile.Session.resolveImportOpaque,
             .repl_mode = true,
             .check_global_exists = checkGlobalExists,
-            .check_global_ctx = @ptrFromInt(1),
+            .check_global_is_const = checkGlobalIsConst,
+            .check_global_ctx = self,
         });
         compiler.compile(true) catch |err| {
             self.last_compile_line = compiler.prev.line;
@@ -273,6 +290,22 @@ pub const Runtime = struct {
             self.setLastCompilePath("");
             return err;
         };
+
+        var ci: usize = 0;
+        while (ci < compiler.registry.global_const_count) : (ci += 1) {
+            const cname = compiler.registry.global_consts[ci].name;
+            if (!checkGlobalIsConst(self, cname)) {
+                if (self.repl_const_count < MaxGlobalConsts and
+                    self.repl_const_name_buf_used + cname.len <= self.repl_const_name_buf.len)
+                {
+                    const start = self.repl_const_name_buf_used;
+                    @memcpy(self.repl_const_name_buf[start .. start + cname.len], cname);
+                    self.repl_const_names[self.repl_const_count] = self.repl_const_name_buf[start .. start + cname.len];
+                    self.repl_const_name_buf_used += cname.len;
+                    self.repl_const_count += 1;
+                }
+            }
+        }
 
         try vmnative.installStdGlobal();
         try vmnative.installHostModules(self.host_modules);
