@@ -1,3 +1,4 @@
+const std = @import("std");
 const host_abi = @import("../../runtime/host_abi.zig");
 const heap = @import("../../runtime/heap.zig");
 const vms = @import("../vm_state.zig");
@@ -146,6 +147,7 @@ pub fn wireNumberToU64(w: host_abi.ValueWire) !u64 {
     if (n < 0) return error.HostNativeBadReturnValue;
     const tr = @trunc(n);
     if (tr != n) return error.HostNativeBadReturnValue;
+    if (tr > @as(f64, @floatFromInt(std.math.maxInt(u64)))) return error.HostNativeBadReturnValue;
     return @intFromFloat(tr);
 }
 

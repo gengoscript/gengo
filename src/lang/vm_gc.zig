@@ -27,6 +27,7 @@ fn markObjectQueue(obj: *Object) void {
     if (!heap.isObjectLive(obj)) return;
     if (heap.isObjectMarked(obj)) return;
     heap.markObject(obj);
+    if (mark_worklist_top >= mark_worklist.len) return;
     mark_worklist[mark_worklist_top] = obj;
     mark_worklist_top += 1;
 }
@@ -112,7 +113,7 @@ pub fn collectGarbage() void {
     while (i < vms.vmState().temp_root_top) : (i += 1) markValue(vms.vmState().temp_roots[i]);
 
     i = 0;
-    while (i < chunk.constCount()) : (i += 1) markValue(chunk.constAt(i));
+    while (i < chunk.constCount()) : (i += 1) markValue(chunk.constAt(i) catch unreachable);
 
     i = 0;
     while (i < vms.vmState().defer_top) : (i += 1) markValue(vms.vmState().defer_stack[i]);

@@ -503,6 +503,7 @@ fn retSlowPath(retval_in: Value) !bool {
         try pushTempRoot(deferred);
         const arr = vms.asArraySlice(deferred.object);
         if (arr.len > 0) {
+            if (arr.len > 256) return error.ArityMismatch;
             const dargc: u8 = @intCast(arr.len - 1);
             var di: usize = 0;
             while (di < arr.len) : (di += 1) try vmPush(arr[di]);
@@ -581,7 +582,7 @@ fn opGetLocalGetField() !void {
     const obj = container.object;
     switch (obj.*) {
         .array, .array_managed => {
-            const name = chunk.constAt(name_idx).string;
+            const name = (try chunk.constAt(name_idx)).string;
             const items = vms.asArraySlice(obj);
             if (common.streq(name, "first")) {
                 if (items.len == 0) return error.IndexOutOfBounds;
@@ -596,7 +597,7 @@ fn opGetLocalGetField() !void {
             if (ic_type_idx == @as(usize, tpi) and ic_fidx != 0xFF) {
                 try vmPush(inst.fields[ic_fidx].value);
             } else {
-                const name = chunk.constAt(name_idx).string;
+                const name = (try chunk.constAt(name_idx)).string;
                 const fi = vmtyp.findFieldIndex(inst.typ.struct_type.fields, name) orelse {
                     vms.setRuntimeErr("no field '{s}' on type '{s}'", .{ name, inst.typ.struct_type.name });
                     return error.UnknownStructField;
@@ -610,7 +611,7 @@ fn opGetLocalGetField() !void {
             }
         },
         .map, .map_managed => {
-            const name = chunk.constAt(name_idx).string;
+            const name = (try chunk.constAt(name_idx)).string;
             if (common.streq(name, "len")) {
                 const items = vms.asMapSlice(obj);
                 try vmPush(.{ .number = @floatFromInt(items.len) });
@@ -628,7 +629,7 @@ fn opGetLocalGetField() !void {
             }
         },
         .map_hashed => |hm| {
-            const name = chunk.constAt(name_idx).string;
+            const name = (try chunk.constAt(name_idx)).string;
             if (common.streq(name, "len")) {
                 try vmPush(.{ .number = @floatFromInt(hm.len) });
             } else {
@@ -641,7 +642,7 @@ fn opGetLocalGetField() !void {
             }
         },
         .enum_type => |et| {
-            const name = chunk.constAt(name_idx).string;
+            const name = (try chunk.constAt(name_idx)).string;
             if (common.streq(name, "name")) {
                 try vmPush(.{ .string = et.name });
             } else if (common.streq(name, "first")) {
@@ -667,7 +668,7 @@ fn opGetLocalGetField() !void {
             }
         },
         .named_type => |nt| {
-            const name = chunk.constAt(name_idx).string;
+            const name = (try chunk.constAt(name_idx)).string;
             if (common.streq(name, "name")) {
                 try vmPush(.{ .string = nt.name });
             } else if (common.streq(name, "first")) {
@@ -685,7 +686,7 @@ fn opGetLocalGetField() !void {
             } else return error.UnknownStructField;
         },
         .variant_type => |vt| {
-            const name = chunk.constAt(name_idx).string;
+            const name = (try chunk.constAt(name_idx)).string;
             if (common.streq(name, "name")) {
                 try vmPush(.{ .string = vt.name });
             } else {
@@ -721,7 +722,7 @@ fn opGetLocalGetField() !void {
         },
         .variant_value => |vv| {
             const vt = vv.typ.variant_type;
-            const vvn = chunk.constAt(name_idx).string;
+            const vvn = (try chunk.constAt(name_idx)).string;
             if (vmtyp.findFieldIndex(vt.shared_fields, vvn)) |idx| {
                 try vmPush(vv.shared_values[idx]);
                 return;
@@ -972,6 +973,7 @@ fn opInvokeMethod() !void {
             var func: Value = undefined;
             var pass_recv = true;
             if (ic_type_idx == @as(usize, tpi) and ic_func_idx != 0xFFFF) {
+                if (ic_func_idx >= heap.MaxObjects) return error.NotAMethodReceiver;
                 func = .{ .object = heap.objectAt(@intCast(ic_func_idx)) };
             } else {
                 const tname = inst.typ.struct_type.qualified_name;
@@ -1170,7 +1172,7 @@ fn opGetField() !void {
     const ic_base = vmState().ip;
     const ic_type_idx = try vmShort();
     const ic_fidx = try vmByte();
-    const name = chunk.constAt(name_idx).string;
+    const name = (try chunk.constAt(name_idx)).string;
     const raw = try vmPop();
     const container = if (raw == .object and raw.object.* == .named_value)
         raw.object.named_value.value
@@ -1340,7 +1342,7 @@ fn opSetField() !void {
     const ic_base = vmState().ip;
     const ic_type_idx = try vmShort();
     const ic_fidx = try vmByte();
-    const name = chunk.constAt(name_idx).string;
+    const name = (try chunk.constAt(name_idx)).string;
     const val = try vmPop();
     const raw_c = try vmPop();
     const is_named_c = raw_c == .object and raw_c.object.* == .named_value;
@@ -1554,7 +1556,7 @@ fn runInner() !void {
                 if (ic_slot != 0xFFFF) {
                     try vmPush(globals.getAt(ic_slot));
                 } else {
-                    const name = chunk.constAt(name_idx).string;
+                    const name = (try chunk.constAt(name_idx)).string;
                     const slot = globals.findSlot(name) orelse {
                         vms.setRuntimeErr("'{s}' is not defined", .{name});
                         return error.NotDefined;
@@ -1572,7 +1574,7 @@ fn runInner() !void {
                 if (ic_slot != 0xFFFF) {
                     globals.setAt(ic_slot, val);
                 } else {
-                    const name = chunk.constAt(name_idx).string;
+                    const name = (try chunk.constAt(name_idx)).string;
                     const slot = globals.findSlot(name) orelse return error.NotDefined;
                     chunk.patchByte(ic_base,     @intCast((slot >> 8) & 0xFF));
                     chunk.patchByte(ic_base + 1, @intCast(slot & 0xFF));
@@ -1675,13 +1677,13 @@ fn runInner() !void {
                 const a = try vmPop();
                 if (decimalOpValues(a, b)) |_| {
                     return error.TypeError;
-                } else if (a == .object and a.object.* == .named_value and a.object.named_value.typ.named_type.base == .decimal and b == .number and @trunc(b.number) == b.number) {
+                } else if (a == .object and a.object.* == .named_value and a.object.named_value.typ.named_type.base == .decimal and b == .number and @trunc(b.number) == b.number and b.number >= @as(f64, @floatFromInt(std.math.minInt(i64))) and b.number < std.math.pow(f64, 2.0, 63.0)) {
                     const d = vms.valueAsDecimal(a.object.named_value.value) catch return error.TypeError;
                     const other = @as(i64, @intFromFloat(b.number));
                     const result = @mulWithOverflow(d, other);
                     if (result[1] != 0) return error.TypeError;
                     try pushDecimalResultWithCarrier(a.object.named_value.typ, result[0]);
-                } else if (b == .object and b.object.* == .named_value and b.object.named_value.typ.named_type.base == .decimal and a == .number and @trunc(a.number) == a.number) {
+                } else if (b == .object and b.object.* == .named_value and b.object.named_value.typ.named_type.base == .decimal and a == .number and @trunc(a.number) == a.number and a.number >= @as(f64, @floatFromInt(std.math.minInt(i64))) and a.number < std.math.pow(f64, 2.0, 63.0)) {
                     const d = vms.valueAsDecimal(b.object.named_value.value) catch return error.TypeError;
                     const other = @as(i64, @intFromFloat(a.number));
                     const result = @mulWithOverflow(d, other);
@@ -1698,7 +1700,7 @@ fn runInner() !void {
                 const a = try vmPop();
                 if (decimalOpValues(a, b)) |_| {
                     return error.TypeError;
-                } else if (a == .object and a.object.* == .named_value and a.object.named_value.typ.named_type.base == .decimal and b == .number and @trunc(b.number) == b.number) {
+                } else if (a == .object and a.object.* == .named_value and a.object.named_value.typ.named_type.base == .decimal and b == .number and @trunc(b.number) == b.number and b.number >= @as(f64, @floatFromInt(std.math.minInt(i64))) and b.number < std.math.pow(f64, 2.0, 63.0)) {
                     const d = vms.valueAsDecimal(a.object.named_value.value) catch return error.TypeError;
                     const divisor = @as(i64, @intFromFloat(b.number));
                     if (divisor == 0) { vms.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
@@ -1838,7 +1840,10 @@ fn runInner() !void {
                 switch (v) {
                     .number => |n| {
                         if (!std.math.isFinite(n)) return error.TypeError;
-                        try vmPush(.{ .decimal = @intFromFloat(@trunc(n)) });
+                        const t = @trunc(n);
+                        if (t < @as(f64, @floatFromInt(std.math.minInt(i64))) or
+                            t >= std.math.pow(f64, 2.0, 63.0)) return error.TypeError;
+                        try vmPush(.{ .decimal = @intFromFloat(t) });
                     },
                     .decimal => |d| try vmPush(.{ .decimal = d }),
                     .rune => |r| try vmPush(.{ .decimal = @intCast(r) }),
@@ -1953,7 +1958,7 @@ fn runInner() !void {
 
             // Fused const+op: reads rhs constant, pops lhs from stack.
             .const_eq => {
-                const k = chunk.constAt(try vmShort());
+                const k = try chunk.constAt(try vmShort());
                 const a = try vmPop();
                 const a_named = a == .object and a.object.* == .named_value;
                 const k_named = k == .object and k.object.* == .named_value;
@@ -1967,7 +1972,7 @@ fn runInner() !void {
                 try vmPush(.{ .boolean = Value.equals(ea, ek) });
             },
             .const_sub => {
-                const k = chunk.constAt(try vmShort());
+                const k = try chunk.constAt(try vmShort());
                 const a = try vmPop();
                 const an = try vms.valueAsNumber(a);
                 const kn = try vms.valueAsNumber(k);
@@ -1981,7 +1986,7 @@ fn runInner() !void {
             .get_local_const_eq => {
                 const slot = try vmByte();
                 vmState().ip += 1; // skip the embedded const_eq opcode byte
-                const k = chunk.constAt(try vmShort());
+                const k = try chunk.constAt(try vmShort());
                 const base = vmState().frames[vmState().frame_top - 1].base;
                 if (base + slot >= vmState().stack.len) return error.StackOverflow;
                 var a = vmState().stack[base + slot];
@@ -2000,7 +2005,7 @@ fn runInner() !void {
             .get_local_const_sub => {
                 const slot = try vmByte();
                 vmState().ip += 1; // skip the embedded const_sub opcode byte
-                const k = chunk.constAt(try vmShort());
+                const k = try chunk.constAt(try vmShort());
                 const base = vmState().frames[vmState().frame_top - 1].base;
                 if (base + slot >= vmState().stack.len) return error.StackOverflow;
                 var a = vmState().stack[base + slot];
@@ -2016,7 +2021,7 @@ fn runInner() !void {
             .get_local_const_eq_jif_pop => {
                 const slot = try vmByte();
                 vmState().ip += 1; // skip
-                const k = chunk.constAt(try vmShort());
+                const k = try chunk.constAt(try vmShort());
                 const off = try vmShort();
                 const base = vmState().frames[vmState().frame_top - 1].base;
                 if (base + slot >= vmState().stack.len) return error.StackOverflow;
@@ -2039,7 +2044,7 @@ fn runInner() !void {
             .get_local_const_lt_jif_pop => {
                 const slot = try vmByte();
                 vmState().ip += 1; // skip embedded const_lt opcode byte
-                const k = chunk.constAt(try vmShort());
+                const k = try chunk.constAt(try vmShort());
                 const off = try vmShort();
                 const base = vmState().frames[vmState().frame_top - 1].base;
                 if (base + slot >= vmState().stack.len) return error.StackOverflow;
@@ -2063,7 +2068,7 @@ fn runInner() !void {
             .get_local_get_field => try opGetLocalGetField(),
 
             .const_add => {
-                const k = chunk.constAt(try vmShort());
+                const k = try chunk.constAt(try vmShort());
                 const a = try vmPop();
                 if (vms.isStringValue(a) and vms.isStringValue(k)) {
                     const sk = try vms.asStringValue(k);
@@ -2107,7 +2112,7 @@ fn runInner() !void {
                 }
             },
             .const_lt => {
-                const k = chunk.constAt(try vmShort());
+                const k = try chunk.constAt(try vmShort());
                 const a = try vmPop();
                 const a_named = a == .object and a.object.* == .named_value;
                 const k_named = k == .object and k.object.* == .named_value;
@@ -2458,6 +2463,7 @@ fn runInner() !void {
             },
             .loop => {
                 const off = try vmShort();
+                if (off > vmState().ip) return error.BytecodeOutOfBounds;
                 vmState().ip -= off;
                 // If the back-edge target is a warm get_global IC, execute it inline
                 // to save one full dispatch iteration per loop cycle.
@@ -2486,13 +2492,14 @@ fn runInner() !void {
                 if (ic_slot != 0xFFFF) {
                     globals.setAt(ic_slot, val);
                 } else {
-                    const name = chunk.constAt(name_idx).string;
+                    const name = (try chunk.constAt(name_idx)).string;
                     const slot = globals.findSlot(name) orelse return error.NotDefined;
                     chunk.patchByte(ic_base,     @intCast((slot >> 8) & 0xFF));
                     chunk.patchByte(ic_base + 1, @intCast(slot & 0xFF));
                     globals.setAt(slot, val);
                 }
                 const off = try vmShort();
+                if (off > vmState().ip) return error.BytecodeOutOfBounds;
                 vmState().ip -= off;
                 // Same inline get_global as loop: skip one dispatch if warm.
                 const jip = vmState().ip;
@@ -2628,7 +2635,7 @@ fn runInner() !void {
             .ret_const => {
                 vmperf.breakOpChain();
                 if (vmState().frame_top == 0) return error.ReturnAtTopLevel;
-                const k = chunk.constAt(try vmShort());
+                const k = try chunk.constAt(try vmShort());
                 const fi = vmState().frame_top - 1;
                 const frame = &vmState().frames[fi];
                 if (vmState().defer_top == frame.defer_base and !frame.has_typed_returns) {
@@ -2652,6 +2659,7 @@ fn runInner() !void {
 fn runDeferredCall(deferred: Value) anyerror!void {
     const arr = vms.asArraySlice(deferred.object);
     if (arr.len == 0) return;
+    if (arr.len > 256) return;
     const dargc: u8 = @intCast(arr.len - 1);
     var di: usize = 0;
     while (di < arr.len) : (di += 1) vmPush(arr[di]) catch return;
