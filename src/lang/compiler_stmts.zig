@@ -1350,7 +1350,19 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
             try c.expr();
             if (inferred_type_check == .prim) {
                 switch (inferred_type_check.prim) {
-                    .int => try chunk.emitOp(.cast_int, name.line),
+                    .int => {
+                        // Reject float literal assigned to int at compile time
+                        if (chunk.g_state.code_len >= 3) {
+                            const last_inst_start = chunk.g_state.code_len - 3;
+                            if (chunk.g_state.code[last_inst_start] == @intFromEnum(Op.constant)) {
+                                const idx = (@as(u16, chunk.g_state.code[last_inst_start + 1]) << 8) | chunk.g_state.code[last_inst_start + 2];
+                                if (idx < chunk.g_state.const_count and chunk.g_state.consts[idx] == .float) {
+                                    return c.err("float literal cannot be assigned to int without explicit conversion", .{});
+                                }
+                            }
+                        }
+                        try chunk.emitOp(.cast_int, name.line);
+                    },
                     .float => try chunk.emitOp(.cast_float, name.line),
                     .decimal => try chunk.emitOp(.cast_decimal, name.line),
                     .bool => try chunk.emitOp(.cast_bool, name.line),

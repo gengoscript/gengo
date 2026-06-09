@@ -4,7 +4,7 @@ type Age int range 0 .. 100
 
 var x Age = 10
 const y Age = 20
-var i int = 3.9
+var i int = int(3.9)
 var f float = 7
 var b bool = 1
 
