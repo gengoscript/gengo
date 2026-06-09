@@ -1,12 +1,13 @@
 # Gengo (言語)
 
-Gengo is a small embeddable scripting engine.
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Zig](https://img.shields.io/badge/Zig-0.16.0-orange?logo=zig)](https://ziglang.org/)
+
+Domain constraints belong in the type system, not in validation code written after the fact. Gengo is a small embeddable scripting engine built around that idea.
 
 You write the host application. Your users write Gengo scripts. The engine runs those scripts in a controlled environment, where the host decides what scripts are allowed to see, call, and consume.
 
 **[Try it in the browser](https://gengoscript.github.io/gengo/)**
-
-Gengo is still early. The language and runtime are being tightened, and breaking changes should be expected.
 
 ---
 
@@ -20,7 +21,7 @@ The usual options all have trade-offs.
 
 Lua is small and embeddable, but its type system is loose. Python is familiar, but heavy and awkward to isolate properly. A custom DSL can fit the problem well, but costs real time to design and maintain. JSON and YAML are useful for data, but they are not programming languages.
 
-Gengo sits somewhere in the middle: a small scripting VM with explicit host integration, a domain-oriented type system, hard execution limits, isolated runtime instances, and WASM as a primary target.
+Gengo is the option built around the last point: a small scripting VM with explicit host integration, a domain-oriented type system, hard execution limits, isolated runtime instances, and WASM as a primary target.
 
 ---
 
@@ -30,7 +31,7 @@ Gengo sits somewhere in the middle: a small scripting VM with explicit host inte
 Each engine instance runs with a configurable instruction budget. A script that loops forever or recurses without bound is stopped instead of hanging the host process. Memory limits are selected at build time through presets such as `dev`, `tiny`, and `stress`.
 
 **Domain-safe types.**
-Gengo is built around the idea that domain constraints should live in the type system when possible, not in scattered validation code.
+Range types, predicate subtypes, cyclic types, and named scalars let constraints live at the point of definition.
 
 ```gengo
 type Port      int range 1..65535
@@ -86,7 +87,7 @@ const result = rt.run(user_script_source);
 
 // Call the script's exported function on each record
 const verdict = rt.call("validate", &.{
-    api.Value{ .number = record.severity },
+    api.Value{ .int = record.severity },
     api.Value{ .string = record.source },
 });
 ```
@@ -106,6 +107,39 @@ pub func validate(severity int, source string) bool {
 ```
 
 If `severity` is outside `0..5`, the script fails while constructing `Severity`. The host does not receive a supposedly valid result built from invalid domain data.
+
+A deploy gate might look like this:
+
+```gengo
+type Environment variant { Dev, Staging, Production }
+type Branch      string
+
+pub func allow_deploy(env Environment, branch Branch, tests_passed bool, approved bool) bool {
+    switch env {
+        case Environment.Production:
+            return branch == Branch("main") && tests_passed && approved
+        case Environment.Staging:
+            return tests_passed
+        default:
+            return true
+    }
+}
+```
+
+A webhook routing rule:
+
+```gengo
+type EventKind enum { push, pull_request, release, ping }
+type Repo      string
+
+pub func should_notify(kind EventKind, repo Repo, actor string) bool {
+    if kind == EventKind.ping { return false }
+    if kind == EventKind.release { return true }
+    return repo == Repo("core") && actor != "bot"
+}
+```
+
+The host calls the function. The script makes the decision. It cannot reach anything the host has not registered.
 
 ---
 
@@ -284,6 +318,12 @@ playground/       browser playground
 * [docs/embedding.md](docs/embedding.md)
 * [docs/engine-api.md](docs/engine-api.md)
 * [docs/changelog.md](docs/changelog.md)
+
+---
+
+## Status
+
+Gengo is still early. The language and runtime are being tightened, and breaking changes should be expected.
 
 ---
 
