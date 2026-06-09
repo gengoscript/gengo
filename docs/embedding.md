@@ -28,10 +28,10 @@
 - `api.RuntimeResult`
   - `.ok`
   - `.compile_error { line: u32, kind: anyerror }`
-  - `.runtime_error { kind: anyerror, line: u32, col: u16, frames: [max_frames]PanicFrame, frame_count: usize }`
+  - `.runtime_error { kind: anyerror, line: u32, col: u32, frames: [max_frames]PanicFrame, frame_count: usize }`
 - `api.RuntimeResultWithValue`
   - `.ok: Value`
-  - `.runtime_error { kind: anyerror, line: u32, col: u16, frames: [max_frames]PanicFrame, frame_count: usize }`
+  - `.runtime_error { kind: anyerror, line: u32, col: u32, frames: [max_frames]PanicFrame, frame_count: usize }`
 
 ## Lifecycle
 
