@@ -1,6 +1,6 @@
 # @gengo/engine
 
-TypeScript SDK for the [Gengo](https://github.com/anomalyco/gengo) embeddable
+TypeScript SDK for the [Gengo](https://github.com/gengoscript/gengo) embeddable
 scripting engine.  Load the WASM engine, run scripts, call functions, and
 register host modules — all from TypeScript.
 
