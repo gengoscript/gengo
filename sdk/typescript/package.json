@@ -6,7 +6,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/anomalyco/gengo"
+    "url": "https://github.com/gengoscript/gengo"
   },
   "type": "module",
   "main": "./dist/index.js",
