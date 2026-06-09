@@ -167,6 +167,12 @@ fn fuzzValueWire() void {
         .{ .rune = 0 },
         .{ .rune = 65 },
         .{ .rune = 0x10FFFF },
+        .{ .decimal = 0 },
+        .{ .decimal = 1000000 },
+        .{ .decimal = -1000000 },
+        .{ .error_value = "test" },
+        .{ .error_value = "" },
+        .{ .error_value = "something went wrong" },
     };
 
     for (test_values) |v| {
@@ -183,7 +189,7 @@ fn fuzzValueWire() void {
             .int => if (round != .float or round.float != v.int) fail("fuzz FAIL: int round-trip\n"),
             .float => if (round != .float or (!std.math.isNan(v.float) and round.float != v.float)) fail("fuzz FAIL: float round-trip\n"),
             .decimal => if (round != .decimal or round.decimal != v.decimal) fail("fuzz FAIL: decimal round-trip\n"),
-            .rune => if (round != .float or @as(u32, @intFromFloat(round.float)) != v.rune) fail("fuzz FAIL: rune round-trip\n"),
+            .rune => if (round != .rune or round.rune != v.rune) fail("fuzz FAIL: rune round-trip\n"),
             .error_value => if (round != .error_value or !std.mem.eql(u8, round.error_value, v.error_value)) fail("fuzz FAIL: error round-trip\n"),
             else => {},
         }
