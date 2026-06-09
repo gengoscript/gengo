@@ -2,6 +2,49 @@
 
 This changelog tracks notable language/runtime changes by implementation date.
 
+## 2026-06-08
+
+### Embedding — Per-instance Resource Limits (#57)
+
+`engine_init_with_config` now accepts an `InstanceConfig` struct (56 bytes, all `i64`/`u8`) that sets per-engine heap and execution limits, overriding preset defaults for that instance. Fields: `heap_size_bytes`, `max_objects`, `max_stack`, `max_frames`, `max_defers`, `max_ops` (`-1` = preset default), `allow_io`. See `docs/engine-api.md` for the full layout.
+
+### Embedding — Custom Allocator in Engine Config (#71)
+
+`api.Config` gains an `allocator` field (`std.mem.Allocator`, default `page_allocator`). The allocator is used for all per-instance backing memory and must remain valid until `rt.deinit()` is called. `Runtime.deinit()` added; required when using a non-default allocator.
+
+### Embedding — ValueWire Exhaustive Mapping (#70)
+
+`engine_call` / `engine_run` return values no longer silently drop non-primitive types. New mappings:
+
+| Gengo type | Wire tag |
+|---|---|
+| `struct` | `5` (`map`) — field names as keys |
+| `rune` | `1` (`number`) — Unicode code point |
+| named/enum value | unwrapped to underlying wire type |
+| `error` value | `1` (`number`), payload `-2` |
+
+### Performance — `@cap:fs` Cold-start (#73)
+
+`fs.read` and `fs.exists` now use `std.posix.openat` + read loop directly instead of `std.Io.Threaded`. Eliminated ~900 ms startup cost from thread-pool and io_uring initialisation. Measured: ~2 ms per call.
+
+### Fix — `engine_last_error` on Init Failure (#74)
+
+`engine_init_with_config` returning `-3` (config ceiling exceeded) now writes a descriptive message to a module-level buffer (`g_init_error`). `engine_last_error(0, ...)` reads from this buffer when the handle is invalid, so callers can retrieve the failure reason without a valid engine handle.
+
+### Fix — `@cap:http` Availability
+
+`@cap:http` is now importable from Gengo scripts and dispatches to the host HTTP handler. Added conformance spec tests with a mock handler. HTTP calls still incur ~900 ms cold-start on the native CLI due to `std.Io.Threaded` in the HTTP implementation (tracked in issue #72).
+
+### Fix — Template GC Safety
+
+Three GC use-after-free bugs in template rendering corrected: `tplValToDynStr` result rooted across `tplAppendToBuilder`; template object and range array rooted across GC during rendering; `tplBuildObj` ops/args/jmp rooted before any allocation.
+
+### Fix — Zig 0.16.0 Alignment Syntax
+
+`heap.init` uses `.@"16"` alignment tag to satisfy the `?mem.Alignment` enum requirement in Zig 0.16.0 (`alignedAlloc(u8, .@"16", size)` instead of `alignedAlloc(u8, 16, size)`).
+
+---
+
 ## 2026-06-07
 
 - **Variant records**: variant types may now declare bare shared fields alongside arm declarations. Shared fields are unconditionally accessible on any value of the type without a match. Construction supplies shared and arm-specific fields together in one struct literal.
