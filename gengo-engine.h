@@ -15,20 +15,35 @@ typedef int32_t gengo_handle_t;
 /* ── Wire value (used for engine_call args and results) ───────────────────── */
 
 typedef enum {
-    GENGO_WIRE_NULL = 0,
+    GENGO_WIRE_NULL    = 0,
     GENGO_WIRE_BOOLEAN = 1,
-    GENGO_WIRE_NUMBER = 2,
-    GENGO_WIRE_STRING = 3,
-    GENGO_WIRE_ARRAY = 4,
-    GENGO_WIRE_MAP = 5,
+    GENGO_WIRE_NUMBER  = 2,
+    GENGO_WIRE_STRING  = 3,
+    GENGO_WIRE_ARRAY   = 4,
+    GENGO_WIRE_MAP     = 5,
+    GENGO_WIRE_ERROR   = 6,  /* error_value: payload=string ptr, len=byte length */
 } gengo_wire_tag_t;
 
+/*
+ * Flags for GENGO_WIRE_NUMBER (bits in the flags byte):
+ *
+ *   bit 0 (GENGO_WIRE_FLAG_INTEGER): payload is an integer encoded as f64 bits.
+ *          Without this flag the number is treated as a float.
+ *   bit 1 (GENGO_WIRE_FLAG_DECIMAL): payload is a raw i64 fixed-point value
+ *          (scale ×1000, matching Gengo's decimal type). No f64 precision loss.
+ *   bit 2 (GENGO_WIRE_FLAG_RUNE):    payload is a Unicode codepoint (u21).
+ *          Decodes to Gengo's rune type rather than a numeric type.
+ */
+#define GENGO_WIRE_FLAG_INTEGER 0x01
+#define GENGO_WIRE_FLAG_DECIMAL 0x02
+#define GENGO_WIRE_FLAG_RUNE    0x04
+
 typedef struct {
-    uint8_t  tag;
-    uint8_t  flags;
+    uint8_t  tag;        /* gengo_wire_tag_t */
+    uint8_t  flags;      /* GENGO_WIRE_FLAG_* bits (meaningful for GENGO_WIRE_NUMBER) */
     uint16_t reserved;
-    uint64_t payload;
-    uint32_t len;
+    uint64_t payload;    /* bool: 0/1 | number: f64 bits | string/error: ptr | array/map: ptr */
+    uint32_t len;        /* string/error: byte count | array: element count | map: entry count */
     uint32_t reserved2;
 } gengo_value_wire_t;
 
@@ -50,10 +65,38 @@ typedef struct {
  */
 typedef void (*gengo_write_fn_t)(const char *ptr, int32_t len, int32_t is_stderr);
 
+/* ── Instance configuration ───────────────────────────────────────────────── */
+
+/*
+ * Optional configuration passed to engine_init_with_config().
+ * All fields must be set; use engine_init() for defaults.
+ *
+ * max_ops: instruction budget. -1 means unlimited.
+ *          Scripts that exceed the budget receive InstructionBudgetExceeded.
+ */
+typedef struct {
+    size_t   heap_size_bytes;
+    size_t   max_objects;
+    size_t   max_stack;
+    size_t   max_frames;
+    size_t   max_defers;
+    int64_t  max_ops;    /* -1 = unlimited */
+    uint8_t  allow_io;
+} gengo_instance_config_t;
+
 /* ── Engine lifecycle ─────────────────────────────────────────────────────── */
 
-/* Create a new engine instance.  Returns a positive handle on success, 0 on failure. */
+/* Create a new engine instance with default configuration.
+ * Returns a positive handle on success, 0 on failure. */
 int32_t engine_init(void);
+
+/*
+ * Create a new engine instance with explicit configuration.
+ * config must remain valid only for the duration of this call.
+ * Returns a positive handle on success, 0 on failure.
+ * On failure, engine_last_error(0, ...) returns a description.
+ */
+int32_t engine_init_with_config(const gengo_instance_config_t *config);
 
 /* Destroy an engine instance and release its resources. */
 void engine_destroy(int32_t handle);

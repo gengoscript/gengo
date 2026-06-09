@@ -41,6 +41,13 @@ WIRE_NULL    = 0
 WIRE_BOOLEAN = 1
 WIRE_NUMBER  = 2
 WIRE_STRING  = 3
+WIRE_ARRAY   = 4
+WIRE_MAP     = 5
+WIRE_ERROR   = 6
+
+FLAG_INTEGER = 0x01  # WIRE_NUMBER: payload is integer encoded as f64 bits
+FLAG_DECIMAL = 0x02  # WIRE_NUMBER: payload is raw i64 fixed-point (scale ×1000)
+FLAG_RUNE    = 0x04  # WIRE_NUMBER: payload is a Unicode codepoint
 
 class _ValueWire(ctypes.Structure):
     _fields_ = [
@@ -54,9 +61,7 @@ class _ValueWire(ctypes.Structure):
 
 def _num(v, *, integer=False):
     bits = struct.unpack("Q", struct.pack("d", float(v)))[0]
-    # flags bit 0: mark as integer so wireToValue produces .int (not .float).
-    # Without this, calling int-typed Gengo params fails with TypeError.
-    return _ValueWire(tag=WIRE_NUMBER, flags=(1 if integer else 0), payload=bits)
+    return _ValueWire(tag=WIRE_NUMBER, flags=(FLAG_INTEGER if integer else 0), payload=bits)
 
 def _str(s):
     b = s.encode("utf-8")
@@ -70,8 +75,14 @@ def _bool(v):
 def _unpack(w):
     if w.tag == WIRE_NULL:    return None
     if w.tag == WIRE_BOOLEAN: return bool(w.payload)
-    if w.tag == WIRE_NUMBER:  return struct.unpack("d", struct.pack("Q", w.payload))[0]
-    if w.tag == WIRE_STRING and w.len > 0:
+    if w.tag == WIRE_NUMBER:
+        if w.flags & FLAG_DECIMAL:
+            return struct.unpack("q", struct.pack("Q", w.payload))[0]  # raw i64
+        if w.flags & FLAG_RUNE:
+            return chr(w.payload)
+        fval = struct.unpack("d", struct.pack("Q", w.payload))[0]
+        return int(fval) if (w.flags & FLAG_INTEGER) else fval
+    if w.tag in (WIRE_STRING, WIRE_ERROR) and w.len > 0:
         return (ctypes.c_char * w.len).from_address(w.payload).raw.decode("utf-8")
     return None
 
@@ -95,7 +106,7 @@ _lib.engine_init.restype  = ctypes.c_int32
 _lib.engine_init.argtypes = []
 
 _lib.engine_init_with_config.restype  = ctypes.c_int32
-_lib.engine_init_with_config.argtypes = [ctypes.c_void_p]
+_lib.engine_init_with_config.argtypes = [ctypes.POINTER(_InstanceConfig)]
 
 _lib.engine_destroy.restype  = None
 _lib.engine_destroy.argtypes = [ctypes.c_int32]
@@ -127,7 +138,7 @@ class Engine:
                 max_ops=max_ops,
                 allow_io=False,
             )
-            self._h = _lib.engine_init_with_config(ctypes.byref(cfg))
+            self._h = _lib.engine_init_with_config(ctypes.pointer(cfg))
         else:
             self._h = _lib.engine_init()
         if self._h <= 0:
