@@ -1,0 +1,2 @@
+std := import("std")
+std.io.println(std.math.sqrt(-1))

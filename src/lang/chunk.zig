@@ -341,6 +341,7 @@ pub fn colAt(i: usize) u16 {
     return g_state.cols[i];
 }
 
-pub fn constAt(i: usize) Value {
+pub fn constAt(i: usize) !Value {
+    if (i >= g_state.const_count) return error.BadConstantIndex;
     return g_state.consts[i];
 }

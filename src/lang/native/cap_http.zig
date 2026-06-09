@@ -144,7 +144,10 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                             body = b;
                         } else if (std.mem.eql(u8, key, "timeout_ms")) {
                             timeout_ms = switch (entry.value) {
-                                .number => |n| @as(i64, @intFromFloat(n)),
+                                .number => |n| blk: {
+                                    if (n < @as(f64, @floatFromInt(std.math.minInt(i64))) or n >= std.math.pow(f64, 2.0, 63.0)) return error.TypeError;
+                                    break :blk @as(i64, @intFromFloat(n));
+                                },
                                 else => return error.TypeError,
                             };
                         } else if (std.mem.eql(u8, key, "headers")) {
