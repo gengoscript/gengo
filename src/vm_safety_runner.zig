@@ -96,7 +96,7 @@ fn runSetNamedPredicateTypeError() !void {
         .base = .int,
     } };
     try chunk.emitConst(.{ .object = nt }, 1);
-    try chunk.emitConst(.{ .number = 42 }, 1);
+    try chunk.emitConst(.{ .int = 42 }, 1);
     try chunk.emitOp(.set_named_predicate, 1);
     try chunk.emitOp(.halt, 1);
     vm.run() catch |e| return expectError("set-named-predicate-type-error", error.TypeError, e);
@@ -120,10 +120,10 @@ fn runRuntimeIsolation() !void {
     );
 
     const v1 = try rt1.callGlobal("read", &[_]Value{});
-    if (v1 != .number or v1.number != 11) return error.TestFailed;
+    if (v1 != .int or v1.int != 11) return error.TestFailed;
 
     const v2 = try rt2.callGlobal("read", &[_]Value{});
-    if (v2 != .number or v2.number != 99) return error.TestFailed;
+    if (v2 != .int or v2.int != 99) return error.TestFailed;
 
     // Interleaved calls into both runtimes should preserve each runtime's
     // independent mutable state.
@@ -145,10 +145,10 @@ fn runRuntimeIsolation() !void {
     const b1 = try rt2.callGlobal("bump", &[_]Value{});
     const a2 = try rt1.callGlobal("bump", &[_]Value{});
     const b2 = try rt2.callGlobal("bump", &[_]Value{});
-    if (a1 != .number or a1.number != 1) return error.TestFailed;
-    if (b1 != .number or b1.number != 102) return error.TestFailed;
-    if (a2 != .number or a2.number != 2) return error.TestFailed;
-    if (b2 != .number or b2.number != 104) return error.TestFailed;
+    if (a1 != .int or a1.int != 1) return error.TestFailed;
+    if (b1 != .int or b1.int != 102) return error.TestFailed;
+    if (a2 != .int or a2.int != 2) return error.TestFailed;
+    if (b2 != .int or b2.int != 104) return error.TestFailed;
 }
 
 fn runDupStackUnderflow() !void {
@@ -169,8 +169,8 @@ fn runDup2StackUnderflow() !void {
 
 fn runDivByZero() !void {
     resetAll();
-    try chunk.emitConst(.{ .number = 5.0 }, 1);
-    try chunk.emitConst(.{ .number = 0.0 }, 1);
+    try chunk.emitConst(.{ .float = 5.0 }, 1);
+    try chunk.emitConst(.{ .float = 0.0 }, 1);
     try chunk.emitOp(.div, 1);
     try chunk.emitOp(.halt, 1);
     vm.run() catch |e| return expectError("div-by-zero", error.DivisionByZero, e);
@@ -179,7 +179,7 @@ fn runDivByZero() !void {
 
 fn runCallNumber() !void {
     resetAll();
-    try chunk.emitConst(.{ .number = 42.0 }, 1);
+    try chunk.emitConst(.{ .float = 42.0 }, 1);
     try chunk.emitOp(.call, 1);
     try chunk.emitByte(0, 1); // argc = 0
     try chunk.emitOp(.halt, 1);
@@ -217,7 +217,7 @@ fn runNegOnNonNumber() !void {
 
 fn runAssertOnNonBoolean() !void {
     resetAll();
-    try chunk.emitConst(.{ .number = 42.0 }, 1);
+    try chunk.emitConst(.{ .float = 42.0 }, 1);
     try chunk.emitOp(.op_assert, 1);
     try chunk.emitOp(.halt, 1);
     vm.run() catch |e| return expectError("assert-non-bool", error.TypeError, e);
@@ -227,7 +227,7 @@ fn runAssertOnNonBoolean() !void {
 fn runAssertMsgOnNonBoolean() !void {
     resetAll();
     try chunk.emitConst(.{ .string = "msg" }, 1);
-    try chunk.emitConst(.{ .number = 42.0 }, 1);
+    try chunk.emitConst(.{ .float = 42.0 }, 1);
     try chunk.emitOp(.op_assert_msg, 1);
     try chunk.emitOp(.halt, 1);
     vm.run() catch |e| return expectError("assert-msg-non-bool", error.TypeError, e);
@@ -236,7 +236,7 @@ fn runAssertMsgOnNonBoolean() !void {
 
 fn runTrapCheckOnNonNull() !void {
     resetAll();
-    try chunk.emitConst(.{ .number = 1.0 }, 1);
+    try chunk.emitConst(.{ .float = 1.0 }, 1);
     try chunk.emitOp(.op_trap_check, 1);
     try chunk.emitOp(.halt, 1);
     vm.run() catch |e| return expectError("trap-check-non-null", error.TrapFired, e);
@@ -245,7 +245,7 @@ fn runTrapCheckOnNonNull() !void {
 
 fn runVariantPayloadOnNonObject() !void {
     resetAll();
-    try chunk.emitConst(.{ .number = 42.0 }, 1);
+    try chunk.emitConst(.{ .float = 42.0 }, 1);
     try chunk.emitOp(.variant_payload, 1);
     try chunk.emitOp(.halt, 1);
     vm.run() catch |e| return expectError("variant-payload-non-obj", error.TypeError, e);
@@ -254,7 +254,7 @@ fn runVariantPayloadOnNonObject() !void {
 
 fn runAssertTypeInvalidTag() !void {
     resetAll();
-    try chunk.emitConst(.{ .number = 1.0 }, 1);
+    try chunk.emitConst(.{ .float = 1.0 }, 1);
     try chunk.emitOp(.assert_type, 1);
     try chunk.emitByte(99, 1);
     try chunk.emitOp(.halt, 1);
@@ -265,7 +265,7 @@ fn runAssertTypeInvalidTag() !void {
 fn runSetNamedPredicateBadNtVal() !void {
     resetAll();
     // nt_val is a number (not an object), pred is null
-    try chunk.emitConst(.{ .number = 99.0 }, 1);
+    try chunk.emitConst(.{ .float = 99.0 }, 1);
     try chunk.emitOp(.null_val, 1);
     try chunk.emitOp(.set_named_predicate, 1);
     try chunk.emitOp(.halt, 1);
@@ -284,8 +284,8 @@ fn runDeferCallStackUnderflow() !void {
 
 fn runModByZero() !void {
     resetAll();
-    try chunk.emitConst(.{ .number = 5.0 }, 1);
-    try chunk.emitConst(.{ .number = 0.0 }, 1);
+    try chunk.emitConst(.{ .float = 5.0 }, 1);
+    try chunk.emitConst(.{ .float = 0.0 }, 1);
     try chunk.emitOp(.mod, 1);
     try chunk.emitOp(.halt, 1);
     vm.run() catch |e| return expectError("mod-by-zero", error.DivisionByZero, e);

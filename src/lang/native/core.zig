@@ -30,7 +30,7 @@ pub fn nativeLen(v: Value) !Value {
         },
         else => return error.TypeError,
     };
-    return .{ .number = @floatFromInt(n) };
+    return .{ .int = @floatFromInt(n) };
 }
 
 pub fn nativeByteLen(v: Value) !Value {
@@ -42,7 +42,7 @@ pub fn nativeByteLen(v: Value) !Value {
         },
         else => return error.TypeError,
     };
-    return .{ .number = @floatFromInt(n) };
+    return .{ .int = @floatFromInt(n) };
 }
 
 pub fn nativeDelete(m_obj: *Object, key: Value) !Value {
@@ -202,9 +202,9 @@ pub fn nativeGcStats() !Value {
     try vms.pushTempRoot(.{ .object = obj });
     defer vms.popTempRoot();
     const items = heap.bump(MapEntry, 3) orelse return error.OutOfMemory;
-    items[0] = .{ .key = .{ .string = "heap_used_bytes" }, .value = .{ .number = @floatFromInt(heap.usedBytes()) } };
-    items[1] = .{ .key = .{ .string = "heap_size_bytes" }, .value = .{ .number = @floatFromInt(heap.g_state.heap.len) } };
-    items[2] = .{ .key = .{ .string = "live_objects" }, .value = .{ .number = @floatFromInt(heap.liveObjectCount()) } };
+    items[0] = .{ .key = .{ .string = "heap_used_bytes" }, .value = .{ .int = @floatFromInt(heap.usedBytes()) } };
+    items[1] = .{ .key = .{ .string = "heap_size_bytes" }, .value = .{ .int = @floatFromInt(heap.g_state.heap.len) } };
+    items[2] = .{ .key = .{ .string = "live_objects" }, .value = .{ .int = @floatFromInt(heap.liveObjectCount()) } };
     obj.* = .{ .map = items[0..3] };
     return .{ .object = obj };
 }
@@ -214,29 +214,30 @@ pub fn nativeGcStatsExt() !Value {
     try vms.pushTempRoot(.{ .object = obj });
     defer vms.popTempRoot();
     const items = heap.bump(MapEntry, 8) orelse return error.OutOfMemory;
-    items[0] = .{ .key = .{ .string = "heap_used_bytes" }, .value = .{ .number = @floatFromInt(heap.usedBytes()) } };
-    items[1] = .{ .key = .{ .string = "heap_size_bytes" }, .value = .{ .number = @floatFromInt(heap.g_state.heap.len) } };
-    items[2] = .{ .key = .{ .string = "live_objects" }, .value = .{ .number = @floatFromInt(heap.liveObjectCount()) } };
-    items[3] = .{ .key = .{ .string = "gc_runs" }, .value = .{ .number = @floatFromInt(vms.vmState().gc_runs) } };
-    items[4] = .{ .key = .{ .string = "gc_time_ns" }, .value = .{ .number = @floatFromInt(vms.vmState().gc_time_ns) } };
-    items[5] = .{ .key = .{ .string = "alloc_object_calls" }, .value = .{ .number = @floatFromInt(vms.vmState().alloc_object_calls) } };
-    items[6] = .{ .key = .{ .string = "alloc_managed_slice_calls" }, .value = .{ .number = @floatFromInt(vms.vmState().alloc_managed_slice_calls) } };
-    items[7] = .{ .key = .{ .string = "alloc_managed_bytes_calls" }, .value = .{ .number = @floatFromInt(vms.vmState().alloc_managed_bytes_calls) } };
+    items[0] = .{ .key = .{ .string = "heap_used_bytes" }, .value = .{ .int = @floatFromInt(heap.usedBytes()) } };
+    items[1] = .{ .key = .{ .string = "heap_size_bytes" }, .value = .{ .int = @floatFromInt(heap.g_state.heap.len) } };
+    items[2] = .{ .key = .{ .string = "live_objects" }, .value = .{ .int = @floatFromInt(heap.liveObjectCount()) } };
+    items[3] = .{ .key = .{ .string = "gc_runs" }, .value = .{ .int = @floatFromInt(vms.vmState().gc_runs) } };
+    items[4] = .{ .key = .{ .string = "gc_time_ns" }, .value = .{ .int = @floatFromInt(vms.vmState().gc_time_ns) } };
+    items[5] = .{ .key = .{ .string = "alloc_object_calls" }, .value = .{ .int = @floatFromInt(vms.vmState().alloc_object_calls) } };
+    items[6] = .{ .key = .{ .string = "alloc_managed_slice_calls" }, .value = .{ .int = @floatFromInt(vms.vmState().alloc_managed_slice_calls) } };
+    items[7] = .{ .key = .{ .string = "alloc_managed_bytes_calls" }, .value = .{ .int = @floatFromInt(vms.vmState().alloc_managed_bytes_calls) } };
     obj.* = .{ .map = items[0..8] };
     return .{ .object = obj };
 }
 
 pub fn nativeConvToInt(v: Value) !Value {
     switch (v) {
-        .number => |n| { const tr = @trunc(n); return .{ .number = tr }; },
-        .rune => |r| return .{ .number = @floatFromInt(r) },
-        .boolean => |b| return .{ .number = if (b) 1 else 0 },
-        .string => |s| { const n = common.parseFloat(s) orelse return error.TypeError; const tr = @trunc(n); return .{ .number = tr }; },
+        .int => |n| { const tr = @trunc(n); return .{ .int = tr }; },
+        .float => |n| { const tr = @trunc(n); return .{ .int = tr }; },
+        .rune => |r| return .{ .int = @floatFromInt(r) },
+        .boolean => |b| return .{ .int = if (b) 1 else 0 },
+        .string => |s| { const n = common.parseFloat(s) orelse return error.TypeError; const tr = @trunc(n); return .{ .int = tr }; },
         .object => |o| {
             if (o.* == .dyn_string) {
                 const n = common.parseFloat(o.dyn_string) orelse return error.TypeError;
                 const tr = @trunc(n);
-                return .{ .number = tr };
+                return .{ .int = tr };
             }
             return error.TypeError;
         },
@@ -246,14 +247,15 @@ pub fn nativeConvToInt(v: Value) !Value {
 
 pub fn nativeConvToFloat(v: Value) !Value {
     switch (v) {
-        .number => |n| return .{ .number = n },
-        .rune => |r| return .{ .number = @floatFromInt(r) },
-        .boolean => |b| return .{ .number = if (b) 1 else 0 },
-        .string => |s| { const n = common.parseFloat(s) orelse return error.TypeError; return .{ .number = n }; },
+        .int => |n| return .{ .float = n },
+        .float => |n| return .{ .float = n },
+        .rune => |r| return .{ .float = @floatFromInt(r) },
+        .boolean => |b| return .{ .float = if (b) 1 else 0 },
+        .string => |s| { const n = common.parseFloat(s) orelse return error.TypeError; return .{ .float = n }; },
         .object => |o| {
             if (o.* == .dyn_string) {
                 const n = common.parseFloat(o.dyn_string) orelse return error.TypeError;
-                return .{ .number = n };
+                return .{ .float = n };
             }
             return error.TypeError;
         },
@@ -264,7 +266,8 @@ pub fn nativeConvToFloat(v: Value) !Value {
 pub fn nativeConvToBool(v: Value) !Value {
     return .{ .boolean = switch (v) {
         .boolean => |b| b,
-        .number => |n| n != 0.0,
+        .int => |n| n != 0.0,
+        .float => |n| n != 0.0,
         .decimal => |d| d != 0,
         .rune => |r| r != 0,
         .string => |s| s.len != 0,
@@ -287,7 +290,12 @@ pub fn nativeConvToString(v: Value) !Value {
             return error.TypeError;
         },
         .boolean => |b| vmgc.makeDynString(if (b) "true" else "false"),
-        .number => |n| {
+        .int => |n| {
+            var buf: [64]u8 = undefined;
+            const s = std.fmt.bufPrint(buf[0..], "{d}", .{n}) catch return error.TypeError;
+            return vmgc.makeDynString(s);
+        },
+        .float => |n| {
             var buf: [64]u8 = undefined;
             const s = std.fmt.bufPrint(buf[0..], "{d}", .{n}) catch return error.TypeError;
             return vmgc.makeDynString(s);
@@ -305,7 +313,8 @@ pub fn nativeConvToString(v: Value) !Value {
 
 pub fn nativeTypeNameValue(v: Value) Value {
     return switch (v) {
-        .number => |n| .{ .string = if (isIntegralNumber(n)) "int" else "float" },
+        .int => .{ .string = "int" },
+        .float => .{ .string = "float" },
         .decimal => .{ .string = "decimal" },
         .rune => .{ .string = "rune" },
         .boolean => .{ .string = "bool" },
@@ -338,7 +347,8 @@ pub fn nativeTypeNameValue(v: Value) Value {
 
 pub fn nativeIsInt(v: Value) Value {
     return .{ .boolean = switch (v) {
-        .number => |n| isIntegralNumber(n),
+        .int => true,
+        .float => |n| isIntegralNumber(n),
         .object => isNamedBase(v, .int),
         else => false,
     } };
@@ -346,7 +356,8 @@ pub fn nativeIsInt(v: Value) Value {
 
 pub fn nativeIsFloat(v: Value) Value {
     return .{ .boolean = switch (v) {
-        .number => |n| !isIntegralNumber(n),
+        .int => false,
+        .float => |n| !isIntegralNumber(n),
         .object => isNamedBase(v, .float),
         else => false,
     } };
@@ -524,7 +535,8 @@ fn deepEqualValue(a: Value, b: Value, visits: []DeepEqVisit, visit_len: *usize) 
     if (a == .object and b == .object) return deepEqualObject(a.object, b.object, visits, visit_len);
     if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
     return switch (a) {
-        .number => |x| x == b.number,
+        .int => |x| x == b.int,
+        .float => |x| x == b.float,
         .decimal => |x| x == b.decimal,
         .rune => |x| x == b.rune,
         .boolean => |x| x == b.boolean,
@@ -783,7 +795,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
 
             if (argc != nf.arity) return error.ArityMismatch;
             _ = try vms.vmPop();
-            try vms.vmPush(.{ .number = @floatFromInt(heap.liveObjectCount()) });
+            try vms.vmPush(.{ .int = @floatFromInt(heap.liveObjectCount()) });
         },
         .core_gc_stats => {
 

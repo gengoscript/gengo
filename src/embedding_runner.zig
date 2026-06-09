@@ -76,9 +76,9 @@ fn expectCallAndStatePersistence() void {
     const r1 = rt.call("bump", &[_]Value{});
     const r2 = rt.call("bump", &[_]Value{});
     const r3 = rt.call("bump", &[_]Value{});
-    if (r1 != .ok or r1.ok != .number or r1.ok.number != 1) fail("embedding FAIL: bump #1\n");
-    if (r2 != .ok or r2.ok != .number or r2.ok.number != 2) fail("embedding FAIL: bump #2\n");
-    if (r3 != .ok or r3.ok != .number or r3.ok.number != 3) fail("embedding FAIL: bump #3\n");
+    if (r1 != .ok or r1.ok != .int or r1.ok.int != 1) fail("embedding FAIL: bump #1\n");
+    if (r2 != .ok or r2.ok != .int or r2.ok.int != 2) fail("embedding FAIL: bump #2\n");
+    if (r3 != .ok or r3.ok != .int or r3.ok.int != 3) fail("embedding FAIL: bump #3\n");
 }
 
 fn expectMaxOps() void {
@@ -135,7 +135,7 @@ fn expectRunPathWithSources() void {
     const call_res = rt.call("read", &[_]Value{});
     switch (call_res) {
         .ok => |v| {
-            if (v != .number or v.number != 42) fail("embedding FAIL: runPathWithSources result\n");
+            if (v != .int or v.int != 42) fail("embedding FAIL: runPathWithSources result\n");
         },
         else => fail("embedding FAIL: expected runPathWithSources call success\n"),
     }
@@ -191,7 +191,7 @@ fn expectRunPathWithSourceProvider() void {
     const call_res = rt.call("read", &[_]Value{});
     switch (call_res) {
         .ok => |v| {
-            if (v != .number or v.number != 42) fail("embedding FAIL: runPathWithSourceProvider result\n");
+            if (v != .int or v.int != 42) fail("embedding FAIL: runPathWithSourceProvider result\n");
         },
         else => fail("embedding FAIL: expected runPathWithSourceProvider call success\n"),
     }

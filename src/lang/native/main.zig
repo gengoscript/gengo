@@ -183,12 +183,12 @@ pub fn buildStdModule() !*Object {
         .{ .name = "nan", .value = try makeNative(.math_nan, 0) },
         .{ .name = "is_nan", .value = try makeNative(.math_is_nan, 1) },
         .{ .name = "is_inf", .value = try makeNative(.math_is_inf, 2) },
-        .{ .name = "pi", .value = .{ .number = std.math.pi } },
-        .{ .name = "e", .value = .{ .number = std.math.e } },
-        .{ .name = "phi", .value = .{ .number = 1.618033988749895 } },
+        .{ .name = "pi", .value = .{ .float = std.math.pi } },
+        .{ .name = "e", .value = .{ .float = std.math.e } },
+        .{ .name = "phi", .value = .{ .float = 1.618033988749895 } },
         .{ .name = "clamp", .value = try makeNative(.math_clamp, 3) },
         .{ .name = "sign", .value = try makeNative(.math_sign, 1) },
-        .{ .name = "inf", .value = .{ .number = std.math.inf(f64) } },
+        .{ .name = "inf", .value = .{ .float = std.math.inf(f64) } },
     };
     const math_obj = try makeNamespace("math", "@module_type:std.math", &math_entries);
     try vms.pushTempRoot(.{ .object = math_obj });
@@ -271,11 +271,11 @@ pub fn buildStdModule() !*Object {
         .{ .name = "since", .value = try makeNative(.time_since, 1) },
         .{ .name = "until", .value = try makeNative(.time_until, 1) },
         .{ .name = "parse_duration", .value = try makeNative(.time_parse_duration, 1) },
-        .{ .name = "ms", .value = .{ .number = 1 } },
-        .{ .name = "second", .value = .{ .number = 1000 } },
-        .{ .name = "minute", .value = .{ .number = 60_000 } },
-        .{ .name = "hour", .value = .{ .number = 3_600_000 } },
-        .{ .name = "day", .value = .{ .number = 86_400_000 } },
+        .{ .name = "ms", .value = .{ .int = 1 } },
+        .{ .name = "second", .value = .{ .int = 1000 } },
+        .{ .name = "minute", .value = .{ .int = 60_000 } },
+        .{ .name = "hour", .value = .{ .int = 3_600_000 } },
+        .{ .name = "day", .value = .{ .int = 86_400_000 } },
         .{ .name = "__type", .value = .{ .object = time_type_obj } },
     };
     const time_obj = try makeNamespace("time", "@module_type:std.time", &time_entries);

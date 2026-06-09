@@ -32,16 +32,17 @@ pub fn timeGetType() !*Object {
 pub fn timeBuildObj(ms: f64) !Value {
     const obj = try vmgc.vmAllocObject();
     const typ = try timeGetType();
-    obj.* = .{ .named_value = .{ .typ = typ, .value = .{ .number = ms } } };
+    obj.* = .{ .named_value = .{ .typ = typ, .value = .{ .float = ms } } };
     return .{ .object = obj };
 }
 
 pub fn timeGetMs(val: Value) !f64 {
     const uv = vms.unboxNamed(val);
     return switch (uv) {
-        .number => |n| if (n == n) n else return error.TypeError,
+        .int => |n| if (n == n) n else return error.TypeError,
+        .float => |n| if (n == n) n else return error.TypeError,
         .object => |obj| switch (obj.*) {
-            .named_value => |nv| if (nv.value == .number) nv.value.number else return error.TypeError,
+            .named_value => |nv| if (nv.value == .int) nv.value.int else if (nv.value == .float) nv.value.float else return error.TypeError,
             else => return error.TypeError,
         },
         else => return error.TypeError,
@@ -378,8 +379,8 @@ pub fn timeIsoWeek(ms: f64) !Value {
     obj.* = .{ .map = &[_]MapEntry{} };
     try vms.pushTempRoot(.{ .object = obj });
     defer vms.popTempRoot();
-    entries[0] = .{ .key = .{ .string = "year" }, .value = .{ .number = @floatFromInt(iso_year) } };
-    entries[1] = .{ .key = .{ .string = "week" }, .value = .{ .number = @floatFromInt(week) } };
+    entries[0] = .{ .key = .{ .string = "year" }, .value = .{ .int = @floatFromInt(iso_year) } };
+    entries[1] = .{ .key = .{ .string = "week" }, .value = .{ .int = @floatFromInt(week) } };
     obj.* = .{ .map_managed = entries[0..2] };
     return .{ .object = obj };
 }
@@ -618,14 +619,14 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             obj.* = .{ .map = &[_]MapEntry{} };
             try vms.pushTempRoot(.{ .object = obj });
             defer vms.popTempRoot();
-            entries[0] = .{ .key = .{ .string = "year" }, .value = .{ .number = @floatFromInt(p.year) } };
-            entries[1] = .{ .key = .{ .string = "month" }, .value = .{ .number = @floatFromInt(p.month) } };
-            entries[2] = .{ .key = .{ .string = "day" }, .value = .{ .number = @floatFromInt(p.day) } };
-            entries[3] = .{ .key = .{ .string = "hour" }, .value = .{ .number = @floatFromInt(p.hour) } };
-            entries[4] = .{ .key = .{ .string = "min" }, .value = .{ .number = @floatFromInt(p.min) } };
-            entries[5] = .{ .key = .{ .string = "sec" }, .value = .{ .number = @floatFromInt(p.sec) } };
-            entries[6] = .{ .key = .{ .string = "ms" }, .value = .{ .number = @floatFromInt(p.ms) } };
-            entries[7] = .{ .key = .{ .string = "weekday" }, .value = .{ .number = @floatFromInt(p.weekday) } };
+            entries[0] = .{ .key = .{ .string = "year" }, .value = .{ .int = @floatFromInt(p.year) } };
+            entries[1] = .{ .key = .{ .string = "month" }, .value = .{ .int = @floatFromInt(p.month) } };
+            entries[2] = .{ .key = .{ .string = "day" }, .value = .{ .int = @floatFromInt(p.day) } };
+            entries[3] = .{ .key = .{ .string = "hour" }, .value = .{ .int = @floatFromInt(p.hour) } };
+            entries[4] = .{ .key = .{ .string = "min" }, .value = .{ .int = @floatFromInt(p.min) } };
+            entries[5] = .{ .key = .{ .string = "sec" }, .value = .{ .int = @floatFromInt(p.sec) } };
+            entries[6] = .{ .key = .{ .string = "ms" }, .value = .{ .int = @floatFromInt(p.ms) } };
+            entries[7] = .{ .key = .{ .string = "weekday" }, .value = .{ .int = @floatFromInt(p.weekday) } };
             obj.* = .{ .map_managed = entries[0..field_count] };
             _ = try vms.vmPop(); _ = try vms.vmPop();
             try vms.vmPush(.{ .object = obj });
@@ -636,7 +637,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const recv = vms.vmState().stack[vms.vmState().stack_top - 1];
             const ms = try timeGetMs(recv);
             _ = try vms.vmPop(); _ = try vms.vmPop();
-            try vms.vmPush(.{ .number = timeNowMs() - ms });
+            try vms.vmPush(.{ .float = timeNowMs() - ms });
         },
         .time_sub => {
 
@@ -647,7 +648,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const ms_a = try timeGetMs(recv);
             const ms_b = try timeGetMs(other);
             _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
-            try vms.vmPush(.{ .number = ms_a - ms_b });
+            try vms.vmPush(.{ .float = ms_a - ms_b });
         },
         .time_unix => {
 
@@ -655,7 +656,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const recv = vms.vmState().stack[vms.vmState().stack_top - 1];
             const ms = try timeGetMs(recv);
             _ = try vms.vmPop(); _ = try vms.vmPop();
-            try vms.vmPush(.{ .number = @floor(ms / 1000) });
+            try vms.vmPush(.{ .int = @floor(ms / 1000) });
         },
         .time_unix_ms => {
 
@@ -663,7 +664,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const recv = vms.vmState().stack[vms.vmState().stack_top - 1];
             const ms = try timeGetMs(recv);
             _ = try vms.vmPop(); _ = try vms.vmPop();
-            try vms.vmPush(.{ .number = ms });
+            try vms.vmPush(.{ .float = ms });
         },
         .time_until => {
 
@@ -671,7 +672,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const recv = vms.vmState().stack[vms.vmState().stack_top - 1];
             const ms = try timeGetMs(recv);
             _ = try vms.vmPop(); _ = try vms.vmPop();
-            try vms.vmPush(.{ .number = ms - timeNowMs() });
+            try vms.vmPush(.{ .float = ms - timeNowMs() });
         },
         .time_parse_duration => {
 
@@ -679,7 +680,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const s = try vms.asStringValue(vms.vmState().stack[vms.vmState().stack_top - 1]);
             const ms = try parseDuration(s);
             _ = try vms.vmPop(); _ = try vms.vmPop();
-            try vms.vmPush(.{ .number = ms });
+            try vms.vmPush(.{ .float = ms });
         },
         .time_iso_week => {
 

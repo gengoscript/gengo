@@ -10,7 +10,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             if (argc != nf.arity) return error.ArityMismatch;
             const n = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 1]);
             _ = try vms.vmPop(); _ = try vms.vmPop();
-            try vms.vmPush(.{ .number = @abs(n) });
+            try vms.vmPush(.{ .float = @abs(n) });
         },
         .math_acos => {
 
@@ -20,7 +20,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             if (@abs(n) > 1.0) return error.RangeError;
             const result = std.math.acos(n);
             if (!std.math.isFinite(result)) return error.RangeError;
-            try vms.vmPush(.{ .number = result });
+            try vms.vmPush(.{ .float = result });
         },
         .math_asin => {
 
@@ -30,14 +30,14 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             if (@abs(n) > 1.0) return error.RangeError;
             const result = std.math.asin(n);
             if (!std.math.isFinite(result)) return error.RangeError;
-            try vms.vmPush(.{ .number = result });
+            try vms.vmPush(.{ .float = result });
         },
         .math_atan => {
 
             if (argc != nf.arity) return error.ArityMismatch;
             const n = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 1]);
             _ = try vms.vmPop(); _ = try vms.vmPop();
-            try vms.vmPush(.{ .number = std.math.atan(n) });
+            try vms.vmPush(.{ .float = std.math.atan(n) });
         },
         .math_atan2 => {
 
@@ -45,21 +45,21 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const x = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 1]);
             const y = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 2]);
             _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
-            try vms.vmPush(.{ .number = std.math.atan2(y, x) });
+            try vms.vmPush(.{ .float = std.math.atan2(y, x) });
         },
         .math_cbrt => {
 
             if (argc != nf.arity) return error.ArityMismatch;
             const n = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 1]);
             _ = try vms.vmPop(); _ = try vms.vmPop();
-            try vms.vmPush(.{ .number = std.math.cbrt(n) });
+            try vms.vmPush(.{ .float = std.math.cbrt(n) });
         },
         .math_ceil => {
 
             if (argc != nf.arity) return error.ArityMismatch;
             const n = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 1]);
             _ = try vms.vmPop(); _ = try vms.vmPop();
-            try vms.vmPush(.{ .number = @ceil(n) });
+            try vms.vmPush(.{ .float = @ceil(n) });
         },
         .math_clamp => {
 
@@ -68,14 +68,14 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const min = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 2]);
             const v = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 3]);
             _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
-            try vms.vmPush(.{ .number = @min(@max(v, min), max) });
+            try vms.vmPush(.{ .float = @min(@max(v, min), max) });
         },
         .math_cos => {
 
             if (argc != nf.arity) return error.ArityMismatch;
             const n = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 1]);
             _ = try vms.vmPop(); _ = try vms.vmPop();
-            try vms.vmPush(.{ .number = @cos(n) });
+            try vms.vmPush(.{ .float = @cos(n) });
         },
         .math_cosh => {
 
@@ -84,7 +84,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             _ = try vms.vmPop(); _ = try vms.vmPop();
             const result = std.math.cosh(n);
             if (!std.math.isFinite(result)) return error.RangeError;
-            try vms.vmPush(.{ .number = result });
+            try vms.vmPush(.{ .float = result });
         },
         .math_exp => {
 
@@ -93,7 +93,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             _ = try vms.vmPop(); _ = try vms.vmPop();
             const result = std.math.exp(n);
             if (!std.math.isFinite(result)) return error.RangeError;
-            try vms.vmPush(.{ .number = result });
+            try vms.vmPush(.{ .float = result });
         },
         .math_exp2 => {
 
@@ -102,14 +102,14 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             _ = try vms.vmPop(); _ = try vms.vmPop();
             const result = std.math.exp2(n);
             if (!std.math.isFinite(result)) return error.RangeError;
-            try vms.vmPush(.{ .number = result });
+            try vms.vmPush(.{ .float = result });
         },
         .math_floor => {
 
             if (argc != nf.arity) return error.ArityMismatch;
             const n = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 1]);
             _ = try vms.vmPop(); _ = try vms.vmPop();
-            try vms.vmPush(.{ .number = @floor(n) });
+            try vms.vmPush(.{ .float = @floor(n) });
         },
         .math_hypot => {
 
@@ -117,7 +117,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const q = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 1]);
             const p = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 2]);
             _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
-            try vms.vmPush(.{ .number = std.math.hypot(p, q) });
+            try vms.vmPush(.{ .float = std.math.hypot(p, q) });
         },
         .math_is_inf => {
 
@@ -144,7 +144,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             if (n <= 0.0) return error.RangeError;
             const result = @log(n);
             if (!std.math.isFinite(result)) return error.RangeError;
-            try vms.vmPush(.{ .number = result });
+            try vms.vmPush(.{ .float = result });
         },
         .math_log10 => {
 
@@ -154,7 +154,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             if (n <= 0.0) return error.RangeError;
             const result = @log10(n);
             if (!std.math.isFinite(result)) return error.RangeError;
-            try vms.vmPush(.{ .number = result });
+            try vms.vmPush(.{ .float = result });
         },
         .math_log2 => {
 
@@ -164,7 +164,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             if (n <= 0.0) return error.RangeError;
             const result = @log2(n);
             if (!std.math.isFinite(result)) return error.RangeError;
-            try vms.vmPush(.{ .number = result });
+            try vms.vmPush(.{ .float = result });
         },
         .math_max => {
 
@@ -172,7 +172,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const b = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 1]);
             const a = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 2]);
             _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
-            try vms.vmPush(.{ .number = @max(a, b) });
+            try vms.vmPush(.{ .float = @max(a, b) });
         },
         .math_min => {
 
@@ -180,7 +180,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const b = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 1]);
             const a = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 2]);
             _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
-            try vms.vmPush(.{ .number = @min(a, b) });
+            try vms.vmPush(.{ .float = @min(a, b) });
         },
         .math_mod => {
 
@@ -189,13 +189,13 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const x = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 2]);
             _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
             if (y == 0.0) return error.DivisionByZero;
-            try vms.vmPush(.{ .number = @mod(x, y) });
+            try vms.vmPush(.{ .float = @mod(x, y) });
         },
         .math_nan => {
 
             if (argc != nf.arity) return error.ArityMismatch;
             _ = try vms.vmPop();
-            try vms.vmPush(.{ .number = std.math.nan(f64) });
+            try vms.vmPush(.{ .float = std.math.nan(f64) });
         },
         .math_pow => {
 
@@ -205,14 +205,14 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
             const result = std.math.pow(f64, a, b);
             if (!std.math.isFinite(result)) return error.RangeError;
-            try vms.vmPush(.{ .number = result });
+            try vms.vmPush(.{ .float = result });
         },
         .math_round => {
 
             if (argc != nf.arity) return error.ArityMismatch;
             const n = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 1]);
             _ = try vms.vmPop(); _ = try vms.vmPop();
-            try vms.vmPush(.{ .number = @round(n) });
+            try vms.vmPush(.{ .float = @round(n) });
         },
         .math_sign => {
 
@@ -220,14 +220,14 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const n = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 1]);
             _ = try vms.vmPop(); _ = try vms.vmPop();
             const sign: f64 = if (n > 0) 1.0 else if (n < 0) -1.0 else 0.0;
-            try vms.vmPush(.{ .number = sign });
+            try vms.vmPush(.{ .float = sign });
         },
         .math_sin => {
 
             if (argc != nf.arity) return error.ArityMismatch;
             const n = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 1]);
             _ = try vms.vmPop(); _ = try vms.vmPop();
-            try vms.vmPush(.{ .number = @sin(n) });
+            try vms.vmPush(.{ .float = @sin(n) });
         },
         .math_sinh => {
 
@@ -236,7 +236,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             _ = try vms.vmPop(); _ = try vms.vmPop();
             const result = std.math.sinh(n);
             if (!std.math.isFinite(result)) return error.RangeError;
-            try vms.vmPush(.{ .number = result });
+            try vms.vmPush(.{ .float = result });
         },
         .math_sqrt => {
 
@@ -246,28 +246,28 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             if (n < 0.0) return error.RangeError;
             const result = @sqrt(n);
             if (!std.math.isFinite(result)) return error.RangeError;
-            try vms.vmPush(.{ .number = result });
+            try vms.vmPush(.{ .float = result });
         },
         .math_tan => {
 
             if (argc != nf.arity) return error.ArityMismatch;
             const n = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 1]);
             _ = try vms.vmPop(); _ = try vms.vmPop();
-            try vms.vmPush(.{ .number = std.math.tan(n) });
+            try vms.vmPush(.{ .float = std.math.tan(n) });
         },
         .math_tanh => {
 
             if (argc != nf.arity) return error.ArityMismatch;
             const n = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 1]);
             _ = try vms.vmPop(); _ = try vms.vmPop();
-            try vms.vmPush(.{ .number = std.math.tanh(n) });
+            try vms.vmPush(.{ .float = std.math.tanh(n) });
         },
         .math_trunc => {
 
             if (argc != nf.arity) return error.ArityMismatch;
             const n = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 1]);
             _ = try vms.vmPop(); _ = try vms.vmPop();
-            try vms.vmPush(.{ .number = @trunc(n) });
+            try vms.vmPush(.{ .float = @trunc(n) });
         },
         else => {},
     }

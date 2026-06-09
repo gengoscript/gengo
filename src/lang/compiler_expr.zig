@@ -243,7 +243,8 @@ pub fn mapLit(c: anytype) !void {
 
 pub fn numLit(c: anytype) !void {
     const n = common.parseFloat(c.prev.src) orelse return error.BadNumber;
-    try chunk.emitConst(.{ .number = n }, c.prev.line);
+    const is_float = std.mem.indexOfAny(u8, c.prev.src, ".eE") != null;
+    try chunk.emitConst(if (is_float) .{ .float = n } else .{ .int = n }, c.prev.line);
 }
 
 pub fn parsePrecedence(c: anytype, p: Prec) anyerror!void {

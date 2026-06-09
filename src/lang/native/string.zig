@@ -114,9 +114,9 @@ pub fn nativeStrEndsWith(s: []const u8, suffix: []const u8) Value {
 }
 
 pub fn nativeStrIndexOf(s: []const u8, sub: []const u8) !Value {
-    const byte_idx = std.mem.indexOf(u8, s, sub) orelse return .{ .number = -1.0 };
+    const byte_idx = std.mem.indexOf(u8, s, sub) orelse return .{ .int = -1.0 };
     const rune_idx = try vmstr.utf8RuneCount(s[0..byte_idx]);
-    return .{ .number = @floatFromInt(rune_idx) };
+    return .{ .int = @floatFromInt(rune_idx) };
 }
 
 pub fn nativeStrReplace(s: []const u8, old: []const u8, new: []const u8) !Value {
@@ -149,9 +149,9 @@ pub fn nativeStrReplace(s: []const u8, old: []const u8, new: []const u8) !Value 
 }
 
 pub fn nativeStrLastIndexOf(s: []const u8, sub: []const u8) !Value {
-    const byte_idx = std.mem.lastIndexOf(u8, s, sub) orelse return .{ .number = -1.0 };
+    const byte_idx = std.mem.lastIndexOf(u8, s, sub) orelse return .{ .int = -1.0 };
     const rune_idx = try vmstr.utf8RuneCount(s[0..byte_idx]);
-    return .{ .number = @floatFromInt(rune_idx) };
+    return .{ .int = @floatFromInt(rune_idx) };
 }
 
 pub fn nativeStrRepeat(s: []const u8, count_v: Value) !Value {
@@ -199,7 +199,7 @@ pub fn nativeStrSplitOnce(s: []const u8, sep: []const u8) !Value {
 }
 
 pub fn nativeStrCount(s: []const u8, sub: []const u8) Value {
-    return .{ .number = @floatFromInt(std.mem.count(u8, s, sub)) };
+    return .{ .int = @floatFromInt(std.mem.count(u8, s, sub)) };
 }
 
 pub fn nativeStrFields(s: []const u8) !Value {

@@ -7,6 +7,7 @@ const cfg = @import("../runtime/config.zig");
 const Op = @import("op.zig").Op;
 const vmod = @import("value.zig");
 const Value = vmod.Value;
+const VTag = vmod.VTag;
 const Object = vmod.Object;
 const MapEntry = vmod.MapEntry;
 const IterObj = vmod.IterObj;
@@ -62,8 +63,11 @@ const concatDynString = vmgc.concatDynString;
 fn panicMessageFromValue(v: Value) []const u8 {
     if (v == .string) return v.string;
     if (v == .object and v.object.* == .dyn_string) return v.object.dyn_string;
-    if (v == .number) {
-        return std.fmt.bufPrint(&vmState().str_acc, "{d}", .{v.number}) catch "AssertionFailed";
+    if (v == .int) {
+        return std.fmt.bufPrint(&vmState().str_acc, "{d}", .{v.int}) catch "AssertionFailed";
+    }
+    if (v == .float) {
+        return std.fmt.bufPrint(&vmState().str_acc, "{d}", .{v.float}) catch "AssertionFailed";
     }
     if (v == .boolean) return if (v.boolean) "true" else "false";
     if (v == .null) return "null";
@@ -95,6 +99,14 @@ fn namedTypeCarrier(a: Value, b: Value) !?*Object {
     return error.TypeError;
 }
 
+fn numericOpTag(a: Value, b: Value) !VTag {
+    const a_raw = a == .int or a == .float;
+    const b_raw = b == .int or b == .float;
+    if (a_raw and b_raw and @as(VTag, a) != @as(VTag, b)) return error.TypeError;
+    if (a == .float or b == .float) return .float;
+    return .int;
+}
+
 fn decimalOpValues(a: Value, b: Value) ?struct { lhs: i64, rhs: i64, typ: *Object } {
     if (a == .object and a.object.* == .named_value and
         b == .object and b.object.* == .named_value and
@@ -116,18 +128,27 @@ fn pushDecimalResultWithCarrier(typ: *Object, d: i64) !void {
     try vmPush(wrapped);
 }
 
-fn pushNumericResultWithCarrier(a: Value, b: Value, n: f64) !void {
+fn makeNumeric(tag: VTag, n: f64) Value {
+    return switch (tag) {
+        .int => .{ .int = n },
+        .float => .{ .float = n },
+        else => .{ .int = n },
+    };
+}
+
+fn pushNumericResultWithCarrier(a: Value, b: Value, n: f64, tag: VTag) !void {
     if (!std.math.isFinite(n)) {
         vms.setRuntimeErr("non-finite value in arithmetic operation", .{});
         return error.TypeError;
     }
+    const val = makeNumeric(tag, n);
     const carrier = try namedTypeCarrier(a, b);
     if (carrier) |typ| {
-        const wrapped = try vmtyp.coerceNamedTypeResult(typ, .{ .number = n });
+        const wrapped = try vmtyp.coerceNamedTypeResult(typ, val);
         try checkNamedTypePredicate(typ, wrapped.object.named_value.value);
         try vmPush(wrapped);
     } else {
-        try vmPush(.{ .number = n });
+        try vmPush(val);
     }
 }
 
@@ -433,7 +454,8 @@ fn iterNext1(it: *IterObj) !void {
                 return;
             }
             const typ_obj = it.source.?;
-            const val = try vmtyp.makeNamedValue(typ_obj, .{ .number = it.range_current });
+            const nt = typ_obj.named_type;
+            const val = try vmtyp.makeNamedValue(typ_obj, if (nt.base == .float) .{ .float = it.range_current } else .{ .int = it.range_current });
             const next = it.range_current + 1.0;
             if (next == it.range_current) return error.RangeError;
             it.range_current = next;
@@ -450,7 +472,7 @@ fn iterNext2(it: *IterObj) !void {
                 try vmPush(.{ .boolean = false });
                 return;
             }
-            try vmPush(.{ .number = @floatFromInt(it.index) });
+            try vmPush(.{ .int = @floatFromInt(it.index) });
             try vmPush(it.array[it.index]);
             it.index += 1;
             try vmPush(.{ .boolean = true });
@@ -463,7 +485,7 @@ fn iterNext2(it: *IterObj) !void {
             const ridx = it.rune_index;
             const start = try vmstr.utf8ByteOffsetForRuneIndexCached(it.string, ridx);
             const end = try vmstr.utf8ByteOffsetForRuneIndexCached(it.string, ridx + 1);
-            try vmPush(.{ .number = @floatFromInt(it.rune_index) });
+            try vmPush(.{ .int = @floatFromInt(it.rune_index) });
             if (it.string_managed) {
                 try vmPush(try makeDynString(it.string[start..end]));
             } else {
@@ -614,7 +636,7 @@ fn opGetLocalGetField() !void {
             const name = (try chunk.constAt(name_idx)).string;
             if (common.streq(name, "len")) {
                 const items = vms.asMapSlice(obj);
-                try vmPush(.{ .number = @floatFromInt(items.len) });
+                try vmPush(.{ .int = @floatFromInt(items.len) });
             } else {
                 const items = vms.asMapSlice(obj);
                 const key_v = Value{ .string = name };
@@ -631,7 +653,7 @@ fn opGetLocalGetField() !void {
         .map_hashed => |hm| {
             const name = (try chunk.constAt(name_idx)).string;
             if (common.streq(name, "len")) {
-                try vmPush(.{ .number = @floatFromInt(hm.len) });
+                try vmPush(.{ .int = @floatFromInt(hm.len) });
             } else {
                 const key_v = Value{ .string = name };
                 if (vmmap.mapFindHashedIndex(hm.entries[0..hm.len], hm.buckets, key_v)) |fi| {
@@ -673,10 +695,10 @@ fn opGetLocalGetField() !void {
                 try vmPush(.{ .string = nt.name });
             } else if (common.streq(name, "first")) {
                 if (!nt.has_range) return error.TypeError;
-                try vmPush(try vmtyp.makeNamedValue(obj, .{ .number = nt.min }));
+                try vmPush(try vmtyp.makeNamedValue(obj, if (nt.base == .float) .{ .float = nt.min } else .{ .int = nt.min }));
             } else if (common.streq(name, "last")) {
                 if (!nt.has_range) return error.TypeError;
-                try vmPush(try vmtyp.makeNamedValue(obj, .{ .number = nt.max }));
+                try vmPush(try vmtyp.makeNamedValue(obj, if (nt.base == .float) .{ .float = nt.max } else .{ .int = nt.max }));
             } else if (common.streq(name, "succ") or common.streq(name, "pred")) {
                 if (!nt.has_range) return error.TypeError;
                 const fn_obj = try vmAllocObject();
@@ -824,10 +846,10 @@ fn opGetIndex() !void {
                     try vmPush(.{ .string = nt.name });
                 } else if (common.streq(key, "first")) {
                     if (!nt.has_range) return error.TypeError;
-                    try vmPush(try vmtyp.makeNamedValue(obj, .{ .number = nt.min }));
+                    try vmPush(try vmtyp.makeNamedValue(obj, if (nt.base == .float) .{ .float = nt.min } else .{ .int = nt.min }));
                 } else if (common.streq(key, "last")) {
                     if (!nt.has_range) return error.TypeError;
-                    try vmPush(try vmtyp.makeNamedValue(obj, .{ .number = nt.max }));
+                    try vmPush(try vmtyp.makeNamedValue(obj, if (nt.base == .float) .{ .float = nt.max } else .{ .int = nt.max }));
                 } else return error.UnknownStructField;
             },
             .variant_type => |vt| {
@@ -1211,7 +1233,7 @@ fn opGetField() !void {
         .map, .map_managed => {
             if (common.streq(name, "len")) {
                 const items = vms.asMapSlice(obj);
-                try vmPush(.{ .number = @floatFromInt(items.len) });
+                try vmPush(.{ .int = @floatFromInt(items.len) });
             } else {
                 const items = vms.asMapSlice(obj);
                 const key_v = Value{ .string = name };
@@ -1227,7 +1249,7 @@ fn opGetField() !void {
         },
         .map_hashed => |hm| {
             if (common.streq(name, "len")) {
-                try vmPush(.{ .number = @floatFromInt(hm.len) });
+                try vmPush(.{ .int = @floatFromInt(hm.len) });
             } else {
                 const key_v = Value{ .string = name };
                 if (vmmap.mapFindHashedIndex(hm.entries[0..hm.len], hm.buckets, key_v)) |fi| {
@@ -1267,10 +1289,10 @@ fn opGetField() !void {
                 try vmPush(.{ .string = nt.name });
             } else if (common.streq(name, "first")) {
                 if (!nt.has_range) return error.TypeError;
-                try vmPush(try vmtyp.makeNamedValue(obj, .{ .number = nt.min }));
+                try vmPush(try vmtyp.makeNamedValue(obj, if (nt.base == .float) .{ .float = nt.min } else .{ .int = nt.min }));
             } else if (common.streq(name, "last")) {
                 if (!nt.has_range) return error.TypeError;
-                try vmPush(try vmtyp.makeNamedValue(obj, .{ .number = nt.max }));
+                try vmPush(try vmtyp.makeNamedValue(obj, if (nt.base == .float) .{ .float = nt.max } else .{ .int = nt.max }));
             } else if (common.streq(name, "succ") or common.streq(name, "pred")) {
                 if (!nt.has_range) return error.TypeError;
                 const fn_obj = try vmAllocObject();
@@ -1654,9 +1676,10 @@ fn runInner() !void {
                     if (result[1] != 0) return error.TypeError;
                     try pushDecimalResultWithCarrier(dop.typ, result[0]);
                 } else {
+                    const tag = try numericOpTag(a, b);
                     const an = try vms.valueAsNumber(a);
                     const bn = try vms.valueAsNumber(b);
-                    try pushNumericResultWithCarrier(a, b, an + bn);
+                    try pushNumericResultWithCarrier(a, b, an + bn, tag);
                 }
             },
             .sub => {
@@ -1667,9 +1690,10 @@ fn runInner() !void {
                     if (result[1] != 0) return error.TypeError;
                     try pushDecimalResultWithCarrier(dop.typ, result[0]);
                 } else {
+                    const tag = try numericOpTag(a, b);
                     const an = try vms.valueAsNumber(a);
                     const bn = try vms.valueAsNumber(b);
-                    try pushNumericResultWithCarrier(a, b, an - bn);
+                    try pushNumericResultWithCarrier(a, b, an - bn, tag);
                 }
             },
             .mul => {
@@ -1677,22 +1701,23 @@ fn runInner() !void {
                 const a = try vmPop();
                 if (decimalOpValues(a, b)) |_| {
                     return error.TypeError;
-                } else if (a == .object and a.object.* == .named_value and a.object.named_value.typ.named_type.base == .decimal and b == .number and @trunc(b.number) == b.number and b.number >= @as(f64, @floatFromInt(std.math.minInt(i64))) and b.number < std.math.pow(f64, 2.0, 63.0)) {
+                } else if (a == .object and a.object.* == .named_value and a.object.named_value.typ.named_type.base == .decimal and b == .int and b.int >= @as(f64, @floatFromInt(std.math.minInt(i64))) and b.int < std.math.pow(f64, 2.0, 63.0)) {
                     const d = vms.valueAsDecimal(a.object.named_value.value) catch return error.TypeError;
-                    const other = @as(i64, @intFromFloat(b.number));
+                    const other = @as(i64, @intFromFloat(b.int));
                     const result = @mulWithOverflow(d, other);
                     if (result[1] != 0) return error.TypeError;
                     try pushDecimalResultWithCarrier(a.object.named_value.typ, result[0]);
-                } else if (b == .object and b.object.* == .named_value and b.object.named_value.typ.named_type.base == .decimal and a == .number and @trunc(a.number) == a.number and a.number >= @as(f64, @floatFromInt(std.math.minInt(i64))) and a.number < std.math.pow(f64, 2.0, 63.0)) {
+                } else if (b == .object and b.object.* == .named_value and b.object.named_value.typ.named_type.base == .decimal and a == .int and a.int >= @as(f64, @floatFromInt(std.math.minInt(i64))) and a.int < std.math.pow(f64, 2.0, 63.0)) {
                     const d = vms.valueAsDecimal(b.object.named_value.value) catch return error.TypeError;
-                    const other = @as(i64, @intFromFloat(a.number));
+                    const other = @as(i64, @intFromFloat(a.int));
                     const result = @mulWithOverflow(d, other);
                     if (result[1] != 0) return error.TypeError;
                     try pushDecimalResultWithCarrier(b.object.named_value.typ, result[0]);
                 } else {
+                    const tag = try numericOpTag(a, b);
                     const an = try vms.valueAsNumber(a);
                     const bn = try vms.valueAsNumber(b);
-                    try pushNumericResultWithCarrier(a, b, an * bn);
+                    try pushNumericResultWithCarrier(a, b, an * bn, tag);
                 }
             },
             .div => {
@@ -1700,33 +1725,40 @@ fn runInner() !void {
                 const a = try vmPop();
                 if (decimalOpValues(a, b)) |_| {
                     return error.TypeError;
-                } else if (a == .object and a.object.* == .named_value and a.object.named_value.typ.named_type.base == .decimal and b == .number and @trunc(b.number) == b.number and b.number >= @as(f64, @floatFromInt(std.math.minInt(i64))) and b.number < std.math.pow(f64, 2.0, 63.0)) {
+                } else if (a == .object and a.object.* == .named_value and a.object.named_value.typ.named_type.base == .decimal and b == .int and b.int >= @as(f64, @floatFromInt(std.math.minInt(i64))) and b.int < std.math.pow(f64, 2.0, 63.0)) {
                     const d = vms.valueAsDecimal(a.object.named_value.value) catch return error.TypeError;
-                    const divisor = @as(i64, @intFromFloat(b.number));
+                    const divisor = @as(i64, @intFromFloat(b.int));
                     if (divisor == 0) { vms.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
                     if (d == std.math.minInt(i64) and divisor == -1) return error.TypeError;
                     try pushDecimalResultWithCarrier(a.object.named_value.typ, @divTrunc(d, divisor));
                 } else {
+                    const tag = try numericOpTag(a, b);
                     const an = try vms.valueAsNumber(a);
                     const bn = try vms.valueAsNumber(b);
                     if (bn == 0.0) { vms.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
-                    try pushNumericResultWithCarrier(a, b, an / bn);
+                    if (a == .int and b == .int) {
+                        try pushNumericResultWithCarrier(a, b, an / bn, .float);
+                    } else {
+                        try pushNumericResultWithCarrier(a, b, an / bn, tag);
+                    }
                 }
             },
             .mod => {
                 const b = try vmPop();
                 const a = try vmPop();
+                const tag = try numericOpTag(a, b);
                 const an = try vms.valueAsNumber(a);
                 const bn = try vms.valueAsNumber(b);
                 if (bn == 0.0) { vms.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
-                try pushNumericResultWithCarrier(a, b, common.fmod(an, bn));
+                try pushNumericResultWithCarrier(a, b, common.fmod(an, bn), tag);
             },
             .pow => {
                 const b = try vmPop();
                 const a = try vmPop();
+                const tag = try numericOpTag(a, b);
                 const an = try vms.valueAsNumber(a);
                 const bn = try vms.valueAsNumber(b);
-                try pushNumericResultWithCarrier(a, b, std.math.pow(f64, an, bn));
+                try pushNumericResultWithCarrier(a, b, std.math.pow(f64, an, bn), tag);
             },
             .bit_and => {
                 const b = try vmPop();
@@ -1735,7 +1767,7 @@ fn runInner() !void {
                 const bn = try vms.valueAsInt(b);
                 const result = an & bn;
                 if (result > (1 << 53) or result < -(1 << 53)) return error.RangeError;
-                try pushNumericResultWithCarrier(a, b, @floatFromInt(result));
+                try pushNumericResultWithCarrier(a, b, @floatFromInt(result), .int);
             },
             .bit_or => {
                 const b = try vmPop();
@@ -1744,7 +1776,7 @@ fn runInner() !void {
                 const bn = try vms.valueAsInt(b);
                 const result = an | bn;
                 if (result > (1 << 53) or result < -(1 << 53)) return error.RangeError;
-                try pushNumericResultWithCarrier(a, b, @floatFromInt(result));
+                try pushNumericResultWithCarrier(a, b, @floatFromInt(result), .int);
             },
             .bit_xor => {
                 const b = try vmPop();
@@ -1753,7 +1785,7 @@ fn runInner() !void {
                 const bn = try vms.valueAsInt(b);
                 const result = an ^ bn;
                 if (result > (1 << 53) or result < -(1 << 53)) return error.RangeError;
-                try pushNumericResultWithCarrier(a, b, @floatFromInt(result));
+                try pushNumericResultWithCarrier(a, b, @floatFromInt(result), .int);
             },
             .bit_not => {
                 const v = try vmPop();
@@ -1762,11 +1794,11 @@ fn runInner() !void {
                 if (raw > (1 << 53) or raw < -(1 << 53)) return error.RangeError;
                 const result: f64 = @floatFromInt(raw);
                 if (v == .object and v.object.* == .named_value) {
-                    const wrapped = try vmtyp.coerceNamedTypeResult(v.object.named_value.typ, .{ .number = result });
+                    const wrapped = try vmtyp.coerceNamedTypeResult(v.object.named_value.typ, .{ .int = result });
                     try checkNamedTypePredicate(v.object.named_value.typ, wrapped.object.named_value.value);
                     try vmPush(wrapped);
                 } else {
-                    try vmPush(.{ .number = result });
+                    try vmPush(.{ .int = result });
                 }
             },
             .shl => {
@@ -1778,7 +1810,7 @@ fn runInner() !void {
                 const shift: u6 = @intCast(@min(bn, 63));
                 const result = an << shift;
                 if (result > (1 << 53) or result < -(1 << 53)) return error.RangeError;
-                try pushNumericResultWithCarrier(a, b, @floatFromInt(result));
+                try pushNumericResultWithCarrier(a, b, @floatFromInt(result), .int);
             },
             .shr => {
                 const b = try vmPop();
@@ -1789,7 +1821,7 @@ fn runInner() !void {
                 const shift: u6 = @intCast(@min(bn, 63));
                 const result = an >> shift;
                 if (result > (1 << 53) or result < -(1 << 53)) return error.RangeError;
-                try pushNumericResultWithCarrier(a, b, @floatFromInt(result));
+                try pushNumericResultWithCarrier(a, b, @floatFromInt(result), .int);
             },
             .cast_int => {
                 const raw = try vmPop();
@@ -1800,45 +1832,54 @@ fn runInner() !void {
                     const t = @trunc(n);
                     const as_i64: i64 = @intFromFloat(t);
                     if (@as(f64, @floatFromInt(as_i64)) != t) return error.RangeError;
-                    try vmPush(.{ .number = t });
+                    try vmPush(.{ .int = t });
                     continue;
                 }
                 const v = vms.unboxNamed(raw);
                 switch (v) {
-                    .number => |n| {
+                    .int => |n| try vmPush(.{ .int = n }),
+                    .float => |n| {
                         if (!std.math.isFinite(n) or
                             n < @as(f64, @floatFromInt(std.math.minInt(i64))) or
                             n >= @as(f64, @floatFromInt(std.math.maxInt(i64)))) return error.RangeError;
                         const t = @trunc(n);
                         const as_i64: i64 = @intFromFloat(t);
                         if (@as(f64, @floatFromInt(as_i64)) != t) return error.RangeError;
-                        try vmPush(.{ .number = t });
+                        try vmPush(.{ .int = t });
                     },
-                    .decimal => |d| try vmPush(.{ .number = @floatFromInt(d) }),
-                    .rune => |r| try vmPush(.{ .number = @floatFromInt(r) }),
-                    .boolean => |b| try vmPush(.{ .number = if (b) 1 else 0 }),
+                    .decimal => |d| try vmPush(.{ .int = @floatFromInt(d) }),
+                    .rune => |r| try vmPush(.{ .int = @floatFromInt(r) }),
+                    .boolean => |b| try vmPush(.{ .int = if (b) 1 else 0 }),
                     else => return error.TypeError,
                 }
             },
             .cast_float => {
                 const raw = try vmPop();
                 if (vmod.decimalLogicalNumber(raw)) |n| {
-                    try vmPush(.{ .number = n });
+                    try vmPush(.{ .float = n });
                     continue;
                 }
                 const v = vms.unboxNamed(raw);
                 switch (v) {
-                    .number => |n| try vmPush(.{ .number = n }),
-                    .decimal => |d| try vmPush(.{ .number = @floatFromInt(d) }),
-                    .rune => |r| try vmPush(.{ .number = @floatFromInt(r) }),
-                    .boolean => |b| try vmPush(.{ .number = if (b) 1.0 else 0.0 }),
+                    .int => |n| try vmPush(.{ .float = n }),
+                    .float => |n| try vmPush(.{ .float = n }),
+                    .decimal => |d| try vmPush(.{ .float = @floatFromInt(d) }),
+                    .rune => |r| try vmPush(.{ .float = @floatFromInt(r) }),
+                    .boolean => |b| try vmPush(.{ .float = if (b) 1.0 else 0.0 }),
                     else => return error.TypeError,
                 }
             },
             .cast_decimal => {
                 const v = vms.unboxNamed(try vmPop());
                 switch (v) {
-                    .number => |n| {
+                    .int => |n| {
+                        if (!std.math.isFinite(n)) return error.TypeError;
+                        const t = @trunc(n);
+                        if (t < @as(f64, @floatFromInt(std.math.minInt(i64))) or
+                            t >= std.math.pow(f64, 2.0, 63.0)) return error.TypeError;
+                        try vmPush(.{ .decimal = @intFromFloat(t) });
+                    },
+                    .float => |n| {
                         if (!std.math.isFinite(n)) return error.TypeError;
                         const t = @trunc(n);
                         if (t < @as(f64, @floatFromInt(std.math.minInt(i64))) or
@@ -1854,7 +1895,8 @@ fn runInner() !void {
             .cast_bool => {
                 const v = vms.unboxNamed(try vmPop());
                 switch (v) {
-                    .number => |n| try vmPush(.{ .boolean = n != 0.0 }),
+                    .int => |n| try vmPush(.{ .boolean = n != 0.0 }),
+                    .float => |n| try vmPush(.{ .boolean = n != 0.0 }),
                     .rune => |r| try vmPush(.{ .boolean = r != 0 }),
                     .boolean => |b| try vmPush(.{ .boolean = b }),
                     else => return error.TypeError,
@@ -1875,7 +1917,7 @@ fn runInner() !void {
                 const v = vms.unboxNamed(try vmPop());
                 const r: u21 = switch (v) {
                     .rune => |rv| rv,
-                    .number => |n| blk: {
+                    .int => |n| blk: {
                         const t = @trunc(n);
                         if (t != n or t < 0 or t > 0x10FFFF) return error.TypeError;
                         break :blk @intFromFloat(t);
@@ -1902,11 +1944,11 @@ fn runInner() !void {
                 const v = try vmPop();
                 const n = try vms.valueAsNumber(v);
                 if (v == .object and v.object.* == .named_value) {
-                    const wrapped = try vmtyp.coerceNamedTypeResult(v.object.named_value.typ, .{ .number = -n });
+                    const wrapped = try vmtyp.coerceNamedTypeResult(v.object.named_value.typ, if (v.object.named_value.typ.named_type.base == .float) .{ .float = -n } else .{ .int = -n });
                     try checkNamedTypePredicate(v.object.named_value.typ, wrapped.object.named_value.value);
                     try vmPush(wrapped);
                 } else {
-                    try vmPush(.{ .number = -n });
+                    try vmPush(if (v == .float) .{ .float = -n } else .{ .int = -n });
                 }
             },
             .not => try vmPush(.{ .boolean = !(try vmPop()).isTruthy() }),
@@ -1976,7 +2018,7 @@ fn runInner() !void {
                 const a = try vmPop();
                 const an = try vms.valueAsNumber(a);
                 const kn = try vms.valueAsNumber(k);
-                try pushNumericResultWithCarrier(a, k, an - kn);
+                try pushNumericResultWithCarrier(a, k, an - kn, try numericOpTag(a, k));
             },
 
             // Triple-fused: get_local + constant + eq/sub.
@@ -2012,7 +2054,7 @@ fn runInner() !void {
                 if (a == .object and a.object.* == .cell) a = a.object.cell.value;
                 const an = try vms.valueAsNumber(a);
                 const kn = try vms.valueAsNumber(k);
-                try pushNumericResultWithCarrier(a, k, an - kn);
+                try pushNumericResultWithCarrier(a, k, an - kn, try numericOpTag(a, k));
             },
 
             // Quad-fused: get_local + constant + eq + jif_pop.
@@ -2108,7 +2150,7 @@ fn runInner() !void {
                 } else {
                     const an = try vms.valueAsNumber(a);
                     const kn = try vms.valueAsNumber(k);
-                    try pushNumericResultWithCarrier(a, k, an + kn);
+                    try pushNumericResultWithCarrier(a, k, an + kn, try numericOpTag(a, k));
                 }
             },
             .const_lt => {

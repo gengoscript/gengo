@@ -156,9 +156,10 @@ pub const Object = union(ObjTag) {
     string_builder: StringBuilderObj,
 };
 
-pub const VTag = enum { number, decimal, rune, boolean, string, error_value, object, null };
+pub const VTag = enum { int, float, decimal, rune, boolean, string, error_value, object, null };
 pub const Value = union(VTag) {
-    number: f64,
+    int: f64,
+    float: f64,
     decimal: i64,
     rune: u21,
     boolean: bool,
@@ -172,6 +173,8 @@ pub const Value = union(VTag) {
             .boolean => |b| b,
             .rune => |r| r != 0,
             .decimal => |d| d != 0,
+            .int => |n| n != 0.0,
+            .float => |n| n != 0.0,
             .null => false,
             else => true,
         };
@@ -197,9 +200,17 @@ pub const Value = union(VTag) {
             if (!common.streq(av.tag, bv.tag)) return false;
             return equals(av.payload, bv.payload);
         }
-        if (@as(VTag, a) != @as(VTag, b)) return false;
+        if (@as(VTag, a) != @as(VTag, b)) {
+            if ((a == .int and b == .float) or (a == .float and b == .int)) {
+                const an = if (a == .int) a.int else a.float;
+                const bn = if (b == .int) b.int else b.float;
+                return an == bn;
+            }
+            return false;
+        }
         return switch (a) {
-            .number => |x| x == b.number,
+            .int => |x| x == b.int,
+            .float => |x| x == b.float,
             .decimal => |x| x == b.decimal,
             .rune => |x| x == b.rune,
             .boolean => |x| x == b.boolean,

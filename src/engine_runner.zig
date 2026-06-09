@@ -77,9 +77,9 @@ fn testMultiHandle() void {
     const b2 = rt2.call("bump", &.{});
     const b3 = rt1.call("bump", &.{});
 
-    if (b1 != .ok or b1.ok != .number or b1.ok.number != 1) fail("engine FAIL: h1 bump #1\n");
-    if (b2 != .ok or b2.ok != .number or b2.ok.number != 101) fail("engine FAIL: h2 bump #1\n");
-    if (b3 != .ok or b3.ok != .number or b3.ok.number != 2) fail("engine FAIL: h1 bump #2\n");
+    if (b1 != .ok or b1.ok != .int or b1.ok.int != 1) fail("engine FAIL: h1 bump #1\n");
+    if (b2 != .ok or b2.ok != .int or b2.ok.int != 101) fail("engine FAIL: h2 bump #1\n");
+    if (b3 != .ok or b3.ok != .int or b3.ok.int != 2) fail("engine FAIL: h1 bump #2\n");
 
     out("  multi-handle isolation: OK\n");
 }
@@ -105,7 +105,7 @@ fn testRunPathWithSourceProvider() void {
     const call_res = rt.call("read", &.{});
     switch (call_res) {
         .ok => |v| {
-            if (v != .number or v.number != 42) fail("engine FAIL: runPath result\n");
+            if (v != .int or v.int != 42) fail("engine FAIL: runPath result\n");
         },
         else => fail("engine FAIL: runPath call failed\n"),
     }
@@ -121,10 +121,10 @@ fn testCallWithArgs() void {
     );
     if (res != .ok) fail("engine FAIL: call_with_args setup\n");
 
-    const call_res = rt.call("add", &.{ .{ .number = 20 }, .{ .number = 22 } });
+    const call_res = rt.call("add", &.{ .{ .int = 20 }, .{ .int = 22 } });
     switch (call_res) {
         .ok => |v| {
-            if (v != .number or v.number != 42) fail("engine FAIL: add(20,22) != 42\n");
+            if (v != .int or v.int != 42) fail("engine FAIL: add(20,22) != 42\n");
         },
         else => fail("engine FAIL: add call failed\n"),
     }
@@ -263,9 +263,9 @@ fn testArrayWireResult() void {
             if (v != .object) fail("engine FAIL: expected object\n");
             const items = vms.asArraySlice(v.object);
             if (items.len != 3) fail("engine FAIL: expected 3 items\n");
-            if (items[0] != .number or items[0].number != 1) fail("engine FAIL: expected 1\n");
-            if (items[1] != .number or items[1].number != 2) fail("engine FAIL: expected 2\n");
-            if (items[2] != .number or items[2].number != 3) fail("engine FAIL: expected 3\n");
+            if (items[0] != .int or items[0].int != 1) fail("engine FAIL: expected 1\n");
+            if (items[1] != .int or items[1].int != 2) fail("engine FAIL: expected 2\n");
+            if (items[2] != .int or items[2].int != 3) fail("engine FAIL: expected 3\n");
         },
         else => fail("engine FAIL: array_wire call\n"),
     }
@@ -284,7 +284,7 @@ fn testMapWireResult() void {
     const call_res = rt.call("readMap", &.{.{ .string = "b" }});
     switch (call_res) {
         .ok => |v| {
-            if (v != .number or v.number != 2) fail("engine FAIL: expected 2\n");
+            if (v != .int or v.int != 2) fail("engine FAIL: expected 2\n");
         },
         else => fail("engine FAIL: map_wire call\n"),
     }
@@ -293,7 +293,7 @@ fn testMapWireResult() void {
     const global_m = rt.call("readMap", &.{.{ .string = "a" }});
     switch (global_m) {
         .ok => |v| {
-            if (v != .number or v.number != 1) fail("engine FAIL: expected 1\n");
+            if (v != .int or v.int != 1) fail("engine FAIL: expected 1\n");
         },
         else => fail("engine FAIL: map_wire call a\n"),
     }
@@ -651,10 +651,10 @@ fn testStructReturn() void {
                     else => fail("engine FAIL: struct bad key type\n"),
                 };
                 if (std.mem.eql(u8, key, "x")) {
-                    if (f.value != .number or f.value.number != 1) fail("engine FAIL: struct x field\n");
+                    if (f.value != .int or f.value.int != 1) fail("engine FAIL: struct x field\n");
                     found_x = true;
                 } else if (std.mem.eql(u8, key, "y")) {
-                    if (f.value != .number or f.value.number != 2) fail("engine FAIL: struct y field\n");
+                    if (f.value != .int or f.value.int != 2) fail("engine FAIL: struct y field\n");
                     found_y = true;
                 }
             }
@@ -716,7 +716,7 @@ fn testNamedTypeReturn() void {
         .ok => |v| {
             if (v != .object or v.object.* != .named_value) fail("engine FAIL: named type return type\n");
             const inner = v.object.named_value.value;
-            if (inner != .number or inner.number != 5) fail("engine FAIL: named type inner value\n");
+            if (inner != .int or inner.int != 5) fail("engine FAIL: named type inner value\n");
         },
         .runtime_error => |e| {
             writeAll(2, "named type call runtime: "); writeAll(2, e.msg); writeAll(2, "\n");

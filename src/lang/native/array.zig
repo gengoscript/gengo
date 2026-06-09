@@ -207,10 +207,10 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const arr_obj = arr_val.object;
             if (!vms.isArrayObject(arr_obj)) return error.TypeError;
             const items = vms.asArraySlice(arr_obj);
-            var result: Value = .{ .number = -1 };
+            var result: Value = .{ .int = -1 };
             for (items, 0..) |item, i| {
                 const ok = try vm.callFunction(fn_val, &.{item});
-                if (ok.isTruthy()) { result = .{ .number = @floatFromInt(i) }; break; }
+                if (ok.isTruthy()) { result = .{ .int = @floatFromInt(i) }; break; }
             }
             _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
             try vms.vmPush(result);

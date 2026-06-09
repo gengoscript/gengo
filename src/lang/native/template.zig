@@ -128,7 +128,12 @@ fn tplValToDynStr(v: Value) !Value {
     return switch (v) {
         .null => vmgc.makeDynString("null"),
         .boolean => |b| vmgc.makeDynString(if (b) "true" else "false"),
-        .number => |n| {
+        .int => |n| {
+            var buf: [64]u8 = undefined;
+            const s = std.fmt.bufPrint(buf[0..], "{d}", .{n}) catch return error.TypeError;
+            return vmgc.makeDynString(s);
+        },
+        .float => |n| {
             var buf: [64]u8 = undefined;
             const s = std.fmt.bufPrint(buf[0..], "{d}", .{n}) catch return error.TypeError;
             return vmgc.makeDynString(s);
@@ -356,9 +361,9 @@ pub fn tplParse(src_val: Value, src: []const u8) !Value {
     while (pos < src.len) {
         if (std.mem.indexOfPos(u8, src, pos, "{{")) |start| {
             if (start > pos) {
-                ops[idx] = .{ .number = @floatFromInt(@intFromEnum(TplOp.text)) };
+                ops[idx] = .{ .float = @floatFromInt(@intFromEnum(TplOp.text)) };
                 args[idx] = .{ .string = src[pos..start] };
-                jmp[idx] = .{ .number = -1 };
+                jmp[idx] = .{ .float = -1 };
                 idx += 1;
             }
             const end = std.mem.indexOfPos(u8, src, start + 2, "}}") orelse return error.InvalidTemplate;
@@ -378,43 +383,43 @@ pub fn tplParse(src_val: Value, src: []const u8) !Value {
                     switch (entry.kind) {
                         .if_block => {
                             if (entry.else_idx != std.math.maxInt(usize)) {
-                                jmp[entry.if_idx] = .{ .number = @floatFromInt(entry.else_idx + 1) };
-                                jmp[entry.else_idx] = .{ .number = @floatFromInt(idx) };
+                                jmp[entry.if_idx] = .{ .float = @floatFromInt(entry.else_idx + 1) };
+                                jmp[entry.else_idx] = .{ .float = @floatFromInt(idx) };
                             } else {
-                                jmp[entry.if_idx] = .{ .number = @floatFromInt(idx) };
+                                jmp[entry.if_idx] = .{ .float = @floatFromInt(idx) };
                             }
                             scope_pop = 0;
                         },
                         .range_block => {
                             if (entry.else_idx != std.math.maxInt(usize)) {
-                                jmp[entry.else_idx] = .{ .number = @floatFromInt(idx) };
-                                jmp[entry.if_idx] = .{ .number = @floatFromInt(entry.else_idx + 1) };
+                                jmp[entry.else_idx] = .{ .float = @floatFromInt(idx) };
+                                jmp[entry.if_idx] = .{ .float = @floatFromInt(entry.else_idx + 1) };
                             } else {
-                                jmp[entry.if_idx] = .{ .number = @floatFromInt(idx) };
+                                jmp[entry.if_idx] = .{ .float = @floatFromInt(idx) };
                             }
                             scope_pop = -2;
                         },
                         .with_block => {
-                            jmp[entry.if_idx] = .{ .number = @floatFromInt(idx) };
+                            jmp[entry.if_idx] = .{ .float = @floatFromInt(idx) };
                             scope_pop = -1;
                         },
                     }
                 }
-                ops[idx] = .{ .number = @floatFromInt(@intFromEnum(TplOp.end)) };
+                ops[idx] = .{ .float = @floatFromInt(@intFromEnum(TplOp.end)) };
                 args[idx] = .null;
-                jmp[idx] = .{ .number = scope_pop };
+                jmp[idx] = .{ .float = scope_pop };
                 idx += 1;
             } else if (parsed.op == .if_else) {
                 if (ctrl_top > 0) ctrl_stack[ctrl_top - 1].else_idx = idx;
-                ops[idx] = .{ .number = @floatFromInt(@intFromEnum(TplOp.if_else)) };
+                ops[idx] = .{ .float = @floatFromInt(@intFromEnum(TplOp.if_else)) };
                 args[idx] = .null;
-                jmp[idx] = .{ .number = -1 };
+                jmp[idx] = .{ .float = -1 };
                 idx += 1;
             } else if (parsed.op == .range_else) {
                 if (ctrl_top > 0) ctrl_stack[ctrl_top - 1].else_idx = idx;
-                ops[idx] = .{ .number = @floatFromInt(@intFromEnum(TplOp.range_else)) };
+                ops[idx] = .{ .float = @floatFromInt(@intFromEnum(TplOp.range_else)) };
                 args[idx] = .null;
-                jmp[idx] = .{ .number = -1 };
+                jmp[idx] = .{ .float = -1 };
                 idx += 1;
             } else {
                 if (parsed.op == .if_begin) {
@@ -427,16 +432,16 @@ pub fn tplParse(src_val: Value, src: []const u8) !Value {
                     ctrl_stack[ctrl_top] = .{ .kind = .with_block, .if_idx = idx, .else_idx = std.math.maxInt(usize) };
                     ctrl_top += 1;
                 }
-                ops[idx] = .{ .number = @floatFromInt(@intFromEnum(parsed.op)) };
+                ops[idx] = .{ .float = @floatFromInt(@intFromEnum(parsed.op)) };
                 args[idx] = parsed.arg;
-                jmp[idx] = .{ .number = -1 };
+                jmp[idx] = .{ .float = -1 };
                 idx += 1;
             }
             pos = end + 2;
         } else {
-            ops[idx] = .{ .number = @floatFromInt(@intFromEnum(TplOp.text)) };
+                ops[idx] = .{ .float = @floatFromInt(@intFromEnum(TplOp.text)) };
             args[idx] = .{ .string = src[pos..] };
-            jmp[idx] = .{ .number = -1 };
+            jmp[idx] = .{ .float = -1 };
             idx += 1;
             break;
         }
@@ -477,8 +482,8 @@ pub fn tplExec(tmpl: *Object, data: Value) !Value {
 
     while (ip < ops.len) {
         const op_v = ops[ip];
-        if (op_v != .number) return error.TypeError;
-        const op_num = op_v.number;
+        if (op_v != .int and op_v != .float) return error.TypeError;
+        const op_num = if (op_v == .int) op_v.int else op_v.float;
         if (op_num < 0 or op_num > 14) return error.TypeError;
         const op: TplOp = @enumFromInt(@as(u8, @intFromFloat(op_num)));
         const arg = args[ip];
@@ -516,20 +521,23 @@ pub fn tplExec(tmpl: *Object, data: Value) !Value {
                 const cond = try tplEvalExpr(arg, dot_stack[scope_top], funcs_v);
                 if (!cond.isTruthy()) {
                     const jv = jmps[ip];
-                    if (jv != .number or jv.number < 0 or jv.number >= @as(f64, @floatFromInt(ops.len))) return error.TypeError;
-                    ip = @intFromFloat(jv.number);
+                    const jv_num = if (jv == .int) jv.int else if (jv == .float) jv.float else return error.TypeError;
+                    if (jv_num < 0 or jv_num >= @as(f64, @floatFromInt(ops.len))) return error.TypeError;
+                    ip = @intFromFloat(jv_num);
                 } else {
                     ip += 1;
                 }
             },
             .if_else => {
                 const jv = jmps[ip];
-                if (jv != .number or jv.number < 0 or jv.number >= @as(f64, @floatFromInt(ops.len))) return error.TypeError;
-                ip = @intFromFloat(jv.number);
+                const jv_num = if (jv == .int) jv.int else if (jv == .float) jv.float else return error.TypeError;
+                if (jv_num < 0 or jv_num >= @as(f64, @floatFromInt(ops.len))) return error.TypeError;
+                ip = @intFromFloat(jv_num);
             },
             .end => {
                 const jv = jmps[ip];
-                if (jv == .number and jv.number == -2) {
+                const jv_num = if (jv == .int) jv.int else if (jv == .float) jv.float else null;
+                if (jv_num != null and jv_num.? == -2) {
                     if (iter_top > 0) {
                         const iter_idx = iter_top - 1;
                         iter_stack[iter_idx].index += 1;
@@ -545,8 +553,8 @@ pub fn tplExec(tmpl: *Object, data: Value) !Value {
                     } else {
                         ip += 1;
                     }
-                } else if (jv == .number and jv.number < 0 and jv.number > -@as(f64, @floatFromInt(std.math.maxInt(usize)))) {
-                    const pop = @as(usize, @intFromFloat(-jv.number));
+                } else if ((jv == .int or jv == .float) and (if (jv == .int) jv.int else jv.float) < 0 and (if (jv == .int) jv.int else jv.float) > -@as(f64, @floatFromInt(std.math.maxInt(usize)))) {
+                    const pop = @as(usize, @intFromFloat(-(if (jv == .int) jv.int else jv.float)));
                     if (scope_top >= pop) scope_top -= pop;
                     ip += 1;
                 } else {
@@ -568,24 +576,27 @@ pub fn tplExec(tmpl: *Object, data: Value) !Value {
                             ip += 1;
                         } else {
                             const jv = jmps[ip];
-                            if (jv != .number or jv.number < 0 or jv.number >= @as(f64, @floatFromInt(ops.len))) return error.TypeError;
-                            ip = @intFromFloat(jv.number);
+                    if ((jv != .int and jv != .float) or (if (jv == .int) jv.int else jv.float) < 0 or (if (jv == .int) jv.int else jv.float) >= @as(f64, @floatFromInt(ops.len))) return error.TypeError;
+                    ip = @intFromFloat(if (jv == .int) jv.int else jv.float);
                         }
                     } else {
                         const jv = jmps[ip];
-                        if (jv != .number or jv.number < 0 or jv.number >= @as(f64, @floatFromInt(ops.len))) return error.TypeError;
-                        ip = @intFromFloat(jv.number);
+                        const jv_num = if (jv == .int) jv.int else if (jv == .float) jv.float else return error.TypeError;
+                        if (jv_num < 0 or jv_num >= @as(f64, @floatFromInt(ops.len))) return error.TypeError;
+                        ip = @intFromFloat(jv_num);
                     }
                 } else {
                     const jv = jmps[ip];
-                    if (jv != .number or jv.number < 0 or jv.number >= @as(f64, @floatFromInt(ops.len))) return error.TypeError;
-                    ip = @intFromFloat(jv.number);
+                    const jv_num = if (jv == .int) jv.int else if (jv == .float) jv.float else return error.TypeError;
+                    if (jv_num < 0 or jv_num >= @as(f64, @floatFromInt(ops.len))) return error.TypeError;
+                    ip = @intFromFloat(jv_num);
                 }
             },
             .range_else => {
                 const jv = jmps[ip];
-                if (jv != .number or jv.number < 0 or jv.number >= @as(f64, @floatFromInt(ops.len))) return error.TypeError;
-                ip = @intFromFloat(jv.number);
+                const jv_num = if (jv == .int) jv.int else if (jv == .float) jv.float else return error.TypeError;
+                if (jv_num < 0 or jv_num >= @as(f64, @floatFromInt(ops.len))) return error.TypeError;
+                ip = @intFromFloat(jv_num);
             },
             .with_begin => {
                 const wval = try tplEvalExpr(arg, dot_stack[scope_top], funcs_v);

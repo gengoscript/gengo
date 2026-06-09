@@ -25,7 +25,15 @@ pub fn wireFromValue(v: Value) !host_abi.ValueWire {
             .len = 0,
             .reserved2 = 0,
         },
-        .number => |n| .{
+        .int => |n| .{
+            .tag = @intFromEnum(host_abi.WireTag.number),
+            .flags = 0,
+            .reserved = 0,
+            .payload = @bitCast(n),
+            .len = 0,
+            .reserved2 = 0,
+        },
+        .float => |n| .{
             .tag = @intFromEnum(host_abi.WireTag.number),
             .flags = 0,
             .reserved = 0,
@@ -100,7 +108,7 @@ pub fn valueFromWire(w: host_abi.ValueWire) !Value {
     return switch (tag) {
         .null => .null,
         .boolean => .{ .boolean = w.payload != 0 },
-        .number => .{ .number = @bitCast(w.payload) },
+        .number => .{ .float = @bitCast(w.payload) },
         .string => {
             if (w.len == 0) return Value{ .string = "" };
             const data = @as([*]u8, @ptrFromInt(@as(usize, @intCast(w.payload))))[0..@as(usize, @intCast(w.len))];
