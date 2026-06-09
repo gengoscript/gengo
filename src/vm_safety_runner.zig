@@ -151,6 +151,147 @@ fn runRuntimeIsolation() !void {
     if (b2 != .number or b2.number != 104) return error.TestFailed;
 }
 
+fn runDupStackUnderflow() !void {
+    resetAll();
+    try chunk.emitOp(.dup, 1);
+    try chunk.emitOp(.halt, 1);
+    vm.run() catch |e| return expectError("dup-stack-underflow", error.StackUnderflow, e);
+    return error.TestFailed;
+}
+
+fn runDup2StackUnderflow() !void {
+    resetAll();
+    try chunk.emitOp(.dup2, 1);
+    try chunk.emitOp(.halt, 1);
+    vm.run() catch |e| return expectError("dup2-stack-underflow", error.StackUnderflow, e);
+    return error.TestFailed;
+}
+
+fn runDivByZero() !void {
+    resetAll();
+    try chunk.emitConst(.{ .number = 5.0 }, 1);
+    try chunk.emitConst(.{ .number = 0.0 }, 1);
+    try chunk.emitOp(.div, 1);
+    try chunk.emitOp(.halt, 1);
+    vm.run() catch |e| return expectError("div-by-zero", error.DivisionByZero, e);
+    return error.TestFailed;
+}
+
+fn runCallNumber() !void {
+    resetAll();
+    try chunk.emitConst(.{ .number = 42.0 }, 1);
+    try chunk.emitOp(.call, 1);
+    try chunk.emitByte(0, 1); // argc = 0
+    try chunk.emitOp(.halt, 1);
+    vm.run() catch |e| return expectError("call-number", error.NotAFunction, e);
+    return error.TestFailed;
+}
+
+fn runReturnAtTopLevel() !void {
+    resetAll();
+    try chunk.emitOp(.ret, 1);
+    try chunk.emitOp(.halt, 1);
+    vm.run() catch |e| return expectError("return-toplevel", error.ReturnAtTopLevel, e);
+    return error.TestFailed;
+}
+
+fn runRetConstAtTopLevel() !void {
+    resetAll();
+    // ret_const checks ReturnAtTopLevel before reading the const index
+    try chunk.emitOp(.ret_const, 1);
+    try chunk.emitByte(0, 1);
+    try chunk.emitByte(0, 1);
+    try chunk.emitOp(.halt, 1);
+    vm.run() catch |e| return expectError("ret-const-toplevel", error.ReturnAtTopLevel, e);
+    return error.TestFailed;
+}
+
+fn runNegOnNonNumber() !void {
+    resetAll();
+    try chunk.emitConst(.{ .boolean = true }, 1);
+    try chunk.emitOp(.neg, 1);
+    try chunk.emitOp(.halt, 1);
+    vm.run() catch |e| return expectError("neg-non-number", error.TypeError, e);
+    return error.TestFailed;
+}
+
+fn runAssertOnNonBoolean() !void {
+    resetAll();
+    try chunk.emitConst(.{ .number = 42.0 }, 1);
+    try chunk.emitOp(.op_assert, 1);
+    try chunk.emitOp(.halt, 1);
+    vm.run() catch |e| return expectError("assert-non-bool", error.TypeError, e);
+    return error.TestFailed;
+}
+
+fn runAssertMsgOnNonBoolean() !void {
+    resetAll();
+    try chunk.emitConst(.{ .string = "msg" }, 1);
+    try chunk.emitConst(.{ .number = 42.0 }, 1);
+    try chunk.emitOp(.op_assert_msg, 1);
+    try chunk.emitOp(.halt, 1);
+    vm.run() catch |e| return expectError("assert-msg-non-bool", error.TypeError, e);
+    return error.TestFailed;
+}
+
+fn runTrapCheckOnNonNull() !void {
+    resetAll();
+    try chunk.emitConst(.{ .number = 1.0 }, 1);
+    try chunk.emitOp(.op_trap_check, 1);
+    try chunk.emitOp(.halt, 1);
+    vm.run() catch |e| return expectError("trap-check-non-null", error.TrapFired, e);
+    return error.TestFailed;
+}
+
+fn runVariantPayloadOnNonObject() !void {
+    resetAll();
+    try chunk.emitConst(.{ .number = 42.0 }, 1);
+    try chunk.emitOp(.variant_payload, 1);
+    try chunk.emitOp(.halt, 1);
+    vm.run() catch |e| return expectError("variant-payload-non-obj", error.TypeError, e);
+    return error.TestFailed;
+}
+
+fn runAssertTypeInvalidTag() !void {
+    resetAll();
+    try chunk.emitConst(.{ .number = 1.0 }, 1);
+    try chunk.emitOp(.assert_type, 1);
+    try chunk.emitByte(99, 1);
+    try chunk.emitOp(.halt, 1);
+    vm.run() catch |e| return expectError("assert-type-invalid-tag", error.TypeError, e);
+    return error.TestFailed;
+}
+
+fn runSetNamedPredicateBadNtVal() !void {
+    resetAll();
+    // nt_val is a number (not an object), pred is null
+    try chunk.emitConst(.{ .number = 99.0 }, 1);
+    try chunk.emitOp(.null_val, 1);
+    try chunk.emitOp(.set_named_predicate, 1);
+    try chunk.emitOp(.halt, 1);
+    vm.run() catch |e| return expectError("set-named-predicate-bad-nt", error.TypeError, e);
+    return error.TestFailed;
+}
+
+fn runDeferCallStackUnderflow() !void {
+    resetAll();
+    try chunk.emitOp(.defer_call, 1);
+    try chunk.emitByte(1, 1); // argc = 1
+    try chunk.emitOp(.halt, 1);
+    vm.run() catch |e| return expectError("defer-call-underflow", error.StackUnderflow, e);
+    return error.TestFailed;
+}
+
+fn runModByZero() !void {
+    resetAll();
+    try chunk.emitConst(.{ .number = 5.0 }, 1);
+    try chunk.emitConst(.{ .number = 0.0 }, 1);
+    try chunk.emitOp(.mod, 1);
+    try chunk.emitOp(.halt, 1);
+    vm.run() catch |e| return expectError("mod-by-zero", error.DivisionByZero, e);
+    return error.TestFailed;
+}
+
 export fn _start() void {
     runStackUnderflow() catch {
         std.os.wasi.proc_exit(1);
@@ -171,6 +312,51 @@ export fn _start() void {
         std.os.wasi.proc_exit(1);
     };
     runRuntimeIsolation() catch {
+        std.os.wasi.proc_exit(1);
+    };
+    runDupStackUnderflow() catch {
+        std.os.wasi.proc_exit(1);
+    };
+    runDup2StackUnderflow() catch {
+        std.os.wasi.proc_exit(1);
+    };
+    runDivByZero() catch {
+        std.os.wasi.proc_exit(1);
+    };
+    runModByZero() catch {
+        std.os.wasi.proc_exit(1);
+    };
+    runCallNumber() catch {
+        std.os.wasi.proc_exit(1);
+    };
+    runReturnAtTopLevel() catch {
+        std.os.wasi.proc_exit(1);
+    };
+    runRetConstAtTopLevel() catch {
+        std.os.wasi.proc_exit(1);
+    };
+    runNegOnNonNumber() catch {
+        std.os.wasi.proc_exit(1);
+    };
+    runAssertOnNonBoolean() catch {
+        std.os.wasi.proc_exit(1);
+    };
+    runAssertMsgOnNonBoolean() catch {
+        std.os.wasi.proc_exit(1);
+    };
+    runTrapCheckOnNonNull() catch {
+        std.os.wasi.proc_exit(1);
+    };
+    runVariantPayloadOnNonObject() catch {
+        std.os.wasi.proc_exit(1);
+    };
+    runAssertTypeInvalidTag() catch {
+        std.os.wasi.proc_exit(1);
+    };
+    runSetNamedPredicateBadNtVal() catch {
+        std.os.wasi.proc_exit(1);
+    };
+    runDeferCallStackUnderflow() catch {
         std.os.wasi.proc_exit(1);
     };
     out("vm-safety OK\n");

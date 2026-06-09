@@ -275,6 +275,7 @@ pub fn compileFuncWithPrefix(c: anytype, prefix: []const []const u8, is_named: b
     // compound-assignment operators (+=, etc.) work without a prior explicit
     // assignment. Other types (nullable, any, complex) are initialised to null.
     if (named_return_count > 0) {
+        if (arity + named_return_count > MaxLocals) return error.TooManyLocals;
         scope.named_return_base = arity;
         scope.named_return_count = named_return_count;
         var ri: u8 = 0;
@@ -913,10 +914,12 @@ pub fn parseAssignTargetList(c: anytype, targets: *[MaxLocals]AssignTarget, step
             break;
         }
 
+        const path_len = scount - start;
+        if (path_len > std.math.maxInt(u8)) return error.TooManyElements;
         targets[tcount] = .{
             .root = root,
             .step_start = start,
-            .step_count = @intCast(scount - start),
+            .step_count = @intCast(path_len),
         };
         tcount += 1;
         if (!c.match(.comma)) break;
@@ -1159,7 +1162,7 @@ pub fn stmt(c: anytype) anyerror!void {
     c.repl_expr_ok = saved;
     try c.expr();
     try chunk.emitOp(.pop, c.prev.line);
-    if (c.options.repl_mode and c.repl_expr_ok) {
+    if (c.options.repl_mode and c.repl_expr_ok and chunk.codeLen() > 0) {
         c.repl_expr_pop_pos = chunk.codeLen() - 1;
     }
     c.matchOpt(.semicolon);

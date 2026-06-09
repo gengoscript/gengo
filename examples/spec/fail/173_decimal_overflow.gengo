@@ -1,0 +1,3 @@
+// Decimal construction from very large float should be rejected
+type BigInt decimal 0
+a := BigInt(1e20)

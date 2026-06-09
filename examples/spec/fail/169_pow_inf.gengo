@@ -1,0 +1,5 @@
+std := import("std")
+// pow(0, -1) produces +Inf
+// using the result in arithmetic should raise TypeError
+r := std.math.pow(0.0, -1.0)
+_ = r + 1.0

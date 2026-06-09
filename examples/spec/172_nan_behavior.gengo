@@ -1,0 +1,12 @@
+std := import("std")
+
+// is_nan should detect NaN values
+n := std.math.nan()
+std.io.println(std.math.is_nan(n))
+
+// Normal values are not NaN
+std.io.println(std.math.is_nan(42.0))
+
+// pow should produce correct results for valid inputs
+std.io.println(int(std.math.pow(2.0, 3.0)))
+std.io.println(int(std.math.pow(10.0, 0.0)))

@@ -225,7 +225,8 @@ pub fn concatDynString(a: []const u8, b: []const u8) !Value {
     obj.* = .{ .dyn_string = &[_]u8{} }; // safe tag before GC can run
     try vms.pushTempRoot(.{ .object = obj });
     defer vms.popTempRoot();
-    const total = a.len + b.len;
+    const total = a.len +% b.len;
+    if (total < a.len) return error.OutOfMemory;
     const buf = try vmAllocManagedBytes(total);
     @memcpy(buf[0..a.len], a);
     @memcpy(buf[a.len..total], b);

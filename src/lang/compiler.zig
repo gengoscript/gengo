@@ -92,7 +92,7 @@ pub const Compiler = struct {
     export_count: u8 = 0,
     err_msg_buf: [512]u8 = undefined,
     err_msg_len: u16 = 0,
-    err_col: u16 = 0,
+    err_col: u32 = 0,
     err_line: u32 = 0,
 
     std_namespace_path: ?[]const u8 = null,
@@ -130,12 +130,12 @@ pub const Compiler = struct {
         while (!self.check(.eof)) {
             if (self.cur.typ == .err_invalid_char) {
                 self.setErr("invalid character '{c}'", .{self.cur.src[0]});
-                self.err_col = @intCast(self.cur.col);
+                self.err_col = self.cur.col;
                 return error.InvalidChar;
             }
             if (self.cur.typ == .err_unterminated_string) {
                 self.setErr("unterminated string literal", .{});
-                self.err_col = @intCast(self.cur.col);
+                self.err_col = self.cur.col;
                 return error.UnterminatedString;
             }
             self.repl_expr_ok = true;
@@ -706,7 +706,7 @@ pub const Compiler = struct {
             return;
         }
         self.setErr("expected {s}, found {s}", .{ self.tokenName(tt), self.tokenName(self.cur.typ) });
-        self.err_col = @intCast(self.cur.col);
+        self.err_col = self.cur.col;
         self.err_line = self.cur.line;
         return error.UnexpectedToken;
     }
@@ -840,7 +840,7 @@ pub const Compiler = struct {
                 if (path.len > 0) path else "",
             });
             self.err_line = line;
-            self.err_col = @intCast(self.prev.col);
+            self.err_col = self.prev.col;
             return error.UnknownField;
         };
         switch (kind) {
@@ -857,7 +857,7 @@ pub const Compiler = struct {
         if (cb(self.options.module_ctx.?, path, field)) return;
         self.setErr("unknown field '{s}' in module '{s}'", .{ field, path });
         self.err_line = line;
-        self.err_col = @intCast(self.prev.col);
+        self.err_col = self.prev.col;
         return error.UnknownField;
     }
 

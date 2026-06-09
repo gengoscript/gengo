@@ -117,6 +117,10 @@ fn pushDecimalResultWithCarrier(typ: *Object, d: i64) !void {
 }
 
 fn pushNumericResultWithCarrier(a: Value, b: Value, n: f64) !void {
+    if (!std.math.isFinite(n)) {
+        vms.setRuntimeErr("non-finite value in arithmetic operation", .{});
+        return error.TypeError;
+    }
     const carrier = try namedTypeCarrier(a, b);
     if (carrier) |typ| {
         const wrapped = try vmtyp.coerceNamedTypeResult(typ, .{ .number = n });
@@ -1644,7 +1648,9 @@ fn runInner() !void {
                     popTempRoot();
                     try vmPush(try result);
                 } else if (decimalOpValues(a, b)) |dop| {
-                    try pushDecimalResultWithCarrier(dop.typ, dop.lhs + dop.rhs);
+                    const result = @addWithOverflow(dop.lhs, dop.rhs);
+                    if (result[1] != 0) return error.TypeError;
+                    try pushDecimalResultWithCarrier(dop.typ, result[0]);
                 } else {
                     const an = try vms.valueAsNumber(a);
                     const bn = try vms.valueAsNumber(b);
@@ -1655,7 +1661,9 @@ fn runInner() !void {
                 const b = try vmPop();
                 const a = try vmPop();
                 if (decimalOpValues(a, b)) |dop| {
-                    try pushDecimalResultWithCarrier(dop.typ, dop.lhs - dop.rhs);
+                    const result = @subWithOverflow(dop.lhs, dop.rhs);
+                    if (result[1] != 0) return error.TypeError;
+                    try pushDecimalResultWithCarrier(dop.typ, result[0]);
                 } else {
                     const an = try vms.valueAsNumber(a);
                     const bn = try vms.valueAsNumber(b);
@@ -1669,10 +1677,16 @@ fn runInner() !void {
                     return error.TypeError;
                 } else if (a == .object and a.object.* == .named_value and a.object.named_value.typ.named_type.base == .decimal and b == .number and @trunc(b.number) == b.number) {
                     const d = vms.valueAsDecimal(a.object.named_value.value) catch return error.TypeError;
-                    try pushDecimalResultWithCarrier(a.object.named_value.typ, d * @as(i64, @intFromFloat(b.number)));
+                    const other = @as(i64, @intFromFloat(b.number));
+                    const result = @mulWithOverflow(d, other);
+                    if (result[1] != 0) return error.TypeError;
+                    try pushDecimalResultWithCarrier(a.object.named_value.typ, result[0]);
                 } else if (b == .object and b.object.* == .named_value and b.object.named_value.typ.named_type.base == .decimal and a == .number and @trunc(a.number) == a.number) {
                     const d = vms.valueAsDecimal(b.object.named_value.value) catch return error.TypeError;
-                    try pushDecimalResultWithCarrier(b.object.named_value.typ, d * @as(i64, @intFromFloat(a.number)));
+                    const other = @as(i64, @intFromFloat(a.number));
+                    const result = @mulWithOverflow(d, other);
+                    if (result[1] != 0) return error.TypeError;
+                    try pushDecimalResultWithCarrier(b.object.named_value.typ, result[0]);
                 } else {
                     const an = try vms.valueAsNumber(a);
                     const bn = try vms.valueAsNumber(b);
@@ -1688,6 +1702,7 @@ fn runInner() !void {
                     const d = vms.valueAsDecimal(a.object.named_value.value) catch return error.TypeError;
                     const divisor = @as(i64, @intFromFloat(b.number));
                     if (divisor == 0) { vms.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
+                    if (d == std.math.minInt(i64) and divisor == -1) return error.TypeError;
                     try pushDecimalResultWithCarrier(a.object.named_value.typ, @divTrunc(d, divisor));
                 } else {
                     const an = try vms.valueAsNumber(a);
@@ -1917,6 +1932,7 @@ fn runInner() !void {
                 }
                 const an = try vms.valueAsNumber(a);
                 const bn = try vms.valueAsNumber(b);
+                if (!std.math.isFinite(an) or !std.math.isFinite(bn)) { vms.setRuntimeErr("cannot compare non-finite value", .{}); return error.TypeError; }
                 try vmPush(.{ .boolean = an > bn });
             },
             .lt => {
@@ -1931,6 +1947,7 @@ fn runInner() !void {
                 }
                 const an = try vms.valueAsNumber(a);
                 const bn = try vms.valueAsNumber(b);
+                if (!std.math.isFinite(an) or !std.math.isFinite(bn)) { vms.setRuntimeErr("cannot compare non-finite value", .{}); return error.TypeError; }
                 try vmPush(.{ .boolean = an < bn });
             },
 
@@ -2037,6 +2054,7 @@ fn runInner() !void {
                 }
                 const an = try vms.valueAsNumber(if (a_named) a.object.named_value.value else a);
                 const kn = try vms.valueAsNumber(if (k_named) k.object.named_value.value else k);
+                if (!std.math.isFinite(an) or !std.math.isFinite(kn)) { vms.setRuntimeErr("cannot compare non-finite value", .{}); return error.TypeError; }
                 if (!(an < kn)) vmState().ip += off;
             },
 
@@ -2100,6 +2118,7 @@ fn runInner() !void {
                 }
                 const an = try vms.valueAsNumber(a);
                 const kn = try vms.valueAsNumber(k);
+                if (!std.math.isFinite(an) or !std.math.isFinite(kn)) { vms.setRuntimeErr("cannot compare non-finite value", .{}); return error.TypeError; }
                 try vmPush(.{ .boolean = an < kn });
             },
 
@@ -2570,6 +2589,7 @@ fn runInner() !void {
                 const argc = try vmByte();
                 if (vmState().defer_top >= vmState().defer_stack.len) return error.DeferStackOverflow;
                 const total: usize = @as(usize, argc) + 1;
+                if (vmState().stack_top < total) return error.StackUnderflow;
                 const start = vmState().stack_top - total;
                 const arr_obj = try vmAllocObject();
                 arr_obj.* = .{ .array = &[_]Value{} }; // safe tag before GC can run

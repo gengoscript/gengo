@@ -1,0 +1,5 @@
+std := import("std")
+// pow with negative base and fractional exponent produces NaN
+// using the result in arithmetic should raise TypeError
+r := std.math.pow(-1.0, 0.5)
+_ = r + 1.0

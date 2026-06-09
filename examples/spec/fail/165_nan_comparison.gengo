@@ -1,0 +1,4 @@
+std := import("std")
+n := std.math.nan()
+// NaN comparison should produce a runtime error
+_ = n > 0.0
