@@ -478,7 +478,9 @@ pub fn tplExec(tmpl: *Object, data: Value) !Value {
     while (ip < ops.len) {
         const op_v = ops[ip];
         if (op_v != .number) return error.TypeError;
-        const op: TplOp = @enumFromInt(@as(u8, @intFromFloat(op_v.number)));
+        const op_num = op_v.number;
+        if (op_num < 0 or op_num > 14) return error.TypeError;
+        const op: TplOp = @enumFromInt(@as(u8, @intFromFloat(op_num)));
         const arg = args[ip];
 
         switch (op) {
@@ -513,13 +515,17 @@ pub fn tplExec(tmpl: *Object, data: Value) !Value {
             .if_begin => {
                 const cond = try tplEvalExpr(arg, dot_stack[scope_top], funcs_v);
                 if (!cond.isTruthy()) {
-                    ip = @intFromFloat(jmps[ip].number);
+                    const jv = jmps[ip];
+                    if (jv != .number or jv.number < 0 or jv.number >= @as(f64, @floatFromInt(ops.len))) return error.TypeError;
+                    ip = @intFromFloat(jv.number);
                 } else {
                     ip += 1;
                 }
             },
             .if_else => {
-                ip = @intFromFloat(jmps[ip].number);
+                const jv = jmps[ip];
+                if (jv != .number or jv.number < 0 or jv.number >= @as(f64, @floatFromInt(ops.len))) return error.TypeError;
+                ip = @intFromFloat(jv.number);
             },
             .end => {
                 const jv = jmps[ip];
@@ -553,26 +559,37 @@ pub fn tplExec(tmpl: *Object, data: Value) !Value {
                     const obj = rval.object;
                     if (tplIsArray(obj)) {
                         if (tplAsArraySlice(obj).len > 0) {
+                            if (iter_top >= iter_stack.len) return error.TypeError;
+                            if (scope_top >= dot_stack.len - 1) return error.TypeError;
                             iter_stack[iter_top] = .{ .arr = obj, .index = 0, .body_ip = ip + 1 };
                             iter_top += 1;
                             scope_top += 1;
                             dot_stack[scope_top] = tplAsArraySlice(obj)[0];
                             ip += 1;
                         } else {
-                            ip = @intFromFloat(jmps[ip].number);
+                            const jv = jmps[ip];
+                    if (jv != .number or jv.number < 0 or jv.number >= @as(f64, @floatFromInt(ops.len))) return error.TypeError;
+                            ip = @intFromFloat(jv.number);
                         }
                     } else {
-                        ip = @intFromFloat(jmps[ip].number);
+                        const jv = jmps[ip];
+                        if (jv != .number or jv.number < 0 or jv.number >= @as(f64, @floatFromInt(ops.len))) return error.TypeError;
+                        ip = @intFromFloat(jv.number);
                     }
                 } else {
-                    ip = @intFromFloat(jmps[ip].number);
+                    const jv = jmps[ip];
+                    if (jv != .number or jv.number < 0 or jv.number >= @as(f64, @floatFromInt(ops.len))) return error.TypeError;
+                    ip = @intFromFloat(jv.number);
                 }
             },
             .range_else => {
-                ip = @intFromFloat(jmps[ip].number);
+                const jv = jmps[ip];
+                if (jv != .number or jv.number < 0 or jv.number >= @as(f64, @floatFromInt(ops.len))) return error.TypeError;
+                ip = @intFromFloat(jv.number);
             },
             .with_begin => {
                 const wval = try tplEvalExpr(arg, dot_stack[scope_top], funcs_v);
+                if (scope_top >= dot_stack.len - 1) return error.TypeError;
                 scope_top += 1;
                 dot_stack[scope_top] = wval;
                 ip += 1;

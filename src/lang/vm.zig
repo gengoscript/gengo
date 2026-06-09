@@ -1675,13 +1675,13 @@ fn runInner() !void {
                 const a = try vmPop();
                 if (decimalOpValues(a, b)) |_| {
                     return error.TypeError;
-                } else if (a == .object and a.object.* == .named_value and a.object.named_value.typ.named_type.base == .decimal and b == .number and @trunc(b.number) == b.number) {
+                } else if (a == .object and a.object.* == .named_value and a.object.named_value.typ.named_type.base == .decimal and b == .number and @trunc(b.number) == b.number and b.number >= @as(f64, @floatFromInt(std.math.minInt(i64))) and b.number < std.math.pow(f64, 2.0, 63.0)) {
                     const d = vms.valueAsDecimal(a.object.named_value.value) catch return error.TypeError;
                     const other = @as(i64, @intFromFloat(b.number));
                     const result = @mulWithOverflow(d, other);
                     if (result[1] != 0) return error.TypeError;
                     try pushDecimalResultWithCarrier(a.object.named_value.typ, result[0]);
-                } else if (b == .object and b.object.* == .named_value and b.object.named_value.typ.named_type.base == .decimal and a == .number and @trunc(a.number) == a.number) {
+                } else if (b == .object and b.object.* == .named_value and b.object.named_value.typ.named_type.base == .decimal and a == .number and @trunc(a.number) == a.number and a.number >= @as(f64, @floatFromInt(std.math.minInt(i64))) and a.number < std.math.pow(f64, 2.0, 63.0)) {
                     const d = vms.valueAsDecimal(b.object.named_value.value) catch return error.TypeError;
                     const other = @as(i64, @intFromFloat(a.number));
                     const result = @mulWithOverflow(d, other);
@@ -1698,7 +1698,7 @@ fn runInner() !void {
                 const a = try vmPop();
                 if (decimalOpValues(a, b)) |_| {
                     return error.TypeError;
-                } else if (a == .object and a.object.* == .named_value and a.object.named_value.typ.named_type.base == .decimal and b == .number and @trunc(b.number) == b.number) {
+                } else if (a == .object and a.object.* == .named_value and a.object.named_value.typ.named_type.base == .decimal and b == .number and @trunc(b.number) == b.number and b.number >= @as(f64, @floatFromInt(std.math.minInt(i64))) and b.number < std.math.pow(f64, 2.0, 63.0)) {
                     const d = vms.valueAsDecimal(a.object.named_value.value) catch return error.TypeError;
                     const divisor = @as(i64, @intFromFloat(b.number));
                     if (divisor == 0) { vms.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
