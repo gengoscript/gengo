@@ -503,6 +503,7 @@ fn retSlowPath(retval_in: Value) !bool {
         try pushTempRoot(deferred);
         const arr = vms.asArraySlice(deferred.object);
         if (arr.len > 0) {
+            if (arr.len > 256) return error.ArityMismatch;
             const dargc: u8 = @intCast(arr.len - 1);
             var di: usize = 0;
             while (di < arr.len) : (di += 1) try vmPush(arr[di]);
@@ -2655,6 +2656,7 @@ fn runInner() !void {
 fn runDeferredCall(deferred: Value) anyerror!void {
     const arr = vms.asArraySlice(deferred.object);
     if (arr.len == 0) return;
+    if (arr.len > 256) return;
     const dargc: u8 = @intCast(arr.len - 1);
     var di: usize = 0;
     while (di < arr.len) : (di += 1) vmPush(arr[di]) catch return;

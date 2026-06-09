@@ -27,6 +27,7 @@ fn markObjectQueue(obj: *Object) void {
     if (!heap.isObjectLive(obj)) return;
     if (heap.isObjectMarked(obj)) return;
     heap.markObject(obj);
+    if (mark_worklist_top >= mark_worklist.len) return;
     mark_worklist[mark_worklist_top] = obj;
     mark_worklist_top += 1;
 }
