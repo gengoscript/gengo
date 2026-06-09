@@ -27,6 +27,10 @@ Companion guides:
   - path plus `/mod.gengo`
 - Source modules return struct-backed namespace objects containing `pub` exports.
 - Field accesses on imported module objects are validated at compile time; accessing a name that is not exported raises a `CompileError`.
+- Host-defined modules are imported using the `@module:` prefix: `import("@module:mylib")`.
+  - The host registers them via `engine_register_module` before running scripts.
+  - Calls are dispatched to the host's `nativeCallRaw` handler.
+- Capability modules use the `@cap:` prefix: `import("@cap:http")`. See section 10.
 - Builtins must be called via namespace access (dot + call), for example:
   - `std.io.println(...)`
   - `std.core.len(x)`
@@ -35,7 +39,8 @@ Companion guides:
 ## 3. Values and Types
 
 Implemented value kinds:
-- `number` (floating-point)
+- `int` (64-bit integer)
+- `float` (64-bit floating-point)
 - `rune` (Unicode code point scalar)
 - `boolean`
 - `string`
@@ -489,7 +494,7 @@ The `network` argument to `net.dial` is `"tcp"`, `"tcp4"`, `"tcp6"`, `"udp"`, et
 
 ---
 
-## 12. Runtime/Backend Notes
+## 11. Runtime/Backend Notes
 
 - Native functions are dispatched through VM native IDs.
 - Two backend modes exist:
@@ -521,18 +526,18 @@ The `network` argument to `net.dial` is `"tcp"`, `"tcp4"`, `"tcp6"`, `"udp"`, et
   - `ALLOW_OOM` means runtime `OutOfMemory` is treated as expected for that bench case.
   - if `GENGO_BENCH_STATS=1`, bench runner prints elapsed time and optional ops/sec (when `.ops` file exists).
 
-## 13. Current Known Limits
+## 12. Current Known Limits
 
-- Resource limits are fixed-size per active preset (defaults shown):
-  - heap arena: `512 KiB`
-  - object pool: `2048` objects
-  - VM value stack: `512`
-  - call frames: `64`
-  - input source buffer: `128 KiB`
+- Resource limits have preset defaults but are overridable per engine instance via `engine_init_with_config` (see `docs/engine-api.md`):
+  - heap arena: `512 KiB` default
+  - object pool: `2048` objects default
+  - VM value stack: `512` default
+  - call frames: `64` default
+  - input source buffer: `128 KiB` (not overridable at runtime)
 - Managed allocations use fixed class sizes; one managed block currently cannot exceed `32 KiB` even if total heap has room.
 - Source imports require a file-backed runtime entrypoint; pathless embedding calls still only support `std`.
 
-## 14. Named Types and Ranges
+## 13. Named Types and Ranges
 
 - Named scalar types:
   - `type UserId string`
@@ -568,7 +573,7 @@ max_val := 20
 type Bounded int predicate func(x) { return x >= min_val && x <= max_val }
 ```
 
-## 15. Enums
+## 14. Enums
 
 - Declaration:
   - `type Status enum { pending, approved, denied }`
@@ -592,7 +597,7 @@ subtype Weekend_Days Days { Saturday, Sunday }
 - Type attributes (`name`, `first`, `last`, `values`) work on enum subtypes.
 - A subtype value is accepted anywhere its parent type is expected.
 
-## 16. Variant Types
+## 15. Variant Types
 
 Variant types define a closed set of tagged alternatives, each optionally carrying a payload.
 
