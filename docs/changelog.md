@@ -2,6 +2,34 @@
 
 This changelog tracks notable language/runtime changes by implementation date.
 
+## 2026-06-09
+
+### Fix — NaN/Inf Rejection in VM Arithmetic and Comparisons
+
+Non-finite float values now produce a runtime error at the point of use rather than propagating silently or causing undefined behaviour in debug builds.
+
+- **Arithmetic**: `pushNumericResultWithCarrier` rejects non-finite results with `TypeError`. Integer overflow in decimal add/sub/mul now uses `@addWithOverflow`/`@subWithOverflow`/`@mulWithOverflow`; `minInt(i64) / -1` is guarded. String concatenation length overflow is detected via wrapping arithmetic.
+- **Comparisons**: `gt`, `lt`, `const_lt`, and `get_local_const_lt_jif_pop` all guard against NaN/Inf operands (`TypeError`).
+- **Decimal construction**: constructing a decimal named type from a float that is non-finite or out of `i64` range now returns `TypeError` instead of invoking undefined behaviour via `@intFromFloat`.
+- **`succ`/`pred`**: stagnation check (`result == n`) catches Inf and values too large for f64 to increment; returns `RangeError`.
+- **`int()` cast**: NaN and out-of-range floats return `RangeError` (consistent with other range-overflow paths).
+- **`defer_call`**: stack underflow guard added.
+- Conformance tests added: spec 165–171 (NaN/Inf failure cases), 172 (NaN detection), 173 (decimal overflow).
+
+### Fix — Compiler Safety Guards
+
+- `arity + named_return_count > MaxLocals` now returns `TooManyLocals` instead of silent miscount.
+- Assignment path `step_count` (a `u8`) guarded against paths longer than 255 segments.
+- `repl_expr_pop_pos` assignment guarded against `codeLen() == 0` underflow.
+
+### ABI Change — Column Counters Widened to `u32`
+
+`CompileError.col` and `RuntimeError.col` in `api.zig` (and the corresponding fields in `Compiler`, `Session`, `Runtime`, and `Engine`) have been widened from `u16` to `u32`. This prevents a debug-mode panic on source lines longer than 65 535 characters.
+
+**Hosts must recompile against updated headers.** Any host reading `col` from a `CompileError` or `RuntimeError` struct compiled against the old layout will get incorrect values.
+
+---
+
 ## 2026-06-08
 
 ### Embedding — Per-instance Resource Limits (#57)
