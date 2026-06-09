@@ -2462,6 +2462,7 @@ fn runInner() !void {
             },
             .loop => {
                 const off = try vmShort();
+                if (off > vmState().ip) return error.BytecodeOutOfBounds;
                 vmState().ip -= off;
                 // If the back-edge target is a warm get_global IC, execute it inline
                 // to save one full dispatch iteration per loop cycle.
@@ -2497,6 +2498,7 @@ fn runInner() !void {
                     globals.setAt(slot, val);
                 }
                 const off = try vmShort();
+                if (off > vmState().ip) return error.BytecodeOutOfBounds;
                 vmState().ip -= off;
                 // Same inline get_global as loop: skip one dispatch if warm.
                 const jip = vmState().ip;
