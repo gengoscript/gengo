@@ -13,7 +13,7 @@
 | `max_ops` | `?u64` | `null` | Instruction budget; `null` = unlimited |
 | `module_sources` | `[]const api.SourceEntry` | `&.{}` | In-memory source table for `import("./...")` |
 | `module_source_provider` | `?api.SourceProvider` | `null` | Dynamic source callback (wins over `module_sources`) |
-| `host_modules` | `[]const api.HostModuleDesc` | `&.{}` | Host-defined modules importable via `@module:` prefix |
+| `host_modules` | `[]const api.HostModuleDesc` | `&.{}` | Host-defined modules importable via `module:` prefix |
 | `capabilities` | `[]const []const u8` | `&.{}` | Enabled capability names (e.g. `&.{"http", "fs"}`) |
 | `heap_size_bytes` | `usize` | preset default | Gengo heap size in bytes |
 | `max_objects` | `usize` | preset default | Maximum live GC objects |
@@ -179,7 +179,7 @@ const res = rt.run("for {}");
 
 ## Capabilities
 
-Scripts can access system capabilities (`@cap:http`, `@cap:fs`, `@cap:net`) only when the host enables them. Pass capability names in `api.Config.capabilities`:
+Scripts can access system capabilities (`cap:http`, `cap:fs`, `cap:net`) only when the host enables them. Pass capability names in `api.Config.capabilities`:
 
 ```zig
 var rt: api.Runtime = undefined;
@@ -227,7 +227,7 @@ http_state.setHttpHandler(&myHttpFetch, null);
 
 ### Net capability handlers
 
-For `@cap:net`, register a `GengoNetHandlers` struct with all socket-level callbacks:
+For `cap:net`, register a `GengoNetHandlers` struct with all socket-level callbacks:
 
 ```zig
 const net_state = @import("lang/native/net_state.zig");

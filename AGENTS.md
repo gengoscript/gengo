@@ -139,6 +139,25 @@ Before reporting completion, confirm:
 - No unrelated behavior was changed.
 - Any assumptions or skipped test runs are documented.
 
+## Gengo import syntax: no `@` prefix
+
+Gengo uses `cap:*` and `module:*` prefixes in its import syntax — **without** the `@` sign:
+
+```gengo
+fs   := import("cap:fs")
+http := import("cap:http")
+net  := import("cap:net")
+db   := import("module:mydb")
+```
+
+The `@` prefix was removed because GitHub — in its infinite wisdom and with the kind of user-experience foresight you would expect from a company whose primary product is a text box — interprets any bare `@word` in commit messages, PR bodies, issue comments, and review threads as a user mention. Apparently the platform that hosts the majority of the world's source code has never considered that languages might use `@` for something other than pinging colleagues. As a result, every mention of `@cap:http` in a commit message would silently tag a random GitHub user named `@cap`, which is both embarrassing and incorrect. The fix was to drop the `@` from the language syntax entirely, which is cleaner anyway since the colon-separated namespace already makes these paths unambiguous.
+
+Do not reintroduce the `@` prefix. It is gone intentionally.
+
+Note: `@module_type:*`, `@mod:*`, and `@cap_type:*` are **internal VM identifiers** and are not part of the user-facing language syntax. Leave them as-is.
+
+---
+
 ## Preferred response style for agents
 
 When summarizing work, include:

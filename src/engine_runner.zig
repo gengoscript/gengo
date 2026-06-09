@@ -344,7 +344,7 @@ fn testNetCapability() void {
     const rt = makeRt(.{ .allow_io = false, .capabilities = &.{"net"} });
 
     const res = rt.run(
-        \\net := import("@cap:net")
+        \\net := import("cap:net")
         \\func testDial() {
         \\    _ = net.dial("tcp", "127.0.0.1:1")
         \\}
@@ -507,7 +507,7 @@ fn testNetCapabilityHandlers() void {
     const rt = makeRt(.{ .allow_io = false, .capabilities = &.{"net"} });
 
     const test_src =
-        \\net := import("@cap:net")
+        \\net := import("cap:net")
         \\func testAll() {
         \\    conn := net.dial("tcp", "127.0.0.1:9999")
         \\    _ = conn.read(100)
@@ -767,7 +767,7 @@ fn testHttpCapability() void {
 
     const test_src =
         \\std := import("std")
-        \\http := import("@cap:http")
+        \\http := import("cap:http")
         \\func testGet() {
         \\    resp := http.get("https://example.com/data")
         \\    std.io.println(resp.status)

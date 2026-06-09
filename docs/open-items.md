@@ -44,5 +44,5 @@ This becomes more relevant once the module system is used heavily. At that point
 | Per-instance resource limits (#57) | Implemented: `c5c75b6` |
 | ValueWire silently drops structs/runes/named/error types (#70) | Fixed: `327b760` |
 | Custom allocator in engine config (#71) | Implemented: `6e2332a` |
-| `@cap:fs` ~900 ms cold-start from `std.Io.Threaded` (#73) | Fixed: `cb7bb89` |
+| `cap:fs` ~900 ms cold-start from `std.Io.Threaded` (#73) | Fixed: `cb7bb89` |
 | `engine_last_error` unreachable after `engine_init_with_config` failure (#74) | Fixed: `19972f6` |

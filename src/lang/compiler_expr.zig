@@ -65,14 +65,14 @@ pub fn importExpr(c: anytype) !void {
     const resolver = c.options.resolve_import orelse { c.setErr("unsupported import module '{s}'", .{name}); return error.UnsupportedImportModule; };
     const mod_name = try resolver(ctx, c.options.module_path, name);
     try chunk.emitGetGlobal(mod_name, c.prev.line);
-    if (common.streq(name, "std") and common.streq(mod_name, "@module:std")) {
+    if (common.streq(name, "std") and common.streq(mod_name, "module:std")) {
         c.std_namespace_path = "";
         c.import_module_path = null;
-    } else if (mod_name.len > 8 and std.mem.startsWith(u8, mod_name, "@module:")) {
-        c.import_module_path = mod_name[8..];
+    } else if (mod_name.len > 7 and std.mem.startsWith(u8, mod_name, "module:")) {
+        c.import_module_path = mod_name[7..];
         c.std_namespace_path = null;
-    } else if (mod_name.len > 5 and std.mem.startsWith(u8, mod_name, "@cap:")) {
-        c.import_module_path = mod_name[5..];
+    } else if (mod_name.len > 4 and std.mem.startsWith(u8, mod_name, "cap:")) {
+        c.import_module_path = mod_name[4..];
         c.std_namespace_path = null;
     }
 }
