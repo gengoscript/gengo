@@ -123,11 +123,6 @@ pub fn build(b: *std.Build) void {
     const engine_native_release_step = b.step("engine-native-release", "Build native shared library (ReleaseFast)");
     engine_native_release_step.dependOn(&install_engine_native_release.step);
 
-    const deploy_cmd = b.addSystemCommand(&.{ "bash", "playground/deploy.sh" });
-    deploy_cmd.step.dependOn(&install_engine_debug.step);
-    const deploy_step = b.step("deploy", "Build engine WASM module and deploy to playground with cache-busted version");
-    deploy_step.dependOn(&deploy_cmd.step);
-
     const unit_step = b.step("unit", "Run VM safety, embedding, and engine API checks");
     unit_step.dependOn(&run_vm_safety.step);
     unit_step.dependOn(&run_embedding.step);

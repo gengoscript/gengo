@@ -22,13 +22,12 @@ run zig build -Dpreset=dev test
 run zig build -Dpreset=dev parity
 run zig build -Dpreset=dev cli
 
-echo "→ playground and example scripts..."
+echo "→ example and stress scripts..."
 for f in \
     examples/simple_math.gengo \
     examples/roundtrip_stdlib.gengo \
     examples/std_features.gengo \
-    playground/examples/*.gengo \
-    playground/stress/simlab/*.gengo; do
+    examples/stress/simlab/*.gengo; do
     if ! "$G" "$f" > /dev/null 2>&1; then
         echo "  FAIL: $f"
         fail=1
