@@ -2798,7 +2798,12 @@ fn runPanicUnwind(orig_err: anyerror) anyerror!void {
             vmState().ip = frame.ret_ip;
 
             if (ret_count <= 1) {
-                vmPush(.null) catch {};
+                if (named_ret > 0) {
+                    const raw = vmState().stack[rec_base + rec_arity];
+                    vmPush(if (raw == .object and raw.object.* == .cell) raw.object.cell.value else raw) catch {};
+                } else {
+                    vmPush(.null) catch {};
+                }
             } else recover_ret: {
                 // Multi-value return: build a tuple of the right size.
                 // Named returns: use the values from the (still-readable) stack slots;
@@ -2809,8 +2814,10 @@ fn runPanicUnwind(orig_err: anyerror) anyerror!void {
                 const items = vmAllocManagedSlice(Value, n) catch { vmPush(.null) catch {}; break :recover_ret; };
                 if (named_ret > 0) {
                     var ri: u8 = 0;
-                    while (ri < named_ret) : (ri += 1)
-                        items[ri] = vmState().stack[rec_base + rec_arity + ri];
+                    while (ri < named_ret) : (ri += 1) {
+                        const raw = vmState().stack[rec_base + rec_arity + ri];
+                        items[ri] = if (raw == .object and raw.object.* == .cell) raw.object.cell.value else raw;
+                    }
                 } else {
                     var ri: u8 = 0;
                     while (ri < n) : (ri += 1) items[ri] = .null;
