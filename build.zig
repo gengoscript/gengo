@@ -8,8 +8,17 @@ pub fn build(b: *std.Build) void {
     if (!valid) @panic("invalid -Dpreset, expected dev|tiny|stress");
 
     const perf_opt = b.option(bool, "perf", "Enable performance counters (outputs PERF: lines to stderr)") orelse false;
+    const cap_net_opt = b.option(bool, "cap_net", "Include cap:net capability") orelse true;
+    const cap_http_opt = b.option(bool, "cap_http", "Include cap:http capability") orelse true;
+    const cap_fs_opt = b.option(bool, "cap_fs", "Include cap:fs capability") orelse true;
+    if (cap_http_opt and !cap_net_opt) {
+        @panic("cap:http requires cap:net; enable cap:net or disable cap:http");
+    }
     const build_opts = b.addOptions();
     build_opts.addOption(bool, "perf", perf_opt);
+    build_opts.addOption(bool, "cap_net", cap_net_opt);
+    build_opts.addOption(bool, "cap_http", cap_http_opt);
+    build_opts.addOption(bool, "cap_fs", cap_fs_opt);
     const build_opts_mod = build_opts.createModule();
 
     const wasmtime_opt = b.option([]const u8, "wasmtime", "path to wasmtime binary") orelse "wasmtime";
@@ -90,6 +99,44 @@ pub fn build(b: *std.Build) void {
 
     const engine_release_step = b.step("engine-release", "Build engine WASM module (ReleaseFast)");
     engine_release_step.dependOn(&install_engine_release.step);
+
+    // ── Named WASM release artifacts (compile-time capability gating) ─────────
+
+    const cap_combo = b.step("engine-release-full", "Build engine with net+http+fs (ReleaseFast)");
+    cap_combo.dependOn(&install_engine_release.step);
+
+    const net_http_opts = b.addOptions();
+    net_http_opts.addOption(bool, "perf", perf_opt);
+    net_http_opts.addOption(bool, "cap_net", true);
+    net_http_opts.addOption(bool, "cap_http", true);
+    net_http_opts.addOption(bool, "cap_fs", false);
+    const net_http_opts_mod = net_http_opts.createModule();
+    const engine_net_http = addWasmExe(b, "gengo-engine", "src/engine.zig", wasm_target, .ReleaseFast, &preset.step, net_http_opts_mod);
+    const install_engine_net_http = installWasmAs(b, engine_net_http, "gengo-engine-net.wasm");
+    const net_http_step = b.step("engine-release-net", "Build engine with net+http (ReleaseFast)");
+    net_http_step.dependOn(&install_engine_net_http.step);
+
+    const fs_opts = b.addOptions();
+    fs_opts.addOption(bool, "perf", perf_opt);
+    fs_opts.addOption(bool, "cap_net", false);
+    fs_opts.addOption(bool, "cap_http", false);
+    fs_opts.addOption(bool, "cap_fs", true);
+    const fs_opts_mod = fs_opts.createModule();
+    const engine_fs = addWasmExe(b, "gengo-engine", "src/engine.zig", wasm_target, .ReleaseFast, &preset.step, fs_opts_mod);
+    const install_engine_fs = installWasmAs(b, engine_fs, "gengo-engine-fs.wasm");
+    const fs_step = b.step("engine-release-fs", "Build engine with fs only (ReleaseFast)");
+    fs_step.dependOn(&install_engine_fs.step);
+
+    const minimal_opts = b.addOptions();
+    minimal_opts.addOption(bool, "perf", perf_opt);
+    minimal_opts.addOption(bool, "cap_net", false);
+    minimal_opts.addOption(bool, "cap_http", false);
+    minimal_opts.addOption(bool, "cap_fs", false);
+    const minimal_opts_mod = minimal_opts.createModule();
+    const engine_minimal = addWasmExe(b, "gengo-engine", "src/engine.zig", wasm_target, .ReleaseFast, &preset.step, minimal_opts_mod);
+    const install_engine_minimal = installWasmAs(b, engine_minimal, "gengo-engine-minimal.wasm");
+    const minimal_step = b.step("engine-release-minimal", "Build engine with no capabilities (ReleaseFast)");
+    minimal_step.dependOn(&install_engine_minimal.step);
 
     // ── Engine (native shared library for host embedding) ──────────────────────
 

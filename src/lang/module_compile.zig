@@ -8,6 +8,7 @@ const Lexer = @import("lexer.zig").Lexer;
 const TT = @import("token.zig").TT;
 const cfg = @import("../runtime/config.zig");
 const source_io = @import("../runtime/source_io.zig");
+const build_options = @import("build_options");
 
 pub const MaxModules = 64;
 pub const MaxImportsPerModule = 64;
@@ -103,7 +104,25 @@ pub const cap_http_desc: CapModuleDesc = .{
     },
 };
 
-pub const AllCapabilities = &.{ cap_net_desc, cap_fs_desc, cap_http_desc };
+const _cap_storage = blk: {
+    var caps: [MaxCapabilities]CapModuleDesc = undefined;
+    var i: usize = 0;
+    if (build_options.cap_net) {
+        caps[i] = cap_net_desc;
+        i += 1;
+    }
+    if (build_options.cap_fs) {
+        caps[i] = cap_fs_desc;
+        i += 1;
+    }
+    if (build_options.cap_http) {
+        caps[i] = cap_http_desc;
+        i += 1;
+    }
+    break :blk caps;
+};
+const _cap_count: usize = @as(usize, @intFromBool(build_options.cap_net)) + @as(usize, @intFromBool(build_options.cap_fs)) + @as(usize, @intFromBool(build_options.cap_http));
+pub const AllCapabilities = _cap_storage[0.._cap_count];
 
 pub const MaxCapabilities = 16;
 
@@ -132,7 +151,12 @@ pub const Session = struct {
 
     fn isCapabilityEnabled(self: *Session, name: []const u8) bool {
         for (self.enabled_capabilities) |cap| {
-            if (common.streq(cap, name)) return true;
+            if (common.streq(cap, name)) {
+                for (self.capability_modules) |cm| {
+                    if (common.streq(cm.name, name)) return true;
+                }
+                return false;
+            }
         }
         return false;
     }

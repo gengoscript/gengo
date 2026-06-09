@@ -37,9 +37,10 @@ const math_mod = @import("math.zig");
 const conv_mod = @import("conv.zig");
 const array_mod = @import("array.zig");
 const sort_mod = @import("sort.zig");
-const cap_net_mod = @import("cap_net.zig");
-const cap_fs_mod = @import("cap_fs.zig");
-const cap_http_mod = @import("cap_http.zig");
+const build_options = @import("build_options");
+const cap_net_mod = if (build_options.cap_net) @import("cap_net.zig") else struct {};
+const cap_fs_mod = if (build_options.cap_fs) @import("cap_fs.zig") else struct {};
+const cap_http_mod = if (build_options.cap_http) @import("cap_http.zig") else struct {};
 
 const TemplateTypeQualifiedName = "@std.template.obj";
 const TimeTypeQualifiedName = "@std.time.obj";
@@ -544,49 +545,53 @@ pub fn installCapabilityModules(cap_modules: []const module_compile.CapModuleDes
 
         try globals.def(global_name, .{ .object = inst_obj });
 
-        if (std.mem.eql(u8, cm.name, "http") and !globals.has("@cap_type:http.Response")) {
-            try cap_http_mod.registerResponseType();
+        if (comptime build_options.cap_http) {
+            if (std.mem.eql(u8, cm.name, "http") and !globals.has("@cap_type:http.Response")) {
+                try cap_http_mod.registerResponseType();
+            }
         }
 
-        if (std.mem.eql(u8, cm.name, "net") and !globals.has("@cap_type:net.Conn")) {
-            const conn_qual_name = "@cap_type:net.Conn";
+        if (comptime build_options.cap_net) {
+            if (std.mem.eql(u8, cm.name, "net") and !globals.has("@cap_type:net.Conn")) {
+                const conn_qual_name = "@cap_type:net.Conn";
 
-            const conn_any_alts = heap.bump(FieldTypeAlt, 1) orelse return;
-            conn_any_alts[0] = .{ .typ = .any };
-            const conn_any_spec: FieldTypeSpec = .{ .alts = conn_any_alts[0..1] };
+                const conn_any_alts = heap.bump(FieldTypeAlt, 1) orelse return;
+                conn_any_alts[0] = .{ .typ = .any };
+                const conn_any_spec: FieldTypeSpec = .{ .alts = conn_any_alts[0..1] };
 
-            const conn_field_specs = (heap.bump(StructFieldSpec, 1) orelse return)[0..1];
-            conn_field_specs[0] = .{ .name = "_handle", .typ = conn_any_spec, .is_const = true };
+                const conn_field_specs = (heap.bump(StructFieldSpec, 1) orelse return)[0..1];
+                conn_field_specs[0] = .{ .name = "_handle", .typ = conn_any_spec, .is_const = true };
 
-            const conn_typ_obj = try vmgc.vmAllocObject();
-            try vms.pushTempRoot(.{ .object = conn_typ_obj });
-            defer vms.popTempRoot();
-            conn_typ_obj.* = .{ .struct_type = StructTypeObj{
-                .name = "Conn",
-                .qualified_name = conn_qual_name,
-                .fields = conn_field_specs[0..1],
-            } };
-            try globals.def(conn_qual_name, .{ .object = conn_typ_obj });
+                const conn_typ_obj = try vmgc.vmAllocObject();
+                try vms.pushTempRoot(.{ .object = conn_typ_obj });
+                defer vms.popTempRoot();
+                conn_typ_obj.* = .{ .struct_type = StructTypeObj{
+                    .name = "Conn",
+                    .qualified_name = conn_qual_name,
+                    .fields = conn_field_specs[0..1],
+                } };
+                try globals.def(conn_qual_name, .{ .object = conn_typ_obj });
 
-            const conn_methods = [_]struct { name: []const u8, id: NativeFnId, arity: u8 }{
-                .{ .name = "read",              .id = .cap_net_read,              .arity = 2 },
-                .{ .name = "write",             .id = .cap_net_write,             .arity = 2 },
-                .{ .name = "close",             .id = .cap_net_close,             .arity = 1 },
-                .{ .name = "local_addr",        .id = .cap_net_local_addr,        .arity = 1 },
-                .{ .name = "remote_addr",       .id = .cap_net_remote_addr,       .arity = 1 },
-                .{ .name = "set_deadline",      .id = .cap_net_set_deadline,      .arity = 2 },
-                .{ .name = "set_read_deadline", .id = .cap_net_set_read_deadline, .arity = 2 },
-                .{ .name = "set_write_deadline",.id = .cap_net_set_write_deadline,.arity = 2 },
-            };
-            for (conn_methods) |m| {
-                const needed = conn_qual_name.len + 1 + m.name.len;
-                const kbuf = (heap.bump(u8, needed) orelse return)[0..needed];
-                @memcpy(kbuf[0..conn_qual_name.len], conn_qual_name);
-                kbuf[conn_qual_name.len] = '.';
-                @memcpy(kbuf[conn_qual_name.len + 1 .. needed], m.name);
-                if (!globals.has(kbuf)) {
-                    const n = try makeNative(m.id, m.arity);
-                    try globals.def(kbuf, n);
+                const conn_methods = [_]struct { name: []const u8, id: NativeFnId, arity: u8 }{
+                    .{ .name = "read",              .id = .cap_net_read,              .arity = 2 },
+                    .{ .name = "write",             .id = .cap_net_write,             .arity = 2 },
+                    .{ .name = "close",             .id = .cap_net_close,             .arity = 1 },
+                    .{ .name = "local_addr",        .id = .cap_net_local_addr,        .arity = 1 },
+                    .{ .name = "remote_addr",       .id = .cap_net_remote_addr,       .arity = 1 },
+                    .{ .name = "set_deadline",      .id = .cap_net_set_deadline,      .arity = 2 },
+                    .{ .name = "set_read_deadline", .id = .cap_net_set_read_deadline, .arity = 2 },
+                    .{ .name = "set_write_deadline",.id = .cap_net_set_write_deadline,.arity = 2 },
+                };
+                for (conn_methods) |m| {
+                    const needed = conn_qual_name.len + 1 + m.name.len;
+                    const kbuf = (heap.bump(u8, needed) orelse return)[0..needed];
+                    @memcpy(kbuf[0..conn_qual_name.len], conn_qual_name);
+                    kbuf[conn_qual_name.len] = '.';
+                    @memcpy(kbuf[conn_qual_name.len + 1 .. needed], m.name);
+                    if (!globals.has(kbuf)) {
+                        const n = try makeNative(m.id, m.arity);
+                        try globals.def(kbuf, n);
+                    }
                 }
             }
         }
@@ -663,11 +668,29 @@ pub fn callNative(nf: NativeFuncObj, argc: u8) !void {
         .array_filter, .array_map, .array_reduce, .array_slice, .array_zip, .array_flat,
         .array_find, .array_find_index, .array_all, .array_any, .array_chunk => return array_mod.dispatch(nf, argc),
         .sort_asc, .sort_desc, .sort_by => return sort_mod.dispatch(nf, argc),
-        .cap_net_dial, .cap_net_read, .cap_net_write, .cap_net_close,
-        .cap_net_local_addr, .cap_net_remote_addr,
-        .cap_net_set_deadline, .cap_net_set_read_deadline, .cap_net_set_write_deadline => return cap_net_mod.dispatch(nf, argc),
-        .cap_fs_read, .cap_fs_exists => return cap_fs_mod.dispatch(nf, argc),
-        .cap_http_get, .cap_http_post, .cap_http_fetch => return cap_http_mod.dispatch(nf, argc),
+        inline else => |id| {
+            if (comptime build_options.cap_net) {
+                switch (id) {
+                    .cap_net_dial, .cap_net_read, .cap_net_write, .cap_net_close,
+                    .cap_net_local_addr, .cap_net_remote_addr,
+                    .cap_net_set_deadline, .cap_net_set_read_deadline, .cap_net_set_write_deadline => return cap_net_mod.dispatch(nf, argc),
+                    else => {},
+                }
+            }
+            if (comptime build_options.cap_fs) {
+                switch (id) {
+                    .cap_fs_read, .cap_fs_exists => return cap_fs_mod.dispatch(nf, argc),
+                    else => {},
+                }
+            }
+            if (comptime build_options.cap_http) {
+                switch (id) {
+                    .cap_http_get, .cap_http_post, .cap_http_fetch => return cap_http_mod.dispatch(nf, argc),
+                    else => {},
+                }
+            }
+            return error.NativeFunctionNotFound;
+        },
     }
 }
 
