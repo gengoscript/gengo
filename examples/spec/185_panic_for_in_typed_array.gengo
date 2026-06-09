@@ -1,0 +1,26 @@
+std := import("std")
+
+type Score int range 0..100
+type Record struct { name string, score Score }
+type Records []Record
+
+func make_record(items any) (result Record, err string) {
+    err = ""
+    defer func() {
+        e := std.core.recover()
+        if std.core.is_error(e) {
+            err = std.conv.to_string(e)
+            result = Record{ name: "error", score: Score(0) }
+        }
+    }()
+    for item in items {
+        _ = Score(std.conv.to_int(item))  // panics on out-of-range value
+    }
+    result = Record{ name: "ok", score: Score(42) }
+    return result, err
+}
+
+recs := Records([])
+r, _ := make_record([10, 999])  // 999 triggers RangeError inside for-in
+recs = std.core.append(recs, r) // TypeError here — should succeed
+std.io.println(std.core.len(recs))
