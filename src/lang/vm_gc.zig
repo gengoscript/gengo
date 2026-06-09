@@ -113,7 +113,7 @@ pub fn collectGarbage() void {
     while (i < vms.vmState().temp_root_top) : (i += 1) markValue(vms.vmState().temp_roots[i]);
 
     i = 0;
-    while (i < chunk.constCount()) : (i += 1) markValue(chunk.constAt(i));
+    while (i < chunk.constCount()) : (i += 1) markValue(chunk.constAt(i) catch unreachable);
 
     i = 0;
     while (i < vms.vmState().defer_top) : (i += 1) markValue(vms.vmState().defer_stack[i]);

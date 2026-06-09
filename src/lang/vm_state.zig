@@ -281,7 +281,7 @@ pub fn popTempRoot() void {
 pub fn vmConst() !Value {
     const idx = try vmShort();
     if (idx >= chunk.constCount()) return error.BadConstantIndex;
-    return chunk.constAt(idx);
+    return chunk.constAt(idx) catch unreachable;
 }
 
 pub fn vmIndexFromVal(v: Value) !usize {
