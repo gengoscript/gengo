@@ -43,9 +43,17 @@ pub fn wireFromValue(v: Value) !host_abi.ValueWire {
         },
         .rune => |r| .{
             .tag = @intFromEnum(host_abi.WireTag.number),
-            .flags = 0,
+            .flags = host_abi.FLAG_RUNE,
             .reserved = 0,
-            .payload = @bitCast(@as(f64, @floatFromInt(r))),
+            .payload = @as(u64, r),
+            .len = 0,
+            .reserved2 = 0,
+        },
+        .decimal => |d| .{
+            .tag = @intFromEnum(host_abi.WireTag.number),
+            .flags = host_abi.FLAG_DECIMAL,
+            .reserved = 0,
+            .payload = @as(u64, @bitCast(d)),
             .len = 0,
             .reserved2 = 0,
         },
@@ -55,6 +63,14 @@ pub fn wireFromValue(v: Value) !host_abi.ValueWire {
             .reserved = 0,
             .payload = @intFromPtr(s.ptr),
             .len = @intCast(s.len),
+            .reserved2 = 0,
+        },
+        .error_value => |msg| .{
+            .tag = @intFromEnum(host_abi.WireTag.@"error"),
+            .flags = 0,
+            .reserved = 0,
+            .payload = @intFromPtr(msg.ptr),
+            .len = @intCast(msg.len),
             .reserved2 = 0,
         },
         .object => |o| switch (o.*) {
@@ -97,9 +113,23 @@ pub fn wireFromValue(v: Value) !host_abi.ValueWire {
                     .reserved2 = 0,
                 };
             },
+            .variant_value => |vv| {
+                const wires = (heap.bump(host_abi.ValueWire, 4) orelse return error.OutOfMemory)[0..4];
+                wires[0] = try wireFromValue(.{ .string = "tag" });
+                wires[1] = try wireFromValue(.{ .string = vv.tag });
+                wires[2] = try wireFromValue(.{ .string = "value" });
+                wires[3] = try wireFromValue(vv.payload);
+                return .{
+                    .tag = @intFromEnum(host_abi.WireTag.map),
+                    .flags = 0,
+                    .reserved = 0,
+                    .payload = @intFromPtr(wires.ptr),
+                    .len = 2,
+                    .reserved2 = 0,
+                };
+            },
             else => return error.UnsupportedHostValueType,
         },
-        else => return error.UnsupportedHostValueType,
     };
 }
 
@@ -108,7 +138,20 @@ pub fn valueFromWire(w: host_abi.ValueWire) !Value {
     return switch (tag) {
         .null => .null,
         .boolean => .{ .boolean = w.payload != 0 },
-        .number => .{ .float = @bitCast(w.payload) },
+        .number => if ((w.flags & host_abi.FLAG_DECIMAL) != 0) {
+            return Value{ .decimal = @bitCast(w.payload) };
+        } else if ((w.flags & host_abi.FLAG_RUNE) != 0) {
+            return Value{ .rune = @intCast(w.payload) };
+        } else {
+            return Value{ .float = @bitCast(w.payload) };
+        },
+        .@"error" => {
+            if (w.len == 0) return Value{ .error_value = "" };
+            const data = @as([*]u8, @ptrFromInt(@as(usize, @intCast(w.payload))))[0..@as(usize, @intCast(w.len))];
+            const copy = try vmgc.vmAllocManagedBytes(w.len);
+            @memcpy(copy[0..w.len], data);
+            return .{ .error_value = copy[0..w.len] };
+        },
         .string => {
             if (w.len == 0) return Value{ .string = "" };
             const data = @as([*]u8, @ptrFromInt(@as(usize, @intCast(w.payload))))[0..@as(usize, @intCast(w.len))];

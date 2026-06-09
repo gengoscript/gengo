@@ -199,9 +199,23 @@ fn wireToValue(wire: ValueWire) Value {
         @intFromEnum(WireTag.boolean) => Value{ .boolean = wire.payload != 0 },
         @intFromEnum(WireTag.number) => blk: {
             // flags bit 0: caller declares this as an integer, not a float.
-            // Without this hint wireToValue produces .float, which fails int-typed params.
+            // flags bit 1: decimal (payload is raw i64 fixed-point).
+            // flags bit 2: rune (payload is Unicode codepoint).
             const fval: f64 = @bitCast(wire.payload);
-            break :blk if (wire.flags & 1 != 0) Value{ .int = fval } else Value{ .float = fval };
+            if ((wire.flags & host_abi.FLAG_DECIMAL) != 0) {
+                break :blk Value{ .decimal = @bitCast(wire.payload) };
+            }
+            if ((wire.flags & host_abi.FLAG_RUNE) != 0) {
+                break :blk Value{ .rune = @intCast(wire.payload) };
+            }
+            break :blk if ((wire.flags & 1) != 0) Value{ .int = fval } else Value{ .float = fval };
+        },
+        @intFromEnum(WireTag.@"error") => {
+            if (wire.len == 0) return Value{ .error_value = "" };
+            const data = @as([*]u8, @ptrFromInt(@as(usize, @intCast(wire.payload))))[0..@as(usize, @intCast(wire.len))];
+            const copy = vmgc.vmAllocManagedBytes(wire.len) catch return Value.null;
+            @memcpy(copy[0..wire.len], data);
+            return Value{ .error_value = copy[0..wire.len] };
         },
         @intFromEnum(WireTag.string) => {
             if (wire.len == 0) return Value{ .string = "" };
@@ -260,10 +274,24 @@ fn valueToWire(val: Value) !ValueWire {
         .boolean => |b| makeWire(@intFromEnum(WireTag.boolean), @intFromBool(b), 0),
         .int => |n| makeWire(@intFromEnum(WireTag.number), @bitCast(@as(f64, n)), 0),
         .float => |n| makeWire(@intFromEnum(WireTag.number), @bitCast(@as(f64, n)), 0),
-        .decimal => |d| makeWire(@intFromEnum(WireTag.number), @bitCast(@as(f64, @floatFromInt(d))), 0),
-        .rune => |r| makeWire(@intFromEnum(WireTag.number), @bitCast(@as(f64, @floatFromInt(r))), 0),
+        .decimal => |d| .{
+            .tag = @intFromEnum(WireTag.number),
+            .flags = host_abi.FLAG_DECIMAL,
+            .reserved = 0,
+            .payload = @as(u64, @bitCast(d)),
+            .len = 0,
+            .reserved2 = 0,
+        },
+        .rune => |r| .{
+            .tag = @intFromEnum(WireTag.number),
+            .flags = host_abi.FLAG_RUNE,
+            .reserved = 0,
+            .payload = @as(u64, r),
+            .len = 0,
+            .reserved2 = 0,
+        },
         .string => |s| makeWire(@intFromEnum(WireTag.string), @intFromPtr(s.ptr), @intCast(s.len)),
-        .error_value => error.WireSerializeError,
+        .error_value => |msg| makeWire(@intFromEnum(WireTag.@"error"), @intFromPtr(msg.ptr), @intCast(msg.len)),
         .object => |obj| switch (obj.*) {
             .dyn_string => makeWire(@intFromEnum(WireTag.string), @intFromPtr(obj.dyn_string.ptr), @intCast(obj.dyn_string.len)),
             .array, .array_managed => {
@@ -294,6 +322,14 @@ fn valueToWire(val: Value) !ValueWire {
             },
             .named_value => |nv| return valueToWire(nv.value),
             .enum_value => |ev| makeWire(@intFromEnum(WireTag.string), @intFromPtr(ev.name.ptr), @intCast(ev.name.len)),
+            .variant_value => |vv| {
+                const wires = (heap.bump(ValueWire, 4) orelse return makeWire(@intFromEnum(WireTag.null), 0, 0))[0..4];
+                wires[0] = try valueToWire(.{ .string = "tag" });
+                wires[1] = try valueToWire(.{ .string = vv.tag });
+                wires[2] = try valueToWire(.{ .string = "value" });
+                wires[3] = try valueToWire(vv.payload);
+                return makeWire(@intFromEnum(WireTag.map), @intFromPtr(wires.ptr), 2);
+            },
             else => makeWire(@intFromEnum(WireTag.null), 0, 0),
         },
     };
