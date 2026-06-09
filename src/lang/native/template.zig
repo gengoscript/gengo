@@ -568,7 +568,7 @@ pub fn tplExec(tmpl: *Object, data: Value) !Value {
                             ip += 1;
                         } else {
                             const jv = jmps[ip];
-                    if (jv != .number or jv.number < 0 or jv.number >= @as(f64, @floatFromInt(ops.len))) return error.TypeError;
+                            if (jv != .number or jv.number < 0 or jv.number >= @as(f64, @floatFromInt(ops.len))) return error.TypeError;
                             ip = @intFromFloat(jv.number);
                         }
                     } else {

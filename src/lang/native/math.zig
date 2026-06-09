@@ -204,7 +204,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const a = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 2]);
             _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
             const result = std.math.pow(f64, a, b);
-            if (!std.math.isFinite(result)) return error.TypeError;
+            if (!std.math.isFinite(result)) return error.RangeError;
             try vms.vmPush(.{ .number = result });
         },
         .math_round => {
