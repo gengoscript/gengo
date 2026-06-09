@@ -246,6 +246,15 @@ fn testReplIncremental() void {
         else => fail("engine FAIL: expected redeclare error\n"),
     }
 
+    // const declared in one line must not be reassignable in a subsequent line
+    const r5 = rt.runIncremental("const cx int = 99");
+    if (r5 != .ok) fail("engine FAIL: repl const decl\n");
+    const r6 = rt.runIncremental("cx = 1");
+    switch (r6) {
+        .compile_error => {},
+        else => fail("engine FAIL: expected AssignToConst across repl lines\n"),
+    }
+
     out("  repl incremental: OK\n");
 }
 

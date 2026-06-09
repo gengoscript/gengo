@@ -68,6 +68,7 @@ pub const CompilerOptions = struct {
     test_mode: bool = false,
     repl_mode: bool = false,
     check_global_exists: ?*const fn (ctx: *anyopaque, name: []const u8) bool = null,
+    check_global_is_const: ?*const fn (ctx: *anyopaque, name: []const u8) bool = null,
     check_global_ctx: ?*anyopaque = null,
 };
 
@@ -453,6 +454,9 @@ pub const Compiler = struct {
             return;
         }
         if (self.registry.hasGlobalConst(name.src)) { self.setErr("cannot assign to const variable '{s}'", .{name.src}); return error.AssignToConst; }
+        if (self.options.check_global_is_const) |f| {
+            if (f(self.options.check_global_ctx.?, name.src)) { self.setErr("cannot assign to const variable '{s}'", .{name.src}); return error.AssignToConst; }
+        }
     }
 
     fn addUpvalueToScope(self: *Compiler, scope_index: u8, name: []const u8, index: u8, from_upvalue: bool) ?u8 {

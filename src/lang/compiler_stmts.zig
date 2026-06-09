@@ -1402,6 +1402,11 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
         }
     } else {
         if (!is_const and c.registry.hasGlobalConst(name.src)) { c.setErr("cannot assign to const variable '{s}'", .{name.src}); return error.AssignToConst; }
+        if (!is_const) {
+            if (c.options.check_global_is_const) |f| {
+                if (f(c.options.check_global_ctx.?, name.src)) { c.setErr("cannot assign to const variable '{s}'", .{name.src}); return error.AssignToConst; }
+            }
+        }
         const qname = try c.qualifyGlobalName(name.src);
         if (c.options.repl_mode and inferred_type_check != .none) {
             if (c.options.check_global_exists) |checker| {
