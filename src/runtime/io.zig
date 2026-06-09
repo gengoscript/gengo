@@ -204,7 +204,8 @@ pub fn printValue(v: Value) void {
         return;
     }
     switch (v) {
-        .number => |n| writeF64(n),
+        .int => |n| writeF64(n),
+        .float => |n| writeF64(n),
         .decimal => unreachable,
         .rune => |r| writeUint(r),
         .boolean => |b| write(if (b) "true" else "false"),

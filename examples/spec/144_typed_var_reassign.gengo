@@ -10,9 +10,9 @@ var f float = 1.5
 f = 3
 std.io.println(f)
 
-// compound assignment truncates
+// compound assignment requires same type
 var n int = 5
-n += 3.7
+n += 3
 std.io.println(n)
 
 // named return truncates

@@ -197,7 +197,7 @@ fn wireToValue(wire: ValueWire) Value {
     return switch (wire.tag) {
         @intFromEnum(WireTag.null) => .null,
         @intFromEnum(WireTag.boolean) => Value{ .boolean = wire.payload != 0 },
-        @intFromEnum(WireTag.number) => Value{ .number = @bitCast(wire.payload) },
+        @intFromEnum(WireTag.number) => Value{ .float = @bitCast(wire.payload) },
         @intFromEnum(WireTag.string) => {
             if (wire.len == 0) return Value{ .string = "" };
             const data = @as([*]u8, @ptrFromInt(@as(usize, @intCast(wire.payload))))[0..@as(usize, @intCast(wire.len))];
@@ -253,7 +253,8 @@ fn valueToWire(val: Value) !ValueWire {
     return switch (val) {
         .null => makeWire(@intFromEnum(WireTag.null), 0, 0),
         .boolean => |b| makeWire(@intFromEnum(WireTag.boolean), @intFromBool(b), 0),
-        .number => |n| makeWire(@intFromEnum(WireTag.number), @bitCast(@as(f64, n)), 0),
+        .int => |n| makeWire(@intFromEnum(WireTag.number), @bitCast(@as(f64, n)), 0),
+        .float => |n| makeWire(@intFromEnum(WireTag.number), @bitCast(@as(f64, n)), 0),
         .decimal => |d| makeWire(@intFromEnum(WireTag.number), @bitCast(@as(f64, @floatFromInt(d))), 0),
         .rune => |r| makeWire(@intFromEnum(WireTag.number), @bitCast(@as(f64, @floatFromInt(r))), 0),
         .string => |s| makeWire(@intFromEnum(WireTag.string), @intFromPtr(s.ptr), @intCast(s.len)),

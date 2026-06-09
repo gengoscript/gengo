@@ -54,8 +54,8 @@ pub fn matchesTypeAlt(v: Value, alt: FieldTypeAlt) bool {
     return switch (alt.typ) {
         .any => true,
         .null_t => v == .null,
-        .int => (v == .number and @trunc(v.number) == v.number) or v == .rune,
-        .float => v == .number or v == .rune,
+        .int => v == .int or v == .rune,
+        .float => v == .float or v == .rune,
         .decimal_t => v == .decimal,
         .rune_t => v == .rune,
         .boolean => v == .boolean,
@@ -244,19 +244,25 @@ pub fn constructNamedType(typ_obj: *Object, arg: Value) !Value {
         .int => {
             const n = try vms.valueAsNumber(arg);
             if (@trunc(n) != n) return error.TypeError;
-            base_v = .{ .number = n };
+            base_v = .{ .int = n };
             if (nt.has_range and (n < nt.min or n > nt.max)) return error.RangeError;
         },
         .float => {
             const n = try vms.valueAsNumber(arg);
-            base_v = .{ .number = n };
+            base_v = .{ .float = n };
             if (nt.has_range and (n < nt.min or n > nt.max)) return error.RangeError;
         },
         .decimal => {
             const scale = nt.scale;
             const factor = std.math.pow(f64, 10.0, @floatFromInt(scale));
             const scaled: i64 = switch (arg) {
-                .number => |n| blk: {
+                .int => |n| blk: {
+                    const raw = @round(n * factor);
+                    if (!std.math.isFinite(raw)) return error.TypeError;
+                    if (raw < -std.math.pow(f64, 2.0, 63.0) or raw >= std.math.pow(f64, 2.0, 63.0)) return error.TypeError;
+                    break :blk @intFromFloat(raw);
+                },
+                .float => |n| blk: {
                     const raw = @round(n * factor);
                     if (!std.math.isFinite(raw)) return error.TypeError;
                     if (raw < -std.math.pow(f64, 2.0, 63.0) or raw >= std.math.pow(f64, 2.0, 63.0)) return error.TypeError;
@@ -274,7 +280,12 @@ pub fn constructNamedType(typ_obj: *Object, arg: Value) !Value {
         .rune => {
             const r: u21 = switch (arg) {
                 .rune => |rv| rv,
-                .number => |n| blk: {
+                .int => |n| blk: {
+                    const t = @trunc(n);
+                    if (t != n or t < 0) return error.TypeError;
+                    break :blk @intFromFloat(t);
+                },
+                .float => |n| blk: {
                     const t = @trunc(n);
                     if (t != n or t < 0) return error.TypeError;
                     break :blk @intFromFloat(t);
@@ -332,7 +343,7 @@ pub fn coerceNamedTypeResult(typ_obj: *Object, arg: Value) !Value {
     const n = try vms.valueAsNumber(arg);
     if (@trunc(n) != n) return error.TypeError;
     const wrapped = wrapCycleValue(nt.min, nt.max, n);
-    return makeNamedValue(typ_obj, .{ .number = wrapped });
+    return makeNamedValue(typ_obj, .{ .int = wrapped });
 }
 
 pub fn applyNamedTypeFn(typ_obj: *Object, kind: @import("value.zig").NamedTypeFnKind, arg: Value) !Value {
@@ -345,10 +356,10 @@ pub fn applyNamedTypeFn(typ_obj: *Object, kind: @import("value.zig").NamedTypeFn
     const result = n + delta;
     if (result == n) { vms.setRuntimeErr("cannot increment non-finite or very large value", .{}); return error.RangeError; }
     if (nt.is_cycle) {
-        return makeNamedValue(typ_obj, .{ .number = wrapCycleValue(nt.min, nt.max, result) });
+        return makeNamedValue(typ_obj, if (nt.base == .float) .{ .float = wrapCycleValue(nt.min, nt.max, result) } else .{ .int = wrapCycleValue(nt.min, nt.max, result) });
     } else {
         if (result < nt.min or result > nt.max) return error.RangeError;
-        return makeNamedValue(typ_obj, .{ .number = result });
+        return makeNamedValue(typ_obj, if (nt.base == .float) .{ .float = result } else .{ .int = result });
     }
 }
 

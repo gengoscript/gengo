@@ -300,8 +300,12 @@ pub fn compileFuncWithPrefix(c: anytype, prefix: []const []const u8, is_named: b
             const rt = return_types[ri];
             if (rt.alts.len == 1) {
                 switch (rt.alts[0].typ) {
-                    .int, .float, .rune_t =>
-                        try chunk.emitConst(.{ .number = 0.0 }, @intCast(func_ip)),
+                    .int =>
+                        try chunk.emitConst(.{ .int = 0.0 }, @intCast(func_ip)),
+                    .float =>
+                        try chunk.emitConst(.{ .float = 0.0 }, @intCast(func_ip)),
+                    .rune_t =>
+                        try chunk.emitConst(.{ .rune = 0 }, @intCast(func_ip)),
                     .decimal_t =>
                         try chunk.emitConst(.{ .decimal = 0 }, @intCast(func_ip)),
                     .boolean =>
@@ -499,7 +503,7 @@ pub fn emitAssignTargetPath(c: anytype, target: AssignTarget, all_steps: []const
         switch (st) {
             .dot_name => |name| try chunk.emitGetField(name, target.root.line),
             .index_number => |n| {
-                try chunk.emitConst(.{ .number = n }, target.root.line);
+                try chunk.emitConst(.{ .int = n }, target.root.line);
                 try chunk.emitOp(.get_index, target.root.line);
             },
             .index_string => |s| {
@@ -516,7 +520,7 @@ pub fn emitAssignTargetPath(c: anytype, target: AssignTarget, all_steps: []const
             try chunk.emitSetField(name, target.root.line);
         },
         .index_number => |n| {
-            try chunk.emitConst(.{ .number = n }, target.root.line);
+            try chunk.emitConst(.{ .int = n }, target.root.line);
             try chunk.emitGetGlobalIdx(vidx, target.root.line);
             try chunk.emitOp(.set_index, target.root.line);
         },
@@ -682,7 +686,7 @@ pub fn incrStmt(c: anytype) !void {
     const is_inc = c.cur.typ == .plus_plus;
     c.advance();
     try c.emitGetVar(name);
-    try chunk.emitConst(.{ .number = 1.0 }, name.line);
+    try chunk.emitConst(.{ .int = 1.0 }, name.line);
     try chunk.emitOp(if (is_inc) .add else .sub, name.line);
     const tc = c.getLocalTypeCheck(name.src);
     if (tc) |t| try c.emitVarTypeEpilog(t, name.line);

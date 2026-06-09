@@ -51,7 +51,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                     var j: usize = i;
                     while (j > 0) : (j -= 1) {
                         const cmp = try vm.callFunction(fn_val, &.{ items[j - 1], key });
-                        const less = if (cmp == .number) cmp.number < 0 else cmp.isTruthy();
+                        const less = if (cmp == .int) cmp.int < 0 else if (cmp == .float) cmp.float < 0 else cmp.isTruthy();
                         if (less) break;
                         items[j] = items[j - 1];
                     }

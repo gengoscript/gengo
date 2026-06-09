@@ -20,7 +20,11 @@ fn extractHandle(arg: Value) !u32 {
     };
     const handle_val = fields[0].value;
     return switch (handle_val) {
-        .number => |n| blk: {
+        .int => |n| blk: {
+            if (n < 0 or n > @as(f64, @floatFromInt(std.math.maxInt(u32)))) return error.TypeError;
+            break :blk @as(u32, @intFromFloat(n));
+        },
+        .float => |n| blk: {
             if (n < 0 or n > @as(f64, @floatFromInt(std.math.maxInt(u32)))) return error.TypeError;
             break :blk @as(u32, @intFromFloat(n));
         },
@@ -55,7 +59,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             defer vms.popTempRoot();
             const inst_fields = try vmgc.vmAllocManagedSlice(MapEntry, 1);
             inst_obj.* = .{ .struct_instance = .{ .typ = conn_type_obj, .fields = inst_fields } };
-            inst_fields[0] = .{ .key = .{ .string = "_handle" }, .value = .{ .number = @floatFromInt(id) } };
+            inst_fields[0] = .{ .key = .{ .string = "_handle" }, .value = .{ .int = @floatFromInt(id) } };
             try vms.vmPush(.{ .object = inst_obj });
         },
         .cap_net_read => {
@@ -64,7 +68,11 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const arg0 = try vms.vmPop();
             const id = try extractHandle(arg0);
             const max_bytes = switch (arg1) {
-                .number => |n| blk: {
+                .int => |n| blk: {
+                    if (n < 0 or n > @as(f64, @floatFromInt(std.math.maxInt(usize)))) return error.TypeError;
+                    break :blk @as(usize, @intFromFloat(n));
+                },
+                .float => |n| blk: {
                     if (n < 0 or n > @as(f64, @floatFromInt(std.math.maxInt(usize)))) return error.TypeError;
                     break :blk @as(usize, @intFromFloat(n));
                 },
@@ -86,7 +94,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             _ = try vms.vmPop();
 
             const n = net_state.netWrite(id, data) catch return error.CapabilityError;
-            try vms.vmPush(.{ .number = @floatFromInt(n) });
+            try vms.vmPush(.{ .int = @floatFromInt(n) });
         },
         .cap_net_close => {
             if (argc != 1) return error.ArityMismatch;
@@ -123,7 +131,11 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const arg0 = try vms.vmPop();
             const id = try extractHandle(arg0);
             const ms = switch (arg1) {
-                .number => |n| blk: {
+                .int => |n| blk: {
+                    if (n < @as(f64, @floatFromInt(std.math.minInt(i64))) or n >= std.math.pow(f64, 2.0, 63.0)) return error.TypeError;
+                    break :blk @as(i64, @intFromFloat(n));
+                },
+                .float => |n| blk: {
                     if (n < @as(f64, @floatFromInt(std.math.minInt(i64))) or n >= std.math.pow(f64, 2.0, 63.0)) return error.TypeError;
                     break :blk @as(i64, @intFromFloat(n));
                 },
@@ -140,7 +152,11 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const arg0 = try vms.vmPop();
             const id = try extractHandle(arg0);
             const ms = switch (arg1) {
-                .number => |n| blk: {
+                .int => |n| blk: {
+                    if (n < @as(f64, @floatFromInt(std.math.minInt(i64))) or n >= std.math.pow(f64, 2.0, 63.0)) return error.TypeError;
+                    break :blk @as(i64, @intFromFloat(n));
+                },
+                .float => |n| blk: {
                     if (n < @as(f64, @floatFromInt(std.math.minInt(i64))) or n >= std.math.pow(f64, 2.0, 63.0)) return error.TypeError;
                     break :blk @as(i64, @intFromFloat(n));
                 },
@@ -157,7 +173,11 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const arg0 = try vms.vmPop();
             const id = try extractHandle(arg0);
             const ms = switch (arg1) {
-                .number => |n| blk: {
+                .int => |n| blk: {
+                    if (n < @as(f64, @floatFromInt(std.math.minInt(i64))) or n >= std.math.pow(f64, 2.0, 63.0)) return error.TypeError;
+                    break :blk @as(i64, @intFromFloat(n));
+                },
+                .float => |n| blk: {
                     if (n < @as(f64, @floatFromInt(std.math.minInt(i64))) or n >= std.math.pow(f64, 2.0, 63.0)) return error.TypeError;
                     break :blk @as(i64, @intFromFloat(n));
                 },

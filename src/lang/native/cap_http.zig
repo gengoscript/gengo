@@ -65,7 +65,7 @@ fn buildResponseStruct(status: i32, body: []const u8, hdr_map: std.StringHashMap
         }
     }
 
-    inst_fields[0] = .{ .key = .{ .string = "status" }, .value = .{ .number = @floatFromInt(status) } };
+    inst_fields[0] = .{ .key = .{ .string = "status" }, .value = .{ .int = @floatFromInt(status) } };
     inst_fields[1] = .{ .key = .{ .string = "body" }, .value = body_val };
     inst_fields[2] = .{ .key = .{ .string = "headers" }, .value = .{ .object = hdr_obj } };
     inst_fields[3] = .{ .key = .{ .string = "ok" }, .value = .{ .boolean = ok } };
@@ -144,7 +144,11 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                             body = b;
                         } else if (std.mem.eql(u8, key, "timeout_ms")) {
                             timeout_ms = switch (entry.value) {
-                                .number => |n| blk: {
+                                .int => |n| blk: {
+                                    if (n < @as(f64, @floatFromInt(std.math.minInt(i64))) or n >= std.math.pow(f64, 2.0, 63.0)) return error.TypeError;
+                                    break :blk @as(i64, @intFromFloat(n));
+                                },
+                                .float => |n| blk: {
                                     if (n < @as(f64, @floatFromInt(std.math.minInt(i64))) or n >= std.math.pow(f64, 2.0, 63.0)) return error.TypeError;
                                     break :blk @as(i64, @intFromFloat(n));
                                 },

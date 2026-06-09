@@ -39,11 +39,12 @@ pub fn emitZeroValue(_: anytype, tc: TypeCheck, line: u32) !void {
     switch (tc) {
         .none => try chunk.emitOp(.null_val, line),
         .prim => |p| switch (p) {
-            .int, .float => try chunk.emitConst(.{ .number = 0.0 }, line),
+            .int => try chunk.emitConst(.{ .int = 0.0 }, line),
+            .float => try chunk.emitConst(.{ .float = 0.0 }, line),
             .decimal => try chunk.emitConst(.{ .decimal = 0 }, line),
             .bool => try chunk.emitOp(.false_val, line),
             .string => try chunk.emitConst(.{ .string = "" }, line),
-            .rune => try chunk.emitConst(.{ .number = 0.0 }, line),
+            .rune => try chunk.emitConst(.{ .rune = 0 }, line),
         },
         .assert_arr => try chunk.emit2(@intFromEnum(Op.build_array), 0, line),
         .assert_map => try chunk.emit2(@intFromEnum(Op.build_map), 0, line),

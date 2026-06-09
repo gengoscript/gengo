@@ -47,9 +47,9 @@ fn jsonValueToGengo(jv: std.json.Value) !Value {
     return switch (jv) {
         .null => .null,
         .bool => |b| .{ .boolean = b },
-        .integer => |i| .{ .number = @floatFromInt(i) },
-        .float => |f| .{ .number = f },
-        .number_string => |s| .{ .number = try std.fmt.parseFloat(f64, s) },
+        .integer => |i| .{ .int = @floatFromInt(i) },
+        .float => |f| .{ .float = f },
+        .number_string => |s| .{ .float = try std.fmt.parseFloat(f64, s) },
         .string => |s| try vmgc.makeDynString(s),
         .array => |arr| {
             const n = arr.items.len;
@@ -110,7 +110,8 @@ fn jsonStringifyValue(s: *std.json.Stringify, gv: Value) !void {
     switch (uv) {
         .null => try s.write(null),
         .boolean => |b| try s.write(b),
-        .number => |n| try s.write(n),
+        .int => |n| try s.write(n),
+        .float => |n| try s.write(n),
         .decimal => unreachable,
         .rune => |r| try s.write(@as(i64, @intCast(r))),
         .string => |str| try s.write(str),
