@@ -96,7 +96,7 @@ rt.initWithConfig(.{
 
 ## Capability modules
 
-System access is opt-in through named capability modules. A script that imports `@cap:http` will fail at compile time unless the host has enabled the `"http"` capability.
+System access is opt-in through named capability modules. A script that imports `cap:http` will fail at compile time unless the host has enabled the `"http"` capability.
 
 ```zig
 // Host enables only the capabilities it intends to allow
@@ -111,25 +111,25 @@ Available capability modules:
 
 | Name | What it exposes |
 |---|---|
-| `http` | Outbound HTTP requests (`@cap:http`) |
-| `net` | Raw TCP/UDP socket operations (`@cap:net`) |
-| `fs` | Local filesystem read access (`@cap:fs`) |
+| `http` | Outbound HTTP requests (`cap:http`) |
+| `net` | Raw TCP/UDP socket operations (`cap:net`) |
+| `fs` | Local filesystem read access (`cap:fs`) |
 
 Capabilities are additive and opt-in. Enabling `"http"` does not enable `"net"` or `"fs"`.
 
-For `@cap:net` and `@cap:http`, the host can register per-call handlers that intercept and allow or deny individual requests before they execute. See [embedding.md](embedding.md) for the handler interface.
+For `cap:net` and `cap:http`, the host can register per-call handlers that intercept and allow or deny individual requests before they execute. See [embedding.md](embedding.md) for the handler interface.
 
 ---
 
 ## Host modules
 
-The host can expose named functions to scripts via `@module:` imports. Scripts can only call functions the host explicitly registers. There is no reflection, no dynamic function lookup, and no way for a script to discover what host functions exist beyond what it successfully imports.
+The host can expose named functions to scripts via `module:` imports. Scripts can only call functions the host explicitly registers. There is no reflection, no dynamic function lookup, and no way for a script to discover what host functions exist beyond what it successfully imports.
 
 ```zig
 // Only lookup_category is available to scripts; nothing else from the host
 var rt = api.Runtime.init(.{
     .host_modules = &.{.{
-        .name  = "@module:db",
+        .name  = "module:db",
         .funcs = &.{.{ .name = "lookup_category", .arity = 1 }},
     }},
 });

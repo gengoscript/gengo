@@ -1,5 +1,5 @@
 std := import("std")
-http := import("@cap:http")
+http := import("cap:http")
 resp := http.fetch("https://example.com/api", {
     "method": "PUT",
     "body": "put-body",

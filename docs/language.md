@@ -27,10 +27,10 @@ Companion guides:
   - path plus `/mod.gengo`
 - Source modules return struct-backed namespace objects containing `pub` exports.
 - Field accesses on imported module objects are validated at compile time; accessing a name that is not exported raises a `CompileError`.
-- Host-defined modules are imported using the `@module:` prefix: `import("@module:mylib")`.
+- Host-defined modules are imported using the `module:` prefix: `import("module:mylib")`.
   - The host registers them via `engine_register_module` before running scripts.
   - Calls are dispatched to the host's `nativeCallRaw` handler.
-- Capability modules use the `@cap:` prefix: `import("@cap:http")`. See section 10.
+- Capability modules use the `cap:` prefix: `import("cap:http")`. See section 10.
 - Builtins must be called via namespace access (dot + call), for example:
   - `std.io.println(...)`
   - `std.core.len(x)`
@@ -374,14 +374,14 @@ For cycle types, `succ`/`pred` wrap around.
 
 The standard library is documented separately in [`docs/stdlib.md`](stdlib.md).
 
-## 10. Capability Imports (`@cap:*`)
+## 10. Capability Imports (`cap:*`)
 
-Capabilities are opt-in system integrations that scripts import using the `@cap:` prefix. A capability is only available if the host or CLI explicitly enables it — accessing a disabled or unsupported capability raises `CapabilityNotAvailable` at runtime.
+Capabilities are opt-in system integrations that scripts import using the `cap:` prefix. A capability is only available if the host or CLI explicitly enables it — accessing a disabled or unsupported capability raises `CapabilityNotAvailable` at runtime.
 
 ```gengo
-http := import("@cap:http")
-fs   := import("@cap:fs")
-net  := import("@cap:net")
+http := import("cap:http")
+fs   := import("cap:fs")
+net  := import("cap:net")
 ```
 
 **CLI usage:** pass `--cap <name>` for each capability required:
@@ -394,7 +394,7 @@ gengo --cap http --cap fs script.gengo
 
 ---
 
-### `@cap:http`
+### `cap:http`
 
 High-level HTTP client. All functions return an `http.Response` struct.
 
@@ -410,7 +410,7 @@ High-level HTTP client. All functions return an `http.Response` struct.
 **Functions:**
 
 ```gengo
-http := import("@cap:http")
+http := import("cap:http")
 
 // GET
 resp := http.get("https://api.example.com/items")
@@ -442,12 +442,12 @@ std.io.println(resp3.status)
 
 ---
 
-### `@cap:fs`
+### `cap:fs`
 
 Local filesystem access (read-only for now).
 
 ```gengo
-fs := import("@cap:fs")
+fs := import("cap:fs")
 
 // Read a file — returns its contents as a string, or raises CapabilityError
 src := fs.read("/etc/hostname")
@@ -461,12 +461,12 @@ if fs.exists("/tmp/data.json") {
 
 ---
 
-### `@cap:net`
+### `cap:net`
 
-Low-level TCP/UDP connections. Suitable for custom protocols, raw socket work, or wrapping a higher-level protocol that `@cap:http` does not cover.
+Low-level TCP/UDP connections. Suitable for custom protocols, raw socket work, or wrapping a higher-level protocol that `cap:http` does not cover.
 
 ```gengo
-net := import("@cap:net")
+net := import("cap:net")
 
 // dial opens a connection; returns a connection object
 conn := net.dial("tcp", "example.com:80")

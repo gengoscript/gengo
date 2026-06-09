@@ -51,7 +51,7 @@ Non-finite float values now produce a runtime error at the point of use rather t
 | named/enum value | unwrapped to underlying wire type |
 | `error` value | `1` (`number`), payload `-2` |
 
-### Performance — `@cap:fs` Cold-start (#73)
+### Performance — `cap:fs` Cold-start (#73)
 
 `fs.read` and `fs.exists` now use `std.posix.openat` + read loop directly instead of `std.Io.Threaded`. Eliminated ~900 ms startup cost from thread-pool and io_uring initialisation. Measured: ~2 ms per call.
 
@@ -59,9 +59,9 @@ Non-finite float values now produce a runtime error at the point of use rather t
 
 `engine_init_with_config` returning `-3` (config ceiling exceeded) now writes a descriptive message to a module-level buffer (`g_init_error`). `engine_last_error(0, ...)` reads from this buffer when the handle is invalid, so callers can retrieve the failure reason without a valid engine handle.
 
-### Fix — `@cap:http` Availability
+### Fix — `cap:http` Availability
 
-`@cap:http` is now importable from Gengo scripts and dispatches to the host HTTP handler. Added conformance spec tests with a mock handler. HTTP calls still incur ~900 ms cold-start on the native CLI due to `std.Io.Threaded` in the HTTP implementation (tracked in issue #72).
+`cap:http` is now importable from Gengo scripts and dispatches to the host HTTP handler. Added conformance spec tests with a mock handler. HTTP calls still incur ~900 ms cold-start on the native CLI due to `std.Io.Threaded` in the HTTP implementation (tracked in issue #72).
 
 ### Fix — Template GC Safety
 
@@ -125,7 +125,7 @@ gengo_host_module_func_def_t funcs[] = {
 engine_register_module(handle, "mylib", 5, funcs, 1);
 ```
 
-Scripts import with the `@module:` prefix: `mylib := import("@module:mylib")`. Calls are dispatched via the host's `nativeCallRaw` implementation.
+Scripts import with the `module:` prefix: `mylib := import("module:mylib")`. Calls are dispatched via the host's `nativeCallRaw` implementation.
 
 New engine exports: `engine_register_module`, `engine_set_write_fn`, `engine_last_error_line`, `engine_last_error_col`.
 

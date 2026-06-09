@@ -13,7 +13,7 @@ pub const MaxModules = 64;
 pub const MaxImportsPerModule = 64;
 pub const MaxModulePathBytes = 256;
 pub const StdModulePath = "std";
-pub const StdModuleGlobalName = "@module:std";
+pub const StdModuleGlobalName = "module:std";
 
 pub const SourceEntry = struct {
     path: []const u8,
@@ -160,18 +160,18 @@ pub const Session = struct {
 
     pub fn resolveImportOpaque(ctx: *anyopaque, importer_path: []const u8, import_name: []const u8) anyerror![]const u8 {
         const self: *Session = @ptrCast(@alignCast(ctx));
-        // Capability imports: @cap:<name>
-        if (import_name.len > 5 and std.mem.startsWith(u8, import_name, "@cap:")) {
-            const cap_name = import_name[5..];
+        // Capability imports: cap:<name>
+        if (import_name.len > 4 and std.mem.startsWith(u8, import_name, "cap:")) {
+            const cap_name = import_name[4..];
             if (self.isCapabilityEnabled(cap_name)) {
-                return try self.makePrefixedName("@cap:", cap_name);
+                return try self.makePrefixedName("cap:", cap_name);
             }
             return error.CapabilityNotEnabled;
         }
         const resolved = try self.resolveImportPath(importer_path, import_name);
         if (common.streq(resolved, StdModulePath)) return StdModuleGlobalName;
         if (self.isHostModule(resolved)) {
-            return try self.makePrefixedName("@module:", resolved);
+            return try self.makePrefixedName("module:", resolved);
         }
         try self.compileModuleFromPath(resolved);
         return self.moduleGlobalName(resolved) orelse return error.ImportNotFound;
@@ -273,7 +273,7 @@ pub const Session = struct {
                     if (rp.typ != .rparen) continue;
                     if (common.streq(name.src, "std")) continue;
                     if (self.isHostModule(name.src)) continue;
-                    if (name.src.len > 5 and std.mem.startsWith(u8, name.src, "@cap:")) continue;
+                    if (name.src.len > 4 and std.mem.startsWith(u8, name.src, "cap:")) continue;
                     const resolved = try self.resolveImportPath(importer_path, name.src);
                     if (count >= MaxImportsPerModule) {
                         self.last_error_path = importer_path;
@@ -310,7 +310,7 @@ pub const Session = struct {
         self.modules[idx].path_len = path.len;
         @memcpy(self.modules[idx].path_buf[0..path.len], path);
         if (!is_root) {
-            self.modules[idx].global_name = try self.makePrefixedName("@module:", path);
+            self.modules[idx].global_name = try self.makePrefixedName("module:", path);
             self.modules[idx].prefix = try self.makePrefixedName("@mod:", path);
             self.modules[idx].struct_name = try self.makePrefixedName("@module_type:", path);
         }
@@ -404,8 +404,8 @@ pub const Session = struct {
 pub fn hasModuleExport(ctx: *anyopaque, path: []const u8, field: []const u8) bool {
     const self: *Session = @ptrCast(@alignCast(ctx));
     const idx = self.findModule(path) orelse {
-        // Check capability modules — path is "@cap:<name>", cm.name is "<name>"
-        const cap_key = if (std.mem.startsWith(u8, path, "@cap:")) path[5..] else path;
+        // Check capability modules — path is "cap:<name>", cm.name is "<name>"
+        const cap_key = if (std.mem.startsWith(u8, path, "cap:")) path[4..] else path;
         for (self.capability_modules) |cm| {
             if (common.streq(cm.name, cap_key)) {
                 for (cm.functions) |func| {

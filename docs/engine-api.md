@@ -180,10 +180,10 @@ instance.exports.engine_add_source(
 
 ### `engine_register_module(handle: i32, name_ptr: i32, name_len: i32, funcs_ptr: i32, funcs_count: i32) → i32`
 
-Registers a host-defined module that Gengo scripts can import using the `@module:` prefix.
+Registers a host-defined module that Gengo scripts can import using the `module:` prefix.
 
 ```js
-// In Gengo: mylib := import("@module:mylib")
+// In Gengo: mylib := import("module:mylib")
 ```
 
 `funcs_ptr` points to an array of `funcs_count` function descriptors, each 16 bytes:
@@ -205,7 +205,7 @@ Returns:
 
 ### `engine_set_http_handler(handle: i32, callback: ptr, userdata: ptr) → void`
 
-Registers a host HTTP implementation for `@cap:http`. The `callback` must match the C signature:
+Registers a host HTTP implementation for `cap:http`. The `callback` must match the C signature:
 
 ```c
 int callback(
@@ -245,7 +245,7 @@ Pass `NULL` for `callback` to remove the handler and revert to the built-in impl
 
 ### `engine_set_net_handlers(handle: i32, handlers: ptr, userdata: ptr) → void`
 
-Registers host-side socket callbacks for `@cap:net`. `handlers` points to a `GengoNetHandlers` struct:
+Registers host-side socket callbacks for `cap:net`. `handlers` points to a `GengoNetHandlers` struct:
 
 ```c
 typedef struct {
