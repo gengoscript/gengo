@@ -58,10 +58,12 @@ pub fn findSlot(name: []const u8) ?u16 {
 }
 
 pub fn getAt(slot: u16) Value {
+    if (slot >= TableSize) return .null;
     return g_state.entries[slot].value;
 }
 
 pub fn setAt(slot: u16, value: Value) void {
+    if (slot >= TableSize) return;
     g_state.entries[slot].value = value;
 }
 
