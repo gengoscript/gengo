@@ -92,7 +92,8 @@ pub fn writeUint(v: u64) void {
 pub fn writeInt(v: i64) void {
     if (v < 0) {
         write("-");
-        writeUint(@intCast(-v));
+        const uv = if (v == std.math.minInt(i64)) @as(u64, @intCast(std.math.maxInt(i64))) + 1 else @as(u64, @intCast(-v));
+        writeUint(uv);
     } else writeUint(@intCast(v));
 }
 
@@ -121,7 +122,8 @@ fn werrUint(v: u64) void {
 pub fn werrInt(v: i64) void {
     if (v < 0) {
         werr("-");
-        werrUint(@intCast(-v));
+        const uv = if (v == std.math.minInt(i64)) @as(u64, @intCast(std.math.maxInt(i64))) + 1 else @as(u64, @intCast(-v));
+        werrUint(uv);
     } else werrUint(@intCast(v));
 }
 
