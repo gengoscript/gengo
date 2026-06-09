@@ -1,0 +1,4 @@
+std := import("std")
+n := std.math.nan()
+// Arithmetic with NaN should produce a runtime error
+_ = 1.0 + n

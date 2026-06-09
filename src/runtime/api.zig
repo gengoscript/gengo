@@ -28,7 +28,7 @@ pub const Config = struct {
 
 pub const CompileError = struct {
     line: u32,
-    col: u16 = 0,
+    col: u32 = 0,
     kind: anyerror,
     msg: []const u8 = "",
 };
@@ -36,7 +36,7 @@ pub const CompileError = struct {
 pub const RuntimeError = struct {
     kind: anyerror,
     line: u32 = 0,
-    col: u16 = 0,
+    col: u32 = 0,
     msg: []const u8 = "",
     frames: [MaxFrames]vm.PanicFrame = undefined,
     frame_count: usize = 0,

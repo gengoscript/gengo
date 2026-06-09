@@ -1,0 +1,4 @@
+std := import("std")
+type Huge int range 9000000000000000000..9000000000000000010
+// succ on very large values should error (f64 precision loss)
+_ = Huge.succ(Huge(9000000000000000000))
