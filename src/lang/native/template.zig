@@ -545,7 +545,7 @@ pub fn tplExec(tmpl: *Object, data: Value) !Value {
                     } else {
                         ip += 1;
                     }
-                } else if (jv == .number and jv.number < 0) {
+                } else if (jv == .number and jv.number < 0 and jv.number > -@as(f64, @floatFromInt(std.math.maxInt(usize)))) {
                     const pop = @as(usize, @intFromFloat(-jv.number));
                     if (scope_top >= pop) scope_top -= pop;
                     ip += 1;
