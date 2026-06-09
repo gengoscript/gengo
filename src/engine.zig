@@ -197,7 +197,12 @@ fn wireToValue(wire: ValueWire) Value {
     return switch (wire.tag) {
         @intFromEnum(WireTag.null) => .null,
         @intFromEnum(WireTag.boolean) => Value{ .boolean = wire.payload != 0 },
-        @intFromEnum(WireTag.number) => Value{ .float = @bitCast(wire.payload) },
+        @intFromEnum(WireTag.number) => blk: {
+            // flags bit 0: caller declares this as an integer, not a float.
+            // Without this hint wireToValue produces .float, which fails int-typed params.
+            const fval: f64 = @bitCast(wire.payload);
+            break :blk if (wire.flags & 1 != 0) Value{ .int = fval } else Value{ .float = fval };
+        },
         @intFromEnum(WireTag.string) => {
             if (wire.len == 0) return Value{ .string = "" };
             const data = @as([*]u8, @ptrFromInt(@as(usize, @intCast(wire.payload))))[0..@as(usize, @intCast(wire.len))];
@@ -566,6 +571,9 @@ fn setupHostModules(engine: *Engine) void {
         .allow_io = true,
         .module_sources = engine.source_entries[0..engine.source_count],
         .host_modules = engine.host_module_descs[0..desc_count],
+        // Preserve the per-instance instruction budget set via engine_init_with_config.
+        // Without this, setConfig resets policy.max_ops to null (unlimited) every run.
+        .max_ops = engine.runtime.inner.policy.max_ops,
     });
 }
 
