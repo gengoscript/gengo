@@ -128,7 +128,6 @@ pub fn build(b: *std.Build) void {
     const deploy_step = b.step("deploy", "Build engine WASM module and deploy to playground with cache-busted version");
     deploy_step.dependOn(&deploy_cmd.step);
 
-
     const unit_step = b.step("unit", "Run VM safety, embedding, and engine API checks");
     unit_step.dependOn(&run_vm_safety.step);
     unit_step.dependOn(&run_embedding.step);
@@ -282,5 +281,3 @@ fn installWasmAs(
     step.addArg(dest_name);
     return step;
 }
-
-
