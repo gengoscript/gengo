@@ -440,10 +440,10 @@ pub fn installStdGlobal() !void {
 
 pub fn installHostModules(host_modules: []const module_compile.HostModuleDesc) !void {
     for (host_modules) |hm| {
-        const global_name_buf = (heap.bump(u8, 7 + hm.name.len) orelse return)[0..7 + hm.name.len];
-        @memcpy(global_name_buf[0..7], "module:");
-        @memcpy(global_name_buf[7..][0..hm.name.len], hm.name);
-        const global_name = global_name_buf[0..7 + hm.name.len];
+        const global_name_buf = (heap.bump(u8, 5 + hm.name.len) orelse return)[0..5 + hm.name.len];
+        @memcpy(global_name_buf[0..5], "host:");
+        @memcpy(global_name_buf[5..][0..hm.name.len], hm.name);
+        const global_name = global_name_buf[0..5 + hm.name.len];
         if (globals.has(global_name)) continue;
 
         const entries = hm.functions;

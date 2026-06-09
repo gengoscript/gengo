@@ -27,7 +27,7 @@ Companion guides:
   - path plus `/mod.gengo`
 - Source modules return struct-backed namespace objects containing `pub` exports.
 - Field accesses on imported module objects are validated at compile time; accessing a name that is not exported raises a `CompileError`.
-- Host-defined modules are imported using the `module:` prefix: `import("module:mylib")`.
+- Host-defined modules are imported using the `host:` prefix: `import("host:mylib")`.
   - The host registers them via `engine_register_module` before running scripts.
   - Calls are dispatched to the host's `nativeCallRaw` handler.
 - Capability modules use the `cap:` prefix: `import("cap:http")`. See section 10.
