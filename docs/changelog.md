@@ -125,7 +125,7 @@ gengo_host_module_func_def_t funcs[] = {
 engine_register_module(handle, "mylib", 5, funcs, 1);
 ```
 
-Scripts import with the `module:` prefix: `mylib := import("module:mylib")`. Calls are dispatched via the host's `nativeCallRaw` implementation.
+Scripts import with the `host:` prefix: `mylib := import("host:mylib")`. Calls are dispatched via the host's `nativeCallRaw` implementation.
 
 New engine exports: `engine_register_module`, `engine_set_write_fn`, `engine_last_error_line`, `engine_last_error_col`.
 

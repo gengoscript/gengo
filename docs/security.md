@@ -123,13 +123,13 @@ For `cap:net` and `cap:http`, the host can register per-call handlers that inter
 
 ## Host modules
 
-The host can expose named functions to scripts via `module:` imports. Scripts can only call functions the host explicitly registers. There is no reflection, no dynamic function lookup, and no way for a script to discover what host functions exist beyond what it successfully imports.
+The host can expose named functions to scripts via `host:` imports. Scripts can only call functions the host explicitly registers. There is no reflection, no dynamic function lookup, and no way for a script to discover what host functions exist beyond what it successfully imports.
 
 ```zig
 // Only lookup_category is available to scripts; nothing else from the host
 var rt = api.Runtime.init(.{
     .host_modules = &.{.{
-        .name  = "module:db",
+        .name  = "host:db",
         .funcs = &.{.{ .name = "lookup_category", .arity = 1 }},
     }},
 });

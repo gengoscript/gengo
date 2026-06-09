@@ -180,10 +180,10 @@ instance.exports.engine_add_source(
 
 ### `engine_register_module(handle: i32, name_ptr: i32, name_len: i32, funcs_ptr: i32, funcs_count: i32) → i32`
 
-Registers a host-defined module that Gengo scripts can import using the `module:` prefix.
+Registers a host-defined module that Gengo scripts can import using the `host:` prefix.
 
 ```js
-// In Gengo: mylib := import("module:mylib")
+// In Gengo: mylib := import("host:mylib")
 ```
 
 `funcs_ptr` points to an array of `funcs_count` function descriptors, each 16 bytes:

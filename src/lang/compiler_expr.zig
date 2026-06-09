@@ -68,8 +68,8 @@ pub fn importExpr(c: anytype) !void {
     if (common.streq(name, "std") and common.streq(mod_name, "module:std")) {
         c.std_namespace_path = "";
         c.import_module_path = null;
-    } else if (mod_name.len > 7 and std.mem.startsWith(u8, mod_name, "module:")) {
-        c.import_module_path = mod_name[7..];
+    } else if (mod_name.len > 5 and std.mem.startsWith(u8, mod_name, "host:")) {
+        c.import_module_path = mod_name[5..];
         c.std_namespace_path = null;
     } else if (mod_name.len > 4 and std.mem.startsWith(u8, mod_name, "cap:")) {
         c.import_module_path = mod_name[4..];

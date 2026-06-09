@@ -78,7 +78,7 @@ var rt = api.Runtime.init(.{
     .allow_io   = false,
     .max_ops    = 50_000,
     .host_modules = &.{.{
-        .name  = "module:host",
+        .name  = "host:host",
         .funcs = &.{.{ .name = "lookup_category", .arity = 1 }},
     }},
 });
@@ -96,7 +96,7 @@ const verdict = rt.call("validate", &.{
 The user script might look like this:
 
 ```gengo
-host := import("module:host")
+host := import("host:host")
 
 type Severity int range 0..5
 

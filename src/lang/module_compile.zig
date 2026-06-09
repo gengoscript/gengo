@@ -171,7 +171,7 @@ pub const Session = struct {
         const resolved = try self.resolveImportPath(importer_path, import_name);
         if (common.streq(resolved, StdModulePath)) return StdModuleGlobalName;
         if (self.isHostModule(resolved)) {
-            return try self.makePrefixedName("module:", resolved);
+            return try self.makePrefixedName("host:", resolved);
         }
         try self.compileModuleFromPath(resolved);
         return self.moduleGlobalName(resolved) orelse return error.ImportNotFound;
@@ -310,7 +310,7 @@ pub const Session = struct {
         self.modules[idx].path_len = path.len;
         @memcpy(self.modules[idx].path_buf[0..path.len], path);
         if (!is_root) {
-            self.modules[idx].global_name = try self.makePrefixedName("module:", path);
+            self.modules[idx].global_name = try self.makePrefixedName("host:", path);
             self.modules[idx].prefix = try self.makePrefixedName("@mod:", path);
             self.modules[idx].struct_name = try self.makePrefixedName("@module_type:", path);
         }
