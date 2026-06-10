@@ -55,7 +55,9 @@ pub const CAP_CONV_TO_BOOL: u64 = 1 << 6;
 pub const CAP_CONV_TO_STRING: u64 = 1 << 7;
 
 fn hasHostImport() bool {
-    return builtin.target.os.tag == .freestanding and builtin.target.cpu.arch == .wasm32;
+    if (builtin.target.cpu.arch != .wasm32) return false;
+    const root = @import("root");
+    return @hasDecl(root, "is_embedded_engine") and root.is_embedded_engine;
 }
 
 pub fn nativeCall(id: HostCall, args: []const ValueWire, out: *ValueWire) CallStatus {
