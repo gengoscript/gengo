@@ -53,6 +53,10 @@ pub fn build(b: *std.Build) void {
     const run_vm_safety = b.addSystemCommand(&.{ wasmtime_opt, "--dir", "/" });
     run_vm_safety.addArtifactArg(vm_safety_exe);
 
+    const vm_value_exe = addWasmExe(b, "vm-value-runner", "src/vm_value_runner.zig", wasm_target, .Debug, &preset.step, build_opts_mod);
+    const run_vm_value = b.addSystemCommand(&.{ wasmtime_opt, "--dir", "/" });
+    run_vm_value.addArtifactArg(vm_value_exe);
+
     const embedding_exe = addWasmExe(b, "embedding-runner", "src/embedding_runner.zig", wasm_target, .Debug, &preset.step, build_opts_mod);
     const run_embedding = b.addSystemCommand(&.{ wasmtime_opt, "--dir", "/" });
     run_embedding.addArtifactArg(embedding_exe);
@@ -198,15 +202,17 @@ pub fn build(b: *std.Build) void {
     const compiler_test_step = b.step("compiler-test", "Run compiler bytecode output tests");
     compiler_test_step.dependOn(&run_compiler_tests.step);
 
-    const unit_step = b.step("unit", "Run VM safety, embedding, and engine API checks");
+    const unit_step = b.step("unit", "Run VM safety, value, embedding, and engine API checks");
     unit_step.dependOn(&run_vm_safety.step);
+    unit_step.dependOn(&run_vm_value.step);
     unit_step.dependOn(&run_embedding.step);
     unit_step.dependOn(&run_engine_runner.step);
 
-    const test_step = b.step("test", "Run compiler, lexer, runtime safety, embedding, engine, fuzz, and conformance tests");
+    const test_step = b.step("test", "Run compiler, lexer, runtime safety, value, embedding, engine, fuzz, and conformance tests");
     test_step.dependOn(&run_compiler_tests.step);
     test_step.dependOn(&run_lexer_tests.step);
     test_step.dependOn(&run_vm_safety.step);
+    test_step.dependOn(&run_vm_value.step);
     test_step.dependOn(&run_embedding.step);
     test_step.dependOn(&run_engine_runner.step);
     test_step.dependOn(&run_fuzz_runner.step);
