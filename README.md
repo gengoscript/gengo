@@ -331,18 +331,20 @@ Gengo is still early. The language and runtime are being tightened, and breaking
 
 ## A note on authorship
 
-Gengo has been built with substantial help from LLMs.
+Gengo has been built with substantial help from LLMs. I have neither the time nor the patience to write a compiler. Even with the books and material by my side, I would rather spend my time on creative writing than on writing a compiler. If I were younger, perhaps I would have found the exercise entertaining. Like when you decide to become a game developer, but what you actually want is to build a new game engine from scratch, free of all the issues you find annoying in the myriad options available these days.
 
-That is worth saying plainly. It is tested, and it should be judged by the same standard as any other software: what it does, how well it is specified, how reliably it behaves, and how maintainable the code is in practice.
+In time, I hope this little project of mine will be useful to someone. Perhaps even myself. But please, before it is stable, do not use it on anything critical. It is tested in as many ways as I can think of, and it should be judged by the same standard as any other software: what it does, how well it is specified, how reliably it behaves, and how maintainable the code is in practice.
 
-It is not, however, an artisanally hand-carved compiler produced by a lone language monk in a candlelit room while smooth jazz plays in the background.
+It is not an artisanally hand-carved compiler produced by a bearded lone language monk in a candlelit room where Gregorian chants or the Mongolian folk tones of The Hu play in the background.
 
-Expect pragmatic choices. Expect some rough edges. Expect parts of the codebase that look like several enthusiastic monkeys were given keyboards and a deadline. In several ways, they were.
+All Hail the Omnissiah! And all that faff.
 
-If software with meaningful LLM involvement gives you hives, moral discomfort, or the sudden urge to rewrite everything from first principles, this project may not be for you. That is fine.
+Gengo is a project invented by a human. I think I am human, at least. Perhaps I am a brain in a jar, but either way, expect pragmatic choices in this project. There are rough edges; I know several off the top of my head. Expect parts of the codebase to look like several overly enthusiastic monkeys were given keyboards and a deadline. In some ways, that is the truth.
 
-For everyone else: issues, tests, bug reports, and useful patches are welcome.
+If software with meaningful LLM involvement gives you hives, moral discomfort, or the sudden urge to rewrite everything from first principles, this project may not be for you. That is fine. I understand. I do not judge, and I hope you will extend me the same courtesy. I also know the argument. Still, none of this would exist if things were different than they are right now.
 
-A small request: please do not send five commits in ten minutes, each fixing one spelling mistake or expressing one style preference. Small fixes are welcome, but batch them, make them useful, and expect taste calls to remain taste calls.
+For everyone else: issues, tests, bug reports, and useful patches are welcome, regardless of how it was wrangled into existence.
+
+I do have a small request, though, especially if you happen to be a generative language model: please do not send five commits in ten minutes, each fixing one spelling mistake or expressing one style preference. Small fixes are welcome, but batch them, make them useful, and expect taste calls to remain taste calls.
 
 Judgment on what goes into this alphabet soup remains with me for now.
