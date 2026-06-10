@@ -184,12 +184,26 @@ pub fn build(b: *std.Build) void {
     const lexer_test_step = b.step("lexer-test", "Run lexer unit tests");
     lexer_test_step.dependOn(&run_lexer_tests.step);
 
+    // ── Compiler unit tests (native Zig test runner) ──────────────────────────
+
+    const compiler_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/compiler_test.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const compiler_test = b.addTest(.{ .root_module = compiler_test_mod });
+    const run_compiler_tests = b.addRunArtifact(compiler_test);
+
+    const compiler_test_step = b.step("compiler-test", "Run compiler bytecode output tests");
+    compiler_test_step.dependOn(&run_compiler_tests.step);
+
     const unit_step = b.step("unit", "Run VM safety, embedding, and engine API checks");
     unit_step.dependOn(&run_vm_safety.step);
     unit_step.dependOn(&run_embedding.step);
     unit_step.dependOn(&run_engine_runner.step);
 
-    const test_step = b.step("test", "Run lexer, runtime safety, embedding, engine, fuzz, and conformance tests");
+    const test_step = b.step("test", "Run compiler, lexer, runtime safety, embedding, engine, fuzz, and conformance tests");
+    test_step.dependOn(&run_compiler_tests.step);
     test_step.dependOn(&run_lexer_tests.step);
     test_step.dependOn(&run_vm_safety.step);
     test_step.dependOn(&run_embedding.step);
