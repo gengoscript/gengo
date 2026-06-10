@@ -10,8 +10,8 @@ zig build -Dpreset=dev test
 
 Notes:
 - `test` forces dev preset (`config-dev`) first.
-- Pass cases are in `examples/spec/*.gengo` with matching `.out` files.
-- Fail cases are in `examples/spec/fail/*.gengo` with matching `.err` token files.
+- Pass cases are in `tests/spec/*.gengo` with matching `.out` files.
+- Fail cases are in `tests/spec/fail/*.gengo` with matching `.err` token files.
 
 ## Parity Harness
 
@@ -22,7 +22,7 @@ zig build -Dpreset=dev parity
 ```
 
 Notes:
-- Parity cases live in `examples/parity/*.gengo`.
+- Parity cases live in `tests/parity/*.gengo`.
 - Host backend gracefully falls back to VM-local implementations when host import is unavailable.
 
 ## Bench Harness
@@ -42,7 +42,7 @@ GENGO_BENCH_STATS=1 zig build -Dpreset=dev bench
 ```
 
 Bench files:
-- `examples/bench/*.gengo`: benchmark scripts
+- `tests/bench/*.gengo`: benchmark scripts
 - `*.out`: expected output
 - `*.policy`: optional behavior policy
 - `*.ops`: optional operation count for ops/sec logging

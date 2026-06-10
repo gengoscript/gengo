@@ -33,7 +33,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
 
     const wasmtime = if (args.len > 1) args[1] else "wasmtime";
     const wasm_path = if (args.len > 2) args[2] else "build/gengo-perf.wasm";
-    const bench_dir = if (args.len > 3) args[3] else "examples/bench";
+    const bench_dir = if (args.len > 3) args[3] else "tests/bench";
     const perf_dir = if (args.len > 4) args[4] else "build/perf";
 
     // Collect bench cases using raw C directory API

@@ -300,8 +300,9 @@ Use `-Dpreset=<name>` with any build command.
 src/lang/         lexer, compiler, bytecode, VM
 src/runtime/      heap, GC, runtime, Zig embedding API
 src/engine.zig    WASM/native engine exports
-examples/spec/    conformance cases, both pass and fail
-examples/bench/   benchmark programs
+tests/spec/       conformance cases, both pass and fail
+tests/bench/      benchmark programs
+examples/         embedding demos (Python, etc.)
 docs/             language, stdlib, embedding, engine API, changelog
 sdk/typescript/   TypeScript wrapper for gengo-engine.wasm
 ```
