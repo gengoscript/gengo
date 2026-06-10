@@ -280,7 +280,12 @@ fn runSrc(rt: *Runtime, src: []const u8) !void {
 test "compiler: const_eq fusion fires" {
     var rt = setup();
     defer rt.deinit();
-    try compile(&rt, "func f(x int) bool { return x == 42 }");
+    // Global variable: emits get_global (not get_local), so the triple fusion
+    // cannot fire; const_eq remains as a standalone fused opcode.
+    try compile(&rt,
+        \\var g = 10
+        \\func f() bool { return g == 42 }
+    );
     const c = &rt.chunk_state;
     var found = false;
     for (c.code[0..c.code_len]) |op| {
@@ -304,7 +309,12 @@ test "compiler: const_eq fusion result" {
 test "compiler: const_sub fusion fires" {
     var rt = setup();
     defer rt.deinit();
-    try compile(&rt, "func f(x int) int { return x - 1 }");
+    // Global variable: emits get_global (not get_local), so the triple fusion
+    // cannot fire; const_sub remains as a standalone fused opcode.
+    try compile(&rt,
+        \\var g = 10
+        \\func f() int { return g - 1 }
+    );
     const c = &rt.chunk_state;
     var found = false;
     for (c.code[0..c.code_len]) |op| {
