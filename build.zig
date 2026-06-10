@@ -188,6 +188,20 @@ pub fn build(b: *std.Build) void {
     const lexer_test_step = b.step("lexer-test", "Run lexer unit tests");
     lexer_test_step.dependOn(&run_lexer_tests.step);
 
+    // ── Heap / GC unit tests (native Zig test runner) ─────────────────────────
+    // Uses a wrapper root at src/ so that runtime/heap.zig can import ../lang/value.zig.
+
+    const heap_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/heap_test_root.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const heap_test = b.addTest(.{ .root_module = heap_test_mod });
+    const run_heap_tests = b.addRunArtifact(heap_test);
+
+    const heap_test_step = b.step("heap-test", "Run heap and GC invariant tests");
+    heap_test_step.dependOn(&run_heap_tests.step);
+
     // ── Compiler unit tests (native Zig test runner) ──────────────────────────
 
     const compiler_test_mod = b.createModule(.{
@@ -208,7 +222,8 @@ pub fn build(b: *std.Build) void {
     unit_step.dependOn(&run_embedding.step);
     unit_step.dependOn(&run_engine_runner.step);
 
-    const test_step = b.step("test", "Run compiler, lexer, runtime safety, value, embedding, engine, fuzz, and conformance tests");
+    const test_step = b.step("test", "Run heap, compiler, lexer, runtime safety, value, embedding, engine, fuzz, and conformance tests");
+    test_step.dependOn(&run_heap_tests.step);
     test_step.dependOn(&run_compiler_tests.step);
     test_step.dependOn(&run_lexer_tests.step);
     test_step.dependOn(&run_vm_safety.step);
