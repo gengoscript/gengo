@@ -240,3 +240,390 @@ pub const Lexer = struct {
         return self.pos >= self.src.len;
     }
 };
+
+const testing = std.testing;
+
+test "lexer: keywords" {
+    var lex = Lexer{ .src = "assert break case const continue cycle default defer else enum false for func if import in interface null predicate pub range return struct subtype switch test trap true type var variant" };
+    const expected = comptime [_]TT{
+        .kw_assert, .kw_break, .kw_case, .kw_const, .kw_continue, .kw_cycle,
+        .kw_default, .kw_defer, .kw_else, .kw_enum, .kw_false, .kw_for,
+        .kw_func, .kw_if, .kw_import, .kw_in, .kw_interface, .kw_null,
+        .kw_predicate, .kw_pub, .kw_range, .kw_return, .kw_struct, .kw_subtype,
+        .kw_switch, .kw_test, .kw_trap, .kw_true, .kw_type, .kw_var, .kw_variant,
+    };
+    inline for (expected) |exp| {
+        const tok = lex.next();
+        try testing.expectEqual(exp, tok.typ);
+    }
+    try testing.expectEqual(.eof, lex.next().typ);
+}
+
+test "lexer: identifiers" {
+    var lex = Lexer{ .src = "foo bar _baz hello123" };
+    {
+        const tok = lex.next();
+        try testing.expectEqual(.ident, tok.typ);
+        try testing.expectEqualStrings("foo", tok.src);
+    }
+    {
+        const tok = lex.next();
+        try testing.expectEqual(.ident, tok.typ);
+        try testing.expectEqualStrings("bar", tok.src);
+    }
+    {
+        const tok = lex.next();
+        try testing.expectEqual(.ident, tok.typ);
+        try testing.expectEqualStrings("_baz", tok.src);
+    }
+    {
+        const tok = lex.next();
+        try testing.expectEqual(.ident, tok.typ);
+        try testing.expectEqualStrings("hello123", tok.src);
+    }
+    try testing.expectEqual(.eof, lex.next().typ);
+}
+
+test "lexer: invalid non-ASCII start gives err_invalid_char" {
+    var lex = Lexer{ .src = "λ" };
+    try testing.expectEqual(.err_invalid_char, lex.next().typ);
+}
+
+test "lexer: ascii ident followed by UTF-8 stops at non-ASCII" {
+    var lex = Lexer{ .src = "aλb" };
+    const tok = lex.next();
+    try testing.expectEqual(.ident, tok.typ);
+    try testing.expectEqualStrings("a", tok.src);
+    try testing.expectEqual(.err_invalid_char, lex.next().typ);
+}
+
+test "lexer: single-char punctuation" {
+    var lex = Lexer{ .src = "(){}[],;:." };
+    const expected = comptime [_]TT{
+        .lparen, .rparen, .lbrace, .rbrace, .lbracket, .rbracket,
+        .comma, .semicolon, .colon, .dot,
+    };
+    inline for (expected) |exp| try testing.expectEqual(exp, lex.next().typ);
+    try testing.expectEqual(.eof, lex.next().typ);
+}
+
+test "lexer: operators" {
+    var lex = Lexer{ .src = "?~!= == <= >= << >> <<= >>= := += -= *= /= %= &= |= ^= ++ -- ** && ||" };
+    const expected = comptime [_]TT{
+        .question, .tilde, .bang_eq, .eq_eq, .lt_eq, .gt_eq,
+        .lt_lt, .gt_gt, .lt_lt_eq, .gt_gt_eq, .colon_eq,
+        .plus_eq, .minus_eq, .star_eq, .slash_eq, .percent_eq,
+        .amp_eq, .pipe_eq, .caret_eq,
+        .plus_plus, .minus_minus, .star_star, .amp_amp, .pipe_pipe,
+    };
+    inline for (expected) |exp| try testing.expectEqual(exp, lex.next().typ);
+    try testing.expectEqual(.eof, lex.next().typ);
+}
+
+test "lexer: single-char + = / . combos" {
+    // Tests that prefix operators don't consume extra when not followed by = or .
+    var lex = Lexer{ .src = "+ - * / % & | ^ = < > ! ." };
+    const expected = comptime [_]TT{ .plus, .minus, .star, .slash, .percent, .amp, .pipe, .caret, .eq, .lt, .gt, .bang, .dot };
+    inline for (expected) |exp| try testing.expectEqual(exp, lex.next().typ);
+    try testing.expectEqual(.eof, lex.next().typ);
+}
+
+test "lexer: ... ellipsis" {
+    var lex = Lexer{ .src = "..." };
+    try testing.expectEqual(.ellipsis, lex.next().typ);
+    try testing.expectEqual(.eof, lex.next().typ);
+}
+
+test "lexer: integer literals" {
+    var lex = Lexer{ .src = "0 42 1_000" };
+    {
+        const tok = lex.next();
+        try testing.expectEqual(.number, tok.typ);
+        try testing.expectEqualStrings("0", tok.src);
+    }
+    {
+        const tok = lex.next();
+        try testing.expectEqual(.number, tok.typ);
+        try testing.expectEqualStrings("42", tok.src);
+    }
+    {
+        const tok = lex.next();
+        try testing.expectEqual(.number, tok.typ);
+        try testing.expectEqualStrings("1_000", tok.src);
+    }
+    try testing.expectEqual(.eof, lex.next().typ);
+}
+
+test "lexer: float literals" {
+    var lex = Lexer{ .src = "3.14 0.5 1.0 1_000.5 1e10 2.5e-3 1E+2" };
+    const expected = comptime [_][]const u8{ "3.14", "0.5", "1.0", "1_000.5", "1e10", "2.5e-3", "1E+2" };
+    inline for (expected) |exp| {
+        const tok = lex.next();
+        try testing.expectEqual(.number, tok.typ);
+        try testing.expectEqualStrings(exp, tok.src);
+    }
+    try testing.expectEqual(.eof, lex.next().typ);
+}
+
+test "lexer: number with leading zeros" {
+    var lex = Lexer{ .src = "007" };
+    const tok = lex.next();
+    try testing.expectEqual(.number, tok.typ);
+    try testing.expectEqualStrings("007", tok.src);
+}
+
+test "lexer: string literal" {
+    var lex = Lexer{ .src = "\"hello\"" };
+    const tok = lex.next();
+    try testing.expectEqual(.string, tok.typ);
+    try testing.expectEqualStrings("hello", tok.src);
+}
+
+test "lexer: string literal with escape sequences" {
+    var lex = Lexer{ .src = "\"hello\\nworld\\ttab\"" };
+    const tok = lex.next();
+    try testing.expectEqual(.string, tok.typ);
+    try testing.expectEqualStrings("hello\nworld\ttab", tok.src);
+}
+
+test "lexer: string literal with backslash and quote escapes" {
+    var lex = Lexer{ .src = "\"a\\\\b\\\"c\\'\"" };
+    const tok = lex.next();
+    try testing.expectEqual(.string, tok.typ);
+    try testing.expectEqualStrings("a\\b\"c'", tok.src);
+}
+
+test "lexer: string literal with unknown escape passes through" {
+    var lex = Lexer{ .src = "\"\\x\"" };
+    const tok = lex.next();
+    try testing.expectEqual(.string, tok.typ);
+    try testing.expectEqualStrings("x", tok.src);
+}
+
+test "lexer: unterminated double-quoted string" {
+    var lex = Lexer{ .src = "\"hello" };
+    try testing.expectEqual(.err_unterminated_string, lex.next().typ);
+}
+
+test "lexer: string with embedded newline returns error" {
+    var lex = Lexer{ .src = "\"hello\nworld\"" };
+    try testing.expectEqual(.err_unterminated_string, lex.next().typ);
+}
+
+test "lexer: char literal" {
+    var lex = Lexer{ .src = "'a'" };
+    const tok = lex.next();
+    try testing.expectEqual(.string, tok.typ);
+    try testing.expectEqualStrings("a", tok.src);
+}
+
+test "lexer: char literal with escape not processed in single quotes" {
+    var lex = Lexer{ .src = "'\\n'" };
+    const tok = lex.next();
+    try testing.expectEqual(.string, tok.typ);
+    try testing.expectEqualStrings("\\n", tok.src);
+}
+
+test "lexer: char literal with escaped quote" {
+    var lex = Lexer{ .src = "'\\''" };
+    const tok = lex.next();
+    try testing.expectEqual(.string, tok.typ);
+    try testing.expectEqualStrings("\\", tok.src);
+}
+
+test "lexer: unterminated single-quoted string" {
+    var lex = Lexer{ .src = "'hello" };
+    try testing.expectEqual(.err_unterminated_string, lex.next().typ);
+}
+
+test "lexer: rune literal" {
+    var lex = Lexer{ .src = "`a`" };
+    const tok = lex.next();
+    try testing.expectEqual(.rune, tok.typ);
+    try testing.expectEqualStrings("`a`", tok.src);
+}
+
+test "lexer: rune literal multi-byte UTF-8" {
+    var lex = Lexer{ .src = "`λ`" };
+    const tok = lex.next();
+    try testing.expectEqual(.rune, tok.typ);
+    try testing.expectEqualStrings("`λ`", tok.src);
+}
+
+test "lexer: empty rune" {
+    var lex = Lexer{ .src = "``" };
+    const tok = lex.next();
+    try testing.expectEqual(.rune, tok.typ);
+    try testing.expectEqualStrings("``", tok.src);
+}
+
+test "lexer: multi-codepoint rune" {
+    var lex = Lexer{ .src = "`ab`" };
+    const tok = lex.next();
+    try testing.expectEqual(.rune, tok.typ);
+    try testing.expectEqualStrings("`ab`", tok.src);
+}
+
+test "lexer: unterminated rune" {
+    var lex = Lexer{ .src = "`hello" };
+    try testing.expectEqual(.err_unterminated_string, lex.next().typ);
+}
+
+test "lexer: rune with embedded newline returns error" {
+    var lex = Lexer{ .src = "`hello\nworld`" };
+    try testing.expectEqual(.err_unterminated_string, lex.next().typ);
+}
+
+test "lexer: multiline string" {
+    var lex = Lexer{ .src = "\\\\hello\n\\\\world" };
+    const tok = lex.next();
+    try testing.expectEqual(.string, tok.typ);
+    try testing.expectEqualStrings("hello\nworld", tok.src);
+}
+
+test "lexer: multiline string with whitespace continuation" {
+    var lex = Lexer{ .src = "\\\\hello\n  \\\\world" };
+    const tok = lex.next();
+    try testing.expectEqual(.string, tok.typ);
+    try testing.expectEqualStrings("hello\nworld", tok.src);
+}
+
+test "lexer: multiline string stops at line without continuation" {
+    var lex = Lexer{ .src = "\\\\hello\nworld" };
+    const tok = lex.next();
+    try testing.expectEqual(.string, tok.typ);
+    try testing.expectEqualStrings("hello\n", tok.src);
+}
+
+test "lexer: multiline string single line" {
+    var lex = Lexer{ .src = "\\\\hello" };
+    const tok = lex.next();
+    try testing.expectEqual(.string, tok.typ);
+    try testing.expectEqualStrings("hello", tok.src);
+}
+
+test "lexer: multiline string empty body" {
+    var lex = Lexer{ .src = "\\\\\n\\\\world" };
+    const tok = lex.next();
+    try testing.expectEqual(.string, tok.typ);
+    try testing.expectEqualStrings("\nworld", tok.src);
+}
+
+test "lexer: multiline string at EOF" {
+    var lex = Lexer{ .src = "\\\\\n" };
+    const tok = lex.next();
+    try testing.expectEqual(.string, tok.typ);
+    try testing.expectEqualStrings("\n", tok.src);
+}
+
+test "lexer: double backslash alone" {
+    var lex = Lexer{ .src = "\\\\" };
+    const tok = lex.next();
+    try testing.expectEqual(.string, tok.typ);
+    try testing.expectEqualStrings("", tok.src);
+}
+
+test "lexer: single backslash is invalid" {
+    var lex = Lexer{ .src = "\\a" };
+    try testing.expectEqual(.err_invalid_char, lex.next().typ);
+}
+
+test "lexer: line numbers start at 1" {
+    var lex = Lexer{ .src = "a" };
+    try testing.expectEqual(@as(u32, 1), lex.next().line);
+}
+
+test "lexer: column numbers start at 1" {
+    var lex = Lexer{ .src = "a" };
+    try testing.expectEqual(@as(u32, 1), lex.next().col);
+}
+
+test "lexer: line incremented after newline" {
+    var lex = Lexer{ .src = "a\nb" };
+    const tok1 = lex.next();
+    try testing.expectEqual(@as(u32, 1), tok1.line);
+    const tok2 = lex.next();
+    try testing.expectEqual(@as(u32, 2), tok2.line);
+}
+
+test "lexer: column reset after newline" {
+    var lex = Lexer{ .src = "abc\nd" };
+    _ = lex.next();
+    const tok = lex.next();
+    try testing.expectEqual(@as(u32, 2), tok.line);
+    try testing.expectEqual(@as(u32, 1), tok.col);
+}
+
+test "lexer: column tracks byte offset" {
+    var lex = Lexer{ .src = "  x" };
+    const tok = lex.next();
+    try testing.expectEqual(@as(u32, 3), tok.col);
+}
+
+test "lexer: column in string literal" {
+    var lex = Lexer{ .src = "\"hi\"" };
+    const tok = lex.next();
+    try testing.expectEqual(@as(u32, 1), tok.col);
+}
+
+test "lexer: string literal column on same line" {
+    var lex = Lexer{ .src = "x \"hi\"" };
+    _ = lex.next();
+    const tok = lex.next();
+    try testing.expectEqual(@as(u32, 3), tok.col);
+}
+
+test "lexer: comment skipped" {
+    var lex = Lexer{ .src = "a // comment\nb" };
+    {
+        const tok = lex.next();
+        try testing.expectEqual(.ident, tok.typ);
+        try testing.expectEqualStrings("a", tok.src);
+    }
+    {
+        const tok = lex.next();
+        try testing.expectEqual(.ident, tok.typ);
+        try testing.expectEqualStrings("b", tok.src);
+    }
+    try testing.expectEqual(.eof, lex.next().typ);
+}
+
+test "lexer: comment at end of file" {
+    var lex = Lexer{ .src = "a // comment" };
+    const tok = lex.next();
+    try testing.expectEqual(.ident, tok.typ);
+    try testing.expectEqualStrings("a", tok.src);
+    try testing.expectEqual(.eof, lex.next().typ);
+}
+
+test "lexer: EOF returns eof repeatedly" {
+    var lex = Lexer{ .src = "" };
+    try testing.expectEqual(.eof, lex.next().typ);
+    try testing.expectEqual(.eof, lex.next().typ);
+    try testing.expectEqual(.eof, lex.next().typ);
+}
+
+test "lexer: only whitespace returns eof" {
+    var lex = Lexer{ .src = "   \t  \n  " };
+    try testing.expectEqual(.eof, lex.next().typ);
+}
+
+test "lexer: invalid character" {
+    var lex = Lexer{ .src = "@" };
+    try testing.expectEqual(.err_invalid_char, lex.next().typ);
+}
+
+test "lexer: identifier with underscore prefix" {
+    var lex = Lexer{ .src = "_foo _123" };
+    {
+        const tok = lex.next();
+        try testing.expectEqual(.ident, tok.typ);
+        try testing.expectEqualStrings("_foo", tok.src);
+    }
+    {
+        const tok = lex.next();
+        try testing.expectEqual(.ident, tok.typ);
+        try testing.expectEqualStrings("_123", tok.src);
+    }
+    try testing.expectEqual(.eof, lex.next().typ);
+}
