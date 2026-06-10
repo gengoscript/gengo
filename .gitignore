@@ -3,6 +3,8 @@ zig-out/
 .zig-cache/
 *.swp
 *.wasm
+__pycache__/
+*.pyc
 !playground/gengo-runtime.wasm
 !playground/gengo-engine.wasm
 embed-host-example
