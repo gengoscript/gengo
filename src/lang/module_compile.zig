@@ -90,8 +90,12 @@ pub const cap_net_desc: CapModuleDesc = .{
 pub const cap_fs_desc: CapModuleDesc = .{
     .name = "fs",
     .functions = &.{
-        .{ .name = "read", .arity = 1, .native_id = 161 },
+        .{ .name = "read",   .arity = 1, .native_id = 161 },
         .{ .name = "exists", .arity = 1, .native_id = 162 },
+        .{ .name = "write",  .arity = 2, .native_id = 188 },
+        .{ .name = "list",   .arity = 1, .native_id = 189 },
+        .{ .name = "delete", .arity = 1, .native_id = 190 },
+        .{ .name = "mkdir",  .arity = 1, .native_id = 191 },
     },
 };
 
@@ -436,6 +440,10 @@ pub fn hasModuleExport(ctx: *anyopaque, path: []const u8, field: []const u8) boo
             if (common.streq(cm.name, cap_key)) {
                 for (cm.functions) |func| {
                     if (common.streq(func.name, field)) return true;
+                    // Accept namespace prefix: "local" matches "local.read" etc.
+                    if (func.name.len > field.len and
+                        std.mem.startsWith(u8, func.name, field) and
+                        func.name[field.len] == '.') return true;
                 }
                 return false;
             }

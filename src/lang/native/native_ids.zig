@@ -175,6 +175,10 @@ pub const NativeFnId = enum(u8) {
 
     cap_fs_read = 161,
     cap_fs_exists = 162,
+    cap_fs_write = 188,
+    cap_fs_list = 189,
+    cap_fs_delete = 190,
+    cap_fs_mkdir = 191,
 
     cap_http_get = 185,
     cap_http_post = 186,
