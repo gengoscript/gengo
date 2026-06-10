@@ -444,3 +444,7 @@ test "compiler: get_local_const_lt_jif_pop quad fusion result" {
     const r2 = try rt.callGlobal("f", &.{.{ .int = 10 }});
     try std.testing.expect(r2 == .int and r2.int == 20);
 }
+
+test {
+    _ = @import("lang/native/fs_state.zig");
+}

@@ -10,6 +10,7 @@ const vms = @import("lang/vm_state.zig");
 const vmgc = @import("lang/vm_gc.zig");
 const net_state = @import("lang/native/net_state.zig");
 const http_state = @import("lang/native/http_state.zig");
+const fs_state = @import("lang/native/fs_state.zig");
 const cfg = @import("runtime/config.zig");
 const Value = @import("lang/value.zig").Value;
 const Object = @import("lang/value.zig").Object;
@@ -720,4 +721,15 @@ export fn engine_set_http_handler(handle: i32, callback: ?http_state.GengoHttpFe
     if (callback) |cb| {
         http_state.setHttpHandler(cb, userdata);
     }
+}
+
+/// Register a host directory as a cap:fs mount ("name" -> real path).
+/// Strings are copied; the caller may free them after the call returns.
+/// Returns 0 on success, -1 on invalid handle, -2 on invalid mount.
+export fn engine_mount_dir(handle: i32, name_ptr: PtrInt, name_len: i32, path_ptr: PtrInt, path_len: i32) i32 {
+    _ = getEngine(handle) orelse return -1;
+    const name = wasmSlice(name_ptr, name_len);
+    const path = wasmSlice(path_ptr, path_len);
+    fs_state.addMount(name, path) catch return -2;
+    return 0;
 }

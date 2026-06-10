@@ -19,6 +19,7 @@ const vm = @import("lang/vm.zig");
 const vmperf = @import("lang/vm_perf.zig");
 const vms = @import("lang/vm_state.zig");
 const cfg = @import("runtime/config.zig");
+const fs_state = @import("lang/native/fs_state.zig");
 
 const MaxArgs = 32;
 const ArgBufSize = 4096;
@@ -258,6 +259,29 @@ fn runCli(argv: []const []const u8) void {
             }
             cap_names[cap_count] = argv[script_index + 1];
             cap_count += 1;
+            script_index += 2;
+            continue;
+        }
+        if (std.mem.eql(u8, a, "--mount")) {
+            if (script_index + 1 >= argv.len) {
+                io.werr("gengo: --mount requires value name=path\n");
+                die(1);
+            }
+            const v = argv[script_index + 1];
+            const eq = std.mem.indexOfScalar(u8, v, '=') orelse {
+                io.werr("gengo: invalid --mount value (expected name=path): ");
+                io.werr(v);
+                io.werr("\n");
+                die(1);
+            };
+            fs_state.addMount(v[0..eq], v[eq + 1 ..]) catch |err| {
+                io.werr("gengo: invalid --mount value (");
+                io.werr(@errorName(err));
+                io.werr("): ");
+                io.werr(v);
+                io.werr("\n");
+                die(1);
+            };
             script_index += 2;
             continue;
         }

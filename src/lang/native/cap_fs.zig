@@ -5,6 +5,7 @@ const vmgc = @import("../vm_gc.zig");
 const Value = @import("../value.zig").Value;
 const NativeFuncObj = @import("../value.zig").NativeFuncObj;
 const NativeFnId = @import("native_ids.zig").NativeFnId;
+const fs_state = @import("fs_state.zig");
 
 const alloc = std.heap.page_allocator;
 
@@ -25,7 +26,10 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
 
             if (comptime builtin.os.tag == .wasi) return error.CapabilityNotAvailable;
 
-            const fd = std.posix.openat(std.posix.AT.FDCWD, path, .{ .ACCMODE = .RDONLY, .CLOEXEC = true }, 0) catch return error.CapabilityError;
+            var rbuf: [4096]u8 = undefined;
+            const rpath = try fs_state.resolve(path, &rbuf);
+
+            const fd = std.posix.openat(std.posix.AT.FDCWD, rpath, .{ .ACCMODE = .RDONLY, .CLOEXEC = true }, 0) catch return error.CapabilityError;
             defer _ = std.posix.system.close(fd);
 
             var buf: std.ArrayList(u8) = .empty;
@@ -53,7 +57,10 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
 
             if (comptime builtin.os.tag == .wasi) return error.CapabilityNotAvailable;
 
-            const fd = std.posix.openat(std.posix.AT.FDCWD, path, .{ .ACCMODE = .RDONLY, .CLOEXEC = true }, 0) catch |err| switch (err) {
+            var rbuf: [4096]u8 = undefined;
+            const rpath = try fs_state.resolve(path, &rbuf);
+
+            const fd = std.posix.openat(std.posix.AT.FDCWD, rpath, .{ .ACCMODE = .RDONLY, .CLOEXEC = true }, 0) catch |err| switch (err) {
                 error.FileNotFound => {
                     try vms.vmPush(.{ .boolean = false });
                     return;
@@ -80,9 +87,12 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
 
             if (comptime builtin.os.tag == .wasi) return error.CapabilityNotAvailable;
 
+            var rbuf: [4096]u8 = undefined;
+            const rpath = try fs_state.resolve(path, &rbuf);
+
             const io = ioContext();
             const cwd = std.Io.Dir.cwd();
-            const file = cwd.createFile(io, path, .{}) catch return error.CapabilityError;
+            const file = cwd.createFile(io, rpath, .{}) catch return error.CapabilityError;
             defer file.close(io);
             file.writeStreamingAll(io, content) catch return error.CapabilityError;
             try vms.vmPush(.{ .null = {} });
@@ -98,9 +108,12 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
 
             if (comptime builtin.os.tag == .wasi) return error.CapabilityNotAvailable;
 
+            var rbuf: [4096]u8 = undefined;
+            const rpath = try fs_state.resolve(path, &rbuf);
+
             const io = ioContext();
             const cwd = std.Io.Dir.cwd();
-            const dir = cwd.openDir(io, path, .{}) catch return error.CapabilityError;
+            const dir = cwd.openDir(io, rpath, .{ .iterate = true }) catch return error.CapabilityError;
             defer dir.close(io);
             var it = dir.iterate();
             var names: std.ArrayList([]u8) = .empty;
@@ -137,9 +150,12 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
 
             if (comptime builtin.os.tag == .wasi) return error.CapabilityNotAvailable;
 
+            var rbuf: [4096]u8 = undefined;
+            const rpath = try fs_state.resolve(path, &rbuf);
+
             const io = ioContext();
             const cwd = std.Io.Dir.cwd();
-            cwd.deleteFile(io, path) catch return error.CapabilityError;
+            cwd.deleteFile(io, rpath) catch return error.CapabilityError;
             try vms.vmPush(.{ .null = {} });
         },
         .cap_fs_mkdir => {
@@ -153,9 +169,12 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
 
             if (comptime builtin.os.tag == .wasi) return error.CapabilityNotAvailable;
 
+            var rbuf: [4096]u8 = undefined;
+            const rpath = try fs_state.resolve(path, &rbuf);
+
             const io = ioContext();
             const cwd = std.Io.Dir.cwd();
-            cwd.createDirPath(io, path) catch return error.CapabilityError;
+            cwd.createDirPath(io, rpath) catch return error.CapabilityError;
             try vms.vmPush(.{ .null = {} });
         },
         else => unreachable,
