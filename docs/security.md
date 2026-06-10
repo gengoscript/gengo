@@ -113,7 +113,7 @@ Available capability modules:
 |---|---|
 | `http` | Outbound HTTP requests (`cap:http`) |
 | `net` | Raw TCP/UDP socket operations (`cap:net`) |
-| `fs` | Local filesystem read access (`cap:fs`) |
+| `fs` | Local filesystem access via `fs.local.*` (`cap:fs`) |
 
 Capabilities are additive and opt-in. Enabling `"http"` does not enable `"net"` or `"fs"`.
 

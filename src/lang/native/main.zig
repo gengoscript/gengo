@@ -506,9 +506,38 @@ pub fn installCapabilityModules(cap_modules: []const module_compile.CapModuleDes
         any_alts[0] = .{ .typ = .any };
         const any_spec: FieldTypeSpec = .{ .alts = any_alts[0..1] };
 
-        const field_specs = (heap.bump(StructFieldSpec, entries.len) orelse return)[0..entries.len];
-        for (field_specs, 0..) |*fs, i| {
-            fs.* = .{ .name = entries[i].name, .typ = any_spec, .is_const = true };
+        // Collect unique namespace prefixes (from dotted function names like "local.read").
+        var ns_names: [8][]const u8 = undefined;
+        var ns_count: usize = 0;
+        for (entries) |entry| {
+            const dot = std.mem.indexOfScalar(u8, entry.name, '.') orelse continue;
+            const prefix = entry.name[0..dot];
+            var seen = false;
+            for (ns_names[0..ns_count]) |n| {
+                if (std.mem.eql(u8, n, prefix)) { seen = true; break; }
+            }
+            if (!seen and ns_count < ns_names.len) {
+                ns_names[ns_count] = prefix;
+                ns_count += 1;
+            }
+        }
+        var direct_count: usize = 0;
+        for (entries) |entry| {
+            if (std.mem.indexOfScalar(u8, entry.name, '.') == null) direct_count += 1;
+        }
+        const top_count = direct_count + ns_count;
+
+        const field_specs = (heap.bump(StructFieldSpec, top_count) orelse return)[0..top_count];
+        var fi: usize = 0;
+        for (entries) |entry| {
+            if (std.mem.indexOfScalar(u8, entry.name, '.') == null) {
+                field_specs[fi] = .{ .name = entry.name, .typ = any_spec, .is_const = true };
+                fi += 1;
+            }
+        }
+        for (ns_names[0..ns_count]) |ns| {
+            field_specs[fi] = .{ .name = ns, .typ = any_spec, .is_const = true };
+            fi += 1;
         }
 
         const qual_name_buf = (heap.bump(u8, 10 + cm.name.len) orelse return)[0..10 + cm.name.len];
@@ -522,25 +551,86 @@ pub fn installCapabilityModules(cap_modules: []const module_compile.CapModuleDes
         typ_obj.* = .{ .struct_type = StructTypeObj{
             .name = cm.name,
             .qualified_name = qualified_name,
-            .fields = field_specs[0..entries.len],
+            .fields = field_specs[0..top_count],
         } };
 
-        const inst_fields = try vmgc.vmAllocManagedSlice(MapEntry, entries.len);
+        const inst_fields = try vmgc.vmAllocManagedSlice(MapEntry, top_count);
         const inst_obj = try vmgc.vmAllocObject();
         try vms.pushTempRoot(.{ .object = inst_obj });
         defer vms.popTempRoot();
         inst_obj.* = .{ .struct_instance = .{ .typ = typ_obj, .fields = inst_fields } };
 
-        for (inst_fields, 0..) |*fld, i| {
+        // Fill direct function fields.
+        fi = 0;
+        for (entries) |entry| {
+            if (std.mem.indexOfScalar(u8, entry.name, '.') != null) continue;
             const func_obj = try vmgc.vmAllocObject();
-            func_obj.* = .{ .native_function = .{
-                .id = entries[i].native_id,
-                .arity = entries[i].arity,
+            func_obj.* = .{ .native_function = .{ .id = entry.native_id, .arity = entry.arity } };
+            inst_fields[fi] = .{ .key = .{ .string = entry.name }, .value = .{ .object = func_obj } };
+            fi += 1;
+        }
+
+        // Build a sub-struct for each namespace prefix.
+        for (ns_names[0..ns_count]) |ns| {
+            var sub_count: usize = 0;
+            for (entries) |entry| {
+                if (entry.name.len > ns.len and
+                    std.mem.startsWith(u8, entry.name, ns) and
+                    entry.name[ns.len] == '.') sub_count += 1;
+            }
+
+            const sub_field_specs = (heap.bump(StructFieldSpec, sub_count) orelse return)[0..sub_count];
+            var si: usize = 0;
+            for (entries) |entry| {
+                if (entry.name.len > ns.len and
+                    std.mem.startsWith(u8, entry.name, ns) and
+                    entry.name[ns.len] == '.')
+                {
+                    sub_field_specs[si] = .{ .name = entry.name[ns.len + 1 ..], .typ = any_spec, .is_const = true };
+                    si += 1;
+                }
+            }
+
+            const sub_qual_len = 10 + cm.name.len + 1 + ns.len;
+            const sub_qual_buf = (heap.bump(u8, sub_qual_len) orelse return)[0..sub_qual_len];
+            @memcpy(sub_qual_buf[0..10], "@cap_type:");
+            @memcpy(sub_qual_buf[10..][0..cm.name.len], cm.name);
+            sub_qual_buf[10 + cm.name.len] = '.';
+            @memcpy(sub_qual_buf[10 + cm.name.len + 1 ..][0..ns.len], ns);
+
+            const sub_typ_obj = try vmgc.vmAllocObject();
+            try vms.pushTempRoot(.{ .object = sub_typ_obj });
+            defer vms.popTempRoot();
+            sub_typ_obj.* = .{ .struct_type = StructTypeObj{
+                .name = ns,
+                .qualified_name = sub_qual_buf[0..sub_qual_len],
+                .fields = sub_field_specs[0..sub_count],
             } };
-            fld.* = .{
-                .key = .{ .string = entries[i].name },
-                .value = .{ .object = func_obj },
-            };
+
+            const sub_inst_fields = try vmgc.vmAllocManagedSlice(MapEntry, sub_count);
+            const sub_inst_obj = try vmgc.vmAllocObject();
+            try vms.pushTempRoot(.{ .object = sub_inst_obj });
+            defer vms.popTempRoot();
+            sub_inst_obj.* = .{ .struct_instance = .{ .typ = sub_typ_obj, .fields = sub_inst_fields } };
+
+            si = 0;
+            for (entries) |entry| {
+                if (entry.name.len > ns.len and
+                    std.mem.startsWith(u8, entry.name, ns) and
+                    entry.name[ns.len] == '.')
+                {
+                    const func_obj = try vmgc.vmAllocObject();
+                    func_obj.* = .{ .native_function = .{ .id = entry.native_id, .arity = entry.arity } };
+                    sub_inst_fields[si] = .{
+                        .key = .{ .string = entry.name[ns.len + 1 ..] },
+                        .value = .{ .object = func_obj },
+                    };
+                    si += 1;
+                }
+            }
+
+            inst_fields[fi] = .{ .key = .{ .string = ns }, .value = .{ .object = sub_inst_obj } };
+            fi += 1;
         }
 
         try globals.def(global_name, .{ .object = inst_obj });
@@ -679,7 +769,13 @@ pub fn callNative(nf: NativeFuncObj, argc: u8) !void {
             }
             if (comptime build_options.cap_fs) {
                 switch (id) {
-                    .cap_fs_read, .cap_fs_exists => return cap_fs_mod.dispatch(nf, argc),
+                    .cap_fs_read,
+                    .cap_fs_exists,
+                    .cap_fs_write,
+                    .cap_fs_list,
+                    .cap_fs_delete,
+                    .cap_fs_mkdir,
+                    => return cap_fs_mod.dispatch(nf, argc),
                     else => {},
                 }
             }

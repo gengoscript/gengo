@@ -444,20 +444,34 @@ std.io.println(resp3.status)
 
 ### `cap:fs`
 
-Local filesystem access (read-only for now).
+Local filesystem access.
 
 ```gengo
 fs := import("cap:fs")
 
-// Read a file — returns its contents as a string, or raises CapabilityError
+// Read a file — returns its contents as a string
 src := fs.read("/etc/hostname")
 std.io.println(src)
+
+// Write a file (create or truncate)
+fs.write("/tmp/out.txt", "hello")
 
 // Check existence — returns bool
 if fs.exists("/tmp/data.json") {
     data := fs.read("/tmp/data.json")
 }
+
+// List directory entries — returns array of names (unsorted)
+names := fs.list("/tmp")
+
+// Create a directory (no-op if it already exists)
+fs.mkdir("/tmp/mydir")
+
+// Delete a file
+fs.delete("/tmp/out.txt")
 ```
+
+All `fs.*` functions raise `CapabilityNotAvailable` when running inside a WASI sandbox.
 
 ---
 

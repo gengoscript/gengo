@@ -1,0 +1,2 @@
+fs := import("cap:fs")
+fs.list("/tmp")
