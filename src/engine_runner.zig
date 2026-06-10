@@ -886,7 +886,7 @@ fn readFileWasi(alloc: std.mem.Allocator, path: []const u8) ![]u8 {
 
 fn runCapHttpConformance() void {
     const alloc = std.heap.page_allocator;
-    const spec_dir = "examples/spec/cap/http";
+    const spec_dir = "tests/spec/cap/http";
     const cases = [_][]const u8{ "003_http_get", "004_http_post", "005_http_non2xx", "006_http_error" };
 
     var state: MockHttpState = .{};

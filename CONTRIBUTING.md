@@ -5,7 +5,7 @@ Thanks for helping improve gengo.
 ## Development Flow
 
 - Keep changes focused and small.
-- Add or update spec cases in `examples/spec/` for behavior changes.
+- Add or update spec cases in `tests/spec/` for behavior changes.
 - Prefer explicit runtime errors over implicit behavior.
 
 ## Build Presets

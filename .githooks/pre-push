@@ -24,10 +24,10 @@ run zig build -Dpreset=dev cli
 
 echo "→ example and stress scripts..."
 for f in \
-    examples/simple_math.gengo \
-    examples/roundtrip_stdlib.gengo \
-    examples/std_features.gengo \
-    examples/stress/simlab/*.gengo; do
+    tests/simple_math.gengo \
+    tests/roundtrip_stdlib.gengo \
+    tests/std_features.gengo \
+    tests/stress/simlab/*.gengo; do
     if ! "$G" "$f" > /dev/null 2>&1; then
         echo "  FAIL: $f"
         fail=1

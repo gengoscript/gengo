@@ -53,7 +53,7 @@ fn runConformance(alloc: std.mem.Allocator, wasmtime: []const u8, wasm_path: []c
     // Collect pass cases
     {
         var cases_buf: [MaxCases][]const u8 = undefined;
-        const case_count = collectGengoFiles(alloc, "examples/spec", &cases_buf) catch |err| {
+        const case_count = collectGengoFiles(alloc, "tests/spec", &cases_buf) catch |err| {
             std.debug.print("cannot scan pass dir: {s}\n", .{@errorName(err)});
             std.process.exit(1);
         };
@@ -75,7 +75,7 @@ fn runConformance(alloc: std.mem.Allocator, wasmtime: []const u8, wasm_path: []c
     // Collect fail cases
     {
         var cases_buf: [MaxCases][]const u8 = undefined;
-        const case_count = collectGengoFiles(alloc, "examples/spec/fail", &cases_buf) catch |err| {
+        const case_count = collectGengoFiles(alloc, "tests/spec/fail", &cases_buf) catch |err| {
             std.debug.print("cannot scan fail dir: {s}\n", .{@errorName(err)});
             std.process.exit(1);
         };
@@ -96,7 +96,7 @@ fn runConformance(alloc: std.mem.Allocator, wasmtime: []const u8, wasm_path: []c
 
     // Collect capability cases
     const cap_flags = "--cap net --cap fs --cap http";
-    const cap_dirs = [_][]const u8{ "examples/spec/cap", "examples/spec/cap/fail" };
+    const cap_dirs = [_][]const u8{ "tests/spec/cap", "tests/spec/cap/fail" };
     for (cap_dirs) |cap_dir| {
         var cap_cases: [MaxCases][]const u8 = undefined;
         const cap_count = collectGengoFiles(alloc, cap_dir, &cap_cases) catch continue;
@@ -140,7 +140,7 @@ fn runConformance(alloc: std.mem.Allocator, wasmtime: []const u8, wasm_path: []c
 // ── Bench ──────────────────────────────────────────────────────────────────
 
 fn runBench(alloc: std.mem.Allocator, wasmtime: []const u8, wasm_path: []const u8) !void {
-    const bench_dir = "examples/bench";
+    const bench_dir = "tests/bench";
 
     var cases_buf: [MaxCases][]const u8 = undefined;
     const case_count = collectGengoFiles(alloc, bench_dir, &cases_buf) catch |err| {
@@ -228,7 +228,7 @@ fn runBench(alloc: std.mem.Allocator, wasmtime: []const u8, wasm_path: []const u
 // ── Parity ─────────────────────────────────────────────────────────────────
 
 fn runParity(alloc: std.mem.Allocator, wasmtime: []const u8, wasm_path: []const u8) !void {
-    const parity_dir = "examples/parity";
+    const parity_dir = "tests/parity";
 
     var cases_buf: [MaxCases][]const u8 = undefined;
     const case_count = collectGengoFiles(alloc, parity_dir, &cases_buf) catch |err| {
