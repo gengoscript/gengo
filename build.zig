@@ -171,12 +171,26 @@ pub fn build(b: *std.Build) void {
     const engine_native_release_step = b.step("engine-native-release", "Build native shared library (ReleaseFast)");
     engine_native_release_step.dependOn(&install_engine_native_release.step);
 
+    // ── Lexer unit tests (native Zig test runner) ─────────────────────────────
+
+    const lexer_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/lang/lexer.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const lexer_test = b.addTest(.{ .root_module = lexer_test_mod });
+    const run_lexer_tests = b.addRunArtifact(lexer_test);
+
+    const lexer_test_step = b.step("lexer-test", "Run lexer unit tests");
+    lexer_test_step.dependOn(&run_lexer_tests.step);
+
     const unit_step = b.step("unit", "Run VM safety, embedding, and engine API checks");
     unit_step.dependOn(&run_vm_safety.step);
     unit_step.dependOn(&run_embedding.step);
     unit_step.dependOn(&run_engine_runner.step);
 
-    const test_step = b.step("test", "Run runtime safety, embedding, engine, fuzz, and conformance tests");
+    const test_step = b.step("test", "Run lexer, runtime safety, embedding, engine, fuzz, and conformance tests");
+    test_step.dependOn(&run_lexer_tests.step);
     test_step.dependOn(&run_vm_safety.step);
     test_step.dependOn(&run_embedding.step);
     test_step.dependOn(&run_engine_runner.step);
