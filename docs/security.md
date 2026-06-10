@@ -113,11 +113,13 @@ Available capability modules:
 |---|---|
 | `http` | Outbound HTTP requests (`cap:http`) |
 | `net` | Raw TCP/UDP socket operations (`cap:net`) |
-| `fs` | Local filesystem access via `fs.local.*` (`cap:fs`) |
+| `fs` | Filesystem access restricted to host-registered mounts (`cap:fs`) |
 
 Capabilities are additive and opt-in. Enabling `"http"` does not enable `"net"` or `"fs"`.
 
 For `cap:net` and `cap:http`, the host can register per-call handlers that intercept and allow or deny individual requests before they execute. See [embedding.md](embedding.md) for the handler interface.
+
+For `cap:fs`, scripts can only reach directories the host explicitly mounts (`--mount name=path` on the CLI, `setFsMounts` in the Zig API, `engine_mount_dir` in the C API). Script paths are mount-relative; absolute paths and `.`/`..` components are rejected before any syscall, so a script cannot escape its mounts. Enabling `"fs"` with no mounts grants no access at all.
 
 ---
 

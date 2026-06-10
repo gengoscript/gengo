@@ -444,34 +444,51 @@ std.io.println(resp3.status)
 
 ### `cap:fs`
 
-Local filesystem access.
+Filesystem access through host-defined mounts. Scripts never see real paths: the host registers named mounts (e.g. `data` → `/var/app/data`), and every path a script passes must start with a mount name. Paths that are absolute, contain `.` / `..` components, or start with an unregistered name are rejected.
 
 ```gengo
 fs := import("cap:fs")
 
 // Read a file — returns its contents as a string
-src := fs.read("/etc/hostname")
+src := fs.read("data/config.json")
 std.io.println(src)
 
 // Write a file (create or truncate)
-fs.write("/tmp/out.txt", "hello")
+fs.write("data/out.txt", "hello")
 
 // Check existence — returns bool
-if fs.exists("/tmp/data.json") {
-    data := fs.read("/tmp/data.json")
+if fs.exists("data/cache.json") {
+    cached := fs.read("data/cache.json")
 }
 
 // List directory entries — returns array of names (unsorted)
-names := fs.list("/tmp")
+names := fs.list("data")
 
-// Create a directory (no-op if it already exists)
-fs.mkdir("/tmp/mydir")
+// Create a directory, including parents (no-op if it already exists)
+fs.mkdir("data/reports/2026")
 
 // Delete a file
-fs.delete("/tmp/out.txt")
+fs.delete("data/out.txt")
 ```
 
-All `fs.*` functions raise `CapabilityNotAvailable` when running inside a WASI sandbox.
+Mounts are registered by the host:
+
+```sh
+# CLI: one --mount name=path per mount
+gengo --cap fs --mount data=/var/app/data script.gengo
+```
+
+```zig
+// Native embedding (Zig API)
+try api.setFsMounts(&.{ .{ .name = "data", .real = "/var/app/data" } });
+```
+
+```c
+// Engine C API
+engine_mount_dir(handle, "data", 4, "/var/app/data", 13);
+```
+
+With `--cap fs` but no mounts, every operation fails with `PathNotMounted`. Path violations raise `InvalidPath`. All `fs.*` functions raise `CapabilityNotAvailable` when running inside a WASI sandbox.
 
 ---
 

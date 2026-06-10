@@ -189,6 +189,19 @@ rt.initWithPolicy(.{
 });
 ```
 
+### Filesystem mounts
+
+`cap:fs` only reaches directories the host registers as named mounts. Script paths are mount-relative (`"data/config.json"`); absolute paths and `..` traversal are rejected. Register mounts once before running scripts:
+
+```zig
+try api.setFsMounts(&.{
+    .{ .name = "data", .real = "/var/app/data" },
+    .{ .name = "out", .real = "/tmp/app-out" },
+});
+```
+
+Mounts are process-global and copied at registration. Enabling `"fs"` without mounts grants no filesystem access.
+
 ### HTTP capability handler
 
 By default the native CLI provides a built-in HTTP implementation. For embedding, register a custom handler via `http_state.setHttpHandler` to route HTTP calls through your own networking stack:

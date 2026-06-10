@@ -238,6 +238,20 @@ Returns:
 
 ---
 
+### `engine_mount_dir(handle: i32, name_ptr: i32, name_len: i32, path_ptr: i32, path_len: i32) → i32`
+
+Registers a host directory as a named `cap:fs` mount, analogous to a wasmtime `--dir` preopen. Scripts address files mount-relative (`"data/config.json"` where `data` is a mount name); absolute paths and `..` traversal are rejected. Both strings are copied at registration.
+
+Returns:
+
+- `0` — success
+- `-1` — invalid handle
+- `-2` — invalid mount (empty name, `/` in name, empty path, or mount table full)
+
+Re-registering an existing name replaces its target. Without mounts, every `cap:fs` operation fails with `PathNotMounted`.
+
+---
+
 ### `engine_set_http_handler(handle: i32, callback: ptr, userdata: ptr) → void`
 
 Registers a host HTTP implementation for `cap:http`. The `callback` must match the C signature:
