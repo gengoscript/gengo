@@ -368,7 +368,9 @@ pub const Session = struct {
     fn resolveImportPath(self: *Session, importer_path: []const u8, import_name: []const u8) ![]const u8 {
         if (common.streq(import_name, StdModulePath)) return StdModulePath;
         if (import_name.len == 0) return error.ImportNotFound;
-        if (self.isHostModule(import_name)) return import_name;
+        // Accept optional "host:" prefix so `import("host:foo")` and `import("foo")` are equivalent.
+        const bare_name = if (std.mem.startsWith(u8, import_name, "host:")) import_name[5..] else import_name;
+        if (self.isHostModule(bare_name)) return bare_name;
         if (!(import_name[0] == '.')) return error.UnsupportedImportModule;
 
         const base_dir = dirname(importer_path);
