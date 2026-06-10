@@ -337,11 +337,9 @@ In time, I hope this little project of mine will be useful to someone. Perhaps e
 
 It is not an artisanally hand-carved compiler produced by a bearded lone language monk in a candlelit room where Gregorian chants or the Mongolian folk tones of The Hu play in the background.
 
-All Hail the Omnissiah! And all that faff.
-
 Gengo is a project invented by a human. I think I am human, at least. Perhaps I am a brain in a jar, but either way, expect pragmatic choices in this project. There are rough edges; I know several off the top of my head. Expect parts of the codebase to look like several overly enthusiastic monkeys were given keyboards and a deadline. In some ways, that is the truth.
 
-If software with meaningful LLM involvement gives you hives, moral discomfort, or the sudden urge to rewrite everything from first principles, this project may not be for you. That is fine. I understand. I do not judge, and I hope you will extend me the same courtesy. I also know the argument. Still, none of this would exist if things were different than they are right now.
+If software with meaningful LLM involvement gives you hives, moral discomfort, or the sudden urge to rewrite everything from first principles, this project may not be for you. That is fine. I understand. I do not judge, and I hope you will extend me the same courtesy. I have been on the internet. Still, none of this would exist if things were different than they are right now.
 
 For everyone else: issues, tests, bug reports, and useful patches are welcome, regardless of how it was wrangled into existence.
 
