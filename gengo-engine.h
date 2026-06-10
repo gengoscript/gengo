@@ -55,6 +55,27 @@ typedef struct {
     uint32_t  arity;
 } gengo_host_module_func_def_t;
 
+/* ── Import loader callback ────────────────────────────────────────────────── */
+
+/*
+ * Callback for resolving module imports at runtime.
+ * The engine invokes this callback when a script imports a module that is not
+ * in the source table (engine_add_source).  If the callback returns 0, the
+ * engine falls back to the source table.
+ *
+ * @param ctx        User-supplied context pointer passed to engine_set_import_loader.
+ * @param path       Pointer to the import path string in engine memory.
+ * @param path_len   Length of the import path in bytes.
+ * @param out_buf    Buffer in engine memory where the callback writes the source.
+ * @param out_max_len Size of out_buf in bytes.
+ * @return           Number of bytes written to out_buf on success,
+ *                   0 if the module was not found,
+ *                   negative on error.
+ */
+typedef int32_t (*gengo_import_loader_fn)(void* ctx,
+                                          const char* path, int32_t path_len,
+                                          char* out_buf, int32_t out_max_len);
+
 /* ── Write callback (native target only) ──────────────────────────────────── */
 
 /*
@@ -163,6 +184,21 @@ int32_t engine_register_module(int32_t handle,
                                const char *name, int32_t name_len,
                                const gengo_host_module_func_def_t *funcs,
                                int32_t funcs_count);
+
+/* ── Import loader registration ───────────────────────────────────────────── */
+
+/*
+ * Register a callback that resolves module imports at runtime.
+ * When a script imports a module (e.g. import("./util")), the engine first
+ * invokes this callback.  If the callback returns 0 (not found), the engine
+ * falls back to sources registered via engine_add_source.
+ *
+ * Pass NULL for load_fn to clear the callback and use only the source table.
+ * Returns 0 on success, -1 if the engine handle is invalid.
+ */
+int32_t engine_set_import_loader(int32_t handle,
+                                 gengo_import_loader_fn load_fn,
+                                 void* ctx);
 
 /* ── Write callback registration (native target only) ────────────────────── */
 

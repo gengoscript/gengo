@@ -197,6 +197,72 @@ fn expectRunPathWithSourceProvider() void {
     }
 }
 
+fn expectImportLoaderWithFallback() void {
+    const table_entries = [_]api.SourceEntry{
+        .{ .path = "mod/fallback.gengo", .source =
+            \\pub func fromTable() string { return "table" }
+        },
+    };
+    const callback_entries = [_]api.SourceEntry{
+        .{ .path = "mod/callback.gengo", .source =
+            \\pub func fromCallback() string { return "callback" }
+        },
+    };
+    const callback_set = MemorySourceSet{ .entries = &callback_entries };
+
+    const CombinedSources = struct {
+        callback_set: *const MemorySourceSet,
+        table: []const api.SourceEntry,
+    };
+    const combined = CombinedSources{
+        .callback_set = &callback_set,
+        .table = &table_entries,
+    };
+    const rt = makeRt(.{ .allow_io = false });
+
+    const ctx = @constCast(&combined);
+    const loadWrapper = struct {
+        fn load(c: *anyopaque, path: []const u8) anyerror!?[]const u8 {
+            const cs: *const CombinedSources = @ptrCast(@alignCast(c));
+            for (cs.callback_set.entries) |e| {
+                if (std.mem.eql(u8, e.path, path)) return e.source;
+            }
+            for (cs.table) |e| {
+                if (std.mem.eql(u8, e.path, path)) return e.source;
+            }
+            return null;
+        }
+    }.load;
+
+    const res = rt.runPathWithSourceProvider(
+        \\cb  := import("./callback")
+        \\fb  := import("./fallback")
+        \\func get() string {
+        \\    return cb.fromCallback() + fb.fromTable()
+        \\}
+    , "mod/main.gengo", .{
+        .callback = .{
+            .ctx = ctx,
+            .load = loadWrapper,
+        },
+    });
+    switch (res) {
+        .ok => {},
+        else => fail("embedding FAIL: importLoaderWithFallback setup failed\n"),
+    }
+    const call_res = rt.call("get", &[_]Value{});
+    switch (call_res) {
+        .ok => |v| {
+            const s = if (v == .string) v.string
+                else if (v == .object and v.object.* == .dyn_string) v.object.dyn_string
+                else null;
+            if (s == null or !std.mem.eql(u8, s.?, "callbacktable"))
+                fail("embedding FAIL: importLoaderWithFallback result\n");
+        },
+        else => fail("embedding FAIL: expected importLoaderWithFallback call success\n"),
+    }
+}
+
 export fn _start() void {
     expectCompileError();
     expectRuntimeError();
@@ -205,6 +271,7 @@ export fn _start() void {
     expectRunPathWithSources();
     expectPredicatePanicLocation();
     expectRunPathWithSourceProvider();
+    expectImportLoaderWithFallback();
     out("embedding-api OK\n");
     std.os.wasi.proc_exit(0);
 }

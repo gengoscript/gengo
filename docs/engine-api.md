@@ -178,6 +178,41 @@ instance.exports.engine_add_source(
 
 ---
 
+### `engine_set_import_loader(handle: i32, load_fn: i32, ctx: i32) → i32`
+
+Registers a callback that resolves module imports at runtime. When a script imports a module (e.g. `import("./util")`), the callback is invoked first. If the callback returns `0` (not found), the engine falls back to sources registered via `engine_add_source`.
+
+The `load_fn` must match the C signature:
+
+```c
+int32_t load_fn(void* ctx,
+                const char* path, int32_t path_len,
+                char* out_buf, int32_t out_max_len);
+```
+
+Return positive bytes written to `out_buf` on success, `0` if not found, negative on error. The callback writes the module source text into `out_buf` (max `out_max_len` bytes).
+
+Returns:
+- `0` — registered successfully
+- `-1` — invalid handle
+
+Pass `nullptr` for `load_fn` to clear the callback and revert to table-only resolution.
+
+```js
+function myLoader(ctx, pathPtr, pathLen, outPtr, outMaxLen) {
+    const path = readString(mem, pathPtr, pathLen);
+    if (path === "mem/util.gengo") {
+        const src = 'pub func greet() string { return "hi" }\n';
+        return writeStringBuf(mem, outPtr, outMaxLen, src);
+    }
+    return 0; // not found — fall back to engine_add_source table
+}
+const rc = instance.exports.engine_set_import_loader(handle, myLoader, 0);
+if (rc !== 0) throw new Error("engine_set_import_loader failed");
+```
+
+---
+
 ### `engine_register_module(handle: i32, name_ptr: i32, name_len: i32, funcs_ptr: i32, funcs_count: i32) → i32`
 
 Registers a host-defined module that Gengo scripts can import using the `host:` prefix.

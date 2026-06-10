@@ -27,6 +27,14 @@ const PtrInt = if (is_wasm) i32 else usize;
 const WriteCallback = *const fn (ptr: [*]const u8, len: i32, is_stderr: i32) callconv(.c) void;
 var write_callback: ?WriteCallback = null;
 
+const ImportLoaderFn = *const fn (
+    ctx: *anyopaque,
+    path_ptr: PtrInt,
+    path_len: i32,
+    out_ptr: PtrInt,
+    out_max_len: i32,
+) callconv(.c) i32;
+
 const WriteImpl = if (is_wasm) struct {
     extern "env" fn gengo_write(ptr: [*]const u8, len: i32, is_stderr: i32) void;
     pub fn write(ptr: [*]const u8, len: i32, is_stderr: i32) void {
@@ -56,6 +64,7 @@ const MaxHostModules = 16;
 const MaxHostModuleFuncs = 64;
 const MaxErrorLen = 512;
 const MaxStringScratch = 4096;
+const MaxImportScratch = 16384;
 const HostModuleCallIdBase = 0x1000;
 
 // Init-time error buffer: populated when engine_init_with_config fails validation.
@@ -110,6 +119,9 @@ const Engine = struct {
     string_scratch_len: u16 = 0,
     wire_elem_buf: [256]ValueWire = undefined,
     wire_elem_count: u16 = 0,
+    import_loader_fn: ?ImportLoaderFn = null,
+    import_loader_ctx: ?*anyopaque = null,
+    import_scratch: [MaxImportScratch]u8 = undefined,
 
     fn initInPlaceDefault(self: *Engine) void {
         self.source_count = 0;
@@ -177,6 +189,37 @@ const Engine = struct {
         return self.string_scratch[0..len];
     }
 };
+
+fn importLoaderWrapper(ctx: *anyopaque, path: []const u8) anyerror!?[]const u8 {
+    const engine: *Engine = @ptrCast(@alignCast(ctx));
+
+    if (engine.import_loader_fn) |cb| {
+        const p: PtrInt = @intCast(@intFromPtr(path.ptr));
+        const s: PtrInt = @intCast(@intFromPtr(&engine.import_scratch));
+        const result = cb(
+            engine.import_loader_ctx.?,
+            p,
+            @intCast(path.len),
+            s,
+            @intCast(engine.import_scratch.len),
+        );
+        if (result > 0) return engine.import_scratch[0..@as(usize, @intCast(result))];
+        if (result < 0) return error.ImportNotFound;
+    }
+
+    for (engine.source_entries[0..engine.source_count]) |entry| {
+        if (std.mem.eql(u8, path, entry.path)) return entry.source;
+    }
+    return null;
+}
+
+fn sourceProviderFromLoader(engine: *Engine) ?api.SourceProvider {
+    if (engine.import_loader_fn == null) return null;
+    return api.SourceProvider{ .callback = .{
+        .ctx = engine,
+        .load = importLoaderWrapper,
+    }};
+}
 
 fn getEngine(handle: i32) ?*Engine {
     if (handle <= 0 or handle > MaxEngines) return null;
@@ -550,8 +593,21 @@ export fn engine_add_source(handle: i32, path_ptr: PtrInt, path_len: i32, src_pt
     engine.runtime.initWithPolicy(.{
         .allow_io = true,
         .module_sources = engine.source_entries[0..engine.source_count],
+        .module_source_provider = sourceProviderFromLoader(engine),
     });
 
+    return 0;
+}
+
+export fn engine_set_import_loader(handle: i32, load_fn: ?ImportLoaderFn, ctx: ?*anyopaque) i32 {
+    const engine = getEngine(handle) orelse return -1;
+    engine.import_loader_fn = load_fn;
+    engine.import_loader_ctx = ctx;
+    engine.runtime.initWithPolicy(.{
+        .allow_io = true,
+        .module_sources = engine.source_entries[0..engine.source_count],
+        .module_source_provider = sourceProviderFromLoader(engine),
+    });
     return 0;
 }
 
@@ -609,6 +665,7 @@ fn setupHostModules(engine: *Engine) void {
         .allow_io = true,
         .native_backend = if (desc_count > 0) .host else .embedded,
         .module_sources = engine.source_entries[0..engine.source_count],
+        .module_source_provider = sourceProviderFromLoader(engine),
         .host_modules = engine.host_module_descs[0..desc_count],
         // Preserve the per-instance instruction budget set via engine_init_with_config.
         // Without this, setConfig resets policy.max_ops to null (unlimited) every run.
