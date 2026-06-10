@@ -28,7 +28,7 @@ const WriteCallback = *const fn (ptr: [*]const u8, len: i32, is_stderr: i32) cal
 var write_callback: ?WriteCallback = null;
 
 const ImportLoaderFn = *const fn (
-    ctx: *anyopaque,
+    ctx: ?*anyopaque,
     path_ptr: PtrInt,
     path_len: i32,
     out_ptr: PtrInt,
@@ -197,7 +197,7 @@ fn importLoaderWrapper(ctx: *anyopaque, path: []const u8) anyerror!?[]const u8 {
         const p: PtrInt = @intCast(@intFromPtr(path.ptr));
         const s: PtrInt = @intCast(@intFromPtr(&engine.import_scratch));
         const result = cb(
-            engine.import_loader_ctx.?,
+            engine.import_loader_ctx,
             p,
             @intCast(path.len),
             s,
