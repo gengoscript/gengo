@@ -268,3 +268,169 @@ test "compiler: nested function has correct ip" {
         }
     }
 }
+
+// ── Fusion helper ─────────────────────────────────────────────────────────
+
+fn runSrc(rt: *Runtime, src: []const u8) !void {
+    try rt.run(src);
+}
+
+// ── const_eq fusion ───────────────────────────────────────────────────────
+
+test "compiler: const_eq fusion fires" {
+    var rt = setup();
+    defer rt.deinit();
+    try compile(&rt, "func f(x int) bool { return x == 42 }");
+    const c = &rt.chunk_state;
+    var found = false;
+    for (c.code[0..c.code_len]) |op| {
+        if (op == @intFromEnum(Op.const_eq)) { found = true; break; }
+    }
+    try std.testing.expect(found);
+}
+
+test "compiler: const_eq fusion result" {
+    var rt = setup();
+    defer rt.deinit();
+    try runSrc(&rt, "func f(x int) bool { return x == 42 }");
+    const r1 = try rt.callGlobal("f", &.{.{ .int = 42 }});
+    try std.testing.expect(r1 == .boolean and r1.boolean);
+    const r2 = try rt.callGlobal("f", &.{.{ .int = 99 }});
+    try std.testing.expect(r2 == .boolean and !r2.boolean);
+}
+
+// ── const_sub fusion ──────────────────────────────────────────────────────
+
+test "compiler: const_sub fusion fires" {
+    var rt = setup();
+    defer rt.deinit();
+    try compile(&rt, "func f(x int) int { return x - 1 }");
+    const c = &rt.chunk_state;
+    var found = false;
+    for (c.code[0..c.code_len]) |op| {
+        if (op == @intFromEnum(Op.const_sub)) { found = true; break; }
+    }
+    try std.testing.expect(found);
+}
+
+test "compiler: const_sub fusion result" {
+    var rt = setup();
+    defer rt.deinit();
+    try runSrc(&rt, "func f(x int) int { return x - 1 }");
+    const r = try rt.callGlobal("f", &.{.{ .int = 10 }});
+    try std.testing.expect(r == .int and r.int == 9);
+}
+
+// ── get_local_const_eq triple fusion ──────────────────────────────────────
+
+test "compiler: get_local_const_eq triple fusion fires" {
+    var rt = setup();
+    defer rt.deinit();
+    try compile(&rt, "func f(x int) bool { return x == 0 }");
+    const c = &rt.chunk_state;
+    var found = false;
+    for (c.code[0..c.code_len]) |op| {
+        if (op == @intFromEnum(Op.get_local_const_eq)) { found = true; break; }
+    }
+    try std.testing.expect(found);
+}
+
+test "compiler: get_local_const_eq triple fusion result" {
+    var rt = setup();
+    defer rt.deinit();
+    try runSrc(&rt, "func f(x int) bool { return x == 0 }");
+    const r1 = try rt.callGlobal("f", &.{.{ .int = 0 }});
+    try std.testing.expect(r1 == .boolean and r1.boolean);
+    const r2 = try rt.callGlobal("f", &.{.{ .int = 5 }});
+    try std.testing.expect(r2 == .boolean and !r2.boolean);
+}
+
+// ── get_local_const_sub triple fusion ─────────────────────────────────────
+
+test "compiler: get_local_const_sub triple fusion fires" {
+    var rt = setup();
+    defer rt.deinit();
+    try compile(&rt, "func f(x int) int { return x - 1 }");
+    const c = &rt.chunk_state;
+    var found = false;
+    for (c.code[0..c.code_len]) |op| {
+        if (op == @intFromEnum(Op.get_local_const_sub)) { found = true; break; }
+    }
+    try std.testing.expect(found);
+}
+
+test "compiler: get_local_const_sub triple fusion result" {
+    var rt = setup();
+    defer rt.deinit();
+    try runSrc(&rt, "func f(x int) int { return x - 1 }");
+    const r = try rt.callGlobal("f", &.{.{ .int = 10 }});
+    try std.testing.expect(r == .int and r.int == 9);
+}
+
+// ── get_local_const_eq_jif_pop quad fusion ────────────────────────────────
+
+test "compiler: get_local_const_eq_jif_pop quad fusion fires" {
+    var rt = setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\func f(x int) int {
+        \\    if x == 0 { return 1 }
+        \\    return 2
+        \\}
+    );
+    const c = &rt.chunk_state;
+    var found = false;
+    for (c.code[0..c.code_len]) |op| {
+        if (op == @intFromEnum(Op.get_local_const_eq_jif_pop)) { found = true; break; }
+    }
+    try std.testing.expect(found);
+}
+
+test "compiler: get_local_const_eq_jif_pop quad fusion result" {
+    var rt = setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func f(x int) int {
+        \\    if x == 0 { return 1 }
+        \\    return 2
+        \\}
+    );
+    const r1 = try rt.callGlobal("f", &.{.{ .int = 0 }});
+    try std.testing.expect(r1 == .int and r1.int == 1);
+    const r2 = try rt.callGlobal("f", &.{.{ .int = 5 }});
+    try std.testing.expect(r2 == .int and r2.int == 2);
+}
+
+// ── get_local_const_lt_jif_pop quad fusion ────────────────────────────────
+
+test "compiler: get_local_const_lt_jif_pop quad fusion fires" {
+    var rt = setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\func f(x int) int {
+        \\    if x < 5 { return 10 }
+        \\    return 20
+        \\}
+    );
+    const c = &rt.chunk_state;
+    var found = false;
+    for (c.code[0..c.code_len]) |op| {
+        if (op == @intFromEnum(Op.get_local_const_lt_jif_pop)) { found = true; break; }
+    }
+    try std.testing.expect(found);
+}
+
+test "compiler: get_local_const_lt_jif_pop quad fusion result" {
+    var rt = setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func f(x int) int {
+        \\    if x < 5 { return 10 }
+        \\    return 20
+        \\}
+    );
+    const r1 = try rt.callGlobal("f", &.{.{ .int = 3 }});
+    try std.testing.expect(r1 == .int and r1.int == 10);
+    const r2 = try rt.callGlobal("f", &.{.{ .int = 10 }});
+    try std.testing.expect(r2 == .int and r2.int == 20);
+}

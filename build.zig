@@ -191,6 +191,7 @@ pub fn build(b: *std.Build) void {
         .target = b.graph.host,
         .optimize = .Debug,
     });
+    compiler_test_mod.addImport("build_options", build_opts_mod);
     const compiler_test = b.addTest(.{ .root_module = compiler_test_mod });
     const run_compiler_tests = b.addRunArtifact(compiler_test);
 
