@@ -1,6 +1,8 @@
 # Gengoscript Site Builder
 
-A minimal static site generator written in Gengoscript, built to eat our own dog food.
+The static site generator behind <https://docs.gengoscript.org/>, written in
+Gengoscript. Every docs deploy doubles as an end-to-end smoke test of the
+language — the CI workflow builds the CLI and runs this script over `docs/`.
 
 ## Usage
 
@@ -19,27 +21,24 @@ Paths are mount-based (`root/` maps to the repository root).
 
 ## What it does
 
-- Lists all `.md` files in `docs/`
-- Converts basic Markdown to HTML:
-  - Headers (`#`, `##`, `###`)
-  - Paragraphs
-  - Code blocks (```)
-  - Inline code (`)
-  - Bold (`**`), italic (`*` or `_`)
-  - Links (`[text](url)`)
-  - Images (`![alt](url)`)
-  - Unordered lists (`- ` or `* `)
-  - Blockquotes (`> `)
-  - Horizontal rules (`---`)
-- Extracts page title from the first H1
-- Generates an index page with navigation
-- Links a simple CSS stylesheet
+- Converts the Markdown the docs actually use:
+  - Headers (`#`, `##`, `###`), paragraphs, blockquotes, horizontal rules
+  - Code blocks and inline code, with HTML escaping throughout
+  - Bold and italic, links, images
+  - Unordered lists with one level of nesting, ordered lists
+  - Tables (`| a | b |` with a `|---|` separator row)
+- Orders chapters by the `chapterOrder` list (new pages land at the end)
+- Adds a previous/contents/next footer to every page
+- Generates the index page from `docs/index.md` plus a table of contents
+- Emits per-page meta descriptions, canonical URLs, Open Graph tags, and
+  `sitemap.xml`
+- Ships the stylesheet alongside the pages
 
 ## Limitations
 
-- No tables, footnotes, or nested lists
+- No footnotes, no deeper list nesting, no syntax highlighting
 - No search index
 - No live reload
-- Hardcoded paths (`docs/` → `build/site/`)
 
-This is intentionally minimal. It proves Gengoscript can build real tools.
+Intentionally minimal: it proves Gengoscript builds real tools — and finding
+three VM bugs while writing it is exactly the point of dogfooding.
