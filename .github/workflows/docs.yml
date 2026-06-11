@@ -1,12 +1,17 @@
 name: docs
 
+# The documentation site is built by Gengoscript itself: the workflow builds
+# the native CLI, then runs tools/site-builder/site-builder.gengo over docs/.
+# Every docs deploy doubles as an end-to-end smoke test of the language.
+
 on:
   push:
     branches: [main]
     paths:
       - "docs/**"
-      - "mkdocs.yml"
-      - "requirements-docs.txt"
+      - "tools/site-builder/**"
+      - "src/**"
+      - "build.zig"
       - ".github/workflows/docs.yml"
   workflow_dispatch:
 
@@ -24,14 +29,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: mlugg/setup-zig@v2
         with:
-          python-version: "3.12"
-      - run: pip install -r requirements-docs.txt
-      - run: mkdocs build --strict
+          version: 0.16.0
+      - name: Build gengo CLI
+        run: zig build -Dpreset=dev cli
+      - name: Build site with gengo
+        run: ./zig-out/bin/gengo --cap fs --mount root=. tools/site-builder/site-builder.gengo
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: site
+          path: build/site
 
   deploy:
     needs: build
