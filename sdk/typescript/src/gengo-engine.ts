@@ -1,5 +1,5 @@
 /**
- * GengoEngine – TypeScript wrapper for the Gengo embeddable WASM engine.
+ * GengoEngine – TypeScript wrapper for the Gengoscript embeddable WASM engine.
  *
  * Usage:
  * ```ts

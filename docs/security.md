@@ -1,18 +1,18 @@
 # Security model
 
-Gengo is designed to run untrusted or user-supplied scripts inside a host application. This document describes what the engine guarantees, what it does not guarantee, and how to configure it for safe embedding.
+Gengoscript is designed to run untrusted or user-supplied scripts inside a host application. This document describes what the engine guarantees, what it does not guarantee, and how to configure it for safe embedding.
 
 ---
 
 ## Threat model
 
-Gengo assumes the following:
+Gengoscript assumes the following:
 
 - **Scripts are untrusted.** A script may be written by an end user, loaded from external storage, or supplied by a third party. It should not be able to harm the host process, read sensitive data, or exhaust host resources.
-- **The host is trusted.** The application embedding Gengo controls what scripts are allowed to see and do. Any capability the host does not explicitly register is unavailable to scripts.
+- **The host is trusted.** The application embedding Gengoscript controls what scripts are allowed to see and do. Any capability the host does not explicitly register is unavailable to scripts.
 - **Denial of service is in scope.** A runaway script — infinite loop, deep recursion, excessive allocation — should be stoppable without killing the host process.
 
-Gengo does **not** provide OS-level isolation. It is not a sandbox in the container or seccomp sense. It is a language-level isolation boundary: scripts run in the Gengo VM, not in a separate process or memory-protected region. A bug in the VM itself could allow a script to affect host memory. For defence-in-depth in high-risk deployments, run the WASM engine inside a WASM sandbox (Wasmtime, WasmEdge, etc.).
+Gengoscript does **not** provide OS-level isolation. It is not a sandbox in the container or seccomp sense. It is a language-level isolation boundary: scripts run in the Gengoscript VM, not in a separate process or memory-protected region. A bug in the VM itself could allow a script to affect host memory. For defence-in-depth in high-risk deployments, run the WASM engine inside a WASM sandbox (Wasmtime, WasmEdge, etc.).
 
 ---
 
@@ -66,7 +66,7 @@ In addition to the instruction budget, the engine enforces hard limits on memory
 
 | Field | What it limits | Threat it addresses |
 |---|---|---|
-| `heap_size_bytes` | Total Gengo heap in bytes | Unbounded allocation |
+| `heap_size_bytes` | Total Gengoscript heap in bytes | Unbounded allocation |
 | `max_objects` | Live GC object count | Object graph exhaustion |
 | `max_stack` | VM value stack depth | Stack overflow via expression depth |
 | `max_frames` | Call frame depth | Infinite recursion |
@@ -137,7 +137,7 @@ var rt = api.Runtime.init(.{
 });
 ```
 
-Host function implementations run outside the Gengo VM, in normal host code. They are not subject to the instruction budget. A host function that blocks or loops infinitely will block the VM thread. Host functions should be fast and non-blocking.
+Host function implementations run outside the Gengoscript VM, in normal host code. They are not subject to the instruction budget. A host function that blocks or loops infinitely will block the VM thread. Host functions should be fast and non-blocking.
 
 ---
 

@@ -1,4 +1,4 @@
-# Gengo Engine API
+# Gengoscript Engine API
 
 The engine exposes a C-compatible API for host-driven embedding. It is the primary integration point for non-Zig hosts (JavaScript, Python, C/C++, Rust FFI, etc.).
 
@@ -40,7 +40,7 @@ Like `engine_init` but accepts a pointer to an `InstanceConfig` struct in WASM m
 
 | Offset | Field | Type | Description |
 |--------|-------|------|-------------|
-| 0 | `heap_size_bytes` | `u64` | Gengo heap size in bytes (≤ preset ceiling) |
+| 0 | `heap_size_bytes` | `u64` | Gengoscript heap size in bytes (≤ preset ceiling) |
 | 8 | `max_objects` | `u64` | Max live GC objects |
 | 16 | `max_stack` | `u64` | VM value stack depth |
 | 24 | `max_frames` | `u64` | Call frame limit |
@@ -85,7 +85,7 @@ Passing `NULL` resets to direct stdout/stderr output.
 
 ### `engine_run(handle: i32, src_ptr: i32, src_len: i32) → i32`
 
-Compiles and runs a Gengo source string. Source must be UTF-8, written into WASM linear memory before calling.
+Compiles and runs a Gengoscript source string. Source must be UTF-8, written into WASM linear memory before calling.
 
 Returns:
 - `0` — success
@@ -122,7 +122,7 @@ const rc = instance.exports.engine_run_path(
 
 ### `engine_call(handle: i32, name_ptr: i32, name_len: i32, args_ptr: i32, argc: i32, out_ptr: i32) → i32`
 
-Calls a Gengo function by name. The function must have been defined in a prior `engine_run` or `engine_run_path` call.
+Calls a Gengoscript function by name. The function must have been defined in a prior `engine_run` or `engine_run_path` call.
 
 - `args_ptr` — pointer to an array of `argc` ValueWire structs in WASM memory, or `0` if no arguments
 - `argc` — number of arguments; `0` for zero-argument functions
@@ -215,10 +215,10 @@ if (rc !== 0) throw new Error("engine_set_import_loader failed");
 
 ### `engine_register_module(handle: i32, name_ptr: i32, name_len: i32, funcs_ptr: i32, funcs_count: i32) → i32`
 
-Registers a host-defined module that Gengo scripts can import using the `host:` prefix.
+Registers a host-defined module that Gengoscript scripts can import using the `host:` prefix.
 
 ```js
-// In Gengo: mylib := import("host:mylib")
+// In Gengoscript: mylib := import("host:mylib")
 ```
 
 `funcs_ptr` points to an array of `funcs_count` function descriptors, each 16 bytes:
@@ -374,9 +374,9 @@ For string return values from `engine_call`, the pointer points into the engine'
 
 For array and map values, elements are laid out contiguously in engine memory as `ValueWire` structs. Map entries are interleaved: key wire, value wire, key wire, value wire, … for `len` pairs total.
 
-**Gengo → wire type mapping:**
+**Gengoscript → wire type mapping:**
 
-| Gengo type | Wire tag | Notes |
+| Gengoscript type | Wire tag | Notes |
 |---|---|---|
 | `null` | `null` | |
 | `bool` | `boolean` | |

@@ -1,4 +1,4 @@
-;;; gengo-mode.el --- Major mode for the Gengo programming language  -*- lexical-binding: t; -*-
+;;; gengo-mode.el --- Major mode for the Gengoscript programming language  -*- lexical-binding: t; -*-
 
 ;; Keywords: languages gengo
 
@@ -8,7 +8,7 @@
 ;;; Code:
 
 (defgroup gengo nil
-  "Major mode for Gengo."
+  "Major mode for Gengoscript."
   :group 'languages)
 
 (defconst gengo-keywords
@@ -17,11 +17,11 @@
     "if" "import" "in" "interface" "null" "predicate" "pub"
     "range" "return" "struct" "subtype" "switch" "test"
     "trap" "true" "type" "var" "variant")
-  "Gengo keywords.")
+  "Gengoscript keywords.")
 
 (defconst gengo-types
   '("int" "float" "bool" "string" "any")
-  "Gengo built-in type names (contextual keywords).")
+  "Gengoscript built-in type names (contextual keywords).")
 
 (defconst gengo-operators
   '("+" "-" "*" "/" "%" "**" "++" "--"
@@ -30,7 +30,7 @@
     "&" "|" "^" "~" "<<" ">>"
     "=" ":=" "+=" "-=" "*=" "/=" "%=" "&=" "|=" "^=" "<<=" ">>="
     "." ".." "..." "?" ":")
-  "Gengo operators and punctuation.")
+  "Gengoscript operators and punctuation.")
 
 (defvar gengo-font-lock-keywords
   (list
@@ -47,11 +47,11 @@
    '("^\\\\" . font-lock-string-face)
    ;; Line comments
    '("//.*" . font-lock-comment-face))
-  "Font-lock rules for Gengo.")
+  "Font-lock rules for Gengoscript.")
 
 ;;;###autoload
-(define-derived-mode gengo-mode prog-mode "Gengo"
-  "Major mode for editing Gengo source files."
+(define-derived-mode gengo-mode prog-mode "Gengoscript"
+  "Major mode for editing Gengoscript source files."
   (setq-local font-lock-defaults '(gengo-font-lock-keywords))
   ;; String highlighting
   (setq-local syntax-propertize-function

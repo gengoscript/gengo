@@ -139,9 +139,9 @@ Before reporting completion, confirm:
 - No unrelated behavior was changed.
 - Any assumptions or skipped test runs are documented.
 
-## Gengo import syntax: no `@` prefix
+## Gengoscript import syntax: no `@` prefix
 
-Gengo uses `cap:*` and `host:*` prefixes in its import syntax — **without** the `@` sign:
+Gengoscript uses `cap:*` and `host:*` prefixes in its import syntax — **without** the `@` sign:
 
 ```gengo
 fs   := import("cap:fs")

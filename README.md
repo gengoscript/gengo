@@ -4,9 +4,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Zig](https://img.shields.io/badge/Zig-0.16.0-orange?logo=zig)](https://ziglang.org/)
 
-Domain constraints belong in the type system, not in validation code written after the fact. Gengo is a small embeddable scripting language built around that idea — a sandboxed scripting engine written in Zig that runs natively or as WebAssembly.
+Domain constraints belong in the type system, not in validation code written after the fact. Gengoscript is a small embeddable scripting language built around that idea — a sandboxed scripting engine written in Zig that runs natively or as WebAssembly.
 
-You write the host application. Your users write Gengo scripts. The engine runs those scripts in a controlled environment, where the host decides what scripts are allowed to see, call, and consume.
+You write the host application. Your users write Gengoscript. The engine runs their scripts in a controlled environment, where the host decides what scripts are allowed to see, call, and consume.
 
 **[Try it in the browser](https://gengoscript.github.io/gengo-playground/)**
 
@@ -22,11 +22,11 @@ The usual options all have trade-offs.
 
 Lua is small and embeddable, but its type system is loose. Python is familiar, but heavy and awkward to isolate properly. A custom DSL can fit the problem well, but costs real time to design and maintain. JSON and YAML are useful for data, but they are not programming languages.
 
-Gengo is the option built around the last point: a small scripting VM with explicit host integration, a domain-oriented type system, hard execution limits, isolated runtime instances, and WASM as a primary target.
+Gengoscript is the option built around the last point: a small scripting VM with explicit host integration, a domain-oriented type system, hard execution limits, isolated runtime instances, and WASM as a primary target.
 
 ---
 
-## What Gengo gives you
+## What Gengoscript gives you
 
 **Constrained execution.**
 Each engine instance runs with a configurable instruction budget. A script that loops forever or recurses without bound is stopped instead of hanging the host process. Memory limits are selected at build time through presets such as `dev`, `tiny`, and `stress`.
@@ -57,7 +57,7 @@ The host exposes named functions to scripts. Scripts can only call what the host
 Multiple engine instances can run side by side, each with its own heap, state, and module table. One script failing does not poison the others.
 
 **WASM and native embedding.**
-Gengo can be built as `gengo-engine.wasm` for browser, edge, and other sandboxed environments, or as `libgengo-engine.so` for native in-process embedding. Both expose the same C-style API.
+Gengoscript can be built as `gengo-engine.wasm` for browser, edge, and other sandboxed environments, or as `libgengo-engine.so` for native in-process embedding. Both expose the same C-style API.
 
 ---
 
@@ -146,7 +146,7 @@ The host calls the function. The script makes the decision. It cannot reach anyt
 
 ## Engine artifacts
 
-Gengo currently builds two main engine artifacts.
+Gengoscript currently builds two main engine artifacts.
 
 **`gengo-runtime.wasm`** is a WASI executable. Give it a script path and it runs the script. This is useful for CLI tooling, CI runners, tests, and simple sandboxed execution where you do not need a custom embedding layer.
 
@@ -191,9 +191,9 @@ npm run build
 
 ## The language
 
-Gengo uses a Go-adjacent syntax on purpose. Someone who has read Go should be able to read basic Gengo code without much ceremony.
+Gengoscript uses a Go-adjacent syntax on purpose. Someone who has read Go should be able to read basic Gengoscript code without much ceremony.
 
-The type system is the main point of the language. In addition to structs, interfaces, and variants, Gengo includes:
+The type system is the main point of the language. In addition to structs, interfaces, and variants, Gengoscript includes:
 
 * **Named scalar types** — `type UserId string`, `type Temperature float`
 * **Range types** — `type Port int range 1..65535`
@@ -205,7 +205,7 @@ These features are there because domain scripting often needs stronger boundarie
 
 ### Feature summary
 
-Gengo currently includes:
+Gengoscript currently includes:
 
 * structs, methods, interfaces, and enums
 * variant types, including multi-field arms and shared fields
@@ -263,7 +263,7 @@ import { WASI, File, OpenFile, ConsoleStdout, PreopenDirectory }
   from "https://cdn.jsdelivr.net/npm/@bjorn3/browser_wasi_shim@0.3.0/+esm";
 
 const script = `std := import("std")
-std.io.println("hello from Gengo!")`;
+std.io.println("hello from Gengoscript!")`;
 
 const enc = new TextEncoder();
 const fds = [
@@ -329,19 +329,19 @@ sdk/typescript/   TypeScript wrapper for gengo-engine.wasm
 
 ## Status
 
-Gengo is still early. The language and runtime are being tightened, and breaking changes should be expected.
+Gengoscript is still early. The language and runtime are being tightened, and breaking changes should be expected.
 
 ---
 
 ## A note on authorship
 
-Gengo has been built with substantial help from LLMs. I have neither the time nor the patience to write a compiler. Even with the books and material by my side, I would rather spend my time on creative writing than on writing a compiler. If I were younger, perhaps I would have found the exercise entertaining. Like when you decide to become a game developer, but what you actually want is to build a new game engine from scratch, free of all the issues you find annoying in the myriad options available these days.
+Gengoscript has been built with substantial help from LLMs. I have neither the time nor the patience to write a compiler. Even with the books and material by my side, I would rather spend my time on creative writing than on writing a compiler. If I were younger, perhaps I would have found the exercise entertaining. Like when you decide to become a game developer, but what you actually want is to build a new game engine from scratch, free of all the issues you find annoying in the myriad options available these days.
 
 In time, I hope this little project of mine will be useful to someone. Perhaps even myself. But please, before it is stable, do not use it on anything critical. It is tested in as many ways as I can think of, and it should be judged by the same standard as any other software: what it does, how well it is specified, how reliably it behaves, and how maintainable the code is in practice.
 
 It is not an artisanally hand-carved compiler produced by a bearded lone language monk in a candlelit room where Gregorian chants or the Mongolian folk tones of The Hu play in the background.
 
-Gengo is a project invented by a human. I think I am human, at least. Perhaps I am a brain in a jar, but either way, expect pragmatic choices in this project. There are rough edges; I know several off the top of my head. Expect parts of the codebase to look like several overly enthusiastic monkeys were given keyboards and a deadline. In some ways, that is the truth.
+Gengoscript is a project invented by a human. I think I am human, at least. Perhaps I am a brain in a jar, but either way, expect pragmatic choices in this project. There are rough edges; I know several off the top of my head. Expect parts of the codebase to look like several overly enthusiastic monkeys were given keyboards and a deadline. In some ways, that is the truth.
 
 If software with meaningful LLM involvement gives you hives, moral discomfort, or the sudden urge to rewrite everything from first principles, this project may not be for you. That is fine. I understand. I do not judge, and I hope you will extend me the same courtesy. I have been on the internet. Still, none of this would exist if things were different than they are right now.
 

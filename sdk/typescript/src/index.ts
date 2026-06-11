@@ -1,7 +1,7 @@
 /**
- * Gengo TypeScript SDK
+ * Gengoscript TypeScript SDK
  *
- * Wraps the Gengo embeddable WASM engine for use in Node.js and browser
+ * Wraps the Gengoscript embeddable WASM engine for use in Node.js and browser
  * environments.
  *
  * ## Quick start (browser)
@@ -11,7 +11,7 @@
  * const engine = await GengoEngine.load(fetch("/gengo-engine.wasm"));
  * engine.onStdout = console.log;
  *
- * engine.run(`std := import("std"); std.io.println("hello from Gengo!")`);
+ * engine.run(`std := import("std"); std.io.println("hello from Gengoscript!")`);
  *
  * const result = engine.call("myFunc", [gnum(42)]);
  * engine.destroy();

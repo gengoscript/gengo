@@ -1,4 +1,4 @@
-# gengo Quickstart
+# Gengoscript Quickstart
 
 ## Required Tools
 
@@ -37,7 +37,7 @@ Run with no arguments on an interactive terminal to start the REPL:
 
 ```bash
 ./zig-out/bin/gengo
-# Gengo REPL  (Ctrl+D to exit)
+# Gengoscript REPL  (Ctrl+D to exit)
 ```
 
 The REPL auto-prints the value of top-level expressions.

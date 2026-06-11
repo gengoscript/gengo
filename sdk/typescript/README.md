@@ -1,6 +1,6 @@
 # @gengo/engine
 
-TypeScript SDK for the [Gengo](https://github.com/gengoscript/gengo) embeddable
+TypeScript SDK for the [Gengoscript](https://github.com/gengoscript/gengo) embeddable
 scripting engine.  Load the WASM engine, run scripts, call functions, and
 register host modules — all from TypeScript.
 
@@ -32,7 +32,7 @@ engine.onStderr = (text) => console.error("stderr:", text);
 // Run a script
 const result = engine.run(`
   std := import("std")
-  std.io.println("hello from Gengo!")
+  std.io.println("hello from Gengoscript!")
 `);
 
 if (!result.ok) {
@@ -102,7 +102,7 @@ Options:
 
 ### `engine.run(source): EngineResult`
 
-Compile and run a Gengo script.
+Compile and run a Gengoscript script.
 
 ### `engine.runPath(source, path): EngineResult`
 
@@ -110,7 +110,7 @@ Same as `run` but with a virtual path for import resolution.
 
 ### `engine.call(name, args): GVal`
 
-Call a named Gengo function with typed arguments.
+Call a named Gengoscript function with typed arguments.
 
 ### `engine.addSource(path, source): void`
 
@@ -128,7 +128,7 @@ Release the WASM module reference.
 
 ### `GVal`
 
-Tagged union representing a Gengo value:
+Tagged union representing a Gengoscript value:
 
 ```ts
 type GVal =

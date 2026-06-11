@@ -1,4 +1,4 @@
-# gengo Testing and Benchmarking
+# Gengoscript Testing and Benchmarking
 
 ## Harness layout
 

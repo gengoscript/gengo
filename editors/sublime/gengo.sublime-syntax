@@ -1,6 +1,6 @@
 %YAML 1.2
 ---
-# Gengo syntax for Sublime Text.
+# Gengoscript syntax for Sublime Text.
 file_extensions:
   - gengo
 scope: source.gengo

@@ -1,7 +1,7 @@
 # Mosquitto ACL plugin
 
 A Mosquitto (v2.x) broker plugin that delegates ACL — and optionally basic
-auth — to a Gengo policy script. For every publish, delivery, and
+auth — to a Gengoscript policy script. For every publish, delivery, and
 (un)subscribe the broker calls:
 
 ```gengo

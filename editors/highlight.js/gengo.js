@@ -1,5 +1,5 @@
 /*
- * highlight.js grammar for Gengo.
+ * highlight.js grammar for Gengoscript.
  * Usage: hljs.registerLanguage('gengo', gengo);
  */
 function gengo(hljs) {
@@ -55,7 +55,7 @@ function gengo(hljs) {
   };
 
   return {
-    name: 'Gengo',
+    name: 'Gengoscript',
     aliases: ['gengo'],
     keywords: KEYWORDS,
     contains: [

@@ -1,5 +1,5 @@
 /**
- * ValueWire encoding / decoding for the Gengo engine WASM ABI.
+ * ValueWire encoding / decoding for the Gengoscript engine WASM ABI.
  *
  * WireTag  | payload              | len
  * ---------|----------------------|-------
