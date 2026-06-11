@@ -129,6 +129,11 @@ pub fn reset() void {
     g_state.obj_live_count = 0;
 }
 
+// Largest single managed allocation the active heap supports.
+pub fn maxManagedAlloc() usize {
+    return ClassSizes[g_state.class_count - 1];
+}
+
 fn classIndexFor(n: usize) ?usize {
     var i: usize = 0;
     while (i < g_state.class_count) : (i += 1) {
