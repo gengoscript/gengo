@@ -46,29 +46,27 @@ make parity
 
 ## Docs
 
-The public docs site is sourced from `docs/` and built with `mkdocs`.
+The public docs site is sourced from `docs/` and built by Gengoscript itself
+(`tools/site-builder/site-builder.gengo`). CI rebuilds and deploys it on every
+push that touches `docs/`, the site builder, or the engine.
 
-Install the local docs dependency:
+Build the static site locally:
 
 ```bash
-python3 -m pip install -r requirements-docs.txt
+zig build -Dpreset=dev cli
+./zig-out/bin/gengo --cap fs --mount root=. tools/site-builder/site-builder.gengo
 ```
 
-Run a local preview server:
+Preview it:
 
 ```bash
-python3 -m mkdocs serve
-```
-
-Build the static site:
-
-```bash
-python3 -m mkdocs build
+python3 -m http.server -d build/site 8001
 ```
 
 Notes:
 - `dev-docs/` and `archive/` are repo documentation, not part of the published docs site.
 - `docs/changelog.md` is currently a site page that points to the canonical root `CHANGELOG.md`.
+- Page reading order is the `chapterOrder` list at the top of the site builder; new pages land at the end until added there.
 
 ## Commits
 
