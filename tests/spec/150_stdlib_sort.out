@@ -7,3 +7,8 @@
 []
 [1, 2, 3]
 []
+[ax, bx, cx]
+[cx, bx, ax]
+[ax, bx, cx]
+[cx, bx, ax]
+[a, b, c]
