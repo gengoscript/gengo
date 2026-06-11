@@ -18,10 +18,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
         .cap_fs_read => {
             if (argc != 1) return error.ArityMismatch;
             const arg0 = try vms.vmPop();
-            const path = switch (arg0) {
-                .string => |s| s,
-                else => return error.TypeError,
-            };
+            const path = vms.asStringValue(arg0) catch return error.TypeError;
             _ = try vms.vmPop();
 
             if (comptime builtin.os.tag == .wasi) return error.CapabilityNotAvailable;
@@ -49,10 +46,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
         .cap_fs_exists => {
             if (argc != 1) return error.ArityMismatch;
             const arg0 = try vms.vmPop();
-            const path = switch (arg0) {
-                .string => |s| s,
-                else => return error.TypeError,
-            };
+            const path = vms.asStringValue(arg0) catch return error.TypeError;
             _ = try vms.vmPop();
 
             if (comptime builtin.os.tag == .wasi) return error.CapabilityNotAvailable;
@@ -74,10 +68,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             if (argc != 2) return error.ArityMismatch;
             const arg1 = try vms.vmPop();
             const arg0 = try vms.vmPop();
-            const path = switch (arg0) {
-                .string => |s| s,
-                else => return error.TypeError,
-            };
+            const path = vms.asStringValue(arg0) catch return error.TypeError;
             const content: []const u8 = switch (arg1) {
                 .string => |s| s,
                 .object => |o| if (o.* == .dyn_string) o.dyn_string else return error.TypeError,
@@ -100,10 +91,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
         .cap_fs_list => {
             if (argc != 1) return error.ArityMismatch;
             const arg0 = try vms.vmPop();
-            const path = switch (arg0) {
-                .string => |s| s,
-                else => return error.TypeError,
-            };
+            const path = vms.asStringValue(arg0) catch return error.TypeError;
             _ = try vms.vmPop();
 
             if (comptime builtin.os.tag == .wasi) return error.CapabilityNotAvailable;
@@ -142,10 +130,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
         .cap_fs_delete => {
             if (argc != 1) return error.ArityMismatch;
             const arg0 = try vms.vmPop();
-            const path = switch (arg0) {
-                .string => |s| s,
-                else => return error.TypeError,
-            };
+            const path = vms.asStringValue(arg0) catch return error.TypeError;
             _ = try vms.vmPop();
 
             if (comptime builtin.os.tag == .wasi) return error.CapabilityNotAvailable;
@@ -161,10 +146,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
         .cap_fs_mkdir => {
             if (argc != 1) return error.ArityMismatch;
             const arg0 = try vms.vmPop();
-            const path = switch (arg0) {
-                .string => |s| s,
-                else => return error.TypeError,
-            };
+            const path = vms.asStringValue(arg0) catch return error.TypeError;
             _ = try vms.vmPop();
 
             if (comptime builtin.os.tag == .wasi) return error.CapabilityNotAvailable;
@@ -179,4 +161,23 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
         },
         else => unreachable,
     }
+}
+
+// Regression: cap_fs_* functions must accept both .string and .dyn_string
+// path arguments (issue discovered while building the site-generator).
+test "cap_fs path extraction accepts string and dyn_string" {
+    const Runtime = @import("../../runtime/runtime.zig").Runtime;
+    var rt: Runtime = undefined;
+    rt.initWithPolicy(.{ .allow_io = false });
+    defer rt.deinit();
+
+    // Literal string
+    const s = vms.asStringValue(.{ .string = "test.txt" }) catch return error.TestFailed;
+    try std.testing.expectEqualStrings("test.txt", s);
+
+    // Dynamic string
+    const dyn = try vmgc.makeDynString("test.txt");
+    const ds = vms.asStringValue(dyn) catch return error.TestFailed;
+    try std.testing.expectEqualStrings("test.txt", ds);
+
 }
