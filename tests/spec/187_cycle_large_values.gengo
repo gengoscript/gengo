@@ -1,0 +1,6 @@
+std := import("std")
+
+type Big int cycle 0..9007199254740991
+
+std.io.println(Big.succ(Big(9007199254740991)))
+std.io.println(Big.pred(Big(0)))

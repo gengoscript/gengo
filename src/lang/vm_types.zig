@@ -229,11 +229,33 @@ pub fn makeNamedValue(typ_obj: *Object, inner: Value) !Value {
     return .{ .object = obj };
 }
 
-fn wrapCycleValue(min: f64, max: f64, n: f64) f64 {
+fn wrapCycleValue(min: f64, max: f64, n: f64) !f64 {
+    const exact_int_limit: f64 = 9007199254740992.0;
+    if (@trunc(min) == min and @trunc(max) == max and @trunc(n) == n and
+        min >= -exact_int_limit and min <= exact_int_limit and
+        max >= -exact_int_limit and max <= exact_int_limit and
+        n >= -exact_int_limit and n <= exact_int_limit)
+    {
+        const imin: i64 = @intFromFloat(min);
+        const imax: i64 = @intFromFloat(max);
+        const inn: i64 = @intFromFloat(n);
+        const sub = @subWithOverflow(imax, imin);
+        if (sub[1] != 0) return error.RangeError;
+        const add = @addWithOverflow(sub[0], 1);
+        if (add[1] != 0) return error.RangeError;
+        const ispan = add[0];
+        if (ispan > 0) {
+            const ioffset = @mod(inn - imin, ispan);
+            return @floatFromInt(imin + ioffset);
+        }
+    }
     const span = (max - min) + 1.0;
+    if (span == max - min) return error.RangeError;
     var offset = common.fmod(n - min, span);
     if (offset < 0) offset += span;
-    return min + offset;
+    const result = min + offset;
+    if (result == min and offset != 0) return error.RangeError;
+    return result;
 }
 
 pub fn constructNamedType(typ_obj: *Object, arg: Value) !Value {
@@ -342,7 +364,7 @@ pub fn coerceNamedTypeResult(typ_obj: *Object, arg: Value) !Value {
     if (nt.base != .int) return error.TypeError;
     const n = try vms.valueAsNumber(arg);
     if (@trunc(n) != n) return error.TypeError;
-    const wrapped = wrapCycleValue(nt.min, nt.max, n);
+    const wrapped = try wrapCycleValue(nt.min, nt.max, n);
     return makeNamedValue(typ_obj, .{ .int = wrapped });
 }
 
@@ -356,7 +378,7 @@ pub fn applyNamedTypeFn(typ_obj: *Object, kind: @import("value.zig").NamedTypeFn
     const result = n + delta;
     if (result == n) { vms.setRuntimeErr("cannot increment non-finite or very large value", .{}); return error.RangeError; }
     if (nt.is_cycle) {
-        return makeNamedValue(typ_obj, if (nt.base == .float) .{ .float = wrapCycleValue(nt.min, nt.max, result) } else .{ .int = wrapCycleValue(nt.min, nt.max, result) });
+        return makeNamedValue(typ_obj, if (nt.base == .float) .{ .float = try wrapCycleValue(nt.min, nt.max, result) } else .{ .int = try wrapCycleValue(nt.min, nt.max, result) });
     } else {
         if (result < nt.min or result > nt.max) return error.RangeError;
         return makeNamedValue(typ_obj, if (nt.base == .float) .{ .float = result } else .{ .int = result });
