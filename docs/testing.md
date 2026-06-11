@@ -1,5 +1,14 @@
 # gengo Testing and Benchmarking
 
+## Harness layout
+
+Standalone orchestrators that only shell out to wasmtime (`test_runner.zig`,
+`bench_perf_runner.zig`) live in `tools/`. White-box harness roots that import
+VM internals (`fuzz_runner.zig`, `vm_safety_runner.zig`, `compiler_test.zig`,
+etc.) must stay at the top of `src/`: a Zig module root cannot import files
+outside its own directory tree, and moving the two test roots behind a module
+boundary would also silently drop their `test` blocks from collection.
+
 ## Conformance
 
 Run full conformance suite:
