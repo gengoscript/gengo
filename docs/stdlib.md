@@ -1,5 +1,9 @@
 # Gengoscript Standard Library Reference
 
+This page is the reference for the built-in `std` module and its namespaces.
+
+For the language rules around imports, values, and types, see `language.md`.
+
 ## Import
 
 ```gengo
@@ -7,6 +11,8 @@ std := import("std")
 ```
 
 `std` is always available via `import("std")` and is exposed as a struct-backed namespace object. Relative source imports use the same namespace model.
+
+The entries below describe the public library surface. This page is intentionally reference-shaped: look up a function here once you already know which part of `std` you need.
 
 ## std.io
 

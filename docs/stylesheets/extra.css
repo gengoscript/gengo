@@ -1,0 +1,130 @@
+:root {
+  --gengo-ink: #183a37;
+  --gengo-link: #005f73;
+  --gengo-link-hover: #0a9396;
+  --gengo-paper: #f7f4ed;
+  --gengo-panel: #fbfaf7;
+  --gengo-line: #d8d2c4;
+  --gengo-accent: #ece6d8;
+}
+
+@font-face {
+  font-family: "FontAwesome";
+  src: url("../css/fonts/fontawesome-webfont.woff2?v=4.7.0") format("woff2"),
+       url("../css/fonts/fontawesome-webfont.woff?v=4.7.0") format("woff"),
+       url("../css/fonts/fontawesome-webfont.ttf?v=4.7.0") format("truetype");
+  font-weight: normal;
+  font-style: normal;
+}
+
+html,
+body {
+  background: var(--gengo-paper);
+}
+
+body {
+  font-family: Georgia, "Times New Roman", serif;
+  line-height: 1.65;
+  color: #2a2a2a;
+}
+
+.wy-nav-content {
+  max-width: 860px;
+}
+
+.wy-nav-content-wrap {
+  background: var(--gengo-paper);
+}
+
+.wy-side-nav-search,
+.wy-nav-top {
+  background: var(--gengo-ink);
+  border-bottom: 1px solid #102826;
+}
+
+.wy-side-nav-search > a,
+.wy-nav-top a {
+  color: #f4efe3;
+}
+
+.wy-side-nav-search > a:hover,
+.wy-nav-top a:hover {
+  color: #ffffff;
+}
+
+.wy-menu-vertical header,
+.wy-menu-vertical p.caption {
+  color: #6d7f7c;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.wy-menu-vertical {
+  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+}
+
+.wy-menu-vertical a {
+  color: #d7e3e0;
+}
+
+.wy-menu-vertical a:hover,
+.wy-menu-vertical a:focus {
+  background: #214c48;
+}
+
+.wy-menu-vertical li.current > a,
+.wy-menu-vertical li.current > a:hover,
+.wy-menu-vertical li.current > a:focus,
+.wy-menu-vertical li.current > a button.toctree-expand {
+  background: #f0ece2;
+  color: var(--gengo-ink);
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+  color: var(--gengo-ink);
+  letter-spacing: -0.02em;
+}
+
+a {
+  color: var(--gengo-link);
+}
+
+a:hover,
+a:focus {
+  color: var(--gengo-link-hover);
+}
+
+code,
+pre {
+  font-family: "DejaVu Sans Mono", "SFMono-Regular", Consolas, monospace;
+}
+
+pre {
+  border: 1px solid var(--gengo-line);
+  border-radius: 6px;
+  background: var(--gengo-panel);
+}
+
+code {
+  background: #efe9dc;
+  border-radius: 3px;
+  padding: 0.1rem 0.25rem;
+}
+
+pre code {
+  background: transparent;
+  padding: 0;
+}
+
+table {
+  background: #fffdf8;
+  border: 1px solid var(--gengo-line);
+}
+
+table th {
+  background: var(--gengo-accent);
+}

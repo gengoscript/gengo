@@ -44,6 +44,32 @@ make parity
 
 `parity` checks that the native and WASM backends produce the same output. Run it when touching the VM or compiler.
 
+## Docs
+
+The public docs site is sourced from `docs/` and built with `mkdocs`.
+
+Install the local docs dependency:
+
+```bash
+python3 -m pip install -r requirements-docs.txt
+```
+
+Run a local preview server:
+
+```bash
+python3 -m mkdocs serve
+```
+
+Build the static site:
+
+```bash
+python3 -m mkdocs build
+```
+
+Notes:
+- `dev-docs/` and `archive/` are repo documentation, not part of the published docs site.
+- `docs/changelog.md` is currently a site page that points to the canonical root `CHANGELOG.md`.
+
 ## Commits
 
 - One logical change per commit.

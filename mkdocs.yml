@@ -1,0 +1,35 @@
+site_name: Gengoscript
+site_description: Documentation for the Gengoscript language and embedding APIs
+site_url: https://docs.gengoscript.org/
+repo_url: https://github.com/gengoscript/gengo
+docs_dir: docs
+theme:
+  name: readthedocs
+  highlightjs: true
+
+extra_css:
+  - stylesheets/extra.css
+
+nav:
+  - Overview:
+      - Introduction: index.md
+  - Get Started:
+      - Quickstart: quickstart.md
+      - First Script: tutorial-first-script.md
+  - Language:
+      - Language Guide: language.md
+      - Standard Library: stdlib.md
+  - Embedding:
+      - Embedding in Zig: embedding.md
+      - Engine API: engine-api.md
+      - Host ABI: host-abi.md
+  - Security:
+      - Security Model: security.md
+  - Reference:
+      - Changelog: changelog.md
+
+markdown_extensions:
+  - tables
+  - fenced_code
+  - toc:
+      permalink: true

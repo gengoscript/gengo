@@ -98,4 +98,4 @@ gengo v0 is considered baseline-complete when:
 
 For dated implementation changes, see `CHANGELOG.md`.
 
-Host ABI roadmap notes are tracked in `docs/host-abi-v2-plan.md`.
+Host ABI roadmap notes are tracked in `archive/host-abi-v2-plan.md`.

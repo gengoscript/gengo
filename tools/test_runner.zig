@@ -29,6 +29,12 @@ pub fn main(init: std.process.Init.Minimal) !void {
     const wasmtime = if (args.len > 2) args[2] else "wasmtime";
     const wasm_path = if (args.len > 3) args[3] else "build/gengo-runtime.wasm";
 
+    if (!commandExists(alloc, wasmtime)) {
+        std.debug.print("wasmtime binary not found: {s}\n", .{wasmtime});
+        std.debug.print("install wasmtime or pass an explicit path with -Dwasmtime=/path/to/wasmtime\n", .{});
+        std.process.exit(1);
+    }
+
     if (std.mem.eql(u8, mode, "conformance")) {
         try runConformance(alloc, wasmtime, wasm_path);
     } else if (std.mem.eql(u8, mode, "bench")) {
@@ -448,15 +454,7 @@ fn runPool(
                     break;
                 };
                 defer alloc.free(err_content);
-                var found = false;
-                var err_start: usize = 0;
-                while (err_start < err_content.len) {
-                    const nl = std.mem.indexOfScalar(u8, err_content[err_start..], '\n') orelse err_content.len;
-                    const line = err_content[err_start .. err_start + (nl - err_start)];
-                    err_start = nl + 1;
-                    if (line.len == 0) continue;
-                    if (std.mem.indexOf(u8, output, line) != null) { found = true; break; }
-                }
+                const found = errFileMatchesOutput(output, err_content);
                 if (!found) {
                     std.debug.print("Expected error token not found for {s}\n", .{job.path});
                     result.errors += 1;
@@ -587,6 +585,44 @@ fn fileExists(path: []const u8) bool {
     return true;
 }
 
+fn commandExists(alloc: std.mem.Allocator, command: []const u8) bool {
+    if (std.mem.indexOfScalar(u8, command, '/') != null) {
+        return fileExists(command);
+    }
+
+    const probe_cmd = std.fmt.allocPrint(alloc, "command -v {s} >/dev/null 2>&1", .{command}) catch return false;
+    defer alloc.free(probe_cmd);
+
+    const sh_z = toCStr(alloc, "/bin/sh") catch return false;
+    defer alloc.free(sh_z);
+    const sh_c_z = toCStr(alloc, "-c") catch return false;
+    defer alloc.free(sh_c_z);
+    const probe_z = toCStr(alloc, probe_cmd) catch return false;
+    defer alloc.free(probe_z);
+
+    const pid = std.c.fork();
+    if (pid < 0) return false;
+
+    if (pid == 0) {
+        const argv = [_:null]?[*:0]const u8{ sh_z.ptr, sh_c_z.ptr, probe_z.ptr, null };
+        _ = std.c.execve(sh_z.ptr, &argv, std.c.environ);
+        std.c._exit(1);
+    }
+
+    var status: c_int = 0;
+    _ = std.c.waitpid(pid, &status, 0);
+    return (status & 0x7f) == 0 and ((status >> 8) & 0xff) == 0;
+}
+
+fn errFileMatchesOutput(output: []const u8, err_content: []const u8) bool {
+    var lines = std.mem.splitScalar(u8, err_content, '\n');
+    while (lines.next()) |line| {
+        if (line.len == 0) continue;
+        if (std.mem.indexOf(u8, output, line) != null) return true;
+    }
+    return false;
+}
+
 fn readFileAlloc(alloc: std.mem.Allocator, path: []const u8, max_bytes: usize) ![]u8 {
     const fd = try std.posix.openat(std.posix.AT.FDCWD, path, .{}, 0);
     defer _ = std.posix.system.close(fd);
@@ -608,4 +644,15 @@ fn readFileAlloc(alloc: std.mem.Allocator, path: []const u8, max_bytes: usize) !
         buf = try alloc.realloc(buf, total);
     }
     return buf[0..total];
+}
+
+test "err file token matching handles multiple lines and trailing line without newline" {
+    try std.testing.expect(errFileMatchesOutput("prefix second-token suffix", "first-token\nsecond-token"));
+    try std.testing.expect(!errFileMatchesOutput("completely different", "first-token\nsecond-token"));
+}
+
+test "command exists handles explicit paths and missing commands" {
+    try std.testing.expect(commandExists(std.testing.allocator, "/bin/sh"));
+    try std.testing.expect(!commandExists(std.testing.allocator, "/definitely/not/a/real/binary"));
+    try std.testing.expect(!commandExists(std.testing.allocator, "definitely-not-a-real-command"));
 }
