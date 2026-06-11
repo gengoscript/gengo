@@ -316,6 +316,8 @@ pub fn patchJump(offset: usize) !void {
     g_state.last_const_code_pos = null;
     g_state.last_get_local_code_pos = null;
     g_state.last_triple_eq_pos = null;
+    g_state.last_triple_lt_pos = null;
+    g_state.last_set_global_code_pos = null;
 }
 
 pub fn emitLoop(loop_start: usize, line: u32) !void {

@@ -36,3 +36,15 @@ func h(a bool, b bool) bool {
 std.io.println(h(true, false))
 std.io.println(h(false, true))
 std.io.println(h(false, false))
+
+// Same hazard through the get_local_const_lt quad fusion.
+func lt(a int) string {
+    if a < 5 || a < 9 {
+        return "small"
+    }
+    return "big"
+}
+
+std.io.println(lt(3))
+std.io.println(lt(7))
+std.io.println(lt(12))
