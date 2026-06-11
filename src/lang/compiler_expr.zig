@@ -13,6 +13,7 @@ const std_schema = @import("std_schema.zig");
 const Token = token.Token;
 const TT = token.TT;
 const MaxLocals = ct.MaxLocals;
+const MaxExprDepth = ct.MaxExprDepth;
 const Prec = ct.Prec;
 const TypeCheck = ct.TypeCheck;
 const FuncInfo = ct.FuncInfo;
@@ -248,6 +249,12 @@ pub fn numLit(c: anytype) !void {
 }
 
 pub fn parsePrecedence(c: anytype, p: Prec) anyerror!void {
+    if (c.expr_depth >= MaxExprDepth) {
+        c.setErr("expression too deeply nested", .{});
+        return error.ExpressionTooDeep;
+    }
+    c.expr_depth += 1;
+    defer { c.expr_depth -= 1; }
     c.advance();
     const pfx = c.prev.typ;
     switch (pfx) {

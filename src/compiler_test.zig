@@ -491,6 +491,35 @@ test "compiler: get_local_const_lt_jif_pop quad fusion result" {
     try std.testing.expect(r2 == .int and r2.int == 20);
 }
 
+// ── expression depth limit ──────────────────────────────────────────────────
+
+test "compiler: expression too deep returns error" {
+    var rt = setup();
+    defer rt.deinit();
+    // Build a deeply nested unary expression: var x = -(-(-(-...-1...)))
+    var buf: [1024]u8 = undefined;
+    var i: usize = 0;
+    const prefix = "var x = ";
+    @memcpy(buf[i..i+prefix.len], prefix);
+    i += prefix.len;
+    const depth = 257;
+    var j: usize = 0;
+    while (j < depth) : (j += 1) {
+        buf[i] = '-';
+        buf[i+1] = '(';
+        i += 2;
+    }
+    buf[i] = '1';
+    i += 1;
+    j = 0;
+    while (j < depth) : (j += 1) {
+        buf[i] = ')';
+        i += 1;
+    }
+    const result = compile(&rt, buf[0..i]);
+    try std.testing.expectError(error.ExpressionTooDeep, result);
+}
+
 test {
     _ = @import("lang/native/fs_state.zig");
 }

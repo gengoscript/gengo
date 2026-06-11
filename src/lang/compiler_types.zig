@@ -18,6 +18,7 @@ pub const MaxVariantTypes = 128;
 pub const MaxSwitchJumps = 256;
 pub const MaxUpvalues = 64;
 pub const MaxGlobalConsts = 512;
+pub const MaxExprDepth = 256;
 
 pub const Prec = enum(u8) {
     none,
