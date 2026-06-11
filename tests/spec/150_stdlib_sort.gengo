@@ -20,3 +20,10 @@ cmp := func(a int, b int) int {
 }
 std.io.println(t.by([3, 1, 2], cmp))
 std.io.println(t.by([], cmp))
+
+// Regression: dyn_string sort (strings created at runtime via concatenation)
+std.io.println(t.asc(["b" + "x", "a" + "x", "c" + "x"]))
+std.io.println(t.desc(["b" + "x", "a" + "x", "c" + "x"]))
+std.io.println(t.asc(["bx", "ax", "cx"]))
+std.io.println(t.desc(["bx", "ax", "cx"]))
+std.io.println(t.asc(["b" + "", "a" + "", "c" + ""]))
