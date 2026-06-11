@@ -42,6 +42,7 @@ const MaxVariantTypes = ct.MaxVariantTypes;
 const MaxSwitchJumps = ct.MaxSwitchJumps;
 const MaxUpvalues = ct.MaxUpvalues;
 const MaxGlobalConsts = ct.MaxGlobalConsts;
+const MaxExprDepth = ct.MaxExprDepth;
 
 const Prec = ct.Prec;
 const Local = ct.Local;
@@ -85,6 +86,7 @@ pub const Compiler = struct {
     scope_depth: u8 = 0,
     loops: [MaxLoopDepth]LoopCtx = undefined,
     loop_depth: u8 = 0,
+    expr_depth: u16 = 0,
     registry: TypeRegistry = .{},
     last_func_obj: ?*@import("value.zig").Object = null,
     peek_tok: ?Token = null,
@@ -125,6 +127,7 @@ pub const Compiler = struct {
         self.err_msg_len = 0;
         self.err_col = 0;
         self.err_line = 0;
+        self.expr_depth = 0;
         self.repl_expr_ok = true;
         self.repl_expr_pop_pos = null;
         self.advance();
