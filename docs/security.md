@@ -52,6 +52,17 @@ In addition to the instruction budget, the engine enforces hard limits on memory
 
 These limits come from the active build preset and may be tightened per instance.
 
+| Preset | Heap | Intended use |
+|---|---|---|
+| `tiny` | 128 KiB | Constrained embedding |
+| `dev` | 512 KiB | Development, short validation scripts |
+| `stress` | 2 MiB | Edge-case testing |
+| `server` | 16 MiB | Batch and data-processing workloads (large strings, file processing) |
+
+The heap allocator's largest block size scales with the configured heap
+(capped at heap/8, floor 64 KiB), so the `server` preset also lifts the
+single-allocation ceiling to 2 MiB.
+
 ## Capability Modules
 
 System access is opt-in through capability modules:

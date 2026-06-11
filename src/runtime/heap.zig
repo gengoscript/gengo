@@ -8,9 +8,19 @@ pub const MaxObjects = cfg.max_objects;
 const Object = @import("../lang/value.zig").Object;
 const ObjTag = @import("../lang/value.zig").ObjTag;
 
-const ClassCount = 13;
-const ClassSizes = [_]usize{ 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536 };
+// Size classes 16 B .. 2 MiB. Classes above BaseClassCount (64 KiB) are only
+// usable when the configured heap is large enough: the largest usable class
+// is capped at heap_size / 8 so a single block can never swallow the heap.
+const ClassCount = 18;
+const ClassSizes = [_]usize{ 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576, 2097152 };
+const BaseClassCount = 13; // through 65536 — always available, preserves the historical floor
 const ManagedAlign: usize = 16;
+
+fn usableClassCount(heap_size: usize) usize {
+    var c: usize = BaseClassCount;
+    while (c < ClassCount and ClassSizes[c] * 8 <= heap_size) c += 1;
+    return c;
+}
 
 // On WASM linear memory is fixed; keep preset-sized backing arrays.
 const WasmBacking = if (builtin.target.cpu.arch == .wasm32) struct {
@@ -24,7 +34,7 @@ const WasmBacking = if (builtin.target.cpu.arch == .wasm32) struct {
 var g_wasm_backing: WasmBacking = .{};
 
 pub const State = struct {
-    heap: []u8 align(16) = &[_]u8{},
+    heap: []align(16) u8 = &[_]u8{},
     heap_pos: usize = 0,
     obj_pool: []Object = &[_]Object{},
     obj_marked: []bool = &[_]bool{},
@@ -33,10 +43,12 @@ pub const State = struct {
     obj_free_head: u16 = 0xffff,
     obj_live_count: usize = 0,
     free_blocks: [ClassCount]?*u8 = [_]?*u8{null} ** ClassCount,
+    class_count: usize = BaseClassCount,
     allocator: std.mem.Allocator = std.heap.page_allocator,
 
     pub fn init(self: *State, heap_size: usize, max_objects: usize, allocator: std.mem.Allocator) !void {
         self.allocator = allocator;
+        self.class_count = usableClassCount(heap_size);
         if (comptime builtin.target.cpu.arch == .wasm32) {
             self.heap = &g_wasm_backing.heap;
             self.obj_pool = &g_wasm_backing.obj_pool;
@@ -119,7 +131,7 @@ pub fn reset() void {
 
 fn classIndexFor(n: usize) ?usize {
     var i: usize = 0;
-    while (i < ClassCount) : (i += 1) {
+    while (i < g_state.class_count) : (i += 1) {
         if (n <= ClassSizes[i]) return i;
     }
     return null;
