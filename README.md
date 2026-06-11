@@ -305,7 +305,7 @@ src/*_runner.zig  white-box test harness roots (must live in src/, see docs/test
 tools/            conformance and benchmark orchestrators
 tests/spec/       conformance cases, both pass and fail
 tests/bench/      benchmark programs
-examples/         embedding demos (Zig, Python, JS)
+examples/         embedding demos (Zig, C, Python, JS)
 include/          public C header (gengo-engine.h)
 docs/             language, stdlib, embedding, engine API
 sdk/typescript/   TypeScript wrapper for gengo-engine.wasm
