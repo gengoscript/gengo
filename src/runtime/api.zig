@@ -66,11 +66,20 @@ pub const Runtime = struct {
     capabilities: []const []const u8 = &.{},
 
     pub fn init(config: Config) Runtime {
-        var inner = rt_mod.Runtime.withPolicy(.{
-            .allow_io = config.allow_io,
-            .native_backend = config.native_backend,
-            .max_ops = config.max_ops,
-        });
+        var inner: rt_mod.Runtime = undefined;
+        inner.initWithConfig(
+            .{
+                .allow_io = config.allow_io,
+                .native_backend = config.native_backend,
+                .max_ops = config.max_ops,
+            },
+            config.heap_size_bytes,
+            config.max_objects,
+            config.max_stack,
+            config.max_frames,
+            config.max_defers,
+            config.allocator,
+        );
         inner.host_modules = config.host_modules;
         inner.enabled_capabilities = config.capabilities;
         return .{

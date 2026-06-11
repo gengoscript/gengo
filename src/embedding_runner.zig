@@ -27,6 +27,25 @@ fn makeRt(config: api.Config) *api.Runtime {
     return rt;
 }
 
+fn expectInitByValue() void {
+    var rt = api.Runtime.init(.{ .allow_io = false });
+    defer rt.deinit();
+    const res = rt.run(
+        \\func answer() int { return 42 }
+    );
+    switch (res) {
+        .ok => {},
+        else => fail("embedding FAIL: init by-value should work\n"),
+    }
+    const call_res = rt.call("answer", &[_]Value{});
+    switch (call_res) {
+        .ok => |v| {
+            if (v != .int or v.int != 42) fail("embedding FAIL: init by-value result\n");
+        },
+        else => fail("embedding FAIL: init by-value call\n"),
+    }
+}
+
 fn expectCompileError() void {
     const rt = makeRt(.{ .allow_io = false });
     const res = rt.run(
@@ -264,6 +283,7 @@ fn expectImportLoaderWithFallback() void {
 }
 
 export fn _start() void {
+    expectInitByValue();
     expectCompileError();
     expectRuntimeError();
     expectCallAndStatePersistence();
