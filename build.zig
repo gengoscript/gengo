@@ -1,11 +1,12 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
-    const preset_opt = b.option([]const u8, "preset", "runtime preset: dev|tiny|stress") orelse "dev";
+    const preset_opt = b.option([]const u8, "preset", "runtime preset: dev|tiny|stress|server") orelse "dev";
     const valid = std.mem.eql(u8, preset_opt, "dev") or
         std.mem.eql(u8, preset_opt, "tiny") or
-        std.mem.eql(u8, preset_opt, "stress");
-    if (!valid) @panic("invalid -Dpreset, expected dev|tiny|stress");
+        std.mem.eql(u8, preset_opt, "stress") or
+        std.mem.eql(u8, preset_opt, "server");
+    if (!valid) @panic("invalid -Dpreset, expected dev|tiny|stress|server");
 
     const perf_opt = b.option(bool, "perf", "Enable performance counters (outputs PERF: lines to stderr)") orelse false;
     const cap_net_opt = b.option(bool, "cap_net", "Include cap:net capability") orelse true;
