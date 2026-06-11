@@ -91,12 +91,25 @@ fn namedTypeCarrier(a: Value, b: Value) !?*Object {
     if (a == .object and a.object.* == .named_value) ta = a.object.named_value.typ;
     if (b == .object and b.object.* == .named_value) tb = b.object.named_value.typ;
     if (ta == null and tb == null) return null;
-    if (ta == null) return tb;
-    if (tb == null) return ta;
+    if (ta == null or tb == null) return error.TypeError;
     if (ta.? == tb.?) return ta;
     if (namedTypeIsSubOf(ta.?, tb.?)) return tb.?;
     if (namedTypeIsSubOf(tb.?, ta.?)) return ta.?;
     return error.TypeError;
+}
+
+fn checkNamedValueCompatibility(a: Value, b: Value) !void {
+    const a_named = a == .object and a.object.* == .named_value;
+    const b_named = b == .object and b.object.* == .named_value;
+    if (a_named and b_named) {
+        if (a.object.named_value.typ != b.object.named_value.typ) {
+            const ta = a.object.named_value.typ;
+            const tb = b.object.named_value.typ;
+            if (!namedTypeIsSubOf(ta, tb) and !namedTypeIsSubOf(tb, ta)) return error.TypeError;
+        }
+    } else if (a_named != b_named) {
+        return error.TypeError;
+    }
 }
 
 fn numericOpTag(a: Value, b: Value) !VTag {
@@ -1967,14 +1980,9 @@ fn runInner() !void {
             .eq => {
                 const b = try vmPop();
                 const a = try vmPop();
+                try checkNamedValueCompatibility(a, b);
                 const a_named = a == .object and a.object.* == .named_value;
                 const b_named = b == .object and b.object.* == .named_value;
-                if (a_named and b_named and a.object.named_value.typ != b.object.named_value.typ) {
-                    const ta = a.object.named_value.typ;
-                    const tb = b.object.named_value.typ;
-                    if (!namedTypeIsSubOf(ta, tb) and !namedTypeIsSubOf(tb, ta)) return error.TypeError;
-                }
-                // Unwrap named values for cross named-vs-raw comparison
                 const ea = if (a_named) a.object.named_value.value else a;
                 const eb = if (b_named) b.object.named_value.value else b;
                 try vmPush(.{ .boolean = Value.equals(ea, eb) });
@@ -1982,13 +1990,7 @@ fn runInner() !void {
             .gt => {
                 const b = try vmPop();
                 const a = try vmPop();
-                const a_named = a == .object and a.object.* == .named_value;
-                const b_named = b == .object and b.object.* == .named_value;
-                if (a_named and b_named and a.object.named_value.typ != b.object.named_value.typ) {
-                    const ta = a.object.named_value.typ;
-                    const tb = b.object.named_value.typ;
-                    if (!namedTypeIsSubOf(ta, tb) and !namedTypeIsSubOf(tb, ta)) return error.TypeError;
-                }
+                try checkNamedValueCompatibility(a, b);
                 const an = try vms.valueAsNumber(a);
                 const bn = try vms.valueAsNumber(b);
                 if (!std.math.isFinite(an) or !std.math.isFinite(bn)) { vms.setRuntimeErr("cannot compare non-finite value", .{}); return error.TypeError; }
@@ -1997,13 +1999,7 @@ fn runInner() !void {
             .lt => {
                 const b = try vmPop();
                 const a = try vmPop();
-                const a_named = a == .object and a.object.* == .named_value;
-                const b_named = b == .object and b.object.* == .named_value;
-                if (a_named and b_named and a.object.named_value.typ != b.object.named_value.typ) {
-                    const ta = a.object.named_value.typ;
-                    const tb = b.object.named_value.typ;
-                    if (!namedTypeIsSubOf(ta, tb) and !namedTypeIsSubOf(tb, ta)) return error.TypeError;
-                }
+                try checkNamedValueCompatibility(a, b);
                 const an = try vms.valueAsNumber(a);
                 const bn = try vms.valueAsNumber(b);
                 if (!std.math.isFinite(an) or !std.math.isFinite(bn)) { vms.setRuntimeErr("cannot compare non-finite value", .{}); return error.TypeError; }
@@ -2014,13 +2010,9 @@ fn runInner() !void {
             .const_eq => {
                 const k = try chunk.constAt(try vmShort());
                 const a = try vmPop();
+                try checkNamedValueCompatibility(a, k);
                 const a_named = a == .object and a.object.* == .named_value;
                 const k_named = k == .object and k.object.* == .named_value;
-                if (a_named and k_named and a.object.named_value.typ != k.object.named_value.typ) {
-                    const ta = a.object.named_value.typ;
-                    const tk = k.object.named_value.typ;
-                    if (!namedTypeIsSubOf(ta, tk) and !namedTypeIsSubOf(tk, ta)) return error.TypeError;
-                }
                 const ea = if (a_named) a.object.named_value.value else a;
                 const ek = if (k_named) k.object.named_value.value else k;
                 try vmPush(.{ .boolean = Value.equals(ea, ek) });
@@ -2046,13 +2038,9 @@ fn runInner() !void {
                 if (base + slot >= vmState().stack.len) return error.StackOverflow;
                 var a = vmState().stack[base + slot];
                 if (a == .object and a.object.* == .cell) a = a.object.cell.value;
+                try checkNamedValueCompatibility(a, k);
                 const a_named = a == .object and a.object.* == .named_value;
                 const k_named = k == .object and k.object.* == .named_value;
-                if (a_named and k_named and a.object.named_value.typ != k.object.named_value.typ) {
-                    const ta = a.object.named_value.typ;
-                    const tk = k.object.named_value.typ;
-                    if (!namedTypeIsSubOf(ta, tk) and !namedTypeIsSubOf(tk, ta)) return error.TypeError;
-                }
                 const ea = if (a_named) a.object.named_value.value else a;
                 const ek = if (k_named) k.object.named_value.value else k;
                 try vmPush(.{ .boolean = Value.equals(ea, ek) });
@@ -2099,13 +2087,9 @@ fn runInner() !void {
                 if (base + slot >= vmState().stack.len) return error.StackOverflow;
                 var a = vmState().stack[base + slot];
                 if (a == .object and a.object.* == .cell) a = a.object.cell.value;
+                try checkNamedValueCompatibility(a, k);
                 const a_named = a == .object and a.object.* == .named_value;
                 const k_named = k == .object and k.object.* == .named_value;
-                if (a_named and k_named and a.object.named_value.typ != k.object.named_value.typ) {
-                    const ta = a.object.named_value.typ;
-                    const tk = k.object.named_value.typ;
-                    if (!namedTypeIsSubOf(ta, tk) and !namedTypeIsSubOf(tk, ta)) return error.TypeError;
-                }
                 const an = try vms.valueAsNumber(if (a_named) a.object.named_value.value else a);
                 const kn = try vms.valueAsNumber(if (k_named) k.object.named_value.value else k);
                 if (!std.math.isFinite(an) or !std.math.isFinite(kn)) { vms.setRuntimeErr("cannot compare non-finite value", .{}); return error.TypeError; }
@@ -2125,13 +2109,9 @@ fn runInner() !void {
                 if (base + slot >= vmState().stack.len) return error.StackOverflow;
                 var a = vmState().stack[base + slot];
                 if (a == .object and a.object.* == .cell) a = a.object.cell.value;
+                try checkNamedValueCompatibility(a, k);
                 const a_named = a == .object and a.object.* == .named_value;
                 const k_named = k == .object and k.object.* == .named_value;
-                if (a_named and k_named and a.object.named_value.typ != k.object.named_value.typ) {
-                    const ta = a.object.named_value.typ;
-                    const tk = k.object.named_value.typ;
-                    if (!namedTypeIsSubOf(ta, tk) and !namedTypeIsSubOf(tk, ta)) return error.TypeError;
-                }
                 const ea = if (a_named) a.object.named_value.value else a;
                 const ek = if (k_named) k.object.named_value.value else k;
                 if (!Value.equals(ea, ek)) vmState().ip += off;
@@ -2149,13 +2129,9 @@ fn runInner() !void {
                 if (base + slot >= vmState().stack.len) return error.StackOverflow;
                 var a = vmState().stack[base + slot];
                 if (a == .object and a.object.* == .cell) a = a.object.cell.value;
+                try checkNamedValueCompatibility(a, k);
                 const a_named = a == .object and a.object.* == .named_value;
                 const k_named = k == .object and k.object.* == .named_value;
-                if (a_named and k_named and a.object.named_value.typ != k.object.named_value.typ) {
-                    const ta = a.object.named_value.typ;
-                    const tk = k.object.named_value.typ;
-                    if (!namedTypeIsSubOf(ta, tk) and !namedTypeIsSubOf(tk, ta)) return error.TypeError;
-                }
                 const an = try vms.valueAsNumber(if (a_named) a.object.named_value.value else a);
                 const kn = try vms.valueAsNumber(if (k_named) k.object.named_value.value else k);
                 if (!std.math.isFinite(an) or !std.math.isFinite(kn)) { vms.setRuntimeErr("cannot compare non-finite value", .{}); return error.TypeError; }
@@ -2216,13 +2192,7 @@ fn runInner() !void {
             .const_lt => {
                 const k = try chunk.constAt(try vmShort());
                 const a = try vmPop();
-                const a_named = a == .object and a.object.* == .named_value;
-                const k_named = k == .object and k.object.* == .named_value;
-                if (a_named and k_named and a.object.named_value.typ != k.object.named_value.typ) {
-                    const ta = a.object.named_value.typ;
-                    const tk = k.object.named_value.typ;
-                    if (!namedTypeIsSubOf(ta, tk) and !namedTypeIsSubOf(tk, ta)) return error.TypeError;
-                }
+                try checkNamedValueCompatibility(a, k);
                 const an = try vms.valueAsNumber(a);
                 const kn = try vms.valueAsNumber(k);
                 if (!std.math.isFinite(an) or !std.math.isFinite(kn)) { vms.setRuntimeErr("cannot compare non-finite value", .{}); return error.TypeError; }

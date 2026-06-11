@@ -10,12 +10,6 @@ std.io.println(Age(20) != Age(21))
 std.io.println(Age(20) < Age(30))
 std.io.println(Age(30) > Age(20))
 
-// Named vs raw base: allowed
-std.io.println(Age(20) == 20)
-std.io.println(Age(20) != 21)
-std.io.println(Age(20) < 30)
-std.io.println(30 > Age(20))
-
-// String named type vs raw
-std.io.println(UserId("u-1") == "u-1")
-std.io.println(UserId("u-1") == "u-2")
+// String named type vs same type
+std.io.println(UserId("u-1") == UserId("u-1"))
+std.io.println(UserId("u-1") == UserId("u-2"))

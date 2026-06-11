@@ -12,6 +12,6 @@ t2 := t.add_s(3600)
 diff := t2.sub(t)
 std.io.println(diff)
 
-// Named type arithmetic
-std.io.println(std.core.type_of(t + 1000))
-std.io.println(t + 1000)
+// Named type arithmetic via native method
+std.io.println(std.core.type_of(t.add_ms(1000)))
+std.io.println(t.add_ms(1000))

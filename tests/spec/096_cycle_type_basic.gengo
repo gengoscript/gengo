@@ -4,9 +4,9 @@ type Step int cycle 1..16
 type Hour int cycle 0..23
 
 x := Step(16)
-x++
+x = x + Step(1)
 std.io.println(x)
-x--
+x = x - Step(1)
 std.io.println(x)
 std.io.println(Step.first)
 std.io.println(Step.last)

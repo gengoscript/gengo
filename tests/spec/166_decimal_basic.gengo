@@ -20,14 +20,6 @@ std.io.println(m3)
 m4 := Money(5.00) - Money(2.25)
 std.io.println(m4)
 
-// Multiply by int (exact)
-m5 := Money(3.50) * 2
-std.io.println(m5)
-
-// Division truncates to scale
-m6 := Money(9.99) / 3
-std.io.println(m6)
-
 // Range constraint
 type Percent decimal 2 range 0..1
 p1 := Percent(0.50)

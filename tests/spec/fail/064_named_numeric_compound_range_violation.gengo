@@ -2,4 +2,4 @@ type Integer int range -2147483648 .. 2147483647
 type Age Integer range 0 .. 100
 
 x := Age(100)
-x += 1
+x += Age(1)

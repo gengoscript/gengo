@@ -18,8 +18,8 @@ std.io.println(m <= Month.last)
 
 // clamp using type attributes
 func clampMonth(n int) Month {
-    if n < Month.first { return Month.first }
-    if n > Month.last { return Month.last }
+    if n < int(Month.first) { return Month.first }
+    if n > int(Month.last) { return Month.last }
     return Month(n)
 }
 std.io.println(clampMonth(0))
