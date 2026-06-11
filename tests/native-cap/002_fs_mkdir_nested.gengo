@@ -1,0 +1,9 @@
+fs := import("cap:fs")
+std := import("std")
+
+dir := "tmp/nested/deeper"
+path := dir + "/note.txt"
+
+fs.mkdir(dir)
+fs.write(path, "inside")
+std.io.println(fs.read(path))

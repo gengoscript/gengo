@@ -1,0 +1,30 @@
+fs := import("cap:fs")
+std := import("std")
+
+dir := "tmp/list"
+fs.mkdir(dir)
+
+i := 0
+for i < 50 {
+    s := std.conv.to_string(i)
+    if i < 10 { s = "0" + s }
+    fs.write(dir + "/file" + s + ".txt", s)
+    i++
+}
+
+names := std.sort.asc(fs.list(dir))
+seen := {}
+unique := true
+
+for name in names {
+    if seen[name] == true {
+        unique = false
+    } else {
+        seen[name] = true
+    }
+}
+
+std.io.println(std.core.len(names))
+std.io.println(unique)
+std.io.println(names[0])
+std.io.println(names[49])

@@ -1,0 +1,7 @@
+fs := import("cap:fs")
+std := import("std")
+
+path := "tmp/hello.txt"
+fs.write(path, "hello")
+std.io.println(fs.exists(path))
+std.io.println(fs.read(path))

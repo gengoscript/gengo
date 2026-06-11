@@ -22,10 +22,22 @@ pub fn main(init: std.process.Init.Minimal) !void {
 
     if (args.len < 2) {
         std.debug.print("usage: test-runner <conformance|bench|parity> [wasmtime] [wasm]\n", .{});
+        std.debug.print("   or: test-runner native-cap [gengo]\n", .{});
         std.process.exit(1);
     }
 
     const mode = args[1];
+    if (std.mem.eql(u8, mode, "native-cap")) {
+        const gengo = if (args.len > 2) args[2] else "zig-out/bin/gengo";
+        if (!commandExists(alloc, gengo)) {
+            std.debug.print("gengo binary not found: {s}\n", .{gengo});
+            std.debug.print("build it first with `zig build -Dpreset=dev cli` or pass an explicit path\n", .{});
+            std.process.exit(1);
+        }
+        try runNativeCap(alloc, gengo);
+        return;
+    }
+
     const wasmtime = if (args.len > 2) args[2] else "wasmtime";
     const wasm_path = if (args.len > 3) args[3] else "build/gengo-runtime.wasm";
 
@@ -299,6 +311,118 @@ fn runParity(alloc: std.mem.Allocator, wasmtime: []const u8, wasm_path: []const 
     std.debug.print("Host parity OK: {d} cases\n", .{pass_count});
 }
 
+// ── Native capability lane ────────────────────────────────────────────────
+
+fn runNativeCap(alloc: std.mem.Allocator, gengo: []const u8) !void {
+    var pass_cases: [MaxCases][]const u8 = undefined;
+    const pass_count = collectGengoFiles(alloc, "tests/native-cap", &pass_cases) catch |err| {
+        std.debug.print("cannot scan native-cap dir: {s}\n", .{@errorName(err)});
+        std.process.exit(1);
+    };
+
+    var fail_cases: [MaxCases][]const u8 = undefined;
+    const fail_count = collectGengoFiles(alloc, "tests/native-cap/fail", &fail_cases) catch |err| {
+        std.debug.print("cannot scan native-cap fail dir: {s}\n", .{@errorName(err)});
+        std.process.exit(1);
+    };
+
+    var pass_ok: usize = 0;
+    var fail_ok: usize = 0;
+    var errors: usize = 0;
+
+    for (pass_cases[0..pass_count]) |path| {
+        defer alloc.free(path);
+        const base = path[0 .. path.len - 6];
+        const out_path = try std.fmt.allocPrint(alloc, "{s}.out", .{base});
+        defer alloc.free(out_path);
+
+        if (!fileExists(out_path)) {
+            std.debug.print("missing expected output file: {s}\n", .{out_path});
+            errors += 1;
+            continue;
+        }
+
+        std.debug.print("[NATIVE-CAP PASS] {s}\n", .{path});
+        const temp_subpath = try createNativeCapTempDir(alloc);
+        defer destroyNativeCapTempDir(temp_subpath);
+
+        const result = runNativeCliWithMount(alloc, gengo, temp_subpath, path);
+        const output = result[0];
+        const failed = result[1];
+        defer alloc.free(output);
+
+        if (failed) {
+            std.debug.print("native-cap execution failed unexpectedly: {s}\n", .{path});
+            errors += 1;
+            continue;
+        }
+
+        const expected = readFileAlloc(alloc, out_path, MaxOutputBytes) catch |err| {
+            std.debug.print("cannot read .out file: {s} ({s})\n", .{ out_path, @errorName(err) });
+            errors += 1;
+            continue;
+        };
+        defer alloc.free(expected);
+
+        if (!std.mem.eql(u8, expected, output)) {
+            std.debug.print("native-cap output mismatch: {s}\n", .{path});
+            errors += 1;
+            continue;
+        }
+
+        pass_ok += 1;
+    }
+
+    for (fail_cases[0..fail_count]) |path| {
+        defer alloc.free(path);
+        const base = path[0 .. path.len - 6];
+        const err_path = try std.fmt.allocPrint(alloc, "{s}.err", .{base});
+        defer alloc.free(err_path);
+
+        if (!fileExists(err_path)) {
+            std.debug.print("missing expected error file: {s}\n", .{err_path});
+            errors += 1;
+            continue;
+        }
+
+        std.debug.print("[NATIVE-CAP FAIL] {s}\n", .{path});
+        const temp_subpath = try createNativeCapTempDir(alloc);
+        defer destroyNativeCapTempDir(temp_subpath);
+
+        const result = runNativeCliWithMount(alloc, gengo, temp_subpath, path);
+        const output = result[0];
+        const failed = result[1];
+        defer alloc.free(output);
+
+        if (!failed) {
+            std.debug.print("expected failure but script succeeded: {s}\n", .{path});
+            errors += 1;
+            continue;
+        }
+
+        const err_content = readFileAlloc(alloc, err_path, 1024) catch |err| {
+            std.debug.print("cannot read .err file: {s} ({s})\n", .{ err_path, @errorName(err) });
+            errors += 1;
+            continue;
+        };
+        defer alloc.free(err_content);
+
+        if (!errFileMatchesOutput(output, err_content)) {
+            std.debug.print("expected error token not found for {s}\n", .{path});
+            errors += 1;
+            continue;
+        }
+
+        fail_ok += 1;
+    }
+
+    if (errors != 0) {
+        std.debug.print("Native capability lane FAILED: {d} pass-cases, {d} fail-cases, {d} errors\n", .{ pass_ok, fail_ok, errors });
+        std.process.exit(1);
+    }
+    std.debug.print("Native capability lane OK: {d} pass-cases, {d} fail-cases\n", .{ pass_ok, fail_ok });
+}
+
 // ── Parallel process pool ─────────────────────────────────────────────────
 
 const PoolJob = struct {
@@ -566,6 +690,67 @@ fn runWasmtimeWithFlags(alloc: std.mem.Allocator, wasmtime: []const u8, wasm_pat
     return .{ combined, failed };
 }
 
+fn runNativeCliWithMount(alloc: std.mem.Allocator, gengo: []const u8, mount_path: []const u8, script: []const u8) struct { []const u8, bool } {
+    const cmd = std.fmt.allocPrint(alloc, "{s} --cap fs --mount tmp={s} {s}", .{ gengo, mount_path, script }) catch return .{ "", true };
+    defer alloc.free(cmd);
+
+    return runShellCommand(alloc, cmd);
+}
+
+fn runShellCommand(alloc: std.mem.Allocator, cmd: []const u8) struct { []const u8, bool } {
+    var stdout_pipe: [2]std.c.fd_t = undefined;
+    var stderr_pipe: [2]std.c.fd_t = undefined;
+    if (std.c.pipe(&stdout_pipe) != 0 or std.c.pipe(&stderr_pipe) != 0) {
+        return .{ "", true };
+    }
+
+    const pid = std.c.fork();
+    if (pid < 0) return .{ "", true };
+
+    if (pid == 0) {
+        _ = std.c.close(stdout_pipe[0]);
+        _ = std.c.close(stderr_pipe[0]);
+        _ = std.c.dup2(stdout_pipe[1], 1);
+        _ = std.c.dup2(stderr_pipe[1], 2);
+        _ = std.c.close(stdout_pipe[1]);
+        _ = std.c.close(stderr_pipe[1]);
+
+        const sh_z = toCStr(alloc, "/bin/sh") catch std.c._exit(1);
+        defer alloc.free(sh_z);
+        const sh_c_z = toCStr(alloc, "-c") catch std.c._exit(1);
+        defer alloc.free(sh_c_z);
+        const cmd_z = toCStr(alloc, cmd) catch std.c._exit(1);
+        defer alloc.free(cmd_z);
+
+        const argv = [_:null]?[*:0]const u8{ sh_z.ptr, sh_c_z.ptr, cmd_z.ptr, null };
+        _ = std.c.execve(sh_z.ptr, &argv, std.c.environ);
+        std.c._exit(1);
+    }
+
+    _ = std.c.close(stdout_pipe[1]);
+    _ = std.c.close(stderr_pipe[1]);
+
+    var stdout_buf: [MaxOutputBytes]u8 = undefined;
+    var stderr_buf: [MaxOutputBytes]u8 = undefined;
+    const stdout_len = readAllFromFd(stdout_pipe[0], &stdout_buf) catch 0;
+    const stderr_len = readAllFromFd(stderr_pipe[0], &stderr_buf) catch 0;
+    _ = std.c.close(stdout_pipe[0]);
+    _ = std.c.close(stderr_pipe[0]);
+
+    var status: c_int = 0;
+    _ = std.c.waitpid(pid, &status, 0);
+
+    const exited = (status & 0x7f) == 0;
+    const exit_code = if (exited) @as(u8, @intCast((status >> 8) & 0xff)) else 1;
+    const failed = !exited or exit_code != 0;
+
+    const total_len = stdout_len + stderr_len;
+    const combined = alloc.alloc(u8, total_len) catch return .{ "", true };
+    @memcpy(combined[0..stdout_len], stdout_buf[0..stdout_len]);
+    @memcpy(combined[stdout_len..total_len], stderr_buf[0..stderr_len]);
+    return .{ combined, failed };
+}
+
 fn readAllFromFd(fd: std.c.fd_t, buf: []u8) !usize {
     var total: usize = 0;
     while (total < buf.len) {
@@ -623,6 +808,24 @@ fn errFileMatchesOutput(output: []const u8, err_content: []const u8) bool {
     return false;
 }
 
+var native_cap_counter: usize = 0;
+
+fn createNativeCapTempDir(alloc: std.mem.Allocator) ![]u8 {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const cwd = std.Io.Dir.cwd();
+    try cwd.createDirPath(io, ".zig-cache/native-cap");
+    const subpath = try std.fmt.allocPrint(alloc, ".zig-cache/native-cap/{d}-{d}", .{ std.c.getpid(), native_cap_counter });
+    native_cap_counter += 1;
+    try cwd.createDirPath(io, subpath);
+    return subpath;
+}
+
+fn destroyNativeCapTempDir(subpath: []const u8) void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const cwd = std.Io.Dir.cwd();
+    cwd.deleteTree(io, subpath) catch {};
+}
+
 fn readFileAlloc(alloc: std.mem.Allocator, path: []const u8, max_bytes: usize) ![]u8 {
     const fd = try std.posix.openat(std.posix.AT.FDCWD, path, .{}, 0);
     defer _ = std.posix.system.close(fd);
@@ -655,4 +858,13 @@ test "command exists handles explicit paths and missing commands" {
     try std.testing.expect(commandExists(std.testing.allocator, "/bin/sh"));
     try std.testing.expect(!commandExists(std.testing.allocator, "/definitely/not/a/real/binary"));
     try std.testing.expect(!commandExists(std.testing.allocator, "definitely-not-a-real-command"));
+}
+
+test "native cap temp dir lifecycle" {
+    const subpath = try createNativeCapTempDir(std.testing.allocator);
+    defer std.testing.allocator.free(subpath);
+
+    try std.testing.expect(fileExists(subpath));
+    destroyNativeCapTempDir(subpath);
+    try std.testing.expect(!fileExists(subpath));
 }

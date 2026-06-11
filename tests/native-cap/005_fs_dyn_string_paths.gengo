@@ -1,0 +1,9 @@
+fs := import("cap:fs")
+std := import("std")
+
+dir := "tmp"
+name := "dynamic.txt"
+path := dir + "/" + name
+
+fs.write(path, "dyn")
+std.io.println(fs.read(path))

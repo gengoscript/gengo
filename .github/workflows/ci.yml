@@ -47,5 +47,8 @@ jobs:
       - name: Run benchmarks
         run: zig build -Dpreset=dev bench
 
+      - name: Run native capability tests
+        run: zig build -Dpreset=dev native-cap
+
       - name: Run heap tests
         run: zig build -Dpreset=dev heap-test
