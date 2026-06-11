@@ -2,6 +2,25 @@
 
 This changelog tracks notable language/runtime changes by implementation date.
 
+## 2026-06-11
+
+### Fix — Peephole Fusion Across Patched Jump Targets (BadConstantIndex)
+
+Short-circuit boolean expressions whose operands compare a local against a
+constant could panic at runtime with `BadConstantIndex` (e.g.
+`if a == "x" || a == "y"` when the first comparison is true). The `||` / `&&`
+short-circuit jump is patched to land at the current end of code; pending
+peephole state survived the patch, so a following `jif_pop` quad-fused into
+the instruction at the jump target, leaving the jump pointing at operand
+bytes. `patchJump` now clears all fusion trackers — a patched jump target is
+an instruction boundary. Regression test: spec 186.
+
+### New Example — Mosquitto ACL Plugin
+
+`examples/mosquitto-acl/`: a Mosquitto v5 broker plugin (C) that delegates
+ACL and basic-auth decisions to a Gengo policy script via the C engine API.
+Fail-closed, per-call instruction budget, SIGHUP policy reload.
+
 ## 2026-06-09
 
 ### Fix — NaN/Inf Rejection in VM Arithmetic and Comparisons

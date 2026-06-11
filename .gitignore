@@ -15,3 +15,4 @@ test_epoch
 .continue/
 .copilot/
 .codeium/
+gengo_acl.so

@@ -1,0 +1,45 @@
+std := import("std")
+
+// Multi-tenant topic policy.
+//
+// Called by the broker for every publish, delivery, and (un)subscribe:
+//   client  MQTT client id
+//   user    username ("" when anonymous)
+//   topic   topic, or topic filter for subscribe (may contain +/#)
+//   access  "read" | "write" | "subscribe" | "unsubscribe"
+func acl(client string, user string, topic string, access string) bool {
+    // Unsubscribing is always harmless.
+    if access == "unsubscribe" {
+        return true
+    }
+
+    // Admins bypass everything.
+    if user == "admin" {
+        return true
+    }
+
+    // Anyone — including anonymous clients — may read the public space.
+    if access == "read" || access == "subscribe" {
+        if std.string.starts_with(topic, "public/") {
+            return true
+        }
+    }
+
+    // Named tenants own their own subtree, read and write.
+    if user != "" {
+        if std.string.starts_with(topic, "tenant/" + user + "/") {
+            return true
+        }
+    }
+
+    return false
+}
+
+// Only consulted when plugin_opt_basic_auth is true.
+// Demo rule only — replace with a real credential check.
+func auth(client string, user string, password string) bool {
+    if user == "" {
+        return false
+    }
+    return password == user + "-secret"
+}
