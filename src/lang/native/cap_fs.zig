@@ -118,11 +118,15 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             }
             const result = try vmgc.vmAllocManagedSlice(Value, names.items.len);
             const arr_obj = try vmgc.vmAllocObject();
-            arr_obj.* = .{ .array = &[_]Value{} };
+            arr_obj.* = .{ .array_managed = result[0..0] };
             try vms.pushTempRoot(.{ .object = arr_obj });
             defer vms.popTempRoot();
             for (names.items, 0..) |n, i| {
+                // Grow the rooted slice as each element lands: makeDynString can
+                // trigger GC, and earlier elements must already be traced or they
+                // get reclaimed and reused mid-loop.
                 result[i] = try vmgc.makeDynString(n);
+                arr_obj.* = .{ .array_managed = result[0 .. i + 1] };
             }
             arr_obj.* = .{ .array_managed = result };
             try vms.vmPush(.{ .object = arr_obj });

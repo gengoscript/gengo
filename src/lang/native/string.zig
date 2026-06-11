@@ -8,7 +8,15 @@ const MapEntry = @import("../value.zig").MapEntry;
 const NativeFnId = @import("native_ids.zig").NativeFnId;
 const NativeFuncObj = @import("../value.zig").NativeFuncObj;
 
-pub fn nativeStrSplit(s: []const u8, sep: []const u8) !Value {
+// A raw .string view is only safe when the source bytes are immortal
+// (source-code constants). Substrings of GC-managed strings must be copied,
+// or they dangle once the source is collected.
+fn substring(bytes: []const u8, managed: bool) !Value {
+    if (managed) return vmgc.makeDynString(bytes);
+    return .{ .string = bytes };
+}
+
+pub fn nativeStrSplit(s: []const u8, sep: []const u8, managed: bool) !Value {
     var count: usize = undefined;
     if (sep.len == 0) {
         count = try vmstr.utf8RuneCount(s);
@@ -26,24 +34,29 @@ pub fn nativeStrSplit(s: []const u8, sep: []const u8) !Value {
     defer vms.popTempRoot();
     if (count > 0) {
         const pieces = try vmgc.vmAllocManagedSlice(Value, count);
+        // Attach the slice as it fills: substring() can trigger GC, and
+        // already-filled elements must be traced or they get reclaimed.
+        arr_obj.* = .{ .array_managed = pieces[0..0] };
         if (sep.len == 0) {
             var i: usize = 0;
             var pi: usize = 0;
             while (i < s.len) {
                 const w = try vmstr.utf8NextRuneByteLen(s, i);
-                pieces[pi] = .{ .string = s[i .. i + w] };
+                pieces[pi] = try substring(s[i .. i + w], managed);
                 i += w;
                 pi += 1;
+                arr_obj.* = .{ .array_managed = pieces[0..pi] };
             }
         } else {
             var i: usize = 0;
             var pi: usize = 0;
             while (std.mem.indexOfPos(u8, s, i, sep)) |pos| {
-                pieces[pi] = .{ .string = s[i..pos] };
+                pieces[pi] = try substring(s[i..pos], managed);
                 pi += 1;
+                arr_obj.* = .{ .array_managed = pieces[0..pi] };
                 i = pos + sep.len;
             }
-            pieces[pi] = .{ .string = s[i..] };
+            pieces[pi] = try substring(s[i..], managed);
         }
         arr_obj.* = .{ .array_managed = pieces[0..count] };
     }
@@ -175,7 +188,7 @@ pub fn nativeStrRepeat(s: []const u8, count_v: Value) !Value {
     return .{ .object = obj };
 }
 
-pub fn nativeStrSplitOnce(s: []const u8, sep: []const u8) !Value {
+pub fn nativeStrSplitOnce(s: []const u8, sep: []const u8, managed: bool) !Value {
     const pos = std.mem.indexOf(u8, s, sep) orelse {
         const obj = try vmgc.vmAllocObject();
         obj.* = .{ .array = &[_]Value{} };
@@ -192,9 +205,11 @@ pub fn nativeStrSplitOnce(s: []const u8, sep: []const u8) !Value {
     try vms.pushTempRoot(.{ .object = obj });
     defer vms.popTempRoot();
     const items = try vmgc.vmAllocManagedSlice(Value, 2);
-    items[0] = .{ .string = s[0..pos] };
-    items[1] = .{ .string = s[pos + sep.len ..] };
+    items[0] = .null;
+    items[1] = .null;
     obj.* = .{ .array_managed = items[0..2] };
+    items[0] = try substring(s[0..pos], managed);
+    items[1] = try substring(s[pos + sep.len ..], managed);
     return .{ .object = obj };
 }
 
@@ -217,6 +232,9 @@ pub fn nativeStrFields(s: []const u8) !Value {
     defer vms.popTempRoot();
     if (count > 0) {
         const pieces = try vmgc.vmAllocManagedSlice(Value, count);
+        // Attach as it fills: makeDynString can trigger GC and earlier
+        // elements must be traced.
+        arr_obj.* = .{ .array_managed = pieces[0..0] };
         var pi: usize = 0;
         i = 0;
         while (i < s.len) {
@@ -227,6 +245,7 @@ pub fn nativeStrFields(s: []const u8) !Value {
             const piece = try vmgc.makeDynString(s[start..i]);
             pieces[pi] = piece;
             pi += 1;
+            arr_obj.* = .{ .array_managed = pieces[0..pi] };
         }
         arr_obj.* = .{ .array_managed = pieces[0..count] };
     }
@@ -356,8 +375,14 @@ pub fn nativeStrSplitN(s: []const u8, sep: []const u8, n_v: Value) !Value {
     try vms.pushTempRoot(.{ .object = arr_obj });
     defer vms.popTempRoot();
     const pieces = try vmgc.vmAllocManagedSlice(Value, count);
+    // Attach as it fills: makeDynString can trigger GC and earlier elements
+    // must be traced.
+    arr_obj.* = .{ .array_managed = pieces[0..0] };
     if (sep.len == 0) {
-        for (0..count) |i| pieces[i] = try vmgc.makeDynString(s[i .. i + 1]);
+        for (0..count) |i| {
+            pieces[i] = try vmgc.makeDynString(s[i .. i + 1]);
+            arr_obj.* = .{ .array_managed = pieces[0 .. i + 1] };
+        }
     } else {
         var pos: usize = 0;
         var pi: usize = 0;
@@ -366,6 +391,7 @@ pub fn nativeStrSplitN(s: []const u8, sep: []const u8, n_v: Value) !Value {
             pieces[pi] = try vmgc.makeDynString(s[pos .. pos + idx]);
             pos += idx + sep.len;
             pi += 1;
+            arr_obj.* = .{ .array_managed = pieces[0..pi] };
         }
         pieces[pi] = try vmgc.makeDynString(s[pos..]);
     }
@@ -521,9 +547,10 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
 
             if (argc != nf.arity) return error.ArityMismatch;
             const top = vms.vmState().stack_top;
-            const s = try vms.asStringValue(vms.vmState().stack[top - 2]);
+            const src_val = vms.vmState().stack[top - 2];
+            const s = try vms.asStringValue(src_val);
             const sep = try vms.asStringValue(vms.vmState().stack[top - 1]);
-            const out = try nativeStrSplit(s, sep);
+            const out = try nativeStrSplit(s, sep, src_val == .object);
             _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
             try vms.vmPush(out);
         },
@@ -531,9 +558,10 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
 
             if (argc != nf.arity) return error.ArityMismatch;
             const top = vms.vmState().stack_top;
-            const s = try vms.asStringValue(vms.vmState().stack[top - 2]);
+            const src_val = vms.vmState().stack[top - 2];
+            const s = try vms.asStringValue(src_val);
             const sep = try vms.asStringValue(vms.vmState().stack[top - 1]);
-            const out = try nativeStrSplitOnce(s, sep);
+            const out = try nativeStrSplitOnce(s, sep, src_val == .object);
             _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
             try vms.vmPush(out);
         },
