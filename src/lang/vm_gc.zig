@@ -169,6 +169,10 @@ pub fn vmAllocObject() !*Object {
 }
 
 pub fn vmAllocManagedSlice(comptime T: type, n: usize) ![]T {
+    if (@sizeOf(T) * n > heap.maxManagedAlloc()) {
+        vms.setRuntimeErr("allocation of {d} bytes exceeds this heap's largest block ({d} bytes); configure a larger heap", .{ @sizeOf(T) * n, heap.maxManagedAlloc() });
+        return error.AllocationTooLarge;
+    }
     if (heap.usedBytes() >= vms.vmState().next_gc_heap_bytes) {
         collectGarbage();
         vms.vmState().next_gc_heap_bytes = gcStepThreshold(heap.usedBytes());
@@ -196,6 +200,10 @@ fn gcStepThreshold(used: usize) usize {
 }
 
 pub fn vmAllocManagedBytes(n: usize) ![]u8 {
+    if (n > heap.maxManagedAlloc()) {
+        vms.setRuntimeErr("allocation of {d} bytes exceeds this heap's largest block ({d} bytes); configure a larger heap", .{ n, heap.maxManagedAlloc() });
+        return error.AllocationTooLarge;
+    }
     if (heap.usedBytes() >= vms.vmState().next_gc_heap_bytes) {
         collectGarbage();
         vms.vmState().next_gc_heap_bytes = gcStepThreshold(heap.usedBytes());

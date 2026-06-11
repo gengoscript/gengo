@@ -1,0 +1,2 @@
+std := import("std")
+_ = std.string.repeat("x", 100000)
