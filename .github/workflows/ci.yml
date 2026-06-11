@@ -43,3 +43,9 @@ jobs:
 
       - name: Run conformance tests
         run: zig build -Dpreset=dev test
+
+      - name: Run benchmarks
+        run: zig build -Dpreset=dev bench
+
+      - name: Run heap tests
+        run: zig build -Dpreset=dev heap-test
