@@ -1,0 +1,23 @@
+std := import("std")
+
+func alloc() string {
+    s := ""
+    for i := 0; i < 120; i++ {
+        s += "x"
+    }
+    return s
+}
+
+sum := 0
+for x in [10, 20, 30, 40, 50] {
+    _ := alloc()
+    sum += x
+}
+std.io.println(sum)
+
+total := 0
+for k, v in {"a": 1, "b": 2, "c": 3, "d": 4, "e": 5} {
+    _ := alloc()
+    total += v
+}
+std.io.println(total)
