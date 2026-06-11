@@ -482,7 +482,7 @@ zig build -Dpreset=dev engine-native-release  # optimised
 #                         gengo-engine.dll      (Windows)
 ```
 
-Link against the library and include `gengo-engine.h`. All pointer parameters use `uintptr_t` and work correctly on both 32-bit and 64-bit hosts.
+Link against the library and include `include/gengo-engine.h`. All pointer parameters use `uintptr_t` and work correctly on both 32-bit and 64-bit hosts.
 
 **Native-specific notes:**
 

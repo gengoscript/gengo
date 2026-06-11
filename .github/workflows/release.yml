@@ -92,6 +92,6 @@ jobs:
         run: |
           gh release create "${{ github.ref_name }}" \
             --title "${{ github.ref_name }}" \
-            --notes "See [CHANGELOG](docs/changelog.md) for details." \
+            --notes "See [CHANGELOG](CHANGELOG.md) for details." \
             2>/dev/null || true
           gh release upload "${{ github.ref_name }}" dist/* --clobber

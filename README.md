@@ -303,7 +303,8 @@ src/engine.zig    WASM/native engine exports
 tests/spec/       conformance cases, both pass and fail
 tests/bench/      benchmark programs
 examples/         embedding demos (Python, etc.)
-docs/             language, stdlib, embedding, engine API, changelog
+include/          public C header (gengo-engine.h)
+docs/             language, stdlib, embedding, engine API
 sdk/typescript/   TypeScript wrapper for gengo-engine.wasm
 ```
 
@@ -319,7 +320,7 @@ sdk/typescript/   TypeScript wrapper for gengo-engine.wasm
 * [docs/embedding.md](docs/embedding.md)
 * [docs/security.md](docs/security.md)
 * [docs/engine-api.md](docs/engine-api.md)
-* [docs/changelog.md](docs/changelog.md)
+* [CHANGELOG.md](CHANGELOG.md)
 
 ---
 
