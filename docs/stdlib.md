@@ -1,4 +1,4 @@
-# gengo Standard Library Reference
+# Gengoscript Standard Library Reference
 
 ## Import
 

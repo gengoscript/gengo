@@ -1,6 +1,6 @@
 /*
  * gengo_acl — Mosquitto v5 plugin that delegates ACL (and optionally basic
- * auth) decisions to a Gengo policy script.
+ * auth) decisions to a Gengoscript policy script.
  *
  * The script is loaded once at plugin init and re-loaded on broker reload
  * (SIGHUP). For every ACL check the plugin calls:

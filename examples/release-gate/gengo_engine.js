@@ -312,7 +312,7 @@ class Engine {
   // --------------------------------------------------------------------------
 
   /**
-   * Compile and run a Gengo source string.
+   * Compile and run a Gengoscript source string.
    *
    * @returns {{ ok: true } | { ok: false, error: string }}
    */

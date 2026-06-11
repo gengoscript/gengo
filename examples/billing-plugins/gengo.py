@@ -1,7 +1,7 @@
 """
 gengo — Python binding for libgengo-engine.so.
 
-Wraps the Gengo engine C API with a single class, Engine, that handles
+Wraps the Gengoscript engine C API with a single class, Engine, that handles
 ValueWire encoding, memory lifetime, and error reporting.
 
 Build the shared library before importing this module:
@@ -188,7 +188,7 @@ _lib.engine_last_error_col.argtypes = [ctypes.c_int32]
 # ---------------------------------------------------------------------------
 
 class Engine:
-    """An isolated Gengo script engine instance.
+    """An isolated Gengoscript engine instance.
 
     Each instance has its own heap and state. A failing script does not
     affect other instances or the host process.
@@ -222,7 +222,7 @@ class Engine:
             self._h = 0
 
     def load(self, source):
-        """Compile and run a Gengo source string.
+        """Compile and run a Gengoscript source string.
 
         Returns:
             (True, None) on success.

@@ -1,14 +1,14 @@
-// Package chroma contains a Gengo lexer for Chroma (used by Hugo and other Go-based syntax highlighters).
+// Package chroma contains a Gengoscript lexer for Chroma (used by Hugo and other Go-based syntax highlighters).
 package chroma
 
 import (
 	"github.com/alecthomas/chroma/v2"
 )
 
-// Gengo is a Chroma lexer for the Gengo programming language.
-var Gengo = chroma.MustNewLexer(
+// Gengoscript is a Chroma lexer for the Gengoscript programming language.
+var Gengoscript = chroma.MustNewLexer(
 	&chroma.Config{
-		Name:      "Gengo",
+		Name:      "Gengoscript",
 		Aliases:   []string{"gengo"},
 		Filenames: []string{"*.gengo"},
 	},

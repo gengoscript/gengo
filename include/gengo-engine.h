@@ -30,9 +30,9 @@ typedef enum {
  *   bit 0 (GENGO_WIRE_FLAG_INTEGER): payload is an integer encoded as f64 bits.
  *          Without this flag the number is treated as a float.
  *   bit 1 (GENGO_WIRE_FLAG_DECIMAL): payload is a raw i64 fixed-point value
- *          (scale ×1000, matching Gengo's decimal type). No f64 precision loss.
+ *          (scale ×1000, matching Gengoscript's decimal type). No f64 precision loss.
  *   bit 2 (GENGO_WIRE_FLAG_RUNE):    payload is a Unicode codepoint (u21).
- *          Decodes to Gengo's rune type rather than a numeric type.
+ *          Decodes to Gengoscript's rune type rather than a numeric type.
  */
 #define GENGO_WIRE_FLAG_INTEGER 0x01
 #define GENGO_WIRE_FLAG_DECIMAL 0x02
@@ -128,7 +128,7 @@ void engine_reset(int32_t handle);
 /* ── Compilation / execution ──────────────────────────────────────────────── */
 
 /*
- * Compile and run Gengo source code.
+ * Compile and run Gengoscript source code.
  * Returns  0 on success,
  *         -1 on compile error,
  *         -2 on runtime error.
@@ -136,7 +136,7 @@ void engine_reset(int32_t handle);
 int32_t engine_run(int32_t handle, const char *src, int32_t src_len);
 
 /*
- * Compile and run Gengo source code with an explicit path.
+ * Compile and run Gengoscript source code with an explicit path.
  * Returns  0 on success,
  *         -1 on compile error,
  *         -2 on runtime error.
@@ -148,7 +148,7 @@ int32_t engine_run_path(int32_t handle,
 /* ── Calling exported functions ───────────────────────────────────────────── */
 
 /*
- * Call a globally exported Gengo function by name.
+ * Call a globally exported Gengoscript function by name.
  * args: pointer to an array of gengo_value_wire_t (may be NULL if argc==0).
  * out:  pointer to a gengo_value_wire_t that receives the return value (may be NULL).
  * Returns  0 on success,
@@ -172,7 +172,7 @@ int32_t engine_add_source(int32_t handle,
 /* ── Host modules ─────────────────────────────────────────────────────────── */
 
 /*
- * Register a host module so that Gengo code can import it.
+ * Register a host module so that Gengoscript code can import it.
  * funcs: pointer to an array of gengo_host_module_func_def_t.
  * Returns 0 on success,
  *        -1 if the engine handle is invalid,

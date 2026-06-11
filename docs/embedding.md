@@ -1,4 +1,4 @@
-# gengo Embedding API
+# Gengoscript Embedding API
 
 `runtime/api.zig` is the stable host-facing entrypoint for embedding.
 
@@ -15,7 +15,7 @@
 | `module_source_provider` | `?api.SourceProvider` | `null` | Dynamic source callback (wins over `module_sources`) |
 | `host_modules` | `[]const api.HostModuleDesc` | `&.{}` | Host-defined modules importable via `host:` prefix |
 | `capabilities` | `[]const []const u8` | `&.{}` | Enabled capability names (e.g. `&.{"http", "fs"}`) |
-| `heap_size_bytes` | `usize` | preset default | Gengo heap size in bytes |
+| `heap_size_bytes` | `usize` | preset default | Gengoscript heap size in bytes |
 | `max_objects` | `usize` | preset default | Maximum live GC objects |
 | `max_stack` | `usize` | preset default | VM value stack depth |
 | `max_frames` | `usize` | preset default | Call frame limit |

@@ -1,4 +1,4 @@
-# gengo Language (Current Behavior)
+# Gengoscript Language (Current Behavior)
 
 This document defines the current language behavior implemented by gengo.
 It is intentionally versioned by implementation reality.

@@ -1,9 +1,9 @@
 'use strict';
 /**
- * release_gate.js — Safe release policy via Gengo scripting.
+ * release_gate.js — Safe release policy via Gengoscript scripting.
  *
  * A release pipeline needs to decide whether a deployment is allowed.
- * Each team writes a Gengo script that encodes their own rules. The pipeline
+ * Each team writes a Gengoscript script that encodes their own rules. The pipeline
  * evaluates each script in an isolated WASM engine — a policy script cannot
  * reach the filesystem, the network, or any host state the platform has not
  * explicitly provided. A buggy or malicious policy cannot crash the evaluator.
@@ -202,9 +202,9 @@ async function runPolicy([name, source, budget]) {
 
 async function main() {
   console.log();
-  console.log('Release gate — policy-as-code via Gengo');
+  console.log('Release gate — policy-as-code via Gengoscript');
   console.log(rule());
-  console.log('Each team supplies a Gengo script. The pipeline runs it in an isolated WASM engine.');
+  console.log('Each team supplies a Gengoscript script. The pipeline runs it in an isolated WASM engine.');
   console.log('The script can call host:pipeline functions; it cannot reach anything else.');
   console.log();
 

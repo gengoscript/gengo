@@ -1,4 +1,4 @@
-// Gengo language definition for Prism.js
+// Gengoscript language definition for Prism.js
 Prism.languages.gengo = {
   'comment': [
     {

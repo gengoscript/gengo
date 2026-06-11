@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Scriptable billing plugins — Gengo embedded in Python.
+Scriptable billing plugins — Gengoscript embedded in Python.
 
-Each merchant submits a Gengo script defining their own discount logic.
+Each merchant submits a Gengoscript script defining their own discount logic.
 The billing service loads each script into its own isolated engine,
 calls calculate_discount() with order data, and applies the result.
 
@@ -92,7 +92,7 @@ def rule():
 
 def main():
     print()
-    print("Scriptable billing — each merchant provides their own Gengo policy")
+    print("Scriptable billing — each merchant provides their own Gengoscript policy")
     print(rule())
     print()
 

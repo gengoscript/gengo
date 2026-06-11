@@ -1,4 +1,4 @@
-# Gengo Bytecode Cache — File Format Specification
+# Gengoscript Bytecode Cache — File Format Specification
 
 **Status:** Draft  
 **Version:** 0.4  
@@ -62,7 +62,7 @@ A GBC file is a **compiled module artifact**. It answers one question:
 
 > Can parsing, type-checking, and code generation be skipped for this source input under this runtime?
 
-A GBC file contains the bytecode, constant pool, function table, type metadata, import/export declarations, and optional debug information produced by the Gengo compiler. It does not contain live heap state, open resources, or VM execution state.
+A GBC file contains the bytecode, constant pool, function table, type metadata, import/export declarations, and optional debug information produced by the Gengoscript compiler. It does not contain live heap state, open resources, or VM execution state.
 
 Loading a valid GBC file into a fresh VM must be equivalent to compiling the original source under the same conditions. No observable behaviour may differ.
 
@@ -72,7 +72,7 @@ A GBC file is not a **snapshot** of a running VM. Serialising the live object he
 
 ### Script vs module philosophy
 
-The intent is that every Gengo source file is module-shaped. An `ENTRY_SCRIPT` artifact is a module that also carries executable top-level code — it is not a fundamentally different kind of entity. The distinction is operational (how the host runs it) rather than structural (what the artifact contains). Future versions of this format should converge `ENTRY_SCRIPT` and `ENTRY_MODULE`: a script is a module with an entrypoint, and a module with public declarations is importable regardless of whether it also has a top-level body.
+The intent is that every Gengoscript source file is module-shaped. An `ENTRY_SCRIPT` artifact is a module that also carries executable top-level code — it is not a fundamentally different kind of entity. The distinction is operational (how the host runs it) rather than structural (what the artifact contains). Future versions of this format should converge `ENTRY_SCRIPT` and `ENTRY_MODULE`: a script is a module with an entrypoint, and a module with public declarations is importable regardless of whether it also has a top-level body.
 
 ---
 
@@ -173,8 +173,8 @@ The header begins at file offset 8. Its total size in bytes — including the `h
 | 10 | 2 | 2 | `u16` | `header_version` | Version of this header layout. Current value: 1. |
 | 12 | 4 | 2 | `u16` | `format_major` | Bytecode format major version. |
 | 14 | 6 | 2 | `u16` | `format_minor` | Bytecode format minor version. |
-| 16 | 8 | 2 | `u16` | `language_major` | Gengo language major version. |
-| 18 | 10 | 2 | `u16` | `language_minor` | Gengo language minor version. |
+| 16 | 8 | 2 | `u16` | `language_major` | Gengoscript language major version. |
+| 18 | 10 | 2 | `u16` | `language_minor` | Gengoscript language minor version. |
 | 20 | 12 | 4 | `u32` | `flags` | Compilation flags bitfield. See §6.2. |
 | 24 | 16 | 4 | `u32` | `target_id` | Target platform identifier. See §6.3. |
 | 28 | 20 | 4 | `u32` | `backend_id` | Bytecode backend identifier. See §6.4. |
@@ -905,7 +905,7 @@ Each module artifact stores `source_graph_hash` covering only its own transitive
 
 ## 14. Future: GSI Artifact Class
 
-A **Gengo Snapshot Image** (`.gsi`) would contain all GBC content plus a serialised representation of live VM state at a checkpoint. The GSI format would reuse the GBC header with a different entry kind or a distinct magic sequence, and add sections for:
+A **Gengoscript Snapshot Image** (`.gsi`) would contain all GBC content plus a serialised representation of live VM state at a checkpoint. The GSI format would reuse the GBC header with a different entry kind or a distinct magic sequence, and add sections for:
 
 - `SEC_HEAP_SNAPSHOT` — Object pool serialised with pointer swizzling (pointers replaced by pool indices).
 - `SEC_GLOBALS_SNAPSHOT` — Global variable table with values as pool references or primitives.

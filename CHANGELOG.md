@@ -1,4 +1,4 @@
-# gengo Changelog
+# Gengoscript Changelog
 
 This changelog tracks notable language/runtime changes by implementation date.
 
@@ -18,7 +18,7 @@ an instruction boundary. Regression test: spec 186.
 ### New Example — Mosquitto ACL Plugin
 
 `examples/mosquitto-acl/`: a Mosquitto v5 broker plugin (C) that delegates
-ACL and basic-auth decisions to a Gengo policy script via the C engine API.
+ACL and basic-auth decisions to a Gengoscript policy script via the C engine API.
 Fail-closed, per-call instruction budget, SIGHUP policy reload.
 
 ## 2026-06-09
@@ -63,7 +63,7 @@ Non-finite float values now produce a runtime error at the point of use rather t
 
 `engine_call` / `engine_run` return values no longer silently drop non-primitive types. New mappings:
 
-| Gengo type | Wire tag |
+| Gengoscript type | Wire tag |
 |---|---|
 | `struct` | `5` (`map`) — field names as keys |
 | `rune` | `1` (`number`) — Unicode code point |
@@ -80,7 +80,7 @@ Non-finite float values now produce a runtime error at the point of use rather t
 
 ### Fix — `cap:http` Availability
 
-`cap:http` is now importable from Gengo scripts and dispatches to the host HTTP handler. Added conformance spec tests with a mock handler. HTTP calls still incur ~900 ms cold-start on the native CLI due to `std.Io.Threaded` in the HTTP implementation (tracked in issue #72).
+`cap:http` is now importable from Gengoscript scripts and dispatches to the host HTTP handler. Added conformance spec tests with a mock handler. HTTP calls still incur ~900 ms cold-start on the native CLI due to `std.Io.Threaded` in the HTTP implementation (tracked in issue #72).
 
 ### Fix — Template GC Safety
 
@@ -135,7 +135,7 @@ ABI version bumped to `2`. Capability bits `3`–`7` guard the new calls; the VM
 
 ### Embedding — Host-Defined Module Registration
 
-Host code can register named modules that Gengo scripts import by name:
+Host code can register named modules that Gengoscript scripts import by name:
 
 ```c
 gengo_host_module_func_def_t funcs[] = {

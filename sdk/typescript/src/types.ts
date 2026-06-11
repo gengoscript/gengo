@@ -1,4 +1,4 @@
-/** A Gengo value that can be converted to/from ValueWire. */
+/** A Gengoscript value that can be converted to/from ValueWire. */
 export type GVal =
   | { t: "null" }
   | { t: "bool"; v: boolean }

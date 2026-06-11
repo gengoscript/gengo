@@ -1,10 +1,10 @@
-# gengo Open Items
+# Gengoscript Open Items
 
 Things that are partially built or not yet complete.
 
 ---
 
-## 1. GBC — Gengo Bytecode Cache
+## 1. GBC — Gengoscript Bytecode Cache
 
 **Status:** spec complete (`docs/gbc-spec.md`), implementation not started.
 

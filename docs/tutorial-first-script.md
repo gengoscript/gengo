@@ -1,4 +1,4 @@
-# gengo Tutorial: First Script
+# Gengoscript Tutorial: First Script
 
 This walkthrough takes you from build to a working script with verified output.
 

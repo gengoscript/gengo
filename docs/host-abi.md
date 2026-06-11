@@ -1,4 +1,4 @@
-# gengo Host ABI v2
+# Gengoscript Host ABI v2
 
 This document defines the host bridge used when gengo VM native backend is set to `host`.
 
