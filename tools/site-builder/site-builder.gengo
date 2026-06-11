@@ -1,0 +1,391 @@
+// site-builder.gengo — Static site generator for Gengoscript documentation.
+//
+// Usage (from repository root):
+//   gengo --cap fs --mount root=. tools/site-builder/site-builder.gengo
+//
+// Reads .md files from root/docs/ && writes HTML to root/build/site/.
+// Requires cap:fs capability.
+
+std := import("std")
+fs := import("cap:fs")
+
+// ── Configuration ────────────────────────────────────────────────────────────
+
+var srcDir  := "root/docs"
+var outDir  := "root/build/site"
+var cssPath := "style.css"
+
+// ── String helpers ───────────────────────────────────────────────────────────
+
+func endsWith(s string, suffix string) bool {
+    if std.core.len(s) < std.core.len(suffix) { return false }
+    return s[std.core.len(s)-std.core.len(suffix):std.core.len(s)] == suffix
+}
+
+func startsWith(s string, prefix string) bool {
+    if std.core.len(s) < std.core.len(prefix) { return false }
+    return s[0:std.core.len(prefix)] == prefix
+}
+
+func replaceAll(s string, old string, new string) string {
+    var result := ""
+    var i := 0
+    for i < std.core.len(s) {
+        if i + std.core.len(old) <= std.core.len(s) && s[i:i+std.core.len(old)] == old {
+            result += new
+            i += std.core.len(old)
+        } else {
+            result += s[i:i+1]
+            i += 1
+        }
+    }
+    return result
+}
+
+func escapeHtml(s string) string {
+    s = replaceAll(s, "&", "&amp;")
+    s = replaceAll(s, "<", "&lt;")
+    s = replaceAll(s, ">", "&gt;")
+    return s
+}
+
+func trim(s string) string {
+    var start := 0
+    var end := std.core.len(s)
+    for start < end && (s[start] == ' ' || s[start] == '\t' || s[start] == '\n' || s[start] == '\r') {
+        start += 1
+    }
+    for end > start && (s[end-1] == ' ' || s[end-1] == '\t' || s[end-1] == '\n' || s[end-1] == '\r') {
+        end -= 1
+    }
+    return s[start:end]
+}
+
+func trimEnd(s string) string {
+    var end := std.core.len(s)
+    for end > 0 && (s[end-1] == ' ' || s[end-1] == '\t' || s[end-1] == '\n' || s[end-1] == '\r') {
+        end -= 1
+    }
+    return s[0:end]
+}
+
+func basename(path string) string {
+    var i := std.core.len(path) - 1
+    for i >= 0 && path[i] != '/' {
+        i -= 1
+    }
+    return path[i+1:]
+}
+
+func stripExt(path string) string {
+    var i := std.core.len(path) - 1
+    for i >= 0 && path[i] != '.' && path[i] != '/' {
+        i -= 1
+    }
+    if i >= 0 && path[i] == '.' {
+        return path[0:i]
+    }
+    return path
+}
+
+// ── Markdown → HTML ─────────────────────────────────────────────────────────
+
+func mdToHtml(src string) string {
+    var html := std.string.builder()
+    var lines := std.string.split(src, "\n")
+    var i := 0
+    var inCode := false
+    var codeBuf := ""
+    var inList := false
+    var paraBuf := ""
+
+    func flushPara() {
+        if paraBuf != "" {
+            var p := trimEnd(paraBuf)
+            if p != "" {
+                html.write("<p>")
+                html.write(inlineMdToHtml(p))
+                html.write("</p>\n")
+            }
+            paraBuf = ""
+        }
+    }
+
+    func flushList() {
+        if inList {
+            html.write("</ul>\n")
+            inList = false
+        }
+    }
+
+    for i < std.core.len(lines) {
+        var line := lines[i]
+        i += 1
+
+        // Code blocks
+        if startsWith(line, "```") {
+            if inCode {
+                html.write("<pre><code>")
+                html.write(escapeHtml(trimEnd(codeBuf)))
+                html.write("</code></pre>\n")
+                codeBuf = ""
+                inCode = false
+            } else {
+                flushPara()
+                flushList()
+                inCode = true
+            }
+            continue
+        }
+        if inCode {
+            codeBuf += line + "\n"
+            continue
+        }
+
+        // Headers
+        if startsWith(line, "# ") {
+            flushPara()
+            flushList()
+            html.write("<h1>")
+            html.write(inlineMdToHtml(line[2:]))
+            html.write("</h1>\n")
+            continue
+        }
+        if startsWith(line, "## ") {
+            flushPara()
+            flushList()
+            html.write("<h2>")
+            html.write(inlineMdToHtml(line[3:]))
+            html.write("</h2>\n")
+            continue
+        }
+        if startsWith(line, "### ") {
+            flushPara()
+            flushList()
+            html.write("<h3>")
+            html.write(inlineMdToHtml(line[4:]))
+            html.write("</h3>\n")
+            continue
+        }
+
+        // Horizontal rule
+        if line == "---" || line == "***" || line == "___" {
+            flushPara()
+            flushList()
+            html.write("<hr>\n")
+            continue
+        }
+
+        // Blockquote
+        if startsWith(line, "> ") {
+            flushPara()
+            flushList()
+            html.write("<blockquote>")
+            html.write(inlineMdToHtml(line[2:]))
+            html.write("</blockquote>\n")
+            continue
+        }
+
+        // List items
+        if startsWith(line, "- ") || startsWith(line, "* ") {
+            flushPara()
+            if !inList {
+                html.write("<ul>\n")
+                inList = true
+            }
+            html.write("<li>")
+            html.write(inlineMdToHtml(line[2:]))
+            html.write("</li>\n")
+            continue
+        }
+
+        // Empty line
+        if trim(line) == "" {
+            flushPara()
+            continue
+        }
+
+        // Paragraph continuation
+        if paraBuf != "" {
+            paraBuf += " "
+        }
+        paraBuf += line
+    }
+
+    flushPara()
+    flushList()
+    return html.str()
+}
+
+// Inline markdown: bold, italic, inline code, links
+func inlineMdToHtml(s string) string {
+    var i := 0
+    var result := std.string.builder()
+    for i < std.core.len(s) {
+        // Links: [text](url)
+        if s[i] == '[' {
+            var j := i + 1
+            var text := ""
+            for j < std.core.len(s) && s[j] != ']' {
+                text += s[j:j+1]
+                j += 1
+            }
+            if j < std.core.len(s) && s[j] == ']' && j + 1 < std.core.len(s) && s[j+1] == '(' {
+                var k := j + 2
+                var url := ""
+                for k < std.core.len(s) && s[k] != ')' {
+                    url += s[k:k+1]
+                    k += 1
+                }
+                if k < std.core.len(s) && s[k] == ')' {
+                    result.write("<a href=\"" + url + "\">" + inlineMdToHtml(text) + "</a>")
+                    i = k + 1
+                    continue
+                }
+            }
+        }
+
+        // Images: ![alt](url)
+        if s[i] == '!' && i + 1 < std.core.len(s) && s[i+1] == '[' {
+            var j := i + 2
+            var alt := ""
+            for j < std.core.len(s) && s[j] != ']' {
+                alt += s[j:j+1]
+                j += 1
+            }
+            if j < std.core.len(s) && s[j] == ']' && j + 1 < std.core.len(s) && s[j+1] == '(' {
+                var k := j + 2
+                var url := ""
+                for k < std.core.len(s) && s[k] != ')' {
+                    url += s[k:k+1]
+                    k += 1
+                }
+                if k < std.core.len(s) && s[k] == ')' {
+                    result.write("<img src=\"" + url + "\" alt=\"" + alt + "\">")
+                    i = k + 1
+                    continue
+                }
+            }
+        }
+
+        // Bold: **text**
+        if i + 1 < std.core.len(s) && s[i] == '*' && s[i+1] == '*' {
+            var j := i + 2
+            var text := ""
+            for j < std.core.len(s) {
+                if j + 1 < std.core.len(s) && s[j] == '*' && s[j+1] == '*' {
+                    result.write("<strong>" + inlineMdToHtml(text) + "</strong>")
+                    i = j + 2
+                    break
+                }
+                text += s[j:j+1]
+                j += 1
+            }
+            if i > j - 2 { continue }
+        }
+
+        // Italic: *text* || _text_
+        if s[i] == '*' || s[i] == '_' {
+            var ch := s[i]
+            var j := i + 1
+            var text := ""
+            for j < std.core.len(s) {
+                if s[j] == ch {
+                    result.write("<em>" + inlineMdToHtml(text) + "</em>")
+                    i = j + 1
+                    break
+                }
+                text += s[j:j+1]
+                j += 1
+            }
+            if i > j - 1 { continue }
+        }
+
+        // Inline code: `text`
+        if s[i] == '`' {
+            var j := i + 1
+            var text := ""
+            for j < std.core.len(s) {
+                if s[j] == '`' {
+                    result.write("<code>" + escapeHtml(text) + "</code>")
+                    i = j + 1
+                    break
+                }
+                text += s[j:j+1]
+                j += 1
+            }
+            if i > j - 1 { continue }
+        }
+
+        result.write(s[i:i+1])
+        i += 1
+    }
+    return result.str()
+}
+
+// Extract title from first H1, || use filename
+func extractTitle(html string, filename string) string {
+    var i := 0
+    for i < std.core.len(html) - 4 {
+        if html[i:i+4] == "<h1>" {
+            var j := i + 4
+            var title := ""
+            for j < std.core.len(html) && html[j:j+5] != "</h1>" {
+                title += html[j:j+1]
+                j += 1
+            }
+            return title
+        }
+        i += 1
+    }
+    return filename
+}
+
+func wrapPage(title string, body string, cssPath string) string {
+    return "<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n<title>" + title + "</title>\n<link rel=\"stylesheet\" href=\"" + cssPath + "\">\n</head>\n<body>\n<main>\n" + body + "\n</main>\n</body>\n</html>\n"
+}
+
+// ── Main ─────────────────────────────────────────────────────────────────────
+
+func main() {
+    // Create output directory
+    fs.mkdir(outDir)
+
+    // Collect .md files
+    var files := fs.list(srcDir)
+    var mdFiles := []
+    for f in files {
+        if endsWith(f, ".md") {
+            mdFiles = std.core.append(mdFiles, f)
+        }
+    }
+
+    // Build pages
+    var navItems := []
+    for f in mdFiles {
+        var path string = srcDir + "/" + f
+        var content := fs.read(path)
+        var htmlBody := mdToHtml(content)
+        var title := extractTitle(htmlBody, stripExt(f))
+        var outName := stripExt(f) + ".html"
+        var outPath := outDir + "/" + outName
+
+        var page := wrapPage(title, htmlBody, cssPath)
+        fs.write(outPath, page)
+
+        navItems = std.core.append(navItems, {"title": title, "path": outName})
+    }
+
+    // Write index page
+    var indexBody := "<h1>Gengoscript Documentation</h1>\n<ul>\n"
+    for item in navItems {
+        indexBody += "<li><a href=\"" + item.path + "\">" + item.title + "</a></li>\n"
+    }
+    indexBody += "</ul>\n"
+    var indexPage := wrapPage("Gengoscript Docs", indexBody, cssPath)
+    fs.write(outDir + "/index.html", indexPage)
+
+    std.io.println("Built " + std.conv.to_string(std.core.len(mdFiles)) + " pages to " + outDir)
+}
+
+main()
