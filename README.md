@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Zig](https://img.shields.io/badge/Zig-0.16.0-orange?logo=zig)](https://ziglang.org/)
 
-Domain constraints belong in the type system, not in validation code written after the fact. Gengo is a small embeddable scripting engine built around that idea.
+Domain constraints belong in the type system, not in validation code written after the fact. Gengo is a small embeddable scripting language built around that idea — a sandboxed scripting engine written in Zig that runs natively or as WebAssembly.
 
 You write the host application. Your users write Gengo scripts. The engine runs those scripts in a controlled environment, where the host decides what scripts are allowed to see, call, and consume.
 
