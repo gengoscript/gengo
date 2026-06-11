@@ -1,0 +1,2 @@
+type A struct { x func(B) }
+type B struct { y A }

@@ -619,6 +619,39 @@ pub fn parseSignedNumber(c: anytype) !f64 {
     return sign * n;
 }
 
+fn checkStructFieldType(c: anytype, spec: FieldTypeSpec, qself: []const u8) !void {
+    for (spec.alts) |alt| {
+        switch (alt.typ) {
+            .struct_t => {
+                if (common.streq(alt.struct_name, qself)) {
+                    c.setErr("struct type '{s}' cannot reference itself", .{alt.struct_name});
+                    return error.UnknownStructType;
+                }
+                if (!c.isKnownLocalStructType(alt.struct_name)) {
+                    c.setErr("unknown struct type '{s}'", .{alt.struct_name});
+                    return error.UnknownStructType;
+                }
+            },
+            .array => {
+                if (alt.elem_spec) |es| try checkStructFieldType(c, es, qself);
+            },
+            .map => {
+                if (alt.key_spec) |ks| try checkStructFieldType(c, ks, qself);
+                if (alt.val_spec) |vs| try checkStructFieldType(c, vs, qself);
+            },
+            .func_t => {
+                if (alt.func_params) |params| {
+                    for (params) |param| try checkStructFieldType(c, param, qself);
+                }
+                if (alt.func_returns) |returns| {
+                    for (returns) |ret| try checkStructFieldType(c, ret, qself);
+                }
+            },
+            else => {},
+        }
+    }
+}
+
 pub fn structDeclBody(c: anytype, kw: Token, name: Token, is_pub: bool) !void {
     try c.registry.addStructType(name.src);
     try c.consume(.lbrace);
@@ -641,16 +674,7 @@ pub fn structDeclBody(c: anytype, kw: Token, name: Token, is_pub: bool) !void {
             if (c.cur.typ == .ident or c.cur.typ == .question or c.cur.typ == .kw_func or c.cur.typ == .lbracket) {
                 // Space syntax: field type  (colon no longer used)
                 spec.typ = try parseFieldTypeSpec(c, );
-                var ti: usize = 0;
-                while (ti < spec.typ.alts.len) : (ti += 1) {
-                    const alt = spec.typ.alts[ti];
-                    if (alt.typ == .struct_t) {
-                        // Policy: no forward refs and no self refs.
-                        const qself = try c.qualifyTypeName(name.src);
-                        if (common.streq(alt.struct_name, qself)) { c.setErr("unknown struct type '{s}'", .{alt.struct_name}); return error.UnknownStructType; }
-                        if (!c.isKnownLocalStructType(alt.struct_name)) { c.setErr("unknown struct type '{s}'", .{alt.struct_name}); return error.UnknownStructType; }
-                    }
-                }
+                try checkStructFieldType(c, spec.typ, try c.qualifyTypeName(name.src));
             } else {
                 const alts = heap.bump(FieldTypeAlt, 1) orelse return error.OutOfMemory;
                 alts[0] = .{ .typ = .any };

@@ -1,0 +1,20 @@
+std := import("std")
+
+type B struct { val int }
+type Inner struct { name string }
+
+type A struct {
+    items []B,
+    lookup [string]Inner,
+    flag int | string
+}
+
+a := A{
+    items: [B{ val: 10 }, B{ val: 20 }],
+    lookup: { "x": Inner{ name: "ex" } },
+    flag: 42
+}
+std.io.println(a.items[0].val)
+std.io.println(a.items[1].val)
+std.io.println(a.lookup["x"].name)
+std.io.println(a.flag)
