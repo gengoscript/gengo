@@ -10,7 +10,7 @@ Companion guides:
 - `docs/testing.md`
 - `docs/host-abi.md`
 - `docs/host-abi-v2-plan.md`
-- `docs/changelog.md`
+- `CHANGELOG.md`
 - `docs/embedding.md`
 
 ## 1. Positioning

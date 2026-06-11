@@ -58,7 +58,7 @@ zig build -Dpreset=dev engine-native
 # zig-out/lib/libgengo-engine.so  (Linux)
 ```
 
-See `gengo-engine.h` for the C API and `docs/engine-api.md` for the full reference.
+See `include/gengo-engine.h` for the C API and `docs/engine-api.md` for the full reference.
 
 ## Run a Script (WASI)
 
