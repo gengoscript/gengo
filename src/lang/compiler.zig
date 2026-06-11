@@ -449,17 +449,24 @@ pub const Compiler = struct {
 
     pub fn ensureMutableBinding(self: *Compiler, name: Token) !void {
         if (self.resolveLocalConst(name.src)) |is_const| {
-            if (is_const) { self.setErr("cannot assign to const variable '{s}'", .{name.src}); return error.AssignToConst; }
+            if (is_const) return self.constAssignErr(name);
             return;
         }
         if (self.resolveUpvalueConst(name.src)) |is_const| {
-            if (is_const) { self.setErr("cannot assign to const variable '{s}'", .{name.src}); return error.AssignToConst; }
+            if (is_const) return self.constAssignErr(name);
             return;
         }
-        if (self.registry.hasGlobalConst(name.src)) { self.setErr("cannot assign to const variable '{s}'", .{name.src}); return error.AssignToConst; }
+        if (self.registry.hasGlobalConst(name.src)) return self.constAssignErr(name);
         if (self.options.check_global_is_const) |f| {
-            if (f(self.options.check_global_ctx.?, name.src)) { self.setErr("cannot assign to const variable '{s}'", .{name.src}); return error.AssignToConst; }
+            if (f(self.options.check_global_ctx.?, name.src)) return self.constAssignErr(name);
         }
+    }
+
+    fn constAssignErr(self: *Compiler, name: Token) anyerror {
+        self.setErr("cannot assign to const variable '{s}'", .{name.src});
+        self.err_line = name.line;
+        self.err_col = @intCast(name.col);
+        return error.AssignToConst;
     }
 
     fn addUpvalueToScope(self: *Compiler, scope_index: u8, name: []const u8, index: u8, from_upvalue: bool) ?u8 {

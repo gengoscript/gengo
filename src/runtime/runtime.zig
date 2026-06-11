@@ -283,7 +283,11 @@ pub const Runtime = struct {
             .check_global_ctx = self,
         });
         compiler.compile(true) catch |err| {
-            self.last_compile_line = compiler.prev.line;
+            // Must be nonzero: api.zig classifies compile vs runtime errors by
+            // last_compile_line != 0, and a REPL line may carry no token line.
+            self.last_compile_line = if (compiler.err_line != 0)
+                compiler.err_line
+            else if (compiler.prev.line != 0) compiler.prev.line else 1;
             self.last_compile_col = compiler.err_col;
             self.last_compile_msg_len = compiler.err_msg_len;
             @memcpy(self.last_compile_msg_buf[0..compiler.err_msg_len], compiler.err_msg_buf[0..compiler.err_msg_len]);
