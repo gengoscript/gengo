@@ -1,1 +1,2 @@
 TypeError
+cannot apply '+' to Age and Score; convert one side explicitly before applying '+'

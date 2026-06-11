@@ -98,6 +98,100 @@ fn namedTypeCarrier(a: Value, b: Value) !?*Object {
     return error.TypeError;
 }
 
+fn namedBaseName(base: vmod.NamedTypeBase) []const u8 {
+    return switch (base) {
+        .int => "int",
+        .float => "float",
+        .decimal => "decimal",
+        .string => "string",
+        .bool => "bool",
+        .rune => "rune",
+        .array_t => "array",
+        .map_t => "map",
+        .enum_t => "enum",
+    };
+}
+
+fn runtimeTypeName(v: Value) []const u8 {
+    return switch (v) {
+        .int => "int",
+        .float => "float",
+        .decimal => "decimal",
+        .rune => "rune",
+        .boolean => "bool",
+        .string => "string",
+        .error_value => "error",
+        .null => "null",
+        .object => |obj| switch (obj.*) {
+            .named_value => obj.named_value.typ.named_type.name,
+            .dyn_string => "string",
+            .array, .array_managed => "array",
+            .map, .map_managed, .map_hashed => "map",
+            .function, .closure => "func",
+            else => "object",
+        },
+    };
+}
+
+fn setBinaryTypeError(op: []const u8, a: Value, b: Value) void {
+    const a_named = a == .object and a.object.* == .named_value;
+    const b_named = b == .object and b.object.* == .named_value;
+    if (a_named and b_named) {
+        const ta = a.object.named_value.typ.named_type;
+        const tb = b.object.named_value.typ.named_type;
+        if (ta.base == tb.base and !namedTypeIsSubOf(a.object.named_value.typ, b.object.named_value.typ) and !namedTypeIsSubOf(b.object.named_value.typ, a.object.named_value.typ)) {
+            vms.setRuntimeErr("cannot apply '{s}' to {s} and {s}; convert one side explicitly before applying '{s}'", .{ op, ta.name, tb.name, op });
+            return;
+        }
+    } else if (a_named != b_named) {
+        const named_v = if (a_named) a else b;
+        const raw_v = if (a_named) b else a;
+        const named_typ = named_v.object.named_value.typ.named_type;
+        const raw_name = runtimeTypeName(raw_v);
+        vms.setRuntimeErr("cannot apply '{s}' to {s} and {s}; wrap the {s} with {s}(...) or unwrap the named value with {s}(...)", .{
+            op,
+            named_typ.name,
+            raw_name,
+            raw_name,
+            named_typ.name,
+            namedBaseName(named_typ.base),
+        });
+        return;
+    }
+    if ((a == .int and b == .float) or (a == .float and b == .int)) {
+        vms.setRuntimeErr("cannot apply '{s}' to {s} and {s}; use matching numeric types such as 2.0 or float(2)", .{
+            op,
+            runtimeTypeName(a),
+            runtimeTypeName(b),
+        });
+        return;
+    }
+    vms.setRuntimeErr("cannot apply '{s}' to {s} and {s}", .{ op, runtimeTypeName(a), runtimeTypeName(b) });
+}
+
+fn valueAsNumberForOp(v: Value, other: Value, op: []const u8) !f64 {
+    return vms.valueAsNumber(v) catch |err| {
+        if (err == error.TypeError) setBinaryTypeError(op, v, other);
+        return err;
+    };
+}
+
+fn valueAsNumberForCompare(v: Value, other: Value) !f64 {
+    return vms.valueAsNumber(v) catch |err| {
+        if (err == error.TypeError) {
+            vms.setRuntimeErr("cannot compare {s} and {s}", .{ runtimeTypeName(v), runtimeTypeName(other) });
+        }
+        return err;
+    };
+}
+
+fn valueAsIntForOp(v: Value, other: Value, op: []const u8) !i64 {
+    return vms.valueAsInt(v) catch |err| {
+        if (err == error.TypeError) setBinaryTypeError(op, v, other);
+        return err;
+    };
+}
+
 fn checkNamedValueCompatibility(a: Value, b: Value) !void {
     const a_named = a == .object and a.object.* == .named_value;
     const b_named = b == .object and b.object.* == .named_value;
@@ -105,9 +199,18 @@ fn checkNamedValueCompatibility(a: Value, b: Value) !void {
         if (a.object.named_value.typ != b.object.named_value.typ) {
             const ta = a.object.named_value.typ;
             const tb = b.object.named_value.typ;
-            if (!namedTypeIsSubOf(ta, tb) and !namedTypeIsSubOf(tb, ta)) return error.TypeError;
+            if (!namedTypeIsSubOf(ta, tb) and !namedTypeIsSubOf(tb, ta)) {
+                vms.setRuntimeErr("cannot mix {s} and {s}; convert one side explicitly", .{ ta.named_type.name, tb.named_type.name });
+                return error.TypeError;
+            }
         }
     } else if (a_named != b_named) {
+        const named = if (a_named) a else b;
+        const plain = if (a_named) b else a;
+        const nt_name = named.object.named_value.typ.named_type.name;
+        vms.setRuntimeErr("cannot mix {s} and {s}; wrap the {s} with {s}(...) or unwrap the named value with {s}(...)", .{
+            nt_name, runtimeTypeName(plain), runtimeTypeName(plain), nt_name, runtimeTypeName(plain),
+        });
         return error.TypeError;
     }
 }
@@ -149,13 +252,16 @@ fn makeNumeric(tag: VTag, n: f64) Value {
     };
 }
 
-fn pushNumericResultWithCarrier(a: Value, b: Value, n: f64, tag: VTag) !void {
+fn pushNumericResultWithCarrier(a: Value, b: Value, n: f64, tag: VTag, op: []const u8) !void {
     if (!std.math.isFinite(n)) {
         vms.setRuntimeErr("non-finite value in arithmetic operation", .{});
         return error.TypeError;
     }
     const val = makeNumeric(tag, n);
-    const carrier = try namedTypeCarrier(a, b);
+    const carrier = namedTypeCarrier(a, b) catch |err| {
+        if (err == error.TypeError) setBinaryTypeError(op, a, b);
+        return err;
+    };
     if (carrier) |typ| {
         const wrapped = try vmtyp.coerceNamedTypeResult(typ, val);
         try checkNamedTypePredicate(typ, wrapped.object.named_value.value);
@@ -1698,10 +1804,13 @@ fn runInner() !void {
                     if (result[1] != 0) return error.TypeError;
                     try pushDecimalResultWithCarrier(dop.typ, result[0]);
                 } else {
-                    const tag = try numericOpTag(a, b);
-                    const an = try vms.valueAsNumber(a);
-                    const bn = try vms.valueAsNumber(b);
-                    try pushNumericResultWithCarrier(a, b, an + bn, tag);
+                    const tag = numericOpTag(a, b) catch |err| {
+                        if (err == error.TypeError) setBinaryTypeError("+", a, b);
+                        return err;
+                    };
+                    const an = try valueAsNumberForOp(a, b, "+");
+                    const bn = try valueAsNumberForOp(b, a, "+");
+                    try pushNumericResultWithCarrier(a, b, an + bn, tag, "+");
                 }
             },
             .sub => {
@@ -1712,10 +1821,13 @@ fn runInner() !void {
                     if (result[1] != 0) return error.TypeError;
                     try pushDecimalResultWithCarrier(dop.typ, result[0]);
                 } else {
-                    const tag = try numericOpTag(a, b);
-                    const an = try vms.valueAsNumber(a);
-                    const bn = try vms.valueAsNumber(b);
-                    try pushNumericResultWithCarrier(a, b, an - bn, tag);
+                    const tag = numericOpTag(a, b) catch |err| {
+                        if (err == error.TypeError) setBinaryTypeError("-", a, b);
+                        return err;
+                    };
+                    const an = try valueAsNumberForOp(a, b, "-");
+                    const bn = try valueAsNumberForOp(b, a, "-");
+                    try pushNumericResultWithCarrier(a, b, an - bn, tag, "-");
                 }
             },
             .mul => {
@@ -1736,10 +1848,13 @@ fn runInner() !void {
                     if (result[1] != 0) return error.TypeError;
                     try pushDecimalResultWithCarrier(b.object.named_value.typ, result[0]);
                 } else {
-                    const tag = try numericOpTag(a, b);
-                    const an = try vms.valueAsNumber(a);
-                    const bn = try vms.valueAsNumber(b);
-                    try pushNumericResultWithCarrier(a, b, an * bn, tag);
+                    const tag = numericOpTag(a, b) catch |err| {
+                        if (err == error.TypeError) setBinaryTypeError("*", a, b);
+                        return err;
+                    };
+                    const an = try valueAsNumberForOp(a, b, "*");
+                    const bn = try valueAsNumberForOp(b, a, "*");
+                    try pushNumericResultWithCarrier(a, b, an * bn, tag, "*");
                 }
             },
             .div => {
@@ -1754,60 +1869,69 @@ fn runInner() !void {
                     if (d == std.math.minInt(i64) and divisor == -1) return error.TypeError;
                     try pushDecimalResultWithCarrier(a.object.named_value.typ, @divTrunc(d, divisor));
                 } else {
-                    const tag = try numericOpTag(a, b);
-                    const an = try vms.valueAsNumber(a);
-                    const bn = try vms.valueAsNumber(b);
+                    const tag = numericOpTag(a, b) catch |err| {
+                        if (err == error.TypeError) setBinaryTypeError("/", a, b);
+                        return err;
+                    };
+                    const an = try valueAsNumberForOp(a, b, "/");
+                    const bn = try valueAsNumberForOp(b, a, "/");
                     if (bn == 0.0) { vms.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
                     if (a == .int and b == .int) {
-                        try pushNumericResultWithCarrier(a, b, an / bn, .float);
+                        try pushNumericResultWithCarrier(a, b, an / bn, .float, "/");
                     } else {
-                        try pushNumericResultWithCarrier(a, b, an / bn, tag);
+                        try pushNumericResultWithCarrier(a, b, an / bn, tag, "/");
                     }
                 }
             },
             .mod => {
                 const b = try vmPop();
                 const a = try vmPop();
-                const tag = try numericOpTag(a, b);
-                const an = try vms.valueAsNumber(a);
-                const bn = try vms.valueAsNumber(b);
+                const tag = numericOpTag(a, b) catch |err| {
+                    if (err == error.TypeError) setBinaryTypeError("%", a, b);
+                    return err;
+                };
+                const an = try valueAsNumberForOp(a, b, "%");
+                const bn = try valueAsNumberForOp(b, a, "%");
                 if (bn == 0.0) { vms.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
-                try pushNumericResultWithCarrier(a, b, common.fmod(an, bn), tag);
+                try pushNumericResultWithCarrier(a, b, common.fmod(an, bn), tag, "%");
             },
             .pow => {
                 const b = try vmPop();
                 const a = try vmPop();
-                const tag = try numericOpTag(a, b);
-                const an = try vms.valueAsNumber(a);
-                const bn = try vms.valueAsNumber(b);
-                try pushNumericResultWithCarrier(a, b, std.math.pow(f64, an, bn), tag);
+                const tag = numericOpTag(a, b) catch |err| {
+                    if (err == error.TypeError) setBinaryTypeError("**", a, b);
+                    return err;
+                };
+                const an = try valueAsNumberForOp(a, b, "**");
+                const bn = try valueAsNumberForOp(b, a, "**");
+                try pushNumericResultWithCarrier(a, b, std.math.pow(f64, an, bn), tag, "**");
             },
             .bit_and => {
                 const b = try vmPop();
                 const a = try vmPop();
-                const an = try vms.valueAsInt(a);
-                const bn = try vms.valueAsInt(b);
+                const an = try valueAsIntForOp(a, b, "&");
+                const bn = try valueAsIntForOp(b, a, "&");
                 const result = an & bn;
                 if (result > (1 << 53) or result < -(1 << 53)) return error.RangeError;
-                try pushNumericResultWithCarrier(a, b, @floatFromInt(result), .int);
+                try pushNumericResultWithCarrier(a, b, @floatFromInt(result), .int, "&");
             },
             .bit_or => {
                 const b = try vmPop();
                 const a = try vmPop();
-                const an = try vms.valueAsInt(a);
-                const bn = try vms.valueAsInt(b);
+                const an = try valueAsIntForOp(a, b, "|");
+                const bn = try valueAsIntForOp(b, a, "|");
                 const result = an | bn;
                 if (result > (1 << 53) or result < -(1 << 53)) return error.RangeError;
-                try pushNumericResultWithCarrier(a, b, @floatFromInt(result), .int);
+                try pushNumericResultWithCarrier(a, b, @floatFromInt(result), .int, "|");
             },
             .bit_xor => {
                 const b = try vmPop();
                 const a = try vmPop();
-                const an = try vms.valueAsInt(a);
-                const bn = try vms.valueAsInt(b);
+                const an = try valueAsIntForOp(a, b, "^");
+                const bn = try valueAsIntForOp(b, a, "^");
                 const result = an ^ bn;
                 if (result > (1 << 53) or result < -(1 << 53)) return error.RangeError;
-                try pushNumericResultWithCarrier(a, b, @floatFromInt(result), .int);
+                try pushNumericResultWithCarrier(a, b, @floatFromInt(result), .int, "^");
             },
             .bit_not => {
                 const v = try vmPop();
@@ -1826,8 +1950,8 @@ fn runInner() !void {
             .shl => {
                 const b = try vmPop();
                 const a = try vmPop();
-                const an = try vms.valueAsInt(a);
-                const bn = try vms.valueAsInt(b);
+                const an = try valueAsIntForOp(a, b, "<<");
+                const bn = try valueAsIntForOp(b, a, "<<");
                 if (bn < 0) return error.RangeError;
                 const shift: u6 = @intCast(@min(bn, 63));
                 // Prevent signed left-shift overflow: if magnitude exceeds what i64 can hold after shift.
@@ -1835,18 +1959,18 @@ fn runInner() !void {
                 if (an < 0 and an < (@as(i64, std.math.minInt(i64)) >> shift)) return error.RangeError;
                 const result = an << shift;
                 if (result > (1 << 53) or result < -(1 << 53)) return error.RangeError;
-                try pushNumericResultWithCarrier(a, b, @floatFromInt(result), .int);
+                try pushNumericResultWithCarrier(a, b, @floatFromInt(result), .int, "<<");
             },
             .shr => {
                 const b = try vmPop();
                 const a = try vmPop();
-                const an = try vms.valueAsInt(a);
-                const bn = try vms.valueAsInt(b);
+                const an = try valueAsIntForOp(a, b, ">>");
+                const bn = try valueAsIntForOp(b, a, ">>");
                 if (bn < 0) return error.RangeError;
                 const shift: u6 = @intCast(@min(bn, 63));
                 const result = an >> shift;
                 if (result > (1 << 53) or result < -(1 << 53)) return error.RangeError;
-                try pushNumericResultWithCarrier(a, b, @floatFromInt(result), .int);
+                try pushNumericResultWithCarrier(a, b, @floatFromInt(result), .int, ">>");
             },
             .cast_int => {
                 const raw = try vmPop();
@@ -1967,7 +2091,10 @@ fn runInner() !void {
             },
             .neg => {
                 const v = try vmPop();
-                const n = try vms.valueAsNumber(v);
+                const n = vms.valueAsNumber(v) catch {
+                    vms.setRuntimeErr("cannot negate {s}", .{runtimeTypeName(v)});
+                    return error.TypeError;
+                };
                 if (v == .object and v.object.* == .named_value) {
                     const wrapped = try vmtyp.coerceNamedTypeResult(v.object.named_value.typ, if (v.object.named_value.typ.named_type.base == .float) .{ .float = -n } else .{ .int = -n });
                     try checkNamedTypePredicate(v.object.named_value.typ, wrapped.object.named_value.value);
@@ -1991,8 +2118,8 @@ fn runInner() !void {
                 const b = try vmPop();
                 const a = try vmPop();
                 try checkNamedValueCompatibility(a, b);
-                const an = try vms.valueAsNumber(a);
-                const bn = try vms.valueAsNumber(b);
+                const an = try valueAsNumberForCompare(a, b);
+                const bn = try valueAsNumberForCompare(b, a);
                 if (!std.math.isFinite(an) or !std.math.isFinite(bn)) { vms.setRuntimeErr("cannot compare non-finite value", .{}); return error.TypeError; }
                 try vmPush(.{ .boolean = an > bn });
             },
@@ -2000,8 +2127,8 @@ fn runInner() !void {
                 const b = try vmPop();
                 const a = try vmPop();
                 try checkNamedValueCompatibility(a, b);
-                const an = try vms.valueAsNumber(a);
-                const bn = try vms.valueAsNumber(b);
+                const an = try valueAsNumberForCompare(a, b);
+                const bn = try valueAsNumberForCompare(b, a);
                 if (!std.math.isFinite(an) or !std.math.isFinite(bn)) { vms.setRuntimeErr("cannot compare non-finite value", .{}); return error.TypeError; }
                 try vmPush(.{ .boolean = an < bn });
             },
@@ -2020,9 +2147,13 @@ fn runInner() !void {
             .const_sub => {
                 const k = try chunk.constAt(try vmShort());
                 const a = try vmPop();
-                const an = try vms.valueAsNumber(a);
-                const kn = try vms.valueAsNumber(k);
-                try pushNumericResultWithCarrier(a, k, an - kn, try numericOpTag(a, k));
+                const an = try valueAsNumberForOp(a, k, "-");
+                const kn = try valueAsNumberForOp(k, a, "-");
+                const tag = numericOpTag(a, k) catch |err| {
+                    if (err == error.TypeError) setBinaryTypeError("-", a, k);
+                    return err;
+                };
+                try pushNumericResultWithCarrier(a, k, an - kn, tag, "-");
             },
 
             // Triple-fused: get_local + constant + eq/sub.
@@ -2054,9 +2185,13 @@ fn runInner() !void {
                 if (base + slot >= vmState().stack.len) return error.StackOverflow;
                 var a = vmState().stack[base + slot];
                 if (a == .object and a.object.* == .cell) a = a.object.cell.value;
-                const an = try vms.valueAsNumber(a);
-                const kn = try vms.valueAsNumber(k);
-                try pushNumericResultWithCarrier(a, k, an - kn, try numericOpTag(a, k));
+                const an = try valueAsNumberForOp(a, k, "-");
+                const kn = try valueAsNumberForOp(k, a, "-");
+                const tag = numericOpTag(a, k) catch |err| {
+                    if (err == error.TypeError) setBinaryTypeError("-", a, k);
+                    return err;
+                };
+                try pushNumericResultWithCarrier(a, k, an - kn, tag, "-");
             },
             .get_local_const_add => {
                 if (vmState().frame_top == 0) return error.StackUnderflow;
@@ -2081,9 +2216,13 @@ fn runInner() !void {
                     const result = try concatDynString(sa, sk);
                     try vmPush(result);
                 } else {
-                    const an = try vms.valueAsNumber(a);
-                    const kn = try vms.valueAsNumber(k);
-                    try pushNumericResultWithCarrier(a, k, an + kn, try numericOpTag(a, k));
+                    const an = try valueAsNumberForOp(a, k, "+");
+                    const kn = try valueAsNumberForOp(k, a, "+");
+                    const tag = numericOpTag(a, k) catch |err| {
+                        if (err == error.TypeError) setBinaryTypeError("+", a, k);
+                        return err;
+                    };
+                    try pushNumericResultWithCarrier(a, k, an + kn, tag, "+");
                 }
             },
             .get_local_const_lt => {
@@ -2140,8 +2279,8 @@ fn runInner() !void {
                 try checkNamedValueCompatibility(a, k);
                 const a_named = a == .object and a.object.* == .named_value;
                 const k_named = k == .object and k.object.* == .named_value;
-                const an = try vms.valueAsNumber(if (a_named) a.object.named_value.value else a);
-                const kn = try vms.valueAsNumber(if (k_named) k.object.named_value.value else k);
+                const an = try valueAsNumberForCompare(if (a_named) a.object.named_value.value else a, k);
+                const kn = try valueAsNumberForCompare(if (k_named) k.object.named_value.value else k, a);
                 if (!std.math.isFinite(an) or !std.math.isFinite(kn)) { vms.setRuntimeErr("cannot compare non-finite value", .{}); return error.TypeError; }
                 if (!(an < kn)) vmState().ip += off;
             },
@@ -2173,17 +2312,21 @@ fn runInner() !void {
                     vmperf.countStringConcat(sa.len + sk.len);
                     try vmPush(result);
                 } else {
-                    const an = try vms.valueAsNumber(a);
-                    const kn = try vms.valueAsNumber(k);
-                    try pushNumericResultWithCarrier(a, k, an + kn, try numericOpTag(a, k));
+                    const an = try valueAsNumberForOp(a, k, "+");
+                    const kn = try valueAsNumberForOp(k, a, "+");
+                    const tag = numericOpTag(a, k) catch |err| {
+                        if (err == error.TypeError) setBinaryTypeError("+", a, k);
+                        return err;
+                    };
+                    try pushNumericResultWithCarrier(a, k, an + kn, tag, "+");
                 }
             },
             .const_lt => {
                 const k = try chunk.constAt(try vmShort());
                 const a = try vmPop();
                 try checkNamedValueCompatibility(a, k);
-                const an = try vms.valueAsNumber(a);
-                const kn = try vms.valueAsNumber(k);
+                const an = try valueAsNumberForCompare(a, k);
+                const kn = try valueAsNumberForCompare(k, a);
                 if (!std.math.isFinite(an) or !std.math.isFinite(kn)) { vms.setRuntimeErr("cannot compare non-finite value", .{}); return error.TypeError; }
                 try vmPush(.{ .boolean = an < kn });
             },

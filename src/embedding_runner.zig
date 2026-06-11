@@ -73,6 +73,7 @@ fn expectRuntimeError() void {
     switch (call_res) {
         .runtime_error => |e| {
             if (e.kind != error.TypeError) fail("embedding FAIL: expected TypeError\n");
+            if (e.msg.len == 0) fail("embedding FAIL: runtime error missing message\n");
         },
         else => fail("embedding FAIL: expected runtime_error from call\n"),
     }

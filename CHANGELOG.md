@@ -4,6 +4,15 @@ This changelog tracks notable language/runtime changes by implementation date.
 
 ## 2026-06-11
 
+### Improved — Runtime Errors Explain Themselves
+
+Type and range errors from arithmetic, comparison, unary negation, and
+named-type construction now carry messages naming the operand types and the
+remedy (`cannot mix Age and int; wrap the int with Age(...) or unwrap the
+named value with int(...)`; `Age: -1 is outside 0..200`). The REPL prints
+the same `--> repl:line:col` location block as file mode, and embedding
+hosts receive the messages through the existing error buffers.
+
 ### Breaking — Strict Nominal Types in Arithmetic and Comparison
 
 Named-type values no longer mix with bare base-type values in arithmetic,

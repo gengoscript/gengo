@@ -11,6 +11,53 @@ const StructFieldSpec = @import("value.zig").StructFieldSpec;
 const InterfaceMethodSpec = @import("value.zig").InterfaceMethodSpec;
 const FuncObj = @import("value.zig").FuncObj;
 
+fn namedBaseName(base: @import("value.zig").NamedTypeBase) []const u8 {
+    return switch (base) {
+        .int => "int",
+        .float => "float",
+        .decimal => "decimal",
+        .string => "string",
+        .bool => "bool",
+        .rune => "rune",
+        .array_t => "array",
+        .map_t => "map",
+        .enum_t => "enum",
+    };
+}
+
+fn runtimeTypeName(v: Value) []const u8 {
+    return switch (v) {
+        .int => "int",
+        .float => "float",
+        .decimal => "decimal",
+        .rune => "rune",
+        .boolean => "bool",
+        .string => "string",
+        .error_value => "error",
+        .null => "null",
+        .object => |obj| switch (obj.*) {
+            .named_value => obj.named_value.typ.named_type.name,
+            .dyn_string => "string",
+            .array, .array_managed => "array",
+            .map, .map_managed, .map_hashed => "map",
+            else => "object",
+        },
+    };
+}
+
+fn setNamedRangeError(typ_obj: *Object, value: f64) void {
+    const nt = typ_obj.named_type;
+    switch (nt.base) {
+        .int, .rune => vms.setRuntimeErr("{s}: {d} is outside {d}..{d}", .{
+            nt.name,
+            @as(i64, @intFromFloat(@trunc(value))),
+            @as(i64, @intFromFloat(@trunc(nt.min))),
+            @as(i64, @intFromFloat(@trunc(nt.max))),
+        }),
+        else => vms.setRuntimeErr("{s}: {d} is outside {d}..{d}", .{ nt.name, value, nt.min, nt.max }),
+    }
+}
+
 // Resolve and cache the parent enum type pointer for enum subtypes.
 pub fn resolveEnumParent(obj: *Object) ?*Object {
     if (obj.* != .enum_type) return null;
@@ -264,15 +311,34 @@ pub fn constructNamedType(typ_obj: *Object, arg: Value) !Value {
     var base_v: Value = undefined;
     switch (nt.base) {
         .int => {
-            const n = try vms.valueAsNumber(arg);
-            if (@trunc(n) != n) return error.TypeError;
+            const n = vms.valueAsNumber(arg) catch |err| {
+                if (err == error.TypeError) {
+                    vms.setRuntimeErr("cannot construct {s} from {s}; convert to {s} first", .{ nt.name, runtimeTypeName(arg), namedBaseName(nt.base) });
+                }
+                return err;
+            };
+            if (@trunc(n) != n) {
+                vms.setRuntimeErr("cannot construct {s} from {s}; convert to {s} first", .{ nt.name, runtimeTypeName(arg), namedBaseName(nt.base) });
+                return error.TypeError;
+            }
             base_v = .{ .int = n };
-            if (nt.has_range and (n < nt.min or n > nt.max)) return error.RangeError;
+            if (nt.has_range and (n < nt.min or n > nt.max)) {
+                setNamedRangeError(typ_obj, n);
+                return error.RangeError;
+            }
         },
         .float => {
-            const n = try vms.valueAsNumber(arg);
+            const n = vms.valueAsNumber(arg) catch |err| {
+                if (err == error.TypeError) {
+                    vms.setRuntimeErr("cannot construct {s} from {s}; convert to {s} first", .{ nt.name, runtimeTypeName(arg), namedBaseName(nt.base) });
+                }
+                return err;
+            };
             base_v = .{ .float = n };
-            if (nt.has_range and (n < nt.min or n > nt.max)) return error.RangeError;
+            if (nt.has_range and (n < nt.min or n > nt.max)) {
+                setNamedRangeError(typ_obj, n);
+                return error.RangeError;
+            }
         },
         .decimal => {
             const scale = nt.scale;
@@ -296,7 +362,10 @@ pub fn constructNamedType(typ_obj: *Object, arg: Value) !Value {
             base_v = .{ .decimal = scaled };
             if (nt.has_range) {
                 const fv = @as(f64, @floatFromInt(scaled)) / factor;
-                if (fv < nt.min or fv > nt.max) return error.RangeError;
+                if (fv < nt.min or fv > nt.max) {
+                    setNamedRangeError(typ_obj, fv);
+                    return error.RangeError;
+                }
             }
         },
         .rune => {
@@ -316,7 +385,10 @@ pub fn constructNamedType(typ_obj: *Object, arg: Value) !Value {
             };
             const rf: f64 = @floatFromInt(r);
             base_v = .{ .rune = r };
-            if (nt.has_range and (rf < nt.min or rf > nt.max)) return error.RangeError;
+            if (nt.has_range and (rf < nt.min or rf > nt.max)) {
+                setNamedRangeError(typ_obj, rf);
+                return error.RangeError;
+            }
         },
         .string => {
             if (!vms.isStringValue(arg)) return error.TypeError;
@@ -380,7 +452,10 @@ pub fn applyNamedTypeFn(typ_obj: *Object, kind: @import("value.zig").NamedTypeFn
     if (nt.is_cycle) {
         return makeNamedValue(typ_obj, if (nt.base == .float) .{ .float = try wrapCycleValue(nt.min, nt.max, result) } else .{ .int = try wrapCycleValue(nt.min, nt.max, result) });
     } else {
-        if (result < nt.min or result > nt.max) return error.RangeError;
+        if (result < nt.min or result > nt.max) {
+            setNamedRangeError(typ_obj, result);
+            return error.RangeError;
+        }
         return makeNamedValue(typ_obj, if (nt.base == .float) .{ .float = result } else .{ .int = result });
     }
 }

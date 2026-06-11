@@ -1,1 +1,2 @@
 TypeError
+cannot apply '+' to int and float; use matching numeric types such as 2.0 or float(2)
