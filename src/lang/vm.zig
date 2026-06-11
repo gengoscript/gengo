@@ -2070,6 +2070,47 @@ fn runInner() !void {
                 const kn = try vms.valueAsNumber(k);
                 try pushNumericResultWithCarrier(a, k, an - kn, try numericOpTag(a, k));
             },
+            .get_local_const_add => {
+                if (vmState().frame_top == 0) return error.StackUnderflow;
+                const slot = try vmByte();
+                vmState().ip += 1; // skip the embedded const_add opcode byte
+                const k = try chunk.constAt(try vmShort());
+                const base = vmState().frames[vmState().frame_top - 1].base;
+                if (base + slot >= vmState().stack.len) return error.StackOverflow;
+                var a = vmState().stack[base + slot];
+                if (a == .object and a.object.* == .cell) a = a.object.cell.value;
+                if (vms.isStringValue(a) and vms.isStringValue(k)) {
+                    const sa = try vms.asStringValue(a);
+                    const sk = try vms.asStringValue(k);
+                    const result = try concatDynString(sa, sk);
+                    try vmPush(result);
+                } else {
+                    const an = try vms.valueAsNumber(a);
+                    const kn = try vms.valueAsNumber(k);
+                    try pushNumericResultWithCarrier(a, k, an + kn, try numericOpTag(a, k));
+                }
+            },
+            .get_local_const_lt => {
+                if (vmState().frame_top == 0) return error.StackUnderflow;
+                const slot = try vmByte();
+                vmState().ip += 1; // skip the embedded const_lt opcode byte
+                const k = try chunk.constAt(try vmShort());
+                const base = vmState().frames[vmState().frame_top - 1].base;
+                if (base + slot >= vmState().stack.len) return error.StackOverflow;
+                var a = vmState().stack[base + slot];
+                if (a == .object and a.object.* == .cell) a = a.object.cell.value;
+                const a_named = a == .object and a.object.* == .named_value;
+                const k_named = k == .object and k.object.* == .named_value;
+                if (a_named and k_named and a.object.named_value.typ != k.object.named_value.typ) {
+                    const ta = a.object.named_value.typ;
+                    const tk = k.object.named_value.typ;
+                    if (!namedTypeIsSubOf(ta, tk) and !namedTypeIsSubOf(tk, ta)) return error.TypeError;
+                }
+                const an = try vms.valueAsNumber(if (a_named) a.object.named_value.value else a);
+                const kn = try vms.valueAsNumber(if (k_named) k.object.named_value.value else k);
+                if (!std.math.isFinite(an) or !std.math.isFinite(kn)) { vms.setRuntimeErr("cannot compare non-finite value", .{}); return error.TypeError; }
+                try vmPush(.{ .boolean = an < kn });
+            },
 
             // Quad-fused: get_local + constant + eq + jif_pop.
             // Bytecode: [op][slot][skip][idx_hi][idx_lo][jmp_hi][jmp_lo]

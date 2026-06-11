@@ -377,6 +377,52 @@ test "compiler: get_local_const_sub triple fusion result" {
     try std.testing.expect(r == .int and r.int == 9);
 }
 
+// ── get_local_const_add triple fusion ─────────────────────────────────────
+
+test "compiler: get_local_const_add triple fusion fires" {
+    var rt = setup();
+    defer rt.deinit();
+    try compile(&rt, "func f(x int) int { return x + 1 }");
+    const c = &rt.chunk_state;
+    var found = false;
+    for (c.code[0..c.code_len]) |op| {
+        if (op == @intFromEnum(Op.get_local_const_add)) { found = true; break; }
+    }
+    try std.testing.expect(found);
+}
+
+test "compiler: get_local_const_add triple fusion result" {
+    var rt = setup();
+    defer rt.deinit();
+    try runSrc(&rt, "func f(x int) int { return x + 1 }");
+    const r = try rt.callGlobal("f", &.{.{ .int = 10 }});
+    try std.testing.expect(r == .int and r.int == 11);
+}
+
+// ── get_local_const_lt triple fusion ──────────────────────────────────────
+
+test "compiler: get_local_const_lt triple fusion fires" {
+    var rt = setup();
+    defer rt.deinit();
+    try compile(&rt, "func f(x int) bool { return x < 5 }");
+    const c = &rt.chunk_state;
+    var found = false;
+    for (c.code[0..c.code_len]) |op| {
+        if (op == @intFromEnum(Op.get_local_const_lt)) { found = true; break; }
+    }
+    try std.testing.expect(found);
+}
+
+test "compiler: get_local_const_lt triple fusion result" {
+    var rt = setup();
+    defer rt.deinit();
+    try runSrc(&rt, "func f(x int) bool { return x < 5 }");
+    const r1 = try rt.callGlobal("f", &.{.{ .int = 3 }});
+    try std.testing.expect(r1 == .boolean and r1.boolean);
+    const r2 = try rt.callGlobal("f", &.{.{ .int = 10 }});
+    try std.testing.expect(r2 == .boolean and !r2.boolean);
+}
+
 // ── get_local_const_eq_jif_pop quad fusion ────────────────────────────────
 
 test "compiler: get_local_const_eq_jif_pop quad fusion fires" {

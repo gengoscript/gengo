@@ -25,19 +25,20 @@ pub const Op = enum(u8) {
     const_add,
     const_lt,
     // Triple-fused get_local+constant+binop. Same 5-byte layout as
-    // get_local(2) + const_eq/sub(3). The middle byte (the original const_eq/sub
+    // get_local(2) + const_eq/sub/add/lt(3). The middle byte (the original const_*
     // opcode, now a skip byte) is read and discarded by the VM.
-    // Emitted when get_local immediately precedes a const_eq or const_sub.
+    // Emitted when get_local immediately precedes a const_eq, const_sub, const_add, or const_lt.
     get_local_const_eq,
     get_local_const_sub,
+    get_local_const_add,
+    get_local_const_lt,
     // Quad-fused get_local+constant+eq+jif_pop: 7-byte conditional branch.
     // Layout: [op][slot][skip][idx_hi][idx_lo][jmp_hi][jmp_lo]
     // Emitted when get_local_const_eq immediately precedes jif_pop.
     get_local_const_eq_jif_pop,
     // Quad-fused get_local+constant+lt+jif_pop: 7-byte conditional branch.
     // Layout: [op][slot][skip=const_lt_byte][idx_hi][idx_lo][jmp_hi][jmp_lo]
-    // Emitted when get_local+const_lt immediately precede jif_pop (no intermediate triple opcode).
-    // Detected in emitJump via last_get_local_code_pos + byte inspection.
+    // Emitted when get_local_const_lt immediately precedes jif_pop.
     get_local_const_lt_jif_pop,
     // Fused get_local+get_field: 8-byte load-and-read-field.
     // Layout: [op][slot][skip=get_field_byte][name_hi][name_lo][ic_type_hi][ic_type_lo][ic_fidx]
