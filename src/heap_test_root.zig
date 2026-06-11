@@ -4,4 +4,6 @@ comptime {
         @compileError("heap_test is native-only");
     }
 }
-const _ = @import("runtime/heap_test.zig");
+test {
+    _ = @import("runtime/heap_test.zig");
+}

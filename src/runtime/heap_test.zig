@@ -1,6 +1,7 @@
 const std = @import("std");
 const heap = @import("heap.zig");
 const Object = @import("../lang/value.zig").Object;
+const Value = @import("../lang/value.zig").Value;
 
 const test_heap_size = 1024;
 const test_max_objects = 8;
@@ -81,9 +82,9 @@ test "sweepObjects recycles freed slots for reuse" {
     defer h.deinit();
     heap.setActive(&h);
     const a = heap.allocObject() orelse return error.TestFailed;
-    _ = a;
+    a.* = .{ .array = &[_]Value{} };
     const b = heap.allocObject() orelse return error.TestFailed;
-    _ = b;
+    b.* = .{ .array = &[_]Value{} };
     try std.testing.expectEqual(@as(usize, 2), heap.liveObjectCount());
     heap.sweepObjects();
     try std.testing.expectEqual(@as(usize, 0), heap.liveObjectCount());
@@ -98,6 +99,7 @@ test "unmarked object is collected by sweep" {
     defer h.deinit();
     heap.setActive(&h);
     const obj = heap.allocObject() orelse return error.TestFailed;
+    obj.* = .{ .array = &[_]Value{} };
     try std.testing.expect(heap.isObjectLive(obj));
     heap.sweepObjects();
     try std.testing.expect(!heap.isObjectLive(obj));
@@ -117,9 +119,12 @@ test "liveObjectCount after sweep equals marked count" {
     var h = try createState();
     defer h.deinit();
     heap.setActive(&h);
-    _ = heap.allocObject() orelse return error.TestFailed;
+    const dropped1 = heap.allocObject() orelse return error.TestFailed;
+    dropped1.* = .{ .array = &[_]Value{} };
     const kept = heap.allocObject() orelse return error.TestFailed;
-    _ = heap.allocObject() orelse return error.TestFailed;
+    kept.* = .{ .array = &[_]Value{} };
+    const dropped2 = heap.allocObject() orelse return error.TestFailed;
+    dropped2.* = .{ .array = &[_]Value{} };
     heap.markObject(kept);
     heap.sweepObjects();
     try std.testing.expectEqual(@as(usize, 1), heap.liveObjectCount());
@@ -156,4 +161,46 @@ test "cell object is collected when unmarked" {
     cell.* = .{ .cell = .{ .value = .{ .int = 42 } } };
     heap.sweepObjects();
     try std.testing.expect(!heap.isObjectLive(cell));
+}
+
+// ── Heap-scaled size classes ──────────────────────────────────────────────
+
+test "class cap scales with heap: 16 MiB heap allows 1 MiB blocks" {
+    var h: heap.State = .{};
+    try h.init(16 * 1024 * 1024, 64, std.testing.allocator);
+    defer h.deinit();
+    heap.setActive(&h);
+    const buf = heap.allocBytesManaged(1024 * 1024) orelse return error.TestFailed;
+    try std.testing.expect(buf.len >= 1024 * 1024);
+}
+
+test "class cap scales with heap: 2 MiB heap allows 256 KiB, rejects 512 KiB" {
+    var h: heap.State = .{};
+    try h.init(2 * 1024 * 1024, 64, std.testing.allocator);
+    defer h.deinit();
+    heap.setActive(&h);
+    const ok = heap.allocBytesManaged(256 * 1024) orelse return error.TestFailed;
+    _ = ok;
+    try std.testing.expect(heap.allocBytesManaged(512 * 1024) == null);
+}
+
+test "class cap floor preserved: small heap still allows 64 KiB blocks" {
+    var h: heap.State = .{};
+    try h.init(128 * 1024, 64, std.testing.allocator);
+    defer h.deinit();
+    heap.setActive(&h);
+    const buf = heap.allocBytesManaged(64 * 1024) orelse return error.TestFailed;
+    try std.testing.expect(buf.len >= 64 * 1024);
+    try std.testing.expect(heap.allocBytesManaged(128 * 1024) == null);
+}
+
+test "scaled class blocks are reusable after free" {
+    var h: heap.State = .{};
+    try h.init(16 * 1024 * 1024, 64, std.testing.allocator);
+    defer h.deinit();
+    heap.setActive(&h);
+    const a = heap.allocBytesManaged(1024 * 1024) orelse return error.TestFailed;
+    heap.freeBytesManaged(a);
+    const b = heap.allocBytesManaged(1024 * 1024) orelse return error.TestFailed;
+    try std.testing.expect(a.ptr == b.ptr);
 }
