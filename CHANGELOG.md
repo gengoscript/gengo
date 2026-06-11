@@ -4,6 +4,26 @@ This changelog tracks notable language/runtime changes by implementation date.
 
 ## 2026-06-11
 
+### Breaking — Strict Nominal Types in Arithmetic and Comparison
+
+Named-type values no longer mix with bare base-type values in arithmetic,
+comparison, or compound assignment. `Severity(4) >= 3` is now a runtime
+`TypeError`; write `Severity(4) >= Severity(3)` or unwrap explicitly with
+`int(s) >= 3`. Mixing two different named types was already rejected; this
+closes the named+base loophole so a named value's domain guarantees cannot
+be bypassed mid-expression. Fail tests: spec fail/189–191.
+
+### Fix — Expression Recursion Depth Limit
+
+Deeply nested expressions now fail compilation with `ExpressionTooDeep`
+(limit 256) instead of risking a host stack overflow (#99).
+
+### Fix — By-Value `api.Runtime.init` Allocates Heap Backing
+
+`api.Runtime.init(config)` previously skipped heap initialisation on native
+targets, so the first `run()` panicked; it now routes through
+`initWithConfig` like the in-place initialiser (#100).
+
 ### Fix — Peephole Fusion Across Patched Jump Targets (BadConstantIndex)
 
 Short-circuit boolean expressions whose operands compare a local against a

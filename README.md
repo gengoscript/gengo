@@ -103,7 +103,7 @@ type Severity int range 0..5
 pub func validate(severity int, source string) bool {
     s := Severity(severity)
     cat := host.lookup_category(source)
-    return s >= 3 && cat == "network"
+    return s >= Severity(3) && cat == "network"
 }
 ```
 
