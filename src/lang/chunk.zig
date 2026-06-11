@@ -27,6 +27,12 @@ pub const State = struct {
     // Peephole: position of the last get_local_const_eq triple-fused instruction.
     // Used for quad-fusion: get_local_const_eq + jif_pop → get_local_const_eq_jif_pop.
     last_triple_eq_pos: ?usize = null,
+    // Peephole: position of the last get_local_const_lt triple-fused instruction.
+    // Used for quad-fusion: get_local_const_lt + jif_pop → get_local_const_lt_jif_pop.
+    last_triple_lt_pos: ?usize = null,
+    // Peephole: position of the last set_global instruction.
+    // Used for fusion: set_global + loop → set_global_loop.
+    last_set_global_code_pos: ?usize = null,
 };
 
 var g_default_state: State = .{};
@@ -44,6 +50,8 @@ pub fn reset() void {
     g_state.last_const_idx = 0;
     g_state.last_get_local_code_pos = null;
     g_state.last_triple_eq_pos = null;
+    g_state.last_triple_lt_pos = null;
+    g_state.last_set_global_code_pos = null;
 }
 
 pub fn setCol(col: u32) void {
@@ -103,7 +111,7 @@ pub fn emitOpConst(op: Op, v: Value, line: u32) !void {
 // If the last emitted instruction was `constant k`, replaces it in-place with
 // const_eq/const_sub/const_add/const_lt (same bytecode layout, different opcode byte).
 // If the instruction before that was `get_local`, further fuses to
-// get_local_const_eq / get_local_const_sub (triple fusion, same 5-byte layout).
+// get_local_const_eq / get_local_const_sub / get_local_const_add / get_local_const_lt (triple fusion, same 5-byte layout).
 pub fn emitBinOpFused(op: Op, line: u32) !void {
     if (g_state.last_const_code_pos) |pos| {
         if (pos + 3 == g_state.code_len) {
@@ -124,6 +132,8 @@ pub fn emitBinOpFused(op: Op, line: u32) !void {
                         const triple: ?Op = switch (fop) {
                             .const_eq  => .get_local_const_eq,
                             .const_sub => .get_local_const_sub,
+                            .const_add => .get_local_const_add,
+                            .const_lt  => .get_local_const_lt,
                             else       => null,
                         };
                         if (triple) |top| {
@@ -133,6 +143,8 @@ pub fn emitBinOpFused(op: Op, line: u32) !void {
                             // code[pos+1..+2] = const_idx — all unchanged.
                             if (top == .get_local_const_eq) {
                                 g_state.last_triple_eq_pos = gl_pos;
+                            } else if (top == .get_local_const_lt) {
+                                g_state.last_triple_lt_pos = gl_pos;
                             }
                         }
                     }
@@ -204,6 +216,7 @@ pub fn emitSetGlobal(name: []const u8, line: u32) !void {
     try emitByte(@intCast(idx & 0xff), line);
     try emitByte(0xff, line);
     try emitByte(0xff, line);
+    g_state.last_set_global_code_pos = g_state.code_len - 5;
 }
 
 // Emit get_field: op + name_idx(2) + ic_type(2, cold=0xFFFF) + ic_fidx(1, cold=0xFF).
@@ -272,17 +285,14 @@ pub fn emitJump(op: Op, line: u32) !usize {
                 return g_state.code_len - 2;
             }
         }
-        // Quad fusion: get_local + const_lt immediately preceding jif_pop →
-        // get_local_const_lt_jif_pop (7 bytes). Detected via last_get_local_code_pos
-        // + byte inspection of code[gl_pos+2]; no intermediate triple opcode needed.
-        if (g_state.last_get_local_code_pos) |gl_pos| {
-            if (gl_pos + 5 == g_state.code_len and
-                g_state.code[gl_pos + 2] == @intFromEnum(Op.const_lt))
-            {
-                g_state.code[gl_pos] = @intFromEnum(Op.get_local_const_lt_jif_pop);
+        // Quad fusion: get_local_const_lt immediately preceding jif_pop →
+        // get_local_const_lt_jif_pop (7 bytes, saves 1 dispatch per conditional check).
+        if (g_state.last_triple_lt_pos) |tp| {
+            if (tp + 5 == g_state.code_len) {
+                g_state.code[tp] = @intFromEnum(Op.get_local_const_lt_jif_pop);
                 try emitByte(0xff, line);
                 try emitByte(0xff, line);
-                g_state.last_get_local_code_pos = null;
+                g_state.last_triple_lt_pos = null;
                 return g_state.code_len - 2;
             }
         }
@@ -311,17 +321,26 @@ pub fn patchJump(offset: usize) !void {
 pub fn emitLoop(loop_start: usize, line: u32) !void {
     // Peephole: if the last emitted instruction is set_global (5 bytes), fuse it with
     // the back-edge into set_global_loop (same 5 bytes, different opcode + 2-byte offset).
-    if (g_state.code_len >= 5 and
-        g_state.code[g_state.code_len - 5] == @intFromEnum(Op.set_global))
-    {
-        g_state.last_const_code_pos = null; // invalidate const peephole
-        g_state.code[g_state.code_len - 5] = @intFromEnum(Op.set_global_loop);
-        const offset = g_state.code_len - loop_start + 2;
-        if (offset > 0xffff) return error.LoopTooLarge;
-        try emitByte(@intCast((offset >> 8) & 0xff), line);
-        try emitByte(@intCast(offset & 0xff), line);
-        return;
+    if (g_state.last_set_global_code_pos) |sg_pos| {
+        if (sg_pos + 5 == g_state.code_len) {
+            g_state.last_const_code_pos = null;
+            g_state.last_get_local_code_pos = null;
+            g_state.last_triple_eq_pos = null;
+            g_state.last_triple_lt_pos = null;
+            g_state.last_set_global_code_pos = null;
+            g_state.code[sg_pos] = @intFromEnum(Op.set_global_loop);
+            const offset = g_state.code_len - loop_start + 2;
+            if (offset > 0xffff) return error.LoopTooLarge;
+            try emitByte(@intCast((offset >> 8) & 0xff), line);
+            try emitByte(@intCast(offset & 0xff), line);
+            return;
+        }
     }
+    g_state.last_const_code_pos = null;
+    g_state.last_get_local_code_pos = null;
+    g_state.last_triple_eq_pos = null;
+    g_state.last_triple_lt_pos = null;
+    g_state.last_set_global_code_pos = null;
     try emitOp(.loop, line);
     const offset = g_state.code_len - loop_start + 2;
     if (offset > 0xffff) return error.LoopTooLarge;
