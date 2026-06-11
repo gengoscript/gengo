@@ -166,6 +166,7 @@ fn testLastError() void {
     switch (call_res) {
         .runtime_error => |e| {
             if (e.kind != error.TypeError) fail("engine FAIL: expected TypeError\n");
+            if (e.msg.len == 0) fail("engine FAIL: runtime error missing message\n");
         },
         else => fail("engine FAIL: expected runtime error\n"),
     }
@@ -253,6 +254,16 @@ fn testReplIncremental() void {
     switch (r6) {
         .compile_error => {},
         else => fail("engine FAIL: expected AssignToConst across repl lines\n"),
+    }
+
+    const r7 = rt.runIncremental("x += 1.5");
+    switch (r7) {
+        .runtime_error => |e| {
+            if (e.kind != error.TypeError) fail("engine FAIL: expected runtime TypeError in repl\n");
+            if (e.line == 0 or e.col == 0) fail("engine FAIL: repl runtime position missing\n");
+            if (e.msg.len == 0) fail("engine FAIL: repl runtime message missing\n");
+        },
+        else => fail("engine FAIL: expected runtime error in repl\n"),
     }
 
     out("  repl incremental: OK\n");

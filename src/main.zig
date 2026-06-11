@@ -156,6 +156,25 @@ fn printSourceLine(src: []const u8, line: u32, col: u32) void {
     }
 }
 
+fn printRuntimeErrorBlock(prefix: []const u8, path: []const u8, src: []const u8, err: anyerror, line: u32, col: u32, msg: []const u8) void {
+    io.werr(prefix);
+    io.werr(@errorName(err));
+    if (msg.len > 0) {
+        io.werr(": ");
+        io.werr(msg);
+    }
+    io.werr("\n  --> ");
+    io.werr(path);
+    io.werr(":");
+    io.werrInt(@intCast(line));
+    if (col != 0) {
+        io.werr(":");
+        io.werrInt(@intCast(col));
+    }
+    io.werr("\n");
+    printSourceLine(src, line, col);
+}
+
 // Isolated to keep runCli's frame small. Runtime is heap-allocated because its
 // size grows with the active preset and can exceed the WASM shadow stack limit.
 fn runReplMode(backend: vm.Policy.NativeBackend, max_ops: ?u64, caps: []const []const u8) noreturn {
@@ -188,6 +207,16 @@ fn runReplMode(backend: vm.Policy.NativeBackend, max_ops: ?u64, caps: []const []
                 io.werrInt(@intCast(repl_rt.last_compile_col));
                 io.werr("\n");
                 printSourceLine(line, repl_rt.last_compile_line, repl_rt.last_compile_col);
+            } else if (repl_rt.last_runtime_line != 0) {
+                printRuntimeErrorBlock(
+                    "error: ",
+                    "repl",
+                    line,
+                    err,
+                    repl_rt.last_runtime_line,
+                    repl_rt.last_runtime_col,
+                    repl_rt.last_runtime_msg_buf[0..repl_rt.last_runtime_msg_len],
+                );
             } else {
                 io.werr("error: ");
                 io.werr(@errorName(err));
@@ -354,22 +383,15 @@ fn runCli(argv: []const []const u8) void {
                 printSourceLine(src, runtime.last_compile_line, runtime.last_compile_col);
             }
         } else if (runtime.last_runtime_line != 0) {
-            io.werr("gengo: panic: ");
-            io.werr(@errorName(err));
-            if (runtime.last_runtime_msg_len > 0) {
-                io.werr(": ");
-                io.werr(runtime.last_runtime_msg_buf[0..runtime.last_runtime_msg_len]);
-            }
-            io.werr("\n  --> ");
-            io.werr(script_name);
-            io.werr(":");
-            io.werrInt(@intCast(runtime.last_runtime_line));
-            if (runtime.last_runtime_col != 0) {
-                io.werr(":");
-                io.werrInt(@intCast(runtime.last_runtime_col));
-            }
-            io.werr("\n");
-            printSourceLine(src, runtime.last_runtime_line, runtime.last_runtime_col);
+            printRuntimeErrorBlock(
+                "gengo: panic: ",
+                script_name,
+                src,
+                err,
+                runtime.last_runtime_line,
+                runtime.last_runtime_col,
+                runtime.last_runtime_msg_buf[0..runtime.last_runtime_msg_len],
+            );
             if (runtime.panic_depth > 0) {
                 io.werr("stack trace:\n");
                 var fi: usize = 0;
@@ -452,4 +474,27 @@ pub fn main(init: std.process.Init.Minimal) void {
     }
 
     runCli(argv_storage[0..n]);
+}
+
+var test_capture_buf: [1024]u8 = undefined;
+var test_capture_len: usize = 0;
+
+fn testCaptureWrite(s: []const u8) void {
+    const avail = @min(s.len, test_capture_buf.len - test_capture_len);
+    @memcpy(test_capture_buf[test_capture_len..][0..avail], s[0..avail]);
+    test_capture_len += avail;
+}
+
+test "runtime error block includes location and caret" {
+    io.setWriteOverrides(testCaptureWrite, testCaptureWrite);
+    defer io.clearWriteOverrides();
+
+    test_capture_len = 0;
+    printRuntimeErrorBlock("error: ", "repl", "x += 1.5", error.TypeError, 1, 3, "cannot apply '+' to int and float");
+
+    const got = test_capture_buf[0..test_capture_len];
+    try std.testing.expect(std.mem.indexOf(u8, got, "error: TypeError: cannot apply '+' to int and float") != null);
+    try std.testing.expect(std.mem.indexOf(u8, got, "  --> repl:1:3") != null);
+    try std.testing.expect(std.mem.indexOf(u8, got, "   1 | x += 1.5") != null);
+    try std.testing.expect(std.mem.indexOf(u8, got, "     |   ^") != null);
 }
