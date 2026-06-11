@@ -8,8 +8,8 @@ pub const MaxObjects = cfg.max_objects;
 const Object = @import("../lang/value.zig").Object;
 const ObjTag = @import("../lang/value.zig").ObjTag;
 
-const ClassCount = 12;
-const ClassSizes = [_]usize{ 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768 };
+const ClassCount = 13;
+const ClassSizes = [_]usize{ 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536 };
 const ManagedAlign: usize = 16;
 
 // On WASM linear memory is fixed; keep preset-sized backing arrays.
