@@ -128,7 +128,7 @@ zig build -Dpreset=dev wasi
 ## Nano Syntax Highlighting
 
 ```bash
-echo 'include "./docs/gengo.nanorc"' >> ~/.nanorc
+echo 'include "./editors/nano/gengo.nanorc"' >> ~/.nanorc
 ```
 
 ## Next Step
