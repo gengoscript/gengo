@@ -74,6 +74,20 @@ fn drainMarkQueue() void {
             },
             .iterator => |it| {
                 if (it.source) |src| if (heap.isObjectLive(src)) markObjectQueue(src);
+                switch (it.kind) {
+                    .array => {
+                        var i: usize = 0;
+                        while (i < it.array.len) : (i += 1) markValue(it.array[i]);
+                    },
+                    .map => {
+                        var i: usize = 0;
+                        while (i < it.map.len) : (i += 1) {
+                            markValue(it.map[i].key);
+                            markValue(it.map[i].value);
+                        }
+                    },
+                    .string, .range => {},
+                }
             },
             .enum_value => |ev| markObjectQueue(ev.typ),
             .variant_type => {},
