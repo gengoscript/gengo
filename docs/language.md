@@ -53,6 +53,12 @@ The language includes:
 
 Strings are UTF-8. `std.core.len(s)` counts Unicode code points, while `std.core.bytelen(s)` counts bytes.
 
+Numeric types do not mix implicitly: `int` and `float` cannot be combined in
+arithmetic or ordering comparisons (`1.5 + 1` and `1.5 > 1` are both type
+errors). Convert one side explicitly — `1.5 > float(1)` or write the literal
+as `1.0`. The same rule applies to named types: an `Age` only mixes with an
+`Age` (or its subtypes), never with a bare `int`.
+
 ## Variables and Constants
 
 Common declaration forms:
