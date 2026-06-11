@@ -1,0 +1,2 @@
+type A struct { x [B]int }
+type B struct { y A }
