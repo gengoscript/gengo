@@ -6,7 +6,7 @@ Things that are partially built or not yet complete.
 
 ## 1. GBC — Gengoscript Bytecode Cache
 
-**Status:** spec complete (`docs/gbc-spec.md`), implementation not started.
+**Status:** spec complete (`dev-docs/design/gbc-spec.md`), implementation not started.
 
 GBC is a compiled module artifact that lets the runtime skip parsing and code generation for a known source file. It is not a heap snapshot.
 

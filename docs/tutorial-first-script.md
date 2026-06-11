@@ -1,21 +1,18 @@
 # Gengoscript Tutorial: First Script
 
-This walkthrough takes you from build to a working script with verified output.
+This walkthrough takes you from a fresh build to a small working script.
 
-## 1. Build gengo (dev preset)
+If you only need the command summary, see `quickstart.md`.
+
+This walkthrough assumes `wasmtime` is installed and available on `PATH`.
+
+## 1. Build the WASI Runtime
 
 ```bash
 zig build -Dpreset=dev wasi
 ```
 
-Expected tail output:
-
-```text
-Built /..././gengo-runtime.wasm
-Run with: wasmtime --dir / /..././gengo-runtime.wasm -- <script>
-```
-
-## 2. Create a script
+## 2. Create a Script
 
 Create `examples/hello_tutorial.gengo`:
 
@@ -32,10 +29,10 @@ std.io.println(std.conv.to_string(`🙂`))
 std.io.println(nums[1])
 ```
 
-## 3. Run it
+## 3. Run It
 
 ```bash
-wasmtime --dir . ./gengo-runtime.wasm -- examples/hello_tutorial.gengo
+wasmtime --dir . ./build/gengo-runtime.wasm -- examples/hello_tutorial.gengo
 ```
 
 Expected output:
@@ -48,52 +45,52 @@ hello gengo
 3
 ```
 
-## 4. Try a type contract
+## 4. Add a Type Contract
 
-Replace script contents with:
+Replace the file contents with:
 
 ```gengo
 std := import("std")
 
 type User struct { name string, initial rune }
+
 func greet(u User) {
   std.io.println(u.name, std.conv.to_string(u.initial))
 }
 
-greet(User{ name: "Mikael", initial: `M` })
+greet(User{ name: "Ada", initial: `A` })
 ```
 
-Run again:
+Run it again:
 
 ```bash
-wasmtime --dir . ./gengo-runtime.wasm -- examples/hello_tutorial.gengo
+wasmtime --dir . ./build/gengo-runtime.wasm -- examples/hello_tutorial.gengo
 ```
 
 Expected output:
 
 ```text
-Mikael M
+Ada A
 ```
 
-## 5. Validate your environment
+The important point is that the type contract lives inside the script. Invalid values fail where they are constructed, not later in host-side validation code.
 
-Run conformance:
+## 5. Check the Environment
+
+Run the conformance suite:
 
 ```bash
 zig build -Dpreset=dev test
 ```
 
-Run backend parity checks:
+Run parity checks:
 
 ```bash
 zig build -Dpreset=dev parity
 ```
 
-Run tiny benchmark lane:
+If you are working on runtime behaviour, also run:
 
 ```bash
-zig build -Dpreset=tiny bench
+zig build -Dpreset=stress test
 ```
-
-Notes:
-- `bench`/`bench-tiny` include policy-driven expected low-memory behavior for selected bench cases.

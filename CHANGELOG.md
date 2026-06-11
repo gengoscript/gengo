@@ -619,7 +619,7 @@ variable/field/parameter boundaries.
 - Added host-backend graceful fallback when host import is unavailable.
 
 ### Planning
-- Added Host ABI parity roadmap document: `docs/host-abi-v2-plan.md`.
+- Added Host ABI parity roadmap document: `archive/host-abi-v2-plan.md`.
 
 ## 2026-05-26
 

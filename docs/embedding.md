@@ -1,103 +1,96 @@
-# Gengoscript Embedding API
+# Gengoscript Embedding in Zig
 
-`runtime/api.zig` is the stable host-facing entrypoint for embedding.
+This page covers the Zig embedding API exposed through `runtime/api.zig`.
 
-## Types
+Use this page if your host is written in Zig. For the C-compatible engine surface, see `engine-api.md`.
 
-### `api.Config`
+## Core Types
 
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `allow_io` | `bool` | `true` | Allow `std.io` output |
-| `native_backend` | `vm.Policy.NativeBackend` | `.embedded` | Native dispatch backend |
-| `max_ops` | `?u64` | `null` | Instruction budget; `null` = unlimited |
-| `module_sources` | `[]const api.SourceEntry` | `&.{}` | In-memory source table for `import("./...")` |
-| `module_source_provider` | `?api.SourceProvider` | `null` | Dynamic source callback (wins over `module_sources`) |
-| `host_modules` | `[]const api.HostModuleDesc` | `&.{}` | Host-defined modules importable via `host:` prefix |
-| `capabilities` | `[]const []const u8` | `&.{}` | Enabled capability names (e.g. `&.{"http", "fs"}`) |
-| `heap_size_bytes` | `usize` | preset default | Gengoscript heap size in bytes |
-| `max_objects` | `usize` | preset default | Maximum live GC objects |
-| `max_stack` | `usize` | preset default | VM value stack depth |
-| `max_frames` | `usize` | preset default | Call frame limit |
-| `max_defers` | `usize` | preset default | Defer stack depth |
-| `allocator` | `std.mem.Allocator` | `page_allocator` | Allocator for per-instance backing memory (native only) |
+The main entry points are:
 
-### Other types
-
+- `api.Config`
 - `api.Runtime`
 - `api.RuntimeResult`
-  - `.ok`
-  - `.compile_error { line: u32, kind: anyerror }`
-  - `.runtime_error { kind: anyerror, line: u32, col: u32, frames: [max_frames]PanicFrame, frame_count: usize }`
 - `api.RuntimeResultWithValue`
-  - `.ok: Value`
-  - `.runtime_error { kind: anyerror, line: u32, col: u32, frames: [max_frames]PanicFrame, frame_count: usize }`
+
+Important `api.Config` fields:
+
+| Field | Purpose |
+|---|---|
+| `allow_io` | Enable or suppress `std.io` output |
+| `max_ops` | Instruction budget; `null` means unlimited |
+| `host_modules` | Host-defined modules available through `host:*` imports |
+| `capabilities` | Enabled capability names such as `"http"` or `"fs"` |
+| `module_sources` | In-memory source table for relative imports |
+| `module_source_provider` | Dynamic source callback |
+| `heap_size_bytes` | Per-instance heap limit |
+| `max_objects` | Live object limit |
+| `max_stack` | VM value stack limit |
+| `max_frames` | Call frame limit |
+| `max_defers` | Deferred-call limit |
+| `allocator` | Backing allocator for native instances |
 
 ## Lifecycle
 
-1. `var rt: api.Runtime = undefined; rt.initWithPolicy(config);`  (or `api.Runtime.init(config)`)
-2. `const run_res = rt.run(src);`
-3. `const call_res = rt.call("fn_name", args);`
-4. `rt.reset();` — optional; clears globals, heap, and call stack so the handle can run a fresh script
-5. `rt.deinit();` — frees per-instance backing memory; required when using a custom `allocator`
+The usual lifecycle is:
 
-If the embedded script should be allowed to resolve relative source imports, use `rt.runPath(src, "path/to/root.gengo")` instead of `rt.run(src)`.
+1. initialise a runtime;
+2. run a script;
+3. call exported functions as needed;
+4. reset the runtime if you want to reuse it; and
+5. deinitialise it when finished.
 
-For non-filesystem embeddings there are two host-loading options:
-- `module_sources`: a fixed in-memory source table keyed by canonical logical path
-- `module_source_provider`: a callback provider for dynamic lookup
-
-If both are set, `module_source_provider` wins.
-
-## Native Host Example
-
-Build and run the native Zig embedding example:
-
-```bash
-zig build -Dpreset=dev embed-example
+```zig
+var rt = api.Runtime.init(.{
+    .allow_io = false,
+    .max_ops = 100_000,
+});
+defer rt.deinit();
 ```
 
-Source:
-- `examples/embed-host/main.zig`
-
-## Examples
-
-Run script:
+## Minimal Example
 
 ```zig
 var rt = api.Runtime.init(.{ .allow_io = false });
-switch (rt.run("x := 1")) {
+defer rt.deinit();
+
+switch (rt.run(
+    \\pub func greet(name string) string {
+    \\    return "hello " + name
+    \\}
+)) {
     .ok => {},
-    .compile_error => |e| { /* e.line, e.kind */ },
-    .runtime_error => |e| { /* e.kind, e.line, e.col, e.frames[0..e.frame_count] */ },
+    .compile_error => |e| return e.kind,
+    .runtime_error => |e| return e.kind,
 }
+
+const result = rt.call("greet", &.{
+    api.Value{ .string = "world" },
+});
 ```
 
-Run with a root path so `import("./relative")` works:
+Use `runPath` instead of `run` when the script uses relative imports.
 
-```zig
-switch (rt.runPath(
-    \\math := import("./math")
-    \\answer := math.add(20, 22)
-, "scripts/main.gengo")) {
-    .ok => {},
-    .compile_error => |e| { /* e.line, e.kind */ },
-    .runtime_error => |e| { /* e.kind, e.line, e.col */ },
-}
-```
+## Handling Results
 
-Call function repeatedly:
+`run` and `call` return tagged results rather than throwing directly. In practice you usually branch on:
 
-```zig
-_ = rt.run(
-    \\counter := 0
-    \\func bump() int { counter += 1; return counter }
-);
-_ = rt.call("bump", &[_]Value{});
-_ = rt.call("bump", &[_]Value{});
-```
+- `.ok`
+- `.compile_error`
+- `.runtime_error`
 
-Run with an in-memory source table:
+Compile errors report the source line. Runtime errors report the kind, line, column, and stack frames.
+
+## Relative Imports
+
+If scripts import sibling modules, use one of these approaches:
+
+- `module_sources` for a fixed in-memory source table; or
+- `module_source_provider` for dynamic lookup.
+
+`module_source_provider` takes precedence when both are present.
+
+Example with `module_sources`:
 
 ```zig
 const sources = [_]api.SourceEntry{
@@ -115,83 +108,44 @@ var rt = api.Runtime.init(.{
     .allow_io = false,
     .module_sources = &sources,
 });
-
-switch (rt.runPath(
-    \\pkg := import("./pkg")
-    \\func read() int { return pkg.answer() }
-, "app/main.gengo")) {
-    .ok => {},
-    .compile_error => |e| { /* ... */ },
-    .runtime_error => |e| { /* ... */ },
-}
+defer rt.deinit();
 ```
 
-Run with a host callback provider:
+## Host Modules
+
+Host modules are imported through `host:*` paths and must be registered explicitly.
 
 ```zig
-const SourceSet = struct {
-    entries: []const api.SourceEntry,
-};
-
-fn loadSource(ctx: *anyopaque, path: []const u8) anyerror!?[]const u8 {
-    const set: *const SourceSet = @ptrCast(@alignCast(ctx));
-    for (set.entries) |entry| {
-        if (std.mem.eql(u8, entry.path, path)) return entry.source;
-    }
-    return null;
-}
-
-const entries = [_]api.SourceEntry{
-    .{
-        .path = "mem/math.gengo",
-        .source =
-            \\pub func add(a int, b int) int {
-            \\    return a + b
-            \\}
-        ,
-    },
-};
-const set = SourceSet{ .entries = &entries };
-
-var rt = api.Runtime.init(.{ .allow_io = false });
-switch (rt.runPathWithSourceProvider(
-    \\math := import("./math")
-    \\func read() int { return math.add(20, 22) }
-, "mem/main.gengo", .{
-    .callback = .{
-        .ctx = @constCast(&set),
-        .load = loadSource,
-    },
-})) {
-    .ok => {},
-    .compile_error => |e| { /* ... */ },
-    .runtime_error => |e| { /* ... */ },
-}
-```
-
-Enforce operation budget:
-
-```zig
-var rt = api.Runtime.init(.{ .allow_io = false, .max_ops = 10000 });
-const res = rt.run("for {}");
-// res is .runtime_error with InstructionBudgetExceeded
-```
-
-## Capabilities
-
-Scripts can access system capabilities (`cap:http`, `cap:fs`, `cap:net`) only when the host enables them. Pass capability names in `api.Config.capabilities`:
-
-```zig
-var rt: api.Runtime = undefined;
-rt.initWithPolicy(.{
-    .allow_io = true,
-    .capabilities = &.{ "http", "fs" },
+var rt = api.Runtime.init(.{
+    .host_modules = &.{.{
+        .name = "host:db",
+        .funcs = &.{.{ .name = "lookup", .arity = 1 }},
+    }},
 });
 ```
 
-### Filesystem mounts
+Use host modules when the script needs a narrow, controlled bridge into host logic.
 
-`cap:fs` only reaches directories the host registers as named mounts. Script paths are mount-relative (`"data/config.json"`); absolute paths and `..` traversal are rejected. Register mounts once before running scripts:
+## Capabilities
+
+Capability modules are also opt-in:
+
+```zig
+var rt = api.Runtime.init(.{
+    .allow_io = false,
+    .capabilities = &.{"http", "fs"},
+});
+```
+
+Current public capabilities:
+
+- `"http"`
+- `"fs"`
+- `"net"`
+
+### Filesystem Mounts
+
+`cap:fs` can only reach host-registered named mounts:
 
 ```zig
 try api.setFsMounts(&.{
@@ -200,72 +154,35 @@ try api.setFsMounts(&.{
 });
 ```
 
-Mounts are process-global and copied at registration. Enabling `"fs"` without mounts grants no filesystem access.
+Without mounts, enabling `"fs"` grants no usable filesystem access.
 
-### HTTP capability handler
+### HTTP Handler
 
-By default the native CLI provides a built-in HTTP implementation. For embedding, register a custom handler via `http_state.setHttpHandler` to route HTTP calls through your own networking stack:
+For custom HTTP behaviour, register a handler through `http_state.setHttpHandler`:
 
 ```zig
 const http_state = @import("lang/native/http_state.zig");
-
-fn myHttpFetch(
-    req: *const http_state.GengoHttpRequest,
-    out: *http_state.GengoHttpResponse,
-    userdata: ?*anyopaque,
-) callconv(.c) c_int {
-    _ = userdata;
-    // populate out.status, out.body, out.body_len, out.headers
-    out.status = 200;
-    const body = "hello";
-    out.body = body.ptr;
-    out.body_len = @intCast(body.len);
-    out.headers = .{ .keys = null, .values = null, .count = 0 };
-    return 0; // 0 = success; negative = network error
-}
-
 http_state.setHttpHandler(&myHttpFetch, null);
 ```
 
-`GengoHttpRequest` fields:
+### Net Handlers
 
-| Field | Type | Description |
-|---|---|---|
-| `method` | `[*:0]const u8` | HTTP method (null-terminated) |
-| `url` | `[*:0]const u8` | Full URL (null-terminated) |
-| `body` | `[*]const u8` | Request body bytes (may be empty) |
-| `body_len` | `c_int` | Length of `body` in bytes |
-| `headers` | `GengoHttpHeaders` | Request headers |
-| `timeout_ms` | `i64` | Timeout in ms; `0` = no timeout |
+For `cap:net`, register a `GengoNetHandlers` struct that supplies the socket callbacks your host wants to support.
 
-### Net capability handlers
+## Reuse and Reset
 
-For `cap:net`, register a `GengoNetHandlers` struct with all socket-level callbacks:
+Call `rt.reset()` when you want to discard globals, heap state, and call frames but keep the runtime allocation itself.
 
-```zig
-const net_state = @import("lang/native/net_state.zig");
+Use a fresh runtime when isolation is more important than reuse.
 
-const handlers = net_state.GengoNetHandlers{
-    .dial   = myDial,
-    .read   = myRead,
-    .write  = myWrite,
-    .close  = myClose,
-    .local_addr    = myLocalAddr,
-    .remote_addr   = myRemoteAddr,
-    .set_deadline       = mySetDeadline,
-    .set_read_deadline  = mySetReadDeadline,
-    .set_write_deadline = mySetWriteDeadline,
-};
-net_state.setNetHandlers(handlers, null);
-```
+## Concurrency
 
-If no handler is registered the built-in POSIX socket implementation is used on native targets; on WASM `CapabilityNotAvailable` is raised.
+Treat a runtime instance as single-threaded. Do not call into the same `api.Runtime` from multiple threads at once.
 
-## Concurrency Contract
+Separate runtime instances may be used independently.
 
-- Isolated runtime instances are supported.
-- Interleaved calls across runtimes are supported.
-- Concurrent execution of multiple runtimes on different host threads is not yet supported in the current active-context model.
-- `run(src)` has no source path context, so relative source imports are unavailable there.
-- `runPath(src, path)` provides source path context for relative imports.
-- `module_sources` and callback providers are resolved against normalized logical paths such as `app/pkg/mod.gengo`.
+## Further Reading
+
+- `engine-api.md` for the C-compatible surface
+- `host-abi.md` for the host backend ABI
+- `security.md` for deployment controls and limits
