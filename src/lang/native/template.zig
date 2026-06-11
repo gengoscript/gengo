@@ -200,14 +200,19 @@ fn tplSplitPath(s: []const u8, sep: []const u8) !Value {
     try vms.pushTempRoot(.{ .object = obj });
     defer vms.popTempRoot();
     const arr = try vmgc.vmAllocManagedSlice(Value, count);
+    // Always copy: the template source may be a GC-managed string, and these
+    // path arrays can outlive it inside a compiled template object. Attach
+    // the slice as it fills so already-copied elements stay traced.
+    obj.* = .{ .array_managed = arr[0..0] };
     var idx: usize = 0;
     i = 0;
     while (std.mem.indexOfPos(u8, s, i, sep)) |pos| {
-        arr[idx] = .{ .string = s[i..pos] };
+        arr[idx] = try vmgc.makeDynString(s[i..pos]);
         idx += 1;
+        obj.* = .{ .array_managed = arr[0..idx] };
         i = pos + sep.len;
     }
-    arr[idx] = .{ .string = s[i..] };
+    arr[idx] = try vmgc.makeDynString(s[i..]);
     obj.* = .{ .array_managed = arr[0..count] };
     return .{ .object = obj };
 }

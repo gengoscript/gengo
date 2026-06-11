@@ -1,0 +1,29 @@
+std := import("std")
+
+// Substrings returned by split/split_once/fields must remain valid after
+// their GC-managed source string is collected. Regression: they were
+// zero-copy views into the source's heap bytes, which dangled once the
+// source died and its block was reused.
+
+func makeDyn(a string, b string) string { return a + b }
+
+src := makeDyn("alpha beta", " gamma delta")
+parts := std.string.split(src, " ")
+pair := std.string.split_once(src, " ")
+words := std.string.fields(src)
+src = ""
+
+// Churn the heap so the old source bytes get reclaimed and reused.
+junk := ""
+n := 0
+for n < 4000 {
+    junk += "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"
+    if std.core.len(junk) > 16000 { junk = "" }
+    n += 1
+}
+
+std.io.println(parts[0])
+std.io.println(parts[3])
+std.io.println(pair[0])
+std.io.println(pair[1])
+std.io.println(words[1])
