@@ -300,9 +300,12 @@ Use `-Dpreset=<name>` with any build command.
 src/lang/         lexer, compiler, bytecode, VM
 src/runtime/      heap, GC, runtime, Zig embedding API
 src/engine.zig    WASM/native engine exports
+src/root.zig      public Zig module (`gengo`) for embedders
+src/*_runner.zig  white-box test harness roots (must live in src/, see docs/testing.md)
+tools/            conformance and benchmark orchestrators
 tests/spec/       conformance cases, both pass and fail
 tests/bench/      benchmark programs
-examples/         embedding demos (Python, etc.)
+examples/         embedding demos (Zig, Python, JS)
 include/          public C header (gengo-engine.h)
 docs/             language, stdlib, embedding, engine API
 sdk/typescript/   TypeScript wrapper for gengo-engine.wasm

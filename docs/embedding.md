@@ -58,7 +58,7 @@ zig build -Dpreset=dev embed-example
 ```
 
 Source:
-- `embed_host_example.zig`
+- `examples/embed-host/main.zig`
 
 ## Examples
 

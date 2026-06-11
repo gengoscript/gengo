@@ -1,9 +1,12 @@
 const std = @import("std");
-const api = @import("runtime/api.zig");
-const Value = @import("lang/value.zig").Value;
+const gengo = @import("gengo");
+const api = gengo.api;
+const Value = gengo.Value;
 
 pub fn main() !void {
-    var rt = api.Runtime.init(.{ .allow_io = false, .max_ops = 200000 });
+    var rt: api.Runtime = undefined;
+    rt.initWithPolicy(.{ .allow_io = false, .max_ops = 200000 });
+    defer rt.deinit();
 
     const setup = rt.run(
         \\counter := 0
@@ -24,14 +27,14 @@ pub fn main() !void {
         },
     }
 
-    const a = rt.call("bump", &[_]Value{.{ .number = 2 }});
-    const b = rt.call("bump", &[_]Value{.{ .number = 5 }});
+    const a = rt.call("bump", &[_]Value{.{ .int = 2 }});
+    const b = rt.call("bump", &[_]Value{.{ .int = 5 }});
     switch (a) {
-        .ok => |v| std.debug.print("bump(2) -> {d}\n", .{v.number}),
+        .ok => |v| std.debug.print("bump(2) -> {d}\n", .{v.int}),
         .runtime_error => |e| std.debug.print("call error: {s}\n", .{@errorName(e.kind)}),
     }
     switch (b) {
-        .ok => |v| std.debug.print("bump(5) -> {d}\n", .{v.number}),
+        .ok => |v| std.debug.print("bump(5) -> {d}\n", .{v.int}),
         .runtime_error => |e| std.debug.print("call error: {s}\n", .{@errorName(e.kind)}),
     }
 }

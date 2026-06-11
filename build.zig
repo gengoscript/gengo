@@ -72,7 +72,7 @@ pub fn build(b: *std.Build) void {
     // ── Native test runner (replaces bash scripts) ────────────────────────────
 
     const test_runner_mod = b.createModule(.{
-        .root_source_file = b.path("src/test_runner.zig"),
+        .root_source_file = b.path("tools/test_runner.zig"),
         .target = b.graph.host,
         .optimize = .Debug,
     });
@@ -258,7 +258,7 @@ pub fn build(b: *std.Build) void {
     const install_perf = installWasmAs(b, gengo_perf, "gengo-perf.wasm");
 
     const bench_perf_runner_mod = b.createModule(.{
-        .root_source_file = b.path("src/bench_perf_runner.zig"),
+        .root_source_file = b.path("tools/bench_perf_runner.zig"),
         .target = b.graph.host,
         .optimize = .Debug,
     });
@@ -318,12 +318,18 @@ pub fn build(b: *std.Build) void {
 
     // ── Native embed example ──────────────────────────────────────────────────
 
-    const host_embed_mod = b.createModule(.{
-        .root_source_file = b.path("src/embed_host_example.zig"),
+    const gengo_mod = b.createModule(.{
+        .root_source_file = b.path("src/root.zig"),
         .target = b.graph.host,
         .optimize = .Debug,
     });
-    host_embed_mod.addImport("build_options", build_opts_mod);
+    gengo_mod.addImport("build_options", build_opts_mod);
+    const host_embed_mod = b.createModule(.{
+        .root_source_file = b.path("examples/embed-host/main.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    host_embed_mod.addImport("gengo", gengo_mod);
     const host_embed_exe = b.addExecutable(.{
         .name = "embed-host-example",
         .root_module = host_embed_mod,
