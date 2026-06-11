@@ -8,7 +8,7 @@ Domain constraints belong in the type system, not in validation code written aft
 
 You write the host application. Your users write Gengoscript. The engine runs their scripts in a controlled environment, where the host decides what scripts are allowed to see, call, and consume.
 
-**[Try it in the browser](https://gengoscript.github.io/gengo-playground/)** · **[Read the docs](https://docs.gengoscript.org/)**
+**[Try it in the browser](https://playground.gengoscript.org/)** · **[Read the docs](https://docs.gengoscript.org/)**
 
 ---
 
