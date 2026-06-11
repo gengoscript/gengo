@@ -2,5 +2,5 @@ std := import("std")
 type Meters float
 type Miles float
 dist_metric := Meters(1000.0)
-dist_imperial := Miles(dist_metric) * 621.371e-6
+dist_imperial := Miles(float(Miles(dist_metric)) * 621.371e-6)
 std.io.println(dist_imperial)

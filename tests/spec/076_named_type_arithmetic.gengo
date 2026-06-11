@@ -10,14 +10,6 @@ score := Age(10)
 x := age + score
 std.io.println(x)
 
-// T op base -> T
-y := age + 1
-std.io.println(y)
-
-// base op T -> T
-z := 1 + age
-std.io.println(z)
-
 // T op T subtraction
 d := Age(30) - Age(5)
 std.io.println(d)

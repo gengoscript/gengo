@@ -4,7 +4,7 @@ a := Mod_Int(20)
 b := Mod_Int(15)
 m := a + b
 i := 1
-for i <= m {
+for i <= int(m) {
     std.io.println("Hello, World!")
     i++
 }

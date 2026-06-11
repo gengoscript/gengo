@@ -9,7 +9,7 @@ m := MyInt(int((a + b) / 2))
 
 count := 0
 i := 1
-for i <= m {
+for i <= int(m) {
     count++
     i++
 }
