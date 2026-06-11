@@ -16,3 +16,6 @@ test_epoch
 .copilot/
 .codeium/
 gengo_acl.so
+
+# MkDocs build output
+site/
