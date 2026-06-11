@@ -64,7 +64,7 @@ pub fn matchesTypeAlt(v: Value, alt: FieldTypeAlt) bool {
         .array => blk: {
             if (!(v == .object and vms.isArrayObject(v.object))) break :blk false;
             if (alt.elem_spec) |es| {
-                const items = vms.asArraySlice(v.object);
+                const items = vms.asArraySlice(v.object) catch unreachable;
                 var i: usize = 0;
                 while (i < items.len) : (i += 1) {
                     if (!matchesTypeSpec(items[i], es)) break :blk false;
@@ -75,7 +75,7 @@ pub fn matchesTypeAlt(v: Value, alt: FieldTypeAlt) bool {
         .map => blk: {
             if (!(v == .object and vms.isMapObject(v.object))) break :blk false;
             if (alt.key_spec) |ks| {
-                const entries = vms.asMapSlice(v.object);
+                const entries = vms.asMapSlice(v.object) catch unreachable;
                 var i: usize = 0;
                 while (i < entries.len) : (i += 1) {
                     if (!matchesTypeSpec(entries[i].key, ks)) break :blk false;
@@ -308,7 +308,7 @@ pub fn constructNamedType(typ_obj: *Object, arg: Value) !Value {
         .array_t => {
             if (!(arg == .object and vms.isArrayObject(arg.object))) return error.TypeError;
             if (nt.elem_spec) |es| {
-                const items = vms.asArraySlice(arg.object);
+                const items = try vms.asArraySlice(arg.object);
                 var i: usize = 0;
                 while (i < items.len) : (i += 1) {
                     if (!matchesTypeSpec(items[i], es)) return error.TypeError;
@@ -319,7 +319,7 @@ pub fn constructNamedType(typ_obj: *Object, arg: Value) !Value {
         .map_t => {
             if (!(arg == .object and vms.isMapObject(arg.object))) return error.TypeError;
             if (nt.key_spec) |ks| {
-                const entries = vms.asMapSlice(arg.object);
+                const entries = try vms.asMapSlice(arg.object);
                 var i: usize = 0;
                 while (i < entries.len) : (i += 1) {
                     if (!matchesTypeSpec(entries[i].key, ks)) return error.TypeError;
@@ -389,7 +389,7 @@ pub fn enforceFuncReturnTypes(f: FuncObj, retval: Value) !void {
         return;
     }
     if (!(retval == .object and vms.isArrayObject(retval.object))) return error.TypeError;
-    const arr = vms.asArraySlice(retval.object);
+    const arr = try vms.asArraySlice(retval.object);
     if (arr.len != f.return_types.len) return error.ArityMismatch;
     var i: usize = 0;
     while (i < arr.len) : (i += 1) {

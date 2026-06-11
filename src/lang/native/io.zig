@@ -102,7 +102,7 @@ pub fn sprintValue(buf_or_null: ?[]u8, v: Value) !usize {
                 return s.len;
             },
             .array, .array_managed => {
-                const items = vms.asArraySlice(obj);
+                const items = try vms.asArraySlice(obj);
                 var len: usize = 1;
                 var needs_comma = false;
                 for (items) |item| {
@@ -125,7 +125,7 @@ pub fn sprintValue(buf_or_null: ?[]u8, v: Value) !usize {
                 return len;
             },
             .map, .map_managed, .map_hashed => {
-                const items = vms.asMapSlice(obj);
+                const items = try vms.asMapSlice(obj);
                 var len: usize = 1;
                 var needs_comma = false;
                 for (items) |item| {

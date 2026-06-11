@@ -341,7 +341,7 @@ fn valueToWire(val: Value) !ValueWire {
         .object => |obj| switch (obj.*) {
             .dyn_string => makeWire(@intFromEnum(WireTag.string), @intFromPtr(obj.dyn_string.ptr), @intCast(obj.dyn_string.len)),
             .array, .array_managed => {
-                const items = vms.asArraySlice(obj);
+                const items = try vms.asArraySlice(obj);
                 const wires = (heap.bump(ValueWire, items.len) orelse return makeWire(@intFromEnum(WireTag.null), 0, 0))[0..items.len];
                 for (items, 0..) |item, i| {
                     wires[i] = try valueToWire(item);
@@ -349,7 +349,7 @@ fn valueToWire(val: Value) !ValueWire {
                 return makeWire(@intFromEnum(WireTag.array), @intFromPtr(wires.ptr), @intCast(items.len));
             },
             .map, .map_managed, .map_hashed => {
-                const entries = vms.asMapSlice(obj);
+                const entries = try vms.asMapSlice(obj);
                 const wires = (heap.bump(ValueWire, entries.len * 2) orelse return makeWire(@intFromEnum(WireTag.null), 0, 0))[0 .. entries.len * 2];
                 for (entries, 0..) |entry, i| {
                     wires[i * 2] = try valueToWire(entry.key);
@@ -394,7 +394,7 @@ fn valueToWireWithScratch(val: Value, scratch: *Engine) !ValueWire {
                 return makeWire(@intFromEnum(WireTag.string), @intFromPtr(stable.ptr), @intCast(stable.len));
             },
             .array, .array_managed => {
-                const items = vms.asArraySlice(obj);
+                const items = try vms.asArraySlice(obj);
                 const count = @min(items.len, scratch.wire_elem_buf.len);
                 const wires = &scratch.wire_elem_buf;
                 scratch.wire_elem_count = @intCast(count);
@@ -404,7 +404,7 @@ fn valueToWireWithScratch(val: Value, scratch: *Engine) !ValueWire {
                 return makeWire(@intFromEnum(WireTag.array), @intFromPtr(wires.ptr), @intCast(count));
             },
             .map, .map_managed, .map_hashed => {
-                const entries = vms.asMapSlice(obj);
+                const entries = try vms.asMapSlice(obj);
                 const max_entries = scratch.wire_elem_buf.len / 2;
                 const count = @min(entries.len, max_entries);
                 const wires = &scratch.wire_elem_buf;

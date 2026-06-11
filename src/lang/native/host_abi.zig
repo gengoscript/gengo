@@ -83,7 +83,7 @@ pub fn wireFromValue(v: Value) !host_abi.ValueWire {
                 .reserved2 = 0,
             },
             .array, .array_managed => {
-                const items = vms.asArraySlice(o);
+                const items = try vms.asArraySlice(o);
                 const wires = (heap.bump(host_abi.ValueWire, items.len) orelse return error.OutOfMemory)[0..items.len];
                 for (items, 0..) |item, i| {
                     wires[i] = try wireFromValue(item);
@@ -98,7 +98,7 @@ pub fn wireFromValue(v: Value) !host_abi.ValueWire {
                 };
             },
             .map, .map_managed, .map_hashed => {
-                const entries = vms.asMapSlice(o);
+                const entries = try vms.asMapSlice(o);
                 const wires = (heap.bump(host_abi.ValueWire, entries.len * 2) orelse return error.OutOfMemory)[0 .. entries.len * 2];
                 for (entries, 0..) |entry, i| {
                     wires[i * 2] = try wireFromValue(entry.key);

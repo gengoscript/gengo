@@ -42,12 +42,12 @@ fn drainMarkQueue() void {
         const obj = mark_worklist[mark_worklist_top];
         switch (obj.*) {
             .array, .array_managed => {
-                const items = vms.asArraySlice(obj);
+                const items = vms.asArraySlice(obj) catch unreachable;
                 var i: usize = 0;
                 while (i < items.len) : (i += 1) markValue(items[i]);
             },
             .map, .map_managed, .map_hashed => {
-                const items = vms.asMapSlice(obj);
+                const items = vms.asMapSlice(obj) catch unreachable;
                 var i: usize = 0;
                 while (i < items.len) : (i += 1) {
                     markValue(items[i].key);

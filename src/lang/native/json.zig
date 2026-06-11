@@ -119,14 +119,14 @@ fn jsonStringifyValue(s: *std.json.Stringify, gv: Value) !void {
             .dyn_string => |str| try s.write(str),
             .array, .array_managed => {
                 try s.beginArray();
-                for (vms.asArraySlice(obj)) |item| {
+                for (try vms.asArraySlice(obj)) |item| {
                     try jsonStringifyValue(s, item);
                 }
                 try s.endArray();
             },
             .map, .map_managed, .map_hashed => {
                 try s.beginObject();
-                for (vms.asMapSlice(obj)) |entry| {
+                for (try vms.asMapSlice(obj)) |entry| {
                     const key = vms.unboxNamed(entry.key);
                     const key_str = try vms.asStringValue(key);
                     try s.objectField(key_str);

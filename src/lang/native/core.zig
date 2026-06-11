@@ -23,8 +23,8 @@ pub fn nativeLen(v: Value) !Value {
         .string => |s| try vmstr.utf8RuneCountCached(s),
         .object => |obj| switch (obj.*) {
             .dyn_string => |s| try vmstr.utf8RuneCountCached(s),
-            .array, .array_managed => vms.asArraySlice(obj).len,
-            .map, .map_managed, .map_hashed => vms.asMapSlice(obj).len,
+            .array, .array_managed => (try vms.asArraySlice(obj)).len,
+            .map, .map_managed, .map_hashed => (try vms.asMapSlice(obj)).len,
             .struct_instance => |s| s.fields.len,
             else => return error.TypeError,
         },
@@ -87,7 +87,7 @@ pub fn nativeDelete(m_obj: *Object, key: Value) !Value {
 }
 
 pub fn nativeHas(m_obj: *Object, key: Value) !Value {
-    const items = vms.asMapSlice(m_obj);
+    const items = try vms.asMapSlice(m_obj);
     for (items) |entry| {
         if (vmmap.mapKeyEquals(entry.key, key)) return .{ .boolean = true };
     }
@@ -96,7 +96,7 @@ pub fn nativeHas(m_obj: *Object, key: Value) !Value {
 
 pub fn nativeKeys(m_obj: *Object) !Value {
     if (!vms.isMapObject(m_obj)) return error.TypeError;
-    const items = vms.asMapSlice(m_obj);
+    const items = try vms.asMapSlice(m_obj);
     const obj = try vmgc.vmAllocObject();
     obj.* = .{ .array = &[_]Value{} };
     try vms.pushTempRoot(.{ .object = obj });
@@ -109,7 +109,7 @@ pub fn nativeKeys(m_obj: *Object) !Value {
 
 pub fn nativeValues(m_obj: *Object) !Value {
     if (!vms.isMapObject(m_obj)) return error.TypeError;
-    const items = vms.asMapSlice(m_obj);
+    const items = try vms.asMapSlice(m_obj);
     const obj = try vmgc.vmAllocObject();
     obj.* = .{ .array = &[_]Value{} };
     try vms.pushTempRoot(.{ .object = obj });
@@ -122,7 +122,7 @@ pub fn nativeValues(m_obj: *Object) !Value {
 
 pub fn nativeContains(arr_obj: *Object, needle: Value) !Value {
     if (!vms.isArrayObject(arr_obj)) return error.TypeError;
-    const items = vms.asArraySlice(arr_obj);
+    const items = try vms.asArraySlice(arr_obj);
     for (items) |item| {
         const eq = try nativeDeepEqual(item, needle);
         if (eq == .boolean and eq.boolean) return .{ .boolean = true };
@@ -132,7 +132,7 @@ pub fn nativeContains(arr_obj: *Object, needle: Value) !Value {
 
 pub fn nativeRemove(arr_obj: *Object, idx_val: Value) !Value {
     if (!vms.isArrayObject(arr_obj)) return error.TypeError;
-    const items = vms.asArraySlice(arr_obj);
+    const items = try vms.asArraySlice(arr_obj);
     const idx = try vms.vmIndexFromVal(idx_val);
     if (idx >= items.len) return error.IndexOutOfBounds;
     const obj = try vmgc.vmAllocObject();
@@ -164,7 +164,7 @@ pub fn nativeAppend(start: usize, argc: u8) !Value {
             }
         }
     }
-    const base = vms.asArraySlice(arr_val.object);
+    const base = try vms.asArraySlice(arr_val.object);
     const extra: usize = argc - 1;
     const obj = try vmgc.vmAllocObject();
     obj.* = .{ .array = &[_]Value{} };
@@ -467,7 +467,7 @@ fn deepEqualObject(a: *Object, b: *Object, visits: []DeepEqVisit, visit_len: *us
     if (std.meta.activeTag(a.*) != std.meta.activeTag(b.*)) {
         if ((a.* == .array or a.* == .array_managed) and (b.* == .array or b.* == .array_managed)) {
         } else if (vms.isMapObject(a) and vms.isMapObject(b)) {
-            return try deepEqualMap(vms.asMapSlice(a), vms.asMapSlice(b), visits, visit_len);
+            return try deepEqualMap(try vms.asMapSlice(a), try vms.asMapSlice(b), visits, visit_len);
         } else {
             return false;
         }
@@ -476,15 +476,15 @@ fn deepEqualObject(a: *Object, b: *Object, visits: []DeepEqVisit, visit_len: *us
     switch (a.*) {
         .array, .array_managed => {
             try appendVisitedPair(a, b, visits, visit_len);
-            const aa = vms.asArraySlice(a);
-            const bb = vms.asArraySlice(b);
+            const aa = try vms.asArraySlice(a);
+            const bb = try vms.asArraySlice(b);
             if (aa.len != bb.len) return false;
             for (aa, 0..) |item, i| { if (!try deepEqualValue(item, bb[i], visits, visit_len)) return false; }
             return true;
         },
         .map, .map_managed, .map_hashed => {
             try appendVisitedPair(a, b, visits, visit_len);
-            return deepEqualMap(vms.asMapSlice(a), vms.asMapSlice(b), visits, visit_len);
+            return deepEqualMap(try vms.asMapSlice(a), try vms.asMapSlice(b), visits, visit_len);
         },
         .dyn_string => return common.streq(a.dyn_string, b.dyn_string),
         .function, .closure, .iterator => return a == b,
@@ -576,7 +576,7 @@ fn cloneObject(src: *Object, visits: []CloneVisit, visit_len: *usize) anyerror!V
             try vms.pushTempRoot(.{ .object = out_obj });
             defer vms.popTempRoot();
             try cloneRemember(src, out_obj, visits, visit_len);
-            const items = vms.asArraySlice(src);
+            const items = try vms.asArraySlice(src);
             const out = try vmgc.vmAllocManagedSlice(Value, items.len);
             for (out) |*slot| slot.* = .null;
             out_obj.* = .{ .array_managed = out[0..items.len] };
@@ -589,7 +589,7 @@ fn cloneObject(src: *Object, visits: []CloneVisit, visit_len: *usize) anyerror!V
             try vms.pushTempRoot(.{ .object = out_obj });
             defer vms.popTempRoot();
             try cloneRemember(src, out_obj, visits, visit_len);
-            const entries = vms.asMapSlice(src);
+            const entries = try vms.asMapSlice(src);
             const out = try vmgc.vmAllocManagedSlice(MapEntry, entries.len);
             for (out) |*slot| slot.* = .{ .key = .null, .value = .null };
             out_obj.* = .{ .map_managed = out[0..entries.len] };
