@@ -298,6 +298,14 @@ pub fn patchJump(offset: usize) !void {
     if (jump > 0xffff) return error.JumpTooLarge;
     g_state.code[offset] = @intCast((jump >> 8) & 0xff);
     g_state.code[offset + 1] = @intCast(jump & 0xff);
+    // The patched jump lands at the current end of code, so the next emitted
+    // instruction must start exactly here. Suppress pending peephole fusion:
+    // fusing across this boundary (triple get_local+const or quad +jif_pop)
+    // would rewrite the preceding instruction and turn the jump target into
+    // operand bytes.
+    g_state.last_const_code_pos = null;
+    g_state.last_get_local_code_pos = null;
+    g_state.last_triple_eq_pos = null;
 }
 
 pub fn emitLoop(loop_start: usize, line: u32) !void {
