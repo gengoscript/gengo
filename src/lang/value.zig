@@ -157,6 +157,13 @@ pub const Object = union(ObjTag) {
 };
 
 pub const VTag = enum { int, float, decimal, rune, boolean, string, error_value, object, null };
+
+/// A Value is a tagged union.  The `.string` variant is a raw ptr+len with
+/// no GC tracking; it MUST only point at immortal bytes (source-code string
+/// literals, lexer interned strings, or the chunk constant pool).  Any
+/// heap-backed or transient text MUST be stored as a `.dyn_string` Object.
+/// Violating this invariant causes use-after-free or aliasing bugs when the
+/// GC or a native reuses the backing memory.
 pub const Value = union(VTag) {
     int: f64,
     float: f64,

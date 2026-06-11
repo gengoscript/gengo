@@ -6,7 +6,9 @@ const Compiler = @import("lang/compiler.zig").Compiler;
 const Op = @import("lang/op.zig").Op;
 const Runtime = @import("runtime/runtime.zig").Runtime;
 const vms = @import("lang/vm_state.zig");
+const api = @import("runtime/api.zig");
 const cfg = @import("runtime/config.zig");
+const Value = @import("lang/value.zig").Value;
 
 fn setup() Runtime {
     var rt: Runtime = .{};
@@ -522,4 +524,31 @@ test "compiler: expression too deep returns error" {
 
 test {
     _ = @import("lang/native/fs_state.zig");
+}
+
+// Regression for #101: .string immortality invariant.
+// After the fix, const_add string concatenation must NOT produce a .string
+// view into the str_acc buffer; it should always allocate a dyn_string.
+// This test compiles a chain and verifies the result is a GC object.
+test "const_add string chain produces dyn_string, not str_acc view" {
+    var rt = setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\func f() string {
+        \\    return "a" + "b" + "c"
+        \\}
+    );
+    // The constant pool should contain the string literals "a", "b", "c".
+    // After the fix, the result is a dyn_string object, not a .string view.
+    // We verify by running the function and checking the result type.
+    try rt.run(
+        \\func f() string {
+        \\    return "a" + "b" + "c"
+        \\}
+    );
+
+    const v = try rt.callGlobal("f", &[_]Value{});
+    try std.testing.expect(v == .object);
+    try std.testing.expect(v.object.* == .dyn_string);
+    try std.testing.expectEqualStrings("abc", v.object.dyn_string);
 }

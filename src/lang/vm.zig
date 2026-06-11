@@ -2157,45 +2157,21 @@ fn runInner() !void {
                 const k = try chunk.constAt(try vmShort());
                 const a = try vmPop();
                 if (vms.isStringValue(a) and vms.isStringValue(k)) {
+                    const sa = try vms.asStringValue(a);
                     const sk = try vms.asStringValue(k);
-                    const state = vmState();
-                    const acc = &state.str_acc;
-                    // An acc view is a .string whose ptr equals &str_acc[0].
-                    // Using pointer identity avoids any per-byte scan.
-                    const is_acc = (a == .string) and (state.str_acc_len > 0) and
-                        (@intFromPtr(a.string.ptr) == @intFromPtr(&acc[0]));
-                    const sa: []const u8 = if (is_acc) acc[0..state.str_acc_len] else try vms.asStringValue(a);
-                    const new_len = sa.len + sk.len;
-                    if (new_len < sa.len) return error.TooManyConstants;
-                    if (new_len <= acc.len) {
-                        // Fast path: accumulate in the buffer, push a .string view.
-                        if (!is_acc) @memcpy(acc[0..sa.len], sa);
-                        @memcpy(acc[sa.len..new_len], sk);
-                        state.str_acc_len = new_len;
-                        vmperf.countStringConcat(new_len);
-                        try vmPush(.{ .string = acc[0..new_len] });
-                        // Lookahead: if next op is not const_add, promote now so
-                        // callers never observe a .string pointing into the acc buffer.
-                        const next = if (state.ip < chunk.codeLen()) chunk.codeByteAt(state.ip) else 0xff;
-                        if (next != @intFromEnum(Op.const_add)) {
-                            _ = try vmPop();
-                            const result = try makeDynString(acc[0..new_len]);
-                            state.str_acc_len = 0;
-                            try vmPush(result);
-                        }
-                    } else {
-                        // acc too small (very long chain): alloc normally.
-                        // sa points to acc or to a GC object; neither needs a temp root here
-                        // because acc is VM-static and GC strings in the const pool are traced.
-                        // If a is a GC object (not acc and not a const-pool string literal),
-                        // push it as a temp root so concatDynString can safely allocate.
-                        const a_is_gc_obj = (!is_acc) and (a == .object);
-                        if (a_is_gc_obj) try vms.pushTempRoot(a);
-                        defer if (a_is_gc_obj) vms.popTempRoot();
-                        const result = try concatDynString(sa, sk);
-                        state.str_acc_len = 0;
-                        try vmPush(result);
+                    // Protect GC-backed operands so concatDynString can allocate
+                    // without the source bytes being freed and reused.
+                    const a_is_gc_obj = (a == .object);
+                    const k_is_gc_obj = (k == .object);
+                    if (a_is_gc_obj) try pushTempRoot(a);
+                    if (k_is_gc_obj) try pushTempRoot(k);
+                    defer {
+                        if (k_is_gc_obj) popTempRoot();
+                        if (a_is_gc_obj) popTempRoot();
                     }
+                    const result = try concatDynString(sa, sk);
+                    vmperf.countStringConcat(sa.len + sk.len);
+                    try vmPush(result);
                 } else {
                     const an = try vms.valueAsNumber(a);
                     const kn = try vms.valueAsNumber(k);

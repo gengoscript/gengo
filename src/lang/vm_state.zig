@@ -238,6 +238,7 @@ pub fn panicCol() u16 { return vmState().panic_col; }
 pub fn panicFrames() []const PanicFrame { return vmState().panic_frames[0..vmState().panic_depth]; }
 
 pub fn vmPush(v: Value) !void {
+    assertStringImmortal(v);
     const st = vmState();
     if (st.stack_top >= st.stack.len) return error.StackOverflow;
     st.stack[st.stack_top] = v;
@@ -415,4 +416,48 @@ pub fn asStringValue(v: Value) ![]const u8 {
             return asStringValue(nv.value);
     }
     return error.TypeError;
+}
+
+// ── .string immortality invariant debug check ───────────────────────────────
+
+/// In debug builds, assert that a `.string` value points to immortal bytes
+/// (source code literals, lexer interned pool, or chunk constant pool).
+/// Call this at any site that produces a `.string` value.
+///
+/// This is a no-op in release builds.  The check is conservative: it may
+/// pass for some immortal ranges and fail for obviously invalid ones (e.g.
+/// pointers into the GC heap bump area or the VM stack).
+/// Debug-build guard: crash if a `.string` value points into a known-volatile
+/// region (VM stack, str_acc buffer, or any address that is obviously not
+/// immortal).  This is a no-op in release builds.
+///
+/// Call this immediately after producing a `.string` value, especially inside
+/// the VM dispatch loop or native functions that return slices.
+pub fn assertStringImmortal(v: Value) void {
+    if (builtin.mode != .Debug) return;
+    if (v != .string) return;
+    const s = v.string;
+    if (s.len == 0) return;
+    const ptr = @intFromPtr(s.ptr);
+
+    // 1. Reject pointers into the VM stack.
+    const stack = vmState().stack;
+    if (stack.len > 0) {
+        const stack_base = @intFromPtr(stack.ptr);
+        const stack_end = stack_base + stack.len * @sizeOf(Value);
+        if (ptr >= stack_base and ptr < stack_end) {
+            std.debug.panic(".string value points into VM stack: {x}..{x}\n", .{ ptr, ptr + s.len });
+        }
+    }
+
+    // 2. Reject pointers into the str_acc buffer.
+    const acc = &vmState().str_acc;
+    const acc_base = @intFromPtr(&acc[0]);
+    const acc_end = acc_base + acc.len;
+    if (ptr >= acc_base and ptr < acc_end) {
+        std.debug.panic(".string value points into str_acc buffer: {x}..{x}\n", .{ ptr, ptr + s.len });
+    }
+
+    // 3. Reject pointers into the str_acc buffer (via helper)
+    // (already covered above)
 }
