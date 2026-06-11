@@ -432,6 +432,12 @@ pub fn deferStmt(c: anytype) !void {
             try c.expr();
             try c.consume(.rparen);
         },
+        .lbrace => {
+            try compileDeferBlock(c);
+            try chunk.emit2(@intFromEnum(Op.defer_call), 0, c.prev.line);
+            c.matchOpt(.semicolon);
+            return;
+        },
         .err_invalid_char => return error.InvalidChar,
         .err_unterminated_string => return error.UnterminatedString,
         else => { c.setErr("expected expression, found {s}", .{c.tokenName(c.cur.typ)}); return error.ExpectedExpression; },
@@ -557,6 +563,63 @@ fn emitImplicitReturn(scope: *FuncInfo, line: u32) !void {
         }
         try chunk.emit2(@intFromEnum(Op.build_tuple), scope.named_return_count, line);
     }
+}
+
+fn compileDeferBlock(c: anytype) !void {
+    // c.prev is '{' (consumed by deferStmt's advance()), c.cur is first token inside block.
+    // Desugars `defer { ... }` to the equivalent of `defer (func() { ... })()`:
+    // compile the block as a parameterless closure and emit defer_call 0.
+    const jump_over = try chunk.emitJump(.jump, c.prev.line);
+    const func_ip = chunk.codeLen();
+
+    if (c.scope_depth >= MaxScopes) return error.TooManyNestedFunctions;
+    c.scopes[c.scope_depth] = .{};
+    c.scope_depth += 1;
+
+    const saved = c.repl_expr_ok;
+    c.repl_expr_ok = false;
+    while (!c.check(.rbrace) and !c.check(.eof)) try c.decl();
+    try c.consume(.rbrace);
+    c.repl_expr_ok = saved;
+
+    try c.cleanupLocals(0, c.prev.line);
+
+    const scope = c.currentScope();
+    try emitImplicitReturn(scope, c.prev.line);
+    try chunk.emitOp(.ret, c.prev.line);
+
+    c.scope_depth -= 1;
+    try chunk.patchJump(jump_over);
+
+    const uv_count = scope.upvalue_count;
+    const slots = heap.bump(u8, uv_count) orelse return error.OutOfMemory;
+    var ui: u8 = 0;
+    while (ui < uv_count) : (ui += 1) {
+        const uv = scope.upvalues[ui];
+        const flag: u8 = if (uv.from_upvalue) @as(u8, 0x80) else @as(u8, 0x00);
+        slots[ui] = flag | uv.index;
+    }
+
+    const any_alts = heap.bump(FieldTypeAlt, 1) orelse return error.OutOfMemory;
+    any_alts[0] = .{ .typ = .any };
+    const any_spec: FieldTypeSpec = .{ .alts = any_alts[0..1] };
+
+    const func_obj = heap.allocObject() orelse return error.OutOfMemory;
+    func_obj.* = .{ .function = .{
+        .ip = func_ip,
+        .arity = 0,
+        .is_variadic = false,
+        .variadic_type = any_spec,
+        .capture_slots = slots[0..uv_count],
+        .param_types = &.{},
+        .has_typed_params = false,
+        .return_types = &.{},
+        .has_typed_returns = false,
+        .named_return_count = 0,
+    } };
+
+    const cidx: u16 = try chunk.addConst(.{ .object = func_obj });
+    try chunk.emitConstIdx(.make_closure, cidx, c.prev.line);
 }
 
 pub fn forInStmt(c: anytype) anyerror!void {

@@ -36,9 +36,32 @@ func closure_sees_updated_value() {
     std.io.println("body")
 }
 
+func defer_block_basic() {
+    defer { std.io.println("block deferred") }
+    std.io.println("body")
+}
+
+func defer_block_multiple() {
+    defer {
+        std.io.println("first")
+        std.io.println("second")
+    }
+    std.io.println("body")
+}
+
+func defer_block_captures_by_reference() {
+    x := 10
+    defer { std.io.println(x) }
+    x = 20
+    std.io.println("body")
+}
+
 basic_defer()
 lifo_order()
 captures_arg_by_value(7)
 defers_in_loop()
 std.io.println(defer_before_return())
 closure_sees_updated_value()
+defer_block_basic()
+defer_block_multiple()
+defer_block_captures_by_reference()

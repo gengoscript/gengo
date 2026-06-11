@@ -13,3 +13,10 @@ defer
 42
 body
 20
+body
+block deferred
+body
+first
+second
+body
+20
