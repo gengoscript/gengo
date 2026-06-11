@@ -4,6 +4,15 @@ This changelog tracks notable language/runtime changes by implementation date.
 
 ## 2026-06-11
 
+### Breaking — Strict int/float Comparison
+
+Ordering comparisons now follow the same strictness as arithmetic: `1.5 > 1`
+is a `TypeError`, matching `1.5 + 1`. Previously comparison silently allowed
+the mix while arithmetic rejected it. Equality (`==`) is unchanged and still
+evaluates to `false` across types. (Precedent: Ada and Go forbid mixed typed
+values in both arithmetic and comparison; their leniency exists only for
+adaptable literals, which Gengoscript does not currently have.)
+
 ### Improved — Runtime Errors Explain Themselves
 
 Type and range errors from arithmetic, comparison, unary negation, and

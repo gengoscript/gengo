@@ -176,6 +176,19 @@ fn valueAsNumberForOp(v: Value, other: Value, op: []const u8) !f64 {
     };
 }
 
+// Ordering comparisons follow the same strictness as arithmetic: raw int
+// and float do not mix (Ada/Go draw this line at typed values too).
+fn checkComparableNumeric(a: Value, b: Value, op: []const u8) !void {
+    const ea = if (a == .object and a.object.* == .named_value) a.object.named_value.value else a;
+    const eb = if (b == .object and b.object.* == .named_value) b.object.named_value.value else b;
+    const ea_raw = ea == .int or ea == .float;
+    const eb_raw = eb == .int or eb == .float;
+    if (ea_raw and eb_raw and @as(VTag, ea) != @as(VTag, eb)) {
+        vms.setRuntimeErr("cannot apply '{s}' to {s} and {s}; use matching numeric types such as 2.0 or float(2)", .{ op, runtimeTypeName(a), runtimeTypeName(b) });
+        return error.TypeError;
+    }
+}
+
 fn valueAsNumberForCompare(v: Value, other: Value) !f64 {
     return vms.valueAsNumber(v) catch |err| {
         if (err == error.TypeError) {
@@ -2118,6 +2131,7 @@ fn runInner() !void {
                 const b = try vmPop();
                 const a = try vmPop();
                 try checkNamedValueCompatibility(a, b);
+                try checkComparableNumeric(a, b, ">");
                 const an = try valueAsNumberForCompare(a, b);
                 const bn = try valueAsNumberForCompare(b, a);
                 if (!std.math.isFinite(an) or !std.math.isFinite(bn)) { vms.setRuntimeErr("cannot compare non-finite value", .{}); return error.TypeError; }
@@ -2127,6 +2141,7 @@ fn runInner() !void {
                 const b = try vmPop();
                 const a = try vmPop();
                 try checkNamedValueCompatibility(a, b);
+                try checkComparableNumeric(a, b, "<");
                 const an = try valueAsNumberForCompare(a, b);
                 const bn = try valueAsNumberForCompare(b, a);
                 if (!std.math.isFinite(an) or !std.math.isFinite(bn)) { vms.setRuntimeErr("cannot compare non-finite value", .{}); return error.TypeError; }
@@ -2277,6 +2292,7 @@ fn runInner() !void {
                 var a = vmState().stack[base + slot];
                 if (a == .object and a.object.* == .cell) a = a.object.cell.value;
                 try checkNamedValueCompatibility(a, k);
+                try checkComparableNumeric(a, k, "<");
                 const a_named = a == .object and a.object.* == .named_value;
                 const k_named = k == .object and k.object.* == .named_value;
                 const an = try valueAsNumberForCompare(if (a_named) a.object.named_value.value else a, k);
@@ -2325,6 +2341,7 @@ fn runInner() !void {
                 const k = try chunk.constAt(try vmShort());
                 const a = try vmPop();
                 try checkNamedValueCompatibility(a, k);
+                try checkComparableNumeric(a, k, "<");
                 const an = try valueAsNumberForCompare(a, k);
                 const kn = try valueAsNumberForCompare(k, a);
                 if (!std.math.isFinite(an) or !std.math.isFinite(kn)) { vms.setRuntimeErr("cannot compare non-finite value", .{}); return error.TypeError; }
