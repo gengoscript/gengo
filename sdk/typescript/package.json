@@ -2,7 +2,7 @@
   "name": "@gengo/engine",
   "version": "0.1.0",
   "description": "Gengo embeddable scripting engine — TypeScript SDK for the WASM runtime",
-  "keywords": ["gengo", "scripting", "wasm", "engine", "embed"],
+  "keywords": ["gengo", "gengoscript", "scripting", "wasm", "engine", "embed", "sandbox"],
   "license": "MIT",
   "repository": {
     "type": "git",
