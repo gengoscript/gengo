@@ -53,7 +53,7 @@ pub fn nativeRandSeed(n_val: Value) !void {
 
 pub fn nativeRandChoice(arr_obj: *Object) !Value {
     if (!vms.isArrayObject(arr_obj)) return error.TypeError;
-    const items = vms.asArraySlice(arr_obj);
+    const items = try vms.asArraySlice(arr_obj);
     if (items.len == 0) return error.RangeError;
     const idx = randRng().intRangeLessThan(usize, 0, items.len);
     return items[idx];

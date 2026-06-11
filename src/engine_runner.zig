@@ -270,7 +270,7 @@ fn testArrayWireResult() void {
     switch (call_res) {
         .ok => |v| {
             if (v != .object) fail("engine FAIL: expected object\n");
-            const items = vms.asArraySlice(v.object);
+            const items = vms.asArraySlice(v.object) catch unreachable;
             if (items.len != 3) fail("engine FAIL: expected 3 items\n");
             if (items[0] != .int or items[0].int != 1) fail("engine FAIL: expected 1\n");
             if (items[1] != .int or items[1].int != 2) fail("engine FAIL: expected 2\n");

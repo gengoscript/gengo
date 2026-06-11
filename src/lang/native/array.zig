@@ -17,7 +17,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             if (arr_val != .object) return error.TypeError;
             const arr_obj = arr_val.object;
             if (!vms.isArrayObject(arr_obj)) return error.TypeError;
-            const items = vms.asArraySlice(arr_obj);
+            const items = try vms.asArraySlice(arr_obj);
             const out_obj = try vmgc.vmAllocObject();
             out_obj.* = .{ .array = &[_]Value{} };
             try vms.pushTempRoot(.{ .object = out_obj });
@@ -49,11 +49,11 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             if (arr_val != .object) return error.TypeError;
             const arr_obj = arr_val.object;
             if (!vms.isArrayObject(arr_obj)) return error.TypeError;
-            const items = vms.asArraySlice(arr_obj);
+            const items = try vms.asArraySlice(arr_obj);
             var total: usize = 0;
             for (items) |item| {
                 if (item == .object and vms.isArrayObject(item.object)) {
-                    total += vms.asArraySlice(item.object).len;
+                    total += (try vms.asArraySlice(item.object)).len;
                 } else {
                     total += 1;
                 }
@@ -67,7 +67,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                 var idx: usize = 0;
                 for (items) |item| {
                     if (item == .object and vms.isArrayObject(item.object)) {
-                        const sub = vms.asArraySlice(item.object);
+                        const sub = try vms.asArraySlice(item.object);
                         @memcpy(out[idx..][0..sub.len], sub);
                         idx += sub.len;
                     } else {
@@ -88,7 +88,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             if (arr_val != .object) return error.TypeError;
             const arr_obj = arr_val.object;
             if (!vms.isArrayObject(arr_obj)) return error.TypeError;
-            const items = vms.asArraySlice(arr_obj);
+            const items = try vms.asArraySlice(arr_obj);
             const out_obj = try vmgc.vmAllocObject();
             out_obj.* = .{ .array = &[_]Value{} };
             try vms.pushTempRoot(.{ .object = out_obj });
@@ -112,7 +112,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             if (arr_val != .object) return error.TypeError;
             const arr_obj = arr_val.object;
             if (!vms.isArrayObject(arr_obj)) return error.TypeError;
-            const items = vms.asArraySlice(arr_obj);
+            const items = try vms.asArraySlice(arr_obj);
             var acc = init_val;
             try vms.pushTempRoot(acc);
             defer vms.popTempRoot();
@@ -131,7 +131,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             if (arr_val != .object) return error.TypeError;
             const arr_obj = arr_val.object;
             if (!vms.isArrayObject(arr_obj)) return error.TypeError;
-            const items = vms.asArraySlice(arr_obj);
+            const items = try vms.asArraySlice(arr_obj);
             const from = try vms.valueAsInt(from_val);
             const to = try vms.valueAsInt(to_val);
             if (from < 0 or to > @as(i64, @intCast(items.len)) or from > to) return error.IndexOutOfBounds;
@@ -159,8 +159,8 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const a_obj = a_val.object;
             const b_obj = b_val.object;
             if (!vms.isArrayObject(a_obj) or !vms.isArrayObject(b_obj)) return error.TypeError;
-            const a_items = vms.asArraySlice(a_obj);
-            const b_items = vms.asArraySlice(b_obj);
+            const a_items = try vms.asArraySlice(a_obj);
+            const b_items = try vms.asArraySlice(b_obj);
             const pair_count = @min(a_items.len, b_items.len);
             const out_obj = try vmgc.vmAllocObject();
             out_obj.* = .{ .array = &[_]Value{} };
@@ -189,7 +189,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             if (arr_val != .object) return error.TypeError;
             const arr_obj = arr_val.object;
             if (!vms.isArrayObject(arr_obj)) return error.TypeError;
-            const items = vms.asArraySlice(arr_obj);
+            const items = try vms.asArraySlice(arr_obj);
             var result: Value = .null;
             for (items) |item| {
                 const ok = try vm.callFunction(fn_val, &.{item});
@@ -206,7 +206,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             if (arr_val != .object) return error.TypeError;
             const arr_obj = arr_val.object;
             if (!vms.isArrayObject(arr_obj)) return error.TypeError;
-            const items = vms.asArraySlice(arr_obj);
+            const items = try vms.asArraySlice(arr_obj);
             var result: Value = .{ .int = -1 };
             for (items, 0..) |item, i| {
                 const ok = try vm.callFunction(fn_val, &.{item});
@@ -223,7 +223,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             if (arr_val != .object) return error.TypeError;
             const arr_obj = arr_val.object;
             if (!vms.isArrayObject(arr_obj)) return error.TypeError;
-            const items = vms.asArraySlice(arr_obj);
+            const items = try vms.asArraySlice(arr_obj);
             var result = true;
             for (items) |item| {
                 const ok = try vm.callFunction(fn_val, &.{item});
@@ -240,7 +240,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             if (arr_val != .object) return error.TypeError;
             const arr_obj = arr_val.object;
             if (!vms.isArrayObject(arr_obj)) return error.TypeError;
-            const items = vms.asArraySlice(arr_obj);
+            const items = try vms.asArraySlice(arr_obj);
             var result = false;
             for (items) |item| {
                 const ok = try vm.callFunction(fn_val, &.{item});
@@ -260,7 +260,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const size = try vms.valueAsInt(size_val);
             if (size <= 0) return error.RangeError;
             const sz: usize = @intCast(size);
-            const items = vms.asArraySlice(arr_obj);
+            const items = try vms.asArraySlice(arr_obj);
             const chunk_count = if (items.len == 0) 0 else (items.len + sz - 1) / sz;
             const out_obj = try vmgc.vmAllocObject();
             out_obj.* = .{ .array = &[_]Value{} };

@@ -52,7 +52,7 @@ pub fn nativeStrSplit(s: []const u8, sep: []const u8) !Value {
 
 pub fn nativeStrJoin(arr_obj: *Object, sep: []const u8) !Value {
     if (!vms.isArrayObject(arr_obj)) return error.TypeError;
-    const items = vms.asArraySlice(arr_obj);
+    const items = try vms.asArraySlice(arr_obj);
     if (items.len == 0) return vmgc.makeDynString("");
     var total: usize = sep.len * (items.len - 1);
     for (items) |v| total += (try vms.asStringValue(v)).len;

@@ -125,7 +125,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
 
             switch (opts.*) {
                 .map, .map_managed, .map_hashed => {
-                    const entries = vms.asMapSlice(opts);
+                    const entries = try vms.asMapSlice(opts);
                     for (entries) |entry| {
                         const key = switch (entry.key) {
                         .string => |s| s,
@@ -159,7 +159,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                                 .object => |o| o,
                                 else => return error.TypeError,
                             };
-                            const hdr_entries = vms.asMapSlice(hdr_obj);
+                            const hdr_entries = try vms.asMapSlice(hdr_obj);
                             for (hdr_entries) |he| {
                                 const hk = switch (he.key) {
                                     .string => |s| s,

@@ -374,16 +374,16 @@ pub fn isArrayObject(obj: *Object) bool {
     };
 }
 
-pub fn asArraySlice(obj: *Object) []Value {
+pub fn asArraySlice(obj: *Object) ![]Value {
     return switch (obj.*) {
         .array => |s| s,
         .array_managed => |s| s,
-        else => unreachable,
+        else => error.TypeError,
     };
 }
 
 pub fn cloneArraySlice(obj: *Object) ![]Value {
-    const items = asArraySlice(obj);
+    const items = try asArraySlice(obj);
     if (items.len == 0) return &[_]Value{};
     const out = heap.allocManagedSlice(Value, items.len) orelse return error.OutOfMemory;
     @memcpy(out[0..items.len], items);
@@ -397,12 +397,12 @@ pub fn isMapObject(obj: *Object) bool {
     };
 }
 
-pub fn asMapSlice(obj: *Object) []MapEntry {
+pub fn asMapSlice(obj: *Object) ![]MapEntry {
     return switch (obj.*) {
         .map => |s| s,
         .map_managed => |s| s,
         .map_hashed => |hm| hm.entries[0..hm.len],
-        else => unreachable,
+        else => error.TypeError,
     };
 }
 

@@ -395,8 +395,8 @@ fn iterInit(v: Value) !Value {
     switch (iv) {
         .object => |o| switch (o.*) {
             .dyn_string => |s| obj.* = .{ .iterator = .{ .kind = .string, .index = 0, .string = s, .string_managed = true, .source = o } },
-            .array, .array_managed => obj.* = .{ .iterator = .{ .kind = .array, .index = 0, .array = vms.asArraySlice(o), .source = o } },
-            .map, .map_managed, .map_hashed => obj.* = .{ .iterator = .{ .kind = .map, .index = 0, .map = vms.asMapSlice(o), .source = o } },
+            .array, .array_managed => obj.* = .{ .iterator = .{ .kind = .array, .index = 0, .array = try vms.asArraySlice(o), .source = o } },
+            .map, .map_managed, .map_hashed => obj.* = .{ .iterator = .{ .kind = .map, .index = 0, .map = try vms.asMapSlice(o), .source = o } },
             .named_type => |nt| {
                 if (!nt.has_range) return error.TypeError;
                 obj.* = .{ .iterator = .{ .kind = .range, .index = 0, .range_current = nt.min, .range_max = nt.max, .source = o } };
@@ -523,7 +523,7 @@ fn retSlowPath(retval_in: Value) !bool {
         vmState().defer_top -= 1;
         const deferred = vmState().defer_stack[vmState().defer_top];
         try pushTempRoot(deferred);
-        const arr = vms.asArraySlice(deferred.object);
+        const arr = try vms.asArraySlice(deferred.object);
         if (arr.len > 0) {
             if (arr.len > 256) return error.ArityMismatch;
             const dargc: u8 = @intCast(arr.len - 1);
@@ -605,7 +605,7 @@ fn opGetLocalGetField() !void {
     switch (obj.*) {
         .array, .array_managed => {
             const name = (try chunk.constAt(name_idx)).string;
-            const items = vms.asArraySlice(obj);
+            const items = try vms.asArraySlice(obj);
             if (common.streq(name, "first")) {
                 if (items.len == 0) return error.IndexOutOfBounds;
                 try vmPush(items[0]);
@@ -635,10 +635,10 @@ fn opGetLocalGetField() !void {
         .map, .map_managed => {
             const name = (try chunk.constAt(name_idx)).string;
             if (common.streq(name, "len")) {
-                const items = vms.asMapSlice(obj);
+                const items = try vms.asMapSlice(obj);
                 try vmPush(.{ .int = @floatFromInt(items.len) });
             } else {
-                const items = vms.asMapSlice(obj);
+                const items = try vms.asMapSlice(obj);
                 const key_v = Value{ .string = name };
                 var i: usize = 0;
                 while (i < items.len) : (i += 1) {
@@ -783,7 +783,7 @@ fn opGetIndex() !void {
                 try vmPush(try makeDynString(s[start .. start + w]));
             },
             .array, .array_managed => {
-                const items = vms.asArraySlice(obj);
+                const items = try vms.asArraySlice(obj);
                 const idx = try vms.vmIndexFromVal(idx_v);
                 if (idx >= items.len) {
                     vms.setRuntimeErr("index {} out of bounds for array of length {}", .{ idx, items.len });
@@ -792,7 +792,7 @@ fn opGetIndex() !void {
                 try vmPush(items[idx]);
             },
             .map, .map_managed => {
-                const items = vms.asMapSlice(obj);
+                const items = try vms.asMapSlice(obj);
                 var i: usize = 0;
                 while (i < items.len) : (i += 1) {
                     if (vmmap.mapKeyEquals(items[i].key, idx_v)) {
@@ -926,7 +926,7 @@ fn opSetIndex() !void {
     if (container != .object) return error.TypeError;
     switch (container.object.*) {
         .array, .array_managed => {
-            const items = vms.asArraySlice(container.object);
+            const items = try vms.asArraySlice(container.object);
             const idx = try vms.vmIndexFromVal(idx_v);
             if (idx >= items.len) {
                 vms.setRuntimeErr("index {} out of bounds for array of length {}", .{ idx, items.len });
@@ -935,7 +935,7 @@ fn opSetIndex() !void {
             items[idx] = val;
         },
         .map, .map_managed => {
-            const items = vms.asMapSlice(container.object);
+            const items = try vms.asMapSlice(container.object);
             var i: usize = 0;
             var updated = false;
             while (i < items.len) : (i += 1) {
@@ -1042,7 +1042,7 @@ fn opInvokeMethod() !void {
             }
         },
         .map, .map_managed, .map_hashed => {
-            const items = vms.asMapSlice(recv.object);
+            const items = try vms.asMapSlice(recv.object);
             var i: usize = 0;
             var maybe: ?Value = null;
             while (i < items.len) : (i += 1) {
@@ -1087,6 +1087,7 @@ fn opInvokeMethod() !void {
             const kind: @import("value.zig").NamedTypeFnKind = if (common.streq(mname, "succ")) .succ else .pred;
             const arg = vmState().stack[recv_idx + 1];
             const out = try vmtyp.applyNamedTypeFn(recv.object, kind, arg);
+            if (recv_idx >= vmState().stack_top) return error.StackUnderflow;
             vmState().stack_top = recv_idx;
             try vmPush(out);
         },
@@ -1104,16 +1105,19 @@ fn opInvokeMethod() !void {
                 }
                 @memcpy(sb.buf[sb.len..][0..s_bytes.len], s_bytes);
                 sb.len = needed;
+                if (recv_idx >= vmState().stack_top) return error.StackUnderflow;
                 vmState().stack_top = recv_idx;
                 try vmPush(.null);
             } else if (common.streq(mname, "str")) {
                 if (argc != 0) return error.ArityMismatch;
                 const result = try makeDynString(sb.buf[0..sb.len]);
+                if (recv_idx >= vmState().stack_top) return error.StackUnderflow;
                 vmState().stack_top = recv_idx;
                 try vmPush(result);
             } else if (common.streq(mname, "reset")) {
                 if (argc != 0) return error.ArityMismatch;
                 sb.len = 0;
+                if (recv_idx >= vmState().stack_top) return error.StackUnderflow;
                 vmState().stack_top = recv_idx;
                 try vmPush(.null);
             } else return error.UnknownMethod;
@@ -1174,7 +1178,7 @@ fn opInvokeMethod() !void {
         },
         .array, .array_managed => {
             if (argc != 0) return error.ArityMismatch;
-            const items = vms.asArraySlice(recv.object);
+            const items = try vms.asArraySlice(recv.object);
             if (common.streq(mname, "first")) {
                 if (items.len == 0) return error.IndexOutOfBounds;
                 vmState().stack_top = recv_idx;
@@ -1204,7 +1208,7 @@ fn opGetField() !void {
     const obj = container.object;
     switch (obj.*) {
         .array, .array_managed => {
-            const items = vms.asArraySlice(obj);
+            const items = try vms.asArraySlice(obj);
             if (common.streq(name, "first")) {
                 if (items.len == 0) return error.IndexOutOfBounds;
                 try vmPush(items[0]);
@@ -1232,10 +1236,10 @@ fn opGetField() !void {
         },
         .map, .map_managed => {
             if (common.streq(name, "len")) {
-                const items = vms.asMapSlice(obj);
+                const items = try vms.asMapSlice(obj);
                 try vmPush(.{ .int = @floatFromInt(items.len) });
             } else {
-                const items = vms.asMapSlice(obj);
+                const items = try vms.asMapSlice(obj);
                 const key_v = Value{ .string = name };
                 var i: usize = 0;
                 while (i < items.len) : (i += 1) {
@@ -1404,7 +1408,7 @@ fn opSetField() !void {
             inst.fields[fi].value = val;
         },
         .map, .map_managed => {
-            const items = vms.asMapSlice(container.object);
+            const items = try vms.asMapSlice(container.object);
             const key_v = Value{ .string = name };
             var i: usize = 0;
             var updated = false;
@@ -1471,7 +1475,7 @@ fn opDeferInvokeMethod() !void {
             }
         },
         .map, .map_managed, .map_hashed => {
-            const map_items = vms.asMapSlice(recv.object);
+            const map_items = try vms.asMapSlice(recv.object);
             var found: ?Value = null;
             var mi: usize = 0;
             while (mi < map_items.len) : (mi += 1) {
@@ -2386,13 +2390,13 @@ fn runInner() !void {
                 const expect = try vmByte();
                 const tup = try vmPeek(0);
                 if (tup != .object or !vms.isArrayObject(tup.object)) return error.TypeError;
-                if (vms.asArraySlice(tup.object).len != expect) return error.ArityMismatch;
+                if ((try vms.asArraySlice(tup.object)).len != expect) return error.ArityMismatch;
             },
             .tuple_get => {
                 const idx = try vmByte();
                 const tup = try vmPop();
                 if (tup != .object or !vms.isArrayObject(tup.object)) return error.TypeError;
-                const a = vms.asArraySlice(tup.object);
+                const a = try vms.asArraySlice(tup.object);
                 if (idx >= a.len) return error.ArityMismatch;
                 try vmPush(a[idx]);
             },
@@ -2400,7 +2404,7 @@ fn runInner() !void {
                 const idx = try vmByte();
                 const tup = try vmPeek(0);
                 if (tup != .object or !vms.isArrayObject(tup.object)) return error.TypeError;
-                const a = vms.asArraySlice(tup.object);
+                const a = try vms.asArraySlice(tup.object);
                 if (idx >= a.len) return error.ArityMismatch;
                 try vmPush(a[idx]);
             },
@@ -2438,7 +2442,7 @@ fn runInner() !void {
                             try vmPush(try makeDynString(s[start_b..end_b]));
                         },
                         .array, .array_managed => {
-                            const items = vms.asArraySlice(obj);
+                            const items = try vms.asArraySlice(obj);
                             const start: usize = if (has_start) try vms.vmSliceIndex(start_v, items.len) else 0;
                             const end: usize = if (has_end) try vms.vmSliceIndex(end_v, items.len) else items.len;
                             if (start > end) return error.IndexOutOfBounds;
@@ -2577,7 +2581,14 @@ fn runInner() !void {
                 const pred = try vmPop();
                 const nt_val = vmState().stack[vmState().stack_top - 1];
                 if (nt_val != .object or nt_val.object.* != .named_type) return error.TypeError;
-                nt_val.object.named_type.predicate = if (pred == .null) null else if (pred == .object) pred.object else return error.TypeError;
+                if (pred == .null) {
+                    nt_val.object.named_type.predicate = null;
+                } else if (pred == .object) {
+                    if (pred.object.* != .function and pred.object.* != .closure) return error.TypeError;
+                    nt_val.object.named_type.predicate = pred.object;
+                } else {
+                    return error.TypeError;
+                }
             },
 
             .call => {
@@ -2714,7 +2725,7 @@ fn runInner() !void {
 }
 
 fn runDeferredCall(deferred: Value) anyerror!void {
-    const arr = vms.asArraySlice(deferred.object);
+    const arr = try vms.asArraySlice(deferred.object);
     if (arr.len == 0) return;
     if (arr.len > 256) return;
     const dargc: u8 = @intCast(arr.len - 1);
