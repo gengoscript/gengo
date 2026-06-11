@@ -1,0 +1,15 @@
+std := import("std")
+
+// abs/min/max/sign preserve int when all inputs are int, so their results
+// stay usable in strict int arithmetic.
+std.io.println(std.core.type_of(std.math.abs(-5)))
+std.io.println(std.math.abs(-5))
+std.io.println(std.core.type_of(std.math.abs(-5.5)))
+std.io.println(std.core.type_of(std.math.min(2, 9)))
+std.io.println(std.core.type_of(std.math.max(2, 9)))
+std.io.println(std.core.type_of(std.math.sign(-7)))
+
+total := 0
+i := -3
+total = total + std.math.abs(i)
+std.io.println(total)

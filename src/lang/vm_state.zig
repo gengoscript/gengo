@@ -420,19 +420,12 @@ pub fn asStringValue(v: Value) ![]const u8 {
 
 // ── .string immortality invariant debug check ───────────────────────────────
 
-/// In debug builds, assert that a `.string` value points to immortal bytes
-/// (source code literals, lexer interned pool, or chunk constant pool).
-/// Call this at any site that produces a `.string` value.
-///
-/// This is a no-op in release builds.  The check is conservative: it may
-/// pass for some immortal ranges and fail for obviously invalid ones (e.g.
-/// pointers into the GC heap bump area or the VM stack).
-/// Debug-build guard: crash if a `.string` value points into a known-volatile
-/// region (VM stack, str_acc buffer, or any address that is obviously not
-/// immortal).  This is a no-op in release builds.
-///
-/// Call this immediately after producing a `.string` value, especially inside
-/// the VM dispatch loop or native functions that return slices.
+/// Debug-build tripwire for the `.string` immortality invariant (see the
+/// Value doc comment in value.zig): panics if a `.string` points into a
+/// known-volatile region (VM stack, str_acc buffer). Conservative — it
+/// cannot prove immortality, only reject the volatile ranges we know.
+/// No-op in release builds. Called from vmPush so every value entering the
+/// stack is screened.
 pub fn assertStringImmortal(v: Value) void {
     if (builtin.mode != .Debug) return;
     if (v != .string) return;

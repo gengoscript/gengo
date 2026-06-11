@@ -8,9 +8,12 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
         .math_abs => {
 
             if (argc != nf.arity) return error.ArityMismatch;
-            const n = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            const v = vms.vmState().stack[vms.vmState().stack_top - 1];
+            const n = try vms.valueAsNumber(v);
             _ = try vms.vmPop(); _ = try vms.vmPop();
-            try vms.vmPush(.{ .float = @abs(n) });
+            // Preserve int-ness: strict arithmetic rejects int+float mixing,
+            // so abs(int) must stay usable in int expressions.
+            try vms.vmPush(if (v == .int) .{ .int = @abs(n) } else .{ .float = @abs(n) });
         },
         .math_acos => {
 
@@ -169,18 +172,24 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
         .math_max => {
 
             if (argc != nf.arity) return error.ArityMismatch;
-            const b = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 1]);
-            const a = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 2]);
+            const bv = vms.vmState().stack[vms.vmState().stack_top - 1];
+            const av = vms.vmState().stack[vms.vmState().stack_top - 2];
+            const b = try vms.valueAsNumber(bv);
+            const a = try vms.valueAsNumber(av);
             _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
-            try vms.vmPush(.{ .float = @max(a, b) });
+            const all_int = av == .int and bv == .int;
+            try vms.vmPush(if (all_int) .{ .int = @max(a, b) } else .{ .float = @max(a, b) });
         },
         .math_min => {
 
             if (argc != nf.arity) return error.ArityMismatch;
-            const b = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 1]);
-            const a = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 2]);
+            const bv = vms.vmState().stack[vms.vmState().stack_top - 1];
+            const av = vms.vmState().stack[vms.vmState().stack_top - 2];
+            const b = try vms.valueAsNumber(bv);
+            const a = try vms.valueAsNumber(av);
             _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
-            try vms.vmPush(.{ .float = @min(a, b) });
+            const all_int = av == .int and bv == .int;
+            try vms.vmPush(if (all_int) .{ .int = @min(a, b) } else .{ .float = @min(a, b) });
         },
         .math_mod => {
 
@@ -217,10 +226,11 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
         .math_sign => {
 
             if (argc != nf.arity) return error.ArityMismatch;
-            const n = try vms.valueAsNumber(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            const v = vms.vmState().stack[vms.vmState().stack_top - 1];
+            const n = try vms.valueAsNumber(v);
             _ = try vms.vmPop(); _ = try vms.vmPop();
             const sign: f64 = if (n > 0) 1.0 else if (n < 0) -1.0 else 0.0;
-            try vms.vmPush(.{ .float = sign });
+            try vms.vmPush(if (v == .int) .{ .int = sign } else .{ .float = sign });
         },
         .math_sin => {
 
