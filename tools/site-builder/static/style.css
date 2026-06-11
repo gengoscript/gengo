@@ -62,3 +62,10 @@ footer.pagenav {
 
 footer.pagenav .up { text-align: center; }
 footer.pagenav .next { text-align: right; }
+
+p.colophon {
+    margin-top: 2em;
+    font-size: 0.85em;
+    color: #777;
+    text-align: center;
+}
