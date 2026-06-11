@@ -299,6 +299,13 @@ pub fn build(b: *std.Build) void {
     const cli_step = b.step("cli", "Build native CLI binary (zig-out/bin/gengo)");
     cli_step.dependOn(&install_native.step);
 
+    const run_native_cap = b.addRunArtifact(test_runner_exe);
+    run_native_cap.step.dependOn(&install_native.step);
+    run_native_cap.addArg("native-cap");
+    run_native_cap.addArg("zig-out/bin/gengo");
+    const native_cap_step = b.step("native-cap", "Run native capability tests against the CLI");
+    native_cap_step.dependOn(&run_native_cap.step);
+
     const run_native = b.addRunArtifact(native_exe);
     if (b.args) |args| run_native.addArgs(args);
     const run_step = b.step("run", "Run a script with the native CLI (-- script.gengo)");

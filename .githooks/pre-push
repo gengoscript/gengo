@@ -21,6 +21,7 @@ echo "=== pre-push checks ==="
 run zig build -Dpreset=dev test
 run zig build -Dpreset=dev parity
 run zig build -Dpreset=dev bench
+run zig build -Dpreset=dev native-cap
 run zig build -Dpreset=dev heap-test
 run zig build -Dpreset=dev cli
 

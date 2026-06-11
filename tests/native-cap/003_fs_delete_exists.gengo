@@ -1,0 +1,8 @@
+fs := import("cap:fs")
+std := import("std")
+
+path := "tmp/delete-me.txt"
+fs.write(path, "gone soon")
+std.io.println(fs.exists(path))
+fs.delete(path)
+std.io.println(fs.exists(path))
