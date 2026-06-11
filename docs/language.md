@@ -298,13 +298,15 @@ For cycle types, `succ`/`pred` wrap around.
     - **string**: `i` is the rune index, `v` is the rune as a single-character string
 - `break` and `continue` supported inside loops.
 - `return` supported inside functions.
-- `defer expr` — schedules `expr` to execute when the enclosing function exits, whether by normal return or panic unwind.
+- `defer expr` or `defer { ... }` — schedules work to execute when the enclosing function exits, whether by normal return or panic unwind.
   - Multiple defers run in LIFO order (last declared, first executed).
-  - The expression is evaluated at the `defer` statement; a closure `defer` captures the environment at call time.
+  - For `defer expr`, the expression is evaluated at the `defer` statement (arguments are captured eagerly).
+  - For `defer { ... }`, the block body is captured as a closure; variables are captured by reference and evaluated at function exit.
   - Common patterns:
     - `defer std.io.println("done")` — deferred expression call
-    - `defer (func() { std.io.println(x) })()` — deferred inline closure (captures `x` by reference)
-  - Deferred closures can read and mutate named return values (see Named return values below).
+    - `defer { std.io.println(x); cleanup() }` — deferred block (captures `x` by reference)
+    - `defer (func() { std.io.println(x) })()` — equivalent inline closure form (captures `x` by reference)
+  - Deferred closures (both `defer { ... }` and `defer (func(){...})()`) can read and mutate named return values (see Named return values below).
 - `assert condition` — panics with `AssertionFailed` if `condition` is false.
 - `assert condition, "message"` — panics with the given message string if `condition` is false.
   - The panic value is an `error` value; it can be caught with `std.core.recover()` inside a `defer`.
@@ -354,7 +356,7 @@ For cycle types, `succ`/`pred` wrap around.
     ```gengo
     func double() (result int) {
         result = 10
-        defer (func() { result = result * 2 })()
+        defer { result = result * 2 }  // block form — same as closure
         return result  // defer runs after return: caller receives 20
     }
     ```
@@ -362,9 +364,9 @@ For cycle types, `succ`/`pred` wrap around.
     ```gengo
     func compute() (result int) {
         result = 1
-        defer (func() { result = result + 100 })()  // runs third  → 160
-        defer (func() { result = result * 10 })()   // runs second → 60
-        defer (func() { result = result + 5 })()    // runs first  → 6
+        defer { result = result + 100 }  // runs third  → 160
+        defer { result = result * 10 }   // runs second → 60
+        defer { result = result + 5 }    // runs first  → 6
         return result
     }
     // compute() == 160
