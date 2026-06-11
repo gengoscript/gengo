@@ -2070,6 +2070,14 @@ fn runInner() !void {
                 if (vms.isStringValue(a) and vms.isStringValue(k)) {
                     const sa = try vms.asStringValue(a);
                     const sk = try vms.asStringValue(k);
+                    const a_is_gc_obj = (a == .object);
+                    const k_is_gc_obj = (k == .object);
+                    if (a_is_gc_obj) try pushTempRoot(a);
+                    if (k_is_gc_obj) try pushTempRoot(k);
+                    defer {
+                        if (k_is_gc_obj) popTempRoot();
+                        if (a_is_gc_obj) popTempRoot();
+                    }
                     const result = try concatDynString(sa, sk);
                     try vmPush(result);
                 } else {
@@ -2179,6 +2187,11 @@ fn runInner() !void {
                         // acc too small (very long chain): alloc normally.
                         // sa points to acc or to a GC object; neither needs a temp root here
                         // because acc is VM-static and GC strings in the const pool are traced.
+                        // If a is a GC object (not acc and not a const-pool string literal),
+                        // push it as a temp root so concatDynString can safely allocate.
+                        const a_is_gc_obj = (!is_acc) and (a == .object);
+                        if (a_is_gc_obj) try vms.pushTempRoot(a);
+                        defer if (a_is_gc_obj) vms.popTempRoot();
                         const result = try concatDynString(sa, sk);
                         state.str_acc_len = 0;
                         try vmPush(result);
