@@ -1,4 +1,4 @@
-# Gengo (言語)
+# Gengoscript (言語)
 
 [![CI](https://github.com/gengoscript/gengo/actions/workflows/ci.yml/badge.svg)](https://github.com/gengoscript/gengo/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
