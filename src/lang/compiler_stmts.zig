@@ -167,6 +167,8 @@ pub fn compileFuncWithPrefix(c: anytype, prefix: []const []const u8, is_named: b
     if (prefix.len > MaxLocals) { c.setErr("too many parameters (max {d})", .{MaxLocals}); return error.TooManyParams; }
     var pi0: usize = 0;
     while (pi0 < prefix.len) : (pi0 += 1) {
+        if (c.isKnownTypeName(prefix[pi0]))
+            return c.err("'{s}' is a type name and cannot be used as a receiver name", .{prefix[pi0]});
         param_names[arity] = prefix[pi0];
         param_types[arity] = any_spec;
         arity += 1;
@@ -178,6 +180,8 @@ pub fn compileFuncWithPrefix(c: anytype, prefix: []const []const u8, is_named: b
             const vari = if (predicate_base != null) false else c.match(.ellipsis);
             const p_is_const = if (predicate_base != null) false else c.match(.kw_const);
             if (c.cur.typ != .ident) return c.err("expected identifier, found {s}", .{c.tokenName(c.cur.typ)});
+            if (c.isKnownTypeName(c.cur.src))
+                return c.err("'{s}' is a type name and cannot be used as a parameter name", .{c.cur.src});
             param_names[arity] = c.cur.src;
             param_const[arity] = p_is_const;
             arity += 1;
@@ -237,6 +241,8 @@ pub fn compileFuncWithPrefix(c: anytype, prefix: []const []const u8, is_named: b
         while (true) {
             if (is_named_returns) {
                 if (c.cur.typ != .ident) return c.err("expected identifier, found {s}", .{c.tokenName(c.cur.typ)});
+                if (c.isKnownTypeName(c.cur.src))
+                    return c.err("'{s}' is a type name and cannot be used as a return value name", .{c.cur.src});
                 return_names[return_count] = c.cur.src;
                 c.advance();
             }
@@ -410,6 +416,8 @@ pub fn compoundStmt(c: anytype) !void {
 }
 
 pub fn declareLoopVar(c: anytype, name: Token) !void {
+    if (c.isKnownTypeName(name.src))
+        return c.err("'{s}' is a type name and cannot be used as a loop variable name", .{name.src});
     if (c.inFunc()) {
         try chunk.emitOp(.null_val, name.line);
         _ = try c.defineLocal(name.src, false);
@@ -898,6 +906,12 @@ pub fn multiBindStmt(c: anytype, is_decl: bool) !void {
     if (is_decl) {
         count = try parseNameList(c, &names);
         if (count < 2) return c.err("multi-assign requires at least two targets", .{});
+        var chk: u8 = 0;
+        while (chk < count) : (chk += 1) {
+            if (names[chk].typ != .ident) continue;
+            if (c.isKnownTypeName(names[chk].src))
+                return c.err("'{s}' is a type name and cannot be used as a variable name", .{names[chk].src});
+        }
         if (c.inFunc()) {
             var pre_i: u8 = 0;
             while (pre_i < count) : (pre_i += 1) {
@@ -1267,6 +1281,8 @@ pub fn switchStmt(c: anytype) anyerror!void {
                 // Handle switch value and optional binding
                 const local_before = if (c.inFunc()) c.currentScope().local_count else 0;
                 if (binding != null) {
+                    if (c.isKnownTypeName(binding.?))
+                        return c.err("'{s}' is a type name and cannot be used as a binding name", .{binding.?});
                     try chunk.emitOp(.variant_payload, dot_line);
                     if (c.inFunc()) {
                         _ = try c.defineLocal(binding.?, false);
@@ -1330,6 +1346,8 @@ pub fn switchStmt(c: anytype) anyerror!void {
 pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
     if (has_keyword and c.cur.typ != .ident) return c.err("expected identifier, found {s}", .{c.tokenName(c.cur.typ)});
     const name = c.cur;
+    if (name.typ == .ident and c.isKnownTypeName(name.src))
+        return c.err("'{s}' is a type name and cannot be used as a variable name", .{name.src});
     c.advance();
     var inferred_type_check: TypeCheck = .{ .none = {} };
     if (c.match(.colon_eq) or c.match(.eq)) {

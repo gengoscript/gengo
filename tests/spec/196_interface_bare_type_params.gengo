@@ -1,0 +1,46 @@
+std := import("std")
+
+// Interface method params: bare types (Go-style) and named params both work.
+type Adder interface {
+    add(float) float
+}
+
+type NamedAdder interface {
+    add(x float) float
+}
+
+type Acc struct { total float }
+
+func (a Acc) add(x float) float {
+    return a.total + x
+}
+
+func useBare(a Adder) float {
+    return a.add(1.5)
+}
+
+func useNamed(a NamedAdder) float {
+    return a.add(0.5)
+}
+
+acc := Acc{ total: 2.0 }
+std.io.println(useBare(acc))
+std.io.println(useNamed(acc))
+
+// Bare nullable and multi-param forms.
+type Mixer interface {
+    mix(string, ?int) string
+}
+
+type M struct { tag string }
+
+func (m M) mix(s string, n ?int) string {
+    if n == null { return m.tag + s }
+    return m.tag + s + "!"
+}
+
+func useMix(x Mixer) string {
+    return x.mix("go", null)
+}
+
+std.io.println(useMix(M{ tag: "#" }))

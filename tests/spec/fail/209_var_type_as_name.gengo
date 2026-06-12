@@ -1,0 +1,4 @@
+func asd(a string) {
+    var bool bool
+}
+asd("x")

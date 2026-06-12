@@ -751,6 +751,17 @@ pub const Compiler = struct {
         return self.qualifyGlobalName(name);
     }
 
+    // True for primitive type names and every registered named/struct/
+    // interface/variant type — identifiers that binding forms must not shadow.
+    pub fn isKnownTypeName(self: *Compiler, name: []const u8) bool {
+        const prims = [_][]const u8{ "int", "float", "bool", "string", "rune", "decimal", "error", "any", "map" };
+        for (prims) |p| {
+            if (common.streq(name, p)) return true;
+        }
+        return self.registry.hasNamedType(name) or self.registry.hasStructTypeLocal(name) or
+            self.registry.hasInterfaceType(name) or self.registry.hasVariantType(name);
+    }
+
     pub fn addExport(self: *Compiler, name: []const u8, global_name: []const u8) !void {
         const stable_name = try self.copyName(name);
         var i: usize = 0;
