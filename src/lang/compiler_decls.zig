@@ -767,8 +767,6 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
         return;
     }
 
-    if (parent_info.base != .int and parent_info.base != .float and parent_info.base != .rune)
-        return c.err("subtype parent must be numeric type (int, float, or rune)", .{});
     if (c.registry.hasNamedType(name)) { c.setErr("duplicate type name '{s}'", .{name}); return error.DuplicateNamedType; }
 
     const base = parent_info.base;
@@ -776,8 +774,11 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
     var is_cycle = parent_info.is_cycle;
     var min: f64 = parent_info.min;
     var max: f64 = parent_info.max;
+    const scale = parent_info.scale;
+    const is_numeric = base == .int or base == .float or base == .rune;
 
     if (c.check(.kw_range) or c.check(.kw_cycle)) {
+        if (!is_numeric) return c.err("range and cycle constraints require a numeric parent type (int, float, or rune)", .{});
         const constraint = try parseConstraintBounds(c, );
         if (constraint.is_cycle and base != .int) return c.err("'cycle' constraint requires integer base type", .{});
         if (parent_info.has_range) {
@@ -797,6 +798,7 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
         .base = base,
         .has_range = has_range,
         .is_cycle = is_cycle,
+        .scale = scale,
         .min = min,
         .max = max,
         .parent_name = parent_name,
@@ -811,6 +813,7 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
         .base = base,
         .has_range = has_range,
         .is_cycle = is_cycle,
+        .scale = scale,
         .min = min,
         .max = max,
         .parent_name = qparent,

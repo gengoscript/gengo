@@ -1,0 +1,2 @@
+type Flag bool
+subtype Strict Flag range 0..1
