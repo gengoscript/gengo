@@ -1,0 +1,9 @@
+std := import("std")
+
+func mymaxdefers() {
+    for i := 0; i < 200; i++ {
+        defer std.io.println(i)
+    }
+}
+
+mymaxdefers()

@@ -50,5 +50,8 @@ jobs:
       - name: Run native capability tests
         run: zig build -Dpreset=dev native-cap
 
+      - name: Run chaos tests
+        run: zig build -Dpreset=dev chaos
+
       - name: Run heap tests
         run: zig build -Dpreset=dev heap-test

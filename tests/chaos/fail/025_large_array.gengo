@@ -1,0 +1,6 @@
+std := import("std")
+a := []
+for i := 0; i < 100000; i++ {
+    a = std.core.append(a, i)
+}
+std.io.println(std.core.len(a))

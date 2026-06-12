@@ -1,0 +1,2 @@
+std := import("std")
+std.io.println(0.0 / 0.0)

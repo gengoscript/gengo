@@ -1,0 +1,9 @@
+std := import("std")
+
+func mydefer() {
+    for i := 0; i < 3; i++ {
+        defer std.io.println("defer", i)
+    }
+}
+
+mydefer()

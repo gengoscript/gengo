@@ -1,0 +1,10 @@
+std := import("std")
+
+func multi(n int, acc int) (int, int) {
+    if n == 0 { return acc, acc }
+    return multi(n - 1, acc + 1)
+}
+
+a, b := multi(10000, 0)
+std.io.println(a)
+std.io.println(b)

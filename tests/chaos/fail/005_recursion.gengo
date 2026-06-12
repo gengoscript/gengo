@@ -1,0 +1,8 @@
+std := import("std")
+
+func recurse(n int) int {
+    if n == 0 { return 0 }
+    return recurse(n - 1) + 1
+}
+
+std.io.println(recurse(100))
