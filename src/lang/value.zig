@@ -175,16 +175,9 @@ pub const Value = union(VTag) {
     object: *Object,
     null,
 
-    pub fn isTruthy(self: Value) bool {
-        return switch (self) {
-            .boolean => |b| b,
-            .rune => |r| r != 0,
-            .decimal => |d| d != 0,
-            .int => |n| n != 0.0,
-            .float => |n| n != 0.0,
-            .null => false,
-            else => true,
-        };
+    pub fn asBool(self: Value) error{TypeError}!bool {
+        if (self != .boolean) return error.TypeError;
+        return self.boolean;
     }
 
     pub fn equals(a: Value, b: Value) bool {

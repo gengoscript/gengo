@@ -524,7 +524,7 @@ pub fn tplExec(tmpl: *Object, data: Value) !Value {
             },
             .if_begin => {
                 const cond = try tplEvalExpr(arg, dot_stack[scope_top], funcs_v);
-                if (!cond.isTruthy()) {
+                if (!(try cond.asBool())) {
                     const jv = jmps[ip];
                     const jv_num = if (jv == .int) jv.int else if (jv == .float) jv.float else return error.TypeError;
                     if (jv_num < 0 or jv_num >= @as(f64, @floatFromInt(ops.len))) return error.TypeError;

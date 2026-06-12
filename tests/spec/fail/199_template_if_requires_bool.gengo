@@ -1,0 +1,2 @@
+std := import("std")
+_ = std.template.render("{{if .x}}yes{{end}}", {"x": 1})

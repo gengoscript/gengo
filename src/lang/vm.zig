@@ -2116,7 +2116,10 @@ fn runInner() !void {
                     try vmPush(if (v == .float) .{ .float = -n } else .{ .int = -n });
                 }
             },
-            .not => try vmPush(.{ .boolean = !(try vmPop()).isTruthy() }),
+            .not => {
+                const v = try vmPop();
+                try vmPush(.{ .boolean = !(try v.asBool()) });
+            },
             .eq => {
                 const b = try vmPop();
                 const a = try vmPop();
@@ -2675,12 +2678,12 @@ fn runInner() !void {
             },
             .jump_if_false => {
                 const off = try vmShort();
-                if (!(try vmPeek(0)).isTruthy()) vmState().ip += off;
+                if (!(try (try vmPeek(0)).asBool())) vmState().ip += off;
             },
             .jif_pop => {
                 const off = try vmShort();
                 const cond = try vmPop();
-                if (!cond.isTruthy()) vmState().ip += off;
+                if (!(try cond.asBool())) vmState().ip += off;
             },
             .loop => {
                 const off = try vmShort();
