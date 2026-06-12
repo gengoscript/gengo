@@ -13,7 +13,13 @@ const cfg = @import("config.zig");
 const Value = @import("../lang/value.zig").Value;
 
 const common = @import("../lang/common.zig");
-const MaxGlobalConsts = @import("../lang/compiler_types.zig").MaxGlobalConsts;
+const ct = @import("../lang/compiler_types.zig");
+const MaxGlobalConsts = ct.MaxGlobalConsts;
+const MaxNamedTypes = ct.MaxNamedTypes;
+const MaxStructTypes = ct.MaxStructTypes;
+const MaxInterfaceTypes = ct.MaxInterfaceTypes;
+const MaxVariantTypes = ct.MaxVariantTypes;
+const NamedTypeBase = @import("../lang/value.zig").NamedTypeBase;
 
 fn checkGlobalExists(ctx: *anyopaque, name: []const u8) bool {
     _ = ctx;
@@ -59,6 +65,30 @@ pub const Runtime = struct {
     repl_const_name_buf: [MaxGlobalConsts * 64]u8 = undefined,
     repl_const_name_buf_used: usize = 0,
     repl_const_count: usize = 0,
+
+    // REPL named-type persistence (for subtype/typed-var resolution across lines)
+    repl_named_type_count: usize = 0,
+    repl_named_type_name_offsets: [MaxNamedTypes]u32 = undefined,
+    repl_named_type_name_lens: [MaxNamedTypes]u16 = undefined,
+    repl_named_type_bases: [MaxNamedTypes]NamedTypeBase = undefined,
+    repl_named_type_has_ranges: [MaxNamedTypes]bool = undefined,
+    repl_named_type_is_cycles: [MaxNamedTypes]bool = undefined,
+    repl_named_type_scales: [MaxNamedTypes]u8 = undefined,
+    repl_named_type_mins: [MaxNamedTypes]f64 = undefined,
+    repl_named_type_maxs: [MaxNamedTypes]f64 = undefined,
+    repl_named_type_parent_offsets: [MaxNamedTypes]u32 = undefined,
+    repl_named_type_parent_lens: [MaxNamedTypes]u16 = undefined,
+    repl_struct_type_count: usize = 0,
+    repl_struct_type_name_offsets: [MaxStructTypes]u32 = undefined,
+    repl_struct_type_name_lens: [MaxStructTypes]u16 = undefined,
+    repl_interface_type_count: usize = 0,
+    repl_interface_type_name_offsets: [MaxInterfaceTypes]u32 = undefined,
+    repl_interface_type_name_lens: [MaxInterfaceTypes]u16 = undefined,
+    repl_variant_type_count: usize = 0,
+    repl_variant_type_name_offsets: [MaxVariantTypes]u32 = undefined,
+    repl_variant_type_name_lens: [MaxVariantTypes]u16 = undefined,
+    repl_type_name_buf: [MaxNamedTypes * 64]u8 = undefined,
+    repl_type_name_buf_used: usize = 0,
 
     pub fn init() Runtime {
         var rt: Runtime = .{};
@@ -117,6 +147,13 @@ pub const Runtime = struct {
         vm.reset();
         heap.reset();
         chunk.reset();
+        self.repl_named_type_count = 0;
+        self.repl_struct_type_count = 0;
+        self.repl_interface_type_count = 0;
+        self.repl_variant_type_count = 0;
+        self.repl_type_name_buf_used = 0;
+        self.repl_const_count = 0;
+        self.repl_const_name_buf_used = 0;
     }
 
     pub fn run(self: *Runtime, src: []const u8) !void {
@@ -282,6 +319,39 @@ pub const Runtime = struct {
             .check_global_is_const = checkGlobalIsConst,
             .check_global_ctx = self,
         });
+        // Pre-populate registry with named types from previous REPL lines
+        var repl_ti: usize = 0;
+        while (repl_ti < self.repl_named_type_count) : (repl_ti += 1) {
+            const name = self.repl_type_name_buf[self.repl_named_type_name_offsets[repl_ti]..][0..self.repl_named_type_name_lens[repl_ti]];
+            const parent_name = if (self.repl_named_type_parent_lens[repl_ti] > 0)
+                self.repl_type_name_buf[self.repl_named_type_parent_offsets[repl_ti]..][0..self.repl_named_type_parent_lens[repl_ti]]
+            else null;
+            compiler.registry.addNamedType(.{
+                .name = name,
+                .base = self.repl_named_type_bases[repl_ti],
+                .has_range = self.repl_named_type_has_ranges[repl_ti],
+                .is_cycle = self.repl_named_type_is_cycles[repl_ti],
+                .scale = self.repl_named_type_scales[repl_ti],
+                .min = self.repl_named_type_mins[repl_ti],
+                .max = self.repl_named_type_maxs[repl_ti],
+                .parent_name = parent_name,
+            }) catch {};
+        }
+        repl_ti = 0;
+        while (repl_ti < self.repl_struct_type_count) : (repl_ti += 1) {
+            const name = self.repl_type_name_buf[self.repl_struct_type_name_offsets[repl_ti]..][0..self.repl_struct_type_name_lens[repl_ti]];
+            compiler.registry.addStructType(name) catch {};
+        }
+        repl_ti = 0;
+        while (repl_ti < self.repl_interface_type_count) : (repl_ti += 1) {
+            const name = self.repl_type_name_buf[self.repl_interface_type_name_offsets[repl_ti]..][0..self.repl_interface_type_name_lens[repl_ti]];
+            compiler.registry.addInterfaceType(name) catch {};
+        }
+        repl_ti = 0;
+        while (repl_ti < self.repl_variant_type_count) : (repl_ti += 1) {
+            const name = self.repl_type_name_buf[self.repl_variant_type_name_offsets[repl_ti]..][0..self.repl_variant_type_name_lens[repl_ti]];
+            compiler.registry.addVariantType(name) catch {};
+        }
         compiler.compile(true) catch |err| {
             // Must be nonzero: api.zig classifies compile vs runtime errors by
             // last_compile_line != 0, and a REPL line may carry no token line.
@@ -308,6 +378,75 @@ pub const Runtime = struct {
                     self.repl_const_name_buf_used += cname.len;
                     self.repl_const_count += 1;
                 }
+            }
+        }
+
+        // Persist named type info for subsequent REPL lines
+        self.repl_named_type_count = 0;
+        self.repl_struct_type_count = 0;
+        self.repl_interface_type_count = 0;
+        self.repl_variant_type_count = 0;
+        self.repl_type_name_buf_used = 0;
+        {
+            var ti: usize = 0;
+            while (ti < compiler.registry.named_type_count) : (ti += 1) {
+                const ni = compiler.registry.named_types[ti];
+                if (self.repl_named_type_count >= MaxNamedTypes) break;
+                const idx = self.repl_named_type_count;
+                const saved_name = self.saveReplTypeName(ni.name) catch break;
+                self.repl_named_type_name_offsets[idx] = @intCast(@intFromPtr(saved_name.ptr) - @intFromPtr(&self.repl_type_name_buf));
+                self.repl_named_type_name_lens[idx] = @intCast(saved_name.len);
+                self.repl_named_type_bases[idx] = ni.base;
+                self.repl_named_type_has_ranges[idx] = ni.has_range;
+                self.repl_named_type_is_cycles[idx] = ni.is_cycle;
+                self.repl_named_type_scales[idx] = ni.scale;
+                self.repl_named_type_mins[idx] = ni.min;
+                self.repl_named_type_maxs[idx] = ni.max;
+                if (ni.parent_name) |pn| {
+                    const saved_pn = self.saveReplTypeName(pn) catch {
+                        self.repl_named_type_parent_lens[idx] = 0;
+                        self.repl_named_type_count += 1;
+                        continue;
+                    };
+                    self.repl_named_type_parent_offsets[idx] = @intCast(@intFromPtr(saved_pn.ptr) - @intFromPtr(&self.repl_type_name_buf));
+                    self.repl_named_type_parent_lens[idx] = @intCast(saved_pn.len);
+                } else {
+                    self.repl_named_type_parent_lens[idx] = 0;
+                }
+                self.repl_named_type_count += 1;
+            }
+        }
+        {
+            var ti: usize = 0;
+            while (ti < compiler.registry.struct_type_count) : (ti += 1) {
+                if (self.repl_struct_type_count >= MaxStructTypes) break;
+                const idx = self.repl_struct_type_count;
+                const saved_name = self.saveReplTypeName(compiler.registry.struct_types[ti].name) catch break;
+                self.repl_struct_type_name_offsets[idx] = @intCast(@intFromPtr(saved_name.ptr) - @intFromPtr(&self.repl_type_name_buf));
+                self.repl_struct_type_name_lens[idx] = @intCast(saved_name.len);
+                self.repl_struct_type_count += 1;
+            }
+        }
+        {
+            var ti: usize = 0;
+            while (ti < compiler.registry.interface_type_count) : (ti += 1) {
+                if (self.repl_interface_type_count >= MaxInterfaceTypes) break;
+                const idx = self.repl_interface_type_count;
+                const saved_name = self.saveReplTypeName(compiler.registry.interface_types[ti].name) catch break;
+                self.repl_interface_type_name_offsets[idx] = @intCast(@intFromPtr(saved_name.ptr) - @intFromPtr(&self.repl_type_name_buf));
+                self.repl_interface_type_name_lens[idx] = @intCast(saved_name.len);
+                self.repl_interface_type_count += 1;
+            }
+        }
+        {
+            var ti: usize = 0;
+            while (ti < compiler.registry.variant_type_count) : (ti += 1) {
+                if (self.repl_variant_type_count >= MaxVariantTypes) break;
+                const idx = self.repl_variant_type_count;
+                const saved_name = self.saveReplTypeName(compiler.registry.variant_types[ti].name) catch break;
+                self.repl_variant_type_name_offsets[idx] = @intCast(@intFromPtr(saved_name.ptr) - @intFromPtr(&self.repl_type_name_buf));
+                self.repl_variant_type_name_lens[idx] = @intCast(saved_name.len);
+                self.repl_variant_type_count += 1;
             }
         }
 
@@ -362,6 +501,18 @@ pub const Runtime = struct {
     fn setLastCompilePath(self: *Runtime, path: []const u8) void {
         self.last_compile_path_len = @min(path.len, self.last_compile_path_buf.len);
         @memcpy(self.last_compile_path_buf[0..self.last_compile_path_len], path[0..self.last_compile_path_len]);
+    }
+
+    fn saveReplTypeName(self: *Runtime, name: []const u8) ![]const u8 {
+        // If the name already lives in our buffer, reuse it directly.
+        const buf_addr = @intFromPtr(&self.repl_type_name_buf);
+        const name_addr = @intFromPtr(name.ptr);
+        if (name_addr >= buf_addr and name_addr < buf_addr + self.repl_type_name_buf.len) return name;
+        if (self.repl_type_name_buf_used + name.len > self.repl_type_name_buf.len) return error.OutOfMemory;
+        const start = self.repl_type_name_buf_used;
+        @memcpy(self.repl_type_name_buf[start .. start + name.len], name);
+        self.repl_type_name_buf_used += name.len;
+        return self.repl_type_name_buf[start .. start + name.len];
     }
 
 };
