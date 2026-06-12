@@ -1,0 +1,6 @@
+std := import("std")
+
+const m = {"count": 1}
+m["count"] = 2
+
+std.io.println(m["count"])

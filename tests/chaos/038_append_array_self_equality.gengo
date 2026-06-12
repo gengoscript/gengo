@@ -1,0 +1,6 @@
+std := import("std")
+
+a := []
+a = std.core.append(a, a)
+
+std.io.println(a == a)

@@ -1,0 +1,6 @@
+std := import("std")
+
+m := {}
+m["self"] = m
+
+std.io.println(m == m)

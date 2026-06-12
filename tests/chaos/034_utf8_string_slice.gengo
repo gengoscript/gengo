@@ -1,0 +1,8 @@
+std := import("std")
+
+s := "A🙂B"
+mid := s[1:2]
+
+std.io.println(mid)
+std.io.println(std.core.len(mid))
+std.io.println(std.core.bytelen(mid))

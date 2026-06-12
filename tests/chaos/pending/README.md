@@ -11,3 +11,4 @@ red with the fix reverted.
 | `012_string_pool_overflow` | #116 (truncation masks the pool path in dev) | pool or input error, message names the limit |
 | `028_print_recursive_map` | #117 print cycle host crash | bounded output (`...` or `<cycle>`), no abort |
 | `029_truncation` | #116 | loud error instead of silently running half a program |
+| `040_sprintf_recursive_map` | #117 print/format cycle host crash | bounded formatted output (`...` or `<cycle>`), no abort |

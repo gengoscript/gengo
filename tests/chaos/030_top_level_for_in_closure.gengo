@@ -1,0 +1,10 @@
+std := import("std")
+
+funcs := []
+items := [10, 20, 30]
+for v in items {
+    captured := v
+    funcs = std.core.append(funcs, func() int { return captured })
+}
+
+std.io.println(funcs[0](), funcs[1](), funcs[2]())

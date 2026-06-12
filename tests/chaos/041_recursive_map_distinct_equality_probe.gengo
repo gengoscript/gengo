@@ -1,0 +1,9 @@
+std := import("std")
+
+a := {}
+b := {}
+a["self"] = a
+b["self"] = b
+
+std.io.println(a == b)
+std.io.println(std.core.deep_equal(a, b))
