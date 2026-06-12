@@ -435,6 +435,21 @@ fn runCli(argv: []const []const u8) void {
 // On WASM, init.args.vector is void — collect args via WASI syscalls instead.
 // On native, Zig runtime populates init.args.vector from OS argv.
 pub fn main(init: std.process.Init.Minimal) void {
+    // GC debug modes (posix native only): stress collects on every allocation
+    // so unrooted-window bugs fire deterministically; paranoia adds heap
+    // free/alloc-of-live tripwires.
+    if (comptime builtin.os.tag != .wasi and builtin.os.tag != .windows) {
+        for (init.environ.block.slice) |entry_opt| {
+            const entry = entry_opt orelse continue;
+            const e = std.mem.span(entry);
+            if (std.mem.startsWith(u8, e, "GENGO_GC_STRESS=")) {
+                @import("lang/vm_gc.zig").gc_stress = true;
+            }
+            if (std.mem.startsWith(u8, e, "GENGO_HEAP_PARANOIA=")) {
+                @import("runtime/heap.zig").paranoia = true;
+            }
+        }
+    }
     var argv_storage: [MaxArgs][]const u8 = undefined;
     var n: usize = 0;
 

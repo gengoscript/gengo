@@ -1,0 +1,31 @@
+std := import("std")
+
+// #120: exercises the named-string allocation paths hard. The .add carrier,
+// cast_string, and get_slice windows are fixed, but a residual stomper
+// remains: at ~400 rounds the template-rendered value reads back as garbage
+// (stale-memory signature; manifestation depends on build layout). Promote
+// to the lane with a .out once #120's audit finds it.
+type Html string
+
+func esc(s string) Html {
+    return Html(std.string.replace(s, "&", "&amp;"))
+}
+
+for round := 0; round < 400; round++ {
+    code := Html("<code>") + esc("a&b") + Html("</code>")
+    code = Html("<a href=\"") + esc("u&rl") + Html("\">") + code + Html("</a>")
+    b := std.string.builder()
+    b.write("<td>")
+    b.write(code)
+    b.write("</td>")
+    page := Html(b.str())
+    out := string(page)
+    if out != "<td><a href=\"u&amp;rl\"><code>a&amp;b</code></a></td>" {
+        std.io.println("CORRUPT:", out)
+    }
+    t := std.template.render("[{{.x}}]", {"x": esc("t&t")})
+    if t != "[t&amp;t]" {
+        std.io.println("TPL CORRUPT:", t)
+    }
+}
+std.io.println("done")

@@ -1835,15 +1835,18 @@ fn runInner() !void {
                 const a = try vmPop();
                 if (isStringValueOrNamedString(a) and isStringValueOrNamedString(b)) {
                     // a and b are off the Gengo stack; protect them so GC inside
-                    // concatDynString can't free their backing bytes before the copy.
+                    // concatDynString can't free their backing bytes before the
+                    // copy. They must stay rooted through the carrier wrap too:
+                    // makeNamedValue allocates, and a freed operand's slot can
+                    // be handed back as the new named value (#120 family).
                     try pushTempRoot(a);
+                    defer popTempRoot();
                     try pushTempRoot(b);
+                    defer popTempRoot();
                     const sa = try vms.asStringValue(a);
                     const sb = try vms.asStringValue(b);
                     vmperf.countStringConcat(sa.len + sb.len);
                     const result = try concatDynString(sa, sb);
-                    popTempRoot();
-                    popTempRoot();
                     try pushStringResultWithCarrier(a, b, result);
                 } else if (decimalOpValues(a, b)) |dop| {
                     const result = @addWithOverflow(dop.lhs, dop.rhs);
@@ -2098,15 +2101,23 @@ fn runInner() !void {
                 }
             },
             .cast_string => {
-                const raw = try vmPop();
+                // Keep the operand on the stack while converting: the result
+                // allocation can GC, and a popped named string's bytes would
+                // be freed — possibly handed back as the destination buffer
+                // (#120 window family; caught as an aliasing memcpy).
+                const raw = try vmPeek(0);
                 if (vmod.decimalRawAndScale(raw)) |drs| {
                     var buf: [64]u8 = undefined;
                     const s = vmod.formatDecimalString(drs.raw, drs.scale, &buf);
-                    try vmPush(try vmgc.makeDynString(s));
+                    const out = try vmgc.makeDynString(s);
+                    _ = try vmPop();
+                    try vmPush(out);
                     continue;
                 }
                 const v = vms.unboxNamed(raw);
-                try vmPush(try vmnative.nativeConvToString(v));
+                const out = try vmnative.nativeConvToString(v);
+                _ = try vmPop();
+                try vmPush(out);
             },
             .cast_rune => {
                 const v = vms.unboxNamed(try vmPop());
@@ -2616,6 +2627,10 @@ fn runInner() !void {
                 if (has_end) end_v = try vmPop();
                 if (has_start) start_v = try vmPop();
                 const container = try vmPop();
+                // The slice result is a fresh allocation; keep the popped
+                // container rooted through it (#120 window family).
+                try pushTempRoot(container);
+                defer popTempRoot();
 
                 switch (container) {
                     .string => |s| {

@@ -142,6 +142,8 @@ fn tplValToDynStr(v: Value) !Value {
         .string => |s| vmgc.makeDynString(s),
         .object => |o| {
             if (o.* == .dyn_string) return vmgc.makeDynString(o.dyn_string);
+            // Named values render through their underlying value.
+            if (o.* == .named_value) return tplValToDynStr(o.named_value.value);
             return vmgc.makeDynString("?");
         },
         else => vmgc.makeDynString("?"),

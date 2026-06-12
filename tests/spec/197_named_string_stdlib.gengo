@@ -1,0 +1,16 @@
+std := import("std")
+
+// Named string types flow through stdlib like their base (#110 follow-ups).
+type Html string
+
+h := Html("<p>") + Html("hi") + Html("</p>")
+std.io.println(std.core.len(h), std.core.bytelen(h))
+
+// Templates render named values through their underlying value.
+std.io.println(std.template.render("[{{.t}}]", {"t": h}))
+
+// Builders accept named strings; casts unwrap.
+b := std.string.builder()
+b.write(h)
+std.io.println(b.str())
+std.io.println(string(h) + "!")
