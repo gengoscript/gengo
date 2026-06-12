@@ -1,0 +1,69 @@
+std := import("std")
+
+// ── Named type as interface ──
+
+type Meters int
+
+func (m Meters) doubled() Meters {
+    return Meters(int(m) * 2)
+}
+
+type HasDouble interface { doubled() Meters }
+
+func printDouble(h HasDouble) {
+    std.io.println(int(h.doubled()))
+}
+
+// ── Enum as interface ──
+
+type Direction enum { north, south, east, west }
+
+func (d Direction) opposite() Direction {
+    switch d {
+        case Direction.north { return Direction.south }
+        case Direction.south { return Direction.north }
+        case Direction.east  { return Direction.west  }
+        default              { return Direction.east  }
+    }
+}
+
+type HasOpposite interface { opposite() Direction }
+
+func printOpposite(h HasOpposite) {
+    std.io.println(h.opposite())
+}
+
+// ── Variant as interface ──
+
+type Result variant {
+    ok(value int),
+    err(msg string),
+    pending
+}
+
+func (r Result) isOk() bool {
+    switch r {
+        case .ok { return true }
+        default  { return false }
+    }
+}
+
+type Checkable interface { isOk() bool }
+
+func report(c Checkable) {
+    std.io.println(c.isOk())
+}
+
+// ── Run all tests ──
+
+// Named type
+printDouble(Meters(7))
+
+// Enum
+printOpposite(Direction.south)
+printOpposite(Direction.east)
+
+// Variant
+report(Result.ok(42))
+report(Result.err("fail"))
+report(Result.pending)

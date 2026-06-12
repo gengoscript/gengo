@@ -244,8 +244,16 @@ pub fn interfaceMethodMatches(m: InterfaceMethodSpec, f: FuncObj) bool {
 }
 
 pub fn matchesInterfaceType(v: Value, iname: []const u8) bool {
-    if (!(v == .object and v.object.* == .struct_instance)) return false;
-    const tname = v.object.struct_instance.typ.struct_type.qualified_name;
+    const tname = switch (v) {
+        .object => |obj| switch (obj.*) {
+            .struct_instance => obj.struct_instance.typ.struct_type.qualified_name,
+            .named_value => obj.named_value.typ.named_type.qualified_name,
+            .enum_value => obj.enum_value.typ.enum_type.qualified_name,
+            .variant_value => obj.variant_value.typ.variant_type.qualified_name,
+            else => return false,
+        },
+        else => return false,
+    };
     const iv = globals.get(iname) orelse return false;
     if (!(iv == .object and iv.object.* == .interface_type)) return false;
     const it = iv.object.interface_type;
