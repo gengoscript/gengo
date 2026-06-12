@@ -140,8 +140,9 @@ if score >= 10 {
 
 Conditions are `bool`-only: `if`, `!`, `&&`, `||`, and template `{{if}}`
 reject every other type (`if 1 { }` is a runtime type error — there is no
-truthiness). Write a comparison, or convert explicitly with
-`std.conv.to_bool`.
+truthiness). Named types over `bool` participate through their base, the
+same way named ints participate in arithmetic. For everything else, write
+a comparison or convert explicitly with `std.conv.to_bool`.
 
 Loops:
 

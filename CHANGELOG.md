@@ -24,6 +24,11 @@ the offending type and the remedy (`condition must be bool, got int; use a
 comparison or std.conv.to_bool`; `predicate must return bool, got null`).
 Fail tests: spec fail/196–199.
 
+Named types over `bool` participate in conditions through their base
+(`type Flag bool` makes `if Flag(true) { }` valid), the same way named
+ints participate in arithmetic (spec 194). Generalising `subtype` beyond
+numeric parents is tracked as #113.
+
 `std.conv.to_bool` is the one explicit conversion and now treats heap-backed
 strings like literals (`to_bool("")` and `to_bool(trim(" "))` are both
 `false`) and converts named values through their underlying value

@@ -1,0 +1,6 @@
+if ok
+not ok
+and ok
+or ok
+template ok
+named int rejected

@@ -176,8 +176,14 @@ pub const Value = union(VTag) {
     null,
 
     pub fn asBool(self: Value) error{TypeError}!bool {
-        if (self != .boolean) return error.TypeError;
-        return self.boolean;
+        if (self == .boolean) return self.boolean;
+        // Named types over bool participate in conditions through their
+        // base, the same way named ints participate in arithmetic.
+        if (self == .object and self.object.* == .named_value) {
+            const underlying = self.object.named_value.value;
+            if (underlying == .boolean) return underlying.boolean;
+        }
+        return error.TypeError;
     }
 
     pub fn equals(a: Value, b: Value) bool {

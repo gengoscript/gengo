@@ -1,0 +1,27 @@
+std := import("std")
+
+// Named types over bool work in every condition position through their base.
+type Flag bool
+
+f := Flag(true)
+if f { std.io.println("if ok") }
+if !Flag(false) { std.io.println("not ok") }
+if f && Flag(true) { std.io.println("and ok") }
+if Flag(false) || f { std.io.println("or ok") }
+std.io.println(std.template.render("{{if .f}}template ok{{end}}", {"f": f}))
+
+// Subtype of a bool type belongs here once #113 lands.
+
+// Named types over anything else still do not.
+type Count int
+
+func rejectsNamedInt() {
+    defer func() {
+        e := std.core.recover()
+        if e != null { std.io.println("named int rejected") }
+    }()
+    c := Count(1)
+    if c { std.io.println("unreachable") }
+}
+
+rejectsNamedInt()
