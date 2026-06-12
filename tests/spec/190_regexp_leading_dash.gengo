@@ -1,0 +1,24 @@
+std := import("std")
+
+// Leading dash in character class (issue #111)
+assert(std.regexp.match("[-:]", ":"))
+assert(std.regexp.match("[-a]", "a"))
+assert(std.regexp.match("[-a]", "-"))
+assert(std.regexp.match("[a-]", "a"))
+assert(std.regexp.match("[\-:]", ":"))
+
+// Negated class with leading dash
+assert(std.regexp.match("[^-]", "a"))
+assert(!std.regexp.match("[^-]", "-"))
+
+// Leading and trailing dash
+assert(std.regexp.match("[--]", "-"))
+
+// Backward range produces error, not silent failure
+func testBadRange() {
+    defer { _ = std.core.recover() }
+    std.regexp.match("[z-a]", "a")
+}
+testBadRange()
+
+std.io.println("ok")

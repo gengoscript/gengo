@@ -176,7 +176,7 @@ func looksLikeDocPath(t string) bool {
 
 // ── Tables ───────────────────────────────────────────────────────────────────
 
-const sepCell := std.regexp.compile('^[\-:]+$')
+const sepCell := std.regexp.compile('^[-:]+$')
 
 // Split "| a | b |" into trimmed cells, dropping the outer pipes.
 func splitRow(row string) any {

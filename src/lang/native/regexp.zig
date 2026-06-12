@@ -193,6 +193,7 @@ fn parseAlt(alloc: Allocator, pattern: []const u8, start: usize, end: usize) Par
                 var bits: u128 = 0;
                 var range_start: u8 = 0;
                 var in_range = false;
+                const class_first = i;
                 while (i < end and pattern[i] != ']') {
                     if (pattern[i] == '\\') {
                         i += 1;
@@ -215,12 +216,18 @@ fn parseAlt(alloc: Allocator, pattern: []const u8, start: usize, end: usize) Par
                         continue;
                     }
                     if (pattern[i] == '-' and i + 1 < end and pattern[i + 1] != ']') {
+                        if (i == class_first) {
+                            if ('-' < 128) bits |= @as(u128, 1) << @intCast('-');
+                            i += 1;
+                            continue;
+                        }
                         range_start = pattern[i - 1];
                         in_range = true;
                         i += 1;
                         continue;
                     }
                     if (in_range) {
+                        if (range_start > pattern[i]) return error.InvalidPattern;
                         var r: u8 = range_start;
                         while (r <= pattern[i] and r < 128) : (r += 1) bits |= @as(u128, 1) << @intCast(r);
                         in_range = false;
