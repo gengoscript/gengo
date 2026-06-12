@@ -78,6 +78,7 @@ fn panicMessageFromValue(v: Value) []const u8 {
 // ── Private helpers used only in the execution core ───────────────────────────
 
 fn namedTypeIsSubOf(sub: *Object, ancestor: *Object) bool {
+    if (sub == ancestor) return true;
     var cur = vmtyp.resolveParentType(sub) orelse return false;
     while (true) {
         if (cur == ancestor) return true;
@@ -96,6 +97,16 @@ fn namedTypeCarrier(a: Value, b: Value) !?*Object {
     if (namedTypeIsSubOf(ta.?, tb.?)) return tb.?;
     if (namedTypeIsSubOf(tb.?, ta.?)) return ta.?;
     return error.TypeError;
+}
+
+fn isStringValueOrNamedString(v: Value) bool {
+    if (vms.isStringValue(v)) return true;
+    if (v == .object and v.object.* == .named_value) {
+        const nv = v.object.named_value;
+        if (nv.typ.* == .named_type and nv.typ.named_type.base == .string)
+            return true;
+    }
+    return false;
 }
 
 fn namedBaseName(base: vmod.NamedTypeBase) []const u8 {
@@ -281,6 +292,20 @@ fn pushNumericResultWithCarrier(a: Value, b: Value, n: f64, tag: VTag, op: []con
         try vmPush(wrapped);
     } else {
         try vmPush(val);
+    }
+}
+
+fn pushStringResultWithCarrier(a: Value, b: Value, raw: Value) !void {
+    const carrier = namedTypeCarrier(a, b) catch |err| {
+        if (err == error.TypeError) setBinaryTypeError("+", a, b);
+        return err;
+    };
+    if (carrier) |typ| {
+        try vms.pushTempRoot(raw);
+        defer vms.popTempRoot();
+        try vmPush(try vmtyp.makeNamedValue(typ, raw));
+    } else {
+        try vmPush(raw);
     }
 }
 
@@ -1800,7 +1825,7 @@ fn runInner() !void {
             .add => {
                 const b = try vmPop();
                 const a = try vmPop();
-                if (vms.isStringValue(a) and vms.isStringValue(b)) {
+                if (isStringValueOrNamedString(a) and isStringValueOrNamedString(b)) {
                     // a and b are off the Gengo stack; protect them so GC inside
                     // concatDynString can't free their backing bytes before the copy.
                     try pushTempRoot(a);
@@ -1808,10 +1833,10 @@ fn runInner() !void {
                     const sa = try vms.asStringValue(a);
                     const sb = try vms.asStringValue(b);
                     vmperf.countStringConcat(sa.len + sb.len);
-                    const result = concatDynString(sa, sb);
+                    const result = try concatDynString(sa, sb);
                     popTempRoot();
                     popTempRoot();
-                    try vmPush(try result);
+                    try pushStringResultWithCarrier(a, b, result);
                 } else if (decimalOpValues(a, b)) |dop| {
                     const result = @addWithOverflow(dop.lhs, dop.rhs);
                     if (result[1] != 0) return error.TypeError;
@@ -2220,7 +2245,7 @@ fn runInner() !void {
                 if (base + slot >= vmState().stack.len) return error.StackOverflow;
                 var a = vmState().stack[base + slot];
                 if (a == .object and a.object.* == .cell) a = a.object.cell.value;
-                if (vms.isStringValue(a) and vms.isStringValue(k)) {
+                if (isStringValueOrNamedString(a) and isStringValueOrNamedString(k)) {
                     const sa = try vms.asStringValue(a);
                     const sk = try vms.asStringValue(k);
                     const a_is_gc_obj = (a == .object);
@@ -2232,7 +2257,7 @@ fn runInner() !void {
                         if (a_is_gc_obj) popTempRoot();
                     }
                     const result = try concatDynString(sa, sk);
-                    try vmPush(result);
+                    try pushStringResultWithCarrier(a, k, result);
                 } else {
                     const an = try valueAsNumberForOp(a, k, "+");
                     const kn = try valueAsNumberForOp(k, a, "+");
@@ -2314,7 +2339,7 @@ fn runInner() !void {
             .const_add => {
                 const k = try chunk.constAt(try vmShort());
                 const a = try vmPop();
-                if (vms.isStringValue(a) and vms.isStringValue(k)) {
+                if (isStringValueOrNamedString(a) and isStringValueOrNamedString(k)) {
                     const sa = try vms.asStringValue(a);
                     const sk = try vms.asStringValue(k);
                     // Protect GC-backed operands so concatDynString can allocate
@@ -2329,7 +2354,7 @@ fn runInner() !void {
                     }
                     const result = try concatDynString(sa, sk);
                     vmperf.countStringConcat(sa.len + sk.len);
-                    try vmPush(result);
+                    try pushStringResultWithCarrier(a, k, result);
                 } else {
                     const an = try valueAsNumberForOp(a, k, "+");
                     const kn = try valueAsNumberForOp(k, a, "+");

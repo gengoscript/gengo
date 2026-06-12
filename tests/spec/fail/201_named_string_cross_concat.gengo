@@ -1,0 +1,6 @@
+func use(s string) {}
+
+type Html string
+type Css string
+
+use(Html("<a>") + Css("b"))

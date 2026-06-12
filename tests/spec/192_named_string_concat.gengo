@@ -1,0 +1,22 @@
+std := import("std")
+
+// Named string type concatenation should work like named numeric arithmetic
+type Html string
+
+h1 := Html("<p>")
+h2 := Html("hi</p>")
+std.io.println(h1 + h2)
+std.io.println(Html("<hr>") + Html("<br>"))
+
+// Named string type with a method
+type UserId string
+
+func (u UserId) greet() string {
+    return "Hello, " + string(u)
+}
+
+uid := UserId("alice")
+std.io.println(uid.greet())
+
+// Same type via direct construction
+std.io.println(UserId("x") + UserId("y"))
