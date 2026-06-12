@@ -150,7 +150,15 @@ fn nextGcObjects(live: usize) usize {
     return if (raw >= max_obj) max_obj - 1 else raw;
 }
 
+// Debug stress mode, enabled by the CLI when GENGO_GC_STRESS is set:
+// collect on every allocation so unrooted-window bugs fire deterministically.
+pub var gc_stress: bool = false;
+fn gcStress() bool {
+    return gc_stress;
+}
+
 pub fn vmAllocObject() !*Object {
+    if (gcStress()) collectGarbage();
     if (heap.liveObjectCount() >= vms.vmState().next_gc_objects) {
         collectGarbage();
         vms.vmState().next_gc_objects = nextGcObjects(heap.liveObjectCount());
@@ -169,6 +177,7 @@ pub fn vmAllocObject() !*Object {
 }
 
 pub fn vmAllocManagedSlice(comptime T: type, n: usize) ![]T {
+    if (gcStress()) collectGarbage();
     if (@sizeOf(T) * n > heap.maxManagedAlloc()) {
         vms.setRuntimeErr("allocation of {d} bytes exceeds this heap's largest block ({d} bytes); configure a larger heap", .{ @sizeOf(T) * n, heap.maxManagedAlloc() });
         return error.AllocationTooLarge;
@@ -200,6 +209,7 @@ fn gcStepThreshold(used: usize) usize {
 }
 
 pub fn vmAllocManagedBytes(n: usize) ![]u8 {
+    if (gcStress()) collectGarbage();
     if (n > heap.maxManagedAlloc()) {
         vms.setRuntimeErr("allocation of {d} bytes exceeds this heap's largest block ({d} bytes); configure a larger heap", .{ n, heap.maxManagedAlloc() });
         return error.AllocationTooLarge;

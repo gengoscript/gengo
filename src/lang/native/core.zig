@@ -34,7 +34,8 @@ pub fn nativeLen(v: Value) !Value {
 }
 
 pub fn nativeByteLen(v: Value) !Value {
-    const n: usize = switch (v) {
+    const uv = vms.unboxNamed(v);
+    const n: usize = switch (uv) {
         .string => |s| s.len,
         .object => |obj| switch (obj.*) {
             .dyn_string => |s| s.len,

@@ -167,7 +167,9 @@ pub fn allocBytesManaged(n: usize) ?[]u8 {
     if (g_state.free_blocks[ci]) |head| {
         const next_ptr = @as(*usize, @ptrCast(@alignCast(head))).*;
         g_state.free_blocks[ci] = if (next_ptr == 0) null else @as(*u8, @ptrFromInt(next_ptr));
-        return @as([*]u8, @ptrCast(head))[0..ClassSizes[ci]];
+        const blk = @as([*]u8, @ptrCast(head))[0..ClassSizes[ci]];
+        if (paranoiaOn()) assertNotLive(blk);
+        return blk;
     }
     const mask: usize = ManagedAlign - 1;
     const pos = (g_state.heap_pos + mask) & ~mask;
@@ -176,8 +178,41 @@ pub fn allocBytesManaged(n: usize) ?[]u8 {
     return g_state.heap[pos .. pos + ClassSizes[ci]];
 }
 
+// Debug tripwire, enabled by the CLI when GENGO_HEAP_PARANOIA is set.
+pub var paranoia: bool = false;
+fn paranoiaOn() bool {
+    return paranoia;
+}
+
+fn assertNotLive(buf: []u8) void {
+    const std_ = @import("std");
+    const lo = @intFromPtr(buf.ptr);
+    const hi = lo + buf.len;
+    var i: usize = 0;
+    while (i < g_state.obj_pool.len) : (i += 1) {
+        if (!g_state.obj_live[i]) continue;
+        const region: ?[]const u8 = switch (g_state.obj_pool[i]) {
+            .dyn_string => |ds| ds,
+            .string_builder => |sb| sb.buf,
+            .array_managed => |am| std_.mem.sliceAsBytes(am),
+            .map_managed => |mm| std_.mem.sliceAsBytes(mm),
+            else => null,
+        };
+        if (region) |r| {
+            if (r.len == 0) continue;
+            const rlo = @intFromPtr(r.ptr);
+            const rhi = rlo + r.len;
+            if (lo < rhi and rlo < hi) {
+                std_.debug.print("FREE-OF-LIVE: freeing {x}..{x} overlaps live obj {d} ({s}) {x}..{x}\n", .{ lo, hi, i, @tagName(g_state.obj_pool[i]), rlo, rhi });
+                @panic("free of live region");
+            }
+        }
+    }
+}
+
 pub fn freeBytesManaged(buf: []u8) void {
     if (buf.len == 0) return;
+    if (paranoiaOn()) assertNotLive(buf);
     const ci = classIndexFor(buf.len) orelse return;
     const p = @as(*u8, @ptrCast(buf.ptr));
     const next = if (g_state.free_blocks[ci]) |h| @intFromPtr(h) else 0;
