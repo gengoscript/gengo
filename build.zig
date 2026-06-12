@@ -12,7 +12,7 @@ pub fn build(b: *std.Build) void {
     const cap_net_opt = b.option(bool, "cap_net", "Include cap:net capability") orelse true;
     const cap_http_opt = b.option(bool, "cap_http", "Include cap:http capability") orelse true;
     const cap_fs_opt = b.option(bool, "cap_fs", "Include cap:fs capability") orelse true;
-    const gengo_version = "0.4.0";
+    const gengo_version = "0.5.0-dev";
     const build_opts = b.addOptions();
     build_opts.addOption(bool, "perf", perf_opt);
     build_opts.addOption(bool, "cap_net", cap_net_opt);

@@ -83,7 +83,21 @@ Notes:
 ## Versioning
 
 - The canonical version string is in `build.zig` (`gengo_version`).
+  `sdk/typescript/package.json` is kept in sync with it at all times.
 - Tag every breaking change. Tags follow `v<major>.<minor>.<patch>` (e.g., `v0.4.0`).
-- Before tagging, ensure `build.zig`, `CHANGELOG.md`, and
-  `sdk/typescript/package.json` are in sync.
 - `CHANGELOG.md` entries under the new version's date go into the tag message.
+
+### Release cycle
+
+The version string is never ambiguous about whether a build is a release:
+
+1. The first commit after a release bumps `gengo_version` to the next
+   version with a `-dev` suffix (e.g. `0.5.0-dev`). Binaries built from
+   main during a cycle always identify as pre-release.
+2. When the cycle is done, a release commit drops the `-dev` suffix and
+   adds the version's `CHANGELOG.md` entries.
+3. The annotated tag (`v0.5.0`) goes on that release commit, and a GitHub
+   release is published from it.
+4. The next commit starts over at step 1.
+
+A tagged commit is therefore the only place a bare version string exists.
