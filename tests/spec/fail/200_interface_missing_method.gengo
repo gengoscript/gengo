@@ -1,0 +1,9 @@
+type Processor interface {
+    process() int
+}
+
+type Meters int
+
+func use(p Processor) {}
+
+use(Meters(5))
