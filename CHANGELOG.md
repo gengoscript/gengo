@@ -34,6 +34,23 @@ strings like literals (`to_bool("")` and `to_bool(trim(" "))` are both
 `false`) and converts named values through their underlying value
 (spec 193).
 
+### Breaking — Type Names Cannot Be Shadowed
+
+No binding form may use a type name: function/variable/loop-variable
+names, parameters, receivers, named returns, multi-assign targets, and
+variant case bindings all reject primitive type names (`int`, `float`,
+`bool`, `string`, `rune`, `decimal`, `error`, `any`, `map`) and every
+registered named/struct/interface/variant type. `var bool bool`,
+`func string() {}`, and `add(float float)` are now compile errors
+naming the offence. Fail tests: spec fail/207–211.
+
+### Improved — Bare Type Parameters in Interface Specs
+
+Interface method parameters can be written as bare types, Go-style:
+`add(float) float` is now valid alongside `add(x float) float` — the
+names were documentation only, since interface methods have no body.
+The language guide gains an Interfaces section. Spec 196.
+
 ### Improved — Subtypes of Any Scalar Named Type
 
 `subtype Child Parent` now accepts any scalar named parent — `bool`,

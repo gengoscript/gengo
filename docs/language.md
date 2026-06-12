@@ -72,6 +72,10 @@ const port Port = Port(443)
 
 Assignment uses `=`. Compound assignment such as `+=` and `-=` is supported. `const` bindings cannot be reassigned, though mutable values stored inside them may still be mutated.
 
+Type names cannot be shadowed: no variable, function, parameter, receiver,
+named return, or loop variable may be named after a primitive type or any
+declared type (`var bool bool` and `func string() {}` are compile errors).
+
 ## Literals
 
 Strings:
@@ -256,6 +260,30 @@ switch ev {
         return "ok"
 }
 ```
+
+## Interfaces
+
+Interfaces declare method sets; any value whose type has the methods
+satisfies the interface — structs, named types, enums, and variants alike.
+
+```gengo
+type Adder interface {
+    add(float) float
+}
+
+type Acc struct { total float }
+
+func (a Acc) add(x float) float {
+    return a.total + x
+}
+
+func sum(a Adder) float {
+    return a.add(1.0)
+}
+```
+
+Method parameters in an interface are written as bare types (`add(float)`)
+or `name type` pairs (`add(x float)`); the names are documentation only.
 
 ## Capability Imports
 

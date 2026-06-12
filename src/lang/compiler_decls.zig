@@ -82,9 +82,21 @@ pub fn interfaceDeclBody(c: anytype, kw: Token, name: Token, is_pub: bool) !void
         if (!c.check(.rparen)) {
             while (true) {
                 const vari = c.match(.ellipsis);
-                if (c.cur.typ != .ident) return c.err("expected identifier, found {s}", .{c.tokenName(c.cur.typ)});
-                c.advance(); // param name
-                if (c.cur.typ != .question and c.cur.typ != .ident and c.cur.typ != .kw_func and c.cur.typ != .lbracket) { c.setErr("expected type annotation, found {s}", .{c.tokenName(c.cur.typ)}); return error.ExpectedTypeAnnotation; }
+                // Parameter names in an interface spec are documentation only
+                // (there is no body), so the bare-type form is allowed too:
+                // add(float) float. An ident followed by a type-start token is
+                // a name; an ident followed by ',' or ')' is the type itself.
+                if (c.cur.typ == .ident) {
+                    const after = c.peekToken();
+                    if (after.typ == .question or after.typ == .ident or after.typ == .kw_func or after.typ == .lbracket) {
+                        if (c.isKnownTypeName(c.cur.src))
+                            return c.err("'{s}' is a type name and cannot be used as a parameter name", .{c.cur.src});
+                        c.advance(); // param name
+                    }
+                } else if (c.cur.typ != .question and c.cur.typ != .kw_func and c.cur.typ != .lbracket) {
+                    c.setErr("expected type annotation, found {s}", .{c.tokenName(c.cur.typ)});
+                    return error.ExpectedTypeAnnotation;
+                }
                 const ptype: FieldTypeSpec = try parseFieldTypeSpec(c, );
                 if (!(ptype.alts.len == 1 and ptype.alts[0].typ == .any)) has_typed_params = true;
                 ptypes_tmp[arity] = ptype;
@@ -220,6 +232,8 @@ pub fn namedFuncDecl(c: anytype, is_pub: bool) !void {
     c.advance(); // consume 'func'
     if (c.cur.typ != .ident) return c.err("expected identifier, found {s}", .{c.tokenName(c.cur.typ)});
     const name = c.cur;
+    if (c.isKnownTypeName(name.src))
+        return c.err("'{s}' is a type name and cannot be used as a function name", .{name.src});
     c.advance(); // consume function name
 
     // current token is '('; compile as a named function for return-type enforcement
