@@ -40,6 +40,14 @@ for f in \
     fi
 done
 
+echo "→ site builder (docs e2e)..."
+if ! "$G" --cap fs --mount root=. tools/site-builder/site-builder.gengo > /dev/null 2>&1; then
+    echo "  FAIL: site builder"
+    fail=1
+else
+    echo "  OK:   site builder"
+fi
+
 if [ "$fail" -ne 0 ]; then
     echo "=== pre-push FAILED — push blocked ==="
     exit 1

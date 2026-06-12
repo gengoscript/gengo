@@ -2652,8 +2652,14 @@ fn runInner() !void {
                 }
             },
             .iter_init => {
-                const v = try vmPop();
-                try vmPush(try iterInit(v));
+                // Keep the iterable on the stack while iterInit allocates the
+                // iterator object: popping first leaves a temporary array's
+                // only reference in a Zig local, and the GC sweeps it — often
+                // reusing its slot for the iterator itself.
+                const v = try vmPeek(0);
+                const it = try iterInit(v);
+                _ = try vmPop();
+                try vmPush(it);
             },
             .iter_next1 => {
                 const itv = try vmPeek(0);

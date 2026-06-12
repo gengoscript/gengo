@@ -1,0 +1,33 @@
+std := import("std")
+
+// Regression: iter_init popped the iterable before allocating the iterator
+// object, so a temporary array's only reference lived in a Zig local during
+// the allocation. A GC there swept the array (often reusing its slot for
+// the iterator itself), corrupting iteration or failing with TypeError.
+func inner(row string) any {
+    var cells := []
+    for part in std.string.split(row, "|") {
+        cells = std.core.append(cells, std.string.trim(part))
+    }
+    return cells
+}
+
+func render(rows any) {
+    for row in rows {
+        for cell in inner(row) {
+            if !std.core.is_string(cell) {
+                std.io.println("CORRUPT:", std.core.type_of(cell))
+                return
+            }
+        }
+    }
+}
+
+var rows := []
+for i := 0; i < 12; i++ {
+    rows = std.core.append(rows, "| aaa | bbb | ccc |")
+}
+for round := 0; round < 6000; round++ {
+    render(rows)
+}
+std.io.println("done")
