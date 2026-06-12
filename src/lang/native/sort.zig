@@ -6,6 +6,7 @@ const compare = @import("compare.zig");
 const vm = @import("../vm.zig");
 const vmgc = @import("../vm_gc.zig");
 const vms = @import("../vm_state.zig");
+const vmtyp = @import("../vm_types.zig");
 
 pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
     switch (@as(NativeFnId, @enumFromInt(nf.id))) {
@@ -51,8 +52,9 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                     var j: usize = i;
                     while (j > 0) : (j -= 1) {
                         const cmp = try vm.callFunction(fn_val, &.{ items[j - 1], key });
-                        const less = if (cmp == .int) cmp.int < 0 else if (cmp == .float) cmp.float < 0 else blk: {
-                            break :blk try cmp.asBool();
+                        const less = if (cmp == .int) cmp.int < 0 else if (cmp == .float) cmp.float < 0 else cmp.asBool() catch {
+                            vms.setRuntimeErr("comparator must return int, float, or bool, got {s}", .{vmtyp.runtimeTypeName(cmp)});
+                            return error.TypeError;
                         };
                         if (less) break;
                         items[j] = items[j - 1];

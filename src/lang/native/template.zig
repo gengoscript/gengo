@@ -2,6 +2,7 @@ const std = @import("std");
 const heap = @import("../../runtime/heap.zig");
 const vms = @import("../vm_state.zig");
 const vmgc = @import("../vm_gc.zig");
+const vmtyp = @import("../vm_types.zig");
 const Value = @import("../value.zig").Value;
 const Object = @import("../value.zig").Object;
 const MapEntry = @import("../value.zig").MapEntry;
@@ -524,7 +525,11 @@ pub fn tplExec(tmpl: *Object, data: Value) !Value {
             },
             .if_begin => {
                 const cond = try tplEvalExpr(arg, dot_stack[scope_top], funcs_v);
-                if (!(try cond.asBool())) {
+                const cond_bool = cond.asBool() catch {
+                    vms.setRuntimeErr("{{{{if}}}} condition must be bool, got {s}", .{vmtyp.runtimeTypeName(cond)});
+                    return error.TypeError;
+                };
+                if (!cond_bool) {
                     const jv = jmps[ip];
                     const jv_num = if (jv == .int) jv.int else if (jv == .float) jv.float else return error.TypeError;
                     if (jv_num < 0 or jv_num >= @as(f64, @floatFromInt(ops.len))) return error.TypeError;

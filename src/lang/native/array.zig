@@ -6,6 +6,14 @@ const Value = @import("../value.zig").Value;
 const vm = @import("../vm.zig");
 const vmgc = @import("../vm_gc.zig");
 const vms = @import("../vm_state.zig");
+const vmtyp = @import("../vm_types.zig");
+
+fn predBool(v: Value) !bool {
+    return v.asBool() catch {
+        vms.setRuntimeErr("predicate must return bool, got {s}", .{vmtyp.runtimeTypeName(v)});
+        return error.TypeError;
+    };
+}
 
 pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
     switch (@as(NativeFnId, @enumFromInt(nf.id))) {
@@ -25,14 +33,14 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             var count: usize = 0;
             for (items) |item| {
                 const ok = try vm.callFunction(fn_val, &.{item});
-                if (try ok.asBool()) count += 1;
+                if (try predBool(ok)) count += 1;
             }
             if (count > 0) {
                 const out = try vmgc.vmAllocManagedSlice(Value, count);
                 var idx: usize = 0;
                 for (items) |item| {
                     const ok = try vm.callFunction(fn_val, &.{item});
-                    if (try ok.asBool()) {
+                    if (try predBool(ok)) {
                         out[idx] = item;
                         idx += 1;
                     }
@@ -193,7 +201,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             var result: Value = .null;
             for (items) |item| {
                 const ok = try vm.callFunction(fn_val, &.{item});
-                if (try ok.asBool()) { result = item; break; }
+                if (try predBool(ok)) { result = item; break; }
             }
             _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
             try vms.vmPush(result);
@@ -210,7 +218,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             var result: Value = .{ .int = -1 };
             for (items, 0..) |item, i| {
                 const ok = try vm.callFunction(fn_val, &.{item});
-                if (try ok.asBool()) { result = .{ .int = @floatFromInt(i) }; break; }
+                if (try predBool(ok)) { result = .{ .int = @floatFromInt(i) }; break; }
             }
             _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
             try vms.vmPush(result);
@@ -227,7 +235,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             var result = true;
             for (items) |item| {
                 const ok = try vm.callFunction(fn_val, &.{item});
-                if (!(try ok.asBool())) { result = false; break; }
+                if (!(try predBool(ok))) { result = false; break; }
             }
             _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
             try vms.vmPush(.{ .boolean = result });
@@ -244,7 +252,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             var result = false;
             for (items) |item| {
                 const ok = try vm.callFunction(fn_val, &.{item});
-                if (try ok.asBool()) { result = true; break; }
+                if (try predBool(ok)) { result = true; break; }
             }
             _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
             try vms.vmPush(.{ .boolean = result });

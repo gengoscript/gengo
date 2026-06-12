@@ -1,1 +1,2 @@
 TypeError
+{{if}} condition must be bool, got int

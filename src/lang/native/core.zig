@@ -273,7 +273,13 @@ pub fn nativeConvToBool(v: Value) !Value {
         .string => |s| s.len != 0,
         .error_value => |e| e.len != 0,
         .null => false,
-        .object => true,
+        // A heap-backed string must convert like a literal one; named values
+        // convert through their underlying value.
+        .object => |obj| switch (obj.*) {
+            .dyn_string => |s| s.len != 0,
+            .named_value => |nv| (try nativeConvToBool(nv.value)).boolean,
+            else => true,
+        },
     } };
 }
 

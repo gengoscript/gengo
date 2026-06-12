@@ -138,6 +138,11 @@ if score >= 10 {
 }
 ```
 
+Conditions are `bool`-only: `if`, `!`, `&&`, `||`, and template `{{if}}`
+reject every other type (`if 1 { }` is a runtime type error — there is no
+truthiness). Write a comparison, or convert explicitly with
+`std.conv.to_bool`.
+
 Loops:
 
 ```gengo

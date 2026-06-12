@@ -144,6 +144,14 @@ fn runtimeTypeName(v: Value) []const u8 {
     };
 }
 
+// Conditions are bool-only; explain what arrived instead of a bare TypeError.
+fn condAsBool(v: Value, what: []const u8) !bool {
+    return v.asBool() catch {
+        vms.setRuntimeErr("{s} must be bool, got {s}; use a comparison or std.conv.to_bool", .{ what, runtimeTypeName(v) });
+        return error.TypeError;
+    };
+}
+
 fn setBinaryTypeError(op: []const u8, a: Value, b: Value) void {
     const a_named = a == .object and a.object.* == .named_value;
     const b_named = b == .object and b.object.* == .named_value;
@@ -2143,7 +2151,7 @@ fn runInner() !void {
             },
             .not => {
                 const v = try vmPop();
-                try vmPush(.{ .boolean = !(try v.asBool()) });
+                try vmPush(.{ .boolean = !(try condAsBool(v, "'!' operand")) });
             },
             .eq => {
                 const b = try vmPop();
@@ -2703,12 +2711,12 @@ fn runInner() !void {
             },
             .jump_if_false => {
                 const off = try vmShort();
-                if (!(try (try vmPeek(0)).asBool())) vmState().ip += off;
+                if (!(try condAsBool(try vmPeek(0), "condition"))) vmState().ip += off;
             },
             .jif_pop => {
                 const off = try vmShort();
                 const cond = try vmPop();
-                if (!(try cond.asBool())) vmState().ip += off;
+                if (!(try condAsBool(cond, "condition"))) vmState().ip += off;
             },
             .loop => {
                 const off = try vmShort();
