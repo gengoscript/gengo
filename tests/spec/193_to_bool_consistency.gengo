@@ -1,0 +1,13 @@
+std := import("std")
+
+// Empty heap-backed string converts like an empty literal string.
+empty := std.string.trim(" ")
+std.io.println(std.core.bytelen(empty), std.conv.to_bool(empty))
+std.io.println(std.conv.to_bool(""))
+
+// Named values convert through their underlying value.
+type Count int
+std.io.println(std.conv.to_bool(Count(0)), std.conv.to_bool(Count(3)))
+
+// Baseline scalars.
+std.io.println(std.conv.to_bool(0), std.conv.to_bool(null), std.conv.to_bool([]))

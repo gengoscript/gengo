@@ -2,6 +2,78 @@
 
 This changelog tracks notable language/runtime changes by implementation date.
 
+## 2026-06-12 (v0.5.0-dev)
+
+### Breaking — Boolean-Only Conditions (Go-Style)
+
+`if`, `!`, `||`, `&&`, and template `{{if}}` now require actual `bool` values.
+Non-boolean values that were previously treated as truthy/falsy (non-zero
+integers, non-null strings, etc.) now produce a runtime `TypeError`. This
+eliminates a class of subtle bugs where a non-boolean expression slips into a
+condition. Use `std.conv.to_bool` for explicit conversion. See issue #109.
+
+Positions affected:
+- VM opcodes: `.jif_pop`, `.jump_if_false`, `.not`
+- Template: `{{if}}` condition
+- Array stdlib: `filter`, `find`, `findIndex`, `all`, `any` predicate return
+- Sort stdlib: custom comparator fallback (non-int, non-float return)
+
+The internal `isTruthy()` function on `Value` has been replaced with
+`asBool()` that returns `TypeError` for non-boolean values. The errors name
+the offending type and the remedy (`condition must be bool, got int; use a
+comparison or std.conv.to_bool`; `predicate must return bool, got null`).
+Fail tests: spec fail/196–199.
+
+`std.conv.to_bool` is the one explicit conversion and now treats heap-backed
+strings like literals (`to_bool("")` and `to_bool(trim(" "))` are both
+`false`) and converts named values through their underlying value
+(spec 193).
+
+### Fix — REPL Named Types Persistence Across Lines
+
+`type`, `subtype`, `struct`, `interface`, and `variant` type declarations now
+persist across `runIncremental` calls. Previously the `TypeRegistry` was reset
+on each call, causing type annotations, `subtype`, and `var x TypeName` to fail
+on subsequent REPL lines. Now the `Runtime` stores type names in the same
+pattern as `repl_const_names`, and pre-populates the registry before
+compilation while skipping `registry.reset()` in REPL mode. The persisted
+name buffer is compacted per line with overlap-safe copies so earlier type
+names survive later declarations. See issue #112.
+
+### Fix — Diagnostics: Misleading Errors from Module Load, Host Imports, String Pool
+
+Three misleading error scenarios are now fixed (see issue #98):
+
+1. **Module load failure** — When a module's compilation fails, its record is
+   now marked `.failed` instead of staying in `.loading`. A subsequent import
+   of the same module re-reports the original compile error instead of a
+   misleading `ImportCycle` error.
+2. **Host module exports** — Accessing a non-existent field on a host module
+   (e.g. `db.nonexistent()`) now produces a compile-time error instead of
+   surfacing only at call time.
+3. **Lexer string pool exhaustion** — When the 128KB string pool overflows,
+   the lexer now reports `"string pool exhausted (max 128KB)"` instead of the
+   misleading `"unterminated string"` error.
+
+### Improved — Named String Types Concatenate
+
+`+` on two values of the same named string type (or subtype) now works and
+keeps the named type: `Html("<p>") + Html("</p>")` is an `Html`. Mixing
+different named types or a named type with a bare string remains a
+`TypeError`. See issue #110. Spec 192, fail/201–202.
+
+### Fix — Regexp Character Class Leading Dash
+
+A `-` at the start of a character class (`[-:]`) is now a literal dash, as
+in every mainstream engine; previously the class silently matched nothing.
+See issue #111. Spec 190.
+
+### Fix — Named Types, Enums, and Variants Satisfy Interfaces
+
+`matchesInterfaceType` only recognised struct instances; named values, enum
+values, and variant values with matching methods now satisfy interface
+checks too. Spec 191, fail/200.
+
 ## 2026-06-12 — v0.4.1
 
 ### Fixed — Cross-Platform Release Builds
@@ -33,50 +105,6 @@ The engine now carries a single source-of-truth version string (`0.4.0` in
 
 Every breaking change from now on is tagged, documented in the changelog, and
 never happens silently. See issue #106.
-
-## 2026-06-12 (continued)
-
-### Breaking — Boolean-Only Conditions (Go-Style)
-
-`if`, `!`, `||`, `&&`, and template `{{if}}` now require actual `bool` values.
-Non-boolean values that were previously treated as truthy/falsy (non-zero
-integers, non-null strings, etc.) now produce a runtime `TypeError`. This
-eliminates a class of subtle bugs where a non-boolean expression slips into a
-condition. Use `std.conv.to_bool` for explicit conversion. See issue #109.
-
-Positions affected:
-- VM opcodes: `.jif_pop`, `.jump_if_false`, `.not`
-- Template: `{{if}}` condition
-- Array stdlib: `filter`, `find`, `findIndex`, `all`, `any` predicate return
-- Sort stdlib: custom comparator fallback (non-int, non-float return)
-
-The internal `isTruthy()` function on `Value` has been replaced with
-`asBool()` that returns `TypeError` for non-boolean values.
-Fail tests: spec fail/196–199.
-
-### Fix — REPL Named Types Persistence Across Lines
-
-`type`, `subtype`, `struct`, `interface`, and `variant` type declarations now
-persist across `runIncremental` calls. Previously the `TypeRegistry` was reset
-on each call, causing type annotations, `subtype`, and `var x TypeName` to fail
-on subsequent REPL lines. Now the `Runtime` stores type names in the same
-pattern as `repl_const_names`, and pre-populates the registry before
-compilation while skipping `registry.reset()` in REPL mode. See issue #112.
-
-### Fix — Diagnostics: Misleading Errors from Module Load, Host Imports, String Pool
-
-Three misleading error scenarios are now fixed (see issue #98):
-
-1. **Module load failure** — When a module's compilation fails, its record is
-   now marked `.failed` instead of staying in `.loading`. A subsequent import
-   of the same module re-reports the original compile error instead of a
-   misleading `ImportCycle` error.
-2. **Host module exports** — Accessing a non-existent field on a host module
-   (e.g. `db.nonexistent()`) now produces a compile-time error instead of
-   surfacing only at call time.
-3. **Lexer string pool exhaustion** — When the 128KB string pool overflows,
-   the lexer now reports `"string pool exhausted (max 128KB)"` instead of the
-   misleading `"unterminated string"` error.
 
 ## 2026-06-11
 

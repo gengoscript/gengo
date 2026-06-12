@@ -508,13 +508,15 @@ pub const Runtime = struct {
     }
 
     fn saveReplTypeName(self: *Runtime, name: []const u8) ![]const u8 {
-        // If the name already lives in our buffer, reuse it directly.
-        const buf_addr = @intFromPtr(&self.repl_type_name_buf);
-        const name_addr = @intFromPtr(name.ptr);
-        if (name_addr >= buf_addr and name_addr < buf_addr + self.repl_type_name_buf.len) return name;
+        // Always reserve and copy, even when the name already lives in this
+        // buffer: persist compacts from offset 0, and an unreserved reused
+        // slice gets clobbered by the next new name written over its bytes.
+        // Persist order preserves relative order, so an in-buffer source is
+        // always at or ahead of its destination — copyForwards handles the
+        // overlap.
         if (self.repl_type_name_buf_used + name.len > self.repl_type_name_buf.len) return error.OutOfMemory;
         const start = self.repl_type_name_buf_used;
-        @memcpy(self.repl_type_name_buf[start .. start + name.len], name);
+        std.mem.copyForwards(u8, self.repl_type_name_buf[start .. start + name.len], name);
         self.repl_type_name_buf_used += name.len;
         return self.repl_type_name_buf[start .. start + name.len];
     }

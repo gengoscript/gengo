@@ -120,7 +120,10 @@ The entries below describe the public library surface. This page is intentionall
 - Errors: `TypeError` on invalid conversion
 
 ### `std.conv.to_bool(x)`
-- Truthy conversion to boolean
+- Explicit conversion to boolean: `false`, `null`, `0`, and `""` convert to
+  `false`; everything else converts to `true`
+- This is the only truthiness in the language — `if`/`!`/`&&`/`||` and
+  template `{{if}}` require an actual `bool`
 
 ### `std.conv.to_string(x)`
 - Converts number/rune/boolean/null/string/error to string

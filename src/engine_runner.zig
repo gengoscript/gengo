@@ -336,6 +336,11 @@ fn testReplIncremental() void {
     if (r10 != .ok) fail("engine FAIL: repl subtype across lines\n");
     const r11 = rt2.runIncremental("var a Age = Age(100)");
     if (r11 != .ok) fail("engine FAIL: repl subtype typed var across lines\n");
+    // The FIRST type must survive the persistence of later ones: the name
+    // buffer is rebuilt per line, and a reused-but-unreserved slice gets
+    // clobbered by the next new name (regression: Time read back as "Agee").
+    const r11b = rt2.runIncremental("var t2 Time = Time(2.5)");
+    if (r11b != .ok) fail("engine FAIL: repl first type clobbered by later type persist\n");
 
     // Struct type persistence across REPL lines
     const rt3 = initWithAllowIO(false);

@@ -25,7 +25,7 @@ fn namedBaseName(base: @import("value.zig").NamedTypeBase) []const u8 {
     };
 }
 
-fn runtimeTypeName(v: Value) []const u8 {
+pub fn runtimeTypeName(v: Value) []const u8 {
     return switch (v) {
         .int => "int",
         .float => "float",
