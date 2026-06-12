@@ -266,6 +266,33 @@ fn testReplIncremental() void {
         else => fail("engine FAIL: expected runtime error in repl\n"),
     }
 
+    // Named type persistence across REPL lines
+    const rt2 = initWithAllowIO(false);
+    const r8 = rt2.runIncremental("type Time float");
+    if (r8 != .ok) fail("engine FAIL: repl type decl\n");
+    const r9 = rt2.runIncremental("var t Time = Time(1.5)");
+    if (r9 != .ok) fail("engine FAIL: repl typed var across lines\n");
+    const r10 = rt2.runIncremental("subtype Age Time range 0..200");
+    if (r10 != .ok) fail("engine FAIL: repl subtype across lines\n");
+    const r11 = rt2.runIncremental("var a Age = Age(100)");
+    if (r11 != .ok) fail("engine FAIL: repl subtype typed var across lines\n");
+
+    // Struct type persistence across REPL lines
+    const rt3 = initWithAllowIO(false);
+    const r12 = rt3.runIncremental("type Point struct { x int, y int }");
+    if (r12 != .ok) fail("engine FAIL: repl struct type decl\n");
+    const r13 = rt3.runIncremental("var p Point = Point{x: 1, y: 2}");
+    if (r13 != .ok) fail("engine FAIL: repl struct typed var across lines\n");
+
+    // Struct type annotation on a parameter across lines
+    const rt4 = initWithAllowIO(false);
+    const r14 = rt4.runIncremental("type Meters int");
+    if (r14 != .ok) fail("engine FAIL: repl type for annotation\n");
+    const r15 = rt4.runIncremental(
+        \\func f(x Meters) int { return int(x) }
+    );
+    if (r15 != .ok) fail("engine FAIL: repl type annotation in func param\n");
+
     out("  repl incremental: OK\n");
 }
 

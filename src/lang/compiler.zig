@@ -122,7 +122,7 @@ pub const Compiler = struct {
     }
 
     pub fn compile(self: *Compiler, emit_halt: bool) !void {
-        self.registry.reset();
+        if (!self.options.repl_mode) self.registry.reset();
         self.export_count = 0;
         self.err_msg_len = 0;
         self.err_col = 0;

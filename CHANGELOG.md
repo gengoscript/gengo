@@ -54,6 +54,15 @@ The internal `isTruthy()` function on `Value` has been replaced with
 `asBool()` that returns `TypeError` for non-boolean values.
 Fail tests: spec fail/196–199.
 
+### Fix — REPL Named Types Persistence Across Lines
+
+`type`, `subtype`, `struct`, `interface`, and `variant` type declarations now
+persist across `runIncremental` calls. Previously the `TypeRegistry` was reset
+on each call, causing type annotations, `subtype`, and `var x TypeName` to fail
+on subsequent REPL lines. Now the `Runtime` stores type names in the same
+pattern as `repl_const_names`, and pre-populates the registry before
+compilation while skipping `registry.reset()` in REPL mode. See issue #112.
+
 ## 2026-06-11
 
 ### Breaking — Strict int/float Comparison
