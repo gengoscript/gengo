@@ -186,6 +186,7 @@ pub fn build(b: *std.Build) void {
         .optimize = .Debug,
     });
     const lexer_test = b.addTest(.{ .root_module = lexer_test_mod });
+    lexer_test.step.dependOn(&preset.step);
     const run_lexer_tests = b.addRunArtifact(lexer_test);
 
     const lexer_test_step = b.step("lexer-test", "Run lexer unit tests");
@@ -200,6 +201,7 @@ pub fn build(b: *std.Build) void {
         .optimize = .Debug,
     });
     const heap_test = b.addTest(.{ .root_module = heap_test_mod });
+    heap_test.step.dependOn(&preset.step);
     const run_heap_tests = b.addRunArtifact(heap_test);
 
     const heap_test_step = b.step("heap-test", "Run heap and GC invariant tests");
@@ -214,6 +216,9 @@ pub fn build(b: *std.Build) void {
     });
     compiler_test_mod.addImport("build_options", build_opts_mod);
     const compiler_test = b.addTest(.{ .root_module = compiler_test_mod });
+    // Test compiles read the preset-generated src/runtime/config.zig; without
+    // this edge they race the copy and can see a truncated file (CI flake).
+    compiler_test.step.dependOn(&preset.step);
     const run_compiler_tests = b.addRunArtifact(compiler_test);
 
     const compiler_test_step = b.step("compiler-test", "Run compiler bytecode output tests");
