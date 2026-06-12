@@ -209,6 +209,15 @@ int32_t engine_set_import_loader(int32_t handle,
  */
 void engine_set_write_fn(int32_t handle, gengo_write_fn_t callback);
 
+/* ── Version ──────────────────────────────────────────────────────────────── */
+
+/*
+ * Returns the bare engine version as a null-terminated string (e.g. "0.4.0"),
+ * machine-parseable; display branding is left to the caller.
+ * The pointer is valid for the lifetime of the library. Do not free it.
+ */
+const char* gengo_engine_version(void);
+
 /* ── Error inspection ─────────────────────────────────────────────────────── */
 
 /*
