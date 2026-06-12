@@ -1,0 +1,25 @@
+std := import("std")
+
+// Subtype of bool
+type Flag bool
+subtype Strict Flag
+
+s := Strict(true)
+std.io.println(s)
+std.io.println(s == Flag(true))
+
+// Subtype of string
+type UserId string
+subtype AdminId UserId
+
+a := AdminId("admin")
+std.io.println(a)
+std.io.println(a + AdminId("-root"))
+std.io.println(a == UserId("admin"))
+
+// Subtype of decimal
+type Money decimal 2
+subtype SmallMoney Money
+
+m := SmallMoney(100)
+std.io.println(m)
