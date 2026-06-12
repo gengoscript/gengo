@@ -35,6 +35,7 @@ pub const SourceProvider = union(enum) {
 const ModuleState = enum {
     loading,
     compiled,
+    failed,
 };
 
 const MaxModuleExports = 64;
@@ -48,6 +49,14 @@ const ModuleRecord = struct {
     state: ModuleState = .loading,
     export_names: [MaxModuleExports][]const u8 = undefined,
     export_count: u8 = 0,
+
+    // Saved error info when compilation fails (state == .failed)
+    failure_msg_buf: [512]u8 = undefined,
+    failure_msg_len: u16 = 0,
+    failure_line: u32 = 0,
+    failure_col: u32 = 0,
+    failure_path_buf: [MaxModulePathBytes]u8 = undefined,
+    failure_path_len: usize = 0,
 
     fn path(self: *const ModuleRecord) []const u8 {
         return self.path_buf[0..self.path_len];
@@ -141,6 +150,7 @@ pub const Session = struct {
     last_error_msg_len: u16 = 0,
     provider: SourceProvider = .filesystem,
     host_module_names: []const []const u8 = &.{},
+    host_module_descs: []const HostModuleDesc = &.{},
     enabled_capabilities: []const []const u8 = &.{},
     capability_modules: []const CapModuleDesc = &.{},
     test_mode: bool = false,
@@ -207,6 +217,10 @@ pub const Session = struct {
 
     fn compileModuleFromPath(self: *Session, path: []const u8) anyerror!void {
         if (self.findModule(path)) |idx| {
+            if (self.modules[idx].state == .failed) {
+                self.restoreFailedModule(idx);
+                return error.ImportCycle;
+            }
             if (self.modules[idx].state == .loading) {
                 self.last_error_path = self.modules[idx].path();
                 return error.ImportCycle;
@@ -215,15 +229,46 @@ pub const Session = struct {
         }
 
         const idx = try self.beginModule(path, false);
-        errdefer self.module_count = idx;
 
-        const src = try self.loadSource(path);
-        try self.compileDependencies(path, src);
-        try self.compileBegunModule(idx, src, false);
+        const src = self.loadSource(path) catch |err| {
+            self.saveFailedModule(idx);
+            return err;
+        };
+        self.compileDependencies(path, src) catch |err| {
+            self.saveFailedModule(idx);
+            return err;
+        };
+        self.compileBegunModule(idx, src, false) catch |err| {
+            self.saveFailedModule(idx);
+            return err;
+        };
+    }
+
+    fn saveFailedModule(self: *Session, idx: usize) void {
+        self.modules[idx].state = .failed;
+        self.modules[idx].failure_msg_len = self.last_error_msg_len;
+        @memcpy(self.modules[idx].failure_msg_buf[0..self.last_error_msg_len], self.last_error_msg_buf[0..self.last_error_msg_len]);
+        self.modules[idx].failure_line = self.last_error_line;
+        self.modules[idx].failure_col = self.last_error_col;
+        const path_len = @min(self.last_error_path.len, self.modules[idx].failure_path_buf.len);
+        self.modules[idx].failure_path_len = path_len;
+        @memcpy(self.modules[idx].failure_path_buf[0..path_len], self.last_error_path[0..path_len]);
+    }
+
+    fn restoreFailedModule(self: *Session, idx: usize) void {
+        self.last_error_msg_len = self.modules[idx].failure_msg_len;
+        @memcpy(self.last_error_msg_buf[0..self.modules[idx].failure_msg_len], self.modules[idx].failure_msg_buf[0..self.modules[idx].failure_msg_len]);
+        self.last_error_line = self.modules[idx].failure_line;
+        self.last_error_col = self.modules[idx].failure_col;
+        self.last_error_path = self.modules[idx].failure_path_buf[0..self.modules[idx].failure_path_len];
     }
 
     fn compileModule(self: *Session, path: []const u8, src: []const u8, emit_halt: bool) anyerror!void {
         if (self.findModule(path)) |idx| {
+            if (self.modules[idx].state == .failed) {
+                self.restoreFailedModule(idx);
+                return error.ImportCycle;
+            }
             if (self.modules[idx].state == .loading) {
                 self.last_error_path = self.modules[idx].path();
                 return error.ImportCycle;
@@ -232,10 +277,15 @@ pub const Session = struct {
         }
 
         const idx = try self.beginModule(path, false);
-        errdefer self.module_count = idx;
 
-        try self.compileDependencies(path, src);
-        try self.compileBegunModule(idx, src, emit_halt);
+        self.compileDependencies(path, src) catch |err| {
+            self.saveFailedModule(idx);
+            return err;
+        };
+        self.compileBegunModule(idx, src, emit_halt) catch |err| {
+            self.saveFailedModule(idx);
+            return err;
+        };
     }
 
     fn compileBegunModule(self: *Session, idx: usize, src: []const u8, emit_halt: bool) anyerror!void {
@@ -288,6 +338,11 @@ pub const Session = struct {
                     return error.InvalidChar;
                 },
                 .err_unterminated_string => {
+                    self.last_error_path = importer_path;
+                    self.last_error_line = tok.line;
+                    return error.UnterminatedString;
+                },
+                .err_string_pool_exhausted => {
                     self.last_error_path = importer_path;
                     self.last_error_line = tok.line;
                     return error.UnterminatedString;
@@ -434,16 +489,24 @@ pub const Session = struct {
 pub fn hasModuleExport(ctx: *anyopaque, path: []const u8, field: []const u8) bool {
     const self: *Session = @ptrCast(@alignCast(ctx));
     const idx = self.findModule(path) orelse {
-        // Check capability modules — path is "cap:<name>", cm.name is "<name>"
+        // Check capability modules
         const cap_key = if (std.mem.startsWith(u8, path, "cap:")) path[4..] else path;
         for (self.capability_modules) |cm| {
             if (common.streq(cm.name, cap_key)) {
                 for (cm.functions) |func| {
                     if (common.streq(func.name, field)) return true;
-                    // Accept namespace prefix: "local" matches "local.read" etc.
                     if (func.name.len > field.len and
                         std.mem.startsWith(u8, func.name, field) and
                         func.name[field.len] == '.') return true;
+                }
+                return false;
+            }
+        }
+        // Check host modules
+        for (self.host_module_descs) |hm| {
+            if (common.streq(hm.name, path)) {
+                for (hm.functions) |func| {
+                    if (common.streq(func.name, field)) return true;
                 }
                 return false;
             }

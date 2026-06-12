@@ -63,6 +63,21 @@ on subsequent REPL lines. Now the `Runtime` stores type names in the same
 pattern as `repl_const_names`, and pre-populates the registry before
 compilation while skipping `registry.reset()` in REPL mode. See issue #112.
 
+### Fix — Diagnostics: Misleading Errors from Module Load, Host Imports, String Pool
+
+Three misleading error scenarios are now fixed (see issue #98):
+
+1. **Module load failure** — When a module's compilation fails, its record is
+   now marked `.failed` instead of staying in `.loading`. A subsequent import
+   of the same module re-reports the original compile error instead of a
+   misleading `ImportCycle` error.
+2. **Host module exports** — Accessing a non-existent field on a host module
+   (e.g. `db.nonexistent()`) now produces a compile-time error instead of
+   surfacing only at call time.
+3. **Lexer string pool exhaustion** — When the 128KB string pool overflows,
+   the lexer now reports `"string pool exhausted (max 128KB)"` instead of the
+   misleading `"unterminated string"` error.
+
 ## 2026-06-11
 
 ### Breaking — Strict int/float Comparison

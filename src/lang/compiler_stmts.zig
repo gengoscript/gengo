@@ -440,6 +440,7 @@ pub fn deferStmt(c: anytype) !void {
         },
         .err_invalid_char => return error.InvalidChar,
         .err_unterminated_string => return error.UnterminatedString,
+        .err_string_pool_exhausted => return error.UnterminatedString,
         else => { c.setErr("expected expression, found {s}", .{c.tokenName(c.cur.typ)}); return error.ExpectedExpression; },
     }
     // Consume chained .prop and [index]; when .prop( is seen it's a deferred method call.

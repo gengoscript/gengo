@@ -227,6 +227,66 @@ fn testHostModules() void {
     out("  host modules: OK\n");
 }
 
+fn testHostModuleUnknownField() void {
+    const host_funcs = [_]api.HostModuleFuncDesc{
+        .{ .name = "query", .arity = 2, .call_id = 0x1000 },
+    };
+    const host_mods = [_]api.HostModuleDesc{
+        .{ .name = "mydb", .functions = &host_funcs },
+    };
+    const rt = makeRt(.{ .allow_io = false, .native_backend = .host, .host_modules = &host_mods });
+
+    // Accessing a non-existent host module field should fail at compile time
+    const res = rt.run(
+        \\db := import("mydb")
+        \\func testUnknown() {
+        \\    _ = db.nonexistent()
+        \\}
+    );
+    switch (res) {
+        .compile_error => {},
+        else => fail("engine FAIL: expected compile error for unknown host field\n"),
+    }
+
+    out("  host module unknown field: OK\n");
+}
+
+fn testFailedModuleReimport() void {
+    // Two modules share a broken dependency — the second import should
+    // report the original compile error, not a misleading ImportCycle.
+    const sources = [_]api.SourceEntry{
+        .{
+            .path = "app/broken.gengo",
+            .source = "func f() int { return } // syntax error\n",
+        },
+        .{
+            .path = "app/a.gengo",
+            .source = "broke := import(\"./broken\")\nfunc useA() { _ = broke }\n",
+        },
+        .{
+            .path = "app/b.gengo",
+            .source = "broke := import(\"./broken\")\nfunc useB() { _ = broke }\n",
+        },
+    };
+    const rt = makeRt(.{ .allow_io = false, .module_sources = &sources });
+    const res = rt.runPath(
+        \\a := import("./a")
+        \\b := import("./b")
+        \\func test() { _ = a; _ = b }
+    , "app/main.gengo");
+    switch (res) {
+        .compile_error => |e| {
+            // Should report the original syntax error, not "import cycle"
+            if (std.mem.indexOf(u8, e.msg, "import cycle") != null) {
+                fail("engine FAIL: re-import of failed module reported import cycle instead of original error\n");
+            }
+        },
+        else => fail("engine FAIL: expected compile error for broken module\n"),
+    }
+
+    out("  failed module re-import: OK\n");
+}
+
 fn testReplIncremental() void {
     const rt = initWithAllowIO(false);
 
@@ -988,6 +1048,8 @@ export fn _start() void {
     testIO();
     testReplIncremental();
     testHostModules();
+    testHostModuleUnknownField();
+    testFailedModuleReimport();
     testArrayWireResult();
     testMapWireResult();
     testHostModuleArrayArgs();
