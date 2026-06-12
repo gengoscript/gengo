@@ -120,6 +120,7 @@ pub const NamedTypeInfo = struct {
     elem_spec: ?FieldTypeSpec = null,
     key_spec: ?FieldTypeSpec = null,
     val_spec: ?FieldTypeSpec = null,
+    enum_members: ?[]const []const u8 = null,
 };
 const GlobalConstInfo = struct { name: []const u8 };
 

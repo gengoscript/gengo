@@ -1,0 +1,2 @@
+type Days enum { Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday }
+subtype Bogus Days { tuesday }
