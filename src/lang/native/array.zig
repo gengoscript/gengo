@@ -25,14 +25,14 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             var count: usize = 0;
             for (items) |item| {
                 const ok = try vm.callFunction(fn_val, &.{item});
-                if (ok.isTruthy()) count += 1;
+                if (try ok.asBool()) count += 1;
             }
             if (count > 0) {
                 const out = try vmgc.vmAllocManagedSlice(Value, count);
                 var idx: usize = 0;
                 for (items) |item| {
                     const ok = try vm.callFunction(fn_val, &.{item});
-                    if (ok.isTruthy()) {
+                    if (try ok.asBool()) {
                         out[idx] = item;
                         idx += 1;
                     }
@@ -193,7 +193,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             var result: Value = .null;
             for (items) |item| {
                 const ok = try vm.callFunction(fn_val, &.{item});
-                if (ok.isTruthy()) { result = item; break; }
+                if (try ok.asBool()) { result = item; break; }
             }
             _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
             try vms.vmPush(result);
@@ -210,7 +210,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             var result: Value = .{ .int = -1 };
             for (items, 0..) |item, i| {
                 const ok = try vm.callFunction(fn_val, &.{item});
-                if (ok.isTruthy()) { result = .{ .int = @floatFromInt(i) }; break; }
+                if (try ok.asBool()) { result = .{ .int = @floatFromInt(i) }; break; }
             }
             _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
             try vms.vmPush(result);
@@ -227,7 +227,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             var result = true;
             for (items) |item| {
                 const ok = try vm.callFunction(fn_val, &.{item});
-                if (!ok.isTruthy()) { result = false; break; }
+                if (!(try ok.asBool())) { result = false; break; }
             }
             _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
             try vms.vmPush(.{ .boolean = result });
@@ -244,7 +244,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             var result = false;
             for (items) |item| {
                 const ok = try vm.callFunction(fn_val, &.{item});
-                if (ok.isTruthy()) { result = true; break; }
+                if (try ok.asBool()) { result = true; break; }
             }
             _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
             try vms.vmPush(.{ .boolean = result });

@@ -34,6 +34,26 @@ The engine now carries a single source-of-truth version string (`0.4.0` in
 Every breaking change from now on is tagged, documented in the changelog, and
 never happens silently. See issue #106.
 
+## 2026-06-12 (continued)
+
+### Breaking — Boolean-Only Conditions (Go-Style)
+
+`if`, `!`, `||`, `&&`, and template `{{if}}` now require actual `bool` values.
+Non-boolean values that were previously treated as truthy/falsy (non-zero
+integers, non-null strings, etc.) now produce a runtime `TypeError`. This
+eliminates a class of subtle bugs where a non-boolean expression slips into a
+condition. Use `std.conv.to_bool` for explicit conversion. See issue #109.
+
+Positions affected:
+- VM opcodes: `.jif_pop`, `.jump_if_false`, `.not`
+- Template: `{{if}}` condition
+- Array stdlib: `filter`, `find`, `findIndex`, `all`, `any` predicate return
+- Sort stdlib: custom comparator fallback (non-int, non-float return)
+
+The internal `isTruthy()` function on `Value` has been replaced with
+`asBool()` that returns `TypeError` for non-boolean values.
+Fail tests: spec fail/196–199.
+
 ## 2026-06-11
 
 ### Breaking — Strict int/float Comparison
