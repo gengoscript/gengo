@@ -10,7 +10,9 @@ if f && Flag(true) { std.io.println("and ok") }
 if Flag(false) || f { std.io.println("or ok") }
 std.io.println(std.template.render("{{if .f}}template ok{{end}}", {"f": f}))
 
-// Subtype of a bool type belongs here once #113 lands.
+// Subtypes of a bool type inherit the behavior (#113).
+subtype Strict Flag
+if Strict(true) { std.io.println("subtype ok") }
 
 // Named types over anything else still do not.
 type Count int

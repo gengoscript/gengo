@@ -204,11 +204,26 @@ h := Hour(23)
 std.io.println(h + Hour(1))  // 0
 ```
 
-Subtypes allow narrower domains inside an existing named type:
+Subtypes allow narrower domains inside an existing named type. Any scalar
+named type can be a parent; `range`/`cycle` constraints require a numeric
+parent:
 
 ```gengo
 type Percent int range 0..100
 subtype PassingGrade Percent range 60..100
+
+type UserId string
+subtype AdminId UserId    // distinct name, substitutable for UserId
+
+type Flag bool
+subtype Strict Flag       // works in conditions like its parent
+```
+
+Enum subtypes narrow the member set instead:
+
+```gengo
+type Days enum { mon, tue, wed, thu, fri, sat, sun }
+subtype Weekend Days { sat, sun }
 ```
 
 ## Enums and Variants
