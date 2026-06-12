@@ -34,6 +34,18 @@ strings like literals (`to_bool("")` and `to_bool(trim(" "))` are both
 `false`) and converts named values through their underlying value
 (spec 193).
 
+### Improved — Subtypes of Any Scalar Named Type
+
+`subtype Child Parent` now accepts any scalar named parent — `bool`,
+`string`, and `decimal` join `int`/`float`/`rune`. A subtype without a
+constraint is a distinct, substitutable name for the parent's domain
+(`type UserId string` → `subtype AdminId UserId`), following the Ada
+model. `range`/`cycle` constraints still require a numeric parent, and
+non-scalar parents (arrays, maps) are rejected with a clear message.
+Decimal subtypes inherit the parent's scale. Bare `subtype X SomeEnum`
+now explains that enum subtypes take a member subset. See issue #113.
+Spec 195, fail/203–206.
+
 ### Fix — REPL Named Types Persistence Across Lines
 
 `type`, `subtype`, `struct`, `interface`, and `variant` type declarations now

@@ -732,6 +732,8 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
             .base = .enum_t,
             .parent_name = parent_name,
         });
+        if (!c.check(.lbrace))
+            return c.err("enum subtype requires a member subset: subtype {s} {s} {{ member, ... }}", .{ name, parent_name });
         try c.consume(.lbrace);
         var members_tmp: [MaxLocals][]const u8 = undefined;
         var mcount: u8 = 0;
@@ -776,6 +778,9 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
     var max: f64 = parent_info.max;
     const scale = parent_info.scale;
     const is_numeric = base == .int or base == .float or base == .rune;
+    const is_scalar = is_numeric or base == .string or base == .bool or base == .decimal;
+    if (!is_scalar)
+        return c.err("subtype parent must be a scalar named type (int, float, decimal, string, bool, or rune base)", .{});
 
     if (c.check(.kw_range) or c.check(.kw_cycle)) {
         if (!is_numeric) return c.err("range and cycle constraints require a numeric parent type (int, float, or rune)", .{});
