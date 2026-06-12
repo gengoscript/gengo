@@ -1,0 +1,10 @@
+std := import("std")
+
+func boom() bool {
+    a := []
+    _ = a[0]
+    return true
+}
+
+std.io.println(false && boom())
+std.io.println(true || boom())

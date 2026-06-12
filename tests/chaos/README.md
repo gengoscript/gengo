@@ -28,9 +28,15 @@ the test update is part of that change — never an incidental edit.
 ## Notable pinned behaviors
 
 - Top-level loop closures see the final loop value (globals by reference);
-  in-function closures capture per-iteration (`008`/`009`/`010`, #118).
+  this also holds for top-level `for in` with an explicit copy
+  (`008`/`009`/`010`/`030`, #118).
 - Defers that were pushed successfully all run before a
   `DeferStackOverflow` panic unwinds (`fail/016`) — by design.
 - Division/modulo by zero panic rather than producing `Inf`/`NaN`
   (`fail/022`–`024`) — by design.
 - TCO holds through multi-value returns (`007`).
+- Duplicate string keys in map literals keep the first value (`033`).
+- Map keys are expressions: quoted strings are literals, bare identifiers
+  are variable references — affirmed design decision (`039`).
+- Recursive maps are safe to compare and clone (`037`, `041`, `042`), but
+  not yet safe to print or format (`pending/028`, `pending/040`).

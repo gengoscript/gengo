@@ -1,0 +1,5 @@
+std := import("std")
+
+m := {"x": 1, "x": 2}
+
+std.io.println(m["x"])

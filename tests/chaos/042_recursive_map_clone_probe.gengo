@@ -1,0 +1,8 @@
+std := import("std")
+
+m := {}
+m["self"] = m
+c := std.core.clone(m)
+
+std.io.println(c == m)
+std.io.println(c["self"] == c)

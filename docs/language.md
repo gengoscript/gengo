@@ -113,9 +113,13 @@ std.io.println(nums[0])
 Maps:
 
 ```gengo
-user := {name: "Ada", active: true}
+user := {"name": "Ada", "active": true}
 std.io.println(user.name)
 ```
+
+Map keys are expressions: quote string keys (`"name"`), or use a variable
+to key dynamically (`{k: 1}` uses the *value* of `k`). A bare identifier
+in key position is a variable reference, not a string.
 
 Structs:
 

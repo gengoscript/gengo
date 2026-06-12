@@ -1,0 +1,20 @@
+std := import("std")
+
+// Map keys are expressions: quoted strings are literals, bare identifiers
+// are variable references (affirmed design decision, 2026-06-12).
+k := "dynamic"
+m := {k: 1, "literal": 2}
+std.io.println(m["dynamic"], m["literal"])
+std.io.println(m.dynamic)
+
+// An undefined bare identifier in key position is NotDefined, recovered here.
+func bareKeyIsVariable() {
+    defer func() {
+        e := std.core.recover()
+        if e != null { std.io.println("bare key is a variable reference") }
+    }()
+    bad := {undefined_name: 1}
+    std.io.println(bad)
+}
+
+bareKeyIsVariable()

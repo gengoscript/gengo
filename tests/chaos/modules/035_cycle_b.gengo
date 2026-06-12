@@ -1,0 +1,3 @@
+a := import("./035_cycle_a")
+
+pub const value = a.value
