@@ -2,6 +2,20 @@
 
 This changelog tracks notable language/runtime changes by implementation date.
 
+## 2026-06-12 — v0.4.1
+
+### Fixed — Cross-Platform Release Builds
+
+v0.4.0 shipped no binaries: the release workflow failed to cross-compile.
+
+- **macOS** — `timeval.usec` is `c_int` on Darwin but `i64` on Linux; the
+  `cap:net` deadline code now casts to the platform's field types.
+- **Windows** — `cap:fs` read/exists used `std.posix.openat` (absent on
+  Windows) since the post-v0.3.1 perf rewrite (#73); on Windows they fall
+  back to the `std.Io` implementation that v0.3.1 shipped.
+
+No language or runtime behavior changes on Linux.
+
 ## 2026-06-12
 
 ### Infrastructure — Versioning Discipline
