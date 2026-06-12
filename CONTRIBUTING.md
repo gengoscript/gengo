@@ -79,3 +79,11 @@ Notes:
 - Describe what changed and why.
 - Mention user-visible behavior changes.
 - Include any new/updated spec cases.
+
+## Versioning
+
+- The canonical version string is in `build.zig` (`gengo_version`).
+- Tag every breaking change. Tags follow `v<major>.<minor>.<patch>` (e.g., `v0.4.0`).
+- Before tagging, ensure `build.zig`, `CHANGELOG.md`, and
+  `sdk/typescript/package.json` are in sync.
+- `CHANGELOG.md` entries under the new version's date go into the tag message.

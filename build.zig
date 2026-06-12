@@ -12,11 +12,13 @@ pub fn build(b: *std.Build) void {
     const cap_net_opt = b.option(bool, "cap_net", "Include cap:net capability") orelse true;
     const cap_http_opt = b.option(bool, "cap_http", "Include cap:http capability") orelse true;
     const cap_fs_opt = b.option(bool, "cap_fs", "Include cap:fs capability") orelse true;
+    const gengo_version = "0.4.0";
     const build_opts = b.addOptions();
     build_opts.addOption(bool, "perf", perf_opt);
     build_opts.addOption(bool, "cap_net", cap_net_opt);
     build_opts.addOption(bool, "cap_http", cap_http_opt);
     build_opts.addOption(bool, "cap_fs", cap_fs_opt);
+    build_opts.addOption([]const u8, "version", gengo_version);
     const build_opts_mod = build_opts.createModule();
 
     const wasmtime_opt = b.option([]const u8, "wasmtime", "path to wasmtime binary") orelse "wasmtime";

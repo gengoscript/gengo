@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const build_opts = @import("build_options");
 const api = @import("runtime/api.zig");
 const heap = @import("runtime/heap.zig");
 const host_abi = @import("runtime/host_abi.zig");
@@ -450,6 +451,14 @@ fn validateCeiling(name: []const u8, requested: usize, ceiling: usize) bool {
         return false;
     }
     return true;
+}
+
+// Dereference into a real array so the export hands out a pointer to the
+// bytes, not to a slice descriptor.
+const engine_version_bytes = build_opts.version[0..].* ++ [_]u8{0};
+
+export fn gengo_engine_version() [*:0]const u8 {
+    return @ptrCast(&engine_version_bytes);
 }
 
 export fn engine_init() i32 {

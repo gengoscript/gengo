@@ -2,6 +2,23 @@
 
 This changelog tracks notable language/runtime changes by implementation date.
 
+## 2026-06-12
+
+### Infrastructure — Versioning Discipline
+
+The engine now carries a single source-of-truth version string (`0.4.0` in
+`build.zig`) that is embedded in all artifacts:
+
+- **CLI** — `--version` flag prints `Gengoscript v0.4.0` and exits.
+- **C API** — `gengo_engine_version()` returns the bare, machine-parseable
+  version string (`"0.4.0"`); display branding is left to the caller.
+- **TS SDK** — `package.json` version is kept in sync with the engine.
+- **README** — Status section documents pre-1.0 stability policy.
+- **CONTRIBUTING** — Documents the versioning and tagging workflow.
+
+Every breaking change from now on is tagged, documented in the changelog, and
+never happens silently. See issue #106.
+
 ## 2026-06-11
 
 ### Breaking — Strict int/float Comparison

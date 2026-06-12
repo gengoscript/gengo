@@ -184,7 +184,11 @@ The TypeScript SDK in `sdk/typescript/` wraps `gengo-engine.wasm` and handles va
 
 ## Status
 
-Gengoscript is still early. The language and runtime are being tightened, and breaking changes should be expected.
+Gengoscript is pre-1.0 and under active development. Breaking changes are
+tagged, documented in [CHANGELOG.md](CHANGELOG.md), and listed in
+[releases](https://github.com/gengoscript/gengo/releases).
+No semantic versioning guarantees yet — but every breaking change is
+versioned, documented, and never happens silently.
 
 ---
 

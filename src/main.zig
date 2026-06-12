@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const build_opts = @import("build_options");
 
 const w32 = std.os.windows;
 
@@ -318,6 +319,12 @@ fn runCli(argv: []const []const u8) void {
             test_mode = true;
             script_index += 1;
             continue;
+        }
+        if (std.mem.eql(u8, a, "--version")) {
+            io.write("Gengoscript v");
+            io.write(build_opts.version);
+            io.write("\n");
+            die(0);
         }
         break;
     }
