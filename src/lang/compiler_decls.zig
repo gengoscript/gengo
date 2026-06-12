@@ -263,14 +263,6 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
     if (c.registry.hasNamedType(name)) { c.setErr("duplicate type name '{s}'", .{name}); return error.DuplicateNamedType; }
     const qname = try c.qualifyTypeName(name);
     if (c.check(.kw_enum)) {
-        try c.registry.addNamedType(.{
-            .name = name,
-            .base = .enum_t,
-            .has_range = false,
-            .is_cycle = false,
-            .min = 0,
-            .max = 0,
-        });
         c.advance();
         try c.consume(.lbrace);
         var members_tmp: [MaxLocals][]const u8 = undefined;
@@ -289,6 +281,15 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
         const members = heap.bump([]const u8, mcount) orelse return error.OutOfMemory;
         var mi: usize = 0;
         while (mi < mcount) : (mi += 1) members[mi] = members_tmp[mi];
+        try c.registry.addNamedType(.{
+            .name = name,
+            .base = .enum_t,
+            .has_range = false,
+            .is_cycle = false,
+            .min = 0,
+            .max = 0,
+            .enum_members = members[0..mcount],
+        });
         const et = heap.allocObject() orelse return error.OutOfMemory;
         et.* = .{ .enum_type = .{ .name = try c.copyName(name), .qualified_name = qname, .members = members[0..mcount] } };
         try chunk.emitConst(.{ .object = et }, kw.line);
@@ -741,11 +742,6 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
         if (c.registry.hasNamedType(name)) { c.setErr("duplicate type name '{s}'", .{name}); return error.DuplicateNamedType; }
         const qname = try c.qualifyTypeName(name);
         const qparent = try c.qualifyTypeName(parent_name);
-        try c.registry.addNamedType(.{
-            .name = name,
-            .base = .enum_t,
-            .parent_name = parent_name,
-        });
         if (!c.check(.lbrace))
             return c.err("enum subtype requires a member subset: subtype {s} {s} {{ member, ... }}", .{ name, parent_name });
         try c.consume(.lbrace);
@@ -765,6 +761,30 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
         const members = heap.bump([]const u8, mcount) orelse return error.OutOfMemory;
         var mi: usize = 0;
         while (mi < mcount) : (mi += 1) members[mi] = members_tmp[mi];
+        // Validate each member exists in the parent enum
+        if (parent_info.enum_members) |parent_members| {
+            var i: usize = 0;
+            while (i < mcount) : (i += 1) {
+                var found = false;
+                var j: usize = 0;
+                while (j < parent_members.len) : (j += 1) {
+                    if (common.streq(members[i], parent_members[j])) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    c.setErr("'{s}' is not a member of {s}", .{ members[i], parent_name });
+                    return error.UnexpectedToken;
+                }
+            }
+        }
+        try c.registry.addNamedType(.{
+            .name = name,
+            .base = .enum_t,
+            .parent_name = parent_name,
+            .enum_members = members[0..mcount],
+        });
         const et = heap.allocObject() orelse return error.OutOfMemory;
         et.* = .{ .enum_type = .{
             .name = try c.copyName(name),

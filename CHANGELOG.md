@@ -4,6 +4,16 @@ This changelog tracks notable language/runtime changes by implementation date.
 
 ## 2026-06-12 (v0.5.0-dev)
 
+### Fix — Enum Subtype Members Validated at Declaration
+
+`subtype Bogus Days { tuesday }` with a member the parent does not have
+is now a compile error (`'tuesday' is not a member of Days`) instead of
+compiling silently and failing at first use. The registry carries enum
+member lists, so chained enum subtypes validate too. REPL caveat: a
+parent enum declared on an earlier line has no persisted members yet,
+so validation skips there (#115 tracks the REPL enum-subtype gaps).
+See issue #114. Fail test: spec fail/212.
+
 ### Breaking — Boolean-Only Conditions (Go-Style)
 
 `if`, `!`, `||`, `&&`, and template `{{if}}` now require actual `bool` values.
