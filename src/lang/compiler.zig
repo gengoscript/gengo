@@ -143,7 +143,7 @@ pub const Compiler = struct {
                 return error.UnterminatedString;
             }
             if (self.cur.typ == .err_string_pool_exhausted) {
-                self.setErr("string pool exhausted (max 128KB)", .{});
+                self.setErr("string pool exhausted (max {d}KB)", .{lexer_mod.StrPoolSize / 1024});
                 self.err_col = self.cur.col;
                 return error.UnterminatedString;
             }

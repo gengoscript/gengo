@@ -4,6 +4,10 @@ const token = @import("token.zig");
 const TT = token.TT;
 const Token = token.Token;
 
+/// Capacity of the per-lexer string pool that backs processed string
+/// literals. Error messages derive their reported limit from this.
+pub const StrPoolSize: usize = 128 * 1024;
+
 const keyword_map = std.StaticStringMap(TT).initComptime(.{
     .{ "assert",    .kw_assert },
     .{ "break",     .kw_break },
@@ -44,7 +48,7 @@ pub const Lexer = struct {
     pos: usize = 0,
     line: u32 = 1,
     line_start: usize = 0,
-    str_pool: [128 * 1024]u8 = undefined,
+    str_pool: [StrPoolSize]u8 = undefined,
     str_pool_pos: usize = 0,
 
     pub fn next(self: *Lexer) Token {

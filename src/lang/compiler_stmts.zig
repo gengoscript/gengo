@@ -447,8 +447,8 @@ pub fn deferStmt(c: anytype) !void {
             return;
         },
         .err_invalid_char => return error.InvalidChar,
-        .err_unterminated_string => return error.UnterminatedString,
-        .err_string_pool_exhausted => return error.UnterminatedString,
+        .err_unterminated_string => { c.setErr("unterminated string literal", .{}); return error.UnterminatedString; },
+        .err_string_pool_exhausted => { c.setErr("string pool exhausted (max {d}KB)", .{@import("lexer.zig").StrPoolSize / 1024}); return error.UnterminatedString; },
         else => { c.setErr("expected expression, found {s}", .{c.tokenName(c.cur.typ)}); return error.ExpectedExpression; },
     }
     // Consume chained .prop and [index]; when .prop( is seen it's a deferred method call.

@@ -163,6 +163,11 @@ pub const Session = struct {
         self.last_error_msg_len = compiler.err_msg_len;
     }
 
+    fn setScanError(self: *Session, comptime fmt: []const u8, args: anytype) void {
+        const s = std.fmt.bufPrint(&self.last_error_msg_buf, fmt, args) catch return;
+        self.last_error_msg_len = @intCast(s.len);
+    }
+
     fn isCapabilityEnabled(self: *Session, name: []const u8) bool {
         for (self.enabled_capabilities) |cap| {
             if (common.streq(cap, name)) {
@@ -340,11 +345,13 @@ pub const Session = struct {
                 .err_unterminated_string => {
                     self.last_error_path = importer_path;
                     self.last_error_line = tok.line;
+                    self.setScanError("unterminated string literal", .{});
                     return error.UnterminatedString;
                 },
                 .err_string_pool_exhausted => {
                     self.last_error_path = importer_path;
                     self.last_error_line = tok.line;
+                    self.setScanError("string pool exhausted (max {d}KB)", .{@import("lexer.zig").StrPoolSize / 1024});
                     return error.UnterminatedString;
                 },
                 .kw_import => {
