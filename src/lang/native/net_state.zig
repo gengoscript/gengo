@@ -82,9 +82,12 @@ fn posixGetpeername(sock: std.posix.socket_t, addr: *std.posix.sockaddr, addrlen
 
 fn posixSetSockOptTimeval(fd: std.posix.socket_t, optname: u32, ms: i64) !void {
     if (ms < 0) return error.CapabilityError;
-    const sec = @divTrunc(ms, 1000);
+    // timeval field widths differ per OS (Linux: i64/i64, macOS: i64/i32);
+    // clamp sec to the platform type, usec is < 1_000_000 and always fits.
+    const SecT = @FieldType(std.posix.timeval, "sec");
+    const sec: SecT = @intCast(@min(@divTrunc(ms, 1000), std.math.maxInt(SecT)));
     const usec = @mod(ms, 1000) * 1000;
-    const tv = std.posix.timeval{ .sec = sec, .usec = usec };
+    const tv = std.posix.timeval{ .sec = sec, .usec = @intCast(usec) };
     const opt: []const u8 = std.mem.asBytes(&tv);
     const rc = std.posix.system.setsockopt(fd, std.posix.SOL.SOCKET, optname, opt.ptr, @intCast(opt.len));
     if (std.posix.errno(rc) != .SUCCESS) return error.CapabilityError;

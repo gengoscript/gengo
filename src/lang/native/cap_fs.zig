@@ -26,6 +26,16 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             var rbuf: [4096]u8 = undefined;
             const rpath = try fs_state.resolve(path, &rbuf);
 
+            if (comptime builtin.os.tag == .windows) {
+                // No openat on Windows; std.Io is slower (issue #73) but correct.
+                const io = ioContext();
+                const contents = std.Io.Dir.cwd().readFileAlloc(io, rpath, alloc, .unlimited) catch return error.CapabilityError;
+                defer alloc.free(contents);
+                const out = try vmgc.makeDynString(contents);
+                try vms.vmPush(out);
+                return;
+            }
+
             const fd = std.posix.openat(std.posix.AT.FDCWD, rpath, .{ .ACCMODE = .RDONLY, .CLOEXEC = true }, 0) catch return error.CapabilityError;
             defer _ = std.posix.system.close(fd);
 
@@ -53,6 +63,20 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
 
             var rbuf: [4096]u8 = undefined;
             const rpath = try fs_state.resolve(path, &rbuf);
+
+            if (comptime builtin.os.tag == .windows) {
+                // No openat on Windows; std.Io is slower (issue #73) but correct.
+                const io = ioContext();
+                std.Io.Dir.cwd().access(io, rpath, .{}) catch |err| switch (err) {
+                    error.FileNotFound => {
+                        try vms.vmPush(.{ .boolean = false });
+                        return;
+                    },
+                    else => return error.CapabilityError,
+                };
+                try vms.vmPush(.{ .boolean = true });
+                return;
+            }
 
             const fd = std.posix.openat(std.posix.AT.FDCWD, rpath, .{ .ACCMODE = .RDONLY, .CLOEXEC = true }, 0) catch |err| switch (err) {
                 error.FileNotFound => {
