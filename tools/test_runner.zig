@@ -22,19 +22,23 @@ pub fn main(init: std.process.Init.Minimal) !void {
 
     if (args.len < 2) {
         std.debug.print("usage: test-runner <conformance|bench|parity> [wasmtime] [wasm]\n", .{});
-        std.debug.print("   or: test-runner native-cap [gengo]\n", .{});
+        std.debug.print("   or: test-runner <native-cap|chaos> [gengo]\n", .{});
         std.process.exit(1);
     }
 
     const mode = args[1];
-    if (std.mem.eql(u8, mode, "native-cap")) {
+    if (std.mem.eql(u8, mode, "native-cap") or std.mem.eql(u8, mode, "chaos")) {
         const gengo = if (args.len > 2) args[2] else "zig-out/bin/gengo";
         if (!commandExists(alloc, gengo)) {
             std.debug.print("gengo binary not found: {s}\n", .{gengo});
             std.debug.print("build it first with `zig build -Dpreset=dev cli` or pass an explicit path\n", .{});
             std.process.exit(1);
         }
-        try runNativeCap(alloc, gengo);
+        if (std.mem.eql(u8, mode, "chaos")) {
+            try runChaos(alloc, gengo);
+        } else {
+            try runNativeCap(alloc, gengo);
+        }
         return;
     }
 
@@ -421,6 +425,123 @@ fn runNativeCap(alloc: std.mem.Allocator, gengo: []const u8) !void {
         std.process.exit(1);
     }
     std.debug.print("Native capability lane OK: {d} pass-cases, {d} fail-cases\n", .{ pass_ok, fail_ok });
+}
+
+// ── Chaos lane ────────────────────────────────────────────────────────────
+//
+// Limit and edge-case behavior pinned as expectations, run against the
+// native CLI: tests/chaos/*.gengo must match their .out exactly, and
+// tests/chaos/fail/*.gengo must fail with their .err tokens present.
+// tests/chaos/pending/ holds cases blocked on open bugs and is not scanned.
+
+fn runNativeCli(alloc: std.mem.Allocator, gengo: []const u8, script: []const u8) struct { []const u8, bool } {
+    const cmd = std.fmt.allocPrint(alloc, "{s} {s}", .{ gengo, script }) catch return .{ "", true };
+    defer alloc.free(cmd);
+    return runShellCommand(alloc, cmd);
+}
+
+fn runChaos(alloc: std.mem.Allocator, gengo: []const u8) !void {
+    var pass_cases: [MaxCases][]const u8 = undefined;
+    const pass_count = collectGengoFiles(alloc, "tests/chaos", &pass_cases) catch |err| {
+        std.debug.print("cannot scan chaos dir: {s}\n", .{@errorName(err)});
+        std.process.exit(1);
+    };
+
+    var fail_cases: [MaxCases][]const u8 = undefined;
+    const fail_count = collectGengoFiles(alloc, "tests/chaos/fail", &fail_cases) catch |err| {
+        std.debug.print("cannot scan chaos fail dir: {s}\n", .{@errorName(err)});
+        std.process.exit(1);
+    };
+
+    var pass_ok: usize = 0;
+    var fail_ok: usize = 0;
+    var errors: usize = 0;
+
+    for (pass_cases[0..pass_count]) |path| {
+        defer alloc.free(path);
+        const base = path[0 .. path.len - 6];
+        const out_path = try std.fmt.allocPrint(alloc, "{s}.out", .{base});
+        defer alloc.free(out_path);
+
+        if (!fileExists(out_path)) {
+            std.debug.print("missing expected output file: {s}\n", .{out_path});
+            errors += 1;
+            continue;
+        }
+
+        std.debug.print("[CHAOS PASS] {s}\n", .{path});
+        const result = runNativeCli(alloc, gengo, path);
+        const output = result[0];
+        const failed = result[1];
+        defer alloc.free(output);
+
+        if (failed) {
+            std.debug.print("chaos execution failed unexpectedly: {s}\n", .{path});
+            errors += 1;
+            continue;
+        }
+
+        const expected = readFileAlloc(alloc, out_path, MaxOutputBytes) catch |err| {
+            std.debug.print("cannot read .out file: {s} ({s})\n", .{ out_path, @errorName(err) });
+            errors += 1;
+            continue;
+        };
+        defer alloc.free(expected);
+
+        if (!std.mem.eql(u8, expected, output)) {
+            std.debug.print("chaos output mismatch: {s}\n", .{path});
+            errors += 1;
+            continue;
+        }
+
+        pass_ok += 1;
+    }
+
+    for (fail_cases[0..fail_count]) |path| {
+        defer alloc.free(path);
+        const base = path[0 .. path.len - 6];
+        const err_path = try std.fmt.allocPrint(alloc, "{s}.err", .{base});
+        defer alloc.free(err_path);
+
+        if (!fileExists(err_path)) {
+            std.debug.print("missing expected error file: {s}\n", .{err_path});
+            errors += 1;
+            continue;
+        }
+
+        std.debug.print("[CHAOS FAIL] {s}\n", .{path});
+        const result = runNativeCli(alloc, gengo, path);
+        const output = result[0];
+        const failed = result[1];
+        defer alloc.free(output);
+
+        if (!failed) {
+            std.debug.print("expected failure but script succeeded: {s}\n", .{path});
+            errors += 1;
+            continue;
+        }
+
+        const err_content = readFileAlloc(alloc, err_path, 1024) catch |err| {
+            std.debug.print("cannot read .err file: {s} ({s})\n", .{ err_path, @errorName(err) });
+            errors += 1;
+            continue;
+        };
+        defer alloc.free(err_content);
+
+        if (!errFileMatchesOutput(output, err_content)) {
+            std.debug.print("expected error token not found for {s}\n", .{path});
+            errors += 1;
+            continue;
+        }
+
+        fail_ok += 1;
+    }
+
+    if (errors != 0) {
+        std.debug.print("Chaos lane FAILED: {d} pass-cases, {d} fail-cases, {d} errors\n", .{ pass_ok, fail_ok, errors });
+        std.process.exit(1);
+    }
+    std.debug.print("Chaos lane OK: {d} pass-cases, {d} fail-cases\n", .{ pass_ok, fail_ok });
 }
 
 // ── Parallel process pool ─────────────────────────────────────────────────

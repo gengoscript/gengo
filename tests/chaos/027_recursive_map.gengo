@@ -1,0 +1,4 @@
+std := import("std")
+m := {}
+m["self"] = m
+std.io.println(m["self"]["self"]["self"]["self"] == m)

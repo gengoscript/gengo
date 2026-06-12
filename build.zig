@@ -313,6 +313,13 @@ pub fn build(b: *std.Build) void {
     const native_cap_step = b.step("native-cap", "Run native capability tests against the CLI");
     native_cap_step.dependOn(&run_native_cap.step);
 
+    const run_chaos = b.addRunArtifact(test_runner_exe);
+    run_chaos.step.dependOn(&install_native.step);
+    run_chaos.addArg("chaos");
+    run_chaos.addArg("zig-out/bin/gengo");
+    const chaos_step = b.step("chaos", "Run limit/edge-case chaos tests against the CLI");
+    chaos_step.dependOn(&run_chaos.step);
+
     const run_native = b.addRunArtifact(native_exe);
     if (b.args) |args| run_native.addArgs(args);
     const run_step = b.step("run", "Run a script with the native CLI (-- script.gengo)");

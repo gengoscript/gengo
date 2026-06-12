@@ -1,0 +1,6 @@
+std := import("std")
+m := {}
+for i := 0; i < 10000; i++ {
+    m[i] = i
+}
+std.io.println(std.core.len(m))

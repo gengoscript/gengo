@@ -1,0 +1,11 @@
+std := import("std")
+
+funcs := []
+for i := 0; i < 3; i++ {
+    j := i
+    funcs = std.core.append(funcs, func() int { return j })
+}
+
+std.io.println(funcs[0]())
+std.io.println(funcs[1]())
+std.io.println(funcs[2]())
