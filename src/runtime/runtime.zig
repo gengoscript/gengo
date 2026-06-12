@@ -194,6 +194,7 @@ pub const Runtime = struct {
             var session: module_compile.Session = .{};
             session.provider = provider;
             session.host_module_names = hm_names;
+            session.host_module_descs = self.host_modules;
             session.enabled_capabilities = self.enabled_capabilities;
             session.capability_modules = all_caps;
             session.test_mode = test_mode;
@@ -216,11 +217,13 @@ pub const Runtime = struct {
             var session: module_compile.Session = .{};
             session.provider = provider;
             session.host_module_names = hm_names;
+            session.host_module_descs = self.host_modules;
             session.enabled_capabilities = self.enabled_capabilities;
             session.capability_modules = all_caps;
             var compiler = Compiler.init(src, .{
                 .module_ctx = &session,
                 .resolve_import = module_compile.Session.resolveImportOpaque,
+                .has_module_export = module_compile.hasModuleExport,
                 .test_mode = test_mode,
             });
             compiler.compile(true) catch |err| {
@@ -309,6 +312,7 @@ pub const Runtime = struct {
 
         const repl_caps: []const module_compile.CapModuleDesc = if (self.enabled_capabilities.len > 0) module_compile.AllCapabilities else &[_]module_compile.CapModuleDesc{};
         var session: module_compile.Session = .{};
+        session.host_module_descs = self.host_modules;
         session.enabled_capabilities = self.enabled_capabilities;
         session.capability_modules = repl_caps;
         var compiler = Compiler.init(src, .{

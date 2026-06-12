@@ -170,11 +170,11 @@ pub const Lexer = struct {
                 _ = self.adv();
                 if (self.atEnd()) return self.tok(.err_unterminated_string);
                 const esc = self.adv();
-                if (!self.outEscaped(esc)) return self.tok(.err_unterminated_string);
+                if (!self.outEscaped(esc)) return self.tok(.err_string_pool_exhausted);
                 continue;
             }
             _ = self.adv();
-            if (!self.outByte(c)) return self.tok(.err_unterminated_string);
+            if (!self.outByte(c)) return self.tok(.err_string_pool_exhausted);
         }
         return self.tok(.err_unterminated_string);
     }
@@ -185,13 +185,13 @@ pub const Lexer = struct {
             // Read content to end of line; no escape processing
             while (!self.atEnd() and self.peek() != '\n') {
                 const c = self.adv();
-                if (!self.outByte(c)) return self.tok(.eof);
+                if (!self.outByte(c)) return self.tok(.err_string_pool_exhausted);
             }
             if (self.atEnd()) break;
             _ = self.adv(); // consume '\n'
             self.line += 1;
             self.line_start = self.pos;
-            if (!self.outByte('\n')) return self.tok(.eof);
+            if (!self.outByte('\n')) return self.tok(.err_string_pool_exhausted);
             // Skip leading whitespace on next line
             while (!self.atEnd() and (self.peek() == ' ' or self.peek() == '\t')) {
                 _ = self.adv();

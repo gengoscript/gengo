@@ -142,6 +142,11 @@ pub const Compiler = struct {
                 self.err_col = self.cur.col;
                 return error.UnterminatedString;
             }
+            if (self.cur.typ == .err_string_pool_exhausted) {
+                self.setErr("string pool exhausted (max 128KB)", .{});
+                self.err_col = self.cur.col;
+                return error.UnterminatedString;
+            }
             self.repl_expr_ok = true;
             try self.decl();
         }
@@ -173,6 +178,7 @@ pub const Compiler = struct {
             .eof => "end of file",
             .err_invalid_char => "invalid character",
             .err_unterminated_string => "unterminated string",
+            .err_string_pool_exhausted => "string pool exhausted",
             .ident => "identifier",
             .number => "number",
             .string => "string",

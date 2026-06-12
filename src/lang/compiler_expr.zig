@@ -276,6 +276,7 @@ pub fn parsePrecedence(c: anytype, p: Prec) anyerror!void {
         .kw_import => try importExpr(c, ),
         .err_invalid_char => return error.InvalidChar,
         .err_unterminated_string => return error.UnterminatedString,
+        .err_string_pool_exhausted => return error.UnterminatedString,
         else => { c.setErr("expected expression, found {s}", .{c.tokenName(c.cur.typ)}); return error.ExpectedExpression; },
     }
     while (@intFromEnum(p) <= @intFromEnum(tokPrec(c.cur.typ))) {
