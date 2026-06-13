@@ -16,6 +16,10 @@ pub fn mapKeyEquals(a: Value, b: Value) bool {
     return Value.equals(a, b);
 }
 
+fn hashMix64(a: u64, b: u64) u64 {
+    return a *% 0x9e3779b97f4a7c15 +% b;
+}
+
 pub fn mapHashValue(v: Value) u64 {
     return switch (v) {
         .int => |n| @bitCast(n),
@@ -30,6 +34,12 @@ pub fn mapHashValue(v: Value) u64 {
         // same bucket and are found by mapFindHashedIndex.
         .object => |o| switch (o.*) {
             .dyn_string => |s| common.hashBytes(s),
+            // enum_value, named_value, and variant_value use structural equality in
+            // mapKeyEquals, so they must hash structurally too.  Pointer identity
+            // would break open-addressed lookups after promotion.
+            .enum_value => |ev| hashMix64(@intFromPtr(ev.typ), @intCast(ev.ordinal)),
+            .named_value => |nv| hashMix64(@intFromPtr(nv.typ), mapHashValue(nv.value)),
+            .variant_value => |vv| hashMix64(hashMix64(@intFromPtr(vv.typ), common.hashBytes(vv.tag)), mapHashValue(vv.payload)),
             else => @intFromPtr(o),
         },
         .null => 0xcbf29ce484222325,
