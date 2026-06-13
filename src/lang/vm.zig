@@ -1125,6 +1125,7 @@ fn opSetIndex() !void {
                 @memcpy(ext[0..items.len], items);
                 ext[items.len] = .{ .key = idx_v, .value = val };
                 const new_len = items.len + 1;
+                if (container.object.* == .map_managed) heap.freeManagedSlice(MapEntry, container.object.map_managed);
                 container.object.* = .{ .map_managed = ext[0..new_len] };
                 // Auto-promote to hashed map once linear scan becomes expensive.
                 if (new_len > 8) {
@@ -1602,6 +1603,7 @@ fn opSetField() !void {
                 @memcpy(ext[0..items.len], items);
                 ext[items.len] = .{ .key = .{ .string = name }, .value = val };
                 const new_len = items.len + 1;
+                if (container.object.* == .map_managed) heap.freeManagedSlice(MapEntry, container.object.map_managed);
                 container.object.* = .{ .map_managed = ext[0..new_len] };
                 if (new_len > 8) {
                     const bcount = vmmap.mapBucketsForCount(new_len);

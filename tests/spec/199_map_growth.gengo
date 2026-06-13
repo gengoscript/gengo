@@ -1,0 +1,8 @@
+std := import("std")
+m := {}
+for i := 0; i < 100; i++ {
+    m[i] = i * 2
+}
+for i := 0; i < 100; i++ {
+    std.io.println(m[i])
+}
