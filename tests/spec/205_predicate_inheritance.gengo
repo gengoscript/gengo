@@ -1,0 +1,5 @@
+std := import("std")
+type UserId string predicate func(s) { return std.core.len(s) > 0 }
+subtype AdminId UserId predicate func(s) { return std.string.starts_with(s, "admin:") }
+a := AdminId("admin:42")
+std.io.println(a)

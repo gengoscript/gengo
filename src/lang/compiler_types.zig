@@ -117,6 +117,7 @@ pub const NamedTypeInfo = struct {
     min: f64 = 0,
     max: f64 = 0,
     parent_name: ?[]const u8 = null,
+    predicate_msg: ?[]const u8 = null,
     elem_spec: ?FieldTypeSpec = null,
     key_spec: ?FieldTypeSpec = null,
     val_spec: ?FieldTypeSpec = null,

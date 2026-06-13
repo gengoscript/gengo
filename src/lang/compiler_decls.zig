@@ -404,6 +404,7 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
 
     var predicate_obj: ?*Object = null;
     var predicate_uv_count: u8 = 0;
+    var predicate_msg: ?[]const u8 = null;
 
     if (c.match(.kw_predicate)) {
         if (base == .array_t or base == .map_t or base == .enum_t) {
@@ -420,6 +421,11 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
             const cidx: u16 = try chunk.addConst(.{ .object = func_obj });
             try chunk.emitConstIdx(.make_closure, cidx, c.prev.line);
         }
+        if (c.match(.kw_message)) {
+            if (c.cur.typ != .string) return c.err("expected string literal after 'message'", .{});
+            predicate_msg = try c.copyName(c.cur.src);
+            c.advance();
+        }
     }
 
     try c.registry.addNamedType(.{
@@ -430,6 +436,7 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
         .scale = scale,
         .min = min,
         .max = max,
+        .predicate_msg = predicate_msg,
     });
 
     const nt = heap.allocObject() orelse return error.OutOfMemory;
@@ -443,6 +450,7 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
         .min = min,
         .max = max,
         .predicate = predicate_obj,
+        .predicate_msg = predicate_msg,
     } };
     try chunk.emitConst(.{ .object = nt }, kw.line);
     if (predicate_uv_count > 0) {
@@ -832,6 +840,32 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
         max = constraint.max;
     }
 
+    var predicate_obj: ?*Object = null;
+    var predicate_uv_count: u8 = 0;
+    var predicate_msg: ?[]const u8 = null;
+
+    if (c.match(.kw_predicate)) {
+        if (base == .array_t or base == .map_t or base == .enum_t) {
+            return c.err("predicate not supported for collection or enum types", .{});
+        }
+        try c.consume(.kw_func);
+        predicate_uv_count = try c.compileFuncWithPrefix(&[_][]const u8{}, false, base);
+        const func_obj = c.last_func_obj orelse return error.NotAFunction;
+        if (predicate_uv_count == 0) {
+            const cl = heap.allocObject() orelse return error.OutOfMemory;
+            cl.* = .{ .closure = .{ .func = func_obj, .upvalues = &[_]*Object{} } };
+            predicate_obj = cl;
+        } else {
+            const cidx: u16 = try chunk.addConst(.{ .object = func_obj });
+            try chunk.emitConstIdx(.make_closure, cidx, c.prev.line);
+        }
+        if (c.match(.kw_message)) {
+            if (c.cur.typ != .string) return c.err("expected string literal after 'message'", .{});
+            predicate_msg = try c.copyName(c.cur.src);
+            c.advance();
+        }
+    }
+
     try c.registry.addNamedType(.{
         .name = name,
         .base = base,
@@ -841,6 +875,7 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
         .min = min,
         .max = max,
         .parent_name = parent_name,
+        .predicate_msg = predicate_msg,
     });
 
     const qname = try c.qualifyTypeName(name);
@@ -856,8 +891,13 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
         .min = min,
         .max = max,
         .parent_name = qparent,
+        .predicate = predicate_obj,
+        .predicate_msg = predicate_msg,
     } };
     try chunk.emitConst(.{ .object = nt }, kw.line);
+    if (predicate_uv_count > 0) {
+        try chunk.emitOp(.set_named_predicate, kw.line);
+    }
     if (c.inFunc()) {
         _ = try c.defineLocal(name, false);
     } else {

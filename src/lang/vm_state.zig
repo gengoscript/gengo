@@ -32,6 +32,7 @@ pub const Policy = struct {
     allow_io: bool = true,
     native_backend: NativeBackend = .embedded,
     max_ops: ?u64 = null,
+    enable_predicates: bool = true,
 };
 
 pub const Frame = struct {

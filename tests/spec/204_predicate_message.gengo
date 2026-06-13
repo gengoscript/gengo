@@ -1,0 +1,4 @@
+std := import("std")
+type PositiveInt int predicate func(x) { return x > 0 } message "must be positive"
+a := PositiveInt(5)
+std.io.println(a)
