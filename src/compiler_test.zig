@@ -10,9 +10,9 @@ const api = @import("runtime/api.zig");
 const cfg = @import("runtime/config.zig");
 const Value = @import("lang/value.zig").Value;
 
-fn setup() Runtime {
+fn setup() !Runtime {
     var rt: Runtime = .{};
-    rt.initWithConfig(.{}, heap.HeapSize, heap.MaxObjects, vms.MaxStack, vms.MaxFrames, cfg.max_defers, std.testing.allocator);
+    try rt.initWithConfig(.{}, heap.HeapSize, heap.MaxObjects, vms.MaxStack, vms.MaxFrames, cfg.max_defers, std.testing.allocator);
     return rt;
 }
 
@@ -29,7 +29,7 @@ fn compile(rt: *Runtime, src: []const u8) !void {
 }
 
 test "compiler: empty source emits halt" {
-    var rt = setup();
+    var rt = try setup();
     defer rt.deinit();
     try compile(&rt, "");
     const c = &rt.chunk_state;
@@ -38,7 +38,7 @@ test "compiler: empty source emits halt" {
 }
 
 test "compiler: integer constant 42" {
-    var rt = setup();
+    var rt = try setup();
     defer rt.deinit();
     try compile(&rt,
         \\func f() int { return 42 }
@@ -59,7 +59,7 @@ test "compiler: integer constant 42" {
 }
 
 test "compiler: var global int" {
-    var rt = setup();
+    var rt = try setup();
     defer rt.deinit();
     try compile(&rt, "var x = 42");
 
@@ -73,7 +73,7 @@ test "compiler: var global int" {
 }
 
 test "compiler: const_add fusion" {
-    var rt = setup();
+    var rt = try setup();
     defer rt.deinit();
     try compile(&rt,
         \\func f() int { return 1 + 2 }
@@ -95,7 +95,7 @@ test "compiler: const_add fusion" {
 }
 
 test "compiler: ret_const peephole" {
-    var rt = setup();
+    var rt = try setup();
     defer rt.deinit();
     try compile(&rt,
         \\func f() int { return 42 }
@@ -114,7 +114,7 @@ test "compiler: ret_const peephole" {
 }
 
 test "compiler: def_global with string constant" {
-    var rt = setup();
+    var rt = try setup();
     defer rt.deinit();
     try compile(&rt,
         \\func f() int { return 42 }
@@ -133,7 +133,7 @@ test "compiler: def_global with string constant" {
 }
 
 test "compiler: make_closure emitted" {
-    var rt = setup();
+    var rt = try setup();
     defer rt.deinit();
     try compile(&rt,
         \\func f() int { return 42 }
@@ -151,7 +151,7 @@ test "compiler: make_closure emitted" {
 }
 
 test "compiler: closure captures upvalue" {
-    var rt = setup();
+    var rt = try setup();
     defer rt.deinit();
     try compile(&rt,
         \\func makeCounter() func() int {
@@ -174,7 +174,7 @@ test "compiler: closure captures upvalue" {
 }
 
 test "compiler: struct field access" {
-    var rt = setup();
+    var rt = try setup();
     defer rt.deinit();
     try compile(&rt,
         \\type Point struct { x int, y int }
@@ -195,7 +195,7 @@ test "compiler: struct field access" {
 }
 
 test "compiler: named return values" {
-    var rt = setup();
+    var rt = try setup();
     defer rt.deinit();
     try compile(&rt,
         \\func div(a int, b int) (result int, err error) {
@@ -212,7 +212,7 @@ test "compiler: named return values" {
 }
 
 test "compiler: multi-value return" {
-    var rt = setup();
+    var rt = try setup();
     defer rt.deinit();
     try compile(&rt,
         \\func pair() (int, int) { return 1, 2 }
@@ -228,7 +228,7 @@ test "compiler: multi-value return" {
 }
 
 test "compiler: for-in loop bytecode" {
-    var rt = setup();
+    var rt = try setup();
     defer rt.deinit();
     try compile(&rt,
         \\func sum(a []int) int {
@@ -251,7 +251,7 @@ test "compiler: for-in loop bytecode" {
 }
 
 test "compiler: nested function has correct ip" {
-    var rt = setup();
+    var rt = try setup();
     defer rt.deinit();
     try compile(&rt,
         \\func outer() int {
@@ -280,7 +280,7 @@ fn runSrc(rt: *Runtime, src: []const u8) !void {
 // ── const_eq fusion ───────────────────────────────────────────────────────
 
 test "compiler: const_eq fusion fires" {
-    var rt = setup();
+    var rt = try setup();
     defer rt.deinit();
     // Global variable: emits get_global (not get_local), so the triple fusion
     // cannot fire; const_eq remains as a standalone fused opcode.
@@ -297,7 +297,7 @@ test "compiler: const_eq fusion fires" {
 }
 
 test "compiler: const_eq fusion result" {
-    var rt = setup();
+    var rt = try setup();
     defer rt.deinit();
     try runSrc(&rt, "func f(x int) bool { return x == 42 }");
     const r1 = try rt.callGlobal("f", &.{.{ .int = 42 }});
@@ -309,7 +309,7 @@ test "compiler: const_eq fusion result" {
 // ── const_sub fusion ──────────────────────────────────────────────────────
 
 test "compiler: const_sub fusion fires" {
-    var rt = setup();
+    var rt = try setup();
     defer rt.deinit();
     // Global variable: emits get_global (not get_local), so the triple fusion
     // cannot fire; const_sub remains as a standalone fused opcode.
@@ -326,7 +326,7 @@ test "compiler: const_sub fusion fires" {
 }
 
 test "compiler: const_sub fusion result" {
-    var rt = setup();
+    var rt = try setup();
     defer rt.deinit();
     try runSrc(&rt, "func f(x int) int { return x - 1 }");
     const r = try rt.callGlobal("f", &.{.{ .int = 10 }});
@@ -336,7 +336,7 @@ test "compiler: const_sub fusion result" {
 // ── get_local_const_eq triple fusion ──────────────────────────────────────
 
 test "compiler: get_local_const_eq triple fusion fires" {
-    var rt = setup();
+    var rt = try setup();
     defer rt.deinit();
     try compile(&rt, "func f(x int) bool { return x == 0 }");
     const c = &rt.chunk_state;
@@ -348,7 +348,7 @@ test "compiler: get_local_const_eq triple fusion fires" {
 }
 
 test "compiler: get_local_const_eq triple fusion result" {
-    var rt = setup();
+    var rt = try setup();
     defer rt.deinit();
     try runSrc(&rt, "func f(x int) bool { return x == 0 }");
     const r1 = try rt.callGlobal("f", &.{.{ .int = 0 }});
@@ -360,7 +360,7 @@ test "compiler: get_local_const_eq triple fusion result" {
 // ── get_local_const_sub triple fusion ─────────────────────────────────────
 
 test "compiler: get_local_const_sub triple fusion fires" {
-    var rt = setup();
+    var rt = try setup();
     defer rt.deinit();
     try compile(&rt, "func f(x int) int { return x - 1 }");
     const c = &rt.chunk_state;
@@ -372,7 +372,7 @@ test "compiler: get_local_const_sub triple fusion fires" {
 }
 
 test "compiler: get_local_const_sub triple fusion result" {
-    var rt = setup();
+    var rt = try setup();
     defer rt.deinit();
     try runSrc(&rt, "func f(x int) int { return x - 1 }");
     const r = try rt.callGlobal("f", &.{.{ .int = 10 }});
@@ -382,7 +382,7 @@ test "compiler: get_local_const_sub triple fusion result" {
 // ── get_local_const_add triple fusion ─────────────────────────────────────
 
 test "compiler: get_local_const_add triple fusion fires" {
-    var rt = setup();
+    var rt = try setup();
     defer rt.deinit();
     try compile(&rt, "func f(x int) int { return x + 1 }");
     const c = &rt.chunk_state;
@@ -394,7 +394,7 @@ test "compiler: get_local_const_add triple fusion fires" {
 }
 
 test "compiler: get_local_const_add triple fusion result" {
-    var rt = setup();
+    var rt = try setup();
     defer rt.deinit();
     try runSrc(&rt, "func f(x int) int { return x + 1 }");
     const r = try rt.callGlobal("f", &.{.{ .int = 10 }});
@@ -404,7 +404,7 @@ test "compiler: get_local_const_add triple fusion result" {
 // ── get_local_const_lt triple fusion ──────────────────────────────────────
 
 test "compiler: get_local_const_lt triple fusion fires" {
-    var rt = setup();
+    var rt = try setup();
     defer rt.deinit();
     try compile(&rt, "func f(x int) bool { return x < 5 }");
     const c = &rt.chunk_state;
@@ -416,7 +416,7 @@ test "compiler: get_local_const_lt triple fusion fires" {
 }
 
 test "compiler: get_local_const_lt triple fusion result" {
-    var rt = setup();
+    var rt = try setup();
     defer rt.deinit();
     try runSrc(&rt, "func f(x int) bool { return x < 5 }");
     const r1 = try rt.callGlobal("f", &.{.{ .int = 3 }});
@@ -428,7 +428,7 @@ test "compiler: get_local_const_lt triple fusion result" {
 // ── get_local_const_eq_jif_pop quad fusion ────────────────────────────────
 
 test "compiler: get_local_const_eq_jif_pop quad fusion fires" {
-    var rt = setup();
+    var rt = try setup();
     defer rt.deinit();
     try compile(&rt,
         \\func f(x int) int {
@@ -445,7 +445,7 @@ test "compiler: get_local_const_eq_jif_pop quad fusion fires" {
 }
 
 test "compiler: get_local_const_eq_jif_pop quad fusion result" {
-    var rt = setup();
+    var rt = try setup();
     defer rt.deinit();
     try runSrc(&rt,
         \\func f(x int) int {
@@ -462,7 +462,7 @@ test "compiler: get_local_const_eq_jif_pop quad fusion result" {
 // ── get_local_const_lt_jif_pop quad fusion ────────────────────────────────
 
 test "compiler: get_local_const_lt_jif_pop quad fusion fires" {
-    var rt = setup();
+    var rt = try setup();
     defer rt.deinit();
     try compile(&rt,
         \\func f(x int) int {
@@ -479,7 +479,7 @@ test "compiler: get_local_const_lt_jif_pop quad fusion fires" {
 }
 
 test "compiler: get_local_const_lt_jif_pop quad fusion result" {
-    var rt = setup();
+    var rt = try setup();
     defer rt.deinit();
     try runSrc(&rt,
         \\func f(x int) int {
@@ -496,7 +496,7 @@ test "compiler: get_local_const_lt_jif_pop quad fusion result" {
 // ── expression depth limit ──────────────────────────────────────────────────
 
 test "compiler: expression too deep returns error" {
-    var rt = setup();
+    var rt = try setup();
     defer rt.deinit();
     // Build a deeply nested unary expression: var x = -(-(-(-...-1...)))
     var buf: [1024]u8 = undefined;
@@ -531,7 +531,7 @@ test {
 // view into the str_acc buffer; it should always allocate a dyn_string.
 // This test compiles a chain and verifies the result is a GC object.
 test "const_add string chain produces dyn_string, not str_acc view" {
-    var rt = setup();
+    var rt = try setup();
     defer rt.deinit();
     try compile(&rt,
         \\func f() string {

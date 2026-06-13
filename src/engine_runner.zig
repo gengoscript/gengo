@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const api = @import("runtime/api.zig");
 const io = @import("runtime/io.zig");
 const Value = @import("lang/value.zig").Value;
@@ -36,7 +37,7 @@ fn captureWerr(s: []const u8) void {
 
 fn makeRt(config: api.Config) *api.Runtime {
     const rt = std.heap.page_allocator.create(api.Runtime) catch fail("engine: out of memory\n");
-    rt.initWithPolicy(config);
+    rt.initWithPolicy(config) catch fail("engine: runtime init failed\n");
     return rt;
 }
 
@@ -760,7 +761,7 @@ fn testInitWithConfig() void {
         .max_stack = 128,
         .max_frames = 32,
         .max_defers = 64,
-    });
+    }) catch fail("engine: runtime init failed\n");
 
     const res = rt.run("std := import(\"std\")\nstd.io.println(42)");
     switch (res) {
@@ -769,6 +770,44 @@ fn testInitWithConfig() void {
         .runtime_error => |e| { writeAll(2, "engine FAIL: config runtime: "); writeAll(2, e.msg); writeAll(2, "\n"); std.os.wasi.proc_exit(1); },
     }
     out("  init_with_config: OK\n");
+}
+
+fn testInitFailure() void {
+    // Verify that runtime init failures are propagated to the caller
+    // rather than silently returning a partially-initialised runtime.
+    // On WASM the backing arrays are fixed-size and init never allocates,
+    // so this test only applies to native targets.
+    if (comptime builtin.target.cpu.arch == .wasm32) {
+        out("  init_failure_detected: OK (skipped on WASM)\n");
+        return;
+    }
+
+    const FailingAlloc = struct {
+        fn alloc(_: *anyopaque, _: usize, _: std.mem.Alignment, _: usize) ?[*]u8 {
+            return null;
+        }
+        fn resize(_: *anyopaque, _: []u8, _: std.mem.Alignment, _: usize, _: usize) bool {
+            return false;
+        }
+        fn free(_: *anyopaque, _: []u8, _: std.mem.Alignment, _: usize) void {}
+        fn remap(_: *anyopaque, _: []u8, _: std.mem.Alignment, _: usize, _: usize) ?[*]u8 {
+            return null;
+        }
+    };
+    const failing_alloc_vtable: std.mem.Allocator.VTable = .{
+        .alloc = FailingAlloc.alloc,
+        .resize = FailingAlloc.resize,
+        .free = FailingAlloc.free,
+        .remap = FailingAlloc.remap,
+    };
+    const failing_alloc: std.mem.Allocator = .{ .ptr = undefined, .vtable = &failing_alloc_vtable };
+
+    var rt: api.Runtime = undefined;
+    rt.initWithPolicy(.{ .allow_io = false, .allocator = failing_alloc }) catch {
+        out("  init_failure_detected: OK\n");
+        return;
+    };
+    fail("engine FAIL: init failure was not detected\n");
 }
 
 fn testStructReturn() void {
@@ -1096,6 +1135,7 @@ export fn _start() void {
     testNetCapability();
     testNetCapabilityHandlers();
     testInitWithConfig();
+    testInitFailure();
     testStructReturn();
     testRuneReturn();
     testNamedTypeReturn();

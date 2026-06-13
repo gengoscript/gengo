@@ -65,9 +65,9 @@ pub const Runtime = struct {
     host_modules: []const HostModuleDesc = &.{},
     capabilities: []const []const u8 = &.{},
 
-    pub fn init(config: Config) Runtime {
+    pub fn init(config: Config) !Runtime {
         var inner: rt_mod.Runtime = undefined;
-        inner.initWithConfig(
+        try inner.initWithConfig(
             .{
                 .allow_io = config.allow_io,
                 .native_backend = config.native_backend,
@@ -93,8 +93,8 @@ pub const Runtime = struct {
 
     // In-place initializer: no large stack temporary. Use when the Runtime is
     // heap-allocated and the shadow stack cannot hold a full Runtime value.
-    pub fn initWithPolicy(self: *Runtime, config: Config) void {
-        self.inner.initWithConfig(
+    pub fn initWithPolicy(self: *Runtime, config: Config) !void {
+        try self.inner.initWithConfig(
             .{
                 .allow_io = config.allow_io,
                 .native_backend = config.native_backend,

@@ -225,7 +225,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
 test "cap_fs path extraction accepts string and dyn_string" {
     const Runtime = @import("../../runtime/runtime.zig").Runtime;
     var rt: Runtime = undefined;
-    rt.initWithPolicy(.{ .allow_io = false });
+    rt.initWithPolicy(.{ .allow_io = false }) catch return error.TestFailed;
     defer rt.deinit();
 
     // Literal string
