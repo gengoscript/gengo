@@ -670,14 +670,15 @@ export fn engine_add_source(handle: i32, path_ptr: PtrInt, path_len: i32, src_pt
     engine.source_entries[sc] = .{ .path = path_buf[0..plen], .source = src_buf[0..slen] };
     engine.source_count = sc + 1;
 
-    engine.runtime.initWithPolicy(.{
+    // Use setConfig (not initWithPolicy) to update the source table without
+    // discarding compiled state or leaking prior heap allocations (#13).
+    engine.runtime.setConfig(.{
         .allow_io = engine.runtime.inner.policy.allow_io,
+        .native_backend = engine.runtime.inner.policy.native_backend,
+        .max_ops = engine.runtime.inner.policy.max_ops,
         .module_sources = engine.source_entries[0..engine.source_count],
         .module_source_provider = sourceProviderFromLoader(engine),
-    }) catch {
-        setInitError("engine_add_source: runtime re-init failed");
-        return -4;
-    };
+    });
 
     return 0;
 }
@@ -686,14 +687,13 @@ export fn engine_set_import_loader(handle: i32, load_fn: ?ImportLoaderFn, ctx: ?
     const engine = getEngine(handle) orelse return -1;
     engine.import_loader_fn = load_fn;
     engine.import_loader_ctx = ctx;
-    engine.runtime.initWithPolicy(.{
+    engine.runtime.setConfig(.{
         .allow_io = engine.runtime.inner.policy.allow_io,
+        .native_backend = engine.runtime.inner.policy.native_backend,
+        .max_ops = engine.runtime.inner.policy.max_ops,
         .module_sources = engine.source_entries[0..engine.source_count],
         .module_source_provider = sourceProviderFromLoader(engine),
-    }) catch {
-        setInitError("engine_set_import_loader: runtime re-init failed");
-        return -4;
-    };
+    });
     return 0;
 }
 
