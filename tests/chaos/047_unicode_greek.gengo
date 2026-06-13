@@ -1,0 +1,5 @@
+std := import("std")
+α := 1
+β := 2
+γ := α + β
+std.io.println(γ)

@@ -72,6 +72,8 @@ const port Port = Port(443)
 
 Assignment uses `=`. Compound assignment such as `+=` and `-=` is supported. `const` bindings cannot be reassigned, though mutable values stored inside them may still be mutated.
 
+Identifiers may contain Unicode letters and decimal digits, following the same rules as Go: the first character must be a Unicode letter or underscore, and subsequent characters may be Unicode letters, decimal digits, or underscores. Identifiers are not normalized — two visually identical identifiers that differ at the byte level are distinct.
+
 Type names cannot be shadowed: no variable, function, parameter, receiver,
 named return, or loop variable may be named after a primitive type or any
 declared type (`var bool bool` and `func string() {}` are compile errors).
