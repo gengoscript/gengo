@@ -90,6 +90,14 @@ pub const Runtime = struct {
     repl_type_name_buf: [MaxNamedTypes * 64]u8 = undefined,
     repl_type_name_buf_used: usize = 0,
 
+    // REPL enum-member persistence: the parent enum's member list must survive
+    // across lines so subtype declarations can validate member subsets and so
+    // member access resolves. Members are packed as [len:u8][bytes]... per type.
+    repl_named_type_enum_member_counts: [MaxNamedTypes]u8 = undefined,
+    repl_named_type_enum_member_offsets: [MaxNamedTypes]u32 = undefined,
+    repl_enum_member_buf: [MaxNamedTypes * 64]u8 = undefined,
+    repl_enum_member_buf_used: usize = 0,
+
     pub fn init() Runtime {
         var rt: Runtime = .{};
         chunk.setActive(&rt.chunk_state);
@@ -154,6 +162,7 @@ pub const Runtime = struct {
         self.repl_type_name_buf_used = 0;
         self.repl_const_count = 0;
         self.repl_const_name_buf_used = 0;
+        self.repl_enum_member_buf_used = 0;
     }
 
     pub fn run(self: *Runtime, src: []const u8) !void {
@@ -330,6 +339,7 @@ pub const Runtime = struct {
             const parent_name = if (self.repl_named_type_parent_lens[repl_ti] > 0)
                 self.repl_type_name_buf[self.repl_named_type_parent_offsets[repl_ti]..][0..self.repl_named_type_parent_lens[repl_ti]]
             else null;
+            const enum_members = self.replEnumMembersAt(repl_ti);
             compiler.registry.addNamedType(.{
                 .name = name,
                 .base = self.repl_named_type_bases[repl_ti],
@@ -339,6 +349,7 @@ pub const Runtime = struct {
                 .min = self.repl_named_type_mins[repl_ti],
                 .max = self.repl_named_type_maxs[repl_ti],
                 .parent_name = parent_name,
+                .enum_members = enum_members,
             }) catch {};
         }
         repl_ti = 0;
@@ -391,12 +402,14 @@ pub const Runtime = struct {
         self.repl_interface_type_count = 0;
         self.repl_variant_type_count = 0;
         self.repl_type_name_buf_used = 0;
+        self.repl_enum_member_buf_used = 0;
         {
             var ti: usize = 0;
             while (ti < compiler.registry.named_type_count) : (ti += 1) {
                 const ni = compiler.registry.named_types[ti];
                 if (self.repl_named_type_count >= MaxNamedTypes) break;
                 const idx = self.repl_named_type_count;
+                self.repl_named_type_enum_member_counts[idx] = 0;
                 const saved_name = self.saveReplTypeName(ni.name) catch break;
                 self.repl_named_type_name_offsets[idx] = @intCast(@intFromPtr(saved_name.ptr) - @intFromPtr(&self.repl_type_name_buf));
                 self.repl_named_type_name_lens[idx] = @intCast(saved_name.len);
@@ -417,6 +430,7 @@ pub const Runtime = struct {
                 } else {
                     self.repl_named_type_parent_lens[idx] = 0;
                 }
+                if (ni.enum_members) |members| self.saveReplEnumMembers(idx, members);
                 self.repl_named_type_count += 1;
             }
         }
@@ -519,6 +533,48 @@ pub const Runtime = struct {
         std.mem.copyForwards(u8, self.repl_type_name_buf[start .. start + name.len], name);
         self.repl_type_name_buf_used += name.len;
         return self.repl_type_name_buf[start .. start + name.len];
+    }
+
+    // Pack an enum type's member names for type `idx` as [len:u8][bytes]... into
+    // repl_enum_member_buf. On overflow the type is left with zero persisted
+    // members (graceful: validation simply can't run for that type next line).
+    fn saveReplEnumMembers(self: *Runtime, idx: usize, members: []const []const u8) void {
+        if (members.len == 0 or members.len > 255) return;
+        var needed: usize = 0;
+        for (members) |m| {
+            if (m.len > 255) return;
+            needed += 1 + m.len;
+        }
+        if (self.repl_enum_member_buf_used + needed > self.repl_enum_member_buf.len) return;
+        const start = self.repl_enum_member_buf_used;
+        var pos = start;
+        for (members) |m| {
+            self.repl_enum_member_buf[pos] = @intCast(m.len);
+            pos += 1;
+            std.mem.copyForwards(u8, self.repl_enum_member_buf[pos .. pos + m.len], m);
+            pos += m.len;
+        }
+        self.repl_enum_member_buf_used = pos;
+        self.repl_named_type_enum_member_offsets[idx] = @intCast(start);
+        self.repl_named_type_enum_member_counts[idx] = @intCast(members.len);
+    }
+
+    // Rebuild the []const []const u8 member slice for persisted type `idx`.
+    // The outer array is bump-allocated on the (REPL-persistent) heap; inner
+    // slices point back into repl_enum_member_buf.
+    fn replEnumMembersAt(self: *Runtime, idx: usize) ?[]const []const u8 {
+        const count = self.repl_named_type_enum_member_counts[idx];
+        if (count == 0) return null;
+        const out = heap.bump([]const u8, count) orelse return null;
+        var pos: usize = self.repl_named_type_enum_member_offsets[idx];
+        var i: usize = 0;
+        while (i < count) : (i += 1) {
+            const len = self.repl_enum_member_buf[pos];
+            pos += 1;
+            out[i] = self.repl_enum_member_buf[pos .. pos + len];
+            pos += len;
+        }
+        return out[0..count];
     }
 
 };
