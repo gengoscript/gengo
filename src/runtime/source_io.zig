@@ -53,6 +53,13 @@ pub fn readFile(path: []const u8, buf: []u8) !usize {
             if (nread == 0) break;
             total += nread;
         }
+        if (total == buf.len) {
+            var probe: [1]u8 = undefined;
+            var iov = [1]std.os.wasi.iovec_t{.{ .base = &probe, .len = 1 }};
+            var nread: usize = 0;
+            const probe_rc = std.os.wasi.fd_read(fd, &iov, iov.len, &nread);
+            if (probe_rc == .SUCCESS and nread > 0) return error.InputTooLong;
+        }
         return total;
     }
     if (comptime builtin.os.tag == .windows) {
@@ -87,6 +94,12 @@ pub fn readFile(path: []const u8, buf: []u8) !usize {
             if (!ok.toBool() or nread == 0) break;
             total += nread;
         }
+        if (total == buf.len) {
+            var probe: [1]u8 = undefined;
+            var nread: w32.DWORD = 0;
+            const ok = ReadFile(handle, &probe, 1, &nread, null);
+            if (ok.toBool() and nread > 0) return error.InputTooLong;
+        }
         return total;
     }
     const fd = try std.posix.openat(std.posix.AT.FDCWD, path, .{}, 0);
@@ -97,6 +110,11 @@ pub fn readFile(path: []const u8, buf: []u8) !usize {
         const n = try std.posix.read(fd, buf[total..]);
         if (n == 0) break;
         total += n;
+    }
+    if (total == buf.len) {
+        var probe: [1]u8 = undefined;
+        const n = std.posix.read(fd, &probe) catch @as(usize, 0);
+        if (n > 0) return error.InputTooLong;
     }
     return total;
 }

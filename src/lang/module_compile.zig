@@ -554,7 +554,8 @@ fn fileExists(path: []const u8) bool {
     var dummy: [1]u8 = undefined;
     if (source_io.readFile(path, dummy[0..1])) |_| {
         return true;
-    } else |_| {
+    } else |err| {
+        if (err == error.InputTooLong) return true;
         return false;
     }
 }
