@@ -83,7 +83,7 @@ pub fn block(c: anytype) anyerror!void {
 }
 
 pub fn cForStmt(c: anytype) anyerror!void {
-    const local_base: u8 = if (c.inFunc()) c.currentScope().local_count else 0;
+    const local_base: u8 = c.currentScope().local_count;
 
     var loop_var_name: ?[]const u8 = null;
     c.in_loop_init = true;
@@ -653,7 +653,7 @@ fn compileDeferBlock(c: anytype) !void {
 }
 
 pub fn forInStmt(c: anytype) anyerror!void {
-    const local_base: u8 = if (c.inFunc()) c.currentScope().local_count else 0;
+    const local_base: u8 = c.currentScope().local_count;
     if (c.cur.typ != .ident) return c.err("expected identifier, found {s}", .{c.tokenName(c.cur.typ)});
     const kname = c.cur;
     c.advance();
