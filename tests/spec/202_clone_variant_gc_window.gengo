@@ -1,0 +1,66 @@
+// Regression test for #125 — core.clone variant path GC window
+// Verifies that cloning a variant with many shared string fields
+// does not lose elements due to GC during the shared/arm fill loops.
+std := import("std")
+core := std.core
+
+// A variant with many shared string fields to stress the allocator during clone.
+// Each string field clone triggers a new dyn_string allocation.  With the default
+// GC threshold, this is enough to trigger at least one promotion while the backing
+// slices are still being filled.
+type Big variant {
+    s0 string, s1 string, s2 string, s3 string, s4 string,
+    s5 string, s6 string, s7 string, s8 string, s9 string,
+    s10 string, s11 string, s12 string, s13 string, s14 string,
+    s15 string, s16 string, s17 string, s18 string, s19 string,
+    s20 string, s21 string, s22 string, s23 string, s24 string,
+    s25 string, s26 string, s27 string, s28 string, s29 string,
+    arm { payload int }
+}
+
+src := Big.arm {
+    s0: "a", s1: "b", s2: "c", s3: "d", s4: "e",
+    s5: "f", s6: "g", s7: "h", s8: "i", s9: "j",
+    s10: "k", s11: "l", s12: "m", s13: "n", s14: "o",
+    s15: "p", s16: "q", s17: "r", s18: "s", s19: "t",
+    s20: "u", s21: "v", s22: "w", s23: "x", s24: "y",
+    s25: "z", s26: "A", s27: "B", s28: "C", s29: "D",
+    payload: 42
+}
+
+dst := core.clone(src)
+
+// Verify all 30 shared fields survived the clone.
+assert(dst.s0 == "a")
+assert(dst.s1 == "b")
+assert(dst.s2 == "c")
+assert(dst.s3 == "d")
+assert(dst.s4 == "e")
+assert(dst.s5 == "f")
+assert(dst.s6 == "g")
+assert(dst.s7 == "h")
+assert(dst.s8 == "i")
+assert(dst.s9 == "j")
+assert(dst.s10 == "k")
+assert(dst.s11 == "l")
+assert(dst.s12 == "m")
+assert(dst.s13 == "n")
+assert(dst.s14 == "o")
+assert(dst.s15 == "p")
+assert(dst.s16 == "q")
+assert(dst.s17 == "r")
+assert(dst.s18 == "s")
+assert(dst.s19 == "t")
+assert(dst.s20 == "u")
+assert(dst.s21 == "v")
+assert(dst.s22 == "w")
+assert(dst.s23 == "x")
+assert(dst.s24 == "y")
+assert(dst.s25 == "z")
+assert(dst.s26 == "A")
+assert(dst.s27 == "B")
+assert(dst.s28 == "C")
+assert(dst.s29 == "D")
+assert(dst.payload == 42)
+
+std.io.println("ok")
