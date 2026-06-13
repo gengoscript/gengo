@@ -141,6 +141,9 @@ fn tplValToDynStr(v: Value) !Value {
         },
         .string => |s| vmgc.makeDynString(s),
         .object => |o| {
+            // Root o before any allocation so GC cannot sweep it or its managed bytes.
+            try vms.pushTempRoot(.{ .object = o });
+            defer vms.popTempRoot();
             if (o.* == .dyn_string) return vmgc.makeDynString(o.dyn_string);
             // Named values render through their underlying value.
             if (o.* == .named_value) return tplValToDynStr(o.named_value.value);
@@ -151,6 +154,14 @@ fn tplValToDynStr(v: Value) !Value {
 }
 
 fn tplAppendValToBuilder(sb_obj: *Object, val: Value) !void {
+    if (val == .object) {
+        try vms.pushTempRoot(val);
+        defer vms.popTempRoot();
+        const sv = try tplValToDynStr(val);
+        try vms.pushTempRoot(sv);
+        defer vms.popTempRoot();
+        return tplAppendToBuilder(sb_obj, try tplAsStringVal(sv));
+    }
     const sv = try tplValToDynStr(val);
     try vms.pushTempRoot(sv);
     defer vms.popTempRoot();
@@ -357,9 +368,31 @@ pub fn tplParse(src_val: Value, src: []const u8) !Value {
         const obj = try tplBuildObj(src_val, &[_]Value{}, &[_]Value{}, &[_]Value{});
         return .{ .object = obj };
     }
+    // Root the parse-time slices immediately so that GC triggered by tplParseTag
+    // / tplSplitPath cannot sweep elements already written into args[].
+    const ops_root = try vmgc.vmAllocObject();
+    ops_root.* = .{ .array = &[_]Value{} };
+    try vms.pushTempRoot(.{ .object = ops_root });
+    defer vms.popTempRoot();
     const ops = try vmgc.vmAllocManagedSlice(Value, inst_count);
+    ops_root.* = .{ .array_managed = ops };
+    for (ops) |*v| v.* = .null;
+
+    const args_root = try vmgc.vmAllocObject();
+    args_root.* = .{ .array = &[_]Value{} };
+    try vms.pushTempRoot(.{ .object = args_root });
+    defer vms.popTempRoot();
     const args = try vmgc.vmAllocManagedSlice(Value, inst_count);
+    args_root.* = .{ .array_managed = args };
+    for (args) |*v| v.* = .null;
+
+    const jmp_root = try vmgc.vmAllocObject();
+    jmp_root.* = .{ .array = &[_]Value{} };
+    try vms.pushTempRoot(.{ .object = jmp_root });
+    defer vms.popTempRoot();
     const jmp = try vmgc.vmAllocManagedSlice(Value, inst_count);
+    jmp_root.* = .{ .array_managed = jmp };
+    for (jmp) |*v| v.* = .null;
 
     var idx: usize = 0;
     var pos: usize = 0;

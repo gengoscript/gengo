@@ -401,7 +401,10 @@ pub fn constructNamedType(typ_obj: *Object, arg: Value) !Value {
         .string => {
             if (!vms.isStringValue(arg)) return error.TypeError;
             const s = try vms.asStringValue(arg);
-            base_v = try vmgc.makeDynString(s);
+            const ds = try vmgc.makeDynString(s);
+            try vms.pushTempRoot(ds);
+            defer vms.popTempRoot();
+            return makeNamedValue(typ_obj, ds);
         },
         .bool => {
             if (arg != .boolean) return error.TypeError;

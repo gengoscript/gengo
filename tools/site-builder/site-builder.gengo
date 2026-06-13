@@ -37,6 +37,11 @@ const chapterOrder := [
     "changelog.md",
 ]
 
+// Escaped/rendered HTML. Raw strings do not concatenate with Html — the
+// type system forces every dynamic piece through an escape function (or an
+// explicit Html(...) assertion for trusted markup).
+type Html string
+
 // One rendered documentation page.
 type Page struct {
     file  string,    // markdown filename under docs/
@@ -89,14 +94,17 @@ const footerTmpl := std.template.parse(footerSrc)
 
 // ── String helpers ───────────────────────────────────────────────────────────
 
-func escapeHtml(s string) string {
+func escapeHtml(s string) Html {
     var r := str.replace(s, "&", "&amp;")
     r = str.replace(r, "<", "&lt;")
-    return str.replace(r, ">", "&gt;")
+    return Html(str.replace(r, ">", "&gt;"))
 }
 
-func escapeAttr(s string) string {
-    return str.replace(escapeHtml(s), '"', "&quot;")
+func escapeAttr(s string) Html {
+    var r := str.replace(s, "&", "&amp;")
+    r = str.replace(r, "<", "&lt;")
+    r = str.replace(r, ">", "&gt;")
+    return Html(str.replace(r, '"', "&quot;"))
 }
 
 // std.string.trim trims both ends; the renderer sometimes needs right-only.
@@ -199,7 +207,7 @@ func isSeparatorRow(cells any) bool {
     return true
 }
 
-func renderTable(rows any) string {
+func renderTable(rows any) Html {
     var out := std.string.builder()
     out.write("<table>\n")
     var bodyStart := 0
@@ -207,7 +215,9 @@ func renderTable(rows any) string {
         bodyStart = 2
         out.write("<thead><tr>")
         for cell in splitRow(rows[0]) {
-            out.write("<th>" + inlineMdToHtml(cell) + "</th>")
+            out.write("<th>")
+            out.write(inlineMdToHtml(cell))
+            out.write("</th>")
         }
         out.write("</tr></thead>\n")
     }
@@ -215,12 +225,14 @@ func renderTable(rows any) string {
     for row in rows[bodyStart:] {
         out.write("<tr>")
         for cell in splitRow(row) {
-            out.write("<td>" + inlineMdToHtml(cell) + "</td>")
+            out.write("<td>")
+            out.write(inlineMdToHtml(cell))
+            out.write("</td>")
         }
         out.write("</tr>\n")
     }
     out.write("</tbody>\n</table>\n")
-    return out.str()
+    return Html(out.str())
 }
 
 // ── Markdown → HTML: block level ─────────────────────────────────────────────
@@ -247,7 +259,7 @@ func headingLevel(line string) int {
     return 0
 }
 
-func mdToHtml(src string) string {
+func mdToHtml(src string) Html {
     var html := std.string.builder()
     var lines := str.split(src, "\n")
     var i := 0
@@ -263,7 +275,9 @@ func mdToHtml(src string) string {
         if paraBuf != "" {
             p := trimEnd(paraBuf)
             if p != "" {
-                html.write("<p>" + inlineMdToHtml(p) + "</p>\n")
+                html.write("<p>")
+                html.write(inlineMdToHtml(p))
+                html.write("</p>\n")
             }
             paraBuf = ""
         }
@@ -295,7 +309,9 @@ func mdToHtml(src string) string {
         // Code blocks
         if str.starts_with(line, "```") {
             if inCode {
-                html.write("<pre><code>" + escapeHtml(trimEnd(codeBuf)) + "</code></pre>\n")
+                html.write("<pre><code>")
+                html.write(escapeHtml(trimEnd(codeBuf)))
+                html.write("</code></pre>\n")
                 codeBuf = ""
                 inCode = false
             } else {
@@ -332,7 +348,9 @@ func mdToHtml(src string) string {
             flushPara()
             closeLists()
             tag := "h" + std.conv.to_string(level)
-            html.write("<" + tag + ">" + inlineMdToHtml(line[level+1:]) + "</" + tag + ">\n")
+            html.write("<" + tag + ">")
+            html.write(inlineMdToHtml(line[level+1:]))
+            html.write("</" + tag + ">\n")
             continue
         }
 
@@ -348,7 +366,9 @@ func mdToHtml(src string) string {
         if str.starts_with(line, "> ") {
             flushPara()
             closeLists()
-            html.write("<blockquote>" + inlineMdToHtml(line[2:]) + "</blockquote>\n")
+            html.write("<blockquote>")
+            html.write(inlineMdToHtml(line[2:]))
+            html.write("</blockquote>\n")
             continue
         }
 
@@ -360,7 +380,9 @@ func mdToHtml(src string) string {
                     html.write("\n<ul>\n")
                     nestedOpen = true
                 }
-                html.write("<li>" + inlineMdToHtml(line[4:]) + "</li>\n")
+                html.write("<li>")
+                html.write(inlineMdToHtml(line[4:]))
+                html.write("</li>\n")
                 continue
             }
             // No open parent item: treat as a top-level item.
@@ -386,7 +408,8 @@ func mdToHtml(src string) string {
                 html.write("<ul>\n")
                 ulOpen = true
             }
-            html.write("<li>" + inlineMdToHtml(line[2:]))
+            html.write("<li>")
+            html.write(inlineMdToHtml(line[2:]))
             liOpen = true
             continue
         }
@@ -411,7 +434,9 @@ func mdToHtml(src string) string {
                 html.write("<ol>\n")
                 olOpen = true
             }
-            html.write("<li>" + inlineMdToHtml(line[op:]) + "</li>\n")
+            html.write("<li>")
+            html.write(inlineMdToHtml(line[op:]))
+            html.write("</li>\n")
             continue
         }
 
@@ -431,7 +456,7 @@ func mdToHtml(src string) string {
 
     flushPara()
     closeLists()
-    return html.str()
+    return Html(html.str())
 }
 
 // ── Markdown → HTML: inline level ────────────────────────────────────────────
@@ -459,7 +484,7 @@ func span(s string, from int, marker string) (string, int) {
 }
 
 // Inline markdown: links, images, bold, italic, inline code.
-func inlineMdToHtml(s string) string {
+func inlineMdToHtml(s string) Html {
     var out := std.string.builder()
     n := core.len(s)
     var i := 0
@@ -470,7 +495,11 @@ func inlineMdToHtml(s string) string {
         if ch == "[" {
             text, url, next := bracketPair(s, i)
             if next != -1 {
-                out.write("<a href=\"" + escapeAttr(mdHref(url)) + "\">" + inlineMdToHtml(text) + "</a>")
+                out.write("<a href=\"")
+                out.write(escapeAttr(mdHref(url)))
+                out.write("\">")
+                out.write(inlineMdToHtml(text))
+                out.write("</a>")
                 i = next
                 continue
             }
@@ -480,7 +509,11 @@ func inlineMdToHtml(s string) string {
         if ch == "!" && i+1 < n && s[i+1] == '[' {
             alt, url, next := bracketPair(s, i+1)
             if next != -1 {
-                out.write("<img src=\"" + escapeHtml(url) + "\" alt=\"" + escapeHtml(alt) + "\">")
+                out.write("<img src=\"")
+                out.write(escapeHtml(url))
+                out.write("\" alt=\"")
+                out.write(escapeHtml(alt))
+                out.write("\">")
                 i = next
                 continue
             }
@@ -490,7 +523,9 @@ func inlineMdToHtml(s string) string {
         if ch == "*" && i+1 < n && s[i+1] == '*' {
             text, next := span(s, i+2, "**")
             if next != -1 {
-                out.write("<strong>" + inlineMdToHtml(text) + "</strong>")
+                out.write("<strong>")
+                out.write(inlineMdToHtml(text))
+                out.write("</strong>")
                 i = next
                 continue
             }
@@ -500,7 +535,9 @@ func inlineMdToHtml(s string) string {
         if ch == "*" {
             text, next := span(s, i+1, "*")
             if next != -1 {
-                out.write("<em>" + inlineMdToHtml(text) + "</em>")
+                out.write("<em>")
+                out.write(inlineMdToHtml(text))
+                out.write("</em>")
                 i = next
                 continue
             }
@@ -510,9 +547,9 @@ func inlineMdToHtml(s string) string {
         if ch == "`" {
             text, next := span(s, i+1, "`")
             if next != -1 {
-                code := "<code>" + escapeHtml(text) + "</code>"
+                code := Html("<code>") + escapeHtml(text) + Html("</code>")
                 if looksLikeDocPath(text) {
-                    code = "<a href=\"" + escapeAttr(mdHref(text)) + "\">" + code + "</a>"
+                    code = Html("<a href=\"") + escapeAttr(mdHref(text)) + Html("\">") + code + Html("</a>")
                 }
                 out.write(code)
                 i = next
@@ -531,7 +568,7 @@ func inlineMdToHtml(s string) string {
         }
         i += 1
     }
-    return out.str()
+    return Html(out.str())
 }
 
 // ── Page metadata ────────────────────────────────────────────────────────────
@@ -571,14 +608,14 @@ func extractDescription(src string, fallback string) string {
 // ── Page assembly ────────────────────────────────────────────────────────────
 
 // Wrap rendered body HTML in the full page shell.
-func wrapPage(page Page, body string) string {
+func wrapPage(page Page, body Html) Html {
     var canonical := siteBase + page.out
     var ogType := "article"
     if page.out == "index.html" {
         canonical = siteBase
         ogType = "website"
     }
-    return pageShell.execute({
+    return Html(pageShell.execute({
         "title":      escapeAttr(page.title),
         "desc":       escapeAttr(page.desc),
         "canonical":  escapeAttr(canonical),
@@ -586,11 +623,11 @@ func wrapPage(page Page, body string) string {
         "css":        cssPath,
         "body":       body,
         "builderUrl": repoBlob + "tools/site-builder/site-builder.gengo",
-    })
+    }))
 }
 
 // Previous chapter on the left, contents in the middle, next on the right.
-func pageFooter(prev ?Page, next ?Page) string {
+func pageFooter(prev ?Page, next ?Page) Html {
     var data := {
         "hasPrev": prev != null, "prevPath": "", "prevTitle": "",
         "hasNext": next != null, "nextPath": "", "nextTitle": "",
@@ -603,7 +640,7 @@ func pageFooter(prev ?Page, next ?Page) string {
         data["nextPath"] = next.out
         data["nextTitle"] = escapeHtml(next.title)
     }
-    return trimEnd(footerTmpl.execute(data))
+    return Html(trimEnd(footerTmpl.execute(data)))
 }
 
 // ── Main ─────────────────────────────────────────────────────────────────────
@@ -665,12 +702,12 @@ func main() {
         if k > 0 { prev = pages[k-1] }
         if k+1 < core.len(pages) { next = pages[k+1] }
         body := mdToHtml(fs.read(srcDir + "/" + page.file)) + pageFooter(prev, next)
-        fs.write(outDir + "/" + page.out, wrapPage(page, body))
+        fs.write(outDir + "/" + page.out, string(wrapPage(page, body)))
         written += 1
     }
 
     // Index page: docs/index.md as the intro, then the table of contents.
-    var intro := "<h1>Gengoscript Documentation</h1>\n"
+    var intro := Html("<h1>Gengoscript Documentation</h1>\n")
     var indexDesc := "Documentation for Gengoscript, the embeddable scripting language with domain-safe types."
     if hasIndexMd {
         src := fs.read(srcDir + "/index.md")
@@ -681,7 +718,9 @@ func main() {
     toc.write(intro)
     toc.write("<h2>Contents</h2>\n<ul>\n")
     for page in pages {
-        toc.write(io.sprintf("<li><a href=\"%s\">%s</a></li>\n", page.out, escapeHtml(page.title)))
+        toc.write("<li><a href=\"" + page.out + "\">")
+        toc.write(escapeHtml(page.title))
+        toc.write("</a></li>\n")
     }
     toc.write("</ul>\n")
     index := Page{
@@ -690,7 +729,7 @@ func main() {
         title: "Gengoscript Documentation",
         desc:  indexDesc,
     }
-    fs.write(outDir + "/index.html", wrapPage(index, toc.str()))
+    fs.write(outDir + "/index.html", string(wrapPage(index, Html(toc.str()))))
     written += 1
 
     // Sitemap for crawlers.
