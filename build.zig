@@ -231,6 +231,21 @@ pub fn build(b: *std.Build) void {
     const compiler_test_step = b.step("compiler-test", "Run compiler bytecode output tests");
     compiler_test_step.dependOn(&run_compiler_tests.step);
 
+    // ── Chaos / spec-fail in-process tests (native Zig test runner) ───────────
+
+    const chaos_spec_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/chaos_spec_test.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    chaos_spec_test_mod.addImport("build_options", build_opts_mod);
+    const chaos_spec_test = b.addTest(.{ .root_module = chaos_spec_test_mod });
+    chaos_spec_test.step.dependOn(&preset.step);
+    const run_chaos_spec_tests = b.addRunArtifact(chaos_spec_test);
+
+    const chaos_spec_test_step = b.step("chaos-spec-test", "Run chaos and spec/fail cases in-process");
+    chaos_spec_test_step.dependOn(&run_chaos_spec_tests.step);
+
     const unit_step = b.step("unit", "Run VM safety, value, embedding, and engine API checks");
     unit_step.dependOn(&run_vm_safety.step);
     unit_step.dependOn(&run_vm_value.step);
@@ -240,6 +255,7 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run heap, compiler, lexer, runtime safety, value, embedding, engine, fuzz, and conformance tests");
     test_step.dependOn(&run_heap_tests.step);
     test_step.dependOn(&run_compiler_tests.step);
+    test_step.dependOn(&run_chaos_spec_tests.step);
     test_step.dependOn(&run_lexer_tests.step);
     test_step.dependOn(&run_vm_safety.step);
     test_step.dependOn(&run_vm_value.step);

@@ -3019,6 +3019,7 @@ fn runPanicUnwind(orig_err: anyerror) anyerror!void {
         vmState().panic_value = vmState().pending_panic_value;
         vmState().has_pending_panic_value = false;
     } else if (vmState().pending_panic_message) |msg| {
+        vms.setRuntimeErr("{s}", .{msg});
         vmState().panic_value = .{ .error_value = msg };
         vmState().pending_panic_message = null;
     } else {
