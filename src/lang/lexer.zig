@@ -1,5 +1,6 @@
 const std = @import("std");
 const common = @import("common.zig");
+const unicode = @import("unicode.zig");
 const token = @import("token.zig");
 const TT = token.TT;
 const Token = token.Token;
@@ -59,6 +60,19 @@ pub const Lexer = struct {
         const c = self.adv();
         if (common.isAlpha(c)) return self.ident();
         if (common.isDigit(c)) return self.numLit();
+        if (c >= 0x80) {
+            self.pos = self.start;
+            const cp_len = self.peekCodepointLen();
+            if (cp_len > 0) {
+                const cp = self.decodeCodepoint(cp_len);
+                if (unicode.isIdentStart(cp)) {
+                    self.pos += cp_len;
+                    return self.ident();
+                }
+            }
+            self.pos = self.start + 1;
+            return self.tok(.err_invalid_char);
+        }
         return switch (c) {
             '(' => self.tok(.lparen),
             ')' => self.tok(.rparen),
@@ -112,7 +126,24 @@ pub const Lexer = struct {
     }
 
     fn ident(self: *Lexer) Token {
-        while (common.isAlphaNum(self.peek())) _ = self.adv();
+        while (true) {
+            const c = self.peek();
+            if (common.isAlphaNum(c)) {
+                _ = self.adv();
+                continue;
+            }
+            if (c >= 0x80) {
+                const cp_len = self.peekCodepointLen();
+                if (cp_len > 0) {
+                    const cp = self.decodeCodepoint(cp_len);
+                    if (unicode.isIdentContinue(cp)) {
+                        self.pos += cp_len;
+                        continue;
+                    }
+                }
+            }
+            break;
+        }
         const text = self.src[self.start..self.pos];
         const tt = keyword_map.get(text) orelse .ident;
         return self.tok(tt);
@@ -244,6 +275,14 @@ pub const Lexer = struct {
     fn atEnd(self: *Lexer) bool {
         return self.pos >= self.src.len;
     }
+    fn peekCodepointLen(self: *Lexer) usize {
+        if (self.atEnd()) return 0;
+        const c = self.src[self.pos];
+        return std.unicode.utf8ByteSequenceLength(c) catch 0;
+    }
+    fn decodeCodepoint(self: *Lexer, len: usize) u21 {
+        return std.unicode.utf8Decode(self.src[self.pos..self.pos + len]) catch 0;
+    }
 };
 
 const testing = std.testing;
@@ -290,17 +329,18 @@ test "lexer: identifiers" {
     try testing.expectEqual(.eof, lex.next().typ);
 }
 
-test "lexer: invalid non-ASCII start gives err_invalid_char" {
+test "lexer: non-ASCII start is valid ident" {
     var lex = Lexer{ .src = "λ" };
-    try testing.expectEqual(.err_invalid_char, lex.next().typ);
+    const tok = lex.next();
+    try testing.expectEqual(.ident, tok.typ);
+    try testing.expectEqualStrings("λ", tok.src);
 }
 
-test "lexer: ascii ident followed by UTF-8 stops at non-ASCII" {
+test "lexer: ascii ident followed by UTF-8 continues ident" {
     var lex = Lexer{ .src = "aλb" };
     const tok = lex.next();
     try testing.expectEqual(.ident, tok.typ);
-    try testing.expectEqualStrings("a", tok.src);
-    try testing.expectEqual(.err_invalid_char, lex.next().typ);
+    try testing.expectEqualStrings("aλb", tok.src);
 }
 
 test "lexer: single-char punctuation" {

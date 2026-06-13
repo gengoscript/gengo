@@ -97,6 +97,10 @@ var rt = api.Runtime.init(.{ .allow_io = false });
 
 This suppresses built-in script output only. It does not prevent host callbacks from performing I/O.
 
+## Confusable Identifiers
+
+Unicode identifiers are not normalized. Two identifiers that look identical but are composed differently (for example, NFC vs NFD) are treated as distinct names. This creates the same confusable-identifier risk as Go. Review scripts that accept untrusted source code, and consider running them through a normalizing preprocessor if visual spoofing is a concern.
+
 ## Deployment Checklist
 
 For production use:
