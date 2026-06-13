@@ -217,8 +217,12 @@ fn importLoaderWrapper(ctx: *anyopaque, path: []const u8) anyerror!?[]const u8 {
             s,
             @intCast(engine.import_scratch.len),
         );
-        if (result > 0) return engine.import_scratch[0..@as(usize, @intCast(result))];
-        if (result < 0) return error.ImportNotFound;
+        if (result > 0) {
+            const written = @as(usize, @intCast(result));
+            if (written > engine.import_scratch.len) return error.ImportLoaderFailed;
+            return engine.import_scratch[0..written];
+        }
+        if (result < 0) return error.ImportLoaderFailed;
     }
 
     for (engine.source_entries[0..engine.source_count]) |entry| {
@@ -243,16 +247,16 @@ fn getEngine(handle: i32) ?*Engine {
 }
 
 fn wasmSlice(ptr: PtrInt, len: i32) []const u8 {
-    if (len <= 0) return "";
+    if (len <= 0 or ptr == 0) return "";
     return @as([*]u8, @ptrFromInt(@as(usize, @intCast(ptr))))[0..@as(usize, @intCast(len))];
 }
 
 fn wasmSliceMut(ptr: PtrInt, len: i32) []u8 {
-    if (len <= 0) return "";
+    if (len <= 0 or ptr == 0) return "";
     return @as([*]u8, @ptrFromInt(@as(usize, @intCast(ptr))))[0..@as(usize, @intCast(len))];
 }
 
-fn wireToValue(wire: ValueWire) Value {
+fn wireToValue(wire: ValueWire) !Value {
     return switch (wire.tag) {
         @intFromEnum(WireTag.null) => .null,
         @intFromEnum(WireTag.boolean) => Value{ .boolean = wire.payload != 0 },
@@ -267,30 +271,30 @@ fn wireToValue(wire: ValueWire) Value {
             if ((wire.flags & host_abi.FLAG_RUNE) != 0) {
                 break :blk Value{ .rune = @intCast(wire.payload) };
             }
-            break :blk if ((wire.flags & 1) != 0) Value{ .int = fval } else Value{ .float = fval };
+            break :blk if ((wire.flags & host_abi.FLAG_INTEGER) != 0) Value{ .int = fval } else Value{ .float = fval };
         },
         @intFromEnum(WireTag.@"error") => {
             if (wire.len == 0) return Value{ .error_value = "" };
             const data = @as([*]u8, @ptrFromInt(@as(usize, @intCast(wire.payload))))[0..@as(usize, @intCast(wire.len))];
-            const copy = vmgc.vmAllocManagedBytes(wire.len) catch return Value.null;
+            const copy = try vmgc.vmAllocManagedBytes(wire.len);
             @memcpy(copy[0..wire.len], data);
             return Value{ .error_value = copy[0..wire.len] };
         },
         @intFromEnum(WireTag.string) => {
             if (wire.len == 0) return Value{ .string = "" };
             const data = @as([*]u8, @ptrFromInt(@as(usize, @intCast(wire.payload))))[0..@as(usize, @intCast(wire.len))];
-            return vm.makeString(data) catch Value.null;
+            return try vm.makeString(data);
         },
         @intFromEnum(WireTag.array) => {
             const count = wire.len;
             const elem_wires = @as([*]const ValueWire, @ptrFromInt(@as(usize, @intCast(wire.payload))))[0..count];
-            const arr_obj = vmgc.vmAllocObject() catch return Value.null;
+            const arr_obj = try vmgc.vmAllocObject();
             arr_obj.* = .{ .array = &[_]Value{} };
-            vms.pushTempRoot(.{ .object = arr_obj }) catch return Value.null;
+            try vms.pushTempRoot(.{ .object = arr_obj });
             defer vms.popTempRoot();
-            const items = vmgc.vmAllocManagedSlice(Value, count) catch return Value.null;
+            const items = try vmgc.vmAllocManagedSlice(Value, count);
             for (elem_wires, 0..) |ew, i| {
-                items[i] = wireToValue(ew);
+                items[i] = try wireToValue(ew);
             }
             arr_obj.* = .{ .array_managed = items[0..count] };
             return .{ .object = arr_obj };
@@ -298,15 +302,15 @@ fn wireToValue(wire: ValueWire) Value {
         @intFromEnum(WireTag.map) => {
             const count = wire.len;
             const pair_wires = @as([*]const ValueWire, @ptrFromInt(@as(usize, @intCast(wire.payload))))[0 .. count * 2];
-            const map_obj = vmgc.vmAllocObject() catch return Value.null;
+            const map_obj = try vmgc.vmAllocObject();
             map_obj.* = .{ .map = &[_]MapEntry{} };
-            vms.pushTempRoot(.{ .object = map_obj }) catch return Value.null;
+            try vms.pushTempRoot(.{ .object = map_obj });
             defer vms.popTempRoot();
-            const entries = vmgc.vmAllocManagedSlice(MapEntry, count) catch return Value.null;
+            const entries = try vmgc.vmAllocManagedSlice(MapEntry, count);
             for (0..count) |i| {
                 entries[i] = .{
-                    .key = wireToValue(pair_wires[i * 2]),
-                    .value = wireToValue(pair_wires[i * 2 + 1]),
+                    .key = try wireToValue(pair_wires[i * 2]),
+                    .value = try wireToValue(pair_wires[i * 2 + 1]),
                 };
             }
             map_obj.* = .{ .map_managed = entries[0..count] };
@@ -331,7 +335,7 @@ fn valueToWire(val: Value) !ValueWire {
     return switch (val) {
         .null => makeWire(@intFromEnum(WireTag.null), 0, 0),
         .boolean => |b| makeWire(@intFromEnum(WireTag.boolean), @intFromBool(b), 0),
-        .int => |n| makeWire(@intFromEnum(WireTag.number), @bitCast(@as(f64, n)), 0),
+        .int => |n| .{ .tag = @intFromEnum(WireTag.number), .flags = host_abi.FLAG_INTEGER, .reserved = 0, .payload = @bitCast(@as(f64, n)), .len = 0, .reserved2 = 0 },
         .float => |n| makeWire(@intFromEnum(WireTag.number), @bitCast(@as(f64, n)), 0),
         .decimal => |d| .{
             .tag = @intFromEnum(WireTag.number),
@@ -382,14 +386,30 @@ fn valueToWire(val: Value) !ValueWire {
             .named_value => |nv| return valueToWire(nv.value),
             .enum_value => |ev| makeWire(@intFromEnum(WireTag.string), @intFromPtr(ev.name.ptr), @intCast(ev.name.len)),
             .variant_value => |vv| {
-                const wires = (heap.bump(ValueWire, 4) orelse return makeWire(@intFromEnum(WireTag.null), 0, 0))[0..4];
+                const vtype = vv.typ.variant_type;
+                const arm_spec = vtype.arms[vv.ordinal];
+                const shared_count = @min(vv.shared_values.len, vtype.shared_fields.len);
+                const arm_field_count = @min(vv.arm_fields.len, arm_spec.fields.len);
+                const total_entries = 2 + shared_count + arm_field_count;
+                const wires = (heap.bump(ValueWire, total_entries * 2) orelse return makeWire(@intFromEnum(WireTag.null), 0, 0))[0..total_entries * 2];
                 wires[0] = try valueToWire(.{ .string = "tag" });
                 wires[1] = try valueToWire(.{ .string = vv.tag });
                 wires[2] = try valueToWire(.{ .string = "value" });
                 wires[3] = try valueToWire(vv.payload);
-                return makeWire(@intFromEnum(WireTag.map), @intFromPtr(wires.ptr), 2);
+                var wi: usize = 2;
+                for (vtype.shared_fields[0..shared_count], vv.shared_values[0..shared_count]) |spec, sv| {
+                    wires[wi * 2] = try valueToWire(.{ .string = spec.name });
+                    wires[wi * 2 + 1] = try valueToWire(sv);
+                    wi += 1;
+                }
+                for (arm_spec.fields[0..arm_field_count], vv.arm_fields[0..arm_field_count]) |spec, af| {
+                    wires[wi * 2] = try valueToWire(.{ .string = spec.name });
+                    wires[wi * 2 + 1] = try valueToWire(af);
+                    wi += 1;
+                }
+                return makeWire(@intFromEnum(WireTag.map), @intFromPtr(wires.ptr), @intCast(total_entries));
             },
-            else => makeWire(@intFromEnum(WireTag.null), 0, 0),
+            else => return error.UnsupportedWireType,
         },
     };
 }
@@ -490,6 +510,10 @@ export fn engine_init() i32 {
 
 export fn engine_init_with_config(config_ptr: PtrInt) i32 {
     g_init_error_len = 0;
+    if (config_ptr == 0) {
+        setInitError("engine_init_with_config: config pointer is null");
+        return -3;
+    }
     const config = @as(*const InstanceConfig, @ptrFromInt(@as(usize, @intCast(config_ptr)))).*;
 
     const ceiling_heap = cfg.heap_size_bytes;
@@ -521,10 +545,20 @@ export fn engine_destroy(handle: i32) void {
     const idx = if (handle > 0 and handle <= MaxEngines) @as(usize, @intCast(handle - 1)) else return;
     engine_slots[idx].engine.deinitInPlace();
     engine_slots[idx].active = false;
+    // If this was the last active engine, tear down all process-global state so
+    // that the next engine_init() starts clean.
+    for (&engine_slots) |*s| {
+        if (s.active) return;
+    }
+    io.clearWriteOverrides();
+    http_state.resetHandler();
+    net_state.resetHandlers();
+    fs_state.clearMounts();
 }
 
 export fn engine_run(handle: i32, src_ptr: PtrInt, src_len: i32) i32 {
     const engine = getEngine(handle) orelse return -1;
+    if (src_len < 0) { engine.setError("engine_run: src_len must not be negative"); return -1; }
     const src = wasmSlice(src_ptr, src_len);
     setupHostModules(engine);
     const res = engine.runtime.run(src);
@@ -543,6 +577,7 @@ export fn engine_run(handle: i32, src_ptr: PtrInt, src_len: i32) i32 {
 
 export fn engine_run_path(handle: i32, src_ptr: PtrInt, src_len: i32, path_ptr: PtrInt, path_len: i32) i32 {
     const engine = getEngine(handle) orelse return -1;
+    if (src_len < 0 or path_len < 0) { engine.setError("engine_run_path: lengths must not be negative"); return -1; }
     const src = wasmSlice(src_ptr, src_len);
     const path = wasmSlice(path_ptr, path_len);
     setupHostModules(engine);
@@ -566,15 +601,22 @@ export fn engine_call(handle: i32, name_ptr: PtrInt, name_len: i32, args_ptr: Pt
     setupHostModules(engine);
 
     var args: [64]Value = undefined;
+    if (argc < 0) {
+        engine.setError("engine_call: argc must not be negative");
+        return -3;
+    }
     if (argc > @as(i32, args.len)) {
         engine.setError("too many arguments: engine_call supports at most 64");
         return -3;
     }
-    const arg_count = @as(usize, @intCast(@max(argc, 0)));
+    const arg_count = @as(usize, @intCast(argc));
     if (argc > 0 and args_ptr != 0) {
         const wire_args = @as([*]const ValueWire, @ptrFromInt(@as(usize, @intCast(args_ptr))))[0..arg_count];
         for (wire_args, 0..) |wa, i| {
-            args[i] = wireToValue(wa);
+            args[i] = wireToValue(wa) catch {
+                engine.setError("argument wire conversion failed: out of memory");
+                return -2;
+            };
         }
     }
 
@@ -607,6 +649,7 @@ export fn engine_reset(handle: i32) void {
 
 export fn engine_add_source(handle: i32, path_ptr: PtrInt, path_len: i32, src_ptr: PtrInt, src_len: i32) i32 {
     const engine = getEngine(handle) orelse return -1;
+    if (path_len < 0 or src_len < 0) return -5;
     if (engine.source_count >= MaxSources) return -3;
 
     const path = wasmSlice(path_ptr, path_len);
@@ -628,7 +671,7 @@ export fn engine_add_source(handle: i32, path_ptr: PtrInt, path_len: i32, src_pt
     engine.source_count = sc + 1;
 
     engine.runtime.initWithPolicy(.{
-        .allow_io = true,
+        .allow_io = engine.runtime.inner.policy.allow_io,
         .module_sources = engine.source_entries[0..engine.source_count],
         .module_source_provider = sourceProviderFromLoader(engine),
     }) catch {
@@ -644,7 +687,7 @@ export fn engine_set_import_loader(handle: i32, load_fn: ?ImportLoaderFn, ctx: ?
     engine.import_loader_fn = load_fn;
     engine.import_loader_ctx = ctx;
     engine.runtime.initWithPolicy(.{
-        .allow_io = true,
+        .allow_io = engine.runtime.inner.policy.allow_io,
         .module_sources = engine.source_entries[0..engine.source_count],
         .module_source_provider = sourceProviderFromLoader(engine),
     }) catch {
@@ -677,6 +720,7 @@ export fn engine_register_module(handle: i32, name_ptr: PtrInt, name_len: i32, f
     slot.name_len = @as(usize, @intCast(name.len));
     @memcpy(slot.name[0..slot.name_len], name[0..slot.name_len]);
 
+    if (funcs_count > 0 and funcs_ptr == 0) return -4;
     const func_defs = @as([*]const HostModuleFuncDef, @ptrFromInt(@as(usize, @intCast(funcs_ptr))))[0..@as(usize, @intCast(funcs_count))];
     for (func_defs, 0..) |fd, i| {
         const fname = wasmSlice(fd.name_ptr, @intCast(fd.name_len));
@@ -708,7 +752,7 @@ fn setupHostModules(engine: *Engine) void {
         };
     }
     engine.runtime.setConfig(.{
-        .allow_io = true,
+        .allow_io = engine.runtime.inner.policy.allow_io,
         .native_backend = if (desc_count > 0) .host else .embedded,
         .module_sources = engine.source_entries[0..engine.source_count],
         .module_source_provider = sourceProviderFromLoader(engine),
@@ -729,7 +773,8 @@ export fn engine_last_error(handle: i32, out_ptr: PtrInt, out_max_len: i32) i32 
         }
         return e.last_error_len;
     }
-    // Fall back to init-time error when handle is 0 or invalid.
+    // Fall back to init-time error only when handle is the init sentinel (0).
+    if (handle != 0) return 0;
     const len = @min(@as(usize, @intCast(g_init_error_len)), @as(usize, @intCast(@max(out_max_len, 0))));
     if (len > 0 and out_ptr != 0) {
         const dest = wasmSliceMut(out_ptr, @intCast(len));
@@ -758,6 +803,8 @@ export fn engine_set_net_handlers(handle: i32, handlers: ?*const net_state.Gengo
     _ = getEngine(handle) orelse return;
     if (handlers) |h| {
         net_state.setNetHandlers(h.*, userdata);
+    } else {
+        net_state.resetHandlers();
     }
 }
 
@@ -765,6 +812,8 @@ export fn engine_set_http_handler(handle: i32, callback: ?http_state.GengoHttpFe
     _ = getEngine(handle) orelse return;
     if (callback) |cb| {
         http_state.setHttpHandler(cb, userdata);
+    } else {
+        http_state.resetHandler();
     }
 }
 
@@ -773,6 +822,7 @@ export fn engine_set_http_handler(handle: i32, callback: ?http_state.GengoHttpFe
 /// Returns 0 on success, -1 on invalid handle, -2 on invalid mount.
 export fn engine_mount_dir(handle: i32, name_ptr: PtrInt, name_len: i32, path_ptr: PtrInt, path_len: i32) i32 {
     _ = getEngine(handle) orelse return -1;
+    if (name_len < 0 or path_len < 0) return -2;
     const name = wasmSlice(name_ptr, name_len);
     const path = wasmSlice(path_ptr, path_len);
     fs_state.addMount(name, path) catch return -2;
