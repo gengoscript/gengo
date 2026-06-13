@@ -358,6 +358,27 @@ fn testReplIncremental() void {
     );
     if (r15 != .ok) fail("engine FAIL: repl type annotation in func param\n");
 
+    // Enum subtype member access across REPL lines (#115)
+    const rt5 = initWithAllowIO(false);
+    const r16 = rt5.runIncremental("type Days enum { mon, sat, sun }");
+    if (r16 != .ok) fail("engine FAIL: repl enum type decl (#115)\n");
+    const r17 = rt5.runIncremental("subtype Weekend Days { sat, sun }");
+    if (r17 != .ok) fail("engine FAIL: repl enum subtype decl (#115)\n");
+    const r18 = rt5.runIncremental("_ = Weekend.sat");
+    if (r18 != .ok) fail("engine FAIL: repl enum subtype member access (#115)\n");
+
+    // Enum subtype member VALIDATION must persist across REPL lines (#115):
+    // the parent enum's member list must be available so an out-of-set member
+    // is rejected at declaration time, exactly as in file mode.
+    const rt6 = initWithAllowIO(false);
+    const r19 = rt6.runIncremental("type Colors enum { red, green, blue }");
+    if (r19 != .ok) fail("engine FAIL: repl enum type decl for validation (#115)\n");
+    const r20 = rt6.runIncremental("subtype Warm Colors { orange }");
+    switch (r20) {
+        .compile_error => {},
+        else => fail("engine FAIL: repl enum subtype must reject non-parent member (#115)\n"),
+    }
+
     out("  repl incremental: OK\n");
 }
 
