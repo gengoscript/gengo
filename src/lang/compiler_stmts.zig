@@ -265,6 +265,7 @@ pub fn compileFuncWithPrefix(c: anytype, prefix: []const []const u8, is_named: b
         const is_named_returns = c.cur.typ == .ident and
             (c.peekToken().typ == .ident or c.peekToken().typ == .question or c.peekToken().typ == .kw_func or c.peekToken().typ == .lbracket);
         while (true) {
+            if (return_count >= MaxLocals) { c.setErr("too many return types (max {d})", .{MaxLocals}); return error.TooManyParams; }
             if (is_named_returns) {
                 if (c.cur.typ != .ident) return c.err("expected identifier, found {s}", .{c.tokenName(c.cur.typ)});
                 if (c.isKnownTypeName(c.cur.src))

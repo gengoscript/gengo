@@ -1,0 +1,2 @@
+type Color enum { Red, Green, Blue }
+subtype WarmColors Color { Red, Green, Red }
