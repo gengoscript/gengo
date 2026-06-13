@@ -1,0 +1,20 @@
+std := import("std")
+type Day enum { Mon, Tue, Wed, Thu, Fri, Sat, Sun }
+
+// Build a map with enum keys that will be promoted to hashed once it exceeds 8 entries.
+days := {}
+for d in [Day.Mon, Day.Tue, Day.Wed, Day.Thu, Day.Fri, Day.Sat, Day.Sun] {
+    days[d] = "ok"
+}
+
+// Force a fresh enum_value allocation for each lookup by creating the enum
+// member value again in the expression.  If the hash function uses only pointer
+// identity, the fresh enum_value will have a different address and the lookup
+// will miss.
+std.io.println(days[Day.Mon])
+std.io.println(days[Day.Tue])
+std.io.println(days[Day.Wed])
+std.io.println(days[Day.Thu])
+std.io.println(days[Day.Fri])
+std.io.println(days[Day.Sat])
+std.io.println(days[Day.Sun])
