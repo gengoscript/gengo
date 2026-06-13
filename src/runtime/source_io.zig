@@ -118,3 +118,14 @@ pub fn readFile(path: []const u8, buf: []u8) !usize {
     }
     return total;
 }
+
+test "readFile returns InputTooLong when file exceeds buffer" {
+    const tmp = "/tmp/gengo_test_input_too_long.txt";
+    const fd = std.posix.openat(std.posix.AT.FDCWD, tmp, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, 0o644) catch unreachable;
+    defer _ = std.posix.system.close(fd);
+    const data = "x" ** 1024;
+    _ = std.posix.system.write(fd, data.ptr, data.len);
+    var buf: [512]u8 = undefined;
+    const result = readFile(tmp, &buf);
+    try std.testing.expectError(error.InputTooLong, result);
+}

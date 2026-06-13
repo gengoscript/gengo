@@ -99,7 +99,7 @@ fn jsonValueToGengo(jv: std.json.Value) !Value {
     };
 }
 
-const MaxDepth = 64;
+const MaxDepth = 32;
 
 fn jsonStringifyValueDepth(s: *std.json.Stringify, gv: Value, depth: u32, ancestors: *[MaxDepth]*const Object, anc_count: *usize) !void {
     if (depth >= MaxDepth) {
