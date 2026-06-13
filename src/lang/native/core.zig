@@ -650,15 +650,23 @@ fn cloneObject(src: *Object, visits: []CloneVisit, visit_len: *usize) anyerror!V
         },
         .variant_value => |vv| {
             const out_obj = try vmgc.vmAllocObject();
-            out_obj.* = .{ .array = &[_]Value{} };
+            out_obj.* = .{ .variant_value = .{ .typ = vv.typ, .tag = vv.tag, .ordinal = vv.ordinal, .payload = .null, .shared_values = &[_]Value{}, .arm_fields = &[_]Value{} } };
             try vms.pushTempRoot(.{ .object = out_obj });
             defer vms.popTempRoot();
             try cloneRemember(src, out_obj, visits, visit_len);
             var shared = try vmgc.vmAllocManagedSlice(Value, vv.shared_values.len);
-            for (vv.shared_values, 0..) |sv, i| shared[i] = try cloneValue(sv, visits, visit_len);
+            out_obj.variant_value.shared_values = shared[0..0]; // publish immediately
+            for (vv.shared_values, 0..) |sv, i| {
+                shared[i] = try cloneValue(sv, visits, visit_len);
+                out_obj.variant_value.shared_values = shared[0 .. i + 1]; // grow visible
+            }
             var arm = try vmgc.vmAllocManagedSlice(Value, vv.arm_fields.len);
-            for (vv.arm_fields, 0..) |af, i| arm[i] = try cloneValue(af, visits, visit_len);
-            out_obj.* = .{ .variant_value = .{ .typ = vv.typ, .tag = vv.tag, .ordinal = vv.ordinal, .payload = try cloneValue(vv.payload, visits, visit_len), .shared_values = shared, .arm_fields = arm } };
+            out_obj.variant_value.arm_fields = arm[0..0]; // publish immediately
+            for (vv.arm_fields, 0..) |af, i| {
+                arm[i] = try cloneValue(af, visits, visit_len);
+                out_obj.variant_value.arm_fields = arm[0 .. i + 1]; // grow visible
+            }
+            out_obj.variant_value.payload = try cloneValue(vv.payload, visits, visit_len);
             return .{ .object = out_obj };
         },
     }
