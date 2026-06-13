@@ -373,11 +373,11 @@ pub const Session = struct {
                     if (self.isHostModule(name.src)) continue;
                     if (name.src.len > 4 and std.mem.startsWith(u8, name.src, "cap:")) continue;
                     const resolved = try self.resolveImportPath(importer_path, name.src);
-                    if (count >= MaxImportsPerModule) {
-                        self.last_error_path = importer_path;
-                        return error.ModuleLimitExceeded;
-                    }
                     if (!containsPath(imports[0..count], lens[0..count], resolved)) {
+                        if (count >= MaxImportsPerModule) {
+                            self.last_error_path = importer_path;
+                            return error.ModuleLimitExceeded;
+                        }
                         @memcpy(imports[count][0..resolved.len], resolved);
                         lens[count] = resolved.len;
                         count += 1;
