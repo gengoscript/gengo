@@ -172,6 +172,12 @@ const Engine = struct {
         self.last_error_len = @intCast(len);
     }
 
+    fn clearError(self: *Engine) void {
+        self.last_error_len = 0;
+        self.last_error_line = 0;
+        self.last_error_col = 0;
+    }
+
     fn setCompileError(self: *Engine, e: api.CompileError) void {
         self.last_error_line = e.line;
         self.last_error_col = e.col;
@@ -523,7 +529,7 @@ export fn engine_run(handle: i32, src_ptr: PtrInt, src_len: i32) i32 {
     setupHostModules(engine);
     const res = engine.runtime.run(src);
     return switch (res) {
-        .ok => 0,
+        .ok => { engine.clearError(); return 0; },
         .compile_error => |e| {
             engine.setCompileError(e);
             return -1;
@@ -542,7 +548,7 @@ export fn engine_run_path(handle: i32, src_ptr: PtrInt, src_len: i32, path_ptr: 
     setupHostModules(engine);
     const res = engine.runtime.runPath(src, path);
     return switch (res) {
-        .ok => 0,
+        .ok => { engine.clearError(); return 0; },
         .compile_error => |e| {
             engine.setCompileError(e);
             return -1;
@@ -560,7 +566,11 @@ export fn engine_call(handle: i32, name_ptr: PtrInt, name_len: i32, args_ptr: Pt
     setupHostModules(engine);
 
     var args: [64]Value = undefined;
-    const arg_count = @min(@as(usize, @intCast(@max(argc, 0))), args.len);
+    if (argc > @as(i32, args.len)) {
+        engine.setError("too many arguments: engine_call supports at most 64");
+        return -3;
+    }
+    const arg_count = @as(usize, @intCast(@max(argc, 0)));
     if (argc > 0 and args_ptr != 0) {
         const wire_args = @as([*]const ValueWire, @ptrFromInt(@as(usize, @intCast(args_ptr))))[0..arg_count];
         for (wire_args, 0..) |wa, i| {
@@ -579,6 +589,7 @@ export fn engine_call(handle: i32, name_ptr: PtrInt, name_len: i32, args_ptr: Pt
             if (out_ptr != 0) {
                 @as(*ValueWire, @ptrFromInt(@as(usize, @intCast(out_ptr)))).* = wire;
             }
+            engine.clearError();
             return 0;
         },
         .runtime_error => |e| {
@@ -590,6 +601,7 @@ export fn engine_call(handle: i32, name_ptr: PtrInt, name_len: i32, args_ptr: Pt
 
 export fn engine_reset(handle: i32) void {
     const engine = getEngine(handle) orelse return;
+    engine.clearError();
     engine.runtime.reset();
 }
 
@@ -661,13 +673,16 @@ export fn engine_register_module(handle: i32, name_ptr: PtrInt, name_len: i32, f
     if (!validateModuleName(name)) return -5;
 
     const slot = &engine.host_module_entries[engine.host_module_count];
-    slot.name_len = @min(@as(usize, @intCast(name.len)), slot.name.len);
+    if (name.len > slot.name.len) return -5;
+    slot.name_len = @as(usize, @intCast(name.len));
     @memcpy(slot.name[0..slot.name_len], name[0..slot.name_len]);
 
     const func_defs = @as([*]const HostModuleFuncDef, @ptrFromInt(@as(usize, @intCast(funcs_ptr))))[0..@as(usize, @intCast(funcs_count))];
     for (func_defs, 0..) |fd, i| {
         const fname = wasmSlice(fd.name_ptr, @intCast(fd.name_len));
-        const flen = @min(@as(usize, @intCast(fname.len)), engine.host_module_func_name_bufs[engine.host_module_count][i].len);
+        if (fname.len > engine.host_module_func_name_bufs[engine.host_module_count][i].len) return -5;
+        if (fd.arity > 255) return -4;
+        const flen = @as(usize, @intCast(fname.len));
         @memcpy(engine.host_module_func_name_bufs[engine.host_module_count][i][0..flen], fname[0..flen]);
         engine.host_module_func_name_lens[engine.host_module_count][i] = flen;
         const call_id = engine.next_host_call_id;
