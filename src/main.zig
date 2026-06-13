@@ -48,6 +48,13 @@ fn readSource(maybe_path: ?[]const u8, buf: []u8) !usize {
             if (nread == 0) break;
             total += nread;
         }
+        if (total == buf.len) {
+            var probe: [1]u8 = undefined;
+            var iov = [1]std.os.wasi.iovec_t{.{ .base = &probe, .len = 1 }};
+            var nread: usize = 0;
+            const rc = std.os.wasi.fd_read(0, &iov, iov.len, &nread);
+            if (rc == .SUCCESS and nread > 0) return error.InputTooLong;
+        }
         return total;
     }
     if (comptime builtin.os.tag == .windows) {
@@ -61,6 +68,12 @@ fn readSource(maybe_path: ?[]const u8, buf: []u8) !usize {
             if (!ok.toBool() or nread == 0) break;
             total += nread;
         }
+        if (total == buf.len) {
+            var probe: [1]u8 = undefined;
+            var nread: w32.DWORD = 0;
+            const ok = ReadFile(handle, &probe, 1, &nread, null);
+            if (ok.toBool() and nread > 0) return error.InputTooLong;
+        }
         return total;
     }
     var total: usize = 0;
@@ -68,6 +81,11 @@ fn readSource(maybe_path: ?[]const u8, buf: []u8) !usize {
         const n = try std.posix.read(std.posix.STDIN_FILENO, buf[total..]);
         if (n == 0) break;
         total += n;
+    }
+    if (total == buf.len) {
+        var probe: [1]u8 = undefined;
+        const n = std.posix.read(std.posix.STDIN_FILENO, &probe) catch @as(usize, 0);
+        if (n > 0) return error.InputTooLong;
     }
     return total;
 }
@@ -340,7 +358,13 @@ fn runCli(argv: []const []const u8) void {
         runReplMode(backend, max_ops, if (cap_count > 0) cap_names[0..cap_count] else &.{});
     }
 
-    const total = readSource(script_path, &g_src_buf) catch {
+    const total = readSource(script_path, &g_src_buf) catch |err| {
+        if (err == error.InputTooLong) {
+            io.werr("gengo: input is larger than max_input_bytes (");
+            io.werrInt(cfg.max_input_bytes);
+            io.werr("); configure a larger preset\n");
+            die(1);
+        }
         if (script_path) |p| {
             io.werr("gengo: cannot open: ");
             io.werr(p);

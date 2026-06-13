@@ -12,7 +12,19 @@ const host_abi = @import("../../runtime/host_abi.zig");
 const host_abi_mod = @import("host_abi.zig");
 const MaxNativeArgs = @import("native_ids.zig").MaxNativeArgs;
 
+const PrintMaxDepth = 64;
+
 pub fn sprintValue(buf_or_null: ?[]u8, v: Value) !usize {
+    var ancestors: [PrintMaxDepth]*const Object = undefined;
+    var anc_count: usize = 0;
+    return sprintValueDepth(buf_or_null, v, 0, &ancestors, &anc_count);
+}
+
+fn sprintValueDepth(buf_or_null: ?[]u8, v: Value, depth: u32, ancestors: *[PrintMaxDepth]*const Object, anc_count: *usize) !usize {
+    if (depth >= PrintMaxDepth) {
+        if (buf_or_null) |buf| @memcpy(buf[0..3], "...");
+        return 3;
+    }
     if (@import("../value.zig").decimalRawAndScale(v)) |drs| {
         var tmp: [64]u8 = undefined;
         const s = @import("../value.zig").formatDecimalString(drs.raw, drs.scale, &tmp);
@@ -96,8 +108,18 @@ pub fn sprintValue(buf_or_null: ?[]u8, v: Value) !usize {
             }
             return len;
         },
-        .object => |obj| switch (obj.*) {
-            .dyn_string => |s| {
+        .object => |obj| {
+            for (ancestors[0..anc_count.*]) |a| {
+                if (a == obj) {
+                    if (buf_or_null) |buf| @memcpy(buf[0..7], "<cycle>");
+                    return 7;
+                }
+            }
+            ancestors[anc_count.*] = obj;
+            anc_count.* += 1;
+            defer anc_count.* -= 1;
+            switch (obj.*) {
+                .dyn_string => |s| {
                 if (buf_or_null) |buf| @memcpy(buf[0..s.len], s);
                 return s.len;
             },
@@ -107,7 +129,7 @@ pub fn sprintValue(buf_or_null: ?[]u8, v: Value) !usize {
                 var needs_comma = false;
                 for (items) |item| {
                     if (needs_comma) len += 2;
-                    len += try sprintValue(null, item);
+                    len += try sprintValueDepth(null, item, depth + 1, ancestors, anc_count);
                     needs_comma = true;
                 }
                 len += 1;
@@ -117,7 +139,7 @@ pub fn sprintValue(buf_or_null: ?[]u8, v: Value) !usize {
                     needs_comma = false;
                     for (items) |item| {
                         if (needs_comma) { @memcpy(buf[pos..][0..2], ", "); pos += 2; }
-                        pos += try sprintValue(buf[pos..], item);
+                        pos += try sprintValueDepth(buf[pos..], item, depth + 1, ancestors, anc_count);
                         needs_comma = true;
                     }
                     buf[pos] = ']';
@@ -130,9 +152,9 @@ pub fn sprintValue(buf_or_null: ?[]u8, v: Value) !usize {
                 var needs_comma = false;
                 for (items) |item| {
                     if (needs_comma) len += 2;
-                    len += try sprintValue(null, item.key);
+                    len += try sprintValueDepth(null, item.key, depth + 1, ancestors, anc_count);
                     len += 2;
-                    len += try sprintValue(null, item.value);
+                    len += try sprintValueDepth(null, item.value, depth + 1, ancestors, anc_count);
                     needs_comma = true;
                 }
                 len += 1;
@@ -142,16 +164,16 @@ pub fn sprintValue(buf_or_null: ?[]u8, v: Value) !usize {
                     needs_comma = false;
                     for (items) |item| {
                         if (needs_comma) { @memcpy(buf[pos..][0..2], ", "); pos += 2; }
-                        pos += try sprintValue(buf[pos..], item.key);
+                        pos += try sprintValueDepth(buf[pos..], item.key, depth + 1, ancestors, anc_count);
                         @memcpy(buf[pos..][0..2], ": "); pos += 2;
-                        pos += try sprintValue(buf[pos..], item.value);
+                        pos += try sprintValueDepth(buf[pos..], item.value, depth + 1, ancestors, anc_count);
                         needs_comma = true;
                     }
                     buf[pos] = '}';
                 }
                 return len;
             },
-            .named_value => |nv| return try sprintValue(buf_or_null, nv.value),
+            .named_value => |nv| return try sprintValueDepth(buf_or_null, nv.value, depth + 1, ancestors, anc_count),
             .function => {
                 if (buf_or_null) |buf| @memcpy(buf[0..6], "<func>");
                 return 6;
@@ -251,11 +273,11 @@ pub fn sprintValue(buf_or_null: ?[]u8, v: Value) !usize {
                 var inner_len: usize = 0;
                 if (vv.arm_fields.len > 0) {
                     for (vv.arm_fields) |f| {
-                        inner_len += try sprintValue(null, f);
+                        inner_len += try sprintValueDepth(null, f, depth + 1, ancestors, anc_count);
                     }
                     inner_len += (vv.arm_fields.len - 1) * 2; // ", " separators
                 } else if (vv.payload != .null) {
-                    inner_len = try sprintValue(null, vv.payload);
+                    inner_len = try sprintValueDepth(null, vv.payload, depth + 1, ancestors, anc_count);
                 }
                 const open = if (vv.payload != .null or vv.arm_fields.len > 0) "(" else "";
                 const close = if (vv.payload != .null or vv.arm_fields.len > 0) ")" else "";
@@ -271,20 +293,21 @@ pub fn sprintValue(buf_or_null: ?[]u8, v: Value) !usize {
                         if (vv.arm_fields.len > 0) {
                             for (vv.arm_fields, 0..) |f, fi| {
                                 if (fi > 0) { @memcpy(buf[pos..][0..2], ", "); pos += 2; }
-                                pos += try sprintValue(buf[pos..], f);
+                                pos += try sprintValueDepth(buf[pos..], f, depth + 1, ancestors, anc_count);
                             }
                         } else {
-                            pos += try sprintValue(buf[pos..], vv.payload);
+                            pos += try sprintValueDepth(buf[pos..], vv.payload, depth + 1, ancestors, anc_count);
                         }
                         buf[pos] = ')'; pos += 1;
                     }
                 }
                 return len;
             },
-            else => {
+             else => {
                 if (buf_or_null) |buf| @memcpy(buf[0..4], "null");
                 return 4;
             },
+            }
         },
     }
 }

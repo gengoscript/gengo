@@ -196,7 +196,19 @@ pub fn writeF64(v: f64) void {
     write(digits[0..dlen]);
 }
 
+const PrintMaxDepth = 64;
+
 pub fn printValue(v: Value) void {
+    var ancestors: [PrintMaxDepth]*const vmod.Object = undefined;
+    var anc_count: usize = 0;
+    printValueDepth(v, 0, &ancestors, &anc_count);
+}
+
+fn printValueDepth(v: Value, depth: u32, ancestors: *[PrintMaxDepth]*const vmod.Object, anc_count: *usize) void {
+    if (depth >= PrintMaxDepth) {
+        write("...");
+        return;
+    }
     if (vmod.decimalRawAndScale(v)) |drs| {
         var tmp: [64]u8 = undefined;
         const s = vmod.formatDecimalString(drs.raw, drs.scale, &tmp);
@@ -216,117 +228,132 @@ pub fn printValue(v: Value) void {
             write(")");
         },
         .null => write("null"),
-        .object => |obj| switch (obj.*) {
-            .dyn_string => |s| write(s),
-            .array, .array_managed => |items| {
-                write("[");
-                for (items, 0..) |item, i| {
-                    if (i > 0) write(", ");
-                    printValue(item);
+        .object => |obj| {
+            // Cycle detection: if this object is in the ancestor chain, emit <cycle>.
+            for (ancestors[0..anc_count.*]) |a| {
+                if (a == obj) {
+                    write("<cycle>");
+                    return;
                 }
-                write("]");
-            },
-            .map, .map_managed => |items| {
-                write("{");
-                for (items, 0..) |item, i| {
-                    if (i > 0) write(", ");
-                    switch (item.key) {
-                        .string => |s| write(s),
-                        else => printValue(item.key),
-                    }
-                    write(": ");
-                    printValue(item.value);
-                }
-                write("}");
-            },
-            .map_hashed => |hm| {
-                write("{");
-                for (hm.entries[0..hm.len], 0..) |item, i| {
-                    if (i > 0) write(", ");
-                    switch (item.key) {
-                        .string => |s| write(s),
-                        else => printValue(item.key),
-                    }
-                    write(": ");
-                    printValue(item.value);
-                }
-                write("}");
-            },
-            .function => write("<func>"),
-            .closure => write("<closure>"),
-            .cell => write("<cell>"),
-            .native_function => write("<native-func>"),
-            .host_module_function => write("<host-func>"),
-            .struct_type => |st| {
-                write("<struct ");
-                write(st.name);
-                write(">");
-            },
-            .interface_type => |it| {
-                write("<interface ");
-                write(it.name);
-                write(">");
-            },
-            .named_type => |nt| {
-                write("<type ");
-                write(nt.name);
-                write(">");
-            },
-            .named_value => |nv| {
-                printValue(nv.value);
-            },
-            .enum_type => |et| {
-                write("<enum ");
-                write(et.name);
-                write(">");
-            },
-            .enum_value => |ev| {
-                write(ev.name);
-            },
-            .struct_instance => |inst| {
-                write(inst.typ.struct_type.name);
-                write("{");
-                for (inst.fields, 0..) |item, i| {
-                    if (i > 0) write(", ");
-                    switch (item.key) {
-                        .string => |s| write(s),
-                        else => printValue(item.key),
-                    }
-                    write(": ");
-                    printValue(item.value);
-                }
-                write("}");
-            },
-            .iterator => write("<iter>"),
-            .variant_type => |vt| {
-                write("<variant ");
-                write(vt.name);
-                write(">");
-            },
-            .variant_ctor => |vc| {
-                write(vc.typ.variant_type.name);
-                write(".");
-                write(vc.tag);
-            },
-            .variant_value => |vv| {
-                write(vv.typ.variant_type.name);
-                write(".");
-                write(vv.tag);
-                if (vv.arm_fields.len > 0) {
-                    write("(");
-                    for (vv.arm_fields, 0..) |f, i| {
+            }
+            // Push this object onto the ancestor chain.
+            ancestors[anc_count.*] = obj;
+            anc_count.* += 1;
+
+            switch (obj.*) {
+                .dyn_string => |s| write(s),
+                .array, .array_managed => |items| {
+                    write("[");
+                    for (items, 0..) |item, i| {
                         if (i > 0) write(", ");
-                        printValue(f);
+                        printValueDepth(item, depth + 1, ancestors, anc_count);
                     }
-                    write(")");
-                } else if (vv.payload != .null) {
-                    write("(");
-                    printValue(vv.payload);
-                    write(")");
-                }
-            },
-            .named_type_fn => write("<func>"),
-            .string_builder => write("<builder>"),
+                    write("]");
+                },
+                .map, .map_managed => |items| {
+                    write("{");
+                    for (items, 0..) |item, i| {
+                        if (i > 0) write(", ");
+                        switch (item.key) {
+                            .string => |s| write(s),
+                            else => printValueDepth(item.key, depth + 1, ancestors, anc_count),
+                        }
+                        write(": ");
+                        printValueDepth(item.value, depth + 1, ancestors, anc_count);
+                    }
+                    write("}");
+                },
+                .map_hashed => |hm| {
+                    write("{");
+                    for (hm.entries[0..hm.len], 0..) |item, i| {
+                        if (i > 0) write(", ");
+                        switch (item.key) {
+                            .string => |s| write(s),
+                            else => printValueDepth(item.key, depth + 1, ancestors, anc_count),
+                        }
+                        write(": ");
+                        printValueDepth(item.value, depth + 1, ancestors, anc_count);
+                    }
+                    write("}");
+                },
+                .function => write("<func>"),
+                .closure => write("<closure>"),
+                .cell => write("<cell>"),
+                .native_function => write("<native-func>"),
+                .host_module_function => write("<host-func>"),
+                .struct_type => |st| {
+                    write("<struct ");
+                    write(st.name);
+                    write(">");
+                },
+                .interface_type => |it| {
+                    write("<interface ");
+                    write(it.name);
+                    write(">");
+                },
+                .named_type => |nt| {
+                    write("<type ");
+                    write(nt.name);
+                    write(">");
+                },
+                .named_value => |nv| {
+                    printValueDepth(nv.value, depth + 1, ancestors, anc_count);
+                },
+                .enum_type => |et| {
+                    write("<enum ");
+                    write(et.name);
+                    write(">");
+                },
+                .enum_value => |ev| {
+                    write(ev.name);
+                },
+                .struct_instance => |inst| {
+                    write(inst.typ.struct_type.name);
+                    write("{");
+                    for (inst.fields, 0..) |item, i| {
+                        if (i > 0) write(", ");
+                        switch (item.key) {
+                            .string => |s| write(s),
+                            else => printValueDepth(item.key, depth + 1, ancestors, anc_count),
+                        }
+                        write(": ");
+                        printValueDepth(item.value, depth + 1, ancestors, anc_count);
+                    }
+                    write("}");
+                },
+                .iterator => write("<iter>"),
+                .variant_type => |vt| {
+                    write("<variant ");
+                    write(vt.name);
+                    write(">");
+                },
+                .variant_ctor => |vc| {
+                    write(vc.typ.variant_type.name);
+                    write(".");
+                    write(vc.tag);
+                },
+                .variant_value => |vv| {
+                    write(vv.typ.variant_type.name);
+                    write(".");
+                    write(vv.tag);
+                    if (vv.arm_fields.len > 0) {
+                        write("(");
+                        for (vv.arm_fields, 0..) |f, i| {
+                            if (i > 0) write(", ");
+                            printValueDepth(f, depth + 1, ancestors, anc_count);
+                        }
+                        write(")");
+                    } else if (vv.payload != .null) {
+                        write("(");
+                        printValueDepth(vv.payload, depth + 1, ancestors, anc_count);
+                        write(")");
+                    }
+                },
+                .named_type_fn => write("<func>"),
+                .string_builder => write("<builder>"),
+            }
+
+            anc_count.* -= 1;
         },
     }
 }

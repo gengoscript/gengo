@@ -178,6 +178,7 @@ pub const Runtime = struct {
     }
 
     pub fn runPathWithProvider(self: *Runtime, src: []const u8, path: []const u8, provider: module_compile.SourceProvider, test_mode: bool) !void {
+        if (src.len > cfg.max_input_bytes) return error.InputTooLong;
         self.last_compile_line = 0;
         self.last_compile_path_len = 0;
         self.last_compile_col = 0;
@@ -306,6 +307,7 @@ pub const Runtime = struct {
     // Run src without resetting globals or heap — allows successive REPL lines
     // to share definitions and allocated objects.
     pub fn runIncremental(self: *Runtime, src: []const u8) !void {
+        if (src.len > cfg.max_input_bytes) return error.InputTooLong;
         self.last_compile_line = 0;
         self.last_compile_path_len = 0;
         self.last_compile_col = 0;
