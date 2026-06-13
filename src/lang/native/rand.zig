@@ -10,6 +10,10 @@ const NativeFuncObj = @import("../value.zig").NativeFuncObj;
 var g_prng: std.Random.DefaultPrng = undefined;
 var g_prng_ready: bool = false;
 
+pub fn randResetState() void {
+    g_prng_ready = false;
+}
+
 pub fn randRng() std.Random {
     if (!g_prng_ready) {
         var seed: u64 = undefined;

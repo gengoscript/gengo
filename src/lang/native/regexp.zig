@@ -15,6 +15,10 @@ var regexp_type_cache: ?*Object = null;
 
 // ── Regex type helpers ───────────────────────────────────────────────────────
 
+pub fn reClearCache() void {
+    regexp_type_cache = null;
+}
+
 pub fn reGetType() !*Object {
     if (regexp_type_cache) |t| return t;
     const obj = try vmgc.vmAllocObject();
