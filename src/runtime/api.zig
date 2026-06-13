@@ -24,6 +24,7 @@ pub const Config = struct {
     allow_io: bool = true,
     native_backend: vm.Policy.NativeBackend = .embedded,
     max_ops: ?u64 = null,
+    enable_predicates: bool = true,
     heap_size_bytes: usize = cfg.heap_size_bytes,
     max_objects: usize = cfg.max_objects,
     max_stack: usize = cfg.max_stack,
@@ -72,6 +73,7 @@ pub const Runtime = struct {
                 .allow_io = config.allow_io,
                 .native_backend = config.native_backend,
                 .max_ops = config.max_ops,
+                .enable_predicates = config.enable_predicates,
             },
             config.heap_size_bytes,
             config.max_objects,
@@ -99,6 +101,7 @@ pub const Runtime = struct {
                 .allow_io = config.allow_io,
                 .native_backend = config.native_backend,
                 .max_ops = config.max_ops,
+                .enable_predicates = config.enable_predicates,
             },
             config.heap_size_bytes,
             config.max_objects,
@@ -128,6 +131,7 @@ pub const Runtime = struct {
             .allow_io = config.allow_io,
             .native_backend = config.native_backend,
             .max_ops = config.max_ops,
+            .enable_predicates = config.enable_predicates,
         });
         self.inner.host_modules = config.host_modules;
         self.inner.enabled_capabilities = config.capabilities;

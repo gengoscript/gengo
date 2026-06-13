@@ -96,6 +96,7 @@ pub const NamedTypeObj = struct {
     key_spec: ?FieldTypeSpec = null,   // for map_t: key type
     val_spec: ?FieldTypeSpec = null,   // for map_t: value type
     predicate: ?*Object = null,          // predicate closure (null if unconstrained)
+    predicate_msg: ?[]const u8 = null,   // custom failure message (null = generic)
 };
 pub const NamedValueObj = struct { typ: *Object, value: Value };
 pub const EnumTypeObj = struct {

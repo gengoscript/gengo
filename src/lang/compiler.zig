@@ -213,6 +213,7 @@ pub const Compiler = struct {
             .kw_subtype => "'subtype'",
             .kw_pub => "'pub'",
             .kw_test => "'test'",
+            .kw_message => "'message'",
             .kw_predicate => "'predicate'",
             .lparen => "'('",
             .rparen => "')'",

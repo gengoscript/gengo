@@ -18,6 +18,7 @@ const vmgc = @import("vm_gc.zig");
 const vmmap = @import("vm_map.zig");
 const vmstr = @import("vm_string.zig");
 const vmtyp = @import("vm_types.zig");
+const build_options = @import("build_options");
 const vmnative = @import("vm_native.zig");
 const vmperf = @import("vm_perf.zig");
 const io = @import("../runtime/io.zig");
@@ -376,6 +377,8 @@ fn enumTypeAllocValue(obj: *Object, member_name: []const u8) !Value {
 }
 
 fn checkNamedTypePredicate(nt_obj: *Object, inner: Value) !void {
+    if (comptime !build_options.predicates) return;
+    if (!vmState().policy.enable_predicates) return;
     const nt = nt_obj.named_type;
     if (nt.predicate) |pred| {
         const result = callFunction(.{ .object = pred }, &[_]Value{inner}) catch |err| {
@@ -385,9 +388,34 @@ fn checkNamedTypePredicate(nt_obj: *Object, inner: Value) !void {
             return err;
         };
         if (result != .boolean or !result.boolean) {
-            vms.setRuntimeErr("predicate failed for {s}", .{nt.name});
+            if (nt.predicate_msg) |msg| {
+                vms.setRuntimeErr("{s}", .{msg});
+            } else {
+                vms.setRuntimeErr("predicate failed for {s}", .{nt.name});
+            }
             return error.PredicateFailed;
         }
+    }
+}
+
+// Walk the parent chain and check each predicate in order (parent first).
+fn checkNamedTypePredicateChain(nt_obj: *Object, inner: Value) !void {
+    if (comptime !build_options.predicates) return;
+    if (!vmState().policy.enable_predicates) return;
+    // Collect all types in the chain from current to root.
+    var chain: [16]*Object = undefined;
+    var chain_len: usize = 0;
+    var cur: ?*Object = nt_obj;
+    while (cur) |t| {
+        if (chain_len >= chain.len) break;
+        chain[chain_len] = t;
+        chain_len += 1;
+        cur = vmtyp.resolveParentType(t);
+    }
+    // Evaluate from root to current (reverse order).
+    var i: usize = chain_len;
+    while (i > 0) : (i -= 1) {
+        try checkNamedTypePredicate(chain[i - 1], inner);
     }
 }
 
@@ -444,9 +472,7 @@ fn performCall(argc: u8) !void {
             if (argc != 1) return error.ArityMismatch;
             const arg = vmState().stack[vmState().stack_top - 1];
             const out = try vmtyp.constructNamedType(obj, arg);
-            if (obj.named_type.predicate) |_| {
-                try checkNamedTypePredicate(obj, out.object.named_value.value);
-            }
+            try checkNamedTypePredicateChain(obj, out.object.named_value.value);
             _ = try vmPop();
             _ = try vmPop();
             try vmPush(out);

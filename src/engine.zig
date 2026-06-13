@@ -402,37 +402,37 @@ fn valueToWireWithScratch(val: Value, scratch: *Engine) !ValueWire {
             },
             .array, .array_managed => {
                 const items = try vms.asArraySlice(obj);
-                const count = @min(items.len, scratch.wire_elem_buf.len);
+                if (items.len > scratch.wire_elem_buf.len) return error.WireBufferOverflow;
                 const wires = &scratch.wire_elem_buf;
-                scratch.wire_elem_count = @intCast(count);
-                for (items[0..count], 0..) |item, i| {
+                scratch.wire_elem_count = @intCast(items.len);
+                for (items, 0..) |item, i| {
                     wires[i] = try valueToWire(item);
                 }
-                return makeWire(@intFromEnum(WireTag.array), @intFromPtr(wires.ptr), @intCast(count));
+                return makeWire(@intFromEnum(WireTag.array), @intFromPtr(wires.ptr), @intCast(items.len));
             },
             .map, .map_managed, .map_hashed => {
                 const entries = try vms.asMapSlice(obj);
                 const max_entries = scratch.wire_elem_buf.len / 2;
-                const count = @min(entries.len, max_entries);
+                if (entries.len > max_entries) return error.WireBufferOverflow;
                 const wires = &scratch.wire_elem_buf;
-                scratch.wire_elem_count = @intCast(count * 2);
-                for (entries[0..count], 0..) |entry, i| {
+                scratch.wire_elem_count = @intCast(entries.len * 2);
+                for (entries, 0..) |entry, i| {
                     wires[i * 2] = try valueToWire(entry.key);
                     wires[i * 2 + 1] = try valueToWire(entry.value);
                 }
-                return makeWire(@intFromEnum(WireTag.map), @intFromPtr(wires.ptr), @intCast(count));
+                return makeWire(@intFromEnum(WireTag.map), @intFromPtr(wires.ptr), @intCast(entries.len));
             },
             .struct_instance => {
                 const entries = obj.struct_instance.fields;
                 const max_entries = scratch.wire_elem_buf.len / 2;
-                const count = @min(entries.len, max_entries);
+                if (entries.len > max_entries) return error.WireBufferOverflow;
                 const wires = &scratch.wire_elem_buf;
-                scratch.wire_elem_count = @intCast(count * 2);
-                for (entries[0..count], 0..) |entry, i| {
+                scratch.wire_elem_count = @intCast(entries.len * 2);
+                for (entries, 0..) |entry, i| {
                     wires[i * 2] = try valueToWire(entry.key);
                     wires[i * 2 + 1] = try valueToWire(entry.value);
                 }
-                return makeWire(@intFromEnum(WireTag.map), @intFromPtr(wires.ptr), @intCast(count));
+                return makeWire(@intFromEnum(WireTag.map), @intFromPtr(wires.ptr), @intCast(entries.len));
             },
             else => return try valueToWire(val),
         },
@@ -791,4 +791,63 @@ test "engine_add_source rejects path and source exceeding buffer" {
     const long_src = "b" ** (MaxSource + 1);
     const fail_src = engine_add_source(h3, @intCast(@intFromPtr(ok_path.ptr)), @intCast(ok_path.len), @intCast(@intFromPtr(long_src.ptr)), @intCast(long_src.len));
     try std.testing.expectEqual(-5, fail_src);
+}
+
+test "engine_call rejects wire serialization overflow" {
+    const h = engine_init();
+    try std.testing.expect(h > 0);
+
+    // Build a source string that returns an array with exactly 256 elements
+    var src_buf: [2048]u8 = undefined;
+    var src_len: usize = 0;
+    const prefix = "func ok() []int { return [";
+    @memcpy(src_buf[0..prefix.len], prefix);
+    src_len = prefix.len;
+    var i: usize = 0;
+    while (i < 256) : (i += 1) {
+        const n = std.fmt.bufPrint(src_buf[src_len..], "{d}", .{i}) catch break;
+        src_len += n.len;
+        if (i < 255) {
+            src_buf[src_len] = ',';
+            src_len += 1;
+        }
+    }
+    const suffix = "] }\n";
+    @memcpy(src_buf[src_len..][0..suffix.len], suffix);
+    src_len += suffix.len;
+
+    const ok = engine_run(h, @intCast(@intFromPtr(src_buf[0..src_len].ptr)), @intCast(src_len));
+    try std.testing.expectEqual(0, ok);
+
+    var out_wire: ValueWire = undefined;
+    const call_ok = engine_call(h, @intCast(@intFromPtr("ok".ptr)), 2, 0, 0, @intCast(@intFromPtr(&out_wire)));
+    try std.testing.expectEqual(0, call_ok);
+
+    // Build a source string that returns an array with 257 elements (one over)
+    const h2 = engine_init();
+    try std.testing.expect(h2 > 0);
+    var src_buf2: [2048]u8 = undefined;
+    var src_len2: usize = 0;
+    const prefix2 = "func fail() []int { return [";
+    @memcpy(src_buf2[0..prefix2.len], prefix2);
+    src_len2 = prefix2.len;
+    var j: usize = 0;
+    while (j < 257) : (j += 1) {
+        const n = std.fmt.bufPrint(src_buf2[src_len2..], "{d}", .{j}) catch break;
+        src_len2 += n.len;
+        if (j < 256) {
+            src_buf2[src_len2] = ',';
+            src_len2 += 1;
+        }
+    }
+    const suffix2 = "] }\n";
+    @memcpy(src_buf2[src_len2..][0..suffix2.len], suffix2);
+    src_len2 += suffix2.len;
+
+    const fail_run = engine_run(h2, @intCast(@intFromPtr(src_buf2[0..src_len2].ptr)), @intCast(src_len2));
+    try std.testing.expectEqual(0, fail_run);
+
+    var out_wire2: ValueWire = undefined;
+    const call_fail = engine_call(h2, @intCast(@intFromPtr("fail".ptr)), 4, 0, 0, @intCast(@intFromPtr(&out_wire2)));
+    try std.testing.expectEqual(-2, call_fail);
 }

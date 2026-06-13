@@ -935,6 +935,28 @@ fn testErrorReturn() void {
     out("  error return: OK\n");
 }
 
+fn testRuntimeDisablePredicates() void {
+    const rt = makeRt(.{ .allow_io = false, .enable_predicates = false });
+    const res = rt.run(
+        \\type PositiveInt int predicate func(x) { return x > 0 }
+        \\a := PositiveInt(-1)
+        \\func getA() PositiveInt { return a }
+    );
+    switch (res) {
+        .ok => {},
+        else => fail("engine FAIL: predicate disable should allow negative value\n"),
+    }
+    const call_res = rt.call("getA", &.{});
+    switch (call_res) {
+        .ok => |v| {
+            if (v != .object or v.object.* != .named_value) fail("engine FAIL: expected named value when predicates disabled\n");
+            if (v.object.named_value.value != .int or v.object.named_value.value.int != -1) fail("engine FAIL: expected -1 when predicates disabled\n");
+        },
+        else => fail("engine FAIL: expected call success when predicates disabled\n"),
+    }
+    out("  runtime disable predicates: OK\n");
+}
+
 fn testHttpCapability() void {
     var state: MockHttpState = .{};
     http_state.setHttpHandler(&mockHttpFetch, @ptrCast(&state));
@@ -1140,6 +1162,7 @@ export fn _start() void {
     testRuneReturn();
     testNamedTypeReturn();
     testErrorReturn();
+    testRuntimeDisablePredicates();
     testHttpCapability();
     out("engine-api OK\n");
     runCapHttpConformance();

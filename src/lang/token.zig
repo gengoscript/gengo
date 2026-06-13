@@ -38,6 +38,7 @@ pub const TT = enum {
     kw_pub,
     kw_test,
     kw_predicate,
+    kw_message,
     lparen,
     rparen,
     lbrace,
