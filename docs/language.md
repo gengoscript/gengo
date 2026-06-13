@@ -234,6 +234,28 @@ type Days enum { mon, tue, wed, thu, fri, sat, sun }
 subtype Weekend Days { sat, sun }
 ```
 
+Predicate types attach an arbitrary boolean check to a named scalar type. The predicate fires every time a value is constructed or cast into the type. If it returns `false`, the script panics:
+
+```gengo
+type Port      int   predicate func(x) { return x >= 1 && x <= 65535 }
+type Tag       string predicate func(s) { return std.core.len(s) > 0 }
+type EventCode int   predicate func(x) { return x % 2 == 0 }
+
+p := Port(8080)    // ok
+// Port(0)         // runtime predicate violation
+// EventCode(3)    // runtime predicate violation
+```
+
+The predicate parameter name is arbitrary; the compiler infers its type from the base type and requires a `bool` return. The predicate is a closure and may close over variables and functions from the enclosing scope:
+
+```gengo
+max_retries := 5
+
+type RetryCount int predicate func(n) { return n >= 0 && n <= max_retries }
+```
+
+Predicates work on any scalar base type (`int`, `float`, `string`, `bool`, `rune`). They cannot be declared on collection types, enums, or variants.
+
 ## Enums and Variants
 
 Enums provide closed sets of values:
