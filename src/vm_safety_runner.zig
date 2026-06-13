@@ -106,14 +106,14 @@ fn runSetNamedPredicateTypeError() !void {
 fn runRuntimeIsolation() !void {
     const alloc = std.heap.page_allocator;
     const rt1 = try alloc.create(Runtime);
-    rt1.initWithPolicy(.{ .allow_io = false, .native_backend = .embedded });
+    try rt1.initWithPolicy(.{ .allow_io = false, .native_backend = .embedded });
     try rt1.run(
         \\x := 11
         \\func read() int { return x }
     );
 
     const rt2 = try alloc.create(Runtime);
-    rt2.initWithPolicy(.{ .allow_io = false, .native_backend = .embedded });
+    try rt2.initWithPolicy(.{ .allow_io = false, .native_backend = .embedded });
     try rt2.run(
         \\x := 99
         \\func read() int { return x }

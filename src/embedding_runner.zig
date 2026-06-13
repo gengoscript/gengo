@@ -23,12 +23,12 @@ fn fail(msg: []const u8) noreturn {
 
 fn makeRt(config: api.Config) *api.Runtime {
     const rt = std.heap.page_allocator.create(api.Runtime) catch fail("embedding: out of memory\n");
-    rt.initWithPolicy(config);
+    rt.initWithPolicy(config) catch fail("embedding: runtime init failed\n");
     return rt;
 }
 
 fn expectInitByValue() void {
-    var rt = api.Runtime.init(.{ .allow_io = false });
+    var rt = api.Runtime.init(.{ .allow_io = false }) catch fail("embedding: runtime init failed\n");
     defer rt.deinit();
     const res = rt.run(
         \\func answer() int { return 42 }

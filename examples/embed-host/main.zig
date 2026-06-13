@@ -5,7 +5,7 @@ const Value = gengo.Value;
 
 pub fn main() !void {
     var rt: api.Runtime = undefined;
-    rt.initWithPolicy(.{ .allow_io = false, .max_ops = 200000 });
+    try rt.initWithPolicy(.{ .allow_io = false, .max_ops = 200000 });
     defer rt.deinit();
 
     const setup = rt.run(

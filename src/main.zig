@@ -205,7 +205,10 @@ fn runReplMode(backend: vm.Policy.NativeBackend, max_ops: ?u64, caps: []const []
         .allow_io = true,
         .native_backend = backend,
         .max_ops = max_ops,
-    });
+    }) catch {
+        io.werr("gengo: runtime init failed\n");
+        die(1);
+    };
     repl_rt.enabled_capabilities = caps;
     io.write("Gengo REPL  (Ctrl+D to exit)\n");
     while (true) {
@@ -384,7 +387,10 @@ fn runCli(argv: []const []const u8) void {
         .allow_io = true,
         .native_backend = backend,
         .max_ops = max_ops,
-    });
+    }) catch {
+        io.werr("gengo: runtime init failed\n");
+        die(1);
+    };
     if (cap_count > 0) {
         runtime.enabled_capabilities = cap_names[0..cap_count];
     }

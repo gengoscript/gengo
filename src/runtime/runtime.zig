@@ -120,15 +120,15 @@ pub const Runtime = struct {
     // Initialize this Runtime in-place without allocating a large stack temporary.
     // Use this instead of withPolicy() when the Runtime is already heap-allocated
     // or when the shadow stack is too small to hold a temporary copy (e.g. WASM with large presets).
-    pub fn initWithPolicy(self: *Runtime, policy: vm.Policy) void {
-        initWithConfig(self, policy, heap.HeapSize, heap.MaxObjects, vms.MaxStack, vms.MaxFrames, cfg.max_defers, std.heap.page_allocator);
+    pub fn initWithPolicy(self: *Runtime, policy: vm.Policy) !void {
+        try initWithConfig(self, policy, heap.HeapSize, heap.MaxObjects, vms.MaxStack, vms.MaxFrames, cfg.max_defers, std.heap.page_allocator);
     }
 
-    pub fn initWithConfig(self: *Runtime, policy: vm.Policy, heap_size: usize, max_objects: usize, max_stack: usize, max_frames: usize, max_defers: usize, allocator: std.mem.Allocator) void {
+    pub fn initWithConfig(self: *Runtime, policy: vm.Policy, heap_size: usize, max_objects: usize, max_stack: usize, max_frames: usize, max_defers: usize, allocator: std.mem.Allocator) !void {
         @memset(std.mem.asBytes(self), 0);
         self.policy = policy;
-        self.heap_state.init(heap_size, max_objects, allocator) catch return;
-        self.vm_state.init(max_stack, max_frames, max_defers, heap_size, allocator) catch return;
+        try self.heap_state.init(heap_size, max_objects, allocator);
+        try self.vm_state.init(max_stack, max_frames, max_defers, heap_size, allocator);
         chunk.setActive(&self.chunk_state);
         globals.setActive(&self.globals_state);
         chunk.reset();

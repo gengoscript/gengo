@@ -73,6 +73,12 @@ const HostModuleCallIdBase = 0x1000;
 var g_init_error: [MaxErrorLen]u8 = undefined;
 var g_init_error_len: u16 = 0;
 
+fn setInitError(msg: []const u8) void {
+    const len = @min(msg.len, g_init_error.len);
+    @memcpy(g_init_error[0..len], msg[0..len]);
+    g_init_error_len = @intCast(len);
+}
+
 const SourceEntry = struct {
     path: []const u8,
     src: []const u8,
@@ -125,18 +131,18 @@ const Engine = struct {
     import_loader_ctx: ?*anyopaque = null,
     import_scratch: [MaxImportScratch]u8 = undefined,
 
-    fn initInPlaceDefault(self: *Engine) void {
+    fn initInPlaceDefault(self: *Engine) !void {
         self.source_count = 0;
         self.host_module_count = 0;
         self.next_host_call_id = HostModuleCallIdBase;
         self.last_error_len = 0;
         self.last_error_line = 0;
         self.last_error_col = 0;
-        self.runtime.initWithPolicy(.{ .allow_io = true });
+        try self.runtime.initWithPolicy(.{ .allow_io = true });
         io.setWriteOverrides(engineWrite, engineWerr);
     }
 
-    fn initInPlaceWithConfig(self: *Engine, ic: InstanceConfig) void {
+    fn initInPlaceWithConfig(self: *Engine, ic: InstanceConfig) !void {
         self.source_count = 0;
         self.host_module_count = 0;
         self.next_host_call_id = HostModuleCallIdBase;
@@ -144,7 +150,7 @@ const Engine = struct {
         self.last_error_line = 0;
         self.last_error_col = 0;
         const max_ops: ?u64 = if (ic.max_ops < 0) null else @intCast(ic.max_ops);
-        self.runtime.inner.initWithConfig(
+        try self.runtime.inner.initWithConfig(
             .{ .allow_io = ic.allow_io, .max_ops = max_ops },
             ic.heap_size_bytes,
             ic.max_objects,
@@ -465,7 +471,10 @@ export fn engine_init() i32 {
     g_init_error_len = 0;
     for (&engine_slots, 0..) |*slot, i| {
         if (!slot.active) {
-            slot.engine.initInPlaceDefault();
+            slot.engine.initInPlaceDefault() catch {
+                setInitError("engine_init: allocation failed");
+                return -4;
+            };
             slot.active = true;
             return @as(i32, @intCast(i + 1));
         }
@@ -491,7 +500,10 @@ export fn engine_init_with_config(config_ptr: PtrInt) i32 {
 
     for (&engine_slots, 0..) |*slot, i| {
         if (!slot.active) {
-            slot.engine.initInPlaceWithConfig(config);
+            slot.engine.initInPlaceWithConfig(config) catch {
+                setInitError("engine_init_with_config: allocation failed");
+                return -4;
+            };
             slot.active = true;
             return @as(i32, @intCast(i + 1));
         }
@@ -604,7 +616,10 @@ export fn engine_add_source(handle: i32, path_ptr: PtrInt, path_len: i32, src_pt
         .allow_io = true,
         .module_sources = engine.source_entries[0..engine.source_count],
         .module_source_provider = sourceProviderFromLoader(engine),
-    });
+    }) catch {
+        setInitError("engine_add_source: runtime re-init failed");
+        return -4;
+    };
 
     return 0;
 }
@@ -617,7 +632,10 @@ export fn engine_set_import_loader(handle: i32, load_fn: ?ImportLoaderFn, ctx: ?
         .allow_io = true,
         .module_sources = engine.source_entries[0..engine.source_count],
         .module_source_provider = sourceProviderFromLoader(engine),
-    });
+    }) catch {
+        setInitError("engine_set_import_loader: runtime re-init failed");
+        return -4;
+    };
     return 0;
 }
 
