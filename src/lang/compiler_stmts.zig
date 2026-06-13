@@ -85,11 +85,16 @@ pub fn block(c: anytype) anyerror!void {
 pub fn cForStmt(c: anytype) anyerror!void {
     const local_base: u8 = if (c.inFunc()) c.currentScope().local_count else 0;
 
+    var loop_var_name: ?[]const u8 = null;
+    c.in_loop_init = true;
     if (c.match(.semicolon)) {} else if (c.check(.ident) and c.peekTT() == .colon_eq) {
+        loop_var_name = c.cur.src;
         try varDecl(c, false, false);
     } else if (c.check(.ident) and c.isTypedVarDecl()) {
+        loop_var_name = c.cur.src;
         try varDecl(c, false, false);
     } else if (c.match(.kw_const)) {
+        if (c.cur.typ == .ident) loop_var_name = c.cur.src;
         try varDecl(c, true, true);
     } else if (c.check(.ident) and c.peekTT() == .eq) {
         try assignStmt(c, );
@@ -98,6 +103,7 @@ pub fn cForStmt(c: anytype) anyerror!void {
         try chunk.emitOp(.pop, c.prev.line);
         try c.consume(.semicolon);
     }
+    c.in_loop_init = false;
 
     var loop_start = chunk.codeLen();
     var exit_j: ?usize = null;
@@ -133,8 +139,18 @@ pub fn cForStmt(c: anytype) anyerror!void {
     }
 
     try c.pushLoop(loop_start, local_base, c.loopKeepBase(), 0);
+    if (loop_var_name) |name| {
+        if (c.resolveLocal(name)) |slot| {
+            c.currentLoop().loop_var_slots[c.currentLoop().loop_var_count] = slot;
+            c.currentLoop().loop_var_names[c.currentLoop().loop_var_count] = name;
+            c.currentLoop().loop_var_count += 1;
+        }
+    }
     try c.consume(.lbrace);
     try block(c, );
+    for (c.currentLoop().loop_var_slots[0..c.currentLoop().loop_var_count]) |slot| {
+        try chunk.emit2(@intFromEnum(Op.close_upvalue), slot, c.prev.line);
+    }
     try chunk.emitLoop(loop_start, c.prev.line);
 
     if (exit_j) |j| {
@@ -142,6 +158,15 @@ pub fn cForStmt(c: anytype) anyerror!void {
     }
 
     try c.cleanupLocals(local_base, c.prev.line);
+    if (!c.inFunc()) {
+        var li: u8 = 0;
+        while (li < c.currentLoop().loop_var_count) : (li += 1) {
+            const slot = c.currentLoop().loop_var_slots[li];
+            try chunk.emit2(@intFromEnum(Op.get_local), slot, c.prev.line);
+            try chunk.emitOpConst(.def_global, .{ .string = try c.qualifyGlobalName(c.currentLoop().loop_var_names[li]) }, c.prev.line);
+            try chunk.emitOp(.pop, c.prev.line);
+        }
+    }
 
     const loop = c.popLoop();
     var i: usize = 0;
@@ -418,13 +443,8 @@ pub fn compoundStmt(c: anytype) !void {
 pub fn declareLoopVar(c: anytype, name: Token) !void {
     if (c.isKnownTypeName(name.src))
         return c.err("'{s}' is a type name and cannot be used as a loop variable name", .{name.src});
-    if (c.inFunc()) {
-        try chunk.emitOp(.null_val, name.line);
-        _ = try c.defineLocal(name.src, false);
-    } else {
-        try chunk.emitOp(.null_val, name.line);
-        try chunk.emitOpConst(.def_global, .{ .string = try c.qualifyGlobalName(name.src) }, name.line);
-    }
+    try chunk.emitOp(.null_val, name.line);
+    _ = try c.defineLocal(name.src, false);
 }
 
 pub fn deferStmt(c: anytype) !void {
@@ -660,6 +680,18 @@ pub fn forInStmt(c: anytype) anyerror!void {
     // In functions the hidden local slot is cleaned up by cleanupLocals; at top-level
     // cleanupLocals is a no-op so an explicit pop is still needed (iter_pops=1).
     try c.pushLoop(loop_start, local_base, body_keep, if (in_func) @as(u8, 0) else @as(u8, 1));
+    if (c.resolveLocal(kname.src)) |slot| {
+        c.currentLoop().loop_var_slots[c.currentLoop().loop_var_count] = slot;
+        c.currentLoop().loop_var_names[c.currentLoop().loop_var_count] = kname.src;
+        c.currentLoop().loop_var_count += 1;
+    }
+    if (vname) |vn| {
+        if (c.resolveLocal(vn.src)) |slot| {
+            c.currentLoop().loop_var_slots[c.currentLoop().loop_var_count] = slot;
+            c.currentLoop().loop_var_names[c.currentLoop().loop_var_count] = vn.src;
+            c.currentLoop().loop_var_count += 1;
+        }
+    }
     try chunk.emitOp(if (vname == null) .iter_next1 else .iter_next2, c.prev.line);
     const exit_j = try chunk.emitJump(.jif_pop, c.prev.line);
 
@@ -674,11 +706,23 @@ pub fn forInStmt(c: anytype) anyerror!void {
 
     try c.consume(.lbrace);
     try block(c, );
+    for (c.currentLoop().loop_var_slots[0..c.currentLoop().loop_var_count]) |slot| {
+        try chunk.emit2(@intFromEnum(Op.close_upvalue), slot, c.prev.line);
+    }
     try chunk.emitLoop(loop_start, c.prev.line);
 
     try chunk.patchJump(exit_j);
     if (!in_func) try chunk.emitOp(.pop, c.prev.line); // pop iterator (top-level only)
     try c.cleanupLocals(local_base, c.prev.line);
+    if (!in_func) {
+        var li: u8 = 0;
+        while (li < c.currentLoop().loop_var_count) : (li += 1) {
+            const slot = c.currentLoop().loop_var_slots[li];
+            try chunk.emit2(@intFromEnum(Op.get_local), slot, c.prev.line);
+            try chunk.emitOpConst(.def_global, .{ .string = try c.qualifyGlobalName(c.currentLoop().loop_var_names[li]) }, c.prev.line);
+            try chunk.emitOp(.pop, c.prev.line);
+        }
+    }
 
     const loop = c.popLoop();
     var i: usize = 0;
@@ -1473,7 +1517,7 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
     } else {
         return c.err("expected expression, found {s}", .{c.tokenName(c.cur.typ)});
     }
-    if (c.inFunc()) {
+    if (c.inFunc() or c.in_loop_init) {
         const slot = try c.defineLocal(name.src, is_const);
         c.currentScope().locals[slot].type_check = inferred_type_check;
         if (c.std_namespace_path != null and c.std_namespace_path.?.len == 0) {
@@ -1481,6 +1525,10 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
         }
         if (c.import_module_path) |path| {
             c.currentScope().locals[slot].import_module_path = path;
+        }
+        if (!c.inFunc()) {
+            try chunk.emitOp(.dup, name.line);
+            try chunk.emit2(@intFromEnum(Op.set_local), slot, name.line);
         }
     } else {
         if (!is_const and c.registry.hasGlobalConst(name.src)) { c.setErr("cannot assign to const variable '{s}'", .{name.src}); return error.AssignToConst; }

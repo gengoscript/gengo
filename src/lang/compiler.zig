@@ -114,11 +114,15 @@ pub const Compiler = struct {
 
     repl_expr_ok: bool = true,
     repl_expr_pop_pos: ?usize = null,
+    in_loop_init: bool = false,
 
     // ── Lifecycle ────────────────────────────────────────────────────────────────
 
     pub fn init(src: []const u8, options: CompilerOptions) Compiler {
-        return .{ .lex = .{ .src = src }, .options = options };
+        var c = Compiler{ .lex = .{ .src = src }, .options = options };
+        c.scopes[0] = .{};
+        c.scope_depth = 1;
+        return c;
     }
 
     pub fn compile(self: *Compiler, emit_halt: bool) !void {
@@ -296,15 +300,14 @@ pub const Compiler = struct {
     // ── Scope and variable resolution ────────────────────────────────────────────
 
     pub fn inFunc(self: *Compiler) bool {
-        return self.scope_depth > 0;
+        return self.scope_depth > 1;
     }
 
     pub fn currentScope(self: *Compiler) *FuncInfo {
         return &self.scopes[self.scope_depth - 1];
     }
 
-    fn resolveLocal(self: *Compiler, name: []const u8) ?u8 {
-        if (!self.inFunc()) return null;
+    pub fn resolveLocal(self: *Compiler, name: []const u8) ?u8 {
         const scope = self.currentScope();
         var i: u8 = scope.local_count;
         while (i > 0) {
@@ -324,7 +327,6 @@ pub const Compiler = struct {
     }
 
     fn resolveLocalConst(self: *Compiler, name: []const u8) ?bool {
-        if (!self.inFunc()) return null;
         const scope = self.currentScope();
         var i: u8 = scope.local_count;
         while (i > 0) {
@@ -432,8 +434,8 @@ pub const Compiler = struct {
     }
 
     fn resolveUpvalue(self: *Compiler, name: []const u8) ?u8 {
-        if (self.scope_depth < 2) return null;
-        return self.resolveUpvalueForScope(self.scope_depth - 1, name);
+        if (self.scope_depth == 0) return null;
+        return self.resolveUpvalueForScope(self.scope_depth, name);
     }
 
     fn resolveUpvalueConstForScope(self: *Compiler, scope_index: u8, name: []const u8) ?bool {
@@ -445,13 +447,12 @@ pub const Compiler = struct {
             i -= 1;
             if (common.streq(enclosing.locals[i].name, name)) return enclosing.locals[i].is_const;
         }
-        if (enclosing_index == 0) return null;
         return self.resolveUpvalueConstForScope(enclosing_index, name);
     }
 
     fn resolveUpvalueConst(self: *Compiler, name: []const u8) ?bool {
-        if (self.scope_depth < 2) return null;
-        return self.resolveUpvalueConstForScope(self.scope_depth - 1, name);
+        if (self.scope_depth == 0) return null;
+        return self.resolveUpvalueConstForScope(self.scope_depth, name);
     }
 
     pub fn ensureMutableBinding(self: *Compiler, name: Token) !void {
@@ -494,7 +495,6 @@ pub const Compiler = struct {
         if (scope_index == 0) return null;
         const enclosing_index: u8 = scope_index - 1;
         const enclosing = &self.scopes[enclosing_index];
-
         var i: u8 = enclosing.local_count;
         while (i > 0) {
             i -= 1;
@@ -504,13 +504,12 @@ pub const Compiler = struct {
             }
         }
 
-        if (enclosing_index == 0) return null;
         const parent_up = self.resolveUpvalueForScope(enclosing_index, name) orelse return null;
         return self.addUpvalueToScope(scope_index, name, parent_up, true);
     }
 
     pub fn cleanupLocals(self: *Compiler, base: u8, line: u32) !void {
-        if (!self.inFunc()) return;
+        if (self.scope_depth <= 1) return;
         const scope = self.currentScope();
         while (scope.local_count > base) {
             const idx = scope.local_count - 1;
@@ -525,7 +524,7 @@ pub const Compiler = struct {
     // ── Loop context ─────────────────────────────────────────────────────────────
 
     pub fn loopKeepBase(self: *Compiler) u8 {
-        if (!self.inFunc()) return 0;
+        if (self.scope_depth <= 1) return 0;
         return self.currentScope().local_count;
     }
 
@@ -545,7 +544,7 @@ pub const Compiler = struct {
         return self.loops[self.loop_depth];
     }
 
-    fn currentLoop(self: *Compiler) *LoopCtx {
+    pub fn currentLoop(self: *Compiler) *LoopCtx {
         return &self.loops[self.loop_depth - 1];
     }
 
@@ -557,6 +556,9 @@ pub const Compiler = struct {
         try self.cleanupLocals(loop.body_keep, line);
         var p: u8 = 0;
         while (p < loop.iter_pops) : (p += 1) try chunk.emitOp(.pop, line);
+        for (loop.loop_var_slots[0..loop.loop_var_count]) |slot| {
+            try chunk.emit2(@intFromEnum(Op.close_upvalue), slot, line);
+        }
         try self.cleanupLocals(loop.local_keep, line);
         const off = try chunk.emitJump(.jump, line);
         if (loop.break_count >= MaxLoopBreaks) { self.setErr("too many 'break' statements in loop (max {d})", .{MaxLoopBreaks}); return error.TooManyBreaksInLoop; }
@@ -570,6 +572,9 @@ pub const Compiler = struct {
         const loop = self.currentLoop();
         const saved: u8 = if (self.inFunc()) self.currentScope().local_count else 0;
         try self.cleanupLocals(loop.body_keep, line);
+        for (loop.loop_var_slots[0..loop.loop_var_count]) |slot| {
+            try chunk.emit2(@intFromEnum(Op.close_upvalue), slot, line);
+        }
         try chunk.emitLoop(loop.continue_target, line);
         if (self.inFunc()) self.currentScope().local_count = saved;
     }

@@ -783,7 +783,7 @@ fn opGetLocalGetField() !void {
     const ic_base = vmState().ip;
     const ic_type_idx = try vmShort();
     const ic_fidx = try vmByte();
-    const frame_base = vmState().frames[vmState().frame_top - 1].base;
+    const frame_base = if (vmState().frame_top > 0) vmState().frames[vmState().frame_top - 1].base else 0;
     if (frame_base + slot >= vmState().stack.len) return error.StackOverflow;
     var raw = vmState().stack[frame_base + slot];
     if (raw == .object and raw.object.* == .cell) raw = raw.object.cell.value;
@@ -1813,9 +1813,8 @@ fn runInner() !void {
             },
 
             .get_local => {
-                if (vmState().frame_top == 0) return error.StackUnderflow;
                 const slot = try vmByte();
-                const base = vmState().frames[vmState().frame_top - 1].base;
+                const base = if (vmState().frame_top > 0) vmState().frames[vmState().frame_top - 1].base else 0;
                 if (base + slot >= vmState().stack.len) return error.StackOverflow;
                 const v = vmState().stack[base + slot];
                 if (v == .object and v.object.* == .cell) {
@@ -1825,9 +1824,8 @@ fn runInner() !void {
                 }
             },
             .set_local => {
-                if (vmState().frame_top == 0) return error.StackUnderflow;
                 const slot = try vmByte();
-                const base = vmState().frames[vmState().frame_top - 1].base;
+                const base = if (vmState().frame_top > 0) vmState().frames[vmState().frame_top - 1].base else 0;
                 if (base + slot >= vmState().stack.len) return error.StackOverflow;
                 const val = try vmPop();
                 const cur = vmState().stack[base + slot];
@@ -1859,9 +1857,8 @@ fn runInner() !void {
                 cell.cell.value = val;
             },
             .close_upvalue => {
-                if (vmState().frame_top == 0) return error.StackUnderflow;
                 const slot = try vmByte();
-                const base = vmState().frames[vmState().frame_top - 1].base;
+                const base = if (vmState().frame_top > 0) vmState().frames[vmState().frame_top - 1].base else 0;
                 if (base + slot >= vmState().stack.len) return error.StackOverflow;
                 const v = vmState().stack[base + slot];
                 if (v == .object and v.object.* == .cell) {
@@ -2267,11 +2264,10 @@ fn runInner() !void {
             // The skip byte (was const_eq/sub opcode) is always present in well-formed
             // bytecode; advance IP directly to avoid the bounds check in vmByte().
             .get_local_const_eq => {
-                if (vmState().frame_top == 0) return error.StackUnderflow;
                 const slot = try vmByte();
                 vmState().ip += 1; // skip the embedded const_eq opcode byte
                 const k = try chunk.constAt(try vmShort());
-                const base = vmState().frames[vmState().frame_top - 1].base;
+                const base = if (vmState().frame_top > 0) vmState().frames[vmState().frame_top - 1].base else 0;
                 if (base + slot >= vmState().stack.len) return error.StackOverflow;
                 var a = vmState().stack[base + slot];
                 if (a == .object and a.object.* == .cell) a = a.object.cell.value;
@@ -2283,11 +2279,10 @@ fn runInner() !void {
                 try vmPush(.{ .boolean = Value.equals(ea, ek) });
             },
             .get_local_const_sub => {
-                if (vmState().frame_top == 0) return error.StackUnderflow;
                 const slot = try vmByte();
                 vmState().ip += 1; // skip the embedded const_sub opcode byte
                 const k = try chunk.constAt(try vmShort());
-                const base = vmState().frames[vmState().frame_top - 1].base;
+                const base = if (vmState().frame_top > 0) vmState().frames[vmState().frame_top - 1].base else 0;
                 if (base + slot >= vmState().stack.len) return error.StackOverflow;
                 var a = vmState().stack[base + slot];
                 if (a == .object and a.object.* == .cell) a = a.object.cell.value;
@@ -2300,11 +2295,10 @@ fn runInner() !void {
                 try pushNumericResultWithCarrier(a, k, an - kn, tag, "-");
             },
             .get_local_const_add => {
-                if (vmState().frame_top == 0) return error.StackUnderflow;
                 const slot = try vmByte();
                 vmState().ip += 1; // skip the embedded const_add opcode byte
                 const k = try chunk.constAt(try vmShort());
-                const base = vmState().frames[vmState().frame_top - 1].base;
+                const base = if (vmState().frame_top > 0) vmState().frames[vmState().frame_top - 1].base else 0;
                 if (base + slot >= vmState().stack.len) return error.StackOverflow;
                 var a = vmState().stack[base + slot];
                 if (a == .object and a.object.* == .cell) a = a.object.cell.value;
@@ -2332,11 +2326,10 @@ fn runInner() !void {
                 }
             },
             .get_local_const_lt => {
-                if (vmState().frame_top == 0) return error.StackUnderflow;
                 const slot = try vmByte();
                 vmState().ip += 1; // skip the embedded const_lt opcode byte
                 const k = try chunk.constAt(try vmShort());
-                const base = vmState().frames[vmState().frame_top - 1].base;
+                const base = if (vmState().frame_top > 0) vmState().frames[vmState().frame_top - 1].base else 0;
                 if (base + slot >= vmState().stack.len) return error.StackOverflow;
                 var a = vmState().stack[base + slot];
                 if (a == .object and a.object.* == .cell) a = a.object.cell.value;
@@ -2353,12 +2346,11 @@ fn runInner() !void {
             // Bytecode: [op][slot][skip][idx_hi][idx_lo][jmp_hi][jmp_lo]
             // Reads offset first (advancing IP past the full instruction), then branches.
             .get_local_const_eq_jif_pop => {
-                if (vmState().frame_top == 0) return error.StackUnderflow;
                 const slot = try vmByte();
                 vmState().ip += 1; // skip
                 const k = try chunk.constAt(try vmShort());
                 const off = try vmShort();
-                const base = vmState().frames[vmState().frame_top - 1].base;
+                const base = if (vmState().frame_top > 0) vmState().frames[vmState().frame_top - 1].base else 0;
                 if (base + slot >= vmState().stack.len) return error.StackOverflow;
                 var a = vmState().stack[base + slot];
                 if (a == .object and a.object.* == .cell) a = a.object.cell.value;
@@ -2373,12 +2365,11 @@ fn runInner() !void {
             // Quad-fused: get_local + const_lt + jif_pop.
             // Bytecode: [op][slot][skip][idx_hi][idx_lo][jmp_hi][jmp_lo]
             .get_local_const_lt_jif_pop => {
-                if (vmState().frame_top == 0) return error.StackUnderflow;
                 const slot = try vmByte();
                 vmState().ip += 1; // skip embedded const_lt opcode byte
                 const k = try chunk.constAt(try vmShort());
                 const off = try vmShort();
-                const base = vmState().frames[vmState().frame_top - 1].base;
+                const base = if (vmState().frame_top > 0) vmState().frames[vmState().frame_top - 1].base else 0;
                 if (base + slot >= vmState().stack.len) return error.StackOverflow;
                 var a = vmState().stack[base + slot];
                 if (a == .object and a.object.* == .cell) a = a.object.cell.value;
@@ -2395,7 +2386,6 @@ fn runInner() !void {
             // Fused: get_local + get_field. 8-byte layout:
             // [op][slot][skip=get_field_byte][name_hi][name_lo][ic_type_hi][ic_type_lo][ic_fidx]
             .get_local_get_field => {
-                if (vmState().frame_top == 0) return error.StackUnderflow;
                 try opGetLocalGetField();
             },
 
@@ -2738,7 +2728,6 @@ fn runInner() !void {
                     vmgc.collectGarbage();
                     break :blk (heap.bump(*Object, proto.capture_slots.len) orelse return error.OutOfMemory);
                 };
-                if (vmState().frame_top == 0 and proto.capture_slots.len != 0) return error.TypeError;
                 const frame = if (vmState().frame_top == 0) vms.Frame{ .ret_ip = 0, .base = 0, .closure = null, .func_obj = f.object, .defer_base = 0, .has_typed_returns = false } else vmState().frames[vmState().frame_top - 1];
                 var i: usize = 0;
                 while (i < proto.capture_slots.len) : (i += 1) {
