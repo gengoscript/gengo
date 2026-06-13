@@ -283,9 +283,12 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                     const from = ci * sz;
                     const to = @min(from + sz, items.len);
                     const chunk_obj = try vmgc.vmAllocObject();
+                    chunk_obj.* = .{ .array_managed = &[_]Value{} };
+                    try vms.pushTempRoot(.{ .object = chunk_obj });
                     const chunk_items = try vmgc.vmAllocManagedSlice(Value, to - from);
                     @memcpy(chunk_items, items[from..to]);
                     chunk_obj.* = .{ .array_managed = chunk_items };
+                    vms.popTempRoot();
                     out[ci] = .{ .object = chunk_obj };
                     out_obj.* = .{ .array_managed = out[0 .. ci + 1] }; // grow visible
                 }
