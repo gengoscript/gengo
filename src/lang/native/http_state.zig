@@ -131,10 +131,23 @@ fn httpFetchHost(
 
     if (maybe_headers) |hdrs| {
         var it = hdrs.iterator();
-        while (it.next()) |entry| : (header_count += 1) {
+        while (it.next()) |entry| {
             if (header_count >= 64) break;
-            host_headers_keys[header_count] = std.heap.page_allocator.dupeZ(u8, entry.key_ptr.*) catch continue;
-            host_headers_vals[header_count] = std.heap.page_allocator.dupeZ(u8, entry.value_ptr.*) catch continue;
+            const k = std.heap.page_allocator.dupeZ(u8, entry.key_ptr.*) catch continue;
+            const v = std.heap.page_allocator.dupeZ(u8, entry.value_ptr.*) catch {
+                std.heap.page_allocator.free(k);
+                continue;
+            };
+            host_headers_keys[header_count] = k;
+            host_headers_vals[header_count] = v;
+            header_count += 1;
+        }
+    }
+    defer {
+        var di: usize = 0;
+        while (di < header_count) : (di += 1) {
+            std.heap.page_allocator.free(host_headers_keys[di]);
+            std.heap.page_allocator.free(host_headers_vals[di]);
         }
     }
 

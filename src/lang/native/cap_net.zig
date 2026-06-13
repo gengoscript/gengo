@@ -112,6 +112,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             _ = try vms.vmPop();
 
             const addr = net_state.netLocalAddr(id) catch return error.CapabilityError;
+            defer std.heap.page_allocator.free(addr);
             const out = try vmgc.makeDynString(addr);
             try vms.vmPush(out);
         },
@@ -122,6 +123,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             _ = try vms.vmPop();
 
             const addr = net_state.netRemoteAddr(id) catch return error.CapabilityError;
+            defer std.heap.page_allocator.free(addr);
             const out = try vmgc.makeDynString(addr);
             try vms.vmPush(out);
         },

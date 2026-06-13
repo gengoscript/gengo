@@ -507,7 +507,7 @@ pub fn installCapabilityModules(cap_modules: []const module_compile.CapModuleDes
         const any_spec: FieldTypeSpec = .{ .alts = any_alts[0..1] };
 
         // Collect unique namespace prefixes (from dotted function names like "local.read").
-        var ns_names: [8][]const u8 = undefined;
+        var ns_names: [64][]const u8 = undefined;
         var ns_count: usize = 0;
         for (entries) |entry| {
             const dot = std.mem.indexOfScalar(u8, entry.name, '.') orelse continue;

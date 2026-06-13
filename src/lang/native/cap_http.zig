@@ -17,12 +17,6 @@ const StructTypeObj = @import("../value.zig").StructTypeObj;
 
 const ResponseTypeQualifiedName = "@cap_type:http.Response";
 
-fn vmsAsString(val: Value) ![]const u8 {
-    return switch (val) {
-        .string => |s| s,
-        else => error.TypeError,
-    };
-}
 
 fn buildResponseStruct(status: i32, body: []const u8, hdr_map: std.StringHashMap([]const u8), ok: bool) !Value {
     const resp_type_val = globals.get(ResponseTypeQualifiedName) orelse return error.CapabilityError;
@@ -78,7 +72,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
         .cap_http_get => {
             if (argc != 1) return error.ArityMismatch;
             const arg0 = try vms.vmPop();
-            const url = try vmsAsString(arg0);
+            const url = try vms.asStringValue(arg0);
             _ = try vms.vmPop();
 
             var result = http_state.httpFetch("GET", url, null, null, 0) catch {
@@ -93,8 +87,8 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             if (argc != 2) return error.ArityMismatch;
             const arg1 = try vms.vmPop();
             const arg0 = try vms.vmPop();
-            const url = try vmsAsString(arg0);
-            const body = try vmsAsString(arg1);
+            const url = try vms.asStringValue(arg0);
+            const body = try vms.asStringValue(arg1);
             _ = try vms.vmPop();
 
             var result = http_state.httpFetch("POST", url, body, null, 0) catch {
@@ -109,7 +103,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             if (argc != 2) return error.ArityMismatch;
             const arg1 = try vms.vmPop();
             const arg0 = try vms.vmPop();
-            const url = try vmsAsString(arg0);
+            const url = try vms.asStringValue(arg0);
             const opts = switch (arg1) {
                 .object => |o| o,
                 else => return error.TypeError,
