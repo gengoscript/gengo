@@ -404,15 +404,16 @@ pub const Runtime = struct {
         while (ci < compiler.registry.global_const_count) : (ci += 1) {
             const cname = compiler.registry.global_consts[ci].name;
             if (!checkGlobalIsConst(self, cname)) {
-                if (self.repl_const_count < MaxGlobalConsts and
-                    self.repl_const_name_buf_used + cname.len <= self.repl_const_name_buf.len)
+                if (self.repl_const_count >= MaxGlobalConsts or
+                    self.repl_const_name_buf_used + cname.len > self.repl_const_name_buf.len)
                 {
-                    const start = self.repl_const_name_buf_used;
-                    @memcpy(self.repl_const_name_buf[start .. start + cname.len], cname);
-                    self.repl_const_names[self.repl_const_count] = self.repl_const_name_buf[start .. start + cname.len];
-                    self.repl_const_name_buf_used += cname.len;
-                    self.repl_const_count += 1;
+                    return self.setReplOverflowError("REPL const table full: too many global const declarations");
                 }
+                const start = self.repl_const_name_buf_used;
+                @memcpy(self.repl_const_name_buf[start .. start + cname.len], cname);
+                self.repl_const_names[self.repl_const_count] = self.repl_const_name_buf[start .. start + cname.len];
+                self.repl_const_name_buf_used += cname.len;
+                self.repl_const_count += 1;
             }
         }
 
@@ -427,10 +428,12 @@ pub const Runtime = struct {
             var ti: usize = 0;
             while (ti < compiler.registry.named_type_count) : (ti += 1) {
                 const ni = compiler.registry.named_types[ti];
-                if (self.repl_named_type_count >= MaxNamedTypes) break;
+                if (self.repl_named_type_count >= MaxNamedTypes)
+                    return self.setReplOverflowError("REPL type table full: too many named type declarations");
                 const idx = self.repl_named_type_count;
                 self.repl_named_type_enum_member_counts[idx] = 0;
-                const saved_name = self.saveReplTypeName(ni.name) catch break;
+                const saved_name = self.saveReplTypeName(ni.name) catch
+                    return self.setReplOverflowError("REPL type name buffer full");
                 self.repl_named_type_name_offsets[idx] = @intCast(@intFromPtr(saved_name.ptr) - @intFromPtr(&self.repl_type_name_buf));
                 self.repl_named_type_name_lens[idx] = @intCast(saved_name.len);
                 self.repl_named_type_bases[idx] = ni.base;
@@ -440,11 +443,8 @@ pub const Runtime = struct {
                 self.repl_named_type_mins[idx] = ni.min;
                 self.repl_named_type_maxs[idx] = ni.max;
                 if (ni.parent_name) |pn| {
-                    const saved_pn = self.saveReplTypeName(pn) catch {
-                        self.repl_named_type_parent_lens[idx] = 0;
-                        self.repl_named_type_count += 1;
-                        continue;
-                    };
+                    const saved_pn = self.saveReplTypeName(pn) catch
+                        return self.setReplOverflowError("REPL type name buffer full");
                     self.repl_named_type_parent_offsets[idx] = @intCast(@intFromPtr(saved_pn.ptr) - @intFromPtr(&self.repl_type_name_buf));
                     self.repl_named_type_parent_lens[idx] = @intCast(saved_pn.len);
                 } else {
@@ -457,9 +457,11 @@ pub const Runtime = struct {
         {
             var ti: usize = 0;
             while (ti < compiler.registry.struct_type_count) : (ti += 1) {
-                if (self.repl_struct_type_count >= MaxStructTypes) break;
+                if (self.repl_struct_type_count >= MaxStructTypes)
+                    return self.setReplOverflowError("REPL type table full: too many struct type declarations");
                 const idx = self.repl_struct_type_count;
-                const saved_name = self.saveReplTypeName(compiler.registry.struct_types[ti].name) catch break;
+                const saved_name = self.saveReplTypeName(compiler.registry.struct_types[ti].name) catch
+                    return self.setReplOverflowError("REPL type name buffer full");
                 self.repl_struct_type_name_offsets[idx] = @intCast(@intFromPtr(saved_name.ptr) - @intFromPtr(&self.repl_type_name_buf));
                 self.repl_struct_type_name_lens[idx] = @intCast(saved_name.len);
                 self.repl_struct_type_count += 1;
@@ -468,9 +470,11 @@ pub const Runtime = struct {
         {
             var ti: usize = 0;
             while (ti < compiler.registry.interface_type_count) : (ti += 1) {
-                if (self.repl_interface_type_count >= MaxInterfaceTypes) break;
+                if (self.repl_interface_type_count >= MaxInterfaceTypes)
+                    return self.setReplOverflowError("REPL type table full: too many interface type declarations");
                 const idx = self.repl_interface_type_count;
-                const saved_name = self.saveReplTypeName(compiler.registry.interface_types[ti].name) catch break;
+                const saved_name = self.saveReplTypeName(compiler.registry.interface_types[ti].name) catch
+                    return self.setReplOverflowError("REPL type name buffer full");
                 self.repl_interface_type_name_offsets[idx] = @intCast(@intFromPtr(saved_name.ptr) - @intFromPtr(&self.repl_type_name_buf));
                 self.repl_interface_type_name_lens[idx] = @intCast(saved_name.len);
                 self.repl_interface_type_count += 1;
@@ -479,9 +483,11 @@ pub const Runtime = struct {
         {
             var ti: usize = 0;
             while (ti < compiler.registry.variant_type_count) : (ti += 1) {
-                if (self.repl_variant_type_count >= MaxVariantTypes) break;
+                if (self.repl_variant_type_count >= MaxVariantTypes)
+                    return self.setReplOverflowError("REPL type table full: too many variant type declarations");
                 const idx = self.repl_variant_type_count;
-                const saved_name = self.saveReplTypeName(compiler.registry.variant_types[ti].name) catch break;
+                const saved_name = self.saveReplTypeName(compiler.registry.variant_types[ti].name) catch
+                    return self.setReplOverflowError("REPL type name buffer full");
                 self.repl_variant_type_name_offsets[idx] = @intCast(@intFromPtr(saved_name.ptr) - @intFromPtr(&self.repl_type_name_buf));
                 self.repl_variant_type_name_lens[idx] = @intCast(saved_name.len);
                 self.repl_variant_type_count += 1;
@@ -539,6 +545,15 @@ pub const Runtime = struct {
     fn setLastCompilePath(self: *Runtime, path: []const u8) void {
         self.last_compile_path_len = @min(path.len, self.last_compile_path_buf.len);
         @memcpy(self.last_compile_path_buf[0..self.last_compile_path_len], path[0..self.last_compile_path_len]);
+    }
+
+    fn setReplOverflowError(self: *Runtime, comptime msg: []const u8) error{OutOfMemory} {
+        self.last_compile_line = 1;
+        self.last_compile_col = 0;
+        const len = @min(msg.len, self.last_compile_msg_buf.len);
+        @memcpy(self.last_compile_msg_buf[0..len], msg[0..len]);
+        self.last_compile_msg_len = @intCast(len);
+        return error.OutOfMemory;
     }
 
     fn saveReplTypeName(self: *Runtime, name: []const u8) ![]const u8 {
