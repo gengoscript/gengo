@@ -600,14 +600,17 @@ export fn engine_add_source(handle: i32, path_ptr: PtrInt, path_len: i32, src_pt
     const path = wasmSlice(path_ptr, path_len);
     const src = wasmSlice(src_ptr, src_len);
 
+    if (path.len > engine.path_bufs[0].len) return -5;
+    if (src.len > engine.src_bufs[0].len) return -5;
+
     const sc = engine.source_count;
     const path_buf = &engine.path_bufs[sc];
     const src_buf = &engine.src_bufs[sc];
 
-    const plen = @min(@as(usize, @intCast(path.len)), path_buf.len);
-    @memcpy(path_buf[0..plen], path[0..plen]);
-    const slen = @min(@as(usize, @intCast(src.len)), src_buf.len);
-    @memcpy(src_buf[0..slen], src[0..slen]);
+    const plen = @as(usize, @intCast(path.len));
+    @memcpy(path_buf[0..plen], path);
+    const slen = @as(usize, @intCast(src.len));
+    @memcpy(src_buf[0..slen], src);
 
     engine.source_entries[sc] = .{ .path = path_buf[0..plen], .source = src_buf[0..slen] };
     engine.source_count = sc + 1;
@@ -759,4 +762,33 @@ export fn engine_mount_dir(handle: i32, name_ptr: PtrInt, name_len: i32, path_pt
     const path = wasmSlice(path_ptr, path_len);
     fs_state.addMount(name, path) catch return -2;
     return 0;
+}
+
+test "engine_add_source rejects path and source exceeding buffer" {
+    const MaxPath = 256;
+    const MaxSource = 4096;
+
+    // Initialize an engine
+    const h = engine_init();
+    try std.testing.expect(h > 0);
+
+    // Path exactly at limit should succeed
+    const ok_path = "a" ** MaxPath;
+    const ok_src = "b" ** MaxSource;
+    const ok = engine_add_source(h, @intCast(@intFromPtr(ok_path.ptr)), @intCast(ok_path.len), @intCast(@intFromPtr(ok_src.ptr)), @intCast(ok_src.len));
+    try std.testing.expectEqual(0, ok);
+
+    // Path one byte over limit should fail
+    const h2 = engine_init();
+    try std.testing.expect(h2 > 0);
+    const long_path = "a" ** (MaxPath + 1);
+    const fail_path = engine_add_source(h2, @intCast(@intFromPtr(long_path.ptr)), @intCast(long_path.len), @intCast(@intFromPtr(ok_src.ptr)), @intCast(ok_src.len));
+    try std.testing.expectEqual(-5, fail_path);
+
+    // Source one byte over limit should fail
+    const h3 = engine_init();
+    try std.testing.expect(h3 > 0);
+    const long_src = "b" ** (MaxSource + 1);
+    const fail_src = engine_add_source(h3, @intCast(@intFromPtr(ok_path.ptr)), @intCast(ok_path.len), @intCast(@intFromPtr(long_src.ptr)), @intCast(long_src.len));
+    try std.testing.expectEqual(-5, fail_src);
 }
