@@ -488,6 +488,16 @@ pub fn tplParse(src_val: Value, src: []const u8) !Value {
         }
     }
 
+    // Release the temporary root wrappers' ownership of the managed slices before
+    // tplBuildObj creates its own wrapper objects for the same slices.  Leaving
+    // ops_root/args_root/jmp_root pointing to the slices would cause a double-free:
+    // when these objects are swept after the defers pop them, sweepObjects calls
+    // freeManagedSlice on the same memory that the template's __ops/__args/__jmp
+    // objects still reference.
+    ops_root.* = .{ .array = &[_]Value{} };
+    args_root.* = .{ .array = &[_]Value{} };
+    jmp_root.* = .{ .array = &[_]Value{} };
+
     const obj = try tplBuildObj(src_val, ops[0..idx], args[0..idx], jmp[0..idx]);
     return .{ .object = obj };
 }
