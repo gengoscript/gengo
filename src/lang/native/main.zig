@@ -372,14 +372,14 @@ pub fn installStdGlobal() !void {
     const std_obj = try buildStdModule();
     try globals.def(module_compile.StdModuleGlobalName, .{ .object = std_obj });
     {
-        const exec_buf = (heap.bump(u8, 64) orelse return)[0..64];
-        const exec_key = std.fmt.bufPrint(exec_buf, "{s}.{s}", .{ TemplateTypeQualifiedName, "execute" }) catch return;
+        const exec_buf = (heap.bump(u8, 64) orelse return error.OutOfMemory)[0..64];
+        const exec_key = std.fmt.bufPrint(exec_buf, "{s}.{s}", .{ TemplateTypeQualifiedName, "execute" }) catch return error.OutOfMemory;
         if (!globals.has(exec_key)) {
             const exec_native = try makeNative(.template_execute, 2);
             try globals.def(exec_key, exec_native);
         }
-        const af_buf = (heap.bump(u8, 64) orelse return)[0..64];
-        const af_key = std.fmt.bufPrint(af_buf, "{s}.{s}", .{ TemplateTypeQualifiedName, "add_func" }) catch return;
+        const af_buf = (heap.bump(u8, 64) orelse return error.OutOfMemory)[0..64];
+        const af_key = std.fmt.bufPrint(af_buf, "{s}.{s}", .{ TemplateTypeQualifiedName, "add_func" }) catch return error.OutOfMemory;
         if (!globals.has(af_key)) {
             const af_native = try makeNative(.template_add_func, 3);
             try globals.def(af_key, af_native);
@@ -407,7 +407,7 @@ pub fn installStdGlobal() !void {
         };
         for (time_methods) |m| {
             const needed = TimeTypeQualifiedName.len + 1 + m.name.len;
-            const kbuf = (heap.bump(u8, needed) orelse return)[0..needed];
+            const kbuf = (heap.bump(u8, needed) orelse return error.OutOfMemory)[0..needed];
             @memcpy(kbuf[0..TimeTypeQualifiedName.len], TimeTypeQualifiedName);
             kbuf[TimeTypeQualifiedName.len] = '.';
             @memcpy(kbuf[TimeTypeQualifiedName.len + 1 .. needed], m.name);
@@ -427,7 +427,7 @@ pub fn installStdGlobal() !void {
         };
         for (regexp_methods) |m| {
             const needed = RegexpTypeQualifiedName.len + 1 + m.name.len;
-            const kbuf = (heap.bump(u8, needed) orelse return)[0..needed];
+            const kbuf = (heap.bump(u8, needed) orelse return error.OutOfMemory)[0..needed];
             @memcpy(kbuf[0..RegexpTypeQualifiedName.len], RegexpTypeQualifiedName);
             kbuf[RegexpTypeQualifiedName.len] = '.';
             @memcpy(kbuf[RegexpTypeQualifiedName.len + 1 .. needed], m.name);
@@ -441,23 +441,23 @@ pub fn installStdGlobal() !void {
 
 pub fn installHostModules(host_modules: []const module_compile.HostModuleDesc) !void {
     for (host_modules) |hm| {
-        const global_name_buf = (heap.bump(u8, 5 + hm.name.len) orelse return)[0..5 + hm.name.len];
+        const global_name_buf = (heap.bump(u8, 5 + hm.name.len) orelse return error.OutOfMemory)[0..5 + hm.name.len];
         @memcpy(global_name_buf[0..5], "host:");
         @memcpy(global_name_buf[5..][0..hm.name.len], hm.name);
         const global_name = global_name_buf[0..5 + hm.name.len];
         if (globals.has(global_name)) continue;
 
         const entries = hm.functions;
-        const any_alts = heap.bump(FieldTypeAlt, 1) orelse return;
+        const any_alts = heap.bump(FieldTypeAlt, 1) orelse return error.OutOfMemory;
         any_alts[0] = .{ .typ = .any };
         const any_spec: FieldTypeSpec = .{ .alts = any_alts[0..1] };
 
-        const field_specs = (heap.bump(StructFieldSpec, entries.len) orelse return)[0..entries.len];
+        const field_specs = (heap.bump(StructFieldSpec, entries.len) orelse return error.OutOfMemory)[0..entries.len];
         for (field_specs, 0..) |*fs, i| {
             fs.* = .{ .name = entries[i].name, .typ = any_spec, .is_const = true };
         }
 
-        const qual_name_buf = (heap.bump(u8, 13 + hm.name.len) orelse return)[0..13 + hm.name.len];
+        const qual_name_buf = (heap.bump(u8, 13 + hm.name.len) orelse return error.OutOfMemory)[0..13 + hm.name.len];
         @memcpy(qual_name_buf[0..13], "@module_type:");
         @memcpy(qual_name_buf[13..][0..hm.name.len], hm.name);
         const qualified_name = qual_name_buf[0..13 + hm.name.len];
@@ -495,14 +495,14 @@ pub fn installHostModules(host_modules: []const module_compile.HostModuleDesc) !
 
 pub fn installCapabilityModules(cap_modules: []const module_compile.CapModuleDesc) !void {
     for (cap_modules) |cm| {
-        const global_name_buf = (heap.bump(u8, 4 + cm.name.len) orelse return)[0..4 + cm.name.len];
+        const global_name_buf = (heap.bump(u8, 4 + cm.name.len) orelse return error.OutOfMemory)[0..4 + cm.name.len];
         @memcpy(global_name_buf[0..4], "cap:");
         @memcpy(global_name_buf[4..][0..cm.name.len], cm.name);
         const global_name = global_name_buf[0..4 + cm.name.len];
         if (globals.has(global_name)) continue;
 
         const entries = cm.functions;
-        const any_alts = heap.bump(FieldTypeAlt, 1) orelse return;
+        const any_alts = heap.bump(FieldTypeAlt, 1) orelse return error.OutOfMemory;
         any_alts[0] = .{ .typ = .any };
         const any_spec: FieldTypeSpec = .{ .alts = any_alts[0..1] };
 
@@ -527,7 +527,7 @@ pub fn installCapabilityModules(cap_modules: []const module_compile.CapModuleDes
         }
         const top_count = direct_count + ns_count;
 
-        const field_specs = (heap.bump(StructFieldSpec, top_count) orelse return)[0..top_count];
+        const field_specs = (heap.bump(StructFieldSpec, top_count) orelse return error.OutOfMemory)[0..top_count];
         var fi: usize = 0;
         for (entries) |entry| {
             if (std.mem.indexOfScalar(u8, entry.name, '.') == null) {
@@ -540,7 +540,7 @@ pub fn installCapabilityModules(cap_modules: []const module_compile.CapModuleDes
             fi += 1;
         }
 
-        const qual_name_buf = (heap.bump(u8, 10 + cm.name.len) orelse return)[0..10 + cm.name.len];
+        const qual_name_buf = (heap.bump(u8, 10 + cm.name.len) orelse return error.OutOfMemory)[0..10 + cm.name.len];
         @memcpy(qual_name_buf[0..10], "@cap_type:");
         @memcpy(qual_name_buf[10..][0..cm.name.len], cm.name);
         const qualified_name = qual_name_buf[0..10 + cm.name.len];
@@ -579,7 +579,7 @@ pub fn installCapabilityModules(cap_modules: []const module_compile.CapModuleDes
                     entry.name[ns.len] == '.') sub_count += 1;
             }
 
-            const sub_field_specs = (heap.bump(StructFieldSpec, sub_count) orelse return)[0..sub_count];
+            const sub_field_specs = (heap.bump(StructFieldSpec, sub_count) orelse return error.OutOfMemory)[0..sub_count];
             var si: usize = 0;
             for (entries) |entry| {
                 if (entry.name.len > ns.len and
@@ -592,7 +592,7 @@ pub fn installCapabilityModules(cap_modules: []const module_compile.CapModuleDes
             }
 
             const sub_qual_len = 10 + cm.name.len + 1 + ns.len;
-            const sub_qual_buf = (heap.bump(u8, sub_qual_len) orelse return)[0..sub_qual_len];
+            const sub_qual_buf = (heap.bump(u8, sub_qual_len) orelse return error.OutOfMemory)[0..sub_qual_len];
             @memcpy(sub_qual_buf[0..10], "@cap_type:");
             @memcpy(sub_qual_buf[10..][0..cm.name.len], cm.name);
             sub_qual_buf[10 + cm.name.len] = '.';
@@ -645,11 +645,11 @@ pub fn installCapabilityModules(cap_modules: []const module_compile.CapModuleDes
             if (std.mem.eql(u8, cm.name, "net") and !globals.has("@cap_type:net.Conn")) {
                 const conn_qual_name = "@cap_type:net.Conn";
 
-                const conn_any_alts = heap.bump(FieldTypeAlt, 1) orelse return;
+                const conn_any_alts = heap.bump(FieldTypeAlt, 1) orelse return error.OutOfMemory;
                 conn_any_alts[0] = .{ .typ = .any };
                 const conn_any_spec: FieldTypeSpec = .{ .alts = conn_any_alts[0..1] };
 
-                const conn_field_specs = (heap.bump(StructFieldSpec, 1) orelse return)[0..1];
+                const conn_field_specs = (heap.bump(StructFieldSpec, 1) orelse return error.OutOfMemory)[0..1];
                 conn_field_specs[0] = .{ .name = "_handle", .typ = conn_any_spec, .is_const = true };
 
                 const conn_typ_obj = try vmgc.vmAllocObject();
@@ -674,7 +674,7 @@ pub fn installCapabilityModules(cap_modules: []const module_compile.CapModuleDes
                 };
                 for (conn_methods) |m| {
                     const needed = conn_qual_name.len + 1 + m.name.len;
-                    const kbuf = (heap.bump(u8, needed) orelse return)[0..needed];
+                    const kbuf = (heap.bump(u8, needed) orelse return error.OutOfMemory)[0..needed];
                     @memcpy(kbuf[0..conn_qual_name.len], conn_qual_name);
                     kbuf[conn_qual_name.len] = '.';
                     @memcpy(kbuf[conn_qual_name.len + 1 .. needed], m.name);

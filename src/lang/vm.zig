@@ -3082,14 +3082,14 @@ fn runPanicUnwind(orig_err: anyerror) anyerror!void {
                 } else {
                     vmPush(.null) catch {};
                 }
-            } else recover_ret: {
+            } else {
                 // Multi-value return: build a tuple of the right size.
                 // Named returns: use the values from the (still-readable) stack slots;
                 // unnamed returns: fill with null.
                 const n: u8 = if (named_ret > 0) named_ret else @intCast(@min(ret_count, 255));
-                const tup_obj = vmAllocObject() catch { vmPush(.null) catch {}; break :recover_ret; };
+                const tup_obj = try vmAllocObject();
                 tup_obj.* = .{ .array = &[_]Value{} };
-                const items = vmAllocManagedSlice(Value, n) catch { vmPush(.null) catch {}; break :recover_ret; };
+                const items = try vmAllocManagedSlice(Value, n);
                 if (named_ret > 0) {
                     var ri: u8 = 0;
                     while (ri < named_ret) : (ri += 1) {
@@ -3101,7 +3101,7 @@ fn runPanicUnwind(orig_err: anyerror) anyerror!void {
                     while (ri < n) : (ri += 1) items[ri] = .null;
                 }
                 tup_obj.* = .{ .array_managed = items };
-                vmPush(.{ .object = tup_obj }) catch { vmPush(.null) catch {}; break :recover_ret; };
+                try vmPush(.{ .object = tup_obj });
             }
             return run();
         }
