@@ -82,13 +82,16 @@ fn jsonValueToGengo(jv: std.json.Value) !Value {
             try vms.pushTempRoot(.{ .object = obj });
             defer vms.popTempRoot();
             const items = try vmgc.vmAllocManagedSlice(MapEntry, n);
+            obj.* = .{ .map = items[0..0] }; // root items immediately; grow length as entries are filled
             const keys = obj_map.keys();
             const vals = obj_map.values();
             for (0..n) |i| {
-                items[i] = .{
-                    .key = try vmgc.makeDynString(keys[i]),
-                    .value = try jsonValueToGengo(vals[i]),
-                };
+                const k = try vmgc.makeDynString(keys[i]);
+                try vms.pushTempRoot(k);
+                items[i].key = k;
+                items[i].value = try jsonValueToGengo(vals[i]);
+                vms.popTempRoot();
+                obj.* = .{ .map = items[0 .. i + 1] };
             }
             obj.* = .{ .map = items[0..n] };
             const bcount = vmmap.mapBucketsForCount(n);

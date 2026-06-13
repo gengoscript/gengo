@@ -182,10 +182,11 @@ pub fn valueFromWire(w: host_abi.ValueWire) !Value {
             const entries = try vmgc.vmAllocManagedSlice(MapEntry, count);
             map_obj.* = .{ .map_managed = entries[0..0] }; // publish immediately
             for (0..count) |i| {
-                entries[i] = .{
-                    .key = try valueFromWire(pair_wires[i * 2]),
-                    .value = try valueFromWire(pair_wires[i * 2 + 1]),
-                };
+                const k = try valueFromWire(pair_wires[i * 2]);
+                try vms.pushTempRoot(k);
+                entries[i].key = k;
+                entries[i].value = try valueFromWire(pair_wires[i * 2 + 1]);
+                vms.popTempRoot();
                 map_obj.* = .{ .map_managed = entries[0 .. i + 1] }; // grow visible
             }
             return .{ .object = map_obj };
