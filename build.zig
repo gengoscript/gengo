@@ -9,12 +9,14 @@ pub fn build(b: *std.Build) void {
     if (!valid) @panic("invalid -Dpreset, expected dev|tiny|stress|server");
 
     const perf_opt = b.option(bool, "perf", "Enable performance counters (outputs PERF: lines to stderr)") orelse false;
+    const gc_stress_opt = b.option(bool, "gc_stress", "Force GC on every allocation to detect unrooted-value bugs") orelse false;
     const cap_net_opt = b.option(bool, "cap_net", "Include cap:net capability") orelse true;
     const cap_http_opt = b.option(bool, "cap_http", "Include cap:http capability") orelse true;
     const cap_fs_opt = b.option(bool, "cap_fs", "Include cap:fs capability") orelse true;
     const gengo_version = "0.5.0-dev";
     const build_opts = b.addOptions();
     build_opts.addOption(bool, "perf", perf_opt);
+    build_opts.addOption(bool, "gc_stress", gc_stress_opt);
     build_opts.addOption(bool, "cap_net", cap_net_opt);
     build_opts.addOption(bool, "cap_http", cap_http_opt);
     build_opts.addOption(bool, "cap_fs", cap_fs_opt);

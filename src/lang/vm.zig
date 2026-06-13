@@ -935,6 +935,14 @@ fn opGetLocalGetField() !void {
 fn opGetIndex() !void {
     const idx_v = try vmPop();
     const raw = try vmPop();
+    var rooted_raw = false;
+    var rooted_idx = false;
+    if (raw == .object) { try pushTempRoot(raw); rooted_raw = true; }
+    if (idx_v == .object) { try pushTempRoot(idx_v); rooted_idx = true; }
+    defer {
+        if (rooted_idx) popTempRoot();
+        if (rooted_raw) popTempRoot();
+    }
     const container = if (raw == .object and raw.object.* == .named_value)
         raw.object.named_value.value
     else
@@ -1365,6 +1373,9 @@ fn opGetField() !void {
     const ic_fidx = try vmByte();
     const name = (try chunk.constAt(name_idx)).string;
     const raw = try vmPop();
+    var rooted_raw = false;
+    if (raw == .object) { try pushTempRoot(raw); rooted_raw = true; }
+    defer if (rooted_raw) popTempRoot();
     const container = if (raw == .object and raw.object.* == .named_value)
         raw.object.named_value.value
     else
@@ -1983,7 +1994,7 @@ fn runInner() !void {
                 try pushNumericResultWithCarrier(a, b, @floatFromInt(result), .int, "^");
             },
             .bit_not => {
-                const v = try vmPop();
+                const v = try vmPeek(0);
                 const n = try vms.valueAsInt(v);
                 const raw = ~n;
                 if (raw > (1 << 53) or raw < -(1 << 53)) return error.RangeError;
@@ -1991,8 +2002,10 @@ fn runInner() !void {
                 if (v == .object and v.object.* == .named_value) {
                     const wrapped = try vmtyp.coerceNamedTypeResult(v.object.named_value.typ, .{ .int = result });
                     try checkNamedTypePredicate(v.object.named_value.typ, wrapped.object.named_value.value);
+                    _ = try vmPop();
                     try vmPush(wrapped);
                 } else {
+                    _ = try vmPop();
                     try vmPush(.{ .int = result });
                 }
             },
@@ -2147,16 +2160,19 @@ fn runInner() !void {
                 }
             },
             .neg => {
-                const v = try vmPop();
+                const v = try vmPeek(0);
                 const n = vms.valueAsNumber(v) catch {
+                    _ = try vmPop();
                     vms.setRuntimeErr("cannot negate {s}", .{runtimeTypeName(v)});
                     return error.TypeError;
                 };
                 if (v == .object and v.object.* == .named_value) {
                     const wrapped = try vmtyp.coerceNamedTypeResult(v.object.named_value.typ, if (v.object.named_value.typ.named_type.base == .float) .{ .float = -n } else .{ .int = -n });
                     try checkNamedTypePredicate(v.object.named_value.typ, wrapped.object.named_value.value);
+                    _ = try vmPop();
                     try vmPush(wrapped);
                 } else {
+                    _ = try vmPop();
                     try vmPush(if (v == .float) .{ .float = -n } else .{ .int = -n });
                 }
             },
@@ -2854,7 +2870,6 @@ fn runInner() !void {
                 if (v != .object or v.object.* != .variant_value) return error.TypeError;
                 const vv = v.object.variant_value;
                 const arm = vv.typ.variant_type.arms[vv.ordinal];
-                _ = try vmPop();
                 if (arm.fields.len > 0) {
                     const map_obj = try vmAllocObject();
                     map_obj.* = .{ .map = &[_]MapEntry{} };
@@ -2867,8 +2882,10 @@ fn runInner() !void {
                         items[fi] = .{ .key = .{ .string = arm.fields[fi].name }, .value = fv };
                     }
                     map_obj.* = .{ .map = items[0..arm.fields.len] };
+                    _ = try vmPop();
                     try vmPush(.{ .object = map_obj });
                 } else {
+                    _ = try vmPop();
                     try vmPush(vv.payload);
                 }
             },
