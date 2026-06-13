@@ -107,14 +107,21 @@ typedef struct {
 
 /* ── Engine lifecycle ─────────────────────────────────────────────────────── */
 
-/* Create a new engine instance with default configuration.
- * Returns a positive handle on success, 0 on failure. */
+/*
+ * Create a new engine instance with default configuration.
+ * Returns a positive handle on success.
+ * Returns  0 if no engine slot is available.
+ * Returns -4 on allocation failure; engine_last_error(0,...) returns a description.
+ */
 int32_t engine_init(void);
 
 /*
  * Create a new engine instance with explicit configuration.
  * config must remain valid only for the duration of this call.
- * Returns a positive handle on success, 0 on failure.
+ * Returns a positive handle on success.
+ * Returns  0 if no engine slot is available.
+ * Returns -3 if a config value exceeds the compiled-in ceiling.
+ * Returns -4 on allocation failure.
  * On failure, engine_last_error(0, ...) returns a description.
  */
 int32_t engine_init_with_config(const gengo_instance_config_t *config);
@@ -208,6 +215,93 @@ int32_t engine_set_import_loader(int32_t handle,
  * On the WASM target this function is a no-op.
  */
 void engine_set_write_fn(int32_t handle, gengo_write_fn_t callback);
+
+/* ── HTTP capability types ───────────────────────────────────────────────── */
+
+typedef struct {
+    const char **keys;    /* parallel array of null-terminated header key strings */
+    const char **values;  /* parallel array of null-terminated header value strings */
+    int32_t      count;
+} gengo_http_headers_t;
+
+typedef struct {
+    const char          *method;
+    const char          *url;
+    const char          *body;
+    int32_t              body_len;
+    gengo_http_headers_t headers;
+    int64_t              timeout_ms;
+} gengo_http_request_t;
+
+typedef struct {
+    int32_t              status;
+    const char          *body;
+    int32_t              body_len;
+    gengo_http_headers_t headers;
+} gengo_http_response_t;
+
+/*
+ * Host-provided HTTP fetch callback.
+ * Returns 0 on success (the script sees the response regardless of HTTP status).
+ * Returns negative on network failure or timeout (becomes a runtime error).
+ */
+typedef int32_t (*gengo_http_fetch_fn_t)(const gengo_http_request_t *req,
+                                         gengo_http_response_t *out,
+                                         void *userdata);
+
+/* ── Network capability handlers ─────────────────────────────────────────── */
+
+/*
+ * Function pointer types for the network handler table.
+ * All pointers in the struct must be non-NULL when the struct is passed.
+ */
+typedef struct {
+    int32_t (*dial)(const char *network, size_t network_len,
+                    const char *address, size_t address_len,
+                    int32_t *out_handle, void *userdata);
+    int32_t (*read)(int32_t handle, char *buf, int32_t max_bytes, void *userdata);
+    int32_t (*write)(int32_t handle, const char *data, int32_t len, void *userdata);
+    void    (*close)(int32_t handle, void *userdata);
+    void    (*local_addr)(int32_t handle, char *buf, int32_t buf_len, void *userdata);
+    void    (*remote_addr)(int32_t handle, char *buf, int32_t buf_len, void *userdata);
+    void    (*set_deadline)(int32_t handle, int64_t ms, void *userdata);
+    void    (*set_read_deadline)(int32_t handle, int64_t ms, void *userdata);
+    void    (*set_write_deadline)(int32_t handle, int64_t ms, void *userdata);
+} gengo_net_handlers_t;
+
+/*
+ * Register host-provided network handlers.
+ * Pass NULL for handlers to clear registered handlers.
+ * Has no effect if the handle is invalid.
+ */
+void engine_set_net_handlers(int32_t handle,
+                             const gengo_net_handlers_t *handlers,
+                             void *userdata);
+
+/* ── HTTP capability handler ─────────────────────────────────────────────── */
+
+/*
+ * Register a host-provided HTTP fetch callback.
+ * Pass NULL for callback to clear the registered handler.
+ * Has no effect if the handle is invalid.
+ */
+void engine_set_http_handler(int32_t handle,
+                             gengo_http_fetch_fn_t callback,
+                             void *userdata);
+
+/* ── Filesystem capability ───────────────────────────────────────────────── */
+
+/*
+ * Mount a host directory for use by scripts with the cap:fs capability.
+ * name: mount name used in import("cap:fs").open("name/path").
+ * path: host filesystem path (native targets only; ignored on WASM).
+ * Returns  0 on success,
+ *         -1 if the handle is invalid,
+ *         -2 if the mount table is full or the path is invalid.
+ */
+int32_t engine_mount_dir(int32_t handle,
+                         const char *name, int32_t name_len,
+                         const char *path, int32_t path_len);
 
 /* ── Version ──────────────────────────────────────────────────────────────── */
 

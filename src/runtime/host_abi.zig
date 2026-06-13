@@ -11,8 +11,9 @@ pub const WireTag = enum(u8) {
 };
 
 // Flags for WireTag.number to distinguish subtypes
+pub const FLAG_INTEGER: u8 = 1 << 0; // bit 0: payload is an integer encoded as f64 bits
 pub const FLAG_DECIMAL: u8 = 1 << 1; // bit 1: payload is raw i64 fixed-point, not f64
-pub const FLAG_RUNE: u8 = 1 << 2;     // bit 2: payload is a Unicode codepoint (u21)
+pub const FLAG_RUNE: u8 = 1 << 2;    // bit 2: payload is a Unicode codepoint (u21)
 
 pub const ValueWire = extern struct {
     tag: u8,

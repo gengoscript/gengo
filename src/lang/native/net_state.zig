@@ -43,6 +43,10 @@ pub fn hasHandlers() bool {
     return g_net_handlers != null;
 }
 
+pub fn resetHandlers() void {
+    g_net_handlers = null;
+}
+
 pub fn netReset() void {
     if (g_net_handlers) |h| {
         var i: usize = 0;
