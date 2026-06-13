@@ -166,6 +166,7 @@ pub fn cForStmt(c: anytype) anyerror!void {
             try chunk.emitOpConst(.def_global, .{ .string = try c.qualifyGlobalName(c.currentLoop().loop_var_names[li]) }, c.prev.line);
             try chunk.emitOp(.pop, c.prev.line);
         }
+        c.currentScope().local_count = local_base;
     }
 
     const loop = c.popLoop();
@@ -722,6 +723,7 @@ pub fn forInStmt(c: anytype) anyerror!void {
             try chunk.emitOpConst(.def_global, .{ .string = try c.qualifyGlobalName(c.currentLoop().loop_var_names[li]) }, c.prev.line);
             try chunk.emitOp(.pop, c.prev.line);
         }
+        c.currentScope().local_count = local_base;
     }
 
     const loop = c.popLoop();

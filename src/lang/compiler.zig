@@ -434,8 +434,8 @@ pub const Compiler = struct {
     }
 
     fn resolveUpvalue(self: *Compiler, name: []const u8) ?u8 {
-        if (self.scope_depth == 0) return null;
-        return self.resolveUpvalueForScope(self.scope_depth, name);
+        if (self.scope_depth <= 1) return null;
+        return self.resolveUpvalueForScope(self.scope_depth - 1, name);
     }
 
     fn resolveUpvalueConstForScope(self: *Compiler, scope_index: u8, name: []const u8) ?bool {
@@ -451,8 +451,8 @@ pub const Compiler = struct {
     }
 
     fn resolveUpvalueConst(self: *Compiler, name: []const u8) ?bool {
-        if (self.scope_depth == 0) return null;
-        return self.resolveUpvalueConstForScope(self.scope_depth, name);
+        if (self.scope_depth <= 1) return null;
+        return self.resolveUpvalueConstForScope(self.scope_depth - 1, name);
     }
 
     pub fn ensureMutableBinding(self: *Compiler, name: Token) !void {
