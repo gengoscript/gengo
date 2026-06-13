@@ -59,14 +59,15 @@ fn jsonValueToGengo(jv: std.json.Value) !Value {
                 return .{ .object = obj };
             }
             const obj = try vmgc.vmAllocObject();
-            obj.* = .{ .array = &[_]Value{} };
+            obj.* = .{ .array_managed = &[_]Value{} }; // safe placeholder
             try vms.pushTempRoot(.{ .object = obj });
             defer vms.popTempRoot();
             const items = try vmgc.vmAllocManagedSlice(Value, n);
+            obj.* = .{ .array_managed = items[0..0] }; // publish immediately so GC traces partial contents
             for (0..n) |i| {
                 items[i] = try jsonValueToGengo(arr.items[i]);
+                obj.* = .{ .array_managed = items[0 .. i + 1] }; // grow visible length
             }
-            obj.* = .{ .array_managed = items[0..n] };
             return .{ .object = obj };
         },
         .object => |obj_map| {

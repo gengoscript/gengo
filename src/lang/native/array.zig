@@ -98,15 +98,16 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             if (!vms.isArrayObject(arr_obj)) return error.TypeError;
             const items = try vms.asArraySlice(arr_obj);
             const out_obj = try vmgc.vmAllocObject();
-            out_obj.* = .{ .array = &[_]Value{} };
+            out_obj.* = .{ .array_managed = &[_]Value{} }; // safe placeholder
             try vms.pushTempRoot(.{ .object = out_obj });
             defer vms.popTempRoot();
             if (items.len > 0) {
                 const out = try vmgc.vmAllocManagedSlice(Value, items.len);
+                out_obj.* = .{ .array_managed = out[0..0] }; // publish immediately
                 for (items, 0..) |item, i| {
                     out[i] = try vm.callFunction(fn_val, &.{item});
+                    out_obj.* = .{ .array_managed = out[0 .. i + 1] }; // grow visible
                 }
-                out_obj.* = .{ .array_managed = out[0..items.len] };
             }
             _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
             try vms.vmPush(.{ .object = out_obj });
@@ -171,11 +172,12 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const b_items = try vms.asArraySlice(b_obj);
             const pair_count = @min(a_items.len, b_items.len);
             const out_obj = try vmgc.vmAllocObject();
-            out_obj.* = .{ .array = &[_]Value{} };
+            out_obj.* = .{ .array_managed = &[_]Value{} }; // safe placeholder
             try vms.pushTempRoot(.{ .object = out_obj });
             defer vms.popTempRoot();
             if (pair_count > 0) {
                 const out = try vmgc.vmAllocManagedSlice(Value, pair_count);
+                out_obj.* = .{ .array_managed = out[0..0] }; // publish immediately
                 for (0..pair_count) |i| {
                     const pair = try vmgc.vmAllocObject();
                     const pair_items = try vmgc.vmAllocManagedSlice(Value, 2);
@@ -183,8 +185,8 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                     pair_items[1] = b_items[i];
                     pair.* = .{ .array_managed = pair_items[0..2] };
                     out[i] = .{ .object = pair };
+                    out_obj.* = .{ .array_managed = out[0 .. i + 1] }; // grow visible
                 }
-                out_obj.* = .{ .array_managed = out[0..pair_count] };
             }
             _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
             try vms.vmPush(.{ .object = out_obj });
@@ -271,11 +273,12 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const items = try vms.asArraySlice(arr_obj);
             const chunk_count = if (items.len == 0) 0 else (items.len + sz - 1) / sz;
             const out_obj = try vmgc.vmAllocObject();
-            out_obj.* = .{ .array = &[_]Value{} };
+            out_obj.* = .{ .array_managed = &[_]Value{} }; // safe placeholder
             try vms.pushTempRoot(.{ .object = out_obj });
             defer vms.popTempRoot();
             if (chunk_count > 0) {
                 const out = try vmgc.vmAllocManagedSlice(Value, chunk_count);
+                out_obj.* = .{ .array_managed = out[0..0] }; // publish immediately
                 for (0..chunk_count) |ci| {
                     const from = ci * sz;
                     const to = @min(from + sz, items.len);
@@ -284,8 +287,8 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                     @memcpy(chunk_items, items[from..to]);
                     chunk_obj.* = .{ .array_managed = chunk_items };
                     out[ci] = .{ .object = chunk_obj };
+                    out_obj.* = .{ .array_managed = out[0 .. ci + 1] }; // grow visible
                 }
-                out_obj.* = .{ .array_managed = out[0..chunk_count] };
             }
             _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
             try vms.vmPush(.{ .object = out_obj });

@@ -161,31 +161,33 @@ pub fn valueFromWire(w: host_abi.ValueWire) !Value {
             const count = w.len;
             const elem_wires = @as([*]const host_abi.ValueWire, @ptrFromInt(@as(usize, @intCast(w.payload))))[0..count];
             const arr_obj = try vmgc.vmAllocObject();
-            arr_obj.* = .{ .array = &[_]Value{} };
+            arr_obj.* = .{ .array_managed = &[_]Value{} }; // safe placeholder
             try vms.pushTempRoot(.{ .object = arr_obj });
             defer vms.popTempRoot();
             const items = try vmgc.vmAllocManagedSlice(Value, count);
+            arr_obj.* = .{ .array_managed = items[0..0] }; // publish immediately
             for (elem_wires, 0..) |ew, i| {
                 items[i] = try valueFromWire(ew);
+                arr_obj.* = .{ .array_managed = items[0 .. i + 1] }; // grow visible
             }
-            arr_obj.* = .{ .array_managed = items[0..count] };
             return .{ .object = arr_obj };
         },
         .map => {
             const count = w.len;
             const pair_wires = @as([*]const host_abi.ValueWire, @ptrFromInt(@as(usize, @intCast(w.payload))))[0 .. count * 2];
             const map_obj = try vmgc.vmAllocObject();
-            map_obj.* = .{ .map = &[_]MapEntry{} };
+            map_obj.* = .{ .map_managed = &[_]MapEntry{} }; // safe placeholder
             try vms.pushTempRoot(.{ .object = map_obj });
             defer vms.popTempRoot();
             const entries = try vmgc.vmAllocManagedSlice(MapEntry, count);
+            map_obj.* = .{ .map_managed = entries[0..0] }; // publish immediately
             for (0..count) |i| {
                 entries[i] = .{
                     .key = try valueFromWire(pair_wires[i * 2]),
                     .value = try valueFromWire(pair_wires[i * 2 + 1]),
                 };
+                map_obj.* = .{ .map_managed = entries[0 .. i + 1] }; // grow visible
             }
-            map_obj.* = .{ .map_managed = entries[0..count] };
             return .{ .object = map_obj };
         },
     };

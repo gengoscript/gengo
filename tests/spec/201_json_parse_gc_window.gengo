@@ -1,0 +1,23 @@
+// Regression test for #124 — JSON parsing GC window
+// Verifies that parsing a large JSON array with objects that allocate strings
+// does not lose elements due to GC during construction.
+std := import("std")
+json := std.json
+
+// Build a JSON array with 104 elements (each a short string) to stress the allocator.
+// The json parser will create a new object for the array and call makeDynString
+// for each element.  With the default GC threshold, this is enough to trigger at
+// least one promotion while the backing slice is still being filled.
+arr := json.parse("[\"a\",\"b\",\"c\",\"d\",\"e\",\"f\",\"g\",\"h\",\"i\",\"j\",\"k\",\"l\",\"m\",\"n\",\"o\",\"p\",\"q\",\"r\",\"s\",\"t\",\"u\",\"v\",\"w\",\"x\",\"y\",\"z\",\"a\",\"b\",\"c\",\"d\",\"e\",\"f\",\"g\",\"h\",\"i\",\"j\",\"k\",\"l\",\"m\",\"n\",\"o\",\"p\",\"q\",\"r\",\"s\",\"t\",\"u\",\"v\",\"w\",\"x\",\"y\",\"z\",\"a\",\"b\",\"c\",\"d\",\"e\",\"f\",\"g\",\"h\",\"i\",\"j\",\"k\",\"l\",\"m\",\"n\",\"o\",\"p\",\"q\",\"r\",\"s\",\"t\",\"u\",\"v\",\"w\",\"x\",\"y\",\"z\",\"a\",\"b\",\"c\",\"d\",\"e\",\"f\",\"g\",\"h\",\"i\",\"j\",\"k\",\"l\",\"m\",\"n\",\"o\",\"p\",\"q\",\"r\",\"s\",\"t\",\"u\",\"v\",\"w\",\"x\",\"y\",\"z\"]")
+
+// Verify all 104 elements are present and correct.
+assert(std.core.len(arr) == 104)
+
+for i := 0; i < 104; i++ {
+    ch := arr[i]
+    letters := "abcdefghijklmnopqrstuvwxyz"
+    expected := letters[i % 26 : i % 26 + 1]
+    assert(ch == expected)
+}
+
+std.io.println("ok")
