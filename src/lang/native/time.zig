@@ -213,7 +213,7 @@ pub fn timeParseStr(s: []const u8, fmt: []const u8) !Value {
                 if (sec > 59) return error.RangeError;
                 si += 2;
             },
-            '3' => {
+            'L' => {
                 if (si + 3 > s.len) return error.TypeError;
                 ms = std.fmt.parseInt(u16, s[si..si+3], 10) catch return error.TypeError;
                 si += 3;
