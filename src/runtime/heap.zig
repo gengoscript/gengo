@@ -4,6 +4,9 @@ const builtin = @import("builtin");
 
 pub const HeapSize = cfg.heap_size_bytes;
 pub const MaxObjects = cfg.max_objects;
+comptime {
+    if (MaxObjects > 65535) @compileError("max_objects must be <= 65535 (free-list indices are u16; 0xffff is the sentinel)");
+}
 
 const Object = @import("../lang/value.zig").Object;
 const ObjTag = @import("../lang/value.zig").ObjTag;

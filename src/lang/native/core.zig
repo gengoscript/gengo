@@ -190,19 +190,13 @@ pub fn nativeIsError(v: Value) Value {
     return .{ .boolean = v == .error_value };
 }
 
-pub fn nativeGc() void {
-    vmgc.vmCollectGarbage();
-}
-
-pub fn nativeGcLiveObjects() Value {
-    return .{ .number = @floatFromInt(heap.liveObjectCount()) };
-}
-
 pub fn nativeGcStats() !Value {
     const obj = try vmgc.vmAllocObject();
+    obj.* = .{ .map = &[_]MapEntry{} };
     try vms.pushTempRoot(.{ .object = obj });
     defer vms.popTempRoot();
-    const items = heap.bump(MapEntry, 3) orelse return error.OutOfMemory;
+    const items = try vmgc.vmAllocManagedSlice(MapEntry, 3);
+    obj.* = .{ .map = items[0..0] };
     items[0] = .{ .key = .{ .string = "heap_used_bytes" }, .value = .{ .int = @floatFromInt(heap.usedBytes()) } };
     items[1] = .{ .key = .{ .string = "heap_size_bytes" }, .value = .{ .int = @floatFromInt(heap.g_state.heap.len) } };
     items[2] = .{ .key = .{ .string = "live_objects" }, .value = .{ .int = @floatFromInt(heap.liveObjectCount()) } };
@@ -212,9 +206,11 @@ pub fn nativeGcStats() !Value {
 
 pub fn nativeGcStatsExt() !Value {
     const obj = try vmgc.vmAllocObject();
+    obj.* = .{ .map = &[_]MapEntry{} };
     try vms.pushTempRoot(.{ .object = obj });
     defer vms.popTempRoot();
-    const items = heap.bump(MapEntry, 8) orelse return error.OutOfMemory;
+    const items = try vmgc.vmAllocManagedSlice(MapEntry, 8);
+    obj.* = .{ .map = items[0..0] };
     items[0] = .{ .key = .{ .string = "heap_used_bytes" }, .value = .{ .int = @floatFromInt(heap.usedBytes()) } };
     items[1] = .{ .key = .{ .string = "heap_size_bytes" }, .value = .{ .int = @floatFromInt(heap.g_state.heap.len) } };
     items[2] = .{ .key = .{ .string = "live_objects" }, .value = .{ .int = @floatFromInt(heap.liveObjectCount()) } };
@@ -449,10 +445,13 @@ fn appendVisitedPair(a: *Object, b: *Object, visits: []DeepEqVisit, visit_len: *
     visit_len.* += 1;
 }
 
+const MaxDeepEqMapScratch = 128;
 fn deepEqualMap(a_entries: []const MapEntry, b_entries: []const MapEntry, visits: []DeepEqVisit, visit_len: *usize) anyerror!bool {
     if (a_entries.len != b_entries.len) return false;
-    const used = heap.bump(bool, b_entries.len) orelse return error.OutOfMemory;
-    @memset(used[0..b_entries.len], false);
+    if (b_entries.len > MaxDeepEqMapScratch) return error.OutOfMemory;
+    var used_buf: [MaxDeepEqMapScratch]bool = undefined;
+    const used = used_buf[0..b_entries.len];
+    @memset(used, false);
     for (a_entries) |ae| {
         var matched = false;
         var i: usize = 0;
@@ -616,9 +615,23 @@ fn cloneObject(src: *Object, visits: []CloneVisit, visit_len: *usize) anyerror!V
             return .{ .object = out_obj };
         },
         .dyn_string => |s| return vmgc.makeDynString(s),
+        .string_builder => |sb| {
+            const out_obj = try vmgc.vmAllocObject();
+            if (sb.len == 0) {
+                out_obj.* = .{ .string_builder = .{ .buf = &[_]u8{}, .len = 0 } };
+            } else {
+                out_obj.* = .{ .string_builder = .{ .buf = &[_]u8{}, .len = 0 } };
+                try vms.pushTempRoot(.{ .object = out_obj });
+                const new_buf = try vmgc.vmAllocManagedBytes(sb.len);
+                @memcpy(new_buf[0..sb.len], sb.buf[0..sb.len]);
+                out_obj.* = .{ .string_builder = .{ .buf = new_buf, .len = sb.len } };
+                vms.popTempRoot();
+            }
+            return .{ .object = out_obj };
+        },
         .function, .closure, .native_function, .host_module_function, .struct_type, .interface_type,
         .named_type, .enum_type, .iterator, .variant_type, .variant_ctor,
-        .named_type_fn, .string_builder, .cell => return .{ .object = src },
+        .named_type_fn, .cell => return .{ .object = src },
         .named_value => |nv| {
             const out_obj = try vmgc.vmAllocObject();
             out_obj.* = .{ .array = &[_]Value{} };
@@ -802,7 +815,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             if (argc != nf.arity) return error.ArityMismatch;
             const arg = vms.vmState().stack[vms.vmState().stack_top - 1];
             const msg = try vms.asStringValue(arg);
-            const copy = heap.bump(u8, msg.len) orelse return error.OutOfMemory;
+            const copy = try vmgc.vmAllocManagedBytes(msg.len);
             @memcpy(copy[0..msg.len], msg);
             _ = try vms.vmPop();
             _ = try vms.vmPop();
