@@ -67,6 +67,13 @@ pub fn interfaceDeclBody(c: anytype, kw: Token, name: Token, is_pub: bool) !void
         if (c.cur.typ != .ident) return c.err("expected identifier, found {s}", .{c.tokenName(c.cur.typ)});
         if (mcount >= MaxLocals) { c.setErr("too many fields (max {d})", .{MaxLocals}); return error.TooManyFields; }
         const mname = try c.copyName(c.cur.src);
+        var mi_check: u8 = 0;
+        while (mi_check < mcount) : (mi_check += 1) {
+            if (common.streq(methods_tmp[mi_check].name, mname)) {
+                c.setErr("duplicate method '{s}' in interface", .{mname});
+                return error.DuplicateField;
+            }
+        }
         c.advance();
         try c.consume(.lparen);
 
@@ -99,6 +106,7 @@ pub fn interfaceDeclBody(c: anytype, kw: Token, name: Token, is_pub: bool) !void
                 }
                 const ptype: FieldTypeSpec = try parseFieldTypeSpec(c, );
                 if (!(ptype.alts.len == 1 and ptype.alts[0].typ == .any)) has_typed_params = true;
+                if (arity >= MaxLocals) { c.setErr("too many parameters (max {d})", .{MaxLocals}); return error.TooManyParams; }
                 ptypes_tmp[arity] = ptype;
                 arity += 1;
                 if (vari) {
@@ -117,6 +125,7 @@ pub fn interfaceDeclBody(c: anytype, kw: Token, name: Token, is_pub: bool) !void
         var has_typed_returns = false;
         if (c.match(.lparen)) {
             while (true) {
+                if (rcount >= MaxLocals) { c.setErr("too many return types (max {d})", .{MaxLocals}); return error.TooManyParams; }
                 returns_tmp[rcount] = try parseFieldTypeSpec(c, );
                 rcount += 1;
                 has_typed_returns = true;
@@ -222,6 +231,11 @@ pub fn methodDecl(c: anytype) !void {
     if (c.inFunc()) {
         _ = try c.defineLocal(key, false);
     } else {
+        if (c.registry.hasGlobalFunc(key)) {
+            c.setErr("duplicate method '{s}'", .{method_name});
+            return error.DuplicateField;
+        }
+        try c.registry.addGlobalFunc(key);
         try chunk.emitOpConst(.def_global, .{ .string = key }, kw.line);
     }
     c.matchOpt(.semicolon);
@@ -244,6 +258,11 @@ pub fn namedFuncDecl(c: anytype, is_pub: bool) !void {
         _ = try c.defineLocal(name.src, false);
     } else {
         const qname = try c.qualifyGlobalName(name.src);
+        if (c.registry.hasGlobalFunc(qname)) {
+            c.setErr("duplicate function '{s}'", .{name.src});
+            return error.DuplicateField;
+        }
+        try c.registry.addGlobalFunc(qname);
         try chunk.emitOpConst(.def_global, .{ .string = qname }, kw.line);
         if (is_pub) try c.addExport(name.src, qname);
     }
@@ -270,7 +289,13 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
         if (!c.check(.rbrace)) {
             while (true) {
                 if (c.cur.typ != .ident) return c.err("expected identifier, found {s}", .{c.tokenName(c.cur.typ)});
-                members_tmp[mcount] = try c.copyName(c.cur.src);
+                if (mcount >= MaxLocals) { c.setErr("too many enum members (max {d})", .{MaxLocals}); return error.TooManyFields; }
+                const mname = c.cur.src;
+                var mdup: u8 = 0;
+                while (mdup < mcount) : (mdup += 1) {
+                    if (common.streq(members_tmp[mdup], mname)) { c.setErr("duplicate member '{s}' in enum", .{mname}); return error.DuplicateField; }
+                }
+                members_tmp[mcount] = try c.copyName(mname);
                 mcount += 1;
                 c.advance();
                 if (!c.match(.comma)) break;
@@ -758,7 +783,13 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
         if (!c.check(.rbrace)) {
             while (true) {
                 if (c.cur.typ != .ident) return c.err("expected identifier, found {s}", .{c.tokenName(c.cur.typ)});
-                members_tmp[mcount] = try c.copyName(c.cur.src);
+                if (mcount >= MaxLocals) { c.setErr("too many enum members (max {d})", .{MaxLocals}); return error.TooManyFields; }
+                const smname = c.cur.src;
+                var smdup: u8 = 0;
+                while (smdup < mcount) : (smdup += 1) {
+                    if (common.streq(members_tmp[smdup], smname)) { c.setErr("duplicate member '{s}' in enum subtype", .{smname}); return error.DuplicateField; }
+                }
+                members_tmp[mcount] = try c.copyName(smname);
                 mcount += 1;
                 c.advance();
                 if (!c.match(.comma)) break;
@@ -939,6 +970,10 @@ pub fn variantDeclBody(c: anytype, kw: Token, name_tok: Token, is_pub: bool) !vo
                 payload_type = try parseFieldTypeSpec(c, );
                 try c.consume(.rparen);
                 if (arm_count >= MaxLocals) { c.setErr("too many local variables (max {d})", .{MaxLocals}); return error.TooManyLocals; }
+                var varm_dup: u8 = 0;
+                while (varm_dup < arm_count) : (varm_dup += 1) {
+                    if (common.streq(arms_tmp[varm_dup].name, entry_name)) { c.setErr("duplicate arm '{s}' in variant", .{entry_name}); return error.DuplicateField; }
+                }
                 arms_tmp[arm_count] = .{
                     .name = entry_name,
                     .has_payload = true,
@@ -955,6 +990,10 @@ pub fn variantDeclBody(c: anytype, kw: Token, name_tok: Token, is_pub: bool) !vo
                         if (c.cur.typ != .ident) return c.err("expected identifier, found {s}", .{c.tokenName(c.cur.typ)});
                         if (field_count >= MaxLocals) { c.setErr("too many fields (max {d})", .{MaxLocals}); return error.TooManyFields; }
                         const fname = try c.copyName(c.cur.src);
+                        var vfield_dup: u8 = 0;
+                        while (vfield_dup < field_count) : (vfield_dup += 1) {
+                            if (common.streq(field_specs[vfield_dup].name, fname)) { c.setErr("duplicate field '{s}' in variant arm", .{fname}); return error.DuplicateField; }
+                        }
                         c.advance();
                         var spec = StructFieldSpec{ .name = fname, .typ = .{ .alts = &[_]FieldTypeAlt{} } };
                         if (c.cur.typ == .ident or c.cur.typ == .question or c.cur.typ == .kw_func or c.cur.typ == .lbracket) {
@@ -971,6 +1010,10 @@ pub fn variantDeclBody(c: anytype, kw: Token, name_tok: Token, is_pub: bool) !vo
                 var fi: usize = 0;
                 while (fi < field_count) : (fi += 1) fields[fi] = field_specs[fi];
                 if (arm_count >= MaxLocals) { c.setErr("too many local variables (max {d})", .{MaxLocals}); return error.TooManyLocals; }
+                var vrec_dup: u8 = 0;
+                while (vrec_dup < arm_count) : (vrec_dup += 1) {
+                    if (common.streq(arms_tmp[vrec_dup].name, entry_name)) { c.setErr("duplicate arm '{s}' in variant", .{entry_name}); return error.DuplicateField; }
+                }
                 arms_tmp[arm_count] = .{
                     .name = entry_name,
                     .has_payload = field_count > 0,
@@ -980,11 +1023,19 @@ pub fn variantDeclBody(c: anytype, kw: Token, name_tok: Token, is_pub: bool) !vo
             } else if (c.cur.typ == .comma or c.cur.typ == .rbrace) {
                 // No-payload arm: name
                 if (arm_count >= MaxLocals) { c.setErr("too many local variables (max {d})", .{MaxLocals}); return error.TooManyLocals; }
+                var vnp_dup: u8 = 0;
+                while (vnp_dup < arm_count) : (vnp_dup += 1) {
+                    if (common.streq(arms_tmp[vnp_dup].name, entry_name)) { c.setErr("duplicate arm '{s}' in variant", .{entry_name}); return error.DuplicateField; }
+                }
                 arms_tmp[arm_count] = .{ .name = entry_name };
                 arm_count += 1;
             } else if (c.cur.typ == .ident or c.cur.typ == .question or c.cur.typ == .kw_func or c.cur.typ == .lbracket) {
                 // Shared field: name type
                 if (shared_count >= MaxLocals) { c.setErr("too many fields (max {d})", .{MaxLocals}); return error.TooManyFields; }
+                var vshared_dup: u8 = 0;
+                while (vshared_dup < shared_count) : (vshared_dup += 1) {
+                    if (common.streq(shared_tmp[vshared_dup].name, entry_name)) { c.setErr("duplicate field '{s}' in variant shared fields", .{entry_name}); return error.DuplicateField; }
+                }
                 const spec = StructFieldSpec{ .name = entry_name, .typ = try parseFieldTypeSpec(c, ) };
                 shared_tmp[shared_count] = spec;
                 shared_count += 1;

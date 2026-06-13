@@ -1,0 +1,4 @@
+type Doer interface {
+    do(int) int
+    do(string) string
+}

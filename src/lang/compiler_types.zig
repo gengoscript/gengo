@@ -19,6 +19,7 @@ pub const MaxVariantTypes = 128;
 pub const MaxSwitchJumps = 256;
 pub const MaxUpvalues = 64;
 pub const MaxGlobalConsts = 512;
+pub const MaxGlobalFuncs = 512;
 pub const MaxExprDepth = 256;
 
 pub const Prec = enum(u8) {
@@ -128,6 +129,7 @@ pub const NamedTypeInfo = struct {
     enum_members: ?[]const []const u8 = null,
 };
 const GlobalConstInfo = struct { name: []const u8 };
+const GlobalFuncInfo = struct { name: []const u8 };
 
 pub const TypeRegistry = struct {
     struct_types: [MaxStructTypes]StructTypeInfo = undefined,
@@ -140,6 +142,8 @@ pub const TypeRegistry = struct {
     variant_type_count: usize = 0,
     global_consts: [MaxGlobalConsts]GlobalConstInfo = undefined,
     global_const_count: usize = 0,
+    global_funcs: [MaxGlobalFuncs]GlobalFuncInfo = undefined,
+    global_func_count: usize = 0,
 
     pub fn reset(self: *TypeRegistry) void {
         self.struct_type_count = 0;
@@ -147,6 +151,7 @@ pub const TypeRegistry = struct {
         self.named_type_count = 0;
         self.variant_type_count = 0;
         self.global_const_count = 0;
+        self.global_func_count = 0;
     }
 
     pub fn hasStructType(self: *TypeRegistry, name: []const u8) bool {
@@ -234,5 +239,19 @@ pub const TypeRegistry = struct {
         if (self.variant_type_count >= MaxVariantTypes) return error.TooManyVariantTypes;
         self.variant_types[self.variant_type_count] = .{ .name = name };
         self.variant_type_count += 1;
+    }
+
+    pub fn hasGlobalFunc(self: *TypeRegistry, name: []const u8) bool {
+        var i: usize = 0;
+        while (i < self.global_func_count) : (i += 1) {
+            if (common.streq(self.global_funcs[i].name, name)) return true;
+        }
+        return false;
+    }
+
+    pub fn addGlobalFunc(self: *TypeRegistry, name: []const u8) !void {
+        if (self.global_func_count >= MaxGlobalFuncs) return;
+        self.global_funcs[self.global_func_count] = .{ .name = name };
+        self.global_func_count += 1;
     }
 };

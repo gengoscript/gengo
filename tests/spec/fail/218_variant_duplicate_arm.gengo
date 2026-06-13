@@ -1,0 +1,5 @@
+type Shape variant {
+    Circle(radius float),
+    Square(side float),
+    Circle(r float)
+}

@@ -1,0 +1,1 @@
+type Color enum { Red, Green, Blue, Red }
