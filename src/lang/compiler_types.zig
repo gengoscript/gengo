@@ -10,6 +10,7 @@ pub const MaxLocals = 64;
 pub const MaxScopes = 8;
 pub const MaxLoopDepth = 16;
 pub const MaxLoopBreaks = 128;
+pub const MaxLoopVars = 2;
 pub const MaxTypeAlts = 8;
 pub const MaxStructTypes = 128;
 pub const MaxInterfaceTypes = 128;
@@ -87,6 +88,9 @@ pub const LoopCtx = struct {
     iter_pops: u8,
     break_offsets: [MaxLoopBreaks]usize = undefined,
     break_count: usize = 0,
+    loop_var_count: u8 = 0,
+    loop_var_slots: [MaxLoopVars]u8 = undefined,
+    loop_var_names: [MaxLoopVars][]const u8 = undefined,
 };
 
 pub const AssignTargetStep = union(enum) {
