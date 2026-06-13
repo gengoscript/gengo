@@ -17,21 +17,24 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
     switch (@as(NativeFnId, @enumFromInt(nf.id))) {
         .cap_fs_read => {
             if (argc != 1) return error.ArityMismatch;
-            const arg0 = try vms.vmPop();
-            const path = vms.asStringValue(arg0) catch return error.TypeError;
-            _ = try vms.vmPop();
+            const path = vms.asStringValue(try vms.vmPeek(0)) catch return error.TypeError;
 
-            if (comptime builtin.os.tag == .wasi) return error.CapabilityNotAvailable;
+            if (comptime builtin.os.tag == .wasi) {
+                _ = try vms.vmPop();
+                _ = try vms.vmPop();
+                return error.CapabilityNotAvailable;
+            }
 
             var rbuf: [4096]u8 = undefined;
             const rpath = try fs_state.resolve(path, &rbuf);
 
             if (comptime builtin.os.tag == .windows) {
-                // No openat on Windows; std.Io is slower (issue #73) but correct.
                 const io = ioContext();
                 const contents = std.Io.Dir.cwd().readFileAlloc(io, rpath, alloc, .unlimited) catch return error.CapabilityError;
                 defer alloc.free(contents);
                 const out = try vmgc.makeDynString(contents);
+                _ = try vms.vmPop();
+                _ = try vms.vmPop();
                 try vms.vmPush(out);
                 return;
             }
@@ -51,6 +54,8 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             defer alloc.free(contents);
 
             const out = try vmgc.makeDynString(contents);
+            _ = try vms.vmPop();
+            _ = try vms.vmPop();
             try vms.vmPush(out);
         },
         .cap_fs_exists => {

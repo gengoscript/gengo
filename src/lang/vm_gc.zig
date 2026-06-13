@@ -8,6 +8,7 @@ const vms = @import("vm_state.zig");
 const vmperf = @import("vm_perf.zig");
 const Value = @import("value.zig").Value;
 const Object = @import("value.zig").Object;
+const build_options = @import("build_options");
 
 pub fn monoNowNs() u64 {
     if (comptime builtin.os.tag != .wasi) {
@@ -154,6 +155,7 @@ fn nextGcObjects(live: usize) usize {
 // collect on every allocation so unrooted-window bugs fire deterministically.
 pub var gc_stress: bool = false;
 fn gcStress() bool {
+    if (comptime build_options.gc_stress) return true;
     return gc_stress;
 }
 

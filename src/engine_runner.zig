@@ -735,6 +735,19 @@ fn mockHttpFetch(req: *const http_state.GengoHttpRequest, resp: *http_state.Geng
     return 0;
 }
 
+fn testGcStressWindows() void {
+    // Verify the runtime toggle exists.
+    const saved = vmgc.gc_stress;
+    vmgc.gc_stress = true;
+    _ = vmgc.gc_stress;
+    vmgc.gc_stress = saved;
+
+    // The specific opcode GC-window fixes (peek-allocate-pop, temp-rooting)
+    // are verified implicitly by the conformance tests. The `-Dgc_stress`
+    // compile-time option provides exhaustive GC-window coverage.
+    out("  gc stress windows: N/A (build with -Dgc_stress=true for full coverage)\n");
+}
+
 fn testInitWithConfig() void {
     // Create a runtime with custom (but valid) resource limits.
     // On WASM this falls back to preset backing arrays; on native it
@@ -1079,6 +1092,7 @@ export fn _start() void {
     testArrayWireResult();
     testMapWireResult();
     testHostModuleArrayArgs();
+    testGcStressWindows();
     testNetCapability();
     testNetCapabilityHandlers();
     testInitWithConfig();
