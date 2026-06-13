@@ -303,6 +303,7 @@ pub fn build(b: *std.Build) void {
     native_exe.step.dependOn(&preset.step);
     const install_native = b.addInstallArtifact(native_exe, .{});
 
+    b.getInstallStep().dependOn(&install_native.step);
     const cli_step = b.step("cli", "Build native CLI binary (zig-out/bin/gengo)");
     cli_step.dependOn(&install_native.step);
 
