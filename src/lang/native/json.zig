@@ -99,7 +99,13 @@ fn jsonValueToGengo(jv: std.json.Value) !Value {
     };
 }
 
-fn jsonStringifyValue(s: *std.json.Stringify, gv: Value) !void {
+const MaxDepth = 64;
+
+fn jsonStringifyValueDepth(s: *std.json.Stringify, gv: Value, depth: u32, ancestors: *[MaxDepth]*const Object, anc_count: *usize) !void {
+    if (depth >= MaxDepth) {
+        try s.write(null);
+        return;
+    }
     if (vmod.decimalRawAndScale(gv)) |drs| {
         var tmp: [64]u8 = undefined;
         const str = vmod.formatDecimalString(drs.raw, drs.scale, &tmp);
@@ -118,26 +124,50 @@ fn jsonStringifyValue(s: *std.json.Stringify, gv: Value) !void {
         .object => |obj| switch (obj.*) {
             .dyn_string => |str| try s.write(str),
             .array, .array_managed => {
+                for (ancestors[0..anc_count.*]) |a| {
+                    if (a == obj) {
+                        try s.write(null);
+                        return;
+                    }
+                }
+                ancestors[anc_count.*] = obj;
+                anc_count.* += 1;
                 try s.beginArray();
                 for (try vms.asArraySlice(obj)) |item| {
-                    try jsonStringifyValue(s, item);
+                    try jsonStringifyValueDepth(s, item, depth + 1, ancestors, anc_count);
                 }
                 try s.endArray();
+                anc_count.* -= 1;
             },
             .map, .map_managed, .map_hashed => {
+                for (ancestors[0..anc_count.*]) |a| {
+                    if (a == obj) {
+                        try s.write(null);
+                        return;
+                    }
+                }
+                ancestors[anc_count.*] = obj;
+                anc_count.* += 1;
                 try s.beginObject();
                 for (try vms.asMapSlice(obj)) |entry| {
                     const key = vms.unboxNamed(entry.key);
                     const key_str = try vms.asStringValue(key);
                     try s.objectField(key_str);
-                    try jsonStringifyValue(s, entry.value);
+                    try jsonStringifyValueDepth(s, entry.value, depth + 1, ancestors, anc_count);
                 }
                 try s.endObject();
+                anc_count.* -= 1;
             },
             else => try s.write(null),
         },
         .error_value => try s.write(null),
     }
+}
+
+fn jsonStringifyValue(s: *std.json.Stringify, gv: Value) !void {
+    var ancestors: [MaxDepth]*const Object = undefined;
+    var anc_count: usize = 0;
+    try jsonStringifyValueDepth(s, gv, 0, &ancestors, &anc_count);
 }
 
 pub fn jsonParseNative() !Value {
