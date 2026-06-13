@@ -2963,12 +2963,12 @@ fn runInner() !void {
 fn runDeferredCall(deferred: Value) anyerror!void {
     const arr = try vms.asArraySlice(deferred.object);
     if (arr.len == 0) return;
-    if (arr.len > 256) return;
+    if (arr.len > 256) return error.ArityMismatch;
     const dargc: u8 = @intCast(arr.len - 1);
     var di: usize = 0;
-    while (di < arr.len) : (di += 1) vmPush(arr[di]) catch return;
+    while (di < arr.len) : (di += 1) try vmPush(arr[di]);
     const depth_before = vmState().frame_top;
-    performCall(dargc) catch return;
+    try performCall(dargc);
     if (vmState().frame_top > depth_before) {
         const prev_target = vmState().call_depth_target;
         vmState().call_depth_target = depth_before;

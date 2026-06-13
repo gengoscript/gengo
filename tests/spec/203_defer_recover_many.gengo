@@ -1,0 +1,18 @@
+// Regression test for #129 — runDeferredCall must not silently drop deferred calls
+// Verifies that recover() in a defer block catches a panic, and that multiple
+// defers all run during panic unwind.
+std := import("std")
+core := std.core
+
+func test_many_defers_and_recover() {
+    defer func() {
+        e := core.recover()
+        std.io.println(core.is_error(e))
+    }()
+    defer std.io.println("defer2")
+    defer std.io.println("defer1")
+    _ = []int{}[0]
+}
+
+test_many_defers_and_recover()
+std.io.println("done")
