@@ -53,27 +53,47 @@ pub fn timeGetMs(val: Value) !f64 {
     };
 }
 
+// Convert a signed day-count from epoch (1970-01-01 = 0) to year/month/day.
+// Uses the algorithm from http://howardhinnant.github.io/date_algorithms.html
+fn epochDayToYmd(z: i64) struct { year: i32, month: u8, day: u8 } {
+    const z2 = z + 719468;
+    const era: i64 = @divFloor(z2, 146097);
+    const doe: u32 = @intCast(z2 - era * 146097);
+    const yoe: u32 = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    const y: i64 = @as(i64, yoe) + era * 400;
+    const doy: u32 = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    const mp: u32 = (5 * doy + 2) / 153;
+    const d: u8 = @intCast(doy - (153 * mp + 2) / 5 + 1);
+    const m: u8 = @intCast(if (mp < 10) mp + 3 else mp - 9);
+    const yr: i32 = @intCast(y + @as(i64, if (m <= 2) 1 else 0));
+    return .{ .year = yr, .month = m, .day = d };
+}
+
 pub fn timeEpochMsToParts(ms: f64) struct { year: i32, month: u8, day: u8, hour: u8, min: u8, sec: u8, ms: u16, weekday: u8 } {
     if (ms < @as(f64, @floatFromInt(std.math.minInt(i64))) or ms >= std.math.pow(f64, 2.0, 63.0)) {
         return .{ .year = 0, .month = 1, .day = 1, .hour = 0, .min = 0, .sec = 0, .ms = 0, .weekday = 0 };
     }
     const ms_int = @as(i64, @intFromFloat(ms));
     const total_secs = @divFloor(ms_int, 1000);
-    const ms_part = @as(u16, @intCast(@rem(ms_int, 1000)));
-    const epoch_secs = std.time.epoch.EpochSeconds{ .secs = @as(u64, @intCast(total_secs)) };
-    const epoch_day = epoch_secs.getEpochDay();
-    const day_secs = epoch_secs.getDaySeconds();
-    const year_day = epoch_day.calculateYearDay();
-    const month_day = year_day.calculateMonthDay();
+    const ms_rem = @mod(ms_int, 1000);
+    const ms_part: u16 = @intCast(ms_rem);
+    const day = @divFloor(total_secs, 86400);
+    const secs_in_day: u32 = @intCast(@mod(total_secs, 86400));
+    const ymd = epochDayToYmd(day);
+    const hour: u8 = @intCast(secs_in_day / 3600);
+    const min_sec: u32 = secs_in_day % 3600;
+    const min: u8 = @intCast(min_sec / 60);
+    const sec: u8 = @intCast(min_sec % 60);
+    const weekday: u8 = @intCast(@mod(day + 4, 7));
     return .{
-        .year = year_day.year,
-        .month = @intFromEnum(month_day.month),
-        .day = month_day.day_index + 1,
-        .hour = day_secs.getHoursIntoDay(),
-        .min = day_secs.getMinutesIntoHour(),
-        .sec = day_secs.getSecondsIntoMinute(),
+        .year = ymd.year,
+        .month = ymd.month,
+        .day = ymd.day,
+        .hour = hour,
+        .min = min,
+        .sec = sec,
         .ms = ms_part,
-        .weekday = @as(u8, @intCast((epoch_day.day + 4) % 7)),
+        .weekday = weekday,
     };
 }
 
@@ -324,18 +344,20 @@ pub fn timeAddDate(ms: f64, y_delta: i32, m_delta: i32, d_delta: i32) !Value {
     var new_m = @as(i32, p.month) + m_delta;
     while (new_m > 12) { new_m -= 12; new_y += 1; }
     while (new_m < 1) { new_m += 12; new_y -= 1; }
-    const new_m_u8 = @as(u8, @intCast(new_m));
-    const dim = daysInMonth(new_y, new_m_u8);
     var new_d = @as(i32, p.day) + d_delta;
-    if (new_d < 1) {
+    // Normalize day underflow with a loop to handle multi-month spans.
+    while (new_d < 1) {
         new_m -= 1;
         if (new_m < 1) { new_m += 12; new_y -= 1; }
-        const prev_dim = daysInMonth(new_y, @as(u8, @intCast(new_m)));
-        new_d += prev_dim;
-    } else if (new_d > dim) {
-        new_d -= dim;
+        new_d += @as(i32, daysInMonth(new_y, @intCast(new_m)));
+    }
+    // Normalize day overflow with a loop to handle multi-month spans.
+    var cur_dim = @as(i32, daysInMonth(new_y, @intCast(new_m)));
+    while (new_d > cur_dim) {
+        new_d -= cur_dim;
         new_m += 1;
         if (new_m > 12) { new_m -= 12; new_y += 1; }
+        cur_dim = @as(i32, daysInMonth(new_y, @intCast(new_m)));
     }
     const epoch_secs = timeCalendarToEpochSecs(new_y, @as(u8, @intCast(new_m)), @as(u8, @intCast(new_d)), p.hour, p.min, p.sec);
     const new_ms = @as(f64, @floatFromInt(epoch_secs)) * 1000.0 + @as(f64, @floatFromInt(p.ms));
