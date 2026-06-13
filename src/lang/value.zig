@@ -204,7 +204,12 @@ pub const Value = union(VTag) {
             const bv = b.object.variant_value;
             if (av.typ != bv.typ) return false;
             if (!common.streq(av.tag, bv.tag)) return false;
-            return equals(av.payload, bv.payload);
+            if (!equals(av.payload, bv.payload)) return false;
+            if (av.shared_values.len != bv.shared_values.len) return false;
+            for (av.shared_values, bv.shared_values) |x, y| if (!equals(x, y)) return false;
+            if (av.arm_fields.len != bv.arm_fields.len) return false;
+            for (av.arm_fields, bv.arm_fields) |x, y| if (!equals(x, y)) return false;
+            return true;
         }
         if (@as(VTag, a) != @as(VTag, b)) {
             if ((a == .int and b == .float) or (a == .float and b == .int)) {

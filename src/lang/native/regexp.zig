@@ -44,7 +44,6 @@ pub fn reGetPattern(val: Value) ![]const u8 {
     return switch (uv) {
         .string => |s| s,
         .object => |obj| switch (obj.*) {
-            .named_value => |nv| nv.value.string,
             .dyn_string => obj.dyn_string,
             else => return error.TypeError,
         },

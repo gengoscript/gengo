@@ -235,10 +235,18 @@ pub const Session = struct {
 
         const idx = try self.beginModule(path, false);
 
-        const src = self.loadSource(path) catch |err| {
+        const src_raw = self.loadSource(path) catch |err| {
             self.saveFailedModule(idx);
             return err;
         };
+        // Copy source to the bump heap so that recursive loadSource calls
+        // (which reuse source_buf) do not overwrite it before we compile this module.
+        const src_copy = heap.bump(u8, src_raw.len) orelse {
+            self.saveFailedModule(idx);
+            return error.OutOfMemory;
+        };
+        @memcpy(src_copy[0..src_raw.len], src_raw);
+        const src = src_copy[0..src_raw.len];
         self.compileDependencies(path, src) catch |err| {
             self.saveFailedModule(idx);
             return err;

@@ -524,8 +524,17 @@ fn deepEqualObject(a: *Object, b: *Object, visits: []DeepEqVisit, visit_len: *us
         .variant_value => |avv| {
             const bvv = b.variant_value;
             if (avv.typ != bvv.typ or !common.streq(avv.tag, bvv.tag)) return false;
+            if (avv.shared_values.len != bvv.shared_values.len) return false;
+            if (avv.arm_fields.len != bvv.arm_fields.len) return false;
             try appendVisitedPair(a, b, visits, visit_len);
-            return try deepEqualValue(avv.payload, bvv.payload, visits, visit_len);
+            if (!try deepEqualValue(avv.payload, bvv.payload, visits, visit_len)) return false;
+            for (avv.shared_values, bvv.shared_values) |x, y| {
+                if (!try deepEqualValue(x, y, visits, visit_len)) return false;
+            }
+            for (avv.arm_fields, bvv.arm_fields) |x, y| {
+                if (!try deepEqualValue(x, y, visits, visit_len)) return false;
+            }
+            return true;
         },
         .variant_ctor => |avc| {
             const bvc = b.variant_ctor;
