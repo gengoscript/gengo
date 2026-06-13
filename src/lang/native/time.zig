@@ -15,6 +15,10 @@ extern "kernel32" fn GetSystemTimeAsFileTime(lpSystemTimeAsFileTime: *w32.FILETI
 const TimeTypeQualifiedName = "@std.time.obj";
 var time_type_cache: ?*Object = null;
 
+pub fn timeClearCache() void {
+    time_type_cache = null;
+}
+
 pub fn timeGetType() !*Object {
     if (time_type_cache) |t| return t;
     const obj = try vmgc.vmAllocObject();
