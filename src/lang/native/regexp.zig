@@ -470,15 +470,16 @@ pub fn nativeReFindAll(pattern_val: Value, s_val: Value) !Value {
     defer freeAlts(alts);
     const matches = findAllMatches(alts, s, alloc) catch |err| { alloc.free(alts); return err; };
     defer alloc.free(matches);
-    const result = try vmgc.vmAllocManagedSlice(Value, matches.len);
     const obj = try vmgc.vmAllocObject();
-    obj.* = .{ .array = &[_]Value{} };
+    obj.* = .{ .array_managed = &[_]Value{} }; // safe placeholder
     try vms.pushTempRoot(.{ .object = obj });
     defer vms.popTempRoot();
+    const result = try vmgc.vmAllocManagedSlice(Value, matches.len);
+    obj.* = .{ .array_managed = result[0..0] }; // publish immediately
     for (matches, 0..) |m, j| {
         result[j] = try vmgc.makeDynString(s[m[0]..m[1]]);
+        obj.* = .{ .array_managed = result[0 .. j + 1] }; // grow visible
     }
-    obj.* = .{ .array_managed = result };
     return .{ .object = obj };
 }
 
@@ -521,15 +522,16 @@ pub fn nativeReSplit(pattern_val: Value, s_val: Value) !Value {
         try parts.append(s[i .. i + m[0]]);
         i += m[1];
     }
-    const result = try vmgc.vmAllocManagedSlice(Value, parts.items.len);
     const obj = try vmgc.vmAllocObject();
-    obj.* = .{ .array = &[_]Value{} };
+    obj.* = .{ .array_managed = &[_]Value{} }; // safe placeholder
     try vms.pushTempRoot(.{ .object = obj });
     defer vms.popTempRoot();
+    const result = try vmgc.vmAllocManagedSlice(Value, parts.items.len);
+    obj.* = .{ .array_managed = result[0..0] }; // publish immediately
     for (parts.items, 0..) |part, j| {
         result[j] = try vmgc.makeDynString(part);
+        obj.* = .{ .array_managed = result[0 .. j + 1] }; // grow visible
     }
-    obj.* = .{ .array_managed = result };
     return .{ .object = obj };
 }
 
