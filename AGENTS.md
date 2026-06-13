@@ -107,6 +107,22 @@ TDD is not required for changes that do not affect runtime behavior, such as:
 
 If a mechanical change could affect behavior, add or update tests.
 
+## Building the CLI
+
+`zig build` builds the CLI binary at `zig-out/bin/gengo` as part of the install step. The explicit target is:
+
+```bash
+zig build -Dpreset=dev cli
+```
+
+Zig uses a content-hash cache. If the binary timestamp looks unchanged after editing source files, the cache served a stale artifact. Force a rebuild by passing the preset explicitly — the `-Dpreset=dev` flag is enough to bypass the stale hit:
+
+```bash
+zig build -Dpreset=dev
+```
+
+Never trust the binary timestamp alone to confirm a rebuild happened. Run the binary and verify observable behavior changed, or check that the binary's mtime advanced past your last source edit.
+
 ## Test execution
 
 Read `CONTRIBUTING.md` before starting any non-trivial task. It documents the build presets, test commands, and commit conventions for this project.
