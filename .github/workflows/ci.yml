@@ -50,6 +50,43 @@ jobs:
       - name: Run native capability tests
         run: zig build -Dpreset=dev native-cap
 
+      - name: Check chaos test discipline (every .gengo needs .out or .err)
+        run: |
+          errors=0
+          for f in tests/chaos/*.gengo; do
+            base="${f%.gengo}"
+            if [ ! -f "$base.out" ]; then
+              echo "FAIL: $f has no .out file"
+              errors=$((errors + 1))
+            fi
+          done
+          for f in tests/chaos/fail/*.gengo; do
+            base="${f%.gengo}"
+            if [ ! -f "$base.err" ]; then
+              echo "FAIL: $f has no .err file"
+              errors=$((errors + 1))
+            fi
+          done
+          for f in tests/chaos/*.out; do
+            base="${f%.out}"
+            if [ ! -f "$base.gengo" ]; then
+              echo "FAIL: $f has no corresponding .gengo (orphaned .out)"
+              errors=$((errors + 1))
+            fi
+          done
+          for f in tests/chaos/fail/*.err; do
+            base="${f%.err}"
+            if [ ! -f "$base.gengo" ]; then
+              echo "FAIL: $f has no corresponding .gengo (orphaned .err)"
+              errors=$((errors + 1))
+            fi
+          done
+          if [ $errors -gt 0 ]; then
+            echo "test discipline FAILED: $errors errors"
+            exit 1
+          fi
+          echo "test discipline OK"
+
       - name: Run chaos tests
         run: zig build -Dpreset=dev chaos
 
