@@ -1,0 +1,33 @@
+std := import("std")
+
+// Integer verbs
+std.io.println(std.io.sprintf("%d", 42))
+std.io.println(std.io.sprintf("%d", -42))
+std.io.println(std.io.sprintf("%x", 255))
+std.io.println(std.io.sprintf("%X", 255))
+std.io.println(std.io.sprintf("%o", 8))
+std.io.println(std.io.sprintf("%b", 5))
+std.io.println(std.io.sprintf("%#x", 255))
+std.io.println(std.io.sprintf("%#o", 8))
+
+// Float verbs
+std.io.println(std.io.sprintf("%.2f", 3.14159))
+std.io.println(std.io.sprintf("%e", 12345.678))
+std.io.println(std.io.sprintf("%.3e", 12345.678))
+std.io.println(std.io.sprintf("%g", 0.000123))
+std.io.println(std.io.sprintf("%g", 1234567.0))
+
+// Width and padding
+std.io.println(std.io.sprintf("%8d", 42))
+std.io.println(std.io.sprintf("%-8d|", 42))
+std.io.println(std.io.sprintf("%08d", 42))
+std.io.println(std.io.sprintf("%+d", 42))
+std.io.println(std.io.sprintf("%+d", -42))
+
+// String verbs
+std.io.println(std.io.sprintf("%10s", "hi"))
+std.io.println(std.io.sprintf("%-10s|", "hi"))
+std.io.println(std.io.sprintf("%.3s", "hello"))
+
+// Quoted
+std.io.println(std.io.sprintf("%q", "hello\nworld"))

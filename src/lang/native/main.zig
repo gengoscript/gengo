@@ -102,10 +102,15 @@ pub fn buildStdModule() !*Object {
     if (vms.vmState().std_module) |m| return m;
 
     const io_entries = [_]NamespaceEntry{
-        .{ .name = "sprintf", .value = try makeNative(.io_sprintf, 255) },
-        .{ .name = "println", .value = try makeNative(.io_println, 255) },
-        .{ .name = "printf", .value = try makeNative(.io_printf, 255) },
-        .{ .name = "print", .value = try makeNative(.io_print, 255) },
+        .{ .name = "sprintf",  .value = try makeNative(.io_sprintf,  255) },
+        .{ .name = "println",  .value = try makeNative(.io_println,  255) },
+        .{ .name = "printf",   .value = try makeNative(.io_printf,   255) },
+        .{ .name = "print",    .value = try makeNative(.io_print,    255) },
+        .{ .name = "eprint",   .value = try makeNative(.io_eprint,   255) },
+        .{ .name = "eprintf",  .value = try makeNative(.io_eprintf,  255) },
+        .{ .name = "eprintln", .value = try makeNative(.io_eprintln, 255) },
+        .{ .name = "read",     .value = try makeNative(.io_read,     0)   },
+        .{ .name = "readline", .value = try makeNative(.io_readline, 0)   },
     };
     const io_obj = try makeNamespace("io", "@module_type:std.io", &io_entries);
     try vms.pushTempRoot(.{ .object = io_obj });
@@ -725,7 +730,8 @@ pub fn callHostModule(hmf: HostModuleFuncObj, argc: u8) !void {
 pub fn callNative(nf: NativeFuncObj, argc: u8) !void {
     vmperf.countHostcall(nf.id);
     switch (@as(NativeFnId, @enumFromInt(nf.id))) {
-        .io_println, .io_print, .io_printf, .io_sprintf => return io_mod.dispatch(nf, argc),
+        .io_println, .io_print, .io_printf, .io_sprintf,
+        .io_eprint, .io_eprintf, .io_eprintln, .io_read, .io_readline => return io_mod.dispatch(nf, argc),
         .core_len, .core_append, .core_error, .core_is_error, .core_gc, .core_gc_live_objects,
         .core_gc_stats, .core_bytelen, .core_gc_stats_ext, .core_delete, .core_has, .core_keys,
         .core_values, .core_contains, .core_remove, .core_type_of, .core_is_int, .core_is_float,

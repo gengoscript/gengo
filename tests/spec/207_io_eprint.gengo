@@ -1,0 +1,7 @@
+std := import("std")
+
+// eprint writes to stderr; stdout should only get the println lines
+std.io.eprint("err1")
+std.io.eprintln(" err2")
+std.io.eprintf("err%d\n", 3)
+std.io.println("ok")

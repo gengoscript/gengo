@@ -29,6 +29,9 @@ const PtrInt = if (is_wasm) i32 else usize;
 const WriteCallback = *const fn (ptr: [*]const u8, len: i32, is_stderr: i32) callconv(.c) void;
 var write_callback: ?WriteCallback = null;
 
+const ReadCallback = *const fn (ptr: [*]u8, max_len: i32, is_line: i32) callconv(.c) i32;
+var read_callback: ?ReadCallback = null;
+
 const ImportLoaderFn = *const fn (
     ctx: ?*anyopaque,
     path_ptr: PtrInt,
@@ -52,12 +55,28 @@ const WriteImpl = if (is_wasm) struct {
     }
 };
 
+const ReadImpl = if (is_wasm) struct {
+    extern "env" fn gengo_read(ptr: [*]u8, max_len: i32, is_line: i32) i32;
+    pub fn read(buf: []u8, is_line: bool) isize {
+        return @intCast(gengo_read(buf.ptr, @intCast(buf.len), if (is_line) 1 else 0));
+    }
+} else struct {
+    pub fn read(buf: []u8, is_line: bool) isize {
+        if (read_callback) |cb| return @intCast(cb(buf.ptr, @intCast(buf.len), if (is_line) 1 else 0));
+        return io.readBytesRaw(buf, is_line);
+    }
+};
+
 fn engineWrite(s: []const u8) void {
     WriteImpl.write(s.ptr, @intCast(s.len), 0);
 }
 
 fn engineWerr(s: []const u8) void {
     WriteImpl.write(s.ptr, @intCast(s.len), 1);
+}
+
+fn engineRead(buf: []u8, is_line: bool) isize {
+    return ReadImpl.read(buf, is_line);
 }
 
 const MaxEngines = 64;
@@ -140,6 +159,7 @@ const Engine = struct {
         self.last_error_col = 0;
         try self.runtime.initWithPolicy(.{ .allow_io = true });
         io.setWriteOverrides(engineWrite, engineWerr);
+        io.setReadOverride(engineRead);
     }
 
     fn initInPlaceWithConfig(self: *Engine, ic: InstanceConfig) !void {
@@ -160,6 +180,7 @@ const Engine = struct {
             std.heap.page_allocator,
         );
         io.setWriteOverrides(engineWrite, engineWerr);
+        io.setReadOverride(engineRead);
     }
 
     fn deinitInPlace(self: *Engine) void {
@@ -551,6 +572,7 @@ export fn engine_destroy(handle: i32) void {
         if (s.active) return;
     }
     io.clearWriteOverrides();
+    io.clearReadOverride();
     http_state.resetHandler();
     net_state.resetHandlers();
     fs_state.clearMounts();
@@ -797,6 +819,12 @@ export fn engine_set_write_fn(handle: i32, callback: ?WriteCallback) void {
     if (comptime is_wasm) return;
     _ = getEngine(handle) orelse return;
     write_callback = callback;
+}
+
+export fn engine_set_read_fn(handle: i32, callback: ?ReadCallback) void {
+    if (comptime is_wasm) return;
+    _ = getEngine(handle) orelse return;
+    read_callback = callback;
 }
 
 export fn engine_set_net_handlers(handle: i32, handlers: ?*const net_state.GengoNetHandlers, userdata: ?*anyopaque) void {
