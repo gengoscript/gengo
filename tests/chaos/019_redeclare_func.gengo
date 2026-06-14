@@ -1,7 +1,0 @@
-std := import("std")
-func f() {
-    x := 1
-    x := 2
-    std.io.println(x)
-}
-f()
