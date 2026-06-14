@@ -672,6 +672,9 @@ pub fn parseFieldTypeSpec(c: anytype) !FieldTypeSpec {
             alt = .{ .typ = .named_t, .named_name = try c.qualifyTypeName(tname) };
         } else if (c.registry.hasVariantType(tname)) {
             alt = .{ .typ = .variant_t, .named_name = try c.qualifyTypeName(tname) };
+        } else if (!c.skipping_test_body) {
+            c.setErr("unknown type '{s}'", .{tname});
+            return error.UnknownType;
         }
         } // end else (ident type)
 

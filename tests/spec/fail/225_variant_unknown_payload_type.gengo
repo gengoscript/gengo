@@ -1,0 +1,4 @@
+type V variant {
+    Some(val Ghost),
+    None
+}
