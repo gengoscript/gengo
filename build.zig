@@ -26,6 +26,7 @@ pub fn build(b: *std.Build) void {
     const build_opts_mod = build_opts.createModule();
 
     const wasmtime_opt = b.option([]const u8, "wasmtime", "path to wasmtime binary") orelse "wasmtime";
+    const test_filter_opt = b.option([]const u8, "test_filter", "Filter test cases by filename substring (chaos, native-cap)");
 
     // Copy preset config file into place.
     const preset = b.addSystemCommand(&.{
@@ -334,6 +335,10 @@ pub fn build(b: *std.Build) void {
     run_native_cap.step.dependOn(&install_native.step);
     run_native_cap.addArg("native-cap");
     run_native_cap.addArg("zig-out/bin/gengo");
+    if (test_filter_opt) |f| {
+        run_native_cap.addArg("--filter");
+        run_native_cap.addArg(f);
+    }
     const native_cap_step = b.step("native-cap", "Run native capability tests against the CLI");
     native_cap_step.dependOn(&run_native_cap.step);
 
@@ -341,6 +346,10 @@ pub fn build(b: *std.Build) void {
     run_chaos.step.dependOn(&install_native.step);
     run_chaos.addArg("chaos");
     run_chaos.addArg("zig-out/bin/gengo");
+    if (test_filter_opt) |f| {
+        run_chaos.addArg("--filter");
+        run_chaos.addArg(f);
+    }
     const chaos_step = b.step("chaos", "Run limit/edge-case chaos tests against the CLI");
     chaos_step.dependOn(&run_chaos.step);
 

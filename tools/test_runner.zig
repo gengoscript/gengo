@@ -21,23 +21,38 @@ pub fn main(init: std.process.Init.Minimal) !void {
     const args = argv_storage[0..arg_count];
 
     if (args.len < 2) {
-        std.debug.print("usage: test-runner <conformance|bench|parity> [wasmtime] [wasm]\n", .{});
-        std.debug.print("   or: test-runner <native-cap|chaos> [gengo]\n", .{});
+        std.debug.print("usage: test-runner <conformance|bench|parity> [wasmtime] [wasm] [--filter <pattern>]\n", .{});
+        std.debug.print("   or: test-runner <native-cap|chaos> [gengo] [--filter <pattern>]\n", .{});
         std.process.exit(1);
     }
 
     const mode = args[1];
+
+    var filter: ?[]const u8 = null;
+    {
+        var i: usize = 2;
+        while (i + 1 < args.len) : (i += 1) {
+            if (std.mem.eql(u8, args[i], "--filter")) {
+                filter = args[i + 1];
+                break;
+            }
+        }
+    }
+
     if (std.mem.eql(u8, mode, "native-cap") or std.mem.eql(u8, mode, "chaos")) {
-        const gengo = if (args.len > 2) args[2] else "zig-out/bin/gengo";
+        var gengo: []const u8 = "zig-out/bin/gengo";
+        if (args.len > 2 and !std.mem.eql(u8, args[2], "--filter")) {
+            gengo = args[2];
+        }
         if (!commandExists(alloc, gengo)) {
             std.debug.print("gengo binary not found: {s}\n", .{gengo});
             std.debug.print("build it first with `zig build -Dpreset=dev cli` or pass an explicit path\n", .{});
             std.process.exit(1);
         }
         if (std.mem.eql(u8, mode, "chaos")) {
-            try runChaos(alloc, gengo);
+            try runChaos(alloc, gengo, filter);
         } else {
-            try runNativeCap(alloc, gengo);
+            try runNativeCap(alloc, gengo, filter);
         }
         return;
     }
@@ -317,7 +332,7 @@ fn runParity(alloc: std.mem.Allocator, wasmtime: []const u8, wasm_path: []const 
 
 // ── Native capability lane ────────────────────────────────────────────────
 
-fn runNativeCap(alloc: std.mem.Allocator, gengo: []const u8) !void {
+fn runNativeCap(alloc: std.mem.Allocator, gengo: []const u8, filter: ?[]const u8) !void {
     var pass_cases: [MaxCases][]const u8 = undefined;
     const pass_count = collectGengoFiles(alloc, "tests/native-cap", &pass_cases) catch |err| {
         std.debug.print("cannot scan native-cap dir: {s}\n", .{@errorName(err)});
@@ -336,6 +351,9 @@ fn runNativeCap(alloc: std.mem.Allocator, gengo: []const u8) !void {
 
     for (pass_cases[0..pass_count]) |path| {
         defer alloc.free(path);
+        if (filter) |f| {
+            if (std.mem.indexOf(u8, path, f) == null) continue;
+        }
         const base = path[0 .. path.len - 6];
         const out_path = try std.fmt.allocPrint(alloc, "{s}.out", .{base});
         defer alloc.free(out_path);
@@ -379,6 +397,9 @@ fn runNativeCap(alloc: std.mem.Allocator, gengo: []const u8) !void {
 
     for (fail_cases[0..fail_count]) |path| {
         defer alloc.free(path);
+        if (filter) |f| {
+            if (std.mem.indexOf(u8, path, f) == null) continue;
+        }
         const base = path[0 .. path.len - 6];
         const err_path = try std.fmt.allocPrint(alloc, "{s}.err", .{base});
         defer alloc.free(err_path);
@@ -440,7 +461,7 @@ fn runNativeCli(alloc: std.mem.Allocator, gengo: []const u8, script: []const u8)
     return runShellCommand(alloc, cmd);
 }
 
-fn runChaos(alloc: std.mem.Allocator, gengo: []const u8) !void {
+fn runChaos(alloc: std.mem.Allocator, gengo: []const u8, filter: ?[]const u8) !void {
     var pass_cases: [MaxCases][]const u8 = undefined;
     const pass_count = collectGengoFiles(alloc, "tests/chaos", &pass_cases) catch |err| {
         std.debug.print("cannot scan chaos dir: {s}\n", .{@errorName(err)});
@@ -459,6 +480,9 @@ fn runChaos(alloc: std.mem.Allocator, gengo: []const u8) !void {
 
     for (pass_cases[0..pass_count]) |path| {
         defer alloc.free(path);
+        if (filter) |f| {
+            if (std.mem.indexOf(u8, path, f) == null) continue;
+        }
         const base = path[0 .. path.len - 6];
         const out_path = try std.fmt.allocPrint(alloc, "{s}.out", .{base});
         defer alloc.free(out_path);
@@ -499,6 +523,9 @@ fn runChaos(alloc: std.mem.Allocator, gengo: []const u8) !void {
 
     for (fail_cases[0..fail_count]) |path| {
         defer alloc.free(path);
+        if (filter) |f| {
+            if (std.mem.indexOf(u8, path, f) == null) continue;
+        }
         const base = path[0 .. path.len - 6];
         const err_path = try std.fmt.allocPrint(alloc, "{s}.err", .{base});
         defer alloc.free(err_path);
