@@ -688,14 +688,13 @@ pub fn forInStmt(c: anytype) anyerror!void {
     // Claim a hidden local slot for the iterator so that body locals land on the
     // correct stack offsets. Without this, body-local slot N resolves to the iterator
     // object instead of the actual value.
-    const in_func = c.inFunc();
-    if (in_func) c.currentScope().local_count += 1;
-    const body_keep: u8 = if (in_func) c.currentScope().local_count else 0;
+    c.currentScope().local_count += 1;
+    const body_keep: u8 = c.currentScope().local_count;
 
     const loop_start = chunk.codeLen();
     // In functions the hidden local slot is cleaned up by cleanupLocals; at top-level
     // cleanupLocals is a no-op so an explicit pop is still needed (iter_pops=1).
-    try c.pushLoop(loop_start, local_base, body_keep, if (in_func) @as(u8, 0) else @as(u8, 1));
+    try c.pushLoop(loop_start, local_base, body_keep, if (c.inFunc()) @as(u8, 0) else @as(u8, 1));
     if (c.resolveLocal(kname.src)) |slot| {
         c.currentLoop().loop_var_slots[c.currentLoop().loop_var_count] = slot;
         c.currentLoop().loop_var_names[c.currentLoop().loop_var_count] = kname.src;
@@ -728,9 +727,9 @@ pub fn forInStmt(c: anytype) anyerror!void {
     try chunk.emitLoop(loop_start, c.prev.line);
 
     try chunk.patchJump(exit_j);
-    if (!in_func) try chunk.emitOp(.pop, c.prev.line); // pop iterator (top-level only)
+    if (!c.inFunc()) try chunk.emitOp(.pop, c.prev.line); // pop iterator (top-level only)
     try c.cleanupLocals(local_base, c.prev.line);
-    if (!in_func) {
+    if (!c.inFunc()) {
         var li: u8 = 0;
         while (li < c.currentLoop().loop_var_count) : (li += 1) {
             const slot = c.currentLoop().loop_var_slots[li];
