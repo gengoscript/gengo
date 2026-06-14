@@ -81,8 +81,8 @@ var rt = api.Runtime.init(.{
     .allow_io   = false,
     .max_ops    = 50_000,
     .host_modules = &.{.{
-        .name  = "host:host",
-        .funcs = &.{.{ .name = "lookup_category", .arity = 1 }},
+        .name      = "db",
+        .functions = &.{.{ .name = "lookup_category", .arity = 1 }},
     }},
 });
 
@@ -99,13 +99,13 @@ const verdict = rt.call("validate", &.{
 The user script might look like this:
 
 ```gengo
-host := import("host:host")
+db := import("db")
 
 type Severity int range 0..5
 
 pub func validate(severity int, source string) bool {
     s := Severity(severity)
-    cat := host.lookup_category(source)
+    cat := db.lookup_category(source)
     return s >= Severity(3) && cat == "network"
 }
 ```
