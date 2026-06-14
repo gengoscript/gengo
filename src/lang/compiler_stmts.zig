@@ -1541,6 +1541,10 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
             }
         }
         const qname = try c.qualifyGlobalName(name.src);
+        if (!c.skipping_test_body and c.registry.hasGlobalFunc(qname)) {
+            c.setErr("name '{s}' already declared as a function", .{name.src});
+            return error.DuplicateGlobal;
+        }
         if (c.options.repl_mode and inferred_type_check != .none) {
             if (c.options.check_global_exists) |checker| {
                 if (checker(c.options.check_global_ctx.?, qname)) {
@@ -1550,25 +1554,27 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
             }
         }
         try chunk.emitOpConst(.def_global, .{ .string = qname }, name.line);
-        if (inferred_type_check != .none and c.typed_global_count < MaxLocals) {
-            c.typed_global_names[c.typed_global_count] = qname;
-            c.typed_global_type_checks[c.typed_global_count] = inferred_type_check;
-            c.typed_global_count += 1;
-        }
-        if (c.std_namespace_path != null and c.std_namespace_path.?.len == 0) {
-            if (c.std_module_global_count < MaxLocals) {
-                c.std_module_global_names[c.std_module_global_count] = qname;
-                c.std_module_global_count += 1;
+        if (!c.skipping_test_body) {
+            if (inferred_type_check != .none and c.typed_global_count < MaxLocals) {
+                c.typed_global_names[c.typed_global_count] = qname;
+                c.typed_global_type_checks[c.typed_global_count] = inferred_type_check;
+                c.typed_global_count += 1;
             }
-        }
-        if (c.import_module_path) |path| {
-            if (c.import_module_global_count < MaxLocals) {
-                c.import_module_global_qnames[c.import_module_global_count] = qname;
-                c.import_module_global_paths[c.import_module_global_count] = path;
-                c.import_module_global_count += 1;
+            if (c.std_namespace_path != null and c.std_namespace_path.?.len == 0) {
+                if (c.std_module_global_count < MaxLocals) {
+                    c.std_module_global_names[c.std_module_global_count] = qname;
+                    c.std_module_global_count += 1;
+                }
             }
+            if (c.import_module_path) |path| {
+                if (c.import_module_global_count < MaxLocals) {
+                    c.import_module_global_qnames[c.import_module_global_count] = qname;
+                    c.import_module_global_paths[c.import_module_global_count] = path;
+                    c.import_module_global_count += 1;
+                }
+            }
+            if (is_const) try c.registry.addGlobalConst(name.src);
         }
-        if (is_const) try c.registry.addGlobalConst(name.src);
     }
     c.matchOpt(.semicolon);
 }

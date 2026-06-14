@@ -58,7 +58,21 @@ pub fn emitZeroValue(_: anytype, tc: TypeCheck, line: u32) !void {
 }
 
 pub fn interfaceDeclBody(c: anytype, kw: Token, name: Token, is_pub: bool) !void {
-    try c.registry.addInterfaceType(name.src);
+    if (!c.skipping_test_body and !c.inFunc()) {
+        if (c.registry.hasInterfaceType(name.src)) {
+            c.setErr("duplicate interface name '{s}'", .{name.src});
+            return error.DuplicateInterfaceType;
+        }
+        if (c.registry.hasAnyTypeName(name.src)) {
+            c.setErr("type name '{s}' conflicts with an existing type declaration", .{name.src});
+            return error.DuplicateNamedType;
+        }
+        if (c.registry.hasGlobalFunc(try c.qualifyTypeName(name.src))) {
+            c.setErr("name '{s}' already declared as a function", .{name.src});
+            return error.DuplicateField;
+        }
+    }
+    if (!c.skipping_test_body) try c.registry.addInterfaceType(name.src);
     try c.consume(.lbrace);
 
     var methods_tmp: [MaxLocals]InterfaceMethodSpec = undefined;
@@ -211,6 +225,10 @@ pub fn methodDecl(c: anytype) !void {
     const recv_type = c.cur.src;
     c.advance();
     if (c.registry.hasInterfaceType(recv_type)) { c.setErr("cannot define method on interface type '{s}'", .{recv_type}); return error.MethodOnInterface; }
+    if (!c.skipping_test_body and !c.registry.hasStructType(recv_type) and !c.registry.hasNamedType(recv_type) and !c.registry.hasVariantType(recv_type)) {
+        c.setErr("method receiver '{s}' is not a declared type", .{recv_type});
+        return error.UnknownReceiverType;
+    }
     try c.consume(.rparen);
     if (c.cur.typ != .ident) return c.err("expected identifier, found {s}", .{c.tokenName(c.cur.typ)});
     const method_name = c.cur.src;
@@ -231,11 +249,16 @@ pub fn methodDecl(c: anytype) !void {
     if (c.inFunc()) {
         _ = try c.defineLocal(key, false);
     } else {
-        if (c.registry.hasGlobalFunc(key)) {
-            c.setErr("duplicate method '{s}'", .{method_name});
-            return error.DuplicateField;
+        if (!c.skipping_test_body) {
+            if (c.registry.hasGlobalFunc(key)) {
+                c.setErr("duplicate method '{s}'", .{method_name});
+                return error.DuplicateField;
+            }
+            c.registry.addGlobalFunc(key) catch {
+                c.setErr("too many global functions (limit {d})", .{ct.MaxGlobalFuncs});
+                return error.TooManyGlobalFuncs;
+            };
         }
-        try c.registry.addGlobalFunc(key);
         try chunk.emitOpConst(.def_global, .{ .string = key }, kw.line);
     }
     c.matchOpt(.semicolon);
@@ -258,11 +281,16 @@ pub fn namedFuncDecl(c: anytype, is_pub: bool) !void {
         _ = try c.defineLocal(name.src, false);
     } else {
         const qname = try c.qualifyGlobalName(name.src);
-        if (c.registry.hasGlobalFunc(qname)) {
-            c.setErr("duplicate function '{s}'", .{name.src});
-            return error.DuplicateField;
+        if (!c.skipping_test_body) {
+            if (c.registry.hasGlobalFunc(qname)) {
+                c.setErr("duplicate function '{s}'", .{name.src});
+                return error.DuplicateField;
+            }
+            c.registry.addGlobalFunc(qname) catch {
+                c.setErr("too many global functions (limit {d})", .{ct.MaxGlobalFuncs});
+                return error.TooManyGlobalFuncs;
+            };
         }
-        try c.registry.addGlobalFunc(qname);
         try chunk.emitOpConst(.def_global, .{ .string = qname }, kw.line);
         if (is_pub) try c.addExport(name.src, qname);
     }
@@ -279,7 +307,20 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
     if (c.match(.kw_interface)) return interfaceDeclBody(c, kw, name_tok, is_pub);
     if (c.match(.kw_variant)) return variantDeclBody(c, kw, name_tok, is_pub);
     const name = name_tok.src;
-    if (c.registry.hasNamedType(name)) { c.setErr("duplicate type name '{s}'", .{name}); return error.DuplicateNamedType; }
+    if (!c.skipping_test_body) {
+        if (c.registry.hasNamedType(name)) { c.setErr("duplicate type name '{s}'", .{name}); return error.DuplicateNamedType; }
+        if (!c.inFunc()) {
+            if (c.registry.hasAnyTypeName(name)) {
+                c.setErr("type name '{s}' conflicts with an existing type declaration", .{name});
+                return error.DuplicateNamedType;
+            }
+            const _qn = try c.qualifyTypeName(name);
+            if (c.registry.hasGlobalFunc(_qn)) {
+                c.setErr("name '{s}' already declared as a function", .{name});
+                return error.DuplicateField;
+            }
+        }
+    }
     const qname = try c.qualifyTypeName(name);
     if (c.check(.kw_enum)) {
         c.advance();
@@ -306,7 +347,7 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
         const members = heap.bump([]const u8, mcount) orelse return error.OutOfMemory;
         var mi: usize = 0;
         while (mi < mcount) : (mi += 1) members[mi] = members_tmp[mi];
-        try c.registry.addNamedType(.{
+        if (!c.skipping_test_body) try c.registry.addNamedType(.{
             .name = name,
             .base = .enum_t,
             .has_range = false,
@@ -333,7 +374,7 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
         c.advance(); // consume '['
         try c.consume(.rbracket); // consume ']'
         const es: FieldTypeSpec = try parseFieldTypeSpec(c, );
-        try c.registry.addNamedType(.{ .name = name, .base = .array_t, .elem_spec = es });
+        if (!c.skipping_test_body) try c.registry.addNamedType(.{ .name = name, .base = .array_t, .elem_spec = es });
         const nt = heap.allocObject() orelse return error.OutOfMemory;
         nt.* = .{ .named_type = NamedTypeObj{ .name = try c.copyName(name), .qualified_name = qname, .base = .array_t, .elem_spec = es } };
         try chunk.emitConst(.{ .object = nt }, kw.line);
@@ -375,7 +416,7 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
         const ks = try parseFieldTypeSpec(c, );
         try c.consume(.rbracket);
         const vs = try parseFieldTypeSpec(c, );
-        try c.registry.addNamedType(.{ .name = name, .base = .map_t, .key_spec = ks, .val_spec = vs });
+        if (!c.skipping_test_body) try c.registry.addNamedType(.{ .name = name, .base = .map_t, .key_spec = ks, .val_spec = vs });
         const nt = heap.allocObject() orelse return error.OutOfMemory;
         nt.* = .{ .named_type = NamedTypeObj{ .name = try c.copyName(name), .qualified_name = qname, .base = .map_t, .key_spec = ks, .val_spec = vs } };
         try chunk.emitConst(.{ .object = nt }, kw.line);
@@ -453,7 +494,7 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
         }
     }
 
-    try c.registry.addNamedType(.{
+    if (!c.skipping_test_body) try c.registry.addNamedType(.{
         .name = name,
         .base = base,
         .has_range = has_range,
@@ -701,7 +742,21 @@ fn checkStructFieldType(c: anytype, spec: FieldTypeSpec, qself: []const u8) !voi
 }
 
 pub fn structDeclBody(c: anytype, kw: Token, name: Token, is_pub: bool) !void {
-    try c.registry.addStructType(name.src);
+    if (!c.skipping_test_body and !c.inFunc()) {
+        if (c.registry.hasStructType(name.src)) {
+            c.setErr("duplicate struct name '{s}'", .{name.src});
+            return error.DuplicateStructType;
+        }
+        if (c.registry.hasAnyTypeName(name.src)) {
+            c.setErr("type name '{s}' conflicts with an existing type declaration", .{name.src});
+            return error.DuplicateNamedType;
+        }
+        if (c.registry.hasGlobalFunc(try c.qualifyTypeName(name.src))) {
+            c.setErr("name '{s}' already declared as a function", .{name.src});
+            return error.DuplicateField;
+        }
+    }
+    if (!c.skipping_test_body) try c.registry.addStructType(name.src);
     try c.consume(.lbrace);
 
     var field_specs: [MaxLocals]StructFieldSpec = undefined;
@@ -722,7 +777,7 @@ pub fn structDeclBody(c: anytype, kw: Token, name: Token, is_pub: bool) !void {
             if (c.cur.typ == .ident or c.cur.typ == .question or c.cur.typ == .kw_func or c.cur.typ == .lbracket) {
                 // Space syntax: field type  (colon no longer used)
                 spec.typ = try parseFieldTypeSpec(c, );
-                try checkStructFieldType(c, spec.typ, try c.qualifyTypeName(name.src));
+                if (!c.skipping_test_body) try checkStructFieldType(c, spec.typ, try c.qualifyTypeName(name.src));
             } else {
                 const alts = heap.bump(FieldTypeAlt, 1) orelse return error.OutOfMemory;
                 alts[0] = .{ .typ = .any };
@@ -818,7 +873,7 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
                 }
             }
         }
-        try c.registry.addNamedType(.{
+        if (!c.skipping_test_body) try c.registry.addNamedType(.{
             .name = name,
             .base = .enum_t,
             .parent_name = parent_name,
@@ -842,7 +897,7 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
         return;
     }
 
-    if (c.registry.hasNamedType(name)) { c.setErr("duplicate type name '{s}'", .{name}); return error.DuplicateNamedType; }
+    if (!c.skipping_test_body and c.registry.hasNamedType(name)) { c.setErr("duplicate type name '{s}'", .{name}); return error.DuplicateNamedType; }
 
     const base = parent_info.base;
     var has_range = parent_info.has_range;
@@ -897,7 +952,7 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
         }
     }
 
-    try c.registry.addNamedType(.{
+    if (!c.skipping_test_body) try c.registry.addNamedType(.{
         .name = name,
         .base = base,
         .has_range = has_range,
@@ -940,8 +995,20 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
 
 pub fn variantDeclBody(c: anytype, kw: Token, name_tok: Token, is_pub: bool) !void {
     const name = name_tok.src;
-    if (c.registry.hasVariantType(name)) { c.setErr("duplicate variant type name '{s}'", .{name}); return error.DuplicateVariantType; }
-    try c.registry.addVariantType(name);
+    if (!c.skipping_test_body) {
+        if (c.registry.hasVariantType(name)) { c.setErr("duplicate variant type name '{s}'", .{name}); return error.DuplicateVariantType; }
+        if (!c.inFunc()) {
+            if (c.registry.hasAnyTypeName(name)) {
+                c.setErr("type name '{s}' conflicts with an existing type declaration", .{name});
+                return error.DuplicateVariantType;
+            }
+            if (c.registry.hasGlobalFunc(try c.qualifyTypeName(name))) {
+                c.setErr("name '{s}' already declared as a function", .{name});
+                return error.DuplicateField;
+            }
+        }
+        try c.registry.addVariantType(name);
+    }
     try c.consume(.lbrace);
 
     var shared_tmp: [MaxLocals]StructFieldSpec = undefined;

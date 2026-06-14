@@ -234,6 +234,11 @@ pub const TypeRegistry = struct {
         return false;
     }
 
+    pub fn hasAnyTypeName(self: *TypeRegistry, name: []const u8) bool {
+        return self.hasStructType(name) or self.hasInterfaceType(name) or
+            self.hasNamedType(name) or self.hasVariantType(name);
+    }
+
     pub fn addVariantType(self: *TypeRegistry, name: []const u8) !void {
         if (self.hasVariantType(name)) return error.DuplicateVariantType;
         if (self.variant_type_count >= MaxVariantTypes) return error.TooManyVariantTypes;
@@ -250,7 +255,7 @@ pub const TypeRegistry = struct {
     }
 
     pub fn addGlobalFunc(self: *TypeRegistry, name: []const u8) !void {
-        if (self.global_func_count >= MaxGlobalFuncs) return;
+        if (self.global_func_count >= MaxGlobalFuncs) return error.TooManyGlobalFuncs;
         self.global_funcs[self.global_func_count] = .{ .name = name };
         self.global_func_count += 1;
     }
