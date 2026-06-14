@@ -46,7 +46,9 @@
    ;; Multiline raw string lines
    '("^\\\\" . font-lock-string-face)
    ;; Line comments
-   '("//.*" . font-lock-comment-face))
+   '("//.*" . font-lock-comment-face)
+   ;; Block comments
+   (list "/\\*\\(?:[^*]\\|\\*[^/]\\)*\\*/" 0 'font-lock-comment-face t))
   "Font-lock rules for Gengoscript.")
 
 ;;;###autoload

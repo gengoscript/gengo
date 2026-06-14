@@ -32,7 +32,8 @@ syn region gengoRune matchgroup=gengoRuneDelim start='`' end='`'
 
 syn match gengoNumber '\<-\=\d[0-9_]*\(\.[0-9][0-9_]*\)\=\([eE][+-]\=\d\+\)\>'
 
-syn match gengoComment "//.*$"
+syn match   gengoComment  "//.*$"
+syn region  gengoComment  start="/\*" end="\*/"
 
 hi def link gengoKeyword      Keyword
 hi def link gengoType         Type

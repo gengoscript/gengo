@@ -107,6 +107,9 @@ pub const Lexer = struct {
     }
 
     fn skipWS(self: *Lexer) void {
+        if (self.pos == 0 and self.src.len >= 2 and self.src[0] == '#' and self.src[1] == '!') {
+            while (!self.atEnd() and self.peek() != '\n') _ = self.adv();
+        }
         while (!self.atEnd()) {
             switch (self.peek()) {
                 ' ', '\r', '\t' => _ = self.adv(),
@@ -650,6 +653,14 @@ test "lexer: comment at end of file" {
     try testing.expectEqual(.ident, tok.typ);
     try testing.expectEqualStrings("a", tok.src);
     try testing.expectEqual(.eof, lex.next().typ);
+}
+
+test "lexer: shebang skipped" {
+    var lex = Lexer{ .src = "#!/usr/bin/env gengo\na" };
+    const tok = lex.next();
+    try testing.expectEqual(.ident, tok.typ);
+    try testing.expectEqualStrings("a", tok.src);
+    try testing.expectEqual(@as(u32, 2), tok.line);
 }
 
 test "lexer: block comment skipped" {
