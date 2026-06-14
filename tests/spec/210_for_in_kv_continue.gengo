@@ -1,0 +1,52 @@
+std := import("std")
+
+func skip_even_values_map() {
+    m := {"a": 1, "b": 2, "c": 3, "d": 4, "e": 5}
+    for k, v in m {
+        if v % 2 == 0 { continue }
+        std.io.print(k, ":", v, " ")
+    }
+    std.io.println()
+}
+
+func skip_key_prefix_map() {
+    m := {"aa": 10, "bb": 20, "cc": 30, "dd": 40}
+    for k, v in m {
+        if k == "bb" || k == "dd" { continue }
+        std.io.print(k, ":", v, " ")
+    }
+    std.io.println()
+}
+
+func kv_array_continue() {
+    for i, v in ["a", "b", "c", "d", "e"] {
+        if v == "c" { continue }
+        std.io.print(i, ":", v, " ")
+    }
+    std.io.println()
+}
+
+func kv_body_local_continue() int {
+    s := 0
+    for k, v in {"x": 5, "y": 10, "z": 15} {
+        doubled := v * 2
+        if doubled > 20 { continue }
+        s += doubled
+    }
+    return s
+}
+
+func kv_map_continue_all_even() {
+    m := {"p": 2, "q": 4, "r": 6}
+    for k, v in m {
+        if v % 2 != 0 { continue }
+        std.io.print(k, ":", v, " ")
+    }
+    std.io.println()
+}
+
+skip_even_values_map()
+skip_key_prefix_map()
+kv_array_continue()
+std.io.println(kv_body_local_continue())
+kv_map_continue_all_even()
