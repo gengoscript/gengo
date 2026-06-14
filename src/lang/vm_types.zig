@@ -180,6 +180,55 @@ pub fn matchesTypeSpec(v: Value, spec: FieldTypeSpec) bool {
     return false;
 }
 
+fn fieldTypeSpecEqual(a: FieldTypeSpec, b: FieldTypeSpec) bool {
+    if (a.alts.len != b.alts.len) return false;
+    var i: usize = 0;
+    while (i < a.alts.len) : (i += 1) {
+        if (!fieldTypeAltEqual(a.alts[i], b.alts[i])) return false;
+    }
+    return true;
+}
+
+fn fieldTypeAltEqual(a: FieldTypeAlt, b: FieldTypeAlt) bool {
+    if (a.typ != b.typ) return false;
+    return switch (a.typ) {
+        .struct_t => common.streq(a.struct_name, b.struct_name),
+        .interface_t => common.streq(a.interface_name, b.interface_name),
+        .named_t, .variant_t => common.streq(a.named_name, b.named_name),
+        .array => blk: {
+            const ae = a.elem_spec orelse break :blk b.elem_spec == null;
+            const be = b.elem_spec orelse break :blk false;
+            break :blk fieldTypeSpecEqual(ae, be);
+        },
+        .map => blk: {
+            const ak = a.key_spec orelse break :blk b.key_spec == null;
+            const bk = b.key_spec orelse break :blk false;
+            if (!fieldTypeSpecEqual(ak, bk)) break :blk false;
+            const av = a.val_spec orelse break :blk b.val_spec == null;
+            const bv = b.val_spec orelse break :blk false;
+            break :blk fieldTypeSpecEqual(av, bv);
+        },
+        .func_t => blk: {
+            const ap = a.func_params orelse &[_]FieldTypeSpec{};
+            const bp = b.func_params orelse &[_]FieldTypeSpec{};
+            if (ap.len != bp.len) break :blk false;
+            var pi: usize = 0;
+            while (pi < ap.len) : (pi += 1) {
+                if (!fieldTypeSpecEqual(ap[pi], bp[pi])) break :blk false;
+            }
+            const ar = a.func_returns orelse &[_]FieldTypeSpec{};
+            const br = b.func_returns orelse &[_]FieldTypeSpec{};
+            if (ar.len != br.len) break :blk false;
+            var ri: usize = 0;
+            while (ri < ar.len) : (ri += 1) {
+                if (!fieldTypeSpecEqual(ar[ri], br[ri])) break :blk false;
+            }
+            break :blk true;
+        },
+        else => true,
+    };
+}
+
 pub fn interfaceMethodMatches(m: InterfaceMethodSpec, f: FuncObj) bool {
     if (m.is_variadic != f.is_variadic) return false;
     var f_param_start: usize = 0;
@@ -194,51 +243,15 @@ pub fn interfaceMethodMatches(m: InterfaceMethodSpec, f: FuncObj) bool {
     if (m.param_types.len + f_param_start != f.param_types.len) return false;
     if (m.return_types.len != f.return_types.len) return false;
     if (m.is_variadic) {
-        const ma = m.variadic_type.alts;
-        const fa = f.variadic_type.alts;
-        if (ma.len != fa.len) return false;
-        var vai: usize = 0;
-        while (vai < ma.len) : (vai += 1) {
-            if (ma[vai].typ != fa[vai].typ) return false;
-            switch (ma[vai].typ) {
-                .struct_t => if (!common.streq(ma[vai].struct_name, fa[vai].struct_name)) return false,
-                .interface_t => if (!common.streq(ma[vai].interface_name, fa[vai].interface_name)) return false,
-                .named_t => if (!common.streq(ma[vai].named_name, fa[vai].named_name)) return false,
-                else => {},
-            }
-        }
+        if (!fieldTypeSpecEqual(m.variadic_type, f.variadic_type)) return false;
     }
     var i: usize = 0;
     while (i < m.param_types.len) : (i += 1) {
-        const ma = m.param_types[i].alts;
-        const fa = f.param_types[f_param_start + i].alts;
-        if (ma.len != fa.len) return false;
-        var ai: usize = 0;
-        while (ai < ma.len) : (ai += 1) {
-            if (ma[ai].typ != fa[ai].typ) return false;
-            switch (ma[ai].typ) {
-                .struct_t => if (!common.streq(ma[ai].struct_name, fa[ai].struct_name)) return false,
-                .interface_t => if (!common.streq(ma[ai].interface_name, fa[ai].interface_name)) return false,
-                .named_t => if (!common.streq(ma[ai].named_name, fa[ai].named_name)) return false,
-                else => {},
-            }
-        }
+        if (!fieldTypeSpecEqual(m.param_types[i], f.param_types[f_param_start + i])) return false;
     }
     i = 0;
     while (i < m.return_types.len) : (i += 1) {
-        const ma = m.return_types[i].alts;
-        const fa = f.return_types[i].alts;
-        if (ma.len != fa.len) return false;
-        var ai: usize = 0;
-        while (ai < ma.len) : (ai += 1) {
-            if (ma[ai].typ != fa[ai].typ) return false;
-            switch (ma[ai].typ) {
-                .struct_t => if (!common.streq(ma[ai].struct_name, fa[ai].struct_name)) return false,
-                .interface_t => if (!common.streq(ma[ai].interface_name, fa[ai].interface_name)) return false,
-                .named_t => if (!common.streq(ma[ai].named_name, fa[ai].named_name)) return false,
-                else => {},
-            }
-        }
+        if (!fieldTypeSpecEqual(m.return_types[i], f.return_types[i])) return false;
     }
     return true;
 }
