@@ -2,6 +2,10 @@
 Prism.languages.gengo = {
   'comment': [
     {
+      pattern: /\/\*[\s\S]*?\*\//,
+      greedy: true,
+    },
+    {
       pattern: /\/\/.*/,
       greedy: true,
     },

@@ -16,6 +16,7 @@ var Gengoscript = chroma.MustNewLexer(
 		return chroma.Rules{
 			"root": {
 				// Comments
+				{`/\*`, chroma.CommentMultiline, chroma.Push("block_comment")},
 				{`//.*`, chroma.CommentSingle, nil},
 
 				// Keywords
@@ -41,6 +42,11 @@ var Gengoscript = chroma.MustNewLexer(
 
 				// Whitespace
 				{`\s+`, chroma.TextWhitespace, nil},
+			},
+			"block_comment": {
+				{`\*/`, chroma.CommentMultiline, chroma.Pop(1)},
+				{`[^*]+`, chroma.CommentMultiline, nil},
+				{`\*`, chroma.CommentMultiline, nil},
 			},
 			"multiline": {
 				{`$`, chroma.StringOther, chroma.Pop(1)},

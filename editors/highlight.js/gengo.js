@@ -48,17 +48,15 @@ function gengo(hljs) {
     ],
   };
 
-  var COMMENT = {
-    className: 'comment',
-    begin: /\/\//,
-    end: /$/,
-  };
+  var COMMENT = hljs.COMMENT('//', '$');
+  var BLOCK_COMMENT = hljs.COMMENT('/\\*', '\\*/');
 
   return {
     name: 'Gengoscript',
     aliases: ['gengo'],
     keywords: KEYWORDS,
     contains: [
+      BLOCK_COMMENT,
       COMMENT,
       STRING_DQ,
       STRING_SQ,

@@ -20,6 +20,11 @@ contexts:
     - include: operators
 
   comments:
+    - match: '/\*'
+      push:
+        - meta_scope: comment.block.gengo
+        - match: '\*/'
+          pop: true
     - match: '//'
       push:
         - meta_scope: comment.line.gengo
