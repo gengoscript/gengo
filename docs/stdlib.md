@@ -25,15 +25,65 @@ The entries below describe the public library surface. This page is intentionall
 - Returns `null`.
 
 ### `std.io.printf(fmt, ...args)`
-- `fmt` is string.
-- Supported verbs: `%v`, `%s`, `%d`, `%f`, `%t`, `%x`, `%X`, `%%`.
-- Errors:
-  - `ArityMismatch` when placeholder count and args differ
-  - `TypeError` when arg type does not match verb
+- `fmt` is a string with Go-style format verbs.
+- Errors: `ArityMismatch` when placeholder count and args differ; `TypeError` when arg type does not match verb.
 
 ### `std.io.sprintf(fmt, ...args)`
 - Like `std.io.printf` but returns the formatted string instead of printing it.
 - Same verbs and error semantics as `std.io.printf`.
+
+### `std.io.eprint(...args)`
+- Like `std.io.print` but writes to stderr.
+- Returns `null`.
+
+### `std.io.eprintf(fmt, ...args)`
+- Like `std.io.printf` but writes to stderr.
+- Returns `null`.
+
+### `std.io.eprintln(...args)`
+- Like `std.io.println` but writes to stderr.
+- Returns `null`.
+
+### `std.io.read()`
+- Reads up to 4096 bytes from stdin in a single call.
+- Returns the bytes as a string, or `null` on EOF.
+
+### `std.io.readline()`
+- Reads one line from stdin (up to 4096 bytes), stripping the trailing `\n` / `\r\n`.
+- Returns the line as a string, or `null` on EOF.
+
+### Format verbs
+
+| Verb | Meaning |
+|------|---------|
+| `%v` | Default format (same as the `print` family) |
+| `%s` | String; precision trims to N runes (`%.3s`) |
+| `%q` | Quoted string with Go-style escape sequences |
+| `%d` | Decimal integer |
+| `%b` | Binary integer |
+| `%o` | Octal integer |
+| `%x` | Hexadecimal (lowercase) |
+| `%X` | Hexadecimal (uppercase) |
+| `%f` | Floating-point, decimal notation (default precision 6) |
+| `%e` | Scientific notation, lowercase exponent |
+| `%E` | Scientific notation, uppercase exponent |
+| `%g` | `%e` for large exponents, `%f` otherwise |
+| `%G` | Like `%g` with uppercase exponent |
+| `%t` | Boolean (`true` / `false`) |
+| `%c` | Integer as Unicode code point |
+| `%%` | Literal `%` |
+
+**Flags** (between `%` and the verb):
+
+| Flag | Meaning |
+|------|---------|
+| `-` | Left-align within field width |
+| `0` | Zero-pad numeric fields |
+| `+` | Always print sign for numeric values |
+| ` ` | Space before positive numbers |
+| `#` | Alternate form: `0x` / `0X` / `0` / `0b` prefix for `%x`/`%X`/`%o`/`%b` |
+
+**Width and precision**: `%8d` (minimum width 8), `%.2f` (2 decimal places), `%8.3f` (both).
 
 ## std.core
 

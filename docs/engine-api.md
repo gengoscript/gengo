@@ -170,6 +170,19 @@ Registers a native output callback. In the WebAssembly target, output is provide
 
 Passing `NULL` restores direct stdout and stderr output.
 
+Signature: `void callback(const char *ptr, int len, int is_stderr)`  
+`is_stderr` is `1` when the output comes from `std.io.eprint*`, `0` otherwise.
+
+### `engine_set_read_fn(handle, callback) -> void`
+
+Registers a native input callback used by `std.io.read` and `std.io.readline`. Not available in the WebAssembly target.
+
+Passing `NULL` restores direct stdin reads.
+
+Signature: `int callback(char *buf, int max_len, int is_line)`  
+- `is_line` is `1` for `readline` (read until `\n` or buffer full), `0` for `read` (single raw read).
+- Return value: number of bytes written into `buf`, or `-1` on EOF/error.
+
 ### `engine_last_error(handle, out_ptr, out_max_len) -> i32`
 
 Copies the last error message into the caller buffer and returns the number of bytes written.
