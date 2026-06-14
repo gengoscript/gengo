@@ -18,11 +18,15 @@ const Value = @import("../lang/value.zig").Value;
 const common = @import("../lang/common.zig");
 const ct = @import("../lang/compiler_types.zig");
 const MaxGlobalConsts = ct.MaxGlobalConsts;
+const MaxGlobalFuncs = ct.MaxGlobalFuncs;
+const MaxLocals = ct.MaxLocals;
 const MaxNamedTypes = ct.MaxNamedTypes;
 const MaxStructTypes = ct.MaxStructTypes;
 const MaxInterfaceTypes = ct.MaxInterfaceTypes;
 const MaxVariantTypes = ct.MaxVariantTypes;
 const NamedTypeBase = @import("../lang/value.zig").NamedTypeBase;
+const TypeCheck = ct.TypeCheck;
+const PrimType = ct.PrimType;
 
 fn checkGlobalExists(ctx: *anyopaque, name: []const u8) bool {
     _ = ctx;
@@ -100,6 +104,37 @@ pub const Runtime = struct {
     repl_named_type_enum_member_offsets: [MaxNamedTypes]u32 = undefined,
     repl_enum_member_buf: [MaxNamedTypes * 64]u8 = undefined,
     repl_enum_member_buf_used: usize = 0,
+
+    // #72: global-func persistence — function/method duplicate detection across lines
+    repl_global_func_count: usize = 0,
+    repl_global_func_name_offsets: [MaxGlobalFuncs]u32 = undefined,
+    repl_global_func_name_lens: [MaxGlobalFuncs]u16 = undefined,
+    repl_global_func_name_buf: [MaxGlobalFuncs * 64]u8 = undefined,
+    repl_global_func_name_buf_used: usize = 0,
+
+    // #73: typed-global persistence — assignment type enforcement across lines.
+    // Tags: 0=prim_int 1=prim_float 2=prim_decimal 3=prim_bool 4=prim_string
+    //       5=prim_rune 6=named 7=assert_arr 8=assert_map 9=assert_err
+    repl_typed_global_count: usize = 0,
+    repl_typed_global_name_offsets: [MaxLocals]u32 = undefined,
+    repl_typed_global_name_lens: [MaxLocals]u16 = undefined,
+    repl_typed_global_named_type_offsets: [MaxLocals]u32 = undefined,
+    repl_typed_global_named_type_lens: [MaxLocals]u16 = undefined,
+    repl_typed_global_tags: [MaxLocals]u8 = undefined,
+    repl_typed_global_name_buf: [MaxLocals * 128]u8 = undefined,
+    repl_typed_global_name_buf_used: usize = 0,
+
+    // #74: std/import namespace provenance persistence — unknown-field validation
+    repl_std_global_count: usize = 0,
+    repl_std_global_name_offsets: [MaxLocals]u32 = undefined,
+    repl_std_global_name_lens: [MaxLocals]u16 = undefined,
+    repl_import_global_count: usize = 0,
+    repl_import_global_qname_offsets: [MaxLocals]u32 = undefined,
+    repl_import_global_qname_lens: [MaxLocals]u16 = undefined,
+    repl_import_global_path_offsets: [MaxLocals]u32 = undefined,
+    repl_import_global_path_lens: [MaxLocals]u16 = undefined,
+    repl_namespace_name_buf: [MaxLocals * 128]u8 = undefined,
+    repl_namespace_name_buf_used: usize = 0,
 
     pub fn init() Runtime {
         var rt: Runtime = .{};
@@ -387,6 +422,58 @@ pub const Runtime = struct {
             const name = self.repl_type_name_buf[self.repl_variant_type_name_offsets[repl_ti]..][0..self.repl_variant_type_name_lens[repl_ti]];
             compiler.registry.addVariantType(name) catch {};
         }
+        // #72: restore global-func table so duplicate detection works across lines
+        repl_ti = 0;
+        while (repl_ti < self.repl_global_func_count) : (repl_ti += 1) {
+            const fname = self.repl_global_func_name_buf[self.repl_global_func_name_offsets[repl_ti]..][0..self.repl_global_func_name_lens[repl_ti]];
+            compiler.registry.addGlobalFunc(fname) catch {};
+        }
+        // #73: restore typed-global table so assignment type-checks persist
+        repl_ti = 0;
+        while (repl_ti < self.repl_typed_global_count and
+               compiler.typed_global_count < MaxLocals) : (repl_ti += 1)
+        {
+            const gname = self.repl_typed_global_name_buf[self.repl_typed_global_name_offsets[repl_ti]..][0..self.repl_typed_global_name_lens[repl_ti]];
+            const tag = self.repl_typed_global_tags[repl_ti];
+            const tc: TypeCheck = switch (tag) {
+                0 => .{ .prim = .int },
+                1 => .{ .prim = .float },
+                2 => .{ .prim = .decimal },
+                3 => .{ .prim = .bool },
+                4 => .{ .prim = .string },
+                5 => .{ .prim = .rune },
+                6 => blk: {
+                    const ntname = self.repl_typed_global_name_buf[self.repl_typed_global_named_type_offsets[repl_ti]..][0..self.repl_typed_global_named_type_lens[repl_ti]];
+                    break :blk .{ .named = ntname };
+                },
+                7 => .{ .assert_arr = {} },
+                8 => .{ .assert_map = {} },
+                9 => .{ .assert_err = {} },
+                else => continue,
+            };
+            compiler.typed_global_names[compiler.typed_global_count] = gname;
+            compiler.typed_global_type_checks[compiler.typed_global_count] = tc;
+            compiler.typed_global_count += 1;
+        }
+        // #74: restore std/import namespace provenance for field validation
+        repl_ti = 0;
+        while (repl_ti < self.repl_std_global_count and
+               compiler.std_module_global_count < MaxLocals) : (repl_ti += 1)
+        {
+            const sname = self.repl_namespace_name_buf[self.repl_std_global_name_offsets[repl_ti]..][0..self.repl_std_global_name_lens[repl_ti]];
+            compiler.std_module_global_names[compiler.std_module_global_count] = sname;
+            compiler.std_module_global_count += 1;
+        }
+        repl_ti = 0;
+        while (repl_ti < self.repl_import_global_count and
+               compiler.import_module_global_count < MaxLocals) : (repl_ti += 1)
+        {
+            const qn = self.repl_namespace_name_buf[self.repl_import_global_qname_offsets[repl_ti]..][0..self.repl_import_global_qname_lens[repl_ti]];
+            const ip = self.repl_namespace_name_buf[self.repl_import_global_path_offsets[repl_ti]..][0..self.repl_import_global_path_lens[repl_ti]];
+            compiler.import_module_global_qnames[compiler.import_module_global_count] = qn;
+            compiler.import_module_global_paths[compiler.import_module_global_count] = ip;
+            compiler.import_module_global_count += 1;
+        }
         compiler.compile(true) catch |err| {
             // Must be nonzero: api.zig classifies compile vs runtime errors by
             // last_compile_line != 0, and a REPL line may carry no token line.
@@ -491,6 +578,104 @@ pub const Runtime = struct {
                 self.repl_variant_type_name_offsets[idx] = @intCast(@intFromPtr(saved_name.ptr) - @intFromPtr(&self.repl_type_name_buf));
                 self.repl_variant_type_name_lens[idx] = @intCast(saved_name.len);
                 self.repl_variant_type_count += 1;
+            }
+        }
+
+        // #72: persist global-func names for duplicate detection on subsequent lines
+        self.repl_global_func_count = 0;
+        self.repl_global_func_name_buf_used = 0;
+        {
+            var fi: usize = 0;
+            while (fi < compiler.registry.global_func_count) : (fi += 1) {
+                const fn_name = compiler.registry.global_funcs[fi].name;
+                if (self.repl_global_func_count >= MaxGlobalFuncs or
+                    self.repl_global_func_name_buf_used + fn_name.len > self.repl_global_func_name_buf.len) break;
+                const start = self.repl_global_func_name_buf_used;
+                std.mem.copyForwards(u8, self.repl_global_func_name_buf[start .. start + fn_name.len], fn_name);
+                self.repl_global_func_name_offsets[self.repl_global_func_count] = @intCast(start);
+                self.repl_global_func_name_lens[self.repl_global_func_count] = @intCast(fn_name.len);
+                self.repl_global_func_name_buf_used += fn_name.len;
+                self.repl_global_func_count += 1;
+            }
+        }
+        // #73: persist typed-global table entries
+        self.repl_typed_global_count = 0;
+        self.repl_typed_global_name_buf_used = 0;
+        {
+            var tgi: usize = 0;
+            while (tgi < compiler.typed_global_count) : (tgi += 1) {
+                const gname = compiler.typed_global_names[tgi];
+                const tc = compiler.typed_global_type_checks[tgi];
+                if (self.repl_typed_global_count >= MaxLocals) break;
+                const tag: u8 = switch (tc) {
+                    .prim => |p| switch (p) {
+                        .int => 0, .float => 1, .decimal => 2,
+                        .bool => 3, .string => 4, .rune => 5,
+                    },
+                    .named => 6,
+                    .assert_arr => 7,
+                    .assert_map => 8,
+                    .assert_err => 9,
+                    .none => continue,
+                };
+                if (self.repl_typed_global_name_buf_used + gname.len > self.repl_typed_global_name_buf.len) break;
+                const gs = self.repl_typed_global_name_buf_used;
+                std.mem.copyForwards(u8, self.repl_typed_global_name_buf[gs .. gs + gname.len], gname);
+                self.repl_typed_global_name_offsets[self.repl_typed_global_count] = @intCast(gs);
+                self.repl_typed_global_name_lens[self.repl_typed_global_count] = @intCast(gname.len);
+                self.repl_typed_global_name_buf_used += gname.len;
+                self.repl_typed_global_named_type_offsets[self.repl_typed_global_count] = @intCast(gs);
+                self.repl_typed_global_named_type_lens[self.repl_typed_global_count] = 0;
+                if (tag == 6) {
+                    const ntname = tc.named;
+                    if (self.repl_typed_global_name_buf_used + ntname.len <= self.repl_typed_global_name_buf.len) {
+                        const ns = self.repl_typed_global_name_buf_used;
+                        std.mem.copyForwards(u8, self.repl_typed_global_name_buf[ns .. ns + ntname.len], ntname);
+                        self.repl_typed_global_named_type_offsets[self.repl_typed_global_count] = @intCast(ns);
+                        self.repl_typed_global_named_type_lens[self.repl_typed_global_count] = @intCast(ntname.len);
+                        self.repl_typed_global_name_buf_used += ntname.len;
+                    } else break;
+                }
+                self.repl_typed_global_tags[self.repl_typed_global_count] = tag;
+                self.repl_typed_global_count += 1;
+            }
+        }
+        // #74: persist std/import namespace provenance
+        self.repl_std_global_count = 0;
+        self.repl_import_global_count = 0;
+        self.repl_namespace_name_buf_used = 0;
+        {
+            var si: usize = 0;
+            while (si < compiler.std_module_global_count) : (si += 1) {
+                const sname = compiler.std_module_global_names[si];
+                if (self.repl_std_global_count >= MaxLocals or
+                    self.repl_namespace_name_buf_used + sname.len > self.repl_namespace_name_buf.len) break;
+                const ss = self.repl_namespace_name_buf_used;
+                std.mem.copyForwards(u8, self.repl_namespace_name_buf[ss .. ss + sname.len], sname);
+                self.repl_std_global_name_offsets[self.repl_std_global_count] = @intCast(ss);
+                self.repl_std_global_name_lens[self.repl_std_global_count] = @intCast(sname.len);
+                self.repl_namespace_name_buf_used += sname.len;
+                self.repl_std_global_count += 1;
+            }
+        }
+        {
+            var ii: usize = 0;
+            while (ii < compiler.import_module_global_count) : (ii += 1) {
+                const qn = compiler.import_module_global_qnames[ii];
+                const ip = compiler.import_module_global_paths[ii];
+                if (self.repl_import_global_count >= MaxLocals or
+                    self.repl_namespace_name_buf_used + qn.len + ip.len > self.repl_namespace_name_buf.len) break;
+                const qs = self.repl_namespace_name_buf_used;
+                std.mem.copyForwards(u8, self.repl_namespace_name_buf[qs .. qs + qn.len], qn);
+                self.repl_import_global_qname_offsets[self.repl_import_global_count] = @intCast(qs);
+                self.repl_import_global_qname_lens[self.repl_import_global_count] = @intCast(qn.len);
+                self.repl_namespace_name_buf_used += qn.len;
+                const ps = self.repl_namespace_name_buf_used;
+                std.mem.copyForwards(u8, self.repl_namespace_name_buf[ps .. ps + ip.len], ip);
+                self.repl_import_global_path_offsets[self.repl_import_global_count] = @intCast(ps);
+                self.repl_import_global_path_lens[self.repl_import_global_count] = @intCast(ip.len);
+                self.repl_namespace_name_buf_used += ip.len;
+                self.repl_import_global_count += 1;
             }
         }
 
