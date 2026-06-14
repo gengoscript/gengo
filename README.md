@@ -14,6 +14,25 @@ You write the host application. Your users write Gengoscript. The engine runs th
 
 ---
 
+## At a glance
+
+Gengoscript is for hosts that need user-defined logic without handing users a full ambient scripting environment.
+
+Use it when you want:
+
+* embedded scripting with explicit host integration
+* stronger domain constraints than Lua-style dynamic scripting
+* capability-gated access to IO, network, time, and host APIs
+* native and WebAssembly targets from the same engine
+
+It is not trying to be:
+
+* a general-purpose replacement for Python or JavaScript
+* an unrestricted shell language
+* a large batteries-included application platform
+
+---
+
 ## Why it exists
 
 Sometimes you want users to define logic without rebuilding or redeploying the host application every time that logic changes. But once users can write logic, they can also consume resources, reach into systems, and create states the host never meant to allow.
@@ -61,6 +80,23 @@ Multiple engine instances can run side by side, each with its own heap, state, a
 
 **WASM and native embedding.**
 Gengoscript can be built as `gengo-engine.wasm` for browsers, edge runtimes, and other sandboxed environments, or as `libgengo-engine.so` for native in-process embedding. Both expose the same C-style API.
+
+---
+
+## Small example
+
+```gengo
+type Port int range 1..65535
+type Hour int cycle 0..23
+
+pub func allow(port int, hour int) bool {
+    p := Port(port)
+    h := Hour(hour)
+    return p == Port(443) && h >= Hour(8) && h <= Hour(18)
+}
+```
+
+If a caller passes `0` as a port or `27` as an hour, construction fails at the boundary where the bad value enters the script.
 
 ---
 
@@ -116,6 +152,16 @@ That same pattern works for deploy gates, routing rules, policy checks, and data
 
 ---
 
+## Safety model
+
+* No ambient filesystem, network, process, or reflection access.
+* Host functions exist only if the host registers them.
+* Capability modules exist only if the host enables them.
+* Execution can be bounded by operation limits.
+* Runtime instances are isolated from each other.
+
+---
+
 ## Quick start
 
 ```bash
@@ -156,38 +202,35 @@ For a step-by-step walkthrough, see [docs/tutorial-first-script.md](docs/tutoria
 
 ---
 
+## Status at a glance
+
+| Surface | Status |
+| --- | --- |
+| CLI | Available |
+| REPL | Available |
+| WASI runtime | Available |
+| Native engine (`libgengo-engine.so`) | Available |
+| Engine WASM (`gengo-engine.wasm`) | Available |
+| TypeScript SDK | Available |
+| In-source `test` blocks | Available |
+| Stress test preset | Available |
+| Stability guarantees | Pre-1.0 |
+
+---
+
 ## Language and embedding
 
 Gengoscript uses a Go-adjacent syntax and leans on a stricter type system for domain scripting. Beyond ordinary structs and functions, the language includes named scalars, range types, predicate types, cyclic types, variants, typed arrays and maps, pattern-matching `switch`, closures, multi-file modules, and in-source `test` blocks.
 
-The runtime is available as:
-
-* `gengo-runtime.wasm` for WASI execution
-* `gengo-engine.wasm` for embeddable WebAssembly hosts
-* `libgengo-engine.so` for native C-compatible embedding
-
 The TypeScript SDK in `sdk/typescript/` wraps `gengo-engine.wasm` and handles value encoding for JavaScript hosts.
-
-## Docs
-
-* [docs/index.md](docs/index.md)
-* [docs/quickstart.md](docs/quickstart.md)
-* [docs/tutorial-first-script.md](docs/tutorial-first-script.md)
-* [docs/language.md](docs/language.md)
-* [docs/stdlib.md](docs/stdlib.md)
-* [docs/embedding.md](docs/embedding.md)
-* [docs/engine-api.md](docs/engine-api.md)
-* [docs/host-abi.md](docs/host-abi.md)
-* [sdk/typescript/README.md](sdk/typescript/README.md)
-* [docs/security.md](docs/security.md)
-* [dev-docs/index.md](dev-docs/index.md)
-* [CHANGELOG.md](CHANGELOG.md)
 
 ---
 
-## Status
+## Docs
 
-Gengoscript is pre-1.0 and under active development. Breaking changes are tagged, documented in [CHANGELOG.md](CHANGELOG.md), and listed in [releases](https://github.com/gengoscript/gengo/releases). No semantic versioning guarantees yet, but every breaking change is versioned, documented, and never happens silently.
+Primary documentation lives at **[docs.gengoscript.org](https://docs.gengoscript.org/)**.
+
+For repository-local references, see [docs/](docs/), [sdk/typescript/README.md](sdk/typescript/README.md), [dev-docs/index.md](dev-docs/index.md), and [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
