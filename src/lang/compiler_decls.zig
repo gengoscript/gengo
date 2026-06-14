@@ -397,18 +397,30 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
     var parent_is_cycle = false;
     var parent_min: f64 = 0;
     var parent_max: f64 = 0;
+    var parent_name_str: ?[]const u8 = null;
+    var parent_elem_spec: ?FieldTypeSpec = null;
+    var parent_key_spec: ?FieldTypeSpec = null;
+    var parent_val_spec: ?FieldTypeSpec = null;
+    var parent_scale: u8 = 0;
+    var is_primitive_base = false;
     if (common.streq(base_name, "int")) {
         base = .int;
+        is_primitive_base = true;
     } else if (common.streq(base_name, "float")) {
         base = .float;
+        is_primitive_base = true;
     } else if (common.streq(base_name, "decimal")) {
         base = .decimal;
+        is_primitive_base = true;
     } else if (common.streq(base_name, "string")) {
         base = .string;
+        is_primitive_base = true;
     } else if (common.streq(base_name, "bool")) {
         base = .bool;
+        is_primitive_base = true;
     } else if (common.streq(base_name, "rune")) {
         base = .rune;
+        is_primitive_base = true;
     } else if (common.streq(base_name, "array")) {
         return c.err("use '[]T' syntax for array types", .{});
     } else if (common.streq(base_name, "map")) {
@@ -429,20 +441,39 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
         c.matchOpt(.semicolon);
         return;
     } else if (c.registry.getNamedTypeInfo(base_name)) |parent| {
+        // #80: enum aliasing is incoherent — the alias would produce a named_type
+        // with base=enum_t but no members, which the runtime refuses to construct.
+        if (parent.base == .enum_t) {
+            return c.err("cannot alias enum type '{s}'; declare a new enum with 'type {s} enum {{ ... }}'", .{ base_name, name });
+        }
         base = parent.base;
         parent_has_range = parent.has_range;
         parent_is_cycle = parent.is_cycle;
         parent_min = parent.min;
         parent_max = parent.max;
+        parent_name_str = base_name;          // #78: preserve parent chain
+        parent_scale = parent.scale;           // #79: inherit decimal scale
+        parent_elem_spec = parent.elem_spec;   // #76: inherit collection specs
+        parent_key_spec = parent.key_spec;
+        parent_val_spec = parent.val_spec;
     } else return c.err("unknown type '{s}'", .{base_name});
 
-    var scale: u8 = 0;
+    var scale: u8 = parent_scale;
     if (base == .decimal) {
-        if (c.cur.typ != .number) return c.err("decimal type requires a scale (e.g., decimal 2)", .{});
-        const scale_val = common.parseFloat(c.cur.src) orelse return c.err("decimal scale must be a number", .{});
-        if (scale_val < 0 or scale_val > 18 or @trunc(scale_val) != scale_val) return c.err("decimal scale must be an integer between 0 and 18", .{});
-        scale = @intFromFloat(scale_val);
-        c.advance();
+        if (is_primitive_base) {
+            // Direct primitive base: require explicit scale.
+            if (c.cur.typ != .number) return c.err("decimal type requires a scale (e.g., decimal 2)", .{});
+            const scale_val = common.parseFloat(c.cur.src) orelse return c.err("decimal scale must be a number", .{});
+            if (scale_val < 0 or scale_val > 18 or @trunc(scale_val) != scale_val) return c.err("decimal scale must be an integer between 0 and 18", .{});
+            scale = @intFromFloat(scale_val);
+            c.advance();
+        } else if (c.cur.typ == .number) {
+            // Named-type alias: scale is inherited from parent; an explicit number overrides.
+            const scale_val = common.parseFloat(c.cur.src) orelse return c.err("decimal scale must be a number", .{});
+            if (scale_val < 0 or scale_val > 18 or @trunc(scale_val) != scale_val) return c.err("decimal scale must be an integer between 0 and 18", .{});
+            scale = @intFromFloat(scale_val);
+            c.advance();
+        }
     }
 
     var has_range = false;
@@ -502,9 +533,17 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
         .scale = scale,
         .min = min,
         .max = max,
+        .parent_name = parent_name_str,
         .predicate_msg = predicate_msg,
+        .elem_spec = parent_elem_spec,
+        .key_spec = parent_key_spec,
+        .val_spec = parent_val_spec,
     });
 
+    const qparent_name: ?[]const u8 = if (parent_name_str) |pn|
+        try c.qualifyTypeName(pn)
+    else
+        null;
     const nt = heap.allocObject() orelse return error.OutOfMemory;
     nt.* = .{ .named_type = NamedTypeObj{
         .name = try c.copyName(name),
@@ -515,8 +554,12 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
         .is_cycle = is_cycle,
         .min = min,
         .max = max,
+        .parent_name = qparent_name,
         .predicate = predicate_obj,
         .predicate_msg = predicate_msg,
+        .elem_spec = parent_elem_spec,
+        .key_spec = parent_key_spec,
+        .val_spec = parent_val_spec,
     } };
     try chunk.emitConst(.{ .object = nt }, kw.line);
     if (predicate_uv_count > 0) {
