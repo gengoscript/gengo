@@ -1,0 +1,1 @@
+type Index map[string]Nope
