@@ -118,6 +118,16 @@ pub const Lexer = struct {
                 '/' => {
                     if (self.peekNext() == '/') {
                         while (!self.atEnd() and self.peek() != '\n') _ = self.adv();
+                    } else if (self.peekNext() == '*') {
+                        _ = self.adv(); _ = self.adv(); // consume '/*'
+                        while (!self.atEnd()) {
+                            if (self.peek() == '\n') { self.line += 1; self.line_start = self.pos + 1; }
+                            if (self.peek() == '*' and self.peekNext() == '/') {
+                                _ = self.adv(); _ = self.adv(); // consume '*/'
+                                break;
+                            }
+                            _ = self.adv();
+                        }
                     } else return;
                 },
                 else => return,
@@ -639,6 +649,32 @@ test "lexer: comment at end of file" {
     const tok = lex.next();
     try testing.expectEqual(.ident, tok.typ);
     try testing.expectEqualStrings("a", tok.src);
+    try testing.expectEqual(.eof, lex.next().typ);
+}
+
+test "lexer: block comment skipped" {
+    var lex = Lexer{ .src = "a /* block */ b" };
+    const t1 = lex.next();
+    try testing.expectEqual(.ident, t1.typ);
+    try testing.expectEqualStrings("a", t1.src);
+    const t2 = lex.next();
+    try testing.expectEqual(.ident, t2.typ);
+    try testing.expectEqualStrings("b", t2.src);
+    try testing.expectEqual(.eof, lex.next().typ);
+}
+
+test "lexer: block comment multiline tracks line numbers" {
+    var lex = Lexer{ .src = "a /* line1\nline2\n*/ b" };
+    _ = lex.next(); // a
+    const tok = lex.next(); // b
+    try testing.expectEqual(.ident, tok.typ);
+    try testing.expectEqual(@as(u32, 3), tok.line);
+}
+
+test "lexer: block comment at end of file" {
+    var lex = Lexer{ .src = "a /* unterminated" };
+    const tok = lex.next();
+    try testing.expectEqual(.ident, tok.typ);
     try testing.expectEqual(.eof, lex.next().typ);
 }
 
