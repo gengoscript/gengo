@@ -299,6 +299,13 @@ pub fn compileFuncWithPrefix(c: anytype, prefix: []const []const u8, is_named: b
 
     var pi: u8 = 0;
     while (pi < arity) : (pi += 1) {
+        var pdi: u8 = 0;
+        while (pdi < pi) : (pdi += 1) {
+            if (common.streq(scope.locals[pdi].name, param_names[pi])) {
+                c.setErr("duplicate parameter name '{s}'", .{param_names[pi]});
+                return error.DuplicateLocal;
+            }
+        }
         scope.locals[pi] = .{ .name = param_names[pi], .is_const = param_const[pi] };
     }
     scope.local_count = arity;
@@ -313,6 +320,13 @@ pub fn compileFuncWithPrefix(c: anytype, prefix: []const []const u8, is_named: b
         scope.named_return_count = named_return_count;
         var ri: u8 = 0;
         while (ri < named_return_count) : (ri += 1) {
+            var rdi: u8 = 0;
+            while (rdi < arity + ri) : (rdi += 1) {
+                if (common.streq(scope.locals[rdi].name, return_names[ri])) {
+                    c.setErr("named return '{s}' conflicts with existing local binding", .{return_names[ri]});
+                    return error.DuplicateLocal;
+                }
+            }
             const rc: TypeCheck = if (return_types[ri].alts.len == 1) blk: {
                 switch (return_types[ri].alts[0].typ) {
                     .int => break :blk .{ .prim = .int },
@@ -1560,23 +1574,31 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
         }
         try chunk.emitOpConst(.def_global, .{ .string = qname }, name.line);
         if (!c.skipping_test_body) {
-            if (inferred_type_check != .none and c.typed_global_count < MaxLocals) {
+            if (inferred_type_check != .none) {
+                if (c.typed_global_count >= MaxLocals) {
+                    c.setErr("too many typed globals (limit {d})", .{MaxLocals});
+                    return error.TooManyGlobals;
+                }
                 c.typed_global_names[c.typed_global_count] = qname;
                 c.typed_global_type_checks[c.typed_global_count] = inferred_type_check;
                 c.typed_global_count += 1;
             }
             if (c.std_namespace_path != null and c.std_namespace_path.?.len == 0) {
-                if (c.std_module_global_count < MaxLocals) {
-                    c.std_module_global_names[c.std_module_global_count] = qname;
-                    c.std_module_global_count += 1;
+                if (c.std_module_global_count >= MaxLocals) {
+                    c.setErr("too many std-module globals (limit {d})", .{MaxLocals});
+                    return error.TooManyGlobals;
                 }
+                c.std_module_global_names[c.std_module_global_count] = qname;
+                c.std_module_global_count += 1;
             }
             if (c.import_module_path) |path| {
-                if (c.import_module_global_count < MaxLocals) {
-                    c.import_module_global_qnames[c.import_module_global_count] = qname;
-                    c.import_module_global_paths[c.import_module_global_count] = path;
-                    c.import_module_global_count += 1;
+                if (c.import_module_global_count >= MaxLocals) {
+                    c.setErr("too many imported-module globals (limit {d})", .{MaxLocals});
+                    return error.TooManyGlobals;
                 }
+                c.import_module_global_qnames[c.import_module_global_count] = qname;
+                c.import_module_global_paths[c.import_module_global_count] = path;
+                c.import_module_global_count += 1;
             }
             if (is_const) try c.registry.addGlobalConst(name.src);
         }

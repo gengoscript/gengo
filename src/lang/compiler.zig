@@ -321,6 +321,15 @@ pub const Compiler = struct {
     pub fn defineLocal(self: *Compiler, name: []const u8, is_const: bool) !u8 {
         const scope = self.currentScope();
         if (scope.local_count >= MaxLocals) { self.setErr("too many local variables (max {d})", .{MaxLocals}); return error.TooManyLocals; }
+        if (name.len > 0 and name[0] != '_') {
+            var di: u8 = 0;
+            while (di < scope.local_count) : (di += 1) {
+                if (common.streq(scope.locals[di].name, name)) {
+                    self.setErr("duplicate local binding '{s}'", .{name});
+                    return error.DuplicateLocal;
+                }
+            }
+        }
         const slot = scope.local_count;
         scope.locals[slot] = .{ .name = name, .is_const = is_const };
         scope.local_count += 1;
