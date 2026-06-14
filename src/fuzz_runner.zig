@@ -225,6 +225,79 @@ fn fuzzNamedTypeBoundaries() void {
     out("  named type boundary fuzz: OK\n");
 }
 
+// ── For-in/C-for nesting fuzz ───────────────────────────────────────────────
+// Generates random top-level and function-scoped for-in / C-for nestings
+// and runs them through compile + execute to catch stack-collision bugs.
+
+fn fuzzForInNesting() void {
+    const seeds = [_]u64{ 1, 42, 123, 999, 0xBEEF, 0xCAFE, 0x1337, 0xABCDEF };
+    for (seeds) |seed| {
+        rngSeed(seed);
+        var trial: usize = 0;
+        while (trial < 32) : (trial += 1) {
+            resetAll();
+            const depth = rngRange(1, 4);
+            var buf: [2048]u8 = undefined;
+            var pos: usize = 0;
+
+            const preamble = "var data = [1, 2, 3]\n";
+            @memcpy(buf[pos..][0..preamble.len], preamble);
+            pos += preamble.len;
+
+            var d: usize = 0;
+            while (d < depth) : (d += 1) {
+                if (pos + 64 > buf.len) break;
+                const use_forin = rngBool();
+                const dc = @as(u8, @intCast('0' + d % 10));
+                if (use_forin) {
+                    @memcpy(buf[pos..][0..5], "for x");
+                    pos += 5;
+                    buf[pos] = dc;
+                    pos += 1;
+                    @memcpy(buf[pos..][0..10], " in data {");
+                    pos += 10;
+                } else {
+                    @memcpy(buf[pos..][0..5], "for i");
+                    pos += 5;
+                    buf[pos] = dc;
+                    pos += 1;
+                    @memcpy(buf[pos..][0..8], " := 0; i");
+                    pos += 8;
+                    buf[pos] = dc;
+                    pos += 1;
+                    @memcpy(buf[pos..][0..7], " < 3; i");
+                    pos += 7;
+                    buf[pos] = dc;
+                    pos += 1;
+                    @memcpy(buf[pos..][0..4], "++ {");
+                    pos += 4;
+                }
+                buf[pos] = '\n';
+                pos += 1;
+            }
+
+            const body = "print(1)\n";
+            @memcpy(buf[pos..][0..body.len], body);
+            pos += body.len;
+
+            d = 0;
+            while (d < depth) : (d += 1) {
+                if (pos + 2 > buf.len) break;
+                buf[pos] = '}';
+                pos += 1;
+                buf[pos] = '\n';
+                pos += 1;
+            }
+
+            var compiler = Compiler.init(buf[0..pos], .{});
+            compiler.compile(true) catch { continue; };
+            chunk.emitOp(.halt, 1) catch continue;
+            vm.run() catch { continue; };
+        }
+    }
+    out("  for-in/C-for nesting fuzz: OK\n");
+}
+
 // ── Stack/heap boundary fuzz ─────────────────────────────────────────────────
 
 fn fuzzStackHeapBoundaries() void {
@@ -263,6 +336,7 @@ export fn _start() void {
     fuzzVmArithmetic();
     fuzzValueWire();
     fuzzNamedTypeBoundaries();
+    fuzzForInNesting();
     fuzzStackHeapBoundaries();
     out("fuzz OK\n");
     std.os.wasi.proc_exit(0);
