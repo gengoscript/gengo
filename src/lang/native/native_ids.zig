@@ -183,6 +183,12 @@ pub const NativeFnId = enum(u8) {
     cap_http_get = 185,
     cap_http_post = 186,
     cap_http_fetch = 187,
+
+    io_eprint = 192,
+    io_eprintf = 193,
+    io_eprintln = 194,
+    io_read = 195,
+    io_readline = 196,
 };
 
 pub const MaxNativeArgs = 255;

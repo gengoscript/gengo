@@ -39,10 +39,15 @@ pub const top_level_entries = [_]Entry{
 };
 
 pub const io_entries = [_]Entry{
-    .{ .name = "sprintf", .kind = .function },
-    .{ .name = "println", .kind = .function },
-    .{ .name = "printf", .kind = .function },
-    .{ .name = "print", .kind = .function },
+    .{ .name = "sprintf",  .kind = .function },
+    .{ .name = "println",  .kind = .function },
+    .{ .name = "printf",   .kind = .function },
+    .{ .name = "print",    .kind = .function },
+    .{ .name = "eprint",   .kind = .function },
+    .{ .name = "eprintf",  .kind = .function },
+    .{ .name = "eprintln", .kind = .function },
+    .{ .name = "read",     .kind = .function },
+    .{ .name = "readline", .kind = .function },
 };
 
 pub const core_entries = [_]Entry{

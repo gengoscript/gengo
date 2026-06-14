@@ -1,7 +1,7 @@
 hello world
 int -42
 hex ff FF
-float 3.14
+float 3.140000
 bool true false
 value 42 hi true null
 %

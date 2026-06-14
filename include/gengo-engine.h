@@ -86,6 +86,18 @@ typedef int32_t (*gengo_import_loader_fn)(void* ctx,
  */
 typedef void (*gengo_write_fn_t)(const char *ptr, int32_t len, int32_t is_stderr);
 
+/*
+ * Read callback for io.read() / io.readline().
+ *   buf      — buffer to fill
+ *   max_len  — buffer capacity in bytes
+ *   is_line  — 0: read up to max_len bytes; 1: read until '\n' or max_len
+ * Return value: bytes read (>= 0), or -1 for EOF / error.
+ * In the WASM target, gengo_read is an import provided by the host runtime.
+ * In the native target, the host registers via engine_set_read_fn().
+ * If no callback is set, reads fall through to stdin directly.
+ */
+typedef int32_t (*gengo_read_fn_t)(char *buf, int32_t max_len, int32_t is_line);
+
 /* ── Instance configuration ───────────────────────────────────────────────── */
 
 /*
@@ -215,6 +227,13 @@ int32_t engine_set_import_loader(int32_t handle,
  * On the WASM target this function is a no-op.
  */
 void engine_set_write_fn(int32_t handle, gengo_write_fn_t callback);
+
+/*
+ * Register a host-provided read callback for an engine.
+ * If the callback is NULL (or never set), reads come from stdin directly.
+ * On the WASM target this function is a no-op.
+ */
+void engine_set_read_fn(int32_t handle, gengo_read_fn_t callback);
 
 /* ── HTTP capability types ───────────────────────────────────────────────── */
 

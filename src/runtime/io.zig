@@ -13,11 +13,20 @@ extern "kernel32" fn WriteFile(
     lpNumberOfBytesWritten: ?*w32.DWORD,
     lpOverlapped: ?*anyopaque,
 ) callconv(.winapi) w32.BOOL;
+extern "kernel32" fn ReadFile(
+    hFile: w32.HANDLE,
+    lpBuffer: [*]u8,
+    nNumberOfBytesToRead: w32.DWORD,
+    lpNumberOfBytesRead: ?*w32.DWORD,
+    lpOverlapped: ?*anyopaque,
+) callconv(.winapi) w32.BOOL;
 
 pub const WriteFn = *const fn (s: []const u8) void;
+pub const ReadFn = *const fn (buf: []u8, is_line: bool) isize;
 
 var write_override: ?WriteFn = null;
 var werr_override: ?WriteFn = null;
+var read_override: ?ReadFn = null;
 
 pub fn setWriteOverrides(w: WriteFn, e: WriteFn) void {
     write_override = w;
@@ -27,6 +36,14 @@ pub fn setWriteOverrides(w: WriteFn, e: WriteFn) void {
 pub fn clearWriteOverrides() void {
     write_override = null;
     werr_override = null;
+}
+
+pub fn setReadOverride(f: ReadFn) void {
+    read_override = f;
+}
+
+pub fn clearReadOverride() void {
+    read_override = null;
 }
 
 pub fn writeAllFd(fd: u8, s: []const u8) void {
@@ -194,6 +211,40 @@ pub fn writeF64(v: f64) void {
     }
     while (dlen > 1 and digits[dlen - 1] == '0') dlen -= 1;
     write(digits[0..dlen]);
+}
+
+fn readFd0(buf: []u8) isize {
+    if (comptime builtin.os.tag == .wasi) {
+        var iov = [1]std.os.wasi.iovec_t{.{ .base = buf.ptr, .len = buf.len }};
+        var nread: usize = 0;
+        const rc = std.os.wasi.fd_read(0, &iov, 1, &nread);
+        if (rc != .SUCCESS or nread == 0) return -1;
+        return @intCast(nread);
+    }
+    if (comptime builtin.os.tag == .windows) {
+        const STD_INPUT_HANDLE: w32.DWORD = 0xFFFFFFF6;
+        const handle = GetStdHandle(STD_INPUT_HANDLE);
+        var nread: w32.DWORD = 0;
+        const ok = ReadFile(handle, buf.ptr, @intCast(buf.len), &nread, null);
+        if (ok == 0 or nread == 0) return -1;
+        return @intCast(nread);
+    }
+    const n = std.posix.read(0, buf) catch return -1;
+    return if (n == 0) -1 else @intCast(n);
+}
+
+pub fn readBytesRaw(buf: []u8, is_line: bool) isize {
+    if (read_override) |f| return f(buf, is_line);
+    if (buf.len == 0) return 0;
+    if (!is_line) return readFd0(buf);
+    var total: usize = 0;
+    while (total < buf.len) {
+        const n = readFd0(buf[total .. total + 1]);
+        if (n <= 0) return if (total > 0) @intCast(total) else -1;
+        total += 1;
+        if (buf[total - 1] == '\n') break;
+    }
+    return @intCast(total);
 }
 
 const PrintMaxDepth = 64;
