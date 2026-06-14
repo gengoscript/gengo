@@ -1,0 +1,53 @@
+std := import("std")
+
+// Nested for-in inside for-in (regression: body-local slot collided with
+// outer iterator at top level, causing TypeError on second outer iteration).
+for a in [1, 2] {
+    for b in [10, 20] {
+        std.io.print(a * b)
+        std.io.print(" ")
+    }
+}
+std.io.println()
+
+// C-for inside for-in (same collision, different inner loop type).
+for x in [3, 4] {
+    for y := 0; y < 3; y++ {
+        std.io.print(x * 10 + y)
+        std.io.print(" ")
+    }
+}
+std.io.println()
+
+// For-in with index+value containing nested loop.
+for k, v in [["a"], ["b"]] {
+    for c in v {
+        std.io.print(k)
+        std.io.print(c)
+        std.io.print(" ")
+    }
+}
+std.io.println()
+
+// Three levels deep.
+for i in [0, 1] {
+    for j in [0, 1] {
+        for k in [0, 1] {
+            std.io.print(i + j + k)
+        }
+    }
+}
+std.io.println()
+
+// Sequential nested for-ins at top level (each pair resets correctly).
+for p in [0, 1] {
+    for q in [0, 1] {
+        std.io.print(p + q)
+    }
+}
+for r in [0, 1] {
+    for s in [0, 1] {
+        std.io.print(r * 10 + s)
+    }
+}
+std.io.println()
