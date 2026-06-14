@@ -99,7 +99,7 @@ const verdict = rt.call("validate", &.{
 The user script might look like this:
 
 ```gengo
-db := import("db")
+db := import("host:db")
 
 type Severity int range 0..5
 
