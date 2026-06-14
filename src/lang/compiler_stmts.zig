@@ -75,7 +75,7 @@ pub fn assignStmt(c: anytype) !void {
 pub fn block(c: anytype) anyerror!void {
     const saved = c.repl_expr_ok;
     c.repl_expr_ok = false;
-    const local_base: u8 = if (c.inFunc()) c.currentScope().local_count else 0;
+    const local_base: u8 = c.currentScope().local_count;
     while (!c.check(.rbrace) and !c.check(.eof)) try c.decl();
     try c.consume(.rbrace);
     try c.cleanupLocals(local_base, c.prev.line);
@@ -147,7 +147,9 @@ pub fn cForStmt(c: anytype) anyerror!void {
         }
     }
     try c.consume(.lbrace);
+    c.loop_body_depth += 1;
     try block(c, );
+    c.loop_body_depth -= 1;
     for (c.currentLoop().loop_var_slots[0..c.currentLoop().loop_var_count]) |slot| {
         try chunk.emit2(@intFromEnum(Op.close_upvalue), slot, c.prev.line);
     }
@@ -157,7 +159,6 @@ pub fn cForStmt(c: anytype) anyerror!void {
         try chunk.patchJump(j);
     }
 
-    try c.cleanupLocals(local_base, c.prev.line);
     if (!c.inFunc()) {
         var li: u8 = 0;
         while (li < c.currentLoop().loop_var_count) : (li += 1) {
@@ -168,6 +169,7 @@ pub fn cForStmt(c: anytype) anyerror!void {
         }
         c.currentScope().local_count = local_base;
     }
+    try c.cleanupLocals(local_base, c.prev.line);
 
     const loop = c.popLoop();
     var i: usize = 0;
@@ -720,7 +722,9 @@ pub fn forInStmt(c: anytype) anyerror!void {
     }
 
     try c.consume(.lbrace);
+    c.loop_body_depth += 1;
     try block(c, );
+    c.loop_body_depth -= 1;
     for (c.currentLoop().loop_var_slots[0..c.currentLoop().loop_var_count]) |slot| {
         try chunk.emit2(@intFromEnum(Op.close_upvalue), slot, c.prev.line);
     }
@@ -728,7 +732,6 @@ pub fn forInStmt(c: anytype) anyerror!void {
 
     try chunk.patchJump(exit_j);
     if (!c.inFunc()) try chunk.emitOp(.pop, c.prev.line); // pop iterator (top-level only)
-    try c.cleanupLocals(local_base, c.prev.line);
     if (!c.inFunc()) {
         var li: u8 = 0;
         while (li < c.currentLoop().loop_var_count) : (li += 1) {
@@ -739,6 +742,7 @@ pub fn forInStmt(c: anytype) anyerror!void {
         }
         c.currentScope().local_count = local_base;
     }
+    try c.cleanupLocals(local_base, c.prev.line);
 
     const loop = c.popLoop();
     var i: usize = 0;
@@ -772,7 +776,7 @@ pub fn hasInitSemicolon(c: anytype) bool {
 }
 
 pub fn ifStmt(c: anytype) anyerror!void {
-    const local_base: u8 = if (c.inFunc()) c.currentScope().local_count else 0;
+    const local_base: u8 = c.currentScope().local_count;
 
     if (hasInitSemicolon(c, )) {
         if (c.check(.ident) and c.peekTT() == .colon_eq) {
@@ -1339,7 +1343,7 @@ pub fn switchStmt(c: anytype) anyerror!void {
                 try chunk.emitOpConst(.variant_check, .{ .string = arm_name_tok.src }, dot_line);
                 const next_case = try chunk.emitJump(.jif_pop, dot_line);
                 // Handle switch value and optional binding
-                const local_before = if (c.inFunc()) c.currentScope().local_count else 0;
+                const local_before = c.currentScope().local_count;
                 if (binding != null) {
                     if (c.isKnownTypeName(binding.?))
                         return c.err("'{s}' is a type name and cannot be used as a binding name", .{binding.?});
@@ -1533,7 +1537,7 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
     } else {
         return c.err("expected expression, found {s}", .{c.tokenName(c.cur.typ)});
     }
-    if (c.inFunc() or c.in_loop_init) {
+    if (c.inFunc() or c.in_loop_init or c.loop_body_depth > 0) {
         const slot = try c.defineLocal(name.src, is_const);
         c.currentScope().locals[slot].type_check = inferred_type_check;
         if (c.std_namespace_path != null and c.std_namespace_path.?.len == 0) {

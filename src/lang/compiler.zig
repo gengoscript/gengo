@@ -115,6 +115,7 @@ pub const Compiler = struct {
     repl_expr_ok: bool = true,
     repl_expr_pop_pos: ?usize = null,
     in_loop_init: bool = false,
+    loop_body_depth: u8 = 0,
     skipping_test_body: bool = false,
 
     // ── Lifecycle ────────────────────────────────────────────────────────────────
@@ -519,7 +520,6 @@ pub const Compiler = struct {
     }
 
     pub fn cleanupLocals(self: *Compiler, base: u8, line: u32) !void {
-        if (self.scope_depth <= 1) return;
         const scope = self.currentScope();
         while (scope.local_count > base) {
             const idx = scope.local_count - 1;
