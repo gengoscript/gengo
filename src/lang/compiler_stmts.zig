@@ -694,9 +694,7 @@ pub fn forInStmt(c: anytype) anyerror!void {
     const body_keep: u8 = c.currentScope().local_count;
 
     const loop_start = chunk.codeLen();
-    // In functions the hidden local slot is cleaned up by cleanupLocals; at top-level
-    // cleanupLocals is a no-op so an explicit pop is still needed (iter_pops=1).
-    try c.pushLoop(loop_start, local_base, body_keep, if (c.inFunc()) @as(u8, 0) else @as(u8, 1));
+    try c.pushLoop(loop_start, local_base, body_keep, 0);
     if (c.resolveLocal(kname.src)) |slot| {
         c.currentLoop().loop_var_slots[c.currentLoop().loop_var_count] = slot;
         c.currentLoop().loop_var_names[c.currentLoop().loop_var_count] = kname.src;

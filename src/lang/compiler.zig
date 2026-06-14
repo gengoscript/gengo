@@ -534,7 +534,6 @@ pub const Compiler = struct {
     // ── Loop context ─────────────────────────────────────────────────────────────
 
     pub fn loopKeepBase(self: *Compiler) u8 {
-        if (self.scope_depth <= 1) return 0;
         return self.currentScope().local_count;
     }
 
@@ -562,7 +561,7 @@ pub const Compiler = struct {
         if (self.loop_depth == 0) { self.setErr("'break' outside of loop", .{}); return error.BreakOutsideLoop; }
         const loop = self.currentLoop();
         // Save so code after the if-break block sees the correct local count (non-break path).
-        const saved: u8 = if (self.inFunc()) self.currentScope().local_count else 0;
+        const saved: u8 = self.currentScope().local_count;
         try self.cleanupLocals(loop.body_keep, line);
         var p: u8 = 0;
         while (p < loop.iter_pops) : (p += 1) try chunk.emitOp(.pop, line);
@@ -574,19 +573,19 @@ pub const Compiler = struct {
         if (loop.break_count >= MaxLoopBreaks) { self.setErr("too many 'break' statements in loop (max {d})", .{MaxLoopBreaks}); return error.TooManyBreaksInLoop; }
         loop.break_offsets[loop.break_count] = off;
         loop.break_count += 1;
-        if (self.inFunc()) self.currentScope().local_count = saved;
+        self.currentScope().local_count = saved;
     }
 
     pub fn emitContinue(self: *Compiler, line: u32) !void {
         if (self.loop_depth == 0) { self.setErr("'continue' outside of loop", .{}); return error.ContinueOutsideLoop; }
         const loop = self.currentLoop();
-        const saved: u8 = if (self.inFunc()) self.currentScope().local_count else 0;
+        const saved: u8 = self.currentScope().local_count;
         try self.cleanupLocals(loop.body_keep, line);
         for (loop.loop_var_slots[0..loop.loop_var_count]) |slot| {
             try chunk.emit2(@intFromEnum(Op.close_upvalue), slot, line);
         }
         try chunk.emitLoop(loop.continue_target, line);
-        if (self.inFunc()) self.currentScope().local_count = saved;
+        self.currentScope().local_count = saved;
     }
 
     // ── Top-level dispatch ───────────────────────────────────────────────────────
