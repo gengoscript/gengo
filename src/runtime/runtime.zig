@@ -218,6 +218,58 @@ pub const Runtime = struct {
         return self.runPathWithProvider(src, path, .{ .table = sources }, false);
     }
 
+    pub fn compileOnly(self: *Runtime, src: []const u8, path: []const u8, provider: module_compile.SourceProvider) !void {
+        self.last_compile_line = 0;
+        self.last_compile_path_len = 0;
+        self.last_compile_col = 0;
+        self.last_compile_msg_len = 0;
+        self.reset();
+        const hm_names = blk: {
+            const names_ptr = heap.bump([]const u8, self.host_modules.len) orelse return error.OutOfMemory;
+            const names = names_ptr[0..self.host_modules.len];
+            for (names, self.host_modules) |*n, hm| n.* = hm.name;
+            break :blk names;
+        };
+        const all_caps: []const module_compile.CapModuleDesc = if (self.enabled_capabilities.len > 0) module_compile.AllCapabilities else &[_]module_compile.CapModuleDesc{};
+        if (path.len != 0) {
+            var session: module_compile.Session = .{};
+            session.provider = provider;
+            session.host_module_names = hm_names;
+            session.host_module_descs = self.host_modules;
+            session.enabled_capabilities = self.enabled_capabilities;
+            session.capability_modules = all_caps;
+            session.compileRoot(path, src) catch |err| {
+                self.last_compile_line = if (session.last_error_line != 0) session.last_error_line else 1;
+                self.last_compile_col = session.last_error_col;
+                self.last_compile_msg_len = session.last_error_msg_len;
+                @memcpy(self.last_compile_msg_buf[0..session.last_error_msg_len], session.last_error_msg_buf[0..session.last_error_msg_len]);
+                self.setLastCompilePath(session.last_error_path);
+                return err;
+            };
+        } else {
+            var session: module_compile.Session = .{};
+            session.provider = provider;
+            session.host_module_names = hm_names;
+            session.host_module_descs = self.host_modules;
+            session.enabled_capabilities = self.enabled_capabilities;
+            session.capability_modules = all_caps;
+            var compiler = Compiler.init(src, .{
+                .module_ctx = &session,
+                .resolve_import = module_compile.Session.resolveImportOpaque,
+                .has_module_export = module_compile.hasModuleExport,
+                .test_mode = false,
+            });
+            compiler.compile(true) catch |err| {
+                self.last_compile_line = if (compiler.err_line != 0) compiler.err_line else compiler.prev.line;
+                self.last_compile_col = compiler.err_col;
+                self.last_compile_msg_len = compiler.err_msg_len;
+                @memcpy(self.last_compile_msg_buf[0..compiler.err_msg_len], compiler.err_msg_buf[0..compiler.err_msg_len]);
+                self.setLastCompilePath("");
+                return err;
+            };
+        }
+    }
+
     pub fn runPathWithProvider(self: *Runtime, src: []const u8, path: []const u8, provider: module_compile.SourceProvider, test_mode: bool) !void {
         if (src.len > cfg.max_input_bytes) {
             vms.setRuntimeErr("input exceeds max_input_bytes ({d})", .{cfg.max_input_bytes});
