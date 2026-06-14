@@ -115,6 +115,7 @@ pub const Compiler = struct {
     repl_expr_ok: bool = true,
     repl_expr_pop_pos: ?usize = null,
     in_loop_init: bool = false,
+    skipping_test_body: bool = false,
 
     // ── Lifecycle ────────────────────────────────────────────────────────────────
 
@@ -613,11 +614,16 @@ pub const Compiler = struct {
         self.advance();
 
         if (!self.options.test_mode) {
-            // Normal mode: parse the body but discard emitted code.
+            // Normal mode: parse the body but discard emitted code AND semantic state.
             var tmp_state: chunk.State = .{};
             const saved_state = chunk.g_state;
             chunk.setActive(&tmp_state);
-            defer chunk.setActive(saved_state);
+            const saved_skipping = self.skipping_test_body;
+            self.skipping_test_body = true;
+            defer {
+                chunk.setActive(saved_state);
+                self.skipping_test_body = saved_skipping;
+            }
 
             try self.consume(.lbrace);
             while (!self.check(.rbrace) and !self.check(.eof)) try self.decl();
@@ -769,6 +775,7 @@ pub const Compiler = struct {
     }
 
     pub fn addExport(self: *Compiler, name: []const u8, global_name: []const u8) !void {
+        if (self.skipping_test_body) return;
         const stable_name = try self.copyName(name);
         var i: usize = 0;
         while (i < self.export_count) : (i += 1) {
