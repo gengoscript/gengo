@@ -1,0 +1,65 @@
+std := import("std")
+
+// Continue skips the rest of the body, but defers from that iteration
+// still accumulate and run when the function returns.
+func for_in_continue_defer() {
+    for x in [1, 2, 3, 4, 5] {
+        defer std.io.print("d", x, " ")
+        if x == 3 { continue }
+        std.io.print(x, " ")
+    }
+    std.io.print("|")
+    std.io.println()
+}
+
+func cfor_continue_defer() {
+    for i := 0; i < 6; i++ {
+        defer std.io.print("d", i, " ")
+        if i == 4 { continue }
+        std.io.print(i, " ")
+    }
+    std.io.print("|")
+    std.io.println()
+}
+
+// Multiple defers per iteration (LIFO) with continue.
+func multi_defer_continue() {
+    for x in [1, 2, 3] {
+        defer std.io.print("A", x, " ")
+        defer std.io.print("B", x, " ")
+        if x == 2 { continue }
+        std.io.print(x, " ")
+    }
+    std.io.print("|")
+    std.io.println()
+}
+
+// Defer inside the continue block (nested scope).
+func defer_inside_continue_block() {
+    for x in [5, 6, 7] {
+        if x == 6 {
+            defer std.io.print("inner-d", x, " ")
+            continue
+        }
+        std.io.print(x, " ")
+    }
+    std.io.print("|")
+    std.io.println()
+}
+
+// Continue before defer — that iteration's defer is never registered.
+func continue_prevents_defer() {
+    for x in [1, 2, 3] {
+        if x == 2 { continue }
+        defer std.io.print("d", x, " ")
+    }
+    std.io.print("|")
+    std.io.println()
+}
+
+for_in_continue_defer()
+cfor_continue_defer()
+multi_defer_continue()
+defer_inside_continue_block()
+continue_prevents_defer()
+std.io.println()

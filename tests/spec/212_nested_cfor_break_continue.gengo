@@ -1,0 +1,78 @@
+std := import("std")
+
+func inner_break() {
+    for i := 0; i < 3; i++ {
+        for j := 0; j < 5; j++ {
+            if j == 3 { break }
+            std.io.print(i * 10 + j, " ")
+        }
+        std.io.print("| ")
+    }
+    std.io.println()
+}
+
+func inner_continue() {
+    for i := 0; i < 3; i++ {
+        for j := 0; j < 6; j++ {
+            if j % 2 == 0 { continue }
+            std.io.print(i * 10 + j, " ")
+        }
+        std.io.print("| ")
+    }
+    std.io.println()
+}
+
+func inner_break_sum() int {
+    s := 0
+    for i := 0; i < 3; i++ {
+        for j := 0; j < 5; j++ {
+            if j == 3 { break }
+            s += i * 10 + j
+        }
+    }
+    return s
+}
+
+func inner_continue_sum() int {
+    s := 0
+    for i := 0; i < 3; i++ {
+        for j := 0; j < 6; j++ {
+            if j % 2 == 0 { continue }
+            s += i * 10 + j
+        }
+    }
+    return s
+}
+
+func inner_break_outer_break() int {
+    s := 0
+    for i := 0; i < 4; i++ {
+        for j := 0; j < 5; j++ {
+            if j == 3 { break }
+            s += i * 10 + j
+        }
+        if i == 1 { break }
+    }
+    return s
+}
+
+func nested_body_local_break() {
+    for i := 0; i < 2; i++ {
+        for j := 0; j < 4; j++ {
+            val := i * 10 + j
+            if j == 2 {
+                std.io.print("break(", val, ") ")
+                break
+            }
+            std.io.print(val, " ")
+        }
+    }
+    std.io.println()
+}
+
+inner_break()
+inner_continue()
+std.io.println(inner_break_sum())
+std.io.println(inner_continue_sum())
+std.io.println(inner_break_outer_break())
+nested_body_local_break()
