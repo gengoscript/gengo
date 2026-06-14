@@ -1,0 +1,65 @@
+std := import("std")
+
+// Defers accumulate across iterations and run LIFO when function returns.
+// Break exits the loop; defers from completed iterations still run.
+func for_in_break_defer() {
+    for x in [10, 20, 30, 40] {
+        defer std.io.print("d", x, " ")
+        if x == 30 { break }
+        std.io.print(x, " ")
+    }
+    std.io.print("|")
+    std.io.println()
+}
+
+func cfor_break_defer() {
+    for i := 0; i < 6; i++ {
+        defer std.io.print("d", i, " ")
+        if i == 4 { break }
+        std.io.print(i, " ")
+    }
+    std.io.print("|")
+    std.io.println()
+}
+
+// Multiple defers per iteration (LIFO) with break.
+func multi_defer_break() {
+    for x in [1, 2, 3] {
+        defer std.io.print("A", x, " ")
+        defer std.io.print("B", x, " ")
+        if x == 2 { break }
+        std.io.print(x, " ")
+    }
+    std.io.print("|")
+    std.io.println()
+}
+
+// Defer inside the if-break block (nested scope).
+func defer_inside_break_block() {
+    for x in [5, 6, 7] {
+        if x == 6 {
+            defer std.io.print("inner-d", x, " ")
+            break
+        }
+        std.io.print(x, " ")
+    }
+    std.io.print("|")
+    std.io.println()
+}
+
+// Break before defer statement — no defer is registered for that iteration.
+func break_prevents_defer() {
+    for x in [1, 2, 3] {
+        if x == 2 { break }
+        defer std.io.print("d", x, " ")
+    }
+    std.io.print("|")
+    std.io.println()
+}
+
+for_in_break_defer()
+cfor_break_defer()
+multi_defer_break()
+defer_inside_break_block()
+break_prevents_defer()
+std.io.println()
