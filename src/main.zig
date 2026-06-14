@@ -21,6 +21,7 @@ const vmperf = @import("lang/vm_perf.zig");
 const vms = @import("lang/vm_state.zig");
 const cfg = @import("runtime/config.zig");
 const fs_state = @import("lang/native/fs_state.zig");
+const disasm = @import("lang/disasm.zig");
 
 const MaxArgs = 32;
 const ArgBufSize = 4096;
@@ -257,6 +258,7 @@ fn runCli(argv: []const []const u8) void {
     var backend: vm.Policy.NativeBackend = .embedded;
     var max_ops: ?u64 = null;
     var test_mode: bool = false;
+    var disasm_mode: bool = false;
     var cap_names: [8][]const u8 = undefined;
     var cap_count: usize = 0;
     while (script_index < argv.len) {
@@ -264,6 +266,23 @@ fn runCli(argv: []const []const u8) void {
         if (a.len == 2 and a[0] == '-' and a[1] == '-') {
             script_index += 1;
             continue;
+        }
+        if (std.mem.eql(u8, a, "--help") or std.mem.eql(u8, a, "-h")) {
+            io.write("Usage: gengo [options] [script.gengo]\n");
+            io.write("\n");
+            io.write("Options:\n");
+            io.write("  --help, -h         Show this help message\n");
+            io.write("  --version          Print version and exit\n");
+            io.write("  --disasm           Compile and print bytecode disassembly; do not run\n");
+            io.write("  --test             Run test blocks in the script\n");
+            io.write("  --cap <name>       Enable a named capability (repeatable)\n");
+            io.write("  --max-ops <n>      Limit instruction count (0 = unlimited)\n");
+            io.write("  --backend <name>   Native call backend: embedded (default) or host\n");
+            io.write("  --mount <n>=<path> Mount a filesystem path under the given name\n");
+            io.write("  --                 End of options; treat next argument as script path\n");
+            io.write("\n");
+            io.write("If no script is given and stdin is a terminal, starts the REPL.\n");
+            die(0);
         }
         if (a.len == 9 and std.mem.eql(u8, a, "--backend")) {
             if (script_index + 1 >= argv.len) {
@@ -336,6 +355,11 @@ fn runCli(argv: []const []const u8) void {
             script_index += 2;
             continue;
         }
+        if (std.mem.eql(u8, a, "--disasm")) {
+            disasm_mode = true;
+            script_index += 1;
+            continue;
+        }
         if (std.mem.eql(u8, a, "--test")) {
             test_mode = true;
             script_index += 1;
@@ -394,7 +418,36 @@ fn runCli(argv: []const []const u8) void {
     if (cap_count > 0) {
         runtime.enabled_capabilities = cap_names[0..cap_count];
     }
-    runtime.runPathWithProvider(src, if (script_path) |p| p else "", .filesystem, test_mode) catch |err| {
+    const script_arg = if (script_path) |p| p else "";
+
+    if (disasm_mode) {
+        runtime.compileOnly(src, script_arg, .filesystem) catch |err| {
+            const compile_path = if (runtime.lastCompilePath().len != 0) runtime.lastCompilePath() else script_name;
+            io.werr("gengo: compile error: ");
+            io.werr(@errorName(err));
+            if (runtime.last_compile_msg_len > 0) {
+                io.werr(": ");
+                io.werr(runtime.last_compile_msg_buf[0..runtime.last_compile_msg_len]);
+            }
+            io.werr("\n  --> ");
+            io.werr(compile_path);
+            io.werr(":");
+            io.werrInt(@intCast(runtime.last_compile_line));
+            if (runtime.last_compile_col > 0) {
+                io.werr(":");
+                io.werrInt(@intCast(runtime.last_compile_col));
+            }
+            io.werr("\n");
+            if (std.mem.eql(u8, compile_path, script_name)) {
+                printSourceLine(src, runtime.last_compile_line, runtime.last_compile_col);
+            }
+            die(1);
+        };
+        disasm.disassemble();
+        die(0);
+    }
+
+    runtime.runPathWithProvider(src, script_arg, .filesystem, test_mode) catch |err| {
         vmperf.printSummary(vms.vmState().gc_runs, vms.vmState().gc_time_ns,
             vms.vmState().alloc_object_calls, vms.vmState().alloc_managed_slice_calls,
             vms.vmState().alloc_managed_bytes_calls);
