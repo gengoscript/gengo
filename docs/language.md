@@ -258,6 +258,48 @@ type RetryCount int predicate func(n) { return n >= 0 && n <= max_retries }
 
 Predicates work on any scalar base type (`int`, `float`, `string`, `bool`, `rune`). They cannot be declared on collection types, enums, or variants.
 
+### Predicate Custom Messages
+
+A predicate may declare a custom failure message that replaces the generic
+"predicate failed" runtime error:
+
+```gengo
+type PositiveInt int predicate func(x) { return x > 0 } message "must be positive"
+
+// PositiveInt(-1)   // runtime error: PositiveInt(-1): must be positive
+```
+
+### Predicate Inheritance
+
+Subtypes inherit the parent’s predicate. A subtype with its own predicate
+must satisfy *both* the parent and the subtype checks:
+
+```gengo
+type UserId string predicate func(s) { return std.core.len(s) > 0 }
+subtype AdminId UserId predicate func(s) { return std.string.starts_with(s, "admin:") }
+
+a := AdminId("admin:42")   // ok
+// AdminId("")             // fails parent predicate (empty string)
+// AdminId("user:42")      // fails subtype predicate (wrong prefix)
+```
+
+### Named String Concatenation
+
+Values of the same named string type can be concatenated with `+`, preserving
+the named type:
+
+```gengo
+type Html string
+
+h1 := Html("<p>")
+h2 := Html("hi</p>")
+std.io.println(h1 + h2)           // Html("<p>hi</p>")
+std.io.println(Html("<hr>") + Html("<br>"))
+```
+
+Mixing different named string types or a named type with a bare string is a
+`TypeError`.
+
 ## Enums and Variants
 
 Enums provide closed sets of values:

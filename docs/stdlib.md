@@ -228,6 +228,77 @@ The entries below describe the public library surface. This page is intentionall
 ### `std.string.builder()`
 - Creates mutable string builder with `.write`, `.str`, and `.reset`
 
+### `std.string.count(s, sub)`
+- Counts non-overlapping occurrences of `sub` in `s`
+
+### `std.string.fields(s)`
+- Splits `s` by Unicode whitespace (spaces, tabs, newlines) into an array
+
+### `std.string.pad_left(s, width, pad)` / `std.string.pad_right(s, width, pad)`
+- Pads `s` to `width` using `pad` (first rune only) on the left or right
+
+### `std.string.equal_fold(a, b)`
+- Case-insensitive equality for ASCII strings
+
+### `std.string.contains_any(s, chars)`
+- Returns `true` if any rune in `chars` appears in `s`
+
+### `std.string.trim_left(s, chars)` / `std.string.trim_right(s, chars)`
+- Trims leading or trailing runes that appear in `chars`
+
+### `std.string.trim_prefix(s, prefix)` / `std.string.trim_suffix(s, suffix)`
+- Removes `prefix` or `suffix` if present; returns `s` unchanged otherwise
+
+### `std.string.split_n(s, sep, n)`
+- Splits `s` by `sep` into at most `n` substrings; final element contains the rest
+
+## std.array
+
+### `std.array.filter(arr, pred)`
+- Returns array of elements where `pred(element)` is `true`
+
+### `std.array.map(arr, fn)`
+- Returns array of `fn(element)` for each element
+
+### `std.array.reduce(arr, fn, init)`
+- Folds `arr` left-to-right: `fn(init, arr[0])`, then `fn(result, arr[1])`, etc.
+
+### `std.array.slice(arr, start, end)`
+- Returns sub-array from `start` (inclusive) to `end` (exclusive)
+
+### `std.array.zip(a, b)`
+- Returns array of pairs `[a[0], b[0]], [a[1], b[1]], …`
+
+### `std.array.flat(arr)`
+- Flattens one level of nesting: `[[1,2],[3]]` → `[1,2,3]`
+
+### `std.array.find(arr, pred)`
+- Returns first element where `pred(element)` is `true`, or `null`
+
+### `std.array.find_index(arr, pred)`
+- Returns index of first element where `pred(element)` is `true`, or `-1`
+
+### `std.array.all(arr, pred)`
+- Returns `true` if `pred(element)` is `true` for every element
+
+### `std.array.any(arr, pred)`
+- Returns `true` if `pred(element)` is `true` for at least one element
+
+### `std.array.chunk(arr, size)`
+- Splits `arr` into sub-arrays of length `size`; last chunk may be shorter
+- Errors: `RangeError` if `size <= 0`
+
+## std.sort
+
+### `std.sort.asc(arr)`
+- Sorts `arr` in ascending order (int, float, or string elements)
+
+### `std.sort.desc(arr)`
+- Sorts `arr` in descending order
+
+### `std.sort.by(arr, key_fn)`
+- Sorts `arr` by the value returned by `key_fn(element)` for each element
+
 ## std.math
 
 ### `std.math.abs(x)`
@@ -297,6 +368,25 @@ The entries below describe the public library surface. This page is intentionall
 
 ### `std.json.valid(s)`
 - Returns `true` if `s` is valid JSON, `false` otherwise
+
+## std.hex
+
+### `std.hex.encode(data)`
+- Encodes a string or array of bytes to a lowercase hex string
+
+### `std.hex.decode(s)`
+- Decodes a hex string to a string; errors: `TypeError` on invalid hex
+
+## std.base64
+
+### `std.base64.encode(data)`
+- Encodes a string or array of bytes to base64
+
+### `std.base64.decode(s)`
+- Decodes a base64 string; errors: `TypeError` on invalid base64
+
+### `std.base64.url_encode(data)` / `std.base64.url_decode(s)`
+- URL-safe base64 variant (uses `-` and `_` instead of `+` and `/`)
 
 ## std.regexp
 
@@ -396,6 +486,14 @@ Note: `range` iteration is reserved syntax but not yet executed (v1 always takes
 | `.after(t2)` | `bool` | |
 | `.equal(t2)` | `bool` | |
 | `.is_zero()` | `bool` | |
+| `.since(t2)` | `int` | Milliseconds elapsed since `t2` (may be negative) |
+| `.until(t2)` | `int` | Milliseconds until `t2` (may be negative) |
+| `.add_date(years, months, days, ms)` | `std.Time` | Adds calendar units |
+| `.iso_week()` | `map` | Keys: `year`, `week`, `day` (ISO 8601 week date) |
+
+### `std.time.parse_duration(s)`
+- Parses a duration string like `"1h30m"`, `"2.5s"`, `"100ms"` into milliseconds
+- Returns `int`
 
 ### Format verbs
 

@@ -1,5 +1,46 @@
 # Gengoscript Changelog
 
-Release notes are maintained in the repository changelog:
+## v0.5.0 — 2026-06-12
 
-- <https://github.com/gengoscript/gengo/blob/main/CHANGELOG.md>
+### Language
+
+- **Boolean-only conditions** — `if`, `!`, `&&`, `||`, and template `{{if}}` now require actual `bool` values. Non-boolean values (non-zero integers, non-null strings, etc.) that were previously treated as truthy/falsy now produce a runtime `TypeError`. Use `std.conv.to_bool` for explicit conversion.
+- **Type names cannot be shadowed** — No binding form may use a type name: variables, functions, parameters, loop variables, and named returns all reject primitive type names and every declared type.
+- **Subtypes of any scalar named type** — `subtype Child Parent` now accepts any scalar named parent (`bool`, `string`, `decimal` join `int`/`float`/`rune`). `range`/`cycle` constraints still require a numeric parent.
+- **Named string concatenation** — `+` on two values of the same named string type preserves the named type.
+- **Predicate custom messages** — A predicate may declare a custom failure message: `predicate func(x) { ... } message "must be positive"`.
+- **Predicate inheritance** — Subtypes inherit the parent’s predicate. A subtype with its own predicate must satisfy both.
+- **Bare type parameters in interface specs** — Interface method parameters can be written as bare types, Go-style: `add(float) float`.
+- **Enum subtype validation** — `subtype Bogus Days { tuesday }` with a member the parent does not have is now a compile error instead of compiling silently.
+- **Unicode identifiers** — Identifiers may contain Unicode letters and decimal digits, following the same rules as Go.
+
+### Standard Library
+
+- **std.regexp** — Backtracking NFA regexp engine with `.match`, `.find`, `.find_all`, `.replace`, `.split`, and `.compile`.
+- **std.string.builder** — Mutable string builder with `.write`, `.str`, and `.reset`.
+- **std.array** — `filter`, `map`, `reduce`, `slice`, `zip`, `flat`, `find`, `find_index`, `all`, `any`, `chunk`.
+- **std.sort** — `asc`, `desc`, `by`.
+- **std.hex** — `encode`, `decode`.
+- **std.base64** — `encode`, `decode`, `url_encode`, `url_decode`.
+- **std.time** — `parse_duration`, `iso_week`, `add_date`, `since`, `until`.
+- **std.string** — `count`, `fields`, `pad_left`, `pad_right`, `equal_fold`, `contains_any`, `trim_left`, `trim_right`, `trim_prefix`, `trim_suffix`, `split_n`.
+
+### Runtime & Embedding
+
+- **Runtime error messages** — Type and range errors now explain what went wrong and how to fix it (e.g. `cannot mix Age and int; wrap the int with Age(...)`).
+- **Host module failure modes** — Host module calls that return `unsupported`, `denied`, `bad_args`, or `failed` now raise distinct runtime errors (`HostNativeUnsupported`, `PermissionDenied`, `HostNativeBadArgs`, `HostNativeFailed`).
+- **REPL type persistence** — `type`, `subtype`, `struct`, `interface`, and `variant` declarations now persist across REPL lines.
+- **Instruction budget** — `max_ops` in `api.Config` enforces a hard limit on VM instructions per run.
+
+### Fixes
+
+- **Strict int/float comparison** — Ordering comparisons now follow the same strictness as arithmetic: `1.5 > 1` is a `TypeError`, matching `1.5 + 1`.
+- **Nominal type strictness** — Named-type values no longer mix with bare base-type values in arithmetic, comparison, or compound assignment.
+- **Expression recursion limit** — Deeply nested expressions now fail compilation with `ExpressionTooDeep` (limit 256) instead of risking a host stack overflow.
+- **Module load failure** — A failed module is now marked `.failed` instead of staying in `.loading`, so subsequent imports report the original error instead of a misleading `ImportCycle`.
+- **Host module exports** — Accessing a non-existent field on a host module now produces a compile-time error instead of surfacing at call time.
+- **String pool exhaustion** — When the 128KB string pool overflows, the lexer reports `"string pool exhausted (max 128KB)"` instead of `"unterminated string"`.
+
+---
+
+For the full internal development log, see the root [`CHANGELOG.md`](https://github.com/gengoscript/gengo/blob/main/CHANGELOG.md).
