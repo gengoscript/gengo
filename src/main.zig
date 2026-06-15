@@ -105,10 +105,15 @@ fn stdinIsTerminal() bool {
 }
 
 // Read one line from stdin into buf (without the newline).
-// Returns null on EOF with no data. Never called on WASI (stdinIsTerminal = false).
-fn readLine(buf: []u8) ?[]const u8 {
+// Prints prompt before reading. Returns null on EOF with no data.
+// Never called on WASI (stdinIsTerminal = false).
+fn readLine(prompt: []const u8, buf: []u8) ?[]const u8 {
     if (comptime builtin.os.tag == .wasi) return null;
+    if (comptime builtin.os.tag == .linux) {
+        return @import("repl_line.zig").readLine(prompt, buf);
+    }
     if (comptime builtin.os.tag == .windows) {
+        io.write(prompt);
         const STD_INPUT_HANDLE: w32.DWORD = 0xFFFFFFF6;
         const handle = GetStdHandle(STD_INPUT_HANDLE);
         var n: usize = 0;
@@ -124,6 +129,7 @@ fn readLine(buf: []u8) ?[]const u8 {
         }
         return buf[0..n];
     }
+    io.write(prompt);
     var n: usize = 0;
     while (n < buf.len) {
         var ch: [1]u8 = undefined;
@@ -213,8 +219,7 @@ fn runReplMode(backend: vm.Policy.NativeBackend, max_ops: ?u64, caps: []const []
     repl_rt.enabled_capabilities = caps;
     io.write("Gengo REPL  (Ctrl+D to exit)\n");
     while (true) {
-        io.write("> ");
-        const line = readLine(g_src_buf[0..]) orelse break;
+        const line = readLine("> ", g_src_buf[0..]) orelse break;
         if (line.len == 0) continue;
         repl_rt.runIncremental(line) catch |err| {
             if (repl_rt.last_compile_line != 0) {
