@@ -1,0 +1,23 @@
+// Order validation rules — edit this file to change what the database accepts.
+// No schema migration, no application redeployment.
+
+type AmountCents int range 1..100000000   // 1 cent to 1 000 000 USD
+type Quantity    int range 1..10000
+
+var last_reason string = ""
+
+pub func validate(amount_cents int, currency string, qty int) bool {
+    last_reason = ""
+    _ = AmountCents(amount_cents)     // panics with range message if violated
+    _ = Quantity(qty)                 // panics with range message if violated
+    if !(currency == "USD" || currency == "EUR" || currency == "SEK" ||
+         currency == "GBP" || currency == "JPY") {
+        last_reason = "unsupported currency: " + currency
+        return false
+    }
+    return true
+}
+
+pub func last_reject_reason() string {
+    return last_reason
+}
