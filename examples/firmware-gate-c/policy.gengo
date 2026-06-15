@@ -1,4 +1,5 @@
-std := import("std")
+std  := import("std")
+core := std.core
 
 type Build          int range 1000..999999
 type BatteryPercent int range 0..100
@@ -30,10 +31,19 @@ pub func allow_update(
     model_enabled   bool,
     serial_blocked  bool,
     battery_percent int,
-) bool {
+) (ok bool) {
     last_deny = ""
 
-    _ = Region(region)                     // fail-closed on unknown region
+    // Type panics (unknown region, out-of-range build/battery) are caught here
+    // and converted into a soft deny with the constraint message as the reason.
+    defer func() {
+        if e := core.recover(); core.is_error(e) {
+            last_deny = string(e)
+            ok = false
+        }
+    }()
+
+    _ = Region(region)
     cur     := Build(current_build)
     tgt     := Build(target_build)
     battery := BatteryPercent(battery_percent)
