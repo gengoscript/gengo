@@ -102,53 +102,49 @@ If a caller passes `0` as a port or `27` as an hour, construction fails at the b
 
 ## Integration example
 
-A Zig host application can load a user script, set an execution budget, expose a small host module, and call a function from the script.
+A Zig host application can load a user script, set an execution budget, and call a function from the script.
 
 ```zig
-const api = @import("src/runtime/api.zig");
+const gengo = @import("gengo");
+const api = gengo.api;
+const Value = gengo.Value;
 
-// Host-defined function the script is allowed to call
-fn lookup_category(args: []const api.Value) anyerror!api.Value {
-    // ... safe lookup against host data ...
-    return api.Value{ .string = "network" };
-}
-
-var rt = api.Runtime.init(.{
-    .allow_io   = false,
-    .max_ops    = 50_000,
-    .host_modules = &.{.{
-        .name      = "db",
-        .functions = &.{.{ .name = "lookup_category", .arity = 1 }},
-    }},
-});
+var rt: api.Runtime = undefined;
+try rt.initWithPolicy(.{ .allow_io = false, .max_ops = 50_000 });
+defer rt.deinit();
 
 // Load the user's script once
-const result = rt.run(user_script_source);
+switch (rt.run(user_script_source)) {
+    .ok => {},
+    .compile_error => |e| return handleCompileError(e),
+    .runtime_error => |e| return handleRuntimeError(e),
+}
 
 // Call the script's exported function on each record
-const verdict = rt.call("validate", &.{
-    api.Value{ .int = record.severity },
-    api.Value{ .string = record.source },
+const result = rt.call("validate", &.{
+    Value{ .int = @floatFromInt(record.severity) },
+    Value{ .string = record.source },
 });
+const verdict = switch (result) {
+    .ok => |v| v.boolean,
+    .runtime_error => |e| return handleRuntimeError(e),
+};
 ```
 
 The user script might look like this:
 
 ```gengo
-db := import("host:db")
-
 type Severity int range 0..5
 
 pub func validate(severity int, source string) bool {
     s := Severity(severity)
-    cat := db.lookup_category(source)
-    return s >= Severity(3) && cat == "network"
+    return s >= Severity(3) && source == "network"
 }
 ```
 
 If `severity` is outside `0..5`, the script fails while constructing `Severity`. The host does not receive a supposedly valid result built from invalid domain data.
 
-That same pattern works for deploy gates, routing rules, policy checks, and data validation. The host calls the function. The script makes the decision. It cannot reach anything the host has not registered.
+That same pattern works for deploy gates, routing rules, policy checks, and data validation. The host calls the function. The script makes the decision.
 
 ---
 
