@@ -1,56 +1,63 @@
-type Build int range 1000..999999
+std := import("std")
+
+type Build          int range 1000..999999
 type BatteryPercent int range 0..100
-type RegionCode string predicate func(x) {
+type Region string predicate func(x) {
     return x == "eu" || x == "us" || x == "apac"
 }
 
-var saved_reason string = ""
+type RolloutRule struct { min_battery int, min_build int, region_lock string }
+
+// Add a new model here — no code change required.
+var rollout = {
+    "meter-v1":   RolloutRule{ min_battery: 35, min_build: 1000, region_lock: "eu" },
+    "gateway-x":  RolloutRule{ min_battery: 35, min_build: 5000, region_lock: ""   },
+    "sensor-pro": RolloutRule{ min_battery: 35, min_build: 1000, region_lock: ""   },
+}
+
+var last_deny string = ""
 
 func deny(reason string) bool {
-    saved_reason = reason
+    last_deny = reason
     return false
 }
 
 pub func allow_update(
-    model string,
-    serial string,
-    region string,
-    current_build int,
-    target_build int,
-    model_enabled bool,
-    serial_blocked bool,
+    model           string,
+    region          string,
+    current_build   int,
+    target_build    int,
+    model_enabled   bool,
+    serial_blocked  bool,
     battery_percent int,
 ) bool {
-    saved_reason = ""
-    _ = serial  // serial checks are host-side (blocked list); the script receives a bool
+    last_deny = ""
 
-    _ = RegionCode(region)
-    cur := Build(current_build)
-    tgt := Build(target_build)
+    _ = Region(region)                     // fail-closed on unknown region
+    cur     := Build(current_build)
+    tgt     := Build(target_build)
     battery := BatteryPercent(battery_percent)
 
-    if !model_enabled {
-        return deny("model disabled")
-    }
-    if serial_blocked {
-        return deny("serial blocked")
-    }
-    if tgt <= cur {
-        return deny("target build must be newer")
-    }
-    if battery < BatteryPercent(35) {
+    if !model_enabled { return deny("model not enabled for updates") }
+    if serial_blocked { return deny("serial number is blocked") }
+    if tgt <= cur     { return deny("target build is not newer than current") }
+
+    rule := rollout[model]
+    if rule == null   { return deny("unknown model: " + model) }
+
+    if battery < BatteryPercent(rule.min_battery) {
         return deny("battery too low for safe update")
     }
-    if model == "meter-v1" && region != "eu" {
-        return deny("meter-v1 rollout only enabled in eu")
+    if tgt < Build(rule.min_build) {
+        return deny(model + " requires build >= " + std.conv.to_string(rule.min_build))
     }
-    if model == "gateway-x" && target_build < 5000 {
-        return deny("gateway-x requires build >= 5000")
+    if rule.region_lock != "" && region != rule.region_lock {
+        return deny(model + " rollout restricted to " + rule.region_lock)
     }
 
     return true
 }
 
 pub func last_reason() string {
-    return saved_reason
+    return last_deny
 }

@@ -191,13 +191,12 @@ int main(int argc, char **argv)
         char reason[256];
 
         args[0] = gengo_wire_str(cases[i].model);
-        args[1] = gengo_wire_str(cases[i].serial);
-        args[2] = gengo_wire_str(cases[i].region);
-        args[3] = gengo_wire_int(cases[i].current_build);
-        args[4] = gengo_wire_int(cases[i].target_build);
-        args[5] = gengo_wire_bool(model_enabled(cases[i].model));
-        args[6] = gengo_wire_bool(serial_blocked(cases[i].serial));
-        args[7] = gengo_wire_int(cases[i].battery_percent);
+        args[1] = gengo_wire_str(cases[i].region);
+        args[2] = gengo_wire_int(cases[i].current_build);
+        args[3] = gengo_wire_int(cases[i].target_build);
+        args[4] = gengo_wire_bool(model_enabled(cases[i].model));
+        args[5] = gengo_wire_bool(serial_blocked(cases[i].serial));
+        args[6] = gengo_wire_int(cases[i].battery_percent);
 
         printf("device model=%s serial=%s region=%s current=%d target=%d battery=%d%%\n",
                cases[i].model,
@@ -208,7 +207,7 @@ int main(int argc, char **argv)
                cases[i].battery_percent);
         fflush(stdout);
 
-        rc = call_bool_fn(engine, "allow_update", args, 8, &allowed);
+        rc = call_bool_fn(engine, "allow_update", args, 7, &allowed);
         if (rc != 0) {
             log_engine_error(engine, "policy call failed");
             printf("  -> FAIL CLOSED\n\n");
