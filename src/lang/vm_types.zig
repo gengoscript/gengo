@@ -393,7 +393,13 @@ pub fn constructNamedType(typ_obj: *Object, arg: Value) !Value {
             }
             if (nt.has_range and (n < nt.min or n > nt.max)) {
                 if (nt.is_cycle) {
-                    base_v = .{ .int = try wrapCycleValue(nt.min, nt.max, n) };
+                    const wrapped = wrapCycleValue(nt.min, nt.max, n) catch |err| {
+                        if (err == error.RangeError) {
+                            vms.setRuntimeErr("{s}: {d} is outside cyclic range {d}..{d}", .{ nt.name, n, nt.min, nt.max });
+                        }
+                        return err;
+                    };
+                    base_v = .{ .int = wrapped };
                 } else {
                     setNamedRangeError(typ_obj, n);
                     return error.RangeError;
@@ -412,7 +418,13 @@ pub fn constructNamedType(typ_obj: *Object, arg: Value) !Value {
             };
             if (nt.has_range and (n < nt.min or n > nt.max)) {
                 if (nt.is_cycle) {
-                    base_v = .{ .float = try wrapCycleValue(nt.min, nt.max, n) };
+                    const wrapped = wrapCycleValue(nt.min, nt.max, n) catch |err| {
+                        if (err == error.RangeError) {
+                            vms.setRuntimeErr("{s}: {d} is outside cyclic range {d}..{d}", .{ nt.name, n, nt.min, nt.max });
+                        }
+                        return err;
+                    };
+                    base_v = .{ .float = wrapped };
                 } else {
                     setNamedRangeError(typ_obj, n);
                     return error.RangeError;
@@ -520,7 +532,12 @@ pub fn coerceNamedTypeResult(typ_obj: *Object, arg: Value) !Value {
     if (nt.base != .int) return error.TypeError;
     const n = try vms.valueAsNumber(arg);
     if (@trunc(n) != n) return error.TypeError;
-    const wrapped = try wrapCycleValue(nt.min, nt.max, n);
+    const wrapped = wrapCycleValue(nt.min, nt.max, n) catch |err| {
+        if (err == error.RangeError) {
+            vms.setRuntimeErr("{s}: {d} is outside cyclic range {d}..{d}", .{ nt.name, n, nt.min, nt.max });
+        }
+        return err;
+    };
     return makeNamedValue(typ_obj, .{ .int = wrapped });
 }
 
@@ -620,4 +637,41 @@ pub fn frameFuncSig(func_obj: *Object) !FuncObj {
         .closure => |cl| cl.func.function,
         else => error.NotAFunction,
     };
+}
+
+pub fn funcSignatureStr(buf: *[256]u8, f: FuncObj) []const u8 {
+    if (!f.has_typed_params) {
+        if (f.name.len > 0) return f.name;
+        return "func";
+    }
+    var wi: usize = 0;
+    const prefix = if (f.name.len > 0) f.name else "func";
+    if (wi + prefix.len > 255) return "func";
+    @memcpy(buf[wi..wi + prefix.len], prefix);
+    wi += prefix.len;
+    if (wi >= 255) return buf[0..wi];
+    buf[wi] = '(';
+    wi += 1;
+    const fixed: usize = if (f.is_variadic) f.arity - 1 else f.arity;
+    var i: usize = 0;
+    while (i < fixed) : (i += 1) {
+        var tbuf: [128]u8 = undefined;
+        const tstr = fieldTypeSpecStr(&tbuf, f.param_types[i]);
+        if (wi > 1 and wi < 255) { buf[wi] = ','; wi += 1; buf[wi] = ' '; wi += 1; }
+        if (wi + tstr.len > 255) break;
+        @memcpy(buf[wi..wi + tstr.len], tstr);
+        wi += tstr.len;
+    }
+    if (f.is_variadic) {
+        var vbuf: [128]u8 = undefined;
+        const vstr = fieldTypeSpecStr(&vbuf, f.variadic_type);
+        if (wi > 1 and wi < 255) { buf[wi] = ','; wi += 1; buf[wi] = ' '; wi += 1; }
+        if (wi + vstr.len + 3 <= 255) {
+            @memcpy(buf[wi..wi + vstr.len], vstr);
+            wi += vstr.len;
+            buf[wi] = '.'; wi += 1; buf[wi] = '.'; wi += 1; buf[wi] = '.'; wi += 1;
+        }
+    }
+    if (wi < 255) { buf[wi] = ')'; wi += 1; }
+    return buf[0..wi];
 }
