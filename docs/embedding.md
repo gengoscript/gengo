@@ -111,21 +111,6 @@ var rt = api.Runtime.init(.{
 defer rt.deinit();
 ```
 
-## Host Modules
-
-Host modules are imported through `host:*` paths and must be registered explicitly.
-
-```zig
-var rt = api.Runtime.init(.{
-    .host_modules = &.{.{
-        .name = "host:db",
-        .funcs = &.{.{ .name = "lookup", .arity = 1 }},
-    }},
-});
-```
-
-Use host modules when the script needs a narrow, controlled bridge into host logic.
-
 ## Capabilities
 
 Capability modules are also opt-in:
@@ -198,7 +183,10 @@ const setup = rt.run(
     \\    return active && verified && age >= 18 && score < limit
     \\}
 );
-if (setup != .ok) return;
+switch (setup) {
+    .ok => {},
+    else => return,
+}
 
 // In a request loop, call the loaded function directly.
 // No reset() here — the function and its bytecode stay loaded.
