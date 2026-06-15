@@ -454,6 +454,63 @@ The host may also enforce:
 
 These limits are part of normal embedding, not exceptional deployment machinery.
 
+## Testing
+
+Test blocks are first-class syntax. They live at the top level of a script alongside regular declarations:
+
+```gengo
+std := import("std")
+
+func add(a int, b int) int {
+    return a + b
+}
+
+test "add is commutative" {
+    assert add(1, 2) == add(2, 1)
+}
+
+test "add with zero" {
+    assert add(5, 0) == 5
+    assert add(0, 5) == 5
+}
+```
+
+`assert condition` panics with `AssertionFailed` if the condition is `false`. An optional message string gives a clearer failure reason:
+
+```gengo
+test "range check" {
+    assert x >= 0, "x must be non-negative"
+}
+```
+
+**Normal execution skips test blocks.** Running `gengo script.gengo` executes the script body but ignores all `test` blocks entirely. No test code runs, and no test infrastructure is paid for.
+
+**`--test` activates them:**
+
+```bash
+gengo script.gengo --test
+```
+
+Each test block runs in order. Results go to stderr:
+
+```text
+PASS: add is commutative
+PASS: add with zero
+PASS: range check
+
+3 passed, 0 failed
+```
+
+A failing test reports the error name and message:
+
+```text
+FAIL: range check: AssertionFailed: x must be non-negative
+
+2 passed, 1 failed
+```
+
+The process exits non-zero if any test fails.
+
 ## Practical Reading Order
 
 If you are new to the language:
