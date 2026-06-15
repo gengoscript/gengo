@@ -1,5 +1,4 @@
 const std = @import("std");
-const heap = @import("../../runtime/heap.zig");
 const vms = @import("../vm_state.zig");
 const vmgc = @import("../vm_gc.zig");
 const vmmap = @import("../vm_map.zig");
@@ -9,39 +8,6 @@ const Object = vmod.Object;
 const MapEntry = vmod.MapEntry;
 const NativeFnId = @import("native_ids.zig").NativeFnId;
 const NativeFuncObj = @import("../value.zig").NativeFuncObj;
-
-const JsonAllocator = struct {
-    fn allocFn(ctx: *anyopaque, len: usize, ptr_align: std.mem.Alignment, ra: usize) ?[*]u8 {
-        _ = ctx; _ = ra;
-        if (ptr_align.toByteUnits() > 16) return null;
-        return @ptrCast(heap.allocBytesManaged(len) orelse return null);
-    }
-    fn resizeFn(ctx: *anyopaque, buf: []u8, buf_align: std.mem.Alignment, new_len: usize, ra: usize) bool {
-        _ = ctx; _ = buf_align; _ = ra;
-        if (new_len <= buf.len) return true;
-        return false;
-    }
-    fn remapFn(ctx: *anyopaque, buf: []u8, buf_align: std.mem.Alignment, new_len: usize, ra: usize) ?[*]u8 {
-        _ = ctx; _ = buf_align; _ = ra;
-        if (new_len <= buf.len) return buf.ptr;
-        return null;
-    }
-    fn freeFn(ctx: *anyopaque, buf: []u8, buf_align: std.mem.Alignment, ra: usize) void {
-        _ = ctx; _ = buf_align; _ = ra;
-        heap.freeBytesManaged(buf);
-    }
-    pub fn allocator() std.mem.Allocator {
-        return .{
-            .ptr = undefined,
-            .vtable = &.{
-                .alloc = &allocFn,
-                .resize = &resizeFn,
-                .remap = &remapFn,
-                .free = &freeFn,
-            },
-        };
-    }
-};
 
 fn jsonValueToGengo(jv: std.json.Value) !Value {
     return switch (jv) {
