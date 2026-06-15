@@ -293,7 +293,7 @@ type Html string
 
 h1 := Html("<p>")
 h2 := Html("hi</p>")
-std.io.println(h1 + h2)           // Html("<p>hi</p>")
+std.io.println(h1 + h2)           // prints: <p>hi</p>
 std.io.println(Html("<hr>") + Html("<br>"))
 ```
 

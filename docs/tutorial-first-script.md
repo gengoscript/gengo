@@ -115,14 +115,14 @@ Named types keep domain rules inside the script. A `Port` rejects out-of-range v
 Add a script that uses `defer` and `recover` to handle panics:
 
 ```gengo
-std := import("std")
+std  := import("std")
+core := std.core
 
-type SafeDiv int range 1..1000
-
-func divide(a int, b int) int {
+func divide(a int, b int) (result int) {
     defer func() {
-        if err := std.core.recover() {
-            std.io.println("recovered:", err)
+        e := core.recover()
+        if core.is_error(e) {
+            std.io.println("recovered:", e)
         }
     }()
     return a / b
