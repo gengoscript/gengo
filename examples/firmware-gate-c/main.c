@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include <gengo-engine.h>
+#include <gengo-wire.h>
 
 typedef struct {
     const char *model;
@@ -24,69 +25,6 @@ static const char *blocked_serials[] = {
     "SN-BLOCK-77",
     "SN-REVOKED-13",
 };
-
-static uint64_t f64_bits(double x)
-{
-    uint64_t bits = 0;
-    memcpy(&bits, &x, sizeof bits);
-    return bits;
-}
-
-static gengo_value_wire_t wire_null(void)
-{
-    gengo_value_wire_t v;
-    memset(&v, 0, sizeof v);
-    v.tag = GENGO_WIRE_NULL;
-    return v;
-}
-
-static gengo_value_wire_t wire_bool(int value)
-{
-    gengo_value_wire_t v = wire_null();
-    v.tag = GENGO_WIRE_BOOLEAN;
-    v.payload = value ? 1u : 0u;
-    return v;
-}
-
-static gengo_value_wire_t wire_int(int value)
-{
-    gengo_value_wire_t v = wire_null();
-    v.tag = GENGO_WIRE_NUMBER;
-    v.flags = GENGO_WIRE_FLAG_INTEGER;
-    v.payload = f64_bits((double)value);
-    return v;
-}
-
-static gengo_value_wire_t wire_str(const char *s)
-{
-    gengo_value_wire_t v = wire_null();
-    v.tag = GENGO_WIRE_STRING;
-    v.payload = (uint64_t)(uintptr_t)s;
-    v.len = (uint32_t)strlen(s);
-    return v;
-}
-
-static int wire_as_bool(const gengo_value_wire_t *v)
-{
-    return v->tag == GENGO_WIRE_BOOLEAN && v->payload == 1u;
-}
-
-static const char *wire_as_str(const gengo_value_wire_t *v, char *buf, size_t buf_size)
-{
-    size_t n;
-
-    if (buf_size == 0) return "";
-    if (v->tag != GENGO_WIRE_STRING || v->payload == 0 || v->len == 0) {
-        buf[0] = '\0';
-        return buf;
-    }
-
-    n = v->len;
-    if (n >= buf_size) n = buf_size - 1;
-    memcpy(buf, (const void *)(uintptr_t)v->payload, n);
-    buf[n] = '\0';
-    return buf;
-}
 
 static int str_in_list(const char *s, const char *const *list, size_t count)
 {
@@ -171,10 +109,10 @@ static int call_bool_fn(int32_t engine,
                         int argc,
                         int *out_value)
 {
-    gengo_value_wire_t out = wire_null();
+    gengo_value_wire_t out = gengo_wire_null();
     int32_t rc = engine_call(engine, fn_name, (int32_t)strlen(fn_name), args, argc, &out);
     if (rc != 0) return rc;
-    *out_value = wire_as_bool(&out);
+    *out_value = gengo_wire_as_bool(&out);
     return 0;
 }
 
@@ -183,10 +121,10 @@ static int call_string_fn(int32_t engine,
                           char *buf,
                           size_t buf_size)
 {
-    gengo_value_wire_t out = wire_null();
+    gengo_value_wire_t out = gengo_wire_null();
     int32_t rc = engine_call(engine, fn_name, (int32_t)strlen(fn_name), NULL, 0, &out);
     if (rc != 0) return rc;
-    wire_as_str(&out, buf, buf_size);
+    gengo_wire_read_str(&out, buf, buf_size);
     return 0;
 }
 
@@ -252,14 +190,14 @@ int main(int argc, char **argv)
         int32_t rc;
         char reason[256];
 
-        args[0] = wire_str(cases[i].model);
-        args[1] = wire_str(cases[i].serial);
-        args[2] = wire_str(cases[i].region);
-        args[3] = wire_int(cases[i].current_build);
-        args[4] = wire_int(cases[i].target_build);
-        args[5] = wire_bool(model_enabled(cases[i].model));
-        args[6] = wire_bool(serial_blocked(cases[i].serial));
-        args[7] = wire_int(cases[i].battery_percent);
+        args[0] = gengo_wire_str(cases[i].model);
+        args[1] = gengo_wire_str(cases[i].serial);
+        args[2] = gengo_wire_str(cases[i].region);
+        args[3] = gengo_wire_int(cases[i].current_build);
+        args[4] = gengo_wire_int(cases[i].target_build);
+        args[5] = gengo_wire_bool(model_enabled(cases[i].model));
+        args[6] = gengo_wire_bool(serial_blocked(cases[i].serial));
+        args[7] = gengo_wire_int(cases[i].battery_percent);
 
         printf("device model=%s serial=%s region=%s current=%d target=%d battery=%d%%\n",
                cases[i].model,
