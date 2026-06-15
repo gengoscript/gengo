@@ -406,6 +406,10 @@ fn checkNamedTypePredicate(nt_obj: *Object, inner: Value) !void {
             } else {
                 vms.setRuntimeErr("predicate failed for {s}({s})", .{ nt.name, vstr });
             }
+            // Expose the human-readable message via core.recover() by storing a
+            // pointer into runtime_err_buf as pending_panic_message.  runPanicUnwind
+            // skips the @memcpy-self when it detects the alias.
+            vmState().pending_panic_message = vms.runtimeErrMsg();
             return error.PredicateFailed;
         }
     }
@@ -3039,7 +3043,12 @@ fn runPanicUnwind(orig_err: anyerror) anyerror!void {
         vmState().panic_value = vmState().pending_panic_value;
         vmState().has_pending_panic_value = false;
     } else if (vmState().pending_panic_message) |msg| {
-        vms.setRuntimeErr("{s}", .{msg});
+        // Only sync runtime_err_buf if msg doesn't already point into it —
+        // when pending_panic_message was set from runtimeErrMsg() the buffer
+        // is already correct, and @memcpy of a slice onto itself is UB.
+        if (@intFromPtr(msg.ptr) != @intFromPtr(&vmState().runtime_err_buf[0])) {
+            vms.setRuntimeErr("{s}", .{msg});
+        }
         vmState().panic_value = .{ .error_value = msg };
         vmState().pending_panic_message = null;
     } else {
@@ -3204,6 +3213,12 @@ pub fn callGlobal(name: []const u8, args: []const Value) !Value {
     if (fn_val != .object) return error.NotAFunction;
     const obj = fn_val.object;
     if (obj.* != .function and obj.* != .closure) return error.NotAFunction;
+
+    // Clear the runtime error message so that runtimeErrMsg() is empty at the
+    // start of each external call.  runPanicUnwind uses it as a fallback when
+    // pending_panic_message is null, and we must not pick up a stale message
+    // from a previous engine_call.
+    vmState().runtime_err_len = 0;
 
     if (args.len > 255) return error.ArityMismatch;
     try vmPush(fn_val);
