@@ -30,10 +30,10 @@ Gengoscript is for hosts that need user-defined logic without handing users a fu
 
 Use it when you want:
 
-* [embedded scripting with explicit host integration](docs/embedding.md)
-* [stronger domain constraints than Lua-style dynamic scripting](docs/language.md)
-* [capability-gated access to IO, network, time, and host APIs](docs/security.md)
-* [native and WebAssembly targets from the same engine](docs/quickstart.md)
+* embedded scripting with explicit host integration [→](docs/embedding.md)
+* stronger domain constraints than Lua-style dynamic scripting [→](docs/language.md)
+* capability-gated access to IO, network, time, and host APIs [→](docs/security.md)
+* native and WebAssembly targets from the same engine [→](docs/quickstart.md)
 
 It is not trying to be:
 
