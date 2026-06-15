@@ -177,9 +177,10 @@ Use a fresh runtime when isolation is more important than reuse.
 
 ## Request-Loop Pattern
 
-A common embedding pattern is a long-lived runtime that runs different scripts or
-repeatedly calls exported functions. The key is to keep the runtime alive and use
-`reset()` between requests to clear state without deallocating the instance.
+A common embedding pattern is a long-lived runtime that loads a script once and
+then calls exported functions repeatedly — once per request, event, or policy
+check. The script stays loaded for the lifetime of the runtime; each `call()`
+invocation runs against the same globals without reloading bytecode.
 
 ```zig
 var rt = api.Runtime.init(.{
@@ -188,18 +189,19 @@ var rt = api.Runtime.init(.{
 });
 defer rt.deinit();
 
-// Load the business-logic script once.
+// Load the business-logic script once at startup.
 const setup = rt.run(
     \\pub func allow_update(user string, role string,
     \\                       age int, score int,
     \\                       active bool, verified bool,
     \\                       limit int) bool {
-    \\    return active and verified and age >= 18 and score < limit
+    \\    return active && verified && age >= 18 && score < limit
     \\}
 );
 if (setup != .ok) return;
 
-// Later, in a request loop:
+// In a request loop, call the loaded function directly.
+// No reset() here — the function and its bytecode stay loaded.
 while (try nextRequest(&req)) {
     const result = rt.call("allow_update", &.{
         .{ .string = req.user },
@@ -217,14 +219,13 @@ while (try nextRequest(&req)) {
             handleDecision(false);
         },
     }
-    // Clear globals and heap state for the next request.
-    rt.reset();
 }
 ```
 
-Use `reset()` when you want to discard globals, heap state, and call frames but
-keep the runtime allocation itself. Use a fresh runtime when isolation is more
-important than reuse.
+`reset()` clears the entire runtime state — globals, heap, and bytecode — which
+removes loaded functions. Only call it when you want to unload the current script
+and start fresh. For per-request isolation without shared globals, use a separate
+runtime instance per request instead.
 
 ## Host Modules
 
@@ -276,15 +277,29 @@ These are runtime errors that the embedding code should handle like any other
 
 ## Call Boundary Types
 
-The `api.Runtime.call()` method accepts any `api.Value` variant:
+The `api.Runtime.call()` method accepts `[]const api.Value`. From the Zig host
+side, only scalar and string variants can be safely constructed:
 
 ```zig
 rt.call("foo", &.{ .{ .int = 1 }, .{ .string = "hello" } });
 ```
 
-`Value` is a rich tagged union that can carry arrays, maps, structs, named
-types, and closures. This works fine for the Zig-to-VM boundary because both
-sides share the same memory.
+Constructable tags: `.int`, `.float`, `.decimal`, `.rune`, `.boolean`,
+`.string`, `.null`.
+
+The `Value` type also has an `.object` variant used for arrays, maps, structs,
+closures, and named types, but constructing one requires a live GC-managed
+pointer from inside the VM heap. There is no public API to allocate objects from
+outside the runtime. If a script needs to receive a complex value (a config map,
+a record), the two supported approaches are:
+
+- **Script-side initialisation** — run a setup script that builds the object and
+  stores it in a global; then call a function that reads that global.
+- **Serialise to JSON** — pass a JSON string and let the script call
+  `std.json.parse`.
+
+Return values from `call()` may be objects (arrays, maps, structs, etc.);
+reading their contents from the Zig side is supported through the `Value` union.
 
 The **host-module wire boundary** is more restricted. Values are serialised into
 `ValueWire` structs (scalar tag + payload + length) before crossing to the host
