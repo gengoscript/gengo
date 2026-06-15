@@ -316,6 +316,19 @@ pub const Session = struct {
             self.last_error_path = self.modules[idx].path();
             self.last_error_line = if (compiler.err_line != 0) compiler.err_line else compiler.prev.line;
             self.copyCompilerError(&compiler);
+            if (self.last_error_msg_len == 0) {
+                switch (err) {
+                    error.ChunkFull => self.setScanError(
+                        "compilation unit exceeded {d}-byte bytecode limit; split into smaller files",
+                        .{chunk.MaxCode},
+                    ),
+                    error.TooManyConstants => self.setScanError(
+                        "compilation unit exceeded {d}-constant limit; split into smaller files",
+                        .{chunk.MaxConst},
+                    ),
+                    else => {},
+                }
+            }
             return err;
         };
         if (emit_halt and self.test_mode) {
