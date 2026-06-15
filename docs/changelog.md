@@ -1,6 +1,6 @@
 # Gengoscript Changelog
 
-## v0.5.0 — 2026-06-12
+## v0.5.0 — 2026-06-15
 
 ### Language
 
