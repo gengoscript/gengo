@@ -227,6 +227,9 @@ class Engine {
           const text  = new TextDecoder().decode(bytes);
           (isStderr ? process.stderr : process.stdout).write(text);
         },
+        gengo_read(_ptr, _maxLen, _isLine) {
+          return 0;  // EOF / no input available
+        },
       },
       gengo_host: {
         gengo_native_call(id, argsPtr, argc, outPtr) {
