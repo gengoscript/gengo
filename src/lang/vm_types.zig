@@ -342,10 +342,15 @@ pub fn constructNamedType(typ_obj: *Object, arg: Value) !Value {
                 vms.setRuntimeErr("cannot construct {s} from {s}; convert to {s} first", .{ nt.name, runtimeTypeName(arg), namedBaseName(nt.base) });
                 return error.TypeError;
             }
-            base_v = .{ .int = n };
             if (nt.has_range and (n < nt.min or n > nt.max)) {
-                setNamedRangeError(typ_obj, n);
-                return error.RangeError;
+                if (nt.is_cycle) {
+                    base_v = .{ .int = try wrapCycleValue(nt.min, nt.max, n) };
+                } else {
+                    setNamedRangeError(typ_obj, n);
+                    return error.RangeError;
+                }
+            } else {
+                base_v = .{ .int = n };
             }
         },
         .float => {
@@ -355,10 +360,15 @@ pub fn constructNamedType(typ_obj: *Object, arg: Value) !Value {
                 }
                 return err;
             };
-            base_v = .{ .float = n };
             if (nt.has_range and (n < nt.min or n > nt.max)) {
-                setNamedRangeError(typ_obj, n);
-                return error.RangeError;
+                if (nt.is_cycle) {
+                    base_v = .{ .float = try wrapCycleValue(nt.min, nt.max, n) };
+                } else {
+                    setNamedRangeError(typ_obj, n);
+                    return error.RangeError;
+                }
+            } else {
+                base_v = .{ .float = n };
             }
         },
         .decimal => {
