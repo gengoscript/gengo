@@ -944,3 +944,55 @@ test "engine_call rejects wire serialization overflow" {
     const call_fail = engine_call(h2, @intCast(@intFromPtr("fail".ptr)), 4, 0, 0, @intCast(@intFromPtr(&out_wire2)));
     try std.testing.expectEqual(-2, call_fail);
 }
+
+test "engine_call: recover() in defer intercepts panic" {
+    // Regression test for issue #140: core.recover() inside a deferred function
+    // must intercept panics even when the function is called via engine_call
+    // (not via the CLI / top-level bytecode).  Previously the recovery path
+    // called run() with ret_ip pointing past end-of-bytecode, producing a
+    // spurious BytecodeOutOfBounds error instead of returning the recovered value.
+    const h = engine_init();
+    try std.testing.expect(h > 0);
+
+    const src =
+        \\std  := import("std")
+        \\core := std.core
+        \\
+        \\type Region string predicate func(x) {
+        \\    return x == "eu" || x == "us"
+        \\}
+        \\
+        \\pub func check(region string) (ok bool) {
+        \\    defer func() {
+        \\        if e := core.recover(); core.is_error(e) {
+        \\            ok = false
+        \\        }
+        \\    }()
+        \\    _ = Region(region)
+        \\    return true
+        \\}
+    ;
+    const run_rc = engine_run(h, @intCast(@intFromPtr(src.ptr)), @intCast(src.len));
+    try std.testing.expectEqual(0, run_rc);
+
+    // "eu" is a valid region — should return true.
+    var arg_wire: ValueWire = .{ .tag = 3, .flags = 0, .payload = @bitCast(@intFromPtr("eu".ptr)), .len = 2 };
+    var out_wire: ValueWire = undefined;
+    const rc_good = engine_call(h, @intCast(@intFromPtr("check".ptr)), 5,
+                                @intCast(@intFromPtr(&arg_wire)), 1,
+                                @intCast(@intFromPtr(&out_wire)));
+    try std.testing.expectEqual(0, rc_good);
+    try std.testing.expectEqual(@as(u8, 1), out_wire.tag); // boolean
+    try std.testing.expect(out_wire.payload != 0);         // true
+
+    // "mars" fails the predicate; recover() should intercept and return false.
+    var bad_arg: ValueWire = .{ .tag = 3, .flags = 0, .payload = @bitCast(@intFromPtr("mars".ptr)), .len = 4 };
+    var bad_out: ValueWire = undefined;
+    const rc_bad = engine_call(h, @intCast(@intFromPtr("check".ptr)), 5,
+                               @intCast(@intFromPtr(&bad_arg)), 1,
+                               @intCast(@intFromPtr(&bad_out)));
+    // Must return 0 (recover handled it), NOT -2.
+    try std.testing.expectEqual(0, rc_bad);
+    try std.testing.expectEqual(@as(u8, 1), bad_out.tag); // boolean
+    try std.testing.expect(bad_out.payload == 0);         // false
+}
