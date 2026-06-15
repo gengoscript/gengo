@@ -45,6 +45,13 @@ fn emitConstBytecode(idx: u16) !void {
     try chunk.emitByte(@intCast(idx & 0xff), 1);
 }
 
+fn emitOffset4(off: u32) !void {
+    try chunk.emitByte(@intCast((off >> 24) & 0xff), 1);
+    try chunk.emitByte(@intCast((off >> 16) & 0xff), 1);
+    try chunk.emitByte(@intCast((off >> 8)  & 0xff), 1);
+    try chunk.emitByte(@intCast(off & 0xff), 1);
+}
+
 // ── Type values ───────────────────────────────────────────────────────────
 
 fn testNullVal() void {
@@ -330,9 +337,9 @@ fn testJifPopTaken() void {
     emitConstBytecode(push_idx) catch fail("jif taken push idx");
     chunk.emitByte(@intFromEnum(Op.const_eq), 1) catch fail("jif taken const_eq");
     emitConstBytecode(eq_idx) catch fail("jif taken eq idx");
-    // jif_pop: condition is true (5 == 5), don't jump
+    // jif_pop: condition is true (5 == 5), don't jump; 4-byte offset
     chunk.emitOp(.jif_pop, 1) catch fail("jif taken jif_pop");
-    emitConstBytecode(6) catch fail("jif taken jmp offset");
+    emitOffset4(3) catch fail("jif taken jmp offset");
     // fall through: push 99
     chunk.emitConst(.{ .int = 99 }, 1) catch fail("jif taken const 99");
     chunk.emitOp(.halt, 1) catch fail("jif taken halt");
@@ -350,12 +357,12 @@ fn testJifPopNotTaken() void {
     chunk.emitByte(@intFromEnum(Op.const_eq), 1) catch fail("jif not taken const_eq");
     emitConstBytecode(eq_idx) catch fail("jif not taken eq idx");
     // jif_pop at pos 6: condition is false (99 != 5), should jump
-    // ip after reading offset = 9, target = pos 12 (constant 42)
+    // ip after reading 4-byte offset = 11, target = pos 14 (constant 42)
     chunk.emitOp(.jif_pop, 1) catch fail("jif not taken jif_pop");
-    emitConstBytecode(3) catch fail("jif not taken jmp offset");
-    // [9] skipped — would push 99 if reached
+    emitOffset4(3) catch fail("jif not taken jmp offset");
+    // [11] skipped — would push 99 if reached
     chunk.emitConst(.{ .int = 99 }, 1) catch fail("jif not taken skipped const");
-    // [12] target — push 42
+    // [14] target — push 42
     chunk.emitConst(.{ .int = 42 }, 1) catch fail("jif not taken const 42");
     chunk.emitOp(.halt, 1) catch fail("jif not taken halt");
     vm.run() catch fail("jif not taken run");

@@ -17,7 +17,7 @@ fn setup() !Runtime {
 }
 
 fn compile(rt: *Runtime, src: []const u8) !void {
-    chunk.setActive(&rt.chunk_state);
+    chunk.setActive(rt.chunk_state);
     globals.setActive(&rt.globals_state);
     heap.setActive(&rt.heap_state);
     chunk.reset();
@@ -32,7 +32,7 @@ test "compiler: empty source emits halt" {
     var rt = try setup();
     defer rt.deinit();
     try compile(&rt, "");
-    const c = &rt.chunk_state;
+    const c = rt.chunk_state;
     try std.testing.expectEqual(@as(usize, 1), c.code_len);
     try std.testing.expectEqual(@intFromEnum(Op.halt), c.code[0]);
 }
@@ -43,19 +43,19 @@ test "compiler: integer constant 42" {
     try compile(&rt,
         \\func f() int { return 42 }
     );
-    const c = &rt.chunk_state;
+    const c = rt.chunk_state;
 
-    try std.testing.expectEqual(@as(usize, 15), c.code_len);
+    try std.testing.expectEqual(@as(usize, 17), c.code_len);
 
     try std.testing.expect(c.consts[0] == .int);
 
-    try std.testing.expectEqual(@intFromEnum(Op.ret_const), c.code[3]);
+    try std.testing.expectEqual(@intFromEnum(Op.ret_const), c.code[5]);
 
-    try std.testing.expectEqual(@intFromEnum(Op.make_closure), c.code[8]);
+    try std.testing.expectEqual(@intFromEnum(Op.make_closure), c.code[10]);
 
-    try std.testing.expectEqual(@intFromEnum(Op.def_global), c.code[11]);
+    try std.testing.expectEqual(@intFromEnum(Op.def_global), c.code[13]);
 
-    try std.testing.expectEqual(@intFromEnum(Op.halt), c.code[14]);
+    try std.testing.expectEqual(@intFromEnum(Op.halt), c.code[16]);
 }
 
 test "compiler: var global int" {
@@ -63,7 +63,7 @@ test "compiler: var global int" {
     defer rt.deinit();
     try compile(&rt, "var x = 42");
 
-    const c = &rt.chunk_state;
+    const c = rt.chunk_state;
 
     try std.testing.expectEqual(@as(usize, 7), c.code_len);
 
@@ -78,7 +78,7 @@ test "compiler: const_add fusion" {
     try compile(&rt,
         \\func f() int { return 1 + 2 }
     );
-    const c = &rt.chunk_state;
+    const c = rt.chunk_state;
 
     try std.testing.expect(c.consts[0] == .int);
     try std.testing.expect(c.consts[1] == .int);
@@ -100,7 +100,7 @@ test "compiler: ret_const peephole" {
     try compile(&rt,
         \\func f() int { return 42 }
     );
-    const c = &rt.chunk_state;
+    const c = rt.chunk_state;
 
     var found_ret_const = false;
     var i: usize = 0;
@@ -120,7 +120,7 @@ test "compiler: def_global with string constant" {
         \\func f() int { return 42 }
     );
 
-    const c = &rt.chunk_state;
+    const c = rt.chunk_state;
     var found_name = false;
     var i: usize = 0;
     while (i < c.const_count) : (i += 1) {
@@ -138,7 +138,7 @@ test "compiler: make_closure emitted" {
     try compile(&rt,
         \\func f() int { return 42 }
     );
-    const c = &rt.chunk_state;
+    const c = rt.chunk_state;
     var found_make_closure = false;
     var j: usize = 0;
     while (j < c.code_len) : (j += 1) {
@@ -163,7 +163,7 @@ test "compiler: closure captures upvalue" {
 
     var found_get_upvalue = false;
     var found_set_upvalue = false;
-    const c = &rt.chunk_state;
+    const c = rt.chunk_state;
     var i: usize = 0;
     while (i < c.code_len) : (i += 1) {
         if (c.code[i] == @intFromEnum(Op.get_upvalue)) found_get_upvalue = true;
@@ -181,7 +181,7 @@ test "compiler: struct field access" {
         \\
         \\func getX(p Point) int { return p.x }
     );
-    const c = &rt.chunk_state;
+    const c = rt.chunk_state;
 
     var found_get_field = false;
     var i: usize = 0;
@@ -206,7 +206,7 @@ test "compiler: named return values" {
     );
     _ = &rt;
 
-    const c = &rt.chunk_state;
+    const c = rt.chunk_state;
     try std.testing.expect(c.code_len > 0);
     try std.testing.expectEqual(@intFromEnum(Op.halt), c.code[c.code_len - 1]);
 }
@@ -217,7 +217,7 @@ test "compiler: multi-value return" {
     try compile(&rt,
         \\func pair() (int, int) { return 1, 2 }
     );
-    const c = &rt.chunk_state;
+    const c = rt.chunk_state;
 
     var found_build_tuple = false;
     var i: usize = 0;
@@ -237,7 +237,7 @@ test "compiler: for-in loop bytecode" {
         \\    return s
         \\}
     );
-    const c = &rt.chunk_state;
+    const c = rt.chunk_state;
 
     var found_iter_init = false;
     var i: usize = 0;
@@ -261,7 +261,7 @@ test "compiler: nested function has correct ip" {
     );
     _ = &rt;
 
-    const c = &rt.chunk_state;
+    const c = rt.chunk_state;
     var i: usize = 0;
     while (i < c.const_count) : (i += 1) {
         if (c.consts[i] == .object and c.consts[i].object.* == .function) {
@@ -288,7 +288,7 @@ test "compiler: const_eq fusion fires" {
         \\var g = 10
         \\func f() bool { return g == 42 }
     );
-    const c = &rt.chunk_state;
+    const c = rt.chunk_state;
     var found = false;
     for (c.code[0..c.code_len]) |op| {
         if (op == @intFromEnum(Op.const_eq)) { found = true; break; }
@@ -317,7 +317,7 @@ test "compiler: const_sub fusion fires" {
         \\var g = 10
         \\func f() int { return g - 1 }
     );
-    const c = &rt.chunk_state;
+    const c = rt.chunk_state;
     var found = false;
     for (c.code[0..c.code_len]) |op| {
         if (op == @intFromEnum(Op.const_sub)) { found = true; break; }
@@ -339,7 +339,7 @@ test "compiler: get_local_const_eq triple fusion fires" {
     var rt = try setup();
     defer rt.deinit();
     try compile(&rt, "func f(x int) bool { return x == 0 }");
-    const c = &rt.chunk_state;
+    const c = rt.chunk_state;
     var found = false;
     for (c.code[0..c.code_len]) |op| {
         if (op == @intFromEnum(Op.get_local_const_eq)) { found = true; break; }
@@ -363,7 +363,7 @@ test "compiler: get_local_const_sub triple fusion fires" {
     var rt = try setup();
     defer rt.deinit();
     try compile(&rt, "func f(x int) int { return x - 1 }");
-    const c = &rt.chunk_state;
+    const c = rt.chunk_state;
     var found = false;
     for (c.code[0..c.code_len]) |op| {
         if (op == @intFromEnum(Op.get_local_const_sub)) { found = true; break; }
@@ -385,7 +385,7 @@ test "compiler: get_local_const_add triple fusion fires" {
     var rt = try setup();
     defer rt.deinit();
     try compile(&rt, "func f(x int) int { return x + 1 }");
-    const c = &rt.chunk_state;
+    const c = rt.chunk_state;
     var found = false;
     for (c.code[0..c.code_len]) |op| {
         if (op == @intFromEnum(Op.get_local_const_add)) { found = true; break; }
@@ -407,7 +407,7 @@ test "compiler: get_local_const_lt triple fusion fires" {
     var rt = try setup();
     defer rt.deinit();
     try compile(&rt, "func f(x int) bool { return x < 5 }");
-    const c = &rt.chunk_state;
+    const c = rt.chunk_state;
     var found = false;
     for (c.code[0..c.code_len]) |op| {
         if (op == @intFromEnum(Op.get_local_const_lt)) { found = true; break; }
@@ -436,7 +436,7 @@ test "compiler: get_local_const_eq_jif_pop quad fusion fires" {
         \\    return 2
         \\}
     );
-    const c = &rt.chunk_state;
+    const c = rt.chunk_state;
     var found = false;
     for (c.code[0..c.code_len]) |op| {
         if (op == @intFromEnum(Op.get_local_const_eq_jif_pop)) { found = true; break; }
@@ -470,7 +470,7 @@ test "compiler: get_local_const_lt_jif_pop quad fusion fires" {
         \\    return 20
         \\}
     );
-    const c = &rt.chunk_state;
+    const c = rt.chunk_state;
     var found = false;
     for (c.code[0..c.code_len]) |op| {
         if (op == @intFromEnum(Op.get_local_const_lt_jif_pop)) { found = true; break; }

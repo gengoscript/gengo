@@ -4,11 +4,21 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Zig](https://img.shields.io/badge/Zig-0.16.0-orange?logo=zig)](https://ziglang.org/)
 
-Domain constraints belong in the type system, not in validation code written after the fact. Ada understood this in the 1970s: put constraints where the language can enforce them. Gengoscript brings that old lesson to embedded scripting.
+Domain constraints belong in the type system, not in validation code written after the fact.
 
-Gengoscript is a small embeddable scripting language: a sandboxed engine written in Zig, designed to run natively or as WebAssembly.
+Ada knew this in the 1970s: put constraints where the language can enforce them.
 
-You write the host application. Your users write Gengoscript. The engine runs their scripts in a controlled environment, where the host decides what they may see, call, and use.
+Somewhere along the way, scripting made it normal to push those constraints out of the language and into validation code.
+
+Gengoscript brings that old lesson back to embedded scripting.
+
+It is a small, embeddable scripting language with a sandboxed engine written in Zig, designed to run natively or as WebAssembly.
+
+You write the host application.
+
+Your users write Gengoscript.
+
+The engine runs their scripts in a controlled environment, where the host decides what they may see, call, and use.
 
 **[Try it in the browser](https://playground.gengoscript.org/)** · **[Read the docs](https://docs.gengoscript.org/)**
 
