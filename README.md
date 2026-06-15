@@ -20,7 +20,7 @@ Your users write Gengoscript.
 
 The engine runs their scripts in a controlled environment, where the host decides what they may see, call, and use.
 
-**[Try it in the browser](https://playground.gengoscript.org/)** · **[Read the docs](https://docs.gengoscript.org/)**
+**[Try it in the browser](https://playground.gengoscript.org/)** · **[Read the docs](https://docs.gengoscript.org/)** · **[Browse examples](examples/)**
 
 ---
 
@@ -205,6 +205,8 @@ Run the CLI with no arguments on an interactive terminal to start the REPL.
 ---
 
 For a step-by-step walkthrough, see [docs/tutorial-first-script.md](docs/tutorial-first-script.md). For more build and test commands, see [docs/quickstart.md](docs/quickstart.md) and [CONTRIBUTING.md](CONTRIBUTING.md).
+
+---
 
 ---
 
