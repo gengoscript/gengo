@@ -61,7 +61,7 @@ pub const Runtime = struct {
     last_runtime_msg_len: u16 = 0,
     panic_frames: [MaxFrames]vm.PanicFrame = undefined,
     panic_depth: usize = 0,
-    chunk_state: chunk.State = .{},
+    chunk_state: *chunk.State = undefined,
     globals_state: globals.State = .{},
     heap_state: heap.State = .{},
     vm_state: vm.State = .{},
@@ -138,7 +138,10 @@ pub const Runtime = struct {
 
     pub fn init() Runtime {
         var rt: Runtime = .{};
-        chunk.setActive(&rt.chunk_state);
+        const cs = std.heap.page_allocator.create(chunk.State) catch @panic("OOM");
+        cs.* = .{};
+        rt.chunk_state = cs;
+        chunk.setActive(rt.chunk_state);
         globals.setActive(&rt.globals_state);
         chunk.reset();
         globals.reset();
@@ -163,11 +166,15 @@ pub const Runtime = struct {
     }
 
     pub fn initWithConfig(self: *Runtime, policy: vm.Policy, heap_size: usize, max_objects: usize, max_stack: usize, max_frames: usize, max_defers: usize, allocator: std.mem.Allocator) !void {
+        const cs = try std.heap.page_allocator.create(chunk.State);
+        errdefer std.heap.page_allocator.destroy(cs);
+        cs.* = .{};
         @memset(std.mem.asBytes(self), 0);
+        self.chunk_state = cs;
         self.policy = policy;
         try self.heap_state.init(heap_size, max_objects, allocator);
         try self.vm_state.init(max_stack, max_frames, max_defers, heap_size, allocator);
-        chunk.setActive(&self.chunk_state);
+        chunk.setActive(self.chunk_state);
         globals.setActive(&self.globals_state);
         chunk.reset();
         globals.reset();
@@ -180,6 +187,7 @@ pub const Runtime = struct {
     pub fn deinit(self: *Runtime) void {
         self.vm_state.deinit();
         self.heap_state.deinit();
+        std.heap.page_allocator.destroy(self.chunk_state);
     }
 
     pub fn setPolicy(self: *Runtime, policy: vm.Policy) void {
@@ -769,7 +777,7 @@ pub const Runtime = struct {
     }
 
     fn activate(self: *Runtime) void {
-        chunk.setActive(&self.chunk_state);
+        chunk.setActive(self.chunk_state);
         globals.setActive(&self.globals_state);
         heap.setActive(&self.heap_state);
         vm.setActive(&self.vm_state);

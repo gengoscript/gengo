@@ -270,6 +270,14 @@ pub fn vmShort() !usize {
     return (hi << 8) | lo;
 }
 
+pub fn vmInt() !usize {
+    const b3: usize = try vmByte();
+    const b2: usize = try vmByte();
+    const b1: usize = try vmByte();
+    const b0: usize = try vmByte();
+    return (b3 << 24) | (b2 << 16) | (b1 << 8) | b0;
+}
+
 pub fn pushTempRoot(v: Value) !void {
     if (vmState().temp_root_top >= MaxTempRoots) return error.StackOverflow;
     vmState().temp_roots[vmState().temp_root_top] = v;

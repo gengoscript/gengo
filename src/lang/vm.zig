@@ -2368,13 +2368,13 @@ fn runInner() !void {
             },
 
             // Quad-fused: get_local + constant + eq + jif_pop.
-            // Bytecode: [op][slot][skip][idx_hi][idx_lo][jmp_hi][jmp_lo]
+            // Bytecode: [op][slot][skip][idx_hi][idx_lo][jmp_b3][jmp_b2][jmp_b1][jmp_b0]
             // Reads offset first (advancing IP past the full instruction), then branches.
             .get_local_const_eq_jif_pop => {
                 const slot = try vmByte();
                 vmState().ip += 1; // skip
                 const k = try chunk.constAt(try vmShort());
-                const off = try vmShort();
+                const off = try vms.vmInt();
                 const base = if (vmState().frame_top > 0) vmState().frames[vmState().frame_top - 1].base else 0;
                 if (base + slot >= vmState().stack.len) return error.StackOverflow;
                 var a = vmState().stack[base + slot];
@@ -2388,12 +2388,12 @@ fn runInner() !void {
             },
 
             // Quad-fused: get_local + const_lt + jif_pop.
-            // Bytecode: [op][slot][skip][idx_hi][idx_lo][jmp_hi][jmp_lo]
+            // Bytecode: [op][slot][skip][idx_hi][idx_lo][jmp_b3][jmp_b2][jmp_b1][jmp_b0]
             .get_local_const_lt_jif_pop => {
                 const slot = try vmByte();
                 vmState().ip += 1; // skip embedded const_lt opcode byte
                 const k = try chunk.constAt(try vmShort());
-                const off = try vmShort();
+                const off = try vms.vmInt();
                 const base = if (vmState().frame_top > 0) vmState().frames[vmState().frame_top - 1].base else 0;
                 if (base + slot >= vmState().stack.len) return error.StackOverflow;
                 var a = vmState().stack[base + slot];
@@ -2785,20 +2785,20 @@ fn runInner() !void {
             .invoke_method => try opInvokeMethod(),
 
             .jump => {
-                const off = try vmShort();
+                const off = try vms.vmInt();
                 vmState().ip += off;
             },
             .jump_if_false => {
-                const off = try vmShort();
+                const off = try vms.vmInt();
                 if (!(try condAsBool(try vmPeek(0), "condition"))) vmState().ip += off;
             },
             .jif_pop => {
-                const off = try vmShort();
+                const off = try vms.vmInt();
                 const cond = try vmPop();
                 if (!(try condAsBool(cond, "condition"))) vmState().ip += off;
             },
             .loop => {
-                const off = try vmShort();
+                const off = try vms.vmInt();
                 if (off > vmState().ip) return error.BytecodeOutOfBounds;
                 vmState().ip -= off;
                 // If the back-edge target is a warm get_global IC, execute it inline
@@ -2818,7 +2818,7 @@ fn runInner() !void {
             },
 
             // Fused set_global + loop back-edge.
-            // Bytecode: [op][name_hi][name_lo][ic_hi][ic_lo][off_hi][off_lo]
+            // Bytecode: [op][name_hi][name_lo][ic_hi][ic_lo][off_b3][off_b2][off_b1][off_b0]
             // IC layout and patch offsets are identical to set_global.
             .set_global_loop => {
                 const name_idx = try vmShort();
@@ -2834,7 +2834,7 @@ fn runInner() !void {
                     chunk.patchByte(ic_base + 1, @intCast(slot & 0xFF));
                     globals.setAt(slot, val);
                 }
-                const off = try vmShort();
+                const off = try vms.vmInt();
                 if (off > vmState().ip) return error.BytecodeOutOfBounds;
                 vmState().ip -= off;
                 // Same inline get_global as loop: skip one dispatch if warm.

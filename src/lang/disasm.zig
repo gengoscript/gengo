@@ -9,6 +9,13 @@ fn readU16(pos: usize) u16 {
     return (@as(u16, chunk.codeByteAt(pos)) << 8) | @as(u16, chunk.codeByteAt(pos + 1));
 }
 
+fn readU32(pos: usize) u32 {
+    return (@as(u32, chunk.codeByteAt(pos)) << 24) |
+           (@as(u32, chunk.codeByteAt(pos + 1)) << 16) |
+           (@as(u32, chunk.codeByteAt(pos + 2)) << 8) |
+           @as(u32, chunk.codeByteAt(pos + 3));
+}
+
 fn writeOffset(n: usize) void {
     var buf: [8]u8 = undefined;
     const s = std.fmt.bufPrint(&buf, "{x:0>4}", .{n}) catch return;
@@ -191,22 +198,22 @@ pub fn disassemble() void {
                 io.write("\n");
             },
 
-            // --- jumps: 2-byte forward offset ---
+            // --- jumps: 4-byte forward offset ---
             .jump, .jump_if_false, .jif_pop => {
-                const off = readU16(i);
-                i += 2;
-                const target = start + 3 + @as(usize, off);
+                const off = readU32(i);
+                i += 4;
+                const target = start + 5 + @as(usize, off);
                 io.write(@tagName(op));
                 io.write(" -> ");
                 writeOffset(target);
                 io.write("\n");
             },
 
-            // --- loop: 2-byte backward offset ---
+            // --- loop: 4-byte backward offset ---
             .loop => {
-                const off = readU16(i);
-                i += 2;
-                const target = start + 3 - @as(usize, off);
+                const off = readU32(i);
+                i += 4;
+                const target = start + 5 - @as(usize, off);
                 io.write("loop -> ");
                 writeOffset(target);
                 io.write("\n");
@@ -316,16 +323,16 @@ pub fn disassemble() void {
                 io.write("\n");
             },
 
-            // --- quad-fused: op + slot(1) + skip(1) + idx(2) + jmp(2) ---
+            // --- quad-fused: op + slot(1) + skip(1) + idx(2) + jmp(4) ---
             .get_local_const_eq_jif_pop, .get_local_const_lt_jif_pop => {
                 const slot = chunk.codeByteAt(i);
                 i += 1;
                 i += 1; // skip byte
                 const idx = readU16(i);
                 i += 2;
-                const jmp = readU16(i);
-                i += 2;
-                const target = start + 7 + @as(usize, jmp);
+                const jmp = readU32(i);
+                i += 4;
+                const target = start + 9 + @as(usize, jmp);
                 io.write(@tagName(op));
                 io.write(" local=");
                 writeNum(slot);
@@ -362,15 +369,15 @@ pub fn disassemble() void {
                 io.write("\n");
             },
 
-            // --- set_global_loop: op + name(2) + ic(2) + off(2) ---
+            // --- set_global_loop: op + name(2) + ic(2) + off(4) ---
             .set_global_loop => {
                 const name_idx = readU16(i);
                 i += 2;
                 const ic = readU16(i);
                 i += 2;
-                const off = readU16(i);
-                i += 2;
-                const target = start + 7 - @as(usize, off);
+                const off = readU32(i);
+                i += 4;
+                const target = start + 9 - @as(usize, off);
                 io.write("set_global_loop ");
                 writeConst(name_idx);
                 if (ic != 0xffff) {

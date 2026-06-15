@@ -3,8 +3,9 @@ const Value = @import("value.zig").Value;
 const common = @import("common.zig");
 const heap = @import("../runtime/heap.zig");
 
-// 65536 is the encoding ceiling: jump offsets are 16-bit, so code cannot exceed 64 KiB.
-pub const MaxCode = 65536;
+// Jump offsets are 32-bit (4 bytes, big-endian u32). MaxCode can therefore be very large;
+// 1 MiB is a practical ceiling that covers any realistic script.
+pub const MaxCode = 1048576;
 // Constant indices are two-byte (big-endian u16); 4096 is a practical ceiling well below
 // the u16 maximum while fitting comfortably in the GC heap.
 pub const MaxConst = 4096;
@@ -275,40 +276,48 @@ pub fn emitDeferInvokeMethod(name: []const u8, argc: u8, line: u32) !void {
 
 pub fn emitJump(op: Op, line: u32) !usize {
     // Quad fusion: get_local_const_eq immediately preceding jif_pop →
-    // get_local_const_eq_jif_pop (7 bytes, saves 1 dispatch per conditional check).
+    // get_local_const_eq_jif_pop (9 bytes, saves 1 dispatch per conditional check).
     if (op == .jif_pop) {
         if (g_state.last_triple_eq_pos) |tp| {
             if (tp + 5 == g_state.code_len) {
                 g_state.code[tp] = @intFromEnum(Op.get_local_const_eq_jif_pop);
                 try emitByte(0xff, line);
                 try emitByte(0xff, line);
+                try emitByte(0xff, line);
+                try emitByte(0xff, line);
                 g_state.last_triple_eq_pos = null;
-                return g_state.code_len - 2;
+                return g_state.code_len - 4;
             }
         }
         // Quad fusion: get_local_const_lt immediately preceding jif_pop →
-        // get_local_const_lt_jif_pop (7 bytes, saves 1 dispatch per conditional check).
+        // get_local_const_lt_jif_pop (9 bytes, saves 1 dispatch per conditional check).
         if (g_state.last_triple_lt_pos) |tp| {
             if (tp + 5 == g_state.code_len) {
                 g_state.code[tp] = @intFromEnum(Op.get_local_const_lt_jif_pop);
                 try emitByte(0xff, line);
                 try emitByte(0xff, line);
+                try emitByte(0xff, line);
+                try emitByte(0xff, line);
                 g_state.last_triple_lt_pos = null;
-                return g_state.code_len - 2;
+                return g_state.code_len - 4;
             }
         }
     }
     try emitOp(op, line);
     try emitByte(0xff, line);
     try emitByte(0xff, line);
-    return g_state.code_len - 2;
+    try emitByte(0xff, line);
+    try emitByte(0xff, line);
+    return g_state.code_len - 4;
 }
 
 pub fn patchJump(offset: usize) !void {
-    const jump = g_state.code_len - offset - 2;
-    if (jump > 0xffff) return error.JumpTooLarge;
-    g_state.code[offset] = @intCast((jump >> 8) & 0xff);
-    g_state.code[offset + 1] = @intCast(jump & 0xff);
+    const jump = g_state.code_len - offset - 4;
+    if (jump > 0xffffffff) return error.JumpTooLarge;
+    g_state.code[offset]     = @intCast((jump >> 24) & 0xff);
+    g_state.code[offset + 1] = @intCast((jump >> 16) & 0xff);
+    g_state.code[offset + 2] = @intCast((jump >> 8)  & 0xff);
+    g_state.code[offset + 3] = @intCast(jump & 0xff);
     // The patched jump lands at the current end of code, so the next emitted
     // instruction must start exactly here. Suppress pending peephole fusion:
     // fusing across this boundary (triple get_local+const or quad +jif_pop)
@@ -323,7 +332,7 @@ pub fn patchJump(offset: usize) !void {
 
 pub fn emitLoop(loop_start: usize, line: u32) !void {
     // Peephole: if the last emitted instruction is set_global (5 bytes), fuse it with
-    // the back-edge into set_global_loop (same 5 bytes, different opcode + 2-byte offset).
+    // the back-edge into set_global_loop (same 5 bytes, different opcode + 4-byte offset).
     if (g_state.last_set_global_code_pos) |sg_pos| {
         if (sg_pos + 5 == g_state.code_len) {
             g_state.last_const_code_pos = null;
@@ -332,9 +341,11 @@ pub fn emitLoop(loop_start: usize, line: u32) !void {
             g_state.last_triple_lt_pos = null;
             g_state.last_set_global_code_pos = null;
             g_state.code[sg_pos] = @intFromEnum(Op.set_global_loop);
-            const offset = g_state.code_len - loop_start + 2;
-            if (offset > 0xffff) return error.LoopTooLarge;
-            try emitByte(@intCast((offset >> 8) & 0xff), line);
+            const offset = g_state.code_len - loop_start + 4;
+            if (offset > 0xffffffff) return error.LoopTooLarge;
+            try emitByte(@intCast((offset >> 24) & 0xff), line);
+            try emitByte(@intCast((offset >> 16) & 0xff), line);
+            try emitByte(@intCast((offset >> 8)  & 0xff), line);
             try emitByte(@intCast(offset & 0xff), line);
             return;
         }
@@ -345,9 +356,11 @@ pub fn emitLoop(loop_start: usize, line: u32) !void {
     g_state.last_triple_lt_pos = null;
     g_state.last_set_global_code_pos = null;
     try emitOp(.loop, line);
-    const offset = g_state.code_len - loop_start + 2;
-    if (offset > 0xffff) return error.LoopTooLarge;
-    try emitByte(@intCast((offset >> 8) & 0xff), line);
+    const offset = g_state.code_len - loop_start + 4;
+    if (offset > 0xffffffff) return error.LoopTooLarge;
+    try emitByte(@intCast((offset >> 24) & 0xff), line);
+    try emitByte(@intCast((offset >> 16) & 0xff), line);
+    try emitByte(@intCast((offset >> 8)  & 0xff), line);
     try emitByte(@intCast(offset & 0xff), line);
 }
 
