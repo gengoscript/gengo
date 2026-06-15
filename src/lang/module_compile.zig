@@ -159,8 +159,10 @@ pub const Session = struct {
 
     fn copyCompilerError(self: *Session, compiler: *Compiler) void {
         self.last_error_col = compiler.err_col;
-        @memcpy(self.last_error_msg_buf[0..compiler.err_msg_len], compiler.err_msg_buf[0..compiler.err_msg_len]);
-        self.last_error_msg_len = compiler.err_msg_len;
+        if (compiler.err_msg_len > 0) {
+            @memcpy(self.last_error_msg_buf[0..compiler.err_msg_len], compiler.err_msg_buf[0..compiler.err_msg_len]);
+            self.last_error_msg_len = compiler.err_msg_len;
+        }
     }
 
     fn setScanError(self: *Session, comptime fmt: []const u8, args: anytype) void {
@@ -317,14 +319,23 @@ pub const Session = struct {
             self.last_error_line = if (compiler.err_line != 0) compiler.err_line else compiler.prev.line;
             self.copyCompilerError(&compiler);
             if (self.last_error_msg_len == 0) {
+                const mod_path = self.modules[idx].path();
                 switch (err) {
                     error.ChunkFull => self.setScanError(
-                        "compilation unit exceeded {d}-byte bytecode limit; split into smaller files",
-                        .{chunk.MaxCode},
+                        "compilation unit '{s}' exceeded {d}-byte bytecode limit; split into smaller files",
+                        .{ mod_path, chunk.MaxCode },
                     ),
                     error.TooManyConstants => self.setScanError(
-                        "compilation unit exceeded {d}-constant limit; split into smaller files",
-                        .{chunk.MaxConst},
+                        "compilation unit '{s}' exceeded {d}-constant limit; split into smaller files",
+                        .{ mod_path, chunk.MaxConst },
+                    ),
+                    error.ImportNotFound => self.setScanError(
+                        "import not found; checked directory relative to '{s}'",
+                        .{mod_path},
+                    ),
+                    error.UnsupportedImportModule => self.setScanError(
+                        "import paths must start with '.', 'cap:', or 'host:'; got '{s}'",
+                        .{mod_path},
                     ),
                     else => {},
                 }
@@ -458,7 +469,11 @@ pub const Session = struct {
         // Accept optional "host:" prefix so `import("host:foo")` and `import("foo")` are equivalent.
         const bare_name = if (std.mem.startsWith(u8, import_name, "host:")) import_name[5..] else import_name;
         if (self.isHostModule(bare_name)) return bare_name;
-        if (!(import_name[0] == '.')) return error.UnsupportedImportModule;
+        if (!(import_name[0] == '.')) {
+            self.last_error_path = importer_path;
+            self.setScanError("unsupported import '{s}'; relative imports must start with '.', or use 'cap:'/'host:' prefix", .{import_name});
+            return error.UnsupportedImportModule;
+        }
 
         const base_dir = dirname(importer_path);
 
@@ -475,6 +490,9 @@ pub const Session = struct {
         if (self.sourceExists(with_mod)) return copyResolvedPath(with_mod);
 
         self.last_error_path = importer_path;
+        self.setScanError("import '{s}' not found from '{s}'; tried '{s}', '{s}', and '{s}'", .{
+            import_name, importer_path, exact, with_ext, with_mod,
+        });
         return error.ImportNotFound;
     }
 
