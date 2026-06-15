@@ -45,6 +45,14 @@ pub fn runtimeTypeName(v: Value) []const u8 {
     };
 }
 
+// Set pending_panic_message to the current runtime_err_buf slice so that
+// core.recover() returns the human-readable message instead of just the
+// Zig error-name string.  runPanicUnwind skips the self-@memcpy when it
+// detects that pending_panic_message already points into runtime_err_buf.
+inline fn announcePanicMsg() void {
+    vms.vmState().pending_panic_message = vms.runtimeErrMsg();
+}
+
 fn setNamedRangeError(typ_obj: *Object, value: f64) void {
     const nt = typ_obj.named_type;
     switch (nt.base) {
@@ -56,6 +64,7 @@ fn setNamedRangeError(typ_obj: *Object, value: f64) void {
         }),
         else => vms.setRuntimeErr("{s}: {d} is outside {d}..{d}", .{ nt.name, value, nt.min, nt.max }),
     }
+    announcePanicMsg();
 }
 
 // Resolve and cache the parent enum type pointer for enum subtypes.
@@ -373,11 +382,13 @@ pub fn constructNamedType(typ_obj: *Object, arg: Value) !Value {
             const n = vms.valueAsNumber(arg) catch |err| {
                 if (err == error.TypeError) {
                     vms.setRuntimeErr("cannot construct {s} from {s}; convert to {s} first", .{ nt.name, runtimeTypeName(arg), namedBaseName(nt.base) });
+                    announcePanicMsg();
                 }
                 return err;
             };
             if (@trunc(n) != n) {
                 vms.setRuntimeErr("cannot construct {s} from {s}; convert to {s} first", .{ nt.name, runtimeTypeName(arg), namedBaseName(nt.base) });
+                announcePanicMsg();
                 return error.TypeError;
             }
             if (nt.has_range and (n < nt.min or n > nt.max)) {
@@ -395,6 +406,7 @@ pub fn constructNamedType(typ_obj: *Object, arg: Value) !Value {
             const n = vms.valueAsNumber(arg) catch |err| {
                 if (err == error.TypeError) {
                     vms.setRuntimeErr("cannot construct {s} from {s}; convert to {s} first", .{ nt.name, runtimeTypeName(arg), namedBaseName(nt.base) });
+                    announcePanicMsg();
                 }
                 return err;
             };
@@ -520,7 +532,7 @@ pub fn applyNamedTypeFn(typ_obj: *Object, kind: @import("value.zig").NamedTypeFn
     const n = try vms.valueAsNumber(inner);
     const delta: f64 = if (kind == .succ) 1.0 else -1.0;
     const result = n + delta;
-    if (result == n) { vms.setRuntimeErr("cannot increment non-finite or very large value", .{}); return error.RangeError; }
+    if (result == n) { vms.setRuntimeErr("cannot increment non-finite or very large value", .{}); announcePanicMsg(); return error.RangeError; }
     if (nt.is_cycle) {
         return makeNamedValue(typ_obj, if (nt.base == .float) .{ .float = try wrapCycleValue(nt.min, nt.max, result) } else .{ .int = try wrapCycleValue(nt.min, nt.max, result) });
     } else {

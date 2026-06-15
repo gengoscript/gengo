@@ -951,6 +951,10 @@ test "engine_call: recover() in defer intercepts panic" {
     // (not via the CLI / top-level bytecode).  Previously the recovery path
     // called run() with ret_ip pointing past end-of-bytecode, producing a
     // spurious BytecodeOutOfBounds error instead of returning the recovered value.
+    //
+    // Also verifies that core.recover() returns the full human-readable error
+    // message (e.g. "predicate failed for Region(mars)") rather than the bare
+    // Zig error-name string ("PredicateFailed").
     const h = engine_init();
     try std.testing.expect(h > 0);
 
@@ -962,15 +966,20 @@ test "engine_call: recover() in defer intercepts panic" {
         \\    return x == "eu" || x == "us"
         \\}
         \\
+        \\var last_err string = ""
+        \\
         \\pub func check(region string) (ok bool) {
         \\    defer func() {
         \\        if e := core.recover(); core.is_error(e) {
+        \\            last_err = string(e)
         \\            ok = false
         \\        }
         \\    }()
         \\    _ = Region(region)
         \\    return true
         \\}
+        \\
+        \\pub func get_last_err() string { return last_err }
     ;
     const run_rc = engine_run(h, @intCast(@intFromPtr(src.ptr)), @intCast(src.len));
     try std.testing.expectEqual(0, run_rc);
@@ -995,4 +1004,16 @@ test "engine_call: recover() in defer intercepts panic" {
     try std.testing.expectEqual(0, rc_bad);
     try std.testing.expectEqual(@as(u8, 1), bad_out.tag); // boolean
     try std.testing.expect(bad_out.payload == 0);         // false
+
+    // The recovered error message must be the human-readable predicate message,
+    // not the bare Zig error name "PredicateFailed".
+    var err_out: ValueWire = undefined;
+    const rc_err = engine_call(h, @intCast(@intFromPtr("get_last_err".ptr)), 12,
+                               0, 0,
+                               @intCast(@intFromPtr(&err_out)));
+    try std.testing.expectEqual(0, rc_err);
+    try std.testing.expectEqual(@as(u8, 3), err_out.tag); // string
+    const err_str = @as([*]const u8, @ptrFromInt(@as(usize, @bitCast(err_out.payload))))[0..err_out.len];
+    try std.testing.expect(std.mem.indexOf(u8, err_str, "predicate failed") != null);
+    try std.testing.expect(std.mem.indexOf(u8, err_str, "Region") != null);
 }
