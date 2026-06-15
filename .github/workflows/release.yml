@@ -31,6 +31,9 @@ jobs:
           curl -sL https://github.com/WebAssembly/binaryen/releases/download/version_130/binaryen-version_130-x86_64-linux.tar.gz | tar xz
           echo "$PWD/binaryen-version_130/bin" >> "$GITHUB_PATH"
 
+      - name: Install llvm-strip
+        run: sudo apt-get install -y --no-install-recommends llvm
+
       # ── Gate: run conformance before building release artifacts ─────
 
       - name: Run unit tests
@@ -64,13 +67,13 @@ jobs:
       - name: Build CLI linux-x86_64
         run: |
           zig build -Dpreset=dev -Dtarget=x86_64-linux cli-release
-          strip zig-out/bin/gengo
+          llvm-strip zig-out/bin/gengo
           cp zig-out/bin/gengo dist/gengo-linux-x86_64
 
       - name: Build CLI linux-aarch64
         run: |
           zig build -Dpreset=dev -Dtarget=aarch64-linux cli-release
-          strip zig-out/bin/gengo
+          llvm-strip zig-out/bin/gengo
           cp zig-out/bin/gengo dist/gengo-linux-aarch64
 
       - name: Build CLI macos-x86_64
@@ -93,13 +96,13 @@ jobs:
       - name: Build libgengo-engine linux-x86_64
         run: |
           zig build -Dpreset=dev -Dtarget=x86_64-linux engine-native-release
-          strip zig-out/lib/libgengo-engine.so
+          llvm-strip zig-out/lib/libgengo-engine.so
           cp zig-out/lib/libgengo-engine.so dist/libgengo-engine-linux-x86_64.so
 
       - name: Build libgengo-engine linux-aarch64
         run: |
           zig build -Dpreset=dev -Dtarget=aarch64-linux engine-native-release
-          strip zig-out/lib/libgengo-engine.so
+          llvm-strip zig-out/lib/libgengo-engine.so
           cp zig-out/lib/libgengo-engine.so dist/libgengo-engine-linux-aarch64.so
 
       - name: Build libgengo-engine macos-x86_64
