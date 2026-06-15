@@ -112,8 +112,16 @@ pub fn timeFormatStr(ms: f64, fmt: []const u8) !Value {
             i += 2;
             switch (verb) {
                 'Y' => {
-                    const written = try std.fmt.bufPrint(buf[pos..], "{d:0>4}", .{@as(u32, @intCast(parts.year))});
-                    pos += written.len;
+                    if (parts.year < 0) {
+                        buf[pos] = '-';
+                        pos += 1;
+                        const abs: u32 = @intCast(-@as(i64, parts.year));
+                        const written = try std.fmt.bufPrint(buf[pos..], "{d:0>4}", .{abs});
+                        pos += written.len;
+                    } else {
+                        const written = try std.fmt.bufPrint(buf[pos..], "{d:0>4}", .{@as(u32, @intCast(parts.year))});
+                        pos += written.len;
+                    }
                 },
                 'm' => {
                     const written = try std.fmt.bufPrint(buf[pos..], "{d:0>2}", .{@as(u32, parts.month)});
@@ -197,9 +205,16 @@ pub fn timeParseStr(s: []const u8, fmt: []const u8) !Value {
         fi += 1;
         switch (spec) {
             'Y' => {
-                if (si + 4 > s.len) return error.TypeError;
-                year = std.fmt.parseInt(i32, s[si..si+4], 10) catch return error.TypeError;
-                si += 4;
+                if (si >= s.len) return error.TypeError;
+                if (s[si] == '-') {
+                    if (si + 5 > s.len) return error.TypeError;
+                    year = std.fmt.parseInt(i32, s[si..si+5], 10) catch return error.TypeError;
+                    si += 5;
+                } else {
+                    if (si + 4 > s.len) return error.TypeError;
+                    year = std.fmt.parseInt(i32, s[si..si+4], 10) catch return error.TypeError;
+                    si += 4;
+                }
             },
             'y' => {
                 if (si + 2 > s.len) return error.TypeError;
@@ -292,7 +307,7 @@ pub fn timeCalendarToEpochSecs(year: i32, month: u8, day: u8, hour: u8, min: u8,
     var y: i32 = year;
     var m: i32 = @as(i32, month);
     if (m <= 2) { y -= 1; m += 12; }
-    const era = @divTrunc(y, 400);
+    const era = @divFloor(y, 400);
     const yoe = y - era * 400;
     const doy = @divTrunc(153 * (m - 3) + 2, 5) + @as(i32, day) - 1;
     const doe = yoe * 365 + @divTrunc(yoe, 4) - @divTrunc(yoe, 100) + doy;

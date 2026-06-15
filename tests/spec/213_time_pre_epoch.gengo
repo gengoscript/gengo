@@ -1,0 +1,26 @@
+std := import("std")
+time := std.time
+
+// Pre-epoch dates: negative unix timestamps, format/parse round-trip
+t1 := time.parse("1969-07-20", "%Y-%m-%d")
+std.io.println(t1.format("%Y-%m-%d"))
+std.io.println(t1.unix())
+std.io.println(t1.before(time.from_unix(0)))
+
+t2 := time.parse("1900-01-01", "%Y-%m-%d")
+std.io.println(t2.format("%Y-%m-%d"))
+std.io.println(t2.unix())
+
+// Year 0 (1 BC in astronomical year numbering)
+t3 := time.parse("0000-01-01", "%Y-%m-%d")
+std.io.println(t3.format("%Y-%m-%d"))
+
+// Negative year: -0001 = 2 BC
+t4 := time.parse("-0001-06-15", "%Y-%m-%d")
+std.io.println(t4.format("%Y-%m-%d"))
+
+// parts() round-trip on pre-epoch date
+p := t1.parts()
+std.io.println(p.year)
+std.io.println(p.month)
+std.io.println(p.day)
