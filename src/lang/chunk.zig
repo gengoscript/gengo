@@ -3,10 +3,11 @@ const Value = @import("value.zig").Value;
 const common = @import("common.zig");
 const heap = @import("../runtime/heap.zig");
 
-pub const MaxCode = 16384;
-// Constant indices are encoded as two bytes (big-endian u16), supporting up to 512 distinct
-// values per compilation unit. Previously the limit was 256 (single-byte index).
-pub const MaxConst = 512;
+// 65536 is the encoding ceiling: jump offsets are 16-bit, so code cannot exceed 64 KiB.
+pub const MaxCode = 65536;
+// Constant indices are two-byte (big-endian u16); 4096 is a practical ceiling well below
+// the u16 maximum while fitting comfortably in the GC heap.
+pub const MaxConst = 4096;
 
 pub const State = struct {
     code: [MaxCode]u8 = undefined,

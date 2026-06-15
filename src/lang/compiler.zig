@@ -623,9 +623,13 @@ pub const Compiler = struct {
 
         if (!self.options.test_mode) {
             // Normal mode: parse the body but discard emitted code AND semantic state.
-            var tmp_state: chunk.State = .{};
+            // Heap-allocate the discard state: chunk.State is ~416 KB with current limits,
+            // which is too large for the WASM stack.
+            const tmp_state = std.heap.page_allocator.create(chunk.State) catch return error.OutOfMemory;
+            defer std.heap.page_allocator.destroy(tmp_state);
+            tmp_state.* = .{};
             const saved_state = chunk.g_state;
-            chunk.setActive(&tmp_state);
+            chunk.setActive(tmp_state);
             const saved_skipping = self.skipping_test_body;
             self.skipping_test_body = true;
             defer {
