@@ -226,7 +226,7 @@ fn readFd0(buf: []u8) isize {
         const handle = GetStdHandle(STD_INPUT_HANDLE);
         var nread: w32.DWORD = 0;
         const ok = ReadFile(handle, buf.ptr, @intCast(buf.len), &nread, null);
-        if (ok == 0 or nread == 0) return -1;
+        if (ok == .FALSE or nread == 0) return -1;
         return @intCast(nread);
     }
     const n = std.posix.read(0, buf) catch return -1;
