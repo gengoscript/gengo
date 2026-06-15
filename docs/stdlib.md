@@ -218,8 +218,8 @@ The entries below describe the public library surface. This page is intentionall
 - `n < 0` raises `RangeError`
 
 ### `std.string.split_once(s, sep)`
-- Returns `(head, tail)` split on the first occurrence of `sep`
-- Returns `(null, null)` if `sep` is not present
+- Returns a 2-element array `[head, tail]` split on the first occurrence of `sep`
+- Returns `[null, null]` if `sep` is not present
 
 ### `std.string.contains(s, sub)`
 - Returns `true` if `sub` appears anywhere in `s`, else `false`
@@ -451,7 +451,7 @@ Go-style text templates with `{{` / `}}` delimiters.
 | `{{with .expr}}…{{end}}` | Scoped context block |
 | `{{/* comment */}}` | Comment (emits nothing) |
 
-Note: `range` iteration is reserved syntax but not yet executed (v1 always takes the else/empty branch).
+`range` iterates over arrays: `{{range .items}}…{{end}}` binds each element as `.` in turn. An optional `{{else}}` block runs when the array is empty.
 
 ## std.Time / std.time
 

@@ -184,6 +184,52 @@ func add(a int, b int) int {
 
 Gengoscript supports closures, methods, and multi-value returns. Functions may be exported from a source module with `pub`.
 
+Named returns let a `defer` modify the function's return value before it exits:
+
+```gengo
+func safe_div(a int, b int) (result int) {
+    defer func() {
+        e := std.core.recover()
+        if std.core.is_error(e) {
+            result = 0
+        }
+    }()
+    result = a / b
+    return result
+}
+```
+
+## Defer and Recover
+
+`defer` schedules a function call to run when the enclosing function returns, even during a panic unwind. Deferred calls run in LIFO order.
+
+```gengo
+func with_cleanup() {
+    defer std.io.println("cleanup")
+    std.io.println("body")
+    // prints: body, then cleanup
+}
+```
+
+`std.core.recover()` catches a panic from inside a `defer` function and stops the unwind. It returns the panic payload (an `error` value), or `null` if no panic is in progress.
+
+```gengo
+core := std.core
+
+func attempt(x int) (ok bool) {
+    defer func() {
+        e := core.recover()
+        if core.is_error(e) {
+            ok = false
+        }
+    }()
+    _ = someOperation(x)
+    return true
+}
+```
+
+`recover()` only has effect when called directly inside a `defer` function during an active panic. Calling it outside a defer, or after the panic has already been recovered, returns `null`.
+
 ## Named Types
 
 Named types are central to the language. They let scripts model domain rules directly instead of treating everything as unstructured maps and validating later.
@@ -195,6 +241,20 @@ type UserId string
 type Port int range 1..65535
 type Hour int cycle 0..23
 ```
+
+Fixed-point decimal types store an exact scaled integer. The number after `decimal` is the scale (decimal places):
+
+```gengo
+type Money decimal 2
+
+m := Money(9.99)     // stored as 999 internally
+std.io.println(m)    // prints: 9.99
+
+type Percent decimal 2 range 0..1
+p := Percent(0.50)
+```
+
+Decimal types support the same arithmetic, range, predicate, and subtype features as integer named types. They do not mix with bare `float` or `int`.
 
 Range types reject out-of-range values at construction time:
 
