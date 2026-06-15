@@ -445,11 +445,15 @@ fn performCall(argc: u8) !void {
         .function => |f| {
             if (f.is_variadic) {
                 if (argc < f.arity - 1) {
-                    if (f.name.len > 0) { vms.setRuntimeErr("{s}: expected at least {} argument(s), got {}", .{ f.name, f.arity - 1, argc }); } else { vms.setRuntimeErr("expected at least {} argument(s), got {}", .{ f.arity - 1, argc }); }
+                    var sig_buf: [256]u8 = undefined;
+                    const sig = vmtyp.funcSignatureStr(&sig_buf, f);
+                    if (f.name.len > 0) { vms.setRuntimeErr("{s}: expected at least {} argument(s), got {} for {s}", .{ f.name, f.arity - 1, argc, sig }); } else { vms.setRuntimeErr("expected at least {} argument(s), got {} for {s}", .{ f.arity - 1, argc, sig }); }
                     return error.ArityMismatch;
                 }
             } else if (f.arity != argc) {
-                if (f.name.len > 0) { vms.setRuntimeErr("{s}: expected {} argument(s), got {}", .{ f.name, f.arity, argc }); } else { vms.setRuntimeErr("expected {} argument(s), got {}", .{ f.arity, argc }); }
+                var sig_buf: [256]u8 = undefined;
+                const sig = vmtyp.funcSignatureStr(&sig_buf, f);
+                if (f.name.len > 0) { vms.setRuntimeErr("{s}: expected {} argument(s), got {} for {s}", .{ f.name, f.arity, argc, sig }); } else { vms.setRuntimeErr("expected {} argument(s), got {} for {s}", .{ f.arity, argc, sig }); }
                 return error.ArityMismatch;
             }
             if (f.has_typed_params) try vmtyp.enforceFuncArgTypes(f, argc);
@@ -470,11 +474,15 @@ fn performCall(argc: u8) !void {
             const f = cl.func.function;
             if (f.is_variadic) {
                 if (argc < f.arity - 1) {
-                    if (f.name.len > 0) { vms.setRuntimeErr("{s}: expected at least {} argument(s), got {}", .{ f.name, f.arity - 1, argc }); } else { vms.setRuntimeErr("expected at least {} argument(s), got {}", .{ f.arity - 1, argc }); }
+                    var sig_buf: [256]u8 = undefined;
+                    const sig = vmtyp.funcSignatureStr(&sig_buf, f);
+                    if (f.name.len > 0) { vms.setRuntimeErr("{s}: expected at least {} argument(s), got {} for {s}", .{ f.name, f.arity - 1, argc, sig }); } else { vms.setRuntimeErr("expected at least {} argument(s), got {} for {s}", .{ f.arity - 1, argc, sig }); }
                     return error.ArityMismatch;
                 }
             } else if (f.arity != argc) {
-                if (f.name.len > 0) { vms.setRuntimeErr("{s}: expected {} argument(s), got {}", .{ f.name, f.arity, argc }); } else { vms.setRuntimeErr("expected {} argument(s), got {}", .{ f.arity, argc }); }
+                var sig_buf: [256]u8 = undefined;
+                const sig = vmtyp.funcSignatureStr(&sig_buf, f);
+                if (f.name.len > 0) { vms.setRuntimeErr("{s}: expected {} argument(s), got {} for {s}", .{ f.name, f.arity, argc, sig }); } else { vms.setRuntimeErr("expected {} argument(s), got {} for {s}", .{ f.arity, argc, sig }); }
                 return error.ArityMismatch;
             }
             if (f.has_typed_params) try vmtyp.enforceFuncArgTypes(f, argc);
