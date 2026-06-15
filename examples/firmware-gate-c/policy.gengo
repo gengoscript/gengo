@@ -1,0 +1,56 @@
+type Build int range 1000..999999
+type BatteryPercent int range 0..100
+type RegionCode string predicate func(x) {
+    return x == "eu" || x == "us" || x == "apac"
+}
+
+var saved_reason string = ""
+
+func deny(reason string) bool {
+    saved_reason = reason
+    return false
+}
+
+pub func allow_update(
+    model string,
+    serial string,
+    region string,
+    current_build int,
+    target_build int,
+    model_enabled bool,
+    serial_blocked bool,
+    battery_percent int,
+) bool {
+    saved_reason = ""
+    _ = serial  // serial checks are host-side (blocked list); the script receives a bool
+
+    _ = RegionCode(region)
+    cur := Build(current_build)
+    tgt := Build(target_build)
+    battery := BatteryPercent(battery_percent)
+
+    if !model_enabled {
+        return deny("model disabled")
+    }
+    if serial_blocked {
+        return deny("serial blocked")
+    }
+    if tgt <= cur {
+        return deny("target build must be newer")
+    }
+    if battery < BatteryPercent(35) {
+        return deny("battery too low for safe update")
+    }
+    if model == "meter-v1" && region != "eu" {
+        return deny("meter-v1 rollout only enabled in eu")
+    }
+    if model == "gateway-x" && target_build < 5000 {
+        return deny("gateway-x requires build >= 5000")
+    }
+
+    return true
+}
+
+pub func last_reason() string {
+    return saved_reason
+}
