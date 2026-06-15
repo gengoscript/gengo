@@ -75,7 +75,80 @@ Ada A
 
 The important point is that the type contract lives inside the script. Invalid values fail where they are constructed, not later in host-side validation code.
 
-## 5. Check the Environment
+## 5. Named Types and Domain Rules
+
+Replace the file with a script that uses named types to enforce domain rules:
+
+```gengo
+std := import("std")
+
+type Port int range 1..65535
+type Percent int range 0..100
+
+func scale(port Port, factor Percent) int {
+    return int(port) * int(factor) / 100
+}
+
+p := Port(443)
+// Port(0)          // runtime range error — 0 is outside 1..65535
+
+pct := Percent(50)
+std.io.println(scale(p, pct))
+```
+
+Run it:
+
+```bash
+wasmtime --dir . ./build/gengo-cli.wasm -- examples/hello_tutorial.gengo
+```
+
+Expected output:
+
+```text
+221
+```
+
+Named types keep domain rules inside the script. A `Port` rejects out-of-range values at construction time. Two different named types cannot be mixed directly — `scale(Port(80), Percent(50))` is fine, but `scale(80, 50)` is a type error because bare `int` and named `Port` do not mix. This prevents accidental misuse where the wrong kind of number is passed to the wrong place.
+
+## 6. Error Handling and Recovery
+
+Add a script that uses `defer` and `recover` to handle panics:
+
+```gengo
+std := import("std")
+
+type SafeDiv int range 1..1000
+
+func divide(a int, b int) int {
+    defer func() {
+        if err := std.core.recover() {
+            std.io.println("recovered:", err)
+        }
+    }()
+    return a / b
+}
+
+std.io.println(divide(10, 2))
+std.io.println(divide(10, 0))
+```
+
+Run it:
+
+```bash
+wasmtime --dir . ./build/gengo-cli.wasm -- examples/hello_tutorial.gengo
+```
+
+Expected output:
+
+```text
+5
+recovered: DivisionByZero
+0
+```
+
+`defer` schedules a function to run when the current function returns, even during a panic unwind. `std.core.recover()` catches the panic payload inside a `defer` function and stops the unwind.
+
+## 7. Check the Environment
 
 Run the conformance suite:
 
