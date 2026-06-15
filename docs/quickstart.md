@@ -33,7 +33,7 @@ zig build -Dpreset=dev engine-native
 Outputs:
 
 - `zig-out/bin/gengo`
-- `build/gengo-runtime.wasm`
+- `build/gengo-cli.wasm`
 - `build/gengo-engine.wasm`
 - `zig-out/lib/libgengo-engine.so` on Linux
 
@@ -48,7 +48,7 @@ Native CLI:
 WASI runtime:
 
 ```bash
-wasmtime --dir . ./build/gengo-runtime.wasm -- script.gengo
+wasmtime --dir . ./build/gengo-cli.wasm -- script.gengo
 ```
 
 The `test`, `parity`, and `bench` build steps also invoke `wasmtime`. If it is not on `PATH`, pass `-Dwasmtime=/path/to/wasmtime` to the relevant `zig build` command.

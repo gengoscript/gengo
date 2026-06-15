@@ -32,7 +32,7 @@ std.io.println(nums[1])
 ## 3. Run It
 
 ```bash
-wasmtime --dir . ./build/gengo-runtime.wasm -- examples/hello_tutorial.gengo
+wasmtime --dir . ./build/gengo-cli.wasm -- examples/hello_tutorial.gengo
 ```
 
 Expected output:
@@ -64,7 +64,7 @@ greet(User{ name: "Ada", initial: `A` })
 Run it again:
 
 ```bash
-wasmtime --dir . ./build/gengo-runtime.wasm -- examples/hello_tutorial.gengo
+wasmtime --dir . ./build/gengo-cli.wasm -- examples/hello_tutorial.gengo
 ```
 
 Expected output:

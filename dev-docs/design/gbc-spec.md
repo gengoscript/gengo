@@ -265,7 +265,7 @@ The stdlib is not included in `source_graph_hash` because it is covered by `modu
 
 **`vm_fingerprint`**
 
-For `TARGET_WASM32_WASI`: `SHA-256(gengo-runtime.wasm)` — the same hash computed by `playground/deploy.sh`.
+For `TARGET_WASM32_WASI`: `SHA-256(gengo-cli.wasm)` — the same hash computed by `playground/deploy.sh`.
 
 For other targets: a build-ID, git commit hash, or host-supplied ABI fingerprint agreed upon between compiler and loader. The important property is that this value changes whenever the bytecode instruction set changes, opcode encoding changes, native function binding table changes, or any other change would cause existing bytecode to produce different results.
 

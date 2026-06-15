@@ -41,11 +41,11 @@ pub fn build(b: *std.Build) void {
 
     // ── Main runtime ──────────────────────────────────────────────────────────
 
-    const gengo_debug = addWasmExe(b, "gengo-runtime", "src/main.zig", wasm_target, .Debug, &preset.step, build_opts_mod);
-    const gengo_release = addWasmExe(b, "gengo-runtime", "src/main.zig", wasm_target, .ReleaseFast, &preset.step, build_opts_mod);
+    const gengo_debug = addWasmExe(b, "gengo-cli", "src/main.zig", wasm_target, .Debug, &preset.step, build_opts_mod);
+    const gengo_release = addWasmExe(b, "gengo-cli", "src/main.zig", wasm_target, .ReleaseFast, &preset.step, build_opts_mod);
 
-    const install_debug = installWasm(b, gengo_debug, "gengo-runtime.wasm");
-    const install_release = installWasm(b, gengo_release, "gengo-runtime.wasm");
+    const install_debug = installWasm(b, gengo_debug, "gengo-cli.wasm");
+    const install_release = installWasm(b, gengo_release, "gengo-cli.wasm");
 
     // ── Engine (WASM exports for host embedding) ─────────────────────────────
 
@@ -93,7 +93,7 @@ pub fn build(b: *std.Build) void {
     run_conformance.step.dependOn(&install_debug.step);
     run_conformance.addArg("conformance");
     run_conformance.addArg(wasmtime_opt);
-    run_conformance.addArg("build/gengo-runtime.wasm");
+    run_conformance.addArg("build/gengo-cli.wasm");
 
     // ── Named steps ───────────────────────────────────────────────────────────
 
@@ -116,10 +116,12 @@ pub fn build(b: *std.Build) void {
 
     const net_http_opts = b.addOptions();
     net_http_opts.addOption(bool, "perf", perf_opt);
+    net_http_opts.addOption(bool, "gc_stress", false);
     net_http_opts.addOption(bool, "cap_net", true);
     net_http_opts.addOption(bool, "cap_http", true);
     net_http_opts.addOption(bool, "cap_fs", false);
     net_http_opts.addOption(bool, "predicates", predicates_opt);
+    net_http_opts.addOption([]const u8, "version", gengo_version);
     const net_http_opts_mod = net_http_opts.createModule();
     const engine_net_http = addWasmExe(b, "gengo-engine", "src/engine.zig", wasm_target, .ReleaseFast, &preset.step, net_http_opts_mod);
     const install_engine_net_http = installWasmAs(b, engine_net_http, "gengo-engine-net.wasm");
@@ -128,10 +130,12 @@ pub fn build(b: *std.Build) void {
 
     const fs_opts = b.addOptions();
     fs_opts.addOption(bool, "perf", perf_opt);
+    fs_opts.addOption(bool, "gc_stress", false);
     fs_opts.addOption(bool, "cap_net", false);
     fs_opts.addOption(bool, "cap_http", false);
     fs_opts.addOption(bool, "cap_fs", true);
     fs_opts.addOption(bool, "predicates", predicates_opt);
+    fs_opts.addOption([]const u8, "version", gengo_version);
     const fs_opts_mod = fs_opts.createModule();
     const engine_fs = addWasmExe(b, "gengo-engine", "src/engine.zig", wasm_target, .ReleaseFast, &preset.step, fs_opts_mod);
     const install_engine_fs = installWasmAs(b, engine_fs, "gengo-engine-fs.wasm");
@@ -140,10 +144,12 @@ pub fn build(b: *std.Build) void {
 
     const minimal_opts = b.addOptions();
     minimal_opts.addOption(bool, "perf", perf_opt);
+    minimal_opts.addOption(bool, "gc_stress", false);
     minimal_opts.addOption(bool, "cap_net", false);
     minimal_opts.addOption(bool, "cap_http", false);
     minimal_opts.addOption(bool, "cap_fs", false);
     minimal_opts.addOption(bool, "predicates", predicates_opt);
+    minimal_opts.addOption([]const u8, "version", gengo_version);
     const minimal_opts_mod = minimal_opts.createModule();
     const engine_minimal = addWasmExe(b, "gengo-engine", "src/engine.zig", wasm_target, .ReleaseFast, &preset.step, minimal_opts_mod);
     const install_engine_minimal = installWasmAs(b, engine_minimal, "gengo-engine-minimal.wasm");
@@ -152,9 +158,11 @@ pub fn build(b: *std.Build) void {
 
     // ── Engine (native shared library for host embedding) ──────────────────────
 
+    const native_target = b.standardTargetOptions(.{ .default_target = .{ .cpu_arch = .x86_64, .os_tag = .linux } });
+
     const engine_native_mod = b.createModule(.{
         .root_source_file = b.path("src/engine.zig"),
-        .target = b.graph.host,
+        .target = native_target,
         .optimize = .Debug,
     });
     engine_native_mod.addImport("build_options", build_opts_mod);
@@ -168,7 +176,7 @@ pub fn build(b: *std.Build) void {
 
     const engine_native_release_mod = b.createModule(.{
         .root_source_file = b.path("src/engine.zig"),
-        .target = b.graph.host,
+        .target = native_target,
         .optimize = .ReleaseFast,
     });
     engine_native_release_mod.addImport("build_options", build_opts_mod);
@@ -270,7 +278,7 @@ pub fn build(b: *std.Build) void {
     run_bench.step.dependOn(&install_debug.step);
     run_bench.addArg("bench");
     run_bench.addArg(wasmtime_opt);
-    run_bench.addArg("build/gengo-runtime.wasm");
+    run_bench.addArg("build/gengo-cli.wasm");
     const bench_step = b.step("bench", "Run benchmark suite");
     bench_step.dependOn(&run_bench.step);
 
@@ -278,7 +286,7 @@ pub fn build(b: *std.Build) void {
     run_bench_release.step.dependOn(&install_release.step);
     run_bench_release.addArg("bench");
     run_bench_release.addArg(wasmtime_opt);
-    run_bench_release.addArg("build/gengo-runtime.wasm");
+    run_bench_release.addArg("build/gengo-cli.wasm");
     const bench_release_step = b.step("bench-release", "Run benchmark suite (ReleaseFast)");
     bench_release_step.dependOn(&run_bench_release.step);
 
@@ -309,13 +317,11 @@ pub fn build(b: *std.Build) void {
     run_parity.step.dependOn(&install_debug.step);
     run_parity.addArg("parity");
     run_parity.addArg(wasmtime_opt);
-    run_parity.addArg("build/gengo-runtime.wasm");
+    run_parity.addArg("build/gengo-cli.wasm");
     const parity_step = b.step("parity", "Run host/embedded parity tests");
     parity_step.dependOn(&run_parity.step);
 
     // ── Native CLI ────────────────────────────────────────────────────────────
-
-    const native_target = b.standardTargetOptions(.{ .default_target = .{ .cpu_arch = .x86_64, .os_tag = .linux } });
 
     const native_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
