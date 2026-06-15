@@ -177,7 +177,7 @@ zig build -Dpreset=dev cli
 
 # WASI runtime
 zig build -Dpreset=dev wasi
-wasmtime --dir . ./build/gengo-runtime.wasm -- script.gengo
+wasmtime --dir . ./build/gengo-cli.wasm -- script.gengo
 
 # Engine WASM
 zig build -Dpreset=dev engine-build
