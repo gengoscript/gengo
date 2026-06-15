@@ -3134,6 +3134,13 @@ fn runPanicUnwind(orig_err: anyerror) anyerror!void {
                 tup_obj.* = .{ .array_managed = items };
                 try vmPush(.{ .object = tup_obj });
             }
+            // If the recovered function was called via callGlobal (not from inside
+            // bytecode), ret_ip points past halt/end-of-code.  The ret opcode's
+            // fast path already handles this via call_depth_target; mirror that here
+            // so recover() works when the caller is engine_call, not just the CLI.
+            if (vmState().call_depth_target) |d| {
+                if (vmState().frame_top == d) return;
+            }
             return run();
         }
         vmState().frame_top -= 1;
