@@ -175,9 +175,142 @@ Call `rt.reset()` when you want to discard globals, heap state, and call frames 
 
 Use a fresh runtime when isolation is more important than reuse.
 
+## Request-Loop Pattern
+
+A common embedding pattern is a long-lived runtime that runs different scripts or
+repeatedly calls exported functions. The key is to keep the runtime alive and use
+`reset()` between requests to clear state without deallocating the instance.
+
+```zig
+var rt = api.Runtime.init(.{
+    .allow_io = false,
+    .max_ops = 100_000,
+});
+defer rt.deinit();
+
+// Load the business-logic script once.
+const setup = rt.run(
+    \\pub func allow_update(user string, role string,
+    \\                       age int, score int,
+    \\                       active bool, verified bool,
+    \\                       limit int) bool {
+    \\    return active and verified and age >= 18 and score < limit
+    \\}
+);
+if (setup != .ok) return;
+
+// Later, in a request loop:
+while (try nextRequest(&req)) {
+    const result = rt.call("allow_update", &.{
+        .{ .string = req.user },
+        .{ .string = req.role },
+        .{ .int = req.age },
+        .{ .int = req.score },
+        .{ .boolean = req.active },
+        .{ .boolean = req.verified },
+        .{ .int = req.limit },
+    });
+    switch (result) {
+        .ok => |v| handleDecision(v.boolean),
+        .runtime_error => |e| {
+            logError("policy error: {s} at line {d}\n", .{ e.msg, e.line });
+            handleDecision(false);
+        },
+    }
+    // Clear globals and heap state for the next request.
+    rt.reset();
+}
+```
+
+Use `reset()` when you want to discard globals, heap state, and call frames but
+keep the runtime allocation itself. Use a fresh runtime when isolation is more
+important than reuse.
+
+## Host Modules
+
+Host modules are imported through `host:*` paths and must be registered
+explicitly.
+
+```zig
+var rt = api.Runtime.init(.{
+    .host_modules = &.{.{
+        .name = "host:db",
+        .funcs = &.{.{ .name = "lookup", .arity = 1 }},
+    }},
+});
+```
+
+Use host modules when the script needs a narrow, controlled bridge into host
+logic.
+
+### Host Module Constraints
+
+**Host modules require a callback-capable backend.** The `api.Runtime` Zig
+surface uses `native_backend = .embedded` by default, which does **not**
+provide a callback mechanism for host modules. If you register a host module
+and the script calls it, the VM will raise `HostNativeUnsupported`.
+
+Host modules only work when the runtime is compiled with
+`native_backend = .host`, which is the mode used by the WASM/C-compatible
+engine surface (`engine-api.md`). In that mode, the host registers a callback
+function that the VM invokes through the `gengo_host` import.
+
+If you are embedding from Zig and want script-to-host communication, the
+supported path is to run the script, then call back into the host from the
+result value, or use `std.io` hooks to capture output.
+
+### Host Module Failure Modes
+
+When a host module function is called, the host callback can return one of four
+failure codes:
+
+| Status | Error raised |
+|---|---|
+| `unsupported` | `HostNativeUnsupported` — host does not implement this call ID |
+| `denied` | `PermissionDenied` — host refused the call |
+| `bad_args` | `HostNativeBadArgs` — host rejected the argument types |
+| `failed` | `HostNativeFailed` — host callback failed internally |
+
+These are runtime errors that the embedding code should handle like any other
+`runtime_error` result.
+
+## Call Boundary Types
+
+The `api.Runtime.call()` method accepts any `api.Value` variant:
+
+```zig
+rt.call("foo", &.{ .{ .int = 1 }, .{ .string = "hello" } });
+```
+
+`Value` is a rich tagged union that can carry arrays, maps, structs, named
+types, and closures. This works fine for the Zig-to-VM boundary because both
+sides share the same memory.
+
+The **host-module wire boundary** is more restricted. Values are serialised into
+`ValueWire` structs (scalar tag + payload + length) before crossing to the host
+callback. The wire format supports:
+
+- `null`, `boolean`, `int`, `float`, `rune`, `decimal`
+- `string` (including dyn strings)
+- `error` (message string)
+- `array` of any wire-supported element
+- `map` with string keys and wire-supported values
+- `variant` (converted to a map with `tag` and `value` fields)
+
+Values that are **not** supported across the host wire boundary:
+
+- `named_value` — named types are unwrapped to their raw value
+- `struct_instance` — structs are not serialised
+- `function` / `closure` — functions cannot cross the wire
+- `enum_value` — enum values are not serialised
+
+If a script passes an unsupported value to a host module, the VM will raise
+`UnsupportedHostValueType`.
+
 ## Concurrency
 
-Treat a runtime instance as single-threaded. Do not call into the same `api.Runtime` from multiple threads at once.
+Treat a runtime instance as single-threaded. Do not call into the same
+`api.Runtime` from multiple threads at once.
 
 Separate runtime instances may be used independently.
 
