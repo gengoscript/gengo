@@ -5,60 +5,7 @@
 
 #include <sqlite3.h>
 #include <gengo-engine.h>
-
-/* ── Wire helpers ─────────────────────────────────────────────────────────── */
-
-static uint64_t f64_bits(double x)
-{
-    uint64_t bits = 0;
-    memcpy(&bits, &x, sizeof bits);
-    return bits;
-}
-
-static gengo_value_wire_t wire_null(void)
-{
-    gengo_value_wire_t v;
-    memset(&v, 0, sizeof v);
-    v.tag = GENGO_WIRE_NULL;
-    return v;
-}
-
-static gengo_value_wire_t wire_int(int64_t value)
-{
-    gengo_value_wire_t v = wire_null();
-    v.tag     = GENGO_WIRE_NUMBER;
-    v.flags   = GENGO_WIRE_FLAG_INTEGER;
-    v.payload = f64_bits((double)value);
-    return v;
-}
-
-static gengo_value_wire_t wire_str(const char *s)
-{
-    gengo_value_wire_t v = wire_null();
-    if (!s) return v;
-    v.tag     = GENGO_WIRE_STRING;
-    v.payload = (uint64_t)(uintptr_t)s;
-    v.len     = (uint32_t)strlen(s);
-    return v;
-}
-
-static int wire_as_bool(const gengo_value_wire_t *v)
-{
-    return v->tag == GENGO_WIRE_BOOLEAN && v->payload == 1u;
-}
-
-static void wire_read_str(const gengo_value_wire_t *v, char *buf, size_t buf_size)
-{
-    size_t n;
-    if (buf_size == 0) return;
-    if (v->tag != GENGO_WIRE_STRING || !v->payload || !v->len) {
-        buf[0] = '\0';
-        return;
-    }
-    n = v->len < buf_size ? v->len : buf_size - 1;
-    memcpy(buf, (const void *)(uintptr_t)v->payload, n);
-    buf[n] = '\0';
-}
+#include <gengo-wire.h>
 
 /* ── Policy context ───────────────────────────────────────────────────────── */
 
@@ -115,11 +62,11 @@ static void sql_gengo_validate(sqlite3_context *ctx, int argc, sqlite3_value **a
         return;
     }
 
-    args[0] = wire_int(sqlite3_value_int64(argv[0]));
-    args[1] = wire_str(currency);
-    args[2] = wire_int(sqlite3_value_int64(argv[2]));
+    args[0] = gengo_wire_int(sqlite3_value_int64(argv[0]));
+    args[1] = gengo_wire_str(currency);
+    args[2] = gengo_wire_int(sqlite3_value_int64(argv[2]));
 
-    out = wire_null();
+    out = gengo_wire_null();
     rc  = engine_call(pol->engine, "validate", 8, args, 3, &out);
 
     if (rc == -2) {
@@ -134,14 +81,14 @@ static void sql_gengo_validate(sqlite3_context *ctx, int argc, sqlite3_value **a
         return;
     }
 
-    if (wire_as_bool(&out)) {
+    if (gengo_wire_as_bool(&out)) {
         pol->last_reason[0] = '\0';
         sqlite3_result_int(ctx, 1);
     } else {
         /* Explicit return false — script stored reason in last_reject_reason() */
-        gengo_value_wire_t reason_out = wire_null();
+        gengo_value_wire_t reason_out = gengo_wire_null();
         if (engine_call(pol->engine, "last_reject_reason", 18, NULL, 0, &reason_out) == 0)
-            wire_read_str(&reason_out, pol->last_reason, sizeof pol->last_reason);
+            gengo_wire_read_str(&reason_out, pol->last_reason, sizeof pol->last_reason);
         else
             strncpy(pol->last_reason, "validation failed", sizeof pol->last_reason - 1);
         sqlite3_result_int(ctx, 0);
