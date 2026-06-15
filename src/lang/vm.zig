@@ -1813,7 +1813,12 @@ fn runInner() !void {
                 } else {
                     const name = (try chunk.constAt(name_idx)).string;
                     const slot = globals.findSlot(name) orelse {
-                        vms.setRuntimeErr("'{s}' is not defined", .{name});
+                        const suggestion = findSimilarName(name);
+                        if (suggestion) |s| {
+                            vms.setRuntimeErr("'{s}' is not defined; did you mean '{s}'?", .{ name, s });
+                        } else {
+                            vms.setRuntimeErr("'{s}' is not defined", .{name});
+                        }
                         return error.NotDefined;
                     };
                     chunk.patchByte(ic_base,     @intCast((slot >> 8) & 0xFF));
@@ -2205,7 +2210,8 @@ fn runInner() !void {
                     else => return error.TypeError,
                 };
                 if (!ok) {
-                    vms.setRuntimeErr("assert_type tag={d} failed for v={s}", .{tag, @tagName(v)});
+                    const expected = if (tag == 1) "array" else if (tag == 2) "map" else if (tag == 3) "error" else "unknown";
+                    vms.setRuntimeErr("expected {s}, got {s}", .{ expected, runtimeTypeName(v) });
                     return error.TypeError;
                 }
             },
@@ -3147,6 +3153,43 @@ pub fn run() anyerror!void {
 
 pub fn makeString(s: []const u8) !Value {
     return vmgc.makeDynString(s);
+}
+
+fn levenshteinDistance(a: []const u8, b: []const u8) usize {
+    const m = a.len;
+    const n = b.len;
+    if (m == 0) return n;
+    if (n == 0) return m;
+    var prev: [128]usize = undefined;
+    var cur: [128]usize = undefined;
+    if (n > 127) return @max(m, n);
+    if (m > 127) return @max(m, n);
+    for (0..n + 1) |j| prev[j] = j;
+    for (0..m) |i| {
+        cur[0] = i + 1;
+        for (0..n) |j| {
+            const cost: usize = if (a[i] == b[j]) 0 else 1;
+            cur[j + 1] = @min(@min(cur[j] + 1, prev[j + 1] + 1), prev[j] + cost);
+        }
+        @memcpy(prev[0..n + 1], cur[0..n + 1]);
+    }
+    return cur[n];
+}
+
+fn findSimilarName(name: []const u8) ?[]const u8 {
+    var best: ?[]const u8 = null;
+    var best_dist: usize = 4; // only suggest names within 2 edits
+    var i: usize = 0;
+    const n = globals.len();
+    while (i < n) : (i += 1) {
+        const candidate = globals.nameAt(i);
+        const d = levenshteinDistance(name, candidate);
+        if (d < best_dist) {
+            best_dist = d;
+            best = candidate;
+        }
+    }
+    return best;
 }
 
 pub fn callGlobal(name: []const u8, args: []const Value) !Value {
