@@ -177,15 +177,17 @@ fn jsonStringifyValue(s: *std.json.Stringify, gv: Value) !void {
 pub fn jsonParseNative() !Value {
     const arg = vms.vmState().stack[vms.vmState().stack_top - 1];
     const src = try vms.asStringValue(arg);
-    const alloc = JsonAllocator.allocator();
-    const parsed = std.json.parseFromSlice(std.json.Value, alloc, src, .{}) catch return error.TypeError;
+    const parsed = std.json.parseFromSlice(std.json.Value, std.heap.page_allocator, src, .{}) catch |e| {
+        vms.setRuntimeErr("json.parse: {s}", .{@errorName(e)});
+        return error.TypeError;
+    };
     defer parsed.deinit();
     return jsonValueToGengo(parsed.value);
 }
 
 pub fn jsonStringifyNative() !Value {
     const arg = vms.vmState().stack[vms.vmState().stack_top - 1];
-    var out: std.Io.Writer.Allocating = .init(JsonAllocator.allocator());
+    var out: std.Io.Writer.Allocating = .init(std.heap.page_allocator);
     defer out.deinit();
     var s = std.json.Stringify{ .writer = &out.writer, .options = .{} };
     jsonStringifyValue(&s, arg) catch return error.TypeError;
@@ -196,8 +198,7 @@ pub fn jsonStringifyNative() !Value {
 pub fn jsonValidNative() !Value {
     const arg = vms.vmState().stack[vms.vmState().stack_top - 1];
     const src = try vms.asStringValue(arg);
-    const alloc = JsonAllocator.allocator();
-    const parsed = std.json.parseFromSlice(std.json.Value, alloc, src, .{}) catch return .{ .boolean = false };
+    const parsed = std.json.parseFromSlice(std.json.Value, std.heap.page_allocator, src, .{}) catch return .{ .boolean = false };
     parsed.deinit();
     return .{ .boolean = true };
 }
@@ -206,10 +207,12 @@ pub fn jsonIndentNative() !Value {
     const top = vms.vmState().stack_top;
     const src = try vms.asStringValue(vms.vmState().stack[top - 2]);
     const indent_str = try vms.asStringValue(vms.vmState().stack[top - 1]);
-    const alloc = JsonAllocator.allocator();
-    const parsed = std.json.parseFromSlice(std.json.Value, alloc, src, .{}) catch return error.TypeError;
+    const parsed = std.json.parseFromSlice(std.json.Value, std.heap.page_allocator, src, .{}) catch |e| {
+        vms.setRuntimeErr("json.indent: {s}", .{@errorName(e)});
+        return error.TypeError;
+    };
     defer parsed.deinit();
-    var out: std.Io.Writer.Allocating = .init(alloc);
+    var out: std.Io.Writer.Allocating = .init(std.heap.page_allocator);
     defer out.deinit();
     const Ws = @TypeOf(@as(std.json.Stringify.Options, .{}).whitespace);
     const ws: Ws = if (std.mem.eql(u8, indent_str, "\t")) .indent_tab
