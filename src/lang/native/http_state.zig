@@ -204,66 +204,209 @@ fn httpFetchBuiltin(
     maybe_headers: ?std.StringHashMap([]const u8),
     _timeout_ms: i64,
 ) !HttpResult {
-    _ = _timeout_ms; // TODO: std.http.Client does not expose per-request timeout easily
+    _ = _timeout_ms;
 
-    const io_ctx = std.Io.Threaded.global_single_threaded.io();
-    var client = std.http.Client{
-        .allocator = std.heap.page_allocator,
-        .io = io_ctx,
-    };
-    defer client.deinit();
+    const uri = std.Uri.parse(url) catch return error.CapabilityError;
 
-    var writer: std.Io.Writer.Allocating = .init(std.heap.page_allocator);
+    var host_buf: [std.Io.net.HostName.max_len]u8 = undefined;
+    const host = uri.getHost(&host_buf) catch return error.CapabilityError;
+    const is_tls = std.mem.eql(u8, uri.scheme, "https");
+    const port = uri.port orelse if (is_tls) @as(u16, 443) else 80;
 
-    // Build extra headers if provided
-    var extra_headers: [16]std.http.Header = undefined;
-    var extra_header_count: usize = 0;
-    if (maybe_headers) |hdrs| {
-        var it = hdrs.iterator();
-        while (it.next()) |entry| : (extra_header_count += 1) {
-            if (extra_header_count >= 16) break;
-            extra_headers[extra_header_count] = .{
-                .name = entry.key_ptr.*,
-                .value = entry.value_ptr.*,
-            };
-        }
+    const io = std.Io.Threaded.global_single_threaded.io();
+
+    var stream = host.connect(io, port, .{ .mode = .stream }) catch return error.CapabilityError;
+    defer stream.close(io);
+
+    const tls_min_buf = std.crypto.tls.Client.min_buffer_len;
+    var stream_read_buf: [tls_min_buf]u8 = undefined;
+    var stream_write_buf: [tls_min_buf]u8 = undefined;
+    var tls_read_buf: [tls_min_buf]u8 = undefined;
+    var tls_write_buf: [tls_min_buf]u8 = undefined;
+
+    var sr = stream.reader(io, &stream_read_buf);
+    var sw = stream.writer(io, &stream_write_buf);
+
+    var tls_client: ?std.crypto.tls.Client = null;
+    if (is_tls) {
+        var entropy: [std.crypto.tls.Client.Options.entropy_len]u8 = undefined;
+        io.vtable.random(io.userdata, &entropy);
+        const now = std.Io.Timestamp.now(io, .real);
+        tls_client = std.crypto.tls.Client.init(
+            &sr.interface,
+            &sw.interface,
+            .{
+                .host = .{ .explicit = host.bytes },
+                .ca = .{ .no_verification = {} },
+                .write_buffer = &tls_write_buf,
+                .read_buffer = &tls_read_buf,
+                .entropy = &entropy,
+                .realtime_now = now,
+            },
+        ) catch return error.CapabilityError;
     }
 
-    const method_enum: std.http.Method = blk: {
-        if (std.mem.eql(u8, method, "GET")) break :blk .GET;
-        if (std.mem.eql(u8, method, "POST")) break :blk .POST;
-        if (std.mem.eql(u8, method, "PUT")) break :blk .PUT;
-        if (std.mem.eql(u8, method, "DELETE")) break :blk .DELETE;
-        if (std.mem.eql(u8, method, "HEAD")) break :blk .HEAD;
-        if (std.mem.eql(u8, method, "PATCH")) break :blk .PATCH;
-        if (std.mem.eql(u8, method, "OPTIONS")) break :blk .OPTIONS;
-        break :blk .GET;
-    };
+    const actual_reader: *std.Io.Reader = if (tls_client) |*tc| &tc.reader else &sr.interface;
+    const actual_writer: *std.Io.Writer = if (tls_client) |*tc| &tc.writer else &sw.interface;
 
-    const res = client.fetch(.{
-        .location = .{ .url = url },
-        .method = method_enum,
-        .payload = if (maybe_body) |p| p else null,
-        .extra_headers = if (extra_header_count > 0) extra_headers[0..extra_header_count] else &.{},
-        .response_writer = &writer.writer,
-    }) catch return error.CapabilityError;
+    // Build HTTP request
+    var req_alloc = std.Io.Writer.Allocating.init(std.heap.page_allocator);
+    defer req_alloc.deinit();
+    const req_w = &req_alloc.writer;
 
-    // Copy body out before writer.deinit() frees the underlying buffer.
-    const resp_body = std.heap.page_allocator.dupe(u8, writer.written()) catch "";
-    writer.deinit();
+    var uri_buf: [4096]u8 = undefined;
+    const path = if (uri.path.isEmpty()) "/" else (uri.path.toRaw(&uri_buf) catch "/");
+    try req_w.print("{s} {s}", .{ method, path });
+    if (uri.query) |q| {
+        const q_raw = q.toRaw(&uri_buf) catch "";
+        if (q_raw.len > 0) try req_w.print("?{s}", .{q_raw});
+    }
+    try req_w.writeAll(" HTTP/1.1\r\n");
+    try req_w.print("Host: {s}\r\n", .{host.bytes});
+    try req_w.writeAll("User-Agent: gengo\r\n");
+    try req_w.writeAll("Accept: */*\r\n");
+    if (maybe_body) |body| try req_w.print("Content-Length: {d}\r\n", .{body.len});
+    if (maybe_headers) |hdrs| {
+        var it = hdrs.iterator();
+        while (it.next()) |entry| try req_w.print("{s}: {s}\r\n", .{ entry.key_ptr.*, entry.value_ptr.* });
+    }
+    try req_w.writeAll("\r\n");
 
+    _ = try actual_writer.writeVec(&.{req_alloc.written()});
+    try actual_writer.flush();
+    if (is_tls) try sw.interface.flush();
+
+    if (maybe_body) |body| {
+        _ = try actual_writer.writeVec(&.{body});
+        try actual_writer.flush();
+        if (is_tls) try sw.interface.flush();
+    }
+
+    // Parse response status line and headers
+    var status_code: u16 = 0;
+    var content_length: ?u64 = null;
+    var transfer_chunked = false;
+    var content_encoding: std.http.ContentEncoding = .identity;
     var resp_headers = std.StringHashMap([]const u8).init(std.heap.page_allocator);
     errdefer resp_headers.deinit();
 
-    // std.http.Client.fetch response headers are not easily accessible in this Zig version.
-    // For the built-in default, we leave headers empty — the host handler is the path
-    // for full header fidelity.
+    // Status line: "HTTP/1.1 200 OK\r\n"
+    {
+        const line = (try actual_reader.takeDelimiter('\n')) orelse return error.CapabilityError;
+        const trimmed = (if (line.len > 0 and line[line.len - 1] == '\r') line[0 .. line.len - 1] else line);
+        var parts = std.mem.splitScalar(u8, trimmed, ' ');
+        _ = parts.next(); // skip "HTTP/1.1"
+        const status_str = parts.next() orelse return error.CapabilityError;
+        status_code = std.fmt.parseInt(u16, status_str, 10) catch return error.CapabilityError;
+    }
 
-    const status = @as(i32, @intCast(@intFromEnum(res.status)));
-    const ok = status >= 200 and status < 300;
+    // Headers
+    var header_values: [64]struct { name: []const u8, value: []const u8 } = undefined;
+    var header_count: usize = 0;
+
+    while (true) {
+        const line = (try actual_reader.takeDelimiter('\n')) orelse break;
+        const trimmed = (if (line.len > 0 and line[line.len - 1] == '\r') line[0 .. line.len - 1] else line);
+        if (trimmed.len == 0) break; // end of headers
+
+        const colon_idx = std.mem.indexOfScalar(u8, trimmed, ':') orelse continue;
+        const name = trimmed[0..colon_idx];
+        const value = std.mem.trim(u8, trimmed[colon_idx + 1 ..], " ");
+
+        if (header_count < header_values.len) {
+            const name_dup = std.heap.page_allocator.dupe(u8, name) catch continue;
+            const value_dup = std.heap.page_allocator.dupe(u8, value) catch {
+                std.heap.page_allocator.free(name_dup);
+                continue;
+            };
+            header_values[header_count] = .{ .name = name_dup, .value = value_dup };
+            header_count += 1;
+        }
+
+        if (std.ascii.eqlIgnoreCase(name, "content-length")) {
+            content_length = std.fmt.parseInt(u64, value, 10) catch null;
+        } else if (std.ascii.eqlIgnoreCase(name, "transfer-encoding")) {
+            if (std.mem.indexOf(u8, value, "chunked") != null) transfer_chunked = true;
+        } else if (std.ascii.eqlIgnoreCase(name, "content-encoding")) {
+            if (std.mem.eql(u8, value, "gzip")) content_encoding = .gzip;
+        }
+    }
+
+    var i: usize = 0;
+    while (i < header_count) : (i += 1) {
+        resp_headers.put(header_values[i].name, header_values[i].value) catch {};
+    }
+
+    // Read body
+    var body: std.ArrayList(u8) = .empty;
+    errdefer body.deinit(std.heap.page_allocator);
+
+    if (transfer_chunked) {
+        while (true) {
+            const size_line = (try actual_reader.takeDelimiter('\n')) orelse break;
+            const chunk_size_str = if (size_line.len > 0 and size_line[size_line.len - 1] == '\r') size_line[0 .. size_line.len - 1] else size_line;
+            const chunk_size = std.fmt.parseInt(usize, chunk_size_str, 16) catch break;
+            if (chunk_size == 0) break;
+
+            const offset = body.items.len;
+            try body.resize(std.heap.page_allocator, offset + chunk_size);
+            try actual_reader.readSliceAll(body.items[offset..]);
+            _ = try actual_reader.takeDelimiter('\n'); // trailing \r\n
+        }
+        // Skip trailers
+        while (true) {
+            const trail = (try actual_reader.takeDelimiter('\n')) orelse break;
+            if (trail.len <= 1) break;
+        }
+    } else if (content_length) |len| {
+        if (len > 0) {
+            try body.resize(std.heap.page_allocator, len);
+            try actual_reader.readSliceAll(body.items);
+        }
+    } else {
+        // Read until connection close
+        try std.Io.Reader.appendRemaining(actual_reader, std.heap.page_allocator, &body, .unlimited);
+    }
+
+    // Decompress gzip body
+    var decompress: std.http.Decompress = undefined;
+    var decompress_buf: [std.compress.flate.max_window_len]u8 = undefined;
+    var decompressed_alloc: ?[]u8 = null;
+
+    if (content_encoding != .identity) {
+        var body_reader = std.Io.Reader.fixed(body.items);
+        const transfer_reader = switch (content_encoding) {
+            .gzip => blk: {
+                decompress = .{ .flate = .init(&body_reader, .gzip, &decompress_buf) };
+                break :blk &decompress.flate.reader;
+            },
+            .deflate => blk: {
+                decompress = .{ .flate = .init(&body_reader, .zlib, &decompress_buf) };
+                break :blk &decompress.flate.reader;
+            },
+            else => &body_reader,
+        };
+        decompressed_alloc = try transfer_reader.allocRemaining(std.heap.page_allocator, std.Io.Limit.unlimited);
+
+        resp_headers.put("content-encoding", "identity") catch {};
+        body.deinit(std.heap.page_allocator);
+    }
+
+    const ok = status_code >= 200 and status_code < 300;
+
+    if (decompressed_alloc) |d| {
+        return .{
+            .status = @intCast(status_code),
+            .body = d,
+            .headers = resp_headers,
+            .ok = ok,
+            .body_needs_free = true,
+        };
+    }
+
     return .{
-        .status = status,
-        .body = resp_body,
+        .status = @intCast(status_code),
+        .body = body.items,
         .headers = resp_headers,
         .ok = ok,
         .body_needs_free = true,
