@@ -180,6 +180,44 @@ pub fn matchesTypeSpec(v: Value, spec: FieldTypeSpec) bool {
     return false;
 }
 
+fn fieldTypeAltStr(buf: *[128]u8, alt: FieldTypeAlt) []const u8 {
+    return switch (alt.typ) {
+        .any => "any",
+        .null_t => "null",
+        .int => "int",
+        .float => "float",
+        .decimal_t => "decimal",
+        .rune_t => "rune",
+        .boolean => "bool",
+        .string => "string",
+        .error_t => "error",
+        .array => if (alt.elem_spec) |es| blk: {
+            var inner_buf: [128]u8 = undefined;
+            const inner = fieldTypeSpecStr(&inner_buf, es);
+            break :blk std.fmt.bufPrint(buf[0..], "[]{s}", .{inner}) catch "array";
+        } else "array",
+        .map => if (alt.key_spec) |ks| blk: {
+            var key_buf: [128]u8 = undefined;
+            const keystr = fieldTypeSpecStr(&key_buf, ks);
+            if (alt.val_spec) |vs| {
+                var val_buf: [128]u8 = undefined;
+                const valstr = fieldTypeSpecStr(&val_buf, vs);
+                break :blk std.fmt.bufPrint(buf[0..], "map[{s}]{s}", .{ keystr, valstr }) catch "map";
+            }
+            break :blk std.fmt.bufPrint(buf[0..], "map[{s}]", .{keystr}) catch "map";
+        } else "map",
+        .struct_t => alt.struct_name,
+        .interface_t => alt.interface_name,
+        .named_t => alt.named_name,
+        .variant_t => alt.named_name,
+        .func_t => "func",
+    };
+}
+
+fn fieldTypeSpecStr(buf: *[128]u8, spec: FieldTypeSpec) []const u8 {
+    return fieldTypeAltStr(buf, spec.alts[0]);
+}
+
 fn fieldTypeSpecEqual(a: FieldTypeSpec, b: FieldTypeSpec) bool {
     if (a.alts.len != b.alts.len) return false;
     var i: usize = 0;
@@ -500,12 +538,30 @@ pub fn enforceFuncArgTypes(f: FuncObj, argc: u8) !void {
     var i: usize = 0;
     while (i < fixed) : (i += 1) {
         const arg = vms.vmState().stack[vms.vmState().stack_top - argc + i];
-        if (!matchesTypeSpec(arg, f.param_types[i])) return error.TypeError;
+        if (!matchesTypeSpec(arg, f.param_types[i])) {
+            var buf: [128]u8 = undefined;
+            const expected = fieldTypeSpecStr(&buf, f.param_types[i]);
+            if (f.name.len > 0) {
+                vms.setRuntimeErr("{s}: arg {}: expected {s}, got {s}", .{ f.name, i + 1, expected, runtimeTypeName(arg) });
+            } else {
+                vms.setRuntimeErr("arg {}: expected {s}, got {s}", .{ i + 1, expected, runtimeTypeName(arg) });
+            }
+            return error.TypeError;
+        }
     }
     if (f.is_variadic) {
         while (i < @as(usize, argc)) : (i += 1) {
             const arg = vms.vmState().stack[vms.vmState().stack_top - argc + i];
-            if (!matchesTypeSpec(arg, f.variadic_type)) return error.TypeError;
+            if (!matchesTypeSpec(arg, f.variadic_type)) {
+                var buf: [128]u8 = undefined;
+                const expected = fieldTypeSpecStr(&buf, f.variadic_type);
+                if (f.name.len > 0) {
+                    vms.setRuntimeErr("{s}: arg {}: expected {s}, got {s}", .{ f.name, i + 1, expected, runtimeTypeName(arg) });
+                } else {
+                    vms.setRuntimeErr("arg {}: expected {s}, got {s}", .{ i + 1, expected, runtimeTypeName(arg) });
+                }
+                return error.TypeError;
+            }
         }
     }
 }
@@ -516,7 +572,16 @@ pub fn enforceFuncReturnTypes(f: FuncObj, retval: Value) !void {
     // Named returns are programmer-controlled and may be null-initialized; skip enforcement.
     if (f.named_return_count > 0) return;
     if (f.return_types.len == 1) {
-        if (!matchesTypeSpec(retval, f.return_types[0])) return error.TypeError;
+        if (!matchesTypeSpec(retval, f.return_types[0])) {
+            var buf: [128]u8 = undefined;
+            const expected = fieldTypeSpecStr(&buf, f.return_types[0]);
+            if (f.name.len > 0) {
+                vms.setRuntimeErr("{s}: expected return {s}, got {s}", .{ f.name, expected, runtimeTypeName(retval) });
+            } else {
+                vms.setRuntimeErr("expected return {s}, got {s}", .{ expected, runtimeTypeName(retval) });
+            }
+            return error.TypeError;
+        }
         return;
     }
     if (!(retval == .object and vms.isArrayObject(retval.object))) return error.TypeError;
@@ -524,7 +589,16 @@ pub fn enforceFuncReturnTypes(f: FuncObj, retval: Value) !void {
     if (arr.len != f.return_types.len) return error.ArityMismatch;
     var i: usize = 0;
     while (i < arr.len) : (i += 1) {
-        if (!matchesTypeSpec(arr[i], f.return_types[i])) return error.TypeError;
+        if (!matchesTypeSpec(arr[i], f.return_types[i])) {
+            var buf: [128]u8 = undefined;
+            const expected = fieldTypeSpecStr(&buf, f.return_types[i]);
+            if (f.name.len > 0) {
+                vms.setRuntimeErr("{s}: return {}: expected {s}, got {s}", .{ f.name, i + 1, expected, runtimeTypeName(arr[i]) });
+            } else {
+                vms.setRuntimeErr("return {}: expected {s}, got {s}", .{ i + 1, expected, runtimeTypeName(arr[i]) });
+            }
+            return error.TypeError;
+        }
     }
 }
 
