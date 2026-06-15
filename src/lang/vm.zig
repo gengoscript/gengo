@@ -388,10 +388,23 @@ fn checkNamedTypePredicate(nt_obj: *Object, inner: Value) !void {
             return err;
         };
         if (result != .boolean or !result.boolean) {
+            var vbuf: [64]u8 = undefined;
+            const vstr: []const u8 = switch (inner) {
+                .int     => |n| std.fmt.bufPrint(&vbuf, "{d}", .{@as(i64, @intFromFloat(@trunc(n)))}) catch "?",
+                .float   => |n| std.fmt.bufPrint(&vbuf, "{d}", .{n}) catch "?",
+                .decimal => |d| std.fmt.bufPrint(&vbuf, "{d}", .{d}) catch "?",
+                .string  => |s| s,
+                .boolean => |b| if (b) "true" else "false",
+                .rune    => |r| blk: {
+                    const n = std.unicode.utf8Encode(r, vbuf[0..4]) catch 0;
+                    break :blk vbuf[0..n];
+                },
+                else     => "?",
+            };
             if (nt.predicate_msg) |msg| {
-                vms.setRuntimeErr("{s}", .{msg});
+                vms.setRuntimeErr("{s}({s}): {s}", .{ nt.name, vstr, msg });
             } else {
-                vms.setRuntimeErr("predicate failed for {s}", .{nt.name});
+                vms.setRuntimeErr("predicate failed for {s}({s})", .{ nt.name, vstr });
             }
             return error.PredicateFailed;
         }
@@ -427,8 +440,14 @@ fn performCall(argc: u8) !void {
     switch (obj.*) {
         .function => |f| {
             if (f.is_variadic) {
-                if (argc < f.arity - 1) { vms.setRuntimeErr("expected at least {} argument(s), got {}", .{ f.arity - 1, argc }); return error.ArityMismatch; }
-            } else if (f.arity != argc) { vms.setRuntimeErr("expected {} argument(s), got {}", .{ f.arity, argc }); return error.ArityMismatch; }
+                if (argc < f.arity - 1) {
+                    if (f.name.len > 0) { vms.setRuntimeErr("{s}: expected at least {} argument(s), got {}", .{ f.name, f.arity - 1, argc }); } else { vms.setRuntimeErr("expected at least {} argument(s), got {}", .{ f.arity - 1, argc }); }
+                    return error.ArityMismatch;
+                }
+            } else if (f.arity != argc) {
+                if (f.name.len > 0) { vms.setRuntimeErr("{s}: expected {} argument(s), got {}", .{ f.name, f.arity, argc }); } else { vms.setRuntimeErr("expected {} argument(s), got {}", .{ f.arity, argc }); }
+                return error.ArityMismatch;
+            }
             if (f.has_typed_params) try vmtyp.enforceFuncArgTypes(f, argc);
             try prepareVariadicCall(f, argc);
             if (vmState().frame_top >= vmState().frames.len) return error.CallStackOverflow;
@@ -446,8 +465,14 @@ fn performCall(argc: u8) !void {
         .closure => |cl| {
             const f = cl.func.function;
             if (f.is_variadic) {
-                if (argc < f.arity - 1) { vms.setRuntimeErr("expected at least {} argument(s), got {}", .{ f.arity - 1, argc }); return error.ArityMismatch; }
-            } else if (f.arity != argc) { vms.setRuntimeErr("expected {} argument(s), got {}", .{ f.arity, argc }); return error.ArityMismatch; }
+                if (argc < f.arity - 1) {
+                    if (f.name.len > 0) { vms.setRuntimeErr("{s}: expected at least {} argument(s), got {}", .{ f.name, f.arity - 1, argc }); } else { vms.setRuntimeErr("expected at least {} argument(s), got {}", .{ f.arity - 1, argc }); }
+                    return error.ArityMismatch;
+                }
+            } else if (f.arity != argc) {
+                if (f.name.len > 0) { vms.setRuntimeErr("{s}: expected {} argument(s), got {}", .{ f.name, f.arity, argc }); } else { vms.setRuntimeErr("expected {} argument(s), got {}", .{ f.arity, argc }); }
+                return error.ArityMismatch;
+            }
             if (f.has_typed_params) try vmtyp.enforceFuncArgTypes(f, argc);
             try prepareVariadicCall(f, argc);
             if (vmState().frame_top >= vmState().frames.len) return error.CallStackOverflow;
