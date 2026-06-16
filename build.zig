@@ -14,6 +14,7 @@ pub fn build(b: *std.Build) void {
     const cap_http_opt = b.option(bool, "cap_http", "Include cap:http capability") orelse true;
     const cap_fs_opt = b.option(bool, "cap_fs", "Include cap:fs capability") orelse true;
     const predicates_opt = b.option(bool, "predicates", "Enable runtime predicate checks") orelse true;
+    const gengo_host_opt = b.option(bool, "gengo_host", "Include gengo_host import for host module callbacks") orelse true;
     const gengo_version = "0.5.0-pre1";
     const build_opts = b.addOptions();
     build_opts.addOption(bool, "perf", perf_opt);
@@ -22,6 +23,7 @@ pub fn build(b: *std.Build) void {
     build_opts.addOption(bool, "cap_http", cap_http_opt);
     build_opts.addOption(bool, "cap_fs", cap_fs_opt);
     build_opts.addOption(bool, "predicates", predicates_opt);
+    build_opts.addOption(bool, "gengo_host", gengo_host_opt);
     build_opts.addOption([]const u8, "version", gengo_version);
     const build_opts_mod = build_opts.createModule();
 
@@ -121,6 +123,7 @@ pub fn build(b: *std.Build) void {
     net_http_opts.addOption(bool, "cap_http", true);
     net_http_opts.addOption(bool, "cap_fs", false);
     net_http_opts.addOption(bool, "predicates", predicates_opt);
+    net_http_opts.addOption(bool, "gengo_host", true);
     net_http_opts.addOption([]const u8, "version", gengo_version);
     const net_http_opts_mod = net_http_opts.createModule();
     const engine_net_http = addWasmExe(b, "gengo-engine", "src/engine.zig", wasm_target, .ReleaseFast, &preset.step, net_http_opts_mod);
@@ -135,6 +138,7 @@ pub fn build(b: *std.Build) void {
     fs_opts.addOption(bool, "cap_http", false);
     fs_opts.addOption(bool, "cap_fs", true);
     fs_opts.addOption(bool, "predicates", predicates_opt);
+    fs_opts.addOption(bool, "gengo_host", true);
     fs_opts.addOption([]const u8, "version", gengo_version);
     const fs_opts_mod = fs_opts.createModule();
     const engine_fs = addWasmExe(b, "gengo-engine", "src/engine.zig", wasm_target, .ReleaseFast, &preset.step, fs_opts_mod);
@@ -149,6 +153,7 @@ pub fn build(b: *std.Build) void {
     minimal_opts.addOption(bool, "cap_http", false);
     minimal_opts.addOption(bool, "cap_fs", false);
     minimal_opts.addOption(bool, "predicates", predicates_opt);
+    minimal_opts.addOption(bool, "gengo_host", false);
     minimal_opts.addOption([]const u8, "version", gengo_version);
     const minimal_opts_mod = minimal_opts.createModule();
     const engine_minimal = addWasmExe(b, "gengo-engine", "src/engine.zig", wasm_target, .ReleaseFast, &preset.step, minimal_opts_mod);

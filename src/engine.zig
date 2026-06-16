@@ -21,7 +21,9 @@ const WireTag = host_abi.WireTag;
 
 const is_wasm = builtin.target.cpu.arch == .wasm32;
 // Signals host_abi that gengo_native_call should be emitted as a WASM import.
-pub const is_embedded_engine = true;
+// Controlled by the `gengo_host` build option so engine-minimal (and similar
+// no-host-module builds) produce a WASM without a gengo_host import section entry.
+pub const is_embedded_engine = build_opts.gengo_host;
 // On WASM all pointers are 32-bit offsets into linear memory; on native they are
 // full-width host pointers.  All exported functions use PtrInt for pointer params
 // so the C header can declare them as `const char *` / `void *` on both targets.
