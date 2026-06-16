@@ -2195,6 +2195,7 @@ fn runInner() !void {
                     continue;
                 }
                 const v = vms.unboxNamed(raw);
+                if (v == .null) return error.TypeError;
                 const out = try vmnative.nativeConvToString(v);
                 _ = try vmPop();
                 try vmPush(out);
