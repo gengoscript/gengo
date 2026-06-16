@@ -90,13 +90,15 @@ pub const NamedTypeObj = struct {
     scale: u8 = 0,
     min: f64 = 0,
     max: f64 = 0,
-    parent_name: ?[]const u8 = null,   // non-null for subtype declarations
-    parent_obj: ?*Object = null,       // lazily resolved from parent_name at runtime
-    elem_spec: ?FieldTypeSpec = null,  // for array_t: element type
-    key_spec: ?FieldTypeSpec = null,   // for map_t: key type
-    val_spec: ?FieldTypeSpec = null,   // for map_t: value type
-    predicate: ?*Object = null,          // predicate closure (null if unconstrained)
-    predicate_msg: ?[]const u8 = null,   // custom failure message (null = generic)
+    parent_name: ?[]const u8 = null,
+    parent_obj: ?*Object = null,
+    elem_spec: ?FieldTypeSpec = null,
+    key_spec: ?FieldTypeSpec = null,
+    val_spec: ?FieldTypeSpec = null,
+    predicate: ?*Object = null,
+    predicate_msg: ?[]const u8 = null,
+    has_default: bool = false,
+    default_val: Value = undefined,
 };
 pub const NamedValueObj = struct { typ: *Object, value: Value };
 pub const EnumTypeObj = struct {

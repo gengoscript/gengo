@@ -535,6 +535,43 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
         }
     }
 
+    var has_default = false;
+    var default_val: value_mod.Value = undefined;
+    if (c.match(.kw_default)) {
+        switch (base) {
+            .int, .float, .rune, .decimal => {
+                if (c.cur.typ != .number) return c.err("expected number after 'default'", .{});
+                default_val = .{ .float = common.parseFloat(c.cur.src) orelse return c.err("invalid number literal", .{}) };
+                c.advance();
+            },
+            .string => {
+                if (c.cur.typ != .string) return c.err("expected string literal after 'default'", .{});
+                default_val = .{ .string = try c.copyName(c.cur.src) };
+                c.advance();
+            },
+            .bool => {
+                if (c.match(.kw_true)) {
+                    default_val = .{ .boolean = true };
+                } else if (c.match(.kw_false)) {
+                    default_val = .{ .boolean = false };
+                } else {
+                    return c.err("expected true or false after 'default'", .{});
+                }
+            },
+            else => return c.err("'default' not supported for this base type", .{}),
+        }
+        has_default = true;
+    }
+
+    // Validate default value against range at compile time
+    if (has_range and has_default) {
+        const df = default_val.float;
+        if (df < min or df > max) {
+            c.setErr("type '{s}': default value {d} is outside range {d}..{d}", .{ name, df, min, max });
+            return error.RangeError;
+        }
+    }
+
     if (!c.skipping_test_body) try c.registry.addNamedType(.{
         .name = name,
         .base = base,
@@ -548,6 +585,8 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
         .elem_spec = parent_elem_spec,
         .key_spec = parent_key_spec,
         .val_spec = parent_val_spec,
+        .has_default = has_default,
+        .default_val = default_val,
     });
 
     const qparent_name: ?[]const u8 = if (parent_name_str) |pn|
@@ -570,6 +609,8 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
         .elem_spec = parent_elem_spec,
         .key_spec = parent_key_spec,
         .val_spec = parent_val_spec,
+        .has_default = has_default,
+        .default_val = default_val,
     } };
     try chunk.emitConst(.{ .object = nt }, kw.line);
     if (predicate_uv_count > 0) {
@@ -1009,6 +1050,49 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
         }
     }
 
+    var has_default = false;
+    var default_val: value_mod.Value = undefined;
+    if (c.match(.kw_default)) {
+        switch (base) {
+            .int, .float, .rune, .decimal => {
+                if (c.cur.typ != .number) return c.err("expected number after 'default'", .{});
+                default_val = .{ .float = common.parseFloat(c.cur.src) orelse return c.err("invalid number literal", .{}) };
+                c.advance();
+            },
+            .string => {
+                if (c.cur.typ != .string) return c.err("expected string literal after 'default'", .{});
+                default_val = .{ .string = try c.copyName(c.cur.src) };
+                c.advance();
+            },
+            .bool => {
+                if (c.match(.kw_true)) {
+                    default_val = .{ .boolean = true };
+                } else if (c.match(.kw_false)) {
+                    default_val = .{ .boolean = false };
+                } else {
+                    return c.err("expected true or false after 'default'", .{});
+                }
+            },
+            else => return c.err("'default' not supported for this base type", .{}),
+        }
+        has_default = true;
+    }
+
+    // Inherit parent's default if subtype doesn't declare its own
+    if (!has_default and parent_info.has_default) {
+        default_val = parent_info.default_val;
+        has_default = true;
+    }
+
+    // Validate default against subtype range at compile time
+    if (has_range and has_default) {
+        const df = default_val.float;
+        if (df < min or df > max) {
+            c.setErr("subtype '{s}': default value {d} is outside range {d}..{d}", .{ name, df, min, max });
+            return error.RangeError;
+        }
+    }
+
     if (!c.skipping_test_body) try c.registry.addNamedType(.{
         .name = name,
         .base = base,
@@ -1019,6 +1103,8 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
         .max = max,
         .parent_name = parent_name,
         .predicate_msg = predicate_msg,
+        .has_default = has_default,
+        .default_val = default_val,
     });
 
     const qname = try c.qualifyTypeName(name);
@@ -1036,6 +1122,8 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
         .parent_name = qparent,
         .predicate = predicate_obj,
         .predicate_msg = predicate_msg,
+        .has_default = has_default,
+        .default_val = default_val,
     } };
     try chunk.emitConst(.{ .object = nt }, kw.line);
     if (predicate_uv_count > 0) {
