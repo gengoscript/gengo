@@ -404,6 +404,37 @@ switch ev {
 }
 ```
 
+## Comparing by Type
+
+A union-typed value (`int|string`, or a wider union) can be compared by its
+runtime type with `.type`:
+
+```gengo
+type Person struct { id int|string }
+p := Person{ id: 42 }
+
+if p.id.type == int { std.io.println("numeric id") }
+
+switch p.id.type {
+    case int { std.io.println("numeric id") }
+    case string { std.io.println("string id") }
+}
+```
+
+`.type` is intentionally restricted — it is **not** a general expression.
+It is only valid directly compared with `==`/`!=` (on either side: `p.id.type
+== int` and `int == p.id.type` both work), or as a `switch` scrutinee. It
+cannot be assigned to a variable, passed as an argument, or chained further
+(`x.type.foo` is a compile error), and a `switch x.type { }` cannot mix in
+variant-arm patterns (`case .arm_name`). The right-hand side must be a
+concrete type: a primitive (`int`, `float`, `bool`, `string`, `rune`,
+`decimal`, `error`, `map`) or a declared named/struct/enum/variant type —
+**not** an interface, since interfaces are method-set constraints, not
+concrete runtime types, so `.type` can never equal an interface name.
+
+The result of a `.type` comparison is an ordinary `bool`, freely usable
+anywhere a `bool` is — including combined with `&&`/`||`.
+
 ## Interfaces
 
 Interfaces declare method sets; any value whose type has the methods

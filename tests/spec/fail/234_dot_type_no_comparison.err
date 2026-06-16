@@ -1,0 +1,1 @@
+'.type' can only be compared with '==' or '!=', or used as a switch scrutinee

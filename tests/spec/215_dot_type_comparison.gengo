@@ -1,0 +1,68 @@
+std := import("std")
+core := std.core
+
+type Age int range 0..150
+type Cat struct { name string }
+type Result variant { ok(value int), err(msg string) }
+type Status enum { active, inactive }
+type Money decimal 2
+
+type Box struct { v Cat|Age|Result|Status|Money|float|bool|string }
+
+vals := [
+    Box{ v: Cat{ name: "tom" } },
+    Box{ v: Age(5) },
+    Box{ v: Result.ok(1) },
+    Box{ v: Status.active },
+    Box{ v: Money(9.99) },
+    Box{ v: 1.5 },
+    Box{ v: true },
+    Box{ v: "hi" },
+]
+
+errVal := core.error("boom")
+if errVal.type == error { std.io.println("standalone: error") }
+if error == errVal.type { std.io.println("standalone rev: error") }
+
+// forward comparison
+for b in vals {
+    if b.v.type == Cat { std.io.println("fwd: Cat") }
+    if b.v.type == Age { std.io.println("fwd: Age") }
+    if b.v.type == Result { std.io.println("fwd: Result") }
+    if b.v.type == Status { std.io.println("fwd: Status") }
+    if b.v.type == Money { std.io.println("fwd: Money") }
+    if b.v.type == float { std.io.println("fwd: float") }
+    if b.v.type == bool { std.io.println("fwd: bool") }
+    if b.v.type == string { std.io.println("fwd: string") }
+}
+
+// reversed comparison
+for b in vals {
+    if Cat == b.v.type { std.io.println("rev: Cat") }
+    if int == b.v.type { std.io.println("rev: int (should never print)") }
+}
+
+// != on both sides
+n := Age(5)
+if n.type != string { std.io.println("neq fwd ok") }
+if string != n.type { std.io.println("neq rev ok") }
+
+// switch dispatch
+for b in vals {
+    switch b.v.type {
+        case Cat { std.io.println("switch: Cat") }
+        case Age { std.io.println("switch: Age") }
+        case Result { std.io.println("switch: Result") }
+        case Status { std.io.println("switch: Status") }
+        case Money { std.io.println("switch: Money") }
+        case float { std.io.println("switch: float") }
+        case bool { std.io.println("switch: bool") }
+        case string { std.io.println("switch: string") }
+        default { std.io.println("switch: other") }
+    }
+}
+
+// the boolean result of a '.type' comparison is an ordinary, freely usable bool
+ok := n.type == Age
+std.io.println(ok)
+if ok && true { std.io.println("composable with &&") }

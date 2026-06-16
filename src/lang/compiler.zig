@@ -118,6 +118,18 @@ pub const Compiler = struct {
     loop_body_depth: u8 = 0,
     skipping_test_body: bool = false,
 
+    // `.type` is only valid directly compared with ==/!=, or as a switch
+    // scrutinee. parsing_switch_scrutinee gates the latter; switch_scrutinee_is_type
+    // is set by the '.type' handler in infixExpr and read back by switchStmt.
+    parsing_switch_scrutinee: bool = false,
+    switch_scrutinee_is_type: bool = false,
+    // Set while parsing the right operand of `<typename> == <expr>`, so the
+    // '.type' handler knows a trailing '.type' here is expected (not an error)
+    // even though it isn't immediately followed by == / !=. type_suffix_consumed
+    // reports back whether the operand actually ended in '.type'.
+    require_type_suffix: bool = false,
+    type_suffix_consumed: bool = false,
+
     // ── Lifecycle ────────────────────────────────────────────────────────────────
 
     pub fn init(src: []const u8, options: CompilerOptions) Compiler {
@@ -995,6 +1007,9 @@ pub const Compiler = struct {
     }
     pub fn expr(self: *Compiler) !void {
         return compiler_expr.expr(self);
+    }
+    pub fn typeNameLiteral(self: *Compiler) !void {
+        return compiler_expr.typeNameLiteral(self);
     }
     fn forInStmt(self: *Compiler) anyerror!void {
         return compiler_stmts.forInStmt(self);

@@ -51,6 +51,44 @@ pub fn arrayLit(c: anytype) !void {
     try chunk.emit2(@intFromEnum(Op.build_array), count, c.prev.line);
 }
 
+// Returns true for an identifier token that names a concrete, comparable
+// type — usable opposite a '.type' expression. Interfaces are excluded
+// ('.type' never equals an interface name, since interfaces aren't concrete
+// runtime types); unknown names are left for the caller to reject.
+fn isTypeNamePrimitive(name: []const u8) bool {
+    const prims = [_][]const u8{ "int", "float", "bool", "string", "rune", "decimal", "error", "map" };
+    for (prims) |p| {
+        if (common.streq(name, p)) return true;
+    }
+    return false;
+}
+
+// Validates an already-consumed identifier token as a concrete type name and
+// emits the string constant matching what `std.core.type_of` would produce
+// for a value of that type — '.type' compares by that same name.
+fn validateAndEmitTypeName(c: anytype, name: Token) !void {
+    if (!isTypeNamePrimitive(name.src)) {
+        if (c.registry.hasInterfaceType(name.src)) {
+            c.setErr("'{s}' is an interface, not a concrete type — '.type' never equals an interface name", .{name.src});
+            return error.UnexpectedToken;
+        }
+        if (!(c.registry.hasNamedType(name.src) or c.registry.hasStructTypeLocal(name.src) or c.registry.hasVariantType(name.src))) {
+            c.setErr("unknown type name '{s}'", .{name.src});
+            return error.UnknownTypeName;
+        }
+    }
+    try chunk.emitConst(.{ .string = name.src }, name.line);
+}
+
+// Parses a bare type name used opposite a `.type` expression — either as the
+// other side of == / != , or as a `case` label in a `.type`-headed switch.
+pub fn typeNameLiteral(c: anytype) !void {
+    if (c.cur.typ != .ident) { c.setErr("expected a type name, found {s}", .{c.tokenName(c.cur.typ)}); return error.ExpectedTypeName; }
+    const name = c.cur;
+    c.advance();
+    try validateAndEmitTypeName(c, name);
+}
+
 pub fn expr(c: anytype) !void {
     c.std_namespace_path = null;
     try parsePrecedence(c, .assign);
@@ -83,6 +121,29 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
     const col = c.prev.col;
 
     if (tt == .dot) {
+        if (c.cur.typ == .kw_type) {
+            c.advance(); // consume 'type'
+            try chunk.emitOp(.type_name, line);
+            if (c.check(.eq_eq) or c.check(.bang_eq)) {
+                const is_eq = c.cur.typ == .eq_eq;
+                c.advance();
+                try typeNameLiteral(c, );
+                try chunk.emitOp(.eq, line);
+                if (!is_eq) try chunk.emitOp(.not, line);
+                return;
+            }
+            if (c.parsing_switch_scrutinee) {
+                c.switch_scrutinee_is_type = true;
+                return;
+            }
+            if (c.require_type_suffix) {
+                c.require_type_suffix = false;
+                c.type_suffix_consumed = true;
+                return;
+            }
+            c.setErr("'.type' can only be compared with '==' or '!=', or used as a switch scrutinee", .{});
+            return error.UnexpectedToken;
+        }
         if (c.cur.typ != .ident) { c.setErr("expected property name, found {s}", .{c.tokenName(c.cur.typ)}); return error.ExpectedPropertyName; }
         const prop = c.cur;
         c.advance();
@@ -378,6 +439,29 @@ pub fn varExpr(c: anytype, name: Token) !void {
     }
     if (c.check(.lbrace) and looksLikeStructLiteral(c, )) {
         try structInstanceLit(c, name);
+        return;
+    }
+    // `<typename> == <expr>.type` — the reverse of `<expr>.type == <typename>`.
+    // Only known type names are eligible, so an ordinary variable compared
+    // with == is never affected.
+    if ((c.check(.eq_eq) or c.check(.bang_eq)) and
+        (isTypeNamePrimitive(name.src) or c.registry.hasNamedType(name.src) or
+         c.registry.hasStructTypeLocal(name.src) or c.registry.hasVariantType(name.src) or
+         c.registry.hasInterfaceType(name.src)))
+    {
+        try validateAndEmitTypeName(c, name);
+        const is_eq = c.cur.typ == .eq_eq;
+        c.advance();
+        c.require_type_suffix = true;
+        c.type_suffix_consumed = false;
+        try expr(c, );
+        if (!c.type_suffix_consumed) {
+            c.require_type_suffix = false;
+            c.setErr("expected '{s}' to be compared against a '.type' expression", .{name.src});
+            return error.UnexpectedToken;
+        }
+        try chunk.emitOp(.eq, name.line);
+        if (!is_eq) try chunk.emitOp(.not, name.line);
         return;
     }
     try c.emitGetVar(name);
