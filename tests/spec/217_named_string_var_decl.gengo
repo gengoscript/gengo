@@ -1,0 +1,18 @@
+std := import("std")
+
+type Username string
+type Age int range 0..150
+
+// Bug 1: zero-value var decl for named scalar types
+var u Username
+std.io.println(u == Username(""))
+
+var a Age
+std.io.println(a)
+
+// Bug 2: re-constructing an already-typed value
+y := Username(Username("ada"))
+std.io.println(y == Username("ada"))
+
+var b Username = Username("ada")
+std.io.println(b == Username("ada"))

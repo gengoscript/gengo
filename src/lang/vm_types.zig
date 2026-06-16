@@ -5,6 +5,7 @@ const vms = @import("vm_state.zig");
 const vmgc = @import("vm_gc.zig");
 const Value = @import("value.zig").Value;
 const Object = @import("value.zig").Object;
+const MapEntry = @import("value.zig").MapEntry;
 const FieldTypeAlt = @import("value.zig").FieldTypeAlt;
 const FieldTypeSpec = @import("value.zig").FieldTypeSpec;
 const StructFieldSpec = @import("value.zig").StructFieldSpec;
@@ -388,12 +389,46 @@ fn wrapCycleValue(min: f64, max: f64, n: f64, continuous: bool) !f64 {
 pub fn constructNamedType(typ_obj: *Object, arg: Value) !Value {
     if (typ_obj.* != .named_type) return error.TypeError;
     const nt = typ_obj.named_type;
+
+    // Unwrap an already-typed named value so that re-constructing a value
+    // of the same named type works consistently across all bases
+    // (like valueAsNumber does for numeric bases).
+    const effective_arg = if (arg == .object and arg.object.* == .named_value)
+        arg.object.named_value.value
+    else
+        arg;
+
+    // Convert null to the base type's zero value so that
+    // `var x T` with no initializer works for named scalar types.
+    // The zero value still passes through range/cycle/predicate checks.
+    const zero_arg = if (effective_arg == .null) zero: {
+        switch (nt.base) {
+            .int => break :zero Value{ .int = 0 },
+            .float => break :zero Value{ .float = 0 },
+            .decimal => break :zero Value{ .decimal = 0 },
+            .bool => break :zero Value{ .boolean = false },
+            .string => break :zero Value{ .string = "" },
+            .rune => break :zero Value{ .rune = 0 },
+            .array_t => {
+                const obj = try vmgc.vmAllocObject();
+                obj.* = .{ .array = &[_]Value{} };
+                break :zero Value{ .object = obj };
+            },
+            .map_t => {
+                const obj = try vmgc.vmAllocObject();
+                obj.* = .{ .map = &[_]MapEntry{} };
+                break :zero Value{ .object = obj };
+            },
+            .enum_t => return error.TypeError,
+        }
+    } else effective_arg;
+
     var base_v: Value = undefined;
     switch (nt.base) {
         .int => {
-            const n = vms.valueAsNumber(arg) catch |err| {
+            const n = vms.valueAsNumber(zero_arg) catch |err| {
                 if (err == error.TypeError) {
-                    vms.setRuntimeErr("cannot construct {s} from {s}; convert to {s} first", .{ nt.name, runtimeTypeName(arg), namedBaseName(nt.base) });
+                    vms.setRuntimeErr("cannot construct {s} from {s}; convert to {s} first", .{ nt.name, runtimeTypeName(zero_arg), namedBaseName(nt.base) });
                     announcePanicMsg();
                 }
                 return err;
@@ -403,7 +438,7 @@ pub fn constructNamedType(typ_obj: *Object, arg: Value) !Value {
                 return error.RangeError;
             }
             if (@trunc(n) != n) {
-                vms.setRuntimeErr("cannot construct {s} from {s}; convert to {s} first", .{ nt.name, runtimeTypeName(arg), namedBaseName(nt.base) });
+                vms.setRuntimeErr("cannot construct {s} from {s}; convert to {s} first", .{ nt.name, runtimeTypeName(zero_arg), namedBaseName(nt.base) });
                 announcePanicMsg();
                 return error.TypeError;
             }
@@ -425,9 +460,9 @@ pub fn constructNamedType(typ_obj: *Object, arg: Value) !Value {
             }
         },
         .float => {
-            const n = vms.valueAsNumber(arg) catch |err| {
+            const n = vms.valueAsNumber(zero_arg) catch |err| {
                 if (err == error.TypeError) {
-                    vms.setRuntimeErr("cannot construct {s} from {s}; convert to {s} first", .{ nt.name, runtimeTypeName(arg), namedBaseName(nt.base) });
+                    vms.setRuntimeErr("cannot construct {s} from {s}; convert to {s} first", .{ nt.name, runtimeTypeName(zero_arg), namedBaseName(nt.base) });
                     announcePanicMsg();
                 }
                 return err;
@@ -459,7 +494,7 @@ pub fn constructNamedType(typ_obj: *Object, arg: Value) !Value {
         .decimal => {
             const scale = nt.scale;
             const factor = std.math.pow(f64, 10.0, @floatFromInt(scale));
-            const scaled: i64 = switch (arg) {
+            const scaled: i64 = switch (zero_arg) {
                 .int => |n| blk: {
                     const raw = @round(n * factor);
                     if (!std.math.isFinite(raw)) return error.TypeError;
@@ -495,7 +530,7 @@ pub fn constructNamedType(typ_obj: *Object, arg: Value) !Value {
             }
         },
         .rune => {
-            const r: u21 = switch (arg) {
+            const r: u21 = switch (zero_arg) {
                 .rune => |rv| rv,
                 .int => |n| blk: {
                     const t = @trunc(n);
@@ -522,32 +557,32 @@ pub fn constructNamedType(typ_obj: *Object, arg: Value) !Value {
             }
         },
         .string => {
-            if (!vms.isStringValue(arg)) return error.TypeError;
-            const s = try vms.asStringValue(arg);
+            if (!vms.isStringValue(zero_arg)) return error.TypeError;
+            const s = try vms.asStringValue(zero_arg);
             const ds = try vmgc.makeDynString(s);
             try vms.pushTempRoot(ds);
             defer vms.popTempRoot();
             return makeNamedValue(typ_obj, ds);
         },
         .bool => {
-            if (arg != .boolean) return error.TypeError;
-            base_v = arg;
+            if (zero_arg != .boolean) return error.TypeError;
+            base_v = zero_arg;
         },
         .array_t => {
-            if (!(arg == .object and vms.isArrayObject(arg.object))) return error.TypeError;
+            if (!(zero_arg == .object and vms.isArrayObject(zero_arg.object))) return error.TypeError;
             if (nt.elem_spec) |es| {
-                const items = try vms.asArraySlice(arg.object);
+                const items = try vms.asArraySlice(zero_arg.object);
                 var i: usize = 0;
                 while (i < items.len) : (i += 1) {
                     if (!matchesTypeSpec(items[i], es)) return error.TypeError;
                 }
             }
-            return makeNamedValue(typ_obj, arg);
+            return makeNamedValue(typ_obj, zero_arg);
         },
         .map_t => {
-            if (!(arg == .object and vms.isMapObject(arg.object))) return error.TypeError;
+            if (!(zero_arg == .object and vms.isMapObject(zero_arg.object))) return error.TypeError;
             if (nt.key_spec) |ks| {
-                const entries = try vms.asMapSlice(arg.object);
+                const entries = try vms.asMapSlice(zero_arg.object);
                 var i: usize = 0;
                 while (i < entries.len) : (i += 1) {
                     if (!matchesTypeSpec(entries[i].key, ks)) return error.TypeError;
@@ -556,7 +591,7 @@ pub fn constructNamedType(typ_obj: *Object, arg: Value) !Value {
                     }
                 }
             }
-            return makeNamedValue(typ_obj, arg);
+            return makeNamedValue(typ_obj, zero_arg);
         },
         .enum_t => return error.TypeError,
     }
