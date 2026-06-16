@@ -7,3 +7,4 @@ pub const installStdGlobal = native_main.installStdGlobal;
 pub const installHostModules = native_main.installHostModules;
 pub const installCapabilityModules = native_main.installCapabilityModules;
 pub const nativeConvToString = native_core.nativeConvToString;
+pub const nativeTypeNameValue = native_core.nativeTypeNameValue;

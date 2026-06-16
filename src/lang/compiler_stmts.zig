@@ -1313,7 +1313,14 @@ pub fn stmt(c: anytype) anyerror!void {
 }
 
 pub fn switchStmt(c: anytype) anyerror!void {
+    c.parsing_switch_scrutinee = true;
+    c.switch_scrutinee_is_type = false;
     try c.expr();
+    c.parsing_switch_scrutinee = false;
+    // Capture into a local before parsing case bodies: a nested switch in a
+    // case body would otherwise clobber this shared compiler field.
+    const is_type_switch = c.switch_scrutinee_is_type;
+    c.switch_scrutinee_is_type = false;
     try c.consume(.lbrace);
 
     var end_jumps: [MaxSwitchJumps]usize = undefined;
@@ -1323,6 +1330,7 @@ pub fn switchStmt(c: anytype) anyerror!void {
     while (!c.check(.rbrace) and !c.check(.eof)) {
         if (c.match(.kw_case)) {
             if (c.check(.dot)) {
+                if (is_type_switch) return c.err("'case .arm_name' is a variant pattern and cannot be used in a '.type' switch", .{});
                 // Variant arm pattern: case .arm_name { } or case .arm_name(binding) { }
                 const dot_line = c.cur.line;
                 c.advance(); // consume '.'
@@ -1366,7 +1374,11 @@ pub fn switchStmt(c: anytype) anyerror!void {
                 // If matched (no jump), pop the switch-val before running the body so
                 // the stack is balanced on the jump-to-end path.
                 try chunk.emitOp(.dup, c.prev.line);
-                try c.expr();
+                if (is_type_switch) {
+                    try c.typeNameLiteral();
+                } else {
+                    try c.expr();
+                }
                 try chunk.emitBinOpFused(.eq, c.prev.line);
                 const next_case = try chunk.emitJump(.jif_pop, c.prev.line);
                 try chunk.emitOp(.pop, c.prev.line); // consume the switch value

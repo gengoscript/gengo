@@ -1,0 +1,23 @@
+standalone: error
+standalone rev: error
+fwd: Cat
+fwd: Age
+fwd: Result
+fwd: Status
+fwd: Money
+fwd: float
+fwd: bool
+fwd: string
+rev: Cat
+neq fwd ok
+neq rev ok
+switch: Cat
+switch: Age
+switch: Result
+switch: Status
+switch: Money
+switch: float
+switch: bool
+switch: string
+true
+composable with &&

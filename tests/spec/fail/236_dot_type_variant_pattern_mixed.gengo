@@ -1,0 +1,5 @@
+type Result variant { ok(value int), err(msg string) }
+x := 5
+switch x.type {
+    case .ok { }
+}

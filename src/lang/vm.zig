@@ -2248,6 +2248,10 @@ fn runInner() !void {
                     return error.TypeError;
                 }
             },
+            .type_name => {
+                const v = try vmPop();
+                try vmPush(vmnative.nativeTypeNameValue(v));
+            },
             .neg => {
                 const v = try vmPeek(0);
                 const n = vms.valueAsNumber(v) catch {

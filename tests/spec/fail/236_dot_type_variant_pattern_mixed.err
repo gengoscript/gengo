@@ -1,0 +1,1 @@
+'case .arm_name' is a variant pattern and cannot be used in a '.type' switch
