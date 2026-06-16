@@ -58,7 +58,7 @@ pub fn emitZeroValue(c: anytype, tc: TypeCheck, line: u32) !void {
     }
 }
 
-fn emitNamedDefault(c: anytype, name: []const u8, line: u32) !void {
+pub fn emitNamedDefault(c: anytype, name: []const u8, line: u32) !void {
     const type_info = c.registry.getNamedTypeInfo(name) orelse {
         try chunk.emitOp(.null_val, line);
         return;

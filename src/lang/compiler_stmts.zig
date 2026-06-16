@@ -1542,39 +1542,7 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
             }
         } else if (has_keyword and !is_const and inferred_type_check != .none) {
             if (inferred_type_check == .named) {
-                const type_info = c.registry.getNamedTypeInfo(inferred_type_check.named);
-                if (type_info) |ti| {
-                    if (ti.has_default) {
-                        switch (ti.base) {
-                            .int, .float, .rune, .decimal => try chunk.emitConst(.{ .float = ti.default_val.float }, name.line),
-                            .string => try chunk.emitConst(.{ .string = ti.default_val.string }, name.line),
-                            .bool => {
-                                if (ti.default_val.boolean) {
-                                    try chunk.emitOp(.true_val, name.line);
-                                } else {
-                                    try chunk.emitOp(.false_val, name.line);
-                                }
-                            },
-                            .array_t => try chunk.emit2(@intFromEnum(Op.build_array), 0, name.line),
-                            .map_t => try chunk.emit2(@intFromEnum(Op.build_map), 0, name.line),
-                            .enum_t => try chunk.emitOp(.null_val, name.line),
-                        }
-                    } else {
-                        switch (ti.base) {
-                            .int => try chunk.emitConst(.{ .int = 0 }, name.line),
-                            .float => try chunk.emitConst(.{ .float = 0 }, name.line),
-                            .decimal => try chunk.emitConst(.{ .decimal = 0 }, name.line),
-                            .string => try chunk.emitConst(.{ .string = "" }, name.line),
-                            .rune => try chunk.emitConst(.{ .rune = 0 }, name.line),
-                            .bool => try chunk.emitOp(.false_val, name.line),
-                            .array_t => try chunk.emit2(@intFromEnum(Op.build_array), 0, name.line),
-                            .map_t => try chunk.emit2(@intFromEnum(Op.build_map), 0, name.line),
-                            .enum_t => try chunk.emitOp(.null_val, name.line),
-                        }
-                    }
-                } else {
-                    try chunk.emitOp(.null_val, name.line);
-                }
+                try c.emitNamedDefault(inferred_type_check.named, name.line);
                 try chunk.emit2(@intFromEnum(Op.call), 1, name.line);
             } else {
                 try c.emitZeroValue(inferred_type_check, name.line);
