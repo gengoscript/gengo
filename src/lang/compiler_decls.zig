@@ -35,7 +35,7 @@ const MaxScopes = ct.MaxScopes;
 const StructTypeObj = value_mod.StructTypeObj;
 const InterfaceTypeObj = value_mod.InterfaceTypeObj;
 
-pub fn emitZeroValue(_: anytype, tc: TypeCheck, line: u32) !void {
+pub fn emitZeroValue(c: anytype, tc: TypeCheck, line: u32) !void {
     switch (tc) {
         .none => try chunk.emitOp(.null_val, line),
         .prim => |p| switch (p) {
@@ -50,11 +50,50 @@ pub fn emitZeroValue(_: anytype, tc: TypeCheck, line: u32) !void {
         .assert_map => try chunk.emit2(@intFromEnum(Op.build_map), 0, line),
         .assert_err => try chunk.emitOp(.null_val, line),
         .named => {
-            try chunk.emitOp(.null_val, line);
+            try emitNamedDefault(c, tc.named, line);
             try chunk.emitGetGlobal(tc.named, line);
             try chunk.emit2(@intFromEnum(Op.call), 1, line);
         },
         .interface_type, .struct_type => try chunk.emitOp(.null_val, line),
+    }
+}
+
+fn emitNamedDefault(c: anytype, name: []const u8, line: u32) !void {
+    const type_info = c.registry.getNamedTypeInfo(name) orelse {
+        try chunk.emitOp(.null_val, line);
+        return;
+    };
+    if (type_info.has_default) {
+        switch (type_info.base) {
+            .int, .float, .rune, .decimal => {
+                try chunk.emitConst(.{ .float = type_info.default_val.float }, line);
+            },
+            .string => {
+                try chunk.emitConst(.{ .string = type_info.default_val.string }, line);
+            },
+            .bool => {
+                if (type_info.default_val.boolean) {
+                    try chunk.emitOp(.true_val, line);
+                } else {
+                    try chunk.emitOp(.false_val, line);
+                }
+            },
+            .array_t => try chunk.emit2(@intFromEnum(Op.build_array), 0, line),
+            .map_t => try chunk.emit2(@intFromEnum(Op.build_map), 0, line),
+            .enum_t => try chunk.emitOp(.null_val, line),
+        }
+    } else {
+        switch (type_info.base) {
+            .int => try chunk.emitConst(.{ .int = 0 }, line),
+            .float => try chunk.emitConst(.{ .float = 0 }, line),
+            .decimal => try chunk.emitConst(.{ .decimal = 0 }, line),
+            .string => try chunk.emitConst(.{ .string = "" }, line),
+            .rune => try chunk.emitConst(.{ .rune = 0 }, line),
+            .bool => try chunk.emitOp(.false_val, line),
+            .array_t => try chunk.emit2(@intFromEnum(Op.build_array), 0, line),
+            .map_t => try chunk.emit2(@intFromEnum(Op.build_map), 0, line),
+            .enum_t => try chunk.emitOp(.null_val, line),
+        }
     }
 }
 
