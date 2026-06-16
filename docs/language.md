@@ -370,6 +370,28 @@ std.io.println(h1 + h2)           // prints: <p>hi</p>
 std.io.println(Html("<hr>") + Html("<br>"))
 ```
 
+### Named Array and Map Types
+
+A named type can also wrap an array or map, using the same bracket syntax as
+struct fields and `var` declarations:
+
+```gengo
+type Points []int
+type Scores map[string]int   // or: type Scores [string]int
+
+p := Points([1, 2, 3])
+s := Scores({"alice": 100})
+```
+
+`[]T` is the only array spelling. `[K]V` and `map[K]V` are both valid map
+spellings with identical meaning — `map` is optional, not required.
+
+A bracketed type with nothing after the closing `]` (`[K]` with no `V`) is a
+compile error rather than being read as "array of `K`". This is deliberate:
+that shape is what a forgotten map value type looks like, and silently
+reinterpreting it as an array would hide exactly that mistake. Write `[]K`
+if you actually want an array of `K`.
+
 Mixing different named string types or a named type with a bare string is a
 `TypeError`.
 

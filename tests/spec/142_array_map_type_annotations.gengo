@@ -1,7 +1,7 @@
 std := import("std")
 
-// 1. [T] array in function param
-func sum(xs [int]) int {
+// 1. []T array in function param
+func sum(xs []int) int {
     total := 0
     for x in xs {
         total += x
@@ -16,8 +16,8 @@ func get(m [string]int, k string) int {
 }
 std.io.println(get({"a": 10, "b": 20}, "b"))
 
-// 3. [T] typed decl
-var xs [int] = [4, 5, 6]
+// 3. []T typed decl
+var xs []int = [4, 5, 6]
 total := 0
 for x in xs {
     total += x
@@ -28,8 +28,8 @@ std.io.println(total)
 var m [string]int = {"x": 100, "y": 200}
 std.io.println(m["x"] + m["y"])
 
-// 5. Nested [[int]]
-func flatten(xs [[int]]) int {
+// 5. Nested [][]int
+func flatten(xs [][]int) int {
     total := 0
     for inner in xs {
         for x in inner {

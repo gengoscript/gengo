@@ -1,0 +1,3 @@
+func get(m [string]) int {
+    return 0
+}
