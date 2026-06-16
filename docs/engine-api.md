@@ -238,6 +238,31 @@ Build the native shared library:
 zig build -Dpreset=dev engine-native
 ```
 
+### The `gengo_host` Import
+
+`gengo-engine.wasm` (and the `-net`/`-fs` variants) import one function from
+module `gengo_host`, even if the script never calls a host module:
+
+```c
+int32_t gengo_native_call(uint16_t id, ValueWire* args_ptr, uint16_t argc, ValueWire* out_ptr);
+```
+
+Every `WebAssembly.instantiate`/`instantiateStreaming` call must supply this
+import or instantiation fails with `TypeError: import object field 'gengo_host'
+is not an Object`. If the host never registers host modules, a stub that
+always returns `unsupported` (`1`) is sufficient:
+
+```js
+gengo_host: {
+  gengo_native_call: () => 1,
+},
+```
+
+`engine-minimal` is built with the `gengo_host` build option disabled
+(`zig build -Dgengo_host=false ...`) and omits this import entirely, so hosts
+using that variant don't need to provide a stub. See `host-abi.md` and
+`embedding.md#host-module-constraints` for the full callback ABI.
+
 ## Further Reading
 
 - `embedding.md` for Zig embedding
