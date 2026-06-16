@@ -483,7 +483,8 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
     var max: f64 = 0;
     if (c.check(.kw_range) or c.check(.kw_cycle)) {
         const constraint = try parseConstraintBounds(c, );
-        if (constraint.is_cycle and base != .int) return c.err("'cycle' constraint requires integer base type", .{});
+        if (constraint.is_cycle and base != .int and base != .float and base != .decimal)
+            return c.err("'cycle' constraint requires a numeric base type (int, float, or decimal)", .{});
         has_range = true;
         is_cycle = constraint.is_cycle;
         min = constraint.min;
@@ -952,15 +953,16 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
     var min: f64 = parent_info.min;
     var max: f64 = parent_info.max;
     const scale = parent_info.scale;
-    const is_numeric = base == .int or base == .float or base == .rune;
-    const is_scalar = is_numeric or base == .string or base == .bool or base == .decimal;
+    const is_numeric = base == .int or base == .float or base == .rune or base == .decimal;
+    const is_scalar = is_numeric or base == .string or base == .bool;
     if (!is_scalar)
         return c.err("subtype parent must be a scalar named type (int, float, decimal, string, bool, or rune base)", .{});
 
     if (c.check(.kw_range) or c.check(.kw_cycle)) {
-        if (!is_numeric) return c.err("range and cycle constraints require a numeric parent type (int, float, or rune)", .{});
+        if (!is_numeric) return c.err("range and cycle constraints require a numeric parent type (int, float, decimal, or rune)", .{});
         const constraint = try parseConstraintBounds(c, );
-        if (constraint.is_cycle and base != .int) return c.err("'cycle' constraint requires integer base type", .{});
+        if (constraint.is_cycle and base != .int and base != .float and base != .decimal)
+            return c.err("'cycle' constraint requires a numeric base type (int, float, or decimal)", .{});
         if (parent_info.has_range) {
             if (constraint.min < parent_info.min or constraint.max > parent_info.max) {
                 c.setErr("range {d}..{d} exceeds parent type bounds {d}..{d}", .{ constraint.min, constraint.max, parent_info.min, parent_info.max });

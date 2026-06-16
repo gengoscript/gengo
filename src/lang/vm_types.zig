@@ -344,28 +344,37 @@ pub fn makeNamedValue(typ_obj: *Object, inner: Value) !Value {
     return .{ .object = obj };
 }
 
-fn wrapCycleValue(min: f64, max: f64, n: f64) !f64 {
-    const exact_int_limit: f64 = 9007199254740992.0;
-    if (@trunc(min) == min and @trunc(max) == max and @trunc(n) == n and
-        min >= -exact_int_limit and min <= exact_int_limit and
-        max >= -exact_int_limit and max <= exact_int_limit and
-        n >= -exact_int_limit and n <= exact_int_limit)
-    {
-        const imin: i64 = @intFromFloat(min);
-        const imax: i64 = @intFromFloat(max);
-        const inn: i64 = @intFromFloat(n);
-        const sub = @subWithOverflow(imax, imin);
-        if (sub[1] != 0) return error.RangeError;
-        const add = @addWithOverflow(sub[0], 1);
-        if (add[1] != 0) return error.RangeError;
-        const ispan = add[0];
-        if (ispan > 0) {
-            const ioffset = @mod(inn - imin, ispan);
-            return @floatFromInt(imin + ioffset);
+// `continuous` selects the wraparound convention:
+//   - discrete (int):  domain is `span = (max - min) + 1` inclusive integer
+//     steps, e.g. `cycle 0..23` has 24 distinct values and 24 wraps to 0.
+//   - continuous (float/decimal): the endpoints are identified with each
+//     other, e.g. `cycle 0.0..360.0` treats 360.0 as the same point as 0.0,
+//     so `span = max - min` and the maximum itself wraps to the minimum.
+fn wrapCycleValue(min: f64, max: f64, n: f64, continuous: bool) !f64 {
+    if (!continuous) {
+        const exact_int_limit: f64 = 9007199254740992.0;
+        if (@trunc(min) == min and @trunc(max) == max and @trunc(n) == n and
+            min >= -exact_int_limit and min <= exact_int_limit and
+            max >= -exact_int_limit and max <= exact_int_limit and
+            n >= -exact_int_limit and n <= exact_int_limit)
+        {
+            const imin: i64 = @intFromFloat(min);
+            const imax: i64 = @intFromFloat(max);
+            const inn: i64 = @intFromFloat(n);
+            const sub = @subWithOverflow(imax, imin);
+            if (sub[1] != 0) return error.RangeError;
+            const add = @addWithOverflow(sub[0], 1);
+            if (add[1] != 0) return error.RangeError;
+            const ispan = add[0];
+            if (ispan > 0) {
+                const ioffset = @mod(inn - imin, ispan);
+                return @floatFromInt(imin + ioffset);
+            }
         }
     }
-    const span = (max - min) + 1.0;
-    if (span == max - min) return error.RangeError;
+    const span = if (continuous) max - min else (max - min) + 1.0;
+    if (span <= 0) return error.RangeError;
+    if (!continuous and span == max - min) return error.RangeError;
     var offset = common.fmod(n - min, span);
     if (offset < 0) offset += span;
     const result = min + offset;
@@ -393,7 +402,7 @@ pub fn constructNamedType(typ_obj: *Object, arg: Value) !Value {
             }
             if (nt.has_range and (n < nt.min or n > nt.max)) {
                 if (nt.is_cycle) {
-                    const wrapped = wrapCycleValue(nt.min, nt.max, n) catch |err| {
+                    const wrapped = wrapCycleValue(nt.min, nt.max, n, false) catch |err| {
                         if (err == error.RangeError) {
                             vms.setRuntimeErr("{s}: {d} is outside cyclic range {d}..{d}", .{ nt.name, n, nt.min, nt.max });
                         }
@@ -416,9 +425,12 @@ pub fn constructNamedType(typ_obj: *Object, arg: Value) !Value {
                 }
                 return err;
             };
-            if (nt.has_range and (n < nt.min or n > nt.max)) {
+            // Continuous cycle: max is identified with min, so n == max must
+            // also wrap (unlike a plain range, where max is a valid value).
+            const out_of_bounds = if (nt.is_cycle) n < nt.min or n >= nt.max else n < nt.min or n > nt.max;
+            if (nt.has_range and out_of_bounds) {
                 if (nt.is_cycle) {
-                    const wrapped = wrapCycleValue(nt.min, nt.max, n) catch |err| {
+                    const wrapped = wrapCycleValue(nt.min, nt.max, n, true) catch |err| {
                         if (err == error.RangeError) {
                             vms.setRuntimeErr("{s}: {d} is outside cyclic range {d}..{d}", .{ nt.name, n, nt.min, nt.max });
                         }
@@ -452,13 +464,23 @@ pub fn constructNamedType(typ_obj: *Object, arg: Value) !Value {
                 .decimal => |d| d,
                 else => return error.TypeError,
             };
-            base_v = .{ .decimal = scaled };
             if (nt.has_range) {
                 const fv = @as(f64, @floatFromInt(scaled)) / factor;
-                if (fv < nt.min or fv > nt.max) {
-                    setNamedRangeError(typ_obj, fv);
-                    return error.RangeError;
+                // Continuous cycle: max is identified with min, so fv == max
+                // must also wrap (unlike a plain range, where max is valid).
+                const out_of_bounds = if (nt.is_cycle) fv < nt.min or fv >= nt.max else fv < nt.min or fv > nt.max;
+                if (out_of_bounds) {
+                    if (nt.is_cycle) {
+                        base_v = .{ .decimal = try wrapDecimalCycle(nt, fv, factor) };
+                    } else {
+                        setNamedRangeError(typ_obj, fv);
+                        return error.RangeError;
+                    }
+                } else {
+                    base_v = .{ .decimal = scaled };
                 }
+            } else {
+                base_v = .{ .decimal = scaled };
             }
         },
         .rune => {
@@ -525,20 +547,56 @@ pub fn constructNamedType(typ_obj: *Object, arg: Value) !Value {
     return makeNamedValue(typ_obj, base_v);
 }
 
+// Wraps an out-of-range decimal value (given as its unscaled real value `fv`)
+// into the named type's cyclic domain and rescales it back to the fixed-point
+// integer representation.
+fn wrapDecimalCycle(nt: @import("value.zig").NamedTypeObj, fv: f64, factor: f64) !i64 {
+    const wrapped = wrapCycleValue(nt.min, nt.max, fv, true) catch |err| {
+        if (err == error.RangeError) {
+            vms.setRuntimeErr("{s}: {d} is outside cyclic range {d}..{d}", .{ nt.name, fv, nt.min, nt.max });
+        }
+        return err;
+    };
+    const raw = @round(wrapped * factor);
+    if (!std.math.isFinite(raw) or raw < -std.math.pow(f64, 2.0, 63.0) or raw >= std.math.pow(f64, 2.0, 63.0)) return error.TypeError;
+    return @intFromFloat(raw);
+}
+
 pub fn coerceNamedTypeResult(typ_obj: *Object, arg: Value) !Value {
     if (typ_obj.* != .named_type) return error.TypeError;
     const nt = typ_obj.named_type;
     if (!nt.is_cycle) return constructNamedType(typ_obj, arg);
-    if (nt.base != .int) return error.TypeError;
-    const n = try vms.valueAsNumber(arg);
-    if (@trunc(n) != n) return error.TypeError;
-    const wrapped = wrapCycleValue(nt.min, nt.max, n) catch |err| {
-        if (err == error.RangeError) {
-            vms.setRuntimeErr("{s}: {d} is outside cyclic range {d}..{d}", .{ nt.name, n, nt.min, nt.max });
-        }
-        return err;
-    };
-    return makeNamedValue(typ_obj, .{ .int = wrapped });
+    switch (nt.base) {
+        .int => {
+            const n = try vms.valueAsNumber(arg);
+            if (@trunc(n) != n) return error.TypeError;
+            const wrapped = wrapCycleValue(nt.min, nt.max, n, false) catch |err| {
+                if (err == error.RangeError) {
+                    vms.setRuntimeErr("{s}: {d} is outside cyclic range {d}..{d}", .{ nt.name, n, nt.min, nt.max });
+                }
+                return err;
+            };
+            return makeNamedValue(typ_obj, .{ .int = wrapped });
+        },
+        .float => {
+            const n = try vms.valueAsNumber(arg);
+            const wrapped = wrapCycleValue(nt.min, nt.max, n, true) catch |err| {
+                if (err == error.RangeError) {
+                    vms.setRuntimeErr("{s}: {d} is outside cyclic range {d}..{d}", .{ nt.name, n, nt.min, nt.max });
+                }
+                return err;
+            };
+            return makeNamedValue(typ_obj, .{ .float = wrapped });
+        },
+        .decimal => {
+            const d = try vms.valueAsDecimal(arg);
+            const factor = std.math.pow(f64, 10.0, @floatFromInt(nt.scale));
+            const fv = @as(f64, @floatFromInt(d)) / factor;
+            const scaled = try wrapDecimalCycle(nt, fv, factor);
+            return makeNamedValue(typ_obj, .{ .decimal = scaled });
+        },
+        else => return error.TypeError,
+    }
 }
 
 pub fn applyNamedTypeFn(typ_obj: *Object, kind: @import("value.zig").NamedTypeFnKind, arg: Value) !Value {
@@ -551,7 +609,7 @@ pub fn applyNamedTypeFn(typ_obj: *Object, kind: @import("value.zig").NamedTypeFn
     const result = n + delta;
     if (result == n) { vms.setRuntimeErr("cannot increment non-finite or very large value", .{}); announcePanicMsg(); return error.RangeError; }
     if (nt.is_cycle) {
-        return makeNamedValue(typ_obj, if (nt.base == .float) .{ .float = try wrapCycleValue(nt.min, nt.max, result) } else .{ .int = try wrapCycleValue(nt.min, nt.max, result) });
+        return makeNamedValue(typ_obj, if (nt.base == .float) .{ .float = try wrapCycleValue(nt.min, nt.max, result, true) } else .{ .int = try wrapCycleValue(nt.min, nt.max, result, false) });
     } else {
         if (result < nt.min or result > nt.max) {
             setNamedRangeError(typ_obj, result);
