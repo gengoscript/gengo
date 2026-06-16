@@ -1,0 +1,104 @@
+std  := import("std")
+core := std.core
+
+// Schema for a "create user" request:
+//   { "name": string, "age": int (0..150), "email": string (must contain "@"),
+//     "role": "admin" | "member" | "guest" }
+//
+// Range and predicate constraints are enforced by the named-type constructor;
+// a violation panics with TypeError, which each per-field check below
+// recovers and turns into a plain error message instead of failing the
+// whole request.
+
+type Age   int    range 0..150
+type Email string predicate func(x) {
+    return std.string.contains(x, "@")
+}
+type Role string predicate func(x) {
+    return x == "admin" || x == "member" || x == "guest"
+}
+
+func require_string(v any, field string) (s string, err string) {
+    if core.is_null(v) { return "", field + ": required" }
+    if !core.is_string(v) { return "", field + ": expected string, got " + core.type_of(v) }
+    return string(v), ""
+}
+
+func require_int(v any, field string) (n int, err string) {
+    if core.is_null(v) { return 0, field + ": required" }
+    if !core.is_int(v) { return 0, field + ": expected int, got " + core.type_of(v) }
+    return int(v), ""
+}
+
+func check_name(v any) string {
+    _, err := require_string(v, "name")
+    return err
+}
+
+func check_age(v any) (err string) {
+    defer func() {
+        if e := core.recover(); core.is_error(e) { err = "age: " + string(e) }
+    }()
+    n, base_err := require_int(v, "age")
+    if base_err != "" { return base_err }
+    _ = Age(n)
+    return ""
+}
+
+func check_email(v any) (err string) {
+    defer func() {
+        if e := core.recover(); core.is_error(e) { err = "email: " + string(e) }
+    }()
+    s, base_err := require_string(v, "email")
+    if base_err != "" { return base_err }
+    _ = Email(s)
+    return ""
+}
+
+func check_role(v any) (err string) {
+    defer func() {
+        if e := core.recover(); core.is_error(e) { err = "role: " + string(e) }
+    }()
+    s, base_err := require_string(v, "role")
+    if base_err != "" { return base_err }
+    _ = Role(s)
+    return ""
+}
+
+var last_errors []string
+
+// Validate a JSON document against the schema above. Returns true if the
+// document is valid; otherwise false, with all violations available via
+// errors_json() — not just the first one.
+pub func validate(json string) (ok bool) {
+    last_errors = []
+
+    defer func() {
+        if e := core.recover(); core.is_error(e) {
+            last_errors = [string(e)]
+            ok = false
+        }
+    }()
+
+    doc := std.json.parse(json)
+    if !core.is_map(doc) {
+        last_errors = ["document: expected a JSON object"]
+        return false
+    }
+
+    checks := [
+        check_name(doc["name"]),
+        check_age(doc["age"]),
+        check_email(doc["email"]),
+        check_role(doc["role"]),
+    ]
+    for e in checks {
+        if e != "" { last_errors = core.append(last_errors, e) }
+    }
+
+    return core.len(last_errors) == 0
+}
+
+pub func errors_json() string {
+    return std.json.stringify(last_errors)
+}
