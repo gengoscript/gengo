@@ -451,7 +451,7 @@ pub fn compoundStmt(c: anytype) !void {
         .gt_gt_eq => .shr,
         else => return c.err("unsupported compound assignment operator", .{}),
     };
-    try chunk.emitOp(op, op_tok.line);
+    try chunk.emitBinOpFused(op, op_tok.line);
     const tc = c.getLocalTypeCheck(name.src);
     if (tc) |t| try c.emitVarTypeEpilog(t, op_tok.line);
     try c.emitSetVar(name);
