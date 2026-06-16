@@ -1,0 +1,4 @@
+type MyStruct struct { x int }
+type X struct { v int }
+
+var s MyStruct = X{v: 1}

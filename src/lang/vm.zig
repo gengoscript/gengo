@@ -2227,6 +2227,27 @@ fn runInner() !void {
                     return error.TypeError;
                 }
             },
+            .assert_interface => {
+                const idx = try vmShort();
+                if (idx >= chunk.constCount()) return error.BadConstantIndex;
+                const name = (chunk.constAt(idx) catch unreachable).string;
+                const v = try vmPeek(0);
+                if (!vmtyp.matchesInterfaceType(v, name)) {
+                    vms.setRuntimeErr("expected {s}, got {s}", .{ name, runtimeTypeName(v) });
+                    return error.TypeError;
+                }
+            },
+            .assert_struct => {
+                const idx = try vmShort();
+                if (idx >= chunk.constCount()) return error.BadConstantIndex;
+                const name = (chunk.constAt(idx) catch unreachable).string;
+                const v = try vmPeek(0);
+                const ok = v == .object and v.object.* == .struct_instance and common.streq(v.object.struct_instance.typ.struct_type.qualified_name, name);
+                if (!ok) {
+                    vms.setRuntimeErr("expected {s}, got {s}", .{ name, runtimeTypeName(v) });
+                    return error.TypeError;
+                }
+            },
             .neg => {
                 const v = try vmPeek(0);
                 const n = vms.valueAsNumber(v) catch {

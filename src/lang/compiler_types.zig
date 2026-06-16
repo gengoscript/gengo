@@ -60,6 +60,8 @@ pub const TypeCheck = union(enum) {
     assert_arr: void,
     assert_map: void,
     assert_err: void,
+    interface_type: []const u8,
+    struct_type: []const u8,
 };
 
 pub const Local = struct {

@@ -54,6 +54,7 @@ pub fn emitZeroValue(_: anytype, tc: TypeCheck, line: u32) !void {
             try chunk.emitGetGlobal(tc.named, line);
             try chunk.emit2(@intFromEnum(Op.call), 1, line);
         },
+        .interface_type, .struct_type => try chunk.emitOp(.null_val, line),
     }
 }
 
