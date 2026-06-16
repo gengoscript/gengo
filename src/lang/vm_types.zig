@@ -55,7 +55,9 @@ inline fn announcePanicMsg() void {
 
 fn setNamedRangeError(typ_obj: *Object, value: f64) void {
     const nt = typ_obj.named_type;
-    switch (nt.base) {
+    if (!std.math.isFinite(value)) {
+        vms.setRuntimeErr("{s}: {d} is outside {d}..{d}", .{ nt.name, value, nt.min, nt.max });
+    } else switch (nt.base) {
         .int, .rune => vms.setRuntimeErr("{s}: {d} is outside {d}..{d}", .{
             nt.name,
             @as(i64, @intFromFloat(@trunc(value))),
@@ -351,6 +353,7 @@ pub fn makeNamedValue(typ_obj: *Object, inner: Value) !Value {
 //     other, e.g. `cycle 0.0..360.0` treats 360.0 as the same point as 0.0,
 //     so `span = max - min` and the maximum itself wraps to the minimum.
 fn wrapCycleValue(min: f64, max: f64, n: f64, continuous: bool) !f64 {
+    if (!std.math.isFinite(n)) return error.RangeError;
     if (!continuous) {
         const exact_int_limit: f64 = 9007199254740992.0;
         if (@trunc(min) == min and @trunc(max) == max and @trunc(n) == n and
@@ -395,6 +398,10 @@ pub fn constructNamedType(typ_obj: *Object, arg: Value) !Value {
                 }
                 return err;
             };
+            if (!std.math.isFinite(n)) {
+                setNamedRangeError(typ_obj, n);
+                return error.RangeError;
+            }
             if (@trunc(n) != n) {
                 vms.setRuntimeErr("cannot construct {s} from {s}; convert to {s} first", .{ nt.name, runtimeTypeName(arg), namedBaseName(nt.base) });
                 announcePanicMsg();
@@ -425,6 +432,10 @@ pub fn constructNamedType(typ_obj: *Object, arg: Value) !Value {
                 }
                 return err;
             };
+            if (!std.math.isFinite(n)) {
+                setNamedRangeError(typ_obj, n);
+                return error.RangeError;
+            }
             // Continuous cycle: max is identified with min, so n == max must
             // also wrap (unlike a plain range, where max is a valid value).
             const out_of_bounds = if (nt.is_cycle) n < nt.min or n >= nt.max else n < nt.min or n > nt.max;
@@ -492,6 +503,11 @@ pub fn constructNamedType(typ_obj: *Object, arg: Value) !Value {
                     break :blk @intFromFloat(t);
                 },
                 .float => |n| blk: {
+                    if (!std.math.isFinite(n)) {
+                        vms.setRuntimeErr("{s}: {d} is outside {d}..{d}", .{ nt.name, n, nt.min, nt.max });
+                        announcePanicMsg();
+                        return error.RangeError;
+                    }
                     const t = @trunc(n);
                     if (t != n or t < 0) return error.TypeError;
                     break :blk @intFromFloat(t);
