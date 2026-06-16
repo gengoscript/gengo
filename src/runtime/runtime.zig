@@ -676,7 +676,9 @@ pub const Runtime = struct {
                     .assert_arr => 7,
                     .assert_map => 8,
                     .assert_err => 9,
-                    .none => continue,
+                    // Interface and struct type checks are not persisted across REPL
+                    // resets — the check is emitted inline at declaration time.
+                    .interface_type, .struct_type, .none => continue,
                 };
                 if (self.repl_typed_global_name_buf_used + gname.len > self.repl_typed_global_name_buf.len) break;
                 const gs = self.repl_typed_global_name_buf_used;

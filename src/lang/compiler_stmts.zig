@@ -1478,9 +1478,11 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
             inferred_type_check = .{ .assert_map = {} };
         } else if (common.streq(type_name, "error")) {
             inferred_type_check = .{ .assert_err = {} };
-        } else if (type_name.len == 0 or common.streq(type_name, "any") or
-                   c.registry.hasInterfaceType(type_name) or
-                   c.registry.hasStructTypeLocal(type_name)) {
+        } else if (c.registry.hasInterfaceType(type_name)) {
+            inferred_type_check = .{ .interface_type = type_name };
+        } else if (c.registry.hasStructTypeLocal(type_name)) {
+            inferred_type_check = .{ .struct_type = type_name };
+        } else if (type_name.len == 0 or common.streq(type_name, "any")) {
             // No type check for these types
         } else {
             return { c.setErr("unknown type name '{s}'", .{type_name}); return error.UnknownTypeName; };
@@ -1519,6 +1521,12 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
                 try chunk.emit2(@intFromEnum(Op.assert_type), 2, name.line);
             } else if (inferred_type_check == .assert_err) {
                 try chunk.emit2(@intFromEnum(Op.assert_type), 3, name.line);
+            } else if (inferred_type_check == .interface_type) {
+                const idx = try chunk.addConst(.{ .string = inferred_type_check.interface_type });
+                try chunk.emitConstIdx(.assert_interface, idx, name.line);
+            } else if (inferred_type_check == .struct_type) {
+                const idx = try chunk.addConst(.{ .string = inferred_type_check.struct_type });
+                try chunk.emitConstIdx(.assert_struct, idx, name.line);
             }
         } else if (has_keyword and !is_const and inferred_type_check != .none) {
             if (inferred_type_check == .named) {

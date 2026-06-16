@@ -441,6 +441,14 @@ pub const Compiler = struct {
             .assert_arr => try chunk.emit2(@intFromEnum(Op.assert_type), 1, line),
             .assert_map => try chunk.emit2(@intFromEnum(Op.assert_type), 2, line),
             .assert_err => try chunk.emit2(@intFromEnum(Op.assert_type), 3, line),
+            .interface_type => |name| {
+                const idx = try chunk.addConst(.{ .string = name });
+                try chunk.emitConstIdx(.assert_interface, idx, line);
+            },
+            .struct_type => |name| {
+                const idx = try chunk.addConst(.{ .string = name });
+                try chunk.emitConstIdx(.assert_struct, idx, line);
+            },
         }
     }
 
