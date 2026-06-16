@@ -371,13 +371,21 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
     }
 
     if (c.cur.typ == .lbracket) {
-        // type Name []T — named slice type
-        c.advance(); // consume '['
-        try c.consume(.rbracket); // consume ']'
-        const es: FieldTypeSpec = try parseFieldTypeSpec(c, );
-        if (!c.skipping_test_body) try c.registry.addNamedType(.{ .name = name, .base = .array_t, .elem_spec = es });
+        // type Name []T (named array) or type Name [K]V (named map) — shares
+        // the same array/map disambiguation as struct fields and 'var'.
+        const spec: FieldTypeSpec = try parseFieldTypeSpec(c, );
+        if (spec.alts.len != 1 or (spec.alts[0].typ != .array and spec.alts[0].typ != .map)) {
+            return c.err("expected an array ('[]T') or map ('[K]V') type", .{});
+        }
+        const alt = spec.alts[0];
         const nt = heap.allocObject() orelse return error.OutOfMemory;
-        nt.* = .{ .named_type = NamedTypeObj{ .name = try c.copyName(name), .qualified_name = qname, .base = .array_t, .elem_spec = es } };
+        if (alt.typ == .array) {
+            if (!c.skipping_test_body) try c.registry.addNamedType(.{ .name = name, .base = .array_t, .elem_spec = alt.elem_spec });
+            nt.* = .{ .named_type = NamedTypeObj{ .name = try c.copyName(name), .qualified_name = qname, .base = .array_t, .elem_spec = alt.elem_spec } };
+        } else {
+            if (!c.skipping_test_body) try c.registry.addNamedType(.{ .name = name, .base = .map_t, .key_spec = alt.key_spec, .val_spec = alt.val_spec });
+            nt.* = .{ .named_type = NamedTypeObj{ .name = try c.copyName(name), .qualified_name = qname, .base = .map_t, .key_spec = alt.key_spec, .val_spec = alt.val_spec } };
+        }
         try chunk.emitConst(.{ .object = nt }, kw.line);
         if (c.inFunc()) {
             _ = try c.defineLocal(name, false);
@@ -615,23 +623,23 @@ pub fn parseFieldTypeSpec(c: anytype) !FieldTypeSpec {
                 ep[0] = es;
                 alt = .{ .typ = .array, .elem_spec = ep[0] };
             } else {
-                // [T] array or [K]V map
+                // [K]V map — a bare '[T]' with nothing after the ']' is
+                // rejected rather than silently treated as an array: that
+                // shape is what a forgotten map value type looks like, and
+                // letting it quietly mean "array of T" instead would mask
+                // exactly that mistake. Arrays are written '[]T'.
                 const first_spec = try parseFieldTypeSpec(c, );
                 try c.consume(.rbracket);
-                if (c.cur.typ == .ident or c.cur.typ == .kw_func or c.cur.typ == .lbracket or c.cur.typ == .question) {
-                    // [K]V map
-                    const second_spec = try parseFieldTypeSpec(c, );
-                    const kp = heap.bump(FieldTypeSpec, 1) orelse return error.OutOfMemory;
-                    kp[0] = first_spec;
-                    const vp = heap.bump(FieldTypeSpec, 1) orelse return error.OutOfMemory;
-                    vp[0] = second_spec;
-                    alt = .{ .typ = .map, .key_spec = kp[0], .val_spec = vp[0] };
-                } else {
-                    // [T] array
-                    const ep = heap.bump(FieldTypeSpec, 1) orelse return error.OutOfMemory;
-                    ep[0] = first_spec;
-                    alt = .{ .typ = .array, .elem_spec = ep[0] };
+                if (!(c.cur.typ == .ident or c.cur.typ == .kw_func or c.cur.typ == .lbracket or c.cur.typ == .question)) {
+                    c.setErr("expected a value type after '[...]' — write 'map[K]V' for a map, or '[]T' for an array", .{});
+                    return error.ExpectedTypeName;
                 }
+                const second_spec = try parseFieldTypeSpec(c, );
+                const kp = heap.bump(FieldTypeSpec, 1) orelse return error.OutOfMemory;
+                kp[0] = first_spec;
+                const vp = heap.bump(FieldTypeSpec, 1) orelse return error.OutOfMemory;
+                vp[0] = second_spec;
+                alt = .{ .typ = .map, .key_spec = kp[0], .val_spec = vp[0] };
             }
         } else if (c.cur.typ == .kw_func) {
             c.advance(); // consume 'func'

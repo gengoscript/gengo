@@ -1,0 +1,23 @@
+std := import("std")
+
+// []T named array type
+type Points []int
+p := Points([1, 2, 3])
+std.io.println(p)
+
+// [K]V named map type — bare bracket spelling
+type Tag [int]string
+t := Tag({1: "a", 2: "b"})
+std.io.println(t[1])
+std.io.println(t[2])
+
+// map[K]V named map type — explicit spelling, same meaning
+type Lookup map[string]int
+l := Lookup({"x": 10})
+std.io.println(l["x"])
+
+// Nested: array of named-map-compatible bracket types
+type Matrix [][]int
+m := Matrix([[1, 2], [3, 4]])
+std.io.println(m[0][1])
+std.io.println(m[1][0])
