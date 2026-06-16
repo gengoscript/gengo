@@ -1,10 +1,10 @@
-001_compute_stress total_ops=1005431 gc_runs=20484 alloc_objects=20955 string_concat_bytes=0
-002_tiny_safe_math total_ops=3645 gc_runs=1 alloc_objects=282 string_concat_bytes=0
+001_compute_stress total_ops=959311 gc_runs=20484 alloc_objects=20955 string_concat_bytes=0
+002_tiny_safe_math total_ops=3325 gc_runs=1 alloc_objects=282 string_concat_bytes=0
 003_fib_recursive total_ops=16987271 gc_runs=0 alloc_objects=202 string_concat_bytes=0
 004_fib_tail_recursive total_ops=325 gc_runs=0 alloc_objects=202 string_concat_bytes=0
 005_fib_recursive_35_stress total_ops=188391692 gc_runs=0 alloc_objects=202 string_concat_bytes=0
-006_utf8_hotpath total_ops=1076429 gc_runs=9 alloc_objects=4202 string_concat_bytes=0
-007_utf8_slice_heavy total_ops=2508024 gc_runs=0 alloc_objects=201 string_concat_bytes=0
+006_utf8_hotpath total_ops=1020405 gc_runs=9 alloc_objects=4202 string_concat_bytes=0
+007_utf8_slice_heavy total_ops=2316024 gc_runs=0 alloc_objects=201 string_concat_bytes=0
 008_runtime_call_overhead total_ops=3000025 gc_runs=0 alloc_objects=202 string_concat_bytes=0
 009_struct_field_access total_ops=4200036 gc_runs=0 alloc_objects=203 string_concat_bytes=0
 010_string_concat_heavy total_ops=5000016 gc_runs=3058 alloc_objects=1400201 string_concat_bytes=7000000
