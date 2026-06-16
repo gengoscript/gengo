@@ -400,8 +400,10 @@ pub fn constructNamedType(typ_obj: *Object, arg: Value) !Value {
 
     // Convert null to the base type's zero value so that
     // `var x T` with no initializer works for named scalar types.
-    // The zero value still passes through range/cycle/predicate checks.
+    // If the type declares a default value, use that instead.
+    // The value still passes through range/cycle/predicate checks.
     const zero_arg = if (effective_arg == .null) zero: {
+        if (nt.has_default) break :zero nt.default_val;
         switch (nt.base) {
             .int => break :zero Value{ .int = 0 },
             .float => break :zero Value{ .float = 0 },

@@ -129,6 +129,8 @@ pub const NamedTypeInfo = struct {
     key_spec: ?FieldTypeSpec = null,
     val_spec: ?FieldTypeSpec = null,
     enum_members: ?[]const []const u8 = null,
+    has_default: bool = false,
+    default_val: value_mod.Value = undefined,
 };
 const GlobalConstInfo = struct { name: []const u8 };
 const GlobalFuncInfo = struct { name: []const u8 };
