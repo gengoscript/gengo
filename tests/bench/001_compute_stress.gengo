@@ -2,10 +2,10 @@ std := import("std")
 
 type Grid struct {
   size int,
-  data array
+  data []int
 }
 
-func is_prime(n int) {
+func is_prime(n int) bool {
   if n <= 1 { return false }
   if n <= 3 { return true }
   if n % 2 == 0 || n % 3 == 0 { return false }
@@ -43,19 +43,19 @@ std.io.println("Grid populated. Total elements:")
 std.io.println(std.core.len(grid.data))
 
 checksum := 0
-for cycle := 0; cycle < 50; cycle += 1 {
+for round := 0; round < 50; round += 1 {
   next_data := []
   for idx := 0; idx < 400; idx += 1 {
-    target_idx := (idx + cycle) % 400
+    target_idx := (idx + round) % 400
     current_val := grid.data[target_idx]
-    new_val := (current_val + cycle) % 777
+    new_val := (current_val + round) % 777
     next_data = std.core.append(next_data, new_val)
     if idx % 10 == 0 {
       checksum += new_val
     }
   }
   grid.data = next_data
-  if cycle % 10 == 0 {
+  if round % 10 == 0 {
     std.core.gc()
   }
 }

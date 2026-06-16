@@ -298,6 +298,13 @@ pub fn build(b: *std.Build) void {
     // bench-perf: perf-instrumented debug build; outputs PERF: lines to stderr
     const perf_opts = b.addOptions();
     perf_opts.addOption(bool, "perf", true);
+    perf_opts.addOption(bool, "gc_stress", gc_stress_opt);
+    perf_opts.addOption(bool, "cap_net", cap_net_opt);
+    perf_opts.addOption(bool, "cap_http", cap_http_opt);
+    perf_opts.addOption(bool, "cap_fs", cap_fs_opt);
+    perf_opts.addOption(bool, "predicates", predicates_opt);
+    perf_opts.addOption(bool, "gengo_host", gengo_host_opt);
+    perf_opts.addOption([]const u8, "version", gengo_version);
     const perf_opts_mod = perf_opts.createModule();
     const gengo_perf = addWasmExe(b, "gengo-perf", "src/main.zig", wasm_target, .Debug, &preset.step, perf_opts_mod);
     const install_perf = installWasmAs(b, gengo_perf, "gengo-perf.wasm");

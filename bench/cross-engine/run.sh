@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# Cross-engine comparison: the same minimal, portable logic run in Gengo and
+# a few peer scripting engines, on this machine, right now. No engine here
+# uses language-specific features (no Gengo named types, no Lua metatables,
+# etc.) — these are deliberately the lowest common denominator so the
+# comparison is actually apples-to-apples.
+#
+# This is informational, not a claim of "fastest" or "slowest" in general —
+# re-run it yourself; results depend on the machine, the engine version, and
+# the build mode (this uses Gengo's native ReleaseSafe CLI, the same build
+# mode the release pipeline ships).
+#
+# Usage: bench/cross-engine/run.sh
+set -uo pipefail
+cd "$(dirname "$0")"
+
+GENGO_BIN="${GENGO_BIN:-../../zig-out/bin/gengo}"
+
+if [ ! -x "$GENGO_BIN" ]; then
+  echo "gengo binary not found at $GENGO_BIN — build it first:" >&2
+  echo "  zig build -Dpreset=dev cli-release" >&2
+  exit 1
+fi
+
+declare -A ENGINES=(
+  [gengo]="$GENGO_BIN {script}"
+  [lua]="lua5.4 {script}"
+  [python3]="python3 {script}"
+  [node]="node {script}"
+)
+
+run_timed() {
+  local cmd="$1"
+  local start_ns end_ns
+  start_ns=$(date +%s%N)
+  eval "$cmd" > /tmp/cross-engine-out.txt 2>&1
+  local rc=$?
+  end_ns=$(date +%s%N)
+  if [ $rc -ne 0 ]; then
+    echo "ERROR"
+    return
+  fi
+  awk -v ns="$((end_ns - start_ns))" 'BEGIN { printf "%.3fs", ns / 1000000000 }'
+}
+
+run_case() {
+  local case_name="$1"
+  echo "=== ${case_name} ==="
+  printf "%-10s %10s   %s\n" "engine" "time" "output"
+  for engine in gengo lua python3 node; do
+    local tmpl="${ENGINES[$engine]}"
+    local ext
+    case "$engine" in
+      gengo) ext="gengo" ;;
+      lua) ext="lua" ;;
+      python3) ext="py" ;;
+      node) ext="js" ;;
+    esac
+    local script="${case_name}.${ext}"
+    if [ ! -f "$script" ]; then
+      printf "%-10s %10s   %s\n" "$engine" "-" "(missing $script)"
+      continue
+    fi
+    local cmd="${tmpl/\{script\}/$script}"
+    local t
+    t=$(run_timed "$cmd")
+    local out
+    out=$(tail -c 80 /tmp/cross-engine-out.txt | tr -d '\n')
+    printf "%-10s %10s   %s\n" "$engine" "$t" "$out"
+  done
+  echo
+}
+
+echo "Cross-engine comparison — $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+echo "host: $(uname -s) $(uname -m)"
+echo
+
+run_case fib_recursive
+run_case loop_sum

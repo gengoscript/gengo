@@ -3,6 +3,7 @@ zig-out/
 .zig-cache/
 *.swp
 *.wasm
+*.got
 __pycache__/
 *.pyc
 embed-host-example
