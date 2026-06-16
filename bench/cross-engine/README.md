@@ -1,5 +1,7 @@
 # Cross-engine comparison
 
+**[See the latest captured results →](RESULTS.md)**
+
 Two minimal, portable benchmarks — naive recursive `fib(32)` and a 20M-iteration
 tight loop — implemented identically in Gengo and a few peer scripting
 engines (Lua, Python, Node), so the comparison is actually apples-to-apples.
@@ -23,9 +25,13 @@ counts release to release, using Gengo-specific feature scripts in
 ## Running it
 
 ```bash
-zig build -Dpreset=dev cli-release   # build the native CLI first
 bench/cross-engine/run.sh
 ```
+
+`run.sh` (re)builds the native ReleaseSafe CLI itself before timing — it
+doesn't trust whatever happens to already be at `zig-out/bin/gengo`, since
+that path is shared with the Debug `cli` build step and a stale Debug
+binary would silently make Gengo look several times slower than it is.
 
 Requires `lua5.4` (or adjust `run.sh`'s `ENGINES` map for `lua`/`lua5.3`),
 `python3`, and `node` on `PATH`. Any engine that's missing is skipped, not
