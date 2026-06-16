@@ -1,0 +1,25 @@
+std := import("std")
+
+// Continuous cycle: float endpoints are identified with each other, so the
+// maximum wraps straight to the minimum (no extra "+1" step like int cycles).
+type Degrees float cycle 0.0..360.0
+
+std.io.println(Degrees(360.0))   // 0
+std.io.println(Degrees(370.0))   // 10
+std.io.println(Degrees(-10.0))   // 350
+std.io.println(Degrees(180.0))   // 180
+
+d := Degrees(350.0)
+std.io.println(d + Degrees(20.0))  // 10
+
+// Decimal cycle wraps in the same continuous way, at fixed-point precision.
+type DegreeCircle decimal 1 cycle 0.0..360.0
+
+std.io.println(DegreeCircle(360.0))  // 0
+std.io.println(DegreeCircle(359.5) + DegreeCircle(1.0))  // 0.5
+
+// Subtype of a numeric named type can also carry a cycle constraint.
+type Money decimal 2
+subtype Heading Money cycle 0.00..360.00
+
+std.io.println(Heading(360.00))  // 0

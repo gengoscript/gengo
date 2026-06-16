@@ -265,13 +265,26 @@ s := Severity(3)   // ok
 // Severity(9)     // runtime range error
 ```
 
-Cycle types wrap through their declared domain during arithmetic:
+Cycle types wrap through their declared domain during arithmetic. `cycle`
+works on any numeric base — `int`, `float`, or `decimal`.
 
 ```gengo
 type Hour int cycle 0..23
 
 h := Hour(23)
 std.io.println(h + Hour(1))  // 0
+```
+
+Integer cycles are discrete: the domain is `max - min + 1` inclusive steps,
+so `cycle 0..23` has 24 distinct values and 23 + 1 wraps to 0. Float and
+decimal cycles are continuous instead: the endpoints are the same point, so
+`max` itself wraps to `min`:
+
+```gengo
+type Degrees float cycle 0.0..360.0
+
+std.io.println(Degrees(360.0))            // 0 — max wraps to min
+std.io.println(Degrees(350.0) + Degrees(20.0))  // 10
 ```
 
 Subtypes allow narrower domains inside an existing named type. Any scalar
