@@ -1,0 +1,5 @@
+std := import("std")
+type Id int range 1..100
+type Greeting string
+type Flag bool
+var x = Id(null)
