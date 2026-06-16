@@ -60,6 +60,8 @@ pub const Op = enum(u8) {
     cast_string,
     cast_rune,
     assert_type, // operand byte: 1=array 2=map 3=error
+    assert_interface, // u16: const index of interface type name
+    assert_struct,    // u16: const index of struct type name
     neg,
     not,
     eq,

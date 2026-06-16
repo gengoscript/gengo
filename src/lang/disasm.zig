@@ -187,7 +187,8 @@ pub fn disassemble() void {
             // --- 2-byte const index ops ---
             .constant, .def_global, .make_closure, .ret_const,
             .const_eq, .const_sub, .const_add, .const_lt,
-            .variant_check => {
+            .variant_check,
+            .assert_interface, .assert_struct => {
                 const idx = readU16(i);
                 i += 2;
                 io.write(@tagName(op));
