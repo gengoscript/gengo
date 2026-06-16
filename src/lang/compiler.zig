@@ -1005,6 +1005,9 @@ pub const Compiler = struct {
     pub fn emitZeroValue(self: *Compiler, tc: TypeCheck, line: u32) !void {
         return compiler_decls.emitZeroValue(self, tc, line);
     }
+    pub fn emitNamedDefault(self: *Compiler, name: []const u8, line: u32) !void {
+        return compiler_decls.emitNamedDefault(self, name, line);
+    }
     pub fn expr(self: *Compiler) !void {
         return compiler_expr.expr(self);
     }
