@@ -16,6 +16,19 @@ cd "$(dirname "$0")"
 
 GENGO_BIN="${GENGO_BIN:-../../zig-out/bin/gengo}"
 
+# 'cli' (Debug) and 'cli-release' (ReleaseSafe) both install to this same
+# path, so a stale Debug binary from an earlier unrelated build can silently
+# sit here and make Gengo look several times slower than it actually is.
+# Always (re)build the release CLI right before timing, rather than trusting
+# whatever happens to already be at GENGO_BIN.
+if [ -z "${GENGO_BIN_PREBUILT:-}" ]; then
+  echo "→ building native CLI (ReleaseSafe)..." >&2
+  (cd ../.. && zig build -Dpreset=dev cli-release) >&2 || {
+    echo "build failed" >&2
+    exit 1
+  }
+fi
+
 if [ ! -x "$GENGO_BIN" ]; then
   echo "gengo binary not found at $GENGO_BIN — build it first:" >&2
   echo "  zig build -Dpreset=dev cli-release" >&2

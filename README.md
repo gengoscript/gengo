@@ -20,7 +20,7 @@ Your users write Gengoscript.
 
 The engine runs their scripts in a controlled environment, where the host decides what they may see, call, and use.
 
-**[Try it in the browser](https://playground.gengoscript.org/)** · **[Read the docs](https://docs.gengoscript.org/)** · **[Browse examples](examples/)** · **[Benchmarks](bench/cross-engine/)**
+**[Try it in the browser](https://playground.gengoscript.org/)** · **[Read the docs](https://docs.gengoscript.org/)** · **[Browse examples](examples/)** · **[Benchmarks](bench/cross-engine/RESULTS.md)**
 
 ---
 
@@ -222,7 +222,7 @@ For a step-by-step walkthrough, see [docs/tutorial-first-script.md](docs/tutoria
 | TypeScript SDK | Available |
 | In-source `test` blocks | Available |
 | Stress test preset | Available |
-| [Cross-engine benchmarks](bench/cross-engine/) | Available — informational, not a speed claim |
+| [Cross-engine benchmarks](bench/cross-engine/RESULTS.md) | Available — informational, not a speed claim |
 | Stability guarantees | Pre-1.0 |
 
 ---
