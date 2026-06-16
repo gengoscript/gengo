@@ -1,0 +1,6 @@
+type Parser interface {
+    parse() int
+}
+type X struct { v int }
+
+var p Parser = X{v: 1}
