@@ -1,0 +1,4 @@
+std := import("std")
+// Zero value (0) is outside the named type's range
+type Id int range 1..100
+var x Id
