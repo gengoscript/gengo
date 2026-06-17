@@ -414,6 +414,28 @@ pub fn disassemble() void {
             .add_ret => {
                 io.write("add_ret\n");
             },
+            // --- fused local += local: op + dst(1) + src(1) ---
+            .local_add_local => {
+                const dst = chunk.codeByteAt(i); i += 1;
+                const src = chunk.codeByteAt(i); i += 1;
+                io.write("local_add_local dst=");
+                writeNum(dst);
+                io.write(" src=");
+                writeNum(src);
+                io.write("\n");
+            },
+            // --- fused local += const: op + dst(1) + idx(2) ---
+            .local_add_const => {
+                const dst = chunk.codeByteAt(i); i += 1;
+                const idx = readU16(i); i += 2;
+                io.write("local_add_const dst=");
+                writeNum(dst);
+                io.write(" [");
+                writeNum(idx);
+                io.write("] ");
+                writeConst(idx);
+                io.write("\n");
+            },
             // --- no operands ---
             else => {
                 io.write(@tagName(op));
