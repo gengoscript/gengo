@@ -18,54 +18,31 @@ type Role string predicate func(x) {
     return x == "admin" or x == "member" or x == "guest"
 }
 
-func require_string(v any, field string) (s string, err string) {
-    if core.is_null(v) { return "", field + ": required" }
-    if not core.is_string(v) { return "", field + ": expected string, got " + core.type_of(v) }
-    return string(v), ""
-}
+var last_errors []string
 
-func require_int(v any, field string) (n int, err string) {
-    if core.is_null(v) { return 0, field + ": required" }
-    if not core.is_int(v) { return 0, field + ": expected int, got " + core.type_of(v) }
-    return int(v), ""
-}
-
-func check_name(v any) string {
-    _, err := require_string(v, "name")
-    return err
-}
-
-func check_age(v any) (err string) {
+func check_age(n int) (err string) {
     defer func() {
         if e := core.recover(); core.is_error(e) { err = "age: " + string(e) }
     }()
-    n, base_err := require_int(v, "age")
-    if base_err != "" { return base_err }
     _ = Age(n)
     return ""
 }
 
-func check_email(v any) (err string) {
+func check_email(s string) (err string) {
     defer func() {
         if e := core.recover(); core.is_error(e) { err = "email: " + string(e) }
     }()
-    s, base_err := require_string(v, "email")
-    if base_err != "" { return base_err }
     _ = Email(s)
     return ""
 }
 
-func check_role(v any) (err string) {
+func check_role(s string) (err string) {
     defer func() {
         if e := core.recover(); core.is_error(e) { err = "role: " + string(e) }
     }()
-    s, base_err := require_string(v, "role")
-    if base_err != "" { return base_err }
     _ = Role(s)
     return ""
 }
-
-var last_errors []string
 
 // Validate a JSON document against the schema above. Returns true if the
 // document is valid; otherwise false, with all violations available via
@@ -86,13 +63,41 @@ pub func validate(json string) (ok bool) {
         return false
     }
 
-    checks := [
-        check_name(doc["name"]),
-        check_age(doc["age"]),
-        check_email(doc["email"]),
-        check_role(doc["role"]),
-    ]
-    for e in checks {
+    name_v  := doc["name"]
+    age_v   := doc["age"]
+    email_v := doc["email"]
+    role_v  := doc["role"]
+
+    if core.is_null(name_v) {
+        last_errors = core.append(last_errors, "name: required")
+    } else if not core.is_string(name_v) {
+        last_errors = core.append(last_errors, "name: expected string, got " + core.type_of(name_v))
+    }
+
+    if core.is_null(age_v) {
+        last_errors = core.append(last_errors, "age: required")
+    } else if not core.is_int(age_v) {
+        last_errors = core.append(last_errors, "age: expected int, got " + core.type_of(age_v))
+    } else {
+        e := check_age(int(age_v))
+        if e != "" { last_errors = core.append(last_errors, e) }
+    }
+
+    if core.is_null(email_v) {
+        last_errors = core.append(last_errors, "email: required")
+    } else if not core.is_string(email_v) {
+        last_errors = core.append(last_errors, "email: expected string, got " + core.type_of(email_v))
+    } else {
+        e := check_email(string(email_v))
+        if e != "" { last_errors = core.append(last_errors, e) }
+    }
+
+    if core.is_null(role_v) {
+        last_errors = core.append(last_errors, "role: required")
+    } else if not core.is_string(role_v) {
+        last_errors = core.append(last_errors, "role: expected string, got " + core.type_of(role_v))
+    } else {
+        e := check_role(string(role_v))
         if e != "" { last_errors = core.append(last_errors, e) }
     }
 
