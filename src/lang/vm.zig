@@ -399,6 +399,7 @@ fn checkNamedTypePredicate(nt_obj: *Object, inner: Value) !void {
                     const n = std.unicode.utf8Encode(r, vbuf[0..4]) catch 0;
                     break :blk vbuf[0..n];
                 },
+                .object  => |o| if (o.* == .dyn_string) o.dyn_string else "?",
                 else     => "?",
             };
             if (nt.predicate_msg) |msg| {
@@ -2907,6 +2908,16 @@ fn runInner() !void {
                     nt_val.object.named_type.predicate = pred.object;
                 } else {
                     return error.TypeError;
+                }
+            },
+
+            .validate_type_default => {
+                const nt_val = try vmPeek(0);
+                if (nt_val != .object or nt_val.object.* != .named_type) return error.TypeError;
+                const nt = &nt_val.object.named_type;
+                if (nt.has_default and nt.predicate != null) {
+                    const constructed = try vmtyp.constructNamedType(nt_val.object, nt.default_val);
+                    try checkNamedTypePredicate(nt_val.object, constructed.object.named_value.value);
                 }
             },
 

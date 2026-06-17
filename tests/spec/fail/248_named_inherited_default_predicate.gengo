@@ -1,0 +1,4 @@
+std := import("std")
+type Tag string predicate func(s) { return std.core.len(s) > 3 } default "abcd"
+subtype ShortTag Tag predicate func(s) { return std.core.len(s) < 3 }
+var x ShortTag
