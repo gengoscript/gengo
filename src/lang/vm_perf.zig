@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const io = @import("../runtime/io.zig");
 const Op = @import("op.zig").Op;
 const build_options = @import("build_options");
@@ -16,6 +17,10 @@ pub const PerfCounters = struct {
     gc_marked_total:     u64                   = 0,
     gc_swept_total:      u64                   = 0,
     hostcall_counts:     [256]u64              = [_]u64{0}                        ** 256,
+    call_cycles:         u64                   = 0,
+    call_count:          u64                   = 0,
+    ret_cycles:          u64                   = 0,
+    ret_count:           u64                   = 0,
     prev_op:             u8                    = 0xFF,
 };
 
@@ -58,6 +63,35 @@ pub inline fn countGCSweep(marked: usize, swept: usize) void {
 pub inline fn countHostcall(id: u8) void {
     if (!perf_enabled) return;
     g_counters.hostcall_counts[id] += 1;
+}
+
+pub inline fn callCycles(cycles: u64) void {
+    if (!perf_enabled) return;
+    g_counters.call_cycles += cycles;
+    g_counters.call_count += 1;
+}
+
+pub inline fn retCycles(cycles: u64) void {
+    if (!perf_enabled) return;
+    g_counters.ret_cycles += cycles;
+    g_counters.ret_count += 1;
+}
+
+pub inline fn readTsc() u64 {
+    if (!perf_enabled) return 0;
+    if (comptime builtin.target.cpu.arch == .x86_64) {
+        var eax: u32 = undefined;
+        var edx: u32 = undefined;
+        asm volatile (
+            \\ rdtsc
+            : [eax] "={eax}" (eax),
+              [edx] "={edx}" (edx)
+            :
+            : .{ .memory = true }
+        );
+        return (@as(u64, edx) << 32) | eax;
+    }
+    return @as(u64, @intCast(std.time.milliTimestamp()));
 }
 
 fn writeU64Err(v: u64) void {
@@ -117,4 +151,9 @@ pub fn printSummary(gc_runs: u64, gc_time_ns: u64, alloc_objs: u64, alloc_slices
         if (cnt == 0) continue;
         io.werr("PERF:hostcall:"); writeU64Err(@intCast(hci)); io.werr("="); writeU64Err(cnt); io.werr("\n");
     }
+
+    io.werr("PERF:call_cycles=");        writeU64Err(c.call_cycles); io.werr("\n");
+    io.werr("PERF:call_count=");         writeU64Err(c.call_count);  io.werr("\n");
+    io.werr("PERF:ret_cycles=");         writeU64Err(c.ret_cycles);  io.werr("\n");
+    io.werr("PERF:ret_count=");          writeU64Err(c.ret_count);   io.werr("\n");
 }

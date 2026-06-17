@@ -715,6 +715,33 @@ pub fn enforceFuncReturnTypes(f: FuncObj, retval: Value) !void {
     }
 }
 
+// Returns true if the function has a single simple primitive return type
+// that can be checked inline in the ret fast path.
+pub fn isPrimitiveReturn(f: FuncObj) bool {
+    if (f.named_return_count > 0) return false;
+    if (f.return_types.len != 1) return false;
+    const spec = f.return_types[0];
+    if (spec.alts.len != 1) return false;
+    return switch (spec.alts[0].typ) {
+        .int, .float, .boolean, .null_t, .rune_t, .string => true,
+        else => false,
+    };
+}
+
+// Inline tag check matching enforceFuncReturnTypes for single primitive returns.
+pub fn checkPrimitiveReturn(f: FuncObj, v: Value) bool {
+    const alt = f.return_types[0].alts[0];
+    return switch (alt.typ) {
+        .int => v == .int or v == .rune,
+        .float => v == .float or v == .rune,
+        .boolean => v == .boolean,
+        .null_t => v == .null,
+        .rune_t => v == .rune,
+        .string => vms.isStringValue(v),
+        else => false,
+    };
+}
+
 pub fn frameFuncSig(func_obj: *Object) !FuncObj {
     return switch (func_obj.*) {
         .function => |f| f,
