@@ -277,6 +277,57 @@ fn pushDecimalResultWithCarrier(typ: *Object, d: i64) !void {
     try vmPush(wrapped);
 }
 
+fn computeAddResult(a: Value, b: Value) !Value {
+    if (isStringValueOrNamedString(a) and isStringValueOrNamedString(b)) {
+        try pushTempRoot(a);
+        defer popTempRoot();
+        try pushTempRoot(b);
+        defer popTempRoot();
+        const sa = try vms.asStringValue(a);
+        const sb = try vms.asStringValue(b);
+        vmperf.countStringConcat(sa.len + sb.len);
+        const result = try concatDynString(sa, sb);
+        const carrier = namedTypeCarrier(a, b) catch |err| {
+            if (err == error.TypeError) setBinaryTypeError("+", a, b);
+            return err;
+        };
+        if (carrier) |typ| {
+            try vms.pushTempRoot(result);
+            defer vms.popTempRoot();
+            return try vmtyp.makeNamedValue(typ, result);
+        } else {
+            return result;
+        }
+    } else if (decimalOpValues(a, b)) |dop| {
+        const result = @addWithOverflow(dop.lhs, dop.rhs);
+        if (result[1] != 0) return error.TypeError;
+        return try vmtyp.coerceNamedTypeResult(dop.typ, .{ .decimal = result[0] });
+    } else {
+        const tag = numericOpTag(a, b) catch |err| {
+            if (err == error.TypeError) setBinaryTypeError("+", a, b);
+            return err;
+        };
+        const an = try valueAsNumberForOp(a, b, "+");
+        const bn = try valueAsNumberForOp(b, a, "+");
+        if (!std.math.isFinite(an + bn)) {
+            vms.setRuntimeErr("non-finite value in arithmetic operation", .{});
+            return error.TypeError;
+        }
+        const val = makeNumeric(tag, an + bn);
+        const carrier = namedTypeCarrier(a, b) catch |err| {
+            if (err == error.TypeError) setBinaryTypeError("+", a, b);
+            return err;
+        };
+        if (carrier) |typ| {
+            const wrapped = try vmtyp.coerceNamedTypeResult(typ, val);
+            try checkNamedTypePredicate(typ, wrapped.object.named_value.value);
+            return wrapped;
+        } else {
+            return val;
+        }
+    }
+}
+
 fn makeNumeric(tag: VTag, n: f64) Value {
     return switch (tag) {
         .int => .{ .int = n },
@@ -1912,34 +1963,38 @@ fn runInner() !void {
             .add => {
                 const b = try vmPop();
                 const a = try vmPop();
-                if (isStringValueOrNamedString(a) and isStringValueOrNamedString(b)) {
-                    // a and b are off the Gengo stack; protect them so GC inside
-                    // concatDynString can't free their backing bytes before the
-                    // copy. They must stay rooted through the carrier wrap too:
-                    // makeNamedValue allocates, and a freed operand's slot can
-                    // be handed back as the new named value (#120 family).
-                    try pushTempRoot(a);
-                    defer popTempRoot();
-                    try pushTempRoot(b);
-                    defer popTempRoot();
-                    const sa = try vms.asStringValue(a);
-                    const sb = try vms.asStringValue(b);
-                    vmperf.countStringConcat(sa.len + sb.len);
-                    const result = try concatDynString(sa, sb);
-                    try pushStringResultWithCarrier(a, b, result);
-                } else if (decimalOpValues(a, b)) |dop| {
-                    const result = @addWithOverflow(dop.lhs, dop.rhs);
-                    if (result[1] != 0) return error.TypeError;
-                    try pushDecimalResultWithCarrier(dop.typ, result[0]);
-                } else {
-                    const tag = numericOpTag(a, b) catch |err| {
-                        if (err == error.TypeError) setBinaryTypeError("+", a, b);
-                        return err;
+                try vmPush(try computeAddResult(a, b));
+            },
+            .add_ret => {
+                vmperf.breakOpChain();
+                if (vmState().frame_top == 0) return error.ReturnAtTopLevel;
+                const b = try vmPop();
+                const a = try vmPop();
+                const retval = try computeAddResult(a, b);
+                const fi = vmState().frame_top - 1;
+                const frame = &vmState().frames[fi];
+                const can_fast = blk: {
+                    if (vmState().defer_top != frame.defer_base) break :blk false;
+                    if (!frame.has_typed_returns) break :blk true;
+                    const f = switch (frame.func_obj.*) {
+                        .function => frame.func_obj.function,
+                        .closure => |cl| cl.func.function,
+                        else => break :blk false,
                     };
-                    const an = try valueAsNumberForOp(a, b, "+");
-                    const bn = try valueAsNumberForOp(b, a, "+");
-                    try pushNumericResultWithCarrier(a, b, an + bn, tag, "+");
+                    if (!vmtyp.isPrimitiveReturn(f)) break :blk false;
+                    break :blk vmtyp.checkPrimitiveReturn(f, retval);
+                };
+                if (can_fast) {
+                    vmState().frame_top = fi;
+                    vmState().stack_top = if (frame.base > 0) frame.base - 1 else 0;
+                    vmState().ip = frame.ret_ip;
+                    try vmPush(retval);
+                    if (vmState().call_depth_target) |d| {
+                        if (vmState().frame_top == d) return;
+                    }
+                    continue;
                 }
+                if (try retSlowPath(retval)) return;
             },
             .sub => {
                 const b = try vmPop();

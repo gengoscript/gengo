@@ -410,6 +410,10 @@ pub fn disassemble() void {
                 io.write("\n");
             },
 
+            // --- fused binop+ret: no operands ---
+            .add_ret => {
+                io.write("add_ret\n");
+            },
             // --- no operands ---
             else => {
                 io.write(@tagName(op));
