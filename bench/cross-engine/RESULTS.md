@@ -21,6 +21,40 @@ versions, and the OS.
 
 ## Results
 
+### 2026-06-17, commit `4f07c9a`
+
+**Host**: AMD Ryzen 5 7600 (6-core/12-thread), Linux 6.12.86+deb13-amd64 x86_64
+
+**Engines**: Gengoscript v0.5.0-pre1 (native ReleaseSafe) · Lua 5.4.7 · Python 3.13.5 · Node v20.19.2 · [google/starlark-go](https://github.com/google/starlark-go) (devel, via `go install`) · [traefik/yaegi](https://github.com/traefik/yaegi) (Go interpreter, running real Go source) · [mattn/anko](https://github.com/mattn/anko) v0.1.8
+
+| Engine | `fib_recursive(32)` | `loop_sum` (20M) |
+| --- | --- | --- |
+| Gengo | 0.647s | 0.796s |
+| Lua 5.4 | 0.080s | 0.139s |
+| Node | 0.075s | 0.072s |
+| Python 3 | 0.160s | 1.172s |
+| Yaegi (Go interpreter) | 1.838s | 0.485s |
+| Anko | 8.301s | 4.865s |
+| Starlark | n/a — forbids recursive functions by design | 2.198s |
+
+`loop_sum` now uses a function-local loop in the Gengo benchmark, matching
+Lua (`local`), JavaScript (`let`), and Go/Yaegi (`main()`) — all of which
+use function-scoped variables. The previous benchmark used top-level globals;
+the updated version is a more apples-to-apples comparison.
+
+The 2.4x `loop_sum` improvement (1.91s → 0.796s) comes from two new
+read-modify-write opcodes (`local_add_local`, `local_add_const`) that fuse the
+4-dispatch `get_local/get_local/add/set_local` sequence and the 3-dispatch
+`get_local_const_add/set_local` sequence into a single instruction with an
+integer fast-path, reducing per-iteration dispatch from 8 to 4 and skipping
+the general-purpose `computeAddResult` call for `.int + .int`.
+
+Gengo `loop_sum` is now 1.6× behind Yaegi (was 4×). The remaining gap is
+the difference between Gengo's tagged-union heap values and Yaegi's
+`reflect.Value` Int64 path operating on Go's native stack frame.
+
+---
+
 ### 2026-06-17, commit `7d071b9`
 
 **Host**: AMD Ryzen 5 7600 (6-core/12-thread), Linux 6.12.86+deb13-amd64 x86_64
