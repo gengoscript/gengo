@@ -21,11 +21,35 @@ versions, and the OS.
 
 ## Results
 
-Captured 2026-06-16, commit `e3c0277`.
+### 2026-06-17, commit `7d071b9`
 
 **Host**: AMD Ryzen 5 7600 (6-core/12-thread), Linux 6.12.86+deb13-amd64 x86_64
 
 **Engines**: Gengoscript v0.5.0-pre1 (native ReleaseSafe) · Lua 5.4.7 · Python 3.13.5 · Node v20.19.2 · [google/starlark-go](https://github.com/google/starlark-go) (devel, via `go install`) · [traefik/yaegi](https://github.com/traefik/yaegi) (Go interpreter, running real Go source) · [mattn/anko](https://github.com/mattn/anko) v0.1.8
+
+| Engine | `fib_recursive(32)` | `loop_sum` (20M) |
+| --- | --- | --- |
+| Gengo | 0.639s | 1.912s |
+| Lua 5.4 | 0.096s | 0.138s |
+| Node | 0.081s | 0.080s |
+| Python 3 | 0.160s | 1.332s |
+| Yaegi (Go interpreter) | 1.866s | 0.468s |
+| Anko | 8.331s | 4.873s |
+| Starlark | n/a — forbids recursive functions by design | 2.214s |
+
+The 20% improvement in `fib_recursive` vs the previous snapshot (0.80s → 0.64s)
+is a correctness-driven performance win: the closure self-reference fix (`fib :=
+func(x int) int { ... fib(x-1) ... }`) changed `fib` resolution from
+`get_global` (hash lookup on every call) to `get_upvalue` (direct heap-cell
+dereference). `loop_sum` is unchanged — no function-call path involved.
+
+---
+
+### 2026-06-16, commit `e3c0277`
+
+**Host**: AMD Ryzen 5 7600 (6-core/12-thread), Linux 6.12.86+deb13-amd64 x86_64
+
+**Engines**: same as above
 
 | Engine | `fib_recursive(32)` | `loop_sum` (20M) |
 | --- | --- | --- |
