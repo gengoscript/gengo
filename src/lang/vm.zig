@@ -1965,6 +1965,46 @@ fn runInner() !void {
                 const a = try vmPop();
                 try vmPush(try computeAddResult(a, b));
             },
+            .local_add_local => {
+                const dst = try vmByte();
+                const src = try vmByte();
+                const base = if (vmState().frame_top > 0) vmState().frames[vmState().frame_top - 1].base else 0;
+                if (base + dst >= vmState().stack.len or base + src >= vmState().stack.len) return error.StackOverflow;
+                var a = vmState().stack[base + dst];
+                if (a == .object and a.object.* == .cell) a = a.object.cell.value;
+                var b = vmState().stack[base + src];
+                if (b == .object and b.object.* == .cell) b = b.object.cell.value;
+                const result: Value = if (a == .int and b == .int) blk: {
+                    const r = a.int + b.int;
+                    if (!std.math.isFinite(r)) { vms.setRuntimeErr("non-finite value in arithmetic operation", .{}); return error.TypeError; }
+                    break :blk .{ .int = r };
+                } else try computeAddResult(a, b);
+                const cur = vmState().stack[base + dst];
+                if (cur == .object and cur.object.* == .cell) {
+                    cur.object.cell.value = result;
+                } else {
+                    vmState().stack[base + dst] = result;
+                }
+            },
+            .local_add_const => {
+                const dst = try vmByte();
+                const k = try chunk.constAt(try vmShort());
+                const base = if (vmState().frame_top > 0) vmState().frames[vmState().frame_top - 1].base else 0;
+                if (base + dst >= vmState().stack.len) return error.StackOverflow;
+                var a = vmState().stack[base + dst];
+                if (a == .object and a.object.* == .cell) a = a.object.cell.value;
+                const result: Value = if (a == .int and k == .int) blk: {
+                    const r = a.int + k.int;
+                    if (!std.math.isFinite(r)) { vms.setRuntimeErr("non-finite value in arithmetic operation", .{}); return error.TypeError; }
+                    break :blk .{ .int = r };
+                } else try computeAddResult(a, k);
+                const cur = vmState().stack[base + dst];
+                if (cur == .object and cur.object.* == .cell) {
+                    cur.object.cell.value = result;
+                } else {
+                    vmState().stack[base + dst] = result;
+                }
+            },
             .add_ret => {
                 vmperf.breakOpChain();
                 if (vmState().frame_top == 0) return error.ReturnAtTopLevel;

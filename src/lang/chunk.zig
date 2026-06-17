@@ -35,6 +35,9 @@ pub const State = struct {
     // Peephole: position of the last get_local_const_sub triple-fused instruction.
     // Used for fusion: get_local_const_sub + call → get_local_const_sub_call.
     last_get_local_const_sub_pos: ?usize = null,
+    // Peephole: position of the last get_local_const_add triple-fused instruction.
+    // Used for fusion: get_local_const_add + set_local → local_add_const.
+    last_get_local_const_add_pos: ?usize = null,
     // Peephole: position of the last set_global instruction.
     // Used for fusion: set_global + loop → set_global_loop.
     last_set_global_code_pos: ?usize = null,
@@ -57,6 +60,7 @@ pub fn reset() void {
     g_state.last_triple_eq_pos = null;
     g_state.last_triple_lt_pos = null;
     g_state.last_get_local_const_sub_pos = null;
+    g_state.last_get_local_const_add_pos = null;
     g_state.last_set_global_code_pos = null;
 }
 
@@ -130,6 +134,36 @@ pub fn emit2(a: u8, b: u8, line: u32) !void {
             }
         }
     }
+    if (a == @intFromEnum(Op.set_local)) {
+        // Fusion: get_local_const_add dst K + set_local dst → local_add_const dst K_hi K_lo (4 bytes, 1 dispatch).
+        if (g_state.last_get_local_const_add_pos) |pos| {
+            g_state.last_get_local_const_add_pos = null;
+            if (pos + 5 == g_state.code_len - 2 and g_state.code[pos + 1] == b) {
+                g_state.code[pos] = @intFromEnum(Op.local_add_const);
+                // Shift K_hi/K_lo left over the skipped const_add byte: [dst][skip][K_hi][K_lo] → [dst][K_hi][K_lo]
+                g_state.code[pos + 2] = g_state.code[pos + 3];
+                g_state.code[pos + 3] = g_state.code[pos + 4];
+                g_state.code_len = pos + 4;
+                return;
+            }
+        }
+        // Fusion: get_local dst; get_local src; add; set_local dst → local_add_local dst src (3 bytes, 1 dispatch).
+        if (g_state.code_len >= 7) {
+            const p = g_state.code_len - 7;
+            if (g_state.code[p] == @intFromEnum(Op.get_local) and
+                g_state.code[p + 1] == b and
+                g_state.code[p + 2] == @intFromEnum(Op.get_local) and
+                g_state.code[p + 4] == @intFromEnum(Op.add))
+            {
+                const src = g_state.code[p + 3];
+                g_state.code[p] = @intFromEnum(Op.local_add_local);
+                g_state.code[p + 1] = b;   // dst
+                g_state.code[p + 2] = src; // src
+                g_state.code_len = p + 3;
+                return;
+            }
+        }
+    }
 }
 
 // Emit opcode + 2-byte constant index (big-endian).
@@ -191,6 +225,8 @@ pub fn emitBinOpFused(op: Op, line: u32) !void {
                                 g_state.last_triple_lt_pos = gl_pos;
                             } else if (top == .get_local_const_sub) {
                                 g_state.last_get_local_const_sub_pos = gl_pos;
+                            } else if (top == .get_local_const_add) {
+                                g_state.last_get_local_const_add_pos = gl_pos;
                             }
                         }
                     }
