@@ -172,7 +172,7 @@ The entries below describe the public library surface. This page is intentionall
 ### `std.conv.to_bool(x)`
 - Explicit conversion to boolean: `false`, `null`, `0`, and `""` convert to
   `false`; everything else converts to `true`
-- This is the only truthiness in the language — `if`/`!`/`&&`/`||` and
+- This is the only truthiness in the language — `if`/`not`/`and`/`or` and
   template `{{if}}` require an actual `bool`
 
 ### `std.conv.to_string(x)`

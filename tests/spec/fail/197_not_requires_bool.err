@@ -1,2 +1,2 @@
 TypeError
-'!' operand must be bool, got int
+'not' operand must be bool, got int

@@ -102,7 +102,7 @@ type Hour int cycle 0..23
 pub func allow(port int, hour int) bool {
     p := Port(port)
     h := Hour(hour)
-    return p == Port(443) && h >= Hour(8) && h <= Hour(18)
+    return p == Port(443) and h >= Hour(8) and h <= Hour(18)
 }
 ```
 
@@ -148,7 +148,7 @@ type Severity int range 0..5
 
 pub func validate(severity int, source string) bool {
     s := Severity(severity)
-    return s >= Severity(3) && source == "network"
+    return s >= Severity(3) and source == "network"
 }
 ```
 

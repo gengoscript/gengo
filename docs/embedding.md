@@ -180,7 +180,7 @@ const setup = rt.run(
     \\                       age int, score int,
     \\                       active bool, verified bool,
     \\                       limit int) bool {
-    \\    return active && verified && age >= 18 && score < limit
+    \\    return active and verified and age >= 18 and score < limit
     \\}
 );
 switch (setup) {

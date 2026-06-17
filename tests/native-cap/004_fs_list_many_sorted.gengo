@@ -33,6 +33,6 @@ for j < std.core.len(names) {
 }
 
 std.io.println(std.core.len(names))
-std.io.println(!dup)
+std.io.println(not dup)
 std.io.println(names[0][0:5])
 std.io.println(names[1399][0:5])

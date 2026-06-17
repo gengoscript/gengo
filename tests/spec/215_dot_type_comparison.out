@@ -20,4 +20,4 @@ switch: float
 switch: bool
 switch: string
 true
-composable with &&
+composable with and

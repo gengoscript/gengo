@@ -19,7 +19,7 @@ func acl(client string, user string, topic string, access string) bool {
     }
 
     // Anyone — including anonymous clients — may read the public space.
-    if access == "read" || access == "subscribe" {
+    if access == "read" or access == "subscribe" {
         if std.string.starts_with(topic, "public/") {
             return true
         }

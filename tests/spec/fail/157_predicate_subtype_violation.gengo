@@ -1,2 +1,2 @@
-type Port int predicate func(x) { return x >= 1 && x <= 65535 }
+type Port int predicate func(x) { return x >= 1 and x <= 65535 }
 p := Port(0)

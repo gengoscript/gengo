@@ -10,8 +10,8 @@ pub func validate(amount_cents int, currency string, qty int) bool {
     last_reason = ""
     _ = AmountCents(amount_cents)     // panics with range message if violated
     _ = Quantity(qty)                 // panics with range message if violated
-    if !(currency == "USD" || currency == "EUR" || currency == "SEK" ||
-         currency == "GBP" || currency == "JPY") {
+    if not (currency == "USD" or currency == "EUR" or currency == "SEK" or
+         currency == "GBP" or currency == "JPY") {
         last_reason = "unsupported currency: " + currency
         return false
     }

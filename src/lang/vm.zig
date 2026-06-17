@@ -2273,7 +2273,7 @@ fn runInner() !void {
             },
             .not => {
                 const v = try vmPop();
-                try vmPush(.{ .boolean = !(try condAsBool(v, "'!' operand")) });
+                try vmPush(.{ .boolean = !(try condAsBool(v, "'not' operand")) });
             },
             .eq => {
                 const b = try vmPop();

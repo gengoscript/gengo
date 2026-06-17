@@ -1,5 +1,5 @@
 std := import("std")
-if x := 3; x > 2 && x < 4 {
+if x := 3; x > 2 and x < 4 {
     std.io.println("ok")
 } else {
     std.io.println("bad")

@@ -13,7 +13,7 @@ syn keyword gengoType int float bool string any
 
 syn match gengoOperator "+\|-\|\*\|/\|%\|\*\*\|++\|--"
 syn match gengoOperator "==\|!=\|<\|<=\|>\|>="
-syn match gengoOperator "&&\|||\|!"
+syn match gengoOperator "&&\|||\|!\|and\|or\|not"
 syn match gengoOperator "&\||\|\^\|~\|<<\|>>"
 syn match gengoOperator "=\|:=\|+=\|-=\|*=\|/=\|%="
 syn match gengoOperator "&=\||=\|^=\|<<=\|>>="

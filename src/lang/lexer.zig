@@ -10,6 +10,7 @@ const Token = token.Token;
 pub const StrPoolSize: usize = 128 * 1024;
 
 const keyword_map = std.StaticStringMap(TT).initComptime(.{
+    .{ "and",       .kw_and },
     .{ "assert",    .kw_assert },
     .{ "break",     .kw_break },
     .{ "case",      .kw_case },
@@ -27,8 +28,10 @@ const keyword_map = std.StaticStringMap(TT).initComptime(.{
     .{ "import",    .kw_import },
     .{ "in",        .kw_in },
     .{ "interface", .kw_interface },
+    .{ "not",       .kw_not },
     .{ "null",      .kw_null },
     .{ "message",   .kw_message },
+    .{ "or",        .kw_or },
     .{ "predicate", .kw_predicate },
     .{ "pub",       .kw_pub },
     .{ "range",     .kw_range },

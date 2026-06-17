@@ -15,7 +15,7 @@ func inner(row string) any {
 func render(rows any) {
     for row in rows {
         for cell in inner(row) {
-            if !std.core.is_string(cell) {
+            if not std.core.is_string(cell) {
                 std.io.println("CORRUPT:", std.core.type_of(cell))
                 return
             }

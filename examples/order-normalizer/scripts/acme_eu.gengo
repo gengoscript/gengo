@@ -3,11 +3,11 @@ catalog := import("host:catalog")
 type Quantity int range 1..10000
 type WeightGrams int range 1..50000000
 type CurrencyCode string predicate func(x) {
-    return x == "SEK" || x == "EUR" || x == "USD" || x == "GBP"
+    return x == "SEK" or x == "EUR" or x == "USD" or x == "GBP"
 }
 type CountryCode string predicate func(x) {
-    return x == "SE" || x == "NO" || x == "DK" || x == "FI" ||
-           x == "DE" || x == "NL" || x == "US"
+    return x == "SE" or x == "NO" or x == "DK" or x == "FI" or
+           x == "DE" or x == "NL" or x == "US"
 }
 
 var saved_reason string = ""
@@ -49,7 +49,7 @@ pub func normalize(
         return reject("unsupported status")
     }
 
-    if !catalog.country_allowed(country) {
+    if not catalog.country_allowed(country) {
         return reject("country not enabled")
     }
 

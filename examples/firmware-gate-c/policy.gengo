@@ -4,7 +4,7 @@ core := std.core
 type Build          int range 1000..999999
 type BatteryPercent int range 0..100
 type Region string predicate func(x) {
-    return x == "eu" || x == "us" || x == "apac"
+    return x == "eu" or x == "us" or x == "apac"
 }
 
 type RolloutRule struct { min_battery int, min_build int, region_lock string }
@@ -48,7 +48,7 @@ pub func allow_update(
     tgt     := Build(target_build)
     battery := BatteryPercent(battery_percent)
 
-    if !model_enabled { return deny("model not enabled for updates") }
+    if not model_enabled { return deny("model not enabled for updates") }
     if serial_blocked { return deny("serial number is blocked") }
     if tgt <= cur     { return deny("target build is not newer than current") }
 
@@ -61,7 +61,7 @@ pub func allow_update(
     if tgt < Build(rule.min_build) {
         return deny(model + " requires build >= " + std.conv.to_string(rule.min_build))
     }
-    if rule.region_lock != "" && region != rule.region_lock {
+    if rule.region_lock != "" and region != rule.region_lock {
         return deny(model + " rollout restricted to " + rule.region_lock)
     }
 

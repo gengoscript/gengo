@@ -1,6 +1,6 @@
 std := import("std")
 
-type Score int predicate func(x) { return x >= 0 && x <= 100 }
+type Score int predicate func(x) { return x >= 0 and x <= 100 }
 
 total := 0
 for i := 0; i < 1000; i++ {

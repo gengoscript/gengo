@@ -6,5 +6,5 @@ func boom() bool {
     return true
 }
 
-std.io.println(false && boom())
-std.io.println(true || boom())
+std.io.println(false and boom())
+std.io.println(true or boom())

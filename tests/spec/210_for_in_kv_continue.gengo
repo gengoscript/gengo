@@ -12,7 +12,7 @@ func skip_even_values_map() {
 func skip_key_prefix_map() {
     m := {"aa": 10, "bb": 20, "cc": 30, "dd": 40}
     for k, v in m {
-        if k == "bb" || k == "dd" { continue }
+        if k == "bb" or k == "dd" { continue }
         std.io.print(k, ":", v, " ")
     }
     std.io.println()
