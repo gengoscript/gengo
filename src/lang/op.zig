@@ -89,6 +89,7 @@ pub const Op = enum(u8) {
     loop,
     set_global_loop,  // fused: set_global (5 bytes) + loop back-edge (2 bytes); same IC layout
     set_named_predicate, // pop predicate, set named_type.predicate on TOS
+    validate_type_default, // if TOS named_type has both a default and a predicate, check the default now
     call,
     defer_call,
     defer_invoke_method,

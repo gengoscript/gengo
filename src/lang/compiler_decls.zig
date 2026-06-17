@@ -655,6 +655,9 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
     if (predicate_uv_count > 0) {
         try chunk.emitOp(.set_named_predicate, kw.line);
     }
+    if (has_default and predicate_obj != null) {
+        try chunk.emitOp(.validate_type_default, kw.line);
+    }
     if (c.inFunc()) {
         _ = try c.defineLocal(name, false);
     } else {
@@ -1167,6 +1170,9 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
     try chunk.emitConst(.{ .object = nt }, kw.line);
     if (predicate_uv_count > 0) {
         try chunk.emitOp(.set_named_predicate, kw.line);
+    }
+    if (has_default and predicate_obj != null) {
+        try chunk.emitOp(.validate_type_default, kw.line);
     }
     if (c.inFunc()) {
         _ = try c.defineLocal(name, false);
