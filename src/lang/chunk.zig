@@ -32,6 +32,9 @@ pub const State = struct {
     // Peephole: position of the last get_local_const_lt triple-fused instruction.
     // Used for quad-fusion: get_local_const_lt + jif_pop → get_local_const_lt_jif_pop.
     last_triple_lt_pos: ?usize = null,
+    // Peephole: position of the last get_local_const_sub triple-fused instruction.
+    // Used for fusion: get_local_const_sub + call → get_local_const_sub_call.
+    last_get_local_const_sub_pos: ?usize = null,
     // Peephole: position of the last set_global instruction.
     // Used for fusion: set_global + loop → set_global_loop.
     last_set_global_code_pos: ?usize = null,
@@ -53,6 +56,7 @@ pub fn reset() void {
     g_state.last_get_local_code_pos = null;
     g_state.last_triple_eq_pos = null;
     g_state.last_triple_lt_pos = null;
+    g_state.last_get_local_const_sub_pos = null;
     g_state.last_set_global_code_pos = null;
 }
 
@@ -87,6 +91,16 @@ pub fn emitOp(op: Op, line: u32) !void {
             }
         }
     }
+    // Peephole: get_local_const_sub immediately preceding call → get_local_const_sub_call (6 bytes, 1 dispatch).
+    if (op == .call) {
+        if (g_state.last_get_local_const_sub_pos) |sub_pos| {
+            if (sub_pos + 5 == g_state.code_len) {
+                g_state.code[sub_pos] = @intFromEnum(Op.get_local_const_sub_call);
+                g_state.last_get_local_const_sub_pos = null;
+                return; // reuses the 5-byte get_local_const_sub + 1-byte argc
+            }
+        }
+    }
     return emitByte(@intFromEnum(op), line);
 }
 
@@ -95,6 +109,18 @@ pub fn emit2(a: u8, b: u8, line: u32) !void {
     try emitByte(b, line);
     if (a == @intFromEnum(Op.get_local)) {
         g_state.last_get_local_code_pos = g_state.code_len - 2;
+    }
+    if (a == @intFromEnum(Op.call)) {
+        if (g_state.last_get_local_const_sub_pos) |sub_pos| {
+            if (sub_pos + 5 == g_state.code_len - 2) {
+                g_state.code[sub_pos] = @intFromEnum(Op.get_local_const_sub_call);
+                g_state.code[sub_pos + 5] = b; // argc moves to position 5
+                g_state.code_len -= 1;
+                g_state.last_get_local_const_sub_pos = null;
+            } else {
+                g_state.last_get_local_const_sub_pos = null; // stale tracker
+            }
+        }
     }
 }
 
@@ -155,6 +181,8 @@ pub fn emitBinOpFused(op: Op, line: u32) !void {
                                 g_state.last_triple_eq_pos = gl_pos;
                             } else if (top == .get_local_const_lt) {
                                 g_state.last_triple_lt_pos = gl_pos;
+                            } else if (top == .get_local_const_sub) {
+                                g_state.last_get_local_const_sub_pos = gl_pos;
                             }
                         }
                     }

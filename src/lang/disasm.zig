@@ -323,6 +323,26 @@ pub fn disassemble() void {
                 writeConst(idx);
                 io.write("\n");
             },
+            // --- get_local_const_sub + call fused: op + slot(1) + skip(1) + idx(2) + argc(1) ---
+            .get_local_const_sub_call => {
+                const slot = chunk.codeByteAt(i);
+                i += 1;
+                i += 1; // skip byte
+                const idx = readU16(i);
+                i += 2;
+                const argc = chunk.codeByteAt(i);
+                i += 1;
+                io.write(@tagName(op));
+                io.write(" local=");
+                writeNum(slot);
+                io.write(" [");
+                writeNum(idx);
+                io.write("] ");
+                writeConst(idx);
+                io.write(" argc=");
+                writeNum(argc);
+                io.write("\n");
+            },
 
             // --- quad-fused: op + slot(1) + skip(1) + idx(2) + jmp(4) ---
             .get_local_const_eq_jif_pop, .get_local_const_lt_jif_pop => {
