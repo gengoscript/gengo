@@ -90,6 +90,14 @@ pub fn emitOp(op: Op, line: u32) !void {
                 return; // get_local_ret reuses the 2-byte get_local slot; no extra byte needed
             }
         }
+        // Peephole: add immediately preceding ret → add_ret (1 byte, 1 dispatch).
+        if (g_state.code_len > 0) {
+            const prev = g_state.code[g_state.code_len - 1];
+            if (prev == @intFromEnum(Op.add)) {
+                g_state.code[g_state.code_len - 1] = @intFromEnum(Op.add_ret);
+                return; // overwrites the add opcode in place
+            }
+        }
     }
     // Peephole: get_local_const_sub immediately preceding call → get_local_const_sub_call (6 bytes, 1 dispatch).
     if (op == .call) {
