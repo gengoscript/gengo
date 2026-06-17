@@ -2364,6 +2364,25 @@ fn runInner() !void {
                 };
                 try pushNumericResultWithCarrier(a, k, an - kn, tag, "-");
             },
+            .get_local_const_sub_call => {
+                const slot = try vmByte();
+                vmState().ip += 1; // skip the embedded const_sub opcode byte
+                const k = try chunk.constAt(try vmShort());
+                const argc = try vmByte();
+                const base = if (vmState().frame_top > 0) vmState().frames[vmState().frame_top - 1].base else 0;
+                if (base + slot >= vmState().stack.len) return error.StackOverflow;
+                var a = vmState().stack[base + slot];
+                if (a == .object and a.object.* == .cell) a = a.object.cell.value;
+                const an = try valueAsNumberForOp(a, k, "-");
+                const kn = try valueAsNumberForOp(k, a, "-");
+                const tag = numericOpTag(a, k) catch |err| {
+                    if (err == error.TypeError) setBinaryTypeError("-", a, k);
+                    return err;
+                };
+                try pushNumericResultWithCarrier(a, k, an - kn, tag, "-");
+                if (try tryTailCall(argc)) continue;
+                try performCall(argc);
+            },
             .get_local_const_add => {
                 const slot = try vmByte();
                 vmState().ip += 1; // skip the embedded const_add opcode byte
