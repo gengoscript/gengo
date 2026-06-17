@@ -1,0 +1,14 @@
+std := import("std")
+
+func make_fib() func(int) int {
+    fib := func(n int) int {
+        if n < 2 { return n }
+        return fib(n-1) + fib(n-2)
+    }
+    return fib
+}
+
+f := make_fib()
+std.io.println(f(10))
+std.io.println(f(0))
+std.io.println(f(1))
