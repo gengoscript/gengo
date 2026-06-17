@@ -4,7 +4,7 @@ std := import("std")
 // object, so a temporary array's only reference lived in a Zig local during
 // the allocation. A GC there swept the array (often reusing its slot for
 // the iterator itself), corrupting iteration or failing with TypeError.
-func inner(row string) any {
+func inner(row string) []string {
     var cells := []
     for part in std.string.split(row, "|") {
         cells = std.core.append(cells, std.string.trim(part))
@@ -12,7 +12,7 @@ func inner(row string) any {
     return cells
 }
 
-func render(rows any) {
+func render(rows []string) {
     for row in rows {
         for cell in inner(row) {
             if not std.core.is_string(cell) {

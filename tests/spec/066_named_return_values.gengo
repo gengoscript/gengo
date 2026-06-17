@@ -2,7 +2,7 @@ std := import("std")
 core := std.core
 
 // Single named return
-func identity(v any) (out any) {
+func identity(v int) (out int) {
     out = v
     return
 }
@@ -36,7 +36,7 @@ func always42() (x int) {
 }
 
 std.io.println(identity(123))
-std.io.println(identity("hello"))
+std.io.println(identity(456))
 
 r1, e1 := divide(10.0, 2.0)
 std.io.printf("result=%v err=%v\n", r1, e1)

@@ -60,7 +60,7 @@ fn fuzzCompiler() void {
         "\"hello\"", "\"world\"", "func", "var", "const", "if", "else", "for",
         "in", "while", "return", "break", "continue", "defer", "panic", "recover",
         "type", "struct", "interface", "import", "map", "array", "int", "float",
-        "bool", "string", "rune", "error", "any", "decimal", "[]", "[", "]", "{", "}",
+        "bool", "string", "rune", "error", "decimal", "[]", "[", "]", "{", "}",
         "(", ")", ",", ";", ":", "=", "==", "!=", "<", ">", "+", "-", "*", "/", "%",
         "&", "|", "^", "~", "<<", ">>", "and", "or", "not", "+=", "-=", "*=", "/=",
         ":=", "=>", ".", "..", "range", "score", "name", "age", "Score", "Name", "Age",

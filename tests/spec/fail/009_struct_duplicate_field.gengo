@@ -1,1 +1,1 @@
-type User struct { id, id }
+type User struct { id int, id int }

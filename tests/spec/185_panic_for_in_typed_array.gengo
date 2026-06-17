@@ -4,7 +4,7 @@ type Score int range 0..100
 type Record struct { name string, score Score }
 type Records []Record
 
-func make_record(items any) (result Record, err string) {
+func make_record(items []int) (result Record, err string) {
     err = ""
     defer func() {
         e := std.core.recover()
