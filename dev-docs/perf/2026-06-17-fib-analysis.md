@@ -144,5 +144,66 @@ The `ret` path dropped from ~103 cycles to ~35 cycles because typed functions wi
 - `src/lang/vm_perf.zig` — cycle-counting instrumentation (compile-time gated)
 - `dev-docs/perf/2026-06-17-fib-analysis.md` — this document
 
+## Additional Optimizations Implemented
+
+### Optimization #2: `get_local_ret` superinstruction
+
+**Commit:** `6cd762e`
+
+Fuses `get_local slot` + `ret` → `get_local_ret slot` (2 bytes, 1 dispatch). Very common in recursive base cases (`return n`).
+
+| Metric | Before | After | Change |
+|---|---|---|---|
+| `ret` opcodes in fib(32) | 7.0M | 3.5M `ret` + 3.5M `get_local_ret` | **3.5M dispatches saved** |
+| fib(32) user time | ~0.63s | ~0.61s | **~3% faster** |
+
+### Optimization #3: `get_local_const_sub_call` superinstruction
+
+**Commit:** `4b61868`
+
+Fuses `get_local_const_sub` + `call` → `get_local_const_sub_call` (6 bytes, 1 dispatch). Saves the hottest opcode pair in fib(32) (7M occurrences).
+
+| Metric | Before | After | Change |
+|---|---|---|---|
+| Opcode bytes per recursive call | 7 bytes | 6 bytes | **1 byte + 1 dispatch saved per call** |
+| fib(32) user time | ~0.63s | ~0.63s | ~0% (dispatch savings offset by handler complexity) |
+
+The wall-time improvement is marginal because the saved dispatch (~17ns) is small compared to `performCall` overhead (~100ns). The primary value is reducing instruction cache pressure and interpreter loop overhead.
+
+### Optimization #4: `add_ret` superinstruction
+
+**Commit:** `00f3a4b`
+
+Fuses `add` + `ret` → `add_ret` (1 byte, 1 dispatch). Avoids pushing/popping the intermediate result.
+
+| Metric | Before | After | Change |
+|---|---|---|---|
+| `add` + `ret` pairs in fib(32) | 3.5M | 3.5M `add_ret` | **3.5M dispatches saved, no intermediate stack traffic** |
+| fib(32) user time | ~0.63s | ~0.63s | ~0% |
+
+Extracted `computeAddResult(a, b)` helper to share `add` logic between `.add` and `.add_ret` handlers, covering string concatenation, decimal arithmetic, and named-type carriers.
+
+### Cumulative Results
+
+| Metric | Baseline | After all optimizations | Total Improvement |
+|---|---|---|---|
+| fib(32) user time | ~0.72s | ~0.61–0.63s | **~12–15% faster** |
+| `ret` cycles | ~103 | ~35 | **65% reduction** |
+| Superinstructions added | 0 | 3 (`get_local_ret`, `get_local_const_sub_call`, `add_ret`) | — |
+| Dispatches saved in fib(32) | — | ~14M | — |
+
+### Remaining Bottlenecks
+
+After the superinstruction optimizations, the dominant overhead is still the **call frame push/pop** in `performCall`:
+- `performCall` saves `ret_ip`, `base`, `closure`, `func_obj`, `defer_base`, `has_typed_returns` (6 fields, ~48 bytes)
+- Typed parameter validation (`enforceFuncArgTypes`) adds a tag check per call
+- Frame array bounds check
+
+To improve further, the most impactful changes would be:
+1. **Direct-threaded dispatch** — replace the `switch` with a jump table of function pointers (saves ~5–10ns per dispatch)
+2. **Frame caching / register-window calling convention** — reduce the field writes per call
+3. **Compiler-level TCO detection** — convert naive recursion to tail-recursive form where possible
+4. **Closure self-reference** — recursive functions store a self-reference in upvalues, avoiding `get_global` entirely
+
 ---
 *Generated on 2026-06-17 as part of the `perf-analysis` branch investigation.*

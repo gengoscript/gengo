@@ -1420,8 +1420,29 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
         return c.err("'{s}' is a type name and cannot be used as a variable name", .{name.src});
     c.advance();
     var inferred_type_check: TypeCheck = .{ .none = {} };
+    var self_ref_slot: ?u8 = null;
+    var captured_self = false;
     if (c.match(.colon_eq) or c.match(.eq)) {
+        const is_func_lit = c.cur.typ == .kw_func;
+        if (is_func_lit and c.inFunc()) {
+            self_ref_slot = try c.defineLocal(name.src, is_const);
+        }
         try c.expr();
+        if (is_func_lit and self_ref_slot != null) {
+            const sr = self_ref_slot.?;
+            if (c.last_func_obj) |fo| {
+                const proto = fo.function;
+                for (proto.capture_slots) |enc| {
+                    if ((enc & 0x80) == 0 and (enc & 0x7F) == sr) {
+                        captured_self = true;
+                        break;
+                    }
+                }
+            }
+            if (captured_self) {
+                try chunk.emit2(@intFromEnum(Op.set_local), sr, name.line);
+            }
+        }
     } else if (c.cur.typ == .lbracket) {
         const ts = try c.parseFieldTypeSpec();
         const is_map = ts.alts.len > 0 and ts.alts[0].typ == .map;
@@ -1551,18 +1572,35 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
     } else {
         return c.err("expected expression, found {s}", .{c.tokenName(c.cur.typ)});
     }
+    // Determine slot and whether local is already defined (self-reference placeholder).
+    var already_defined = false;
+    var slot: ?u8 = null;
+    if (self_ref_slot) |sr| {
+        slot = sr;
+        already_defined = true;
+    }
+
     if (c.inFunc() or c.in_loop_init or c.loop_body_depth > 0) {
-        const slot = try c.defineLocal(name.src, is_const);
-        c.currentScope().locals[slot].type_check = inferred_type_check;
-        if (c.std_namespace_path != null and c.std_namespace_path.?.len == 0) {
-            c.currentScope().locals[slot].from_std = true;
+        if (!already_defined) {
+            slot = try c.defineLocal(name.src, is_const);
         }
-        if (c.import_module_path) |path| {
-            c.currentScope().locals[slot].import_module_path = path;
-        }
-        if (!c.inFunc()) {
-            try chunk.emitOp(.dup, name.line);
-            try chunk.emit2(@intFromEnum(Op.set_local), slot, name.line);
+        if (slot) |s| {
+            c.currentScope().locals[s].type_check = inferred_type_check;
+            if (c.std_namespace_path != null and c.std_namespace_path.?.len == 0) {
+                c.currentScope().locals[s].from_std = true;
+            }
+            if (c.import_module_path) |path| {
+                c.currentScope().locals[s].import_module_path = path;
+            }
+            if (!c.inFunc()) {
+                if (!already_defined) {
+                    try chunk.emitOp(.dup, name.line);
+                } else {
+                    // self-ref: push the closure from local so def_global can store it.
+                    try chunk.emit2(@intFromEnum(Op.get_local), s, name.line);
+                }
+                try chunk.emit2(@intFromEnum(Op.set_local), s, name.line);
+            }
         }
     } else {
         if (!is_const and c.registry.hasGlobalConst(name.src)) { c.setErr("cannot assign to const variable '{s}'", .{name.src}); return error.AssignToConst; }
@@ -1588,6 +1626,9 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
                     return error.RedeclareGlobal;
                 }
             }
+        }
+        if (already_defined) {
+            try chunk.emit2(@intFromEnum(Op.get_local), slot.?, name.line);
         }
         try chunk.emitOpConst(.def_global, .{ .string = qname }, name.line);
         if (!c.skipping_test_body) {
