@@ -2924,7 +2924,10 @@ fn runInner() !void {
             .call => {
                 const argc = try vmByte();
                 if (try tryTailCall(argc)) continue;
+                const t0 = vmperf.readTsc();
                 try performCall(argc);
+                const t1 = vmperf.readTsc();
+                if (t1 > t0) vmperf.callCycles(t1 - t0);
             },
             .op_assert => {
                 const cond = try vmPop();
@@ -3013,20 +3016,44 @@ fn runInner() !void {
             .ret => {
                 vmperf.breakOpChain();
                 if (vmState().frame_top == 0) return error.ReturnAtTopLevel;
+                const t0 = vmperf.readTsc();
                 const retval = try vmPop();
                 const fi = vmState().frame_top - 1;
                 const frame = &vmState().frames[fi];
-                if (vmState().defer_top == frame.defer_base and !frame.has_typed_returns) {
+                const can_fast = blk: {
+                    if (vmState().defer_top != frame.defer_base) break :blk false;
+                    if (!frame.has_typed_returns) break :blk true;
+                    const f = switch (frame.func_obj.*) {
+                        .function => frame.func_obj.function,
+                        .closure => |cl| cl.func.function,
+                        else => break :blk false,
+                    };
+                    if (!vmtyp.isPrimitiveReturn(f)) break :blk false;
+                    break :blk vmtyp.checkPrimitiveReturn(f, retval);
+                };
+                if (can_fast) {
                     vmState().frame_top = fi;
                     vmState().stack_top = if (frame.base > 0) frame.base - 1 else 0;
                     vmState().ip = frame.ret_ip;
                     try vmPush(retval);
                     if (vmState().call_depth_target) |d| {
-                        if (vmState().frame_top == d) return;
+                        if (vmState().frame_top == d) {
+                            const t1 = vmperf.readTsc();
+                            if (t1 > t0) vmperf.retCycles(t1 - t0);
+                            return;
+                        }
                     }
+                    const t1 = vmperf.readTsc();
+                    if (t1 > t0) vmperf.retCycles(t1 - t0);
                     continue;
                 }
-                if (try retSlowPath(retval)) return;
+                if (try retSlowPath(retval)) {
+                    const t1 = vmperf.readTsc();
+                    if (t1 > t0) vmperf.retCycles(t1 - t0);
+                    return;
+                }
+                const t1 = vmperf.readTsc();
+                if (t1 > t0) vmperf.retCycles(t1 - t0);
             },
 
             // Fused constant+ret: reads idx, pushes constant, returns.
@@ -3037,7 +3064,18 @@ fn runInner() !void {
                 const k = try chunk.constAt(try vmShort());
                 const fi = vmState().frame_top - 1;
                 const frame = &vmState().frames[fi];
-                if (vmState().defer_top == frame.defer_base and !frame.has_typed_returns) {
+                const can_fast = blk: {
+                    if (vmState().defer_top != frame.defer_base) break :blk false;
+                    if (!frame.has_typed_returns) break :blk true;
+                    const f = switch (frame.func_obj.*) {
+                        .function => frame.func_obj.function,
+                        .closure => |cl| cl.func.function,
+                        else => break :blk false,
+                    };
+                    if (!vmtyp.isPrimitiveReturn(f)) break :blk false;
+                    break :blk vmtyp.checkPrimitiveReturn(f, k);
+                };
+                if (can_fast) {
                     vmState().frame_top = fi;
                     vmState().stack_top = if (frame.base > 0) frame.base - 1 else 0;
                     vmState().ip = frame.ret_ip;

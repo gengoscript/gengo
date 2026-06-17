@@ -1,0 +1,7 @@
+std := import("std")
+
+n := 0
+for i := 0; i < 100000000; i++ {
+    n = n + 1
+}
+std.io.println(n)
