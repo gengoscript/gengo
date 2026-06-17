@@ -144,7 +144,7 @@ func clampTick(n int) Tick {
 // ---------- Per-worker policy builder ----------
 // Returns a map whose values are RetryPolicy interface values.
 // Exercises: for-in over array, interface struct stored as map value.
-func buildPolicies(workers []Worker) map[string]any {
+func buildPolicies(workers []Worker) map[string]RetryPolicy {
     out := {}
     for w in workers {
         wk := std.conv.to_string(int(w.id))
@@ -219,7 +219,7 @@ func scheduleJob(policy RetryPolicy, job Job) (int, bool) {
 }
 
 // ---------- Simulation ----------
-func runSim(initialWorkers []Worker, jobs JobQueue, maxTicks Tick, policies map[string]any) (Stats, ?error) {
+func runSim(initialWorkers []Worker, jobs JobQueue, maxTicks Tick, policies map[string]RetryPolicy) (Stats, ?error) {
     defer func() {
         rec := std.core.recover()
         if rec != null {

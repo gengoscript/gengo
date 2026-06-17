@@ -1,7 +1,7 @@
 std := import("std")
 
-type Person struct { id int|string, nick ?string }
-p := Person{ id: 42, nick: null }
+type Person struct { id string, nick ?string }
+p := Person{ id: "42", nick: null }
 std.io.println(p.id, p.nick)
 p.id = "u-7"
 p.nick = "m"

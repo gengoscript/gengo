@@ -1213,10 +1213,6 @@ pub fn skipTypeSpec(c: anytype) !void {
     _ = c.match(.question);
     if (c.cur.typ != .ident) return c.err("expected identifier, found {s}", .{c.tokenName(c.cur.typ)});
     c.advance();
-    while (c.match(.pipe)) {
-        if (c.cur.typ != .ident) return c.err("expected identifier, found {s}", .{c.tokenName(c.cur.typ)});
-        c.advance();
-    }
 }
 
 pub fn stmt(c: anytype) anyerror!void {
@@ -1494,8 +1490,8 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
             inferred_type_check = .{ .interface_type = type_name };
         } else if (c.registry.hasStructTypeLocal(type_name)) {
             inferred_type_check = .{ .struct_type = type_name };
-        } else if (type_name.len == 0 or common.streq(type_name, "any")) {
-            // No type check for these types
+        } else if (type_name.len == 0) {
+            // No type check for nullable type
         } else {
             return { c.setErr("unknown type name '{s}'", .{type_name}); return error.UnknownTypeName; };
         }

@@ -801,7 +801,7 @@ pub const Compiler = struct {
     // True for primitive type names and every registered named/struct/
     // interface/variant type — identifiers that binding forms must not shadow.
     pub fn isKnownTypeName(self: *Compiler, name: []const u8) bool {
-        const prims = [_][]const u8{ "int", "float", "bool", "string", "rune", "decimal", "error", "any", "map" };
+        const prims = [_][]const u8{ "int", "float", "bool", "string", "rune", "decimal", "error", "map" };
         for (prims) |p| {
             if (common.streq(name, p)) return true;
         }
@@ -901,11 +901,6 @@ pub const Compiler = struct {
                 }
                 t = lx.next();
             }
-        }
-        while (t.typ == .pipe) { // skip union alternatives: | type ...
-            t = lx.next();
-            if (t.typ != .ident) return false;
-            t = lx.next();
         }
         return t.typ == .eq;
     }

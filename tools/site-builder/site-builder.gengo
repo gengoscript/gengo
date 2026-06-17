@@ -187,7 +187,7 @@ func looksLikeDocPath(t string) bool {
 const sepCell := std.regexp.compile('^[-:]+$')
 
 // Split "| a | b |" into trimmed cells, dropping the outer pipes.
-func splitRow(row string) any {
+func splitRow(row string) []string {
     var r := row
     if str.starts_with(r, "|") { r = r[1:] }
     if str.ends_with(r, "|") { r = r[0:core.len(r)-1] }
@@ -199,7 +199,7 @@ func splitRow(row string) any {
 }
 
 // True for the |---|:---:| alignment row.
-func isSeparatorRow(cells any) bool {
+func isSeparatorRow(cells []string) bool {
     if core.len(cells) == 0 { return false }
     for c in cells {
         if not sepCell.match(c) { return false }
@@ -207,7 +207,7 @@ func isSeparatorRow(cells any) bool {
     return true
 }
 
-func renderTable(rows any) Html {
+func renderTable(rows []string) Html {
     var out := std.string.builder()
     out.write("<table>\n")
     var bodyStart := 0

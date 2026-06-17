@@ -6,7 +6,7 @@ type Inner struct { name string }
 type A struct {
     items []B,
     lookup [string]Inner,
-    flag int | string
+    flag int
 }
 
 a := A{

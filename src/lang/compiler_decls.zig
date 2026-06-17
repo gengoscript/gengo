@@ -689,93 +689,90 @@ pub fn parseFieldTypeSpec(c: anytype) !FieldTypeSpec {
     var count: u8 = 0;
 
     if (c.match(.question)) {
-            if (count >= MaxTypeAlts) { c.setErr("too many type alternatives (max {d})", .{MaxTypeAlts}); return error.TooManyTypeAlternatives; }
+        if (count >= MaxTypeAlts) { c.setErr("too many type alternatives (max {d})", .{MaxTypeAlts}); return error.TooManyTypeAlternatives; }
         tmp[count] = .{ .typ = .null_t };
         count += 1;
     }
 
-    while (true) {
-        var alt: FieldTypeAlt = undefined;
-        if (c.cur.typ == .lbracket) {
-            c.advance(); // consume '['
-            if (c.check(.rbracket)) {
-                // SliceType: []T
-                c.advance(); // consume ']'
-                const es = try parseFieldTypeSpec(c, );
-                const ep = heap.bump(FieldTypeSpec, 1) orelse return error.OutOfMemory;
-                ep[0] = es;
-                alt = .{ .typ = .array, .elem_spec = ep[0] };
-            } else {
-                // [K]V map — a bare '[T]' with nothing after the ']' is
-                // rejected rather than silently treated as an array: that
-                // shape is what a forgotten map value type looks like, and
-                // letting it quietly mean "array of T" instead would mask
-                // exactly that mistake. Arrays are written '[]T'.
-                const first_spec = try parseFieldTypeSpec(c, );
-                try c.consume(.rbracket);
-                if (!(c.cur.typ == .ident or c.cur.typ == .kw_func or c.cur.typ == .lbracket or c.cur.typ == .question)) {
-                    c.setErr("expected a value type after '[...]' — write 'map[K]V' for a map, or '[]T' for an array", .{});
-                    return error.ExpectedTypeName;
-                }
-                const second_spec = try parseFieldTypeSpec(c, );
-                const kp = heap.bump(FieldTypeSpec, 1) orelse return error.OutOfMemory;
-                kp[0] = first_spec;
-                const vp = heap.bump(FieldTypeSpec, 1) orelse return error.OutOfMemory;
-                vp[0] = second_spec;
-                alt = .{ .typ = .map, .key_spec = kp[0], .val_spec = vp[0] };
+    var alt: FieldTypeAlt = undefined;
+    if (c.cur.typ == .lbracket) {
+        c.advance(); // consume '['
+        if (c.check(.rbracket)) {
+            // SliceType: []T
+            c.advance(); // consume ']'
+            const es = try parseFieldTypeSpec(c, );
+            const ep = heap.bump(FieldTypeSpec, 1) orelse return error.OutOfMemory;
+            ep[0] = es;
+            alt = .{ .typ = .array, .elem_spec = ep[0] };
+        } else {
+            // [K]V map — a bare '[T]' with nothing after the ']' is
+            // rejected rather than silently treated as an array: that
+            // shape is what a forgotten map value type looks like, and
+            // letting it quietly mean "array of T" instead would mask
+            // exactly that mistake. Arrays are written '[]T'.
+            const first_spec = try parseFieldTypeSpec(c, );
+            try c.consume(.rbracket);
+            if (!(c.cur.typ == .ident or c.cur.typ == .kw_func or c.cur.typ == .lbracket or c.cur.typ == .question)) {
+                c.setErr("expected a value type after '[...]' — write 'map[K]V' for a map, or '[]T' for an array", .{});
+                return error.ExpectedTypeName;
             }
-        } else if (c.cur.typ == .kw_func) {
-            c.advance(); // consume 'func'
-            try c.consume(.lparen);
-            var func_params_tmp: [MaxLocals]FieldTypeSpec = undefined;
-            var func_param_count: u8 = 0;
-            if (!c.check(.rparen)) {
-                while (true) {
-                    if (func_param_count >= MaxLocals) { c.setErr("too many parameters (max {d})", .{MaxLocals}); return error.TooManyParams; }
-                    func_params_tmp[func_param_count] = try parseFieldTypeSpec(c, );
-                    func_param_count += 1;
-                    if (!c.match(.comma)) break;
-                    if (c.check(.rparen)) break;
-                }
+            const second_spec = try parseFieldTypeSpec(c, );
+            const kp = heap.bump(FieldTypeSpec, 1) orelse return error.OutOfMemory;
+            kp[0] = first_spec;
+            const vp = heap.bump(FieldTypeSpec, 1) orelse return error.OutOfMemory;
+            vp[0] = second_spec;
+            alt = .{ .typ = .map, .key_spec = kp[0], .val_spec = vp[0] };
+        }
+    } else if (c.cur.typ == .kw_func) {
+        c.advance(); // consume 'func'
+        try c.consume(.lparen);
+        var func_params_tmp: [MaxLocals]FieldTypeSpec = undefined;
+        var func_param_count: u8 = 0;
+        if (!c.check(.rparen)) {
+            while (true) {
+                if (func_param_count >= MaxLocals) { c.setErr("too many parameters (max {d})", .{MaxLocals}); return error.TooManyParams; }
+                func_params_tmp[func_param_count] = try parseFieldTypeSpec(c, );
+                func_param_count += 1;
+                if (!c.match(.comma)) break;
+                if (c.check(.rparen)) break;
+            }
+        }
+        try c.consume(.rparen);
+        var func_returns_tmp: [MaxLocals]FieldTypeSpec = undefined;
+        var func_return_count: u8 = 0;
+        if (c.match(.lparen)) {
+            while (true) {
+                if (func_return_count >= MaxLocals) { c.setErr("too many parameters (max {d})", .{MaxLocals}); return error.TooManyParams; }
+                func_returns_tmp[func_return_count] = try parseFieldTypeSpec(c, );
+                func_return_count += 1;
+                if (!c.match(.comma)) break;
+                if (c.check(.rparen)) break;
             }
             try c.consume(.rparen);
-            var func_returns_tmp: [MaxLocals]FieldTypeSpec = undefined;
-            var func_return_count: u8 = 0;
-            if (c.match(.lparen)) {
-                while (true) {
-                    if (func_return_count >= MaxLocals) { c.setErr("too many parameters (max {d})", .{MaxLocals}); return error.TooManyParams; }
-                    func_returns_tmp[func_return_count] = try parseFieldTypeSpec(c, );
-                    func_return_count += 1;
-                    if (!c.match(.comma)) break;
-                    if (c.check(.rparen)) break;
-                }
-                try c.consume(.rparen);
-            } else if (c.cur.typ == .question or c.cur.typ == .ident or c.cur.typ == .kw_func or c.cur.typ == .lbracket) {
-                func_returns_tmp[0] = try parseFieldTypeSpec(c, );
-                func_return_count = 1;
-            }
-            const fp = if (func_param_count > 0) blk: {
-                const ps = heap.bump(FieldTypeSpec, func_param_count) orelse return error.OutOfMemory;
-                var ii: u8 = 0;
-                while (ii < func_param_count) : (ii += 1) ps[ii] = func_params_tmp[ii];
-                break :blk ps[0..func_param_count];
-            } else @as([]FieldTypeSpec, &.{});
-            const fr = if (func_return_count > 0) blk: {
-                const rs = heap.bump(FieldTypeSpec, func_return_count) orelse return error.OutOfMemory;
-                var ii: u8 = 0;
-                while (ii < func_return_count) : (ii += 1) rs[ii] = func_returns_tmp[ii];
-                break :blk rs[0..func_return_count];
-            } else @as([]FieldTypeSpec, &.{});
-            alt = .{ .typ = .func_t, .func_params = fp, .func_returns = fr };
-        } else {
+        } else if (c.cur.typ == .question or c.cur.typ == .ident or c.cur.typ == .kw_func or c.cur.typ == .lbracket) {
+            func_returns_tmp[0] = try parseFieldTypeSpec(c, );
+            func_return_count = 1;
+        }
+        const fp = if (func_param_count > 0) blk: {
+            const ps = heap.bump(FieldTypeSpec, func_param_count) orelse return error.OutOfMemory;
+            var ii: u8 = 0;
+            while (ii < func_param_count) : (ii += 1) ps[ii] = func_params_tmp[ii];
+            break :blk ps[0..func_param_count];
+        } else @as([]FieldTypeSpec, &.{});
+        const fr = if (func_return_count > 0) blk: {
+            const rs = heap.bump(FieldTypeSpec, func_return_count) orelse return error.OutOfMemory;
+            var ii: u8 = 0;
+            while (ii < func_return_count) : (ii += 1) rs[ii] = func_returns_tmp[ii];
+            break :blk rs[0..func_return_count];
+        } else @as([]FieldTypeSpec, &.{});
+        alt = .{ .typ = .func_t, .func_params = fp, .func_returns = fr };
+    } else {
         if (c.cur.typ != .ident) return c.err("expected identifier, found {s}", .{c.tokenName(c.cur.typ)});
         const tname = c.cur.src;
         c.advance();
 
         alt = .{ .typ = .struct_t, .struct_name = tname };
-        if (common.streq(tname, "any")) {
-            alt = .{ .typ = .any };
-        } else if (common.streq(tname, "int")) {
+        if (common.streq(tname, "int")) {
             alt = .{ .typ = .int };
         } else if (common.streq(tname, "float")) {
             alt = .{ .typ = .float };
@@ -812,20 +809,11 @@ pub fn parseFieldTypeSpec(c: anytype) !FieldTypeSpec {
             c.setErr("unknown type '{s}'", .{tname});
             return error.UnknownType;
         }
-        } // end else (ident type)
-
-        var i: u8 = 0;
-        while (i < count) : (i += 1) {
-            if (tmp[i].typ == alt.typ and common.streq(tmp[i].struct_name, alt.struct_name) and common.streq(tmp[i].interface_name, alt.interface_name) and common.streq(tmp[i].named_name, alt.named_name)) break;
-        }
-        if (i == count) {
-            if (count >= MaxTypeAlts) { c.setErr("too many type alternatives (max {d})", .{MaxTypeAlts}); return error.TooManyTypeAlternatives; }
-            tmp[count] = alt;
-            count += 1;
-        }
-
-        if (!c.match(.pipe)) break;
     }
+
+    if (count >= MaxTypeAlts) { c.setErr("too many type alternatives (max {d})", .{MaxTypeAlts}); return error.TooManyTypeAlternatives; }
+    tmp[count] = alt;
+    count += 1;
 
     const alts = heap.bump(FieldTypeAlt, count) orelse return error.OutOfMemory;
     var ai: usize = 0;
@@ -918,9 +906,7 @@ pub fn structDeclBody(c: anytype, kw: Token, name: Token, is_pub: bool) !void {
                 spec.typ = try parseFieldTypeSpec(c, );
                 if (!c.skipping_test_body) try checkStructFieldType(c, spec.typ, try c.qualifyTypeName(name.src));
             } else {
-                const alts = heap.bump(FieldTypeAlt, 1) orelse return error.OutOfMemory;
-                alts[0] = .{ .typ = .any };
-                spec.typ = .{ .alts = alts[0..1] };
+                return c.err("expected type annotation for struct field '{s}'", .{fname});
             }
 
             field_specs[count] = spec;
@@ -1252,10 +1238,10 @@ pub fn variantDeclBody(c: anytype, kw: Token, name_tok: Token, is_pub: bool) !vo
                             if (common.streq(field_specs[vfield_dup].name, fname)) { c.setErr("duplicate field '{s}' in variant arm", .{fname}); return error.DuplicateField; }
                         }
                         c.advance();
+                        if (!(c.cur.typ == .ident or c.cur.typ == .question or c.cur.typ == .kw_func or c.cur.typ == .lbracket))
+                            return c.err("expected type annotation for variant arm field '{s}'", .{fname});
                         var spec = StructFieldSpec{ .name = fname, .typ = .{ .alts = &[_]FieldTypeAlt{} } };
-                        if (c.cur.typ == .ident or c.cur.typ == .question or c.cur.typ == .kw_func or c.cur.typ == .lbracket) {
-                            spec.typ = try parseFieldTypeSpec(c, );
-                        }
+                        spec.typ = try parseFieldTypeSpec(c, );
                         field_specs[field_count] = spec;
                         field_count += 1;
                         if (!c.match(.comma)) break;
