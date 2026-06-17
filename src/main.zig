@@ -260,6 +260,7 @@ fn runCli(argv: []const []const u8) void {
     var script_path: ?[]const u8 = null;
     var script_name: []const u8 = "<stdin>";
     var script_index: usize = 1;
+    var eval_source: ?[]const u8 = null;
     var backend: vm.Policy.NativeBackend = .embedded;
     var max_ops: ?u64 = null;
     var test_mode: bool = false;
@@ -284,6 +285,7 @@ fn runCli(argv: []const []const u8) void {
             io.write("  --max-ops <n>      Limit instruction count (0 = unlimited)\n");
             io.write("  --backend <name>   Native call backend: embedded (default) or host\n");
             io.write("  --mount <n>=<path> Mount a filesystem path under the given name\n");
+            io.write("  -e, --eval <code>  Evaluate inline code instead of a script file\n");
             io.write("  --                 End of options; treat next argument as script path\n");
             io.write("\n");
             io.write("If no script is given and stdin is a terminal, starts the REPL.\n");
@@ -376,6 +378,15 @@ fn runCli(argv: []const []const u8) void {
             io.write("\n");
             die(0);
         }
+        if (std.mem.eql(u8, a, "-e") or std.mem.eql(u8, a, "--eval")) {
+            if (script_index + 1 >= argv.len) {
+                io.werr("gengo: -e requires an argument\n");
+                die(1);
+            }
+            eval_source = argv[script_index + 1];
+            script_index += 2;
+            continue;
+        }
         break;
     }
 
@@ -384,13 +395,21 @@ fn runCli(argv: []const []const u8) void {
         script_name = argv[script_index];
     }
 
+    if (eval_source != null and script_path != null) {
+        io.werr("gengo: -e/--eval and a script file are mutually exclusive\n");
+        die(1);
+    }
+
     // REPL: enter interactive mode when no file is given and stdin is a terminal.
     // Runs in a separate function so this frame never holds two Runtimes at once.
-    if (script_path == null and stdinIsTerminal()) {
+    if (eval_source == null and script_path == null and stdinIsTerminal()) {
         runReplMode(backend, max_ops, if (cap_count > 0) cap_names[0..cap_count] else &.{});
     }
 
-    const total = readSource(script_path, &g_src_buf) catch |err| {
+    if (eval_source != null) script_name = "<eval>";
+
+    const total = if (eval_source == null)
+        readSource(script_path, &g_src_buf) catch |err| {
         if (err == error.InputTooLong) {
             io.werr("gengo: input is larger than max_input_bytes (");
             io.werrInt(cfg.max_input_bytes);
@@ -405,8 +424,10 @@ fn runCli(argv: []const []const u8) void {
         }
         io.werr("\n");
         die(1);
-    };
-    const src = g_src_buf[0..total];
+    }
+    else
+        0;
+    const src: []const u8 = if (eval_source) |es| es else g_src_buf[0..total];
 
     const runtime = std.heap.page_allocator.create(Runtime) catch {
         io.werr("gengo: out of memory\n");
@@ -423,7 +444,7 @@ fn runCli(argv: []const []const u8) void {
     if (cap_count > 0) {
         runtime.enabled_capabilities = cap_names[0..cap_count];
     }
-    const script_arg = if (script_path) |p| p else "";
+    const script_arg = if (eval_source != null) "<eval>" else if (script_path) |p| p else "";
 
     if (disasm_mode) {
         runtime.compileOnly(src, script_arg, .filesystem) catch |err| {
