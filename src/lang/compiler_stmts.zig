@@ -1205,6 +1205,23 @@ pub fn returnStmt(c: anytype) !void {
         if (scope.is_named and !scope.has_typed_returns) { c.setErr("named-return function must declare return types", .{}); return error.MissingReturnType; }
         _ = try emitExprListTuple(c, );
     }
+    // Close any captured locals before returning. Without this, the get_local_ret
+    // peephole (get_local + ret → fused) would skip the close_upvalue that
+    // cleanupLocals emits at end-of-function, leaving upvalues dangling on the
+    // dead stack frame.
+    // Named return variables (slots [named_return_base .. named_return_base+named_return_count))
+    // must NOT be closed here: retSlowPath reads them AFTER deferred functions run, and
+    // closing them severs the connection between the deferred closure's upvalue and the slot.
+    var idx: u8 = scope.local_count;
+    while (idx > 0) {
+        idx -= 1;
+        if (idx >= scope.named_return_base and idx < scope.named_return_base + scope.named_return_count) {
+            continue;
+        }
+        if (scope.locals[idx].is_captured) {
+            try chunk.emit2(@intFromEnum(Op.close_upvalue), idx, line);
+        }
+    }
     try chunk.emitOp(.ret, line);
     c.matchOpt(.semicolon);
 }
@@ -1420,8 +1437,30 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
         return c.err("'{s}' is a type name and cannot be used as a variable name", .{name.src});
     c.advance();
     var inferred_type_check: TypeCheck = .{ .none = {} };
+    var self_ref_slot: ?u8 = null;
     if (c.match(.colon_eq) or c.match(.eq)) {
+        // Self-reference pre-allocation: if the RHS is a function literal and we are
+        // inside a function, pre-push null and register the local BEFORE compiling the
+        // RHS. This allows the inner closure's capture to find the local in scope (so it
+        // uses get_upvalue instead of get_global). make_closure converts the null slot
+        // to a heap cell; the subsequent set_local stores the closure into that cell,
+        // giving the upvalue a valid self-reference from the start.
+        if (c.cur.typ == .kw_func and c.inFunc()) {
+            try chunk.emitOp(.null_val, name.line);
+            const sr = try c.defineLocal(name.src, is_const);
+            c.currentScope().locals[sr].type_check = inferred_type_check;
+            if (c.std_namespace_path != null and c.std_namespace_path.?.len == 0) {
+                c.currentScope().locals[sr].from_std = true;
+            }
+            if (c.import_module_path) |path| {
+                c.currentScope().locals[sr].import_module_path = path;
+            }
+            self_ref_slot = sr;
+        }
         try c.expr();
+        if (self_ref_slot != null) {
+            try chunk.emit2(@intFromEnum(Op.set_local), self_ref_slot.?, name.line);
+        }
     } else if (c.cur.typ == .lbracket) {
         const ts = try c.parseFieldTypeSpec();
         const is_map = ts.alts.len > 0 and ts.alts[0].typ == .map;
@@ -1552,17 +1591,19 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
         return c.err("expected expression, found {s}", .{c.tokenName(c.cur.typ)});
     }
     if (c.inFunc() or c.in_loop_init or c.loop_body_depth > 0) {
-        const slot = try c.defineLocal(name.src, is_const);
-        c.currentScope().locals[slot].type_check = inferred_type_check;
-        if (c.std_namespace_path != null and c.std_namespace_path.?.len == 0) {
-            c.currentScope().locals[slot].from_std = true;
-        }
-        if (c.import_module_path) |path| {
-            c.currentScope().locals[slot].import_module_path = path;
-        }
-        if (!c.inFunc()) {
-            try chunk.emitOp(.dup, name.line);
-            try chunk.emit2(@intFromEnum(Op.set_local), slot, name.line);
+        if (self_ref_slot == null) {
+            const slot = try c.defineLocal(name.src, is_const);
+            c.currentScope().locals[slot].type_check = inferred_type_check;
+            if (c.std_namespace_path != null and c.std_namespace_path.?.len == 0) {
+                c.currentScope().locals[slot].from_std = true;
+            }
+            if (c.import_module_path) |path| {
+                c.currentScope().locals[slot].import_module_path = path;
+            }
+            if (!c.inFunc()) {
+                try chunk.emitOp(.dup, name.line);
+                try chunk.emit2(@intFromEnum(Op.set_local), slot, name.line);
+            }
         }
     } else {
         if (!is_const and c.registry.hasGlobalConst(name.src)) { c.setErr("cannot assign to const variable '{s}'", .{name.src}); return error.AssignToConst; }
