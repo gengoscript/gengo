@@ -3058,6 +3058,39 @@ fn runInner() !void {
 
             // Fused constant+ret: reads idx, pushes constant, returns.
             // Emitted when `constant k` immediately precedes `ret`.
+            .get_local_ret => {
+                vmperf.breakOpChain();
+                if (vmState().frame_top == 0) return error.ReturnAtTopLevel;
+                const slot = try vmByte();
+                const base = if (vmState().frame_top > 0) vmState().frames[vmState().frame_top - 1].base else 1;
+                if (base + slot >= vmState().stack.len) return error.StackOverflow;
+                const v_raw = vmState().stack[base + slot];
+                const v = if (v_raw == .object and v_raw.object.* == .cell) v_raw.object.cell.value else v_raw;
+                const fi = vmState().frame_top - 1;
+                const frame = &vmState().frames[fi];
+                const can_fast = blk: {
+                    if (vmState().defer_top != frame.defer_base) break :blk false;
+                    if (!frame.has_typed_returns) break :blk true;
+                    const f = switch (frame.func_obj.*) {
+                        .function => frame.func_obj.function,
+                        .closure => |cl| cl.func.function,
+                        else => break :blk false,
+                    };
+                    if (!vmtyp.isPrimitiveReturn(f)) break :blk false;
+                    break :blk vmtyp.checkPrimitiveReturn(f, v);
+                };
+                if (can_fast) {
+                    vmState().frame_top = fi;
+                    vmState().stack_top = if (frame.base > 0) frame.base - 1 else 0;
+                    vmState().ip = frame.ret_ip;
+                    try vmPush(v);
+                    if (vmState().call_depth_target) |d| {
+                        if (vmState().frame_top == d) return;
+                    }
+                    continue;
+                }
+                if (try retSlowPath(v)) return;
+            },
             .ret_const => {
                 vmperf.breakOpChain();
                 if (vmState().frame_top == 0) return error.ReturnAtTopLevel;

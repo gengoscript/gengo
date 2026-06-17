@@ -78,6 +78,14 @@ pub fn emitOp(op: Op, line: u32) !void {
                 return; // ret_const reuses the 3-byte constant slot; no extra byte needed
             }
         }
+        // Peephole: get_local slot immediately preceding ret → get_local_ret slot (2 bytes, 1 dispatch).
+        if (g_state.last_get_local_code_pos) |gl_pos| {
+            if (gl_pos + 2 == g_state.code_len) {
+                g_state.code[gl_pos] = @intFromEnum(Op.get_local_ret);
+                g_state.last_get_local_code_pos = null;
+                return; // get_local_ret reuses the 2-byte get_local slot; no extra byte needed
+            }
+        }
     }
     return emitByte(@intFromEnum(op), line);
 }
