@@ -9,7 +9,7 @@ assert(std.regexp.match("[\-:]", ":"))
 
 // Negated class with leading dash
 assert(std.regexp.match("[^-]", "a"))
-assert(!std.regexp.match("[^-]", "-"))
+assert(not std.regexp.match("[^-]", "-"))
 
 // Leading and trailing dash
 assert(std.regexp.match("[--]", "-"))

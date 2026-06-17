@@ -218,15 +218,24 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
         return;
     }
 
-    const p = tokPrec(tt);
     if (tt == .amp_amp) {
+        c.setErr("'&&' is no longer supported; use 'and'", .{});
+        return error.ExpectedExpression;
+    }
+    if (tt == .pipe_pipe) {
+        c.setErr("'||' is no longer supported; use 'or'", .{});
+        return error.ExpectedExpression;
+    }
+
+    const p = tokPrec(tt);
+    if (tt == .kw_and) {
         const j = try chunk.emitJump(.jump_if_false, line);
         try chunk.emitOp(.pop, line);
         try parsePrecedence(c, p.next());
         try chunk.patchJump(j);
         return;
     }
-    if (tt == .pipe_pipe) {
+    if (tt == .kw_or) {
         const j_else = try chunk.emitJump(.jump_if_false, line);
         const j_end = try chunk.emitJump(.jump, line);
         try chunk.patchJump(j_else);
@@ -326,7 +335,11 @@ pub fn parsePrecedence(c: anytype, p: Prec) anyerror!void {
         .kw_false => try chunk.emitOp(.false_val, c.prev.line),
         .kw_null => try chunk.emitOp(.null_val, c.prev.line),
         .ident => try varExpr(c, c.prev),
-        .minus, .bang, .tilde => try unaryExpr(c, pfx),
+        .minus, .kw_not, .tilde => try unaryExpr(c, pfx),
+        .bang => {
+            c.setErr("'!' is no longer supported; use 'not'", .{});
+            return error.ExpectedExpression;
+        },
         .lparen => {
             try expr(c, );
             try c.consume(.rparen);
@@ -416,7 +429,7 @@ pub fn unaryExpr(c: anytype, tt: TT) !void {
     try parsePrecedence(c, .unary);
     switch (tt) {
         .minus => try chunk.emitOp(.neg, c.prev.line),
-        .bang => try chunk.emitOp(.not, c.prev.line),
+        .kw_not => try chunk.emitOp(.not, c.prev.line),
         .tilde => try chunk.emitOp(.bit_not, c.prev.line),
         else => unreachable,
     }
@@ -469,8 +482,8 @@ pub fn varExpr(c: anytype, name: Token) !void {
 
 fn tokPrec(tt: TT) Prec {
     return switch (tt) {
-        .pipe_pipe => .or_,
-        .amp_amp => .and_,
+        .kw_or, .pipe_pipe => .or_,
+        .kw_and, .amp_amp => .and_,
         .eq_eq, .bang_eq => .eq_,
         .pipe => .bit_or,
         .caret => .bit_xor,

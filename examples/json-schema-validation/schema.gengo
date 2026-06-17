@@ -15,18 +15,18 @@ type Email string predicate func(x) {
     return std.string.contains(x, "@")
 }
 type Role string predicate func(x) {
-    return x == "admin" || x == "member" || x == "guest"
+    return x == "admin" or x == "member" or x == "guest"
 }
 
 func require_string(v any, field string) (s string, err string) {
     if core.is_null(v) { return "", field + ": required" }
-    if !core.is_string(v) { return "", field + ": expected string, got " + core.type_of(v) }
+    if not core.is_string(v) { return "", field + ": expected string, got " + core.type_of(v) }
     return string(v), ""
 }
 
 func require_int(v any, field string) (n int, err string) {
     if core.is_null(v) { return 0, field + ": required" }
-    if !core.is_int(v) { return 0, field + ": expected int, got " + core.type_of(v) }
+    if not core.is_int(v) { return 0, field + ": expected int, got " + core.type_of(v) }
     return int(v), ""
 }
 
@@ -81,7 +81,7 @@ pub func validate(json string) (ok bool) {
     }()
 
     doc := std.json.parse(json)
-    if !core.is_map(doc) {
+    if not core.is_map(doc) {
         last_errors = ["document: expected a JSON object"]
         return false
     }

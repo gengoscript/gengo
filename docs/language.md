@@ -148,7 +148,7 @@ if score >= 10 {
 }
 ```
 
-Conditions are `bool`-only: `if`, `!`, `&&`, `||`, and template `{{if}}`
+Conditions are `bool`-only: `if`, `not`, `and`, `or`, and template `{{if}}`
 reject every other type (`if 1 { }` is a runtime type error — there is no
 truthiness). Named types over `bool` participate through their base, the
 same way named ints participate in arithmetic. For everything else, write
@@ -312,7 +312,7 @@ subtype Weekend Days { sat, sun }
 Predicate types attach an arbitrary boolean check to a named scalar type. The predicate fires every time a value is constructed or cast into the type. If it returns `false`, the script panics:
 
 ```gengo
-type Port      int   predicate func(x) { return x >= 1 && x <= 65535 }
+type Port      int   predicate func(x) { return x >= 1 and x <= 65535 }
 type Tag       string predicate func(s) { return std.core.len(s) > 0 }
 type EventCode int   predicate func(x) { return x % 2 == 0 }
 
@@ -326,7 +326,7 @@ The predicate parameter name is arbitrary; the compiler infers its type from the
 ```gengo
 max_retries := 5
 
-type RetryCount int predicate func(n) { return n >= 0 && n <= max_retries }
+type RetryCount int predicate func(n) { return n >= 0 and n <= max_retries }
 ```
 
 Predicates work on any scalar base type (`int`, `float`, `string`, `bool`, `rune`). They cannot be declared on collection types, enums, or variants.
@@ -455,7 +455,7 @@ concrete type: a primitive (`int`, `float`, `bool`, `string`, `rune`,
 concrete runtime types, so `.type` can never equal an interface name.
 
 The result of a `.type` comparison is an ordinary `bool`, freely usable
-anywhere a `bool` is — including combined with `&&`/`||`.
+anywhere a `bool` is — including combined with `and`/`or`.
 
 ## Interfaces
 

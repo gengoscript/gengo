@@ -2,11 +2,11 @@ std := import("std")
 
 // Regression: a patched short-circuit jump must land on an instruction
 // boundary. Quad fusion (get_local_const_eq + jif_pop) previously rewrote
-// the instruction at a patched || / && jump target, so the jump landed on
+// the instruction at a patched or / and jump target, so the jump landed on
 // operand bytes and the VM panicked with BadConstantIndex.
 
 func f(access string) string {
-    if access == "read" || access == "subscribe" {
+    if access == "read" or access == "subscribe" {
         return "ok"
     }
     return "no"
@@ -17,7 +17,7 @@ std.io.println(f("subscribe"))
 std.io.println(f("write"))
 
 func g(a string, b string) string {
-    if a == "x" && b == "y" {
+    if a == "x" and b == "y" {
         return "both"
     }
     return "not"
@@ -27,10 +27,10 @@ std.io.println(g("x", "y"))
 std.io.println(g("z", "y"))
 std.io.println(g("x", "z"))
 
-// Triple-fusion variant: (a || b) ends on a bare get_local; the following
+// Triple-fusion variant: (a or b) ends on a bare get_local; the following
 // == constant must not fuse across the patched jump target either.
 func h(a bool, b bool) bool {
-    return (a || b) == true
+    return (a or b) == true
 }
 
 std.io.println(h(true, false))
@@ -39,7 +39,7 @@ std.io.println(h(false, false))
 
 // Same hazard through the get_local_const_lt quad fusion.
 func lt(a int) string {
-    if a < 5 || a < 9 {
+    if a < 5 or a < 9 {
         return "small"
     }
     return "big"

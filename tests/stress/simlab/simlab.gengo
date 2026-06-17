@@ -194,7 +194,7 @@ func runSim(initialWorkers []Worker, initialJobs []Job, maxTicks Tick) (Stats, ?
             }
             case .submit(job) {
                 wk := workerKey(job.owner)
-                if !std.core.has(workers, wk) {
+                if not std.core.has(workers, wk) {
                     st.failed += 1
                     continue
                 }
@@ -207,7 +207,7 @@ func runSim(initialWorkers []Worker, initialJobs []Job, maxTicks Tick) (Stats, ?
                         continue
                     }
                     tgt := int(now) + d
-                    if !std.core.has(delayed, tgt) {
+if not std.core.has(delayed, tgt) {
                         delayed[tgt] = []
                     }
                     delayed[tgt] = std.core.append(delayed[tgt], job)
@@ -249,7 +249,7 @@ func runSim(initialWorkers []Worker, initialJobs []Job, maxTicks Tick) (Stats, ?
                     continue
                 }
                 tgt := int(now) + d
-                if !std.core.has(delayed, tgt) {
+                if not std.core.has(delayed, tgt) {
                     delayed[tgt] = []
                 }
                 delayed[tgt] = std.core.append(delayed[tgt], job)

@@ -1,2 +1,2 @@
 std := import("std")
-std.io.println(!1)
+std.io.println(not 1)

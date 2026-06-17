@@ -1,4 +1,4 @@
 min_val := 10
 max_val := 20
-type Bounded int predicate func(x) { return x >= min_val && x <= max_val }
+type Bounded int predicate func(x) { return x >= min_val and x <= max_val }
 p := Bounded(5)

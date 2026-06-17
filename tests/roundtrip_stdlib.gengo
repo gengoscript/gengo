@@ -34,8 +34,8 @@ func check_perm(n int) {
     assert std.core.len(p) == n
     seen := {}
     for i, v in p {
-        assert v >= 0 && v < n
-        assert !std.core.has(seen, v)
+        assert v >= 0 and v < n
+        assert not std.core.has(seen, v)
         seen[v] = true
     }
 }

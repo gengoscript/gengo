@@ -65,4 +65,4 @@ for b in vals {
 // the boolean result of a '.type' comparison is an ordinary, freely usable bool
 ok := n.type == Age
 std.io.println(ok)
-if ok && true { std.io.println("composable with &&") }
+if ok and true { std.io.println("composable with and") }

@@ -965,7 +965,7 @@ test "engine_call: recover() in defer intercepts panic" {
         \\core := std.core
         \\
         \\type Region string predicate func(x) {
-        \\    return x == "eu" || x == "us"
+        \\    return x == "eu" or x == "us"
         \\}
         \\
         \\var last_err string = ""

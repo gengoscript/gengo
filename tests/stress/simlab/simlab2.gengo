@@ -282,7 +282,7 @@ func runSim(initialWorkers []Worker, jobs JobQueue, maxTicks Tick, policies map[
             }
             case .submit(job) {
                 wk := workerKey(job.owner)
-                if !std.core.has(workers, wk) {
+                if not std.core.has(workers, wk) {
                     st.failed += 1
                     continue
                 }
@@ -298,7 +298,7 @@ func runSim(initialWorkers []Worker, jobs JobQueue, maxTicks Tick, policies map[
                         continue
                     }
                     tgt := int(now) + d
-                    if !std.core.has(delayed, tgt) { delayed[tgt] = [] }
+                    if not std.core.has(delayed, tgt) { delayed[tgt] = [] }
                     delayed[tgt] = std.core.append(delayed[tgt], job)
                     st.retried += 1
                     continue
@@ -342,7 +342,7 @@ func runSim(initialWorkers []Worker, jobs JobQueue, maxTicks Tick, policies map[
                     continue
                 }
                 tgt := int(now) + d
-                if !std.core.has(delayed, tgt) { delayed[tgt] = [] }
+                if not std.core.has(delayed, tgt) { delayed[tgt] = [] }
                 delayed[tgt] = std.core.append(delayed[tgt], job)
                 st.retried += 1
             }

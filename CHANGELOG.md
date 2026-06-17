@@ -194,7 +194,7 @@ targets, so the first `run()` panicked; it now routes through
 
 Short-circuit boolean expressions whose operands compare a local against a
 constant could panic at runtime with `BadConstantIndex` (e.g.
-`if a == "x" || a == "y"` when the first comparison is true). The `||` / `&&`
+`if a == "x" or a == "y"` when the first comparison is true). The `||` / `&&`
 short-circuit jump is patched to land at the current end of code; pending
 peephole state survived the patch, so a following `jif_pop` quad-fused into
 the instruction at the jump target, leaving the jump pointing at operand
@@ -291,7 +291,7 @@ Three GC use-after-free bugs in template rendering corrected: `tplValToDynStr` r
 Named types may include a predicate body that is evaluated at construction time:
 
 ```gengo
-type Port int predicate func(x) { return x >= 1 && x <= 65535 }
+type Port int predicate func(x) { return x >= 1 and x <= 65535 }
 p := Port(80)    // ok
 p2 := Port(0)    // PredicateViolation
 ```
