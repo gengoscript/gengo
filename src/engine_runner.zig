@@ -967,31 +967,35 @@ fn testHttpCapability() void {
         \\std := import("std")
         \\http := import("cap:http")
         \\func testGet() {
-        \\    resp := http.get("https://example.com/data")
+        \\    resp, err := http.get("https://example.com/data")
+        \\    if err != null { return }
         \\    std.io.println(resp.status)
         \\    std.io.println(resp.ok)
         \\    std.io.println(resp.body)
         \\}
         \\func testPost() {
-        \\    resp := http.post("https://example.com/api", "{\"key\":\"value\"}")
+        \\    resp, err := http.post("https://example.com/api", "{\"key\":\"value\"}")
+        \\    if err != null { return }
         \\    std.io.println(resp.status)
         \\}
         \\func testFetch() {
-        \\    resp := http.fetch("https://example.com/api", {
+        \\    resp, err := http.fetch("https://example.com/api", {
         \\        "method": "PUT",
         \\        "body": "put-body",
         \\        "timeout_ms": 5000,
         \\    })
+        \\    if err != null { return }
         \\    std.io.println(resp.status)
         \\}
         \\func testNotFound() {
-        \\    resp := http.get("https://example.com/404")
+        \\    resp, err := http.get("https://example.com/404")
+        \\    if err != null { return }
         \\    std.io.println(resp.status)
         \\    std.io.println(resp.ok)
         \\}
         \\func testFailure() {
-        \\    resp := http.get("https://fail.example.com/")
-        \\    std.io.println(resp.status)
+        \\    _, err := http.get("https://fail.example.com/")
+        \\    std.io.println(err)
         \\}
     ;
 
@@ -1041,8 +1045,8 @@ fn testHttpCapability() void {
     state.fail_next = true;
     const fail_res = rt.call("testFailure", &.{});
     switch (fail_res) {
-        .runtime_error => {},
-        else => fail("engine FAIL: expected runtime error for network failure\n"),
+        .ok => {},
+        .runtime_error => fail("engine FAIL: http failure should return error value, not panic\n"),
     }
 
     http_state.resetHandler();
