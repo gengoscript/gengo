@@ -41,6 +41,10 @@ pub const State = struct {
     // Peephole: position of the last set_global instruction.
     // Used for fusion: set_global + loop → set_global_loop.
     last_set_global_code_pos: ?usize = null,
+    // Code-position patch: position before get_global "module:std" (or get_local for a from_std local).
+    // Used by the std direct-call peephole to truncate back and emit a single get_global
+    // "module:std.{ns}.{func}" instead of std-namespace load + field traversal + call.
+    std_call_patch_pos: ?usize = null,
 };
 
 var g_default_state: State = .{};
@@ -62,6 +66,7 @@ pub fn reset() void {
     g_state.last_get_local_const_sub_pos = null;
     g_state.last_get_local_const_add_pos = null;
     g_state.last_set_global_code_pos = null;
+    g_state.std_call_patch_pos = null;
 }
 
 pub fn setCol(col: u32) void {
@@ -462,6 +467,22 @@ pub fn lineAt(i: usize) u16 {
 
 pub fn colAt(i: usize) u16 {
     return g_state.cols[i];
+}
+
+pub fn markStdCallPatchPos() void {
+    g_state.std_call_patch_pos = g_state.code_len;
+}
+
+pub fn stdCallPatchPos() ?usize {
+    return g_state.std_call_patch_pos;
+}
+
+pub fn clearStdCallPatchPos() void {
+    g_state.std_call_patch_pos = null;
+}
+
+pub fn truncateTo(pos: usize) void {
+    g_state.code_len = pos;
 }
 
 pub fn constAt(i: usize) !Value {
