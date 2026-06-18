@@ -131,7 +131,12 @@ pub const StringBuilderObj = struct {
     len: usize,  // bytes actually written
 };
 
-pub const ObjTag = enum { array, array_managed, map, map_managed, map_hashed, dyn_string, function, closure, cell, native_function, host_module_function, struct_type, interface_type, named_type, named_value, enum_type, enum_value, struct_instance, iterator, variant_type, variant_value, variant_ctor, named_type_fn, string_builder };
+pub const StringViewObj = struct {
+    bytes: []const u8,  // view into the source dyn_string's backing buffer
+    source: *Object,    // keeps the dyn_string alive so its backing buffer is not freed
+};
+
+pub const ObjTag = enum { array, array_managed, map, map_managed, map_hashed, dyn_string, function, closure, cell, native_function, host_module_function, struct_type, interface_type, named_type, named_value, enum_type, enum_value, struct_instance, iterator, variant_type, variant_value, variant_ctor, named_type_fn, string_builder, string_view };
 pub const Object = union(ObjTag) {
     array: []Value,
     array_managed: []Value,
@@ -157,6 +162,7 @@ pub const Object = union(ObjTag) {
     variant_ctor: VariantCtorObj,
     named_type_fn: NamedTypeFnObj,
     string_builder: StringBuilderObj,
+    string_view: StringViewObj,
 };
 
 pub const VTag = enum { int, float, decimal, rune, boolean, string, error_value, object, null };
@@ -189,10 +195,30 @@ pub const Value = union(VTag) {
         return error.TypeError;
     }
 
+    fn stringViewOrDynBytes(obj: *Object) []const u8 {
+        return switch (obj.*) {
+            .dyn_string => |s| s,
+            .string_view => |sv| sv.bytes,
+            else => "",
+        };
+    }
+
     pub fn equals(a: Value, b: Value) bool {
-        if (a == .string and b == .object and b.object.* == .dyn_string) return common.streq(a.string, b.object.dyn_string);
-        if (b == .string and a == .object and a.object.* == .dyn_string) return common.streq(a.object.dyn_string, b.string);
-        if (a == .object and b == .object and a.object.* == .dyn_string and b.object.* == .dyn_string) return common.streq(a.object.dyn_string, b.object.dyn_string);
+        if (a == .string and b == .object) {
+            const btag = @as(ObjTag, b.object.*);
+            if (btag == .dyn_string or btag == .string_view) return common.streq(a.string, stringViewOrDynBytes(b.object));
+        }
+        if (b == .string and a == .object) {
+            const atag = @as(ObjTag, a.object.*);
+            if (atag == .dyn_string or atag == .string_view) return common.streq(stringViewOrDynBytes(a.object), b.string);
+        }
+        if (a == .object and b == .object) {
+            const atag = @as(ObjTag, a.object.*);
+            const btag = @as(ObjTag, b.object.*);
+            if ((atag == .dyn_string or atag == .string_view) and (btag == .dyn_string or btag == .string_view)) {
+                return common.streq(stringViewOrDynBytes(a.object), stringViewOrDynBytes(b.object));
+            }
+        }
         if (a == .object and b == .object and a.object.* == .enum_value and b.object.* == .enum_value) {
             return a.object.enum_value.typ == b.object.enum_value.typ and a.object.enum_value.ordinal == b.object.enum_value.ordinal;
         }

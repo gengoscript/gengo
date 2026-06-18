@@ -108,7 +108,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const arg1 = try vms.vmPeek(0);
             const content: []const u8 = switch (arg1) {
                 .string => |s| s,
-                .object => |o| if (o.* == .dyn_string) o.dyn_string else return error.TypeError,
+                .object => |o| if (o.* == .dyn_string) o.dyn_string else if (o.* == .string_view) o.string_view.bytes else return error.TypeError,
                 else => return error.TypeError,
             };
 

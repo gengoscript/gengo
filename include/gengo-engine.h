@@ -193,11 +193,14 @@ int32_t engine_add_source(int32_t handle,
 /*
  * Register a host module so that Gengoscript code can import it.
  * funcs: pointer to an array of gengo_host_module_func_def_t.
+ * NOTE: Host modules are only supported on WASM targets. On native
+ *       shared-library builds this function always returns -6.
  * Returns 0 on success,
  *        -1 if the engine handle is invalid,
  *        -3 if the module table is full,
  *        -4 if funcs_count is out of range,
- *        -5 if the module name is invalid.
+ *        -5 if the module name is invalid,
+ *        -6 if host modules are not supported on this platform (WASM only).
  */
 int32_t engine_register_module(int32_t handle,
                                const char *name, int32_t name_len,

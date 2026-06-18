@@ -23,6 +23,7 @@ pub fn nativeLen(v: Value) !Value {
         .string => |s| try vmstr.utf8RuneCountCached(s),
         .object => |obj| switch (obj.*) {
             .dyn_string => |s| try vmstr.utf8RuneCountCached(s),
+            .string_view => |sv| try vmstr.utf8RuneCountCached(sv.bytes),
             .array, .array_managed => (try vms.asArraySlice(obj)).len,
             .map, .map_managed, .map_hashed => (try vms.asMapSlice(obj)).len,
             .struct_instance => |s| s.fields.len,
@@ -39,6 +40,7 @@ pub fn nativeByteLen(v: Value) !Value {
         .string => |s| s.len,
         .object => |obj| switch (obj.*) {
             .dyn_string => |s| s.len,
+            .string_view => |sv| sv.bytes.len,
             else => return error.TypeError,
         },
         else => return error.TypeError,
@@ -88,11 +90,25 @@ pub fn nativeDelete(m_obj: *Object, key: Value) !Value {
 }
 
 pub fn nativeHas(m_obj: *Object, key: Value) !Value {
-    const items = try vms.asMapSlice(m_obj);
-    for (items) |entry| {
-        if (vmmap.mapKeyEquals(entry.key, key)) return .{ .boolean = true };
+    switch (m_obj.*) {
+        .map => {
+            for (m_obj.map) |entry| {
+                if (vmmap.mapKeyEquals(entry.key, key)) return .{ .boolean = true };
+            }
+            return .{ .boolean = false };
+        },
+        .map_managed => {
+            for (m_obj.map_managed) |entry| {
+                if (vmmap.mapKeyEquals(entry.key, key)) return .{ .boolean = true };
+            }
+            return .{ .boolean = false };
+        },
+        .map_hashed => {
+            const hm = &m_obj.map_hashed;
+            return .{ .boolean = vmmap.mapFindHashedIndex(hm.entries[0..hm.len], hm.buckets, key) != null };
+        },
+        else => return error.TypeError,
     }
-    return .{ .boolean = false };
 }
 
 pub fn nativeKeys(m_obj: *Object) !Value {
@@ -231,12 +247,10 @@ pub fn nativeConvToInt(v: Value) !Value {
         .boolean => |b| return .{ .int = if (b) 1 else 0 },
         .string => |s| { const n = common.parseFloat(s) orelse return error.TypeError; const tr = @trunc(n); return .{ .int = tr }; },
         .object => |o| {
-            if (o.* == .dyn_string) {
-                const n = common.parseFloat(o.dyn_string) orelse return error.TypeError;
-                const tr = @trunc(n);
-                return .{ .int = tr };
-            }
-            return error.TypeError;
+            const s: []const u8 = if (o.* == .dyn_string) o.dyn_string else if (o.* == .string_view) o.string_view.bytes else return error.TypeError;
+            const n = common.parseFloat(s) orelse return error.TypeError;
+            const tr = @trunc(n);
+            return .{ .int = tr };
         },
         else => return error.TypeError,
     }
@@ -250,11 +264,9 @@ pub fn nativeConvToFloat(v: Value) !Value {
         .boolean => |b| return .{ .float = if (b) 1 else 0 },
         .string => |s| { const n = common.parseFloat(s) orelse return error.TypeError; return .{ .float = n }; },
         .object => |o| {
-            if (o.* == .dyn_string) {
-                const n = common.parseFloat(o.dyn_string) orelse return error.TypeError;
-                return .{ .float = n };
-            }
-            return error.TypeError;
+            const s: []const u8 = if (o.* == .dyn_string) o.dyn_string else if (o.* == .string_view) o.string_view.bytes else return error.TypeError;
+            const n = common.parseFloat(s) orelse return error.TypeError;
+            return .{ .float = n };
         },
         else => return error.TypeError,
     }
@@ -274,6 +286,7 @@ pub fn nativeConvToBool(v: Value) !Value {
         // convert through their underlying value.
         .object => |obj| switch (obj.*) {
             .dyn_string => |s| s.len != 0,
+            .string_view => |sv| sv.bytes.len != 0,
             .named_value => |nv| (try nativeConvToBool(nv.value)).boolean,
             else => true,
         },
@@ -289,8 +302,8 @@ pub fn nativeConvToString(v: Value) !Value {
     return switch (v) {
         .string => |s| vmgc.makeDynString(s),
         .object => |o| {
-            if (o.* == .dyn_string) return vmgc.makeDynString(o.dyn_string);
-            return error.TypeError;
+            const s: []const u8 = if (o.* == .dyn_string) o.dyn_string else if (o.* == .string_view) o.string_view.bytes else return error.TypeError;
+            return vmgc.makeDynString(s);
         },
         .boolean => |b| vmgc.makeDynString(if (b) "true" else "false"),
         .int => |n| {
@@ -325,7 +338,7 @@ pub fn nativeTypeNameValue(v: Value) Value {
         .error_value => .{ .string = "error" },
         .null => .{ .string = "null" },
         .object => |obj| switch (obj.*) {
-            .dyn_string => .{ .string = "string" },
+            .dyn_string, .string_view => .{ .string = "string" },
             .array, .array_managed => .{ .string = "array" },
             .map, .map_managed, .map_hashed => .{ .string = "map" },
             .native_function => .{ .string = "native_func" },
@@ -493,6 +506,7 @@ fn deepEqualObject(a: *Object, b: *Object, visits: []DeepEqVisit, visit_len: *us
             return deepEqualMap(try vms.asMapSlice(a), try vms.asMapSlice(b), visits, visit_len);
         },
         .dyn_string => return common.streq(a.dyn_string, b.dyn_string),
+        .string_view => return common.streq(a.string_view.bytes, b.string_view.bytes),
         .function, .closure, .iterator => return a == b,
         .cell => return try deepEqualValue(a.cell.value, b.cell.value, visits, visit_len),
         .native_function => |anf| { const bnf = b.native_function; return anf.id == bnf.id and anf.arity == bnf.arity; },
@@ -544,9 +558,21 @@ fn deepEqualObject(a: *Object, b: *Object, visits: []DeepEqVisit, visit_len: *us
     }
 }
 
+fn strBytesFromObj(o: *Object) ?[]const u8 {
+    return switch (o.*) {
+        .dyn_string => |s| s,
+        .string_view => |sv| sv.bytes,
+        else => null,
+    };
+}
+
 fn deepEqualValue(a: Value, b: Value, visits: []DeepEqVisit, visit_len: *usize) anyerror!bool {
-    if (a == .string and b == .object and b.object.* == .dyn_string) return common.streq(a.string, b.object.dyn_string);
-    if (b == .string and a == .object and a.object.* == .dyn_string) return common.streq(a.object.dyn_string, b.string);
+    if (a == .string and b == .object) {
+        if (strBytesFromObj(b.object)) |bs| return common.streq(a.string, bs);
+    }
+    if (b == .string and a == .object) {
+        if (strBytesFromObj(a.object)) |as| return common.streq(as, b.string);
+    }
     if (a == .object and b == .object) return deepEqualObject(a.object, b.object, visits, visit_len);
     if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
     return switch (a) {
@@ -615,6 +641,7 @@ fn cloneObject(src: *Object, visits: []CloneVisit, visit_len: *usize) anyerror!V
             return .{ .object = out_obj };
         },
         .dyn_string => |s| return vmgc.makeDynString(s),
+        .string_view => |sv| return vmgc.makeDynString(sv.bytes),
         .string_builder => |sb| {
             const out_obj = try vmgc.vmAllocObject();
             if (sb.len == 0) {

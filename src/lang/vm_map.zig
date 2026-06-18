@@ -34,6 +34,7 @@ pub fn mapHashValue(v: Value) u64 {
         // same bucket and are found by mapFindHashedIndex.
         .object => |o| switch (o.*) {
             .dyn_string => |s| common.hashBytes(s),
+            .string_view => |sv| common.hashBytes(sv.bytes),
             // enum_value, named_value, and variant_value use structural equality in
             // mapKeyEquals, so they must hash structurally too.  Pointer identity
             // would break open-addressed lookups after promotion.
