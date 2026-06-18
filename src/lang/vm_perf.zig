@@ -91,7 +91,9 @@ pub inline fn readTsc() u64 {
         );
         return (@as(u64, edx) << 32) | eax;
     }
-    return @as(u64, @intCast(std.time.milliTimestamp()));
+    var ts: u64 = 0;
+    _ = std.os.wasi.clock_time_get(.MONOTONIC, 1_000_000, &ts);
+    return ts / 1_000_000; // nanoseconds → milliseconds
 }
 
 fn writeU64Err(v: u64) void {
