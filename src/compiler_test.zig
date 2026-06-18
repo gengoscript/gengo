@@ -9,6 +9,7 @@ const vms = @import("lang/vm_state.zig");
 const api = @import("runtime/api.zig");
 const cfg = @import("runtime/config.zig");
 const Value = @import("lang/value.zig").Value;
+const module_compile = @import("lang/module_compile.zig");
 
 fn setup() !Runtime {
     var rt: Runtime = .{};
@@ -25,6 +26,30 @@ fn compile(rt: *Runtime, src: []const u8) !void {
     heap.reset();
 
     var compiler = Compiler.init(src, .{});
+    try compiler.compile(true);
+}
+
+fn compileWithSession(rt: *Runtime, src: []const u8, path: []const u8) !void {
+    chunk.setActive(rt.chunk_state);
+    globals.setActive(&rt.globals_state);
+    heap.setActive(&rt.heap_state);
+    chunk.reset();
+    globals.reset();
+    heap.reset();
+
+    var session: module_compile.Session = .{};
+    session.provider = .{ .table = &.{} };
+    session.host_module_names = &.{};
+    session.host_module_descs = &.{};
+    session.enabled_capabilities = &.{};
+    session.capability_modules = &.{};
+
+    var compiler = Compiler.init(src, .{
+        .module_ctx = &session,
+        .resolve_import = module_compile.Session.resolveImportOpaque,
+        .has_module_export = module_compile.hasModuleExport,
+    });
+    _ = path;
     try compiler.compile(true);
 }
 
@@ -171,6 +196,54 @@ test "compiler: closure captures upvalue" {
     }
     try std.testing.expect(found_get_upvalue);
     try std.testing.expect(found_set_upvalue);
+}
+
+test "chunk: verify rejects jump target into instruction body" {
+    var rt = try setup();
+    defer rt.deinit();
+
+    chunk.setActive(rt.chunk_state);
+    globals.setActive(&rt.globals_state);
+    heap.setActive(&rt.heap_state);
+    chunk.reset();
+    globals.reset();
+    heap.reset();
+
+    try chunk.emitOp(.jump, 1);
+    try chunk.emitByte(0, 1);
+    try chunk.emitByte(0, 1);
+    try chunk.emitByte(0, 1);
+    try chunk.emitByte(1, 1);
+    try chunk.emitConst(.{ .int = 42 }, 1);
+    try chunk.emitOp(.halt, 1);
+
+    try std.testing.expectError(error.BadJumpTarget, chunk.verify());
+}
+
+test "compiler: std direct call lowers to leaf global" {
+    var rt = try setup();
+    defer rt.deinit();
+
+    try compileWithSession(&rt,
+        \\std := import("std")
+        \\func f(x int) int { return std.math.abs(x) }
+    , "");
+
+    const c = rt.chunk_state;
+    var found_direct = false;
+    var found_get_field = false;
+    var ip: usize = 0;
+    while (ip < c.code_len) {
+        const inst = try chunk.decodeAt(ip);
+        if (inst.op == .get_field) found_get_field = true;
+        if (inst.op == .get_global and inst.const_index != null) {
+            const name = (try chunk.constAt(inst.const_index.?)).string;
+            if (std.mem.eql(u8, name, "module:std.math.abs")) found_direct = true;
+        }
+        ip += inst.width;
+    }
+    try std.testing.expect(found_direct);
+    try std.testing.expect(!found_get_field);
 }
 
 test "compiler: struct field access" {
