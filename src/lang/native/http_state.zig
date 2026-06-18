@@ -206,16 +206,16 @@ fn httpFetchBuiltin(
 ) !HttpResult {
     _ = _timeout_ms;
 
-    const uri = std.Uri.parse(url) catch return error.CapabilityError;
+    const uri = std.Uri.parse(url) catch return error.InvalidUrl;
 
     var host_buf: [std.Io.net.HostName.max_len]u8 = undefined;
-    const host = uri.getHost(&host_buf) catch return error.CapabilityError;
+    const host = uri.getHost(&host_buf) catch return error.InvalidUrl;
     const is_tls = std.mem.eql(u8, uri.scheme, "https");
     const port = uri.port orelse if (is_tls) @as(u16, 443) else 80;
 
     const io = std.Io.Threaded.global_single_threaded.io();
 
-    var stream = host.connect(io, port, .{ .mode = .stream }) catch return error.CapabilityError;
+    var stream = host.connect(io, port, .{ .mode = .stream }) catch |e| return e;
     defer stream.close(io);
 
     const tls_min_buf = std.crypto.tls.Client.min_buffer_len;
@@ -243,7 +243,7 @@ fn httpFetchBuiltin(
                 .entropy = &entropy,
                 .realtime_now = now,
             },
-        ) catch return error.CapabilityError;
+        ) catch |e| return e;
     }
 
     const actual_reader: *std.Io.Reader = if (tls_client) |*tc| &tc.reader else &sr.interface;

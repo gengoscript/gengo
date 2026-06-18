@@ -75,7 +75,8 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const url = try vms.asStringValue(arg0);
             _ = try vms.vmPop();
 
-            var result = http_state.httpFetch("GET", url, null, null, 0) catch {
+            var result = http_state.httpFetch("GET", url, null, null, 0) catch |err| {
+                vms.setRuntimeErr("http.get: {s}: {s}", .{ url, @errorName(err) });
                 return error.CapabilityError;
             };
             defer result.deinit();
@@ -91,7 +92,8 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const body = try vms.asStringValue(arg1);
             _ = try vms.vmPop();
 
-            var result = http_state.httpFetch("POST", url, body, null, 0) catch {
+            var result = http_state.httpFetch("POST", url, body, null, 0) catch |err| {
+                vms.setRuntimeErr("http.post: {s}: {s}", .{ url, @errorName(err) });
                 return error.CapabilityError;
             };
             defer result.deinit();
@@ -171,7 +173,8 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                 else => return error.TypeError,
             }
 
-            var result = http_state.httpFetch(method, url, body, req_headers, timeout_ms) catch {
+            var result = http_state.httpFetch(method, url, body, req_headers, timeout_ms) catch |err| {
+                vms.setRuntimeErr("http.fetch: {s} {s}: {s}", .{ method, url, @errorName(err) });
                 return error.CapabilityError;
             };
             defer result.deinit();
