@@ -217,7 +217,7 @@ All other values are reserved and must cause rejection.
 | Value | Constant | Description |
 |-------|----------|-------------|
 | `0x0000` | `BACKEND_UNSPECIFIED` | Invalid; reject. |
-| `0x0001` | `BACKEND_BYTEVM` | Register-based bytecode interpreter (current). |
+| `0x0001` | `BACKEND_BYTEVM` | Stack-based bytecode interpreter (current). |
 
 All other values are reserved and must cause rejection.
 

@@ -197,12 +197,25 @@ fn runReturnAtTopLevel() !void {
 
 fn runRetConstAtTopLevel() !void {
     resetAll();
-    // ret_const checks ReturnAtTopLevel before reading the const index
+    try chunk.emitConst(.{ .int = 1 }, 1);
     try chunk.emitOp(.ret_const, 1);
     try chunk.emitByte(0, 1);
     try chunk.emitByte(0, 1);
     try chunk.emitOp(.halt, 1);
     vm.run() catch |e| return expectError("ret-const-toplevel", error.ReturnAtTopLevel, e);
+    return error.TestFailed;
+}
+
+fn runBadJumpTarget() !void {
+    resetAll();
+    try chunk.emitOp(.jump, 1);
+    try chunk.emitByte(0, 1);
+    try chunk.emitByte(0, 1);
+    try chunk.emitByte(0, 1);
+    try chunk.emitByte(1, 1);
+    try chunk.emitConst(.{ .int = 42 }, 1);
+    try chunk.emitOp(.halt, 1);
+    vm.run() catch |e| return expectError("bad-jump-target", error.BadJumpTarget, e);
     return error.TestFailed;
 }
 
@@ -333,6 +346,9 @@ export fn _start() void {
         std.os.wasi.proc_exit(1);
     };
     runRetConstAtTopLevel() catch {
+        std.os.wasi.proc_exit(1);
+    };
+    runBadJumpTarget() catch {
         std.os.wasi.proc_exit(1);
     };
     runNegOnNonNumber() catch {

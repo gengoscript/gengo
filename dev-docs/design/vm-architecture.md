@@ -54,7 +54,7 @@ Any string whose bytes are heap-managed must be represented as an `object` point
 
 ### 2.1 Object Types
 
-An `Object` is a heap-allocated Zig union. There are 26 tags:
+An `Object` is a heap-allocated Zig union. There are currently 25 tags:
 
 **Collections**
 
@@ -125,10 +125,10 @@ Instructions are variable-width. The first byte is the opcode. Subsequent bytes 
 | `get_local slot` | 2 bytes | op, slot |
 | `constant idx` | 3 bytes | op, idx_hi, idx_lo |
 | `get_global name_idx ic_slot` | 5 bytes | op, name_hi, name_lo, ic_hi, ic_lo |
-| `get_field name_idx ic_type ic_fidx` | 5 bytes | op, name_hi, name_lo, ic_type_hi, ic_type_lo + 1 more byte for field index in fused form |
+| `get_field name_idx ic_type ic_fidx` | 6 bytes | op, name_hi, name_lo, ic_type_hi, ic_type_lo, ic_fidx |
 | `get_local_get_field slot name ic` | 8 bytes | fused form; see §6 |
 
-Jump offsets are **u32 big-endian** absolute byte positions in the chunk, allowing chunks up to the full 1 MiB code limit.
+Jump offsets are **u32 big-endian relative offsets** in the chunk. Forward jumps (`jump`, `jump_if_false`, `jif_pop`) add the encoded offset to the IP after the instruction; backward jumps (`loop`, `set_global_loop`) subtract it. This keeps patching simple while still allowing chunks up to the full 1 MiB code limit.
 
 ---
 
@@ -291,19 +291,19 @@ When a pattern fires, the emitter overwrites the tracked position in-place and t
 | `add_ret` | `add` + `ret` | 1 byte | 2 → 1 |
 | `const_eq/sub/add/lt k` | `constant k` + `eq/sub/add/lt` | 3 bytes | 2 → 1 |
 | `get_local_const_eq/sub/add/lt s k` | `get_local s` + `const_eq/sub/add/lt k` | 5 bytes | 3 → 1 |
-| `get_local_const_eq_jif_pop s k off` | `get_local_const_eq s k` + `jif_pop off` | 7 bytes | 4 → 1 |
-| `get_local_const_lt_jif_pop s k off` | `get_local_const_lt s k` + `jif_pop off` | 7 bytes | 4 → 1 |
+| `get_local_const_eq_jif_pop s k off` | `get_local_const_eq s k` + `jif_pop off` | 9 bytes | 4 → 1 |
+| `get_local_const_lt_jif_pop s k off` | `get_local_const_lt s k` + `jif_pop off` | 9 bytes | 4 → 1 |
 | `get_local_get_field s name` | `get_local s` + `get_field name` | 8 bytes | 2 → 1 |
 | `get_local_const_sub_call s k n` | `get_local_const_sub s k` + `call n` | 6 bytes | 4 → 1 |
 | `local_add_const dst k` | `get_local_const_add dst k` + `set_local dst` | 4 bytes | 3 → 1 |
 | `local_add_local dst src` | `get_local dst` + `get_local src` + `add` + `set_local dst` | 3 bytes | 4 → 1 |
-| `set_global_loop name` | `set_global name` + `loop off` | 7 bytes | 2 → 1 |
+| `set_global_loop name` | `set_global name` + `loop off` | 9 bytes | 2 → 1 |
 
 `local_add_const` and `local_add_local` include an integer fast-path in their handlers: when both operands are `.int`, the addition is performed directly as `f64 + f64` with a `isFinite` check, skipping the general `computeAddResult` path that handles strings, decimals, named types, and overflow.
 
 ### 6.3 Encoding Contract for Fused Opcodes
 
-Each fused opcode occupies a fixed number of bytes. The VM handler reads exactly those bytes. No fused instruction may straddle a jump target, because the verifier (once it exists) must be able to enumerate instruction boundaries without re-running the peephole.
+Each fused opcode occupies a fixed number of bytes. The VM handler reads exactly those bytes. No fused instruction may straddle a jump target, because the verifier enumerates instruction boundaries without re-running the peephole.
 
 A **skip byte** appears in some fused instructions (e.g., `get_local_const_add`) as the position that held the original constituent opcode before fusion. The VM handler reads and discards it. This preserves the encoding length so that the IC slot positions already patched by prior instructions remain valid.
 

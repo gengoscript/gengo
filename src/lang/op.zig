@@ -32,11 +32,11 @@ pub const Op = enum(u8) {
     get_local_const_sub,
     get_local_const_add,
     get_local_const_lt,
-    // Quad-fused get_local+constant+eq+jif_pop: 7-byte conditional branch.
+    // Quad-fused get_local+constant+eq+jif_pop: 9-byte conditional branch.
     // Layout: [op][slot][skip][idx_hi][idx_lo][jmp_hi][jmp_lo]
     // Emitted when get_local_const_eq immediately precedes jif_pop.
     get_local_const_eq_jif_pop,
-    // Quad-fused get_local+constant+lt+jif_pop: 7-byte conditional branch.
+    // Quad-fused get_local+constant+lt+jif_pop: 9-byte conditional branch.
     // Layout: [op][slot][skip=const_lt_byte][idx_hi][idx_lo][jmp_hi][jmp_lo]
     // Emitted when get_local_const_lt immediately precedes jif_pop.
     get_local_const_lt_jif_pop,
@@ -96,7 +96,7 @@ pub const Op = enum(u8) {
     op_assert,
     op_assert_msg,
     op_trap_check,
-    variant_check,   // u8 const_idx: pop dup'd value, push bool (tag match)
+    variant_check,   // u16 const_idx: pop dup'd value, push bool (tag match)
     variant_payload, // pop variant_value, push payload
     get_field,       // u16:name_const_idx, u16:ic_type_pool_idx, u8:ic_field_idx — struct field read with inline cache
     set_field,       // u16:name_const_idx, u16:ic_type_pool_idx, u8:ic_field_idx — struct field write with inline cache

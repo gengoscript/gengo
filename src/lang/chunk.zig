@@ -1,3 +1,4 @@
+const std = @import("std");
 const Op = @import("op.zig").Op;
 const Value = @import("value.zig").Value;
 const common = @import("common.zig");
@@ -500,4 +501,187 @@ pub fn truncateTo(pos: usize) void {
 pub fn constAt(i: usize) !Value {
     if (i >= g_state.const_count) return error.BadConstantIndex;
     return g_state.consts[i];
+}
+
+pub const DecodedInstruction = struct {
+    op: Op,
+    width: usize,
+    const_index: ?usize = null,
+    jump_target: ?usize = null,
+};
+
+fn readU16At(pos: usize) !u16 {
+    if (pos + 1 >= g_state.code_len) return error.BytecodeOutOfBounds;
+    return (@as(u16, g_state.code[pos]) << 8) | @as(u16, g_state.code[pos + 1]);
+}
+
+fn readU32At(pos: usize) !u32 {
+    if (pos + 3 >= g_state.code_len) return error.BytecodeOutOfBounds;
+    return (@as(u32, g_state.code[pos]) << 24) |
+        (@as(u32, g_state.code[pos + 1]) << 16) |
+        (@as(u32, g_state.code[pos + 2]) << 8) |
+        @as(u32, g_state.code[pos + 3]);
+}
+
+pub fn decodeAt(pos: usize) !DecodedInstruction {
+    if (pos >= g_state.code_len) return error.BytecodeOutOfBounds;
+
+    const raw = g_state.code[pos];
+    const max_op = @intFromEnum(Op.halt);
+    if (raw > max_op) return error.BadOpcode;
+    const op: Op = @enumFromInt(raw);
+
+    return switch (op) {
+        .constant, .def_global, .make_closure, .ret_const,
+        .const_eq, .const_sub, .const_add, .const_lt,
+        .assert_interface, .assert_struct, .variant_check => .{
+            .op = op,
+            .width = 3,
+            .const_index = try readU16At(pos + 1),
+        },
+
+        .jump, .jump_if_false, .jif_pop => blk: {
+            const off = try readU32At(pos + 1);
+            break :blk .{
+                .op = op,
+                .width = 5,
+                .jump_target = pos + 5 + @as(usize, off),
+            };
+        },
+
+        .loop => blk: {
+            const off = try readU32At(pos + 1);
+            const width: usize = 5;
+            if (@as(usize, off) > pos + width) return error.BadJumpTarget;
+            break :blk .{
+                .op = op,
+                .width = width,
+                .jump_target = pos + width - @as(usize, off),
+            };
+        },
+
+        .get_local, .set_local, .get_upvalue, .set_upvalue, .close_upvalue,
+        .get_local_ret, .call, .defer_call,
+        .build_array, .build_map, .build_tuple, .build_struct_instance,
+        .tuple_check_arity, .tuple_get, .tuple_get_keep,
+        .get_slice, .assert_type => .{
+            .op = op,
+            .width = 2,
+        },
+
+        .get_global, .set_global => .{
+            .op = op,
+            .width = 5,
+            .const_index = try readU16At(pos + 1),
+        },
+
+        .get_field, .set_field => .{
+            .op = op,
+            .width = 6,
+            .const_index = try readU16At(pos + 1),
+        },
+
+        .invoke_method, .defer_invoke_method => .{
+            .op = op,
+            .width = if (op == .invoke_method) 8 else 4,
+            .const_index = try readU16At(pos + 1),
+        },
+
+        .get_local_const_eq, .get_local_const_sub,
+        .get_local_const_add, .get_local_const_lt => .{
+            .op = op,
+            .width = 5,
+            .const_index = try readU16At(pos + 3),
+        },
+
+        .get_local_const_sub_call => .{
+            .op = op,
+            .width = 6,
+            .const_index = try readU16At(pos + 3),
+        },
+
+        .get_local_const_eq_jif_pop, .get_local_const_lt_jif_pop => blk: {
+            const off = try readU32At(pos + 5);
+            break :blk .{
+                .op = op,
+                .width = 9,
+                .const_index = try readU16At(pos + 3),
+                .jump_target = pos + 9 + @as(usize, off),
+            };
+        },
+
+        .get_local_get_field => .{
+            .op = op,
+            .width = 8,
+            .const_index = try readU16At(pos + 3),
+        },
+
+        .set_global_loop => blk: {
+            const off = try readU32At(pos + 5);
+            const width: usize = 9;
+            if (@as(usize, off) > pos + width) return error.BadJumpTarget;
+            break :blk .{
+                .op = op,
+                .width = width,
+                .const_index = try readU16At(pos + 1),
+                .jump_target = pos + width - @as(usize, off),
+            };
+        },
+
+        .local_add_local => .{
+            .op = op,
+            .width = 3,
+        },
+
+        .local_add_const => .{
+            .op = op,
+            .width = 4,
+            .const_index = try readU16At(pos + 2),
+        },
+
+        else => .{
+            .op = op,
+            .width = 1,
+        },
+    };
+}
+
+pub fn verify() !void {
+    if (g_state.code_len == 0) return;
+
+    const bit_len = (g_state.code_len + 7) / 8;
+    const starts = try std.heap.page_allocator.alloc(u8, bit_len);
+    defer std.heap.page_allocator.free(starts);
+    @memset(starts, 0);
+
+    const Bits = struct {
+        fn set(bits: []u8, idx: usize) void {
+            bits[idx / 8] |= @as(u8, 1) << @intCast(idx % 8);
+        }
+
+        fn has(bits: []const u8, idx: usize) bool {
+            return (bits[idx / 8] & (@as(u8, 1) << @intCast(idx % 8))) != 0;
+        }
+    };
+
+    var ip: usize = 0;
+    while (ip < g_state.code_len) {
+        Bits.set(starts, ip);
+        const inst = try decodeAt(ip);
+        if (inst.const_index) |idx| {
+            if (idx >= g_state.const_count) return error.BadConstantIndex;
+        }
+        ip += inst.width;
+    }
+
+    ip = 0;
+    while (ip < g_state.code_len) {
+        const inst = try decodeAt(ip);
+        if (inst.jump_target) |target| {
+            if (target >= g_state.code_len or !Bits.has(starts, target)) {
+                return error.BadJumpTarget;
+            }
+        }
+        ip += inst.width;
+    }
 }

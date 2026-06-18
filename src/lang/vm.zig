@@ -3414,6 +3414,7 @@ fn runPanicUnwind(orig_err: anyerror) anyerror!void {
 // ── Public API ────────────────────────────────────────────────────────────────
 
 pub fn run() anyerror!void {
+    try chunk.verify();
     runInner() catch |err| return runPanicUnwind(err);
 }
 
