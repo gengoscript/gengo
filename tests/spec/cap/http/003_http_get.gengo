@@ -1,6 +1,10 @@
 std := import("std")
 http := import("cap:http")
-resp := http.get("https://example.com/data")
-std.io.println(resp.status)
-std.io.println(resp.ok)
-std.io.println(resp.body)
+resp, err := http.get("https://example.com/data")
+if err != null {
+    std.io.println("error:", err)
+} else {
+    std.io.println(resp.status)
+    std.io.println(resp.ok)
+    std.io.println(resp.body)
+}

@@ -67,6 +67,35 @@ fn buildResponseStruct(status: i32, body: []const u8, hdr_map: std.StringHashMap
     return .{ .object = inst_obj };
 }
 
+fn pushOkPair(resp: Value) !void {
+    const arr_obj = try vmgc.vmAllocObject();
+    arr_obj.* = .{ .array = &[_]Value{} };
+    try vms.pushTempRoot(.{ .object = arr_obj });
+    const vals = try vmgc.vmAllocManagedSlice(Value, 2);
+    vals[0] = resp;
+    vals[1] = .null;
+    arr_obj.* = .{ .array_managed = vals };
+    vms.popTempRoot();
+    try vms.vmPush(.{ .object = arr_obj });
+}
+
+fn pushErrPair(comptime fmt: []const u8, args: anytype) !void {
+    var buf: [512]u8 = undefined;
+    const msg = std.fmt.bufPrint(&buf, fmt, args) catch buf[0..];
+    const copy = try vmgc.vmAllocManagedBytes(msg.len);
+    @memcpy(copy[0..msg.len], msg);
+
+    const arr_obj = try vmgc.vmAllocObject();
+    arr_obj.* = .{ .array = &[_]Value{} };
+    try vms.pushTempRoot(.{ .object = arr_obj });
+    const vals = try vmgc.vmAllocManagedSlice(Value, 2);
+    vals[0] = .null;
+    vals[1] = .{ .error_value = copy[0..msg.len] };
+    arr_obj.* = .{ .array_managed = vals };
+    vms.popTempRoot();
+    try vms.vmPush(.{ .object = arr_obj });
+}
+
 pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
     switch (@as(NativeFnId, @enumFromInt(nf.id))) {
         .cap_http_get => {
@@ -76,13 +105,14 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             _ = try vms.vmPop();
 
             var result = http_state.httpFetch("GET", url, null, null, 0) catch |err| {
-                vms.setRuntimeErr("http.get: {s}: {s}", .{ url, @errorName(err) });
-                return error.CapabilityError;
+                if (err == error.CapabilityNotAvailable) return error.CapabilityError;
+                try pushErrPair("http.get: {s}: {s}", .{ url, @errorName(err) });
+                return;
             };
             defer result.deinit();
 
             const resp_val = try buildResponseStruct(result.status, result.body, result.headers, result.ok);
-            try vms.vmPush(resp_val);
+            try pushOkPair(resp_val);
         },
         .cap_http_post => {
             if (argc != 2) return error.ArityMismatch;
@@ -93,13 +123,14 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             _ = try vms.vmPop();
 
             var result = http_state.httpFetch("POST", url, body, null, 0) catch |err| {
-                vms.setRuntimeErr("http.post: {s}: {s}", .{ url, @errorName(err) });
-                return error.CapabilityError;
+                if (err == error.CapabilityNotAvailable) return error.CapabilityError;
+                try pushErrPair("http.post: {s}: {s}", .{ url, @errorName(err) });
+                return;
             };
             defer result.deinit();
 
             const resp_val = try buildResponseStruct(result.status, result.body, result.headers, result.ok);
-            try vms.vmPush(resp_val);
+            try pushOkPair(resp_val);
         },
         .cap_http_fetch => {
             if (argc != 2) return error.ArityMismatch;
@@ -174,13 +205,14 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             }
 
             var result = http_state.httpFetch(method, url, body, req_headers, timeout_ms) catch |err| {
-                vms.setRuntimeErr("http.fetch: {s} {s}: {s}", .{ method, url, @errorName(err) });
-                return error.CapabilityError;
+                if (err == error.CapabilityNotAvailable) return error.CapabilityError;
+                try pushErrPair("http.fetch: {s} {s}: {s}", .{ method, url, @errorName(err) });
+                return;
             };
             defer result.deinit();
 
             const resp_val = try buildResponseStruct(result.status, result.body, result.headers, result.ok);
-            try vms.vmPush(resp_val);
+            try pushOkPair(resp_val);
         },
         else => unreachable,
     }

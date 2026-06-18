@@ -1,4 +1,8 @@
 std := import("std")
 http := import("cap:http")
-resp := http.post("https://example.com/api", "{\"key\":\"value\"}")
-std.io.println(resp.status)
+resp, err := http.post("https://example.com/api", "{\"key\":\"value\"}")
+if err != null {
+    std.io.println("error:", err)
+} else {
+    std.io.println(resp.status)
+}
