@@ -88,11 +88,25 @@ pub fn nativeDelete(m_obj: *Object, key: Value) !Value {
 }
 
 pub fn nativeHas(m_obj: *Object, key: Value) !Value {
-    const items = try vms.asMapSlice(m_obj);
-    for (items) |entry| {
-        if (vmmap.mapKeyEquals(entry.key, key)) return .{ .boolean = true };
+    switch (m_obj.*) {
+        .map => {
+            for (m_obj.map) |entry| {
+                if (vmmap.mapKeyEquals(entry.key, key)) return .{ .boolean = true };
+            }
+            return .{ .boolean = false };
+        },
+        .map_managed => {
+            for (m_obj.map_managed) |entry| {
+                if (vmmap.mapKeyEquals(entry.key, key)) return .{ .boolean = true };
+            }
+            return .{ .boolean = false };
+        },
+        .map_hashed => {
+            const hm = &m_obj.map_hashed;
+            return .{ .boolean = vmmap.mapFindHashedIndex(hm.entries[0..hm.len], hm.buckets, key) != null };
+        },
+        else => return error.TypeError,
     }
-    return .{ .boolean = false };
 }
 
 pub fn nativeKeys(m_obj: *Object) !Value {
