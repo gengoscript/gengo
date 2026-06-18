@@ -2,6 +2,100 @@
 
 This changelog tracks notable language/runtime changes by implementation date.
 
+## 2026-06-18 (v0.5.0-pre2)
+
+### Breaking — `and` / `or` / `not` Replace `&&` / `||` / `!`
+
+Boolean operators are now Go-style keywords. `&&`, `||`, and `!` are rejected
+at the lexer level. Update all boolean expressions. See commit `1aec116`.
+
+### Breaking — Untagged Unions and `any` Removed
+
+`any` is no longer a valid type. All struct fields, function parameters, and
+variable declarations must carry explicit type annotations. Untagged union
+fields (`field string | int`) are replaced by named variant types.
+See commit `e89c965`.
+
+### Breaking — NaN/Inf Rejected in Named-Type Construction
+
+`type Meter float; Meter(math.inf)` now panics `TypeError` instead of
+silently constructing an invalid named value. Closes #145.
+
+### Feature — Compile-Time Undefined Global Detection
+
+A pre-scan pass collects all top-level declaration names before compilation.
+References to undeclared globals at the outermost scope are now rejected with
+`UndefinedVariable` at compile time instead of failing at runtime with
+`NotDefined`. Forward references within the same module work correctly.
+Closes #152.
+
+### Feature — `-e` / `--eval` Inline Code Execution
+
+`gengo -e 'std := import("std"); std.io.println("hello")'` runs a snippet
+without a source file. See commit `5bf039c`.
+
+### Feature — `.type` Switch Dispatch for Union-Typed Values
+
+Values declared as `string | int | bool` can be dispatched with
+`switch v.type { case string: … case int: … }`. See commit `e1a4e64`.
+
+### Feature — `cycle` Constraint for Float and Decimal Named Types
+
+`type Angle float { cycle 0.0..360.0 }` wraps on overflow. Previously
+restricted to integer types. See commit `f00b943`.
+
+### Feature — `default` Clause for Named Scalar Types
+
+`type Port int { default 8080 }` makes `var p Port` initialise to 8080
+instead of zero. Subtypes inherit the parent's default. See commit `f5ef229`.
+
+### Feature — Interface and Struct Contracts on Typed Var Declarations
+
+`var conn DbConn` where `DbConn` is an interface now validates that the
+zero value satisfies the interface at declaration time. Closes #143.
+
+### Fix — Closure Self-Reference via varDecl Pre-Allocation
+
+`var fib = func(n int) int { return fib(n-1) + fib(n-2) }` and any
+closure that calls itself by name now works correctly. The varDecl cell
+is allocated before the initialiser executes so the upvalue chain is
+populated at first call. See commit `7d071b9`.
+
+### Fix — MaxGlobals Raised from 256 to 2048
+
+Scripts with many top-level declarations no longer hit `TooManyGlobals`.
+The accompanying GC scan was O(N×TableSize); replaced with a compact
+values array giving O(N) marking. Closes #154.
+
+### Fix — `std.core.has` Uses Hash Table on Hashed Maps
+
+`std.core.has` previously did a linear scan even on `map_hashed` objects,
+making it O(N). Now it uses the hash table path for O(1) average lookup.
+Closes #164.
+
+### Performance — Superinstruction Expansion
+
+Several new fused opcodes reduce dispatch counts in hot paths:
+- `get_local_ret`: load-and-return in one dispatch
+- `get_local_const_sub_call`: `n-1` / `n-2` recursive call pattern
+- `add_ret`: add-and-return for binary recursive functions
+- `local_add_const` / `local_add_local`: read-modify-write loop counters
+- `std.*` direct-call lowering: `std.math.abs(x)` compiles to
+  `get_global "module:std.math.abs" + call` — 2 dispatches instead of 4
+
+### Hardening — Bytecode Verifier
+
+`chunk.verify()` runs before every execution, checking that all constant
+indices are in-bounds and all jump targets land on instruction boundaries.
+See commit `fc7e47f`.
+
+### Docs — VM Architecture Reference
+
+`dev-docs/design/vm-architecture.md` — comprehensive developer reference
+covering value/object types, chunk format, dispatch loop, peephole fusions,
+inline caches, GC invariants, call protocol, closures, and the active-state
+model. Closes #176.
+
 ## 2026-06-12 (v0.5.0-dev)
 
 ### Fix — Enum Subtype Members Validated at Declaration
