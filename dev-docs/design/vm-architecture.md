@@ -1,0 +1,489 @@
+# Gengo VM Architecture
+
+This document describes the bytecode virtual machine at a conceptual level: what the machine looks like, what its moving parts are, how they interact, and what invariants must hold at every point. It is the reference for VM changes, the hardening work, and onboarding new contributors to the runtime.
+
+---
+
+## 1. Overview
+
+Gengo uses a **stack-based bytecode VM**. The compiler emits a flat array of bytes (the chunk) plus a pool of constants. The VM maintains an operand stack and a call-frame stack, reads one opcode at a time, and executes it.
+
+The execution model is deliberately simple:
+
+- No registers; all operands are pushed and popped from the stack.
+- All heap memory goes through one allocator; the GC is a stop-the-world mark-and-sweep over that allocator.
+- All name resolution (globals, struct fields) goes through explicit opcodes; there is no implicit environment chain at runtime.
+- Closures capture upvalues through heap-allocated cell objects; the capture protocol is explicit and visible in the bytecode.
+
+The source files for the components described here:
+
+| Component | File |
+|---|---|
+| Value and Object types | `src/lang/value.zig` |
+| Opcodes | `src/lang/op.zig` |
+| Bytecode emitter and peephole | `src/lang/chunk.zig` |
+| VM state (stack, frames, etc.) | `src/lang/vm_state.zig` |
+| Dispatch loop and op handlers | `src/lang/vm.zig` |
+| GC | `src/lang/vm_gc.zig` |
+| Heap allocator | `src/runtime/heap.zig` |
+| Globals table | `src/lang/globals.zig` |
+
+---
+
+## 2. Value Representation
+
+Every slot on the operand stack holds a `Value`. A `Value` is a tagged union with nine variants:
+
+```
+Value = int       f64         integer arithmetic (stored as double for uniformity)
+      | float     f64         floating-point
+      | decimal   i64         fixed-point (scale is stored in the named-type object, not here)
+      | rune      u21         Unicode code point
+      | boolean   bool
+      | string    []const u8  STATIC BYTES ONLY — see the invariant below
+      | error_value []const u8 same static-bytes rule
+      | object    *Object     pointer into the GC object pool
+      | null
+```
+
+**The `.string` invariant** — this is the most important rule in the entire value system:
+
+> `.string` MUST only ever point at bytes with lifetime longer than any GC cycle: compile-time string literals, lexer-interned identifiers stored in the bump allocator, or entries in the chunk constant pool. It MUST NOT point at heap-managed backing bytes.
+
+Any string whose bytes are heap-managed must be represented as an `object` pointing to a `.dyn_string` (owned bytes) or `.string_view` (borrowed view with a source pointer). Violating the `.string` invariant causes use-after-free or aliasing bugs when the GC sweeps the backing memory.
+
+### 2.1 Object Types
+
+An `Object` is a heap-allocated Zig union. There are 26 tags:
+
+**Collections**
+
+| Tag | Payload | Notes |
+|---|---|---|
+| `array` | `[]Value` | Static slice; length is fixed after creation. |
+| `array_managed` | `[]Value` | Managed (GC-tracked) slice; GC frees the backing memory. |
+| `map` | `[]MapEntry` | Ordered key-value pairs, static slice. |
+| `map_managed` | `[]MapEntry` | Same with managed backing. |
+| `map_hashed` | `MapHashedObj` | Open-addressed hash table; promoted from linear when the map grows. |
+
+**Strings**
+
+| Tag | Payload | Notes |
+|---|---|---|
+| `dyn_string` | `[]u8` | Owns heap-managed bytes. The GC frees the backing when the object dies. |
+| `string_view` | `StringViewObj` | Borrows a sub-slice of a `dyn_string`. Holds a `source: *Object` pointer to keep the backing alive. The GC traces `source`. |
+| `string_builder` | `StringBuilderObj` | Mutable buffer for incremental string construction (`std.string.builder`). |
+
+**Functions and closures**
+
+| Tag | Payload | Notes |
+|---|---|---|
+| `function` | `FuncObj` | Bytecode function: IP, arity, capture slots, optional type annotations. |
+| `closure` | `ClosureObj` | Function + captured upvalue cells (`[]*Object`). |
+| `cell` | `CellObj` | One `Value` stored on the heap so multiple closures can share it. |
+| `native_function` | `NativeFuncObj` | Built-in Zig function, identified by a small integer ID. |
+| `host_module_function` | `HostModuleFuncObj` | Function registered by the host embedder (WASM only). |
+
+**Type objects** (live in globals, written once at script init)
+
+`struct_type`, `interface_type`, `named_type`, `enum_type`, `variant_type`
+
+**Value wrappers** (heap-allocated per construction)
+
+`named_value`, `enum_value`, `struct_instance`, `variant_value`, `variant_ctor`, `named_type_fn`
+
+**Utilities**
+
+`iterator` — produced by `iter_init`, consumed by `iter_next1`/`iter_next2`.
+
+---
+
+## 3. The Chunk
+
+A **chunk** is the unit of compiled code. One chunk covers one top-level script (or module). It has two arrays that are active during compilation:
+
+```
+code:   [MaxCode]u8        (1 MiB max) — raw bytecode bytes
+consts: [MaxConst]Value    (4096 max)  — constant pool
+```
+
+Each byte position in `code` also has parallel `lines` and `cols` entries (both `u16`) for source-location reporting.
+
+### 3.1 Constant Pool
+
+Constants are `Value`s stored at compile time: string literals, integer and float literals, field name strings (for `get_field`/`set_field`/`invoke_method`), global name strings (for `get_global`/`def_global`), and type name strings (for `assert_interface`/`assert_struct`).
+
+Constants are referenced by **u16 index** and encoded big-endian in the bytecode as two consecutive bytes.
+
+### 3.2 Instruction Encoding
+
+Instructions are variable-width. The first byte is the opcode. Subsequent bytes are operands whose types and widths are fixed by the opcode. Examples:
+
+| Opcode | Width | Encoding |
+|---|---|---|
+| `null_val`, `add`, `halt` | 1 byte | op only |
+| `get_local slot` | 2 bytes | op, slot |
+| `constant idx` | 3 bytes | op, idx_hi, idx_lo |
+| `get_global name_idx ic_slot` | 5 bytes | op, name_hi, name_lo, ic_hi, ic_lo |
+| `get_field name_idx ic_type ic_fidx` | 5 bytes | op, name_hi, name_lo, ic_type_hi, ic_type_lo + 1 more byte for field index in fused form |
+| `get_local_get_field slot name ic` | 8 bytes | fused form; see §6 |
+
+Jump offsets are **u32 big-endian** absolute byte positions in the chunk, allowing chunks up to the full 1 MiB code limit.
+
+---
+
+## 4. Runtime State
+
+The VM state lives in a `State` struct (`vm_state.zig`). All active-state switching is done by calling `setActive(*State)` on each component (chunk, heap, globals, vm_state) before running.
+
+### 4.1 Operand Stack
+
+```
+stack:     []Value   (pre-allocated to max_stack at init)
+stack_top: usize     (index of the next free slot; TOS is stack[stack_top - 1])
+```
+
+`vmPush(v)` writes `v` to `stack[stack_top]` and increments `stack_top`. `vmPop()` decrements `stack_top` and returns the value. Stack underflow and overflow are checked on every push/pop.
+
+### 4.2 Call Frames
+
+```
+frames:    []Frame   (pre-allocated to max_frames at init)
+frame_top: usize     (index of the next free frame slot)
+```
+
+A `Frame` captures the call site and the local-variable base:
+
+```
+Frame = {
+    ret_ip:           usize      -- IP to restore on ret
+    base:             usize      -- stack index of first local (arg 0)
+    closure:          ?*Object   -- owning closure, or null for plain functions
+    func_obj:         *Object    -- the function object (for type checking on ret)
+    defer_base:       usize      -- defer_stack depth at call time
+    has_typed_returns: bool
+}
+```
+
+**Local variable `slot` in the active frame** is `stack[base + slot]`.
+
+At the top level (no active frame, `frame_top == 0`), there are no locals. Top-level variables are globals.
+
+### 4.3 Instruction Pointer
+
+`ip: usize` — byte offset into the active chunk's code array. Each opcode handler advances `ip` by reading operand bytes with `vmByte()` (reads one byte and increments `ip`), `vmShort()` (reads big-endian u16), or `vmU32()` (reads big-endian u32).
+
+### 4.4 Globals
+
+The globals table (`globals.zig`) is a separate open-addressed hash table:
+
+```
+TableSize: 4096 slots (power of two)
+MaxGlobals: 2048 entries (load factor ≤ 0.5)
+```
+
+Each entry stores a name (`[]const u8`) and a `Value`. Lookup is by string key with linear probing. `def_global` writes once at script init; `get_global`/`set_global` read and write during execution. See §7 for inline-cache acceleration.
+
+### 4.5 Temp Roots
+
+```
+temp_roots:    [128]Value
+temp_root_top: usize
+```
+
+Any in-flight `Value` that is not yet reachable from the stack or globals must be pushed here before any GC-triggering allocation. See §8 for details.
+
+### 4.6 Defer and Panic State
+
+```
+defer_stack:  []Value    -- deferred callables pushed by defer_call
+defer_top:    usize
+
+is_panicking: bool
+panic_value:  Value      -- value passed to panic()
+recovered:    bool       -- set by std.core.recover()
+panic_frames: []PanicFrame -- source locations for the panic traceback
+```
+
+---
+
+## 5. Dispatch Loop
+
+The main loop in `vm.zig` (`runInner`) reads one byte, switches on it, and executes the handler. The loop exits on `halt` or any unhandled error.
+
+```zig
+while (true) {
+    const op_byte = try vmByte();
+    vmperf.countOp(op_byte);
+    switch (@as(Op, @enumFromInt(op_byte))) {
+        .constant => { ... },
+        .add      => { ... },
+        // ... all opcodes
+        .halt => break,
+    }
+}
+```
+
+All opcode handlers are plain Zig functions or inline code. The opcode byte is consumed before the handler runs; operand bytes are consumed by the handler itself.
+
+### 5.1 Opcode Categories
+
+**Stack manipulation**: `constant`, `null_val`, `true_val`, `false_val`, `dup`, `dup2`, `pop`
+
+**Global access**: `def_global`, `get_global`, `set_global`
+
+**Local access**: `get_local`, `set_local`
+
+**Upvalue access**: `get_upvalue`, `set_upvalue`, `close_upvalue`
+
+**Arithmetic and logic**: `add`, `sub`, `mul`, `div`, `mod`, `pow`, `neg`, `not`, `eq`, `gt`, `lt`, `bit_and`, `bit_or`, `bit_xor`, `bit_not`, `shl`, `shr`
+
+**Type operations**: `cast_int/float/decimal/bool/string/rune`, `assert_type`, `assert_interface`, `assert_struct`, `type_name`
+
+**Containers**: `build_array`, `build_map`, `build_struct_instance`, `get_index`, `set_index`, `get_slice`
+
+**Field access**: `get_field`, `set_field`, `invoke_method`
+
+**Iteration**: `iter_init`, `iter_next1`, `iter_next2`
+
+**Control flow**: `jump`, `jump_if_false`, `jif_pop`, `loop`
+
+**Closures**: `make_closure`
+
+**Calls and returns**: `call`, `defer_call`, `defer_invoke_method`, `ret`, `repl_print`, `halt`
+
+**Named types and variants**: `set_named_predicate`, `validate_type_default`, `variant_check`, `variant_payload`
+
+**Assertions**: `op_assert`, `op_assert_msg`, `op_trap_check`
+
+**Fused opcodes**: see §6.
+
+---
+
+## 6. Peephole Fusions
+
+The compiler's `chunk.zig` emitter runs a **single-pass peephole optimizer**: as each instruction is emitted, a small set of tracked positions allows the emitter to detect patterns spanning 2–4 instructions and replace them with a single fused instruction.
+
+Fused instructions reduce dispatch count. They do not change observable semantics.
+
+### 6.1 Tracking State
+
+The `chunk.State` struct carries several nullable position fields:
+
+| Field | Tracks |
+|---|---|
+| `last_const_code_pos` | Position of the last `constant k` instruction |
+| `last_get_local_code_pos` | Position of the last `get_local slot` instruction |
+| `last_triple_eq_pos` | Position of the last `get_local_const_eq` (triple-fused) |
+| `last_triple_lt_pos` | Position of the last `get_local_const_lt` (triple-fused) |
+| `last_get_local_const_sub_pos` | Position of the last `get_local_const_sub` triple |
+| `last_get_local_const_add_pos` | Position of the last `get_local_const_add` triple |
+| `last_set_global_code_pos` | Position of the last `set_global n` instruction |
+
+When a pattern fires, the emitter overwrites the tracked position in-place and truncates `code_len`, effectively replacing multiple already-emitted instructions with one.
+
+### 6.2 Fusion Table
+
+| Fused opcode | Replaces | Width | Dispatch reduction |
+|---|---|---|---|
+| `ret_const k` | `constant k` + `ret` | 3 bytes | 2 → 1 |
+| `get_local_ret s` | `get_local s` + `ret` | 2 bytes | 2 → 1 |
+| `add_ret` | `add` + `ret` | 1 byte | 2 → 1 |
+| `const_eq/sub/add/lt k` | `constant k` + `eq/sub/add/lt` | 3 bytes | 2 → 1 |
+| `get_local_const_eq/sub/add/lt s k` | `get_local s` + `const_eq/sub/add/lt k` | 5 bytes | 3 → 1 |
+| `get_local_const_eq_jif_pop s k off` | `get_local_const_eq s k` + `jif_pop off` | 7 bytes | 4 → 1 |
+| `get_local_const_lt_jif_pop s k off` | `get_local_const_lt s k` + `jif_pop off` | 7 bytes | 4 → 1 |
+| `get_local_get_field s name` | `get_local s` + `get_field name` | 8 bytes | 2 → 1 |
+| `get_local_const_sub_call s k n` | `get_local_const_sub s k` + `call n` | 6 bytes | 4 → 1 |
+| `local_add_const dst k` | `get_local_const_add dst k` + `set_local dst` | 4 bytes | 3 → 1 |
+| `local_add_local dst src` | `get_local dst` + `get_local src` + `add` + `set_local dst` | 3 bytes | 4 → 1 |
+| `set_global_loop name` | `set_global name` + `loop off` | 7 bytes | 2 → 1 |
+
+`local_add_const` and `local_add_local` include an integer fast-path in their handlers: when both operands are `.int`, the addition is performed directly as `f64 + f64` with a `isFinite` check, skipping the general `computeAddResult` path that handles strings, decimals, named types, and overflow.
+
+### 6.3 Encoding Contract for Fused Opcodes
+
+Each fused opcode occupies a fixed number of bytes. The VM handler reads exactly those bytes. No fused instruction may straddle a jump target, because the verifier (once it exists) must be able to enumerate instruction boundaries without re-running the peephole.
+
+A **skip byte** appears in some fused instructions (e.g., `get_local_const_add`) as the position that held the original constituent opcode before fusion. The VM handler reads and discards it. This preserves the encoding length so that the IC slot positions already patched by prior instructions remain valid.
+
+---
+
+## 7. Inline Caches
+
+`get_global` and `get_field` have **inline caches** (ICs) baked into the instruction stream. The IC bytes start cold (all 0xFF) and are patched on the first successful resolution.
+
+### 7.1 `get_global`
+
+```
+[get_global][name_hi][name_lo][ic_hi][ic_lo]    5 bytes
+```
+
+- Cold: `ic_hi:ic_lo = 0xFFFF`. Handler does a full hash-table lookup by name string, then patches the IC with the resolved slot index.
+- Warm: `ic_hi:ic_lo` holds the slot index. Handler reads `globals.getAt(ic_slot)` directly — no string lookup.
+
+### 7.2 `get_field`
+
+```
+[get_field][name_hi][name_lo][ic_type_hi][ic_type_lo]    5 bytes  (struct field)
+```
+
+- `ic_type` holds the heap object-pool index of the struct type last seen at this call site.
+- If the receiver's type matches `ic_type`, the field is read by cached field index rather than by name scan.
+- The fused `get_local_get_field` form appends one more IC byte for the field index directly.
+
+IC mispredictions fall back to the cold path and re-patch. ICs are monomorphic: one type per call site.
+
+---
+
+## 8. Garbage Collector
+
+### 8.1 Heap Layout
+
+The heap has two regions:
+
+**Object pool** — a fixed-size array of `Object` values with a free-list. Each `Object` slot is tracked by two parallel boolean arrays: `obj_live` and `obj_marked`. Allocation pops from the free-list; sweep iterates the live array and returns dead objects to the free-list.
+
+**Managed memory** — a bump allocator backed by a single contiguous region, organized into **size classes** (16 B, 32 B, 64 B, ..., up to 2 MiB). Freed blocks are returned to per-class free lists. A live managed block is reachable only through an `Object` that owns it; the GC frees the managed block when the owning object dies.
+
+### 8.2 Collection Triggers
+
+Collection is triggered in `vmAllocObject()` and `vmAllocManagedSlice()`:
+
+- When live object count reaches `next_gc_objects` (adaptive: `live * 2 + step`).
+- When heap bytes used reaches `next_gc_heap_bytes` (adaptive: scales with heap fill level).
+- In gc-stress mode: on every allocation.
+
+### 8.3 Root Set
+
+The mark phase roots from:
+
+1. **Operand stack** (`stack[0..stack_top]`)
+2. **Globals table** (all live entries)
+3. **std_module** (the stdlib namespace object, held separately)
+4. **Temp roots** (`temp_roots[0..temp_root_top]`)
+5. **Chunk constant pool** (all constants)
+6. **Defer stack** (`defer_stack[0..defer_top]`)
+
+### 8.4 Mark Phase
+
+The mark phase is **iterative** using a static worklist (`mark_worklist` array). Each object is marked before being enqueued, so no object is enqueued twice.
+
+`drainMarkQueue()` processes the worklist: each dequeued object traces its children (array elements, map entries, closure upvalues, etc.) and enqueues any unmarked live children.
+
+The `string_view` object traces its `source: *Object` pointer so that the backing `dyn_string` stays alive as long as any view into it is reachable.
+
+### 8.5 Sweep Phase
+
+`heap.sweepObjects()` iterates the live array and returns every unmarked live object to the free-list. Managed-memory blocks owned by dead objects are freed back to the appropriate size-class free list.
+
+### 8.6 Temp Root Discipline
+
+Any `*Object` or `Value` that is in flight (allocated but not yet reachable from the stack or globals) must be pinned in `temp_roots` before any allocation that could trigger GC. Failure to do so is a rooting-window bug: GC may collect the object mid-computation.
+
+```
+pushTempRoot(v)   -- add v to temp_roots
+popTempRoot()     -- remove most-recently-pushed root
+```
+
+The temp root stack depth must be balanced across every code path: every `pushTempRoot` must have a matching `popTempRoot` on every exit, including error exits.
+
+---
+
+## 9. Call and Return Protocol
+
+### 9.1 Call
+
+Before `call argc` executes, the stack must look like:
+
+```
+... [func_value] [arg_0] [arg_1] ... [arg_{argc-1}]
+                 ^--- stack_top - argc - 1 (func slot)
+```
+
+`performCall(argc)`:
+1. Reads `func_value = stack[stack_top - argc - 1]`.
+2. Dispatches on the object type:
+   - **function/closure**: creates a `Frame`, sets `ip = f.ip`. Args are already at `stack[base..base+arity]`.
+   - **native_function**: calls `callNative(nf, argc)` which pops args, calls the Zig function, and pushes the result.
+   - **named_type**: constructs a named-type value (consumes one arg, pushes the wrapped value).
+   - **variant_ctor**: constructs a variant value.
+3. For bytecode functions, the existing stack slots become locals in the new frame. The func_value slot becomes the first out-of-frame slot; after `ret`, the return value is written there and `stack_top` is set to `func_slot + 1`.
+
+### 9.2 Return
+
+`ret` (and its fused forms `ret_const`, `get_local_ret`, `add_ret`):
+
+1. Pops the current frame (`frame_top -= 1`).
+2. Restores `ip = frame.ret_ip`.
+3. Writes the return value to `stack[frame.base - 1]` (the slot that held the function before the call).
+4. Sets `stack_top = frame.base` (discards all locals and the function slot, leaving only the return value at TOS).
+5. Runs any pending deferred callables from `defer_stack[frame.defer_base..defer_top]`.
+
+### 9.3 Tail Call
+
+`tryTailCall(argc)` fires before `performCall` when certain conditions hold (calling a plain function and the current frame has no deferred calls and no typed return). It reuses the current frame instead of allocating a new one, enabling constant-space recursion.
+
+---
+
+## 10. Closures and Upvalues
+
+When a function captures a local variable from an enclosing scope, the variable is stored in a `cell` object on the heap. Both the enclosing scope and the closure hold a pointer to the same cell.
+
+`close_upvalue slot` — emitted when a captured local goes out of scope. It copies the current stack value into `cell.value` and updates the stack slot to hold the cell object. From this point, all reads/writes to that slot go through the cell.
+
+`get_upvalue idx` / `set_upvalue idx` — read and write through `closure.upvalues[idx].cell.value`.
+
+---
+
+## 11. Panic and Recover
+
+A script-level panic (`panic(msg)` or type/arithmetic errors) sets `is_panicking = true` and records the panic value in `panic_value`. The dispatch loop unwinds: `ret` opcodes and defer chains run normally, but the panic propagates upward until:
+
+- `std.core.recover()` is called in a defer — sets `recovered = true`, clearing the panic.
+- The top-level frame is reached — the engine reports the panic to the host.
+
+The panic frame list (`panic_frames`) accumulates source locations as the stack unwinds, producing the traceback.
+
+---
+
+## 12. Key Invariants Summary
+
+These are the properties that must hold at every point during execution:
+
+1. **`.string` points only at immortal bytes.** All heap-backed text is `.dyn_string` or `.string_view`.
+
+2. **Any in-flight object must be reachable from roots.** Between allocating an object and writing it to the stack or a stable location, it must be in `temp_roots`.
+
+3. **`string_view.source` must be a live `dyn_string`.** The GC maintains this by tracing `source`; code must not construct a view whose source has been freed.
+
+4. **`frame.base` + `local_slot` must be within `stack[0..stack_top]`.** Every `get_local`/`set_local` checks this.
+
+5. **The temp-root stack must be balanced.** Every `pushTempRoot` has a matching `popTempRoot` on all exit paths.
+
+6. **The defer stack must be balanced.** `frame.defer_base` marks where this frame's defers begin; `ret` runs exactly `defer_stack[defer_base..defer_top]`.
+
+7. **Fused instructions are semantically equivalent to their constituent instructions.** The peephole may not change observable behaviour, including error conditions, side effects, and return values.
+
+8. **Constant pool indices in bytecode are in range.** `constant idx` with `idx >= const_count` is a malformed instruction; the verifier (once present) must reject it.
+
+9. **Jump targets land on instruction starts.** A jump to the middle of a multi-byte instruction is a malformed chunk.
+
+10. **The GC mark phase visits every edge.** Any `Object` field holding a `*Object` or containing a `Value` that may be `.object` must be traced in `drainMarkQueue`. Missing an edge causes use-after-free.
+
+---
+
+## 13. Active-State Model
+
+Each logical component has a global active state pointer and a `setActive(*State)` function:
+
+| Component | State type | Set by |
+|---|---|---|
+| `chunk.zig` | `chunk.State` | `chunk.setActive` |
+| `heap.zig` | `heap.State` | `heap.setActive` |
+| `globals.zig` | `globals.State` | `globals.setActive` |
+| `vm_state.zig` | `vm_state.State` | `vm_state.setActive` |
+
+The engine wrapper (`src/engine.zig`) switches all four before every `run()` call so that each engine handle has its own isolated state. This is how multiple engine instances coexist in the same process.
+
+The current model is **single-active**: only one runtime instance executes at a time within a thread. Reentrancy (calling back into the VM from a host callback while the VM is running) is not safe in the current design. See issue #172 for the architectural path toward explicit context pointers.
