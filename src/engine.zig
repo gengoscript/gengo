@@ -733,6 +733,10 @@ fn validateModuleName(name: []const u8) bool {
 
 export fn engine_register_module(handle: i32, name_ptr: PtrInt, name_len: i32, funcs_ptr: PtrInt, funcs_count: i32) i32 {
     const engine = getEngine(handle) orelse return -1;
+    if (comptime !is_wasm) {
+        engine.setError("host modules are not supported on native targets (WASM only)");
+        return -6;
+    }
     if (engine.host_module_count >= MaxHostModules) return -3;
     if (funcs_count < 0 or funcs_count > MaxHostModuleFuncs) return -4;
 

@@ -134,13 +134,17 @@ Pass `NULL` to clear the callback.
 
 Registers a host-defined module that scripts can import through the `host:` prefix.
 
+**Platform restriction:** host modules are only supported on WASM targets. On
+native shared-library builds this function always fails with `-6`.
+
 Returns:
 
 - `0` on success;
 - `-1` for invalid handle;
 - `-3` if the module table is full;
-- `-4` if `funcs_count` is out of range; or
-- `-5` for invalid module name.
+- `-4` if `funcs_count` is out of range;
+- `-5` for invalid module name; or
+- `-6` if host modules are not supported on this platform (WASM only).
 
 ## Capabilities
 
