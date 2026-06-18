@@ -123,7 +123,7 @@ pub fn collectGarbage() void {
     while (i < vms.vmState().stack_top) : (i += 1) markValue(vms.vmState().stack[i]);
 
     i = 0;
-    while (i < globals.len()) : (i += 1) markValue(globals.valueAt(i));
+    while (i < globals.len()) : (i += 1) markValue(globals.compactValue(i));
 
     if (vms.vmState().std_module) |m| markObjectQueue(m);
 

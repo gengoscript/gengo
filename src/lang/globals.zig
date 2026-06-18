@@ -6,10 +6,12 @@ pub const TableSize = 4096; // power-of-two, keep load factor <= 0.5 at MaxGloba
 const GEntry = struct {
     name: []const u8 = "",
     value: Value = .null,
+    compact_idx: u16 = 0,
     occupied: bool = false,
 };
 pub const State = struct {
     entries: [TableSize]GEntry = undefined,
+    compact_values: [MaxGlobals]Value = undefined,
     globals_len: usize = 0,
 };
 
@@ -47,6 +49,10 @@ pub fn reset() void {
     g_state.globals_len = 0;
 }
 
+pub fn compactValue(i: usize) Value {
+    return g_state.compact_values[i];
+}
+
 pub fn get(name: []const u8) ?Value {
     const idx = slotFor(name) orelse return null;
     return g_state.entries[idx].value;
@@ -65,6 +71,7 @@ pub fn getAt(slot: u16) Value {
 pub fn setAt(slot: u16, value: Value) void {
     if (slot >= TableSize) return;
     g_state.entries[slot].value = value;
+    g_state.compact_values[g_state.entries[slot].compact_idx] = value;
 }
 
 pub fn has(name: []const u8) bool {
@@ -74,6 +81,7 @@ pub fn has(name: []const u8) bool {
 pub fn set(name: []const u8, value: Value) bool {
     const idx = slotFor(name) orelse return false;
     g_state.entries[idx].value = value;
+    g_state.compact_values[g_state.entries[idx].compact_idx] = value;
     return true;
 }
 
@@ -83,9 +91,11 @@ pub fn def(name: []const u8, value: Value) !void {
     if (!g_state.entries[idx].occupied) {
         g_state.entries[idx].occupied = true;
         g_state.entries[idx].name = name;
+        g_state.entries[idx].compact_idx = @intCast(g_state.globals_len);
         g_state.globals_len += 1;
     }
     g_state.entries[idx].value = value;
+    g_state.compact_values[g_state.entries[idx].compact_idx] = value;
 }
 
 pub fn len() usize {
