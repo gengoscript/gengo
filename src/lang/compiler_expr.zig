@@ -148,8 +148,12 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
         const prop = c.cur;
         c.advance();
         if (c.match(.lparen)) {
+            const is_std_func = c.std_namespace_path != null;
             try c.checkStdNamespaceField(prop.src, line);
             try c.checkImportModuleField(prop.src, line);
+            if (is_std_func) {
+                try chunk.emitGetField(prop.src, prop.line);
+            }
             var argc: u8 = 0;
             if (!c.check(.rparen)) {
                 while (true) {
@@ -160,7 +164,11 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
                 }
             }
             try c.consume(.rparen);
-            try chunk.emitInvokeMethod(prop.src, argc, line);
+            if (is_std_func) {
+                try chunk.emit2(@intFromEnum(Op.call), argc, prop.line);
+            } else {
+                try chunk.emitInvokeMethod(prop.src, argc, line);
+            }
             return;
         }
         try c.checkStdNamespaceField(prop.src, line);
