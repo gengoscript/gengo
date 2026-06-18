@@ -376,6 +376,37 @@ pub fn installStdGlobal() !void {
     if (globals.has(module_compile.StdModuleGlobalName)) return;
     const std_obj = try buildStdModule();
     try globals.def(module_compile.StdModuleGlobalName, .{ .object = std_obj });
+    // Register leaf-node globals for direct-call optimization.
+    // Each "module:std.{ns}.{func}" global allows the compiler to emit a single
+    // get_global instead of get_global "module:std" + get_field chain + call.
+    if (std_obj.* == .struct_instance) {
+        const prefix = module_compile.StdModuleGlobalName;
+        const top_fields = std_obj.struct_instance.fields;
+        for (top_fields) |top_entry| {
+            const ns_val = top_entry.value;
+            if (ns_val == .object and ns_val.object.* == .struct_instance) {
+                const ns_name = top_entry.key.string;
+                const ns_fields = ns_val.object.struct_instance.fields;
+                for (ns_fields) |fe| {
+                    const needed = prefix.len + 1 + ns_name.len + 1 + fe.key.string.len;
+                    const gbuf = (heap.bump(u8, needed) orelse return error.OutOfMemory)[0..needed];
+                    @memcpy(gbuf[0..prefix.len], prefix);
+                    gbuf[prefix.len] = '.';
+                    @memcpy(gbuf[prefix.len + 1 .. prefix.len + 1 + ns_name.len], ns_name);
+                    gbuf[prefix.len + 1 + ns_name.len] = '.';
+                    @memcpy(gbuf[prefix.len + 2 + ns_name.len .. needed], fe.key.string);
+                    if (!globals.has(gbuf)) try globals.def(gbuf, fe.value);
+                }
+            } else {
+                const needed = prefix.len + 1 + top_entry.key.string.len;
+                const gbuf = (heap.bump(u8, needed) orelse return error.OutOfMemory)[0..needed];
+                @memcpy(gbuf[0..prefix.len], prefix);
+                gbuf[prefix.len] = '.';
+                @memcpy(gbuf[prefix.len + 1 .. needed], top_entry.key.string);
+                if (!globals.has(gbuf)) try globals.def(gbuf, ns_val);
+            }
+        }
+    }
     {
         const exec_buf = (heap.bump(u8, 64) orelse return error.OutOfMemory)[0..64];
         const exec_key = std.fmt.bufPrint(exec_buf, "{s}.{s}", .{ TemplateTypeQualifiedName, "execute" }) catch return error.OutOfMemory;
