@@ -86,6 +86,7 @@ pub const Compiler = struct {
     scope_depth: u8 = 0,
     loops: [MaxLoopDepth]LoopCtx = undefined,
     loop_depth: u8 = 0,
+    block_depth: u8 = 1,
     expr_depth: u16 = 0,
     registry: TypeRegistry = .{},
     last_func_obj: ?*@import("value.zig").Object = null,
@@ -386,6 +387,16 @@ pub const Compiler = struct {
             self.import_module_path = null;
         } else {
             const qname = try self.qualifyGlobalName(name.src);
+            if (!self.inFunc() and self.block_depth == 1) {
+                if (self.options.check_global_exists) |checker| {
+                    if (!checker(self.options.check_global_ctx.?, qname)) {
+                        self.setErr("undefined variable '{s}'", .{name.src});
+                        self.err_line = name.line;
+                        self.err_col = @intCast(name.col);
+                        return error.UndefinedVariable;
+                    }
+                }
+            }
             if (self.isStdModuleGlobal(qname)) {
                 chunk.markStdCallPatchPos();
             }

@@ -7,6 +7,7 @@ const CompilerOptions = @import("compiler.zig").CompilerOptions;
 const Lexer = @import("lexer.zig").Lexer;
 const TT = @import("token.zig").TT;
 const cfg = @import("../runtime/config.zig");
+const globals = @import("globals.zig");
 const source_io = @import("../runtime/source_io.zig");
 const build_options = @import("build_options");
 
@@ -153,6 +154,8 @@ pub const Session = struct {
     host_module_descs: []const HostModuleDesc = &.{},
     enabled_capabilities: []const []const u8 = &.{},
     capability_modules: []const CapModuleDesc = &.{},
+    known_globals: ?[*][]const u8 = null,
+    known_global_count: u16 = 0,
     test_mode: bool = false,
     test_count: u8 = 0,
     test_names: [64][]const u8 = undefined,
@@ -303,7 +306,102 @@ pub const Session = struct {
         };
     }
 
+    fn registerGlobalName(self: *Session, name: []const u8, prefix: []const u8) !void {
+        if (name.len > 0 and name[0] == '_') return;
+        const qname = if (prefix.len > 0) blk: {
+            const total = prefix.len + 1 + name.len;
+            const buf = heap.bump(u8, total) orelse return error.OutOfMemory;
+            @memcpy(buf[0..prefix.len], prefix);
+            buf[prefix.len] = '.';
+            @memcpy(buf[prefix.len + 1 .. total], name);
+            break :blk buf[0..total];
+        } else name;
+        if (self.known_global_count >= chunk.MaxConst) {
+            self.setScanError("too many global declarations (max {d})", .{chunk.MaxConst});
+            return error.TooManyGlobals;
+        }
+        const copy = heap.bump(u8, qname.len) orelse return error.OutOfMemory;
+        @memcpy(copy[0..qname.len], qname);
+        self.known_globals.?[self.known_global_count] = copy[0..qname.len];
+        self.known_global_count += 1;
+    }
+
+    fn scanGlobalDeclarations(self: *Session, src: []const u8, prefix: []const u8) !void {
+        self.known_global_count = 0;
+        if (self.known_globals == null) {
+            self.known_globals = heap.bump([]const u8, chunk.MaxConst) orelse return error.OutOfMemory;
+        }
+        var lex: Lexer = .{ .src = src };
+        var brace_depth: u32 = 0;
+        while (true) {
+            const tok = lex.next();
+            switch (tok.typ) {
+                .eof => break,
+                .lbrace => brace_depth += 1,
+                .rbrace => {
+                    if (brace_depth > 0) brace_depth -= 1;
+                },
+                .kw_func => {
+                    if (brace_depth > 0) continue;
+                    const name_tok = lex.next();
+                    if (name_tok.typ != .ident) continue;
+                    var peek = lex;
+                    if (peek.next().typ == .lparen) {
+                        try self.registerGlobalName(name_tok.src, prefix);
+                    }
+                },
+                .kw_const, .kw_var => {
+                    if (brace_depth > 0) continue;
+                    const name_tok = lex.next();
+                    if (name_tok.typ == .ident) {
+                        try self.registerGlobalName(name_tok.src, prefix);
+                    }
+                },
+                .kw_type, .kw_subtype => {
+                    if (brace_depth > 0) continue;
+                    const name_tok = lex.next();
+                    if (name_tok.typ == .ident) {
+                        try self.registerGlobalName(name_tok.src, prefix);
+                    }
+                },
+                .ident => {
+                    if (brace_depth > 0) continue;
+                    var peek = lex;
+                    const next1 = peek.next();
+                    if (next1.typ == .colon_eq) {
+                        lex = peek;
+                        try self.registerGlobalName(tok.src, prefix);
+                    } else if (next1.typ != .eq and next1.typ != .lparen and next1.typ != .dot) {
+                        if (next1.typ == .lbracket and (tok.col + tok.src.len == next1.col)) continue;
+                        var depth: i32 = 0;
+                        while (true) {
+                            const t = peek.next();
+                            switch (t.typ) {
+                                .lparen, .lbracket => depth += 1,
+                                .rparen, .rbracket => {
+                                    depth -= 1;
+                                    if (depth < 0) break;
+                                },
+                                .eq, .colon_eq => {
+                                    if (depth == 0) try self.registerGlobalName(tok.src, prefix);
+                                    break;
+                                },
+                                .lbrace, .semicolon, .eof => break,
+                                else => {},
+                            }
+                        }
+                    }
+                },
+                else => {},
+            }
+        }
+    }
+
     fn compileBegunModule(self: *Session, idx: usize, src: []const u8, emit_halt: bool) anyerror!void {
+        self.scanGlobalDeclarations(src, self.modules[idx].prefix) catch |err| {
+            self.last_error_path = self.modules[idx].path();
+            return err;
+        };
         var compiler = Compiler.init(src, .{
             .module_path = self.modules[idx].path(),
             .module_prefix = self.modules[idx].prefix,
@@ -312,6 +410,8 @@ pub const Session = struct {
             .module_ctx = self,
             .resolve_import = resolveImportOpaque,
             .has_module_export = hasModuleExport,
+            .check_global_exists = checkGlobalExistsInSession,
+            .check_global_ctx = self,
             .test_mode = if (emit_halt) self.test_mode else false,
         });
         compiler.compile(false) catch |err| {
@@ -564,6 +664,21 @@ pub fn hasModuleExport(ctx: *anyopaque, path: []const u8, field: []const u8) boo
     while (i < exports.export_count) : (i += 1) {
         if (common.streq(exports.export_names[i], field)) return true;
     }
+    return false;
+}
+
+pub fn checkGlobalExistsInSession(ctx: *anyopaque, name: []const u8) bool {
+    const s: *Session = @ptrCast(@alignCast(ctx));
+    for (s.known_globals.?[0..s.known_global_count]) |gn| {
+        if (common.streq(gn, name)) return true;
+    }
+    if (common.streq(name, StdModuleGlobalName)) return true;
+    if (std.mem.startsWith(u8, name, "module:std.")) return true;
+    if (std.mem.startsWith(u8, name, "cap:")) return true;
+    if (std.mem.startsWith(u8, name, "host:")) return true;
+    if (std.mem.startsWith(u8, name, "@module_type:")) return true;
+    if (std.mem.startsWith(u8, name, "@mod:")) return true;
+    if (std.mem.startsWith(u8, name, "__test_")) return true;
     return false;
 }
 

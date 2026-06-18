@@ -1,0 +1,11 @@
+std := import("std")
+
+func foo() {
+    bar()
+}
+
+func bar() {
+    std.io.println("forward ref works")
+}
+
+foo()
