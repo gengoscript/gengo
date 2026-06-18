@@ -365,8 +365,11 @@ pub const Compiler = struct {
     pub fn emitGetVar(self: *Compiler, name: Token) !void {
         chunk.setCol(name.col);
         if (self.resolveLocal(name.src)) |slot| {
-            try chunk.emit2(@intFromEnum(Op.get_local), slot, name.line);
             const local = self.currentScope().locals[slot];
+            if (local.from_std) {
+                chunk.markStdCallPatchPos();
+            }
+            try chunk.emit2(@intFromEnum(Op.get_local), slot, name.line);
             if (local.from_std) {
                 self.std_namespace_path = "";
                 self.import_module_path = null;
@@ -383,6 +386,9 @@ pub const Compiler = struct {
             self.import_module_path = null;
         } else {
             const qname = try self.qualifyGlobalName(name.src);
+            if (self.isStdModuleGlobal(qname)) {
+                chunk.markStdCallPatchPos();
+            }
             try chunk.emitGetGlobal(qname, name.line);
             if (self.isStdModuleGlobal(qname)) {
                 self.std_namespace_path = "";

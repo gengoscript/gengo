@@ -91,6 +91,7 @@ pub fn typeNameLiteral(c: anytype) !void {
 
 pub fn expr(c: anytype) !void {
     c.std_namespace_path = null;
+    chunk.clearStdCallPatchPos();
     try parsePrecedence(c, .assign);
 }
 
@@ -103,6 +104,9 @@ pub fn importExpr(c: anytype) !void {
     const ctx = c.options.module_ctx orelse { c.setErr("unsupported import module '{s}'", .{name}); return error.UnsupportedImportModule; };
     const resolver = c.options.resolve_import orelse { c.setErr("unsupported import module '{s}'", .{name}); return error.UnsupportedImportModule; };
     const mod_name = try resolver(ctx, c.options.module_path, name);
+    if (common.streq(name, "std")) {
+        chunk.markStdCallPatchPos();
+    }
     try chunk.emitGetGlobal(mod_name, c.prev.line);
     if (common.streq(name, "std") and common.streq(mod_name, "module:std")) {
         c.std_namespace_path = "";
@@ -149,9 +153,34 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
         c.advance();
         if (c.match(.lparen)) {
             const is_std_func = c.std_namespace_path != null;
+            const std_ns = c.std_namespace_path;
             try c.checkStdNamespaceField(prop.src, line);
             try c.checkImportModuleField(prop.src, line);
             if (is_std_func) {
+                if (chunk.stdCallPatchPos()) |patch_pos| {
+                    chunk.clearStdCallPatchPos();
+                    var name_buf: [80]u8 = undefined;
+                    const direct_name = if (std_ns != null and std_ns.?.len > 0)
+                        std.fmt.bufPrint(&name_buf, "module:std.{s}.{s}", .{ std_ns.?, prop.src }) catch ""
+                    else
+                        std.fmt.bufPrint(&name_buf, "module:std.{s}", .{prop.src}) catch "";
+                    if (direct_name.len > 0) {
+                        chunk.truncateTo(patch_pos);
+                        try chunk.emitGetGlobal(direct_name, prop.line);
+                        var argc: u8 = 0;
+                        if (!c.check(.rparen)) {
+                            while (true) {
+                                try expr(c, );
+                                argc += 1;
+                                if (!c.match(.comma)) break;
+                                if (c.check(.rparen)) break;
+                            }
+                        }
+                        try c.consume(.rparen);
+                        try chunk.emit2(@intFromEnum(Op.call), argc, prop.line);
+                        return;
+                    }
+                }
                 try chunk.emitGetField(prop.src, prop.line);
             }
             var argc: u8 = 0;
