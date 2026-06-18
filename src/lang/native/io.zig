@@ -120,9 +120,13 @@ fn sprintValueDepth(buf_or_null: ?[]u8, v: Value, depth: u32, ancestors: *[Print
             defer anc_count.* -= 1;
             switch (obj.*) {
                 .dyn_string => |s| {
-                if (buf_or_null) |buf| @memcpy(buf[0..s.len], s);
-                return s.len;
-            },
+                    if (buf_or_null) |buf| @memcpy(buf[0..s.len], s);
+                    return s.len;
+                },
+                .string_view => |sv| {
+                    if (buf_or_null) |buf| @memcpy(buf[0..sv.bytes.len], sv.bytes);
+                    return sv.bytes.len;
+                },
             .array, .array_managed => {
                 const items = try vms.asArraySlice(obj);
                 var len: usize = 1;

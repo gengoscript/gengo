@@ -374,7 +374,14 @@ pub fn unboxNamed(v: Value) Value {
 // Object classification helpers used by GC, map ops, native fns, and the exec loop.
 
 pub fn isStringValue(v: Value) bool {
-    return v == .string or (v == .object and v.object.* == .dyn_string);
+    if (v == .string) return true;
+    if (v == .object) {
+        return switch (v.object.*) {
+            .dyn_string, .string_view => true,
+            else => false,
+        };
+    }
+    return false;
 }
 
 pub fn isArrayObject(obj: *Object) bool {
@@ -418,11 +425,17 @@ pub fn asMapSlice(obj: *Object) ![]MapEntry {
 
 pub fn asStringValue(v: Value) ![]const u8 {
     if (v == .string) return v.string;
-    if (v == .object and v.object.* == .dyn_string) return v.object.dyn_string;
-    if (v == .object and v.object.* == .named_value) {
-        const nv = v.object.named_value;
-        if (nv.typ.* == .named_type and nv.typ.named_type.base == .string)
-            return asStringValue(nv.value);
+    if (v == .object) {
+        return switch (v.object.*) {
+            .dyn_string => |s| s,
+            .string_view => |sv| sv.bytes,
+            .named_value => |nv| {
+                if (nv.typ.* == .named_type and nv.typ.named_type.base == .string)
+                    return asStringValue(nv.value);
+                return error.TypeError;
+            },
+            else => error.TypeError,
+        };
     }
     return error.TypeError;
 }
