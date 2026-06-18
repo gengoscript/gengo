@@ -6,6 +6,7 @@ Contents:
 
 - `testing.md` — conformance, parity, and benchmark harnesses
 - `roadmap.md` — current open items and exit criteria
+- `design/vm-architecture.md` — bytecode VM conceptual reference: values, stack, chunk format, GC, call protocol, peephole fusions, invariants
 - `design/gbc-spec.md` — bytecode cache format specification
 - `perf/metrics.md` — performance instrumentation reference
 - `perf/baseline-2026-06-01.md` — recorded benchmark baseline
