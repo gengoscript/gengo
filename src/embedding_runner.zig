@@ -275,6 +275,7 @@ fn expectImportLoaderWithFallback() void {
         .ok => |v| {
             const s = if (v == .string) v.string
                 else if (v == .object and v.object.* == .dyn_string) v.object.dyn_string
+                else if (v == .object and v.object.* == .string_view) v.object.string_view.bytes
                 else null;
             if (s == null or !std.mem.eql(u8, s.?, "callbacktable"))
                 fail("embedding FAIL: importLoaderWithFallback result\n");

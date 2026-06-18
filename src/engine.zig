@@ -380,6 +380,7 @@ fn valueToWire(val: Value) !ValueWire {
         .error_value => |msg| makeWire(@intFromEnum(WireTag.@"error"), @intFromPtr(msg.ptr), @intCast(msg.len)),
         .object => |obj| switch (obj.*) {
             .dyn_string => makeWire(@intFromEnum(WireTag.string), @intFromPtr(obj.dyn_string.ptr), @intCast(obj.dyn_string.len)),
+            .string_view => makeWire(@intFromEnum(WireTag.string), @intFromPtr(obj.string_view.bytes.ptr), @intCast(obj.string_view.bytes.len)),
             .array, .array_managed => {
                 const items = try vms.asArraySlice(obj);
                 const wires = (heap.bump(ValueWire, items.len) orelse return makeWire(@intFromEnum(WireTag.null), 0, 0))[0..items.len];
@@ -446,6 +447,11 @@ fn valueToWireWithScratch(val: Value, scratch: *Engine) !ValueWire {
         .object => |obj| switch (obj.*) {
             .dyn_string => {
                 const s = obj.dyn_string;
+                const stable = scratch.setStringScratch(s);
+                return makeWire(@intFromEnum(WireTag.string), @intFromPtr(stable.ptr), @intCast(stable.len));
+            },
+            .string_view => {
+                const s = obj.string_view.bytes;
                 const stable = scratch.setStringScratch(s);
                 return makeWire(@intFromEnum(WireTag.string), @intFromPtr(stable.ptr), @intCast(stable.len));
             },
@@ -733,6 +739,10 @@ fn validateModuleName(name: []const u8) bool {
 
 export fn engine_register_module(handle: i32, name_ptr: PtrInt, name_len: i32, funcs_ptr: PtrInt, funcs_count: i32) i32 {
     const engine = getEngine(handle) orelse return -1;
+    if (comptime !is_wasm) {
+        engine.setError("host modules are not supported on native targets (WASM only)");
+        return -6;
+    }
     if (engine.host_module_count >= MaxHostModules) return -3;
     if (funcs_count < 0 or funcs_count > MaxHostModuleFuncs) return -4;
 

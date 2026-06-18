@@ -308,6 +308,7 @@ pub fn sweepObjects() void {
             },
             .struct_instance => freeManagedSlice(@import("../lang/value.zig").MapEntry, g_state.obj_pool[i].struct_instance.fields),
             .string_builder => freeBytesManaged(g_state.obj_pool[i].string_builder.buf),
+            .string_view => {},
             else => {},
         }
         g_state.obj_live[i] = false;

@@ -42,13 +42,24 @@ const TplCtrlEntry = struct {
 };
 
 fn tplIsStringVal(v: Value) bool {
-    return v == .string or (v == .object and v.object.* == .dyn_string);
+    if (v == .string) return true;
+    if (v == .object) {
+        return switch (v.object.*) {
+            .dyn_string, .string_view => true,
+            else => false,
+        };
+    }
+    return false;
 }
 
 fn tplAsStringVal(v: Value) ![]const u8 {
     return switch (v) {
         .string => |s| s,
-        .object => |o| if (o.* == .dyn_string) o.dyn_string else error.TypeError,
+        .object => |o| switch (o.*) {
+            .dyn_string => |s| s,
+            .string_view => |sv| sv.bytes,
+            else => error.TypeError,
+        },
         else => error.TypeError,
     };
 }
@@ -145,6 +156,7 @@ fn tplValToDynStr(v: Value) !Value {
             try vms.pushTempRoot(.{ .object = o });
             defer vms.popTempRoot();
             if (o.* == .dyn_string) return vmgc.makeDynString(o.dyn_string);
+            if (o.* == .string_view) return vmgc.makeDynString(o.string_view.bytes);
             // Named values render through their underlying value.
             if (o.* == .named_value) return tplValToDynStr(o.named_value.value);
             return vmgc.makeDynString("?");

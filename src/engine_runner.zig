@@ -832,7 +832,7 @@ fn testStructReturn() void {
             for (fields) |f| {
                 const key = switch (f.key) {
                     .string => |s| s,
-                    .object => |o| if (o.* == .dyn_string) o.dyn_string else fail("engine FAIL: struct bad key type\n"),
+                    .object => |o| if (o.* == .dyn_string) o.dyn_string else if (o.* == .string_view) o.string_view.bytes else fail("engine FAIL: struct bad key type\n"),
                     else => fail("engine FAIL: struct bad key type\n"),
                 };
                 if (std.mem.eql(u8, key, "x")) {

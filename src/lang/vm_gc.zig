@@ -105,6 +105,9 @@ fn drainMarkQueue() void {
                 if (nt.predicate) |p| markObjectQueue(p);
             },
             .enum_type => |et| { if (et.parent) |p| markObjectQueue(p); },
+            .string_view => |sv| {
+                if (heap.isObjectLive(sv.source)) markObjectQueue(sv.source);
+            },
             // No GC-traced children; backing bytes are freed by the sweep.
             .dyn_string, .function, .native_function, .host_module_function, .struct_type, .interface_type,
             .string_builder => {},
@@ -266,5 +269,11 @@ pub fn concatDynString(a: []const u8, b: []const u8) !Value {
     @memcpy(buf[0..a.len], a);
     @memcpy(buf[a.len..total], b);
     obj.* = .{ .dyn_string = buf[0..total] };
+    return .{ .object = obj };
+}
+
+pub fn makeStringView(bytes: []const u8, source: *Object) !Value {
+    const obj = try vmAllocObject();
+    obj.* = .{ .string_view = .{ .bytes = bytes, .source = source } };
     return .{ .object = obj };
 }

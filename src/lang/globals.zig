@@ -1,8 +1,8 @@
 const common = @import("common.zig");
 const Value = @import("value.zig").Value;
 
-pub const MaxGlobals = 256;
-pub const TableSize = 512; // keep load factor <= 0.5 at MaxGlobals
+pub const MaxGlobals = 2048;
+pub const TableSize = 4096; // power-of-two, keep load factor <= 0.5 at MaxGlobals
 const GEntry = struct {
     name: []const u8 = "",
     value: Value = .null,
