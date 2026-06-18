@@ -73,6 +73,7 @@ pub fn assignStmt(c: anytype) !void {
 }
 
 pub fn block(c: anytype) anyerror!void {
+    c.block_depth += 1;
     const saved = c.repl_expr_ok;
     c.repl_expr_ok = false;
     const local_base: u8 = c.currentScope().local_count;
@@ -80,6 +81,7 @@ pub fn block(c: anytype) anyerror!void {
     try c.consume(.rbrace);
     try c.cleanupLocals(local_base, c.prev.line);
     c.repl_expr_ok = saved;
+    c.block_depth -= 1;
 }
 
 pub fn cForStmt(c: anytype) anyerror!void {
