@@ -59,11 +59,15 @@ const popTempRoot = vms.popTempRoot;
 const vmAllocObject = vmgc.vmAllocObject;
 const vmAllocManagedSlice = vmgc.vmAllocManagedSlice;
 const makeDynString = vmgc.makeDynString;
+const makeStringView = vmgc.makeStringView;
 const concatDynString = vmgc.concatDynString;
 
 fn panicMessageFromValue(v: Value) []const u8 {
     if (v == .string) return v.string;
-    if (v == .object and v.object.* == .dyn_string) return v.object.dyn_string;
+    if (v == .object) {
+        if (v.object.* == .dyn_string) return v.object.dyn_string;
+        if (v.object.* == .string_view) return v.object.string_view.bytes;
+    }
     if (v == .int) {
         return std.fmt.bufPrint(&vmState().str_acc, "{d}", .{v.int}) catch "AssertionFailed";
     }
@@ -136,7 +140,7 @@ fn runtimeTypeName(v: Value) []const u8 {
         .null => "null",
         .object => |obj| switch (obj.*) {
             .named_value => obj.named_value.typ.named_type.name,
-            .dyn_string => "string",
+            .dyn_string, .string_view => "string",
             .array, .array_managed => "array",
             .map, .map_managed, .map_hashed => "map",
             .function, .closure => "func",
@@ -450,7 +454,7 @@ fn checkNamedTypePredicate(nt_obj: *Object, inner: Value) !void {
                     const n = std.unicode.utf8Encode(r, vbuf[0..4]) catch 0;
                     break :blk vbuf[0..n];
                 },
-                .object  => |o| if (o.* == .dyn_string) o.dyn_string else "?",
+                .object  => |o| if (o.* == .dyn_string) o.dyn_string else if (o.* == .string_view) o.string_view.bytes else "?",
                 else     => "?",
             };
             if (nt.predicate_msg) |msg| {
@@ -675,6 +679,7 @@ fn iterInit(v: Value) !Value {
     switch (iv) {
         .object => |o| switch (o.*) {
             .dyn_string => |s| obj.* = .{ .iterator = .{ .kind = .string, .index = 0, .string = s, .string_managed = true, .source = o } },
+            .string_view => |sv| obj.* = .{ .iterator = .{ .kind = .string, .index = 0, .string = sv.bytes, .string_managed = true, .source = sv.source } },
             .array, .array_managed => obj.* = .{ .iterator = .{ .kind = .array, .index = 0, .array = try vms.asArraySlice(o), .source = o } },
             .map, .map_managed, .map_hashed => obj.* = .{ .iterator = .{ .kind = .map, .index = 0, .map = try vms.asMapSlice(o), .source = o } },
             .named_type => |nt| {
@@ -710,7 +715,7 @@ fn iterNext1(it: *IterObj) !void {
             const start = try vmstr.utf8ByteOffsetForRuneIndexCached(it.string, ridx);
             const end = try vmstr.utf8ByteOffsetForRuneIndexCached(it.string, ridx + 1);
             if (it.string_managed) {
-                try vmPush(try makeDynString(it.string[start..end]));
+                try vmPush(try makeStringView(it.string[start..end], it.source.?));
             } else {
                 try vmPush(.{ .string = it.string[start..end] });
             }
@@ -767,7 +772,7 @@ fn iterNext2(it: *IterObj) !void {
             const end = try vmstr.utf8ByteOffsetForRuneIndexCached(it.string, ridx + 1);
             try vmPush(.{ .int = @floatFromInt(it.rune_index) });
             if (it.string_managed) {
-                try vmPush(try makeDynString(it.string[start..end]));
+                try vmPush(try makeStringView(it.string[start..end], it.source.?));
             } else {
                 try vmPush(.{ .string = it.string[start..end] });
             }
@@ -1068,7 +1073,13 @@ fn opGetIndex() !void {
                 const ridx = try vms.vmIndexFromVal(idx_v);
                 const start = try vmstr.utf8ByteOffsetForRuneIndexCached(s, ridx);
                 const w = try vmstr.utf8NextRuneByteLen(s, start);
-                try vmPush(try makeDynString(s[start .. start + w]));
+                try vmPush(try makeStringView(s[start .. start + w], obj));
+            },
+            .string_view => |sv| {
+                const ridx = try vms.vmIndexFromVal(idx_v);
+                const start = try vmstr.utf8ByteOffsetForRuneIndexCached(sv.bytes, ridx);
+                const w = try vmstr.utf8NextRuneByteLen(sv.bytes, start);
+                try vmPush(try makeStringView(sv.bytes[start .. start + w], sv.source));
             },
             .array, .array_managed => {
                 const items = try vms.asArraySlice(obj);
@@ -2868,7 +2879,16 @@ fn runInner() !void {
                             if (start_r > end_r) return error.IndexOutOfBounds;
                             const start_b = try vmstr.utf8ByteOffsetForRuneIndexCached(s, start_r);
                             const end_b = try vmstr.utf8ByteOffsetForRuneIndexCached(s, end_r);
-                            try vmPush(try makeDynString(s[start_b..end_b]));
+                            try vmPush(try makeStringView(s[start_b..end_b], obj));
+                        },
+                        .string_view => |sv| {
+                            const rune_len = try vmstr.utf8RuneCountCached(sv.bytes);
+                            const start_r: usize = if (has_start) try vms.vmSliceIndex(start_v, rune_len) else 0;
+                            const end_r: usize = if (has_end) try vms.vmSliceIndex(end_v, rune_len) else rune_len;
+                            if (start_r > end_r) return error.IndexOutOfBounds;
+                            const start_b = try vmstr.utf8ByteOffsetForRuneIndexCached(sv.bytes, start_r);
+                            const end_b = try vmstr.utf8ByteOffsetForRuneIndexCached(sv.bytes, end_r);
+                            try vmPush(try makeStringView(sv.bytes[start_b..end_b], sv.source));
                         },
                         .array, .array_managed => {
                             const items = try vms.asArraySlice(obj);

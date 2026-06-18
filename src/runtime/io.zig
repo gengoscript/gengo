@@ -293,6 +293,7 @@ fn printValueDepth(v: Value, depth: u32, ancestors: *[PrintMaxDepth]*const vmod.
 
             switch (obj.*) {
                 .dyn_string => |s| write(s),
+                .string_view => |sv| write(sv.bytes),
                 .array, .array_managed => |items| {
                     write("[");
                     for (items, 0..) |item, i| {
