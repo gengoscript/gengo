@@ -53,6 +53,65 @@ fn compileWithSession(rt: *Runtime, src: []const u8, path: []const u8) !void {
     try compiler.compile(true);
 }
 
+const CompileSnapshot = struct {
+    err: anyerror,
+    line: u32,
+    col: u32,
+    msg: []const u8,
+    path: []const u8,
+    runtime_line: u32,
+    runtime_col: u32,
+    runtime_msg: []const u8,
+};
+
+fn compileOnlySnapshot(rt: *Runtime, src: []const u8, path: []const u8, provider: module_compile.SourceProvider) !CompileSnapshot {
+    const err = rt.compileOnly(src, path, provider) catch |e| {
+        try std.testing.expect(rt.last_compile_line != 0);
+        return .{
+            .err = e,
+            .line = rt.last_compile_line,
+            .col = rt.last_compile_col,
+            .msg = rt.last_compile_msg_buf[0..rt.last_compile_msg_len],
+            .path = rt.lastCompilePath(),
+            .runtime_line = rt.last_runtime_line,
+            .runtime_col = rt.last_runtime_col,
+            .runtime_msg = rt.last_runtime_msg_buf[0..rt.last_runtime_msg_len],
+        };
+    };
+    _ = err;
+    return error.TestUnexpectedResult;
+}
+
+fn runPathCompileSnapshot(rt: *Runtime, src: []const u8, path: []const u8, provider: module_compile.SourceProvider) !CompileSnapshot {
+    const err = rt.runPathWithProvider(src, path, provider, false) catch |e| {
+        try std.testing.expect(rt.last_compile_line != 0);
+        return .{
+            .err = e,
+            .line = rt.last_compile_line,
+            .col = rt.last_compile_col,
+            .msg = rt.last_compile_msg_buf[0..rt.last_compile_msg_len],
+            .path = rt.lastCompilePath(),
+            .runtime_line = rt.last_runtime_line,
+            .runtime_col = rt.last_runtime_col,
+            .runtime_msg = rt.last_runtime_msg_buf[0..rt.last_runtime_msg_len],
+        };
+    };
+    try std.testing.expect(rt.last_compile_line != 0);
+    _ = err;
+    return error.TestUnexpectedResult;
+}
+
+fn expectCompileSnapshotsEqual(a: CompileSnapshot, b: CompileSnapshot) !void {
+    try std.testing.expectEqual(a.err, b.err);
+    try std.testing.expectEqual(a.line, b.line);
+    try std.testing.expectEqual(a.col, b.col);
+    try std.testing.expectEqualStrings(a.msg, b.msg);
+    try std.testing.expectEqualStrings(a.path, b.path);
+    try std.testing.expectEqual(a.runtime_line, b.runtime_line);
+    try std.testing.expectEqual(a.runtime_col, b.runtime_col);
+    try std.testing.expectEqualStrings(a.runtime_msg, b.runtime_msg);
+}
+
 test "compiler: empty source emits halt" {
     var rt = try setup();
     defer rt.deinit();
@@ -196,6 +255,40 @@ test "compiler: closure captures upvalue" {
     }
     try std.testing.expect(found_get_upvalue);
     try std.testing.expect(found_set_upvalue);
+}
+
+test "runtime: compileOnly and runPathWithProvider agree on direct compile errors" {
+    const src =
+        \\func broken( {
+        \\
+    ;
+
+    var rt = try setup();
+    defer rt.deinit();
+
+    const compile_snapshot = try compileOnlySnapshot(&rt, src, "", .filesystem);
+    const run_snapshot = try runPathCompileSnapshot(&rt, src, "", .filesystem);
+
+    try expectCompileSnapshotsEqual(compile_snapshot, run_snapshot);
+    try std.testing.expectEqualStrings("", compile_snapshot.path);
+}
+
+test "runtime: compileOnly and runPathWithProvider agree on rooted compile errors" {
+    const path = "main.gengo";
+    const src =
+        \\func broken( {
+        \\
+    ;
+    const provider: module_compile.SourceProvider = .{ .table = &.{} };
+
+    var rt = try setup();
+    defer rt.deinit();
+
+    const compile_snapshot = try compileOnlySnapshot(&rt, src, path, provider);
+    const run_snapshot = try runPathCompileSnapshot(&rt, src, path, provider);
+
+    try expectCompileSnapshotsEqual(compile_snapshot, run_snapshot);
+    try std.testing.expectEqualStrings(path, compile_snapshot.path);
 }
 
 test "chunk: verify rejects jump target into instruction body" {
