@@ -91,6 +91,16 @@ fn namedTypeIsSubOf(sub: *Object, ancestor: *Object) bool {
     }
 }
 
+fn namedTypeCommonAncestor(a: *Object, b: *Object) ?*Object {
+    if (a == b) return a;
+    // Walk the chain of b's ancestors; for each, check if a is a subtype of it.
+    var cur = vmtyp.resolveParentType(b) orelse return null;
+    while (true) {
+        if (namedTypeIsSubOf(a, cur)) return cur;
+        cur = vmtyp.resolveParentType(cur) orelse return null;
+    }
+}
+
 fn namedTypeCarrier(a: Value, b: Value) !?*Object {
     var ta: ?*Object = null;
     var tb: ?*Object = null;
@@ -101,6 +111,7 @@ fn namedTypeCarrier(a: Value, b: Value) !?*Object {
     if (ta.? == tb.?) return ta;
     if (namedTypeIsSubOf(ta.?, tb.?)) return tb.?;
     if (namedTypeIsSubOf(tb.?, ta.?)) return ta.?;
+    if (namedTypeCommonAncestor(ta.?, tb.?)) |lca| return lca;
     return error.TypeError;
 }
 
@@ -163,7 +174,9 @@ fn setBinaryTypeError(op: []const u8, a: Value, b: Value) void {
     if (a_named and b_named) {
         const ta = a.object.named_value.typ.named_type;
         const tb = b.object.named_value.typ.named_type;
-        if (ta.base == tb.base and !namedTypeIsSubOf(a.object.named_value.typ, b.object.named_value.typ) and !namedTypeIsSubOf(b.object.named_value.typ, a.object.named_value.typ)) {
+        const ta_obj = a.object.named_value.typ;
+        const tb_obj = b.object.named_value.typ;
+        if (ta.base == tb.base and !namedTypeIsSubOf(ta_obj, tb_obj) and !namedTypeIsSubOf(tb_obj, ta_obj) and namedTypeCommonAncestor(ta_obj, tb_obj) == null) {
             vms.setRuntimeErr("cannot apply '{s}' to {s} and {s}; convert one side explicitly before applying '{s}'", .{ op, ta.name, tb.name, op });
             return;
         }
@@ -236,7 +249,7 @@ fn checkNamedValueCompatibility(a: Value, b: Value) !void {
         if (a.object.named_value.typ != b.object.named_value.typ) {
             const ta = a.object.named_value.typ;
             const tb = b.object.named_value.typ;
-            if (!namedTypeIsSubOf(ta, tb) and !namedTypeIsSubOf(tb, ta)) {
+            if (!namedTypeIsSubOf(ta, tb) and !namedTypeIsSubOf(tb, ta) and namedTypeCommonAncestor(ta, tb) == null) {
                 vms.setRuntimeErr("cannot mix {s} and {s}; convert one side explicitly", .{ ta.named_type.name, tb.named_type.name });
                 return error.TypeError;
             }
