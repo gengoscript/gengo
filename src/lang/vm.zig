@@ -2100,11 +2100,7 @@ fn runInner() !void {
                 const b = try vmPop();
                 const a = try vmPop();
                 try checkNamedValueCompatibility(a, b);
-                const a_named = a == .object and a.object.* == .named_value;
-                const b_named = b == .object and b.object.* == .named_value;
-                const ea = if (a_named) a.object.named_value.value else a;
-                const eb = if (b_named) b.object.named_value.value else b;
-                try vmPush(.{ .boolean = Value.equals(ea, eb) });
+                try vmPush(.{ .boolean = Value.equals(vms.unboxNamed(a), vms.unboxNamed(b)) });
             },
             .gt => {
                 const b = try vmPop();
@@ -2132,11 +2128,7 @@ fn runInner() !void {
                 const k = try chunk.constAt(try vmShort());
                 const a = try vmPop();
                 try checkNamedValueCompatibility(a, k);
-                const a_named = a == .object and a.object.* == .named_value;
-                const k_named = k == .object and k.object.* == .named_value;
-                const ea = if (a_named) a.object.named_value.value else a;
-                const ek = if (k_named) k.object.named_value.value else k;
-                try vmPush(.{ .boolean = Value.equals(ea, ek) });
+                try vmPush(.{ .boolean = Value.equals(vms.unboxNamed(a), vms.unboxNamed(k)) });
             },
             .const_sub => {
                 const k = try chunk.constAt(try vmShort());
@@ -2160,11 +2152,7 @@ fn runInner() !void {
                 const k = try chunk.constAt(try vmShort());
                 const a = try readLocalSlot(slot);
                 try checkNamedValueCompatibility(a, k);
-                const a_named = a == .object and a.object.* == .named_value;
-                const k_named = k == .object and k.object.* == .named_value;
-                const ea = if (a_named) a.object.named_value.value else a;
-                const ek = if (k_named) k.object.named_value.value else k;
-                try vmPush(.{ .boolean = Value.equals(ea, ek) });
+                try vmPush(.{ .boolean = Value.equals(vms.unboxNamed(a), vms.unboxNamed(k)) });
             },
             .get_local_const_sub => {
                 const slot = try vmByte();
@@ -2229,10 +2217,8 @@ fn runInner() !void {
                 const k = try chunk.constAt(try vmShort());
                 const a = try readLocalSlot(slot);
                 try checkNamedValueCompatibility(a, k);
-                const a_named = a == .object and a.object.* == .named_value;
-                const k_named = k == .object and k.object.* == .named_value;
-                const an = try vms.valueAsNumber(if (a_named) a.object.named_value.value else a);
-                const kn = try vms.valueAsNumber(if (k_named) k.object.named_value.value else k);
+                const an = try vms.valueAsNumber(vms.unboxNamed(a));
+                const kn = try vms.valueAsNumber(vms.unboxNamed(k));
                 if (!std.math.isFinite(an) or !std.math.isFinite(kn)) { vms.setRuntimeErr("cannot compare non-finite value", .{}); return error.TypeError; }
                 try vmPush(.{ .boolean = an < kn });
             },
@@ -2247,11 +2233,7 @@ fn runInner() !void {
                 const off = try vms.vmInt();
                 const a = try readLocalSlot(slot);
                 try checkNamedValueCompatibility(a, k);
-                const a_named = a == .object and a.object.* == .named_value;
-                const k_named = k == .object and k.object.* == .named_value;
-                const ea = if (a_named) a.object.named_value.value else a;
-                const ek = if (k_named) k.object.named_value.value else k;
-                if (!Value.equals(ea, ek)) vmState().ip += off;
+                if (!Value.equals(vms.unboxNamed(a), vms.unboxNamed(k))) vmState().ip += off;
             },
 
             // Quad-fused: get_local + const_lt + jif_pop.
@@ -2264,10 +2246,8 @@ fn runInner() !void {
                 const a = try readLocalSlot(slot);
                 try checkNamedValueCompatibility(a, k);
                 try checkComparableNumeric(a, k, "<");
-                const a_named = a == .object and a.object.* == .named_value;
-                const k_named = k == .object and k.object.* == .named_value;
-                const an = try valueAsNumberForCompare(if (a_named) a.object.named_value.value else a, k);
-                const kn = try valueAsNumberForCompare(if (k_named) k.object.named_value.value else k, a);
+                const an = try valueAsNumberForCompare(vms.unboxNamed(a), k);
+                const kn = try valueAsNumberForCompare(vms.unboxNamed(k), a);
                 if (!std.math.isFinite(an) or !std.math.isFinite(kn)) { vms.setRuntimeErr("cannot compare non-finite value", .{}); return error.TypeError; }
                 if (!(an < kn)) vmState().ip += off;
             },
