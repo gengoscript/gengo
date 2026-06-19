@@ -2316,7 +2316,7 @@ fn runInner() !void {
                 try vmPush(.{ .boolean = an < kn });
             },
 
-            .build_array => {
+            .build_array, .build_tuple => {
                 const count = try vmByte();
                 const obj = try vmAllocObject();
                 obj.* = .{ .array = &[_]Value{} }; // must init before temp root: GC may run during slice alloc
@@ -2352,21 +2352,6 @@ fn runInner() !void {
                 const buckets = try vmAllocManagedSlice(i32, bcount);
                 vmmap.mapBuildHashedBuckets(items[0..count], buckets);
                 obj.* = .{ .map_hashed = .{ .entries = items[0..count], .len = count, .buckets = buckets } };
-                try vmPush(.{ .object = obj });
-            },
-            .build_tuple => {
-                const count = try vmByte();
-                const obj = try vmAllocObject();
-                obj.* = .{ .array = &[_]Value{} }; // must init before temp root: GC may run during slice alloc
-                try pushTempRoot(.{ .object = obj });
-                defer popTempRoot();
-                const items = try vmAllocManagedSlice(Value, count);
-                var i: usize = count;
-                while (i > 0) {
-                    i -= 1;
-                    items[i] = try vmPop();
-                }
-                obj.* = .{ .array_managed = items[0..count] };
                 try vmPush(.{ .object = obj });
             },
             .build_struct_instance => {
