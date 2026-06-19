@@ -1621,6 +1621,17 @@ fn writeGlobalIC(name_idx: usize, ic_base: usize, ic_slot: u16, val: Value) !voi
     }
 }
 
+fn stringSliceRange(s: []const u8, has_start: bool, start_v: Value, has_end: bool, end_v: Value) !struct { start_b: usize, end_b: usize } {
+    const rune_len = try vmstr.utf8RuneCountCached(s);
+    const start_r: usize = if (has_start) try vms.vmSliceIndex(start_v, rune_len) else 0;
+    const end_r: usize = if (has_end) try vms.vmSliceIndex(end_v, rune_len) else rune_len;
+    if (start_r > end_r) return error.IndexOutOfBounds;
+    return .{
+        .start_b = try vmstr.utf8ByteOffsetForRuneIndexCached(s, start_r),
+        .end_b = try vmstr.utf8ByteOffsetForRuneIndexCached(s, end_r),
+    };
+}
+
 fn readGlobalIC(name_idx: usize, ic_base: usize, ic_slot: u16) !Value {
     if (ic_slot != 0xFFFF) return globals.getAt(ic_slot);
     const name = (try chunk.constAt(name_idx)).string;
@@ -2575,32 +2586,17 @@ fn runInner() !void {
 
                 switch (container) {
                     .string => |s| {
-                        const rune_len = try vmstr.utf8RuneCountCached(s);
-                        const start_r: usize = if (has_start) try vms.vmSliceIndex(start_v, rune_len) else 0;
-                        const end_r: usize = if (has_end) try vms.vmSliceIndex(end_v, rune_len) else rune_len;
-                        if (start_r > end_r) return error.IndexOutOfBounds;
-                        const start_b = try vmstr.utf8ByteOffsetForRuneIndexCached(s, start_r);
-                        const end_b = try vmstr.utf8ByteOffsetForRuneIndexCached(s, end_r);
-                        try vmPush(.{ .string = s[start_b..end_b] });
+                        const r = try stringSliceRange(s, has_start, start_v, has_end, end_v);
+                        try vmPush(.{ .string = s[r.start_b..r.end_b] });
                     },
                     .object => |obj| switch (obj.*) {
                         .dyn_string => |s| {
-                            const rune_len = try vmstr.utf8RuneCountCached(s);
-                            const start_r: usize = if (has_start) try vms.vmSliceIndex(start_v, rune_len) else 0;
-                            const end_r: usize = if (has_end) try vms.vmSliceIndex(end_v, rune_len) else rune_len;
-                            if (start_r > end_r) return error.IndexOutOfBounds;
-                            const start_b = try vmstr.utf8ByteOffsetForRuneIndexCached(s, start_r);
-                            const end_b = try vmstr.utf8ByteOffsetForRuneIndexCached(s, end_r);
-                            try vmPush(try makeStringView(s[start_b..end_b], obj));
+                            const r = try stringSliceRange(s, has_start, start_v, has_end, end_v);
+                            try vmPush(try makeStringView(s[r.start_b..r.end_b], obj));
                         },
                         .string_view => |sv| {
-                            const rune_len = try vmstr.utf8RuneCountCached(sv.bytes);
-                            const start_r: usize = if (has_start) try vms.vmSliceIndex(start_v, rune_len) else 0;
-                            const end_r: usize = if (has_end) try vms.vmSliceIndex(end_v, rune_len) else rune_len;
-                            if (start_r > end_r) return error.IndexOutOfBounds;
-                            const start_b = try vmstr.utf8ByteOffsetForRuneIndexCached(sv.bytes, start_r);
-                            const end_b = try vmstr.utf8ByteOffsetForRuneIndexCached(sv.bytes, end_r);
-                            try vmPush(try makeStringView(sv.bytes[start_b..end_b], sv.source));
+                            const r = try stringSliceRange(sv.bytes, has_start, start_v, has_end, end_v);
+                            try vmPush(try makeStringView(sv.bytes[r.start_b..r.end_b], sv.source));
                         },
                         .array, .array_managed, .array_capacity => {
                             const items = try vms.asArraySlice(obj);
