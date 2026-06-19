@@ -1609,6 +1609,23 @@ fn opDeferInvokeMethod() !void {
     vmState().stack_top = recv_idx;
 }
 
+fn readGlobalIC(name_idx: usize, ic_base: usize, ic_slot: u16) !Value {
+    if (ic_slot != 0xFFFF) return globals.getAt(ic_slot);
+    const name = (try chunk.constAt(name_idx)).string;
+    const slot = globals.findSlot(name) orelse {
+        const suggestion = findSimilarName(name);
+        if (suggestion) |s| {
+            vms.setRuntimeErr("'{s}' is not defined; did you mean '{s}'?", .{ name, s });
+        } else {
+            vms.setRuntimeErr("'{s}' is not defined", .{name});
+        }
+        return error.NotDefined;
+    };
+    chunk.patchByte(ic_base,     @intCast((slot >> 8) & 0xFF));
+    chunk.patchByte(ic_base + 1, @intCast(slot & 0xFF));
+    return globals.getAt(slot);
+}
+
 inline fn vmFrameBase() usize {
     return if (vmState().frame_top > 0) vmState().frames[vmState().frame_top - 1].base else 0;
 }
@@ -1659,23 +1676,7 @@ fn runInner() !void {
                 const name_idx = try vmShort();
                 const ic_base = vmState().ip;
                 const ic_slot: u16 = @intCast(try vmShort());
-                if (ic_slot != 0xFFFF) {
-                    try vmPush(globals.getAt(ic_slot));
-                } else {
-                    const name = (try chunk.constAt(name_idx)).string;
-                    const slot = globals.findSlot(name) orelse {
-                        const suggestion = findSimilarName(name);
-                        if (suggestion) |s| {
-                            vms.setRuntimeErr("'{s}' is not defined; did you mean '{s}'?", .{ name, s });
-                        } else {
-                            vms.setRuntimeErr("'{s}' is not defined", .{name});
-                        }
-                        return error.NotDefined;
-                    };
-                    chunk.patchByte(ic_base,     @intCast((slot >> 8) & 0xFF));
-                    chunk.patchByte(ic_base + 1, @intCast(slot & 0xFF));
-                    try vmPush(globals.getAt(slot));
-                }
+                try vmPush(try readGlobalIC(name_idx, ic_base, ic_slot));
             },
             .set_global => {
                 const name_idx = try vmShort();
@@ -2266,29 +2267,9 @@ fn runInner() !void {
                 const ic_slot: u16 = @intCast(try vmShort());
                 vmState().ip += 1; // skip the embedded const_eq opcode byte
                 const k = try chunk.constAt(try vmShort());
-                const g = if (ic_slot != 0xFFFF) blk: {
-                    break :blk globals.getAt(ic_slot);
-                } else blk: {
-                    const name = (try chunk.constAt(name_idx)).string;
-                    const slot = globals.findSlot(name) orelse {
-                        const suggestion = findSimilarName(name);
-                        if (suggestion) |s| {
-                            vms.setRuntimeErr("'{s}' is not defined; did you mean '{s}'?", .{ name, s });
-                        } else {
-                            vms.setRuntimeErr("'{s}' is not defined", .{name});
-                        }
-                        return error.NotDefined;
-                    };
-                    chunk.patchByte(ic_base,     @intCast((slot >> 8) & 0xFF));
-                    chunk.patchByte(ic_base + 1, @intCast(slot & 0xFF));
-                    break :blk globals.getAt(slot);
-                };
+                const g = try readGlobalIC(name_idx, ic_base, ic_slot);
                 try checkNamedValueCompatibility(g, k);
-                const g_named = g == .object and g.object.* == .named_value;
-                const k_named = k == .object and k.object.* == .named_value;
-                const eg = if (g_named) g.object.named_value.value else g;
-                const ek = if (k_named) k.object.named_value.value else k;
-                try vmPush(.{ .boolean = Value.equals(eg, ek) });
+                try vmPush(.{ .boolean = Value.equals(vms.unboxNamed(g), vms.unboxNamed(k)) });
             },
             .get_global_const_sub => {
                 const name_idx = try vmShort();
@@ -2296,23 +2277,7 @@ fn runInner() !void {
                 const ic_slot: u16 = @intCast(try vmShort());
                 vmState().ip += 1; // skip the embedded const_sub opcode byte
                 const k = try chunk.constAt(try vmShort());
-                const g = if (ic_slot != 0xFFFF) blk: {
-                    break :blk globals.getAt(ic_slot);
-                } else blk: {
-                    const name = (try chunk.constAt(name_idx)).string;
-                    const slot = globals.findSlot(name) orelse {
-                        const suggestion = findSimilarName(name);
-                        if (suggestion) |s| {
-                            vms.setRuntimeErr("'{s}' is not defined; did you mean '{s}'?", .{ name, s });
-                        } else {
-                            vms.setRuntimeErr("'{s}' is not defined", .{name});
-                        }
-                        return error.NotDefined;
-                    };
-                    chunk.patchByte(ic_base,     @intCast((slot >> 8) & 0xFF));
-                    chunk.patchByte(ic_base + 1, @intCast(slot & 0xFF));
-                    break :blk globals.getAt(slot);
-                };
+                const g = try readGlobalIC(name_idx, ic_base, ic_slot);
                 const an = try valueAsNumberForOp(g, k, "-");
                 const kn = try valueAsNumberForOp(k, g, "-");
                 const tag = numericOpTag(g, k) catch |err| {
@@ -2327,23 +2292,7 @@ fn runInner() !void {
                 const ic_slot: u16 = @intCast(try vmShort());
                 vmState().ip += 1; // skip the embedded const_add opcode byte
                 const k = try chunk.constAt(try vmShort());
-                const g = if (ic_slot != 0xFFFF) blk: {
-                    break :blk globals.getAt(ic_slot);
-                } else blk: {
-                    const name = (try chunk.constAt(name_idx)).string;
-                    const slot = globals.findSlot(name) orelse {
-                        const suggestion = findSimilarName(name);
-                        if (suggestion) |s| {
-                            vms.setRuntimeErr("'{s}' is not defined; did you mean '{s}'?", .{ name, s });
-                        } else {
-                            vms.setRuntimeErr("'{s}' is not defined", .{name});
-                        }
-                        return error.NotDefined;
-                    };
-                    chunk.patchByte(ic_base,     @intCast((slot >> 8) & 0xFF));
-                    chunk.patchByte(ic_base + 1, @intCast(slot & 0xFF));
-                    break :blk globals.getAt(slot);
-                };
+                const g = try readGlobalIC(name_idx, ic_base, ic_slot);
                 if (isStringValueOrNamedString(g) and isStringValueOrNamedString(k)) {
                     const sa = try vms.asStringValue(g);
                     const sk = try vms.asStringValue(k);
@@ -2373,28 +2322,10 @@ fn runInner() !void {
                 const ic_slot: u16 = @intCast(try vmShort());
                 vmState().ip += 1; // skip the embedded const_lt opcode byte
                 const k = try chunk.constAt(try vmShort());
-                const g = if (ic_slot != 0xFFFF) blk: {
-                    break :blk globals.getAt(ic_slot);
-                } else blk: {
-                    const name = (try chunk.constAt(name_idx)).string;
-                    const slot = globals.findSlot(name) orelse {
-                        const suggestion = findSimilarName(name);
-                        if (suggestion) |s| {
-                            vms.setRuntimeErr("'{s}' is not defined; did you mean '{s}'?", .{ name, s });
-                        } else {
-                            vms.setRuntimeErr("'{s}' is not defined", .{name});
-                        }
-                        return error.NotDefined;
-                    };
-                    chunk.patchByte(ic_base,     @intCast((slot >> 8) & 0xFF));
-                    chunk.patchByte(ic_base + 1, @intCast(slot & 0xFF));
-                    break :blk globals.getAt(slot);
-                };
+                const g = try readGlobalIC(name_idx, ic_base, ic_slot);
                 try checkNamedValueCompatibility(g, k);
-                const g_named = g == .object and g.object.* == .named_value;
-                const k_named = k == .object and k.object.* == .named_value;
-                const an = try vms.valueAsNumber(if (g_named) g.object.named_value.value else g);
-                const kn = try vms.valueAsNumber(if (k_named) k.object.named_value.value else k);
+                const an = try vms.valueAsNumber(vms.unboxNamed(g));
+                const kn = try vms.valueAsNumber(vms.unboxNamed(k));
                 if (!std.math.isFinite(an) or !std.math.isFinite(kn)) { vms.setRuntimeErr("cannot compare non-finite value", .{}); return error.TypeError; }
                 try vmPush(.{ .boolean = an < kn });
             },
@@ -2407,29 +2338,9 @@ fn runInner() !void {
                 vmState().ip += 1; // skip the embedded const_eq opcode byte
                 const k = try chunk.constAt(try vmShort());
                 const off = try vms.vmInt();
-                const g = if (ic_slot != 0xFFFF) blk: {
-                    break :blk globals.getAt(ic_slot);
-                } else blk: {
-                    const name = (try chunk.constAt(name_idx)).string;
-                    const slot = globals.findSlot(name) orelse {
-                        const suggestion = findSimilarName(name);
-                        if (suggestion) |s| {
-                            vms.setRuntimeErr("'{s}' is not defined; did you mean '{s}'?", .{ name, s });
-                        } else {
-                            vms.setRuntimeErr("'{s}' is not defined", .{name});
-                        }
-                        return error.NotDefined;
-                    };
-                    chunk.patchByte(ic_base,     @intCast((slot >> 8) & 0xFF));
-                    chunk.patchByte(ic_base + 1, @intCast(slot & 0xFF));
-                    break :blk globals.getAt(slot);
-                };
+                const g = try readGlobalIC(name_idx, ic_base, ic_slot);
                 try checkNamedValueCompatibility(g, k);
-                const g_named = g == .object and g.object.* == .named_value;
-                const k_named = k == .object and k.object.* == .named_value;
-                const eg = if (g_named) g.object.named_value.value else g;
-                const ek = if (k_named) k.object.named_value.value else k;
-                if (!Value.equals(eg, ek)) vmState().ip += off;
+                if (!Value.equals(vms.unboxNamed(g), vms.unboxNamed(k))) vmState().ip += off;
             },
             // Quad-fused: get_global + const_lt + jif_pop.
             // Bytecode: [op][name_hi][name_lo][ic_hi][ic_lo][skip][val_hi][val_lo][jmp_b3][jmp_b2][jmp_b1][jmp_b0]
@@ -2440,29 +2351,11 @@ fn runInner() !void {
                 vmState().ip += 1; // skip the embedded const_lt opcode byte
                 const k = try chunk.constAt(try vmShort());
                 const off = try vms.vmInt();
-                const g = if (ic_slot != 0xFFFF) blk: {
-                    break :blk globals.getAt(ic_slot);
-                } else blk: {
-                    const name = (try chunk.constAt(name_idx)).string;
-                    const slot = globals.findSlot(name) orelse {
-                        const suggestion = findSimilarName(name);
-                        if (suggestion) |s| {
-                            vms.setRuntimeErr("'{s}' is not defined; did you mean '{s}'?", .{ name, s });
-                        } else {
-                            vms.setRuntimeErr("'{s}' is not defined", .{name});
-                        }
-                        return error.NotDefined;
-                    };
-                    chunk.patchByte(ic_base,     @intCast((slot >> 8) & 0xFF));
-                    chunk.patchByte(ic_base + 1, @intCast(slot & 0xFF));
-                    break :blk globals.getAt(slot);
-                };
+                const g = try readGlobalIC(name_idx, ic_base, ic_slot);
                 try checkNamedValueCompatibility(g, k);
                 try checkComparableNumeric(g, k, "<");
-                const g_named = g == .object and g.object.* == .named_value;
-                const k_named = k == .object and k.object.* == .named_value;
-                const an = try valueAsNumberForCompare(if (g_named) g.object.named_value.value else g, k);
-                const kn = try valueAsNumberForCompare(if (k_named) k.object.named_value.value else k, g);
+                const an = try valueAsNumberForCompare(vms.unboxNamed(g), k);
+                const kn = try valueAsNumberForCompare(vms.unboxNamed(k), g);
                 if (!std.math.isFinite(an) or !std.math.isFinite(kn)) { vms.setRuntimeErr("cannot compare non-finite value", .{}); return error.TypeError; }
                 if (!(an < kn)) vmState().ip += off;
             },
