@@ -557,9 +557,8 @@ fn makeVariantArmValue(obj: *Object, vt: vmod.VariantTypeObj, arm_index: usize) 
 fn variantTypeFieldValue(obj: *Object, name: []const u8) !Value {
     const vt = obj.variant_type;
     if (common.streq(name, "name")) return .{ .string = vt.name };
-    var vi: usize = 0;
-    while (vi < vt.arms.len) : (vi += 1) {
-        if (common.streq(vt.arms[vi].name, name)) return try makeVariantArmValue(obj, vt, vi);
+    for (vt.arms, 0..) |arm, vi| {
+        if (common.streq(arm.name, name)) return try makeVariantArmValue(obj, vt, vi);
     }
     return error.UnknownStructField;
 }
@@ -866,10 +865,7 @@ fn tryTailCall(argc: u8) !bool {
     if (f.is_variadic) return false;
     if (f.arity != argc) return false;
     if (f.has_typed_params) try vmtyp.enforceFuncArgTypes(f, argc);
-    var i: usize = 0;
-    while (i < argc) : (i += 1) {
-        writeFrameLocal(frame.base + i, vmState().stack[callee_idx + 1 + i]);
-    }
+    for (0..argc) |i| writeFrameLocal(frame.base + i, vmState().stack[callee_idx + 1 + i]);
     frame.closure = closure;
     frame.func_obj = f_obj;
     vmState().stack_top = frame.base + argc;
@@ -1016,8 +1012,7 @@ fn retSlowPath(retval_in: Value) !bool {
         if (arr.len > 0) {
             if (arr.len > 256) return error.ArityMismatch;
             const dargc: u8 = @intCast(arr.len - 1);
-            var di: usize = 0;
-            while (di < arr.len) : (di += 1) try vmPush(arr[di]);
+            for (arr) |v| try vmPush(v);
             const depth_before = vmState().frame_top;
             try performCall(dargc);
             if (vmState().frame_top > depth_before) {
@@ -1045,8 +1040,7 @@ fn retSlowPath(retval_in: Value) !bool {
                 arr_obj.* = .{ .array = &[_]Value{} };
                 try pushTempRoot(.{ .object = arr_obj });
                 const items = try vmAllocManagedSlice(Value, nrc);
-                var ri: usize = 0;
-                while (ri < nrc) : (ri += 1) {
+                for (0..nrc) |ri| {
                     if (nrbase + ri >= vmState().stack.len) return error.StackOverflow;
                     const raw = vmState().stack[nrbase + ri];
                     items[ri] = if (raw == .object and raw.object.* == .cell) raw.object.cell.value else raw;
@@ -1342,11 +1336,9 @@ fn opInvokeMethod() !void {
             try performCall(argc);
         },
         .variant_type => |vt| {
-            var vi: usize = 0;
-            while (vi < vt.arms.len) : (vi += 1) {
-                if (common.streq(vt.arms[vi].name, mname)) break;
-            }
-            if (vi == vt.arms.len) return error.UnknownStructField;
+            const vi = for (vt.arms, 0..) |arm, i| {
+                if (common.streq(arm.name, mname)) break i;
+            } else return error.UnknownStructField;
             const arm = vt.arms[vi];
             if (arm.has_payload) {
                 if (argc != 1) return error.ArityMismatch;
@@ -2487,9 +2479,7 @@ fn runInner() !void {
                     break :blk (heap.bump(*Object, proto.capture_slots.len) orelse return error.OutOfMemory);
                 };
                 const frame = if (vmState().frame_top == 0) vms.Frame{ .ret_ip = 0, .base = 0, .closure = null, .func_obj = f.object, .defer_base = 0, .has_typed_returns = false } else vmState().frames[vmState().frame_top - 1];
-                var i: usize = 0;
-                while (i < proto.capture_slots.len) : (i += 1) {
-                    const enc = proto.capture_slots[i];
+                for (proto.capture_slots, 0..) |enc, i| {
                     const is_upvalue = (enc & 0x80) != 0;
                     const idx = enc & 0x7f;
                     if (is_upvalue) {
@@ -2655,11 +2645,7 @@ fn runInner() !void {
                     try pushTempRoot(.{ .object = map_obj });
                     defer popTempRoot();
                     const items = try vmAllocManagedSlice(MapEntry, arm.fields.len);
-                    var fi: usize = 0;
-                    while (fi < arm.fields.len) : (fi += 1) {
-                        const fv = vv.arm_fields[fi];
-                        items[fi] = .{ .key = .{ .string = arm.fields[fi].name }, .value = fv };
-                    }
+                    for (arm.fields, vv.arm_fields, items) |f, fv, *it| it.* = .{ .key = .{ .string = f.name }, .value = fv };
                     map_obj.* = .{ .map = items[0..arm.fields.len] };
                     _ = try vmPop();
                     try vmPush(.{ .object = map_obj });
@@ -2684,8 +2670,7 @@ fn runInner() !void {
                 try pushTempRoot(.{ .object = arr_obj });
                 defer popTempRoot();
                 const items = try vmAllocManagedSlice(Value, total);
-                var di: usize = 0;
-                while (di < total) : (di += 1) items[di] = vmState().stack[start + di];
+                for (0..total) |di| items[di] = vmState().stack[start + di];
                 arr_obj.* = .{ .array_managed = items[0..total] };
                 vmState().defer_stack[vmState().defer_top] = .{ .object = arr_obj };
                 vmState().defer_top += 1;
@@ -2761,8 +2746,7 @@ fn runDeferredCall(deferred: Value) anyerror!void {
     if (arr.len == 0) return;
     if (arr.len > 256) return error.ArityMismatch;
     const dargc: u8 = @intCast(arr.len - 1);
-    var di: usize = 0;
-    while (di < arr.len) : (di += 1) try vmPush(arr[di]);
+    for (arr) |v| try vmPush(v);
     const depth_before = vmState().frame_top;
     try performCall(dargc);
     if (vmState().frame_top > depth_before) {
