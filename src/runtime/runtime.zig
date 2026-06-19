@@ -278,6 +278,18 @@ pub const Runtime = struct {
         }
     }
 
+    // Compile and install all native globals (std, host modules, capabilities)
+    // but do not execute. After this call, vm.setPolicy(self.policy) and vm.run()
+    // together complete what a normal runPath would do. Used by differential testing.
+    pub fn compileAndInstall(self: *Runtime, src: []const u8, path: []const u8, provider: module_compile.SourceProvider) !void {
+        try self.compileOnly(src, path, provider);
+        vm.setPolicy(self.policy);
+        const all_caps: []const module_compile.CapModuleDesc = if (self.enabled_capabilities.len > 0) module_compile.AllCapabilities else &[_]module_compile.CapModuleDesc{};
+        try vmnative.installStdGlobal();
+        try vmnative.installHostModules(self.host_modules);
+        try vmnative.installCapabilityModules(all_caps);
+    }
+
     pub fn runPathWithProvider(self: *Runtime, src: []const u8, path: []const u8, provider: module_compile.SourceProvider, test_mode: bool) !void {
         if (src.len > cfg.max_input_bytes) {
             vms.setRuntimeErr("input exceeds max_input_bytes ({d})", .{cfg.max_input_bytes});

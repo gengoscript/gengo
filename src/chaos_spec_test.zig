@@ -1,6 +1,9 @@
 const std = @import("std");
 const api = @import("runtime/api.zig");
 const io = @import("runtime/io.zig");
+const chunk = @import("lang/chunk.zig");
+const vm = @import("lang/vm.zig");
+const vm_defuse = @import("lang/vm_defuse.zig");
 
 var g_stdout: std.array_list.Managed(u8) = undefined;
 var g_stderr: std.array_list.Managed(u8) = undefined;
@@ -268,5 +271,67 @@ test "spec fail cases" {
     }
 
     if (count == 0) return error.NoSpecFailCases;
+}
+
+// ── Spec pass cases — differential (defused vs fused) ─────────────────────
+// For every spec pass case: compile, defuse the bytecode, run the defused
+// version, and verify it also succeeds. Divergence means a fused opcode or
+// IC path produces different semantics from the expanded primitives.
+
+test "spec pass cases differential" {
+    const alloc = std.testing.allocator;
+    const io_ref = std.Io.Threaded.global_single_threaded.io();
+    const cwd = std.Io.Dir.cwd();
+    var d = try cwd.openDir(io_ref, "tests/spec", .{ .iterate = true });
+    defer d.close(io_ref);
+
+    var iter = d.iterate();
+    var count: usize = 0;
+    while (try iter.next(io_ref)) |entry| {
+        if (entry.kind != .file) continue;
+        const ext = std.fs.path.extension(entry.name);
+        if (!std.mem.eql(u8, ext, ".gengo")) continue;
+
+        const path = try std.fs.path.join(alloc, &.{ "tests/spec", entry.name });
+        defer alloc.free(path);
+
+        const src = readFileAlloc(alloc, path, 1024 * 1024) catch continue;
+        defer alloc.free(src);
+
+        // Compile, install natives (std/host/cap), and set vm policy — but do not run.
+        var rt = try setup();
+        defer rt.deinit();
+        rt.inner.compileAndInstall(src, path, .filesystem) catch continue;
+
+        // Build defused bytecode from the current (just-compiled) chunk.
+        const defused = vm_defuse.buildDefusedCode(alloc) catch continue;
+        defer alloc.free(defused);
+
+        if (defused.len > chunk.MaxCode) continue; // pathological; shouldn't happen
+
+        // Install defused code.
+        @memcpy(chunk.g_state.code[0..defused.len], defused);
+        chunk.g_state.code_len = defused.len;
+
+        // Discard output; we only check that it doesn't error.
+        g_stdout = std.array_list.Managed(u8).init(alloc);
+        g_stderr = std.array_list.Managed(u8).init(alloc);
+        defer g_stdout.deinit();
+        defer g_stderr.deinit();
+        io.setWriteOverrides(captureStdout, captureStderr);
+        defer io.clearWriteOverrides();
+
+        vm.run() catch |e| {
+            std.debug.print(
+                "differential FAIL: spec pass case {s} succeeded normally but failed as defused: {s}\n",
+                .{ entry.name, @errorName(e) },
+            );
+            return error.TestUnexpectedResult;
+        };
+
+        count += 1;
+    }
+
+    if (count == 0) return error.NoSpecPassCases;
 }
 
