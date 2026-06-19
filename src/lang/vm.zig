@@ -353,6 +353,20 @@ fn makeNumeric(tag: VTag, n: f64) Value {
     };
 }
 
+fn pushIntResultWithCarrier(a: Value, b: Value, n: i64, op: []const u8) !void {
+    const carrier = namedTypeCarrier(a, b) catch |err| {
+        if (err == error.TypeError) setBinaryTypeError(op, a, b);
+        return err;
+    };
+    if (carrier) |typ| {
+        const wrapped = try vmtyp.coerceNamedTypeResult(typ, .{ .int = n });
+        try checkNamedTypePredicate(typ, wrapped.object.named_value.value);
+        try vmPush(wrapped);
+    } else {
+        try vmPush(.{ .int = n });
+    }
+}
+
 fn pushNumericResultWithCarrier(a: Value, b: Value, n: f64, tag: VTag, op: []const u8) !void {
     if (!std.math.isFinite(n)) {
         vms.setRuntimeErr("non-finite value in arithmetic operation", .{});
@@ -1137,10 +1151,7 @@ fn opGetLocalGetField() !void {
     const ic_base = vmState().ip;
     const ic_type_idx = try vmShort();
     const ic_fidx = try vmByte();
-    const frame_base = if (vmState().frame_top > 0) vmState().frames[vmState().frame_top - 1].base else 0;
-    if (frame_base + slot >= vmState().stack.len) return error.StackOverflow;
-    var raw = vmState().stack[frame_base + slot];
-    if (raw == .object and raw.object.* == .cell) raw = raw.object.cell.value;
+    const raw = try readLocalSlot(slot);
     const container = if (raw == .object and raw.object.* == .named_value)
         raw.object.named_value.value
     else
@@ -1598,6 +1609,18 @@ fn opDeferInvokeMethod() !void {
     vmState().stack_top = recv_idx;
 }
 
+inline fn vmFrameBase() usize {
+    return if (vmState().frame_top > 0) vmState().frames[vmState().frame_top - 1].base else 0;
+}
+
+fn readLocalSlot(slot: usize) !Value {
+    const base = vmFrameBase();
+    if (base + slot >= vmState().stack.len) return error.StackOverflow;
+    var v = vmState().stack[base + slot];
+    if (v == .object and v.object.* == .cell) v = v.object.cell.value;
+    return v;
+}
+
 fn runInner() !void {
     while (true) {
         if (vmState().ops_budget_remaining < std.math.maxInt(u64)) {
@@ -1672,26 +1695,13 @@ fn runInner() !void {
 
             .get_local => {
                 const slot = try vmByte();
-                const base = if (vmState().frame_top > 0) vmState().frames[vmState().frame_top - 1].base else 0;
-                if (base + slot >= vmState().stack.len) return error.StackOverflow;
-                const v = vmState().stack[base + slot];
-                if (v == .object and v.object.* == .cell) {
-                    try vmPush(v.object.cell.value);
-                } else {
-                    try vmPush(v);
-                }
+                try vmPush(try readLocalSlot(slot));
             },
             .set_local => {
                 const slot = try vmByte();
-                const base = if (vmState().frame_top > 0) vmState().frames[vmState().frame_top - 1].base else 0;
+                const base = vmFrameBase();
                 if (base + slot >= vmState().stack.len) return error.StackOverflow;
-                const val = try vmPop();
-                const cur = vmState().stack[base + slot];
-                if (cur == .object and cur.object.* == .cell) {
-                    cur.object.cell.value = val;
-                } else {
-                    vmState().stack[base + slot] = val;
-                }
+                writeFrameLocal(base + slot, try vmPop());
             },
             .get_upvalue => {
                 if (vmState().frame_top == 0) return error.StackUnderflow;
@@ -1716,7 +1726,7 @@ fn runInner() !void {
             },
             .close_upvalue => {
                 const slot = try vmByte();
-                const base = if (vmState().frame_top > 0) vmState().frames[vmState().frame_top - 1].base else 0;
+                const base = vmFrameBase();
                 if (base + slot >= vmState().stack.len) return error.StackOverflow;
                 const v = vmState().stack[base + slot];
                 if (v == .object and v.object.* == .cell) {
@@ -1732,38 +1742,17 @@ fn runInner() !void {
             .local_add_local => {
                 const dst = try vmByte();
                 const src = try vmByte();
-                const base = if (vmState().frame_top > 0) vmState().frames[vmState().frame_top - 1].base else 0;
-                if (base + dst >= vmState().stack.len or base + src >= vmState().stack.len) return error.StackOverflow;
-                var a = vmState().stack[base + dst];
-                if (a == .object and a.object.* == .cell) a = a.object.cell.value;
-                var b = vmState().stack[base + src];
-                if (b == .object and b.object.* == .cell) b = b.object.cell.value;
-                const result: Value = if (a == .int and b == .int) blk: {
-                    break :blk .{ .int = a.int + b.int };
-                } else try computeAddResult(a, b);
-                const cur = vmState().stack[base + dst];
-                if (cur == .object and cur.object.* == .cell) {
-                    cur.object.cell.value = result;
-                } else {
-                    vmState().stack[base + dst] = result;
-                }
+                const a = try readLocalSlot(dst);
+                const b = try readLocalSlot(src);
+                const result: Value = if (a == .int and b == .int) .{ .int = a.int + b.int } else try computeAddResult(a, b);
+                writeFrameLocal(vmFrameBase() + dst, result);
             },
             .local_add_const => {
                 const dst = try vmByte();
                 const k = try chunk.constAt(try vmShort());
-                const base = if (vmState().frame_top > 0) vmState().frames[vmState().frame_top - 1].base else 0;
-                if (base + dst >= vmState().stack.len) return error.StackOverflow;
-                var a = vmState().stack[base + dst];
-                if (a == .object and a.object.* == .cell) a = a.object.cell.value;
-                const result: Value = if (a == .int and k == .int) blk: {
-                    break :blk .{ .int = a.int + k.int };
-                } else try computeAddResult(a, k);
-                const cur = vmState().stack[base + dst];
-                if (cur == .object and cur.object.* == .cell) {
-                    cur.object.cell.value = result;
-                } else {
-                    vmState().stack[base + dst] = result;
-                }
+                const a = try readLocalSlot(dst);
+                const result: Value = if (a == .int and k == .int) .{ .int = a.int + k.int } else try computeAddResult(a, k);
+                writeFrameLocal(vmFrameBase() + dst, result);
             },
             .add_ret => {
                 vmperf.breakOpChain();
@@ -1891,29 +1880,17 @@ fn runInner() !void {
             .bit_and => {
                 const b = try vmPop();
                 const a = try vmPop();
-                const an = try valueAsIntForOp(a, b, "&");
-                const bn = try valueAsIntForOp(b, a, "&");
-                const result = an & bn;
-                if (result > (1 << 53) or result < -(1 << 53)) return error.RangeError;
-                try pushNumericResultWithCarrier(a, b, @floatFromInt(result), .int, "&");
+                try pushIntResultWithCarrier(a, b, try valueAsIntForOp(a, b, "&") & try valueAsIntForOp(b, a, "&"), "&");
             },
             .bit_or => {
                 const b = try vmPop();
                 const a = try vmPop();
-                const an = try valueAsIntForOp(a, b, "|");
-                const bn = try valueAsIntForOp(b, a, "|");
-                const result = an | bn;
-                if (result > (1 << 53) or result < -(1 << 53)) return error.RangeError;
-                try pushNumericResultWithCarrier(a, b, @floatFromInt(result), .int, "|");
+                try pushIntResultWithCarrier(a, b, try valueAsIntForOp(a, b, "|") | try valueAsIntForOp(b, a, "|"), "|");
             },
             .bit_xor => {
                 const b = try vmPop();
                 const a = try vmPop();
-                const an = try valueAsIntForOp(a, b, "^");
-                const bn = try valueAsIntForOp(b, a, "^");
-                const result = an ^ bn;
-                if (result > (1 << 53) or result < -(1 << 53)) return error.RangeError;
-                try pushNumericResultWithCarrier(a, b, @floatFromInt(result), .int, "^");
+                try pushIntResultWithCarrier(a, b, try valueAsIntForOp(a, b, "^") ^ try valueAsIntForOp(b, a, "^"), "^");
             },
             .bit_not => {
                 const v = try vmPeek(0);
@@ -1939,9 +1916,7 @@ fn runInner() !void {
                 // Prevent signed left-shift overflow: if magnitude exceeds what i64 can hold after shift.
                 if (an > 0 and an > (@as(i64, std.math.maxInt(i64)) >> shift)) return error.RangeError;
                 if (an < 0 and an < (@as(i64, std.math.minInt(i64)) >> shift)) return error.RangeError;
-                const result = an << shift;
-                if (result > (1 << 53) or result < -(1 << 53)) return error.RangeError;
-                try pushNumericResultWithCarrier(a, b, @floatFromInt(result), .int, "<<");
+                try pushIntResultWithCarrier(a, b, an << shift, "<<");
             },
             .shr => {
                 const b = try vmPop();
@@ -1950,9 +1925,7 @@ fn runInner() !void {
                 const bn = try valueAsIntForOp(b, a, ">>");
                 if (bn < 0) return error.RangeError;
                 const shift: u6 = @intCast(@min(bn, 63));
-                const result = an >> shift;
-                if (result > (1 << 53) or result < -(1 << 53)) return error.RangeError;
-                try pushNumericResultWithCarrier(a, b, @floatFromInt(result), .int, ">>");
+                try pushIntResultWithCarrier(a, b, an >> shift, ">>");
             },
             .cast_int => {
                 const raw = try vmPop();
@@ -2101,23 +2074,22 @@ fn runInner() !void {
             },
             .neg => {
                 const v = try vmPeek(0);
-                const n = vms.valueAsNumber(v) catch {
-                    _ = try vmPop();
-                    vms.setRuntimeErr("cannot negate {s}", .{runtimeTypeName(v)});
-                    return error.TypeError;
+                const negated: Value = switch (vms.unboxNamed(v)) {
+                    .int => |n| .{ .int = -n },
+                    .float => |n| .{ .float = -n },
+                    else => {
+                        _ = try vmPop();
+                        vms.setRuntimeErr("cannot negate {s}", .{runtimeTypeName(v)});
+                        return error.TypeError;
+                    },
                 };
+                _ = try vmPop();
                 if (v == .object and v.object.* == .named_value) {
-                    const base = v.object.named_value.typ.named_type.base;
-                    const wrapped = try vmtyp.coerceNamedTypeResult(
-                        v.object.named_value.typ,
-                        if (base == .float) .{ .float = -n } else .{ .int = @intFromFloat(-n) },
-                    );
+                    const wrapped = try vmtyp.coerceNamedTypeResult(v.object.named_value.typ, negated);
                     try checkNamedTypePredicate(v.object.named_value.typ, wrapped.object.named_value.value);
-                    _ = try vmPop();
                     try vmPush(wrapped);
                 } else {
-                    _ = try vmPop();
-                    try vmPush(if (v == .float) .{ .float = -n } else .{ .int = @intFromFloat(-n) });
+                    try vmPush(negated);
                 }
             },
             .not => {
@@ -2186,10 +2158,7 @@ fn runInner() !void {
                 const slot = try vmByte();
                 vmState().ip += 1; // skip the embedded const_eq opcode byte
                 const k = try chunk.constAt(try vmShort());
-                const base = if (vmState().frame_top > 0) vmState().frames[vmState().frame_top - 1].base else 0;
-                if (base + slot >= vmState().stack.len) return error.StackOverflow;
-                var a = vmState().stack[base + slot];
-                if (a == .object and a.object.* == .cell) a = a.object.cell.value;
+                const a = try readLocalSlot(slot);
                 try checkNamedValueCompatibility(a, k);
                 const a_named = a == .object and a.object.* == .named_value;
                 const k_named = k == .object and k.object.* == .named_value;
@@ -2201,10 +2170,7 @@ fn runInner() !void {
                 const slot = try vmByte();
                 vmState().ip += 1; // skip the embedded const_sub opcode byte
                 const k = try chunk.constAt(try vmShort());
-                const base = if (vmState().frame_top > 0) vmState().frames[vmState().frame_top - 1].base else 0;
-                if (base + slot >= vmState().stack.len) return error.StackOverflow;
-                var a = vmState().stack[base + slot];
-                if (a == .object and a.object.* == .cell) a = a.object.cell.value;
+                const a = try readLocalSlot(slot);
                 const an = try valueAsNumberForOp(a, k, "-");
                 const kn = try valueAsNumberForOp(k, a, "-");
                 const tag = numericOpTag(a, k) catch |err| {
@@ -2218,10 +2184,7 @@ fn runInner() !void {
                 vmState().ip += 1; // skip the embedded const_sub opcode byte
                 const k = try chunk.constAt(try vmShort());
                 const argc = try vmByte();
-                const base = if (vmState().frame_top > 0) vmState().frames[vmState().frame_top - 1].base else 0;
-                if (base + slot >= vmState().stack.len) return error.StackOverflow;
-                var a = vmState().stack[base + slot];
-                if (a == .object and a.object.* == .cell) a = a.object.cell.value;
+                const a = try readLocalSlot(slot);
                 const an = try valueAsNumberForOp(a, k, "-");
                 const kn = try valueAsNumberForOp(k, a, "-");
                 const tag = numericOpTag(a, k) catch |err| {
@@ -2236,10 +2199,7 @@ fn runInner() !void {
                 const slot = try vmByte();
                 vmState().ip += 1; // skip the embedded const_add opcode byte
                 const k = try chunk.constAt(try vmShort());
-                const base = if (vmState().frame_top > 0) vmState().frames[vmState().frame_top - 1].base else 0;
-                if (base + slot >= vmState().stack.len) return error.StackOverflow;
-                var a = vmState().stack[base + slot];
-                if (a == .object and a.object.* == .cell) a = a.object.cell.value;
+                const a = try readLocalSlot(slot);
                 if (isStringValueOrNamedString(a) and isStringValueOrNamedString(k)) {
                     const sa = try vms.asStringValue(a);
                     const sk = try vms.asStringValue(k);
@@ -2267,10 +2227,7 @@ fn runInner() !void {
                 const slot = try vmByte();
                 vmState().ip += 1; // skip the embedded const_lt opcode byte
                 const k = try chunk.constAt(try vmShort());
-                const base = if (vmState().frame_top > 0) vmState().frames[vmState().frame_top - 1].base else 0;
-                if (base + slot >= vmState().stack.len) return error.StackOverflow;
-                var a = vmState().stack[base + slot];
-                if (a == .object and a.object.* == .cell) a = a.object.cell.value;
+                const a = try readLocalSlot(slot);
                 try checkNamedValueCompatibility(a, k);
                 const a_named = a == .object and a.object.* == .named_value;
                 const k_named = k == .object and k.object.* == .named_value;
@@ -2288,10 +2245,7 @@ fn runInner() !void {
                 vmState().ip += 1; // skip
                 const k = try chunk.constAt(try vmShort());
                 const off = try vms.vmInt();
-                const base = if (vmState().frame_top > 0) vmState().frames[vmState().frame_top - 1].base else 0;
-                if (base + slot >= vmState().stack.len) return error.StackOverflow;
-                var a = vmState().stack[base + slot];
-                if (a == .object and a.object.* == .cell) a = a.object.cell.value;
+                const a = try readLocalSlot(slot);
                 try checkNamedValueCompatibility(a, k);
                 const a_named = a == .object and a.object.* == .named_value;
                 const k_named = k == .object and k.object.* == .named_value;
@@ -2307,10 +2261,7 @@ fn runInner() !void {
                 vmState().ip += 1; // skip embedded const_lt opcode byte
                 const k = try chunk.constAt(try vmShort());
                 const off = try vms.vmInt();
-                const base = if (vmState().frame_top > 0) vmState().frames[vmState().frame_top - 1].base else 0;
-                if (base + slot >= vmState().stack.len) return error.StackOverflow;
-                var a = vmState().stack[base + slot];
-                if (a == .object and a.object.* == .cell) a = a.object.cell.value;
+                const a = try readLocalSlot(slot);
                 try checkNamedValueCompatibility(a, k);
                 try checkComparableNumeric(a, k, "<");
                 const a_named = a == .object and a.object.* == .named_value;
