@@ -444,6 +444,106 @@ fn enumTypeAllocValue(obj: *Object, member_name: []const u8) !Value {
     }
 }
 
+fn enumTypeValuesValue(obj: *Object, et: vmod.EnumTypeObj) !Value {
+    const arr_obj = try vmAllocObject();
+    arr_obj.* = .{ .array = &[_]Value{} };
+    try pushTempRoot(.{ .object = arr_obj });
+    defer popTempRoot();
+    const items = try vmAllocManagedSlice(Value, et.members.len);
+    var ei: usize = 0;
+    while (ei < et.members.len) : (ei += 1) {
+        items[ei] = try enumTypeAllocValue(obj, et.members[ei]);
+        arr_obj.* = .{ .array_managed = items[0 .. ei + 1] };
+    }
+    return .{ .object = arr_obj };
+}
+
+fn enumTypeFieldValue(obj: *Object, name: []const u8) !Value {
+    const et = obj.enum_type;
+    if (common.streq(name, "name")) return .{ .string = et.name };
+    if (common.streq(name, "first")) {
+        if (et.members.len == 0) return error.IndexOutOfBounds;
+        return try enumTypeAllocValue(obj, et.members[0]);
+    }
+    if (common.streq(name, "last")) {
+        if (et.members.len == 0) return error.IndexOutOfBounds;
+        return try enumTypeAllocValue(obj, et.members[et.members.len - 1]);
+    }
+    if (common.streq(name, "values")) return try enumTypeValuesValue(obj, et);
+    return try enumTypeAllocValue(obj, name);
+}
+
+fn namedTypeFieldValue(obj: *Object, name: []const u8) !Value {
+    const nt = obj.named_type;
+    if (common.streq(name, "name")) return .{ .string = nt.name };
+    if (common.streq(name, "first")) {
+        if (!nt.has_range) return error.TypeError;
+        return try vmtyp.makeNamedValue(obj, if (nt.base == .float) .{ .float = nt.min } else .{ .int = @intFromFloat(nt.min) });
+    }
+    if (common.streq(name, "last")) {
+        if (!nt.has_range) return error.TypeError;
+        return try vmtyp.makeNamedValue(obj, if (nt.base == .float) .{ .float = nt.max } else .{ .int = @intFromFloat(nt.max) });
+    }
+    if (common.streq(name, "succ") or common.streq(name, "pred")) {
+        if (!nt.has_range) return error.TypeError;
+        const fn_obj = try vmAllocObject();
+        const kind: vmod.NamedTypeFnKind = if (common.streq(name, "succ")) .succ else .pred;
+        fn_obj.* = .{ .named_type_fn = .{ .typ = obj, .kind = kind } };
+        return .{ .object = fn_obj };
+    }
+    return error.UnknownStructField;
+}
+
+fn makeVariantArmValue(obj: *Object, vt: vmod.VariantTypeObj, arm_index: usize) !Value {
+    const arm = vt.arms[arm_index];
+    const has_shared = vt.shared_fields.len > 0;
+    if (arm.has_payload or has_shared) {
+        const ctor = try vmAllocObject();
+        ctor.* = .{ .variant_ctor = .{
+            .typ = obj,
+            .tag = arm.name,
+            .ordinal = arm_index,
+            .payload_type = arm.payload_type,
+        } };
+        return .{ .object = ctor };
+    }
+
+    const vv = try vmAllocObject();
+    vv.* = .{ .variant_value = .{
+        .typ = obj,
+        .tag = arm.name,
+        .ordinal = arm_index,
+        .payload = .null,
+    } };
+    return .{ .object = vv };
+}
+
+fn variantTypeFieldValue(obj: *Object, name: []const u8) !Value {
+    const vt = obj.variant_type;
+    if (common.streq(name, "name")) return .{ .string = vt.name };
+    var vi: usize = 0;
+    while (vi < vt.arms.len) : (vi += 1) {
+        if (common.streq(vt.arms[vi].name, name)) return try makeVariantArmValue(obj, vt, vi);
+    }
+    return error.UnknownStructField;
+}
+
+fn variantValueFieldValue(vv: vmod.VariantValueObj, name: []const u8) !Value {
+    const vt = vv.typ.variant_type;
+    if (vmtyp.findFieldIndex(vt.shared_fields, name)) |idx| return vv.shared_values[idx];
+
+    const arm = vt.arms[vv.ordinal];
+    if (arm.fields.len > 0) {
+        for (arm.fields, 0..) |af, afi| {
+            if (common.streq(af.name, name)) return vv.arm_fields[afi];
+        }
+    } else if (arm.has_payload and common.streq(arm.payload_name, name)) {
+        return vv.payload;
+    }
+
+    return error.TypeError;
+}
+
 fn checkNamedTypePredicate(nt_obj: *Object, inner: Value) !void {
     if (comptime !build_options.predicates) return;
     if (!vmState().policy.enable_predicates) return;
@@ -962,104 +1062,23 @@ fn opGetLocalGetField() !void {
             }
         },
         .enum_type => |et| {
+            _ = et;
             const name = (try chunk.constAt(name_idx)).string;
-            if (common.streq(name, "name")) {
-                try vmPush(.{ .string = et.name });
-            } else if (common.streq(name, "first")) {
-                if (et.members.len == 0) return error.IndexOutOfBounds;
-                try vmPush(try enumTypeAllocValue(obj, et.members[0]));
-            } else if (common.streq(name, "last")) {
-                if (et.members.len == 0) return error.IndexOutOfBounds;
-                try vmPush(try enumTypeAllocValue(obj, et.members[et.members.len - 1]));
-            } else if (common.streq(name, "values")) {
-                const arr_obj = try vmAllocObject();
-                arr_obj.* = .{ .array = &[_]Value{} };
-                try pushTempRoot(.{ .object = arr_obj });
-                defer popTempRoot();
-                const items = try vmAllocManagedSlice(Value, et.members.len);
-                var ei: usize = 0;
-                while (ei < et.members.len) : (ei += 1) {
-                    items[ei] = try enumTypeAllocValue(obj, et.members[ei]);
-                    arr_obj.* = .{ .array_managed = items[0 .. ei + 1] };
-                }
-                try vmPush(.{ .object = arr_obj });
-            } else {
-                try vmPush(try enumTypeAllocValue(obj, name));
-            }
+            try vmPush(try enumTypeFieldValue(obj, name));
         },
         .named_type => |nt| {
+            _ = nt;
             const name = (try chunk.constAt(name_idx)).string;
-            if (common.streq(name, "name")) {
-                try vmPush(.{ .string = nt.name });
-            } else if (common.streq(name, "first")) {
-                if (!nt.has_range) return error.TypeError;
-                try vmPush(try vmtyp.makeNamedValue(obj, if (nt.base == .float) .{ .float = nt.min } else .{ .int = @intFromFloat(nt.min) }));
-            } else if (common.streq(name, "last")) {
-                if (!nt.has_range) return error.TypeError;
-                try vmPush(try vmtyp.makeNamedValue(obj, if (nt.base == .float) .{ .float = nt.max } else .{ .int = @intFromFloat(nt.max) }));
-            } else if (common.streq(name, "succ") or common.streq(name, "pred")) {
-                if (!nt.has_range) return error.TypeError;
-                const fn_obj = try vmAllocObject();
-                const kind: @import("value.zig").NamedTypeFnKind = if (common.streq(name, "succ")) .succ else .pred;
-                fn_obj.* = .{ .named_type_fn = .{ .typ = obj, .kind = kind } };
-                try vmPush(.{ .object = fn_obj });
-            } else return error.UnknownStructField;
+            try vmPush(try namedTypeFieldValue(obj, name));
         },
         .variant_type => |vt| {
+            _ = vt;
             const name = (try chunk.constAt(name_idx)).string;
-            if (common.streq(name, "name")) {
-                try vmPush(.{ .string = vt.name });
-            } else {
-                var vi: usize = 0;
-                while (vi < vt.arms.len) : (vi += 1) {
-                    if (common.streq(vt.arms[vi].name, name)) {
-                        const arm = vt.arms[vi];
-                        const has_shared = vt.shared_fields.len > 0;
-                        if (arm.has_payload or has_shared) {
-                            const ctor = try vmAllocObject();
-                            ctor.* = .{ .variant_ctor = .{
-                                .typ = obj,
-                                .tag = arm.name,
-                                .ordinal = vi,
-                                .payload_type = arm.payload_type,
-                            }};
-                            try vmPush(.{ .object = ctor });
-                        } else {
-                            const vv = try vmAllocObject();
-                            vv.* = .{ .variant_value = .{
-                                .typ = obj,
-                                .tag = arm.name,
-                                .ordinal = vi,
-                                .payload = .null,
-                            }};
-                            try vmPush(.{ .object = vv });
-                        }
-                        break;
-                    }
-                }
-                if (vi == vt.arms.len) return error.UnknownStructField;
-            }
+            try vmPush(try variantTypeFieldValue(obj, name));
         },
         .variant_value => |vv| {
-            const vt = vv.typ.variant_type;
-            const vvn = (try chunk.constAt(name_idx)).string;
-            if (vmtyp.findFieldIndex(vt.shared_fields, vvn)) |idx| {
-                try vmPush(vv.shared_values[idx]);
-                return;
-            }
-            const arm = vt.arms[vv.ordinal];
-            if (arm.fields.len > 0) {
-                for (arm.fields, 0..) |af, afi| {
-                    if (common.streq(af.name, vvn)) {
-                        try vmPush(vv.arm_fields[afi]);
-                        return;
-                    }
-                }
-            } else if (arm.has_payload and common.streq(arm.payload_name, vvn)) {
-                try vmPush(vv.payload);
-                return;
-            }
-            return error.TypeError;
+            const name = (try chunk.constAt(name_idx)).string;
+            try vmPush(try variantValueFieldValue(vv, name));
         },
         else => return error.TypeError,
     }
@@ -1127,76 +1146,23 @@ fn opGetIndex() !void {
                 try vmPush(inst.fields[idx].value);
             },
             .enum_type => |et| {
+                _ = et;
                 const key = try vms.asStringValue(idx_v);
-                if (common.streq(key, "name")) {
-                    try vmPush(.{ .string = et.name });
-                } else if (common.streq(key, "first")) {
-                    if (et.members.len == 0) return error.IndexOutOfBounds;
-                    try vmPush(try enumTypeAllocValue(obj, et.members[0]));
-                } else if (common.streq(key, "last")) {
-                    if (et.members.len == 0) return error.IndexOutOfBounds;
-                    try vmPush(try enumTypeAllocValue(obj, et.members[et.members.len - 1]));
-                } else if (common.streq(key, "values")) {
-                    const arr_obj = try vmAllocObject();
-                    arr_obj.* = .{ .array = &[_]Value{} };
-                    try pushTempRoot(.{ .object = arr_obj });
-                    defer popTempRoot();
-                    const items = try vmAllocManagedSlice(Value, et.members.len);
-                    var ei: usize = 0;
-                    while (ei < et.members.len) : (ei += 1) {
-                        items[ei] = try enumTypeAllocValue(obj, et.members[ei]);
-                        arr_obj.* = .{ .array_managed = items[0 .. ei + 1] };
-                    }
-                    try vmPush(.{ .object = arr_obj });
-                } else {
-                    try vmPush(try enumTypeAllocValue(obj, key));
-                }
+                try vmPush(try enumTypeFieldValue(obj, key));
             },
             .named_type => |nt| {
+                _ = nt;
                 const key = try vms.asStringValue(idx_v);
-                if (common.streq(key, "name")) {
-                    try vmPush(.{ .string = nt.name });
-                } else if (common.streq(key, "first")) {
-                    if (!nt.has_range) return error.TypeError;
-                    try vmPush(try vmtyp.makeNamedValue(obj, if (nt.base == .float) .{ .float = nt.min } else .{ .int = @intFromFloat(nt.min) }));
-                } else if (common.streq(key, "last")) {
-                    if (!nt.has_range) return error.TypeError;
-                    try vmPush(try vmtyp.makeNamedValue(obj, if (nt.base == .float) .{ .float = nt.max } else .{ .int = @intFromFloat(nt.max) }));
-                } else return error.UnknownStructField;
+                try vmPush(try namedTypeFieldValue(obj, key));
             },
             .variant_type => |vt| {
+                _ = vt;
                 const key = try vms.asStringValue(idx_v);
-                if (common.streq(key, "name")) {
-                    try vmPush(.{ .string = vt.name });
-                } else {
-                    var vi: usize = 0;
-                    while (vi < vt.arms.len) : (vi += 1) {
-                        if (common.streq(vt.arms[vi].name, key)) {
-                            const arm = vt.arms[vi];
-                            if (arm.has_payload) {
-                                const ctor = try vmAllocObject();
-                                ctor.* = .{ .variant_ctor = .{
-                                    .typ = obj,
-                                    .tag = arm.name,
-                                    .ordinal = vi,
-                                    .payload_type = arm.payload_type,
-                                }};
-                                try vmPush(.{ .object = ctor });
-                            } else {
-                                const vv = try vmAllocObject();
-                                vv.* = .{ .variant_value = .{
-                                    .typ = obj,
-                                    .tag = arm.name,
-                                    .ordinal = vi,
-                                    .payload = .null,
-                                }};
-                                try vmPush(.{ .object = vv });
-                            }
-                            break;
-                        }
-                    }
-                    if (vi == vt.arms.len) return error.UnknownStructField;
-                }
+                try vmPush(try variantTypeFieldValue(obj, key));
+            },
+            .variant_value => |vv| {
+                const key = try vms.asStringValue(idx_v);
+                try vmPush(try variantValueFieldValue(vv, key));
             },
             else => return error.TypeError,
         },
@@ -1580,100 +1546,19 @@ fn opGetField() !void {
             }
         },
         .enum_type => |et| {
-            if (common.streq(name, "name")) {
-                try vmPush(.{ .string = et.name });
-            } else if (common.streq(name, "first")) {
-                if (et.members.len == 0) return error.IndexOutOfBounds;
-                try vmPush(try enumTypeAllocValue(obj, et.members[0]));
-            } else if (common.streq(name, "last")) {
-                if (et.members.len == 0) return error.IndexOutOfBounds;
-                try vmPush(try enumTypeAllocValue(obj, et.members[et.members.len - 1]));
-            } else if (common.streq(name, "values")) {
-                const arr_obj = try vmAllocObject();
-                arr_obj.* = .{ .array = &[_]Value{} };
-                try pushTempRoot(.{ .object = arr_obj });
-                defer popTempRoot();
-                const items = try vmAllocManagedSlice(Value, et.members.len);
-                var ei: usize = 0;
-                while (ei < et.members.len) : (ei += 1) {
-                    items[ei] = try enumTypeAllocValue(obj, et.members[ei]);
-                    arr_obj.* = .{ .array_managed = items[0 .. ei + 1] };
-                }
-                try vmPush(.{ .object = arr_obj });
-            } else {
-                try vmPush(try enumTypeAllocValue(obj, name));
-            }
+            _ = et;
+            try vmPush(try enumTypeFieldValue(obj, name));
         },
         .named_type => |nt| {
-            if (common.streq(name, "name")) {
-                try vmPush(.{ .string = nt.name });
-            } else if (common.streq(name, "first")) {
-                if (!nt.has_range) return error.TypeError;
-                try vmPush(try vmtyp.makeNamedValue(obj, if (nt.base == .float) .{ .float = nt.min } else .{ .int = @intFromFloat(nt.min) }));
-            } else if (common.streq(name, "last")) {
-                if (!nt.has_range) return error.TypeError;
-                try vmPush(try vmtyp.makeNamedValue(obj, if (nt.base == .float) .{ .float = nt.max } else .{ .int = @intFromFloat(nt.max) }));
-            } else if (common.streq(name, "succ") or common.streq(name, "pred")) {
-                if (!nt.has_range) return error.TypeError;
-                const fn_obj = try vmAllocObject();
-                const kind: @import("value.zig").NamedTypeFnKind = if (common.streq(name, "succ")) .succ else .pred;
-                fn_obj.* = .{ .named_type_fn = .{ .typ = obj, .kind = kind } };
-                try vmPush(.{ .object = fn_obj });
-            } else return error.UnknownStructField;
+            _ = nt;
+            try vmPush(try namedTypeFieldValue(obj, name));
         },
         .variant_type => |vt| {
-            if (common.streq(name, "name")) {
-                try vmPush(.{ .string = vt.name });
-            } else {
-                var vi: usize = 0;
-                while (vi < vt.arms.len) : (vi += 1) {
-                    if (common.streq(vt.arms[vi].name, name)) {
-                        const arm = vt.arms[vi];
-                        const has_shared = vt.shared_fields.len > 0;
-                        if (arm.has_payload or has_shared) {
-                            const ctor = try vmAllocObject();
-                            ctor.* = .{ .variant_ctor = .{
-                                .typ = obj,
-                                .tag = arm.name,
-                                .ordinal = vi,
-                                .payload_type = arm.payload_type,
-                            }};
-                            try vmPush(.{ .object = ctor });
-                        } else {
-                            const vv = try vmAllocObject();
-                            vv.* = .{ .variant_value = .{
-                                .typ = obj,
-                                .tag = arm.name,
-                                .ordinal = vi,
-                                .payload = .null,
-                            }};
-                            try vmPush(.{ .object = vv });
-                        }
-                        break;
-                    }
-                }
-                if (vi == vt.arms.len) return error.UnknownStructField;
-            }
+            _ = vt;
+            try vmPush(try variantTypeFieldValue(obj, name));
         },
         .variant_value => |vv| {
-            const vt = vv.typ.variant_type;
-            if (vmtyp.findFieldIndex(vt.shared_fields, name)) |idx| {
-                try vmPush(vv.shared_values[idx]);
-                return;
-            }
-            const arm = vt.arms[vv.ordinal];
-            if (arm.fields.len > 0) {
-                for (arm.fields, 0..) |af, afi| {
-                    if (common.streq(af.name, name)) {
-                        try vmPush(vv.arm_fields[afi]);
-                        return;
-                    }
-                }
-            } else if (arm.has_payload and common.streq(arm.payload_name, name)) {
-                try vmPush(vv.payload);
-                return;
-            }
-            return error.TypeError;
+            try vmPush(try variantValueFieldValue(vv, name));
         },
         else => return error.TypeError,
     }

@@ -65,6 +65,131 @@ fn setup() !api.Runtime {
     return api.Runtime.init(.{ .allow_io = true, .allocator = std.testing.allocator });
 }
 
+fn expectInlineOutput(src: []const u8, expected: []const u8) !void {
+    var rt = try setup();
+    defer rt.deinit();
+
+    g_stdout = std.array_list.Managed(u8).init(std.testing.allocator);
+    g_stderr = std.array_list.Managed(u8).init(std.testing.allocator);
+    defer g_stdout.deinit();
+    defer g_stderr.deinit();
+
+    const r = runWithCapture(&rt, src, "");
+    const result = r[0];
+    const output = r[1];
+    const stderr_out = r[2];
+
+    if (result != .ok) {
+        if (result == .compile_error) {
+            std.debug.print("inline compile error: {s}\n", .{result.compile_error.msg});
+            return error.TestUnexpectedResult;
+        }
+        if (result == .runtime_error) {
+            std.debug.print("inline runtime error: {s}\n", .{result.runtime_error.msg});
+            return error.TestUnexpectedResult;
+        }
+        _ = stderr_out;
+        return error.TestUnexpectedResult;
+    }
+
+    try std.testing.expectEqualStrings(expected, output);
+}
+
+test "access parity: named type dot and index surface agree" {
+    try expectInlineOutput(
+        \\std := import("std")
+        \\
+        \\type Month int range 1..12
+        \\
+        \\m := Month(4)
+        \\std.io.println(Month.name)
+        \\std.io.println(Month["name"])
+        \\std.io.println(Month.first)
+        \\std.io.println(Month["first"])
+        \\std.io.println(Month.last)
+        \\std.io.println(Month["last"])
+        \\std.io.println(m == Month.first)
+        \\std.io.println(m == Month["first"])
+    ,
+        \\Month
+        \\Month
+        \\1
+        \\1
+        \\12
+        \\12
+        \\false
+        \\false
+        \\
+    );
+}
+
+test "access parity: variant type dot and index constructors agree" {
+    try expectInlineOutput(
+        \\std := import("std")
+        \\
+        \\type Shape variant {
+        \\    x float,
+        \\    y float,
+        \\    circle { radius float },
+        \\    point,
+        \\}
+        \\
+        \\std.io.println(Shape.name)
+        \\std.io.println(Shape["name"])
+        \\
+        \\dot_circle := Shape.circle { x: 1, y: 2, radius: 5 }
+        \\circle_ctor := Shape["circle"]
+        \\idx_circle := circle_ctor { x: 3, y: 4, radius: 6 }
+        \\dot_point := Shape.point { x: 7, y: 8 }
+        \\point_ctor := Shape["point"]
+        \\idx_point := point_ctor { x: 9, y: 10 }
+        \\
+        \\std.io.println(dot_circle.radius)
+        \\std.io.println(idx_circle.radius)
+        \\std.io.println(dot_point.x)
+        \\std.io.println(idx_point.x)
+    ,
+        \\Shape
+        \\Shape
+        \\5
+        \\6
+        \\7
+        \\9
+        \\
+    );
+}
+
+test "access parity: variant value dot and index field lookup agree" {
+    try expectInlineOutput(
+        \\std := import("std")
+        \\
+        \\type Shape variant {
+        \\    x float,
+        \\    y float,
+        \\    circle { radius float },
+        \\    rect { width float, height float },
+        \\}
+        \\
+        \\circle := Shape.circle { x: 1, y: 2, radius: 5 }
+        \\rect := Shape.rect { x: 3, y: 4, width: 10, height: 20 }
+        \\
+        \\std.io.println(circle.x)
+        \\std.io.println(circle["x"])
+        \\std.io.println(circle.radius)
+        \\std.io.println(circle["radius"])
+        \\std.io.println(rect.width)
+        \\std.io.println(rect["width"])
+    ,
+        \\1
+        \\1
+        \\5
+        \\5
+        \\10
+        \\10
+        \\
+    );
+}
+
 // ── Chaos pass cases ───────────────────────────────────────────────────────
 
 test "chaos pass cases" {
@@ -334,4 +459,3 @@ test "spec pass cases differential" {
 
     if (count == 0) return error.NoSpecPassCases;
 }
-
