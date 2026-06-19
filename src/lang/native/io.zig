@@ -127,7 +127,7 @@ fn sprintValueDepth(buf_or_null: ?[]u8, v: Value, depth: u32, ancestors: *[Print
                     if (buf_or_null) |buf| @memcpy(buf[0..sv.bytes.len], sv.bytes);
                     return sv.bytes.len;
                 },
-            .array, .array_managed => {
+            .array, .array_managed, .array_capacity => {
                 const items = try vms.asArraySlice(obj);
                 var len: usize = 1;
                 var needs_comma = false;

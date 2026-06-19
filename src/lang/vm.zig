@@ -152,7 +152,7 @@ fn runtimeTypeName(v: Value) []const u8 {
         .object => |obj| switch (obj.*) {
             .named_value => obj.named_value.typ.named_type.name,
             .dyn_string, .string_view => "string",
-            .array, .array_managed => "array",
+            .array, .array_managed, .array_capacity => "array",
             .map, .map_managed, .map_hashed => "map",
             .function, .closure => "func",
             else => "object",
@@ -693,7 +693,7 @@ fn iterInit(v: Value) !Value {
         .object => |o| switch (o.*) {
             .dyn_string => |s| obj.* = .{ .iterator = .{ .kind = .string, .index = 0, .string = s, .string_managed = true, .source = o } },
             .string_view => |sv| obj.* = .{ .iterator = .{ .kind = .string, .index = 0, .string = sv.bytes, .string_managed = true, .source = sv.source } },
-            .array, .array_managed => obj.* = .{ .iterator = .{ .kind = .array, .index = 0, .array = try vms.asArraySlice(o), .source = o } },
+            .array, .array_managed, .array_capacity => obj.* = .{ .iterator = .{ .kind = .array, .index = 0, .array = try vms.asArraySlice(o), .source = o } },
             .map, .map_managed, .map_hashed => obj.* = .{ .iterator = .{ .kind = .map, .index = 0, .map = try vms.asMapSlice(o), .source = o } },
             .named_type => |nt| {
                 if (!nt.has_range) return error.TypeError;
@@ -901,7 +901,7 @@ fn opGetLocalGetField() !void {
     if (container != .object) return error.TypeError;
     const obj = container.object;
     switch (obj.*) {
-        .array, .array_managed => {
+        .array, .array_managed, .array_capacity => {
             const name = (try chunk.constAt(name_idx)).string;
             const items = try vms.asArraySlice(obj);
             if (common.streq(name, "first")) {
@@ -1094,7 +1094,7 @@ fn opGetIndex() !void {
                 const w = try vmstr.utf8NextRuneByteLen(sv.bytes, start);
                 try vmPush(try makeStringView(sv.bytes[start .. start + w], sv.source));
             },
-            .array, .array_managed => {
+            .array, .array_managed, .array_capacity => {
                 const items = try vms.asArraySlice(obj);
                 const idx = try vms.vmIndexFromVal(idx_v);
                 if (idx >= items.len) {
@@ -1237,7 +1237,7 @@ fn opSetIndex() !void {
     }
     if (container != .object) return error.TypeError;
     switch (container.object.*) {
-        .array, .array_managed => {
+        .array, .array_managed, .array_capacity => {
             const items = try vms.asArraySlice(container.object);
             const idx = try vms.vmIndexFromVal(idx_v);
             if (idx >= items.len) {
@@ -1489,7 +1489,7 @@ fn opInvokeMethod() !void {
             vmState().stack[recv_idx + 1] = recv;
             try performCall(argc + 1);
         },
-        .array, .array_managed => {
+        .array, .array_managed, .array_capacity => {
             if (argc != 0) return error.ArityMismatch;
             const items = try vms.asArraySlice(recv.object);
             if (common.streq(mname, "first")) {
@@ -1523,7 +1523,7 @@ fn opGetField() !void {
     if (container != .object) return error.TypeError;
     const obj = container.object;
     switch (obj.*) {
-        .array, .array_managed => {
+        .array, .array_managed, .array_capacity => {
             const items = try vms.asArraySlice(obj);
             if (common.streq(name, "first")) {
                 if (items.len == 0) return error.IndexOutOfBounds;
@@ -3111,7 +3111,7 @@ fn runInner() !void {
                             const end_b = try vmstr.utf8ByteOffsetForRuneIndexCached(sv.bytes, end_r);
                             try vmPush(try makeStringView(sv.bytes[start_b..end_b], sv.source));
                         },
-                        .array, .array_managed => {
+                        .array, .array_managed, .array_capacity => {
                             const items = try vms.asArraySlice(obj);
                             const start: usize = if (has_start) try vms.vmSliceIndex(start_v, items.len) else 0;
                             const end: usize = if (has_end) try vms.vmSliceIndex(end_v, items.len) else items.len;
