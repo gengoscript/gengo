@@ -457,22 +457,19 @@ fn enumTypeAllocValue(obj: *Object, member_name: []const u8) !Value {
         // Resolve parent and find the ordinal there.
         const parent_obj = vmtyp.resolveEnumParent(obj) orelse return error.UnknownStructField;
         const parent_members = parent_obj.enum_type.members;
-        var pi: usize = 0;
-        while (pi < parent_members.len) : (pi += 1) {
-            if (common.streq(parent_members[pi], member_name)) {
+        for (parent_members, 0..) |m, pi| {
+            if (common.streq(m, member_name)) {
                 const ev = try vmAllocObject();
-                ev.* = .{ .enum_value = .{ .typ = parent_obj, .name = parent_members[pi], .ordinal = @intCast(pi) } };
+                ev.* = .{ .enum_value = .{ .typ = parent_obj, .name = m, .ordinal = @intCast(pi) } };
                 return .{ .object = ev };
             }
         }
         return error.UnknownStructField;
     } else {
-        // Regular enum.
-        var ei: usize = 0;
-        while (ei < et.members.len) : (ei += 1) {
-            if (common.streq(et.members[ei], member_name)) {
+        for (et.members, 0..) |m, ei| {
+            if (common.streq(m, member_name)) {
                 const ev = try vmAllocObject();
-                ev.* = .{ .enum_value = .{ .typ = obj, .name = et.members[ei], .ordinal = @intCast(ei) } };
+                ev.* = .{ .enum_value = .{ .typ = obj, .name = m, .ordinal = @intCast(ei) } };
                 return .{ .object = ev };
             }
         }
@@ -486,9 +483,8 @@ fn enumTypeValuesValue(obj: *Object, et: vmod.EnumTypeObj) !Value {
     try pushTempRoot(.{ .object = arr_obj });
     defer popTempRoot();
     const items = try vmAllocManagedSlice(Value, et.members.len);
-    var ei: usize = 0;
-    while (ei < et.members.len) : (ei += 1) {
-        items[ei] = try enumTypeAllocValue(obj, et.members[ei]);
+    for (et.members, 0..) |m, ei| {
+        items[ei] = try enumTypeAllocValue(obj, m);
         arr_obj.* = .{ .array_managed = items[0 .. ei + 1] };
     }
     return .{ .object = arr_obj };
@@ -1315,16 +1311,7 @@ fn opInvokeMethod() !void {
                 }
             }
             if (resolved.pass_recv) {
-                if (vmState().stack_top >= vmState().stack.len) return error.StackOverflow;
-                var i: usize = vmState().stack_top;
-                while (i > recv_idx + 1) {
-                    vmState().stack[i] = vmState().stack[i - 1];
-                    i -= 1;
-                }
-                vmState().stack_top += 1;
-                vmState().stack[recv_idx] = resolved.func;
-                vmState().stack[recv_idx + 1] = recv;
-                try performCall(argc + 1);
+                try insertReceiverAndCall(recv_idx, resolved.func, recv, argc);
             } else {
                 vmState().stack[recv_idx] = resolved.func;
                 try performCall(argc);
@@ -1401,14 +1388,8 @@ fn opInvokeMethod() !void {
             } else return error.UnknownMethod;
         },
         .named_value, .enum_value, .variant_value => {
-            if (vmState().stack_top >= vmState().stack.len) return error.StackOverflow;
             const resolved = try resolveMethodReceiver(recv, mname);
-            var si: usize = vmState().stack_top;
-            while (si > recv_idx + 1) : (si -= 1) vmState().stack[si] = vmState().stack[si - 1];
-            vmState().stack_top += 1;
-            vmState().stack[recv_idx] = resolved.func;
-            vmState().stack[recv_idx + 1] = recv;
-            try performCall(argc + 1);
+            try insertReceiverAndCall(recv_idx, resolved.func, recv, argc);
         },
         .array, .array_managed, .array_capacity => {
             if (argc != 0) return error.ArityMismatch;
@@ -1489,6 +1470,16 @@ fn opSetField() !void {
         .map_hashed => try vmmap.mapInsertHashed(container.object, .{ .string = name }, val),
         else => return error.TypeError,
     }
+}
+
+fn insertReceiverAndCall(recv_idx: usize, func: Value, recv: Value, argc: u8) !void {
+    if (vmState().stack_top >= vmState().stack.len) return error.StackOverflow;
+    var i: usize = vmState().stack_top;
+    while (i > recv_idx + 1) : (i -= 1) vmState().stack[i] = vmState().stack[i - 1];
+    vmState().stack_top += 1;
+    vmState().stack[recv_idx] = func;
+    vmState().stack[recv_idx + 1] = recv;
+    try performCall(argc + 1);
 }
 
 fn mapLinearInsertOrAppend(container: Value, key: Value, val: Value) !void {
@@ -2286,9 +2277,8 @@ fn runInner() !void {
                                 return error.UnknownStructField;
                             }
                         }
-                        var si: usize = 0;
-                        while (si < shared_count) : (si += 1) {
-                            if (!shared_seen[si]) { vms.setRuntimeErr("missing required field '{s}' in variant literal", .{vt.shared_fields[si].name}); return error.MissingStructField; }
+                        for (vt.shared_fields, shared_seen[0..shared_count]) |sf, seen| {
+                            if (!seen) { vms.setRuntimeErr("missing required field '{s}' in variant literal", .{sf.name}); return error.MissingStructField; }
                         }
                         if (arm.has_payload and !payload_seen) { vms.setRuntimeErr("missing required field '{s}' in variant literal", .{arm.payload_name}); return error.MissingStructField; }
 
