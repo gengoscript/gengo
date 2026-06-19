@@ -753,7 +753,7 @@ fn iterNext1(it: *IterObj) !void {
             }
             const typ_obj = it.source.?;
             const nt = typ_obj.named_type;
-            const val = try vmtyp.makeNamedValue(typ_obj, if (nt.base == .float) .{ .float = it.range_current } else .{ .int = it.range_current });
+            const val = try vmtyp.makeNamedValue(typ_obj, if (nt.base == .float) .{ .float = it.range_current } else .{ .int = @intFromFloat(it.range_current) });
             const next = it.range_current + 1.0;
             if (next == it.range_current) return error.RangeError;
             it.range_current = next;
@@ -770,7 +770,7 @@ fn iterNext2(it: *IterObj) !void {
                 try vmPush(.{ .boolean = false });
                 return;
             }
-            try vmPush(.{ .int = @floatFromInt(it.index) });
+            try vmPush(.{ .int = @intCast(it.index) });
             try vmPush(it.array[it.index]);
             it.index += 1;
             try vmPush(.{ .boolean = true });
@@ -783,7 +783,7 @@ fn iterNext2(it: *IterObj) !void {
             const ridx = it.rune_index;
             const start = try vmstr.utf8ByteOffsetForRuneIndexCached(it.string, ridx);
             const end = try vmstr.utf8ByteOffsetForRuneIndexCached(it.string, ridx + 1);
-            try vmPush(.{ .int = @floatFromInt(it.rune_index) });
+            try vmPush(.{ .int = @intCast(it.rune_index) });
             if (it.string_managed) {
                 try vmPush(try makeStringView(it.string[start..end], it.source.?));
             } else {
@@ -934,7 +934,7 @@ fn opGetLocalGetField() !void {
             const name = (try chunk.constAt(name_idx)).string;
             if (common.streq(name, "len")) {
                 const items = try vms.asMapSlice(obj);
-                try vmPush(.{ .int = @floatFromInt(items.len) });
+                try vmPush(.{ .int = @intCast(items.len) });
             } else {
                 const items = try vms.asMapSlice(obj);
                 const key_v = Value{ .string = name };
@@ -951,7 +951,7 @@ fn opGetLocalGetField() !void {
         .map_hashed => |hm| {
             const name = (try chunk.constAt(name_idx)).string;
             if (common.streq(name, "len")) {
-                try vmPush(.{ .int = @floatFromInt(hm.len) });
+                try vmPush(.{ .int = @intCast(hm.len) });
             } else {
                 const key_v = Value{ .string = name };
                 if (vmmap.mapFindHashedIndex(hm.entries[0..hm.len], hm.buckets, key_v)) |fi| {
@@ -993,10 +993,10 @@ fn opGetLocalGetField() !void {
                 try vmPush(.{ .string = nt.name });
             } else if (common.streq(name, "first")) {
                 if (!nt.has_range) return error.TypeError;
-                try vmPush(try vmtyp.makeNamedValue(obj, if (nt.base == .float) .{ .float = nt.min } else .{ .int = nt.min }));
+                try vmPush(try vmtyp.makeNamedValue(obj, if (nt.base == .float) .{ .float = nt.min } else .{ .int = @intFromFloat(nt.min) }));
             } else if (common.streq(name, "last")) {
                 if (!nt.has_range) return error.TypeError;
-                try vmPush(try vmtyp.makeNamedValue(obj, if (nt.base == .float) .{ .float = nt.max } else .{ .int = nt.max }));
+                try vmPush(try vmtyp.makeNamedValue(obj, if (nt.base == .float) .{ .float = nt.max } else .{ .int = @intFromFloat(nt.max) }));
             } else if (common.streq(name, "succ") or common.streq(name, "pred")) {
                 if (!nt.has_range) return error.TypeError;
                 const fn_obj = try vmAllocObject();
@@ -1158,10 +1158,10 @@ fn opGetIndex() !void {
                     try vmPush(.{ .string = nt.name });
                 } else if (common.streq(key, "first")) {
                     if (!nt.has_range) return error.TypeError;
-                    try vmPush(try vmtyp.makeNamedValue(obj, if (nt.base == .float) .{ .float = nt.min } else .{ .int = nt.min }));
+                    try vmPush(try vmtyp.makeNamedValue(obj, if (nt.base == .float) .{ .float = nt.min } else .{ .int = @intFromFloat(nt.min) }));
                 } else if (common.streq(key, "last")) {
                     if (!nt.has_range) return error.TypeError;
-                    try vmPush(try vmtyp.makeNamedValue(obj, if (nt.base == .float) .{ .float = nt.max } else .{ .int = nt.max }));
+                    try vmPush(try vmtyp.makeNamedValue(obj, if (nt.base == .float) .{ .float = nt.max } else .{ .int = @intFromFloat(nt.max) }));
                 } else return error.UnknownStructField;
             },
             .variant_type => |vt| {
@@ -1553,7 +1553,7 @@ fn opGetField() !void {
         .map, .map_managed => {
             if (common.streq(name, "len")) {
                 const items = try vms.asMapSlice(obj);
-                try vmPush(.{ .int = @floatFromInt(items.len) });
+                try vmPush(.{ .int = @intCast(items.len) });
             } else {
                 const items = try vms.asMapSlice(obj);
                 const key_v = Value{ .string = name };
@@ -1569,7 +1569,7 @@ fn opGetField() !void {
         },
         .map_hashed => |hm| {
             if (common.streq(name, "len")) {
-                try vmPush(.{ .int = @floatFromInt(hm.len) });
+                try vmPush(.{ .int = @intCast(hm.len) });
             } else {
                 const key_v = Value{ .string = name };
                 if (vmmap.mapFindHashedIndex(hm.entries[0..hm.len], hm.buckets, key_v)) |fi| {
@@ -1609,10 +1609,10 @@ fn opGetField() !void {
                 try vmPush(.{ .string = nt.name });
             } else if (common.streq(name, "first")) {
                 if (!nt.has_range) return error.TypeError;
-                try vmPush(try vmtyp.makeNamedValue(obj, if (nt.base == .float) .{ .float = nt.min } else .{ .int = nt.min }));
+                try vmPush(try vmtyp.makeNamedValue(obj, if (nt.base == .float) .{ .float = nt.min } else .{ .int = @intFromFloat(nt.min) }));
             } else if (common.streq(name, "last")) {
                 if (!nt.has_range) return error.TypeError;
-                try vmPush(try vmtyp.makeNamedValue(obj, if (nt.base == .float) .{ .float = nt.max } else .{ .int = nt.max }));
+                try vmPush(try vmtyp.makeNamedValue(obj, if (nt.base == .float) .{ .float = nt.max } else .{ .int = @intFromFloat(nt.max) }));
             } else if (common.streq(name, "succ") or common.streq(name, "pred")) {
                 if (!nt.has_range) return error.TypeError;
                 const fn_obj = try vmAllocObject();
@@ -2236,10 +2236,10 @@ fn runInner() !void {
                         const t = @trunc(n);
                         const as_i64: i64 = @intFromFloat(t);
                         if (@as(f64, @floatFromInt(as_i64)) != t) return error.RangeError;
-                        try vmPush(.{ .int = t });
+                        try vmPush(.{ .int = as_i64 });
                     },
-                    .decimal => |d| try vmPush(.{ .int = @floatFromInt(d) }),
-                    .rune => |r| try vmPush(.{ .int = @floatFromInt(r) }),
+                    .decimal => |d| try vmPush(.{ .int = d }),
+                    .rune => |r| try vmPush(.{ .int = @intCast(r) }),
                     .boolean => |b| try vmPush(.{ .int = if (b) 1 else 0 }),
                     else => return error.TypeError,
                 }
@@ -2252,7 +2252,7 @@ fn runInner() !void {
                 }
                 const v = vms.unboxNamed(raw);
                 switch (v) {
-                    .int => |n| try vmPush(.{ .float = n }),
+                    .int => |n| try vmPush(.{ .float = @floatFromInt(n) }),
                     .float => |n| try vmPush(.{ .float = n }),
                     .decimal => |d| try vmPush(.{ .float = @floatFromInt(d) }),
                     .rune => |r| try vmPush(.{ .float = @floatFromInt(r) }),
@@ -2263,13 +2263,7 @@ fn runInner() !void {
             .cast_decimal => {
                 const v = vms.unboxNamed(try vmPop());
                 switch (v) {
-                    .int => |n| {
-                        if (!std.math.isFinite(n)) return error.TypeError;
-                        const t = @trunc(n);
-                        if (t < @as(f64, @floatFromInt(std.math.minInt(i64))) or
-                            t >= std.math.pow(f64, 2.0, 63.0)) return error.TypeError;
-                        try vmPush(.{ .decimal = @intFromFloat(t) });
-                    },
+                    .int => |n| try vmPush(.{ .decimal = n }),
                     .float => |n| {
                         if (!std.math.isFinite(n)) return error.TypeError;
                         const t = @trunc(n);
@@ -2286,7 +2280,7 @@ fn runInner() !void {
             .cast_bool => {
                 const v = vms.unboxNamed(try vmPop());
                 switch (v) {
-                    .int => |n| try vmPush(.{ .boolean = n != 0.0 }),
+                    .int => |n| try vmPush(.{ .boolean = n != 0 }),
                     .float => |n| try vmPush(.{ .boolean = n != 0.0 }),
                     .rune => |r| try vmPush(.{ .boolean = r != 0 }),
                     .boolean => |b| try vmPush(.{ .boolean = b }),
@@ -2318,9 +2312,8 @@ fn runInner() !void {
                 const r: u21 = switch (v) {
                     .rune => |rv| rv,
                     .int => |n| blk: {
-                        const t = @trunc(n);
-                        if (t != n or t < 0 or t > 0x10FFFF) return error.TypeError;
-                        break :blk @intFromFloat(t);
+                        if (n < 0 or n > 0x10FFFF) return error.TypeError;
+                        break :blk @intCast(n);
                     },
                     else => return error.TypeError,
                 };
@@ -2374,13 +2367,17 @@ fn runInner() !void {
                     return error.TypeError;
                 };
                 if (v == .object and v.object.* == .named_value) {
-                    const wrapped = try vmtyp.coerceNamedTypeResult(v.object.named_value.typ, if (v.object.named_value.typ.named_type.base == .float) .{ .float = -n } else .{ .int = -n });
+                    const base = v.object.named_value.typ.named_type.base;
+                    const wrapped = try vmtyp.coerceNamedTypeResult(
+                        v.object.named_value.typ,
+                        if (base == .float) .{ .float = -n } else .{ .int = @intFromFloat(-n) },
+                    );
                     try checkNamedTypePredicate(v.object.named_value.typ, wrapped.object.named_value.value);
                     _ = try vmPop();
                     try vmPush(wrapped);
                 } else {
                     _ = try vmPop();
-                    try vmPush(if (v == .float) .{ .float = -n } else .{ .int = -n });
+                    try vmPush(if (v == .float) .{ .float = -n } else .{ .int = @intFromFloat(-n) });
                 }
             },
             .not => {
