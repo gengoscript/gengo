@@ -27,7 +27,7 @@ pub fn wireFromValue(v: Value) !host_abi.ValueWire {
         },
         .int => |n| .{
             .tag = @intFromEnum(host_abi.WireTag.number),
-            .flags = 0,
+            .flags = host_abi.FLAG_INTEGER,
             .reserved = 0,
             .payload = @bitCast(n),
             .len = 0,
@@ -150,6 +150,8 @@ pub fn valueFromWire(w: host_abi.ValueWire) !Value {
             return Value{ .decimal = @bitCast(w.payload) };
         } else if ((w.flags & host_abi.FLAG_RUNE) != 0) {
             return Value{ .rune = @intCast(w.payload) };
+        } else if ((w.flags & host_abi.FLAG_INTEGER) !=  0) {
+            return Value{ .int = @bitCast(w.payload) };
         } else {
             return Value{ .float = @bitCast(w.payload) };
         },

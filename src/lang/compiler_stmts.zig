@@ -558,7 +558,7 @@ pub fn emitAssignTargetPath(c: anytype, target: AssignTarget, all_steps: []const
         switch (st) {
             .dot_name => |name| try chunk.emitGetField(name, target.root.line),
             .index_number => |n| {
-                try chunk.emitConst(.{ .int = n }, target.root.line);
+                try chunk.emitConst(.{ .int = @intFromFloat(n) }, target.root.line);
                 try chunk.emitOp(.get_index, target.root.line);
             },
             .index_string => |s| {
@@ -575,7 +575,7 @@ pub fn emitAssignTargetPath(c: anytype, target: AssignTarget, all_steps: []const
             try chunk.emitSetField(name, target.root.line);
         },
         .index_number => |n| {
-            try chunk.emitConst(.{ .int = n }, target.root.line);
+            try chunk.emitConst(.{ .int = @intFromFloat(n) }, target.root.line);
             try chunk.emitGetGlobalIdx(vidx, target.root.line);
             try chunk.emitOp(.set_index, target.root.line);
         },

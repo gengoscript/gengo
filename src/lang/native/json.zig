@@ -13,7 +13,7 @@ fn jsonValueToGengo(jv: std.json.Value) !Value {
     return switch (jv) {
         .null => .null,
         .bool => |b| .{ .boolean = b },
-        .integer => |i| .{ .int = @floatFromInt(i) },
+        .integer => |i| .{ .int = i },
         .float => |f| .{ .float = f },
         .number_string => |s| .{ .float = try std.fmt.parseFloat(f64, s) },
         .string => |s| try vmgc.makeDynString(s),

@@ -31,7 +31,7 @@ pub fn nativeLen(v: Value) !Value {
         },
         else => return error.TypeError,
     };
-    return .{ .int = @floatFromInt(n) };
+    return .{ .int = @intCast(n) };
 }
 
 pub fn nativeByteLen(v: Value) !Value {
@@ -45,7 +45,7 @@ pub fn nativeByteLen(v: Value) !Value {
         },
         else => return error.TypeError,
     };
-    return .{ .int = @floatFromInt(n) };
+    return .{ .int = @intCast(n) };
 }
 
 pub fn nativeDelete(m_obj: *Object, key: Value) !Value {
@@ -250,9 +250,9 @@ pub fn nativeGcStats() !Value {
     defer vms.popTempRoot();
     const items = try vmgc.vmAllocManagedSlice(MapEntry, 3);
     obj.* = .{ .map = items[0..0] };
-    items[0] = .{ .key = .{ .string = "heap_used_bytes" }, .value = .{ .int = @floatFromInt(heap.usedBytes()) } };
-    items[1] = .{ .key = .{ .string = "heap_size_bytes" }, .value = .{ .int = @floatFromInt(heap.g_state.heap.len) } };
-    items[2] = .{ .key = .{ .string = "live_objects" }, .value = .{ .int = @floatFromInt(heap.liveObjectCount()) } };
+    items[0] = .{ .key = .{ .string = "heap_used_bytes" }, .value = .{ .int = @intCast(heap.usedBytes()) } };
+    items[1] = .{ .key = .{ .string = "heap_size_bytes" }, .value = .{ .int = @intCast(heap.g_state.heap.len) } };
+    items[2] = .{ .key = .{ .string = "live_objects" }, .value = .{ .int = @intCast(heap.liveObjectCount()) } };
     obj.* = .{ .map = items[0..3] };
     return .{ .object = obj };
 }
@@ -264,30 +264,30 @@ pub fn nativeGcStatsExt() !Value {
     defer vms.popTempRoot();
     const items = try vmgc.vmAllocManagedSlice(MapEntry, 8);
     obj.* = .{ .map = items[0..0] };
-    items[0] = .{ .key = .{ .string = "heap_used_bytes" }, .value = .{ .int = @floatFromInt(heap.usedBytes()) } };
-    items[1] = .{ .key = .{ .string = "heap_size_bytes" }, .value = .{ .int = @floatFromInt(heap.g_state.heap.len) } };
-    items[2] = .{ .key = .{ .string = "live_objects" }, .value = .{ .int = @floatFromInt(heap.liveObjectCount()) } };
-    items[3] = .{ .key = .{ .string = "gc_runs" }, .value = .{ .int = @floatFromInt(vms.vmState().gc_runs) } };
-    items[4] = .{ .key = .{ .string = "gc_time_ns" }, .value = .{ .int = @floatFromInt(vms.vmState().gc_time_ns) } };
-    items[5] = .{ .key = .{ .string = "alloc_object_calls" }, .value = .{ .int = @floatFromInt(vms.vmState().alloc_object_calls) } };
-    items[6] = .{ .key = .{ .string = "alloc_managed_slice_calls" }, .value = .{ .int = @floatFromInt(vms.vmState().alloc_managed_slice_calls) } };
-    items[7] = .{ .key = .{ .string = "alloc_managed_bytes_calls" }, .value = .{ .int = @floatFromInt(vms.vmState().alloc_managed_bytes_calls) } };
+    items[0] = .{ .key = .{ .string = "heap_used_bytes" }, .value = .{ .int = @intCast(heap.usedBytes()) } };
+    items[1] = .{ .key = .{ .string = "heap_size_bytes" }, .value = .{ .int = @intCast(heap.g_state.heap.len) } };
+    items[2] = .{ .key = .{ .string = "live_objects" }, .value = .{ .int = @intCast(heap.liveObjectCount()) } };
+    items[3] = .{ .key = .{ .string = "gc_runs" }, .value = .{ .int = @intCast(vms.vmState().gc_runs) } };
+    items[4] = .{ .key = .{ .string = "gc_time_ns" }, .value = .{ .int = @intCast(vms.vmState().gc_time_ns) } };
+    items[5] = .{ .key = .{ .string = "alloc_object_calls" }, .value = .{ .int = @intCast(vms.vmState().alloc_object_calls) } };
+    items[6] = .{ .key = .{ .string = "alloc_managed_slice_calls" }, .value = .{ .int = @intCast(vms.vmState().alloc_managed_slice_calls) } };
+    items[7] = .{ .key = .{ .string = "alloc_managed_bytes_calls" }, .value = .{ .int = @intCast(vms.vmState().alloc_managed_bytes_calls) } };
     obj.* = .{ .map = items[0..8] };
     return .{ .object = obj };
 }
 
 pub fn nativeConvToInt(v: Value) !Value {
     switch (v) {
-        .int => |n| { const tr = @trunc(n); return .{ .int = tr }; },
-        .float => |n| { const tr = @trunc(n); return .{ .int = tr }; },
-        .rune => |r| return .{ .int = @floatFromInt(r) },
+        .int => |n| return .{ .int = n },
+        .float => |n| return .{ .int = @intFromFloat(n) },
+        .rune => |r| return .{ .int = @intCast(r) },
         .boolean => |b| return .{ .int = if (b) 1 else 0 },
-        .string => |s| { const n = common.parseFloat(s) orelse return error.TypeError; const tr = @trunc(n); return .{ .int = tr }; },
+        .string => |s| { const n = common.parseFloat(s) orelse return error.TypeError; return .{ .int = @intFromFloat(n) }; },
         .object => |o| {
             const s: []const u8 = if (o.* == .dyn_string) o.dyn_string else if (o.* == .string_view) o.string_view.bytes else return error.TypeError;
             const n = common.parseFloat(s) orelse return error.TypeError;
             const tr = @trunc(n);
-            return .{ .int = tr };
+            return .{ .int = @intFromFloat(tr) };
         },
         else => return error.TypeError,
     }
@@ -295,7 +295,7 @@ pub fn nativeConvToInt(v: Value) !Value {
 
 pub fn nativeConvToFloat(v: Value) !Value {
     switch (v) {
-        .int => |n| return .{ .float = n },
+        .int => |n| return .{ .float = @floatFromInt(n) },
         .float => |n| return .{ .float = n },
         .rune => |r| return .{ .float = @floatFromInt(r) },
         .boolean => |b| return .{ .float = if (b) 1 else 0 },
@@ -896,7 +896,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
 
             if (argc != nf.arity) return error.ArityMismatch;
             _ = try vms.vmPop();
-            try vms.vmPush(.{ .int = @floatFromInt(heap.liveObjectCount()) });
+            try vms.vmPush(.{ .int = @intCast(heap.liveObjectCount()) });
         },
         .core_gc_stats => {
 
