@@ -221,6 +221,16 @@ fn testNegInt() void {
     expect(vms.vmState().stack[0] == .int and vms.vmState().stack[0].int == -42, "neg int: expected -42");
 }
 
+fn testCastIntFromFloat() void {
+    resetAll();
+    chunk.emitConst(.{ .float = 3.9 }, 1) catch fail("cast int float const");
+    chunk.emitOp(.cast_int, 1) catch fail("cast int op");
+    chunk.emitOp(.halt, 1) catch fail("cast int halt");
+    vm.run() catch fail("cast int run");
+    expect(vms.vmState().stack_top == 1, "cast int: expected stack_top == 1");
+    expect(vms.vmState().stack[0] == .int and vms.vmState().stack[0].int == 3, "cast int: expected 3");
+}
+
 fn testNotBool() void {
     resetAll();
     chunk.emitConst(.{ .boolean = true }, 1) catch fail("not bool const true");
@@ -471,6 +481,7 @@ export fn _start() void {
     testAddFloat();            out("  add float: OK\n");
     testSubFloat();            out("  sub float: OK\n");
     testNegInt();              out("  neg int: OK\n");
+    testCastIntFromFloat();    out("  cast int from float: OK\n");
     testNotBool();             out("  not bool: OK\n");
     testConstEqTrue();         out("  const_eq true: OK\n");
     testConstEqFalse();        out("  const_eq false: OK\n");
