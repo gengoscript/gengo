@@ -684,6 +684,27 @@ fn checkNamedTypePredicateChain(nt_obj: *Object, inner: Value) !void {
     }
 }
 
+fn canReturnFast(fi: usize, retval: Value) bool {
+    const frame = &vmState().frames[fi];
+    if (vmState().defer_top != frame.defer_base) return false;
+    if (!frame.has_typed_returns) return true;
+    const f = switch (frame.func_obj.*) {
+        .function => frame.func_obj.function,
+        .closure => |cl| cl.func.function,
+        else => return false,
+    };
+    if (!vmtyp.isPrimitiveReturn(f)) return false;
+    return vmtyp.checkPrimitiveReturn(f, retval);
+}
+
+fn doReturnFast(fi: usize, retval: Value) !void {
+    const frame = &vmState().frames[fi];
+    vmState().frame_top = fi;
+    vmState().stack_top = if (frame.base > 0) frame.base - 1 else 0;
+    vmState().ip = frame.ret_ip;
+    try vmPush(retval);
+}
+
 fn enterFunctionFrame(f: @import("value.zig").FuncObj, func_obj: *Object, closure: ?*Object, argc: u8) !void {
     if (f.is_variadic) {
         if (argc < f.arity - 1) {
@@ -1739,23 +1760,8 @@ fn runInner() !void {
                 const a = try vmPop();
                 const retval = try computeAddResult(a, b);
                 const fi = vmState().frame_top - 1;
-                const frame = &vmState().frames[fi];
-                const can_fast = blk: {
-                    if (vmState().defer_top != frame.defer_base) break :blk false;
-                    if (!frame.has_typed_returns) break :blk true;
-                    const f = switch (frame.func_obj.*) {
-                        .function => frame.func_obj.function,
-                        .closure => |cl| cl.func.function,
-                        else => break :blk false,
-                    };
-                    if (!vmtyp.isPrimitiveReturn(f)) break :blk false;
-                    break :blk vmtyp.checkPrimitiveReturn(f, retval);
-                };
-                if (can_fast) {
-                    vmState().frame_top = fi;
-                    vmState().stack_top = if (frame.base > 0) frame.base - 1 else 0;
-                    vmState().ip = frame.ret_ip;
-                    try vmPush(retval);
+                if (canReturnFast(fi, retval)) {
+                    try doReturnFast(fi, retval);
                     if (vmState().call_depth_target) |d| {
                         if (vmState().frame_top == d) return;
                     }
@@ -2815,23 +2821,8 @@ fn runInner() !void {
                 const t0 = vmperf.readTsc();
                 const retval = try vmPop();
                 const fi = vmState().frame_top - 1;
-                const frame = &vmState().frames[fi];
-                const can_fast = blk: {
-                    if (vmState().defer_top != frame.defer_base) break :blk false;
-                    if (!frame.has_typed_returns) break :blk true;
-                    const f = switch (frame.func_obj.*) {
-                        .function => frame.func_obj.function,
-                        .closure => |cl| cl.func.function,
-                        else => break :blk false,
-                    };
-                    if (!vmtyp.isPrimitiveReturn(f)) break :blk false;
-                    break :blk vmtyp.checkPrimitiveReturn(f, retval);
-                };
-                if (can_fast) {
-                    vmState().frame_top = fi;
-                    vmState().stack_top = if (frame.base > 0) frame.base - 1 else 0;
-                    vmState().ip = frame.ret_ip;
-                    try vmPush(retval);
+                if (canReturnFast(fi, retval)) {
+                    try doReturnFast(fi, retval);
                     if (vmState().call_depth_target) |d| {
                         if (vmState().frame_top == d) {
                             const t1 = vmperf.readTsc();
@@ -2857,29 +2848,10 @@ fn runInner() !void {
             .get_local_ret => {
                 vmperf.breakOpChain();
                 if (vmState().frame_top == 0) return error.ReturnAtTopLevel;
-                const slot = try vmByte();
-                const base = if (vmState().frame_top > 0) vmState().frames[vmState().frame_top - 1].base else 1;
-                if (base + slot >= vmState().stack.len) return error.StackOverflow;
-                const v_raw = vmState().stack[base + slot];
-                const v = if (v_raw == .object and v_raw.object.* == .cell) v_raw.object.cell.value else v_raw;
+                const v = try readLocalSlot(try vmByte());
                 const fi = vmState().frame_top - 1;
-                const frame = &vmState().frames[fi];
-                const can_fast = blk: {
-                    if (vmState().defer_top != frame.defer_base) break :blk false;
-                    if (!frame.has_typed_returns) break :blk true;
-                    const f = switch (frame.func_obj.*) {
-                        .function => frame.func_obj.function,
-                        .closure => |cl| cl.func.function,
-                        else => break :blk false,
-                    };
-                    if (!vmtyp.isPrimitiveReturn(f)) break :blk false;
-                    break :blk vmtyp.checkPrimitiveReturn(f, v);
-                };
-                if (can_fast) {
-                    vmState().frame_top = fi;
-                    vmState().stack_top = if (frame.base > 0) frame.base - 1 else 0;
-                    vmState().ip = frame.ret_ip;
-                    try vmPush(v);
+                if (canReturnFast(fi, v)) {
+                    try doReturnFast(fi, v);
                     if (vmState().call_depth_target) |d| {
                         if (vmState().frame_top == d) return;
                     }
@@ -2892,23 +2864,8 @@ fn runInner() !void {
                 if (vmState().frame_top == 0) return error.ReturnAtTopLevel;
                 const k = try chunk.constAt(try vmShort());
                 const fi = vmState().frame_top - 1;
-                const frame = &vmState().frames[fi];
-                const can_fast = blk: {
-                    if (vmState().defer_top != frame.defer_base) break :blk false;
-                    if (!frame.has_typed_returns) break :blk true;
-                    const f = switch (frame.func_obj.*) {
-                        .function => frame.func_obj.function,
-                        .closure => |cl| cl.func.function,
-                        else => break :blk false,
-                    };
-                    if (!vmtyp.isPrimitiveReturn(f)) break :blk false;
-                    break :blk vmtyp.checkPrimitiveReturn(f, k);
-                };
-                if (can_fast) {
-                    vmState().frame_top = fi;
-                    vmState().stack_top = if (frame.base > 0) frame.base - 1 else 0;
-                    vmState().ip = frame.ret_ip;
-                    try vmPush(k);
+                if (canReturnFast(fi, k)) {
+                    try doReturnFast(fi, k);
                     if (vmState().call_depth_target) |d| {
                         if (vmState().frame_top == d) return;
                     }
