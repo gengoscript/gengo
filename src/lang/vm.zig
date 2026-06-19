@@ -684,6 +684,35 @@ fn checkNamedTypePredicateChain(nt_obj: *Object, inner: Value) !void {
     }
 }
 
+fn enterFunctionFrame(f: @import("value.zig").FuncObj, func_obj: *Object, closure: ?*Object, argc: u8) !void {
+    if (f.is_variadic) {
+        if (argc < f.arity - 1) {
+            var sig_buf: [256]u8 = undefined;
+            const sig = vmtyp.funcSignatureStr(&sig_buf, f);
+            if (f.name.len > 0) { vms.setRuntimeErr("{s}: expected at least {} argument(s), got {} for {s}", .{ f.name, f.arity - 1, argc, sig }); } else { vms.setRuntimeErr("expected at least {} argument(s), got {} for {s}", .{ f.arity - 1, argc, sig }); }
+            return error.ArityMismatch;
+        }
+    } else if (f.arity != argc) {
+        var sig_buf: [256]u8 = undefined;
+        const sig = vmtyp.funcSignatureStr(&sig_buf, f);
+        if (f.name.len > 0) { vms.setRuntimeErr("{s}: expected {} argument(s), got {} for {s}", .{ f.name, f.arity, argc, sig }); } else { vms.setRuntimeErr("expected {} argument(s), got {} for {s}", .{ f.arity, argc, sig }); }
+        return error.ArityMismatch;
+    }
+    if (f.has_typed_params) try vmtyp.enforceFuncArgTypes(f, argc);
+    try prepareVariadicCall(f, argc);
+    if (vmState().frame_top >= vmState().frames.len) return error.CallStackOverflow;
+    vmState().frames[vmState().frame_top] = .{
+        .ret_ip = vmState().ip,
+        .base = vmState().stack_top - f.arity,
+        .closure = closure,
+        .func_obj = func_obj,
+        .defer_base = vmState().defer_top,
+        .has_typed_returns = f.has_typed_returns,
+    };
+    vmState().frame_top += 1;
+    vmState().ip = f.ip;
+}
+
 fn performCall(argc: u8) !void {
     if (vmState().stack_top < @as(usize, argc) + 1) return error.StackUnderflow;
     const func_val = vmState().stack[vmState().stack_top - argc - 1];
@@ -691,61 +720,10 @@ fn performCall(argc: u8) !void {
     const obj = func_val.object;
     switch (obj.*) {
         .function => |f| {
-            if (f.is_variadic) {
-                if (argc < f.arity - 1) {
-                    var sig_buf: [256]u8 = undefined;
-                    const sig = vmtyp.funcSignatureStr(&sig_buf, f);
-                    if (f.name.len > 0) { vms.setRuntimeErr("{s}: expected at least {} argument(s), got {} for {s}", .{ f.name, f.arity - 1, argc, sig }); } else { vms.setRuntimeErr("expected at least {} argument(s), got {} for {s}", .{ f.arity - 1, argc, sig }); }
-                    return error.ArityMismatch;
-                }
-            } else if (f.arity != argc) {
-                var sig_buf: [256]u8 = undefined;
-                const sig = vmtyp.funcSignatureStr(&sig_buf, f);
-                if (f.name.len > 0) { vms.setRuntimeErr("{s}: expected {} argument(s), got {} for {s}", .{ f.name, f.arity, argc, sig }); } else { vms.setRuntimeErr("expected {} argument(s), got {} for {s}", .{ f.arity, argc, sig }); }
-                return error.ArityMismatch;
-            }
-            if (f.has_typed_params) try vmtyp.enforceFuncArgTypes(f, argc);
-            try prepareVariadicCall(f, argc);
-            if (vmState().frame_top >= vmState().frames.len) return error.CallStackOverflow;
-            vmState().frames[vmState().frame_top] = .{
-                .ret_ip = vmState().ip,
-                .base = vmState().stack_top - f.arity,
-                .closure = null,
-                .func_obj = obj,
-                .defer_base = vmState().defer_top,
-                .has_typed_returns = f.has_typed_returns,
-            };
-            vmState().frame_top += 1;
-            vmState().ip = f.ip;
+            try enterFunctionFrame(f, obj, null, argc);
         },
         .closure => |cl| {
-            const f = cl.func.function;
-            if (f.is_variadic) {
-                if (argc < f.arity - 1) {
-                    var sig_buf: [256]u8 = undefined;
-                    const sig = vmtyp.funcSignatureStr(&sig_buf, f);
-                    if (f.name.len > 0) { vms.setRuntimeErr("{s}: expected at least {} argument(s), got {} for {s}", .{ f.name, f.arity - 1, argc, sig }); } else { vms.setRuntimeErr("expected at least {} argument(s), got {} for {s}", .{ f.arity - 1, argc, sig }); }
-                    return error.ArityMismatch;
-                }
-            } else if (f.arity != argc) {
-                var sig_buf: [256]u8 = undefined;
-                const sig = vmtyp.funcSignatureStr(&sig_buf, f);
-                if (f.name.len > 0) { vms.setRuntimeErr("{s}: expected {} argument(s), got {} for {s}", .{ f.name, f.arity, argc, sig }); } else { vms.setRuntimeErr("expected {} argument(s), got {} for {s}", .{ f.arity, argc, sig }); }
-                return error.ArityMismatch;
-            }
-            if (f.has_typed_params) try vmtyp.enforceFuncArgTypes(f, argc);
-            try prepareVariadicCall(f, argc);
-            if (vmState().frame_top >= vmState().frames.len) return error.CallStackOverflow;
-            vmState().frames[vmState().frame_top] = .{
-                .ret_ip = vmState().ip,
-                .base = vmState().stack_top - f.arity,
-                .closure = obj,
-                .func_obj = cl.func,
-                .defer_base = vmState().defer_top,
-                .has_typed_returns = f.has_typed_returns,
-            };
-            vmState().frame_top += 1;
-            vmState().ip = f.ip;
+            try enterFunctionFrame(cl.func.function, cl.func, obj, argc);
         },
         .native_function => |nf| {
             try vmnative.callNative(nf, argc);
@@ -831,38 +809,23 @@ fn tryTailCall(argc: u8) !bool {
 
     const frame_idx = vmState().frame_top - 1;
     const frame = &vmState().frames[frame_idx];
-    if (callee_obj.* == .closure) {
-        const cl = callee_obj.closure;
-        const f = cl.func.function;
-        if (f.is_variadic) return false;
-        if (f.arity != argc) return false;
-        if (f.has_typed_params) try vmtyp.enforceFuncArgTypes(f, argc);
-        var i: usize = 0;
-        while (i < argc) : (i += 1) {
-            writeFrameLocal(frame.base + i, vmState().stack[callee_idx + 1 + i]);
-        }
-        frame.closure = callee_obj;
-        frame.func_obj = cl.func;
-        vmState().stack_top = frame.base + argc;
-        vmState().ip = f.ip;
-        return true;
+    const f_obj: *Object, const closure: ?*Object, const f = switch (callee_obj.*) {
+        .closure => |cl| .{ cl.func, callee_obj, cl.func.function },
+        .function => |f| .{ callee_obj, null, f },
+        else => return false,
+    };
+    if (f.is_variadic) return false;
+    if (f.arity != argc) return false;
+    if (f.has_typed_params) try vmtyp.enforceFuncArgTypes(f, argc);
+    var i: usize = 0;
+    while (i < argc) : (i += 1) {
+        writeFrameLocal(frame.base + i, vmState().stack[callee_idx + 1 + i]);
     }
-    if (callee_obj.* == .function) {
-        const f = callee_obj.function;
-        if (f.is_variadic) return false;
-        if (f.arity != argc) return false;
-        if (f.has_typed_params) try vmtyp.enforceFuncArgTypes(f, argc);
-        var i: usize = 0;
-        while (i < argc) : (i += 1) {
-            writeFrameLocal(frame.base + i, vmState().stack[callee_idx + 1 + i]);
-        }
-        frame.closure = null;
-        frame.func_obj = callee_obj;
-        vmState().stack_top = frame.base + argc;
-        vmState().ip = f.ip;
-        return true;
-    }
-    return false;
+    frame.closure = closure;
+    frame.func_obj = f_obj;
+    vmState().stack_top = frame.base + argc;
+    vmState().ip = f.ip;
+    return true;
 }
 
 fn iterInit(v: Value) !Value {
