@@ -13,7 +13,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             _ = try vms.vmPop(); _ = try vms.vmPop();
             // Preserve int-ness: strict arithmetic rejects int+float mixing,
             // so abs(int) must stay usable in int expressions.
-            try vms.vmPush(if (v == .int) .{ .int = @abs(n) } else .{ .float = @abs(n) });
+            try vms.vmPush(if (v == .int) .{ .int = @intCast(@abs(v.int)) } else .{ .float = @abs(n) });
         },
         .math_acos => {
 
@@ -178,7 +178,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const a = try vms.valueAsNumber(av);
             _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
             const all_int = av == .int and bv == .int;
-            try vms.vmPush(if (all_int) .{ .int = @max(a, b) } else .{ .float = @max(a, b) });
+            try vms.vmPush(if (all_int) .{ .int = @intFromFloat(@max(a, b)) } else .{ .float = @max(a, b) });
         },
         .math_min => {
 
@@ -189,7 +189,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const a = try vms.valueAsNumber(av);
             _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
             const all_int = av == .int and bv == .int;
-            try vms.vmPush(if (all_int) .{ .int = @min(a, b) } else .{ .float = @min(a, b) });
+            try vms.vmPush(if (all_int) .{ .int = @intFromFloat(@min(a, b)) } else .{ .float = @min(a, b) });
         },
         .math_mod => {
 
@@ -230,7 +230,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const n = try vms.valueAsNumber(v);
             _ = try vms.vmPop(); _ = try vms.vmPop();
             const sign: f64 = if (n > 0) 1.0 else if (n < 0) -1.0 else 0.0;
-            try vms.vmPush(if (v == .int) .{ .int = sign } else .{ .float = sign });
+            try vms.vmPush(if (v == .int) .{ .int = @intFromFloat(sign) } else .{ .float = sign });
         },
         .math_sin => {
 

@@ -43,10 +43,10 @@ pub fn timeBuildObj(ms: f64) !Value {
 pub fn timeGetMs(val: Value) !f64 {
     const uv = vms.unboxNamed(val);
     return switch (uv) {
-        .int => |n| if (n == n) n else return error.TypeError,
+        .int => |n| @floatFromInt(n),
         .float => |n| if (n == n) n else return error.TypeError,
         .object => |obj| switch (obj.*) {
-            .named_value => |nv| if (nv.value == .int) nv.value.int else if (nv.value == .float) nv.value.float else return error.TypeError,
+            .named_value => |nv| if (nv.value == .int) @floatFromInt(nv.value.int) else if (nv.value == .float) nv.value.float else return error.TypeError,
             else => return error.TypeError,
         },
         else => return error.TypeError,
@@ -420,8 +420,8 @@ pub fn timeIsoWeek(ms: f64) !Value {
     obj.* = .{ .map = &[_]MapEntry{} };
     try vms.pushTempRoot(.{ .object = obj });
     defer vms.popTempRoot();
-    entries[0] = .{ .key = .{ .string = "year" }, .value = .{ .int = @floatFromInt(iso_year) } };
-    entries[1] = .{ .key = .{ .string = "week" }, .value = .{ .int = @floatFromInt(week) } };
+    entries[0] = .{ .key = .{ .string = "year" }, .value = .{ .int = iso_year } };
+    entries[1] = .{ .key = .{ .string = "week" }, .value = .{ .int = week } };
     obj.* = .{ .map_managed = entries[0..2] };
     return .{ .object = obj };
 }
@@ -660,14 +660,14 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             obj.* = .{ .map = &[_]MapEntry{} };
             try vms.pushTempRoot(.{ .object = obj });
             defer vms.popTempRoot();
-            entries[0] = .{ .key = .{ .string = "year" }, .value = .{ .int = @floatFromInt(p.year) } };
-            entries[1] = .{ .key = .{ .string = "month" }, .value = .{ .int = @floatFromInt(p.month) } };
-            entries[2] = .{ .key = .{ .string = "day" }, .value = .{ .int = @floatFromInt(p.day) } };
-            entries[3] = .{ .key = .{ .string = "hour" }, .value = .{ .int = @floatFromInt(p.hour) } };
-            entries[4] = .{ .key = .{ .string = "min" }, .value = .{ .int = @floatFromInt(p.min) } };
-            entries[5] = .{ .key = .{ .string = "sec" }, .value = .{ .int = @floatFromInt(p.sec) } };
-            entries[6] = .{ .key = .{ .string = "ms" }, .value = .{ .int = @floatFromInt(p.ms) } };
-            entries[7] = .{ .key = .{ .string = "weekday" }, .value = .{ .int = @floatFromInt(p.weekday) } };
+            entries[0] = .{ .key = .{ .string = "year" }, .value = .{ .int = p.year } };
+            entries[1] = .{ .key = .{ .string = "month" }, .value = .{ .int = p.month } };
+            entries[2] = .{ .key = .{ .string = "day" }, .value = .{ .int = p.day } };
+            entries[3] = .{ .key = .{ .string = "hour" }, .value = .{ .int = p.hour } };
+            entries[4] = .{ .key = .{ .string = "min" }, .value = .{ .int = p.min } };
+            entries[5] = .{ .key = .{ .string = "sec" }, .value = .{ .int = p.sec } };
+            entries[6] = .{ .key = .{ .string = "ms" }, .value = .{ .int = p.ms } };
+            entries[7] = .{ .key = .{ .string = "weekday" }, .value = .{ .int = p.weekday } };
             obj.* = .{ .map_managed = entries[0..field_count] };
             _ = try vms.vmPop(); _ = try vms.vmPop();
             try vms.vmPush(.{ .object = obj });

@@ -267,7 +267,7 @@ fn printValueDepth(v: Value, depth: u32, ancestors: *[PrintMaxDepth]*const vmod.
         return;
     }
     switch (v) {
-        .int => |n| writeF64(n),
+        .int => |n| writeInt(n),
         .float => |n| writeF64(n),
         .decimal => unreachable,
         .rune => |r| writeUint(r),

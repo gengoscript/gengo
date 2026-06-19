@@ -174,7 +174,7 @@ pub const VTag = enum { int, float, decimal, rune, boolean, string, error_value,
 /// Violating this invariant causes use-after-free or aliasing bugs when the
 /// GC or a native reuses the backing memory.
 pub const Value = union(VTag) {
-    int: f64,
+    int: i64,
     float: f64,
     decimal: i64,
     rune: u21,
@@ -242,8 +242,8 @@ pub const Value = union(VTag) {
         }
         if (@as(VTag, a) != @as(VTag, b)) {
             if ((a == .int and b == .float) or (a == .float and b == .int)) {
-                const an = if (a == .int) a.int else a.float;
-                const bn = if (b == .int) b.int else b.float;
+                const an: f64 = if (a == .int) @floatFromInt(a.int) else a.float;
+                const bn: f64 = if (b == .int) @floatFromInt(b.int) else b.float;
                 return an == bn;
             }
             return false;

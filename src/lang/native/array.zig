@@ -220,7 +220,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             var result: Value = .{ .int = -1 };
             for (items, 0..) |item, i| {
                 const ok = try vm.callFunction(fn_val, &.{item});
-                if (try predBool(ok)) { result = .{ .int = @floatFromInt(i) }; break; }
+                if (try predBool(ok)) { result = .{ .int = @intCast(i) }; break; }
             }
             _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
             try vms.vmPush(result);

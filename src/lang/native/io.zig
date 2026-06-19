@@ -43,23 +43,7 @@ fn sprintValueDepth(buf_or_null: ?[]u8, v: Value, depth: u32, ancestors: *[Print
         },
         .decimal => unreachable,
         .int => |n| {
-            if (n == @trunc(n) and !std.math.isInf(n) and n == n) {
-                if (n < @as(f64, @floatFromInt(std.math.minInt(i64))) or n >= std.math.pow(f64, 2.0, 63.0)) return error.TypeError;
-                const i = @as(i64, @intFromFloat(n));
-                var tmp: [32]u8 = undefined;
-                const s = std.fmt.bufPrint(tmp[0..], "{d}", .{i}) catch return error.TypeError;
-                if (buf_or_null) |buf| @memcpy(buf[0..s.len], s);
-                return s.len;
-            }
-            if (n != n) {
-                if (buf_or_null) |buf| @memcpy(buf[0..], "NaN");
-                return 3;
-            }
-            if (std.math.isInf(n)) {
-                if (buf_or_null) |buf| @memcpy(buf[0..], if (n < 0) "-Inf" else "Inf");
-                return if (n < 0) 4 else 3;
-            }
-            var tmp: [64]u8 = undefined;
+            var tmp: [32]u8 = undefined;
             const s = std.fmt.bufPrint(tmp[0..], "{d}", .{n}) catch return error.TypeError;
             if (buf_or_null) |buf| @memcpy(buf[0..s.len], s);
             return s.len;
@@ -589,9 +573,8 @@ fn fmtArg(scratch: *[2048]u8, arg: Value, spec: FmtSpec) ![]const u8 {
             const r: u21 = switch (arg) {
                 .rune => |rv| rv,
                 .int => |n| blk: {
-                    const iv = @as(i64, @intFromFloat(n));
-                    if (iv < 0 or iv > 0x10FFFF) return error.TypeError;
-                    break :blk @intCast(iv);
+                    if (n < 0 or n > 0x10FFFF) return error.TypeError;
+                    break :blk @intCast(n);
                 },
                 else => return error.TypeError,
             };

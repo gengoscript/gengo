@@ -546,7 +546,7 @@ pub fn tplExec(tmpl: *Object, data: Value) !Value {
     while (ip < ops.len) {
         const op_v = ops[ip];
         if (op_v != .int and op_v != .float) return error.TypeError;
-        const op_num = if (op_v == .int) op_v.int else op_v.float;
+        const op_num: f64 = if (op_v == .int) @floatFromInt(op_v.int) else op_v.float;
         if (op_num < 0 or op_num > 14) return error.TypeError;
         const op: TplOp = @enumFromInt(@as(u8, @intFromFloat(op_num)));
         const arg = args[ip];
@@ -588,7 +588,7 @@ pub fn tplExec(tmpl: *Object, data: Value) !Value {
                 };
                 if (!cond_bool) {
                     const jv = jmps[ip];
-                    const jv_num = if (jv == .int) jv.int else if (jv == .float) jv.float else return error.TypeError;
+                    const jv_num: f64 = if (jv == .int) @floatFromInt(jv.int) else if (jv == .float) jv.float else return error.TypeError;
                     if (jv_num < 0 or jv_num >= @as(f64, @floatFromInt(ops.len))) return error.TypeError;
                     ip = @intFromFloat(jv_num);
                 } else {
@@ -597,13 +597,13 @@ pub fn tplExec(tmpl: *Object, data: Value) !Value {
             },
             .if_else => {
                 const jv = jmps[ip];
-                const jv_num = if (jv == .int) jv.int else if (jv == .float) jv.float else return error.TypeError;
+                const jv_num: f64 = if (jv == .int) @floatFromInt(jv.int) else if (jv == .float) jv.float else return error.TypeError;
                 if (jv_num < 0 or jv_num >= @as(f64, @floatFromInt(ops.len))) return error.TypeError;
                 ip = @intFromFloat(jv_num);
             },
             .end => {
                 const jv = jmps[ip];
-                const jv_num = if (jv == .int) jv.int else if (jv == .float) jv.float else null;
+                const jv_num: ?f64 = if (jv == .int) @floatFromInt(jv.int) else if (jv == .float) jv.float else null;
                 if (jv_num != null and jv_num.? == -2) {
                     if (iter_top > 0) {
                         const iter_idx = iter_top - 1;
@@ -620,8 +620,8 @@ pub fn tplExec(tmpl: *Object, data: Value) !Value {
                     } else {
                         ip += 1;
                     }
-                } else if ((jv == .int or jv == .float) and (if (jv == .int) jv.int else jv.float) < 0 and (if (jv == .int) jv.int else jv.float) > -@as(f64, @floatFromInt(std.math.maxInt(usize)))) {
-                    const pop = @as(usize, @intFromFloat(-(if (jv == .int) jv.int else jv.float)));
+                } else if ((jv == .int or jv == .float) and (if (jv == .int) @as(f64, @floatFromInt(jv.int)) else jv.float) < 0 and (if (jv == .int) @as(f64, @floatFromInt(jv.int)) else jv.float) > -@as(f64, @floatFromInt(std.math.maxInt(usize)))) {
+                    const pop = @as(usize, @intFromFloat(-(if (jv == .int) @as(f64, @floatFromInt(jv.int)) else jv.float)));
                     if (scope_top >= pop) scope_top -= pop;
                     ip += 1;
                 } else {
@@ -643,25 +643,25 @@ pub fn tplExec(tmpl: *Object, data: Value) !Value {
                             ip += 1;
                         } else {
                             const jv = jmps[ip];
-                    if ((jv != .int and jv != .float) or (if (jv == .int) jv.int else jv.float) < 0 or (if (jv == .int) jv.int else jv.float) >= @as(f64, @floatFromInt(ops.len))) return error.TypeError;
-                    ip = @intFromFloat(if (jv == .int) jv.int else jv.float);
+                    if ((jv != .int and jv != .float) or (if (jv == .int) @as(f64, @floatFromInt(jv.int)) else jv.float) < 0 or (if (jv == .int) @as(f64, @floatFromInt(jv.int)) else jv.float) >= @as(f64, @floatFromInt(ops.len))) return error.TypeError;
+                    ip = @intFromFloat(if (jv == .int) @as(f64, @floatFromInt(jv.int)) else jv.float);
                         }
                     } else {
                         const jv = jmps[ip];
-                        const jv_num = if (jv == .int) jv.int else if (jv == .float) jv.float else return error.TypeError;
+                    const jv_num: f64 = if (jv == .int) @floatFromInt(jv.int) else if (jv == .float) jv.float else return error.TypeError;
                         if (jv_num < 0 or jv_num >= @as(f64, @floatFromInt(ops.len))) return error.TypeError;
                         ip = @intFromFloat(jv_num);
                     }
                 } else {
                     const jv = jmps[ip];
-                    const jv_num = if (jv == .int) jv.int else if (jv == .float) jv.float else return error.TypeError;
+                    const jv_num: f64 = if (jv == .int) @floatFromInt(jv.int) else if (jv == .float) jv.float else return error.TypeError;
                     if (jv_num < 0 or jv_num >= @as(f64, @floatFromInt(ops.len))) return error.TypeError;
                     ip = @intFromFloat(jv_num);
                 }
             },
             .range_else => {
                 const jv = jmps[ip];
-                const jv_num = if (jv == .int) jv.int else if (jv == .float) jv.float else return error.TypeError;
+                const jv_num: f64 = if (jv == .int) @floatFromInt(jv.int) else if (jv == .float) jv.float else return error.TypeError;
                 if (jv_num < 0 or jv_num >= @as(f64, @floatFromInt(ops.len))) return error.TypeError;
                 ip = @intFromFloat(jv_num);
             },

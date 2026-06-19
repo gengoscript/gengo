@@ -32,13 +32,7 @@ fn writeConst(idx: u16) void {
         return;
     };
     switch (v) {
-        .int => |n| {
-            if (n == @trunc(n) and n >= -1e15 and n <= 1e15) {
-                io.writeInt(@intFromFloat(n));
-            } else {
-                io.writeF64(n);
-            }
-        },
+        .int => |n| io.writeInt(n),
         .float => |n| io.writeF64(n),
         .decimal => |n| io.writeInt(n),
         .rune => |r| {

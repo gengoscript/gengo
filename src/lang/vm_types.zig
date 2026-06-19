@@ -425,13 +425,13 @@ pub fn constructNamedType(typ_obj: *Object, arg: Value) !Value {
                         }
                         return err;
                     };
-                    base_v = .{ .int = wrapped };
+                    base_v = .{ .int = @intFromFloat(wrapped) };
                 } else {
                     setNamedRangeError(typ_obj, n);
                     return error.RangeError;
                 }
             } else {
-                base_v = .{ .int = n };
+                base_v = .{ .int = @intFromFloat(n) };
             }
         },
         .float => {
@@ -471,7 +471,7 @@ pub fn constructNamedType(typ_obj: *Object, arg: Value) !Value {
             const factor = std.math.pow(f64, 10.0, @floatFromInt(scale));
             const scaled: i64 = switch (effective_arg) {
                 .int => |n| blk: {
-                    const raw = @round(n * factor);
+                    const raw = @round(@as(f64, @floatFromInt(n)) * factor);
                     if (!std.math.isFinite(raw)) return error.TypeError;
                     if (raw < -std.math.pow(f64, 2.0, 63.0) or raw >= std.math.pow(f64, 2.0, 63.0)) return error.TypeError;
                     break :blk @intFromFloat(raw);
@@ -508,9 +508,8 @@ pub fn constructNamedType(typ_obj: *Object, arg: Value) !Value {
             const r: u21 = switch (effective_arg) {
                 .rune => |rv| rv,
                 .int => |n| blk: {
-                    const t = @trunc(n);
-                    if (t != n or t < 0) return error.TypeError;
-                    break :blk @intFromFloat(t);
+                    if (n < 0 or n > 0x10FFFF) return error.TypeError;
+                    break :blk @intCast(n);
                 },
                 .float => |n| blk: {
                     if (!std.math.isFinite(n)) {
@@ -602,7 +601,7 @@ pub fn coerceNamedTypeResult(typ_obj: *Object, arg: Value) !Value {
                 }
                 return err;
             };
-            return makeNamedValue(typ_obj, .{ .int = wrapped });
+            return makeNamedValue(typ_obj, .{ .int = @intFromFloat(wrapped) });
         },
         .float => {
             const n = try vms.valueAsNumber(arg);
@@ -635,13 +634,13 @@ pub fn applyNamedTypeFn(typ_obj: *Object, kind: @import("value.zig").NamedTypeFn
     const result = n + delta;
     if (result == n) { vms.setRuntimeErr("cannot increment non-finite or very large value", .{}); announcePanicMsg(); return error.RangeError; }
     if (nt.is_cycle) {
-        return makeNamedValue(typ_obj, if (nt.base == .float) .{ .float = try wrapCycleValue(nt.min, nt.max, result, true) } else .{ .int = try wrapCycleValue(nt.min, nt.max, result, false) });
+        return makeNamedValue(typ_obj, if (nt.base == .float) .{ .float = try wrapCycleValue(nt.min, nt.max, result, true) } else .{ .int = @intFromFloat(try wrapCycleValue(nt.min, nt.max, result, false)) });
     } else {
         if (result < nt.min or result > nt.max) {
             setNamedRangeError(typ_obj, result);
             return error.RangeError;
         }
-        return makeNamedValue(typ_obj, if (nt.base == .float) .{ .float = result } else .{ .int = result });
+        return makeNamedValue(typ_obj, if (nt.base == .float) .{ .float = result } else .{ .int = @intFromFloat(result) });
     }
 }
 
