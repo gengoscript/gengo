@@ -40,6 +40,18 @@ pub const Op = enum(u8) {
     // Layout: [op][slot][skip=const_lt_byte][idx_hi][idx_lo][jmp_hi][jmp_lo]
     // Emitted when get_local_const_lt immediately precedes jif_pop.
     get_local_const_lt_jif_pop,
+    // Triple-fused get_global+constant+binop. 8-byte layout:
+    // [op][glob_hi][glob_lo][ic_hi][ic_lo][skip][val_hi][val_lo]
+    // Emitted when get_global immediately precedes a const_eq, const_sub, const_add, or const_lt.
+    get_global_const_eq,
+    get_global_const_sub,
+    get_global_const_add,
+    get_global_const_lt,
+    // Quad-fused get_global+constant+eq|lt+jif_pop: 12-byte conditional branch.
+    // Layout: [op][glob_hi][glob_lo][ic_hi][ic_lo][skip][val_hi][val_lo][jmp_b3][jmp_b2][jmp_b1][jmp_b0]
+    // Emitted when get_global_const_eq|lt immediately precedes jif_pop.
+    get_global_const_eq_jif_pop,
+    get_global_const_lt_jif_pop,
     // Fused get_local+get_field: 8-byte load-and-read-field.
     // Layout: [op][slot][skip=get_field_byte][name_hi][name_lo][ic_type_hi][ic_type_lo][ic_fidx]
     // Emitted when get_local immediately precedes get_field.
