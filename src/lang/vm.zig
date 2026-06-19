@@ -544,6 +544,71 @@ fn variantValueFieldValue(vv: vmod.VariantValueObj, name: []const u8) !Value {
     return error.TypeError;
 }
 
+const MethodResolution = struct {
+    func: Value,
+    pass_recv: bool,
+};
+
+fn resolveQualifiedReceiverMethod(qualified_name: []const u8, mname: []const u8) !Value {
+    const total = qualified_name.len + 1 + mname.len;
+    if (total > 512) return error.NotAMethodReceiver;
+    var key_buf: [512]u8 = undefined;
+    @memcpy(key_buf[0..qualified_name.len], qualified_name);
+    key_buf[qualified_name.len] = '.';
+    @memcpy(key_buf[qualified_name.len + 1 .. total], mname);
+    return globals.get(key_buf[0..total]) orelse error.UnknownMethod;
+}
+
+fn resolveStructMethod(inst: vmod.StructInstanceObj, mname: []const u8) !MethodResolution {
+    if (resolveQualifiedReceiverMethod(inst.typ.struct_type.qualified_name, mname)) |method_func| {
+        return .{ .func = method_func, .pass_recv = true };
+    } else |err| switch (err) {
+        error.UnknownMethod => {
+            const fi = vmtyp.findFieldIndex(inst.typ.struct_type.fields, mname) orelse {
+                if (isModuleNamespaceStruct(inst.typ)) return error.UnknownStructField;
+                return error.UnknownMethod;
+            };
+            return .{ .func = inst.fields[fi].value, .pass_recv = false };
+        },
+        else => return err,
+    }
+}
+
+fn resolveMapMethod(obj: *Object, mname: []const u8) !Value {
+    const items = try vms.asMapSlice(obj);
+    var i: usize = 0;
+    while (i < items.len) : (i += 1) {
+        if (vms.isStringValue(items[i].key) and common.streq(try vms.asStringValue(items[i].key), mname)) {
+            return items[i].value;
+        }
+    }
+    return error.UnknownMethod;
+}
+
+fn resolveMethodReceiver(recv: Value, mname: []const u8) !MethodResolution {
+    if (recv != .object) return error.NotAMethodReceiver;
+    switch (recv.object.*) {
+        .struct_instance => |inst| return try resolveStructMethod(inst, mname),
+        .map, .map_managed, .map_hashed => {
+            return .{ .func = try resolveMapMethod(recv.object, mname), .pass_recv = false };
+        },
+        .named_value => |nv| {
+            const qualified_name = switch (nv.typ.*) {
+                .named_type => |nt| nt.qualified_name,
+                else => return error.NotAMethodReceiver,
+            };
+            return .{ .func = try resolveQualifiedReceiverMethod(qualified_name, mname), .pass_recv = true };
+        },
+        .enum_value => |ev| {
+            return .{ .func = try resolveQualifiedReceiverMethod(ev.typ.enum_type.qualified_name, mname), .pass_recv = true };
+        },
+        .variant_value => |vv| {
+            return .{ .func = try resolveQualifiedReceiverMethod(vv.typ.variant_type.qualified_name, mname), .pass_recv = true };
+        },
+        else => return error.NotAMethodReceiver,
+    }
+}
+
 fn checkNamedTypePredicate(nt_obj: *Object, inner: Value) !void {
     if (comptime !build_options.predicates) return;
     if (!vmState().policy.enable_predicates) return;
@@ -1271,31 +1336,14 @@ fn opInvokeMethod() !void {
     switch (recv.object.*) {
         .struct_instance => |inst| {
             const tpi = heap.objectPoolIndex(inst.typ);
-            var func: Value = undefined;
-            var pass_recv = true;
+            var resolved: MethodResolution = undefined;
             if (ic_type_idx == @as(usize, tpi) and ic_func_idx != 0xFFFF) {
                 if (ic_func_idx >= heap.MaxObjects) return error.NotAMethodReceiver;
-                func = .{ .object = heap.objectAt(@intCast(ic_func_idx)) };
+                resolved = .{ .func = .{ .object = heap.objectAt(@intCast(ic_func_idx)) }, .pass_recv = true };
             } else {
-                const tname = inst.typ.struct_type.qualified_name;
-                const total = tname.len + 1 + mname.len;
-                if (total > 512) return error.NotAMethodReceiver;
-                var key_buf: [512]u8 = undefined;
-                @memcpy(key_buf[0..tname.len], tname);
-                key_buf[tname.len] = '.';
-                @memcpy(key_buf[tname.len + 1 .. total], mname);
-                if (globals.get(key_buf[0..total])) |method_func| {
-                    func = method_func;
-                } else {
-                    const fi = vmtyp.findFieldIndex(inst.typ.struct_type.fields, mname) orelse {
-                        if (isModuleNamespaceStruct(inst.typ)) return error.UnknownStructField;
-                        return error.UnknownMethod;
-                    };
-                    func = inst.fields[fi].value;
-                    pass_recv = false;
-                }
-                if (pass_recv and func == .object) {
-                    const fpi = heap.objectPoolIndex(func.object);
+                resolved = try resolveStructMethod(inst, mname);
+                if (resolved.pass_recv and resolved.func == .object) {
+                    const fpi = heap.objectPoolIndex(resolved.func.object);
                     if (fpi != 0xFFFF) {
                         chunk.patchByte(ic_base + 0, @intCast((tpi >> 8) & 0xFF));
                         chunk.patchByte(ic_base + 1, @intCast(tpi & 0xFF));
@@ -1304,7 +1352,7 @@ fn opInvokeMethod() !void {
                     }
                 }
             }
-            if (pass_recv) {
+            if (resolved.pass_recv) {
                 if (vmState().stack_top >= vmState().stack.len) return error.StackOverflow;
                 var i: usize = vmState().stack_top;
                 while (i > recv_idx + 1) {
@@ -1312,26 +1360,17 @@ fn opInvokeMethod() !void {
                     i -= 1;
                 }
                 vmState().stack_top += 1;
-                vmState().stack[recv_idx] = func;
+                vmState().stack[recv_idx] = resolved.func;
                 vmState().stack[recv_idx + 1] = recv;
                 try performCall(argc + 1);
             } else {
-                vmState().stack[recv_idx] = func;
+                vmState().stack[recv_idx] = resolved.func;
                 try performCall(argc);
             }
         },
         .map, .map_managed, .map_hashed => {
-            const items = try vms.asMapSlice(recv.object);
-            var i: usize = 0;
-            var maybe: ?Value = null;
-            while (i < items.len) : (i += 1) {
-                if (vms.isStringValue(items[i].key) and common.streq(try vms.asStringValue(items[i].key), mname)) {
-                    maybe = items[i].value;
-                    break;
-                }
-            }
-            const func = maybe orelse return error.UnknownMethod;
-            vmState().stack[recv_idx] = func;
+            const resolved = try resolveMethodReceiver(recv, mname);
+            vmState().stack[recv_idx] = resolved.func;
             try performCall(argc);
         },
         .variant_type => |vt| {
@@ -1402,56 +1441,35 @@ fn opInvokeMethod() !void {
             } else return error.UnknownMethod;
         },
         .named_value => |nv| {
-            const tname = switch (nv.typ.*) {
-                .named_type => |nt| nt.qualified_name,
-                else => return error.NotAMethodReceiver,
-            };
-            const total = tname.len + 1 + mname.len;
-            if (total > 512) return error.NotAMethodReceiver;
-            var key_buf: [512]u8 = undefined;
-            @memcpy(key_buf[0..tname.len], tname);
-            key_buf[tname.len] = '.';
-            @memcpy(key_buf[tname.len + 1 .. total], mname);
-            const func = globals.get(key_buf[0..total]) orelse return error.UnknownMethod;
             if (vmState().stack_top >= vmState().stack.len) return error.StackOverflow;
+            _ = nv;
+            const resolved = try resolveMethodReceiver(recv, mname);
             var si: usize = vmState().stack_top;
             while (si > recv_idx + 1) : (si -= 1) vmState().stack[si] = vmState().stack[si - 1];
             vmState().stack_top += 1;
-            vmState().stack[recv_idx] = func;
+            vmState().stack[recv_idx] = resolved.func;
             vmState().stack[recv_idx + 1] = recv;
             try performCall(argc + 1);
         },
         .enum_value => |ev| {
-            const tname = ev.typ.enum_type.qualified_name;
-            const total = tname.len + 1 + mname.len;
-            if (total > 512) return error.NotAMethodReceiver;
-            var key_buf: [512]u8 = undefined;
-            @memcpy(key_buf[0..tname.len], tname);
-            key_buf[tname.len] = '.';
-            @memcpy(key_buf[tname.len + 1 .. total], mname);
-            const func = globals.get(key_buf[0..total]) orelse return error.UnknownMethod;
             if (vmState().stack_top >= vmState().stack.len) return error.StackOverflow;
+            _ = ev;
+            const resolved = try resolveMethodReceiver(recv, mname);
             var si: usize = vmState().stack_top;
             while (si > recv_idx + 1) : (si -= 1) vmState().stack[si] = vmState().stack[si - 1];
             vmState().stack_top += 1;
-            vmState().stack[recv_idx] = func;
+            vmState().stack[recv_idx] = resolved.func;
             vmState().stack[recv_idx + 1] = recv;
             try performCall(argc + 1);
         },
         .variant_value => |vv| {
-            const tname = vv.typ.variant_type.qualified_name;
-            const total = tname.len + 1 + mname.len;
-            if (total > 512) return error.NotAMethodReceiver;
-            var key_buf: [512]u8 = undefined;
-            @memcpy(key_buf[0..tname.len], tname);
-            key_buf[tname.len] = '.';
-            @memcpy(key_buf[tname.len + 1 .. total], mname);
-            const func = globals.get(key_buf[0..total]) orelse return error.UnknownMethod;
             if (vmState().stack_top >= vmState().stack.len) return error.StackOverflow;
+            _ = vv;
+            const resolved = try resolveMethodReceiver(recv, mname);
             var si: usize = vmState().stack_top;
             while (si > recv_idx + 1) : (si -= 1) vmState().stack[si] = vmState().stack[si - 1];
             vmState().stack_top += 1;
-            vmState().stack[recv_idx] = func;
+            vmState().stack[recv_idx] = resolved.func;
             vmState().stack[recv_idx + 1] = recv;
             try performCall(argc + 1);
         },
@@ -1652,78 +1670,13 @@ fn opDeferInvokeMethod() !void {
     if (vmState().stack_top < @as(usize, argc) + 1) return error.StackUnderflow;
     const recv_idx = vmState().stack_top - @as(usize, argc) - 1;
     const recv = vmState().stack[recv_idx];
-    if (recv != .object) return error.NotAMethodReceiver;
     var func: Value = undefined;
     var pass_recv: bool = undefined;
     switch (recv.object.*) {
-        .struct_instance => |inst| {
-            const tname = inst.typ.struct_type.qualified_name;
-            const key_total = tname.len + 1 + mname.len;
-            if (key_total > 512) return error.NotAMethodReceiver;
-            var key_buf: [512]u8 = undefined;
-            @memcpy(key_buf[0..tname.len], tname);
-            key_buf[tname.len] = '.';
-            @memcpy(key_buf[tname.len + 1 .. key_total], mname);
-            if (globals.get(key_buf[0..key_total])) |method_func| {
-                func = method_func;
-                pass_recv = true;
-            } else {
-                const fi = vmtyp.findFieldIndex(inst.typ.struct_type.fields, mname) orelse {
-                    if (isModuleNamespaceStruct(inst.typ)) return error.UnknownStructField;
-                    return error.UnknownMethod;
-                };
-                func = inst.fields[fi].value;
-                pass_recv = false;
-            }
-        },
-        .map, .map_managed, .map_hashed => {
-            const map_items = try vms.asMapSlice(recv.object);
-            var found: ?Value = null;
-            var mi: usize = 0;
-            while (mi < map_items.len) : (mi += 1) {
-                if (vms.isStringValue(map_items[mi].key)) {
-                    const ks = vms.asStringValue(map_items[mi].key) catch continue;
-                    if (common.streq(ks, mname)) { found = map_items[mi].value; break; }
-                }
-            }
-            func = found orelse return error.UnknownMethod;
-            pass_recv = false;
-        },
-        .named_value => |nv| {
-            const tname = switch (nv.typ.*) {
-                .named_type => |nt| nt.qualified_name,
-                else => return error.NotAMethodReceiver,
-            };
-            const key_total = tname.len + 1 + mname.len;
-            if (key_total > 512) return error.NotAMethodReceiver;
-            var key_buf: [512]u8 = undefined;
-            @memcpy(key_buf[0..tname.len], tname);
-            key_buf[tname.len] = '.';
-            @memcpy(key_buf[tname.len + 1 .. key_total], mname);
-            func = globals.get(key_buf[0..key_total]) orelse return error.UnknownMethod;
-            pass_recv = true;
-        },
-        .enum_value => |ev| {
-            const tname = ev.typ.enum_type.qualified_name;
-            const key_total = tname.len + 1 + mname.len;
-            if (key_total > 512) return error.NotAMethodReceiver;
-            var key_buf: [512]u8 = undefined;
-            @memcpy(key_buf[0..tname.len], tname);
-            key_buf[tname.len] = '.';
-            @memcpy(key_buf[tname.len + 1 .. key_total], mname);
-            func = globals.get(key_buf[0..key_total]) orelse return error.UnknownMethod;
-            pass_recv = true;
-        },
-        .variant_value => |vv| {
-            const tname = vv.typ.variant_type.qualified_name;
-            const key_total = tname.len + 1 + mname.len;
-            if (key_total > 512) return error.NotAMethodReceiver;
-            var key_buf: [512]u8 = undefined;
-            @memcpy(key_buf[0..tname.len], tname);
-            key_buf[tname.len] = '.';
-            @memcpy(key_buf[tname.len + 1 .. key_total], mname);
-            func = globals.get(key_buf[0..key_total]) orelse return error.UnknownMethod;
-            pass_recv = true;
+        .struct_instance, .map, .map_managed, .map_hashed, .named_value, .enum_value, .variant_value => {
+            const resolved = try resolveMethodReceiver(recv, mname);
+            func = resolved.func;
+            pass_recv = resolved.pass_recv;
         },
         else => return error.NotAMethodReceiver,
     }

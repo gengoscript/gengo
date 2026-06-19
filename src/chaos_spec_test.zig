@@ -190,6 +190,50 @@ test "access parity: variant value dot and index field lookup agree" {
     );
 }
 
+test "invoke parity: immediate and deferred method dispatch agree" {
+    try expectInlineOutput(
+        \\std := import("std")
+        \\
+        \\type UserId string
+        \\func (u UserId) emit() {
+        \\    std.io.println("user:" + string(u))
+        \\}
+        \\
+        \\type Shape variant {
+        \\    circle(radius int),
+        \\    point,
+        \\}
+        \\func (s Shape) emit() {
+        \\    switch s {
+        \\        case .circle(v) { std.io.println("shape:", v) }
+        \\        case .point { std.io.println("shape:point") }
+        \\    }
+        \\}
+        \\
+        \\func outer() {
+        \\    uid := UserId("alice")
+        \\    shape := Shape.circle(7)
+        \\    m := { "emit": func() { std.io.println("map:ok") } }
+        \\    defer uid.emit()
+        \\    defer shape.emit()
+        \\    defer m.emit()
+        \\    uid.emit()
+        \\    shape.emit()
+        \\    m.emit()
+        \\}
+        \\
+        \\outer()
+    ,
+        \\user:alice
+        \\shape:7
+        \\map:ok
+        \\map:ok
+        \\shape:7
+        \\user:alice
+        \\
+    );
+}
+
 // ── Chaos pass cases ───────────────────────────────────────────────────────
 
 test "chaos pass cases" {
