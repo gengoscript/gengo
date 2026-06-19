@@ -8,6 +8,7 @@ const Compiler = @import("lang/compiler.zig").Compiler;
 const vms = @import("lang/vm_state.zig");
 const vmnative = @import("lang/vm_native.zig");
 const host_abi = @import("lang/native/host_abi.zig");
+const vm_defuse = @import("lang/vm_defuse.zig");
 
 fn writeAll(fd: std.os.wasi.fd_t, s: []const u8) void {
     var off: usize = 0;
@@ -328,6 +329,118 @@ fn fuzzStackHeapBoundaries() void {
     out("  stack/heap boundary fuzz: OK\n");
 }
 
+// ── Differential: defused vs fused execution must agree ─────────────────────
+
+const OutcomeTag = enum { ok, type_error, range_error, not_defined, predicate_error, other };
+
+fn classifyErr(e: anyerror) OutcomeTag {
+    return switch (e) {
+        error.TypeError        => .type_error,
+        error.RangeError       => .range_error,
+        error.NotDefined       => .not_defined,
+        error.PredicateError   => .predicate_error,
+        else                   => .other,
+    };
+}
+
+fn runNormal(src: []const u8) OutcomeTag {
+    resetAll();
+    var c = Compiler.init(src, .{});
+    c.compile(true) catch return .other;
+    chunk.emitOp(.halt, 1) catch return .other;
+    vm.run() catch |e| return classifyErr(e);
+    return .ok;
+}
+
+fn runDefused(src: []const u8) OutcomeTag {
+    resetAll();
+    var c = Compiler.init(src, .{});
+    c.compile(true) catch return .other;
+    chunk.emitOp(.halt, 1) catch return .other;
+
+    const alloc = std.heap.page_allocator;
+    const defused = vm_defuse.buildDefusedCode(alloc) catch return .other;
+    defer alloc.free(defused);
+
+    @memcpy(chunk.g_state.code[0..defused.len], defused);
+    chunk.g_state.code_len = defused.len;
+
+    vm.run() catch |e| return classifyErr(e);
+    return .ok;
+}
+
+fn fuzzDifferential() void {
+    const programs = [_][]const u8{
+        // C-for loop: exercises get_local_const_lt_jif_pop, local_add_const, set_global_loop
+        \\var s = 0
+        \\for i := 0; i < 10; i++ {
+        \\    s = s + i
+        \\}
+        ,
+        // Recursion: exercises get_local_ret, add_ret, get_local_const_sub, const_lt
+        \\func fib(n int) int {
+        \\    if n < 2 { return n }
+        \\    return fib(n - 1) + fib(n - 2)
+        \\}
+        \\fib(8)
+        ,
+        // Named type range: exercises RangeError path
+        \\type Score int range 0..100
+        \\Score(50)
+        ,
+        // Field access: exercises get_local_get_field, invoke_method IC
+        \\var m = {"a": 1, "b": 2}
+        \\m["a"]
+        ,
+        // Struct fields: exercises get_field / set_field IC
+        \\struct Point { x int, y int }
+        \\var p = Point{x: 3, y: 4}
+        \\p.x + p.y
+        ,
+        // Named type arithmetic via subtype: exercises namedTypeCommonAncestor
+        \\type Pct int range 0..100
+        \\subtype Hi Pct range 60..100
+        \\subtype Lo Pct range 0..59
+        \\var a = Hi(70)
+        \\var b = Lo(30)
+        \\Pct(int(a) + int(b))
+        ,
+        // For-in: exercises iter_next2, break stack discipline
+        \\var arr = [1, 2, 3, 4, 5]
+        \\var total = 0
+        \\for v in arr {
+        \\    total = total + v
+        \\}
+        ,
+        // Global variable with loop counter: exercises set_global_loop
+        \\var count = 0
+        \\for count = 0; count < 5; count++ {
+        \\}
+        ,
+        // Closure: exercises make_closure, get_upvalue, set_upvalue
+        \\func counter() func() int {
+        \\    var n = 0
+        \\    return func() int {
+        \\        n = n + 1
+        \\        return n
+        \\    }
+        \\}
+        \\var c = counter()
+        \\c()
+        \\c()
+        ,
+    };
+
+    for (programs) |src| {
+        const norm = runNormal(src);
+        const defu = runDefused(src);
+        if (norm != defu) {
+            fail("differential FAIL: fused and defused outcomes diverge\n");
+        }
+    }
+    out("  differential fuzz: OK\n");
+}
+
 // ── Main ────────────────────────────────────────────────────────────────────
 
 export fn _start() void {
@@ -338,6 +451,7 @@ export fn _start() void {
     fuzzNamedTypeBoundaries();
     fuzzForInNesting();
     fuzzStackHeapBoundaries();
+    fuzzDifferential();
     out("fuzz OK\n");
     std.os.wasi.proc_exit(0);
 }
