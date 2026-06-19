@@ -216,8 +216,8 @@ fn valueAsNumberForOp(v: Value, other: Value, op: []const u8) !f64 {
 // Ordering comparisons follow the same strictness as arithmetic: raw int
 // and float do not mix (Ada/Go draw this line at typed values too).
 fn checkComparableNumeric(a: Value, b: Value, op: []const u8) !void {
-    const ea = if (a == .object and a.object.* == .named_value) a.object.named_value.value else a;
-    const eb = if (b == .object and b.object.* == .named_value) b.object.named_value.value else b;
+    const ea = vms.unboxNamed(a);
+    const eb = vms.unboxNamed(b);
     const ea_raw = ea == .int or ea == .float;
     const eb_raw = eb == .int or eb == .float;
     if (ea_raw and eb_raw and @as(VTag, ea) != @as(VTag, eb)) {
@@ -233,6 +233,18 @@ fn valueAsNumberForCompare(v: Value, other: Value) !f64 {
         }
         return err;
     };
+}
+
+fn compareNumericPair(a: Value, b: Value, op: []const u8) !struct { an: f64, bn: f64 } {
+    try checkNamedValueCompatibility(a, b);
+    try checkComparableNumeric(a, b, op);
+    const an = try valueAsNumberForCompare(a, b);
+    const bn = try valueAsNumberForCompare(b, a);
+    if (!std.math.isFinite(an) or !std.math.isFinite(bn)) {
+        vms.setRuntimeErr("cannot compare non-finite value", .{});
+        return error.TypeError;
+    }
+    return .{ .an = an, .bn = bn };
 }
 
 fn valueAsIntForOp(v: Value, other: Value, op: []const u8) !i64 {
@@ -343,6 +355,16 @@ fn computeAddResult(a: Value, b: Value) !Value {
             return val;
         }
     }
+}
+
+fn pushSubResult(a: Value, b: Value) !void {
+    const an = try valueAsNumberForOp(a, b, "-");
+    const bn = try valueAsNumberForOp(b, a, "-");
+    const tag = numericOpTag(a, b) catch |err| {
+        if (err == error.TypeError) setBinaryTypeError("-", a, b);
+        return err;
+    };
+    try pushNumericResultWithCarrier(a, b, an - bn, tag, "-");
 }
 
 fn makeNumeric(tag: VTag, n: f64) Value {
@@ -851,7 +873,7 @@ fn tryTailCall(argc: u8) !bool {
 
 fn iterInit(v: Value) !Value {
     const obj = try vmAllocObject();
-    const iv = if (v == .object and v.object.* == .named_value) v.object.named_value.value else v;
+    const iv = vms.unboxNamed(v);
     switch (iv) {
         .object => |o| switch (o.*) {
             .dyn_string => |s| obj.* = .{ .iterator = .{ .kind = .string, .index = 0, .string = s, .string_managed = true, .source = o } },
@@ -1136,10 +1158,7 @@ fn opGetLocalGetField() !void {
     const ic_type_idx = try vmShort();
     const ic_fidx = try vmByte();
     const raw = try readLocalSlot(slot);
-    const container = if (raw == .object and raw.object.* == .named_value)
-        raw.object.named_value.value
-    else
-        raw;
+    const container = vms.unboxNamed(raw);
     if (container != .object) return error.TypeError;
     try pushFieldFromObject(container.object, name_idx, ic_base, ic_type_idx, ic_fidx);
 }
@@ -1155,23 +1174,16 @@ fn opGetIndex() !void {
         if (rooted_idx) popTempRoot();
         if (rooted_raw) popTempRoot();
     }
-    const container = if (raw == .object and raw.object.* == .named_value)
-        raw.object.named_value.value
-    else
-        raw;
+    const container = vms.unboxNamed(raw);
     switch (container) {
         .object => |obj| switch (obj.*) {
-            .dyn_string => |s| {
+            .dyn_string, .string_view => {
+                const bytes = if (obj.* == .dyn_string) obj.dyn_string else obj.string_view.bytes;
+                const src = if (obj.* == .dyn_string) obj else obj.string_view.source;
                 const ridx = try vms.vmIndexFromVal(idx_v);
-                const start = try vmstr.utf8ByteOffsetForRuneIndexCached(s, ridx);
-                const w = try vmstr.utf8NextRuneByteLen(s, start);
-                try vmPush(try makeStringView(s[start .. start + w], obj));
-            },
-            .string_view => |sv| {
-                const ridx = try vms.vmIndexFromVal(idx_v);
-                const start = try vmstr.utf8ByteOffsetForRuneIndexCached(sv.bytes, ridx);
-                const w = try vmstr.utf8NextRuneByteLen(sv.bytes, start);
-                try vmPush(try makeStringView(sv.bytes[start .. start + w], sv.source));
+                const start = try vmstr.utf8ByteOffsetForRuneIndexCached(bytes, ridx);
+                const w = try vmstr.utf8NextRuneByteLen(bytes, start);
+                try vmPush(try makeStringView(bytes[start .. start + w], src));
             },
             .array, .array_managed, .array_capacity => {
                 const items = try vms.asArraySlice(obj);
@@ -1272,38 +1284,8 @@ fn opSetIndex() !void {
             }
             items[idx] = val;
         },
-        .map, .map_managed => {
-            const items = try vms.asMapSlice(container.object);
-            var i: usize = 0;
-            var updated = false;
-            while (i < items.len) : (i += 1) {
-                if (vmmap.mapKeyEquals(items[i].key, idx_v)) {
-                    items[i].value = val;
-                    updated = true;
-                    break;
-                }
-            }
-            if (!updated) {
-                try pushTempRoot(container);
-                defer popTempRoot();
-                const ext = try vmAllocManagedSlice(MapEntry, items.len + 1);
-                @memcpy(ext[0..items.len], items);
-                ext[items.len] = .{ .key = idx_v, .value = val };
-                const new_len = items.len + 1;
-                if (container.object.* == .map_managed) heap.freeManagedSlice(MapEntry, container.object.map_managed);
-                container.object.* = .{ .map_managed = ext[0..new_len] };
-                // Auto-promote to hashed map once linear scan becomes expensive.
-                if (new_len > 8) {
-                    const bcount = vmmap.mapBucketsForCount(new_len);
-                    const buckets = try vmAllocManagedSlice(i32, bcount);
-                    vmmap.mapBuildHashedBuckets(ext[0..new_len], buckets);
-                    container.object.* = .{ .map_hashed = .{ .entries = ext[0..new_len], .len = new_len, .buckets = buckets } };
-                }
-            }
-        },
-        .map_hashed => {
-            try vmmap.mapInsertHashed(container.object, idx_v, val);
-        },
+        .map, .map_managed => try mapLinearInsertOrAppend(container, idx_v, val),
+        .map_hashed => try vmmap.mapInsertHashed(container.object, idx_v, val),
         .struct_instance => |inst| {
             const key = try vms.asStringValue(idx_v);
             const idx = vmtyp.findFieldIndex(inst.typ.struct_type.fields, key) orelse {
@@ -1471,10 +1453,7 @@ fn opGetField() !void {
     var rooted_raw = false;
     if (raw == .object) { try pushTempRoot(raw); rooted_raw = true; }
     defer if (rooted_raw) popTempRoot();
-    const container = if (raw == .object and raw.object.* == .named_value)
-        raw.object.named_value.value
-    else
-        raw;
+    const container = vms.unboxNamed(raw);
     if (container != .object) return error.TypeError;
     try pushFieldFromObject(container.object, name_idx, ic_base, ic_type_idx, ic_fidx);
 }
@@ -1523,40 +1502,33 @@ fn opSetField() !void {
             if (!vmtyp.matchesFieldType(val, inst.typ.struct_type.fields[fi])) return error.StructFieldTypeMismatch;
             inst.fields[fi].value = val;
         },
-        .map, .map_managed => {
-            const items = try vms.asMapSlice(container.object);
-            const key_v = Value{ .string = name };
-            var i: usize = 0;
-            var updated = false;
-            while (i < items.len) : (i += 1) {
-                if (vmmap.mapKeyEquals(items[i].key, key_v)) {
-                    items[i].value = val;
-                    updated = true;
-                    break;
-                }
-            }
-            if (!updated) {
-                try pushTempRoot(container);
-                defer popTempRoot();
-                const ext = try vmAllocManagedSlice(MapEntry, items.len + 1);
-                @memcpy(ext[0..items.len], items);
-                ext[items.len] = .{ .key = .{ .string = name }, .value = val };
-                const new_len = items.len + 1;
-                if (container.object.* == .map_managed) heap.freeManagedSlice(MapEntry, container.object.map_managed);
-                container.object.* = .{ .map_managed = ext[0..new_len] };
-                if (new_len > 8) {
-                    const bcount = vmmap.mapBucketsForCount(new_len);
-                    const buckets = try vmAllocManagedSlice(i32, bcount);
-                    vmmap.mapBuildHashedBuckets(ext[0..new_len], buckets);
-                    container.object.* = .{ .map_hashed = .{ .entries = ext[0..new_len], .len = new_len, .buckets = buckets } };
-                }
-            }
-        },
-        .map_hashed => {
-            const key_v = Value{ .string = name };
-            try vmmap.mapInsertHashed(container.object, key_v, val);
-        },
+        .map, .map_managed => try mapLinearInsertOrAppend(container, .{ .string = name }, val),
+        .map_hashed => try vmmap.mapInsertHashed(container.object, .{ .string = name }, val),
         else => return error.TypeError,
+    }
+}
+
+fn mapLinearInsertOrAppend(container: Value, key: Value, val: Value) !void {
+    const items = try vms.asMapSlice(container.object);
+    for (items) |*entry| {
+        if (vmmap.mapKeyEquals(entry.key, key)) {
+            entry.value = val;
+            return;
+        }
+    }
+    try pushTempRoot(container);
+    defer popTempRoot();
+    const new_len = items.len + 1;
+    const ext = try vmAllocManagedSlice(MapEntry, new_len);
+    @memcpy(ext[0..items.len], items);
+    ext[items.len] = .{ .key = key, .value = val };
+    if (container.object.* == .map_managed) heap.freeManagedSlice(MapEntry, container.object.map_managed);
+    container.object.* = .{ .map_managed = ext[0..new_len] };
+    if (new_len > 8) {
+        const bcount = vmmap.mapBucketsForCount(new_len);
+        const buckets = try vmAllocManagedSlice(i32, bcount);
+        vmmap.mapBuildHashedBuckets(ext[0..new_len], buckets);
+        container.object.* = .{ .map_hashed = .{ .entries = ext[0..new_len], .len = new_len, .buckets = buckets } };
     }
 }
 
@@ -1777,13 +1749,7 @@ fn runInner() !void {
                     if (result[1] != 0) return error.TypeError;
                     try pushDecimalResultWithCarrier(dop.typ, result[0]);
                 } else {
-                    const tag = numericOpTag(a, b) catch |err| {
-                        if (err == error.TypeError) setBinaryTypeError("-", a, b);
-                        return err;
-                    };
-                    const an = try valueAsNumberForOp(a, b, "-");
-                    const bn = try valueAsNumberForOp(b, a, "-");
-                    try pushNumericResultWithCarrier(a, b, an - bn, tag, "-");
+                    try pushSubResult(a, b);
                 }
             },
             .mul => {
@@ -2089,22 +2055,14 @@ fn runInner() !void {
             .gt => {
                 const b = try vmPop();
                 const a = try vmPop();
-                try checkNamedValueCompatibility(a, b);
-                try checkComparableNumeric(a, b, ">");
-                const an = try valueAsNumberForCompare(a, b);
-                const bn = try valueAsNumberForCompare(b, a);
-                if (!std.math.isFinite(an) or !std.math.isFinite(bn)) { vms.setRuntimeErr("cannot compare non-finite value", .{}); return error.TypeError; }
-                try vmPush(.{ .boolean = an > bn });
+                const n = try compareNumericPair(a, b, ">");
+                try vmPush(.{ .boolean = n.an > n.bn });
             },
             .lt => {
                 const b = try vmPop();
                 const a = try vmPop();
-                try checkNamedValueCompatibility(a, b);
-                try checkComparableNumeric(a, b, "<");
-                const an = try valueAsNumberForCompare(a, b);
-                const bn = try valueAsNumberForCompare(b, a);
-                if (!std.math.isFinite(an) or !std.math.isFinite(bn)) { vms.setRuntimeErr("cannot compare non-finite value", .{}); return error.TypeError; }
-                try vmPush(.{ .boolean = an < bn });
+                const n = try compareNumericPair(a, b, "<");
+                try vmPush(.{ .boolean = n.an < n.bn });
             },
 
             // Fused const+op: reads rhs constant, pops lhs from stack.
@@ -2117,13 +2075,7 @@ fn runInner() !void {
             .const_sub => {
                 const k = try chunk.constAt(try vmShort());
                 const a = try vmPop();
-                const an = try valueAsNumberForOp(a, k, "-");
-                const kn = try valueAsNumberForOp(k, a, "-");
-                const tag = numericOpTag(a, k) catch |err| {
-                    if (err == error.TypeError) setBinaryTypeError("-", a, k);
-                    return err;
-                };
-                try pushNumericResultWithCarrier(a, k, an - kn, tag, "-");
+                try pushSubResult(a, k);
             },
 
             // Triple-fused: get_local + constant + eq/sub.
@@ -2143,13 +2095,7 @@ fn runInner() !void {
                 vmState().ip += 1; // skip the embedded const_sub opcode byte
                 const k = try chunk.constAt(try vmShort());
                 const a = try readLocalSlot(slot);
-                const an = try valueAsNumberForOp(a, k, "-");
-                const kn = try valueAsNumberForOp(k, a, "-");
-                const tag = numericOpTag(a, k) catch |err| {
-                    if (err == error.TypeError) setBinaryTypeError("-", a, k);
-                    return err;
-                };
-                try pushNumericResultWithCarrier(a, k, an - kn, tag, "-");
+                try pushSubResult(a, k);
             },
             .get_local_const_sub_call => {
                 const slot = try vmByte();
@@ -2157,13 +2103,7 @@ fn runInner() !void {
                 const k = try chunk.constAt(try vmShort());
                 const argc = try vmByte();
                 const a = try readLocalSlot(slot);
-                const an = try valueAsNumberForOp(a, k, "-");
-                const kn = try valueAsNumberForOp(k, a, "-");
-                const tag = numericOpTag(a, k) catch |err| {
-                    if (err == error.TypeError) setBinaryTypeError("-", a, k);
-                    return err;
-                };
-                try pushNumericResultWithCarrier(a, k, an - kn, tag, "-");
+                try pushSubResult(a, k);
                 if (try tryTailCall(argc)) continue;
                 try performCall(argc);
             },
@@ -2179,11 +2119,8 @@ fn runInner() !void {
                 vmState().ip += 1; // skip the embedded const_lt opcode byte
                 const k = try chunk.constAt(try vmShort());
                 const a = try readLocalSlot(slot);
-                try checkNamedValueCompatibility(a, k);
-                const an = try vms.valueAsNumber(vms.unboxNamed(a));
-                const kn = try vms.valueAsNumber(vms.unboxNamed(k));
-                if (!std.math.isFinite(an) or !std.math.isFinite(kn)) { vms.setRuntimeErr("cannot compare non-finite value", .{}); return error.TypeError; }
-                try vmPush(.{ .boolean = an < kn });
+                const n = try compareNumericPair(a, k, "<");
+                try vmPush(.{ .boolean = n.an < n.bn });
             },
 
             // Quad-fused: get_local + constant + eq + jif_pop.
@@ -2207,12 +2144,8 @@ fn runInner() !void {
                 const k = try chunk.constAt(try vmShort());
                 const off = try vms.vmInt();
                 const a = try readLocalSlot(slot);
-                try checkNamedValueCompatibility(a, k);
-                try checkComparableNumeric(a, k, "<");
-                const an = try valueAsNumberForCompare(vms.unboxNamed(a), k);
-                const kn = try valueAsNumberForCompare(vms.unboxNamed(k), a);
-                if (!std.math.isFinite(an) or !std.math.isFinite(kn)) { vms.setRuntimeErr("cannot compare non-finite value", .{}); return error.TypeError; }
-                if (!(an < kn)) vmState().ip += off;
+                const n = try compareNumericPair(a, k, "<");
+                if (!(n.an < n.bn)) vmState().ip += off;
             },
 
             // Fused: get_local + get_field. 8-byte layout:
@@ -2240,13 +2173,7 @@ fn runInner() !void {
                 vmState().ip += 1; // skip the embedded const_sub opcode byte
                 const k = try chunk.constAt(try vmShort());
                 const g = try readGlobalIC(name_idx, ic_base, ic_slot);
-                const an = try valueAsNumberForOp(g, k, "-");
-                const kn = try valueAsNumberForOp(k, g, "-");
-                const tag = numericOpTag(g, k) catch |err| {
-                    if (err == error.TypeError) setBinaryTypeError("-", g, k);
-                    return err;
-                };
-                try pushNumericResultWithCarrier(g, k, an - kn, tag, "-");
+                try pushSubResult(g, k);
             },
             .get_global_const_add => {
                 const name_idx = try vmShort();
@@ -2264,11 +2191,8 @@ fn runInner() !void {
                 vmState().ip += 1; // skip the embedded const_lt opcode byte
                 const k = try chunk.constAt(try vmShort());
                 const g = try readGlobalIC(name_idx, ic_base, ic_slot);
-                try checkNamedValueCompatibility(g, k);
-                const an = try vms.valueAsNumber(vms.unboxNamed(g));
-                const kn = try vms.valueAsNumber(vms.unboxNamed(k));
-                if (!std.math.isFinite(an) or !std.math.isFinite(kn)) { vms.setRuntimeErr("cannot compare non-finite value", .{}); return error.TypeError; }
-                try vmPush(.{ .boolean = an < kn });
+                const n = try compareNumericPair(g, k, "<");
+                try vmPush(.{ .boolean = n.an < n.bn });
             },
             // Quad-fused: get_global + constant + eq + jif_pop.
             // Bytecode: [op][name_hi][name_lo][ic_hi][ic_lo][skip][val_hi][val_lo][jmp_b3][jmp_b2][jmp_b1][jmp_b0]
@@ -2293,12 +2217,8 @@ fn runInner() !void {
                 const k = try chunk.constAt(try vmShort());
                 const off = try vms.vmInt();
                 const g = try readGlobalIC(name_idx, ic_base, ic_slot);
-                try checkNamedValueCompatibility(g, k);
-                try checkComparableNumeric(g, k, "<");
-                const an = try valueAsNumberForCompare(vms.unboxNamed(g), k);
-                const kn = try valueAsNumberForCompare(vms.unboxNamed(k), g);
-                if (!std.math.isFinite(an) or !std.math.isFinite(kn)) { vms.setRuntimeErr("cannot compare non-finite value", .{}); return error.TypeError; }
-                if (!(an < kn)) vmState().ip += off;
+                const n = try compareNumericPair(g, k, "<");
+                if (!(n.an < n.bn)) vmState().ip += off;
             },
             .const_add => {
                 const k = try chunk.constAt(try vmShort());
@@ -2308,12 +2228,8 @@ fn runInner() !void {
             .const_lt => {
                 const k = try chunk.constAt(try vmShort());
                 const a = try vmPop();
-                try checkNamedValueCompatibility(a, k);
-                try checkComparableNumeric(a, k, "<");
-                const an = try valueAsNumberForCompare(a, k);
-                const kn = try valueAsNumberForCompare(k, a);
-                if (!std.math.isFinite(an) or !std.math.isFinite(kn)) { vms.setRuntimeErr("cannot compare non-finite value", .{}); return error.TypeError; }
-                try vmPush(.{ .boolean = an < kn });
+                const n = try compareNumericPair(a, k, "<");
+                try vmPush(.{ .boolean = n.an < n.bn });
             },
 
             .build_array, .build_tuple => {
@@ -2544,13 +2460,11 @@ fn runInner() !void {
                         try vmPush(.{ .string = s[r.start_b..r.end_b] });
                     },
                     .object => |obj| switch (obj.*) {
-                        .dyn_string => |s| {
-                            const r = try stringSliceRange(s, has_start, start_v, has_end, end_v);
-                            try vmPush(try makeStringView(s[r.start_b..r.end_b], obj));
-                        },
-                        .string_view => |sv| {
-                            const r = try stringSliceRange(sv.bytes, has_start, start_v, has_end, end_v);
-                            try vmPush(try makeStringView(sv.bytes[r.start_b..r.end_b], sv.source));
+                        .dyn_string, .string_view => {
+                            const bytes = if (obj.* == .dyn_string) obj.dyn_string else obj.string_view.bytes;
+                            const src = if (obj.* == .dyn_string) obj else obj.string_view.source;
+                            const r = try stringSliceRange(bytes, has_start, start_v, has_end, end_v);
+                            try vmPush(try makeStringView(bytes[r.start_b..r.end_b], src));
                         },
                         .array, .array_managed, .array_capacity => {
                             const items = try vms.asArraySlice(obj);
