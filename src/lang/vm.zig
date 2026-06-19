@@ -612,11 +612,8 @@ fn resolveStructMethod(inst: vmod.StructInstanceObj, mname: []const u8) !MethodR
 
 fn resolveMapMethod(obj: *Object, mname: []const u8) !Value {
     const items = try vms.asMapSlice(obj);
-    var i: usize = 0;
-    while (i < items.len) : (i += 1) {
-        if (vms.isStringValue(items[i].key) and common.streq(try vms.asStringValue(items[i].key), mname)) {
-            return items[i].value;
-        }
+    for (items) |e| {
+        if (vms.isStringValue(e.key) and common.streq(try vms.asStringValue(e.key), mname)) return e.value;
     }
     return error.UnknownMethod;
 }
@@ -725,6 +722,15 @@ fn doReturnFast(fi: usize, retval: Value) !void {
     vmState().stack_top = if (frame.base > 0) frame.base - 1 else 0;
     vmState().ip = frame.ret_ip;
     try vmPush(retval);
+}
+
+fn readUpvalueCell(idx: usize) !*Object {
+    if (vmState().frame_top == 0) return error.StackUnderflow;
+    const frame = vmState().frames[vmState().frame_top - 1];
+    const cl = frame.closure orelse return error.TypeError;
+    if (cl.* != .closure) return error.TypeError;
+    if (idx >= cl.closure.upvalues.len) return error.TypeError;
+    return cl.closure.upvalues[idx];
 }
 
 fn enterFunctionFrame(f: @import("value.zig").FuncObj, func_obj: *Object, closure: ?*Object, argc: u8) !void {
@@ -1101,20 +1107,15 @@ fn pushFieldFromObject(obj: *Object, name_idx: usize, ic_base: usize, ic_type_id
         },
         .map, .map_managed => {
             const name = (try chunk.constAt(name_idx)).string;
+            const items = try vms.asMapSlice(obj);
             if (common.streq(name, "len")) {
-                const items = try vms.asMapSlice(obj);
                 try vmPush(.{ .int = @intCast(items.len) });
             } else {
-                const items = try vms.asMapSlice(obj);
                 const key_v = Value{ .string = name };
-                var i: usize = 0;
-                while (i < items.len) : (i += 1) {
-                    if (vmmap.mapKeyEquals(items[i].key, key_v)) {
-                        try vmPush(items[i].value);
-                        break;
-                    }
-                }
-                if (i == items.len) try vmPush(.null);
+                const found: ?Value = for (items) |e| {
+                    if (vmmap.mapKeyEquals(e.key, key_v)) break e.value;
+                } else null;
+                try vmPush(found orelse .null);
             }
         },
         .map_hashed => |hm| {
@@ -1196,14 +1197,10 @@ fn opGetIndex() !void {
             },
             .map, .map_managed => {
                 const items = try vms.asMapSlice(obj);
-                var i: usize = 0;
-                while (i < items.len) : (i += 1) {
-                    if (vmmap.mapKeyEquals(items[i].key, idx_v)) {
-                        try vmPush(items[i].value);
-                        break;
-                    }
-                }
-                if (i == items.len) try vmPush(.null);
+                const found: ?Value = for (items) |e| {
+                    if (vmmap.mapKeyEquals(e.key, idx_v)) break e.value;
+                } else null;
+                try vmPush(found orelse .null);
             },
             .map_hashed => |hm| {
                 if (vmmap.mapFindHashedIndex(hm.entries[0..hm.len], hm.buckets, idx_v)) |fi| {
@@ -1217,20 +1214,14 @@ fn opGetIndex() !void {
                 const idx = vmtyp.findFieldIndex(inst.typ.struct_type.fields, key) orelse return error.UnknownStructField;
                 try vmPush(inst.fields[idx].value);
             },
-            .enum_type => |et| {
-                _ = et;
-                const key = try vms.asStringValue(idx_v);
-                try vmPush(try enumTypeFieldValue(obj, key));
+            .enum_type => {
+                try vmPush(try enumTypeFieldValue(obj, try vms.asStringValue(idx_v)));
             },
-            .named_type => |nt| {
-                _ = nt;
-                const key = try vms.asStringValue(idx_v);
-                try vmPush(try namedTypeFieldValue(obj, key));
+            .named_type => {
+                try vmPush(try namedTypeFieldValue(obj, try vms.asStringValue(idx_v)));
             },
-            .variant_type => |vt| {
-                _ = vt;
-                const key = try vms.asStringValue(idx_v);
-                try vmPush(try variantTypeFieldValue(obj, key));
+            .variant_type => {
+                try vmPush(try variantTypeFieldValue(obj, try vms.asStringValue(idx_v)));
             },
             .variant_value => |vv| {
                 const key = try vms.asStringValue(idx_v);
@@ -1675,25 +1666,12 @@ fn runInner() !void {
                 writeFrameLocal(base + slot, try vmPop());
             },
             .get_upvalue => {
-                if (vmState().frame_top == 0) return error.StackUnderflow;
-                const idx = try vmByte();
-                const frame = vmState().frames[vmState().frame_top - 1];
-                const cl = frame.closure orelse return error.TypeError;
-                if (cl.* != .closure) return error.TypeError;
-                if (idx >= cl.closure.upvalues.len) return error.TypeError;
-                const cell = cl.closure.upvalues[idx];
-                try vmPush(cell.cell.value);
+                try vmPush((try readUpvalueCell(try vmByte())).cell.value);
             },
             .set_upvalue => {
-                if (vmState().frame_top == 0) return error.StackUnderflow;
                 const idx = try vmByte();
-                const frame = vmState().frames[vmState().frame_top - 1];
-                const cl = frame.closure orelse return error.TypeError;
-                if (cl.* != .closure) return error.TypeError;
-                if (idx >= cl.closure.upvalues.len) return error.TypeError;
                 const val = try vmPop();
-                const cell = cl.closure.upvalues[idx];
-                cell.cell.value = val;
+                (try readUpvalueCell(idx)).cell.value = val;
             },
             .close_upvalue => {
                 const slot = try vmByte();
