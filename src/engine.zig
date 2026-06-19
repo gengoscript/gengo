@@ -294,7 +294,7 @@ fn wireToValue(wire: ValueWire) !Value {
             if ((wire.flags & host_abi.FLAG_RUNE) != 0) {
                 break :blk Value{ .rune = @intCast(wire.payload) };
             }
-            break :blk if ((wire.flags & host_abi.FLAG_INTEGER) != 0) Value{ .int = fval } else Value{ .float = fval };
+            break :blk if ((wire.flags & host_abi.FLAG_INTEGER) != 0) Value{ .int = @bitCast(wire.payload) } else Value{ .float = fval };
         },
         @intFromEnum(WireTag.@"error") => {
             if (wire.len == 0) return Value{ .error_value = "" };
@@ -358,7 +358,7 @@ fn valueToWire(val: Value) !ValueWire {
     return switch (val) {
         .null => makeWire(@intFromEnum(WireTag.null), 0, 0),
         .boolean => |b| makeWire(@intFromEnum(WireTag.boolean), @intFromBool(b), 0),
-        .int => |n| .{ .tag = @intFromEnum(WireTag.number), .flags = host_abi.FLAG_INTEGER, .reserved = 0, .payload = @bitCast(@as(f64, n)), .len = 0, .reserved2 = 0 },
+        .int => |n| .{ .tag = @intFromEnum(WireTag.number), .flags = host_abi.FLAG_INTEGER, .reserved = 0, .payload = @bitCast(n), .len = 0, .reserved2 = 0 },
         .float => |n| makeWire(@intFromEnum(WireTag.number), @bitCast(@as(f64, n)), 0),
         .decimal => |d| .{
             .tag = @intFromEnum(WireTag.number),
