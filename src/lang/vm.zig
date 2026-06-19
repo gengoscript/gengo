@@ -2189,28 +2189,7 @@ fn runInner() !void {
                 vmState().ip += 1; // skip the embedded const_add opcode byte
                 const k = try chunk.constAt(try vmShort());
                 const a = try readLocalSlot(slot);
-                if (isStringValueOrNamedString(a) and isStringValueOrNamedString(k)) {
-                    const sa = try vms.asStringValue(a);
-                    const sk = try vms.asStringValue(k);
-                    const a_is_gc_obj = (a == .object);
-                    const k_is_gc_obj = (k == .object);
-                    if (a_is_gc_obj) try pushTempRoot(a);
-                    if (k_is_gc_obj) try pushTempRoot(k);
-                    defer {
-                        if (k_is_gc_obj) popTempRoot();
-                        if (a_is_gc_obj) popTempRoot();
-                    }
-                    const result = try concatDynString(sa, sk);
-                    try pushStringResultWithCarrier(a, k, result);
-                } else {
-                    const an = try valueAsNumberForOp(a, k, "+");
-                    const kn = try valueAsNumberForOp(k, a, "+");
-                    const tag = numericOpTag(a, k) catch |err| {
-                        if (err == error.TypeError) setBinaryTypeError("+", a, k);
-                        return err;
-                    };
-                    try pushNumericResultWithCarrier(a, k, an + kn, tag, "+");
-                }
+                try vmPush(try computeAddResult(a, k));
             },
             .get_local_const_lt => {
                 const slot = try vmByte();
@@ -2293,28 +2272,7 @@ fn runInner() !void {
                 vmState().ip += 1; // skip the embedded const_add opcode byte
                 const k = try chunk.constAt(try vmShort());
                 const g = try readGlobalIC(name_idx, ic_base, ic_slot);
-                if (isStringValueOrNamedString(g) and isStringValueOrNamedString(k)) {
-                    const sa = try vms.asStringValue(g);
-                    const sk = try vms.asStringValue(k);
-                    const a_is_gc_obj = (g == .object);
-                    const k_is_gc_obj = (k == .object);
-                    if (a_is_gc_obj) try pushTempRoot(g);
-                    if (k_is_gc_obj) try pushTempRoot(k);
-                    defer {
-                        if (k_is_gc_obj) popTempRoot();
-                        if (a_is_gc_obj) popTempRoot();
-                    }
-                    const result = try concatDynString(sa, sk);
-                    try pushStringResultWithCarrier(g, k, result);
-                } else {
-                    const an = try valueAsNumberForOp(g, k, "+");
-                    const kn = try valueAsNumberForOp(k, g, "+");
-                    const tag = numericOpTag(g, k) catch |err| {
-                        if (err == error.TypeError) setBinaryTypeError("+", g, k);
-                        return err;
-                    };
-                    try pushNumericResultWithCarrier(g, k, an + kn, tag, "+");
-                }
+                try vmPush(try computeAddResult(g, k));
             },
             .get_global_const_lt => {
                 const name_idx = try vmShort();
@@ -2362,31 +2320,7 @@ fn runInner() !void {
             .const_add => {
                 const k = try chunk.constAt(try vmShort());
                 const a = try vmPop();
-                if (isStringValueOrNamedString(a) and isStringValueOrNamedString(k)) {
-                    const sa = try vms.asStringValue(a);
-                    const sk = try vms.asStringValue(k);
-                    // Protect GC-backed operands so concatDynString can allocate
-                    // without the source bytes being freed and reused.
-                    const a_is_gc_obj = (a == .object);
-                    const k_is_gc_obj = (k == .object);
-                    if (a_is_gc_obj) try pushTempRoot(a);
-                    if (k_is_gc_obj) try pushTempRoot(k);
-                    defer {
-                        if (k_is_gc_obj) popTempRoot();
-                        if (a_is_gc_obj) popTempRoot();
-                    }
-                    const result = try concatDynString(sa, sk);
-                    vmperf.countStringConcat(sa.len + sk.len);
-                    try pushStringResultWithCarrier(a, k, result);
-                } else {
-                    const an = try valueAsNumberForOp(a, k, "+");
-                    const kn = try valueAsNumberForOp(k, a, "+");
-                    const tag = numericOpTag(a, k) catch |err| {
-                        if (err == error.TypeError) setBinaryTypeError("+", a, k);
-                        return err;
-                    };
-                    try pushNumericResultWithCarrier(a, k, an + kn, tag, "+");
-                }
+                try vmPush(try computeAddResult(a, k));
             },
             .const_lt => {
                 const k = try chunk.constAt(try vmShort());
