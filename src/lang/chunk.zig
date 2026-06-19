@@ -39,6 +39,15 @@ pub const State = struct {
     // Peephole: position of the last get_local_const_add triple-fused instruction.
     // Used for fusion: get_local_const_add + set_local → local_add_const.
     last_get_local_const_add_pos: ?usize = null,
+    // Peephole: track position of last `get_global` instruction (5 bytes: op + name_idx(2) + ic_slot(2)).
+    // Used for triple-fusion: get_global + constant + eq/sub → get_global_const_eq/sub.
+    last_get_global_code_pos: ?usize = null,
+    // Peephole: position of the last get_global_const_eq triple-fused instruction.
+    // Used for quad-fusion: get_global_const_eq + jif_pop → get_global_const_eq_jif_pop.
+    last_triple_global_eq_pos: ?usize = null,
+    // Peephole: position of the last get_global_const_lt triple-fused instruction.
+    // Used for quad-fusion: get_global_const_lt + jif_pop → get_global_const_lt_jif_pop.
+    last_triple_global_lt_pos: ?usize = null,
     // Peephole: position of the last set_global instruction.
     // Used for fusion: set_global + loop → set_global_loop.
     last_set_global_code_pos: ?usize = null,
@@ -66,6 +75,9 @@ pub fn reset() void {
     g_state.last_triple_lt_pos = null;
     g_state.last_get_local_const_sub_pos = null;
     g_state.last_get_local_const_add_pos = null;
+    g_state.last_get_global_code_pos = null;
+    g_state.last_triple_global_eq_pos = null;
+    g_state.last_triple_global_lt_pos = null;
     g_state.last_set_global_code_pos = null;
     g_state.std_call_patch_pos = null;
 }
@@ -237,6 +249,30 @@ pub fn emitBinOpFused(op: Op, line: u32) !void {
                         }
                     }
                 }
+                // Triple fusion: get_global (5 bytes) immediately before constant (3 bytes).
+                // get_global + const_eq/sub/add/lt → get_global_const_eq/sub/add/lt (8 bytes, 1 dispatch).
+                if (g_state.last_get_global_code_pos) |gg_pos| {
+                    if (gg_pos + 5 == pos) {
+                        const triple: ?Op = switch (fop) {
+                            .const_eq  => .get_global_const_eq,
+                            .const_sub => .get_global_const_sub,
+                            .const_add => .get_global_const_add,
+                            .const_lt  => .get_global_const_lt,
+                            else       => null,
+                        };
+                        if (triple) |top| {
+                            g_state.code[gg_pos] = @intFromEnum(top);
+                            // Layout: [top][glob_hi][glob_lo][ic_hi][ic_lo][fop_byte(skip)][val_hi][val_lo]
+                            // All bytes already in place — just change the opcode.
+                            if (top == .get_global_const_eq) {
+                                g_state.last_triple_global_eq_pos = gg_pos;
+                            } else if (top == .get_global_const_lt) {
+                                g_state.last_triple_global_lt_pos = gg_pos;
+                            }
+                            g_state.last_get_global_code_pos = null;
+                        }
+                    }
+                }
                 g_state.last_const_code_pos = null;
                 return;
             }
@@ -285,6 +321,7 @@ pub fn emitGetGlobal(name: []const u8, line: u32) !void {
     try emitByte(@intCast(idx & 0xff), line);
     try emitByte(0xff, line);
     try emitByte(0xff, line);
+    g_state.last_get_global_code_pos = g_state.code_len - 5;
 }
 
 // Emit get_global when constant index is already known.
@@ -294,6 +331,7 @@ pub fn emitGetGlobalIdx(idx: u16, line: u32) !void {
     try emitByte(@intCast(idx & 0xff), line);
     try emitByte(0xff, line);
     try emitByte(0xff, line);
+    g_state.last_get_global_code_pos = g_state.code_len - 5;
 }
 
 // Emit set_global: op + name_idx(2) + ic_slot(2, cold=0xFFFF).
@@ -388,6 +426,32 @@ pub fn emitJump(op: Op, line: u32) !usize {
                 return g_state.code_len - 4;
             }
         }
+        // Quad fusion: get_global_const_eq immediately preceding jif_pop →
+        // get_global_const_eq_jif_pop (12 bytes, saves 1 dispatch per conditional check).
+        if (g_state.last_triple_global_eq_pos) |tp| {
+            if (tp + 8 == g_state.code_len) {
+                g_state.code[tp] = @intFromEnum(Op.get_global_const_eq_jif_pop);
+                try emitByte(0xff, line);
+                try emitByte(0xff, line);
+                try emitByte(0xff, line);
+                try emitByte(0xff, line);
+                g_state.last_triple_global_eq_pos = null;
+                return g_state.code_len - 4;
+            }
+        }
+        // Quad fusion: get_global_const_lt immediately preceding jif_pop →
+        // get_global_const_lt_jif_pop (12 bytes, saves 1 dispatch per conditional check).
+        if (g_state.last_triple_global_lt_pos) |tp| {
+            if (tp + 8 == g_state.code_len) {
+                g_state.code[tp] = @intFromEnum(Op.get_global_const_lt_jif_pop);
+                try emitByte(0xff, line);
+                try emitByte(0xff, line);
+                try emitByte(0xff, line);
+                try emitByte(0xff, line);
+                g_state.last_triple_global_lt_pos = null;
+                return g_state.code_len - 4;
+            }
+        }
     }
     try emitOp(op, line);
     try emitByte(0xff, line);
@@ -413,6 +477,9 @@ pub fn patchJump(offset: usize) !void {
     g_state.last_get_local_code_pos = null;
     g_state.last_triple_eq_pos = null;
     g_state.last_triple_lt_pos = null;
+    g_state.last_get_global_code_pos = null;
+    g_state.last_triple_global_eq_pos = null;
+    g_state.last_triple_global_lt_pos = null;
     g_state.last_set_global_code_pos = null;
 }
 
@@ -607,6 +674,23 @@ pub fn decodeAt(pos: usize) !DecodedInstruction {
                 .width = 9,
                 .const_index = try readU16At(pos + 3),
                 .jump_target = pos + 9 + @as(usize, off),
+            };
+        },
+
+        .get_global_const_eq, .get_global_const_sub,
+        .get_global_const_add, .get_global_const_lt => .{
+            .op = op,
+            .width = 8,
+            .const_index = try readU16At(pos + 6),
+        },
+
+        .get_global_const_eq_jif_pop, .get_global_const_lt_jif_pop => blk: {
+            const off = try readU32At(pos + 8);
+            break :blk .{
+                .op = op,
+                .width = 12,
+                .const_index = try readU16At(pos + 6),
+                .jump_target = pos + 12 + @as(usize, off),
             };
         },
 

@@ -2584,6 +2584,214 @@ fn runInner() !void {
                 try opGetLocalGetField();
             },
 
+            // Triple-fused: get_global + constant + eq.
+            // Bytecode: [op][name_hi][name_lo][ic_hi][ic_lo][skip][val_hi][val_lo]
+            .get_global_const_eq => {
+                const name_idx = try vmShort();
+                const ic_base = vmState().ip;
+                const ic_slot: u16 = @intCast(try vmShort());
+                vmState().ip += 1; // skip the embedded const_eq opcode byte
+                const k = try chunk.constAt(try vmShort());
+                const g = if (ic_slot != 0xFFFF) blk: {
+                    break :blk globals.getAt(ic_slot);
+                } else blk: {
+                    const name = (try chunk.constAt(name_idx)).string;
+                    const slot = globals.findSlot(name) orelse {
+                        const suggestion = findSimilarName(name);
+                        if (suggestion) |s| {
+                            vms.setRuntimeErr("'{s}' is not defined; did you mean '{s}'?", .{ name, s });
+                        } else {
+                            vms.setRuntimeErr("'{s}' is not defined", .{name});
+                        }
+                        return error.NotDefined;
+                    };
+                    chunk.patchByte(ic_base,     @intCast((slot >> 8) & 0xFF));
+                    chunk.patchByte(ic_base + 1, @intCast(slot & 0xFF));
+                    break :blk globals.getAt(slot);
+                };
+                try checkNamedValueCompatibility(g, k);
+                const g_named = g == .object and g.object.* == .named_value;
+                const k_named = k == .object and k.object.* == .named_value;
+                const eg = if (g_named) g.object.named_value.value else g;
+                const ek = if (k_named) k.object.named_value.value else k;
+                try vmPush(.{ .boolean = Value.equals(eg, ek) });
+            },
+            .get_global_const_sub => {
+                const name_idx = try vmShort();
+                const ic_base = vmState().ip;
+                const ic_slot: u16 = @intCast(try vmShort());
+                vmState().ip += 1; // skip the embedded const_sub opcode byte
+                const k = try chunk.constAt(try vmShort());
+                const g = if (ic_slot != 0xFFFF) blk: {
+                    break :blk globals.getAt(ic_slot);
+                } else blk: {
+                    const name = (try chunk.constAt(name_idx)).string;
+                    const slot = globals.findSlot(name) orelse {
+                        const suggestion = findSimilarName(name);
+                        if (suggestion) |s| {
+                            vms.setRuntimeErr("'{s}' is not defined; did you mean '{s}'?", .{ name, s });
+                        } else {
+                            vms.setRuntimeErr("'{s}' is not defined", .{name});
+                        }
+                        return error.NotDefined;
+                    };
+                    chunk.patchByte(ic_base,     @intCast((slot >> 8) & 0xFF));
+                    chunk.patchByte(ic_base + 1, @intCast(slot & 0xFF));
+                    break :blk globals.getAt(slot);
+                };
+                const an = try valueAsNumberForOp(g, k, "-");
+                const kn = try valueAsNumberForOp(k, g, "-");
+                const tag = numericOpTag(g, k) catch |err| {
+                    if (err == error.TypeError) setBinaryTypeError("-", g, k);
+                    return err;
+                };
+                try pushNumericResultWithCarrier(g, k, an - kn, tag, "-");
+            },
+            .get_global_const_add => {
+                const name_idx = try vmShort();
+                const ic_base = vmState().ip;
+                const ic_slot: u16 = @intCast(try vmShort());
+                vmState().ip += 1; // skip the embedded const_add opcode byte
+                const k = try chunk.constAt(try vmShort());
+                const g = if (ic_slot != 0xFFFF) blk: {
+                    break :blk globals.getAt(ic_slot);
+                } else blk: {
+                    const name = (try chunk.constAt(name_idx)).string;
+                    const slot = globals.findSlot(name) orelse {
+                        const suggestion = findSimilarName(name);
+                        if (suggestion) |s| {
+                            vms.setRuntimeErr("'{s}' is not defined; did you mean '{s}'?", .{ name, s });
+                        } else {
+                            vms.setRuntimeErr("'{s}' is not defined", .{name});
+                        }
+                        return error.NotDefined;
+                    };
+                    chunk.patchByte(ic_base,     @intCast((slot >> 8) & 0xFF));
+                    chunk.patchByte(ic_base + 1, @intCast(slot & 0xFF));
+                    break :blk globals.getAt(slot);
+                };
+                if (isStringValueOrNamedString(g) and isStringValueOrNamedString(k)) {
+                    const sa = try vms.asStringValue(g);
+                    const sk = try vms.asStringValue(k);
+                    const a_is_gc_obj = (g == .object);
+                    const k_is_gc_obj = (k == .object);
+                    if (a_is_gc_obj) try pushTempRoot(g);
+                    if (k_is_gc_obj) try pushTempRoot(k);
+                    defer {
+                        if (k_is_gc_obj) popTempRoot();
+                        if (a_is_gc_obj) popTempRoot();
+                    }
+                    const result = try concatDynString(sa, sk);
+                    try pushStringResultWithCarrier(g, k, result);
+                } else {
+                    const an = try valueAsNumberForOp(g, k, "+");
+                    const kn = try valueAsNumberForOp(k, g, "+");
+                    const tag = numericOpTag(g, k) catch |err| {
+                        if (err == error.TypeError) setBinaryTypeError("+", g, k);
+                        return err;
+                    };
+                    try pushNumericResultWithCarrier(g, k, an + kn, tag, "+");
+                }
+            },
+            .get_global_const_lt => {
+                const name_idx = try vmShort();
+                const ic_base = vmState().ip;
+                const ic_slot: u16 = @intCast(try vmShort());
+                vmState().ip += 1; // skip the embedded const_lt opcode byte
+                const k = try chunk.constAt(try vmShort());
+                const g = if (ic_slot != 0xFFFF) blk: {
+                    break :blk globals.getAt(ic_slot);
+                } else blk: {
+                    const name = (try chunk.constAt(name_idx)).string;
+                    const slot = globals.findSlot(name) orelse {
+                        const suggestion = findSimilarName(name);
+                        if (suggestion) |s| {
+                            vms.setRuntimeErr("'{s}' is not defined; did you mean '{s}'?", .{ name, s });
+                        } else {
+                            vms.setRuntimeErr("'{s}' is not defined", .{name});
+                        }
+                        return error.NotDefined;
+                    };
+                    chunk.patchByte(ic_base,     @intCast((slot >> 8) & 0xFF));
+                    chunk.patchByte(ic_base + 1, @intCast(slot & 0xFF));
+                    break :blk globals.getAt(slot);
+                };
+                try checkNamedValueCompatibility(g, k);
+                const g_named = g == .object and g.object.* == .named_value;
+                const k_named = k == .object and k.object.* == .named_value;
+                const an = try vms.valueAsNumber(if (g_named) g.object.named_value.value else g);
+                const kn = try vms.valueAsNumber(if (k_named) k.object.named_value.value else k);
+                if (!std.math.isFinite(an) or !std.math.isFinite(kn)) { vms.setRuntimeErr("cannot compare non-finite value", .{}); return error.TypeError; }
+                try vmPush(.{ .boolean = an < kn });
+            },
+            // Quad-fused: get_global + constant + eq + jif_pop.
+            // Bytecode: [op][name_hi][name_lo][ic_hi][ic_lo][skip][val_hi][val_lo][jmp_b3][jmp_b2][jmp_b1][jmp_b0]
+            .get_global_const_eq_jif_pop => {
+                const name_idx = try vmShort();
+                const ic_base = vmState().ip;
+                const ic_slot: u16 = @intCast(try vmShort());
+                vmState().ip += 1; // skip the embedded const_eq opcode byte
+                const k = try chunk.constAt(try vmShort());
+                const off = try vms.vmInt();
+                const g = if (ic_slot != 0xFFFF) blk: {
+                    break :blk globals.getAt(ic_slot);
+                } else blk: {
+                    const name = (try chunk.constAt(name_idx)).string;
+                    const slot = globals.findSlot(name) orelse {
+                        const suggestion = findSimilarName(name);
+                        if (suggestion) |s| {
+                            vms.setRuntimeErr("'{s}' is not defined; did you mean '{s}'?", .{ name, s });
+                        } else {
+                            vms.setRuntimeErr("'{s}' is not defined", .{name});
+                        }
+                        return error.NotDefined;
+                    };
+                    chunk.patchByte(ic_base,     @intCast((slot >> 8) & 0xFF));
+                    chunk.patchByte(ic_base + 1, @intCast(slot & 0xFF));
+                    break :blk globals.getAt(slot);
+                };
+                try checkNamedValueCompatibility(g, k);
+                const g_named = g == .object and g.object.* == .named_value;
+                const k_named = k == .object and k.object.* == .named_value;
+                const eg = if (g_named) g.object.named_value.value else g;
+                const ek = if (k_named) k.object.named_value.value else k;
+                if (!Value.equals(eg, ek)) vmState().ip += off;
+            },
+            // Quad-fused: get_global + const_lt + jif_pop.
+            // Bytecode: [op][name_hi][name_lo][ic_hi][ic_lo][skip][val_hi][val_lo][jmp_b3][jmp_b2][jmp_b1][jmp_b0]
+            .get_global_const_lt_jif_pop => {
+                const name_idx = try vmShort();
+                const ic_base = vmState().ip;
+                const ic_slot: u16 = @intCast(try vmShort());
+                vmState().ip += 1; // skip the embedded const_lt opcode byte
+                const k = try chunk.constAt(try vmShort());
+                const off = try vms.vmInt();
+                const g = if (ic_slot != 0xFFFF) blk: {
+                    break :blk globals.getAt(ic_slot);
+                } else blk: {
+                    const name = (try chunk.constAt(name_idx)).string;
+                    const slot = globals.findSlot(name) orelse {
+                        const suggestion = findSimilarName(name);
+                        if (suggestion) |s| {
+                            vms.setRuntimeErr("'{s}' is not defined; did you mean '{s}'?", .{ name, s });
+                        } else {
+                            vms.setRuntimeErr("'{s}' is not defined", .{name});
+                        }
+                        return error.NotDefined;
+                    };
+                    chunk.patchByte(ic_base,     @intCast((slot >> 8) & 0xFF));
+                    chunk.patchByte(ic_base + 1, @intCast(slot & 0xFF));
+                    break :blk globals.getAt(slot);
+                };
+                try checkNamedValueCompatibility(g, k);
+                try checkComparableNumeric(g, k, "<");
+                const g_named = g == .object and g.object.* == .named_value;
+                const k_named = k == .object and k.object.* == .named_value;
+                const an = try valueAsNumberForCompare(if (g_named) g.object.named_value.value else g, k);
+                const kn = try valueAsNumberForCompare(if (k_named) k.object.named_value.value else k, g);
+                if (!std.math.isFinite(an) or !std.math.isFinite(kn)) { vms.setRuntimeErr("cannot compare non-finite value", .{}); return error.TypeError; }
+                if (!(an < kn)) vmState().ip += off;
+            },
             .const_add => {
                 const k = try chunk.constAt(try vmShort());
                 const a = try vmPop();
