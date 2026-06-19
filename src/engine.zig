@@ -381,7 +381,7 @@ fn valueToWire(val: Value) !ValueWire {
         .object => |obj| switch (obj.*) {
             .dyn_string => makeWire(@intFromEnum(WireTag.string), @intFromPtr(obj.dyn_string.ptr), @intCast(obj.dyn_string.len)),
             .string_view => makeWire(@intFromEnum(WireTag.string), @intFromPtr(obj.string_view.bytes.ptr), @intCast(obj.string_view.bytes.len)),
-            .array, .array_managed => {
+            .array, .array_managed, .array_capacity => {
                 const items = try vms.asArraySlice(obj);
                 const wires = (heap.bump(ValueWire, items.len) orelse return makeWire(@intFromEnum(WireTag.null), 0, 0))[0..items.len];
                 for (items, 0..) |item, i| {
@@ -455,7 +455,7 @@ fn valueToWireWithScratch(val: Value, scratch: *Engine) !ValueWire {
                 const stable = scratch.setStringScratch(s);
                 return makeWire(@intFromEnum(WireTag.string), @intFromPtr(stable.ptr), @intCast(stable.len));
             },
-            .array, .array_managed => {
+            .array, .array_managed, .array_capacity => {
                 const items = try vms.asArraySlice(obj);
                 if (items.len > scratch.wire_elem_buf.len) return error.WireBufferOverflow;
                 const wires = &scratch.wire_elem_buf;

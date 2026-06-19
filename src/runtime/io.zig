@@ -302,6 +302,14 @@ fn printValueDepth(v: Value, depth: u32, ancestors: *[PrintMaxDepth]*const vmod.
                     }
                     write("]");
                 },
+                .array_capacity => |ac| {
+                    write("[");
+                    for (ac.backing.array_managed[0..ac.len], 0..) |item, i| {
+                        if (i > 0) write(", ");
+                        printValueDepth(item, depth + 1, ancestors, anc_count);
+                    }
+                    write("]");
+                },
                 .map, .map_managed => |items| {
                     write("{");
                     for (items, 0..) |item, i| {

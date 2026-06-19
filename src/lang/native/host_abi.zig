@@ -90,7 +90,7 @@ pub fn wireFromValue(v: Value) !host_abi.ValueWire {
                 .len = @intCast(o.string_view.bytes.len),
                 .reserved2 = 0,
             },
-            .array, .array_managed => {
+            .array, .array_managed, .array_capacity => {
                 const items = try vms.asArraySlice(o);
                 const wires = (heap.bump(host_abi.ValueWire, items.len) orelse return error.OutOfMemory)[0..items.len];
                 for (items, 0..) |item, i| {

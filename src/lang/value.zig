@@ -136,10 +136,16 @@ pub const StringViewObj = struct {
     source: *Object,    // keeps the dyn_string alive so its backing buffer is not freed
 };
 
-pub const ObjTag = enum { array, array_managed, map, map_managed, map_hashed, dyn_string, function, closure, cell, native_function, host_module_function, struct_type, interface_type, named_type, named_value, enum_type, enum_value, struct_instance, iterator, variant_type, variant_value, variant_ctor, named_type_fn, string_builder, string_view };
+// Growable array backed by a shared array_managed Object.
+// backing must always be an .array_managed Object; backing.len is the capacity.
+// Items 0..len are live; items len..capacity are always .null (safe for GC marking).
+pub const ArrayCapObj = struct { backing: *Object, len: usize };
+
+pub const ObjTag = enum { array, array_managed, array_capacity, map, map_managed, map_hashed, dyn_string, function, closure, cell, native_function, host_module_function, struct_type, interface_type, named_type, named_value, enum_type, enum_value, struct_instance, iterator, variant_type, variant_value, variant_ctor, named_type_fn, string_builder, string_view };
 pub const Object = union(ObjTag) {
     array: []Value,
     array_managed: []Value,
+    array_capacity: ArrayCapObj,
     map: []MapEntry,
     map_managed: []MapEntry,
     map_hashed: MapHashedObj,

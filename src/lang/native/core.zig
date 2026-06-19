@@ -24,7 +24,7 @@ pub fn nativeLen(v: Value) !Value {
         .object => |obj| switch (obj.*) {
             .dyn_string => |s| try vmstr.utf8RuneCountCached(s),
             .string_view => |sv| try vmstr.utf8RuneCountCached(sv.bytes),
-            .array, .array_managed => (try vms.asArraySlice(obj)).len,
+            .array, .array_managed, .array_capacity => (try vms.asArraySlice(obj)).len,
             .map, .map_managed, .map_hashed => (try vms.asMapSlice(obj)).len,
             .struct_instance => |s| s.fields.len,
             else => return error.TypeError,
@@ -183,18 +183,55 @@ pub fn nativeAppend(start: usize, argc: u8) !Value {
     }
     const base = try vms.asArraySlice(arr_val.object);
     const extra: usize = argc - 1;
-    const obj = try vmgc.vmAllocObject();
-    obj.* = .{ .array = &[_]Value{} };
-    try vms.pushTempRoot(.{ .object = obj });
+    const new_len = base.len + extra;
+
+    // Fast path: reuse backing buffer when the array already has spare capacity.
+    // array_capacity.backing is an array_managed Object whose slice.len is the capacity.
+    if (arr_val.object.* == .array_capacity) {
+        const ac = arr_val.object.array_capacity;
+        const cap = ac.backing.array_managed.len;
+        if (new_len <= cap) {
+            var i: usize = 0;
+            while (i < extra) : (i += 1) {
+                ac.backing.array_managed[ac.len + i] = vms.vmState().stack[start + 1 + i];
+            }
+            const obj = try vmgc.vmAllocObject();
+            obj.* = .{ .array_capacity = .{ .backing = ac.backing, .len = new_len } };
+            if (is_named) {
+                try vms.pushTempRoot(.{ .object = obj });
+                defer vms.popTempRoot();
+                return try vmtyp.makeNamedValue(first.object.named_value.typ, .{ .object = obj });
+            }
+            return .{ .object = obj };
+        }
+    }
+
+    // Slow path: allocate a new backing buffer with 2x growth, capped at the
+    // heap's largest single block so we never trigger AllocationTooLarge early.
+    const ideal_cap = @max(new_len * 2, new_len + 4);
+    const max_cap_values = heap.maxManagedAlloc() / @sizeOf(Value);
+    const new_cap = if (ideal_cap <= max_cap_values) ideal_cap else @max(new_len, max_cap_values);
+    const backing_obj = try vmgc.vmAllocObject();
+    backing_obj.* = .{ .array = &[_]Value{} }; // safe placeholder before slice is assigned
+    try vms.pushTempRoot(.{ .object = backing_obj });
     defer vms.popTempRoot();
-    const out = try vmgc.vmAllocManagedSlice(Value, base.len + extra);
+    const out = try vmgc.vmAllocManagedSlice(Value, new_cap);
     @memcpy(out[0..base.len], base);
     var i: usize = 0;
     while (i < extra) : (i += 1) {
         out[base.len + i] = vms.vmState().stack[start + 1 + i];
     }
-    obj.* = .{ .array_managed = out[0 .. base.len + extra] };
-    if (is_named) return vmtyp.makeNamedValue(first.object.named_value.typ, .{ .object = obj });
+    // Zero-fill spare capacity so the GC never traces stale pointers.
+    i = new_len;
+    while (i < new_cap) : (i += 1) out[i] = .null;
+    backing_obj.* = .{ .array_managed = out };
+    const obj = try vmgc.vmAllocObject(); // backing_obj is temp-rooted
+    obj.* = .{ .array_capacity = .{ .backing = backing_obj, .len = new_len } };
+    if (is_named) {
+        try vms.pushTempRoot(.{ .object = obj });
+        defer vms.popTempRoot();
+        return try vmtyp.makeNamedValue(first.object.named_value.typ, .{ .object = obj });
+    }
     return .{ .object = obj };
 }
 
@@ -339,7 +376,7 @@ pub fn nativeTypeNameValue(v: Value) Value {
         .null => .{ .string = "null" },
         .object => |obj| switch (obj.*) {
             .dyn_string, .string_view => .{ .string = "string" },
-            .array, .array_managed => .{ .string = "array" },
+            .array, .array_managed, .array_capacity => .{ .string = "array" },
             .map, .map_managed, .map_hashed => .{ .string = "map" },
             .native_function => .{ .string = "native_func" },
             .host_module_function => .{ .string = "host_func" },
@@ -493,7 +530,7 @@ fn deepEqualObject(a: *Object, b: *Object, visits: []DeepEqVisit, visit_len: *us
     }
     if (hasVisitedPair(a, b, visits, visit_len.*)) return true;
     switch (a.*) {
-        .array, .array_managed => {
+        .array, .array_managed, .array_capacity => {
             try appendVisitedPair(a, b, visits, visit_len);
             const aa = try vms.asArraySlice(a);
             const bb = try vms.asArraySlice(b);
@@ -611,7 +648,7 @@ fn cloneValue(v: Value, visits: []CloneVisit, visit_len: *usize) anyerror!Value 
 fn cloneObject(src: *Object, visits: []CloneVisit, visit_len: *usize) anyerror!Value {
     if (cloneFindExisting(src, visits, visit_len.*)) |cached| return .{ .object = cached };
     switch (src.*) {
-        .array, .array_managed => {
+        .array, .array_managed, .array_capacity => {
             const out_obj = try vmgc.vmAllocObject();
             out_obj.* = .{ .array = &[_]Value{} };
             try vms.pushTempRoot(.{ .object = out_obj });

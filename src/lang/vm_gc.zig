@@ -52,6 +52,9 @@ fn drainMarkQueue() void {
                 var i: usize = 0;
                 while (i < items.len) : (i += 1) markValue(items[i]);
             },
+            .array_capacity => |ac| {
+                if (heap.isObjectLive(ac.backing)) markObjectQueue(ac.backing);
+            },
             .map, .map_managed, .map_hashed => {
                 const items = vms.asMapSlice(obj) catch unreachable;
                 var i: usize = 0;

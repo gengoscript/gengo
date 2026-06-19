@@ -105,6 +105,7 @@ fn tplAsArraySlice(obj: *Object) []Value {
     return switch (obj.*) {
         .array => |a| a,
         .array_managed => |a| a,
+        .array_capacity => |a| a.backing.array_managed[0..a.len],
         else => &[_]Value{},
     };
 }
