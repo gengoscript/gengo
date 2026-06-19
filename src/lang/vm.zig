@@ -2861,14 +2861,12 @@ fn runPanicUnwind(orig_err: anyerror) anyerror!void {
                 tup_obj.* = .{ .array = &[_]Value{} };
                 const items = try vmAllocManagedSlice(Value, n);
                 if (named_ret > 0) {
-                    var ri: u8 = 0;
-                    while (ri < named_ret) : (ri += 1) {
+                    for (0..named_ret) |ri| {
                         const raw = vmState().stack[rec_base + rec_arity + ri];
                         items[ri] = if (raw == .object and raw.object.* == .cell) raw.object.cell.value else raw;
                     }
                 } else {
-                    var ri: u8 = 0;
-                    while (ri < n) : (ri += 1) items[ri] = .null;
+                    @memset(items, .null);
                 }
                 tup_obj.* = .{ .array_managed = items };
                 try vmPush(.{ .object = tup_obj });
@@ -2932,17 +2930,25 @@ fn levenshteinDistance(a: []const u8, b: []const u8) usize {
 fn findSimilarName(name: []const u8) ?[]const u8 {
     var best: ?[]const u8 = null;
     var best_dist: usize = 4; // only suggest names within 2 edits
-    var i: usize = 0;
-    const n = globals.len();
-    while (i < n) : (i += 1) {
+    for (0..globals.len()) |i| {
         const candidate = globals.nameAt(i);
         const d = levenshteinDistance(name, candidate);
-        if (d < best_dist) {
-            best_dist = d;
-            best = candidate;
-        }
+        if (d < best_dist) { best_dist = d; best = candidate; }
     }
     return best;
+}
+
+fn callValue(fn_val: Value, args: []const Value) !Value {
+    if (args.len > 255) return error.ArityMismatch;
+    try vmPush(fn_val);
+    for (args) |a| try vmPush(a);
+    const depth_before = vmState().frame_top;
+    try performCall(@intCast(args.len));
+    const prev_target = vmState().call_depth_target;
+    vmState().call_depth_target = depth_before;
+    defer vmState().call_depth_target = prev_target;
+    try run();
+    return try vmPop();
 }
 
 pub fn callGlobal(name: []const u8, args: []const Value) !Value {
@@ -2950,37 +2956,12 @@ pub fn callGlobal(name: []const u8, args: []const Value) !Value {
     if (fn_val != .object) return error.NotAFunction;
     const obj = fn_val.object;
     if (obj.* != .function and obj.* != .closure) return error.NotAFunction;
-
-    // Clear the runtime error message so that runtimeErrMsg() is empty at the
-    // start of each external call.  runPanicUnwind uses it as a fallback when
-    // pending_panic_message is null, and we must not pick up a stale message
-    // from a previous engine_call.
+    // Clear stale runtime error so runPanicUnwind won't pick up a message
+    // from a previous engine_call as the fallback for pending_panic_message.
     vmState().runtime_err_len = 0;
-
-    if (args.len > 255) return error.ArityMismatch;
-    try vmPush(fn_val);
-    for (args) |a| try vmPush(a);
-
-    const depth_before = vmState().frame_top;
-    try performCall(@intCast(args.len));
-
-    const prev_target = vmState().call_depth_target;
-    vmState().call_depth_target = depth_before;
-    defer vmState().call_depth_target = prev_target;
-
-    try run();
-    return try vmPop();
+    return callValue(fn_val, args);
 }
 
 pub fn callFunction(func_val: Value, args: []const Value) anyerror!Value {
-    if (args.len > 255) return error.ArityMismatch;
-    try vmPush(func_val);
-    for (args) |a| try vmPush(a);
-    const depth_before = vmState().frame_top;
-    try performCall(@intCast(args.len));
-    const prev_target = vmState().call_depth_target;
-    vmState().call_depth_target = depth_before;
-    defer vmState().call_depth_target = prev_target;
-    try run();
-    return try vmPop();
+    return callValue(func_val, args);
 }
