@@ -38,14 +38,14 @@ pub fn nativeRandFloat() Value {
 pub fn nativeRandIntn(n_val: Value) !Value {
     const n = try vms.valueAsInt(n_val);
     if (n <= 0) return error.RangeError;
-    return .{ .int = @floatFromInt(randRng().intRangeLessThan(i64, 0, n)) };
+    return .{ .int = randRng().intRangeLessThan(i64, 0, n) };
 }
 
 pub fn nativeRandBetween(lo_val: Value, hi_val: Value) !Value {
     const lo = try vms.valueAsInt(lo_val);
     const hi = try vms.valueAsInt(hi_val);
     if (lo > hi) return error.RangeError;
-    return .{ .int = @floatFromInt(randRng().intRangeAtMost(i64, lo, hi)) };
+    return .{ .int = randRng().intRangeAtMost(i64, lo, hi) };
 }
 
 pub fn nativeRandSeed(n_val: Value) !void {
@@ -73,7 +73,7 @@ pub fn nativeRandPerm(n_v: Value) !Value {
     defer vms.popTempRoot();
     const items = try vmgc.vmAllocManagedSlice(Value, usize_n);
     var i: usize = 0;
-    while (i < usize_n) : (i += 1) items[i] = .{ .int = @floatFromInt(i) };
+    while (i < usize_n) : (i += 1) items[i] = .{ .int = @intCast(i) };
     var j: usize = usize_n;
     while (j > 1) {
         j -= 1;

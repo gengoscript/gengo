@@ -187,7 +187,7 @@ fn fuzzValueWire() void {
         switch (v) {
             .null => if (round != .null) fail("fuzz FAIL: null round-trip\n"),
             .boolean => if (round != .boolean or round.boolean != v.boolean) fail("fuzz FAIL: bool round-trip\n"),
-            .int => if (round != .float or round.float != v.int) fail("fuzz FAIL: int round-trip\n"),
+            .int => if (round != .int or round.int != v.int) fail("fuzz FAIL: int round-trip\n"),
             .float => if (round != .float or (!std.math.isNan(v.float) and round.float != v.float)) fail("fuzz FAIL: float round-trip\n"),
             .decimal => if (round != .decimal or round.decimal != v.decimal) fail("fuzz FAIL: decimal round-trip\n"),
             .rune => if (round != .rune or round.rune != v.rune) fail("fuzz FAIL: rune round-trip\n"),

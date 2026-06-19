@@ -296,7 +296,7 @@ pub fn vmConst() !Value {
 
 pub fn vmIndexFromVal(v: Value) !usize {
     const n: f64 = switch (v) {
-        .int => |x| x,
+        .int => |x| @floatFromInt(x),
         .decimal => |x| @floatFromInt(x),
         .rune => |x| @floatFromInt(x),
         else => return error.TypeError,
@@ -310,7 +310,7 @@ pub fn vmIndexFromVal(v: Value) !usize {
 
 pub fn vmSliceIndex(v: Value, upper: usize) !usize {
     const n: f64 = switch (v) {
-        .int => |x| x,
+        .int => |x| @floatFromInt(x),
         .decimal => |x| @floatFromInt(x),
         .rune => |x| @floatFromInt(x),
         else => return error.TypeError,
@@ -326,7 +326,7 @@ pub fn vmSliceIndex(v: Value, upper: usize) !usize {
 
 pub fn valueAsNumber(v: Value) !f64 {
     return switch (v) {
-        .int => |n| n,
+        .int => |n| @floatFromInt(n),
         .float => |n| n,
         .rune => |r| @floatFromInt(r),
         .object => |o| switch (o.*) {
@@ -350,13 +350,7 @@ pub fn valueAsDecimal(v: Value) !i64 {
 
 pub fn valueAsInt(v: Value) !i64 {
     return switch (v) {
-        .int => |n| blk: {
-            const t = @trunc(n);
-            if (t != n) return error.TypeError;
-            if (t < @as(f64, @floatFromInt(std.math.minInt(i64))) or
-                t >= @as(f64, @floatFromInt(std.math.maxInt(i64)))) return error.TypeError;
-            break :blk @intFromFloat(t);
-        },
+        .int => |n| n,
         .rune => |r| @intCast(r),
         .object => |o| switch (o.*) {
             .named_value => |nv| valueAsInt(nv.value),

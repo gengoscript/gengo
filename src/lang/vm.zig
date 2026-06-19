@@ -347,9 +347,9 @@ fn computeAddResult(a: Value, b: Value) !Value {
 
 fn makeNumeric(tag: VTag, n: f64) Value {
     return switch (tag) {
-        .int => .{ .int = n },
+        .int => .{ .int = @intFromFloat(n) },
         .float => .{ .float = n },
-        else => .{ .int = n },
+        else => .{ .int = @intFromFloat(n) },
     };
 }
 
@@ -458,7 +458,7 @@ fn checkNamedTypePredicate(nt_obj: *Object, inner: Value) !void {
         if (result != .boolean or !result.boolean) {
             var vbuf: [64]u8 = undefined;
             const vstr: []const u8 = switch (inner) {
-                .int     => |n| std.fmt.bufPrint(&vbuf, "{d}", .{@as(i64, @intFromFloat(@trunc(n)))}) catch "?",
+                .int     => |n| std.fmt.bufPrint(&vbuf, "{d}", .{n}) catch "?",
                 .float   => |n| std.fmt.bufPrint(&vbuf, "{d}", .{n}) catch "?",
                 .decimal => |d| std.fmt.bufPrint(&vbuf, "{d}", .{d}) catch "?",
                 .string  => |s| s,
@@ -1999,9 +1999,7 @@ fn runInner() !void {
                 var b = vmState().stack[base + src];
                 if (b == .object and b.object.* == .cell) b = b.object.cell.value;
                 const result: Value = if (a == .int and b == .int) blk: {
-                    const r = a.int + b.int;
-                    if (!std.math.isFinite(r)) { vms.setRuntimeErr("non-finite value in arithmetic operation", .{}); return error.TypeError; }
-                    break :blk .{ .int = r };
+                    break :blk .{ .int = a.int + b.int };
                 } else try computeAddResult(a, b);
                 const cur = vmState().stack[base + dst];
                 if (cur == .object and cur.object.* == .cell) {
@@ -2018,9 +2016,7 @@ fn runInner() !void {
                 var a = vmState().stack[base + dst];
                 if (a == .object and a.object.* == .cell) a = a.object.cell.value;
                 const result: Value = if (a == .int and k == .int) blk: {
-                    const r = a.int + k.int;
-                    if (!std.math.isFinite(r)) { vms.setRuntimeErr("non-finite value in arithmetic operation", .{}); return error.TypeError; }
-                    break :blk .{ .int = r };
+                    break :blk .{ .int = a.int + k.int };
                 } else try computeAddResult(a, k);
                 const cur = vmState().stack[base + dst];
                 if (cur == .object and cur.object.* == .cell) {
@@ -2082,16 +2078,16 @@ fn runInner() !void {
                 const a = try vmPop();
                 if (decimalOpValues(a, b)) |_| {
                     return error.TypeError;
-                } else if (a == .object and a.object.* == .named_value and a.object.named_value.typ.named_type.base == .decimal and b == .int and b.int >= @as(f64, @floatFromInt(std.math.minInt(i64))) and b.int < std.math.pow(f64, 2.0, 63.0)) {
+                } else if (a == .object and a.object.* == .named_value and a.object.named_value.typ.named_type.base == .decimal and b == .int and b.int >= std.math.minInt(i64) and b.int < std.math.maxInt(i64)) {
                     const d = vms.valueAsDecimal(a.object.named_value.value) catch return error.TypeError;
-                    const other = @as(i64, @intFromFloat(b.int));
-                    const result = @mulWithOverflow(d, other);
+                    
+                    const result = @mulWithOverflow(d, b.int);
                     if (result[1] != 0) return error.TypeError;
                     try pushDecimalResultWithCarrier(a.object.named_value.typ, result[0]);
-                } else if (b == .object and b.object.* == .named_value and b.object.named_value.typ.named_type.base == .decimal and a == .int and a.int >= @as(f64, @floatFromInt(std.math.minInt(i64))) and a.int < std.math.pow(f64, 2.0, 63.0)) {
+                } else if (b == .object and b.object.* == .named_value and b.object.named_value.typ.named_type.base == .decimal and a == .int and a.int >= std.math.minInt(i64) and a.int < std.math.maxInt(i64)) {
                     const d = vms.valueAsDecimal(b.object.named_value.value) catch return error.TypeError;
-                    const other = @as(i64, @intFromFloat(a.int));
-                    const result = @mulWithOverflow(d, other);
+                    
+                    const result = @mulWithOverflow(d, a.int);
                     if (result[1] != 0) return error.TypeError;
                     try pushDecimalResultWithCarrier(b.object.named_value.typ, result[0]);
                 } else {
@@ -2109,12 +2105,11 @@ fn runInner() !void {
                 const a = try vmPop();
                 if (decimalOpValues(a, b)) |_| {
                     return error.TypeError;
-                } else if (a == .object and a.object.* == .named_value and a.object.named_value.typ.named_type.base == .decimal and b == .int and b.int >= @as(f64, @floatFromInt(std.math.minInt(i64))) and b.int < std.math.pow(f64, 2.0, 63.0)) {
+                } else if (a == .object and a.object.* == .named_value and a.object.named_value.typ.named_type.base == .decimal and b == .int and b.int >= std.math.minInt(i64) and b.int < std.math.maxInt(i64)) {
                     const d = vms.valueAsDecimal(a.object.named_value.value) catch return error.TypeError;
-                    const divisor = @as(i64, @intFromFloat(b.int));
-                    if (divisor == 0) { vms.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
-                    if (d == std.math.minInt(i64) and divisor == -1) return error.TypeError;
-                    try pushDecimalResultWithCarrier(a.object.named_value.typ, @divTrunc(d, divisor));
+                    if (b.int == 0) { vms.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
+                    if (d == std.math.minInt(i64) and b.int == -1) return error.TypeError;
+                    try pushDecimalResultWithCarrier(a.object.named_value.typ, @divTrunc(d, b.int));
                 } else {
                     const tag = numericOpTag(a, b) catch |err| {
                         if (err == error.TypeError) setBinaryTypeError("/", a, b);
@@ -2184,16 +2179,14 @@ fn runInner() !void {
                 const v = try vmPeek(0);
                 const n = try vms.valueAsInt(v);
                 const raw = ~n;
-                if (raw > (1 << 53) or raw < -(1 << 53)) return error.RangeError;
-                const result: f64 = @floatFromInt(raw);
                 if (v == .object and v.object.* == .named_value) {
-                    const wrapped = try vmtyp.coerceNamedTypeResult(v.object.named_value.typ, .{ .int = result });
+                    const wrapped = try vmtyp.coerceNamedTypeResult(v.object.named_value.typ, .{ .int = raw });
                     try checkNamedTypePredicate(v.object.named_value.typ, wrapped.object.named_value.value);
                     _ = try vmPop();
                     try vmPush(wrapped);
                 } else {
                     _ = try vmPop();
-                    try vmPush(.{ .int = result });
+                    try vmPush(.{ .int = raw });
                 }
             },
             .shl => {
@@ -2230,7 +2223,7 @@ fn runInner() !void {
                     const t = @trunc(n);
                     const as_i64: i64 = @intFromFloat(t);
                     if (@as(f64, @floatFromInt(as_i64)) != t) return error.RangeError;
-                    try vmPush(.{ .int = t });
+                    try vmPush(.{ .int = as_i64 });
                     continue;
                 }
                 const v = vms.unboxNamed(raw);
