@@ -226,56 +226,102 @@ pub const Runtime = struct {
         return self.runPathWithProvider(src, path, .{ .table = sources }, false);
     }
 
+    fn capabilityModules(self: *Runtime) []const module_compile.CapModuleDesc {
+        return if (self.enabled_capabilities.len > 0) module_compile.AllCapabilities else &[_]module_compile.CapModuleDesc{};
+    }
+
+    fn buildHostModuleNames(self: *Runtime) ![]const []const u8 {
+        const names_ptr = heap.bump([]const u8, self.host_modules.len) orelse return error.OutOfMemory;
+        const names = names_ptr[0..self.host_modules.len];
+        for (names, self.host_modules) |*n, hm| n.* = hm.name;
+        return names;
+    }
+
+    fn initCompileSession(
+        self: *Runtime,
+        session: *module_compile.Session,
+        provider: module_compile.SourceProvider,
+        hm_names: []const []const u8,
+        caps: []const module_compile.CapModuleDesc,
+        test_mode: bool,
+    ) void {
+        session.* = .{};
+        session.provider = provider;
+        session.host_module_names = hm_names;
+        session.host_module_descs = self.host_modules;
+        session.enabled_capabilities = self.enabled_capabilities;
+        session.capability_modules = caps;
+        session.test_mode = test_mode;
+    }
+
+    fn recordSessionCompileError(self: *Runtime, session: *const module_compile.Session) void {
+        self.last_compile_line = if (session.last_error_line != 0) session.last_error_line else 1;
+        self.last_compile_col = session.last_error_col;
+        self.last_compile_msg_len = session.last_error_msg_len;
+        @memcpy(self.last_compile_msg_buf[0..session.last_error_msg_len], session.last_error_msg_buf[0..session.last_error_msg_len]);
+        self.setLastCompilePath(session.last_error_path);
+    }
+
+    fn recordCompilerCompileError(self: *Runtime, compiler: *const Compiler, path: []const u8) void {
+        self.last_compile_line = if (compiler.err_line != 0) compiler.err_line else compiler.prev.line;
+        self.last_compile_col = compiler.err_col;
+        self.last_compile_msg_len = compiler.err_msg_len;
+        @memcpy(self.last_compile_msg_buf[0..compiler.err_msg_len], compiler.err_msg_buf[0..compiler.err_msg_len]);
+        self.setLastCompilePath(path);
+    }
+
+    fn copyTestNamesFromSession(self: *Runtime, session: *const module_compile.Session) void {
+        self.test_count = session.test_count;
+        var ti: usize = 0;
+        while (ti < session.test_count) : (ti += 1) {
+            self.test_names[ti] = session.test_names[ti];
+        }
+    }
+
+    fn copyTestNamesFromCompiler(self: *Runtime, compiler: *const Compiler) void {
+        self.test_count = compiler.test_count;
+        var ti: usize = 0;
+        while (ti < compiler.test_count) : (ti += 1) {
+            self.test_names[ti] = compiler.test_names[ti];
+        }
+    }
+
+    fn compileProgram(self: *Runtime, src: []const u8, path: []const u8, provider: module_compile.SourceProvider, test_mode: bool) !void {
+        const hm_names = try self.buildHostModuleNames();
+        const caps = self.capabilityModules();
+        if (path.len != 0) {
+            var session: module_compile.Session = .{};
+            self.initCompileSession(&session, provider, hm_names, caps, test_mode);
+            session.compileRoot(path, src) catch |err| {
+                self.recordSessionCompileError(&session);
+                return err;
+            };
+            if (test_mode) self.copyTestNamesFromSession(&session);
+            return;
+        }
+
+        var session: module_compile.Session = .{};
+        self.initCompileSession(&session, provider, hm_names, caps, test_mode);
+        var compiler = Compiler.init(src, .{
+            .module_ctx = &session,
+            .resolve_import = module_compile.Session.resolveImportOpaque,
+            .has_module_export = module_compile.hasModuleExport,
+            .test_mode = test_mode,
+        });
+        compiler.compile(true) catch |err| {
+            self.recordCompilerCompileError(&compiler, "");
+            return err;
+        };
+        if (test_mode) self.copyTestNamesFromCompiler(&compiler);
+    }
+
     pub fn compileOnly(self: *Runtime, src: []const u8, path: []const u8, provider: module_compile.SourceProvider) !void {
         self.last_compile_line = 0;
         self.last_compile_path_len = 0;
         self.last_compile_col = 0;
         self.last_compile_msg_len = 0;
         self.reset();
-        const hm_names = blk: {
-            const names_ptr = heap.bump([]const u8, self.host_modules.len) orelse return error.OutOfMemory;
-            const names = names_ptr[0..self.host_modules.len];
-            for (names, self.host_modules) |*n, hm| n.* = hm.name;
-            break :blk names;
-        };
-        const all_caps: []const module_compile.CapModuleDesc = if (self.enabled_capabilities.len > 0) module_compile.AllCapabilities else &[_]module_compile.CapModuleDesc{};
-        if (path.len != 0) {
-            var session: module_compile.Session = .{};
-            session.provider = provider;
-            session.host_module_names = hm_names;
-            session.host_module_descs = self.host_modules;
-            session.enabled_capabilities = self.enabled_capabilities;
-            session.capability_modules = all_caps;
-            session.compileRoot(path, src) catch |err| {
-                self.last_compile_line = if (session.last_error_line != 0) session.last_error_line else 1;
-                self.last_compile_col = session.last_error_col;
-                self.last_compile_msg_len = session.last_error_msg_len;
-                @memcpy(self.last_compile_msg_buf[0..session.last_error_msg_len], session.last_error_msg_buf[0..session.last_error_msg_len]);
-                self.setLastCompilePath(session.last_error_path);
-                return err;
-            };
-        } else {
-            var session: module_compile.Session = .{};
-            session.provider = provider;
-            session.host_module_names = hm_names;
-            session.host_module_descs = self.host_modules;
-            session.enabled_capabilities = self.enabled_capabilities;
-            session.capability_modules = all_caps;
-            var compiler = Compiler.init(src, .{
-                .module_ctx = &session,
-                .resolve_import = module_compile.Session.resolveImportOpaque,
-                .has_module_export = module_compile.hasModuleExport,
-                .test_mode = false,
-            });
-            compiler.compile(true) catch |err| {
-                self.last_compile_line = if (compiler.err_line != 0) compiler.err_line else compiler.prev.line;
-                self.last_compile_col = compiler.err_col;
-                self.last_compile_msg_len = compiler.err_msg_len;
-                @memcpy(self.last_compile_msg_buf[0..compiler.err_msg_len], compiler.err_msg_buf[0..compiler.err_msg_len]);
-                self.setLastCompilePath("");
-                return err;
-            };
-        }
+        try self.compileProgram(src, path, provider, false);
     }
 
     // Compile and install all native globals (std, host modules, capabilities)
@@ -284,10 +330,9 @@ pub const Runtime = struct {
     pub fn compileAndInstall(self: *Runtime, src: []const u8, path: []const u8, provider: module_compile.SourceProvider) !void {
         try self.compileOnly(src, path, provider);
         vm.setPolicy(self.policy);
-        const all_caps: []const module_compile.CapModuleDesc = if (self.enabled_capabilities.len > 0) module_compile.AllCapabilities else &[_]module_compile.CapModuleDesc{};
         try vmnative.installStdGlobal();
         try vmnative.installHostModules(self.host_modules);
-        try vmnative.installCapabilityModules(all_caps);
+        try vmnative.installCapabilityModules(self.capabilityModules());
     }
 
     pub fn runPathWithProvider(self: *Runtime, src: []const u8, path: []const u8, provider: module_compile.SourceProvider, test_mode: bool) !void {
@@ -310,71 +355,11 @@ pub const Runtime = struct {
         self.test_failed = false;
         self.reset();
         vm.setPolicy(self.policy);
-
-        const hm_names = blk: {
-            const names_ptr = heap.bump([]const u8, self.host_modules.len) orelse return error.OutOfMemory;
-            const names = names_ptr[0..self.host_modules.len];
-            for (names, self.host_modules) |*n, hm| n.* = hm.name;
-            break :blk names;
-        };
-
-        const all_caps: []const module_compile.CapModuleDesc = if (self.enabled_capabilities.len > 0) module_compile.AllCapabilities else &[_]module_compile.CapModuleDesc{};
-        if (path.len != 0) {
-            var session: module_compile.Session = .{};
-            session.provider = provider;
-            session.host_module_names = hm_names;
-            session.host_module_descs = self.host_modules;
-            session.enabled_capabilities = self.enabled_capabilities;
-            session.capability_modules = all_caps;
-            session.test_mode = test_mode;
-            session.compileRoot(path, src) catch |err| {
-                self.last_compile_line = if (session.last_error_line != 0) session.last_error_line else 1;
-                self.last_compile_col = session.last_error_col;
-                self.last_compile_msg_len = session.last_error_msg_len;
-                @memcpy(self.last_compile_msg_buf[0..session.last_error_msg_len], session.last_error_msg_buf[0..session.last_error_msg_len]);
-                self.setLastCompilePath(session.last_error_path);
-                return err;
-            };
-            if (test_mode) {
-                self.test_count = session.test_count;
-                var ti: usize = 0;
-                while (ti < session.test_count) : (ti += 1) {
-                    self.test_names[ti] = session.test_names[ti];
-                }
-            }
-        } else {
-            var session: module_compile.Session = .{};
-            session.provider = provider;
-            session.host_module_names = hm_names;
-            session.host_module_descs = self.host_modules;
-            session.enabled_capabilities = self.enabled_capabilities;
-            session.capability_modules = all_caps;
-            var compiler = Compiler.init(src, .{
-                .module_ctx = &session,
-                .resolve_import = module_compile.Session.resolveImportOpaque,
-                .has_module_export = module_compile.hasModuleExport,
-                .test_mode = test_mode,
-            });
-            compiler.compile(true) catch |err| {
-                self.last_compile_line = if (compiler.err_line != 0) compiler.err_line else compiler.prev.line;
-                self.last_compile_col = compiler.err_col;
-                self.last_compile_msg_len = compiler.err_msg_len;
-                @memcpy(self.last_compile_msg_buf[0..compiler.err_msg_len], compiler.err_msg_buf[0..compiler.err_msg_len]);
-                self.setLastCompilePath("");
-                return err;
-            };
-            if (test_mode) {
-                self.test_count = compiler.test_count;
-                var ti: usize = 0;
-                while (ti < compiler.test_count) : (ti += 1) {
-                    self.test_names[ti] = compiler.test_names[ti];
-                }
-            }
-        }
+        try self.compileProgram(src, path, provider, test_mode);
 
         try vmnative.installStdGlobal();
         try vmnative.installHostModules(self.host_modules);
-        try vmnative.installCapabilityModules(all_caps);
+        try vmnative.installCapabilityModules(self.capabilityModules());
         vm.run() catch |err| {
             self.last_runtime_line = vm.panicLine();
             self.last_runtime_col = vm.panicCol();
