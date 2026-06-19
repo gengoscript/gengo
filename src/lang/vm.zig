@@ -3622,7 +3622,13 @@ fn runPanicUnwind(orig_err: anyerror) anyerror!void {
 // ── Public API ────────────────────────────────────────────────────────────────
 
 pub fn run() anyerror!void {
-    try chunk.verify();
+    chunk.verify() catch |err| {
+        if (chunk.g_state.verify_err_len > 0) {
+            vms.setRuntimeErr("verifier: {s}", .{chunk.g_state.verify_err_buf[0..chunk.g_state.verify_err_len]});
+            vms.vmState().pending_panic_message = vms.runtimeErrMsg();
+        }
+        return runPanicUnwind(err);
+    };
     runInner() catch |err| return runPanicUnwind(err);
 }
 
