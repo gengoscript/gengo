@@ -220,6 +220,125 @@ test "chunk: verify rejects jump target into instruction body" {
     try std.testing.expectError(error.BadJumpTarget, chunk.verify());
 }
 
+test "chunk: verify catches truncated instruction (BytecodeOutOfBounds)" {
+    var rt = try setup();
+    defer rt.deinit();
+
+    chunk.setActive(rt.chunk_state);
+    globals.setActive(&rt.globals_state);
+    heap.setActive(&rt.heap_state);
+    chunk.reset();
+    globals.reset();
+    heap.reset();
+
+    // Emit just the opcode byte of .constant — missing 2 operand bytes
+    try chunk.emitOp(.constant, 1);
+
+    try std.testing.expectError(error.BytecodeOutOfBounds, chunk.verify());
+}
+
+test "chunk: verify catches bad constant index (BadConstantIndex)" {
+    var rt = try setup();
+    defer rt.deinit();
+
+    chunk.setActive(rt.chunk_state);
+    globals.setActive(&rt.globals_state);
+    heap.setActive(&rt.heap_state);
+    chunk.reset();
+    globals.reset();
+    heap.reset();
+
+    // Emit .constant with an index that exceeds const_count
+    try chunk.emitOp(.constant, 1);
+    try chunk.emitByte(0, 1);
+    try chunk.emitByte(1, 1);
+
+    try std.testing.expectError(error.BadConstantIndex, chunk.verify());
+}
+
+test "chunk: verify catches stack underflow (StackUnderflow)" {
+    var rt = try setup();
+    defer rt.deinit();
+
+    chunk.setActive(rt.chunk_state);
+    globals.setActive(&rt.globals_state);
+    heap.setActive(&rt.heap_state);
+    chunk.reset();
+    globals.reset();
+    heap.reset();
+
+    // .pop with empty stack → depth(0) < pop(1)
+    try chunk.emitOp(.pop, 1);
+    try chunk.emitOp(.halt, 1);
+
+    try std.testing.expectError(error.StackUnderflow, chunk.verify());
+}
+
+test "chunk: verify catches return at top level (ReturnAtTopLevel)" {
+    var rt = try setup();
+    defer rt.deinit();
+
+    chunk.setActive(rt.chunk_state);
+    globals.setActive(&rt.globals_state);
+    heap.setActive(&rt.heap_state);
+    chunk.reset();
+    globals.reset();
+    heap.reset();
+
+    try chunk.emitOp(.ret, 1);
+
+    try std.testing.expectError(error.ReturnAtTopLevel, chunk.verify());
+}
+
+test "chunk: verify catches malformed fused instruction (BadOpcode)" {
+    var rt = try setup();
+    defer rt.deinit();
+
+    chunk.setActive(rt.chunk_state);
+    globals.setActive(&rt.globals_state);
+    heap.setActive(&rt.heap_state);
+    chunk.reset();
+    globals.reset();
+    heap.reset();
+
+    // Add a constant so the const_index check passes,
+    // then check that the skip-byte mismatch triggers BadOpcode
+    try chunk.emitConst(.{ .int = 42 }, 1);
+    try chunk.emitConst(.{ .int = 99 }, 1);
+    // Emit get_local_const_eq with a wrong skip byte (0 instead of const_eq)
+    try chunk.emitByte(@intFromEnum(Op.get_local_const_eq), 1);
+    try chunk.emitByte(1, 1);       // local slot (valid)
+    try chunk.emitByte(0, 1);       // skip byte — should be const_eq
+    try chunk.emitByte(0, 1);       // const index hi
+    try chunk.emitByte(1, 1);       // const index lo = 1 (valid, < const_count)
+    try chunk.emitOp(.halt, 1);
+
+    try std.testing.expectError(error.BadOpcode, chunk.verify());
+}
+
+// regression: verifier error message includes IP/opcode context
+test "chunk: verify context on BadConstantIndex" {
+    var rt = try setup();
+    defer rt.deinit();
+
+    chunk.setActive(rt.chunk_state);
+    globals.setActive(&rt.globals_state);
+    heap.setActive(&rt.heap_state);
+    chunk.reset();
+    globals.reset();
+    heap.reset();
+
+    try chunk.emitOp(.constant, 1);
+    try chunk.emitByte(0, 1);
+    try chunk.emitByte(99, 1);
+
+    try std.testing.expectError(error.BadConstantIndex, chunk.verify());
+    try std.testing.expect(chunk.g_state.verify_err_len > 0);
+    const msg = chunk.g_state.verify_err_buf[0..chunk.g_state.verify_err_len];
+    try std.testing.expect(std.mem.indexOf(u8, msg, "constant") != null);
+    try std.testing.expect(std.mem.indexOf(u8, msg, "ip=0") != null);
+}
+
 test "compiler: std direct call lowers to leaf global" {
     var rt = try setup();
     defer rt.deinit();

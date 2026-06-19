@@ -55,6 +55,9 @@ pub const State = struct {
     // Used by the std direct-call peephole to truncate back and emit a single get_global
     // "module:std.{ns}.{func}" instead of std-namespace load + field traversal + call.
     std_call_patch_pos: ?usize = null,
+    // Verifier error detail — populated before verify() returns an error.
+    verify_err_buf: [256]u8 = undefined,
+    verify_err_len: usize = 0,
 };
 
 var g_default_state: State = .{};
@@ -80,6 +83,7 @@ pub fn reset() void {
     g_state.last_triple_global_lt_pos = null;
     g_state.last_set_global_code_pos = null;
     g_state.std_call_patch_pos = null;
+    g_state.verify_err_len = 0;
 }
 
 pub fn setCol(col: u32) void {
@@ -730,6 +734,149 @@ pub fn decodeAt(pos: usize) !DecodedInstruction {
     };
 }
 
+fn isReturnOp(op: Op) bool {
+    return switch (op) {
+        .ret, .ret_const, .get_local_ret, .add_ret => true,
+        else => false,
+    };
+}
+
+fn isUnconditionalBranch(op: Op) bool {
+    return switch (op) {
+        .jump, .loop, .set_global_loop => true,
+        else => false,
+    };
+}
+
+fn isConditionalBranch(op: Op) bool {
+    return switch (op) {
+        .jump_if_false, .jif_pop,
+        .get_local_const_eq_jif_pop, .get_local_const_lt_jif_pop,
+        .get_global_const_eq_jif_pop, .get_global_const_lt_jif_pop => true,
+        else => false,
+    };
+}
+
+fn stackEffect(op: Op, ip: usize) struct { pop: u8, push: u8 } {
+    return switch (op) {
+        // Push 1
+        .constant, .null_val, .true_val, .false_val,
+        .get_local, .get_upvalue, .get_global, .get_field,
+        .make_closure, .tuple_get_keep,
+        .get_local_const_eq, .get_local_const_sub,
+        .get_local_const_add, .get_local_const_lt,
+        .get_global_const_eq, .get_global_const_sub,
+        .get_global_const_add, .get_global_const_lt,
+        .get_local_get_field => .{ .pop = 0, .push = 1 },
+
+        // Pop 1
+        .pop, .def_global, .set_global, .set_local, .set_upvalue,
+        .set_field, .jif_pop, .op_assert, .repl_print,
+        .set_named_predicate => .{ .pop = 1, .push = 0 },
+
+        // Pop 2, push 1 (binary operators)
+        .add, .sub, .mul, .div, .mod, .pow,
+        .bit_and, .bit_or, .bit_xor, .shl, .shr,
+        .eq, .gt, .lt => .{ .pop = 2, .push = 1 },
+
+        // Pop 1, push 1 (unary / type ops)
+        .neg, .not, .bit_not,
+        .cast_int, .cast_float, .cast_decimal, .cast_bool, .cast_string, .cast_rune,
+        .type_name, .variant_check, .variant_payload,
+        .const_eq, .const_sub, .const_add, .const_lt,
+        .assert_type, .assert_interface, .assert_struct,
+        .tuple_get => .{ .pop = 1, .push = 1 },
+
+        // Pop 3, push 0
+        .set_index => .{ .pop = 3, .push = 0 },
+
+        // Pop 2, push 1
+        .get_index => .{ .pop = 2, .push = 1 },
+
+        // Variable pop counts — read operand byte
+        .call => blk: {
+            const argc = g_state.code[ip + 1];
+            break :blk .{ .pop = argc + 1, .push = 1 };
+        },
+        .defer_call => blk: {
+            const argc = g_state.code[ip + 1];
+            break :blk .{ .pop = argc + 1, .push = 0 };
+        },
+        .invoke_method => blk: {
+            const argc = g_state.code[ip + 3];
+            break :blk .{ .pop = argc + 1, .push = 1 };
+        },
+        .defer_invoke_method => blk: {
+            const argc = g_state.code[ip + 3];
+            break :blk .{ .pop = argc + 1, .push = 0 };
+        },
+        .build_array => blk: {
+            const n = g_state.code[ip + 1];
+            break :blk .{ .pop = n, .push = 1 };
+        },
+        .build_tuple => blk: {
+            const n = g_state.code[ip + 1];
+            break :blk .{ .pop = n, .push = 1 };
+        },
+        .build_map => blk: {
+            const n = g_state.code[ip + 1];
+            break :blk .{ .pop = n * 2, .push = 1 };
+        },
+        .build_struct_instance => blk: {
+            const field_count = g_state.code[ip + 1];
+            break :blk .{ .pop = 1 + field_count * 2, .push = 1 };
+        },
+        .get_slice => blk: {
+            const extra: u8 = @popCount(g_state.code[ip + 1]);
+            break :blk .{ .pop = 1 + extra, .push = 1 };
+        },
+
+        // Iteration — iter_next1 peeks iterator and pushes value+flag (+2),
+        // iter_next2 peeks iterator and pushes key+value+flag (+3).
+        // The "done" case pushes only flag (+1), but modeling the max case
+        // avoids depth underestimation in the loop body (which fires on the
+        // "more" path). Exit-path overestimation is harmless because loops
+        // have a single successor at the target.
+        .iter_init => .{ .pop = 1, .push = 1 },
+        .iter_next1 => .{ .pop = 0, .push = 2 },
+        .iter_next2 => .{ .pop = 0, .push = 3 },
+
+        // Duplication
+        .dup => .{ .pop = 0, .push = 1 },
+        .dup2 => .{ .pop = 0, .push = 2 },
+
+        // Special / no stack effect
+        .close_upvalue, .tuple_check_arity, .validate_type_default => .{ .pop = 0, .push = 0 },
+        .get_local_const_sub_call => blk: {
+            // Computes local - const, pushes result, then calls it.
+            // The internal push of the sub result offsets the call pop
+            // by one, so net is pop=argc, push=1.
+            const argc = g_state.code[ip + 5];
+            break :blk .{ .pop = argc, .push = 1 };
+        },
+        .local_add_local => .{ .pop = 0, .push = 0 },
+        .local_add_const => .{ .pop = 0, .push = 0 },
+        .op_assert_msg => .{ .pop = 2, .push = 0 },
+        .op_trap_check => .{ .pop = 1, .push = 0 },
+
+        // Return instructions (handled specially by control-flow logic)
+        .ret => .{ .pop = 1, .push = 0 },
+        .ret_const, .get_local_ret => .{ .pop = 0, .push = 0 },
+        .add_ret => .{ .pop = 2, .push = 0 },
+
+        // Branch instructions (pop already accounted for)
+        .jump, .loop, .set_global_loop, .jump_if_false => .{ .pop = 0, .push = 0 },
+        .get_local_const_eq_jif_pop, .get_local_const_lt_jif_pop,
+        .get_global_const_eq_jif_pop, .get_global_const_lt_jif_pop => .{ .pop = 0, .push = 0 },
+
+        .halt => .{ .pop = 0, .push = 0 },
+    };
+}
+
+fn verifySetErr(comptime fmt: []const u8, args: anytype) void {
+    g_state.verify_err_len = (std.fmt.bufPrint(&g_state.verify_err_buf, fmt, args) catch unreachable).len;
+}
+
 pub fn verify() !void {
     if (g_state.code_len == 0) return;
 
@@ -742,30 +889,205 @@ pub fn verify() !void {
         fn set(bits: []u8, idx: usize) void {
             bits[idx / 8] |= @as(u8, 1) << @intCast(idx % 8);
         }
-
         fn has(bits: []const u8, idx: usize) bool {
             return (bits[idx / 8] & (@as(u8, 1) << @intCast(idx % 8))) != 0;
         }
     };
 
-    var ip: usize = 0;
-    while (ip < g_state.code_len) {
-        Bits.set(starts, ip);
-        const inst = try decodeAt(ip);
-        if (inst.const_index) |idx| {
-            if (idx >= g_state.const_count) return error.BadConstantIndex;
+    // Pass 1: mark instruction starts, validate const indices, fused skip bytes.
+    {
+        var ip: usize = 0;
+        while (ip < g_state.code_len) {
+            Bits.set(starts, ip);
+            const inst = decodeAt(ip) catch |err| {
+                verifySetErr("ip={d}: {s}", .{ip, @errorName(err)});
+                return err;
+            };
+            if (inst.const_index) |idx| {
+                if (idx >= g_state.const_count) {
+                    verifySetErr("ip={d} ({s}): constant index {d} >= {d}", .{ip, @tagName(inst.op), idx, g_state.const_count});
+                    return error.BadConstantIndex;
+                }
+            }
+            // Fused opcode skip-byte validation: the byte that was the original
+            // inner opcode must match the expected value.
+            switch (inst.op) {
+                .get_local_const_eq => if (g_state.code[ip + 2] != @intFromEnum(Op.const_eq)) {
+                    verifySetErr("ip={d} ({s}): expected embedded const_eq, got {d}", .{ip, @tagName(inst.op), g_state.code[ip + 2]});
+                    return error.BadOpcode;
+                },
+                .get_local_const_sub => if (g_state.code[ip + 2] != @intFromEnum(Op.const_sub)) {
+                    verifySetErr("ip={d} ({s}): expected embedded const_sub, got {d}", .{ip, @tagName(inst.op), g_state.code[ip + 2]});
+                    return error.BadOpcode;
+                },
+                .get_local_const_add => if (g_state.code[ip + 2] != @intFromEnum(Op.const_add)) {
+                    verifySetErr("ip={d} ({s}): expected embedded const_add, got {d}", .{ip, @tagName(inst.op), g_state.code[ip + 2]});
+                    return error.BadOpcode;
+                },
+                .get_local_const_lt => if (g_state.code[ip + 2] != @intFromEnum(Op.const_lt)) {
+                    verifySetErr("ip={d} ({s}): expected embedded const_lt, got {d}", .{ip, @tagName(inst.op), g_state.code[ip + 2]});
+                    return error.BadOpcode;
+                },
+                .get_global_const_eq => if (g_state.code[ip + 5] != @intFromEnum(Op.const_eq)) {
+                    verifySetErr("ip={d} ({s}): expected embedded const_eq, got {d}", .{ip, @tagName(inst.op), g_state.code[ip + 5]});
+                    return error.BadOpcode;
+                },
+                .get_global_const_sub => if (g_state.code[ip + 5] != @intFromEnum(Op.const_sub)) {
+                    verifySetErr("ip={d} ({s}): expected embedded const_sub, got {d}", .{ip, @tagName(inst.op), g_state.code[ip + 5]});
+                    return error.BadOpcode;
+                },
+                .get_global_const_add => if (g_state.code[ip + 5] != @intFromEnum(Op.const_add)) {
+                    verifySetErr("ip={d} ({s}): expected embedded const_add, got {d}", .{ip, @tagName(inst.op), g_state.code[ip + 5]});
+                    return error.BadOpcode;
+                },
+                .get_global_const_lt => if (g_state.code[ip + 5] != @intFromEnum(Op.const_lt)) {
+                    verifySetErr("ip={d} ({s}): expected embedded const_lt, got {d}", .{ip, @tagName(inst.op), g_state.code[ip + 5]});
+                    return error.BadOpcode;
+                },
+                .get_local_const_eq_jif_pop => if (g_state.code[ip + 2] != @intFromEnum(Op.const_eq)) {
+                    verifySetErr("ip={d} ({s}): expected embedded const_eq, got {d}", .{ip, @tagName(inst.op), g_state.code[ip + 2]});
+                    return error.BadOpcode;
+                },
+                .get_local_const_lt_jif_pop => if (g_state.code[ip + 2] != @intFromEnum(Op.const_lt)) {
+                    verifySetErr("ip={d} ({s}): expected embedded const_lt, got {d}", .{ip, @tagName(inst.op), g_state.code[ip + 2]});
+                    return error.BadOpcode;
+                },
+                .get_global_const_eq_jif_pop => if (g_state.code[ip + 5] != @intFromEnum(Op.const_eq)) {
+                    verifySetErr("ip={d} ({s}): expected embedded const_eq, got {d}", .{ip, @tagName(inst.op), g_state.code[ip + 5]});
+                    return error.BadOpcode;
+                },
+                .get_global_const_lt_jif_pop => if (g_state.code[ip + 5] != @intFromEnum(Op.const_lt)) {
+                    verifySetErr("ip={d} ({s}): expected embedded const_lt, got {d}", .{ip, @tagName(inst.op), g_state.code[ip + 5]});
+                    return error.BadOpcode;
+                },
+                .get_local_const_sub_call => if (g_state.code[ip + 2] != @intFromEnum(Op.const_sub)) {
+                    verifySetErr("ip={d} ({s}): expected embedded const_sub, got {d}", .{ip, @tagName(inst.op), g_state.code[ip + 2]});
+                    return error.BadOpcode;
+                },
+                .get_local_get_field => if (g_state.code[ip + 2] != @intFromEnum(Op.get_field)) {
+                    verifySetErr("ip={d} ({s}): expected embedded get_field, got {d}", .{ip, @tagName(inst.op), g_state.code[ip + 2]});
+                    return error.BadOpcode;
+                },
+                else => {},
+            }
+            ip += inst.width;
         }
-        ip += inst.width;
     }
 
-    ip = 0;
-    while (ip < g_state.code_len) {
-        const inst = try decodeAt(ip);
-        if (inst.jump_target) |target| {
-            if (target >= g_state.code_len or !Bits.has(starts, target)) {
-                return error.BadJumpTarget;
+    // Pass 2: validate jump targets land on instruction starts.
+    {
+        var ip: usize = 0;
+        while (ip < g_state.code_len) {
+            const inst = decodeAt(ip) catch |err| {
+                verifySetErr("ip={d}: {s}", .{ip, @errorName(err)});
+                return err;
+            };
+            if (inst.jump_target) |target| {
+                if (target >= g_state.code_len or !Bits.has(starts, target)) {
+                    verifySetErr("ip={d} ({s}): jump target {d} lands inside operand bytes", .{ip, @tagName(inst.op), target});
+                    return error.BadJumpTarget;
+                }
+            }
+            ip += inst.width;
+        }
+    }
+
+    // Pass 3: stack depth analysis via worklist-based BFS.
+    // Also verifies that ret/ret_const/get_local_ret/add_ret are never
+    // reachable from the top-level entry point (ip=0).
+    {
+        // Collect function body entry points from the constant pool.
+        var func_body_count: usize = 0;
+        var func_ips: [256]usize = undefined;
+        {
+            var i: usize = 0;
+            while (i < g_state.const_count) : (i += 1) {
+                const cv = g_state.consts[i];
+                if (cv == .object) {
+                    switch (cv.object.*) {
+                        .function => |f| {
+                            if (f.ip < g_state.code_len and Bits.has(starts, f.ip)) {
+                                func_ips[func_body_count] = f.ip;
+                                func_body_count += 1;
+                            }
+                        },
+                        else => {},
+                    }
+                }
             }
         }
-        ip += inst.width;
+
+        const BfsRunner = struct {
+            fn run(entry_ip: usize, check_ret: bool, starts_arg: []u8) !void {
+                var depth = try std.heap.page_allocator.alloc(?i32, g_state.code_len);
+                defer std.heap.page_allocator.free(depth);
+                @memset(depth, null);
+
+                const WorkItem = struct { ip: usize, depth: i32 };
+                var work = try std.ArrayListUnmanaged(WorkItem).initCapacity(std.heap.page_allocator, g_state.code_len);
+                defer work.deinit(std.heap.page_allocator);
+                try work.append(std.heap.page_allocator, .{ .ip = entry_ip, .depth = 0 });
+
+                var head: usize = 0;
+                while (head < work.items.len) {
+                    const current_ip = work.items[head].ip;
+                    const current_depth = work.items[head].depth;
+                    head += 1;
+
+                    if (current_ip >= g_state.code_len) continue;
+                    if (!Bits.has(starts_arg, current_ip)) continue;
+
+                    // Different paths can legitimately arrive with different
+                    // depths (e.g., for_in break path vs natural exit path).
+                    // The first-visited depth is used for downstream checks.
+                    if (depth[current_ip]) |_| continue;
+                    depth[current_ip] = current_depth;
+
+                    const inst = decodeAt(current_ip) catch |err| {
+                        verifySetErr("ip={d}: {s}", .{current_ip, @errorName(err)});
+                        return err;
+                    };
+                    const effect = stackEffect(inst.op, current_ip);
+                    const is_branch = isConditionalBranch(inst.op);
+                    const is_uncond = isUnconditionalBranch(inst.op);
+                    const is_ret = isReturnOp(inst.op);
+
+                    if (is_ret and check_ret) {
+                        verifySetErr("ip={d} ({s}): return at top level", .{current_ip, @tagName(inst.op)});
+                        return error.ReturnAtTopLevel;
+                    }
+
+                    if (current_depth < effect.pop) {
+                        verifySetErr("ip={d} ({s}): stack depth {d} < {d}", .{current_ip, @tagName(inst.op), current_depth, effect.pop});
+                        return error.StackUnderflow;
+                    }
+
+                    const new_depth = current_depth - @as(i32, effect.pop) + @as(i32, effect.push);
+                    if (new_depth < 0) {
+                        verifySetErr("ip={d} ({s}): stack underflow (new depth {d})", .{current_ip, @tagName(inst.op), new_depth});
+                        return error.StackUnderflow;
+                    }
+
+                    if (!is_ret and !is_uncond) {
+                        const next_ip = current_ip + inst.width;
+                        if (next_ip < g_state.code_len) {
+                            try work.append(std.heap.page_allocator, .{ .ip = next_ip, .depth = new_depth });
+                        }
+                    }
+
+                    if (is_branch or is_uncond) {
+                        if (inst.jump_target) |target| {
+                            try work.append(std.heap.page_allocator, .{ .ip = target, .depth = new_depth });
+                        }
+                    }
+                }
+            }
+        };
+
+        try BfsRunner.run(0, true, starts);
+        var fi: usize = 0;
+        while (fi < func_body_count) : (fi += 1) {
+            try BfsRunner.run(func_ips[fi], false, starts);
+        }
     }
 }
