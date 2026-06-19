@@ -1609,6 +1609,18 @@ fn opDeferInvokeMethod() !void {
     vmState().stack_top = recv_idx;
 }
 
+fn writeGlobalIC(name_idx: usize, ic_base: usize, ic_slot: u16, val: Value) !void {
+    if (ic_slot != 0xFFFF) {
+        globals.setAt(ic_slot, val);
+    } else {
+        const name = (try chunk.constAt(name_idx)).string;
+        const slot = globals.findSlot(name) orelse return error.NotDefined;
+        chunk.patchByte(ic_base,     @intCast((slot >> 8) & 0xFF));
+        chunk.patchByte(ic_base + 1, @intCast(slot & 0xFF));
+        globals.setAt(slot, val);
+    }
+}
+
 fn readGlobalIC(name_idx: usize, ic_base: usize, ic_slot: u16) !Value {
     if (ic_slot != 0xFFFF) return globals.getAt(ic_slot);
     const name = (try chunk.constAt(name_idx)).string;
@@ -1682,16 +1694,7 @@ fn runInner() !void {
                 const name_idx = try vmShort();
                 const ic_base = vmState().ip;
                 const ic_slot: u16 = @intCast(try vmShort());
-                const val = try vmPop();
-                if (ic_slot != 0xFFFF) {
-                    globals.setAt(ic_slot, val);
-                } else {
-                    const name = (try chunk.constAt(name_idx)).string;
-                    const slot = globals.findSlot(name) orelse return error.NotDefined;
-                    chunk.patchByte(ic_base,     @intCast((slot >> 8) & 0xFF));
-                    chunk.patchByte(ic_base + 1, @intCast(slot & 0xFF));
-                    globals.setAt(slot, val);
-                }
+                try writeGlobalIC(name_idx, ic_base, ic_slot, try vmPop());
             },
 
             .get_local => {
@@ -2712,16 +2715,7 @@ fn runInner() !void {
                 const name_idx = try vmShort();
                 const ic_base = vmState().ip;
                 const ic_slot: u16 = @intCast(try vmShort());
-                const val = try vmPop();
-                if (ic_slot != 0xFFFF) {
-                    globals.setAt(ic_slot, val);
-                } else {
-                    const name = (try chunk.constAt(name_idx)).string;
-                    const slot = globals.findSlot(name) orelse return error.NotDefined;
-                    chunk.patchByte(ic_base,     @intCast((slot >> 8) & 0xFF));
-                    chunk.patchByte(ic_base + 1, @intCast(slot & 0xFF));
-                    globals.setAt(slot, val);
-                }
+                try writeGlobalIC(name_idx, ic_base, ic_slot, try vmPop());
                 const off = try vms.vmInt();
                 if (off > vmState().ip) return error.BytecodeOutOfBounds;
                 vmState().ip -= off;
