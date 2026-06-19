@@ -1048,23 +1048,7 @@ fn retSlowPath(retval_in: Value) !bool {
 
 // ── Large opcode handlers (extracted from runInner for readability) ──────────
 
-fn opGetLocalGetField() !void {
-    const slot = try vmByte();
-    vmState().ip += 1; // skip embedded get_field opcode byte
-    const name_idx = try vmShort();
-    const ic_base = vmState().ip;
-    const ic_type_idx = try vmShort();
-    const ic_fidx = try vmByte();
-    const frame_base = if (vmState().frame_top > 0) vmState().frames[vmState().frame_top - 1].base else 0;
-    if (frame_base + slot >= vmState().stack.len) return error.StackOverflow;
-    var raw = vmState().stack[frame_base + slot];
-    if (raw == .object and raw.object.* == .cell) raw = raw.object.cell.value;
-    const container = if (raw == .object and raw.object.* == .named_value)
-        raw.object.named_value.value
-    else
-        raw;
-    if (container != .object) return error.TypeError;
-    const obj = container.object;
+fn pushFieldFromObject(obj: *Object, name_idx: usize, ic_base: usize, ic_type_idx: usize, ic_fidx: u8) !void {
     switch (obj.*) {
         .array, .array_managed, .array_capacity => {
             const name = (try chunk.constAt(name_idx)).string;
@@ -1126,18 +1110,15 @@ fn opGetLocalGetField() !void {
                 }
             }
         },
-        .enum_type => |et| {
-            _ = et;
+        .enum_type => {
             const name = (try chunk.constAt(name_idx)).string;
             try vmPush(try enumTypeFieldValue(obj, name));
         },
-        .named_type => |nt| {
-            _ = nt;
+        .named_type => {
             const name = (try chunk.constAt(name_idx)).string;
             try vmPush(try namedTypeFieldValue(obj, name));
         },
-        .variant_type => |vt| {
-            _ = vt;
+        .variant_type => {
             const name = (try chunk.constAt(name_idx)).string;
             try vmPush(try variantTypeFieldValue(obj, name));
         },
@@ -1147,6 +1128,25 @@ fn opGetLocalGetField() !void {
         },
         else => return error.TypeError,
     }
+}
+
+fn opGetLocalGetField() !void {
+    const slot = try vmByte();
+    vmState().ip += 1; // skip embedded get_field opcode byte
+    const name_idx = try vmShort();
+    const ic_base = vmState().ip;
+    const ic_type_idx = try vmShort();
+    const ic_fidx = try vmByte();
+    const frame_base = if (vmState().frame_top > 0) vmState().frames[vmState().frame_top - 1].base else 0;
+    if (frame_base + slot >= vmState().stack.len) return error.StackOverflow;
+    var raw = vmState().stack[frame_base + slot];
+    if (raw == .object and raw.object.* == .cell) raw = raw.object.cell.value;
+    const container = if (raw == .object and raw.object.* == .named_value)
+        raw.object.named_value.value
+    else
+        raw;
+    if (container != .object) return error.TypeError;
+    try pushFieldFromObject(container.object, name_idx, ic_base, ic_type_idx, ic_fidx);
 }
 
 fn opGetIndex() !void {
@@ -1440,31 +1440,8 @@ fn opInvokeMethod() !void {
                 try vmPush(.null);
             } else return error.UnknownMethod;
         },
-        .named_value => |nv| {
+        .named_value, .enum_value, .variant_value => {
             if (vmState().stack_top >= vmState().stack.len) return error.StackOverflow;
-            _ = nv;
-            const resolved = try resolveMethodReceiver(recv, mname);
-            var si: usize = vmState().stack_top;
-            while (si > recv_idx + 1) : (si -= 1) vmState().stack[si] = vmState().stack[si - 1];
-            vmState().stack_top += 1;
-            vmState().stack[recv_idx] = resolved.func;
-            vmState().stack[recv_idx + 1] = recv;
-            try performCall(argc + 1);
-        },
-        .enum_value => |ev| {
-            if (vmState().stack_top >= vmState().stack.len) return error.StackOverflow;
-            _ = ev;
-            const resolved = try resolveMethodReceiver(recv, mname);
-            var si: usize = vmState().stack_top;
-            while (si > recv_idx + 1) : (si -= 1) vmState().stack[si] = vmState().stack[si - 1];
-            vmState().stack_top += 1;
-            vmState().stack[recv_idx] = resolved.func;
-            vmState().stack[recv_idx + 1] = recv;
-            try performCall(argc + 1);
-        },
-        .variant_value => |vv| {
-            if (vmState().stack_top >= vmState().stack.len) return error.StackOverflow;
-            _ = vv;
             const resolved = try resolveMethodReceiver(recv, mname);
             var si: usize = vmState().stack_top;
             while (si > recv_idx + 1) : (si -= 1) vmState().stack[si] = vmState().stack[si - 1];
@@ -1495,7 +1472,6 @@ fn opGetField() !void {
     const ic_base = vmState().ip;
     const ic_type_idx = try vmShort();
     const ic_fidx = try vmByte();
-    const name = (try chunk.constAt(name_idx)).string;
     const raw = try vmPop();
     var rooted_raw = false;
     if (raw == .object) { try pushTempRoot(raw); rooted_raw = true; }
@@ -1505,81 +1481,7 @@ fn opGetField() !void {
     else
         raw;
     if (container != .object) return error.TypeError;
-    const obj = container.object;
-    switch (obj.*) {
-        .array, .array_managed, .array_capacity => {
-            const items = try vms.asArraySlice(obj);
-            if (common.streq(name, "first")) {
-                if (items.len == 0) return error.IndexOutOfBounds;
-                try vmPush(items[0]);
-            } else if (common.streq(name, "last")) {
-                if (items.len == 0) return error.IndexOutOfBounds;
-                try vmPush(items[items.len - 1]);
-            } else return error.TypeError;
-        },
-        .struct_instance => |inst| {
-            const tpi = heap.objectPoolIndex(inst.typ);
-            if (ic_type_idx == @as(usize, tpi) and ic_fidx != 0xFF) {
-                try vmPush(inst.fields[ic_fidx].value);
-            } else {
-                const fi = vmtyp.findFieldIndex(inst.typ.struct_type.fields, name) orelse {
-                    vms.setRuntimeErr("no field '{s}' on type '{s}'", .{ name, inst.typ.struct_type.name });
-                    return error.UnknownStructField;
-                };
-                if (fi <= 0xFE) {
-                    chunk.patchByte(ic_base,     @intCast((tpi >> 8) & 0xFF));
-                    chunk.patchByte(ic_base + 1, @intCast(tpi & 0xFF));
-                    chunk.patchByte(ic_base + 2, @intCast(fi));
-                }
-                try vmPush(inst.fields[fi].value);
-            }
-        },
-        .map, .map_managed => {
-            if (common.streq(name, "len")) {
-                const items = try vms.asMapSlice(obj);
-                try vmPush(.{ .int = @intCast(items.len) });
-            } else {
-                const items = try vms.asMapSlice(obj);
-                const key_v = Value{ .string = name };
-                var i: usize = 0;
-                while (i < items.len) : (i += 1) {
-                    if (vmmap.mapKeyEquals(items[i].key, key_v)) {
-                        try vmPush(items[i].value);
-                        break;
-                    }
-                }
-                if (i == items.len) try vmPush(.null);
-            }
-        },
-        .map_hashed => |hm| {
-            if (common.streq(name, "len")) {
-                try vmPush(.{ .int = @intCast(hm.len) });
-            } else {
-                const key_v = Value{ .string = name };
-                if (vmmap.mapFindHashedIndex(hm.entries[0..hm.len], hm.buckets, key_v)) |fi| {
-                    try vmPush(hm.entries[fi].value);
-                } else {
-                    try vmPush(.null);
-                }
-            }
-        },
-        .enum_type => |et| {
-            _ = et;
-            try vmPush(try enumTypeFieldValue(obj, name));
-        },
-        .named_type => |nt| {
-            _ = nt;
-            try vmPush(try namedTypeFieldValue(obj, name));
-        },
-        .variant_type => |vt| {
-            _ = vt;
-            try vmPush(try variantTypeFieldValue(obj, name));
-        },
-        .variant_value => |vv| {
-            try vmPush(try variantValueFieldValue(vv, name));
-        },
-        else => return error.TypeError,
-    }
+    try pushFieldFromObject(container.object, name_idx, ic_base, ic_type_idx, ic_fidx);
 }
 
 fn opSetField() !void {
