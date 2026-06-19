@@ -366,6 +366,56 @@ pub fn disassemble() void {
                 io.write("\n");
             },
 
+            // --- global triple-fused: op + name(2) + ic(2) + skip(1) + idx(2) ---
+            .get_global_const_eq, .get_global_const_sub,
+            .get_global_const_add, .get_global_const_lt => {
+                const name_idx = readU16(i);
+                i += 2;
+                const ic = readU16(i);
+                i += 2;
+                i += 1; // skip byte
+                const idx = readU16(i);
+                i += 2;
+                io.write(@tagName(op));
+                io.write(" ");
+                writeConst(name_idx);
+                if (ic != 0xffff) {
+                    io.write(" ic=");
+                    writeNum(ic);
+                }
+                io.write(" [");
+                writeNum(idx);
+                io.write("] ");
+                writeConst(idx);
+                io.write("\n");
+            },
+            // --- global quad-fused: op + name(2) + ic(2) + skip(1) + idx(2) + jmp(4) ---
+            .get_global_const_eq_jif_pop, .get_global_const_lt_jif_pop => {
+                const name_idx = readU16(i);
+                i += 2;
+                const ic = readU16(i);
+                i += 2;
+                i += 1; // skip byte
+                const idx = readU16(i);
+                i += 2;
+                const jmp = readU32(i);
+                i += 4;
+                const target = start + 12 + @as(usize, jmp);
+                io.write(@tagName(op));
+                io.write(" ");
+                writeConst(name_idx);
+                if (ic != 0xffff) {
+                    io.write(" ic=");
+                    writeNum(ic);
+                }
+                io.write(" [");
+                writeNum(idx);
+                io.write("] ");
+                writeConst(idx);
+                io.write(" -> ");
+                writeOffset(target);
+                io.write("\n");
+            },
             // --- get_local_get_field: op + slot(1) + skip(1) + name(2) + ic_type(2) + ic_fidx(1) ---
             .get_local_get_field => {
                 const slot = chunk.codeByteAt(i);
