@@ -28,7 +28,12 @@ fn markObjectQueue(obj: *Object) void {
     if (!heap.isObjectLive(obj)) return;
     if (heap.isObjectMarked(obj)) return;
     heap.markObject(obj);
-    if (mark_worklist_top >= mark_worklist.len) return;
+    if (mark_worklist_top >= mark_worklist.len) {
+        if (comptime builtin.mode == .Debug) {
+            @panic("GC FATAL: mark worklist exhausted — object graph too deep or mark-phase bug");
+        }
+        return;
+    }
     mark_worklist[mark_worklist_top] = obj;
     mark_worklist_top += 1;
 }
@@ -115,6 +120,29 @@ fn drainMarkQueue() void {
     }
 }
 
+fn gcCheckIntegrityPostSweep() void {
+    if (comptime builtin.mode != .Debug) return;
+    const gs = heap.g_state;
+    const max = gs.obj_pool.len;
+
+    // Every string_view.source object must still be live after sweep.
+    var i: usize = 0;
+    while (i < max) : (i += 1) {
+        if (!gs.obj_live[i]) continue;
+        switch (gs.obj_pool[i]) {
+            .string_view => |sv| {
+                if (!heap.isObjectLive(sv.source)) {
+                    std.debug.panic("GC INTEGRITY: string_view.source (obj {d}) is dead after sweep", .{i});
+                }
+            },
+            else => {},
+        }
+    }
+
+    // Freed-block overlap is checked by heap.assertNotLive when
+    // heap.paranoia is enabled (via freeBytesManaged).
+}
+
 pub fn collectGarbage() void {
     const t0 = monoNowNs();
     mark_worklist_top = 0;
@@ -140,6 +168,7 @@ pub fn collectGarbage() void {
 
     const marked_count = heap.liveObjectCount();
     heap.sweepObjects();
+    gcCheckIntegrityPostSweep();
     const swept_count = marked_count - heap.liveObjectCount();
     vmperf.countGCSweep(marked_count, swept_count);
     const t1 = monoNowNs();
@@ -245,6 +274,24 @@ pub fn vmAllocManagedBytes(n: usize) ![]u8 {
         return s;
     }
     return error.OutOfMemory;
+}
+
+/// Allocate an object, set `safeInit` as a GC-safe initial tag, push a
+/// temp root, call `setup` (which may allocate managed memory and finalize
+/// fields), pop the temp root, and return the Value.
+///
+/// This helper ensures new native code cannot accidentally create a
+/// rooting-window bug by forgetting the temp-root or safe-tag step.
+pub fn buildObject(
+    comptime safeInit: Object,
+    comptime setup: *const fn (obj: *Object) anyerror!void,
+) anyerror!Value {
+    const obj = try vmAllocObject();
+    obj.* = safeInit;
+    try vms.pushTempRoot(.{ .object = obj });
+    defer vms.popTempRoot();
+    try setup(obj);
+    return .{ .object = obj };
 }
 
 pub fn makeDynString(s: []const u8) !Value {
