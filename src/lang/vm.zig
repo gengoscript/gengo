@@ -353,18 +353,7 @@ fn computeAddResult(a: Value, b: Value) !Value {
             vms.setRuntimeErr("non-finite value in arithmetic operation", .{});
             return error.TypeError;
         }
-        const val = makeNumeric(tag, an + bn);
-        const carrier = namedTypeCarrier(a, b) catch |err| {
-            if (err == error.TypeError) setBinaryTypeError("+", a, b);
-            return err;
-        };
-        if (carrier) |typ| {
-            const wrapped = try vmtyp.coerceNamedTypeResult(typ, val);
-            try checkNamedTypePredicate(typ, wrapped.object.named_value.value);
-            return wrapped;
-        } else {
-            return val;
-        }
+        return try wrapValueWithCarrier(a, b, makeNumeric(tag, an + bn), "+");
     }
 }
 
@@ -386,26 +375,7 @@ fn makeNumeric(tag: VTag, n: f64) Value {
     };
 }
 
-fn pushIntResultWithCarrier(a: Value, b: Value, n: i64, op: []const u8) !void {
-    const carrier = namedTypeCarrier(a, b) catch |err| {
-        if (err == error.TypeError) setBinaryTypeError(op, a, b);
-        return err;
-    };
-    if (carrier) |typ| {
-        const wrapped = try vmtyp.coerceNamedTypeResult(typ, .{ .int = n });
-        try checkNamedTypePredicate(typ, wrapped.object.named_value.value);
-        try vmPush(wrapped);
-    } else {
-        try vmPush(.{ .int = n });
-    }
-}
-
-fn pushNumericResultWithCarrier(a: Value, b: Value, n: f64, tag: VTag, op: []const u8) !void {
-    if (!std.math.isFinite(n)) {
-        vms.setRuntimeErr("non-finite value in arithmetic operation", .{});
-        return error.TypeError;
-    }
-    const val = makeNumeric(tag, n);
+fn wrapValueWithCarrier(a: Value, b: Value, val: Value, op: []const u8) !Value {
     const carrier = namedTypeCarrier(a, b) catch |err| {
         if (err == error.TypeError) setBinaryTypeError(op, a, b);
         return err;
@@ -413,10 +383,21 @@ fn pushNumericResultWithCarrier(a: Value, b: Value, n: f64, tag: VTag, op: []con
     if (carrier) |typ| {
         const wrapped = try vmtyp.coerceNamedTypeResult(typ, val);
         try checkNamedTypePredicate(typ, wrapped.object.named_value.value);
-        try vmPush(wrapped);
-    } else {
-        try vmPush(val);
+        return wrapped;
     }
+    return val;
+}
+
+fn pushIntResultWithCarrier(a: Value, b: Value, n: i64, op: []const u8) !void {
+    try vmPush(try wrapValueWithCarrier(a, b, .{ .int = n }, op));
+}
+
+fn pushNumericResultWithCarrier(a: Value, b: Value, n: f64, tag: VTag, op: []const u8) !void {
+    if (!std.math.isFinite(n)) {
+        vms.setRuntimeErr("non-finite value in arithmetic operation", .{});
+        return error.TypeError;
+    }
+    try vmPush(try wrapValueWithCarrier(a, b, makeNumeric(tag, n), op));
 }
 
 fn getShiftArgs(op: []const u8) !struct { a: Value, b: Value, an: i64, shift: u6 } {
