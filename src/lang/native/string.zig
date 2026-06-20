@@ -179,8 +179,7 @@ pub fn nativeStrRepeat(s: []const u8, count_v: Value) !Value {
     defer vms.popTempRoot();
     const buf = try vmgc.vmAllocManagedBytes(total);
     var pos: usize = 0;
-    var i: usize = 0;
-    while (i < count) : (i += 1) {
+    for (0..count) |_| {
         @memcpy(buf[pos .. pos + s.len], s);
         pos += s.len;
     }
@@ -305,9 +304,8 @@ pub fn nativeStrPadRight(s: []const u8, n_v: Value, pad: []const u8) !Value {
 
 pub fn nativeStrEqualFold(s: []const u8, t: []const u8) Value {
     if (s.len != t.len) return .{ .boolean = false };
-    var i: usize = 0;
-    while (i < s.len) : (i += 1) {
-        if (std.ascii.toLower(s[i]) != std.ascii.toLower(t[i])) return .{ .boolean = false };
+    for (s, t) |sc, tc| {
+        if (std.ascii.toLower(sc) != std.ascii.toLower(tc)) return .{ .boolean = false };
     }
     return .{ .boolean = true };
 }

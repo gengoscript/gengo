@@ -102,8 +102,7 @@ fn writeU64Err(v: u64) void {
     var n = v;
     var len: usize = 0;
     while (n > 0) : (n /= 10) { buf[len] = '0' + @as(u8, @intCast(n % 10)); len += 1; }
-    var i: usize = 0;
-    while (i < len / 2) : (i += 1) {
+    for (0..len / 2) |i| {
         const t = buf[i]; buf[i] = buf[len - 1 - i]; buf[len - 1 - i] = t;
     }
     io.werr(buf[0..len]);
