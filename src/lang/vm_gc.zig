@@ -119,10 +119,9 @@ fn gcCheckIntegrityPostSweep() void {
     const max = gs.obj_pool.len;
 
     // Every string_view.source object must still be live after sweep.
-    var i: usize = 0;
-    while (i < max) : (i += 1) {
-        if (!gs.obj_live[i]) continue;
-        switch (gs.obj_pool[i]) {
+    for (gs.obj_pool[0..max], gs.obj_live[0..max], 0..) |*obj, live, i| {
+        if (!live) continue;
+        switch (obj.*) {
             .string_view => |sv| {
                 if (!heap.isObjectLive(sv.source)) {
                     std.debug.panic("GC INTEGRITY: string_view.source (obj {d}) is dead after sweep", .{i});
@@ -140,22 +139,17 @@ pub fn collectGarbage() void {
     const t0 = monoNowNs();
     mark_worklist_top = 0;
 
-    var i: usize = 0;
-    while (i < vms.vmState().stack_top) : (i += 1) markValue(vms.vmState().stack[i]);
+    for (vms.vmState().stack[0..vms.vmState().stack_top]) |v| markValue(v);
 
-    i = 0;
-    while (i < globals.len()) : (i += 1) markValue(globals.compactValue(i));
+    for (0..globals.len()) |i| markValue(globals.compactValue(i));
 
     if (vms.vmState().std_module) |m| markObjectQueue(m);
 
-    i = 0;
-    while (i < vms.vmState().temp_root_top) : (i += 1) markValue(vms.vmState().temp_roots[i]);
+    for (vms.vmState().temp_roots[0..vms.vmState().temp_root_top]) |v| markValue(v);
 
-    i = 0;
-    while (i < chunk.constCount()) : (i += 1) markValue(chunk.constAt(i) catch unreachable);
+    for (0..chunk.constCount()) |i| markValue(chunk.constAt(i) catch unreachable);
 
-    i = 0;
-    while (i < vms.vmState().defer_top) : (i += 1) markValue(vms.vmState().defer_stack[i]);
+    for (vms.vmState().defer_stack[0..vms.vmState().defer_top]) |v| markValue(v);
 
     drainMarkQueue();
 
