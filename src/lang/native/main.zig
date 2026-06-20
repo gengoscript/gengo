@@ -68,10 +68,7 @@ fn makeNamespace(display_name: []const u8, qualified_name: []const u8, entries: 
     const any_spec: FieldTypeSpec = .{ .alts = any_alts[0..1] };
 
     const field_specs = heap.bump(StructFieldSpec, entries.len) orelse return error.OutOfMemory;
-    var i: usize = 0;
-    while (i < entries.len) : (i += 1) {
-        field_specs[i] = .{ .name = entries[i].name, .typ = any_spec, .is_const = true };
-    }
+    for (field_specs[0..entries.len], entries) |*fs, e| fs.* = .{ .name = e.name, .typ = any_spec, .is_const = true };
 
     const typ_obj = try vmgc.vmAllocObject();
     try vms.pushTempRoot(.{ .object = typ_obj });
@@ -88,13 +85,7 @@ fn makeNamespace(display_name: []const u8, qualified_name: []const u8, entries: 
     defer vms.popTempRoot();
     inst_obj.* = .{ .struct_instance = .{ .typ = typ_obj, .fields = inst_fields } };
 
-    i = 0;
-    while (i < entries.len) : (i += 1) {
-        inst_fields[i] = .{
-            .key = .{ .string = entries[i].name },
-            .value = entries[i].value,
-        };
-    }
+    for (inst_fields[0..entries.len], entries) |*f, e| f.* = .{ .key = .{ .string = e.name }, .value = e.value };
     return inst_obj;
 }
 
@@ -731,15 +722,10 @@ pub fn callHostModule(hmf: HostModuleFuncObj, argc: u8) !void {
     try host_abi_mod.ensureHostReady();
     const start = vms.vmState().stack_top - argc;
     var args_wire: [MaxNativeArgs]host_abi.ValueWire = undefined;
-    var i: usize = 0;
-    while (i < @as(usize, argc)) : (i += 1) {
-        args_wire[i] = try host_abi_mod.wireFromValue(vms.vmState().stack[start + i]);
-    }
+    for (args_wire[0..argc], vms.vmState().stack[start .. start + argc]) |*w, v| w.* = try host_abi_mod.wireFromValue(v);
     var out_wire = host_abi_mod.nullWire();
     try host_abi_mod.nativeCallRawChecked(hmf.call_id, args_wire[0..argc], &out_wire);
-    var j: usize = 0;
-    while (j < @as(usize, argc)) : (j += 1) _ = try vms.vmPop();
-    _ = try vms.vmPop();
+    for (0..@as(usize, argc) + 1) |_| _ = try vms.vmPop();
     const out = try host_abi_mod.valueFromWire(out_wire);
     try vms.vmPush(out);
 }

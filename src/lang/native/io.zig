@@ -717,11 +717,8 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
         .io_print => {
             if (!vms.vmState().policy.allow_io) return error.PermissionDenied;
             const start = vms.vmState().stack_top - argc;
-            var i: usize = 0;
-            while (i < @as(usize, argc)) : (i += 1) io.printValue(vms.vmState().stack[start + i]);
-            var j: usize = 0;
-            while (j < @as(usize, argc)) : (j += 1) _ = try vms.vmPop();
-            _ = try vms.vmPop();
+            for (vms.vmState().stack[start .. start + argc]) |v| io.printValue(v);
+            for (0..@as(usize, argc) + 1) |_| _ = try vms.vmPop();
             try vms.vmPush(.null);
         },
         .io_printf => {
@@ -731,9 +728,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const fmt_str = try vms.asStringValue(vms.vmState().stack[start]);
             const result = try doSprintf(fmt_str, start, argc);
             io.write(result.object.*.dyn_string);
-            var j: usize = 0;
-            while (j < @as(usize, argc)) : (j += 1) _ = try vms.vmPop();
-            _ = try vms.vmPop();
+            for (0..@as(usize, argc) + 1) |_| _ = try vms.vmPop();
             try vms.vmPush(.null);
         },
         .io_println => {
@@ -744,26 +739,18 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                     if (argc > MaxNativeArgs) return error.ArityMismatch;
                     const start = vms.vmState().stack_top - argc;
                     var args_wire: [MaxNativeArgs]host_abi.ValueWire = undefined;
-                    var i: usize = 0;
-                    while (i < @as(usize, argc)) : (i += 1) {
-                        args_wire[i] = try host_abi_mod.wireFromValue(vms.vmState().stack[start + i]);
-                    }
+                    for (args_wire[0..argc], vms.vmState().stack[start .. start + argc]) |*w, v| w.* = try host_abi_mod.wireFromValue(v);
                     var out = host_abi_mod.nullWire();
                     try host_abi_mod.nativeCallChecked(.io_println, args_wire[0..argc], &out);
-                    var j: usize = 0;
-                    while (j < @as(usize, argc)) : (j += 1) _ = try vms.vmPop();
-                    _ = try vms.vmPop();
+                    for (0..@as(usize, argc) + 1) |_| _ = try vms.vmPop();
                     try vms.vmPush(.null);
                     return;
                 }
             }
             const start = vms.vmState().stack_top - argc;
-            var i: usize = 0;
-            while (i < @as(usize, argc)) : (i += 1) io.printValue(vms.vmState().stack[start + i]);
+            for (vms.vmState().stack[start .. start + argc]) |v| io.printValue(v);
             io.write("\n");
-            var j: usize = 0;
-            while (j < @as(usize, argc)) : (j += 1) _ = try vms.vmPop();
-            _ = try vms.vmPop();
+            for (0..@as(usize, argc) + 1) |_| _ = try vms.vmPop();
             try vms.vmPush(.null);
         },
         .io_sprintf => {
@@ -771,19 +758,14 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             if (argc < 1) return error.ArityMismatch;
             const fmt_str = try vms.asStringValue(vms.vmState().stack[start]);
             const out = try doSprintf(fmt_str, start, argc);
-            var j: usize = 0;
-            while (j < @as(usize, argc)) : (j += 1) _ = try vms.vmPop();
-            _ = try vms.vmPop();
+            for (0..@as(usize, argc) + 1) |_| _ = try vms.vmPop();
             try vms.vmPush(out);
         },
         .io_eprint => {
             if (!vms.vmState().policy.allow_io) return error.PermissionDenied;
             const start = vms.vmState().stack_top - argc;
-            var i: usize = 0;
-            while (i < @as(usize, argc)) : (i += 1) try printArgToErr(vms.vmState().stack[start + i]);
-            var j: usize = 0;
-            while (j < @as(usize, argc)) : (j += 1) _ = try vms.vmPop();
-            _ = try vms.vmPop();
+            for (vms.vmState().stack[start .. start + argc]) |v| try printArgToErr(v);
+            for (0..@as(usize, argc) + 1) |_| _ = try vms.vmPop();
             try vms.vmPush(.null);
         },
         .io_eprintf => {
@@ -793,20 +775,15 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const fmt_str = try vms.asStringValue(vms.vmState().stack[start]);
             const result = try doSprintf(fmt_str, start, argc);
             io.werr(result.object.*.dyn_string);
-            var j: usize = 0;
-            while (j < @as(usize, argc)) : (j += 1) _ = try vms.vmPop();
-            _ = try vms.vmPop();
+            for (0..@as(usize, argc) + 1) |_| _ = try vms.vmPop();
             try vms.vmPush(.null);
         },
         .io_eprintln => {
             if (!vms.vmState().policy.allow_io) return error.PermissionDenied;
             const start = vms.vmState().stack_top - argc;
-            var i: usize = 0;
-            while (i < @as(usize, argc)) : (i += 1) try printArgToErr(vms.vmState().stack[start + i]);
+            for (vms.vmState().stack[start .. start + argc]) |v| try printArgToErr(v);
             io.werr("\n");
-            var j: usize = 0;
-            while (j < @as(usize, argc)) : (j += 1) _ = try vms.vmPop();
-            _ = try vms.vmPop();
+            for (0..@as(usize, argc) + 1) |_| _ = try vms.vmPop();
             try vms.vmPush(.null);
         },
         .io_read => {
