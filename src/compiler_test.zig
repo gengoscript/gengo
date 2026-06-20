@@ -310,6 +310,58 @@ test "runtime: compileOnly and runPathWithProvider agree on rooted compile error
     try std.testing.expectEqualStrings(path, compile_snapshot.path);
 }
 
+test "runtime: compileOnly and runPathWithProvider agree on imported module compile errors" {
+    const path = "main.gengo";
+    const src =
+        \\dep := import("./dep")
+        \\
+    ;
+    const dep_src =
+        \\func broken( {
+        \\
+    ;
+    const source_entries = [_]module_compile.SourceEntry{
+        .{ .path = path, .source = src },
+        .{ .path = "dep.gengo", .source = dep_src },
+    };
+    const provider: module_compile.SourceProvider = .{ .table = &source_entries };
+
+    var rt = try setup();
+    defer rt.deinit();
+
+    const compile_snapshot = try compileOnlySnapshot(&rt, src, path, provider);
+    const run_snapshot = try runPathCompileSnapshot(&rt, src, path, provider);
+
+    try expectCompileSnapshotsEqual(compile_snapshot, run_snapshot);
+    try std.testing.expectEqualStrings("dep.gengo", compile_snapshot.path);
+}
+
+test "runtime: compileOnly and runPathWithProvider agree on nested import lookup failures" {
+    const path = "main.gengo";
+    const src =
+        \\dep := import("./dep")
+        \\
+    ;
+    const dep_src =
+        \\missing := import("./missing")
+        \\
+    ;
+    const source_entries = [_]module_compile.SourceEntry{
+        .{ .path = path, .source = src },
+        .{ .path = "dep.gengo", .source = dep_src },
+    };
+    const provider: module_compile.SourceProvider = .{ .table = &source_entries };
+
+    var rt = try setup();
+    defer rt.deinit();
+
+    const compile_snapshot = try compileOnlySnapshot(&rt, src, path, provider);
+    const run_snapshot = try runPathCompileSnapshot(&rt, src, path, provider);
+
+    try expectCompileSnapshotsEqual(compile_snapshot, run_snapshot);
+    try std.testing.expectEqualStrings("dep.gengo", compile_snapshot.path);
+}
+
 test "api runtime: rooted entrypoints agree on compile and runtime error mapping" {
     const bad_src =
         \\func broken( {
