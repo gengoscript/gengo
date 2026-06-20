@@ -92,27 +92,19 @@ pub fn nativeStrTrim(s: []const u8) !Value {
     return vmgc.makeDynString(std.mem.trim(u8, s, " \t\n\r"));
 }
 
-pub fn nativeStrUpper(s: []const u8) !Value {
+fn nativeStrTransform(s: []const u8, comptime transform: fn (u8) u8) !Value {
     const obj = try vmgc.vmAllocObject();
     obj.* = .{ .dyn_string = &[_]u8{} };
     try vms.pushTempRoot(.{ .object = obj });
     defer vms.popTempRoot();
     const buf = try vmgc.vmAllocManagedBytes(s.len);
-    for (s, 0..) |b, i| buf[i] = std.ascii.toUpper(b);
+    for (s, 0..) |b, i| buf[i] = transform(b);
     obj.* = .{ .dyn_string = buf[0..s.len] };
     return .{ .object = obj };
 }
 
-pub fn nativeStrLower(s: []const u8) !Value {
-    const obj = try vmgc.vmAllocObject();
-    obj.* = .{ .dyn_string = &[_]u8{} };
-    try vms.pushTempRoot(.{ .object = obj });
-    defer vms.popTempRoot();
-    const buf = try vmgc.vmAllocManagedBytes(s.len);
-    for (s, 0..) |b, i| buf[i] = std.ascii.toLower(b);
-    obj.* = .{ .dyn_string = buf[0..s.len] };
-    return .{ .object = obj };
-}
+pub fn nativeStrUpper(s: []const u8) !Value { return nativeStrTransform(s, std.ascii.toUpper); }
+pub fn nativeStrLower(s: []const u8) !Value { return nativeStrTransform(s, std.ascii.toLower); }
 
 pub fn nativeStrContains(s: []const u8, sub: []const u8) Value {
     return .{ .boolean = std.mem.indexOf(u8, s, sub) != null };

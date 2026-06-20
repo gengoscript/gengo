@@ -125,45 +125,17 @@ fn isStringValueOrNamedString(v: Value) bool {
     return false;
 }
 
-fn namedBaseName(base: vmod.NamedTypeBase) []const u8 {
-    return switch (base) {
-        .int => "int",
-        .float => "float",
-        .decimal => "decimal",
-        .string => "string",
-        .bool => "bool",
-        .rune => "rune",
-        .array_t => "array",
-        .map_t => "map",
-        .enum_t => "enum",
-    };
-}
-
-fn runtimeTypeName(v: Value) []const u8 {
-    return switch (v) {
-        .int => "int",
-        .float => "float",
-        .decimal => "decimal",
-        .rune => "rune",
-        .boolean => "bool",
-        .string => "string",
-        .error_value => "error",
-        .null => "null",
-        .object => |obj| switch (obj.*) {
-            .named_value => obj.named_value.typ.named_type.name,
-            .dyn_string, .string_view => "string",
-            .array, .array_managed, .array_capacity => "array",
-            .map, .map_managed, .map_hashed => "map",
-            .function, .closure => "func",
-            else => "object",
-        },
-    };
+fn typeAssert(v: Value, ok: bool, expected: []const u8) !void {
+    if (!ok) {
+        vms.setRuntimeErr("expected {s}, got {s}", .{ expected, vmtyp.runtimeTypeName(v) });
+        return error.TypeError;
+    }
 }
 
 // Conditions are bool-only; explain what arrived instead of a bare TypeError.
 fn condAsBool(v: Value, what: []const u8) !bool {
     return v.asBool() catch {
-        vms.setRuntimeErr("{s} must be bool, got {s}; use a comparison or std.conv.to_bool", .{ what, runtimeTypeName(v) });
+        vms.setRuntimeErr("{s} must be bool, got {s}; use a comparison or std.conv.to_bool", .{ what, vmtyp.runtimeTypeName(v) });
         return error.TypeError;
     };
 }
@@ -184,26 +156,26 @@ fn setBinaryTypeError(op: []const u8, a: Value, b: Value) void {
         const named_v = if (a_named) a else b;
         const raw_v = if (a_named) b else a;
         const named_typ = named_v.object.named_value.typ.named_type;
-        const raw_name = runtimeTypeName(raw_v);
+        const raw_name = vmtyp.runtimeTypeName(raw_v);
         vms.setRuntimeErr("cannot apply '{s}' to {s} and {s}; wrap the {s} with {s}(...) or unwrap the named value with {s}(...)", .{
             op,
             named_typ.name,
             raw_name,
             raw_name,
             named_typ.name,
-            namedBaseName(named_typ.base),
+            vmtyp.namedBaseName(named_typ.base),
         });
         return;
     }
     if ((a == .int and b == .float) or (a == .float and b == .int)) {
         vms.setRuntimeErr("cannot apply '{s}' to {s} and {s}; use matching numeric types such as 2.0 or float(2)", .{
             op,
-            runtimeTypeName(a),
-            runtimeTypeName(b),
+            vmtyp.runtimeTypeName(a),
+            vmtyp.runtimeTypeName(b),
         });
         return;
     }
-    vms.setRuntimeErr("cannot apply '{s}' to {s} and {s}", .{ op, runtimeTypeName(a), runtimeTypeName(b) });
+    vms.setRuntimeErr("cannot apply '{s}' to {s} and {s}", .{ op, vmtyp.runtimeTypeName(a), vmtyp.runtimeTypeName(b) });
 }
 
 fn valueAsNumberForOp(v: Value, other: Value, op: []const u8) !f64 {
@@ -221,7 +193,7 @@ fn checkComparableNumeric(a: Value, b: Value, op: []const u8) !void {
     const ea_raw = ea == .int or ea == .float;
     const eb_raw = eb == .int or eb == .float;
     if (ea_raw and eb_raw and @as(VTag, ea) != @as(VTag, eb)) {
-        vms.setRuntimeErr("cannot apply '{s}' to {s} and {s}; use matching numeric types such as 2.0 or float(2)", .{ op, runtimeTypeName(a), runtimeTypeName(b) });
+        vms.setRuntimeErr("cannot apply '{s}' to {s} and {s}; use matching numeric types such as 2.0 or float(2)", .{ op, vmtyp.runtimeTypeName(a), vmtyp.runtimeTypeName(b) });
         return error.TypeError;
     }
 }
@@ -229,7 +201,7 @@ fn checkComparableNumeric(a: Value, b: Value, op: []const u8) !void {
 fn valueAsNumberForCompare(v: Value, other: Value) !f64 {
     return vms.valueAsNumber(v) catch |err| {
         if (err == error.TypeError) {
-            vms.setRuntimeErr("cannot compare {s} and {s}", .{ runtimeTypeName(v), runtimeTypeName(other) });
+            vms.setRuntimeErr("cannot compare {s} and {s}", .{ vmtyp.runtimeTypeName(v), vmtyp.runtimeTypeName(other) });
         }
         return err;
     };
@@ -271,7 +243,7 @@ fn checkNamedValueCompatibility(a: Value, b: Value) !void {
         const plain = if (a_named) b else a;
         const nt_name = named.object.named_value.typ.named_type.name;
         vms.setRuntimeErr("cannot mix {s} and {s}; wrap the {s} with {s}(...) or unwrap the named value with {s}(...)", .{
-            nt_name, runtimeTypeName(plain), runtimeTypeName(plain), nt_name, runtimeTypeName(plain),
+            nt_name, vmtyp.runtimeTypeName(plain), vmtyp.runtimeTypeName(plain), nt_name, vmtyp.runtimeTypeName(plain),
         });
         return error.TypeError;
     }
@@ -800,6 +772,12 @@ fn enterFunctionFrame(f: @import("value.zig").FuncObj, func_obj: *Object, closur
     vmState().ip = f.ip;
 }
 
+inline fn pop2push1(v: Value) !void {
+    _ = try vmPop();
+    _ = try vmPop();
+    try vmPush(v);
+}
+
 fn performCall(argc: u8) !void {
     if (vmState().stack_top < @as(usize, argc) + 1) return error.StackUnderflow;
     const func_val = vmState().stack[vmState().stack_top - argc - 1];
@@ -823,9 +801,7 @@ fn performCall(argc: u8) !void {
             const arg = vmState().stack[vmState().stack_top - 1];
             const out = try vmtyp.constructNamedType(obj, arg);
             try checkNamedTypePredicateChain(obj, out.object.named_value.value);
-            _ = try vmPop();
-            _ = try vmPop();
-            try vmPush(out);
+            try pop2push1(out);
         },
         .enum_type => |et| {
             if (et.parent_name == null) return error.NotAFunction;
@@ -839,9 +815,7 @@ fn performCall(argc: u8) !void {
                 if (common.streq(m, arg.object.enum_value.name)) { found = true; break; }
             }
             if (!found) return error.RangeError;
-            _ = try vmPop();
-            _ = try vmPop();
-            try vmPush(arg);
+            try pop2push1(arg);
         },
         .variant_ctor => |vc| {
             if (argc != 1) return error.ArityMismatch;
@@ -856,17 +830,13 @@ fn performCall(argc: u8) !void {
                 .ordinal = vc.ordinal,
                 .payload = payload,
             }};
-            _ = try vmPop();
-            _ = try vmPop();
-            try vmPush(.{ .object = vv });
+            try pop2push1(.{ .object = vv });
         },
         .named_type_fn => |nf| {
             if (argc != 1) return error.ArityMismatch;
             const arg = vmState().stack[vmState().stack_top - 1];
             const out = try vmtyp.applyNamedTypeFn(nf.typ, nf.kind, arg);
-            _ = try vmPop();
-            _ = try vmPop();
-            try vmPush(out);
+            try pop2push1(out);
         },
         else => return error.NotAFunction,
     }
@@ -933,23 +903,25 @@ fn iterInit(v: Value) !Value {
     return .{ .object = obj };
 }
 
+fn iterAdvance(cond: bool) !bool {
+    if (!cond) {
+        try vmPush(.{ .boolean = false });
+        return false;
+    }
+    return true;
+}
+
 fn iterNext1(it: *IterObj) !void {
     switch (it.kind) {
         .array => {
-            if (it.index >= it.array.len) {
-                try vmPush(.{ .boolean = false });
-                return;
-            }
+            if (!try iterAdvance(it.index < it.array.len)) return;
             const v = it.array[it.index];
             it.index += 1;
             try vmPush(v);
             try vmPush(.{ .boolean = true });
         },
         .string => {
-            if (it.index >= it.string.len) {
-                try vmPush(.{ .boolean = false });
-                return;
-            }
+            if (!try iterAdvance(it.index < it.string.len)) return;
             const ridx = it.rune_index;
             const start = try vmstr.utf8ByteOffsetForRuneIndexCached(it.string, ridx);
             const end = try vmstr.utf8ByteOffsetForRuneIndexCached(it.string, ridx + 1);
@@ -963,10 +935,7 @@ fn iterNext1(it: *IterObj) !void {
             try vmPush(.{ .boolean = true });
         },
         .map => {
-            if (it.index >= it.map.len) {
-                try vmPush(.{ .boolean = false });
-                return;
-            }
+            if (!try iterAdvance(it.index < it.map.len)) return;
             const k = it.map[it.index].key;
             it.index += 1;
             try vmPush(k);
@@ -992,20 +961,14 @@ fn iterNext1(it: *IterObj) !void {
 fn iterNext2(it: *IterObj) !void {
     switch (it.kind) {
         .array => {
-            if (it.index >= it.array.len) {
-                try vmPush(.{ .boolean = false });
-                return;
-            }
+            if (!try iterAdvance(it.index < it.array.len)) return;
             try vmPush(.{ .int = @intCast(it.index) });
             try vmPush(it.array[it.index]);
             it.index += 1;
             try vmPush(.{ .boolean = true });
         },
         .string => {
-            if (it.index >= it.string.len) {
-                try vmPush(.{ .boolean = false });
-                return;
-            }
+            if (!try iterAdvance(it.index < it.string.len)) return;
             const ridx = it.rune_index;
             const start = try vmstr.utf8ByteOffsetForRuneIndexCached(it.string, ridx);
             const end = try vmstr.utf8ByteOffsetForRuneIndexCached(it.string, ridx + 1);
@@ -1020,10 +983,7 @@ fn iterNext2(it: *IterObj) !void {
             try vmPush(.{ .boolean = true });
         },
         .map => {
-            if (it.index >= it.map.len) {
-                try vmPush(.{ .boolean = false });
-                return;
-            }
+            if (!try iterAdvance(it.index < it.map.len)) return;
             try vmPush(it.map[it.index].key);
             try vmPush(it.map[it.index].value);
             it.index += 1;
@@ -1939,21 +1899,15 @@ fn runInner() !void {
                     3 => v == .error_value,
                     else => return error.TypeError,
                 };
-                if (!ok) {
-                    const expected = if (tag == 1) "array" else if (tag == 2) "map" else if (tag == 3) "error" else "unknown";
-                    vms.setRuntimeErr("expected {s}, got {s}", .{ expected, runtimeTypeName(v) });
-                    return error.TypeError;
-                }
+                const expected = if (tag == 1) "array" else if (tag == 2) "map" else "error";
+                try typeAssert(v, ok, expected);
             },
             .assert_interface => {
                 const idx = try vmShort();
                 if (idx >= chunk.constCount()) return error.BadConstantIndex;
                 const name = (chunk.constAt(idx) catch unreachable).string;
                 const v = try vmPeek(0);
-                if (!vmtyp.matchesInterfaceType(v, name)) {
-                    vms.setRuntimeErr("expected {s}, got {s}", .{ name, runtimeTypeName(v) });
-                    return error.TypeError;
-                }
+                try typeAssert(v, vmtyp.matchesInterfaceType(v, name), name);
             },
             .assert_struct => {
                 const idx = try vmShort();
@@ -1961,10 +1915,7 @@ fn runInner() !void {
                 const name = (chunk.constAt(idx) catch unreachable).string;
                 const v = try vmPeek(0);
                 const ok = v == .object and v.object.* == .struct_instance and common.streq(v.object.struct_instance.typ.struct_type.qualified_name, name);
-                if (!ok) {
-                    vms.setRuntimeErr("expected {s}, got {s}", .{ name, runtimeTypeName(v) });
-                    return error.TypeError;
-                }
+                try typeAssert(v, ok, name);
             },
             .type_name => {
                 const v = try vmPop();
@@ -1977,7 +1928,7 @@ fn runInner() !void {
                     .float => |n| .{ .float = -n },
                     else => {
                         _ = try vmPop();
-                        vms.setRuntimeErr("cannot negate {s}", .{runtimeTypeName(v)});
+                        vms.setRuntimeErr("cannot negate {s}", .{vmtyp.runtimeTypeName(v)});
                         return error.TypeError;
                     },
                 };
