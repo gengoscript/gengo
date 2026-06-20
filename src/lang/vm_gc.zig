@@ -48,33 +48,27 @@ fn drainMarkQueue() void {
         const obj = mark_worklist[mark_worklist_top];
         switch (obj.*) {
             .array, .array_managed => {
-                const items = vms.asArraySlice(obj) catch unreachable;
-                var i: usize = 0;
-                while (i < items.len) : (i += 1) markValue(items[i]);
+                for (vms.asArraySlice(obj) catch unreachable) |v| markValue(v);
             },
             .array_capacity => |ac| {
                 if (heap.isObjectLive(ac.backing)) markObjectQueue(ac.backing);
             },
             .map, .map_managed, .map_hashed => {
-                const items = vms.asMapSlice(obj) catch unreachable;
-                var i: usize = 0;
-                while (i < items.len) : (i += 1) {
-                    markValue(items[i].key);
-                    markValue(items[i].value);
+                for (vms.asMapSlice(obj) catch unreachable) |e| {
+                    markValue(e.key);
+                    markValue(e.value);
                 }
             },
             .closure => |cl| {
                 markObjectQueue(cl.func);
-                var i: usize = 0;
-                while (i < cl.upvalues.len) : (i += 1) markObjectQueue(cl.upvalues[i]);
+                for (cl.upvalues) |uv| markObjectQueue(uv);
             },
             .cell => |c| markValue(c.value),
             .struct_instance => |inst| {
                 markObjectQueue(inst.typ);
-                var i: usize = 0;
-                while (i < inst.fields.len) : (i += 1) {
-                    markValue(inst.fields[i].key);
-                    markValue(inst.fields[i].value);
+                for (inst.fields) |f| {
+                    markValue(f.key);
+                    markValue(f.value);
                 }
             },
             .named_value => |nv| {
@@ -84,15 +78,11 @@ fn drainMarkQueue() void {
             .iterator => |it| {
                 if (it.source) |src| if (heap.isObjectLive(src)) markObjectQueue(src);
                 switch (it.kind) {
-                    .array => {
-                        var i: usize = 0;
-                        while (i < it.array.len) : (i += 1) markValue(it.array[i]);
-                    },
+                    .array => { for (it.array) |v| markValue(v); },
                     .map => {
-                        var i: usize = 0;
-                        while (i < it.map.len) : (i += 1) {
-                            markValue(it.map[i].key);
-                            markValue(it.map[i].value);
+                        for (it.map) |e| {
+                            markValue(e.key);
+                            markValue(e.value);
                         }
                     },
                     .string, .range => {},
