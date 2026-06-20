@@ -282,9 +282,8 @@ pub const Compiler = struct {
         const any_spec: FieldTypeSpec = .{ .alts = any_alts[0..1] };
 
         const fields = heap.bump(StructFieldSpec, self.export_count) orelse return error.OutOfMemory;
-        var i: usize = 0;
-        while (i < self.export_count) : (i += 1) {
-            fields[i] = .{ .name = self.exports[i].name, .typ = any_spec, .is_const = true };
+        for (fields[0..self.export_count], self.exports[0..self.export_count]) |*f, e| {
+            f.* = .{ .name = e.name, .typ = any_spec, .is_const = true };
         }
 
         const st = heap.allocObject() orelse return error.OutOfMemory;
@@ -292,10 +291,9 @@ pub const Compiler = struct {
         st.* = .{ .struct_type = StructTypeObj{ .name = self.copyName(self.moduleBaseName()) catch struct_name, .qualified_name = struct_name, .fields = fields[0..self.export_count] } };
         try chunk.emitConst(.{ .object = st }, self.prev.line);
 
-        i = 0;
-        while (i < self.export_count) : (i += 1) {
-            try chunk.emitConst(.{ .string = self.exports[i].name }, self.prev.line);
-            try chunk.emitGetGlobal(self.exports[i].global_name, self.prev.line);
+        for (self.exports[0..self.export_count]) |e| {
+            try chunk.emitConst(.{ .string = e.name }, self.prev.line);
+            try chunk.emitGetGlobal(e.global_name, self.prev.line);
         }
         try chunk.emit2(@intFromEnum(Op.build_struct_instance), self.export_count, self.prev.line);
         try chunk.emitOpConst(.def_global, .{ .string = self.options.module_global_name }, self.prev.line);
@@ -325,9 +323,8 @@ pub const Compiler = struct {
         const scope = self.currentScope();
         if (scope.local_count >= MaxLocals) { self.setErr("too many local variables (max {d})", .{MaxLocals}); return error.TooManyLocals; }
         if (name.len > 0 and name[0] != '_') {
-            var di: u8 = 0;
-            while (di < scope.local_count) : (di += 1) {
-                if (common.streq(scope.locals[di].name, name)) {
+            for (scope.locals[0..scope.local_count]) |local| {
+                if (common.streq(local.name, name)) {
                     self.setErr("duplicate local binding '{s}'", .{name});
                     return error.DuplicateLocal;
                 }
@@ -394,17 +391,16 @@ pub const Compiler = struct {
     }
 
     fn isStdModuleGlobal(self: *Compiler, name: []const u8) bool {
-        var i: u8 = 0;
-        while (i < self.std_module_global_count) : (i += 1) {
-            if (common.streq(self.std_module_global_names[i], name)) return true;
+        for (self.std_module_global_names[0..self.std_module_global_count]) |n| {
+            if (common.streq(n, name)) return true;
         }
         return false;
     }
 
     fn getImportModuleGlobalPath(self: *Compiler, name: []const u8) ?[]const u8 {
-        var i: u8 = 0;
-        while (i < self.import_module_global_count) : (i += 1) {
-            if (common.streq(self.import_module_global_qnames[i], name)) return self.import_module_global_paths[i];
+        const count = self.import_module_global_count;
+        for (self.import_module_global_qnames[0..count], self.import_module_global_paths[0..count]) |qn, path| {
+            if (common.streq(qn, name)) return path;
         }
         return null;
     }
@@ -424,9 +420,9 @@ pub const Compiler = struct {
             return self.currentScope().locals[slot].type_check;
         }
         const qname = self.qualifyGlobalName(name) catch return null;
-        var i: u8 = 0;
-        while (i < self.typed_global_count) : (i += 1) {
-            if (common.streq(self.typed_global_names[i], qname)) return self.typed_global_type_checks[i];
+        const count = self.typed_global_count;
+        for (self.typed_global_names[0..count], self.typed_global_type_checks[0..count]) |n, tc| {
+            if (common.streq(n, qname)) return tc;
         }
         return null;
     }
@@ -509,9 +505,8 @@ pub const Compiler = struct {
 
     fn addUpvalueToScope(self: *Compiler, scope_index: u8, name: []const u8, index: u8, from_upvalue: bool) ?u8 {
         const scope = &self.scopes[scope_index];
-        var u: u8 = 0;
-        while (u < scope.upvalue_count) : (u += 1) {
-            if (common.streq(scope.upvalues[u].name, name) and scope.upvalues[u].index == index and scope.upvalues[u].from_upvalue == from_upvalue) return u;
+        for (scope.upvalues[0..scope.upvalue_count], 0..) |uv, u| {
+            if (common.streq(uv.name, name) and uv.index == index and uv.from_upvalue == from_upvalue) return @intCast(u);
         }
         if (scope.upvalue_count >= MaxUpvalues) return null;
         const idx = scope.upvalue_count;
@@ -582,8 +577,7 @@ pub const Compiler = struct {
         // Save so code after the if-break block sees the correct local count (non-break path).
         const saved: u8 = self.currentScope().local_count;
         try self.cleanupLocals(loop.body_keep, line);
-        var p: u8 = 0;
-        while (p < loop.iter_pops) : (p += 1) try chunk.emitOp(.pop, line);
+        for (0..loop.iter_pops) |_| try chunk.emitOp(.pop, line);
         for (loop.loop_var_slots[0..loop.loop_var_count]) |slot| {
             try chunk.emit2(@intFromEnum(Op.close_upvalue), slot, line);
         }
@@ -808,9 +802,8 @@ pub const Compiler = struct {
     pub fn addExport(self: *Compiler, name: []const u8, global_name: []const u8) !void {
         if (self.skipping_test_body) return;
         const stable_name = try self.copyName(name);
-        var i: usize = 0;
-        while (i < self.export_count) : (i += 1) {
-            if (common.streq(self.exports[i].name, stable_name)) { self.setErr("duplicate export name '{s}'", .{stable_name}); return error.DuplicateExport; }
+        for (self.exports[0..self.export_count]) |e| {
+            if (common.streq(e.name, stable_name)) { self.setErr("duplicate export name '{s}'", .{stable_name}); return error.DuplicateExport; }
         }
         if (self.export_count >= MaxLocals) { self.setErr("too many fields (max {d})", .{MaxLocals}); return error.TooManyFields; }
         self.exports[self.export_count] = .{ .name = stable_name, .global_name = global_name };
