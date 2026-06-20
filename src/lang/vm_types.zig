@@ -102,9 +102,8 @@ pub fn namedTypeIsOrExtends(typ_obj: *Object, target_name: []const u8) bool {
 }
 
 pub fn findFieldIndex(fields: []const StructFieldSpec, key: []const u8) ?usize {
-    var i: usize = 0;
-    while (i < fields.len) : (i += 1) {
-        if (common.streq(fields[i].name, key)) return i;
+    for (fields, 0..) |f, i| {
+        if (common.streq(f.name, key)) return i;
     }
     return null;
 }
@@ -124,9 +123,8 @@ pub fn matchesTypeAlt(v: Value, alt: FieldTypeAlt) bool {
             if (!(v == .object and vms.isArrayObject(v.object))) break :blk false;
             if (alt.elem_spec) |es| {
                 const items = vms.asArraySlice(v.object) catch unreachable;
-                var i: usize = 0;
-                while (i < items.len) : (i += 1) {
-                    if (!matchesTypeSpec(items[i], es)) break :blk false;
+                for (items) |item| {
+                    if (!matchesTypeSpec(item, es)) break :blk false;
                 }
             }
             break :blk true;
@@ -135,11 +133,10 @@ pub fn matchesTypeAlt(v: Value, alt: FieldTypeAlt) bool {
             if (!(v == .object and vms.isMapObject(v.object))) break :blk false;
             if (alt.key_spec) |ks| {
                 const entries = vms.asMapSlice(v.object) catch unreachable;
-                var i: usize = 0;
-                while (i < entries.len) : (i += 1) {
-                    if (!matchesTypeSpec(entries[i].key, ks)) break :blk false;
+                for (entries) |e| {
+                    if (!matchesTypeSpec(e.key, ks)) break :blk false;
                     if (alt.val_spec) |vs| {
-                        if (!matchesTypeSpec(entries[i].value, vs)) break :blk false;
+                        if (!matchesTypeSpec(e.value, vs)) break :blk false;
                     }
                 }
             }
@@ -185,9 +182,8 @@ pub fn matchesFieldType(v: Value, spec: StructFieldSpec) bool {
 }
 
 pub fn matchesTypeSpec(v: Value, spec: FieldTypeSpec) bool {
-    var i: usize = 0;
-    while (i < spec.alts.len) : (i += 1) {
-        if (matchesTypeAlt(v, spec.alts[i])) return true;
+    for (spec.alts) |alt| {
+        if (matchesTypeAlt(v, alt)) return true;
     }
     return false;
 }
@@ -232,9 +228,8 @@ fn fieldTypeSpecStr(buf: *[128]u8, spec: FieldTypeSpec) []const u8 {
 
 fn fieldTypeSpecEqual(a: FieldTypeSpec, b: FieldTypeSpec) bool {
     if (a.alts.len != b.alts.len) return false;
-    var i: usize = 0;
-    while (i < a.alts.len) : (i += 1) {
-        if (!fieldTypeAltEqual(a.alts[i], b.alts[i])) return false;
+    for (a.alts, b.alts) |aa, ba| {
+        if (!fieldTypeAltEqual(aa, ba)) return false;
     }
     return true;
 }
@@ -262,17 +257,11 @@ fn fieldTypeAltEqual(a: FieldTypeAlt, b: FieldTypeAlt) bool {
             const ap = a.func_params orelse &[_]FieldTypeSpec{};
             const bp = b.func_params orelse &[_]FieldTypeSpec{};
             if (ap.len != bp.len) break :blk false;
-            var pi: usize = 0;
-            while (pi < ap.len) : (pi += 1) {
-                if (!fieldTypeSpecEqual(ap[pi], bp[pi])) break :blk false;
-            }
+            for (ap, bp) |pa, pb| { if (!fieldTypeSpecEqual(pa, pb)) break :blk false; }
             const ar = a.func_returns orelse &[_]FieldTypeSpec{};
             const br = b.func_returns orelse &[_]FieldTypeSpec{};
             if (ar.len != br.len) break :blk false;
-            var ri: usize = 0;
-            while (ri < ar.len) : (ri += 1) {
-                if (!fieldTypeSpecEqual(ar[ri], br[ri])) break :blk false;
-            }
+            for (ar, br) |ra, rb| { if (!fieldTypeSpecEqual(ra, rb)) break :blk false; }
             break :blk true;
         },
         else => true,
@@ -295,13 +284,11 @@ pub fn interfaceMethodMatches(m: InterfaceMethodSpec, f: FuncObj) bool {
     if (m.is_variadic) {
         if (!fieldTypeSpecEqual(m.variadic_type, f.variadic_type)) return false;
     }
-    var i: usize = 0;
-    while (i < m.param_types.len) : (i += 1) {
-        if (!fieldTypeSpecEqual(m.param_types[i], f.param_types[f_param_start + i])) return false;
+    for (m.param_types, f.param_types[f_param_start..]) |mp, fp| {
+        if (!fieldTypeSpecEqual(mp, fp)) return false;
     }
-    i = 0;
-    while (i < m.return_types.len) : (i += 1) {
-        if (!fieldTypeSpecEqual(m.return_types[i], f.return_types[i])) return false;
+    for (m.return_types, f.return_types) |mr, fr| {
+        if (!fieldTypeSpecEqual(mr, fr)) return false;
     }
     return true;
 }
@@ -320,9 +307,7 @@ pub fn matchesInterfaceType(v: Value, iname: []const u8) bool {
     const iv = globals.get(iname) orelse return false;
     if (!(iv == .object and iv.object.* == .interface_type)) return false;
     const it = iv.object.interface_type;
-    var mi: usize = 0;
-    while (mi < it.methods.len) : (mi += 1) {
-        const m = it.methods[mi];
+    for (it.methods) |m| {
         const total = tname.len + 1 + m.name.len;
         if (total > 512) return false;
         var key_buf: [512]u8 = undefined;
@@ -545,10 +530,8 @@ pub fn constructNamedType(typ_obj: *Object, arg: Value) !Value {
         .array_t => {
             if (!(effective_arg == .object and vms.isArrayObject(effective_arg.object))) return error.TypeError;
             if (nt.elem_spec) |es| {
-                const items = try vms.asArraySlice(effective_arg.object);
-                var i: usize = 0;
-                while (i < items.len) : (i += 1) {
-                    if (!matchesTypeSpec(items[i], es)) return error.TypeError;
+                for (try vms.asArraySlice(effective_arg.object)) |item| {
+                    if (!matchesTypeSpec(item, es)) return error.TypeError;
                 }
             }
             return makeNamedValue(typ_obj, effective_arg);
@@ -556,12 +539,10 @@ pub fn constructNamedType(typ_obj: *Object, arg: Value) !Value {
         .map_t => {
             if (!(effective_arg == .object and vms.isMapObject(effective_arg.object))) return error.TypeError;
             if (nt.key_spec) |ks| {
-                const entries = try vms.asMapSlice(effective_arg.object);
-                var i: usize = 0;
-                while (i < entries.len) : (i += 1) {
-                    if (!matchesTypeSpec(entries[i].key, ks)) return error.TypeError;
+                for (try vms.asMapSlice(effective_arg.object)) |e| {
+                    if (!matchesTypeSpec(e.key, ks)) return error.TypeError;
                     if (nt.val_spec) |vs| {
-                        if (!matchesTypeSpec(entries[i].value, vs)) return error.TypeError;
+                        if (!matchesTypeSpec(e.value, vs)) return error.TypeError;
                     }
                 }
             }
@@ -647,8 +628,7 @@ pub fn applyNamedTypeFn(typ_obj: *Object, kind: @import("value.zig").NamedTypeFn
 pub fn enforceFuncArgTypes(f: FuncObj, argc: u8) !void {
     if (!f.has_typed_params) return;
     const fixed: usize = if (f.is_variadic) f.arity - 1 else f.arity;
-    var i: usize = 0;
-    while (i < fixed) : (i += 1) {
+    for (0..fixed) |i| {
         const arg = vms.vmState().stack[vms.vmState().stack_top - argc + i];
         if (!matchesTypeSpec(arg, f.param_types[i])) {
             var buf: [128]u8 = undefined;
@@ -662,7 +642,7 @@ pub fn enforceFuncArgTypes(f: FuncObj, argc: u8) !void {
         }
     }
     if (f.is_variadic) {
-        while (i < @as(usize, argc)) : (i += 1) {
+        for (fixed..@as(usize, argc)) |i| {
             const arg = vms.vmState().stack[vms.vmState().stack_top - argc + i];
             if (!matchesTypeSpec(arg, f.variadic_type)) {
                 var buf: [128]u8 = undefined;
@@ -699,15 +679,14 @@ pub fn enforceFuncReturnTypes(f: FuncObj, retval: Value) !void {
     if (!(retval == .object and vms.isArrayObject(retval.object))) return error.TypeError;
     const arr = try vms.asArraySlice(retval.object);
     if (arr.len != f.return_types.len) return error.ArityMismatch;
-    var i: usize = 0;
-    while (i < arr.len) : (i += 1) {
-        if (!matchesTypeSpec(arr[i], f.return_types[i])) {
+    for (arr, f.return_types, 0..) |v, rt, i| {
+        if (!matchesTypeSpec(v, rt)) {
             var buf: [128]u8 = undefined;
-            const expected = fieldTypeSpecStr(&buf, f.return_types[i]);
+            const expected = fieldTypeSpecStr(&buf, rt);
             if (f.name.len > 0) {
-                vms.setRuntimeErr("{s}: return {}: expected {s}, got {s}", .{ f.name, i + 1, expected, runtimeTypeName(arr[i]) });
+                vms.setRuntimeErr("{s}: return {}: expected {s}, got {s}", .{ f.name, i + 1, expected, runtimeTypeName(v) });
             } else {
-                vms.setRuntimeErr("return {}: expected {s}, got {s}", .{ i + 1, expected, runtimeTypeName(arr[i]) });
+                vms.setRuntimeErr("return {}: expected {s}, got {s}", .{ i + 1, expected, runtimeTypeName(v) });
             }
             return error.TypeError;
         }
@@ -763,10 +742,9 @@ pub fn funcSignatureStr(buf: *[256]u8, f: FuncObj) []const u8 {
     buf[wi] = '(';
     wi += 1;
     const fixed: usize = if (f.is_variadic) f.arity - 1 else f.arity;
-    var i: usize = 0;
-    while (i < fixed) : (i += 1) {
+    for (f.param_types[0..fixed]) |pt| {
         var tbuf: [128]u8 = undefined;
-        const tstr = fieldTypeSpecStr(&tbuf, f.param_types[i]);
+        const tstr = fieldTypeSpecStr(&tbuf, pt);
         if (wi > 1 and wi < 255) { buf[wi] = ','; wi += 1; buf[wi] = ' '; wi += 1; }
         if (wi + tstr.len > 255) break;
         @memcpy(buf[wi..wi + tstr.len], tstr);
