@@ -1191,9 +1191,8 @@ pub fn variantDeclBody(c: anytype, kw: Token, name_tok: Token, is_pub: bool) !vo
                 payload_type = try parseFieldTypeSpec(c, );
                 try c.consume(.rparen);
                 if (arm_count >= MaxLocals) { c.setErr("too many local variables (max {d})", .{MaxLocals}); return error.TooManyLocals; }
-                var varm_dup: u8 = 0;
-                while (varm_dup < arm_count) : (varm_dup += 1) {
-                    if (common.streq(arms_tmp[varm_dup].name, entry_name)) { c.setErr("duplicate arm '{s}' in variant", .{entry_name}); return error.DuplicateField; }
+                for (arms_tmp[0..arm_count]) |a| {
+                    if (common.streq(a.name, entry_name)) { c.setErr("duplicate arm '{s}' in variant", .{entry_name}); return error.DuplicateField; }
                 }
                 arms_tmp[arm_count] = .{
                     .name = entry_name,
@@ -1211,9 +1210,8 @@ pub fn variantDeclBody(c: anytype, kw: Token, name_tok: Token, is_pub: bool) !vo
                         if (c.cur.typ != .ident) return c.err("expected identifier, found {s}", .{c.tokenName(c.cur.typ)});
                         if (field_count >= MaxLocals) { c.setErr("too many fields (max {d})", .{MaxLocals}); return error.TooManyFields; }
                         const fname = try c.copyName(c.cur.src);
-                        var vfield_dup: u8 = 0;
-                        while (vfield_dup < field_count) : (vfield_dup += 1) {
-                            if (common.streq(field_specs[vfield_dup].name, fname)) { c.setErr("duplicate field '{s}' in variant arm", .{fname}); return error.DuplicateField; }
+                        for (field_specs[0..field_count]) |fs| {
+                            if (common.streq(fs.name, fname)) { c.setErr("duplicate field '{s}' in variant arm", .{fname}); return error.DuplicateField; }
                         }
                         c.advance();
                         if (!(c.cur.typ == .ident or c.cur.typ == .question or c.cur.typ == .kw_func or c.cur.typ == .lbracket))
@@ -1228,12 +1226,10 @@ pub fn variantDeclBody(c: anytype, kw: Token, name_tok: Token, is_pub: bool) !vo
                 }
                 try c.consume(.rbrace);
                 const fields = heap.bump(StructFieldSpec, field_count) orelse return error.OutOfMemory;
-                var fi: usize = 0;
-                while (fi < field_count) : (fi += 1) fields[fi] = field_specs[fi];
+                @memcpy(fields[0..field_count], field_specs[0..field_count]);
                 if (arm_count >= MaxLocals) { c.setErr("too many local variables (max {d})", .{MaxLocals}); return error.TooManyLocals; }
-                var vrec_dup: u8 = 0;
-                while (vrec_dup < arm_count) : (vrec_dup += 1) {
-                    if (common.streq(arms_tmp[vrec_dup].name, entry_name)) { c.setErr("duplicate arm '{s}' in variant", .{entry_name}); return error.DuplicateField; }
+                for (arms_tmp[0..arm_count]) |a| {
+                    if (common.streq(a.name, entry_name)) { c.setErr("duplicate arm '{s}' in variant", .{entry_name}); return error.DuplicateField; }
                 }
                 arms_tmp[arm_count] = .{
                     .name = entry_name,
@@ -1244,18 +1240,16 @@ pub fn variantDeclBody(c: anytype, kw: Token, name_tok: Token, is_pub: bool) !vo
             } else if (c.cur.typ == .comma or c.cur.typ == .rbrace) {
                 // No-payload arm: name
                 if (arm_count >= MaxLocals) { c.setErr("too many local variables (max {d})", .{MaxLocals}); return error.TooManyLocals; }
-                var vnp_dup: u8 = 0;
-                while (vnp_dup < arm_count) : (vnp_dup += 1) {
-                    if (common.streq(arms_tmp[vnp_dup].name, entry_name)) { c.setErr("duplicate arm '{s}' in variant", .{entry_name}); return error.DuplicateField; }
+                for (arms_tmp[0..arm_count]) |a| {
+                    if (common.streq(a.name, entry_name)) { c.setErr("duplicate arm '{s}' in variant", .{entry_name}); return error.DuplicateField; }
                 }
                 arms_tmp[arm_count] = .{ .name = entry_name };
                 arm_count += 1;
             } else if (c.cur.typ == .ident or c.cur.typ == .question or c.cur.typ == .kw_func or c.cur.typ == .lbracket) {
                 // Shared field: name type
                 if (shared_count >= MaxLocals) { c.setErr("too many fields (max {d})", .{MaxLocals}); return error.TooManyFields; }
-                var vshared_dup: u8 = 0;
-                while (vshared_dup < shared_count) : (vshared_dup += 1) {
-                    if (common.streq(shared_tmp[vshared_dup].name, entry_name)) { c.setErr("duplicate field '{s}' in variant shared fields", .{entry_name}); return error.DuplicateField; }
+                for (shared_tmp[0..shared_count]) |sf| {
+                    if (common.streq(sf.name, entry_name)) { c.setErr("duplicate field '{s}' in variant shared fields", .{entry_name}); return error.DuplicateField; }
                 }
                 const spec = StructFieldSpec{ .name = entry_name, .typ = try parseFieldTypeSpec(c, ) };
                 shared_tmp[shared_count] = spec;
@@ -1272,14 +1266,12 @@ pub fn variantDeclBody(c: anytype, kw: Token, name_tok: Token, is_pub: bool) !vo
 
     const shared_fields = if (shared_count > 0) blk: {
         const sf = heap.bump(StructFieldSpec, shared_count) orelse return error.OutOfMemory;
-        var si: usize = 0;
-        while (si < shared_count) : (si += 1) sf[si] = shared_tmp[si];
+        @memcpy(sf[0..shared_count], shared_tmp[0..shared_count]);
         break :blk sf[0..shared_count];
     } else @as([]const StructFieldSpec, &.{});
 
     const arms = heap.bump(VariantArmSpec, arm_count) orelse return error.OutOfMemory;
-    var ai: usize = 0;
-    while (ai < arm_count) : (ai += 1) arms[ai] = arms_tmp[ai];
+    @memcpy(arms[0..arm_count], arms_tmp[0..arm_count]);
 
     const qname = try c.qualifyTypeName(name);
     const vt = heap.allocObject() orelse return error.OutOfMemory;
