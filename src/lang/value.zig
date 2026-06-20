@@ -314,8 +314,7 @@ pub fn formatDecimalString(raw: i64, scale: u8, buf: []u8) []u8 {
     const raw128: i128 = raw;
     const abs_raw: i128 = if (raw128 < 0) -raw128 else raw128;
     var factor: i128 = 1;
-    var i: u8 = 0;
-    while (i < scale) : (i += 1) factor *= 10;
+    for (0..scale) |_| factor *= 10;
     const int_part = @divTrunc(abs_raw, factor);
     const frac_raw = @mod(abs_raw, factor);
     var pos: usize = 0;
@@ -330,11 +329,7 @@ pub fn formatDecimalString(raw: i64, scale: u8, buf: []u8) []u8 {
     var frac_buf: [20]u8 = undefined;
     const frac_digits = std.fmt.bufPrint(&frac_buf, "{d}", .{@as(i64, @intCast(frac_raw))}) catch "";
     const pad_len = scale - frac_digits.len;
-    var j: usize = 0;
-    while (j < pad_len) : (j += 1) {
-        buf[pos] = '0';
-        pos += 1;
-    }
+    for (0..pad_len) |_| { buf[pos] = '0'; pos += 1; }
     @memcpy(buf[pos..pos + frac_digits.len], frac_digits);
     pos += frac_digits.len;
     while (pos > 0 and buf[pos - 1] == '0') pos -= 1;

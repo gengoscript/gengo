@@ -102,8 +102,7 @@ fn printConstPool() void {
     io.write("constants (");
     writeNum(n);
     io.write("):\n");
-    var i: usize = 0;
-    while (i < n) : (i += 1) {
+    for (0..n) |i| {
         var buf: [8]u8 = undefined;
         const s = std.fmt.bufPrint(&buf, "  {d:>3}  ", .{i}) catch "  ???  ";
         io.write(s);
@@ -116,8 +115,8 @@ fn printConstPool() void {
 fn collectFuncLabels(ips: []usize, names: [][]const u8) usize {
     var count: usize = 0;
     const n = chunk.constCount();
-    var i: usize = 0;
-    while (i < n and count < ips.len) : (i += 1) {
+    for (0..n) |i| {
+        if (count >= ips.len) break;
         const v = chunk.constAt(i) catch continue;
         if (v == .object and v.object.* == .function) {
             ips[count] = v.object.function.ip;
@@ -129,11 +128,10 @@ fn collectFuncLabels(ips: []usize, names: [][]const u8) usize {
 }
 
 fn printFuncLabel(pos: usize, ips: []const usize, names: []const []const u8) void {
-    var i: usize = 0;
-    while (i < ips.len) : (i += 1) {
-        if (ips[i] == pos) {
+    for (ips, names) |ip, name| {
+        if (ip == pos) {
             io.write("\n<");
-            io.write(if (names[i].len > 0) names[i] else "anon");
+            io.write(if (name.len > 0) name else "anon");
             io.write(">:\n");
             return;
         }
