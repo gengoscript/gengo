@@ -66,56 +66,62 @@ pub const Runtime = struct {
     host_modules: []const HostModuleDesc = &.{},
     capabilities: []const []const u8 = &.{},
 
-    pub fn init(config: Config) !Runtime {
-        var inner: rt_mod.Runtime = undefined;
-        try inner.initWithConfig(
-            .{
-                .allow_io = config.allow_io,
-                .native_backend = config.native_backend,
-                .max_ops = config.max_ops,
-                .enable_predicates = config.enable_predicates,
-            },
-            config.heap_size_bytes,
-            config.max_objects,
-            config.max_stack,
-            config.max_frames,
-            config.max_defers,
-            config.allocator,
-        );
-        inner.host_modules = config.host_modules;
-        inner.enabled_capabilities = config.capabilities;
+    fn policyFromConfig(config: Config) vm.Policy {
         return .{
-            .inner = inner,
-            .module_sources = config.module_sources,
-            .module_source_provider = config.module_source_provider,
-            .host_modules = config.host_modules,
-            .capabilities = config.capabilities,
+            .allow_io = config.allow_io,
+            .native_backend = config.native_backend,
+            .max_ops = config.max_ops,
+            .enable_predicates = config.enable_predicates,
         };
     }
 
-    // In-place initializer: no large stack temporary. Use when the Runtime is
-    // heap-allocated and the shadow stack cannot hold a full Runtime value.
-    pub fn initWithPolicy(self: *Runtime, config: Config) !void {
-        try self.inner.initWithConfig(
-            .{
-                .allow_io = config.allow_io,
-                .native_backend = config.native_backend,
-                .max_ops = config.max_ops,
-                .enable_predicates = config.enable_predicates,
-            },
-            config.heap_size_bytes,
-            config.max_objects,
-            config.max_stack,
-            config.max_frames,
-            config.max_defers,
-            config.allocator,
-        );
+    fn applyConfigState(self: *Runtime, config: Config) void {
         self.inner.host_modules = config.host_modules;
         self.inner.enabled_capabilities = config.capabilities;
         self.module_sources = config.module_sources;
         self.module_source_provider = config.module_source_provider;
         self.host_modules = config.host_modules;
         self.capabilities = config.capabilities;
+    }
+
+    fn classifyRunResult(self: *Runtime, err: anyerror) RuntimeResult {
+        if (self.inner.last_compile_line != 0) {
+            return .{ .compile_error = compileError(err, &self.inner) };
+        }
+        return .{ .runtime_error = runtimeError(err, &self.inner) };
+    }
+
+    pub fn init(config: Config) !Runtime {
+        var inner: rt_mod.Runtime = undefined;
+        try inner.initWithConfig(
+            policyFromConfig(config),
+            config.heap_size_bytes,
+            config.max_objects,
+            config.max_stack,
+            config.max_frames,
+            config.max_defers,
+            config.allocator,
+        );
+        var rt: Runtime = .{
+            .inner = inner,
+        };
+        rt.applyConfigState(config);
+        return rt;
+    }
+
+    // In-place initializer: no large stack temporary. Use when the Runtime is
+    // heap-allocated and the shadow stack cannot hold a full Runtime value.
+    pub fn initWithPolicy(self: *Runtime, config: Config) !void {
+        try self.inner.initWithConfig(
+            policyFromConfig(config),
+            config.heap_size_bytes,
+            config.max_objects,
+            config.max_stack,
+            config.max_frames,
+            config.max_defers,
+            config.allocator,
+        );
+        self.applyConfigState(config);
     }
 
     pub fn deinit(self: *Runtime) void {
@@ -127,56 +133,34 @@ pub const Runtime = struct {
     }
 
     pub fn setConfig(self: *Runtime, config: Config) void {
-        self.inner.setPolicy(.{
-            .allow_io = config.allow_io,
-            .native_backend = config.native_backend,
-            .max_ops = config.max_ops,
-            .enable_predicates = config.enable_predicates,
-        });
-        self.inner.host_modules = config.host_modules;
-        self.inner.enabled_capabilities = config.capabilities;
-        self.module_sources = config.module_sources;
-        self.module_source_provider = config.module_source_provider;
-        self.host_modules = config.host_modules;
-        self.capabilities = config.capabilities;
+        self.inner.setPolicy(policyFromConfig(config));
+        self.applyConfigState(config);
     }
 
     pub fn run(self: *Runtime, src: []const u8) RuntimeResult {
         self.inner.run(src) catch |err| {
-            if (self.inner.last_compile_line != 0) {
-                return .{ .compile_error = compileError(err, &self.inner) };
-            }
-            return .{ .runtime_error = runtimeError(err, &self.inner) };
+            return self.classifyRunResult(err);
         };
         return .ok;
     }
 
     pub fn runPath(self: *Runtime, src: []const u8, path: []const u8) RuntimeResult {
         self.inner.runPathWithProvider(src, path, defaultSourceProvider(self), false) catch |err| {
-            if (self.inner.last_compile_line != 0) {
-                return .{ .compile_error = compileError(err, &self.inner) };
-            }
-            return .{ .runtime_error = runtimeError(err, &self.inner) };
+            return self.classifyRunResult(err);
         };
         return .ok;
     }
 
     pub fn runPathWithSources(self: *Runtime, src: []const u8, path: []const u8, sources: []const SourceEntry) RuntimeResult {
         self.inner.runPathWithSources(src, path, sources) catch |err| {
-            if (self.inner.last_compile_line != 0) {
-                return .{ .compile_error = compileError(err, &self.inner) };
-            }
-            return .{ .runtime_error = runtimeError(err, &self.inner) };
+            return self.classifyRunResult(err);
         };
         return .ok;
     }
 
     pub fn runPathWithSourceProvider(self: *Runtime, src: []const u8, path: []const u8, provider: SourceProvider) RuntimeResult {
         self.inner.runPathWithProvider(src, path, provider, false) catch |err| {
-            if (self.inner.last_compile_line != 0) {
-                return .{ .compile_error = compileError(err, &self.inner) };
-            }
-            return .{ .runtime_error = runtimeError(err, &self.inner) };
+            return self.classifyRunResult(err);
         };
         return .ok;
     }
@@ -190,10 +174,7 @@ pub const Runtime = struct {
 
     pub fn runIncremental(self: *Runtime, src: []const u8) RuntimeResult {
         self.inner.runIncremental(src) catch |err| {
-            if (self.inner.last_compile_line != 0) {
-                return .{ .compile_error = compileError(err, &self.inner) };
-            }
-            return .{ .runtime_error = runtimeError(err, &self.inner) };
+            return self.classifyRunResult(err);
         };
         return .ok;
     }
