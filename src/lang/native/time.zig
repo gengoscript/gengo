@@ -514,51 +514,33 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
-        .time_add_h => {
+        .time_add_h, .time_add_m, .time_add_ms, .time_add_s => {
+            const add_fn: NativeFnId = @enumFromInt(nf.id);
+            const multiplier: f64 = switch (add_fn) {
+                .time_add_h => 3_600_000.0,
+                .time_add_m => 60_000.0,
+                .time_add_ms => 1.0,
+                .time_add_s => 1000.0,
+                else => unreachable,
+            };
             const ms = try timeGetMs(vms.vmTop(1));
             const n = try vms.valueAsNumber(vms.vmTop(0));
             if (@trunc(n) != n) return error.TypeError;
             try vms.vmPopArgs(argc);
-            try vms.vmPush(try timeBuildObj(ms + n * 3_600_000));
+            try vms.vmPush(try timeBuildObj(ms + n * multiplier));
         },
-        .time_add_m => {
-            const ms = try timeGetMs(vms.vmTop(1));
-            const n = try vms.valueAsNumber(vms.vmTop(0));
-            if (@trunc(n) != n) return error.TypeError;
-            try vms.vmPopArgs(argc);
-            try vms.vmPush(try timeBuildObj(ms + n * 60_000));
-        },
-        .time_add_ms => {
-            const ms = try timeGetMs(vms.vmTop(1));
-            const n = try vms.valueAsNumber(vms.vmTop(0));
-            if (@trunc(n) != n) return error.TypeError;
-            try vms.vmPopArgs(argc);
-            try vms.vmPush(try timeBuildObj(ms + n));
-        },
-        .time_add_s => {
-            const ms = try timeGetMs(vms.vmTop(1));
-            const n = try vms.valueAsNumber(vms.vmTop(0));
-            if (@trunc(n) != n) return error.TypeError;
-            try vms.vmPopArgs(argc);
-            try vms.vmPush(try timeBuildObj(ms + n * 1000));
-        },
-        .time_after => {
+        .time_after, .time_before, .time_equal => {
+            const cmp_fn: NativeFnId = @enumFromInt(nf.id);
             const ms_a = try timeGetMs(vms.vmTop(1));
             const ms_b = try timeGetMs(vms.vmTop(0));
             try vms.vmPopArgs(argc);
-            try vms.vmPush(.{ .boolean = ms_a > ms_b });
-        },
-        .time_before => {
-            const ms_a = try timeGetMs(vms.vmTop(1));
-            const ms_b = try timeGetMs(vms.vmTop(0));
-            try vms.vmPopArgs(argc);
-            try vms.vmPush(.{ .boolean = ms_a < ms_b });
-        },
-        .time_equal => {
-            const ms_a = try timeGetMs(vms.vmTop(1));
-            const ms_b = try timeGetMs(vms.vmTop(0));
-            try vms.vmPopArgs(argc);
-            try vms.vmPush(.{ .boolean = ms_a == ms_b });
+            const cmp = switch (cmp_fn) {
+                .time_after => ms_a > ms_b,
+                .time_before => ms_a < ms_b,
+                .time_equal => ms_a == ms_b,
+                else => unreachable,
+            };
+            try vms.vmPush(.{ .boolean = cmp });
         },
         .time_format => {
             const ms = try timeGetMs(vms.vmTop(1));
@@ -567,17 +549,12 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
-        .time_from_unix => {
-            const sec = try vms.valueAsNumber(vms.vmTop(0));
-            if (@trunc(sec) != sec) return error.TypeError;
+        .time_from_unix, .time_from_unix_ms => {
+            const n = try vms.valueAsNumber(vms.vmTop(0));
+            if (@trunc(n) != n) return error.TypeError;
             try vms.vmPopArgs(argc);
-            try vms.vmPush(try timeBuildObj(sec * 1000));
-        },
-        .time_from_unix_ms => {
-            const ms = try vms.valueAsNumber(vms.vmTop(0));
-            if (@trunc(ms) != ms) return error.TypeError;
-            try vms.vmPopArgs(argc);
-            try vms.vmPush(try timeBuildObj(ms));
+            const multiplier: f64 = if (@as(NativeFnId, @enumFromInt(nf.id)) == .time_from_unix) 1000.0 else 1.0;
+            try vms.vmPush(try timeBuildObj(n * multiplier));
         },
         .time_is_zero => {
             const ms = try timeGetMs(vms.vmTop(0));

@@ -12,7 +12,7 @@ const StructFieldSpec = @import("value.zig").StructFieldSpec;
 const InterfaceMethodSpec = @import("value.zig").InterfaceMethodSpec;
 const FuncObj = @import("value.zig").FuncObj;
 
-fn namedBaseName(base: @import("value.zig").NamedTypeBase) []const u8 {
+pub fn namedBaseName(base: @import("value.zig").NamedTypeBase) []const u8 {
     return switch (base) {
         .int => "int",
         .float => "float",
@@ -39,7 +39,7 @@ pub fn runtimeTypeName(v: Value) []const u8 {
         .object => |obj| switch (obj.*) {
             .named_value => obj.named_value.typ.named_type.name,
             .dyn_string, .string_view => "string",
-            .array, .array_managed => "array",
+            .array, .array_managed, .array_capacity => "array",
             .map, .map_managed, .map_hashed => "map",
             else => "object",
         },

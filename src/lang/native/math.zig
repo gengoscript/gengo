@@ -14,19 +14,12 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             // so abs(int) must stay usable in int expressions.
             try vms.vmPush(if (v == .int) .{ .int = @intCast(@abs(v.int)) } else .{ .float = @abs(n) });
         },
-        .math_acos => {
+        .math_acos, .math_asin => {
             const n = try vms.valueAsNumber(vms.vmTop(0));
             try vms.vmPopArgs(argc);
             if (@abs(n) > 1.0) return error.RangeError;
-            const result = std.math.acos(n);
-            if (!std.math.isFinite(result)) return error.RangeError;
-            try vms.vmPush(.{ .float = result });
-        },
-        .math_asin => {
-            const n = try vms.valueAsNumber(vms.vmTop(0));
-            try vms.vmPopArgs(argc);
-            if (@abs(n) > 1.0) return error.RangeError;
-            const result = std.math.asin(n);
+            const fn_id: NativeFnId = @enumFromInt(nf.id);
+            const result = switch (fn_id) { .math_acos => std.math.acos(n), .math_asin => std.math.asin(n), else => unreachable };
             if (!std.math.isFinite(result)) return error.RangeError;
             try vms.vmPush(.{ .float = result });
         },
@@ -41,16 +34,6 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             try vms.vmPopArgs(argc);
             try vms.vmPush(.{ .float = std.math.atan2(y, x) });
         },
-        .math_cbrt => {
-            const n = try vms.valueAsNumber(vms.vmTop(0));
-            try vms.vmPopArgs(argc);
-            try vms.vmPush(.{ .float = std.math.cbrt(n) });
-        },
-        .math_ceil => {
-            const n = try vms.valueAsNumber(vms.vmTop(0));
-            try vms.vmPopArgs(argc);
-            try vms.vmPush(.{ .float = @ceil(n) });
-        },
         .math_clamp => {
             const max = try vms.valueAsNumber(vms.vmTop(0));
             const min = try vms.valueAsNumber(vms.vmTop(1));
@@ -58,36 +41,36 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             try vms.vmPopArgs(argc);
             try vms.vmPush(.{ .float = @min(@max(v, min), max) });
         },
-        .math_cos => {
+        .math_cos, .math_sin, .math_tan, .math_cbrt, .math_ceil, .math_floor, .math_round, .math_trunc => {
             const n = try vms.valueAsNumber(vms.vmTop(0));
             try vms.vmPopArgs(argc);
-            try vms.vmPush(.{ .float = @cos(n) });
+            const fn_id: NativeFnId = @enumFromInt(nf.id);
+            try vms.vmPush(.{ .float = switch (fn_id) {
+                .math_cos => @cos(n),
+                .math_sin => @sin(n),
+                .math_tan => std.math.tan(n),
+                .math_cbrt => std.math.cbrt(n),
+                .math_ceil => @ceil(n),
+                .math_floor => @floor(n),
+                .math_round => @round(n),
+                .math_trunc => @trunc(n),
+                else => unreachable,
+            } });
         },
-        .math_cosh => {
+        .math_cosh, .math_sinh, .math_tanh, .math_exp, .math_exp2 => {
             const n = try vms.valueAsNumber(vms.vmTop(0));
             try vms.vmPopArgs(argc);
-            const result = std.math.cosh(n);
+            const fn_id: NativeFnId = @enumFromInt(nf.id);
+            const result = switch (fn_id) {
+                .math_cosh => std.math.cosh(n),
+                .math_sinh => std.math.sinh(n),
+                .math_tanh => std.math.tanh(n),
+                .math_exp => std.math.exp(n),
+                .math_exp2 => std.math.exp2(n),
+                else => unreachable,
+            };
             if (!std.math.isFinite(result)) return error.RangeError;
             try vms.vmPush(.{ .float = result });
-        },
-        .math_exp => {
-            const n = try vms.valueAsNumber(vms.vmTop(0));
-            try vms.vmPopArgs(argc);
-            const result = std.math.exp(n);
-            if (!std.math.isFinite(result)) return error.RangeError;
-            try vms.vmPush(.{ .float = result });
-        },
-        .math_exp2 => {
-            const n = try vms.valueAsNumber(vms.vmTop(0));
-            try vms.vmPopArgs(argc);
-            const result = std.math.exp2(n);
-            if (!std.math.isFinite(result)) return error.RangeError;
-            try vms.vmPush(.{ .float = result });
-        },
-        .math_floor => {
-            const n = try vms.valueAsNumber(vms.vmTop(0));
-            try vms.vmPopArgs(argc);
-            try vms.vmPush(.{ .float = @floor(n) });
         },
         .math_hypot => {
             const q = try vms.valueAsNumber(vms.vmTop(0));
@@ -108,27 +91,12 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             try vms.vmPopArgs(argc);
             try vms.vmPush(.{ .boolean = std.math.isNan(n) });
         },
-        .math_log => {
+        .math_log, .math_log10, .math_log2 => {
             const n = try vms.valueAsNumber(vms.vmTop(0));
             try vms.vmPopArgs(argc);
             if (n <= 0.0) return error.RangeError;
-            const result = @log(n);
-            if (!std.math.isFinite(result)) return error.RangeError;
-            try vms.vmPush(.{ .float = result });
-        },
-        .math_log10 => {
-            const n = try vms.valueAsNumber(vms.vmTop(0));
-            try vms.vmPopArgs(argc);
-            if (n <= 0.0) return error.RangeError;
-            const result = @log10(n);
-            if (!std.math.isFinite(result)) return error.RangeError;
-            try vms.vmPush(.{ .float = result });
-        },
-        .math_log2 => {
-            const n = try vms.valueAsNumber(vms.vmTop(0));
-            try vms.vmPopArgs(argc);
-            if (n <= 0.0) return error.RangeError;
-            const result = @log2(n);
+            const fn_id: NativeFnId = @enumFromInt(nf.id);
+            const result = switch (fn_id) { .math_log => @log(n), .math_log10 => @log10(n), .math_log2 => @log2(n), else => unreachable };
             if (!std.math.isFinite(result)) return error.RangeError;
             try vms.vmPush(.{ .float = result });
         },
@@ -169,29 +137,12 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             if (!std.math.isFinite(result)) return error.RangeError;
             try vms.vmPush(.{ .float = result });
         },
-        .math_round => {
-            const n = try vms.valueAsNumber(vms.vmTop(0));
-            try vms.vmPopArgs(argc);
-            try vms.vmPush(.{ .float = @round(n) });
-        },
         .math_sign => {
             const v = vms.vmTop(0);
             const n = try vms.valueAsNumber(v);
             try vms.vmPopArgs(argc);
             const sign: f64 = if (n > 0) 1.0 else if (n < 0) -1.0 else 0.0;
             try vms.vmPush(if (v == .int) .{ .int = @intFromFloat(sign) } else .{ .float = sign });
-        },
-        .math_sin => {
-            const n = try vms.valueAsNumber(vms.vmTop(0));
-            try vms.vmPopArgs(argc);
-            try vms.vmPush(.{ .float = @sin(n) });
-        },
-        .math_sinh => {
-            const n = try vms.valueAsNumber(vms.vmTop(0));
-            try vms.vmPopArgs(argc);
-            const result = std.math.sinh(n);
-            if (!std.math.isFinite(result)) return error.RangeError;
-            try vms.vmPush(.{ .float = result });
         },
         .math_sqrt => {
             const n = try vms.valueAsNumber(vms.vmTop(0));
@@ -200,21 +151,6 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const result = @sqrt(n);
             if (!std.math.isFinite(result)) return error.RangeError;
             try vms.vmPush(.{ .float = result });
-        },
-        .math_tan => {
-            const n = try vms.valueAsNumber(vms.vmTop(0));
-            try vms.vmPopArgs(argc);
-            try vms.vmPush(.{ .float = std.math.tan(n) });
-        },
-        .math_tanh => {
-            const n = try vms.valueAsNumber(vms.vmTop(0));
-            try vms.vmPopArgs(argc);
-            try vms.vmPush(.{ .float = std.math.tanh(n) });
-        },
-        .math_trunc => {
-            const n = try vms.valueAsNumber(vms.vmTop(0));
-            try vms.vmPopArgs(argc);
-            try vms.vmPush(.{ .float = @trunc(n) });
         },
         else => {},
     }

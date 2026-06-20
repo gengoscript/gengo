@@ -84,9 +84,9 @@ pub fn werr(s: []const u8) void {
     writeAllFd(2, s);
 }
 
-pub fn writeUint(v: u64) void {
+fn formatUint(v: u64, comptime emit: fn ([]const u8) void) void {
     if (v == 0) {
-        write("0");
+        emit("0");
         return;
     }
     var buf: [24]u8 = undefined;
@@ -103,46 +103,21 @@ pub fn writeUint(v: u64) void {
         buf[i] = buf[len - 1 - i];
         buf[len - 1 - i] = t;
     }
-    write(buf[0..len]);
+    emit(buf[0..len]);
 }
 
-pub fn writeInt(v: i64) void {
+fn formatInt(v: i64, comptime emit: fn ([]const u8) void) void {
     if (v < 0) {
-        write("-");
+        emit("-");
         const uv = if (v == std.math.minInt(i64)) @as(u64, @intCast(std.math.maxInt(i64))) + 1 else @as(u64, @intCast(-v));
-        writeUint(uv);
-    } else writeUint(@intCast(v));
+        formatUint(uv, emit);
+    } else formatUint(@intCast(v), emit);
 }
 
-fn werrUint(v: u64) void {
-    if (v == 0) {
-        werr("0");
-        return;
-    }
-    var buf: [24]u8 = undefined;
-    var n = v;
-    var len: usize = 0;
-    while (n > 0) {
-        buf[len] = '0' + @as(u8, @intCast(n % 10));
-        len += 1;
-        n /= 10;
-    }
-    var i: usize = 0;
-    while (i < len / 2) : (i += 1) {
-        const t = buf[i];
-        buf[i] = buf[len - 1 - i];
-        buf[len - 1 - i] = t;
-    }
-    werr(buf[0..len]);
-}
-
-pub fn werrInt(v: i64) void {
-    if (v < 0) {
-        werr("-");
-        const uv = if (v == std.math.minInt(i64)) @as(u64, @intCast(std.math.maxInt(i64))) + 1 else @as(u64, @intCast(-v));
-        werrUint(uv);
-    } else werrUint(@intCast(v));
-}
+pub fn writeUint(v: u64) void { formatUint(v, write); }
+pub fn writeInt(v: i64) void { formatInt(v, write); }
+pub fn werrUint(v: u64) void { formatUint(v, werr); }
+pub fn werrInt(v: i64) void { formatInt(v, werr); }
 
 pub fn writeF64Prec(v: f64, prec: usize) void {
     if (v != v) { write("NaN"); return; }

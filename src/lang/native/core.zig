@@ -109,7 +109,7 @@ pub fn nativeHas(m_obj: *Object, key: Value) !Value {
     }
 }
 
-pub fn nativeKeys(m_obj: *Object) !Value {
+fn nativeMapExtract(m_obj: *Object, comptime field: std.meta.FieldEnum(MapEntry)) !Value {
     if (!vms.isMapObject(m_obj)) return error.TypeError;
     const items = try vms.asMapSlice(m_obj);
     const obj = try vmgc.vmAllocObject();
@@ -117,23 +117,13 @@ pub fn nativeKeys(m_obj: *Object) !Value {
     try vms.pushTempRoot(.{ .object = obj });
     defer vms.popTempRoot();
     const out = try vmgc.vmAllocManagedSlice(Value, items.len);
-    for (items, 0..) |entry, i| out[i] = entry.key;
+    for (items, 0..) |entry, i| out[i] = @field(entry, @tagName(field));
     obj.* = .{ .array_managed = out[0..items.len] };
     return .{ .object = obj };
 }
 
-pub fn nativeValues(m_obj: *Object) !Value {
-    if (!vms.isMapObject(m_obj)) return error.TypeError;
-    const items = try vms.asMapSlice(m_obj);
-    const obj = try vmgc.vmAllocObject();
-    obj.* = .{ .array = &[_]Value{} };
-    try vms.pushTempRoot(.{ .object = obj });
-    defer vms.popTempRoot();
-    const out = try vmgc.vmAllocManagedSlice(Value, items.len);
-    for (items, 0..) |entry, i| out[i] = entry.value;
-    obj.* = .{ .array_managed = out[0..items.len] };
-    return .{ .object = obj };
-}
+pub fn nativeKeys(m_obj: *Object) !Value { return nativeMapExtract(m_obj, .key); }
+pub fn nativeValues(m_obj: *Object) !Value { return nativeMapExtract(m_obj, .value); }
 
 pub fn nativeContains(arr_obj: *Object, needle: Value) !Value {
     if (!vms.isArrayObject(arr_obj)) return error.TypeError;

@@ -150,38 +150,22 @@ pub fn reset() void {
     if (vmState().stack.len == 0 and vmState() == &g_default_state) {
         _ = g_default_state.init(MaxStack, MaxFrames, cfg.max_defers, heap.HeapSize, vmState().allocator) catch {};
     }
-    vmState().stack_top = 0;
-    vmState().ip = 0;
-    vmState().frame_top = 0;
+    resetExec();
     vmState().std_module = null;
     vmState().host_checked = false;
     vmState().host_caps = 0;
     vmState().next_gc_objects = 256;
     vmState().next_gc_heap_bytes = if (vmState().configured_heap_size > 0) vmState().configured_heap_size / 2 else heap.HeapSize / 2;
-    vmState().call_depth_target = null;
-    vmState().temp_root_top = 0;
     vmState().rune_cache_ptr = 0;
     vmState().rune_cache_byte_len = 0;
     vmState().rune_cache_rune_len = 0;
     vmState().rune_cache_valid = false;
     vmState().rune_cache_overflow = false;
-    vmState().str_acc_len = 0;
     vmState().gc_runs = 0;
     vmState().gc_time_ns = 0;
     vmState().alloc_object_calls = 0;
     vmState().alloc_managed_slice_calls = 0;
     vmState().alloc_managed_bytes_calls = 0;
-    vmState().ops_budget_remaining = std.math.maxInt(u64);
-    vmState().defer_top = 0;
-    vmState().panic_line = 0;
-    vmState().panic_col = 0;
-    vmState().panic_depth = 0;
-    vmState().is_panicking = false;
-    vmState().panic_value = .null;
-    vmState().recovered = false;
-    vmState().pending_panic_message = null;
-    vmState().has_pending_panic_value = false;
-    vmState().runtime_err_len = 0;
 }
 
 // Reset only execution state; preserve globals, heap, GC objects, and std_module.
@@ -334,38 +318,36 @@ pub fn vmSliceIndex(v: Value, upper: usize) !usize {
     return idx;
 }
 
-pub fn valueAsNumber(v: Value) !f64 {
+fn unwrapNamed(v: Value) Value {
     return switch (v) {
+        .object => |o| switch (o.*) {
+            .named_value => |nv| unwrapNamed(nv.value),
+            else => v,
+        },
+        else => v,
+    };
+}
+
+pub fn valueAsNumber(v: Value) !f64 {
+    return switch (unwrapNamed(v)) {
         .int => |n| @floatFromInt(n),
         .float => |n| n,
         .rune => |r| @floatFromInt(r),
-        .object => |o| switch (o.*) {
-            .named_value => |nv| valueAsNumber(nv.value),
-            else => error.TypeError,
-        },
         else => error.TypeError,
     };
 }
 
 pub fn valueAsDecimal(v: Value) !i64 {
-    return switch (v) {
+    return switch (unwrapNamed(v)) {
         .decimal => |d| d,
-        .object => |o| switch (o.*) {
-            .named_value => |nv| valueAsDecimal(nv.value),
-            else => error.TypeError,
-        },
         else => error.TypeError,
     };
 }
 
 pub fn valueAsInt(v: Value) !i64 {
-    return switch (v) {
+    return switch (unwrapNamed(v)) {
         .int => |n| n,
         .rune => |r| @intCast(r),
-        .object => |o| switch (o.*) {
-            .named_value => |nv| valueAsInt(nv.value),
-            else => error.TypeError,
-        },
         else => error.TypeError,
     };
 }
