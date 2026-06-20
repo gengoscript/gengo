@@ -190,22 +190,22 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
     switch (@as(NativeFnId, @enumFromInt(nf.id))) {
         .json_parse => {
             const out = try jsonParseNative();
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .json_stringify => {
             const out = try jsonStringifyNative();
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .json_valid => {
             const out = try jsonValidNative();
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .json_indent => {
             const out = try jsonIndentNative();
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         else => {},

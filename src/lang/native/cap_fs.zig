@@ -20,7 +20,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const path = vms.asStringValue(try vms.vmPeek(0)) catch return error.TypeError;
 
             if (comptime builtin.os.tag == .wasi) {
-                try vms.vmPopArgs(argc);
+                vms.vmPopArgs(argc);
                 return error.CapabilityNotAvailable;
             }
 
@@ -32,7 +32,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                 const contents = std.Io.Dir.cwd().readFileAlloc(io, rpath, alloc, .unlimited) catch return error.CapabilityError;
                 defer alloc.free(contents);
                 const out = try vmgc.makeDynString(contents);
-                try vms.vmPopArgs(argc);
+                vms.vmPopArgs(argc);
                 try vms.vmPush(out);
                 return;
             }
@@ -52,7 +52,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             defer alloc.free(contents);
 
             const out = try vmgc.makeDynString(contents);
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .cap_fs_exists => {
@@ -60,7 +60,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const path = vms.asStringValue(try vms.vmPeek(0)) catch return error.TypeError;
 
             if (comptime builtin.os.tag == .wasi) {
-                try vms.vmPopArgs(argc);
+                vms.vmPopArgs(argc);
                 return error.CapabilityNotAvailable;
             }
 
@@ -71,27 +71,27 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                 const io = ioContext();
                 std.Io.Dir.cwd().access(io, rpath, .{}) catch |err| switch (err) {
                     error.FileNotFound => {
-                        try vms.vmPopArgs(argc);
+                        vms.vmPopArgs(argc);
                         try vms.vmPush(.{ .boolean = false });
                         return;
                     },
                     else => return error.CapabilityError,
                 };
-                try vms.vmPopArgs(argc);
+                vms.vmPopArgs(argc);
                 try vms.vmPush(.{ .boolean = true });
                 return;
             }
 
             const fd = std.posix.openat(std.posix.AT.FDCWD, rpath, .{ .ACCMODE = .RDONLY, .CLOEXEC = true }, 0) catch |err| switch (err) {
                 error.FileNotFound => {
-                    try vms.vmPopArgs(argc);
+                    vms.vmPopArgs(argc);
                     try vms.vmPush(.{ .boolean = false });
                     return;
                 },
                 else => return error.CapabilityError,
             };
             _ = std.posix.system.close(fd);
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(.{ .boolean = true });
         },
         .cap_fs_write => {
@@ -105,7 +105,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             };
 
             if (comptime builtin.os.tag == .wasi) {
-                try vms.vmPopArgs(argc);
+                vms.vmPopArgs(argc);
                 return error.CapabilityNotAvailable;
             }
 
@@ -117,7 +117,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const file = cwd.createFile(io, rpath, .{}) catch return error.CapabilityError;
             defer file.close(io);
             file.writeStreamingAll(io, content) catch return error.CapabilityError;
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(.{ .null = {} });
         },
         .cap_fs_list => {
@@ -125,7 +125,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const path = vms.asStringValue(try vms.vmPeek(0)) catch return error.TypeError;
 
             if (comptime builtin.os.tag == .wasi) {
-                try vms.vmPopArgs(argc);
+                vms.vmPopArgs(argc);
                 return error.CapabilityNotAvailable;
             }
 
@@ -159,7 +159,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                 arr_obj.* = .{ .array_managed = result[0 .. i + 1] };
             }
             arr_obj.* = .{ .array_managed = result };
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(.{ .object = arr_obj });
         },
         .cap_fs_delete => {
@@ -167,7 +167,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const path = vms.asStringValue(try vms.vmPeek(0)) catch return error.TypeError;
 
             if (comptime builtin.os.tag == .wasi) {
-                try vms.vmPopArgs(argc);
+                vms.vmPopArgs(argc);
                 return error.CapabilityNotAvailable;
             }
 
@@ -177,7 +177,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const io = ioContext();
             const cwd = std.Io.Dir.cwd();
             cwd.deleteFile(io, rpath) catch return error.CapabilityError;
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(.{ .null = {} });
         },
         .cap_fs_mkdir => {
@@ -185,7 +185,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const path = vms.asStringValue(try vms.vmPeek(0)) catch return error.TypeError;
 
             if (comptime builtin.os.tag == .wasi) {
-                try vms.vmPopArgs(argc);
+                vms.vmPopArgs(argc);
                 return error.CapabilityNotAvailable;
             }
 
@@ -195,7 +195,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const io = ioContext();
             const cwd = std.Io.Dir.cwd();
             cwd.createDirPath(io, rpath) catch return error.CapabilityError;
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(.{ .null = {} });
         },
         else => unreachable,

@@ -209,6 +209,14 @@ fn valueAsNumberForCompare(v: Value, other: Value) !f64 {
 }
 
 fn compareNumericPair(a: Value, b: Value, op: []const u8) !struct { an: f64, bn: f64 } {
+    if (a == .int and b == .int) return .{ .an = @floatFromInt(a.int), .bn = @floatFromInt(b.int) };
+    if (a == .float and b == .float) {
+        if (!std.math.isFinite(a.float) or !std.math.isFinite(b.float)) {
+            vms.setRuntimeErr("cannot compare non-finite value", .{});
+            return error.TypeError;
+        }
+        return .{ .an = a.float, .bn = b.float };
+    }
     try checkNamedValueCompatibility(a, b);
     try checkComparableNumeric(a, b, op);
     const an = try valueAsNumberForCompare(a, b);
@@ -303,6 +311,12 @@ fn pushDecimalResultWithCarrier(typ: *Object, d: i64) !void {
 }
 
 fn computeAddResult(a: Value, b: Value) !Value {
+    if (a == .int and b == .int) return .{ .int = a.int + b.int };
+    if (a == .float and b == .float) {
+        const r = a.float + b.float;
+        if (!std.math.isFinite(r)) { vms.setRuntimeErr("non-finite value in arithmetic operation", .{}); return error.TypeError; }
+        return .{ .float = r };
+    }
     if (isStringValueOrNamedString(a) and isStringValueOrNamedString(b)) {
         try pushTempRoot(a);
         defer popTempRoot();
@@ -361,6 +375,8 @@ fn makeNumeric(tag: VTag, n: f64) Value {
 }
 
 fn wrapValueWithCarrier(a: Value, b: Value, val: Value, op: []const u8) !Value {
+    // Fast path: plain scalars carry no named type.
+    if (a != .object and b != .object) return val;
     const carrier = namedTypeCarrier(a, b) catch |err| {
         if (err == error.TypeError) setBinaryTypeError(op, a, b);
         return err;
@@ -1699,6 +1715,12 @@ fn runInner() !void {
             .sub => {
                 const b = try vmPop();
                 const a = try vmPop();
+                if (a == .int and b == .int) { try vmPush(.{ .int = a.int - b.int }); continue; }
+                if (a == .float and b == .float) {
+                    const r = a.float - b.float;
+                    if (!std.math.isFinite(r)) { vms.setRuntimeErr("non-finite value in arithmetic operation", .{}); return error.TypeError; }
+                    try vmPush(.{ .float = r }); continue;
+                }
                 if (decimalOpValues(a, b)) |dop| {
                     const result = @subWithOverflow(dop.lhs, dop.rhs);
                     if (result[1] != 0) return error.TypeError;
@@ -1710,6 +1732,12 @@ fn runInner() !void {
             .mul => {
                 const b = try vmPop();
                 const a = try vmPop();
+                if (a == .int and b == .int) { try vmPush(.{ .int = a.int * b.int }); continue; }
+                if (a == .float and b == .float) {
+                    const r = a.float * b.float;
+                    if (!std.math.isFinite(r)) { vms.setRuntimeErr("non-finite value in arithmetic operation", .{}); return error.TypeError; }
+                    try vmPush(.{ .float = r }); continue;
+                }
                 if (decimalOpValues(a, b)) |_| {
                     return error.TypeError;
                 } else if (decimalScalarPair(a, b) orelse decimalScalarPair(b, a)) |p| {
@@ -1928,12 +1956,14 @@ fn runInner() !void {
             .gt => {
                 const b = try vmPop();
                 const a = try vmPop();
+                if (a == .int and b == .int) { try vmPush(.{ .boolean = a.int > b.int }); continue; }
                 const n = try compareNumericPair(a, b, ">");
                 try vmPush(.{ .boolean = n.an > n.bn });
             },
             .lt => {
                 const b = try vmPop();
                 const a = try vmPop();
+                if (a == .int and b == .int) { try vmPush(.{ .boolean = a.int < b.int }); continue; }
                 const n = try compareNumericPair(a, b, "<");
                 try vmPush(.{ .boolean = n.an < n.bn });
             },
@@ -1995,8 +2025,13 @@ fn runInner() !void {
             .get_local_const_lt_jif_pop => {
                 const p = try readLocalSlotAndConst();
                 const off = try vms.vmInt();
-                const n = try compareNumericPair(try readLocalSlot(p.slot), p.k, "<");
-                if (!(n.an < n.bn)) vmState().ip += off;
+                const a = try readLocalSlot(p.slot);
+                if (a == .int and p.k == .int) {
+                    if (a.int >= p.k.int) vmState().ip += off;
+                } else {
+                    const n = try compareNumericPair(a, p.k, "<");
+                    if (!(n.an < n.bn)) vmState().ip += off;
+                }
             },
 
             // Fused: get_local + get_field. 8-byte layout:
@@ -2038,8 +2073,12 @@ fn runInner() !void {
             .get_global_const_lt_jif_pop => {
                 const p = try readGlobalConstPair();
                 const off = try vms.vmInt();
-                const n = try compareNumericPair(p.g, p.k, "<");
-                if (!(n.an < n.bn)) vmState().ip += off;
+                if (p.g == .int and p.k == .int) {
+                    if (p.g.int >= p.k.int) vmState().ip += off;
+                } else {
+                    const n = try compareNumericPair(p.g, p.k, "<");
+                    if (!(n.an < n.bn)) vmState().ip += off;
+                }
             },
             .const_add => {
                 const k = try chunk.constAt(try vmShort());

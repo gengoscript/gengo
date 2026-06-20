@@ -217,7 +217,7 @@ pub fn panicLine() u32 { return vmState().panic_line; }
 pub fn panicCol() u16 { return vmState().panic_col; }
 pub fn panicFrames() []const PanicFrame { return vmState().panic_frames[0..vmState().panic_depth]; }
 
-pub fn vmPush(v: Value) !void {
+pub inline fn vmPush(v: Value) !void {
     assertStringImmortal(v);
     const st = vmState();
     if (st.stack_top >= st.stack.len) return error.StackOverflow;
@@ -225,25 +225,26 @@ pub fn vmPush(v: Value) !void {
     st.stack_top += 1;
 }
 
-pub fn vmPop() !Value {
+pub inline fn vmPop() !Value {
     if (vmState().stack_top == 0) return error.StackUnderflow;
     vmState().stack_top -= 1;
     return vmState().stack[vmState().stack_top];
 }
 
-pub fn vmPeek(dist: usize) !Value {
+pub inline fn vmPeek(dist: usize) !Value {
     if (dist >= vmState().stack_top) return error.StackUnderflow;
     return vmState().stack[vmState().stack_top - 1 - dist];
 }
 
 // Unchecked stack read for native dispatch — safe after arity has been verified.
-pub fn vmTop(dist: usize) Value {
+pub inline fn vmTop(dist: usize) Value {
     return vmState().stack[vmState().stack_top - 1 - dist];
 }
 
 // Pop all arguments of a native call: argc user args plus the function object.
-pub fn vmPopArgs(argc: u8) !void {
-    for (0..@as(usize, argc) + 1) |_| _ = try vmPop();
+// Safe to call unchecked after arity has been verified.
+pub inline fn vmPopArgs(argc: u8) void {
+    vmState().stack_top -= @as(usize, argc) + 1;
 }
 
 pub fn vmByte() !u8 {

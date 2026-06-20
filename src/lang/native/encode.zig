@@ -138,37 +138,37 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
         .base64_decode => {
             const s = try vms.asStringValue(vms.vmTop(0));
             const out = try nativeBase64Decode(s, false);
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .base64_encode => {
             const s = try vms.asStringValue(vms.vmTop(0));
             const out = try nativeBase64Encode(s, false);
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .base64_url_decode => {
             const s = try vms.asStringValue(vms.vmTop(0));
             const out = try nativeBase64Decode(s, true);
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .base64_url_encode => {
             const s = try vms.asStringValue(vms.vmTop(0));
             const out = try nativeBase64Encode(s, true);
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .hex_decode => {
             const s = try vms.asStringValue(vms.vmTop(0));
             const out = try nativeHexDecode(s);
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .hex_encode => {
             const s = try vms.asStringValue(vms.vmTop(0));
             const out = try nativeHexEncode(s);
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         else => {},

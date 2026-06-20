@@ -509,7 +509,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const m = try vms.valueAsInt(vms.vmTop(1));
             const d = try vms.valueAsInt(vms.vmTop(0));
             const out = try timeAddDate(ms, @intCast(y), @intCast(m), @intCast(d));
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .time_add_h, .time_add_m, .time_add_ms, .time_add_s => {
@@ -524,14 +524,14 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const ms = try timeGetMs(vms.vmTop(1));
             const n = try vms.valueAsNumber(vms.vmTop(0));
             if (@trunc(n) != n) return error.TypeError;
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(try timeBuildObj(ms + n * multiplier));
         },
         .time_after, .time_before, .time_equal => {
             const cmp_fn: NativeFnId = @enumFromInt(nf.id);
             const ms_a = try timeGetMs(vms.vmTop(1));
             const ms_b = try timeGetMs(vms.vmTop(0));
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             const cmp = switch (cmp_fn) {
                 .time_after => ms_a > ms_b,
                 .time_before => ms_a < ms_b,
@@ -544,30 +544,30 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const ms = try timeGetMs(vms.vmTop(1));
             const fmt = try vms.asStringValue(vms.vmTop(0));
             const out = try timeFormatStr(ms, fmt);
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .time_from_unix, .time_from_unix_ms => {
             const n = try vms.valueAsNumber(vms.vmTop(0));
             if (@trunc(n) != n) return error.TypeError;
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             const multiplier: f64 = if (@as(NativeFnId, @enumFromInt(nf.id)) == .time_from_unix) 1000.0 else 1.0;
             try vms.vmPush(try timeBuildObj(n * multiplier));
         },
         .time_is_zero => {
             const ms = try timeGetMs(vms.vmTop(0));
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(.{ .boolean = ms == 0 });
         },
         .time_now => {
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(try timeBuildObj(timeNowMs()));
         },
         .time_parse => {
             const s = try vms.asStringValue(vms.vmTop(1));
             const fmt = try vms.asStringValue(vms.vmTop(0));
             const out = try timeParseStr(s, fmt);
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .time_parts => {
@@ -586,45 +586,45 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             entries[6] = .{ .key = .{ .string = "ms" }, .value = .{ .int = p.ms } };
             entries[7] = .{ .key = .{ .string = "weekday" }, .value = .{ .int = p.weekday } };
             obj.* = .{ .map_managed = entries[0..field_count] };
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(.{ .object = obj });
         },
         .time_since => {
             const ms = try timeGetMs(vms.vmTop(0));
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(.{ .float = timeNowMs() - ms });
         },
         .time_sub => {
             const ms_a = try timeGetMs(vms.vmTop(1));
             const ms_b = try timeGetMs(vms.vmTop(0));
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(.{ .float = ms_a - ms_b });
         },
         .time_unix => {
             const ms = try timeGetMs(vms.vmTop(0));
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(.{ .int = @floor(ms / 1000) });
         },
         .time_unix_ms => {
             const ms = try timeGetMs(vms.vmTop(0));
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(.{ .float = ms });
         },
         .time_until => {
             const ms = try timeGetMs(vms.vmTop(0));
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(.{ .float = ms - timeNowMs() });
         },
         .time_parse_duration => {
             const s = try vms.asStringValue(vms.vmTop(0));
             const ms = try parseDuration(s);
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(.{ .float = ms });
         },
         .time_iso_week => {
             const ms = try timeGetMs(vms.vmTop(0));
             const out = try timeIsoWeek(ms);
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         else => {},

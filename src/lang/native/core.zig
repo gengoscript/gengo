@@ -702,7 +702,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
         .core_clone => {
             if (argc != nf.arity) return error.ArityMismatch;
             const out = try nativeClone(vms.vmTop(0));
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .core_contains => {
@@ -711,13 +711,13 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const needle = vms.vmTop(0);
             if (arr_val != .object) return error.TypeError;
             const out = try nativeContains(arr_val.object, needle);
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .core_deep_equal => {
             if (argc != nf.arity) return error.ArityMismatch;
             const out = try nativeDeepEqual(vms.vmTop(1), vms.vmTop(0));
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .core_delete => {
@@ -726,7 +726,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const key = vms.vmTop(0);
             if (m_val != .object) return error.TypeError;
             const out = try nativeDelete(m_val.object, key);
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .core_error => {
@@ -734,30 +734,30 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const msg = try vms.asStringValue(vms.vmTop(0));
             const copy = try vmgc.vmAllocManagedBytes(msg.len);
             @memcpy(copy[0..msg.len], msg);
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(.{ .error_value = copy[0..msg.len] });
         },
         .core_gc => {
             if (argc != nf.arity) return error.ArityMismatch;
             vmgc.collectGarbage();
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(.null);
         },
         .core_gc_live_objects => {
             if (argc != nf.arity) return error.ArityMismatch;
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(.{ .int = @intCast(heap.liveObjectCount()) });
         },
         .core_gc_stats => {
             if (argc != nf.arity) return error.ArityMismatch;
             const out = try nativeGcStats();
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .core_gc_stats_ext => {
             if (argc != nf.arity) return error.ArityMismatch;
             const out = try nativeGcStatsExt();
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .core_has => {
@@ -766,55 +766,55 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const key = vms.vmTop(0);
             if (m_val != .object) return error.TypeError;
             const out = try nativeHas(m_val.object, key);
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .core_is_array => {
             if (argc != nf.arity) return error.ArityMismatch;
             const out = nativeIsArray(vms.vmTop(0));
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .core_is_error => {
             if (argc != nf.arity) return error.ArityMismatch;
             const arg = vms.vmTop(0);
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(.{ .boolean = arg == .error_value });
         },
         .core_is_float => {
             if (argc != nf.arity) return error.ArityMismatch;
             const out = nativeIsFloat(vms.vmTop(0));
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .core_is_int => {
             if (argc != nf.arity) return error.ArityMismatch;
             const out = nativeIsInt(vms.vmTop(0));
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .core_is_map => {
             if (argc != nf.arity) return error.ArityMismatch;
             const out = nativeIsMap(vms.vmTop(0));
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .core_is_null => {
             if (argc != nf.arity) return error.ArityMismatch;
             const out = nativeIsNull(vms.vmTop(0));
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .core_is_string => {
             if (argc != nf.arity) return error.ArityMismatch;
             const out = nativeIsString(vms.vmTop(0));
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .core_is_struct => {
             if (argc != nf.arity) return error.ArityMismatch;
             const out = nativeIsStruct(vms.vmTop(0));
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .core_keys => {
@@ -822,7 +822,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const m_val = vms.unboxNamed(vms.vmTop(0));
             if (m_val != .object) return error.TypeError;
             const out = try nativeKeys(m_val.object);
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .core_len => {
@@ -831,7 +831,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
         },
         .core_recover => {
             if (argc != nf.arity) return error.ArityMismatch;
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             if (vms.vmState().is_panicking and !vms.vmState().recovered) {
                 const pv = vms.vmState().panic_value;
                 vms.vmState().recovered = true;
@@ -846,13 +846,13 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const idx_val = vms.vmTop(0);
             if (arr_val != .object) return error.TypeError;
             const out = try nativeRemove(arr_val.object, idx_val);
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .core_type_of => {
             if (argc != nf.arity) return error.ArityMismatch;
             const out = nativeTypeNameValue(vms.vmTop(0));
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .core_values => {
@@ -860,7 +860,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const m_val = vms.unboxNamed(vms.vmTop(0));
             if (m_val != .object) return error.TypeError;
             const out = try nativeValues(m_val.object);
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         else => {},
