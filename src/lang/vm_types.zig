@@ -338,6 +338,15 @@ pub fn makeNamedValue(typ_obj: *Object, inner: Value) !Value {
 //   - continuous (float/decimal): the endpoints are identified with each
 //     other, e.g. `cycle 0.0..360.0` treats 360.0 as the same point as 0.0,
 //     so `span = max - min` and the maximum itself wraps to the minimum.
+fn wrapCycleValueWithError(name: []const u8, min: f64, max: f64, n: f64, continuous: bool) !f64 {
+    return wrapCycleValue(min, max, n, continuous) catch |err| {
+        if (err == error.RangeError) {
+            vms.setRuntimeErr("{s}: {d} is outside cyclic range {d}..{d}", .{ name, n, min, max });
+        }
+        return err;
+    };
+}
+
 fn wrapCycleValue(min: f64, max: f64, n: f64, continuous: bool) !f64 {
     if (!std.math.isFinite(n)) return error.RangeError;
     if (!continuous) {
@@ -404,12 +413,7 @@ pub fn constructNamedType(typ_obj: *Object, arg: Value) !Value {
             }
             if (nt.has_range and (n < nt.min or n > nt.max)) {
                 if (nt.is_cycle) {
-                    const wrapped = wrapCycleValue(nt.min, nt.max, n, false) catch |err| {
-                        if (err == error.RangeError) {
-                            vms.setRuntimeErr("{s}: {d} is outside cyclic range {d}..{d}", .{ nt.name, n, nt.min, nt.max });
-                        }
-                        return err;
-                    };
+                    const wrapped = try wrapCycleValueWithError(nt.name, nt.min, nt.max, n, false);
                     base_v = .{ .int = @intFromFloat(wrapped) };
                 } else {
                     setNamedRangeError(typ_obj, n);
@@ -436,12 +440,7 @@ pub fn constructNamedType(typ_obj: *Object, arg: Value) !Value {
             const out_of_bounds = if (nt.is_cycle) n < nt.min or n >= nt.max else n < nt.min or n > nt.max;
             if (nt.has_range and out_of_bounds) {
                 if (nt.is_cycle) {
-                    const wrapped = wrapCycleValue(nt.min, nt.max, n, true) catch |err| {
-                        if (err == error.RangeError) {
-                            vms.setRuntimeErr("{s}: {d} is outside cyclic range {d}..{d}", .{ nt.name, n, nt.min, nt.max });
-                        }
-                        return err;
-                    };
+                    const wrapped = try wrapCycleValueWithError(nt.name, nt.min, nt.max, n, true);
                     base_v = .{ .float = wrapped };
                 } else {
                     setNamedRangeError(typ_obj, n);
@@ -557,12 +556,7 @@ pub fn constructNamedType(typ_obj: *Object, arg: Value) !Value {
 // into the named type's cyclic domain and rescales it back to the fixed-point
 // integer representation.
 fn wrapDecimalCycle(nt: @import("value.zig").NamedTypeObj, fv: f64, factor: f64) !i64 {
-    const wrapped = wrapCycleValue(nt.min, nt.max, fv, true) catch |err| {
-        if (err == error.RangeError) {
-            vms.setRuntimeErr("{s}: {d} is outside cyclic range {d}..{d}", .{ nt.name, fv, nt.min, nt.max });
-        }
-        return err;
-    };
+    const wrapped = try wrapCycleValueWithError(nt.name, nt.min, nt.max, fv, true);
     const raw = @round(wrapped * factor);
     if (!std.math.isFinite(raw) or raw < -std.math.pow(f64, 2.0, 63.0) or raw >= std.math.pow(f64, 2.0, 63.0)) return error.TypeError;
     return @intFromFloat(raw);
@@ -576,22 +570,12 @@ pub fn coerceNamedTypeResult(typ_obj: *Object, arg: Value) !Value {
         .int => {
             const n = try vms.valueAsNumber(arg);
             if (@trunc(n) != n) return error.TypeError;
-            const wrapped = wrapCycleValue(nt.min, nt.max, n, false) catch |err| {
-                if (err == error.RangeError) {
-                    vms.setRuntimeErr("{s}: {d} is outside cyclic range {d}..{d}", .{ nt.name, n, nt.min, nt.max });
-                }
-                return err;
-            };
+            const wrapped = try wrapCycleValueWithError(nt.name, nt.min, nt.max, n, false);
             return makeNamedValue(typ_obj, .{ .int = @intFromFloat(wrapped) });
         },
         .float => {
             const n = try vms.valueAsNumber(arg);
-            const wrapped = wrapCycleValue(nt.min, nt.max, n, true) catch |err| {
-                if (err == error.RangeError) {
-                    vms.setRuntimeErr("{s}: {d} is outside cyclic range {d}..{d}", .{ nt.name, n, nt.min, nt.max });
-                }
-                return err;
-            };
+            const wrapped = try wrapCycleValueWithError(nt.name, nt.min, nt.max, n, true);
             return makeNamedValue(typ_obj, .{ .float = wrapped });
         },
         .decimal => {
@@ -625,35 +609,28 @@ pub fn applyNamedTypeFn(typ_obj: *Object, kind: @import("value.zig").NamedTypeFn
     }
 }
 
+fn argTypeError(f: FuncObj, i: usize, spec: FieldTypeSpec, arg: Value) error{TypeError} {
+    var buf: [128]u8 = undefined;
+    const expected = fieldTypeSpecStr(&buf, spec);
+    if (f.name.len > 0) {
+        vms.setRuntimeErr("{s}: arg {}: expected {s}, got {s}", .{ f.name, i + 1, expected, runtimeTypeName(arg) });
+    } else {
+        vms.setRuntimeErr("arg {}: expected {s}, got {s}", .{ i + 1, expected, runtimeTypeName(arg) });
+    }
+    return error.TypeError;
+}
+
 pub fn enforceFuncArgTypes(f: FuncObj, argc: u8) !void {
     if (!f.has_typed_params) return;
     const fixed: usize = if (f.is_variadic) f.arity - 1 else f.arity;
     for (0..fixed) |i| {
         const arg = vms.vmState().stack[vms.vmState().stack_top - argc + i];
-        if (!matchesTypeSpec(arg, f.param_types[i])) {
-            var buf: [128]u8 = undefined;
-            const expected = fieldTypeSpecStr(&buf, f.param_types[i]);
-            if (f.name.len > 0) {
-                vms.setRuntimeErr("{s}: arg {}: expected {s}, got {s}", .{ f.name, i + 1, expected, runtimeTypeName(arg) });
-            } else {
-                vms.setRuntimeErr("arg {}: expected {s}, got {s}", .{ i + 1, expected, runtimeTypeName(arg) });
-            }
-            return error.TypeError;
-        }
+        if (!matchesTypeSpec(arg, f.param_types[i])) return argTypeError(f, i, f.param_types[i], arg);
     }
     if (f.is_variadic) {
         for (fixed..@as(usize, argc)) |i| {
             const arg = vms.vmState().stack[vms.vmState().stack_top - argc + i];
-            if (!matchesTypeSpec(arg, f.variadic_type)) {
-                var buf: [128]u8 = undefined;
-                const expected = fieldTypeSpecStr(&buf, f.variadic_type);
-                if (f.name.len > 0) {
-                    vms.setRuntimeErr("{s}: arg {}: expected {s}, got {s}", .{ f.name, i + 1, expected, runtimeTypeName(arg) });
-                } else {
-                    vms.setRuntimeErr("arg {}: expected {s}, got {s}", .{ i + 1, expected, runtimeTypeName(arg) });
-                }
-                return error.TypeError;
-            }
+            if (!matchesTypeSpec(arg, f.variadic_type)) return argTypeError(f, i, f.variadic_type, arg);
         }
     }
 }

@@ -226,6 +226,18 @@ fn valueAsIntForOp(v: Value, other: Value, op: []const u8) !i64 {
     };
 }
 
+const NumericOpCtx = struct { an: f64, bn: f64, tag: VTag };
+
+fn numericBinaryOp(a: Value, b: Value, comptime op: []const u8) !NumericOpCtx {
+    const tag = numericOpTag(a, b) catch |err| {
+        if (err == error.TypeError) setBinaryTypeError(op, a, b);
+        return err;
+    };
+    const an = try valueAsNumberForOp(a, b, op);
+    const bn = try valueAsNumberForOp(b, a, op);
+    return .{ .an = an, .bn = bn, .tag = tag };
+}
+
 fn checkNamedValueCompatibility(a: Value, b: Value) !void {
     const a_named = a == .object and a.object.* == .named_value;
     const b_named = b == .object and b.object.* == .named_value;
@@ -1103,10 +1115,7 @@ fn pushFieldFromObject(obj: *Object, name_idx: usize, ic_base: usize, ic_type_id
                 try vmPush(.{ .int = @intCast(items.len) });
             } else {
                 const key_v = Value{ .string = name };
-                const found: ?Value = for (items) |e| {
-                    if (vmmap.mapKeyEquals(e.key, key_v)) break e.value;
-                } else null;
-                try vmPush(found orelse .null);
+                try vmPush(if (vmmap.mapFindLinear(items, key_v)) |fi| items[fi].value else .null);
             }
         },
         .map_hashed => |hm| {
@@ -1175,10 +1184,7 @@ fn opGetIndex() !void {
             },
             .map, .map_managed => {
                 const items = try vms.asMapSlice(obj);
-                const found: ?Value = for (items) |e| {
-                    if (vmmap.mapKeyEquals(e.key, idx_v)) break e.value;
-                } else null;
-                try vmPush(found orelse .null);
+                try vmPush(if (vmmap.mapFindLinear(items, idx_v)) |fi| items[fi].value else .null);
             },
             .map_hashed => |hm| {
                 if (vmmap.mapFindHashedIndex(hm.entries[0..hm.len], hm.buckets, idx_v)) |fi| {
@@ -1471,11 +1477,9 @@ fn insertReceiverAndCall(recv_idx: usize, func: Value, recv: Value, argc: u8) !v
 
 fn mapLinearInsertOrAppend(container: Value, key: Value, val: Value) !void {
     const items = try vms.asMapSlice(container.object);
-    for (items) |*entry| {
-        if (vmmap.mapKeyEquals(entry.key, key)) {
-            entry.value = val;
-            return;
-        }
+    if (vmmap.mapFindLinear(items, key)) |fi| {
+        items[fi].value = val;
+        return;
     }
     try pushTempRoot(container);
     defer popTempRoot();
@@ -1716,13 +1720,8 @@ fn runInner() !void {
                     if (result[1] != 0) return error.TypeError;
                     try pushDecimalResultWithCarrier(p.typ, result[0]);
                 } else {
-                    const tag = numericOpTag(a, b) catch |err| {
-                        if (err == error.TypeError) setBinaryTypeError("*", a, b);
-                        return err;
-                    };
-                    const an = try valueAsNumberForOp(a, b, "*");
-                    const bn = try valueAsNumberForOp(b, a, "*");
-                    try pushNumericResultWithCarrier(a, b, an * bn, tag, "*");
+                    const ctx = try numericBinaryOp(a, b, "*");
+                    try pushNumericResultWithCarrier(a, b, ctx.an * ctx.bn, ctx.tag, "*");
                 }
             },
             .div => {
@@ -1735,38 +1734,23 @@ fn runInner() !void {
                     if (p.d == std.math.minInt(i64) and p.n == -1) return error.TypeError;
                     try pushDecimalResultWithCarrier(p.typ, @divTrunc(p.d, p.n));
                 } else {
-                    const tag = numericOpTag(a, b) catch |err| {
-                        if (err == error.TypeError) setBinaryTypeError("/", a, b);
-                        return err;
-                    };
-                    const an = try valueAsNumberForOp(a, b, "/");
-                    const bn = try valueAsNumberForOp(b, a, "/");
-                    if (bn == 0.0) { vms.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
-                    try pushNumericResultWithCarrier(a, b, an / bn, if (a == .int and b == .int) .float else tag, "/");
+                    const ctx = try numericBinaryOp(a, b, "/");
+                    if (ctx.bn == 0.0) { vms.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
+                    try pushNumericResultWithCarrier(a, b, ctx.an / ctx.bn, if (a == .int and b == .int) .float else ctx.tag, "/");
                 }
             },
             .mod => {
                 const b = try vmPop();
                 const a = try vmPop();
-                const tag = numericOpTag(a, b) catch |err| {
-                    if (err == error.TypeError) setBinaryTypeError("%", a, b);
-                    return err;
-                };
-                const an = try valueAsNumberForOp(a, b, "%");
-                const bn = try valueAsNumberForOp(b, a, "%");
-                if (bn == 0.0) { vms.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
-                try pushNumericResultWithCarrier(a, b, common.fmod(an, bn), tag, "%");
+                const ctx = try numericBinaryOp(a, b, "%");
+                if (ctx.bn == 0.0) { vms.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
+                try pushNumericResultWithCarrier(a, b, common.fmod(ctx.an, ctx.bn), ctx.tag, "%");
             },
             .pow => {
                 const b = try vmPop();
                 const a = try vmPop();
-                const tag = numericOpTag(a, b) catch |err| {
-                    if (err == error.TypeError) setBinaryTypeError("**", a, b);
-                    return err;
-                };
-                const an = try valueAsNumberForOp(a, b, "**");
-                const bn = try valueAsNumberForOp(b, a, "**");
-                try pushNumericResultWithCarrier(a, b, std.math.pow(f64, an, bn), tag, "**");
+                const ctx = try numericBinaryOp(a, b, "**");
+                try pushNumericResultWithCarrier(a, b, std.math.pow(f64, ctx.an, ctx.bn), ctx.tag, "**");
             },
             .bit_and => {
                 const b = try vmPop();
