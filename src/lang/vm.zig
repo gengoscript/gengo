@@ -2055,6 +2055,24 @@ fn runInner() !void {
                 if (try tryTailCall(argc)) continue;
                 try performCall(argc);
             },
+            .call_global_local_sub_const => {
+                const name_idx = try vmShort();
+                const ic_base = vmState().ip;
+                const ic_slot: u16 = @intCast(try vmShort());
+                _ = try vmByte(); // skip get_local_const_sub_call opcode byte
+                const p = try readLocalSlotAndConst();
+                const argc = try vmByte();
+                const callee = try readGlobalIC(name_idx, ic_base, ic_slot);
+                const a = try readLocalSlot(p.slot);
+                try vmPush(callee);
+                if (a == .int and p.k == .int) {
+                    try vmPush(.{ .int = a.int - p.k.int });
+                } else {
+                    try pushSubResult(a, p.k);
+                }
+                if (try tryTailCall(argc)) continue;
+                try performCall(argc);
+            },
             .get_local_const_add => {
                 const p = try readLocalSlotAndConst();
                 const a = try readLocalSlot(p.slot);
