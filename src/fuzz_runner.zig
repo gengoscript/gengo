@@ -9,6 +9,8 @@ const vms = @import("lang/vm_state.zig");
 const vmnative = @import("lang/vm_native.zig");
 const host_abi = @import("lang/native/host_abi.zig");
 const vm_defuse = @import("lang/vm_defuse.zig");
+const vmod = @import("lang/value.zig");
+const staticSS = vmod.staticSS;
 
 fn writeAll(fd: std.os.wasi.fd_t, s: []const u8) void {
     var off: usize = 0;
@@ -162,18 +164,18 @@ fn fuzzValueWire() void {
         .{ .float = std.math.inf(f64) },
         .{ .float = -std.math.inf(f64) },
         .{ .float = std.math.nan(f64) },
-        .{ .string = "" },
-        .{ .string = "hello" },
-        .{ .string = "hello\nworld\t" },
+        .{ .string = staticSS("") },
+        .{ .string = staticSS("hello") },
+        .{ .string = staticSS("hello\nworld\t") },
         .{ .rune = 0 },
         .{ .rune = 65 },
         .{ .rune = 0x10FFFF },
         .{ .decimal = 0 },
         .{ .decimal = 1000000 },
         .{ .decimal = -1000000 },
-        .{ .error_value = "test" },
-        .{ .error_value = "" },
-        .{ .error_value = "something went wrong" },
+        .{ .error_value = staticSS("test") },
+        .{ .error_value = staticSS("") },
+        .{ .error_value = staticSS("something went wrong") },
     };
 
     for (test_values) |v| {
@@ -191,7 +193,7 @@ fn fuzzValueWire() void {
             .float => if (round != .float or (!std.math.isNan(v.float) and round.float != v.float)) fail("fuzz FAIL: float round-trip\n"),
             .decimal => if (round != .decimal or round.decimal != v.decimal) fail("fuzz FAIL: decimal round-trip\n"),
             .rune => if (round != .rune or round.rune != v.rune) fail("fuzz FAIL: rune round-trip\n"),
-            .error_value => if (round != .error_value or !std.mem.eql(u8, round.error_value, v.error_value)) fail("fuzz FAIL: error round-trip\n"),
+            .error_value => if (round != .error_value or !std.mem.eql(u8, round.error_value.bytes, v.error_value.bytes)) fail("fuzz FAIL: error round-trip\n"),
             else => {},
         }
     }

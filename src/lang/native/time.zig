@@ -7,6 +7,7 @@ const Object = @import("../value.zig").Object;
 const MapEntry = @import("../value.zig").MapEntry;
 const NativeFnId = @import("native_ids.zig").NativeFnId;
 const NativeFuncObj = @import("../value.zig").NativeFuncObj;
+const chunk = @import("../chunk.zig");
 
 const w32 = std.os.windows;
 
@@ -418,8 +419,8 @@ pub fn timeIsoWeek(ms: f64) !Value {
     const entries = try vmgc.vmAllocManagedSlice(MapEntry, 2);
     const obj = try vmgc.allocTempRooted(.{ .map = &[_]MapEntry{} });
     defer vms.popTempRoot();
-    entries[0] = .{ .key = .{ .string = "year" }, .value = .{ .int = iso_year } };
-    entries[1] = .{ .key = .{ .string = "week" }, .value = .{ .int = week } };
+    entries[0] = .{ .key = .{ .string = try chunk.internStr("year") }, .value = .{ .int = iso_year } };
+    entries[1] = .{ .key = .{ .string = try chunk.internStr("week") }, .value = .{ .int = week } };
     obj.* = .{ .map_managed = entries[0..2] };
     return .{ .object = obj };
 }
@@ -577,14 +578,14 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const entries = try vmgc.vmAllocManagedSlice(MapEntry, field_count);
             const obj = try vmgc.allocTempRooted(.{ .map = &[_]MapEntry{} });
             defer vms.popTempRoot();
-            entries[0] = .{ .key = .{ .string = "year" }, .value = .{ .int = p.year } };
-            entries[1] = .{ .key = .{ .string = "month" }, .value = .{ .int = p.month } };
-            entries[2] = .{ .key = .{ .string = "day" }, .value = .{ .int = p.day } };
-            entries[3] = .{ .key = .{ .string = "hour" }, .value = .{ .int = p.hour } };
-            entries[4] = .{ .key = .{ .string = "min" }, .value = .{ .int = p.min } };
-            entries[5] = .{ .key = .{ .string = "sec" }, .value = .{ .int = p.sec } };
-            entries[6] = .{ .key = .{ .string = "ms" }, .value = .{ .int = p.ms } };
-            entries[7] = .{ .key = .{ .string = "weekday" }, .value = .{ .int = p.weekday } };
+            entries[0] = .{ .key = .{ .string = try chunk.internStr("year") }, .value = .{ .int = p.year } };
+            entries[1] = .{ .key = .{ .string = try chunk.internStr("month") }, .value = .{ .int = p.month } };
+            entries[2] = .{ .key = .{ .string = try chunk.internStr("day") }, .value = .{ .int = p.day } };
+            entries[3] = .{ .key = .{ .string = try chunk.internStr("hour") }, .value = .{ .int = p.hour } };
+            entries[4] = .{ .key = .{ .string = try chunk.internStr("min") }, .value = .{ .int = p.min } };
+            entries[5] = .{ .key = .{ .string = try chunk.internStr("sec") }, .value = .{ .int = p.sec } };
+            entries[6] = .{ .key = .{ .string = try chunk.internStr("ms") }, .value = .{ .int = p.ms } };
+            entries[7] = .{ .key = .{ .string = try chunk.internStr("weekday") }, .value = .{ .int = p.weekday } };
             obj.* = .{ .map_managed = entries[0..field_count] };
             vms.vmPopArgs(argc);
             try vms.vmPush(.{ .object = obj });

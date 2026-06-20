@@ -404,7 +404,7 @@ pub fn asMapSlice(obj: *Object) ![]MapEntry {
 }
 
 pub fn asStringValue(v: Value) ![]const u8 {
-    if (v == .string) return v.string;
+    if (v == .string) return v.string.bytes;
     if (v == .object) {
         return switch (v.object.*) {
             .dyn_string => |s| s,
@@ -431,7 +431,7 @@ pub fn asStringValue(v: Value) ![]const u8 {
 pub fn assertStringImmortal(v: Value) void {
     if (builtin.mode != .Debug) return;
     if (v != .string) return;
-    const s = v.string;
+    const s = v.string.bytes;
     if (s.len == 0) return;
     const ptr = @intFromPtr(s.ptr);
 

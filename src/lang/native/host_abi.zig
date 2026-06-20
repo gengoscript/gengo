@@ -1,6 +1,7 @@
 const std = @import("std");
 const host_abi = @import("../../runtime/host_abi.zig");
 const heap = @import("../../runtime/heap.zig");
+const chunk = @import("../chunk.zig");
 const vms = @import("../vm_state.zig");
 const vmgc = @import("../vm_gc.zig");
 const Value = @import("../value.zig").Value;
@@ -42,8 +43,8 @@ pub fn wireFromValue(v: Value) !host_abi.ValueWire {
         .float => |n| makeWire(.number, 0, @bitCast(n), 0),
         .rune => |r| makeWire(.number, host_abi.FLAG_RUNE, @as(u64, r), 0),
         .decimal => |d| makeWire(.number, host_abi.FLAG_DECIMAL, @as(u64, @bitCast(d)), 0),
-        .string => |s| makeWire(.string, 0, @intCast(@intFromPtr(s.ptr)), @intCast(s.len)),
-        .error_value => |msg| makeWire(.@"error", 0, @intCast(@intFromPtr(msg.ptr)), @intCast(msg.len)),
+        .string => |s| makeWire(.string, 0, @intCast(@intFromPtr(s.bytes.ptr)), @intCast(s.bytes.len)),
+        .error_value => |msg| makeWire(.@"error", 0, @intCast(@intFromPtr(msg.bytes.ptr)), @intCast(msg.bytes.len)),
         .object => |o| switch (o.*) {
             .dyn_string => makeWire(.string, 0, @intCast(@intFromPtr(o.dyn_string.ptr)), @intCast(o.dyn_string.len)),
             .string_view => makeWire(.string, 0, @intCast(@intFromPtr(o.string_view.bytes.ptr)), @intCast(o.string_view.bytes.len)),
@@ -66,9 +67,9 @@ pub fn wireFromValue(v: Value) !host_abi.ValueWire {
             },
             .variant_value => |vv| {
                 const wires = (heap.bump(host_abi.ValueWire, 4) orelse return error.OutOfMemory)[0..4];
-                wires[0] = try wireFromValue(.{ .string = "tag" });
-                wires[1] = try wireFromValue(.{ .string = vv.tag });
-                wires[2] = try wireFromValue(.{ .string = "value" });
+                wires[0] = try wireFromValue(.{ .string = try chunk.internStr("tag") });
+                wires[1] = try wireFromValue(.{ .string = try chunk.internStr(vv.tag) });
+                wires[2] = try wireFromValue(.{ .string = try chunk.internStr("value") });
                 wires[3] = try wireFromValue(vv.payload);
                 return makeWire(.map, 0, @intCast(@intFromPtr(wires.ptr)), 2);
             },
@@ -92,14 +93,14 @@ pub fn valueFromWire(w: host_abi.ValueWire) !Value {
             return Value{ .float = @bitCast(w.payload) };
         },
         .@"error" => {
-            if (w.len == 0) return Value{ .error_value = "" };
+            if (w.len == 0) return Value{ .error_value = try chunk.internStr("") };
             const data = @as([*]u8, @ptrFromInt(@as(usize, @intCast(w.payload))))[0..@as(usize, @intCast(w.len))];
             const copy = try vmgc.vmAllocManagedBytes(w.len);
             @memcpy(copy[0..w.len], data);
-            return .{ .error_value = copy[0..w.len] };
+            return .{ .error_value = try chunk.internStr(copy[0..w.len]) };
         },
         .string => {
-            if (w.len == 0) return Value{ .string = "" };
+            if (w.len == 0) return Value{ .string = try chunk.internStr("") };
             const data = @as([*]u8, @ptrFromInt(@as(usize, @intCast(w.payload))))[0..@as(usize, @intCast(w.len))];
             return vmgc.makeDynString(data);
         },

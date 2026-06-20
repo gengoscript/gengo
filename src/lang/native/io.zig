@@ -11,6 +11,7 @@ const NativeFuncObj = @import("../value.zig").NativeFuncObj;
 const host_abi = @import("../../runtime/host_abi.zig");
 const host_abi_mod = @import("host_abi.zig");
 const MaxNativeArgs = @import("native_ids.zig").MaxNativeArgs;
+const chunk = @import("../chunk.zig");
 
 const PrintMaxDepth = 64;
 
@@ -72,8 +73,8 @@ fn sprintValueDepth(buf_or_null: ?[]u8, v: Value, depth: u32, ancestors: *[Print
             return s.len;
         },
         .string => |s| {
-            if (buf_or_null) |buf| @memcpy(buf[0..s.len], s);
-            return s.len;
+            if (buf_or_null) |buf| @memcpy(buf[0..s.bytes.len], s.bytes);
+            return s.bytes.len;
         },
         .rune => |r| {
             var tmp: [4]u8 = undefined;
@@ -84,11 +85,11 @@ fn sprintValueDepth(buf_or_null: ?[]u8, v: Value, depth: u32, ancestors: *[Print
         .error_value => |s| {
             const prefix = "error(";
             const suffix = ")";
-            const len = prefix.len + s.len + suffix.len;
+            const len = prefix.len + s.bytes.len + suffix.len;
             if (buf_or_null) |buf| {
                 @memcpy(buf[0..prefix.len], prefix);
-                @memcpy(buf[prefix.len..][0..s.len], s);
-                @memcpy(buf[prefix.len + s.len..][0..suffix.len], suffix);
+                @memcpy(buf[prefix.len..][0..s.bytes.len], s.bytes);
+                @memcpy(buf[prefix.len + s.bytes.len..][0..suffix.len], suffix);
             }
             return len;
         },

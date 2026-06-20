@@ -7,13 +7,14 @@ const Object = @import("../value.zig").Object;
 const MapEntry = @import("../value.zig").MapEntry;
 const NativeFnId = @import("native_ids.zig").NativeFnId;
 const NativeFuncObj = @import("../value.zig").NativeFuncObj;
+const chunk = @import("../chunk.zig");
 
 // A raw .string view is only safe when the source bytes are immortal
 // (source-code constants). Substrings of GC-managed strings must be copied,
 // or they dangle once the source is collected.
 fn substring(bytes: []const u8, managed: bool) !Value {
-    if (managed) return vmgc.makeDynString(bytes);
-    return .{ .string = bytes };
+    _ = managed;
+    return vmgc.makeDynString(bytes);
 }
 
 pub fn nativeStrSplit(s: []const u8, sep: []const u8, managed: bool) !Value {

@@ -273,7 +273,7 @@ fn expectImportLoaderWithFallback() void {
     const call_res = rt.call("get", &[_]Value{});
     switch (call_res) {
         .ok => |v| {
-            const s = if (v == .string) v.string
+            const s = if (v == .string) v.string.bytes
                 else if (v == .object and v.object.* == .dyn_string) v.object.dyn_string
                 else if (v == .object and v.object.* == .string_view) v.object.string_view.bytes
                 else null;

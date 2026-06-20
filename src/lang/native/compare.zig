@@ -3,7 +3,7 @@ const Value = @import("../value.zig").Value;
 const Object = @import("../value.zig").Object;
 
 fn strBytes(v: Value) ?[]const u8 {
-    if (v == .string) return v.string;
+    if (v == .string) return v.string.bytes;
     if (v == .object) {
         return switch (v.object.*) {
             .dyn_string => |s| s,

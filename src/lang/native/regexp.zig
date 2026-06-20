@@ -7,6 +7,7 @@ const Value = @import("../value.zig").Value;
 const Object = @import("../value.zig").Object;
 const NativeFnId = @import("native_ids.zig").NativeFnId;
 const NativeFuncObj = @import("../value.zig").NativeFuncObj;
+const chunk = @import("../chunk.zig");
 
 const RegexpQualifiedName = "@std.regexp.obj";
 const MaxPatternLen = 4096;
@@ -46,7 +47,7 @@ pub fn reBuildObj(pattern: []const u8) !Value {
 pub fn reGetPattern(val: Value) ![]const u8 {
     const uv = vms.unboxNamed(val);
     return switch (uv) {
-        .string => |s| s,
+        .string => |s| s.bytes,
         .object => |obj| switch (obj.*) {
             .dyn_string => |s| s,
             .string_view => |sv| sv.bytes,
@@ -592,7 +593,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const recv = vms.vmState().stack[top - 2];
             const s_val = vms.vmState().stack[top - 1];
             const pattern = try reGetPattern(recv);
-            const result = try nativeReFind(.{ .string = pattern }, s_val);
+            const result = try nativeReFind(.{ .string = try chunk.internStr(pattern) }, s_val);
             _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
             try vms.vmPush(result);
         },
@@ -603,7 +604,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const recv = vms.vmState().stack[top - 2];
             const s_val = vms.vmState().stack[top - 1];
             const pattern = try reGetPattern(recv);
-            const result = try nativeReFindAll(.{ .string = pattern }, s_val);
+            const result = try nativeReFindAll(.{ .string = try chunk.internStr(pattern) }, s_val);
             _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
             try vms.vmPush(result);
         },
@@ -614,7 +615,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const recv = vms.vmState().stack[top - 2];
             const s_val = vms.vmState().stack[top - 1];
             const pattern = try reGetPattern(recv);
-            const result = try nativeReMatch(.{ .string = pattern }, s_val);
+            const result = try nativeReMatch(.{ .string = try chunk.internStr(pattern) }, s_val);
             _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
             try vms.vmPush(result);
         },
@@ -626,7 +627,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const s_val = vms.vmState().stack[top - 2];
             const repl_val = vms.vmState().stack[top - 1];
             const pattern = try reGetPattern(recv);
-            const result = try nativeReReplace(.{ .string = pattern }, s_val, repl_val);
+            const result = try nativeReReplace(.{ .string = try chunk.internStr(pattern) }, s_val, repl_val);
             _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
             try vms.vmPush(result);
         },
@@ -637,7 +638,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const recv = vms.vmState().stack[top - 2];
             const s_val = vms.vmState().stack[top - 1];
             const pattern = try reGetPattern(recv);
-            const result = try nativeReSplit(.{ .string = pattern }, s_val);
+            const result = try nativeReSplit(.{ .string = try chunk.internStr(pattern) }, s_val);
             _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
             try vms.vmPush(result);
         },

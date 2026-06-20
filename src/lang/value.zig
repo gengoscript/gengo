@@ -173,20 +173,33 @@ pub const Object = union(ObjTag) {
 
 pub const VTag = enum { int, float, decimal, rune, boolean, string, error_value, object, null };
 
-/// A Value is a tagged union.  The `.string` variant is a raw ptr+len with
-/// no GC tracking; it MUST only point at immortal bytes (source-code string
-/// literals, lexer interned strings, or the chunk constant pool).  Any
-/// heap-backed or transient text MUST be stored as a `.dyn_string` Object.
-/// Violating this invariant causes use-after-free or aliasing bugs when the
-/// GC or a native reuses the backing memory.
+/// Indirection wrapper that makes string payloads 8 bytes (pointer-sized) so
+/// the entire Value fits in 16 bytes.  Lives in chunk.g_state.str_slices[].
+/// The `.bytes` slice itself MUST point at immortal data (source literals,
+/// interned names, constant-pool text) — same constraint as the old []const u8.
+pub const StringSlice = struct { bytes: []const u8 };
+
+/// Returns a stable pointer to a comptime-allocated StringSlice for a string
+/// literal. No pool allocation, no errors. Use for permanent static strings.
+pub fn staticSS(comptime s: []const u8) *const StringSlice {
+    const S = struct { const v: StringSlice = .{ .bytes = s }; };
+    return &S.v;
+}
+
+/// A Value is a tagged union (16 bytes: 8-byte tag word + 8-byte payload).
+/// The `.string` and `.error_value` variants store a *const StringSlice so
+/// their payload fits in 8 bytes.  The StringSlice lives in a bump pool
+/// (chunk.g_state.str_slices); obtain one via chunk.internStr().
+/// The bytes the StringSlice points to MUST be immortal — same invariant as
+/// the old []const u8 variants.
 pub const Value = union(VTag) {
     int: i64,
     float: f64,
     decimal: i64,
     rune: u21,
     boolean: bool,
-    string: []const u8,
-    error_value: []const u8,
+    string: *const StringSlice,
+    error_value: *const StringSlice,
     object: *Object,
     null,
 
@@ -212,11 +225,11 @@ pub const Value = union(VTag) {
     pub fn equals(a: Value, b: Value) bool {
         if (a == .string and b == .object) {
             const btag = @as(ObjTag, b.object.*);
-            if (btag == .dyn_string or btag == .string_view) return common.streq(a.string, stringViewOrDynBytes(b.object));
+            if (btag == .dyn_string or btag == .string_view) return common.streq(a.string.bytes, stringViewOrDynBytes(b.object));
         }
         if (b == .string and a == .object) {
             const atag = @as(ObjTag, a.object.*);
-            if (atag == .dyn_string or atag == .string_view) return common.streq(stringViewOrDynBytes(a.object), b.string);
+            if (atag == .dyn_string or atag == .string_view) return common.streq(stringViewOrDynBytes(a.object), b.string.bytes);
         }
         if (a == .object and b == .object) {
             const atag = @as(ObjTag, a.object.*);
@@ -260,8 +273,8 @@ pub const Value = union(VTag) {
             .decimal => |x| x == b.decimal,
             .rune => |x| x == b.rune,
             .boolean => |x| x == b.boolean,
-            .string => |x| common.streq(x, b.string),
-            .error_value => |x| common.streq(x, b.error_value),
+            .string => |x| common.streq(x.bytes, b.string.bytes),
+            .error_value => |x| common.streq(x.bytes, b.error_value.bytes),
             .object => |x| x == b.object,
             .null => true,
         };

@@ -165,7 +165,7 @@ pub fn cForStmt(c: anytype) anyerror!void {
         const lp = c.currentLoop();
         for (lp.loop_var_slots[0..lp.loop_var_count], lp.loop_var_names[0..lp.loop_var_count]) |slot, lname| {
             try chunk.emit2(@intFromEnum(Op.get_local), slot, c.prev.line);
-            try chunk.emitOpConst(.def_global, .{ .string = try c.qualifyGlobalName(lname) }, c.prev.line);
+            try chunk.emitOpStringConst(.def_global, try c.qualifyGlobalName(lname), c.prev.line);
             try chunk.emitOp(.pop, c.prev.line);
         }
         c.currentScope().local_count = local_base;
@@ -353,7 +353,7 @@ pub fn compileFuncWithPrefix(c: anytype, prefix: []const []const u8, is_named: b
                     .boolean =>
                         try chunk.emitOp(.false_val, @intCast(func_ip)),
                     .string =>
-                        try chunk.emitConst(.{ .string = "" }, @intCast(func_ip)),
+                        try chunk.emitStringConst("", @intCast(func_ip)),
                     else =>
                         try chunk.emitOp(.null_val, @intCast(func_ip)),
                 }
@@ -528,7 +528,7 @@ pub fn deferStmt(c: anytype) !void {
 }
 
 pub fn emitAssignTargetPath(c: anytype, target: AssignTarget, all_steps: []const AssignTargetStep) !void {
-    const vidx: u16 = try chunk.addConst(.{ .string = MultiAssignValueScratch });
+    const vidx: u16 = try chunk.addStringConst(MultiAssignValueScratch);
     if (target.step_count == 0) {
         try chunk.emitGetGlobalIdx(vidx, target.root.line);
         try c.emitSetVar(target.root);
@@ -545,7 +545,7 @@ pub fn emitAssignTargetPath(c: anytype, target: AssignTarget, all_steps: []const
                 try chunk.emitOp(.get_index, target.root.line);
             },
             .index_string => |s| {
-                try chunk.emitConst(.{ .string = s }, target.root.line);
+                try chunk.emitStringConst(s, target.root.line);
                 try chunk.emitOp(.get_index, target.root.line);
             },
         }
@@ -563,7 +563,7 @@ pub fn emitAssignTargetPath(c: anytype, target: AssignTarget, all_steps: []const
             try chunk.emitOp(.set_index, target.root.line);
         },
         .index_string => |s| {
-            try chunk.emitConst(.{ .string = s }, target.root.line);
+            try chunk.emitStringConst(s, target.root.line);
             try chunk.emitGetGlobalIdx(vidx, target.root.line);
             try chunk.emitOp(.set_index, target.root.line);
         },
@@ -715,7 +715,7 @@ pub fn forInStmt(c: anytype) anyerror!void {
         const lp = c.currentLoop();
         for (lp.loop_var_slots[0..lp.loop_var_count], lp.loop_var_names[0..lp.loop_var_count]) |slot, lname| {
             try chunk.emit2(@intFromEnum(Op.get_local), slot, c.prev.line);
-            try chunk.emitOpConst(.def_global, .{ .string = try c.qualifyGlobalName(lname) }, c.prev.line);
+            try chunk.emitOpStringConst(.def_global, try c.qualifyGlobalName(lname), c.prev.line);
             try chunk.emitOp(.pop, c.prev.line);
         }
         c.currentScope().local_count = local_base;
@@ -979,11 +979,11 @@ pub fn multiBindStmt(c: anytype, is_decl: bool) !void {
             } else if (c.inFunc()) {
                 try c.emitSetVar(names[i]);
             } else {
-                try chunk.emitOpConst(.def_global, .{ .string = try c.qualifyGlobalName(names[i].src) }, names[i].line);
+                try chunk.emitOpStringConst(.def_global, try c.qualifyGlobalName(names[i].src), names[i].line);
             }
         } else {
             if (targets[i].step_count == 0) try c.ensureMutableBinding(targets[i].root);
-            const vidx: u16 = try chunk.addConst(.{ .string = MultiAssignValueScratch });
+            const vidx: u16 = try chunk.addStringConst(MultiAssignValueScratch);
             try chunk.emitOp(.dup, targets[i].root.line);
             try chunk.emit2(@intFromEnum(Op.tuple_get), i, targets[i].root.line);
             try chunk.emitConstIdx(.def_global, vidx, targets[i].root.line);
@@ -1334,7 +1334,7 @@ pub fn switchStmt(c: anytype) anyerror!void {
                 }
                 // Emit: dup, variant_check arm_name, jump_if_false [H]
                 try chunk.emitOp(.dup, dot_line);
-                try chunk.emitOpConst(.variant_check, .{ .string = arm_name_tok.src }, dot_line);
+                try chunk.emitOpStringConst(.variant_check, arm_name_tok.src, dot_line);
                 const next_case = try chunk.emitJump(.jif_pop, dot_line);
                 // Handle switch value and optional binding
                 const local_before = c.currentScope().local_count;
@@ -1345,7 +1345,7 @@ pub fn switchStmt(c: anytype) anyerror!void {
                     if (c.inFunc()) {
                         _ = try c.defineLocal(binding.?, false);
                     } else {
-                        try chunk.emitOpConst(.def_global, .{ .string = try c.qualifyGlobalName(binding.?) }, dot_line);
+                        try chunk.emitOpStringConst(.def_global, try c.qualifyGlobalName(binding.?), dot_line);
                     }
                 } else {
                     try chunk.emitOp(.pop, dot_line); // discard switch value
@@ -1541,10 +1541,10 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
             } else if (inferred_type_check == .assert_err) {
                 try chunk.emit2(@intFromEnum(Op.assert_type), 3, name.line);
             } else if (inferred_type_check == .interface_type) {
-                const idx = try chunk.addConst(.{ .string = inferred_type_check.interface_type });
+                const idx = try chunk.addStringConst(inferred_type_check.interface_type);
                 try chunk.emitConstIdx(.assert_interface, idx, name.line);
             } else if (inferred_type_check == .struct_type) {
-                const idx = try chunk.addConst(.{ .string = inferred_type_check.struct_type });
+                const idx = try chunk.addStringConst(inferred_type_check.struct_type);
                 try chunk.emitConstIdx(.assert_struct, idx, name.line);
             }
         } else if (has_keyword and !is_const and inferred_type_check != .none) {
@@ -1602,7 +1602,7 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
                 }
             }
         }
-        try chunk.emitOpConst(.def_global, .{ .string = qname }, name.line);
+        try chunk.emitOpStringConst(.def_global, qname, name.line);
         if (!c.skipping_test_body) {
             if (inferred_type_check != .none) {
                 if (c.typed_global_count >= MaxLocals) {

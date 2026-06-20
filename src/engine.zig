@@ -13,7 +13,10 @@ const net_state = @import("lang/native/net_state.zig");
 const http_state = @import("lang/native/http_state.zig");
 const fs_state = @import("lang/native/fs_state.zig");
 const cfg = @import("runtime/config.zig");
-const Value = @import("lang/value.zig").Value;
+const vmod = @import("lang/value.zig");
+const Value = vmod.Value;
+const staticSS = vmod.staticSS;
+const chunk = @import("lang/chunk.zig");
 const Object = @import("lang/value.zig").Object;
 const MapEntry = @import("lang/value.zig").MapEntry;
 const ValueWire = host_abi.ValueWire;
@@ -297,14 +300,14 @@ fn wireToValue(wire: ValueWire) !Value {
             break :blk if ((wire.flags & host_abi.FLAG_INTEGER) != 0) Value{ .int = @bitCast(wire.payload) } else Value{ .float = fval };
         },
         @intFromEnum(WireTag.@"error") => {
-            if (wire.len == 0) return Value{ .error_value = "" };
+            if (wire.len == 0) return Value{ .error_value = try chunk.internStr("") };
             const data = @as([*]u8, @ptrFromInt(@as(usize, @intCast(wire.payload))))[0..@as(usize, @intCast(wire.len))];
             const copy = try vmgc.vmAllocManagedBytes(wire.len);
             @memcpy(copy[0..wire.len], data);
-            return Value{ .error_value = copy[0..wire.len] };
+            return Value{ .error_value = try chunk.internStr(copy[0..wire.len]) };
         },
         @intFromEnum(WireTag.string) => {
-            if (wire.len == 0) return Value{ .string = "" };
+            if (wire.len == 0) return Value{ .string = try chunk.internStr("") };
             const data = @as([*]u8, @ptrFromInt(@as(usize, @intCast(wire.payload))))[0..@as(usize, @intCast(wire.len))];
             return try vm.makeString(data);
         },
@@ -383,8 +386,8 @@ fn valueToWire(val: Value) !ValueWire {
             .len = 0,
             .reserved2 = 0,
         },
-        .string => |s| makeWire(@intFromEnum(WireTag.string), @intFromPtr(s.ptr), @intCast(s.len)),
-        .error_value => |msg| makeWire(@intFromEnum(WireTag.@"error"), @intFromPtr(msg.ptr), @intCast(msg.len)),
+        .string => |s| makeWire(@intFromEnum(WireTag.string), @intFromPtr(s.bytes.ptr), @intCast(s.bytes.len)),
+        .error_value => |msg| makeWire(@intFromEnum(WireTag.@"error"), @intFromPtr(msg.bytes.ptr), @intCast(msg.bytes.len)),
         .object => |obj| switch (obj.*) {
             .dyn_string => makeWire(@intFromEnum(WireTag.string), @intFromPtr(obj.dyn_string.ptr), @intCast(obj.dyn_string.len)),
             .string_view => makeWire(@intFromEnum(WireTag.string), @intFromPtr(obj.string_view.bytes.ptr), @intCast(obj.string_view.bytes.len)),
@@ -415,18 +418,18 @@ fn valueToWire(val: Value) !ValueWire {
                 const arm_field_count = @min(vv.arm_fields.len, arm_spec.fields.len);
                 const total_entries = 2 + shared_count + arm_field_count;
                 const wires = (heap.bump(ValueWire, total_entries * 2) orelse return makeWire(@intFromEnum(WireTag.null), 0, 0))[0..total_entries * 2];
-                wires[0] = try valueToWire(.{ .string = "tag" });
-                wires[1] = try valueToWire(.{ .string = vv.tag });
-                wires[2] = try valueToWire(.{ .string = "value" });
+                wires[0] = try valueToWire(.{ .string = staticSS("tag") });
+                wires[1] = try valueToWire(.{ .string = try chunk.internStr(vv.tag) });
+                wires[2] = try valueToWire(.{ .string = staticSS("value") });
                 wires[3] = try valueToWire(vv.payload);
                 var wi: usize = 2;
                 for (vtype.shared_fields[0..shared_count], vv.shared_values[0..shared_count]) |spec, sv| {
-                    wires[wi * 2] = try valueToWire(.{ .string = spec.name });
+                    wires[wi * 2] = try valueToWire(.{ .string = try chunk.internStr(spec.name) });
                     wires[wi * 2 + 1] = try valueToWire(sv);
                     wi += 1;
                 }
                 for (arm_spec.fields[0..arm_field_count], vv.arm_fields[0..arm_field_count]) |spec, af| {
-                    wires[wi * 2] = try valueToWire(.{ .string = spec.name });
+                    wires[wi * 2] = try valueToWire(.{ .string = try chunk.internStr(spec.name) });
                     wires[wi * 2 + 1] = try valueToWire(af);
                     wi += 1;
                 }
@@ -440,7 +443,7 @@ fn valueToWire(val: Value) !ValueWire {
 fn valueToWireWithScratch(val: Value, scratch: *Engine) !ValueWire {
     switch (val) {
         .string => |s| {
-            const stable = scratch.setStringScratch(s);
+            const stable = scratch.setStringScratch(s.bytes);
             return makeWire(@intFromEnum(WireTag.string), @intFromPtr(stable.ptr), @intCast(stable.len));
         },
         .object => |obj| switch (obj.*) {

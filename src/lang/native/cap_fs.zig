@@ -6,6 +6,7 @@ const Value = @import("../value.zig").Value;
 const NativeFuncObj = @import("../value.zig").NativeFuncObj;
 const NativeFnId = @import("native_ids.zig").NativeFnId;
 const fs_state = @import("fs_state.zig");
+const chunk = @import("../chunk.zig");
 
 const alloc = std.heap.page_allocator;
 
@@ -99,7 +100,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const path = vms.asStringValue(try vms.vmPeek(1)) catch return error.TypeError;
             const arg1 = try vms.vmPeek(0);
             const content: []const u8 = switch (arg1) {
-                .string => |s| s,
+                .string => |s| s.bytes,
                 .object => |o| if (o.* == .dyn_string) o.dyn_string else if (o.* == .string_view) o.string_view.bytes else return error.TypeError,
                 else => return error.TypeError,
             };
@@ -211,7 +212,7 @@ test "cap_fs path extraction accepts string and dyn_string" {
     defer rt.deinit();
 
     // Literal string
-    const s = vms.asStringValue(.{ .string = "test.txt" }) catch return error.TestFailed;
+    const s = vms.asStringValue(.{ .string = try chunk.internStr("test.txt") }) catch return error.TestFailed;
     try std.testing.expectEqualStrings("test.txt", s);
 
     // Dynamic string

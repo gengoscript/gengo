@@ -2,8 +2,11 @@ const std = @import("std");
 const builtin = @import("builtin");
 const api = @import("runtime/api.zig");
 const io = @import("runtime/io.zig");
-const Value = @import("lang/value.zig").Value;
-const Object = @import("lang/value.zig").Object;
+const vmod = @import("lang/value.zig");
+const Value = vmod.Value;
+const Object = vmod.Object;
+const staticSS = vmod.staticSS;
+const chunk = @import("lang/chunk.zig");
 const vms = @import("lang/vm_state.zig");
 const vmgc = @import("lang/vm_gc.zig");
 const net_state = @import("lang/native/net_state.zig");
@@ -415,7 +418,7 @@ fn testMapWireResult() void {
     );
     if (res != .ok) fail("engine FAIL: map_wire setup\n");
 
-    const call_res = rt.call("readMap", &.{.{ .string = "b" }});
+    const call_res = rt.call("readMap", &.{.{ .string = staticSS("b") }});
     switch (call_res) {
         .ok => |v| {
             if (v != .int or v.int != 2) fail("engine FAIL: expected 2\n");
@@ -424,7 +427,7 @@ fn testMapWireResult() void {
     }
 
     // Also verify the global map is accessible
-    const global_m = rt.call("readMap", &.{.{ .string = "a" }});
+    const global_m = rt.call("readMap", &.{.{ .string = staticSS("a") }});
     switch (global_m) {
         .ok => |v| {
             if (v != .int or v.int != 1) fail("engine FAIL: expected 1\n");
@@ -831,7 +834,7 @@ fn testStructReturn() void {
             var found_y = false;
             for (fields) |f| {
                 const key = switch (f.key) {
-                    .string => |s| s,
+                    .string => |s| s.bytes,
                     .object => |o| if (o.* == .dyn_string) o.dyn_string else if (o.* == .string_view) o.string_view.bytes else fail("engine FAIL: struct bad key type\n"),
                     else => fail("engine FAIL: struct bad key type\n"),
                 };
@@ -925,7 +928,7 @@ fn testErrorReturn() void {
     switch (call_res) {
         .ok => |v| {
             if (v != .error_value) fail("engine FAIL: error return type\n");
-            if (!std.mem.eql(u8, v.error_value, "boom")) fail("engine FAIL: error return message\n");
+            if (!std.mem.eql(u8, v.error_value.bytes, "boom")) fail("engine FAIL: error return message\n");
         },
         .runtime_error => |e| {
             writeAll(2, "error call runtime: "); writeAll(2, e.msg); writeAll(2, "\n");

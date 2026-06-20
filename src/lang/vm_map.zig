@@ -27,8 +27,8 @@ pub fn mapHashValue(v: Value) u64 {
         .decimal => |d| @bitCast(@as(f64, @floatFromInt(d))),
         .rune => |r| @as(u64, r) *% 11400714819323198485,
         .boolean => |b| if (b) 0x9e3779b97f4a7c15 else 0x94d049bb133111eb,
-        .string => |s| common.hashBytes(s),
-        .error_value => |s| common.hashBytes(s),
+        .string => |s| common.hashBytes(s.bytes),
+        .error_value => |s| common.hashBytes(s.bytes),
         // dyn_string keys must hash by content, not pointer, so that a static .string
         // literal and a heap-allocated dyn_string with the same content land in the
         // same bucket and are found by mapFindHashedIndex.

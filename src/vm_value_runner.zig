@@ -103,7 +103,7 @@ fn testConstantFloat() void {
 
 fn testConstantString() void {
     resetAll();
-    chunk.emitConst(.{ .string = "hello" }, 1) catch fail("constant string emit");
+    chunk.emitStringConst("hello", 1) catch fail("constant string emit");
     chunk.emitOp(.halt, 1) catch fail("constant string halt");
     vm.run() catch fail("constant string run");
     expect(vms.vmState().stack_top == 1, "constant string: expected stack_top == 1");
