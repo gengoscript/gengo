@@ -121,9 +121,8 @@ pub fn interfaceDeclBody(c: anytype, kw: Token, name: Token, is_pub: bool) !void
         if (c.cur.typ != .ident) return c.err("expected identifier, found {s}", .{c.tokenName(c.cur.typ)});
         if (mcount >= MaxLocals) { c.setErr("too many fields (max {d})", .{MaxLocals}); return error.TooManyFields; }
         const mname = try c.copyName(c.cur.src);
-        var mi_check: u8 = 0;
-        while (mi_check < mcount) : (mi_check += 1) {
-            if (common.streq(methods_tmp[mi_check].name, mname)) {
+        for (methods_tmp[0..mcount]) |m| {
+            if (common.streq(m.name, mname)) {
                 c.setErr("duplicate method '{s}' in interface", .{mname});
                 return error.DuplicateField;
             }
@@ -194,11 +193,9 @@ pub fn interfaceDeclBody(c: anytype, kw: Token, name: Token, is_pub: bool) !void
         }
 
         const ptypes = heap.bump(FieldTypeSpec, arity) orelse return error.OutOfMemory;
-        var pi: usize = 0;
-        while (pi < arity) : (pi += 1) ptypes[pi] = ptypes_tmp[pi];
+        @memcpy(ptypes[0..arity], ptypes_tmp[0..arity]);
         const rtypes = heap.bump(FieldTypeSpec, rcount) orelse return error.OutOfMemory;
-        var ri: usize = 0;
-        while (ri < rcount) : (ri += 1) rtypes[ri] = returns_tmp[ri];
+        @memcpy(rtypes[0..rcount], returns_tmp[0..rcount]);
 
         methods_tmp[mcount] = .{
             .name = mname,
@@ -215,8 +212,7 @@ pub fn interfaceDeclBody(c: anytype, kw: Token, name: Token, is_pub: bool) !void
     }
     try c.consume(.rbrace);
     const methods = heap.bump(InterfaceMethodSpec, mcount) orelse return error.OutOfMemory;
-    var i: usize = 0;
-    while (i < mcount) : (i += 1) methods[i] = methods_tmp[i];
+    @memcpy(methods[0..mcount], methods_tmp[0..mcount]);
     const qname = try c.qualifyTypeName(name.src);
     const it = heap.allocObject() orelse return error.OutOfMemory;
     it.* = .{ .interface_type = InterfaceTypeObj{ .name = try c.copyName(name.src), .qualified_name = qname, .methods = methods[0..mcount] } };
@@ -372,9 +368,8 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
                 if (c.cur.typ != .ident) return c.err("expected identifier, found {s}", .{c.tokenName(c.cur.typ)});
                 if (mcount >= MaxLocals) { c.setErr("too many enum members (max {d})", .{MaxLocals}); return error.TooManyFields; }
                 const mname = c.cur.src;
-                var mdup: u8 = 0;
-                while (mdup < mcount) : (mdup += 1) {
-                    if (common.streq(members_tmp[mdup], mname)) { c.setErr("duplicate member '{s}' in enum", .{mname}); return error.DuplicateField; }
+                for (members_tmp[0..mcount]) |m| {
+                    if (common.streq(m, mname)) { c.setErr("duplicate member '{s}' in enum", .{mname}); return error.DuplicateField; }
                 }
                 members_tmp[mcount] = try c.copyName(mname);
                 mcount += 1;
@@ -385,8 +380,7 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
         }
         try c.consume(.rbrace);
         const members = heap.bump([]const u8, mcount) orelse return error.OutOfMemory;
-        var mi: usize = 0;
-        while (mi < mcount) : (mi += 1) members[mi] = members_tmp[mi];
+        @memcpy(members[0..mcount], members_tmp[0..mcount]);
         if (!c.skipping_test_body) try c.registry.addNamedType(.{
             .name = name,
             .base = .enum_t,
@@ -755,14 +749,12 @@ pub fn parseFieldTypeSpec(c: anytype) !FieldTypeSpec {
         }
         const fp = if (func_param_count > 0) blk: {
             const ps = heap.bump(FieldTypeSpec, func_param_count) orelse return error.OutOfMemory;
-            var ii: u8 = 0;
-            while (ii < func_param_count) : (ii += 1) ps[ii] = func_params_tmp[ii];
+            @memcpy(ps[0..func_param_count], func_params_tmp[0..func_param_count]);
             break :blk ps[0..func_param_count];
         } else @as([]FieldTypeSpec, &.{});
         const fr = if (func_return_count > 0) blk: {
             const rs = heap.bump(FieldTypeSpec, func_return_count) orelse return error.OutOfMemory;
-            var ii: u8 = 0;
-            while (ii < func_return_count) : (ii += 1) rs[ii] = func_returns_tmp[ii];
+            @memcpy(rs[0..func_return_count], func_returns_tmp[0..func_return_count]);
             break :blk rs[0..func_return_count];
         } else @as([]FieldTypeSpec, &.{});
         alt = .{ .typ = .func_t, .func_params = fp, .func_returns = fr };
@@ -816,10 +808,7 @@ pub fn parseFieldTypeSpec(c: anytype) !FieldTypeSpec {
     count += 1;
 
     const alts = heap.bump(FieldTypeAlt, count) orelse return error.OutOfMemory;
-    var ai: usize = 0;
-    while (ai < count) : (ai += 1) {
-        alts[ai] = tmp[ai];
-    }
+    @memcpy(alts[0..count], tmp[0..count]);
     return .{ .alts = alts[0..count] };
 }
 
@@ -894,9 +883,8 @@ pub fn structDeclBody(c: anytype, kw: Token, name: Token, is_pub: bool) !void {
             if (c.cur.typ != .ident) return c.err("expected identifier, found {s}", .{c.tokenName(c.cur.typ)});
             if (count >= MaxLocals) { c.setErr("too many fields (max {d})", .{MaxLocals}); return error.TooManyFields; }
             const fname = try c.copyName(c.cur.src);
-            var i: u8 = 0;
-            while (i < count) : (i += 1) {
-                if (common.streq(field_specs[i].name, fname)) { c.setErr("duplicate field name '{s}'", .{fname}); return error.DuplicateField; }
+            for (field_specs[0..count]) |fs| {
+                if (common.streq(fs.name, fname)) { c.setErr("duplicate field name '{s}'", .{fname}); return error.DuplicateField; }
             }
             c.advance();
 
@@ -918,10 +906,7 @@ pub fn structDeclBody(c: anytype, kw: Token, name: Token, is_pub: bool) !void {
     try c.consume(.rbrace);
 
     const fields = heap.bump(StructFieldSpec, count) orelse return error.OutOfMemory;
-    var i: usize = 0;
-    while (i < count) : (i += 1) {
-        fields[i] = field_specs[i];
-    }
+    @memcpy(fields[0..count], field_specs[0..count]);
     const qname = try c.qualifyTypeName(name.src);
     const st = heap.allocObject() orelse return error.OutOfMemory;
     st.* = .{ .struct_type = StructTypeObj{ .name = try c.copyName(name.src), .qualified_name = qname, .fields = fields[0..count] } };
@@ -965,9 +950,8 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
                 if (c.cur.typ != .ident) return c.err("expected identifier, found {s}", .{c.tokenName(c.cur.typ)});
                 if (mcount >= MaxLocals) { c.setErr("too many enum members (max {d})", .{MaxLocals}); return error.TooManyFields; }
                 const smname = c.cur.src;
-                var smdup: u8 = 0;
-                while (smdup < mcount) : (smdup += 1) {
-                    if (common.streq(members_tmp[smdup], smname)) { c.setErr("duplicate member '{s}' in enum subtype", .{smname}); return error.DuplicateField; }
+                for (members_tmp[0..mcount]) |m| {
+                    if (common.streq(m, smname)) { c.setErr("duplicate member '{s}' in enum subtype", .{smname}); return error.DuplicateField; }
                 }
                 members_tmp[mcount] = try c.copyName(smname);
                 mcount += 1;
@@ -978,22 +962,16 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
         }
         try c.consume(.rbrace);
         const members = heap.bump([]const u8, mcount) orelse return error.OutOfMemory;
-        var mi: usize = 0;
-        while (mi < mcount) : (mi += 1) members[mi] = members_tmp[mi];
+        @memcpy(members[0..mcount], members_tmp[0..mcount]);
         // Validate each member exists in the parent enum
         if (parent_info.enum_members) |parent_members| {
-            var i: usize = 0;
-            while (i < mcount) : (i += 1) {
+            for (members[0..mcount]) |m| {
                 var found = false;
-                var j: usize = 0;
-                while (j < parent_members.len) : (j += 1) {
-                    if (common.streq(members[i], parent_members[j])) {
-                        found = true;
-                        break;
-                    }
+                for (parent_members) |pm| {
+                    if (common.streq(m, pm)) { found = true; break; }
                 }
                 if (!found) {
-                    c.setErr("'{s}' is not a member of {s}", .{ members[i], parent_name });
+                    c.setErr("'{s}' is not a member of {s}", .{ m, parent_name });
                     return error.UnexpectedToken;
                 }
             }
