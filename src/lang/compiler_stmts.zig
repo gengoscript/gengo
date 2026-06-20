@@ -162,11 +162,10 @@ pub fn cForStmt(c: anytype) anyerror!void {
     }
 
     if (!c.inFunc()) {
-        var li: u8 = 0;
-        while (li < c.currentLoop().loop_var_count) : (li += 1) {
-            const slot = c.currentLoop().loop_var_slots[li];
+        const lp = c.currentLoop();
+        for (lp.loop_var_slots[0..lp.loop_var_count], lp.loop_var_names[0..lp.loop_var_count]) |slot, lname| {
             try chunk.emit2(@intFromEnum(Op.get_local), slot, c.prev.line);
-            try chunk.emitOpConst(.def_global, .{ .string = try c.qualifyGlobalName(c.currentLoop().loop_var_names[li]) }, c.prev.line);
+            try chunk.emitOpConst(.def_global, .{ .string = try c.qualifyGlobalName(lname) }, c.prev.line);
             try chunk.emitOp(.pop, c.prev.line);
         }
         c.currentScope().local_count = local_base;
@@ -174,10 +173,7 @@ pub fn cForStmt(c: anytype) anyerror!void {
     try c.cleanupLocals(local_base, c.prev.line);
 
     const loop = c.popLoop();
-    var i: usize = 0;
-    while (i < loop.break_count) : (i += 1) {
-        try chunk.patchJump(loop.break_offsets[i]);
-    }
+    for (loop.break_offsets[0..loop.break_count]) |off| try chunk.patchJump(off);
 }
 
 pub fn compileFuncWithPrefix(c: anytype, prefix: []const []const u8, is_named: bool, predicate_base: ?NamedTypeBase) anyerror!u8 {
@@ -195,11 +191,10 @@ pub fn compileFuncWithPrefix(c: anytype, prefix: []const []const u8, is_named: b
     variadic_type = any_spec;
 
     if (prefix.len > MaxLocals) { c.setErr("too many parameters (max {d})", .{MaxLocals}); return error.TooManyParams; }
-    var pi0: usize = 0;
-    while (pi0 < prefix.len) : (pi0 += 1) {
-        if (c.isKnownTypeName(prefix[pi0]))
-            return c.err("'{s}' is a type name and cannot be used as a receiver name", .{prefix[pi0]});
-        param_names[arity] = prefix[pi0];
+    for (prefix) |p| {
+        if (c.isKnownTypeName(p))
+            return c.err("'{s}' is a type name and cannot be used as a receiver name", .{p});
+        param_names[arity] = p;
         param_types[arity] = any_spec;
         arity += 1;
     }
@@ -301,11 +296,9 @@ pub fn compileFuncWithPrefix(c: anytype, prefix: []const []const u8, is_named: b
     scope.is_named = is_named;
     scope.has_typed_returns = has_typed_returns;
 
-    var pi: u8 = 0;
-    while (pi < arity) : (pi += 1) {
-        var pdi: u8 = 0;
-        while (pdi < pi) : (pdi += 1) {
-            if (common.streq(scope.locals[pdi].name, param_names[pi])) {
+    for (0..@as(usize, arity)) |pi| {
+        for (scope.locals[0..pi]) |local| {
+            if (common.streq(local.name, param_names[pi])) {
                 c.setErr("duplicate parameter name '{s}'", .{param_names[pi]});
                 return error.DuplicateLocal;
             }
@@ -322,11 +315,9 @@ pub fn compileFuncWithPrefix(c: anytype, prefix: []const []const u8, is_named: b
         if (arity + named_return_count > MaxLocals) return error.TooManyLocals;
         scope.named_return_base = arity;
         scope.named_return_count = named_return_count;
-        var ri: u8 = 0;
-        while (ri < named_return_count) : (ri += 1) {
-            var rdi: u8 = 0;
-            while (rdi < arity + ri) : (rdi += 1) {
-                if (common.streq(scope.locals[rdi].name, return_names[ri])) {
+        for (0..@as(usize, named_return_count)) |ri| {
+            for (scope.locals[0..arity + ri]) |local| {
+                if (common.streq(local.name, return_names[ri])) {
                     c.setErr("named return '{s}' conflicts with existing local binding", .{return_names[ri]});
                     return error.DuplicateLocal;
                 }
@@ -346,7 +337,7 @@ pub fn compileFuncWithPrefix(c: anytype, prefix: []const []const u8, is_named: b
                     else => break :blk .{ .none = {} },
                 }
             } else .{ .none = {} };
-            scope.locals[arity + ri] = .{ .name = return_names[ri], .is_const = false, .type_check = rc };
+            scope.locals[@as(usize, arity) + ri] = .{ .name = return_names[ri], .is_const = false, .type_check = rc };
             scope.local_count += 1;
             const rt = return_types[ri];
             if (rt.alts.len == 1) {
@@ -390,26 +381,19 @@ pub fn compileFuncWithPrefix(c: anytype, prefix: []const []const u8, is_named: b
 
     const uv_count = scope.upvalue_count;
     const slots = heap.bump(u8, uv_count) orelse return error.OutOfMemory;
-    var ui: u8 = 0;
-    while (ui < uv_count) : (ui += 1) {
-        const uv = scope.upvalues[ui];
-        const flag: u8 = if (uv.from_upvalue) @as(u8, 0x80) else @as(u8, 0x00);
-        slots[ui] = flag | uv.index;
+    for (scope.upvalues[0..uv_count], slots[0..uv_count]) |uv, *s| {
+        s.* = (if (uv.from_upvalue) @as(u8, 0x80) else @as(u8, 0x00)) | uv.index;
     }
 
     const ptypes = heap.bump(FieldTypeSpec, arity) orelse return error.OutOfMemory;
     var has_typed_params = false;
-    var pti: u8 = 0;
-    while (pti < arity) : (pti += 1) {
-        ptypes[pti] = param_types[pti];
-        if (!(param_types[pti].alts.len == 1 and param_types[pti].alts[0].typ == .any)) {
-            has_typed_params = true;
-        }
+    for (ptypes[0..arity], param_types[0..arity]) |*pt, src| {
+        pt.* = src;
+        if (!(src.alts.len == 1 and src.alts[0].typ == .any)) has_typed_params = true;
     }
 
     const rtypes = heap.bump(FieldTypeSpec, return_count) orelse return error.OutOfMemory;
-    var rti: u8 = 0;
-    while (rti < return_count) : (rti += 1) rtypes[rti] = return_types[rti];
+    @memcpy(rtypes[0..return_count], return_types[0..return_count]);
 
     const func_obj = heap.allocObject() orelse return error.OutOfMemory;
     func_obj.* = .{ .function = .{
@@ -552,9 +536,8 @@ pub fn emitAssignTargetPath(c: anytype, target: AssignTarget, all_steps: []const
     }
 
     try c.emitGetVar(target.root);
-    var i: u8 = 0;
-    while (i + 1 < target.step_count) : (i += 1) {
-        const st = all_steps[target.step_start + i];
+    const step_end = target.step_start + target.step_count - 1;
+    for (all_steps[target.step_start..step_end]) |st| {
         switch (st) {
             .dot_name => |name| try chunk.emitGetField(name, target.root.line),
             .index_number => |n| {
@@ -606,9 +589,8 @@ fn emitImplicitReturn(scope: *FuncInfo, line: u32) !void {
     } else if (scope.named_return_count == 1) {
         try chunk.emit2(@intFromEnum(Op.get_local), scope.named_return_base, line);
     } else {
-        var ri: u8 = 0;
-        while (ri < scope.named_return_count) : (ri += 1) {
-            try chunk.emit2(@intFromEnum(Op.get_local), scope.named_return_base + ri, line);
+        for (0..scope.named_return_count) |ri| {
+            try chunk.emit2(@intFromEnum(Op.get_local), scope.named_return_base + @as(u8, @intCast(ri)), line);
         }
         try chunk.emit2(@intFromEnum(Op.build_tuple), scope.named_return_count, line);
     }
@@ -642,11 +624,8 @@ fn compileDeferBlock(c: anytype) !void {
 
     const uv_count = scope.upvalue_count;
     const slots = heap.bump(u8, uv_count) orelse return error.OutOfMemory;
-    var ui: u8 = 0;
-    while (ui < uv_count) : (ui += 1) {
-        const uv = scope.upvalues[ui];
-        const flag: u8 = if (uv.from_upvalue) @as(u8, 0x80) else @as(u8, 0x00);
-        slots[ui] = flag | uv.index;
+    for (scope.upvalues[0..uv_count], slots[0..uv_count]) |uv, *s| {
+        s.* = (if (uv.from_upvalue) @as(u8, 0x80) else @as(u8, 0x00)) | uv.index;
     }
 
     const any_alts = heap.bump(FieldTypeAlt, 1) orelse return error.OutOfMemory;
@@ -733,11 +712,10 @@ pub fn forInStmt(c: anytype) anyerror!void {
     try chunk.patchJump(exit_j);
     if (!c.inFunc()) try chunk.emitOp(.pop, c.prev.line); // pop iterator (top-level only)
     if (!c.inFunc()) {
-        var li: u8 = 0;
-        while (li < c.currentLoop().loop_var_count) : (li += 1) {
-            const slot = c.currentLoop().loop_var_slots[li];
+        const lp = c.currentLoop();
+        for (lp.loop_var_slots[0..lp.loop_var_count], lp.loop_var_names[0..lp.loop_var_count]) |slot, lname| {
             try chunk.emit2(@intFromEnum(Op.get_local), slot, c.prev.line);
-            try chunk.emitOpConst(.def_global, .{ .string = try c.qualifyGlobalName(c.currentLoop().loop_var_names[li]) }, c.prev.line);
+            try chunk.emitOpConst(.def_global, .{ .string = try c.qualifyGlobalName(lname) }, c.prev.line);
             try chunk.emitOp(.pop, c.prev.line);
         }
         c.currentScope().local_count = local_base;
@@ -745,10 +723,7 @@ pub fn forInStmt(c: anytype) anyerror!void {
     try c.cleanupLocals(local_base, c.prev.line);
 
     const loop = c.popLoop();
-    var i: usize = 0;
-    while (i < loop.break_count) : (i += 1) {
-        try chunk.patchJump(loop.break_offsets[i]);
-    }
+    for (loop.break_offsets[0..loop.break_count]) |off| try chunk.patchJump(off);
 }
 
 pub fn forStmt(c: anytype) anyerror!void {
@@ -970,18 +945,16 @@ pub fn multiBindStmt(c: anytype, is_decl: bool) !void {
     if (is_decl) {
         count = try parseNameList(c, &names);
         if (count < 2) return c.err("multi-assign requires at least two targets", .{});
-        var chk: u8 = 0;
-        while (chk < count) : (chk += 1) {
-            if (names[chk].typ != .ident) continue;
-            if (c.isKnownTypeName(names[chk].src))
-                return c.err("'{s}' is a type name and cannot be used as a variable name", .{names[chk].src});
+        for (names[0..count]) |n| {
+            if (n.typ != .ident) continue;
+            if (c.isKnownTypeName(n.src))
+                return c.err("'{s}' is a type name and cannot be used as a variable name", .{n.src});
         }
         if (c.inFunc()) {
-            var pre_i: u8 = 0;
-            while (pre_i < count) : (pre_i += 1) {
-                if (names[pre_i].typ == .kw_trap) continue;
-                try chunk.emitOp(.null_val, names[pre_i].line);
-                _ = try c.defineLocal(names[pre_i].src, false);
+            for (names[0..count]) |n| {
+                if (n.typ == .kw_trap) continue;
+                try chunk.emitOp(.null_val, n.line);
+                _ = try c.defineLocal(n.src, false);
             }
         }
     } else {
@@ -995,8 +968,8 @@ pub fn multiBindStmt(c: anytype, is_decl: bool) !void {
     _ = try emitExprListTuple(c, );
     try chunk.emit2(@intFromEnum(Op.tuple_check_arity), count, c.prev.line);
 
-    var i: u8 = 0;
-    while (i < count) : (i += 1) {
+    for (0..count) |ii| {
+        const i: u8 = @intCast(ii);
         if (is_decl) {
             const is_trap_slot = names[i].typ == .kw_trap;
             try chunk.emitOp(.dup, names[i].line);
