@@ -52,7 +52,7 @@ pub fn emitZeroValue(c: anytype, tc: TypeCheck, line: u32) !void {
         .named => {
             try emitNamedDefault(c, tc.named, line);
             try chunk.emitGetGlobal(tc.named, line);
-            try chunk.emit2(@intFromEnum(Op.call), 1, line);
+            try chunk.emitCall(1, line);
         },
         .interface_type, .struct_type => try chunk.emitOp(.null_val, line),
     }
@@ -907,6 +907,7 @@ pub fn structDeclBody(c: anytype, kw: Token, name: Token, is_pub: bool) !void {
 
     const fields = heap.bump(StructFieldSpec, count) orelse return error.OutOfMemory;
     @memcpy(fields[0..count], field_specs[0..count]);
+    for (fields[0..count]) |*f| f.key = .{ .string = try chunk.internStr(f.name) };
     const qname = try c.qualifyTypeName(name.src);
     const st = heap.allocObject() orelse return error.OutOfMemory;
     st.* = .{ .struct_type = StructTypeObj{ .name = try c.copyName(name.src), .qualified_name = qname, .fields = fields[0..count] } };
@@ -1227,6 +1228,7 @@ pub fn variantDeclBody(c: anytype, kw: Token, name_tok: Token, is_pub: bool) !vo
                 try c.consume(.rbrace);
                 const fields = heap.bump(StructFieldSpec, field_count) orelse return error.OutOfMemory;
                 @memcpy(fields[0..field_count], field_specs[0..field_count]);
+                for (fields[0..field_count]) |*f| f.key = .{ .string = try chunk.internStr(f.name) };
                 if (arm_count >= MaxLocals) { c.setErr("too many local variables (max {d})", .{MaxLocals}); return error.TooManyLocals; }
                 for (arms_tmp[0..arm_count]) |a| {
                     if (common.streq(a.name, entry_name)) { c.setErr("duplicate arm '{s}' in variant", .{entry_name}); return error.DuplicateField; }
@@ -1267,6 +1269,7 @@ pub fn variantDeclBody(c: anytype, kw: Token, name_tok: Token, is_pub: bool) !vo
     const shared_fields = if (shared_count > 0) blk: {
         const sf = heap.bump(StructFieldSpec, shared_count) orelse return error.OutOfMemory;
         @memcpy(sf[0..shared_count], shared_tmp[0..shared_count]);
+        for (sf[0..shared_count]) |*f| f.key = .{ .string = try chunk.internStr(f.name) };
         break :blk sf[0..shared_count];
     } else @as([]const StructFieldSpec, &.{});
 

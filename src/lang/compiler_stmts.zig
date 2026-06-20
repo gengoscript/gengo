@@ -1464,7 +1464,7 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
             return c.err("expected '=', found {s}", .{c.tokenName(c.cur.typ)});
         }
         inferred_type_check = .{ .none = {} };
-        try chunk.emit2(@intFromEnum(Op.call), 1, name.line);
+        try chunk.emitCall(1, name.line);
     } else if (c.cur.typ == .kw_func) {
         _ = try c.parseFieldTypeSpec();
         if (c.match(.eq)) {
@@ -1535,7 +1535,7 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
                     .rune => try chunk.emitOp(.cast_rune, name.line),
                 }
             } else if (inferred_type_check == .named) {
-                try chunk.emit2(@intFromEnum(Op.call), 1, name.line);
+                try chunk.emitCall(1, name.line);
             } else if (inferred_type_check == .assert_map) {
                 try chunk.emit2(@intFromEnum(Op.assert_type), 2, name.line);
             } else if (inferred_type_check == .assert_err) {
@@ -1550,7 +1550,7 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
         } else if (has_keyword and !is_const and inferred_type_check != .none) {
             if (inferred_type_check == .named) {
                 try c.emitNamedDefault(inferred_type_check.named, name.line);
-                try chunk.emit2(@intFromEnum(Op.call), 1, name.line);
+                try chunk.emitCall(1, name.line);
             } else {
                 try c.emitZeroValue(inferred_type_check, name.line);
             }

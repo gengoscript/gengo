@@ -52,7 +52,7 @@ fn expandedWidth(op: Op, old_width: usize) usize {
         .get_local_const_lt,
         .get_local_const_gt         => 6,   // get_local(2)+constant(3)+binop(1)
         // Fused get_local+const+sub+call
-        .get_local_const_sub_call   => 8,   // get_local(2)+constant(3)+sub(1)+call(2)
+        .get_local_const_sub_call   => 10,  // get_local(2)+constant(3)+sub(1)+call(4)
         // Fused quad with jif_pop
         .get_local_const_eq_jif_pop,
         .get_local_const_lt_jif_pop,
@@ -193,7 +193,7 @@ fn emitExpanded(
             dst[0] = opByte(.get_local); dst[1] = rb(old_ip, 1);
             dst[2] = opByte(.constant); dst[3] = rb(old_ip, 3); dst[4] = rb(old_ip, 4);
             dst[5] = opByte(.sub);
-            dst[6] = opByte(.call); dst[7] = rb(old_ip, 5);
+            dst[6] = opByte(.call); dst[7] = rb(old_ip, 5); dst[8] = 0xFF; dst[9] = 0xFF;
         },
 
         // ── quad: get_local + const_cmp + jif_pop ────────────────────────────

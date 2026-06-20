@@ -519,7 +519,9 @@ fn deepEqualObject(a: *Object, b: *Object, visits: []DeepEqVisit, visit_len: *us
             try appendVisitedPair(a, b, visits, visit_len);
             if (asi.fields.len != bsi.fields.len) return false;
             for (asi.fields, bsi.fields) |af, bf| {
-                if (!common.streq(af.key.string.bytes, bf.key.string.bytes)) return false;
+                const ak = vms.asStringValue(af.key) catch return false;
+                const bk = vms.asStringValue(bf.key) catch return false;
+                if (!common.streq(ak, bk)) return false;
                 if (!try deepEqualValue(af.value, bf.value, visits, visit_len)) return false;
             }
             return true;

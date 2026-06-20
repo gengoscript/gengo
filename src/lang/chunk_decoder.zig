@@ -58,8 +58,11 @@ pub fn decodeAt(state: anytype, pos: usize) !DecodedInstruction {
             };
         },
 
+        // call: [op][argc][ic_hi][ic_lo] — 4 bytes (IC slot = object pool index, 0xFFFF = cold)
+        .call => .{ .op = op, .width = 4 },
+
         .get_local, .set_local, .get_upvalue, .set_upvalue, .close_upvalue,
-        .get_local_ret, .call, .defer_call,
+        .get_local_ret, .defer_call,
         .build_array, .build_map, .build_tuple, .build_struct_instance,
         .tuple_check_arity, .tuple_get, .tuple_get_keep,
         .get_slice, .assert_type => .{

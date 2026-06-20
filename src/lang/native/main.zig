@@ -376,25 +376,27 @@ pub fn installStdGlobal() !void {
         const top_fields = std_obj.struct_instance.fields;
         for (top_fields) |top_entry| {
             const ns_val = top_entry.value;
+            const top_key = try vms.asStringValue(top_entry.key);
             if (ns_val == .object and ns_val.object.* == .struct_instance) {
-                const ns_name = top_entry.key.string.bytes;
+                const ns_name = top_key;
                 const ns_fields = ns_val.object.struct_instance.fields;
                 for (ns_fields) |fe| {
-                    const needed = prefix.len + 1 + ns_name.len + 1 + fe.key.string.bytes.len;
+                    const fe_key = try vms.asStringValue(fe.key);
+                    const needed = prefix.len + 1 + ns_name.len + 1 + fe_key.len;
                     const gbuf = (heap.bump(u8, needed) orelse return error.OutOfMemory)[0..needed];
                     @memcpy(gbuf[0..prefix.len], prefix);
                     gbuf[prefix.len] = '.';
                     @memcpy(gbuf[prefix.len + 1 .. prefix.len + 1 + ns_name.len], ns_name);
                     gbuf[prefix.len + 1 + ns_name.len] = '.';
-                    @memcpy(gbuf[prefix.len + 2 + ns_name.len .. needed], fe.key.string.bytes);
+                    @memcpy(gbuf[prefix.len + 2 + ns_name.len .. needed], fe_key);
                     if (!globals.has(gbuf)) try globals.def(gbuf, fe.value);
                 }
             } else {
-                const needed = prefix.len + 1 + top_entry.key.string.bytes.len;
+                const needed = prefix.len + 1 + top_key.len;
                 const gbuf = (heap.bump(u8, needed) orelse return error.OutOfMemory)[0..needed];
                 @memcpy(gbuf[0..prefix.len], prefix);
                 gbuf[prefix.len] = '.';
-                @memcpy(gbuf[prefix.len + 1 .. needed], top_entry.key.string.bytes);
+                @memcpy(gbuf[prefix.len + 1 .. needed], top_key);
                 if (!globals.has(gbuf)) try globals.def(gbuf, ns_val);
             }
         }

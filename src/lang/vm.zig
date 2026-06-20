@@ -769,6 +769,22 @@ fn readUpvalueCell(idx: usize) !*Object {
     return cl.closure.upvalues[idx];
 }
 
+// Warm call path: IC confirmed same callee — skip arity/variadic/typed-param checks.
+// Only reached for non-variadic, non-typed-param functions cached by performCallIC.
+fn enterFunctionFrameWarm(f: @import("value.zig").FuncObj, func_obj: *Object, closure: ?*Object) !void {
+    if (vmState().frame_top >= vmState().frames.len) return error.CallStackOverflow;
+    vmState().frames[vmState().frame_top] = .{
+        .ret_ip = vmState().ip,
+        .base = vmState().stack_top - f.arity,
+        .closure = closure,
+        .func_obj = func_obj,
+        .defer_base = vmState().defer_top,
+        .has_typed_returns = f.has_typed_returns,
+    };
+    vmState().frame_top += 1;
+    vmState().ip = f.ip;
+}
+
 fn enterFunctionFrame(f: @import("value.zig").FuncObj, func_obj: *Object, closure: ?*Object, argc: u8) !void {
     if (f.is_variadic) {
         if (argc < f.arity - 1) {
@@ -802,6 +818,38 @@ inline fn pop2push1(v: Value) !void {
     _ = try vmPop();
     _ = try vmPop();
     try vmPush(v);
+}
+
+fn performCallIC(argc: u8, ic_base: usize, ic_slot: u16) !void {
+    if (vmState().stack_top < @as(usize, argc) + 1) return error.StackUnderflow;
+    const func_val = vmState().stack[vmState().stack_top - argc - 1];
+    if (func_val == .object) {
+        const obj = func_val.object;
+        const obj_idx = heap.objectPoolIndex(obj);
+        if (ic_slot != 0xFFFF and obj_idx == ic_slot) {
+            return switch (obj.*) {
+                .function => |f| enterFunctionFrameWarm(f, obj, null),
+                .closure  => |cl| enterFunctionFrameWarm(cl.func.function, cl.func, obj),
+                else      => performCall(argc),
+            };
+        }
+        try performCall(argc);
+        if (ic_slot == 0xFFFF and obj_idx != 0xFFFF) {
+            switch (obj.*) {
+                .function => |f| if (!f.is_variadic and !f.has_typed_params) {
+                    chunk.patchByte(ic_base,     @intCast((obj_idx >> 8) & 0xFF));
+                    chunk.patchByte(ic_base + 1, @intCast(obj_idx & 0xFF));
+                },
+                .closure => |cl| if (!cl.func.function.is_variadic and !cl.func.function.has_typed_params) {
+                    chunk.patchByte(ic_base,     @intCast((obj_idx >> 8) & 0xFF));
+                    chunk.patchByte(ic_base + 1, @intCast(obj_idx & 0xFF));
+                },
+                else => {},
+            }
+        }
+        return;
+    }
+    return performCall(argc);
 }
 
 fn performCall(argc: u8) !void {
@@ -954,7 +1002,7 @@ fn iterNext1(it: *IterObj) !void {
             if (it.string_managed) {
                 try vmPush(try makeStringView(it.string[start..end], it.source.?));
             } else {
-                try vmPush(.{ .string = try chunk.internStr(it.string[start..end]) });
+                try vmPush(try makeDynString(it.string[start..end]));
             }
             it.index = end;
             it.rune_index += 1;
@@ -1002,7 +1050,7 @@ fn iterNext2(it: *IterObj) !void {
             if (it.string_managed) {
                 try vmPush(try makeStringView(it.string[start..end], it.source.?));
             } else {
-                try vmPush(.{ .string = try chunk.internStr(it.string[start..end]) });
+                try vmPush(try makeDynString(it.string[start..end]));
             }
             it.index = end;
             it.rune_index += 1;
@@ -1233,7 +1281,7 @@ fn opGetIndex() !void {
             const ridx = try vms.vmIndexFromVal(idx_v);
             const start = try vmstr.utf8ByteOffsetForRuneIndexCached(s.bytes, ridx);
             const w = try vmstr.utf8NextRuneByteLen(s.bytes, start);
-            try vmPush(.{ .string = try chunk.internStr(s.bytes[start .. start + w]) });
+            try vmPush(try makeDynString(s.bytes[start .. start + w]));
         },
         else => return error.TypeError,
     }
@@ -1436,7 +1484,8 @@ fn opSetField() !void {
     const ic_base = vmState().ip;
     const ic_type_idx = try vmShort();
     const ic_fidx = try vmByte();
-    const name = (try chunk.constAt(name_idx)).string.bytes;
+    const name_val = try chunk.constAt(name_idx);
+    const name = name_val.string.bytes;
     const val = try vmPop();
     const raw_c = try vmPop();
     const is_named_c = raw_c == .object and raw_c.object.* == .named_value;
@@ -1475,8 +1524,8 @@ fn opSetField() !void {
             if (!vmtyp.matchesFieldType(val, inst.typ.struct_type.fields[fi])) return error.StructFieldTypeMismatch;
             inst.fields[fi].value = val;
         },
-        .map, .map_managed => try mapLinearInsertOrAppend(container, .{ .string = try chunk.internStr(name) }, val),
-        .map_hashed => try vmmap.mapInsertHashed(container.object, .{ .string = try chunk.internStr(name) }, val),
+        .map, .map_managed => try mapLinearInsertOrAppend(container, name_val, val),
+        .map_hashed => try vmmap.mapInsertHashed(container.object, name_val, val),
         else => return error.TypeError,
     }
 }
@@ -2392,7 +2441,7 @@ fn runInner() !void {
                         if (seen[idx]) { vms.setRuntimeErr("duplicate field '{s}' in struct literal", .{key_s}); return error.DuplicateField; }
                         seen[idx] = true;
                         if (!vmtyp.matchesFieldType(val, st.fields[idx])) return error.StructFieldTypeMismatch;
-                        inst_fields[idx] = .{ .key = .{ .string = try chunk.internStr(st.fields[idx].name) }, .value = val };
+                        inst_fields[idx] = .{ .key = st.fields[idx].key, .value = val };
                     }
 
                     for (st.fields, seen[0..st.fields.len]) |f, s| {
@@ -2451,7 +2500,7 @@ fn runInner() !void {
                 switch (container) {
                     .string => |s| {
                         const r = try stringSliceRange(s.bytes, has_start, start_v, has_end, end_v);
-                        try vmPush(.{ .string = try chunk.internStr(s.bytes[r.start_b..r.end_b]) });
+                        try vmPush(try makeDynString(s.bytes[r.start_b..r.end_b]));
                     },
                     .object => |obj| switch (obj.*) {
                         .dyn_string, .string_view => {
@@ -2594,9 +2643,12 @@ fn runInner() !void {
 
             .call => {
                 const argc = try vmByte();
+                const ic_base = vmState().ip;
+                const ic_slot: u16 = (@as(u16, chunk.codeByteAt(ic_base)) << 8) | @as(u16, chunk.codeByteAt(ic_base + 1));
+                vmState().ip += 2;
                 if (try tryTailCall(argc)) continue;
                 const t0 = vmperf.readTsc();
-                try performCall(argc);
+                try performCallIC(argc, ic_base, ic_slot);
                 const t1 = vmperf.readTsc();
                 if (t1 > t0) vmperf.callCycles(t1 - t0);
             },
@@ -2645,7 +2697,7 @@ fn runInner() !void {
                     const map_obj = try allocTempRooted(.{ .map = &[_]MapEntry{} });
                     defer popTempRoot();
                     const items = try vmAllocManagedSlice(MapEntry, arm.fields.len);
-                    for (arm.fields, vv.arm_fields, items) |f, fv, *it| it.* = .{ .key = .{ .string = try chunk.internStr(f.name) }, .value = fv };
+                    for (arm.fields, vv.arm_fields, items) |f, fv, *it| it.* = .{ .key = f.key, .value = fv };
                     map_obj.* = .{ .map = items[0..arm.fields.len] };
                     _ = try vmPop();
                     try vmPush(.{ .object = map_obj });

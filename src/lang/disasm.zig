@@ -212,9 +212,24 @@ pub fn disassemble() void {
                 io.write("\n");
             },
 
+            // call: [op][argc][ic_hi][ic_lo]
+            .call => {
+                const argc = chunk.codeByteAt(i);
+                const ic = (@as(u16, chunk.codeByteAt(i + 1)) << 8) | @as(u16, chunk.codeByteAt(i + 2));
+                i += 3;
+                io.write("call ");
+                writeNum(argc);
+                if (ic != 0xFFFF) {
+                    io.write(" [ic=");
+                    writeNum(ic);
+                    io.write("]");
+                }
+                io.write("\n");
+            },
+
             // --- 1-byte operand ops ---
             .get_local, .set_local, .get_upvalue, .set_upvalue, .close_upvalue,
-            .get_local_ret, .call, .defer_call,
+            .get_local_ret, .defer_call,
             .build_array, .build_map, .build_tuple, .build_struct_instance,
             .tuple_check_arity, .tuple_get, .tuple_get_keep,
             .get_slice, .assert_type => {
