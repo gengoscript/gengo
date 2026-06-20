@@ -82,7 +82,7 @@ fn tplResolveField(data: Value, field: []const u8) !Value {
         .struct_instance => {
             const fields = obj.struct_instance.fields;
             for (fields) |f| {
-                if (f.key == .string and std.mem.eql(u8, f.key.string.bytes, field)) return f.value;
+                if (vms.isStringValue(f.key)) { const k = vms.asStringValue(f.key) catch continue; if (std.mem.eql(u8, k, field)) return f.value; }
             }
             return .null;
         },
@@ -93,7 +93,7 @@ fn tplResolveField(data: Value, field: []const u8) !Value {
 fn tplFieldValue(obj: *Object, name: []const u8) Value {
     const fields = obj.struct_instance.fields;
     for (fields) |f| {
-        if (f.key == .string and std.mem.eql(u8, f.key.string.bytes, name)) return f.value;
+        if (vms.isStringValue(f.key)) { const k = vms.asStringValue(f.key) catch continue; if (std.mem.eql(u8, k, name)) return f.value; }
     }
     return .null;
 }

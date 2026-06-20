@@ -54,6 +54,7 @@ pub const StructFieldSpec = struct {
     name: []const u8,
     typ: FieldTypeSpec,
     is_const: bool = false,
+    key: Value = .null,
 };
 pub const StructTypeObj = struct { name: []const u8, qualified_name: []const u8, fields: []StructFieldSpec };
 pub const InterfaceMethodSpec = struct {

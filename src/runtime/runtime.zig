@@ -597,7 +597,8 @@ pub const Runtime = struct {
             if (@field(self, desc.repl_count) >= desc.max)
                 return self.setReplOverflowError(desc.overflow_msg);
             const idx = @field(self, desc.repl_count);
-            const saved_name = try self.saveReplTypeName(@field(compiler.registry, desc.registry_entries)[ti].name);
+            const saved_name = self.saveReplTypeName(@field(compiler.registry, desc.registry_entries)[ti].name) catch
+                return self.setReplOverflowError("REPL type name buffer full");
             @field(self, desc.repl_offsets)[idx] = @intCast(@intFromPtr(saved_name.ptr) - @intFromPtr(&self.repl_type_name_buf));
             @field(self, desc.repl_lens)[idx] = @intCast(saved_name.len);
             @field(self, desc.repl_count) += 1;

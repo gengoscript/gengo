@@ -177,7 +177,7 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
                             }
                         }
                         try c.consume(.rparen);
-                        try chunk.emit2(@intFromEnum(Op.call), argc, prop.line);
+                        try chunk.emitCall(argc, prop.line);
                         return;
                     }
                 }
@@ -194,7 +194,7 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
             }
             try c.consume(.rparen);
             if (is_std_func) {
-                try chunk.emit2(@intFromEnum(Op.call), argc, prop.line);
+                try chunk.emitCall(argc, prop.line);
             } else {
                 try chunk.emitInvokeMethod(prop.src, argc, line);
             }
@@ -251,7 +251,7 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
         }
         try c.consume(.rparen);
         chunk.setCol(col);
-        try chunk.emit2(@intFromEnum(Op.call), argc, line);
+        try chunk.emitCall(argc, line);
         return;
     }
 

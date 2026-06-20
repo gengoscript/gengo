@@ -444,7 +444,7 @@ pub const Compiler = struct {
                 .string => .cast_string,
                 .rune => .cast_rune,
             }, line),
-            .named => try chunk.emit2(@intFromEnum(Op.call), 1, line),
+            .named => try chunk.emitCall(1, line),
             .assert_arr => try chunk.emit2(@intFromEnum(Op.assert_type), 1, line),
             .assert_map => try chunk.emit2(@intFromEnum(Op.assert_type), 2, line),
             .assert_err => try chunk.emit2(@intFromEnum(Op.assert_type), 3, line),

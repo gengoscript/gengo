@@ -168,6 +168,31 @@ pub fn emitOp(op: Op, line: u32) !void {
     return emitByte(@intFromEnum(op), line);
 }
 
+// Emit a call instruction: [call][argc][ic_hi][ic_lo] (4 bytes, cold IC = 0xFFFF).
+// Fuses into get_local_const_sub_call (6 bytes) or call_global_local_sub_const (11 bytes)
+// when preceded by the matching sequence, in which case no IC bytes are appended.
+pub fn emitCall(argc: u8, line: u32) !void {
+    if (g_state.last_get_local_const_sub_pos) |sub_pos| {
+        if (sub_pos + 5 == g_state.code_len) {
+            g_state.code[sub_pos] = @intFromEnum(Op.get_local_const_sub_call);
+            try emitByte(argc, line);
+            g_state.last_get_local_const_sub_pos = null;
+            if (g_state.last_get_global_code_pos) |gg_pos| {
+                if (gg_pos + 5 == sub_pos) {
+                    g_state.code[gg_pos] = @intFromEnum(Op.call_global_local_sub_const);
+                    g_state.last_get_global_code_pos = null;
+                }
+            }
+            return;
+        }
+        g_state.last_get_local_const_sub_pos = null;
+    }
+    try emitByte(@intFromEnum(Op.call), line);
+    try emitByte(argc, line);
+    try emitByte(0xFF, line); // IC slot hi (cold)
+    try emitByte(0xFF, line); // IC slot lo (cold)
+}
+
 pub fn emit2(a: u8, b: u8, line: u32) !void {
     try emitByte(a, line);
     try emitByte(b, line);
