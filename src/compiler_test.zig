@@ -112,6 +112,25 @@ fn expectCompileSnapshotsEqual(a: CompileSnapshot, b: CompileSnapshot) !void {
     try std.testing.expectEqualStrings(a.runtime_msg, b.runtime_msg);
 }
 
+fn setupApiRuntime(config: api.Config) !api.Runtime {
+    return api.Runtime.init(config);
+}
+
+fn expectApiCompileErrorEqual(a: api.CompileError, b: api.CompileError) !void {
+    try std.testing.expectEqual(a.kind, b.kind);
+    try std.testing.expectEqual(a.line, b.line);
+    try std.testing.expectEqual(a.col, b.col);
+    try std.testing.expectEqualStrings(a.msg, b.msg);
+}
+
+fn expectApiRuntimeErrorEqual(a: api.RuntimeError, b: api.RuntimeError) !void {
+    try std.testing.expectEqual(a.kind, b.kind);
+    try std.testing.expectEqual(a.line, b.line);
+    try std.testing.expectEqual(a.col, b.col);
+    try std.testing.expectEqual(a.frame_count, b.frame_count);
+    try std.testing.expectEqualStrings(a.msg, b.msg);
+}
+
 test "compiler: empty source emits halt" {
     var rt = try setup();
     defer rt.deinit();
@@ -289,6 +308,91 @@ test "runtime: compileOnly and runPathWithProvider agree on rooted compile error
 
     try expectCompileSnapshotsEqual(compile_snapshot, run_snapshot);
     try std.testing.expectEqualStrings(path, compile_snapshot.path);
+}
+
+test "api runtime: rooted entrypoints agree on compile and runtime error mapping" {
+    const bad_src =
+        \\func broken( {
+        \\
+    ;
+    const boom_src =
+        \\x := 0
+        \\1 / x
+        \\
+    ;
+    const path = "main.gengo";
+    const source_entries = [_]module_compile.SourceEntry{.{ .path = path, .source = bad_src }};
+    const source_entries_runtime = [_]module_compile.SourceEntry{.{ .path = path, .source = boom_src }};
+
+    var rt_compile = try setupApiRuntime(.{
+        .allow_io = false,
+        .module_sources = &source_entries,
+        .allocator = std.testing.allocator,
+    });
+    defer rt_compile.deinit();
+
+    const res_sources = rt_compile.runPathWithSources(bad_src, path, &source_entries);
+    const res_provider = rt_compile.runPathWithSourceProvider(bad_src, path, .{ .table = &source_entries });
+    try std.testing.expect(res_sources == .compile_error);
+    try std.testing.expect(res_provider == .compile_error);
+    try expectApiCompileErrorEqual(res_sources.compile_error, res_provider.compile_error);
+
+    var rt_runtime = try setupApiRuntime(.{
+        .allow_io = false,
+        .module_sources = &source_entries_runtime,
+        .allocator = std.testing.allocator,
+    });
+    defer rt_runtime.deinit();
+
+    const runtime_sources = rt_runtime.runPathWithSources(boom_src, path, &source_entries_runtime);
+    const runtime_provider = rt_runtime.runPathWithSourceProvider(boom_src, path, .{ .table = &source_entries_runtime });
+    try std.testing.expect(runtime_sources == .runtime_error);
+    try std.testing.expect(runtime_provider == .runtime_error);
+    try expectApiRuntimeErrorEqual(runtime_sources.runtime_error, runtime_provider.runtime_error);
+}
+
+test "api runtime: setConfig updates mirrored config fields" {
+    const initial_sources = [_]module_compile.SourceEntry{.{ .path = "a.gengo", .source = "x := 1" }};
+    const updated_sources = [_]module_compile.SourceEntry{.{ .path = "b.gengo", .source = "y := 2" }};
+    const host_funcs = [_]module_compile.HostModuleFuncDesc{.{ .name = "ping", .arity = 0, .call_id = 7 }};
+    const initial_hosts = [_]module_compile.HostModuleDesc{.{ .name = "alpha", .functions = &host_funcs }};
+    const updated_hosts = [_]module_compile.HostModuleDesc{.{ .name = "beta", .functions = &host_funcs }};
+
+    var rt = try setupApiRuntime(.{
+        .allow_io = false,
+        .module_sources = &initial_sources,
+        .host_modules = &initial_hosts,
+        .capabilities = &.{"fs"},
+        .allocator = std.testing.allocator,
+    });
+    defer rt.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), rt.module_sources.len);
+    try std.testing.expectEqualStrings("alpha", rt.host_modules[0].name);
+    try std.testing.expectEqual(@as(usize, 1), rt.capabilities.len);
+    try std.testing.expectEqualStrings("fs", rt.capabilities[0]);
+    try std.testing.expectEqual(@as(usize, 1), rt.inner.host_modules.len);
+    try std.testing.expectEqualStrings("alpha", rt.inner.host_modules[0].name);
+    try std.testing.expectEqual(@as(usize, 1), rt.inner.enabled_capabilities.len);
+    try std.testing.expectEqualStrings("fs", rt.inner.enabled_capabilities[0]);
+
+    rt.setConfig(.{
+        .allow_io = true,
+        .module_sources = &updated_sources,
+        .host_modules = &updated_hosts,
+        .capabilities = &.{"http"},
+        .allocator = std.testing.allocator,
+    });
+
+    try std.testing.expectEqual(@as(usize, 1), rt.module_sources.len);
+    try std.testing.expectEqualStrings("b.gengo", rt.module_sources[0].path);
+    try std.testing.expectEqualStrings("beta", rt.host_modules[0].name);
+    try std.testing.expectEqual(@as(usize, 1), rt.capabilities.len);
+    try std.testing.expectEqualStrings("http", rt.capabilities[0]);
+    try std.testing.expectEqual(@as(usize, 1), rt.inner.host_modules.len);
+    try std.testing.expectEqualStrings("beta", rt.inner.host_modules[0].name);
+    try std.testing.expectEqual(@as(usize, 1), rt.inner.enabled_capabilities.len);
+    try std.testing.expectEqualStrings("http", rt.inner.enabled_capabilities[0]);
 }
 
 test "chunk: verify rejects jump target into instruction body" {
