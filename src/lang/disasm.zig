@@ -178,7 +178,7 @@ pub fn disassemble() void {
         switch (op) {
             // --- 2-byte const index ops ---
             .constant, .def_global, .make_closure, .ret_const,
-            .const_eq, .const_sub, .const_add, .const_lt,
+            .const_eq, .const_sub, .const_add, .const_lt, .const_gt,
             .variant_check,
             .assert_interface, .assert_struct => {
                 const idx = readU16(i);
@@ -300,7 +300,7 @@ pub fn disassemble() void {
 
             // --- triple-fused: op + slot(1) + skip(1) + idx(2) ---
             .get_local_const_eq, .get_local_const_sub,
-            .get_local_const_add, .get_local_const_lt => {
+            .get_local_const_add, .get_local_const_lt, .get_local_const_gt => {
                 const slot = chunk.codeByteAt(i);
                 i += 1;
                 i += 1; // skip byte
@@ -381,7 +381,8 @@ pub fn disassemble() void {
             },
 
             // --- quad-fused: op + slot(1) + skip(1) + idx(2) + jmp(4) ---
-            .get_local_const_eq_jif_pop, .get_local_const_lt_jif_pop => {
+            .get_local_const_eq_jif_pop, .get_local_const_lt_jif_pop,
+            .get_local_const_gt_jif_pop => {
                 const slot = chunk.codeByteAt(i);
                 i += 1;
                 i += 1; // skip byte

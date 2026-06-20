@@ -2106,6 +2106,13 @@ fn runInner() !void {
                 const n = try compareNumericPair(a, p.k, "<");
                 try vmPush(.{ .boolean = n.an < n.bn });
             },
+            .get_local_const_gt => {
+                const p = try readLocalSlotAndConst();
+                const a = try readLocalSlot(p.slot);
+                if (a == .int and p.k == .int) { try vmPush(.{ .boolean = a.int > p.k.int }); continue; }
+                const n = try compareNumericPair(a, p.k, ">");
+                try vmPush(.{ .boolean = n.an > n.bn });
+            },
 
             // Quad-fused: get_local + constant + eq + jif_pop.
             // Bytecode: [op][slot][skip][idx_hi][idx_lo][jmp_b3][jmp_b2][jmp_b1][jmp_b0]
@@ -2132,6 +2139,19 @@ fn runInner() !void {
                 } else {
                     const n = try compareNumericPair(a, p.k, "<");
                     if (!(n.an < n.bn)) vmState().ip += off;
+                }
+            },
+            // Quad-fused: get_local + const_gt + jif_pop.
+            // Bytecode: [op][slot][skip][idx_hi][idx_lo][exit_b3..b0]
+            .get_local_const_gt_jif_pop => {
+                const p = try readLocalSlotAndConst();
+                const off = try vms.vmInt();
+                const a = try readLocalSlot(p.slot);
+                if (a == .int and p.k == .int) {
+                    if (a.int <= p.k.int) vmState().ip += off;
+                } else {
+                    const n = try compareNumericPair(a, p.k, ">");
+                    if (!(n.an > n.bn)) vmState().ip += off;
                 }
             },
 
@@ -2210,6 +2230,12 @@ fn runInner() !void {
                 const a = try vmPop();
                 const n = try compareNumericPair(a, k, "<");
                 try vmPush(.{ .boolean = n.an < n.bn });
+            },
+            .const_gt => {
+                const k = try chunk.constAt(try vmShort());
+                const a = try vmPop();
+                const n = try compareNumericPair(a, k, ">");
+                try vmPush(.{ .boolean = n.an > n.bn });
             },
 
             .build_array, .build_tuple => {

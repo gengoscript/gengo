@@ -44,17 +44,19 @@ fn expandedWidth(op: Op, old_width: usize) usize {
         .local_add_const            => 8,   // get_local(2)+constant(3)+add(1)+set_local(2)
         // Fused const+binop (stack-top = left, const = right)
         .const_eq, .const_sub,
-        .const_add, .const_lt       => 4,   // constant(3) + binop(1)
+        .const_add, .const_lt, .const_gt => 4,   // constant(3) + binop(1)
         // Fused get_local+const+binop
         .get_local_const_eq,
         .get_local_const_sub,
         .get_local_const_add,
-        .get_local_const_lt         => 6,   // get_local(2)+constant(3)+binop(1)
+        .get_local_const_lt,
+        .get_local_const_gt         => 6,   // get_local(2)+constant(3)+binop(1)
         // Fused get_local+const+sub+call
         .get_local_const_sub_call   => 8,   // get_local(2)+constant(3)+sub(1)+call(2)
         // Fused quad with jif_pop
         .get_local_const_eq_jif_pop,
-        .get_local_const_lt_jif_pop => 10,  // get_local(2)+const_cmp(3)+jif_pop(5)
+        .get_local_const_lt_jif_pop,
+        .get_local_const_gt_jif_pop => 10,  // get_local(2)+const_cmp(3)+jif_pop(5)
         .get_global_const_lt_jif_pop => 13, // get_global(5)+const_cmp(3)+jif_pop(5)
         // Fused set_global+loop
         .set_global_loop            => 10,  // set_global(5)+loop(5)
@@ -151,6 +153,11 @@ fn emitExpanded(
             dst[1] = rb(old_ip, 1); dst[2] = rb(old_ip, 2);
             dst[3] = opByte(.lt);
         },
+        .const_gt => {
+            dst[0] = opByte(.constant);
+            dst[1] = rb(old_ip, 1); dst[2] = rb(old_ip, 2);
+            dst[3] = opByte(.gt);
+        },
 
         // ── get_local + const + binop ────────────────────────────────────────
         // Layout: [op][slot][skip_byte][idx_hi][idx_lo]
@@ -173,6 +180,11 @@ fn emitExpanded(
             dst[0] = opByte(.get_local); dst[1] = rb(old_ip, 1);
             dst[2] = opByte(.constant); dst[3] = rb(old_ip, 3); dst[4] = rb(old_ip, 4);
             dst[5] = opByte(.lt);
+        },
+        .get_local_const_gt => {
+            dst[0] = opByte(.get_local); dst[1] = rb(old_ip, 1);
+            dst[2] = opByte(.constant); dst[3] = rb(old_ip, 3); dst[4] = rb(old_ip, 4);
+            dst[5] = opByte(.gt);
         },
 
         // ── get_local + const + sub + call ───────────────────────────────────
@@ -197,6 +209,13 @@ fn emitExpanded(
             const tgt = instr.jump_target.?;
             dst[0] = opByte(.get_local); dst[1] = rb(old_ip, 1);
             dst[2] = opByte(.const_lt); dst[3] = rb(old_ip, 3); dst[4] = rb(old_ip, 4);
+            dst[5] = opByte(.jif_pop);
+            pu32(dst, 6, fwdOff(ip_map, tgt, new_end));
+        },
+        .get_local_const_gt_jif_pop => {
+            const tgt = instr.jump_target.?;
+            dst[0] = opByte(.get_local); dst[1] = rb(old_ip, 1);
+            dst[2] = opByte(.const_gt); dst[3] = rb(old_ip, 3); dst[4] = rb(old_ip, 4);
             dst[5] = opByte(.jif_pop);
             pu32(dst, 6, fwdOff(ip_map, tgt, new_end));
         },
@@ -391,11 +410,30 @@ pub fn buildDefusedCode(alloc: std.mem.Allocator) ![]u8 {
     // Pass 3: update FuncObj.ip values in the constants pool.
     // Function objects store bytecode entry IPs; after defusing, those positions
     // shift due to expanded instructions and must be remapped through ip_map.
+    // Also handles closures and predicates embedded in named_type constants.
     for (chunk.g_state.consts[0..chunk.g_state.const_count]) |v| {
         if (v != .object) continue;
         switch (v.object.*) {
             .function => |*f| {
                 if (f.ip < ip_map.len) f.ip = @intCast(ip_map[f.ip]);
+            },
+            .closure => |*cl| {
+                if (cl.func.* == .function and cl.func.function.ip < ip_map.len)
+                    cl.func.function.ip = @intCast(ip_map[cl.func.function.ip]);
+            },
+            .named_type => |nt| {
+                if (nt.predicate) |pred| {
+                    switch (pred.*) {
+                        .function => |*f| {
+                            if (f.ip < ip_map.len) f.ip = @intCast(ip_map[f.ip]);
+                        },
+                        .closure => |*cl| {
+                            if (cl.func.* == .function and cl.func.function.ip < ip_map.len)
+                                cl.func.function.ip = @intCast(ip_map[cl.func.function.ip]);
+                        },
+                        else => {},
+                    }
+                }
             },
             else => {},
         }
