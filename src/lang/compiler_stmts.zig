@@ -1167,12 +1167,12 @@ pub fn returnStmt(c: anytype) !void {
             try c.emitVarTypeEpilog(scope.locals[scope.named_return_base].type_check, line);
             try chunk.emit2(@intFromEnum(Op.set_local), scope.named_return_base, line);
         } else {
-            var ri: u8 = 0;
-            while (ri < scope.named_return_count) : (ri += 1) {
+            for (0..scope.named_return_count) |ri| {
                 if (ri > 0) try c.consume(.comma);
+                const slot: u8 = scope.named_return_base + @as(u8, @intCast(ri));
                 try c.expr();
-                try c.emitVarTypeEpilog(scope.locals[scope.named_return_base + ri].type_check, line);
-                try chunk.emit2(@intFromEnum(Op.set_local), scope.named_return_base + ri, line);
+                try c.emitVarTypeEpilog(scope.locals[slot].type_check, line);
+                try chunk.emit2(@intFromEnum(Op.set_local), slot, line);
             }
         }
         try emitImplicitReturn(scope, line);
@@ -1399,10 +1399,7 @@ pub fn switchStmt(c: anytype) anyerror!void {
     try c.consume(.rbrace);
     try chunk.emitOp(.pop, c.prev.line);
 
-    var i: usize = 0;
-    while (i < end_count) : (i += 1) {
-        try chunk.patchJump(end_jumps[i]);
-    }
+    for (end_jumps[0..end_count]) |j| try chunk.patchJump(j);
 }
 
 pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
@@ -1655,8 +1652,5 @@ pub fn whileForStmt(c: anytype) anyerror!void {
     try chunk.emitLoop(loop_start, c.prev.line);
     if (!infinite) try chunk.patchJump(exit_j);
     const loop = c.popLoop();
-    var i: usize = 0;
-    while (i < loop.break_count) : (i += 1) {
-        try chunk.patchJump(loop.break_offsets[i]);
-    }
+    for (loop.break_offsets[0..loop.break_count]) |off| try chunk.patchJump(off);
 }
