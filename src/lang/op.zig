@@ -37,9 +37,15 @@ pub const Op = enum(u8) {
     // Emitted when get_local_const_eq immediately precedes jif_pop.
     get_local_const_eq_jif_pop,
     // Quad-fused get_local+constant+lt+jif_pop: 9-byte conditional branch.
-    // Layout: [op][slot][skip=const_lt_byte][idx_hi][idx_lo][jmp_hi][jmp_lo]
+    // Layout: [op][slot][skip=const_lt_byte][idx_hi][idx_lo][exit_b3][exit_b2][exit_b1][exit_b0]
     // Emitted when get_local_const_lt immediately precedes jif_pop.
     get_local_const_lt_jif_pop,
+    // Quint-fused get_local+constant+lt+jif_pop+jump: 13-byte for-loop header.
+    // Layout: [op][slot][skip][idx_hi][idx_lo][exit_b3..b0][body_b3..b0]
+    // When a < k: ip += body_off (jump to body, past post-increment).
+    // When a >= k: ip (at mid, after exit_off read) += exit_off (jump to loop end).
+    // Emitted when get_local_const_lt_jif_pop immediately precedes jump.
+    get_local_const_lt_jif_pop_jump,
     // Triple-fused get_global+constant+binop. 8-byte layout:
     // [op][glob_hi][glob_lo][ic_hi][ic_lo][skip][val_hi][val_lo]
     // Emitted when get_global immediately precedes a const_eq, const_sub, const_add, or const_lt.
@@ -100,6 +106,7 @@ pub const Op = enum(u8) {
     jif_pop,          // pop condition then jump if it was falsy; used by if/while/for/switch
     loop,
     set_global_loop,  // fused: set_global (5 bytes) + loop back-edge (2 bytes); same IC layout
+    close_upvalue_loop, // fused: close_upvalue (2 bytes) + loop back-edge; layout: [op][slot][off_b3..b0] (6 bytes)
     set_named_predicate, // pop predicate, set named_type.predicate on TOS
     validate_type_default, // if TOS named_type has both a default and a predicate, check the default now
     call,
