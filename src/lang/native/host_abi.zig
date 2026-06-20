@@ -7,15 +7,12 @@ const Value = @import("../value.zig").Value;
 const Object = @import("../value.zig").Object;
 const MapEntry = @import("../value.zig").MapEntry;
 
+fn makeWire(tag: host_abi.WireTag, flags: u8, payload: u64, len: u32) host_abi.ValueWire {
+    return .{ .tag = @intFromEnum(tag), .flags = flags, .reserved = 0, .payload = payload, .len = len, .reserved2 = 0 };
+}
+
 pub fn nullWire() host_abi.ValueWire {
-    return .{
-        .tag = @intFromEnum(host_abi.WireTag.null),
-        .flags = 0,
-        .reserved = 0,
-        .payload = 0,
-        .len = 0,
-        .reserved2 = 0,
-    };
+    return makeWire(.null, 0, 0, 0);
 }
 
 pub fn checkCallStatus(st: host_abi.CallStatus) !void {
@@ -38,101 +35,24 @@ pub fn nativeCallRawChecked(id: u16, args: []const host_abi.ValueWire, out: *hos
 
 pub fn wireFromValue(v: Value) !host_abi.ValueWire {
     return switch (v) {
-        .null => .{
-            .tag = @intFromEnum(host_abi.WireTag.null),
-            .flags = 0,
-            .reserved = 0,
-            .payload = 0,
-            .len = 0,
-            .reserved2 = 0,
-        },
-        .boolean => |b| .{
-            .tag = @intFromEnum(host_abi.WireTag.boolean),
-            .flags = 0,
-            .reserved = 0,
-            .payload = if (b) 1 else 0,
-            .len = 0,
-            .reserved2 = 0,
-        },
-        .int => |n| .{
-            .tag = @intFromEnum(host_abi.WireTag.number),
-            .flags = host_abi.FLAG_INTEGER,
-            .reserved = 0,
-            .payload = @bitCast(n),
-            .len = 0,
-            .reserved2 = 0,
-        },
-        .float => |n| .{
-            .tag = @intFromEnum(host_abi.WireTag.number),
-            .flags = 0,
-            .reserved = 0,
-            .payload = @bitCast(n),
-            .len = 0,
-            .reserved2 = 0,
-        },
-        .rune => |r| .{
-            .tag = @intFromEnum(host_abi.WireTag.number),
-            .flags = host_abi.FLAG_RUNE,
-            .reserved = 0,
-            .payload = @as(u64, r),
-            .len = 0,
-            .reserved2 = 0,
-        },
-        .decimal => |d| .{
-            .tag = @intFromEnum(host_abi.WireTag.number),
-            .flags = host_abi.FLAG_DECIMAL,
-            .reserved = 0,
-            .payload = @as(u64, @bitCast(d)),
-            .len = 0,
-            .reserved2 = 0,
-        },
-        .string => |s| .{
-            .tag = @intFromEnum(host_abi.WireTag.string),
-            .flags = 0,
-            .reserved = 0,
-            .payload = @intFromPtr(s.ptr),
-            .len = @intCast(s.len),
-            .reserved2 = 0,
-        },
-        .error_value => |msg| .{
-            .tag = @intFromEnum(host_abi.WireTag.@"error"),
-            .flags = 0,
-            .reserved = 0,
-            .payload = @intFromPtr(msg.ptr),
-            .len = @intCast(msg.len),
-            .reserved2 = 0,
-        },
+        .null => nullWire(),
+        .boolean => |b| makeWire(.boolean, 0, if (b) 1 else 0, 0),
+        .int => |n| makeWire(.number, host_abi.FLAG_INTEGER, @bitCast(n), 0),
+        .float => |n| makeWire(.number, 0, @bitCast(n), 0),
+        .rune => |r| makeWire(.number, host_abi.FLAG_RUNE, @as(u64, r), 0),
+        .decimal => |d| makeWire(.number, host_abi.FLAG_DECIMAL, @as(u64, @bitCast(d)), 0),
+        .string => |s| makeWire(.string, 0, @intCast(@intFromPtr(s.ptr)), @intCast(s.len)),
+        .error_value => |msg| makeWire(.@"error", 0, @intCast(@intFromPtr(msg.ptr)), @intCast(msg.len)),
         .object => |o| switch (o.*) {
-            .dyn_string => .{
-                .tag = @intFromEnum(host_abi.WireTag.string),
-                .flags = 0,
-                .reserved = 0,
-                .payload = @intFromPtr(o.dyn_string.ptr),
-                .len = @intCast(o.dyn_string.len),
-                .reserved2 = 0,
-            },
-            .string_view => .{
-                .tag = @intFromEnum(host_abi.WireTag.string),
-                .flags = 0,
-                .reserved = 0,
-                .payload = @intFromPtr(o.string_view.bytes.ptr),
-                .len = @intCast(o.string_view.bytes.len),
-                .reserved2 = 0,
-            },
+            .dyn_string => makeWire(.string, 0, @intCast(@intFromPtr(o.dyn_string.ptr)), @intCast(o.dyn_string.len)),
+            .string_view => makeWire(.string, 0, @intCast(@intFromPtr(o.string_view.bytes.ptr)), @intCast(o.string_view.bytes.len)),
             .array, .array_managed, .array_capacity => {
                 const items = try vms.asArraySlice(o);
                 const wires = (heap.bump(host_abi.ValueWire, items.len) orelse return error.OutOfMemory)[0..items.len];
                 for (items, 0..) |item, i| {
                     wires[i] = try wireFromValue(item);
                 }
-                return .{
-                    .tag = @intFromEnum(host_abi.WireTag.array),
-                    .flags = 0,
-                    .reserved = 0,
-                    .payload = @intFromPtr(wires.ptr),
-                    .len = @intCast(items.len),
-                    .reserved2 = 0,
-                };
+                return makeWire(.array, 0, @intCast(@intFromPtr(wires.ptr)), @intCast(items.len));
             },
             .map, .map_managed, .map_hashed => {
                 const entries = try vms.asMapSlice(o);
@@ -141,14 +61,7 @@ pub fn wireFromValue(v: Value) !host_abi.ValueWire {
                     wires[i * 2] = try wireFromValue(entry.key);
                     wires[i * 2 + 1] = try wireFromValue(entry.value);
                 }
-                return .{
-                    .tag = @intFromEnum(host_abi.WireTag.map),
-                    .flags = 0,
-                    .reserved = 0,
-                    .payload = @intFromPtr(wires.ptr),
-                    .len = @intCast(entries.len),
-                    .reserved2 = 0,
-                };
+                return makeWire(.map, 0, @intCast(@intFromPtr(wires.ptr)), @intCast(entries.len));
             },
             .variant_value => |vv| {
                 const wires = (heap.bump(host_abi.ValueWire, 4) orelse return error.OutOfMemory)[0..4];
@@ -156,14 +69,7 @@ pub fn wireFromValue(v: Value) !host_abi.ValueWire {
                 wires[1] = try wireFromValue(.{ .string = vv.tag });
                 wires[2] = try wireFromValue(.{ .string = "value" });
                 wires[3] = try wireFromValue(vv.payload);
-                return .{
-                    .tag = @intFromEnum(host_abi.WireTag.map),
-                    .flags = 0,
-                    .reserved = 0,
-                    .payload = @intFromPtr(wires.ptr),
-                    .len = 2,
-                    .reserved2 = 0,
-                };
+                return makeWire(.map, 0, @intCast(@intFromPtr(wires.ptr)), 2);
             },
             else => return error.UnsupportedHostValueType,
         },

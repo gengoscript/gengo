@@ -14,28 +14,19 @@ fn strBytes(v: Value) ?[]const u8 {
     return null;
 }
 
-pub fn valueLessThan(a: Value, b: Value) !bool {
-    if (a == .int and b == .int) return a.int < b.int;
-    if (a == .float and b == .float) return a.float < b.float;
-    if (a == .boolean and b == .boolean) return !a.boolean and b.boolean;
+fn valueCompare(a: Value, b: Value, comptime op: enum { lt, gt }) !bool {
+    if (a == .int and b == .int) return switch (op) { .lt => a.int < b.int, .gt => a.int > b.int };
+    if (a == .float and b == .float) return switch (op) { .lt => a.float < b.float, .gt => a.float > b.float };
+    if (a == .boolean and b == .boolean) return switch (op) { .lt => !a.boolean and b.boolean, .gt => a.boolean and !b.boolean };
     const sa = strBytes(a);
     if (sa) |sa_bytes| {
         const sb = strBytes(b);
-        if (sb) |sb_bytes| return std.mem.lessThan(u8, sa_bytes, sb_bytes);
+        if (sb) |sb_bytes| return switch (op) { .lt => std.mem.lessThan(u8, sa_bytes, sb_bytes), .gt => std.mem.lessThan(u8, sb_bytes, sa_bytes) };
     }
-    return @intFromEnum(a) < @intFromEnum(b);
+    return switch (op) { .lt => @intFromEnum(a) < @intFromEnum(b), .gt => @intFromEnum(a) > @intFromEnum(b) };
 }
 
-pub fn valueGreaterThan(a: Value, b: Value) !bool {
-    if (a == .int and b == .int) return a.int > b.int;
-    if (a == .float and b == .float) return a.float > b.float;
-    if (a == .boolean and b == .boolean) return a.boolean and !b.boolean;
-    const sa = strBytes(a);
-    if (sa) |sa_bytes| {
-        const sb = strBytes(b);
-        if (sb) |sb_bytes| return std.mem.lessThan(u8, sb_bytes, sa_bytes);
-    }
-    return @intFromEnum(a) > @intFromEnum(b);
-}
+pub fn valueLessThan(a: Value, b: Value) !bool { return valueCompare(a, b, .lt); }
+pub fn valueGreaterThan(a: Value, b: Value) !bool { return valueCompare(a, b, .gt); }
 
 

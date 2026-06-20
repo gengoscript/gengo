@@ -204,19 +204,14 @@ pub fn setPolicy(policy: Policy) void {
     vmState().ops_budget_remaining = policy.max_ops orelse std.math.maxInt(u64);
 }
 
-pub fn currentLine() u32 {
+fn currentIpIdx() usize {
     const len = chunk.codeLen();
     if (len == 0) return 0;
-    const idx: usize = if (vmState().ip == 0) 0 else @min(vmState().ip - 1, len - 1);
-    return chunk.lineAt(idx);
+    return if (vmState().ip == 0) 0 else @min(vmState().ip - 1, len - 1);
 }
 
-pub fn currentCol() u16 {
-    const len = chunk.codeLen();
-    if (len == 0) return 0;
-    const idx: usize = if (vmState().ip == 0) 0 else @min(vmState().ip - 1, len - 1);
-    return chunk.colAt(idx);
-}
+pub fn currentLine() u32 { return chunk.lineAt(currentIpIdx()); }
+pub fn currentCol() u16 { return chunk.colAt(currentIpIdx()); }
 
 pub fn panicLine() u32 { return vmState().panic_line; }
 pub fn panicCol() u16 { return vmState().panic_col; }
@@ -288,7 +283,7 @@ pub fn vmConst() !Value {
     return chunk.constAt(idx) catch unreachable;
 }
 
-pub fn vmIndexFromVal(v: Value) !usize {
+fn valToFloatIndex(v: Value) !f64 {
     const n: f64 = switch (v) {
         .int => |x| @floatFromInt(x),
         .decimal => |x| @floatFromInt(x),
@@ -299,21 +294,13 @@ pub fn vmIndexFromVal(v: Value) !usize {
     const f = @trunc(n);
     if (f != n) return error.TypeError;
     if (f > @as(f64, @floatFromInt(std.math.maxInt(usize)))) return error.IndexOutOfBounds;
-    return @intFromFloat(f);
+    return f;
 }
 
+pub fn vmIndexFromVal(v: Value) !usize { return @intFromFloat(try valToFloatIndex(v)); }
+
 pub fn vmSliceIndex(v: Value, upper: usize) !usize {
-    const n: f64 = switch (v) {
-        .int => |x| @floatFromInt(x),
-        .decimal => |x| @floatFromInt(x),
-        .rune => |x| @floatFromInt(x),
-        else => return error.TypeError,
-    };
-    if (n < 0) return error.IndexOutOfBounds;
-    const f = @trunc(n);
-    if (f != n) return error.TypeError;
-    if (f > @as(f64, @floatFromInt(std.math.maxInt(usize)))) return error.IndexOutOfBounds;
-    const idx: usize = @intFromFloat(f);
+    const idx: usize = @intFromFloat(try valToFloatIndex(v));
     if (idx > upper) return error.IndexOutOfBounds;
     return idx;
 }
