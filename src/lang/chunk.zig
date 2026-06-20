@@ -33,6 +33,9 @@ pub const State = struct {
     // Peephole: position of the last get_local_const_lt triple-fused instruction.
     // Used for quad-fusion: get_local_const_lt + jif_pop → get_local_const_lt_jif_pop.
     last_triple_lt_pos: ?usize = null,
+    // Peephole: position of the last get_local_const_gt triple-fused instruction.
+    // Used for quad-fusion: get_local_const_gt + jif_pop → get_local_const_gt_jif_pop.
+    last_triple_gt_pos: ?usize = null,
     // Peephole: position of the last get_local_const_sub triple-fused instruction.
     // Used for fusion: get_local_const_sub + call → get_local_const_sub_call.
     last_get_local_const_sub_pos: ?usize = null,
@@ -87,6 +90,7 @@ pub fn reset() void {
     g_state.last_get_local_code_pos = null;
     g_state.last_triple_eq_pos = null;
     g_state.last_triple_lt_pos = null;
+    g_state.last_triple_gt_pos = null;
     g_state.last_get_local_const_sub_pos = null;
     g_state.last_get_local_const_add_pos = null;
     g_state.last_get_global_code_pos = null;
@@ -249,6 +253,7 @@ pub fn emitBinOpFused(op: Op, line: u32) !void {
                 .sub => .const_sub,
                 .add => .const_add,
                 .lt  => .const_lt,
+                .gt  => .const_gt,
                 else => null,
             };
             if (fused) |fop| {
@@ -263,6 +268,7 @@ pub fn emitBinOpFused(op: Op, line: u32) !void {
                             .const_sub => .get_local_const_sub,
                             .const_add => .get_local_const_add,
                             .const_lt  => .get_local_const_lt,
+                            .const_gt  => .get_local_const_gt,
                             else       => null,
                         };
                         if (triple) |top| {
@@ -274,6 +280,8 @@ pub fn emitBinOpFused(op: Op, line: u32) !void {
                                 g_state.last_triple_eq_pos = gl_pos;
                             } else if (top == .get_local_const_lt) {
                                 g_state.last_triple_lt_pos = gl_pos;
+                            } else if (top == .get_local_const_gt) {
+                                g_state.last_triple_gt_pos = gl_pos;
                             } else if (top == .get_local_const_sub) {
                                 g_state.last_get_local_const_sub_pos = gl_pos;
                             } else if (top == .get_local_const_add) {
@@ -489,6 +497,19 @@ pub fn emitJump(op: Op, line: u32) !usize {
                 return result;
             }
         }
+        // Quad fusion: get_local_const_gt immediately preceding jif_pop →
+        // get_local_const_gt_jif_pop (9 bytes, saves 1 dispatch per conditional check).
+        if (g_state.last_triple_gt_pos) |tp| {
+            if (tp + 5 == g_state.code_len) {
+                g_state.code[tp] = @intFromEnum(Op.get_local_const_gt_jif_pop);
+                try emitByte(0xff, line);
+                try emitByte(0xff, line);
+                try emitByte(0xff, line);
+                try emitByte(0xff, line);
+                g_state.last_triple_gt_pos = null;
+                return g_state.code_len - 4;
+            }
+        }
         // Quad fusion: get_global_const_lt immediately preceding jif_pop →
         // get_global_const_lt_jif_pop (12 bytes, saves 1 dispatch per conditional check).
         if (g_state.last_triple_global_lt_pos) |tp| {
@@ -527,6 +548,7 @@ pub fn patchJump(offset: usize) !void {
     g_state.last_get_local_code_pos = null;
     g_state.last_triple_eq_pos = null;
     g_state.last_triple_lt_pos = null;
+    g_state.last_triple_gt_pos = null;
     g_state.last_get_global_code_pos = null;
     g_state.last_triple_global_eq_pos = null;
     g_state.last_triple_global_lt_pos = null;
@@ -608,6 +630,7 @@ pub fn emitLoop(loop_start: usize, line: u32) !void {
     g_state.last_get_local_code_pos = null;
     g_state.last_triple_eq_pos = null;
     g_state.last_triple_lt_pos = null;
+    g_state.last_triple_gt_pos = null;
     g_state.last_set_global_code_pos = null;
     g_state.last_quad_lt_jif_pos = null;
     g_state.last_close_upvalue_pos = null;
@@ -665,6 +688,7 @@ pub fn truncateTo(pos: usize) void {
     g_state.last_set_global_code_pos = null;
     g_state.last_triple_eq_pos = null;
     g_state.last_triple_lt_pos = null;
+    g_state.last_triple_gt_pos = null;
     g_state.last_get_local_const_sub_pos = null;
     g_state.last_get_local_const_add_pos = null;
     g_state.last_quad_lt_jif_pos = null;
@@ -706,7 +730,7 @@ pub fn decodeAt(pos: usize) !DecodedInstruction {
 
     return switch (op) {
         .constant, .def_global, .make_closure, .ret_const,
-        .const_eq, .const_sub, .const_add, .const_lt,
+        .const_eq, .const_sub, .const_add, .const_lt, .const_gt,
         .assert_interface, .assert_struct, .variant_check => .{
             .op = op,
             .width = 3,
@@ -761,7 +785,8 @@ pub fn decodeAt(pos: usize) !DecodedInstruction {
         },
 
         .get_local_const_eq, .get_local_const_sub,
-        .get_local_const_add, .get_local_const_lt => .{
+        .get_local_const_add, .get_local_const_lt,
+        .get_local_const_gt => .{
             .op = op,
             .width = 5,
             .const_index = try readU16At(pos + 3),
@@ -785,7 +810,8 @@ pub fn decodeAt(pos: usize) !DecodedInstruction {
             .const_index = try readU16At(pos + 6),
         },
 
-        .get_local_const_eq_jif_pop, .get_local_const_lt_jif_pop => blk: {
+        .get_local_const_eq_jif_pop, .get_local_const_lt_jif_pop,
+        .get_local_const_gt_jif_pop => blk: {
             const off = try readU32At(pos + 5);
             break :blk .{
                 .op = op,
@@ -900,7 +926,7 @@ fn isUnconditionalBranch(op: Op) bool {
 fn isConditionalBranch(op: Op) bool {
     return switch (op) {
         .jump_if_false, .jif_pop,
-        .get_local_const_eq_jif_pop, .get_local_const_lt_jif_pop,
+        .get_local_const_eq_jif_pop, .get_local_const_lt_jif_pop, .get_local_const_gt_jif_pop,
         .get_global_const_lt_jif_pop,
         .get_local_const_lt_jif_pop_jump => true,
         else => false,
@@ -914,7 +940,7 @@ fn stackEffect(op: Op, ip: usize) struct { pop: u8, push: u8 } {
         .get_local, .get_upvalue, .get_global, .get_field,
         .make_closure, .tuple_get_keep,
         .get_local_const_eq, .get_local_const_sub,
-        .get_local_const_add, .get_local_const_lt,
+        .get_local_const_add, .get_local_const_lt, .get_local_const_gt,
         .get_global_const_eq, .get_global_const_sub,
         .get_global_const_add, .get_global_const_lt,
         .get_local_get_field => .{ .pop = 0, .push = 1 },
@@ -933,7 +959,7 @@ fn stackEffect(op: Op, ip: usize) struct { pop: u8, push: u8 } {
         .neg, .not, .bit_not,
         .cast_int, .cast_float, .cast_decimal, .cast_bool, .cast_string, .cast_rune,
         .type_name, .variant_check, .variant_payload,
-        .const_eq, .const_sub, .const_add, .const_lt,
+        .const_eq, .const_sub, .const_add, .const_lt, .const_gt,
         .assert_type, .assert_interface, .assert_struct,
         .tuple_get => .{ .pop = 1, .push = 1 },
 
@@ -1020,7 +1046,7 @@ fn stackEffect(op: Op, ip: usize) struct { pop: u8, push: u8 } {
 
         // Branch instructions (pop already accounted for)
         .jump, .loop, .set_global_loop, .close_upvalue_loop, .jump_if_false => .{ .pop = 0, .push = 0 },
-        .get_local_const_eq_jif_pop, .get_local_const_lt_jif_pop,
+        .get_local_const_eq_jif_pop, .get_local_const_lt_jif_pop, .get_local_const_gt_jif_pop,
         .get_local_const_lt_jif_pop_jump,
         .get_global_const_lt_jif_pop => .{ .pop = 0, .push = 0 },
 
@@ -1081,6 +1107,14 @@ pub fn verify() !void {
                 },
                 .get_local_const_lt => if (g_state.code[ip + 2] != @intFromEnum(Op.const_lt)) {
                     verifySetErr("ip={d} ({s}): expected embedded const_lt, got {d}", .{ip, @tagName(inst.op), g_state.code[ip + 2]});
+                    return error.BadOpcode;
+                },
+                .get_local_const_gt => if (g_state.code[ip + 2] != @intFromEnum(Op.const_gt)) {
+                    verifySetErr("ip={d} ({s}): expected embedded const_gt, got {d}", .{ip, @tagName(inst.op), g_state.code[ip + 2]});
+                    return error.BadOpcode;
+                },
+                .get_local_const_gt_jif_pop => if (g_state.code[ip + 2] != @intFromEnum(Op.const_gt)) {
+                    verifySetErr("ip={d} ({s}): expected embedded const_gt, got {d}", .{ip, @tagName(inst.op), g_state.code[ip + 2]});
                     return error.BadOpcode;
                 },
                 .get_global_const_eq => if (g_state.code[ip + 5] != @intFromEnum(Op.const_eq)) {

@@ -24,14 +24,16 @@ pub const Op = enum(u8) {
     const_sub,
     const_add,
     const_lt,
+    const_gt,
     // Triple-fused get_local+constant+binop. Same 5-byte layout as
-    // get_local(2) + const_eq/sub/add/lt(3). The middle byte (the original const_*
+    // get_local(2) + const_eq/sub/add/lt/gt(3). The middle byte (the original const_*
     // opcode, now a skip byte) is read and discarded by the VM.
-    // Emitted when get_local immediately precedes a const_eq, const_sub, const_add, or const_lt.
+    // Emitted when get_local immediately precedes a const_eq, const_sub, const_add, const_lt, or const_gt.
     get_local_const_eq,
     get_local_const_sub,
     get_local_const_add,
     get_local_const_lt,
+    get_local_const_gt,
     // Quad-fused get_local+constant+eq+jif_pop: 9-byte conditional branch.
     // Layout: [op][slot][skip][idx_hi][idx_lo][jmp_hi][jmp_lo]
     // Emitted when get_local_const_eq immediately precedes jif_pop.
@@ -40,6 +42,10 @@ pub const Op = enum(u8) {
     // Layout: [op][slot][skip=const_lt_byte][idx_hi][idx_lo][exit_b3][exit_b2][exit_b1][exit_b0]
     // Emitted when get_local_const_lt immediately precedes jif_pop.
     get_local_const_lt_jif_pop,
+    // Quad-fused get_local+constant+gt+jif_pop: 9-byte conditional branch.
+    // Layout: [op][slot][skip=const_gt_byte][idx_hi][idx_lo][exit_b3][exit_b2][exit_b1][exit_b0]
+    // Emitted when get_local_const_gt immediately precedes jif_pop.
+    get_local_const_gt_jif_pop,
     // Quint-fused get_local+constant+lt+jif_pop+jump: 13-byte for-loop header.
     // Layout: [op][slot][skip][idx_hi][idx_lo][exit_b3..b0][body_b3..b0]
     // When a < k: ip += body_off (jump to body, past post-increment).

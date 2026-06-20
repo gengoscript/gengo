@@ -307,7 +307,7 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
             try chunk.emitBinOpFused(.eq, line);
             try chunk.emitOp(.not, line);
         },
-        .gt => try chunk.emitOp(.gt, line),
+        .gt => try chunk.emitBinOpFused(.gt, line),
         .gt_eq => {
             try chunk.emitBinOpFused(.lt, line);
             try chunk.emitOp(.not, line);
