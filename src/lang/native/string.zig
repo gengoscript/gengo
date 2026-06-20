@@ -373,50 +373,50 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
         .str_builder_new => {
             const obj = try vmgc.vmAllocObject();
             obj.* = .{ .string_builder = .{ .buf = &[_]u8{}, .len = 0 } };
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(.{ .object = obj });
         },
         .str_contains => {
             const s = try vms.asStringValue(vms.vmTop(1));
             const sub = try vms.asStringValue(vms.vmTop(0));
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(nativeStrContains(s, sub));
         },
         .str_contains_any => {
             const s = try vms.asStringValue(vms.vmTop(1));
             const chars = try vms.asStringValue(vms.vmTop(0));
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(nativeStrContainsAny(s, chars));
         },
         .str_count => {
             const s = try vms.asStringValue(vms.vmTop(1));
             const sub = try vms.asStringValue(vms.vmTop(0));
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(nativeStrCount(s, sub));
         },
         .str_ends_with => {
             const s = try vms.asStringValue(vms.vmTop(1));
             const suffix = try vms.asStringValue(vms.vmTop(0));
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(nativeStrEndsWith(s, suffix));
         },
         .str_equal_fold => {
             const s = try vms.asStringValue(vms.vmTop(1));
             const t = try vms.asStringValue(vms.vmTop(0));
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(nativeStrEqualFold(s, t));
         },
         .str_fields => {
             const s = try vms.asStringValue(vms.vmTop(0));
             const out = try nativeStrFields(s);
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .str_index_of => {
             const s = try vms.asStringValue(vms.vmTop(1));
             const sub = try vms.asStringValue(vms.vmTop(0));
             const out = try nativeStrIndexOf(s, sub);
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .str_join => {
@@ -424,20 +424,20 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const sep = try vms.asStringValue(vms.vmTop(0));
             if (arr_val != .object) return error.TypeError;
             const out = try nativeStrJoin(arr_val.object, sep);
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .str_last_index_of => {
             const s = try vms.asStringValue(vms.vmTop(1));
             const sub = try vms.asStringValue(vms.vmTop(0));
             const out = try nativeStrLastIndexOf(s, sub);
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .str_lower => {
             const s = try vms.asStringValue(vms.vmTop(0));
             const out = try nativeStrLower(s);
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .str_pad_left => {
@@ -445,7 +445,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const n_v = vms.vmTop(1);
             const pad = try vms.asStringValue(vms.vmTop(0));
             const out = try nativeStrPadLeft(s, n_v, pad);
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .str_pad_right => {
@@ -453,13 +453,13 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const n_v = vms.vmTop(1);
             const pad = try vms.asStringValue(vms.vmTop(0));
             const out = try nativeStrPadRight(s, n_v, pad);
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .str_repeat => {
             const s = try vms.asStringValue(vms.vmTop(1));
             const out = try nativeStrRepeat(s, vms.vmTop(0));
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .str_replace => {
@@ -467,7 +467,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const old = try vms.asStringValue(vms.vmTop(1));
             const new = try vms.asStringValue(vms.vmTop(0));
             const out = try nativeStrReplace(s, old, new);
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .str_split => {
@@ -475,7 +475,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const s = try vms.asStringValue(src_val);
             const sep = try vms.asStringValue(vms.vmTop(0));
             const out = try nativeStrSplit(s, sep, src_val == .object);
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .str_split_once => {
@@ -483,53 +483,53 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const s = try vms.asStringValue(src_val);
             const sep = try vms.asStringValue(vms.vmTop(0));
             const out = try nativeStrSplitOnce(s, sep, src_val == .object);
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .str_starts_with => {
             const s = try vms.asStringValue(vms.vmTop(1));
             const prefix = try vms.asStringValue(vms.vmTop(0));
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(nativeStrStartsWith(s, prefix));
         },
         .str_trim => {
             const s = try vms.asStringValue(vms.vmTop(0));
             const out = try nativeStrTrim(s);
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .str_upper => {
             const s = try vms.asStringValue(vms.vmTop(0));
             const out = try nativeStrUpper(s);
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .str_trim_left => {
             const s = try vms.asStringValue(vms.vmTop(1));
             const cutset = try vms.asStringValue(vms.vmTop(0));
             const out = try nativeStrTrimLeft(s, cutset);
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .str_trim_right => {
             const s = try vms.asStringValue(vms.vmTop(1));
             const cutset = try vms.asStringValue(vms.vmTop(0));
             const out = try nativeStrTrimRight(s, cutset);
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .str_trim_prefix => {
             const s = try vms.asStringValue(vms.vmTop(1));
             const prefix = try vms.asStringValue(vms.vmTop(0));
             const out = try nativeStrTrimPrefix(s, prefix);
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .str_trim_suffix => {
             const s = try vms.asStringValue(vms.vmTop(1));
             const suffix = try vms.asStringValue(vms.vmTop(0));
             const out = try nativeStrTrimSuffix(s, suffix);
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .str_split_n => {
@@ -537,7 +537,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const sep = try vms.asStringValue(vms.vmTop(1));
             const n_v = vms.vmTop(0);
             const out = try nativeStrSplitN(s, sep, n_v);
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         else => {},

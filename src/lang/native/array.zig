@@ -44,7 +44,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                 }
                 out_obj.* = .{ .array_managed = out[0..count] };
             }
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(.{ .object = out_obj });
         },
         .array_flat => {
@@ -78,7 +78,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                 }
                 out_obj.* = .{ .array_managed = out[0..total] };
             }
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(.{ .object = out_obj });
         },
         .array_map => {
@@ -98,7 +98,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                     out_obj.* = .{ .array_managed = out[0 .. i + 1] }; // grow visible
                 }
             }
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(.{ .object = out_obj });
         },
         .array_reduce => {
@@ -115,7 +115,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             for (items) |item| {
                 acc = try vm.callFunction(fn_val, &.{ acc, item });
             }
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(acc);
         },
         .array_slice => {
@@ -139,7 +139,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                 @memcpy(out[0..slice_len], items[from_u..to_u]);
                 out_obj.* = .{ .array_managed = out[0..slice_len] };
             }
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(.{ .object = out_obj });
         },
         .array_zip => {
@@ -167,7 +167,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                     out_obj.* = .{ .array_managed = out[0 .. i + 1] }; // grow visible
                 }
             }
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(.{ .object = out_obj });
         },
         .array_find => {
@@ -182,7 +182,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                 const ok = try vm.callFunction(fn_val, &.{item});
                 if (try predBool(ok)) { result = item; break; }
             }
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(result);
         },
         .array_find_index => {
@@ -197,7 +197,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                 const ok = try vm.callFunction(fn_val, &.{item});
                 if (try predBool(ok)) { result = .{ .int = @intCast(i) }; break; }
             }
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(result);
         },
         .array_all => {
@@ -212,7 +212,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                 const ok = try vm.callFunction(fn_val, &.{item});
                 if (!(try predBool(ok))) { result = false; break; }
             }
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(.{ .boolean = result });
         },
         .array_any => {
@@ -227,7 +227,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                 const ok = try vm.callFunction(fn_val, &.{item});
                 if (try predBool(ok)) { result = true; break; }
             }
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(.{ .boolean = result });
         },
         .array_chunk => {
@@ -260,7 +260,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                     out_obj.* = .{ .array_managed = out[0 .. ci + 1] }; // grow visible
                 }
             }
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(.{ .object = out_obj });
         },
         else => {},

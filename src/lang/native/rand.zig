@@ -101,37 +101,37 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
     switch (@as(NativeFnId, @enumFromInt(nf.id))) {
         .rand_between => {
             const out = try nativeRandBetween(vms.vmTop(1), vms.vmTop(0));
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .rand_choice => {
             const arr_val = vms.unboxNamed(vms.vmTop(0));
             if (arr_val != .object) return error.TypeError;
             const out = try nativeRandChoice(arr_val.object);
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .rand_float => {
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(nativeRandFloat());
         },
         .rand_intn => {
             const out = try nativeRandIntn(vms.vmTop(0));
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .rand_norm_float => {
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(nativeRandNormFloat());
         },
         .rand_perm => {
             const out = try nativeRandPerm(vms.vmTop(0));
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .rand_seed => {
             try nativeRandSeed(vms.vmTop(0));
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(.null);
         },
         else => {},

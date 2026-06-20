@@ -157,13 +157,13 @@ pub fn dispatchHostCallVariadic(comptime cap: u64, comptime call: host_abi.HostC
             var out = nullWire();
             try nativeCallChecked(call, args_wire[0..argc], &out);
             const result = try valueFromWire(out);
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(result);
             return;
         }
     }
     const result = try @call(.auto, nativeFn, .{start, argc});
-    try vms.vmPopArgs(argc);
+    vms.vmPopArgs(argc);
     try vms.vmPush(result);
 }
 
@@ -176,13 +176,13 @@ pub fn dispatchHostCall1(comptime cap: u64, comptime call: host_abi.HostCall, ar
             var out_wire = nullWire();
             try nativeCallChecked(call, arg_wire[0..], &out_wire);
             const out = try valueFromWire(out_wire);
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(out);
             return;
         }
     }
     const out = try @call(.auto, nativeFn, .{vms.vmTop(0)});
-    try vms.vmPopArgs(argc);
+    vms.vmPopArgs(argc);
     try vms.vmPush(out);
 }
 

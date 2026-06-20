@@ -31,7 +31,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             }
             const out_obj = try vmgc.vmAllocObject();
             out_obj.* = .{ .array_managed = items[0..n] };
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(.{ .object = out_obj });
         },
         .sort_by => {
@@ -61,7 +61,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             }
             const out_obj = try vmgc.vmAllocObject();
             out_obj.* = .{ .array_managed = items[0..n] };
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(.{ .object = out_obj });
         },
         .sort_desc => {
@@ -84,7 +84,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             }
             const out_obj = try vmgc.vmAllocObject();
             out_obj.* = .{ .array_managed = items[0..n] };
-            try vms.vmPopArgs(argc);
+            vms.vmPopArgs(argc);
             try vms.vmPush(.{ .object = out_obj });
         },
         else => {},
