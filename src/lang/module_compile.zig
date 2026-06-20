@@ -175,10 +175,7 @@ pub const Session = struct {
 
     fn copyTestNamesFromCompiler(self: *Session, compiler: *const Compiler) void {
         self.test_count = compiler.test_count;
-        var ti: usize = 0;
-        while (ti < compiler.test_count) : (ti += 1) {
-            self.test_names[ti] = compiler.test_names[ti];
-        }
+        @memcpy(self.test_names[0..compiler.test_count], compiler.test_names[0..compiler.test_count]);
     }
 
     fn isCapabilityEnabled(self: *Session, name: []const u8) bool {
@@ -442,9 +439,8 @@ pub const Session = struct {
             self.copyTestNamesFromCompiler(&compiler);
         }
         self.modules[idx].export_count = compiler.export_count;
-        var ei: u8 = 0;
-        while (ei < compiler.export_count) : (ei += 1) {
-            self.modules[idx].export_names[ei] = compiler.exports[ei].name;
+        for (self.modules[idx].export_names[0..compiler.export_count], compiler.exports[0..compiler.export_count]) |*n, e| {
+            n.* = e.name;
         }
         try compiler.emitModuleObject();
         if (emit_halt) try chunk.emitOp(.halt, compiler.prev.line);
@@ -503,9 +499,8 @@ pub const Session = struct {
             }
         }
 
-        var i: usize = 0;
-        while (i < count) : (i += 1) {
-            try self.compileModuleFromPath(imports[i][0..lens[i]]);
+        for (imports[0..count], lens[0..count]) |*imp, len| {
+            try self.compileModuleFromPath(imp[0..len]);
         }
     }
 
@@ -548,9 +543,8 @@ pub const Session = struct {
     }
 
     fn findModule(self: *Session, path: []const u8) ?usize {
-        var i: usize = 0;
-        while (i < self.module_count) : (i += 1) {
-            if (common.streq(self.modules[i].path(), path)) return i;
+        for (self.modules[0..self.module_count], 0..) |*m, i| {
+            if (common.streq(m.path(), path)) return i;
         }
         return null;
     }
@@ -652,9 +646,8 @@ pub fn hasModuleExport(ctx: *anyopaque, path: []const u8, field: []const u8) boo
         return false;
     };
     const exports = &self.modules[idx];
-    var i: u8 = 0;
-    while (i < exports.export_count) : (i += 1) {
-        if (common.streq(exports.export_names[i], field)) return true;
+    for (exports.export_names[0..exports.export_count]) |n| {
+        if (common.streq(n, field)) return true;
     }
     return false;
 }
@@ -675,9 +668,8 @@ pub fn checkGlobalExistsInSession(ctx: *anyopaque, name: []const u8) bool {
 }
 
 fn containsPath(paths: []const [MaxModulePathBytes]u8, lens: []const usize, needle: []const u8) bool {
-    var i: usize = 0;
-    while (i < lens.len) : (i += 1) {
-        if (common.streq(paths[i][0..lens[i]], needle)) return true;
+    for (paths, lens) |*p, l| {
+        if (common.streq(p[0..l], needle)) return true;
     }
     return false;
 }
