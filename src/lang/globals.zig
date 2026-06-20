@@ -21,8 +21,7 @@ var g_state: *State = &g_default_state;
 fn slotFor(name: []const u8) ?usize {
     const mask: usize = TableSize - 1;
     var idx: usize = @intCast(common.hashBytes(name) & mask);
-    var probes: usize = 0;
-    while (probes < TableSize) : (probes += 1) {
+    for (0..TableSize) |_| {
         const e = g_state.entries[idx];
         if (!e.occupied) return null;
         if (common.streq(e.name, name)) return idx;
@@ -34,8 +33,7 @@ fn slotFor(name: []const u8) ?usize {
 fn slotForInsert(name: []const u8) ?usize {
     const mask: usize = TableSize - 1;
     var idx: usize = @intCast(common.hashBytes(name) & mask);
-    var probes: usize = 0;
-    while (probes < TableSize) : (probes += 1) {
+    for (0..TableSize) |_| {
         const e = g_state.entries[idx];
         if (!e.occupied or common.streq(e.name, name)) return idx;
         idx = (idx + 1) & mask;
@@ -44,8 +42,7 @@ fn slotForInsert(name: []const u8) ?usize {
 }
 
 pub fn reset() void {
-    var i: usize = 0;
-    while (i < TableSize) : (i += 1) g_state.entries[i] = .{};
+    @memset(g_state.entries[0..TableSize], .{});
     g_state.globals_len = 0;
 }
 
@@ -104,10 +101,9 @@ pub fn len() usize {
 
 pub fn valueAt(i: usize) Value {
     var seen: usize = 0;
-    var slot: usize = 0;
-    while (slot < TableSize) : (slot += 1) {
-        if (!g_state.entries[slot].occupied) continue;
-        if (seen == i) return g_state.entries[slot].value;
+    for (g_state.entries[0..TableSize]) |e| {
+        if (!e.occupied) continue;
+        if (seen == i) return e.value;
         seen += 1;
     }
     return .null;
@@ -115,10 +111,9 @@ pub fn valueAt(i: usize) Value {
 
 pub fn nameAt(i: usize) []const u8 {
     var seen: usize = 0;
-    var slot: usize = 0;
-    while (slot < TableSize) : (slot += 1) {
-        if (!g_state.entries[slot].occupied) continue;
-        if (seen == i) return g_state.entries[slot].name;
+    for (g_state.entries[0..TableSize]) |e| {
+        if (!e.occupied) continue;
+        if (seen == i) return e.name;
         seen += 1;
     }
     return "";
@@ -126,9 +121,8 @@ pub fn nameAt(i: usize) []const u8 {
 
 pub fn debugSlotCount() usize {
     var n: usize = 0;
-    var slot: usize = 0;
-    while (slot < TableSize) : (slot += 1) {
-        if (g_state.entries[slot].occupied) n += 1;
+    for (g_state.entries[0..TableSize]) |e| {
+        if (e.occupied) n += 1;
     }
     return n;
 }

@@ -1,15 +1,13 @@
 pub fn streq(a: []const u8, b: []const u8) bool {
     if (a.len != b.len) return false;
-    var i: usize = 0;
-    while (i < a.len) : (i += 1) if (a[i] != b[i]) return false;
+    for (a, b) |ca, cb| if (ca != cb) return false;
     return true;
 }
 
 pub fn hashBytes(s: []const u8) u64 {
     var h: u64 = 1469598103934665603; // FNV-1a 64-bit offset basis
-    var i: usize = 0;
-    while (i < s.len) : (i += 1) {
-        h ^= @as(u64, s[i]);
+    for (s) |byte| {
+        h ^= @as(u64, byte);
         h *%= 1099511628211; // FNV-1a 64-bit prime
     }
     return h;
