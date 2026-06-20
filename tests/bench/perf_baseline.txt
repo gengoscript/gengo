@@ -1,8 +1,8 @@
 001_compute_stress total_ops=847972 gc_runs=47 alloc_objects=21319 string_concat_bytes=0
 002_tiny_safe_math total_ops=2600 gc_runs=1 alloc_objects=287 string_concat_bytes=0
-003_fib_recursive total_ops=12948466 gc_runs=0 alloc_objects=202 string_concat_bytes=0
+003_fib_recursive total_ops=10255930 gc_runs=0 alloc_objects=202 string_concat_bytes=0
 004_fib_tail_recursive total_ops=323 gc_runs=0 alloc_objects=202 string_concat_bytes=0
-005_fib_recursive_35_stress total_ops=143600638 gc_runs=0 alloc_objects=202 string_concat_bytes=0
+005_fib_recursive_35_stress total_ops=113739936 gc_runs=0 alloc_objects=202 string_concat_bytes=0
 006_call_overhead total_ops=90000019 gc_runs=0 alloc_objects=202 string_concat_bytes=0
 006_utf8_hotpath total_ops=836331 gc_runs=9 alloc_objects=4202 string_concat_bytes=0
 007_dispatch_loop total_ops=500000016 gc_runs=0 alloc_objects=201 string_concat_bytes=0

@@ -168,6 +168,14 @@ pub fn emit2(a: u8, b: u8, line: u32) !void {
                 g_state.code[sub_pos + 5] = b; // argc moves to position 5
                 g_state.code_len -= 1;
                 g_state.last_get_local_const_sub_pos = null;
+                // Hexa-fusion: get_global immediately before get_local_const_sub_call
+                // → call_global_local_sub_const (11 bytes, 1 dispatch).
+                if (g_state.last_get_global_code_pos) |gg_pos| {
+                    if (gg_pos + 5 == sub_pos) {
+                        g_state.code[gg_pos] = @intFromEnum(Op.call_global_local_sub_const);
+                        g_state.last_get_global_code_pos = null;
+                    }
+                }
             } else {
                 g_state.last_get_local_const_sub_pos = null; // stale tracker
             }
@@ -760,6 +768,12 @@ pub fn decodeAt(pos: usize) !DecodedInstruction {
             .const_index = try readU16At(pos + 3),
         },
 
+        .call_global_local_sub_const => .{
+            .op = op,
+            .width = 11,
+            .const_index = try readU16At(pos + 8),
+        },
+
         .get_local_const_eq_jif_pop, .get_local_const_lt_jif_pop => blk: {
             const off = try readU32At(pos + 5);
             break :blk .{
@@ -973,11 +987,15 @@ fn stackEffect(op: Op, ip: usize) struct { pop: u8, push: u8 } {
         // Special / no stack effect
         .close_upvalue, .tuple_check_arity, .validate_type_default => .{ .pop = 0, .push = 0 },
         .get_local_const_sub_call => blk: {
-            // Computes local - const, pushes result, then calls it.
-            // The internal push of the sub result offsets the call pop
-            // by one, so net is pop=argc, push=1.
             const argc = g_state.code[ip + 5];
             break :blk .{ .pop = argc, .push = 1 };
+        },
+        .call_global_local_sub_const => blk: {
+            // Equivalent to get_global (pop=0,push=1) + get_local_const_sub_call (pop=argc,push=1).
+            // Combined net: push=2, pop=argc. For argc=1: net height +1.
+            const argc = g_state.code[ip + 10];
+            _ = argc;
+            break :blk .{ .pop = 0, .push = 1 };
         },
         .local_add_local => .{ .pop = 0, .push = 0 },
         .local_add_const => .{ .pop = 0, .push = 0 },
