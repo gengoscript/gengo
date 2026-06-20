@@ -285,6 +285,17 @@ fn numericOpTag(a: Value, b: Value) !VTag {
     return .int;
 }
 
+fn decimalScalarPair(dec: Value, scalar: Value) ?struct { d: i64, n: i64, typ: *Object } {
+    if (dec != .object or dec.object.* != .named_value) return null;
+    if (dec.object.named_value.typ.named_type.base != .decimal) return null;
+    if (scalar != .int or scalar.int < std.math.minInt(i64) or scalar.int >= std.math.maxInt(i64)) return null;
+    return .{
+        .d = vms.valueAsDecimal(dec.object.named_value.value) catch return null,
+        .n = scalar.int,
+        .typ = dec.object.named_value.typ,
+    };
+}
+
 fn decimalOpValues(a: Value, b: Value) ?struct { lhs: i64, rhs: i64, typ: *Object } {
     if (a == .object and a.object.* == .named_value and
         b == .object and b.object.* == .named_value and
@@ -434,8 +445,7 @@ fn prepareVariadicCall(f: @import("value.zig").FuncObj, argc: u8) !void {
     try pushTempRoot(.{ .object = arr_obj });
     defer popTempRoot();
     const items = try vmAllocManagedSlice(Value, extra);
-    var i: usize = 0;
-    while (i < extra) : (i += 1) items[i] = vmState().stack[start + fixed + i];
+    @memcpy(items[0..extra], vmState().stack[start + fixed .. start + fixed + extra]);
     arr_obj.* = .{ .array_managed = items[0..extra] };
     vmState().stack[start + fixed] = .{ .object = arr_obj };
     vmState().stack_top = start + fixed + 1;
@@ -565,8 +575,8 @@ fn variantValueFieldValue(vv: vmod.VariantValueObj, name: []const u8) !Value {
 
     const arm = vt.arms[vv.ordinal];
     if (arm.fields.len > 0) {
-        for (arm.fields, 0..) |af, afi| {
-            if (common.streq(af.name, name)) return vv.arm_fields[afi];
+        for (arm.fields, vv.arm_fields) |af, fv| {
+            if (common.streq(af.name, name)) return fv;
         }
     } else if (arm.has_payload and common.streq(arm.payload_name, name)) {
         return vv.payload;
@@ -635,6 +645,16 @@ fn resolveMethodReceiver(recv: Value, mname: []const u8) !MethodResolution {
         },
         else => return error.NotAMethodReceiver,
     }
+}
+
+fn floatToIntSafe(n: f64) !i64 {
+    if (!std.math.isFinite(n) or
+        n < @as(f64, @floatFromInt(std.math.minInt(i64))) or
+        n >= @as(f64, @floatFromInt(std.math.maxInt(i64)))) return error.RangeError;
+    const t = @trunc(n);
+    const as_i64: i64 = @intFromFloat(t);
+    if (@as(f64, @floatFromInt(as_i64)) != t) return error.RangeError;
+    return as_i64;
 }
 
 fn checkNamedTypePredicate(nt_obj: *Object, inner: Value) !void {
@@ -1065,9 +1085,9 @@ fn retSlowPath(retval_in: Value) !bool {
 // ── Large opcode handlers (extracted from runInner for readability) ──────────
 
 fn pushFieldFromObject(obj: *Object, name_idx: usize, ic_base: usize, ic_type_idx: usize, ic_fidx: u8) !void {
+    const name = (try chunk.constAt(name_idx)).string;
     switch (obj.*) {
         .array, .array_managed, .array_capacity => {
-            const name = (try chunk.constAt(name_idx)).string;
             const items = try vms.asArraySlice(obj);
             if (common.streq(name, "first")) {
                 if (items.len == 0) return error.IndexOutOfBounds;
@@ -1082,7 +1102,6 @@ fn pushFieldFromObject(obj: *Object, name_idx: usize, ic_base: usize, ic_type_id
             if (ic_type_idx == @as(usize, tpi) and ic_fidx != 0xFF) {
                 try vmPush(inst.fields[ic_fidx].value);
             } else {
-                const name = (try chunk.constAt(name_idx)).string;
                 const fi = vmtyp.findFieldIndex(inst.typ.struct_type.fields, name) orelse {
                     vms.setRuntimeErr("no field '{s}' on type '{s}'", .{ name, inst.typ.struct_type.name });
                     return error.UnknownStructField;
@@ -1096,7 +1115,6 @@ fn pushFieldFromObject(obj: *Object, name_idx: usize, ic_base: usize, ic_type_id
             }
         },
         .map, .map_managed => {
-            const name = (try chunk.constAt(name_idx)).string;
             const items = try vms.asMapSlice(obj);
             if (common.streq(name, "len")) {
                 try vmPush(.{ .int = @intCast(items.len) });
@@ -1109,7 +1127,6 @@ fn pushFieldFromObject(obj: *Object, name_idx: usize, ic_base: usize, ic_type_id
             }
         },
         .map_hashed => |hm| {
-            const name = (try chunk.constAt(name_idx)).string;
             if (common.streq(name, "len")) {
                 try vmPush(.{ .int = @intCast(hm.len) });
             } else {
@@ -1121,22 +1138,10 @@ fn pushFieldFromObject(obj: *Object, name_idx: usize, ic_base: usize, ic_type_id
                 }
             }
         },
-        .enum_type => {
-            const name = (try chunk.constAt(name_idx)).string;
-            try vmPush(try enumTypeFieldValue(obj, name));
-        },
-        .named_type => {
-            const name = (try chunk.constAt(name_idx)).string;
-            try vmPush(try namedTypeFieldValue(obj, name));
-        },
-        .variant_type => {
-            const name = (try chunk.constAt(name_idx)).string;
-            try vmPush(try variantTypeFieldValue(obj, name));
-        },
-        .variant_value => |vv| {
-            const name = (try chunk.constAt(name_idx)).string;
-            try vmPush(try variantValueFieldValue(vv, name));
-        },
+        .enum_type => try vmPush(try enumTypeFieldValue(obj, name)),
+        .named_type => try vmPush(try namedTypeFieldValue(obj, name)),
+        .variant_type => try vmPush(try variantTypeFieldValue(obj, name)),
+        .variant_value => |vv| try vmPush(try variantValueFieldValue(vv, name)),
         else => return error.TypeError,
     }
 }
@@ -1335,8 +1340,7 @@ fn opInvokeMethod() !void {
                 }
                 const vv = try vmAllocObject();
                 vv.* = .{ .variant_value = .{ .typ = recv.object, .tag = arm.name, .ordinal = vi, .payload = payload } };
-                var i: usize = @as(usize, argc) + 1;
-                while (i > 0) : (i -= 1) { _ = try vmPop(); }
+                for (0..@as(usize, argc) + 1) |_| _ = try vmPop();
                 try vmPush(.{ .object = vv });
             } else {
                 if (argc != 0) return error.ArityMismatch;
@@ -1531,8 +1535,7 @@ fn opDeferInvokeMethod() !void {
     const items = try vmAllocManagedSlice(Value, total);
     items[0] = func;
     if (pass_recv) items[1] = recv;
-    var ai: usize = 0;
-    while (ai < argc) : (ai += 1) items[1 + extra + ai] = vmState().stack[recv_idx + 1 + ai];
+    @memcpy(items[1 + extra .. 1 + extra + @as(usize, argc)], vmState().stack[recv_idx + 1 .. recv_idx + 1 + @as(usize, argc)]);
     arr_obj.* = .{ .array_managed = items[0..total] };
     vmState().defer_stack[vmState().defer_top] = .{ .object = arr_obj };
     vmState().defer_top += 1;
@@ -1718,18 +1721,10 @@ fn runInner() !void {
                 const a = try vmPop();
                 if (decimalOpValues(a, b)) |_| {
                     return error.TypeError;
-                } else if (a == .object and a.object.* == .named_value and a.object.named_value.typ.named_type.base == .decimal and b == .int and b.int >= std.math.minInt(i64) and b.int < std.math.maxInt(i64)) {
-                    const d = vms.valueAsDecimal(a.object.named_value.value) catch return error.TypeError;
-                    
-                    const result = @mulWithOverflow(d, b.int);
+                } else if (decimalScalarPair(a, b) orelse decimalScalarPair(b, a)) |p| {
+                    const result = @mulWithOverflow(p.d, p.n);
                     if (result[1] != 0) return error.TypeError;
-                    try pushDecimalResultWithCarrier(a.object.named_value.typ, result[0]);
-                } else if (b == .object and b.object.* == .named_value and b.object.named_value.typ.named_type.base == .decimal and a == .int and a.int >= std.math.minInt(i64) and a.int < std.math.maxInt(i64)) {
-                    const d = vms.valueAsDecimal(b.object.named_value.value) catch return error.TypeError;
-                    
-                    const result = @mulWithOverflow(d, a.int);
-                    if (result[1] != 0) return error.TypeError;
-                    try pushDecimalResultWithCarrier(b.object.named_value.typ, result[0]);
+                    try pushDecimalResultWithCarrier(p.typ, result[0]);
                 } else {
                     const tag = numericOpTag(a, b) catch |err| {
                         if (err == error.TypeError) setBinaryTypeError("*", a, b);
@@ -1745,11 +1740,10 @@ fn runInner() !void {
                 const a = try vmPop();
                 if (decimalOpValues(a, b)) |_| {
                     return error.TypeError;
-                } else if (a == .object and a.object.* == .named_value and a.object.named_value.typ.named_type.base == .decimal and b == .int and b.int >= std.math.minInt(i64) and b.int < std.math.maxInt(i64)) {
-                    const d = vms.valueAsDecimal(a.object.named_value.value) catch return error.TypeError;
-                    if (b.int == 0) { vms.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
-                    if (d == std.math.minInt(i64) and b.int == -1) return error.TypeError;
-                    try pushDecimalResultWithCarrier(a.object.named_value.typ, @divTrunc(d, b.int));
+                } else if (decimalScalarPair(a, b)) |p| {
+                    if (p.n == 0) { vms.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
+                    if (p.d == std.math.minInt(i64) and p.n == -1) return error.TypeError;
+                    try pushDecimalResultWithCarrier(p.typ, @divTrunc(p.d, p.n));
                 } else {
                     const tag = numericOpTag(a, b) catch |err| {
                         if (err == error.TypeError) setBinaryTypeError("/", a, b);
@@ -1841,27 +1835,13 @@ fn runInner() !void {
             .cast_int => {
                 const raw = try vmPop();
                 if (vmod.decimalLogicalNumber(raw)) |n| {
-                    if (!std.math.isFinite(n) or
-                        n < @as(f64, @floatFromInt(std.math.minInt(i64))) or
-                        n >= @as(f64, @floatFromInt(std.math.maxInt(i64)))) return error.RangeError;
-                    const t = @trunc(n);
-                    const as_i64: i64 = @intFromFloat(t);
-                    if (@as(f64, @floatFromInt(as_i64)) != t) return error.RangeError;
-                    try vmPush(.{ .int = as_i64 });
+                    try vmPush(.{ .int = try floatToIntSafe(n) });
                     continue;
                 }
                 const v = vms.unboxNamed(raw);
                 switch (v) {
                     .int => |n| try vmPush(.{ .int = n }),
-                    .float => |n| {
-                        if (!std.math.isFinite(n) or
-                            n < @as(f64, @floatFromInt(std.math.minInt(i64))) or
-                            n >= @as(f64, @floatFromInt(std.math.maxInt(i64)))) return error.RangeError;
-                        const t = @trunc(n);
-                        const as_i64: i64 = @intFromFloat(t);
-                        if (@as(f64, @floatFromInt(as_i64)) != t) return error.RangeError;
-                        try vmPush(.{ .int = as_i64 });
-                    },
+                    .float => |n| try vmPush(.{ .int = try floatToIntSafe(n) }),
                     .decimal => |d| try vmPush(.{ .int = d }),
                     .rune => |r| try vmPush(.{ .int = @intCast(r) }),
                     .boolean => |b| try vmPush(.{ .int = if (b) 1 else 0 }),
@@ -2259,8 +2239,7 @@ fn runInner() !void {
                         var shared_seen: [255]bool = [_]bool{false} ** 255;
                         var payload_val: Value = .null;
                         var payload_seen = false;
-                        var ci: usize = 0;
-                        while (ci < count) : (ci += 1) {
+                        for (0..@as(usize, count)) |ci| {
                             const key = vmState().stack[base + ci * 2];
                             const val = vmState().stack[base + ci * 2 + 1];
                             const key_s = try vms.asStringValue(key);
@@ -2294,8 +2273,7 @@ fn runInner() !void {
                         // Record arm (multi-field arm)
                         const total_fields = shared_count + arm_field_count;
                         var seen: [255]bool = [_]bool{false} ** 255;
-                        var ci: usize = 0;
-                        while (ci < count) : (ci += 1) {
+                        for (0..@as(usize, count)) |ci| {
                             const key = vmState().stack[base + ci * 2];
                             const val = vmState().stack[base + ci * 2 + 1];
                             const key_s = try vms.asStringValue(key);
@@ -2313,13 +2291,11 @@ fn runInner() !void {
                                 return error.UnknownStructField;
                             }
                         }
-                        var fi: usize = 0;
-                        while (fi < total_fields) : (fi += 1) {
-                            if (!seen[fi]) {
-                                const fname = if (fi < shared_count) vt.shared_fields[fi].name else arm.fields[fi - shared_count].name;
-                                vms.setRuntimeErr("missing required field '{s}' in variant literal", .{fname});
-                                return error.MissingStructField;
-                            }
+                        for (seen[0..shared_count], vt.shared_fields) |s, sf| {
+                            if (!s) { vms.setRuntimeErr("missing required field '{s}' in variant literal", .{sf.name}); return error.MissingStructField; }
+                        }
+                        for (seen[shared_count..total_fields], arm.fields) |s, af| {
+                            if (!s) { vms.setRuntimeErr("missing required field '{s}' in variant literal", .{af.name}); return error.MissingStructField; }
                         }
 
                         vmState().stack_top -= typ_stack_dist + 1;
@@ -2345,8 +2321,7 @@ fn runInner() !void {
 
                     const base = vmState().stack_top - typ_stack_dist;
                     var seen: [255]bool = [_]bool{false} ** 255;
-                    var ci: usize = 0;
-                    while (ci < count) : (ci += 1) {
+                    for (0..@as(usize, count)) |ci| {
                         const key = vmState().stack[base + ci * 2];
                         const val = vmState().stack[base + ci * 2 + 1];
                         const key_s = try vms.asStringValue(key);
@@ -2360,9 +2335,8 @@ fn runInner() !void {
                         inst_fields[idx] = .{ .key = .{ .string = st.fields[idx].name }, .value = val };
                     }
 
-                    var mi: usize = 0;
-                    while (mi < st.fields.len) : (mi += 1) {
-                        if (!seen[mi]) { vms.setRuntimeErr("missing required field '{s}' in struct literal", .{st.fields[mi].name}); return error.MissingStructField; }
+                    for (st.fields, seen[0..st.fields.len]) |f, s| {
+                        if (!s) { vms.setRuntimeErr("missing required field '{s}' in struct literal", .{f.name}); return error.MissingStructField; }
                     }
 
                     vmState().stack_top -= typ_stack_dist + 1;
@@ -2469,26 +2443,26 @@ fn runInner() !void {
                     break :blk (heap.bump(*Object, proto.capture_slots.len) orelse return error.OutOfMemory);
                 };
                 const frame = if (vmState().frame_top == 0) vms.Frame{ .ret_ip = 0, .base = 0, .closure = null, .func_obj = f.object, .defer_base = 0, .has_typed_returns = false } else vmState().frames[vmState().frame_top - 1];
-                for (proto.capture_slots, 0..) |enc, i| {
+                for (proto.capture_slots, ups) |enc, *u| {
                     const is_upvalue = (enc & 0x80) != 0;
                     const idx = enc & 0x7f;
                     if (is_upvalue) {
                         const pcl = frame.closure orelse return error.TypeError;
                         if (pcl.* != .closure) return error.TypeError;
                         if (idx >= pcl.closure.upvalues.len) return error.TypeError;
-                        ups[i] = pcl.closure.upvalues[idx];
+                        u.* = pcl.closure.upvalues[idx];
                     } else {
                         const abs = frame.base + idx;
                         if (abs >= vmState().stack.len) return error.StackOverflow;
                         const cur = vmState().stack[abs];
                         if (cur == .object and cur.object.* == .cell) {
-                            ups[i] = cur.object;
+                            u.* = cur.object;
                             continue;
                         }
                         const cell = try vmAllocObject();
                         cell.* = .{ .cell = .{ .value = cur } };
                         vmState().stack[abs] = .{ .object = cell };
-                        ups[i] = cell;
+                        u.* = cell;
                     }
                 }
                 const clo = try vmAllocObject();
