@@ -419,6 +419,15 @@ fn pushNumericResultWithCarrier(a: Value, b: Value, n: f64, tag: VTag, op: []con
     }
 }
 
+fn getShiftArgs(op: []const u8) !struct { a: Value, b: Value, an: i64, shift: u6 } {
+    const b = try vmPop();
+    const a = try vmPop();
+    const an = try valueAsIntForOp(a, b, op);
+    const bn = try valueAsIntForOp(b, a, op);
+    if (bn < 0) return error.RangeError;
+    return .{ .a = a, .b = b, .an = an, .shift = @intCast(@min(bn, 63)) };
+}
+
 fn pushUnaryIntResult(v: Value, result: Value) !void {
     _ = try vmPop();
     if (v == .object and v.object.* == .named_value) {
@@ -1627,6 +1636,21 @@ fn readLocalSlot(slot: usize) !Value {
     return v;
 }
 
+fn readGlobalConstPair() !struct { g: Value, k: Value } {
+    const name_idx = try vmShort();
+    const ic_base = vmState().ip;
+    const ic_slot: u16 = @intCast(try vmShort());
+    vmState().ip += 1; // skip embedded const opcode byte
+    const k = try chunk.constAt(try vmShort());
+    return .{ .g = try readGlobalIC(name_idx, ic_base, ic_slot), .k = k };
+}
+
+fn readLocalSlotAndConst() !struct { slot: u8, k: Value } {
+    const slot = try vmByte();
+    vmState().ip += 1; // skip embedded const opcode byte
+    return .{ .slot = slot, .k = try chunk.constAt(try vmShort()) };
+}
+
 fn runInner() !void {
     while (true) {
         if (vmState().ops_budget_remaining < std.math.maxInt(u64)) {
@@ -1824,25 +1848,15 @@ fn runInner() !void {
                 try pushUnaryIntResult(v, .{ .int = ~n });
             },
             .shl => {
-                const b = try vmPop();
-                const a = try vmPop();
-                const an = try valueAsIntForOp(a, b, "<<");
-                const bn = try valueAsIntForOp(b, a, "<<");
-                if (bn < 0) return error.RangeError;
-                const shift: u6 = @intCast(@min(bn, 63));
+                const p = try getShiftArgs("<<");
                 // Prevent signed left-shift overflow: if magnitude exceeds what i64 can hold after shift.
-                if (an > 0 and an > (@as(i64, std.math.maxInt(i64)) >> shift)) return error.RangeError;
-                if (an < 0 and an < (@as(i64, std.math.minInt(i64)) >> shift)) return error.RangeError;
-                try pushIntResultWithCarrier(a, b, an << shift, "<<");
+                if (p.an > 0 and p.an > (@as(i64, std.math.maxInt(i64)) >> p.shift)) return error.RangeError;
+                if (p.an < 0 and p.an < (@as(i64, std.math.minInt(i64)) >> p.shift)) return error.RangeError;
+                try pushIntResultWithCarrier(p.a, p.b, p.an << p.shift, "<<");
             },
             .shr => {
-                const b = try vmPop();
-                const a = try vmPop();
-                const an = try valueAsIntForOp(a, b, ">>");
-                const bn = try valueAsIntForOp(b, a, ">>");
-                if (bn < 0) return error.RangeError;
-                const shift: u6 = @intCast(@min(bn, 63));
-                try pushIntResultWithCarrier(a, b, an >> shift, ">>");
+                const p = try getShiftArgs(">>");
+                try pushIntResultWithCarrier(p.a, p.b, p.an >> p.shift, ">>");
             },
             .cast_int => {
                 const raw = try vmPop();
@@ -2026,71 +2040,49 @@ fn runInner() !void {
 
             // Triple-fused: get_local + constant + eq/sub.
             // Bytecode: [op][slot][skip][idx_hi][idx_lo]
-            // The skip byte (was const_eq/sub opcode) is always present in well-formed
-            // bytecode; advance IP directly to avoid the bounds check in vmByte().
             .get_local_const_eq => {
-                const slot = try vmByte();
-                vmState().ip += 1; // skip the embedded const_eq opcode byte
-                const k = try chunk.constAt(try vmShort());
-                const a = try readLocalSlot(slot);
-                try checkNamedValueCompatibility(a, k);
-                try vmPush(.{ .boolean = Value.equals(vms.unboxNamed(a), vms.unboxNamed(k)) });
+                const p = try readLocalSlotAndConst();
+                const a = try readLocalSlot(p.slot);
+                try checkNamedValueCompatibility(a, p.k);
+                try vmPush(.{ .boolean = Value.equals(vms.unboxNamed(a), vms.unboxNamed(p.k)) });
             },
             .get_local_const_sub => {
-                const slot = try vmByte();
-                vmState().ip += 1; // skip the embedded const_sub opcode byte
-                const k = try chunk.constAt(try vmShort());
-                const a = try readLocalSlot(slot);
-                try pushSubResult(a, k);
+                const p = try readLocalSlotAndConst();
+                try pushSubResult(try readLocalSlot(p.slot), p.k);
             },
             .get_local_const_sub_call => {
-                const slot = try vmByte();
-                vmState().ip += 1; // skip the embedded const_sub opcode byte
-                const k = try chunk.constAt(try vmShort());
+                const p = try readLocalSlotAndConst();
                 const argc = try vmByte();
-                const a = try readLocalSlot(slot);
-                try pushSubResult(a, k);
+                try pushSubResult(try readLocalSlot(p.slot), p.k);
                 if (try tryTailCall(argc)) continue;
                 try performCall(argc);
             },
             .get_local_const_add => {
-                const slot = try vmByte();
-                vmState().ip += 1; // skip the embedded const_add opcode byte
-                const k = try chunk.constAt(try vmShort());
-                const a = try readLocalSlot(slot);
-                try vmPush(try computeAddResult(a, k));
+                const p = try readLocalSlotAndConst();
+                try vmPush(try computeAddResult(try readLocalSlot(p.slot), p.k));
             },
             .get_local_const_lt => {
-                const slot = try vmByte();
-                vmState().ip += 1; // skip the embedded const_lt opcode byte
-                const k = try chunk.constAt(try vmShort());
-                const a = try readLocalSlot(slot);
-                const n = try compareNumericPair(a, k, "<");
+                const p = try readLocalSlotAndConst();
+                const n = try compareNumericPair(try readLocalSlot(p.slot), p.k, "<");
                 try vmPush(.{ .boolean = n.an < n.bn });
             },
 
             // Quad-fused: get_local + constant + eq + jif_pop.
             // Bytecode: [op][slot][skip][idx_hi][idx_lo][jmp_b3][jmp_b2][jmp_b1][jmp_b0]
-            // Reads offset first (advancing IP past the full instruction), then branches.
             .get_local_const_eq_jif_pop => {
-                const slot = try vmByte();
-                vmState().ip += 1; // skip
-                const k = try chunk.constAt(try vmShort());
+                const p = try readLocalSlotAndConst();
                 const off = try vms.vmInt();
-                const a = try readLocalSlot(slot);
-                try checkNamedValueCompatibility(a, k);
-                if (!Value.equals(vms.unboxNamed(a), vms.unboxNamed(k))) vmState().ip += off;
+                const a = try readLocalSlot(p.slot);
+                try checkNamedValueCompatibility(a, p.k);
+                if (!Value.equals(vms.unboxNamed(a), vms.unboxNamed(p.k))) vmState().ip += off;
             },
 
             // Quad-fused: get_local + const_lt + jif_pop.
             // Bytecode: [op][slot][skip][idx_hi][idx_lo][jmp_b3][jmp_b2][jmp_b1][jmp_b0]
             .get_local_const_lt_jif_pop => {
-                const slot = try vmByte();
-                vmState().ip += 1; // skip embedded const_lt opcode byte
-                const k = try chunk.constAt(try vmShort());
+                const p = try readLocalSlotAndConst();
                 const off = try vms.vmInt();
-                const a = try readLocalSlot(slot);
-                const n = try compareNumericPair(a, k, "<");
+                const n = try compareNumericPair(try readLocalSlot(p.slot), p.k, "<");
                 if (!(n.an < n.bn)) vmState().ip += off;
             },
 
@@ -2103,67 +2095,37 @@ fn runInner() !void {
             // Triple-fused: get_global + constant + eq.
             // Bytecode: [op][name_hi][name_lo][ic_hi][ic_lo][skip][val_hi][val_lo]
             .get_global_const_eq => {
-                const name_idx = try vmShort();
-                const ic_base = vmState().ip;
-                const ic_slot: u16 = @intCast(try vmShort());
-                vmState().ip += 1; // skip the embedded const_eq opcode byte
-                const k = try chunk.constAt(try vmShort());
-                const g = try readGlobalIC(name_idx, ic_base, ic_slot);
-                try checkNamedValueCompatibility(g, k);
-                try vmPush(.{ .boolean = Value.equals(vms.unboxNamed(g), vms.unboxNamed(k)) });
+                const p = try readGlobalConstPair();
+                try checkNamedValueCompatibility(p.g, p.k);
+                try vmPush(.{ .boolean = Value.equals(vms.unboxNamed(p.g), vms.unboxNamed(p.k)) });
             },
             .get_global_const_sub => {
-                const name_idx = try vmShort();
-                const ic_base = vmState().ip;
-                const ic_slot: u16 = @intCast(try vmShort());
-                vmState().ip += 1; // skip the embedded const_sub opcode byte
-                const k = try chunk.constAt(try vmShort());
-                const g = try readGlobalIC(name_idx, ic_base, ic_slot);
-                try pushSubResult(g, k);
+                const p = try readGlobalConstPair();
+                try pushSubResult(p.g, p.k);
             },
             .get_global_const_add => {
-                const name_idx = try vmShort();
-                const ic_base = vmState().ip;
-                const ic_slot: u16 = @intCast(try vmShort());
-                vmState().ip += 1; // skip the embedded const_add opcode byte
-                const k = try chunk.constAt(try vmShort());
-                const g = try readGlobalIC(name_idx, ic_base, ic_slot);
-                try vmPush(try computeAddResult(g, k));
+                const p = try readGlobalConstPair();
+                try vmPush(try computeAddResult(p.g, p.k));
             },
             .get_global_const_lt => {
-                const name_idx = try vmShort();
-                const ic_base = vmState().ip;
-                const ic_slot: u16 = @intCast(try vmShort());
-                vmState().ip += 1; // skip the embedded const_lt opcode byte
-                const k = try chunk.constAt(try vmShort());
-                const g = try readGlobalIC(name_idx, ic_base, ic_slot);
-                const n = try compareNumericPair(g, k, "<");
+                const p = try readGlobalConstPair();
+                const n = try compareNumericPair(p.g, p.k, "<");
                 try vmPush(.{ .boolean = n.an < n.bn });
             },
             // Quad-fused: get_global + constant + eq + jif_pop.
             // Bytecode: [op][name_hi][name_lo][ic_hi][ic_lo][skip][val_hi][val_lo][jmp_b3][jmp_b2][jmp_b1][jmp_b0]
             .get_global_const_eq_jif_pop => {
-                const name_idx = try vmShort();
-                const ic_base = vmState().ip;
-                const ic_slot: u16 = @intCast(try vmShort());
-                vmState().ip += 1; // skip the embedded const_eq opcode byte
-                const k = try chunk.constAt(try vmShort());
+                const p = try readGlobalConstPair();
                 const off = try vms.vmInt();
-                const g = try readGlobalIC(name_idx, ic_base, ic_slot);
-                try checkNamedValueCompatibility(g, k);
-                if (!Value.equals(vms.unboxNamed(g), vms.unboxNamed(k))) vmState().ip += off;
+                try checkNamedValueCompatibility(p.g, p.k);
+                if (!Value.equals(vms.unboxNamed(p.g), vms.unboxNamed(p.k))) vmState().ip += off;
             },
             // Quad-fused: get_global + const_lt + jif_pop.
             // Bytecode: [op][name_hi][name_lo][ic_hi][ic_lo][skip][val_hi][val_lo][jmp_b3][jmp_b2][jmp_b1][jmp_b0]
             .get_global_const_lt_jif_pop => {
-                const name_idx = try vmShort();
-                const ic_base = vmState().ip;
-                const ic_slot: u16 = @intCast(try vmShort());
-                vmState().ip += 1; // skip the embedded const_lt opcode byte
-                const k = try chunk.constAt(try vmShort());
+                const p = try readGlobalConstPair();
                 const off = try vms.vmInt();
-                const g = try readGlobalIC(name_idx, ic_base, ic_slot);
-                const n = try compareNumericPair(g, k, "<");
+                const n = try compareNumericPair(p.g, p.k, "<");
                 if (!(n.an < n.bn)) vmState().ip += off;
             },
             .const_add => {
