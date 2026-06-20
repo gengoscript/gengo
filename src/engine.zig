@@ -354,6 +354,17 @@ fn makeWire(tag: u8, payload: u64, len: u32) ValueWire {
     };
 }
 
+fn fillArrayWires(items: []const Value, wires: []ValueWire) anyerror!void {
+    for (items, 0..) |item, i| wires[i] = try valueToWire(item);
+}
+
+fn fillMapWires(entries: []const MapEntry, wires: []ValueWire) anyerror!void {
+    for (entries, 0..) |entry, i| {
+        wires[i * 2] = try valueToWire(entry.key);
+        wires[i * 2 + 1] = try valueToWire(entry.value);
+    }
+}
+
 fn valueToWire(val: Value) !ValueWire {
     return switch (val) {
         .null => makeWire(@intFromEnum(WireTag.null), 0, 0),
@@ -384,27 +395,19 @@ fn valueToWire(val: Value) !ValueWire {
             .array, .array_managed, .array_capacity => {
                 const items = try vms.asArraySlice(obj);
                 const wires = (heap.bump(ValueWire, items.len) orelse return makeWire(@intFromEnum(WireTag.null), 0, 0))[0..items.len];
-                for (items, 0..) |item, i| {
-                    wires[i] = try valueToWire(item);
-                }
+                try fillArrayWires(items, wires);
                 return makeWire(@intFromEnum(WireTag.array), @intFromPtr(wires.ptr), @intCast(items.len));
             },
             .map, .map_managed, .map_hashed => {
                 const entries = try vms.asMapSlice(obj);
                 const wires = (heap.bump(ValueWire, entries.len * 2) orelse return makeWire(@intFromEnum(WireTag.null), 0, 0))[0 .. entries.len * 2];
-                for (entries, 0..) |entry, i| {
-                    wires[i * 2] = try valueToWire(entry.key);
-                    wires[i * 2 + 1] = try valueToWire(entry.value);
-                }
+                try fillMapWires(entries, wires);
                 return makeWire(@intFromEnum(WireTag.map), @intFromPtr(wires.ptr), @intCast(entries.len));
             },
             .struct_instance => {
                 const entries = obj.struct_instance.fields;
                 const wires = (heap.bump(ValueWire, entries.len * 2) orelse return makeWire(@intFromEnum(WireTag.null), 0, 0))[0 .. entries.len * 2];
-                for (entries, 0..) |entry, i| {
-                    wires[i * 2] = try valueToWire(entry.key);
-                    wires[i * 2 + 1] = try valueToWire(entry.value);
-                }
+                try fillMapWires(entries, wires);
                 return makeWire(@intFromEnum(WireTag.map), @intFromPtr(wires.ptr), @intCast(entries.len));
             },
             .named_value => |nv| return valueToWire(nv.value),
@@ -460,9 +463,7 @@ fn valueToWireWithScratch(val: Value, scratch: *Engine) !ValueWire {
                 if (items.len > scratch.wire_elem_buf.len) return error.WireBufferOverflow;
                 const wires = &scratch.wire_elem_buf;
                 scratch.wire_elem_count = @intCast(items.len);
-                for (items, 0..) |item, i| {
-                    wires[i] = try valueToWire(item);
-                }
+                try fillArrayWires(items, wires);
                 return makeWire(@intFromEnum(WireTag.array), @intFromPtr(wires.ptr), @intCast(items.len));
             },
             .map, .map_managed, .map_hashed => {
@@ -471,10 +472,7 @@ fn valueToWireWithScratch(val: Value, scratch: *Engine) !ValueWire {
                 if (entries.len > max_entries) return error.WireBufferOverflow;
                 const wires = &scratch.wire_elem_buf;
                 scratch.wire_elem_count = @intCast(entries.len * 2);
-                for (entries, 0..) |entry, i| {
-                    wires[i * 2] = try valueToWire(entry.key);
-                    wires[i * 2 + 1] = try valueToWire(entry.value);
-                }
+                try fillMapWires(entries, wires);
                 return makeWire(@intFromEnum(WireTag.map), @intFromPtr(wires.ptr), @intCast(entries.len));
             },
             .struct_instance => {
@@ -483,10 +481,7 @@ fn valueToWireWithScratch(val: Value, scratch: *Engine) !ValueWire {
                 if (entries.len > max_entries) return error.WireBufferOverflow;
                 const wires = &scratch.wire_elem_buf;
                 scratch.wire_elem_count = @intCast(entries.len * 2);
-                for (entries, 0..) |entry, i| {
-                    wires[i * 2] = try valueToWire(entry.key);
-                    wires[i * 2 + 1] = try valueToWire(entry.value);
-                }
+                try fillMapWires(entries, wires);
                 return makeWire(@intFromEnum(WireTag.map), @intFromPtr(wires.ptr), @intCast(entries.len));
             },
             else => return try valueToWire(val),

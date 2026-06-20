@@ -54,6 +54,13 @@ pub fn mapBucketsForCount(entry_count: usize) usize {
     return p;
 }
 
+pub fn mapFindLinear(items: []const MapEntry, key: Value) ?usize {
+    for (items, 0..) |entry, i| {
+        if (mapKeyEquals(entry.key, key)) return i;
+    }
+    return null;
+}
+
 pub fn mapFindHashedIndex(entries: []MapEntry, buckets: []i32, key: Value) ?usize {
     if (buckets.len == 0) return null;
     const mask = buckets.len - 1;

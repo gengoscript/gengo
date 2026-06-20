@@ -52,25 +52,21 @@ pub fn nativeDelete(m_obj: *Object, key: Value) !Value {
     switch (m_obj.*) {
         .map => {
             const items = m_obj.map;
-            for (items, 0..) |item, fi| {
-                if (vmmap.mapKeyEquals(item.key, key)) {
-                    const removed = item.value;
-                    items[fi] = items[items.len - 1];
-                    m_obj.* = .{ .map = items[0 .. items.len - 1] };
-                    return removed;
-                }
+            if (vmmap.mapFindLinear(items, key)) |fi| {
+                const removed = items[fi].value;
+                items[fi] = items[items.len - 1];
+                m_obj.* = .{ .map = items[0 .. items.len - 1] };
+                return removed;
             }
             return .null;
         },
         .map_managed => {
             const items = m_obj.map_managed;
-            for (items, 0..) |item, fi| {
-                if (vmmap.mapKeyEquals(item.key, key)) {
-                    const removed = item.value;
-                    items[fi] = items[items.len - 1];
-                    m_obj.* = .{ .map_managed = items[0 .. items.len - 1] };
-                    return removed;
-                }
+            if (vmmap.mapFindLinear(items, key)) |fi| {
+                const removed = items[fi].value;
+                items[fi] = items[items.len - 1];
+                m_obj.* = .{ .map_managed = items[0 .. items.len - 1] };
+                return removed;
             }
             return .null;
         },
@@ -89,17 +85,9 @@ pub fn nativeDelete(m_obj: *Object, key: Value) !Value {
 
 pub fn nativeHas(m_obj: *Object, key: Value) !Value {
     switch (m_obj.*) {
-        .map => {
-            for (m_obj.map) |entry| {
-                if (vmmap.mapKeyEquals(entry.key, key)) return .{ .boolean = true };
-            }
-            return .{ .boolean = false };
-        },
-        .map_managed => {
-            for (m_obj.map_managed) |entry| {
-                if (vmmap.mapKeyEquals(entry.key, key)) return .{ .boolean = true };
-            }
-            return .{ .boolean = false };
+        .map, .map_managed => {
+            const items = try vms.asMapSlice(m_obj);
+            return .{ .boolean = vmmap.mapFindLinear(items, key) != null };
         },
         .map_hashed => {
             const hm = &m_obj.map_hashed;
