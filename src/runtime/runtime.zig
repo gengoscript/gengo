@@ -444,93 +444,7 @@ pub const Runtime = struct {
             .check_global_is_const = checkGlobalIsConst,
             .check_global_ctx = self,
         });
-        // Pre-populate registry with named types from previous REPL lines
-        var repl_ti: usize = 0;
-        while (repl_ti < self.repl_named_type_count) : (repl_ti += 1) {
-            const name = self.repl_type_name_buf[self.repl_named_type_name_offsets[repl_ti]..][0..self.repl_named_type_name_lens[repl_ti]];
-            const parent_name = if (self.repl_named_type_parent_lens[repl_ti] > 0)
-                self.repl_type_name_buf[self.repl_named_type_parent_offsets[repl_ti]..][0..self.repl_named_type_parent_lens[repl_ti]]
-            else null;
-            const enum_members = self.replEnumMembersAt(repl_ti);
-            compiler.registry.addNamedType(.{
-                .name = name,
-                .base = self.repl_named_type_bases[repl_ti],
-                .has_range = self.repl_named_type_has_ranges[repl_ti],
-                .is_cycle = self.repl_named_type_is_cycles[repl_ti],
-                .scale = self.repl_named_type_scales[repl_ti],
-                .min = self.repl_named_type_mins[repl_ti],
-                .max = self.repl_named_type_maxs[repl_ti],
-                .parent_name = parent_name,
-                .enum_members = enum_members,
-            }) catch {};
-        }
-        repl_ti = 0;
-        while (repl_ti < self.repl_struct_type_count) : (repl_ti += 1) {
-            const name = self.repl_type_name_buf[self.repl_struct_type_name_offsets[repl_ti]..][0..self.repl_struct_type_name_lens[repl_ti]];
-            compiler.registry.addStructType(name) catch {};
-        }
-        repl_ti = 0;
-        while (repl_ti < self.repl_interface_type_count) : (repl_ti += 1) {
-            const name = self.repl_type_name_buf[self.repl_interface_type_name_offsets[repl_ti]..][0..self.repl_interface_type_name_lens[repl_ti]];
-            compiler.registry.addInterfaceType(name) catch {};
-        }
-        repl_ti = 0;
-        while (repl_ti < self.repl_variant_type_count) : (repl_ti += 1) {
-            const name = self.repl_type_name_buf[self.repl_variant_type_name_offsets[repl_ti]..][0..self.repl_variant_type_name_lens[repl_ti]];
-            compiler.registry.addVariantType(name) catch {};
-        }
-        // #72: restore global-func table so duplicate detection works across lines
-        repl_ti = 0;
-        while (repl_ti < self.repl_global_func_count) : (repl_ti += 1) {
-            const fname = self.repl_global_func_name_buf[self.repl_global_func_name_offsets[repl_ti]..][0..self.repl_global_func_name_lens[repl_ti]];
-            compiler.registry.addGlobalFunc(fname) catch {};
-        }
-        // #73: restore typed-global table so assignment type-checks persist
-        repl_ti = 0;
-        while (repl_ti < self.repl_typed_global_count and
-               compiler.typed_global_count < MaxLocals) : (repl_ti += 1)
-        {
-            const gname = self.repl_typed_global_name_buf[self.repl_typed_global_name_offsets[repl_ti]..][0..self.repl_typed_global_name_lens[repl_ti]];
-            const tag = self.repl_typed_global_tags[repl_ti];
-            const tc: TypeCheck = switch (tag) {
-                0 => .{ .prim = .int },
-                1 => .{ .prim = .float },
-                2 => .{ .prim = .decimal },
-                3 => .{ .prim = .bool },
-                4 => .{ .prim = .string },
-                5 => .{ .prim = .rune },
-                6 => blk: {
-                    const ntname = self.repl_typed_global_name_buf[self.repl_typed_global_named_type_offsets[repl_ti]..][0..self.repl_typed_global_named_type_lens[repl_ti]];
-                    break :blk .{ .named = ntname };
-                },
-                7 => .{ .assert_arr = {} },
-                8 => .{ .assert_map = {} },
-                9 => .{ .assert_err = {} },
-                else => continue,
-            };
-            compiler.typed_global_names[compiler.typed_global_count] = gname;
-            compiler.typed_global_type_checks[compiler.typed_global_count] = tc;
-            compiler.typed_global_count += 1;
-        }
-        // #74: restore std/import namespace provenance for field validation
-        repl_ti = 0;
-        while (repl_ti < self.repl_std_global_count and
-               compiler.std_module_global_count < MaxLocals) : (repl_ti += 1)
-        {
-            const sname = self.repl_namespace_name_buf[self.repl_std_global_name_offsets[repl_ti]..][0..self.repl_std_global_name_lens[repl_ti]];
-            compiler.std_module_global_names[compiler.std_module_global_count] = sname;
-            compiler.std_module_global_count += 1;
-        }
-        repl_ti = 0;
-        while (repl_ti < self.repl_import_global_count and
-               compiler.import_module_global_count < MaxLocals) : (repl_ti += 1)
-        {
-            const qn = self.repl_namespace_name_buf[self.repl_import_global_qname_offsets[repl_ti]..][0..self.repl_import_global_qname_lens[repl_ti]];
-            const ip = self.repl_namespace_name_buf[self.repl_import_global_path_offsets[repl_ti]..][0..self.repl_import_global_path_lens[repl_ti]];
-            compiler.import_module_global_qnames[compiler.import_module_global_count] = qn;
-            compiler.import_module_global_paths[compiler.import_module_global_count] = ip;
-            compiler.import_module_global_count += 1;
-        }
+        self.restoreReplCompilerState(&compiler);
         compiler.compile(true) catch |err| {
             // Must be nonzero: api.zig classifies compile vs runtime errors by
             // last_compile_line != 0, and a REPL line may carry no token line.
@@ -561,196 +475,13 @@ pub const Runtime = struct {
             }
         }
 
-        // Persist named type info for subsequent REPL lines
-        self.repl_named_type_count = 0;
-        self.repl_struct_type_count = 0;
-        self.repl_interface_type_count = 0;
-        self.repl_variant_type_count = 0;
-        self.repl_type_name_buf_used = 0;
-        self.repl_enum_member_buf_used = 0;
-        {
-            var ti: usize = 0;
-            while (ti < compiler.registry.named_type_count) : (ti += 1) {
-                const ni = compiler.registry.named_types[ti];
-                if (self.repl_named_type_count >= MaxNamedTypes)
-                    return self.setReplOverflowError("REPL type table full: too many named type declarations");
-                const idx = self.repl_named_type_count;
-                self.repl_named_type_enum_member_counts[idx] = 0;
-                const saved_name = self.saveReplTypeName(ni.name) catch
-                    return self.setReplOverflowError("REPL type name buffer full");
-                self.repl_named_type_name_offsets[idx] = @intCast(@intFromPtr(saved_name.ptr) - @intFromPtr(&self.repl_type_name_buf));
-                self.repl_named_type_name_lens[idx] = @intCast(saved_name.len);
-                self.repl_named_type_bases[idx] = ni.base;
-                self.repl_named_type_has_ranges[idx] = ni.has_range;
-                self.repl_named_type_is_cycles[idx] = ni.is_cycle;
-                self.repl_named_type_scales[idx] = ni.scale;
-                self.repl_named_type_mins[idx] = ni.min;
-                self.repl_named_type_maxs[idx] = ni.max;
-                if (ni.parent_name) |pn| {
-                    const saved_pn = self.saveReplTypeName(pn) catch
-                        return self.setReplOverflowError("REPL type name buffer full");
-                    self.repl_named_type_parent_offsets[idx] = @intCast(@intFromPtr(saved_pn.ptr) - @intFromPtr(&self.repl_type_name_buf));
-                    self.repl_named_type_parent_lens[idx] = @intCast(saved_pn.len);
-                } else {
-                    self.repl_named_type_parent_lens[idx] = 0;
-                }
-                if (ni.enum_members) |members| self.saveReplEnumMembers(idx, members);
-                self.repl_named_type_count += 1;
-            }
-        }
-        {
-            var ti: usize = 0;
-            while (ti < compiler.registry.struct_type_count) : (ti += 1) {
-                if (self.repl_struct_type_count >= MaxStructTypes)
-                    return self.setReplOverflowError("REPL type table full: too many struct type declarations");
-                const idx = self.repl_struct_type_count;
-                const saved_name = self.saveReplTypeName(compiler.registry.struct_types[ti].name) catch
-                    return self.setReplOverflowError("REPL type name buffer full");
-                self.repl_struct_type_name_offsets[idx] = @intCast(@intFromPtr(saved_name.ptr) - @intFromPtr(&self.repl_type_name_buf));
-                self.repl_struct_type_name_lens[idx] = @intCast(saved_name.len);
-                self.repl_struct_type_count += 1;
-            }
-        }
-        {
-            var ti: usize = 0;
-            while (ti < compiler.registry.interface_type_count) : (ti += 1) {
-                if (self.repl_interface_type_count >= MaxInterfaceTypes)
-                    return self.setReplOverflowError("REPL type table full: too many interface type declarations");
-                const idx = self.repl_interface_type_count;
-                const saved_name = self.saveReplTypeName(compiler.registry.interface_types[ti].name) catch
-                    return self.setReplOverflowError("REPL type name buffer full");
-                self.repl_interface_type_name_offsets[idx] = @intCast(@intFromPtr(saved_name.ptr) - @intFromPtr(&self.repl_type_name_buf));
-                self.repl_interface_type_name_lens[idx] = @intCast(saved_name.len);
-                self.repl_interface_type_count += 1;
-            }
-        }
-        {
-            var ti: usize = 0;
-            while (ti < compiler.registry.variant_type_count) : (ti += 1) {
-                if (self.repl_variant_type_count >= MaxVariantTypes)
-                    return self.setReplOverflowError("REPL type table full: too many variant type declarations");
-                const idx = self.repl_variant_type_count;
-                const saved_name = self.saveReplTypeName(compiler.registry.variant_types[ti].name) catch
-                    return self.setReplOverflowError("REPL type name buffer full");
-                self.repl_variant_type_name_offsets[idx] = @intCast(@intFromPtr(saved_name.ptr) - @intFromPtr(&self.repl_type_name_buf));
-                self.repl_variant_type_name_lens[idx] = @intCast(saved_name.len);
-                self.repl_variant_type_count += 1;
-            }
-        }
-
-        // #72: persist global-func names for duplicate detection on subsequent lines
-        self.repl_global_func_count = 0;
-        self.repl_global_func_name_buf_used = 0;
-        {
-            var fi: usize = 0;
-            while (fi < compiler.registry.global_func_count) : (fi += 1) {
-                const fn_name = compiler.registry.global_funcs[fi].name;
-                if (self.repl_global_func_count >= MaxGlobalFuncs or
-                    self.repl_global_func_name_buf_used + fn_name.len > self.repl_global_func_name_buf.len) break;
-                const start = self.repl_global_func_name_buf_used;
-                std.mem.copyForwards(u8, self.repl_global_func_name_buf[start .. start + fn_name.len], fn_name);
-                self.repl_global_func_name_offsets[self.repl_global_func_count] = @intCast(start);
-                self.repl_global_func_name_lens[self.repl_global_func_count] = @intCast(fn_name.len);
-                self.repl_global_func_name_buf_used += fn_name.len;
-                self.repl_global_func_count += 1;
-            }
-        }
-        // #73: persist typed-global table entries
-        self.repl_typed_global_count = 0;
-        self.repl_typed_global_name_buf_used = 0;
-        {
-            var tgi: usize = 0;
-            while (tgi < compiler.typed_global_count) : (tgi += 1) {
-                const gname = compiler.typed_global_names[tgi];
-                const tc = compiler.typed_global_type_checks[tgi];
-                if (self.repl_typed_global_count >= MaxLocals) break;
-                const tag: u8 = switch (tc) {
-                    .prim => |p| switch (p) {
-                        .int => 0, .float => 1, .decimal => 2,
-                        .bool => 3, .string => 4, .rune => 5,
-                    },
-                    .named => 6,
-                    .assert_arr => 7,
-                    .assert_map => 8,
-                    .assert_err => 9,
-                    // Interface and struct type checks are not persisted across REPL
-                    // resets — the check is emitted inline at declaration time.
-                    .interface_type, .struct_type, .none => continue,
-                };
-                if (self.repl_typed_global_name_buf_used + gname.len > self.repl_typed_global_name_buf.len) break;
-                const gs = self.repl_typed_global_name_buf_used;
-                std.mem.copyForwards(u8, self.repl_typed_global_name_buf[gs .. gs + gname.len], gname);
-                self.repl_typed_global_name_offsets[self.repl_typed_global_count] = @intCast(gs);
-                self.repl_typed_global_name_lens[self.repl_typed_global_count] = @intCast(gname.len);
-                self.repl_typed_global_name_buf_used += gname.len;
-                self.repl_typed_global_named_type_offsets[self.repl_typed_global_count] = @intCast(gs);
-                self.repl_typed_global_named_type_lens[self.repl_typed_global_count] = 0;
-                if (tag == 6) {
-                    const ntname = tc.named;
-                    if (self.repl_typed_global_name_buf_used + ntname.len <= self.repl_typed_global_name_buf.len) {
-                        const ns = self.repl_typed_global_name_buf_used;
-                        std.mem.copyForwards(u8, self.repl_typed_global_name_buf[ns .. ns + ntname.len], ntname);
-                        self.repl_typed_global_named_type_offsets[self.repl_typed_global_count] = @intCast(ns);
-                        self.repl_typed_global_named_type_lens[self.repl_typed_global_count] = @intCast(ntname.len);
-                        self.repl_typed_global_name_buf_used += ntname.len;
-                    } else break;
-                }
-                self.repl_typed_global_tags[self.repl_typed_global_count] = tag;
-                self.repl_typed_global_count += 1;
-            }
-        }
-        // #74: persist std/import namespace provenance
-        self.repl_std_global_count = 0;
-        self.repl_import_global_count = 0;
-        self.repl_namespace_name_buf_used = 0;
-        {
-            var si: usize = 0;
-            while (si < compiler.std_module_global_count) : (si += 1) {
-                const sname = compiler.std_module_global_names[si];
-                if (self.repl_std_global_count >= MaxLocals or
-                    self.repl_namespace_name_buf_used + sname.len > self.repl_namespace_name_buf.len) break;
-                const ss = self.repl_namespace_name_buf_used;
-                std.mem.copyForwards(u8, self.repl_namespace_name_buf[ss .. ss + sname.len], sname);
-                self.repl_std_global_name_offsets[self.repl_std_global_count] = @intCast(ss);
-                self.repl_std_global_name_lens[self.repl_std_global_count] = @intCast(sname.len);
-                self.repl_namespace_name_buf_used += sname.len;
-                self.repl_std_global_count += 1;
-            }
-        }
-        {
-            var ii: usize = 0;
-            while (ii < compiler.import_module_global_count) : (ii += 1) {
-                const qn = compiler.import_module_global_qnames[ii];
-                const ip = compiler.import_module_global_paths[ii];
-                if (self.repl_import_global_count >= MaxLocals or
-                    self.repl_namespace_name_buf_used + qn.len + ip.len > self.repl_namespace_name_buf.len) break;
-                const qs = self.repl_namespace_name_buf_used;
-                std.mem.copyForwards(u8, self.repl_namespace_name_buf[qs .. qs + qn.len], qn);
-                self.repl_import_global_qname_offsets[self.repl_import_global_count] = @intCast(qs);
-                self.repl_import_global_qname_lens[self.repl_import_global_count] = @intCast(qn.len);
-                self.repl_namespace_name_buf_used += qn.len;
-                const ps = self.repl_namespace_name_buf_used;
-                std.mem.copyForwards(u8, self.repl_namespace_name_buf[ps .. ps + ip.len], ip);
-                self.repl_import_global_path_offsets[self.repl_import_global_count] = @intCast(ps);
-                self.repl_import_global_path_lens[self.repl_import_global_count] = @intCast(ip.len);
-                self.repl_namespace_name_buf_used += ip.len;
-                self.repl_import_global_count += 1;
-            }
-        }
+        try self.persistReplCompilerState(&compiler);
 
         try vmnative.installStdGlobal();
         try vmnative.installHostModules(self.host_modules);
         try vmnative.installCapabilityModules(repl_caps);
         vm.run() catch |err| {
-            self.last_runtime_line = vm.panicLine();
-            self.last_runtime_col = vm.panicCol();
-            const pf = vm.panicFrames();
-            self.panic_depth = pf.len;
-            var fi: usize = 0;
-            while (fi < pf.len) : (fi += 1) self.panic_frames[fi] = pf[fi];
-            const emsg = vm.runtimeErrMsg();
-            self.last_runtime_msg_len = @intCast(emsg.len);
-            @memcpy(self.last_runtime_msg_buf[0..emsg.len], emsg);
+            self.captureRuntimeError();
             return err;
         };
     }
@@ -762,17 +493,294 @@ pub const Runtime = struct {
         self.last_compile_col = 0;
         self.last_compile_msg_len = 0;
         return vm.callGlobal(name, args) catch |err| {
-            self.last_runtime_line = vm.panicLine();
-            self.last_runtime_col = vm.panicCol();
-            const pf = vm.panicFrames();
-            self.panic_depth = pf.len;
-            var fi: usize = 0;
-            while (fi < pf.len) : (fi += 1) self.panic_frames[fi] = pf[fi];
-            const emsg = vm.runtimeErrMsg();
-            self.last_runtime_msg_len = @intCast(emsg.len);
-            @memcpy(self.last_runtime_msg_buf[0..emsg.len], emsg);
+            self.captureRuntimeError();
             return err;
         };
+    }
+
+    fn restoreReplCompilerState(self: *Runtime, compiler: *Compiler) void {
+        self.restoreReplNamedTypes(compiler);
+        self.restoreReplStructTypes(compiler);
+        self.restoreReplInterfaceTypes(compiler);
+        self.restoreReplVariantTypes(compiler);
+        self.restoreReplGlobalFuncs(compiler);
+        self.restoreReplTypedGlobals(compiler);
+        self.restoreReplNamespaceProvenance(compiler);
+    }
+
+    fn restoreReplNamedTypes(self: *Runtime, compiler: *Compiler) void {
+        var ti: usize = 0;
+        while (ti < self.repl_named_type_count) : (ti += 1) {
+            const name = self.replTypeNameAt(self.repl_named_type_name_offsets[ti], self.repl_named_type_name_lens[ti]);
+            const parent_name = if (self.repl_named_type_parent_lens[ti] > 0)
+                self.replTypeNameAt(self.repl_named_type_parent_offsets[ti], self.repl_named_type_parent_lens[ti])
+            else
+                null;
+            compiler.registry.addNamedType(.{
+                .name = name,
+                .base = self.repl_named_type_bases[ti],
+                .has_range = self.repl_named_type_has_ranges[ti],
+                .is_cycle = self.repl_named_type_is_cycles[ti],
+                .scale = self.repl_named_type_scales[ti],
+                .min = self.repl_named_type_mins[ti],
+                .max = self.repl_named_type_maxs[ti],
+                .parent_name = parent_name,
+                .enum_members = self.replEnumMembersAt(ti),
+            }) catch {};
+        }
+    }
+
+    fn restoreReplStructTypes(self: *Runtime, compiler: *Compiler) void {
+        var ti: usize = 0;
+        while (ti < self.repl_struct_type_count) : (ti += 1) {
+            compiler.registry.addStructType(
+                self.replTypeNameAt(self.repl_struct_type_name_offsets[ti], self.repl_struct_type_name_lens[ti]),
+            ) catch {};
+        }
+    }
+
+    fn restoreReplInterfaceTypes(self: *Runtime, compiler: *Compiler) void {
+        var ti: usize = 0;
+        while (ti < self.repl_interface_type_count) : (ti += 1) {
+            compiler.registry.addInterfaceType(
+                self.replTypeNameAt(self.repl_interface_type_name_offsets[ti], self.repl_interface_type_name_lens[ti]),
+            ) catch {};
+        }
+    }
+
+    fn restoreReplVariantTypes(self: *Runtime, compiler: *Compiler) void {
+        var ti: usize = 0;
+        while (ti < self.repl_variant_type_count) : (ti += 1) {
+            compiler.registry.addVariantType(
+                self.replTypeNameAt(self.repl_variant_type_name_offsets[ti], self.repl_variant_type_name_lens[ti]),
+            ) catch {};
+        }
+    }
+
+    fn restoreReplGlobalFuncs(self: *Runtime, compiler: *Compiler) void {
+        var ti: usize = 0;
+        while (ti < self.repl_global_func_count) : (ti += 1) {
+            compiler.registry.addGlobalFunc(
+                self.replGlobalFuncNameAt(self.repl_global_func_name_offsets[ti], self.repl_global_func_name_lens[ti]),
+            ) catch {};
+        }
+    }
+
+    fn restoreReplTypedGlobals(self: *Runtime, compiler: *Compiler) void {
+        var ti: usize = 0;
+        while (ti < self.repl_typed_global_count and compiler.typed_global_count < MaxLocals) : (ti += 1) {
+            const tc = self.replTypedGlobalTypeCheckAt(ti) orelse continue;
+            compiler.typed_global_names[compiler.typed_global_count] =
+                self.replTypedGlobalNameAt(self.repl_typed_global_name_offsets[ti], self.repl_typed_global_name_lens[ti]);
+            compiler.typed_global_type_checks[compiler.typed_global_count] = tc;
+            compiler.typed_global_count += 1;
+        }
+    }
+
+    fn restoreReplNamespaceProvenance(self: *Runtime, compiler: *Compiler) void {
+        var ti: usize = 0;
+        while (ti < self.repl_std_global_count and compiler.std_module_global_count < MaxLocals) : (ti += 1) {
+            compiler.std_module_global_names[compiler.std_module_global_count] =
+                self.replNamespaceNameAt(self.repl_std_global_name_offsets[ti], self.repl_std_global_name_lens[ti]);
+            compiler.std_module_global_count += 1;
+        }
+        ti = 0;
+        while (ti < self.repl_import_global_count and compiler.import_module_global_count < MaxLocals) : (ti += 1) {
+            compiler.import_module_global_qnames[compiler.import_module_global_count] =
+                self.replNamespaceNameAt(self.repl_import_global_qname_offsets[ti], self.repl_import_global_qname_lens[ti]);
+            compiler.import_module_global_paths[compiler.import_module_global_count] =
+                self.replNamespaceNameAt(self.repl_import_global_path_offsets[ti], self.repl_import_global_path_lens[ti]);
+            compiler.import_module_global_count += 1;
+        }
+    }
+
+    fn persistReplCompilerState(self: *Runtime, compiler: *const Compiler) !void {
+        try self.persistReplTypes(compiler);
+        self.persistReplGlobalFuncs(compiler);
+        self.persistReplTypedGlobals(compiler);
+        self.persistReplNamespaceProvenance(compiler);
+    }
+
+    fn persistReplTypes(self: *Runtime, compiler: *const Compiler) !void {
+        self.repl_named_type_count = 0;
+        self.repl_struct_type_count = 0;
+        self.repl_interface_type_count = 0;
+        self.repl_variant_type_count = 0;
+        self.repl_type_name_buf_used = 0;
+        self.repl_enum_member_buf_used = 0;
+        try self.persistReplNamedTypes(compiler);
+        try self.persistReplStructTypes(compiler);
+        try self.persistReplInterfaceTypes(compiler);
+        try self.persistReplVariantTypes(compiler);
+    }
+
+    fn persistReplNamedTypes(self: *Runtime, compiler: *const Compiler) !void {
+        var ti: usize = 0;
+        while (ti < compiler.registry.named_type_count) : (ti += 1) {
+            const ni = compiler.registry.named_types[ti];
+            if (self.repl_named_type_count >= MaxNamedTypes)
+                return self.setReplOverflowError("REPL type table full: too many named type declarations");
+            const idx = self.repl_named_type_count;
+            self.repl_named_type_enum_member_counts[idx] = 0;
+            const saved_name = self.saveReplTypeName(ni.name) catch
+                return self.setReplOverflowError("REPL type name buffer full");
+            self.repl_named_type_name_offsets[idx] = @intCast(@intFromPtr(saved_name.ptr) - @intFromPtr(&self.repl_type_name_buf));
+            self.repl_named_type_name_lens[idx] = @intCast(saved_name.len);
+            self.repl_named_type_bases[idx] = ni.base;
+            self.repl_named_type_has_ranges[idx] = ni.has_range;
+            self.repl_named_type_is_cycles[idx] = ni.is_cycle;
+            self.repl_named_type_scales[idx] = ni.scale;
+            self.repl_named_type_mins[idx] = ni.min;
+            self.repl_named_type_maxs[idx] = ni.max;
+            if (ni.parent_name) |pn| {
+                const saved_pn = self.saveReplTypeName(pn) catch
+                    return self.setReplOverflowError("REPL type name buffer full");
+                self.repl_named_type_parent_offsets[idx] = @intCast(@intFromPtr(saved_pn.ptr) - @intFromPtr(&self.repl_type_name_buf));
+                self.repl_named_type_parent_lens[idx] = @intCast(saved_pn.len);
+            } else {
+                self.repl_named_type_parent_lens[idx] = 0;
+            }
+            if (ni.enum_members) |members| self.saveReplEnumMembers(idx, members);
+            self.repl_named_type_count += 1;
+        }
+    }
+
+    fn persistReplStructTypes(self: *Runtime, compiler: *const Compiler) !void {
+        var ti: usize = 0;
+        while (ti < compiler.registry.struct_type_count) : (ti += 1) {
+            if (self.repl_struct_type_count >= MaxStructTypes)
+                return self.setReplOverflowError("REPL type table full: too many struct type declarations");
+            const idx = self.repl_struct_type_count;
+            const saved_name = self.saveReplTypeName(compiler.registry.struct_types[ti].name) catch
+                return self.setReplOverflowError("REPL type name buffer full");
+            self.repl_struct_type_name_offsets[idx] = @intCast(@intFromPtr(saved_name.ptr) - @intFromPtr(&self.repl_type_name_buf));
+            self.repl_struct_type_name_lens[idx] = @intCast(saved_name.len);
+            self.repl_struct_type_count += 1;
+        }
+    }
+
+    fn persistReplInterfaceTypes(self: *Runtime, compiler: *const Compiler) !void {
+        var ti: usize = 0;
+        while (ti < compiler.registry.interface_type_count) : (ti += 1) {
+            if (self.repl_interface_type_count >= MaxInterfaceTypes)
+                return self.setReplOverflowError("REPL type table full: too many interface type declarations");
+            const idx = self.repl_interface_type_count;
+            const saved_name = self.saveReplTypeName(compiler.registry.interface_types[ti].name) catch
+                return self.setReplOverflowError("REPL type name buffer full");
+            self.repl_interface_type_name_offsets[idx] = @intCast(@intFromPtr(saved_name.ptr) - @intFromPtr(&self.repl_type_name_buf));
+            self.repl_interface_type_name_lens[idx] = @intCast(saved_name.len);
+            self.repl_interface_type_count += 1;
+        }
+    }
+
+    fn persistReplVariantTypes(self: *Runtime, compiler: *const Compiler) !void {
+        var ti: usize = 0;
+        while (ti < compiler.registry.variant_type_count) : (ti += 1) {
+            if (self.repl_variant_type_count >= MaxVariantTypes)
+                return self.setReplOverflowError("REPL type table full: too many variant type declarations");
+            const idx = self.repl_variant_type_count;
+            const saved_name = self.saveReplTypeName(compiler.registry.variant_types[ti].name) catch
+                return self.setReplOverflowError("REPL type name buffer full");
+            self.repl_variant_type_name_offsets[idx] = @intCast(@intFromPtr(saved_name.ptr) - @intFromPtr(&self.repl_type_name_buf));
+            self.repl_variant_type_name_lens[idx] = @intCast(saved_name.len);
+            self.repl_variant_type_count += 1;
+        }
+    }
+
+    fn persistReplGlobalFuncs(self: *Runtime, compiler: *const Compiler) void {
+        self.repl_global_func_count = 0;
+        self.repl_global_func_name_buf_used = 0;
+        var fi: usize = 0;
+        while (fi < compiler.registry.global_func_count) : (fi += 1) {
+            const fn_name = compiler.registry.global_funcs[fi].name;
+            if (self.repl_global_func_count >= MaxGlobalFuncs or
+                self.repl_global_func_name_buf_used + fn_name.len > self.repl_global_func_name_buf.len) break;
+            const start = self.repl_global_func_name_buf_used;
+            std.mem.copyForwards(u8, self.repl_global_func_name_buf[start .. start + fn_name.len], fn_name);
+            self.repl_global_func_name_offsets[self.repl_global_func_count] = @intCast(start);
+            self.repl_global_func_name_lens[self.repl_global_func_count] = @intCast(fn_name.len);
+            self.repl_global_func_name_buf_used += fn_name.len;
+            self.repl_global_func_count += 1;
+        }
+    }
+
+    fn persistReplTypedGlobals(self: *Runtime, compiler: *const Compiler) void {
+        self.repl_typed_global_count = 0;
+        self.repl_typed_global_name_buf_used = 0;
+        var tgi: usize = 0;
+        while (tgi < compiler.typed_global_count) : (tgi += 1) {
+            const gname = compiler.typed_global_names[tgi];
+            const tc = compiler.typed_global_type_checks[tgi];
+            if (self.repl_typed_global_count >= MaxLocals) break;
+            const tag = replTypedGlobalTag(tc) orelse continue;
+            if (self.repl_typed_global_name_buf_used + gname.len > self.repl_typed_global_name_buf.len) break;
+            const gs = self.repl_typed_global_name_buf_used;
+            std.mem.copyForwards(u8, self.repl_typed_global_name_buf[gs .. gs + gname.len], gname);
+            self.repl_typed_global_name_offsets[self.repl_typed_global_count] = @intCast(gs);
+            self.repl_typed_global_name_lens[self.repl_typed_global_count] = @intCast(gname.len);
+            self.repl_typed_global_name_buf_used += gname.len;
+            self.repl_typed_global_named_type_offsets[self.repl_typed_global_count] = @intCast(gs);
+            self.repl_typed_global_named_type_lens[self.repl_typed_global_count] = 0;
+            if (tag == 6) {
+                const ntname = tc.named;
+                if (self.repl_typed_global_name_buf_used + ntname.len > self.repl_typed_global_name_buf.len) break;
+                const ns = self.repl_typed_global_name_buf_used;
+                std.mem.copyForwards(u8, self.repl_typed_global_name_buf[ns .. ns + ntname.len], ntname);
+                self.repl_typed_global_named_type_offsets[self.repl_typed_global_count] = @intCast(ns);
+                self.repl_typed_global_named_type_lens[self.repl_typed_global_count] = @intCast(ntname.len);
+                self.repl_typed_global_name_buf_used += ntname.len;
+            }
+            self.repl_typed_global_tags[self.repl_typed_global_count] = tag;
+            self.repl_typed_global_count += 1;
+        }
+    }
+
+    fn persistReplNamespaceProvenance(self: *Runtime, compiler: *const Compiler) void {
+        self.repl_std_global_count = 0;
+        self.repl_import_global_count = 0;
+        self.repl_namespace_name_buf_used = 0;
+        var si: usize = 0;
+        while (si < compiler.std_module_global_count) : (si += 1) {
+            const sname = compiler.std_module_global_names[si];
+            if (self.repl_std_global_count >= MaxLocals or
+                self.repl_namespace_name_buf_used + sname.len > self.repl_namespace_name_buf.len) break;
+            const ss = self.repl_namespace_name_buf_used;
+            std.mem.copyForwards(u8, self.repl_namespace_name_buf[ss .. ss + sname.len], sname);
+            self.repl_std_global_name_offsets[self.repl_std_global_count] = @intCast(ss);
+            self.repl_std_global_name_lens[self.repl_std_global_count] = @intCast(sname.len);
+            self.repl_namespace_name_buf_used += sname.len;
+            self.repl_std_global_count += 1;
+        }
+        var ii: usize = 0;
+        while (ii < compiler.import_module_global_count) : (ii += 1) {
+            const qn = compiler.import_module_global_qnames[ii];
+            const ip = compiler.import_module_global_paths[ii];
+            if (self.repl_import_global_count >= MaxLocals or
+                self.repl_namespace_name_buf_used + qn.len + ip.len > self.repl_namespace_name_buf.len) break;
+            const qs = self.repl_namespace_name_buf_used;
+            std.mem.copyForwards(u8, self.repl_namespace_name_buf[qs .. qs + qn.len], qn);
+            self.repl_import_global_qname_offsets[self.repl_import_global_count] = @intCast(qs);
+            self.repl_import_global_qname_lens[self.repl_import_global_count] = @intCast(qn.len);
+            self.repl_namespace_name_buf_used += qn.len;
+            const ps = self.repl_namespace_name_buf_used;
+            std.mem.copyForwards(u8, self.repl_namespace_name_buf[ps .. ps + ip.len], ip);
+            self.repl_import_global_path_offsets[self.repl_import_global_count] = @intCast(ps);
+            self.repl_import_global_path_lens[self.repl_import_global_count] = @intCast(ip.len);
+            self.repl_namespace_name_buf_used += ip.len;
+            self.repl_import_global_count += 1;
+        }
+    }
+
+    fn captureRuntimeError(self: *Runtime) void {
+        self.last_runtime_line = vm.panicLine();
+        self.last_runtime_col = vm.panicCol();
+        const pf = vm.panicFrames();
+        self.panic_depth = pf.len;
+        var fi: usize = 0;
+        while (fi < pf.len) : (fi += 1) self.panic_frames[fi] = pf[fi];
+        const emsg = vm.runtimeErrMsg();
+        self.last_runtime_msg_len = @intCast(emsg.len);
+        @memcpy(self.last_runtime_msg_buf[0..emsg.len], emsg);
     }
 
     fn activate(self: *Runtime) void {
@@ -798,6 +806,59 @@ pub const Runtime = struct {
         @memcpy(self.last_compile_msg_buf[0..len], msg[0..len]);
         self.last_compile_msg_len = @intCast(len);
         return error.OutOfMemory;
+    }
+
+    fn replTypeNameAt(self: *Runtime, offset: u32, len: u16) []const u8 {
+        return self.repl_type_name_buf[offset..][0..len];
+    }
+
+    fn replGlobalFuncNameAt(self: *Runtime, offset: u32, len: u16) []const u8 {
+        return self.repl_global_func_name_buf[offset..][0..len];
+    }
+
+    fn replTypedGlobalNameAt(self: *Runtime, offset: u32, len: u16) []const u8 {
+        return self.repl_typed_global_name_buf[offset..][0..len];
+    }
+
+    fn replNamespaceNameAt(self: *Runtime, offset: u32, len: u16) []const u8 {
+        return self.repl_namespace_name_buf[offset..][0..len];
+    }
+
+    fn replTypedGlobalTypeCheckAt(self: *Runtime, idx: usize) ?TypeCheck {
+        return switch (self.repl_typed_global_tags[idx]) {
+            0 => .{ .prim = .int },
+            1 => .{ .prim = .float },
+            2 => .{ .prim = .decimal },
+            3 => .{ .prim = .bool },
+            4 => .{ .prim = .string },
+            5 => .{ .prim = .rune },
+            6 => .{ .named = self.replTypedGlobalNameAt(
+                self.repl_typed_global_named_type_offsets[idx],
+                self.repl_typed_global_named_type_lens[idx],
+            ) },
+            7 => .{ .assert_arr = {} },
+            8 => .{ .assert_map = {} },
+            9 => .{ .assert_err = {} },
+            else => null,
+        };
+    }
+
+    fn replTypedGlobalTag(tc: TypeCheck) ?u8 {
+        return switch (tc) {
+            .prim => |p| switch (p) {
+                .int => 0,
+                .float => 1,
+                .decimal => 2,
+                .bool => 3,
+                .string => 4,
+                .rune => 5,
+            },
+            .named => 6,
+            .assert_arr => 7,
+            .assert_map => 8,
+            .assert_err => 9,
+            .interface_type, .struct_type, .none => null,
+        };
     }
 
     fn saveReplTypeName(self: *Runtime, name: []const u8) ![]const u8 {
