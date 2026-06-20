@@ -28,9 +28,7 @@ pub fn nativeStrSplit(s: []const u8, sep: []const u8, managed: bool) !Value {
             i = pos + sep.len;
         }
     }
-    const arr_obj = try vmgc.vmAllocObject();
-    arr_obj.* = .{ .array = &[_]Value{} };
-    try vms.pushTempRoot(.{ .object = arr_obj });
+    const arr_obj = try vmgc.allocTempRooted(.{ .array = &[_]Value{} });
     defer vms.popTempRoot();
     if (count > 0) {
         const pieces = try vmgc.vmAllocManagedSlice(Value, count);
@@ -69,9 +67,7 @@ pub fn nativeStrJoin(arr_obj: *Object, sep: []const u8) !Value {
     if (items.len == 0) return vmgc.makeDynString("");
     var total: usize = sep.len * (items.len - 1);
     for (items) |v| total += (try vms.asStringValue(v)).len;
-    const obj = try vmgc.vmAllocObject();
-    obj.* = .{ .dyn_string = &[_]u8{} };
-    try vms.pushTempRoot(.{ .object = obj });
+    const obj = try vmgc.allocTempRooted(.{ .dyn_string = &[_]u8{} });
     defer vms.popTempRoot();
     const buf = try vmgc.vmAllocManagedBytes(total);
     var pos: usize = 0;
@@ -93,9 +89,7 @@ pub fn nativeStrTrim(s: []const u8) !Value {
 }
 
 fn nativeStrTransform(s: []const u8, comptime transform: fn (u8) u8) !Value {
-    const obj = try vmgc.vmAllocObject();
-    obj.* = .{ .dyn_string = &[_]u8{} };
-    try vms.pushTempRoot(.{ .object = obj });
+    const obj = try vmgc.allocTempRooted(.{ .dyn_string = &[_]u8{} });
     defer vms.popTempRoot();
     const buf = try vmgc.vmAllocManagedBytes(s.len);
     for (s, 0..) |b, i| buf[i] = transform(b);
@@ -134,9 +128,7 @@ pub fn nativeStrReplace(s: []const u8, old: []const u8, new: []const u8) !Value 
     }
     if (count == 0) return vmgc.makeDynString(s);
     const total = s.len + count * new.len - count * old.len;
-    const obj = try vmgc.vmAllocObject();
-    obj.* = .{ .dyn_string = &[_]u8{} };
-    try vms.pushTempRoot(.{ .object = obj });
+    const obj = try vmgc.allocTempRooted(.{ .dyn_string = &[_]u8{} });
     defer vms.popTempRoot();
     const buf = try vmgc.vmAllocManagedBytes(total);
     var src_i: usize = 0;
@@ -165,9 +157,7 @@ pub fn nativeStrRepeat(s: []const u8, count_v: Value) !Value {
     if (n == 0) return vmgc.makeDynString("");
     const count: usize = @intCast(n);
     const total = s.len * count;
-    const obj = try vmgc.vmAllocObject();
-    obj.* = .{ .dyn_string = &[_]u8{} };
-    try vms.pushTempRoot(.{ .object = obj });
+    const obj = try vmgc.allocTempRooted(.{ .dyn_string = &[_]u8{} });
     defer vms.popTempRoot();
     const buf = try vmgc.vmAllocManagedBytes(total);
     var pos: usize = 0;
@@ -181,9 +171,7 @@ pub fn nativeStrRepeat(s: []const u8, count_v: Value) !Value {
 
 pub fn nativeStrSplitOnce(s: []const u8, sep: []const u8, managed: bool) !Value {
     const pos = std.mem.indexOf(u8, s, sep) orelse {
-        const obj = try vmgc.vmAllocObject();
-        obj.* = .{ .array = &[_]Value{} };
-        try vms.pushTempRoot(.{ .object = obj });
+        const obj = try vmgc.allocTempRooted(.{ .array = &[_]Value{} });
         defer vms.popTempRoot();
         const items = try vmgc.vmAllocManagedSlice(Value, 2);
         items[0] = .null;
@@ -191,9 +179,7 @@ pub fn nativeStrSplitOnce(s: []const u8, sep: []const u8, managed: bool) !Value 
         obj.* = .{ .array_managed = items[0..2] };
         return .{ .object = obj };
     };
-    const obj = try vmgc.vmAllocObject();
-    obj.* = .{ .array = &[_]Value{} };
-    try vms.pushTempRoot(.{ .object = obj });
+    const obj = try vmgc.allocTempRooted(.{ .array = &[_]Value{} });
     defer vms.popTempRoot();
     const items = try vmgc.vmAllocManagedSlice(Value, 2);
     items[0] = .null;
@@ -217,9 +203,7 @@ pub fn nativeStrFields(s: []const u8) !Value {
         count += 1;
         while (i < s.len and s[i] != ' ' and s[i] != '\t' and s[i] != '\n' and s[i] != '\r' and s[i] != 0x0b and s[i] != 0x0c) i += 1;
     }
-    const arr_obj = try vmgc.vmAllocObject();
-    arr_obj.* = .{ .array = &[_]Value{} };
-    try vms.pushTempRoot(.{ .object = arr_obj });
+    const arr_obj = try vmgc.allocTempRooted(.{ .array = &[_]Value{} });
     defer vms.popTempRoot();
     if (count > 0) {
         const pieces = try vmgc.vmAllocManagedSlice(Value, count);
@@ -250,9 +234,7 @@ pub fn nativeStrPadLeft(s: []const u8, n_v: Value, pad: []const u8) !Value {
     if (width <= s.len or pad.len == 0) return vmgc.makeDynString(s);
     const pad_needed = width - s.len;
     const total = width;
-    const obj = try vmgc.vmAllocObject();
-    obj.* = .{ .dyn_string = &[_]u8{} };
-    try vms.pushTempRoot(.{ .object = obj });
+    const obj = try vmgc.allocTempRooted(.{ .dyn_string = &[_]u8{} });
     defer vms.popTempRoot();
     const buf = try vmgc.vmAllocManagedBytes(total);
     var pos: usize = 0;
@@ -275,9 +257,7 @@ pub fn nativeStrPadRight(s: []const u8, n_v: Value, pad: []const u8) !Value {
     const width: usize = @intCast(n);
     if (width <= s.len or pad.len == 0) return vmgc.makeDynString(s);
     const total = width;
-    const obj = try vmgc.vmAllocObject();
-    obj.* = .{ .dyn_string = &[_]u8{} };
-    try vms.pushTempRoot(.{ .object = obj });
+    const obj = try vmgc.allocTempRooted(.{ .dyn_string = &[_]u8{} });
     defer vms.popTempRoot();
     const buf = try vmgc.vmAllocManagedBytes(total);
     var pos: usize = 0;
@@ -360,9 +340,7 @@ pub fn nativeStrSplitN(s: []const u8, sep: []const u8, n_v: Value) !Value {
             pos += idx + sep.len;
         }
     }
-    const arr_obj = try vmgc.vmAllocObject();
-    arr_obj.* = .{ .array = &[_]Value{} };
-    try vms.pushTempRoot(.{ .object = arr_obj });
+    const arr_obj = try vmgc.allocTempRooted(.{ .array = &[_]Value{} });
     defer vms.popTempRoot();
     const pieces = try vmgc.vmAllocManagedSlice(Value, count);
     // Attach as it fills: makeDynString can trigger GC and earlier elements

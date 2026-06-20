@@ -676,9 +676,7 @@ fn fmtProcess(buf_opt: ?[]u8, fmt: []const u8, args_start: usize, argc: u8) !usi
 
 fn doSprintf(fmt_str: []const u8, args_start: usize, argc: u8) !Value {
     const total = try fmtProcess(null, fmt_str, args_start, argc);
-    const obj = try vmgc.vmAllocObject();
-    obj.* = .{ .dyn_string = &[_]u8{} };
-    try vms.pushTempRoot(.{ .object = obj });
+    const obj = try vmgc.allocTempRooted(.{ .dyn_string = &[_]u8{} });
     defer vms.popTempRoot();
     if (total > 0) {
         const buf = try vmgc.vmAllocManagedBytes(total);
@@ -691,9 +689,7 @@ fn doSprintf(fmt_str: []const u8, args_start: usize, argc: u8) !Value {
 fn printArgToErr(arg: Value) !void {
     const n = try sprintValue(null, arg);
     if (n == 0) return;
-    const obj = try vmgc.vmAllocObject();
-    obj.* = .{ .dyn_string = &[_]u8{} };
-    try vms.pushTempRoot(.{ .object = obj });
+    const obj = try vmgc.allocTempRooted(.{ .dyn_string = &[_]u8{} });
     defer vms.popTempRoot();
     const buf = try vmgc.vmAllocManagedBytes(n);
     _ = try sprintValue(buf, arg);
@@ -702,9 +698,7 @@ fn printArgToErr(arg: Value) !void {
 }
 
 fn bytesToValue(bytes: []const u8) !Value {
-    const obj = try vmgc.vmAllocObject();
-    obj.* = .{ .dyn_string = &[_]u8{} };
-    try vms.pushTempRoot(.{ .object = obj });
+    const obj = try vmgc.allocTempRooted(.{ .dyn_string = &[_]u8{} });
     defer vms.popTempRoot();
     const buf = try vmgc.vmAllocManagedBytes(bytes.len);
     @memcpy(buf[0..bytes.len], bytes);

@@ -100,9 +100,7 @@ pub fn nativeHas(m_obj: *Object, key: Value) !Value {
 fn nativeMapExtract(m_obj: *Object, comptime field: std.meta.FieldEnum(MapEntry)) !Value {
     if (!vms.isMapObject(m_obj)) return error.TypeError;
     const items = try vms.asMapSlice(m_obj);
-    const obj = try vmgc.vmAllocObject();
-    obj.* = .{ .array = &[_]Value{} };
-    try vms.pushTempRoot(.{ .object = obj });
+    const obj = try vmgc.allocTempRooted(.{ .array = &[_]Value{} });
     defer vms.popTempRoot();
     const out = try vmgc.vmAllocManagedSlice(Value, items.len);
     for (items, 0..) |entry, i| out[i] = @field(entry, @tagName(field));
@@ -128,9 +126,7 @@ pub fn nativeRemove(arr_obj: *Object, idx_val: Value) !Value {
     const items = try vms.asArraySlice(arr_obj);
     const idx = try vms.vmIndexFromVal(idx_val);
     if (idx >= items.len) return error.IndexOutOfBounds;
-    const obj = try vmgc.vmAllocObject();
-    obj.* = .{ .array = &[_]Value{} };
-    try vms.pushTempRoot(.{ .object = obj });
+    const obj = try vmgc.allocTempRooted(.{ .array = &[_]Value{} });
     defer vms.popTempRoot();
     if (items.len > 1) {
         const out = try vmgc.vmAllocManagedSlice(Value, items.len - 1);
@@ -183,9 +179,7 @@ pub fn nativeAppend(start: usize, argc: u8) !Value {
     const ideal_cap = @max(new_len * 2, new_len + 4);
     const max_cap_values = heap.maxManagedAlloc() / @sizeOf(Value);
     const new_cap = if (ideal_cap <= max_cap_values) ideal_cap else @max(new_len, max_cap_values);
-    const backing_obj = try vmgc.vmAllocObject();
-    backing_obj.* = .{ .array = &[_]Value{} }; // safe placeholder before slice is assigned
-    try vms.pushTempRoot(.{ .object = backing_obj });
+    const backing_obj = try vmgc.allocTempRooted(.{ .array = &[_]Value{} });
     defer vms.popTempRoot();
     const out = try vmgc.vmAllocManagedSlice(Value, new_cap);
     @memcpy(out[0..base.len], base);
@@ -212,9 +206,7 @@ pub fn nativeIsError(v: Value) Value {
 }
 
 pub fn nativeGcStats() !Value {
-    const obj = try vmgc.vmAllocObject();
-    obj.* = .{ .map = &[_]MapEntry{} };
-    try vms.pushTempRoot(.{ .object = obj });
+    const obj = try vmgc.allocTempRooted(.{ .map = &[_]MapEntry{} });
     defer vms.popTempRoot();
     const items = try vmgc.vmAllocManagedSlice(MapEntry, 3);
     obj.* = .{ .map = items[0..0] };
@@ -226,9 +218,7 @@ pub fn nativeGcStats() !Value {
 }
 
 pub fn nativeGcStatsExt() !Value {
-    const obj = try vmgc.vmAllocObject();
-    obj.* = .{ .map = &[_]MapEntry{} };
-    try vms.pushTempRoot(.{ .object = obj });
+    const obj = try vmgc.allocTempRooted(.{ .map = &[_]MapEntry{} });
     defer vms.popTempRoot();
     const items = try vmgc.vmAllocManagedSlice(MapEntry, 8);
     obj.* = .{ .map = items[0..0] };
@@ -425,9 +415,7 @@ const DeepEqVisit = struct { a: *Object, b: *Object };
 const CloneVisit = struct { src: *Object, dst: *Object };
 
 pub fn makeTuple2(a: Value, b: Value) !Value {
-    const obj = try vmgc.vmAllocObject();
-    obj.* = .{ .array = &[_]Value{} };
-    try vms.pushTempRoot(.{ .object = obj });
+    const obj = try vmgc.allocTempRooted(.{ .array = &[_]Value{} });
     defer vms.popTempRoot();
     const items = try vmgc.vmAllocManagedSlice(Value, 2);
     items[0] = a;
@@ -612,9 +600,7 @@ fn cloneObject(src: *Object, visits: []CloneVisit, visit_len: *usize) anyerror!V
     if (cloneFindExisting(src, visits, visit_len.*)) |cached| return .{ .object = cached };
     switch (src.*) {
         .array, .array_managed, .array_capacity => {
-            const out_obj = try vmgc.vmAllocObject();
-            out_obj.* = .{ .array = &[_]Value{} };
-            try vms.pushTempRoot(.{ .object = out_obj });
+            const out_obj = try vmgc.allocTempRooted(.{ .array = &[_]Value{} });
             defer vms.popTempRoot();
             try cloneRemember(src, out_obj, visits, visit_len);
             const items = try vms.asArraySlice(src);
@@ -625,9 +611,7 @@ fn cloneObject(src: *Object, visits: []CloneVisit, visit_len: *usize) anyerror!V
             return .{ .object = out_obj };
         },
         .map, .map_managed, .map_hashed => {
-            const out_obj = try vmgc.vmAllocObject();
-            out_obj.* = .{ .map = &[_]MapEntry{} };
-            try vms.pushTempRoot(.{ .object = out_obj });
+            const out_obj = try vmgc.allocTempRooted(.{ .map = &[_]MapEntry{} });
             defer vms.popTempRoot();
             try cloneRemember(src, out_obj, visits, visit_len);
             const entries = try vms.asMapSlice(src);
@@ -643,12 +627,9 @@ fn cloneObject(src: *Object, visits: []CloneVisit, visit_len: *usize) anyerror!V
         .dyn_string => |s| return vmgc.makeDynString(s),
         .string_view => |sv| return vmgc.makeDynString(sv.bytes),
         .string_builder => |sb| {
-            const out_obj = try vmgc.vmAllocObject();
+            const out_obj = try vmgc.allocTempRooted(.{ .string_builder = .{ .buf = &[_]u8{}, .len = 0 } });
             if (sb.len == 0) {
-                out_obj.* = .{ .string_builder = .{ .buf = &[_]u8{}, .len = 0 } };
             } else {
-                out_obj.* = .{ .string_builder = .{ .buf = &[_]u8{}, .len = 0 } };
-                try vms.pushTempRoot(.{ .object = out_obj });
                 const new_buf = try vmgc.vmAllocManagedBytes(sb.len);
                 @memcpy(new_buf[0..sb.len], sb.buf[0..sb.len]);
                 out_obj.* = .{ .string_builder = .{ .buf = new_buf, .len = sb.len } };
@@ -660,9 +641,7 @@ fn cloneObject(src: *Object, visits: []CloneVisit, visit_len: *usize) anyerror!V
         .named_type, .enum_type, .iterator, .variant_type, .variant_ctor,
         .named_type_fn, .cell => return .{ .object = src },
         .named_value => |nv| {
-            const out_obj = try vmgc.vmAllocObject();
-            out_obj.* = .{ .array = &[_]Value{} };
-            try vms.pushTempRoot(.{ .object = out_obj });
+            const out_obj = try vmgc.allocTempRooted(.{ .array = &[_]Value{} });
             defer vms.popTempRoot();
             try cloneRemember(src, out_obj, visits, visit_len);
             out_obj.* = .{ .named_value = .{ .typ = nv.typ, .value = try cloneValue(nv.value, visits, visit_len) } };
@@ -674,9 +653,7 @@ fn cloneObject(src: *Object, visits: []CloneVisit, visit_len: *usize) anyerror!V
             return .{ .object = out_obj };
         },
         .struct_instance => |inst| {
-            const out_obj = try vmgc.vmAllocObject();
-            out_obj.* = .{ .array = &[_]Value{} };
-            try vms.pushTempRoot(.{ .object = out_obj });
+            const out_obj = try vmgc.allocTempRooted(.{ .array = &[_]Value{} });
             defer vms.popTempRoot();
             try cloneRemember(src, out_obj, visits, visit_len);
             const fields = try vmgc.vmAllocManagedSlice(MapEntry, inst.fields.len);
@@ -716,42 +693,11 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
     switch (@as(NativeFnId, @enumFromInt(nf.id))) {
         .core_append => {
             const start = vms.vmState().stack_top - argc;
-            if (vms.vmState().policy.native_backend == .host) {
-                try host_abi_mod.ensureHostReady();
-                if ((vms.vmState().host_caps & host_abi.CAP_CORE_APPEND) != 0) {
-                    if (argc > MaxNativeArgs) return error.ArityMismatch;
-                    var args_wire: [MaxNativeArgs]host_abi.ValueWire = undefined;
-                    for (args_wire[0..argc], vms.vmState().stack[start .. start + argc]) |*w, v| w.* = try host_abi_mod.wireFromValue(v);
-                    var out_wire = host_abi_mod.nullWire();
-                    try host_abi_mod.nativeCallChecked(.core_append, args_wire[0..argc], &out_wire);
-                    const out = try host_abi_mod.valueFromWire(out_wire);
-                    try vms.vmPopArgs(argc);
-                    try vms.vmPush(out);
-                    return;
-                }
-            }
-            const out = try nativeAppend(start, argc);
-            try vms.vmPopArgs(argc);
-            try vms.vmPush(out);
+            try host_abi_mod.dispatchHostCallVariadic(host_abi.CAP_CORE_APPEND, .core_append, argc, start, nativeAppend);
         },
         .core_bytelen => {
             if (argc != nf.arity) return error.ArityMismatch;
-            if (vms.vmState().policy.native_backend == .host) {
-                try host_abi_mod.ensureHostReady();
-                if ((vms.vmState().host_caps & host_abi.CAP_CORE_BYTELEN) != 0) {
-                    var arg_wire: [1]host_abi.ValueWire = undefined;
-                    arg_wire[0] = try host_abi_mod.wireFromValue(vms.vmTop(0));
-                    var out_wire = host_abi_mod.nullWire();
-                    try host_abi_mod.nativeCallChecked(.core_bytelen, arg_wire[0..], &out_wire);
-                    const out = try host_abi_mod.valueFromWire(out_wire);
-                    try vms.vmPopArgs(argc);
-                    try vms.vmPush(out);
-                    return;
-                }
-            }
-            const out = try nativeByteLen(vms.vmTop(0));
-            try vms.vmPopArgs(argc);
-            try vms.vmPush(out);
+            try host_abi_mod.dispatchHostCall1(host_abi.CAP_CORE_BYTELEN, .core_bytelen, argc, nativeByteLen);
         },
         .core_clone => {
             if (argc != nf.arity) return error.ArityMismatch;
@@ -881,22 +827,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
         },
         .core_len => {
             if (argc != nf.arity) return error.ArityMismatch;
-            if (vms.vmState().policy.native_backend == .host) {
-                try host_abi_mod.ensureHostReady();
-                if ((vms.vmState().host_caps & host_abi.CAP_CORE_LEN) != 0) {
-                    var arg_wire: [1]host_abi.ValueWire = undefined;
-                    arg_wire[0] = try host_abi_mod.wireFromValue(vms.vmTop(0));
-                    var out_wire = host_abi_mod.nullWire();
-                    try host_abi_mod.nativeCallChecked(.core_len, arg_wire[0..], &out_wire);
-                    const out = try host_abi_mod.valueFromWire(out_wire);
-                    try vms.vmPopArgs(argc);
-                    try vms.vmPush(out);
-                    return;
-                }
-            }
-            const out = try nativeLen(vms.vmTop(0));
-            try vms.vmPopArgs(argc);
-            try vms.vmPush(out);
+            try host_abi_mod.dispatchHostCall1(host_abi.CAP_CORE_LEN, .core_len, argc, nativeLen);
         },
         .core_recover => {
             if (argc != nf.arity) return error.ArityMismatch;

@@ -67,9 +67,7 @@ pub fn nativeRandPerm(n_v: Value) !Value {
     const n = try vms.valueAsInt(n_v);
     if (n < 0) return error.RangeError;
     const usize_n = @as(usize, @intCast(n));
-    const obj = try vmgc.vmAllocObject();
-    obj.* = .{ .array = &[_]Value{} };
-    try vms.pushTempRoot(.{ .object = obj });
+    const obj = try vmgc.allocTempRooted(.{ .array = &[_]Value{} });
     defer vms.popTempRoot();
     const items = try vmgc.vmAllocManagedSlice(Value, usize_n);
     for (items, 0..) |*item, i| item.* = .{ .int = @intCast(i) };

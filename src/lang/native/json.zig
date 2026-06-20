@@ -24,9 +24,7 @@ fn jsonValueToGengo(jv: std.json.Value) !Value {
                 obj.* = .{ .array_managed = &[_]Value{} };
                 return .{ .object = obj };
             }
-            const obj = try vmgc.vmAllocObject();
-            obj.* = .{ .array_managed = &[_]Value{} }; // safe placeholder
-            try vms.pushTempRoot(.{ .object = obj });
+            const obj = try vmgc.allocTempRooted(.{ .array_managed = &[_]Value{} });
             defer vms.popTempRoot();
             const items = try vmgc.vmAllocManagedSlice(Value, n);
             obj.* = .{ .array_managed = items[0..0] }; // publish immediately so GC traces partial contents
@@ -43,9 +41,7 @@ fn jsonValueToGengo(jv: std.json.Value) !Value {
                 obj.* = .{ .map = &[_]MapEntry{} };
                 return .{ .object = obj };
             }
-            const obj = try vmgc.vmAllocObject();
-            obj.* = .{ .map = &[_]MapEntry{} };
-            try vms.pushTempRoot(.{ .object = obj });
+            const obj = try vmgc.allocTempRooted(.{ .map = &[_]MapEntry{} });
             defer vms.popTempRoot();
             const items = try vmgc.vmAllocManagedSlice(MapEntry, n);
             obj.* = .{ .map = items[0..0] }; // root items immediately; grow length as entries are filled

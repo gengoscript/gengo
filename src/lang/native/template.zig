@@ -222,9 +222,7 @@ fn tplSplitPath(s: []const u8, sep: []const u8) !Value {
         count += 1;
         i = pos + sep.len;
     }
-    const obj = try vmgc.vmAllocObject();
-    obj.* = .{ .array = &[_]Value{} };
-    try vms.pushTempRoot(.{ .object = obj });
+    const obj = try vmgc.allocTempRooted(.{ .array = &[_]Value{} });
     defer vms.popTempRoot();
     const arr = try vmgc.vmAllocManagedSlice(Value, count);
     // Always copy: the template source may be a GC-managed string, and these
@@ -341,21 +339,15 @@ fn tplBuildObj(src_val: Value, ops: []Value, args: []Value, jmp: []Value) !*Obje
     defer vms.popTempRoot();
     inst_obj.* = .{ .struct_instance = .{ .typ = typ_obj, .fields = inst_fields } };
 
-    const ops_obj = try vmgc.vmAllocObject();
-    ops_obj.* = .{ .array = &[_]Value{} };
-    try vms.pushTempRoot(.{ .object = ops_obj });
+    const ops_obj = try vmgc.allocTempRooted(.{ .array = &[_]Value{} });
     defer vms.popTempRoot();
     ops_obj.* = .{ .array_managed = ops };
 
-    const args_obj = try vmgc.vmAllocObject();
-    args_obj.* = .{ .array = &[_]Value{} };
-    try vms.pushTempRoot(.{ .object = args_obj });
+    const args_obj = try vmgc.allocTempRooted(.{ .array = &[_]Value{} });
     defer vms.popTempRoot();
     args_obj.* = .{ .array_managed = args };
 
-    const jmp_obj = try vmgc.vmAllocObject();
-    jmp_obj.* = .{ .array = &[_]Value{} };
-    try vms.pushTempRoot(.{ .object = jmp_obj });
+    const jmp_obj = try vmgc.allocTempRooted(.{ .array = &[_]Value{} });
     defer vms.popTempRoot();
     jmp_obj.* = .{ .array_managed = jmp };
 
@@ -383,25 +375,19 @@ pub fn tplParse(src_val: Value, src: []const u8) !Value {
     }
     // Root the parse-time slices immediately so that GC triggered by tplParseTag
     // / tplSplitPath cannot sweep elements already written into args[].
-    const ops_root = try vmgc.vmAllocObject();
-    ops_root.* = .{ .array = &[_]Value{} };
-    try vms.pushTempRoot(.{ .object = ops_root });
+    const ops_root = try vmgc.allocTempRooted(.{ .array = &[_]Value{} });
     defer vms.popTempRoot();
     const ops = try vmgc.vmAllocManagedSlice(Value, inst_count);
     ops_root.* = .{ .array_managed = ops };
     for (ops) |*v| v.* = .null;
 
-    const args_root = try vmgc.vmAllocObject();
-    args_root.* = .{ .array = &[_]Value{} };
-    try vms.pushTempRoot(.{ .object = args_root });
+    const args_root = try vmgc.allocTempRooted(.{ .array = &[_]Value{} });
     defer vms.popTempRoot();
     const args = try vmgc.vmAllocManagedSlice(Value, inst_count);
     args_root.* = .{ .array_managed = args };
     for (args) |*v| v.* = .null;
 
-    const jmp_root = try vmgc.vmAllocObject();
-    jmp_root.* = .{ .array = &[_]Value{} };
-    try vms.pushTempRoot(.{ .object = jmp_root });
+    const jmp_root = try vmgc.allocTempRooted(.{ .array = &[_]Value{} });
     defer vms.popTempRoot();
     const jmp = try vmgc.vmAllocManagedSlice(Value, inst_count);
     jmp_root.* = .{ .array_managed = jmp };
@@ -532,9 +518,7 @@ pub fn tplExec(tmpl: *Object, data: Value) !Value {
     const args = tplAsArraySlice(args_v.object);
     const jmps = tplAsArraySlice(jmp_v.object);
 
-    const sb_obj = try vmgc.vmAllocObject();
-    sb_obj.* = .{ .string_builder = .{ .buf = &[_]u8{}, .len = 0 } };
-    try vms.pushTempRoot(.{ .object = sb_obj });
+    const sb_obj = try vmgc.allocTempRooted(.{ .string_builder = .{ .buf = &[_]u8{}, .len = 0 } });
     defer vms.popTempRoot();
 
     var ip: usize = 0;

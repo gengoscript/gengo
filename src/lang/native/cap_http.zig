@@ -40,9 +40,7 @@ fn buildResponseStruct(status: i32, body: []const u8, hdr_map: std.StringHashMap
     const hdr_count = hdr_map.count();
     const hdr_entries = try vmgc.vmAllocManagedSlice(MapEntry, hdr_count);
     for (hdr_entries) |*e| e.* = .{ .key = .null, .value = .null };
-    const hdr_obj = try vmgc.vmAllocObject();
-    hdr_obj.* = .{ .map = &[_]MapEntry{} };
-    try vms.pushTempRoot(.{ .object = hdr_obj });
+    const hdr_obj = try vmgc.allocTempRooted(.{ .map = &[_]MapEntry{} });
     defer vms.popTempRoot();
     // Assign map_managed before the loop so GC traces completed entries each iteration
     hdr_obj.* = .{ .map_managed = hdr_entries };

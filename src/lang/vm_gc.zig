@@ -263,28 +263,15 @@ pub fn vmAllocManagedBytes(n: usize) ![]u8 {
     return error.OutOfMemory;
 }
 
-/// Allocate an object, set `safeInit` as a GC-safe initial tag, push a
-/// temp root, call `setup` (which may allocate managed memory and finalize
-/// fields), pop the temp root, and return the Value.
-///
-/// This helper ensures new native code cannot accidentally create a
-/// rooting-window bug by forgetting the temp-root or safe-tag step.
-pub fn buildObject(
-    comptime safeInit: Object,
-    comptime setup: *const fn (obj: *Object) anyerror!void,
-) anyerror!Value {
+pub fn allocTempRooted(comptime safeInit: Object) !*Object {
     const obj = try vmAllocObject();
     obj.* = safeInit;
     try vms.pushTempRoot(.{ .object = obj });
-    defer vms.popTempRoot();
-    try setup(obj);
-    return .{ .object = obj };
+    return obj;
 }
 
 pub fn makeDynString(s: []const u8) !Value {
-    const obj = try vmAllocObject();
-    obj.* = .{ .dyn_string = &[_]u8{} }; // safe tag before GC can run
-    try vms.pushTempRoot(.{ .object = obj });
+    const obj = try allocTempRooted(.{ .dyn_string = &[_]u8{} });
     defer vms.popTempRoot();
     const buf = try vmAllocManagedBytes(s.len);
     @memcpy(buf[0..s.len], s);
@@ -293,9 +280,7 @@ pub fn makeDynString(s: []const u8) !Value {
 }
 
 pub fn concatDynString(a: []const u8, b: []const u8) !Value {
-    const obj = try vmAllocObject();
-    obj.* = .{ .dyn_string = &[_]u8{} }; // safe tag before GC can run
-    try vms.pushTempRoot(.{ .object = obj });
+    const obj = try allocTempRooted(.{ .dyn_string = &[_]u8{} });
     defer vms.popTempRoot();
     const total = a.len +% b.len;
     if (total < a.len) return error.OutOfMemory;
