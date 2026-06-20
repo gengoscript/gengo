@@ -239,7 +239,7 @@ fn runAssertOnNonBoolean() !void {
 
 fn runAssertMsgOnNonBoolean() !void {
     resetAll();
-    try chunk.emitConst(.{ .string = "msg" }, 1);
+    try chunk.emitStringConst("msg", 1);
     try chunk.emitConst(.{ .float = 42.0 }, 1);
     try chunk.emitOp(.op_assert_msg, 1);
     try chunk.emitOp(.halt, 1);

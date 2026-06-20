@@ -86,7 +86,7 @@ fn jsonStringifyValueDepth(s: *std.json.Stringify, gv: Value, depth: u32, ancest
         .float => |n| try s.write(n),
         .decimal => unreachable,
         .rune => |r| try s.write(@as(i64, @intCast(r))),
-        .string => |str| try s.write(str),
+        .string => |str| try s.write(str.bytes),
         .object => |obj| switch (obj.*) {
             .dyn_string => |str| try s.write(str),
             .string_view => |sv| try s.write(sv.bytes),

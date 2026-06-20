@@ -77,7 +77,7 @@ fn validateAndEmitTypeName(c: anytype, name: Token) !void {
             return error.UnknownTypeName;
         }
     }
-    try chunk.emitConst(.{ .string = name.src }, name.line);
+    try chunk.emitStringConst(name.src, name.line);
 }
 
 // Parses a bare type name used opposite a `.type` expression — either as the
@@ -408,7 +408,7 @@ pub fn runeLitExpr(c: anytype) !void {
 }
 
 pub fn strLitExpr(c: anytype) !void {
-    try chunk.emitConst(.{ .string = c.prev.src }, c.prev.line);
+    try chunk.emitStringConst(c.prev.src, c.prev.line);
 }
 
 pub fn structInstanceLit(c: anytype, type_name: Token) !void {
@@ -421,9 +421,9 @@ pub fn structInstanceLit(c: anytype, type_name: Token) !void {
             if (c.check(.ident)) {
                 const key_tok = c.cur;
                 c.advance();
-                try chunk.emitConst(.{ .string = key_tok.src }, key_tok.line);
+                try chunk.emitStringConst(key_tok.src, key_tok.line);
             } else if (c.check(.string)) {
-                try chunk.emitConst(.{ .string = c.cur.src }, c.cur.line);
+                try chunk.emitStringConst(c.cur.src, c.cur.line);
                 c.advance();
             } else return c.err("expected identifier or string key, found {s}", .{c.tokenName(c.cur.typ)});
             try c.consume(.colon);
@@ -446,9 +446,9 @@ pub fn structInstanceLitAfterValue(c: anytype, line: u32) !void {
             if (c.check(.ident)) {
                 const key_tok = c.cur;
                 c.advance();
-                try chunk.emitConst(.{ .string = key_tok.src }, key_tok.line);
+                try chunk.emitStringConst(key_tok.src, key_tok.line);
             } else if (c.check(.string)) {
-                try chunk.emitConst(.{ .string = c.cur.src }, c.cur.line);
+                try chunk.emitStringConst(c.cur.src, c.cur.line);
                 c.advance();
             } else return c.err("expected identifier or string key, found {s}", .{c.tokenName(c.cur.typ)});
             try c.consume(.colon);

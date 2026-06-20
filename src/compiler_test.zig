@@ -227,7 +227,7 @@ test "compiler: def_global with string constant" {
     var found_name = false;
     var i: usize = 0;
     while (i < c.const_count) : (i += 1) {
-        if (c.consts[i] == .string and std.mem.eql(u8, c.consts[i].string, "f")) {
+        if (c.consts[i] == .string and std.mem.eql(u8, c.consts[i].string.bytes, "f")) {
             found_name = true;
             break;
         }
@@ -671,7 +671,7 @@ test "compiler: std direct call lowers to leaf global" {
         const inst = try chunk.decodeAt(ip);
         if (inst.op == .get_field) found_get_field = true;
         if (inst.op == .get_global and inst.const_index != null) {
-            const name = (try chunk.constAt(inst.const_index.?)).string;
+            const name = (try chunk.constAt(inst.const_index.?)).string.bytes;
             if (std.mem.eql(u8, name, "module:std.math.abs")) found_direct = true;
         }
         ip += inst.width;

@@ -45,12 +45,12 @@ fn writeConst(idx: u16) void {
         .boolean => |b| io.write(if (b) "true" else "false"),
         .string => |s| {
             io.write("\"");
-            io.write(s);
+            io.write(s.bytes);
             io.write("\"");
         },
         .error_value => |s| {
             io.write("error(\"");
-            io.write(s);
+            io.write(s.bytes);
             io.write("\")");
         },
         .object => |obj| switch (obj.*) {

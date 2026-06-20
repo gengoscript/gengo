@@ -1,6 +1,8 @@
 const std = @import("std");
 const Op = @import("op.zig").Op;
-const Value = @import("value.zig").Value;
+const val_mod = @import("value.zig");
+const Value = val_mod.Value;
+const StringSlice = val_mod.StringSlice;
 const common = @import("common.zig");
 const heap = @import("../runtime/heap.zig");
 
@@ -10,14 +12,20 @@ pub const MaxCode = 1048576;
 // Constant indices are two-byte (big-endian u16); 4096 is a practical ceiling well below
 // the u16 maximum while fitting comfortably in the GC heap.
 pub const MaxConst = 4096;
+// StringSlice pool: holds the (bytes) payloads for Value.string / Value.error_value.
+// Sized at MaxConst*4 to cover both constant-pool strings and runtime-created strings
+// (type-name lookups, string-iterator steps, slice results, etc.) within one script run.
+pub const MaxStrSlices = MaxConst * 4;
 
 pub const State = struct {
     code: [MaxCode]u8 = undefined,
     lines: [MaxCode]u16 = undefined,
     cols: [MaxCode]u16 = undefined,
     consts: [MaxConst]Value = undefined,
+    str_slices: [MaxStrSlices]StringSlice = undefined,
     code_len: usize = 0,
     const_count: usize = 0,
+    str_slice_count: usize = 0,
     pending_col: u16 = 0,
     // Peephole: track position of last `constant` instruction for const-op fusion.
     last_const_code_pos: ?usize = null,
@@ -84,6 +92,7 @@ pub fn setActive(state: *State) void {
 pub fn reset() void {
     g_state.code_len = 0;
     g_state.const_count = 0;
+    g_state.str_slice_count = 0;
     g_state.pending_col = 0;
     g_state.last_const_code_pos = null;
     g_state.last_const_idx = 0;
@@ -325,21 +334,60 @@ pub fn emitBinOpFused(op: Op, line: u32) !void {
     try emitOp(op, line);
 }
 
-// Deduplicate + store constant; return its 2-byte index.
-pub fn addConst(v: Value) !u16 {
-    // Deduplicate string constants to conserve slots.
-    var to_store = v;
-    if (v == .string) {
-        for (g_state.consts[0..g_state.const_count], 0..) |c, i| {
-            if (c == .string and common.streq(c.string, v.string)) return @intCast(i);
-        }
-        const copy = heap.bump(u8, v.string.len) orelse return error.OutOfMemory;
-        @memcpy(copy[0..v.string.len], v.string);
-        to_store = .{ .string = copy[0..v.string.len] };
+// Allocate a StringSlice in the pool for s without copying s's bytes.
+// s MUST point at immortal data for the current script's lifetime.
+pub fn internStr(s: []const u8) !*const StringSlice {
+    if (g_state.str_slice_count >= MaxStrSlices) return error.TooManyConstants;
+    const idx = g_state.str_slice_count;
+    g_state.str_slice_count += 1;
+    g_state.str_slices[idx] = .{ .bytes = s };
+    return &g_state.str_slices[idx];
+}
+
+// Like internStr but copies s to the GC heap first so the bytes outlive any
+// caller-provided source buffer.  Use for compile-time string constants.
+pub fn internStrCopy(s: []const u8) !*const StringSlice {
+    const copy = heap.bump(u8, s.len) orelse return error.OutOfMemory;
+    @memcpy(copy[0..s.len], s);
+    return internStr(copy[0..s.len]);
+}
+
+// Deduplicate + store a string constant; return its 2-byte index.
+// Copies s to the GC heap for stability.
+pub fn addStringConst(s: []const u8) !u16 {
+    for (g_state.consts[0..g_state.const_count], 0..) |c, i| {
+        if (c == .string and common.streq(c.string.bytes, s)) return @intCast(i);
     }
+    const ss = try internStrCopy(s);
     if (g_state.const_count >= MaxConst) return error.TooManyConstants;
     const idx = g_state.const_count;
-    g_state.consts[idx] = to_store;
+    g_state.consts[idx] = .{ .string = ss };
+    g_state.const_count += 1;
+    return @intCast(idx);
+}
+
+// Emit any opcode + string constant index.  Mirrors emitOpConst for strings.
+pub fn emitOpStringConst(op: Op, s: []const u8, line: u32) !void {
+    const idx = try addStringConst(s);
+    try emitConstIdx(op, idx, line);
+    if (op == .constant) {
+        g_state.last_const_code_pos = g_state.code_len - 3;
+        g_state.last_const_idx = idx;
+    } else {
+        g_state.last_const_code_pos = null;
+    }
+}
+
+// Emit .constant opcode for a string literal.
+pub fn emitStringConst(s: []const u8, line: u32) !void {
+    return emitOpStringConst(.constant, s, line);
+}
+
+// Store any non-string constant; return its 2-byte index (no dedup).
+pub fn addConst(v: Value) !u16 {
+    if (g_state.const_count >= MaxConst) return error.TooManyConstants;
+    const idx = g_state.const_count;
+    g_state.consts[idx] = v;
     g_state.const_count += 1;
     return @intCast(idx);
 }
@@ -355,7 +403,7 @@ pub fn patchByte(offset: usize, val: u8) void {
 
 // Emit get_global: op + name_idx(2) + ic_slot(2, cold=0xFFFF).
 pub fn emitGetGlobal(name: []const u8, line: u32) !void {
-    const idx = try addConst(.{ .string = name });
+    const idx = try addStringConst(name);
     try emitByte(@intFromEnum(Op.get_global), line);
     try emitByte(@intCast((idx >> 8) & 0xff), line);
     try emitByte(@intCast(idx & 0xff), line);
@@ -376,7 +424,7 @@ pub fn emitGetGlobalIdx(idx: u16, line: u32) !void {
 
 // Emit set_global: op + name_idx(2) + ic_slot(2, cold=0xFFFF).
 pub fn emitSetGlobal(name: []const u8, line: u32) !void {
-    const idx = try addConst(.{ .string = name });
+    const idx = try addStringConst(name);
     // Peephole: get_global_const_add X k immediately preceding set_global X
     // → inc_global_const X k (8 bytes, 1 dispatch). Saves 1 dispatch for n += k patterns.
     if (g_state.last_get_global_const_add_pos) |ga_pos| {
@@ -399,7 +447,7 @@ pub fn emitSetGlobal(name: []const u8, line: u32) !void {
 
 // Emit get_field: op + name_idx(2) + ic_type(2, cold=0xFFFF) + ic_fidx(1, cold=0xFF).
 pub fn emitGetField(name: []const u8, line: u32) !void {
-    const idx = try addConst(.{ .string = name });
+    const idx = try addStringConst(name);
     try emitByte(@intFromEnum(Op.get_field), line);
     try emitByte(@intCast((idx >> 8) & 0xff), line);
     try emitByte(@intCast(idx & 0xff), line);
@@ -419,7 +467,7 @@ pub fn emitGetField(name: []const u8, line: u32) !void {
 
 // Emit set_field: op + name_idx(2) + ic_type(2, cold=0xFFFF) + ic_fidx(1, cold=0xFF).
 pub fn emitSetField(name: []const u8, line: u32) !void {
-    const idx = try addConst(.{ .string = name });
+    const idx = try addStringConst(name);
     try emitByte(@intFromEnum(Op.set_field), line);
     try emitByte(@intCast((idx >> 8) & 0xff), line);
     try emitByte(@intCast(idx & 0xff), line);
@@ -431,7 +479,7 @@ pub fn emitSetField(name: []const u8, line: u32) !void {
 // Helpers for invoke_method / defer_invoke_method which interleave a const index
 // with a separate argc byte: op + idx_hi + idx_lo + argc + ic_type(2) + ic_func(2).
 pub fn emitInvokeMethod(name: []const u8, argc: u8, line: u32) !void {
-    const idx = try addConst(.{ .string = name });
+    const idx = try addStringConst(name);
     try emitByte(@intFromEnum(Op.invoke_method), line);
     try emitByte(@intCast((idx >> 8) & 0xff), line);
     try emitByte(@intCast(idx & 0xff), line);
@@ -443,7 +491,7 @@ pub fn emitInvokeMethod(name: []const u8, argc: u8, line: u32) !void {
 }
 
 pub fn emitDeferInvokeMethod(name: []const u8, argc: u8, line: u32) !void {
-    const idx = try addConst(.{ .string = name });
+    const idx = try addStringConst(name);
     try emitByte(@intFromEnum(Op.defer_invoke_method), line);
     try emitByte(@intCast((idx >> 8) & 0xff), line);
     try emitByte(@intCast(idx & 0xff), line);

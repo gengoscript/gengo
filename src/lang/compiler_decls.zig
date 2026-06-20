@@ -43,7 +43,7 @@ pub fn emitZeroValue(c: anytype, tc: TypeCheck, line: u32) !void {
             .float => try chunk.emitConst(.{ .float = 0.0 }, line),
             .decimal => try chunk.emitConst(.{ .decimal = 0 }, line),
             .bool => try chunk.emitOp(.false_val, line),
-            .string => try chunk.emitConst(.{ .string = "" }, line),
+            .string => try chunk.emitStringConst("", line),
             .rune => try chunk.emitConst(.{ .rune = 0 }, line),
         },
         .assert_arr => try chunk.emit2(@intFromEnum(Op.build_array), 0, line),
@@ -87,7 +87,7 @@ pub fn emitNamedDefault(c: anytype, name: []const u8, line: u32) !void {
             .int => try chunk.emitConst(.{ .int = 0 }, line),
             .float => try chunk.emitConst(.{ .float = 0 }, line),
             .decimal => try chunk.emitConst(.{ .decimal = 0 }, line),
-            .string => try chunk.emitConst(.{ .string = "" }, line),
+            .string => try chunk.emitStringConst("", line),
             .rune => try chunk.emitConst(.{ .rune = 0 }, line),
             .bool => try chunk.emitOp(.false_val, line),
             .array_t => try chunk.emit2(@intFromEnum(Op.build_array), 0, line),
@@ -220,7 +220,7 @@ pub fn interfaceDeclBody(c: anytype, kw: Token, name: Token, is_pub: bool) !void
     if (c.inFunc()) {
         _ = try c.defineLocal(name.src, false);
     } else {
-        try chunk.emitOpConst(.def_global, .{ .string = qname }, kw.line);
+        try chunk.emitOpStringConst(.def_global, qname, kw.line);
         if (is_pub) try c.addExport(name.src, qname);
     }
     c.matchOpt(.semicolon);
@@ -295,7 +295,7 @@ pub fn methodDecl(c: anytype) !void {
                 return error.TooManyGlobalFuncs;
             };
         }
-        try chunk.emitOpConst(.def_global, .{ .string = key }, kw.line);
+        try chunk.emitOpStringConst(.def_global, key, kw.line);
     }
     c.matchOpt(.semicolon);
 }
@@ -327,7 +327,7 @@ pub fn namedFuncDecl(c: anytype, is_pub: bool) !void {
                 return error.TooManyGlobalFuncs;
             };
         }
-        try chunk.emitOpConst(.def_global, .{ .string = qname }, kw.line);
+        try chunk.emitOpStringConst(.def_global, qname, kw.line);
         if (is_pub) try c.addExport(name.src, qname);
     }
     c.matchOpt(.semicolon);
@@ -396,7 +396,7 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
         if (c.inFunc()) {
             _ = try c.defineLocal(name, false);
         } else {
-            try chunk.emitOpConst(.def_global, .{ .string = qname }, kw.line);
+            try chunk.emitOpStringConst(.def_global, qname, kw.line);
             if (is_pub) try c.addExport(name, qname);
         }
         c.matchOpt(.semicolon);
@@ -423,7 +423,7 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
         if (c.inFunc()) {
             _ = try c.defineLocal(name, false);
         } else {
-            try chunk.emitOpConst(.def_global, .{ .string = qname }, kw.line);
+            try chunk.emitOpStringConst(.def_global, qname, kw.line);
             if (is_pub) try c.addExport(name, qname);
         }
         c.matchOpt(.semicolon);
@@ -477,7 +477,7 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
         if (c.inFunc()) {
             _ = try c.defineLocal(name, false);
         } else {
-            try chunk.emitOpConst(.def_global, .{ .string = qname }, kw.line);
+            try chunk.emitOpStringConst(.def_global, qname, kw.line);
             if (is_pub) try c.addExport(name, qname);
         }
         c.matchOpt(.semicolon);
@@ -579,7 +579,7 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
             },
             .string => {
                 if (c.cur.typ != .string) return c.err("expected string literal after 'default'", .{});
-                default_val = .{ .string = try c.copyName(c.cur.src) };
+                default_val = .{ .string = try chunk.internStr(try c.copyName(c.cur.src)) };
                 c.advance();
             },
             .bool => {
@@ -655,7 +655,7 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
     if (c.inFunc()) {
         _ = try c.defineLocal(name, false);
     } else {
-        try chunk.emitOpConst(.def_global, .{ .string = qname }, kw.line);
+        try chunk.emitOpStringConst(.def_global, qname, kw.line);
         if (is_pub) try c.addExport(name, qname);
     }
     c.matchOpt(.semicolon);
@@ -915,7 +915,7 @@ pub fn structDeclBody(c: anytype, kw: Token, name: Token, is_pub: bool) !void {
     if (c.inFunc()) {
         _ = try c.defineLocal(name.src, false);
     } else {
-        try chunk.emitOpConst(.def_global, .{ .string = qname }, kw.line);
+        try chunk.emitOpStringConst(.def_global, qname, kw.line);
         if (is_pub) try c.addExport(name.src, qname);
     }
     c.matchOpt(.semicolon);
@@ -993,7 +993,7 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
         if (c.inFunc()) {
             _ = try c.defineLocal(name, false);
         } else {
-            try chunk.emitOpConst(.def_global, .{ .string = qname }, kw.line);
+            try chunk.emitOpStringConst(.def_global, qname, kw.line);
             if (is_pub) try c.addExport(name, qname);
         }
         c.matchOpt(.semicolon);
@@ -1067,7 +1067,7 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
             },
             .string => {
                 if (c.cur.typ != .string) return c.err("expected string literal after 'default'", .{});
-                default_val = .{ .string = try c.copyName(c.cur.src) };
+                default_val = .{ .string = try chunk.internStr(try c.copyName(c.cur.src)) };
                 c.advance();
             },
             .bool => {
@@ -1141,7 +1141,7 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
     if (c.inFunc()) {
         _ = try c.defineLocal(name, false);
     } else {
-        try chunk.emitOpConst(.def_global, .{ .string = qname }, kw.line);
+        try chunk.emitOpStringConst(.def_global, qname, kw.line);
         if (is_pub) try c.addExport(name, qname);
     }
     c.matchOpt(.semicolon);
@@ -1285,7 +1285,7 @@ pub fn variantDeclBody(c: anytype, kw: Token, name_tok: Token, is_pub: bool) !vo
     if (c.inFunc()) {
         _ = try c.defineLocal(name, false);
     } else {
-        try chunk.emitOpConst(.def_global, .{ .string = qname }, kw.line);
+        try chunk.emitOpStringConst(.def_global, qname, kw.line);
         if (is_pub) try c.addExport(name, qname);
     }
     c.matchOpt(.semicolon);

@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const common = @import("../common.zig");
 const heap = @import("../../runtime/heap.zig");
+const chunk = @import("../chunk.zig");
 const host_abi = @import("../../runtime/host_abi.zig");
 const io = @import("../../runtime/io.zig");
 const globals = @import("../globals.zig");
@@ -85,7 +86,7 @@ fn makeNamespace(display_name: []const u8, qualified_name: []const u8, entries: 
     defer vms.popTempRoot();
     inst_obj.* = .{ .struct_instance = .{ .typ = typ_obj, .fields = inst_fields } };
 
-    for (inst_fields[0..entries.len], entries) |*f, e| f.* = .{ .key = .{ .string = e.name }, .value = e.value };
+    for (inst_fields[0..entries.len], entries) |*f, e| f.* = .{ .key = .{ .string = try chunk.internStr(e.name) }, .value = e.value };
     return inst_obj;
 }
 
@@ -376,24 +377,24 @@ pub fn installStdGlobal() !void {
         for (top_fields) |top_entry| {
             const ns_val = top_entry.value;
             if (ns_val == .object and ns_val.object.* == .struct_instance) {
-                const ns_name = top_entry.key.string;
+                const ns_name = top_entry.key.string.bytes;
                 const ns_fields = ns_val.object.struct_instance.fields;
                 for (ns_fields) |fe| {
-                    const needed = prefix.len + 1 + ns_name.len + 1 + fe.key.string.len;
+                    const needed = prefix.len + 1 + ns_name.len + 1 + fe.key.string.bytes.len;
                     const gbuf = (heap.bump(u8, needed) orelse return error.OutOfMemory)[0..needed];
                     @memcpy(gbuf[0..prefix.len], prefix);
                     gbuf[prefix.len] = '.';
                     @memcpy(gbuf[prefix.len + 1 .. prefix.len + 1 + ns_name.len], ns_name);
                     gbuf[prefix.len + 1 + ns_name.len] = '.';
-                    @memcpy(gbuf[prefix.len + 2 + ns_name.len .. needed], fe.key.string);
+                    @memcpy(gbuf[prefix.len + 2 + ns_name.len .. needed], fe.key.string.bytes);
                     if (!globals.has(gbuf)) try globals.def(gbuf, fe.value);
                 }
             } else {
-                const needed = prefix.len + 1 + top_entry.key.string.len;
+                const needed = prefix.len + 1 + top_entry.key.string.bytes.len;
                 const gbuf = (heap.bump(u8, needed) orelse return error.OutOfMemory)[0..needed];
                 @memcpy(gbuf[0..prefix.len], prefix);
                 gbuf[prefix.len] = '.';
-                @memcpy(gbuf[prefix.len + 1 .. needed], top_entry.key.string);
+                @memcpy(gbuf[prefix.len + 1 .. needed], top_entry.key.string.bytes);
                 if (!globals.has(gbuf)) try globals.def(gbuf, ns_val);
             }
         }
@@ -511,7 +512,7 @@ pub fn installHostModules(host_modules: []const module_compile.HostModuleDesc) !
                 .arity = entries[i].arity,
             } };
             fld.* = .{
-                .key = .{ .string = entries[i].name },
+                .key = .{ .string = try chunk.internStr(entries[i].name) },
                 .value = .{ .object = func_obj },
             };
         }
@@ -593,7 +594,7 @@ pub fn installCapabilityModules(cap_modules: []const module_compile.CapModuleDes
             if (std.mem.indexOfScalar(u8, entry.name, '.') != null) continue;
             const func_obj = try vmgc.vmAllocObject();
             func_obj.* = .{ .native_function = .{ .id = entry.native_id, .arity = entry.arity } };
-            inst_fields[fi] = .{ .key = .{ .string = entry.name }, .value = .{ .object = func_obj } };
+            inst_fields[fi] = .{ .key = .{ .string = try chunk.internStr(entry.name) }, .value = .{ .object = func_obj } };
             fi += 1;
         }
 
@@ -649,14 +650,14 @@ pub fn installCapabilityModules(cap_modules: []const module_compile.CapModuleDes
                     const func_obj = try vmgc.vmAllocObject();
                     func_obj.* = .{ .native_function = .{ .id = entry.native_id, .arity = entry.arity } };
                     sub_inst_fields[si] = .{
-                        .key = .{ .string = entry.name[ns.len + 1 ..] },
+                        .key = .{ .string = try chunk.internStr(entry.name[ns.len + 1 ..]) },
                         .value = .{ .object = func_obj },
                     };
                     si += 1;
                 }
             }
 
-            inst_fields[fi] = .{ .key = .{ .string = ns }, .value = .{ .object = sub_inst_obj } };
+            inst_fields[fi] = .{ .key = .{ .string = try chunk.internStr(ns) }, .value = .{ .object = sub_inst_obj } };
             fi += 1;
         }
 

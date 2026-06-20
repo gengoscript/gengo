@@ -14,6 +14,7 @@ const FieldTypeAlt = @import("../value.zig").FieldTypeAlt;
 const FieldTypeSpec = @import("../value.zig").FieldTypeSpec;
 const StructFieldSpec = @import("../value.zig").StructFieldSpec;
 const StructTypeObj = @import("../value.zig").StructTypeObj;
+const chunk = @import("../chunk.zig");
 
 const ResponseTypeQualifiedName = "@cap_type:http.Response";
 
@@ -57,10 +58,10 @@ fn buildResponseStruct(status: i32, body: []const u8, hdr_map: std.StringHashMap
         }
     }
 
-    inst_fields[0] = .{ .key = .{ .string = "status" }, .value = .{ .int = @as(i64, status) } };
-    inst_fields[1] = .{ .key = .{ .string = "body" }, .value = body_val };
-    inst_fields[2] = .{ .key = .{ .string = "headers" }, .value = .{ .object = hdr_obj } };
-    inst_fields[3] = .{ .key = .{ .string = "ok" }, .value = .{ .boolean = ok } };
+    inst_fields[0] = .{ .key = .{ .string = try chunk.internStr("status") }, .value = .{ .int = @as(i64, status) } };
+    inst_fields[1] = .{ .key = .{ .string = try chunk.internStr("body") }, .value = body_val };
+    inst_fields[2] = .{ .key = .{ .string = try chunk.internStr("headers") }, .value = .{ .object = hdr_obj } };
+    inst_fields[3] = .{ .key = .{ .string = try chunk.internStr("ok") }, .value = .{ .boolean = ok } };
 
     return .{ .object = inst_obj };
 }
@@ -88,7 +89,7 @@ fn pushErrPair(comptime fmt: []const u8, args: anytype) !void {
     try vms.pushTempRoot(.{ .object = arr_obj });
     const vals = try vmgc.vmAllocManagedSlice(Value, 2);
     vals[0] = .null;
-    vals[1] = .{ .error_value = copy[0..msg.len] };
+    vals[1] = .{ .error_value = try chunk.internStr(copy[0..msg.len]) };
     arr_obj.* = .{ .array_managed = vals };
     vms.popTempRoot();
     try vms.vmPush(.{ .object = arr_obj });
@@ -153,17 +154,17 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                     const entries = try vms.asMapSlice(opts);
                     for (entries) |entry| {
                         const key = switch (entry.key) {
-                        .string => |s| s,
+                        .string => |s| s.bytes,
                             else => continue,
                         };
                         if (std.mem.eql(u8, key, "method")) {
                             method = switch (entry.value) {
-                        .string => |s| s,
+                        .string => |s| s.bytes,
                                 else => return error.TypeError,
                             };
                         } else if (std.mem.eql(u8, key, "body")) {
                             const b = switch (entry.value) {
-                        .string => |s| s,
+                        .string => |s| s.bytes,
                                 else => return error.TypeError,
                             };
                             body = b;
@@ -184,11 +185,11 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                             const hdr_entries = try vms.asMapSlice(hdr_obj);
                             for (hdr_entries) |he| {
                                 const hk = switch (he.key) {
-                                    .string => |s| s,
+                                    .string => |s| s.bytes,
                                     else => continue,
                                 };
                                 const hv = switch (he.value) {
-                                    .string => |s| s,
+                                    .string => |s| s.bytes,
                                     else => continue,
                                 };
                                 try req_headers.put(hk, hv);

@@ -8,6 +8,7 @@ const Op = @import("op.zig").Op;
 const vmod = @import("value.zig");
 const Value = vmod.Value;
 const VTag = vmod.VTag;
+const StringSlice = vmod.StringSlice;
 const Object = vmod.Object;
 const MapEntry = vmod.MapEntry;
 const IterObj = vmod.IterObj;
@@ -64,7 +65,7 @@ const makeStringView = vmgc.makeStringView;
 const concatDynString = vmgc.concatDynString;
 
 fn panicMessageFromValue(v: Value) []const u8 {
-    if (v == .string) return v.string;
+    if (v == .string) return v.string.bytes;
     if (v == .object) {
         if (v.object.* == .dyn_string) return v.object.dyn_string;
         if (v.object.* == .string_view) return v.object.string_view.bytes;
@@ -77,7 +78,7 @@ fn panicMessageFromValue(v: Value) []const u8 {
     }
     if (v == .boolean) return if (v.boolean) "true" else "false";
     if (v == .null) return "null";
-    if (v == .error_value) return v.error_value;
+    if (v == .error_value) return v.error_value.bytes;
     return "AssertionFailed";
 }
 
@@ -500,7 +501,7 @@ fn enumTypeValuesValue(obj: *Object, et: vmod.EnumTypeObj) !Value {
 
 fn enumTypeFieldValue(obj: *Object, name: []const u8) !Value {
     const et = obj.enum_type;
-    if (common.streq(name, "name")) return .{ .string = et.name };
+    if (common.streq(name, "name")) return .{ .string = try chunk.internStr(et.name) };
     if (common.streq(name, "first")) {
         if (et.members.len == 0) return error.IndexOutOfBounds;
         return try enumTypeAllocValue(obj, et.members[0]);
@@ -515,7 +516,7 @@ fn enumTypeFieldValue(obj: *Object, name: []const u8) !Value {
 
 fn namedTypeFieldValue(obj: *Object, name: []const u8) !Value {
     const nt = obj.named_type;
-    if (common.streq(name, "name")) return .{ .string = nt.name };
+    if (common.streq(name, "name")) return .{ .string = try chunk.internStr(nt.name) };
     if (common.streq(name, "first")) {
         if (!nt.has_range) return error.TypeError;
         return try vmtyp.makeNamedValue(obj, if (nt.base == .float) .{ .float = nt.min } else .{ .int = @intFromFloat(nt.min) });
@@ -560,7 +561,7 @@ fn makeVariantArmValue(obj: *Object, vt: vmod.VariantTypeObj, arm_index: usize) 
 
 fn variantTypeFieldValue(obj: *Object, name: []const u8) !Value {
     const vt = obj.variant_type;
-    if (common.streq(name, "name")) return .{ .string = vt.name };
+    if (common.streq(name, "name")) return .{ .string = try chunk.internStr(vt.name) };
     for (vt.arms, 0..) |arm, vi| {
         if (common.streq(arm.name, name)) return try makeVariantArmValue(obj, vt, vi);
     }
@@ -672,7 +673,7 @@ fn checkNamedTypePredicate(nt_obj: *Object, inner: Value) !void {
                 .int     => |n| std.fmt.bufPrint(&vbuf, "{d}", .{n}) catch "?",
                 .float   => |n| std.fmt.bufPrint(&vbuf, "{d}", .{n}) catch "?",
                 .decimal => |d| std.fmt.bufPrint(&vbuf, "{d}", .{d}) catch "?",
-                .string  => |s| s,
+                .string  => |s| s.bytes,
                 .boolean => |b| if (b) "true" else "false",
                 .rune    => |r| blk: {
                     const n = std.unicode.utf8Encode(r, vbuf[0..4]) catch 0;
@@ -922,7 +923,7 @@ fn iterInit(v: Value) !Value {
             },
             else => return error.TypeError,
         },
-        .string => |s| obj.* = .{ .iterator = .{ .kind = .string, .index = 0, .string = s, .string_managed = false } },
+        .string => |s| obj.* = .{ .iterator = .{ .kind = .string, .index = 0, .string = s.bytes, .string_managed = false } },
         else => return error.TypeError,
     }
     return .{ .object = obj };
@@ -953,7 +954,7 @@ fn iterNext1(it: *IterObj) !void {
             if (it.string_managed) {
                 try vmPush(try makeStringView(it.string[start..end], it.source.?));
             } else {
-                try vmPush(.{ .string = it.string[start..end] });
+                try vmPush(.{ .string = try chunk.internStr(it.string[start..end]) });
             }
             it.index = end;
             it.rune_index += 1;
@@ -1001,7 +1002,7 @@ fn iterNext2(it: *IterObj) !void {
             if (it.string_managed) {
                 try vmPush(try makeStringView(it.string[start..end], it.source.?));
             } else {
-                try vmPush(.{ .string = it.string[start..end] });
+                try vmPush(.{ .string = try chunk.internStr(it.string[start..end]) });
             }
             it.index = end;
             it.rune_index += 1;
@@ -1093,7 +1094,7 @@ fn retSlowPath(retval_in: Value) !bool {
 // ── Large opcode handlers (extracted from runInner for readability) ──────────
 
 fn pushFieldFromObject(obj: *Object, name_idx: usize, ic_base: usize, ic_type_idx: usize, ic_fidx: u8) !void {
-    const name = (try chunk.constAt(name_idx)).string;
+    const name = (try chunk.constAt(name_idx)).string.bytes;
     switch (obj.*) {
         .array, .array_managed, .array_capacity => {
             const items = try vms.asArraySlice(obj);
@@ -1127,7 +1128,8 @@ fn pushFieldFromObject(obj: *Object, name_idx: usize, ic_base: usize, ic_type_id
             if (common.streq(name, "len")) {
                 try vmPush(.{ .int = @intCast(items.len) });
             } else {
-                const key_v = Value{ .string = name };
+                var name_ss = StringSlice{ .bytes = name };
+                const key_v = Value{ .string = &name_ss };
                 try vmPush(if (vmmap.mapFindLinear(items, key_v)) |fi| items[fi].value else .null);
             }
         },
@@ -1135,7 +1137,8 @@ fn pushFieldFromObject(obj: *Object, name_idx: usize, ic_base: usize, ic_type_id
             if (common.streq(name, "len")) {
                 try vmPush(.{ .int = @intCast(hm.len) });
             } else {
-                const key_v = Value{ .string = name };
+                var name_ss = StringSlice{ .bytes = name };
+                const key_v = Value{ .string = &name_ss };
                 if (vmmap.mapFindHashedIndex(hm.entries[0..hm.len], hm.buckets, key_v)) |fi| {
                     try vmPush(hm.entries[fi].value);
                 } else {
@@ -1228,9 +1231,9 @@ fn opGetIndex() !void {
         },
         .string => |s| {
             const ridx = try vms.vmIndexFromVal(idx_v);
-            const start = try vmstr.utf8ByteOffsetForRuneIndexCached(s, ridx);
-            const w = try vmstr.utf8NextRuneByteLen(s, start);
-            try vmPush(.{ .string = s[start .. start + w] });
+            const start = try vmstr.utf8ByteOffsetForRuneIndexCached(s.bytes, ridx);
+            const w = try vmstr.utf8NextRuneByteLen(s.bytes, start);
+            try vmPush(.{ .string = try chunk.internStr(s.bytes[start .. start + w]) });
         },
         else => return error.TypeError,
     }
@@ -1289,7 +1292,7 @@ fn opSetIndex() !void {
 }
 
 fn opInvokeMethod() !void {
-    const mname = (try vmConst()).string;
+    const mname = (try vmConst()).string.bytes;
     const argc = try vmByte();
     const ic_base = vmState().ip;
     const ic_type_idx = try vmShort(); // ic_type pool index (0xFFFF = cold)
@@ -1433,7 +1436,7 @@ fn opSetField() !void {
     const ic_base = vmState().ip;
     const ic_type_idx = try vmShort();
     const ic_fidx = try vmByte();
-    const name = (try chunk.constAt(name_idx)).string;
+    const name = (try chunk.constAt(name_idx)).string.bytes;
     const val = try vmPop();
     const raw_c = try vmPop();
     const is_named_c = raw_c == .object and raw_c.object.* == .named_value;
@@ -1472,8 +1475,8 @@ fn opSetField() !void {
             if (!vmtyp.matchesFieldType(val, inst.typ.struct_type.fields[fi])) return error.StructFieldTypeMismatch;
             inst.fields[fi].value = val;
         },
-        .map, .map_managed => try mapLinearInsertOrAppend(container, .{ .string = name }, val),
-        .map_hashed => try vmmap.mapInsertHashed(container.object, .{ .string = name }, val),
+        .map, .map_managed => try mapLinearInsertOrAppend(container, .{ .string = try chunk.internStr(name) }, val),
+        .map_hashed => try vmmap.mapInsertHashed(container.object, .{ .string = try chunk.internStr(name) }, val),
         else => return error.TypeError,
     }
 }
@@ -1511,7 +1514,7 @@ fn mapLinearInsertOrAppend(container: Value, key: Value, val: Value) !void {
 }
 
 fn opDeferInvokeMethod() !void {
-    const mname = (try vmConst()).string;
+    const mname = (try vmConst()).string.bytes;
     const argc = try vmByte();
     if (vmState().defer_top >= vmState().defer_stack.len) return error.DeferStackOverflow;
     if (vmState().stack_top < @as(usize, argc) + 1) return error.StackUnderflow;
@@ -1546,7 +1549,7 @@ fn writeGlobalIC(name_idx: usize, ic_base: usize, ic_slot: u16, val: Value) !voi
     if (ic_slot != 0xFFFF) {
         globals.setAt(ic_slot, val);
     } else {
-        const name = (try chunk.constAt(name_idx)).string;
+        const name = (try chunk.constAt(name_idx)).string.bytes;
         const slot = globals.findSlot(name) orelse return error.NotDefined;
         chunk.patchByte(ic_base,     @intCast((slot >> 8) & 0xFF));
         chunk.patchByte(ic_base + 1, @intCast(slot & 0xFF));
@@ -1567,7 +1570,7 @@ fn stringSliceRange(s: []const u8, has_start: bool, start_v: Value, has_end: boo
 
 fn readGlobalIC(name_idx: usize, ic_base: usize, ic_slot: u16) !Value {
     if (ic_slot != 0xFFFF) return globals.getAt(ic_slot);
-    const name = (try chunk.constAt(name_idx)).string;
+    const name = (try chunk.constAt(name_idx)).string.bytes;
     const slot = globals.findSlot(name) orelse {
         const suggestion = findSimilarName(name);
         if (suggestion) |s| {
@@ -1640,7 +1643,7 @@ fn runInner() !void {
             },
 
             .def_global => {
-                const name = (try vmConst()).string;
+                const name = (try vmConst()).string.bytes;
                 try globals.def(name, try vmPop());
             },
             .get_global => {
@@ -1666,7 +1669,7 @@ fn runInner() !void {
                     const result: Value = if (v == .int and k == .int) .{ .int = v.int + k.int } else try computeAddResult(v, k);
                     globals.setAt(ic_slot, result);
                 } else {
-                    const name = (try chunk.constAt(name_idx)).string;
+                    const name = (try chunk.constAt(name_idx)).string.bytes;
                     const slot = globals.findSlot(name) orelse return error.NotDefined;
                     chunk.patchByte(ic_base,     @intCast((slot >> 8) & 0xFF));
                     chunk.patchByte(ic_base + 1, @intCast(slot & 0xFF));
@@ -1977,21 +1980,21 @@ fn runInner() !void {
             .assert_interface => {
                 const idx = try vmShort();
                 if (idx >= chunk.constCount()) return error.BadConstantIndex;
-                const name = (chunk.constAt(idx) catch unreachable).string;
+                const name = (chunk.constAt(idx) catch unreachable).string.bytes;
                 const v = try vmPeek(0);
                 try typeAssert(v, vmtyp.matchesInterfaceType(v, name), name);
             },
             .assert_struct => {
                 const idx = try vmShort();
                 if (idx >= chunk.constCount()) return error.BadConstantIndex;
-                const name = (chunk.constAt(idx) catch unreachable).string;
+                const name = (chunk.constAt(idx) catch unreachable).string.bytes;
                 const v = try vmPeek(0);
                 const ok = v == .object and v.object.* == .struct_instance and common.streq(v.object.struct_instance.typ.struct_type.qualified_name, name);
                 try typeAssert(v, ok, name);
             },
             .type_name => {
                 const v = try vmPop();
-                try vmPush(vmnative.nativeTypeNameValue(v));
+                try vmPush(try vmnative.nativeTypeNameValue(v));
             },
             .neg => {
                 const v = try vmPeek(0);
@@ -2389,7 +2392,7 @@ fn runInner() !void {
                         if (seen[idx]) { vms.setRuntimeErr("duplicate field '{s}' in struct literal", .{key_s}); return error.DuplicateField; }
                         seen[idx] = true;
                         if (!vmtyp.matchesFieldType(val, st.fields[idx])) return error.StructFieldTypeMismatch;
-                        inst_fields[idx] = .{ .key = .{ .string = st.fields[idx].name }, .value = val };
+                        inst_fields[idx] = .{ .key = .{ .string = try chunk.internStr(st.fields[idx].name) }, .value = val };
                     }
 
                     for (st.fields, seen[0..st.fields.len]) |f, s| {
@@ -2447,8 +2450,8 @@ fn runInner() !void {
 
                 switch (container) {
                     .string => |s| {
-                        const r = try stringSliceRange(s, has_start, start_v, has_end, end_v);
-                        try vmPush(.{ .string = s[r.start_b..r.end_b] });
+                        const r = try stringSliceRange(s.bytes, has_start, start_v, has_end, end_v);
+                        try vmPush(.{ .string = try chunk.internStr(s.bytes[r.start_b..r.end_b]) });
                     },
                     .object => |obj| switch (obj.*) {
                         .dyn_string, .string_view => {
@@ -2626,7 +2629,7 @@ fn runInner() !void {
             },
 
             .variant_check => {
-                const arm = (try vms.vmConst()).string;
+                const arm = (try vms.vmConst()).string.bytes;
                 const v = try vmPop();
                 const matches = v == .object and v.object.* == .variant_value and
                     common.streq(v.object.variant_value.tag, arm);
@@ -2642,7 +2645,7 @@ fn runInner() !void {
                     const map_obj = try allocTempRooted(.{ .map = &[_]MapEntry{} });
                     defer popTempRoot();
                     const items = try vmAllocManagedSlice(MapEntry, arm.fields.len);
-                    for (arm.fields, vv.arm_fields, items) |f, fv, *it| it.* = .{ .key = .{ .string = f.name }, .value = fv };
+                    for (arm.fields, vv.arm_fields, items) |f, fv, *it| it.* = .{ .key = .{ .string = try chunk.internStr(f.name) }, .value = fv };
                     map_obj.* = .{ .map = items[0..arm.fields.len] };
                     _ = try vmPop();
                     try vmPush(.{ .object = map_obj });
@@ -2758,10 +2761,10 @@ fn runPanicUnwind(orig_err: anyerror) anyerror!void {
         if (@intFromPtr(msg.ptr) != @intFromPtr(&vmState().runtime_err_buf[0])) {
             vms.setRuntimeErr("{s}", .{msg});
         }
-        vmState().panic_value = .{ .error_value = msg };
+        vmState().panic_value = .{ .error_value = try chunk.internStr(msg) };
         vmState().pending_panic_message = null;
     } else {
-        vmState().panic_value = .{ .error_value = @errorName(orig_err) };
+        vmState().panic_value = .{ .error_value = try chunk.internStr(@errorName(orig_err)) };
     }
 
     if (vmState().panic_line == 0) {
@@ -2792,7 +2795,7 @@ fn runPanicUnwind(orig_err: anyerror) anyerror!void {
             runDeferredCall(vmState().defer_stack[vmState().defer_top]) catch |new_err| {
                 if (!vmState().recovered) {
                     current_err = new_err;
-                    vmState().panic_value = .{ .error_value = @errorName(new_err) };
+                    vmState().panic_value = .{ .error_value = try chunk.internStr(@errorName(new_err)) };
                 }
             };
             if (vmState().recovered) break;

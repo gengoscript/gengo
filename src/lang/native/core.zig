@@ -16,11 +16,13 @@ const NativeFuncObj = vmod.NativeFuncObj;
 const host_abi = @import("../../runtime/host_abi.zig");
 const host_abi_mod = @import("host_abi.zig");
 const MaxNativeArgs = @import("native_ids.zig").MaxNativeArgs;
+const chunk = @import("../chunk.zig");
+const staticSS = vmod.staticSS;
 
 pub fn nativeLen(v: Value) !Value {
     const uv = vms.unboxNamed(v);
     const n: usize = switch (uv) {
-        .string => |s| try vmstr.utf8RuneCountCached(s),
+        .string => |s| try vmstr.utf8RuneCountCached(s.bytes),
         .object => |obj| switch (obj.*) {
             .dyn_string => |s| try vmstr.utf8RuneCountCached(s),
             .string_view => |sv| try vmstr.utf8RuneCountCached(sv.bytes),
@@ -37,7 +39,7 @@ pub fn nativeLen(v: Value) !Value {
 pub fn nativeByteLen(v: Value) !Value {
     const uv = vms.unboxNamed(v);
     const n: usize = switch (uv) {
-        .string => |s| s.len,
+        .string => |s| s.bytes.len,
         .object => |obj| switch (obj.*) {
             .dyn_string => |s| s.len,
             .string_view => |sv| sv.bytes.len,
@@ -198,7 +200,7 @@ pub fn nativeAppend(start: usize, argc: u8) !Value {
 }
 
 pub fn nativeErrorMsg(msg: []const u8) Value {
-    return .{ .error_value = msg };
+    return .{ .error_value = try chunk.internStr(msg) };
 }
 
 pub fn nativeIsError(v: Value) Value {
@@ -210,9 +212,9 @@ pub fn nativeGcStats() !Value {
     defer vms.popTempRoot();
     const items = try vmgc.vmAllocManagedSlice(MapEntry, 3);
     obj.* = .{ .map = items[0..0] };
-    items[0] = .{ .key = .{ .string = "heap_used_bytes" }, .value = .{ .int = @intCast(heap.usedBytes()) } };
-    items[1] = .{ .key = .{ .string = "heap_size_bytes" }, .value = .{ .int = @intCast(heap.g_state.heap.len) } };
-    items[2] = .{ .key = .{ .string = "live_objects" }, .value = .{ .int = @intCast(heap.liveObjectCount()) } };
+    items[0] = .{ .key = .{ .string = try chunk.internStr("heap_used_bytes") }, .value = .{ .int = @intCast(heap.usedBytes()) } };
+    items[1] = .{ .key = .{ .string = try chunk.internStr("heap_size_bytes") }, .value = .{ .int = @intCast(heap.g_state.heap.len) } };
+    items[2] = .{ .key = .{ .string = try chunk.internStr("live_objects") }, .value = .{ .int = @intCast(heap.liveObjectCount()) } };
     obj.* = .{ .map = items[0..3] };
     return .{ .object = obj };
 }
@@ -222,14 +224,14 @@ pub fn nativeGcStatsExt() !Value {
     defer vms.popTempRoot();
     const items = try vmgc.vmAllocManagedSlice(MapEntry, 8);
     obj.* = .{ .map = items[0..0] };
-    items[0] = .{ .key = .{ .string = "heap_used_bytes" }, .value = .{ .int = @intCast(heap.usedBytes()) } };
-    items[1] = .{ .key = .{ .string = "heap_size_bytes" }, .value = .{ .int = @intCast(heap.g_state.heap.len) } };
-    items[2] = .{ .key = .{ .string = "live_objects" }, .value = .{ .int = @intCast(heap.liveObjectCount()) } };
-    items[3] = .{ .key = .{ .string = "gc_runs" }, .value = .{ .int = @intCast(vms.vmState().gc_runs) } };
-    items[4] = .{ .key = .{ .string = "gc_time_ns" }, .value = .{ .int = @intCast(vms.vmState().gc_time_ns) } };
-    items[5] = .{ .key = .{ .string = "alloc_object_calls" }, .value = .{ .int = @intCast(vms.vmState().alloc_object_calls) } };
-    items[6] = .{ .key = .{ .string = "alloc_managed_slice_calls" }, .value = .{ .int = @intCast(vms.vmState().alloc_managed_slice_calls) } };
-    items[7] = .{ .key = .{ .string = "alloc_managed_bytes_calls" }, .value = .{ .int = @intCast(vms.vmState().alloc_managed_bytes_calls) } };
+    items[0] = .{ .key = .{ .string = try chunk.internStr("heap_used_bytes") }, .value = .{ .int = @intCast(heap.usedBytes()) } };
+    items[1] = .{ .key = .{ .string = try chunk.internStr("heap_size_bytes") }, .value = .{ .int = @intCast(heap.g_state.heap.len) } };
+    items[2] = .{ .key = .{ .string = try chunk.internStr("live_objects") }, .value = .{ .int = @intCast(heap.liveObjectCount()) } };
+    items[3] = .{ .key = .{ .string = try chunk.internStr("gc_runs") }, .value = .{ .int = @intCast(vms.vmState().gc_runs) } };
+    items[4] = .{ .key = .{ .string = try chunk.internStr("gc_time_ns") }, .value = .{ .int = @intCast(vms.vmState().gc_time_ns) } };
+    items[5] = .{ .key = .{ .string = try chunk.internStr("alloc_object_calls") }, .value = .{ .int = @intCast(vms.vmState().alloc_object_calls) } };
+    items[6] = .{ .key = .{ .string = try chunk.internStr("alloc_managed_slice_calls") }, .value = .{ .int = @intCast(vms.vmState().alloc_managed_slice_calls) } };
+    items[7] = .{ .key = .{ .string = try chunk.internStr("alloc_managed_bytes_calls") }, .value = .{ .int = @intCast(vms.vmState().alloc_managed_bytes_calls) } };
     obj.* = .{ .map = items[0..8] };
     return .{ .object = obj };
 }
@@ -240,7 +242,7 @@ pub fn nativeConvToInt(v: Value) !Value {
         .float => |n| return .{ .int = @intFromFloat(n) },
         .rune => |r| return .{ .int = @intCast(r) },
         .boolean => |b| return .{ .int = if (b) 1 else 0 },
-        .string => |s| { const n = common.parseFloat(s) orelse return error.TypeError; return .{ .int = @intFromFloat(n) }; },
+        .string => |s| { const n = common.parseFloat(s.bytes) orelse return error.TypeError; return .{ .int = @intFromFloat(n) }; },
         .object => |o| {
             const s: []const u8 = if (o.* == .dyn_string) o.dyn_string else if (o.* == .string_view) o.string_view.bytes else return error.TypeError;
             const n = common.parseFloat(s) orelse return error.TypeError;
@@ -257,7 +259,7 @@ pub fn nativeConvToFloat(v: Value) !Value {
         .float => |n| return .{ .float = n },
         .rune => |r| return .{ .float = @floatFromInt(r) },
         .boolean => |b| return .{ .float = if (b) 1 else 0 },
-        .string => |s| { const n = common.parseFloat(s) orelse return error.TypeError; return .{ .float = n }; },
+        .string => |s| { const n = common.parseFloat(s.bytes) orelse return error.TypeError; return .{ .float = n }; },
         .object => |o| {
             const s: []const u8 = if (o.* == .dyn_string) o.dyn_string else if (o.* == .string_view) o.string_view.bytes else return error.TypeError;
             const n = common.parseFloat(s) orelse return error.TypeError;
@@ -274,8 +276,8 @@ pub fn nativeConvToBool(v: Value) !Value {
         .float => |n| n != 0.0,
         .decimal => |d| d != 0,
         .rune => |r| r != 0,
-        .string => |s| s.len != 0,
-        .error_value => |e| e.len != 0,
+        .string => |s| s.bytes.len != 0,
+        .error_value => |e| e.bytes.len != 0,
         .null => false,
         // A heap-backed string must convert like a literal one; named values
         // convert through their underlying value.
@@ -295,7 +297,7 @@ pub fn nativeConvToString(v: Value) !Value {
         return vmgc.makeDynString(s);
     }
     return switch (v) {
-        .string => |s| vmgc.makeDynString(s),
+        .string => |s| vmgc.makeDynString(s.bytes),
         .object => |o| {
             const s: []const u8 = if (o.* == .dyn_string) o.dyn_string else if (o.* == .string_view) o.string_view.bytes else return error.TypeError;
             return vmgc.makeDynString(s);
@@ -318,40 +320,40 @@ pub fn nativeConvToString(v: Value) !Value {
             return vmgc.makeDynString(buf[0..n]);
         },
         .null => vmgc.makeDynString("null"),
-        .error_value => |e| vmgc.makeDynString(e),
+        .error_value => |e| vmgc.makeDynString(e.bytes),
     };
 }
 
-pub fn nativeTypeNameValue(v: Value) Value {
+pub fn nativeTypeNameValue(v: Value) !Value {
     return switch (v) {
-        .int => .{ .string = "int" },
-        .float => .{ .string = "float" },
-        .decimal => .{ .string = "decimal" },
-        .rune => .{ .string = "rune" },
-        .boolean => .{ .string = "bool" },
-        .string => .{ .string = "string" },
-        .error_value => .{ .string = "error" },
-        .null => .{ .string = "null" },
+        .int => .{ .string = staticSS("int") },
+        .float => .{ .string = staticSS("float") },
+        .decimal => .{ .string = staticSS("decimal") },
+        .rune => .{ .string = staticSS("rune") },
+        .boolean => .{ .string = staticSS("bool") },
+        .string => .{ .string = staticSS("string") },
+        .error_value => .{ .string = staticSS("error") },
+        .null => .{ .string = staticSS("null") },
         .object => |obj| switch (obj.*) {
-            .dyn_string, .string_view => .{ .string = "string" },
-            .array, .array_managed, .array_capacity => .{ .string = "array" },
-            .map, .map_managed, .map_hashed => .{ .string = "map" },
-            .native_function => .{ .string = "native_func" },
-            .host_module_function => .{ .string = "host_func" },
-            .function, .closure, .named_type_fn => .{ .string = "func" },
-            .struct_type => |st| .{ .string = st.name },
-            .interface_type => |it| .{ .string = it.name },
-            .named_type => |nt| .{ .string = nt.name },
-            .named_value => |nv| .{ .string = rootNamedType(nv.typ).named_type.name },
-            .enum_type => |et| .{ .string = et.name },
-            .enum_value => |ev| .{ .string = ev.typ.enum_type.name },
-            .struct_instance => |inst| .{ .string = inst.typ.struct_type.name },
-            .iterator => .{ .string = "iterator" },
-            .variant_type => |vt| .{ .string = vt.name },
-            .variant_value => |vv| .{ .string = vv.typ.variant_type.name },
-            .variant_ctor => |vc| .{ .string = vc.typ.variant_type.name },
-            .string_builder => .{ .string = "string_builder" },
-            .cell => .{ .string = "cell" },
+            .dyn_string, .string_view => .{ .string = staticSS("string") },
+            .array, .array_managed, .array_capacity => .{ .string = staticSS("array") },
+            .map, .map_managed, .map_hashed => .{ .string = staticSS("map") },
+            .native_function => .{ .string = staticSS("native_func") },
+            .host_module_function => .{ .string = staticSS("host_func") },
+            .function, .closure, .named_type_fn => .{ .string = staticSS("func") },
+            .struct_type => |st| .{ .string = try chunk.internStr(st.name) },
+            .interface_type => |it| .{ .string = try chunk.internStr(it.name) },
+            .named_type => |nt| .{ .string = try chunk.internStr(nt.name) },
+            .named_value => |nv| .{ .string = try chunk.internStr(rootNamedType(nv.typ).named_type.name) },
+            .enum_type => |et| .{ .string = try chunk.internStr(et.name) },
+            .enum_value => |ev| .{ .string = try chunk.internStr(ev.typ.enum_type.name) },
+            .struct_instance => |inst| .{ .string = try chunk.internStr(inst.typ.struct_type.name) },
+            .iterator => .{ .string = staticSS("iterator") },
+            .variant_type => |vt| .{ .string = try chunk.internStr(vt.name) },
+            .variant_value => |vv| .{ .string = try chunk.internStr(vv.typ.variant_type.name) },
+            .variant_ctor => |vc| .{ .string = try chunk.internStr(vc.typ.variant_type.name) },
+            .string_builder => .{ .string = staticSS("string_builder") },
+            .cell => .{ .string = staticSS("cell") },
         },
     };
 }
@@ -517,7 +519,7 @@ fn deepEqualObject(a: *Object, b: *Object, visits: []DeepEqVisit, visit_len: *us
             try appendVisitedPair(a, b, visits, visit_len);
             if (asi.fields.len != bsi.fields.len) return false;
             for (asi.fields, bsi.fields) |af, bf| {
-                if (!common.streq(af.key.string, bf.key.string)) return false;
+                if (!common.streq(af.key.string.bytes, bf.key.string.bytes)) return false;
                 if (!try deepEqualValue(af.value, bf.value, visits, visit_len)) return false;
             }
             return true;
@@ -557,10 +559,10 @@ fn strBytesFromObj(o: *Object) ?[]const u8 {
 
 fn deepEqualValue(a: Value, b: Value, visits: []DeepEqVisit, visit_len: *usize) anyerror!bool {
     if (a == .string and b == .object) {
-        if (strBytesFromObj(b.object)) |bs| return common.streq(a.string, bs);
+        if (strBytesFromObj(b.object)) |bs| return common.streq(a.string.bytes, bs);
     }
     if (b == .string and a == .object) {
-        if (strBytesFromObj(a.object)) |as| return common.streq(as, b.string);
+        if (strBytesFromObj(a.object)) |as| return common.streq(as, b.string.bytes);
     }
     if (a == .object and b == .object) return deepEqualObject(a.object, b.object, visits, visit_len);
     if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
@@ -570,8 +572,8 @@ fn deepEqualValue(a: Value, b: Value, visits: []DeepEqVisit, visit_len: *usize) 
         .decimal => |x| x == b.decimal,
         .rune => |x| x == b.rune,
         .boolean => |x| x == b.boolean,
-        .string => |x| common.streq(x, b.string),
-        .error_value => |x| common.streq(x, b.error_value),
+        .string => |x| common.streq(x.bytes, b.string.bytes),
+        .error_value => |x| common.streq(x.bytes, b.error_value.bytes),
         .null => true,
         .object => unreachable,
     };
@@ -590,7 +592,7 @@ fn cloneRemember(src: *Object, dst: *Object, visits: []CloneVisit, visit_len: *u
 
 fn cloneValue(v: Value, visits: []CloneVisit, visit_len: *usize) anyerror!Value {
     return switch (v) {
-        .string => |s| try vmgc.makeDynString(s),
+        .string => |s| try vmgc.makeDynString(s.bytes),
         .object => |obj| try cloneObject(obj, visits, visit_len),
         else => v,
     };
@@ -735,7 +737,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const copy = try vmgc.vmAllocManagedBytes(msg.len);
             @memcpy(copy[0..msg.len], msg);
             vms.vmPopArgs(argc);
-            try vms.vmPush(.{ .error_value = copy[0..msg.len] });
+            try vms.vmPush(.{ .error_value = try chunk.internStr(copy[0..msg.len]) });
         },
         .core_gc => {
             if (argc != nf.arity) return error.ArityMismatch;
@@ -851,7 +853,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
         },
         .core_type_of => {
             if (argc != nf.arity) return error.ArityMismatch;
-            const out = nativeTypeNameValue(vms.vmTop(0));
+            const out = try nativeTypeNameValue(vms.vmTop(0));
             vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },

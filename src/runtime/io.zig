@@ -247,10 +247,10 @@ fn printValueDepth(v: Value, depth: u32, ancestors: *[PrintMaxDepth]*const vmod.
         .decimal => unreachable,
         .rune => |r| writeUint(r),
         .boolean => |b| write(if (b) "true" else "false"),
-        .string => |s| write(s),
+        .string => |s| write(s.bytes),
         .error_value => |s| {
             write("error(");
-            write(s);
+            write(s.bytes);
             write(")");
         },
         .null => write("null"),
@@ -290,7 +290,7 @@ fn printValueDepth(v: Value, depth: u32, ancestors: *[PrintMaxDepth]*const vmod.
                     for (items, 0..) |item, i| {
                         if (i > 0) write(", ");
                         switch (item.key) {
-                            .string => |s| write(s),
+                            .string => |s| write(s.bytes),
                             else => printValueDepth(item.key, depth + 1, ancestors, anc_count),
                         }
                         write(": ");
@@ -303,7 +303,7 @@ fn printValueDepth(v: Value, depth: u32, ancestors: *[PrintMaxDepth]*const vmod.
                     for (hm.entries[0..hm.len], 0..) |item, i| {
                         if (i > 0) write(", ");
                         switch (item.key) {
-                            .string => |s| write(s),
+                            .string => |s| write(s.bytes),
                             else => printValueDepth(item.key, depth + 1, ancestors, anc_count),
                         }
                         write(": ");
@@ -348,7 +348,7 @@ fn printValueDepth(v: Value, depth: u32, ancestors: *[PrintMaxDepth]*const vmod.
                     for (inst.fields, 0..) |item, i| {
                         if (i > 0) write(", ");
                         switch (item.key) {
-                            .string => |s| write(s),
+                            .string => |s| write(s.bytes),
                             else => printValueDepth(item.key, depth + 1, ancestors, anc_count),
                         }
                         write(": ");

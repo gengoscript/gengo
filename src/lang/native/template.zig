@@ -12,6 +12,7 @@ const StructFieldSpec = @import("../value.zig").StructFieldSpec;
 const StructTypeObj = @import("../value.zig").StructTypeObj;
 const NativeFnId = @import("native_ids.zig").NativeFnId;
 const NativeFuncObj = @import("../value.zig").NativeFuncObj;
+const chunk = @import("../chunk.zig");
 
 const TemplateTypeQualifiedName = "@std.template.obj";
 
@@ -54,7 +55,7 @@ fn tplIsStringVal(v: Value) bool {
 
 fn tplAsStringVal(v: Value) ![]const u8 {
     return switch (v) {
-        .string => |s| s,
+        .string => |s| s.bytes,
         .object => |o| switch (o.*) {
             .dyn_string => |s| s,
             .string_view => |sv| sv.bytes,
@@ -81,7 +82,7 @@ fn tplResolveField(data: Value, field: []const u8) !Value {
         .struct_instance => {
             const fields = obj.struct_instance.fields;
             for (fields) |f| {
-                if (f.key == .string and std.mem.eql(u8, f.key.string, field)) return f.value;
+                if (f.key == .string and std.mem.eql(u8, f.key.string.bytes, field)) return f.value;
             }
             return .null;
         },
@@ -92,7 +93,7 @@ fn tplResolveField(data: Value, field: []const u8) !Value {
 fn tplFieldValue(obj: *Object, name: []const u8) Value {
     const fields = obj.struct_instance.fields;
     for (fields) |f| {
-        if (f.key == .string and std.mem.eql(u8, f.key.string, name)) return f.value;
+        if (f.key == .string and std.mem.eql(u8, f.key.string.bytes, name)) return f.value;
     }
     return .null;
 }
@@ -123,7 +124,7 @@ fn tplEvalExpr(arg: Value, dot: Value, _funcs_val: Value) !Value {
     _ = _funcs_val;
     if (arg == .null) return dot;
     if (arg == .string) {
-        return try tplResolveField(dot, arg.string);
+        return try tplResolveField(dot, arg.string.bytes);
     }
     if (arg == .object and tplIsArray(arg.object)) {
         const items = tplAsArraySlice(arg.object);
@@ -151,7 +152,7 @@ fn tplValToDynStr(v: Value) !Value {
             const s = std.fmt.bufPrint(buf[0..], "{d}", .{n}) catch return error.TypeError;
             return vmgc.makeDynString(s);
         },
-        .string => |s| vmgc.makeDynString(s),
+        .string => |s| vmgc.makeDynString(s.bytes),
         .object => |o| {
             // Root o before any allocation so GC cannot sweep it or its managed bytes.
             try vms.pushTempRoot(.{ .object = o });
@@ -246,15 +247,15 @@ fn tplEncodeExpr(expr: []const u8) !Value {
     const trimmed = std.mem.trim(u8, expr, " \t\n\r");
     if (trimmed.len == 0) return .null;
     if (std.mem.eql(u8, trimmed, ".")) return .null;
-    if (trimmed[0] == '$') return .{ .string = trimmed[1..] };
+    if (trimmed[0] == '$') return .{ .string = try chunk.internStr(trimmed[1..]) };
     if (trimmed[0] == '.') {
         const path = trimmed[1..];
         if (std.mem.indexOf(u8, path, ".")) |_| {
             return try tplSplitPath(path, ".");
         }
-        return .{ .string = path };
+        return .{ .string = try chunk.internStr(path) };
     }
-    return .{ .string = trimmed };
+    return .{ .string = try chunk.internStr(trimmed) };
 }
 
 fn tplParseTag(tag: []const u8) !struct { op: TplOp, arg: Value } {
@@ -282,22 +283,22 @@ fn tplParseTag(tag: []const u8) !struct { op: TplOp, arg: Value } {
     if (trimmed.len >= 2 and trimmed[0] == '$') {
         if (std.mem.indexOf(u8, trimmed, ":=")) |pos| {
             const vname = std.mem.trim(u8, trimmed[1..pos], " \t");
-            return .{ .op = .assign, .arg = .{ .string = vname } };
+            return .{ .op = .assign, .arg = .{ .string = try chunk.internStr(vname) } };
         }
         const vname = trimmed[1..];
-        return .{ .op = .var_ref, .arg = .{ .string = vname } };
+        return .{ .op = .var_ref, .arg = .{ .string = try chunk.internStr(vname) } };
     }
     if (trimmed[0] == '.') {
         const path = trimmed[1..];
         if (std.mem.indexOf(u8, path, ".")) |_| {
             return .{ .op = .chain, .arg = try tplSplitPath(path, ".") };
         }
-        return .{ .op = .field, .arg = .{ .string = path } };
+        return .{ .op = .field, .arg = .{ .string = try chunk.internStr(path) } };
     }
     const space_pos = std.mem.indexOfAny(u8, trimmed, " \t");
     if (space_pos) |pos| {
         const fname = trimmed[0..pos];
-        return .{ .op = .call_fn, .arg = .{ .string = fname } };
+        return .{ .op = .call_fn, .arg = .{ .string = try chunk.internStr(fname) } };
     }
 
     return error.InvalidTemplate;
@@ -354,11 +355,11 @@ fn tplBuildObj(src_val: Value, ops: []Value, args: []Value, jmp: []Value) !*Obje
     const funcs_obj = try vmgc.vmAllocObject();
     funcs_obj.* = .{ .map = &[_]MapEntry{} };
 
-    inst_fields[0] = .{ .key = .{ .string = "__ops" }, .value = .{ .object = ops_obj } };
-    inst_fields[1] = .{ .key = .{ .string = "__args" }, .value = .{ .object = args_obj } };
-    inst_fields[2] = .{ .key = .{ .string = "__jmp" }, .value = .{ .object = jmp_obj } };
-    inst_fields[3] = .{ .key = .{ .string = "__src" }, .value = src_val };
-    inst_fields[4] = .{ .key = .{ .string = "funcs" }, .value = .{ .object = funcs_obj } };
+    inst_fields[0] = .{ .key = .{ .string = try chunk.internStr("__ops") }, .value = .{ .object = ops_obj } };
+    inst_fields[1] = .{ .key = .{ .string = try chunk.internStr("__args") }, .value = .{ .object = args_obj } };
+    inst_fields[2] = .{ .key = .{ .string = try chunk.internStr("__jmp") }, .value = .{ .object = jmp_obj } };
+    inst_fields[3] = .{ .key = .{ .string = try chunk.internStr("__src") }, .value = src_val };
+    inst_fields[4] = .{ .key = .{ .string = try chunk.internStr("funcs") }, .value = .{ .object = funcs_obj } };
 
     return inst_obj;
 }
@@ -402,7 +403,7 @@ pub fn tplParse(src_val: Value, src: []const u8) !Value {
         if (std.mem.indexOfPos(u8, src, pos, "{{")) |start| {
             if (start > pos) {
                 ops[idx] = .{ .float = @floatFromInt(@intFromEnum(TplOp.text)) };
-                args[idx] = .{ .string = src[pos..start] };
+                args[idx] = .{ .string = try chunk.internStr(src[pos..start]) };
                 jmp[idx] = .{ .float = -1 };
                 idx += 1;
             }
@@ -480,7 +481,7 @@ pub fn tplParse(src_val: Value, src: []const u8) !Value {
             pos = end + 2;
         } else {
                 ops[idx] = .{ .float = @floatFromInt(@intFromEnum(TplOp.text)) };
-            args[idx] = .{ .string = src[pos..] };
+            args[idx] = .{ .string = try chunk.internStr(src[pos..]) };
             jmp[idx] = .{ .float = -1 };
             idx += 1;
             break;
@@ -689,7 +690,7 @@ pub fn tplAddFunc(tmpl_obj: *Object, name: []const u8, func_val: Value) !void {
             }
             const new_items = try vmgc.vmAllocManagedSlice(MapEntry, m.len + 1);
             @memcpy(new_items[0..m.len], m);
-            new_items[m.len] = .{ .key = .{ .string = name }, .value = func_val };
+            new_items[m.len] = .{ .key = .{ .string = try chunk.internStr(name) }, .value = func_val };
             funcs_obj.* = .{ .map_managed = new_items[0 .. m.len + 1] };
         },
         .map_managed => |m| {
@@ -701,7 +702,7 @@ pub fn tplAddFunc(tmpl_obj: *Object, name: []const u8, func_val: Value) !void {
             }
             const new_items = try vmgc.vmAllocManagedSlice(MapEntry, m.len + 1);
             @memcpy(new_items[0..m.len], m);
-            new_items[m.len] = .{ .key = .{ .string = name }, .value = func_val };
+            new_items[m.len] = .{ .key = .{ .string = try chunk.internStr(name) }, .value = func_val };
             heap.freeManagedSlice(MapEntry, m);
             funcs_obj.* = .{ .map_managed = new_items[0 .. m.len + 1] };
         },

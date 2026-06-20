@@ -292,11 +292,11 @@ pub const Compiler = struct {
         try chunk.emitConst(.{ .object = st }, self.prev.line);
 
         for (self.exports[0..self.export_count]) |e| {
-            try chunk.emitConst(.{ .string = e.name }, self.prev.line);
+            try chunk.emitStringConst(e.name, self.prev.line);
             try chunk.emitGetGlobal(e.global_name, self.prev.line);
         }
         try chunk.emit2(@intFromEnum(Op.build_struct_instance), self.export_count, self.prev.line);
-        try chunk.emitOpConst(.def_global, .{ .string = self.options.module_global_name }, self.prev.line);
+        try chunk.emitOpStringConst(.def_global, self.options.module_global_name, self.prev.line);
     }
 
     // ── Scope and variable resolution ────────────────────────────────────────────
@@ -449,11 +449,11 @@ pub const Compiler = struct {
             .assert_map => try chunk.emit2(@intFromEnum(Op.assert_type), 2, line),
             .assert_err => try chunk.emit2(@intFromEnum(Op.assert_type), 3, line),
             .interface_type => |name| {
-                const idx = try chunk.addConst(.{ .string = name });
+                const idx = try chunk.addStringConst(name);
                 try chunk.emitConstIdx(.assert_interface, idx, line);
             },
             .struct_type => |name| {
-                const idx = try chunk.addConst(.{ .string = name });
+                const idx = try chunk.addStringConst(name);
                 try chunk.emitConstIdx(.assert_struct, idx, line);
             },
         }
@@ -703,7 +703,7 @@ pub const Compiler = struct {
         self.last_func_obj = func_obj;
         const cidx: u16 = try chunk.addConst(.{ .object = func_obj });
         try chunk.emitConstIdx(.make_closure, cidx, self.prev.line);
-        try chunk.emitOpConst(.def_global, .{ .string = name_str }, line);
+        try chunk.emitOpStringConst(.def_global, name_str, line);
     }
 
     fn pubDecl(self: *Compiler) !void {
