@@ -5,7 +5,7 @@
 005_fib_recursive_35_stress total_ops=113739936 gc_runs=0 alloc_objects=202 string_concat_bytes=0
 006_call_overhead total_ops=90000019 gc_runs=0 alloc_objects=202 string_concat_bytes=0
 006_utf8_hotpath total_ops=836331 gc_runs=9 alloc_objects=4202 string_concat_bytes=0
-007_dispatch_loop total_ops=500000016 gc_runs=0 alloc_objects=201 string_concat_bytes=0
+007_dispatch_loop total_ops=400000016 gc_runs=0 alloc_objects=201 string_concat_bytes=0
 007_utf8_slice_heavy total_ops=1932022 gc_runs=0 alloc_objects=201 string_concat_bytes=0
 008_runtime_call_overhead total_ops=1800023 gc_runs=0 alloc_objects=202 string_concat_bytes=0
 009_struct_field_access total_ops=2800034 gc_runs=0 alloc_objects=203 string_concat_bytes=0

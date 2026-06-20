@@ -131,6 +131,10 @@ pub const Op = enum(u8) {
     local_add_local, // fused get_local+get_local+add+set_local: [op][dst][src] (3 bytes); dst += src
     local_add_const, // fused get_local+const_add+set_local: [op][dst][idx_hi][idx_lo] (4 bytes); dst += k
     local_add_const_loop, // fused local_add_const+loop: [op][dst][idx_hi][idx_lo][off_b3..b0] (8 bytes)
+    // Fused get_global_const_add+set_global (same global): 8-byte in-place global increment.
+    // Layout: [op][name_hi][name_lo][ic_hi][ic_lo][add_skip][val_hi][val_lo] (same as get_global_const_add)
+    // Emitted when get_global_const_add immediately precedes set_global with the same name.
+    inc_global_const,
     repl_print,      // REPL-only: print TOS if not null, then pop
     halt,
 };

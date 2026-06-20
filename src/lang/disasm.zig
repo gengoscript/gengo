@@ -335,6 +335,25 @@ pub fn disassemble() void {
                 writeNum(argc);
                 io.write("\n");
             },
+            // --- inc_global_const: op + name(2) + ic(2) + add_skip(1) + val(2) ---
+            .inc_global_const => {
+                const name_idx = readU16(i); i += 2;
+                const ic = readU16(i); i += 2;
+                i += 1; // skip add byte
+                const val_idx = readU16(i); i += 2;
+                io.write("inc_global_const ");
+                writeConst(name_idx);
+                if (ic != 0xffff) {
+                    io.write(" ic=");
+                    writeNum(ic);
+                }
+                io.write(" [");
+                writeNum(val_idx);
+                io.write("] ");
+                writeConst(val_idx);
+                io.write("\n");
+            },
+
             // --- hexa-fused: op + name(2) + ic(2) + glcs_skip(1) + slot(1) + sub_skip(1) + idx(2) + argc(1) ---
             .call_global_local_sub_const => {
                 const name_idx = readU16(i); i += 2;
