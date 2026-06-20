@@ -151,21 +151,7 @@ pub const Compiler = struct {
         self.repl_expr_pop_pos = null;
         self.advance();
         while (!self.check(.eof)) {
-            if (self.cur.typ == .err_invalid_char) {
-                self.setErr("invalid character '{c}'", .{self.cur.src[0]});
-                self.err_col = self.cur.col;
-                return error.InvalidChar;
-            }
-            if (self.cur.typ == .err_unterminated_string) {
-                self.setErr("unterminated string literal", .{});
-                self.err_col = self.cur.col;
-                return error.UnterminatedString;
-            }
-            if (self.cur.typ == .err_string_pool_exhausted) {
-                self.setErr("string pool exhausted (max {d}KB)", .{lexer_mod.StrPoolSize / 1024});
-                self.err_col = self.cur.col;
-                return error.UnterminatedString;
-            }
+            try self.failOnLexerError();
             self.repl_expr_ok = true;
             try self.decl();
         }
@@ -372,19 +358,15 @@ pub const Compiler = struct {
             }
             try chunk.emit2(@intFromEnum(Op.get_local), slot, name.line);
             if (local.from_std) {
-                self.std_namespace_path = "";
-                self.import_module_path = null;
+                self.setStdNamespacePath("");
             } else if (local.import_module_path) |path| {
-                self.import_module_path = path;
-                self.std_namespace_path = null;
+                self.setImportModulePath(path);
             } else {
-                self.std_namespace_path = null;
-                self.import_module_path = null;
+                self.clearNamespaceProvenance();
             }
         } else if (self.resolveUpvalue(name.src)) |uv| {
             try chunk.emit2(@intFromEnum(Op.get_upvalue), uv, name.line);
-            self.std_namespace_path = null;
-            self.import_module_path = null;
+            self.clearNamespaceProvenance();
         } else {
             const qname = try self.qualifyGlobalName(name.src);
             if (!self.inFunc() and self.block_depth == 1) {
@@ -402,14 +384,11 @@ pub const Compiler = struct {
             }
             try chunk.emitGetGlobal(qname, name.line);
             if (self.isStdModuleGlobal(qname)) {
-                self.std_namespace_path = "";
-                self.import_module_path = null;
+                self.setStdNamespacePath("");
             } else if (self.getImportModuleGlobalPath(qname)) |path| {
-                self.import_module_path = path;
-                self.std_namespace_path = null;
+                self.setImportModulePath(path);
             } else {
-                self.std_namespace_path = null;
-                self.import_module_path = null;
+                self.clearNamespaceProvenance();
             }
         }
     }
@@ -950,6 +929,42 @@ pub const Compiler = struct {
         self.err_line = line;
         self.err_col = self.prev.col;
         return error.UnknownField;
+    }
+
+    fn failOnLexerError(self: *Compiler) !void {
+        switch (self.cur.typ) {
+            .err_invalid_char => {
+                self.setErr("invalid character '{c}'", .{self.cur.src[0]});
+                self.err_col = self.cur.col;
+                return error.InvalidChar;
+            },
+            .err_unterminated_string => {
+                self.setErr("unterminated string literal", .{});
+                self.err_col = self.cur.col;
+                return error.UnterminatedString;
+            },
+            .err_string_pool_exhausted => {
+                self.setErr("string pool exhausted (max {d}KB)", .{lexer_mod.StrPoolSize / 1024});
+                self.err_col = self.cur.col;
+                return error.UnterminatedString;
+            },
+            else => {},
+        }
+    }
+
+    fn clearNamespaceProvenance(self: *Compiler) void {
+        self.std_namespace_path = null;
+        self.import_module_path = null;
+    }
+
+    fn setStdNamespacePath(self: *Compiler, path: []const u8) void {
+        self.std_namespace_path = path;
+        self.import_module_path = null;
+    }
+
+    fn setImportModulePath(self: *Compiler, path: []const u8) void {
+        self.import_module_path = path;
+        self.std_namespace_path = null;
     }
 
 

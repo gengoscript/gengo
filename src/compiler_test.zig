@@ -1029,6 +1029,22 @@ test "compiler: expression too deep returns error" {
     try std.testing.expectError(error.ExpressionTooDeep, result);
 }
 
+test "compiler: invalid character reports direct scanner error" {
+    var rt = try setup();
+    defer rt.deinit();
+
+    const result = compile(&rt, "@");
+    try std.testing.expectError(error.InvalidChar, result);
+}
+
+test "compiler: unterminated string reports direct scanner error" {
+    var rt = try setup();
+    defer rt.deinit();
+
+    const result = compile(&rt, "\"unterminated");
+    try std.testing.expectError(error.UnterminatedString, result);
+}
+
 test {
     _ = @import("lang/native/fs_state.zig");
 }
