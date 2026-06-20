@@ -126,6 +126,7 @@ pub const Op = enum(u8) {
     add_ret,         // fused add+ret: [op]; same 1-byte layout as `add`
     local_add_local, // fused get_local+get_local+add+set_local: [op][dst][src] (3 bytes); dst += src
     local_add_const, // fused get_local+const_add+set_local: [op][dst][idx_hi][idx_lo] (4 bytes); dst += k
+    local_add_const_loop, // fused local_add_const+loop: [op][dst][idx_hi][idx_lo][off_b3..b0] (8 bytes)
     repl_print,      // REPL-only: print TOS if not null, then pop
     halt,
 };

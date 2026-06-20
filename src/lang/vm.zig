@@ -1717,6 +1717,16 @@ fn runInner() !void {
                 const result: Value = if (a == .int and k == .int) .{ .int = a.int + k.int } else try computeAddResult(a, k);
                 writeFrameLocal(vmFrameBase() + dst, result);
             },
+            .local_add_const_loop => {
+                const dst = try vmByte();
+                const k = try chunk.constAt(try vmShort());
+                const a = try readLocalSlot(dst);
+                const result: Value = if (a == .int and k == .int) .{ .int = a.int + k.int } else try computeAddResult(a, k);
+                writeFrameLocal(vmFrameBase() + dst, result);
+                const off = try vms.vmInt();
+                if (off > vmState().ip) return error.BytecodeOutOfBounds;
+                vmState().ip -= off;
+            },
             .add_ret => {
                 vmperf.breakOpChain();
                 if (vmState().frame_top == 0) return error.ReturnAtTopLevel;

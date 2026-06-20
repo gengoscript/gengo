@@ -61,6 +61,8 @@ fn expandedWidth(op: Op, old_width: usize) usize {
         .set_global_loop            => 10,  // set_global(5)+loop(5)
         // Fused close_upvalue+loop
         .close_upvalue_loop         =>  7,  // close_upvalue(2)+loop(5)
+        // Fused local_add_const+loop
+        .local_add_const_loop       => 13,  // get_local(2)+constant(3)+add(1)+set_local(2)+loop(5)
         // Quint-fused: get_local+const_lt+jif_pop+jump
         .get_local_const_lt_jif_pop_jump => 15, // get_local(2)+const_lt(3)+jif_pop(5)+jump(5)
         // get_global_const_*: same 8 bytes, but expand to get_global+const_op
@@ -223,6 +225,22 @@ fn emitExpanded(
             dst[3] = 0xFF; dst[4] = 0xFF;
             dst[5] = opByte(.loop);
             pu32(dst, 6, bwdOff(ip_map, tgt, new_end));
+        },
+
+        // ── fused local_add_const + loop ─────────────────────────────────────
+        // Layout: [op][dst][idx_hi][idx_lo][jmp*4] (8 bytes)
+        // Expands to: get_local(2)+constant(3)+add(1)+set_local(2)+loop(5) = 13 bytes
+        .local_add_const_loop => {
+            const tgt = instr.jump_target.?;
+            const d  = rb(old_ip, 1);
+            const ih = rb(old_ip, 2);
+            const il = rb(old_ip, 3);
+            dst[0] = opByte(.get_local);  dst[1] = d;
+            dst[2] = opByte(.constant);   dst[3] = ih; dst[4] = il;
+            dst[5] = opByte(.add);
+            dst[6] = opByte(.set_local);  dst[7] = d;
+            dst[8] = opByte(.loop);
+            pu32(dst, 9, bwdOff(ip_map, tgt, new_end));
         },
 
         // ── fused close_upvalue + loop ────────────────────────────────────────

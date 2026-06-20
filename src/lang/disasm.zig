@@ -518,6 +518,22 @@ pub fn disassemble() void {
                 writeConst(idx);
                 io.write("\n");
             },
+            // --- fused local += const + loop: op + dst(1) + idx(2) + off(4) ---
+            .local_add_const_loop => {
+                const dst = chunk.codeByteAt(i); i += 1;
+                const idx = readU16(i); i += 2;
+                const off = readU32(i); i += 4;
+                const target = start + 8 - @as(usize, off);
+                io.write("local_add_const_loop dst=");
+                writeNum(dst);
+                io.write(" [");
+                writeNum(idx);
+                io.write("] ");
+                writeConst(idx);
+                io.write(" -> ");
+                writeOffset(target);
+                io.write("\n");
+            },
             // --- no operands ---
             else => {
                 io.write(@tagName(op));
