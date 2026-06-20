@@ -291,11 +291,8 @@ pub fn addConst(v: Value) !u16 {
     // Deduplicate string constants to conserve slots.
     var to_store = v;
     if (v == .string) {
-        var i: usize = 0;
-        while (i < g_state.const_count) : (i += 1) {
-            if (g_state.consts[i] == .string and common.streq(g_state.consts[i].string, v.string)) {
-                return @intCast(i);
-            }
+        for (g_state.consts[0..g_state.const_count], 0..) |c, i| {
+            if (c == .string and common.streq(c.string, v.string)) return @intCast(i);
         }
         const copy = heap.bump(u8, v.string.len) orelse return error.OutOfMemory;
         @memcpy(copy[0..v.string.len], v.string);
@@ -1000,9 +997,7 @@ pub fn verify() !void {
         var func_body_count: usize = 0;
         var func_ips: [256]usize = undefined;
         {
-            var i: usize = 0;
-            while (i < g_state.const_count) : (i += 1) {
-                const cv = g_state.consts[i];
+            for (g_state.consts[0..g_state.const_count]) |cv| {
                 if (cv == .object) {
                     switch (cv.object.*) {
                         .function => |f| {
@@ -1085,9 +1080,8 @@ pub fn verify() !void {
         };
 
         try BfsRunner.run(0, true, starts);
-        var fi: usize = 0;
-        while (fi < func_body_count) : (fi += 1) {
-            try BfsRunner.run(func_ips[fi], false, starts);
+        for (func_ips[0..func_body_count]) |fip| {
+            try BfsRunner.run(fip, false, starts);
         }
     }
 }
