@@ -60,6 +60,9 @@ pub const State = struct {
     // Peephole: position of last local_add_const instruction (4 bytes: op + dst + idx_hi + idx_lo).
     // Used for fusion: local_add_const + loop → local_add_const_loop.
     last_local_add_const_pos: ?usize = null,
+    // Peephole: position of last get_global_const_add instruction (8 bytes).
+    // Used for fusion: get_global_const_add X k + set_global X → inc_global_const X k.
+    last_get_global_const_add_pos: ?usize = null,
     // Code-position patch: position before get_global "module:std" (or get_local for a from_std local).
     // Used by the std direct-call peephole to truncate back and emit a single get_global
     // "module:std.{ns}.{func}" instead of std-namespace load + field traversal + call.
@@ -94,6 +97,7 @@ pub fn reset() void {
     g_state.last_quad_lt_jif_pos = null;
     g_state.last_close_upvalue_pos = null;
     g_state.last_local_add_const_pos = null;
+    g_state.last_get_global_const_add_pos = null;
     g_state.std_call_patch_pos = null;
     g_state.verify_err_len = 0;
 }
@@ -298,6 +302,8 @@ pub fn emitBinOpFused(op: Op, line: u32) !void {
                                 g_state.last_triple_global_eq_pos = gg_pos;
                             } else if (top == .get_global_const_lt) {
                                 g_state.last_triple_global_lt_pos = gg_pos;
+                            } else if (top == .get_global_const_add) {
+                                g_state.last_get_global_const_add_pos = gg_pos;
                             }
                             g_state.last_get_global_code_pos = null;
                         }
@@ -364,6 +370,18 @@ pub fn emitGetGlobalIdx(idx: u16, line: u32) !void {
 // Emit set_global: op + name_idx(2) + ic_slot(2, cold=0xFFFF).
 pub fn emitSetGlobal(name: []const u8, line: u32) !void {
     const idx = try addConst(.{ .string = name });
+    // Peephole: get_global_const_add X k immediately preceding set_global X
+    // → inc_global_const X k (8 bytes, 1 dispatch). Saves 1 dispatch for n += k patterns.
+    if (g_state.last_get_global_const_add_pos) |ga_pos| {
+        g_state.last_get_global_const_add_pos = null;
+        if (ga_pos + 8 == g_state.code_len and
+            g_state.code[ga_pos + 1] == @as(u8, @intCast((idx >> 8) & 0xff)) and
+            g_state.code[ga_pos + 2] == @as(u8, @intCast(idx & 0xff))) {
+            g_state.code[ga_pos] = @intFromEnum(Op.inc_global_const);
+            g_state.last_set_global_code_pos = null;
+            return;
+        }
+    }
     try emitByte(@intFromEnum(Op.set_global), line);
     try emitByte(@intCast((idx >> 8) & 0xff), line);
     try emitByte(@intCast(idx & 0xff), line);
@@ -530,6 +548,7 @@ pub fn patchJump(offset: usize) !void {
     g_state.last_quad_lt_jif_pos = null;
     g_state.last_close_upvalue_pos = null;
     g_state.last_local_add_const_pos = null;
+    g_state.last_get_global_const_add_pos = null;
 }
 
 pub fn emitLoop(loop_start: usize, line: u32) !void {
@@ -774,6 +793,12 @@ pub fn decodeAt(pos: usize) !DecodedInstruction {
             .const_index = try readU16At(pos + 8),
         },
 
+        .inc_global_const => .{
+            .op = op,
+            .width = 8,
+            .const_index = try readU16At(pos + 6),
+        },
+
         .get_local_const_eq_jif_pop, .get_local_const_lt_jif_pop => blk: {
             const off = try readU32At(pos + 5);
             break :blk .{
@@ -991,12 +1016,11 @@ fn stackEffect(op: Op, ip: usize) struct { pop: u8, push: u8 } {
             break :blk .{ .pop = argc, .push = 1 };
         },
         .call_global_local_sub_const => blk: {
-            // Equivalent to get_global (pop=0,push=1) + get_local_const_sub_call (pop=argc,push=1).
-            // Combined net: push=2, pop=argc. For argc=1: net height +1.
             const argc = g_state.code[ip + 10];
             _ = argc;
             break :blk .{ .pop = 0, .push = 1 };
         },
+        .inc_global_const => .{ .pop = 0, .push = 0 }, // reads global, adds const, writes back; no stack change
         .local_add_local => .{ .pop = 0, .push = 0 },
         .local_add_const => .{ .pop = 0, .push = 0 },
         .local_add_const_loop => .{ .pop = 0, .push = 0 },

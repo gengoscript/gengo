@@ -1655,6 +1655,26 @@ fn runInner() !void {
                 const ic_slot: u16 = @intCast(try vmShort());
                 try writeGlobalIC(name_idx, ic_base, ic_slot, try vmPop());
             },
+            .inc_global_const => {
+                const name_idx = try vmShort();
+                const ic_base = vmState().ip;
+                const ic_slot: u16 = @intCast(try vmShort());
+                _ = try vmByte(); // skip add_skip byte
+                const k = try chunk.constAt(try vmShort());
+                if (ic_slot != 0xFFFF) {
+                    const v = globals.getAt(ic_slot);
+                    const result: Value = if (v == .int and k == .int) .{ .int = v.int + k.int } else try computeAddResult(v, k);
+                    globals.setAt(ic_slot, result);
+                } else {
+                    const name = (try chunk.constAt(name_idx)).string;
+                    const slot = globals.findSlot(name) orelse return error.NotDefined;
+                    chunk.patchByte(ic_base,     @intCast((slot >> 8) & 0xFF));
+                    chunk.patchByte(ic_base + 1, @intCast(slot & 0xFF));
+                    const v = globals.getAt(slot);
+                    const result: Value = if (v == .int and k == .int) .{ .int = v.int + k.int } else try computeAddResult(v, k);
+                    globals.setAt(slot, result);
+                }
+            },
 
             .get_local => {
                 const slot = try vmByte();

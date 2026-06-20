@@ -65,6 +65,8 @@ fn expandedWidth(op: Op, old_width: usize) usize {
         .local_add_const_loop       => 13,  // get_local(2)+constant(3)+add(1)+set_local(2)+loop(5)
         // Hexa-fused get_global+get_local_const_sub_call: same 11 bytes, just byte 0 changes
         .call_global_local_sub_const => 11, // get_global(5)+get_local_const_sub_call(6)
+        // Fused get_global_const_add+set_global (same global): expands to 8+5=13 bytes
+        .inc_global_const            => 13, // get_global_const_add(8)+set_global(5)
         // Quint-fused: get_local+const_lt+jif_pop+jump
         .get_local_const_lt_jif_pop_jump => 15, // get_local(2)+const_lt(3)+jif_pop(5)+jump(5)
         // get_global_const_*: same 8 bytes, but expand to get_global+const_op
@@ -227,6 +229,20 @@ fn emitExpanded(
             dst[3] = 0xFF; dst[4] = 0xFF;
             dst[5] = opByte(.loop);
             pu32(dst, 6, bwdOff(ip_map, tgt, new_end));
+        },
+
+        // ── fused get_global_const_add + set_global (same global) ────────────
+        // Layout: [op][name_hi][name_lo][ic_hi][ic_lo][add_skip][val_hi][val_lo] (8 bytes, same as get_global_const_add)
+        // Expands to: get_global_const_add(8) + set_global(5) = 13 bytes
+        .inc_global_const => {
+            dst[0] = opByte(.get_global_const_add);
+            for (1..8) |i| dst[i] = rb(old_ip, i);
+            // set_global for the same name with cold IC
+            dst[8] = opByte(.set_global);
+            dst[9]  = rb(old_ip, 1); // name_hi
+            dst[10] = rb(old_ip, 2); // name_lo
+            dst[11] = 0xff;           // ic_hi (cold)
+            dst[12] = 0xff;           // ic_lo (cold)
         },
 
         // ── hexa-fused get_global + get_local_const_sub_call ─────────────────
