@@ -52,10 +52,9 @@ pub fn nativeDelete(m_obj: *Object, key: Value) !Value {
     switch (m_obj.*) {
         .map => {
             const items = m_obj.map;
-            var fi: usize = 0;
-            while (fi < items.len) : (fi += 1) {
-                if (vmmap.mapKeyEquals(items[fi].key, key)) {
-                    const removed = items[fi].value;
+            for (items, 0..) |item, fi| {
+                if (vmmap.mapKeyEquals(item.key, key)) {
+                    const removed = item.value;
                     items[fi] = items[items.len - 1];
                     m_obj.* = .{ .map = items[0 .. items.len - 1] };
                     return removed;
@@ -65,10 +64,9 @@ pub fn nativeDelete(m_obj: *Object, key: Value) !Value {
         },
         .map_managed => {
             const items = m_obj.map_managed;
-            var fi: usize = 0;
-            while (fi < items.len) : (fi += 1) {
-                if (vmmap.mapKeyEquals(items[fi].key, key)) {
-                    const removed = items[fi].value;
+            for (items, 0..) |item, fi| {
+                if (vmmap.mapKeyEquals(item.key, key)) {
+                    const removed = item.value;
                     items[fi] = items[items.len - 1];
                     m_obj.* = .{ .map_managed = items[0 .. items.len - 1] };
                     return removed;
@@ -175,9 +173,8 @@ pub fn nativeAppend(start: usize, argc: u8) !Value {
     if (arr_val != .object or !vms.isArrayObject(arr_val.object)) return error.TypeError;
     if (is_named) {
         if (first.object.named_value.typ.named_type.elem_spec) |es| {
-            var ei: usize = 1;
-            while (ei < argc) : (ei += 1) {
-                if (!vmtyp.matchesTypeSpec(vms.vmState().stack[start + ei], es)) return error.TypeError;
+            for (vms.vmState().stack[start + 1 .. start + argc]) |v| {
+                if (!vmtyp.matchesTypeSpec(v, es)) return error.TypeError;
             }
         }
     }
@@ -191,10 +188,7 @@ pub fn nativeAppend(start: usize, argc: u8) !Value {
         const ac = arr_val.object.array_capacity;
         const cap = ac.backing.array_managed.len;
         if (new_len <= cap) {
-            var i: usize = 0;
-            while (i < extra) : (i += 1) {
-                ac.backing.array_managed[ac.len + i] = vms.vmState().stack[start + 1 + i];
-            }
+            @memcpy(ac.backing.array_managed[ac.len .. ac.len + extra], vms.vmState().stack[start + 1 .. start + 1 + extra]);
             const obj = try vmgc.vmAllocObject();
             obj.* = .{ .array_capacity = .{ .backing = ac.backing, .len = new_len } };
             if (is_named) {
@@ -217,13 +211,9 @@ pub fn nativeAppend(start: usize, argc: u8) !Value {
     defer vms.popTempRoot();
     const out = try vmgc.vmAllocManagedSlice(Value, new_cap);
     @memcpy(out[0..base.len], base);
-    var i: usize = 0;
-    while (i < extra) : (i += 1) {
-        out[base.len + i] = vms.vmState().stack[start + 1 + i];
-    }
+    @memcpy(out[base.len .. base.len + extra], vms.vmState().stack[start + 1 .. start + 1 + extra]);
     // Zero-fill spare capacity so the GC never traces stale pointers.
-    i = new_len;
-    while (i < new_cap) : (i += 1) out[i] = .null;
+    @memset(out[new_len..new_cap], .null);
     backing_obj.* = .{ .array_managed = out };
     const obj = try vmgc.vmAllocObject(); // backing_obj is temp-rooted
     obj.* = .{ .array_capacity = .{ .backing = backing_obj, .len = new_len } };
@@ -481,9 +471,7 @@ pub fn nativeClone(v: Value) !Value {
 }
 
 fn hasVisitedPair(a: *Object, b: *Object, visits: []const DeepEqVisit, visit_len: usize) bool {
-    var i: usize = 0;
-    while (i < visit_len) : (i += 1) {
-        const p = visits[i];
+    for (visits[0..visit_len]) |p| {
         if ((p.a == a and p.b == b) or (p.a == b and p.b == a)) return true;
     }
     return false;
@@ -504,12 +492,11 @@ fn deepEqualMap(a_entries: []const MapEntry, b_entries: []const MapEntry, visits
     @memset(used, false);
     for (a_entries) |ae| {
         var matched = false;
-        var i: usize = 0;
-        while (i < b_entries.len) : (i += 1) {
-            if (used[i]) continue;
-            if (!try deepEqualValue(ae.key, b_entries[i].key, visits, visit_len)) continue;
-            if (!try deepEqualValue(ae.value, b_entries[i].value, visits, visit_len)) continue;
-            used[i] = true;
+        for (b_entries, used) |be, *u| {
+            if (u.*) continue;
+            if (!try deepEqualValue(ae.key, be.key, visits, visit_len)) continue;
+            if (!try deepEqualValue(ae.value, be.value, visits, visit_len)) continue;
+            u.* = true;
             matched = true;
             break;
         }
@@ -563,10 +550,9 @@ fn deepEqualObject(a: *Object, b: *Object, visits: []DeepEqVisit, visit_len: *us
             if (asi.typ != bsi.typ) return false;
             try appendVisitedPair(a, b, visits, visit_len);
             if (asi.fields.len != bsi.fields.len) return false;
-            var i: usize = 0;
-            while (i < asi.fields.len) : (i += 1) {
-                if (!common.streq(asi.fields[i].key.string, bsi.fields[i].key.string)) return false;
-                if (!try deepEqualValue(asi.fields[i].value, bsi.fields[i].value, visits, visit_len)) return false;
+            for (asi.fields, bsi.fields) |af, bf| {
+                if (!common.streq(af.key.string, bf.key.string)) return false;
+                if (!try deepEqualValue(af.value, bf.value, visits, visit_len)) return false;
             }
             return true;
         },
@@ -626,8 +612,7 @@ fn deepEqualValue(a: Value, b: Value, visits: []DeepEqVisit, visit_len: *usize) 
 }
 
 fn cloneFindExisting(src: *Object, visits: []const CloneVisit, visit_len: usize) ?*Object {
-    var i: usize = 0;
-    while (i < visit_len) : (i += 1) { if (visits[i].src == src) return visits[i].dst; }
+    for (visits[0..visit_len]) |v| { if (v.src == src) return v.dst; }
     return null;
 }
 
@@ -759,24 +744,17 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                 if ((vms.vmState().host_caps & host_abi.CAP_CORE_APPEND) != 0) {
                     if (argc > MaxNativeArgs) return error.ArityMismatch;
                     var args_wire: [MaxNativeArgs]host_abi.ValueWire = undefined;
-                    var i: usize = 0;
-                    while (i < @as(usize, argc)) : (i += 1) {
-                        args_wire[i] = try host_abi_mod.wireFromValue(vms.vmState().stack[start + i]);
-                    }
+                    for (args_wire[0..argc], vms.vmState().stack[start .. start + argc]) |*w, v| w.* = try host_abi_mod.wireFromValue(v);
                     var out_wire = host_abi_mod.nullWire();
                     try host_abi_mod.nativeCallChecked(.core_append, args_wire[0..argc], &out_wire);
                     const out = try host_abi_mod.valueFromWire(out_wire);
-                    var j: usize = 0;
-                    while (j < @as(usize, argc)) : (j += 1) _ = try vms.vmPop();
-                    _ = try vms.vmPop();
+                    for (0..@as(usize, argc) + 1) |_| _ = try vms.vmPop();
                     try vms.vmPush(out);
                     return;
                 }
             }
             const out = try nativeAppend(start, argc);
-            var j: usize = 0;
-            while (j < @as(usize, argc)) : (j += 1) _ = try vms.vmPop();
-            _ = try vms.vmPop();
+            for (0..@as(usize, argc) + 1) |_| _ = try vms.vmPop();
             try vms.vmPush(out);
         },
         .core_bytelen => {
