@@ -798,7 +798,7 @@ pub fn incrStmt(c: anytype) !void {
     c.advance();
     try c.emitGetVar(name);
     try chunk.emitConst(.{ .int = 1.0 }, name.line);
-    try chunk.emitOp(if (is_inc) .add else .sub, name.line);
+    try chunk.emitBinOpFused(if (is_inc) .add else .sub, name.line);
     const tc = c.getLocalTypeCheck(name.src);
     if (tc) |t| try c.emitVarTypeEpilog(t, name.line);
     try c.emitSetVar(name);

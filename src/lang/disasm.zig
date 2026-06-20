@@ -358,6 +358,32 @@ pub fn disassemble() void {
                 io.write("\n");
             },
 
+            // --- quint-fused: op + slot(1) + skip(1) + idx(2) + exit_jmp(4) + body_jmp(4) ---
+            .get_local_const_lt_jif_pop_jump => {
+                const slot = chunk.codeByteAt(i);
+                i += 1;
+                i += 1; // skip byte
+                const idx = readU16(i);
+                i += 2;
+                const exit_jmp = readU32(i);
+                i += 4;
+                const body_jmp = readU32(i);
+                i += 4;
+                const exit_target = start + 9 + @as(usize, exit_jmp);
+                const body_target = start + 13 + @as(usize, body_jmp);
+                io.write("get_local_const_lt_jif_pop_jump local=");
+                writeNum(slot);
+                io.write(" [");
+                writeNum(idx);
+                io.write("] ");
+                writeConst(idx);
+                io.write(" exit->");
+                writeOffset(exit_target);
+                io.write(" body->");
+                writeOffset(body_target);
+                io.write("\n");
+            },
+
             // --- global triple-fused: op + name(2) + ic(2) + skip(1) + idx(2) ---
             .get_global_const_eq, .get_global_const_sub,
             .get_global_const_add, .get_global_const_lt => {
@@ -429,6 +455,20 @@ pub fn disassemble() void {
                     io.write(" ic_fidx=");
                     writeNum(ic_fidx);
                 }
+                io.write("\n");
+            },
+
+            // --- close_upvalue_loop: op + slot(1) + off(4) ---
+            .close_upvalue_loop => {
+                const slot = chunk.codeByteAt(i);
+                i += 1;
+                const off = readU32(i);
+                i += 4;
+                const target = start + 6 - @as(usize, off);
+                io.write("close_upvalue_loop slot=");
+                writeNum(slot);
+                io.write(" -> ");
+                writeOffset(target);
                 io.write("\n");
             },
 
