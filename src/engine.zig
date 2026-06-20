@@ -311,9 +311,7 @@ fn wireToValue(wire: ValueWire) !Value {
         @intFromEnum(WireTag.array) => {
             const count = wire.len;
             const elem_wires = @as([*]const ValueWire, @ptrFromInt(@as(usize, @intCast(wire.payload))))[0..count];
-            const arr_obj = try vmgc.vmAllocObject();
-            arr_obj.* = .{ .array = &[_]Value{} };
-            try vms.pushTempRoot(.{ .object = arr_obj });
+            const arr_obj = try vmgc.allocTempRooted(.{ .array = &[_]Value{} });
             defer vms.popTempRoot();
             const items = try vmgc.vmAllocManagedSlice(Value, count);
             for (elem_wires, 0..) |ew, i| {
@@ -325,9 +323,7 @@ fn wireToValue(wire: ValueWire) !Value {
         @intFromEnum(WireTag.map) => {
             const count = wire.len;
             const pair_wires = @as([*]const ValueWire, @ptrFromInt(@as(usize, @intCast(wire.payload))))[0 .. count * 2];
-            const map_obj = try vmgc.vmAllocObject();
-            map_obj.* = .{ .map = &[_]MapEntry{} };
-            try vms.pushTempRoot(.{ .object = map_obj });
+            const map_obj = try vmgc.allocTempRooted(.{ .map = &[_]MapEntry{} });
             defer vms.popTempRoot();
             const entries = try vmgc.vmAllocManagedSlice(MapEntry, count);
             for (0..count) |i| {

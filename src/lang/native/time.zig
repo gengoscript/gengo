@@ -416,9 +416,7 @@ pub fn timeIsoWeek(ms: f64) !Value {
     const week: i64 = @divFloor(week_thursday_doy - first_thursday_doy, 7) + 1;
 
     const entries = try vmgc.vmAllocManagedSlice(MapEntry, 2);
-    const obj = try vmgc.vmAllocObject();
-    obj.* = .{ .map = &[_]MapEntry{} };
-    try vms.pushTempRoot(.{ .object = obj });
+    const obj = try vmgc.allocTempRooted(.{ .map = &[_]MapEntry{} });
     defer vms.popTempRoot();
     entries[0] = .{ .key = .{ .string = "year" }, .value = .{ .int = iso_year } };
     entries[1] = .{ .key = .{ .string = "week" }, .value = .{ .int = week } };
@@ -577,9 +575,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const p = timeEpochMsToParts(ms);
             const field_count = 8;
             const entries = try vmgc.vmAllocManagedSlice(MapEntry, field_count);
-            const obj = try vmgc.vmAllocObject();
-            obj.* = .{ .map = &[_]MapEntry{} };
-            try vms.pushTempRoot(.{ .object = obj });
+            const obj = try vmgc.allocTempRooted(.{ .map = &[_]MapEntry{} });
             defer vms.popTempRoot();
             entries[0] = .{ .key = .{ .string = "year" }, .value = .{ .int = p.year } };
             entries[1] = .{ .key = .{ .string = "month" }, .value = .{ .int = p.month } };

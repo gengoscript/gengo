@@ -475,9 +475,7 @@ pub fn nativeReFindAll(pattern_val: Value, s_val: Value) !Value {
     defer freeAlts(alts);
     const matches = findAllMatches(alts, s, alloc) catch |err| { alloc.free(alts); return err; };
     defer alloc.free(matches);
-    const obj = try vmgc.vmAllocObject();
-    obj.* = .{ .array_managed = &[_]Value{} }; // safe placeholder
-    try vms.pushTempRoot(.{ .object = obj });
+    const obj = try vmgc.allocTempRooted(.{ .array_managed = &[_]Value{} });
     defer vms.popTempRoot();
     const result = try vmgc.vmAllocManagedSlice(Value, matches.len);
     obj.* = .{ .array_managed = result[0..0] }; // publish immediately
@@ -527,9 +525,7 @@ pub fn nativeReSplit(pattern_val: Value, s_val: Value) !Value {
         try parts.append(s[i .. i + m[0]]);
         i += m[1];
     }
-    const obj = try vmgc.vmAllocObject();
-    obj.* = .{ .array_managed = &[_]Value{} }; // safe placeholder
-    try vms.pushTempRoot(.{ .object = obj });
+    const obj = try vmgc.allocTempRooted(.{ .array_managed = &[_]Value{} });
     defer vms.popTempRoot();
     const result = try vmgc.vmAllocManagedSlice(Value, parts.items.len);
     obj.* = .{ .array_managed = result[0..0] }; // publish immediately

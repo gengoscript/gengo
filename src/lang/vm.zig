@@ -57,6 +57,7 @@ const vmConst = vms.vmConst;
 const pushTempRoot = vms.pushTempRoot;
 const popTempRoot = vms.popTempRoot;
 const vmAllocObject = vmgc.vmAllocObject;
+const allocTempRooted = vmgc.allocTempRooted;
 const vmAllocManagedSlice = vmgc.vmAllocManagedSlice;
 const makeDynString = vmgc.makeDynString;
 const makeStringView = vmgc.makeStringView;
@@ -425,9 +426,7 @@ fn prepareVariadicCall(f: @import("value.zig").FuncObj, argc: u8) !void {
     if (vmState().stack_top < @as(usize, argc)) return error.StackUnderflow;
     const start = vmState().stack_top - argc;
     const extra: usize = argc - fixed;
-    const arr_obj = try vmAllocObject();
-    arr_obj.* = .{ .array = &[_]Value{} }; // safe tag before GC can run
-    try pushTempRoot(.{ .object = arr_obj });
+    const arr_obj = try allocTempRooted(.{ .array = &[_]Value{} });
     defer popTempRoot();
     const items = try vmAllocManagedSlice(Value, extra);
     @memcpy(items[0..extra], vmState().stack[start + fixed .. start + fixed + extra]);
@@ -473,9 +472,7 @@ fn enumTypeAllocValue(obj: *Object, member_name: []const u8) !Value {
 }
 
 fn enumTypeValuesValue(obj: *Object, et: vmod.EnumTypeObj) !Value {
-    const arr_obj = try vmAllocObject();
-    arr_obj.* = .{ .array = &[_]Value{} };
-    try pushTempRoot(.{ .object = arr_obj });
+    const arr_obj = try allocTempRooted(.{ .array = &[_]Value{} });
     defer popTempRoot();
     const items = try vmAllocManagedSlice(Value, et.members.len);
     for (et.members, 0..) |m, ei| {
@@ -2058,9 +2055,7 @@ fn runInner() !void {
 
             .build_array, .build_tuple => {
                 const count = try vmByte();
-                const obj = try vmAllocObject();
-                obj.* = .{ .array = &[_]Value{} }; // must init before temp root: GC may run during slice alloc
-                try pushTempRoot(.{ .object = obj });
+                const obj = try allocTempRooted(.{ .array = &[_]Value{} });
                 defer popTempRoot();
                 const items = try vmAllocManagedSlice(Value, count);
                 var i: usize = count;
@@ -2073,9 +2068,7 @@ fn runInner() !void {
             },
             .build_map => {
                 const count = try vmByte();
-                const obj = try vmAllocObject();
-                obj.* = .{ .map = &[_]MapEntry{} }; // must init before temp root: GC may run during slice alloc
-                try pushTempRoot(.{ .object = obj });
+                const obj = try allocTempRooted(.{ .map = &[_]MapEntry{} });
                 defer popTempRoot();
                 const items = try vmAllocManagedSlice(MapEntry, count);
                 var i: usize = count;
@@ -2108,10 +2101,8 @@ fn runInner() !void {
                     const shared_count = vt.shared_fields.len;
                     const arm_field_count = arm.fields.len;
 
-                    const obj = try vmAllocObject();
-                    try pushTempRoot(.{ .object = obj });
+                    const obj = try allocTempRooted(.{ .array = &[_]Value{} });
                     defer popTempRoot();
-                    obj.* = .{ .array = &[_]Value{} };
 
                     const base = vmState().stack_top - typ_stack_dist;
                     const shared_vals = try vmAllocManagedSlice(Value, shared_count);
@@ -2197,10 +2188,8 @@ fn runInner() !void {
                     if (st.fields.len > 255) return error.TooManyStructFields;
 
                     const inst_fields = try vmAllocManagedSlice(MapEntry, st.fields.len);
-                    const obj = try vmAllocObject();
-                    try pushTempRoot(.{ .object = obj });
+                    const obj = try allocTempRooted(.{ .array = &[_]Value{} });
                     defer popTempRoot();
-                    obj.* = .{ .array = &[_]Value{} };
 
                     const base = vmState().stack_top - typ_stack_dist;
                     var seen: [255]bool = [_]bool{false} ** 255;
@@ -2465,9 +2454,7 @@ fn runInner() !void {
                 const vv = v.object.variant_value;
                 const arm = vv.typ.variant_type.arms[vv.ordinal];
                 if (arm.fields.len > 0) {
-                    const map_obj = try vmAllocObject();
-                    map_obj.* = .{ .map = &[_]MapEntry{} };
-                    try pushTempRoot(.{ .object = map_obj });
+                    const map_obj = try allocTempRooted(.{ .map = &[_]MapEntry{} });
                     defer popTempRoot();
                     const items = try vmAllocManagedSlice(MapEntry, arm.fields.len);
                     for (arm.fields, vv.arm_fields, items) |f, fv, *it| it.* = .{ .key = .{ .string = f.name }, .value = fv };
@@ -2490,9 +2477,7 @@ fn runInner() !void {
                 const total: usize = @as(usize, argc) + 1;
                 if (vmState().stack_top < total) return error.StackUnderflow;
                 const start = vmState().stack_top - total;
-                const arr_obj = try vmAllocObject();
-                arr_obj.* = .{ .array = &[_]Value{} }; // safe tag before GC can run
-                try pushTempRoot(.{ .object = arr_obj });
+                const arr_obj = try allocTempRooted(.{ .array = &[_]Value{} });
                 defer popTempRoot();
                 const items = try vmAllocManagedSlice(Value, total);
                 @memcpy(items[0..total], vmState().stack[start .. start + total]);
