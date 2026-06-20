@@ -49,9 +49,8 @@ pub fn resetHandlers() void {
 
 pub fn netReset() void {
     if (g_net_handlers) |h| {
-        var i: usize = 0;
-        while (i < g_conn_count) : (i += 1) {
-            if (h.callbacks.close) |close_fn| close_fn(g_conns[i].host_handle, h.userdata);
+        for (g_conns[0..g_conn_count]) |conn| {
+            if (h.callbacks.close) |close_fn| close_fn(conn.host_handle, h.userdata);
         }
         g_conn_count = 0;
         g_next_id = 1;
@@ -59,9 +58,8 @@ pub fn netReset() void {
     }
     if (comptime builtin.os.tag == .wasi) return;
     const io_ctx = ioContext();
-    var i: usize = 0;
-    while (i < g_conn_count) : (i += 1) {
-        io_ctx.vtable.netClose(io_ctx.userdata, (&g_conns[i].socket)[0..1]);
+    for (g_conns[0..g_conn_count]) |*conn| {
+        io_ctx.vtable.netClose(io_ctx.userdata, (&conn.socket)[0..1]);
     }
     g_conn_count = 0;
     g_next_id = 1;
@@ -184,17 +182,15 @@ pub fn netDial(network: []const u8, address: []const u8) !u32 {
 }
 
 fn findConn(id: u32) ?*NetConn {
-    var i: usize = 0;
-    while (i < g_conn_count) : (i += 1) {
-        if (g_conns[i].id == id) return &g_conns[i];
+    for (g_conns[0..g_conn_count]) |*c| {
+        if (c.id == id) return c;
     }
     return null;
 }
 
 fn removeConn(id: u32) void {
-    var i: usize = 0;
-    while (i < g_conn_count) : (i += 1) {
-        if (g_conns[i].id == id) {
+    for (g_conns[0..g_conn_count], 0..) |*c, i| {
+        if (c.id == id) {
             g_conns[i] = g_conns[g_conn_count - 1];
             g_conn_count -= 1;
             return;

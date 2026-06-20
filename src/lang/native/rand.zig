@@ -72,8 +72,7 @@ pub fn nativeRandPerm(n_v: Value) !Value {
     try vms.pushTempRoot(.{ .object = obj });
     defer vms.popTempRoot();
     const items = try vmgc.vmAllocManagedSlice(Value, usize_n);
-    var i: usize = 0;
-    while (i < usize_n) : (i += 1) items[i] = .{ .int = @intCast(i) };
+    for (items, 0..) |*item, i| item.* = .{ .int = @intCast(i) };
     var j: usize = usize_n;
     while (j > 1) {
         j -= 1;

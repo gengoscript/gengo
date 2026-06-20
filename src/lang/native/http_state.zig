@@ -144,10 +144,9 @@ fn httpFetchHost(
         }
     }
     defer {
-        var di: usize = 0;
-        while (di < header_count) : (di += 1) {
-            std.heap.page_allocator.free(host_headers_keys[di]);
-            std.heap.page_allocator.free(host_headers_vals[di]);
+        for (host_headers_keys[0..header_count], host_headers_vals[0..header_count]) |k, v| {
+            std.heap.page_allocator.free(k);
+            std.heap.page_allocator.free(v);
         }
     }
 
@@ -178,13 +177,11 @@ fn httpFetchHost(
     errdefer resp_headers.deinit();
 
     if (out.headers.count > 0 and out.headers.keys != null and out.headers.values != null) {
+        const count: usize = @intCast(out.headers.count);
         const keys_ptr = out.headers.keys.?;
         const vals_ptr = out.headers.values.?;
-        var i: usize = 0;
-        while (i < @as(usize, @intCast(out.headers.count))) : (i += 1) {
-            const key = std.mem.span(keys_ptr[i]);
-            const val = std.mem.span(vals_ptr[i]);
-            try resp_headers.put(key, val);
+        for (0..count) |i| {
+            try resp_headers.put(std.mem.span(keys_ptr[i]), std.mem.span(vals_ptr[i]));
         }
     }
 
@@ -332,10 +329,7 @@ fn httpFetchBuiltin(
         }
     }
 
-    var i: usize = 0;
-    while (i < header_count) : (i += 1) {
-        resp_headers.put(header_values[i].name, header_values[i].value) catch {};
-    }
+    for (header_values[0..header_count]) |hv| resp_headers.put(hv.name, hv.value) catch {};
 
     // Read body
     var body: std.ArrayList(u8) = .empty;

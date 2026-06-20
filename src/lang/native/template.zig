@@ -697,14 +697,10 @@ pub fn tplAddFunc(tmpl_obj: *Object, name: []const u8, func_val: Value) !void {
     const funcs_obj = funcs_v.object;
     switch (funcs_obj.*) {
         .map => |m| {
-            var fi: usize = 0;
-            while (fi < m.len) : (fi += 1) {
-                if (tplIsStringVal(m[fi].key)) {
-                    const k = try tplAsStringVal(m[fi].key);
-                    if (std.mem.eql(u8, k, name)) {
-                        m[fi].value = func_val;
-                        return;
-                    }
+            for (m) |*e| {
+                if (tplIsStringVal(e.key)) {
+                    const k = try tplAsStringVal(e.key);
+                    if (std.mem.eql(u8, k, name)) { e.value = func_val; return; }
                 }
             }
             const new_items = try vmgc.vmAllocManagedSlice(MapEntry, m.len + 1);
@@ -713,14 +709,10 @@ pub fn tplAddFunc(tmpl_obj: *Object, name: []const u8, func_val: Value) !void {
             funcs_obj.* = .{ .map_managed = new_items[0 .. m.len + 1] };
         },
         .map_managed => |m| {
-            var fi: usize = 0;
-            while (fi < m.len) : (fi += 1) {
-                if (tplIsStringVal(m[fi].key)) {
-                    const k = try tplAsStringVal(m[fi].key);
-                    if (std.mem.eql(u8, k, name)) {
-                        m[fi].value = func_val;
-                        return;
-                    }
+            for (m) |*e| {
+                if (tplIsStringVal(e.key)) {
+                    const k = try tplAsStringVal(e.key);
+                    if (std.mem.eql(u8, k, name)) { e.value = func_val; return; }
                 }
             }
             const new_items = try vmgc.vmAllocManagedSlice(MapEntry, m.len + 1);
