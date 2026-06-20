@@ -498,11 +498,23 @@ pub const Runtime = struct {
         };
     }
 
+    fn restoreReplTypeNames(
+        self: *Runtime,
+        compiler: *Compiler,
+        offsets: []const u32,
+        lens: []const u16,
+        comptime addFn: anytype,
+    ) void {
+        for (offsets, lens) |offset, len| {
+            addFn(&compiler.registry, self.replTypeNameAt(offset, len)) catch {};
+        }
+    }
+
     fn restoreReplCompilerState(self: *Runtime, compiler: *Compiler) void {
         self.restoreReplNamedTypes(compiler);
-        self.restoreReplStructTypes(compiler);
-        self.restoreReplInterfaceTypes(compiler);
-        self.restoreReplVariantTypes(compiler);
+        self.restoreReplTypeNames(compiler, self.repl_struct_type_name_offsets[0..self.repl_struct_type_count], self.repl_struct_type_name_lens[0..self.repl_struct_type_count], @TypeOf(compiler.registry).addStructType);
+        self.restoreReplTypeNames(compiler, self.repl_interface_type_name_offsets[0..self.repl_interface_type_count], self.repl_interface_type_name_lens[0..self.repl_interface_type_count], @TypeOf(compiler.registry).addInterfaceType);
+        self.restoreReplTypeNames(compiler, self.repl_variant_type_name_offsets[0..self.repl_variant_type_count], self.repl_variant_type_name_lens[0..self.repl_variant_type_count], @TypeOf(compiler.registry).addVariantType);
         self.restoreReplGlobalFuncs(compiler);
         self.restoreReplTypedGlobals(compiler);
         self.restoreReplNamespaceProvenance(compiler);
@@ -527,33 +539,6 @@ pub const Runtime = struct {
                 .parent_name = parent_name,
                 .enum_members = self.replEnumMembersAt(ti),
             }) catch {};
-        }
-    }
-
-    fn restoreReplStructTypes(self: *Runtime, compiler: *Compiler) void {
-        var ti: usize = 0;
-        while (ti < self.repl_struct_type_count) : (ti += 1) {
-            compiler.registry.addStructType(
-                self.replTypeNameAt(self.repl_struct_type_name_offsets[ti], self.repl_struct_type_name_lens[ti]),
-            ) catch {};
-        }
-    }
-
-    fn restoreReplInterfaceTypes(self: *Runtime, compiler: *Compiler) void {
-        var ti: usize = 0;
-        while (ti < self.repl_interface_type_count) : (ti += 1) {
-            compiler.registry.addInterfaceType(
-                self.replTypeNameAt(self.repl_interface_type_name_offsets[ti], self.repl_interface_type_name_lens[ti]),
-            ) catch {};
-        }
-    }
-
-    fn restoreReplVariantTypes(self: *Runtime, compiler: *Compiler) void {
-        var ti: usize = 0;
-        while (ti < self.repl_variant_type_count) : (ti += 1) {
-            compiler.registry.addVariantType(
-                self.replTypeNameAt(self.repl_variant_type_name_offsets[ti], self.repl_variant_type_name_lens[ti]),
-            ) catch {};
         }
     }
 
@@ -594,6 +579,31 @@ pub const Runtime = struct {
         }
     }
 
+    fn persistReplTypeNames(
+        self: *Runtime,
+        compiler: *const Compiler,
+        comptime desc: struct {
+            registry_count: []const u8,
+            registry_entries: []const u8,
+            repl_count: []const u8,
+            repl_offsets: []const u8,
+            repl_lens: []const u8,
+            max: u32,
+            overflow_msg: []const u8,
+        },
+    ) !void {
+        var ti: usize = 0;
+        while (ti < @field(compiler.registry, desc.registry_count)) : (ti += 1) {
+            if (@field(self, desc.repl_count) >= desc.max)
+                return self.setReplOverflowError(desc.overflow_msg);
+            const idx = @field(self, desc.repl_count);
+            const saved_name = try self.saveReplTypeName(@field(compiler.registry, desc.registry_entries)[ti].name);
+            @field(self, desc.repl_offsets)[idx] = @intCast(@intFromPtr(saved_name.ptr) - @intFromPtr(&self.repl_type_name_buf));
+            @field(self, desc.repl_lens)[idx] = @intCast(saved_name.len);
+            @field(self, desc.repl_count) += 1;
+        }
+    }
+
     fn persistReplCompilerState(self: *Runtime, compiler: *const Compiler) !void {
         try self.persistReplTypes(compiler);
         self.persistReplGlobalFuncs(compiler);
@@ -609,9 +619,33 @@ pub const Runtime = struct {
         self.repl_type_name_buf_used = 0;
         self.repl_enum_member_buf_used = 0;
         try self.persistReplNamedTypes(compiler);
-        try self.persistReplStructTypes(compiler);
-        try self.persistReplInterfaceTypes(compiler);
-        try self.persistReplVariantTypes(compiler);
+        try self.persistReplTypeNames(compiler, .{
+            .registry_count = "struct_type_count",
+            .registry_entries = "struct_types",
+            .repl_count = "repl_struct_type_count",
+            .repl_offsets = "repl_struct_type_name_offsets",
+            .repl_lens = "repl_struct_type_name_lens",
+            .max = MaxStructTypes,
+            .overflow_msg = "REPL type table full: too many struct type declarations",
+        });
+        try self.persistReplTypeNames(compiler, .{
+            .registry_count = "interface_type_count",
+            .registry_entries = "interface_types",
+            .repl_count = "repl_interface_type_count",
+            .repl_offsets = "repl_interface_type_name_offsets",
+            .repl_lens = "repl_interface_type_name_lens",
+            .max = MaxInterfaceTypes,
+            .overflow_msg = "REPL type table full: too many interface type declarations",
+        });
+        try self.persistReplTypeNames(compiler, .{
+            .registry_count = "variant_type_count",
+            .registry_entries = "variant_types",
+            .repl_count = "repl_variant_type_count",
+            .repl_offsets = "repl_variant_type_name_offsets",
+            .repl_lens = "repl_variant_type_name_lens",
+            .max = MaxVariantTypes,
+            .overflow_msg = "REPL type table full: too many variant type declarations",
+        });
     }
 
     fn persistReplNamedTypes(self: *Runtime, compiler: *const Compiler) !void {
@@ -642,48 +676,6 @@ pub const Runtime = struct {
             }
             if (ni.enum_members) |members| self.saveReplEnumMembers(idx, members);
             self.repl_named_type_count += 1;
-        }
-    }
-
-    fn persistReplStructTypes(self: *Runtime, compiler: *const Compiler) !void {
-        var ti: usize = 0;
-        while (ti < compiler.registry.struct_type_count) : (ti += 1) {
-            if (self.repl_struct_type_count >= MaxStructTypes)
-                return self.setReplOverflowError("REPL type table full: too many struct type declarations");
-            const idx = self.repl_struct_type_count;
-            const saved_name = self.saveReplTypeName(compiler.registry.struct_types[ti].name) catch
-                return self.setReplOverflowError("REPL type name buffer full");
-            self.repl_struct_type_name_offsets[idx] = @intCast(@intFromPtr(saved_name.ptr) - @intFromPtr(&self.repl_type_name_buf));
-            self.repl_struct_type_name_lens[idx] = @intCast(saved_name.len);
-            self.repl_struct_type_count += 1;
-        }
-    }
-
-    fn persistReplInterfaceTypes(self: *Runtime, compiler: *const Compiler) !void {
-        var ti: usize = 0;
-        while (ti < compiler.registry.interface_type_count) : (ti += 1) {
-            if (self.repl_interface_type_count >= MaxInterfaceTypes)
-                return self.setReplOverflowError("REPL type table full: too many interface type declarations");
-            const idx = self.repl_interface_type_count;
-            const saved_name = self.saveReplTypeName(compiler.registry.interface_types[ti].name) catch
-                return self.setReplOverflowError("REPL type name buffer full");
-            self.repl_interface_type_name_offsets[idx] = @intCast(@intFromPtr(saved_name.ptr) - @intFromPtr(&self.repl_type_name_buf));
-            self.repl_interface_type_name_lens[idx] = @intCast(saved_name.len);
-            self.repl_interface_type_count += 1;
-        }
-    }
-
-    fn persistReplVariantTypes(self: *Runtime, compiler: *const Compiler) !void {
-        var ti: usize = 0;
-        while (ti < compiler.registry.variant_type_count) : (ti += 1) {
-            if (self.repl_variant_type_count >= MaxVariantTypes)
-                return self.setReplOverflowError("REPL type table full: too many variant type declarations");
-            const idx = self.repl_variant_type_count;
-            const saved_name = self.saveReplTypeName(compiler.registry.variant_types[ti].name) catch
-                return self.setReplOverflowError("REPL type name buffer full");
-            self.repl_variant_type_name_offsets[idx] = @intCast(@intFromPtr(saved_name.ptr) - @intFromPtr(&self.repl_type_name_buf));
-            self.repl_variant_type_name_lens[idx] = @intCast(saved_name.len);
-            self.repl_variant_type_count += 1;
         }
     }
 

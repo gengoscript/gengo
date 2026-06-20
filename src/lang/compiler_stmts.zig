@@ -583,7 +583,7 @@ pub fn emitExprListTuple(c: anytype) !u8 {
     return count;
 }
 
-fn emitImplicitReturn(scope: *FuncInfo, line: u32) !void {
+pub fn emitImplicitReturn(scope: *FuncInfo, line: u32) !void {
     if (scope.named_return_count == 0) {
         try chunk.emitOp(.null_val, line);
     } else if (scope.named_return_count == 1) {

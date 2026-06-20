@@ -986,196 +986,68 @@ pub const Compiler = struct {
         }
         return false;
     }
-    fn arrayLit(self: *Compiler) !void {
-        return compiler_expr.arrayLit(self);
-    }
-    fn assertStmt(self: *Compiler) !void {
-        return compiler_stmts.assertStmt(self);
-    }
-    fn assignLoopVar(self: *Compiler, name: Token) !void {
-        return compiler_stmts.assignLoopVar(self, name);
-    }
-    fn assignStmt(self: *Compiler) !void {
-        return compiler_stmts.assignStmt(self);
-    }
-    fn block(self: *Compiler) anyerror!void {
-        return compiler_stmts.block(self);
-    }
-    fn cForStmt(self: *Compiler) anyerror!void {
-        return compiler_stmts.cForStmt(self);
-    }
-    pub fn compileFuncWithPrefix(self: *Compiler, prefix: []const []const u8, is_named: bool, predicate_base: ?NamedTypeBase) anyerror!u8 {
-        return compiler_stmts.compileFuncWithPrefix(self, prefix, is_named, predicate_base);
-    }
-    fn compoundStmt(self: *Compiler) !void {
-        return compiler_stmts.compoundStmt(self);
-    }
-    fn declareLoopVar(self: *Compiler, name: Token) !void {
-        return compiler_stmts.declareLoopVar(self, name);
-    }
-    fn deferStmt(self: *Compiler) !void {
-        return compiler_stmts.deferStmt(self);
-    }
-    fn emitAssignTargetPath(self: *Compiler, target: AssignTarget, all_steps: []const AssignTargetStep) !void {
-        return compiler_stmts.emitAssignTargetPath(self, target, all_steps);
-    }
-    fn emitExprListTuple(self: *Compiler) !u8 {
-        return compiler_stmts.emitExprListTuple(self);
-    }
-    fn emitImplicitReturn(scope: *FuncInfo, line: u32) !void {
-        return compiler_stmts.emitImplicitReturn(scope, line);
-    }
-    pub fn emitZeroValue(self: *Compiler, tc: TypeCheck, line: u32) !void {
-        return compiler_decls.emitZeroValue(self, tc, line);
-    }
-    pub fn emitNamedDefault(self: *Compiler, name: []const u8, line: u32) !void {
-        return compiler_decls.emitNamedDefault(self, name, line);
-    }
-    pub fn expr(self: *Compiler) !void {
-        return compiler_expr.expr(self);
-    }
-    pub fn typeNameLiteral(self: *Compiler) !void {
-        return compiler_expr.typeNameLiteral(self);
-    }
-    fn forInStmt(self: *Compiler) anyerror!void {
-        return compiler_stmts.forInStmt(self);
-    }
-    fn forStmt(self: *Compiler) anyerror!void {
-        return compiler_stmts.forStmt(self);
-    }
-    pub fn funcLit(self: *Compiler) anyerror!void {
-        return compiler_stmts.funcLit(self);
-    }
-    fn hasInitSemicolon(self: *Compiler) bool {
-        return compiler_stmts.hasInitSemicolon(self);
-    }
-    fn ifStmt(self: *Compiler) anyerror!void {
-        return compiler_stmts.ifStmt(self);
-    }
-    fn importExpr(self: *Compiler) !void {
-        return compiler_expr.importExpr(self);
-    }
-    fn incrStmt(self: *Compiler) !void {
-        return compiler_stmts.incrStmt(self);
-    }
-    fn indexAssignStmt(self: *Compiler) !void {
-        return compiler_stmts.indexAssignStmt(self);
-    }
-    fn infixExpr(self: *Compiler, tt: TT) anyerror!void {
-        return compiler_expr.infixExpr(self, tt);
-    }
-    fn interfaceDeclBody(self: *Compiler, kw: Token, name: Token, is_pub: bool) !void {
-        return compiler_decls.interfaceDeclBody(self, kw, name, is_pub);
-    }
-    fn isCStyleFor(self: *Compiler) bool {
-        return compiler_stmts.isCStyleFor(self);
-    }
-    fn isForIn(self: *Compiler) bool {
-        return compiler_stmts.isForIn(self);
-    }
-    fn isIndexAssign(self: *Compiler) bool {
-        return compiler_stmts.isIndexAssign(self);
-    }
-    fn isMethodDecl(self: *Compiler) bool {
-        return compiler_decls.isMethodDecl(self);
-    }
-    fn isMultiAssignEq(self: *Compiler) bool {
-        return compiler_stmts.isMultiAssignEq(self);
-    }
-    fn isMultiBind(self: *Compiler, op: TT) bool {
-        return compiler_stmts.isMultiBind(self, op);
-    }
-    fn isNamedFuncDecl(self: *Compiler) bool {
-        return compiler_decls.isNamedFuncDecl(self);
-    }
-    fn isPropertyAssign(self: *Compiler) bool {
-        return compiler_stmts.isPropertyAssign(self);
-    }
-    fn looksLikeStructLiteral(self: *Compiler) bool {
-        return compiler_expr.looksLikeStructLiteral(self);
-    }
-    fn mapLit(self: *Compiler) !void {
-        return compiler_expr.mapLit(self);
-    }
-    fn methodDecl(self: *Compiler) !void {
-        return compiler_decls.methodDecl(self);
-    }
-    fn multiBindStmt(self: *Compiler, is_decl: bool) !void {
-        return compiler_stmts.multiBindStmt(self, is_decl);
-    }
-    fn namedFuncDecl(self: *Compiler, is_pub: bool) !void {
-        return compiler_decls.namedFuncDecl(self, is_pub);
-    }
-    fn namedTypeDecl(self: *Compiler, is_pub: bool) !void {
-        return compiler_decls.namedTypeDecl(self, is_pub);
-    }
-    fn numLit(self: *Compiler) !void {
-        return compiler_expr.numLit(self);
-    }
-    fn parseAssignTargetList(self: *Compiler, targets: *[MaxLocals]AssignTarget, steps: *[MaxLocals * 8]AssignTargetStep) !struct { target_count: u8, step_count: u16 } {
-        return compiler_stmts.parseAssignTargetList(self, targets, steps);
-    }
-    fn parseConstraintBounds(self: *Compiler) !struct { is_cycle: bool, min: f64, max: f64 } {
-        return compiler_decls.parseConstraintBounds(self);
-    }
-    pub fn parseFieldTypeSpec(self: *Compiler) !FieldTypeSpec {
-        return compiler_decls.parseFieldTypeSpec(self);
-    }
-    fn parseNameList(self: *Compiler, out: *[MaxLocals]Token) !u8 {
-        return compiler_stmts.parseNameList(self, out);
-    }
-    fn parsePrecedence(self: *Compiler, p: Prec) anyerror!void {
-        return compiler_expr.parsePrecedence(self, p);
-    }
-    fn parseSignedNumber(self: *Compiler) !f64 {
-        return compiler_decls.parseSignedNumber(self);
-    }
-    fn propertyAssignStmt(self: *Compiler) !void {
-        return compiler_stmts.propertyAssignStmt(self);
-    }
-    fn returnStmt(self: *Compiler) !void {
-        return compiler_stmts.returnStmt(self);
-    }
-    fn runeLitExpr(self: *Compiler) !void {
-        return compiler_expr.runeLitExpr(self);
-    }
-    fn skipTypeSpec(self: *Compiler) !void {
-        return compiler_stmts.skipTypeSpec(self);
-    }
-    fn stmt(self: *Compiler) anyerror!void {
-        return compiler_stmts.stmt(self);
-    }
-    fn strLitExpr(self: *Compiler) !void {
-        return compiler_expr.strLitExpr(self);
-    }
-    fn structDeclBody(self: *Compiler, kw: Token, name: Token, is_pub: bool) !void {
-        return compiler_decls.structDeclBody(self, kw, name, is_pub);
-    }
-    fn structInstanceLit(self: *Compiler, type_name: Token) !void {
-        return compiler_expr.structInstanceLit(self, type_name);
-    }
-    fn structInstanceLitAfterValue(self: *Compiler, line: u32) !void {
-        return compiler_expr.structInstanceLitAfterValue(self, line);
-    }
-    fn subtypeDecl(self: *Compiler, is_pub: bool) !void {
-        return compiler_decls.subtypeDecl(self, is_pub);
-    }
-    fn switchStmt(self: *Compiler) anyerror!void {
-        return compiler_stmts.switchStmt(self);
-    }
-    fn unaryExpr(self: *Compiler, tt: TT) !void {
-        return compiler_expr.unaryExpr(self, tt);
-    }
-    fn varDecl(self: *Compiler, has_keyword: bool, is_const: bool) !void {
-        return compiler_stmts.varDecl(self, has_keyword, is_const);
-    }
-    pub fn varExpr(self: *Compiler, name: Token) !void {
-        return compiler_expr.varExpr(self, name);
-    }
-    fn variantDeclBody(self: *Compiler, kw: Token, name_tok: Token, is_pub: bool) !void {
-        return compiler_decls.variantDeclBody(self, kw, name_tok, is_pub);
-    }
-    fn whileForStmt(self: *Compiler) anyerror!void {
-        return compiler_stmts.whileForStmt(self);
-    }
+    const arrayLit = compiler_expr.arrayLit;
+    const assertStmt = compiler_stmts.assertStmt;
+    const assignLoopVar = compiler_stmts.assignLoopVar;
+    const assignStmt = compiler_stmts.assignStmt;
+    const block = compiler_stmts.block;
+    const cForStmt = compiler_stmts.cForStmt;
+    pub const compileFuncWithPrefix = compiler_stmts.compileFuncWithPrefix;
+    const compoundStmt = compiler_stmts.compoundStmt;
+    const declareLoopVar = compiler_stmts.declareLoopVar;
+    const deferStmt = compiler_stmts.deferStmt;
+    const emitAssignTargetPath = compiler_stmts.emitAssignTargetPath;
+    const emitExprListTuple = compiler_stmts.emitExprListTuple;
+    const emitImplicitReturn = compiler_stmts.emitImplicitReturn;
+    pub const emitNamedDefault = compiler_decls.emitNamedDefault;
+    pub const emitZeroValue = compiler_decls.emitZeroValue;
+    pub const expr = compiler_expr.expr;
+    const forInStmt = compiler_stmts.forInStmt;
+    const forStmt = compiler_stmts.forStmt;
+    pub const funcLit = compiler_stmts.funcLit;
+    const hasInitSemicolon = compiler_stmts.hasInitSemicolon;
+    const ifStmt = compiler_stmts.ifStmt;
+    const importExpr = compiler_expr.importExpr;
+    const incrStmt = compiler_stmts.incrStmt;
+    const indexAssignStmt = compiler_stmts.indexAssignStmt;
+    const infixExpr = compiler_expr.infixExpr;
+    const interfaceDeclBody = compiler_decls.interfaceDeclBody;
+    const isCStyleFor = compiler_stmts.isCStyleFor;
+    const isForIn = compiler_stmts.isForIn;
+    const isIndexAssign = compiler_stmts.isIndexAssign;
+    const isMethodDecl = compiler_decls.isMethodDecl;
+    const isMultiAssignEq = compiler_stmts.isMultiAssignEq;
+    const isMultiBind = compiler_stmts.isMultiBind;
+    const isNamedFuncDecl = compiler_decls.isNamedFuncDecl;
+    const isPropertyAssign = compiler_stmts.isPropertyAssign;
+    const looksLikeStructLiteral = compiler_expr.looksLikeStructLiteral;
+    const mapLit = compiler_expr.mapLit;
+    const methodDecl = compiler_decls.methodDecl;
+    const multiBindStmt = compiler_stmts.multiBindStmt;
+    const namedFuncDecl = compiler_decls.namedFuncDecl;
+    const namedTypeDecl = compiler_decls.namedTypeDecl;
+    const numLit = compiler_expr.numLit;
+    const parseAssignTargetList = compiler_stmts.parseAssignTargetList;
+    const parseConstraintBounds = compiler_decls.parseConstraintBounds;
+    pub const parseFieldTypeSpec = compiler_decls.parseFieldTypeSpec;
+    const parseNameList = compiler_stmts.parseNameList;
+    const parsePrecedence = compiler_expr.parsePrecedence;
+    const parseSignedNumber = compiler_decls.parseSignedNumber;
+    const propertyAssignStmt = compiler_stmts.propertyAssignStmt;
+    const returnStmt = compiler_stmts.returnStmt;
+    const runeLitExpr = compiler_expr.runeLitExpr;
+    const skipTypeSpec = compiler_stmts.skipTypeSpec;
+    const stmt = compiler_stmts.stmt;
+    const strLitExpr = compiler_expr.strLitExpr;
+    const structDeclBody = compiler_decls.structDeclBody;
+    const structInstanceLit = compiler_expr.structInstanceLit;
+    const structInstanceLitAfterValue = compiler_expr.structInstanceLitAfterValue;
+    const subtypeDecl = compiler_decls.subtypeDecl;
+    const switchStmt = compiler_stmts.switchStmt;
+    pub const typeNameLiteral = compiler_expr.typeNameLiteral;
+    const unaryExpr = compiler_expr.unaryExpr;
+    const varDecl = compiler_stmts.varDecl;
+    pub const varExpr = compiler_expr.varExpr;
+    const variantDeclBody = compiler_decls.variantDeclBody;
+    const whileForStmt = compiler_stmts.whileForStmt;
     };
