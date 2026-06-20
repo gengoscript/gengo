@@ -447,6 +447,72 @@ test "api runtime: setConfig updates mirrored config fields" {
     try std.testing.expectEqualStrings("http", rt.inner.enabled_capabilities[0]);
 }
 
+test "api runtime: incremental std namespace validation matches file mode" {
+    const src =
+        \\std := import("std")
+        \\std.io.missing
+        \\
+    ;
+
+    var rt_file = try setupApiRuntime(.{
+        .allow_io = false,
+        .allocator = std.testing.allocator,
+    });
+    defer rt_file.deinit();
+
+    const file_result = rt_file.run(src);
+    try std.testing.expect(file_result == .compile_error);
+
+    var rt_repl = try setupApiRuntime(.{
+        .allow_io = false,
+        .allocator = std.testing.allocator,
+    });
+    defer rt_repl.deinit();
+
+    try std.testing.expect(rt_repl.runIncremental("std := import(\"std\")") == .ok);
+    const repl_result = rt_repl.runIncremental("std.io.missing");
+    try std.testing.expect(repl_result == .compile_error);
+
+    try std.testing.expectEqual(file_result.compile_error.kind, repl_result.compile_error.kind);
+    try std.testing.expectEqual(file_result.compile_error.col, repl_result.compile_error.col);
+    try std.testing.expectEqualStrings(file_result.compile_error.msg, repl_result.compile_error.msg);
+    try std.testing.expectEqual(@as(u32, 2), file_result.compile_error.line);
+    try std.testing.expectEqual(@as(u32, 1), repl_result.compile_error.line);
+}
+
+test "api runtime: incremental enum subtype validation matches file mode" {
+    const src =
+        \\type Colors enum { red, green, blue }
+        \\subtype Warm Colors { orange }
+        \\
+    ;
+
+    var rt_file = try setupApiRuntime(.{
+        .allow_io = false,
+        .allocator = std.testing.allocator,
+    });
+    defer rt_file.deinit();
+
+    const file_result = rt_file.run(src);
+    try std.testing.expect(file_result == .compile_error);
+
+    var rt_repl = try setupApiRuntime(.{
+        .allow_io = false,
+        .allocator = std.testing.allocator,
+    });
+    defer rt_repl.deinit();
+
+    try std.testing.expect(rt_repl.runIncremental("type Colors enum { red, green, blue }") == .ok);
+    const repl_result = rt_repl.runIncremental("subtype Warm Colors { orange }");
+    try std.testing.expect(repl_result == .compile_error);
+
+    try std.testing.expectEqual(file_result.compile_error.kind, repl_result.compile_error.kind);
+    try std.testing.expectEqual(file_result.compile_error.col, repl_result.compile_error.col);
+    try std.testing.expectEqualStrings(file_result.compile_error.msg, repl_result.compile_error.msg);
+    try std.testing.expectEqual(@as(u32, 2), file_result.compile_error.line);
+    try std.testing.expectEqual(@as(u32, 1), repl_result.compile_error.line);
+}
+
 test "chunk: verify rejects jump target into instruction body" {
     var rt = try setup();
     defer rt.deinit();
