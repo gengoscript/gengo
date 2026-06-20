@@ -159,9 +159,8 @@ pub const TypeRegistry = struct {
     }
 
     pub fn hasStructType(self: *TypeRegistry, name: []const u8) bool {
-        var i: usize = 0;
-        while (i < self.struct_type_count) : (i += 1) {
-            if (common.streq(self.struct_types[i].name, name)) return true;
+        for (self.struct_types[0..self.struct_type_count]) |t| {
+            if (common.streq(t.name, name)) return true;
         }
         return false;
     }
@@ -171,17 +170,15 @@ pub const TypeRegistry = struct {
     }
 
     pub fn hasInterfaceType(self: *TypeRegistry, name: []const u8) bool {
-        var i: usize = 0;
-        while (i < self.interface_type_count) : (i += 1) {
-            if (common.streq(self.interface_types[i].name, name)) return true;
+        for (self.interface_types[0..self.interface_type_count]) |t| {
+            if (common.streq(t.name, name)) return true;
         }
         return false;
     }
 
     pub fn hasGlobalConst(self: *TypeRegistry, name: []const u8) bool {
-        var i: usize = 0;
-        while (i < self.global_const_count) : (i += 1) {
-            if (common.streq(self.global_consts[i].name, name)) return true;
+        for (self.global_consts[0..self.global_const_count]) |c| {
+            if (common.streq(c.name, name)) return true;
         }
         return false;
     }
@@ -208,17 +205,15 @@ pub const TypeRegistry = struct {
     }
 
     pub fn hasNamedType(self: *TypeRegistry, name: []const u8) bool {
-        var i: usize = 0;
-        while (i < self.named_type_count) : (i += 1) {
-            if (common.streq(self.named_types[i].name, name)) return true;
+        for (self.named_types[0..self.named_type_count]) |t| {
+            if (common.streq(t.name, name)) return true;
         }
         return false;
     }
 
     pub fn getNamedTypeInfo(self: *TypeRegistry, name: []const u8) ?NamedTypeInfo {
-        var i: usize = 0;
-        while (i < self.named_type_count) : (i += 1) {
-            if (common.streq(self.named_types[i].name, name)) return self.named_types[i];
+        for (self.named_types[0..self.named_type_count]) |t| {
+            if (common.streq(t.name, name)) return t;
         }
         return null;
     }
@@ -231,9 +226,8 @@ pub const TypeRegistry = struct {
     }
 
     pub fn hasVariantType(self: *TypeRegistry, name: []const u8) bool {
-        var i: usize = 0;
-        while (i < self.variant_type_count) : (i += 1) {
-            if (common.streq(self.variant_types[i].name, name)) return true;
+        for (self.variant_types[0..self.variant_type_count]) |t| {
+            if (common.streq(t.name, name)) return true;
         }
         return false;
     }
@@ -251,9 +245,8 @@ pub const TypeRegistry = struct {
     }
 
     pub fn hasGlobalFunc(self: *TypeRegistry, name: []const u8) bool {
-        var i: usize = 0;
-        while (i < self.global_func_count) : (i += 1) {
-            if (common.streq(self.global_funcs[i].name, name)) return true;
+        for (self.global_funcs[0..self.global_func_count]) |f| {
+            if (common.streq(f.name, name)) return true;
         }
         return false;
     }

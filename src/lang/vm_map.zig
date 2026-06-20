@@ -58,8 +58,7 @@ pub fn mapFindHashedIndex(entries: []MapEntry, buckets: []i32, key: Value) ?usiz
     if (buckets.len == 0) return null;
     const mask = buckets.len - 1;
     var idx: usize = @intCast(mapHashValue(key) & mask);
-    var probes: usize = 0;
-    while (probes < buckets.len) : (probes += 1) {
+    for (0..buckets.len) |probes| {
         const b = buckets[idx];
         if (b < 0) { vmperf.countMapProbe(probes + 1); return null; }
         const ei: usize = @intCast(b);
@@ -69,27 +68,24 @@ pub fn mapFindHashedIndex(entries: []MapEntry, buckets: []i32, key: Value) ?usiz
         }
         idx = (idx + 1) & mask;
     }
-    vmperf.countMapProbe(probes);
+    vmperf.countMapProbe(buckets.len);
     return null;
 }
 
 pub fn mapBuildHashedBuckets(entries: []MapEntry, buckets: []i32) void {
-    var i: usize = 0;
-    while (i < buckets.len) : (i += 1) buckets[i] = -1;
+    for (buckets) |*b| b.* = -1;
     if (buckets.len == 0) return;
     const mask = buckets.len - 1;
-    i = 0;
-    while (i < entries.len) : (i += 1) {
-        var idx: usize = @intCast(mapHashValue(entries[i].key) & mask);
-        var probes: usize = 0;
-        while (probes < buckets.len) : (probes += 1) {
+    for (entries, 0..) |e, i| {
+        var idx: usize = @intCast(mapHashValue(e.key) & mask);
+        for (0..buckets.len) |_| {
             const cur = buckets[idx];
             if (cur < 0) {
                 buckets[idx] = @intCast(i);
                 break;
             }
             const curi: usize = @intCast(cur);
-            if (mapKeyEquals(entries[curi].key, entries[i].key)) {
+            if (mapKeyEquals(entries[curi].key, e.key)) {
                 // Preserve first-in semantics for duplicate keys.
                 break;
             }
@@ -125,8 +121,7 @@ pub fn mapInsertHashed(obj: *Object, key: Value, val: Value) !void {
     var hm = &obj.map_hashed;
     const mask = hm.buckets.len - 1;
     var slot: usize = @intCast(mapHashValue(key) & mask);
-    var probes: usize = 0;
-    while (probes < hm.buckets.len) : (probes += 1) {
+    for (0..hm.buckets.len) |_| {
         const b = hm.buckets[slot];
         if (b < 0) {
             const ei = hm.len;
