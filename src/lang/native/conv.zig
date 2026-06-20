@@ -17,22 +17,8 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                 if ((vms.vmState().host_caps & host_abi.CAP_CONV_TO_BOOL) != 0) {
                     var arg_wire: [1]host_abi.ValueWire = undefined;
                     arg_wire[0] = try host_abi_mod.wireFromValue(vms.vmState().stack[vms.vmState().stack_top - 1]);
-                    var out_wire: host_abi.ValueWire = .{
-                        .tag = @intFromEnum(host_abi.WireTag.null),
-                        .flags = 0,
-                        .reserved = 0,
-                        .payload = 0,
-                        .len = 0,
-                        .reserved2 = 0,
-                    };
-                    const st = host_abi.nativeCall(.conv_to_bool, arg_wire[0..], &out_wire);
-                    switch (st) {
-                        .ok => {},
-                        .unsupported => return error.HostNativeUnsupported,
-                        .denied => return error.PermissionDenied,
-                        .bad_args => return error.HostNativeBadArgs,
-                        .failed => return error.HostNativeFailed,
-                    }
+                    var out_wire = host_abi_mod.nullWire();
+                    try host_abi_mod.nativeCallChecked(.conv_to_bool, arg_wire[0..], &out_wire);
                     const out = try host_abi_mod.valueFromWire(out_wire);
                     _ = try vms.vmPop();
                     _ = try vms.vmPop();
@@ -54,22 +40,8 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                 if ((vms.vmState().host_caps & host_abi.CAP_CONV_TO_FLOAT) != 0) {
                     var arg_wire: [1]host_abi.ValueWire = undefined;
                     arg_wire[0] = try host_abi_mod.wireFromValue(vms.vmState().stack[vms.vmState().stack_top - 1]);
-                    var out_wire: host_abi.ValueWire = .{
-                        .tag = @intFromEnum(host_abi.WireTag.null),
-                        .flags = 0,
-                        .reserved = 0,
-                        .payload = 0,
-                        .len = 0,
-                        .reserved2 = 0,
-                    };
-                    const st = host_abi.nativeCall(.conv_to_float, arg_wire[0..], &out_wire);
-                    switch (st) {
-                        .ok => {},
-                        .unsupported => return error.HostNativeUnsupported,
-                        .denied => return error.PermissionDenied,
-                        .bad_args => return error.HostNativeBadArgs,
-                        .failed => return error.HostNativeFailed,
-                    }
+                    var out_wire = host_abi_mod.nullWire();
+                    try host_abi_mod.nativeCallChecked(.conv_to_float, arg_wire[0..], &out_wire);
                     const out = try host_abi_mod.valueFromWire(out_wire);
                     _ = try vms.vmPop();
                     _ = try vms.vmPop();
@@ -91,22 +63,8 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                 if ((vms.vmState().host_caps & host_abi.CAP_CONV_TO_INT) != 0) {
                     var arg_wire: [1]host_abi.ValueWire = undefined;
                     arg_wire[0] = try host_abi_mod.wireFromValue(vms.vmState().stack[vms.vmState().stack_top - 1]);
-                    var out_wire: host_abi.ValueWire = .{
-                        .tag = @intFromEnum(host_abi.WireTag.null),
-                        .flags = 0,
-                        .reserved = 0,
-                        .payload = 0,
-                        .len = 0,
-                        .reserved2 = 0,
-                    };
-                    const st = host_abi.nativeCall(.conv_to_int, arg_wire[0..], &out_wire);
-                    switch (st) {
-                        .ok => {},
-                        .unsupported => return error.HostNativeUnsupported,
-                        .denied => return error.PermissionDenied,
-                        .bad_args => return error.HostNativeBadArgs,
-                        .failed => return error.HostNativeFailed,
-                    }
+                    var out_wire = host_abi_mod.nullWire();
+                    try host_abi_mod.nativeCallChecked(.conv_to_int, arg_wire[0..], &out_wire);
                     const out = try host_abi_mod.valueFromWire(out_wire);
                     _ = try vms.vmPop();
                     _ = try vms.vmPop();
@@ -128,22 +86,8 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                 if ((vms.vmState().host_caps & host_abi.CAP_CONV_TO_STRING) != 0) {
                     var arg_wire: [1]host_abi.ValueWire = undefined;
                     arg_wire[0] = try host_abi_mod.wireFromValue(vms.vmState().stack[vms.vmState().stack_top - 1]);
-                    var out_wire: host_abi.ValueWire = .{
-                        .tag = @intFromEnum(host_abi.WireTag.null),
-                        .flags = 0,
-                        .reserved = 0,
-                        .payload = 0,
-                        .len = 0,
-                        .reserved2 = 0,
-                    };
-                    const st = host_abi.nativeCall(.conv_to_string, arg_wire[0..], &out_wire);
-                    switch (st) {
-                        .ok => {},
-                        .unsupported => return error.HostNativeUnsupported,
-                        .denied => return error.PermissionDenied,
-                        .bad_args => return error.HostNativeBadArgs,
-                        .failed => return error.HostNativeFailed,
-                    }
+                    var out_wire = host_abi_mod.nullWire();
+                    try host_abi_mod.nativeCallChecked(.conv_to_string, arg_wire[0..], &out_wire);
                     const out = try host_abi_mod.valueFromWire(out_wire);
                     _ = try vms.vmPop();
                     _ = try vms.vmPop();

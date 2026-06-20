@@ -7,6 +7,35 @@ const Value = @import("../value.zig").Value;
 const Object = @import("../value.zig").Object;
 const MapEntry = @import("../value.zig").MapEntry;
 
+pub fn nullWire() host_abi.ValueWire {
+    return .{
+        .tag = @intFromEnum(host_abi.WireTag.null),
+        .flags = 0,
+        .reserved = 0,
+        .payload = 0,
+        .len = 0,
+        .reserved2 = 0,
+    };
+}
+
+pub fn checkCallStatus(st: host_abi.CallStatus) !void {
+    switch (st) {
+        .ok => {},
+        .unsupported => return error.HostNativeUnsupported,
+        .denied => return error.PermissionDenied,
+        .bad_args => return error.HostNativeBadArgs,
+        .failed => return error.HostNativeFailed,
+    }
+}
+
+pub fn nativeCallChecked(id: host_abi.HostCall, args: []const host_abi.ValueWire, out: *host_abi.ValueWire) !void {
+    try checkCallStatus(host_abi.nativeCall(id, args, out));
+}
+
+pub fn nativeCallRawChecked(id: u16, args: []const host_abi.ValueWire, out: *host_abi.ValueWire) !void {
+    try checkCallStatus(host_abi.nativeCallRaw(id, args, out));
+}
+
 pub fn wireFromValue(v: Value) !host_abi.ValueWire {
     return switch (v) {
         .null => .{
@@ -219,14 +248,7 @@ pub fn ensureHostReady() !void {
     if (vms.vmState().policy.native_backend != .host) return;
     if (vms.vmState().host_checked) return;
 
-    var out: host_abi.ValueWire = .{
-        .tag = @intFromEnum(host_abi.WireTag.null),
-        .flags = 0,
-        .reserved = 0,
-        .payload = 0,
-        .len = 0,
-        .reserved2 = 0,
-    };
+    var out = nullWire();
 
     var empty: [0]host_abi.ValueWire = .{};
     const st_ver = host_abi.nativeCall(.abi_version, empty[0..], &out);
@@ -244,14 +266,7 @@ pub fn ensureHostReady() !void {
     const version = try wireNumberToU64(out);
     if (version != host_abi.ABI_VERSION) return error.HostAbiVersionMismatch;
 
-    const st_caps = host_abi.nativeCall(.host_caps, empty[0..], &out);
-    switch (st_caps) {
-        .ok => {},
-        .unsupported => return error.HostNativeUnsupported,
-        .denied => return error.PermissionDenied,
-        .bad_args => return error.HostNativeBadArgs,
-        .failed => return error.HostNativeFailed,
-    }
+    try nativeCallChecked(.host_caps, empty[0..], &out);
     vms.vmState().host_caps = try wireNumberToU64(out);
     vms.vmState().host_checked = true;
 }

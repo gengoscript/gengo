@@ -748,22 +748,8 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                     while (i < @as(usize, argc)) : (i += 1) {
                         args_wire[i] = try host_abi_mod.wireFromValue(vms.vmState().stack[start + i]);
                     }
-                    var out: host_abi.ValueWire = .{
-                        .tag = @intFromEnum(host_abi.WireTag.null),
-                        .flags = 0,
-                        .reserved = 0,
-                        .payload = 0,
-                        .len = 0,
-                        .reserved2 = 0,
-                    };
-                    const st = host_abi.nativeCall(.io_println, args_wire[0..argc], &out);
-                    switch (st) {
-                        .ok => {},
-                        .unsupported => return error.HostNativeUnsupported,
-                        .denied => return error.PermissionDenied,
-                        .bad_args => return error.HostNativeBadArgs,
-                        .failed => return error.HostNativeFailed,
-                    }
+                    var out = host_abi_mod.nullWire();
+                    try host_abi_mod.nativeCallChecked(.io_println, args_wire[0..argc], &out);
                     var j: usize = 0;
                     while (j < @as(usize, argc)) : (j += 1) _ = try vms.vmPop();
                     _ = try vms.vmPop();
