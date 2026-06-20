@@ -173,6 +173,14 @@ pub const Session = struct {
         self.last_error_msg_len = @intCast(s.len);
     }
 
+    fn copyTestNamesFromCompiler(self: *Session, compiler: *const Compiler) void {
+        self.test_count = compiler.test_count;
+        var ti: usize = 0;
+        while (ti < compiler.test_count) : (ti += 1) {
+            self.test_names[ti] = compiler.test_names[ti];
+        }
+    }
+
     fn isCapabilityEnabled(self: *Session, name: []const u8) bool {
         for (self.enabled_capabilities) |cap| {
             if (common.streq(cap, name)) {
@@ -226,40 +234,9 @@ pub const Session = struct {
     }
 
     fn compileModuleFromPath(self: *Session, path: []const u8) anyerror!void {
-        if (self.findModule(path)) |idx| {
-            if (self.modules[idx].state == .failed) {
-                self.restoreFailedModule(idx);
-                return error.ImportCycle;
-            }
-            if (self.modules[idx].state == .loading) {
-                self.last_error_path = self.modules[idx].path();
-                return error.ImportCycle;
-            }
-            return;
-        }
-
-        const idx = try self.beginModule(path, false);
-
-        const src_raw = self.loadSource(path) catch |err| {
-            self.saveFailedModule(idx);
-            return err;
-        };
-        // Copy source to the bump heap so that recursive loadSource calls
-        // (which reuse source_buf) do not overwrite it before we compile this module.
-        const src_copy = heap.bump(u8, src_raw.len) orelse {
-            self.saveFailedModule(idx);
-            return error.OutOfMemory;
-        };
-        @memcpy(src_copy[0..src_raw.len], src_raw);
-        const src = src_copy[0..src_raw.len];
-        self.compileDependencies(path, src) catch |err| {
-            self.saveFailedModule(idx);
-            return err;
-        };
-        self.compileBegunModule(idx, src, false) catch |err| {
-            self.saveFailedModule(idx);
-            return err;
-        };
+        const idx = (try self.beginImportedModule(path)) orelse return;
+        const src = try self.loadImportedModuleSource(idx);
+        try self.compileImportedModule(idx, src);
     }
 
     fn saveFailedModule(self: *Session, idx: usize) void {
@@ -281,7 +258,7 @@ pub const Session = struct {
         self.last_error_path = self.modules[idx].failure_path_buf[0..self.modules[idx].failure_path_len];
     }
 
-    fn compileModule(self: *Session, path: []const u8, src: []const u8, emit_halt: bool) anyerror!void {
+    fn beginImportedModule(self: *Session, path: []const u8) anyerror!?usize {
         if (self.findModule(path)) |idx| {
             if (self.modules[idx].state == .failed) {
                 self.restoreFailedModule(idx);
@@ -291,16 +268,35 @@ pub const Session = struct {
                 self.last_error_path = self.modules[idx].path();
                 return error.ImportCycle;
             }
-            return;
+            return null;
         }
 
-        const idx = try self.beginModule(path, false);
+        return try self.beginModule(path, false);
+    }
 
+    fn loadImportedModuleSource(self: *Session, idx: usize) ![]const u8 {
+        const path = self.modules[idx].path();
+        const src_raw = self.loadSource(path) catch |err| {
+            self.saveFailedModule(idx);
+            return err;
+        };
+        // Copy source to the bump heap so that recursive loadSource calls
+        // (which reuse source_buf) do not overwrite it before we compile this module.
+        const src_copy = heap.bump(u8, src_raw.len) orelse {
+            self.saveFailedModule(idx);
+            return error.OutOfMemory;
+        };
+        @memcpy(src_copy[0..src_raw.len], src_raw);
+        return src_copy[0..src_raw.len];
+    }
+
+    fn compileImportedModule(self: *Session, idx: usize, src: []const u8) anyerror!void {
+        const path = self.modules[idx].path();
         self.compileDependencies(path, src) catch |err| {
             self.saveFailedModule(idx);
             return err;
         };
-        self.compileBegunModule(idx, src, emit_halt) catch |err| {
+        self.compileBegunModule(idx, src, false) catch |err| {
             self.saveFailedModule(idx);
             return err;
         };
@@ -443,11 +439,7 @@ pub const Session = struct {
             return err;
         };
         if (emit_halt and self.test_mode) {
-            self.test_count = compiler.test_count;
-            var ti: usize = 0;
-            while (ti < compiler.test_count) : (ti += 1) {
-                self.test_names[ti] = compiler.test_names[ti];
-            }
+            self.copyTestNamesFromCompiler(&compiler);
         }
         self.modules[idx].export_count = compiler.export_count;
         var ei: u8 = 0;
