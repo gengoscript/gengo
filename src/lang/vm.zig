@@ -419,6 +419,17 @@ fn pushNumericResultWithCarrier(a: Value, b: Value, n: f64, tag: VTag, op: []con
     }
 }
 
+fn pushUnaryIntResult(v: Value, result: Value) !void {
+    _ = try vmPop();
+    if (v == .object and v.object.* == .named_value) {
+        const wrapped = try vmtyp.coerceNamedTypeResult(v.object.named_value.typ, result);
+        try checkNamedTypePredicate(v.object.named_value.typ, wrapped.object.named_value.value);
+        try vmPush(wrapped);
+    } else {
+        try vmPush(result);
+    }
+}
+
 fn pushStringResultWithCarrier(a: Value, b: Value, raw: Value) !void {
     const carrier = namedTypeCarrier(a, b) catch |err| {
         if (err == error.TypeError) setBinaryTypeError("+", a, b);
@@ -729,6 +740,16 @@ fn canReturnFast(fi: usize, retval: Value) bool {
     };
     if (!vmtyp.isPrimitiveReturn(f)) return false;
     return vmtyp.checkPrimitiveReturn(f, retval);
+}
+
+fn tryInlineGetGlobal() !void {
+    const jip = vmState().ip;
+    if (jip + 5 > chunk.codeLen() or chunk.codeByteAt(jip) != @intFromEnum(Op.get_global)) return;
+    const ic_slot: u16 = @intCast((@as(usize, chunk.codeByteAt(jip + 3)) << 8) | chunk.codeByteAt(jip + 4));
+    if (ic_slot != 0xffff) {
+        vmState().ip += 5;
+        try vmPush(globals.getAt(ic_slot));
+    }
 }
 
 fn doReturn(retval: Value) !bool {
@@ -1756,11 +1777,7 @@ fn runInner() !void {
                     const an = try valueAsNumberForOp(a, b, "/");
                     const bn = try valueAsNumberForOp(b, a, "/");
                     if (bn == 0.0) { vms.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
-                    if (a == .int and b == .int) {
-                        try pushNumericResultWithCarrier(a, b, an / bn, .float, "/");
-                    } else {
-                        try pushNumericResultWithCarrier(a, b, an / bn, tag, "/");
-                    }
+                    try pushNumericResultWithCarrier(a, b, an / bn, if (a == .int and b == .int) .float else tag, "/");
                 }
             },
             .mod => {
@@ -1804,16 +1821,7 @@ fn runInner() !void {
             .bit_not => {
                 const v = try vmPeek(0);
                 const n = try vms.valueAsInt(v);
-                const raw = ~n;
-                if (v == .object and v.object.* == .named_value) {
-                    const wrapped = try vmtyp.coerceNamedTypeResult(v.object.named_value.typ, .{ .int = raw });
-                    try checkNamedTypePredicate(v.object.named_value.typ, wrapped.object.named_value.value);
-                    _ = try vmPop();
-                    try vmPush(wrapped);
-                } else {
-                    _ = try vmPop();
-                    try vmPush(.{ .int = raw });
-                }
+                try pushUnaryIntResult(v, .{ .int = ~n });
             },
             .shl => {
                 const b = try vmPop();
@@ -1978,14 +1986,7 @@ fn runInner() !void {
                         return error.TypeError;
                     },
                 };
-                _ = try vmPop();
-                if (v == .object and v.object.* == .named_value) {
-                    const wrapped = try vmtyp.coerceNamedTypeResult(v.object.named_value.typ, negated);
-                    try checkNamedTypePredicate(v.object.named_value.typ, wrapped.object.named_value.value);
-                    try vmPush(wrapped);
-                } else {
-                    try vmPush(negated);
-                }
+                try pushUnaryIntResult(v, negated);
             },
             .not => {
                 const v = try vmPop();
@@ -2494,18 +2495,7 @@ fn runInner() !void {
                 vmState().ip -= off;
                 // If the back-edge target is a warm get_global IC, execute it inline
                 // to save one full dispatch iteration per loop cycle.
-                const jip = vmState().ip;
-                if (jip + 5 <= chunk.codeLen() and
-                    chunk.codeByteAt(jip) == @intFromEnum(Op.get_global))
-                {
-                    const ic_slot: u16 = @intCast(
-                        (@as(usize, chunk.codeByteAt(jip + 3)) << 8) | chunk.codeByteAt(jip + 4),
-                    );
-                    if (ic_slot != 0xffff) {
-                        vmState().ip += 5;
-                        try vmPush(globals.getAt(ic_slot));
-                    }
-                }
+                try tryInlineGetGlobal();
             },
 
             // Fused set_global + loop back-edge.
@@ -2520,18 +2510,7 @@ fn runInner() !void {
                 if (off > vmState().ip) return error.BytecodeOutOfBounds;
                 vmState().ip -= off;
                 // Same inline get_global as loop: skip one dispatch if warm.
-                const jip = vmState().ip;
-                if (jip + 5 <= chunk.codeLen() and
-                    chunk.codeByteAt(jip) == @intFromEnum(Op.get_global))
-                {
-                    const ic_slot2: u16 = @intCast(
-                        (@as(usize, chunk.codeByteAt(jip + 3)) << 8) | chunk.codeByteAt(jip + 4),
-                    );
-                    if (ic_slot2 != 0xffff) {
-                        vmState().ip += 5;
-                        try vmPush(globals.getAt(ic_slot2));
-                    }
-                }
+                try tryInlineGetGlobal();
             },
 
             .set_named_predicate => {
@@ -2638,7 +2617,7 @@ fn runInner() !void {
                 try pushTempRoot(.{ .object = arr_obj });
                 defer popTempRoot();
                 const items = try vmAllocManagedSlice(Value, total);
-                for (0..total) |di| items[di] = vmState().stack[start + di];
+                @memcpy(items[0..total], vmState().stack[start .. start + total]);
                 arr_obj.* = .{ .array_managed = items[0..total] };
                 vmState().defer_stack[vmState().defer_top] = .{ .object = arr_obj };
                 vmState().defer_top += 1;
