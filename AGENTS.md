@@ -1,5 +1,3 @@
-# AGENTS.md
-
 ## Purpose
 
 This repository uses test-driven development for behavior changes, bug fixes, and new features.
