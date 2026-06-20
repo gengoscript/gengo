@@ -1683,6 +1683,19 @@ fn runInner() !void {
                     vmState().stack[base + slot] = v.object.cell.value;
                 }
             },
+            .close_upvalue_loop => {
+                const slot = try vmByte();
+                const base = vmFrameBase();
+                if (base + slot < vmState().stack.len) {
+                    const v = vmState().stack[base + slot];
+                    if (v == .object and v.object.* == .cell) {
+                        vmState().stack[base + slot] = v.object.cell.value;
+                    }
+                }
+                const off = try vms.vmInt();
+                if (off > vmState().ip) return error.BytecodeOutOfBounds;
+                vmState().ip -= off;
+            },
 
             .add => {
                 const b = try vmPop();
@@ -1752,6 +1765,17 @@ fn runInner() !void {
             .div => {
                 const b = try vmPop();
                 const a = try vmPop();
+                if (a == .int and b == .int) {
+                    if (b.int == 0) { vms.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
+                    try vmPush(.{ .float = @as(f64, @floatFromInt(a.int)) / @as(f64, @floatFromInt(b.int)) });
+                    continue;
+                }
+                if (a == .float and b == .float) {
+                    if (b.float == 0.0) { vms.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
+                    const r = a.float / b.float;
+                    if (!std.math.isFinite(r)) { vms.setRuntimeErr("non-finite value in arithmetic operation", .{}); return error.TypeError; }
+                    try vmPush(.{ .float = r }); continue;
+                }
                 if (decimalOpValues(a, b)) |_| {
                     return error.TypeError;
                 } else if (decimalScalarPair(a, b)) |p| {
@@ -1761,12 +1785,21 @@ fn runInner() !void {
                 } else {
                     const ctx = try numericBinaryOp(a, b, "/");
                     if (ctx.bn == 0.0) { vms.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
-                    try pushNumericResultWithCarrier(a, b, ctx.an / ctx.bn, if (a == .int and b == .int) .float else ctx.tag, "/");
+                    try pushNumericResultWithCarrier(a, b, ctx.an / ctx.bn, ctx.tag, "/");
                 }
             },
             .mod => {
                 const b = try vmPop();
                 const a = try vmPop();
+                if (a == .int and b == .int) {
+                    if (b.int == 0) { vms.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
+                    const result: i64 = if (a.int == std.math.minInt(i64) and b.int == -1) 0 else @rem(a.int, b.int);
+                    try vmPush(.{ .int = result }); continue;
+                }
+                if (a == .float and b == .float) {
+                    if (b.float == 0.0) { vms.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
+                    try vmPush(.{ .float = common.fmod(a.float, b.float) }); continue;
+                }
                 const ctx = try numericBinaryOp(a, b, "%");
                 if (ctx.bn == 0.0) { vms.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
                 try pushNumericResultWithCarrier(a, b, common.fmod(ctx.an, ctx.bn), ctx.tag, "%");
@@ -1950,6 +1983,8 @@ fn runInner() !void {
             .eq => {
                 const b = try vmPop();
                 const a = try vmPop();
+                if (a == .int and b == .int) { try vmPush(.{ .boolean = a.int == b.int }); continue; }
+                if (a == .boolean and b == .boolean) { try vmPush(.{ .boolean = a.boolean == b.boolean }); continue; }
                 try checkNamedValueCompatibility(a, b);
                 try vmPush(.{ .boolean = Value.equals(vms.unboxNamed(a), vms.unboxNamed(b)) });
             },
@@ -1972,12 +2007,14 @@ fn runInner() !void {
             .const_eq => {
                 const k = try chunk.constAt(try vmShort());
                 const a = try vmPop();
+                if (a == .int and k == .int) { try vmPush(.{ .boolean = a.int == k.int }); continue; }
                 try checkNamedValueCompatibility(a, k);
                 try vmPush(.{ .boolean = Value.equals(vms.unboxNamed(a), vms.unboxNamed(k)) });
             },
             .const_sub => {
                 const k = try chunk.constAt(try vmShort());
                 const a = try vmPop();
+                if (a == .int and k == .int) { try vmPush(.{ .int = a.int - k.int }); continue; }
                 try pushSubResult(a, k);
             },
 
@@ -1986,27 +2023,39 @@ fn runInner() !void {
             .get_local_const_eq => {
                 const p = try readLocalSlotAndConst();
                 const a = try readLocalSlot(p.slot);
+                if (a == .int and p.k == .int) { try vmPush(.{ .boolean = a.int == p.k.int }); continue; }
                 try checkNamedValueCompatibility(a, p.k);
                 try vmPush(.{ .boolean = Value.equals(vms.unboxNamed(a), vms.unboxNamed(p.k)) });
             },
             .get_local_const_sub => {
                 const p = try readLocalSlotAndConst();
-                try pushSubResult(try readLocalSlot(p.slot), p.k);
+                const a = try readLocalSlot(p.slot);
+                if (a == .int and p.k == .int) { try vmPush(.{ .int = a.int - p.k.int }); continue; }
+                try pushSubResult(a, p.k);
             },
             .get_local_const_sub_call => {
                 const p = try readLocalSlotAndConst();
                 const argc = try vmByte();
-                try pushSubResult(try readLocalSlot(p.slot), p.k);
+                const a = try readLocalSlot(p.slot);
+                if (a == .int and p.k == .int) {
+                    try vmPush(.{ .int = a.int - p.k.int });
+                } else {
+                    try pushSubResult(a, p.k);
+                }
                 if (try tryTailCall(argc)) continue;
                 try performCall(argc);
             },
             .get_local_const_add => {
                 const p = try readLocalSlotAndConst();
-                try vmPush(try computeAddResult(try readLocalSlot(p.slot), p.k));
+                const a = try readLocalSlot(p.slot);
+                if (a == .int and p.k == .int) { try vmPush(.{ .int = a.int + p.k.int }); continue; }
+                try vmPush(try computeAddResult(a, p.k));
             },
             .get_local_const_lt => {
                 const p = try readLocalSlotAndConst();
-                const n = try compareNumericPair(try readLocalSlot(p.slot), p.k, "<");
+                const a = try readLocalSlot(p.slot);
+                if (a == .int and p.k == .int) { try vmPush(.{ .boolean = a.int < p.k.int }); continue; }
+                const n = try compareNumericPair(a, p.k, "<");
                 try vmPush(.{ .boolean = n.an < n.bn });
             },
 
@@ -2016,12 +2065,16 @@ fn runInner() !void {
                 const p = try readLocalSlotAndConst();
                 const off = try vms.vmInt();
                 const a = try readLocalSlot(p.slot);
-                try checkNamedValueCompatibility(a, p.k);
-                if (!Value.equals(vms.unboxNamed(a), vms.unboxNamed(p.k))) vmState().ip += off;
+                if (a == .int and p.k == .int) {
+                    if (a.int != p.k.int) vmState().ip += off;
+                } else {
+                    try checkNamedValueCompatibility(a, p.k);
+                    if (!Value.equals(vms.unboxNamed(a), vms.unboxNamed(p.k))) vmState().ip += off;
+                }
             },
 
             // Quad-fused: get_local + const_lt + jif_pop.
-            // Bytecode: [op][slot][skip][idx_hi][idx_lo][jmp_b3][jmp_b2][jmp_b1][jmp_b0]
+            // Bytecode: [op][slot][skip][idx_hi][idx_lo][exit_b3..b0]
             .get_local_const_lt_jif_pop => {
                 const p = try readLocalSlotAndConst();
                 const off = try vms.vmInt();
@@ -2031,6 +2084,29 @@ fn runInner() !void {
                 } else {
                     const n = try compareNumericPair(a, p.k, "<");
                     if (!(n.an < n.bn)) vmState().ip += off;
+                }
+            },
+
+            // Quint-fused: get_local + const_lt + jif_pop + jump (C-style for-loop header).
+            // Bytecode: [op][slot][skip][idx_hi][idx_lo][exit_b3..b0][body_b3..b0]
+            // exit_off is relative to ip after reading it (ip_mid = tp+9).
+            // body_off is relative to ip after reading both offsets (tp+13).
+            .get_local_const_lt_jif_pop_jump => {
+                const p = try readLocalSlotAndConst();
+                const a = try readLocalSlot(p.slot);
+                const exit_off = try vms.vmInt();
+                const ip_mid = vmState().ip;
+                const body_off = try vms.vmInt();
+                const cond_true = if (a == .int and p.k == .int)
+                    (a.int < p.k.int)
+                else blk: {
+                    const n = try compareNumericPair(a, p.k, "<");
+                    break :blk n.an < n.bn;
+                };
+                if (cond_true) {
+                    vmState().ip += body_off;
+                } else {
+                    vmState().ip = ip_mid + exit_off;
                 }
             },
 
@@ -2044,19 +2120,23 @@ fn runInner() !void {
             // Bytecode: [op][name_hi][name_lo][ic_hi][ic_lo][skip][val_hi][val_lo]
             .get_global_const_eq => {
                 const p = try readGlobalConstPair();
+                if (p.g == .int and p.k == .int) { try vmPush(.{ .boolean = p.g.int == p.k.int }); continue; }
                 try checkNamedValueCompatibility(p.g, p.k);
                 try vmPush(.{ .boolean = Value.equals(vms.unboxNamed(p.g), vms.unboxNamed(p.k)) });
             },
             .get_global_const_sub => {
                 const p = try readGlobalConstPair();
+                if (p.g == .int and p.k == .int) { try vmPush(.{ .int = p.g.int - p.k.int }); continue; }
                 try pushSubResult(p.g, p.k);
             },
             .get_global_const_add => {
                 const p = try readGlobalConstPair();
+                if (p.g == .int and p.k == .int) { try vmPush(.{ .int = p.g.int + p.k.int }); continue; }
                 try vmPush(try computeAddResult(p.g, p.k));
             },
             .get_global_const_lt => {
                 const p = try readGlobalConstPair();
+                if (p.g == .int and p.k == .int) { try vmPush(.{ .boolean = p.g.int < p.k.int }); continue; }
                 const n = try compareNumericPair(p.g, p.k, "<");
                 try vmPush(.{ .boolean = n.an < n.bn });
             },

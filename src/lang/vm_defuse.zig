@@ -59,6 +59,10 @@ fn expandedWidth(op: Op, old_width: usize) usize {
         .get_global_const_lt_jif_pop => 13, // get_global(5)+const_cmp(3)+jif_pop(5)
         // Fused set_global+loop
         .set_global_loop            => 10,  // set_global(5)+loop(5)
+        // Fused close_upvalue+loop
+        .close_upvalue_loop         =>  7,  // close_upvalue(2)+loop(5)
+        // Quint-fused: get_local+const_lt+jif_pop+jump
+        .get_local_const_lt_jif_pop_jump => 15, // get_local(2)+const_lt(3)+jif_pop(5)+jump(5)
         // get_global_const_*: same 8 bytes, but expand to get_global+const_op
         .get_global_const_eq,
         .get_global_const_sub,
@@ -219,6 +223,34 @@ fn emitExpanded(
             dst[3] = 0xFF; dst[4] = 0xFF;
             dst[5] = opByte(.loop);
             pu32(dst, 6, bwdOff(ip_map, tgt, new_end));
+        },
+
+        // ── fused close_upvalue + loop ────────────────────────────────────────
+        // Layout: [op][slot][jmp*4]  (6 bytes) → close_upvalue(2) + loop(5)
+        .close_upvalue_loop => {
+            const tgt = instr.jump_target.?;
+            dst[0] = opByte(.close_upvalue); dst[1] = rb(old_ip, 1);
+            dst[2] = opByte(.loop);
+            pu32(dst, 3, bwdOff(ip_map, tgt, new_end));
+        },
+
+        // ── quint: get_local + const_lt + jif_pop + jump ─────────────────────
+        // Layout: [op][slot][skip][idx_hi][idx_lo][exit_b3..b0][body_b3..b0] (13 bytes)
+        // Expands to: get_local(2) + const_lt(3) + jif_pop(5) + jump(5) = 15 bytes
+        .get_local_const_lt_jif_pop_jump => {
+            const exit_tgt = instr.jump_target.?;
+            // body_off is at bytes 9-12 of the original instruction
+            const body_off_raw = (@as(u32, rb(old_ip, 9)) << 24) |
+                (@as(u32, rb(old_ip, 10)) << 16) |
+                (@as(u32, rb(old_ip, 11)) << 8) |
+                @as(u32, rb(old_ip, 12));
+            const body_tgt = old_ip + 13 + @as(usize, body_off_raw);
+            dst[0] = opByte(.get_local); dst[1] = rb(old_ip, 1);
+            dst[2] = opByte(.const_lt); dst[3] = rb(old_ip, 3); dst[4] = rb(old_ip, 4);
+            dst[5] = opByte(.jif_pop);
+            pu32(dst, 6, fwdOff(ip_map, exit_tgt, new_end - 5));
+            dst[10] = opByte(.jump);
+            pu32(dst, 11, fwdOff(ip_map, body_tgt, new_end));
         },
 
         // ── get_global_const_* (same size): expand to get_global + const_op ──
