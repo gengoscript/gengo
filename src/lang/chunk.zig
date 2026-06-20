@@ -57,6 +57,9 @@ pub const State = struct {
     // Peephole: position of last close_upvalue instruction (2 bytes: op + slot).
     // Used for fusion: close_upvalue + loop → close_upvalue_loop.
     last_close_upvalue_pos: ?usize = null,
+    // Peephole: position of last local_add_const instruction (4 bytes: op + dst + idx_hi + idx_lo).
+    // Used for fusion: local_add_const + loop → local_add_const_loop.
+    last_local_add_const_pos: ?usize = null,
     // Code-position patch: position before get_global "module:std" (or get_local for a from_std local).
     // Used by the std direct-call peephole to truncate back and emit a single get_global
     // "module:std.{ns}.{func}" instead of std-namespace load + field traversal + call.
@@ -90,6 +93,7 @@ pub fn reset() void {
     g_state.last_set_global_code_pos = null;
     g_state.last_quad_lt_jif_pos = null;
     g_state.last_close_upvalue_pos = null;
+    g_state.last_local_add_const_pos = null;
     g_state.std_call_patch_pos = null;
     g_state.verify_err_len = 0;
 }
@@ -179,6 +183,7 @@ pub fn emit2(a: u8, b: u8, line: u32) !void {
                 g_state.code[pos + 2] = g_state.code[pos + 3];
                 g_state.code[pos + 3] = g_state.code[pos + 4];
                 g_state.code_len = pos + 4;
+                g_state.last_local_add_const_pos = pos;
                 return;
             }
         }
@@ -516,6 +521,7 @@ pub fn patchJump(offset: usize) !void {
     g_state.last_set_global_code_pos = null;
     g_state.last_quad_lt_jif_pos = null;
     g_state.last_close_upvalue_pos = null;
+    g_state.last_local_add_const_pos = null;
 }
 
 pub fn emitLoop(loop_start: usize, line: u32) !void {
@@ -530,7 +536,30 @@ pub fn emitLoop(loop_start: usize, line: u32) !void {
             g_state.last_set_global_code_pos = null;
             g_state.last_quad_lt_jif_pos = null;
             g_state.last_close_upvalue_pos = null;
+            g_state.last_local_add_const_pos = null;
             g_state.code[cu_pos] = @intFromEnum(Op.close_upvalue_loop);
+            const offset = g_state.code_len - loop_start + 4;
+            if (offset > 0xffffffff) return error.LoopTooLarge;
+            try emitByte(@intCast((offset >> 24) & 0xff), line);
+            try emitByte(@intCast((offset >> 16) & 0xff), line);
+            try emitByte(@intCast((offset >> 8)  & 0xff), line);
+            try emitByte(@intCast(offset & 0xff), line);
+            return;
+        }
+    }
+    // Peephole: local_add_const (4 bytes) immediately preceding loop → local_add_const_loop (8 bytes).
+    // Saves 1 dispatch per C-style for-loop iteration (i++ post-increment in common loop pattern).
+    if (g_state.last_local_add_const_pos) |lac_pos| {
+        if (lac_pos + 4 == g_state.code_len) {
+            g_state.last_const_code_pos = null;
+            g_state.last_get_local_code_pos = null;
+            g_state.last_triple_eq_pos = null;
+            g_state.last_triple_lt_pos = null;
+            g_state.last_set_global_code_pos = null;
+            g_state.last_quad_lt_jif_pos = null;
+            g_state.last_close_upvalue_pos = null;
+            g_state.last_local_add_const_pos = null;
+            g_state.code[lac_pos] = @intFromEnum(Op.local_add_const_loop);
             const offset = g_state.code_len - loop_start + 4;
             if (offset > 0xffffffff) return error.LoopTooLarge;
             try emitByte(@intCast((offset >> 24) & 0xff), line);
@@ -551,6 +580,7 @@ pub fn emitLoop(loop_start: usize, line: u32) !void {
             g_state.last_set_global_code_pos = null;
             g_state.last_quad_lt_jif_pos = null;
             g_state.last_close_upvalue_pos = null;
+            g_state.last_local_add_const_pos = null;
             g_state.code[sg_pos] = @intFromEnum(Op.set_global_loop);
             const offset = g_state.code_len - loop_start + 4;
             if (offset > 0xffffffff) return error.LoopTooLarge;
@@ -568,6 +598,7 @@ pub fn emitLoop(loop_start: usize, line: u32) !void {
     g_state.last_set_global_code_pos = null;
     g_state.last_quad_lt_jif_pos = null;
     g_state.last_close_upvalue_pos = null;
+    g_state.last_local_add_const_pos = null;
     try emitOp(.loop, line);
     const offset = g_state.code_len - loop_start + 4;
     if (offset > 0xffffffff) return error.LoopTooLarge;
@@ -808,6 +839,18 @@ pub fn decodeAt(pos: usize) !DecodedInstruction {
             .const_index = try readU16At(pos + 2),
         },
 
+        .local_add_const_loop => blk: {
+            const off = try readU32At(pos + 4);
+            const width: usize = 8;
+            if (@as(usize, off) > pos + width) return error.BadJumpTarget;
+            break :blk .{
+                .op = op,
+                .width = width,
+                .const_index = try readU16At(pos + 2),
+                .jump_target = pos + width - @as(usize, off),
+            };
+        },
+
         else => .{
             .op = op,
             .width = 1,
@@ -824,7 +867,7 @@ fn isReturnOp(op: Op) bool {
 
 fn isUnconditionalBranch(op: Op) bool {
     return switch (op) {
-        .jump, .loop, .set_global_loop, .close_upvalue_loop => true,
+        .jump, .loop, .set_global_loop, .close_upvalue_loop, .local_add_const_loop => true,
         else => false,
     };
 }
@@ -938,6 +981,7 @@ fn stackEffect(op: Op, ip: usize) struct { pop: u8, push: u8 } {
         },
         .local_add_local => .{ .pop = 0, .push = 0 },
         .local_add_const => .{ .pop = 0, .push = 0 },
+        .local_add_const_loop => .{ .pop = 0, .push = 0 },
         .op_assert_msg => .{ .pop = 2, .push = 0 },
         .op_trap_check => .{ .pop = 1, .push = 0 },
 
