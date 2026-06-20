@@ -452,7 +452,7 @@ pub fn disassemble() void {
                 io.write("\n");
             },
             // --- global quad-fused: op + name(2) + ic(2) + skip(1) + idx(2) + jmp(4) ---
-            .get_global_const_eq_jif_pop, .get_global_const_lt_jif_pop => {
+            .get_global_const_lt_jif_pop => {
                 const name_idx = readU16(i);
                 i += 2;
                 const ic = readU16(i);

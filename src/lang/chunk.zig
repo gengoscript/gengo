@@ -42,8 +42,7 @@ pub const State = struct {
     // Peephole: track position of last `get_global` instruction (5 bytes: op + name_idx(2) + ic_slot(2)).
     // Used for triple-fusion: get_global + constant + eq/sub → get_global_const_eq/sub.
     last_get_global_code_pos: ?usize = null,
-    // Peephole: position of the last get_global_const_eq triple-fused instruction.
-    // Used for quad-fusion: get_global_const_eq + jif_pop → get_global_const_eq_jif_pop.
+    // Peephole: position of the last get_global_const_eq triple-fused instruction (cleared by patchJump/emitLoop).
     last_triple_global_eq_pos: ?usize = null,
     // Peephole: position of the last get_global_const_lt triple-fused instruction.
     // Used for quad-fusion: get_global_const_lt + jif_pop → get_global_const_lt_jif_pop.
@@ -490,19 +489,6 @@ pub fn emitJump(op: Op, line: u32) !usize {
                 return result;
             }
         }
-        // Quad fusion: get_global_const_eq immediately preceding jif_pop →
-        // get_global_const_eq_jif_pop (12 bytes, saves 1 dispatch per conditional check).
-        if (g_state.last_triple_global_eq_pos) |tp| {
-            if (tp + 8 == g_state.code_len) {
-                g_state.code[tp] = @intFromEnum(Op.get_global_const_eq_jif_pop);
-                try emitByte(0xff, line);
-                try emitByte(0xff, line);
-                try emitByte(0xff, line);
-                try emitByte(0xff, line);
-                g_state.last_triple_global_eq_pos = null;
-                return g_state.code_len - 4;
-            }
-        }
         // Quad fusion: get_global_const_lt immediately preceding jif_pop →
         // get_global_const_lt_jif_pop (12 bytes, saves 1 dispatch per conditional check).
         if (g_state.last_triple_global_lt_pos) |tp| {
@@ -828,7 +814,7 @@ pub fn decodeAt(pos: usize) !DecodedInstruction {
             .const_index = try readU16At(pos + 6),
         },
 
-        .get_global_const_eq_jif_pop, .get_global_const_lt_jif_pop => blk: {
+        .get_global_const_lt_jif_pop => blk: {
             const off = try readU32At(pos + 8);
             break :blk .{
                 .op = op,
@@ -915,7 +901,7 @@ fn isConditionalBranch(op: Op) bool {
     return switch (op) {
         .jump_if_false, .jif_pop,
         .get_local_const_eq_jif_pop, .get_local_const_lt_jif_pop,
-        .get_global_const_eq_jif_pop, .get_global_const_lt_jif_pop,
+        .get_global_const_lt_jif_pop,
         .get_local_const_lt_jif_pop_jump => true,
         else => false,
     };
@@ -1036,7 +1022,7 @@ fn stackEffect(op: Op, ip: usize) struct { pop: u8, push: u8 } {
         .jump, .loop, .set_global_loop, .close_upvalue_loop, .jump_if_false => .{ .pop = 0, .push = 0 },
         .get_local_const_eq_jif_pop, .get_local_const_lt_jif_pop,
         .get_local_const_lt_jif_pop_jump,
-        .get_global_const_eq_jif_pop, .get_global_const_lt_jif_pop => .{ .pop = 0, .push = 0 },
+        .get_global_const_lt_jif_pop => .{ .pop = 0, .push = 0 },
 
         .halt => .{ .pop = 0, .push = 0 },
     };
@@ -1122,16 +1108,16 @@ pub fn verify() !void {
                     verifySetErr("ip={d} ({s}): expected embedded const_lt, got {d}", .{ip, @tagName(inst.op), g_state.code[ip + 2]});
                     return error.BadOpcode;
                 },
-                .get_global_const_eq_jif_pop => if (g_state.code[ip + 5] != @intFromEnum(Op.const_eq)) {
-                    verifySetErr("ip={d} ({s}): expected embedded const_eq, got {d}", .{ip, @tagName(inst.op), g_state.code[ip + 5]});
-                    return error.BadOpcode;
-                },
                 .get_global_const_lt_jif_pop => if (g_state.code[ip + 5] != @intFromEnum(Op.const_lt)) {
                     verifySetErr("ip={d} ({s}): expected embedded const_lt, got {d}", .{ip, @tagName(inst.op), g_state.code[ip + 5]});
                     return error.BadOpcode;
                 },
                 .get_local_const_sub_call => if (g_state.code[ip + 2] != @intFromEnum(Op.const_sub)) {
                     verifySetErr("ip={d} ({s}): expected embedded const_sub, got {d}", .{ip, @tagName(inst.op), g_state.code[ip + 2]});
+                    return error.BadOpcode;
+                },
+                .call_global_local_sub_const => if (g_state.code[ip + 5] != @intFromEnum(Op.get_local_const_sub_call)) {
+                    verifySetErr("ip={d} ({s}): expected embedded get_local_const_sub_call, got {d}", .{ip, @tagName(inst.op), g_state.code[ip + 5]});
                     return error.BadOpcode;
                 },
                 .get_local_get_field => if (g_state.code[ip + 2] != @intFromEnum(Op.get_field)) {

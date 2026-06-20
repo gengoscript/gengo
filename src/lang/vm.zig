@@ -2188,14 +2188,6 @@ fn runInner() !void {
                 const n = try compareNumericPair(p.g, p.k, "<");
                 try vmPush(.{ .boolean = n.an < n.bn });
             },
-            // Quad-fused: get_global + constant + eq + jif_pop.
-            // Bytecode: [op][name_hi][name_lo][ic_hi][ic_lo][skip][val_hi][val_lo][jmp_b3][jmp_b2][jmp_b1][jmp_b0]
-            .get_global_const_eq_jif_pop => {
-                const p = try readGlobalConstPair();
-                const off = try vms.vmInt();
-                try checkNamedValueCompatibility(p.g, p.k);
-                if (!Value.equals(vms.unboxNamed(p.g), vms.unboxNamed(p.k))) vmState().ip += off;
-            },
             // Quad-fused: get_global + const_lt + jif_pop.
             // Bytecode: [op][name_hi][name_lo][ic_hi][ic_lo][skip][val_hi][val_lo][jmp_b3][jmp_b2][jmp_b1][jmp_b0]
             .get_global_const_lt_jif_pop => {

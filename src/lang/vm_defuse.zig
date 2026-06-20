@@ -55,7 +55,6 @@ fn expandedWidth(op: Op, old_width: usize) usize {
         // Fused quad with jif_pop
         .get_local_const_eq_jif_pop,
         .get_local_const_lt_jif_pop => 10,  // get_local(2)+const_cmp(3)+jif_pop(5)
-        .get_global_const_eq_jif_pop,
         .get_global_const_lt_jif_pop => 13, // get_global(5)+const_cmp(3)+jif_pop(5)
         // Fused set_global+loop
         .set_global_loop            => 10,  // set_global(5)+loop(5)
@@ -202,16 +201,8 @@ fn emitExpanded(
             pu32(dst, 6, fwdOff(ip_map, tgt, new_end));
         },
 
-        // ── quad: get_global + const_cmp + jif_pop ───────────────────────────
+        // ── quad: get_global + const_lt + jif_pop ────────────────────────────
         // Layout: [op][name_hi][name_lo][ic_hi][ic_lo][skip][k_hi][k_lo][jmp*4]  (12 bytes)
-        .get_global_const_eq_jif_pop => {
-            const tgt = instr.jump_target.?;
-            dst[0] = opByte(.get_global); dst[1] = rb(old_ip, 1); dst[2] = rb(old_ip, 2);
-            dst[3] = 0xFF; dst[4] = 0xFF; // cold IC
-            dst[5] = opByte(.const_eq); dst[6] = rb(old_ip, 6); dst[7] = rb(old_ip, 7);
-            dst[8] = opByte(.jif_pop);
-            pu32(dst, 9, fwdOff(ip_map, tgt, new_end));
-        },
         .get_global_const_lt_jif_pop => {
             const tgt = instr.jump_target.?;
             dst[0] = opByte(.get_global); dst[1] = rb(old_ip, 1); dst[2] = rb(old_ip, 2);
