@@ -731,6 +731,18 @@ fn canReturnFast(fi: usize, retval: Value) bool {
     return vmtyp.checkPrimitiveReturn(f, retval);
 }
 
+fn doReturn(retval: Value) !bool {
+    const fi = vmState().frame_top - 1;
+    if (canReturnFast(fi, retval)) {
+        try doReturnFast(fi, retval);
+        if (vmState().call_depth_target) |d| {
+            if (vmState().frame_top == d) return true;
+        }
+        return false;
+    }
+    return try retSlowPath(retval);
+}
+
 fn doReturnFast(fi: usize, retval: Value) !void {
     const frame = &vmState().frames[fi];
     vmState().frame_top = fi;
@@ -1049,7 +1061,7 @@ fn retSlowPath(retval_in: Value) !bool {
             if (nrbase >= vmState().stack.len) return error.StackOverflow;
             if (fsig.named_return_count == 1) {
                 const raw = vmState().stack[nrbase];
-                retval = if (raw == .object and raw.object.* == .cell) raw.object.cell.value else raw;
+                retval = vms.unboxCell(raw);
             } else {
                 const nrc: usize = fsig.named_return_count;
                 const arr_obj = try vmAllocObject();
@@ -1059,7 +1071,7 @@ fn retSlowPath(retval_in: Value) !bool {
                 for (0..nrc) |ri| {
                     if (nrbase + ri >= vmState().stack.len) return error.StackOverflow;
                     const raw = vmState().stack[nrbase + ri];
-                    items[ri] = if (raw == .object and raw.object.* == .cell) raw.object.cell.value else raw;
+                    items[ri] = vms.unboxCell(raw);
                 }
                 arr_obj.* = .{ .array_managed = items[0..nrc] };
                 popTempRoot();
@@ -1695,15 +1707,7 @@ fn runInner() !void {
                 const b = try vmPop();
                 const a = try vmPop();
                 const retval = try computeAddResult(a, b);
-                const fi = vmState().frame_top - 1;
-                if (canReturnFast(fi, retval)) {
-                    try doReturnFast(fi, retval);
-                    if (vmState().call_depth_target) |d| {
-                        if (vmState().frame_top == d) return;
-                    }
-                    continue;
-                }
-                if (try retSlowPath(retval)) return;
+                if (try doReturn(retval)) return;
             },
             .sub => {
                 const b = try vmPop();
@@ -2675,29 +2679,13 @@ fn runInner() !void {
                 vmperf.breakOpChain();
                 if (vmState().frame_top == 0) return error.ReturnAtTopLevel;
                 const v = try readLocalSlot(try vmByte());
-                const fi = vmState().frame_top - 1;
-                if (canReturnFast(fi, v)) {
-                    try doReturnFast(fi, v);
-                    if (vmState().call_depth_target) |d| {
-                        if (vmState().frame_top == d) return;
-                    }
-                    continue;
-                }
-                if (try retSlowPath(v)) return;
+                if (try doReturn(v)) return;
             },
             .ret_const => {
                 vmperf.breakOpChain();
                 if (vmState().frame_top == 0) return error.ReturnAtTopLevel;
                 const k = try chunk.constAt(try vmShort());
-                const fi = vmState().frame_top - 1;
-                if (canReturnFast(fi, k)) {
-                    try doReturnFast(fi, k);
-                    if (vmState().call_depth_target) |d| {
-                        if (vmState().frame_top == d) return;
-                    }
-                    continue;
-                }
-                if (try retSlowPath(k)) return;
+                if (try doReturn(k)) return;
             },
 
             .halt => { vmperf.breakOpChain(); return; },
@@ -2812,7 +2800,7 @@ fn runPanicUnwind(orig_err: anyerror) anyerror!void {
             if (ret_count <= 1) {
                 if (named_ret > 0) {
                     const raw = vmState().stack[rec_base + rec_arity];
-                    vmPush(if (raw == .object and raw.object.* == .cell) raw.object.cell.value else raw) catch {};
+                    vmPush(vms.unboxCell(raw)) catch {};
                 } else {
                     vmPush(.null) catch {};
                 }
@@ -2827,7 +2815,7 @@ fn runPanicUnwind(orig_err: anyerror) anyerror!void {
                 if (named_ret > 0) {
                     for (0..named_ret) |ri| {
                         const raw = vmState().stack[rec_base + rec_arity + ri];
-                        items[ri] = if (raw == .object and raw.object.* == .cell) raw.object.cell.value else raw;
+                        items[ri] = vms.unboxCell(raw);
                     }
                 } else {
                     @memset(items, .null);

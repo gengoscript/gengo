@@ -365,6 +365,11 @@ pub fn unboxNamed(v: Value) Value {
     return v;
 }
 
+pub fn unboxCell(v: Value) Value {
+    if (v == .object and v.object.* == .cell) return v.object.cell.value;
+    return v;
+}
+
 // Object classification helpers used by GC, map ops, native fns, and the exec loop.
 
 pub fn isStringValue(v: Value) bool {
