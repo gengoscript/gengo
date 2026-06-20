@@ -142,8 +142,7 @@ fn jsonStringifyValue(s: *std.json.Stringify, gv: Value) !void {
 }
 
 pub fn jsonParseNative() !Value {
-    const arg = vms.vmState().stack[vms.vmState().stack_top - 1];
-    const src = try vms.asStringValue(arg);
+    const src = try vms.asStringValue(vms.vmTop(0));
     const parsed = std.json.parseFromSlice(std.json.Value, std.heap.page_allocator, src, .{}) catch |e| {
         vms.setRuntimeErr("json.parse: {s}", .{@errorName(e)});
         return error.TypeError;
@@ -153,27 +152,24 @@ pub fn jsonParseNative() !Value {
 }
 
 pub fn jsonStringifyNative() !Value {
-    const arg = vms.vmState().stack[vms.vmState().stack_top - 1];
     var out: std.Io.Writer.Allocating = .init(std.heap.page_allocator);
     defer out.deinit();
     var s = std.json.Stringify{ .writer = &out.writer, .options = .{} };
-    jsonStringifyValue(&s, arg) catch return error.TypeError;
+    jsonStringifyValue(&s, vms.vmTop(0)) catch return error.TypeError;
     const buf = out.written();
     return vmgc.makeDynString(buf);
 }
 
 pub fn jsonValidNative() !Value {
-    const arg = vms.vmState().stack[vms.vmState().stack_top - 1];
-    const src = try vms.asStringValue(arg);
+    const src = try vms.asStringValue(vms.vmTop(0));
     const parsed = std.json.parseFromSlice(std.json.Value, std.heap.page_allocator, src, .{}) catch return .{ .boolean = false };
     parsed.deinit();
     return .{ .boolean = true };
 }
 
 pub fn jsonIndentNative() !Value {
-    const top = vms.vmState().stack_top;
-    const src = try vms.asStringValue(vms.vmState().stack[top - 2]);
-    const indent_str = try vms.asStringValue(vms.vmState().stack[top - 1]);
+    const src = try vms.asStringValue(vms.vmTop(1));
+    const indent_str = try vms.asStringValue(vms.vmTop(0));
     const parsed = std.json.parseFromSlice(std.json.Value, std.heap.page_allocator, src, .{}) catch |e| {
         vms.setRuntimeErr("json.indent: {s}", .{@errorName(e)});
         return error.TypeError;
@@ -194,38 +190,26 @@ pub fn jsonIndentNative() !Value {
 }
 
 pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
+    if (argc != nf.arity) return error.ArityMismatch;
     switch (@as(NativeFnId, @enumFromInt(nf.id))) {
         .json_parse => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
             const out = try jsonParseNative();
-            _ = try vms.vmPop();
-            _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .json_stringify => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
             const out = try jsonStringifyNative();
-            _ = try vms.vmPop();
-            _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .json_valid => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
             const out = try jsonValidNative();
-            _ = try vms.vmPop();
-            _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .json_indent => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
             const out = try jsonIndentNative();
-            _ = try vms.vmPop();
-            _ = try vms.vmPop();
-            _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         else => {},

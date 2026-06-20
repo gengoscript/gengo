@@ -99,58 +99,41 @@ pub fn nativeRandNormFloat() Value {
 }
 
 pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
+    if (argc != nf.arity) return error.ArityMismatch;
     switch (@as(NativeFnId, @enumFromInt(nf.id))) {
         .rand_between => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
-            const top = vms.vmState().stack_top;
-            const out = try nativeRandBetween(vms.vmState().stack[top - 2], vms.vmState().stack[top - 1]);
-            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            const out = try nativeRandBetween(vms.vmTop(1), vms.vmTop(0));
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .rand_choice => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
-            const arr_val = vms.unboxNamed(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            const arr_val = vms.unboxNamed(vms.vmTop(0));
             if (arr_val != .object) return error.TypeError;
             const out = try nativeRandChoice(arr_val.object);
-            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .rand_float => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
-            _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(nativeRandFloat());
         },
         .rand_intn => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
-            const n_val = vms.vmState().stack[vms.vmState().stack_top - 1];
-            const out = try nativeRandIntn(n_val);
-            _ = try vms.vmPop(); _ = try vms.vmPop();
+            const out = try nativeRandIntn(vms.vmTop(0));
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .rand_norm_float => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
-            _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(nativeRandNormFloat());
         },
         .rand_perm => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
-            const n_v = vms.vmState().stack[vms.vmState().stack_top - 1];
-            const out = try nativeRandPerm(n_v);
-            _ = try vms.vmPop(); _ = try vms.vmPop();
+            const out = try nativeRandPerm(vms.vmTop(0));
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .rand_seed => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
-            const n_val = vms.vmState().stack[vms.vmState().stack_top - 1];
-            try nativeRandSeed(n_val);
-            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try nativeRandSeed(vms.vmTop(0));
+            try vms.vmPopArgs(argc);
             try vms.vmPush(.null);
         },
         else => {},

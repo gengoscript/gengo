@@ -9,11 +9,10 @@ const vms = @import("../vm_state.zig");
 const vmtyp = @import("../vm_types.zig");
 
 pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
+    if (argc != nf.arity) return error.ArityMismatch;
     switch (@as(NativeFnId, @enumFromInt(nf.id))) {
         .sort_asc => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
-            const arr_val = vms.vmState().stack[vms.vmState().stack_top - 1];
+            const arr_val = vms.vmTop(0);
             if (arr_val != .object) return error.TypeError;
             const arr_obj = arr_val.object;
             if (!vms.isArrayObject(arr_obj)) return error.TypeError;
@@ -32,14 +31,12 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             }
             const out_obj = try vmgc.vmAllocObject();
             out_obj.* = .{ .array_managed = items[0..n] };
-            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(.{ .object = out_obj });
         },
         .sort_by => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
-            const fn_val = vms.vmState().stack[vms.vmState().stack_top - 1];
-            const arr_val = vms.vmState().stack[vms.vmState().stack_top - 2];
+            const fn_val = vms.vmTop(0);
+            const arr_val = vms.vmTop(1);
             if (arr_val != .object) return error.TypeError;
             const arr_obj = arr_val.object;
             if (!vms.isArrayObject(arr_obj)) return error.TypeError;
@@ -64,13 +61,11 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             }
             const out_obj = try vmgc.vmAllocObject();
             out_obj.* = .{ .array_managed = items[0..n] };
-            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(.{ .object = out_obj });
         },
         .sort_desc => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
-            const arr_val = vms.vmState().stack[vms.vmState().stack_top - 1];
+            const arr_val = vms.vmTop(0);
             if (arr_val != .object) return error.TypeError;
             const arr_obj = arr_val.object;
             if (!vms.isArrayObject(arr_obj)) return error.TypeError;
@@ -89,7 +84,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             }
             const out_obj = try vmgc.vmAllocObject();
             out_obj.* = .{ .array_managed = items[0..n] };
-            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(.{ .object = out_obj });
         },
         else => {},

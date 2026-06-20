@@ -16,12 +16,11 @@ fn predBool(v: Value) !bool {
 }
 
 pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
+    if (argc != nf.arity) return error.ArityMismatch;
     switch (@as(NativeFnId, @enumFromInt(nf.id))) {
         .array_filter => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
-            const fn_val = vms.vmState().stack[vms.vmState().stack_top - 1];
-            const arr_val = vms.vmState().stack[vms.vmState().stack_top - 2];
+            const fn_val = vms.vmTop(0);
+            const arr_val = vms.vmTop(1);
             if (arr_val != .object) return error.TypeError;
             const arr_obj = arr_val.object;
             if (!vms.isArrayObject(arr_obj)) return error.TypeError;
@@ -47,13 +46,11 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                 }
                 out_obj.* = .{ .array_managed = out[0..count] };
             }
-            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(.{ .object = out_obj });
         },
         .array_flat => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
-            const arr_val = vms.vmState().stack[vms.vmState().stack_top - 1];
+            const arr_val = vms.vmTop(0);
             if (arr_val != .object) return error.TypeError;
             const arr_obj = arr_val.object;
             if (!vms.isArrayObject(arr_obj)) return error.TypeError;
@@ -85,14 +82,12 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                 }
                 out_obj.* = .{ .array_managed = out[0..total] };
             }
-            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(.{ .object = out_obj });
         },
         .array_map => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
-            const fn_val = vms.vmState().stack[vms.vmState().stack_top - 1];
-            const arr_val = vms.vmState().stack[vms.vmState().stack_top - 2];
+            const fn_val = vms.vmTop(0);
+            const arr_val = vms.vmTop(1);
             if (arr_val != .object) return error.TypeError;
             const arr_obj = arr_val.object;
             if (!vms.isArrayObject(arr_obj)) return error.TypeError;
@@ -109,15 +104,13 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                     out_obj.* = .{ .array_managed = out[0 .. i + 1] }; // grow visible
                 }
             }
-            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(.{ .object = out_obj });
         },
         .array_reduce => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
-            const init_val = vms.vmState().stack[vms.vmState().stack_top - 1];
-            const fn_val = vms.vmState().stack[vms.vmState().stack_top - 2];
-            const arr_val = vms.vmState().stack[vms.vmState().stack_top - 3];
+            const init_val = vms.vmTop(0);
+            const fn_val = vms.vmTop(1);
+            const arr_val = vms.vmTop(2);
             if (arr_val != .object) return error.TypeError;
             const arr_obj = arr_val.object;
             if (!vms.isArrayObject(arr_obj)) return error.TypeError;
@@ -128,15 +121,13 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             for (items) |item| {
                 acc = try vm.callFunction(fn_val, &.{ acc, item });
             }
-            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(acc);
         },
         .array_slice => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
-            const to_val = vms.vmState().stack[vms.vmState().stack_top - 1];
-            const from_val = vms.vmState().stack[vms.vmState().stack_top - 2];
-            const arr_val = vms.vmState().stack[vms.vmState().stack_top - 3];
+            const to_val = vms.vmTop(0);
+            const from_val = vms.vmTop(1);
+            const arr_val = vms.vmTop(2);
             if (arr_val != .object) return error.TypeError;
             const arr_obj = arr_val.object;
             if (!vms.isArrayObject(arr_obj)) return error.TypeError;
@@ -156,14 +147,12 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                 @memcpy(out[0..slice_len], items[from_u..to_u]);
                 out_obj.* = .{ .array_managed = out[0..slice_len] };
             }
-            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(.{ .object = out_obj });
         },
         .array_zip => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
-            const b_val = vms.vmState().stack[vms.vmState().stack_top - 1];
-            const a_val = vms.vmState().stack[vms.vmState().stack_top - 2];
+            const b_val = vms.vmTop(0);
+            const a_val = vms.vmTop(1);
             if (a_val != .object or b_val != .object) return error.TypeError;
             const a_obj = a_val.object;
             const b_obj = b_val.object;
@@ -188,14 +177,12 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                     out_obj.* = .{ .array_managed = out[0 .. i + 1] }; // grow visible
                 }
             }
-            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(.{ .object = out_obj });
         },
         .array_find => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
-            const fn_val = vms.vmState().stack[vms.vmState().stack_top - 1];
-            const arr_val = vms.vmState().stack[vms.vmState().stack_top - 2];
+            const fn_val = vms.vmTop(0);
+            const arr_val = vms.vmTop(1);
             if (arr_val != .object) return error.TypeError;
             const arr_obj = arr_val.object;
             if (!vms.isArrayObject(arr_obj)) return error.TypeError;
@@ -205,14 +192,12 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                 const ok = try vm.callFunction(fn_val, &.{item});
                 if (try predBool(ok)) { result = item; break; }
             }
-            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(result);
         },
         .array_find_index => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
-            const fn_val = vms.vmState().stack[vms.vmState().stack_top - 1];
-            const arr_val = vms.vmState().stack[vms.vmState().stack_top - 2];
+            const fn_val = vms.vmTop(0);
+            const arr_val = vms.vmTop(1);
             if (arr_val != .object) return error.TypeError;
             const arr_obj = arr_val.object;
             if (!vms.isArrayObject(arr_obj)) return error.TypeError;
@@ -222,14 +207,12 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                 const ok = try vm.callFunction(fn_val, &.{item});
                 if (try predBool(ok)) { result = .{ .int = @intCast(i) }; break; }
             }
-            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(result);
         },
         .array_all => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
-            const fn_val = vms.vmState().stack[vms.vmState().stack_top - 1];
-            const arr_val = vms.vmState().stack[vms.vmState().stack_top - 2];
+            const fn_val = vms.vmTop(0);
+            const arr_val = vms.vmTop(1);
             if (arr_val != .object) return error.TypeError;
             const arr_obj = arr_val.object;
             if (!vms.isArrayObject(arr_obj)) return error.TypeError;
@@ -239,14 +222,12 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                 const ok = try vm.callFunction(fn_val, &.{item});
                 if (!(try predBool(ok))) { result = false; break; }
             }
-            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(.{ .boolean = result });
         },
         .array_any => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
-            const fn_val = vms.vmState().stack[vms.vmState().stack_top - 1];
-            const arr_val = vms.vmState().stack[vms.vmState().stack_top - 2];
+            const fn_val = vms.vmTop(0);
+            const arr_val = vms.vmTop(1);
             if (arr_val != .object) return error.TypeError;
             const arr_obj = arr_val.object;
             if (!vms.isArrayObject(arr_obj)) return error.TypeError;
@@ -256,14 +237,12 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                 const ok = try vm.callFunction(fn_val, &.{item});
                 if (try predBool(ok)) { result = true; break; }
             }
-            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(.{ .boolean = result });
         },
         .array_chunk => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
-            const size_val = vms.vmState().stack[vms.vmState().stack_top - 1];
-            const arr_val = vms.vmState().stack[vms.vmState().stack_top - 2];
+            const size_val = vms.vmTop(0);
+            const arr_val = vms.vmTop(1);
             if (arr_val != .object) return error.TypeError;
             const arr_obj = arr_val.object;
             if (!vms.isArrayObject(arr_obj)) return error.TypeError;
@@ -293,7 +272,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                     out_obj.* = .{ .array_managed = out[0 .. ci + 1] }; // grow visible
                 }
             }
-            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(.{ .object = out_obj });
         },
         else => {},

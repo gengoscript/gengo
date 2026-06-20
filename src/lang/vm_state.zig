@@ -257,6 +257,16 @@ pub fn vmPeek(dist: usize) !Value {
     return vmState().stack[vmState().stack_top - 1 - dist];
 }
 
+// Unchecked stack read for native dispatch — safe after arity has been verified.
+pub fn vmTop(dist: usize) Value {
+    return vmState().stack[vmState().stack_top - 1 - dist];
+}
+
+// Pop all arguments of a native call: argc user args plus the function object.
+pub fn vmPopArgs(argc: u8) !void {
+    for (0..@as(usize, argc) + 1) |_| _ = try vmPop();
+}
+
 pub fn vmByte() !u8 {
     if (vmState().ip >= chunk.codeLen()) return error.BytecodeOutOfBounds;
     const b = chunk.codeByteAt(vmState().ip);

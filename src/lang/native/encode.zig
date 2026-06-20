@@ -141,53 +141,42 @@ pub fn nativeBase64Decode(s: []const u8, url_safe: bool) !Value {
 }
 
 pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
+    if (argc != nf.arity) return error.ArityMismatch;
     switch (@as(NativeFnId, @enumFromInt(nf.id))) {
         .base64_decode => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
-            const s = try vms.asStringValue(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            const s = try vms.asStringValue(vms.vmTop(0));
             const out = try nativeBase64Decode(s, false);
-            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .base64_encode => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
-            const s = try vms.asStringValue(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            const s = try vms.asStringValue(vms.vmTop(0));
             const out = try nativeBase64Encode(s, false);
-            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .base64_url_decode => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
-            const s = try vms.asStringValue(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            const s = try vms.asStringValue(vms.vmTop(0));
             const out = try nativeBase64Decode(s, true);
-            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .base64_url_encode => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
-            const s = try vms.asStringValue(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            const s = try vms.asStringValue(vms.vmTop(0));
             const out = try nativeBase64Encode(s, true);
-            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .hex_decode => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
-            const s = try vms.asStringValue(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            const s = try vms.asStringValue(vms.vmTop(0));
             const out = try nativeHexDecode(s);
-            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .hex_encode => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
-            const s = try vms.asStringValue(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            const s = try vms.asStringValue(vms.vmTop(0));
             const out = try nativeHexEncode(s);
-            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         else => {},

@@ -398,245 +398,176 @@ pub fn nativeStrSplitN(s: []const u8, sep: []const u8, n_v: Value) !Value {
 }
 
 pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
+    if (argc != nf.arity) return error.ArityMismatch;
     switch (@as(NativeFnId, @enumFromInt(nf.id))) {
         .str_builder_new => {
-
-            if (argc != 0) return error.ArityMismatch;
             const obj = try vmgc.vmAllocObject();
             obj.* = .{ .string_builder = .{ .buf = &[_]u8{}, .len = 0 } };
-            _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(.{ .object = obj });
         },
         .str_contains => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
-            const top = vms.vmState().stack_top;
-            const s = try vms.asStringValue(vms.vmState().stack[top - 2]);
-            const sub = try vms.asStringValue(vms.vmState().stack[top - 1]);
-            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            const s = try vms.asStringValue(vms.vmTop(1));
+            const sub = try vms.asStringValue(vms.vmTop(0));
+            try vms.vmPopArgs(argc);
             try vms.vmPush(nativeStrContains(s, sub));
         },
         .str_contains_any => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
-            const top = vms.vmState().stack_top;
-            const s = try vms.asStringValue(vms.vmState().stack[top - 2]);
-            const chars = try vms.asStringValue(vms.vmState().stack[top - 1]);
-            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            const s = try vms.asStringValue(vms.vmTop(1));
+            const chars = try vms.asStringValue(vms.vmTop(0));
+            try vms.vmPopArgs(argc);
             try vms.vmPush(nativeStrContainsAny(s, chars));
         },
         .str_count => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
-            const top = vms.vmState().stack_top;
-            const s = try vms.asStringValue(vms.vmState().stack[top - 2]);
-            const sub = try vms.asStringValue(vms.vmState().stack[top - 1]);
-            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            const s = try vms.asStringValue(vms.vmTop(1));
+            const sub = try vms.asStringValue(vms.vmTop(0));
+            try vms.vmPopArgs(argc);
             try vms.vmPush(nativeStrCount(s, sub));
         },
         .str_ends_with => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
-            const top = vms.vmState().stack_top;
-            const s = try vms.asStringValue(vms.vmState().stack[top - 2]);
-            const suffix = try vms.asStringValue(vms.vmState().stack[top - 1]);
-            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            const s = try vms.asStringValue(vms.vmTop(1));
+            const suffix = try vms.asStringValue(vms.vmTop(0));
+            try vms.vmPopArgs(argc);
             try vms.vmPush(nativeStrEndsWith(s, suffix));
         },
         .str_equal_fold => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
-            const top = vms.vmState().stack_top;
-            const s = try vms.asStringValue(vms.vmState().stack[top - 2]);
-            const t = try vms.asStringValue(vms.vmState().stack[top - 1]);
-            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            const s = try vms.asStringValue(vms.vmTop(1));
+            const t = try vms.asStringValue(vms.vmTop(0));
+            try vms.vmPopArgs(argc);
             try vms.vmPush(nativeStrEqualFold(s, t));
         },
         .str_fields => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
-            const s = try vms.asStringValue(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            const s = try vms.asStringValue(vms.vmTop(0));
             const out = try nativeStrFields(s);
-            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .str_index_of => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
-            const top = vms.vmState().stack_top;
-            const s = try vms.asStringValue(vms.vmState().stack[top - 2]);
-            const sub = try vms.asStringValue(vms.vmState().stack[top - 1]);
+            const s = try vms.asStringValue(vms.vmTop(1));
+            const sub = try vms.asStringValue(vms.vmTop(0));
             const out = try nativeStrIndexOf(s, sub);
-            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .str_join => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
-            const top = vms.vmState().stack_top;
-            const arr_val = vms.vmState().stack[top - 2];
-            const sep = try vms.asStringValue(vms.vmState().stack[top - 1]);
+            const arr_val = vms.vmTop(1);
+            const sep = try vms.asStringValue(vms.vmTop(0));
             if (arr_val != .object) return error.TypeError;
             const out = try nativeStrJoin(arr_val.object, sep);
-            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .str_last_index_of => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
-            const top = vms.vmState().stack_top;
-            const s = try vms.asStringValue(vms.vmState().stack[top - 2]);
-            const sub = try vms.asStringValue(vms.vmState().stack[top - 1]);
+            const s = try vms.asStringValue(vms.vmTop(1));
+            const sub = try vms.asStringValue(vms.vmTop(0));
             const out = try nativeStrLastIndexOf(s, sub);
-            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .str_lower => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
-            const s = try vms.asStringValue(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            const s = try vms.asStringValue(vms.vmTop(0));
             const out = try nativeStrLower(s);
-            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .str_pad_left => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
-            const top = vms.vmState().stack_top;
-            const s = try vms.asStringValue(vms.vmState().stack[top - 3]);
-            const n_v = vms.vmState().stack[top - 2];
-            const pad = try vms.asStringValue(vms.vmState().stack[top - 1]);
+            const s = try vms.asStringValue(vms.vmTop(2));
+            const n_v = vms.vmTop(1);
+            const pad = try vms.asStringValue(vms.vmTop(0));
             const out = try nativeStrPadLeft(s, n_v, pad);
-            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .str_pad_right => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
-            const top = vms.vmState().stack_top;
-            const s = try vms.asStringValue(vms.vmState().stack[top - 3]);
-            const n_v = vms.vmState().stack[top - 2];
-            const pad = try vms.asStringValue(vms.vmState().stack[top - 1]);
+            const s = try vms.asStringValue(vms.vmTop(2));
+            const n_v = vms.vmTop(1);
+            const pad = try vms.asStringValue(vms.vmTop(0));
             const out = try nativeStrPadRight(s, n_v, pad);
-            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .str_repeat => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
-            const top = vms.vmState().stack_top;
-            const s = try vms.asStringValue(vms.vmState().stack[top - 2]);
-            const out = try nativeStrRepeat(s, vms.vmState().stack[top - 1]);
-            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            const s = try vms.asStringValue(vms.vmTop(1));
+            const out = try nativeStrRepeat(s, vms.vmTop(0));
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .str_replace => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
-            const top = vms.vmState().stack_top;
-            const s = try vms.asStringValue(vms.vmState().stack[top - 3]);
-            const old = try vms.asStringValue(vms.vmState().stack[top - 2]);
-            const new = try vms.asStringValue(vms.vmState().stack[top - 1]);
+            const s = try vms.asStringValue(vms.vmTop(2));
+            const old = try vms.asStringValue(vms.vmTop(1));
+            const new = try vms.asStringValue(vms.vmTop(0));
             const out = try nativeStrReplace(s, old, new);
-            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .str_split => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
-            const top = vms.vmState().stack_top;
-            const src_val = vms.vmState().stack[top - 2];
+            const src_val = vms.vmTop(1);
             const s = try vms.asStringValue(src_val);
-            const sep = try vms.asStringValue(vms.vmState().stack[top - 1]);
+            const sep = try vms.asStringValue(vms.vmTop(0));
             const out = try nativeStrSplit(s, sep, src_val == .object);
-            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .str_split_once => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
-            const top = vms.vmState().stack_top;
-            const src_val = vms.vmState().stack[top - 2];
+            const src_val = vms.vmTop(1);
             const s = try vms.asStringValue(src_val);
-            const sep = try vms.asStringValue(vms.vmState().stack[top - 1]);
+            const sep = try vms.asStringValue(vms.vmTop(0));
             const out = try nativeStrSplitOnce(s, sep, src_val == .object);
-            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .str_starts_with => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
-            const top = vms.vmState().stack_top;
-            const s = try vms.asStringValue(vms.vmState().stack[top - 2]);
-            const prefix = try vms.asStringValue(vms.vmState().stack[top - 1]);
-            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            const s = try vms.asStringValue(vms.vmTop(1));
+            const prefix = try vms.asStringValue(vms.vmTop(0));
+            try vms.vmPopArgs(argc);
             try vms.vmPush(nativeStrStartsWith(s, prefix));
         },
         .str_trim => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
-            const s = try vms.asStringValue(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            const s = try vms.asStringValue(vms.vmTop(0));
             const out = try nativeStrTrim(s);
-            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .str_upper => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
-            const s = try vms.asStringValue(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            const s = try vms.asStringValue(vms.vmTop(0));
             const out = try nativeStrUpper(s);
-            _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .str_trim_left => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
-            const top = vms.vmState().stack_top;
-            const s = try vms.asStringValue(vms.vmState().stack[top - 2]);
-            const cutset = try vms.asStringValue(vms.vmState().stack[top - 1]);
+            const s = try vms.asStringValue(vms.vmTop(1));
+            const cutset = try vms.asStringValue(vms.vmTop(0));
             const out = try nativeStrTrimLeft(s, cutset);
-            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .str_trim_right => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
-            const top = vms.vmState().stack_top;
-            const s = try vms.asStringValue(vms.vmState().stack[top - 2]);
-            const cutset = try vms.asStringValue(vms.vmState().stack[top - 1]);
+            const s = try vms.asStringValue(vms.vmTop(1));
+            const cutset = try vms.asStringValue(vms.vmTop(0));
             const out = try nativeStrTrimRight(s, cutset);
-            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .str_trim_prefix => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
-            const top = vms.vmState().stack_top;
-            const s = try vms.asStringValue(vms.vmState().stack[top - 2]);
-            const prefix = try vms.asStringValue(vms.vmState().stack[top - 1]);
+            const s = try vms.asStringValue(vms.vmTop(1));
+            const prefix = try vms.asStringValue(vms.vmTop(0));
             const out = try nativeStrTrimPrefix(s, prefix);
-            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .str_trim_suffix => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
-            const top = vms.vmState().stack_top;
-            const s = try vms.asStringValue(vms.vmState().stack[top - 2]);
-            const suffix = try vms.asStringValue(vms.vmState().stack[top - 1]);
+            const s = try vms.asStringValue(vms.vmTop(1));
+            const suffix = try vms.asStringValue(vms.vmTop(0));
             const out = try nativeStrTrimSuffix(s, suffix);
-            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .str_split_n => {
-
-            if (argc != nf.arity) return error.ArityMismatch;
-            const top = vms.vmState().stack_top;
-            const s = try vms.asStringValue(vms.vmState().stack[top - 3]);
-            const sep = try vms.asStringValue(vms.vmState().stack[top - 2]);
-            const n_v = vms.vmState().stack[top - 1];
+            const s = try vms.asStringValue(vms.vmTop(2));
+            const sep = try vms.asStringValue(vms.vmTop(1));
+            const n_v = vms.vmTop(0);
             const out = try nativeStrSplitN(s, sep, n_v);
-            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         else => {},

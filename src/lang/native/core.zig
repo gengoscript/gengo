@@ -737,7 +737,6 @@ fn cloneObject(src: *Object, visits: []CloneVisit, visit_len: *usize) anyerror!V
 pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
     switch (@as(NativeFnId, @enumFromInt(nf.id))) {
         .core_append => {
-
             const start = vms.vmState().stack_top - argc;
             if (vms.vmState().policy.native_backend == .host) {
                 try host_abi_mod.ensureHostReady();
@@ -748,234 +747,182 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                     var out_wire = host_abi_mod.nullWire();
                     try host_abi_mod.nativeCallChecked(.core_append, args_wire[0..argc], &out_wire);
                     const out = try host_abi_mod.valueFromWire(out_wire);
-                    for (0..@as(usize, argc) + 1) |_| _ = try vms.vmPop();
+                    try vms.vmPopArgs(argc);
                     try vms.vmPush(out);
                     return;
                 }
             }
             const out = try nativeAppend(start, argc);
-            for (0..@as(usize, argc) + 1) |_| _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .core_bytelen => {
-
             if (argc != nf.arity) return error.ArityMismatch;
             if (vms.vmState().policy.native_backend == .host) {
                 try host_abi_mod.ensureHostReady();
                 if ((vms.vmState().host_caps & host_abi.CAP_CORE_BYTELEN) != 0) {
                     var arg_wire: [1]host_abi.ValueWire = undefined;
-                    arg_wire[0] = try host_abi_mod.wireFromValue(vms.vmState().stack[vms.vmState().stack_top - 1]);
+                    arg_wire[0] = try host_abi_mod.wireFromValue(vms.vmTop(0));
                     var out_wire = host_abi_mod.nullWire();
                     try host_abi_mod.nativeCallChecked(.core_bytelen, arg_wire[0..], &out_wire);
                     const out = try host_abi_mod.valueFromWire(out_wire);
-                    _ = try vms.vmPop();
-                    _ = try vms.vmPop();
+                    try vms.vmPopArgs(argc);
                     try vms.vmPush(out);
                     return;
                 }
             }
-            const arg = vms.vmState().stack[vms.vmState().stack_top - 1];
-            const out = try nativeByteLen(arg);
-            _ = try vms.vmPop();
-            _ = try vms.vmPop();
+            const out = try nativeByteLen(vms.vmTop(0));
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .core_clone => {
-
             if (argc != nf.arity) return error.ArityMismatch;
-            const out = try nativeClone(vms.vmState().stack[vms.vmState().stack_top - 1]);
-            _ = try vms.vmPop();
-            _ = try vms.vmPop();
+            const out = try nativeClone(vms.vmTop(0));
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .core_contains => {
-
             if (argc != nf.arity) return error.ArityMismatch;
-            const top = vms.vmState().stack_top;
-            const arr_val = vms.unboxNamed(vms.vmState().stack[top - 2]);
-            const needle = vms.vmState().stack[top - 1];
+            const arr_val = vms.unboxNamed(vms.vmTop(1));
+            const needle = vms.vmTop(0);
             if (arr_val != .object) return error.TypeError;
             const out = try nativeContains(arr_val.object, needle);
-            _ = try vms.vmPop();
-            _ = try vms.vmPop();
-            _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .core_deep_equal => {
-
             if (argc != nf.arity) return error.ArityMismatch;
-            const top = vms.vmState().stack_top;
-            const out = try nativeDeepEqual(vms.vmState().stack[top - 2], vms.vmState().stack[top - 1]);
-            _ = try vms.vmPop();
-            _ = try vms.vmPop();
-            _ = try vms.vmPop();
+            const out = try nativeDeepEqual(vms.vmTop(1), vms.vmTop(0));
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .core_delete => {
-
             if (argc != nf.arity) return error.ArityMismatch;
-            const top = vms.vmState().stack_top;
-            const m_val = vms.unboxNamed(vms.vmState().stack[top - 2]);
-            const key = vms.vmState().stack[top - 1];
+            const m_val = vms.unboxNamed(vms.vmTop(1));
+            const key = vms.vmTop(0);
             if (m_val != .object) return error.TypeError;
             const out = try nativeDelete(m_val.object, key);
-            _ = try vms.vmPop();
-            _ = try vms.vmPop();
-            _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .core_error => {
-
             if (argc != nf.arity) return error.ArityMismatch;
-            const arg = vms.vmState().stack[vms.vmState().stack_top - 1];
-            const msg = try vms.asStringValue(arg);
+            const msg = try vms.asStringValue(vms.vmTop(0));
             const copy = try vmgc.vmAllocManagedBytes(msg.len);
             @memcpy(copy[0..msg.len], msg);
-            _ = try vms.vmPop();
-            _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(.{ .error_value = copy[0..msg.len] });
         },
         .core_gc => {
-
             if (argc != nf.arity) return error.ArityMismatch;
             vmgc.collectGarbage();
-            _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(.null);
         },
         .core_gc_live_objects => {
-
             if (argc != nf.arity) return error.ArityMismatch;
-            _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(.{ .int = @intCast(heap.liveObjectCount()) });
         },
         .core_gc_stats => {
-
             if (argc != nf.arity) return error.ArityMismatch;
             const out = try nativeGcStats();
-            _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .core_gc_stats_ext => {
-
             if (argc != nf.arity) return error.ArityMismatch;
             const out = try nativeGcStatsExt();
-            _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .core_has => {
-
             if (argc != nf.arity) return error.ArityMismatch;
-            const top = vms.vmState().stack_top;
-            const m_val = vms.unboxNamed(vms.vmState().stack[top - 2]);
-            const key = vms.vmState().stack[top - 1];
+            const m_val = vms.unboxNamed(vms.vmTop(1));
+            const key = vms.vmTop(0);
             if (m_val != .object) return error.TypeError;
             const out = try nativeHas(m_val.object, key);
-            _ = try vms.vmPop();
-            _ = try vms.vmPop();
-            _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .core_is_array => {
-
             if (argc != nf.arity) return error.ArityMismatch;
-            const out = nativeIsArray(vms.vmState().stack[vms.vmState().stack_top - 1]);
-            _ = try vms.vmPop();
-            _ = try vms.vmPop();
+            const out = nativeIsArray(vms.vmTop(0));
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .core_is_error => {
-
             if (argc != nf.arity) return error.ArityMismatch;
-            const arg = vms.vmState().stack[vms.vmState().stack_top - 1];
-            _ = try vms.vmPop();
-            _ = try vms.vmPop();
+            const arg = vms.vmTop(0);
+            try vms.vmPopArgs(argc);
             try vms.vmPush(.{ .boolean = arg == .error_value });
         },
         .core_is_float => {
-
             if (argc != nf.arity) return error.ArityMismatch;
-            const out = nativeIsFloat(vms.vmState().stack[vms.vmState().stack_top - 1]);
-            _ = try vms.vmPop();
-            _ = try vms.vmPop();
+            const out = nativeIsFloat(vms.vmTop(0));
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .core_is_int => {
-
             if (argc != nf.arity) return error.ArityMismatch;
-            const out = nativeIsInt(vms.vmState().stack[vms.vmState().stack_top - 1]);
-            _ = try vms.vmPop();
-            _ = try vms.vmPop();
+            const out = nativeIsInt(vms.vmTop(0));
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .core_is_map => {
-
             if (argc != nf.arity) return error.ArityMismatch;
-            const out = nativeIsMap(vms.vmState().stack[vms.vmState().stack_top - 1]);
-            _ = try vms.vmPop();
-            _ = try vms.vmPop();
+            const out = nativeIsMap(vms.vmTop(0));
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .core_is_null => {
-
             if (argc != nf.arity) return error.ArityMismatch;
-            const out = nativeIsNull(vms.vmState().stack[vms.vmState().stack_top - 1]);
-            _ = try vms.vmPop();
-            _ = try vms.vmPop();
+            const out = nativeIsNull(vms.vmTop(0));
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .core_is_string => {
-
             if (argc != nf.arity) return error.ArityMismatch;
-            const out = nativeIsString(vms.vmState().stack[vms.vmState().stack_top - 1]);
-            _ = try vms.vmPop();
-            _ = try vms.vmPop();
+            const out = nativeIsString(vms.vmTop(0));
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .core_is_struct => {
-
             if (argc != nf.arity) return error.ArityMismatch;
-            const out = nativeIsStruct(vms.vmState().stack[vms.vmState().stack_top - 1]);
-            _ = try vms.vmPop();
-            _ = try vms.vmPop();
+            const out = nativeIsStruct(vms.vmTop(0));
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .core_keys => {
-
             if (argc != nf.arity) return error.ArityMismatch;
-            const m_val = vms.unboxNamed(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            const m_val = vms.unboxNamed(vms.vmTop(0));
             if (m_val != .object) return error.TypeError;
             const out = try nativeKeys(m_val.object);
-            _ = try vms.vmPop();
-            _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .core_len => {
-
             if (argc != nf.arity) return error.ArityMismatch;
             if (vms.vmState().policy.native_backend == .host) {
                 try host_abi_mod.ensureHostReady();
                 if ((vms.vmState().host_caps & host_abi.CAP_CORE_LEN) != 0) {
                     var arg_wire: [1]host_abi.ValueWire = undefined;
-                    arg_wire[0] = try host_abi_mod.wireFromValue(vms.vmState().stack[vms.vmState().stack_top - 1]);
+                    arg_wire[0] = try host_abi_mod.wireFromValue(vms.vmTop(0));
                     var out_wire = host_abi_mod.nullWire();
                     try host_abi_mod.nativeCallChecked(.core_len, arg_wire[0..], &out_wire);
                     const out = try host_abi_mod.valueFromWire(out_wire);
-                    _ = try vms.vmPop();
-                    _ = try vms.vmPop();
+                    try vms.vmPopArgs(argc);
                     try vms.vmPush(out);
                     return;
                 }
             }
-            const arg = vms.vmState().stack[vms.vmState().stack_top - 1];
-            const out = try nativeLen(arg);
-            _ = try vms.vmPop();
-            _ = try vms.vmPop();
+            const out = try nativeLen(vms.vmTop(0));
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .core_recover => {
-
             if (argc != nf.arity) return error.ArityMismatch;
-            _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             if (vms.vmState().is_panicking and !vms.vmState().recovered) {
                 const pv = vms.vmState().panic_value;
                 vms.vmState().recovered = true;
@@ -985,35 +932,26 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             }
         },
         .core_remove => {
-
             if (argc != nf.arity) return error.ArityMismatch;
-            const top = vms.vmState().stack_top;
-            const arr_val = vms.unboxNamed(vms.vmState().stack[top - 2]);
-            const idx_val = vms.vmState().stack[top - 1];
+            const arr_val = vms.unboxNamed(vms.vmTop(1));
+            const idx_val = vms.vmTop(0);
             if (arr_val != .object) return error.TypeError;
             const out = try nativeRemove(arr_val.object, idx_val);
-            _ = try vms.vmPop();
-            _ = try vms.vmPop();
-            _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .core_type_of => {
-
             if (argc != nf.arity) return error.ArityMismatch;
-            const arg = vms.vmState().stack[vms.vmState().stack_top - 1];
-            const out = nativeTypeNameValue(arg);
-            _ = try vms.vmPop();
-            _ = try vms.vmPop();
+            const out = nativeTypeNameValue(vms.vmTop(0));
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .core_values => {
-
             if (argc != nf.arity) return error.ArityMismatch;
-            const m_val = vms.unboxNamed(vms.vmState().stack[vms.vmState().stack_top - 1]);
+            const m_val = vms.unboxNamed(vms.vmTop(0));
             if (m_val != .object) return error.TypeError;
             const out = try nativeValues(m_val.object);
-            _ = try vms.vmPop();
-            _ = try vms.vmPop();
+            try vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         else => {},
