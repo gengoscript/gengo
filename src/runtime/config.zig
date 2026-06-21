@@ -1,4 +1,4 @@
-pub const heap_size_bytes: usize = 512 * 1024;
+pub const heap_size_bytes: usize = 1024 * 1024;
 pub const max_objects: usize = 2048;
 pub const max_stack: usize = 512;
 pub const max_frames: usize = 64;
