@@ -159,6 +159,33 @@ The entries below describe the public library surface. This page is intentionall
   - `heap_size_bytes`
   - `live_objects`
 
+### `std.core.gc_stats_ext()`
+- Returns extended GC stats with keys: `heap_used_bytes`, `heap_size_bytes`, `live_objects`, `gc_runs`, `gc_time_ns`, `alloc_object_calls`, `alloc_managed_slice_calls`, `alloc_managed_bytes_calls`
+
+### `std.core.keys(map)`
+- Returns array of all keys in a map
+- Errors: `TypeError` on non-map
+
+### `std.core.values(map)`
+- Returns array of all values in a map
+- Errors: `TypeError` on non-map
+
+### `std.core.has(map, key)`
+- Returns `true` iff `key` exists in `map`
+- Errors: `TypeError` on non-map
+
+### `std.core.delete(map, key)`
+- Removes `key` from `map`; returns the removed value or `null`
+- Errors: `TypeError` on non-map
+
+### `std.core.contains(arr, needle)`
+- Returns `true` iff `arr` contains `needle` (uses `deep_equal`)
+- Errors: `TypeError` on non-array
+
+### `std.core.remove(arr, index)`
+- Returns a new array with the element at `index` removed
+- Errors: `TypeError` on non-array, `IndexOutOfBounds`
+
 ## std.conv
 
 ### `std.conv.to_int(x)`
@@ -232,7 +259,7 @@ The entries below describe the public library surface. This page is intentionall
 - Counts non-overlapping occurrences of `sub` in `s`
 
 ### `std.string.fields(s)`
-- Splits `s` by Unicode whitespace (spaces, tabs, newlines) into an array
+- Splits `s` by ASCII whitespace (spaces, tabs, newlines) into an array
 
 ### `std.string.pad_left(s, width, pad)` / `std.string.pad_right(s, width, pad)`
 - Pads `s` to `width` using `pad` (first rune only) on the left or right
@@ -244,7 +271,7 @@ The entries below describe the public library surface. This page is intentionall
 - Returns `true` if any rune in `chars` appears in `s`
 
 ### `std.string.trim_left(s, chars)` / `std.string.trim_right(s, chars)`
-- Trims leading or trailing runes that appear in `chars`
+- Trims leading or trailing bytes that appear in `chars` (single-byte characters only; multi-byte runes in `chars` are not recognised)
 
 ### `std.string.trim_prefix(s, prefix)` / `std.string.trim_suffix(s, suffix)`
 - Removes `prefix` or `suffix` if present; returns `s` unchanged otherwise
@@ -291,13 +318,13 @@ The entries below describe the public library surface. This page is intentionall
 ## std.sort
 
 ### `std.sort.asc(arr)`
-- Sorts `arr` in ascending order (int, float, or string elements)
+- Returns a new array sorted in ascending order (int, float, or string elements); the original is unchanged
 
 ### `std.sort.desc(arr)`
-- Sorts `arr` in descending order
+- Returns a new array sorted in descending order; the original is unchanged
 
 ### `std.sort.by(arr, key_fn)`
-- Sorts `arr` by the value returned by `key_fn(element)` for each element
+- Returns a new array sorted by the value returned by `key_fn(element)` for each element; the original is unchanged
 
 ## std.math
 
@@ -328,8 +355,50 @@ The entries below describe the public library surface. This page is intentionall
 ### `std.math.e`
 - Euler's number ≈ 2.71828182845904… (constant)
 
+### `std.math.phi`
+- Golden ratio ≈ 1.618033988749895… (constant)
+
 ### `std.math.inf`
 - Positive infinity (constant)
+
+### `std.math.nan()`
+- Returns NaN
+
+### `std.math.is_nan(x)`
+- Returns `true` if `x` is NaN
+
+### `std.math.is_inf(x, sign)`
+- Returns `true` if `x` is infinite; `sign=0` matches any sign, `sign>0` matches positive, `sign<0` matches negative
+
+### `std.math.sign(x)`
+- Returns the sign of `x`: `-1`, `0`, or `1`; preserves int type for integer inputs
+
+### `std.math.clamp(v, min, max)`
+- Clamps `v` to the `[min, max]` range
+
+### `std.math.trunc(x)`
+- Truncates toward zero
+
+### `std.math.exp(x)`
+- `e^x`; errors: `RangeError` if result is not finite
+
+### `std.math.exp2(x)`
+- `2^x`; errors: `RangeError` if result is not finite
+
+### `std.math.cbrt(x)`
+- Cube root
+
+### `std.math.hypot(x, y)`
+- Euclidean distance `sqrt(x^2 + y^2)`
+
+### `std.math.mod(x, y)`
+- Floating-point modulo; errors: `DivisionByZero` if `y == 0`
+
+### `std.math.acos(x)` / `std.math.asin(x)` / `std.math.atan(x)` / `std.math.atan2(y, x)`
+- Inverse trigonometric functions; errors: `RangeError` on domain error
+
+### `std.math.cosh(x)` / `std.math.sinh(x)` / `std.math.tanh(x)`
+- Hyperbolic trigonometric functions; errors: `RangeError` if result is not finite
 
 ## std.rand
 
@@ -353,6 +422,13 @@ The entries below describe the public library surface. This page is intentionall
 - Returns a random element from `arr`
 - Errors: `RangeError` on empty array, `TypeError` if not an array
 
+### `std.rand.perm(n)`
+- Returns a random permutation of `[0, n)` (Fisher-Yates shuffle)
+- Errors: `RangeError` if `n < 0`
+
+### `std.rand.norm_float()`
+- Normally-distributed float (Box-Muller transform)
+
 ## std.json
 
 ### `std.json.parse(s)`
@@ -373,6 +449,10 @@ The entries below describe the public library surface. This page is intentionall
 
 ### `std.json.valid(s)`
 - Returns `true` if `s` is valid JSON, `false` otherwise
+
+### `std.json.indent(src, indent_str)`
+- Parses JSON and re-serialises with the given indentation; `indent_str` may be `"\t"` or 1–8 spaces
+- Errors: `TypeError` on invalid JSON
 
 ### `std.json.Value` / `std.JSONValue`
 - The `JSONValue` variant type; both names refer to the same type object
@@ -452,7 +532,8 @@ Errors: `InvalidRegexp` on a malformed pattern.
 - Splits `s` at each match of `pattern`; returns array of strings
 
 ### `std.regexp.compile(pattern)`
-- Compiles `pattern` into a reusable regexp object
+- Compiles `pattern` into a reusable `std.Regexp` object
+- `std.Regexp` is the named type for compiled regular expressions
 - The object supports method-call syntax: `re.match(s)`, `re.find(s)`, `re.find_all(s)`, `re.replace(s, repl)`, `re.split(s)`
 
 ## std.template
@@ -533,7 +614,7 @@ Go-style text templates with `{{` / `}}` delimiters.
 
 ### `std.time.parse_duration(s)`
 - Parses a duration string like `"1h30m"`, `"2.5s"`, `"100ms"` into milliseconds
-- Returns `int`
+- Returns `float`
 
 ### Format verbs
 
