@@ -67,14 +67,17 @@ fn buildResponseStruct(status: i32, body: []const u8, hdr_map: std.StringHashMap
 }
 
 fn pushOkPair(resp: Value) !void {
-    const arr_obj = try vmgc.vmAllocObject();
+    // resp.object is unrooted on entry (caller popped its temp root); protect it before GC fires
+    try vms.pushTempRoot(resp);
+    defer vms.popTempRoot();
+    const arr_obj = try vmgc.vmAllocObject(); // GC fires; resp is protected
     arr_obj.* = .{ .array = &[_]Value{} };
     try vms.pushTempRoot(.{ .object = arr_obj });
     const vals = try vmgc.vmAllocManagedSlice(Value, 2);
     vals[0] = resp;
     vals[1] = .null;
     arr_obj.* = .{ .array_managed = vals };
-    vms.popTempRoot();
+    vms.popTempRoot(); // pop arr_obj
     try vms.vmPush(.{ .object = arr_obj });
 }
 

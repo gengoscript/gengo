@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const vms = @import("../vm_state.zig");
 const vmgc = @import("../vm_gc.zig");
+const heap = @import("../../runtime/heap.zig");
 const Value = @import("../value.zig").Value;
 const Object = @import("../value.zig").Object;
 const MapEntry = @import("../value.zig").MapEntry;
@@ -22,9 +23,9 @@ pub fn timeClearCache() void {
 
 pub fn timeGetType() !*Object {
     if (time_type_cache) |t| return t;
-    const obj = try vmgc.vmAllocObject();
-    try vms.pushTempRoot(.{ .object = obj });
-    defer vms.popTempRoot();
+    // Bump-allocate: permanent singleton; never swept, never triggers GC
+    const buf = heap.bump(Object, 1) orelse return error.OutOfMemory;
+    const obj: *Object = @ptrCast(buf);
     obj.* = .{ .named_type = .{
         .name = "Time",
         .qualified_name = TimeTypeQualifiedName,
@@ -35,7 +36,9 @@ pub fn timeGetType() !*Object {
 }
 
 pub fn timeBuildObj(ms: f64) !Value {
-    const obj = try vmgc.vmAllocObject();
+    // allocTempRooted: allocates, initializes, and roots obj before timeGetType can trigger GC
+    const obj = try vmgc.allocTempRooted(.{ .dyn_string = &[_]u8{} });
+    defer vms.popTempRoot();
     const typ = try timeGetType();
     obj.* = .{ .named_value = .{ .typ = typ, .value = .{ .float = ms } } };
     return .{ .object = obj };

@@ -58,7 +58,11 @@ const NamespaceEntry = struct {
 };
 
 fn makeNative(id: NativeFnId, arity: u8) !Value {
-    const obj = try vmgc.vmAllocObject();
+    // Use bump (non-pool) allocation so these permanent static objects are never
+    // seen by the GC. vmAllocObject triggers GC on every call under gc_stress,
+    // sweeping earlier makeNative results that are only held in Zig locals.
+    const buf = heap.bump(Object, 1) orelse return error.OutOfMemory;
+    const obj: *Object = @ptrCast(buf);
     obj.* = .{ .native_function = .{ .id = @intFromEnum(id), .arity = arity } };
     return .{ .object = obj };
 }

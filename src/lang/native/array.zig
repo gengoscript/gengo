@@ -159,12 +159,15 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                 out_obj.* = .{ .array_managed = out[0..0] }; // publish immediately
                 for (0..pair_count) |i| {
                     const pair = try vmgc.vmAllocObject();
+                    pair.* = .{ .array_managed = &[_]Value{} }; // safe init before GC can see it
+                    try vms.pushTempRoot(.{ .object = pair });
                     const pair_items = try vmgc.vmAllocManagedSlice(Value, 2);
                     pair_items[0] = a_items[i];
                     pair_items[1] = b_items[i];
                     pair.* = .{ .array_managed = pair_items[0..2] };
                     out[i] = .{ .object = pair };
                     out_obj.* = .{ .array_managed = out[0 .. i + 1] }; // grow visible
+                    vms.popTempRoot();
                 }
             }
             vms.vmPopArgs(argc);
