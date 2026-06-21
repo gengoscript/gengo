@@ -40,7 +40,7 @@ BENCH_SCRIPTS=(
 )
 
 echo "→ building ReleaseFast binary..." >&2
-zig build cli-fast -Dpreset=dev 2>&1 | grep -v "^$" >&2
+zig build cli-fast -Dpreset=1m 2>&1 | grep -v "^$" >&2
 
 echo >&2
 

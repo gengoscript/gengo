@@ -36,7 +36,7 @@ a schema document when you need that portability.
 Build the WASM engine first:
 
 ```bash
-zig build -Dpreset=dev engine-build
+zig build -Dpreset=1m engine-build
 ```
 
 Then run:

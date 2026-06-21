@@ -21,7 +21,7 @@ The shipped `policy.gengo`: `admin` may do anything, anyone may read
 Needs the broker plugin headers (Debian/Ubuntu: `mosquitto-dev`).
 
 ```bash
-zig build -Dpreset=dev engine-native   # repo root: builds libgengo-engine.so
+zig build -Dpreset=1m engine-native   # repo root: builds libgengo-engine.so
 cd examples/mosquitto-acl
 make
 mosquitto -c mosquitto.conf            # listens on 127.0.0.1:1884

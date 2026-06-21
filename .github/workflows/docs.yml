@@ -33,7 +33,7 @@ jobs:
         with:
           version: 0.16.0
       - name: Build gengo CLI
-        run: zig build -Dpreset=dev cli
+        run: zig build -Dpreset=1m cli
       - name: Build site with gengo
         run: ./zig-out/bin/gengo --cap fs --mount root=. tools/site-builder/site-builder.gengo
       - uses: actions/upload-pages-artifact@v3

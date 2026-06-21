@@ -35,7 +35,7 @@ Why the example uses getter functions after `normalize()` succeeds:
 Build the WASM engine first:
 
 ```bash
-zig build -Dpreset=dev engine-build
+zig build -Dpreset=1m engine-build
 ```
 
 Then run:

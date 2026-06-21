@@ -10,15 +10,15 @@ Thanks for helping improve gengo.
 
 ## Build Presets
 
-Three presets are available: `dev` (default), `tiny` (constrained limits), `stress` (larger heap, stress-tests memory).
+Four presets are available: `256k` (constrained), `1m` (default), `16m` (large), `unlimited`.
 
-Pass `-Dpreset=<name>` to any `zig build` command. `make test` uses `dev`. For any change that touches the runtime, heap, or VM also run:
+Pass `-Dpreset=<name>` to any `zig build` command. For any change that touches the runtime, heap, or VM also run with GC stress enabled:
 
 ```bash
-zig build -Dpreset=stress test
+zig build -Dpreset=1m -Dgc_stress=true test
 ```
 
-The stress preset allocates a much larger inline heap (`~4 MB` for `Runtime`) and is the harshest test for stack and memory correctness.
+`-Dgc_stress=true` forces a GC on every allocation — the harshest check for unrooted-value bugs.
 
 ## Local Validation
 
@@ -32,7 +32,7 @@ make test
 For runtime, heap, or VM changes also run:
 
 ```bash
-zig build -Dpreset=stress test
+zig build -Dpreset=1m -Dgc_stress=true test
 ```
 
 If relevant, also run:
@@ -53,7 +53,7 @@ push that touches `docs/`, the site builder, or the engine.
 Build the static site locally:
 
 ```bash
-zig build -Dpreset=dev cli
+zig build -Dpreset=1m cli
 ./zig-out/bin/gengo --cap fs --mount root=. tools/site-builder/site-builder.gengo
 ```
 

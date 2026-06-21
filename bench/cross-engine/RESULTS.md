@@ -13,7 +13,7 @@ versions, and the OS.
   loop/arithmetic overhead, no recursion.
 - Both are deliberately minimal and portable: no Gengo named types, no Lua
   metatables, no language-specific tricks on either side.
-- Gengo runs as the **native ReleaseSafe CLI** (`zig build -Dpreset=dev
+- Gengo runs as the **native ReleaseSafe CLI** (`zig build -Dpreset=1m
   cli-release`) — the same build mode the release pipeline ships, not a
   Debug build (which is several times slower and not representative).
 - Each number is a single wall-clock measurement of the whole process
