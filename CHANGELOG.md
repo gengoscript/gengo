@@ -27,8 +27,8 @@ variant value, safe for exhaustive pattern matching with `switch`:
 ```gengo
 doc := std.json.parse_value(src)
 switch doc {
-    case .jobject(m)    { std.io.println(m["name"]) }
-    case .jarray(items) { std.io.println(std.core.len(items)) }
+    case .jobject as m    { std.io.println(m["name"]) }
+    case .jarray as items { std.io.println(std.core.len(items)) }
     case .jnull         { std.io.println("null") }
 }
 ```
@@ -792,7 +792,7 @@ Each arm may have zero or one payload (optionally with a field name for document
 ```gengo
 switch d {
     case .allow { std.io.println("allowed") }
-    case .deny(reason) { std.io.println("denied:", reason) }
+    case .deny as reason { std.io.println("denied:", reason) }
     default { }
 }
 ```

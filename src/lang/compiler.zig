@@ -222,6 +222,7 @@ pub const Compiler = struct {
             .kw_and => "'and'",
             .kw_or => "'or'",
             .kw_not => "'not'",
+            .kw_as => "'as'",
             .kw_predicate => "'predicate'",
             .lparen => "'('",
             .rparen => "')'",

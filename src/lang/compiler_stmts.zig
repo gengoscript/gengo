@@ -1358,18 +1358,17 @@ pub fn switchStmt(c: anytype) anyerror!void {
         if (c.match(.kw_case)) {
             if (c.check(.dot)) {
                 if (is_type_switch) return c.err("'case .arm_name' is a variant pattern and cannot be used in a '.type' switch", .{});
-                // Variant arm pattern: case .arm_name { } or case .arm_name(binding) { }
+                // Variant arm pattern: case .arm_name { } or case .arm_name as binding { }
                 const dot_line = c.cur.line;
                 c.advance(); // consume '.'
                 if (c.cur.typ != .ident) return c.err("expected identifier, found {s}", .{c.tokenName(c.cur.typ)});
                 const arm_name_tok = c.cur;
                 c.advance(); // consume arm name
                 var binding: ?[]const u8 = null;
-                if (c.match(.lparen)) {
-                    if (c.cur.typ != .ident) return c.err("expected identifier, found {s}", .{c.tokenName(c.cur.typ)});
+                if (c.match(.kw_as)) {
+                    if (c.cur.typ != .ident) return c.err("expected identifier after 'as', found {s}", .{c.tokenName(c.cur.typ)});
                     binding = c.cur.src;
                     c.advance();
-                    try c.consume(.rparen);
                 }
                 // Emit: dup, variant_check arm_name, jump_if_false [H]
                 try chunk.emitOp(.dup, dot_line);

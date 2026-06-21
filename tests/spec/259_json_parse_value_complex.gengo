@@ -19,31 +19,31 @@ src :=
 doc := json.parse_value(src)
 
 switch doc {
-    case .jobject(root) {
+    case .jobject as root {
         switch root["store"] {
-            case .jobject(store) {
+            case .jobject as store {
 
                 // scalars
-                switch store["name"]    { case .jstr(s)  { std.io.println(s) } }
-                switch store["open"]    { case .jbool(b) { std.io.println(b) } }
-                switch store["rating"]  { case .jfloat(f){ std.io.println(f) } }
+                switch store["name"]    { case .jstr as s  { std.io.println(s) } }
+                switch store["open"]    { case .jbool as b { std.io.println(b) } }
+                switch store["rating"]  { case .jfloat as f{ std.io.println(f) } }
                 switch store["address"] { case .jnull    { std.io.println("no address") } }
 
                 // array of objects — title + first tag + price
                 switch store["inventory"] {
-                    case .jarray(books) {
+                    case .jarray as books {
                         for book in books {
                             switch book {
-                                case .jobject(b) {
+                                case .jobject as b {
                                     title := ""
                                     price := 0
                                     first_tag := ""
 
-                                    switch b["title"] { case .jstr(s)  { title = s } }
-                                    switch b["price"] { case .jint(n)  { price = n } }
+                                    switch b["title"] { case .jstr as s  { title = s } }
+                                    switch b["price"] { case .jint as n  { price = n } }
                                     switch b["tags"] {
-                                        case .jarray(tags) {
-                                            switch tags[0] { case .jstr(t) { first_tag = t } }
+                                        case .jarray as tags {
+                                            switch tags[0] { case .jstr as t { first_tag = t } }
                                         }
                                     }
 
@@ -57,11 +57,11 @@ switch doc {
                 // total price via accumulation
                 total := 0
                 switch store["inventory"] {
-                    case .jarray(books) {
+                    case .jarray as books {
                         for book in books {
                             switch book {
-                                case .jobject(b) {
-                                    switch b["price"] { case .jint(n) { total = total + n } }
+                                case .jobject as b {
+                                    switch b["price"] { case .jint as n { total = total + n } }
                                 }
                             }
                         }

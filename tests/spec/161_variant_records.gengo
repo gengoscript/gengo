@@ -36,8 +36,8 @@ std.io.println(r1)
 for shape in [s1, s2, s3] {
     std.io.print("pos(", shape.x, ",", shape.y, ") ")
     switch shape {
-        case .circle(f) { std.io.println("r=", f.radius) }
-        case .rect(f) { std.io.println("rect") }
+        case .circle as f { std.io.println("r=", f.radius) }
+        case .rect as f { std.io.println("rect") }
         case .point { std.io.println("point") }
     }
 }

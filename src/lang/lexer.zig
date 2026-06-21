@@ -11,6 +11,7 @@ pub const StrPoolSize: usize = 128 * 1024;
 
 const keyword_map = std.StaticStringMap(TT).initComptime(.{
     .{ "and",       .kw_and },
+    .{ "as",        .kw_as },
     .{ "assert",    .kw_assert },
     .{ "break",     .kw_break },
     .{ "case",      .kw_case },
@@ -304,9 +305,9 @@ pub const Lexer = struct {
 const testing = std.testing;
 
 test "lexer: keywords" {
-    var lex = Lexer{ .src = "assert break case const continue cycle default defer else enum false for func if import in interface message null predicate pub range return struct subtype switch test trap true type var variant" };
+    var lex = Lexer{ .src = "as assert break case const continue cycle default defer else enum false for func if import in interface message null predicate pub range return struct subtype switch test trap true type var variant" };
     const expected = comptime [_]TT{
-        .kw_assert, .kw_break, .kw_case, .kw_const, .kw_continue, .kw_cycle,
+        .kw_as, .kw_assert, .kw_break, .kw_case, .kw_const, .kw_continue, .kw_cycle,
         .kw_default, .kw_defer, .kw_else, .kw_enum, .kw_false, .kw_for,
         .kw_func, .kw_if, .kw_import, .kw_in, .kw_interface, .kw_message,
         .kw_null, .kw_predicate, .kw_pub, .kw_range, .kw_return, .kw_struct,

@@ -8,9 +8,9 @@ type Shape variant {
 
 func area(s Shape) int {
     switch s {
-        case .Circle(r) { return r * r * 3 }
-        case .Rect(w) { return w * w }
-        case .Triangle(b) { return b * b * 1 }
+        case .Circle as r { return r * r * 3 }
+        case .Rect as w { return w * w }
+        case .Triangle as b { return b * b * 1 }
     }
     return 0
 }

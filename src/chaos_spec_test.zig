@@ -197,7 +197,7 @@ test "invoke parity: immediate and deferred method dispatch agree" {
         \\}
         \\func (s Shape) emit() {
         \\    switch s {
-        \\        case .circle(v) { std.io.println("shape:", v) }
+        \\        case .circle as v { std.io.println("shape:", v) }
         \\        case .point { std.io.println("shape:point") }
         \\    }
         \\}

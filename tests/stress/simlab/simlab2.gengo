@@ -274,13 +274,13 @@ func runSim(initialWorkers []Worker, jobs JobQueue, maxTicks Tick, policies map[
         if qerr != null { return st, qerr }
 
         switch ev {
-            case .spawn(w) {
+            case .spawn as w {
                 workers[workerKey(w.id)] = w
             }
-            case .phase_change(ph) {
+            case .phase_change as ph {
                 _ = describePhase(ph)
             }
-            case .submit(job) {
+            case .submit as job {
                 wk := workerKey(job.owner)
                 if not std.core.has(workers, wk) {
                     st.failed += 1
@@ -313,7 +313,7 @@ func runSim(initialWorkers []Worker, jobs JobQueue, maxTicks Tick, policies map[
                     st.totalLatency = Latency(float(st.totalLatency) + float(int(job.cost)) * 0.1)
                 }
             }
-            case .finish(id) {
+            case .finish as id {
                 wk := workerKey(id)
                 if std.core.has(workers, wk) {
                     w := workers[wk]
@@ -323,7 +323,7 @@ func runSim(initialWorkers []Worker, jobs JobQueue, maxTicks Tick, policies map[
                     st.processed += 1
                 }
             }
-            case .fail(job) {
+            case .fail as job {
                 st.failed += 1
                 wk := workerKey(job.owner)
                 if std.core.has(workers, wk) {
@@ -346,7 +346,7 @@ func runSim(initialWorkers []Worker, jobs JobQueue, maxTicks Tick, policies map[
                 delayed[tgt] = std.core.append(delayed[tgt], job)
                 st.retried += 1
             }
-            case .tick(t) {
+            case .tick as t {
                 now = t
             }
             default {}

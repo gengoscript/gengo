@@ -23,15 +23,15 @@ std.io.println(d2)
 // Pattern matching: no payload
 switch d1 {
     case .allow { std.io.println("allowed") }
-    case .deny(r) { std.io.println("denied:", r) }
-    case .review(r) { std.io.println("review:", r) }
+    case .deny as r { std.io.println("denied:", r) }
+    case .review as r { std.io.println("review:", r) }
 }
 
 // Pattern matching: with payload binding
 switch d2 {
     case .allow { std.io.println("allowed") }
-    case .deny(r) { std.io.println("denied:", r) }
-    case .review(r) { std.io.println("review:", r) }
+    case .deny as r { std.io.println("denied:", r) }
+    case .review as r { std.io.println("review:", r) }
 }
 
 // Result type
@@ -41,8 +41,8 @@ r3 := Result.pending
 
 for r in [r1, r2, r3] {
     switch r {
-        case .ok(v) { std.io.println("ok:", v) }
-        case .err(m) { std.io.println("err:", m) }
+        case .ok as v { std.io.println("ok:", v) }
+        case .err as m { std.io.println("err:", m) }
         case .pending { std.io.println("pending") }
     }
 }
@@ -54,8 +54,8 @@ std.io.println(Decision.name)
 func describe(d Decision) string {
     switch d {
         case .allow { return "allow" }
-        case .deny(r) { return r }
-        case .review(r) { return r }
+        case .deny as r { return r }
+        case .review as r { return r }
     }
     return "unknown"
 }
