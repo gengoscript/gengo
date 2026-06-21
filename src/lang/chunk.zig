@@ -29,9 +29,13 @@ pub const State = struct {
     const_count: usize = 0,
     str_slice_count: usize = 0,
     pending_col: u16 = 0,
-    // Peephole: track position of last `constant` instruction for const-op fusion.
+    // Peephole: track position of last `constant` instruction for const-op fusion and folding.
     last_const_code_pos: ?usize = null,
     last_const_idx: u16 = 0,
+    // Peephole: position of the constant emitted immediately before last_const. Set only
+    // when two constants were emitted with nothing in between; used for constant folding.
+    prev_const_code_pos: ?usize = null,
+    prev_const_idx: u16 = 0,
     // Peephole: track position of last `get_local` instruction (2 bytes: op + slot).
     // Used for triple-fusion: get_local + constant + eq/sub → get_local_const_eq/sub.
     // Verified via arithmetic (gl_pos + 2 == const_pos) rather than code inspection
@@ -98,6 +102,8 @@ pub fn reset() void {
     g_state.pending_col = 0;
     g_state.last_const_code_pos = null;
     g_state.last_const_idx = 0;
+    g_state.prev_const_code_pos = null;
+    g_state.prev_const_idx = 0;
     g_state.last_get_local_code_pos = null;
     g_state.last_triple_eq_pos = null;
     g_state.last_triple_lt_pos = null;
@@ -128,7 +134,71 @@ pub fn emitByte(b: u8, line: u32) !void {
     g_state.code_len += 1;
 }
 
+fn foldBinOp(op: Op, lhs: Value, rhs: Value) ?Value {
+    if (lhs == .int and rhs == .int) {
+        return switch (op) {
+            .add => blk: { const r = @addWithOverflow(lhs.int, rhs.int); break :blk if (r[1] != 0) null else Value{ .int = r[0] }; },
+            .sub => blk: { const r = @subWithOverflow(lhs.int, rhs.int); break :blk if (r[1] != 0) null else Value{ .int = r[0] }; },
+            .mul => blk: { const r = @mulWithOverflow(lhs.int, rhs.int); break :blk if (r[1] != 0) null else Value{ .int = r[0] }; },
+            .div => if (rhs.int == 0 or (lhs.int == std.math.minInt(i64) and rhs.int == -1)) null else Value{ .int = @divTrunc(lhs.int, rhs.int) },
+            .mod => if (rhs.int == 0 or (lhs.int == std.math.minInt(i64) and rhs.int == -1)) null else Value{ .int = @rem(lhs.int, rhs.int) },
+            else => null,
+        };
+    }
+    if (lhs == .float and rhs == .float) {
+        return switch (op) {
+            .add => Value{ .float = lhs.float + rhs.float },
+            .sub => Value{ .float = lhs.float - rhs.float },
+            .mul => Value{ .float = lhs.float * rhs.float },
+            .div => Value{ .float = lhs.float / rhs.float },
+            .mod => Value{ .float = @rem(lhs.float, rhs.float) },
+            else => null,
+        };
+    }
+    return null;
+}
+
 pub fn emitOp(op: Op, line: u32) !void {
+    // Constant folding for ops that bypass emitBinOpFused (mul, div, mod).
+    switch (op) {
+        .mul, .div, .mod => {
+            if (g_state.last_const_code_pos) |rhs_pos| {
+                if (rhs_pos + 3 == g_state.code_len) {
+                    if (g_state.prev_const_code_pos) |lhs_pos| {
+                        if (lhs_pos + 3 == rhs_pos) {
+                            const lhs = g_state.consts[g_state.prev_const_idx];
+                            const rhs = g_state.consts[g_state.last_const_idx];
+                            if (foldBinOp(op, lhs, rhs)) |result| {
+                                g_state.code_len = lhs_pos;
+                                g_state.const_count -= 2;
+                                g_state.last_const_code_pos = null;
+                                g_state.prev_const_code_pos = null;
+                                try emitConst(result, line);
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        else => {},
+    }
+    // Peephole: neg immediately after constant → negate the constant in place.
+    if (op == .neg) {
+        if (g_state.last_const_code_pos) |pos| {
+            if (pos + 3 == g_state.code_len) {
+                const v = g_state.consts[g_state.last_const_idx];
+                if (v == .int and v.int != std.math.minInt(i64)) {
+                    g_state.consts[g_state.last_const_idx] = .{ .int = -v.int };
+                    return;
+                }
+                if (v == .float) {
+                    g_state.consts[g_state.last_const_idx] = .{ .float = -v.float };
+                    return;
+                }
+            }
+        }
+    }
     // Peephole: constant k immediately preceding ret → ret_const k (3 bytes, 1 dispatch).
     if (op == .ret) {
         if (g_state.last_const_code_pos) |pos| {
@@ -269,10 +339,13 @@ pub fn emitOpConst(op: Op, v: Value, line: u32) !void {
     const idx = try addConst(v);
     try emitConstIdx(op, idx, line);
     if (op == .constant) {
+        g_state.prev_const_code_pos = g_state.last_const_code_pos;
+        g_state.prev_const_idx = g_state.last_const_idx;
         g_state.last_const_code_pos = g_state.code_len - 3;
         g_state.last_const_idx = idx;
     } else {
         g_state.last_const_code_pos = null;
+        g_state.prev_const_code_pos = null;
     }
 }
 
@@ -281,7 +354,27 @@ pub fn emitOpConst(op: Op, v: Value, line: u32) !void {
 // const_eq/const_sub/const_add/const_lt (same bytecode layout, different opcode byte).
 // If the instruction before that was `get_local`, further fuses to
 // get_local_const_eq / get_local_const_sub / get_local_const_add / get_local_const_lt (triple fusion, same 5-byte layout).
+// If both operands are literal constants, folds to a single constant at compile time.
 pub fn emitBinOpFused(op: Op, line: u32) !void {
+    if (g_state.last_const_code_pos) |rhs_pos| {
+        if (rhs_pos + 3 == g_state.code_len) {
+            // Constant folding: both operands are adjacent literal constants.
+            if (g_state.prev_const_code_pos) |lhs_pos| {
+                if (lhs_pos + 3 == rhs_pos) {
+                    const lhs = g_state.consts[g_state.prev_const_idx];
+                    const rhs = g_state.consts[g_state.last_const_idx];
+                    if (foldBinOp(op, lhs, rhs)) |result| {
+                        g_state.code_len = lhs_pos;
+                        g_state.const_count -= 2;
+                        g_state.last_const_code_pos = null;
+                        g_state.prev_const_code_pos = null;
+                        try emitConst(result, line);
+                        return;
+                    }
+                }
+            }
+        }
+    }
     if (g_state.last_const_code_pos) |pos| {
         if (pos + 3 == g_state.code_len) {
             const fused: ?Op = switch (op) {
@@ -398,10 +491,13 @@ pub fn emitOpStringConst(op: Op, s: []const u8, line: u32) !void {
     const idx = try addStringConst(s);
     try emitConstIdx(op, idx, line);
     if (op == .constant) {
+        g_state.prev_const_code_pos = g_state.last_const_code_pos;
+        g_state.prev_const_idx = g_state.last_const_idx;
         g_state.last_const_code_pos = g_state.code_len - 3;
         g_state.last_const_idx = idx;
     } else {
         g_state.last_const_code_pos = null;
+        g_state.prev_const_code_pos = null;
     }
 }
 
