@@ -42,6 +42,7 @@ pub const TT = enum {
     kw_and,
     kw_or,
     kw_not,
+    kw_as,
     lparen,
     rparen,
     lbrace,

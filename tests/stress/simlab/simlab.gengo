@@ -189,10 +189,10 @@ func runSim(initialWorkers []Worker, initialJobs []Job, maxTicks Tick) (Stats, ?
         }
 
         switch ev {
-            case .spawn(w) {
+            case .spawn as w {
                 workers[workerKey(w.id)] = w
             }
-            case .submit(job) {
+            case .submit as job {
                 wk := workerKey(job.owner)
                 if not std.core.has(workers, wk) {
                     st.failed += 1
@@ -224,7 +224,7 @@ if not std.core.has(delayed, tgt) {
                     queue = queuePush(queue, Event.finish(job.owner))
                 }
             }
-            case .finish(id) {
+            case .finish as id {
                 wk := workerKey(id)
                 if std.core.has(workers, wk) {
                     w := workers[wk]
@@ -234,7 +234,7 @@ if not std.core.has(delayed, tgt) {
                     st.processed += 1
                 }
             }
-            case .fail(job) {
+            case .fail as job {
                 st.failed += 1
                 wk := workerKey(job.owner)
                 if std.core.has(workers, wk) {
@@ -255,7 +255,7 @@ if not std.core.has(delayed, tgt) {
                 delayed[tgt] = std.core.append(delayed[tgt], job)
                 st.retried += 1
             }
-            case .tick(t) {
+            case .tick as t {
                 now = t
             }
             default {

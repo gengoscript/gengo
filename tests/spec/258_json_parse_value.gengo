@@ -14,27 +14,27 @@ src :=
 doc := json.parse_value(src)
 
 switch doc {
-    case .jobject(m) {
+    case .jobject as m {
         switch m["name"] {
-            case .jstr(s)  { std.io.println(s) }
+            case .jstr as s  { std.io.println(s) }
         }
         switch m["age"] {
-            case .jint(n)  { std.io.println(n) }
+            case .jint as n  { std.io.println(n) }
         }
         switch m["active"] {
-            case .jbool(b) { std.io.println(b) }
+            case .jbool as b { std.io.println(b) }
         }
         switch m["ratio"] {
-            case .jfloat(f) { std.io.println(f) }
+            case .jfloat as f { std.io.println(f) }
         }
         switch m["notes"] {
             case .jnull    { std.io.println("null") }
         }
         switch m["scores"] {
-            case .jarray(items) {
+            case .jarray as items {
                 for item in items {
                     switch item {
-                        case .jint(n) { std.io.println(n) }
+                        case .jint as n { std.io.println(n) }
                     }
                 }
             }

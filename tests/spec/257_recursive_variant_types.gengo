@@ -13,7 +13,7 @@ leaf2 := JSONValue.jstr("hello")
 arr   := JSONValue.jarray([leaf1, leaf2, JSONValue.jnull])
 
 switch arr {
-    case .jarray(items) {
+    case .jarray as items {
         std.io.println(items[0])
         std.io.println(items[1])
         std.io.println(items[2])

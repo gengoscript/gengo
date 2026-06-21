@@ -472,16 +472,16 @@ The entries below describe the public library surface. This page is intentionall
 doc := std.json.parse_value(src)
 
 switch doc {
-    case .jobject(m) {
+    case .jobject as m {
         switch m["name"] {
-            case .jstr(s) { std.io.println(s) }
+            case .jstr as s { std.io.println(s) }
         }
     }
-    case .jarray(items) {
+    case .jarray as items {
         for item in items {
             switch item {
-                case .jint(n)   { std.io.println(n) }
-                case .jfloat(f) { std.io.println(f) }
+                case .jint as n   { std.io.println(n) }
+                case .jfloat as f { std.io.println(f) }
             }
         }
     }
