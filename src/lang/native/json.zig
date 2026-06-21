@@ -2,6 +2,7 @@ const std = @import("std");
 const vms = @import("../vm_state.zig");
 const vmgc = @import("../vm_gc.zig");
 const vmmap = @import("../vm_map.zig");
+const heap = @import("../../runtime/heap.zig");
 const vmod = @import("../value.zig");
 const Value = vmod.Value;
 const Object = vmod.Object;
@@ -36,7 +37,9 @@ pub fn jsonValueClearCache() void {
 
 pub fn jsonValueGetType() !*Object {
     if (jv_type_cache) |t| return t;
-    const obj = try vmgc.vmAllocObject();
+    // Bump-allocate: permanent singleton; never swept, never triggers GC
+    const buf = heap.bump(Object, 1) orelse return error.OutOfMemory;
+    const obj: *Object = @ptrCast(buf);
     obj.* = .{ .variant_type = .{
         .name = "JSONValue",
         .qualified_name = JsonValueQualifiedName,
@@ -49,7 +52,11 @@ pub fn jsonValueGetType() !*Object {
 const JVArm = enum(usize) { jnull = 0, jbool = 1, jint = 2, jfloat = 3, jstr = 4, jarray = 5, jobject = 6 };
 
 fn makeJV(arm: JVArm, payload: Value) !Value {
-    const typ = try jsonValueGetType();
+    const typ = try jsonValueGetType(); // bump: no alloc, no GC
+    // Protect payload if it's an object (e.g. dyn_string for .jstr) before vmAllocObject triggers GC
+    const payload_is_obj = switch (payload) { .object => true, else => false };
+    if (payload_is_obj) try vms.pushTempRoot(payload);
+    defer if (payload_is_obj) vms.popTempRoot();
     const obj = try vmgc.vmAllocObject();
     obj.* = .{ .variant_value = .{
         .typ = typ,

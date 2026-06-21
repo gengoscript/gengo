@@ -3,6 +3,7 @@ const Allocator = std.mem.Allocator;
 const AlignedManaged = std.array_list.AlignedManaged;
 const vms = @import("../vm_state.zig");
 const vmgc = @import("../vm_gc.zig");
+const heap = @import("../../runtime/heap.zig");
 const Value = @import("../value.zig").Value;
 const Object = @import("../value.zig").Object;
 const NativeFnId = @import("native_ids.zig").NativeFnId;
@@ -22,9 +23,9 @@ pub fn reClearCache() void {
 
 pub fn reGetType() !*Object {
     if (regexp_type_cache) |t| return t;
-    const obj = try vmgc.vmAllocObject();
-    try vms.pushTempRoot(.{ .object = obj });
-    defer vms.popTempRoot();
+    // Bump-allocate: permanent singleton; never swept, never triggers GC
+    const buf = heap.bump(Object, 1) orelse return error.OutOfMemory;
+    const obj: *Object = @ptrCast(buf);
     obj.* = .{ .named_type = .{
         .name = "Regexp",
         .qualified_name = RegexpQualifiedName,
@@ -35,11 +36,11 @@ pub fn reGetType() !*Object {
 }
 
 pub fn reBuildObj(pattern: []const u8) !Value {
-    const obj = try vmgc.vmAllocObject();
+    // allocTempRooted: allocates, initializes, and roots obj before any further GC-triggering calls
+    const obj = try vmgc.allocTempRooted(.{ .dyn_string = &[_]u8{} });
+    defer vms.popTempRoot();
     const typ = try reGetType();
     const str_val = try vmgc.makeDynString(pattern);
-    try vms.pushTempRoot(.{ .object = obj });
-    defer vms.popTempRoot();
     obj.* = .{ .named_value = .{ .typ = typ, .value = str_val } };
     return .{ .object = obj };
 }

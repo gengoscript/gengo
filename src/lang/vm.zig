@@ -1596,6 +1596,7 @@ fn opDeferInvokeMethod() !void {
     const extra: usize = if (pass_recv) 1 else 0;
     const total: usize = 1 + extra + @as(usize, argc);
     const arr_obj = try vmAllocObject();
+    arr_obj.* = .{ .array_managed = &[_]Value{} }; // safe init before GC can see it via temp root
     try pushTempRoot(.{ .object = arr_obj });
     defer popTempRoot();
     const items = try vmAllocManagedSlice(Value, total);
