@@ -1,0 +1,74 @@
+std := import("std")
+json := std.json
+
+src :=
+    \\{
+    \\    "store": {
+    \\        "name": "Books & Co",
+    \\        "open": true,
+    \\        "rating": 4.5,
+    \\        "address": null,
+    \\        "inventory": [
+    \\            { "title": "Dune",        "price": 12, "tags": ["sci-fi", "classic"] },
+    \\            { "title": "Foundation",  "price": 10, "tags": ["sci-fi"] },
+    \\            { "title": "Neuromancer", "price": 9,  "tags": ["sci-fi", "cyberpunk"] }
+    \\        ]
+    \\    }
+    \\}
+
+doc := json.parse_value(src)
+
+switch doc {
+    case .jobject(root) {
+        switch root["store"] {
+            case .jobject(store) {
+
+                // scalars
+                switch store["name"]    { case .jstr(s)  { std.io.println(s) } }
+                switch store["open"]    { case .jbool(b) { std.io.println(b) } }
+                switch store["rating"]  { case .jfloat(f){ std.io.println(f) } }
+                switch store["address"] { case .jnull    { std.io.println("no address") } }
+
+                // array of objects — title + first tag + price
+                switch store["inventory"] {
+                    case .jarray(books) {
+                        for book in books {
+                            switch book {
+                                case .jobject(b) {
+                                    title := ""
+                                    price := 0
+                                    first_tag := ""
+
+                                    switch b["title"] { case .jstr(s)  { title = s } }
+                                    switch b["price"] { case .jint(n)  { price = n } }
+                                    switch b["tags"] {
+                                        case .jarray(tags) {
+                                            switch tags[0] { case .jstr(t) { first_tag = t } }
+                                        }
+                                    }
+
+                                    std.io.println(title + " (" + std.conv.to_string(price) + ") [" + first_tag + "]")
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // total price via accumulation
+                total := 0
+                switch store["inventory"] {
+                    case .jarray(books) {
+                        for book in books {
+                            switch book {
+                                case .jobject(b) {
+                                    switch b["price"] { case .jint(n) { total = total + n } }
+                                }
+                            }
+                        }
+                    }
+                }
+                std.io.println("total: " + std.conv.to_string(total))
+            }
+        }
+    }
+}
