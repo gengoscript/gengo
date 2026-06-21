@@ -324,7 +324,18 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
 pub fn looksLikeStructLiteral(c: anytype) bool {
     var lx = c.lex;
     var t = lx.next(); // first token inside '{'
-    if (t.typ == .rbrace) return true; // empty literal form (if ever allowed)
+    if (t.typ == .rbrace) return true; // empty struct: TypeName{}
+    if (!(t.typ == .ident or t.typ == .string)) return false;
+    t = lx.next();
+    return t.typ == .colon;
+}
+
+// Like looksLikeStructLiteral but returns false for empty braces.
+// Used to detect `variable { field: val }` (clearly wrong) vs `variable {}` (ambiguous — may be a block).
+fn looksLikeNonEmptyStructLiteral(c: anytype) bool {
+    var lx = c.lex;
+    var t = lx.next();
+    if (t.typ == .rbrace) return false;
     if (!(t.typ == .ident or t.typ == .string)) return false;
     t = lx.next();
     return t.typ == .colon;
@@ -488,8 +499,21 @@ pub fn varExpr(c: anytype, name: Token) !void {
         return;
     }
     if (c.check(.lbrace) and looksLikeStructLiteral(c, )) {
-        try structInstanceLit(c, name);
-        return;
+        const is_known_type = c.registry.hasStructTypeLocal(name.src) or
+            c.registry.hasNamedType(name.src) or
+            c.registry.hasVariantType(name.src);
+        if (is_known_type) {
+            try structInstanceLit(c, name);
+            return;
+        }
+        // Not a registered type. If there are actual fields it's a clear error.
+        // Empty braces fall through — they may be a block (if-body, loop body, etc.).
+        if (looksLikeNonEmptyStructLiteral(c, )) {
+            if (c.resolveLocal(name.src) != null) {
+                return c.err("'{s}' is a variable, not a type", .{name.src});
+            }
+            return c.err("'{s}' is not a known type", .{name.src});
+        }
     }
     // `<typename> == <expr>.type` — the reverse of `<expr>.type == <typename>`.
     // Only known type names are eligible, so an ordinary variable compared

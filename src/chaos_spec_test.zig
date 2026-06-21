@@ -123,7 +123,7 @@ test "access parity: named type dot and index surface agree" {
     );
 }
 
-test "access parity: variant type dot and index constructors agree" {
+test "access parity: variant type dot and index name lookup agree" {
     try expectInlineOutput(
         \\std := import("std")
         \\
@@ -138,23 +138,15 @@ test "access parity: variant type dot and index constructors agree" {
         \\std.io.println(Shape["name"])
         \\
         \\dot_circle := Shape.circle { x: 1, y: 2, radius: 5 }
-        \\circle_ctor := Shape["circle"]
-        \\idx_circle := circle_ctor { x: 3, y: 4, radius: 6 }
         \\dot_point := Shape.point { x: 7, y: 8 }
-        \\point_ctor := Shape["point"]
-        \\idx_point := point_ctor { x: 9, y: 10 }
         \\
         \\std.io.println(dot_circle.radius)
-        \\std.io.println(idx_circle.radius)
         \\std.io.println(dot_point.x)
-        \\std.io.println(idx_point.x)
     ,
         \\Shape
         \\Shape
         \\5
-        \\6
         \\7
-        \\9
         \\
     );
 }
