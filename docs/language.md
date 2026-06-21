@@ -428,24 +428,29 @@ switch ev {
 
 ## Comparing by Type
 
-A union-typed value (`int|string`, or a wider union) can be compared by its
-runtime type with `.type`:
+Any value can be compared against a type name at runtime using `.type`:
 
 ```gengo
-type Person struct { id int|string }
-p := Person{ id: 42 }
+type Age int range 0..150
+type Cat struct { name string }
+type Result variant { ok(value int), err(msg string) }
 
-if p.id.type == int { std.io.println("numeric id") }
+a := Age(5)
+c := Cat{ name: "tom" }
+r := Result.ok(1)
 
-switch p.id.type {
-    case int { std.io.println("numeric id") }
-    case string { std.io.println("string id") }
+if a.type == Age   { std.io.println("named type") }
+if c.type == Cat   { std.io.println("struct") }
+if r.type == Result { std.io.println("variant") }
+
+switch c.type {
+    case Cat { std.io.println("it's a cat") }
 }
 ```
 
 `.type` is intentionally restricted — it is **not** a general expression.
-It is only valid directly compared with `==`/`!=` (on either side: `p.id.type
-== int` and `int == p.id.type` both work), or as a `switch` scrutinee. It
+It is only valid directly compared with `==`/`!=` (on either side: `a.type
+== Age` and `Age == a.type` both work), or as a `switch` scrutinee. It
 cannot be assigned to a variable, passed as an argument, or chained further
 (`x.type.foo` is a compile error), and a `switch x.type { }` cannot mix in
 variant-arm patterns (`case .arm_name`). The right-hand side must be a
