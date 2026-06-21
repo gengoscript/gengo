@@ -71,10 +71,10 @@ fn panicMessageFromValue(v: Value) []const u8 {
         if (v.object.* == .string_view) return v.object.string_view.bytes;
     }
     if (v == .int) {
-        return std.fmt.bufPrint(&vmState().str_acc, "{d}", .{v.int}) catch "AssertionFailed";
+        return std.fmt.bufPrint(&vmState().fmt_scratch, "{d}", .{v.int}) catch "AssertionFailed";
     }
     if (v == .float) {
-        return std.fmt.bufPrint(&vmState().str_acc, "{d}", .{v.float}) catch "AssertionFailed";
+        return std.fmt.bufPrint(&vmState().fmt_scratch, "{d}", .{v.float}) catch "AssertionFailed";
     }
     if (v == .boolean) return if (v.boolean) "true" else "false";
     if (v == .null) return "null";
