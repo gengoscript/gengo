@@ -1613,7 +1613,10 @@ fn writeGlobalIC(name_idx: usize, ic_base: usize, ic_slot: u16, val: Value) !voi
         globals.setAt(ic_slot, val);
     } else {
         const name = (try chunk.constAt(name_idx)).string.bytes;
-        const slot = globals.findSlot(name) orelse return error.NotDefined;
+        const slot = globals.findSlot(name) orelse {
+            vms.setRuntimeErr("'{s}' is not defined", .{name});
+            return error.NotDefined;
+        };
         chunk.patchByte(ic_base,     @intCast((slot >> 8) & 0xFF));
         chunk.patchByte(ic_base + 1, @intCast(slot & 0xFF));
         globals.setAt(slot, val);
@@ -1733,7 +1736,10 @@ fn runInner() !void {
                     globals.setAt(ic_slot, result);
                 } else {
                     const name = (try chunk.constAt(name_idx)).string.bytes;
-                    const slot = globals.findSlot(name) orelse return error.NotDefined;
+                    const slot = globals.findSlot(name) orelse {
+                        vms.setRuntimeErr("'{s}' is not defined", .{name});
+                        return error.NotDefined;
+                    };
                     chunk.patchByte(ic_base,     @intCast((slot >> 8) & 0xFF));
                     chunk.patchByte(ic_base + 1, @intCast(slot & 0xFF));
                     const v = globals.getAt(slot);
