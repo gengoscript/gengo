@@ -2,6 +2,111 @@
 
 This changelog tracks notable language/runtime changes by implementation date.
 
+## 2026-06-21 (v0.5.0-pre3)
+
+### Breaking — Build Presets Renamed
+
+The preset names now reflect their memory budgets directly:
+
+| Old | New | Heap |
+|---|---|---|
+| `tiny` | `256k` | 256 KiB (doubled from 128 KiB) |
+| `dev` | `1m` | 1 MiB |
+| `server` | `16m` | 16 MiB |
+| `stress` | dropped | — |
+| *(new)* | `unlimited` | 256 MiB |
+
+`stress` is removed as a preset; GC correctness testing is now
+`-Dgc_stress=true` (independent of preset). Update all `-Dpreset=` invocations.
+
+### Feature — `std.JSONValue` and `json.parse_value`
+
+`std.json.parse_value(src)` parses a JSON string and returns a `std.JSONValue`
+variant value, safe for exhaustive pattern matching with `switch`:
+
+```gengo
+doc := std.json.parse_value(src)
+switch doc {
+    case .jobject(m)    { std.io.println(m["name"]) }
+    case .jarray(items) { std.io.println(std.core.len(items)) }
+    case .jnull         { std.io.println("null") }
+}
+```
+
+Arms: `jnull`, `jbool(bool)`, `jint(int)`, `jfloat(float)`, `jstr(string)`,
+`jarray([]JSONValue)`, `jobject([string]JSONValue)`. The type is accessible as
+`std.json.Value` or `std.JSONValue`.
+
+### Feature — Recursive Struct Types
+
+Struct fields typed as `[]T`, `[K]V`, or `?T` may now reference the enclosing
+struct, enabling recursive data structures:
+
+```gengo
+type Node struct {
+    value    int,
+    children []Node,
+}
+
+type Tree struct {
+    value int,
+    left  ?Tree,
+    right ?Tree,
+}
+```
+
+Direct inline self-reference (non-reference field) remains a compile error.
+
+### Feature — Type-Qualified Defer Calls
+
+`defer TypeName.method(instance)` promotes the first argument to receiver
+position, useful when the instance is an expression rather than a named
+variable:
+
+```gengo
+defer Database.close(open(":memory:"))
+```
+
+### Feature — Compile-Time Name Check for Struct Literals
+
+`Name{}` and `Name{ field: value }` now produce a compile error if `Name` is
+not a registered type. Previously an unknown name followed by `{}` would
+silently fall through to a block expression.
+
+### Fix — `recover()` Clears Error Buffer
+
+After a successful recovery the stale panic message is now cleared. Previously
+`recover()` left the previous error string in the buffer, which could be read
+by subsequent error-introspection calls.
+
+### Fix — Named Type Subtypes Inherit Parent Methods
+
+Methods defined on a parent named type are now accessible on subtypes without
+re-declaration.
+
+### Fix — Constant Folding Correctness
+
+- `int / int` constant folding now produces `float` (true division), matching
+  runtime behaviour.
+- Float division and modulo by zero constant-fold to `null` instead of `+Inf`,
+  so the runtime division-by-zero handler fires correctly.
+
+### Performance — Value Size 24 → 16 Bytes
+
+`Value` shrunk from 24 to 16 bytes via `StringSlice` indirection, reducing
+stack and heap pressure across all workloads.
+
+### Performance — Call-Site Inline Cache
+
+The `call` opcode caches the last-seen callee's function pointer. Repeated
+calls to the same global or closure skip the type-check dispatch on the hot
+path.
+
+### Performance — Compile-Time Constant Folding
+
+Literal arithmetic expressions (`1 + 2`, `10 * 3`, etc.) are evaluated at
+compile time and emitted as a single constant.
+
 ## 2026-06-18 (v0.5.0-pre2)
 
 ### Breaking — `and` / `or` / `not` Replace `&&` / `||` / `!`
