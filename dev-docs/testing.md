@@ -14,11 +14,11 @@ boundary would also silently drop their `test` blocks from collection.
 Run full conformance suite:
 
 ```bash
-zig build -Dpreset=dev test
+zig build -Dpreset=1m test
 ```
 
 Notes:
-- `test` forces dev preset (`config-dev`) first.
+- `test` forces `1m` preset (`config-1m`) first.
 - Pass cases are in `tests/spec/*.gengo` with matching `.out` files.
 - Fail cases are in `tests/spec/fail/*.gengo` with matching `.err` token files.
 
@@ -27,7 +27,7 @@ Notes:
 Run embedded vs host-backend parity checks:
 
 ```bash
-zig build -Dpreset=dev parity
+zig build -Dpreset=1m parity
 ```
 
 Notes:
@@ -39,15 +39,15 @@ Notes:
 Run benchmarks:
 
 ```bash
-zig build -Dpreset=dev bench
-zig build -Dpreset=tiny bench
-zig build -Dpreset=stress bench
+zig build -Dpreset=1m bench
+zig build -Dpreset=256k bench
+zig build -Dpreset=16m bench
 ```
 
 Timing and throughput mode (set via `GENGO_BENCH_STATS=1`):
 
 ```bash
-GENGO_BENCH_STATS=1 zig build -Dpreset=dev bench
+GENGO_BENCH_STATS=1 zig build -Dpreset=1m bench
 ```
 
 Bench files:

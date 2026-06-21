@@ -234,13 +234,13 @@ if (instance.exports.engine_run(handle, srcPtr, src.length) !== 0) {
 Build the WebAssembly engine:
 
 ```bash
-zig build -Dpreset=dev engine-build
+zig build -Dpreset=1m engine-build
 ```
 
 Build the native shared library:
 
 ```bash
-zig build -Dpreset=dev engine-native
+zig build -Dpreset=1m engine-native
 ```
 
 ### The `gengo_host` Import

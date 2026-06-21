@@ -9,7 +9,7 @@ This walkthrough assumes `wasmtime` is installed and available on `PATH`.
 ## 1. Build the WASI Runtime
 
 ```bash
-zig build -Dpreset=dev wasi
+zig build -Dpreset=1m wasi
 ```
 
 ## 2. Create a Script
@@ -153,17 +153,17 @@ recovered: DivisionByZero
 Run the conformance suite:
 
 ```bash
-zig build -Dpreset=dev test
+zig build -Dpreset=1m test
 ```
 
 Run parity checks:
 
 ```bash
-zig build -Dpreset=dev parity
+zig build -Dpreset=1m parity
 ```
 
 If you are working on runtime behaviour, also run:
 
 ```bash
-zig build -Dpreset=stress test
+zig build -Dpreset=1m test
 ```

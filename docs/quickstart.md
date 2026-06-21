@@ -14,20 +14,20 @@ For a guided first example, see `tutorial-first-script.md`.
 Build the native CLI:
 
 ```bash
-zig build -Dpreset=dev cli
+zig build -Dpreset=1m cli
 ```
 
 Build the WASI runtime:
 
 ```bash
-zig build -Dpreset=dev wasi
+zig build -Dpreset=1m wasi
 ```
 
 Build the embeddable engine artefacts:
 
 ```bash
-zig build -Dpreset=dev engine-build
-zig build -Dpreset=dev engine-native
+zig build -Dpreset=1m engine-build
+zig build -Dpreset=1m engine-native
 ```
 
 Outputs:
@@ -64,34 +64,35 @@ Run the CLI with no arguments to start the REPL:
 Run the conformance suite:
 
 ```bash
-zig build -Dpreset=dev test
+zig build -Dpreset=1m test
 ```
 
 Run parity checks between the embedded and host backends when relevant:
 
 ```bash
-zig build -Dpreset=dev parity
+zig build -Dpreset=1m parity
 ```
 
 Run benchmarks when you need performance data:
 
 ```bash
-zig build -Dpreset=dev bench
-```
-
-For changes that touch the runtime, heap, or VM, also run:
-
-```bash
-zig build -Dpreset=stress test
+zig build -Dpreset=1m bench
 ```
 
 ## Presets
 
-- `dev` is the default development preset.
-- `tiny` uses tighter heap and stack limits for constrained embeddings.
-- `stress` uses a larger inline heap and is the strongest check for memory behaviour.
+Presets control the heap and stack budgets baked into the binary:
+
+| Preset | Heap | Use |
+|---|---|---|
+| `256k` | 256 KiB | Constrained embedded targets |
+| `1m` | 1 MiB | Default — CLI and general scripting |
+| `16m` | 16 MiB | Production embedding / large workloads |
+| `unlimited` | 256 MiB | No practical limits |
 
 Apply a preset with `-Dpreset=<name>`.
+
+For GC correctness testing, combine any preset with `-Dgc_stress=true` (forces GC on every allocation).
 
 ## Next Steps
 

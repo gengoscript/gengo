@@ -54,13 +54,13 @@ These limits come from the active build preset and may be tightened per instance
 
 | Preset | Heap | Intended use |
 |---|---|---|
-| `tiny` | 128 KiB | Constrained embedding |
-| `dev` | 512 KiB | Development, short validation scripts |
-| `stress` | 2 MiB | Edge-case testing |
-| `server` | 16 MiB | Batch and data-processing workloads (large strings, file processing) |
+| `256k` | 256 KiB | Constrained embedded targets |
+| `1m` | 1 MiB | Default — CLI and general scripting |
+| `16m` | 16 MiB | Production embedding / large workloads |
+| `unlimited` | 256 MiB | No practical limits |
 
 The heap allocator's largest block size scales with the configured heap
-(capped at heap/8, floor 64 KiB), so the `server` preset also lifts the
+(capped at heap/8, floor 64 KiB), so the `16m` preset lifts the
 single-allocation ceiling to 2 MiB.
 
 ## Capability Modules

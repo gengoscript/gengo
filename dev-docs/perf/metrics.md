@@ -7,7 +7,7 @@ Normal builds (`wasi`, `cli-release`, etc.) compile out all counter code — no 
 
 ```bash
 # Build the perf-instrumented binary and run all bench cases:
-zig build -Dpreset=dev bench-perf
+zig build -Dpreset=1m bench-perf
 
 # Per-case perf data is written to build/perf/<case>.perf
 # Each line has the form:  PERF:<metric>=<value>

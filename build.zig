@@ -1,12 +1,12 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
-    const preset_opt = b.option([]const u8, "preset", "runtime preset: dev|tiny|stress|server") orelse "dev";
-    const valid = std.mem.eql(u8, preset_opt, "dev") or
-        std.mem.eql(u8, preset_opt, "tiny") or
-        std.mem.eql(u8, preset_opt, "stress") or
-        std.mem.eql(u8, preset_opt, "server");
-    if (!valid) @panic("invalid -Dpreset, expected dev|tiny|stress|server");
+    const preset_opt = b.option([]const u8, "preset", "runtime preset: 256k|1m|16m|unlimited") orelse "1m";
+    const valid = std.mem.eql(u8, preset_opt, "256k") or
+        std.mem.eql(u8, preset_opt, "1m") or
+        std.mem.eql(u8, preset_opt, "16m") or
+        std.mem.eql(u8, preset_opt, "unlimited");
+    if (!valid) @panic("invalid -Dpreset, expected 256k|1m|16m|unlimited");
 
     const perf_opt = b.option(bool, "perf", "Enable performance counters (outputs PERF: lines to stderr)") orelse false;
     const gc_stress_opt = b.option(bool, "gc_stress", "Force GC on every allocation to detect unrooted-value bugs") orelse false;
