@@ -457,8 +457,21 @@ pub fn deferStmt(c: anytype) !void {
     // .prop and [index] accesses, stopping before the outermost call '('.
     c.advance();
     const pfx = c.prev.typ;
+    // Track whether the base is a registered type name and where its code starts,
+    // so that `defer TypeName.method(instance, ...)` can be rewritten at compile time
+    // into a method call on the instance (first argument) rather than the type object.
+    var base_type_name: []const u8 = "";
+    var base_code_pos: usize = 0;
+    var base_is_type: bool = false;
     switch (pfx) {
-        .ident => try c.varExpr(c.prev),
+        .ident => {
+            base_type_name = c.prev.src;
+            base_code_pos = chunk.codeLen();
+            base_is_type = c.registry.hasNamedType(c.prev.src) or
+                c.registry.hasStructTypeLocal(c.prev.src) or
+                c.registry.hasVariantType(c.prev.src);
+            try c.varExpr(c.prev);
+        },
         .kw_func => try funcLit(c, ),
         .lparen => {
             try c.expr();
@@ -478,6 +491,7 @@ pub fn deferStmt(c: anytype) !void {
     // Consume chained .prop and [index]; when .prop( is seen it's a deferred method call.
     while (true) {
         if (c.cur.typ == .lbracket) {
+            base_is_type = false;
             const line = c.cur.line;
             c.advance();
             try c.expr();
@@ -490,6 +504,30 @@ pub fn deferStmt(c: anytype) !void {
             c.advance();
             if (c.cur.typ == .lparen) {
                 c.advance(); // consume '('
+                if (base_is_type) {
+                    // `defer TypeName.method(instance, args...)` — the type object on the
+                    // stack is not a valid method receiver. Truncate it and treat the first
+                    // argument as the receiver instead, matching regular `instance.method()`.
+                    chunk.truncateTo(base_code_pos);
+                    var total_argc: u8 = 0;
+                    if (!c.check(.rparen)) {
+                        while (true) {
+                            if (total_argc == 255) { c.setErr("too many elements (max {d})", .{MaxLocals}); return error.TooManyElements; }
+                            try c.expr();
+                            total_argc += 1;
+                            if (!c.match(.comma)) break;
+                            if (c.check(.rparen)) break;
+                        }
+                    }
+                    try c.consume(.rparen);
+                    if (total_argc == 0) {
+                        c.setErr("'{s}.{s}(...)' requires at least one argument (the receiver instance)", .{ base_type_name, prop.src });
+                        return error.ArityMismatch;
+                    }
+                    try chunk.emitDeferInvokeMethod(prop.src, total_argc - 1, prop.line);
+                    c.matchOpt(.semicolon);
+                    return;
+                }
                 var argc: u8 = 0;
                 if (!c.check(.rparen)) {
                     while (true) {
@@ -505,6 +543,7 @@ pub fn deferStmt(c: anytype) !void {
                 c.matchOpt(.semicolon);
                 return;
             }
+            base_is_type = false;
             try chunk.emitGetField(prop.src, prop.line);
         } else {
             break;

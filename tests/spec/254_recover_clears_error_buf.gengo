@@ -1,0 +1,17 @@
+std := import("std")
+core := std.core
+
+type Score int range 0..100
+
+func safeScore(n int) int {
+    defer func() {
+        _ = core.recover()
+    }()
+    _ = Score(n) // panics when n out of range
+    return n
+}
+
+// Panic recovered; subsequent operation should produce its own error message,
+// not bleed the panic message into unrelated errors.
+_ = safeScore(999)
+std.io.println("ok")
