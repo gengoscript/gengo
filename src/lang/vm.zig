@@ -2878,6 +2878,7 @@ fn runPanicUnwind(orig_err: anyerror) anyerror!void {
             vmState().panic_line = 0;
             vmState().panic_col = 0;
             vmState().panic_depth = 0;
+            vmState().runtime_err_len = 0;
             vmState().defer_top = frame_defer_base;
 
             // Determine the recovered function's return arity before unwinding its frame.

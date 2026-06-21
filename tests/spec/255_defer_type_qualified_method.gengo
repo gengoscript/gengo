@@ -1,0 +1,14 @@
+std := import("std")
+
+type MyInt int
+
+func (m MyInt) show() {
+    std.io.println(int(m))
+}
+
+func run() {
+    defer MyInt.show(MyInt(42))
+    std.io.println("body")
+}
+
+run()
