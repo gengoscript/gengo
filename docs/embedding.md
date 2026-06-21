@@ -13,12 +13,21 @@ The main entry points are:
 - `api.RuntimeResult`
 - `api.RuntimeResultWithValue`
 
+Values passed to and returned from the runtime use the `Value` type from
+`lang/value.zig`, imported separately:
+
+```zig
+const Value = @import("lang/value.zig").Value;
+```
+
 Important `api.Config` fields:
 
 | Field | Purpose |
-|---|---|
+|---|---|---|
 | `allow_io` | Enable or suppress `std.io` output |
+| `native_backend` | `.embedded` (default) or `.host` (WASM/callback mode) |
 | `max_ops` | Instruction budget; `null` means unlimited |
+| `enable_predicates` | Enable `predicate` clause on named types (default `true`) |
 | `host_modules` | Host-defined modules available through `host:*` imports |
 | `capabilities` | Enabled capability names such as `"http"` or `"fs"` |
 | `module_sources` | In-memory source table for relative imports |
@@ -44,19 +53,19 @@ The usual lifecycle is:
 var rt = api.Runtime.init(.{
     .allow_io = false,
     .max_ops = 100_000,
-});
+}) catch return;
 defer rt.deinit();
 ```
 
 ## Minimal Example
 
 ```zig
-var rt = api.Runtime.init(.{ .allow_io = false });
+var rt = api.Runtime.init(.{ .allow_io = false }) catch return;
 defer rt.deinit();
 
 switch (rt.run(
-    \\pub func greet(name string) string {
-    \\    return "hello " + name
+    \\pub func add(a int, b int) int {
+    \\    return a + b
     \\}
 )) {
     .ok => {},
@@ -64,8 +73,9 @@ switch (rt.run(
     .runtime_error => |e| return e.kind,
 }
 
-const result = rt.call("greet", &.{
-    api.Value{ .string = "world" },
+const result = rt.call("add", &.{
+    .{ .int = 40 },
+    .{ .int = 2 },
 });
 ```
 
@@ -79,7 +89,7 @@ Use `runPath` instead of `run` when the script uses relative imports.
 - `.compile_error`
 - `.runtime_error`
 
-Compile errors report the source line. Runtime errors report the kind, line, column, and stack frames.
+Compile errors report the source line, column, kind, and message. Runtime errors report the kind, line, column, message, and stack frames.
 
 ## Relative Imports
 
@@ -107,7 +117,7 @@ const sources = [_]api.SourceEntry{
 var rt = api.Runtime.init(.{
     .allow_io = false,
     .module_sources = &sources,
-});
+}) catch return;
 defer rt.deinit();
 ```
 
@@ -119,7 +129,7 @@ Capability modules are also opt-in:
 var rt = api.Runtime.init(.{
     .allow_io = false,
     .capabilities = &.{"http", "fs"},
-});
+}) catch return;
 ```
 
 Current public capabilities:
@@ -158,6 +168,10 @@ For `cap:net`, register a `GengoNetHandlers` struct that supplies the socket cal
 
 Call `rt.reset()` when you want to discard globals, heap state, and call frames but keep the runtime allocation itself.
 
+For REPL-style incremental execution without resetting globals, use
+`rt.runIncremental(src)` — each call compiles and executes the snippet in the
+same global scope as previous calls.
+
 Use a fresh runtime when isolation is more important than reuse.
 
 ## Request-Loop Pattern
@@ -171,13 +185,12 @@ invocation runs against the same globals without reloading bytecode.
 var rt = api.Runtime.init(.{
     .allow_io = false,
     .max_ops = 100_000,
-});
+}) catch return;
 defer rt.deinit();
 
 // Load the business-logic script once at startup.
 const setup = rt.run(
-    \\pub func allow_update(user string, role string,
-    \\                       age int, score int,
+    \\pub func allow_update(age int, score int,
     \\                       active bool, verified bool,
     \\                       limit int) bool {
     \\    return active and verified and age >= 18 and score < limit
@@ -192,8 +205,6 @@ switch (setup) {
 // No reset() here — the function and its bytecode stay loaded.
 while (try nextRequest(&req)) {
     const result = rt.call("allow_update", &.{
-        .{ .string = req.user },
-        .{ .string = req.role },
         .{ .int = req.age },
         .{ .int = req.score },
         .{ .boolean = req.active },
@@ -224,9 +235,9 @@ explicitly.
 var rt = api.Runtime.init(.{
     .host_modules = &.{.{
         .name = "host:db",
-        .funcs = &.{.{ .name = "lookup", .arity = 1 }},
+        .functions = &.{.{ .name = "lookup", .arity = 1, .call_id = 0 }},
     }},
-});
+}) catch return;
 ```
 
 Use host modules when the script needs a narrow, controlled bridge into host
@@ -265,15 +276,20 @@ These are runtime errors that the embedding code should handle like any other
 
 ## Call Boundary Types
 
-The `api.Runtime.call()` method accepts `[]const api.Value`. From the Zig host
-side, only scalar and string variants can be safely constructed:
+The `api.Runtime.call()` method accepts `[]const Value`. From the Zig host
+side, scalar values are directly constructable:
 
 ```zig
-rt.call("foo", &.{ .{ .int = 1 }, .{ .string = "hello" } });
+const result = rt.call("score", &.{
+    .{ .int = 42 },
+    .{ .boolean = true },
+    .{ .null },
+});
 ```
 
 Constructable tags: `.int`, `.float`, `.decimal`, `.rune`, `.boolean`,
-`.string`, `.null`.
+`.null`. String values can be constructed but require a `*const StringSlice`
+pointer (use `chunk.internStr` or a persistent `StringSlice` local).
 
 The `Value` type also has an `.object` variant used for arrays, maps, structs,
 closures, and named types, but constructing one requires a live GC-managed
@@ -288,6 +304,10 @@ a record), the two supported approaches are:
 
 Return values from `call()` may be objects (arrays, maps, structs, etc.);
 reading their contents from the Zig side is supported through the `Value` union.
+For string results, check both the `.string` variant (`v.string.bytes`) and the
+`.object` variant (`v.object.dyn_string` or `v.object.string_view.bytes`) since
+the VM may return short strings as interned slices and long strings as dynamic
+allocations.
 
 The **host-module wire boundary** is more restricted. Values are serialised into
 `ValueWire` structs (scalar tag + payload + length) before crossing to the host
