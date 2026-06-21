@@ -6,14 +6,18 @@ For library functions, see `stdlib.md`. For embedding and capability control, se
 
 ## Design Shape
 
-Gengoscript is a small host-embedded language with:
+Gengoscript is a small host-embedded language. It is designed to be
+integrated into a larger application — think policy enforcement, user-defined
+logic, or plugin-style scripting — not to stand alone. To that end, it
+explicitly avoids ambient access to the machine: every import, every
+capability, and every allocation budget comes from the host. The language
+itself has no file system, no network, and no system calls. If a script
+needs those, the host decides whether to provide them.
 
-- explicit imports;
-- nominal types for domain modelling;
-- bounded execution under host control; and
-- no ambient access to the machine.
-
-The syntax is intentionally compact and broadly familiar to anyone who has used Go-like languages.
+The syntax is compact and broadly familiar to anyone who has used
+Go-like languages. The type system leans on nominal types (named wrappers
+around scalars, structs, enums, and variants) so that domain rules can be
+expressed directly in types rather than pushed into runtime validation.
 
 ## Modules and Imports
 
@@ -37,27 +41,28 @@ Built-ins are accessed through namespaces such as `std.io.println(...)` and `std
 
 ## Values
 
-The language includes:
+The value types fall into three groups. Scalar types hold a single value:
 
-- `int`
-- `float`
-- `bool`
-- `string`
-- `rune`
-- `null`
-- `error`
-- arrays
-- maps
-- structs
-- functions
+- `int`, `float`, `bool`, `string`, `rune`, `null`, `error`
 
-Strings are UTF-8. `std.core.len(s)` counts Unicode code points, while `std.core.bytelen(s)` counts bytes.
+Collection types hold multiple values:
 
-Numeric types do not mix implicitly: `int` and `float` cannot be combined in
-arithmetic or ordering comparisons (`1.5 + 1` and `1.5 > 1` are both type
-errors). Convert one side explicitly — `1.5 > float(1)` or write the literal
-as `1.0`. The same rule applies to named types: an `Age` only mixes with an
-`Age` (or its subtypes), never with a bare `int`.
+- arrays, maps, structs
+
+Functions are values too — they can be passed around, assigned, and closed
+over.
+
+Strings are UTF-8. `std.core.len(s)` counts Unicode code points, while
+`std.core.bytelen(s)` counts bytes.
+
+A key design rule: **numeric types do not mix implicitly**. `int` and `float`
+cannot be combined in arithmetic or ordering comparisons (`1.5 + 1` and
+`1.5 > 1` are both type errors). Convert one side explicitly —
+`1.5 > float(1)` or write the literal as `1.0`. The same rule applies to
+named types: an `Age` only mixes with an `Age` (or its subtypes), never with
+a bare `int`. This is intentional — it prevents the kind of subtle precision
+loss and domain confusion that plague languages with implicit numeric
+coercion.
 
 ## Variables and Constants
 
@@ -70,13 +75,30 @@ var count int = 3
 const port Port = Port(443)
 ```
 
-`:=` declares a mutable variable with an inferred type. `const` makes the binding immutable. `var` adds a type annotation (and may omit the initializer, which defaults to the zero value). Assignment uses `=`. Compound assignment such as `+=` and `-=` is supported. `const` bindings cannot be reassigned, though mutable values stored inside them may still be mutated.
+How each form works:
 
-Identifiers may contain Unicode letters and decimal digits, following the same rules as Go: the first character must be a Unicode letter or underscore, and subsequent characters may be Unicode letters, decimal digits, or underscores. Identifiers are not normalized — two visually identical identifiers that differ at the byte level are distinct.
+- `name := value` — declares a mutable variable, type is inferred from the
+  initializer.
+- `const name := value` — immutable binding. The variable cannot be
+  reassigned, though the value itself (e.g. an array or struct) can still be
+  mutated.
+- `var name Type = value` — mutable with an explicit type annotation. The
+  initializer may be omitted, in which case the variable gets the zero value
+  (e.g. `0` for `int`, `""` for `string`, `null` for optional types).
+- `const name Type = value` — typed immutable binding.
 
-Type names cannot be shadowed: no variable, function, parameter, receiver,
-named return, or loop variable may be named after a primitive type or any
-declared type (`var bool bool` and `func string() {}` are compile errors).
+Assignment uses `=`. Compound assignment forms (`+=`, `-=`, `*=`, `/=`) are
+supported for numeric types.
+
+Identifier rules follow Go: the first character must be a Unicode letter or
+underscore; subsequent characters may be Unicode letters, decimal digits, or
+underscores. Identifiers are not normalized — two identifiers that differ at
+the byte level are distinct even if they look the same on screen.
+
+One gotcha: **type names cannot be shadowed**. No variable, function,
+parameter, receiver, named return, or loop variable may share a name with a
+primitive type or any declared type (`var bool bool` and `func string() {}`
+are compile errors).
 
 ## Literals
 
@@ -500,13 +522,18 @@ Mixing different named string types or a named type with a bare string is a
 
 ## Enums and Variants
 
-Enums provide closed sets of values:
+Enums model a fixed set of values. Use them when a value must be one of a
+known list and nothing else:
 
 ```gengo
 type Mode enum { dev, staging, production }
+
+env := Mode.staging
 ```
 
-Variants model tagged alternatives:
+Variants model tagged unions — a value that can be one of several shapes,
+each with its own fields. They are the natural way to represent success
+vs. failure, different kinds of events, or parse results:
 
 ```gengo
 type Event variant {
@@ -516,7 +543,11 @@ type Event variant {
 }
 ```
 
-Use `switch` to branch on variant values:
+A variant arm with no fields (like `Ping` above) is just a tag. Arms with
+fields carry their own data.
+
+Use `switch` to branch on which variant arm you have. Inside each case arm
+the variant value's fields are available directly:
 
 ```gengo
 switch ev {
@@ -567,8 +598,13 @@ anywhere a `bool` is — including combined with `and`/`or`.
 
 ## Interfaces
 
-Interfaces declare method sets; any value whose type has the methods
-satisfies the interface — structs, named types, enums, and variants alike.
+An interface declares a set of methods. Any value whose type implements
+those methods satisfies the interface automatically — there is no explicit
+`implements` declaration. This works for structs, named types, enums, and
+variants alike.
+
+Use interfaces when you want to write a function that accepts any type
+with a certain behaviour, without caring about its concrete type:
 
 ```gengo
 type Adder interface {
@@ -581,52 +617,70 @@ func (a Acc) add(x float) float {
     return a.total + x
 }
 
+// sum accepts anything that can add.
 func sum(a Adder) float {
     return a.add(1.0)
 }
+
+std.io.println(sum(Acc{ total: 5.0 }))  // 6.0
 ```
 
-Method parameters in an interface are written as bare types (`add(float)`)
-or `name type` pairs (`add(x float)`); the names are documentation only.
+Method parameters in an interface can be written as bare types
+(`add(float)`) or name-type pairs (`add(x float)`); the names are
+documentation only and do not affect satisfaction.
 
 ## Capability Imports
 
-Capabilities are not available unless the host enables them.
+Capability imports are how a script asks for access to host resources. The
+host decides which capabilities to enable; a script cannot bypass that
+decision. If a script imports a capability the host has not enabled,
+compilation fails.
 
 Current public capability modules:
 
-- `cap:http`
-- `cap:fs`
-- `cap:net`
+- `cap:http` — outgoing HTTP requests
+- `cap:fs` — filesystem access (restricted to host-registered mounts)
+- `cap:net` — raw socket operations
 
-If a script imports a capability the host has not enabled, compilation fails. Filesystem access is further restricted to host-registered mounts.
+Each capability module exposes a well-defined API. A script that only
+imports `std` and its own relative modules cannot touch the network or
+disk at all, even if the host itself has those resources.
 
 ## Host Modules
 
-Host-defined modules let the embedding application expose a narrow integration surface:
+Host modules let the embedding application expose custom functions to
+scripts through the `host:` import prefix. Unlike capabilities, which
+provide standard APIs, host modules are whatever the application decides:
 
 ```gengo
-db := import("host:db")
+db    := import("host:db")
+cache := import("host:cache")
 ```
 
-Scripts can call only the functions the host registered. There is no ambient reflection or implicit access to host functionality.
+The host registers each module with a name and a set of functions. A script
+can call only the functions the host explicitly registered — there is no
+reflection, no access to the host's internals beyond what the host chooses
+to expose. This makes host modules a natural boundary for passing in
+application-specific data or operations that do not fit into the capability
+model.
 
 ## Errors and Runtime Behaviour
 
-Gengoscript distinguishes:
+Three kinds of things can go wrong:
 
-- compile errors;
-- runtime errors; and
-- first-class `error` values created inside the language.
+- **Compile errors** — the script won't run. Typing mistakes, missing
+  imports, type mismatches. Caught before any code executes.
+- **Runtime errors** — the script started but panicked. Division by zero,
+  out-of-bounds access, a `range` or `predicate` violation. These unwind
+  through `defer` frames and can be caught with `recover()`.
+- **First-class `error` values** — created explicitly inside the language
+  with `std.core.error(msg)`. These are ordinary values that can be checked
+  and passed around, not panics.
 
-The host may also enforce:
-
-- an instruction budget;
-- heap limits;
-- frame and stack limits; and
-- capability restrictions.
-
-These limits are part of normal embedding, not exceptional deployment machinery.
+On top of these, the host may enforce resource budgets — instruction
+limits, heap size caps, maximum call depth — that stop misbehaving scripts
+before they can consume too much. These limits are a normal part of
+embedding, not a sign that something is broken.
 
 ## Testing
 
