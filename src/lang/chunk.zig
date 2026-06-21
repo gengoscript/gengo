@@ -140,7 +140,8 @@ fn foldBinOp(op: Op, lhs: Value, rhs: Value) ?Value {
             .add => blk: { const r = @addWithOverflow(lhs.int, rhs.int); break :blk if (r[1] != 0) null else Value{ .int = r[0] }; },
             .sub => blk: { const r = @subWithOverflow(lhs.int, rhs.int); break :blk if (r[1] != 0) null else Value{ .int = r[0] }; },
             .mul => blk: { const r = @mulWithOverflow(lhs.int, rhs.int); break :blk if (r[1] != 0) null else Value{ .int = r[0] }; },
-            .div => if (rhs.int == 0 or (lhs.int == std.math.minInt(i64) and rhs.int == -1)) null else Value{ .int = @divTrunc(lhs.int, rhs.int) },
+            // int / int produces float (true division), matching the runtime .div opcode.
+            .div => if (rhs.int == 0) null else Value{ .float = @as(f64, @floatFromInt(lhs.int)) / @as(f64, @floatFromInt(rhs.int)) },
             .mod => if (rhs.int == 0 or (lhs.int == std.math.minInt(i64) and rhs.int == -1)) null else Value{ .int = @rem(lhs.int, rhs.int) },
             else => null,
         };
@@ -150,8 +151,8 @@ fn foldBinOp(op: Op, lhs: Value, rhs: Value) ?Value {
             .add => Value{ .float = lhs.float + rhs.float },
             .sub => Value{ .float = lhs.float - rhs.float },
             .mul => Value{ .float = lhs.float * rhs.float },
-            .div => Value{ .float = lhs.float / rhs.float },
-            .mod => Value{ .float = @rem(lhs.float, rhs.float) },
+            .div => if (rhs.float == 0.0) null else Value{ .float = lhs.float / rhs.float },
+            .mod => if (rhs.float == 0.0) null else Value{ .float = @rem(lhs.float, rhs.float) },
             else => null,
         };
     }

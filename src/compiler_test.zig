@@ -176,25 +176,23 @@ test "compiler: var global int" {
 }
 
 test "compiler: const_add fusion" {
+    // 1 + 2 is now constant-folded at compile time — the folded value 3 is in
+    // the constant table and no separate 1 or 2 appear.
     var rt = try setup();
     defer rt.deinit();
     try compile(&rt,
         \\func f() int { return 1 + 2 }
     );
     const c = rt.chunk_state;
-
-    try std.testing.expect(c.consts[0] == .int);
-    try std.testing.expect(c.consts[1] == .int);
-
-    var found_const_add = false;
+    var found3 = false;
     var i: usize = 0;
-    while (i < c.code_len) : (i += 1) {
-        if (c.code[i] == @intFromEnum(Op.const_add)) {
-            found_const_add = true;
-            break;
+    while (i < c.const_count) : (i += 1) {
+        if (c.consts[i] == .int) {
+            try std.testing.expect(c.consts[i].int == 3); // no stray 1 or 2
+            found3 = true;
         }
     }
-    try std.testing.expect(found_const_add);
+    try std.testing.expect(found3);
 }
 
 test "compiler: ret_const peephole" {
