@@ -160,6 +160,7 @@ pub const NativeFnId = enum(u8) {
     array_any = 180,
     array_chunk = 181,
     json_indent = 182,
+    json_parse_value = 197,
     time_parse_duration = 183,
     time_iso_week = 184,
 

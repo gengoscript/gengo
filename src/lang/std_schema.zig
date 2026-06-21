@@ -34,8 +34,9 @@ pub const top_level_entries = [_]Entry{
     .{ .name = "regexp", .kind = .namespace },
     .{ .name = "sort", .kind = .namespace },
     .{ .name = "array", .kind = .namespace },
-    .{ .name = "Time", .kind = .value },
-    .{ .name = "Regexp", .kind = .value },
+    .{ .name = "Time",      .kind = .value },
+    .{ .name = "Regexp",    .kind = .value },
+    .{ .name = "JSONValue", .kind = .value },
 };
 
 pub const io_entries = [_]Entry{
@@ -159,9 +160,11 @@ pub const string_entries = [_]Entry{
 };
 
 pub const json_entries = [_]Entry{
-    .{ .name = "parse", .kind = .function },
-    .{ .name = "stringify", .kind = .function },
-    .{ .name = "valid", .kind = .function },
+    .{ .name = "parse",       .kind = .function },
+    .{ .name = "parse_value", .kind = .function },
+    .{ .name = "stringify",   .kind = .function },
+    .{ .name = "valid",       .kind = .function },
+    .{ .name = "Value",       .kind = .value },
 };
 
 pub const template_entries = [_]Entry{

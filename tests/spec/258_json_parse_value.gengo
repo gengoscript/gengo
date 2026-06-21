@@ -1,0 +1,47 @@
+std := import("std")
+json := std.json
+
+src :=
+    \\{
+    \\    "name": "Alice",
+    \\    "age": 30,
+    \\    "scores": [10, 20],
+    \\    "active": true,
+    \\    "ratio": 1.5,
+    \\    "notes": null
+    \\}
+
+doc := json.parse_value(src)
+
+switch doc {
+    case .jobject(m) {
+        switch m["name"] {
+            case .jstr(s)  { std.io.println(s) }
+        }
+        switch m["age"] {
+            case .jint(n)  { std.io.println(n) }
+        }
+        switch m["active"] {
+            case .jbool(b) { std.io.println(b) }
+        }
+        switch m["ratio"] {
+            case .jfloat(f) { std.io.println(f) }
+        }
+        switch m["notes"] {
+            case .jnull    { std.io.println("null") }
+        }
+        switch m["scores"] {
+            case .jarray(items) {
+                for item in items {
+                    switch item {
+                        case .jint(n) { std.io.println(n) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// type accessible via std.json.Value and std.JSONValue
+std.io.println(json.Value.name)
+std.io.println(std.JSONValue.name)

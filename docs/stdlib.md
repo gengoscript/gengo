@@ -360,6 +360,11 @@ The entries below describe the public library surface. This page is intentionall
 - JSON null → `null`, booleans → `bool`, numbers → `number`, strings → `string`, arrays → array, objects → map
 - Errors: `TypeError` on invalid JSON
 
+### `std.json.parse_value(s)`
+- Parses a JSON string and returns a `std.JSONValue` variant value
+- Use this when the JSON structure is not known ahead of time; the result can be pattern-matched exhaustively with `switch`
+- Errors: `TypeError` on invalid JSON
+
 ### `std.json.stringify(v)`
 - Serializes a gengo value to a JSON string
 - Arrays → JSON arrays, maps → JSON objects (string keys required), scalars → JSON primitives
@@ -368,6 +373,41 @@ The entries below describe the public library surface. This page is intentionall
 
 ### `std.json.valid(s)`
 - Returns `true` if `s` is valid JSON, `false` otherwise
+
+### `std.json.Value` / `std.JSONValue`
+- The `JSONValue` variant type; both names refer to the same type object
+- Arms:
+
+| Arm | Payload | JSON source |
+|---|---|---|
+| `.jnull` | — | `null` |
+| `.jbool(b)` | `bool` | `true` / `false` |
+| `.jint(n)` | `int` | integer numbers |
+| `.jfloat(f)` | `float` | fractional numbers |
+| `.jstr(s)` | `string` | string values |
+| `.jarray(items)` | `[]JSONValue` | arrays |
+| `.jobject(m)` | `[string]JSONValue` | objects |
+
+```
+doc := std.json.parse_value(src)
+
+switch doc {
+    case .jobject(m) {
+        switch m["name"] {
+            case .jstr(s) { std.io.println(s) }
+        }
+    }
+    case .jarray(items) {
+        for item in items {
+            switch item {
+                case .jint(n)   { std.io.println(n) }
+                case .jfloat(f) { std.io.println(f) }
+            }
+        }
+    }
+    case .jnull { std.io.println("null") }
+}
+```
 
 ## std.hex
 
