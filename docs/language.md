@@ -134,6 +134,33 @@ type User struct {
 u := User{ name: "Ada", age: 37 }
 ```
 
+Fields typed as `[]T`, `[K]V`, or `?T` are heap-referenced and can safely reference the enclosing struct type, enabling recursive data structures:
+
+```gengo
+type Node struct {
+    value    int,
+    children []Node,
+}
+
+type Tree struct {
+    value int,
+    left  ?Tree,
+    right ?Tree,
+}
+```
+
+Mark a field `const` to make it read-only after construction:
+
+```gengo
+type Point struct {
+    const x int,
+    const y int,
+}
+
+p := Point{ x: 3, y: 4 }
+// p.x = 5  // compile error: cannot assign to const field
+```
+
 Arrays and strings support slicing with `a:b`, `:b`, and `a:`.
 
 ## Control Flow
@@ -145,6 +172,18 @@ if score >= 10 {
     return "ok"
 } else {
     return "retry"
+}
+```
+
+An `if` may include an init statement before the condition, scoped to the branch:
+
+```gengo
+if result := lookup(key); result != null {
+    std.io.println(result)
+}
+
+if const x := parse(input); x > 0 {
+    return x
 }
 ```
 
@@ -170,7 +209,39 @@ for item in items {
 }
 ```
 
-Pattern-based branching uses `switch`.
+A second variable captures the index (for arrays) or key (for maps):
+
+```gengo
+for i, item in items {
+    std.io.println(i, item)
+}
+
+for k, v in lookup {
+    std.io.println(k, v)
+}
+```
+
+`break` exits a loop early; `continue` skips to the next iteration:
+
+```gengo
+for x in data {
+    if x < 0 { continue }
+    if x > 100 { break }
+    std.io.println(x)
+}
+```
+
+Value-based branching uses `switch`:
+
+```gengo
+switch status {
+    case 200 { return "ok" }
+    case 404 { return "not found" }
+    default  { return "unknown" }
+}
+```
+
+Pattern-based branching uses `switch` (see [Enums and Variants](#enums-and-variants)).
 
 ## Functions
 
@@ -182,7 +253,18 @@ func add(a int, b int) int {
 }
 ```
 
-Gengoscript supports closures, methods, and multi-value returns. Functions may be exported from a source module with `pub`.
+Multi-value return types are written in parentheses:
+
+```gengo
+func div_rem(a int, b int) (int, int) {
+    return a / b, a % b
+}
+
+q, r := div_rem(10, 3)  // destructure into two variables
+std.io.println(q, r)
+```
+
+Functions may be exported from a source module with `pub`. Closures capture variables from the enclosing scope by reference.
 
 Named returns let a `defer` modify the function's return value before it exits:
 
