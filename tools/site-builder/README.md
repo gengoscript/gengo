@@ -10,7 +10,7 @@ From the repository root:
 
 ```bash
 # Build the native CLI
-zig build -Dpreset=dev cli
+zig build -Dpreset=1m cli
 
 # Run the site builder (requires cap:fs)
 ./zig-out/bin/gengo --cap fs --mount root=. tools/site-builder/site-builder.gengo

@@ -38,8 +38,8 @@ runtime panics, and runaway scripts as host-recoverable failures, not crashes.
 Most examples need a build artifact first:
 
 ```bash
-zig build -Dpreset=dev engine-build   # WASM engine, for JS hosts
-zig build -Dpreset=dev engine-native  # shared library, for C/Python hosts
+zig build -Dpreset=1m engine-build   # WASM engine, for JS hosts
+zig build -Dpreset=1m engine-native  # shared library, for C/Python hosts
 ```
 
 `embed-host` builds directly against the Zig package and needs neither.

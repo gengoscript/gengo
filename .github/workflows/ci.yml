@@ -39,16 +39,16 @@ jobs:
         run: zig build unit
 
       - name: Build WASI binary
-        run: zig build -Dpreset=dev wasi
+        run: zig build -Dpreset=1m wasi
 
       - name: Run conformance tests
-        run: zig build -Dpreset=dev test
+        run: zig build -Dpreset=1m test
 
       - name: Run benchmarks
-        run: zig build -Dpreset=dev bench
+        run: zig build -Dpreset=1m bench
 
       - name: Run native capability tests
-        run: zig build -Dpreset=dev native-cap
+        run: zig build -Dpreset=1m native-cap
 
       - name: Check chaos test discipline (every .gengo needs .out or .err)
         run: |
@@ -89,12 +89,12 @@ jobs:
           echo "test discipline OK"
 
       - name: Run chaos tests
-        run: zig build -Dpreset=dev chaos
+        run: zig build -Dpreset=1m chaos
 
       - name: Run heap tests
-        run: zig build -Dpreset=dev heap-test
+        run: zig build -Dpreset=1m heap-test
 
-  stress-test:
+  gc-stress-test:
     runs-on: ubuntu-latest
     env:
       WASMTIME_VERSION: v45.0.0
@@ -135,6 +135,6 @@ jobs:
           else
             echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
-      - name: Run stress preset tests
+      - name: Run GC stress tests
         if: steps.src_changed.outputs.changed == 'true'
-        run: zig build -Dpreset=stress test
+        run: zig build -Dpreset=1m -Dgc_stress=true test

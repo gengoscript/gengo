@@ -23,7 +23,7 @@ This example shows:
 Build the native engine first:
 
 ```bash
-zig build -Dpreset=dev engine-native
+zig build -Dpreset=1m engine-native
 ```
 
 Then build the example:

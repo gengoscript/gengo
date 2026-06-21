@@ -46,7 +46,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
         }
         if (!commandExists(alloc, gengo)) {
             std.debug.print("gengo binary not found: {s}\n", .{gengo});
-            std.debug.print("build it first with `zig build -Dpreset=dev cli` or pass an explicit path\n", .{});
+            std.debug.print("build it first with `zig build -Dpreset=1m cli` or pass an explicit path\n", .{});
             std.process.exit(1);
         }
         if (std.mem.eql(u8, mode, "chaos")) {

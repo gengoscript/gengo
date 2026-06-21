@@ -3,7 +3,7 @@
 #
 # Unlike wall-clock benchmarks, this compares exact per-opcode execution
 # counts, GC runs, and allocation counts captured by the perf-instrumented
-# build (`zig build -Dpreset=dev bench-perf`, see tools/bench_perf_runner.zig).
+# build (`zig build -Dpreset=1m bench-perf`, see tools/bench_perf_runner.zig).
 # These are deterministic for a given script — no run-to-run noise, no
 # machine-to-machine noise — so any difference at all is a real change in
 # what the compiler/VM does for that script, not measurement jitter.
@@ -23,7 +23,7 @@ fi
 BASELINE="tests/bench/perf_baseline.txt"
 
 echo "→ building perf-instrumented engine and running bench-perf..." >&2
-if ! zig build -Dpreset=dev bench-perf > /tmp/gengo-bench-perf.log 2>&1; then
+if ! zig build -Dpreset=1m bench-perf > /tmp/gengo-bench-perf.log 2>&1; then
   cat /tmp/gengo-bench-perf.log >&2
   echo "bench-perf run failed" >&2
   exit 1

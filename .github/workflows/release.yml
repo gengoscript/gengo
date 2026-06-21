@@ -37,23 +37,23 @@ jobs:
       # ── Gate: run conformance before building release artifacts ─────
 
       - name: Run unit tests
-        run: zig build -Dpreset=dev unit
+        run: zig build -Dpreset=1m unit
 
       - name: Build WASI runtime (Debug)
-        run: zig build -Dpreset=dev wasi
+        run: zig build -Dpreset=1m wasi
 
       - name: Run conformance tests
-        run: zig build -Dpreset=dev test
+        run: zig build -Dpreset=1m test
 
       # ── WASM artifacts ──────────────────────────────────────────────
 
       - name: Build WASM artifacts (ReleaseFast)
         run: |
-          zig build -Dpreset=dev wasi-release
-          zig build -Dpreset=dev engine-release
-          zig build -Dpreset=dev engine-release-net
-          zig build -Dpreset=dev engine-release-fs
-          zig build -Dpreset=dev engine-release-minimal
+          zig build -Dpreset=1m wasi-release
+          zig build -Dpreset=1m engine-release
+          zig build -Dpreset=1m engine-release-net
+          zig build -Dpreset=1m engine-release-fs
+          zig build -Dpreset=1m engine-release-minimal
 
       - name: Optimise and stage WASM artifacts
         run: |
@@ -66,53 +66,53 @@ jobs:
 
       - name: Build CLI linux-x86_64
         run: |
-          zig build -Dpreset=dev -Dtarget=x86_64-linux cli-release
+          zig build -Dpreset=1m -Dtarget=x86_64-linux cli-release
           llvm-strip zig-out/bin/gengo
           cp zig-out/bin/gengo dist/gengo-linux-x86_64
 
       - name: Build CLI linux-aarch64
         run: |
-          zig build -Dpreset=dev -Dtarget=aarch64-linux cli-release
+          zig build -Dpreset=1m -Dtarget=aarch64-linux cli-release
           llvm-strip zig-out/bin/gengo
           cp zig-out/bin/gengo dist/gengo-linux-aarch64
 
       - name: Build CLI macos-x86_64
         run: |
-          zig build -Dpreset=dev -Dtarget=x86_64-macos cli-release
+          zig build -Dpreset=1m -Dtarget=x86_64-macos cli-release
           cp zig-out/bin/gengo dist/gengo-macos-x86_64
 
       - name: Build CLI macos-aarch64
         run: |
-          zig build -Dpreset=dev -Dtarget=aarch64-macos cli-release
+          zig build -Dpreset=1m -Dtarget=aarch64-macos cli-release
           cp zig-out/bin/gengo dist/gengo-macos-aarch64
 
       - name: Build CLI windows-x86_64
         run: |
-          zig build -Dpreset=dev -Dtarget=x86_64-windows cli-release
+          zig build -Dpreset=1m -Dtarget=x86_64-windows cli-release
           cp zig-out/bin/gengo.exe dist/gengo-windows-x86_64.exe
 
       # ── Native shared library per target ───────────────────────────
 
       - name: Build libgengo-engine linux-x86_64
         run: |
-          zig build -Dpreset=dev -Dtarget=x86_64-linux engine-native-release
+          zig build -Dpreset=1m -Dtarget=x86_64-linux engine-native-release
           llvm-strip zig-out/lib/libgengo-engine.so
           cp zig-out/lib/libgengo-engine.so dist/libgengo-engine-linux-x86_64.so
 
       - name: Build libgengo-engine linux-aarch64
         run: |
-          zig build -Dpreset=dev -Dtarget=aarch64-linux engine-native-release
+          zig build -Dpreset=1m -Dtarget=aarch64-linux engine-native-release
           llvm-strip zig-out/lib/libgengo-engine.so
           cp zig-out/lib/libgengo-engine.so dist/libgengo-engine-linux-aarch64.so
 
       - name: Build libgengo-engine macos-x86_64
         run: |
-          zig build -Dpreset=dev -Dtarget=x86_64-macos engine-native-release
+          zig build -Dpreset=1m -Dtarget=x86_64-macos engine-native-release
           cp zig-out/lib/libgengo-engine.dylib dist/libgengo-engine-macos-x86_64.dylib
 
       - name: Build libgengo-engine macos-aarch64
         run: |
-          zig build -Dpreset=dev -Dtarget=aarch64-macos engine-native-release
+          zig build -Dpreset=1m -Dtarget=aarch64-macos engine-native-release
           cp zig-out/lib/libgengo-engine.dylib dist/libgengo-engine-macos-aarch64.dylib
 
       # ── Release ────────────────────────────────────────────────────

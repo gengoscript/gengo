@@ -172,19 +172,19 @@ That same pattern works for deploy gates, routing rules, policy checks, and data
 
 ```bash
 # Native CLI
-zig build -Dpreset=dev cli
+zig build -Dpreset=1m cli
 ./zig-out/bin/gengo script.gengo
 
 # WASI runtime
-zig build -Dpreset=dev wasi
+zig build -Dpreset=1m wasi
 wasmtime --dir . ./build/gengo-cli.wasm -- script.gengo
 
 # Engine WASM
-zig build -Dpreset=dev engine-build
+zig build -Dpreset=1m engine-build
 # → build/gengo-engine.wasm
 
 # Native shared library
-zig build -Dpreset=dev engine-native
+zig build -Dpreset=1m engine-native
 # → zig-out/lib/libgengo-engine.so
 
 # TypeScript SDK
@@ -193,7 +193,7 @@ npm install
 npm run build
 
 # Tests
-zig build -Dpreset=dev test
+zig build -Dpreset=1m test
 ```
 
 Run the CLI with no arguments on an interactive terminal to start the REPL.

@@ -1,7 +1,7 @@
 # Chaos lane
 
 Limit and edge-case behavior, pinned as expectations and run against the
-native CLI on every push (`zig build -Dpreset=dev chaos`).
+native CLI on every push (`zig build -Dpreset=1m chaos`).
 
 - `*.gengo` + `*.out` — must succeed and match output exactly.
 - `fail/*.gengo` + `fail/*.err` — must fail, with every `.err` line present

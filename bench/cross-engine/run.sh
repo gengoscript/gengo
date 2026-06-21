@@ -23,7 +23,7 @@ GENGO_BIN="${GENGO_BIN:-../../zig-out/bin/gengo}"
 # whatever happens to already be at GENGO_BIN.
 if [ -z "${GENGO_BIN_PREBUILT:-}" ]; then
   echo "→ building native CLI (ReleaseSafe)..." >&2
-  (cd ../.. && zig build -Dpreset=dev cli-release) >&2 || {
+  (cd ../.. && zig build -Dpreset=1m cli-release) >&2 || {
     echo "build failed" >&2
     exit 1
   }
@@ -31,7 +31,7 @@ fi
 
 if [ ! -x "$GENGO_BIN" ]; then
   echo "gengo binary not found at $GENGO_BIN — build it first:" >&2
-  echo "  zig build -Dpreset=dev cli-release" >&2
+  echo "  zig build -Dpreset=1m cli-release" >&2
   exit 1
 fi
 
