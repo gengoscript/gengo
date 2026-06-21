@@ -264,9 +264,13 @@ fn checkNamedValueCompatibility(a: Value, b: Value) !void {
         const named = if (a_named) a else b;
         const plain = if (a_named) b else a;
         const nt_name = named.object.named_value.typ.named_type.name;
-        vms.setRuntimeErr("cannot mix {s} and {s}; wrap the {s} with {s}(...) or unwrap the named value with {s}(...)", .{
-            nt_name, vmtyp.runtimeTypeName(plain), vmtyp.runtimeTypeName(plain), nt_name, vmtyp.runtimeTypeName(plain),
-        });
+        if (plain == .null) {
+            vms.setRuntimeErr("cannot compare {s} with null; {s} is non-nullable — use ?{s} to allow null", .{ nt_name, nt_name, nt_name });
+        } else {
+            vms.setRuntimeErr("cannot mix {s} and {s}; wrap the {s} with {s}(...) or unwrap with {s}(...)", .{
+                nt_name, vmtyp.runtimeTypeName(plain), vmtyp.runtimeTypeName(plain), nt_name, vmtyp.namedBaseName(named.object.named_value.typ.named_type.base),
+            });
+        }
         return error.TypeError;
     }
 }
