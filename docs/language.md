@@ -66,11 +66,11 @@ Common declaration forms:
 ```gengo
 name := "gengo"
 const limit := 10
-count int = 3
+var count int = 3
 const port Port = Port(443)
 ```
 
-Assignment uses `=`. Compound assignment such as `+=` and `-=` is supported. `const` bindings cannot be reassigned, though mutable values stored inside them may still be mutated.
+`:=` declares a mutable variable with an inferred type. `const` makes the binding immutable. `var` adds a type annotation (and may omit the initializer, which defaults to the zero value). Assignment uses `=`. Compound assignment such as `+=` and `-=` is supported. `const` bindings cannot be reassigned, though mutable values stored inside them may still be mutated.
 
 Identifiers may contain Unicode letters and decimal digits, following the same rules as Go: the first character must be a Unicode letter or underscore, and subsequent characters may be Unicode letters, decimal digits, or underscores. Identifiers are not normalized — two visually identical identifiers that differ at the byte level are distinct.
 
@@ -127,8 +127,8 @@ Structs:
 
 ```gengo
 type User struct {
-    name string
-    age  int
+    name string,
+    age  int,
 }
 
 u := User{ name: "Ada", age: 37 }
@@ -208,6 +208,25 @@ func with_cleanup() {
     defer std.io.println("cleanup")
     std.io.println("body")
     // prints: body, then cleanup
+}
+```
+
+Instance methods can be deferred directly:
+
+```gengo
+func with_report() {
+    var conn Database = open(":memory:")
+    defer conn.close()
+    conn.exec("INSERT ...")
+}
+```
+
+When the base name refers to a type (not an instance), the first argument to the method call is promoted to receiver position:
+
+```gengo
+func with_report() {
+    defer Database.close(open(":memory:"))
+    conn.exec("INSERT ...")
 }
 ```
 
