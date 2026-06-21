@@ -66,11 +66,11 @@ Common declaration forms:
 ```gengo
 name := "gengo"
 const limit := 10
-count int = 3
+var count int = 3
 const port Port = Port(443)
 ```
 
-Assignment uses `=`. Compound assignment such as `+=` and `-=` is supported. `const` bindings cannot be reassigned, though mutable values stored inside them may still be mutated.
+`:=` declares a mutable variable with an inferred type. `const` makes the binding immutable. `var` adds a type annotation (and may omit the initializer, which defaults to the zero value). Assignment uses `=`. Compound assignment such as `+=` and `-=` is supported. `const` bindings cannot be reassigned, though mutable values stored inside them may still be mutated.
 
 Identifiers may contain Unicode letters and decimal digits, following the same rules as Go: the first character must be a Unicode letter or underscore, and subsequent characters may be Unicode letters, decimal digits, or underscores. Identifiers are not normalized — two visually identical identifiers that differ at the byte level are distinct.
 
@@ -127,11 +127,38 @@ Structs:
 
 ```gengo
 type User struct {
-    name string
-    age  int
+    name string,
+    age  int,
 }
 
 u := User{ name: "Ada", age: 37 }
+```
+
+Fields typed as `[]T`, `[K]V`, or `?T` are heap-referenced and can safely reference the enclosing struct type, enabling recursive data structures:
+
+```gengo
+type Node struct {
+    value    int,
+    children []Node,
+}
+
+type Tree struct {
+    value int,
+    left  ?Tree,
+    right ?Tree,
+}
+```
+
+Mark a field `const` to make it read-only after construction:
+
+```gengo
+type Point struct {
+    const x int,
+    const y int,
+}
+
+p := Point{ x: 3, y: 4 }
+// p.x = 5  // compile error: cannot assign to const field
 ```
 
 Arrays and strings support slicing with `a:b`, `:b`, and `a:`.
@@ -145,6 +172,18 @@ if score >= 10 {
     return "ok"
 } else {
     return "retry"
+}
+```
+
+An `if` may include an init statement before the condition, scoped to the branch:
+
+```gengo
+if result := lookup(key); result != null {
+    std.io.println(result)
+}
+
+if const x := parse(input); x > 0 {
+    return x
 }
 ```
 
@@ -170,7 +209,39 @@ for item in items {
 }
 ```
 
-Pattern-based branching uses `switch`.
+A second variable captures the index (for arrays) or key (for maps):
+
+```gengo
+for i, item in items {
+    std.io.println(i, item)
+}
+
+for k, v in lookup {
+    std.io.println(k, v)
+}
+```
+
+`break` exits a loop early; `continue` skips to the next iteration:
+
+```gengo
+for x in data {
+    if x < 0 { continue }
+    if x > 100 { break }
+    std.io.println(x)
+}
+```
+
+Value-based branching uses `switch`:
+
+```gengo
+switch status {
+    case 200 { return "ok" }
+    case 404 { return "not found" }
+    default  { return "unknown" }
+}
+```
+
+Pattern-based branching uses `switch` (see [Enums and Variants](#enums-and-variants)).
 
 ## Functions
 
@@ -182,7 +253,19 @@ func add(a int, b int) int {
 }
 ```
 
-Gengoscript supports closures, methods, and multi-value returns. Functions may be exported from a source module with `pub`.
+Multi-value return types are written in parentheses:
+
+```gengo
+func min_max(a int, b int) (int, int) {
+    if a < b { return a, b }
+    return b, a
+}
+
+lo, hi := min_max(7, 3)  // destructure into two variables
+std.io.println(lo, hi)
+```
+
+Functions may be exported from a source module with `pub`. Closures capture variables from the enclosing scope by reference.
 
 Named returns let a `defer` modify the function's return value before it exits:
 
@@ -208,6 +291,26 @@ func with_cleanup() {
     defer std.io.println("cleanup")
     std.io.println("body")
     // prints: body, then cleanup
+}
+```
+
+Instance methods can be deferred directly:
+
+```gengo
+func with_report() {
+    var conn Database = open(":memory:")
+    defer conn.close()
+    conn.exec("INSERT ...")
+}
+```
+
+When the base name refers to a type (not an instance), the first argument to the method call is promoted to receiver position:
+
+```gengo
+func with_report() {
+    var conn Database = open(":memory:")
+    defer Database.close(conn)
+    conn.exec("INSERT ...")
 }
 ```
 

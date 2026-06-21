@@ -63,8 +63,9 @@ Initialises an engine with per-instance limits below the active preset ceiling.
 Returns:
 
 - `>= 1` on success;
-- `0` if the engine pool is exhausted; or
-- `-3` if a field exceeds the preset ceiling.
+- `0` if the engine pool is exhausted;
+- `-3` if a field exceeds the preset ceiling; or
+- `-4` if allocation fails.
 
 ### `engine_destroy(handle) -> void`
 
