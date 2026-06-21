@@ -68,8 +68,7 @@ pub const State = struct {
     rune_cache_valid: bool = false,
     rune_cache_overflow: bool = false,
     rune_cache_offsets: [RuneCacheMax]usize = undefined,
-    str_acc: [4096]u8 = undefined,
-    str_acc_len: usize = 0,
+    fmt_scratch: [64]u8 = undefined,
     gc_runs: u64 = 0,
     gc_time_ns: u64 = 0,
     alloc_object_calls: u64 = 0,
@@ -176,7 +175,6 @@ pub fn resetExec() void {
     vmState().frame_top = 0;
     vmState().call_depth_target = null;
     vmState().temp_root_top = 0;
-    vmState().str_acc_len = 0;
     vmState().defer_top = 0;
     vmState().ops_budget_remaining = std.math.maxInt(u64);
     vmState().panic_line = 0;
@@ -424,7 +422,7 @@ pub fn asStringValue(v: Value) ![]const u8 {
 
 /// Debug-build tripwire for the `.string` immortality invariant (see the
 /// Value doc comment in value.zig): panics if a `.string` points into a
-/// known-volatile region (VM stack, str_acc buffer). Conservative — it
+/// known-volatile region (VM stack, fmt_scratch buffer). Conservative — it
 /// cannot prove immortality, only reject the volatile ranges we know.
 /// No-op in release builds. Called from vmPush so every value entering the
 /// stack is screened.
@@ -445,14 +443,11 @@ pub fn assertStringImmortal(v: Value) void {
         }
     }
 
-    // 2. Reject pointers into the str_acc buffer.
-    const acc = &vmState().str_acc;
-    const acc_base = @intFromPtr(&acc[0]);
-    const acc_end = acc_base + acc.len;
-    if (ptr >= acc_base and ptr < acc_end) {
-        std.debug.panic(".string value points into str_acc buffer: {x}..{x}\n", .{ ptr, ptr + s.len });
+    // 2. Reject pointers into the fmt_scratch buffer.
+    const scratch = &vmState().fmt_scratch;
+    const scratch_base = @intFromPtr(&scratch[0]);
+    const scratch_end = scratch_base + scratch.len;
+    if (ptr >= scratch_base and ptr < scratch_end) {
+        std.debug.panic(".string value points into fmt_scratch buffer: {x}..{x}\n", .{ ptr, ptr + s.len });
     }
-
-    // 3. Reject pointers into the str_acc buffer (via helper)
-    // (already covered above)
 }

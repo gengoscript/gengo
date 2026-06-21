@@ -1051,7 +1051,7 @@ test {
 
 // Regression for #101: .string immortality invariant.
 // After the fix, const_add string concatenation must NOT produce a .string
-// view into the str_acc buffer; it should always allocate a dyn_string.
+// view into the fmt_scratch buffer; it should always allocate a dyn_string.
 // This test compiles a chain and verifies the result is a GC object.
 test "const_add string chain produces dyn_string, not str_acc view" {
     var rt = try setup();
