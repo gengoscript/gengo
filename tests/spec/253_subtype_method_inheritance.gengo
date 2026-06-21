@@ -1,0 +1,23 @@
+std := import("std")
+
+type Meters int range 0..1000
+
+func (m Meters) label() string {
+    return "meters"
+}
+
+func (m Meters) times(n int) int {
+    return int(m) * n
+}
+
+// one-level subtype inherits parent methods
+subtype SmallMeters Meters range 0..100
+sm := SmallMeters(5)
+std.io.println(sm.label())
+std.io.println(sm.times(3))
+
+// two-level chain still resolves to grandparent method
+subtype TinyMeters SmallMeters range 0..10
+tm := TinyMeters(3)
+std.io.println(tm.label())
+std.io.println(tm.times(4))

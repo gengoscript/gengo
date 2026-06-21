@@ -630,11 +630,21 @@ fn resolveMethodReceiver(recv: Value, mname: []const u8) !MethodResolution {
             return .{ .func = try resolveMapMethod(recv.object, mname), .pass_recv = false };
         },
         .named_value => |nv| {
-            const qualified_name = switch (nv.typ.*) {
-                .named_type => |nt| nt.qualified_name,
-                else => return error.NotAMethodReceiver,
-            };
-            return .{ .func = try resolveQualifiedReceiverMethod(qualified_name, mname), .pass_recv = true };
+            var typ_obj: *Object = nv.typ;
+            while (true) {
+                const nt = switch (typ_obj.*) {
+                    .named_type => |nt| nt,
+                    else => return error.NotAMethodReceiver,
+                };
+                if (resolveQualifiedReceiverMethod(nt.qualified_name, mname)) |func| {
+                    return .{ .func = func, .pass_recv = true };
+                } else |err| switch (err) {
+                    error.UnknownMethod => {
+                        typ_obj = vmtyp.resolveParentType(typ_obj) orelse return error.UnknownMethod;
+                    },
+                    else => return err,
+                }
+            }
         },
         .enum_value => |ev| {
             return .{ .func = try resolveQualifiedReceiverMethod(ev.typ.enum_type.qualified_name, mname), .pass_recv = true };
