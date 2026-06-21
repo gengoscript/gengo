@@ -1,0 +1,26 @@
+std := import("std")
+
+// Recursive struct via []
+type TreeNode struct {
+    value    int,
+    children []TreeNode,
+}
+
+leaf1 := TreeNode{ value: 10, children: [] }
+leaf2 := TreeNode{ value: 20, children: [] }
+root  := TreeNode{ value: 1, children: [leaf1, leaf2] }
+
+std.io.println(root.value)
+std.io.println(root.children[0].value)
+std.io.println(root.children[1].value)
+
+// Recursive struct via ?
+type ListNode struct {
+    value int,
+    next  ?ListNode,
+}
+
+n2 := ListNode{ value: 200, next: null }
+n1 := ListNode{ value: 100, next: n2 }
+std.io.println(n1.value)
+std.io.println(n1.next.value)

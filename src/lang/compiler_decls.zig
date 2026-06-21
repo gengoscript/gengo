@@ -824,13 +824,24 @@ pub fn parseSignedNumber(c: anytype) !f64 {
     return sign * n;
 }
 
-fn checkStructFieldType(c: anytype, spec: FieldTypeSpec, qself: []const u8) !void {
+fn checkStructFieldType(c: anytype, spec: FieldTypeSpec, qself: []const u8, inside_ref: bool) !void {
+    // A ?T spec contains a null_t alt — the actual type is heap-referenced (null or pointer),
+    // so self-reference is safe.
+    var is_nullable = false;
+    for (spec.alts) |alt| {
+        if (alt.typ == .null_t) { is_nullable = true; break; }
+    }
+    const ref_ctx = inside_ref or is_nullable;
     for (spec.alts) |alt| {
         switch (alt.typ) {
+            .null_t => {},
             .struct_t => {
                 if (common.streq(alt.struct_name, qself)) {
-                    c.setErr("struct type '{s}' cannot reference itself", .{alt.struct_name});
-                    return error.UnknownStructType;
+                    if (!ref_ctx) {
+                        c.setErr("struct type '{s}' cannot reference itself directly; use '[]', '[K]V', or '?' to allow recursion", .{alt.struct_name});
+                        return error.UnknownStructType;
+                    }
+                    return; // valid self-ref through a reference type
                 }
                 if (!c.isKnownLocalStructType(alt.struct_name)) {
                     c.setErr("unknown struct type '{s}'", .{alt.struct_name});
@@ -838,18 +849,18 @@ fn checkStructFieldType(c: anytype, spec: FieldTypeSpec, qself: []const u8) !voi
                 }
             },
             .array => {
-                if (alt.elem_spec) |es| try checkStructFieldType(c, es, qself);
+                if (alt.elem_spec) |es| try checkStructFieldType(c, es, qself, true);
             },
             .map => {
-                if (alt.key_spec) |ks| try checkStructFieldType(c, ks, qself);
-                if (alt.val_spec) |vs| try checkStructFieldType(c, vs, qself);
+                if (alt.key_spec) |ks| try checkStructFieldType(c, ks, qself, true);
+                if (alt.val_spec) |vs| try checkStructFieldType(c, vs, qself, true);
             },
             .func_t => {
                 if (alt.func_params) |params| {
-                    for (params) |param| try checkStructFieldType(c, param, qself);
+                    for (params) |param| try checkStructFieldType(c, param, qself, false);
                 }
                 if (alt.func_returns) |returns| {
-                    for (returns) |ret| try checkStructFieldType(c, ret, qself);
+                    for (returns) |ret| try checkStructFieldType(c, ret, qself, false);
                 }
             },
             else => {},
@@ -892,7 +903,7 @@ pub fn structDeclBody(c: anytype, kw: Token, name: Token, is_pub: bool) !void {
             if (c.cur.typ == .ident or c.cur.typ == .question or c.cur.typ == .kw_func or c.cur.typ == .lbracket) {
                 // Space syntax: field type  (colon no longer used)
                 spec.typ = try parseFieldTypeSpec(c, );
-                if (!c.skipping_test_body) try checkStructFieldType(c, spec.typ, try c.qualifyTypeName(name.src));
+                if (!c.skipping_test_body) try checkStructFieldType(c, spec.typ, try c.qualifyTypeName(name.src), false);
             } else {
                 return c.err("expected type annotation for struct field '{s}'", .{fname});
             }

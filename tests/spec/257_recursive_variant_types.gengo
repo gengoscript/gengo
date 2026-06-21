@@ -1,0 +1,21 @@
+std := import("std")
+
+type JSONValue variant {
+    jnull,
+    jbool(bool),
+    jint(int),
+    jstr(string),
+    jarray([]JSONValue),
+}
+
+leaf1 := JSONValue.jint(1)
+leaf2 := JSONValue.jstr("hello")
+arr   := JSONValue.jarray([leaf1, leaf2, JSONValue.jnull])
+
+switch arr {
+    case .jarray(items) {
+        std.io.println(items[0])
+        std.io.println(items[1])
+        std.io.println(items[2])
+    }
+}
