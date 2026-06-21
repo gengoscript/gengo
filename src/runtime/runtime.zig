@@ -11,6 +11,7 @@ const vmnative = @import("../lang/vm_native.zig");
 const net_state = @import("../lang/native/net_state.zig");
 const native_time = @import("../lang/native/time.zig");
 const native_regexp = @import("../lang/native/regexp.zig");
+const native_json = @import("../lang/native/json.zig");
 const native_rand = @import("../lang/native/rand.zig");
 const cfg = @import("config.zig");
 const Value = @import("../lang/value.zig").Value;
@@ -199,6 +200,7 @@ pub const Runtime = struct {
         net_state.netReset();
         native_time.timeClearCache();
         native_regexp.reClearCache();
+        native_json.jsonValueClearCache();
         native_rand.randResetState();
         globals.reset();
         vm.reset();

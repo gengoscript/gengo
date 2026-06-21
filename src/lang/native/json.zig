@@ -9,6 +9,114 @@ const MapEntry = vmod.MapEntry;
 const NativeFnId = @import("native_ids.zig").NativeFnId;
 const NativeFuncObj = @import("../value.zig").NativeFuncObj;
 
+// ── JSONValue variant type ─────────────────────────────────────────────────
+// Synthesised at runtime, mirroring what the user would write as:
+//   type JSONValue variant {
+//       jnull, jbool(bool), jint(int), jfloat(float), jstr(string),
+//       jarray([]JSONValue), jobject([string]JSONValue),
+//   }
+
+pub const JsonValueQualifiedName = "@std.json.Value";
+
+const jv_arms = [_]vmod.VariantArmSpec{
+    .{ .name = "jnull" },
+    .{ .name = "jbool",   .has_payload = true },
+    .{ .name = "jint",    .has_payload = true },
+    .{ .name = "jfloat",  .has_payload = true },
+    .{ .name = "jstr",    .has_payload = true },
+    .{ .name = "jarray",  .has_payload = true },
+    .{ .name = "jobject", .has_payload = true },
+};
+
+var jv_type_cache: ?*Object = null;
+
+pub fn jsonValueClearCache() void {
+    jv_type_cache = null;
+}
+
+pub fn jsonValueGetType() !*Object {
+    if (jv_type_cache) |t| return t;
+    const obj = try vmgc.vmAllocObject();
+    obj.* = .{ .variant_type = .{
+        .name = "JSONValue",
+        .qualified_name = JsonValueQualifiedName,
+        .arms = &jv_arms,
+    } };
+    jv_type_cache = obj;
+    return obj;
+}
+
+const JVArm = enum(usize) { jnull = 0, jbool = 1, jint = 2, jfloat = 3, jstr = 4, jarray = 5, jobject = 6 };
+
+fn makeJV(arm: JVArm, payload: Value) !Value {
+    const typ = try jsonValueGetType();
+    const obj = try vmgc.vmAllocObject();
+    obj.* = .{ .variant_value = .{
+        .typ = typ,
+        .tag = jv_arms[@intFromEnum(arm)].name,
+        .ordinal = @intFromEnum(arm),
+        .payload = payload,
+    } };
+    return .{ .object = obj };
+}
+
+fn jsonValueToTyped(jv: std.json.Value) !Value {
+    return switch (jv) {
+        .null          => makeJV(.jnull, .null),
+        .bool   => |b| makeJV(.jbool,  .{ .boolean = b }),
+        .integer => |i| makeJV(.jint,  .{ .int = i }),
+        .float  => |f| makeJV(.jfloat, .{ .float = f }),
+        .number_string => |s| makeJV(.jfloat, .{ .float = try std.fmt.parseFloat(f64, s) }),
+        .string => |s| makeJV(.jstr,   try vmgc.makeDynString(s)),
+        .array  => |arr| {
+            const n = arr.items.len;
+            const items_obj = try vmgc.allocTempRooted(.{ .array_managed = &[_]Value{} });
+            defer vms.popTempRoot();
+            const items = try vmgc.vmAllocManagedSlice(Value, n);
+            items_obj.* = .{ .array_managed = items[0..0] };
+            for (0..n) |i| {
+                items[i] = try jsonValueToTyped(arr.items[i]);
+                items_obj.* = .{ .array_managed = items[0 .. i + 1] };
+            }
+            return makeJV(.jarray, .{ .object = items_obj });
+        },
+        .object => |obj_map| {
+            const n = obj_map.keys().len;
+            const map_obj = try vmgc.allocTempRooted(.{ .map = &[_]MapEntry{} });
+            defer vms.popTempRoot();
+            const entries = try vmgc.vmAllocManagedSlice(MapEntry, n);
+            map_obj.* = .{ .map = entries[0..0] };
+            const keys = obj_map.keys();
+            const vals = obj_map.values();
+            for (0..n) |i| {
+                const k = try vmgc.makeDynString(keys[i]);
+                try vms.pushTempRoot(k);
+                entries[i].key = k;
+                entries[i].value = try jsonValueToTyped(vals[i]);
+                vms.popTempRoot();
+                map_obj.* = .{ .map = entries[0 .. i + 1] };
+            }
+            if (n > 0) {
+                const bcount = vmmap.mapBucketsForCount(n);
+                const buckets = try vmgc.vmAllocManagedSlice(i32, bcount);
+                vmmap.mapBuildHashedBuckets(entries[0..n], buckets);
+                map_obj.* = .{ .map_hashed = .{ .entries = entries[0..n], .len = n, .buckets = buckets } };
+            }
+            return makeJV(.jobject, .{ .object = map_obj });
+        },
+    };
+}
+
+pub fn jsonParseValueNative() !Value {
+    const src = try vms.asStringValue(vms.vmTop(0));
+    const parsed = std.json.parseFromSlice(std.json.Value, std.heap.page_allocator, src, .{}) catch |e| {
+        vms.setRuntimeErr("json.parse_value: {s}", .{@errorName(e)});
+        return error.TypeError;
+    };
+    defer parsed.deinit();
+    return jsonValueToTyped(parsed.value);
+}
+
 fn jsonValueToGengo(jv: std.json.Value) !Value {
     return switch (jv) {
         .null => .null,
@@ -205,6 +313,11 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
         },
         .json_indent => {
             const out = try jsonIndentNative();
+            vms.vmPopArgs(argc);
+            try vms.vmPush(out);
+        },
+        .json_parse_value => {
+            const out = try jsonParseValueNative();
             vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },

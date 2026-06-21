@@ -236,11 +236,17 @@ pub fn buildStdModule() !*Object {
     try vms.pushTempRoot(.{ .object = string_obj });
     defer vms.popTempRoot();
 
+    const jv_type_obj = try json_mod.jsonValueGetType();
+    try vms.pushTempRoot(.{ .object = jv_type_obj });
+    defer vms.popTempRoot();
+
     const json_entries = [_]NamespaceEntry{
-        .{ .name = "parse", .value = try makeNative(.json_parse, 1) },
-        .{ .name = "stringify", .value = try makeNative(.json_stringify, 1) },
-        .{ .name = "valid", .value = try makeNative(.json_valid, 1) },
-        .{ .name = "indent", .value = try makeNative(.json_indent, 2) },
+        .{ .name = "parse",       .value = try makeNative(.json_parse, 1) },
+        .{ .name = "parse_value", .value = try makeNative(.json_parse_value, 1) },
+        .{ .name = "stringify",   .value = try makeNative(.json_stringify, 1) },
+        .{ .name = "valid",       .value = try makeNative(.json_valid, 1) },
+        .{ .name = "indent",      .value = try makeNative(.json_indent, 2) },
+        .{ .name = "Value",       .value = .{ .object = jv_type_obj } },
     };
     const json_obj = try makeNamespace("json", "@module_type:std.json", &json_entries);
     try vms.pushTempRoot(.{ .object = json_obj });
@@ -356,8 +362,9 @@ pub fn buildStdModule() !*Object {
         .{ .name = "regexp", .value = .{ .object = regexp_obj } },
         .{ .name = "sort", .value = .{ .object = sort_obj } },
         .{ .name = "array", .value = .{ .object = array_obj } },
-        .{ .name = "Time", .value = .{ .object = time_type_obj } },
-        .{ .name = "Regexp", .value = .{ .object = regexp_type_obj } },
+        .{ .name = "Time",      .value = .{ .object = time_type_obj } },
+        .{ .name = "Regexp",    .value = .{ .object = regexp_type_obj } },
+        .{ .name = "JSONValue", .value = .{ .object = jv_type_obj } },
     };
     const std_obj = try makeNamespace("std", "@module_type:std", &std_entries);
     vms.vmState().std_module = std_obj;
@@ -756,7 +763,7 @@ pub fn callNative(nf: NativeFuncObj, argc: u8) !void {
         .str_repeat, .str_split_once, .str_builder_new, .str_count, .str_fields, .str_pad_left,
         .str_pad_right, .str_equal_fold, .str_contains_any,
         .str_trim_left, .str_trim_right, .str_trim_prefix, .str_trim_suffix, .str_split_n => return string_mod.dispatch(nf, argc),
-        .json_parse, .json_stringify, .json_valid, .json_indent => return json_mod.dispatch(nf, argc),
+        .json_parse, .json_stringify, .json_valid, .json_indent, .json_parse_value => return json_mod.dispatch(nf, argc),
         .hex_encode, .hex_decode, .base64_encode, .base64_decode, .base64_url_encode,
         .base64_url_decode => return encode_mod.dispatch(nf, argc),
         .template_parse, .template_execute, .template_add_func, .template_render,
