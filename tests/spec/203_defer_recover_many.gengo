@@ -11,7 +11,7 @@ func test_many_defers_and_recover() {
     }()
     defer std.io.println("defer2")
     defer std.io.println("defer1")
-    _ = []int{}[0]
+    _ = [][0]
 }
 
 test_many_defers_and_recover()
