@@ -21,6 +21,31 @@ versions, and the OS.
 
 ## Results
 
+### 2026-06-22, commit `e130ec8` (v0.5.0-pre4)
+
+**Host**: AMD Ryzen 5 7600 (6-core/12-thread), Linux 6.12.86+deb13-amd64 x86_64
+
+**Engines**: Gengoscript v0.5.0-pre4 (native ReleaseSafe) · Lua 5.4.7 · Python 3.13.5 · Node v20.19.2 · [google/starlark-go](https://github.com/google/starlark-go) (devel, via `go install`) · [traefik/yaegi](https://github.com/traefik/yaegi) (Go interpreter, running real Go source) · [mattn/anko](https://github.com/mattn/anko) v0.1.8
+
+| Engine | `fib_recursive(32)` | `loop_sum` (20M) |
+| --- | --- | --- |
+| Gengo | 0.389s | 0.417s |
+| Lua 5.4 | 0.089s | 0.152s |
+| Node | 0.128s | 0.073s |
+| Python 3 | 0.158s | 1.212s |
+| Yaegi (Go interpreter) | 1.843s | 0.459s |
+| Anko | 8.514s | 5.345s |
+| Starlark | n/a — forbids recursive functions by design | 2.215s |
+
+Gengo improved ~40% on `fib_recursive` (0.647s → 0.389s) and ~48% on
+`loop_sum` (0.796s → 0.417s) compared to the pre1 snapshot. No dedicated
+performance pass occurred between these releases — the gains appear to come
+from incidental improvements across the compiler and VM over the pre2–pre4
+cycle (in particular the opcode changes for `div`/`rem`/`mod` and variant
+arm dispatch). Gengo `loop_sum` now sits within 10% of Yaegi.
+
+---
+
 ### 2026-06-17, commit `4f07c9a`
 
 **Host**: AMD Ryzen 5 7600 (6-core/12-thread), Linux 6.12.86+deb13-amd64 x86_64
