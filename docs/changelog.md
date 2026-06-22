@@ -1,5 +1,25 @@
 # Gengoscript Changelog
 
+## Unreleased
+
+### Language
+
+- **Default parameter values** — Trailing function parameters may declare a literal default (`func f(a int, b int = 1) int`). Callers may omit any suffix of defaulted parameters.
+- **Hex, binary, and octal literals** — `0xFF`, `0b1010_1111`, `0o755`. Digit separators (`_`) work in all bases. Valid in expressions, range bounds, and default values.
+- **Enum representation values** — `type Status enum { pending = 0, active = 1, done = 2 }`. Unspecified members auto-increment. `.int` on a value returns its integer representation. `T.from_int(n)` does the reverse lookup, returning `?T`.
+- **Enum value properties** — `.name` and `.int` are now first-class field accesses on any enum value.
+- **Struct zero-initialisation** — `var p Point` now creates a zero-value struct instance (fields set to `0`, `false`, `""` by their type). Previously it produced `null`.
+- **Enum zero-initialisation** — `var s Status` now initialises to the first declared member. Previously it panicked.
+- **Range bounds with any numeric base** — `type Port int range 1..0xFFFF` and similar are now valid.
+- **Named type bounds** — `T.first` and `T.last` on ranged named types return the boundary as a named-type value.
+
+### Fixes
+
+- Struct and enum variable declarations following a `std` import no longer trigger a spurious "unknown field in std" compile error.
+- Arity mismatch errors now show `expected 1-2 argument(s)` when a function has defaults, and no longer include a stray leading comma in the function signature.
+
+---
+
 ## v0.5.0 — 2026-06-15
 
 ### Language
