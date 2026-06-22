@@ -1,0 +1,2 @@
+type Foo bool range 0..1
+func main() {}
