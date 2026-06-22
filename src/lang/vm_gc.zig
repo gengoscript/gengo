@@ -98,6 +98,7 @@ fn drainMarkQueue() void {
             },
             .variant_ctor => |vc| markObjectQueue(vc.typ),
             .named_type_fn => |nf| markObjectQueue(nf.typ),
+            .enum_type_fn => |ef| markObjectQueue(ef.typ),
             .named_type => |nt| {
                 if (nt.parent_obj) |p| markObjectQueue(p);
                 if (nt.predicate) |p| markObjectQueue(p);

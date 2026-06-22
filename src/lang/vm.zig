@@ -471,11 +471,12 @@ fn enumTypeAllocValue(obj: *Object, member_name: []const u8) !Value {
         if (!in_sub) return error.UnknownStructField;
         // Resolve parent and find the ordinal there.
         const parent_obj = vmtyp.resolveEnumParent(obj) orelse return error.UnknownStructField;
-        const parent_members = parent_obj.enum_type.members;
-        for (parent_members, 0..) |m, pi| {
+        const parent_et = &parent_obj.enum_type;
+        for (parent_et.members, 0..) |m, pi| {
             if (common.streq(m, member_name)) {
+                const ordinal = if (parent_et.member_ints) |mi| mi[pi] else @as(i64, @intCast(pi));
                 const ev = try vmAllocObject();
-                ev.* = .{ .enum_value = .{ .typ = parent_obj, .name = m, .ordinal = @intCast(pi) } };
+                ev.* = .{ .enum_value = .{ .typ = parent_obj, .name = m, .ordinal = ordinal } };
                 return .{ .object = ev };
             }
         }
@@ -483,8 +484,9 @@ fn enumTypeAllocValue(obj: *Object, member_name: []const u8) !Value {
     } else {
         for (et.members, 0..) |m, ei| {
             if (common.streq(m, member_name)) {
+                const ordinal = if (et.member_ints) |mi| mi[ei] else @as(i64, @intCast(ei));
                 const ev = try vmAllocObject();
-                ev.* = .{ .enum_value = .{ .typ = obj, .name = m, .ordinal = @intCast(ei) } };
+                ev.* = .{ .enum_value = .{ .typ = obj, .name = m, .ordinal = ordinal } };
                 return .{ .object = ev };
             }
         }
@@ -530,6 +532,11 @@ fn enumTypeFieldValue(obj: *Object, name: []const u8) !Value {
         return try enumTypeAllocValue(obj, et.members[et.members.len - 1]);
     }
     if (common.streq(name, "values")) return try enumTypeValuesValue(obj, et);
+    if (common.streq(name, "from_int")) {
+        const fn_obj = try vmAllocObject();
+        fn_obj.* = .{ .enum_type_fn = .{ .typ = obj } };
+        return .{ .object = fn_obj };
+    }
     return try enumTypeAllocValue(obj, name);
 }
 
@@ -956,6 +963,23 @@ fn performCall(argc: u8) !void {
             const out = try vmtyp.applyNamedTypeFn(nf.typ, nf.kind, arg);
             try pop2push1(out);
         },
+        .enum_type_fn => |ef| {
+            if (argc != 1) return error.ArityMismatch;
+            const arg = vmState().stack[vmState().stack_top - 1];
+            if (arg != .int) return error.TypeError;
+            const n = arg.int;
+            const et = &ef.typ.enum_type;
+            for (et.members, 0..) |m, mi| {
+                const ordinal = if (et.member_ints) |ints| ints[mi] else @as(i64, @intCast(mi));
+                if (ordinal == n) {
+                    const ev = try vmAllocObject();
+                    ev.* = .{ .enum_value = .{ .typ = ef.typ, .name = m, .ordinal = ordinal } };
+                    try pop2push1(.{ .object = ev });
+                    return;
+                }
+            }
+            try pop2push1(.null);
+        },
         else => return error.NotAFunction,
     }
 }
@@ -1239,6 +1263,13 @@ fn pushFieldFromObject(obj: *Object, name_idx: usize, ic_base: usize, ic_type_id
             }
         },
         .enum_type => try vmPush(try enumTypeFieldValue(obj, name)),
+        .enum_value => |ev| {
+            if (common.streq(name, "name")) {
+                try vmPush(.{ .string = try chunk.internStr(ev.name) });
+            } else if (common.streq(name, "int")) {
+                try vmPush(.{ .int = ev.ordinal });
+            } else return error.UnknownStructField;
+        },
         .named_type => try vmPush(try namedTypeFieldValue(obj, name)),
         .variant_type => try vmPush(try variantTypeFieldValue(obj, name)),
         .variant_value => |vv| try vmPush(try variantValueFieldValue(vv, name)),
@@ -1491,6 +1522,11 @@ fn opInvokeMethod() !void {
         .named_value, .enum_value, .variant_value => {
             const resolved = try resolveMethodReceiver(recv, mname);
             try insertReceiverAndCall(recv_idx, resolved.func, recv, argc);
+        },
+        .enum_type => {
+            const callable = try enumTypeFieldValue(recv.object, mname);
+            vmState().stack[recv_idx] = callable;
+            try performCall(argc);
         },
         .array, .array_managed, .array_capacity => {
             if (argc != 0) return error.ArityMismatch;
