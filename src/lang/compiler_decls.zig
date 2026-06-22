@@ -523,6 +523,8 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
     var min: f64 = 0;
     var max: f64 = 0;
     if (c.check(.kw_range) or c.check(.kw_cycle)) {
+        if (base != .int and base != .float and base != .decimal and base != .rune)
+            return c.err("range and cycle constraints require a numeric parent type (int, float, decimal, or rune)", .{});
         const constraint = try parseConstraintBounds(c, );
         if (constraint.is_cycle and base != .int and base != .float and base != .decimal)
             return c.err("'cycle' constraint requires a numeric base type (int, float, or decimal)", .{});
