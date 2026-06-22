@@ -815,6 +815,7 @@ fn enterFunctionFrameWarm(f: @import("value.zig").FuncObj, func_obj: *Object, cl
 }
 
 fn enterFunctionFrame(f: @import("value.zig").FuncObj, func_obj: *Object, closure: ?*Object, argc: u8) !void {
+    var effective_argc = argc;
     if (f.is_variadic) {
         if (argc < f.arity - 1) {
             var sig_buf: [256]u8 = undefined;
@@ -823,13 +824,27 @@ fn enterFunctionFrame(f: @import("value.zig").FuncObj, func_obj: *Object, closur
             return error.ArityMismatch;
         }
     } else if (f.arity != argc) {
-        var sig_buf: [256]u8 = undefined;
-        const sig = vmtyp.funcSignatureStr(&sig_buf, f);
-        if (f.name.len > 0) { vms.setRuntimeErr("{s}: expected {} argument(s), got {} for {s}", .{ f.name, f.arity, argc, sig }); } else { vms.setRuntimeErr("expected {} argument(s), got {} for {s}", .{ f.arity, argc, sig }); }
-        return error.ArityMismatch;
+        if (f.default_count > 0 and argc >= f.arity - f.default_count and argc < f.arity) {
+            const first_default_param = f.arity - f.default_count;
+            for (@as(usize, argc)..@as(usize, f.arity)) |pi| {
+                const di = pi - @as(usize, first_default_param);
+                try vmPush(f.defaults[di]);
+            }
+            effective_argc = f.arity;
+        } else {
+            var sig_buf: [256]u8 = undefined;
+            const sig = vmtyp.funcSignatureStr(&sig_buf, f);
+            const min_argc = f.arity - f.default_count;
+            if (f.name.len > 0) {
+                if (f.default_count > 0) { vms.setRuntimeErr("{s}: expected {}-{} argument(s), got {} for {s}", .{ f.name, min_argc, f.arity, argc, sig }); } else { vms.setRuntimeErr("{s}: expected {} argument(s), got {} for {s}", .{ f.name, f.arity, argc, sig }); }
+            } else {
+                if (f.default_count > 0) { vms.setRuntimeErr("expected {}-{} argument(s), got {} for {s}", .{ min_argc, f.arity, argc, sig }); } else { vms.setRuntimeErr("expected {} argument(s), got {} for {s}", .{ f.arity, argc, sig }); }
+            }
+            return error.ArityMismatch;
+        }
     }
-    if (f.has_typed_params) try vmtyp.enforceFuncArgTypes(f, argc);
-    try prepareVariadicCall(f, argc);
+    if (f.has_typed_params) try vmtyp.enforceFuncArgTypes(f, effective_argc);
+    try prepareVariadicCall(f, effective_argc);
     if (vmState().frame_top >= vmState().frames.len) return error.CallStackOverflow;
     vmState().frames[vmState().frame_top] = .{
         .ret_ip = vmState().ip,

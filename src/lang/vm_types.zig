@@ -720,10 +720,12 @@ pub fn funcSignatureStr(buf: *[256]u8, f: FuncObj) []const u8 {
     buf[wi] = '(';
     wi += 1;
     const fixed: usize = if (f.is_variadic) f.arity - 1 else f.arity;
+    var first_param = true;
     for (f.param_types[0..fixed]) |pt| {
         var tbuf: [128]u8 = undefined;
         const tstr = fieldTypeSpecStr(&tbuf, pt);
-        if (wi > 1 and wi < 255) { buf[wi] = ','; wi += 1; buf[wi] = ' '; wi += 1; }
+        if (!first_param and wi < 255) { buf[wi] = ','; wi += 1; buf[wi] = ' '; wi += 1; }
+        first_param = false;
         if (wi + tstr.len > 255) break;
         @memcpy(buf[wi..wi + tstr.len], tstr);
         wi += tstr.len;
@@ -731,7 +733,8 @@ pub fn funcSignatureStr(buf: *[256]u8, f: FuncObj) []const u8 {
     if (f.is_variadic) {
         var vbuf: [128]u8 = undefined;
         const vstr = fieldTypeSpecStr(&vbuf, f.variadic_type);
-        if (wi > 1 and wi < 255) { buf[wi] = ','; wi += 1; buf[wi] = ' '; wi += 1; }
+        if (!first_param and wi < 255) { buf[wi] = ','; wi += 1; buf[wi] = ' '; wi += 1; }
+        _ = &first_param;
         if (wi + vstr.len + 3 <= 255) {
             @memcpy(buf[wi..wi + vstr.len], vstr);
             wi += vstr.len;

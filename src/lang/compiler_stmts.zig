@@ -176,11 +176,37 @@ pub fn cForStmt(c: anytype) anyerror!void {
     for (loop.break_offsets[0..loop.break_count]) |off| try chunk.patchJump(off);
 }
 
+fn parseLiteralDefault(c: anytype) !value_mod.Value {
+    if (c.match(.kw_null)) return .null;
+    if (c.match(.kw_true)) return .{ .boolean = true };
+    if (c.match(.kw_false)) return .{ .boolean = false };
+    const neg = c.match(.minus);
+    if (c.cur.typ == .number) {
+        c.advance();
+        const n = common.parseFloat(c.prev.src) orelse return error.BadNumber;
+        const is_float = std.mem.indexOfAny(u8, c.prev.src, ".eE") != null;
+        if (is_float) {
+            return .{ .float = if (neg) -n else n };
+        } else {
+            const i: i64 = @intFromFloat(n);
+            return .{ .int = if (neg) -i else i };
+        }
+    }
+    if (!neg and c.cur.typ == .string) {
+        const ss = try chunk.internStr(c.cur.src);
+        c.advance();
+        return .{ .string = ss };
+    }
+    return c.err("default value must be a literal (number, string, bool, or null)", .{});
+}
+
 pub fn compileFuncWithPrefix(c: anytype, prefix: []const []const u8, is_named: bool, predicate_base: ?NamedTypeBase) anyerror!u8 {
     try c.consume(.lparen);
     var param_names: [MaxLocals][]const u8 = undefined;
     var param_types: [MaxLocals]FieldTypeSpec = undefined;
     var param_const: [MaxLocals]bool = [_]bool{false} ** MaxLocals;
+    var param_defaults: [MaxLocals]value_mod.Value = undefined;
+    var param_has_default: [MaxLocals]bool = [_]bool{false} ** MaxLocals;
     var arity: u8 = 0;
     var is_variadic = false;
     var variadic_type: FieldTypeSpec = undefined;
@@ -240,6 +266,14 @@ pub fn compileFuncWithPrefix(c: anytype, prefix: []const []const u8, is_named: b
                 is_variadic = true;
                 variadic_type = ptype;
                 break;
+            }
+            if (c.match(.eq)) {
+                const prev_had_default = arity >= 2 and param_has_default[arity - 2];
+                _ = prev_had_default;
+                param_defaults[arity - 1] = try parseLiteralDefault(c);
+                param_has_default[arity - 1] = true;
+            } else if (arity >= 2 and param_has_default[arity - 2]) {
+                return c.err("parameter '{s}' must have a default value because the preceding parameter does", .{param_names[arity - 1]});
             }
             if (!c.match(.comma)) break;
             if (c.check(.rparen)) break;
@@ -395,6 +429,21 @@ pub fn compileFuncWithPrefix(c: anytype, prefix: []const []const u8, is_named: b
     const rtypes = heap.bump(FieldTypeSpec, return_count) orelse return error.OutOfMemory;
     @memcpy(rtypes[0..return_count], return_types[0..return_count]);
 
+    var default_count: u8 = 0;
+    for (0..@as(usize, arity)) |pi| {
+        if (param_has_default[pi]) default_count += 1;
+    }
+    const defaults = heap.bump(value_mod.Value, default_count) orelse return error.OutOfMemory;
+    if (default_count > 0) {
+        var di: usize = 0;
+        for (0..@as(usize, arity)) |pi| {
+            if (param_has_default[pi]) {
+                defaults[di] = param_defaults[pi];
+                di += 1;
+            }
+        }
+    }
+
     const func_obj = heap.allocObject() orelse return error.OutOfMemory;
     func_obj.* = .{ .function = .{
         .ip = func_ip,
@@ -407,6 +456,8 @@ pub fn compileFuncWithPrefix(c: anytype, prefix: []const []const u8, is_named: b
         .return_types = rtypes[0..return_count],
         .has_typed_returns = has_typed_returns,
         .named_return_count = named_return_count,
+        .defaults = defaults[0..default_count],
+        .default_count = default_count,
     } };
     c.last_func_obj = func_obj;
     if (predicate_base == null) {
