@@ -1,0 +1,10 @@
+std := import("std")
+type Point struct {
+    x int,
+    y int
+}
+var p Point
+std.io.println(p.x)
+std.io.println(p.y)
+p.x = 7
+std.io.println(p.x)

@@ -503,6 +503,21 @@ fn enumTypeValuesValue(obj: *Object, et: vmod.EnumTypeObj) !Value {
     return .{ .object = arr_obj };
 }
 
+fn zeroValueForFieldSpec(spec: vmod.FieldTypeSpec) Value {
+    for (spec.alts) |alt| {
+        switch (alt.typ) {
+            .null_t   => return .null,
+            .int      => return .{ .int = 0 },
+            .float    => return .{ .float = 0 },
+            .decimal_t => return .{ .decimal = 0 },
+            .boolean  => return .{ .boolean = false },
+            .rune_t   => return .{ .rune = 0 },
+            else      => {},
+        }
+    }
+    return .null;
+}
+
 fn enumTypeFieldValue(obj: *Object, name: []const u8) !Value {
     const et = obj.enum_type;
     if (common.streq(name, "name")) return .{ .string = try chunk.internStr(et.name) };
@@ -2382,6 +2397,23 @@ fn runInner() !void {
                 vmmap.mapBuildHashedBuckets(items[0..count], buckets);
                 obj.* = .{ .map_hashed = .{ .entries = items[0..count], .len = count, .buckets = buckets } };
                 try vmPush(.{ .object = obj });
+            },
+            .zero_struct => {
+                const typ_val = try vmPop();
+                if (typ_val != .object or typ_val.object.* != .struct_type) return error.TypeError;
+                const st = typ_val.object.struct_type;
+                const n = st.fields.len;
+                const inst_obj = try allocTempRooted(.{ .array = &[_]Value{} });
+                defer popTempRoot();
+                const fields = try vmAllocManagedSlice(MapEntry, n);
+                for (fields, 0..) |*f, i| {
+                    f.* = .{
+                        .key = .{ .string = try chunk.internStr(st.fields[i].name) },
+                        .value = zeroValueForFieldSpec(st.fields[i].typ),
+                    };
+                }
+                inst_obj.* = .{ .struct_instance = .{ .typ = typ_val.object, .fields = fields } };
+                try vmPush(.{ .object = inst_obj });
             },
             .build_struct_instance => {
                 const count = try vmByte();

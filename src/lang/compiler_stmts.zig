@@ -1587,8 +1587,23 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
             }
         } else if (has_keyword and !is_const and inferred_type_check != .none) {
             if (inferred_type_check == .named) {
-                try c.emitNamedDefault(inferred_type_check.named, name.line);
-                try chunk.emitCall(1, name.line);
+                // The type object is already on the stack (emitGetGlobal above).
+                // For enum types, construct the zero value by accessing the first member
+                // directly via field access — calling the enum type as a constructor is
+                // only valid for enum subtypes, not plain enums.
+                const ti = c.registry.getNamedTypeInfo(inferred_type_check.named);
+                if (ti != null and ti.?.base == .enum_t) {
+                    const members = ti.?.enum_members orelse &[_][]const u8{};
+                    if (members.len > 0) {
+                        try chunk.emitGetField(members[0], name.line);
+                    } else {
+                        try chunk.emitOp(.pop, name.line);
+                        try chunk.emitOp(.null_val, name.line);
+                    }
+                } else {
+                    try c.emitNamedDefault(inferred_type_check.named, name.line);
+                    try chunk.emitCall(1, name.line);
+                }
             } else {
                 try c.emitZeroValue(inferred_type_check, name.line);
             }

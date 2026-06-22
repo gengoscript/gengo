@@ -54,7 +54,11 @@ pub fn emitZeroValue(c: anytype, tc: TypeCheck, line: u32) !void {
             try chunk.emitGetGlobal(tc.named, line);
             try chunk.emitCall(1, line);
         },
-        .interface_type, .struct_type => try chunk.emitOp(.null_val, line),
+        .interface_type => try chunk.emitOp(.null_val, line),
+        .struct_type => |qname| {
+            try chunk.emitGetGlobal(qname, line);
+            try chunk.emitOp(.zero_struct, line);
+        },
     }
 }
 
