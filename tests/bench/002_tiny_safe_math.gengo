@@ -4,7 +4,7 @@ sum := 0
 arr := []
 
 for i := 0; i < 80; i += 1 {
-  v := (i * 7 + 3) % 97
+  v := (i * 7 + 3) rem 97
   arr = std.core.append(arr, v)
 }
 

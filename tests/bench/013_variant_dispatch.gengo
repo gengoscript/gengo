@@ -17,9 +17,9 @@ func area(s Shape) int {
 
 total := 0
 for i := 0; i < 200000; i++ {
-    c := Shape.Circle(i % 10)
-    r := Shape.Rect(i % 7)
-    t := Shape.Triangle(i % 5)
+    c := Shape.Circle(i rem 10)
+    r := Shape.Rect(i rem 7)
+    t := Shape.Triangle(i rem 5)
     total = total + area(c) + area(r) + area(t)
 }
 

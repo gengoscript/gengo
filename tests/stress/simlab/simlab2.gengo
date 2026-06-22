@@ -148,7 +148,7 @@ func buildPolicies(workers []Worker) map[string]RetryPolicy {
     out := {}
     for w in workers {
         wk := std.conv.to_string(int(w.id))
-        if int(w.id) % 2 == 0 {
+        if int(w.id) rem 2 == 0 {
             out[wk] = FixedBackoff{ limit: ConservativeRetry(2), delay: 4 }
         } else {
             out[wk] = ExpBackoff{ limit: AggressiveRetry(5), base: 1 }
@@ -209,7 +209,7 @@ func updatePeak(st Stats, qlen int) Stats {
 
 func shouldFail(job Job, now Tick) bool {
     x := (job.id * 31) + (job.attempts * 17) + int(now)
-    return (x % 11) == 0
+    return (x rem 11) == 0
 }
 
 func scheduleJob(policy RetryPolicy, job Job) (int, bool) {
@@ -389,11 +389,11 @@ func main() {
     jobs := []
     i := 0
     for i < 150 {
-        owner := (i % 3) + 1
-        cost  := (i % 40) + 1
+        owner := (i rem 3) + 1
+        cost  := (i rem 40) + 1
         pri   := Priority.medium
-        if i % 5 == 0  { pri = Priority.high }
-        if i % 11 == 0 { pri = Priority.critical }
+        if i rem 5 == 0  { pri = Priority.high }
+        if i rem 11 == 0 { pri = Priority.critical }
         payload := "job-" + std.conv.to_string(i) + "-🙂"
         jobs = std.core.append(jobs, Job{
             id:       i + 1,
@@ -454,7 +454,7 @@ func main() {
     // for-in over plain array.
     evenCount := 0
     for w in workers {
-        if int(w.id) % 2 == 0 { evenCount += 1 }
+        if int(w.id) rem 2 == 0 { evenCount += 1 }
     }
     std.io.printf("even-id workers: %d\n", evenCount)
 

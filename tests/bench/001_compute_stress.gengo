@@ -8,9 +8,9 @@ type Grid struct {
 func is_prime(n int) bool {
   if n <= 1 { return false }
   if n <= 3 { return true }
-  if n % 2 == 0 or n % 3 == 0 { return false }
+  if n rem 2 == 0 or n rem 3 == 0 { return false }
   for i := 5; i * i <= n; i += 6 {
-    if n % i == 0 or n % (i + 2) == 0 {
+    if n rem i == 0 or n rem (i + 2) == 0 {
       return false
     }
   }
@@ -34,8 +34,8 @@ std.io.println(primes[299])
 
 grid := Grid{ size: 20, data: [] }
 for i := 0; i < 400; i += 1 {
-  prime_factor := primes[i % 300]
-  val := (i * prime_factor) % 1000
+  prime_factor := primes[i rem 300]
+  val := (i * prime_factor) rem 1000
   grid.data = std.core.append(grid.data, val)
 }
 
@@ -46,16 +46,16 @@ checksum := 0
 for round := 0; round < 50; round += 1 {
   next_data := []
   for idx := 0; idx < 400; idx += 1 {
-    target_idx := (idx + round) % 400
+    target_idx := (idx + round) rem 400
     current_val := grid.data[target_idx]
-    new_val := (current_val + round) % 777
+    new_val := (current_val + round) rem 777
     next_data = std.core.append(next_data, new_val)
-    if idx % 10 == 0 {
+    if idx rem 10 == 0 {
       checksum += new_val
     }
   }
   grid.data = next_data
-  if round % 10 == 0 {
+  if round rem 10 == 0 {
     std.core.gc()
   }
 }

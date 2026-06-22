@@ -5,8 +5,8 @@ type Score int range 0..100
 
 total := 0
 for i := 0; i < 200000; i++ {
-    p := Port((i % 65534) + 1)
-    s := Score(i % 101)
+    p := Port((i rem 65534) + 1)
+    s := Score(i rem 101)
     total = total + int(p) + int(s)
 }
 
