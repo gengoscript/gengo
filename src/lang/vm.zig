@@ -2311,7 +2311,45 @@ fn runInner() !void {
                 try vmPush(.{ .boolean = n.an > n.bn });
             },
 
-            .build_array, .build_tuple => {
+            .build_array => {
+                const count = try vmByte();
+                const obj = try allocTempRooted(.{ .array = &[_]Value{} });
+                defer popTempRoot();
+                const items = try vmAllocManagedSlice(Value, count);
+                var i: usize = count;
+                while (i > 0) {
+                    i -= 1;
+                    items[i] = try vmPop();
+                }
+                if (count > 0) {
+                    if (items[0] == .null) {
+                        vms.setRuntimeErr("array literal: element 0 is null; null cannot declare the element type", .{});
+                        return error.TypeError;
+                    }
+                    const first_name = vmtyp.runtimeTypeName(items[0]);
+                    const first_is_float = items[0] == .float;
+                    for (items[1..], 0..) |*item, rel| {
+                        if (item.* == .null) {
+                            vms.setRuntimeErr("array literal: element {d} is null; expected {s} (from element 0)", .{ rel + 1, first_name });
+                            return error.TypeError;
+                        }
+                        if (first_is_float) {
+                            switch (item.*) {
+                                .int => |n| { item.* = .{ .float = @floatFromInt(n) }; continue; },
+                                else => {},
+                            }
+                        }
+                        const item_name = vmtyp.runtimeTypeName(item.*);
+                        if (!std.mem.eql(u8, item_name, first_name)) {
+                            vms.setRuntimeErr("array literal: element {d} is {s}, expected {s} (from element 0)", .{ rel + 1, item_name, first_name });
+                            return error.TypeError;
+                        }
+                    }
+                }
+                obj.* = .{ .array_managed = items[0..count] };
+                try vmPush(.{ .object = obj });
+            },
+            .build_tuple => {
                 const count = try vmByte();
                 const obj = try allocTempRooted(.{ .array = &[_]Value{} });
                 defer popTempRoot();

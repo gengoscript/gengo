@@ -1,0 +1,6 @@
+std := import("std")
+std.io.println(std.json.stringify([1, 2, 3]))
+std.io.println(std.json.stringify(["a", "b", "c"]))
+std.io.println(std.json.stringify([1.5, 2, 3]))
+std.io.println(std.json.stringify([]))
+std.io.println(std.json.stringify([[1, 2], [3, 4]]))

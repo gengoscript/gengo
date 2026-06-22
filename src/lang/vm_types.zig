@@ -38,6 +38,7 @@ pub fn runtimeTypeName(v: Value) []const u8 {
         .null => "null",
         .object => |obj| switch (obj.*) {
             .named_value => obj.named_value.typ.named_type.name,
+            .enum_value => obj.enum_value.typ.enum_type.name,
             .dyn_string, .string_view => "string",
             .array, .array_managed, .array_capacity => "array",
             .map, .map_managed, .map_hashed => "map",
