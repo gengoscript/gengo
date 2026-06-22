@@ -1,0 +1,9 @@
+std := import("std")
+std.io.println(0xFF)
+std.io.println(0b1010_1010)
+std.io.println(0o755)
+std.io.println(0xFF_00)
+type Flags int range 0b0000..0b1111
+std.io.println(Flags.last)
+type Port int range 1..0xFFFF
+std.io.println(Port.last)

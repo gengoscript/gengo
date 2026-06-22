@@ -166,7 +166,29 @@ pub const Lexer = struct {
         return self.tok(tt);
     }
 
+    fn isHexDigit(ch: u8) bool {
+        return (ch >= '0' and ch <= '9') or (ch >= 'a' and ch <= 'f') or (ch >= 'A' and ch <= 'F');
+    }
+
     fn numLit(self: *Lexer) Token {
+        // Hex literal: 0x… or 0X…
+        if (self.peek() == 'x' or self.peek() == 'X') {
+            _ = self.adv();
+            while (isHexDigit(self.peek()) or self.peek() == '_') _ = self.adv();
+            return self.tok(.number);
+        }
+        // Binary literal: 0b… or 0B…
+        if (self.peek() == 'b' or self.peek() == 'B') {
+            _ = self.adv();
+            while (self.peek() == '0' or self.peek() == '1' or self.peek() == '_') _ = self.adv();
+            return self.tok(.number);
+        }
+        // Octal literal: 0o… or 0O…
+        if (self.peek() == 'o' or self.peek() == 'O') {
+            _ = self.adv();
+            while ((self.peek() >= '0' and self.peek() <= '7') or self.peek() == '_') _ = self.adv();
+            return self.tok(.number);
+        }
         while (common.isDigit(self.peek()) or self.peek() == '_') _ = self.adv();
         if (self.peek() == '.' and common.isDigit(self.peekNext())) {
             _ = self.adv();
