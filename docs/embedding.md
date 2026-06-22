@@ -38,6 +38,8 @@ Important `api.Config` fields:
 | `max_frames` | Call frame limit |
 | `max_defers` | Deferred-call limit |
 | `allocator` | Backing allocator for native instances |
+| `source_root` | Restrict file imports to this directory (and `module_roots`) |
+| `module_roots` | Additional directories allowed for file imports |
 
 ## Lifecycle
 
@@ -99,6 +101,20 @@ If scripts import sibling modules, use one of these approaches:
 - `module_source_provider` for dynamic lookup.
 
 `module_source_provider` takes precedence when both are present.
+
+### Import Sandboxing
+
+By default, embedded runtimes place no restriction on which paths scripts can import. To lock imports to a specific directory tree, set `source_root` in the config:
+
+```zig
+var rt = try api.Runtime.init(.{
+    .allow_io = false,
+    .source_root = "/app/scripts",
+    .module_roots = &.{ "/app/lib" },
+});
+```
+
+With `source_root` set, any import resolving outside that root (or the listed `module_roots`) is rejected at compile time with `ImportOutsideRoot`. Up to 8 entries are supported in `module_roots`.
 
 Example with `module_sources`:
 

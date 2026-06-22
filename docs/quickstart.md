@@ -59,6 +59,20 @@ Run the CLI with no arguments to start the REPL:
 ./zig-out/bin/gengo
 ```
 
+### Allowing Extra Module Directories
+
+By default, file imports are restricted to the script's own directory. Pass `--modules` (repeatable) to allow additional directories:
+
+```bash
+./zig-out/bin/gengo --modules /app/lib --modules /app/shared script.gengo
+```
+
+For the WASI binary, ensure wasmtime mounts any extra directories too:
+
+```bash
+wasmtime --dir . --dir /app/lib ./build/gengo-cli.wasm -- --modules /app/lib script.gengo
+```
+
 ## Validate the Build
 
 Run the conformance suite:

@@ -2,6 +2,42 @@
 
 This changelog tracks notable language/runtime changes by implementation date.
 
+## 2026-06-22 (v0.5.0-pre5)
+
+### Feature — Module-Qualified Types
+
+Types exported from a source module can now be used directly in function signatures, struct fields, and variable declarations via the import alias:
+
+```gengo
+geo := import("./geometry/shapes")
+
+func make_point(x int, y int) geo.Point { ... }
+func scale(d geo.Distance, n int) geo.Distance { ... }
+
+type Segment struct { a geo.Point, b geo.Point }
+
+var origin geo.Point = geo.Point { x: 0, y: 0 }
+d := geo.Distance(10)
+```
+
+The compiler resolves the type kind (struct, interface, named, variant) at compile time by inspecting the imported module's export registry.
+
+### Feature — Import Sandboxing
+
+The CLI and WASM binary now restrict file imports to the script's own directory by default. Any import that would resolve outside that directory is rejected at compile time:
+
+```
+gengo: compile error: ImportOutsideRoot: import '../shared/utils' is outside the allowed source directories
+```
+
+Use `--modules <path>` (repeatable, up to 8 entries) to opt in additional directories:
+
+```bash
+gengo --modules /app/lib --modules /app/shared script.gengo
+```
+
+Embedded runtimes are unrestricted unless `source_root` is set explicitly in `api.Config`.
+
 ## 2026-06-22 (v0.5.0-pre4)
 
 ### Breaking — `%` Operator Removed

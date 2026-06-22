@@ -77,6 +77,22 @@ Enabling one capability does not enable the others.
 
 For `cap:fs`, scripts can only reach host-registered mounts. Absolute paths and path traversal are rejected before any syscall.
 
+## Import Sandboxing
+
+When the CLI runs a script, file imports are restricted to the script's own directory. Any `import` that would resolve outside that directory is rejected at compile time with `ImportOutsideRoot`:
+
+```
+gengo: compile error: ImportOutsideRoot: import '../shared/utils' is outside the allowed source directories
+```
+
+Additional directories can be whitelisted with `--modules` (repeatable):
+
+```bash
+gengo --modules /app/lib script.gengo
+```
+
+Embedded runtimes created through the Zig API are unrestricted unless `source_root` is configured explicitly in the `Config`. `.table` and `.callback` source providers bypass filesystem resolution entirely and are unaffected by this restriction.
+
 ## Host Modules
 
 Host-defined modules are imported through `host:` paths such as `import("host:db")`. Scripts can call only the functions the host explicitly registers.
@@ -109,5 +125,6 @@ For production use:
 - choose appropriate memory and frame limits;
 - disable `std.io` unless it is required;
 - enable only the capabilities the use case needs;
-- register only the host functions the script should be allowed to call; and
+- register only the host functions the script should be allowed to call;
+- set `source_root` (and optionally `module_roots`) in the embedding config to restrict which files scripts can import; and
 - use a WebAssembly sandbox as defence in depth for higher-risk deployments.
