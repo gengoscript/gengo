@@ -16,6 +16,7 @@ extern "kernel32" fn ReadFile(
 const Runtime = @import("runtime/runtime.zig").Runtime;
 const io = @import("runtime/io.zig");
 const source_io = @import("runtime/source_io.zig");
+const module_compile = @import("lang/module_compile.zig");
 const vm = @import("lang/vm.zig");
 const vmperf = @import("lang/vm_perf.zig");
 const vms = @import("lang/vm_state.zig");
@@ -267,6 +268,8 @@ fn runCli(argv: []const []const u8) void {
     var disasm_mode: bool = false;
     var cap_names: [8][]const u8 = undefined;
     var cap_count: usize = 0;
+    var module_paths: [module_compile.MaxModuleRoots][]const u8 = undefined;
+    var module_path_count: usize = 0;
     while (script_index < argv.len) {
         const a = argv[script_index];
         if (a.len == 2 and a[0] == '-' and a[1] == '-') {
@@ -282,6 +285,7 @@ fn runCli(argv: []const []const u8) void {
             io.write("  --disasm           Compile and print bytecode disassembly; do not run\n");
             io.write("  --test             Run test blocks in the script\n");
             io.write("  --cap <name>       Enable a named capability (repeatable)\n");
+            io.write("  --modules <path>   Allow imports from an extra directory (repeatable)\n");
             io.write("  --max-ops <n>      Limit instruction count (0 = unlimited)\n");
             io.write("  --backend <name>   Native call backend: embedded (default) or host\n");
             io.write("  --mount <n>=<path> Mount a filesystem path under the given name\n");
@@ -339,6 +343,20 @@ fn runCli(argv: []const []const u8) void {
             script_index += 2;
             continue;
         }
+        if (std.mem.eql(u8, a, "--modules")) {
+            if (script_index + 1 >= argv.len) {
+                io.werr("gengo: --modules requires a path\n");
+                die(1);
+            }
+            if (module_path_count >= module_paths.len) {
+                io.werr("gengo: too many --modules flags (max 8)\n");
+                die(1);
+            }
+            module_paths[module_path_count] = argv[script_index + 1];
+            module_path_count += 1;
+            script_index += 2;
+            continue;
+        }
         if (std.mem.eql(u8, a, "--mount")) {
             if (script_index + 1 >= argv.len) {
                 io.werr("gengo: --mount requires value name=path\n");
@@ -387,12 +405,17 @@ fn runCli(argv: []const []const u8) void {
             script_index += 2;
             continue;
         }
-        break;
-    }
-
-    if (argv.len > script_index) {
-        script_path = argv[script_index];
-        script_name = argv[script_index];
+        // Positional argument: first one is the script path.
+        if (script_path == null and eval_source == null) {
+            script_path = a;
+            script_name = a;
+            script_index += 1;
+            continue;
+        }
+        io.werr("gengo: unexpected argument: ");
+        io.werr(a);
+        io.werr("\n");
+        die(1);
     }
 
     if (eval_source != null and script_path != null) {
@@ -443,6 +466,15 @@ fn runCli(argv: []const []const u8) void {
     };
     if (cap_count > 0) {
         runtime.enabled_capabilities = cap_names[0..cap_count];
+    }
+    // Set source_root to the directory containing the entry script so imports
+    // are restricted to that tree by default. eval/stdin have no root restriction.
+    if (script_path) |p| {
+        const last_slash = std.mem.lastIndexOfScalar(u8, p, '/');
+        runtime.source_root = if (last_slash) |i| p[0..i] else ".";
+    }
+    if (module_path_count > 0) {
+        runtime.module_roots = module_paths[0..module_path_count];
     }
     const script_arg = if (eval_source != null) "<eval>" else if (script_path) |p| p else "";
 

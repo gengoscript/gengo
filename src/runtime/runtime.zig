@@ -50,6 +50,8 @@ pub const Runtime = struct {
     policy: vm.Policy = .{},
     host_modules: []const module_compile.HostModuleDesc = &.{},
     enabled_capabilities: []const []const u8 = &.{},
+    source_root: []const u8 = "",
+    module_roots: []const []const u8 = &.{},
     last_compile_line: u32 = 0,
     last_compile_path_buf: [module_compile.MaxModulePathBytes]u8 = undefined,
     last_compile_path_len: usize = 0,
@@ -249,6 +251,10 @@ pub const Runtime = struct {
     ) void {
         session.* = .{};
         session.provider = provider;
+        session.source_root = self.source_root;
+        const n = @min(self.module_roots.len, module_compile.MaxModuleRoots);
+        @memcpy(session.module_roots_buf[0..n], self.module_roots[0..n]);
+        session.module_roots_count = @intCast(n);
         session.host_module_names = hm_names;
         session.host_module_descs = self.host_modules;
         session.enabled_capabilities = self.enabled_capabilities;
