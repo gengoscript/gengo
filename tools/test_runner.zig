@@ -110,6 +110,8 @@ fn runConformance(alloc: std.mem.Allocator, wasmtime: []const u8, wasm_path: []c
     }
 
     // Collect fail cases
+    // Module flags allow fail-case tests to import from sibling test module dirs.
+    const spec_fail_flags = "--modules tests/spec/modules --modules tests/spec/fail_modules";
     {
         var cases_buf: [MaxCases][]const u8 = undefined;
         const case_count = collectGengoFiles(alloc, "tests/spec/fail", &cases_buf) catch |err| {
@@ -126,7 +128,7 @@ fn runConformance(alloc: std.mem.Allocator, wasmtime: []const u8, wasm_path: []c
                 errors += 1;
                 continue;
             }
-            jobs_buf[job_count] = .{ .pid = 0, .stdout_fd = 0, .stderr_fd = 0, .path = path, .aux_path = err_path, .is_pass = false, .flags = "" };
+            jobs_buf[job_count] = .{ .pid = 0, .stdout_fd = 0, .stderr_fd = 0, .path = path, .aux_path = err_path, .is_pass = false, .flags = spec_fail_flags };
             job_count += 1;
         }
     }

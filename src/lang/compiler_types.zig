@@ -6,6 +6,14 @@ pub const Token = token.Token;
 pub const NamedTypeBase = value_mod.NamedTypeBase;
 pub const FieldTypeSpec = value_mod.FieldTypeSpec;
 
+pub const ExportTypeKind = enum(u8) {
+    func_or_var,
+    struct_t,
+    interface_t,
+    named_t,
+    variant_t,
+};
+
 pub const MaxLocals = 64;
 pub const MaxScopes = 8;
 pub const MaxLoopDepth = 16;

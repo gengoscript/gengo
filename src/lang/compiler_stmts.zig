@@ -1563,7 +1563,30 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
         }
     } else if (c.cur.typ == .ident or c.cur.typ == .question) {
         const type_name = if (c.cur.typ == .ident) c.cur.src else "";
-        _ = try c.parseFieldTypeSpec();
+        const type_spec = try c.parseFieldTypeSpec();
+        // Module-qualified types (e.g. `var d t.Distance = ...`): the alias is not a
+        // local type; the resolved qualified name is in the FieldTypeSpec.
+        const resolved_mod_type: bool = blk: {
+            if (type_spec.alts.len == 0) break :blk false;
+            const alt = type_spec.alts[0];
+            switch (alt.typ) {
+                .named_t, .variant_t => if (std.mem.startsWith(u8, alt.named_name, "@mod:")) {
+                    inferred_type_check = .{ .named = alt.named_name };
+                    break :blk true;
+                },
+                .struct_t => if (std.mem.startsWith(u8, alt.struct_name, "@mod:")) {
+                    inferred_type_check = .{ .struct_type = alt.struct_name };
+                    break :blk true;
+                },
+                .interface_t => if (std.mem.startsWith(u8, alt.interface_name, "@mod:")) {
+                    inferred_type_check = .{ .interface_type = alt.interface_name };
+                    break :blk true;
+                },
+                else => {},
+            }
+            break :blk false;
+        };
+        if (!resolved_mod_type) {
         if (common.streq(type_name, "int") or common.streq(type_name, "float") or common.streq(type_name, "bool")) {
             if (common.streq(type_name, "int")) {
                 inferred_type_check = .{ .prim = .int };
@@ -1592,6 +1615,7 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
             // No type check for nullable type
         } else {
             return { c.setErr("unknown type name '{s}'", .{type_name}); return error.UnknownTypeName; };
+        }
         }
         // Named-type constructor must be pushed before the argument value
         // because performCall expects the callee at stack[top - argc - 1].

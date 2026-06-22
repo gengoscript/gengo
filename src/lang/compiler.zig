@@ -66,6 +66,7 @@ pub const CompilerOptions = struct {
     module_ctx: ?*anyopaque = null,
     resolve_import: ?ImportResolverFn = null,
     has_module_export: ?*const fn (ctx: *anyopaque, path: []const u8, field: []const u8) bool = null,
+    resolve_module_type: ?*const fn (ctx: *anyopaque, path: []const u8, name: []const u8) ?ct.ExportTypeKind = null,
     test_mode: bool = false,
     repl_mode: bool = false,
     check_global_exists: ?*const fn (ctx: *anyopaque, name: []const u8) bool = null,
@@ -882,6 +883,12 @@ pub const Compiler = struct {
         }
         if (t.typ != .ident) return false;
         t = lx.next(); // token after the type ident
+        // Handle module-qualified types: ident.ident
+        if (t.typ == .dot) {
+            t = lx.next();
+            if (t.typ != .ident) return false;
+            t = lx.next();
+        }
         // Skip map[K]V or other parameterized types with brackets
         if (t.typ == .lbracket) {
             var depth: i32 = 0;
@@ -966,6 +973,19 @@ pub const Compiler = struct {
     }
 
 
+    pub fn resolveImportAliasPath(self: *Compiler, alias: []const u8) ?[]const u8 {
+        if (self.resolveLocal(alias)) |slot| {
+            return self.currentScope().locals[slot].import_module_path;
+        }
+        const qname = self.qualifyGlobalName(alias) catch return null;
+        return self.getImportModuleGlobalPath(qname);
+    }
+
+    pub fn resolveModuleTypeName(self: *Compiler, path: []const u8, type_name: []const u8) ?ct.ExportTypeKind {
+        const cb = self.options.resolve_module_type orelse return null;
+        return cb(self.options.module_ctx.?, path, type_name);
+    }
+
     pub fn copyName(self: *Compiler, name: []const u8) ![]const u8 {
         _ = self;
         const out = heap.bump(u8, name.len) orelse return error.OutOfMemory;
@@ -984,6 +1004,7 @@ pub const Compiler = struct {
     }
 
     pub fn isKnownLocalStructType(self: *Compiler, name: []const u8) bool {
+        if (std.mem.startsWith(u8, name, "@mod:")) return true;
         if (self.registry.hasStructTypeLocal(name)) return true;
         var i = name.len;
         while (i > 0) : (i -= 1) {

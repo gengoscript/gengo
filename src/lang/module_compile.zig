@@ -4,6 +4,8 @@ const common = @import("common.zig");
 const heap = @import("../runtime/heap.zig");
 const Compiler = @import("compiler.zig").Compiler;
 const CompilerOptions = @import("compiler.zig").CompilerOptions;
+const ct = @import("compiler_types.zig");
+pub const ExportTypeKind = ct.ExportTypeKind;
 const Lexer = @import("lexer.zig").Lexer;
 const TT = @import("token.zig").TT;
 const cfg = @import("../runtime/config.zig");
@@ -49,6 +51,7 @@ const ModuleRecord = struct {
     struct_name: []const u8 = "",
     state: ModuleState = .loading,
     export_names: [MaxModuleExports][]const u8 = undefined,
+    export_type_kinds: [MaxModuleExports]ExportTypeKind = undefined,
     export_count: u8 = 0,
 
     // Saved error info when compilation fails (state == .failed)
@@ -139,6 +142,7 @@ const _cap_count: usize = @as(usize, @intFromBool(build_options.cap_net)) + @as(
 pub const AllCapabilities = _cap_storage[0.._cap_count];
 
 pub const MaxCapabilities = 16;
+pub const MaxModuleRoots = 8;
 
 pub const Session = struct {
     modules: [MaxModules]ModuleRecord = undefined,
@@ -150,6 +154,12 @@ pub const Session = struct {
     last_error_msg_buf: [512]u8 = undefined,
     last_error_msg_len: u16 = 0,
     provider: SourceProvider = .filesystem,
+    // Import sandbox: source_root restricts file imports to one directory tree;
+    // module_roots lists additional allowed trees (e.g. shared library directories).
+    // Empty source_root = unrestricted (default for embedding; CLI always sets it).
+    source_root: []const u8 = "",
+    module_roots_buf: [MaxModuleRoots][]const u8 = undefined,
+    module_roots_count: u8 = 0,
     host_module_names: []const []const u8 = &.{},
     host_module_descs: []const HostModuleDesc = &.{},
     enabled_capabilities: []const []const u8 = &.{},
@@ -403,6 +413,7 @@ pub const Session = struct {
             .module_ctx = self,
             .resolve_import = resolveImportOpaque,
             .has_module_export = hasModuleExport,
+            .resolve_module_type = resolveModuleTypeKind,
             .check_global_exists = checkGlobalExistsInSession,
             .check_global_ctx = self,
             .test_mode = if (emit_halt) self.test_mode else false,
@@ -439,8 +450,23 @@ pub const Session = struct {
             self.copyTestNamesFromCompiler(&compiler);
         }
         self.modules[idx].export_count = compiler.export_count;
-        for (self.modules[idx].export_names[0..compiler.export_count], compiler.exports[0..compiler.export_count]) |*n, e| {
+        for (
+            self.modules[idx].export_names[0..compiler.export_count],
+            self.modules[idx].export_type_kinds[0..compiler.export_count],
+            compiler.exports[0..compiler.export_count],
+        ) |*n, *k, e| {
             n.* = e.name;
+            if (compiler.registry.hasStructType(e.name)) {
+                k.* = .struct_t;
+            } else if (compiler.registry.hasInterfaceType(e.name)) {
+                k.* = .interface_t;
+            } else if (compiler.registry.hasNamedType(e.name)) {
+                k.* = .named_t;
+            } else if (compiler.registry.hasVariantType(e.name)) {
+                k.* = .variant_t;
+            } else {
+                k.* = .func_or_var;
+            }
         }
         try compiler.emitModuleObject();
         if (emit_halt) try chunk.emitOp(.halt, compiler.prev.line);
@@ -549,6 +575,18 @@ pub const Session = struct {
         return null;
     }
 
+    fn isAllowedImportPath(self: *const Session, path: []const u8) bool {
+        // No source_root configured: unrestricted (embedding backward compat).
+        if (self.source_root.len == 0) return true;
+        // Paths that escape upward are never allowed once a root is set.
+        if (std.mem.startsWith(u8, path, "../") or common.streq(path, "..")) return false;
+        if (pathIsUnderRoot(path, self.source_root)) return true;
+        for (self.module_roots_buf[0..self.module_roots_count]) |root| {
+            if (pathIsUnderRoot(path, root)) return true;
+        }
+        return false;
+    }
+
     fn resolveImportPath(self: *Session, importer_path: []const u8, import_name: []const u8) ![]const u8 {
         if (common.streq(import_name, StdModulePath)) return StdModulePath;
         if (import_name.len == 0) return error.ImportNotFound;
@@ -565,6 +603,13 @@ pub const Session = struct {
 
         var candidate_buf: [MaxModulePathBytes]u8 = undefined;
         const exact = try joinAndNormalize(&candidate_buf, base_dir, import_name);
+
+        if (!self.isAllowedImportPath(exact)) {
+            self.last_error_path = importer_path;
+            self.setScanError("import '{s}' is outside the allowed source directories", .{import_name});
+            return error.ImportOutsideRoot;
+        }
+
         if (self.sourceExists(exact)) return copyResolvedPath(exact);
 
         var ext_buf: [MaxModulePathBytes]u8 = undefined;
@@ -652,6 +697,16 @@ pub fn hasModuleExport(ctx: *anyopaque, path: []const u8, field: []const u8) boo
     return false;
 }
 
+pub fn resolveModuleTypeKind(ctx: *anyopaque, path: []const u8, type_name: []const u8) ?ExportTypeKind {
+    const s: *Session = @ptrCast(@alignCast(ctx));
+    const idx = s.findModule(path) orelse return null;
+    const rec = &s.modules[idx];
+    for (rec.export_names[0..rec.export_count], rec.export_type_kinds[0..rec.export_count]) |n, k| {
+        if (common.streq(n, type_name)) return k;
+    }
+    return null;
+}
+
 pub fn checkGlobalExistsInSession(ctx: *anyopaque, name: []const u8) bool {
     const s: *Session = @ptrCast(@alignCast(ctx));
     for (s.known_globals.?[0..s.known_global_count]) |gn| {
@@ -672,6 +727,14 @@ fn containsPath(paths: []const [MaxModulePathBytes]u8, lens: []const usize, need
         if (common.streq(p[0..l], needle)) return true;
     }
     return false;
+}
+
+fn pathIsUnderRoot(path: []const u8, root: []const u8) bool {
+    if (root.len == 0) return true;
+    if (!std.mem.startsWith(u8, path, root)) return false;
+    // Prevent "src_extra/foo" matching root "src"
+    if (path.len == root.len) return true;
+    return path[root.len] == '/';
 }
 
 fn copyResolvedPath(path: []const u8) ![]const u8 {

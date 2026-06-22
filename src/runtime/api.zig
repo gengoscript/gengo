@@ -32,6 +32,11 @@ pub const Config = struct {
     max_defers: usize = cfg.max_defers,
     module_sources: []const SourceEntry = &.{},
     module_source_provider: ?SourceProvider = null,
+    // Import sandbox: leave source_root empty for unrestricted access (default for
+    // embedding). Set to the entry script's directory for user-facing runtimes; add
+    // extra allowed trees via module_roots (e.g. shared library paths).
+    source_root: []const u8 = "",
+    module_roots: []const []const u8 = &.{},
     host_modules: []const HostModuleDesc = &.{},
     capabilities: []const []const u8 = &.{},
     allocator: std.mem.Allocator = std.heap.page_allocator,
@@ -63,6 +68,8 @@ pub const Runtime = struct {
     inner: rt_mod.Runtime,
     module_sources: []const SourceEntry = &.{},
     module_source_provider: ?SourceProvider = null,
+    source_root: []const u8 = "",
+    module_roots: []const []const u8 = &.{},
     host_modules: []const HostModuleDesc = &.{},
     capabilities: []const []const u8 = &.{},
 
@@ -78,8 +85,12 @@ pub const Runtime = struct {
     fn applyConfigState(self: *Runtime, config: Config) void {
         self.inner.host_modules = config.host_modules;
         self.inner.enabled_capabilities = config.capabilities;
+        self.inner.source_root = config.source_root;
+        self.inner.module_roots = config.module_roots;
         self.module_sources = config.module_sources;
         self.module_source_provider = config.module_source_provider;
+        self.source_root = config.source_root;
+        self.module_roots = config.module_roots;
         self.host_modules = config.host_modules;
         self.capabilities = config.capabilities;
     }

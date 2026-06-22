@@ -791,6 +791,39 @@ pub fn parseFieldTypeSpec(c: anytype) !FieldTypeSpec {
         const tname = c.cur.src;
         c.advance();
 
+        // Handle `alias.TypeName` — module-qualified type annotations.
+        if (c.cur.typ == .dot) {
+            if (c.resolveImportAliasPath(tname)) |mod_path| {
+                c.advance(); // consume '.'
+                if (c.cur.typ != .ident) return c.err("expected type name after '.', found {s}", .{c.tokenName(c.cur.typ)});
+                const type_name = c.cur.src;
+                c.advance();
+                if (c.resolveModuleTypeName(mod_path, type_name)) |kind| {
+                    // Qualified name: "@mod:PATH.TypeName" — matches how the module compiler registers types.
+                    const prefix_len = "@mod:".len + mod_path.len;
+                    const qname_len = prefix_len + 1 + type_name.len;
+                    const qname_buf = heap.bump(u8, qname_len) orelse return error.OutOfMemory;
+                    @memcpy(qname_buf[0.."@mod:".len], "@mod:");
+                    @memcpy(qname_buf["@mod:".len..prefix_len], mod_path);
+                    qname_buf[prefix_len] = '.';
+                    @memcpy(qname_buf[prefix_len + 1 .. qname_len], type_name);
+                    const qname = qname_buf[0..qname_len];
+                    alt = switch (kind) {
+                        .struct_t    => .{ .typ = .struct_t,    .struct_name    = qname },
+                        .interface_t => .{ .typ = .interface_t, .interface_name = qname },
+                        .named_t     => .{ .typ = .named_t,     .named_name     = qname },
+                        .variant_t   => .{ .typ = .variant_t,   .named_name     = qname },
+                        .func_or_var => return c.err("'{s}.{s}' is not a type", .{ tname, type_name }),
+                    };
+                } else if (!c.skipping_test_body) {
+                    c.setErr("unknown type '{s}' in module '{s}'", .{ type_name, tname });
+                    return error.UnknownType;
+                }
+            } else if (!c.skipping_test_body) {
+                c.setErr("unknown type '{s}'", .{tname});
+                return error.UnknownType;
+            }
+        } else {
         alt = .{ .typ = .struct_t, .struct_name = tname };
         if (common.streq(tname, "int")) {
             alt = .{ .typ = .int };
@@ -829,6 +862,7 @@ pub fn parseFieldTypeSpec(c: anytype) !FieldTypeSpec {
             c.setErr("unknown type '{s}'", .{tname});
             return error.UnknownType;
         }
+        } // end else (not dot)
     }
 
     if (count >= MaxTypeAlts) { c.setErr("too many type alternatives (max {d})", .{MaxTypeAlts}); return error.TooManyTypeAlternatives; }

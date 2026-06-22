@@ -1,0 +1,5 @@
+t := import("../modules/types/mod")
+
+func bad(x t.NoSuchType) int {
+    return 0
+}
