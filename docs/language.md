@@ -39,6 +39,54 @@ Kinds of import:
 
 Built-ins are accessed through namespaces such as `std.io.println(...)` and `std.core.len(...)`. Legacy global forms such as `println(...)` are not supported.
 
+### Exporting Types from Modules
+
+A source module can export types with `pub`:
+
+```gengo
+// geometry/shapes.gengo
+pub type Point struct { x int, y int }
+pub type Distance int
+```
+
+### Module-Qualified Types
+
+Once imported, the alias can be used to name the module's exported types in function signatures, struct fields, and variable declarations:
+
+```gengo
+geo := import("./geometry/shapes")
+
+func make_point(x int, y int) geo.Point {
+    return geo.Point { x: x, y: y }
+}
+
+func scale(d geo.Distance, factor int) geo.Distance {
+    return geo.Distance(int(d) * factor)
+}
+
+type Segment struct { a geo.Point, b geo.Point }
+
+var origin geo.Point = geo.Point { x: 0, y: 0 }
+d := geo.Distance(10)
+```
+
+### Import Sandboxing (CLI)
+
+When running a script with the native CLI or the WASM binary, file imports are restricted to the script's own directory by default. Imports that escape with `../` are rejected:
+
+```bash
+# blocked — outside the script's directory
+t := import("../shared/utils")
+```
+
+To allow additional directories, pass `--modules` (repeatable):
+
+```bash
+gengo --modules /app/shared --modules /app/lib script.gengo
+```
+
+Embedded runtimes created through the Zig API are unrestricted unless `source_root` is set explicitly in the config.
+
 ## Values
 
 The value types fall into three groups. Scalar types hold a single value:
@@ -329,7 +377,7 @@ lo, hi := min_max(7, 3)  // destructure into two variables
 std.io.println(lo, hi)
 ```
 
-Functions may be exported from a source module with `pub`. Closures capture variables from the enclosing scope by reference.
+Functions, types, and variables may be exported from a source module with `pub`. Closures capture variables from the enclosing scope by reference.
 
 Named returns let a `defer` modify the function's return value before it exits:
 
