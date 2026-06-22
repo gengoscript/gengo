@@ -125,6 +125,23 @@ Rune literals use backticks:
 `🙂`
 ```
 
+Integer literals can be written in decimal, hexadecimal, binary, or octal.
+Digit separators (`_`) are allowed in all bases:
+
+```gengo
+x := 255
+x := 0xFF
+x := 0b1111_1111
+x := 0o377
+```
+
+Floating-point literals support scientific notation:
+
+```gengo
+f := 1.5e2    // 150.0
+f := 2.5e-1   // 0.25
+```
+
 ## Collections
 
 Arrays:
@@ -275,6 +292,21 @@ func add(a int, b int) int {
 }
 ```
 
+Trailing parameters may declare a default value with `=`. Callers can omit
+any suffix of defaulted parameters:
+
+```gengo
+func greet(name string, greeting string = "Hello") string {
+    return greeting + " " + name
+}
+
+greet("World")           // "Hello World"
+greet("World", "Hi")     // "Hi World"
+```
+
+Default values must be literals (number, string, bool, or `null`). All
+parameters after the first defaulted one must also have defaults.
+
 Multi-value return types are written in parentheses:
 
 ```gengo
@@ -385,9 +417,20 @@ Range types reject out-of-range values at construction time:
 
 ```gengo
 type Severity int range 0..5
+type Port     int range 1..65535
+type Byte     int range 0x00..0xFF
+type Flags    int range 0b0000..0b1111
 
 s := Severity(3)   // ok
 // Severity(9)     // runtime range error
+```
+
+Range bounds can be written in any numeric base. The type object exposes
+`.first` and `.last` as named values at the declared bounds:
+
+```gengo
+std.io.println(Port.first)   // Port(1)
+std.io.println(Port.last)    // Port(65535)
 ```
 
 Cycle types wrap through their declared domain during arithmetic. `cycle`
@@ -529,6 +572,36 @@ known list and nothing else:
 type Mode enum { dev, staging, production }
 
 env := Mode.staging
+```
+
+Members can be assigned explicit integer representation values. Unspecified
+members increment from the previous value (starting at 0):
+
+```gengo
+type Status enum { pending = 0, active = 1, done = 2 }
+type Color  enum { red = 10, green = 20, blue = 30 }
+type Flags  enum { none = 0, read = 1, write = 2, exec = 4 }
+```
+
+Every enum value has a `.name` property (the member name as a string) and,
+when the type has representation values, a `.int` property:
+
+```gengo
+s := Status.active
+std.io.println(s.name)   // "active"
+std.io.println(s.int)    // 1
+```
+
+The type object exposes `.first` and `.last` for the boundary members, and
+`.from_int` for reverse lookup. `from_int` returns `?T` — null if no member
+has that value:
+
+```gengo
+std.io.println(Status.first)          // pending
+std.io.println(Status.last)           // done
+
+s := Status.from_int(2)               // done
+std.io.println(Status.from_int(99))   // null
 ```
 
 Variants model tagged unions — a value that can be one of several shapes,
