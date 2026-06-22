@@ -384,7 +384,7 @@ fn printValueDepth(v: Value, depth: u32, ancestors: *[PrintMaxDepth]*const vmod.
                         write(")");
                     }
                 },
-                .named_type_fn => write("<func>"),
+                .named_type_fn, .enum_type_fn => write("<func>"),
                 .string_builder => write("<builder>"),
             }
 

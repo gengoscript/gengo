@@ -366,7 +366,10 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
         c.advance();
         try c.consume(.lbrace);
         var members_tmp: [MaxLocals][]const u8 = undefined;
+        var mints_tmp: [MaxLocals]i64 = undefined;
         var mcount: u8 = 0;
+        var has_explicit_ints = false;
+        var next_int: i64 = 0;
         if (!c.check(.rbrace)) {
             while (true) {
                 if (c.cur.typ != .ident) return c.err("expected identifier, found {s}", .{c.tokenName(c.cur.typ)});
@@ -376,8 +379,22 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
                     if (common.streq(m, mname)) { c.setErr("duplicate member '{s}' in enum", .{mname}); return error.DuplicateField; }
                 }
                 members_tmp[mcount] = try c.copyName(mname);
-                mcount += 1;
                 c.advance();
+                if (c.match(.eq)) {
+                    const v = try parseSignedNumber(c, );
+                    next_int = @intFromFloat(v);
+                    has_explicit_ints = true;
+                }
+                // Check for duplicate integer values
+                for (mints_tmp[0..mcount]) |prev| {
+                    if (prev == next_int) {
+                        c.setErr("duplicate representation value {d} in enum '{s}'", .{ next_int, name });
+                        return error.DuplicateField;
+                    }
+                }
+                mints_tmp[mcount] = next_int;
+                next_int += 1;
+                mcount += 1;
                 if (!c.match(.comma)) break;
                 if (c.check(.rbrace)) break;
             }
@@ -385,6 +402,11 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
         try c.consume(.rbrace);
         const members = heap.bump([]const u8, mcount) orelse return error.OutOfMemory;
         @memcpy(members[0..mcount], members_tmp[0..mcount]);
+        const member_ints: ?[]const i64 = if (has_explicit_ints) blk: {
+            const mi = heap.bump(i64, mcount) orelse return error.OutOfMemory;
+            @memcpy(mi[0..mcount], mints_tmp[0..mcount]);
+            break :blk mi[0..mcount];
+        } else null;
         if (!c.skipping_test_body) try c.registry.addNamedType(.{
             .name = name,
             .base = .enum_t,
@@ -395,7 +417,7 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
             .enum_members = members[0..mcount],
         });
         const et = heap.allocObject() orelse return error.OutOfMemory;
-        et.* = .{ .enum_type = .{ .name = try c.copyName(name), .qualified_name = qname, .members = members[0..mcount] } };
+        et.* = .{ .enum_type = .{ .name = try c.copyName(name), .qualified_name = qname, .members = members[0..mcount], .member_ints = member_ints } };
         try chunk.emitConst(.{ .object = et }, kw.line);
         if (c.inFunc()) {
             _ = try c.defineLocal(name, false);

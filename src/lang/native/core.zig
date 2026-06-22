@@ -340,7 +340,7 @@ pub fn nativeTypeNameValue(v: Value) !Value {
             .map, .map_managed, .map_hashed => .{ .string = staticSS("map") },
             .native_function => .{ .string = staticSS("native_func") },
             .host_module_function => .{ .string = staticSS("host_func") },
-            .function, .closure, .named_type_fn => .{ .string = staticSS("func") },
+            .function, .closure, .named_type_fn, .enum_type_fn => .{ .string = staticSS("func") },
             .struct_type => |st| .{ .string = try chunk.internStr(st.name) },
             .interface_type => |it| .{ .string = try chunk.internStr(it.name) },
             .named_type => |nt| .{ .string = try chunk.internStr(nt.name) },
@@ -547,6 +547,7 @@ fn deepEqualObject(a: *Object, b: *Object, visits: []DeepEqVisit, visit_len: *us
             return avc.typ == bvc.typ and avc.ordinal == bvc.ordinal and common.streq(avc.tag, bvc.tag);
         },
         .named_type_fn => |anf| { const bnf = b.named_type_fn; return anf.typ == bnf.typ and anf.kind == bnf.kind; },
+        .enum_type_fn => |aef| return aef.typ == b.enum_type_fn.typ,
         .string_builder => |asb| return common.streq(asb.buf[0..asb.len], b.string_builder.buf[0..b.string_builder.len]),
     }
 }
@@ -643,7 +644,7 @@ fn cloneObject(src: *Object, visits: []CloneVisit, visit_len: *usize) anyerror!V
         },
         .function, .closure, .native_function, .host_module_function, .struct_type, .interface_type,
         .named_type, .enum_type, .iterator, .variant_type, .variant_ctor,
-        .named_type_fn, .cell => return .{ .object = src },
+        .named_type_fn, .enum_type_fn, .cell => return .{ .object = src },
         .named_value => |nv| {
             const out_obj = try vmgc.allocTempRooted(.{ .array = &[_]Value{} });
             defer vms.popTempRoot();
