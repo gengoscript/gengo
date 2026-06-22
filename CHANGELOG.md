@@ -2,6 +2,114 @@
 
 This changelog tracks notable language/runtime changes by implementation date.
 
+## 2026-06-22 (v0.5.0-pre4)
+
+### Breaking — `%` Operator Removed
+
+The `%` operator is no longer valid. Use `rem` or `mod` instead:
+
+- `rem` — truncating remainder, sign follows the dividend (Ada/Pascal `rem`)
+- `mod` — mathematical modulo, result is always non-negative when divisor is positive (Ada `mod`)
+
+The compiler emits a helpful error pointing to the correct replacement.
+
+### Breaking — `std.io.sprintf` Moved to `std.fmt.format`
+
+`std.io.sprintf` has been removed. Use `std.fmt.format(fmt, ...args)` — same verbs, same semantics, correct namespace (it returns a string, not I/O).
+
+### Feature — `div` Keyword Operator
+
+Truncating integer division as a keyword operator, following Ada/Pascal convention:
+
+```gengo
+7 div 2    // 3
+-7 div 2   // -3
+```
+
+`/` continues to work for float division. `div`, `rem`, and `mod` all work on named numeric types.
+
+### Feature — `std.fmt.stringify`
+
+Renders any value to a string exactly as `std.io.println` would display it:
+
+```gengo
+fmt := std.fmt
+fmt.stringify(42)          // "42"
+fmt.stringify([1, 2, 3])   // "[1, 2, 3]"
+fmt.stringify(myStruct)    // same output as println(myStruct)
+```
+
+### Feature — Enum `.succ()`, `.pred()`, `.ordinal`
+
+- `.succ()` — next member, wrapping from last back to first
+- `.pred()` — previous member, wrapping from first back to last
+- `.ordinal` — 0-based declaration position, independent of representation value
+
+```gengo
+type Day enum { mon, tue, wed, thu, fri, sat, sun }
+Day.fri.succ()    // sat
+Day.sun.succ()    // mon
+Day.wed.ordinal   // 2
+```
+
+### Feature — Enum Representation Clauses
+
+Enum members can be assigned explicit integer representation values. Gaps are allowed; unspecified members increment from the previous value:
+
+```gengo
+type Status enum { pending = 0, active = 1, done = 2 }
+type Flags  enum { none = 0, read = 1, write = 2, exec = 4 }
+```
+
+Values are accessible via `.int` and reverse-looked up via `.from_int(?T)`.
+
+### Feature — `case .arm as binding` Syntax
+
+Variant pattern matching now uses `as` instead of parentheses for the binding:
+
+```gengo
+switch ev {
+    case .submit as job { ... }
+    case .finish as id  { ... }
+}
+```
+
+### Feature — Default Parameter Values
+
+Trailing parameters may declare defaults with `=`. Callers can omit any suffix of defaulted parameters:
+
+```gengo
+func greet(name string, greeting string = "Hello") string {
+    return greeting + " " + name
+}
+greet("World")          // "Hello World"
+greet("World", "Hi")    // "Hi World"
+```
+
+### Feature — Numeric Literal Bases
+
+Integer literals now support hexadecimal, binary, and octal bases with optional digit separators:
+
+```gengo
+0xFF   0b1111_1111   0o377
+```
+
+### Feature — `std.JSONValue` / `json.parse_value`
+
+`std.json.parse_value(src)` parses JSON into a typed variant for exhaustive pattern matching. See v0.5.0-pre3 entry for full details.
+
+### Fix — GC Stress Crashes in Native Modules
+
+Several native modules panicked under `-Dgc_stress=true`. All resolved.
+
+### Fix — Zero-Initialise Struct and Enum `var` Declarations
+
+`var x MyStruct` and `var x MyEnum` now produce valid zero values instead of crashing.
+
+### Fix — Homogeneous Array Literals
+
+Mixed-type array literals are now a compile error. `[1, 2.0]` is rejected; write `[1.0, 2.0]` instead.
+
 ## 2026-06-21 (v0.5.0-pre3)
 
 ### Breaking — Build Presets Renamed
