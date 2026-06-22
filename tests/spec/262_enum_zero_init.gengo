@@ -1,0 +1,4 @@
+std := import("std")
+type Status enum { pending, active, done }
+var s Status
+std.io.println(s)

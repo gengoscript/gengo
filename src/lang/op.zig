@@ -95,6 +95,7 @@ pub const Op = enum(u8) {
     build_map,
     build_tuple,
     build_struct_instance,
+    zero_struct,
     tuple_check_arity,
     tuple_get,
     tuple_get_keep,

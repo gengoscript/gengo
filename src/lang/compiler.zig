@@ -605,6 +605,7 @@ pub const Compiler = struct {
     // ── Top-level dispatch ───────────────────────────────────────────────────────
 
     pub fn decl(self: *Compiler) anyerror!void {
+        self.clearNamespaceProvenance();
         if (self.match(.kw_pub)) {
             if (self.inFunc()) { self.setErr("invalid 'pub' target", .{}); return error.InvalidPubTarget; }
             try self.pubDecl();

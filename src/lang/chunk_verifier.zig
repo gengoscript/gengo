@@ -90,6 +90,7 @@ fn stackEffect(op: Op, code: []const u8, ip: usize) struct { pop: u8, push: u8 }
             const field_count = code[ip + 1];
             break :blk .{ .pop = 1 + field_count * 2, .push = 1 };
         },
+        .zero_struct => .{ .pop = 1, .push = 1 },
         .get_slice => blk: {
             const extra: u8 = @popCount(code[ip + 1]);
             break :blk .{ .pop = 1 + extra, .push = 1 };
