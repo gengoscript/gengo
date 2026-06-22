@@ -1,0 +1,21 @@
+std := import("std")
+
+// rem: sign follows dividend (truncating remainder)
+std.io.println(10 rem 3)
+std.io.println(-10 rem 3)
+std.io.println(10 rem -3)
+std.io.println(-10 rem -3)
+
+// mod: sign follows divisor (mathematical modulo)
+std.io.println(10 mod 3)
+std.io.println(-10 mod 3)
+std.io.println(10 mod -3)
+std.io.println(-10 mod -3)
+
+// named int type preserves type
+type Offset int
+a := Offset(10)
+b := Offset(3)
+std.io.println(a rem b)
+std.io.println(a mod b)
+std.io.println(std.core.type_of(a rem b))

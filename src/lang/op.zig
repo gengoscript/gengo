@@ -68,6 +68,8 @@ pub const Op = enum(u8) {
     // Emitted when get_local immediately precedes get_field.
     get_local_get_field,
     div,
+    int_div,
+    rem,
     mod,
     pow,
     bit_and,

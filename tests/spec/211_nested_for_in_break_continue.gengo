@@ -14,7 +14,7 @@ func inner_break() {
 func inner_continue() {
     for a in [1, 2, 3] {
         for b in [10, 20, 30, 40] {
-            if b % 20 == 0 { continue }
+            if b rem 20 == 0 { continue }
             std.io.print(a + b, " ")
         }
         std.io.print("| ")
@@ -37,7 +37,7 @@ func inner_continue_sum() int {
     s := 0
     for a in [1, 2, 3] {
         for b in [10, 20, 30, 40] {
-            if b % 20 == 0 { continue }
+            if b rem 20 == 0 { continue }
             s += a + b
         }
     }

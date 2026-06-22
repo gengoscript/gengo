@@ -16,7 +16,7 @@ assert(std.core.len(arr) == 104)
 for i := 0; i < 104; i++ {
     ch := arr[i]
     letters := "abcdefghijklmnopqrstuvwxyz"
-    expected := letters[i % 26 : i % 26 + 1]
+    expected := letters[i rem 26 : i rem 26 + 1]
     assert(ch == expected)
 }
 

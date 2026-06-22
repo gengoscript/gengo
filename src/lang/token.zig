@@ -1,5 +1,6 @@
 pub const TT = enum {
     eof,
+
     err_invalid_char,
     err_unterminated_string,
     err_string_pool_exhausted,
@@ -31,6 +32,9 @@ pub const TT = enum {
     kw_break,
     kw_continue,
     kw_defer,
+    kw_div,
+    kw_rem,
+    kw_mod,
     kw_assert,
     kw_trap,
     kw_variant,
@@ -91,6 +95,12 @@ pub const TT = enum {
     gt_gt_eq,
     plus_plus,
     minus_minus,
+
+    pub fn isFieldName(self: TT) bool {
+        return self == .ident or
+            (@intFromEnum(self) >= @intFromEnum(TT.kw_true) and
+             @intFromEnum(self) <= @intFromEnum(TT.kw_as));
+    }
 };
 
 pub const Token = struct { typ: TT, src: []const u8, line: u32, col: u32 };

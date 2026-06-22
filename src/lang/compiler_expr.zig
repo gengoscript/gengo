@@ -148,7 +148,7 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
             c.setErr("'.type' can only be compared with '==' or '!=', or used as a switch scrutinee", .{});
             return error.UnexpectedToken;
         }
-        if (c.cur.typ != .ident) { c.setErr("expected property name, found {s}", .{c.tokenName(c.cur.typ)}); return error.ExpectedPropertyName; }
+        if (!c.cur.typ.isFieldName()) { c.setErr("expected property name, found {s}", .{c.tokenName(c.cur.typ)}); return error.ExpectedPropertyName; }
         const prop = c.cur;
         c.advance();
         if (c.match(.lparen)) {
@@ -263,6 +263,10 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
         c.setErr("'||' is no longer supported; use 'or'", .{});
         return error.ExpectedExpression;
     }
+    if (tt == .percent) {
+        c.setErr("'%' is no longer supported; use 'rem' (truncating remainder) or 'mod' (mathematical modulo)", .{});
+        return error.ExpectedExpression;
+    }
 
     const p = tokPrec(tt);
     if (tt == .kw_and) {
@@ -296,7 +300,9 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
         .minus => try chunk.emitBinOpFused(.sub, line),
         .star  => try chunk.emitOp(.mul, line),
         .slash => try chunk.emitOp(.div, line),
-        .percent => try chunk.emitOp(.mod, line),
+        .kw_div => try chunk.emitOp(.int_div, line),
+        .kw_rem => try chunk.emitOp(.rem, line),
+        .kw_mod => try chunk.emitOp(.mod, line),
         .amp   => try chunk.emitOp(.bit_and, line),
         .pipe  => try chunk.emitOp(.bit_or, line),
         .caret => try chunk.emitOp(.bit_xor, line),
@@ -552,7 +558,7 @@ fn tokPrec(tt: TT) Prec {
         .lt_lt, .gt_gt => .shift,
         .lt, .lt_eq, .gt, .gt_eq => .cmp,
         .plus, .minus => .term,
-        .star, .slash, .percent => .factor,
+        .star, .slash, .kw_div, .kw_rem, .kw_mod, .percent => .factor,
         .star_star => .power,
         .lbracket, .lparen, .dot => .call,
         else => .none,

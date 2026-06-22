@@ -1,7 +1,7 @@
 std := import("std")
 
 func divmod(n int, d int) (float, int) {
-  return n / d, n % d
+  return n / d, n rem d
 }
 
 q, r := divmod(15, 5)

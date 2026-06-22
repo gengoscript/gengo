@@ -3,7 +3,7 @@ std := import("std")
 func skip_even_values_map() {
     m := {"a": 1, "b": 2, "c": 3, "d": 4, "e": 5}
     for k, v in m {
-        if v % 2 == 0 { continue }
+        if v rem 2 == 0 { continue }
         std.io.print(k, ":", v, " ")
     }
     std.io.println()
@@ -39,7 +39,7 @@ func kv_body_local_continue() int {
 func kv_map_continue_all_even() {
     m := {"p": 2, "q": 4, "r": 6}
     for k, v in m {
-        if v % 2 != 0 { continue }
+        if v rem 2 != 0 { continue }
         std.io.print(k, ":", v, " ")
     }
     std.io.println()

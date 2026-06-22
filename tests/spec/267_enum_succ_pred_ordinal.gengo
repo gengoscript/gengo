@@ -1,0 +1,27 @@
+std := import("std")
+
+type Day enum { Mon, Tue, Wed, Thu, Fri, Sat, Sun }
+type Color enum { red = 10, green = 20, blue = 30 }
+
+// succ: basic and wrap-around
+std.io.println(Day.succ(Day.Mon).name)
+std.io.println(Day.succ(Day.Fri).name)
+std.io.println(Day.succ(Day.Sun).name)
+
+// pred: basic and wrap-around
+std.io.println(Day.pred(Day.Wed).name)
+std.io.println(Day.pred(Day.Mon).name)
+
+// succ/pred with representation values
+std.io.println(Color.succ(Color.red).name)
+std.io.println(Color.succ(Color.blue).name)
+std.io.println(Color.succ(Color.red).int)
+
+// ordinal: 0-based position, independent of representation value
+std.io.println(Color.red.ordinal)
+std.io.println(Color.green.ordinal)
+std.io.println(Color.blue.ordinal)
+
+// ordinal vs int differ for explicit representation
+std.io.println(Color.green.int)
+std.io.println(Color.green.ordinal)

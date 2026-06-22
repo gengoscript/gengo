@@ -115,7 +115,8 @@ pub const EnumTypeObj = struct {
     parent: ?*Object = null,           // lazily resolved parent pointer
 };
 pub const EnumValueObj = struct { typ: *Object, name: []const u8, ordinal: i64 };
-pub const EnumTypeFnObj = struct { typ: *Object }; // callable: from_int(n) -> ?EnumValue
+pub const EnumTypeFnKind = enum { from_int, succ, pred };
+pub const EnumTypeFnObj = struct { typ: *Object, kind: EnumTypeFnKind = .from_int };
 pub const StructInstanceObj = struct { typ: *Object, fields: []MapEntry };
 pub const CellObj = struct { value: Value };
 pub const ClosureObj = struct { func: *Object, upvalues: []*Object };
