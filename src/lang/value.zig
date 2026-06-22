@@ -13,6 +13,10 @@ pub const FuncObj = struct {
     has_typed_returns: bool,
     name: []const u8 = "",
     named_return_count: u8 = 0,
+    // Trailing default values for the last `default_count` parameters.
+    // defaults[0] corresponds to param[arity - default_count].
+    defaults: []const Value = &[_]Value{},
+    default_count: u8 = 0,
 };
 pub const MapEntry = struct { key: Value, value: Value };
 pub const MapHashedObj = struct { entries: []MapEntry, len: usize, buckets: []i32 };

@@ -1,0 +1,29 @@
+std := import("std")
+
+func scale(a float, factor float = 2.0) float {
+    return a * factor
+}
+
+func greet(name string, greeting string = "Hello") string {
+    return greeting + " " + name
+}
+
+func make_range(start int = 0, end int = 10) int {
+    return end - start
+}
+
+func triple_default(a int = 1, b int = 2, c int = 3) int {
+    return a + b + c
+}
+
+std.io.println(scale(5.0))
+std.io.println(scale(5.0, 3.0))
+std.io.println(greet("World"))
+std.io.println(greet("World", "Hi"))
+std.io.println(make_range())
+std.io.println(make_range(5))
+std.io.println(make_range(3, 7))
+std.io.println(triple_default())
+std.io.println(triple_default(10))
+std.io.println(triple_default(10, 20))
+std.io.println(triple_default(10, 20, 30))
