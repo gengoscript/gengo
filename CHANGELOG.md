@@ -625,9 +625,11 @@ Errors: `InvalidRegexp` on a malformed pattern.
 
 Supported syntax: `.` `*` `+` `?` `^` `$` `|` `()` `[...]` `[^...]` character classes and ranges, `\d` `\D` `\w` `\W` `\s` `\S` shorthands.
 
-### Standard Library — `std.io.sprintf`
+### Standard Library — `std.fmt`
 
-`std.io.sprintf(fmt, ...args)` — like `std.io.printf` but returns the formatted string instead of printing it.
+`std.fmt.format(fmt, ...args)` — returns the formatted string (formerly `std.io.sprintf`).
+
+`std.fmt.stringify(v)` — renders any value to a string, exactly as `std.io.println` would display it.
 
 Additional verb: `%x` / `%X` — hexadecimal integer.
 

@@ -27,10 +27,7 @@ The entries below describe the public library surface. This page is intentionall
 ### `std.io.printf(fmt, ...args)`
 - `fmt` is a string with Go-style format verbs.
 - Errors: `ArityMismatch` when placeholder count and args differ; `TypeError` when arg type does not match verb.
-
-### `std.io.sprintf(fmt, ...args)`
-- Like `std.io.printf` but returns the formatted string instead of printing it.
-- Same verbs and error semantics as `std.io.printf`.
+- To get the formatted string instead of printing it, use `std.fmt.format`.
 
 ### `std.io.eprint(...args)`
 - Like `std.io.print` but writes to stderr.
@@ -84,6 +81,17 @@ The entries below describe the public library surface. This page is intentionall
 | `#` | Alternate form: `0x` / `0X` / `0` / `0b` prefix for `%x`/`%X`/`%o`/`%b` |
 
 **Width and precision**: `%8d` (minimum width 8), `%.2f` (2 decimal places), `%8.3f` (both).
+
+## std.fmt
+
+### `std.fmt.format(fmt, ...args)`
+- Returns the formatted string. `fmt` uses the same Go-style verbs as `std.io.printf`.
+- Errors: `ArityMismatch` when placeholder count and args differ; `TypeError` when arg type does not match verb.
+
+### `std.fmt.stringify(v)`
+- Returns `v` rendered as a string, exactly as `std.io.println` would display it.
+- Works for any value: scalars, arrays, maps, structs, variants, named types.
+- Returns `""` for a `null` argument.
 
 ## std.core
 
@@ -392,7 +400,8 @@ The entries below describe the public library surface. This page is intentionall
 - Euclidean distance `sqrt(x^2 + y^2)`
 
 ### `std.math.mod(x, y)`
-- Floating-point modulo; errors: `DivisionByZero` if `y == 0`
+- Floating-point modulo (IEEE 754 `fmod`); errors: `DivisionByZero` if `y == 0`
+- For integer and named-type modulo, use the `mod` keyword operator instead.
 
 ### `std.math.acos(x)` / `std.math.asin(x)` / `std.math.atan(x)` / `std.math.atan2(y, x)`
 - Inverse trigonometric functions; errors: `RangeError` on domain error

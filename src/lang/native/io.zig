@@ -802,6 +802,20 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             _ = try vms.vmPop();
             try vms.vmPush(result);
         },
+        .fmt_stringify => {
+            if (argc != 1) return error.ArityMismatch;
+            const v = vms.vmState().stack[vms.vmState().stack_top - 1];
+            const n = try sprintValue(null, v);
+            const obj = try vmgc.allocTempRooted(.{ .dyn_string = &[_]u8{} });
+            defer vms.popTempRoot();
+            if (n > 0) {
+                const buf = try vmgc.vmAllocManagedBytes(n);
+                _ = try sprintValue(buf, v);
+                obj.* = .{ .dyn_string = buf[0..n] };
+            }
+            vms.vmPopArgs(argc);
+            try vms.vmPush(.{ .object = obj });
+        },
         else => {},
     }
 }

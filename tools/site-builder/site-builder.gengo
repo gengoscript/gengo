@@ -13,6 +13,7 @@ fs := import("cap:fs")
 core := std.core
 str  := std.string
 io   := std.io
+fmt  := std.fmt
 
 // ── Configuration ────────────────────────────────────────────────────────────
 
@@ -651,7 +652,7 @@ func main() {
     // Counts actual writes, so the line is honest even after a mid-build panic.
     var written := 0
     defer func() {
-        io.println(io.sprintf("Built %d pages to %s", written, outDir))
+        io.println(fmt.format("Built %d pages to %s", written, outDir))
     }()
 
     // Discover sources: every .md except index.md, which becomes the intro.

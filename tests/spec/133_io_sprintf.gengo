@@ -1,11 +1,11 @@
 std := import("std")
 
-// sprintf basic verbs
-std.io.println(std.io.sprintf("hello %s", "world"))
-std.io.println(std.io.sprintf("int %d", -42))
-std.io.println(std.io.sprintf("hex %x %X", 255, 255))
-std.io.println(std.io.sprintf("float %f", 3.14))
-std.io.println(std.io.sprintf("bool %t %t", true, false))
-std.io.println(std.io.sprintf("value %v %v %v %v", 42, "hi", true, null))
-std.io.println(std.io.sprintf("%%"))
-std.io.println(std.io.sprintf("multi %s %d %x", "test", 100, 171))
+// std.fmt.format basic verbs
+std.io.println(std.fmt.format("hello %s", "world"))
+std.io.println(std.fmt.format("int %d", -42))
+std.io.println(std.fmt.format("hex %x %X", 255, 255))
+std.io.println(std.fmt.format("float %f", 3.14))
+std.io.println(std.fmt.format("bool %t %t", true, false))
+std.io.println(std.fmt.format("value %v %v %v %v", 42, "hi", true, null))
+std.io.println(std.fmt.format("%%"))
+std.io.println(std.fmt.format("multi %s %d %x", "test", 100, 171))
