@@ -190,6 +190,8 @@ pub const NativeFnId = enum(u8) {
     io_eprintln = 194,
     io_read = 195,
     io_readline = 196,
+
+    fmt_stringify = 198,
 };
 
 pub const MaxNativeArgs = 255;

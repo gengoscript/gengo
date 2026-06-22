@@ -1,0 +1,16 @@
+std := import("std")
+
+// std.fmt.format: same as former std.io.sprintf
+s := std.fmt.format("%s has %d items", "list", 5)
+std.io.println(s)
+
+// std.fmt.stringify: render any value to string without a format template
+std.io.println(std.fmt.stringify(42))
+std.io.println(std.fmt.stringify(3.14))
+std.io.println(std.fmt.stringify(true))
+std.io.println(std.fmt.stringify(null))
+std.io.println(std.fmt.stringify("hello"))
+std.io.println(std.fmt.stringify([1, 2, 3]))
+
+// result is a plain string — can concatenate
+std.io.println("got: " + std.fmt.stringify(99))

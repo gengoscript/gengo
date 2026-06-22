@@ -21,6 +21,7 @@ fn findEntry(namespace: []const Entry, field: []const u8) ?EntryKind {
 
 pub const top_level_entries = [_]Entry{
     .{ .name = "io", .kind = .namespace },
+    .{ .name = "fmt", .kind = .namespace },
     .{ .name = "core", .kind = .namespace },
     .{ .name = "conv", .kind = .namespace },
     .{ .name = "math", .kind = .namespace },
@@ -39,8 +40,12 @@ pub const top_level_entries = [_]Entry{
     .{ .name = "JSONValue", .kind = .value },
 };
 
+pub const fmt_entries = [_]Entry{
+    .{ .name = "format",    .kind = .function },
+    .{ .name = "stringify", .kind = .function },
+};
+
 pub const io_entries = [_]Entry{
-    .{ .name = "sprintf",  .kind = .function },
     .{ .name = "println",  .kind = .function },
     .{ .name = "printf",   .kind = .function },
     .{ .name = "print",    .kind = .function },
@@ -211,7 +216,8 @@ pub const regexp_entries = [_]Entry{
 };
 
 pub const namespaces = [_]Namespace{
-    .{ .name = "io", .entries = &io_entries },
+    .{ .name = "io",  .entries = &io_entries },
+    .{ .name = "fmt", .entries = &fmt_entries },
     .{ .name = "core", .entries = &core_entries },
     .{ .name = "conv", .entries = &conv_entries },
     .{ .name = "math", .entries = &math_entries },

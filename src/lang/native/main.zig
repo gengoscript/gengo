@@ -97,8 +97,15 @@ fn makeNamespace(display_name: []const u8, qualified_name: []const u8, entries: 
 pub fn buildStdModule() !*Object {
     if (vms.vmState().std_module) |m| return m;
 
+    const fmt_entries = [_]NamespaceEntry{
+        .{ .name = "format",    .value = try makeNative(.io_sprintf,     255) },
+        .{ .name = "stringify", .value = try makeNative(.fmt_stringify,  1) },
+    };
+    const fmt_obj = try makeNamespace("fmt", "@module_type:std.fmt", &fmt_entries);
+    try vms.pushTempRoot(.{ .object = fmt_obj });
+    defer vms.popTempRoot();
+
     const io_entries = [_]NamespaceEntry{
-        .{ .name = "sprintf",  .value = try makeNative(.io_sprintf,  255) },
         .{ .name = "println",  .value = try makeNative(.io_println,  255) },
         .{ .name = "printf",   .value = try makeNative(.io_printf,   255) },
         .{ .name = "print",    .value = try makeNative(.io_print,    255) },
@@ -352,7 +359,8 @@ pub fn buildStdModule() !*Object {
     defer vms.popTempRoot();
 
     const std_entries = [_]NamespaceEntry{
-        .{ .name = "io", .value = .{ .object = io_obj } },
+        .{ .name = "io",  .value = .{ .object = io_obj } },
+        .{ .name = "fmt", .value = .{ .object = fmt_obj } },
         .{ .name = "core", .value = .{ .object = core_obj } },
         .{ .name = "conv", .value = .{ .object = conv_obj } },
         .{ .name = "math", .value = .{ .object = math_obj } },
@@ -748,7 +756,8 @@ pub fn callNative(nf: NativeFuncObj, argc: u8) !void {
     vmperf.countHostcall(nf.id);
     switch (@as(NativeFnId, @enumFromInt(nf.id))) {
         .io_println, .io_print, .io_printf, .io_sprintf,
-        .io_eprint, .io_eprintf, .io_eprintln, .io_read, .io_readline => return io_mod.dispatch(nf, argc),
+        .io_eprint, .io_eprintf, .io_eprintln, .io_read, .io_readline,
+        .fmt_stringify => return io_mod.dispatch(nf, argc),
         .core_len, .core_append, .core_error, .core_is_error, .core_gc, .core_gc_live_objects,
         .core_gc_stats, .core_bytelen, .core_gc_stats_ext, .core_delete, .core_has, .core_keys,
         .core_values, .core_contains, .core_remove, .core_type_of, .core_is_int, .core_is_float,

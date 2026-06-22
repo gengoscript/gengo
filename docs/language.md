@@ -90,6 +90,16 @@ How each form works:
 Assignment uses `=`. Compound assignment forms (`+=`, `-=`, `*=`, `/=`) are
 supported for numeric types.
 
+Integer division and remainder use keyword operators, following Ada/Pascal convention:
+
+| Operator | Meaning | Example |
+|----------|---------|---------|
+| `div` | Truncating integer division (rounds toward zero) | `7 div 2` → `3` |
+| `rem` | Remainder, sign follows the dividend | `7 rem 3` → `1`, `-7 rem 3` → `-1` |
+| `mod` | Mathematical modulo, result always non-negative when divisor is positive | `7 mod 3` → `1`, `-7 mod 3` → `2` |
+
+`/` divides floats (or integer-to-float when both sides are the same named float type). For integer truncating division use `div`. All three keyword operators work on named numeric types.
+
 Identifier rules follow Go: the first character must be a Unicode letter or
 underscore; subsequent characters may be Unicode letters, decimal digits, or
 underscores. Identifiers are not normalized — two identifiers that differ at
@@ -482,7 +492,7 @@ Predicate types attach an arbitrary boolean check to a named scalar type. The pr
 ```gengo
 type Port      int   predicate func(x) { return x >= 1 and x <= 65535 }
 type Tag       string predicate func(s) { return std.core.len(s) > 0 }
-type EventCode int   predicate func(x) { return x % 2 == 0 }
+type EventCode int   predicate func(x) { return x rem 2 == 0 }
 
 p := Port(8080)    // ok
 // Port(0)         // runtime predicate violation
@@ -602,6 +612,21 @@ std.io.println(Status.last)           // done
 
 s := Status.from_int(2)               // done
 std.io.println(Status.from_int(99))   // null
+```
+
+Enum values also expose `.succ()`, `.pred()`, and `.ordinal`:
+
+- `.succ()` — the next member, wrapping from the last back to the first.
+- `.pred()` — the previous member, wrapping from the first back to the last.
+- `.ordinal` — the 0-based position of this member in declaration order, independent of any representation value.
+
+```gengo
+type Day enum { mon, tue, wed, thu, fri, sat, sun }
+
+std.io.println(Day.fri.succ())    // sat
+std.io.println(Day.sun.succ())    // mon  (wraps)
+std.io.println(Day.mon.pred())    // sun  (wraps)
+std.io.println(Day.wed.ordinal)   // 2
 ```
 
 Variants model tagged unions — a value that can be one of several shapes,

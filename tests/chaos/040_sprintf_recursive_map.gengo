@@ -3,4 +3,4 @@ std := import("std")
 m := {}
 m["self"] = m
 
-std.io.println(std.io.sprintf("%v", m))
+std.io.println(std.fmt.format("%v", m))
