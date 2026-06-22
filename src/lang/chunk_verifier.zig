@@ -43,7 +43,7 @@ fn stackEffect(op: Op, code: []const u8, ip: usize) struct { pop: u8, push: u8 }
         .set_field, .jif_pop, .op_assert, .repl_print,
         .set_named_predicate => .{ .pop = 1, .push = 0 },
 
-        .add, .sub, .mul, .div, .mod, .pow,
+        .add, .sub, .mul, .div, .int_div, .rem, .mod, .pow,
         .bit_and, .bit_or, .bit_xor, .shl, .shr,
         .eq, .gt, .lt => .{ .pop = 2, .push = 1 },
 

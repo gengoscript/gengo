@@ -703,7 +703,7 @@ test "compiler: named return values" {
     var rt = try setup();
     defer rt.deinit();
     try compile(&rt,
-        \\func div(a int, b int) (result int, err error) {
+        \\func divide(a int, b int) (result int, err error) {
         \\    if b == 0 { return 0, "division by zero" }
         \\    result = a / b
         \\    return

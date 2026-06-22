@@ -142,7 +142,8 @@ fn foldBinOp(op: Op, lhs: Value, rhs: Value) ?Value {
             .mul => blk: { const r = @mulWithOverflow(lhs.int, rhs.int); break :blk if (r[1] != 0) null else Value{ .int = r[0] }; },
             // int / int produces float (true division), matching the runtime .div opcode.
             .div => if (rhs.int == 0) null else Value{ .float = @as(f64, @floatFromInt(lhs.int)) / @as(f64, @floatFromInt(rhs.int)) },
-            .mod => if (rhs.int == 0 or (lhs.int == std.math.minInt(i64) and rhs.int == -1)) null else Value{ .int = @rem(lhs.int, rhs.int) },
+            .rem => if (rhs.int == 0 or (lhs.int == std.math.minInt(i64) and rhs.int == -1)) null else Value{ .int = @rem(lhs.int, rhs.int) },
+            .mod => if (rhs.int == 0 or (lhs.int == std.math.minInt(i64) and rhs.int == -1)) null else Value{ .int = @mod(lhs.int, rhs.int) },
             else => null,
         };
     }
@@ -152,7 +153,8 @@ fn foldBinOp(op: Op, lhs: Value, rhs: Value) ?Value {
             .sub => Value{ .float = lhs.float - rhs.float },
             .mul => Value{ .float = lhs.float * rhs.float },
             .div => if (rhs.float == 0.0) null else Value{ .float = lhs.float / rhs.float },
-            .mod => if (rhs.float == 0.0) null else Value{ .float = @rem(lhs.float, rhs.float) },
+            .rem => if (rhs.float == 0.0) null else Value{ .float = common.fmod(lhs.float, rhs.float) },
+            .mod => if (rhs.float == 0.0) null else Value{ .float = lhs.float - @floor(lhs.float / rhs.float) * rhs.float },
             else => null,
         };
     }
@@ -160,9 +162,9 @@ fn foldBinOp(op: Op, lhs: Value, rhs: Value) ?Value {
 }
 
 pub fn emitOp(op: Op, line: u32) !void {
-    // Constant folding for ops that bypass emitBinOpFused (mul, div, mod).
+    // Constant folding for ops that bypass emitBinOpFused (mul, div, int_div, rem, mod).
     switch (op) {
-        .mul, .div, .mod => {
+        .mul, .div, .int_div, .rem, .mod => {
             if (g_state.last_const_code_pos) |rhs_pos| {
                 if (rhs_pos + 3 == g_state.code_len) {
                     if (g_state.prev_const_code_pos) |lhs_pos| {

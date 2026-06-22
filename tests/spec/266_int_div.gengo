@@ -1,0 +1,19 @@
+std := import("std")
+
+// basic integer division
+std.io.println(10 div 3)
+std.io.println(-10 div 3)
+std.io.println(10 div -3)
+std.io.println(9 div 3)
+
+// float floor division
+std.io.println(7.0 div 2.0)
+std.io.println(-7.0 div 2.0)
+
+// named int type preserves type
+type Index int
+a := Index(10)
+b := Index(3)
+r := a div b
+std.io.println(r)
+std.io.println(std.core.type_of(r))

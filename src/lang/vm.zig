@@ -534,7 +534,13 @@ fn enumTypeFieldValue(obj: *Object, name: []const u8) !Value {
     if (common.streq(name, "values")) return try enumTypeValuesValue(obj, et);
     if (common.streq(name, "from_int")) {
         const fn_obj = try vmAllocObject();
-        fn_obj.* = .{ .enum_type_fn = .{ .typ = obj } };
+        fn_obj.* = .{ .enum_type_fn = .{ .typ = obj, .kind = .from_int } };
+        return .{ .object = fn_obj };
+    }
+    if (common.streq(name, "succ") or common.streq(name, "pred")) {
+        const fn_obj = try vmAllocObject();
+        const kind: vmod.EnumTypeFnKind = if (common.streq(name, "succ")) .succ else .pred;
+        fn_obj.* = .{ .enum_type_fn = .{ .typ = obj, .kind = kind } };
         return .{ .object = fn_obj };
     }
     return try enumTypeAllocValue(obj, name);
@@ -966,19 +972,41 @@ fn performCall(argc: u8) !void {
         .enum_type_fn => |ef| {
             if (argc != 1) return error.ArityMismatch;
             const arg = vmState().stack[vmState().stack_top - 1];
-            if (arg != .int) return error.TypeError;
-            const n = arg.int;
             const et = &ef.typ.enum_type;
-            for (et.members, 0..) |m, mi| {
-                const ordinal = if (et.member_ints) |ints| ints[mi] else @as(i64, @intCast(mi));
-                if (ordinal == n) {
-                    const ev = try vmAllocObject();
-                    ev.* = .{ .enum_value = .{ .typ = ef.typ, .name = m, .ordinal = ordinal } };
-                    try pop2push1(.{ .object = ev });
-                    return;
-                }
+            switch (ef.kind) {
+                .from_int => {
+                    if (arg != .int) return error.TypeError;
+                    const n = arg.int;
+                    for (et.members, 0..) |m, mi| {
+                        const ordinal = if (et.member_ints) |ints| ints[mi] else @as(i64, @intCast(mi));
+                        if (ordinal == n) {
+                            const ev = try vmAllocObject();
+                            ev.* = .{ .enum_value = .{ .typ = ef.typ, .name = m, .ordinal = ordinal } };
+                            try pop2push1(.{ .object = ev });
+                            return;
+                        }
+                    }
+                    try pop2push1(.null);
+                },
+                .succ, .pred => {
+                    if (arg != .object or arg.object.* != .enum_value) return error.TypeError;
+                    const ev = arg.object.enum_value;
+                    var cur_idx: usize = 0;
+                    var found: bool = false;
+                    for (et.members, 0..) |m, mi| {
+                        if (common.streq(m, ev.name)) { cur_idx = mi; found = true; break; }
+                    }
+                    if (!found) return error.UnknownStructField;
+                    const next_idx: usize = if (ef.kind == .succ)
+                        (cur_idx + 1) % et.members.len
+                    else
+                        if (cur_idx == 0) et.members.len - 1 else cur_idx - 1;
+                    const next_ordinal = if (et.member_ints) |ints| ints[next_idx] else @as(i64, @intCast(next_idx));
+                    const new_ev = try vmAllocObject();
+                    new_ev.* = .{ .enum_value = .{ .typ = ef.typ, .name = et.members[next_idx], .ordinal = next_ordinal } };
+                    try pop2push1(.{ .object = new_ev });
+                },
             }
-            try pop2push1(.null);
         },
         else => return error.NotAFunction,
     }
@@ -1268,6 +1296,17 @@ fn pushFieldFromObject(obj: *Object, name_idx: usize, ic_base: usize, ic_type_id
                 try vmPush(.{ .string = try chunk.internStr(ev.name) });
             } else if (common.streq(name, "int")) {
                 try vmPush(.{ .int = ev.ordinal });
+            } else if (common.streq(name, "ordinal")) {
+                const et = &ev.typ.enum_type;
+                var found_ord: bool = false;
+                for (et.members, 0..) |m, mi| {
+                    if (common.streq(m, ev.name)) {
+                        try vmPush(.{ .int = @as(i64, @intCast(mi)) });
+                        found_ord = true;
+                        break;
+                    }
+                }
+                if (!found_ord) return error.UnknownStructField;
             } else return error.UnknownStructField;
         },
         .named_type => try vmPush(try namedTypeFieldValue(obj, name)),
@@ -1957,7 +1996,27 @@ fn runInner() !void {
                     try pushNumericResultWithCarrier(a, b, ctx.an / ctx.bn, ctx.tag, "/");
                 }
             },
-            .mod => {
+            .int_div => {
+                const b = try vmPop();
+                const a = try vmPop();
+                if (a == .int and b == .int) {
+                    if (b.int == 0) { vms.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
+                    const result: i64 = if (a.int == std.math.minInt(i64) and b.int == -1) std.math.minInt(i64) else @divTrunc(a.int, b.int);
+                    try vmPush(.{ .int = result }); continue;
+                }
+                if (a == .float and b == .float) {
+                    if (b.float == 0.0) { vms.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
+                    try vmPush(.{ .float = @floor(a.float / b.float) }); continue;
+                }
+                const ctx = try numericBinaryOp(a, b, "div");
+                if (ctx.bn == 0.0) { vms.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
+                const an_int: i64 = @intFromFloat(ctx.an);
+                const bn_int: i64 = @intFromFloat(ctx.bn);
+                if (bn_int == 0) { vms.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
+                const result: i64 = if (an_int == std.math.minInt(i64) and bn_int == -1) std.math.minInt(i64) else @divTrunc(an_int, bn_int);
+                try pushNumericResultWithCarrier(a, b, @floatFromInt(result), ctx.tag, "div");
+            },
+            .rem => {
                 const b = try vmPop();
                 const a = try vmPop();
                 if (a == .int and b == .int) {
@@ -1969,9 +2028,27 @@ fn runInner() !void {
                     if (b.float == 0.0) { vms.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
                     try vmPush(.{ .float = common.fmod(a.float, b.float) }); continue;
                 }
-                const ctx = try numericBinaryOp(a, b, "%");
+                const ctx = try numericBinaryOp(a, b, "rem");
                 if (ctx.bn == 0.0) { vms.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
-                try pushNumericResultWithCarrier(a, b, common.fmod(ctx.an, ctx.bn), ctx.tag, "%");
+                try pushNumericResultWithCarrier(a, b, common.fmod(ctx.an, ctx.bn), ctx.tag, "rem");
+            },
+            .mod => {
+                const b = try vmPop();
+                const a = try vmPop();
+                if (a == .int and b == .int) {
+                    if (b.int == 0) { vms.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
+                    const result: i64 = @mod(a.int, b.int);
+                    try vmPush(.{ .int = result }); continue;
+                }
+                if (a == .float and b == .float) {
+                    if (b.float == 0.0) { vms.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
+                    const r = a.float - @floor(a.float / b.float) * b.float;
+                    try vmPush(.{ .float = r }); continue;
+                }
+                const ctx = try numericBinaryOp(a, b, "mod");
+                if (ctx.bn == 0.0) { vms.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
+                const r = ctx.an - @floor(ctx.an / ctx.bn) * ctx.bn;
+                try pushNumericResultWithCarrier(a, b, r, ctx.tag, "mod");
             },
             .pow => {
                 const b = try vmPop();

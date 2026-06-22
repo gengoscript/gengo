@@ -12,7 +12,7 @@ i := 0
 for {
     i++
     if i > 10 { break }
-    if i % 2 == 0 { continue }
+    if i rem 2 == 0 { continue }
     sum += i
 }
 std.io.println(sum)

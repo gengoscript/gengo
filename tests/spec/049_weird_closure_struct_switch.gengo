@@ -5,7 +5,7 @@ type Box struct { tag rune, n int }
 func mk(seed int) func(Box) int {
   acc := seed
   return func(b Box) {
-    switch b.n % 3 {
+    switch b.n rem 3 {
       case 0 { acc += b.n }
       case 1 { acc += int(b.tag) }
       default { acc += std.core.len(std.conv.to_string(b.tag)) }

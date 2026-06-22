@@ -125,7 +125,7 @@ pub fn cForStmt(c: anytype) anyerror!void {
             try assignStmt(c, );
         } else if (c.check(.ident)) {
             const ptt = c.peekTT();
-            if (ptt == .plus_eq or ptt == .minus_eq or ptt == .star_eq or ptt == .slash_eq or ptt == .percent_eq or ptt == .amp_eq or ptt == .pipe_eq or ptt == .caret_eq or ptt == .lt_lt_eq or ptt == .gt_gt_eq) {
+            if (ptt == .plus_eq or ptt == .minus_eq or ptt == .star_eq or ptt == .slash_eq or ptt == .amp_eq or ptt == .pipe_eq or ptt == .caret_eq or ptt == .lt_lt_eq or ptt == .gt_gt_eq) {
                 try compoundStmt(c, );
             } else {
                 try c.expr();
@@ -480,7 +480,6 @@ pub fn compoundStmt(c: anytype) !void {
         .minus_eq => .sub,
         .star_eq => .mul,
         .slash_eq => .div,
-        .percent_eq => .mod,
         .amp_eq => .bit_and,
         .pipe_eq => .bit_or,
         .caret_eq => .bit_xor,
@@ -550,7 +549,7 @@ pub fn deferStmt(c: anytype) !void {
             try chunk.emitOp(.get_index, line);
         } else if (c.cur.typ == .dot) {
             c.advance();
-            if (c.cur.typ != .ident) { c.setErr("expected property name, found {s}", .{c.tokenName(c.cur.typ)}); return error.ExpectedPropertyName; }
+            if (!c.cur.typ.isFieldName()) { c.setErr("expected property name, found {s}", .{c.tokenName(c.cur.typ)}); return error.ExpectedPropertyName; }
             const prop = c.cur;
             c.advance();
             if (c.cur.typ == .lparen) {
@@ -1016,7 +1015,7 @@ pub fn isPropertyAssign(c: anytype) bool {
                 if (depth == 0) return false;
                 depth -= 1;
             },
-            .eq, .plus_eq, .minus_eq, .star_eq, .slash_eq, .percent_eq, .amp_eq, .pipe_eq, .caret_eq, .lt_lt_eq, .gt_gt_eq => return saw_path and depth == 0,
+            .eq, .plus_eq, .minus_eq, .star_eq, .slash_eq, .amp_eq, .pipe_eq, .caret_eq, .lt_lt_eq, .gt_gt_eq => return saw_path and depth == 0,
             .semicolon, .lbrace, .rbrace => return false,
             else => {},
         }
@@ -1096,7 +1095,7 @@ pub fn parseAssignTargetList(c: anytype, targets: *[MaxLocals]AssignTarget, step
 
         while (true) {
             if (c.match(.dot)) {
-                if (c.cur.typ != .ident) { c.setErr("expected property name, found {s}", .{c.tokenName(c.cur.typ)}); return error.ExpectedPropertyName; }
+                if (!c.cur.typ.isFieldName()) { c.setErr("expected property name, found {s}", .{c.tokenName(c.cur.typ)}); return error.ExpectedPropertyName; }
                 if (scount >= steps.len) { c.setErr("too many elements (max {d})", .{MaxLocals}); return error.TooManyElements; }
                 steps[scount] = .{ .dot_name = c.cur.src };
                 scount += 1;
@@ -1163,10 +1162,10 @@ pub fn propertyAssignStmt(c: anytype) !void {
 
     while (true) {
         if (c.match(.dot)) {
-            if (c.cur.typ != .ident) { c.setErr("expected property name, found {s}", .{c.tokenName(c.cur.typ)}); return error.ExpectedPropertyName; }
+            if (!c.cur.typ.isFieldName()) { c.setErr("expected property name, found {s}", .{c.tokenName(c.cur.typ)}); return error.ExpectedPropertyName; }
             const prop = c.cur;
             c.advance();
-            if (c.check(.eq) or c.check(.plus_eq) or c.check(.minus_eq) or c.check(.star_eq) or c.check(.slash_eq) or c.check(.percent_eq) or c.check(.amp_eq) or c.check(.pipe_eq) or c.check(.caret_eq) or c.check(.lt_lt_eq) or c.check(.gt_gt_eq)) {
+            if (c.check(.eq) or c.check(.plus_eq) or c.check(.minus_eq) or c.check(.star_eq) or c.check(.slash_eq) or c.check(.amp_eq) or c.check(.pipe_eq) or c.check(.caret_eq) or c.check(.lt_lt_eq) or c.check(.gt_gt_eq)) {
                 // This is the last step — record name, do NOT push key, break.
                 last_kind = .dot_name;
                 last_name = prop.src;
@@ -1180,7 +1179,7 @@ pub fn propertyAssignStmt(c: anytype) !void {
         if (c.match(.lbracket)) {
             try c.expr();
             try c.consume(.rbracket);
-            if (c.check(.eq) or c.check(.plus_eq) or c.check(.minus_eq) or c.check(.star_eq) or c.check(.slash_eq) or c.check(.percent_eq) or c.check(.amp_eq) or c.check(.pipe_eq) or c.check(.caret_eq) or c.check(.lt_lt_eq) or c.check(.gt_gt_eq)) {
+            if (c.check(.eq) or c.check(.plus_eq) or c.check(.minus_eq) or c.check(.star_eq) or c.check(.slash_eq) or c.check(.amp_eq) or c.check(.pipe_eq) or c.check(.caret_eq) or c.check(.lt_lt_eq) or c.check(.gt_gt_eq)) {
                 last_kind = .bracket;
                 break;
             }
@@ -1203,13 +1202,12 @@ pub fn propertyAssignStmt(c: anytype) !void {
         return;
     }
 
-    if (c.match(.plus_eq) or c.match(.minus_eq) or c.match(.star_eq) or c.match(.slash_eq) or c.match(.percent_eq) or c.match(.amp_eq) or c.match(.pipe_eq) or c.match(.caret_eq) or c.match(.lt_lt_eq) or c.match(.gt_gt_eq)) {
+    if (c.match(.plus_eq) or c.match(.minus_eq) or c.match(.star_eq) or c.match(.slash_eq) or c.match(.amp_eq) or c.match(.pipe_eq) or c.match(.caret_eq) or c.match(.lt_lt_eq) or c.match(.gt_gt_eq)) {
         const op: Op = switch (op_tok.typ) {
             .plus_eq => .add,
             .minus_eq => .sub,
             .star_eq => .mul,
             .slash_eq => .div,
-            .percent_eq => .mod,
             .amp_eq => .bit_and,
             .pipe_eq => .bit_or,
             .caret_eq => .bit_xor,
@@ -1363,7 +1361,7 @@ pub fn stmt(c: anytype) anyerror!void {
             try incrStmt(c, );
             return;
         }
-        if (ptt == .plus_eq or ptt == .minus_eq or ptt == .star_eq or ptt == .slash_eq or ptt == .percent_eq or ptt == .amp_eq or ptt == .pipe_eq or ptt == .caret_eq or ptt == .lt_lt_eq or ptt == .gt_gt_eq) {
+        if (ptt == .plus_eq or ptt == .minus_eq or ptt == .star_eq or ptt == .slash_eq or ptt == .amp_eq or ptt == .pipe_eq or ptt == .caret_eq or ptt == .lt_lt_eq or ptt == .gt_gt_eq) {
             try compoundStmt(c, );
             return;
         }

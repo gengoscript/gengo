@@ -2,7 +2,7 @@ std := import("std")
 a := std.array
 
 // std.array.filter
-even := func(v int) { return v % 2 == 0 }
+even := func(v int) { return v rem 2 == 0 }
 std.io.println(a.filter([1, 2, 3, 4, 5, 6], even))
 std.io.println(a.filter([], even))
 
