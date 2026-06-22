@@ -463,6 +463,12 @@ fn runNativeCli(alloc: std.mem.Allocator, gengo: []const u8, script: []const u8)
     return runShellCommand(alloc, cmd);
 }
 
+fn runNativeCliFlags(alloc: std.mem.Allocator, gengo: []const u8, flags: []const u8, script: []const u8) struct { []const u8, bool } {
+    const cmd = std.fmt.allocPrint(alloc, "{s} {s} {s}", .{ gengo, flags, script }) catch return .{ "", true };
+    defer alloc.free(cmd);
+    return runShellCommand(alloc, cmd);
+}
+
 fn runChaos(alloc: std.mem.Allocator, gengo: []const u8, filter: ?[]const u8) !void {
     var pass_cases: [MaxCases][]const u8 = undefined;
     const pass_count = collectGengoFiles(alloc, "tests/chaos", &pass_cases) catch |err| {
@@ -523,6 +529,7 @@ fn runChaos(alloc: std.mem.Allocator, gengo: []const u8, filter: ?[]const u8) !v
         pass_ok += 1;
     }
 
+    const chaos_fail_flags = "--modules tests/chaos/modules --modules tests/chaos/fail_modules";
     for (fail_cases[0..fail_count]) |path| {
         defer alloc.free(path);
         if (filter) |f| {
@@ -539,7 +546,7 @@ fn runChaos(alloc: std.mem.Allocator, gengo: []const u8, filter: ?[]const u8) !v
         }
 
         std.debug.print("[CHAOS FAIL] {s}\n", .{path});
-        const result = runNativeCli(alloc, gengo, path);
+        const result = runNativeCliFlags(alloc, gengo, chaos_fail_flags, path);
         const output = result[0];
         const failed = result[1];
         defer alloc.free(output);
