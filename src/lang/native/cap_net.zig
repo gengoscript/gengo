@@ -141,6 +141,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                 },
                 else => return error.TypeError,
             };
+            _ = try vms.vmPop();
             net_state.netSetDeadline(id, ms) catch return error.CapabilityError;
             try vms.vmPush(.null);
         },
@@ -157,6 +158,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                 },
                 else => return error.TypeError,
             };
+            _ = try vms.vmPop();
             net_state.netSetReadDeadline(id, ms) catch return error.CapabilityError;
             try vms.vmPush(.null);
         },
