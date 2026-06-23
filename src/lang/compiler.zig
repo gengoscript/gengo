@@ -688,6 +688,7 @@ pub const Compiler = struct {
         try self.consume(.rbrace);
         self.repl_expr_ok = saved;
         try self.cleanupLocals(0, self.prev.line);
+        try chunk.emitOp(.null_val, self.prev.line);
         try chunk.emitOp(.ret, self.prev.line);
 
         self.scope_depth -= 1;
