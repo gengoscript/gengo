@@ -306,9 +306,15 @@ pub fn sweepObjects() void {
                 freeManagedSlice(@import("../lang/value.zig").MapEntry, g_state.obj_pool[i].map_hashed.entries);
                 freeManagedSlice(i32, g_state.obj_pool[i].map_hashed.buckets);
             },
+            .map => freeManagedSlice(@import("../lang/value.zig").MapEntry, g_state.obj_pool[i].map),
             .struct_instance => freeManagedSlice(@import("../lang/value.zig").MapEntry, g_state.obj_pool[i].struct_instance.fields),
             .string_builder => freeBytesManaged(g_state.obj_pool[i].string_builder.buf),
             .string_view => {},
+            .variant_value => {
+                const vv = g_state.obj_pool[i].variant_value;
+                if (vv.arm_fields.len > 0) freeManagedSlice(@import("../lang/value.zig").Value, vv.arm_fields);
+                if (vv.shared_values.len > 0) freeManagedSlice(@import("../lang/value.zig").Value, vv.shared_values);
+            },
             else => {},
         }
         g_state.obj_live[i] = false;
