@@ -517,6 +517,113 @@ switch doc {
 ### `std.base64.url_encode(data)` / `std.base64.url_decode(s)`
 - URL-safe base64 variant (uses `-` and `_` instead of `+` and `/`)
 
+## std.bytes
+
+Raw byte string construction, decomposition, integer encoding/decoding, and
+byte-indexed search. Unlike `std.string`, all positions and lengths here are
+**byte offsets**, not rune indices.
+
+**Background**: Gengo strings are UTF-8. `string(rune(n))` for `n > 127`
+produces a multi-byte UTF-8 sequence, not the raw byte `n`. `std.bytes.u8` is
+the escape hatch: it takes any integer 0–255 and produces a 1-byte binary
+string.
+
+### Construction
+
+#### `std.bytes.u8(n)`
+- Returns a 1-byte binary string containing raw byte `n & 255`
+- This is the primitive for building binary data; `string(rune(200))` is **not** equivalent (it produces a 2-byte UTF-8 sequence)
+
+#### `std.bytes.pack(bs)`
+- Converts an array of integer byte values (0–255 each) to a binary string
+- Each element is truncated to its low 8 bits
+
+#### `std.bytes.repeat(s, n)`
+- Returns `s` repeated `n` times as a single binary string
+
+### Decomposition
+
+#### `std.bytes.unpack(s)`
+- Returns an array of integer byte values (0–255) for each byte in `s`
+
+#### `std.bytes.at(s, i)`
+- Returns the integer byte value (0–255) at byte offset `i`
+- Errors: `RangeError` if `i` is out of bounds
+
+#### `std.bytes.slice(s, from, to)`
+- Returns the byte substring `s[from:to]` (byte-indexed, not rune-indexed)
+- Errors: `RangeError` if indices are out of range
+
+#### `std.bytes.len(s)`
+- Returns the number of bytes in `s` (same as `std.core.bytelen`)
+
+### Integer encoding
+
+All encoding functions accept any integer and truncate to the appropriate width.
+
+| Function | Width | Byte order |
+|---|---|---|
+| `std.bytes.u16be(n)` | 2 bytes | big-endian |
+| `std.bytes.u32be(n)` | 4 bytes | big-endian |
+| `std.bytes.u64be(n)` | 8 bytes | big-endian |
+| `std.bytes.u16le(n)` | 2 bytes | little-endian |
+| `std.bytes.u32le(n)` | 4 bytes | little-endian |
+| `std.bytes.u64le(n)` | 8 bytes | little-endian |
+
+### Integer decoding
+
+All decoding functions take a binary string `s` and byte offset `i`.
+Errors: `RangeError` if there are insufficient bytes at `i`.
+
+| Function | Width | Byte order | Return |
+|---|---|---|---|
+| `std.bytes.u16be_at(s, i)` | 2 bytes | big-endian | int (0–65535) |
+| `std.bytes.u32be_at(s, i)` | 4 bytes | big-endian | int (0–4294967295) |
+| `std.bytes.u64be_at(s, i)` | 8 bytes | big-endian | int (i64 bit pattern) |
+| `std.bytes.u16le_at(s, i)` | 2 bytes | little-endian | int (0–65535) |
+| `std.bytes.u32le_at(s, i)` | 4 bytes | little-endian | int (0–4294967295) |
+| `std.bytes.u64le_at(s, i)` | 8 bytes | little-endian | int (i64 bit pattern) |
+
+### Byte-indexed search
+
+#### `std.bytes.index_of(s, sub)`
+- Returns the byte offset of the first occurrence of `sub` in `s`, or `-1`
+
+#### `std.bytes.contains(s, sub)`
+- Returns `true` if `sub` appears anywhere in `s`
+
+#### `std.bytes.starts_with(s, prefix)`
+- Returns `true` if `s` begins with `prefix`
+
+#### `std.bytes.ends_with(s, suffix)`
+- Returns `true` if `s` ends with `suffix`
+
+#### `std.bytes.count(s, sub)`
+- Returns the number of non-overlapping occurrences of `sub` in `s`
+
+#### `std.bytes.replace(s, old, new)`
+- Returns a copy of `s` with every occurrence of `old` replaced by `new`
+
+### Example
+
+```gengo
+std := import("std")
+b   := std.bytes
+
+// Build a 4-byte big-endian frame
+frame := b.u16be(0xDEAD) + b.u16be(0xBEEF)
+std.io.println(std.hex.encode(frame))   // "deadbeef"
+
+// Read it back
+std.io.println(b.u16be_at(frame, 0))    // 57005
+std.io.println(b.u16be_at(frame, 2))    // 48879
+
+// Pack/unpack round-trip
+raw   := b.pack([0x01, 0x80, 0xFF])
+parts := b.unpack(raw)
+std.io.println(parts[1])                // 128  (not 2 as rune() would give)
+```
+
 ## std.regexp
 
 Backtracking NFA engine. All functions accept either a pattern string or a compiled regexp object returned by `std.regexp.compile`.
