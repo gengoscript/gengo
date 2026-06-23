@@ -494,11 +494,11 @@ fn testNetCapability() void {
         else => fail("engine FAIL: net capability compile failed\n"),
     }
 
-    // On WASM, all net socket functions return CapabilityNotAvailable at runtime
+    // On WASM net.dial returns a soft error value (not a crash); calling methods on it is a type error
     const dial_res = rt.call("testDial", &.{});
     switch (dial_res) {
-        .runtime_error => {},
-        else => fail("engine FAIL: expected runtime error for net.dial on WASM\n"),
+        .ok => {},
+        else => fail("engine FAIL: net.dial on WASM should return catchable error value\n"),
     }
     const local_res = rt.call("testLocalAddr", &.{});
     switch (local_res) {
@@ -679,8 +679,8 @@ fn testNetCapabilityHandlers() void {
     {
         const uac_res = rt.call("testUseAfterClose", &.{});
         switch (uac_res) {
-            .runtime_error => {},
-            else => fail("engine FAIL: expected runtime error for use-after-close\n"),
+            .ok => {},
+            else => fail("engine FAIL: use-after-close should return catchable error value\n"),
         }
     }
 
