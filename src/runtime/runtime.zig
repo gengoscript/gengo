@@ -44,7 +44,7 @@ fn checkGlobalIsConst(ctx: *anyopaque, name: []const u8) bool {
 }
 
 const MaxFrames = @import("../runtime/config.zig").max_frames;
-const MaxTests = 64;
+const MaxTests = ct.MaxTestBlocks;
 
 pub const Runtime = struct {
     policy: vm.Policy = .{},
@@ -68,7 +68,7 @@ pub const Runtime = struct {
     globals_state: globals.State = .{},
     heap_state: heap.State = .{},
     vm_state: vm.State = .{},
-    test_count: u8 = 0,
+    test_count: u16 = 0,
     test_names: [MaxTests][]const u8 = undefined,
     test_failed: bool = false,
     repl_const_names: [MaxGlobalConsts][]const u8 = undefined,

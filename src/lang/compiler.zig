@@ -42,6 +42,7 @@ const MaxVariantTypes = ct.MaxVariantTypes;
 const MaxSwitchJumps = ct.MaxSwitchJumps;
 const MaxUpvalues = ct.MaxUpvalues;
 const MaxGlobalConsts = ct.MaxGlobalConsts;
+const MaxTestBlocks = ct.MaxTestBlocks;
 const MaxExprDepth = ct.MaxExprDepth;
 
 const Prec = ct.Prec;
@@ -111,8 +112,8 @@ pub const Compiler = struct {
     typed_global_type_checks: [MaxLocals]TypeCheck = undefined,
     typed_global_count: u8 = 0,
 
-    test_names: [MaxLocals][]const u8 = undefined,
-    test_count: u8 = 0,
+    test_names: [MaxTestBlocks][]const u8 = undefined,
+    test_count: u16 = 0,
 
     repl_expr_ok: bool = true,
     repl_expr_pop_pos: ?usize = null,
@@ -663,7 +664,7 @@ pub const Compiler = struct {
         }
 
         // Test mode: emit the test block as a zero-arity function.
-        if (self.test_count >= MaxLocals) return self.err("too many test blocks (max {d})", .{MaxLocals});
+        if (self.test_count >= MaxTestBlocks) return self.err("too many test blocks (max {d})", .{MaxTestBlocks});
         const idx = self.test_count;
         self.test_count += 1;
         self.test_names[idx] = label;
