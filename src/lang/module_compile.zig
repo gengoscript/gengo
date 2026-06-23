@@ -167,8 +167,8 @@ pub const Session = struct {
     known_globals: ?[*][]const u8 = null,
     known_global_count: u16 = 0,
     test_mode: bool = false,
-    test_count: u8 = 0,
-    test_names: [64][]const u8 = undefined,
+    test_count: u16 = 0,
+    test_names: [ct.MaxTestBlocks][]const u8 = undefined,
 
     fn copyCompilerError(self: *Session, compiler: *Compiler) void {
         self.last_error_col = compiler.err_col;

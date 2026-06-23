@@ -15,6 +15,7 @@ pub const ExportTypeKind = enum(u8) {
 };
 
 pub const MaxLocals = 64;
+pub const MaxTestBlocks = 256;
 pub const MaxScopes = 8;
 pub const MaxLoopDepth = 16;
 pub const MaxLoopBreaks = 128;
