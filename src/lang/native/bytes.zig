@@ -310,6 +310,104 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             vms.vmPopArgs(argc);
             try vms.vmPush(.{ .object = obj });
         },
+        // ── IEEE 754 float encoding ──────────────────────────────────────────
+        .bytes_f32be => {
+            const fval: f32 = @floatCast(switch (vms.vmTop(0)) {
+                .float => |n| n,
+                .int   => |n| @as(f64, @floatFromInt(n)),
+                else   => return error.TypeError,
+            });
+            const bits = @as(u32, @bitCast(fval));
+            const buf = [_]u8{
+                @truncate(bits >> 24), @truncate(bits >> 16),
+                @truncate(bits >> 8),  @truncate(bits),
+            };
+            vms.vmPopArgs(argc);
+            try vms.vmPush(try makeBinaryString(&buf));
+        },
+        .bytes_f32le => {
+            const fval: f32 = @floatCast(switch (vms.vmTop(0)) {
+                .float => |n| n,
+                .int   => |n| @as(f64, @floatFromInt(n)),
+                else   => return error.TypeError,
+            });
+            const bits = @as(u32, @bitCast(fval));
+            const buf = [_]u8{
+                @truncate(bits),       @truncate(bits >> 8),
+                @truncate(bits >> 16), @truncate(bits >> 24),
+            };
+            vms.vmPopArgs(argc);
+            try vms.vmPush(try makeBinaryString(&buf));
+        },
+        .bytes_f64be => {
+            const fval: f64 = switch (vms.vmTop(0)) {
+                .float => |n| n,
+                .int   => |n| @floatFromInt(n),
+                else   => return error.TypeError,
+            };
+            const bits = @as(u64, @bitCast(fval));
+            const buf = [_]u8{
+                @truncate(bits >> 56), @truncate(bits >> 48),
+                @truncate(bits >> 40), @truncate(bits >> 32),
+                @truncate(bits >> 24), @truncate(bits >> 16),
+                @truncate(bits >> 8),  @truncate(bits),
+            };
+            vms.vmPopArgs(argc);
+            try vms.vmPush(try makeBinaryString(&buf));
+        },
+        .bytes_f64le => {
+            const fval: f64 = switch (vms.vmTop(0)) {
+                .float => |n| n,
+                .int   => |n| @floatFromInt(n),
+                else   => return error.TypeError,
+            };
+            const bits = @as(u64, @bitCast(fval));
+            const buf = [_]u8{
+                @truncate(bits),       @truncate(bits >> 8),
+                @truncate(bits >> 16), @truncate(bits >> 24),
+                @truncate(bits >> 32), @truncate(bits >> 40),
+                @truncate(bits >> 48), @truncate(bits >> 56),
+            };
+            vms.vmPopArgs(argc);
+            try vms.vmPush(try makeBinaryString(&buf));
+        },
+        // ── IEEE 754 float decoding ──────────────────────────────────────────
+        .bytes_f32be_at => {
+            const s = try vms.asStringValue(vms.vmTop(1));
+            const i = @as(usize, @intCast(try argAsI64(vms.vmTop(0))));
+            if (i + 4 > s.len) return error.RangeError;
+            const bits: u32 = (@as(u32, s[i]) << 24) | (@as(u32, s[i+1]) << 16) |
+                              (@as(u32, s[i+2]) << 8)  |  @as(u32, s[i+3]);
+            vms.vmPopArgs(argc);
+            try vms.vmPush(.{ .float = @as(f64, @as(f32, @bitCast(bits))) });
+        },
+        .bytes_f32le_at => {
+            const s = try vms.asStringValue(vms.vmTop(1));
+            const i = @as(usize, @intCast(try argAsI64(vms.vmTop(0))));
+            if (i + 4 > s.len) return error.RangeError;
+            const bits: u32 = @as(u32, s[i]) | (@as(u32, s[i+1]) << 8) |
+                              (@as(u32, s[i+2]) << 16) | (@as(u32, s[i+3]) << 24);
+            vms.vmPopArgs(argc);
+            try vms.vmPush(.{ .float = @as(f64, @as(f32, @bitCast(bits))) });
+        },
+        .bytes_f64be_at => {
+            const s = try vms.asStringValue(vms.vmTop(1));
+            const i = @as(usize, @intCast(try argAsI64(vms.vmTop(0))));
+            if (i + 8 > s.len) return error.RangeError;
+            var bits: u64 = 0;
+            for (0..8) |k| bits = (bits << 8) | s[i + k];
+            vms.vmPopArgs(argc);
+            try vms.vmPush(.{ .float = @bitCast(bits) });
+        },
+        .bytes_f64le_at => {
+            const s = try vms.asStringValue(vms.vmTop(1));
+            const i = @as(usize, @intCast(try argAsI64(vms.vmTop(0))));
+            if (i + 8 > s.len) return error.RangeError;
+            var bits: u64 = 0;
+            for (0..8) |k| bits |= @as(u64, s[i + k]) << @as(u6, @intCast(k * 8));
+            vms.vmPopArgs(argc);
+            try vms.vmPush(.{ .float = @bitCast(bits) });
+        },
         else => {},
     }
 }

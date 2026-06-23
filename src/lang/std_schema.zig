@@ -242,6 +242,14 @@ pub const bytes_entries = [_]Entry{
     .{ .name = "ends_with",   .kind = .function },
     .{ .name = "count",       .kind = .function },
     .{ .name = "replace",     .kind = .function },
+    .{ .name = "f32be",       .kind = .function },
+    .{ .name = "f32le",       .kind = .function },
+    .{ .name = "f64be",       .kind = .function },
+    .{ .name = "f64le",       .kind = .function },
+    .{ .name = "f32be_at",    .kind = .function },
+    .{ .name = "f32le_at",    .kind = .function },
+    .{ .name = "f64be_at",    .kind = .function },
+    .{ .name = "f64le_at",    .kind = .function },
 };
 
 pub const namespaces = [_]Namespace{
