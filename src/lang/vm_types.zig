@@ -316,13 +316,23 @@ pub fn matchesInterfaceType(v: Value, iname: []const u8) bool {
         key_buf[tname.len] = '.';
         @memcpy(key_buf[tname.len + 1 .. total], m.name);
         const fnv = globals.get(key_buf[0..total]) orelse return false;
-        if (!(fnv == .object and (fnv.object.* == .function or fnv.object.* == .closure))) return false;
-        const f = switch (fnv.object.*) {
-            .function => |ff| ff,
-            .closure => |cl| cl.func.function,
+        if (!(fnv == .object)) return false;
+        switch (fnv.object.*) {
+            .function, .closure => {
+                const f: FuncObj = switch (fnv.object.*) {
+                    .function => |ff| ff,
+                    .closure => |cl| cl.func.function,
+                    else => unreachable,
+                };
+                if (!interfaceMethodMatches(m, f)) return false;
+            },
+            .native_function => |nf| {
+                // Native (cap:/std) methods: arity check only.
+                // Native arity includes the receiver, interface arity does not.
+                if (nf.arity != m.arity + 1) return false;
+            },
             else => return false,
-        };
-        if (!interfaceMethodMatches(m, f)) return false;
+        }
     }
     return true;
 }

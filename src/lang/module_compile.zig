@@ -578,8 +578,11 @@ pub const Session = struct {
     fn isAllowedImportPath(self: *const Session, path: []const u8) bool {
         // No source_root configured: unrestricted (embedding backward compat).
         if (self.source_root.len == 0) return true;
-        // Paths that escape upward are never allowed once a root is set.
-        if (std.mem.startsWith(u8, path, "../") or common.streq(path, "..")) return false;
+        // The prefix check is the authoritative gate: if the resolved path
+        // falls under an allowed root it is permitted regardless of how many
+        // ".." segments were in the original import string.  This also handles
+        // scripts invoked via a relative "../" path whose own imports resolve
+        // to paths that share the same ".." prefix.
         if (pathIsUnderRoot(path, self.source_root)) return true;
         for (self.module_roots_buf[0..self.module_roots_count]) |root| {
             if (pathIsUnderRoot(path, root)) return true;
