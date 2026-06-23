@@ -166,7 +166,7 @@ fn httpFetchHost(
     };
 
     const rc = h.callback(&req, &out, h.userdata);
-    if (rc < 0) return error.CapabilityError;
+    if (rc < 0) return error.HttpHandlerError;
 
     const resp_body = if (out.body_len > 0)
         out.body[0..@as(usize, @intCast(out.body_len))]
@@ -289,12 +289,12 @@ fn httpFetchBuiltin(
 
     // Status line: "HTTP/1.1 200 OK\r\n"
     {
-        const line = (try actual_reader.takeDelimiter('\n')) orelse return error.CapabilityError;
+        const line = (try actual_reader.takeDelimiter('\n')) orelse return error.InvalidResponse;
         const trimmed = (if (line.len > 0 and line[line.len - 1] == '\r') line[0 .. line.len - 1] else line);
         var parts = std.mem.splitScalar(u8, trimmed, ' ');
         _ = parts.next(); // skip "HTTP/1.1"
-        const status_str = parts.next() orelse return error.CapabilityError;
-        status_code = std.fmt.parseInt(u16, status_str, 10) catch return error.CapabilityError;
+        const status_str = parts.next() orelse return error.InvalidResponse;
+        status_code = std.fmt.parseInt(u16, status_str, 10) catch return error.InvalidResponse;
     }
 
     // Headers
