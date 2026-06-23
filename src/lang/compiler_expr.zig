@@ -367,9 +367,14 @@ pub fn mapLit(c: anytype) !void {
 }
 
 pub fn numLit(c: anytype) !void {
-    const n = common.parseFloat(c.prev.src) orelse return error.BadNumber;
     const is_float = std.mem.indexOfAny(u8, c.prev.src, ".eE") != null;
-    try chunk.emitConst(if (is_float) .{ .float = n } else .{ .int = @intFromFloat(n) }, c.prev.line);
+    if (is_float) {
+        const n = common.parseFloat(c.prev.src) orelse return error.BadNumber;
+        try chunk.emitConst(.{ .float = n }, c.prev.line);
+    } else {
+        const n = common.parseInt(c.prev.src) orelse return error.BadNumber;
+        try chunk.emitConst(.{ .int = n }, c.prev.line);
+    }
 }
 
 pub fn parsePrecedence(c: anytype, p: Prec) anyerror!void {
