@@ -47,7 +47,10 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const address = vms.asStringValue(arg1) catch return error.TypeError;
             _ = try vms.vmPop();
 
-            const id = net_state.netDial(network, address) catch return error.CapabilityError;
+            const id = net_state.netDial(network, address) catch {
+                try vms.vmPush(.{ .error_value = try chunk.internStr(net_state.lastNetErr()) });
+                return;
+            };
 
             const conn_type_val = globals.get("@cap_type:net.Conn") orelse return error.CapabilityError;
             const conn_type_obj = switch (conn_type_val) {
@@ -82,7 +85,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             _ = try vms.vmPop();
 
             const buf = net_state.netRead(id, max_bytes) catch |err| {
-                const msg: []const u8 = if (err == error.DeadlineExceeded) "timeout" else "CapabilityError";
+                const msg: []const u8 = if (err == error.DeadlineExceeded) "timeout" else net_state.lastNetErr();
                 try vms.vmPush(.{ .error_value = try chunk.internStr(msg) });
                 return;
             };
@@ -99,7 +102,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             _ = try vms.vmPop();
 
             const n = net_state.netWrite(id, data) catch |err| {
-                const msg: []const u8 = if (err == error.DeadlineExceeded) "timeout" else "CapabilityError";
+                const msg: []const u8 = if (err == error.DeadlineExceeded) "timeout" else net_state.lastNetErr();
                 try vms.vmPush(.{ .error_value = try chunk.internStr(msg) });
                 return;
             };

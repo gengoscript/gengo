@@ -13,6 +13,19 @@ var g_next_id: u32 = 1;
 var g_conns: [MaxConns]NetConn = undefined;
 var g_conn_count: usize = 0;
 
+var g_net_err_buf: [256]u8 = undefined;
+var g_net_err_len: usize = 0;
+
+fn setNetErr(comptime fmt: []const u8, args: anytype) void {
+    const s = std.fmt.bufPrint(&g_net_err_buf, fmt, args) catch g_net_err_buf[0..g_net_err_buf.len];
+    g_net_err_len = s.len;
+}
+
+pub fn lastNetErr() []const u8 {
+    if (g_net_err_len == 0) return "CapabilityError";
+    return g_net_err_buf[0..g_net_err_len];
+}
+
 /// C-compatible struct matching GengoNetHandlers in the C API.
 /// All function pointers are required when set — the entire struct
 /// must be valid or operations fall back to the built-in implementation.
@@ -120,15 +133,22 @@ fn formatIp6Address(port: u16, ip_bytes: [16]u8) ![]u8 {
 }
 
 pub fn netDial(network: []const u8, address: []const u8) !u32 {
+    g_net_err_len = 0;
     if (g_net_handlers) |h| {
-        if (g_conn_count >= MaxConns) return error.CapabilityError;
+        if (g_conn_count >= MaxConns) {
+            setNetErr("too many connections (max {d})", .{MaxConns});
+            return error.NetError;
+        }
         var out_handle: i32 = undefined;
-        const rc = (h.callbacks.dial orelse return error.CapabilityError)(
-            network.ptr, @intCast(network.len),
-            address.ptr, @intCast(address.len),
-            &out_handle, h.userdata,
-        );
-        if (rc < 0) return error.CapabilityError;
+        const dial_fn = h.callbacks.dial orelse {
+            setNetErr("dial handler not registered", .{});
+            return error.NetError;
+        };
+        const rc = dial_fn(network.ptr, @intCast(network.len), address.ptr, @intCast(address.len), &out_handle, h.userdata);
+        if (rc < 0) {
+            setNetErr("dial: host handler returned error {d}", .{rc});
+            return error.NetError;
+        }
         const id = g_next_id;
         g_next_id += 1;
         g_conns[g_conn_count] = .{ .id = id, .host_handle = out_handle, .socket = undefined };
@@ -136,29 +156,45 @@ pub fn netDial(network: []const u8, address: []const u8) !u32 {
         return id;
     }
     if (comptime builtin.os.tag == .wasi) return error.CapabilityNotAvailable;
-    if (g_conn_count >= MaxConns) return error.CapabilityError;
+    if (g_conn_count >= MaxConns) {
+        setNetErr("too many connections (max {d})", .{MaxConns});
+        return error.NetError;
+    }
 
     if (!std.mem.eql(u8, network, "tcp") and
         !std.mem.eql(u8, network, "tcp4") and
         !std.mem.eql(u8, network, "tcp6"))
     {
-        return error.CapabilityError;
+        setNetErr("dial: unsupported network \"{s}\"", .{network});
+        return error.NetError;
     }
 
-    const colon = std.mem.lastIndexOfScalar(u8, address, ':') orelse return error.CapabilityError;
+    const colon = std.mem.lastIndexOfScalar(u8, address, ':') orelse {
+        setNetErr("dial: invalid address \"{s}\" (expected host:port)", .{address});
+        return error.NetError;
+    };
     const host = address[0..colon];
     const port_str = address[colon + 1 ..];
-    const port = std.fmt.parseUnsigned(u16, port_str, 10) catch return error.CapabilityError;
+    const port = std.fmt.parseUnsigned(u16, port_str, 10) catch {
+        setNetErr("dial: invalid port \"{s}\" in address \"{s}\"", .{ port_str, address });
+        return error.NetError;
+    };
 
     const io_ctx = ioContext();
 
-    std.Io.net.HostName.validate(host) catch return error.CapabilityError;
+    std.Io.net.HostName.validate(host) catch {
+        setNetErr("dial: invalid hostname \"{s}\"", .{host});
+        return error.NetError;
+    };
     const host_name = std.Io.net.HostName{ .bytes = host };
 
     var results: [16]std.Io.net.HostName.LookupResult = undefined;
     var queue = std.Io.Queue(std.Io.net.HostName.LookupResult).init(&results);
 
-    host_name.lookup(io_ctx, &queue, .{ .port = port }) catch return error.CapabilityError;
+    host_name.lookup(io_ctx, &queue, .{ .port = port }) catch {
+        setNetErr("dial: name resolution failed for \"{s}\"", .{host});
+        return error.NetError;
+    };
 
     var ip: ?std.Io.net.IpAddress = null;
     while (true) {
@@ -170,13 +206,70 @@ pub fn netDial(network: []const u8, address: []const u8) !u32 {
             .canonical_name => {},
         }
     }
-    const resolved_ip = ip orelse return error.CapabilityError;
+    const resolved_ip = ip orelse {
+        setNetErr("dial: no addresses found for \"{s}\"", .{host});
+        return error.NetError;
+    };
 
-    const stream = resolved_ip.connect(io_ctx, .{ .mode = .stream }) catch return error.CapabilityError;
+    // Use posix.connect directly to get real connection errors (CONNREFUSED etc.)
+    const sock_fam: u32 = switch (resolved_ip) {
+        .ip4 => std.posix.AF.INET,
+        .ip6 => std.posix.AF.INET6,
+    };
+    const sock = std.posix.system.socket(sock_fam, std.posix.SOCK.STREAM, 0);
+    if (std.posix.errno(sock) != .SUCCESS) {
+        setNetErr("dial: socket creation failed", .{});
+        return error.NetError;
+    }
+    const fd: std.posix.socket_t = @intCast(sock);
+    errdefer _ = std.posix.system.close(fd);
+
+    var addr_storage: std.posix.sockaddr.storage = std.mem.zeroes(std.posix.sockaddr.storage);
+    var addr_len: std.posix.socklen_t = undefined;
+    switch (resolved_ip) {
+        .ip4 => |v4| {
+            const sa: *std.posix.sockaddr.in = @ptrCast(&addr_storage);
+            sa.family = std.posix.AF.INET;
+            sa.port = std.mem.nativeToBig(u16, port);
+            sa.addr = @bitCast(v4.bytes);
+            addr_len = @sizeOf(std.posix.sockaddr.in);
+        },
+        .ip6 => |v6| {
+            const sa: *std.posix.sockaddr.in6 = @ptrCast(&addr_storage);
+            sa.family = std.posix.AF.INET6;
+            sa.port = std.mem.nativeToBig(u16, port);
+            sa.addr = v6.bytes;
+            addr_len = @sizeOf(std.posix.sockaddr.in6);
+        },
+    }
+    const rc = std.posix.system.connect(fd, @ptrCast(&addr_storage), addr_len);
+    switch (std.posix.errno(rc)) {
+        .SUCCESS => {},
+        .CONNREFUSED => {
+            setNetErr("dial: connection refused ({s}:{d})", .{ host, port });
+            return error.NetError;
+        },
+        .TIMEDOUT => {
+            setNetErr("dial: connection timed out ({s}:{d})", .{ host, port });
+            return error.NetError;
+        },
+        .NETUNREACH, .HOSTUNREACH => {
+            setNetErr("dial: network unreachable ({s}:{d})", .{ host, port });
+            return error.NetError;
+        },
+        .CONNRESET => {
+            setNetErr("dial: connection reset ({s}:{d})", .{ host, port });
+            return error.NetError;
+        },
+        else => |e| {
+            setNetErr("dial: connect failed ({s}:{d}): {s}", .{ host, port, @tagName(e) });
+            return error.NetError;
+        },
+    }
 
     const id = g_next_id;
     g_next_id += 1;
-    g_conns[g_conn_count] = .{ .id = id, .host_handle = 0, .socket = stream.socket.handle };
+    g_conns[g_conn_count] = .{ .id = id, .host_handle = 0, .socket = fd };
     g_conn_count += 1;
     return id;
 }
@@ -199,40 +292,63 @@ fn removeConn(id: u32) void {
 }
 
 pub fn netRead(id: u32, max_bytes: usize) ![]u8 {
+    g_net_err_len = 0;
     if (g_net_handlers) |h| {
-        const conn = findConn(id) orelse return error.CapabilityError;
+        const conn = findConn(id) orelse {
+            setNetErr("read: unknown connection handle {d}", .{id});
+            return error.NetError;
+        };
         const buf = std.heap.page_allocator.alloc(u8, max_bytes) catch return error.OutOfMemory;
         errdefer std.heap.page_allocator.free(buf);
         const clamped: i32 = if (max_bytes > std.math.maxInt(i32)) std.math.maxInt(i32) else @intCast(max_bytes);
-        const n = (h.callbacks.read orelse return error.CapabilityError)(
-            conn.host_handle, buf.ptr, clamped, h.userdata,
-        );
+        const n = (h.callbacks.read orelse {
+            setNetErr("read handler not registered", .{});
+            return error.NetError;
+        })(conn.host_handle, buf.ptr, clamped, h.userdata);
         if (n < 0) {
             std.heap.page_allocator.free(buf);
-            return error.CapabilityError;
+            setNetErr("read: host handler returned error {d}", .{n});
+            return error.NetError;
         }
         const out = std.heap.page_allocator.realloc(buf, @intCast(n)) catch return error.OutOfMemory;
         return out;
     }
     if (comptime builtin.os.tag == .wasi) return error.CapabilityNotAvailable;
-    const conn = findConn(id) orelse return error.CapabilityError;
+    const conn = findConn(id) orelse {
+        setNetErr("read: unknown connection handle {d}", .{id});
+        return error.NetError;
+    };
 
     const buf = std.heap.page_allocator.alloc(u8, max_bytes) catch return error.OutOfMemory;
     errdefer std.heap.page_allocator.free(buf);
 
-    // Use posix.recv directly so that EAGAIN from SO_RCVTIMEO is surfaced as
-    // DeadlineExceeded rather than retried by the std.Io vtable layer.
+    // Use posix.read directly so EAGAIN from SO_RCVTIMEO surfaces as DeadlineExceeded
+    // rather than being retried by the std.Io vtable layer.
     // Windows falls back to the vtable (set_deadline is already a no-op there).
     if (comptime builtin.os.tag == .windows) {
         const io_ctx = ioContext();
         var slices = [1][]u8{buf};
-        const n = io_ctx.vtable.netRead(io_ctx.userdata, conn.socket, &slices) catch return error.CapabilityError;
+        const n = io_ctx.vtable.netRead(io_ctx.userdata, conn.socket, &slices) catch {
+            setNetErr("read: I/O error", .{});
+            return error.NetError;
+        };
         const out = std.heap.page_allocator.realloc(buf, n) catch return error.OutOfMemory;
         return out;
     }
     const n = std.posix.read(conn.socket, buf) catch |err| switch (err) {
         error.WouldBlock => return error.DeadlineExceeded,
-        else => return error.CapabilityError,
+        error.ConnectionResetByPeer => {
+            setNetErr("read: connection reset by peer", .{});
+            return error.NetError;
+        },
+        error.SocketUnconnected => {
+            setNetErr("read: socket not connected", .{});
+            return error.NetError;
+        },
+        else => |e| {
+            setNetErr("read: {s}", .{@errorName(e)});
+            return error.NetError;
+        },
     };
 
     const out = std.heap.page_allocator.realloc(buf, n) catch return error.OutOfMemory;
@@ -240,26 +356,38 @@ pub fn netRead(id: u32, max_bytes: usize) ![]u8 {
 }
 
 pub fn netWrite(id: u32, data: []const u8) !usize {
+    g_net_err_len = 0;
     if (g_net_handlers) |h| {
-        const conn = findConn(id) orelse return error.CapabilityError;
-        const n = (h.callbacks.write orelse return error.CapabilityError)(
-            conn.host_handle, data.ptr, @intCast(@min(data.len, @as(usize, std.math.maxInt(i32)))), h.userdata,
-        );
-        if (n < 0) return error.CapabilityError;
+        const conn = findConn(id) orelse {
+            setNetErr("write: unknown connection handle {d}", .{id});
+            return error.NetError;
+        };
+        const n = (h.callbacks.write orelse {
+            setNetErr("write handler not registered", .{});
+            return error.NetError;
+        })(conn.host_handle, data.ptr, @intCast(@min(data.len, @as(usize, std.math.maxInt(i32)))), h.userdata);
+        if (n < 0) {
+            setNetErr("write: host handler returned error {d}", .{n});
+            return error.NetError;
+        }
         return @intCast(n);
     }
     if (comptime builtin.os.tag == .wasi) return error.CapabilityNotAvailable;
-    const conn = findConn(id) orelse return error.CapabilityError;
+    const conn = findConn(id) orelse {
+        setNetErr("write: unknown connection handle {d}", .{id});
+        return error.NetError;
+    };
 
-    // Use posix.send directly for the same reason as netRead: SO_SNDTIMEO fires
-    // EAGAIN which the std.Io vtable layer would retry rather than surface.
+    // Use system.write directly so EAGAIN from SO_SNDTIMEO surfaces as DeadlineExceeded.
     // Windows falls back to the vtable (set_deadline is already a no-op there).
     if (comptime builtin.os.tag == .windows) {
         const io_ctx = ioContext();
         const write_slices = [1][]const u8{data};
-        return io_ctx.vtable.netWrite(io_ctx.userdata, conn.socket, &.{}, &write_slices, 1) catch return error.CapabilityError;
+        return io_ctx.vtable.netWrite(io_ctx.userdata, conn.socket, &.{}, &write_slices, 1) catch {
+            setNetErr("write: I/O error", .{});
+            return error.NetError;
+        };
     }
-    // Mirror std.posix.read's pattern: call the raw write syscall and map EAGAIN.
     const max_count: usize = switch (builtin.os.tag) {
         .linux => 0x7ffff000,
         else => std.math.maxInt(isize),
@@ -270,7 +398,18 @@ pub fn netWrite(id: u32, data: []const u8) !usize {
             .SUCCESS => return @intCast(rc),
             .INTR => continue,
             .AGAIN => return error.DeadlineExceeded,
-            else => return error.CapabilityError,
+            .CONNRESET => {
+                setNetErr("write: connection reset by peer", .{});
+                return error.NetError;
+            },
+            .PIPE => {
+                setNetErr("write: broken pipe (connection closed)", .{});
+                return error.NetError;
+            },
+            else => |e| {
+                setNetErr("write: {s}", .{@tagName(e)});
+                return error.NetError;
+            },
         }
     }
 }
