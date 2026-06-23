@@ -81,7 +81,11 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             };
             _ = try vms.vmPop();
 
-            const buf = net_state.netRead(id, max_bytes) catch return error.CapabilityError;
+            const buf = net_state.netRead(id, max_bytes) catch |err| {
+                const msg: []const u8 = if (err == error.DeadlineExceeded) "timeout" else "CapabilityError";
+                try vms.vmPush(.{ .error_value = try chunk.internStr(msg) });
+                return;
+            };
             defer std.heap.page_allocator.free(buf);
             const out = try vmgc.makeDynString(buf);
             try vms.vmPush(out);
@@ -94,7 +98,11 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const data = vms.asStringValue(arg1) catch return error.TypeError;
             _ = try vms.vmPop();
 
-            const n = net_state.netWrite(id, data) catch return error.CapabilityError;
+            const n = net_state.netWrite(id, data) catch |err| {
+                const msg: []const u8 = if (err == error.DeadlineExceeded) "timeout" else "CapabilityError";
+                try vms.vmPush(.{ .error_value = try chunk.internStr(msg) });
+                return;
+            };
             try vms.vmPush(.{ .int = @intCast(n) });
         },
         .cap_net_close => {

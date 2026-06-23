@@ -220,9 +220,20 @@ pub fn netRead(id: u32, max_bytes: usize) ![]u8 {
     const buf = std.heap.page_allocator.alloc(u8, max_bytes) catch return error.OutOfMemory;
     errdefer std.heap.page_allocator.free(buf);
 
-    const io_ctx = ioContext();
-    var slices = [1][]u8{buf};
-    const n = io_ctx.vtable.netRead(io_ctx.userdata, conn.socket, &slices) catch return error.CapabilityError;
+    // Use posix.recv directly so that EAGAIN from SO_RCVTIMEO is surfaced as
+    // DeadlineExceeded rather than retried by the std.Io vtable layer.
+    // Windows falls back to the vtable (set_deadline is already a no-op there).
+    if (comptime builtin.os.tag == .windows) {
+        const io_ctx = ioContext();
+        var slices = [1][]u8{buf};
+        const n = io_ctx.vtable.netRead(io_ctx.userdata, conn.socket, &slices) catch return error.CapabilityError;
+        const out = std.heap.page_allocator.realloc(buf, n) catch return error.OutOfMemory;
+        return out;
+    }
+    const n = std.posix.read(conn.socket, buf) catch |err| switch (err) {
+        error.WouldBlock => return error.DeadlineExceeded,
+        else => return error.CapabilityError,
+    };
 
     const out = std.heap.page_allocator.realloc(buf, n) catch return error.OutOfMemory;
     return out;
@@ -240,11 +251,28 @@ pub fn netWrite(id: u32, data: []const u8) !usize {
     if (comptime builtin.os.tag == .wasi) return error.CapabilityNotAvailable;
     const conn = findConn(id) orelse return error.CapabilityError;
 
-    const io_ctx = ioContext();
-    // vtable netWrite: header, data[][]u8, splat. Pass payload as sole data element, splat=1.
-    const write_slices = [1][]const u8{data};
-    const n = io_ctx.vtable.netWrite(io_ctx.userdata, conn.socket, &.{}, &write_slices, 1) catch return error.CapabilityError;
-    return n;
+    // Use posix.send directly for the same reason as netRead: SO_SNDTIMEO fires
+    // EAGAIN which the std.Io vtable layer would retry rather than surface.
+    // Windows falls back to the vtable (set_deadline is already a no-op there).
+    if (comptime builtin.os.tag == .windows) {
+        const io_ctx = ioContext();
+        const write_slices = [1][]const u8{data};
+        return io_ctx.vtable.netWrite(io_ctx.userdata, conn.socket, &.{}, &write_slices, 1) catch return error.CapabilityError;
+    }
+    // Mirror std.posix.read's pattern: call the raw write syscall and map EAGAIN.
+    const max_count: usize = switch (builtin.os.tag) {
+        .linux => 0x7ffff000,
+        else => std.math.maxInt(isize),
+    };
+    while (true) {
+        const rc = std.posix.system.write(conn.socket, data.ptr, @min(data.len, max_count));
+        switch (std.posix.errno(rc)) {
+            .SUCCESS => return @intCast(rc),
+            .INTR => continue,
+            .AGAIN => return error.DeadlineExceeded,
+            else => return error.CapabilityError,
+        }
+    }
 }
 
 pub fn netClose(id: u32) !void {
