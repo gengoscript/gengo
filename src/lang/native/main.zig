@@ -390,6 +390,14 @@ pub fn buildStdModule() !*Object {
         .{ .name = "ends_with",  .value = try makeNative(.bytes_ends_with,  2) },
         .{ .name = "count",      .value = try makeNative(.bytes_count,      2) },
         .{ .name = "replace",    .value = try makeNative(.bytes_replace,    3) },
+        .{ .name = "f32be",      .value = try makeNative(.bytes_f32be,      1) },
+        .{ .name = "f32le",      .value = try makeNative(.bytes_f32le,      1) },
+        .{ .name = "f64be",      .value = try makeNative(.bytes_f64be,      1) },
+        .{ .name = "f64le",      .value = try makeNative(.bytes_f64le,      1) },
+        .{ .name = "f32be_at",   .value = try makeNative(.bytes_f32be_at,   2) },
+        .{ .name = "f32le_at",   .value = try makeNative(.bytes_f32le_at,   2) },
+        .{ .name = "f64be_at",   .value = try makeNative(.bytes_f64be_at,   2) },
+        .{ .name = "f64le_at",   .value = try makeNative(.bytes_f64le_at,   2) },
     };
     const bytes_obj = try makeNamespace("bytes", "@module_type:std.bytes", &bytes_entries);
     try vms.pushTempRoot(.{ .object = bytes_obj });
@@ -833,7 +841,9 @@ pub fn callNative(nf: NativeFuncObj, argc: u8) !void {
         .bytes_u16be_at, .bytes_u32be_at, .bytes_u64be_at,
         .bytes_u16le_at, .bytes_u32le_at, .bytes_u64le_at,
         .bytes_index_of, .bytes_contains, .bytes_starts_with, .bytes_ends_with,
-        .bytes_count, .bytes_replace => return bytes_mod.dispatch(nf, argc),
+        .bytes_count, .bytes_replace,
+        .bytes_f32be, .bytes_f32le, .bytes_f64be, .bytes_f64le,
+        .bytes_f32be_at, .bytes_f32le_at, .bytes_f64be_at, .bytes_f64le_at => return bytes_mod.dispatch(nf, argc),
         inline else => |id| {
             if (comptime build_options.cap_net) {
                 switch (id) {
