@@ -376,8 +376,13 @@ fn matchAlt(alt: Alt, s: []const u8, pos: usize) ?usize {
                 return matchAlt(alt[i + 1 ..], s, p);
             },
             .group => {
-                const m = matchAny(node.children, s, p) orelse return null;
-                p = m;
+                // Try each alternative; only commit if the continuation also succeeds.
+                for (node.children) |child_alt| {
+                    if (matchAlt(child_alt, s, p)) |m| {
+                        if (matchAlt(alt[i + 1 ..], s, m)) |result| return result;
+                    }
+                }
+                return null;
             },
         }
         i += 1;
