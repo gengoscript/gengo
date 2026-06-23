@@ -104,6 +104,68 @@ pub fn parseFloat(s: []const u8) ?f64 {
     return r;
 }
 
+// Parse an integer literal (decimal, 0x hex, 0b binary, 0o octal) as i64.
+// Avoids the f64 round-trip that parseFloat uses, preserving all 64 bits.
+// Returns null if the input is not a valid integer literal.
+pub fn parseInt(s: []const u8) ?i64 {
+    if (s.len == 0) return null;
+    var i: usize = 0;
+    var neg = false;
+    if (s[i] == '-') { neg = true; i += 1; }
+    if (i >= s.len or s[i] < '0' or s[i] > '9') return null;
+    if (s[i] == '0' and i + 1 < s.len) {
+        const prefix = s[i + 1];
+        if (prefix == 'x' or prefix == 'X') {
+            i += 2;
+            if (i >= s.len) return null;
+            var v: u64 = 0;
+            while (i < s.len) : (i += 1) {
+                const ch = s[i];
+                if (ch == '_') continue;
+                const nib: u64 = if (ch >= '0' and ch <= '9') ch - '0'
+                                  else if (ch >= 'a' and ch <= 'f') ch - 'a' + 10
+                                  else if (ch >= 'A' and ch <= 'F') ch - 'A' + 10
+                                  else return null;
+                v = v *% 16 +% nib;
+            }
+            return if (neg) -@as(i64, @bitCast(v)) else @as(i64, @bitCast(v));
+        }
+        if (prefix == 'b' or prefix == 'B') {
+            i += 2;
+            if (i >= s.len) return null;
+            var v: u64 = 0;
+            while (i < s.len) : (i += 1) {
+                const ch = s[i];
+                if (ch == '_') continue;
+                if (ch != '0' and ch != '1') return null;
+                v = v *% 2 +% (ch - '0');
+            }
+            return if (neg) -@as(i64, @bitCast(v)) else @as(i64, @bitCast(v));
+        }
+        if (prefix == 'o' or prefix == 'O') {
+            i += 2;
+            if (i >= s.len) return null;
+            var v: u64 = 0;
+            while (i < s.len) : (i += 1) {
+                const ch = s[i];
+                if (ch == '_') continue;
+                if (ch < '0' or ch > '7') return null;
+                v = v *% 8 +% (ch - '0');
+            }
+            return if (neg) -@as(i64, @bitCast(v)) else @as(i64, @bitCast(v));
+        }
+    }
+    // Decimal integer (no '.' or 'e'/'E' — caller must verify)
+    var v: u64 = 0;
+    while (i < s.len) : (i += 1) {
+        const ch = s[i];
+        if (ch == '_') continue;
+        if (ch < '0' or ch > '9') return null;
+        v = v *% 10 +% (ch - '0');
+    }
+    return if (neg) -@as(i64, @bitCast(v)) else @as(i64, @bitCast(v));
+}
+
 pub fn fmod(a: f64, b: f64) f64 {
     if (b == 0.0) return 0.0;
     return a - @trunc(a / b) * b;
