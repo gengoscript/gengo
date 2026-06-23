@@ -1,0 +1,34 @@
+// GC stress test: create 50 000 multi-field variants in a tight loop on the
+// default 1 MB heap.  Each iteration mirrors the MQTT receive path:
+//   variant_value (1 obj) + arm_fields managed slice + two dyn_string fields.
+// The test passes only if GC collects the dead variants fast enough.
+
+std := import("std")
+
+type Packet variant {
+    publish { topic string, pkt_id int, payload string },
+    ping,
+}
+
+func make_packet(i int) Packet {
+    return Packet.publish{
+        topic:   "sensor/" + std.conv.to_string(i),
+        pkt_id:  i,
+        payload: "value=" + std.conv.to_string(i),
+    }
+}
+
+total := 0
+i := 0
+for i < 50000 {
+    p := make_packet(i)
+    switch p {
+        case .publish as msg {
+            total = total + msg.pkt_id
+        }
+        default {}
+    }
+    i = i + 1
+}
+
+std.io.println(total)
