@@ -1,2 +1,4 @@
+std := import("std")
 net := import("cap:net")
-net.dial("tcp", "")
+conn := net.dial("tcp", "")
+std.io.println(std.core.is_error(conn))
