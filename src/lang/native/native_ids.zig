@@ -192,6 +192,32 @@ pub const NativeFnId = enum(u8) {
     io_readline = 196,
 
     fmt_stringify = 198,
+
+    bytes_at     = 200,
+    bytes_pack   = 201,
+    bytes_unpack = 202,
+    bytes_u16be  = 203,
+    bytes_u32be  = 204,
+    bytes_u16le  = 205,
+    bytes_u32le  = 206,
+    bytes_u8     = 207,
+    bytes_repeat = 208,
+    bytes_slice  = 209,
+    bytes_len    = 210,
+    bytes_u64be  = 211,
+    bytes_u64le  = 212,
+    bytes_u16be_at = 213,
+    bytes_u32be_at = 214,
+    bytes_u64be_at = 215,
+    bytes_u16le_at = 216,
+    bytes_u32le_at = 217,
+    bytes_u64le_at = 218,
+    bytes_index_of  = 219,
+    bytes_contains  = 220,
+    bytes_starts_with = 221,
+    bytes_ends_with   = 222,
+    bytes_replace     = 223,
+    bytes_count       = 224,
 };
 
 pub const MaxNativeArgs = 255;
