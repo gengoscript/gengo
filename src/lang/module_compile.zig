@@ -734,10 +734,18 @@ fn containsPath(paths: []const [MaxModulePathBytes]u8, lens: []const usize, need
 
 fn pathIsUnderRoot(path: []const u8, root: []const u8) bool {
     if (root.len == 0) return true;
-    if (!std.mem.startsWith(u8, path, root)) return false;
+    // "." means the cwd: any relative path that hasn't escaped upward is allowed.
+    if (common.streq(root, ".")) {
+        return !(path.len == 0 or path[0] == '/' or
+                 common.streq(path, "..") or std.mem.startsWith(u8, path, "../"));
+    }
+    // Strip leading "./" from root so "./modbus" matches normalized path "modbus/…".
+    const r = if (std.mem.startsWith(u8, root, "./")) root[2..] else root;
+    if (r.len == 0) return true;
+    if (!std.mem.startsWith(u8, path, r)) return false;
     // Prevent "src_extra/foo" matching root "src"
-    if (path.len == root.len) return true;
-    return path[root.len] == '/';
+    if (path.len == r.len) return true;
+    return path[r.len] == '/';
 }
 
 fn copyResolvedPath(path: []const u8) ![]const u8 {
