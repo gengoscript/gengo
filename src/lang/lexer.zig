@@ -227,6 +227,25 @@ pub const Lexer = struct {
         };
     }
 
+    fn readHexN(self: *Lexer, comptime n: usize) ?u21 {
+        var val: u21 = 0;
+        for (0..n) |_| {
+            if (self.atEnd()) return null;
+            const d = hexVal(self.adv()) orelse return null;
+            val = (val << 4) | d;
+        }
+        return val;
+    }
+
+    fn outCodepoint(self: *Lexer, cp: u21) bool {
+        var buf: [4]u8 = undefined;
+        const len = std.unicode.utf8Encode(cp, &buf) catch return false;
+        for (buf[0..len]) |b| {
+            if (!self.outByte(b)) return false;
+        }
+        return true;
+    }
+
     fn outEscaped(self: *Lexer, esc: u8) bool {
         return switch (esc) {
             'n' => self.outByte('\n'),
@@ -265,6 +284,12 @@ pub const Lexer = struct {
                     const hv = hexVal(hi) orelse return self.tok(.err_bad_escape);
                     const lv = hexVal(lo) orelse return self.tok(.err_bad_escape);
                     if (!self.outByte((hv << 4) | lv)) return self.tok(.err_string_pool_exhausted);
+                } else if (esc == 'u') {
+                    const cp = self.readHexN(4) orelse return self.tok(.err_bad_escape);
+                    if (!self.outCodepoint(cp)) return self.tok(.err_bad_escape);
+                } else if (esc == 'U') {
+                    const cp = self.readHexN(8) orelse return self.tok(.err_bad_escape);
+                    if (!self.outCodepoint(cp)) return self.tok(.err_bad_escape);
                 } else {
                     if (!self.outEscaped(esc)) return self.tok(.err_string_pool_exhausted);
                 }
@@ -519,6 +544,26 @@ test "lexer: string literal \\xHH lowercase" {
 
 test "lexer: string literal bad \\x escape" {
     var lex = Lexer{ .src = "\"\\xGG\"" };
+    const tok = lex.next();
+    try testing.expectEqual(.err_bad_escape, tok.typ);
+}
+
+test "lexer: string literal \\uXXXX BMP" {
+    var lex = Lexer{ .src = "\"\\u00E9\"" }; // é
+    const tok = lex.next();
+    try testing.expectEqual(.string, tok.typ);
+    try testing.expectEqualStrings("\xC3\xA9", tok.src); // UTF-8 for U+00E9
+}
+
+test "lexer: string literal \\UXXXXXXXX emoji" {
+    var lex = Lexer{ .src = "\"\\U0001F600\"" }; // 😀
+    const tok = lex.next();
+    try testing.expectEqual(.string, tok.typ);
+    try testing.expectEqual(@as(usize, 4), tok.src.len); // 4-byte UTF-8
+}
+
+test "lexer: string literal bad \\u escape" {
+    var lex = Lexer{ .src = "\"\\uXXXX\"" };
     const tok = lex.next();
     try testing.expectEqual(.err_bad_escape, tok.typ);
 }
