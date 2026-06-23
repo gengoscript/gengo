@@ -37,6 +37,7 @@ const host_abi_mod = @import("host_abi.zig");
 const math_mod = @import("math.zig");
 const conv_mod = @import("conv.zig");
 const array_mod = @import("array.zig");
+const bytes_mod = @import("bytes.zig");
 const sort_mod = @import("sort.zig");
 const build_options = @import("build_options");
 const cap_net_mod = if (build_options.cap_net) @import("cap_net.zig") else struct {};
@@ -358,6 +359,42 @@ pub fn buildStdModule() !*Object {
     try vms.pushTempRoot(.{ .object = array_obj });
     defer vms.popTempRoot();
 
+    const bytes_entries = [_]NamespaceEntry{
+        // Construction
+        .{ .name = "u8",      .value = try makeNative(.bytes_u8,     1) },
+        .{ .name = "pack",    .value = try makeNative(.bytes_pack,   1) },
+        .{ .name = "repeat",  .value = try makeNative(.bytes_repeat, 2) },
+        // Decomposition
+        .{ .name = "unpack",  .value = try makeNative(.bytes_unpack, 1) },
+        .{ .name = "at",      .value = try makeNative(.bytes_at,     2) },
+        .{ .name = "slice",   .value = try makeNative(.bytes_slice,  3) },
+        .{ .name = "len",     .value = try makeNative(.bytes_len,    1) },
+        // Integer encoding
+        .{ .name = "u16be",   .value = try makeNative(.bytes_u16be,  1) },
+        .{ .name = "u32be",   .value = try makeNative(.bytes_u32be,  1) },
+        .{ .name = "u64be",   .value = try makeNative(.bytes_u64be,  1) },
+        .{ .name = "u16le",   .value = try makeNative(.bytes_u16le,  1) },
+        .{ .name = "u32le",   .value = try makeNative(.bytes_u32le,  1) },
+        .{ .name = "u64le",   .value = try makeNative(.bytes_u64le,  1) },
+        // Integer decoding
+        .{ .name = "u16be_at", .value = try makeNative(.bytes_u16be_at, 2) },
+        .{ .name = "u32be_at", .value = try makeNative(.bytes_u32be_at, 2) },
+        .{ .name = "u64be_at", .value = try makeNative(.bytes_u64be_at, 2) },
+        .{ .name = "u16le_at", .value = try makeNative(.bytes_u16le_at, 2) },
+        .{ .name = "u32le_at", .value = try makeNative(.bytes_u32le_at, 2) },
+        .{ .name = "u64le_at", .value = try makeNative(.bytes_u64le_at, 2) },
+        // Byte-level search
+        .{ .name = "index_of",   .value = try makeNative(.bytes_index_of,   2) },
+        .{ .name = "contains",   .value = try makeNative(.bytes_contains,   2) },
+        .{ .name = "starts_with",.value = try makeNative(.bytes_starts_with,2) },
+        .{ .name = "ends_with",  .value = try makeNative(.bytes_ends_with,  2) },
+        .{ .name = "count",      .value = try makeNative(.bytes_count,      2) },
+        .{ .name = "replace",    .value = try makeNative(.bytes_replace,    3) },
+    };
+    const bytes_obj = try makeNamespace("bytes", "@module_type:std.bytes", &bytes_entries);
+    try vms.pushTempRoot(.{ .object = bytes_obj });
+    defer vms.popTempRoot();
+
     const std_entries = [_]NamespaceEntry{
         .{ .name = "io",  .value = .{ .object = io_obj } },
         .{ .name = "fmt", .value = .{ .object = fmt_obj } },
@@ -374,6 +411,7 @@ pub fn buildStdModule() !*Object {
         .{ .name = "regexp", .value = .{ .object = regexp_obj } },
         .{ .name = "sort", .value = .{ .object = sort_obj } },
         .{ .name = "array", .value = .{ .object = array_obj } },
+        .{ .name = "bytes", .value = .{ .object = bytes_obj } },
         .{ .name = "Time",      .value = .{ .object = time_type_obj } },
         .{ .name = "Regexp",    .value = .{ .object = regexp_type_obj } },
         .{ .name = "JSONValue", .value = .{ .object = jv_type_obj } },
@@ -790,6 +828,12 @@ pub fn callNative(nf: NativeFuncObj, argc: u8) !void {
         .array_filter, .array_map, .array_reduce, .array_slice, .array_zip, .array_flat,
         .array_find, .array_find_index, .array_all, .array_any, .array_chunk => return array_mod.dispatch(nf, argc),
         .sort_asc, .sort_desc, .sort_by => return sort_mod.dispatch(nf, argc),
+        .bytes_u8, .bytes_pack, .bytes_unpack, .bytes_at, .bytes_len, .bytes_slice, .bytes_repeat,
+        .bytes_u16be, .bytes_u32be, .bytes_u64be, .bytes_u16le, .bytes_u32le, .bytes_u64le,
+        .bytes_u16be_at, .bytes_u32be_at, .bytes_u64be_at,
+        .bytes_u16le_at, .bytes_u32le_at, .bytes_u64le_at,
+        .bytes_index_of, .bytes_contains, .bytes_starts_with, .bytes_ends_with,
+        .bytes_count, .bytes_replace => return bytes_mod.dispatch(nf, argc),
         inline else => |id| {
             if (comptime build_options.cap_net) {
                 switch (id) {

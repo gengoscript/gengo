@@ -35,6 +35,7 @@ pub const top_level_entries = [_]Entry{
     .{ .name = "regexp", .kind = .namespace },
     .{ .name = "sort", .kind = .namespace },
     .{ .name = "array", .kind = .namespace },
+    .{ .name = "bytes", .kind = .namespace },
     .{ .name = "Time",      .kind = .value },
     .{ .name = "Regexp",    .kind = .value },
     .{ .name = "JSONValue", .kind = .value },
@@ -215,6 +216,34 @@ pub const regexp_entries = [_]Entry{
     .{ .name = "compile", .kind = .function },
 };
 
+pub const bytes_entries = [_]Entry{
+    .{ .name = "u8",          .kind = .function },
+    .{ .name = "pack",        .kind = .function },
+    .{ .name = "repeat",      .kind = .function },
+    .{ .name = "unpack",      .kind = .function },
+    .{ .name = "at",          .kind = .function },
+    .{ .name = "slice",       .kind = .function },
+    .{ .name = "len",         .kind = .function },
+    .{ .name = "u16be",       .kind = .function },
+    .{ .name = "u32be",       .kind = .function },
+    .{ .name = "u64be",       .kind = .function },
+    .{ .name = "u16le",       .kind = .function },
+    .{ .name = "u32le",       .kind = .function },
+    .{ .name = "u64le",       .kind = .function },
+    .{ .name = "u16be_at",    .kind = .function },
+    .{ .name = "u32be_at",    .kind = .function },
+    .{ .name = "u64be_at",    .kind = .function },
+    .{ .name = "u16le_at",    .kind = .function },
+    .{ .name = "u32le_at",    .kind = .function },
+    .{ .name = "u64le_at",    .kind = .function },
+    .{ .name = "index_of",    .kind = .function },
+    .{ .name = "contains",    .kind = .function },
+    .{ .name = "starts_with", .kind = .function },
+    .{ .name = "ends_with",   .kind = .function },
+    .{ .name = "count",       .kind = .function },
+    .{ .name = "replace",     .kind = .function },
+};
+
 pub const namespaces = [_]Namespace{
     .{ .name = "io",  .entries = &io_entries },
     .{ .name = "fmt", .entries = &fmt_entries },
@@ -231,6 +260,7 @@ pub const namespaces = [_]Namespace{
     .{ .name = "regexp", .entries = &regexp_entries },
     .{ .name = "sort", .entries = &sort_entries },
     .{ .name = "array", .entries = &array_entries },
+    .{ .name = "bytes", .entries = &bytes_entries },
 };
 
 pub const sort_entries = [_]Entry{
