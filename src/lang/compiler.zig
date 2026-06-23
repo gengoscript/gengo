@@ -186,6 +186,7 @@ pub const Compiler = struct {
             .err_invalid_char => "invalid character",
             .err_unterminated_string => "unterminated string",
             .err_string_pool_exhausted => "string pool exhausted",
+            .err_bad_escape => "bad escape sequence",
             .ident => "identifier",
             .number => "number",
             .string => "string",
@@ -954,6 +955,11 @@ pub const Compiler = struct {
                 self.setErr("string pool exhausted (max {d}KB)", .{lexer_mod.StrPoolSize / 1024});
                 self.err_col = self.cur.col;
                 return error.UnterminatedString;
+            },
+            .err_bad_escape => {
+                self.setErr("bad escape sequence (expected \\xHH with two hex digits)", .{});
+                self.err_col = self.cur.col;
+                return error.BadEscape;
             },
             else => {},
         }

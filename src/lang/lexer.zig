@@ -218,6 +218,15 @@ pub const Lexer = struct {
         return true;
     }
 
+    fn hexVal(c: u8) ?u8 {
+        return switch (c) {
+            '0'...'9' => c - '0',
+            'a'...'f' => c - 'a' + 10,
+            'A'...'F' => c - 'A' + 10,
+            else => null,
+        };
+    }
+
     fn outEscaped(self: *Lexer, esc: u8) bool {
         return switch (esc) {
             'n' => self.outByte('\n'),
@@ -248,7 +257,17 @@ pub const Lexer = struct {
                 _ = self.adv();
                 if (self.atEnd()) return self.tok(.err_unterminated_string);
                 const esc = self.adv();
-                if (!self.outEscaped(esc)) return self.tok(.err_string_pool_exhausted);
+                if (esc == 'x') {
+                    if (self.atEnd()) return self.tok(.err_bad_escape);
+                    const hi = self.adv();
+                    if (self.atEnd()) return self.tok(.err_bad_escape);
+                    const lo = self.adv();
+                    const hv = hexVal(hi) orelse return self.tok(.err_bad_escape);
+                    const lv = hexVal(lo) orelse return self.tok(.err_bad_escape);
+                    if (!self.outByte((hv << 4) | lv)) return self.tok(.err_string_pool_exhausted);
+                } else {
+                    if (!self.outEscaped(esc)) return self.tok(.err_string_pool_exhausted);
+                }
                 continue;
             }
             _ = self.adv();
@@ -481,11 +500,27 @@ test "lexer: string literal with backslash and quote escapes" {
     try testing.expectEqualStrings("a\\b\"c'", tok.src);
 }
 
-test "lexer: string literal with unknown escape passes through" {
-    var lex = Lexer{ .src = "\"\\x\"" };
+test "lexer: string literal \\xHH hex escape" {
+    var lex = Lexer{ .src = "\"\\xFF\"" };
     const tok = lex.next();
     try testing.expectEqual(.string, tok.typ);
-    try testing.expectEqualStrings("x", tok.src);
+    try testing.expectEqual(@as(usize, 1), tok.src.len);
+    try testing.expectEqual(@as(u8, 0xFF), tok.src[0]);
+}
+
+test "lexer: string literal \\xHH lowercase" {
+    var lex = Lexer{ .src = "\"\\xde\\xad\"" };
+    const tok = lex.next();
+    try testing.expectEqual(.string, tok.typ);
+    try testing.expectEqual(@as(usize, 2), tok.src.len);
+    try testing.expectEqual(@as(u8, 0xDE), tok.src[0]);
+    try testing.expectEqual(@as(u8, 0xAD), tok.src[1]);
+}
+
+test "lexer: string literal bad \\x escape" {
+    var lex = Lexer{ .src = "\"\\xGG\"" };
+    const tok = lex.next();
+    try testing.expectEqual(.err_bad_escape, tok.typ);
 }
 
 test "lexer: unterminated double-quoted string" {

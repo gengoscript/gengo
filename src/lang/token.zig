@@ -4,6 +4,7 @@ pub const TT = enum {
     err_invalid_char,
     err_unterminated_string,
     err_string_pool_exhausted,
+    err_bad_escape,
     ident,
     number,
     string,
