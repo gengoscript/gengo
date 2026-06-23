@@ -21,6 +21,7 @@ const vm = @import("lang/vm.zig");
 const vmperf = @import("lang/vm_perf.zig");
 const vms = @import("lang/vm_state.zig");
 const cfg = @import("runtime/config.zig");
+const heap_rt = @import("runtime/heap.zig");
 const fs_state = @import("lang/native/fs_state.zig");
 const disasm = @import("lang/disasm.zig");
 
@@ -257,6 +258,20 @@ fn runReplMode(backend: vm.Policy.NativeBackend, max_ops: ?u64, caps: []const []
     die(0);
 }
 
+fn parseHeapSize(s: []const u8) usize {
+    if (s.len == 0) return 0;
+    const last = s[s.len - 1];
+    const multiplier: usize = switch (last) {
+        'k', 'K' => 1024,
+        'm', 'M' => 1024 * 1024,
+        'g', 'G' => 1024 * 1024 * 1024,
+        else => 1,
+    };
+    const digits = if (multiplier != 1) s[0 .. s.len - 1] else s;
+    const n = std.fmt.parseUnsigned(usize, digits, 10) catch return 0;
+    return n * multiplier;
+}
+
 fn runCli(argv: []const []const u8) void {
     var script_path: ?[]const u8 = null;
     var script_name: []const u8 = "<stdin>";
@@ -270,6 +285,7 @@ fn runCli(argv: []const []const u8) void {
     var cap_count: usize = 0;
     var module_paths: [module_compile.MaxModuleRoots][]const u8 = undefined;
     var module_path_count: usize = 0;
+    var heap_size: usize = heap_rt.HeapSize;
     while (script_index < argv.len) {
         const a = argv[script_index];
         if (a.len == 2 and a[0] == '-' and a[1] == '-') {
@@ -287,6 +303,7 @@ fn runCli(argv: []const []const u8) void {
             io.write("  --cap <name>       Enable a named capability (repeatable)\n");
             io.write("  --modules <path>   Allow imports from an extra directory (repeatable)\n");
             io.write("  --max-ops <n>      Limit instruction count (0 = unlimited)\n");
+            io.write("  --heap <size>      Set GC heap size, e.g. 4m, 512k (default 1m)\n");
             io.write("  --backend <name>   Native call backend: embedded (default) or host\n");
             io.write("  --mount <n>=<path> Mount a filesystem path under the given name\n");
             io.write("  -e, --eval <code>  Evaluate inline code instead of a script file\n");
@@ -380,6 +397,23 @@ fn runCli(argv: []const []const u8) void {
             script_index += 2;
             continue;
         }
+        if (std.mem.eql(u8, a, "--heap")) {
+            if (script_index + 1 >= argv.len) {
+                io.werr("gengo: --heap requires a size (e.g. 4m, 512k, 8388608)\n");
+                die(1);
+            }
+            const v = argv[script_index + 1];
+            const parsed = parseHeapSize(v);
+            if (parsed == 0) {
+                io.werr("gengo: invalid --heap value: ");
+                io.werr(v);
+                io.werr("\n");
+                die(1);
+            }
+            heap_size = parsed;
+            script_index += 2;
+            continue;
+        }
         if (std.mem.eql(u8, a, "--disasm")) {
             disasm_mode = true;
             script_index += 1;
@@ -456,11 +490,12 @@ fn runCli(argv: []const []const u8) void {
         io.werr("gengo: out of memory\n");
         die(1);
     };
-    runtime.initWithPolicy(.{
+    const max_objects = @min(65534, @max(heap_rt.MaxObjects, heap_size / 512));
+    runtime.initWithConfig(.{
         .allow_io = true,
         .native_backend = backend,
         .max_ops = max_ops,
-    }) catch {
+    }, heap_size, max_objects, vms.MaxStack, vms.MaxFrames, cfg.max_defers, std.heap.page_allocator) catch {
         io.werr("gengo: runtime init failed\n");
         die(1);
     };
