@@ -58,11 +58,11 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                 else => return error.CapabilityError,
             };
 
+            const inst_fields = try vmgc.vmAllocManagedSlice(MapEntry, 1);
             const inst_obj = try vmgc.vmAllocObject();
+            inst_obj.* = .{ .struct_instance = .{ .typ = conn_type_obj, .fields = inst_fields } };
             try vms.pushTempRoot(.{ .object = inst_obj });
             defer vms.popTempRoot();
-            const inst_fields = try vmgc.vmAllocManagedSlice(MapEntry, 1);
-            inst_obj.* = .{ .struct_instance = .{ .typ = conn_type_obj, .fields = inst_fields } };
             inst_fields[0] = .{ .key = .{ .string = try chunk.internStr("_handle") }, .value = .{ .int = @as(i64, id) } };
             try vms.vmPush(.{ .object = inst_obj });
         },
