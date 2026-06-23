@@ -194,15 +194,119 @@ fn httpFetchHost(
     };
 }
 
+// Returns milliseconds since an arbitrary monotonic epoch.
+fn monotonicMs() i64 {
+    var ts: std.posix.timespec = undefined;
+    _ = std.posix.system.clock_gettime(std.posix.CLOCK.MONOTONIC, &ts);
+    return @as(i64, ts.sec) * 1000 + @divTrunc(ts.nsec, 1_000_000);
+}
+
+// FdReader wraps a raw socket fd with poll()-based deadline enforcement.
+// It bypasses std.Io.Threaded.netReadPosix which panics on EAGAIN (debug) /
+// returns Unexpected (release) when SO_RCVTIMEO fires.
+const FdReader = struct {
+    fd: std.posix.socket_t,
+    deadline_ms: i64, // absolute monotonic deadline; 0 = no timeout
+    timed_out: bool,
+    interface: std.Io.Reader,
+
+    const vtable = std.Io.Reader.VTable{ .stream = streamFn };
+
+    pub fn init(fd: std.posix.socket_t, buf: []u8, deadline_ms: i64) FdReader {
+        return .{
+            .fd = fd,
+            .deadline_ms = deadline_ms,
+            .timed_out = false,
+            .interface = .{ .vtable = &vtable, .buffer = buf, .seek = 0, .end = 0 },
+        };
+    }
+
+    fn streamFn(r: *std.Io.Reader, w: *std.Io.Writer, limit: std.Io.Limit) std.Io.Reader.StreamError!usize {
+        const self: *FdReader = @alignCast(@fieldParentPtr("interface", r));
+        if (self.deadline_ms > 0) {
+            const remaining = self.deadline_ms - monotonicMs();
+            if (remaining <= 0) { self.timed_out = true; return error.ReadFailed; }
+            const poll_ms: i32 = @intCast(@min(remaining, std.math.maxInt(i32)));
+            var pfd = [1]std.posix.pollfd{.{ .fd = self.fd, .events = std.posix.POLL.IN, .revents = 0 }};
+            const rc = std.posix.poll(&pfd, poll_ms) catch return error.ReadFailed;
+            if (rc == 0) { self.timed_out = true; return error.ReadFailed; }
+        }
+        const dest = limit.slice(w.writableSliceGreedy(1) catch return error.WriteFailed);
+        const n = std.posix.read(self.fd, dest) catch |err| {
+            if (err == error.WouldBlock) self.timed_out = true;
+            return error.ReadFailed;
+        };
+        if (n == 0) return error.EndOfStream;
+        w.advance(n);
+        return n;
+    }
+};
+
+// FdWriter wraps a raw socket fd with poll()-based deadline enforcement.
+const FdWriter = struct {
+    fd: std.posix.socket_t,
+    deadline_ms: i64,
+    timed_out: bool,
+    interface: std.Io.Writer,
+
+    const vtable = std.Io.Writer.VTable{ .drain = drainFn };
+
+    pub fn init(fd: std.posix.socket_t, buf: []u8, deadline_ms: i64) FdWriter {
+        return .{
+            .fd = fd,
+            .deadline_ms = deadline_ms,
+            .timed_out = false,
+            .interface = .{ .vtable = &vtable, .buffer = buf, .end = 0 },
+        };
+    }
+
+    fn writeFd(self: *FdWriter, data: []const u8) std.Io.Writer.Error!void {
+        var remaining = data;
+        const max_count: usize = if (builtin.os.tag == .linux) 0x7ffff000 else std.math.maxInt(isize);
+        while (remaining.len > 0) {
+            if (self.deadline_ms > 0) {
+                const rem_time = self.deadline_ms - monotonicMs();
+                if (rem_time <= 0) { self.timed_out = true; return error.WriteFailed; }
+                const poll_ms: i32 = @intCast(@min(rem_time, std.math.maxInt(i32)));
+                var pfd = [1]std.posix.pollfd{.{ .fd = self.fd, .events = std.posix.POLL.OUT, .revents = 0 }};
+                const rc = std.posix.poll(&pfd, poll_ms) catch return error.WriteFailed;
+                if (rc == 0) { self.timed_out = true; return error.WriteFailed; }
+            }
+            while (true) {
+                const rc = std.posix.system.write(self.fd, remaining.ptr, @min(remaining.len, max_count));
+                switch (std.posix.errno(rc)) {
+                    .SUCCESS => { remaining = remaining[@intCast(rc)..]; break; },
+                    .INTR => continue,
+                    .AGAIN => { self.timed_out = true; return error.WriteFailed; },
+                    else => return error.WriteFailed,
+                }
+            }
+        }
+    }
+
+    fn drainFn(w: *std.Io.Writer, data: []const []const u8, splat: usize) std.Io.Writer.Error!usize {
+        const self: *FdWriter = @alignCast(@fieldParentPtr("interface", w));
+        const buffered = w.buffered();
+        var total_in: usize = buffered.len;
+        for (data) |s| total_in += s.len;
+        if (splat > 1 and data.len > 0) total_in += data[data.len - 1].len * (splat - 1);
+        if (buffered.len > 0) try self.writeFd(buffered);
+        for (data, 0..) |s, i| {
+            const count: usize = if (i == data.len - 1) splat else 1;
+            var j: usize = 0;
+            while (j < count) : (j += 1) try self.writeFd(s);
+        }
+        return w.consume(total_in);
+    }
+};
+
 fn httpFetchBuiltin(
     method: []const u8,
     url: []const u8,
     maybe_body: ?[]const u8,
     maybe_headers: ?std.StringHashMap([]const u8),
-    _timeout_ms: i64,
+    timeout_ms: i64,
 ) !HttpResult {
-    _ = _timeout_ms;
-
     const uri = std.Uri.parse(url) catch return error.InvalidUrl;
 
     var host_buf: [std.Io.net.HostName.max_len]u8 = undefined;
@@ -215,14 +319,19 @@ fn httpFetchBuiltin(
     var stream = host.connect(io, port, .{ .mode = .stream }) catch |e| return e;
     defer stream.close(io);
 
+    // Compute absolute deadline (0 means no timeout)
+    const deadline_ms: i64 = if (timeout_ms > 0) monotonicMs() + timeout_ms else 0;
+
     const tls_min_buf = std.crypto.tls.Client.min_buffer_len;
     var stream_read_buf: [tls_min_buf]u8 = undefined;
     var stream_write_buf: [tls_min_buf]u8 = undefined;
     var tls_read_buf: [tls_min_buf]u8 = undefined;
     var tls_write_buf: [tls_min_buf]u8 = undefined;
 
-    var sr = stream.reader(io, &stream_read_buf);
-    var sw = stream.writer(io, &stream_write_buf);
+    // Use deadline-aware fd readers/writers instead of the std.Io vtable path,
+    // which panics on EAGAIN in debug builds when a socket timeout fires.
+    var fd_reader = FdReader.init(stream.socket.handle, &stream_read_buf, deadline_ms);
+    var fd_writer = FdWriter.init(stream.socket.handle, &stream_write_buf, deadline_ms);
 
     var tls_client: ?std.crypto.tls.Client = null;
     if (is_tls) {
@@ -230,8 +339,8 @@ fn httpFetchBuiltin(
         io.vtable.random(io.userdata, &entropy);
         const now = std.Io.Timestamp.now(io, .real);
         tls_client = std.crypto.tls.Client.init(
-            &sr.interface,
-            &sw.interface,
+            &fd_reader.interface,
+            &fd_writer.interface,
             .{
                 .host = .{ .explicit = host.bytes },
                 .ca = .{ .no_verification = {} },
@@ -243,9 +352,24 @@ fn httpFetchBuiltin(
         ) catch |e| return e;
     }
 
-    const actual_reader: *std.Io.Reader = if (tls_client) |*tc| &tc.reader else &sr.interface;
-    const actual_writer: *std.Io.Writer = if (tls_client) |*tc| &tc.writer else &sw.interface;
+    const actual_reader: *std.Io.Reader = if (tls_client) |*tc| &tc.reader else &fd_reader.interface;
+    const actual_writer: *std.Io.Writer = if (tls_client) |*tc| &tc.writer else &fd_writer.interface;
 
+    return httpExchange(method, uri, host.bytes, maybe_body, maybe_headers, actual_reader, actual_writer) catch |err| {
+        if (fd_reader.timed_out or fd_writer.timed_out) return error.Timeout;
+        return err;
+    };
+}
+
+fn httpExchange(
+    method: []const u8,
+    uri: std.Uri,
+    host_bytes: []const u8,
+    maybe_body: ?[]const u8,
+    maybe_headers: ?std.StringHashMap([]const u8),
+    actual_reader: *std.Io.Reader,
+    actual_writer: *std.Io.Writer,
+) !HttpResult {
     // Build HTTP request
     var req_alloc = std.Io.Writer.Allocating.init(std.heap.page_allocator);
     defer req_alloc.deinit();
@@ -259,7 +383,7 @@ fn httpFetchBuiltin(
         if (q_raw.len > 0) try req_w.print("?{s}", .{q_raw});
     }
     try req_w.writeAll(" HTTP/1.1\r\n");
-    try req_w.print("Host: {s}\r\n", .{host.bytes});
+    try req_w.print("Host: {s}\r\n", .{host_bytes});
     try req_w.writeAll("User-Agent: gengo\r\n");
     try req_w.writeAll("Accept: */*\r\n");
     if (maybe_body) |body| try req_w.print("Content-Length: {d}\r\n", .{body.len});
@@ -271,12 +395,10 @@ fn httpFetchBuiltin(
 
     _ = try actual_writer.writeVec(&.{req_alloc.written()});
     try actual_writer.flush();
-    if (is_tls) try sw.interface.flush();
 
     if (maybe_body) |body| {
         _ = try actual_writer.writeVec(&.{body});
         try actual_writer.flush();
-        if (is_tls) try sw.interface.flush();
     }
 
     // Parse response status line and headers
@@ -290,9 +412,9 @@ fn httpFetchBuiltin(
     // Status line: "HTTP/1.1 200 OK\r\n"
     {
         const line = (try actual_reader.takeDelimiter('\n')) orelse return error.InvalidResponse;
-        const trimmed = (if (line.len > 0 and line[line.len - 1] == '\r') line[0 .. line.len - 1] else line);
+        const trimmed = if (line.len > 0 and line[line.len - 1] == '\r') line[0 .. line.len - 1] else line;
         var parts = std.mem.splitScalar(u8, trimmed, ' ');
-        _ = parts.next(); // skip "HTTP/1.1"
+        _ = parts.next();
         const status_str = parts.next() orelse return error.InvalidResponse;
         status_code = std.fmt.parseInt(u16, status_str, 10) catch return error.InvalidResponse;
     }
@@ -303,8 +425,8 @@ fn httpFetchBuiltin(
 
     while (true) {
         const line = (try actual_reader.takeDelimiter('\n')) orelse break;
-        const trimmed = (if (line.len > 0 and line[line.len - 1] == '\r') line[0 .. line.len - 1] else line);
-        if (trimmed.len == 0) break; // end of headers
+        const trimmed = if (line.len > 0 and line[line.len - 1] == '\r') line[0 .. line.len - 1] else line;
+        if (trimmed.len == 0) break;
 
         const colon_idx = std.mem.indexOfScalar(u8, trimmed, ':') orelse continue;
         const name = trimmed[0..colon_idx];
@@ -345,9 +467,8 @@ fn httpFetchBuiltin(
             const offset = body.items.len;
             try body.resize(std.heap.page_allocator, offset + chunk_size);
             try actual_reader.readSliceAll(body.items[offset..]);
-            _ = try actual_reader.takeDelimiter('\n'); // trailing \r\n
+            _ = try actual_reader.takeDelimiter('\n');
         }
-        // Skip trailers
         while (true) {
             const trail = (try actual_reader.takeDelimiter('\n')) orelse break;
             if (trail.len <= 1) break;
@@ -358,7 +479,6 @@ fn httpFetchBuiltin(
             try actual_reader.readSliceAll(body.items);
         }
     } else {
-        // Read until connection close
         try std.Io.Reader.appendRemaining(actual_reader, std.heap.page_allocator, &body, .unlimited);
     }
 
