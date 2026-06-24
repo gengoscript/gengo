@@ -207,9 +207,10 @@ const Engine = struct {
     fn setCompileError(self: *Engine, e: api.CompileError) void {
         self.last_error_line = e.line;
         self.last_error_col = e.col;
-        const s = std.fmt.bufPrint(&self.last_error, "compile error: {s}: {s}", .{
-            @errorName(e.kind), e.msg,
-        }) catch "";
+        const s = if (e.kind == error.OutOfMemory)
+            std.fmt.bufPrint(&self.last_error, "compilation failed: {s}", .{e.msg}) catch ""
+        else
+            std.fmt.bufPrint(&self.last_error, "compile error: {s}: {s}", .{@errorName(e.kind), e.msg}) catch "";
         self.last_error_len = @intCast(s.len);
     }
 
