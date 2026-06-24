@@ -174,11 +174,38 @@ pub fn allocBytesManaged(n: usize) ?[]u8 {
         if (paranoiaOn()) assertNotLive(blk);
         return blk;
     }
+    // Try bump before splitting — splitting is only worthwhile when the bump
+    // is exhausted, since bump blocks arrive pre-split and are cheaper.
     const mask: usize = ManagedAlign - 1;
     const pos = (g_state.heap_pos + mask) & ~mask;
-    if (pos + ClassSizes[ci] > g_state.heap.len) return null;
-    g_state.heap_pos = pos + ClassSizes[ci];
-    return g_state.heap[pos .. pos + ClassSizes[ci]];
+    if (pos + ClassSizes[ci] <= g_state.heap.len) {
+        g_state.heap_pos = pos + ClassSizes[ci];
+        return g_state.heap[pos .. pos + ClassSizes[ci]];
+    }
+    // Bump exhausted for this class: try buddy-splitting a larger free block.
+    // ClassSizes are exact powers of 2, so splitting is lossless.
+    var split_ci = ci + 1;
+    while (split_ci < g_state.class_count) : (split_ci += 1) {
+        if (g_state.free_blocks[split_ci]) |head| {
+            const next_ptr = @as(*usize, @ptrCast(@alignCast(head))).*;
+            g_state.free_blocks[split_ci] = if (next_ptr == 0) null else @as(*u8, @ptrFromInt(next_ptr));
+            // Split from split_ci down to ci, placing upper buddies in intermediate lists.
+            var cur_ci = split_ci;
+            var cur_ptr = @as([*]u8, @ptrCast(head));
+            while (cur_ci > ci) {
+                cur_ci -= 1;
+                const half = ClassSizes[cur_ci];
+                const buddy = cur_ptr + half;
+                const buddy_next = if (g_state.free_blocks[cur_ci]) |h| @intFromPtr(h) else 0;
+                @as(*usize, @ptrCast(@alignCast(buddy))).* = buddy_next;
+                g_state.free_blocks[cur_ci] = @ptrCast(buddy);
+            }
+            const blk = cur_ptr[0..ClassSizes[ci]];
+            if (paranoiaOn()) assertNotLive(blk);
+            return blk;
+        }
+    }
+    return null;
 }
 
 // Debug tripwire, enabled by the CLI when GENGO_HEAP_PARANOIA is set.
@@ -213,10 +240,55 @@ fn assertNotLive(buf: []u8) void {
     }
 }
 
+// Remove a block at target_addr from free list ci. Returns true if found.
+fn removeFromFreeList(ci: usize, target_addr: usize) bool {
+    var prev: ?*u8 = null;
+    var cur: ?*u8 = g_state.free_blocks[ci];
+    while (cur) |node| {
+        const next_val = @as(*usize, @ptrCast(@alignCast(node))).*;
+        const next_node: ?*u8 = if (next_val == 0) null else @as(*u8, @ptrFromInt(next_val));
+        if (@intFromPtr(node) == target_addr) {
+            if (prev) |p| {
+                @as(*usize, @ptrCast(@alignCast(p))).* = next_val;
+            } else {
+                g_state.free_blocks[ci] = next_node;
+            }
+            return true;
+        }
+        prev = node;
+        cur = next_node;
+    }
+    return false;
+}
+
 pub fn freeBytesManaged(buf: []u8) void {
     if (buf.len == 0) return;
     if (paranoiaOn()) assertNotLive(buf);
     const ci = classIndexFor(buf.len) orelse return;
+    const p_addr = @intFromPtr(buf.ptr);
+
+    // Coalesce: if an adjacent free block of the same class exists, merge them
+    // into a ci+1 block and recurse. Any two adjacent free blocks form a valid
+    // larger block regardless of how they were originally allocated.
+    if (ci + 1 < g_state.class_count) {
+        // Try upper buddy: block immediately after us.
+        const upper_addr = p_addr + ClassSizes[ci];
+        if (removeFromFreeList(ci, upper_addr)) {
+            const merged = @as([*]u8, @ptrCast(buf.ptr))[0..ClassSizes[ci + 1]];
+            freeBytesManaged(merged);
+            return;
+        }
+        // Try lower buddy: block immediately before us.
+        if (p_addr >= ClassSizes[ci]) {
+            const lower_addr = p_addr - ClassSizes[ci];
+            if (lower_addr >= @intFromPtr(g_state.heap.ptr) and removeFromFreeList(ci, lower_addr)) {
+                const merged = @as([*]u8, @ptrFromInt(lower_addr))[0..ClassSizes[ci + 1]];
+                freeBytesManaged(merged);
+                return;
+            }
+        }
+    }
+
     const p = @as(*u8, @ptrCast(buf.ptr));
     const next = if (g_state.free_blocks[ci]) |h| @intFromPtr(h) else 0;
     @as(*usize, @ptrCast(@alignCast(p))).* = next;
@@ -330,4 +402,62 @@ pub fn liveObjectCount() usize {
 
 pub fn usedBytes() usize {
     return g_state.heap_pos;
+}
+
+// Returns total bytes sitting in free lists across all classes.
+pub fn totalFreeListBytes() usize {
+    var total: usize = 0;
+    for (0..g_state.class_count) |ci| {
+        var node = g_state.free_blocks[ci];
+        while (node) |n| {
+            total += ClassSizes[ci];
+            const next_ptr = @as(*usize, @ptrCast(@alignCast(n))).*;
+            node = if (next_ptr == 0) null else @as(*u8, @ptrFromInt(next_ptr));
+        }
+    }
+    return total;
+}
+
+// Writes a compact free-list summary: "ci=N:depth,..." for non-empty classes.
+// buf must be large enough; returns the slice written.
+pub fn freeListSummary(buf: []u8) []u8 {
+    var pos: usize = 0;
+    var first = true;
+    for (0..g_state.class_count) |ci| {
+        var depth: usize = 0;
+        var node = g_state.free_blocks[ci];
+        while (node) |n| {
+            depth += 1;
+            const next_ptr = @as(*usize, @ptrCast(@alignCast(n))).*;
+            node = if (next_ptr == 0) null else @as(*u8, @ptrFromInt(next_ptr));
+        }
+        if (depth == 0) continue;
+        if (!first) {
+            if (pos < buf.len) { buf[pos] = ','; pos += 1; }
+        }
+        first = false;
+        // write "ci=N:depth"
+        const prefix = "ci=";
+        for (prefix) |c| { if (pos < buf.len) { buf[pos] = c; pos += 1; } }
+        // ci index as decimal
+        var tmp: [4]u8 = undefined;
+        var n: usize = ci;
+        var tlen: usize = 0;
+        if (n == 0) { tmp[0] = '0'; tlen = 1; } else {
+            while (n > 0) : (n /= 10) { tmp[tlen] = @intCast('0' + n % 10); tlen += 1; }
+            std.mem.reverse(u8, tmp[0..tlen]);
+        }
+        for (tmp[0..tlen]) |c| { if (pos < buf.len) { buf[pos] = c; pos += 1; } }
+        if (pos < buf.len) { buf[pos] = ':'; pos += 1; }
+        // depth as decimal
+        var d: usize = depth;
+        var dlen: usize = 0;
+        var dtmp: [8]u8 = undefined;
+        if (d == 0) { dtmp[0] = '0'; dlen = 1; } else {
+            while (d > 0) : (d /= 10) { dtmp[dlen] = @intCast('0' + d % 10); dlen += 1; }
+            std.mem.reverse(u8, dtmp[0..dlen]);
+        }
+        for (dtmp[0..dlen]) |c| { if (pos < buf.len) { buf[pos] = c; pos += 1; } }
+    }
+    return buf[0..pos];
 }

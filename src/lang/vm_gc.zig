@@ -208,6 +208,10 @@ pub fn vmAllocManagedSlice(comptime T: type, n: usize) ![]T {
         collectGarbage();
         vms.vmState().next_gc_heap_bytes = gcStepThreshold(heap.usedBytes());
     }
+    if (heap.wouldBump(@sizeOf(T) * n) and heap.usedBytes() * 2 >= heap.g_state.heap.len) {
+        collectGarbage();
+        vms.vmState().next_gc_heap_bytes = gcStepThreshold(heap.usedBytes());
+    }
     if (heap.allocManagedSlice(T, n)) |s| {
         vms.vmState().alloc_managed_slice_calls += 1;
         return s;
@@ -240,14 +244,11 @@ pub fn vmAllocManagedBytes(n: usize) ![]u8 {
         collectGarbage();
         vms.vmState().next_gc_heap_bytes = gcStepThreshold(heap.usedBytes());
     }
-    // Proactive GC: before bumping a medium/large slab when the heap is
-    // already over 25% full, collect first so freed blocks refill the free
-    // list and we avoid growing the bump at all.
-    // Thresholds: ≥2048 B at >25%, ≥4096 B at >12.5% (the tighter bound is
-    // the one the caller already checked via next_gc_heap_bytes so these only
-    // fire when the free list for that class is actually empty).
-    const used = heap.usedBytes();
-    if (n >= 2048 and heap.wouldBump(n) and used * 4 >= heap.g_state.heap.len) {
+    // Proactive GC: when the free list for this size class is empty and the
+    // heap is over 50% full, collect before bumping. Prevents fragmentation-
+    // induced OOM where small freed blocks fill their class free lists but
+    // the needed class has no free blocks and the bump is exhausted.
+    if (heap.wouldBump(n) and heap.usedBytes() * 2 >= heap.g_state.heap.len) {
         collectGarbage();
         vms.vmState().next_gc_heap_bytes = gcStepThreshold(heap.usedBytes());
     }
