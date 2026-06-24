@@ -217,9 +217,10 @@ const Engine = struct {
     fn setRuntimeError(self: *Engine, e: api.RuntimeError) void {
         self.last_error_line = e.line;
         self.last_error_col = e.col;
-        const s = std.fmt.bufPrint(&self.last_error, "panic: {s}: {s}", .{
-            @errorName(e.kind), e.msg,
-        }) catch "";
+        const s = if (e.kind == error.OutOfMemory)
+            std.fmt.bufPrint(&self.last_error, "panic: {s}", .{e.msg}) catch ""
+        else
+            std.fmt.bufPrint(&self.last_error, "panic: {s}: {s}", .{@errorName(e.kind), e.msg}) catch "";
         self.last_error_len = @intCast(s.len);
     }
 

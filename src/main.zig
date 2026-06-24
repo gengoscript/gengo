@@ -546,7 +546,11 @@ fn runCli(argv: []const []const u8) void {
             vms.vmState().alloc_managed_bytes_calls);
 
         if (err == error.OutOfMemory) {
-            io.werr("gengo: compilation failed: heap too small (");
+            if (runtime.last_compile_line != 0) {
+                io.werr("gengo: compilation failed: heap too small (");
+            } else {
+                io.werr("gengo: panic: heap exhausted (");
+            }
             io.werrInt(@intCast(heap_size / 1024));
             io.werr("k); use --heap 1m or larger\n");
         } else if (runtime.last_compile_line != 0) {
