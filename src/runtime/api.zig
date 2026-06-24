@@ -96,18 +96,14 @@ pub const Runtime = struct {
     }
 
     fn classifyRunResult(self: *Runtime, err: anyerror) RuntimeResult {
-        if (err == error.OutOfMemory) {
-            return .{ .compile_error = .{
-                .line = self.inner.last_compile_line,
-                .col = self.inner.last_compile_col,
-                .kind = err,
-                .msg = "heap too small",
-            }};
-        }
         if (self.inner.last_compile_line != 0) {
-            return .{ .compile_error = compileError(err, &self.inner) };
+            var ce = compileError(err, &self.inner);
+            if (err == error.OutOfMemory) ce.msg = "heap too small";
+            return .{ .compile_error = ce };
         }
-        return .{ .runtime_error = runtimeError(err, &self.inner) };
+        var re = runtimeError(err, &self.inner);
+        if (err == error.OutOfMemory) re.msg = "heap exhausted";
+        return .{ .runtime_error = re };
     }
 
     pub fn init(config: Config) !Runtime {
