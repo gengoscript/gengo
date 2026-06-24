@@ -545,7 +545,11 @@ fn runCli(argv: []const []const u8) void {
             vms.vmState().alloc_object_calls, vms.vmState().alloc_managed_slice_calls,
             vms.vmState().alloc_managed_bytes_calls);
 
-        if (runtime.last_compile_line != 0) {
+        if (err == error.OutOfMemory) {
+            io.werr("gengo: out of memory: heap too small (");
+            io.werrInt(@intCast(heap_size / 1024));
+            io.werr("k); try a larger --heap, e.g. --heap 1m\n");
+        } else if (runtime.last_compile_line != 0) {
             const compile_path = if (runtime.lastCompilePath().len != 0) runtime.lastCompilePath() else script_name;
             io.werr("gengo: compile error: ");
             io.werr(@errorName(err));
