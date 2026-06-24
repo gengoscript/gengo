@@ -12,7 +12,7 @@ Somewhere along the way, scripting made it normal to push those constraints out 
 
 Gengoscript brings that old lesson back to embedded scripting.
 
-It is a small, embeddable scripting language with a sandboxed engine written in Zig, designed to run natively or as WebAssembly.
+It is a capability-bounded, embeddable scripting language written in Zig, designed to run typed user logic under explicit host control — natively or as WebAssembly.
 
 You write the host application.
 
@@ -55,7 +55,7 @@ Python is familiar, but heavy and hard to isolate well. Lua is small and embedda
 
 Gengoscript is built for this space: more expressive than configuration, but designed from the start to run under host control. Imports are explicit. Capabilities exist only when the host enables them. Execution can be bounded. Domain rules can live in named types, ranges, predicate types, cycles, enums, variants, and subtypes instead of scattered validation code.
 
-It is a small host-embedded scripting VM with explicit integration points, isolated runtime instances, hard limits, and WebAssembly as a primary target.
+It is a contained scripting engine with explicit integration points, isolated runtime instances, hard limits, and WebAssembly as a primary target.
 
 ---
 
@@ -93,7 +93,7 @@ Gengoscript can be built as `gengo-engine.wasm` for browsers, edge runtimes, and
 
 ---
 
-## Small example
+## Example
 
 ```gengo
 type Port int range 1..65535

@@ -6,13 +6,13 @@ For library functions, see `stdlib.md`. For embedding and capability control, se
 
 ## Design Shape
 
-Gengoscript is a small host-embedded language. It is designed to be
-integrated into a larger application — think policy enforcement, user-defined
-logic, or plugin-style scripting — not to stand alone. To that end, it
-explicitly avoids ambient access to the machine: every import, every
-capability, and every allocation budget comes from the host. The language
-itself has no file system, no network, and no system calls. If a script
-needs those, the host decides whether to provide them.
+Gengoscript is a capability-bounded, host-embedded language. It is designed
+to be integrated into a larger application — think policy enforcement,
+user-defined logic, or plugin-style scripting — not to stand alone. Scripts
+are contained: every import, every capability, and every allocation budget
+comes from the host. The language itself has no file system, no network, and
+no system calls. If a script needs those, the host decides whether to provide
+them.
 
 The syntax is compact and broadly familiar to anyone who has used
 Go-like languages. The type system leans on nominal types (named wrappers
