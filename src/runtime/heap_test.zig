@@ -205,6 +205,18 @@ test "scaled class blocks are reusable after free" {
     try std.testing.expect(a.ptr == b.ptr);
 }
 
+test "flat mode preserves shared heap capacity for managed allocations" {
+    var h: heap.State = .{};
+    try h.init(256 * 1024, 64, std.testing.allocator);
+    defer h.deinit();
+    heap.setActive(&h);
+
+    try std.testing.expect(heap.allocBytesManaged(64 * 1024) != null);
+    try std.testing.expect(heap.allocBytesManaged(64 * 1024) != null);
+    try std.testing.expect(heap.allocBytesManaged(64 * 1024) != null);
+    try std.testing.expect(heap.allocBytesManaged(64 * 1024) != null);
+}
+
 // ── Fragmentation and defragmentation ──────────────────────────────────────
 
 test "defrag merges adjacent cross-class free blocks" {
@@ -255,4 +267,23 @@ test "fragmentationInfo reflects free list state" {
 
     const info_freed = heap.fragmentationInfo();
     try std.testing.expect(info_freed.free_bytes >= 16);
+}
+
+test "defrag frees scratch buffer when free block count exceeds stack buffer" {
+    var h: heap.State = .{};
+    try h.init(32768, 2048, std.testing.allocator);
+    defer h.deinit();
+    heap.setActive(&h);
+
+    var blocks: [1026][]u8 = undefined;
+    for (&blocks) |*block| {
+        block.* = heap.allocBytesManaged(16) orelse return error.TestFailed;
+    }
+
+    var i: usize = 0;
+    while (i < blocks.len) : (i += 2) {
+        heap.freeBytesManaged(blocks[i]);
+    }
+
+    heap.defragmentFreeLists();
 }

@@ -266,32 +266,29 @@ this is the simplest and most effective strategy:
 while (try nextRequest(&req)) {
     rt.reset();
     // Reload the policy script.
-    _ = rt.run(policy_source) catch { reject(req); continue; };
+    switch (rt.run(policy_source)) {
+        .ok => {},
+        else => {
+            reject(req);
+            continue;
+        },
+    }
     const result = rt.call("evaluate", &.{ ... });
     // ...
 }
 ```
 
 **Stateful policies** that cache data across calls should not reset between
-calls. Instead, rely on GC sweep and the internal defragmentation pass that
-consolidates free lists after every collection cycle. If fragmentation
-becomes a problem despite defrag, consider grouping related calls into
-batches and resetting between batches, or using a separate runtime per batch.
+calls. Instead, rely on normal GC sweep, and if long-lived churn still pushes
+the runtime toward `heap exhausted`, rotate the runtime between batches or use
+a separate runtime per batch.
 
 ### Monitoring
 
-Use the `heap.fragmentationInfo()` diagnostic (available in the Zig embedding
-API) to observe free list health:
-
-```zig
-const info = heap.fragmentationInfo();
-std.log.info("heap: {d} free bytes, largest block {d}", .{
-    info.free_bytes, info.largest_block,
-});
-```
-
-A growing gap between total free bytes and largest block suggests
-fragmentation is accumulating.
+The public `api.Runtime` surface does not currently expose heap-fragmentation
+diagnostics. In practice, watch for repeated `heap exhausted` results from
+`run()` or `call()` in long-lived runtimes and treat them as a signal to reset
+or rotate the runtime instance.
 
 ## Host Modules
 
