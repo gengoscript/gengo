@@ -41,7 +41,12 @@ var g_wasm_backing: WasmBacking = .{};
 
 pub const State = struct {
     heap: []align(16) u8 = &[_]u8{},
-    heap_pos: usize = 0,
+    compiler_bump: usize = 0,
+    compiler_end: usize = 0,
+    class_bump: [ClassCount]usize = [_]usize{0} ** ClassCount,
+    class_end: [ClassCount]usize = [_]usize{0} ** ClassCount,
+    overflow_bump: usize = 0,
+    overflow_base: usize = 0,
     obj_pool: []Object = &[_]Object{},
     obj_marked: []bool = &[_]bool{},
     obj_live: []bool = &[_]bool{},
@@ -71,7 +76,6 @@ pub const State = struct {
 
         self.obj_free_head = 0;
         self.obj_live_count = 0;
-        self.heap_pos = 0;
         var c: usize = 0;
         while (c < ClassCount) : (c += 1) self.free_blocks[c] = null;
         var i: usize = 0;
@@ -83,6 +87,50 @@ pub const State = struct {
         if (max_objects > 0) {
             self.obj_next_free[max_objects - 1] = 0xffff;
         }
+
+        // Partition the heap into compiler region, per-class regions, and overflow.
+        const compiler_sz = heap_size / 8;
+        self.compiler_bump = 0;
+        self.compiler_end = compiler_sz;
+        self.overflow_base = compiler_sz;
+
+        const align_mask: usize = ManagedAlign - 1;
+        var offset = (compiler_sz + align_mask) & ~align_mask;
+
+        // Only partition if all classes' minimum (ClassSizes[ci]) plus the
+        // compiler region fit in the heap. Otherwise use flat mode where
+        // overflow serves as a shared bump (traditional behavior).
+        var class_min_sum: usize = 0;
+        for (0..self.class_count) |ci| class_min_sum += ClassSizes[ci];
+        // Partition only when there is at least as much overflow space as
+        // class minimums. This ensures managed allocations have enough room
+        // for runtime bumps (e.g. template render's type metadata) alongside
+        // ordinary managed allocations. Small heaps stay in flat mode, which
+        // behaves like the traditional single-bump allocator.
+        if (class_min_sum * 2 + compiler_sz <= heap_size) {
+            // Partitioned mode: each class gets at least ClassSizes[ci] bytes.
+            for (0..self.class_count) |ci| {
+                const base = offset;
+                var size = ClassSizes[ci];
+                const remaining = heap_size - offset;
+                if (size > remaining) size = remaining;
+                self.class_bump[ci] = base;
+                offset += size;
+                self.class_end[ci] = offset;
+            }
+        } else {
+            // Flat mode: class bumps have zero-length regions so every
+            // managed allocation falls through to overflow immediately.
+            // overflow_bump starts at compiler_end and acts like the
+            // traditional shared heap_pos.
+            for (0..self.class_count) |ci| {
+                self.class_bump[ci] = offset;
+                self.class_end[ci] = offset;
+            }
+        }
+
+        self.overflow_bump = offset;
+        self.overflow_base = offset;
     }
 
     pub fn deinit(self: *State) void {
@@ -118,7 +166,13 @@ pub fn reset() void {
     if (g_state.obj_pool.len == 0 and g_state == &g_default_state) {
         _ = g_default_state.init(HeapSize, MaxObjects, g_state.allocator) catch {};
     }
-    g_state.heap_pos = 0;
+    g_state.compiler_bump = 0;
+    var class_base = g_state.compiler_end;
+    for (0..g_state.class_count) |ci| {
+        g_state.class_bump[ci] = class_base;
+        class_base = g_state.class_end[ci];
+    }
+    g_state.overflow_bump = g_state.overflow_base;
     var c: usize = 0;
     while (c < ClassCount) : (c += 1) g_state.free_blocks[c] = null;
     const max = g_state.obj_pool.len;
@@ -160,10 +214,16 @@ pub fn wouldBump(n: usize) bool {
 pub fn bump(comptime T: type, n: usize) ?[*]T {
     const al: usize = @alignOf(T);
     const mask: usize = al - 1;
-    const pos = (g_state.heap_pos + mask) & ~mask;
+    var pos = (g_state.compiler_bump + mask) & ~mask;
     const sz = @sizeOf(T) * n;
+    if (pos + sz <= g_state.compiler_end) {
+        g_state.compiler_bump = pos + sz;
+        return @as([*]T, @ptrCast(@alignCast(&g_state.heap[pos])));
+    }
+    // Dedicated compiler region exhausted — fall through to overflow.
+    pos = (g_state.overflow_bump + mask) & ~mask;
     if (pos + sz > g_state.heap.len) return null;
-    g_state.heap_pos = pos + sz;
+    g_state.overflow_bump = pos + sz;
     return @as([*]T, @ptrCast(@alignCast(&g_state.heap[pos])));
 }
 
@@ -177,15 +237,22 @@ pub fn allocBytesManaged(n: usize) ?[]u8 {
         if (paranoiaOn()) assertNotLive(blk);
         return blk;
     }
-    // Try bump before splitting — splitting is only worthwhile when the bump
-    // is exhausted, since bump blocks arrive pre-split and are cheaper.
-    const mask: usize = ManagedAlign - 1;
-    const pos = (g_state.heap_pos + mask) & ~mask;
-    if (pos + ClassSizes[ci] <= g_state.heap.len) {
-        g_state.heap_pos = pos + ClassSizes[ci];
-        return g_state.heap[pos .. pos + ClassSizes[ci]];
+    // Try bump from class-dedicated region. ClassSizes and bases are
+    // multiples of ManagedAlign so no alignment mask is needed.
+    const cpos = g_state.class_bump[ci];
+    if (cpos + ClassSizes[ci] <= g_state.class_end[ci]) {
+        g_state.class_bump[ci] = cpos + ClassSizes[ci];
+        return g_state.heap[cpos .. cpos + ClassSizes[ci]];
     }
-    // Bump exhausted for this class: try buddy-splitting a larger free block.
+    // Try overflow bump — shared space after all class regions. This is the
+    // sequential fallback that keeps small heaps working while the per-class
+    // regions provide the isolation guarantee for steady-state operation.
+    const opos = g_state.overflow_bump;
+    if (opos + ClassSizes[ci] <= g_state.heap.len) {
+        g_state.overflow_bump = opos + ClassSizes[ci];
+        return g_state.heap[opos .. opos + ClassSizes[ci]];
+    }
+    // Bump exhausted: try buddy-splitting a larger free block.
     // ClassSizes are exact powers of 2, so splitting is lossless.
     var split_ci = ci + 1;
     while (split_ci < g_state.class_count) : (split_ci += 1) {
@@ -414,7 +481,14 @@ pub fn liveObjectCount() usize {
 }
 
 pub fn usedBytes() usize {
-    return g_state.heap_pos;
+    var total = g_state.compiler_bump;
+    var prev_end = g_state.compiler_end;
+    for (0..g_state.class_count) |ci| {
+        total += g_state.class_bump[ci] - prev_end;
+        prev_end = g_state.class_end[ci];
+    }
+    total += g_state.overflow_bump - prev_end;
+    return total;
 }
 
 // Returns total bytes sitting in free lists across all classes.
