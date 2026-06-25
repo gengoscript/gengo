@@ -82,7 +82,10 @@ fn tplResolveField(data: Value, field: []const u8) !Value {
         .struct_instance => {
             const fields = obj.struct_instance.fields;
             for (fields) |f| {
-                if (vms.isStringValue(f.key)) { const k = vms.asStringValue(f.key) catch continue; if (std.mem.eql(u8, k, field)) return f.value; }
+                if (vms.isStringValue(f.key)) {
+                    const k = vms.asStringValue(f.key) catch continue;
+                    if (std.mem.eql(u8, k, field)) return f.value;
+                }
             }
             return .null;
         },
@@ -93,7 +96,10 @@ fn tplResolveField(data: Value, field: []const u8) !Value {
 fn tplFieldValue(obj: *Object, name: []const u8) Value {
     const fields = obj.struct_instance.fields;
     for (fields) |f| {
-        if (vms.isStringValue(f.key)) { const k = vms.asStringValue(f.key) catch continue; if (std.mem.eql(u8, k, name)) return f.value; }
+        if (vms.isStringValue(f.key)) {
+            const k = vms.asStringValue(f.key) catch continue;
+            if (std.mem.eql(u8, k, name)) return f.value;
+        }
     }
     return .null;
 }
@@ -308,11 +314,8 @@ fn tplBuildObj(src_val: Value, ops: []Value, args: []Value, jmp: []Value) !*Obje
     // Push any GC objects in args as temp roots before any allocation that could
     // trigger GC. Without this, chain-path arrays from tplSplitPath stored in
     // args[] are unreachable during GC and get collected.
-    const args_root_base = vms.vmState().temp_root_top;
-    for (args) |arg| {
-        if (arg == .object) try vms.pushTempRoot(arg);
-    }
-    defer vms.vmState().temp_root_top = args_root_base;
+    const args_root_base = try vms.pushObjectTempRoots(args);
+    defer vms.restoreTempRoots(args_root_base);
 
     const any_alts = heap.bump(FieldTypeAlt, 1) orelse return error.OutOfMemory;
     any_alts[0] = .{ .typ = .any };
@@ -480,7 +483,7 @@ pub fn tplParse(src_val: Value, src: []const u8) !Value {
             }
             pos = end + 2;
         } else {
-                ops[idx] = .{ .float = @floatFromInt(@intFromEnum(TplOp.text)) };
+            ops[idx] = .{ .float = @floatFromInt(@intFromEnum(TplOp.text)) };
             args[idx] = .{ .string = try chunk.internStr(src[pos..]) };
             jmp[idx] = .{ .float = -1 };
             idx += 1;
@@ -629,12 +632,12 @@ pub fn tplExec(tmpl: *Object, data: Value) !Value {
                             ip += 1;
                         } else {
                             const jv = jmps[ip];
-                    if ((jv != .int and jv != .float) or (if (jv == .int) @as(f64, @floatFromInt(jv.int)) else jv.float) < 0 or (if (jv == .int) @as(f64, @floatFromInt(jv.int)) else jv.float) >= @as(f64, @floatFromInt(ops.len))) return error.TypeError;
-                    ip = @intFromFloat(if (jv == .int) @as(f64, @floatFromInt(jv.int)) else jv.float);
+                            if ((jv != .int and jv != .float) or (if (jv == .int) @as(f64, @floatFromInt(jv.int)) else jv.float) < 0 or (if (jv == .int) @as(f64, @floatFromInt(jv.int)) else jv.float) >= @as(f64, @floatFromInt(ops.len))) return error.TypeError;
+                            ip = @intFromFloat(if (jv == .int) @as(f64, @floatFromInt(jv.int)) else jv.float);
                         }
                     } else {
                         const jv = jmps[ip];
-                    const jv_num: f64 = if (jv == .int) @floatFromInt(jv.int) else if (jv == .float) jv.float else return error.TypeError;
+                        const jv_num: f64 = if (jv == .int) @floatFromInt(jv.int) else if (jv == .float) jv.float else return error.TypeError;
                         if (jv_num < 0 or jv_num >= @as(f64, @floatFromInt(ops.len))) return error.TypeError;
                         ip = @intFromFloat(jv_num);
                     }
@@ -685,7 +688,10 @@ pub fn tplAddFunc(tmpl_obj: *Object, name: []const u8, func_val: Value) !void {
             for (m) |*e| {
                 if (tplIsStringVal(e.key)) {
                     const k = try tplAsStringVal(e.key);
-                    if (std.mem.eql(u8, k, name)) { e.value = func_val; return; }
+                    if (std.mem.eql(u8, k, name)) {
+                        e.value = func_val;
+                        return;
+                    }
                 }
             }
             const new_items = try vmgc.vmAllocManagedSlice(MapEntry, m.len + 1);
@@ -697,7 +703,10 @@ pub fn tplAddFunc(tmpl_obj: *Object, name: []const u8, func_val: Value) !void {
             for (m) |*e| {
                 if (tplIsStringVal(e.key)) {
                     const k = try tplAsStringVal(e.key);
-                    if (std.mem.eql(u8, k, name)) { e.value = func_val; return; }
+                    if (std.mem.eql(u8, k, name)) {
+                        e.value = func_val;
+                        return;
+                    }
                 }
             }
             const new_items = try vmgc.vmAllocManagedSlice(MapEntry, m.len + 1);
@@ -713,7 +722,6 @@ pub fn tplAddFunc(tmpl_obj: *Object, name: []const u8, func_val: Value) !void {
 pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
     switch (@as(NativeFnId, @enumFromInt(nf.id))) {
         .template_add_func => {
-
             if (argc != nf.arity) return error.ArityMismatch;
             const top = vms.vmState().stack_top;
             const tmpl_val = vms.vmState().stack[top - 3];
@@ -722,46 +730,51 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             if (tmpl_val != .object) return error.TypeError;
             const name = try vms.asStringValue(name_val);
             try tplAddFunc(tmpl_val.object, name, func_val);
-            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            _ = try vms.vmPop();
             try vms.vmPush(.null);
         },
         .template_execute => {
-
             if (argc != nf.arity) return error.ArityMismatch;
             const top = vms.vmState().stack_top;
             const tmpl_val = vms.vmState().stack[top - 2];
             const data = vms.vmState().stack[top - 1];
             if (tmpl_val != .object) return error.TypeError;
             const out = try tplExec(tmpl_val.object, data);
-            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            _ = try vms.vmPop();
             try vms.vmPush(out);
         },
         .template_parse => {
-
             if (argc != nf.arity) return error.ArityMismatch;
             const src_val = vms.vmState().stack[vms.vmState().stack_top - 1];
             const src = try vms.asStringValue(src_val);
             const out = try tplParse(src_val, src);
-            _ = try vms.vmPop(); _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            _ = try vms.vmPop();
             try vms.vmPush(out);
         },
         .template_render => {
-
             if (argc != nf.arity) return error.ArityMismatch;
             const top = vms.vmState().stack_top;
             const src_val = vms.vmState().stack[top - 2];
             const data = vms.vmState().stack[top - 1];
             const src = try vms.asStringValue(src_val);
             const out = try tplRender(src_val, src, data);
-            _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            _ = try vms.vmPop();
             try vms.vmPush(out);
         },
         .template_valid => {
-
             if (argc != nf.arity) return error.ArityMismatch;
             const src = try vms.asStringValue(vms.vmState().stack[vms.vmState().stack_top - 1]);
             const is_valid = tplValid(src);
-            _ = try vms.vmPop(); _ = try vms.vmPop();
+            _ = try vms.vmPop();
+            _ = try vms.vmPop();
             try vms.vmPush(.{ .boolean = is_valid });
         },
         else => {},

@@ -208,12 +208,22 @@ fn currentIpIdx() usize {
     return if (vmState().ip == 0) 0 else @min(vmState().ip - 1, len - 1);
 }
 
-pub fn currentLine() u32 { return chunk.lineAt(currentIpIdx()); }
-pub fn currentCol() u16 { return chunk.colAt(currentIpIdx()); }
+pub fn currentLine() u32 {
+    return chunk.lineAt(currentIpIdx());
+}
+pub fn currentCol() u16 {
+    return chunk.colAt(currentIpIdx());
+}
 
-pub fn panicLine() u32 { return vmState().panic_line; }
-pub fn panicCol() u16 { return vmState().panic_col; }
-pub fn panicFrames() []const PanicFrame { return vmState().panic_frames[0..vmState().panic_depth]; }
+pub fn panicLine() u32 {
+    return vmState().panic_line;
+}
+pub fn panicCol() u16 {
+    return vmState().panic_col;
+}
+pub fn panicFrames() []const PanicFrame {
+    return vmState().panic_frames[0..vmState().panic_depth];
+}
 
 pub inline fn vmPush(v: Value) !void {
     assertStringImmortal(v);
@@ -276,6 +286,34 @@ pub fn popTempRoot() void {
     if (vmState().temp_root_top > 0) vmState().temp_root_top -= 1;
 }
 
+pub fn tempRootDepth() usize {
+    return vmState().temp_root_top;
+}
+
+pub fn assertNoTempRoots(comptime context: []const u8) void {
+    if (comptime builtin.mode != .Debug) return;
+    if (vmState().temp_root_top == 0) return;
+    std.debug.panic("temp root leak after {s}: depth={d}", .{ context, vmState().temp_root_top });
+}
+
+pub fn assertTempRootDepth(expected: usize, comptime context: []const u8) void {
+    if (comptime builtin.mode != .Debug) return;
+    if (vmState().temp_root_top == expected) return;
+    std.debug.panic("temp root depth mismatch after {s}: expected {d}, found {d}", .{ context, expected, vmState().temp_root_top });
+}
+
+pub fn pushObjectTempRoots(values: []const Value) !usize {
+    const base = vmState().temp_root_top;
+    for (values) |value| {
+        if (value == .object) try pushTempRoot(value);
+    }
+    return base;
+}
+
+pub fn restoreTempRoots(base: usize) void {
+    vmState().temp_root_top = base;
+}
+
 pub fn vmConst() !Value {
     const idx = try vmShort();
     if (idx >= chunk.constCount()) return error.BadConstantIndex;
@@ -296,7 +334,9 @@ fn valToFloatIndex(v: Value) !f64 {
     return f;
 }
 
-pub fn vmIndexFromVal(v: Value) !usize { return @intFromFloat(try valToFloatIndex(v)); }
+pub fn vmIndexFromVal(v: Value) !usize {
+    return @intFromFloat(try valToFloatIndex(v));
+}
 
 pub fn vmSliceIndex(v: Value, upper: usize) !usize {
     const idx: usize = @intFromFloat(try valToFloatIndex(v));

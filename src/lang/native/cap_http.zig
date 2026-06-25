@@ -18,7 +18,6 @@ const chunk = @import("../chunk.zig");
 
 const ResponseTypeQualifiedName = "@cap_type:http.Response";
 
-
 fn buildResponseStruct(status: i32, body: []const u8, hdr_map: std.StringHashMap([]const u8), ok: bool) !Value {
     const resp_type_val = globals.get(ResponseTypeQualifiedName) orelse return error.CapabilityError;
     const resp_type_obj = switch (resp_type_val) {
@@ -70,15 +69,12 @@ fn pushOkPair(resp: Value) !void {
     // resp.object is unrooted on entry (caller popped its temp root); protect it before GC fires
     try vms.pushTempRoot(resp);
     defer vms.popTempRoot();
-    const arr_obj = try vmgc.vmAllocObject(); // GC fires; resp is protected
-    arr_obj.* = .{ .array = &[_]Value{} };
-    try vms.pushTempRoot(.{ .object = arr_obj });
-    const vals = try vmgc.vmAllocManagedSlice(Value, 2);
-    vals[0] = resp;
-    vals[1] = .null;
-    arr_obj.* = .{ .array_managed = vals };
-    vms.popTempRoot(); // pop arr_obj
-    try vms.vmPush(.{ .object = arr_obj });
+    const arr = try vmgc.allocTempRootedManagedValueArray(2);
+    defer vms.popTempRoot();
+    arr.values[0] = resp;
+    arr.values[1] = .null;
+    arr.publish(2);
+    try vms.vmPush(.{ .object = arr.obj });
 }
 
 fn pushErrPair(comptime fmt: []const u8, args: anytype) !void {
@@ -87,15 +83,12 @@ fn pushErrPair(comptime fmt: []const u8, args: anytype) !void {
     const copy = try vmgc.vmAllocManagedBytes(msg.len);
     @memcpy(copy[0..msg.len], msg);
 
-    const arr_obj = try vmgc.vmAllocObject();
-    arr_obj.* = .{ .array = &[_]Value{} };
-    try vms.pushTempRoot(.{ .object = arr_obj });
-    const vals = try vmgc.vmAllocManagedSlice(Value, 2);
-    vals[0] = .null;
-    vals[1] = .{ .error_value = try chunk.internStr(copy[0..msg.len]) };
-    arr_obj.* = .{ .array_managed = vals };
-    vms.popTempRoot();
-    try vms.vmPush(.{ .object = arr_obj });
+    const arr = try vmgc.allocTempRootedManagedValueArray(2);
+    defer vms.popTempRoot();
+    arr.values[0] = .null;
+    arr.values[1] = .{ .error_value = try chunk.internStr(copy[0..msg.len]) };
+    arr.publish(2);
+    try vms.vmPush(.{ .object = arr.obj });
 }
 
 pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
@@ -157,17 +150,17 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                     const entries = try vms.asMapSlice(opts);
                     for (entries) |entry| {
                         const key = switch (entry.key) {
-                        .string => |s| s.bytes,
+                            .string => |s| s.bytes,
                             else => continue,
                         };
                         if (std.mem.eql(u8, key, "method")) {
                             method = switch (entry.value) {
-                        .string => |s| s.bytes,
+                                .string => |s| s.bytes,
                                 else => return error.TypeError,
                             };
                         } else if (std.mem.eql(u8, key, "body")) {
                             const b = switch (entry.value) {
-                        .string => |s| s.bytes,
+                                .string => |s| s.bytes,
                                 else => return error.TypeError,
                             };
                             body = b;

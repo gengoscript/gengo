@@ -198,6 +198,7 @@ pub const Runtime = struct {
     }
 
     pub fn reset(self: *Runtime) void {
+        defer self.assertNoTempRootLeaks("Runtime.reset");
         self.activate();
         net_state.netReset();
         native_time.timeClearCache();
@@ -324,6 +325,7 @@ pub const Runtime = struct {
     }
 
     pub fn compileOnly(self: *Runtime, src: []const u8, path: []const u8, provider: module_compile.SourceProvider) !void {
+        defer self.assertNoTempRootLeaks("Runtime.compileOnly");
         self.last_compile_line = 0;
         self.last_compile_path_len = 0;
         self.last_compile_col = 0;
@@ -336,6 +338,7 @@ pub const Runtime = struct {
     // but do not execute. After this call, vm.setPolicy(self.policy) and vm.run()
     // together complete what a normal runPath would do. Used by differential testing.
     pub fn compileAndInstall(self: *Runtime, src: []const u8, path: []const u8, provider: module_compile.SourceProvider) !void {
+        defer self.assertNoTempRootLeaks("Runtime.compileAndInstall");
         try self.compileOnly(src, path, provider);
         vm.setPolicy(self.policy);
         try vmnative.installStdGlobal();
@@ -351,6 +354,7 @@ pub const Runtime = struct {
             @memcpy(self.last_runtime_msg_buf[0..emsg.len], emsg);
             return error.InputTooLong;
         }
+        defer self.assertNoTempRootLeaks("Runtime.runPathWithProvider");
         self.last_compile_line = 0;
         self.last_compile_path_len = 0;
         self.last_compile_col = 0;
@@ -426,6 +430,7 @@ pub const Runtime = struct {
             @memcpy(self.last_runtime_msg_buf[0..emsg.len], emsg);
             return error.InputTooLong;
         }
+        defer self.assertNoTempRootLeaks("Runtime.runIncremental");
         self.last_compile_line = 0;
         self.last_compile_path_len = 0;
         self.last_compile_col = 0;
@@ -495,6 +500,7 @@ pub const Runtime = struct {
     }
 
     pub fn callGlobal(self: *Runtime, name: []const u8, args: []const Value) !Value {
+        defer self.assertNoTempRootLeaks("Runtime.callGlobal");
         self.activate();
         vm.setPolicy(self.policy);
         self.last_compile_line = 0;
@@ -784,6 +790,11 @@ pub const Runtime = struct {
         @memcpy(self.last_runtime_msg_buf[0..emsg.len], emsg);
     }
 
+    fn assertNoTempRootLeaks(self: *Runtime, comptime context: []const u8) void {
+        self.activate();
+        vms.assertNoTempRoots(context);
+    }
+
     fn activate(self: *Runtime) void {
         chunk.setActive(self.chunk_state);
         globals.setActive(&self.globals_state);
@@ -917,5 +928,4 @@ pub const Runtime = struct {
         }
         return out[0..count];
     }
-
 };
