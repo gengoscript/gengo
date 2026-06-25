@@ -119,14 +119,14 @@ pub const State = struct {
                 self.class_end[ci] = offset;
             }
         } else {
-            // Flat mode: class bumps have zero-length regions so every
-            // managed allocation falls through to overflow immediately.
-            // overflow_bump starts at compiler_end and acts like the
-            // traditional shared heap_pos.
+            // Flat mode: keep the historical single shared bump so managed
+            // allocations do not lose a reserved compiler slice on small heaps.
+            self.compiler_end = 0;
             for (0..self.class_count) |ci| {
-                self.class_bump[ci] = offset;
-                self.class_end[ci] = offset;
+                self.class_bump[ci] = 0;
+                self.class_end[ci] = 0;
             }
+            offset = 0;
         }
 
         self.overflow_bump = offset;
@@ -167,7 +167,8 @@ pub fn reset() void {
         _ = g_default_state.init(HeapSize, MaxObjects, g_state.allocator) catch {};
     }
     g_state.compiler_bump = 0;
-    var class_base = g_state.compiler_end;
+    const align_mask: usize = ManagedAlign - 1;
+    var class_base = (g_state.compiler_end + align_mask) & ~align_mask;
     for (0..g_state.class_count) |ci| {
         g_state.class_bump[ci] = class_base;
         class_base = g_state.class_end[ci];
@@ -227,9 +228,7 @@ pub fn bump(comptime T: type, n: usize) ?[*]T {
     return @as([*]T, @ptrCast(@alignCast(&g_state.heap[pos])));
 }
 
-pub fn allocBytesManaged(n: usize) ?[]u8 {
-    if (n == 0) return &[_]u8{};
-    const ci = classIndexFor(n) orelse return null;
+fn takeFreeBlock(ci: usize) ?[]u8 {
     if (g_state.free_blocks[ci]) |head| {
         const next_ptr = @as(*usize, @ptrCast(@alignCast(head))).*;
         g_state.free_blocks[ci] = if (next_ptr == 0) null else @as(*u8, @ptrFromInt(next_ptr));
@@ -237,23 +236,10 @@ pub fn allocBytesManaged(n: usize) ?[]u8 {
         if (paranoiaOn()) assertNotLive(blk);
         return blk;
     }
-    // Try bump from class-dedicated region. ClassSizes and bases are
-    // multiples of ManagedAlign so no alignment mask is needed.
-    const cpos = g_state.class_bump[ci];
-    if (cpos + ClassSizes[ci] <= g_state.class_end[ci]) {
-        g_state.class_bump[ci] = cpos + ClassSizes[ci];
-        return g_state.heap[cpos .. cpos + ClassSizes[ci]];
-    }
-    // Try overflow bump — shared space after all class regions. This is the
-    // sequential fallback that keeps small heaps working while the per-class
-    // regions provide the isolation guarantee for steady-state operation.
-    const opos = g_state.overflow_bump;
-    if (opos + ClassSizes[ci] <= g_state.heap.len) {
-        g_state.overflow_bump = opos + ClassSizes[ci];
-        return g_state.heap[opos .. opos + ClassSizes[ci]];
-    }
-    // Bump exhausted: try buddy-splitting a larger free block.
-    // ClassSizes are exact powers of 2, so splitting is lossless.
+    return null;
+}
+
+fn splitLargerFreeBlock(ci: usize) ?[]u8 {
     var split_ci = ci + 1;
     while (split_ci < g_state.class_count) : (split_ci += 1) {
         if (g_state.free_blocks[split_ci]) |head| {
@@ -275,15 +261,31 @@ pub fn allocBytesManaged(n: usize) ?[]u8 {
             return blk;
         }
     }
-    // All strategies failed — try defragmenting free lists and retry once.
-    defragmentFreeLists();
-    if (g_state.free_blocks[ci]) |head| {
-        const next_ptr = @as(*usize, @ptrCast(@alignCast(head))).*;
-        g_state.free_blocks[ci] = if (next_ptr == 0) null else @as(*u8, @ptrFromInt(next_ptr));
-        const blk = @as([*]u8, @ptrCast(head))[0..ClassSizes[ci]];
-        if (paranoiaOn()) assertNotLive(blk);
-        return blk;
+    return null;
+}
+
+pub fn allocBytesManaged(n: usize) ?[]u8 {
+    if (n == 0) return &[_]u8{};
+    const ci = classIndexFor(n) orelse return null;
+    if (takeFreeBlock(ci)) |blk| return blk;
+    // Try bump from class-dedicated region. ClassSizes and bases are
+    // multiples of ManagedAlign so no alignment mask is needed.
+    const cpos = g_state.class_bump[ci];
+    if (cpos + ClassSizes[ci] <= g_state.class_end[ci]) {
+        g_state.class_bump[ci] = cpos + ClassSizes[ci];
+        return g_state.heap[cpos .. cpos + ClassSizes[ci]];
     }
+    // Try overflow bump — shared space after all class regions. This is the
+    // sequential fallback that keeps small heaps working while the per-class
+    // regions provide the isolation guarantee for steady-state operation.
+    const opos = g_state.overflow_bump;
+    if (opos + ClassSizes[ci] <= g_state.heap.len) {
+        g_state.overflow_bump = opos + ClassSizes[ci];
+        return g_state.heap[opos .. opos + ClassSizes[ci]];
+    }
+    // Bump exhausted: try buddy-splitting a larger free block.
+    // ClassSizes are exact powers of 2, so splitting is lossless.
+    if (splitLargerFreeBlock(ci)) |blk| return blk;
     return null;
 }
 
@@ -473,7 +475,6 @@ pub fn sweepObjects() void {
         g_state.obj_free_head = @intCast(i);
         g_state.obj_live_count -= 1;
     }
-    defragmentFreeLists();
 }
 
 pub fn liveObjectCount() usize {
@@ -549,10 +550,12 @@ pub fn defragmentFreeLists() void {
     // Collect all free blocks into a buffer.
     const FreeBlock = struct { addr: usize, size: usize };
     var stack_buf: [512]FreeBlock = undefined;
-    const buf = if (total <= stack_buf.len)
-        stack_buf[0..total]
+    const heap_buf = if (total <= stack_buf.len)
+        null
     else
         g_state.allocator.alloc(FreeBlock, total) catch return;
+    defer if (heap_buf) |buf| g_state.allocator.free(buf);
+    const buf = if (heap_buf) |owned| owned else stack_buf[0..total];
 
     var count: usize = 0;
     for (0..g_state.class_count) |ci| {
