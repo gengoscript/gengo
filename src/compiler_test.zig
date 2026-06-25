@@ -131,6 +131,187 @@ fn expectApiRuntimeErrorEqual(a: api.RuntimeError, b: api.RuntimeError) !void {
     try std.testing.expectEqualStrings(a.msg, b.msg);
 }
 
+fn expectNoTempRoots() !void {
+    try std.testing.expectEqual(@as(usize, 0), vms.tempRootDepth());
+}
+
+test "api runtime leaves no temp roots after GC-heavy success and error churn" {
+    var rt = try setupApiRuntime(.{
+        .allow_io = false,
+        .heap_size_bytes = 256 * 1024,
+        .max_objects = 512,
+    });
+    defer rt.deinit();
+
+    try std.testing.expect(rt.run(
+        \\std := import("std")
+        \\
+        \\func churn() int {
+        \\    arr := []
+        \\    for i := 0; i < 50; i += 1 {
+        \\        arr = std.core.append(arr, { i: i })
+        \\    }
+        \\    return std.core.len(arr)
+        \\}
+        \\
+        \\func explode() int {
+        \\    return 1 + "x"
+        \\}
+    ) == .ok);
+    try expectNoTempRoots();
+
+    var i: usize = 0;
+    while (i < 200) : (i += 1) {
+        const ok_result = rt.call("churn", &.{});
+        switch (ok_result) {
+            .ok => |v| try std.testing.expect(v == .int and v.int == 50),
+            else => return error.TestUnexpectedResult,
+        }
+        try expectNoTempRoots();
+
+        const err_result = rt.call("explode", &.{});
+        try std.testing.expect(err_result == .runtime_error);
+        try expectNoTempRoots();
+    }
+
+    var repl_rt = try setupApiRuntime(.{
+        .allow_io = false,
+        .heap_size_bytes = 256 * 1024,
+        .max_objects = 512,
+    });
+    defer repl_rt.deinit();
+
+    try std.testing.expect(repl_rt.runIncremental(
+        \\std := import("std")
+        \\
+        \\func moreChurn() int {
+        \\    arr := []
+        \\    for i := 0; i < 10; i += 1 {
+        \\        arr = std.core.append(arr, { i: i })
+        \\    }
+        \\    return std.core.len(arr)
+        \\}
+    ) == .ok);
+    try expectNoTempRoots();
+}
+
+test "api runtime leaves no temp roots after std.array zip and chunk churn" {
+    var rt = try setupApiRuntime(.{
+        .allow_io = false,
+        .heap_size_bytes = 256 * 1024,
+        .max_objects = 512,
+    });
+    defer rt.deinit();
+
+    try std.testing.expect(rt.run(
+        \\std := import("std")
+        \\a := std.array
+        \\
+        \\func zipCount() int {
+        \\    pairs := a.zip([1, 2, 3, 4], [5, 6, 7, 8])
+        \\    return std.core.len(pairs)
+        \\}
+        \\
+        \\func chunkCount() int {
+        \\    groups := a.chunk([1, 2, 3, 4, 5, 6], 2)
+        \\    return std.core.len(groups)
+        \\}
+    ) == .ok);
+    try expectNoTempRoots();
+
+    var i: usize = 0;
+    while (i < 200) : (i += 1) {
+        const zip_result = rt.call("zipCount", &.{});
+        switch (zip_result) {
+            .ok => |v| try std.testing.expect(v == .int and v.int == 4),
+            else => return error.TestUnexpectedResult,
+        }
+        try expectNoTempRoots();
+
+        const chunk_result = rt.call("chunkCount", &.{});
+        switch (chunk_result) {
+            .ok => |v| try std.testing.expect(v == .int and v.int == 3),
+            else => return error.TestUnexpectedResult,
+        }
+        try expectNoTempRoots();
+    }
+}
+
+test "api runtime leaves no temp roots after std.json parse churn" {
+    var rt = try setupApiRuntime(.{
+        .allow_io = false,
+        .heap_size_bytes = 256 * 1024,
+        .max_objects = 512,
+    });
+    defer rt.deinit();
+
+    try std.testing.expect(rt.run(
+        \\std := import("std")
+        \\json := std.json
+        \\
+        \\func parseCount() int {
+        \\    arr := json.parse("[1,2,3,{\"k\":\"v\"},[4,5,6]]")
+        \\    return std.core.len(arr)
+        \\}
+        \\
+        \\func parseValueTag() bool {
+        \\    doc := json.parse_value("{\"items\":[1,2,3],\"ok\":true}")
+        \\    return std.core.type_of(doc) == "JSONValue"
+        \\}
+    ) == .ok);
+    try expectNoTempRoots();
+
+    var i: usize = 0;
+    while (i < 200) : (i += 1) {
+        const parse_result = rt.call("parseCount", &.{});
+        switch (parse_result) {
+            .ok => |v| try std.testing.expect(v == .int and v.int == 5),
+            else => return error.TestUnexpectedResult,
+        }
+        try expectNoTempRoots();
+
+        const parse_value_result = rt.call("parseValueTag", &.{});
+        switch (parse_value_result) {
+            .ok => |v| try std.testing.expect(v == .boolean and v.boolean),
+            else => return error.TestUnexpectedResult,
+        }
+        try expectNoTempRoots();
+    }
+}
+
+test "api runtime leaves no temp roots after std.template render churn" {
+    var rt = try setupApiRuntime(.{
+        .allow_io = false,
+        .heap_size_bytes = 256 * 1024,
+        .max_objects = 512,
+    });
+    defer rt.deinit();
+
+    try std.testing.expect(rt.run(
+        \\std := import("std")
+        \\tmpl := std.template
+        \\
+        \\func renderLen() int {
+        \\    out := tmpl.render("Hello {{.name}} {{range .nums}}#{{.}}{{end}}", {
+        \\        "name": "Ada",
+        \\        "nums": [1, 2, 3, 4],
+        \\    })
+        \\    return std.core.len(out)
+        \\}
+    ) == .ok);
+    try expectNoTempRoots();
+
+    var i: usize = 0;
+    while (i < 200) : (i += 1) {
+        const render_result = rt.call("renderLen", &.{});
+        switch (render_result) {
+            .ok => |v| try std.testing.expect(v == .int and v.int > 0),
+            else => return error.TestUnexpectedResult,
+        }
+        try expectNoTempRoots();
+    }
+}
+
 test "compiler: empty source emits halt" {
     var rt = try setup();
     defer rt.deinit();
@@ -620,10 +801,10 @@ test "chunk: verify catches malformed fused instruction (BadOpcode)" {
     try chunk.emitConst(.{ .int = 99 }, 1);
     // Emit get_local_const_eq with a wrong skip byte (0 instead of const_eq)
     try chunk.emitByte(@intFromEnum(Op.get_local_const_eq), 1);
-    try chunk.emitByte(1, 1);       // local slot (valid)
-    try chunk.emitByte(0, 1);       // skip byte — should be const_eq
-    try chunk.emitByte(0, 1);       // const index hi
-    try chunk.emitByte(1, 1);       // const index lo = 1 (valid, < const_count)
+    try chunk.emitByte(1, 1); // local slot (valid)
+    try chunk.emitByte(0, 1); // skip byte — should be const_eq
+    try chunk.emitByte(0, 1); // const index hi
+    try chunk.emitByte(1, 1); // const index lo = 1 (valid, < const_count)
     try chunk.emitOp(.halt, 1);
 
     try std.testing.expectError(error.BadOpcode, chunk.verify());
@@ -796,7 +977,10 @@ test "compiler: const_eq fusion fires" {
     const c = rt.chunk_state;
     var found = false;
     for (c.code[0..c.code_len]) |op| {
-        if (op == @intFromEnum(Op.const_eq)) { found = true; break; }
+        if (op == @intFromEnum(Op.const_eq)) {
+            found = true;
+            break;
+        }
     }
     try std.testing.expect(found);
 }
@@ -825,7 +1009,10 @@ test "compiler: const_sub fusion fires" {
     const c = rt.chunk_state;
     var found = false;
     for (c.code[0..c.code_len]) |op| {
-        if (op == @intFromEnum(Op.const_sub)) { found = true; break; }
+        if (op == @intFromEnum(Op.const_sub)) {
+            found = true;
+            break;
+        }
     }
     try std.testing.expect(found);
 }
@@ -847,7 +1034,10 @@ test "compiler: get_local_const_eq triple fusion fires" {
     const c = rt.chunk_state;
     var found = false;
     for (c.code[0..c.code_len]) |op| {
-        if (op == @intFromEnum(Op.get_local_const_eq)) { found = true; break; }
+        if (op == @intFromEnum(Op.get_local_const_eq)) {
+            found = true;
+            break;
+        }
     }
     try std.testing.expect(found);
 }
@@ -871,7 +1061,10 @@ test "compiler: get_local_const_sub triple fusion fires" {
     const c = rt.chunk_state;
     var found = false;
     for (c.code[0..c.code_len]) |op| {
-        if (op == @intFromEnum(Op.get_local_const_sub)) { found = true; break; }
+        if (op == @intFromEnum(Op.get_local_const_sub)) {
+            found = true;
+            break;
+        }
     }
     try std.testing.expect(found);
 }
@@ -893,7 +1086,10 @@ test "compiler: get_local_const_add triple fusion fires" {
     const c = rt.chunk_state;
     var found = false;
     for (c.code[0..c.code_len]) |op| {
-        if (op == @intFromEnum(Op.get_local_const_add)) { found = true; break; }
+        if (op == @intFromEnum(Op.get_local_const_add)) {
+            found = true;
+            break;
+        }
     }
     try std.testing.expect(found);
 }
@@ -915,7 +1111,10 @@ test "compiler: get_local_const_lt triple fusion fires" {
     const c = rt.chunk_state;
     var found = false;
     for (c.code[0..c.code_len]) |op| {
-        if (op == @intFromEnum(Op.get_local_const_lt)) { found = true; break; }
+        if (op == @intFromEnum(Op.get_local_const_lt)) {
+            found = true;
+            break;
+        }
     }
     try std.testing.expect(found);
 }
@@ -944,7 +1143,10 @@ test "compiler: get_local_const_eq_jif_pop quad fusion fires" {
     const c = rt.chunk_state;
     var found = false;
     for (c.code[0..c.code_len]) |op| {
-        if (op == @intFromEnum(Op.get_local_const_eq_jif_pop)) { found = true; break; }
+        if (op == @intFromEnum(Op.get_local_const_eq_jif_pop)) {
+            found = true;
+            break;
+        }
     }
     try std.testing.expect(found);
 }
@@ -978,7 +1180,10 @@ test "compiler: get_local_const_lt_jif_pop quad fusion fires" {
     const c = rt.chunk_state;
     var found = false;
     for (c.code[0..c.code_len]) |op| {
-        if (op == @intFromEnum(Op.get_local_const_lt_jif_pop)) { found = true; break; }
+        if (op == @intFromEnum(Op.get_local_const_lt_jif_pop)) {
+            found = true;
+            break;
+        }
     }
     try std.testing.expect(found);
 }
@@ -1007,13 +1212,13 @@ test "compiler: expression too deep returns error" {
     var buf: [1024]u8 = undefined;
     var i: usize = 0;
     const prefix = "var x = ";
-    @memcpy(buf[i..i+prefix.len], prefix);
+    @memcpy(buf[i .. i + prefix.len], prefix);
     i += prefix.len;
     const depth = 257;
     var j: usize = 0;
     while (j < depth) : (j += 1) {
         buf[i] = '-';
-        buf[i+1] = '(';
+        buf[i + 1] = '(';
         i += 2;
     }
     buf[i] = '1';

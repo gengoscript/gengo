@@ -88,18 +88,16 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const arr_obj = arr_val.object;
             if (!vms.isArrayObject(arr_obj)) return error.TypeError;
             const items = try vms.asArraySlice(arr_obj);
-            const out_obj = try vmgc.allocTempRooted(.{ .array_managed = &[_]Value{} }); // safe placeholder
+            const out_arr = try vmgc.allocTempRootedManagedValueArray(items.len);
             defer vms.popTempRoot();
             if (items.len > 0) {
-                const out = try vmgc.vmAllocManagedSlice(Value, items.len);
-                out_obj.* = .{ .array_managed = out[0..0] }; // publish immediately
                 for (items, 0..) |item, i| {
-                    out[i] = try vm.callFunction(fn_val, &.{item});
-                    out_obj.* = .{ .array_managed = out[0 .. i + 1] }; // grow visible
+                    out_arr.values[i] = try vm.callFunction(fn_val, &.{item});
+                    out_arr.publish(i + 1);
                 }
             }
             vms.vmPopArgs(argc);
-            try vms.vmPush(.{ .object = out_obj });
+            try vms.vmPush(.{ .object = out_arr.obj });
         },
         .array_reduce => {
             const init_val = vms.vmTop(0);
@@ -152,26 +150,21 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const a_items = try vms.asArraySlice(a_obj);
             const b_items = try vms.asArraySlice(b_obj);
             const pair_count = @min(a_items.len, b_items.len);
-            const out_obj = try vmgc.allocTempRooted(.{ .array_managed = &[_]Value{} }); // safe placeholder
+            const out_arr = try vmgc.allocTempRootedManagedValueArray(pair_count);
             defer vms.popTempRoot();
             if (pair_count > 0) {
-                const out = try vmgc.vmAllocManagedSlice(Value, pair_count);
-                out_obj.* = .{ .array_managed = out[0..0] }; // publish immediately
                 for (0..pair_count) |i| {
-                    const pair = try vmgc.vmAllocObject();
-                    pair.* = .{ .array_managed = &[_]Value{} }; // safe init before GC can see it
-                    try vms.pushTempRoot(.{ .object = pair });
-                    const pair_items = try vmgc.vmAllocManagedSlice(Value, 2);
-                    pair_items[0] = a_items[i];
-                    pair_items[1] = b_items[i];
-                    pair.* = .{ .array_managed = pair_items[0..2] };
-                    out[i] = .{ .object = pair };
-                    out_obj.* = .{ .array_managed = out[0 .. i + 1] }; // grow visible
-                    vms.popTempRoot();
+                    const pair_arr = try vmgc.allocTempRootedManagedValueArray(2);
+                    defer vms.popTempRoot();
+                    pair_arr.values[0] = a_items[i];
+                    pair_arr.values[1] = b_items[i];
+                    pair_arr.publish(2);
+                    out_arr.values[i] = .{ .object = pair_arr.obj };
+                    out_arr.publish(i + 1);
                 }
             }
             vms.vmPopArgs(argc);
-            try vms.vmPush(.{ .object = out_obj });
+            try vms.vmPush(.{ .object = out_arr.obj });
         },
         .array_find => {
             const fn_val = vms.vmTop(0);
@@ -183,7 +176,10 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             var result: Value = .null;
             for (items) |item| {
                 const ok = try vm.callFunction(fn_val, &.{item});
-                if (try predBool(ok)) { result = item; break; }
+                if (try predBool(ok)) {
+                    result = item;
+                    break;
+                }
             }
             vms.vmPopArgs(argc);
             try vms.vmPush(result);
@@ -198,7 +194,10 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             var result: Value = .{ .int = -1 };
             for (items, 0..) |item, i| {
                 const ok = try vm.callFunction(fn_val, &.{item});
-                if (try predBool(ok)) { result = .{ .int = @intCast(i) }; break; }
+                if (try predBool(ok)) {
+                    result = .{ .int = @intCast(i) };
+                    break;
+                }
             }
             vms.vmPopArgs(argc);
             try vms.vmPush(result);
@@ -213,7 +212,10 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             var result = true;
             for (items) |item| {
                 const ok = try vm.callFunction(fn_val, &.{item});
-                if (!(try predBool(ok))) { result = false; break; }
+                if (!(try predBool(ok))) {
+                    result = false;
+                    break;
+                }
             }
             vms.vmPopArgs(argc);
             try vms.vmPush(.{ .boolean = result });
@@ -228,7 +230,10 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             var result = false;
             for (items) |item| {
                 const ok = try vm.callFunction(fn_val, &.{item});
-                if (try predBool(ok)) { result = true; break; }
+                if (try predBool(ok)) {
+                    result = true;
+                    break;
+                }
             }
             vms.vmPopArgs(argc);
             try vms.vmPush(.{ .boolean = result });
@@ -244,27 +249,22 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const sz: usize = @intCast(size);
             const items = try vms.asArraySlice(arr_obj);
             const chunk_count = if (items.len == 0) 0 else (items.len + sz - 1) / sz;
-            const out_obj = try vmgc.allocTempRooted(.{ .array_managed = &[_]Value{} }); // safe placeholder
+            const out_arr = try vmgc.allocTempRootedManagedValueArray(chunk_count);
             defer vms.popTempRoot();
             if (chunk_count > 0) {
-                const out = try vmgc.vmAllocManagedSlice(Value, chunk_count);
-                out_obj.* = .{ .array_managed = out[0..0] }; // publish immediately
                 for (0..chunk_count) |ci| {
                     const from = ci * sz;
                     const to = @min(from + sz, items.len);
-                    const chunk_obj = try vmgc.vmAllocObject();
-                    chunk_obj.* = .{ .array_managed = &[_]Value{} };
-                    try vms.pushTempRoot(.{ .object = chunk_obj });
-                    const chunk_items = try vmgc.vmAllocManagedSlice(Value, to - from);
-                    @memcpy(chunk_items, items[from..to]);
-                    chunk_obj.* = .{ .array_managed = chunk_items };
-                    vms.popTempRoot();
-                    out[ci] = .{ .object = chunk_obj };
-                    out_obj.* = .{ .array_managed = out[0 .. ci + 1] }; // grow visible
+                    const chunk_arr = try vmgc.allocTempRootedManagedValueArray(to - from);
+                    defer vms.popTempRoot();
+                    @memcpy(chunk_arr.values, items[from..to]);
+                    chunk_arr.publish(to - from);
+                    out_arr.values[ci] = .{ .object = chunk_arr.obj };
+                    out_arr.publish(ci + 1);
                 }
             }
             vms.vmPopArgs(argc);
-            try vms.vmPush(.{ .object = out_obj });
+            try vms.vmPush(.{ .object = out_arr.obj });
         },
         else => {},
     }

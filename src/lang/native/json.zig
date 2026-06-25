@@ -21,11 +21,11 @@ pub const JsonValueQualifiedName = "@std.json.Value";
 
 const jv_arms = [_]vmod.VariantArmSpec{
     .{ .name = "jnull" },
-    .{ .name = "jbool",   .has_payload = true },
-    .{ .name = "jint",    .has_payload = true },
-    .{ .name = "jfloat",  .has_payload = true },
-    .{ .name = "jstr",    .has_payload = true },
-    .{ .name = "jarray",  .has_payload = true },
+    .{ .name = "jbool", .has_payload = true },
+    .{ .name = "jint", .has_payload = true },
+    .{ .name = "jfloat", .has_payload = true },
+    .{ .name = "jstr", .has_payload = true },
+    .{ .name = "jarray", .has_payload = true },
     .{ .name = "jobject", .has_payload = true },
 };
 
@@ -54,7 +54,10 @@ const JVArm = enum(usize) { jnull = 0, jbool = 1, jint = 2, jfloat = 3, jstr = 4
 fn makeJV(arm: JVArm, payload: Value) !Value {
     const typ = try jsonValueGetType(); // bump: no alloc, no GC
     // Protect payload if it's an object (e.g. dyn_string for .jstr) before vmAllocObject triggers GC
-    const payload_is_obj = switch (payload) { .object => true, else => false };
+    const payload_is_obj = switch (payload) {
+        .object => true,
+        else => false,
+    };
     if (payload_is_obj) try vms.pushTempRoot(payload);
     defer if (payload_is_obj) vms.popTempRoot();
     const obj = try vmgc.vmAllocObject();
@@ -69,47 +72,43 @@ fn makeJV(arm: JVArm, payload: Value) !Value {
 
 fn jsonValueToTyped(jv: std.json.Value) !Value {
     return switch (jv) {
-        .null          => makeJV(.jnull, .null),
-        .bool   => |b| makeJV(.jbool,  .{ .boolean = b }),
-        .integer => |i| makeJV(.jint,  .{ .int = i }),
-        .float  => |f| makeJV(.jfloat, .{ .float = f }),
+        .null => makeJV(.jnull, .null),
+        .bool => |b| makeJV(.jbool, .{ .boolean = b }),
+        .integer => |i| makeJV(.jint, .{ .int = i }),
+        .float => |f| makeJV(.jfloat, .{ .float = f }),
         .number_string => |s| makeJV(.jfloat, .{ .float = try std.fmt.parseFloat(f64, s) }),
-        .string => |s| makeJV(.jstr,   try vmgc.makeDynString(s)),
-        .array  => |arr| {
+        .string => |s| makeJV(.jstr, try vmgc.makeDynString(s)),
+        .array => |arr| {
             const n = arr.items.len;
-            const items_obj = try vmgc.allocTempRooted(.{ .array_managed = &[_]Value{} });
+            const items_arr = try vmgc.allocTempRootedManagedValueArray(n);
             defer vms.popTempRoot();
-            const items = try vmgc.vmAllocManagedSlice(Value, n);
-            items_obj.* = .{ .array_managed = items[0..0] };
             for (0..n) |i| {
-                items[i] = try jsonValueToTyped(arr.items[i]);
-                items_obj.* = .{ .array_managed = items[0 .. i + 1] };
+                items_arr.values[i] = try jsonValueToTyped(arr.items[i]);
+                items_arr.publish(i + 1);
             }
-            return makeJV(.jarray, .{ .object = items_obj });
+            return makeJV(.jarray, .{ .object = items_arr.obj });
         },
         .object => |obj_map| {
             const n = obj_map.keys().len;
-            const map_obj = try vmgc.allocTempRooted(.{ .map = &[_]MapEntry{} });
+            const map_obj = try vmgc.allocTempRootedManagedMap(n);
             defer vms.popTempRoot();
-            const entries = try vmgc.vmAllocManagedSlice(MapEntry, n);
-            map_obj.* = .{ .map = entries[0..0] };
             const keys = obj_map.keys();
             const vals = obj_map.values();
             for (0..n) |i| {
                 const k = try vmgc.makeDynString(keys[i]);
                 try vms.pushTempRoot(k);
-                entries[i].key = k;
-                entries[i].value = try jsonValueToTyped(vals[i]);
+                map_obj.entries[i].key = k;
+                map_obj.entries[i].value = try jsonValueToTyped(vals[i]);
                 vms.popTempRoot();
-                map_obj.* = .{ .map = entries[0 .. i + 1] };
+                map_obj.publish(i + 1);
             }
             if (n > 0) {
                 const bcount = vmmap.mapBucketsForCount(n);
                 const buckets = try vmgc.vmAllocManagedSlice(i32, bcount);
-                vmmap.mapBuildHashedBuckets(entries[0..n], buckets);
-                map_obj.* = .{ .map_hashed = .{ .entries = entries[0..n], .len = n, .buckets = buckets } };
+                vmmap.mapBuildHashedBuckets(map_obj.entries[0..n], buckets);
+                map_obj.obj.* = .{ .map_hashed = .{ .entries = map_obj.entries[0..n], .len = n, .buckets = buckets } };
             }
-            return makeJV(.jobject, .{ .object = map_obj });
+            return makeJV(.jobject, .{ .object = map_obj.obj });
         },
     };
 }
@@ -139,15 +138,13 @@ fn jsonValueToGengo(jv: std.json.Value) !Value {
                 obj.* = .{ .array_managed = &[_]Value{} };
                 return .{ .object = obj };
             }
-            const obj = try vmgc.allocTempRooted(.{ .array_managed = &[_]Value{} });
+            const arr_obj = try vmgc.allocTempRootedManagedValueArray(n);
             defer vms.popTempRoot();
-            const items = try vmgc.vmAllocManagedSlice(Value, n);
-            obj.* = .{ .array_managed = items[0..0] }; // publish immediately so GC traces partial contents
             for (0..n) |i| {
-                items[i] = try jsonValueToGengo(arr.items[i]);
-                obj.* = .{ .array_managed = items[0 .. i + 1] }; // grow visible length
+                arr_obj.values[i] = try jsonValueToGengo(arr.items[i]);
+                arr_obj.publish(i + 1);
             }
-            return .{ .object = obj };
+            return .{ .object = arr_obj.obj };
         },
         .object => |obj_map| {
             const n = obj_map.keys().len;
@@ -156,26 +153,23 @@ fn jsonValueToGengo(jv: std.json.Value) !Value {
                 obj.* = .{ .map = &[_]MapEntry{} };
                 return .{ .object = obj };
             }
-            const obj = try vmgc.allocTempRooted(.{ .map = &[_]MapEntry{} });
+            const map_obj = try vmgc.allocTempRootedManagedMap(n);
             defer vms.popTempRoot();
-            const items = try vmgc.vmAllocManagedSlice(MapEntry, n);
-            obj.* = .{ .map = items[0..0] }; // root items immediately; grow length as entries are filled
             const keys = obj_map.keys();
             const vals = obj_map.values();
             for (0..n) |i| {
                 const k = try vmgc.makeDynString(keys[i]);
                 try vms.pushTempRoot(k);
-                items[i].key = k;
-                items[i].value = try jsonValueToGengo(vals[i]);
+                map_obj.entries[i].key = k;
+                map_obj.entries[i].value = try jsonValueToGengo(vals[i]);
                 vms.popTempRoot();
-                obj.* = .{ .map = items[0 .. i + 1] };
+                map_obj.publish(i + 1);
             }
-            obj.* = .{ .map = items[0..n] };
             const bcount = vmmap.mapBucketsForCount(n);
             const buckets = try vmgc.vmAllocManagedSlice(i32, bcount);
-            vmmap.mapBuildHashedBuckets(items[0..n], buckets);
-            obj.* = .{ .map_hashed = .{ .entries = items[0..n], .len = n, .buckets = buckets } };
-            return .{ .object = obj };
+            vmmap.mapBuildHashedBuckets(map_obj.entries[0..n], buckets);
+            map_obj.obj.* = .{ .map_hashed = .{ .entries = map_obj.entries[0..n], .len = n, .buckets = buckets } };
+            return .{ .object = map_obj.obj };
         },
     };
 }
@@ -289,12 +283,7 @@ pub fn jsonIndentNative() !Value {
     var out: std.Io.Writer.Allocating = .init(std.heap.page_allocator);
     defer out.deinit();
     const Ws = @TypeOf(@as(std.json.Stringify.Options, .{}).whitespace);
-    const ws: Ws = if (std.mem.eql(u8, indent_str, "\t")) .indent_tab
-        else if (std.mem.eql(u8, indent_str, " ")) .indent_1
-        else if (std.mem.eql(u8, indent_str, "   ")) .indent_3
-        else if (std.mem.eql(u8, indent_str, "        ")) .indent_8
-        else if (std.mem.eql(u8, indent_str, "    ")) .indent_4
-        else .indent_2;
+    const ws: Ws = if (std.mem.eql(u8, indent_str, "\t")) .indent_tab else if (std.mem.eql(u8, indent_str, " ")) .indent_1 else if (std.mem.eql(u8, indent_str, "   ")) .indent_3 else if (std.mem.eql(u8, indent_str, "        ")) .indent_8 else if (std.mem.eql(u8, indent_str, "    ")) .indent_4 else .indent_2;
     var s = std.json.Stringify{ .writer = &out.writer, .options = .{ .whitespace = ws } };
     try s.write(parsed.value);
     return vmgc.makeDynString(out.written());

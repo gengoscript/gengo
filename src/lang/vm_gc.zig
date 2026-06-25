@@ -8,6 +8,7 @@ const vms = @import("vm_state.zig");
 const vmperf = @import("vm_perf.zig");
 const Value = @import("value.zig").Value;
 const Object = @import("value.zig").Object;
+const MapEntry = @import("value.zig").MapEntry;
 const build_options = @import("build_options");
 
 pub fn monoNowNs() u64 {
@@ -78,7 +79,9 @@ fn drainMarkQueue() void {
             .iterator => |it| {
                 if (it.source) |src| if (heap.isObjectLive(src)) markObjectQueue(src);
                 switch (it.kind) {
-                    .array => { for (it.array) |v| markValue(v); },
+                    .array => {
+                        for (it.array) |v| markValue(v);
+                    },
                     .map => {
                         for (it.map) |e| {
                             markValue(e.key);
@@ -103,13 +106,14 @@ fn drainMarkQueue() void {
                 if (nt.parent_obj) |p| markObjectQueue(p);
                 if (nt.predicate) |p| markObjectQueue(p);
             },
-            .enum_type => |et| { if (et.parent) |p| markObjectQueue(p); },
+            .enum_type => |et| {
+                if (et.parent) |p| markObjectQueue(p);
+            },
             .string_view => |sv| {
                 if (heap.isObjectLive(sv.source)) markObjectQueue(sv.source);
             },
             // No GC-traced children; backing bytes are freed by the sweep.
-            .dyn_string, .function, .native_function, .host_module_function, .struct_type, .interface_type,
-            .string_builder => {},
+            .dyn_string, .function, .native_function, .host_module_function, .struct_type, .interface_type, .string_builder => {},
         }
     }
 }
@@ -270,6 +274,38 @@ pub fn allocTempRooted(comptime safeInit: Object) !*Object {
     obj.* = safeInit;
     try vms.pushTempRoot(.{ .object = obj });
     return obj;
+}
+
+pub const TempRootedManagedValueArray = struct {
+    obj: *Object,
+    values: []Value,
+
+    pub fn publish(self: TempRootedManagedValueArray, len: usize) void {
+        self.obj.* = .{ .array_managed = self.values[0..len] };
+    }
+};
+
+pub fn allocTempRootedManagedValueArray(len: usize) !TempRootedManagedValueArray {
+    const obj = try allocTempRooted(.{ .array_managed = &[_]Value{} });
+    const values = try vmAllocManagedSlice(Value, len);
+    obj.* = .{ .array_managed = values[0..0] };
+    return .{ .obj = obj, .values = values };
+}
+
+pub const TempRootedManagedMap = struct {
+    obj: *Object,
+    entries: []MapEntry,
+
+    pub fn publish(self: TempRootedManagedMap, len: usize) void {
+        self.obj.* = .{ .map = self.entries[0..len] };
+    }
+};
+
+pub fn allocTempRootedManagedMap(len: usize) !TempRootedManagedMap {
+    const obj = try allocTempRooted(.{ .map = &[_]MapEntry{} });
+    const entries = try vmAllocManagedSlice(MapEntry, len);
+    obj.* = .{ .map = entries[0..0] };
+    return .{ .obj = obj, .entries = entries };
 }
 
 pub fn makeDynString(s: []const u8) !Value {

@@ -51,7 +51,6 @@ const RegexpTypeQualifiedName = "@std.regexp.obj";
 const NativeFnId = @import("native_ids.zig").NativeFnId;
 const compare = @import("compare.zig");
 
-
 const MaxNativeArgs = 255;
 const NamespaceEntry = struct {
     name: []const u8,
@@ -99,22 +98,22 @@ pub fn buildStdModule() !*Object {
     if (vms.vmState().std_module) |m| return m;
 
     const fmt_entries = [_]NamespaceEntry{
-        .{ .name = "format",    .value = try makeNative(.io_sprintf,     255) },
-        .{ .name = "stringify", .value = try makeNative(.fmt_stringify,  1) },
+        .{ .name = "format", .value = try makeNative(.io_sprintf, 255) },
+        .{ .name = "stringify", .value = try makeNative(.fmt_stringify, 1) },
     };
     const fmt_obj = try makeNamespace("fmt", "@module_type:std.fmt", &fmt_entries);
     try vms.pushTempRoot(.{ .object = fmt_obj });
     defer vms.popTempRoot();
 
     const io_entries = [_]NamespaceEntry{
-        .{ .name = "println",  .value = try makeNative(.io_println,  255) },
-        .{ .name = "printf",   .value = try makeNative(.io_printf,   255) },
-        .{ .name = "print",    .value = try makeNative(.io_print,    255) },
-        .{ .name = "eprint",   .value = try makeNative(.io_eprint,   255) },
-        .{ .name = "eprintf",  .value = try makeNative(.io_eprintf,  255) },
+        .{ .name = "println", .value = try makeNative(.io_println, 255) },
+        .{ .name = "printf", .value = try makeNative(.io_printf, 255) },
+        .{ .name = "print", .value = try makeNative(.io_print, 255) },
+        .{ .name = "eprint", .value = try makeNative(.io_eprint, 255) },
+        .{ .name = "eprintf", .value = try makeNative(.io_eprintf, 255) },
         .{ .name = "eprintln", .value = try makeNative(.io_eprintln, 255) },
-        .{ .name = "read",     .value = try makeNative(.io_read,     0)   },
-        .{ .name = "readline", .value = try makeNative(.io_readline, 0)   },
+        .{ .name = "read", .value = try makeNative(.io_read, 0) },
+        .{ .name = "readline", .value = try makeNative(.io_readline, 0) },
     };
     const io_obj = try makeNamespace("io", "@module_type:std.io", &io_entries);
     try vms.pushTempRoot(.{ .object = io_obj });
@@ -238,11 +237,11 @@ pub fn buildStdModule() !*Object {
         .{ .name = "pad_right", .value = try makeNative(.str_pad_right, 3) },
         .{ .name = "equal_fold", .value = try makeNative(.str_equal_fold, 2) },
         .{ .name = "contains_any", .value = try makeNative(.str_contains_any, 2) },
-        .{ .name = "trim_left",    .value = try makeNative(.str_trim_left, 2) },
-        .{ .name = "trim_right",   .value = try makeNative(.str_trim_right, 2) },
-        .{ .name = "trim_prefix",  .value = try makeNative(.str_trim_prefix, 2) },
-        .{ .name = "trim_suffix",  .value = try makeNative(.str_trim_suffix, 2) },
-        .{ .name = "split_n",      .value = try makeNative(.str_split_n, 3) },
+        .{ .name = "trim_left", .value = try makeNative(.str_trim_left, 2) },
+        .{ .name = "trim_right", .value = try makeNative(.str_trim_right, 2) },
+        .{ .name = "trim_prefix", .value = try makeNative(.str_trim_prefix, 2) },
+        .{ .name = "trim_suffix", .value = try makeNative(.str_trim_suffix, 2) },
+        .{ .name = "split_n", .value = try makeNative(.str_split_n, 3) },
     };
     const string_obj = try makeNamespace("string", "@module_type:std.string", &string_entries);
     try vms.pushTempRoot(.{ .object = string_obj });
@@ -253,12 +252,12 @@ pub fn buildStdModule() !*Object {
     defer vms.popTempRoot();
 
     const json_entries = [_]NamespaceEntry{
-        .{ .name = "parse",       .value = try makeNative(.json_parse, 1) },
+        .{ .name = "parse", .value = try makeNative(.json_parse, 1) },
         .{ .name = "parse_value", .value = try makeNative(.json_parse_value, 1) },
-        .{ .name = "stringify",   .value = try makeNative(.json_stringify, 1) },
-        .{ .name = "valid",       .value = try makeNative(.json_valid, 1) },
-        .{ .name = "indent",      .value = try makeNative(.json_indent, 2) },
-        .{ .name = "Value",       .value = .{ .object = jv_type_obj } },
+        .{ .name = "stringify", .value = try makeNative(.json_stringify, 1) },
+        .{ .name = "valid", .value = try makeNative(.json_valid, 1) },
+        .{ .name = "indent", .value = try makeNative(.json_indent, 2) },
+        .{ .name = "Value", .value = .{ .object = jv_type_obj } },
     };
     const json_obj = try makeNamespace("json", "@module_type:std.json", &json_entries);
     try vms.pushTempRoot(.{ .object = json_obj });
@@ -361,21 +360,21 @@ pub fn buildStdModule() !*Object {
 
     const bytes_entries = [_]NamespaceEntry{
         // Construction
-        .{ .name = "u8",      .value = try makeNative(.bytes_u8,     1) },
-        .{ .name = "pack",    .value = try makeNative(.bytes_pack,   1) },
-        .{ .name = "repeat",  .value = try makeNative(.bytes_repeat, 2) },
+        .{ .name = "u8", .value = try makeNative(.bytes_u8, 1) },
+        .{ .name = "pack", .value = try makeNative(.bytes_pack, 1) },
+        .{ .name = "repeat", .value = try makeNative(.bytes_repeat, 2) },
         // Decomposition
-        .{ .name = "unpack",  .value = try makeNative(.bytes_unpack, 1) },
-        .{ .name = "at",      .value = try makeNative(.bytes_at,     2) },
-        .{ .name = "slice",   .value = try makeNative(.bytes_slice,  3) },
-        .{ .name = "len",     .value = try makeNative(.bytes_len,    1) },
+        .{ .name = "unpack", .value = try makeNative(.bytes_unpack, 1) },
+        .{ .name = "at", .value = try makeNative(.bytes_at, 2) },
+        .{ .name = "slice", .value = try makeNative(.bytes_slice, 3) },
+        .{ .name = "len", .value = try makeNative(.bytes_len, 1) },
         // Integer encoding
-        .{ .name = "u16be",   .value = try makeNative(.bytes_u16be,  1) },
-        .{ .name = "u32be",   .value = try makeNative(.bytes_u32be,  1) },
-        .{ .name = "u64be",   .value = try makeNative(.bytes_u64be,  1) },
-        .{ .name = "u16le",   .value = try makeNative(.bytes_u16le,  1) },
-        .{ .name = "u32le",   .value = try makeNative(.bytes_u32le,  1) },
-        .{ .name = "u64le",   .value = try makeNative(.bytes_u64le,  1) },
+        .{ .name = "u16be", .value = try makeNative(.bytes_u16be, 1) },
+        .{ .name = "u32be", .value = try makeNative(.bytes_u32be, 1) },
+        .{ .name = "u64be", .value = try makeNative(.bytes_u64be, 1) },
+        .{ .name = "u16le", .value = try makeNative(.bytes_u16le, 1) },
+        .{ .name = "u32le", .value = try makeNative(.bytes_u32le, 1) },
+        .{ .name = "u64le", .value = try makeNative(.bytes_u64le, 1) },
         // Integer decoding
         .{ .name = "u16be_at", .value = try makeNative(.bytes_u16be_at, 2) },
         .{ .name = "u32be_at", .value = try makeNative(.bytes_u32be_at, 2) },
@@ -384,27 +383,27 @@ pub fn buildStdModule() !*Object {
         .{ .name = "u32le_at", .value = try makeNative(.bytes_u32le_at, 2) },
         .{ .name = "u64le_at", .value = try makeNative(.bytes_u64le_at, 2) },
         // Byte-level search
-        .{ .name = "index_of",   .value = try makeNative(.bytes_index_of,   2) },
-        .{ .name = "contains",   .value = try makeNative(.bytes_contains,   2) },
-        .{ .name = "starts_with",.value = try makeNative(.bytes_starts_with,2) },
-        .{ .name = "ends_with",  .value = try makeNative(.bytes_ends_with,  2) },
-        .{ .name = "count",      .value = try makeNative(.bytes_count,      2) },
-        .{ .name = "replace",    .value = try makeNative(.bytes_replace,    3) },
-        .{ .name = "f32be",      .value = try makeNative(.bytes_f32be,      1) },
-        .{ .name = "f32le",      .value = try makeNative(.bytes_f32le,      1) },
-        .{ .name = "f64be",      .value = try makeNative(.bytes_f64be,      1) },
-        .{ .name = "f64le",      .value = try makeNative(.bytes_f64le,      1) },
-        .{ .name = "f32be_at",   .value = try makeNative(.bytes_f32be_at,   2) },
-        .{ .name = "f32le_at",   .value = try makeNative(.bytes_f32le_at,   2) },
-        .{ .name = "f64be_at",   .value = try makeNative(.bytes_f64be_at,   2) },
-        .{ .name = "f64le_at",   .value = try makeNative(.bytes_f64le_at,   2) },
+        .{ .name = "index_of", .value = try makeNative(.bytes_index_of, 2) },
+        .{ .name = "contains", .value = try makeNative(.bytes_contains, 2) },
+        .{ .name = "starts_with", .value = try makeNative(.bytes_starts_with, 2) },
+        .{ .name = "ends_with", .value = try makeNative(.bytes_ends_with, 2) },
+        .{ .name = "count", .value = try makeNative(.bytes_count, 2) },
+        .{ .name = "replace", .value = try makeNative(.bytes_replace, 3) },
+        .{ .name = "f32be", .value = try makeNative(.bytes_f32be, 1) },
+        .{ .name = "f32le", .value = try makeNative(.bytes_f32le, 1) },
+        .{ .name = "f64be", .value = try makeNative(.bytes_f64be, 1) },
+        .{ .name = "f64le", .value = try makeNative(.bytes_f64le, 1) },
+        .{ .name = "f32be_at", .value = try makeNative(.bytes_f32be_at, 2) },
+        .{ .name = "f32le_at", .value = try makeNative(.bytes_f32le_at, 2) },
+        .{ .name = "f64be_at", .value = try makeNative(.bytes_f64be_at, 2) },
+        .{ .name = "f64le_at", .value = try makeNative(.bytes_f64le_at, 2) },
     };
     const bytes_obj = try makeNamespace("bytes", "@module_type:std.bytes", &bytes_entries);
     try vms.pushTempRoot(.{ .object = bytes_obj });
     defer vms.popTempRoot();
 
     const std_entries = [_]NamespaceEntry{
-        .{ .name = "io",  .value = .{ .object = io_obj } },
+        .{ .name = "io", .value = .{ .object = io_obj } },
         .{ .name = "fmt", .value = .{ .object = fmt_obj } },
         .{ .name = "core", .value = .{ .object = core_obj } },
         .{ .name = "conv", .value = .{ .object = conv_obj } },
@@ -420,8 +419,8 @@ pub fn buildStdModule() !*Object {
         .{ .name = "sort", .value = .{ .object = sort_obj } },
         .{ .name = "array", .value = .{ .object = array_obj } },
         .{ .name = "bytes", .value = .{ .object = bytes_obj } },
-        .{ .name = "Time",      .value = .{ .object = time_type_obj } },
-        .{ .name = "Regexp",    .value = .{ .object = regexp_type_obj } },
+        .{ .name = "Time", .value = .{ .object = time_type_obj } },
+        .{ .name = "Regexp", .value = .{ .object = regexp_type_obj } },
         .{ .name = "JSONValue", .value = .{ .object = jv_type_obj } },
     };
     const std_obj = try makeNamespace("std", "@module_type:std", &std_entries);
@@ -482,23 +481,23 @@ pub fn installStdGlobal() !void {
     }
     {
         const time_methods = [_]struct { name: []const u8, id: NativeFnId, arity: u8 }{
-            .{ .name = "unix",      .id = .time_unix,      .arity = 1 },
-            .{ .name = "unix_ms",   .id = .time_unix_ms,   .arity = 1 },
-            .{ .name = "parts",     .id = .time_parts,     .arity = 1 },
-            .{ .name = "format",    .id = .time_format,    .arity = 2 },
-            .{ .name = "add_ms",    .id = .time_add_ms,    .arity = 2 },
-            .{ .name = "add_s",     .id = .time_add_s,     .arity = 2 },
-            .{ .name = "add_m",     .id = .time_add_m,     .arity = 2 },
-            .{ .name = "add_h",     .id = .time_add_h,     .arity = 2 },
-            .{ .name = "sub",       .id = .time_sub,       .arity = 2 },
-            .{ .name = "before",    .id = .time_before,    .arity = 2 },
-            .{ .name = "after",     .id = .time_after,     .arity = 2 },
-            .{ .name = "equal",     .id = .time_equal,     .arity = 2 },
-            .{ .name = "is_zero",   .id = .time_is_zero,   .arity = 1 },
-            .{ .name = "since",     .id = .time_since,     .arity = 1 },
-            .{ .name = "until",     .id = .time_until,     .arity = 1 },
-            .{ .name = "add_date",  .id = .time_add_date,  .arity = 4 },
-            .{ .name = "iso_week",  .id = .time_iso_week,  .arity = 1 },
+            .{ .name = "unix", .id = .time_unix, .arity = 1 },
+            .{ .name = "unix_ms", .id = .time_unix_ms, .arity = 1 },
+            .{ .name = "parts", .id = .time_parts, .arity = 1 },
+            .{ .name = "format", .id = .time_format, .arity = 2 },
+            .{ .name = "add_ms", .id = .time_add_ms, .arity = 2 },
+            .{ .name = "add_s", .id = .time_add_s, .arity = 2 },
+            .{ .name = "add_m", .id = .time_add_m, .arity = 2 },
+            .{ .name = "add_h", .id = .time_add_h, .arity = 2 },
+            .{ .name = "sub", .id = .time_sub, .arity = 2 },
+            .{ .name = "before", .id = .time_before, .arity = 2 },
+            .{ .name = "after", .id = .time_after, .arity = 2 },
+            .{ .name = "equal", .id = .time_equal, .arity = 2 },
+            .{ .name = "is_zero", .id = .time_is_zero, .arity = 1 },
+            .{ .name = "since", .id = .time_since, .arity = 1 },
+            .{ .name = "until", .id = .time_until, .arity = 1 },
+            .{ .name = "add_date", .id = .time_add_date, .arity = 4 },
+            .{ .name = "iso_week", .id = .time_iso_week, .arity = 1 },
         };
         for (time_methods) |m| {
             const needed = TimeTypeQualifiedName.len + 1 + m.name.len;
@@ -514,11 +513,11 @@ pub fn installStdGlobal() !void {
     }
     {
         const regexp_methods = [_]struct { name: []const u8, id: NativeFnId, arity: u8 }{
-            .{ .name = "match",    .id = .re_obj_match,    .arity = 2 },
-            .{ .name = "find",     .id = .re_obj_find,     .arity = 2 },
+            .{ .name = "match", .id = .re_obj_match, .arity = 2 },
+            .{ .name = "find", .id = .re_obj_find, .arity = 2 },
             .{ .name = "find_all", .id = .re_obj_find_all, .arity = 2 },
-            .{ .name = "replace",  .id = .re_obj_replace,  .arity = 3 },
-            .{ .name = "split",    .id = .re_obj_split,    .arity = 2 },
+            .{ .name = "replace", .id = .re_obj_replace, .arity = 3 },
+            .{ .name = "split", .id = .re_obj_split, .arity = 2 },
         };
         for (regexp_methods) |m| {
             const needed = RegexpTypeQualifiedName.len + 1 + m.name.len;
@@ -536,10 +535,10 @@ pub fn installStdGlobal() !void {
 
 pub fn installHostModules(host_modules: []const module_compile.HostModuleDesc) !void {
     for (host_modules) |hm| {
-        const global_name_buf = (heap.bump(u8, 5 + hm.name.len) orelse return error.OutOfMemory)[0..5 + hm.name.len];
+        const global_name_buf = (heap.bump(u8, 5 + hm.name.len) orelse return error.OutOfMemory)[0 .. 5 + hm.name.len];
         @memcpy(global_name_buf[0..5], "host:");
         @memcpy(global_name_buf[5..][0..hm.name.len], hm.name);
-        const global_name = global_name_buf[0..5 + hm.name.len];
+        const global_name = global_name_buf[0 .. 5 + hm.name.len];
         if (globals.has(global_name)) continue;
 
         const entries = hm.functions;
@@ -552,10 +551,10 @@ pub fn installHostModules(host_modules: []const module_compile.HostModuleDesc) !
             fs.* = .{ .name = entries[i].name, .typ = any_spec, .is_const = true };
         }
 
-        const qual_name_buf = (heap.bump(u8, 13 + hm.name.len) orelse return error.OutOfMemory)[0..13 + hm.name.len];
+        const qual_name_buf = (heap.bump(u8, 13 + hm.name.len) orelse return error.OutOfMemory)[0 .. 13 + hm.name.len];
         @memcpy(qual_name_buf[0..13], "@module_type:");
         @memcpy(qual_name_buf[13..][0..hm.name.len], hm.name);
-        const qualified_name = qual_name_buf[0..13 + hm.name.len];
+        const qualified_name = qual_name_buf[0 .. 13 + hm.name.len];
 
         const typ_obj = try vmgc.vmAllocObject();
         try vms.pushTempRoot(.{ .object = typ_obj });
@@ -590,10 +589,10 @@ pub fn installHostModules(host_modules: []const module_compile.HostModuleDesc) !
 
 pub fn installCapabilityModules(cap_modules: []const module_compile.CapModuleDesc) !void {
     for (cap_modules) |cm| {
-        const global_name_buf = (heap.bump(u8, 4 + cm.name.len) orelse return error.OutOfMemory)[0..4 + cm.name.len];
+        const global_name_buf = (heap.bump(u8, 4 + cm.name.len) orelse return error.OutOfMemory)[0 .. 4 + cm.name.len];
         @memcpy(global_name_buf[0..4], "cap:");
         @memcpy(global_name_buf[4..][0..cm.name.len], cm.name);
-        const global_name = global_name_buf[0..4 + cm.name.len];
+        const global_name = global_name_buf[0 .. 4 + cm.name.len];
         if (globals.has(global_name)) continue;
 
         const entries = cm.functions;
@@ -609,7 +608,10 @@ pub fn installCapabilityModules(cap_modules: []const module_compile.CapModuleDes
             const prefix = entry.name[0..dot];
             var seen = false;
             for (ns_names[0..ns_count]) |n| {
-                if (std.mem.eql(u8, n, prefix)) { seen = true; break; }
+                if (std.mem.eql(u8, n, prefix)) {
+                    seen = true;
+                    break;
+                }
             }
             if (!seen and ns_count < ns_names.len) {
                 ns_names[ns_count] = prefix;
@@ -635,10 +637,10 @@ pub fn installCapabilityModules(cap_modules: []const module_compile.CapModuleDes
             fi += 1;
         }
 
-        const qual_name_buf = (heap.bump(u8, 10 + cm.name.len) orelse return error.OutOfMemory)[0..10 + cm.name.len];
+        const qual_name_buf = (heap.bump(u8, 10 + cm.name.len) orelse return error.OutOfMemory)[0 .. 10 + cm.name.len];
         @memcpy(qual_name_buf[0..10], "@cap_type:");
         @memcpy(qual_name_buf[10..][0..cm.name.len], cm.name);
-        const qualified_name = qual_name_buf[0..10 + cm.name.len];
+        const qualified_name = qual_name_buf[0 .. 10 + cm.name.len];
 
         const typ_obj = try vmgc.vmAllocObject();
         try vms.pushTempRoot(.{ .object = typ_obj });
@@ -758,14 +760,14 @@ pub fn installCapabilityModules(cap_modules: []const module_compile.CapModuleDes
                 try globals.def(conn_qual_name, .{ .object = conn_typ_obj });
 
                 const conn_methods = [_]struct { name: []const u8, id: NativeFnId, arity: u8 }{
-                    .{ .name = "read",              .id = .cap_net_read,              .arity = 2 },
-                    .{ .name = "write",             .id = .cap_net_write,             .arity = 2 },
-                    .{ .name = "close",             .id = .cap_net_close,             .arity = 1 },
-                    .{ .name = "local_addr",        .id = .cap_net_local_addr,        .arity = 1 },
-                    .{ .name = "remote_addr",       .id = .cap_net_remote_addr,       .arity = 1 },
-                    .{ .name = "set_deadline",      .id = .cap_net_set_deadline,      .arity = 2 },
+                    .{ .name = "read", .id = .cap_net_read, .arity = 2 },
+                    .{ .name = "write", .id = .cap_net_write, .arity = 2 },
+                    .{ .name = "close", .id = .cap_net_close, .arity = 1 },
+                    .{ .name = "local_addr", .id = .cap_net_local_addr, .arity = 1 },
+                    .{ .name = "remote_addr", .id = .cap_net_remote_addr, .arity = 1 },
+                    .{ .name = "set_deadline", .id = .cap_net_set_deadline, .arity = 2 },
                     .{ .name = "set_read_deadline", .id = .cap_net_set_read_deadline, .arity = 2 },
-                    .{ .name = "set_write_deadline",.id = .cap_net_set_write_deadline,.arity = 2 },
+                    .{ .name = "set_write_deadline", .id = .cap_net_set_write_deadline, .arity = 2 },
                 };
                 for (conn_methods) |m| {
                     const needed = conn_qual_name.len + 1 + m.name.len;
@@ -799,57 +801,28 @@ pub fn callHostModule(hmf: HostModuleFuncObj, argc: u8) !void {
 }
 
 pub fn callNative(nf: NativeFuncObj, argc: u8) !void {
+    const temp_root_base = vms.vmState().temp_root_top;
+    defer vms.assertTempRootDepth(temp_root_base, "native dispatch");
     vmperf.countHostcall(nf.id);
     switch (@as(NativeFnId, @enumFromInt(nf.id))) {
-        .io_println, .io_print, .io_printf, .io_sprintf,
-        .io_eprint, .io_eprintf, .io_eprintln, .io_read, .io_readline,
-        .fmt_stringify => return io_mod.dispatch(nf, argc),
-        .core_len, .core_append, .core_error, .core_is_error, .core_gc, .core_gc_live_objects,
-        .core_gc_stats, .core_bytelen, .core_gc_stats_ext, .core_delete, .core_has, .core_keys,
-        .core_values, .core_contains, .core_remove, .core_type_of, .core_is_int, .core_is_float,
-        .core_is_string, .core_is_array, .core_is_map, .core_is_struct, .core_is_null,
-        .core_deep_equal, .core_clone, .core_recover => return core_mod.dispatch(nf, argc),
+        .io_println, .io_print, .io_printf, .io_sprintf, .io_eprint, .io_eprintf, .io_eprintln, .io_read, .io_readline, .fmt_stringify => return io_mod.dispatch(nf, argc),
+        .core_len, .core_append, .core_error, .core_is_error, .core_gc, .core_gc_live_objects, .core_gc_stats, .core_bytelen, .core_gc_stats_ext, .core_delete, .core_has, .core_keys, .core_values, .core_contains, .core_remove, .core_type_of, .core_is_int, .core_is_float, .core_is_string, .core_is_array, .core_is_map, .core_is_struct, .core_is_null, .core_deep_equal, .core_clone, .core_recover => return core_mod.dispatch(nf, argc),
         .conv_to_int, .conv_to_float, .conv_to_bool, .conv_to_string => return conv_mod.dispatch(nf, argc),
-        .math_abs, .math_sqrt, .math_floor, .math_ceil, .math_round, .math_sin, .math_cos,
-        .math_tan, .math_log, .math_log2, .math_log10, .math_pow, .math_min, .math_max,
-        .math_acos, .math_asin, .math_atan, .math_atan2, .math_cosh, .math_sinh, .math_tanh,
-        .math_exp, .math_exp2, .math_trunc, .math_cbrt, .math_hypot, .math_mod, .math_nan,
-        .math_is_nan, .math_is_inf, .math_clamp, .math_sign => return math_mod.dispatch(nf, argc),
-        .rand_float, .rand_intn, .rand_between, .rand_seed, .rand_choice, .rand_perm,
-        .rand_norm_float => return rand_mod.dispatch(nf, argc),
-        .str_split, .str_join, .str_trim, .str_upper, .str_lower, .str_contains,
-        .str_starts_with, .str_ends_with, .str_index_of, .str_replace, .str_last_index_of,
-        .str_repeat, .str_split_once, .str_builder_new, .str_count, .str_fields, .str_pad_left,
-        .str_pad_right, .str_equal_fold, .str_contains_any,
-        .str_trim_left, .str_trim_right, .str_trim_prefix, .str_trim_suffix, .str_split_n => return string_mod.dispatch(nf, argc),
+        .math_abs, .math_sqrt, .math_floor, .math_ceil, .math_round, .math_sin, .math_cos, .math_tan, .math_log, .math_log2, .math_log10, .math_pow, .math_min, .math_max, .math_acos, .math_asin, .math_atan, .math_atan2, .math_cosh, .math_sinh, .math_tanh, .math_exp, .math_exp2, .math_trunc, .math_cbrt, .math_hypot, .math_mod, .math_nan, .math_is_nan, .math_is_inf, .math_clamp, .math_sign => return math_mod.dispatch(nf, argc),
+        .rand_float, .rand_intn, .rand_between, .rand_seed, .rand_choice, .rand_perm, .rand_norm_float => return rand_mod.dispatch(nf, argc),
+        .str_split, .str_join, .str_trim, .str_upper, .str_lower, .str_contains, .str_starts_with, .str_ends_with, .str_index_of, .str_replace, .str_last_index_of, .str_repeat, .str_split_once, .str_builder_new, .str_count, .str_fields, .str_pad_left, .str_pad_right, .str_equal_fold, .str_contains_any, .str_trim_left, .str_trim_right, .str_trim_prefix, .str_trim_suffix, .str_split_n => return string_mod.dispatch(nf, argc),
         .json_parse, .json_stringify, .json_valid, .json_indent, .json_parse_value => return json_mod.dispatch(nf, argc),
-        .hex_encode, .hex_decode, .base64_encode, .base64_decode, .base64_url_encode,
-        .base64_url_decode => return encode_mod.dispatch(nf, argc),
-        .template_parse, .template_execute, .template_add_func, .template_render,
-        .template_valid => return template_mod.dispatch(nf, argc),
-        .time_now, .time_from_unix, .time_from_unix_ms, .time_parse, .time_unix, .time_unix_ms,
-        .time_parts, .time_format, .time_add_ms, .time_add_s, .time_add_m, .time_add_h,
-        .time_sub, .time_before, .time_after, .time_equal, .time_is_zero, .time_since,
-        .time_until, .time_add_date, .time_parse_duration, .time_iso_week => return time_mod.dispatch(nf, argc),
-        .re_match, .re_find, .re_find_all, .re_replace, .re_split, .re_compile,
-        .re_obj_match, .re_obj_find, .re_obj_find_all, .re_obj_replace, .re_obj_split => return regexp_mod.dispatch(nf, argc),
-        .array_filter, .array_map, .array_reduce, .array_slice, .array_zip, .array_flat,
-        .array_find, .array_find_index, .array_all, .array_any, .array_chunk => return array_mod.dispatch(nf, argc),
+        .hex_encode, .hex_decode, .base64_encode, .base64_decode, .base64_url_encode, .base64_url_decode => return encode_mod.dispatch(nf, argc),
+        .template_parse, .template_execute, .template_add_func, .template_render, .template_valid => return template_mod.dispatch(nf, argc),
+        .time_now, .time_from_unix, .time_from_unix_ms, .time_parse, .time_unix, .time_unix_ms, .time_parts, .time_format, .time_add_ms, .time_add_s, .time_add_m, .time_add_h, .time_sub, .time_before, .time_after, .time_equal, .time_is_zero, .time_since, .time_until, .time_add_date, .time_parse_duration, .time_iso_week => return time_mod.dispatch(nf, argc),
+        .re_match, .re_find, .re_find_all, .re_replace, .re_split, .re_compile, .re_obj_match, .re_obj_find, .re_obj_find_all, .re_obj_replace, .re_obj_split => return regexp_mod.dispatch(nf, argc),
+        .array_filter, .array_map, .array_reduce, .array_slice, .array_zip, .array_flat, .array_find, .array_find_index, .array_all, .array_any, .array_chunk => return array_mod.dispatch(nf, argc),
         .sort_asc, .sort_desc, .sort_by => return sort_mod.dispatch(nf, argc),
-        .bytes_u8, .bytes_pack, .bytes_unpack, .bytes_at, .bytes_len, .bytes_slice, .bytes_repeat,
-        .bytes_u16be, .bytes_u32be, .bytes_u64be, .bytes_u16le, .bytes_u32le, .bytes_u64le,
-        .bytes_u16be_at, .bytes_u32be_at, .bytes_u64be_at,
-        .bytes_u16le_at, .bytes_u32le_at, .bytes_u64le_at,
-        .bytes_index_of, .bytes_contains, .bytes_starts_with, .bytes_ends_with,
-        .bytes_count, .bytes_replace,
-        .bytes_f32be, .bytes_f32le, .bytes_f64be, .bytes_f64le,
-        .bytes_f32be_at, .bytes_f32le_at, .bytes_f64be_at, .bytes_f64le_at => return bytes_mod.dispatch(nf, argc),
+        .bytes_u8, .bytes_pack, .bytes_unpack, .bytes_at, .bytes_len, .bytes_slice, .bytes_repeat, .bytes_u16be, .bytes_u32be, .bytes_u64be, .bytes_u16le, .bytes_u32le, .bytes_u64le, .bytes_u16be_at, .bytes_u32be_at, .bytes_u64be_at, .bytes_u16le_at, .bytes_u32le_at, .bytes_u64le_at, .bytes_index_of, .bytes_contains, .bytes_starts_with, .bytes_ends_with, .bytes_count, .bytes_replace, .bytes_f32be, .bytes_f32le, .bytes_f64be, .bytes_f64le, .bytes_f32be_at, .bytes_f32le_at, .bytes_f64be_at, .bytes_f64le_at => return bytes_mod.dispatch(nf, argc),
         inline else => |id| {
             if (comptime build_options.cap_net) {
                 switch (id) {
-                    .cap_net_dial, .cap_net_read, .cap_net_write, .cap_net_close,
-                    .cap_net_local_addr, .cap_net_remote_addr,
-                    .cap_net_set_deadline, .cap_net_set_read_deadline, .cap_net_set_write_deadline => return cap_net_mod.dispatch(nf, argc),
+                    .cap_net_dial, .cap_net_read, .cap_net_write, .cap_net_close, .cap_net_local_addr, .cap_net_remote_addr, .cap_net_set_deadline, .cap_net_set_read_deadline, .cap_net_set_write_deadline => return cap_net_mod.dispatch(nf, argc),
                     else => {},
                 }
             }
