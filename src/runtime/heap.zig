@@ -278,7 +278,8 @@ pub fn allocBytesManaged(n: usize) ?[]u8 {
     // Try overflow bump — shared space after all class regions. This is the
     // sequential fallback that keeps small heaps working while the per-class
     // regions provide the isolation guarantee for steady-state operation.
-    const opos = g_state.overflow_bump;
+    const mask: usize = ManagedAlign - 1;
+    const opos = (g_state.overflow_bump + mask) & ~mask;
     if (opos + ClassSizes[ci] <= g_state.heap.len) {
         g_state.overflow_bump = opos + ClassSizes[ci];
         return g_state.heap[opos .. opos + ClassSizes[ci]];
