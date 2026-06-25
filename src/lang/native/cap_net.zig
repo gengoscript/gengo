@@ -33,6 +33,42 @@ fn extractHandle(arg: Value) !u32 {
     };
 }
 
+fn extractUsize(arg: Value) !usize {
+    return switch (arg) {
+        .int => |n| blk: {
+            if (n < 0 or n > std.math.maxInt(usize)) return error.TypeError;
+            break :blk @as(usize, @intCast(n));
+        },
+        .float => |n| blk: {
+            if (n < 0 or n > @as(f64, @floatFromInt(std.math.maxInt(usize)))) return error.TypeError;
+            break :blk @as(usize, @intFromFloat(n));
+        },
+        else => return error.TypeError,
+    };
+}
+
+fn extractI64(arg: Value) !i64 {
+    return switch (arg) {
+        .int => |n| n,
+        .float => |n| blk: {
+            if (n < @as(f64, @floatFromInt(std.math.minInt(i64))) or n >= std.math.pow(f64, 2.0, 63.0)) return error.TypeError;
+            break :blk @as(i64, @intFromFloat(n));
+        },
+        else => return error.TypeError,
+    };
+}
+
+fn pushCatchableNetError(err: anyerror) !void {
+    const msg: []const u8 = if (err == error.DeadlineExceeded) "timeout" else net_state.lastNetErr();
+    try vms.vmPush(.{ .error_value = try chunk.internStr(msg) });
+}
+
+fn pushPageString(bytes: []u8) !void {
+    defer std.heap.page_allocator.free(bytes);
+    const out = try vmgc.makeDynString(bytes);
+    try vms.vmPush(out);
+}
+
 fn ioContext() std.Io {
     return std.Io.Threaded.global_single_threaded.io();
 }
@@ -71,27 +107,14 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const arg1 = try vms.vmPop();
             const arg0 = try vms.vmPop();
             const id = try extractHandle(arg0);
-            const max_bytes = switch (arg1) {
-                .int => |n| blk: {
-                    if (n < 0 or n > std.math.maxInt(usize)) return error.TypeError;
-                    break :blk @as(usize, @intCast(n));
-                },
-                .float => |n| blk: {
-                    if (n < 0 or n > @as(f64, @floatFromInt(std.math.maxInt(usize)))) return error.TypeError;
-                    break :blk @as(usize, @intFromFloat(n));
-                },
-                else => return error.TypeError,
-            };
+            const max_bytes = try extractUsize(arg1);
             _ = try vms.vmPop();
 
             const buf = net_state.netRead(id, max_bytes) catch |err| {
-                const msg: []const u8 = if (err == error.DeadlineExceeded) "timeout" else net_state.lastNetErr();
-                try vms.vmPush(.{ .error_value = try chunk.internStr(msg) });
+                try pushCatchableNetError(err);
                 return;
             };
-            defer std.heap.page_allocator.free(buf);
-            const out = try vmgc.makeDynString(buf);
-            try vms.vmPush(out);
+            try pushPageString(buf);
         },
         .cap_net_write => {
             if (argc != 2) return error.ArityMismatch;
@@ -102,8 +125,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             _ = try vms.vmPop();
 
             const n = net_state.netWrite(id, data) catch |err| {
-                const msg: []const u8 = if (err == error.DeadlineExceeded) "timeout" else net_state.lastNetErr();
-                try vms.vmPush(.{ .error_value = try chunk.internStr(msg) });
+                try pushCatchableNetError(err);
                 return;
             };
             try vms.vmPush(.{ .int = @intCast(n) });
@@ -124,9 +146,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             _ = try vms.vmPop();
 
             const addr = net_state.netLocalAddr(id) catch return error.CapabilityError;
-            defer std.heap.page_allocator.free(addr);
-            const out = try vmgc.makeDynString(addr);
-            try vms.vmPush(out);
+            try pushPageString(addr);
         },
         .cap_net_remote_addr => {
             if (argc != 1) return error.ArityMismatch;
@@ -135,23 +155,14 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             _ = try vms.vmPop();
 
             const addr = net_state.netRemoteAddr(id) catch return error.CapabilityError;
-            defer std.heap.page_allocator.free(addr);
-            const out = try vmgc.makeDynString(addr);
-            try vms.vmPush(out);
+            try pushPageString(addr);
         },
         .cap_net_set_deadline => {
             if (argc != 2) return error.ArityMismatch;
             const arg1 = try vms.vmPop();
             const arg0 = try vms.vmPop();
             const id = try extractHandle(arg0);
-            const ms = switch (arg1) {
-                .int => |n| n,
-                .float => |n| blk: {
-                    if (n < @as(f64, @floatFromInt(std.math.minInt(i64))) or n >= std.math.pow(f64, 2.0, 63.0)) return error.TypeError;
-                    break :blk @as(i64, @intFromFloat(n));
-                },
-                else => return error.TypeError,
-            };
+            const ms = try extractI64(arg1);
             _ = try vms.vmPop();
             net_state.netSetDeadline(id, ms) catch return error.CapabilityError;
             try vms.vmPush(.null);
@@ -161,14 +172,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const arg1 = try vms.vmPop();
             const arg0 = try vms.vmPop();
             const id = try extractHandle(arg0);
-            const ms = switch (arg1) {
-                .int => |n| n,
-                .float => |n| blk: {
-                    if (n < @as(f64, @floatFromInt(std.math.minInt(i64))) or n >= std.math.pow(f64, 2.0, 63.0)) return error.TypeError;
-                    break :blk @as(i64, @intFromFloat(n));
-                },
-                else => return error.TypeError,
-            };
+            const ms = try extractI64(arg1);
             _ = try vms.vmPop();
             net_state.netSetReadDeadline(id, ms) catch return error.CapabilityError;
             try vms.vmPush(.null);
@@ -178,14 +182,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const arg1 = try vms.vmPop();
             const arg0 = try vms.vmPop();
             const id = try extractHandle(arg0);
-            const ms = switch (arg1) {
-                .int => |n| n,
-                .float => |n| blk: {
-                    if (n < @as(f64, @floatFromInt(std.math.minInt(i64))) or n >= std.math.pow(f64, 2.0, 63.0)) return error.TypeError;
-                    break :blk @as(i64, @intFromFloat(n));
-                },
-                else => return error.TypeError,
-            };
+            const ms = try extractI64(arg1);
             _ = try vms.vmPop();
 
             net_state.netSetWriteDeadline(id, ms) catch return error.CapabilityError;
