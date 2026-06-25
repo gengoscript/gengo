@@ -616,18 +616,19 @@ fn cloneObject(src: *Object, visits: []CloneVisit, visit_len: *usize) anyerror!V
             return .{ .object = out_obj };
         },
         .map, .map_managed, .map_hashed => {
-            const out_obj = try vmgc.allocTempRooted(.{ .map = &[_]MapEntry{} });
-            defer vms.popTempRoot();
-            try cloneRemember(src, out_obj, visits, visit_len);
             const entries = try vms.asMapSlice(src);
-            const out = try vmgc.vmAllocManagedSlice(MapEntry, entries.len);
-            for (out) |*slot| slot.* = .{ .key = .null, .value = .null };
-            out_obj.* = .{ .map_managed = out[0..entries.len] };
+            const out_map = try vmgc.allocTempRootedManagedMap(entries.len);
+            defer vms.popTempRoot();
+            try cloneRemember(src, out_map.obj, visits, visit_len);
             for (entries, 0..) |entry, i| {
-                out[i].key = try cloneValue(entry.key, visits, visit_len);
-                out[i].value = try cloneValue(entry.value, visits, visit_len);
+                const k = try cloneValue(entry.key, visits, visit_len);
+                try vms.pushTempRoot(k);
+                out_map.entries[i].key = k;
+                out_map.entries[i].value = try cloneValue(entry.value, visits, visit_len);
+                vms.popTempRoot();
+                out_map.publish(i + 1);
             }
-            return .{ .object = out_obj };
+            return .{ .object = out_map.obj };
         },
         .dyn_string => |s| return vmgc.makeDynString(s),
         .string_view => |sv| return vmgc.makeDynString(sv.bytes),
