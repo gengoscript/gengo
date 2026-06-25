@@ -1,5 +1,6 @@
 const std = @import("std");
 const heap = @import("heap.zig");
+const MapEntry = @import("../lang/value.zig").MapEntry;
 const Object = @import("../lang/value.zig").Object;
 const Value = @import("../lang/value.zig").Value;
 
@@ -215,6 +216,20 @@ test "flat mode preserves shared heap capacity for managed allocations" {
     try std.testing.expect(heap.allocBytesManaged(64 * 1024) != null);
     try std.testing.expect(heap.allocBytesManaged(64 * 1024) != null);
     try std.testing.expect(heap.allocBytesManaged(64 * 1024) != null);
+}
+
+test "managed overflow path realigns after compiler spillover" {
+    var h: heap.State = .{};
+    try h.init(1024 * 1024, 64, std.testing.allocator);
+    defer h.deinit();
+    heap.setActive(&h);
+
+    _ = heap.bump(u8, h.compiler_end) orelse return error.TestFailed;
+    _ = heap.bump(u8, 1) orelse return error.TestFailed;
+
+    _ = heap.allocBytesManaged(@sizeOf(MapEntry)) orelse return error.TestFailed;
+    const bytes = heap.allocBytesManaged(@sizeOf(MapEntry)) orelse return error.TestFailed;
+    try std.testing.expectEqual(@as(usize, 0), @intFromPtr(bytes.ptr) % @alignOf(MapEntry));
 }
 
 // ── Fragmentation and defragmentation ──────────────────────────────────────
