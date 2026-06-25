@@ -1170,8 +1170,8 @@ fn retSlowPath(retval_in: Value) !bool {
     var retval = retval_in;
     const fi = vmState().frame_top - 1;
     const frame = &vmState().frames[fi];
-    const saved_temp_root = vmState().temp_root_top;
-    defer vmState().temp_root_top = saved_temp_root;
+    const saved_temp_root = vms.tempRootDepth();
+    defer vms.restoreTempRoots(saved_temp_root);
     try pushTempRoot(retval);
     while (vmState().defer_top > frame.defer_base) {
         vmState().defer_top -= 1;
