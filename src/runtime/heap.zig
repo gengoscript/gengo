@@ -2,6 +2,9 @@ const std = @import("std");
 const cfg = @import("config.zig");
 const builtin = @import("builtin");
 
+const Value = @import("../lang/value.zig").Value;
+const MapEntry = @import("../lang/value.zig").MapEntry;
+
 pub const HeapSize = cfg.heap_size_bytes;
 pub const MaxObjects = cfg.max_objects;
 comptime {
@@ -205,6 +208,15 @@ pub fn allocBytesManaged(n: usize) ?[]u8 {
             return blk;
         }
     }
+    // All strategies failed — try defragmenting free lists and retry once.
+    defragmentFreeLists();
+    if (g_state.free_blocks[ci]) |head| {
+        const next_ptr = @as(*usize, @ptrCast(@alignCast(head))).*;
+        g_state.free_blocks[ci] = if (next_ptr == 0) null else @as(*u8, @ptrFromInt(next_ptr));
+        const blk = @as([*]u8, @ptrCast(head))[0..ClassSizes[ci]];
+        if (paranoiaOn()) assertNotLive(blk);
+        return blk;
+    }
     return null;
 }
 
@@ -394,6 +406,7 @@ pub fn sweepObjects() void {
         g_state.obj_free_head = @intCast(i);
         g_state.obj_live_count -= 1;
     }
+    defragmentFreeLists();
 }
 
 pub fn liveObjectCount() usize {
@@ -416,6 +429,112 @@ pub fn totalFreeListBytes() usize {
         }
     }
     return total;
+}
+
+fn nextFreeBlock(node: *u8) ?*u8 {
+    const next_ptr = @as(*usize, @ptrCast(@alignCast(node))).*;
+    return if (next_ptr == 0) null else @as(*u8, @ptrFromInt(next_ptr));
+}
+
+// Returns total free bytes in free lists and the largest single free block.
+pub fn fragmentationInfo() struct { free_bytes: usize, largest_block: usize } {
+    var free_bytes: usize = 0;
+    var largest_block: usize = 0;
+    for (0..g_state.class_count) |ci| {
+        var depth: usize = 0;
+        var node = g_state.free_blocks[ci];
+        while (node) |n| {
+            depth += 1;
+            node = nextFreeBlock(n);
+        }
+        const bytes = depth * ClassSizes[ci];
+        free_bytes += bytes;
+        if (depth > 0 and ClassSizes[ci] > largest_block) {
+            largest_block = ClassSizes[ci];
+        }
+    }
+    return .{ .free_bytes = free_bytes, .largest_block = largest_block };
+}
+
+// Collects all free blocks from all classes, sorts by address, merges
+// adjacent blocks, and rebuilds the free lists with the largest possible
+// class blocks. This recovers fragmentation where adjacent free blocks of
+// different classes prevent buddy coalescing.
+pub fn defragmentFreeLists() void {
+    // Count total free blocks across all classes.
+    var total: usize = 0;
+    for (0..g_state.class_count) |ci| {
+        var node = g_state.free_blocks[ci];
+        while (node) |n| {
+            total += 1;
+            node = nextFreeBlock(n);
+        }
+    }
+    if (total < 2) return;
+
+    // Collect all free blocks into a buffer.
+    const FreeBlock = struct { addr: usize, size: usize };
+    var stack_buf: [512]FreeBlock = undefined;
+    const buf = if (total <= stack_buf.len)
+        stack_buf[0..total]
+    else
+        g_state.allocator.alloc(FreeBlock, total) catch return;
+
+    var count: usize = 0;
+    for (0..g_state.class_count) |ci| {
+        var node = g_state.free_blocks[ci];
+        while (node) |n| {
+            buf[count] = .{ .addr = @intFromPtr(n), .size = ClassSizes[ci] };
+            count += 1;
+            node = nextFreeBlock(n);
+        }
+    }
+
+    // Clear free lists — we'll rebuild them from merged blocks.
+    for (0..g_state.class_count) |ci| {
+        g_state.free_blocks[ci] = null;
+    }
+
+    // Sort by address.
+    std.sort.block(FreeBlock, buf[0..count], {}, struct {
+        fn lessThan(_: void, a: FreeBlock, b: FreeBlock) bool {
+            return a.addr < b.addr;
+        }
+    }.lessThan);
+
+    // Merge adjacent blocks and add to free lists.
+    var i: usize = 0;
+    while (i < count) {
+        const cur_addr = buf[i].addr;
+        var cur_end = cur_addr + buf[i].size;
+
+        var j = i + 1;
+        while (j < count and buf[j].addr == cur_end) : (j += 1) {
+            cur_end += buf[j].size;
+        }
+
+        addLargestBlocksToFreeList(cur_addr, cur_end - cur_addr);
+        i = j;
+    }
+}
+
+fn addLargestBlocksToFreeList(start_addr: usize, len: usize) void {
+    var off: usize = 0;
+    while (off < len) {
+        const remaining = len - off;
+        // Find the largest class that fits.
+        var ci = g_state.class_count - 1;
+        while (ci > 0 and ClassSizes[ci] > remaining) : (ci -= 1) {}
+        const class_size = ClassSizes[ci];
+        if (class_size > remaining) return;
+
+        const addr = start_addr + off;
+        const p = @as(*u8, @ptrFromInt(addr));
+        const next = if (g_state.free_blocks[ci]) |h| @intFromPtr(h) else 0;
+        @as(*usize, @ptrCast(@alignCast(p))).* = next;
+        g_state.free_blocks[ci] = p;
+        off += class_size;
+    }
 }
 
 // Writes a compact free-list summary: "ci=N:depth,..." for non-empty classes.
