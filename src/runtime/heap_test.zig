@@ -204,3 +204,55 @@ test "scaled class blocks are reusable after free" {
     const b = heap.allocBytesManaged(1024 * 1024) orelse return error.TestFailed;
     try std.testing.expect(a.ptr == b.ptr);
 }
+
+// ── Fragmentation and defragmentation ──────────────────────────────────────
+
+test "defrag merges adjacent cross-class free blocks" {
+    // Three adjacent blocks of different classes: class-16, class-32,
+    // class-16 each free but in separate class free lists. Defrag should
+    // merge them into a single class-64 block.
+    var h: heap.State = .{};
+    try h.init(4096, 32, std.testing.allocator);
+    defer h.deinit();
+    heap.setActive(&h);
+
+    const a = heap.allocBytesManaged(16) orelse return error.TestFailed;
+    const b = heap.allocBytesManaged(32) orelse return error.TestFailed;
+    const c = heap.allocBytesManaged(16) orelse return error.TestFailed;
+
+    // Free in reverse order so intermediate buddies don't merge early.
+    heap.freeBytesManaged(c); // class-16 at offset 48
+    heap.freeBytesManaged(b); // class-32 at offset 16
+    heap.freeBytesManaged(a); // class-16 at offset 0
+
+    // Now: class-16 free list has [0, 48]; class-32 free list has [16]
+    // Total 64 free bytes but no block > 32.
+    const info = heap.fragmentationInfo();
+    try std.testing.expect(info.free_bytes >= 64);
+    try std.testing.expect(info.largest_block <= 32);
+
+    // Run defrag and check that we now have a usable class-64 block.
+    heap.defragmentFreeLists();
+
+    const big = heap.allocBytesManaged(64) orelse return error.TestFailed;
+    try std.testing.expect(big.len >= 64);
+}
+
+test "fragmentationInfo reflects free list state" {
+    var h: heap.State = .{};
+    try h.init(4096, 16, std.testing.allocator);
+    defer h.deinit();
+    heap.setActive(&h);
+
+    const info_empty = heap.fragmentationInfo();
+    try std.testing.expectEqual(@as(usize, 0), info_empty.free_bytes);
+
+    const a = heap.allocBytesManaged(16) orelse return error.TestFailed;
+    const info_allocd = heap.fragmentationInfo();
+    try std.testing.expectEqual(@as(usize, 0), info_allocd.free_bytes);
+
+    heap.freeBytesManaged(a);
+
+    const info_freed = heap.fragmentationInfo();
+    try std.testing.expect(info_freed.free_bytes >= 16);
+}

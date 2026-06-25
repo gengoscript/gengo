@@ -242,6 +242,57 @@ removes loaded functions. Only call it when you want to unload the current scrip
 and start fresh. For per-request isolation without shared globals, use a separate
 runtime instance per request instead.
 
+## Long-Lived Embeddings and Heap Fragmentation
+
+The managed heap uses a buddy+slab allocator with size classes but no
+compaction. For short-lived scripts this is fine — the heap is reset between
+runs. For long-lived processes that call into the same runtime repeatedly
+(policy engines, event loops, request filters), repeated allocation and GC
+cycles can fragment the heap: freed backing blocks of different size classes
+may be adjacent but cannot coalesce through the buddy system alone.
+
+Signs of fragmentation: allocations fail with `OutOfMemory` even though
+`totalFreeListBytes()` reports sufficient free bytes, or GC runs increasingly
+frequently without reclaiming usable space.
+
+### Mitigation
+
+**Stateless policies**: call `rt.reset()` between evaluations. Reset discards
+the entire heap state (including loaded scripts), so the script must be
+reloaded after each reset. For pure computation with no persistent globals,
+this is the simplest and most effective strategy:
+
+```zig
+while (try nextRequest(&req)) {
+    rt.reset();
+    // Reload the policy script.
+    _ = rt.run(policy_source) catch { reject(req); continue; };
+    const result = rt.call("evaluate", &.{ ... });
+    // ...
+}
+```
+
+**Stateful policies** that cache data across calls should not reset between
+calls. Instead, rely on GC sweep and the internal defragmentation pass that
+consolidates free lists after every collection cycle. If fragmentation
+becomes a problem despite defrag, consider grouping related calls into
+batches and resetting between batches, or using a separate runtime per batch.
+
+### Monitoring
+
+Use the `heap.fragmentationInfo()` diagnostic (available in the Zig embedding
+API) to observe free list health:
+
+```zig
+const info = heap.fragmentationInfo();
+std.log.info("heap: {d} free bytes, largest block {d}", .{
+    info.free_bytes, info.largest_block,
+});
+```
+
+A growing gap between total free bytes and largest block suggests
+fragmentation is accumulating.
+
 ## Host Modules
 
 Host modules are imported through `host:*` paths and must be registered

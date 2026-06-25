@@ -801,7 +801,7 @@ pub fn callHostModule(hmf: HostModuleFuncObj, argc: u8) !void {
 }
 
 pub fn callNative(nf: NativeFuncObj, argc: u8) !void {
-    const temp_root_base = vms.vmState().temp_root_top;
+    const temp_root_base = vms.tempRootDepth();
     defer vms.assertTempRootDepth(temp_root_base, "native dispatch");
     vmperf.countHostcall(nf.id);
     switch (@as(NativeFnId, @enumFromInt(nf.id))) {
