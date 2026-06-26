@@ -312,6 +312,40 @@ test "api runtime leaves no temp roots after std.template render churn" {
     }
 }
 
+test "array slices survive GC churn from temporary array sources" {
+    var rt = try setupApiRuntime(.{
+        .allow_io = false,
+        .heap_size_bytes = 256 * 1024,
+        .max_objects = 512,
+    });
+    defer rt.deinit();
+
+    try std.testing.expect(rt.run(
+        \\std := import("std")
+        \\
+        \\func churnedSliceSum() int {
+        \\    s := [10, 20, 30, 40, 50][1:4]
+        \\    junk := []
+        \\    for i := 0; i < 1500; i += 1 {
+        \\        junk = std.core.append(junk, [i, i + 1, i + 2, i + 3])
+        \\        if std.core.len(junk) > 96 { junk = [] }
+        \\    }
+        \\    return s[0] + s[2]
+        \\}
+    ) == .ok);
+    try expectNoTempRoots();
+
+    var i: usize = 0;
+    while (i < 64) : (i += 1) {
+        const result = rt.call("churnedSliceSum", &.{});
+        switch (result) {
+            .ok => |v| try std.testing.expect(v == .int and v.int == 60),
+            else => return error.TestUnexpectedResult,
+        }
+        try expectNoTempRoots();
+    }
+}
+
 test "compiler: empty source emits halt" {
     var rt = try setup();
     defer rt.deinit();

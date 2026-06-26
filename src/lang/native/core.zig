@@ -26,7 +26,7 @@ pub fn nativeLen(v: Value) !Value {
         .object => |obj| switch (obj.*) {
             .dyn_string => |s| try vmstr.utf8RuneCountCached(s),
             .string_view => |sv| try vmstr.utf8RuneCountCached(sv.bytes),
-            .array, .array_managed, .array_capacity => (try vms.asArraySlice(obj)).len,
+            .array, .array_managed, .array_view, .array_capacity => (try vms.asArraySlice(obj)).len,
             .map, .map_managed, .map_hashed => (try vms.asMapSlice(obj)).len,
             .struct_instance => |s| s.fields.len,
             else => return error.TypeError,
@@ -336,7 +336,7 @@ pub fn nativeTypeNameValue(v: Value) !Value {
         .null => .{ .string = staticSS("null") },
         .object => |obj| switch (obj.*) {
             .dyn_string, .string_view => .{ .string = staticSS("string") },
-            .array, .array_managed, .array_capacity => .{ .string = staticSS("array") },
+            .array, .array_managed, .array_view, .array_capacity => .{ .string = staticSS("array") },
             .map, .map_managed, .map_hashed => .{ .string = staticSS("map") },
             .native_function => .{ .string = staticSS("native_func") },
             .host_module_function => .{ .string = staticSS("host_func") },
@@ -485,7 +485,7 @@ fn deepEqualObject(a: *Object, b: *Object, visits: []DeepEqVisit, visit_len: *us
     }
     if (hasVisitedPair(a, b, visits, visit_len.*)) return true;
     switch (a.*) {
-        .array, .array_managed, .array_capacity => {
+        .array, .array_managed, .array_view, .array_capacity => {
             try appendVisitedPair(a, b, visits, visit_len);
             const aa = try vms.asArraySlice(a);
             const bb = try vms.asArraySlice(b);
@@ -604,7 +604,7 @@ fn cloneValue(v: Value, visits: []CloneVisit, visit_len: *usize) anyerror!Value 
 fn cloneObject(src: *Object, visits: []CloneVisit, visit_len: *usize) anyerror!Value {
     if (cloneFindExisting(src, visits, visit_len.*)) |cached| return .{ .object = cached };
     switch (src.*) {
-        .array, .array_managed, .array_capacity => {
+        .array, .array_managed, .array_view, .array_capacity => {
             const out_obj = try vmgc.allocTempRooted(.{ .array = &[_]Value{} });
             defer vms.popTempRoot();
             try cloneRemember(src, out_obj, visits, visit_len);

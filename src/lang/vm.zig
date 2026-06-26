@@ -1059,6 +1059,7 @@ fn iterInit(v: Value) !Value {
         .object => |o| switch (o.*) {
             .dyn_string => |s| obj.* = .{ .iterator = .{ .kind = .string, .index = 0, .string = s, .string_managed = true, .source = o } },
             .string_view => |sv| obj.* = .{ .iterator = .{ .kind = .string, .index = 0, .string = sv.bytes, .string_managed = true, .source = sv.source } },
+            .array_view => |av| obj.* = .{ .iterator = .{ .kind = .array, .index = 0, .array = av.items, .source = o } },
             .array, .array_managed, .array_capacity => obj.* = .{ .iterator = .{ .kind = .array, .index = 0, .array = try vms.asArraySlice(o), .source = o } },
             .map, .map_managed, .map_hashed => obj.* = .{ .iterator = .{ .kind = .map, .index = 0, .map = try vms.asMapSlice(o), .source = o } },
             .named_type => |nt| {
@@ -1240,7 +1241,7 @@ fn retSlowPath(retval_in: Value) !bool {
 fn pushFieldFromObject(obj: *Object, name_idx: usize, ic_base: usize, ic_type_idx: usize, ic_fidx: u8) !void {
     const name = (try chunk.constAt(name_idx)).string.bytes;
     switch (obj.*) {
-        .array, .array_managed, .array_capacity => {
+        .array, .array_managed, .array_view, .array_capacity => {
             const items = try vms.asArraySlice(obj);
             if (common.streq(name, "first")) {
                 if (items.len == 0) return error.IndexOutOfBounds;
@@ -1351,7 +1352,7 @@ fn opGetIndex() !void {
                 const w = try vmstr.utf8NextRuneByteLen(bytes, start);
                 try vmPush(try makeStringView(bytes[start .. start + w], src));
             },
-            .array, .array_managed, .array_capacity => {
+            .array, .array_managed, .array_view, .array_capacity => {
                 const items = try vms.asArraySlice(obj);
                 const idx = try vms.vmIndexFromVal(idx_v);
                 if (idx >= items.len) {
@@ -1428,7 +1429,7 @@ fn opSetIndex() !void {
     }
     if (container != .object) return error.TypeError;
     switch (container.object.*) {
-        .array, .array_managed, .array_capacity => {
+        .array, .array_managed, .array_view, .array_capacity => {
             const items = try vms.asArraySlice(container.object);
             const idx = try vms.vmIndexFromVal(idx_v);
             if (idx >= items.len) {
@@ -1567,7 +1568,7 @@ fn opInvokeMethod() !void {
             vmState().stack[recv_idx] = callable;
             try performCall(argc);
         },
-        .array, .array_managed, .array_capacity => {
+        .array, .array_managed, .array_view, .array_capacity => {
             if (argc != 0) return error.ArityMismatch;
             const items = try vms.asArraySlice(recv.object);
             if (common.streq(mname, "first")) {
@@ -2728,13 +2729,17 @@ fn runInner() !void {
                             const r = try stringSliceRange(bytes, has_start, start_v, has_end, end_v);
                             try vmPush(try makeStringView(bytes[r.start_b..r.end_b], src));
                         },
-                        .array, .array_managed, .array_capacity => {
+                        .array, .array_managed, .array_view, .array_capacity => {
                             const items = try vms.asArraySlice(obj);
                             const start: usize = if (has_start) try vms.vmSliceIndex(start_v, items.len) else 0;
                             const end: usize = if (has_end) try vms.vmSliceIndex(end_v, items.len) else items.len;
                             if (start > end) return error.IndexOutOfBounds;
                             const out = try vmAllocObject();
-                            out.* = .{ .array = items[start..end] };
+                            const source = switch (obj.*) {
+                                .array_view => obj.array_view.source,
+                                else => obj,
+                            };
+                            out.* = .{ .array_view = .{ .items = items[start..end], .source = source } };
                             try vmPush(.{ .object = out });
                         },
                         else => return error.TypeError,

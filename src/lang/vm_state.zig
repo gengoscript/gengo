@@ -403,7 +403,7 @@ pub fn isStringValue(v: Value) bool {
 
 pub fn isArrayObject(obj: *Object) bool {
     return switch (obj.*) {
-        .array, .array_managed, .array_capacity => true,
+        .array, .array_managed, .array_view, .array_capacity => true,
         else => false,
     };
 }
@@ -412,6 +412,7 @@ pub fn asArraySlice(obj: *Object) ![]Value {
     return switch (obj.*) {
         .array => |s| s,
         .array_managed => |s| s,
+        .array_view => |v| v.items,
         .array_capacity => |a| a.backing.array_managed[0..a.len],
         else => error.TypeError,
     };
