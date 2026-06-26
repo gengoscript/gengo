@@ -28,3 +28,23 @@ test "reset-per-call lane completes constrained churn without failure" {
     try std.testing.expectEqual(@as(usize, 128), stats.completed_iterations);
     try std.testing.expect(stats.sample_count > 0);
 }
+
+test "fragmentation harness accepts custom policy source under gc stress" {
+    const stats = try frag.run(.{
+        .lane = .reset_per_call,
+        .iterations = 8,
+        .heap_size_bytes = 256 * 1024,
+        .max_objects = 512,
+        .sample_every = 1,
+        .gc_stress = true,
+        .policy_source =
+        \\func acl(client string, user string, topic string, access string) bool {
+        \\    return client != "" and user != "" and topic != "" and access != ""
+        \\}
+        ,
+    });
+
+    try std.testing.expectEqual(frag.Outcome.completed, stats.outcome);
+    try std.testing.expectEqual(@as(usize, 8), stats.completed_iterations);
+    try std.testing.expect(stats.sample_count >= 8);
+}

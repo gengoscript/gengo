@@ -1,6 +1,7 @@
 const std = @import("std");
 const api = @import("runtime/api.zig");
 const heap = @import("runtime/heap.zig");
+const vmgc = @import("lang/vm_gc.zig");
 const value = @import("lang/value.zig");
 
 const StringSlice = value.StringSlice;
@@ -25,6 +26,8 @@ pub const Options = struct {
     max_objects: usize = 1024,
     sample_every: usize = 64,
     max_ops: ?u64 = 200_000,
+    policy_source: ?[]const u8 = null,
+    gc_stress: bool = false,
 };
 
 pub const Stats = struct {
@@ -44,7 +47,7 @@ pub const Stats = struct {
     peak_live_objects: usize = 0,
 };
 
-const policy_source =
+pub const default_policy_source =
     \\std := import("std")
     \\tmpl := std.template
     \\
@@ -69,6 +72,12 @@ const policy_source =
 ;
 
 pub fn run(opts: Options) !Stats {
+    const saved_gc_stress = vmgc.gc_stress;
+    if (opts.gc_stress) vmgc.gc_stress = true;
+    defer {
+        if (opts.gc_stress) vmgc.gc_stress = saved_gc_stress;
+    }
+
     var rt = try api.Runtime.init(.{
         .allow_io = false,
         .heap_size_bytes = opts.heap_size_bytes,
@@ -84,9 +93,10 @@ pub fn run(opts: Options) !Stats {
     };
     const prev_heap = heap.g_state;
     defer heap.setActive(prev_heap);
+    const policy_src = opts.policy_source orelse default_policy_source;
 
     if (opts.lane == .long_lived) {
-        switch (rt.run(policy_source)) {
+        switch (rt.run(policy_src)) {
             .ok => {},
             .compile_error => |e| {
                 stats.outcome = .compile_error;
@@ -110,7 +120,7 @@ pub fn run(opts: Options) !Stats {
     while (i < opts.iterations) : (i += 1) {
         if (opts.lane == .reset_per_call) {
             rt.reset();
-            switch (rt.run(policy_source)) {
+            switch (rt.run(policy_src)) {
                 .ok => {},
                 .compile_error => |e| {
                     stats.outcome = .compile_error;
@@ -186,11 +196,10 @@ fn classifyRuntimeError(err: anyerror) Outcome {
 }
 
 fn sample(rt: *api.Runtime, stats: *Stats) void {
-    heap.setActive(&rt.inner.heap_state);
-    const info = heap.fragmentationInfo();
-    const used = heap.usedBytes();
-    const free_list_bytes = heap.totalFreeListBytes();
-    const live_objects = heap.liveObjectCount();
+    const info = rt.heapFragmentationInfo();
+    const used = rt.heapUsedBytes();
+    const free_list_bytes = rt.heapTotalFreeListBytes();
+    const live_objects = rt.heapLiveObjectCount();
 
     stats.sample_count += 1;
     if (used > stats.peak_used_bytes) stats.peak_used_bytes = used;

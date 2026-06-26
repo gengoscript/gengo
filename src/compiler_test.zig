@@ -346,6 +346,40 @@ test "array slices survive GC churn from temporary array sources" {
     }
 }
 
+test "api heap diagnostics preserve the previously active heap" {
+    var active_rt = try setupApiRuntime(.{
+        .allow_io = false,
+        .heap_size_bytes = 256 * 1024,
+        .max_objects = 512,
+    });
+    defer active_rt.deinit();
+
+    var probe_rt = try setupApiRuntime(.{
+        .allow_io = false,
+        .heap_size_bytes = 256 * 1024,
+        .max_objects = 512,
+    });
+    defer probe_rt.deinit();
+
+    heap.setActive(&active_rt.inner.heap_state);
+
+    _ = probe_rt.heapUsedBytes();
+    try std.testing.expect(heap.g_state == &active_rt.inner.heap_state);
+
+    _ = probe_rt.heapTotalFreeListBytes();
+    try std.testing.expect(heap.g_state == &active_rt.inner.heap_state);
+
+    _ = probe_rt.heapFragmentationInfo();
+    try std.testing.expect(heap.g_state == &active_rt.inner.heap_state);
+
+    var buf: [128]u8 = undefined;
+    _ = probe_rt.heapFreeListSummary(&buf);
+    try std.testing.expect(heap.g_state == &active_rt.inner.heap_state);
+
+    _ = probe_rt.heapLiveObjectCount();
+    try std.testing.expect(heap.g_state == &active_rt.inner.heap_state);
+}
+
 test "compiler: empty source emits halt" {
     var rt = try setup();
     defer rt.deinit();
