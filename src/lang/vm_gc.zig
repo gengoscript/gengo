@@ -51,6 +51,9 @@ fn drainMarkQueue() void {
             .array, .array_managed => {
                 for (vms.asArraySlice(obj) catch unreachable) |v| markValue(v);
             },
+            .array_view => |av| {
+                if (heap.isObjectLive(av.source)) markObjectQueue(av.source);
+            },
             .array_capacity => |ac| {
                 if (heap.isObjectLive(ac.backing)) markObjectQueue(ac.backing);
             },
@@ -123,10 +126,15 @@ fn gcCheckIntegrityPostSweep() void {
     const gs = heap.g_state;
     const max = gs.obj_pool.len;
 
-    // Every string_view.source object must still be live after sweep.
+    // Every source-retaining view object must still point at a live source after sweep.
     for (gs.obj_pool[0..max], gs.obj_live[0..max], 0..) |*obj, live, i| {
         if (!live) continue;
         switch (obj.*) {
+            .array_view => |av| {
+                if (!heap.isObjectLive(av.source)) {
+                    std.debug.panic("GC INTEGRITY: array_view.source (obj {d}) is dead after sweep", .{i});
+                }
+            },
             .string_view => |sv| {
                 if (!heap.isObjectLive(sv.source)) {
                     std.debug.panic("GC INTEGRITY: string_view.source (obj {d}) is dead after sweep", .{i});

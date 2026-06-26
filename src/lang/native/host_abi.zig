@@ -48,7 +48,7 @@ pub fn wireFromValue(v: Value) !host_abi.ValueWire {
         .object => |o| switch (o.*) {
             .dyn_string => makeWire(.string, 0, @intCast(@intFromPtr(o.dyn_string.ptr)), @intCast(o.dyn_string.len)),
             .string_view => makeWire(.string, 0, @intCast(@intFromPtr(o.string_view.bytes.ptr)), @intCast(o.string_view.bytes.len)),
-            .array, .array_managed, .array_capacity => {
+            .array, .array_managed, .array_view, .array_capacity => {
                 const items = try vms.asArraySlice(o);
                 const wires = (heap.bump(host_abi.ValueWire, items.len) orelse return error.OutOfMemory)[0..items.len];
                 for (items, 0..) |item, i| {

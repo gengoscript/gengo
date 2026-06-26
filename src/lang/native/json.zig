@@ -199,7 +199,7 @@ fn jsonStringifyValueDepth(s: *std.json.Stringify, gv: Value, depth: u32, ancest
         .object => |obj| switch (obj.*) {
             .dyn_string => |str| try s.write(str),
             .string_view => |sv| try s.write(sv.bytes),
-            .array, .array_managed, .array_capacity => {
+            .array, .array_managed, .array_view, .array_capacity => {
                 for (ancestors[0..anc_count.*]) |a| {
                     if (a == obj) {
                         try s.write(null);
