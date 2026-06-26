@@ -290,6 +290,26 @@ diagnostics. In practice, watch for repeated `heap exhausted` results from
 `run()` or `call()` in long-lived runtimes and treat them as a signal to reset
 or rotate the runtime instance.
 
+### Measuring Your Workload
+
+The repo ships a native stress harness for this question:
+
+```bash
+zig build -Dpreset=1m embedding-frag -- 4096 256
+```
+
+Arguments are `iterations` and `heap_kib`. The harness runs the same
+ACL-shaped workload in two lanes:
+
+- **`long_lived`** — load once, then call repeatedly in the same runtime
+- **`reset_per_call`** — `reset()`, reload, and call once per iteration
+
+It prints heap-usage and free-list summaries for each lane, then emits a
+recommendation line. Use it as a baseline before changing the allocator: if
+your production-shaped workload survives in `long_lived`, compaction can stay
+deferred; if it exhausts the heap while `reset_per_call` remains stable, keep
+reset-per-call as the default stateless embedding pattern.
+
 ## Host Modules
 
 Host modules are imported through `host:*` paths and must be registered

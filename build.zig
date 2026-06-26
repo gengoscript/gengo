@@ -245,6 +245,21 @@ pub fn build(b: *std.Build) void {
     const compiler_test_step = b.step("compiler-test", "Run compiler bytecode output tests");
     compiler_test_step.dependOn(&run_compiler_tests.step);
 
+    // ── Long-lived embedding fragmentation harness tests ────────────────────
+
+    const embedding_frag_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/embedding_fragmentation_test.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    embedding_frag_test_mod.addImport("build_options", build_opts_mod);
+    const embedding_frag_test = b.addTest(.{ .root_module = embedding_frag_test_mod });
+    embedding_frag_test.step.dependOn(&preset.step);
+    const run_embedding_frag_tests = b.addRunArtifact(embedding_frag_test);
+
+    const embedding_frag_test_step = b.step("embedding-frag-test", "Run long-lived embedding fragmentation harness tests");
+    embedding_frag_test_step.dependOn(&run_embedding_frag_tests.step);
+
     // ── Chaos / spec-fail in-process tests (native Zig test runner) ───────────
 
     const chaos_spec_test_mod = b.createModule(.{
@@ -269,6 +284,7 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run heap, compiler, lexer, runtime safety, value, embedding, engine, fuzz, and conformance tests");
     test_step.dependOn(&run_heap_tests.step);
     test_step.dependOn(&run_compiler_tests.step);
+    test_step.dependOn(&run_embedding_frag_tests.step);
     test_step.dependOn(&run_chaos_spec_tests.step);
     test_step.dependOn(&run_lexer_tests.step);
     test_step.dependOn(&run_vm_safety.step);
@@ -359,6 +375,22 @@ pub fn build(b: *std.Build) void {
     }
     const native_cap_step = b.step("native-cap", "Run native capability tests against the CLI");
     native_cap_step.dependOn(&run_native_cap.step);
+
+    const embedding_frag_runner_mod = b.createModule(.{
+        .root_source_file = b.path("src/embedding_fragmentation_runner.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    embedding_frag_runner_mod.addImport("build_options", build_opts_mod);
+    const embedding_frag_runner = b.addExecutable(.{
+        .name = "embedding-frag-runner",
+        .root_module = embedding_frag_runner_mod,
+    });
+    embedding_frag_runner.step.dependOn(&preset.step);
+    const run_embedding_frag = b.addRunArtifact(embedding_frag_runner);
+    if (b.args) |args| run_embedding_frag.addArgs(args);
+    const embedding_frag_step = b.step("embedding-frag", "Run the long-lived embedding fragmentation harness");
+    embedding_frag_step.dependOn(&run_embedding_frag.step);
 
     const run_chaos = b.addRunArtifact(test_runner_exe);
     run_chaos.step.dependOn(&install_native.step);
