@@ -287,6 +287,15 @@ pub fn allocBytesManaged(n: usize) ?[]u8 {
     // Bump exhausted: try buddy-splitting a larger free block.
     // ClassSizes are exact powers of 2, so splitting is lossless.
     if (splitLargerFreeBlock(ci)) |blk| return blk;
+
+    // Last resort: when enough bytes are already free but stranded across
+    // class lists, rebuild the free lists before reporting OOM.
+    const info = fragmentationInfo();
+    if (info.free_bytes >= ClassSizes[ci] and info.largest_block < ClassSizes[ci]) {
+        defragmentFreeLists();
+        if (takeFreeBlock(ci)) |blk| return blk;
+        if (splitLargerFreeBlock(ci)) |blk| return blk;
+    }
     return null;
 }
 

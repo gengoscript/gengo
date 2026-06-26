@@ -235,11 +235,11 @@ test "managed overflow path realigns after compiler spillover" {
 // ── Fragmentation and defragmentation ──────────────────────────────────────
 
 test "defrag merges adjacent cross-class free blocks" {
-    // Three adjacent blocks of different classes: class-16, class-32,
-    // class-16 each free but in separate class free lists. Defrag should
-    // merge them into a single class-64 block.
+    // Exhaust the heap, then free three adjacent blocks of different classes:
+    // class-16, class-32, class-16. Defrag should recover a single class-64
+    // block from that fragmented hole.
     var h: heap.State = .{};
-    try h.init(4096, 32, std.testing.allocator);
+    try h.init(1024, 32, std.testing.allocator);
     defer h.deinit();
     heap.setActive(&h);
 
@@ -247,19 +247,43 @@ test "defrag merges adjacent cross-class free blocks" {
     const b = heap.allocBytesManaged(32) orelse return error.TestFailed;
     const c = heap.allocBytesManaged(16) orelse return error.TestFailed;
 
-    // Free in reverse order so intermediate buddies don't merge early.
-    heap.freeBytesManaged(c); // class-16 at offset 48
-    heap.freeBytesManaged(b); // class-32 at offset 16
-    heap.freeBytesManaged(a); // class-16 at offset 0
+    while (heap.allocBytesManaged(64) != null) {}
 
-    // Now: class-16 free list has [0, 48]; class-32 free list has [16]
-    // Total 64 free bytes but no block > 32.
+    // Free in reverse order so intermediate buddies don't merge early.
+    heap.freeBytesManaged(c);
+    heap.freeBytesManaged(b);
+    heap.freeBytesManaged(a);
+
     const info = heap.fragmentationInfo();
     try std.testing.expect(info.free_bytes >= 64);
     try std.testing.expect(info.largest_block <= 32);
 
     // Run defrag and check that we now have a usable class-64 block.
     heap.defragmentFreeLists();
+
+    const big = heap.allocBytesManaged(64) orelse return error.TestFailed;
+    try std.testing.expect(big.len >= 64);
+}
+
+test "allocBytesManaged defragments cross-class fragmentation before failing" {
+    var h: heap.State = .{};
+    try h.init(1024, 32, std.testing.allocator);
+    defer h.deinit();
+    heap.setActive(&h);
+
+    const a = heap.allocBytesManaged(16) orelse return error.TestFailed;
+    const b = heap.allocBytesManaged(32) orelse return error.TestFailed;
+    const c = heap.allocBytesManaged(16) orelse return error.TestFailed;
+
+    while (heap.allocBytesManaged(64) != null) {}
+
+    heap.freeBytesManaged(c);
+    heap.freeBytesManaged(b);
+    heap.freeBytesManaged(a);
+
+    const info = heap.fragmentationInfo();
+    try std.testing.expect(info.free_bytes >= 64);
+    try std.testing.expect(info.largest_block <= 32);
 
     const big = heap.allocBytesManaged(64) orelse return error.TestFailed;
     try std.testing.expect(big.len >= 64);
