@@ -1,6 +1,7 @@
 const std = @import("std");
 const rt_mod = @import("runtime.zig");
 const vm = @import("../lang/vm.zig");
+const heap = @import("heap.zig");
 const Value = @import("../lang/value.zig").Value;
 pub const SourceEntry = @import("../lang/module_compile.zig").SourceEntry;
 pub const SourceProvider = @import("../lang/module_compile.zig").SourceProvider;
@@ -193,7 +194,45 @@ pub const Runtime = struct {
         };
         return .ok;
     }
+
+    pub fn heapUsedBytes(self: *Runtime) usize {
+        const prev_heap = heap.g_state;
+        defer heap.setActive(prev_heap);
+        heap.setActive(&self.inner.heap_state);
+        return heap.usedBytes();
+    }
+
+    pub fn heapTotalFreeListBytes(self: *Runtime) usize {
+        const prev_heap = heap.g_state;
+        defer heap.setActive(prev_heap);
+        heap.setActive(&self.inner.heap_state);
+        return heap.totalFreeListBytes();
+    }
+
+    pub fn heapFragmentationInfo(self: *Runtime) HeapFragmentationInfo {
+        const prev_heap = heap.g_state;
+        defer heap.setActive(prev_heap);
+        heap.setActive(&self.inner.heap_state);
+        const info = heap.fragmentationInfo();
+        return .{ .free_bytes = info.free_bytes, .largest_block = info.largest_block };
+    }
+
+    pub fn heapFreeListSummary(self: *Runtime, buf: []u8) []u8 {
+        const prev_heap = heap.g_state;
+        defer heap.setActive(prev_heap);
+        heap.setActive(&self.inner.heap_state);
+        return heap.freeListSummary(buf);
+    }
+
+    pub fn heapLiveObjectCount(self: *Runtime) usize {
+        const prev_heap = heap.g_state;
+        defer heap.setActive(prev_heap);
+        heap.setActive(&self.inner.heap_state);
+        return heap.liveObjectCount();
+    }
 };
+
+pub const HeapFragmentationInfo = struct { free_bytes: usize, largest_block: usize };
 
 pub const RuntimeResultWithValue = union(enum) {
     ok: Value,
