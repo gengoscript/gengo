@@ -110,11 +110,31 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const max_bytes = try extractUsize(arg1);
             _ = try vms.vmPop();
 
-            const buf = net_state.netRead(id, max_bytes) catch |err| {
+            // Host/WASM path: use the page-allocator round-trip.
+            if (net_state.hasHandlers() or comptime (builtin.os.tag == .wasi or builtin.os.tag == .windows)) {
+                const buf = net_state.netRead(id, max_bytes) catch |err| {
+                    try pushCatchableNetError(err);
+                    return;
+                };
+                try pushPageString(buf);
+                return;
+            }
+
+            // Native POSIX fast path: fill from the connection's internal read
+            // buffer (which batches socket reads at 4 KiB) into a local Zig
+            // stack buffer, then copy into the GC heap via makeDynString.
+            // Using a local buffer keeps netReadInto free of any GC interaction.
+            if (max_bytes == 0) {
+                try vms.vmPush(try vmgc.makeDynString(""));
+                return;
+            }
+            var local_buf: [4096]u8 = undefined;
+            const read_dest = local_buf[0..@min(max_bytes, local_buf.len)];
+            const n = net_state.netReadInto(id, read_dest) catch |err| {
                 try pushCatchableNetError(err);
                 return;
             };
-            try pushPageString(buf);
+            try vms.vmPush(try vmgc.makeDynString(read_dest[0..n]));
         },
         .cap_net_write => {
             if (argc != 2) return error.ArityMismatch;
