@@ -2,11 +2,15 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const MaxConns = 16;
+const ReadBufSize = 4096;
 
 const NetConn = struct {
     id: u32,
     host_handle: i32,
     socket: if (builtin.os.tag == .wasi) void else std.posix.socket_t,
+    rbuf: [ReadBufSize]u8 = undefined,
+    rbuf_pos: usize = 0,
+    rbuf_end: usize = 0,
 };
 
 var g_next_id: u32 = 1;
@@ -353,6 +357,44 @@ pub fn netRead(id: u32, max_bytes: usize) ![]u8 {
 
     const out = std.heap.page_allocator.realloc(buf, n) catch return error.OutOfMemory;
     return out;
+}
+
+// netReadInto reads up to dest.len bytes into dest, returning how many bytes
+// were written. Data is served from a per-connection 4 KiB read buffer, which
+// is refilled in one syscall when empty — so many small reads cost only one
+// posix.read per 4 KiB consumed. Only available on POSIX (not host/WASM paths).
+pub fn netReadInto(id: u32, dest: []u8) !usize {
+    if (comptime builtin.os.tag == .wasi or builtin.os.tag == .windows) return error.CapabilityNotAvailable;
+    g_net_err_len = 0;
+    const conn = findConn(id) orelse {
+        setNetErr("read: unknown connection handle {d}", .{id});
+        return error.NetError;
+    };
+    if (conn.rbuf_pos >= conn.rbuf_end) {
+        // Buffer empty: fill from socket with a large read.
+        const n = std.posix.read(conn.socket, &conn.rbuf) catch |err| switch (err) {
+            error.WouldBlock => return error.DeadlineExceeded,
+            error.ConnectionResetByPeer => {
+                setNetErr("read: connection reset by peer", .{});
+                return error.NetError;
+            },
+            error.SocketUnconnected => {
+                setNetErr("read: socket not connected", .{});
+                return error.NetError;
+            },
+            else => |e| {
+                setNetErr("read: {s}", .{@errorName(e)});
+                return error.NetError;
+            },
+        };
+        conn.rbuf_pos = 0;
+        conn.rbuf_end = n;
+    }
+    const avail = conn.rbuf_end - conn.rbuf_pos;
+    const n = @min(dest.len, avail);
+    @memcpy(dest[0..n], conn.rbuf[conn.rbuf_pos..conn.rbuf_pos + n]);
+    conn.rbuf_pos += n;
+    return n;
 }
 
 pub fn netWrite(id: u32, data: []const u8) !usize {
