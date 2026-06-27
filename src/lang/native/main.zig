@@ -24,6 +24,12 @@ const FieldTypeSpec = @import("../value.zig").FieldTypeSpec;
 const StructFieldSpec = @import("../value.zig").StructFieldSpec;
 const StructTypeObj = @import("../value.zig").StructTypeObj;
 
+// Static backing for native_function Objects, indexed by NativeFnId discriminant.
+// NativeFnId is enum(u8) so discriminants fit in [0, 256).
+// Lives outside the GC-managed heap so compactManagedHeap never overwrites them.
+// Each run of buildStdModule re-initialises the slots it uses.
+var native_fn_backing: [256]Object = undefined;
+
 const rand_mod = @import("rand.zig");
 const encode_mod = @import("encode.zig");
 const time_mod = @import("time.zig");
@@ -58,13 +64,13 @@ const NamespaceEntry = struct {
 };
 
 fn makeNative(id: NativeFnId, arity: u8) !Value {
-    // Use bump (non-pool) allocation so these permanent static objects are never
-    // seen by the GC. vmAllocObject triggers GC on every call under gc_stress,
-    // sweeping earlier makeNative results that are only held in Zig locals.
-    const buf = heap.bump(Object, 1) orelse return error.OutOfMemory;
-    const obj: *Object = @ptrCast(buf);
-    obj.* = .{ .native_function = .{ .id = @intFromEnum(id), .arity = arity } };
-    return .{ .object = obj };
+    // Store in a static array outside the GC-managed heap.  This means:
+    // - GC never marks or sweeps these objects (isObjectLive returns false).
+    // - compactManagedHeap never overwrites them (they are not in heap[]).
+    // - Each buildStdModule call refreshes the slot; no separate reset needed.
+    const idx = @intFromEnum(id);
+    native_fn_backing[idx] = .{ .native_function = .{ .id = idx, .arity = arity } };
+    return .{ .object = &native_fn_backing[idx] };
 }
 
 fn makeNamespace(display_name: []const u8, qualified_name: []const u8, entries: []const NamespaceEntry) !*Object {
