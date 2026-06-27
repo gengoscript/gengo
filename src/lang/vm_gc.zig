@@ -234,6 +234,11 @@ pub fn vmAllocManagedSlice(comptime T: type, n: usize) ![]T {
         vms.vmState().alloc_managed_slice_calls += 1;
         return s;
     }
+    heap.compactManagedHeap();
+    if (heap.allocManagedSlice(T, n)) |s| {
+        vms.vmState().alloc_managed_slice_calls += 1;
+        return s;
+    }
     return error.OutOfMemory;
 }
 
@@ -270,6 +275,13 @@ pub fn vmAllocManagedBytes(n: usize) ![]u8 {
     }
     collectGarbage();
     vms.vmState().next_gc_heap_bytes = gcStepThreshold(heap.usedBytes());
+    if (heap.allocBytesManaged(n)) |s| {
+        vms.vmState().alloc_managed_bytes_calls += 1;
+        return s;
+    }
+    // Last resort: compact live managed data into a contiguous region so that
+    // fragmentation caused by live objects between freed blocks is eliminated.
+    heap.compactManagedHeap();
     if (heap.allocBytesManaged(n)) |s| {
         vms.vmState().alloc_managed_bytes_calls += 1;
         return s;

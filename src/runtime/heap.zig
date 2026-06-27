@@ -495,10 +495,12 @@ pub fn usedBytes() usize {
     var total = g_state.compiler_bump;
     var prev_end = g_state.compiler_end;
     for (0..g_state.class_count) |ci| {
-        total += g_state.class_bump[ci] - prev_end;
+        const cb = g_state.class_bump[ci];
+        if (cb > prev_end) total += cb - prev_end;
         prev_end = g_state.class_end[ci];
     }
-    total += g_state.overflow_bump - prev_end;
+    const ob = g_state.overflow_bump;
+    if (ob > prev_end) total += ob - prev_end;
     return total;
 }
 
@@ -622,6 +624,295 @@ fn addLargestBlocksToFreeList(start_addr: usize, len: usize) void {
         g_state.free_blocks[ci] = p;
         off += class_size;
     }
+}
+
+// ── Managed heap compaction ────────────────────────────────────────────────
+//
+// Moves all live managed allocations to a contiguous region at the start of
+// the managed heap, freeing all fragmented space as one large contiguous
+// block at the end. Unlike defragmentFreeLists (which only merges adjacent
+// FREE blocks), compaction moves LIVE allocations, eliminating fragmentation
+// caused by live objects interleaved with freed space.
+//
+// After compaction:
+//   - All live managed bytes occupy [managed_start .. dest]
+//   - All class bumps are exhausted (set to class_end)
+//   - overflow_bump = max(overflow_base, dest) — new allocations bump from here
+//   - All free lists are cleared
+//
+// Sub-slice views (string_view.bytes, array_view.items) and iterator slices
+// are updated in a second pass using a reloc table binary search so that
+// sub-slices into moved blocks get the correct offset-adjusted new pointer.
+
+const CompactReloc = struct {
+    old_addr: usize,
+    block_size: usize,
+    new_addr: usize,
+};
+
+// Return the managed block size (ClassSizes[ci]) for a raw byte count.
+fn managedBlockSize(byte_len: usize) usize {
+    if (byte_len == 0) return 0;
+    const ci = classIndexFor(byte_len) orelse return 0;
+    return ClassSizes[ci];
+}
+
+// Binary search: find the CompactReloc entry whose range [old_addr, old_addr+block_size)
+// contains `addr`. Returns the corresponding new address (with offset applied), or null.
+fn compactFindReloc(relocs: []const CompactReloc, addr: usize) ?usize {
+    if (relocs.len == 0) return null;
+    var lo: usize = 0;
+    var hi: usize = relocs.len;
+    while (lo + 1 < hi) {
+        const mid = lo + (hi - lo) / 2;
+        if (relocs[mid].old_addr <= addr) lo = mid else hi = mid;
+    }
+    const r = relocs[lo];
+    if (addr < r.old_addr or addr >= r.old_addr + r.block_size) return null;
+    return r.new_addr + (addr - r.old_addr);
+}
+
+fn compactCountBlocks(obj: *const Object) usize {
+    return switch (obj.*) {
+        .dyn_string      => |s|  if (s.len > 0) 1 else 0,
+        .string_builder  => |sb| if (sb.buf.len > 0) 1 else 0,
+        .array_managed   => |a|  if (a.len > 0) 1 else 0,
+        .map             => |m|  if (m.len > 0) 1 else 0,
+        .map_managed     => |m|  if (m.len > 0) 1 else 0,
+        .map_hashed      => |mh| blk: {
+            var n: usize = 0;
+            if (mh.entries.len > 0) n += 1;
+            if (mh.buckets.len > 0) n += 1;
+            break :blk n;
+        },
+        .struct_instance => |si| if (si.fields.len > 0) 1 else 0,
+        .variant_value   => |vv| blk: {
+            var n: usize = 0;
+            if (vv.arm_fields.len > 0) n += 1;
+            if (vv.shared_values.len > 0) n += 1;
+            break :blk n;
+        },
+        else => 0,
+    };
+}
+
+fn compactFillBlocks(obj: *const Object, out: []CompactReloc) usize {
+    var n: usize = 0;
+    switch (obj.*) {
+        .dyn_string => |s| {
+            if (s.len > 0) {
+                out[n] = .{ .old_addr = @intFromPtr(s.ptr), .block_size = managedBlockSize(s.len), .new_addr = 0 };
+                n += 1;
+            }
+        },
+        .string_builder => |sb| {
+            if (sb.buf.len > 0) {
+                out[n] = .{ .old_addr = @intFromPtr(sb.buf.ptr), .block_size = managedBlockSize(sb.buf.len), .new_addr = 0 };
+                n += 1;
+            }
+        },
+        .array_managed => |a| {
+            if (a.len > 0) {
+                out[n] = .{ .old_addr = @intFromPtr(a.ptr), .block_size = managedBlockSize(a.len * @sizeOf(Value)), .new_addr = 0 };
+                n += 1;
+            }
+        },
+        .map => |m| {
+            if (m.len > 0) {
+                out[n] = .{ .old_addr = @intFromPtr(m.ptr), .block_size = managedBlockSize(m.len * @sizeOf(MapEntry)), .new_addr = 0 };
+                n += 1;
+            }
+        },
+        .map_managed => |m| {
+            if (m.len > 0) {
+                out[n] = .{ .old_addr = @intFromPtr(m.ptr), .block_size = managedBlockSize(m.len * @sizeOf(MapEntry)), .new_addr = 0 };
+                n += 1;
+            }
+        },
+        .map_hashed => |mh| {
+            if (mh.entries.len > 0) {
+                out[n] = .{ .old_addr = @intFromPtr(mh.entries.ptr), .block_size = managedBlockSize(mh.entries.len * @sizeOf(MapEntry)), .new_addr = 0 };
+                n += 1;
+            }
+            if (mh.buckets.len > 0) {
+                out[n] = .{ .old_addr = @intFromPtr(mh.buckets.ptr), .block_size = managedBlockSize(mh.buckets.len * @sizeOf(i32)), .new_addr = 0 };
+                n += 1;
+            }
+        },
+        .struct_instance => |si| {
+            if (si.fields.len > 0) {
+                out[n] = .{ .old_addr = @intFromPtr(si.fields.ptr), .block_size = managedBlockSize(si.fields.len * @sizeOf(MapEntry)), .new_addr = 0 };
+                n += 1;
+            }
+        },
+        .variant_value => |vv| {
+            if (vv.arm_fields.len > 0) {
+                out[n] = .{ .old_addr = @intFromPtr(vv.arm_fields.ptr), .block_size = managedBlockSize(vv.arm_fields.len * @sizeOf(Value)), .new_addr = 0 };
+                n += 1;
+            }
+            if (vv.shared_values.len > 0) {
+                out[n] = .{ .old_addr = @intFromPtr(vv.shared_values.ptr), .block_size = managedBlockSize(vv.shared_values.len * @sizeOf(Value)), .new_addr = 0 };
+                n += 1;
+            }
+        },
+        else => {},
+    }
+    return n;
+}
+
+fn compactUpdateObj(obj: *Object, relocs: []const CompactReloc) void {
+    switch (obj.*) {
+        .dyn_string => |*s| {
+            if (s.len > 0) if (compactFindReloc(relocs, @intFromPtr(s.ptr))) |na| {
+                s.* = @as([*]u8, @ptrFromInt(na))[0..s.len];
+            };
+        },
+        .string_builder => |*sb| {
+            if (sb.buf.len > 0) if (compactFindReloc(relocs, @intFromPtr(sb.buf.ptr))) |na| {
+                sb.buf = @as([*]u8, @ptrFromInt(na))[0..sb.buf.len];
+            };
+        },
+        .array_managed => |*a| {
+            if (a.len > 0) if (compactFindReloc(relocs, @intFromPtr(a.ptr))) |na| {
+                a.* = @as([*]Value, @ptrCast(@alignCast(@as(*u8, @ptrFromInt(na)))))[0..a.len];
+            };
+        },
+        .map => |*m| {
+            if (m.len > 0) if (compactFindReloc(relocs, @intFromPtr(m.ptr))) |na| {
+                m.* = @as([*]MapEntry, @ptrCast(@alignCast(@as(*u8, @ptrFromInt(na)))))[0..m.len];
+            };
+        },
+        .map_managed => |*m| {
+            if (m.len > 0) if (compactFindReloc(relocs, @intFromPtr(m.ptr))) |na| {
+                m.* = @as([*]MapEntry, @ptrCast(@alignCast(@as(*u8, @ptrFromInt(na)))))[0..m.len];
+            };
+        },
+        .map_hashed => |*mh| {
+            if (mh.entries.len > 0) if (compactFindReloc(relocs, @intFromPtr(mh.entries.ptr))) |na| {
+                mh.entries = @as([*]MapEntry, @ptrCast(@alignCast(@as(*u8, @ptrFromInt(na)))))[0..mh.entries.len];
+            };
+            if (mh.buckets.len > 0) if (compactFindReloc(relocs, @intFromPtr(mh.buckets.ptr))) |na| {
+                mh.buckets = @as([*]i32, @ptrCast(@alignCast(@as(*u8, @ptrFromInt(na)))))[0..mh.buckets.len];
+            };
+        },
+        .struct_instance => |*si| {
+            if (si.fields.len > 0) if (compactFindReloc(relocs, @intFromPtr(si.fields.ptr))) |na| {
+                si.fields = @as([*]MapEntry, @ptrCast(@alignCast(@as(*u8, @ptrFromInt(na)))))[0..si.fields.len];
+            };
+        },
+        .variant_value => |*vv| {
+            if (vv.arm_fields.len > 0) if (compactFindReloc(relocs, @intFromPtr(vv.arm_fields.ptr))) |na| {
+                vv.arm_fields = @as([*]Value, @ptrCast(@alignCast(@as(*u8, @ptrFromInt(na)))))[0..vv.arm_fields.len];
+            };
+            if (vv.shared_values.len > 0) if (compactFindReloc(relocs, @intFromPtr(vv.shared_values.ptr))) |na| {
+                vv.shared_values = @as([*]Value, @ptrCast(@alignCast(@as(*u8, @ptrFromInt(na)))))[0..vv.shared_values.len];
+            };
+        },
+        // Sub-slice views: update pointer within the moved parent block.
+        .string_view => |*sv| {
+            if (sv.bytes.len > 0) if (compactFindReloc(relocs, @intFromPtr(sv.bytes.ptr))) |na| {
+                sv.bytes = @as([*]const u8, @ptrFromInt(na))[0..sv.bytes.len];
+            };
+        },
+        .array_view => |*av| {
+            if (av.items.len > 0) if (compactFindReloc(relocs, @intFromPtr(av.items.ptr))) |na| {
+                av.items = @as([*]Value, @ptrCast(@alignCast(@as(*u8, @ptrFromInt(na)))))[0..av.items.len];
+            };
+        },
+        // Iterators hold non-owning slice references into managed blocks.
+        .iterator => |*it| switch (it.kind) {
+            .string => {
+                if (it.string.len > 0) if (compactFindReloc(relocs, @intFromPtr(it.string.ptr))) |na| {
+                    it.string = @as([*]const u8, @ptrFromInt(na))[0..it.string.len];
+                };
+            },
+            .array => {
+                if (it.array.len > 0) if (compactFindReloc(relocs, @intFromPtr(it.array.ptr))) |na| {
+                    it.array = @as([*]Value, @ptrCast(@alignCast(@as(*u8, @ptrFromInt(na)))))[0..it.array.len];
+                };
+            },
+            .map => {
+                if (it.map.len > 0) if (compactFindReloc(relocs, @intFromPtr(it.map.ptr))) |na| {
+                    it.map = @as([*]MapEntry, @ptrCast(@alignCast(@as(*u8, @ptrFromInt(na)))))[0..it.map.len];
+                };
+            },
+            .range => {},
+        },
+        else => {},
+    }
+}
+
+// Move all live managed allocations to a contiguous region at managed_start,
+// then reset the bump pointer so all freed space forms one contiguous block.
+// Safe to call after sweepObjects(); must not be called while allocations are
+// in flight. Pointer updates cover owning objects, sub-slice views, and
+// iterator slice references.
+pub fn compactManagedHeap() void {
+    // Phase 1: count live managed blocks.
+    var count: usize = 0;
+    for (0..g_state.obj_pool.len) |i| {
+        if (g_state.obj_live[i]) count += compactCountBlocks(&g_state.obj_pool[i]);
+    }
+    if (count == 0) return;
+
+    // Phase 2: allocate reloc table (prefer stack).
+    var sbuf: [512]CompactReloc = undefined;
+    const dbuf: ?[]CompactReloc = if (count > sbuf.len)
+        (g_state.allocator.alloc(CompactReloc, count) catch return)
+    else
+        null;
+    defer if (dbuf) |b| g_state.allocator.free(b);
+    const relocs: []CompactReloc = if (dbuf) |b| b else sbuf[0..count];
+
+    // Phase 3: fill reloc table.
+    var ri: usize = 0;
+    for (0..g_state.obj_pool.len) |i| {
+        if (g_state.obj_live[i]) ri += compactFillBlocks(&g_state.obj_pool[i], relocs[ri..]);
+    }
+
+    // Phase 4: sort relocs by old address so we can copy in ascending order
+    // (guarantees new_addr[i] <= old_addr[i], making copyForwards safe).
+    std.sort.block(CompactReloc, relocs[0..count], {}, struct {
+        fn lt(_: void, a: CompactReloc, b: CompactReloc) bool {
+            return a.old_addr < b.old_addr;
+        }
+    }.lt);
+
+    // Phase 5: compute new addresses, packing to managed_start.
+    const heap_base = @intFromPtr(g_state.heap.ptr);
+    const align_mask: usize = ManagedAlign - 1;
+    const managed_start: usize = (g_state.compiler_end + align_mask) & ~align_mask;
+    var dest: usize = heap_base + managed_start;
+    for (relocs[0..count]) |*r| {
+        dest = (dest + align_mask) & ~align_mask;
+        r.new_addr = dest;
+        dest += r.block_size;
+    }
+
+    // Phase 6: copy blocks to new positions. new_addr[i] <= old_addr[i] always
+    // (proven by induction on sorted order), so copyForwards is safe even when
+    // source and destination ranges partially overlap.
+    for (relocs[0..count]) |r| {
+        if (r.new_addr == r.old_addr) continue;
+        const src: [*]const u8 = @ptrFromInt(r.old_addr);
+        const dst: [*]u8 = @ptrFromInt(r.new_addr);
+        std.mem.copyForwards(u8, dst[0..r.block_size], src[0..r.block_size]);
+    }
+
+    // Phase 7: update owning slice pointers and all derived view/iterator slices.
+    for (0..g_state.obj_pool.len) |i| {
+        if (g_state.obj_live[i]) compactUpdateObj(&g_state.obj_pool[i], relocs[0..count]);
+    }
+
+    // Phase 8: reset bump state. All class bumps are exhausted; the overflow
+    // bump starts right after the packed live data. Free lists are cleared
+    // because all free space is now contiguous at [dest..heap.len].
+    const dest_off = dest - heap_base;
+    for (0..g_state.class_count) |ci| {
+        g_state.class_bump[ci] = g_state.class_end[ci];
+        g_state.free_blocks[ci] = null;
+    }
+    g_state.overflow_bump = if (dest_off > g_state.overflow_base) dest_off else g_state.overflow_base;
 }
 
 // Writes a compact free-list summary: "ci=N:depth,..." for non-empty classes.
