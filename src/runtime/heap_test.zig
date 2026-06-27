@@ -308,6 +308,98 @@ test "fragmentationInfo reflects free list state" {
     try std.testing.expect(info_freed.free_bytes >= 16);
 }
 
+test "compactManagedHeap eliminates live-object fragmentation" {
+    // Three live dyn_string objects backed by managed blocks (a=16, b=32, c=16).
+    // After exhausting the heap and freeing the middle object, defrag cannot
+    // merge the 32 free bytes with anything because a and c are live on either
+    // side. compactManagedHeap() moves a and c together and makes room for 64 B.
+    var h: heap.State = .{};
+    try h.init(1024, 32, std.testing.allocator);
+    defer h.deinit();
+    heap.setActive(&h);
+
+    // Allocate three live objects backed by managed bytes.
+    const oa = heap.allocObject() orelse return error.TestFailed;
+    const a = heap.allocBytesManaged(16) orelse return error.TestFailed;
+    oa.* = .{ .dyn_string = a };
+
+    const ob = heap.allocObject() orelse return error.TestFailed;
+    const b_bytes = heap.allocBytesManaged(32) orelse return error.TestFailed;
+    ob.* = .{ .dyn_string = b_bytes };
+
+    const oc = heap.allocObject() orelse return error.TestFailed;
+    const c = heap.allocBytesManaged(16) orelse return error.TestFailed;
+    oc.* = .{ .dyn_string = c };
+
+    // Exhaust the heap so no bump space remains.
+    while (heap.allocBytesManaged(64) != null) {}
+
+    // Simulate GC sweep of ob: free its managed bytes and mark slot dead.
+    heap.freeBytesManaged(ob.dyn_string);
+    const ob_idx = heap.objectPoolIndex(ob);
+    if (ob_idx != 0xFFFF) {
+        heap.g_state.obj_live[ob_idx] = false;
+        heap.g_state.obj_next_free[ob_idx] = heap.g_state.obj_free_head;
+        heap.g_state.obj_free_head = ob_idx;
+        heap.g_state.obj_live_count -= 1;
+    }
+
+    // 32 bytes in free list, but sandwiched between live a and c.
+    const info = heap.fragmentationInfo();
+    try std.testing.expect(info.free_bytes >= 32);
+
+    // compactManagedHeap moves a and c together, freeing a contiguous tail.
+    heap.compactManagedHeap();
+
+    const big = heap.allocBytesManaged(64) orelse return error.TestFailed;
+    try std.testing.expect(big.len >= 64);
+}
+
+test "compactManagedHeap updates slice pointers in owning objects" {
+    // After compaction, Object.dyn_string slice pointers must reflect the new
+    // locations and the underlying data must be intact.
+    var h: heap.State = .{};
+    try h.init(4096, 32, std.testing.allocator);
+    defer h.deinit();
+    heap.setActive(&h);
+
+    // Live block a with known content.
+    const oa = heap.allocObject() orelse return error.TestFailed;
+    const a = heap.allocBytesManaged(16) orelse return error.TestFailed;
+    @memset(a, 0xAB);
+    oa.* = .{ .dyn_string = a };
+
+    // Middle block b (will be freed to create a gap).
+    const ob = heap.allocObject() orelse return error.TestFailed;
+    const b_bytes = heap.allocBytesManaged(16) orelse return error.TestFailed;
+    ob.* = .{ .dyn_string = b_bytes };
+
+    // Live block c with known content.
+    const oc = heap.allocObject() orelse return error.TestFailed;
+    const c = heap.allocBytesManaged(16) orelse return error.TestFailed;
+    @memset(c, 0xEF);
+    oc.* = .{ .dyn_string = c };
+
+    // Exhaust the heap then simulate GC sweep of ob.
+    while (heap.allocBytesManaged(64) != null) {}
+    heap.freeBytesManaged(ob.dyn_string);
+    const ob_idx = heap.objectPoolIndex(ob);
+    if (ob_idx != 0xFFFF) {
+        heap.g_state.obj_live[ob_idx] = false;
+        heap.g_state.obj_next_free[ob_idx] = heap.g_state.obj_free_head;
+        heap.g_state.obj_free_head = ob_idx;
+        heap.g_state.obj_live_count -= 1;
+    }
+
+    heap.compactManagedHeap();
+
+    // Data must be preserved at the new locations.
+    try std.testing.expect(oa.dyn_string[0] == 0xAB);
+    try std.testing.expect(oc.dyn_string[0] == 0xEF);
+    try std.testing.expectEqual(@as(usize, 16), oa.dyn_string.len);
+    try std.testing.expectEqual(@as(usize, 16), oc.dyn_string.len);
+}
+
 test "defrag frees scratch buffer when free block count exceeds stack buffer" {
     var h: heap.State = .{};
     try h.init(32768, 2048, std.testing.allocator);
