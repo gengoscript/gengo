@@ -373,7 +373,7 @@ pub const Compiler = struct {
             self.clearNamespaceProvenance();
         } else {
             const qname = try self.qualifyGlobalName(name.src);
-            if (!self.inFunc() and self.block_depth == 1) {
+            if (!self.inFunc() and self.block_depth == 1 and !self.skipping_test_body) {
                 if (self.options.check_global_exists) |checker| {
                     if (!checker(self.options.check_global_ctx.?, qname)) {
                         self.setErr("undefined variable '{s}'", .{name.src});
