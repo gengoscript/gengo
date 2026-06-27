@@ -912,7 +912,9 @@ fn performCallIC(argc: u8, ic_base: usize, ic_slot: u16) !void {
 fn performCall(argc: u8) !void {
     if (vmState().stack_top < @as(usize, argc) + 1) return error.StackUnderflow;
     const func_val = vmState().stack[vmState().stack_top - argc - 1];
-    if (func_val != .object) return error.NotAFunction;
+    if (func_val != .object) {
+        return error.NotAFunction;
+    }
     const obj = func_val.object;
     switch (obj.*) {
         .function => |f| {

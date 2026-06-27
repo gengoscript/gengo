@@ -305,6 +305,11 @@ fn paranoiaOn() bool {
     return paranoia;
 }
 
+// Pool index of the object currently being swept; used by assertNotLive to
+// exclude the dead object's own region from the overlap check (it still has
+// obj_live=true when freeBytesManaged is called on its backing).
+var sweep_exclude_idx: usize = 0xFFFF;
+
 fn assertNotLive(buf: []u8) void {
     const std_ = @import("std");
     const lo = @intFromPtr(buf.ptr);
@@ -312,11 +317,16 @@ fn assertNotLive(buf: []u8) void {
     var i: usize = 0;
     while (i < g_state.obj_pool.len) : (i += 1) {
         if (!g_state.obj_live[i]) continue;
+        if (i == sweep_exclude_idx) continue; // the dead object being swept
         const region: ?[]const u8 = switch (g_state.obj_pool[i]) {
             .dyn_string => |ds| ds,
             .string_builder => |sb| sb.buf,
             .array_managed => |am| std_.mem.sliceAsBytes(am),
+            .map => |m| std_.mem.sliceAsBytes(m),
             .map_managed => |mm| std_.mem.sliceAsBytes(mm),
+            .map_hashed => |mh| std_.mem.sliceAsBytes(mh.entries),
+            .struct_instance => |si| std_.mem.sliceAsBytes(si.fields),
+            .variant_value => |vv| std_.mem.sliceAsBytes(vv.arm_fields),
             else => null,
         };
         if (region) |r| {
@@ -461,6 +471,7 @@ pub fn sweepObjects() void {
             g_state.obj_marked[i] = false;
             continue;
         }
+        if (paranoiaOn()) sweep_exclude_idx = i;
         switch (@as(ObjTag, g_state.obj_pool[i])) {
             .dyn_string => freeBytesManaged(g_state.obj_pool[i].dyn_string),
             .array_managed => freeManagedSlice(@import("../lang/value.zig").Value, g_state.obj_pool[i].array_managed),
