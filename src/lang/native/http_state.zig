@@ -90,8 +90,9 @@ pub fn httpFetch(
         return try httpFetchHost(h, method, url, body, headers, timeout_ms);
     }
 
-    // No host handler — use built-in default on native, fail on WASM.
-    if (comptime builtin.target.cpu.arch == .wasm32) {
+    // No host handler — use built-in default on Linux/macOS only.
+    // Windows lacks ws2_32.pollfd in Zig 0.16.0 and requires a host handler.
+    if (comptime builtin.target.cpu.arch == .wasm32 or builtin.target.os.tag == .windows) {
         return error.CapabilityNotAvailable;
     }
 
