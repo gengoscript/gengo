@@ -247,14 +247,14 @@ func orderedPrefix(line string) int {
     return core.len(m)
 }
 
-// Heading depth 1–3 when the line starts with "# ", "## ", or "### ", else 0.
-// Deeper headings are left alone, like every other unknown construct.
+// Heading depth 1–6 when the line starts with the right number of '#' chars
+// followed by a space; returns 0 for anything else.
 func headingLevel(line string) int {
     var k := 0
     for k < core.len(line) and line[k] == '#' {
         k += 1
     }
-    if k >= 1 and k <= 3 and k < core.len(line) and line[k] == ' ' {
+    if k >= 1 and k <= 6 and k < core.len(line) and line[k] == ' ' {
         return k
     }
     return 0
