@@ -213,7 +213,7 @@ Returns the source column associated with the last runtime error, or `0` if unav
 | `12` | `len` | `u32` |
 | `16` | `reserved2` | `u32` |
 
-The public wire format covers null, booleans, numbers, and strings. Higher-level host helpers are expected to encode and decode these values correctly on behalf of the embedding application.
+Supported tags: `null` (0), `boolean` (1), `number` (2), `string` (3), `array` (4), `map` (5), `error` (6). For arrays, `payload` is a pointer to `len` consecutive `ValueWire` elements. For maps, `payload` is a pointer to `len * 2` elements arranged as key-value pairs. For strings and errors, `payload` is a guest pointer and `len` is the byte length. See `host-abi.md` for the full wire format reference.
 
 ## JavaScript Example
 
