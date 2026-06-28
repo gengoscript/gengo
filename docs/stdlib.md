@@ -743,4 +743,4 @@ Go-style text templates with `{{` / `}}` delimiters.
 | `%a` | short weekday | `%B` | month name |
 | `%b` | short month | `%%` | literal `%` |
 
-`parse` accepts: `%Y %m %d %H %M %S` only. All times are UTC.
+`parse` accepts: `%Y` (4-digit year), `%y` (2-digit year, 2000-based), `%m`, `%d`, `%H`, `%M`, `%S`, `%L` (milliseconds), `%B` (full month name), `%a` (weekday name, consumed but not used), `%W` (week number, consumed but not used). All times are UTC.
