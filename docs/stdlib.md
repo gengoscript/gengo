@@ -528,33 +528,29 @@ produces a multi-byte UTF-8 sequence, not the raw byte `n`. `std.bytes.u8` is
 the escape hatch: it takes any integer 0–255 and produces a 1-byte binary
 string.
 
-### Construction
-
-#### `std.bytes.u8(n)`
+### `std.bytes.u8(n)`
 - Returns a 1-byte binary string containing raw byte `n & 255`
 - This is the primitive for building binary data; `string(rune(200))` is **not** equivalent (it produces a 2-byte UTF-8 sequence)
 
-#### `std.bytes.pack(bs)`
+### `std.bytes.pack(bs)`
 - Converts an array of integer byte values (0–255 each) to a binary string
 - Each element is truncated to its low 8 bits
 
-#### `std.bytes.repeat(s, n)`
+### `std.bytes.repeat(s, n)`
 - Returns `s` repeated `n` times as a single binary string
 
-### Decomposition
-
-#### `std.bytes.unpack(s)`
+### `std.bytes.unpack(s)`
 - Returns an array of integer byte values (0–255) for each byte in `s`
 
-#### `std.bytes.at(s, i)`
+### `std.bytes.at(s, i)`
 - Returns the integer byte value (0–255) at byte offset `i`
 - Errors: `RangeError` if `i` is out of bounds
 
-#### `std.bytes.slice(s, from, to)`
+### `std.bytes.slice(s, from, to)`
 - Returns the byte substring `s[from:to]` (byte-indexed, not rune-indexed)
 - Errors: `RangeError` if indices are out of range
 
-#### `std.bytes.len(s)`
+### `std.bytes.len(s)`
 - Returns the number of bytes in `s` (same as `std.core.bytelen`)
 
 ### Integer encoding
@@ -584,24 +580,22 @@ Errors: `RangeError` if there are insufficient bytes at `i`.
 | `std.bytes.u32le_at(s, i)` | 4 bytes | little-endian | int (0–4294967295) |
 | `std.bytes.u64le_at(s, i)` | 8 bytes | little-endian | int (i64 bit pattern) |
 
-### Byte-indexed search
-
-#### `std.bytes.index_of(s, sub)`
+### `std.bytes.index_of(s, sub)`
 - Returns the byte offset of the first occurrence of `sub` in `s`, or `-1`
 
-#### `std.bytes.contains(s, sub)`
+### `std.bytes.contains(s, sub)`
 - Returns `true` if `sub` appears anywhere in `s`
 
-#### `std.bytes.starts_with(s, prefix)`
+### `std.bytes.starts_with(s, prefix)`
 - Returns `true` if `s` begins with `prefix`
 
-#### `std.bytes.ends_with(s, suffix)`
+### `std.bytes.ends_with(s, suffix)`
 - Returns `true` if `s` ends with `suffix`
 
-#### `std.bytes.count(s, sub)`
+### `std.bytes.count(s, sub)`
 - Returns the number of non-overlapping occurrences of `sub` in `s`
 
-#### `std.bytes.replace(s, old, new)`
+### `std.bytes.replace(s, old, new)`
 - Returns a copy of `s` with every occurrence of `old` replaced by `new`
 
 ### Example
