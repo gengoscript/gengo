@@ -15,7 +15,7 @@ pub fn build(b: *std.Build) void {
     const cap_fs_opt = b.option(bool, "cap_fs", "Include cap:fs capability") orelse true;
     const predicates_opt = b.option(bool, "predicates", "Enable runtime predicate checks") orelse true;
     const gengo_host_opt = b.option(bool, "gengo_host", "Include gengo_host import for host module callbacks") orelse true;
-    const gengo_version = "0.5.0";
+    const gengo_version = "0.5.1-dev";
     const build_opts = b.addOptions();
     build_opts.addOption(bool, "perf", perf_opt);
     build_opts.addOption(bool, "gc_stress", gc_stress_opt);
