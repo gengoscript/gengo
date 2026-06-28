@@ -21,6 +21,28 @@ versions, and the OS.
 
 ## Results
 
+### 2026-06-28, commit `685ed63` (v0.5.0-pre6)
+
+**Host**: AMD Ryzen 5 7600 (6-core/12-thread), Linux 6.12.86+deb13-amd64 x86_64
+
+**Engines**: Gengoscript v0.5.0-pre6 (native ReleaseSafe) · Lua 5.4.7 · Python 3.13.5 · Node v20.19.2 · [google/starlark-go](https://github.com/google/starlark-go) (devel, via `go install`) · [traefik/yaegi](https://github.com/traefik/yaegi) (Go interpreter, running real Go source) · [mattn/anko](https://github.com/mattn/anko) v0.1.8
+
+| Engine | `fib_recursive(32)` | `loop_sum` (20M) |
+| --- | --- | --- |
+| Gengo | 0.359s | 0.414s |
+| Lua 5.4 | 0.089s | 0.144s |
+| Node | 0.129s | 0.081s |
+| Python 3 | 0.159s | 1.267s |
+| Yaegi (Go interpreter) | 1.859s | 0.485s |
+| Anko | 8.560s | 5.212s |
+| Starlark | n/a — forbids recursive functions by design | 2.212s |
+
+Small improvement on `fib_recursive` (~8% vs pre4, 0.389s → 0.359s); `loop_sum`
+is essentially flat (0.417s → 0.414s). The pre5/pre6 changes were in the TCP
+buffering path and compiler fixes, not in the hot computation paths.
+
+---
+
 ### 2026-06-22, commit `e130ec8` (v0.5.0-pre4)
 
 **Host**: AMD Ryzen 5 7600 (6-core/12-thread), Linux 6.12.86+deb13-amd64 x86_64
