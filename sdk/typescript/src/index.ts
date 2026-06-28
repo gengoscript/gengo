@@ -24,6 +24,6 @@ export { GengoEngine } from "./gengo-engine";
 export type { HostFunctionDef, EngineResult, EngineOptions } from "./gengo-engine";
 export {
   type GVal,
-  gnull, gbool, gnum, gstr, garr, gmap,
+  gnull, gbool, gnum, gstr, garr, gmap, gerr,
   fromJS, toJS,
 } from "./types";
