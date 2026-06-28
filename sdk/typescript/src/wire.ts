@@ -22,6 +22,7 @@ export const enum WireTag {
   Str = 3,
   Arr = 4,
   Map = 5,
+  Err = 6,
 }
 
 // ---------------------------------------------------------------------------
@@ -222,6 +223,13 @@ export function decodeGVal(ctx: WireReadCtx, off: number): [GVal, number] {
         pos = n2;
       }
       return [{ t: "map", v: entries }, nextOff];
+    }
+
+    case WireTag.Err: {
+      const ptr = Number(payload);
+      const bytes = new Uint8Array(ctx.dv.buffer, ptr, len);
+      const msg = new TextDecoder().decode(bytes);
+      return [{ t: "err", v: msg }, nextOff];
     }
 
     default:

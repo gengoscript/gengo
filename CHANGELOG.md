@@ -2,6 +2,97 @@
 
 This changelog tracks notable language/runtime changes by implementation date.
 
+## 2026-06-28 (v0.5.0-pre6)
+
+### Feature — `std.bytes` Module
+
+New module for raw binary data: byte-level construction, decomposition,
+integer encoding/decoding, and byte-indexed search.
+
+```gengo
+b := std.bytes
+
+frame := b.u16be(0xDEAD) + b.u16be(0xBEEF)
+std.io.println(std.hex.encode(frame))   // "deadbeef"
+std.io.println(b.u16be_at(frame, 0))    // 57005
+```
+
+Key functions: `u8`, `pack`, `unpack`, `at`, `slice`, `len`,
+`u16be`/`u32be`/`u64be`/`u16le`/`u32le`/`u64le` (encode),
+`u16be_at`/`u32be_at`/`u64be_at`/`u16le_at`/`u32le_at`/`u64le_at` (decode),
+`index_of`, `contains`, `starts_with`, `ends_with`, `count`, `replace`, `repeat`.
+
+IEEE 754 float encode/decode is also available: `f32be`, `f64be`, `f32le`, `f64le`
+and their `_at` counterparts.
+
+### Feature — String Escape Sequences
+
+String literals now support hex and Unicode escape sequences:
+
+```gengo
+"\x41"          // "A"
+"A"        // "A"
+"\U00000041"    // "A"
+```
+
+`\xHH` encodes a single raw byte. `\uXXXX` and `\UXXXXXXXX` encode Unicode
+code points as UTF-8.
+
+### Feature — HTTP Timeout Support
+
+`cap:net` connections now support deadlines. Pass a millisecond timeout to
+`conn.set_deadline(ms)`, `conn.set_read_deadline(ms)`, or
+`conn.set_write_deadline(ms)`. An expired deadline returns a catchable
+`error("timeout")` value rather than hanging.
+
+### Feature — `--heap` CLI Flag
+
+The native CLI now accepts `--heap <bytes>` to override the compiled-in heap
+size at runtime (subject to the preset ceiling):
+
+```bash
+gengo --heap 2097152 script.gengo   # 2 MiB heap
+```
+
+### Fix — Regexp Group Alternation Backtracking
+
+Regexp group alternatives (`(a|b)c`) now correctly backtrack when the
+continuation after the group fails. Previously a match on the first alternative
+could fail the whole pattern even when the second alternative would have
+succeeded.
+
+### Fix — Large Integer Literal Precision
+
+Integer literals larger than 2^53 now parse as exact `i64` values without
+floating-point rounding. `9007199254740993` (2^53 + 1) previously parsed as
+`9007199254740992` due to intermediate `f64` conversion.
+
+### Fix — GC and Heap Fixes
+
+Several GC and heap fixes for long-lived embeddings:
+
+- Managed heap now supports true compaction: live objects are relocated to
+  eliminate fragmentation after a failed allocation.
+- Size-class isolation prevents small-object frees from polluting large-block
+  free lists.
+- Array slice backing sources are now retained across GC.
+- Map entries and variant values are correctly freed during sweep.
+- Native function objects are stored outside the GC heap on flat-mode presets.
+
+### Fix — Buffered TCP Reads
+
+`cap:net` reads on native targets now batch socket reads into a 4 KiB
+per-connection buffer. This reduces the number of `read(2)` syscalls from one
+per `conn.read(n)` call to one per 4 KiB consumed, giving a ~3× throughput
+improvement for MQTT-style framed-protocol workloads.
+
+### Fix — Test Block Compiler Fixes
+
+- The test block limit was raised from 64 to 256 per script.
+- Undefined-global checks are now suppressed inside discarded test bodies,
+  fixing a spurious compile error when test blocks reference names from the
+  main script body.
+
 ## 2026-06-22 (v0.5.0-pre5)
 
 ### Feature — Module-Qualified Types

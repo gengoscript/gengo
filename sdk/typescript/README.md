@@ -57,14 +57,14 @@ console.log(sum); // { t: "num", v: 42 }
 
 ```ts
 engine.run(`
-  func process(items [int], config) {
+  func process(items []int, config [string]string) {
     for x in items { std.io.println(x) }
   }
 `);
 
 engine.call("process", [
   garr(gnum(1), gnum(2), gnum(3)),
-  gmap([gstr("mode"), gstr("fast")]),
+  gmap([[gstr("mode"), gstr("fast")]]),
 ]);
 ```
 
@@ -137,10 +137,11 @@ type GVal =
   | { t: "num"; v: number }
   | { t: "str"; v: string }
   | { t: "arr"; v: GVal[] }
-  | { t: "map"; v: [GVal, GVal][] };
+  | { t: "map"; v: [GVal, GVal][] }
+  | { t: "err"; v: string };
 ```
 
-Constructors: `gnull()`, `gbool(v)`, `gnum(v)`, `gstr(v)`, `garr(...items)`, `gmap(entries?)`.
+Constructors: `gnull()`, `gbool(v)`, `gnum(v)`, `gstr(v)`, `garr(...items)`, `gmap(entries?)`, `gerr(msg)`.
 
 Conversion helpers: `fromJS(any)` and `toJS(gval)` for best-effort JS
 interop.
@@ -150,7 +151,7 @@ interop.
 ```sh
 # Build the WASM engine
 cd /path/to/gengo
-zig build engine-release
+zig build -Dpreset=1m engine-build
 
 # Build the TypeScript SDK
 cd sdk/typescript

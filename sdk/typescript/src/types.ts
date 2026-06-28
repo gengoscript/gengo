@@ -5,7 +5,8 @@ export type GVal =
   | { t: "num"; v: number }
   | { t: "str"; v: string }
   | { t: "arr"; v: GVal[] }
-  | { t: "map"; v: [GVal, GVal][] };
+  | { t: "map"; v: [GVal, GVal][] }
+  | { t: "err"; v: string };
 
 // -- constructors -----------------------------------------------------------
 
@@ -31,6 +32,10 @@ export function garr(...items: GVal[]): GVal {
 
 export function gmap(entries?: [GVal, GVal][]): GVal {
   return { t: "map", v: entries ?? [] };
+}
+
+export function gerr(v: string): GVal {
+  return { t: "err", v };
 }
 
 // -- JS round-trip helpers --------------------------------------------------
@@ -59,6 +64,7 @@ export function toJS(v: GVal): unknown {
     case "bool": return v.v;
     case "num": return v.v;
     case "str": return v.v;
+    case "err": return new Error(v.v);
     case "arr": return v.v.map(toJS);
     case "map": {
       const obj: Record<string, unknown> = {};
