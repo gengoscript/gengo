@@ -62,7 +62,7 @@ It is a contained scripting engine with explicit integration points, isolated ru
 ## What Gengoscript gives you
 
 **Constrained execution.**
-Each engine instance runs with a configurable instruction budget. A script that loops forever or recurses without bound is stopped instead of hanging the host process. Memory limits are selected at build time through presets such as `dev`, `tiny`, and `stress`.
+Each engine instance runs with a configurable instruction budget. A script that loops forever or recurses without bound is stopped instead of hanging the host process. Memory limits are selected at build time through presets such as `256k`, `1m`, `16m`, and `unlimited`.
 
 **Domain-safe types.**
 Named scalars, ranges, predicate types, cycles, enums, variants, and subtypes let constraints live at the point of definition.
@@ -70,7 +70,7 @@ Named scalars, ranges, predicate types, cycles, enums, variants, and subtypes le
 ```gengo
 type Port      int range 1..65535
 type Severity  int range 0..5
-type EventCode int predicate func(x) { return x % 2 == 0 }
+type EventCode int predicate func(x) { return x rem 2 == 0 }
 type Hour      int cycle 0..23
 
 type AlertRule variant {
@@ -132,7 +132,7 @@ switch (rt.run(user_script_source)) {
 
 // Call the script's exported function on each record
 const result = rt.call("validate", &.{
-    Value{ .int = @floatFromInt(record.severity) },
+    Value{ .int = @intCast(record.severity) },
     Value{ .string = record.source },
 });
 const verdict = switch (result) {

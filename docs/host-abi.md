@@ -36,8 +36,11 @@ Supported tags:
 | `1` | boolean |
 | `2` | number |
 | `3` | string |
+| `4` | array |
+| `5` | map |
+| `6` | error |
 
-For booleans, `payload` is `0` or `1`. For numbers, `payload` contains the bit pattern of an `f64`. For strings, `payload` is a guest pointer and `len` is the byte length.
+For booleans, `payload` is `0` or `1`. For numbers, `payload` contains the bit pattern of an `f64`. For strings and errors, `payload` is a guest pointer and `len` is the byte length. For arrays, `payload` is a pointer to `len` consecutive `ValueWire` elements. For maps, `payload` is a pointer to `len * 2` consecutive `ValueWire` elements arranged as key-value pairs.
 
 ## Status Codes
 

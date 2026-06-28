@@ -86,7 +86,7 @@ type Port int range 1..65535
 type Percent int range 0..100
 
 func scale(port Port, factor Percent) int {
-    return int(port) * int(factor) / 100
+    return int(port) * int(factor) div 100
 }
 
 p := Port(443)
@@ -125,7 +125,7 @@ func divide(a int, b int) (result int) {
             std.io.println("recovered:", e)
         }
     }()
-    return a / b
+    return a div b
 }
 
 std.io.println(divide(10, 2))
@@ -142,7 +142,7 @@ Expected output:
 
 ```text
 5
-recovered: DivisionByZero
+recovered:error(DivisionByZero)
 0
 ```
 

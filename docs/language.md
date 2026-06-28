@@ -389,7 +389,7 @@ func safe_div(a int, b int) (result int) {
             result = 0
         }
     }()
-    result = a / b
+    result = a div b
     return result
 }
 ```
