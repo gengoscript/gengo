@@ -1,6 +1,8 @@
 const std = @import("std");
 const vms = @import("vm_state.zig");
 const heap = @import("../runtime/heap.zig");
+const chunk = @import("chunk.zig");
+const Op = @import("op.zig").Op;
 
 /// Errors that represent VM integrity failures — not recoverable user errors.
 /// When one of these fires, the correct response is always a hard stop with
@@ -12,6 +14,7 @@ pub const Error = error{
 
     /// An object pointer was used after it became dead, or points outside the
     /// object pool entirely. Indicates a GC root-tracking bug.
+    /// Note: detection requires -Dheap_paranoia=true; see heap.zig assertNotLive.
     CorruptedObjectHandle,
 
     /// The temp-root stack push/pop is unbalanced: either overflow (more pushes
@@ -31,6 +34,7 @@ pub const Error = error{
 /// Diagnostic snapshot of VM state at the moment of an integrity failure.
 pub const Snapshot = struct {
     ip: usize,
+    opcode: []const u8,
     frame_depth: usize,
     stack_top: usize,
     temp_root_depth: usize,
@@ -39,8 +43,19 @@ pub const Snapshot = struct {
 
 pub fn capture() Snapshot {
     const state = vms.vmState();
+    const op_name = blk: {
+        const ip = state.ip;
+        if (ip > 0 and ip - 1 < chunk.codeLen()) {
+            const raw = chunk.codeByteAt(ip - 1);
+            if (raw < std.meta.fields(Op).len) {
+                break :blk @tagName(@as(Op, @enumFromInt(raw)));
+            }
+        }
+        break :blk "?";
+    };
     return .{
         .ip = state.ip,
+        .opcode = op_name,
         .frame_depth = state.frame_top,
         .stack_top = state.stack_top,
         .temp_root_depth = state.temp_root_top,
@@ -49,8 +64,7 @@ pub fn capture() Snapshot {
 }
 
 /// Returns true if err is a VM integrity failure rather than a recoverable
-/// user-program error. Covers both the new named errors and legacy names that
-/// the chunk verifier still uses.
+/// user-program error.
 pub fn isIntegrityError(err: anyerror) bool {
     return switch (err) {
         error.InvalidChunkShape,
@@ -64,13 +78,14 @@ pub fn isIntegrityError(err: anyerror) bool {
 }
 
 /// Hard-stop with a structured diagnostic. Captures VM state and calls
-/// std.debug.panic — this path is never supposed to unwind to user code.
+/// std.debug.panic — this path never unwinds to user code.
 pub fn fatal(err: anyerror) noreturn {
     const snap = capture();
     std.debug.panic(
-        "VM integrity failure [{s}] ip={d} frames={d} stack={d} temp_roots={d} gc_live={d}",
+        "VM integrity failure [{s}] op={s} ip={d} frames={d} stack={d} temp_roots={d} gc_live={d}",
         .{
             @errorName(err),
+            snap.opcode,
             snap.ip,
             snap.frame_depth,
             snap.stack_top,
