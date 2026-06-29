@@ -48,7 +48,7 @@ pub fn arrayLit(c: anytype) !void {
         }
     }
     try c.consume(.rbracket);
-    try chunk.emit2(@intFromEnum(Op.build_array), count, c.prev.line);
+    try c.cs.emit2(@intFromEnum(Op.build_array), count, c.prev.line);
 }
 
 // Returns true for an identifier token that names a concrete, comparable
@@ -77,7 +77,7 @@ fn validateAndEmitTypeName(c: anytype, name: Token) !void {
             return error.UnknownTypeName;
         }
     }
-    try chunk.emitStringConst(name.src, name.line);
+    try c.cs.emitStringConst(name.src, name.line);
 }
 
 // Parses a bare type name used opposite a `.type` expression — either as the
@@ -91,7 +91,7 @@ pub fn typeNameLiteral(c: anytype) !void {
 
 pub fn expr(c: anytype) !void {
     c.std_namespace_path = null;
-    chunk.clearStdCallPatchPos();
+    c.cs.clearStdCallPatchPos();
     try parsePrecedence(c, .assign);
 }
 
@@ -105,9 +105,9 @@ pub fn importExpr(c: anytype) !void {
     const resolver = c.options.resolve_import orelse { c.setErr("unsupported import module '{s}'", .{name}); return error.UnsupportedImportModule; };
     const mod_name = try resolver(ctx, c.options.module_path, name);
     if (common.streq(name, "std")) {
-        chunk.markStdCallPatchPos();
+        c.cs.markStdCallPatchPos();
     }
-    try chunk.emitGetGlobal(mod_name, c.prev.line);
+    try c.cs.emitGetGlobal(mod_name, c.prev.line);
     if (common.streq(name, "std") and common.streq(mod_name, "module:std")) {
         c.std_namespace_path = "";
         c.import_module_path = null;
@@ -127,13 +127,13 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
     if (tt == .dot) {
         if (c.cur.typ == .kw_type) {
             c.advance(); // consume 'type'
-            try chunk.emitOp(.type_name, line);
+            try c.cs.emitOp(.type_name, line);
             if (c.check(.eq_eq) or c.check(.bang_eq)) {
                 const is_eq = c.cur.typ == .eq_eq;
                 c.advance();
                 try typeNameLiteral(c, );
-                try chunk.emitOp(.eq, line);
-                if (!is_eq) try chunk.emitOp(.not, line);
+                try c.cs.emitOp(.eq, line);
+                if (!is_eq) try c.cs.emitOp(.not, line);
                 return;
             }
             if (c.parsing_switch_scrutinee) {
@@ -157,16 +157,16 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
             try c.checkStdNamespaceField(prop.src, line);
             try c.checkImportModuleField(prop.src, line);
             if (is_std_func) {
-                if (chunk.stdCallPatchPos()) |patch_pos| {
-                    chunk.clearStdCallPatchPos();
+                if (c.cs.stdCallPatchPos()) |patch_pos| {
+                    c.cs.clearStdCallPatchPos();
                     var name_buf: [80]u8 = undefined;
                     const direct_name = if (std_ns != null and std_ns.?.len > 0)
                         std.fmt.bufPrint(&name_buf, "module:std.{s}.{s}", .{ std_ns.?, prop.src }) catch ""
                     else
                         std.fmt.bufPrint(&name_buf, "module:std.{s}", .{prop.src}) catch "";
                     if (direct_name.len > 0) {
-                        chunk.truncateTo(patch_pos);
-                        try chunk.emitGetGlobal(direct_name, prop.line);
+                        c.cs.truncateTo(patch_pos);
+                        try c.cs.emitGetGlobal(direct_name, prop.line);
                         var argc: u8 = 0;
                         if (!c.check(.rparen)) {
                             while (true) {
@@ -177,11 +177,11 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
                             }
                         }
                         try c.consume(.rparen);
-                        try chunk.emitCall(argc, prop.line);
+                        try c.cs.emitCall(argc, prop.line);
                         return;
                     }
                 }
-                try chunk.emitGetField(prop.src, prop.line);
+                try c.cs.emitGetField(prop.src, prop.line);
             }
             var argc: u8 = 0;
             if (!c.check(.rparen)) {
@@ -194,15 +194,15 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
             }
             try c.consume(.rparen);
             if (is_std_func) {
-                try chunk.emitCall(argc, prop.line);
+                try c.cs.emitCall(argc, prop.line);
             } else {
-                try chunk.emitInvokeMethod(prop.src, argc, line);
+                try c.cs.emitInvokeMethod(prop.src, argc, line);
             }
             return;
         }
         try c.checkStdNamespaceField(prop.src, line);
         try c.checkImportModuleField(prop.src, line);
-        try chunk.emitGetField(prop.src, line);
+        try c.cs.emitGetField(prop.src, line);
         if (c.check(.lbrace) and looksLikeStructLiteral(c, )) {
             try structInstanceLitAfterValue(c, prop.line);
         }
@@ -219,7 +219,7 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
                 flags |= 0b10;
             }
             try c.consume(.rbracket);
-            try chunk.emit2(@intFromEnum(Op.get_slice), flags, line);
+            try c.cs.emit2(@intFromEnum(Op.get_slice), flags, line);
             return;
         }
 
@@ -231,12 +231,12 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
                 flags |= 0b10;
             }
             try c.consume(.rbracket);
-            try chunk.emit2(@intFromEnum(Op.get_slice), flags, line);
+            try c.cs.emit2(@intFromEnum(Op.get_slice), flags, line);
             return;
         }
 
         try c.consume(.rbracket);
-        try chunk.emitOp(.get_index, line);
+        try c.cs.emitOp(.get_index, line);
         return;
     }
     if (tt == .lparen) {
@@ -250,8 +250,8 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
             }
         }
         try c.consume(.rparen);
-        chunk.setCol(col);
-        try chunk.emitCall(argc, line);
+        c.cs.setCol(col);
+        try c.cs.emitCall(argc, line);
         return;
     }
 
@@ -270,58 +270,58 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
 
     const p = tokPrec(tt);
     if (tt == .kw_and) {
-        const j = try chunk.emitJump(.jump_if_false, line);
-        try chunk.emitOp(.pop, line);
+        const j = try c.cs.emitJump(.jump_if_false, line);
+        try c.cs.emitOp(.pop, line);
         try parsePrecedence(c, p.next());
-        try chunk.patchJump(j);
+        try c.cs.patchJump(j);
         return;
     }
     if (tt == .kw_or) {
-        const j_else = try chunk.emitJump(.jump_if_false, line);
-        const j_end = try chunk.emitJump(.jump, line);
-        try chunk.patchJump(j_else);
-        try chunk.emitOp(.pop, line);
+        const j_else = try c.cs.emitJump(.jump_if_false, line);
+        const j_end = try c.cs.emitJump(.jump, line);
+        try c.cs.patchJump(j_else);
+        try c.cs.emitOp(.pop, line);
         try parsePrecedence(c, p.next());
-        try chunk.patchJump(j_end);
+        try c.cs.patchJump(j_end);
         return;
     }
 
     // ** is right-associative: recurse at same level so 2**3**2 = 2**(3**2)
     if (tt == .star_star) {
         try parsePrecedence(c, p);
-        chunk.setCol(col);
-        try chunk.emitOp(.pow, line);
+        c.cs.setCol(col);
+        try c.cs.emitOp(.pow, line);
         return;
     }
     try parsePrecedence(c, p.next());
-    chunk.setCol(col);
+    c.cs.setCol(col);
     switch (tt) {
-        .plus  => try chunk.emitBinOpFused(.add, line),
-        .minus => try chunk.emitBinOpFused(.sub, line),
-        .star  => try chunk.emitOp(.mul, line),
-        .slash => try chunk.emitOp(.div, line),
-        .kw_div => try chunk.emitOp(.int_div, line),
-        .kw_rem => try chunk.emitOp(.rem, line),
-        .kw_mod => try chunk.emitOp(.mod, line),
-        .amp   => try chunk.emitOp(.bit_and, line),
-        .pipe  => try chunk.emitOp(.bit_or, line),
-        .caret => try chunk.emitOp(.bit_xor, line),
-        .lt_lt => try chunk.emitOp(.shl, line),
-        .gt_gt => try chunk.emitOp(.shr, line),
-        .eq_eq => try chunk.emitBinOpFused(.eq, line),
+        .plus  => try c.cs.emitBinOpFused(.add, line),
+        .minus => try c.cs.emitBinOpFused(.sub, line),
+        .star  => try c.cs.emitOp(.mul, line),
+        .slash => try c.cs.emitOp(.div, line),
+        .kw_div => try c.cs.emitOp(.int_div, line),
+        .kw_rem => try c.cs.emitOp(.rem, line),
+        .kw_mod => try c.cs.emitOp(.mod, line),
+        .amp   => try c.cs.emitOp(.bit_and, line),
+        .pipe  => try c.cs.emitOp(.bit_or, line),
+        .caret => try c.cs.emitOp(.bit_xor, line),
+        .lt_lt => try c.cs.emitOp(.shl, line),
+        .gt_gt => try c.cs.emitOp(.shr, line),
+        .eq_eq => try c.cs.emitBinOpFused(.eq, line),
         .bang_eq => {
-            try chunk.emitBinOpFused(.eq, line);
-            try chunk.emitOp(.not, line);
+            try c.cs.emitBinOpFused(.eq, line);
+            try c.cs.emitOp(.not, line);
         },
-        .gt => try chunk.emitBinOpFused(.gt, line),
+        .gt => try c.cs.emitBinOpFused(.gt, line),
         .gt_eq => {
-            try chunk.emitBinOpFused(.lt, line);
-            try chunk.emitOp(.not, line);
+            try c.cs.emitBinOpFused(.lt, line);
+            try c.cs.emitOp(.not, line);
         },
-        .lt => try chunk.emitBinOpFused(.lt, line),
+        .lt => try c.cs.emitBinOpFused(.lt, line),
         .lt_eq => {
-            try chunk.emitOp(.gt, line);
-            try chunk.emitOp(.not, line);
+            try c.cs.emitOp(.gt, line);
+            try c.cs.emitOp(.not, line);
         },
         else => unreachable,
     }
@@ -363,17 +363,17 @@ pub fn mapLit(c: anytype) !void {
         }
     }
     try c.consume(.rbrace);
-    try chunk.emit2(@intFromEnum(Op.build_map), count, c.prev.line);
+    try c.cs.emit2(@intFromEnum(Op.build_map), count, c.prev.line);
 }
 
 pub fn numLit(c: anytype) !void {
     const is_float = std.mem.indexOfAny(u8, c.prev.src, ".eE") != null;
     if (is_float) {
         const n = common.parseFloat(c.prev.src) orelse return error.BadNumber;
-        try chunk.emitConst(.{ .float = n }, c.prev.line);
+        try c.cs.emitConst(.{ .float = n }, c.prev.line);
     } else {
         const n = common.parseInt(c.prev.src) orelse return error.BadNumber;
-        try chunk.emitConst(.{ .int = n }, c.prev.line);
+        try c.cs.emitConst(.{ .int = n }, c.prev.line);
     }
 }
 
@@ -390,9 +390,9 @@ pub fn parsePrecedence(c: anytype, p: Prec) anyerror!void {
         .number => try numLit(c, ),
         .string => try strLitExpr(c, ),
         .rune => try runeLitExpr(c, ),
-        .kw_true => try chunk.emitOp(.true_val, c.prev.line),
-        .kw_false => try chunk.emitOp(.false_val, c.prev.line),
-        .kw_null => try chunk.emitOp(.null_val, c.prev.line),
+        .kw_true => try c.cs.emitOp(.true_val, c.prev.line),
+        .kw_false => try c.cs.emitOp(.false_val, c.prev.line),
+        .kw_null => try c.cs.emitOp(.null_val, c.prev.line),
         .ident => try varExpr(c, c.prev),
         .minus, .kw_not, .tilde => try unaryExpr(c, pfx),
         .bang => {
@@ -426,11 +426,11 @@ pub fn runeLitExpr(c: anytype) !void {
     var iter = it.iterator();
     const cp = iter.nextCodepoint() orelse return c.err("rune literal must contain exactly one codepoint", .{});
     if (iter.nextCodepoint() != null) return c.err("rune literal must contain exactly one codepoint", .{});
-    try chunk.emitConst(.{ .rune = @intCast(cp) }, c.prev.line);
+    try c.cs.emitConst(.{ .rune = @intCast(cp) }, c.prev.line);
 }
 
 pub fn strLitExpr(c: anytype) !void {
-    try chunk.emitStringConst(c.prev.src, c.prev.line);
+    try c.cs.emitStringConst(c.prev.src, c.prev.line);
 }
 
 pub fn structInstanceLit(c: anytype, type_name: Token) !void {
@@ -443,9 +443,9 @@ pub fn structInstanceLit(c: anytype, type_name: Token) !void {
             if (c.check(.ident)) {
                 const key_tok = c.cur;
                 c.advance();
-                try chunk.emitStringConst(key_tok.src, key_tok.line);
+                try c.cs.emitStringConst(key_tok.src, key_tok.line);
             } else if (c.check(.string)) {
-                try chunk.emitStringConst(c.cur.src, c.cur.line);
+                try c.cs.emitStringConst(c.cur.src, c.cur.line);
                 c.advance();
             } else return c.err("expected identifier or string key, found {s}", .{c.tokenName(c.cur.typ)});
             try c.consume(.colon);
@@ -456,7 +456,7 @@ pub fn structInstanceLit(c: anytype, type_name: Token) !void {
         }
     }
     try c.consume(.rbrace);
-    try chunk.emit2(@intFromEnum(Op.build_struct_instance), count, type_name.line);
+    try c.cs.emit2(@intFromEnum(Op.build_struct_instance), count, type_name.line);
 }
 
 pub fn structInstanceLitAfterValue(c: anytype, line: u32) !void {
@@ -468,9 +468,9 @@ pub fn structInstanceLitAfterValue(c: anytype, line: u32) !void {
             if (c.check(.ident)) {
                 const key_tok = c.cur;
                 c.advance();
-                try chunk.emitStringConst(key_tok.src, key_tok.line);
+                try c.cs.emitStringConst(key_tok.src, key_tok.line);
             } else if (c.check(.string)) {
-                try chunk.emitStringConst(c.cur.src, c.cur.line);
+                try c.cs.emitStringConst(c.cur.src, c.cur.line);
                 c.advance();
             } else return c.err("expected identifier or string key, found {s}", .{c.tokenName(c.cur.typ)});
             try c.consume(.colon);
@@ -481,15 +481,15 @@ pub fn structInstanceLitAfterValue(c: anytype, line: u32) !void {
         }
     }
     try c.consume(.rbrace);
-    try chunk.emit2(@intFromEnum(Op.build_struct_instance), count, line);
+    try c.cs.emit2(@intFromEnum(Op.build_struct_instance), count, line);
 }
 
 pub fn unaryExpr(c: anytype, tt: TT) !void {
     try parsePrecedence(c, .unary);
     switch (tt) {
-        .minus => try chunk.emitOp(.neg, c.prev.line),
-        .kw_not => try chunk.emitOp(.not, c.prev.line),
-        .tilde => try chunk.emitOp(.bit_not, c.prev.line),
+        .minus => try c.cs.emitOp(.neg, c.prev.line),
+        .kw_not => try c.cs.emitOp(.not, c.prev.line),
+        .tilde => try c.cs.emitOp(.bit_not, c.prev.line),
         else => unreachable,
     }
 }
@@ -499,13 +499,13 @@ pub fn varExpr(c: anytype, name: Token) !void {
         try expr(c, );
         try c.consume(.rparen);
         if (common.streq(name.src, "int")) {
-            try chunk.emitOp(.cast_int, name.line);
+            try c.cs.emitOp(.cast_int, name.line);
         } else if (common.streq(name.src, "float")) {
-            try chunk.emitOp(.cast_float, name.line);
+            try c.cs.emitOp(.cast_float, name.line);
         } else if (common.streq(name.src, "bool")) {
-            try chunk.emitOp(.cast_bool, name.line);
+            try c.cs.emitOp(.cast_bool, name.line);
         } else {
-            try chunk.emitOp(.cast_string, name.line);
+            try c.cs.emitOp(.cast_string, name.line);
         }
         return;
     }
@@ -545,8 +545,8 @@ pub fn varExpr(c: anytype, name: Token) !void {
             c.setErr("expected '{s}' to be compared against a '.type' expression", .{name.src});
             return error.UnexpectedToken;
         }
-        try chunk.emitOp(.eq, name.line);
-        if (!is_eq) try chunk.emitOp(.not, name.line);
+        try c.cs.emitOp(.eq, name.line);
+        if (!is_eq) try c.cs.emitOp(.not, name.line);
         return;
     }
     try c.emitGetVar(name);

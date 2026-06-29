@@ -795,7 +795,7 @@ pub const Runtime = struct {
         vms.assertNoTempRoots(context);
     }
 
-    fn activate(self: *Runtime) void {
+    pub fn activate(self: *Runtime) void {
         chunk.setActive(self.chunk_state);
         globals.setActive(&self.globals_state);
         heap.setActive(&self.heap_state);

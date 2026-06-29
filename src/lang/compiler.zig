@@ -120,6 +120,7 @@ pub const Compiler = struct {
     in_loop_init: bool = false,
     loop_body_depth: u8 = 0,
     skipping_test_body: bool = false,
+    cs: *chunk.State = undefined,
 
     // `.type` is only valid directly compared with ==/!=, or as a switch
     // scrutinee. parsing_switch_scrutinee gates the latter; switch_scrutinee_is_type
@@ -139,6 +140,7 @@ pub const Compiler = struct {
         var c = Compiler{ .lex = .{ .src = src }, .options = options };
         c.scopes[0] = .{};
         c.scope_depth = 1;
+        c.cs = chunk.g_state;
         return c;
     }
 
@@ -159,10 +161,10 @@ pub const Compiler = struct {
         }
         if (self.options.repl_mode) {
             if (self.repl_expr_pop_pos) |pos| {
-                chunk.g_state.code[pos] = @intFromEnum(Op.repl_print);
+                self.cs.code[pos] = @intFromEnum(Op.repl_print);
             }
         }
-        if (emit_halt) try chunk.emitOp(.halt, self.prev.line);
+        if (emit_halt) try self.cs.emitOp(.halt, self.prev.line);
     }
 
     // ── Error reporting helpers ──────────────────────────────────────────────────
@@ -296,14 +298,14 @@ pub const Compiler = struct {
         const st = heap.allocObject() orelse return error.OutOfMemory;
         const struct_name = if (self.options.module_struct_name.len != 0) self.options.module_struct_name else self.options.module_prefix;
         st.* = .{ .struct_type = StructTypeObj{ .name = self.copyName(self.moduleBaseName()) catch struct_name, .qualified_name = struct_name, .fields = fields[0..self.export_count] } };
-        try chunk.emitConst(.{ .object = st }, self.prev.line);
+        try self.cs.emitConst(.{ .object = st }, self.prev.line);
 
         for (self.exports[0..self.export_count]) |e| {
-            try chunk.emitStringConst(e.name, self.prev.line);
-            try chunk.emitGetGlobal(e.global_name, self.prev.line);
+            try self.cs.emitStringConst(e.name, self.prev.line);
+            try self.cs.emitGetGlobal(e.global_name, self.prev.line);
         }
-        try chunk.emit2(@intFromEnum(Op.build_struct_instance), self.export_count, self.prev.line);
-        try chunk.emitOpStringConst(.def_global, self.options.module_global_name, self.prev.line);
+        try self.cs.emit2(@intFromEnum(Op.build_struct_instance), self.export_count, self.prev.line);
+        try self.cs.emitOpStringConst(.def_global, self.options.module_global_name, self.prev.line);
     }
 
     // ── Scope and variable resolution ────────────────────────────────────────────
@@ -354,13 +356,13 @@ pub const Compiler = struct {
     }
 
     pub fn emitGetVar(self: *Compiler, name: Token) !void {
-        chunk.setCol(name.col);
+        self.cs.setCol(name.col);
         if (self.resolveLocal(name.src)) |slot| {
             const local = self.currentScope().locals[slot];
             if (local.from_std) {
-                chunk.markStdCallPatchPos();
+                self.cs.markStdCallPatchPos();
             }
-            try chunk.emit2(@intFromEnum(Op.get_local), slot, name.line);
+            try self.cs.emit2(@intFromEnum(Op.get_local), slot, name.line);
             if (local.from_std) {
                 self.setStdNamespacePath("");
             } else if (local.import_module_path) |path| {
@@ -369,7 +371,7 @@ pub const Compiler = struct {
                 self.clearNamespaceProvenance();
             }
         } else if (self.resolveUpvalue(name.src)) |uv| {
-            try chunk.emit2(@intFromEnum(Op.get_upvalue), uv, name.line);
+            try self.cs.emit2(@intFromEnum(Op.get_upvalue), uv, name.line);
             self.clearNamespaceProvenance();
         } else {
             const qname = try self.qualifyGlobalName(name.src);
@@ -384,9 +386,9 @@ pub const Compiler = struct {
                 }
             }
             if (self.isStdModuleGlobal(qname)) {
-                chunk.markStdCallPatchPos();
+                self.cs.markStdCallPatchPos();
             }
-            try chunk.emitGetGlobal(qname, name.line);
+            try self.cs.emitGetGlobal(qname, name.line);
             if (self.isStdModuleGlobal(qname)) {
                 self.setStdNamespacePath("");
             } else if (self.getImportModuleGlobalPath(qname)) |path| {
@@ -414,11 +416,11 @@ pub const Compiler = struct {
 
     pub fn emitSetVar(self: *Compiler, name: Token) !void {
         if (self.resolveLocal(name.src)) |slot| {
-            try chunk.emit2(@intFromEnum(Op.set_local), slot, name.line);
+            try self.cs.emit2(@intFromEnum(Op.set_local), slot, name.line);
         } else if (self.resolveUpvalue(name.src)) |uv| {
-            try chunk.emit2(@intFromEnum(Op.set_upvalue), uv, name.line);
+            try self.cs.emit2(@intFromEnum(Op.set_upvalue), uv, name.line);
         } else {
-            try chunk.emitSetGlobal(try self.qualifyGlobalName(name.src), name.line);
+            try self.cs.emitSetGlobal(try self.qualifyGlobalName(name.src), name.line);
         }
     }
 
@@ -434,16 +436,16 @@ pub const Compiler = struct {
         return null;
     }
 
-    pub fn emitVarTypeProlog(_: *Compiler, tc: TypeCheck, line: u32) !void {
+    pub fn emitVarTypeProlog(self: *Compiler, tc: TypeCheck, line: u32) !void {
         if (tc == .named) {
-            try chunk.emitGetGlobal(tc.named, line);
+            try self.cs.emitGetGlobal(tc.named, line);
         }
     }
 
-    pub fn emitVarTypeEpilog(_: *Compiler, tc: TypeCheck, line: u32) !void {
+    pub fn emitVarTypeEpilog(self: *Compiler, tc: TypeCheck, line: u32) !void {
         switch (tc) {
             .none => {},
-            .prim => |p| try chunk.emitOp(switch (p) {
+            .prim => |p| try self.cs.emitOp(switch (p) {
                 .int => .cast_int,
                 .float => .cast_float,
                 .decimal => .cast_decimal,
@@ -451,17 +453,17 @@ pub const Compiler = struct {
                 .string => .cast_string,
                 .rune => .cast_rune,
             }, line),
-            .named => try chunk.emitCall(1, line),
-            .assert_arr => try chunk.emit2(@intFromEnum(Op.assert_type), 1, line),
-            .assert_map => try chunk.emit2(@intFromEnum(Op.assert_type), 2, line),
-            .assert_err => try chunk.emit2(@intFromEnum(Op.assert_type), 3, line),
+            .named => try self.cs.emitCall(1, line),
+            .assert_arr => try self.cs.emit2(@intFromEnum(Op.assert_type), 1, line),
+            .assert_map => try self.cs.emit2(@intFromEnum(Op.assert_type), 2, line),
+            .assert_err => try self.cs.emit2(@intFromEnum(Op.assert_type), 3, line),
             .interface_type => |name| {
-                const idx = try chunk.addStringConst(name);
-                try chunk.emitConstIdx(.assert_interface, idx, line);
+                const idx = try self.cs.addStringConst(name);
+                try self.cs.emitConstIdx(.assert_interface, idx, line);
             },
             .struct_type => |name| {
-                const idx = try chunk.addStringConst(name);
-                try chunk.emitConstIdx(.assert_struct, idx, line);
+                const idx = try self.cs.addStringConst(name);
+                try self.cs.emitConstIdx(.assert_struct, idx, line);
             },
         }
     }
@@ -545,9 +547,9 @@ pub const Compiler = struct {
         while (scope.local_count > base) {
             const idx = scope.local_count - 1;
             if (scope.locals[idx].is_captured) {
-                try chunk.emit2(@intFromEnum(Op.close_upvalue), idx, line);
+                try self.cs.emit2(@intFromEnum(Op.close_upvalue), idx, line);
             }
-            try chunk.emitOp(.pop, line);
+            try self.cs.emitOp(.pop, line);
             scope.local_count -= 1;
         }
     }
@@ -584,12 +586,12 @@ pub const Compiler = struct {
         // Save so code after the if-break block sees the correct local count (non-break path).
         const saved: u8 = self.currentScope().local_count;
         try self.cleanupLocals(loop.body_keep, line);
-        for (0..loop.iter_pops) |_| try chunk.emitOp(.pop, line);
+        for (0..loop.iter_pops) |_| try self.cs.emitOp(.pop, line);
         for (loop.loop_var_slots[0..loop.loop_var_count]) |slot| {
-            try chunk.emit2(@intFromEnum(Op.close_upvalue), slot, line);
+            try self.cs.emit2(@intFromEnum(Op.close_upvalue), slot, line);
         }
         try self.cleanupLocals(loop.local_keep, line);
-        const off = try chunk.emitJump(.jump, line);
+        const off = try self.cs.emitJump(.jump, line);
         if (loop.break_count >= MaxLoopBreaks) { self.setErr("too many 'break' statements in loop (max {d})", .{MaxLoopBreaks}); return error.TooManyBreaksInLoop; }
         loop.break_offsets[loop.break_count] = off;
         loop.break_count += 1;
@@ -602,9 +604,9 @@ pub const Compiler = struct {
         const saved: u8 = self.currentScope().local_count;
         try self.cleanupLocals(loop.body_keep, line);
         for (loop.loop_var_slots[0..loop.loop_var_count]) |slot| {
-            try chunk.emit2(@intFromEnum(Op.close_upvalue), slot, line);
+            try self.cs.emit2(@intFromEnum(Op.close_upvalue), slot, line);
         }
-        try chunk.emitLoop(loop.continue_target, line);
+        try self.cs.emitLoop(loop.continue_target, line);
         self.currentScope().local_count = saved;
     }
 
@@ -649,12 +651,12 @@ pub const Compiler = struct {
             const tmp_state = std.heap.page_allocator.create(chunk.State) catch return error.OutOfMemory;
             defer std.heap.page_allocator.destroy(tmp_state);
             tmp_state.* = .{};
-            const saved_state = chunk.g_state;
-            chunk.setActive(tmp_state);
+            const saved_cs = self.cs;
+            self.cs = tmp_state;
             const saved_skipping = self.skipping_test_body;
             self.skipping_test_body = true;
             defer {
-                chunk.setActive(saved_state);
+                self.cs = saved_cs;
                 self.skipping_test_body = saved_skipping;
             }
 
@@ -673,8 +675,8 @@ pub const Compiler = struct {
         const name_buf = heap.bump(u8, 32) orelse return error.OutOfMemory;
         const name_str = std.fmt.bufPrint(name_buf[0..32], "__test_{d}", .{idx}) catch return error.OutOfMemory;
 
-        const jump_over = try chunk.emitJump(.jump, line);
-        const func_ip = chunk.codeLen();
+        const jump_over = try self.cs.emitJump(.jump, line);
+        const func_ip = self.cs.codeLen();
 
         if (self.scope_depth >= MaxScopes) return error.TooManyNestedFunctions;
         self.scopes[self.scope_depth] = .{};
@@ -690,11 +692,11 @@ pub const Compiler = struct {
         try self.consume(.rbrace);
         self.repl_expr_ok = saved;
         try self.cleanupLocals(0, self.prev.line);
-        try chunk.emitOp(.null_val, self.prev.line);
-        try chunk.emitOp(.ret, self.prev.line);
+        try self.cs.emitOp(.null_val, self.prev.line);
+        try self.cs.emitOp(.ret, self.prev.line);
 
         self.scope_depth -= 1;
-        try chunk.patchJump(jump_over);
+        try self.cs.patchJump(jump_over);
 
         const func_obj = heap.allocObject() orelse return error.OutOfMemory;
         func_obj.* = .{ .function = .{
@@ -710,9 +712,9 @@ pub const Compiler = struct {
             .named_return_count = 0,
         } };
         self.last_func_obj = func_obj;
-        const cidx: u16 = try chunk.addConst(.{ .object = func_obj });
-        try chunk.emitConstIdx(.make_closure, cidx, self.prev.line);
-        try chunk.emitOpStringConst(.def_global, name_str, line);
+        const cidx: u16 = try self.cs.addConst(.{ .object = func_obj });
+        try self.cs.emitConstIdx(.make_closure, cidx, self.prev.line);
+        try self.cs.emitOpStringConst(.def_global, name_str, line);
     }
 
     fn pubDecl(self: *Compiler) !void {
@@ -748,7 +750,7 @@ pub const Compiler = struct {
         } else {
             self.cur = self.lex.next();
         }
-        chunk.setCol(self.prev.col);
+        self.cs.setCol(self.prev.col);
     }
 
     pub fn peekToken(self: *Compiler) Token {

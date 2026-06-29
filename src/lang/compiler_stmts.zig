@@ -40,9 +40,9 @@ pub fn assertStmt(c: anytype) !void {
     try c.expr();
     if (c.match(.comma)) {
         try c.expr();
-        try chunk.emitOp(.op_assert_msg, line);
+        try c.cs.emitOp(.op_assert_msg, line);
     } else {
-        try chunk.emitOp(.op_assert, line);
+        try c.cs.emitOp(.op_assert, line);
     }
     c.matchOpt(.semicolon);
 }
@@ -57,7 +57,7 @@ pub fn assignStmt(c: anytype) !void {
         c.advance();
         try c.consume(.eq);
         try c.expr();
-        try chunk.emitOp(.pop, name.line);
+        try c.cs.emitOp(.pop, name.line);
         c.matchOpt(.semicolon);
         return;
     }
@@ -102,23 +102,23 @@ pub fn cForStmt(c: anytype) anyerror!void {
         try assignStmt(c, );
     } else {
         try c.expr();
-        try chunk.emitOp(.pop, c.prev.line);
+        try c.cs.emitOp(.pop, c.prev.line);
         try c.consume(.semicolon);
     }
     c.in_loop_init = false;
 
-    var loop_start = chunk.codeLen();
+    var loop_start = c.cs.codeLen();
     var exit_j: ?usize = null;
 
     if (!c.match(.semicolon)) {
         try c.expr();
         try c.consume(.semicolon);
-        exit_j = try chunk.emitJump(.jif_pop, c.prev.line);
+        exit_j = try c.cs.emitJump(.jif_pop, c.prev.line);
     }
 
     if (!c.check(.lbrace)) {
-        const body_j = try chunk.emitJump(.jump, c.prev.line);
-        const post_start = chunk.codeLen();
+        const body_j = try c.cs.emitJump(.jump, c.prev.line);
+        const post_start = c.cs.codeLen();
         if (c.check(.ident) and (c.peekTT() == .plus_plus or c.peekTT() == .minus_minus)) {
             try incrStmt(c, );
         } else if (c.check(.ident) and c.peekTT() == .eq) {
@@ -129,15 +129,15 @@ pub fn cForStmt(c: anytype) anyerror!void {
                 try compoundStmt(c, );
             } else {
                 try c.expr();
-                try chunk.emitOp(.pop, c.prev.line);
+                try c.cs.emitOp(.pop, c.prev.line);
             }
         } else {
             try c.expr();
-            try chunk.emitOp(.pop, c.prev.line);
+            try c.cs.emitOp(.pop, c.prev.line);
         }
-        try chunk.emitLoop(loop_start, c.prev.line);
+        try c.cs.emitLoop(loop_start, c.prev.line);
         loop_start = post_start;
-        try chunk.patchJump(body_j);
+        try c.cs.patchJump(body_j);
     }
 
     try c.pushLoop(loop_start, local_base, c.loopKeepBase(), 0);
@@ -153,27 +153,27 @@ pub fn cForStmt(c: anytype) anyerror!void {
     try block(c, );
     c.loop_body_depth -= 1;
     for (c.currentLoop().loop_var_slots[0..c.currentLoop().loop_var_count]) |slot| {
-        try chunk.emit2(@intFromEnum(Op.close_upvalue), slot, c.prev.line);
+        try c.cs.emit2(@intFromEnum(Op.close_upvalue), slot, c.prev.line);
     }
-    try chunk.emitLoop(loop_start, c.prev.line);
+    try c.cs.emitLoop(loop_start, c.prev.line);
 
     if (exit_j) |j| {
-        try chunk.patchJump(j);
+        try c.cs.patchJump(j);
     }
 
     if (!c.inFunc()) {
         const lp = c.currentLoop();
         for (lp.loop_var_slots[0..lp.loop_var_count], lp.loop_var_names[0..lp.loop_var_count]) |slot, lname| {
-            try chunk.emit2(@intFromEnum(Op.get_local), slot, c.prev.line);
-            try chunk.emitOpStringConst(.def_global, try c.qualifyGlobalName(lname), c.prev.line);
-            try chunk.emitOp(.pop, c.prev.line);
+            try c.cs.emit2(@intFromEnum(Op.get_local), slot, c.prev.line);
+            try c.cs.emitOpStringConst(.def_global, try c.qualifyGlobalName(lname), c.prev.line);
+            try c.cs.emitOp(.pop, c.prev.line);
         }
         c.currentScope().local_count = local_base;
     }
     try c.cleanupLocals(local_base, c.prev.line);
 
     const loop = c.popLoop();
-    for (loop.break_offsets[0..loop.break_count]) |off| try chunk.patchJump(off);
+    for (loop.break_offsets[0..loop.break_count]) |off| try c.cs.patchJump(off);
 }
 
 fn parseLiteralDefault(c: anytype) !value_mod.Value {
@@ -193,7 +193,7 @@ fn parseLiteralDefault(c: anytype) !value_mod.Value {
         }
     }
     if (!neg and c.cur.typ == .string) {
-        const ss = try chunk.internStr(c.cur.src);
+        const ss = try c.cs.internStr(c.cur.src);
         c.advance();
         return .{ .string = ss };
     }
@@ -320,8 +320,8 @@ pub fn compileFuncWithPrefix(c: anytype, prefix: []const []const u8, is_named: b
         has_typed_returns = true;
     }
 
-    const jump_over = try chunk.emitJump(.jump, c.prev.line);
-    const func_ip = chunk.codeLen();
+    const jump_over = try c.cs.emitJump(.jump, c.prev.line);
+    const func_ip = c.cs.codeLen();
 
     if (c.scope_depth >= MaxScopes) return error.TooManyNestedFunctions;
     c.scopes[c.scope_depth] = .{};
@@ -377,22 +377,22 @@ pub fn compileFuncWithPrefix(c: anytype, prefix: []const []const u8, is_named: b
             if (rt.alts.len == 1) {
                 switch (rt.alts[0].typ) {
                     .int =>
-                        try chunk.emitConst(.{ .int = 0.0 }, @intCast(func_ip)),
+                        try c.cs.emitConst(.{ .int = 0.0 }, @intCast(func_ip)),
                     .float =>
-                        try chunk.emitConst(.{ .float = 0.0 }, @intCast(func_ip)),
+                        try c.cs.emitConst(.{ .float = 0.0 }, @intCast(func_ip)),
                     .rune_t =>
-                        try chunk.emitConst(.{ .rune = 0 }, @intCast(func_ip)),
+                        try c.cs.emitConst(.{ .rune = 0 }, @intCast(func_ip)),
                     .decimal_t =>
-                        try chunk.emitConst(.{ .decimal = 0 }, @intCast(func_ip)),
+                        try c.cs.emitConst(.{ .decimal = 0 }, @intCast(func_ip)),
                     .boolean =>
-                        try chunk.emitOp(.false_val, @intCast(func_ip)),
+                        try c.cs.emitOp(.false_val, @intCast(func_ip)),
                     .string =>
-                        try chunk.emitStringConst("", @intCast(func_ip)),
+                        try c.cs.emitStringConst("", @intCast(func_ip)),
                     else =>
-                        try chunk.emitOp(.null_val, @intCast(func_ip)),
+                        try c.cs.emitOp(.null_val, @intCast(func_ip)),
                 }
             } else {
-                try chunk.emitOp(.null_val, @intCast(func_ip));
+                try c.cs.emitOp(.null_val, @intCast(func_ip));
             }
         }
     }
@@ -407,11 +407,11 @@ pub fn compileFuncWithPrefix(c: anytype, prefix: []const []const u8, is_named: b
     try c.cleanupLocals(body_local_base, c.prev.line);
 
     // Implicit return: bare named returns or null.
-    try emitImplicitReturn(scope, c.prev.line);
-    try chunk.emitOp(.ret, c.prev.line);
+    try emitImplicitReturn(scope, c.cs, c.prev.line);
+    try c.cs.emitOp(.ret, c.prev.line);
 
     c.scope_depth -= 1;
-    try chunk.patchJump(jump_over);
+    try c.cs.patchJump(jump_over);
 
     const uv_count = scope.upvalue_count;
     const slots = heap.bump(u8, uv_count) orelse return error.OutOfMemory;
@@ -461,8 +461,8 @@ pub fn compileFuncWithPrefix(c: anytype, prefix: []const []const u8, is_named: b
     } };
     c.last_func_obj = func_obj;
     if (predicate_base == null) {
-        const cidx: u16 = try chunk.addConst(.{ .object = func_obj });
-        try chunk.emitConstIdx(.make_closure, cidx, c.prev.line);
+        const cidx: u16 = try c.cs.addConst(.{ .object = func_obj });
+        try c.cs.emitConstIdx(.make_closure, cidx, c.prev.line);
     }
     return uv_count;
 }
@@ -487,7 +487,7 @@ pub fn compoundStmt(c: anytype) !void {
         .gt_gt_eq => .shr,
         else => return c.err("unsupported compound assignment operator", .{}),
     };
-    try chunk.emitBinOpFused(op, op_tok.line);
+    try c.cs.emitBinOpFused(op, op_tok.line);
     const tc = c.getLocalTypeCheck(name.src);
     if (tc) |t| try c.emitVarTypeEpilog(t, op_tok.line);
     try c.emitSetVar(name);
@@ -497,7 +497,7 @@ pub fn compoundStmt(c: anytype) !void {
 pub fn declareLoopVar(c: anytype, name: Token) !void {
     if (c.isKnownTypeName(name.src))
         return c.err("'{s}' is a type name and cannot be used as a loop variable name", .{name.src});
-    try chunk.emitOp(.null_val, name.line);
+    try c.cs.emitOp(.null_val, name.line);
     _ = try c.defineLocal(name.src, false);
 }
 
@@ -516,7 +516,7 @@ pub fn deferStmt(c: anytype) !void {
     switch (pfx) {
         .ident => {
             base_type_name = c.prev.src;
-            base_code_pos = chunk.codeLen();
+            base_code_pos = c.cs.codeLen();
             base_is_type = c.registry.hasNamedType(c.prev.src) or
                 c.registry.hasStructTypeLocal(c.prev.src) or
                 c.registry.hasVariantType(c.prev.src);
@@ -529,7 +529,7 @@ pub fn deferStmt(c: anytype) !void {
         },
         .lbrace => {
             try compileDeferBlock(c);
-            try chunk.emit2(@intFromEnum(Op.defer_call), 0, c.prev.line);
+            try c.cs.emit2(@intFromEnum(Op.defer_call), 0, c.prev.line);
             c.matchOpt(.semicolon);
             return;
         },
@@ -546,7 +546,7 @@ pub fn deferStmt(c: anytype) !void {
             c.advance();
             try c.expr();
             try c.consume(.rbracket);
-            try chunk.emitOp(.get_index, line);
+            try c.cs.emitOp(.get_index, line);
         } else if (c.cur.typ == .dot) {
             c.advance();
             if (!c.cur.typ.isFieldName()) { c.setErr("expected property name, found {s}", .{c.tokenName(c.cur.typ)}); return error.ExpectedPropertyName; }
@@ -558,7 +558,7 @@ pub fn deferStmt(c: anytype) !void {
                     // `defer TypeName.method(instance, args...)` — the type object on the
                     // stack is not a valid method receiver. Truncate it and treat the first
                     // argument as the receiver instead, matching regular `instance.method()`.
-                    chunk.truncateTo(base_code_pos);
+                    c.cs.truncateTo(base_code_pos);
                     var total_argc: u8 = 0;
                     if (!c.check(.rparen)) {
                         while (true) {
@@ -574,7 +574,7 @@ pub fn deferStmt(c: anytype) !void {
                         c.setErr("'{s}.{s}(...)' requires at least one argument (the receiver instance)", .{ base_type_name, prop.src });
                         return error.ArityMismatch;
                     }
-                    try chunk.emitDeferInvokeMethod(prop.src, total_argc - 1, prop.line);
+                    try c.cs.emitDeferInvokeMethod(prop.src, total_argc - 1, prop.line);
                     c.matchOpt(.semicolon);
                     return;
                 }
@@ -589,12 +589,12 @@ pub fn deferStmt(c: anytype) !void {
                     }
                 }
                 try c.consume(.rparen);
-                try chunk.emitDeferInvokeMethod(prop.src, argc, prop.line);
+                try c.cs.emitDeferInvokeMethod(prop.src, argc, prop.line);
                 c.matchOpt(.semicolon);
                 return;
             }
             base_is_type = false;
-            try chunk.emitGetField(prop.src, prop.line);
+            try c.cs.emitGetField(prop.src, prop.line);
         } else {
             break;
         }
@@ -612,14 +612,14 @@ pub fn deferStmt(c: anytype) !void {
         }
     }
     try c.consume(.rparen);
-    try chunk.emit2(@intFromEnum(Op.defer_call), argc, call_line);
+    try c.cs.emit2(@intFromEnum(Op.defer_call), argc, call_line);
     c.matchOpt(.semicolon);
 }
 
 pub fn emitAssignTargetPath(c: anytype, target: AssignTarget, all_steps: []const AssignTargetStep) !void {
-    const vidx: u16 = try chunk.addStringConst(MultiAssignValueScratch);
+    const vidx: u16 = try c.cs.addStringConst(MultiAssignValueScratch);
     if (target.step_count == 0) {
-        try chunk.emitGetGlobalIdx(vidx, target.root.line);
+        try c.cs.emitGetGlobalIdx(vidx, target.root.line);
         try c.emitSetVar(target.root);
         return;
     }
@@ -628,14 +628,14 @@ pub fn emitAssignTargetPath(c: anytype, target: AssignTarget, all_steps: []const
     const step_end = target.step_start + target.step_count - 1;
     for (all_steps[target.step_start..step_end]) |st| {
         switch (st) {
-            .dot_name => |name| try chunk.emitGetField(name, target.root.line),
+            .dot_name => |name| try c.cs.emitGetField(name, target.root.line),
             .index_number => |n| {
-                try chunk.emitConst(.{ .int = @intFromFloat(n) }, target.root.line);
-                try chunk.emitOp(.get_index, target.root.line);
+                try c.cs.emitConst(.{ .int = @intFromFloat(n) }, target.root.line);
+                try c.cs.emitOp(.get_index, target.root.line);
             },
             .index_string => |s| {
-                try chunk.emitStringConst(s, target.root.line);
-                try chunk.emitOp(.get_index, target.root.line);
+                try c.cs.emitStringConst(s, target.root.line);
+                try c.cs.emitOp(.get_index, target.root.line);
             },
         }
     }
@@ -643,18 +643,18 @@ pub fn emitAssignTargetPath(c: anytype, target: AssignTarget, all_steps: []const
     const last = all_steps[target.step_start + target.step_count - 1];
     switch (last) {
         .dot_name => |name| {
-            try chunk.emitGetGlobalIdx(vidx, target.root.line);
-            try chunk.emitSetField(name, target.root.line);
+            try c.cs.emitGetGlobalIdx(vidx, target.root.line);
+            try c.cs.emitSetField(name, target.root.line);
         },
         .index_number => |n| {
-            try chunk.emitConst(.{ .int = @intFromFloat(n) }, target.root.line);
-            try chunk.emitGetGlobalIdx(vidx, target.root.line);
-            try chunk.emitOp(.set_index, target.root.line);
+            try c.cs.emitConst(.{ .int = @intFromFloat(n) }, target.root.line);
+            try c.cs.emitGetGlobalIdx(vidx, target.root.line);
+            try c.cs.emitOp(.set_index, target.root.line);
         },
         .index_string => |s| {
-            try chunk.emitStringConst(s, target.root.line);
-            try chunk.emitGetGlobalIdx(vidx, target.root.line);
-            try chunk.emitOp(.set_index, target.root.line);
+            try c.cs.emitStringConst(s, target.root.line);
+            try c.cs.emitGetGlobalIdx(vidx, target.root.line);
+            try c.cs.emitOp(.set_index, target.root.line);
         },
     }
 }
@@ -668,20 +668,20 @@ pub fn emitExprListTuple(c: anytype) !u8 {
         try c.expr();
         count += 1;
     }
-    if (count > 1) try chunk.emit2(@intFromEnum(Op.build_tuple), count, c.prev.line);
+    if (count > 1) try c.cs.emit2(@intFromEnum(Op.build_tuple), count, c.prev.line);
     return count;
 }
 
-pub fn emitImplicitReturn(scope: *FuncInfo, line: u32) !void {
+pub fn emitImplicitReturn(scope: *FuncInfo, cs: *chunk.State, line: u32) !void {
     if (scope.named_return_count == 0) {
-        try chunk.emitOp(.null_val, line);
+        try cs.emitOp(.null_val, line);
     } else if (scope.named_return_count == 1) {
-        try chunk.emit2(@intFromEnum(Op.get_local), scope.named_return_base, line);
+        try cs.emit2(@intFromEnum(Op.get_local), scope.named_return_base, line);
     } else {
         for (0..scope.named_return_count) |ri| {
-            try chunk.emit2(@intFromEnum(Op.get_local), scope.named_return_base + @as(u8, @intCast(ri)), line);
+            try cs.emit2(@intFromEnum(Op.get_local), scope.named_return_base + @as(u8, @intCast(ri)), line);
         }
-        try chunk.emit2(@intFromEnum(Op.build_tuple), scope.named_return_count, line);
+        try cs.emit2(@intFromEnum(Op.build_tuple), scope.named_return_count, line);
     }
 }
 
@@ -689,8 +689,8 @@ fn compileDeferBlock(c: anytype) !void {
     // c.prev is '{' (consumed by deferStmt's advance()), c.cur is first token inside block.
     // Desugars `defer { ... }` to the equivalent of `defer (func() { ... })()`:
     // compile the block as a parameterless closure and emit defer_call 0.
-    const jump_over = try chunk.emitJump(.jump, c.prev.line);
-    const func_ip = chunk.codeLen();
+    const jump_over = try c.cs.emitJump(.jump, c.prev.line);
+    const func_ip = c.cs.codeLen();
 
     if (c.scope_depth >= MaxScopes) return error.TooManyNestedFunctions;
     c.scopes[c.scope_depth] = .{};
@@ -705,11 +705,11 @@ fn compileDeferBlock(c: anytype) !void {
     try c.cleanupLocals(0, c.prev.line);
 
     const scope = c.currentScope();
-    try emitImplicitReturn(scope, c.prev.line);
-    try chunk.emitOp(.ret, c.prev.line);
+    try emitImplicitReturn(scope, c.cs, c.prev.line);
+    try c.cs.emitOp(.ret, c.prev.line);
 
     c.scope_depth -= 1;
-    try chunk.patchJump(jump_over);
+    try c.cs.patchJump(jump_over);
 
     const uv_count = scope.upvalue_count;
     const slots = heap.bump(u8, uv_count) orelse return error.OutOfMemory;
@@ -735,8 +735,8 @@ fn compileDeferBlock(c: anytype) !void {
         .named_return_count = 0,
     } };
 
-    const cidx: u16 = try chunk.addConst(.{ .object = func_obj });
-    try chunk.emitConstIdx(.make_closure, cidx, c.prev.line);
+    const cidx: u16 = try c.cs.addConst(.{ .object = func_obj });
+    try c.cs.emitConstIdx(.make_closure, cidx, c.prev.line);
 }
 
 pub fn forInStmt(c: anytype) anyerror!void {
@@ -756,14 +756,14 @@ pub fn forInStmt(c: anytype) anyerror!void {
     if (vname) |vn| try declareLoopVar(c, vn);
 
     try c.expr(); // iterable
-    try chunk.emitOp(.iter_init, c.prev.line);
+    try c.cs.emitOp(.iter_init, c.prev.line);
     // Claim a hidden local slot for the iterator so that body locals land on the
     // correct stack offsets. Without this, body-local slot N resolves to the iterator
     // object instead of the actual value.
     c.currentScope().local_count += 1;
     const body_keep: u8 = c.currentScope().local_count;
 
-    const loop_start = chunk.codeLen();
+    const loop_start = c.cs.codeLen();
     try c.pushLoop(loop_start, local_base, body_keep, 0);
     if (c.resolveLocal(kname.src)) |slot| {
         c.currentLoop().loop_var_slots[c.currentLoop().loop_var_count] = slot;
@@ -777,8 +777,8 @@ pub fn forInStmt(c: anytype) anyerror!void {
             c.currentLoop().loop_var_count += 1;
         }
     }
-    try chunk.emitOp(if (vname == null) .iter_next1 else .iter_next2, c.prev.line);
-    const exit_j = try chunk.emitJump(.jif_pop, c.prev.line);
+    try c.cs.emitOp(if (vname == null) .iter_next1 else .iter_next2, c.prev.line);
+    const exit_j = try c.cs.emitJump(.jif_pop, c.prev.line);
 
     if (vname) |vn| {
         // stack: iter, key, value
@@ -794,25 +794,25 @@ pub fn forInStmt(c: anytype) anyerror!void {
     try block(c, );
     c.loop_body_depth -= 1;
     for (c.currentLoop().loop_var_slots[0..c.currentLoop().loop_var_count]) |slot| {
-        try chunk.emit2(@intFromEnum(Op.close_upvalue), slot, c.prev.line);
+        try c.cs.emit2(@intFromEnum(Op.close_upvalue), slot, c.prev.line);
     }
-    try chunk.emitLoop(loop_start, c.prev.line);
+    try c.cs.emitLoop(loop_start, c.prev.line);
 
-    try chunk.patchJump(exit_j);
-    if (!c.inFunc()) try chunk.emitOp(.pop, c.prev.line); // pop iterator (top-level only)
+    try c.cs.patchJump(exit_j);
+    if (!c.inFunc()) try c.cs.emitOp(.pop, c.prev.line); // pop iterator (top-level only)
     if (!c.inFunc()) {
         const lp = c.currentLoop();
         for (lp.loop_var_slots[0..lp.loop_var_count], lp.loop_var_names[0..lp.loop_var_count]) |slot, lname| {
-            try chunk.emit2(@intFromEnum(Op.get_local), slot, c.prev.line);
-            try chunk.emitOpStringConst(.def_global, try c.qualifyGlobalName(lname), c.prev.line);
-            try chunk.emitOp(.pop, c.prev.line);
+            try c.cs.emit2(@intFromEnum(Op.get_local), slot, c.prev.line);
+            try c.cs.emitOpStringConst(.def_global, try c.qualifyGlobalName(lname), c.prev.line);
+            try c.cs.emitOp(.pop, c.prev.line);
         }
         c.currentScope().local_count = local_base;
     }
     try c.cleanupLocals(local_base, c.prev.line);
 
     const loop = c.popLoop();
-    for (loop.break_offsets[0..loop.break_count]) |off| try chunk.patchJump(off);
+    for (loop.break_offsets[0..loop.break_count]) |off| try c.cs.patchJump(off);
 }
 
 pub fn forStmt(c: anytype) anyerror!void {
@@ -853,7 +853,7 @@ pub fn ifStmt(c: anytype) anyerror!void {
             try assignStmt(c, );
         } else {
             try c.expr();
-            try chunk.emitOp(.pop, c.prev.line);
+            try c.cs.emitOp(.pop, c.prev.line);
             c.matchOpt(.semicolon);
         }
     }
@@ -861,11 +861,11 @@ pub fn ifStmt(c: anytype) anyerror!void {
     try c.expr();
     try c.consume(.lbrace);
 
-    const then_j = try chunk.emitJump(.jif_pop, c.prev.line);
+    const then_j = try c.cs.emitJump(.jif_pop, c.prev.line);
     try block(c, );
 
-    const else_j = try chunk.emitJump(.jump, c.prev.line);
-    try chunk.patchJump(then_j);
+    const else_j = try c.cs.emitJump(.jump, c.prev.line);
+    try c.cs.patchJump(then_j);
 
     if (c.match(.kw_else)) {
         if (c.match(.kw_if)) {
@@ -875,7 +875,7 @@ pub fn ifStmt(c: anytype) anyerror!void {
             try block(c, );
         }
     }
-    try chunk.patchJump(else_j);
+    try c.cs.patchJump(else_j);
     try c.cleanupLocals(local_base, c.prev.line);
 }
 
@@ -886,8 +886,8 @@ pub fn incrStmt(c: anytype) !void {
     const is_inc = c.cur.typ == .plus_plus;
     c.advance();
     try c.emitGetVar(name);
-    try chunk.emitConst(.{ .int = 1.0 }, name.line);
-    try chunk.emitBinOpFused(if (is_inc) .add else .sub, name.line);
+    try c.cs.emitConst(.{ .int = 1.0 }, name.line);
+    try c.cs.emitBinOpFused(if (is_inc) .add else .sub, name.line);
     const tc = c.getLocalTypeCheck(name.src);
     if (tc) |t| try c.emitVarTypeEpilog(t, name.line);
     try c.emitSetVar(name);
@@ -903,7 +903,7 @@ pub fn indexAssignStmt(c: anytype) !void {
     try c.consume(.rbracket);
     try c.consume(.eq);
     try c.expr();
-    try chunk.emitOp(.set_index, name.line);
+    try c.cs.emitOp(.set_index, name.line);
     c.matchOpt(.semicolon);
 }
 
@@ -1042,7 +1042,7 @@ pub fn multiBindStmt(c: anytype, is_decl: bool) !void {
         if (c.inFunc()) {
             for (names[0..count]) |n| {
                 if (n.typ == .kw_trap) continue;
-                try chunk.emitOp(.null_val, n.line);
+                try c.cs.emitOp(.null_val, n.line);
                 _ = try c.defineLocal(n.src, false);
             }
         }
@@ -1055,31 +1055,31 @@ pub fn multiBindStmt(c: anytype, is_decl: bool) !void {
 
     try c.consume(if (is_decl) .colon_eq else .eq);
     _ = try emitExprListTuple(c, );
-    try chunk.emit2(@intFromEnum(Op.tuple_check_arity), count, c.prev.line);
+    try c.cs.emit2(@intFromEnum(Op.tuple_check_arity), count, c.prev.line);
 
     for (0..count) |ii| {
         const i: u8 = @intCast(ii);
         if (is_decl) {
             const is_trap_slot = names[i].typ == .kw_trap;
-            try chunk.emitOp(.dup, names[i].line);
-            try chunk.emit2(@intFromEnum(Op.tuple_get), i, names[i].line);
+            try c.cs.emitOp(.dup, names[i].line);
+            try c.cs.emit2(@intFromEnum(Op.tuple_get), i, names[i].line);
             if (is_trap_slot) {
-                try chunk.emitOp(.op_trap_check, names[i].line);
+                try c.cs.emitOp(.op_trap_check, names[i].line);
             } else if (c.inFunc()) {
                 try c.emitSetVar(names[i]);
             } else {
-                try chunk.emitOpStringConst(.def_global, try c.qualifyGlobalName(names[i].src), names[i].line);
+                try c.cs.emitOpStringConst(.def_global, try c.qualifyGlobalName(names[i].src), names[i].line);
             }
         } else {
             if (targets[i].step_count == 0) try c.ensureMutableBinding(targets[i].root);
-            const vidx: u16 = try chunk.addStringConst(MultiAssignValueScratch);
-            try chunk.emitOp(.dup, targets[i].root.line);
-            try chunk.emit2(@intFromEnum(Op.tuple_get), i, targets[i].root.line);
-            try chunk.emitConstIdx(.def_global, vidx, targets[i].root.line);
+            const vidx: u16 = try c.cs.addStringConst(MultiAssignValueScratch);
+            try c.cs.emitOp(.dup, targets[i].root.line);
+            try c.cs.emit2(@intFromEnum(Op.tuple_get), i, targets[i].root.line);
+            try c.cs.emitConstIdx(.def_global, vidx, targets[i].root.line);
             try emitAssignTargetPath(c, targets[i], steps[0..step_count]);
         }
     }
-    try chunk.emitOp(.pop, c.prev.line);
+    try c.cs.emitOp(.pop, c.prev.line);
     c.matchOpt(.semicolon);
 }
 
@@ -1172,7 +1172,7 @@ pub fn propertyAssignStmt(c: anytype) !void {
                 last_line = prop.line;
                 break;
             }
-            try chunk.emitGetField(prop.src, prop.line);
+            try c.cs.emitGetField(prop.src, prop.line);
             continue;
         }
 
@@ -1183,7 +1183,7 @@ pub fn propertyAssignStmt(c: anytype) !void {
                 last_kind = .bracket;
                 break;
             }
-            try chunk.emitOp(.get_index, c.prev.line);
+            try c.cs.emitOp(.get_index, c.prev.line);
             continue;
         }
 
@@ -1195,8 +1195,8 @@ pub fn propertyAssignStmt(c: anytype) !void {
     if (c.match(.eq)) {
         try c.expr();
         switch (last_kind) {
-            .dot_name => try chunk.emitSetField(last_name, last_line),
-            .bracket => try chunk.emitOp(.set_index, c.prev.line),
+            .dot_name => try c.cs.emitSetField(last_name, last_line),
+            .bracket => try c.cs.emitOp(.set_index, c.prev.line),
         }
         c.matchOpt(.semicolon);
         return;
@@ -1218,19 +1218,19 @@ pub fn propertyAssignStmt(c: anytype) !void {
         switch (last_kind) {
             .dot_name => {
                 // Stack: container. Dup it, read old value with get_field, compute, write back.
-                try chunk.emitOp(.dup, op_tok.line);
-                try chunk.emitGetField(last_name, last_line);
+                try c.cs.emitOp(.dup, op_tok.line);
+                try c.cs.emitGetField(last_name, last_line);
                 try c.expr();
-                try chunk.emitOp(op, op_tok.line);
-                try chunk.emitSetField(last_name, op_tok.line);
+                try c.cs.emitOp(op, op_tok.line);
+                try c.cs.emitSetField(last_name, op_tok.line);
             },
             .bracket => {
                 // Stack: container, key. Dup pair, read old value, compute, write back.
-                try chunk.emitOp(.dup2, op_tok.line);
-                try chunk.emitOp(.get_index, op_tok.line);
+                try c.cs.emitOp(.dup2, op_tok.line);
+                try c.cs.emitOp(.get_index, op_tok.line);
                 try c.expr();
-                try chunk.emitOp(op, op_tok.line);
-                try chunk.emitOp(.set_index, op_tok.line);
+                try c.cs.emitOp(op, op_tok.line);
+                try c.cs.emitOp(.set_index, op_tok.line);
             },
         }
         c.matchOpt(.semicolon);
@@ -1246,24 +1246,24 @@ pub fn returnStmt(c: anytype) !void {
     const scope = c.currentScope();
     if (c.check(.rbrace) or c.check(.eof) or c.check(.semicolon)) {
         // Bare return: use named return variables if present, otherwise null.
-        try emitImplicitReturn(scope, line);
+        try emitImplicitReturn(scope, c.cs, line);
     } else if (scope.named_return_count > 0) {
         // Named-return function with explicit value(s): assign to the named return
         // slots first so deferred closures can observe and modify them.
         if (scope.named_return_count == 1) {
             try c.expr();
             try c.emitVarTypeEpilog(scope.locals[scope.named_return_base].type_check, line);
-            try chunk.emit2(@intFromEnum(Op.set_local), scope.named_return_base, line);
+            try c.cs.emit2(@intFromEnum(Op.set_local), scope.named_return_base, line);
         } else {
             for (0..scope.named_return_count) |ri| {
                 if (ri > 0) try c.consume(.comma);
                 const slot: u8 = scope.named_return_base + @as(u8, @intCast(ri));
                 try c.expr();
                 try c.emitVarTypeEpilog(scope.locals[slot].type_check, line);
-                try chunk.emit2(@intFromEnum(Op.set_local), slot, line);
+                try c.cs.emit2(@intFromEnum(Op.set_local), slot, line);
             }
         }
-        try emitImplicitReturn(scope, line);
+        try emitImplicitReturn(scope, c.cs, line);
     } else {
         if (scope.is_named and !scope.has_typed_returns) { c.setErr("named-return function must declare return types", .{}); return error.MissingReturnType; }
         _ = try emitExprListTuple(c, );
@@ -1282,10 +1282,10 @@ pub fn returnStmt(c: anytype) !void {
             continue;
         }
         if (scope.locals[idx].is_captured) {
-            try chunk.emit2(@intFromEnum(Op.close_upvalue), idx, line);
+            try c.cs.emit2(@intFromEnum(Op.close_upvalue), idx, line);
         }
     }
-    try chunk.emitOp(.ret, line);
+    try c.cs.emitOp(.ret, line);
     c.matchOpt(.semicolon);
 }
 
@@ -1381,9 +1381,9 @@ pub fn stmt(c: anytype) anyerror!void {
 
     c.repl_expr_ok = saved;
     try c.expr();
-    try chunk.emitOp(.pop, c.prev.line);
-    if (c.options.repl_mode and c.repl_expr_ok and chunk.codeLen() > 0) {
-        c.repl_expr_pop_pos = chunk.codeLen() - 1;
+    try c.cs.emitOp(.pop, c.prev.line);
+    if (c.options.repl_mode and c.repl_expr_ok and c.cs.codeLen() > 0) {
+        c.repl_expr_pop_pos = c.cs.codeLen() - 1;
     }
     c.matchOpt(.semicolon);
 }
@@ -1420,49 +1420,49 @@ pub fn switchStmt(c: anytype) anyerror!void {
                     c.advance();
                 }
                 // Emit: dup, variant_check arm_name, jump_if_false [H]
-                try chunk.emitOp(.dup, dot_line);
-                try chunk.emitOpStringConst(.variant_check, arm_name_tok.src, dot_line);
-                const next_case = try chunk.emitJump(.jif_pop, dot_line);
+                try c.cs.emitOp(.dup, dot_line);
+                try c.cs.emitOpStringConst(.variant_check, arm_name_tok.src, dot_line);
+                const next_case = try c.cs.emitJump(.jif_pop, dot_line);
                 // Handle switch value and optional binding
                 const local_before = c.currentScope().local_count;
                 if (binding != null) {
                     if (c.isKnownTypeName(binding.?))
                         return c.err("'{s}' is a type name and cannot be used as a binding name", .{binding.?});
-                    try chunk.emitOp(.variant_payload, dot_line);
+                    try c.cs.emitOp(.variant_payload, dot_line);
                     if (c.inFunc()) {
                         _ = try c.defineLocal(binding.?, false);
                     } else {
-                        try chunk.emitOpStringConst(.def_global, try c.qualifyGlobalName(binding.?), dot_line);
+                        try c.cs.emitOpStringConst(.def_global, try c.qualifyGlobalName(binding.?), dot_line);
                     }
                 } else {
-                    try chunk.emitOp(.pop, dot_line); // discard switch value
+                    try c.cs.emitOp(.pop, dot_line); // discard switch value
                 }
                 try c.consume(.lbrace);
                 try block(c, );
                 try c.cleanupLocals(local_before, c.prev.line);
                 if (end_count >= MaxSwitchJumps) { c.setErr("too many switch cases (max {d})", .{MaxSwitchJumps}); return error.TooManySwitchCases; }
-                end_jumps[end_count] = try chunk.emitJump(.jump, c.prev.line);
+                end_jumps[end_count] = try c.cs.emitJump(.jump, c.prev.line);
                 end_count += 1;
-                try chunk.patchJump(next_case);
+                try c.cs.patchJump(next_case);
             } else {
                 // Regular value case: dup switch-val, compare, jif_pop to next case.
                 // If matched (no jump), pop the switch-val before running the body so
                 // the stack is balanced on the jump-to-end path.
-                try chunk.emitOp(.dup, c.prev.line);
+                try c.cs.emitOp(.dup, c.prev.line);
                 if (is_type_switch) {
                     try c.typeNameLiteral();
                 } else {
                     try c.expr();
                 }
-                try chunk.emitBinOpFused(.eq, c.prev.line);
-                const next_case = try chunk.emitJump(.jif_pop, c.prev.line);
-                try chunk.emitOp(.pop, c.prev.line); // consume the switch value
+                try c.cs.emitBinOpFused(.eq, c.prev.line);
+                const next_case = try c.cs.emitJump(.jif_pop, c.prev.line);
+                try c.cs.emitOp(.pop, c.prev.line); // consume the switch value
                 try c.consume(.lbrace);
                 try block(c, );
                 if (end_count >= MaxSwitchJumps) { c.setErr("too many switch cases (max {d})", .{MaxSwitchJumps}); return error.TooManySwitchCases; }
-                end_jumps[end_count] = try chunk.emitJump(.jump, c.prev.line);
+                end_jumps[end_count] = try c.cs.emitJump(.jump, c.prev.line);
                 end_count += 1;
-                try chunk.patchJump(next_case);
+                try c.cs.patchJump(next_case);
             }
             continue;
         }
@@ -1471,11 +1471,11 @@ pub fn switchStmt(c: anytype) anyerror!void {
             if (saw_default) { c.setErr("duplicate 'default' case in switch", .{}); return error.DuplicateDefaultCase; }
             saw_default = true;
             // Pop the switch value that is still on the stack when default is reached.
-            try chunk.emitOp(.pop, c.prev.line);
+            try c.cs.emitOp(.pop, c.prev.line);
             try c.consume(.lbrace);
             try block(c, );
             if (end_count >= MaxSwitchJumps) { c.setErr("too many switch cases (max {d})", .{MaxSwitchJumps}); return error.TooManySwitchCases; }
-            end_jumps[end_count] = try chunk.emitJump(.jump, c.prev.line);
+            end_jumps[end_count] = try c.cs.emitJump(.jump, c.prev.line);
             end_count += 1;
             continue;
         }
@@ -1484,9 +1484,9 @@ pub fn switchStmt(c: anytype) anyerror!void {
     }
 
     try c.consume(.rbrace);
-    try chunk.emitOp(.pop, c.prev.line);
+    try c.cs.emitOp(.pop, c.prev.line);
 
-    for (end_jumps[0..end_count]) |j| try chunk.patchJump(j);
+    for (end_jumps[0..end_count]) |j| try c.cs.patchJump(j);
 }
 
 pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
@@ -1505,7 +1505,7 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
         // to a heap cell; the subsequent set_local stores the closure into that cell,
         // giving the upvalue a valid self-reference from the start.
         if (c.cur.typ == .kw_func and c.inFunc()) {
-            try chunk.emitOp(.null_val, name.line);
+            try c.cs.emitOp(.null_val, name.line);
             const sr = try c.defineLocal(name.src, is_const);
             c.currentScope().locals[sr].type_check = inferred_type_check;
             if (c.std_namespace_path != null and c.std_namespace_path.?.len == 0) {
@@ -1518,7 +1518,7 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
         }
         try c.expr();
         if (self_ref_slot != null) {
-            try chunk.emit2(@intFromEnum(Op.set_local), self_ref_slot.?, name.line);
+            try c.cs.emit2(@intFromEnum(Op.set_local), self_ref_slot.?, name.line);
         }
     } else if (c.cur.typ == .lbracket) {
         const ts = try c.parseFieldTypeSpec();
@@ -1538,26 +1538,26 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
                 .elem_spec = ts.alts[0].elem_spec,
             } };
         }
-        try chunk.emitConst(.{ .object = nt }, name.line);
+        try c.cs.emitConst(.{ .object = nt }, name.line);
         if (c.match(.eq)) {
             try c.expr();
         } else if (has_keyword and !is_const) {
             if (is_map) {
-                try chunk.emit2(@intFromEnum(Op.build_map), 0, name.line);
+                try c.cs.emit2(@intFromEnum(Op.build_map), 0, name.line);
             } else {
-                try chunk.emit2(@intFromEnum(Op.build_array), 0, name.line);
+                try c.cs.emit2(@intFromEnum(Op.build_array), 0, name.line);
             }
         } else {
             return c.err("expected '=', found {s}", .{c.tokenName(c.cur.typ)});
         }
         inferred_type_check = .{ .none = {} };
-        try chunk.emitCall(1, name.line);
+        try c.cs.emitCall(1, name.line);
     } else if (c.cur.typ == .kw_func) {
         _ = try c.parseFieldTypeSpec();
         if (c.match(.eq)) {
             try c.expr();
         } else if (has_keyword and !is_const) {
-            try chunk.emitOp(.null_val, name.line);
+            try c.cs.emitOp(.null_val, name.line);
         } else {
             return c.err("expected '=', found {s}", .{c.tokenName(c.cur.typ)});
         }
@@ -1620,7 +1620,7 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
         // Named-type constructor must be pushed before the argument value
         // because performCall expects the callee at stack[top - argc - 1].
         if (inferred_type_check == .named) {
-            try chunk.emitGetGlobal(inferred_type_check.named, name.line);
+            try c.cs.emitGetGlobal(inferred_type_check.named, name.line);
         }
         if (c.match(.eq)) {
             try c.expr();
@@ -1628,35 +1628,35 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
                 switch (inferred_type_check.prim) {
                     .int => {
                         // Reject float literal assigned to int at compile time
-                        if (chunk.g_state.code_len >= 3) {
-                            const last_inst_start = chunk.g_state.code_len - 3;
-                            if (chunk.g_state.code[last_inst_start] == @intFromEnum(Op.constant)) {
-                                const idx = (@as(u16, chunk.g_state.code[last_inst_start + 1]) << 8) | chunk.g_state.code[last_inst_start + 2];
-                                if (idx < chunk.g_state.const_count and chunk.g_state.consts[idx] == .float) {
+                        if (c.cs.code_len >= 3) {
+                            const last_inst_start = c.cs.code_len - 3;
+                            if (c.cs.code[last_inst_start] == @intFromEnum(Op.constant)) {
+                                const idx = (@as(u16, c.cs.code[last_inst_start + 1]) << 8) | c.cs.code[last_inst_start + 2];
+                                if (idx < c.cs.const_count and c.cs.consts[idx] == .float) {
                                     return c.err("float literal cannot be assigned to int without explicit conversion", .{});
                                 }
                             }
                         }
-                        try chunk.emitOp(.cast_int, name.line);
+                        try c.cs.emitOp(.cast_int, name.line);
                     },
-                    .float => try chunk.emitOp(.cast_float, name.line),
-                    .decimal => try chunk.emitOp(.cast_decimal, name.line),
-                    .bool => try chunk.emitOp(.cast_bool, name.line),
-                    .string => try chunk.emitOp(.cast_string, name.line),
-                    .rune => try chunk.emitOp(.cast_rune, name.line),
+                    .float => try c.cs.emitOp(.cast_float, name.line),
+                    .decimal => try c.cs.emitOp(.cast_decimal, name.line),
+                    .bool => try c.cs.emitOp(.cast_bool, name.line),
+                    .string => try c.cs.emitOp(.cast_string, name.line),
+                    .rune => try c.cs.emitOp(.cast_rune, name.line),
                 }
             } else if (inferred_type_check == .named) {
-                try chunk.emitCall(1, name.line);
+                try c.cs.emitCall(1, name.line);
             } else if (inferred_type_check == .assert_map) {
-                try chunk.emit2(@intFromEnum(Op.assert_type), 2, name.line);
+                try c.cs.emit2(@intFromEnum(Op.assert_type), 2, name.line);
             } else if (inferred_type_check == .assert_err) {
-                try chunk.emit2(@intFromEnum(Op.assert_type), 3, name.line);
+                try c.cs.emit2(@intFromEnum(Op.assert_type), 3, name.line);
             } else if (inferred_type_check == .interface_type) {
-                const idx = try chunk.addStringConst(inferred_type_check.interface_type);
-                try chunk.emitConstIdx(.assert_interface, idx, name.line);
+                const idx = try c.cs.addStringConst(inferred_type_check.interface_type);
+                try c.cs.emitConstIdx(.assert_interface, idx, name.line);
             } else if (inferred_type_check == .struct_type) {
-                const idx = try chunk.addStringConst(inferred_type_check.struct_type);
-                try chunk.emitConstIdx(.assert_struct, idx, name.line);
+                const idx = try c.cs.addStringConst(inferred_type_check.struct_type);
+                try c.cs.emitConstIdx(.assert_struct, idx, name.line);
             }
         } else if (has_keyword and !is_const and inferred_type_check != .none) {
             if (inferred_type_check == .named) {
@@ -1668,20 +1668,20 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
                 if (ti != null and ti.?.base == .enum_t) {
                     const members = ti.?.enum_members orelse &[_][]const u8{};
                     if (members.len > 0) {
-                        try chunk.emitGetField(members[0], name.line);
+                        try c.cs.emitGetField(members[0], name.line);
                     } else {
-                        try chunk.emitOp(.pop, name.line);
-                        try chunk.emitOp(.null_val, name.line);
+                        try c.cs.emitOp(.pop, name.line);
+                        try c.cs.emitOp(.null_val, name.line);
                     }
                 } else {
                     try c.emitNamedDefault(inferred_type_check.named, name.line);
-                    try chunk.emitCall(1, name.line);
+                    try c.cs.emitCall(1, name.line);
                 }
             } else {
                 try c.emitZeroValue(inferred_type_check, name.line);
             }
         } else if (has_keyword and !is_const and inferred_type_check == .none) {
-            try chunk.emitOp(.null_val, name.line);
+            try c.cs.emitOp(.null_val, name.line);
         } else {
             return c.err("expected '=', found {s}", .{c.tokenName(c.cur.typ)});
         }
@@ -1699,8 +1699,8 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
                 c.currentScope().locals[slot].import_module_path = path;
             }
             if (!c.inFunc()) {
-                try chunk.emitOp(.dup, name.line);
-                try chunk.emit2(@intFromEnum(Op.set_local), slot, name.line);
+                try c.cs.emitOp(.dup, name.line);
+                try c.cs.emit2(@intFromEnum(Op.set_local), slot, name.line);
             }
         }
     } else {
@@ -1728,7 +1728,7 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
                 }
             }
         }
-        try chunk.emitOpStringConst(.def_global, qname, name.line);
+        try c.cs.emitOpStringConst(.def_global, qname, name.line);
         if (!c.skipping_test_body) {
             if (inferred_type_check != .none) {
                 if (c.typed_global_count >= MaxLocals) {
@@ -1763,20 +1763,20 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
 }
 
 pub fn whileForStmt(c: anytype) anyerror!void {
-    const loop_start = chunk.codeLen();
+    const loop_start = c.cs.codeLen();
     try c.pushLoop(loop_start, c.loopKeepBase(), c.loopKeepBase(), 0);
     const infinite = c.check(.lbrace);
     var exit_j: usize = 0;
     if (!infinite) {
         try c.expr();
         try c.consume(.lbrace);
-        exit_j = try chunk.emitJump(.jif_pop, c.prev.line);
+        exit_j = try c.cs.emitJump(.jif_pop, c.prev.line);
     } else {
         try c.consume(.lbrace);
     }
     try block(c, );
-    try chunk.emitLoop(loop_start, c.prev.line);
-    if (!infinite) try chunk.patchJump(exit_j);
+    try c.cs.emitLoop(loop_start, c.prev.line);
+    if (!infinite) try c.cs.patchJump(exit_j);
     const loop = c.popLoop();
-    for (loop.break_offsets[0..loop.break_count]) |off| try chunk.patchJump(off);
+    for (loop.break_offsets[0..loop.break_count]) |off| try c.cs.patchJump(off);
 }

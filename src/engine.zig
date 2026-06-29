@@ -311,6 +311,7 @@ fn popCapState(prev: ?*Engine) void {
         net_state.applyHandlers(p.net_handlers);
         http_state.applyHandler(p.http_handler);
         fs_state.loadFromEngine(&p.fs_state);
+        p.runtime.inner.activate();
     } else {
         g_active_engine = null;
         write_callback = null;
