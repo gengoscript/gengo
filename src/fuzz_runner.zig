@@ -5,12 +5,14 @@ const globals = @import("lang/globals.zig");
 const heap = @import("runtime/heap.zig");
 const vm = @import("lang/vm.zig");
 const Compiler = @import("lang/compiler.zig").Compiler;
+const CompilerOptions = @import("lang/compiler.zig").CompilerOptions;
 const vms = @import("lang/vm_state.zig");
 const vmnative = @import("lang/vm_native.zig");
 const host_abi = @import("lang/native/host_abi.zig");
 const vm_defuse = @import("lang/vm_defuse.zig");
 const vmod = @import("lang/value.zig");
 const staticSS = vmod.staticSS;
+const module_compile = @import("lang/module_compile.zig");
 
 fn writeAll(fd: std.os.wasi.fd_t, s: []const u8) void {
     var off: usize = 0;
@@ -443,6 +445,282 @@ fn fuzzDifferential() void {
     out("  differential fuzz: OK\n");
 }
 
+// ── Helper: compile+run a gengo program; exit if the program panics ──────────
+
+fn propStdResolver(_: *anyopaque, _: []const u8, import_name: []const u8) anyerror![]const u8 {
+    if (std.mem.eql(u8, import_name, "std")) return module_compile.StdModuleGlobalName;
+    return error.ModuleNotFound;
+}
+
+var _prop_ctx: u8 = 0;
+
+fn runAssert(src: []const u8, label: []const u8) void {
+    resetAll();
+    vmnative.installStdGlobal() catch {};
+    var c = Compiler.init(src, .{
+        .module_ctx = &_prop_ctx,
+        .resolve_import = propStdResolver,
+    });
+    c.compile(true) catch {
+        out("property FAIL (compile): ");
+        out(label);
+        out("\n");
+        std.os.wasi.proc_exit(1);
+    };
+    chunk.emitOp(.halt, 1) catch {};
+    vm.run() catch |e| {
+        if (e == error.PanicError) {
+            out("property FAIL (panic): ");
+            out(label);
+            out("\n");
+            std.os.wasi.proc_exit(1);
+        }
+        // Other errors (OOM, etc.) are not property failures.
+    };
+}
+
+// ── Property: clone(x) deep-equals x for all representable value types ───────
+
+fn propCloneDeepEquals() void {
+    const cases = [_][]const u8{
+        // Scalar values
+        \\std := import("std")
+        \\core := std.core
+        \\assert core.deep_equal(core.clone(42), 42), "int"
+        \\assert core.deep_equal(core.clone(3.14), 3.14), "float"
+        \\assert core.deep_equal(core.clone(true), true), "bool"
+        \\assert core.deep_equal(core.clone(null), null), "null"
+        \\assert core.deep_equal(core.clone("hello"), "hello"), "string"
+        ,
+        // Flat array
+        \\std := import("std")
+        \\core := std.core
+        \\v := [1, 2, 3, 4, 5]
+        \\assert core.deep_equal(core.clone(v), v), "flat array"
+        ,
+        // Nested array
+        \\std := import("std")
+        \\core := std.core
+        \\v := [[1, 2], [3, 4], [5, 6]]
+        \\assert core.deep_equal(core.clone(v), v), "nested array"
+        ,
+        // Small map (linear representation, <=8 entries)
+        \\std := import("std")
+        \\core := std.core
+        \\v := {"a": 1, "b": 2, "c": 3}
+        \\assert core.deep_equal(core.clone(v), v), "small map"
+        ,
+        // Large map (hashed representation, >8 entries)
+        \\std := import("std")
+        \\core := std.core
+        \\v := {"k1": 1, "k2": 2, "k3": 3, "k4": 4, "k5": 5, "k6": 6, "k7": 7, "k8": 8, "k9": 9, "k10": 10}
+        \\assert core.deep_equal(core.clone(v), v), "large map"
+        ,
+        // Clone independence: mutating clone does not affect original
+        \\std := import("std")
+        \\core := std.core
+        \\original := [1, 2, 3]
+        \\cloned := core.clone(original)
+        \\cloned[0] = 99
+        \\assert original[0] == 1, "clone independence"
+        ,
+    };
+
+    for (cases) |src| {
+        runAssert(src, "clone deep-equals");
+    }
+    out("  clone deep-equals: OK\n");
+}
+
+// ── Property: map promotion does not change lookup or membership semantics ────
+
+fn propMapPromotion() void {
+    const cases = [_][]const u8{
+        // After promotion (9th entry) lookups of all prior keys still work
+        \\std := import("std")
+        \\core := std.core
+        \\m := {}
+        \\m["k1"] = 10
+        \\m["k2"] = 20
+        \\m["k3"] = 30
+        \\m["k4"] = 40
+        \\m["k5"] = 50
+        \\m["k6"] = 60
+        \\m["k7"] = 70
+        \\m["k8"] = 80
+        \\m["k9"] = 90
+        \\assert m["k1"] == 10, "k1 after promote"
+        \\assert m["k5"] == 50, "k5 after promote"
+        \\assert m["k9"] == 90, "k9 after promote"
+        ,
+        // has() works after promotion
+        \\std := import("std")
+        \\core := std.core
+        \\m := {}
+        \\for i := 0; i < 10; i++ { m[i] = i * 10 }
+        \\for i := 0; i < 10; i++ { assert core.has(m, i), "has after promote" }
+        \\assert not core.has(m, 11), "has false positive"
+        ,
+        // Overwrite after promotion preserves the new value
+        \\std := import("std")
+        \\core := std.core
+        \\m := {}
+        \\for i := 0; i < 10; i++ { m[i] = i }
+        \\m[5] = 999
+        \\assert m[5] == 999, "overwrite after promote"
+        ,
+        // for-in over promoted map yields all entries exactly once
+        \\std := import("std")
+        \\core := std.core
+        \\m := {}
+        \\for i := 0; i < 10; i++ { m[i] = true }
+        \\count := 0
+        \\for k in m { count = count + 1 }
+        \\assert count == 10, "for-in count after promote"
+        ,
+        // delete() works after promotion
+        \\std := import("std")
+        \\core := std.core
+        \\m := {}
+        \\for i := 0; i < 10; i++ { m[i] = i }
+        \\core.delete(m, 5)
+        \\assert not core.has(m, 5), "delete after promote"
+        \\assert core.len(m) == 9, "len after delete+promote"
+        ,
+    };
+
+    for (cases) |src| {
+        runAssert(src, "map promotion");
+    }
+    out("  map promotion semantics: OK\n");
+}
+
+// ── Property: panic/defer/recover ordering is stable ────────────────────────
+
+fn propPanicDeferRecover() void {
+    const cases = [_][]const u8{
+        // defer runs after normal return
+        \\std := import("std")
+        \\core := std.core
+        \\ran := false
+        \\func f() {
+        \\    defer func() { ran = true }()
+        \\    return
+        \\}
+        \\f()
+        \\assert ran, "defer after return"
+        ,
+        // defer runs when panic occurs (recover absorbs the panic)
+        \\std := import("std")
+        \\core := std.core
+        \\ran := false
+        \\func f() {
+        \\    defer func() {
+        \\        e := core.recover()
+        \\        if core.is_error(e) { ran = true }
+        \\    }()
+        \\    _ = [][0]
+        \\}
+        \\f()
+        \\assert ran, "defer on panic"
+        ,
+        // recover() sees an error value on panic
+        \\std := import("std")
+        \\core := std.core
+        \\got_error := false
+        \\func f() {
+        \\    defer func() {
+        \\        e := core.recover()
+        \\        if core.is_error(e) { got_error = true }
+        \\    }()
+        \\    _ = [][0]
+        \\}
+        \\f()
+        \\assert got_error, "recover must see error"
+        ,
+        // Multiple defers run in LIFO order (encoded as digits: last-registered runs first)
+        \\std := import("std")
+        \\core := std.core
+        \\order := 0
+        \\func f() {
+        \\    defer func() { order = order * 10 + 1 }()
+        \\    defer func() { order = order * 10 + 2 }()
+        \\    defer func() { order = order * 10 + 3 }()
+        \\}
+        \\f()
+        \\assert order == 321, "LIFO order"
+        ,
+        // Nested recover: inner panic is caught in inner function, does not reach outer
+        \\std := import("std")
+        \\core := std.core
+        \\inner_caught := false
+        \\func inner() {
+        \\    defer func() {
+        \\        e := core.recover()
+        \\        if core.is_error(e) { inner_caught = true }
+        \\    }()
+        \\    _ = [][0]
+        \\}
+        \\func outer() { inner() }
+        \\outer()
+        \\assert inner_caught, "nested: inner panic caught"
+        ,
+    };
+
+    for (cases) |src| {
+        runAssert(src, "panic/defer/recover");
+    }
+    out("  panic/defer/recover ordering: OK\n");
+}
+
+// ── Property: GC invariance — same result with and without forced GC ──────────
+// This runs programs known to allocate heap objects and verifies they don't
+// crash. Full GC invariance is enforced by the gc-stress CI lane; this suite
+// focuses on programs that exercise the allocator boundary conditions.
+
+fn propGcInvariance() void {
+    const programs = [_][]const u8{
+        // String growth
+        \\std := import("std")
+        \\core := std.core
+        \\s := ""
+        \\for i := 0; i < 50; i++ { s = s + "x" }
+        \\assert core.len(s) == 50, "string concat len"
+        ,
+        // Array growth via append
+        \\std := import("std")
+        \\core := std.core
+        \\arr := []
+        \\for i := 0; i < 50; i++ { arr = core.append(arr, i) }
+        \\assert core.len(arr) == 50, "array grow len"
+        \\assert arr[49] == 49, "array grow last"
+        ,
+        // Map growth past promotion, then sum all values
+        \\std := import("std")
+        \\core := std.core
+        \\m := {}
+        \\for i := 0; i < 20; i++ { m[i] = i * i }
+        \\total := 0
+        \\for k in m { total = total + m[k] }
+        \\assert total == 2470, "map sum"
+        ,
+        // Clone of array-of-maps
+        \\std := import("std")
+        \\core := std.core
+        \\arr := []
+        \\for i := 0; i < 20; i++ { arr = core.append(arr, {"k": i, "v": i * 2}) }
+        \\arr2 := core.clone(arr)
+        \\assert core.len(arr2) == 20, "clone len"
+        \\assert core.deep_equal(arr, arr2), "clone eq"
+        ,
+    };
+
+    for (programs) |src| {
+        runAssert(src, "gc invariance");
+    }
+    out("  gc invariance: OK\n");
+}
+
 // ── Main ────────────────────────────────────────────────────────────────────
 
 export fn _start() void {
@@ -454,6 +732,10 @@ export fn _start() void {
     fuzzForInNesting();
     fuzzStackHeapBoundaries();
     fuzzDifferential();
+    propCloneDeepEquals();
+    propMapPromotion();
+    propPanicDeferRecover();
+    propGcInvariance();
     out("fuzz OK\n");
     std.os.wasi.proc_exit(0);
 }
