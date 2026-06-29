@@ -45,7 +45,7 @@ pub const GengoNetHandlers = extern struct {
     set_write_deadline: ?*const fn (handle: i32, ms: i64, userdata: ?*anyopaque) callconv(.c) void,
 };
 
-const HandlerSet = struct {
+pub const HandlerSet = struct {
     callbacks: GengoNetHandlers,
     userdata: ?*anyopaque,
 };
@@ -54,6 +54,14 @@ var g_net_handlers: ?HandlerSet = null;
 
 pub fn setNetHandlers(handlers: GengoNetHandlers, userdata: ?*anyopaque) void {
     g_net_handlers = .{ .callbacks = handlers, .userdata = userdata };
+}
+
+pub fn applyHandlers(h: ?HandlerSet) void {
+    g_net_handlers = h;
+}
+
+pub fn currentHandlers() ?HandlerSet {
+    return g_net_handlers;
 }
 
 pub fn hasHandlers() bool {

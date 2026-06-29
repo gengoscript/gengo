@@ -14,10 +14,16 @@ pub const Mount = struct {
 const MaxMounts = 16;
 const StrBufSize = 4096;
 
-var g_mounts: [MaxMounts]Mount = undefined;
-var g_count: usize = 0;
-var g_str_buf: [StrBufSize]u8 = undefined;
-var g_str_used: usize = 0;
+/// Per-engine mount table. Slices in `mounts` point into `str_buf` by offset;
+/// copy via `loadFromEngine`/`saveToEngine` to keep pointers valid.
+pub const EngineState = struct {
+    mounts: [MaxMounts]Mount = undefined,
+    count: usize = 0,
+    str_buf: [StrBufSize]u8 = undefined,
+    str_used: usize = 0,
+};
+
+var g_state: EngineState = .{};
 
 pub const MountError = error{
     TooManyMounts,
@@ -27,18 +33,41 @@ pub const MountError = error{
 };
 
 pub fn clearMounts() void {
-    g_count = 0;
-    g_str_used = 0;
+    g_state.count = 0;
+    g_state.str_used = 0;
 }
 
 pub fn mountCount() usize {
-    return g_count;
+    return g_state.count;
 }
 
-/// Register a mount. Strings are copied into a static buffer, so the
-/// caller's memory may be freed afterwards. Re-adding an existing name
-/// replaces its target.
+/// Copy an engine's mount state into the active global, fixing up slice
+/// pointers so they reference the global's str_buf rather than the engine's.
+pub fn loadFromEngine(src: *const EngineState) void {
+    g_state.count = src.count;
+    g_state.str_used = src.str_used;
+    if (src.str_used > 0)
+        @memcpy(g_state.str_buf[0..src.str_used], src.str_buf[0..src.str_used]);
+    const src_base = @intFromPtr(&src.str_buf);
+    for (0..src.count) |i| {
+        const name_off = @intFromPtr(src.mounts[i].name.ptr) - src_base;
+        const real_off = @intFromPtr(src.mounts[i].real.ptr) - src_base;
+        g_state.mounts[i] = .{
+            .name = g_state.str_buf[name_off..][0..src.mounts[i].name.len],
+            .real = g_state.str_buf[real_off..][0..src.mounts[i].real.len],
+        };
+    }
+}
+
+/// Register a mount into the active global state. Strings are copied into
+/// the state buffer; re-adding an existing name replaces its target.
 pub fn addMount(name: []const u8, real: []const u8) MountError!void {
+    try addMountToState(&g_state, name, real);
+}
+
+/// Register a mount into a specific EngineState. Use this when populating
+/// an engine's per-instance state outside of a run/call (e.g. engine_mount_dir).
+pub fn addMountToState(state: *EngineState, name: []const u8, real: []const u8) MountError!void {
     if (name.len == 0 or std.mem.indexOfScalar(u8, name, '/') != null) return error.InvalidMountName;
     if (real.len == 0) return error.InvalidMountPath;
 
@@ -46,22 +75,22 @@ pub fn addMount(name: []const u8, real: []const u8) MountError!void {
     var r = real;
     while (r.len > 1 and r[r.len - 1] == '/') r = r[0 .. r.len - 1];
 
-    if (g_str_used + name.len + r.len > g_str_buf.len) return error.OutOfMountSpace;
-    const p = g_str_buf[g_str_used + name.len ..][0..r.len];
-    const n = g_str_buf[g_str_used..][0..name.len];
+    if (state.str_used + name.len + r.len > state.str_buf.len) return error.OutOfMountSpace;
+    const p = state.str_buf[state.str_used + name.len ..][0..r.len];
+    const n = state.str_buf[state.str_used..][0..name.len];
     @memcpy(n, name);
     @memcpy(p, r);
-    g_str_used += name.len + r.len;
+    state.str_used += name.len + r.len;
 
-    for (g_mounts[0..g_count]) |*m| {
+    for (state.mounts[0..state.count]) |*m| {
         if (std.mem.eql(u8, m.name, name)) {
             m.real = p;
             return;
         }
     }
-    if (g_count >= MaxMounts) return error.TooManyMounts;
-    g_mounts[g_count] = .{ .name = n, .real = p };
-    g_count += 1;
+    if (state.count >= MaxMounts) return error.TooManyMounts;
+    state.mounts[state.count] = .{ .name = n, .real = p };
+    state.count += 1;
 }
 
 pub fn setMounts(mounts: []const Mount) MountError!void {
@@ -91,7 +120,7 @@ pub fn resolve(path: []const u8, buf: []u8) ResolveError![]const u8 {
     const head = if (slash) |i| path[0..i] else path;
     const rest = if (slash) |i| path[i + 1 ..] else "";
 
-    const mount = for (g_mounts[0..g_count]) |m| {
+    const mount = for (g_state.mounts[0..g_state.count]) |m| {
         if (std.mem.eql(u8, m.name, head)) break m;
     } else return error.PathNotMounted;
 

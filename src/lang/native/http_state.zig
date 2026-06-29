@@ -51,7 +51,7 @@ pub const GengoHttpFetchFn = *const fn (
     userdata: ?*anyopaque,
 ) callconv(.c) c_int;
 
-const HandlerSet = struct {
+pub const HandlerSet = struct {
     callback: GengoHttpFetchFn,
     userdata: ?*anyopaque,
 };
@@ -60,6 +60,14 @@ var g_http_handler: ?HandlerSet = null;
 
 pub fn setHttpHandler(callback: GengoHttpFetchFn, userdata: ?*anyopaque) void {
     g_http_handler = .{ .callback = callback, .userdata = userdata };
+}
+
+pub fn applyHandler(h: ?HandlerSet) void {
+    g_http_handler = h;
+}
+
+pub fn currentHandler() ?HandlerSet {
+    return g_http_handler;
 }
 
 pub fn hasHandler() bool {
