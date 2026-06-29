@@ -337,8 +337,8 @@ fn assertNotLive(buf: []u8) void {
             const rlo = @intFromPtr(r.ptr);
             const rhi = rlo + r.len;
             if (lo < rhi and rlo < hi) {
-                std_.debug.print("FREE-OF-LIVE: freeing {x}..{x} overlaps live obj {d} ({s}) {x}..{x}\n", .{ lo, hi, i, @tagName(g_state.obj_pool[i]), rlo, rhi });
-                @panic("free of live region");
+                std_.debug.print("CorruptedObjectHandle: freeing {x}..{x} overlaps live obj {d} ({s}) {x}..{x}\n", .{ lo, hi, i, @tagName(g_state.obj_pool[i]), rlo, rhi });
+                @panic("VM integrity failure [CorruptedObjectHandle]: free of live region");
             }
         }
     }

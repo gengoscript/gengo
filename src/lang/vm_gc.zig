@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const vm_integrity = @import("vm_integrity.zig");
 const chunk = @import("chunk.zig");
 const globals = @import("globals.zig");
 const heap = @import("../runtime/heap.zig");
@@ -30,10 +31,7 @@ fn markObjectQueue(obj: *Object) void {
     if (heap.isObjectMarked(obj)) return;
     heap.markObject(obj);
     if (mark_worklist_top >= mark_worklist.len) {
-        if (comptime builtin.mode == .Debug) {
-            @panic("GC FATAL: mark worklist exhausted — object graph too deep or mark-phase bug");
-        }
-        return;
+        vm_integrity.fatal(error.GCInvariantFailure);
     }
     mark_worklist[mark_worklist_top] = obj;
     mark_worklist_top += 1;
@@ -49,7 +47,7 @@ fn drainMarkQueue() void {
         const obj = mark_worklist[mark_worklist_top];
         switch (obj.*) {
             .array, .array_managed => {
-                for (vms.asArraySlice(obj) catch unreachable) |v| markValue(v);
+                for (vms.asArraySlice(obj) catch vm_integrity.fatal(error.GCInvariantFailure)) |v| markValue(v);
             },
             .array_view => |av| {
                 if (heap.isObjectLive(av.source)) markObjectQueue(av.source);
@@ -58,7 +56,7 @@ fn drainMarkQueue() void {
                 if (heap.isObjectLive(ac.backing)) markObjectQueue(ac.backing);
             },
             .map, .map_managed, .map_hashed => {
-                for (vms.asMapSlice(obj) catch unreachable) |e| {
+                for (vms.asMapSlice(obj) catch vm_integrity.fatal(error.GCInvariantFailure)) |e| {
                     markValue(e.key);
                     markValue(e.value);
                 }
@@ -132,12 +130,14 @@ fn gcCheckIntegrityPostSweep() void {
         switch (obj.*) {
             .array_view => |av| {
                 if (!heap.isObjectLive(av.source)) {
-                    std.debug.panic("GC INTEGRITY: array_view.source (obj {d}) is dead after sweep", .{i});
+                    std.debug.print("GC INTEGRITY: array_view.source (obj {d}) is dead after sweep\n", .{i});
+                    vm_integrity.fatal(error.GCInvariantFailure);
                 }
             },
             .string_view => |sv| {
                 if (!heap.isObjectLive(sv.source)) {
-                    std.debug.panic("GC INTEGRITY: string_view.source (obj {d}) is dead after sweep", .{i});
+                    std.debug.print("GC INTEGRITY: string_view.source (obj {d}) is dead after sweep\n", .{i});
+                    vm_integrity.fatal(error.GCInvariantFailure);
                 }
             },
             else => {},

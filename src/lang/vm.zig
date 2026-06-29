@@ -16,6 +16,7 @@ const ClosureObj = vmod.ClosureObj;
 
 const vms = @import("vm_state.zig");
 const vmgc = @import("vm_gc.zig");
+const vm_integrity = @import("vm_integrity.zig");
 const vmmap = @import("vm_map.zig");
 const vmstr = @import("vm_string.zig");
 const vmtyp = @import("vm_types.zig");
@@ -805,9 +806,9 @@ fn doReturnFast(fi: usize, retval: Value) !void {
 fn readUpvalueCell(idx: usize) !*Object {
     if (vmState().frame_top == 0) return error.StackUnderflow;
     const frame = vmState().frames[vmState().frame_top - 1];
-    const cl = frame.closure orelse return error.TypeError;
-    if (cl.* != .closure) return error.TypeError;
-    if (idx >= cl.closure.upvalues.len) return error.TypeError;
+    const cl = frame.closure orelse return error.ImpossibleOpcodeState;
+    if (cl.* != .closure) return error.ImpossibleOpcodeState;
+    if (idx >= cl.closure.upvalues.len) return error.ImpossibleOpcodeState;
     return cl.closure.upvalues[idx];
 }
 
@@ -1795,7 +1796,7 @@ fn runInner() !void {
             vmState().ops_budget_remaining -= 1;
         }
         const op_raw = try vmByte();
-        if (op_raw >= std.meta.fields(Op).len) return error.BadOpcode;
+        if (op_raw >= std.meta.fields(Op).len) return error.InvalidChunkShape;
         vmperf.countOp(op_raw);
         const op: Op = @enumFromInt(op_raw);
         switch (op) {
@@ -1895,7 +1896,7 @@ fn runInner() !void {
                     }
                 }
                 const off = try vms.vmInt();
-                if (off > vmState().ip) return error.BytecodeOutOfBounds;
+                if (off > vmState().ip) return error.InvalidChunkShape;
                 vmState().ip -= off;
             },
 
@@ -1926,12 +1927,12 @@ fn runInner() !void {
                 const result: Value = if (a == .int and k == .int) .{ .int = a.int + k.int } else try computeAddResult(a, k);
                 writeFrameLocal(vmFrameBase() + dst, result);
                 const off = try vms.vmInt();
-                if (off > vmState().ip) return error.BytecodeOutOfBounds;
+                if (off > vmState().ip) return error.InvalidChunkShape;
                 vmState().ip -= off;
             },
             .add_ret => {
                 vmperf.breakOpChain();
-                if (vmState().frame_top == 0) return error.ReturnAtTopLevel;
+                if (vmState().frame_top == 0) return error.ImpossibleOpcodeState;
                 const b = try vmPop();
                 const a = try vmPop();
                 const retval = try computeAddResult(a, b);
@@ -2196,14 +2197,14 @@ fn runInner() !void {
             },
             .assert_interface => {
                 const idx = try vmShort();
-                if (idx >= chunk.constCount()) return error.BadConstantIndex;
+                if (idx >= chunk.constCount()) return error.InvalidChunkShape;
                 const name = (chunk.constAt(idx) catch unreachable).string.bytes;
                 const v = try vmPeek(0);
                 try typeAssert(v, vmtyp.matchesInterfaceType(v, name), name);
             },
             .assert_struct => {
                 const idx = try vmShort();
-                if (idx >= chunk.constCount()) return error.BadConstantIndex;
+                if (idx >= chunk.constCount()) return error.InvalidChunkShape;
                 const name = (chunk.constAt(idx) catch unreachable).string.bytes;
                 const v = try vmPeek(0);
                 const ok = v == .object and v.object.* == .struct_instance and common.streq(v.object.struct_instance.typ.struct_type.qualified_name, name);
@@ -2772,7 +2773,7 @@ fn runInner() !void {
             },
             .make_closure => {
                 const f = try vmConst();
-                if (f != .object or f.object.* != .function) return error.TypeError;
+                if (f != .object or f.object.* != .function) return error.InvalidChunkShape;
                 const proto = f.object.function;
                 const ups = if (heap.bump(*Object, proto.capture_slots.len)) |u| u else blk: {
                     vmgc.collectGarbage();
@@ -2783,9 +2784,9 @@ fn runInner() !void {
                     const is_upvalue = (enc & 0x80) != 0;
                     const idx = enc & 0x7f;
                     if (is_upvalue) {
-                        const pcl = frame.closure orelse return error.TypeError;
-                        if (pcl.* != .closure) return error.TypeError;
-                        if (idx >= pcl.closure.upvalues.len) return error.TypeError;
+                        const pcl = frame.closure orelse return error.ImpossibleOpcodeState;
+                        if (pcl.* != .closure) return error.ImpossibleOpcodeState;
+                        if (idx >= pcl.closure.upvalues.len) return error.ImpossibleOpcodeState;
                         u.* = pcl.closure.upvalues[idx];
                     } else {
                         const abs = frame.base + idx;
@@ -2822,7 +2823,7 @@ fn runInner() !void {
             },
             .loop => {
                 const off = try vms.vmInt();
-                if (off > vmState().ip) return error.BytecodeOutOfBounds;
+                if (off > vmState().ip) return error.InvalidChunkShape;
                 vmState().ip -= off;
                 // If the back-edge target is a warm get_global IC, execute it inline
                 // to save one full dispatch iteration per loop cycle.
@@ -2838,7 +2839,7 @@ fn runInner() !void {
                 const ic_slot: u16 = @intCast(try vmShort());
                 try writeGlobalIC(name_idx, ic_base, ic_slot, try vmPop());
                 const off = try vms.vmInt();
-                if (off > vmState().ip) return error.BytecodeOutOfBounds;
+                if (off > vmState().ip) return error.InvalidChunkShape;
                 vmState().ip -= off;
                 // Same inline get_global as loop: skip one dispatch if warm.
                 try tryInlineGetGlobal();
@@ -2956,7 +2957,7 @@ fn runInner() !void {
             .defer_invoke_method => try opDeferInvokeMethod(),
             .ret => {
                 vmperf.breakOpChain();
-                if (vmState().frame_top == 0) return error.ReturnAtTopLevel;
+                if (vmState().frame_top == 0) return error.ImpossibleOpcodeState;
                 const t0 = vmperf.readTsc();
                 const retval = try vmPop();
                 const fi = vmState().frame_top - 1;
@@ -2986,13 +2987,13 @@ fn runInner() !void {
             // Emitted when `constant k` immediately precedes `ret`.
             .get_local_ret => {
                 vmperf.breakOpChain();
-                if (vmState().frame_top == 0) return error.ReturnAtTopLevel;
+                if (vmState().frame_top == 0) return error.ImpossibleOpcodeState;
                 const v = try readLocalSlot(try vmByte());
                 if (try doReturn(v)) return;
             },
             .ret_const => {
                 vmperf.breakOpChain();
-                if (vmState().frame_top == 0) return error.ReturnAtTopLevel;
+                if (vmState().frame_top == 0) return error.ImpossibleOpcodeState;
                 const k = try chunk.constAt(try vmShort());
                 if (try doReturn(k)) return;
             },
@@ -3161,7 +3162,12 @@ pub fn run() anyerror!void {
         }
         return runPanicUnwind(err);
     };
-    runInner() catch |err| return runPanicUnwind(err);
+    runInner() catch |err| {
+        // Runtime integrity failures hard-stop with diagnostics — they represent
+        // impossible VM states in a program that already passed the verifier.
+        if (vm_integrity.isIntegrityError(err)) vm_integrity.fatal(err);
+        return runPanicUnwind(err);
+    };
 }
 
 pub fn makeString(s: []const u8) !Value {

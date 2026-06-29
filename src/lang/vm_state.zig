@@ -277,7 +277,7 @@ pub fn vmInt() !usize {
 }
 
 pub fn pushTempRoot(v: Value) !void {
-    if (vmState().temp_root_top >= MaxTempRoots) return error.StackOverflow;
+    if (vmState().temp_root_top >= MaxTempRoots) return error.BadTempRootDiscipline;
     vmState().temp_roots[vmState().temp_root_top] = v;
     vmState().temp_root_top += 1;
 }
@@ -316,7 +316,7 @@ pub fn restoreTempRoots(base: usize) void {
 
 pub fn vmConst() !Value {
     const idx = try vmShort();
-    if (idx >= chunk.constCount()) return error.BadConstantIndex;
+    if (idx >= chunk.constCount()) return error.InvalidChunkShape;
     return chunk.constAt(idx) catch unreachable;
 }
 
