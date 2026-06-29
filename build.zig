@@ -1,15 +1,18 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
-    const preset_opt = b.option([]const u8, "preset", "runtime preset: 256k|1m|16m|unlimited") orelse "1m";
+    const preset_opt = b.option([]const u8, "preset", "runtime preset: 256k|1m|16m|unlimited|dev|stress") orelse "1m";
     const valid = std.mem.eql(u8, preset_opt, "256k") or
         std.mem.eql(u8, preset_opt, "1m") or
         std.mem.eql(u8, preset_opt, "16m") or
-        std.mem.eql(u8, preset_opt, "unlimited");
-    if (!valid) @panic("invalid -Dpreset, expected 256k|1m|16m|unlimited");
+        std.mem.eql(u8, preset_opt, "unlimited") or
+        std.mem.eql(u8, preset_opt, "dev") or
+        std.mem.eql(u8, preset_opt, "stress");
+    if (!valid) @panic("invalid -Dpreset, expected 256k|1m|16m|unlimited|dev|stress");
 
     const perf_opt = b.option(bool, "perf", "Enable performance counters (outputs PERF: lines to stderr)") orelse false;
     const gc_stress_opt = b.option(bool, "gc_stress", "Force GC on every allocation to detect unrooted-value bugs") orelse false;
+    const heap_paranoia_opt = b.option(bool, "heap_paranoia", "Assert no live pointers are overwritten in the heap bump allocator") orelse false;
     const cap_net_opt = b.option(bool, "cap_net", "Include cap:net capability") orelse true;
     const cap_http_opt = b.option(bool, "cap_http", "Include cap:http capability") orelse true;
     const cap_fs_opt = b.option(bool, "cap_fs", "Include cap:fs capability") orelse true;
@@ -19,6 +22,7 @@ pub fn build(b: *std.Build) void {
     const build_opts = b.addOptions();
     build_opts.addOption(bool, "perf", perf_opt);
     build_opts.addOption(bool, "gc_stress", gc_stress_opt);
+    build_opts.addOption(bool, "heap_paranoia", heap_paranoia_opt);
     build_opts.addOption(bool, "cap_net", cap_net_opt);
     build_opts.addOption(bool, "cap_http", cap_http_opt);
     build_opts.addOption(bool, "cap_fs", cap_fs_opt);
@@ -119,6 +123,7 @@ pub fn build(b: *std.Build) void {
     const net_http_opts = b.addOptions();
     net_http_opts.addOption(bool, "perf", perf_opt);
     net_http_opts.addOption(bool, "gc_stress", false);
+    net_http_opts.addOption(bool, "heap_paranoia", false);
     net_http_opts.addOption(bool, "cap_net", true);
     net_http_opts.addOption(bool, "cap_http", true);
     net_http_opts.addOption(bool, "cap_fs", false);
@@ -134,6 +139,7 @@ pub fn build(b: *std.Build) void {
     const fs_opts = b.addOptions();
     fs_opts.addOption(bool, "perf", perf_opt);
     fs_opts.addOption(bool, "gc_stress", false);
+    fs_opts.addOption(bool, "heap_paranoia", false);
     fs_opts.addOption(bool, "cap_net", false);
     fs_opts.addOption(bool, "cap_http", false);
     fs_opts.addOption(bool, "cap_fs", true);
@@ -149,6 +155,7 @@ pub fn build(b: *std.Build) void {
     const minimal_opts = b.addOptions();
     minimal_opts.addOption(bool, "perf", perf_opt);
     minimal_opts.addOption(bool, "gc_stress", false);
+    minimal_opts.addOption(bool, "heap_paranoia", false);
     minimal_opts.addOption(bool, "cap_net", false);
     minimal_opts.addOption(bool, "cap_http", false);
     minimal_opts.addOption(bool, "cap_fs", false);
@@ -221,6 +228,7 @@ pub fn build(b: *std.Build) void {
         .target = b.graph.host,
         .optimize = .Debug,
     });
+    heap_test_mod.addImport("build_options", build_opts_mod);
     const heap_test = b.addTest(.{ .root_module = heap_test_mod });
     heap_test.step.dependOn(&preset.step);
     const run_heap_tests = b.addRunArtifact(heap_test);
@@ -315,6 +323,7 @@ pub fn build(b: *std.Build) void {
     const perf_opts = b.addOptions();
     perf_opts.addOption(bool, "perf", true);
     perf_opts.addOption(bool, "gc_stress", gc_stress_opt);
+    perf_opts.addOption(bool, "heap_paranoia", false);
     perf_opts.addOption(bool, "cap_net", cap_net_opt);
     perf_opts.addOption(bool, "cap_http", cap_http_opt);
     perf_opts.addOption(bool, "cap_fs", cap_fs_opt);

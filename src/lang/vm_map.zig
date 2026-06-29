@@ -120,9 +120,10 @@ pub fn mapInsertHashed(obj: *Object, key: Value, val: Value) !void {
         const bcount = mapBucketsForCount(out_cap);
         const out_buckets = try vmgc.vmAllocManagedSlice(i32, bcount);
         mapBuildHashedBuckets(out_entries[0..old.len], out_buckets);
+        // Update the object before freeing old slices so paranoia doesn't see stale live refs.
+        obj.* = .{ .map_hashed = .{ .entries = out_entries[0..out_cap], .len = old.len, .buckets = out_buckets } };
         heap.freeManagedSlice(MapEntry, old.entries);
         heap.freeManagedSlice(i32, old.buckets);
-        obj.* = .{ .map_hashed = .{ .entries = out_entries[0..out_cap], .len = old.len, .buckets = out_buckets } };
     }
 
     var hm = &obj.map_hashed;

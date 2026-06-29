@@ -39,16 +39,16 @@ jobs:
         run: zig build unit
 
       - name: Build WASI binary
-        run: zig build -Dpreset=1m wasi
+        run: zig build -Dpreset=dev wasi
 
       - name: Run conformance tests
-        run: zig build -Dpreset=1m test
+        run: zig build -Dpreset=dev test
 
       - name: Run benchmarks
-        run: zig build -Dpreset=1m bench
+        run: zig build -Dpreset=dev bench
 
       - name: Run native capability tests
-        run: zig build -Dpreset=1m native-cap
+        run: zig build -Dpreset=dev native-cap
 
       - name: Check chaos test discipline (every .gengo needs .out or .err)
         run: |
@@ -89,19 +89,17 @@ jobs:
           echo "test discipline OK"
 
       - name: Run chaos tests
-        run: zig build -Dpreset=1m chaos
+        run: zig build -Dpreset=dev chaos
 
       - name: Run heap tests
-        run: zig build -Dpreset=1m heap-test
+        run: zig build -Dpreset=dev heap-test
 
-  gc-stress-test:
+  stress-test:
     runs-on: ubuntu-latest
     env:
       WASMTIME_VERSION: v45.0.0
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.16.0
@@ -111,7 +109,6 @@ jobs:
           TARBALL="wasmtime-${WASMTIME_VERSION}-x86_64-linux.tar.xz"
           URL="https://github.com/bytecodealliance/wasmtime/releases/download/${WASMTIME_VERSION}/${TARBALL}"
           for attempt in 1 2 3; do
-            echo "Downloading wasmtime ${WASMTIME_VERSION} (attempt ${attempt})..."
             curl -fsSL --retry 3 --retry-delay 5 "$URL" -o "/tmp/${TARBALL}" && break
             [ "$attempt" -lt 3 ] && sleep 15 || exit 1
           done
@@ -119,22 +116,80 @@ jobs:
           mkdir -p "$HOME/.wasmtime/bin"
           mv "/tmp/wasmtime-${WASMTIME_VERSION}-x86_64-linux/wasmtime" "$HOME/.wasmtime/bin/"
           echo "$HOME/.wasmtime/bin" >> "$GITHUB_PATH"
-      - name: Check if src/ changed
-        id: src_changed
+      - name: Run tests under stress preset (tight heap/stack limits)
+        run: zig build -Dpreset=stress test
+
+  gc-stress-test:
+    runs-on: ubuntu-latest
+    env:
+      WASMTIME_VERSION: v45.0.0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - name: Install wasmtime
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            BASE="${{ github.event.pull_request.base.sha }}"
-          elif [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
-            BASE="${{ github.event.before }}"
-          else
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if git diff --name-only "$BASE" "${{ github.sha }}" -- src/ | grep -q .; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Run GC stress tests
-        if: steps.src_changed.outputs.changed == 'true'
-        run: zig build -Dpreset=1m -Dgc_stress=true test
+          set -euo pipefail
+          TARBALL="wasmtime-${WASMTIME_VERSION}-x86_64-linux.tar.xz"
+          URL="https://github.com/bytecodealliance/wasmtime/releases/download/${WASMTIME_VERSION}/${TARBALL}"
+          for attempt in 1 2 3; do
+            curl -fsSL --retry 3 --retry-delay 5 "$URL" -o "/tmp/${TARBALL}" && break
+            [ "$attempt" -lt 3 ] && sleep 15 || exit 1
+          done
+          tar -xJf "/tmp/${TARBALL}" -C /tmp
+          mkdir -p "$HOME/.wasmtime/bin"
+          mv "/tmp/wasmtime-${WASMTIME_VERSION}-x86_64-linux/wasmtime" "$HOME/.wasmtime/bin/"
+          echo "$HOME/.wasmtime/bin" >> "$GITHUB_PATH"
+      - name: Run GC stress tests (GC on every allocation)
+        run: zig build -Dpreset=dev -Dgc_stress=true test
+
+  heap-paranoia-test:
+    runs-on: ubuntu-latest
+    env:
+      WASMTIME_VERSION: v45.0.0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - name: Install wasmtime
+        run: |
+          set -euo pipefail
+          TARBALL="wasmtime-${WASMTIME_VERSION}-x86_64-linux.tar.xz"
+          URL="https://github.com/bytecodealliance/wasmtime/releases/download/${WASMTIME_VERSION}/${TARBALL}"
+          for attempt in 1 2 3; do
+            curl -fsSL --retry 3 --retry-delay 5 "$URL" -o "/tmp/${TARBALL}" && break
+            [ "$attempt" -lt 3 ] && sleep 15 || exit 1
+          done
+          tar -xJf "/tmp/${TARBALL}" -C /tmp
+          mkdir -p "$HOME/.wasmtime/bin"
+          mv "/tmp/wasmtime-${WASMTIME_VERSION}-x86_64-linux/wasmtime" "$HOME/.wasmtime/bin/"
+          echo "$HOME/.wasmtime/bin" >> "$GITHUB_PATH"
+      - name: Run tests with heap paranoia (assert no live regions overwritten)
+        run: zig build -Dpreset=dev -Dheap_paranoia=true test
+
+  parity-test:
+    runs-on: ubuntu-latest
+    env:
+      WASMTIME_VERSION: v45.0.0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - name: Install wasmtime
+        run: |
+          set -euo pipefail
+          TARBALL="wasmtime-${WASMTIME_VERSION}-x86_64-linux.tar.xz"
+          URL="https://github.com/bytecodealliance/wasmtime/releases/download/${WASMTIME_VERSION}/${TARBALL}"
+          for attempt in 1 2 3; do
+            curl -fsSL --retry 3 --retry-delay 5 "$URL" -o "/tmp/${TARBALL}" && break
+            [ "$attempt" -lt 3 ] && sleep 15 || exit 1
+          done
+          tar -xJf "/tmp/${TARBALL}" -C /tmp
+          mkdir -p "$HOME/.wasmtime/bin"
+          mv "/tmp/wasmtime-${WASMTIME_VERSION}-x86_64-linux/wasmtime" "$HOME/.wasmtime/bin/"
+          echo "$HOME/.wasmtime/bin" >> "$GITHUB_PATH"
+      - name: Run host/embedded backend parity tests
+        run: zig build -Dpreset=dev parity

@@ -334,8 +334,8 @@ test "compactManagedHeap eliminates live-object fragmentation" {
     // Exhaust the heap so no bump space remains.
     while (heap.allocBytesManaged(64) != null) {}
 
-    // Simulate GC sweep of ob: free its managed bytes and mark slot dead.
-    heap.freeBytesManaged(ob.dyn_string);
+    // Simulate GC sweep of ob: mark slot dead first, then free its managed bytes
+    // (mirrors the order the real sweeper uses; paranoia checks live refs on free).
     const ob_idx = heap.objectPoolIndex(ob);
     if (ob_idx != 0xFFFF) {
         heap.g_state.obj_live[ob_idx] = false;
@@ -343,6 +343,7 @@ test "compactManagedHeap eliminates live-object fragmentation" {
         heap.g_state.obj_free_head = ob_idx;
         heap.g_state.obj_live_count -= 1;
     }
+    heap.freeBytesManaged(ob.dyn_string);
 
     // 32 bytes in free list, but sandwiched between live a and c.
     const info = heap.fragmentationInfo();
@@ -380,9 +381,8 @@ test "compactManagedHeap updates slice pointers in owning objects" {
     @memset(c, 0xEF);
     oc.* = .{ .dyn_string = c };
 
-    // Exhaust the heap then simulate GC sweep of ob.
+    // Exhaust the heap then simulate GC sweep of ob (mark dead before free).
     while (heap.allocBytesManaged(64) != null) {}
-    heap.freeBytesManaged(ob.dyn_string);
     const ob_idx = heap.objectPoolIndex(ob);
     if (ob_idx != 0xFFFF) {
         heap.g_state.obj_live[ob_idx] = false;
@@ -390,6 +390,7 @@ test "compactManagedHeap updates slice pointers in owning objects" {
         heap.g_state.obj_free_head = ob_idx;
         heap.g_state.obj_live_count -= 1;
     }
+    heap.freeBytesManaged(ob.dyn_string);
 
     heap.compactManagedHeap();
 

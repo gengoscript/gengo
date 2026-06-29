@@ -194,8 +194,9 @@ fn tplAppendToBuilder(sb_obj: *Object, s: []const u8) !void {
     if (needed > sb_obj.string_builder.buf.len) {
         const new_buf = try vmgc.vmAllocManagedBytes(needed);
         @memcpy(new_buf[0..sb_obj.string_builder.len], sb_obj.string_builder.buf[0..sb_obj.string_builder.len]);
-        heap.freeBytesManaged(sb_obj.string_builder.buf);
-        sb_obj.string_builder.buf = new_buf;
+        const old_buf = sb_obj.string_builder.buf;
+        sb_obj.string_builder.buf = new_buf; // update before free so paranoia doesn't see the old ref
+        heap.freeBytesManaged(old_buf);
     }
     @memcpy(sb_obj.string_builder.buf[sb_obj.string_builder.len..needed], s);
     sb_obj.string_builder.len = needed;
