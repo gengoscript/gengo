@@ -1539,8 +1539,9 @@ fn opInvokeMethod() !void {
                     // Grow: receiver stays on stack so GC keeps the object alive.
                     const new_buf = try vmgc.vmAllocManagedBytes(needed);
                     @memcpy(new_buf[0..sb.len], sb.buf[0..sb.len]);
-                    heap.freeBytesManaged(sb.buf);
-                    sb.buf = new_buf;
+                    const old_buf = sb.buf;
+                    sb.buf = new_buf; // update before free so paranoia doesn't see the old ref
+                    heap.freeBytesManaged(old_buf);
                 }
                 @memcpy(sb.buf[sb.len..][0..s_bytes.len], s_bytes);
                 sb.len = needed;

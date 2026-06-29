@@ -1,6 +1,7 @@
 const std = @import("std");
 const cfg = @import("config.zig");
 const builtin = @import("builtin");
+const build_options = @import("build_options");
 
 const Value = @import("../lang/value.zig").Value;
 const MapEntry = @import("../lang/value.zig").MapEntry;
@@ -299,9 +300,11 @@ pub fn allocBytesManaged(n: usize) ?[]u8 {
     return null;
 }
 
-// Debug tripwire, enabled by the CLI when GENGO_HEAP_PARANOIA is set.
+// Debug tripwire. Enabled at compile time via -Dheap_paranoia=true, or at
+// runtime when the CLI sees GENGO_HEAP_PARANOIA=1.
 pub var paranoia: bool = false;
 fn paranoiaOn() bool {
+    if (comptime build_options.heap_paranoia) return true;
     return paranoia;
 }
 
