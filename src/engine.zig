@@ -32,9 +32,16 @@ pub const is_embedded_engine = build_opts.gengo_host;
 // so the C header can declare them as `const char *` / `void *` on both targets.
 const PtrInt = if (is_wasm) i32 else usize;
 const WriteCallback = *const fn (ptr: [*]const u8, len: i32, is_stderr: i32) callconv(.c) void;
-var write_callback: ?WriteCallback = null;
-
 const ReadCallback = *const fn (ptr: [*]u8, max_len: i32, is_line: i32) callconv(.c) i32;
+
+// Active-engine state — set for the duration of engine_run / engine_call so that
+// write/read callbacks and capability handlers resolve to the calling engine's
+// per-instance configuration rather than a process-global slot.
+var g_active_engine: ?*Engine = null;
+
+// Process-global active slots — overwritten by pushCapState before each
+// engine_run / engine_call and cleared by popCapState on return.
+var write_callback: ?WriteCallback = null;
 var read_callback: ?ReadCallback = null;
 
 const ImportLoaderFn = *const fn (
@@ -132,6 +139,13 @@ var engine_slots: [MaxEngines]EngineSlot = [_]EngineSlot{.{}} ** MaxEngines;
 
 const Engine = struct {
     runtime: api.Runtime,
+    // Per-engine capability state — applied to the process globals during
+    // engine_run / engine_call via pushCapState / popCapState.
+    write_callback: ?WriteCallback = null,
+    read_callback: ?ReadCallback = null,
+    net_handlers: ?net_state.HandlerSet = null,
+    http_handler: ?http_state.HandlerSet = null,
+    fs_state: fs_state.EngineState = .{},
     source_entries: [MaxSources]api.SourceEntry = undefined,
     source_count: u8 = 0,
     path_bufs: [MaxSources][256]u8 = undefined,
@@ -272,6 +286,39 @@ fn getEngine(handle: i32) ?*Engine {
     const idx = @as(usize, @intCast(handle - 1));
     if (!engine_slots[idx].active) return null;
     return &engine_slots[idx].engine;
+}
+
+// Push the engine's per-instance capability state into the process globals so
+// that write/read hooks and capability modules use this engine's configuration.
+// Returns the previous active engine for restore (supports future re-entrancy).
+fn pushCapState(engine: *Engine) ?*Engine {
+    const prev = g_active_engine;
+    g_active_engine = engine;
+    write_callback = engine.write_callback;
+    read_callback = engine.read_callback;
+    net_state.applyHandlers(engine.net_handlers);
+    http_state.applyHandler(engine.http_handler);
+    fs_state.loadFromEngine(&engine.fs_state);
+    return prev;
+}
+
+// Restore the process globals to the previous engine's state (or clear them).
+fn popCapState(prev: ?*Engine) void {
+    if (prev) |p| {
+        g_active_engine = p;
+        write_callback = p.write_callback;
+        read_callback = p.read_callback;
+        net_state.applyHandlers(p.net_handlers);
+        http_state.applyHandler(p.http_handler);
+        fs_state.loadFromEngine(&p.fs_state);
+    } else {
+        g_active_engine = null;
+        write_callback = null;
+        read_callback = null;
+        net_state.applyHandlers(null);
+        http_state.applyHandler(null);
+        fs_state.clearMounts();
+    }
 }
 
 fn wasmSlice(ptr: PtrInt, len: i32) []const u8 {
@@ -570,16 +617,14 @@ export fn engine_destroy(handle: i32) void {
     const idx = if (handle > 0 and handle <= MaxEngines) @as(usize, @intCast(handle - 1)) else return;
     engine_slots[idx].engine.deinitInPlace();
     engine_slots[idx].active = false;
-    // If this was the last active engine, tear down all process-global state so
-    // that the next engine_init() starts clean.
+    // If this was the last active engine, clear I/O overrides so the next
+    // engine_init() starts clean. Capability state (net/http/fs) is already
+    // per-engine and cleared by popCapState on each run/call exit.
     for (&engine_slots) |*s| {
         if (s.active) return;
     }
     io.clearWriteOverrides();
     io.clearReadOverride();
-    http_state.resetHandler();
-    net_state.resetHandlers();
-    fs_state.clearMounts();
 }
 
 export fn engine_run(handle: i32, src_ptr: PtrInt, src_len: i32) i32 {
@@ -587,6 +632,8 @@ export fn engine_run(handle: i32, src_ptr: PtrInt, src_len: i32) i32 {
     if (src_len < 0) { engine.setError("engine_run: src_len must not be negative"); return -1; }
     const src = wasmSlice(src_ptr, src_len);
     setupHostModules(engine);
+    const prev = pushCapState(engine);
+    defer popCapState(prev);
     const res = engine.runtime.run(src);
     return switch (res) {
         .ok => { engine.clearError(); return 0; },
@@ -607,6 +654,8 @@ export fn engine_run_path(handle: i32, src_ptr: PtrInt, src_len: i32, path_ptr: 
     const src = wasmSlice(src_ptr, src_len);
     const path = wasmSlice(path_ptr, path_len);
     setupHostModules(engine);
+    const prev = pushCapState(engine);
+    defer popCapState(prev);
     const res = engine.runtime.runPath(src, path);
     return switch (res) {
         .ok => { engine.clearError(); return 0; },
@@ -625,6 +674,8 @@ export fn engine_call(handle: i32, name_ptr: PtrInt, name_len: i32, args_ptr: Pt
     const engine = getEngine(handle) orelse return -1;
     const name = wasmSlice(name_ptr, name_len);
     setupHostModules(engine);
+    const prev = pushCapState(engine);
+    defer popCapState(prev);
 
     var args: [64]Value = undefined;
     if (argc < 0) {
@@ -825,43 +876,41 @@ export fn engine_last_error_col(handle: i32) i32 {
 
 export fn engine_set_write_fn(handle: i32, callback: ?WriteCallback) void {
     if (comptime is_wasm) return;
-    _ = getEngine(handle) orelse return;
-    write_callback = callback;
+    const engine = getEngine(handle) orelse return;
+    engine.write_callback = callback;
 }
 
 export fn engine_set_read_fn(handle: i32, callback: ?ReadCallback) void {
     if (comptime is_wasm) return;
-    _ = getEngine(handle) orelse return;
-    read_callback = callback;
+    const engine = getEngine(handle) orelse return;
+    engine.read_callback = callback;
 }
 
 export fn engine_set_net_handlers(handle: i32, handlers: ?*const net_state.GengoNetHandlers, userdata: ?*anyopaque) void {
-    _ = getEngine(handle) orelse return;
-    if (handlers) |h| {
-        net_state.setNetHandlers(h.*, userdata);
-    } else {
-        net_state.resetHandlers();
-    }
+    const engine = getEngine(handle) orelse return;
+    engine.net_handlers = if (handlers) |h|
+        .{ .callbacks = h.*, .userdata = userdata }
+    else
+        null;
 }
 
 export fn engine_set_http_handler(handle: i32, callback: ?http_state.GengoHttpFetchFn, userdata: ?*anyopaque) void {
-    _ = getEngine(handle) orelse return;
-    if (callback) |cb| {
-        http_state.setHttpHandler(cb, userdata);
-    } else {
-        http_state.resetHandler();
-    }
+    const engine = getEngine(handle) orelse return;
+    engine.http_handler = if (callback) |cb|
+        .{ .callback = cb, .userdata = userdata }
+    else
+        null;
 }
 
 /// Register a host directory as a cap:fs mount ("name" -> real path).
 /// Strings are copied; the caller may free them after the call returns.
 /// Returns 0 on success, -1 on invalid handle, -2 on invalid mount.
 export fn engine_mount_dir(handle: i32, name_ptr: PtrInt, name_len: i32, path_ptr: PtrInt, path_len: i32) i32 {
-    _ = getEngine(handle) orelse return -1;
+    const engine = getEngine(handle) orelse return -1;
     if (name_len < 0 or path_len < 0) return -2;
     const name = wasmSlice(name_ptr, name_len);
     const path = wasmSlice(path_ptr, path_len);
-    fs_state.addMount(name, path) catch return -2;
+    fs_state.addMountToState(&engine.fs_state, name, path) catch return -2;
     return 0;
 }
 

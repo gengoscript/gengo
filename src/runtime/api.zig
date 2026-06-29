@@ -11,9 +11,9 @@ pub const HostModuleDesc = @import("../lang/module_compile.zig").HostModuleDesc;
 const fs_state = @import("../lang/native/fs_state.zig");
 pub const FsMount = fs_state.Mount;
 
-/// Register the host directories visible to cap:fs scripts. Mounts are
-/// process-global (cap:fs has no per-runtime state); call once before
-/// running scripts. Replaces any previously registered mounts.
+/// Register the host directories visible to cap:fs scripts for process-global
+/// Zig-embedding use. For per-engine isolation use `Config.fs_mounts` instead.
+/// Replaces any previously registered mounts.
 pub fn setFsMounts(mounts: []const FsMount) fs_state.MountError!void {
     try fs_state.setMounts(mounts);
 }
