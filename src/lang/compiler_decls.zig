@@ -37,66 +37,66 @@ const InterfaceTypeObj = value_mod.InterfaceTypeObj;
 
 pub fn emitZeroValue(c: anytype, tc: TypeCheck, line: u32) !void {
     switch (tc) {
-        .none => try chunk.emitOp(.null_val, line),
+        .none => try c.cs.emitOp(.null_val, line),
         .prim => |p| switch (p) {
-            .int => try chunk.emitConst(.{ .int = 0.0 }, line),
-            .float => try chunk.emitConst(.{ .float = 0.0 }, line),
-            .decimal => try chunk.emitConst(.{ .decimal = 0 }, line),
-            .bool => try chunk.emitOp(.false_val, line),
-            .string => try chunk.emitStringConst("", line),
-            .rune => try chunk.emitConst(.{ .rune = 0 }, line),
+            .int => try c.cs.emitConst(.{ .int = 0.0 }, line),
+            .float => try c.cs.emitConst(.{ .float = 0.0 }, line),
+            .decimal => try c.cs.emitConst(.{ .decimal = 0 }, line),
+            .bool => try c.cs.emitOp(.false_val, line),
+            .string => try c.cs.emitStringConst("", line),
+            .rune => try c.cs.emitConst(.{ .rune = 0 }, line),
         },
-        .assert_arr => try chunk.emit2(@intFromEnum(Op.build_array), 0, line),
-        .assert_map => try chunk.emit2(@intFromEnum(Op.build_map), 0, line),
-        .assert_err => try chunk.emitOp(.null_val, line),
+        .assert_arr => try c.cs.emit2(@intFromEnum(Op.build_array), 0, line),
+        .assert_map => try c.cs.emit2(@intFromEnum(Op.build_map), 0, line),
+        .assert_err => try c.cs.emitOp(.null_val, line),
         .named => {
             try emitNamedDefault(c, tc.named, line);
-            try chunk.emitGetGlobal(tc.named, line);
-            try chunk.emitCall(1, line);
+            try c.cs.emitGetGlobal(tc.named, line);
+            try c.cs.emitCall(1, line);
         },
-        .interface_type => try chunk.emitOp(.null_val, line),
+        .interface_type => try c.cs.emitOp(.null_val, line),
         .struct_type => |qname| {
-            try chunk.emitGetGlobal(qname, line);
-            try chunk.emitOp(.zero_struct, line);
+            try c.cs.emitGetGlobal(qname, line);
+            try c.cs.emitOp(.zero_struct, line);
         },
     }
 }
 
 pub fn emitNamedDefault(c: anytype, name: []const u8, line: u32) !void {
     const type_info = c.registry.getNamedTypeInfo(name) orelse {
-        try chunk.emitOp(.null_val, line);
+        try c.cs.emitOp(.null_val, line);
         return;
     };
     if (type_info.has_default) {
         switch (type_info.base) {
             .int, .float, .rune, .decimal => {
-                try chunk.emitConst(.{ .float = type_info.default_val.float }, line);
+                try c.cs.emitConst(.{ .float = type_info.default_val.float }, line);
             },
             .string => {
-                try chunk.emitConst(.{ .string = type_info.default_val.string }, line);
+                try c.cs.emitConst(.{ .string = type_info.default_val.string }, line);
             },
             .bool => {
                 if (type_info.default_val.boolean) {
-                    try chunk.emitOp(.true_val, line);
+                    try c.cs.emitOp(.true_val, line);
                 } else {
-                    try chunk.emitOp(.false_val, line);
+                    try c.cs.emitOp(.false_val, line);
                 }
             },
-            .array_t => try chunk.emit2(@intFromEnum(Op.build_array), 0, line),
-            .map_t => try chunk.emit2(@intFromEnum(Op.build_map), 0, line),
-            .enum_t => try chunk.emitOp(.null_val, line),
+            .array_t => try c.cs.emit2(@intFromEnum(Op.build_array), 0, line),
+            .map_t => try c.cs.emit2(@intFromEnum(Op.build_map), 0, line),
+            .enum_t => try c.cs.emitOp(.null_val, line),
         }
     } else {
         switch (type_info.base) {
-            .int => try chunk.emitConst(.{ .int = 0 }, line),
-            .float => try chunk.emitConst(.{ .float = 0 }, line),
-            .decimal => try chunk.emitConst(.{ .decimal = 0 }, line),
-            .string => try chunk.emitStringConst("", line),
-            .rune => try chunk.emitConst(.{ .rune = 0 }, line),
-            .bool => try chunk.emitOp(.false_val, line),
-            .array_t => try chunk.emit2(@intFromEnum(Op.build_array), 0, line),
-            .map_t => try chunk.emit2(@intFromEnum(Op.build_map), 0, line),
-            .enum_t => try chunk.emitOp(.null_val, line),
+            .int => try c.cs.emitConst(.{ .int = 0 }, line),
+            .float => try c.cs.emitConst(.{ .float = 0 }, line),
+            .decimal => try c.cs.emitConst(.{ .decimal = 0 }, line),
+            .string => try c.cs.emitStringConst("", line),
+            .rune => try c.cs.emitConst(.{ .rune = 0 }, line),
+            .bool => try c.cs.emitOp(.false_val, line),
+            .array_t => try c.cs.emit2(@intFromEnum(Op.build_array), 0, line),
+            .map_t => try c.cs.emit2(@intFromEnum(Op.build_map), 0, line),
+            .enum_t => try c.cs.emitOp(.null_val, line),
         }
     }
 }
@@ -220,11 +220,11 @@ pub fn interfaceDeclBody(c: anytype, kw: Token, name: Token, is_pub: bool) !void
     const qname = try c.qualifyTypeName(name.src);
     const it = heap.allocObject() orelse return error.OutOfMemory;
     it.* = .{ .interface_type = InterfaceTypeObj{ .name = try c.copyName(name.src), .qualified_name = qname, .methods = methods[0..mcount] } };
-    try chunk.emitConst(.{ .object = it }, kw.line);
+    try c.cs.emitConst(.{ .object = it }, kw.line);
     if (c.inFunc()) {
         _ = try c.defineLocal(name.src, false);
     } else {
-        try chunk.emitOpStringConst(.def_global, qname, kw.line);
+        try c.cs.emitOpStringConst(.def_global, qname, kw.line);
         if (is_pub) try c.addExport(name.src, qname);
     }
     c.matchOpt(.semicolon);
@@ -299,7 +299,7 @@ pub fn methodDecl(c: anytype) !void {
                 return error.TooManyGlobalFuncs;
             };
         }
-        try chunk.emitOpStringConst(.def_global, key, kw.line);
+        try c.cs.emitOpStringConst(.def_global, key, kw.line);
     }
     c.matchOpt(.semicolon);
 }
@@ -331,7 +331,7 @@ pub fn namedFuncDecl(c: anytype, is_pub: bool) !void {
                 return error.TooManyGlobalFuncs;
             };
         }
-        try chunk.emitOpStringConst(.def_global, qname, kw.line);
+        try c.cs.emitOpStringConst(.def_global, qname, kw.line);
         if (is_pub) try c.addExport(name.src, qname);
     }
     c.matchOpt(.semicolon);
@@ -418,11 +418,11 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
         });
         const et = heap.allocObject() orelse return error.OutOfMemory;
         et.* = .{ .enum_type = .{ .name = try c.copyName(name), .qualified_name = qname, .members = members[0..mcount], .member_ints = member_ints } };
-        try chunk.emitConst(.{ .object = et }, kw.line);
+        try c.cs.emitConst(.{ .object = et }, kw.line);
         if (c.inFunc()) {
             _ = try c.defineLocal(name, false);
         } else {
-            try chunk.emitOpStringConst(.def_global, qname, kw.line);
+            try c.cs.emitOpStringConst(.def_global, qname, kw.line);
             if (is_pub) try c.addExport(name, qname);
         }
         c.matchOpt(.semicolon);
@@ -445,11 +445,11 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
             if (!c.skipping_test_body) try c.registry.addNamedType(.{ .name = name, .base = .map_t, .key_spec = alt.key_spec, .val_spec = alt.val_spec });
             nt.* = .{ .named_type = NamedTypeObj{ .name = try c.copyName(name), .qualified_name = qname, .base = .map_t, .key_spec = alt.key_spec, .val_spec = alt.val_spec } };
         }
-        try chunk.emitConst(.{ .object = nt }, kw.line);
+        try c.cs.emitConst(.{ .object = nt }, kw.line);
         if (c.inFunc()) {
             _ = try c.defineLocal(name, false);
         } else {
-            try chunk.emitOpStringConst(.def_global, qname, kw.line);
+            try c.cs.emitOpStringConst(.def_global, qname, kw.line);
             if (is_pub) try c.addExport(name, qname);
         }
         c.matchOpt(.semicolon);
@@ -499,11 +499,11 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
         if (!c.skipping_test_body) try c.registry.addNamedType(.{ .name = name, .base = .map_t, .key_spec = ks, .val_spec = vs });
         const nt = heap.allocObject() orelse return error.OutOfMemory;
         nt.* = .{ .named_type = NamedTypeObj{ .name = try c.copyName(name), .qualified_name = qname, .base = .map_t, .key_spec = ks, .val_spec = vs } };
-        try chunk.emitConst(.{ .object = nt }, kw.line);
+        try c.cs.emitConst(.{ .object = nt }, kw.line);
         if (c.inFunc()) {
             _ = try c.defineLocal(name, false);
         } else {
-            try chunk.emitOpStringConst(.def_global, qname, kw.line);
+            try c.cs.emitOpStringConst(.def_global, qname, kw.line);
             if (is_pub) try c.addExport(name, qname);
         }
         c.matchOpt(.semicolon);
@@ -586,8 +586,8 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
             cl.* = .{ .closure = .{ .func = func_obj, .upvalues = &[_]*Object{} } };
             predicate_obj = cl;
         } else {
-            const cidx: u16 = try chunk.addConst(.{ .object = func_obj });
-            try chunk.emitConstIdx(.make_closure, cidx, c.prev.line);
+            const cidx: u16 = try c.cs.addConst(.{ .object = func_obj });
+            try c.cs.emitConstIdx(.make_closure, cidx, c.prev.line);
         }
         if (c.match(.kw_message)) {
             if (c.cur.typ != .string) return c.err("expected string literal after 'message'", .{});
@@ -607,7 +607,7 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
             },
             .string => {
                 if (c.cur.typ != .string) return c.err("expected string literal after 'default'", .{});
-                default_val = .{ .string = try chunk.internStr(try c.copyName(c.cur.src)) };
+                default_val = .{ .string = try c.cs.internStr(try c.copyName(c.cur.src)) };
                 c.advance();
             },
             .bool => {
@@ -673,17 +673,17 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
         .has_default = has_default,
         .default_val = default_val,
     } };
-    try chunk.emitConst(.{ .object = nt }, kw.line);
+    try c.cs.emitConst(.{ .object = nt }, kw.line);
     if (predicate_uv_count > 0) {
-        try chunk.emitOp(.set_named_predicate, kw.line);
+        try c.cs.emitOp(.set_named_predicate, kw.line);
     }
     if (has_default and predicate_obj != null) {
-        try chunk.emitOp(.validate_type_default, kw.line);
+        try c.cs.emitOp(.validate_type_default, kw.line);
     }
     if (c.inFunc()) {
         _ = try c.defineLocal(name, false);
     } else {
-        try chunk.emitOpStringConst(.def_global, qname, kw.line);
+        try c.cs.emitOpStringConst(.def_global, qname, kw.line);
         if (is_pub) try c.addExport(name, qname);
     }
     c.matchOpt(.semicolon);
@@ -980,16 +980,16 @@ pub fn structDeclBody(c: anytype, kw: Token, name: Token, is_pub: bool) !void {
 
     const fields = heap.bump(StructFieldSpec, count) orelse return error.OutOfMemory;
     @memcpy(fields[0..count], field_specs[0..count]);
-    for (fields[0..count]) |*f| f.key = .{ .string = try chunk.internStr(f.name) };
+    for (fields[0..count]) |*f| f.key = .{ .string = try c.cs.internStr(f.name) };
     const qname = try c.qualifyTypeName(name.src);
     const st = heap.allocObject() orelse return error.OutOfMemory;
     st.* = .{ .struct_type = StructTypeObj{ .name = try c.copyName(name.src), .qualified_name = qname, .fields = fields[0..count] } };
-    try chunk.emitConst(.{ .object = st }, kw.line);
+    try c.cs.emitConst(.{ .object = st }, kw.line);
 
     if (c.inFunc()) {
         _ = try c.defineLocal(name.src, false);
     } else {
-        try chunk.emitOpStringConst(.def_global, qname, kw.line);
+        try c.cs.emitOpStringConst(.def_global, qname, kw.line);
         if (is_pub) try c.addExport(name.src, qname);
     }
     c.matchOpt(.semicolon);
@@ -1063,11 +1063,11 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
             .members = members[0..mcount],
             .parent_name = qparent,
         } };
-        try chunk.emitConst(.{ .object = et }, kw.line);
+        try c.cs.emitConst(.{ .object = et }, kw.line);
         if (c.inFunc()) {
             _ = try c.defineLocal(name, false);
         } else {
-            try chunk.emitOpStringConst(.def_global, qname, kw.line);
+            try c.cs.emitOpStringConst(.def_global, qname, kw.line);
             if (is_pub) try c.addExport(name, qname);
         }
         c.matchOpt(.semicolon);
@@ -1120,8 +1120,8 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
             cl.* = .{ .closure = .{ .func = func_obj, .upvalues = &[_]*Object{} } };
             predicate_obj = cl;
         } else {
-            const cidx: u16 = try chunk.addConst(.{ .object = func_obj });
-            try chunk.emitConstIdx(.make_closure, cidx, c.prev.line);
+            const cidx: u16 = try c.cs.addConst(.{ .object = func_obj });
+            try c.cs.emitConstIdx(.make_closure, cidx, c.prev.line);
         }
         if (c.match(.kw_message)) {
             if (c.cur.typ != .string) return c.err("expected string literal after 'message'", .{});
@@ -1141,7 +1141,7 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
             },
             .string => {
                 if (c.cur.typ != .string) return c.err("expected string literal after 'default'", .{});
-                default_val = .{ .string = try chunk.internStr(try c.copyName(c.cur.src)) };
+                default_val = .{ .string = try c.cs.internStr(try c.copyName(c.cur.src)) };
                 c.advance();
             },
             .bool => {
@@ -1205,17 +1205,17 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
         .has_default = has_default,
         .default_val = default_val,
     } };
-    try chunk.emitConst(.{ .object = nt }, kw.line);
+    try c.cs.emitConst(.{ .object = nt }, kw.line);
     if (predicate_uv_count > 0) {
-        try chunk.emitOp(.set_named_predicate, kw.line);
+        try c.cs.emitOp(.set_named_predicate, kw.line);
     }
     if (has_default and predicate_obj != null) {
-        try chunk.emitOp(.validate_type_default, kw.line);
+        try c.cs.emitOp(.validate_type_default, kw.line);
     }
     if (c.inFunc()) {
         _ = try c.defineLocal(name, false);
     } else {
-        try chunk.emitOpStringConst(.def_global, qname, kw.line);
+        try c.cs.emitOpStringConst(.def_global, qname, kw.line);
         if (is_pub) try c.addExport(name, qname);
     }
     c.matchOpt(.semicolon);
@@ -1301,7 +1301,7 @@ pub fn variantDeclBody(c: anytype, kw: Token, name_tok: Token, is_pub: bool) !vo
                 try c.consume(.rbrace);
                 const fields = heap.bump(StructFieldSpec, field_count) orelse return error.OutOfMemory;
                 @memcpy(fields[0..field_count], field_specs[0..field_count]);
-                for (fields[0..field_count]) |*f| f.key = .{ .string = try chunk.internStr(f.name) };
+                for (fields[0..field_count]) |*f| f.key = .{ .string = try c.cs.internStr(f.name) };
                 if (arm_count >= MaxLocals) { c.setErr("too many local variables (max {d})", .{MaxLocals}); return error.TooManyLocals; }
                 for (arms_tmp[0..arm_count]) |a| {
                     if (common.streq(a.name, entry_name)) { c.setErr("duplicate arm '{s}' in variant", .{entry_name}); return error.DuplicateField; }
@@ -1342,7 +1342,7 @@ pub fn variantDeclBody(c: anytype, kw: Token, name_tok: Token, is_pub: bool) !vo
     const shared_fields = if (shared_count > 0) blk: {
         const sf = heap.bump(StructFieldSpec, shared_count) orelse return error.OutOfMemory;
         @memcpy(sf[0..shared_count], shared_tmp[0..shared_count]);
-        for (sf[0..shared_count]) |*f| f.key = .{ .string = try chunk.internStr(f.name) };
+        for (sf[0..shared_count]) |*f| f.key = .{ .string = try c.cs.internStr(f.name) };
         break :blk sf[0..shared_count];
     } else @as([]const StructFieldSpec, &.{});
 
@@ -1357,11 +1357,11 @@ pub fn variantDeclBody(c: anytype, kw: Token, name_tok: Token, is_pub: bool) !vo
         .arms = arms[0..arm_count],
         .shared_fields = shared_fields,
     } };
-    try chunk.emitConst(.{ .object = vt }, kw.line);
+    try c.cs.emitConst(.{ .object = vt }, kw.line);
     if (c.inFunc()) {
         _ = try c.defineLocal(name, false);
     } else {
-        try chunk.emitOpStringConst(.def_global, qname, kw.line);
+        try c.cs.emitOpStringConst(.def_global, qname, kw.line);
         if (is_pub) try c.addExport(name, qname);
     }
     c.matchOpt(.semicolon);
