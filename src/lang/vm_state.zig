@@ -129,6 +129,217 @@ pub const State = struct {
         if (self.panic_frames.len > 0) self.allocator.free(self.panic_frames);
         self.* = .{};
     }
+
+    pub fn reset(self: *State) void {
+        if (self.stack.len == 0 and self == &g_default_state) {
+            _ = g_default_state.init(MaxStack, MaxFrames, cfg.max_defers, heap.HeapSize, self.allocator) catch {};
+        }
+        self.resetExec();
+        self.std_module = null;
+        self.host_checked = false;
+        self.host_caps = 0;
+        self.next_gc_objects = 256;
+        self.next_gc_heap_bytes = if (self.configured_heap_size > 0) self.configured_heap_size / 2 else heap.HeapSize / 2;
+        self.rune_cache_ptr = 0;
+        self.rune_cache_byte_len = 0;
+        self.rune_cache_rune_len = 0;
+        self.rune_cache_valid = false;
+        self.rune_cache_overflow = false;
+        self.gc_runs = 0;
+        self.gc_time_ns = 0;
+        self.alloc_object_calls = 0;
+        self.alloc_managed_slice_calls = 0;
+        self.alloc_managed_bytes_calls = 0;
+    }
+
+    // Reset only execution state; preserve globals, heap, GC objects, and std_module.
+    // Used by the REPL to run successive lines with shared state.
+    pub fn resetExec(self: *State) void {
+        self.stack_top = 0;
+        self.ip = 0;
+        self.frame_top = 0;
+        self.call_depth_target = null;
+        self.temp_root_top = 0;
+        self.defer_top = 0;
+        self.ops_budget_remaining = std.math.maxInt(u64);
+        self.panic_line = 0;
+        self.panic_col = 0;
+        self.panic_depth = 0;
+        self.is_panicking = false;
+        self.panic_value = .null;
+        self.recovered = false;
+        self.pending_panic_message = null;
+        self.has_pending_panic_value = false;
+        self.runtime_err_len = 0;
+    }
+
+    pub fn setRuntimeErr(self: *State, comptime fmt: []const u8, args: anytype) void {
+        const s = std.fmt.bufPrint(&self.runtime_err_buf, fmt, args) catch return;
+        self.runtime_err_len = @intCast(s.len);
+    }
+
+    pub fn runtimeErrMsg(self: *State) []const u8 {
+        return self.runtime_err_buf[0..self.runtime_err_len];
+    }
+
+    pub fn setPolicy(self: *State, policy: Policy) void {
+        self.policy = policy;
+        self.ops_budget_remaining = policy.max_ops orelse std.math.maxInt(u64);
+    }
+
+    fn currentIpIdx(self: *State) usize {
+        const len = chunk.codeLen();
+        if (len == 0) return 0;
+        return if (self.ip == 0) 0 else @min(self.ip - 1, len - 1);
+    }
+
+    pub fn currentLine(self: *State) u32 {
+        return chunk.lineAt(self.currentIpIdx());
+    }
+
+    pub fn currentCol(self: *State) u16 {
+        return chunk.colAt(self.currentIpIdx());
+    }
+
+    pub fn panicLine(self: *State) u32 {
+        return self.panic_line;
+    }
+
+    pub fn panicCol(self: *State) u16 {
+        return self.panic_col;
+    }
+
+    pub fn panicFrames(self: *State) []const PanicFrame {
+        return self.panic_frames[0..self.panic_depth];
+    }
+
+    pub inline fn vmPush(self: *State, v: Value) !void {
+        self.assertStringImmortal(v);
+        if (self.stack_top >= self.stack.len) return error.StackOverflow;
+        self.stack[self.stack_top] = v;
+        self.stack_top += 1;
+    }
+
+    pub inline fn vmPop(self: *State) !Value {
+        if (self.stack_top == 0) return error.StackUnderflow;
+        self.stack_top -= 1;
+        return self.stack[self.stack_top];
+    }
+
+    pub inline fn vmPeek(self: *State, dist: usize) !Value {
+        if (dist >= self.stack_top) return error.StackUnderflow;
+        return self.stack[self.stack_top - 1 - dist];
+    }
+
+    // Unchecked stack read for native dispatch — safe after arity has been verified.
+    pub inline fn vmTop(self: *State, dist: usize) Value {
+        return self.stack[self.stack_top - 1 - dist];
+    }
+
+    // Pop all arguments of a native call: argc user args plus the function object.
+    // Safe to call unchecked after arity has been verified.
+    pub inline fn vmPopArgs(self: *State, argc: u8) void {
+        self.stack_top -= @as(usize, argc) + 1;
+    }
+
+    pub fn vmByte(self: *State) !u8 {
+        if (self.ip >= chunk.codeLen()) return error.BytecodeOutOfBounds;
+        const b = chunk.codeByteAt(self.ip);
+        self.ip += 1;
+        return b;
+    }
+
+    pub fn vmShort(self: *State) !usize {
+        const hi: usize = try self.vmByte();
+        const lo: usize = try self.vmByte();
+        return (hi << 8) | lo;
+    }
+
+    pub fn vmInt(self: *State) !usize {
+        const b3: usize = try self.vmByte();
+        const b2: usize = try self.vmByte();
+        const b1: usize = try self.vmByte();
+        const b0: usize = try self.vmByte();
+        return (b3 << 24) | (b2 << 16) | (b1 << 8) | b0;
+    }
+
+    pub fn pushTempRoot(self: *State, v: Value) !void {
+        if (self.temp_root_top >= MaxTempRoots) return error.BadTempRootDiscipline;
+        self.temp_roots[self.temp_root_top] = v;
+        self.temp_root_top += 1;
+    }
+
+    pub fn popTempRoot(self: *State) void {
+        if (self.temp_root_top > 0) self.temp_root_top -= 1;
+    }
+
+    pub fn tempRootDepth(self: *State) usize {
+        return self.temp_root_top;
+    }
+
+    pub fn assertNoTempRoots(self: *State, comptime context: []const u8) void {
+        if (comptime builtin.mode != .Debug) return;
+        if (self.temp_root_top == 0) return;
+        std.debug.panic("temp root leak after {s}: depth={d}", .{ context, self.temp_root_top });
+    }
+
+    pub fn assertTempRootDepth(self: *State, expected: usize, comptime context: []const u8) void {
+        if (comptime builtin.mode != .Debug) return;
+        if (self.temp_root_top == expected) return;
+        std.debug.panic("temp root depth mismatch after {s}: expected {d}, found {d}", .{ context, expected, self.temp_root_top });
+    }
+
+    pub fn pushObjectTempRoots(self: *State, values: []const Value) !usize {
+        const base = self.temp_root_top;
+        for (values) |value| {
+            if (value == .object) try self.pushTempRoot(value);
+        }
+        return base;
+    }
+
+    pub fn restoreTempRoots(self: *State, base: usize) void {
+        self.temp_root_top = base;
+    }
+
+    pub fn vmConst(self: *State) !Value {
+        const idx = try self.vmShort();
+        if (idx >= chunk.constCount()) return error.InvalidChunkShape;
+        return chunk.constAt(idx) catch unreachable;
+    }
+
+    // ── .string immortality invariant debug check ───────────────────────────────
+
+    /// Debug-build tripwire for the `.string` immortality invariant (see the
+    /// Value doc comment in value.zig): panics if a `.string` points into a
+    /// known-volatile region (VM stack, fmt_scratch buffer). Conservative — it
+    /// cannot prove immortality, only reject the volatile ranges we know.
+    /// No-op in release builds. Called from vmPush so every value entering the
+    /// stack is screened.
+    pub fn assertStringImmortal(self: *State, v: Value) void {
+        if (builtin.mode != .Debug) return;
+        if (v != .string) return;
+        const s = v.string.bytes;
+        if (s.len == 0) return;
+        const ptr = @intFromPtr(s.ptr);
+
+        // 1. Reject pointers into the VM stack.
+        const stack = self.stack;
+        if (stack.len > 0) {
+            const stack_base = @intFromPtr(stack.ptr);
+            const stack_end = stack_base + stack.len * @sizeOf(Value);
+            if (ptr >= stack_base and ptr < stack_end) {
+                std.debug.panic(".string value points into VM stack: {x}..{x}\n", .{ ptr, ptr + s.len });
+            }
+        }
+
+        // 2. Reject pointers into the fmt_scratch buffer.
+        const scratch = &self.fmt_scratch;
+        const scratch_base = @intFromPtr(&scratch[0]);
+        const scratch_end = scratch_base + scratch.len;
+        if (ptr >= scratch_base and ptr < scratch_end) {
+            std.debug.panic(".string value points into fmt_scratch buffer: {x}..{x}\n", .{ ptr, ptr + s.len });
+        }
+    }
 };
 
 var g_default_state: State = .{};
@@ -149,180 +360,59 @@ pub fn activeState() *State {
     return g_state;
 }
 
-pub fn reset() void {
-    if (vmState().stack.len == 0 and vmState() == &g_default_state) {
-        _ = g_default_state.init(MaxStack, MaxFrames, cfg.max_defers, heap.HeapSize, vmState().allocator) catch {};
-    }
-    resetExec();
-    vmState().std_module = null;
-    vmState().host_checked = false;
-    vmState().host_caps = 0;
-    vmState().next_gc_objects = 256;
-    vmState().next_gc_heap_bytes = if (vmState().configured_heap_size > 0) vmState().configured_heap_size / 2 else heap.HeapSize / 2;
-    vmState().rune_cache_ptr = 0;
-    vmState().rune_cache_byte_len = 0;
-    vmState().rune_cache_rune_len = 0;
-    vmState().rune_cache_valid = false;
-    vmState().rune_cache_overflow = false;
-    vmState().gc_runs = 0;
-    vmState().gc_time_ns = 0;
-    vmState().alloc_object_calls = 0;
-    vmState().alloc_managed_slice_calls = 0;
-    vmState().alloc_managed_bytes_calls = 0;
-}
+pub fn reset() void { return g_state.reset(); }
 
-// Reset only execution state; preserve globals, heap, GC objects, and std_module.
-// Used by the REPL to run successive lines with shared state.
-pub fn resetExec() void {
-    vmState().stack_top = 0;
-    vmState().ip = 0;
-    vmState().frame_top = 0;
-    vmState().call_depth_target = null;
-    vmState().temp_root_top = 0;
-    vmState().defer_top = 0;
-    vmState().ops_budget_remaining = std.math.maxInt(u64);
-    vmState().panic_line = 0;
-    vmState().panic_col = 0;
-    vmState().panic_depth = 0;
-    vmState().is_panicking = false;
-    vmState().panic_value = .null;
-    vmState().recovered = false;
-    vmState().pending_panic_message = null;
-    vmState().has_pending_panic_value = false;
-    vmState().runtime_err_len = 0;
-}
+pub fn resetExec() void { return g_state.resetExec(); }
 
-pub fn setRuntimeErr(comptime fmt: []const u8, args: anytype) void {
-    const s = std.fmt.bufPrint(&vmState().runtime_err_buf, fmt, args) catch return;
-    vmState().runtime_err_len = @intCast(s.len);
-}
+pub fn setRuntimeErr(comptime fmt: []const u8, args: anytype) void { return g_state.setRuntimeErr(fmt, args); }
 
-pub fn runtimeErrMsg() []const u8 {
-    return vmState().runtime_err_buf[0..vmState().runtime_err_len];
-}
+pub fn runtimeErrMsg() []const u8 { return g_state.runtimeErrMsg(); }
 
-pub fn setPolicy(policy: Policy) void {
-    vmState().policy = policy;
-    vmState().ops_budget_remaining = policy.max_ops orelse std.math.maxInt(u64);
-}
+pub fn setPolicy(policy: Policy) void { return g_state.setPolicy(policy); }
 
-fn currentIpIdx() usize {
-    const len = chunk.codeLen();
-    if (len == 0) return 0;
-    return if (vmState().ip == 0) 0 else @min(vmState().ip - 1, len - 1);
-}
+fn currentIpIdx() usize { return g_state.currentIpIdx(); }
 
-pub fn currentLine() u32 {
-    return chunk.lineAt(currentIpIdx());
-}
-pub fn currentCol() u16 {
-    return chunk.colAt(currentIpIdx());
-}
+pub fn currentLine() u32 { return g_state.currentLine(); }
+pub fn currentCol() u16 { return g_state.currentCol(); }
 
-pub fn panicLine() u32 {
-    return vmState().panic_line;
-}
-pub fn panicCol() u16 {
-    return vmState().panic_col;
-}
-pub fn panicFrames() []const PanicFrame {
-    return vmState().panic_frames[0..vmState().panic_depth];
-}
+pub fn panicLine() u32 { return g_state.panicLine(); }
+pub fn panicCol() u16 { return g_state.panicCol(); }
+pub fn panicFrames() []const PanicFrame { return g_state.panicFrames(); }
 
-pub inline fn vmPush(v: Value) !void {
-    assertStringImmortal(v);
-    const st = vmState();
-    if (st.stack_top >= st.stack.len) return error.StackOverflow;
-    st.stack[st.stack_top] = v;
-    st.stack_top += 1;
-}
+pub inline fn vmPush(v: Value) !void { return g_state.vmPush(v); }
 
-pub inline fn vmPop() !Value {
-    if (vmState().stack_top == 0) return error.StackUnderflow;
-    vmState().stack_top -= 1;
-    return vmState().stack[vmState().stack_top];
-}
+pub inline fn vmPop() !Value { return g_state.vmPop(); }
 
-pub inline fn vmPeek(dist: usize) !Value {
-    if (dist >= vmState().stack_top) return error.StackUnderflow;
-    return vmState().stack[vmState().stack_top - 1 - dist];
-}
+pub inline fn vmPeek(dist: usize) !Value { return g_state.vmPeek(dist); }
 
 // Unchecked stack read for native dispatch — safe after arity has been verified.
-pub inline fn vmTop(dist: usize) Value {
-    return vmState().stack[vmState().stack_top - 1 - dist];
-}
+pub inline fn vmTop(dist: usize) Value { return g_state.vmTop(dist); }
 
 // Pop all arguments of a native call: argc user args plus the function object.
 // Safe to call unchecked after arity has been verified.
-pub inline fn vmPopArgs(argc: u8) void {
-    vmState().stack_top -= @as(usize, argc) + 1;
-}
+pub inline fn vmPopArgs(argc: u8) void { return g_state.vmPopArgs(argc); }
 
-pub fn vmByte() !u8 {
-    if (vmState().ip >= chunk.codeLen()) return error.BytecodeOutOfBounds;
-    const b = chunk.codeByteAt(vmState().ip);
-    vmState().ip += 1;
-    return b;
-}
+pub fn vmByte() !u8 { return g_state.vmByte(); }
 
-pub fn vmShort() !usize {
-    const hi: usize = try vmByte();
-    const lo: usize = try vmByte();
-    return (hi << 8) | lo;
-}
+pub fn vmShort() !usize { return g_state.vmShort(); }
 
-pub fn vmInt() !usize {
-    const b3: usize = try vmByte();
-    const b2: usize = try vmByte();
-    const b1: usize = try vmByte();
-    const b0: usize = try vmByte();
-    return (b3 << 24) | (b2 << 16) | (b1 << 8) | b0;
-}
+pub fn vmInt() !usize { return g_state.vmInt(); }
 
-pub fn pushTempRoot(v: Value) !void {
-    if (vmState().temp_root_top >= MaxTempRoots) return error.BadTempRootDiscipline;
-    vmState().temp_roots[vmState().temp_root_top] = v;
-    vmState().temp_root_top += 1;
-}
+pub fn pushTempRoot(v: Value) !void { return g_state.pushTempRoot(v); }
 
-pub fn popTempRoot() void {
-    if (vmState().temp_root_top > 0) vmState().temp_root_top -= 1;
-}
+pub fn popTempRoot() void { return g_state.popTempRoot(); }
 
-pub fn tempRootDepth() usize {
-    return vmState().temp_root_top;
-}
+pub fn tempRootDepth() usize { return g_state.tempRootDepth(); }
 
-pub fn assertNoTempRoots(comptime context: []const u8) void {
-    if (comptime builtin.mode != .Debug) return;
-    if (vmState().temp_root_top == 0) return;
-    std.debug.panic("temp root leak after {s}: depth={d}", .{ context, vmState().temp_root_top });
-}
+pub fn assertNoTempRoots(comptime context: []const u8) void { return g_state.assertNoTempRoots(context); }
 
-pub fn assertTempRootDepth(expected: usize, comptime context: []const u8) void {
-    if (comptime builtin.mode != .Debug) return;
-    if (vmState().temp_root_top == expected) return;
-    std.debug.panic("temp root depth mismatch after {s}: expected {d}, found {d}", .{ context, expected, vmState().temp_root_top });
-}
+pub fn assertTempRootDepth(expected: usize, comptime context: []const u8) void { return g_state.assertTempRootDepth(expected, context); }
 
-pub fn pushObjectTempRoots(values: []const Value) !usize {
-    const base = vmState().temp_root_top;
-    for (values) |value| {
-        if (value == .object) try pushTempRoot(value);
-    }
-    return base;
-}
+pub fn pushObjectTempRoots(values: []const Value) !usize { return g_state.pushObjectTempRoots(values); }
 
-pub fn restoreTempRoots(base: usize) void {
-    vmState().temp_root_top = base;
-}
+pub fn restoreTempRoots(base: usize) void { return g_state.restoreTempRoots(base); }
 
-pub fn vmConst() !Value {
-    const idx = try vmShort();
-    if (idx >= chunk.constCount()) return error.InvalidChunkShape;
-    return chunk.constAt(idx) catch unreachable;
-}
+pub fn vmConst() !Value { return g_state.vmConst(); }
 
 fn valToFloatIndex(v: Value) !f64 {
     const n: f64 = switch (v) {
@@ -463,36 +553,4 @@ pub fn asStringValue(v: Value) ![]const u8 {
     return error.TypeError;
 }
 
-// ── .string immortality invariant debug check ───────────────────────────────
-
-/// Debug-build tripwire for the `.string` immortality invariant (see the
-/// Value doc comment in value.zig): panics if a `.string` points into a
-/// known-volatile region (VM stack, fmt_scratch buffer). Conservative — it
-/// cannot prove immortality, only reject the volatile ranges we know.
-/// No-op in release builds. Called from vmPush so every value entering the
-/// stack is screened.
-pub fn assertStringImmortal(v: Value) void {
-    if (builtin.mode != .Debug) return;
-    if (v != .string) return;
-    const s = v.string.bytes;
-    if (s.len == 0) return;
-    const ptr = @intFromPtr(s.ptr);
-
-    // 1. Reject pointers into the VM stack.
-    const stack = vmState().stack;
-    if (stack.len > 0) {
-        const stack_base = @intFromPtr(stack.ptr);
-        const stack_end = stack_base + stack.len * @sizeOf(Value);
-        if (ptr >= stack_base and ptr < stack_end) {
-            std.debug.panic(".string value points into VM stack: {x}..{x}\n", .{ ptr, ptr + s.len });
-        }
-    }
-
-    // 2. Reject pointers into the fmt_scratch buffer.
-    const scratch = &vmState().fmt_scratch;
-    const scratch_base = @intFromPtr(&scratch[0]);
-    const scratch_end = scratch_base + scratch.len;
-    if (ptr >= scratch_base and ptr < scratch_end) {
-        std.debug.panic(".string value points into fmt_scratch buffer: {x}..{x}\n", .{ ptr, ptr + s.len });
-    }
-}
+pub fn assertStringImmortal(v: Value) void { return g_state.assertStringImmortal(v); }

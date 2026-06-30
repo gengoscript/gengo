@@ -772,6 +772,14 @@ pub const State = struct {
         self.last_quad_lt_jif_pos = null;
         self.last_close_upvalue_pos = null;
     }
+
+    pub fn constCount(self: *const State) usize { return self.const_count; }
+    pub fn codeByteAt(self: *const State, i: usize) u8 { return self.code[i]; }
+    pub fn lineAt(self: *const State, i: usize) u16 { return self.lines[i]; }
+    pub fn colAt(self: *const State, i: usize) u16 { return self.cols[i]; }
+    pub fn constAt(self: *const State, i: usize) !Value { if (i >= self.const_count) return error.BadConstantIndex; return self.consts[i]; }
+    pub fn decodeAt(self: *State, pos: usize) !DecodedInstruction { return chunk_decoder.decodeAt(self, pos); }
+    pub fn verify(self: *State) !void { return chunk_verifier.verify(self); }
 };
 
 var g_default_state: State = .{};
@@ -871,33 +879,13 @@ pub fn truncateTo(pos: usize) void { g_state.truncateTo(pos); }
 
 // ── VM/verifier-only functions (unchanged, use g_state directly) ──────────────
 
-pub fn constCount() usize {
-    return g_state.const_count;
-}
-
-pub fn codeByteAt(i: usize) u8 {
-    return g_state.code[i];
-}
-
-pub fn lineAt(i: usize) u16 {
-    return g_state.lines[i];
-}
-
-pub fn colAt(i: usize) u16 {
-    return g_state.cols[i];
-}
-
-pub fn constAt(i: usize) !Value {
-    if (i >= g_state.const_count) return error.BadConstantIndex;
-    return g_state.consts[i];
-}
+pub fn constCount() usize { return g_state.constCount(); }
+pub fn codeByteAt(i: usize) u8 { return g_state.codeByteAt(i); }
+pub fn lineAt(i: usize) u16 { return g_state.lineAt(i); }
+pub fn colAt(i: usize) u16 { return g_state.colAt(i); }
+pub fn constAt(i: usize) !Value { return g_state.constAt(i); }
 
 pub const DecodedInstruction = chunk_decoder.DecodedInstruction;
 
-pub fn decodeAt(pos: usize) !DecodedInstruction {
-    return chunk_decoder.decodeAt(g_state, pos);
-}
-
-pub fn verify() !void {
-    return chunk_verifier.verify(g_state);
-}
+pub fn decodeAt(pos: usize) !DecodedInstruction { return g_state.decodeAt(pos); }
+pub fn verify() !void { return g_state.verify(); }
