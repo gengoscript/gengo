@@ -8,6 +8,7 @@ const MapEntry = @import("../lang/value.zig").MapEntry;
 
 pub const HeapSize = cfg.heap_size_bytes;
 pub const MaxObjects = cfg.max_objects;
+pub const FragmentationInfo = struct { free_bytes: usize, largest_block: usize };
 comptime {
     if (MaxObjects > 65535) @compileError("max_objects must be <= 65535 (free-list indices are u16; 0xffff is the sentinel)");
 }
@@ -151,6 +152,660 @@ pub const State = struct {
     pub fn maxObjects(self: *const State) usize {
         return self.obj_pool.len;
     }
+
+    // ── Private helpers ────────────────────────────────────────────────────
+
+    fn classIndexFor(self: *State, n: usize) ?usize {
+        var i: usize = 0;
+        while (i < self.class_count) : (i += 1) {
+            if (n <= ClassSizes[i]) return i;
+        }
+        return null;
+    }
+
+    fn assertNotLive(self: *State, buf: []u8) void {
+        const std_ = @import("std");
+        const lo = @intFromPtr(buf.ptr);
+        const hi = lo + buf.len;
+        var i: usize = 0;
+        while (i < self.obj_pool.len) : (i += 1) {
+            if (!self.obj_live[i]) continue;
+            if (i == sweep_exclude_idx) continue; // the dead object being swept
+            const region: ?[]const u8 = switch (self.obj_pool[i]) {
+                .dyn_string => |ds| ds,
+                .string_builder => |sb| sb.buf,
+                .array_managed => |am| std_.mem.sliceAsBytes(am),
+                .map => |m| std_.mem.sliceAsBytes(m),
+                .map_managed => |mm| std_.mem.sliceAsBytes(mm),
+                .map_hashed => |mh| std_.mem.sliceAsBytes(mh.entries),
+                .struct_instance => |si| std_.mem.sliceAsBytes(si.fields),
+                .variant_value => |vv| std_.mem.sliceAsBytes(vv.arm_fields),
+                else => null,
+            };
+            if (region) |r| {
+                if (r.len == 0) continue;
+                const rlo = @intFromPtr(r.ptr);
+                const rhi = rlo + r.len;
+                if (lo < rhi and rlo < hi) {
+                    std_.debug.print(
+                        "VM integrity failure [CorruptedObjectHandle] gc_live={d}\n  freeing {x}..{x} overlaps live obj {d} ({s}) {x}..{x}\n",
+                        .{ self.obj_live_count, lo, hi, i, @tagName(self.obj_pool[i]), rlo, rhi },
+                    );
+                    @panic("VM integrity failure [CorruptedObjectHandle]");
+                }
+            }
+        }
+    }
+
+    fn takeFreeBlock(self: *State, ci: usize) ?[]u8 {
+        if (self.free_blocks[ci]) |head| {
+            const next_ptr = @as(*usize, @ptrCast(@alignCast(head))).*;
+            self.free_blocks[ci] = if (next_ptr == 0) null else @as(*u8, @ptrFromInt(next_ptr));
+            const blk = @as([*]u8, @ptrCast(head))[0..ClassSizes[ci]];
+            if (paranoiaOn()) self.assertNotLive(blk);
+            return blk;
+        }
+        return null;
+    }
+
+    fn splitLargerFreeBlock(self: *State, ci: usize) ?[]u8 {
+        var split_ci = ci + 1;
+        while (split_ci < self.class_count) : (split_ci += 1) {
+            if (self.free_blocks[split_ci]) |head| {
+                const next_ptr = @as(*usize, @ptrCast(@alignCast(head))).*;
+                self.free_blocks[split_ci] = if (next_ptr == 0) null else @as(*u8, @ptrFromInt(next_ptr));
+                // Split from split_ci down to ci, placing upper buddies in intermediate lists.
+                var cur_ci = split_ci;
+                var cur_ptr = @as([*]u8, @ptrCast(head));
+                while (cur_ci > ci) {
+                    cur_ci -= 1;
+                    const half = ClassSizes[cur_ci];
+                    const buddy = cur_ptr + half;
+                    const buddy_next = if (self.free_blocks[cur_ci]) |h| @intFromPtr(h) else 0;
+                    @as(*usize, @ptrCast(@alignCast(buddy))).* = buddy_next;
+                    self.free_blocks[cur_ci] = @ptrCast(buddy);
+                }
+                const blk = cur_ptr[0..ClassSizes[ci]];
+                if (paranoiaOn()) self.assertNotLive(blk);
+                return blk;
+            }
+        }
+        return null;
+    }
+
+    // Remove a block at target_addr from free list ci. Returns true if found.
+    fn removeFromFreeList(self: *State, ci: usize, target_addr: usize) bool {
+        var prev: ?*u8 = null;
+        var cur: ?*u8 = self.free_blocks[ci];
+        while (cur) |node| {
+            const next_val = @as(*usize, @ptrCast(@alignCast(node))).*;
+            const next_node: ?*u8 = if (next_val == 0) null else @as(*u8, @ptrFromInt(next_val));
+            if (@intFromPtr(node) == target_addr) {
+                if (prev) |p| {
+                    @as(*usize, @ptrCast(@alignCast(p))).* = next_val;
+                } else {
+                    self.free_blocks[ci] = next_node;
+                }
+                return true;
+            }
+            prev = node;
+            cur = next_node;
+        }
+        return false;
+    }
+
+    fn objectIndex(self: *State, ptr: *Object) ?usize {
+        if (self.obj_pool.len == 0) return null;
+        const base = @intFromPtr(self.obj_pool.ptr);
+        const p = @intFromPtr(ptr);
+        if (p < base) return null;
+        const diff = p - base;
+        const sz = @sizeOf(Object);
+        if (diff % sz != 0) return null;
+        const idx = diff / sz;
+        if (idx >= self.obj_pool.len) return null;
+        return idx;
+    }
+
+    fn addLargestBlocksToFreeList(self: *State, start_addr: usize, len: usize) void {
+        var off: usize = 0;
+        while (off < len) {
+            const remaining = len - off;
+            // Find the largest class that fits.
+            var ci = self.class_count - 1;
+            while (ci > 0 and ClassSizes[ci] > remaining) : (ci -= 1) {}
+            const class_size = ClassSizes[ci];
+            if (class_size > remaining) return;
+
+            const addr = start_addr + off;
+            const p = @as(*u8, @ptrFromInt(addr));
+            const next = if (self.free_blocks[ci]) |h| @intFromPtr(h) else 0;
+            @as(*usize, @ptrCast(@alignCast(p))).* = next;
+            self.free_blocks[ci] = p;
+            off += class_size;
+        }
+    }
+
+    // Return the managed block size (ClassSizes[ci]) for a raw byte count.
+    fn managedBlockSize(self: *State, byte_len: usize) usize {
+        if (byte_len == 0) return 0;
+        const ci = self.classIndexFor(byte_len) orelse return 0;
+        return ClassSizes[ci];
+    }
+
+    fn compactFillBlocks(self: *State, obj: *const Object, out: []CompactReloc) usize {
+        var n: usize = 0;
+        switch (obj.*) {
+            .dyn_string => |s| {
+                if (s.len > 0) {
+                    out[n] = .{ .old_addr = @intFromPtr(s.ptr), .block_size = self.managedBlockSize(s.len), .new_addr = 0 };
+                    n += 1;
+                }
+            },
+            .string_builder => |sb| {
+                if (sb.buf.len > 0) {
+                    out[n] = .{ .old_addr = @intFromPtr(sb.buf.ptr), .block_size = self.managedBlockSize(sb.buf.len), .new_addr = 0 };
+                    n += 1;
+                }
+            },
+            .array_managed => |a| {
+                if (a.len > 0) {
+                    out[n] = .{ .old_addr = @intFromPtr(a.ptr), .block_size = self.managedBlockSize(a.len * @sizeOf(Value)), .new_addr = 0 };
+                    n += 1;
+                }
+            },
+            .map => |m| {
+                if (m.len > 0) {
+                    out[n] = .{ .old_addr = @intFromPtr(m.ptr), .block_size = self.managedBlockSize(m.len * @sizeOf(MapEntry)), .new_addr = 0 };
+                    n += 1;
+                }
+            },
+            .map_managed => |m| {
+                if (m.len > 0) {
+                    out[n] = .{ .old_addr = @intFromPtr(m.ptr), .block_size = self.managedBlockSize(m.len * @sizeOf(MapEntry)), .new_addr = 0 };
+                    n += 1;
+                }
+            },
+            .map_hashed => |mh| {
+                if (mh.entries.len > 0) {
+                    out[n] = .{ .old_addr = @intFromPtr(mh.entries.ptr), .block_size = self.managedBlockSize(mh.entries.len * @sizeOf(MapEntry)), .new_addr = 0 };
+                    n += 1;
+                }
+                if (mh.buckets.len > 0) {
+                    out[n] = .{ .old_addr = @intFromPtr(mh.buckets.ptr), .block_size = self.managedBlockSize(mh.buckets.len * @sizeOf(i32)), .new_addr = 0 };
+                    n += 1;
+                }
+            },
+            .struct_instance => |si| {
+                if (si.fields.len > 0) {
+                    out[n] = .{ .old_addr = @intFromPtr(si.fields.ptr), .block_size = self.managedBlockSize(si.fields.len * @sizeOf(MapEntry)), .new_addr = 0 };
+                    n += 1;
+                }
+            },
+            .variant_value => |vv| {
+                if (vv.arm_fields.len > 0) {
+                    out[n] = .{ .old_addr = @intFromPtr(vv.arm_fields.ptr), .block_size = self.managedBlockSize(vv.arm_fields.len * @sizeOf(Value)), .new_addr = 0 };
+                    n += 1;
+                }
+                if (vv.shared_values.len > 0) {
+                    out[n] = .{ .old_addr = @intFromPtr(vv.shared_values.ptr), .block_size = self.managedBlockSize(vv.shared_values.len * @sizeOf(Value)), .new_addr = 0 };
+                    n += 1;
+                }
+            },
+            else => {},
+        }
+        return n;
+    }
+
+    // ── Public methods ─────────────────────────────────────────────────────
+
+    pub fn reset(self: *State) void {
+        if (self.obj_pool.len == 0 and self == &g_default_state) {
+            _ = g_default_state.init(HeapSize, MaxObjects, self.allocator) catch {};
+        }
+        self.compiler_bump = 0;
+        const align_mask: usize = ManagedAlign - 1;
+        var class_base = (self.compiler_end + align_mask) & ~align_mask;
+        for (0..self.class_count) |ci| {
+            self.class_bump[ci] = class_base;
+            class_base = self.class_end[ci];
+        }
+        self.overflow_bump = self.overflow_base;
+        var c: usize = 0;
+        while (c < ClassCount) : (c += 1) self.free_blocks[c] = null;
+        const max = self.obj_pool.len;
+        var i: usize = 0;
+        while (i < max) : (i += 1) {
+            self.obj_marked[i] = false;
+            self.obj_live[i] = false;
+            self.obj_next_free[i] = @intCast(i + 1);
+        }
+        if (max > 0) {
+            self.obj_next_free[max - 1] = 0xffff;
+        }
+        self.obj_free_head = 0;
+        self.obj_live_count = 0;
+    }
+
+    // Largest single managed allocation the active heap supports.
+    pub fn maxManagedAlloc(self: *State) usize {
+        return ClassSizes[self.class_count - 1];
+    }
+
+    // Returns true if allocating n bytes would expand the bump pointer (i.e., the
+    // slab free list for the class has no available block). Callers can use this
+    // to decide whether to run GC proactively before a large allocation.
+    pub fn wouldBump(self: *State, n: usize) bool {
+        if (n == 0) return false;
+        const ci = self.classIndexFor(n) orelse return false; // too large for slab → handled separately
+        return self.free_blocks[ci] == null;
+    }
+
+    pub fn bump(self: *State, comptime T: type, n: usize) ?[*]T {
+        const al: usize = @alignOf(T);
+        const mask: usize = al - 1;
+        var pos = (self.compiler_bump + mask) & ~mask;
+        const sz = @sizeOf(T) * n;
+        if (pos + sz <= self.compiler_end) {
+            self.compiler_bump = pos + sz;
+            return @as([*]T, @ptrCast(@alignCast(&self.heap[pos])));
+        }
+        // Dedicated compiler region exhausted — fall through to overflow.
+        pos = (self.overflow_bump + mask) & ~mask;
+        if (pos + sz > self.heap.len) return null;
+        self.overflow_bump = pos + sz;
+        return @as([*]T, @ptrCast(@alignCast(&self.heap[pos])));
+    }
+
+    pub fn allocBytesManaged(self: *State, n: usize) ?[]u8 {
+        if (n == 0) return &[_]u8{};
+        const ci = self.classIndexFor(n) orelse return null;
+        if (self.takeFreeBlock(ci)) |blk| return blk;
+        // Try bump from class-dedicated region. ClassSizes and bases are
+        // multiples of ManagedAlign so no alignment mask is needed.
+        const cpos = self.class_bump[ci];
+        if (cpos + ClassSizes[ci] <= self.class_end[ci]) {
+            self.class_bump[ci] = cpos + ClassSizes[ci];
+            return self.heap[cpos .. cpos + ClassSizes[ci]];
+        }
+        // Try overflow bump — shared space after all class regions. This is the
+        // sequential fallback that keeps small heaps working while the per-class
+        // regions provide the isolation guarantee for steady-state operation.
+        const mask: usize = ManagedAlign - 1;
+        const opos = (self.overflow_bump + mask) & ~mask;
+        if (opos + ClassSizes[ci] <= self.heap.len) {
+            self.overflow_bump = opos + ClassSizes[ci];
+            return self.heap[opos .. opos + ClassSizes[ci]];
+        }
+        // Bump exhausted: try buddy-splitting a larger free block.
+        // ClassSizes are exact powers of 2, so splitting is lossless.
+        if (self.splitLargerFreeBlock(ci)) |blk| return blk;
+
+        // Last resort: when enough bytes are already free but stranded across
+        // class lists, rebuild the free lists before reporting OOM.
+        const info = self.fragmentationInfo();
+        if (info.free_bytes >= ClassSizes[ci] and info.largest_block < ClassSizes[ci]) {
+            self.defragmentFreeLists();
+            if (self.takeFreeBlock(ci)) |blk| return blk;
+            if (self.splitLargerFreeBlock(ci)) |blk| return blk;
+        }
+        return null;
+    }
+
+    pub fn freeBytesManaged(self: *State, buf: []u8) void {
+        if (buf.len == 0) return;
+        if (paranoiaOn()) self.assertNotLive(buf);
+        const ci = self.classIndexFor(buf.len) orelse return;
+        const p_addr = @intFromPtr(buf.ptr);
+
+        // Coalesce: if an adjacent free block of the same class exists, merge them
+        // into a ci+1 block and recurse. Any two adjacent free blocks form a valid
+        // larger block regardless of how they were originally allocated.
+        if (ci + 1 < self.class_count) {
+            // Try upper buddy: block immediately after us.
+            const upper_addr = p_addr + ClassSizes[ci];
+            if (self.removeFromFreeList(ci, upper_addr)) {
+                const merged = @as([*]u8, @ptrCast(buf.ptr))[0..ClassSizes[ci + 1]];
+                self.freeBytesManaged(merged);
+                return;
+            }
+            // Try lower buddy: block immediately before us.
+            if (p_addr >= ClassSizes[ci]) {
+                const lower_addr = p_addr - ClassSizes[ci];
+                if (lower_addr >= @intFromPtr(self.heap.ptr) and self.removeFromFreeList(ci, lower_addr)) {
+                    const merged = @as([*]u8, @ptrFromInt(lower_addr))[0..ClassSizes[ci + 1]];
+                    self.freeBytesManaged(merged);
+                    return;
+                }
+            }
+        }
+
+        const p = @as(*u8, @ptrCast(buf.ptr));
+        const next = if (self.free_blocks[ci]) |h| @intFromPtr(h) else 0;
+        @as(*usize, @ptrCast(@alignCast(p))).* = next;
+        self.free_blocks[ci] = p;
+    }
+
+    pub fn allocManagedSlice(self: *State, comptime T: type, n: usize) ?[]T {
+        if (n == 0) return &[_]T{};
+        const need = @sizeOf(T) * n;
+        const bytes = self.allocBytesManaged(need) orelse return null;
+        const p = @as([*]T, @ptrCast(@alignCast(bytes.ptr)));
+        return p[0..n];
+    }
+
+    pub fn freeManagedSlice(self: *State, comptime T: type, s: []T) void {
+        if (s.len == 0) return;
+        const need = @sizeOf(T) * s.len;
+        const ci = self.classIndexFor(need) orelse return;
+        const block = @as([*]u8, @ptrCast(s.ptr))[0..ClassSizes[ci]];
+        self.freeBytesManaged(block);
+    }
+
+    pub fn allocObject(self: *State) ?*Object {
+        if (self.obj_free_head == 0xffff) return null;
+        const idx = self.obj_free_head;
+        self.obj_free_head = self.obj_next_free[idx];
+        self.obj_live[idx] = true;
+        self.obj_marked[idx] = false;
+        self.obj_live_count += 1;
+        return &self.obj_pool[idx];
+    }
+
+    // Returns the object pool index (0..maxObjects-1) or 0xFFFF if ptr is not in the pool.
+    pub fn objectPoolIndex(self: *State, ptr: *Object) u16 {
+        const idx = self.objectIndex(ptr) orelse return 0xFFFF;
+        return @intCast(idx);
+    }
+
+    // Returns a pointer to the object at the given pool index.
+    pub fn objectAt(self: *State, idx: u16) *Object {
+        return &self.obj_pool[idx];
+    }
+
+    pub fn markObject(self: *State, ptr: *Object) void {
+        const idx = self.objectIndex(ptr) orelse return;
+        if (!self.obj_live[idx]) return;
+        self.obj_marked[idx] = true;
+    }
+
+    pub fn isObjectMarked(self: *State, ptr: *Object) bool {
+        const idx = self.objectIndex(ptr) orelse return false;
+        return self.obj_live[idx] and self.obj_marked[idx];
+    }
+
+    pub fn isObjectLive(self: *State, ptr: *Object) bool {
+        const idx = self.objectIndex(ptr) orelse return false;
+        return self.obj_live[idx];
+    }
+
+    pub fn sweepObjects(self: *State) void {
+        const max = self.obj_pool.len;
+        var i: usize = 0;
+        while (i < max) : (i += 1) {
+            if (!self.obj_live[i]) continue;
+            if (self.obj_marked[i]) {
+                self.obj_marked[i] = false;
+                continue;
+            }
+            if (paranoiaOn()) sweep_exclude_idx = i;
+            switch (@as(ObjTag, self.obj_pool[i])) {
+                .dyn_string => self.freeBytesManaged(self.obj_pool[i].dyn_string),
+                .array_managed => self.freeManagedSlice(@import("../lang/value.zig").Value, self.obj_pool[i].array_managed),
+                .map_managed => self.freeManagedSlice(@import("../lang/value.zig").MapEntry, self.obj_pool[i].map_managed),
+                .map_hashed => {
+                    self.freeManagedSlice(@import("../lang/value.zig").MapEntry, self.obj_pool[i].map_hashed.entries);
+                    self.freeManagedSlice(i32, self.obj_pool[i].map_hashed.buckets);
+                },
+                .map => self.freeManagedSlice(@import("../lang/value.zig").MapEntry, self.obj_pool[i].map),
+                .struct_instance => self.freeManagedSlice(@import("../lang/value.zig").MapEntry, self.obj_pool[i].struct_instance.fields),
+                .string_builder => self.freeBytesManaged(self.obj_pool[i].string_builder.buf),
+                .string_view => {},
+                .variant_value => {
+                    const vv = self.obj_pool[i].variant_value;
+                    if (vv.arm_fields.len > 0) self.freeManagedSlice(@import("../lang/value.zig").Value, vv.arm_fields);
+                    if (vv.shared_values.len > 0) self.freeManagedSlice(@import("../lang/value.zig").Value, vv.shared_values);
+                },
+                else => {},
+            }
+            self.obj_live[i] = false;
+            self.obj_next_free[i] = self.obj_free_head;
+            self.obj_free_head = @intCast(i);
+            self.obj_live_count -= 1;
+        }
+    }
+
+    pub fn liveObjectCount(self: *State) usize {
+        return self.obj_live_count;
+    }
+
+    pub fn usedBytes(self: *State) usize {
+        var total = self.compiler_bump;
+        var prev_end = self.compiler_end;
+        for (0..self.class_count) |ci| {
+            const cb = self.class_bump[ci];
+            if (cb > prev_end) total += cb - prev_end;
+            prev_end = self.class_end[ci];
+        }
+        const ob = self.overflow_bump;
+        if (ob > prev_end) total += ob - prev_end;
+        return total;
+    }
+
+    // Returns total bytes sitting in free lists across all classes.
+    pub fn totalFreeListBytes(self: *State) usize {
+        var total: usize = 0;
+        for (0..self.class_count) |ci| {
+            var node = self.free_blocks[ci];
+            while (node) |n| {
+                total += ClassSizes[ci];
+                const next_ptr = @as(*usize, @ptrCast(@alignCast(n))).*;
+                node = if (next_ptr == 0) null else @as(*u8, @ptrFromInt(next_ptr));
+            }
+        }
+        return total;
+    }
+
+    // Returns total free bytes in free lists and the largest single free block.
+    pub fn fragmentationInfo(self: *State) FragmentationInfo {
+        var free_bytes: usize = 0;
+        var largest_block: usize = 0;
+        for (0..self.class_count) |ci| {
+            var depth: usize = 0;
+            var node = self.free_blocks[ci];
+            while (node) |n| {
+                depth += 1;
+                node = nextFreeBlock(n);
+            }
+            const bytes = depth * ClassSizes[ci];
+            free_bytes += bytes;
+            if (depth > 0 and ClassSizes[ci] > largest_block) {
+                largest_block = ClassSizes[ci];
+            }
+        }
+        return .{ .free_bytes = free_bytes, .largest_block = largest_block };
+    }
+
+    // Collects all free blocks from all classes, sorts by address, merges
+    // adjacent blocks, and rebuilds the free lists with the largest possible
+    // class blocks. This recovers fragmentation where adjacent free blocks of
+    // different classes prevent buddy coalescing.
+    pub fn defragmentFreeLists(self: *State) void {
+        // Count total free blocks across all classes.
+        var total: usize = 0;
+        for (0..self.class_count) |ci| {
+            var node = self.free_blocks[ci];
+            while (node) |n| {
+                total += 1;
+                node = nextFreeBlock(n);
+            }
+        }
+        if (total < 2) return;
+
+        // Collect all free blocks into a buffer.
+        const FreeBlock = struct { addr: usize, size: usize };
+        var stack_buf: [512]FreeBlock = undefined;
+        const heap_buf = if (total <= stack_buf.len)
+            null
+        else
+            self.allocator.alloc(FreeBlock, total) catch return;
+        defer if (heap_buf) |buf| self.allocator.free(buf);
+        const buf = if (heap_buf) |owned| owned else stack_buf[0..total];
+
+        var count: usize = 0;
+        for (0..self.class_count) |ci| {
+            var node = self.free_blocks[ci];
+            while (node) |n| {
+                buf[count] = .{ .addr = @intFromPtr(n), .size = ClassSizes[ci] };
+                count += 1;
+                node = nextFreeBlock(n);
+            }
+        }
+
+        // Clear free lists — we'll rebuild them from merged blocks.
+        for (0..self.class_count) |ci| {
+            self.free_blocks[ci] = null;
+        }
+
+        // Sort by address.
+        std.sort.block(FreeBlock, buf[0..count], {}, struct {
+            fn lessThan(_: void, a: FreeBlock, b: FreeBlock) bool {
+                return a.addr < b.addr;
+            }
+        }.lessThan);
+
+        // Merge adjacent blocks and add to free lists.
+        var i: usize = 0;
+        while (i < count) {
+            const cur_addr = buf[i].addr;
+            var cur_end = cur_addr + buf[i].size;
+
+            var j = i + 1;
+            while (j < count and buf[j].addr == cur_end) : (j += 1) {
+                cur_end += buf[j].size;
+            }
+
+            self.addLargestBlocksToFreeList(cur_addr, cur_end - cur_addr);
+            i = j;
+        }
+    }
+
+    // Move all live managed allocations to a contiguous region at managed_start,
+    // then reset the bump pointer so all freed space forms one contiguous block.
+    // Safe to call after sweepObjects(); must not be called while allocations are
+    // in flight. Pointer updates cover owning objects, sub-slice views, and
+    // iterator slice references.
+    pub fn compactManagedHeap(self: *State) void {
+        // Phase 1: count live managed blocks.
+        var count: usize = 0;
+        for (0..self.obj_pool.len) |i| {
+            if (self.obj_live[i]) count += compactCountBlocks(&self.obj_pool[i]);
+        }
+        if (count == 0) return;
+
+        // Phase 2: allocate reloc table (prefer stack).
+        var sbuf: [512]CompactReloc = undefined;
+        const dbuf: ?[]CompactReloc = if (count > sbuf.len)
+            (self.allocator.alloc(CompactReloc, count) catch return)
+        else
+            null;
+        defer if (dbuf) |b| self.allocator.free(b);
+        const relocs: []CompactReloc = if (dbuf) |b| b else sbuf[0..count];
+
+        // Phase 3: fill reloc table.
+        var ri: usize = 0;
+        for (0..self.obj_pool.len) |i| {
+            if (self.obj_live[i]) ri += self.compactFillBlocks(&self.obj_pool[i], relocs[ri..]);
+        }
+
+        // Phase 4: sort relocs by old address so we can copy in ascending order
+        // (guarantees new_addr[i] <= old_addr[i], making copyForwards safe).
+        std.sort.block(CompactReloc, relocs[0..count], {}, struct {
+            fn lt(_: void, a: CompactReloc, b: CompactReloc) bool {
+                return a.old_addr < b.old_addr;
+            }
+        }.lt);
+
+        // Phase 5: compute new addresses, packing to managed_start.
+        const heap_base = @intFromPtr(self.heap.ptr);
+        const align_mask: usize = ManagedAlign - 1;
+        const managed_start: usize = (self.compiler_end + align_mask) & ~align_mask;
+        var dest: usize = heap_base + managed_start;
+        for (relocs[0..count]) |*r| {
+            dest = (dest + align_mask) & ~align_mask;
+            r.new_addr = dest;
+            dest += r.block_size;
+        }
+
+        // Phase 6: copy blocks to new positions. new_addr[i] <= old_addr[i] always
+        // (proven by induction on sorted order), so copyForwards is safe even when
+        // source and destination ranges partially overlap.
+        for (relocs[0..count]) |r| {
+            if (r.new_addr == r.old_addr) continue;
+            const src: [*]const u8 = @ptrFromInt(r.old_addr);
+            const dst: [*]u8 = @ptrFromInt(r.new_addr);
+            std.mem.copyForwards(u8, dst[0..r.block_size], src[0..r.block_size]);
+        }
+
+        // Phase 7: update owning slice pointers and all derived view/iterator slices.
+        for (0..self.obj_pool.len) |i| {
+            if (self.obj_live[i]) compactUpdateObj(&self.obj_pool[i], relocs[0..count]);
+        }
+
+        // Phase 8: reset bump state. All class bumps are exhausted; the overflow
+        // bump starts right after the packed live data. Free lists are cleared
+        // because all free space is now contiguous at [dest..heap.len].
+        const dest_off = dest - heap_base;
+        for (0..self.class_count) |ci| {
+            self.class_bump[ci] = self.class_end[ci];
+            self.free_blocks[ci] = null;
+        }
+        self.overflow_bump = if (dest_off > self.overflow_base) dest_off else self.overflow_base;
+    }
+
+    // Writes a compact free-list summary: "ci=N:depth,..." for non-empty classes.
+    // buf must be large enough; returns the slice written.
+    pub fn freeListSummary(self: *State, buf: []u8) []u8 {
+        var pos: usize = 0;
+        var first = true;
+        for (0..self.class_count) |ci| {
+            var depth: usize = 0;
+            var node = self.free_blocks[ci];
+            while (node) |n| {
+                depth += 1;
+                const next_ptr = @as(*usize, @ptrCast(@alignCast(n))).*;
+                node = if (next_ptr == 0) null else @as(*u8, @ptrFromInt(next_ptr));
+            }
+            if (depth == 0) continue;
+            if (!first) {
+                if (pos < buf.len) { buf[pos] = ','; pos += 1; }
+            }
+            first = false;
+            // write "ci=N:depth"
+            const prefix = "ci=";
+            for (prefix) |c| { if (pos < buf.len) { buf[pos] = c; pos += 1; } }
+            // ci index as decimal
+            var tmp: [4]u8 = undefined;
+            var n: usize = ci;
+            var tlen: usize = 0;
+            if (n == 0) { tmp[0] = '0'; tlen = 1; } else {
+                while (n > 0) : (n /= 10) { tmp[tlen] = @intCast('0' + n % 10); tlen += 1; }
+                std.mem.reverse(u8, tmp[0..tlen]);
+            }
+            for (tmp[0..tlen]) |c| { if (pos < buf.len) { buf[pos] = c; pos += 1; } }
+            if (pos < buf.len) { buf[pos] = ':'; pos += 1; }
+            // depth as decimal
+            var d: usize = depth;
+            var dlen: usize = 0;
+            var dtmp: [8]u8 = undefined;
+            if (d == 0) { dtmp[0] = '0'; dlen = 1; } else {
+                while (d > 0) : (d /= 10) { dtmp[dlen] = @intCast('0' + d % 10); dlen += 1; }
+                std.mem.reverse(u8, dtmp[0..dlen]);
+            }
+            for (dtmp[0..dlen]) |c| { if (pos < buf.len) { buf[pos] = c; pos += 1; } }
+        }
+        return buf[0..pos];
+    }
 };
 
 var g_default_state: State = .{};
@@ -163,142 +818,67 @@ pub fn setActive(state: *State) void {
     g_state = state;
 }
 
-pub fn reset() void {
-    if (g_state.obj_pool.len == 0 and g_state == &g_default_state) {
-        _ = g_default_state.init(HeapSize, MaxObjects, g_state.allocator) catch {};
-    }
-    g_state.compiler_bump = 0;
-    const align_mask: usize = ManagedAlign - 1;
-    var class_base = (g_state.compiler_end + align_mask) & ~align_mask;
-    for (0..g_state.class_count) |ci| {
-        g_state.class_bump[ci] = class_base;
-        class_base = g_state.class_end[ci];
-    }
-    g_state.overflow_bump = g_state.overflow_base;
-    var c: usize = 0;
-    while (c < ClassCount) : (c += 1) g_state.free_blocks[c] = null;
-    const max = g_state.obj_pool.len;
-    var i: usize = 0;
-    while (i < max) : (i += 1) {
-        g_state.obj_marked[i] = false;
-        g_state.obj_live[i] = false;
-        g_state.obj_next_free[i] = @intCast(i + 1);
-    }
-    if (max > 0) {
-        g_state.obj_next_free[max - 1] = 0xffff;
-    }
-    g_state.obj_free_head = 0;
-    g_state.obj_live_count = 0;
-}
+pub fn activeState() *State { return g_state; }
+
+pub fn reset() void { g_state.reset(); }
 
 // Largest single managed allocation the active heap supports.
-pub fn maxManagedAlloc() usize {
-    return ClassSizes[g_state.class_count - 1];
-}
-
-fn classIndexFor(n: usize) ?usize {
-    var i: usize = 0;
-    while (i < g_state.class_count) : (i += 1) {
-        if (n <= ClassSizes[i]) return i;
-    }
-    return null;
-}
+pub fn maxManagedAlloc() usize { return g_state.maxManagedAlloc(); }
 
 // Returns true if allocating n bytes would expand the bump pointer (i.e., the
 // slab free list for the class has no available block). Callers can use this
 // to decide whether to run GC proactively before a large allocation.
-pub fn wouldBump(n: usize) bool {
-    if (n == 0) return false;
-    const ci = classIndexFor(n) orelse return false; // too large for slab → handled separately
-    return g_state.free_blocks[ci] == null;
-}
+pub fn wouldBump(n: usize) bool { return g_state.wouldBump(n); }
 
-pub fn bump(comptime T: type, n: usize) ?[*]T {
-    const al: usize = @alignOf(T);
-    const mask: usize = al - 1;
-    var pos = (g_state.compiler_bump + mask) & ~mask;
-    const sz = @sizeOf(T) * n;
-    if (pos + sz <= g_state.compiler_end) {
-        g_state.compiler_bump = pos + sz;
-        return @as([*]T, @ptrCast(@alignCast(&g_state.heap[pos])));
-    }
-    // Dedicated compiler region exhausted — fall through to overflow.
-    pos = (g_state.overflow_bump + mask) & ~mask;
-    if (pos + sz > g_state.heap.len) return null;
-    g_state.overflow_bump = pos + sz;
-    return @as([*]T, @ptrCast(@alignCast(&g_state.heap[pos])));
-}
+pub fn bump(comptime T: type, n: usize) ?[*]T { return g_state.bump(T, n); }
 
-fn takeFreeBlock(ci: usize) ?[]u8 {
-    if (g_state.free_blocks[ci]) |head| {
-        const next_ptr = @as(*usize, @ptrCast(@alignCast(head))).*;
-        g_state.free_blocks[ci] = if (next_ptr == 0) null else @as(*u8, @ptrFromInt(next_ptr));
-        const blk = @as([*]u8, @ptrCast(head))[0..ClassSizes[ci]];
-        if (paranoiaOn()) assertNotLive(blk);
-        return blk;
-    }
-    return null;
-}
+pub fn allocBytesManaged(n: usize) ?[]u8 { return g_state.allocBytesManaged(n); }
 
-fn splitLargerFreeBlock(ci: usize) ?[]u8 {
-    var split_ci = ci + 1;
-    while (split_ci < g_state.class_count) : (split_ci += 1) {
-        if (g_state.free_blocks[split_ci]) |head| {
-            const next_ptr = @as(*usize, @ptrCast(@alignCast(head))).*;
-            g_state.free_blocks[split_ci] = if (next_ptr == 0) null else @as(*u8, @ptrFromInt(next_ptr));
-            // Split from split_ci down to ci, placing upper buddies in intermediate lists.
-            var cur_ci = split_ci;
-            var cur_ptr = @as([*]u8, @ptrCast(head));
-            while (cur_ci > ci) {
-                cur_ci -= 1;
-                const half = ClassSizes[cur_ci];
-                const buddy = cur_ptr + half;
-                const buddy_next = if (g_state.free_blocks[cur_ci]) |h| @intFromPtr(h) else 0;
-                @as(*usize, @ptrCast(@alignCast(buddy))).* = buddy_next;
-                g_state.free_blocks[cur_ci] = @ptrCast(buddy);
-            }
-            const blk = cur_ptr[0..ClassSizes[ci]];
-            if (paranoiaOn()) assertNotLive(blk);
-            return blk;
-        }
-    }
-    return null;
-}
+pub fn freeBytesManaged(buf: []u8) void { g_state.freeBytesManaged(buf); }
 
-pub fn allocBytesManaged(n: usize) ?[]u8 {
-    if (n == 0) return &[_]u8{};
-    const ci = classIndexFor(n) orelse return null;
-    if (takeFreeBlock(ci)) |blk| return blk;
-    // Try bump from class-dedicated region. ClassSizes and bases are
-    // multiples of ManagedAlign so no alignment mask is needed.
-    const cpos = g_state.class_bump[ci];
-    if (cpos + ClassSizes[ci] <= g_state.class_end[ci]) {
-        g_state.class_bump[ci] = cpos + ClassSizes[ci];
-        return g_state.heap[cpos .. cpos + ClassSizes[ci]];
-    }
-    // Try overflow bump — shared space after all class regions. This is the
-    // sequential fallback that keeps small heaps working while the per-class
-    // regions provide the isolation guarantee for steady-state operation.
-    const mask: usize = ManagedAlign - 1;
-    const opos = (g_state.overflow_bump + mask) & ~mask;
-    if (opos + ClassSizes[ci] <= g_state.heap.len) {
-        g_state.overflow_bump = opos + ClassSizes[ci];
-        return g_state.heap[opos .. opos + ClassSizes[ci]];
-    }
-    // Bump exhausted: try buddy-splitting a larger free block.
-    // ClassSizes are exact powers of 2, so splitting is lossless.
-    if (splitLargerFreeBlock(ci)) |blk| return blk;
+pub fn allocManagedSlice(comptime T: type, n: usize) ?[]T { return g_state.allocManagedSlice(T, n); }
 
-    // Last resort: when enough bytes are already free but stranded across
-    // class lists, rebuild the free lists before reporting OOM.
-    const info = fragmentationInfo();
-    if (info.free_bytes >= ClassSizes[ci] and info.largest_block < ClassSizes[ci]) {
-        defragmentFreeLists();
-        if (takeFreeBlock(ci)) |blk| return blk;
-        if (splitLargerFreeBlock(ci)) |blk| return blk;
-    }
-    return null;
-}
+pub fn freeManagedSlice(comptime T: type, s: []T) void { g_state.freeManagedSlice(T, s); }
+
+pub fn allocObject() ?*Object { return g_state.allocObject(); }
+
+// Returns the object pool index (0..maxObjects-1) or 0xFFFF if ptr is not in the pool.
+pub fn objectPoolIndex(ptr: *Object) u16 { return g_state.objectPoolIndex(ptr); }
+
+// Returns a pointer to the object at the given pool index.
+pub fn objectAt(idx: u16) *Object { return g_state.objectAt(idx); }
+
+pub fn markObject(ptr: *Object) void { g_state.markObject(ptr); }
+
+pub fn isObjectMarked(ptr: *Object) bool { return g_state.isObjectMarked(ptr); }
+
+pub fn isObjectLive(ptr: *Object) bool { return g_state.isObjectLive(ptr); }
+
+pub fn sweepObjects() void { g_state.sweepObjects(); }
+
+pub fn liveObjectCount() usize { return g_state.liveObjectCount(); }
+
+pub fn usedBytes() usize { return g_state.usedBytes(); }
+
+// Returns total bytes sitting in free lists across all classes.
+pub fn totalFreeListBytes() usize { return g_state.totalFreeListBytes(); }
+
+// Returns total free bytes in free lists and the largest single free block.
+pub fn fragmentationInfo() FragmentationInfo { return g_state.fragmentationInfo(); }
+
+// Collects all free blocks from all classes, sorts by address, merges
+// adjacent blocks, and rebuilds the free lists with the largest possible
+// class blocks. This recovers fragmentation where adjacent free blocks of
+// different classes prevent buddy coalescing.
+pub fn defragmentFreeLists() void { g_state.defragmentFreeLists(); }
+
+// Move all live managed allocations to a contiguous region at managed_start,
+// then reset the bump pointer so all freed space forms one contiguous block.
+pub fn compactManagedHeap() void { g_state.compactManagedHeap(); }
+
+// Writes a compact free-list summary: "ci=N:depth,..." for non-empty classes.
+// buf must be large enough; returns the slice written.
+pub fn freeListSummary(buf: []u8) []u8 { return g_state.freeListSummary(buf); }
 
 // Debug tripwire. Enabled at compile time via -Dheap_paranoia=true, or at
 // runtime when the CLI sees GENGO_HEAP_PARANOIA=1.
@@ -312,336 +892,6 @@ fn paranoiaOn() bool {
 // exclude the dead object's own region from the overlap check (it still has
 // obj_live=true when freeBytesManaged is called on its backing).
 var sweep_exclude_idx: usize = 0xFFFF;
-
-fn assertNotLive(buf: []u8) void {
-    const std_ = @import("std");
-    const lo = @intFromPtr(buf.ptr);
-    const hi = lo + buf.len;
-    var i: usize = 0;
-    while (i < g_state.obj_pool.len) : (i += 1) {
-        if (!g_state.obj_live[i]) continue;
-        if (i == sweep_exclude_idx) continue; // the dead object being swept
-        const region: ?[]const u8 = switch (g_state.obj_pool[i]) {
-            .dyn_string => |ds| ds,
-            .string_builder => |sb| sb.buf,
-            .array_managed => |am| std_.mem.sliceAsBytes(am),
-            .map => |m| std_.mem.sliceAsBytes(m),
-            .map_managed => |mm| std_.mem.sliceAsBytes(mm),
-            .map_hashed => |mh| std_.mem.sliceAsBytes(mh.entries),
-            .struct_instance => |si| std_.mem.sliceAsBytes(si.fields),
-            .variant_value => |vv| std_.mem.sliceAsBytes(vv.arm_fields),
-            else => null,
-        };
-        if (region) |r| {
-            if (r.len == 0) continue;
-            const rlo = @intFromPtr(r.ptr);
-            const rhi = rlo + r.len;
-            if (lo < rhi and rlo < hi) {
-                std_.debug.print(
-                    "VM integrity failure [CorruptedObjectHandle] gc_live={d}\n  freeing {x}..{x} overlaps live obj {d} ({s}) {x}..{x}\n",
-                    .{ g_state.obj_live_count, lo, hi, i, @tagName(g_state.obj_pool[i]), rlo, rhi },
-                );
-                @panic("VM integrity failure [CorruptedObjectHandle]");
-            }
-        }
-    }
-}
-
-// Remove a block at target_addr from free list ci. Returns true if found.
-fn removeFromFreeList(ci: usize, target_addr: usize) bool {
-    var prev: ?*u8 = null;
-    var cur: ?*u8 = g_state.free_blocks[ci];
-    while (cur) |node| {
-        const next_val = @as(*usize, @ptrCast(@alignCast(node))).*;
-        const next_node: ?*u8 = if (next_val == 0) null else @as(*u8, @ptrFromInt(next_val));
-        if (@intFromPtr(node) == target_addr) {
-            if (prev) |p| {
-                @as(*usize, @ptrCast(@alignCast(p))).* = next_val;
-            } else {
-                g_state.free_blocks[ci] = next_node;
-            }
-            return true;
-        }
-        prev = node;
-        cur = next_node;
-    }
-    return false;
-}
-
-pub fn freeBytesManaged(buf: []u8) void {
-    if (buf.len == 0) return;
-    if (paranoiaOn()) assertNotLive(buf);
-    const ci = classIndexFor(buf.len) orelse return;
-    const p_addr = @intFromPtr(buf.ptr);
-
-    // Coalesce: if an adjacent free block of the same class exists, merge them
-    // into a ci+1 block and recurse. Any two adjacent free blocks form a valid
-    // larger block regardless of how they were originally allocated.
-    if (ci + 1 < g_state.class_count) {
-        // Try upper buddy: block immediately after us.
-        const upper_addr = p_addr + ClassSizes[ci];
-        if (removeFromFreeList(ci, upper_addr)) {
-            const merged = @as([*]u8, @ptrCast(buf.ptr))[0..ClassSizes[ci + 1]];
-            freeBytesManaged(merged);
-            return;
-        }
-        // Try lower buddy: block immediately before us.
-        if (p_addr >= ClassSizes[ci]) {
-            const lower_addr = p_addr - ClassSizes[ci];
-            if (lower_addr >= @intFromPtr(g_state.heap.ptr) and removeFromFreeList(ci, lower_addr)) {
-                const merged = @as([*]u8, @ptrFromInt(lower_addr))[0..ClassSizes[ci + 1]];
-                freeBytesManaged(merged);
-                return;
-            }
-        }
-    }
-
-    const p = @as(*u8, @ptrCast(buf.ptr));
-    const next = if (g_state.free_blocks[ci]) |h| @intFromPtr(h) else 0;
-    @as(*usize, @ptrCast(@alignCast(p))).* = next;
-    g_state.free_blocks[ci] = p;
-}
-
-pub fn allocManagedSlice(comptime T: type, n: usize) ?[]T {
-    if (n == 0) return &[_]T{};
-    const need = @sizeOf(T) * n;
-    const bytes = allocBytesManaged(need) orelse return null;
-    const p = @as([*]T, @ptrCast(@alignCast(bytes.ptr)));
-    return p[0..n];
-}
-
-pub fn freeManagedSlice(comptime T: type, s: []T) void {
-    if (s.len == 0) return;
-    const need = @sizeOf(T) * s.len;
-    const ci = classIndexFor(need) orelse return;
-    const block = @as([*]u8, @ptrCast(s.ptr))[0..ClassSizes[ci]];
-    freeBytesManaged(block);
-}
-
-pub fn allocObject() ?*Object {
-    if (g_state.obj_free_head == 0xffff) return null;
-    const idx = g_state.obj_free_head;
-    g_state.obj_free_head = g_state.obj_next_free[idx];
-    g_state.obj_live[idx] = true;
-    g_state.obj_marked[idx] = false;
-    g_state.obj_live_count += 1;
-    return &g_state.obj_pool[idx];
-}
-
-fn objectIndex(ptr: *Object) ?usize {
-    if (g_state.obj_pool.len == 0) return null;
-    const base = @intFromPtr(g_state.obj_pool.ptr);
-    const p = @intFromPtr(ptr);
-    if (p < base) return null;
-    const diff = p - base;
-    const sz = @sizeOf(Object);
-    if (diff % sz != 0) return null;
-    const idx = diff / sz;
-    if (idx >= g_state.obj_pool.len) return null;
-    return idx;
-}
-
-// Returns the object pool index (0..maxObjects-1) or 0xFFFF if ptr is not in the pool.
-pub fn objectPoolIndex(ptr: *Object) u16 {
-    const idx = objectIndex(ptr) orelse return 0xFFFF;
-    return @intCast(idx);
-}
-
-// Returns a pointer to the object at the given pool index.
-pub fn objectAt(idx: u16) *Object {
-    return &g_state.obj_pool[idx];
-}
-
-pub fn markObject(ptr: *Object) void {
-    const idx = objectIndex(ptr) orelse return;
-    if (!g_state.obj_live[idx]) return;
-    g_state.obj_marked[idx] = true;
-}
-
-pub fn isObjectMarked(ptr: *Object) bool {
-    const idx = objectIndex(ptr) orelse return false;
-    return g_state.obj_live[idx] and g_state.obj_marked[idx];
-}
-
-pub fn isObjectLive(ptr: *Object) bool {
-    const idx = objectIndex(ptr) orelse return false;
-    return g_state.obj_live[idx];
-}
-
-pub fn sweepObjects() void {
-    const max = g_state.obj_pool.len;
-    var i: usize = 0;
-    while (i < max) : (i += 1) {
-        if (!g_state.obj_live[i]) continue;
-        if (g_state.obj_marked[i]) {
-            g_state.obj_marked[i] = false;
-            continue;
-        }
-        if (paranoiaOn()) sweep_exclude_idx = i;
-        switch (@as(ObjTag, g_state.obj_pool[i])) {
-            .dyn_string => freeBytesManaged(g_state.obj_pool[i].dyn_string),
-            .array_managed => freeManagedSlice(@import("../lang/value.zig").Value, g_state.obj_pool[i].array_managed),
-            .map_managed => freeManagedSlice(@import("../lang/value.zig").MapEntry, g_state.obj_pool[i].map_managed),
-            .map_hashed => {
-                freeManagedSlice(@import("../lang/value.zig").MapEntry, g_state.obj_pool[i].map_hashed.entries);
-                freeManagedSlice(i32, g_state.obj_pool[i].map_hashed.buckets);
-            },
-            .map => freeManagedSlice(@import("../lang/value.zig").MapEntry, g_state.obj_pool[i].map),
-            .struct_instance => freeManagedSlice(@import("../lang/value.zig").MapEntry, g_state.obj_pool[i].struct_instance.fields),
-            .string_builder => freeBytesManaged(g_state.obj_pool[i].string_builder.buf),
-            .string_view => {},
-            .variant_value => {
-                const vv = g_state.obj_pool[i].variant_value;
-                if (vv.arm_fields.len > 0) freeManagedSlice(@import("../lang/value.zig").Value, vv.arm_fields);
-                if (vv.shared_values.len > 0) freeManagedSlice(@import("../lang/value.zig").Value, vv.shared_values);
-            },
-            else => {},
-        }
-        g_state.obj_live[i] = false;
-        g_state.obj_next_free[i] = g_state.obj_free_head;
-        g_state.obj_free_head = @intCast(i);
-        g_state.obj_live_count -= 1;
-    }
-}
-
-pub fn liveObjectCount() usize {
-    return g_state.obj_live_count;
-}
-
-pub fn usedBytes() usize {
-    var total = g_state.compiler_bump;
-    var prev_end = g_state.compiler_end;
-    for (0..g_state.class_count) |ci| {
-        const cb = g_state.class_bump[ci];
-        if (cb > prev_end) total += cb - prev_end;
-        prev_end = g_state.class_end[ci];
-    }
-    const ob = g_state.overflow_bump;
-    if (ob > prev_end) total += ob - prev_end;
-    return total;
-}
-
-// Returns total bytes sitting in free lists across all classes.
-pub fn totalFreeListBytes() usize {
-    var total: usize = 0;
-    for (0..g_state.class_count) |ci| {
-        var node = g_state.free_blocks[ci];
-        while (node) |n| {
-            total += ClassSizes[ci];
-            const next_ptr = @as(*usize, @ptrCast(@alignCast(n))).*;
-            node = if (next_ptr == 0) null else @as(*u8, @ptrFromInt(next_ptr));
-        }
-    }
-    return total;
-}
-
-fn nextFreeBlock(node: *u8) ?*u8 {
-    const next_ptr = @as(*usize, @ptrCast(@alignCast(node))).*;
-    return if (next_ptr == 0) null else @as(*u8, @ptrFromInt(next_ptr));
-}
-
-// Returns total free bytes in free lists and the largest single free block.
-pub fn fragmentationInfo() struct { free_bytes: usize, largest_block: usize } {
-    var free_bytes: usize = 0;
-    var largest_block: usize = 0;
-    for (0..g_state.class_count) |ci| {
-        var depth: usize = 0;
-        var node = g_state.free_blocks[ci];
-        while (node) |n| {
-            depth += 1;
-            node = nextFreeBlock(n);
-        }
-        const bytes = depth * ClassSizes[ci];
-        free_bytes += bytes;
-        if (depth > 0 and ClassSizes[ci] > largest_block) {
-            largest_block = ClassSizes[ci];
-        }
-    }
-    return .{ .free_bytes = free_bytes, .largest_block = largest_block };
-}
-
-// Collects all free blocks from all classes, sorts by address, merges
-// adjacent blocks, and rebuilds the free lists with the largest possible
-// class blocks. This recovers fragmentation where adjacent free blocks of
-// different classes prevent buddy coalescing.
-pub fn defragmentFreeLists() void {
-    // Count total free blocks across all classes.
-    var total: usize = 0;
-    for (0..g_state.class_count) |ci| {
-        var node = g_state.free_blocks[ci];
-        while (node) |n| {
-            total += 1;
-            node = nextFreeBlock(n);
-        }
-    }
-    if (total < 2) return;
-
-    // Collect all free blocks into a buffer.
-    const FreeBlock = struct { addr: usize, size: usize };
-    var stack_buf: [512]FreeBlock = undefined;
-    const heap_buf = if (total <= stack_buf.len)
-        null
-    else
-        g_state.allocator.alloc(FreeBlock, total) catch return;
-    defer if (heap_buf) |buf| g_state.allocator.free(buf);
-    const buf = if (heap_buf) |owned| owned else stack_buf[0..total];
-
-    var count: usize = 0;
-    for (0..g_state.class_count) |ci| {
-        var node = g_state.free_blocks[ci];
-        while (node) |n| {
-            buf[count] = .{ .addr = @intFromPtr(n), .size = ClassSizes[ci] };
-            count += 1;
-            node = nextFreeBlock(n);
-        }
-    }
-
-    // Clear free lists — we'll rebuild them from merged blocks.
-    for (0..g_state.class_count) |ci| {
-        g_state.free_blocks[ci] = null;
-    }
-
-    // Sort by address.
-    std.sort.block(FreeBlock, buf[0..count], {}, struct {
-        fn lessThan(_: void, a: FreeBlock, b: FreeBlock) bool {
-            return a.addr < b.addr;
-        }
-    }.lessThan);
-
-    // Merge adjacent blocks and add to free lists.
-    var i: usize = 0;
-    while (i < count) {
-        const cur_addr = buf[i].addr;
-        var cur_end = cur_addr + buf[i].size;
-
-        var j = i + 1;
-        while (j < count and buf[j].addr == cur_end) : (j += 1) {
-            cur_end += buf[j].size;
-        }
-
-        addLargestBlocksToFreeList(cur_addr, cur_end - cur_addr);
-        i = j;
-    }
-}
-
-fn addLargestBlocksToFreeList(start_addr: usize, len: usize) void {
-    var off: usize = 0;
-    while (off < len) {
-        const remaining = len - off;
-        // Find the largest class that fits.
-        var ci = g_state.class_count - 1;
-        while (ci > 0 and ClassSizes[ci] > remaining) : (ci -= 1) {}
-        const class_size = ClassSizes[ci];
-        if (class_size > remaining) return;
-
-        const addr = start_addr + off;
-        const p = @as(*u8, @ptrFromInt(addr));
-        const next = if (g_state.free_blocks[ci]) |h| @intFromPtr(h) else 0;
-        @as(*usize, @ptrCast(@alignCast(p))).* = next;
-        g_state.free_blocks[ci] = p;
-        off += class_size;
-    }
-}
 
 // ── Managed heap compaction ────────────────────────────────────────────────
 //
@@ -666,13 +916,6 @@ const CompactReloc = struct {
     block_size: usize,
     new_addr: usize,
 };
-
-// Return the managed block size (ClassSizes[ci]) for a raw byte count.
-fn managedBlockSize(byte_len: usize) usize {
-    if (byte_len == 0) return 0;
-    const ci = classIndexFor(byte_len) orelse return 0;
-    return ClassSizes[ci];
-}
 
 // Binary search: find the CompactReloc entry whose range [old_addr, old_addr+block_size)
 // contains `addr`. Returns the corresponding new address (with offset applied), or null.
@@ -711,70 +954,6 @@ fn compactCountBlocks(obj: *const Object) usize {
         },
         else => 0,
     };
-}
-
-fn compactFillBlocks(obj: *const Object, out: []CompactReloc) usize {
-    var n: usize = 0;
-    switch (obj.*) {
-        .dyn_string => |s| {
-            if (s.len > 0) {
-                out[n] = .{ .old_addr = @intFromPtr(s.ptr), .block_size = managedBlockSize(s.len), .new_addr = 0 };
-                n += 1;
-            }
-        },
-        .string_builder => |sb| {
-            if (sb.buf.len > 0) {
-                out[n] = .{ .old_addr = @intFromPtr(sb.buf.ptr), .block_size = managedBlockSize(sb.buf.len), .new_addr = 0 };
-                n += 1;
-            }
-        },
-        .array_managed => |a| {
-            if (a.len > 0) {
-                out[n] = .{ .old_addr = @intFromPtr(a.ptr), .block_size = managedBlockSize(a.len * @sizeOf(Value)), .new_addr = 0 };
-                n += 1;
-            }
-        },
-        .map => |m| {
-            if (m.len > 0) {
-                out[n] = .{ .old_addr = @intFromPtr(m.ptr), .block_size = managedBlockSize(m.len * @sizeOf(MapEntry)), .new_addr = 0 };
-                n += 1;
-            }
-        },
-        .map_managed => |m| {
-            if (m.len > 0) {
-                out[n] = .{ .old_addr = @intFromPtr(m.ptr), .block_size = managedBlockSize(m.len * @sizeOf(MapEntry)), .new_addr = 0 };
-                n += 1;
-            }
-        },
-        .map_hashed => |mh| {
-            if (mh.entries.len > 0) {
-                out[n] = .{ .old_addr = @intFromPtr(mh.entries.ptr), .block_size = managedBlockSize(mh.entries.len * @sizeOf(MapEntry)), .new_addr = 0 };
-                n += 1;
-            }
-            if (mh.buckets.len > 0) {
-                out[n] = .{ .old_addr = @intFromPtr(mh.buckets.ptr), .block_size = managedBlockSize(mh.buckets.len * @sizeOf(i32)), .new_addr = 0 };
-                n += 1;
-            }
-        },
-        .struct_instance => |si| {
-            if (si.fields.len > 0) {
-                out[n] = .{ .old_addr = @intFromPtr(si.fields.ptr), .block_size = managedBlockSize(si.fields.len * @sizeOf(MapEntry)), .new_addr = 0 };
-                n += 1;
-            }
-        },
-        .variant_value => |vv| {
-            if (vv.arm_fields.len > 0) {
-                out[n] = .{ .old_addr = @intFromPtr(vv.arm_fields.ptr), .block_size = managedBlockSize(vv.arm_fields.len * @sizeOf(Value)), .new_addr = 0 };
-                n += 1;
-            }
-            if (vv.shared_values.len > 0) {
-                out[n] = .{ .old_addr = @intFromPtr(vv.shared_values.ptr), .block_size = managedBlockSize(vv.shared_values.len * @sizeOf(Value)), .new_addr = 0 };
-                n += 1;
-            }
-        },
-        else => {},
-    }
-    return n;
 }
 
 fn compactUpdateObj(obj: *Object, relocs: []const CompactReloc) void {
@@ -859,119 +1038,7 @@ fn compactUpdateObj(obj: *Object, relocs: []const CompactReloc) void {
     }
 }
 
-// Move all live managed allocations to a contiguous region at managed_start,
-// then reset the bump pointer so all freed space forms one contiguous block.
-// Safe to call after sweepObjects(); must not be called while allocations are
-// in flight. Pointer updates cover owning objects, sub-slice views, and
-// iterator slice references.
-pub fn compactManagedHeap() void {
-    // Phase 1: count live managed blocks.
-    var count: usize = 0;
-    for (0..g_state.obj_pool.len) |i| {
-        if (g_state.obj_live[i]) count += compactCountBlocks(&g_state.obj_pool[i]);
-    }
-    if (count == 0) return;
-
-    // Phase 2: allocate reloc table (prefer stack).
-    var sbuf: [512]CompactReloc = undefined;
-    const dbuf: ?[]CompactReloc = if (count > sbuf.len)
-        (g_state.allocator.alloc(CompactReloc, count) catch return)
-    else
-        null;
-    defer if (dbuf) |b| g_state.allocator.free(b);
-    const relocs: []CompactReloc = if (dbuf) |b| b else sbuf[0..count];
-
-    // Phase 3: fill reloc table.
-    var ri: usize = 0;
-    for (0..g_state.obj_pool.len) |i| {
-        if (g_state.obj_live[i]) ri += compactFillBlocks(&g_state.obj_pool[i], relocs[ri..]);
-    }
-
-    // Phase 4: sort relocs by old address so we can copy in ascending order
-    // (guarantees new_addr[i] <= old_addr[i], making copyForwards safe).
-    std.sort.block(CompactReloc, relocs[0..count], {}, struct {
-        fn lt(_: void, a: CompactReloc, b: CompactReloc) bool {
-            return a.old_addr < b.old_addr;
-        }
-    }.lt);
-
-    // Phase 5: compute new addresses, packing to managed_start.
-    const heap_base = @intFromPtr(g_state.heap.ptr);
-    const align_mask: usize = ManagedAlign - 1;
-    const managed_start: usize = (g_state.compiler_end + align_mask) & ~align_mask;
-    var dest: usize = heap_base + managed_start;
-    for (relocs[0..count]) |*r| {
-        dest = (dest + align_mask) & ~align_mask;
-        r.new_addr = dest;
-        dest += r.block_size;
-    }
-
-    // Phase 6: copy blocks to new positions. new_addr[i] <= old_addr[i] always
-    // (proven by induction on sorted order), so copyForwards is safe even when
-    // source and destination ranges partially overlap.
-    for (relocs[0..count]) |r| {
-        if (r.new_addr == r.old_addr) continue;
-        const src: [*]const u8 = @ptrFromInt(r.old_addr);
-        const dst: [*]u8 = @ptrFromInt(r.new_addr);
-        std.mem.copyForwards(u8, dst[0..r.block_size], src[0..r.block_size]);
-    }
-
-    // Phase 7: update owning slice pointers and all derived view/iterator slices.
-    for (0..g_state.obj_pool.len) |i| {
-        if (g_state.obj_live[i]) compactUpdateObj(&g_state.obj_pool[i], relocs[0..count]);
-    }
-
-    // Phase 8: reset bump state. All class bumps are exhausted; the overflow
-    // bump starts right after the packed live data. Free lists are cleared
-    // because all free space is now contiguous at [dest..heap.len].
-    const dest_off = dest - heap_base;
-    for (0..g_state.class_count) |ci| {
-        g_state.class_bump[ci] = g_state.class_end[ci];
-        g_state.free_blocks[ci] = null;
-    }
-    g_state.overflow_bump = if (dest_off > g_state.overflow_base) dest_off else g_state.overflow_base;
-}
-
-// Writes a compact free-list summary: "ci=N:depth,..." for non-empty classes.
-// buf must be large enough; returns the slice written.
-pub fn freeListSummary(buf: []u8) []u8 {
-    var pos: usize = 0;
-    var first = true;
-    for (0..g_state.class_count) |ci| {
-        var depth: usize = 0;
-        var node = g_state.free_blocks[ci];
-        while (node) |n| {
-            depth += 1;
-            const next_ptr = @as(*usize, @ptrCast(@alignCast(n))).*;
-            node = if (next_ptr == 0) null else @as(*u8, @ptrFromInt(next_ptr));
-        }
-        if (depth == 0) continue;
-        if (!first) {
-            if (pos < buf.len) { buf[pos] = ','; pos += 1; }
-        }
-        first = false;
-        // write "ci=N:depth"
-        const prefix = "ci=";
-        for (prefix) |c| { if (pos < buf.len) { buf[pos] = c; pos += 1; } }
-        // ci index as decimal
-        var tmp: [4]u8 = undefined;
-        var n: usize = ci;
-        var tlen: usize = 0;
-        if (n == 0) { tmp[0] = '0'; tlen = 1; } else {
-            while (n > 0) : (n /= 10) { tmp[tlen] = @intCast('0' + n % 10); tlen += 1; }
-            std.mem.reverse(u8, tmp[0..tlen]);
-        }
-        for (tmp[0..tlen]) |c| { if (pos < buf.len) { buf[pos] = c; pos += 1; } }
-        if (pos < buf.len) { buf[pos] = ':'; pos += 1; }
-        // depth as decimal
-        var d: usize = depth;
-        var dlen: usize = 0;
-        var dtmp: [8]u8 = undefined;
-        if (d == 0) { dtmp[0] = '0'; dlen = 1; } else {
-            while (d > 0) : (d /= 10) { dtmp[dlen] = @intCast('0' + d % 10); dlen += 1; }
-            std.mem.reverse(u8, dtmp[0..dlen]);
-        }
-        for (dtmp[0..dlen]) |c| { if (pos < buf.len) { buf[pos] = c; pos += 1; } }
-    }
-    return buf[0..pos];
+fn nextFreeBlock(node: *u8) ?*u8 {
+    const next_ptr = @as(*usize, @ptrCast(@alignCast(node))).*;
+    return if (next_ptr == 0) null else @as(*u8, @ptrFromInt(next_ptr));
 }

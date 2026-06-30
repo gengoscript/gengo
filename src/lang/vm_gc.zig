@@ -12,6 +12,8 @@ const Object = @import("value.zig").Object;
 const MapEntry = @import("value.zig").MapEntry;
 const build_options = @import("build_options");
 
+const VMContext = vms.VMContext;
+
 pub fn monoNowNs() u64 {
     if (comptime builtin.os.tag != .wasi) {
         return 0;
@@ -26,10 +28,10 @@ pub fn monoNowNs() u64 {
 var mark_worklist: [cfg.max_objects]*Object = undefined;
 var mark_worklist_top: usize = 0;
 
-fn markObjectQueue(obj: *Object) void {
-    if (!heap.isObjectLive(obj)) return;
-    if (heap.isObjectMarked(obj)) return;
-    heap.markObject(obj);
+fn markObjectQueue(ctx: VMContext, obj: *Object) void {
+    if (!ctx.hs.isObjectLive(obj)) return;
+    if (ctx.hs.isObjectMarked(obj)) return;
+    ctx.hs.markObject(obj);
     if (mark_worklist_top >= mark_worklist.len) {
         vm_integrity.fatal(error.GCInvariantFailure);
     }
@@ -37,81 +39,81 @@ fn markObjectQueue(obj: *Object) void {
     mark_worklist_top += 1;
 }
 
-fn markValue(v: Value) void {
-    if (v == .object) markObjectQueue(v.object);
+fn markValue(ctx: VMContext, v: Value) void {
+    if (v == .object) markObjectQueue(ctx, v.object);
 }
 
-fn drainMarkQueue() void {
+fn drainMarkQueue(ctx: VMContext) void {
     while (mark_worklist_top > 0) {
         mark_worklist_top -= 1;
         const obj = mark_worklist[mark_worklist_top];
         switch (obj.*) {
             .array, .array_managed => {
-                for (vms.asArraySlice(obj) catch vm_integrity.fatal(error.GCInvariantFailure)) |v| markValue(v);
+                for (vms.asArraySlice(obj) catch vm_integrity.fatal(error.GCInvariantFailure)) |v| markValue(ctx, v);
             },
             .array_view => |av| {
-                if (heap.isObjectLive(av.source)) markObjectQueue(av.source);
+                if (ctx.hs.isObjectLive(av.source)) markObjectQueue(ctx, av.source);
             },
             .array_capacity => |ac| {
-                if (heap.isObjectLive(ac.backing)) markObjectQueue(ac.backing);
+                if (ctx.hs.isObjectLive(ac.backing)) markObjectQueue(ctx, ac.backing);
             },
             .map, .map_managed, .map_hashed => {
                 for (vms.asMapSlice(obj) catch vm_integrity.fatal(error.GCInvariantFailure)) |e| {
-                    markValue(e.key);
-                    markValue(e.value);
+                    markValue(ctx, e.key);
+                    markValue(ctx, e.value);
                 }
             },
             .closure => |cl| {
-                markObjectQueue(cl.func);
-                for (cl.upvalues) |uv| markObjectQueue(uv);
+                markObjectQueue(ctx, cl.func);
+                for (cl.upvalues) |uv| markObjectQueue(ctx, uv);
             },
-            .cell => |c| markValue(c.value),
+            .cell => |c| markValue(ctx, c.value),
             .struct_instance => |inst| {
-                markObjectQueue(inst.typ);
+                markObjectQueue(ctx, inst.typ);
                 for (inst.fields) |f| {
-                    markValue(f.key);
-                    markValue(f.value);
+                    markValue(ctx, f.key);
+                    markValue(ctx, f.value);
                 }
             },
             .named_value => |nv| {
-                markObjectQueue(nv.typ);
-                markValue(nv.value);
+                markObjectQueue(ctx, nv.typ);
+                markValue(ctx, nv.value);
             },
             .iterator => |it| {
-                if (it.source) |src| if (heap.isObjectLive(src)) markObjectQueue(src);
+                if (it.source) |src| if (ctx.hs.isObjectLive(src)) markObjectQueue(ctx, src);
                 switch (it.kind) {
                     .array => {
-                        for (it.array) |v| markValue(v);
+                        for (it.array) |v| markValue(ctx, v);
                     },
                     .map => {
                         for (it.map) |e| {
-                            markValue(e.key);
-                            markValue(e.value);
+                            markValue(ctx, e.key);
+                            markValue(ctx, e.value);
                         }
                     },
                     .string, .range => {},
                 }
             },
-            .enum_value => |ev| markObjectQueue(ev.typ),
+            .enum_value => |ev| markObjectQueue(ctx, ev.typ),
             .variant_type => {},
             .variant_value => |vv| {
-                markObjectQueue(vv.typ);
-                markValue(vv.payload);
-                for (vv.shared_values) |sv| markValue(sv);
-                for (vv.arm_fields) |af| markValue(af);
+                markObjectQueue(ctx, vv.typ);
+                markValue(ctx, vv.payload);
+                for (vv.shared_values) |sv| markValue(ctx, sv);
+                for (vv.arm_fields) |af| markValue(ctx, af);
             },
-            .variant_ctor => |vc| markObjectQueue(vc.typ),
-            .named_type_fn => |nf| markObjectQueue(nf.typ),
-            .enum_type_fn => |ef| markObjectQueue(ef.typ),
+            .variant_ctor => |vc| markObjectQueue(ctx, vc.typ),
+            .named_type_fn => |nf| markObjectQueue(ctx, nf.typ),
+            .enum_type_fn => |ef| markObjectQueue(ctx, ef.typ),
             .named_type => |nt| {
-                if (nt.parent_obj) |p| markObjectQueue(p);
-                if (nt.predicate) |p| markObjectQueue(p);
+                if (nt.parent_obj) |p| markObjectQueue(ctx, p);
+                if (nt.predicate) |p| markObjectQueue(ctx, p);
             },
             .enum_type => |et| {
-                if (et.parent) |p| markObjectQueue(p);
+                if (et.parent) |p| markObjectQueue(ctx, p);
             },
             .string_view => |sv| {
-                if (heap.isObjectLive(sv.source)) markObjectQueue(sv.source);
+                if (ctx.hs.isObjectLive(sv.source)) markObjectQueue(ctx, sv.source);
             },
             // No GC-traced children; backing bytes are freed by the sweep.
             .dyn_string, .function, .native_function, .host_module_function, .struct_type, .interface_type, .string_builder => {},
@@ -119,9 +121,9 @@ fn drainMarkQueue() void {
     }
 }
 
-fn gcCheckIntegrityPostSweep() void {
+fn gcCheckIntegrityPostSweep(ctx: VMContext) void {
     if (comptime builtin.mode != .Debug) return;
-    const gs = heap.g_state;
+    const gs = ctx.hs;
     const max = gs.obj_pool.len;
 
     // Every source-retaining view object must still point at a live source after sweep.
@@ -129,13 +131,13 @@ fn gcCheckIntegrityPostSweep() void {
         if (!live) continue;
         switch (obj.*) {
             .array_view => |av| {
-                if (!heap.isObjectLive(av.source)) {
+                if (!ctx.hs.isObjectLive(av.source)) {
                     std.debug.print("GC INTEGRITY: array_view.source (obj {d}) is dead after sweep\n", .{i});
                     vm_integrity.fatal(error.GCInvariantFailure);
                 }
             },
             .string_view => |sv| {
-                if (!heap.isObjectLive(sv.source)) {
+                if (!ctx.hs.isObjectLive(sv.source)) {
                     std.debug.print("GC INTEGRITY: string_view.source (obj {d}) is dead after sweep\n", .{i});
                     vm_integrity.fatal(error.GCInvariantFailure);
                 }
@@ -149,31 +151,32 @@ fn gcCheckIntegrityPostSweep() void {
 }
 
 pub fn collectGarbage() void {
+    const ctx = vms.VMContext.fromActive();
     const t0 = monoNowNs();
     mark_worklist_top = 0;
 
-    for (vms.vmState().stack[0..vms.vmState().stack_top]) |v| markValue(v);
+    for (ctx.vs.stack[0..ctx.vs.stack_top]) |v| markValue(ctx, v);
 
-    for (0..globals.len()) |i| markValue(globals.compactValue(i));
+    for (0..ctx.gs.len()) |i| markValue(ctx, ctx.gs.compactValue(i));
 
-    if (vms.vmState().std_module) |m| markObjectQueue(m);
+    if (ctx.vs.std_module) |m| markObjectQueue(ctx, m);
 
-    for (vms.vmState().temp_roots[0..vms.vmState().temp_root_top]) |v| markValue(v);
+    for (ctx.vs.temp_roots[0..ctx.vs.temp_root_top]) |v| markValue(ctx, v);
 
-    for (0..chunk.constCount()) |i| markValue(chunk.constAt(i) catch unreachable);
+    for (0..ctx.cs.constCount()) |i| markValue(ctx, ctx.cs.constAt(i) catch unreachable);
 
-    for (vms.vmState().defer_stack[0..vms.vmState().defer_top]) |v| markValue(v);
+    for (ctx.vs.defer_stack[0..ctx.vs.defer_top]) |v| markValue(ctx, v);
 
-    drainMarkQueue();
+    drainMarkQueue(ctx);
 
-    const marked_count = heap.liveObjectCount();
-    heap.sweepObjects();
-    gcCheckIntegrityPostSweep();
-    const swept_count = marked_count - heap.liveObjectCount();
+    const marked_count = ctx.hs.liveObjectCount();
+    ctx.hs.sweepObjects();
+    gcCheckIntegrityPostSweep(ctx);
+    const swept_count = marked_count - ctx.hs.liveObjectCount();
     vmperf.countGCSweep(marked_count, swept_count);
     const t1 = monoNowNs();
-    vms.vmState().gc_runs += 1;
-    if (t1 > t0) vms.vmState().gc_time_ns += @intCast(t1 - t0);
+    ctx.vs.gc_runs += 1;
+    if (t1 > t0) ctx.vs.gc_time_ns += @intCast(t1 - t0);
 }
 
 fn nextGcObjects(live: usize) usize {
@@ -192,107 +195,111 @@ fn gcStress() bool {
 }
 
 pub fn vmAllocObject() !*Object {
+    const ctx = vms.VMContext.fromActive();
     if (gcStress()) collectGarbage();
-    if (heap.liveObjectCount() >= vms.vmState().next_gc_objects) {
+    if (ctx.hs.liveObjectCount() >= ctx.vs.next_gc_objects) {
         collectGarbage();
-        vms.vmState().next_gc_objects = nextGcObjects(heap.liveObjectCount());
+        ctx.vs.next_gc_objects = nextGcObjects(ctx.hs.liveObjectCount());
     }
-    if (heap.allocObject()) |o| {
-        vms.vmState().alloc_object_calls += 1;
+    if (ctx.hs.allocObject()) |o| {
+        ctx.vs.alloc_object_calls += 1;
         return o;
     }
     collectGarbage();
-    vms.vmState().next_gc_objects = nextGcObjects(heap.liveObjectCount());
-    if (heap.allocObject()) |o| {
-        vms.vmState().alloc_object_calls += 1;
+    ctx.vs.next_gc_objects = nextGcObjects(ctx.hs.liveObjectCount());
+    if (ctx.hs.allocObject()) |o| {
+        ctx.vs.alloc_object_calls += 1;
         return o;
     }
     return error.OutOfMemory;
 }
 
-pub fn vmAllocManagedSlice(comptime T: type, n: usize) ![]T {
-    if (gcStress()) collectGarbage();
-    if (@sizeOf(T) * n > heap.maxManagedAlloc()) {
-        vms.setRuntimeErr("allocation of {d} bytes exceeds this heap's largest block ({d} bytes); configure a larger heap", .{ @sizeOf(T) * n, heap.maxManagedAlloc() });
-        return error.AllocationTooLarge;
-    }
-    if (heap.usedBytes() >= vms.vmState().next_gc_heap_bytes) {
-        collectGarbage();
-        vms.vmState().next_gc_heap_bytes = gcStepThreshold(heap.usedBytes());
-    }
-    if (heap.wouldBump(@sizeOf(T) * n) and heap.usedBytes() * 2 >= heap.g_state.heap.len) {
-        collectGarbage();
-        vms.vmState().next_gc_heap_bytes = gcStepThreshold(heap.usedBytes());
-    }
-    if (heap.allocManagedSlice(T, n)) |s| {
-        vms.vmState().alloc_managed_slice_calls += 1;
-        return s;
-    }
-    collectGarbage();
-    vms.vmState().next_gc_heap_bytes = gcStepThreshold(heap.usedBytes());
-    if (heap.allocManagedSlice(T, n)) |s| {
-        vms.vmState().alloc_managed_slice_calls += 1;
-        return s;
-    }
-    heap.compactManagedHeap();
-    if (heap.allocManagedSlice(T, n)) |s| {
-        vms.vmState().alloc_managed_slice_calls += 1;
-        return s;
-    }
-    return error.OutOfMemory;
-}
-
-fn gcStepThreshold(used: usize) usize {
+fn gcStepThreshold(ctx: VMContext, used: usize) usize {
     // Shrink the step as the heap fills so GC keeps firing even when the bump
     // pointer is near the top. HeapSize/4 at low usage, HeapSize/16 at >75%.
-    const sz = heap.g_state.heap.len;
+    const sz = ctx.hs.heap.len;
     const step = if (used * 4 > sz * 3) sz / 16 else sz / 4;
     const next = used + step;
     return if (next >= sz) sz - sz / 16 else next;
 }
 
-pub fn vmAllocManagedBytes(n: usize) ![]u8 {
+pub fn vmAllocManagedSlice(comptime T: type, n: usize) ![]T {
+    const ctx = vms.VMContext.fromActive();
     if (gcStress()) collectGarbage();
-    if (n > heap.maxManagedAlloc()) {
-        vms.setRuntimeErr("allocation of {d} bytes exceeds this heap's largest block ({d} bytes); configure a larger heap", .{ n, heap.maxManagedAlloc() });
+    if (@sizeOf(T) * n > ctx.hs.maxManagedAlloc()) {
+        ctx.vs.setRuntimeErr("allocation of {d} bytes exceeds this heap's largest block ({d} bytes); configure a larger heap", .{ @sizeOf(T) * n, ctx.hs.maxManagedAlloc() });
         return error.AllocationTooLarge;
     }
-    if (heap.usedBytes() >= vms.vmState().next_gc_heap_bytes) {
+    if (ctx.hs.usedBytes() >= ctx.vs.next_gc_heap_bytes) {
         collectGarbage();
-        vms.vmState().next_gc_heap_bytes = gcStepThreshold(heap.usedBytes());
+        ctx.vs.next_gc_heap_bytes = gcStepThreshold(ctx, ctx.hs.usedBytes());
+    }
+    if (ctx.hs.wouldBump(@sizeOf(T) * n) and ctx.hs.usedBytes() * 2 >= ctx.hs.heap.len) {
+        collectGarbage();
+        ctx.vs.next_gc_heap_bytes = gcStepThreshold(ctx, ctx.hs.usedBytes());
+    }
+    if (ctx.hs.allocManagedSlice(T, n)) |s| {
+        ctx.vs.alloc_managed_slice_calls += 1;
+        return s;
+    }
+    collectGarbage();
+    ctx.vs.next_gc_heap_bytes = gcStepThreshold(ctx, ctx.hs.usedBytes());
+    if (ctx.hs.allocManagedSlice(T, n)) |s| {
+        ctx.vs.alloc_managed_slice_calls += 1;
+        return s;
+    }
+    ctx.hs.compactManagedHeap();
+    if (ctx.hs.allocManagedSlice(T, n)) |s| {
+        ctx.vs.alloc_managed_slice_calls += 1;
+        return s;
+    }
+    return error.OutOfMemory;
+}
+
+pub fn vmAllocManagedBytes(n: usize) ![]u8 {
+    const ctx = vms.VMContext.fromActive();
+    if (gcStress()) collectGarbage();
+    if (n > ctx.hs.maxManagedAlloc()) {
+        ctx.vs.setRuntimeErr("allocation of {d} bytes exceeds this heap's largest block ({d} bytes); configure a larger heap", .{ n, ctx.hs.maxManagedAlloc() });
+        return error.AllocationTooLarge;
+    }
+    if (ctx.hs.usedBytes() >= ctx.vs.next_gc_heap_bytes) {
+        collectGarbage();
+        ctx.vs.next_gc_heap_bytes = gcStepThreshold(ctx, ctx.hs.usedBytes());
     }
     // Proactive GC: when the free list for this size class is empty and the
     // heap is over 50% full, collect before bumping. Prevents fragmentation-
     // induced OOM where small freed blocks fill their class free lists but
     // the needed class has no free blocks and the bump is exhausted.
-    if (heap.wouldBump(n) and heap.usedBytes() * 2 >= heap.g_state.heap.len) {
+    if (ctx.hs.wouldBump(n) and ctx.hs.usedBytes() * 2 >= ctx.hs.heap.len) {
         collectGarbage();
-        vms.vmState().next_gc_heap_bytes = gcStepThreshold(heap.usedBytes());
+        ctx.vs.next_gc_heap_bytes = gcStepThreshold(ctx, ctx.hs.usedBytes());
     }
-    if (heap.allocBytesManaged(n)) |s| {
-        vms.vmState().alloc_managed_bytes_calls += 1;
+    if (ctx.hs.allocBytesManaged(n)) |s| {
+        ctx.vs.alloc_managed_bytes_calls += 1;
         return s;
     }
     collectGarbage();
-    vms.vmState().next_gc_heap_bytes = gcStepThreshold(heap.usedBytes());
-    if (heap.allocBytesManaged(n)) |s| {
-        vms.vmState().alloc_managed_bytes_calls += 1;
+    ctx.vs.next_gc_heap_bytes = gcStepThreshold(ctx, ctx.hs.usedBytes());
+    if (ctx.hs.allocBytesManaged(n)) |s| {
+        ctx.vs.alloc_managed_bytes_calls += 1;
         return s;
     }
     // Last resort: compact live managed data into a contiguous region so that
     // fragmentation caused by live objects between freed blocks is eliminated.
-    heap.compactManagedHeap();
-    if (heap.allocBytesManaged(n)) |s| {
-        vms.vmState().alloc_managed_bytes_calls += 1;
+    ctx.hs.compactManagedHeap();
+    if (ctx.hs.allocBytesManaged(n)) |s| {
+        ctx.vs.alloc_managed_bytes_calls += 1;
         return s;
     }
     return error.OutOfMemory;
 }
 
 pub fn allocTempRooted(comptime safeInit: Object) !*Object {
+    const ctx = vms.VMContext.fromActive();
     const obj = try vmAllocObject();
     obj.* = safeInit;
-    try vms.pushTempRoot(.{ .object = obj });
+    try ctx.vs.pushTempRoot(.{ .object = obj });
     return obj;
 }
 
@@ -329,8 +336,9 @@ pub fn allocTempRootedManagedMap(len: usize) !TempRootedManagedMap {
 }
 
 pub fn makeDynString(s: []const u8) !Value {
+    const ctx = vms.VMContext.fromActive();
     const obj = try allocTempRooted(.{ .dyn_string = &[_]u8{} });
-    defer vms.popTempRoot();
+    defer ctx.vs.popTempRoot();
     const buf = try vmAllocManagedBytes(s.len);
     @memcpy(buf[0..s.len], s);
     obj.* = .{ .dyn_string = buf[0..s.len] };
@@ -338,8 +346,9 @@ pub fn makeDynString(s: []const u8) !Value {
 }
 
 pub fn concatDynString(a: []const u8, b: []const u8) !Value {
+    const ctx = vms.VMContext.fromActive();
     const obj = try allocTempRooted(.{ .dyn_string = &[_]u8{} });
-    defer vms.popTempRoot();
+    defer ctx.vs.popTempRoot();
     const total = a.len +% b.len;
     if (total < a.len) return error.OutOfMemory;
     const buf = try vmAllocManagedBytes(total);
