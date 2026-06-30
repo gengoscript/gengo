@@ -456,7 +456,7 @@ var _prop_ctx: u8 = 0;
 
 fn runAssert(src: []const u8, label: []const u8) void {
     resetAll();
-    vmnative.installStdGlobal() catch {};
+    vmnative.installStdGlobal(globals.activeState()) catch {};
     var c = Compiler.init(src, .{
         .module_ctx = &_prop_ctx,
         .resolve_import = propStdResolver,

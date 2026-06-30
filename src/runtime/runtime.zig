@@ -341,9 +341,9 @@ pub const Runtime = struct {
         defer self.assertNoTempRootLeaks("Runtime.compileAndInstall");
         try self.compileOnly(src, path, provider);
         vm.setPolicy(self.policy);
-        try vmnative.installStdGlobal();
-        try vmnative.installHostModules(self.host_modules);
-        try vmnative.installCapabilityModules(self.capabilityModules());
+        try vmnative.installStdGlobal(&self.globals_state);
+        try vmnative.installHostModules(&self.globals_state, self.host_modules);
+        try vmnative.installCapabilityModules(&self.globals_state, self.capabilityModules());
     }
 
     pub fn runPathWithProvider(self: *Runtime, src: []const u8, path: []const u8, provider: module_compile.SourceProvider, test_mode: bool) !void {
@@ -369,9 +369,9 @@ pub const Runtime = struct {
         vm.setPolicy(self.policy);
         try self.compileProgram(src, path, provider, test_mode);
 
-        try vmnative.installStdGlobal();
-        try vmnative.installHostModules(self.host_modules);
-        try vmnative.installCapabilityModules(self.capabilityModules());
+        try vmnative.installStdGlobal(&self.globals_state);
+        try vmnative.installHostModules(&self.globals_state, self.host_modules);
+        try vmnative.installCapabilityModules(&self.globals_state, self.capabilityModules());
         vm.run() catch |err| {
             self.last_runtime_line = vm.panicLine();
             self.last_runtime_col = vm.panicCol();
@@ -490,9 +490,9 @@ pub const Runtime = struct {
 
         try self.persistReplCompilerState(&compiler);
 
-        try vmnative.installStdGlobal();
-        try vmnative.installHostModules(self.host_modules);
-        try vmnative.installCapabilityModules(repl_caps);
+        try vmnative.installStdGlobal(&self.globals_state);
+        try vmnative.installHostModules(&self.globals_state, self.host_modules);
+        try vmnative.installCapabilityModules(&self.globals_state, repl_caps);
         vm.run() catch |err| {
             self.captureRuntimeError();
             return err;
