@@ -210,8 +210,8 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
     }
 }
 
-pub fn registerResponseType() !void {
-    if (globals.has(ResponseTypeQualifiedName)) return;
+pub fn registerResponseType(gs: *globals.State) !void {
+    if (gs.has(ResponseTypeQualifiedName)) return;
 
     const any_alts = heap.bump(FieldTypeAlt, 1) orelse return error.OutOfMemory;
     any_alts[0] = .{ .typ = .any };
@@ -232,5 +232,5 @@ pub fn registerResponseType() !void {
         .fields = field_specs,
     } };
 
-    try globals.def(ResponseTypeQualifiedName, .{ .object = typ_obj });
+    try gs.def(ResponseTypeQualifiedName, .{ .object = typ_obj });
 }

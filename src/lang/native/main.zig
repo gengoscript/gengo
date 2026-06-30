@@ -434,10 +434,10 @@ pub fn buildStdModule() !*Object {
     return std_obj;
 }
 
-pub fn installStdGlobal() !void {
-    if (globals.has(module_compile.StdModuleGlobalName)) return;
+pub fn installStdGlobal(gs: *globals.State) !void {
+    if (gs.has(module_compile.StdModuleGlobalName)) return;
     const std_obj = try buildStdModule();
-    try globals.def(module_compile.StdModuleGlobalName, .{ .object = std_obj });
+    try gs.def(module_compile.StdModuleGlobalName, .{ .object = std_obj });
     // Register leaf-node globals for direct-call optimization.
     // Each "module:std.{ns}.{func}" global allows the compiler to emit a single
     // get_global instead of get_global "module:std" + get_field chain + call.
@@ -459,7 +459,7 @@ pub fn installStdGlobal() !void {
                     @memcpy(gbuf[prefix.len + 1 .. prefix.len + 1 + ns_name.len], ns_name);
                     gbuf[prefix.len + 1 + ns_name.len] = '.';
                     @memcpy(gbuf[prefix.len + 2 + ns_name.len .. needed], fe_key);
-                    if (!globals.has(gbuf)) try globals.def(gbuf, fe.value);
+                    if (!gs.has(gbuf)) try gs.def(gbuf, fe.value);
                 }
             } else {
                 const needed = prefix.len + 1 + top_key.len;
@@ -467,22 +467,22 @@ pub fn installStdGlobal() !void {
                 @memcpy(gbuf[0..prefix.len], prefix);
                 gbuf[prefix.len] = '.';
                 @memcpy(gbuf[prefix.len + 1 .. needed], top_key);
-                if (!globals.has(gbuf)) try globals.def(gbuf, ns_val);
+                if (!gs.has(gbuf)) try gs.def(gbuf, ns_val);
             }
         }
     }
     {
         const exec_buf = (heap.bump(u8, 64) orelse return error.OutOfMemory)[0..64];
         const exec_key = std.fmt.bufPrint(exec_buf, "{s}.{s}", .{ TemplateTypeQualifiedName, "execute" }) catch return error.OutOfMemory;
-        if (!globals.has(exec_key)) {
+        if (!gs.has(exec_key)) {
             const exec_native = try makeNative(.template_execute, 2);
-            try globals.def(exec_key, exec_native);
+            try gs.def(exec_key, exec_native);
         }
         const af_buf = (heap.bump(u8, 64) orelse return error.OutOfMemory)[0..64];
         const af_key = std.fmt.bufPrint(af_buf, "{s}.{s}", .{ TemplateTypeQualifiedName, "add_func" }) catch return error.OutOfMemory;
-        if (!globals.has(af_key)) {
+        if (!gs.has(af_key)) {
             const af_native = try makeNative(.template_add_func, 3);
-            try globals.def(af_key, af_native);
+            try gs.def(af_key, af_native);
         }
     }
     {
@@ -511,9 +511,9 @@ pub fn installStdGlobal() !void {
             @memcpy(kbuf[0..TimeTypeQualifiedName.len], TimeTypeQualifiedName);
             kbuf[TimeTypeQualifiedName.len] = '.';
             @memcpy(kbuf[TimeTypeQualifiedName.len + 1 .. needed], m.name);
-            if (!globals.has(kbuf)) {
+            if (!gs.has(kbuf)) {
                 const n = try makeNative(m.id, m.arity);
-                try globals.def(kbuf, n);
+                try gs.def(kbuf, n);
             }
         }
     }
@@ -531,21 +531,21 @@ pub fn installStdGlobal() !void {
             @memcpy(kbuf[0..RegexpTypeQualifiedName.len], RegexpTypeQualifiedName);
             kbuf[RegexpTypeQualifiedName.len] = '.';
             @memcpy(kbuf[RegexpTypeQualifiedName.len + 1 .. needed], m.name);
-            if (!globals.has(kbuf)) {
+            if (!gs.has(kbuf)) {
                 const n = try makeNative(m.id, m.arity);
-                try globals.def(kbuf, n);
+                try gs.def(kbuf, n);
             }
         }
     }
 }
 
-pub fn installHostModules(host_modules: []const module_compile.HostModuleDesc) !void {
+pub fn installHostModules(gs: *globals.State, host_modules: []const module_compile.HostModuleDesc) !void {
     for (host_modules) |hm| {
         const global_name_buf = (heap.bump(u8, 5 + hm.name.len) orelse return error.OutOfMemory)[0 .. 5 + hm.name.len];
         @memcpy(global_name_buf[0..5], "host:");
         @memcpy(global_name_buf[5..][0..hm.name.len], hm.name);
         const global_name = global_name_buf[0 .. 5 + hm.name.len];
-        if (globals.has(global_name)) continue;
+        if (gs.has(global_name)) continue;
 
         const entries = hm.functions;
         const any_alts = heap.bump(FieldTypeAlt, 1) orelse return error.OutOfMemory;
@@ -589,17 +589,17 @@ pub fn installHostModules(host_modules: []const module_compile.HostModuleDesc) !
             };
         }
 
-        try globals.def(global_name, .{ .object = inst_obj });
+        try gs.def(global_name, .{ .object = inst_obj });
     }
 }
 
-pub fn installCapabilityModules(cap_modules: []const module_compile.CapModuleDesc) !void {
+pub fn installCapabilityModules(gs: *globals.State, cap_modules: []const module_compile.CapModuleDesc) !void {
     for (cap_modules) |cm| {
         const global_name_buf = (heap.bump(u8, 4 + cm.name.len) orelse return error.OutOfMemory)[0 .. 4 + cm.name.len];
         @memcpy(global_name_buf[0..4], "cap:");
         @memcpy(global_name_buf[4..][0..cm.name.len], cm.name);
         const global_name = global_name_buf[0 .. 4 + cm.name.len];
-        if (globals.has(global_name)) continue;
+        if (gs.has(global_name)) continue;
 
         const entries = cm.functions;
         const any_alts = heap.bump(FieldTypeAlt, 1) orelse return error.OutOfMemory;
@@ -736,16 +736,16 @@ pub fn installCapabilityModules(cap_modules: []const module_compile.CapModuleDes
             fi += 1;
         }
 
-        try globals.def(global_name, .{ .object = inst_obj });
+        try gs.def(global_name, .{ .object = inst_obj });
 
         if (comptime build_options.cap_http) {
-            if (std.mem.eql(u8, cm.name, "http") and !globals.has("@cap_type:http.Response")) {
-                try cap_http_mod.registerResponseType();
+            if (std.mem.eql(u8, cm.name, "http") and !gs.has("@cap_type:http.Response")) {
+                try cap_http_mod.registerResponseType(gs);
             }
         }
 
         if (comptime build_options.cap_net) {
-            if (std.mem.eql(u8, cm.name, "net") and !globals.has("@cap_type:net.Conn")) {
+            if (std.mem.eql(u8, cm.name, "net") and !gs.has("@cap_type:net.Conn")) {
                 const conn_qual_name = "@cap_type:net.Conn";
 
                 const conn_any_alts = heap.bump(FieldTypeAlt, 1) orelse return error.OutOfMemory;
@@ -763,7 +763,7 @@ pub fn installCapabilityModules(cap_modules: []const module_compile.CapModuleDes
                     .qualified_name = conn_qual_name,
                     .fields = conn_field_specs[0..1],
                 } };
-                try globals.def(conn_qual_name, .{ .object = conn_typ_obj });
+                try gs.def(conn_qual_name, .{ .object = conn_typ_obj });
 
                 const conn_methods = [_]struct { name: []const u8, id: NativeFnId, arity: u8 }{
                     .{ .name = "read", .id = .cap_net_read, .arity = 2 },
@@ -781,9 +781,9 @@ pub fn installCapabilityModules(cap_modules: []const module_compile.CapModuleDes
                     @memcpy(kbuf[0..conn_qual_name.len], conn_qual_name);
                     kbuf[conn_qual_name.len] = '.';
                     @memcpy(kbuf[conn_qual_name.len + 1 .. needed], m.name);
-                    if (!globals.has(kbuf)) {
+                    if (!gs.has(kbuf)) {
                         const n = try makeNative(m.id, m.arity);
-                        try globals.def(kbuf, n);
+                        try gs.def(kbuf, n);
                     }
                 }
             }
