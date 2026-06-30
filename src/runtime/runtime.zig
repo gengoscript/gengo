@@ -372,7 +372,7 @@ pub const Runtime = struct {
         try vmnative.installStdGlobal(&self.globals_state);
         try vmnative.installHostModules(&self.globals_state, self.host_modules);
         try vmnative.installCapabilityModules(&self.globals_state, self.capabilityModules());
-        vm.run() catch |err| {
+        vm.run(.{ .cs = self.chunk_state, .gs = &self.globals_state, .hs = &self.heap_state, .vs = &self.vm_state }) catch |err| {
             self.last_runtime_line = vm.panicLine();
             self.last_runtime_col = vm.panicCol();
             const pf = vm.panicFrames();
@@ -392,7 +392,7 @@ pub const Runtime = struct {
             while (ti < self.test_count) : (ti += 1) {
                 var name_buf: [32]u8 = undefined;
                 const name = std.fmt.bufPrint(&name_buf, "__test_{d}", .{ti}) catch continue;
-                _ = vm.callGlobal(name, &[_]Value{}) catch |err| {
+                _ = vm.callGlobal(.{ .cs = self.chunk_state, .gs = &self.globals_state, .hs = &self.heap_state, .vs = &self.vm_state }, name, &[_]Value{}) catch |err| {
                     failed += 1;
                     io.werr("FAIL: ");
                     io.werr(self.test_names[ti]);
@@ -493,7 +493,7 @@ pub const Runtime = struct {
         try vmnative.installStdGlobal(&self.globals_state);
         try vmnative.installHostModules(&self.globals_state, self.host_modules);
         try vmnative.installCapabilityModules(&self.globals_state, repl_caps);
-        vm.run() catch |err| {
+        vm.run(.{ .cs = self.chunk_state, .gs = &self.globals_state, .hs = &self.heap_state, .vs = &self.vm_state }) catch |err| {
             self.captureRuntimeError();
             return err;
         };
@@ -506,7 +506,7 @@ pub const Runtime = struct {
         self.last_compile_line = 0;
         self.last_compile_col = 0;
         self.last_compile_msg_len = 0;
-        return vm.callGlobal(name, args) catch |err| {
+        return vm.callGlobal(.{ .cs = self.chunk_state, .gs = &self.globals_state, .hs = &self.heap_state, .vs = &self.vm_state }, name, args) catch |err| {
             self.captureRuntimeError();
             return err;
         };

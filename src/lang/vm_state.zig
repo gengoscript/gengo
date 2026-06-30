@@ -145,6 +145,10 @@ pub fn setActive(state: *State) void {
     g_state = state;
 }
 
+pub fn activeState() *State {
+    return g_state;
+}
+
 pub fn reset() void {
     if (vmState().stack.len == 0 and vmState() == &g_default_state) {
         _ = g_default_state.init(MaxStack, MaxFrames, cfg.max_defers, heap.HeapSize, vmState().allocator) catch {};

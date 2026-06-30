@@ -112,7 +112,7 @@ fn fuzzVmBytecode() void {
                 if (rngBool()) chunk.emitByte(@intCast(rngRange(0, 255)), 1) catch break;
             }
             chunk.emitByte(255, 1) catch {};
-            vm.run() catch {};
+            vm.run(vm.VMContext.fromActive()) catch {};
         }
     }
     out("  vm bytecode fuzz: OK\n");
@@ -147,7 +147,7 @@ fn fuzzVmArithmetic() void {
         };
         chunk.emitOp(op_code, 1) catch { continue; };
         chunk.emitOp(.halt, 1) catch { continue; };
-        vm.run() catch {};
+        vm.run(vm.VMContext.fromActive()) catch {};
     }
     out("  vm arithmetic boundary fuzz: OK\n");
 }
@@ -225,7 +225,7 @@ fn fuzzNamedTypeBoundaries() void {
         var compiler = Compiler.init(src, .{});
         compiler.compile(true) catch {};
         chunk.emitOp(.halt, 1) catch continue;
-        vm.run() catch {};
+        vm.run(vm.VMContext.fromActive()) catch {};
     }
     out("  named type boundary fuzz: OK\n");
 }
@@ -297,7 +297,7 @@ fn fuzzForInNesting() void {
             var compiler = Compiler.init(buf[0..pos], .{});
             compiler.compile(true) catch { continue; };
             chunk.emitOp(.halt, 1) catch continue;
-            vm.run() catch { continue; };
+            vm.run(vm.VMContext.fromActive()) catch { continue; };
         }
     }
     out("  for-in/C-for nesting fuzz: OK\n");
@@ -317,7 +317,7 @@ fn fuzzStackHeapBoundaries() void {
     , .{});
     compiler.compile(true) catch {};
     chunk.emitOp(.halt, 1) catch {};
-    vm.run() catch {};
+    vm.run(vm.VMContext.fromActive()) catch {};
 
     // Test large array allocation
     resetAll();
@@ -329,7 +329,7 @@ fn fuzzStackHeapBoundaries() void {
     , .{});
     compiler2.compile(true) catch {};
     chunk.emitOp(.halt, 1) catch {};
-    vm.run() catch {};
+    vm.run(vm.VMContext.fromActive()) catch {};
     out("  stack/heap boundary fuzz: OK\n");
 }
 
@@ -352,7 +352,7 @@ fn runNormal(src: []const u8) OutcomeTag {
     var c = Compiler.init(src, .{});
     c.compile(true) catch return .other;
     chunk.emitOp(.halt, 1) catch return .other;
-    vm.run() catch |e| return classifyErr(e);
+    vm.run(vm.VMContext.fromActive()) catch |e| return classifyErr(e);
     return .ok;
 }
 
@@ -369,7 +369,7 @@ fn runDefused(src: []const u8) OutcomeTag {
     @memcpy(chunk.g_state.code[0..defused.len], defused);
     chunk.g_state.code_len = defused.len;
 
-    vm.run() catch |e| return classifyErr(e);
+    vm.run(vm.VMContext.fromActive()) catch |e| return classifyErr(e);
     return .ok;
 }
 
@@ -468,7 +468,7 @@ fn runAssert(src: []const u8, label: []const u8) void {
         std.os.wasi.proc_exit(1);
     };
     chunk.emitOp(.halt, 1) catch {};
-    vm.run() catch |e| {
+    vm.run(vm.VMContext.fromActive()) catch |e| {
         if (e == error.PanicError) {
             out("property FAIL (panic): ");
             out(label);
