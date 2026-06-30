@@ -2,6 +2,7 @@ const std = @import("std");
 const chunk = @import("chunk.zig");
 const heap = @import("../runtime/heap.zig");
 const cfg = @import("../runtime/config.zig");
+const globals_mod = @import("globals.zig");
 const Value = @import("value.zig").Value;
 const Object = @import("value.zig").Object;
 const MapEntry = @import("value.zig").MapEntry;
@@ -554,3 +555,20 @@ pub fn asStringValue(v: Value) ![]const u8 {
 }
 
 pub fn assertStringImmortal(v: Value) void { return g_state.assertStringImmortal(v); }
+
+/// Explicit execution context carrying all four state pointers.
+pub const VMContext = struct {
+    cs: *chunk.State,
+    gs: *globals_mod.State,
+    hs: *heap.State,
+    vs: *State,
+
+    pub fn fromActive() VMContext {
+        return .{
+            .cs = chunk.g_state,
+            .gs = globals_mod.activeState(),
+            .hs = heap.g_state,
+            .vs = g_state,
+        };
+    }
+};
