@@ -49,14 +49,14 @@ fn runStackUnderflow() !void {
     resetAll();
     try chunk.emitOp(.pop, 1);
     try chunk.emitOp(.halt, 1);
-    vm.run() catch |e| return expectError("stack-underflow", error.StackUnderflow, e);
+    vm.run(vm.VMContext.fromActive()) catch |e| return expectError("stack-underflow", error.StackUnderflow, e);
     return error.TestFailed;
 }
 
 fn runBytecodeOutOfBounds() !void {
     resetAll();
     try chunk.emitOp(.constant, 1);
-    vm.run() catch |e| return expectError("bytecode-oob", error.BytecodeOutOfBounds, e);
+    vm.run(vm.VMContext.fromActive()) catch |e| return expectError("bytecode-oob", error.BytecodeOutOfBounds, e);
     return error.TestFailed;
 }
 
@@ -66,7 +66,7 @@ fn runBadConstantIndex() !void {
     try chunk.emitOp(.constant, 1);
     try chunk.emitByte(0, 1);
     try chunk.emitOp(.halt, 1);
-    vm.run() catch |e| return expectError("bad-const-index", error.BadConstantIndex, e);
+    vm.run(vm.VMContext.fromActive()) catch |e| return expectError("bad-const-index", error.BadConstantIndex, e);
     return error.TestFailed;
 }
 
@@ -74,7 +74,7 @@ fn runBadOpcode() !void {
     resetAll();
     // 255 is outside current Op enum range.
     try chunk.emitByte(255, 1);
-    vm.run() catch |e| return expectError("bad-opcode", error.BadOpcode, e);
+    vm.run(vm.VMContext.fromActive()) catch |e| return expectError("bad-opcode", error.BadOpcode, e);
     return error.TestFailed;
 }
 
@@ -83,7 +83,7 @@ fn runInstructionBudgetExceeded() !void {
     vm.setPolicy(.{ .allow_io = false, .native_backend = .embedded, .max_ops = 1 });
     try chunk.emitOp(.null_val, 1);
     try chunk.emitOp(.halt, 1);
-    vm.run() catch |e| return expectError("instruction-budget", error.InstructionBudgetExceeded, e);
+    vm.run(vm.VMContext.fromActive()) catch |e| return expectError("instruction-budget", error.InstructionBudgetExceeded, e);
     return error.TestFailed;
 }
 
@@ -99,7 +99,7 @@ fn runSetNamedPredicateTypeError() !void {
     try chunk.emitConst(.{ .int = 42 }, 1);
     try chunk.emitOp(.set_named_predicate, 1);
     try chunk.emitOp(.halt, 1);
-    vm.run() catch |e| return expectError("set-named-predicate-type-error", error.TypeError, e);
+    vm.run(vm.VMContext.fromActive()) catch |e| return expectError("set-named-predicate-type-error", error.TypeError, e);
     return error.TestFailed;
 }
 
@@ -155,7 +155,7 @@ fn runDupStackUnderflow() !void {
     resetAll();
     try chunk.emitOp(.dup, 1);
     try chunk.emitOp(.halt, 1);
-    vm.run() catch |e| return expectError("dup-stack-underflow", error.StackUnderflow, e);
+    vm.run(vm.VMContext.fromActive()) catch |e| return expectError("dup-stack-underflow", error.StackUnderflow, e);
     return error.TestFailed;
 }
 
@@ -163,7 +163,7 @@ fn runDup2StackUnderflow() !void {
     resetAll();
     try chunk.emitOp(.dup2, 1);
     try chunk.emitOp(.halt, 1);
-    vm.run() catch |e| return expectError("dup2-stack-underflow", error.StackUnderflow, e);
+    vm.run(vm.VMContext.fromActive()) catch |e| return expectError("dup2-stack-underflow", error.StackUnderflow, e);
     return error.TestFailed;
 }
 
@@ -173,7 +173,7 @@ fn runDivByZero() !void {
     try chunk.emitConst(.{ .float = 0.0 }, 1);
     try chunk.emitOp(.div, 1);
     try chunk.emitOp(.halt, 1);
-    vm.run() catch |e| return expectError("div-by-zero", error.DivisionByZero, e);
+    vm.run(vm.VMContext.fromActive()) catch |e| return expectError("div-by-zero", error.DivisionByZero, e);
     return error.TestFailed;
 }
 
@@ -183,7 +183,7 @@ fn runCallNumber() !void {
     try chunk.emitOp(.call, 1);
     try chunk.emitByte(0, 1); // argc = 0
     try chunk.emitOp(.halt, 1);
-    vm.run() catch |e| return expectError("call-number", error.NotAFunction, e);
+    vm.run(vm.VMContext.fromActive()) catch |e| return expectError("call-number", error.NotAFunction, e);
     return error.TestFailed;
 }
 
@@ -191,7 +191,7 @@ fn runReturnAtTopLevel() !void {
     resetAll();
     try chunk.emitOp(.ret, 1);
     try chunk.emitOp(.halt, 1);
-    vm.run() catch |e| return expectError("return-toplevel", error.ReturnAtTopLevel, e);
+    vm.run(vm.VMContext.fromActive()) catch |e| return expectError("return-toplevel", error.ReturnAtTopLevel, e);
     return error.TestFailed;
 }
 
@@ -202,7 +202,7 @@ fn runRetConstAtTopLevel() !void {
     try chunk.emitByte(0, 1);
     try chunk.emitByte(0, 1);
     try chunk.emitOp(.halt, 1);
-    vm.run() catch |e| return expectError("ret-const-toplevel", error.ReturnAtTopLevel, e);
+    vm.run(vm.VMContext.fromActive()) catch |e| return expectError("ret-const-toplevel", error.ReturnAtTopLevel, e);
     return error.TestFailed;
 }
 
@@ -215,7 +215,7 @@ fn runBadJumpTarget() !void {
     try chunk.emitByte(1, 1);
     try chunk.emitConst(.{ .int = 42 }, 1);
     try chunk.emitOp(.halt, 1);
-    vm.run() catch |e| return expectError("bad-jump-target", error.BadJumpTarget, e);
+    vm.run(vm.VMContext.fromActive()) catch |e| return expectError("bad-jump-target", error.BadJumpTarget, e);
     return error.TestFailed;
 }
 
@@ -224,7 +224,7 @@ fn runNegOnNonNumber() !void {
     try chunk.emitConst(.{ .boolean = true }, 1);
     try chunk.emitOp(.neg, 1);
     try chunk.emitOp(.halt, 1);
-    vm.run() catch |e| return expectError("neg-non-number", error.TypeError, e);
+    vm.run(vm.VMContext.fromActive()) catch |e| return expectError("neg-non-number", error.TypeError, e);
     return error.TestFailed;
 }
 
@@ -233,7 +233,7 @@ fn runAssertOnNonBoolean() !void {
     try chunk.emitConst(.{ .float = 42.0 }, 1);
     try chunk.emitOp(.op_assert, 1);
     try chunk.emitOp(.halt, 1);
-    vm.run() catch |e| return expectError("assert-non-bool", error.TypeError, e);
+    vm.run(vm.VMContext.fromActive()) catch |e| return expectError("assert-non-bool", error.TypeError, e);
     return error.TestFailed;
 }
 
@@ -243,7 +243,7 @@ fn runAssertMsgOnNonBoolean() !void {
     try chunk.emitConst(.{ .float = 42.0 }, 1);
     try chunk.emitOp(.op_assert_msg, 1);
     try chunk.emitOp(.halt, 1);
-    vm.run() catch |e| return expectError("assert-msg-non-bool", error.TypeError, e);
+    vm.run(vm.VMContext.fromActive()) catch |e| return expectError("assert-msg-non-bool", error.TypeError, e);
     return error.TestFailed;
 }
 
@@ -252,7 +252,7 @@ fn runTrapCheckOnNonNull() !void {
     try chunk.emitConst(.{ .float = 1.0 }, 1);
     try chunk.emitOp(.op_trap_check, 1);
     try chunk.emitOp(.halt, 1);
-    vm.run() catch |e| return expectError("trap-check-non-null", error.TrapFired, e);
+    vm.run(vm.VMContext.fromActive()) catch |e| return expectError("trap-check-non-null", error.TrapFired, e);
     return error.TestFailed;
 }
 
@@ -261,7 +261,7 @@ fn runVariantPayloadOnNonObject() !void {
     try chunk.emitConst(.{ .float = 42.0 }, 1);
     try chunk.emitOp(.variant_payload, 1);
     try chunk.emitOp(.halt, 1);
-    vm.run() catch |e| return expectError("variant-payload-non-obj", error.TypeError, e);
+    vm.run(vm.VMContext.fromActive()) catch |e| return expectError("variant-payload-non-obj", error.TypeError, e);
     return error.TestFailed;
 }
 
@@ -271,7 +271,7 @@ fn runAssertTypeInvalidTag() !void {
     try chunk.emitOp(.assert_type, 1);
     try chunk.emitByte(99, 1);
     try chunk.emitOp(.halt, 1);
-    vm.run() catch |e| return expectError("assert-type-invalid-tag", error.TypeError, e);
+    vm.run(vm.VMContext.fromActive()) catch |e| return expectError("assert-type-invalid-tag", error.TypeError, e);
     return error.TestFailed;
 }
 
@@ -282,7 +282,7 @@ fn runSetNamedPredicateBadNtVal() !void {
     try chunk.emitOp(.null_val, 1);
     try chunk.emitOp(.set_named_predicate, 1);
     try chunk.emitOp(.halt, 1);
-    vm.run() catch |e| return expectError("set-named-predicate-bad-nt", error.TypeError, e);
+    vm.run(vm.VMContext.fromActive()) catch |e| return expectError("set-named-predicate-bad-nt", error.TypeError, e);
     return error.TestFailed;
 }
 
@@ -291,7 +291,7 @@ fn runDeferCallStackUnderflow() !void {
     try chunk.emitOp(.defer_call, 1);
     try chunk.emitByte(1, 1); // argc = 1
     try chunk.emitOp(.halt, 1);
-    vm.run() catch |e| return expectError("defer-call-underflow", error.StackUnderflow, e);
+    vm.run(vm.VMContext.fromActive()) catch |e| return expectError("defer-call-underflow", error.StackUnderflow, e);
     return error.TestFailed;
 }
 
@@ -301,7 +301,7 @@ fn runModByZero() !void {
     try chunk.emitConst(.{ .float = 0.0 }, 1);
     try chunk.emitOp(.mod, 1);
     try chunk.emitOp(.halt, 1);
-    vm.run() catch |e| return expectError("mod-by-zero", error.DivisionByZero, e);
+    vm.run(vm.VMContext.fromActive()) catch |e| return expectError("mod-by-zero", error.DivisionByZero, e);
     return error.TestFailed;
 }
 

@@ -43,6 +43,26 @@ pub const panicCol = vms.panicCol;
 pub const panicFrames = vms.panicFrames;
 pub const runtimeErrMsg = vms.runtimeErrMsg;
 
+/// Explicit VM execution context. Pass to run() and callGlobal() so callers
+/// do not need to call activate() before entering the VM.
+pub const VMContext = struct {
+    cs: *chunk.State,
+    gs: *globals.State,
+    hs: *heap.State,
+    vs: *vms.State,
+
+    /// Build a context from whichever states are currently active.
+    /// For use by low-level test harnesses that set up state via setActive() directly.
+    pub fn fromActive() VMContext {
+        return .{
+            .cs = chunk.g_state,
+            .gs = globals.activeState(),
+            .hs = heap.g_state,
+            .vs = vms.activeState(),
+        };
+    }
+};
+
 // ── Aliases for hot-path readability in runInner ──────────────────────────────
 
 fn isModuleNamespaceStruct(typ: *Object) bool {
@@ -1192,7 +1212,7 @@ fn retSlowPath(retval_in: Value) !bool {
                 const prev_target = vmState().call_depth_target;
                 vmState().call_depth_target = depth_before;
                 defer vmState().call_depth_target = prev_target;
-                try run();
+                try run(VMContext.fromActive());
             }
             _ = try vmPop();
         }
@@ -3015,7 +3035,7 @@ fn runDeferredCall(deferred: Value) anyerror!void {
         const prev_target = vmState().call_depth_target;
         vmState().call_depth_target = depth_before;
         defer vmState().call_depth_target = prev_target;
-        try run();
+        try run(VMContext.fromActive());
     }
     _ = vmPop() catch {};
 }
@@ -3141,7 +3161,7 @@ fn runPanicUnwind(orig_err: anyerror) anyerror!void {
             if (vmState().call_depth_target) |d| {
                 if (vmState().frame_top == d) return;
             }
-            return run();
+            return run(VMContext.fromActive());
         }
         vmState().frame_top -= 1;
         const frame = vmState().frames[vmState().frame_top];
@@ -3154,7 +3174,11 @@ fn runPanicUnwind(orig_err: anyerror) anyerror!void {
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-pub fn run() anyerror!void {
+pub fn run(ctx: VMContext) anyerror!void {
+    chunk.setActive(ctx.cs);
+    globals.setActive(ctx.gs);
+    heap.setActive(ctx.hs);
+    vms.setActive(ctx.vs);
     chunk.verify() catch |err| {
         if (chunk.g_state.verify_err_len > 0) {
             vms.setRuntimeErr("verifier: {s}", .{chunk.g_state.verify_err_buf[0..chunk.g_state.verify_err_len]});
@@ -3215,11 +3239,15 @@ fn callValue(fn_val: Value, args: []const Value) !Value {
     const prev_target = vmState().call_depth_target;
     vmState().call_depth_target = depth_before;
     defer vmState().call_depth_target = prev_target;
-    try run();
+    try run(VMContext.fromActive());
     return try vmPop();
 }
 
-pub fn callGlobal(name: []const u8, args: []const Value) !Value {
+pub fn callGlobal(ctx: VMContext, name: []const u8, args: []const Value) !Value {
+    chunk.setActive(ctx.cs);
+    globals.setActive(ctx.gs);
+    heap.setActive(ctx.hs);
+    vms.setActive(ctx.vs);
     const fn_val = globals.get(name) orelse return error.NotDefined;
     if (fn_val != .object) return error.NotAFunction;
     const obj = fn_val.object;

@@ -488,7 +488,7 @@ test "spec pass cases differential" {
         io.setWriteOverrides(captureStdout, captureStderr);
         defer io.clearWriteOverrides();
 
-        vm.run() catch |e| {
+        vm.run(vm.VMContext.fromActive()) catch |e| {
             std.debug.print(
                 "differential FAIL: spec pass case {s} succeeded normally but failed as defused: {s}\n",
                 .{ entry.name, @errorName(e) },
