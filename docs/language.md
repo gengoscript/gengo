@@ -138,15 +138,28 @@ How each form works:
 Assignment uses `=`. Compound assignment forms (`+=`, `-=`, `*=`, `/=`) are
 supported for numeric types.
 
+Bitwise operators work on integer types (`int` and named integer types):
+
+| Operator | Meaning |
+|----------|---------|
+| `&` | Bitwise AND |
+| `\|` | Bitwise OR |
+| `^` | Bitwise XOR |
+| `~` | Bitwise NOT (complement) |
+| `<<` | Left shift |
+| `>>` | Right shift |
+
+Bitwise compound assignment forms are also supported: `&=`, `|=`, `^=`, `<<=`, `>>=`.
+
 Integer division and remainder use keyword operators, following Ada/Pascal convention:
 
 | Operator | Meaning | Example |
 |----------|---------|---------|
-| `div` | Truncating integer division (rounds toward zero) | `7 div 2` → `3` |
+| `div` | Integer division: truncates toward zero for `int`; floor (rounds toward −∞) for `float` | `7 div 2` → `3`, `-7.0 div 2.0` → `-4.0` |
 | `rem` | Remainder, sign follows the dividend | `7 rem 3` → `1`, `-7 rem 3` → `-1` |
 | `mod` | Mathematical modulo, result always non-negative when divisor is positive | `7 mod 3` → `1`, `-7 mod 3` → `2` |
 
-`/` divides floats (or integer-to-float when both sides are the same named float type). For integer truncating division use `div`. All three keyword operators work on named numeric types.
+`/` divides floats (or integer-to-float when both sides are the same named float type). For integer truncating division use `div`; for float floor division also use `div`. All three keyword operators work on named numeric types.
 
 Identifier rules follow Go: the first character must be a Unicode letter or
 underscore; subsequent characters may be Unicode letters, decimal digits, or
@@ -692,17 +705,33 @@ type Event variant {
 A variant arm with no fields (like `Ping` above) is just a tag. Arms with
 fields carry their own data.
 
-Use `switch` to branch on which variant arm you have. Inside each case arm
-the variant value's fields are available directly:
+Single-payload arms may also be written with parentheses, which is concise
+when the arm carries exactly one value:
+
+```gengo
+type Result variant {
+    ok(value int),
+    err(msg string),
+    pending,
+}
+```
+
+Use `switch` to branch on which variant arm you have. Case arms are matched
+with a `.arm_name` prefix and the body in braces. An `as binding` clause
+names the payload inside the case body:
 
 ```gengo
 switch ev {
-    case Event.Metric:
-        return ev.name
-    case Event.Error:
-        return ev.message
-    default:
-        return "ok"
+    case .Metric { return ev.name }
+    case .Error  { return ev.message }
+    default      { return "ok" }
+}
+
+// binding a single-payload arm:
+switch r {
+    case .ok as v   { return v }
+    case .err as msg { return msg }
+    case .pending   { return "pending" }
 }
 ```
 
@@ -849,7 +878,7 @@ test "add with zero" {
 }
 ```
 
-`assert condition` panics with `AssertionFailed` if the condition is `false`. An optional message string gives a clearer failure reason:
+`assert condition` panics with `AssertionFailed` if the condition is `false`. An optional message value (any type) gives a clearer failure reason:
 
 ```gengo
 test "range check" {

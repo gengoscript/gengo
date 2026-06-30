@@ -161,9 +161,3 @@ Run parity checks:
 ```bash
 zig build -Dpreset=1m parity
 ```
-
-If you are working on runtime behaviour, also run:
-
-```bash
-zig build -Dpreset=1m test
-```
