@@ -566,6 +566,17 @@ All encoding functions accept any integer and truncate to the appropriate width.
 | `std.bytes.u32le(n)` | 4 bytes | little-endian |
 | `std.bytes.u64le(n)` | 8 bytes | little-endian |
 
+### Float encoding
+
+All float encoding functions accept a `float` or `int` argument and produce IEEE 754 bytes.
+
+| Function | Width | Byte order |
+|---|---|---|
+| `std.bytes.f32be(n)` | 4 bytes | big-endian |
+| `std.bytes.f64be(n)` | 8 bytes | big-endian |
+| `std.bytes.f32le(n)` | 4 bytes | little-endian |
+| `std.bytes.f64le(n)` | 8 bytes | little-endian |
+
 ### Integer decoding
 
 All decoding functions take a binary string `s` and byte offset `i`.
@@ -579,6 +590,18 @@ Errors: `RangeError` if there are insufficient bytes at `i`.
 | `std.bytes.u16le_at(s, i)` | 2 bytes | little-endian | int (0–65535) |
 | `std.bytes.u32le_at(s, i)` | 4 bytes | little-endian | int (0–4294967295) |
 | `std.bytes.u64le_at(s, i)` | 8 bytes | little-endian | int (i64 bit pattern) |
+
+### Float decoding
+
+All float decoding functions take a binary string `s` and byte offset `i`.
+Errors: `RangeError` if there are insufficient bytes at `i`.
+
+| Function | Width | Byte order | Return |
+|---|---|---|---|
+| `std.bytes.f32be_at(s, i)` | 4 bytes | big-endian | float |
+| `std.bytes.f64be_at(s, i)` | 8 bytes | big-endian | float |
+| `std.bytes.f32le_at(s, i)` | 4 bytes | little-endian | float |
+| `std.bytes.f64le_at(s, i)` | 8 bytes | little-endian | float |
 
 ### `std.bytes.index_of(s, sub)`
 - Returns the byte offset of the first occurrence of `sub` in `s`, or `-1`
@@ -696,6 +719,8 @@ Go-style text templates with `{{` / `}}` delimiters.
 | `std.time.from_unix(sec)` | `std.Time` | Integer seconds → Time |
 | `std.time.from_unix_ms(ms)` | `std.Time` | Integer milliseconds → Time |
 | `std.time.parse(str, fmt)` | `std.Time` | Errors: `TypeError`/`RangeError` on bad input |
+| `std.time.since(t)` | `float` | Milliseconds elapsed since `t` (now − t); equivalent to `t.since()` |
+| `std.time.until(t)` | `float` | Milliseconds until `t` (t − now); equivalent to `t.until()` |
 
 **Duration constants** (plain `int`, milliseconds):
 `std.time.ms` `std.time.second` `std.time.minute` `std.time.hour` `std.time.day`
@@ -712,13 +737,13 @@ Go-style text templates with `{{` / `}}` delimiters.
 | `.add_s(n)` | `std.Time` | |
 | `.add_m(n)` | `std.Time` | |
 | `.add_h(n)` | `std.Time` | |
-| `.sub(t2)` | `int` | ms difference, may be negative |
+| `.sub(t2)` | `float` | ms difference `self − t2`, may be negative |
 | `.before(t2)` | `bool` | |
 | `.after(t2)` | `bool` | |
 | `.equal(t2)` | `bool` | |
 | `.is_zero()` | `bool` | |
-| `.since(t2)` | `int` | Milliseconds elapsed since `t2` (may be negative) |
-| `.until(t2)` | `int` | Milliseconds until `t2` (may be negative) |
+| `.since()` | `float` | Milliseconds elapsed since this time (now − self) |
+| `.until()` | `float` | Milliseconds until this time (self − now) |
 | `.add_date(years, months, days, ms)` | `std.Time` | Adds calendar units |
 | `.iso_week()` | `map` | Keys: `year`, `week`, `day` (ISO 8601 week date) |
 
