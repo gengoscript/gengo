@@ -2280,6 +2280,9 @@ fn runInner(ctx: VMContext) !void {
             .get_local_const_sub_call => {
                 const p = try readLocalSlotAndConst(ctx);
                 const argc = try ctx.vs.vmByte();
+                const ic_base = ctx.vs.ip;
+                const ic_slot: u16 = (@as(u16, ctx.cs.codeByteAt(ic_base)) << 8) | @as(u16, ctx.cs.codeByteAt(ic_base + 1));
+                ctx.vs.ip += 2;
                 const a = try readLocalSlot(ctx, p.slot);
                 if (a == .int and p.k == .int) {
                     try ctx.vs.vmPush(.{ .int = a.int - p.k.int });
@@ -2287,16 +2290,19 @@ fn runInner(ctx: VMContext) !void {
                     try pushSubResult(ctx, a, p.k);
                 }
                 if (try tryTailCall(ctx, argc)) continue;
-                try performCall(ctx, argc);
+                try performCallIC(ctx, argc, ic_base, ic_slot);
             },
             .call_global_local_sub_const => {
                 const name_idx = try ctx.vs.vmShort();
-                const ic_base = ctx.vs.ip;
-                const ic_slot: u16 = @intCast(try ctx.vs.vmShort());
+                const g_ic_base = ctx.vs.ip;
+                const g_ic_slot: u16 = @intCast(try ctx.vs.vmShort());
                 _ = try ctx.vs.vmByte(); // skip get_local_const_sub_call opcode byte
                 const p = try readLocalSlotAndConst(ctx);
                 const argc = try ctx.vs.vmByte();
-                const callee = try readGlobalIC(ctx, name_idx, ic_base, ic_slot);
+                const c_ic_base = ctx.vs.ip;
+                const c_ic_slot: u16 = (@as(u16, ctx.cs.codeByteAt(c_ic_base)) << 8) | @as(u16, ctx.cs.codeByteAt(c_ic_base + 1));
+                ctx.vs.ip += 2;
+                const callee = try readGlobalIC(ctx, name_idx, g_ic_base, g_ic_slot);
                 const a = try readLocalSlot(ctx, p.slot);
                 try ctx.vs.vmPush(callee);
                 if (a == .int and p.k == .int) {
@@ -2305,7 +2311,7 @@ fn runInner(ctx: VMContext) !void {
                     try pushSubResult(ctx, a, p.k);
                 }
                 if (try tryTailCall(ctx, argc)) continue;
-                try performCall(ctx, argc);
+                try performCallIC(ctx, argc, c_ic_base, c_ic_slot);
             },
             .get_local_const_add => {
                 const p = try readLocalSlotAndConst(ctx);

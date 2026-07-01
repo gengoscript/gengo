@@ -1117,6 +1117,63 @@ test "compiler: warmed typed primitive call still enforces arg types" {
     ));
 }
 
+// findFusedSubCallIc scans bytecode for get_local_const_sub_call or
+// call_global_local_sub_const and returns the call IC slot embedded in that opcode.
+fn findFusedSubCallIc(c: *chunk.State) ?struct { op: Op, offset: usize, slot: u16 } {
+    var ip: usize = 0;
+    while (ip < c.code_len) {
+        const op: Op = @enumFromInt(c.code[ip]);
+        if (op == .get_local_const_sub_call) {
+            // layout: [op][slot][const_op][const_hi][const_lo][argc][ic_hi][ic_lo]
+            if (ip + 7 >= c.code_len) return null;
+            const slot: u16 = (@as(u16, c.code[ip + 6]) << 8) | c.code[ip + 7];
+            return .{ .op = op, .offset = ip, .slot = slot };
+        }
+        if (op == .call_global_local_sub_const) {
+            // layout: [op][nh][nl][gh][gl][sub_op][slot][cop][ch][cl][argc][ic_hi][ic_lo]
+            if (ip + 12 >= c.code_len) return null;
+            const slot: u16 = (@as(u16, c.code[ip + 11]) << 8) | c.code[ip + 12];
+            return .{ .op = op, .offset = ip, .slot = slot };
+        }
+        const decoded = c.decodeAt(ip) catch return null;
+        ip += decoded.width;
+    }
+    return null;
+}
+
+test "compiler: fused global-sub call warms call inline cache after execution" {
+    var rt = try setup();
+    defer rt.deinit();
+    // Use inc(n-1) + inc(n-2): neither call is in tail position (add_ret follows),
+    // so tryTailCall does not fire and both calls go through performCallIC.
+    try compile(&rt,
+        \\func inc(x int) int { return x + 1 }
+        \\func run(n int) int { return inc(n - 1) + inc(n - 2) }
+    );
+    const before = findFusedSubCallIc(rt.chunk_state) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(before.op == .call_global_local_sub_const);
+    try std.testing.expectEqual(@as(u16, 0xFFFF), before.slot);
+
+    try runSrc(&rt,
+        \\func inc(x int) int { return x + 1 }
+        \\func run(n int) int { return inc(n - 1) + inc(n - 2) }
+        \\_ = run(5)
+    );
+    const after = findFusedSubCallIc(rt.chunk_state) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(after.slot != 0xFFFF);
+}
+
+test "compiler: fused global-sub call IC gives correct result" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func double(x int) int { return x * 2 }
+        \\func run(n int) int { return double(n - 1) }
+    );
+    const r = try rt.callGlobal("run", &.{.{ .int = 6 }});
+    try std.testing.expect(r == .int and r.int == 10);
+}
+
 // ── const_sub fusion ──────────────────────────────────────────────────────
 
 test "compiler: const_sub fusion fires" {

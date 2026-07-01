@@ -15,13 +15,14 @@ runtime panics, and runaway scripts as host-recoverable failures, not crashes.
 | [`order-normalizer`](order-normalizer) | Node.js | Multi-tenant ingestion: one script per merchant, host-owned lookups via a registered module, per-tenant isolation and instruction budgets |
 | [`release-gate`](release-gate) | Node.js | A deployment policy gate; the script calls back into the host through a registered `pipeline` module |
 | [`billing-plugins`](billing-plugins) | Python | Per-merchant discount logic, each in its own isolated engine instance |
+| [`go-embed`](go-embed) | Go | Minimal `cgo` host using the native C engine surface: load once, call functions, decode scalar results |
 | [`embed-host`](embed-host) | Zig | Embedding via the native `api.Runtime` surface directly, no C ABI boundary |
 
 ## Picking an example to start from
 
 - **Host language**: each example only depends on the engine surface for its
   language — WASM + a small wrapper for JS, the C ABI for C, the native Zig
-  API for Zig, ctypes for Python.
+  API for Zig, ctypes for Python, cgo for Go.
 - **Validation/constraint logic** (a policy, a permission check, a request
   validator): start from `firmware-gate-c` or `json-schema-validation` —
   named-type `range`/`predicate` constraints plus `defer`/`recover` is the

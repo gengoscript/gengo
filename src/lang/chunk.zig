@@ -168,7 +168,7 @@ pub const State = struct {
                 }
             }
         }
-        // Peephole: get_local_const_sub immediately preceding call → get_local_const_sub_call (6 bytes, 1 dispatch).
+        // Peephole: get_local_const_sub immediately preceding call → get_local_const_sub_call (8 bytes, 1 dispatch).
         if (op == .call) {
             if (self.last_get_local_const_sub_pos) |sub_pos| {
                 if (sub_pos + 5 == self.code_len) {
@@ -182,13 +182,15 @@ pub const State = struct {
     }
 
     // Emit a call instruction: [call][argc][ic_hi][ic_lo] (4 bytes, cold IC = 0xFFFF).
-    // Fuses into get_local_const_sub_call (6 bytes) or call_global_local_sub_const (11 bytes)
-    // when preceded by the matching sequence, in which case no IC bytes are appended.
+    // Fuses into get_local_const_sub_call (8 bytes) or call_global_local_sub_const (13 bytes)
+    // when preceded by the matching sequence; call IC bytes are always appended.
     pub fn emitCall(self: *State, argc: u8, line: u32) !void {
         if (self.last_get_local_const_sub_pos) |sub_pos| {
             if (sub_pos + 5 == self.code_len) {
                 self.code[sub_pos] = @intFromEnum(Op.get_local_const_sub_call);
                 try self.emitByte(argc, line);
+                try self.emitByte(0xFF, line); // call IC slot hi (cold)
+                try self.emitByte(0xFF, line); // call IC slot lo (cold)
                 self.last_get_local_const_sub_pos = null;
                 if (self.last_get_global_code_pos) |gg_pos| {
                     if (gg_pos + 5 == sub_pos) {
@@ -225,7 +227,7 @@ pub const State = struct {
                     self.code_len -= 1;
                     self.last_get_local_const_sub_pos = null;
                     // Hexa-fusion: get_global immediately before get_local_const_sub_call
-                    // → call_global_local_sub_const (11 bytes, 1 dispatch).
+                    // → call_global_local_sub_const (13 bytes, 1 dispatch).
                     if (self.last_get_global_code_pos) |gg_pos| {
                         if (gg_pos + 5 == sub_pos) {
                             self.code[gg_pos] = @intFromEnum(Op.call_global_local_sub_const);

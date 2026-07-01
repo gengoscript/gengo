@@ -64,8 +64,8 @@ fn expandedWidth(op: Op, old_width: usize) usize {
         .close_upvalue_loop         =>  7,  // close_upvalue(2)+loop(5)
         // Fused local_add_const+loop
         .local_add_const_loop       => 13,  // get_local(2)+constant(3)+add(1)+set_local(2)+loop(5)
-        // Hexa-fused get_global+get_local_const_sub_call: same 11 bytes, just byte 0 changes
-        .call_global_local_sub_const => 11, // get_global(5)+get_local_const_sub_call(6)
+        // Hexa-fused get_global+get_local_const_sub_call: same 13 bytes, just byte 0 changes
+        .call_global_local_sub_const => 13, // get_global(5)+get_local_const_sub_call(8)
         // Fused get_global_const_add+set_global (same global): expands to 8+5=13 bytes
         .inc_global_const            => 13, // get_global_const_add(8)+set_global(5)
         // Quint-fused: get_local+const_lt+jif_pop+jump
@@ -188,7 +188,7 @@ fn emitExpanded(
         },
 
         // ── get_local + const + sub + call ───────────────────────────────────
-        // Layout: [op][slot][skip][idx_hi][idx_lo][argc]
+        // Layout: [op][slot][skip][idx_hi][idx_lo][argc][ic_hi][ic_lo]
         .get_local_const_sub_call => {
             dst[0] = opByte(.get_local); dst[1] = rb(old_ip, 1);
             dst[2] = opByte(.constant); dst[3] = rb(old_ip, 3); dst[4] = rb(old_ip, 4);
@@ -256,11 +256,11 @@ fn emitExpanded(
         },
 
         // ── hexa-fused get_global + get_local_const_sub_call ─────────────────
-        // Layout: [call_global_local_sub_const][name_hi][name_lo][ic_hi][ic_lo][glcs_skip][slot][sub_skip][idx_hi][idx_lo][argc]
-        // Expands to: get_global(5) + get_local_const_sub_call(6) = 11 bytes (just byte 0 changes)
+        // Layout: [call_global_local_sub_const][name_hi][name_lo][ic_hi][ic_lo][glcs_skip][slot][sub_skip][idx_hi][idx_lo][argc][c_ic_hi][c_ic_lo]
+        // Expands to: get_global(5) + get_local_const_sub_call(8) = 13 bytes (just byte 0 changes)
         .call_global_local_sub_const => {
             dst[0] = opByte(.get_global);
-            for (1..11) |i| dst[i] = rb(old_ip, i);
+            for (1..13) |i| dst[i] = rb(old_ip, i);
         },
 
         // ── fused local_add_const + loop ─────────────────────────────────────

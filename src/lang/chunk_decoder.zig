@@ -98,13 +98,13 @@ pub fn decodeAt(state: anytype, pos: usize) !DecodedInstruction {
 
         .get_local_const_sub_call => .{
             .op = op,
-            .width = 6,
+            .width = 8,
             .const_index = try readU16At(state, pos + 3),
         },
 
         .call_global_local_sub_const => .{
             .op = op,
-            .width = 11,
+            .width = 13,
             .const_index = try readU16At(state, pos + 8),
         },
 
