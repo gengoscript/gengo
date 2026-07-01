@@ -13,6 +13,7 @@ const vm_defuse = @import("lang/vm_defuse.zig");
 const vmod = @import("lang/value.zig");
 const staticSS = vmod.staticSS;
 const module_compile = @import("lang/module_compile.zig");
+const op_mod = @import("lang/op.zig");
 
 fn writeAll(fd: std.os.wasi.fd_t, s: []const u8) void {
     var off: usize = 0;
@@ -333,6 +334,39 @@ fn fuzzStackHeapBoundaries() void {
     out("  stack/heap boundary fuzz: OK\n");
 }
 
+// ── Valid adversarial bytecode: stack-balanced, jump-free sequences ──────────
+// These are valid-by-construction: N null_val pushes + (N-1) eq folds + halt.
+// Tests the VM dispatcher at unusual stack depths without invalid-bytecode noise.
+
+fn fuzzValidAdversarialBytecode() void {
+    const depths = [_]usize{ 1, 2, 3, 7, 8, 15, 16, 31, 32, 63, 64, 127, 128, 255, 256, 511 };
+    const null_byte = @intFromEnum(op_mod.Op.null_val);
+    const true_byte = @intFromEnum(op_mod.Op.true_val);
+    const eq_byte   = @intFromEnum(op_mod.Op.eq);
+    const halt_byte = @intFromEnum(op_mod.Op.halt);
+
+    for (depths) |depth| {
+        // null_val * depth, eq * (depth-1), halt — stack ends at depth 1
+        resetAll();
+        var i: usize = 0;
+        while (i < depth) : (i += 1) chunk.emitByte(null_byte, 1) catch break;
+        i = 0;
+        while (i < depth - 1) : (i += 1) chunk.emitByte(eq_byte, 1) catch break;
+        chunk.emitByte(halt_byte, 1) catch {};
+        vm.run(vm.VMContext.fromActive()) catch {};
+
+        // Same but with true_val pushes — exercises the bool fast-path in eq
+        resetAll();
+        i = 0;
+        while (i < depth) : (i += 1) chunk.emitByte(true_byte, 1) catch break;
+        i = 0;
+        while (i < depth - 1) : (i += 1) chunk.emitByte(eq_byte, 1) catch break;
+        chunk.emitByte(halt_byte, 1) catch {};
+        vm.run(vm.VMContext.fromActive()) catch {};
+    }
+    out("  valid adversarial bytecode: OK\n");
+}
+
 // ── Differential: defused vs fused execution must agree ─────────────────────
 
 const OutcomeTag = enum { ok, type_error, range_error, not_defined, predicate_error, other };
@@ -477,6 +511,20 @@ fn runAssert(src: []const u8, label: []const u8) void {
         }
         // Other errors (OOM, etc.) are not property failures.
     };
+}
+
+// Like runAssert but tolerates panics and runtime errors — used for adversarial
+// patterns where the outcome is undefined or deliberately exceptional.
+fn runTolerant(src: []const u8) void {
+    resetAll();
+    vmnative.installStdGlobal(globals.activeState()) catch {};
+    var c = Compiler.init(src, .{
+        .module_ctx = &_prop_ctx,
+        .resolve_import = propStdResolver,
+    });
+    c.compile(true) catch { return; };
+    chunk.emitOp(.halt, 1) catch {};
+    vm.run(vm.VMContext.fromActive()) catch {};
 }
 
 // ── Property: clone(x) deep-equals x for all representable value types ───────
@@ -721,11 +769,321 @@ fn propGcInvariance() void {
     out("  gc invariance: OK\n");
 }
 
+// ── Property: objects reachable via multiple paths survive GC correctly ───────
+
+fn propSharedReferences() void {
+    const cases = [_][]const u8{
+        // Two containers pointing to the same map value
+        \\std := import("std")
+        \\core := std.core
+        \\shared := {"val": 42}
+        \\a := {"ref": shared}
+        \\b := {"ref": shared}
+        \\ref_a := a["ref"]
+        \\ref_b := b["ref"]
+        \\assert ref_a["val"] == 42, "shared ref via a"
+        \\assert ref_b["val"] == 42, "shared ref via b"
+        ,
+        // Diamond graph: two inner nodes share the same leaf array
+        \\std := import("std")
+        \\core := std.core
+        \\leaf := [1, 2, 3]
+        \\inner1 := {"data": leaf}
+        \\inner2 := {"data": leaf}
+        \\d1 := inner1["data"]
+        \\d2 := inner2["data"]
+        \\assert d1[0] == 1, "diamond left"
+        \\assert d2[0] == 1, "diamond right"
+        ,
+        // Same array stored under multiple map keys; force allocations to trigger GC
+        \\std := import("std")
+        \\core := std.core
+        \\shared := []
+        \\for i := 0; i < 10; i++ { shared = core.append(shared, i) }
+        \\m := {"a": shared, "b": shared, "c": shared}
+        \\assert core.len(m["a"]) == 10, "shared len a"
+        \\assert core.len(m["b"]) == 10, "shared len b"
+        \\assert core.deep_equal(m["a"], m["b"]), "shared deep equal"
+        ,
+        // Clone of structure with shared sub-values: paths are independent after clone
+        \\std := import("std")
+        \\core := std.core
+        \\inner := {"x": 1}
+        \\outer := {"p": inner, "q": inner}
+        \\cloned := core.clone(outer)
+        \\cp := cloned["p"]
+        \\cq := cloned["q"]
+        \\assert cp["x"] == 1, "clone p"
+        \\assert cq["x"] == 1, "clone q"
+        ,
+        // Wide fan-out: one root referenced from 10 container slots, GC pressure
+        \\std := import("std")
+        \\core := std.core
+        \\root := {"marker": 99}
+        \\arr := []
+        \\for i := 0; i < 10; i++ { arr = core.append(arr, root) }
+        \\for i := 0; i < 10; i++ {
+        \\    slot := arr[i]
+        \\    assert slot["marker"] == 99, "fan-out slot"
+        \\}
+        ,
+    };
+
+    for (cases) |src| {
+        runAssert(src, "shared references");
+    }
+    out("  shared references: OK\n");
+}
+
+// ── Property: extended panic/defer/recover interaction patterns ───────────────
+
+fn propPanicRecoverExtended() void {
+    const cases = [_][]const u8{
+        // recover() called outside any panic must return null
+        \\std := import("std")
+        \\core := std.core
+        \\v := core.recover()
+        \\assert v == null, "recover outside panic is null"
+        ,
+        // re-panic: handler panics after recovering, outer handler catches it
+        \\std := import("std")
+        \\core := std.core
+        \\outer_caught := false
+        \\func inner() {
+        \\    defer func() {
+        \\        e := core.recover()
+        \\        if core.is_error(e) { panic("re-panic") }
+        \\    }()
+        \\    panic("original")
+        \\}
+        \\func outer() {
+        \\    defer func() {
+        \\        e := core.recover()
+        \\        if core.is_error(e) { outer_caught = true }
+        \\    }()
+        \\    inner()
+        \\}
+        \\outer()
+        \\assert outer_caught, "re-panic caught by outer"
+        ,
+        // Multiple sequential panics, each absorbed by its own frame
+        \\std := import("std")
+        \\core := std.core
+        \\count := 0
+        \\func safe_panic() {
+        \\    defer func() {
+        \\        e := core.recover()
+        \\        if core.is_error(e) { count = count + 1 }
+        \\    }()
+        \\    _ = [][0]
+        \\}
+        \\safe_panic()
+        \\safe_panic()
+        \\safe_panic()
+        \\assert count == 3, "multiple sequential panics"
+        ,
+        // Panic at call depth 4, recovered at depth 1 (all intermediate frames unwind)
+        \\std := import("std")
+        \\core := std.core
+        \\unwound := false
+        \\func d4() { _ = [][0] }
+        \\func d3() { d4() }
+        \\func d2() { d3() }
+        \\func d1() {
+        \\    defer func() {
+        \\        e := core.recover()
+        \\        if core.is_error(e) { unwound = true }
+        \\    }()
+        \\    d2()
+        \\}
+        \\d1()
+        \\assert unwound, "deep unwind to recover"
+        ,
+        // recover() inside a non-deferred inner func: only works if called from defer
+        \\std := import("std")
+        \\core := std.core
+        \\recovered := false
+        \\func handler() {
+        \\    e := core.recover()
+        \\    if core.is_error(e) { recovered = true }
+        \\}
+        \\func victim() {
+        \\    defer handler()
+        \\    _ = [][0]
+        \\}
+        \\victim()
+        \\assert recovered, "recover via deferred func call"
+        ,
+    };
+
+    for (cases) |src| {
+        runAssert(src, "panic/recover extended");
+    }
+    out("  panic/recover extended: OK\n");
+}
+
+// ── Property: collection mutation during for-in must not crash ────────────────
+// These test adversarial iteration patterns. We use runTolerant because some
+// patterns may legitimately panic (e.g. key deletion mid-traverse). The goal
+// is crash-freedom (no WASI trap), not outcome purity.
+
+fn propIteratorInvalidation() void {
+    const cases = [_][]const u8{
+        // Overwrite element value (not length) during array for-in — safe
+        \\var arr = [1, 2, 3, 4, 5]
+        \\for v in arr {
+        \\    arr[0] = 99
+        \\}
+        ,
+        // Append during array for-in: iterator holds snapshot of original length
+        \\std := import("std")
+        \\core := std.core
+        \\arr := [1, 2, 3]
+        \\for v in arr {
+        \\    arr = core.append(arr, v)
+        \\    if core.len(arr) > 10 { break }
+        \\}
+        ,
+        // Overwrite map value during map for-in (key set unchanged)
+        \\var m = {"a": 1, "b": 2, "c": 3}
+        \\for k in m {
+        \\    m["a"] = 99
+        \\}
+        ,
+        // Insert new key during map for-in (structural change)
+        \\var m = {"a": 1}
+        \\count := 0
+        \\for k in m {
+        \\    m["b"] = 2
+        \\    count = count + 1
+        \\    if count > 5 { break }
+        \\}
+        ,
+        // Delete key currently being iterated (most adversarial)
+        \\std := import("std")
+        \\core := std.core
+        \\m := {"a": 1, "b": 2, "c": 3}
+        \\for k in m {
+        \\    core.delete(m, k)
+        \\}
+        ,
+        // Nested for-in over same array
+        \\std := import("std")
+        \\core := std.core
+        \\arr := [1, 2, 3]
+        \\pairs := 0
+        \\for x in arr {
+        \\    for y in arr {
+        \\        pairs = pairs + 1
+        \\    }
+        \\}
+        \\assert pairs == 9, "nested for-in same array"
+        ,
+    };
+
+    for (cases) |src| {
+        runTolerant(src);
+    }
+    out("  iterator invalidation: OK\n");
+}
+
+// ── Property: variant constructor and named-type explosion ────────────────────
+
+fn propVariantExplosion() void {
+    const cases = [_][]const u8{
+        // Variant with 6 arms: all construction and dispatch paths exercised
+        \\std := import("std")
+        \\core := std.core
+        \\type Status variant {
+        \\    pending,
+        \\    running(id int),
+        \\    paused(id int),
+        \\    failed(msg string),
+        \\    succeeded(result int),
+        \\    cancelled
+        \\}
+        \\count := 0
+        \\vals := [Status.pending, Status.running(1), Status.paused(2), Status.failed("oops"), Status.succeeded(42), Status.cancelled]
+        \\for v in vals {
+        \\    switch v {
+        \\        case .pending { count = count + 1 }
+        \\        case .running as id { count = count + 1 }
+        \\        case .paused as id { count = count + 1 }
+        \\        case .failed as m { count = count + 1 }
+        \\        case .succeeded as r { count = count + 1 }
+        \\        case .cancelled { count = count + 1 }
+        \\    }
+        \\}
+        \\assert count == 6, "all 6 variant arms matched"
+        ,
+        // Deep subtype chain: 3 levels of named int types
+        \\std := import("std")
+        \\type Score int range 0..100
+        \\subtype Grade Score range 0..100
+        \\subtype Honors Grade range 90..100
+        \\var h Honors = Honors(95)
+        \\var g Grade = Grade(h)
+        \\var s Score = Score(g)
+        \\assert int(s) == 95, "deep subtype chain"
+        ,
+        // Named type with inline predicate
+        \\std := import("std")
+        \\type Port int predicate func(x) { return x >= 1 and x <= 65535 }
+        \\var p Port = Port(8080)
+        \\assert int(p) == 8080, "predicate named type"
+        ,
+        // Variant construction explosion: many values with GC pressure
+        \\std := import("std")
+        \\core := std.core
+        \\type Node variant {
+        \\    leaf(v int),
+        \\    branch(label string)
+        \\}
+        \\nodes := []
+        \\for i := 0; i < 30; i++ {
+        \\    if i rem 2 == 0 {
+        \\        nodes = core.append(nodes, Node.leaf(i))
+        \\    } else {
+        \\        nodes = core.append(nodes, Node.branch("x"))
+        \\    }
+        \\}
+        \\assert core.len(nodes) == 30, "variant explosion count"
+        ,
+        // Variant in map values: named dispatch over heterogeneous payload types
+        \\std := import("std")
+        \\core := std.core
+        \\type Event variant {
+        \\    click(x int),
+        \\    key(code string),
+        \\    resize
+        \\}
+        \\m := {"e1": Event.click(10), "e2": Event.key("Enter"), "e3": Event.resize}
+        \\clicks := 0
+        \\keys := 0
+        \\for k in m {
+        \\    switch m[k] {
+        \\        case .click as x { clicks = clicks + 1 }
+        \\        case .key as c { keys = keys + 1 }
+        \\        case .resize { }
+        \\    }
+        \\}
+        \\assert clicks == 1, "one click"
+        \\assert keys == 1, "one key"
+        ,
+    };
+
+    for (cases) |src| {
+        runAssert(src, "variant explosion");
+    }
+    out("  variant explosion: OK\n");
+}
+
 // ── Main ────────────────────────────────────────────────────────────────────
 
 export fn _start() void {
     fuzzCompiler();
     fuzzVmBytecode();
+    fuzzValidAdversarialBytecode();
     fuzzVmArithmetic();
     fuzzValueWire();
     fuzzNamedTypeBoundaries();
@@ -735,7 +1093,11 @@ export fn _start() void {
     propCloneDeepEquals();
     propMapPromotion();
     propPanicDeferRecover();
+    propPanicRecoverExtended();
     propGcInvariance();
+    propSharedReferences();
+    propIteratorInvalidation();
+    propVariantExplosion();
     out("fuzz OK\n");
     std.os.wasi.proc_exit(0);
 }

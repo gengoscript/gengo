@@ -83,6 +83,21 @@ pub fn build(b: *std.Build) void {
     const run_fuzz_runner = b.addSystemCommand(&.{ wasmtime_opt, "--dir", "/" });
     run_fuzz_runner.addArtifactArg(fuzz_runner_exe);
 
+    const fuzz_gc_stress_opts = b.addOptions();
+    fuzz_gc_stress_opts.addOption(bool, "perf", false);
+    fuzz_gc_stress_opts.addOption(bool, "gc_stress", true);
+    fuzz_gc_stress_opts.addOption(bool, "heap_paranoia", false);
+    fuzz_gc_stress_opts.addOption(bool, "cap_net", cap_net_opt);
+    fuzz_gc_stress_opts.addOption(bool, "cap_http", cap_http_opt);
+    fuzz_gc_stress_opts.addOption(bool, "cap_fs", cap_fs_opt);
+    fuzz_gc_stress_opts.addOption(bool, "predicates", predicates_opt);
+    fuzz_gc_stress_opts.addOption(bool, "gengo_host", gengo_host_opt);
+    fuzz_gc_stress_opts.addOption([]const u8, "version", gengo_version);
+    const fuzz_gc_stress_opts_mod = fuzz_gc_stress_opts.createModule();
+    const fuzz_gc_stress_exe = addWasmExe(b, "fuzz-runner-gc-stress", "src/fuzz_runner.zig", wasm_target, .Debug, &preset.step, fuzz_gc_stress_opts_mod);
+    const run_fuzz_gc_stress = b.addSystemCommand(&.{ wasmtime_opt, "--dir", "/" });
+    run_fuzz_gc_stress.addArtifactArg(fuzz_gc_stress_exe);
+
     // ── Native test runner (replaces bash scripts) ────────────────────────────
 
     const test_runner_mod = b.createModule(.{
@@ -349,6 +364,9 @@ pub fn build(b: *std.Build) void {
 
     const fuzz_step = b.step("fuzz", "Run fuzz tests (compiler, VM, and boundary inputs)");
     fuzz_step.dependOn(&run_fuzz_runner.step);
+
+    const fuzz_gc_stress_step = b.step("fuzz-gc-stress", "Run fuzz tests under gc_stress (GC on every allocation)");
+    fuzz_gc_stress_step.dependOn(&run_fuzz_gc_stress.step);
 
     const run_parity = b.addRunArtifact(test_runner_exe);
     run_parity.step.dependOn(&install_debug.step);
