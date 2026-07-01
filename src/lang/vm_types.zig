@@ -631,6 +631,40 @@ fn argTypeError(f: FuncObj, i: usize, spec: FieldTypeSpec, arg: Value) error{Typ
     return error.TypeError;
 }
 
+// A primitive spec is a single-alt spec whose alt is a scalar with no
+// allocation overhead, making it safe to type-check inline on the IC warm path.
+// Must stay in sync with the set of tags matchesTypeAlt handles without heap
+// access. decimal_t is included: v == .decimal is a tag-only comparison.
+fn isPrimitiveTypeSpec(spec: FieldTypeSpec) bool {
+    if (spec.alts.len != 1) return false;
+    return switch (spec.alts[0].typ) {
+        .int, .float, .decimal_t, .boolean, .null_t, .rune_t, .string => true,
+        else => false,
+    };
+}
+
+pub fn canInlinePrimitiveArgs(f: FuncObj, argc: u8) bool {
+    if (!f.has_typed_params) return false;
+    if (f.is_variadic or f.default_count > 0) return false;
+    if (f.arity != argc) return false;
+    for (f.param_types[0..f.arity]) |spec| {
+        if (!isPrimitiveTypeSpec(spec)) return false;
+    }
+    return true;
+}
+
+pub fn enforcePrimitiveFuncArgTypes(f: FuncObj, argc: u8) !void {
+    const vs = vms.vmState();
+    const base = vs.stack_top - argc;
+    for (0..f.arity) |i| {
+        const spec = f.param_types[i];
+        // A non-primitive spec here means GC pool-slot reuse; fall back.
+        if (!isPrimitiveTypeSpec(spec)) return enforceFuncArgTypes(f, argc);
+        const arg = vs.stack[base + i];
+        if (!matchesTypeAlt(arg, spec.alts[0])) return argTypeError(f, i, spec, arg);
+    }
+}
+
 pub fn enforceFuncArgTypes(f: FuncObj, argc: u8) !void {
     if (!f.has_typed_params) return;
     const fixed: usize = if (f.is_variadic) f.arity - 1 else f.arity;

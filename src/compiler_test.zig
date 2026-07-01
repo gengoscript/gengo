@@ -1031,6 +1031,21 @@ fn runSrc(rt: *Runtime, src: []const u8) !void {
     try rt.run(src);
 }
 
+fn findFirstCallIc(c: *chunk.State) ?struct { offset: usize, slot: u16 } {
+    var ip: usize = 0;
+    while (ip < c.code_len) {
+        const op: Op = @enumFromInt(c.code[ip]);
+        if (op == .call) {
+            if (ip + 3 >= c.code_len) return null;
+            const slot: u16 = (@as(u16, c.code[ip + 2]) << 8) | c.code[ip + 3];
+            return .{ .offset = ip, .slot = slot };
+        }
+        const decoded = c.decodeAt(ip) catch return null;
+        ip += decoded.width;
+    }
+    return null;
+}
+
 // ── const_eq fusion ───────────────────────────────────────────────────────
 
 test "compiler: const_eq fusion fires" {
@@ -1061,6 +1076,45 @@ test "compiler: const_eq fusion result" {
     try std.testing.expect(r1 == .boolean and r1.boolean);
     const r2 = try rt.callGlobal("f", &.{.{ .int = 99 }});
     try std.testing.expect(r2 == .boolean and !r2.boolean);
+}
+
+test "compiler: typed primitive call warms call inline cache after execution" {
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\func inc(x int) int { return x + 1 }
+        \\n := 0
+        \\for i := 0; i < 100; i += 1 {
+        \\    n = inc(n)
+        \\}
+    );
+
+    const before = findFirstCallIc(rt.chunk_state) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u16, 0xFFFF), before.slot);
+
+    try runSrc(&rt,
+        \\func inc(x int) int { return x + 1 }
+        \\n := 0
+        \\for i := 0; i < 100; i += 1 {
+        \\    n = inc(n)
+        \\}
+    );
+
+    const after = findFirstCallIc(rt.chunk_state) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(after.slot != 0xFFFF);
+}
+
+test "compiler: warmed typed primitive call still enforces arg types" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.TypeError, rt.run(
+        \\func inc(x int) int { return x + 1 }
+        \\v := 1
+        \\func step() int { return inc(v) }
+        \\step()
+        \\v = "x"
+        \\step()
+    ));
 }
 
 // ── const_sub fusion ──────────────────────────────────────────────────────
