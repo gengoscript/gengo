@@ -180,8 +180,7 @@ fn runDivByZero() !void {
 fn runCallNumber() !void {
     resetAll();
     try chunk.emitConst(.{ .float = 42.0 }, 1);
-    try chunk.emitOp(.call, 1);
-    try chunk.emitByte(0, 1); // argc = 0
+    try chunk.emitCall(0, 1);
     try chunk.emitOp(.halt, 1);
     vm.run(vm.VMContext.fromActive()) catch |e| return expectError("call-number", error.NotAFunction, e);
     return error.TestFailed;
