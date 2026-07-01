@@ -169,25 +169,33 @@ const Engine = struct {
     import_loader_ctx: ?*anyopaque = null,
     import_scratch: [MaxImportScratch]u8 = undefined,
 
-    fn initInPlaceDefault(self: *Engine) !void {
+    fn initScalars(self: *Engine) void {
         self.source_count = 0;
         self.host_module_count = 0;
         self.next_host_call_id = HostModuleCallIdBase;
         self.last_error_len = 0;
         self.last_error_line = 0;
         self.last_error_col = 0;
+        self.string_scratch_len = 0;
+        self.wire_elem_count = 0;
+        self.write_callback = null;
+        self.read_callback = null;
+        self.net_handlers = null;
+        self.http_handler = null;
+        self.fs_state = .{};
+        self.import_loader_fn = null;
+        self.import_loader_ctx = null;
+    }
+
+    fn initInPlaceDefault(self: *Engine) !void {
+        self.initScalars();
         try self.runtime.initWithPolicy(.{ .allow_io = true });
         io.setWriteOverrides(engineWrite, engineWerr);
         io.setReadOverride(engineRead);
     }
 
     fn initInPlaceWithConfig(self: *Engine, ic: InstanceConfig) !void {
-        self.source_count = 0;
-        self.host_module_count = 0;
-        self.next_host_call_id = HostModuleCallIdBase;
-        self.last_error_len = 0;
-        self.last_error_line = 0;
-        self.last_error_col = 0;
+        self.initScalars();
         const max_ops: ?u64 = if (ic.max_ops < 0) null else @intCast(ic.max_ops);
         try self.runtime.inner.initWithConfig(
             .{ .allow_io = ic.allow_io, .max_ops = max_ops },
