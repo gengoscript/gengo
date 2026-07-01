@@ -58,3 +58,20 @@ Bench files:
 
 Policy values:
 - `ALLOW_OOM`: OutOfMemory is treated as expected success for that bench case.
+
+## Native VM Sampling Profiles
+
+For Linux `perf` sampling against the native VM:
+
+```bash
+tools/profile-vm.sh
+tools/profile-vm.sh case tests/bench/006_call_overhead.gengo
+```
+
+If `perf` requires elevated privileges on your machine:
+
+```bash
+tools/profile-vm.sh run --sudo
+```
+
+See `dev-docs/perf/profiling.md` for the report layout and interpretation.

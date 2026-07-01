@@ -798,9 +798,16 @@ fn readUpvalueCell(ctx: VMContext, idx: usize) !*Object {
     return cl.closure.upvalues[idx];
 }
 
-// Warm call path: IC confirmed same callee — skip arity/variadic/typed-param checks.
-// Only reached for non-variadic, non-typed-param functions cached by performCallIC.
-fn enterFunctionFrameWarm(ctx: VMContext, f: @import("value.zig").FuncObj, func_obj: *Object, closure: ?*Object) !void {
+// Warm call path: IC confirmed same callee.
+// Arity/default/variadic checks are only skipped for call sites we explicitly
+// decided were safe to cache in performCallIC.
+fn enterFunctionFrameWarm(ctx: VMContext, f: @import("value.zig").FuncObj, func_obj: *Object, closure: ?*Object, argc: u8) !void {
+    // GC pool-slot reuse can put a different function at the cached index.
+    // Re-verify the IC invariants before trusting f.arity for the frame base.
+    if (f.arity != argc or f.is_variadic or f.default_count != 0) {
+        return enterFunctionFrame(ctx, f, func_obj, closure, argc);
+    }
+    if (f.has_typed_params) try vmtyp.enforcePrimitiveFuncArgTypes(f, argc);
     if (ctx.vs.frame_top >= ctx.vs.frames.len) return error.CallStackOverflow;
     ctx.vs.frames[ctx.vs.frame_top] = .{
         .ret_ip = ctx.vs.ip,
@@ -872,19 +879,19 @@ fn performCallIC(ctx: VMContext, argc: u8, ic_base: usize, ic_slot: u16) !void {
         const obj_idx = heap.objectPoolIndex(obj);
         if (ic_slot != 0xFFFF and obj_idx == ic_slot) {
             return switch (obj.*) {
-                .function => |f| enterFunctionFrameWarm(ctx, f, obj, null),
-                .closure  => |cl| enterFunctionFrameWarm(ctx, cl.func.function, cl.func, obj),
+                .function => |f| enterFunctionFrameWarm(ctx, f, obj, null, argc),
+                .closure  => |cl| enterFunctionFrameWarm(ctx, cl.func.function, cl.func, obj, argc),
                 else      => performCall(ctx, argc),
             };
         }
         try performCall(ctx, argc);
         if (ic_slot == 0xFFFF and obj_idx != 0xFFFF) {
             switch (obj.*) {
-                .function => |f| if (!f.is_variadic and !f.has_typed_params) {
+                .function => |f| if (!f.is_variadic and f.default_count == 0 and (f.arity == argc) and (!f.has_typed_params or vmtyp.canInlinePrimitiveArgs(f, argc))) {
                     ctx.cs.patchByte(ic_base,     @intCast((obj_idx >> 8) & 0xFF));
                     ctx.cs.patchByte(ic_base + 1, @intCast(obj_idx & 0xFF));
                 },
-                .closure => |cl| if (!cl.func.function.is_variadic and !cl.func.function.has_typed_params) {
+                .closure => |cl| if (!cl.func.function.is_variadic and cl.func.function.default_count == 0 and (cl.func.function.arity == argc) and (!cl.func.function.has_typed_params or vmtyp.canInlinePrimitiveArgs(cl.func.function, argc))) {
                     ctx.cs.patchByte(ic_base,     @intCast((obj_idx >> 8) & 0xFF));
                     ctx.cs.patchByte(ic_base + 1, @intCast(obj_idx & 0xFF));
                 },
