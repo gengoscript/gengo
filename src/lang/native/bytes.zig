@@ -109,15 +109,52 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             try vms.vmPush(.{ .int = @as(i64, @intCast(s.len)) });
         },
         .bytes_slice => {
-            const s    = try vms.asStringValue(vms.vmTop(2));
+            const src_val = vms.vmTop(2);
             const from = try argAsI64(vms.vmTop(1));
             const to   = try argAsI64(vms.vmTop(0));
+            // When the source is a GC-managed string object, return a zero-copy
+            // string_view instead of allocating and copying bytes.  The view keeps
+            // the source object alive via its .source pointer, so the backing buffer
+            // is never freed while the view exists.  Static constant-pool strings
+            // (.string tag) are immortal; they still require a copy via the slow path.
+            if (src_val == .object) {
+                const src_obj = src_val.object;
+                switch (src_obj.*) {
+                    .dyn_string => |s| {
+                        const slen = @as(i64, @intCast(s.len));
+                        if (from < 0 or to < from or to > slen) return error.RangeError;
+                        const f = @as(usize, @intCast(from));
+                        const t_idx = @as(usize, @intCast(to));
+                        // src_obj is still on the VM stack (vmTop(2)), so GC keeps it
+                        // alive through the vmAllocObject call inside makeStringView.
+                        const result = try vmgc.makeStringView(s[f..t_idx], src_obj);
+                        vms.vmPopArgs(argc);
+                        try vms.vmPush(result);
+                        return;
+                    },
+                    .string_view => |sv| {
+                        const slen = @as(i64, @intCast(sv.bytes.len));
+                        if (from < 0 or to < from or to > slen) return error.RangeError;
+                        const f = @as(usize, @intCast(from));
+                        const t_idx = @as(usize, @intCast(to));
+                        // Chase through to the owning dyn_string so the view graph
+                        // stays shallow: a view of a view still points at the root.
+                        const result = try vmgc.makeStringView(sv.bytes[f..t_idx], sv.source);
+                        vms.vmPopArgs(argc);
+                        try vms.vmPush(result);
+                        return;
+                    },
+                    else => return error.TypeError,
+                }
+            }
+            // Slow path: static string — must copy since it has no GC object header.
+            const s    = try vms.asStringValue(src_val);
             const slen = @as(i64, @intCast(s.len));
             if (from < 0 or to < from or to > slen) return error.RangeError;
             const f = @as(usize, @intCast(from));
-            const t = @as(usize, @intCast(to));
+            const t_idx = @as(usize, @intCast(to));
             vms.vmPopArgs(argc);
-            try vms.vmPush(try makeBinaryString(s[f..t]));
+            try vms.vmPush(try makeBinaryString(s[f..t_idx]));
         },
         .bytes_repeat => {
             const s = try vms.asStringValue(vms.vmTop(1));
