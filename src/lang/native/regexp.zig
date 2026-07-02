@@ -15,10 +15,24 @@ const MaxPatternLen = 4096;
 
 var regexp_type_cache: ?*Object = null;
 
+// Compiled pattern cache — avoids re-parsing constant patterns on every predicate check.
+// Keyed by (pointer, length): stable for constant-pool strings and bump-heap objects alike.
+// Owned by the cache; freed on reClearCache().  LRU-evict at MaxCacheEntries.
+const PatternCacheEntry = struct {
+    pattern_ptr: [*]const u8,
+    pattern_len: usize,
+    alts: []Alt,
+};
+const MaxCacheEntries = 32;
+var pattern_cache: [MaxCacheEntries]PatternCacheEntry = undefined;
+var pattern_cache_len: usize = 0;
+
 // ── Regex type helpers ───────────────────────────────────────────────────────
 
 pub fn reClearCache() void {
     regexp_type_cache = null;
+    for (pattern_cache[0..pattern_cache_len]) |entry| freeAlts(entry.alts);
+    pattern_cache_len = 0;
 }
 
 pub fn reGetType() !*Object {
@@ -437,13 +451,6 @@ fn findAllMatches(alts: []Alt, s: []const u8, alloc: std.mem.Allocator) ![]struc
 
 // ── Native function implementations ──────────────────────────────────────────
 
-fn parsePattern(pattern: []const u8) ParseError![]Alt {
-    if (pattern.len > MaxPatternLen) return error.PatternTooLong;
-    const alloc = std.heap.page_allocator;
-    const alts = try parseAlts(alloc, pattern, 0, pattern.len);
-    return alts;
-}
-
 fn freeAlts(alts: []Alt) void {
     const alloc = std.heap.page_allocator;
     for (alts) |alt| {
@@ -457,19 +464,41 @@ fn freeAlts(alts: []Alt) void {
     alloc.free(alts);
 }
 
+// Return compiled pattern alts, parsing only on first use per (ptr, len) key.
+// The cache owns the memory; callers must NOT call freeAlts on the returned slice.
+fn parsePattern(pattern: []const u8) ParseError![]Alt {
+    if (pattern.len > MaxPatternLen) return error.PatternTooLong;
+    // Fast path: check cache by pointer identity (stable for constant-pool and bump-heap strings).
+    for (pattern_cache[0..pattern_cache_len]) |entry| {
+        if (entry.pattern_ptr == pattern.ptr and entry.pattern_len == pattern.len) {
+            return entry.alts;
+        }
+    }
+    // Slow path: parse and cache.
+    const alts = try parseAlts(std.heap.page_allocator, pattern, 0, pattern.len);
+    if (pattern_cache_len < MaxCacheEntries) {
+        pattern_cache[pattern_cache_len] = .{ .pattern_ptr = pattern.ptr, .pattern_len = pattern.len, .alts = alts };
+        pattern_cache_len += 1;
+    } else {
+        // Evict oldest entry (index 0) and append new one at the end.
+        freeAlts(pattern_cache[0].alts);
+        for (0..MaxCacheEntries - 1) |i| pattern_cache[i] = pattern_cache[i + 1];
+        pattern_cache[MaxCacheEntries - 1] = .{ .pattern_ptr = pattern.ptr, .pattern_len = pattern.len, .alts = alts };
+    }
+    return alts;
+}
+
 pub fn nativeReMatch(pattern_val: Value, s_val: Value) !Value {
     const pattern = try reGetPattern(pattern_val);
     const s = try vms.asStringValue(s_val);
-    const alts = parsePattern(pattern) catch |err| return err;
-    defer freeAlts(alts);
+    const alts = try parsePattern(pattern);
     return .{ .boolean = findMatch(alts, s) != null };
 }
 
 pub fn nativeReFind(pattern_val: Value, s_val: Value) !Value {
     const pattern = try reGetPattern(pattern_val);
     const s = try vms.asStringValue(s_val);
-    const alts = parsePattern(pattern) catch |err| return err;
-    defer freeAlts(alts);
+    const alts = try parsePattern(pattern);
     const m = findMatch(alts, s) orelse return .null;
     return try vmgc.makeDynString(s[m[0]..m[1]]);
 }
@@ -477,18 +506,17 @@ pub fn nativeReFind(pattern_val: Value, s_val: Value) !Value {
 pub fn nativeReFindAll(pattern_val: Value, s_val: Value) !Value {
     const pattern = try reGetPattern(pattern_val);
     const s = try vms.asStringValue(s_val);
+    const alts = try parsePattern(pattern);
     const alloc = std.heap.page_allocator;
-    const alts = parsePattern(pattern) catch |err| return err;
-    defer freeAlts(alts);
-    const matches = findAllMatches(alts, s, alloc) catch |err| { alloc.free(alts); return err; };
+    const matches = try findAllMatches(alts, s, alloc);
     defer alloc.free(matches);
     const obj = try vmgc.allocTempRooted(.{ .array_managed = &[_]Value{} });
     defer vms.popTempRoot();
     const result = try vmgc.vmAllocManagedSlice(Value, matches.len);
-    obj.* = .{ .array_managed = result[0..0] }; // publish immediately
+    obj.* = .{ .array_managed = result[0..0] };
     for (matches, 0..) |m, j| {
         result[j] = try vmgc.makeDynString(s[m[0]..m[1]]);
-        obj.* = .{ .array_managed = result[0 .. j + 1] }; // grow visible
+        obj.* = .{ .array_managed = result[0 .. j + 1] };
     }
     return .{ .object = obj };
 }
@@ -498,8 +526,7 @@ pub fn nativeReReplace(pattern_val: Value, s_val: Value, repl_val: Value) !Value
     const s = try vms.asStringValue(s_val);
     const repl = try vms.asStringValue(repl_val);
     const alloc = std.heap.page_allocator;
-    const alts = parsePattern(pattern) catch |err| return err;
-    defer freeAlts(alts);
+    const alts = try parsePattern(pattern);
     var result = AlignedManaged(u8, null).init(alloc);
     defer result.deinit();
     var i: usize = 0;
@@ -519,8 +546,7 @@ pub fn nativeReSplit(pattern_val: Value, s_val: Value) !Value {
     const pattern = try reGetPattern(pattern_val);
     const s = try vms.asStringValue(s_val);
     const alloc = std.heap.page_allocator;
-    const alts = parsePattern(pattern) catch |err| return err;
-    defer freeAlts(alts);
+    const alts = try parsePattern(pattern);
     var parts = AlignedManaged([]const u8, null).init(alloc);
     defer parts.deinit();
     var i: usize = 0;
@@ -535,20 +561,18 @@ pub fn nativeReSplit(pattern_val: Value, s_val: Value) !Value {
     const obj = try vmgc.allocTempRooted(.{ .array_managed = &[_]Value{} });
     defer vms.popTempRoot();
     const result = try vmgc.vmAllocManagedSlice(Value, parts.items.len);
-    obj.* = .{ .array_managed = result[0..0] }; // publish immediately
+    obj.* = .{ .array_managed = result[0..0] };
     for (parts.items, 0..) |part, j| {
         result[j] = try vmgc.makeDynString(part);
-        obj.* = .{ .array_managed = result[0 .. j + 1] }; // grow visible
+        obj.* = .{ .array_managed = result[0 .. j + 1] };
     }
     return .{ .object = obj };
 }
 
 pub fn nativeReCompile(pattern_val: Value) !Value {
     const pattern = try vms.asStringValue(pattern_val);
-    if (pattern.len > MaxPatternLen) return error.PatternTooLong;
-    const alloc = std.heap.page_allocator;
-    const alts = try parseAlts(alloc, pattern, 0, pattern.len);
-    freeAlts(alts);
+    // Validate by parsing (result goes into the cache for future use).
+    _ = try parsePattern(pattern);
     return try reBuildObj(pattern);
 }
 

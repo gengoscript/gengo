@@ -86,6 +86,16 @@ tools/profile-vm.sh net-case \
 every message it receives, exercising the VM's string, struct, switch, and net
 code paths rather than pure arithmetic loops.
 
+The `#` wildcard receives all traffic from a public broker, which can be
+hundreds of messages per second.  The default 1 m heap may be exhausted; pass
+`--heap 4m` (or larger) for uninterrupted 30–60 s captures:
+
+```bash
+tools/profile-vm.sh net-case \
+    ../gengo-mqtt/listener-all.gengo \
+    --cap net --modules ../gengo-mqtt/mqtt --heap 4m
+```
+
 ## Interpreting results
 
 Typical signals:
