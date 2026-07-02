@@ -33,6 +33,9 @@ pub const is_embedded_engine = build_opts.gengo_host;
 const PtrInt = if (is_wasm) i32 else usize;
 const WriteCallback = *const fn (ptr: [*]const u8, len: i32, is_stderr: i32) callconv(.c) void;
 const ReadCallback = *const fn (ptr: [*]u8, max_len: i32, is_line: i32) callconv(.c) i32;
+const TraceFn = io.TraceFn;
+const GlobalsCallback = *const fn (?*anyopaque, [*]const u8, i32, *const ValueWire) callconv(.c) void;
+const FunctionsCallback = *const fn (?*anyopaque, [*]const u8, i32, i32) callconv(.c) void;
 
 // Active-engine state — set for the duration of engine_run / engine_call so that
 // write/read callbacks and capability handlers resolve to the calling engine's
@@ -168,6 +171,8 @@ const Engine = struct {
     import_loader_fn: ?ImportLoaderFn = null,
     import_loader_ctx: ?*anyopaque = null,
     import_scratch: [MaxImportScratch]u8 = undefined,
+    trace_fn: ?TraceFn = null,
+    trace_userdata: ?*anyopaque = null,
 
     fn initScalars(self: *Engine) void {
         self.source_count = 0;
@@ -185,6 +190,8 @@ const Engine = struct {
         self.fs_state = .{};
         self.import_loader_fn = null;
         self.import_loader_ctx = null;
+        self.trace_fn = null;
+        self.trace_userdata = null;
     }
 
     fn initInPlaceDefault(self: *Engine) !void {
@@ -296,6 +303,13 @@ fn getEngine(handle: i32) ?*Engine {
     return &engine_slots[idx].engine;
 }
 
+fn engineToHandle(engine: *const Engine) i32 {
+    for (&engine_slots, 0..) |*slot, i| {
+        if (&slot.engine == engine) return @intCast(i + 1);
+    }
+    return -1;
+}
+
 // Push the engine's per-instance capability state into the process globals so
 // that write/read hooks and capability modules use this engine's configuration.
 // Returns the previous active engine for restore (supports future re-entrancy).
@@ -307,6 +321,7 @@ fn pushCapState(engine: *Engine) ?*Engine {
     net_state.applyHandlers(engine.net_handlers);
     http_state.applyHandler(engine.http_handler);
     fs_state.loadFromEngine(&engine.fs_state);
+    io.setTrace(engine.trace_fn, engine.trace_userdata, engineToHandle(engine));
     return prev;
 }
 
@@ -319,6 +334,7 @@ fn popCapState(prev: ?*Engine) void {
         net_state.applyHandlers(p.net_handlers);
         http_state.applyHandler(p.http_handler);
         fs_state.loadFromEngine(&p.fs_state);
+        io.setTrace(p.trace_fn, p.trace_userdata, engineToHandle(p));
         p.runtime.inner.activate();
     } else {
         g_active_engine = null;
@@ -327,6 +343,7 @@ fn popCapState(prev: ?*Engine) void {
         net_state.applyHandlers(null);
         http_state.applyHandler(null);
         fs_state.clearMounts();
+        io.clearTrace();
     }
 }
 
@@ -923,6 +940,76 @@ export fn engine_mount_dir(handle: i32, name_ptr: PtrInt, name_len: i32, path_pt
     return 0;
 }
 
+/// Read a named global by value after engine_run. Writes the ValueWire
+/// representation to *out_ptr. Returns 0 on success, -1 if the handle is
+/// invalid, -2 if the name is not defined.
+export fn engine_get_global(handle: i32, name_ptr: PtrInt, name_len: i32, out_ptr: PtrInt) i32 {
+    const engine = getEngine(handle) orelse return -1;
+    const name = wasmSlice(name_ptr, name_len);
+    const gs = &engine.runtime.inner.globals_state;
+    const val = gs.get(name) orelse return -2;
+    if (out_ptr != 0) {
+        const wire = valueToWireWithScratch(val, engine) catch return -3;
+        @as(*ValueWire, @ptrFromInt(@as(usize, @intCast(out_ptr)))).* = wire;
+    }
+    return 0;
+}
+
+/// Enumerate all defined globals. For each global the callback receives
+/// (userdata, name_ptr, name_len, wire_ptr); wire_ptr is valid only during
+/// the call. Returns 0 on success, -1 if the handle is invalid.
+export fn engine_list_globals(handle: i32, callback: ?GlobalsCallback, userdata: ?*anyopaque) i32 {
+    if (comptime is_wasm) return -1;
+    const engine = getEngine(handle) orelse return -1;
+    const cb = callback orelse return 0;
+    const gs = &engine.runtime.inner.globals_state;
+    var i: usize = 0;
+    while (i < gs.len()) : (i += 1) {
+        const name = gs.nameAt(i);
+        const val = gs.valueAt(i);
+        const wire = valueToWireWithScratch(val, engine) catch continue;
+        cb(userdata, name.ptr, @intCast(name.len), &wire);
+    }
+    return 0;
+}
+
+/// Enumerate callable globals (user-defined functions and closures). For each
+/// the callback receives (userdata, name_ptr, name_len, arity).
+/// Returns 0 on success, -1 if the handle is invalid.
+export fn engine_list_functions(handle: i32, callback: ?FunctionsCallback, userdata: ?*anyopaque) i32 {
+    if (comptime is_wasm) return -1;
+    const engine = getEngine(handle) orelse return -1;
+    const cb = callback orelse return 0;
+    const gs = &engine.runtime.inner.globals_state;
+    var i: usize = 0;
+    while (i < gs.len()) : (i += 1) {
+        const name = gs.nameAt(i);
+        const val = gs.valueAt(i);
+        if (val != .object) continue;
+        const obj = val.object;
+        const arity: i32 = switch (obj.*) {
+            .function => |f| @intCast(f.arity),
+            .closure => |cl| switch (cl.func.*) {
+                .function => |f| @intCast(f.arity),
+                else => continue,
+            },
+            else => continue,
+        };
+        cb(userdata, name.ptr, @intCast(name.len), arity);
+    }
+    return 0;
+}
+
+/// Register a per-source-line trace callback fired during script execution.
+/// The callback receives (userdata, handle, line, col) on each new source line.
+/// Pass null to disable tracing.
+export fn engine_set_trace_fn(handle: i32, callback: ?TraceFn, userdata: ?*anyopaque) void {
+    if (comptime is_wasm) return;
+    const engine = getEngine(handle) orelse return;
+    engine.trace_fn = callback;
+    engine.trace_userdata = userdata;
+}
+
 test "engine_add_source rejects path and source exceeding buffer" {
     const MaxPath = 256;
     const MaxSource = 4096;
@@ -1082,4 +1169,109 @@ test "engine_call: recover() in defer intercepts panic" {
     const err_str = @as([*]const u8, @ptrFromInt(@as(usize, @bitCast(err_out.payload))))[0..err_out.len];
     try std.testing.expect(std.mem.indexOf(u8, err_str, "predicate failed") != null);
     try std.testing.expect(std.mem.indexOf(u8, err_str, "Region") != null);
+}
+
+test "engine_get_global and engine_list_globals" {
+    const h = engine_init();
+    try std.testing.expect(h > 0);
+    defer engine_destroy(h);
+
+    const src = "x := 42\ny := \"hello\"\n";
+    const run_rc = engine_run(h, @intCast(@intFromPtr(src.ptr)), @intCast(src.len));
+    try std.testing.expectEqual(0, run_rc);
+
+    // engine_get_global: existing key
+    var wire: ValueWire = undefined;
+    const rc = engine_get_global(h, @intCast(@intFromPtr("x".ptr)), 1, @intCast(@intFromPtr(&wire)));
+    try std.testing.expectEqual(0, rc);
+    // wire should be an integer 42
+    try std.testing.expectEqual(@as(u8, @intFromEnum(WireTag.number)), wire.tag);
+    try std.testing.expect((wire.flags & host_abi.FLAG_INTEGER) != 0);
+    try std.testing.expectEqual(@as(u64, @bitCast(@as(i64, 42))), wire.payload);
+
+    // engine_get_global: missing key returns -2
+    const rc_miss = engine_get_global(h, @intCast(@intFromPtr("zz".ptr)), 2, @intCast(@intFromPtr(&wire)));
+    try std.testing.expectEqual(-2, rc_miss);
+
+    // engine_list_globals: collect names
+    const Ctx = struct {
+        count: usize = 0,
+        found_x: bool = false,
+        found_y: bool = false,
+
+        fn cb(userdata: ?*anyopaque, name_ptr: [*]const u8, name_len: i32, _: *const ValueWire) callconv(.c) void {
+            const self = @as(*@This(), @ptrCast(@alignCast(userdata.?)));
+            self.count += 1;
+            const name = name_ptr[0..@intCast(name_len)];
+            if (std.mem.eql(u8, name, "x")) self.found_x = true;
+            if (std.mem.eql(u8, name, "y")) self.found_y = true;
+        }
+    };
+    var ctx: Ctx = .{};
+    const list_rc = engine_list_globals(h, Ctx.cb, &ctx);
+    try std.testing.expectEqual(0, list_rc);
+    try std.testing.expect(ctx.found_x);
+    try std.testing.expect(ctx.found_y);
+}
+
+test "engine_list_functions" {
+    const h = engine_init();
+    try std.testing.expect(h > 0);
+    defer engine_destroy(h);
+
+    const src = "func add(a int, b int) int { return a + b }\nfunc greet() string { return \"hi\" }\n";
+    const run_rc = engine_run(h, @intCast(@intFromPtr(src.ptr)), @intCast(src.len));
+    try std.testing.expectEqual(0, run_rc);
+
+    const Ctx = struct {
+        found_add: bool = false,
+        found_greet: bool = false,
+        add_arity: i32 = -1,
+        greet_arity: i32 = -1,
+
+        fn cb(userdata: ?*anyopaque, name_ptr: [*]const u8, name_len: i32, arity: i32) callconv(.c) void {
+            const self = @as(*@This(), @ptrCast(@alignCast(userdata.?)));
+            const name = name_ptr[0..@intCast(name_len)];
+            if (std.mem.eql(u8, name, "add")) { self.found_add = true; self.add_arity = arity; }
+            if (std.mem.eql(u8, name, "greet")) { self.found_greet = true; self.greet_arity = arity; }
+        }
+    };
+    var ctx: Ctx = .{};
+    const list_rc = engine_list_functions(h, Ctx.cb, &ctx);
+    try std.testing.expectEqual(0, list_rc);
+    try std.testing.expect(ctx.found_add);
+    try std.testing.expect(ctx.found_greet);
+    try std.testing.expectEqual(2, ctx.add_arity);
+    try std.testing.expectEqual(0, ctx.greet_arity);
+}
+
+test "engine_set_trace_fn fires per source line" {
+    const h = engine_init();
+    try std.testing.expect(h > 0);
+    defer engine_destroy(h);
+
+    const Ctx = struct {
+        lines: [64]i32 = undefined,
+        count: usize = 0,
+
+        fn cb(userdata: ?*anyopaque, _: i32, line: i32, _: i32) callconv(.c) void {
+            const self = @as(*@This(), @ptrCast(@alignCast(userdata.?)));
+            if (self.count < self.lines.len) {
+                self.lines[self.count] = line;
+                self.count += 1;
+            }
+        }
+    };
+    var ctx: Ctx = .{};
+    engine_set_trace_fn(h, Ctx.cb, &ctx);
+
+    const src = "a := 1\nb := 2\nc := a + b\n";
+    const run_rc = engine_run(h, @intCast(@intFromPtr(src.ptr)), @intCast(src.len));
+    try std.testing.expectEqual(0, run_rc);
+
+    // Three source lines — we should see exactly three distinct line numbers fired.
+    try std.testing.expectEqual(@as(usize, 3), ctx.count);
+    try std.testing.expectEqual(@as(i32, 1), ctx.lines[0]);
+    try std.testing.expectEqual(@as(i32, 2), ctx.lines[1]);
+    try std.testing.expectEqual(@as(i32, 3), ctx.lines[2]);
 }
