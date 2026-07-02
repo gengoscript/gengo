@@ -116,7 +116,7 @@ fn drainMarkQueue(ctx: VMContext) void {
                 if (ctx.hs.isObjectLive(sv.source)) markObjectQueue(ctx, sv.source);
             },
             // No GC-traced children; backing bytes are freed by the sweep.
-            .dyn_string, .function, .native_function, .host_module_function, .struct_type, .interface_type, .string_builder => {},
+            .dyn_string, .function, .native_function, .host_module_function, .struct_type, .interface_type, .string_builder, .bigint => {},
         }
     }
 }

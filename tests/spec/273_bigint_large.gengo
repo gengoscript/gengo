@@ -1,0 +1,30 @@
+std := import("std")
+
+// Large numbers that overflow int64
+a := bigint("99999999999999999999999999999999")
+b := bigint("1")
+std.io.println(a + b)
+std.io.println(a * bigint(2))
+
+// Power
+std.io.println(bigint(2) ** bigint(64))
+
+// Negative large
+std.io.println(-bigint("99999999999999999999999999999999"))
+
+// rem and mod with bigint
+std.io.println(bigint(17) rem bigint(5))
+std.io.println(bigint(-17) rem bigint(5))
+std.io.println(bigint(17) mod bigint(5))
+std.io.println(bigint(-17) mod bigint(5))
+
+// Mixed int + bigint promotes
+x := 42 + bigint(0)
+std.io.println(x.type == bigint)
+std.io.println(x)
+
+// Cast back to int
+std.io.println(int(bigint(123)))
+
+// Cast bigint from whole-number float
+std.io.println(bigint(3.0))

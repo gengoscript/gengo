@@ -48,7 +48,7 @@ fn stackEffect(op: Op, code: []const u8, ip: usize) struct { pop: u8, push: u8 }
         .eq, .gt, .lt => .{ .pop = 2, .push = 1 },
 
         .neg, .not, .bit_not,
-        .cast_int, .cast_float, .cast_decimal, .cast_bool, .cast_string, .cast_rune,
+        .cast_int, .cast_float, .cast_decimal, .cast_bool, .cast_string, .cast_rune, .cast_bigint,
         .type_name, .variant_check, .variant_payload,
         .const_eq, .const_sub, .const_add, .const_lt, .const_gt,
         .assert_type, .assert_interface, .assert_struct,

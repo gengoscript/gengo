@@ -56,7 +56,7 @@ pub fn arrayLit(c: anytype) !void {
 // ('.type' never equals an interface name, since interfaces aren't concrete
 // runtime types); unknown names are left for the caller to reject.
 fn isTypeNamePrimitive(name: []const u8) bool {
-    const prims = [_][]const u8{ "int", "float", "bool", "string", "rune", "decimal", "error", "map" };
+    const prims = [_][]const u8{ "int", "float", "bool", "string", "rune", "decimal", "error", "map", "bigint" };
     for (prims) |p| {
         if (common.streq(name, p)) return true;
     }
@@ -495,7 +495,9 @@ pub fn unaryExpr(c: anytype, tt: TT) !void {
 }
 
 pub fn varExpr(c: anytype, name: Token) !void {
-    if ((common.streq(name.src, "int") or common.streq(name.src, "float") or common.streq(name.src, "bool") or common.streq(name.src, "string")) and c.match(.lparen)) {
+    if ((common.streq(name.src, "int") or common.streq(name.src, "float") or
+         common.streq(name.src, "bool") or common.streq(name.src, "string") or
+         common.streq(name.src, "bigint")) and c.match(.lparen)) {
         try expr(c, );
         try c.consume(.rparen);
         if (common.streq(name.src, "int")) {
@@ -504,6 +506,8 @@ pub fn varExpr(c: anytype, name: Token) !void {
             try c.cs.emitOp(.cast_float, name.line);
         } else if (common.streq(name.src, "bool")) {
             try c.cs.emitOp(.cast_bool, name.line);
+        } else if (common.streq(name.src, "bigint")) {
+            try c.cs.emitOp(.cast_bigint, name.line);
         } else {
             try c.cs.emitOp(.cast_string, name.line);
         }

@@ -42,6 +42,7 @@ pub fn runtimeTypeName(v: Value) []const u8 {
             .dyn_string, .string_view => "string",
             .array, .array_managed, .array_view, .array_capacity => "array",
             .map, .map_managed, .map_hashed => "map",
+            .bigint => "bigint",
             else => "object",
         },
     };

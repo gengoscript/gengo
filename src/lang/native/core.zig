@@ -6,6 +6,7 @@ const vmgc = @import("../vm_gc.zig");
 const vmmap = @import("../vm_map.zig");
 const vmtyp = @import("../vm_types.zig");
 const vmstr = @import("../vm_string.zig");
+const vmbigint = @import("../vm_bigint.zig");
 const vmod = @import("../value.zig");
 const Value = vmod.Value;
 const Object = vmod.Object;
@@ -299,6 +300,7 @@ pub fn nativeConvToString(v: Value) !Value {
     return switch (v) {
         .string => |s| vmgc.makeDynString(s.bytes),
         .object => |o| {
+            if (o.* == .bigint) return vmbigint.toDynString(.{ .object = o });
             const s: []const u8 = if (o.* == .dyn_string) o.dyn_string else if (o.* == .string_view) o.string_view.bytes else return error.TypeError;
             return vmgc.makeDynString(s);
         },
@@ -353,6 +355,7 @@ pub fn nativeTypeNameValue(v: Value) !Value {
             .variant_value => |vv| .{ .string = try chunk.internStr(vv.typ.variant_type.name) },
             .variant_ctor => |vc| .{ .string = try chunk.internStr(vc.typ.variant_type.name) },
             .string_builder => .{ .string = staticSS("string_builder") },
+            .bigint => .{ .string = staticSS("bigint") },
             .cell => .{ .string = staticSS("cell") },
         },
     };
@@ -549,6 +552,7 @@ fn deepEqualObject(a: *Object, b: *Object, visits: []DeepEqVisit, visit_len: *us
         .named_type_fn => |anf| { const bnf = b.named_type_fn; return anf.typ == bnf.typ and anf.kind == bnf.kind; },
         .enum_type_fn => |aef| return aef.typ == b.enum_type_fn.typ,
         .string_builder => |asb| return common.streq(asb.buf[0..asb.len], b.string_builder.buf[0..b.string_builder.len]),
+        .bigint => |abi| return abi.toConst().eql(b.bigint.toConst()),
     }
 }
 
@@ -645,7 +649,7 @@ fn cloneObject(src: *Object, visits: []CloneVisit, visit_len: *usize) anyerror!V
         },
         .function, .closure, .native_function, .host_module_function, .struct_type, .interface_type,
         .named_type, .enum_type, .iterator, .variant_type, .variant_ctor,
-        .named_type_fn, .enum_type_fn, .cell => return .{ .object = src },
+        .named_type_fn, .enum_type_fn, .cell, .bigint => return .{ .object = src },
         .named_value => |nv| {
             const out_obj = try vmgc.allocTempRooted(.{ .array = &[_]Value{} });
             defer vms.popTempRoot();

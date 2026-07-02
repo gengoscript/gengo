@@ -851,6 +851,7 @@ pub const Runtime = struct {
             7 => .{ .assert_arr = {} },
             8 => .{ .assert_map = {} },
             9 => .{ .assert_err = {} },
+            10 => .{ .prim = .bigint },
             else => null,
         };
     }
@@ -864,6 +865,7 @@ pub const Runtime = struct {
                 .bool => 3,
                 .string => 4,
                 .rune => 5,
+                .bigint => 10,
             },
             .named => 6,
             .assert_arr => 7,

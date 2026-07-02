@@ -452,6 +452,7 @@ pub const Compiler = struct {
                 .bool => .cast_bool,
                 .string => .cast_string,
                 .rune => .cast_rune,
+                .bigint => .cast_bigint,
             }, line),
             .named => try self.cs.emitCall(1, line),
             .assert_arr => try self.cs.emit2(@intFromEnum(Op.assert_type), 1, line),
@@ -802,7 +803,7 @@ pub const Compiler = struct {
     // True for primitive type names and every registered named/struct/
     // interface/variant type — identifiers that binding forms must not shadow.
     pub fn isKnownTypeName(self: *Compiler, name: []const u8) bool {
-        const prims = [_][]const u8{ "int", "float", "bool", "string", "rune", "decimal", "error", "map" };
+        const prims = [_][]const u8{ "int", "float", "bool", "string", "rune", "decimal", "error", "map", "bigint" };
         for (prims) |p| {
             if (common.streq(name, p)) return true;
         }

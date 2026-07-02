@@ -45,6 +45,7 @@ pub fn emitZeroValue(c: anytype, tc: TypeCheck, line: u32) !void {
             .bool => try c.cs.emitOp(.false_val, line),
             .string => try c.cs.emitStringConst("", line),
             .rune => try c.cs.emitConst(.{ .rune = 0 }, line),
+            .bigint => { try c.cs.emitConst(.{ .int = 0.0 }, line); try c.cs.emitOp(.cast_bigint, line); },
         },
         .assert_arr => try c.cs.emit2(@intFromEnum(Op.build_array), 0, line),
         .assert_map => try c.cs.emit2(@intFromEnum(Op.build_map), 0, line),
@@ -837,6 +838,8 @@ pub fn parseFieldTypeSpec(c: anytype) !FieldTypeSpec {
             alt = .{ .typ = .string };
         } else if (common.streq(tname, "error")) {
             alt = .{ .typ = .error_t };
+        } else if (common.streq(tname, "bigint")) {
+            alt = .{ .typ = .any };
         } else if (common.streq(tname, "array")) {
             return c.err("use '[]T' syntax for array types", .{});
         } else if (common.streq(tname, "map")) {
