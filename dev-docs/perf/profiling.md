@@ -60,6 +60,32 @@ You can raise sampling frequency if the run is short:
 tools/profile-vm.sh case tests/bench/006_call_overhead.gengo --freq 1999
 ```
 
+## Profile a long-running / network workload
+
+For scripts that use network I/O (e.g. an MQTT listener), use `net-case`. The
+script runs for `--duration` seconds (default 30) then is killed and reports
+are generated.  Any gengo flags after the script path are forwarded verbatim;
+`--duration`, `--freq`, and `--sudo` are consumed by the profiler itself.
+
+```bash
+tools/profile-vm.sh net-case \
+    ../gengo-mqtt/listener-all.gengo \
+    --cap net --modules ../gengo-mqtt/mqtt
+```
+
+Extend the window if the broker is quiet or you need more samples:
+
+```bash
+tools/profile-vm.sh net-case \
+    ../gengo-mqtt/listener-all.gengo \
+    --cap net --modules ../gengo-mqtt/mqtt \
+    --duration 60
+```
+
+`listener-all.gengo` subscribes to `#` on `test.mosquitto.org` and processes
+every message it receives, exercising the VM's string, struct, switch, and net
+code paths rather than pure arithmetic loops.
+
 ## Interpreting results
 
 Typical signals:
