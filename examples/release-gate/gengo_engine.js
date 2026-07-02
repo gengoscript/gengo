@@ -40,7 +40,7 @@ const TAG_BOOL     = 1;
 const TAG_NUM      = 2;
 const TAG_STR      = 3;
 const TAG_ERR      = 6;
-const FLAG_INTEGER = 0x01;  // payload is integer encoded as f64 bits
+const FLAG_INTEGER = 0x01;  // payload is raw int64 bits (two's complement)
 
 // Module-level so the WASM import closure can reach them without going through
 // the Engine class (private fields are inaccessible from import closures).
@@ -56,10 +56,12 @@ function wireRead(dv, off) {
     case TAG_NULL: return [null, next];
     case TAG_BOOL: return [payload !== 0n, next];
     case TAG_NUM: {
+      if (flags & FLAG_INTEGER) {
+        return [Number(dv.getBigInt64(off + 8, true)), next]; // raw i64 bits
+      }
       const tmp = new ArrayBuffer(8);
       new BigUint64Array(tmp)[0] = payload;
-      const f = new Float64Array(tmp)[0];
-      return [(flags & FLAG_INTEGER) ? Math.trunc(f) : f, next];
+      return [new Float64Array(tmp)[0], next];
     }
     case TAG_STR:
     case TAG_ERR: {
@@ -81,10 +83,14 @@ function wireWrite(dv, off, value) {
     dv.setBigUint64(off + 8, value ? 1n : 0n, true);
   } else if (typeof value === 'number') {
     dv.setUint8(off, TAG_NUM);
-    if (Number.isInteger(value)) dv.setUint8(off + 1, FLAG_INTEGER);
-    const tmp = new ArrayBuffer(8);
-    new Float64Array(tmp)[0] = value;
-    dv.setBigUint64(off + 8, new BigUint64Array(tmp)[0], true);
+    if (Number.isInteger(value)) {
+      dv.setUint8(off + 1, FLAG_INTEGER);
+      dv.setBigInt64(off + 8, BigInt(value), true); // raw i64 bits
+    } else {
+      const tmp = new ArrayBuffer(8);
+      new Float64Array(tmp)[0] = value;
+      dv.setBigUint64(off + 8, new BigUint64Array(tmp)[0], true);
+    }
   }
   // String returns from host functions require allocation in WASM memory;
   // use bool/number results where possible. See the TypeScript SDK for full support.

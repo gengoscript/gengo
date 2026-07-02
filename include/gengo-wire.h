@@ -36,9 +36,9 @@ static inline gengo_value_wire_t gengo_wire_bool(int value)
 static inline gengo_value_wire_t gengo_wire_int(int64_t value)
 {
     gengo_value_wire_t v = gengo_wire_null();
-    v.tag     = GENGO_WIRE_NUMBER;
-    v.flags   = GENGO_WIRE_FLAG_INTEGER;
-    v.payload = gengo__f64_bits((double)value);
+    v.tag   = GENGO_WIRE_NUMBER;
+    v.flags = GENGO_WIRE_FLAG_INTEGER;
+    memcpy(&v.payload, &value, sizeof value); /* raw i64 bits, no f64 rounding */
     return v;
 }
 
@@ -75,8 +75,13 @@ static inline int gengo_wire_as_bool(const gengo_value_wire_t *v)
 
 static inline int64_t gengo_wire_as_int(const gengo_value_wire_t *v)
 {
-    double d;
+    int64_t n;
     if (v->tag != GENGO_WIRE_NUMBER) return 0;
+    if (v->flags & GENGO_WIRE_FLAG_INTEGER) {
+        memcpy(&n, &v->payload, sizeof n); /* raw i64 bits */
+        return n;
+    }
+    double d; /* plain float — convert to nearest int64 */
     memcpy(&d, &v->payload, sizeof d);
     return (int64_t)d;
 }

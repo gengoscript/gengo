@@ -73,7 +73,7 @@ _WIRE_ARRAY   = 4
 _WIRE_MAP     = 5
 _WIRE_ERROR   = 6
 
-_FLAG_INTEGER = 0x01   # payload is integer encoded as f64 bits
+_FLAG_INTEGER = 0x01   # payload is raw i64 bits (two's complement)
 _FLAG_DECIMAL = 0x02   # payload is raw i64 fixed-point (scale ×1000)
 _FLAG_RUNE    = 0x04   # payload is a Unicode codepoint
 
@@ -98,7 +98,7 @@ def _encode(value):
     if isinstance(value, bool):
         return _ValueWire(tag=_WIRE_BOOLEAN, payload=int(value)), None
     if isinstance(value, int):
-        bits = struct.unpack("Q", struct.pack("d", float(value)))[0]
+        bits = struct.unpack("Q", struct.pack("q", value))[0]  # raw i64 bits
         return _ValueWire(tag=_WIRE_NUMBER, flags=_FLAG_INTEGER, payload=bits), None
     if isinstance(value, float):
         bits = struct.unpack("Q", struct.pack("d", value))[0]
@@ -121,8 +121,9 @@ def _decode(w):
             return struct.unpack("q", struct.pack("Q", w.payload))[0]
         if w.flags & _FLAG_RUNE:
             return chr(w.payload)
-        fval = struct.unpack("d", struct.pack("Q", w.payload))[0]
-        return int(fval) if (w.flags & _FLAG_INTEGER) else fval
+        if w.flags & _FLAG_INTEGER:
+            return struct.unpack("q", struct.pack("Q", w.payload))[0]  # raw i64 bits
+        return struct.unpack("d", struct.pack("Q", w.payload))[0]
     if w.tag in (_WIRE_STRING, _WIRE_ERROR) and w.len > 0:
         return (ctypes.c_char * w.len).from_address(w.payload).raw.decode("utf-8")
     return None
