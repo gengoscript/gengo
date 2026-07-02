@@ -86,6 +86,9 @@ pub const State = struct {
     // Verifier error detail — populated before verify() returns an error.
     verify_err_buf: [256]u8 = undefined,
     verify_err_len: usize = 0,
+    // Set after the first successful verify(); subsequent run() entries skip re-verification.
+    // Cleared by reset() so a re-compiled chunk is re-verified.
+    verified: bool = false,
 
     // ── State methods (used by the compiler via an explicit *State pointer) ────────
 
@@ -781,7 +784,11 @@ pub const State = struct {
     pub fn colAt(self: *const State, i: usize) u16 { return self.cols[i]; }
     pub fn constAt(self: *const State, i: usize) !Value { if (i >= self.const_count) return error.BadConstantIndex; return self.consts[i]; }
     pub fn decodeAt(self: *State, pos: usize) !DecodedInstruction { return chunk_decoder.decodeAt(self, pos); }
-    pub fn verify(self: *State) !void { return chunk_verifier.verify(self); }
+    pub fn verify(self: *State) !void {
+        if (self.verified) return;
+        try chunk_verifier.verify(self);
+        self.verified = true;
+    }
 };
 
 var g_default_state: State = .{};
@@ -816,6 +823,7 @@ pub fn reset() void {
     g_state.last_get_global_const_add_pos = null;
     g_state.std_call_patch_pos = null;
     g_state.verify_err_len = 0;
+    g_state.verified = false;
 }
 
 fn foldBinOp(op: Op, lhs: Value, rhs: Value) ?Value {
