@@ -65,6 +65,8 @@ examples:
   tools/profile-vm.sh net-case ../gengo-mqtt/listener-all.gengo --cap net --modules ../gengo-mqtt/mqtt
   tools/profile-vm.sh net-case ../gengo-mqtt/listener-all.gengo --cap net --modules ../gengo-mqtt/mqtt --duration 60
   tools/profile-vm.sh net-case --duration 60 ../gengo-mqtt/listener-all.gengo --cap net --modules ../gengo-mqtt/mqtt
+  # high-traffic wildcard subscription needs more GC heap:
+  tools/profile-vm.sh net-case ../gengo-mqtt/listener-all.gengo --cap net --modules ../gengo-mqtt/mqtt --heap 4m
 EOF
 }
 
