@@ -23,10 +23,15 @@ extern "kernel32" fn ReadFile(
 
 pub const WriteFn = *const fn (s: []const u8) void;
 pub const ReadFn = *const fn (buf: []u8, is_line: bool) isize;
+pub const TraceFn = *const fn (userdata: ?*anyopaque, handle: i32, line: i32, col: i32) callconv(.c) void;
 
 var write_override: ?WriteFn = null;
 var werr_override: ?WriteFn = null;
 var read_override: ?ReadFn = null;
+var g_trace_fn: ?TraceFn = null;
+var g_trace_userdata: ?*anyopaque = null;
+var g_trace_handle: i32 = -1;
+var g_trace_prev_line: u32 = 0xFFFF_FFFF;
 
 pub fn setWriteOverrides(w: WriteFn, e: WriteFn) void {
     write_override = w;
@@ -44,6 +49,29 @@ pub fn setReadOverride(f: ReadFn) void {
 
 pub fn clearReadOverride() void {
     read_override = null;
+}
+
+pub fn setTrace(f: ?TraceFn, ud: ?*anyopaque, handle: i32) void {
+    g_trace_fn = f;
+    g_trace_userdata = ud;
+    g_trace_handle = handle;
+    g_trace_prev_line = 0xFFFF_FFFF;
+}
+
+pub fn clearTrace() void {
+    g_trace_fn = null;
+    g_trace_handle = -1;
+}
+
+pub fn traceActive() bool {
+    return g_trace_fn != null;
+}
+
+pub fn fireTrace(line: u32, col: u32) void {
+    const f = g_trace_fn orelse return;
+    if (line == g_trace_prev_line) return;
+    g_trace_prev_line = line;
+    f(g_trace_userdata, g_trace_handle, @intCast(line), @intCast(col));
 }
 
 pub fn writeAllFd(fd: u8, s: []const u8) void {

@@ -1823,6 +1823,7 @@ fn runInner(ctx: VMContext) !void {
         }
         const op_raw = try ctx.vs.vmByte();
         if (op_raw >= std.meta.fields(Op).len) return error.InvalidChunkShape;
+        if (io.traceActive()) io.fireTrace(ctx.cs.lineAt(ctx.vs.ip - 1), ctx.cs.colAt(ctx.vs.ip - 1));
         vmperf.countOp(op_raw);
         const op: Op = @enumFromInt(op_raw);
         switch (op) {
