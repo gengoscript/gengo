@@ -27,8 +27,8 @@ typedef enum {
 /*
  * Flags for GENGO_WIRE_NUMBER (bits in the flags byte):
  *
- *   bit 0 (GENGO_WIRE_FLAG_INTEGER): payload is an integer encoded as f64 bits.
- *          Without this flag the number is treated as a float.
+ *   bit 0 (GENGO_WIRE_FLAG_INTEGER): payload is raw int64 bits (two's complement).
+ *          Without this flag the number is treated as a float (f64 bits).
  *   bit 1 (GENGO_WIRE_FLAG_DECIMAL): payload is a raw i64 fixed-point value
  *          (scale ×1000, matching Gengoscript's decimal type). No f64 precision loss.
  *   bit 2 (GENGO_WIRE_FLAG_RUNE):    payload is a Unicode codepoint (u21).
@@ -42,7 +42,7 @@ typedef struct {
     uint8_t  tag;        /* gengo_wire_tag_t */
     uint8_t  flags;      /* GENGO_WIRE_FLAG_* bits (meaningful for GENGO_WIRE_NUMBER) */
     uint16_t reserved;
-    uint64_t payload;    /* bool: 0/1 | number: f64 bits | string/error: ptr | array/map: ptr */
+    uint64_t payload;    /* bool: 0/1 | float: f64 bits | integer: raw i64 bits | string/error: ptr | array/map: ptr */
     uint32_t len;        /* string/error: byte count | array: element count | map: entry count */
     uint32_t reserved2;
 } gengo_value_wire_t;

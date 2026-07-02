@@ -1,19 +1,22 @@
 /**
  * ValueWire encoding / decoding for the Gengoscript engine WASM ABI.
  *
- * WireTag  | payload              | len
- * ---------|----------------------|-------
- * null (0) | 0                    | 0
- * bool (1) | 0|1                  | 0
- * num  (2) | f64 bits as u64      | 0
- * str  (3) | linear-memory ptr    | byte length
- * arr  (4) | ptr to ValueWire[]   | element count
- * map  (5) | ptr to ValueWire[]   | entry count (pairs: k,v,k,v…)
+ * WireTag  | flags         | payload              | len
+ * ---------|---------------|----------------------|-------
+ * null (0) |               | 0                    | 0
+ * bool (1) |               | 0|1                  | 0
+ * num  (2) | 0=float       | f64 bits as u64      | 0
+ * num  (2) | FLAG_INT=0x01 | raw int64 bits       | 0
+ * str  (3) |               | linear-memory ptr    | byte length
+ * arr  (4) |               | ptr to ValueWire[]   | element count
+ * map  (5) |               | ptr to ValueWire[]   | entry count (pairs: k,v,k,v…)
  */
 
 import { GVal } from "./types";
 
-export const WIRE_SIZE = 24; // bytes per ValueWire (1+1+2+8+4+4)
+export const WIRE_SIZE = 24; // bytes per ValueWire (tag+flags+reserved[2]+pad[4]+payload[8]+len[4]+reserved2[4])
+
+const FLAG_INTEGER = 0x01; // GENGO_WIRE_FLAG_INTEGER: payload is raw int64 bits
 
 export const enum WireTag {
   Null = 0,
@@ -96,11 +99,15 @@ export function encodeGVal(ctx: WireWriteCtx, val: GVal): number {
       return ctx.pos;
     }
     case "num": {
-      const buf = new ArrayBuffer(8);
-      new Float64Array(buf)[0] = val.v;
-      const u64 = new BigUint64Array(buf)[0];
       const off = writeWireHeader(ctx, WireTag.Num);
-      patchWire(ctx, off, u64, 0);
+      if (Number.isInteger(val.v)) {
+        ctx.dv.setUint8(off + 1, FLAG_INTEGER);
+        patchWire(ctx, off, BigInt.asUintN(64, BigInt(val.v)), 0); // raw i64 bits
+      } else {
+        const buf = new ArrayBuffer(8);
+        new Float64Array(buf)[0] = val.v;
+        patchWire(ctx, off, new BigUint64Array(buf)[0], 0);
+      }
       return ctx.pos;
     }
     case "str": {
@@ -184,10 +191,13 @@ export function decodeGVal(ctx: WireReadCtx, off: number): [GVal, number] {
       return [{ t: "bool", v: payload !== 0n }, nextOff];
 
     case WireTag.Num: {
+      const flags = readU8(ctx, off + 1);
+      if (flags & FLAG_INTEGER) {
+        return [{ t: "num", v: Number(BigInt.asIntN(64, payload)) }, nextOff]; // raw i64 bits
+      }
       const buf = new ArrayBuffer(8);
       new BigUint64Array(buf)[0] = payload;
-      const num = new Float64Array(buf)[0];
-      return [{ t: "num", v: num }, nextOff];
+      return [{ t: "num", v: new Float64Array(buf)[0] }, nextOff];
     }
 
     case WireTag.Str: {
