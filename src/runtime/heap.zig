@@ -704,7 +704,15 @@ pub const State = struct {
         if (count == 0) return;
 
         // Phase 2: allocate reloc table (prefer stack).
-        var sbuf: [512]CompactReloc = undefined;
+        // Typical live_objs counts are low (a few hundred), but worst-case
+        // every object owns two blocks (map_hashed: entries + buckets,
+        // variant_value: arm_fields + shared_values).  The stack buffer is
+        // sized to MaxObjects * 2 capped at 2048 entries (48 KiB) so the
+        // common case never hits the native allocator.  For very large presets
+        // (16 m, unlimited) with more live objects we fall back to a heap
+        // allocation that page_allocator handles trivially on native targets.
+        const StkCap = @min(MaxObjects * 2, 2048);
+        var sbuf: [StkCap]CompactReloc = undefined;
         const dbuf: ?[]CompactReloc = if (count > sbuf.len)
             (self.allocator.alloc(CompactReloc, count) catch return)
         else
