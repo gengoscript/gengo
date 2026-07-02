@@ -352,6 +352,12 @@ pub const State = struct {
                     n += 1;
                 }
             },
+            .bigint => |bi| {
+                if (bi.limbs.len > 0) {
+                    out[n] = .{ .old_addr = @intFromPtr(bi.limbs.ptr), .block_size = self.managedBlockSize(bi.limbs.len * @sizeOf(@import("std").math.big.Limb)), .new_addr = 0 };
+                    n += 1;
+                }
+            },
             else => {},
         }
         return n;
@@ -560,6 +566,7 @@ pub const State = struct {
                 .map => self.freeManagedSlice(@import("../lang/value.zig").MapEntry, self.obj_pool[i].map),
                 .struct_instance => self.freeManagedSlice(@import("../lang/value.zig").MapEntry, self.obj_pool[i].struct_instance.fields),
                 .string_builder => self.freeBytesManaged(self.obj_pool[i].string_builder.buf),
+                .bigint => self.freeManagedSlice(@import("std").math.big.Limb, self.obj_pool[i].bigint.limbs),
                 .string_view => {},
                 .variant_value => {
                     const vv = self.obj_pool[i].variant_value;
@@ -960,6 +967,7 @@ fn compactCountBlocks(obj: *const Object) usize {
             if (vv.shared_values.len > 0) n += 1;
             break :blk n;
         },
+        .bigint          => |bi| if (bi.limbs.len > 0) 1 else 0,
         else => 0,
     };
 }
@@ -1041,6 +1049,11 @@ fn compactUpdateObj(obj: *Object, relocs: []const CompactReloc) void {
                 };
             },
             .range => {},
+        },
+        .bigint => |*bi| {
+            if (bi.limbs.len > 0) if (compactFindReloc(relocs, @intFromPtr(bi.limbs.ptr))) |na| {
+                bi.limbs = @as([*]@import("std").math.big.Limb, @ptrCast(@alignCast(@as(*u8, @ptrFromInt(na)))))[0..bi.limbs.len];
+            };
         },
         else => {},
     }

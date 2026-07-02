@@ -20,6 +20,7 @@ const vm_integrity = @import("vm_integrity.zig");
 const vmmap = @import("vm_map.zig");
 const vmstr = @import("vm_string.zig");
 const vmtyp = @import("vm_types.zig");
+const vmbigint = @import("vm_bigint.zig");
 const build_options = @import("build_options");
 const vmnative = @import("vm_native.zig");
 const vmperf = @import("vm_perf.zig");
@@ -302,12 +303,44 @@ fn pushDecimalResultWithCarrier(ctx: VMContext, typ: *Object, d: i64) !void {
     try ctx.vs.vmPush(wrapped);
 }
 
+fn bigIntBinOpWithPromotion(ctx: VMContext, a: Value, b: Value, op: enum { add, sub, mul, int_div, rem, mod }) !Value {
+    const a_bi = vmbigint.isBigInt(a);
+    const b_bi = vmbigint.isBigInt(b);
+    var a_big = a;
+    var b_big = b;
+    if (!a_bi) {
+        if (a != .int) {
+            ctx.vs.setRuntimeErr("cannot apply '{s}' to bigint and {s}", .{ @tagName(op), vmtyp.runtimeTypeName(a) });
+            return error.TypeError;
+        }
+        a_big = try vmbigint.promoteInt(a.int, b);
+    }
+    if (!b_bi) {
+        if (b != .int) {
+            ctx.vs.setRuntimeErr("cannot apply '{s}' to bigint and {s}", .{ @tagName(op), vmtyp.runtimeTypeName(b) });
+            return error.TypeError;
+        }
+        b_big = try vmbigint.promoteInt(b.int, a_big);
+    }
+    return switch (op) {
+        .add => vmbigint.addBi(a_big, b_big),
+        .sub => vmbigint.subBi(a_big, b_big),
+        .mul => vmbigint.mulBi(a_big, b_big),
+        .int_div => vmbigint.intDivBi(a_big, b_big),
+        .rem => vmbigint.remBi(a_big, b_big),
+        .mod => vmbigint.modBi(a_big, b_big),
+    };
+}
+
 fn computeAddResult(ctx: VMContext, a: Value, b: Value) !Value {
     if (a == .int and b == .int) return .{ .int = a.int + b.int };
     if (a == .float and b == .float) {
         const r = a.float + b.float;
         if (!std.math.isFinite(r)) { ctx.vs.setRuntimeErr("non-finite value in arithmetic operation", .{}); return error.TypeError; }
         return .{ .float = r };
+    }
+    if (vmbigint.isBigInt(a) or vmbigint.isBigInt(b)) {
+        return bigIntBinOpWithPromotion(ctx, a, b, .add);
     }
     if (isStringValueOrNamedString(a) and isStringValueOrNamedString(b)) {
         try ctx.vs.pushTempRoot(a);
@@ -1940,6 +1973,9 @@ fn runInner(ctx: VMContext) !void {
                     if (!std.math.isFinite(r)) { ctx.vs.setRuntimeErr("non-finite value in arithmetic operation", .{}); return error.TypeError; }
                     try ctx.vs.vmPush(.{ .float = r }); continue;
                 }
+                if (vmbigint.isBigInt(a) or vmbigint.isBigInt(b)) {
+                    try ctx.vs.vmPush(try bigIntBinOpWithPromotion(ctx, a, b, .sub)); continue;
+                }
                 if (decimalOpValues(a, b)) |dop| {
                     const result = @subWithOverflow(dop.lhs, dop.rhs);
                     if (result[1] != 0) return error.TypeError;
@@ -1956,6 +1992,9 @@ fn runInner(ctx: VMContext) !void {
                     const r = a.float * b.float;
                     if (!std.math.isFinite(r)) { ctx.vs.setRuntimeErr("non-finite value in arithmetic operation", .{}); return error.TypeError; }
                     try ctx.vs.vmPush(.{ .float = r }); continue;
+                }
+                if (vmbigint.isBigInt(a) or vmbigint.isBigInt(b)) {
+                    try ctx.vs.vmPush(try bigIntBinOpWithPromotion(ctx, a, b, .mul)); continue;
                 }
                 if (decimalOpValues(a, b)) |_| {
                     return error.TypeError;
@@ -1975,6 +2014,12 @@ fn runInner(ctx: VMContext) !void {
                     if (b.int == 0) { ctx.vs.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
                     try ctx.vs.vmPush(.{ .float = @as(f64, @floatFromInt(a.int)) / @as(f64, @floatFromInt(b.int)) });
                     continue;
+                }
+                if (vmbigint.isBigInt(a) or vmbigint.isBigInt(b)) {
+                    const af: f64 = if (vmbigint.isBigInt(a)) vmbigint.toFloat(a) else @floatFromInt(a.int);
+                    const bf: f64 = if (vmbigint.isBigInt(b)) vmbigint.toFloat(b) else @floatFromInt(b.int);
+                    if (bf == 0.0) { ctx.vs.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
+                    try ctx.vs.vmPush(.{ .float = af / bf }); continue;
                 }
                 if (a == .float and b == .float) {
                     if (b.float == 0.0) { ctx.vs.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
@@ -2002,6 +2047,9 @@ fn runInner(ctx: VMContext) !void {
                     const result: i64 = if (a.int == std.math.minInt(i64) and b.int == -1) std.math.minInt(i64) else @divTrunc(a.int, b.int);
                     try ctx.vs.vmPush(.{ .int = result }); continue;
                 }
+                if (vmbigint.isBigInt(a) or vmbigint.isBigInt(b)) {
+                    try ctx.vs.vmPush(try bigIntBinOpWithPromotion(ctx, a, b, .int_div)); continue;
+                }
                 if (a == .float and b == .float) {
                     if (b.float == 0.0) { ctx.vs.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
                     try ctx.vs.vmPush(.{ .float = @floor(a.float / b.float) }); continue;
@@ -2022,6 +2070,9 @@ fn runInner(ctx: VMContext) !void {
                     const result: i64 = if (a.int == std.math.minInt(i64) and b.int == -1) 0 else @rem(a.int, b.int);
                     try ctx.vs.vmPush(.{ .int = result }); continue;
                 }
+                if (vmbigint.isBigInt(a) or vmbigint.isBigInt(b)) {
+                    try ctx.vs.vmPush(try bigIntBinOpWithPromotion(ctx, a, b, .rem)); continue;
+                }
                 if (a == .float and b == .float) {
                     if (b.float == 0.0) { ctx.vs.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
                     try ctx.vs.vmPush(.{ .float = common.fmod(a.float, b.float) }); continue;
@@ -2038,6 +2089,9 @@ fn runInner(ctx: VMContext) !void {
                     const result: i64 = @mod(a.int, b.int);
                     try ctx.vs.vmPush(.{ .int = result }); continue;
                 }
+                if (vmbigint.isBigInt(a) or vmbigint.isBigInt(b)) {
+                    try ctx.vs.vmPush(try bigIntBinOpWithPromotion(ctx, a, b, .mod)); continue;
+                }
                 if (a == .float and b == .float) {
                     if (b.float == 0.0) { ctx.vs.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
                     const r = a.float - @floor(a.float / b.float) * b.float;
@@ -2051,6 +2105,26 @@ fn runInner(ctx: VMContext) !void {
             .pow => {
                 const b = try ctx.vs.vmPop();
                 const a = try ctx.vs.vmPop();
+                if (vmbigint.isBigInt(a) or vmbigint.isBigInt(b)) {
+                    const exp_i64: i64 = if (b == .int) b.int
+                    else if (vmbigint.isBigInt(b)) vmbigint.toInt(b) catch {
+                        ctx.vs.setRuntimeErr("bigint: exponent too large", .{});
+                        return error.RangeError;
+                    }
+                    else {
+                        ctx.vs.setRuntimeErr("bigint ** {s}: exponent must be int or bigint", .{vmtyp.runtimeTypeName(b)});
+                        return error.TypeError;
+                    };
+                    if (exp_i64 < 0) { ctx.vs.setRuntimeErr("bigint: negative exponent not supported", .{}); return error.TypeError; }
+                    if (exp_i64 > std.math.maxInt(u32)) { ctx.vs.setRuntimeErr("bigint: exponent too large", .{}); return error.RangeError; }
+                    const exp: u32 = @intCast(exp_i64);
+                    var a_big = a;
+                    if (!vmbigint.isBigInt(a)) {
+                        if (a != .int) { ctx.vs.setRuntimeErr("{s} ** bigint: base must be int or bigint", .{vmtyp.runtimeTypeName(a)}); return error.TypeError; }
+                        a_big = try vmbigint.fromInt(a.int);
+                    }
+                    try ctx.vs.vmPush(try vmbigint.powBi(a_big, exp)); continue;
+                }
                 const nop = try numericBinaryOp(ctx, a, b, "**");
                 try pushNumericResultWithCarrier(ctx, a, b, std.math.pow(f64, nop.an, nop.bn), nop.tag, "**");
             },
@@ -2092,6 +2166,10 @@ fn runInner(ctx: VMContext) !void {
                     continue;
                 }
                 const v = vms.unboxNamed(raw);
+                if (vmbigint.isBigInt(v)) {
+                    try ctx.vs.vmPush(.{ .int = try vmbigint.toInt(v) });
+                    continue;
+                }
                 switch (v) {
                     .int => |n| try ctx.vs.vmPush(.{ .int = n }),
                     .float => |n| try ctx.vs.vmPush(.{ .int = try floatToIntSafe(n) }),
@@ -2108,6 +2186,10 @@ fn runInner(ctx: VMContext) !void {
                     continue;
                 }
                 const v = vms.unboxNamed(raw);
+                if (vmbigint.isBigInt(v)) {
+                    try ctx.vs.vmPush(.{ .float = vmbigint.toFloat(v) });
+                    continue;
+                }
                 switch (v) {
                     .int => |n| try ctx.vs.vmPush(.{ .float = @floatFromInt(n) }),
                     .float => |n| try ctx.vs.vmPush(.{ .float = n }),
@@ -2176,6 +2258,24 @@ fn runInner(ctx: VMContext) !void {
                 };
                 try ctx.vs.vmPush(.{ .rune = r });
             },
+            .cast_bigint => {
+                // Keep operand on stack during string parse (allocation may GC)
+                const raw = try ctx.vs.vmPeek(0);
+                const v = vms.unboxNamed(raw);
+                const result = if (vmbigint.isBigInt(v))
+                    v
+                else if (v == .int)
+                    try vmbigint.fromInt(v.int)
+                else if (vms.isStringValue(v))
+                    vmbigint.fromStrVal(v) catch return error.TypeError
+                else if (v == .float) blk: {
+                    if (!std.math.isFinite(v.float) or @trunc(v.float) != v.float) return error.TypeError;
+                    if (v.float < -9.223372036854776e18 or v.float >= 9.223372036854776e18) return error.TypeError;
+                    break :blk try vmbigint.fromInt(@intFromFloat(v.float));
+                } else return error.TypeError;
+                _ = try ctx.vs.vmPop();
+                try ctx.vs.vmPush(result);
+            },
             .assert_type => {
                 const tag = try ctx.vs.vmByte();
                 const v = try ctx.vs.vmPeek(0);
@@ -2209,7 +2309,13 @@ fn runInner(ctx: VMContext) !void {
             },
             .neg => {
                 const v = try ctx.vs.vmPeek(0);
-                const negated: Value = switch (vms.unboxNamed(v)) {
+                const unboxed = vms.unboxNamed(v);
+                if (vmbigint.isBigInt(unboxed)) {
+                    _ = try ctx.vs.vmPop();
+                    try ctx.vs.vmPush(try vmbigint.negBi(unboxed));
+                    continue;
+                }
+                const negated: Value = switch (unboxed) {
                     .int => |n| .{ .int = -n },
                     .float => |n| .{ .float = -n },
                     else => {
@@ -2236,6 +2342,13 @@ fn runInner(ctx: VMContext) !void {
                 const b = try ctx.vs.vmPop();
                 const a = try ctx.vs.vmPop();
                 if (a == .int and b == .int) { try ctx.vs.vmPush(.{ .boolean = a.int > b.int }); continue; }
+                if (vmbigint.isBigInt(a) or vmbigint.isBigInt(b)) {
+                    const ord = vmbigint.compareValues(a, b) catch {
+                        ctx.vs.setRuntimeErr("cannot compare bigint and {s}", .{vmtyp.runtimeTypeName(if (vmbigint.isBigInt(a)) b else a)});
+                        return error.TypeError;
+                    };
+                    try ctx.vs.vmPush(.{ .boolean = ord == .gt }); continue;
+                }
                 const n = try compareNumericPair(ctx, a, b, ">");
                 try ctx.vs.vmPush(.{ .boolean = n.an > n.bn });
             },
@@ -2243,6 +2356,13 @@ fn runInner(ctx: VMContext) !void {
                 const b = try ctx.vs.vmPop();
                 const a = try ctx.vs.vmPop();
                 if (a == .int and b == .int) { try ctx.vs.vmPush(.{ .boolean = a.int < b.int }); continue; }
+                if (vmbigint.isBigInt(a) or vmbigint.isBigInt(b)) {
+                    const ord = vmbigint.compareValues(a, b) catch {
+                        ctx.vs.setRuntimeErr("cannot compare bigint and {s}", .{vmtyp.runtimeTypeName(if (vmbigint.isBigInt(a)) b else a)});
+                        return error.TypeError;
+                    };
+                    try ctx.vs.vmPush(.{ .boolean = ord == .lt }); continue;
+                }
                 const n = try compareNumericPair(ctx, a, b, "<");
                 try ctx.vs.vmPush(.{ .boolean = n.an < n.bn });
             },

@@ -394,6 +394,11 @@ fn printValueDepth(v: Value, depth: u32, ancestors: *[PrintMaxDepth]*const vmod.
                 },
                 .named_type_fn, .enum_type_fn => write("<func>"),
                 .string_builder => write("<builder>"),
+                .bigint => |bi| {
+                    const s = bi.toConst().toStringAlloc(std.heap.page_allocator, 10, .lower) catch { write("<bigint>"); return; };
+                    defer std.heap.page_allocator.free(s);
+                    write(s);
+                },
             }
 
             anc_count.* -= 1;

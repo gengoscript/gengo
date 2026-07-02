@@ -139,6 +139,16 @@ pub const StringBuilderObj = struct {
     len: usize,  // bytes actually written
 };
 
+pub const BigIntObj = struct {
+    limbs: []std.math.big.Limb, // GC-managed; .len = allocated capacity
+    len: usize,                  // live limb count
+    positive: bool,              // true = non-negative
+
+    pub fn toConst(self: BigIntObj) std.math.big.int.Const {
+        return .{ .limbs = self.limbs[0..self.len], .positive = self.positive };
+    }
+};
+
 pub const StringViewObj = struct {
     bytes: []const u8,  // view into the source dyn_string's backing buffer
     source: *Object,    // keeps the dyn_string alive so its backing buffer is not freed
@@ -154,7 +164,7 @@ pub const ArrayViewObj = struct {
 // Items 0..len are live; items len..capacity are always .null (safe for GC marking).
 pub const ArrayCapObj = struct { backing: *Object, len: usize };
 
-pub const ObjTag = enum { array, array_managed, array_view, array_capacity, map, map_managed, map_hashed, dyn_string, function, closure, cell, native_function, host_module_function, struct_type, interface_type, named_type, named_value, enum_type, enum_value, enum_type_fn, struct_instance, iterator, variant_type, variant_value, variant_ctor, named_type_fn, string_builder, string_view };
+pub const ObjTag = enum { array, array_managed, array_view, array_capacity, map, map_managed, map_hashed, dyn_string, function, closure, cell, native_function, host_module_function, struct_type, interface_type, named_type, named_value, enum_type, enum_value, enum_type_fn, struct_instance, iterator, variant_type, variant_value, variant_ctor, named_type_fn, string_builder, string_view, bigint };
 pub const Object = union(ObjTag) {
     array: []Value,
     array_managed: []Value,
@@ -184,6 +194,7 @@ pub const Object = union(ObjTag) {
     named_type_fn: NamedTypeFnObj,
     string_builder: StringBuilderObj,
     string_view: StringViewObj,
+    bigint: BigIntObj,
 };
 
 pub const VTag = enum { int, float, decimal, rune, boolean, string, error_value, object, null };
@@ -273,6 +284,16 @@ pub const Value = union(VTag) {
             if (av.arm_fields.len != bv.arm_fields.len) return false;
             for (av.arm_fields, bv.arm_fields) |x, y| if (!equals(x, y)) return false;
             return true;
+        }
+        if (a == .object and b == .object and a.object.* == .bigint and b.object.* == .bigint) {
+            return a.object.bigint.toConst().eql(b.object.bigint.toConst());
+        }
+        if ((a == .int and b == .object and b.object.* == .bigint) or
+            (a == .object and a.object.* == .bigint and b == .int))
+        {
+            const bi = if (a == .object) a.object.bigint else b.object.bigint;
+            const n: i64 = if (a == .int) a.int else b.int;
+            return bi.toConst().orderAgainstScalar(n) == .eq;
         }
         if (@as(VTag, a) != @as(VTag, b)) {
             if ((a == .int and b == .float) or (a == .float and b == .int)) {

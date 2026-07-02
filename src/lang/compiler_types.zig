@@ -60,6 +60,7 @@ pub const PrimType = enum {
     bool,
     string,
     rune,
+    bigint,
 };
 
 pub const TypeCheck = union(enum) {

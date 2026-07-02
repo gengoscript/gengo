@@ -1601,6 +1601,8 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
             inferred_type_check = .{ .prim = .string };
         } else if (common.streq(type_name, "rune")) {
             inferred_type_check = .{ .prim = .rune };
+        } else if (common.streq(type_name, "bigint")) {
+            inferred_type_check = .{ .prim = .bigint };
         } else if (common.streq(type_name, "array")) {
             return c.err("use '[]T' syntax for array types", .{});
         } else if (common.streq(type_name, "map")) {
@@ -1644,6 +1646,7 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
                     .bool => try c.cs.emitOp(.cast_bool, name.line),
                     .string => try c.cs.emitOp(.cast_string, name.line),
                     .rune => try c.cs.emitOp(.cast_rune, name.line),
+                    .bigint => try c.cs.emitOp(.cast_bigint, name.line),
                 }
             } else if (inferred_type_check == .named) {
                 try c.cs.emitCall(1, name.line);
