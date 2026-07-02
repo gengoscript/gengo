@@ -88,8 +88,13 @@ static inline int64_t gengo_wire_as_int(const gengo_value_wire_t *v)
 
 static inline double gengo_wire_as_float(const gengo_value_wire_t *v)
 {
-    double d = 0.0;
-    if (v->tag != GENGO_WIRE_NUMBER) return d;
+    if (v->tag != GENGO_WIRE_NUMBER) return 0.0;
+    if (v->flags & GENGO_WIRE_FLAG_INTEGER) {
+        int64_t n;
+        memcpy(&n, &v->payload, sizeof n);
+        return (double)n;
+    }
+    double d;
     memcpy(&d, &v->payload, sizeof d);
     return d;
 }
