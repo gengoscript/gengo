@@ -200,6 +200,107 @@ Returns the source line associated with the last error, or `0` if unavailable.
 
 Returns the source column associated with the last runtime error, or `0` if unavailable.
 
+## Runtime Introspection
+
+These functions let the host inspect the state of a running engine: read individual globals, enumerate all globals, filter to callable functions, and hook into the VM's execution line by line.
+
+All four are available on **native** targets. `engine_get_global` also works on WebAssembly (it writes to WASM linear memory). The callback-based APIs (`engine_list_globals`, `engine_list_functions`, `engine_set_trace_fn`) are **not supported** on WebAssembly and return `-1` or are no-ops there.
+
+Call these functions between or after `engine_run` / `engine_call` — not while a script is actively running on another thread.
+
+### `engine_get_global(handle, name_ptr, name_len, out_ptr) -> i32`
+
+Reads a single global variable by name and writes its current value into `*out_ptr` as a `ValueWire`.
+
+`out_ptr` may be `NULL` to test existence without copying the value.
+
+Returns:
+
+- `0` on success;
+- `-1` if the handle is invalid;
+- `-2` if no global with that name exists; or
+- `-3` if serialising the value to `ValueWire` fails.
+
+### `engine_list_globals(handle, callback, userdata) -> i32`
+
+Enumerates every global variable, invoking `callback` once per entry.
+
+Callback signature:
+
+```c
+void callback(void *userdata, const char *name, int32_t name_len,
+              const gengo_value_wire_t *value);
+```
+
+`name` is not null-terminated. `value` is valid only for the duration of the callback.
+
+Passing `NULL` for `callback` is a no-op and returns `0`.
+
+Returns:
+
+- `0` on success;
+- `-1` if the handle is invalid; or
+- `-1` on WASM targets (not supported).
+
+### `engine_list_functions(handle, callback, userdata) -> i32`
+
+Like `engine_list_globals`, but only calls `callback` for globals that hold a script-defined function or closure. The arity (number of declared parameters) is passed instead of a `ValueWire`.
+
+Callback signature:
+
+```c
+void callback(void *userdata, const char *name, int32_t name_len,
+              int32_t arity);
+```
+
+Returns:
+
+- `0` on success;
+- `-1` if the handle is invalid; or
+- `-1` on WASM targets (not supported).
+
+### `engine_set_trace_fn(handle, callback, userdata) -> void`
+
+Registers a callback that fires **once per source line** during script execution. The engine suppresses duplicate fires when multiple bytecode instructions map to the same line.
+
+Callback signature:
+
+```c
+void callback(void *userdata, int32_t handle, int32_t line, int32_t col);
+```
+
+`line` and `col` are 1-based.
+
+The callback fires inside the VM dispatch loop. Avoid calling `engine_run` or `engine_call` from within the callback.
+
+Pass `NULL` for `callback` to clear the hook.
+
+No-op on WASM targets.
+
+### C Example
+
+```c
+/* Dump all globals after running a script. */
+static void print_global(void *ud, const char *name, int32_t name_len,
+                          const gengo_value_wire_t *v) {
+    (void)ud;
+    printf("  %.*s  (tag=%d)\n", name_len, name, v->tag);
+}
+
+int handle = engine_init();
+engine_run(handle, src, (int32_t)strlen(src));
+engine_list_globals(handle, print_global, NULL);
+
+/* Trace execution line by line. */
+static void on_line(void *ud, int32_t h, int32_t line, int32_t col) {
+    printf("engine %d  line %d  col %d\n", h, line, col);
+}
+
+engine_set_trace_fn(handle, on_line, NULL);
+engine_call(handle, "main", 4, NULL, 0, NULL);
+engine_set_trace_fn(handle, NULL, NULL);  /* clear */
+```
+
 ## `ValueWire` Layout
 
 `ValueWire` is a 24-byte extern record:

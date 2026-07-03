@@ -2,6 +2,19 @@
 
 This changelog tracks notable language/runtime changes by implementation date.
 
+## 2026-07-03 (v0.5.0-pre7)
+
+### Feature — Runtime Introspection
+
+Four new engine API functions give the host visibility into a running script:
+
+- **`engine_get_global(handle, name, name_len, out)`** — reads a named global as a `ValueWire`; returns `0` on success, `-2` if not defined.
+- **`engine_list_globals(handle, callback, userdata)`** — enumerates every global variable; callback receives `(userdata, name, name_len, *ValueWire)`.
+- **`engine_list_functions(handle, callback, userdata)`** — same as above, filtered to user-defined functions and closures; callback receives arity instead of a wire value.
+- **`engine_set_trace_fn(handle, callback, userdata)`** — registers a per-source-line hook; callback fires as `(userdata, handle, line, col)` at most once per line during `engine_run` / `engine_call`. Pass `NULL` to clear.
+
+`engine_get_global` works on all targets. The three callback-based APIs are not available on WASM.
+
 ## 2026-06-28 (v0.5.0-pre6)
 
 ### Feature — `std.bytes` Module
