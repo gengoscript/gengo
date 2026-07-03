@@ -12,6 +12,7 @@ const vmgc = @import("lang/vm_gc.zig");
 const net_state = @import("lang/native/net_state.zig");
 const http_state = @import("lang/native/http_state.zig");
 const fs_state = @import("lang/native/fs_state.zig");
+const package_state = @import("lang/native/package_state.zig");
 const cfg = @import("runtime/config.zig");
 const vmod = @import("lang/value.zig");
 const Value = vmod.Value;
@@ -174,6 +175,7 @@ const Engine = struct {
     import_scratch: [MaxImportScratch]u8 = undefined,
     trace_fn: ?TraceFn = null,
     trace_userdata: ?*anyopaque = null,
+    package_registry: package_state.PackageRegistry = .{},
 
     fn initScalars(self: *Engine) void {
         self.source_count = 0;
@@ -194,6 +196,7 @@ const Engine = struct {
         self.import_loader_ctx = null;
         self.trace_fn = null;
         self.trace_userdata = null;
+        package_state.clearRegistry(&self.package_registry);
     }
 
     fn initInPlaceDefault(self: *Engine) !void {
@@ -220,6 +223,7 @@ const Engine = struct {
     }
 
     fn deinitInPlace(self: *Engine) void {
+        package_state.clearRegistry(&self.package_registry);
         self.runtime.inner.deinit();
     }
 
@@ -284,6 +288,8 @@ fn importLoaderWrapper(ctx: *anyopaque, path: []const u8) anyerror!?[]const u8 {
         if (result < 0) return error.ImportLoaderFailed;
     }
 
+    if (package_state.resolve(&engine.package_registry, path)) |src| return src;
+
     for (engine.source_entries[0..engine.source_count]) |entry| {
         if (std.mem.eql(u8, path, entry.path)) return entry.source;
     }
@@ -291,7 +297,7 @@ fn importLoaderWrapper(ctx: *anyopaque, path: []const u8) anyerror!?[]const u8 {
 }
 
 fn sourceProviderFromLoader(engine: *Engine) ?api.SourceProvider {
-    if (engine.import_loader_fn == null) return null;
+    if (engine.import_loader_fn == null and engine.package_registry.count == 0) return null;
     return api.SourceProvider{ .callback = .{
         .ctx = engine,
         .load = importLoaderWrapper,
@@ -1049,6 +1055,73 @@ export fn engine_net_policy_clear(handle: i32) void {
     engine.net_policy = .{};
 }
 
+// Returns:
+//   0  success
+//  -1  invalid handle
+//  -2  package table full (max 32)
+//  -3  file table full (max 64 files per package)
+//  -4  a file exceeds the 64 KiB size limit
+//  -5  invalid zip or package name
+export fn engine_load_package(handle: i32, name_ptr: PtrInt, name_len: i32, zip_ptr: PtrInt, zip_len: i32) i32 {
+    const engine = getEngine(handle) orelse return -1;
+    if (name_len <= 0 or zip_len <= 0) return -5;
+    const name = wasmSlice(name_ptr, name_len);
+    const zip_data = wasmSlice(zip_ptr, zip_len);
+    package_state.loadFromZip(&engine.package_registry, name, zip_data) catch |err| return switch (err) {
+        error.PackageTableFull => -2,
+        error.FileTableFull => -3,
+        error.FileTooLarge => -4,
+        error.InvalidZip, error.InvalidPath => -5,
+        error.OutOfMemory => -5,
+    };
+    engine.runtime.setConfig(.{
+        .allow_io = engine.runtime.inner.policy.allow_io,
+        .native_backend = engine.runtime.inner.policy.native_backend,
+        .max_ops = engine.runtime.inner.policy.max_ops,
+        .module_sources = engine.source_entries[0..engine.source_count],
+        .module_source_provider = sourceProviderFromLoader(engine),
+    });
+    return 0;
+}
+
+// Native-only: load package files from a directory on the host filesystem.
+// Not available in WebAssembly builds.
+// Returns same codes as engine_load_package.
+export fn engine_load_package_dir(handle: i32, name_ptr: PtrInt, name_len: i32, dir_ptr: PtrInt, dir_len: i32) i32 {
+    if (comptime is_wasm) return -5;
+    const engine = getEngine(handle) orelse return -1;
+    if (name_len <= 0 or dir_len <= 0) return -5;
+    const name = wasmSlice(name_ptr, name_len);
+    const dir_path = wasmSlice(dir_ptr, dir_len);
+    package_state.loadFromDir(&engine.package_registry, name, dir_path) catch |err| return switch (err) {
+        error.PackageTableFull => -2,
+        error.FileTableFull => -3,
+        error.FileTooLarge => -4,
+        error.InvalidZip, error.InvalidPath => -5,
+        error.OutOfMemory => -5,
+    };
+    engine.runtime.setConfig(.{
+        .allow_io = engine.runtime.inner.policy.allow_io,
+        .native_backend = engine.runtime.inner.policy.native_backend,
+        .max_ops = engine.runtime.inner.policy.max_ops,
+        .module_sources = engine.source_entries[0..engine.source_count],
+        .module_source_provider = sourceProviderFromLoader(engine),
+    });
+    return 0;
+}
+
+export fn engine_clear_packages(handle: i32) void {
+    const engine = getEngine(handle) orelse return;
+    package_state.clearRegistry(&engine.package_registry);
+    engine.runtime.setConfig(.{
+        .allow_io = engine.runtime.inner.policy.allow_io,
+        .native_backend = engine.runtime.inner.policy.native_backend,
+        .max_ops = engine.runtime.inner.policy.max_ops,
+        .module_sources = engine.source_entries[0..engine.source_count],
+        .module_source_provider = sourceProviderFromLoader(engine),
+    });
+}
+
 test "engine_add_source rejects path and source exceeding buffer" {
     const MaxPath = 256;
     const MaxSource = 4096;
@@ -1382,4 +1455,67 @@ test "engine_net_policy checkDialPolicy semantics" {
     try std.testing.expect(!net_state.checkDialPolicy("192.168.1.1:80"));
 
     net_state.clearPolicy();
+}
+
+test "engine_load_package loads zip and resolves imports" {
+    const h = engine_init();
+    try std.testing.expect(h > 0);
+    defer engine_destroy(h);
+
+    // Minimal ZIP containing:
+    //   utils/greet.gengo  — pub func greet(name string) string { return "hello " + name }
+    //   utils/math.gengo   — pub func add(a int b int) int { return a + b }
+    //   README.md          — skipped (not .gengo)
+    const zip_data = [_]u8{
+        80,75,3,4,20,0,0,0,0,0,185,174,227,92,149,106,139,212,61,0,0,0,61,0,0,0,17,0,0,0,
+        117,116,105,108,115,47,103,114,101,101,116,46,103,101,110,103,111,112,117,98,32,102,
+        117,110,99,32,103,114,101,101,116,40,110,97,109,101,32,115,116,114,105,110,103,41,32,
+        115,116,114,105,110,103,32,123,32,114,101,116,117,114,110,32,34,104,101,108,108,111,
+        32,34,32,43,32,110,97,109,101,32,125,80,75,3,4,20,0,0,0,0,0,185,174,227,92,105,177,
+        238,211,46,0,0,0,46,0,0,0,16,0,0,0,117,116,105,108,115,47,109,97,116,104,46,103,101,
+        110,103,111,112,117,98,32,102,117,110,99,32,97,100,100,40,97,32,105,110,116,32,98,32,
+        105,110,116,41,32,105,110,116,32,123,32,114,101,116,117,114,110,32,97,32,43,32,98,32,
+        125,80,75,3,4,20,0,0,0,0,0,185,174,227,92,97,57,152,145,12,0,0,0,12,0,0,0,9,0,0,0,
+        82,69,65,68,77,69,46,109,100,112,97,99,107,97,103,101,32,100,111,99,115,80,75,1,2,20,
+        3,20,0,0,0,0,0,185,174,227,92,149,106,139,212,61,0,0,0,61,0,0,0,17,0,0,0,0,0,0,0,0,
+        0,0,0,128,1,0,0,0,0,117,116,105,108,115,47,103,114,101,101,116,46,103,101,110,103,111,
+        80,75,1,2,20,3,20,0,0,0,0,0,185,174,227,92,105,177,238,211,46,0,0,0,46,0,0,0,16,0,0,
+        0,0,0,0,0,0,0,0,0,128,1,108,0,0,0,117,116,105,108,115,47,109,97,116,104,46,103,101,
+        110,103,111,80,75,1,2,20,3,20,0,0,0,0,0,185,174,227,92,97,57,152,145,12,0,0,0,12,0,0,
+        0,9,0,0,0,0,0,0,0,0,0,0,0,128,1,200,0,0,0,82,69,65,68,77,69,46,109,100,80,75,5,6,0,0,
+        0,0,3,0,3,0,180,0,0,0,251,0,0,0,0,0,
+    };
+
+    const rc = engine_load_package(
+        h,
+        @intCast(@intFromPtr("mylib".ptr)), 5,
+        @intCast(@intFromPtr(&zip_data)), @intCast(zip_data.len),
+    );
+    try std.testing.expectEqual(@as(i32, 0), rc);
+
+    // Run a script that imports from the package
+    const src =
+        \\const greet = import("mylib/utils/greet")
+        \\const math = import("mylib/utils/math")
+        \\pub func main() string {
+        \\    const g = greet.greet("world")
+        \\    const n = math.add(3 5)
+        \\    return g + " " + std.conv.intToStr(n)
+        \\}
+    ;
+    const run_rc = engine_run(h, @intCast(@intFromPtr(src.ptr)), @intCast(src.len));
+    try std.testing.expectEqual(@as(i32, 0), run_rc);
+
+    var result: ValueWire = undefined;
+    const call_rc = engine_call(h, @intCast(@intFromPtr("main".ptr)), 4, 0, 0, @intCast(@intFromPtr(&result)));
+    try std.testing.expectEqual(@as(i32, 0), call_rc);
+    try std.testing.expectEqual(@as(u8, 3), result.tag); // string
+    const str_ptr: [*]const u8 = @ptrFromInt(@as(usize, @intCast(result.payload)));
+    const str = str_ptr[0..result.len];
+    try std.testing.expectEqualStrings("hello world 8", str);
+
+    // Clear packages
+    engine_clear_packages(h);
+    const engine = getEngine(h).?;
+    try std.testing.expectEqual(@as(u8, 0), engine.package_registry.count);
 }
