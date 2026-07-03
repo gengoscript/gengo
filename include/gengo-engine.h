@@ -238,6 +238,42 @@ void engine_set_write_fn(int32_t handle, gengo_write_fn_t callback);
  */
 void engine_set_read_fn(int32_t handle, gengo_read_fn_t callback);
 
+/* ── Net dial policy ─────────────────────────────────────────────────────── */
+
+/*
+ * Add a dial policy rule for cap:net.
+ *
+ * Rules are evaluated most-recently-added first (LIFO stack). The first
+ * matching rule wins. If no rule matches, the default is ALLOW.
+ *
+ * action:      0 = deny, 1 = allow
+ * pattern:     One of:
+ *                "*"                 — match any address
+ *                "192.168.1.1"       — exact IPv4
+ *                "192.168.1.0/24"    — IPv4 CIDR
+ *                "::1"               — exact IPv6
+ *                "fd00::/8"          — IPv6 CIDR
+ *                "api.example.com"   — exact hostname
+ *                "*.example.com"     — hostname suffix wildcard
+ * port:        0 = any port; otherwise exact port match.
+ *
+ * Returns  0 on success,
+ *         -1 if the handle is invalid,
+ *         -2 if the per-engine rule list is full (max 32 rules),
+ *         -3 if the pattern is invalid.
+ */
+int32_t engine_net_policy_add(int32_t handle,
+                               int32_t action,
+                               const char *pattern, int32_t pattern_len,
+                               int32_t port);
+
+/*
+ * Remove all dial policy rules for the engine.
+ * After this call the default (allow all) is restored.
+ * Has no effect if the handle is invalid.
+ */
+void engine_net_policy_clear(int32_t handle);
+
 /* ── Runtime introspection (native target only) ───────────────────────────── */
 
 /*

@@ -4,6 +4,189 @@ const builtin = @import("builtin");
 const MaxConns = 16;
 const ReadBufSize = 4096;
 
+// ---------------------------------------------------------------------------
+// Net dial policy — stacked allow/deny rules, LIFO evaluation
+// ---------------------------------------------------------------------------
+
+const MaxPolicyRules = 32;
+
+pub const PolicyAction = enum(u8) { deny = 0, allow = 1 };
+
+const PatternKind = enum(u8) {
+    match_all,       // "*"
+    hostname_exact,  // "api.example.com"
+    wildcard_suffix, // "*.example.com" — suffix stored as ".example.com"
+    ipv4_exact,      // stored as 4 bytes in data[0..4]
+    ipv4_cidr,       // stored as 4 bytes + prefix_len
+    ipv6_exact,      // stored as 16 bytes in data[0..16]
+    ipv6_cidr,       // stored as 16 bytes + prefix_len
+};
+
+const NetPolicyRule = struct {
+    action: PolicyAction,
+    kind: PatternKind,
+    port: u16,        // 0 = any port
+    data: [64]u8 = undefined,
+    data_len: u8 = 0,
+    prefix_len: u8 = 0,
+};
+
+pub const PolicyState = struct {
+    rules: [MaxPolicyRules]NetPolicyRule = undefined,
+    count: u8 = 0,
+};
+
+var g_policy: PolicyState = .{};
+
+pub fn applyPolicy(state: PolicyState) void {
+    g_policy = state;
+}
+
+pub fn currentPolicy() PolicyState {
+    return g_policy;
+}
+
+pub fn clearPolicy() void {
+    g_policy = .{};
+}
+
+// Returns 0 on success, -1 if the rule list is full, -2 for invalid pattern.
+pub fn addPolicyRule(action: PolicyAction, pattern: []const u8, port: u16) i32 {
+    if (g_policy.count >= MaxPolicyRules) return -1;
+    var rule: NetPolicyRule = .{ .action = action, .kind = undefined, .port = port };
+
+    if (std.mem.eql(u8, pattern, "*")) {
+        rule.kind = .match_all;
+    } else if (std.mem.startsWith(u8, pattern, "*.")) {
+        const suffix = pattern[1..]; // ".example.com"
+        if (suffix.len > 63) return -2;
+        rule.kind = .wildcard_suffix;
+        rule.data_len = @intCast(suffix.len);
+        @memcpy(rule.data[0..suffix.len], suffix);
+    } else if (std.mem.indexOfScalar(u8, pattern, '/')) |slash| {
+        const addr_part = pattern[0..slash];
+        const prefix_str = pattern[slash + 1 ..];
+        const prefix_len = std.fmt.parseInt(u8, prefix_str, 10) catch return -2;
+        if (parseIPv4(addr_part)) |ip4| {
+            if (prefix_len > 32) return -2;
+            rule.kind = .ipv4_cidr;
+            rule.data[0..4].* = ip4;
+            rule.data_len = 4;
+            rule.prefix_len = prefix_len;
+        } else if (parseIPv6(addr_part)) |ip6| {
+            if (prefix_len > 128) return -2;
+            rule.kind = .ipv6_cidr;
+            rule.data[0..16].* = ip6;
+            rule.data_len = 16;
+            rule.prefix_len = prefix_len;
+        } else {
+            return -2;
+        }
+    } else if (parseIPv4(pattern)) |ip4| {
+        rule.kind = .ipv4_exact;
+        rule.data[0..4].* = ip4;
+        rule.data_len = 4;
+    } else if (parseIPv6(pattern)) |ip6| {
+        rule.kind = .ipv6_exact;
+        rule.data[0..16].* = ip6;
+        rule.data_len = 16;
+    } else {
+        if (pattern.len > 63) return -2;
+        rule.kind = .hostname_exact;
+        rule.data_len = @intCast(pattern.len);
+        @memcpy(rule.data[0..pattern.len], pattern);
+    }
+
+    g_policy.rules[g_policy.count] = rule;
+    g_policy.count += 1;
+    return 0;
+}
+
+pub fn clearPolicyRules() void {
+    g_policy.count = 0;
+}
+
+// Returns true if the dial is allowed.
+// No rules → allow (default; same as current behaviour).
+// Rules are evaluated LIFO — most recently added rule wins on first match.
+// If no rule matches, the default is allow.
+pub fn checkDialPolicy(address: []const u8) bool {
+    if (g_policy.count == 0) return true;
+
+    const colon = std.mem.lastIndexOfScalar(u8, address, ':') orelse return true;
+    var host = address[0..colon];
+    const port_str = address[colon + 1 ..];
+    const port = std.fmt.parseUnsigned(u16, port_str, 10) catch return true;
+
+    // Strip IPv6 brackets: "[::1]" → "::1"
+    if (host.len >= 2 and host[0] == '[' and host[host.len - 1] == ']') {
+        host = host[1 .. host.len - 1];
+    }
+
+    const host_ip4 = parseIPv4(host);
+    const host_ip6: ?[16]u8 = if (host_ip4 == null) parseIPv6(host) else null;
+
+    // LIFO: walk from last rule down to first
+    var i = g_policy.count;
+    while (i > 0) {
+        i -= 1;
+        const rule = &g_policy.rules[i];
+        if (rule.port != 0 and rule.port != port) continue;
+        const matches = switch (rule.kind) {
+            .match_all => true,
+            .hostname_exact => std.mem.eql(u8, host, rule.data[0..rule.data_len]),
+            .wildcard_suffix => std.mem.endsWith(u8, host, rule.data[0..rule.data_len]),
+            .ipv4_exact => if (host_ip4) |ip| std.mem.eql(u8, &ip, rule.data[0..4]) else false,
+            .ipv4_cidr => if (host_ip4) |ip| ipv4InCidr(ip, rule.data[0..4].*, rule.prefix_len) else false,
+            .ipv6_exact => if (host_ip6) |ip| std.mem.eql(u8, &ip, rule.data[0..16]) else false,
+            .ipv6_cidr => if (host_ip6) |ip| ipv6InCidr(ip, rule.data[0..16].*, rule.prefix_len) else false,
+        };
+        if (matches) return rule.action == .allow;
+    }
+
+    return true; // no rule matched → default allow
+}
+
+fn parseIPv4(s: []const u8) ?[4]u8 {
+    var result: [4]u8 = undefined;
+    var it = std.mem.splitScalar(u8, s, '.');
+    var i: usize = 0;
+    while (it.next()) |part| {
+        if (i >= 4) return null;
+        result[i] = std.fmt.parseInt(u8, part, 10) catch return null;
+        i += 1;
+    }
+    if (i != 4) return null;
+    return result;
+}
+
+fn parseIPv6(s: []const u8) ?[16]u8 {
+    const addr = std.Io.net.Ip6Address.parse(s, 0) catch return null;
+    return addr.bytes;
+}
+
+fn ipv4InCidr(ip: [4]u8, network: [4]u8, prefix_len: u8) bool {
+    if (prefix_len == 0) return true;
+    const ip_u32 = std.mem.readInt(u32, &ip, .big);
+    const net_u32 = std.mem.readInt(u32, &network, .big);
+    const shift: u5 = @intCast(32 - prefix_len);
+    const mask = ~@as(u32, 0) << shift;
+    return (ip_u32 & mask) == (net_u32 & mask);
+}
+
+fn ipv6InCidr(ip: [16]u8, network: [16]u8, prefix_len: u8) bool {
+    if (prefix_len == 0) return true;
+    var remaining: u8 = prefix_len;
+    for (0..16) |idx| {
+        if (remaining == 0) break;
+        const bits: u3 = @intCast(@min(remaining, 8));
+        const mask: u8 = ~@as(u8, 0) << @intCast(8 - @as(u4, bits));
+        if ((ip[idx] & mask) != (network[idx] & mask)) return false;
+        remaining -= bits;
+    }
+    return true;
+}
+
 const NetConn = struct {
     id: u32,
     host_handle: i32,

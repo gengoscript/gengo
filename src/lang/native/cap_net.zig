@@ -83,6 +83,11 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const address = vms.asStringValue(arg1) catch return error.TypeError;
             _ = try vms.vmPop();
 
+            if (!net_state.checkDialPolicy(address)) {
+                try vms.vmPush(.{ .error_value = try chunk.internStr("net.dial: refused by policy") });
+                return;
+            }
+
             const id = net_state.netDial(network, address) catch {
                 try vms.vmPush(.{ .error_value = try chunk.internStr(net_state.lastNetErr()) });
                 return;

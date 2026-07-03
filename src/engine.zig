@@ -147,6 +147,7 @@ const Engine = struct {
     write_callback: ?WriteCallback = null,
     read_callback: ?ReadCallback = null,
     net_handlers: ?net_state.HandlerSet = null,
+    net_policy: net_state.PolicyState = .{},
     http_handler: ?http_state.HandlerSet = null,
     fs_state: fs_state.EngineState = .{},
     source_entries: [MaxSources]api.SourceEntry = undefined,
@@ -186,6 +187,7 @@ const Engine = struct {
         self.write_callback = null;
         self.read_callback = null;
         self.net_handlers = null;
+        self.net_policy = .{};
         self.http_handler = null;
         self.fs_state = .{};
         self.import_loader_fn = null;
@@ -319,6 +321,7 @@ fn pushCapState(engine: *Engine) ?*Engine {
     write_callback = engine.write_callback;
     read_callback = engine.read_callback;
     net_state.applyHandlers(engine.net_handlers);
+    net_state.applyPolicy(engine.net_policy);
     http_state.applyHandler(engine.http_handler);
     fs_state.loadFromEngine(&engine.fs_state);
     io.setTrace(engine.trace_fn, engine.trace_userdata, engineToHandle(engine));
@@ -332,6 +335,7 @@ fn popCapState(prev: ?*Engine) void {
         write_callback = p.write_callback;
         read_callback = p.read_callback;
         net_state.applyHandlers(p.net_handlers);
+        net_state.applyPolicy(p.net_policy);
         http_state.applyHandler(p.http_handler);
         fs_state.loadFromEngine(&p.fs_state);
         io.setTrace(p.trace_fn, p.trace_userdata, engineToHandle(p));
@@ -341,6 +345,7 @@ fn popCapState(prev: ?*Engine) void {
         write_callback = null;
         read_callback = null;
         net_state.applyHandlers(null);
+        net_state.clearPolicy();
         http_state.applyHandler(null);
         fs_state.clearMounts();
         io.clearTrace();
@@ -1010,6 +1015,40 @@ export fn engine_set_trace_fn(handle: i32, callback: ?TraceFn, userdata: ?*anyop
     engine.trace_userdata = userdata;
 }
 
+/// Add a dial policy rule. Rules are evaluated most-recently-added first (LIFO).
+/// action: 0 = deny, 1 = allow.
+/// pattern: exact IP, CIDR (192.168.1.0/24), exact hostname, wildcard (*.example.com), or "*".
+/// port: 0 = any port; otherwise exact port match.
+/// Returns 0 on success, -1 for invalid handle, -2 if the rule list is full,
+/// -3 for an invalid pattern.
+export fn engine_net_policy_add(handle: i32, action: i32, pattern_ptr: PtrInt, pattern_len: i32, port: i32) i32 {
+    const engine = getEngine(handle) orelse return -1;
+    const pattern = wasmSlice(pattern_ptr, pattern_len);
+    const act: net_state.PolicyAction = if (action == 0) .deny else .allow;
+    const p: u16 = if (port <= 0 or port > 65535) 0 else @intCast(port);
+    const rc = blk: {
+        // Temporarily apply this engine's policy so addPolicyRule modifies it.
+        const saved = net_state.currentPolicy();
+        net_state.applyPolicy(engine.net_policy);
+        const r = net_state.addPolicyRule(act, pattern, p);
+        engine.net_policy = net_state.currentPolicy();
+        net_state.applyPolicy(saved);
+        break :blk r;
+    };
+    return switch (rc) {
+        0 => 0,
+        -1 => -2,
+        else => -3,
+    };
+}
+
+/// Clear all dial policy rules for the engine. After this call the default
+/// (allow all) is restored.
+export fn engine_net_policy_clear(handle: i32) void {
+    const engine = getEngine(handle) orelse return;
+    engine.net_policy = .{};
+}
+
 test "engine_add_source rejects path and source exceeding buffer" {
     const MaxPath = 256;
     const MaxSource = 4096;
@@ -1274,4 +1313,73 @@ test "engine_set_trace_fn fires per source line" {
     try std.testing.expectEqual(@as(i32, 1), ctx.lines[0]);
     try std.testing.expectEqual(@as(i32, 2), ctx.lines[1]);
     try std.testing.expectEqual(@as(i32, 3), ctx.lines[2]);
+}
+
+test "engine_net_policy_add rule registration" {
+    const h = engine_init();
+    try std.testing.expect(h > 0);
+    defer engine_destroy(h);
+
+    // Invalid handle → -1
+    const pat_star = "*";
+    try std.testing.expectEqual(@as(i32, -1), engine_net_policy_add(0, 0, @intCast(@intFromPtr(pat_star.ptr)), @intCast(pat_star.len), 0));
+
+    // Valid patterns
+    try std.testing.expectEqual(@as(i32, 0), engine_net_policy_add(h, 0, @intCast(@intFromPtr(pat_star.ptr)), @intCast(pat_star.len), 0));
+    const pat_cidr = "192.168.1.0/24";
+    try std.testing.expectEqual(@as(i32, 0), engine_net_policy_add(h, 1, @intCast(@intFromPtr(pat_cidr.ptr)), @intCast(pat_cidr.len), 0));
+    const pat_wild = "*.example.com";
+    try std.testing.expectEqual(@as(i32, 0), engine_net_policy_add(h, 1, @intCast(@intFromPtr(pat_wild.ptr)), @intCast(pat_wild.len), 443));
+
+    // Invalid CIDR → -3
+    const pat_bad = "not/a/cidr";
+    try std.testing.expectEqual(@as(i32, -3), engine_net_policy_add(h, 1, @intCast(@intFromPtr(pat_bad.ptr)), @intCast(pat_bad.len), 0));
+
+    // clear resets count
+    engine_net_policy_clear(h);
+    try std.testing.expectEqual(@as(u8, 0), getEngine(h).?.net_policy.count);
+
+    // Per-engine isolation
+    const h2 = engine_init();
+    try std.testing.expect(h2 > 0);
+    defer engine_destroy(h2);
+    try std.testing.expectEqual(@as(i32, 0), engine_net_policy_add(h, 0, @intCast(@intFromPtr(pat_star.ptr)), @intCast(pat_star.len), 0));
+    try std.testing.expectEqual(@as(u8, 1), getEngine(h).?.net_policy.count);
+    try std.testing.expectEqual(@as(u8, 0), getEngine(h2).?.net_policy.count);
+}
+
+test "engine_net_policy checkDialPolicy semantics" {
+    // Default allow: no rules
+    net_state.clearPolicy();
+    try std.testing.expect(net_state.checkDialPolicy("192.168.1.1:80"));
+
+    // Deny all, then allow one IP (LIFO: allow is added last → evaluated first)
+    net_state.clearPolicy();
+    _ = net_state.addPolicyRule(.deny, "*", 0);
+    _ = net_state.addPolicyRule(.allow, "192.168.1.1", 0);
+    try std.testing.expect(net_state.checkDialPolicy("192.168.1.1:80"));
+    try std.testing.expect(!net_state.checkDialPolicy("10.0.0.1:80"));
+
+    // CIDR
+    net_state.clearPolicy();
+    _ = net_state.addPolicyRule(.deny, "*", 0);
+    _ = net_state.addPolicyRule(.allow, "10.0.0.0/8", 0);
+    try std.testing.expect(net_state.checkDialPolicy("10.1.2.3:443"));
+    try std.testing.expect(!net_state.checkDialPolicy("192.168.1.1:443"));
+
+    // Wildcard hostname
+    net_state.clearPolicy();
+    _ = net_state.addPolicyRule(.deny, "*", 0);
+    _ = net_state.addPolicyRule(.allow, "*.example.com", 0);
+    try std.testing.expect(net_state.checkDialPolicy("api.example.com:443"));
+    try std.testing.expect(!net_state.checkDialPolicy("other.net:443"));
+
+    // Port-specific rule
+    net_state.clearPolicy();
+    _ = net_state.addPolicyRule(.deny, "*", 0);
+    _ = net_state.addPolicyRule(.allow, "192.168.1.1", 443);
+    try std.testing.expect(net_state.checkDialPolicy("192.168.1.1:443"));
+    try std.testing.expect(!net_state.checkDialPolicy("192.168.1.1:80"));
+
+    net_state.clearPolicy();
 }
