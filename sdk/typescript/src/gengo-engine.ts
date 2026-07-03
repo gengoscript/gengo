@@ -253,6 +253,21 @@ export class GengoEngine {
     return result;
   }
 
+  getGlobal(name: string): GVal | undefined {
+    this.assertAlive();
+    this.resetScratch();
+    const [namePtr, nameLen] = this.scratchString(name);
+    const outPtr = this.scratchPos;
+    this.ensureScratch(WIRE_SIZE);
+    this.scratchPos += WIRE_SIZE;
+    const rc = this.callExport("engine_get_global", [this.handle, namePtr, nameLen, outPtr]);
+    if (rc === -2) return undefined;
+    if (rc !== RESULT_OK) throw new Error(`engine_get_global failed: ${rc}`);
+    const ctx: WireReadCtx = { dv: this.dv };
+    const [val] = decodeGVal(ctx, outPtr);
+    return val;
+  }
+
   addSource(path: string, source: string): void {
     this.assertAlive();
     this.resetScratch();

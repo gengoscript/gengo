@@ -238,6 +238,82 @@ void engine_set_write_fn(int32_t handle, gengo_write_fn_t callback);
  */
 void engine_set_read_fn(int32_t handle, gengo_read_fn_t callback);
 
+/* ── Runtime introspection (native target only) ───────────────────────────── */
+
+/*
+ * Callback for engine_list_globals.
+ *   userdata  — opaque pointer passed to engine_list_globals
+ *   name      — global variable name (not null-terminated)
+ *   name_len  — length in bytes
+ *   value     — current value as a ValueWire; valid only during the callback
+ */
+typedef void (*gengo_globals_callback_t)(void *userdata,
+                                         const char *name, int32_t name_len,
+                                         const gengo_value_wire_t *value);
+
+/*
+ * Callback for engine_list_functions.
+ *   userdata  — opaque pointer passed to engine_list_functions
+ *   name      — function name (not null-terminated)
+ *   name_len  — length in bytes
+ *   arity     — number of declared parameters
+ */
+typedef void (*gengo_functions_callback_t)(void *userdata,
+                                           const char *name, int32_t name_len,
+                                           int32_t arity);
+
+/*
+ * Trace callback registered via engine_set_trace_fn.
+ *   userdata  — opaque pointer passed to engine_set_trace_fn
+ *   handle    — engine handle that fired the event
+ *   line      — 1-based source line
+ *   col       — 1-based source column
+ * Fires at most once per source line per engine_run/engine_call invocation.
+ */
+typedef void (*gengo_trace_fn_t)(void *userdata,
+                                  int32_t handle, int32_t line, int32_t col);
+
+/*
+ * Read a global variable by name.
+ * out may be NULL to test existence without copying the value.
+ * Returns  0 on success,
+ *         -1 if the handle is invalid,
+ *         -2 if no global with that name exists,
+ *         -3 if serialising the value to ValueWire fails.
+ */
+int32_t engine_get_global(int32_t handle,
+                           const char *name, int32_t name_len,
+                           gengo_value_wire_t *out);
+
+/*
+ * Enumerate all globals, invoking callback once per entry.
+ * Not available on the WASM target (returns -1).
+ * Returns 0 on success, -1 if the handle is invalid.
+ */
+int32_t engine_list_globals(int32_t handle,
+                             gengo_globals_callback_t callback,
+                             void *userdata);
+
+/*
+ * Enumerate all globals that hold a function or closure, invoking callback
+ * once per entry with the function's arity.
+ * Not available on the WASM target (returns -1).
+ * Returns 0 on success, -1 if the handle is invalid.
+ */
+int32_t engine_list_functions(int32_t handle,
+                               gengo_functions_callback_t callback,
+                               void *userdata);
+
+/*
+ * Register a trace callback that fires once per source line during execution.
+ * Pass NULL for callback to clear the callback.
+ * Not available on the WASM target (no-op).
+ * Has no effect if the handle is invalid.
+ */
+void engine_set_trace_fn(int32_t handle,
+                          gengo_trace_fn_t callback,
+                          void *userdata);
+
 /* ── HTTP capability types ───────────────────────────────────────────────── */
 
 typedef struct {

@@ -112,6 +112,11 @@ Same as `run` but with a virtual path for import resolution.
 
 Call a named Gengoscript function with typed arguments.
 
+### `engine.getGlobal(name): GVal | undefined`
+
+Read a global variable by name. Returns the current value, or `undefined` if
+no global with that name exists.
+
 ### `engine.addSource(path, source): void`
 
 Register a source module for import resolution.
