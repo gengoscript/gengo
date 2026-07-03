@@ -597,8 +597,13 @@ pub const Session = struct {
         const bare_name = if (std.mem.startsWith(u8, import_name, "host:")) import_name[5..] else import_name;
         if (self.isHostModule(bare_name)) return bare_name;
         if (!(import_name[0] == '.')) {
+            // Allow package imports: try the source provider before rejecting.
+            if (self.sourceExists(import_name)) return copyResolvedPath(import_name);
+            var pkg_ext_buf: [MaxModulePathBytes]u8 = undefined;
+            const with_ext = try appendSuffix(&pkg_ext_buf, import_name, ".gengo");
+            if (self.sourceExists(with_ext)) return copyResolvedPath(import_name);
             self.last_error_path = importer_path;
-            self.setScanError("unsupported import '{s}'; relative imports must start with '.', or use 'cap:'/'host:' prefix", .{import_name});
+            self.setScanError("unsupported import '{s}'; relative imports must start with '.', or use 'cap:'/'host:' prefix, or register a package", .{import_name});
             return error.UnsupportedImportModule;
         }
 

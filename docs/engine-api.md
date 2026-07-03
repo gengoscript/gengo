@@ -200,6 +200,78 @@ Returns the source line associated with the last error, or `0` if unavailable.
 
 Returns the source column associated with the last runtime error, or `0` if unavailable.
 
+## Package Bundles
+
+Scripts can import modules from a package bundle registered on the engine. Packages require no special prefix in the script — `import("mylib/utils/strings")` resolves against registered packages transparently.
+
+### Evaluation order
+
+Module resolution follows this order:
+
+1. Stdlib (`std`)
+2. Host modules (`host:` prefix)
+3. Import loader callback (if registered via `engine_set_import_loader`)
+4. Package bundles (registered via `engine_load_package` / `engine_load_package_dir`)
+5. In-memory sources (`engine_add_source`)
+
+### Package format
+
+A package bundle is a standard ZIP file. Only `.gengo` files are loaded; other files are ignored. The module path within the package is the zip entry path with the `.gengo` extension stripped. For example, a zip entry `utils/strings.gengo` is importable as `import("mylib/utils/strings")` when loaded under the name `"mylib"`.
+
+Limits per bundle call:
+
+| Limit | Value |
+|---|---|
+| Max packages per engine | 32 |
+| Max files per package | 64 |
+| Max file size | 64 KiB |
+| Supported compression | store, deflate |
+
+### `engine_load_package(handle, name_ptr, name_len, zip_ptr, zip_len) -> i32`
+
+Load a zip-format package bundle.
+
+Returns:
+
+- `0` on success;
+- `-1` if the handle is invalid;
+- `-2` if the package table is full (max 32);
+- `-3` if a package file table is full (max 64 files);
+- `-4` if a file exceeds 64 KiB; or
+- `-5` for invalid zip data or package name.
+
+### `engine_load_package_dir(handle, name_ptr, name_len, dir_ptr, dir_len) -> i32`
+
+Load all `.gengo` files found recursively under `dir_path` into a package named `name`. This is a convenience for development — in production, use `engine_load_package` with a pre-built zip. Not available in WebAssembly builds (returns `-5`).
+
+Returns the same codes as `engine_load_package`.
+
+### `engine_clear_packages(handle) -> void`
+
+Remove all registered packages. Does not affect `engine_add_source` entries or the import loader callback.
+
+### C Example
+
+```c
+/* Load a pre-built package zip from disk */
+FILE *f = fopen("mylib-1.0.zip", "rb");
+fseek(f, 0, SEEK_END);
+long size = ftell(f);
+rewind(f);
+void *buf = malloc(size);
+fread(buf, 1, size, f);
+fclose(f);
+
+int h = engine_init();
+engine_load_package(h, "mylib", 5, buf, (int32_t)size);
+free(buf);
+
+/* Script imports work without any prefix */
+const char *src = "const m = import(\"mylib/utils\")\n"
+                  "pub func run() string { return m.greet(\"world\") }\n";
+engine_run(h, src, (int32_t)strlen(src));
+```
+
 ## Net Dial Policy
 
 `cap:net` is unrestricted by default — any script with the capability can dial any address. `engine_net_policy_add` lets the host add allow/deny rules that gate every `net.dial()` call without replacing the entire net handler.

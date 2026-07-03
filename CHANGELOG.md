@@ -2,7 +2,21 @@
 
 This changelog tracks notable language/runtime changes by implementation date.
 
-## 2026-07-03 (v0.5.0-pre7)
+## 2026-07-03 (v0.5.1-dev)
+
+### Feature — Package Bundles (#48)
+
+Scripts can now import modules from named packages registered on the engine. No special prefix is needed — `import("mylib/utils/strings")` resolves against registered packages transparently, keeping the same import path in development and production.
+
+**New API:**
+
+- **`engine_load_package(handle, name, name_len, zip_ptr, zip_len)`** — registers a zip-format bundle under a package name. Each `.gengo` file in the zip becomes an importable module. Limits: 32 packages per engine, 64 files per package, 64 KiB per file. Supports `store` and `deflate` compression.
+- **`engine_load_package_dir(handle, name, name_len, dir, dir_len)`** — native-only convenience that loads all `.gengo` files found recursively under a directory. Useful during development to load live source trees. Not available on WASM.
+- **`engine_clear_packages(handle)`** — removes all registered packages.
+
+**Resolution order:** stdlib → host modules → import loader callback → packages → `engine_add_source` entries.
+
+## 2026-07-03 (v0.5.1-dev)
 
 ### Feature — Runtime Introspection
 

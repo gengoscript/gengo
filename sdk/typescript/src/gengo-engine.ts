@@ -268,6 +268,30 @@ export class GengoEngine {
     return val;
   }
 
+  /**
+   * Register a zip-format package bundle under the given name.
+   * Scripts import modules from the package with plain paths: import("name/path/to/module")
+   */
+  loadPackage(name: string, zipData: Uint8Array): void {
+    this.assertAlive();
+    this.resetScratch();
+    const [namePtr, nameLen] = this.scratchString(name);
+    const zipPtr = this.scratchPos;
+    this.ensureScratch(zipData.byteLength);
+    new Uint8Array(this.mem.buffer, zipPtr, zipData.byteLength).set(zipData);
+    this.scratchPos += zipData.byteLength;
+    const rc = this.callExport("engine_load_package", [
+      this.handle, namePtr, nameLen, zipPtr, zipData.byteLength,
+    ]);
+    if (rc !== RESULT_OK) throw new Error(`engine_load_package failed: ${rc}`);
+  }
+
+  /** Remove all registered packages from the engine. */
+  clearPackages(): void {
+    this.assertAlive();
+    this.callExport("engine_clear_packages", [this.handle]);
+  }
+
   addSource(path: string, source: string): void {
     this.assertAlive();
     this.resetScratch();
