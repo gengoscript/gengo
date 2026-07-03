@@ -200,6 +200,65 @@ Returns the source line associated with the last error, or `0` if unavailable.
 
 Returns the source column associated with the last runtime error, or `0` if unavailable.
 
+## Net Dial Policy
+
+`cap:net` is unrestricted by default — any script with the capability can dial any address. `engine_net_policy_add` lets the host add allow/deny rules that gate every `net.dial()` call without replacing the entire net handler.
+
+### Evaluation model
+
+Rules form a stack. The **most recently added rule is evaluated first**. The first matching rule wins. If no rule matches, the default is **allow** — so with no rules set, behaviour is unchanged from today.
+
+To restrict to an allowlist, add a `deny *` rule first, then add `allow` rules for what you want to permit. Because `allow` rules are added after (and therefore evaluated before) the `deny *`, they take priority:
+
+```c
+engine_net_policy_add(h, 0, "*", 1, 0);              // deny all   (added first, evaluated last)
+engine_net_policy_add(h, 1, "10.0.0.0/8", 8, 0);    // allow range (evaluated before deny *)
+engine_net_policy_add(h, 1, "*.internal.corp", 14, 0); // allow domain
+```
+
+### Pattern format
+
+| Pattern | Example | Matches |
+|---|---|---|
+| `*` | `*` | any address |
+| IPv4 exact | `192.168.1.1` | that IP only |
+| IPv4 CIDR | `192.168.1.0/24` | IPs in that range |
+| IPv6 exact | `::1` | that address only |
+| IPv6 CIDR | `fd00::/8` | addresses in that range |
+| Hostname exact | `api.example.com` | that hostname |
+| Hostname wildcard | `*.example.com` | any subdomain of `example.com` |
+
+The `port` argument is `0` for any port, or an exact port number.
+
+### `engine_net_policy_add(handle, action, pattern_ptr, pattern_len, port) -> i32`
+
+Add a rule to the end of the stack (making it the first to be evaluated).
+
+`action`: `0` = deny, `1` = allow.
+
+Returns:
+
+- `0` on success;
+- `-1` if the handle is invalid;
+- `-2` if the rule list is full (max 32); or
+- `-3` if the pattern is invalid.
+
+### `engine_net_policy_clear(handle) -> void`
+
+Remove all rules. Default-allow is restored.
+
+### C Example
+
+```c
+/* Allowlist: only internal network and one external API */
+engine_net_policy_add(h, 0, "*", 1, 0);
+engine_net_policy_add(h, 1, "10.0.0.0/8", 8, 0);
+engine_net_policy_add(h, 1, "api.example.com", 15, 443);
+
+/* Single deny: block one bad actor, allow everything else */
+engine_net_policy_add(h, 0, "198.51.100.0/24", 15, 0);
+```
+
 ## Runtime Introspection
 
 These functions let the host inspect the state of a running engine: read individual globals, enumerate all globals, filter to callable functions, and hook into the VM's execution line by line.
