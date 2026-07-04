@@ -149,6 +149,28 @@ fn testReset() void {
     out("  reset: OK\n");
 }
 
+fn testHexLiterals() void {
+    const rt = initWithAllowIO(false);
+    const res = rt.run(
+        \\func vals() int {
+        \\    a := 0x6E
+        \\    b := 0xBEEF
+        \\    c := 0x1e
+        \\    return a + b + c
+        \\}
+    );
+    if (res != .ok) fail("engine FAIL: hex_literals setup\n");
+    const call_res = rt.call("vals", &.{});
+    switch (call_res) {
+        .ok => |v| {
+            if (v != .int) fail("engine FAIL: hex_literals: expected int, got float or other\n");
+            if (v.int != 0x6E + 0xBEEF + 0x1e) fail("engine FAIL: hex_literals: wrong value\n");
+        },
+        else => fail("engine FAIL: hex_literals call failed\n"),
+    }
+    out("  hex literals as int: OK\n");
+}
+
 fn testLastError() void {
     const rt = initWithAllowIO(false);
 
@@ -1176,6 +1198,7 @@ export fn _start() void {
     out("engine runner:\n");
     testInitDestroy();
     testRun();
+    testHexLiterals();
     testMultiHandle();
     testRunPathWithSourceProvider();
     testCallWithArgs();
