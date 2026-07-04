@@ -1307,27 +1307,14 @@ fn pushFieldFromObject(ctx: VMContext, obj: *Object, name_idx: usize, ic_base: u
                 try ctx.vs.vmPush(inst.fields[fi].value);
             }
         },
-        .map, .map_managed => {
-            const items = try vms.asMapSlice(obj);
+        .map, .map_managed, .map_hashed => {
             if (common.streq(name, "len")) {
+                const items = try vms.asMapSlice(obj);
                 try ctx.vs.vmPush(.{ .int = @intCast(items.len) });
             } else {
                 var name_ss = StringSlice{ .bytes = name };
                 const key_v = Value{ .string = &name_ss };
-                try ctx.vs.vmPush(if (vmmap.mapFindLinear(items, key_v)) |fi| items[fi].value else .null);
-            }
-        },
-        .map_hashed => |hm| {
-            if (common.streq(name, "len")) {
-                try ctx.vs.vmPush(.{ .int = @intCast(hm.len) });
-            } else {
-                var name_ss = StringSlice{ .bytes = name };
-                const key_v = Value{ .string = &name_ss };
-                if (vmmap.mapFindHashedIndex(hm.entries[0..hm.len], hm.buckets, key_v)) |fi| {
-                    try ctx.vs.vmPush(hm.entries[fi].value);
-                } else {
-                    try ctx.vs.vmPush(.null);
-                }
+                try ctx.vs.vmPush(try vmmap.mapGet(obj, key_v) orelse .null);
             }
         },
         .enum_type => try ctx.vs.vmPush(try enumTypeFieldValue(ctx, obj, name)),
@@ -1400,16 +1387,8 @@ fn opGetIndex(ctx: VMContext) !void {
                 }
                 try ctx.vs.vmPush(items[idx]);
             },
-            .map, .map_managed => {
-                const items = try vms.asMapSlice(obj);
-                try ctx.vs.vmPush(if (vmmap.mapFindLinear(items, idx_v)) |fi| items[fi].value else .null);
-            },
-            .map_hashed => |hm| {
-                if (vmmap.mapFindHashedIndex(hm.entries[0..hm.len], hm.buckets, idx_v)) |fi| {
-                    try ctx.vs.vmPush(hm.entries[fi].value);
-                } else {
-                    try ctx.vs.vmPush(.null);
-                }
+            .map, .map_managed, .map_hashed => {
+                try ctx.vs.vmPush(try vmmap.mapGet(obj, idx_v) orelse .null);
             },
             .struct_instance => |inst| {
                 const key = try vms.asStringValue(idx_v);
@@ -1477,8 +1456,7 @@ fn opSetIndex(ctx: VMContext) !void {
             }
             items[idx] = val;
         },
-        .map, .map_managed => try mapLinearInsertOrAppend(ctx, container, idx_v, val),
-        .map_hashed => try vmmap.mapInsertHashed(container.object, idx_v, val),
+        .map, .map_managed, .map_hashed => try vmmap.mapSet(container, idx_v, val),
         .struct_instance => |inst| {
             const key = try vms.asStringValue(idx_v);
             const idx = vmtyp.findFieldIndex(inst.typ.struct_type.fields, key) orelse {
@@ -1684,8 +1662,7 @@ fn opSetField(ctx: VMContext) !void {
             if (!vmtyp.matchesFieldType(val, inst.typ.struct_type.fields[fi])) return error.StructFieldTypeMismatch;
             inst.fields[fi].value = val;
         },
-        .map, .map_managed => try mapLinearInsertOrAppend(ctx, container, name_val, val),
-        .map_hashed => try vmmap.mapInsertHashed(container.object, name_val, val),
+        .map, .map_managed, .map_hashed => try vmmap.mapSet(container, name_val, val),
         else => return error.TypeError,
     }
 }
@@ -1698,28 +1675,6 @@ fn insertReceiverAndCall(ctx: VMContext, recv_idx: usize, func: Value, recv: Val
     ctx.vs.stack[recv_idx] = func;
     ctx.vs.stack[recv_idx + 1] = recv;
     try performCall(ctx, argc + 1);
-}
-
-fn mapLinearInsertOrAppend(ctx: VMContext, container: Value, key: Value, val: Value) !void {
-    const items = try vms.asMapSlice(container.object);
-    if (vmmap.mapFindLinear(items, key)) |fi| {
-        items[fi].value = val;
-        return;
-    }
-    try ctx.vs.pushTempRoot(container);
-    defer ctx.vs.popTempRoot();
-    const new_len = items.len + 1;
-    const ext = try vmgc.vmAllocManagedSlice(MapEntry, new_len);
-    @memcpy(ext[0..items.len], items);
-    ext[items.len] = .{ .key = key, .value = val };
-    if (container.object.* == .map_managed) heap.freeManagedSlice(MapEntry, container.object.map_managed);
-    container.object.* = .{ .map_managed = ext[0..new_len] };
-    if (new_len > 8) {
-        const bcount = vmmap.mapBucketsForCount(new_len);
-        const buckets = try vmgc.vmAllocManagedSlice(i32, bcount);
-        vmmap.mapBuildHashedBuckets(ext[0..new_len], buckets);
-        container.object.* = .{ .map_hashed = .{ .entries = ext[0..new_len], .len = new_len, .buckets = buckets } };
-    }
 }
 
 fn opDeferInvokeMethod(ctx: VMContext) !void {

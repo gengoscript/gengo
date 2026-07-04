@@ -52,52 +52,11 @@ pub fn nativeByteLen(v: Value) !Value {
 }
 
 pub fn nativeDelete(m_obj: *Object, key: Value) !Value {
-    switch (m_obj.*) {
-        .map => {
-            const items = m_obj.map;
-            if (vmmap.mapFindLinear(items, key)) |fi| {
-                const removed = items[fi].value;
-                items[fi] = items[items.len - 1];
-                m_obj.* = .{ .map = items[0 .. items.len - 1] };
-                return removed;
-            }
-            return .null;
-        },
-        .map_managed => {
-            const items = m_obj.map_managed;
-            if (vmmap.mapFindLinear(items, key)) |fi| {
-                const removed = items[fi].value;
-                items[fi] = items[items.len - 1];
-                m_obj.* = .{ .map_managed = items[0 .. items.len - 1] };
-                return removed;
-            }
-            return .null;
-        },
-        .map_hashed => {
-            const hm = &m_obj.map_hashed;
-            const idx = vmmap.mapFindHashedIndex(hm.entries[0..hm.len], hm.buckets, key) orelse return .null;
-            const removed = hm.entries[idx].value;
-            hm.entries[idx] = hm.entries[hm.len - 1];
-            hm.len -= 1;
-            vmmap.mapBuildHashedBuckets(hm.entries[0..hm.len], hm.buckets);
-            return removed;
-        },
-        else => return error.TypeError,
-    }
+    return vmmap.mapDelete(m_obj, key);
 }
 
 pub fn nativeHas(m_obj: *Object, key: Value) !Value {
-    switch (m_obj.*) {
-        .map, .map_managed => {
-            const items = try vms.asMapSlice(m_obj);
-            return .{ .boolean = vmmap.mapFindLinear(items, key) != null };
-        },
-        .map_hashed => {
-            const hm = &m_obj.map_hashed;
-            return .{ .boolean = vmmap.mapFindHashedIndex(hm.entries[0..hm.len], hm.buckets, key) != null };
-        },
-        else => return error.TypeError,
-    }
+    return .{ .boolean = try vmmap.mapHas(m_obj, key) };
 }
 
 fn nativeMapExtract(m_obj: *Object, comptime field: std.meta.FieldEnum(MapEntry)) !Value {
