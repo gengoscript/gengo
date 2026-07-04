@@ -101,6 +101,87 @@ pub fn mapBuildHashedBuckets(entries: []MapEntry, buckets: []i32) void {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Unified map operations — dispatch over all map representations
+// ---------------------------------------------------------------------------
+
+pub fn mapGet(obj: *Object, key: Value) !?Value {
+    switch (obj.*) {
+        .map, .map_managed => {
+            const items = try vms.asMapSlice(obj);
+            return if (mapFindLinear(items, key)) |fi| items[fi].value else null;
+        },
+        .map_hashed => |*hm| {
+            return if (mapFindHashedIndex(hm.entries[0..hm.len], hm.buckets, key)) |fi| hm.entries[fi].value else null;
+        },
+        else => return error.TypeError,
+    }
+}
+
+pub fn mapHas(obj: *Object, key: Value) !bool {
+    switch (obj.*) {
+        .map, .map_managed => {
+            const items = try vms.asMapSlice(obj);
+            return mapFindLinear(items, key) != null;
+        },
+        .map_hashed => |*hm| {
+            return mapFindHashedIndex(hm.entries[0..hm.len], hm.buckets, key) != null;
+        },
+        else => return error.TypeError,
+    }
+}
+
+pub fn mapSet(container: Value, key: Value, val: Value) !void {
+    if (container.object.* == .map_hashed) return mapInsertHashed(container.object, key, val);
+    const items = try vms.asMapSlice(container.object);
+    if (mapFindLinear(items, key)) |fi| {
+        items[fi].value = val;
+        return;
+    }
+    try vms.pushTempRoot(container);
+    defer vms.popTempRoot();
+    const new_len = items.len + 1;
+    const ext = try vmgc.vmAllocManagedSlice(MapEntry, new_len);
+    @memcpy(ext[0..items.len], items);
+    ext[items.len] = .{ .key = key, .value = val };
+    if (container.object.* == .map_managed) heap.freeManagedSlice(MapEntry, container.object.map_managed);
+    container.object.* = .{ .map_managed = ext[0..new_len] };
+    if (new_len > 8) {
+        const bcount = mapBucketsForCount(new_len);
+        const buckets = try vmgc.vmAllocManagedSlice(i32, bcount);
+        mapBuildHashedBuckets(ext[0..new_len], buckets);
+        container.object.* = .{ .map_hashed = .{ .entries = ext[0..new_len], .len = new_len, .buckets = buckets } };
+    }
+}
+
+pub fn mapDelete(obj: *Object, key: Value) !Value {
+    switch (obj.*) {
+        .map, .map_managed => {
+            const items = try vms.asMapSlice(obj);
+            const fi = mapFindLinear(items, key) orelse return .null;
+            const removed = items[fi].value;
+            items[fi] = items[items.len - 1];
+            const shrunk = items[0 .. items.len - 1];
+            if (obj.* == .map_managed) {
+                obj.* = .{ .map_managed = shrunk };
+            } else {
+                obj.* = .{ .map = shrunk };
+            }
+            return removed;
+        },
+        .map_hashed => {
+            const hm = &obj.map_hashed;
+            const fi = mapFindHashedIndex(hm.entries[0..hm.len], hm.buckets, key) orelse return .null;
+            const removed = hm.entries[fi].value;
+            hm.entries[fi] = hm.entries[hm.len - 1];
+            hm.len -= 1;
+            mapBuildHashedBuckets(hm.entries[0..hm.len], hm.buckets);
+            return removed;
+        },
+        else => return error.TypeError,
+    }
+}
+
 pub fn mapInsertHashed(obj: *Object, key: Value, val: Value) !void {
     if (obj.* != .map_hashed) return error.TypeError;
 
