@@ -1,0 +1,11 @@
+pub func letter(pct int) string {
+    if pct >= 90 { return "A" }
+    if pct >= 80 { return "B" }
+    if pct >= 70 { return "C" }
+    if pct >= 60 { return "D" }
+    return "F"
+}
+
+pub func passed(pct int) bool {
+    return pct >= 60
+}
