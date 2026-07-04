@@ -274,10 +274,10 @@ int32_t engine_net_policy_add(int32_t handle,
  */
 void engine_net_policy_clear(int32_t handle);
 
-/* ── Package bundles ──────────────────────────────────────────────────────── */
+/* ── Module bundles ──────────────────────────────────────────────────────── */
 
 /*
- * Load a zip-format package bundle into the engine.
+ * Load a zip-format module bundle into the engine.
  *
  * name     — logical package name used in import paths (e.g. "mylib")
  * zip_ptr  — pointer to the raw zip bytes
@@ -295,26 +295,26 @@ void engine_net_policy_clear(int32_t handle);
  *  -4   a file exceeds the 64 KiB per-file size limit
  *  -5   invalid zip data or package name
  */
-int32_t engine_load_package(int32_t handle,
-                             const char *name_ptr, int32_t name_len,
-                             const void *zip_ptr,  int32_t zip_len);
+int32_t engine_load_bundle(int32_t handle,
+                            const char *name_ptr, int32_t name_len,
+                            const void *zip_ptr,  int32_t zip_len);
 
 /*
  * Load a package from a directory on the host filesystem (native builds only).
  * All .gengo files found recursively under dir_path are registered under name.
  * Not available in WebAssembly builds (returns -5).
  *
- * Returns same codes as engine_load_package.
+ * Returns same codes as engine_load_bundle.
  */
-int32_t engine_load_package_dir(int32_t handle,
-                                 const char *name_ptr, int32_t name_len,
-                                 const char *dir_ptr,  int32_t dir_len);
+int32_t engine_load_bundle_dir(int32_t handle,
+                                const char *name_ptr, int32_t name_len,
+                                const char *dir_ptr,  int32_t dir_len);
 
 /*
- * Remove all registered packages from the engine.
+ * Remove all registered module bundles from the engine.
  * Does not affect engine_add_source entries or the import loader callback.
  */
-void engine_clear_packages(int32_t handle);
+void engine_clear_bundles(int32_t handle);
 
 /* ── Runtime introspection (native target only) ───────────────────────────── */
 

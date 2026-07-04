@@ -1062,7 +1062,7 @@ export fn engine_net_policy_clear(handle: i32) void {
 //  -3  file table full (max 64 files per package)
 //  -4  a file exceeds the 64 KiB size limit
 //  -5  invalid zip or package name
-export fn engine_load_package(handle: i32, name_ptr: PtrInt, name_len: i32, zip_ptr: PtrInt, zip_len: i32) i32 {
+export fn engine_load_bundle(handle: i32, name_ptr: PtrInt, name_len: i32, zip_ptr: PtrInt, zip_len: i32) i32 {
     const engine = getEngine(handle) orelse return -1;
     if (name_len <= 0 or zip_len <= 0) return -5;
     const name = wasmSlice(name_ptr, name_len);
@@ -1086,8 +1086,8 @@ export fn engine_load_package(handle: i32, name_ptr: PtrInt, name_len: i32, zip_
 
 // Native-only: load package files from a directory on the host filesystem.
 // Not available in WebAssembly builds.
-// Returns same codes as engine_load_package.
-export fn engine_load_package_dir(handle: i32, name_ptr: PtrInt, name_len: i32, dir_ptr: PtrInt, dir_len: i32) i32 {
+// Returns same codes as engine_load_bundle.
+export fn engine_load_bundle_dir(handle: i32, name_ptr: PtrInt, name_len: i32, dir_ptr: PtrInt, dir_len: i32) i32 {
     if (comptime is_wasm) return -5;
     const engine = getEngine(handle) orelse return -1;
     if (name_len <= 0 or dir_len <= 0) return -5;
@@ -1110,7 +1110,7 @@ export fn engine_load_package_dir(handle: i32, name_ptr: PtrInt, name_len: i32, 
     return 0;
 }
 
-export fn engine_clear_packages(handle: i32) void {
+export fn engine_clear_bundles(handle: i32) void {
     const engine = getEngine(handle) orelse return;
     package_state.clearRegistry(&engine.package_registry);
     engine.runtime.setConfig(.{
@@ -1457,7 +1457,7 @@ test "engine_net_policy checkDialPolicy semantics" {
     net_state.clearPolicy();
 }
 
-test "engine_load_package loads zip and resolves imports" {
+test "engine_load_bundle loads zip and resolves imports" {
     const h = engine_init();
     try std.testing.expect(h > 0);
     defer engine_destroy(h);
@@ -1486,7 +1486,7 @@ test "engine_load_package loads zip and resolves imports" {
         0,0,3,0,3,0,180,0,0,0,251,0,0,0,0,0,
     };
 
-    const rc = engine_load_package(
+    const rc = engine_load_bundle(
         h,
         @intCast(@intFromPtr("mylib".ptr)), 5,
         @intCast(@intFromPtr(&zip_data)), @intCast(zip_data.len),
@@ -1515,7 +1515,7 @@ test "engine_load_package loads zip and resolves imports" {
     try std.testing.expectEqualStrings("hello world 8", str);
 
     // Clear packages
-    engine_clear_packages(h);
+    engine_clear_bundles(h);
     const engine = getEngine(h).?;
     try std.testing.expectEqual(@as(u8, 0), engine.package_registry.count);
 }
