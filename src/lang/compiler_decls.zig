@@ -60,6 +60,17 @@ pub fn emitZeroValue(c: anytype, tc: TypeCheck, line: u32) !void {
             try c.cs.emitGetGlobal(qname, line);
             try c.cs.emitOp(.zero_struct, line);
         },
+        .anon_typed => |idx| {
+            const type_obj = c.cs.consts[idx].object;
+            const is_map = type_obj.named_type.base == .map_t;
+            try c.cs.emitConstIdx(.constant, idx, line);
+            if (is_map) {
+                try c.cs.emit2(@intFromEnum(Op.build_map), 0, line);
+            } else {
+                try c.cs.emit2(@intFromEnum(Op.build_array), 0, line);
+            }
+            try c.cs.emitCall(1, line);
+        },
     }
 }
 

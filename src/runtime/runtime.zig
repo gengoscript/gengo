@@ -874,7 +874,7 @@ pub const Runtime = struct {
             .assert_arr => 7,
             .assert_map => 8,
             .assert_err => 9,
-            .interface_type, .struct_type, .none => null,
+            .interface_type, .struct_type, .none, .anon_typed => null,
         };
     }
 

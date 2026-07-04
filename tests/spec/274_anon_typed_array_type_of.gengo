@@ -1,0 +1,10 @@
+std := import("std")
+
+var xs []int = [1, 2, 3]
+std.io.println(std.core.type_of(xs))
+
+var m [string]int = {"a": 1}
+std.io.println(std.core.type_of(m))
+
+var z []string
+std.io.println(std.core.type_of(z))

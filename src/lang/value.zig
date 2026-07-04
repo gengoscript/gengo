@@ -90,6 +90,7 @@ pub const NamedTypeObj = struct {
     name: []const u8,
     qualified_name: []const u8,
     base: NamedTypeBase,
+    is_anonymous: bool = false,
     has_range: bool = false,
     is_cycle: bool = false,
     scale: u8 = 0,

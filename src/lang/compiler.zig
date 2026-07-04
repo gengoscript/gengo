@@ -439,6 +439,8 @@ pub const Compiler = struct {
     pub fn emitVarTypeProlog(self: *Compiler, tc: TypeCheck, line: u32) !void {
         if (tc == .named) {
             try self.cs.emitGetGlobal(tc.named, line);
+        } else if (tc == .anon_typed) {
+            try self.cs.emitConstIdx(.constant, tc.anon_typed, line);
         }
     }
 
@@ -466,6 +468,7 @@ pub const Compiler = struct {
                 const idx = try self.cs.addStringConst(name);
                 try self.cs.emitConstIdx(.assert_struct, idx, line);
             },
+            .anon_typed => try self.cs.emitCall(1, line),
         }
     }
 
