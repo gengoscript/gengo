@@ -1,5 +1,8 @@
 const std = @import("std");
 const vms = @import("vm_state.zig");
+const vmgc = @import("vm_gc.zig");
+const Value = @import("value.zig").Value;
+const Object = @import("value.zig").Object;
 
 pub fn utf8NextRuneByteLen(s: []const u8, byte_idx: usize) !usize {
     if (byte_idx >= s.len) return error.IndexOutOfBounds;
@@ -63,4 +66,77 @@ pub fn utf8ByteOffsetForRuneIndexCached(s: []const u8, rune_idx: usize) !usize {
     if (rune_idx > st.rune_cache_rune_len) return error.IndexOutOfBounds;
     if (rune_idx < vms.RuneCacheMax) return st.rune_cache_offsets[rune_idx];
     return utf8ByteOffsetForRuneIndex(s, rune_idx);
+}
+
+// ---------------------------------------------------------------------------
+// Unified string operations — dispatch over all string representations
+// ---------------------------------------------------------------------------
+
+pub fn stringBytesFromObj(obj: *Object) ![]const u8 {
+    return switch (obj.*) {
+        .dyn_string => |s| s,
+        .string_view => |sv| sv.bytes,
+        else => error.TypeError,
+    };
+}
+
+pub fn stringSliceRange(s: []const u8, has_start: bool, start_v: Value, has_end: bool, end_v: Value) !struct { start_b: usize, end_b: usize } {
+    const rune_len = try utf8RuneCountCached(s);
+    const start_r: usize = if (has_start) try vms.vmSliceIndex(start_v, rune_len) else 0;
+    const end_r: usize = if (has_end) try vms.vmSliceIndex(end_v, rune_len) else rune_len;
+    if (start_r > end_r) return error.IndexOutOfBounds;
+    return .{
+        .start_b = try utf8ByteOffsetForRuneIndexCached(s, start_r),
+        .end_b = try utf8ByteOffsetForRuneIndexCached(s, end_r),
+    };
+}
+
+pub fn stringIndex(container: Value, idx_v: Value) !Value {
+    const ridx = try vms.vmIndexFromVal(idx_v);
+    switch (container) {
+        .string => |s| {
+            const start = try utf8ByteOffsetForRuneIndexCached(s.bytes, ridx);
+            const w = try utf8NextRuneByteLen(s.bytes, start);
+            return vmgc.makeDynString(s.bytes[start .. start + w]);
+        },
+        .object => |obj| switch (obj.*) {
+            .dyn_string => {
+                const bytes = obj.dyn_string;
+                const start = try utf8ByteOffsetForRuneIndexCached(bytes, ridx);
+                const w = try utf8NextRuneByteLen(bytes, start);
+                return vmgc.makeStringView(bytes[start .. start + w], obj);
+            },
+            .string_view => {
+                const sv = obj.string_view;
+                const start = try utf8ByteOffsetForRuneIndexCached(sv.bytes, ridx);
+                const w = try utf8NextRuneByteLen(sv.bytes, start);
+                return vmgc.makeStringView(sv.bytes[start .. start + w], sv.source);
+            },
+            else => return error.TypeError,
+        },
+        else => return error.TypeError,
+    }
+}
+
+pub fn stringSlice(container: Value, has_start: bool, start_v: Value, has_end: bool, end_v: Value) !Value {
+    switch (container) {
+        .string => |s| {
+            const r = try stringSliceRange(s.bytes, has_start, start_v, has_end, end_v);
+            return vmgc.makeDynString(s.bytes[r.start_b..r.end_b]);
+        },
+        .object => |obj| switch (obj.*) {
+            .dyn_string => {
+                const bytes = obj.dyn_string;
+                const r = try stringSliceRange(bytes, has_start, start_v, has_end, end_v);
+                return vmgc.makeStringView(bytes[r.start_b..r.end_b], obj);
+            },
+            .string_view => {
+                const sv = obj.string_view;
+                const r = try stringSliceRange(sv.bytes, has_start, start_v, has_end, end_v);
+                return vmgc.makeStringView(sv.bytes[r.start_b..r.end_b], sv.source);
+            },
+            else => return error.TypeError,
+        },
+        else => return error.TypeError,
+    }
 }
