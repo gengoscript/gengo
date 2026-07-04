@@ -35,7 +35,7 @@ export interface HostFunctionDef {
 
 export type EngineResult =
   | { ok: true }
-  | { ok: false; kind: "compile" | "runtime"; message: string; line: number; col: number };
+  | { ok: false; kind: "compile" | "runtime"; message: string; line: number; col: number; path: string };
 
 export interface EngineOptions {
   onStdout?: (text: string) => void;
@@ -348,17 +348,26 @@ export class GengoEngine {
   private readError(rc: number): EngineResult {
     const kind = rc === RESULT_COMPILE_ERR ? "compile" as const : "runtime" as const;
     const outPtr = this.scratchPos;
-    this.ensureScratch(MAX_ERROR_LEN);
+    this.ensureScratch(MAX_ERROR_LEN * 2);
     this.scratchPos += MAX_ERROR_LEN;
 
     const written = this.callExport("engine_last_error", [this.handle, outPtr, MAX_ERROR_LEN]);
     if (written <= 0) {
-      return { ok: false, kind, message: `engine error ${rc}`, line: 0, col: 0 };
+      return { ok: false, kind, message: `engine error ${rc}`, line: 0, col: 0, path: "" };
     }
     const bytes = new Uint8Array(this.memory.buffer, outPtr, written);
     const message = new TextDecoder().decode(bytes);
     const line = this.callExport("engine_last_error_line", [this.handle]);
     const col = this.callExport("engine_last_error_col", [this.handle]);
-    return { ok: false, kind, message, line, col };
+
+    const pathPtr = this.scratchPos;
+    this.scratchPos += MAX_ERROR_LEN;
+    const pathLen = this.callExport("engine_last_error_path", [this.handle, pathPtr, MAX_ERROR_LEN]);
+    let path = "";
+    if (pathLen > 0) {
+      const pathBytes = new Uint8Array(this.memory.buffer, pathPtr, pathLen);
+      path = new TextDecoder().decode(pathBytes);
+    }
+    return { ok: false, kind, message, line, col, path };
   }
 }

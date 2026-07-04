@@ -54,6 +54,7 @@ pub const RuntimeError = struct {
     kind: anyerror,
     line: u32 = 0,
     col: u32 = 0,
+    path: []const u8 = "",
     msg: []const u8 = "",
     frames: [MaxFrames]vm.PanicFrame = undefined,
     frame_count: usize = 0,
@@ -259,6 +260,7 @@ fn runtimeError(err: anyerror, rt: *rt_mod.Runtime) RuntimeError {
         .kind = err,
         .line = rt.last_runtime_line,
         .col = rt.last_runtime_col,
+        .path = rt.lastRuntimePath(),
         .msg = if (rt.last_runtime_msg_len > 0) rt.last_runtime_msg_buf[0..rt.last_runtime_msg_len] else "",
         .frame_count = rt.panic_depth,
     };

@@ -41,6 +41,7 @@ pub const currentLine = vms.currentLine;
 pub const currentCol = vms.currentCol;
 pub const panicLine = vms.panicLine;
 pub const panicCol = vms.panicCol;
+pub const panicPath = vms.panicPath;
 pub const panicFrames = vms.panicFrames;
 pub const runtimeErrMsg = vms.runtimeErrMsg;
 
@@ -3170,6 +3171,10 @@ fn runPanicUnwind(ctx: VMContext, orig_err: anyerror) anyerror!void {
     if (ctx.vs.panic_line == 0) {
         ctx.vs.panic_line = currentLine();
         ctx.vs.panic_col = currentCol();
+        const _path = ctx.cs.pathAt(if (ctx.vs.ip > 0) ctx.vs.ip - 1 else 0);
+        const _plen: u8 = @intCast(@min(_path.len, ctx.vs.panic_path.len));
+        @memcpy(ctx.vs.panic_path[0.._plen], _path[0.._plen]);
+        ctx.vs.panic_path_len = _plen;
         const stop_depth = ctx.vs.call_depth_target orelse 0;
         var depth: usize = 0;
         var fi: usize = ctx.vs.frame_top;
@@ -3205,6 +3210,7 @@ fn runPanicUnwind(ctx: VMContext, orig_err: anyerror) anyerror!void {
             ctx.vs.is_panicking = false;
             ctx.vs.panic_line = 0;
             ctx.vs.panic_col = 0;
+            ctx.vs.panic_path_len = 0;
             ctx.vs.panic_depth = 0;
             ctx.vs.runtime_err_len = 0;
             ctx.vs.defer_top = frame_defer_base;
