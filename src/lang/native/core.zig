@@ -346,7 +346,17 @@ pub fn nativeTypeNameValue(v: Value) !Value {
             .struct_type => |st| .{ .string = try chunk.internStr(st.name) },
             .interface_type => |it| .{ .string = try chunk.internStr(it.name) },
             .named_type => |nt| .{ .string = try chunk.internStr(nt.name) },
-            .named_value => |nv| .{ .string = try chunk.internStr(rootNamedType(nv.typ).named_type.name) },
+            .named_value => |nv| blk: {
+                const root_nt = rootNamedType(nv.typ).named_type;
+                if (root_nt.is_anonymous) {
+                    break :blk switch (root_nt.base) {
+                        .array_t => .{ .string = staticSS("array") },
+                        .map_t => .{ .string = staticSS("map") },
+                        else => .{ .string = try chunk.internStr(root_nt.name) },
+                    };
+                }
+                break :blk .{ .string = try chunk.internStr(root_nt.name) };
+            },
             .enum_type => |et| .{ .string = try chunk.internStr(et.name) },
             .enum_value => |ev| .{ .string = try chunk.internStr(ev.typ.enum_type.name) },
             .struct_instance => |inst| .{ .string = try chunk.internStr(inst.typ.struct_type.name) },

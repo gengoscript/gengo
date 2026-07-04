@@ -72,6 +72,7 @@ pub const TypeCheck = union(enum) {
     assert_err: void,
     interface_type: []const u8,
     struct_type: []const u8,
+    anon_typed: u16,
 };
 
 pub const Local = struct {

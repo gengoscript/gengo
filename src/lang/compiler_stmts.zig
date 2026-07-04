@@ -1489,6 +1489,52 @@ pub fn switchStmt(c: anytype) anyerror!void {
     for (end_jumps[0..end_count]) |j| try c.cs.patchJump(j);
 }
 
+fn fieldTypeAltLabel(alt: FieldTypeAlt) []const u8 {
+    return switch (alt.typ) {
+        .int => "int",
+        .float => "float",
+        .decimal_t => "decimal",
+        .boolean => "bool",
+        .string => "string",
+        .rune_t => "rune",
+        .error_t => "error",
+        .null_t => "null",
+        .any => "any",
+        .func_t => "func",
+        .named_t, .variant_t => alt.named_name,
+        .struct_t => alt.struct_name,
+        .interface_t => alt.interface_name,
+        .array => blk: {
+            const inner = if (alt.elem_spec) |es|
+                if (es.alts.len > 0) fieldTypeAltLabel(es.alts[0]) else "any"
+            else
+                "any";
+            const buf = heap.bump(u8, inner.len + 2) orelse break :blk "array";
+            buf[0] = '[';
+            buf[1] = ']';
+            @memcpy(buf[2 .. inner.len + 2], inner);
+            break :blk buf[0 .. inner.len + 2];
+        },
+        .map => blk: {
+            const k = if (alt.key_spec) |ks|
+                if (ks.alts.len > 0) fieldTypeAltLabel(ks.alts[0]) else "any"
+            else
+                "any";
+            const v = if (alt.val_spec) |vs|
+                if (vs.alts.len > 0) fieldTypeAltLabel(vs.alts[0]) else "any"
+            else
+                "any";
+            const len = 1 + k.len + 1 + v.len;
+            const buf = heap.bump(u8, len) orelse break :blk "map";
+            buf[0] = '[';
+            @memcpy(buf[1 .. 1 + k.len], k);
+            buf[1 + k.len] = ']';
+            @memcpy(buf[2 + k.len .. len], v);
+            break :blk buf[0..len];
+        },
+    };
+}
+
 pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
     if (has_keyword and c.cur.typ != .ident) return c.err("expected identifier, found {s}", .{c.tokenName(c.cur.typ)});
     const name = c.cur;
@@ -1523,22 +1569,26 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
     } else if (c.cur.typ == .lbracket) {
         const ts = try c.parseFieldTypeSpec();
         const is_map = ts.alts.len > 0 and ts.alts[0].typ == .map;
+        const type_label = if (ts.alts.len > 0) fieldTypeAltLabel(ts.alts[0]) else if (is_map) "map" else "array";
         const nt = heap.allocObject() orelse return error.OutOfMemory;
         if (is_map) {
             nt.* = .{ .named_type = .{
-                .name = "", .qualified_name = "",
+                .name = type_label, .qualified_name = type_label,
                 .base = .map_t,
+                .is_anonymous = true,
                 .key_spec = ts.alts[0].key_spec,
                 .val_spec = ts.alts[0].val_spec,
             } };
         } else {
             nt.* = .{ .named_type = .{
-                .name = "", .qualified_name = "",
+                .name = type_label, .qualified_name = type_label,
                 .base = .array_t,
+                .is_anonymous = true,
                 .elem_spec = ts.alts[0].elem_spec,
             } };
         }
         try c.cs.emitConst(.{ .object = nt }, name.line);
+        const type_const_idx = c.cs.last_const_idx;
         if (c.match(.eq)) {
             try c.expr();
         } else if (has_keyword and !is_const) {
@@ -1550,7 +1600,7 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
         } else {
             return c.err("expected '=', found {s}", .{c.tokenName(c.cur.typ)});
         }
-        inferred_type_check = .{ .none = {} };
+        inferred_type_check = .{ .anon_typed = type_const_idx };
         try c.cs.emitCall(1, name.line);
     } else if (c.cur.typ == .kw_func) {
         _ = try c.parseFieldTypeSpec();

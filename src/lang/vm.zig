@@ -244,6 +244,12 @@ fn checkNamedValueCompatibility(ctx: VMContext, a: Value, b: Value) !void {
         if (a.object.named_value.typ != b.object.named_value.typ) {
             const ta = a.object.named_value.typ;
             const tb = b.object.named_value.typ;
+            // Two anonymous typed collections are compatible when they share the same
+            // synthesized name (e.g. both "[]int") — each var decl creates its own
+            // type object, so pointer equality would reject them.
+            if (ta.named_type.is_anonymous and tb.named_type.is_anonymous and
+                ta.named_type.base == tb.named_type.base and
+                std.mem.eql(u8, ta.named_type.name, tb.named_type.name)) return;
             if (!namedTypeIsSubOf(ta, tb) and !namedTypeIsSubOf(tb, ta) and namedTypeCommonAncestor(ta, tb) == null) {
                 ctx.vs.setRuntimeErr("cannot mix {s} and {s}; convert one side explicitly", .{ ta.named_type.name, tb.named_type.name });
                 return error.TypeError;
@@ -252,7 +258,10 @@ fn checkNamedValueCompatibility(ctx: VMContext, a: Value, b: Value) !void {
     } else if (a_named != b_named) {
         const named = if (a_named) a else b;
         const plain = if (a_named) b else a;
-        const nt_name = named.object.named_value.typ.named_type.name;
+        const nt = named.object.named_value.typ.named_type;
+        // Anonymous typed arrays/maps compare transparently with plain arrays/maps.
+        if (nt.is_anonymous and (nt.base == .array_t or nt.base == .map_t)) return;
+        const nt_name = nt.name;
         if (plain == .null) {
             ctx.vs.setRuntimeErr("cannot compare {s} with null; {s} is non-nullable — use ?{s} to allow null", .{ nt_name, nt_name, nt_name });
         } else {
