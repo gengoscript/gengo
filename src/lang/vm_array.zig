@@ -1,5 +1,6 @@
 const vms = @import("vm_state.zig");
 const vmgc = @import("vm_gc.zig");
+const heap = @import("../runtime/heap.zig");
 const Value = @import("value.zig").Value;
 const Object = @import("value.zig").Object;
 
@@ -35,4 +36,38 @@ pub fn arraySlice(obj: *Object, has_start: bool, start_v: Value, has_end: bool, 
     };
     out.* = .{ .array_view = .{ .items = items[start..end], .source = source } };
     return .{ .object = out };
+}
+
+pub fn arrayAppend(arr_obj: *Object, elems: []const Value) !Value {
+    const base = try vms.asArraySlice(arr_obj);
+    const new_len = base.len + elems.len;
+
+    // Fast path: reuse backing buffer when spare capacity exists.
+    if (arr_obj.* == .array_capacity) {
+        const ac = arr_obj.array_capacity;
+        const cap = ac.backing.array_managed.len;
+        if (new_len <= cap) {
+            @memcpy(ac.backing.array_managed[ac.len .. ac.len + elems.len], elems);
+            const obj = try vmgc.vmAllocObject();
+            obj.* = .{ .array_capacity = .{ .backing = ac.backing, .len = new_len } };
+            return .{ .object = obj };
+        }
+    }
+
+    // Slow path: allocate a new backing buffer with 2x growth, capped at the
+    // heap's largest single block so we never trigger AllocationTooLarge early.
+    const ideal_cap = @max(new_len * 2, new_len + 4);
+    const max_cap_values = heap.maxManagedAlloc() / @sizeOf(Value);
+    const new_cap = if (ideal_cap <= max_cap_values) ideal_cap else @max(new_len, max_cap_values);
+    const backing_obj = try vmgc.allocTempRooted(.{ .array = &[_]Value{} });
+    defer vms.popTempRoot();
+    const out = try vmgc.vmAllocManagedSlice(Value, new_cap);
+    @memcpy(out[0..base.len], base);
+    @memcpy(out[base.len .. base.len + elems.len], elems);
+    // Zero-fill spare capacity so the GC never traces stale pointers.
+    @memset(out[new_len..new_cap], .null);
+    backing_obj.* = .{ .array_managed = out };
+    const obj = try vmgc.vmAllocObject(); // backing_obj is temp-rooted
+    obj.* = .{ .array_capacity = .{ .backing = backing_obj, .len = new_len } };
+    return .{ .object = obj };
 }

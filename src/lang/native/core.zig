@@ -4,6 +4,7 @@ const heap = @import("../../runtime/heap.zig");
 const vms = @import("../vm_state.zig");
 const vmgc = @import("../vm_gc.zig");
 const vmmap = @import("../vm_map.zig");
+const vmarr = @import("../vm_array.zig");
 const vmtyp = @import("../vm_types.zig");
 const vmstr = @import("../vm_string.zig");
 const vmbigint = @import("../vm_bigint.zig");
@@ -114,49 +115,14 @@ pub fn nativeAppend(start: usize, argc: u8) !Value {
             }
         }
     }
-    const base = try vms.asArraySlice(arr_val.object);
-    const extra: usize = argc - 1;
-    const new_len = base.len + extra;
-
-    // Fast path: reuse backing buffer when the array already has spare capacity.
-    // array_capacity.backing is an array_managed Object whose slice.len is the capacity.
-    if (arr_val.object.* == .array_capacity) {
-        const ac = arr_val.object.array_capacity;
-        const cap = ac.backing.array_managed.len;
-        if (new_len <= cap) {
-            @memcpy(ac.backing.array_managed[ac.len .. ac.len + extra], vms.vmState().stack[start + 1 .. start + 1 + extra]);
-            const obj = try vmgc.vmAllocObject();
-            obj.* = .{ .array_capacity = .{ .backing = ac.backing, .len = new_len } };
-            if (is_named) {
-                try vms.pushTempRoot(.{ .object = obj });
-                defer vms.popTempRoot();
-                return try vmtyp.makeNamedValue(first.object.named_value.typ, .{ .object = obj });
-            }
-            return .{ .object = obj };
-        }
-    }
-
-    // Slow path: allocate a new backing buffer with 2x growth, capped at the
-    // heap's largest single block so we never trigger AllocationTooLarge early.
-    const ideal_cap = @max(new_len * 2, new_len + 4);
-    const max_cap_values = heap.maxManagedAlloc() / @sizeOf(Value);
-    const new_cap = if (ideal_cap <= max_cap_values) ideal_cap else @max(new_len, max_cap_values);
-    const backing_obj = try vmgc.allocTempRooted(.{ .array = &[_]Value{} });
-    defer vms.popTempRoot();
-    const out = try vmgc.vmAllocManagedSlice(Value, new_cap);
-    @memcpy(out[0..base.len], base);
-    @memcpy(out[base.len .. base.len + extra], vms.vmState().stack[start + 1 .. start + 1 + extra]);
-    // Zero-fill spare capacity so the GC never traces stale pointers.
-    @memset(out[new_len..new_cap], .null);
-    backing_obj.* = .{ .array_managed = out };
-    const obj = try vmgc.vmAllocObject(); // backing_obj is temp-rooted
-    obj.* = .{ .array_capacity = .{ .backing = backing_obj, .len = new_len } };
+    const elems = vms.vmState().stack[start + 1 .. start + argc];
+    const result = try vmarr.arrayAppend(arr_val.object, elems);
     if (is_named) {
-        try vms.pushTempRoot(.{ .object = obj });
+        try vms.pushTempRoot(result);
         defer vms.popTempRoot();
-        return try vmtyp.makeNamedValue(first.object.named_value.typ, .{ .object = obj });
+        return try vmtyp.makeNamedValue(first.object.named_value.typ, result);
     }
-    return .{ .object = obj };
+    return result;
 }
 
 pub fn nativeErrorMsg(msg: []const u8) Value {

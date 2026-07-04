@@ -344,6 +344,12 @@ pub fn makeNamedValue(typ_obj: *Object, inner: Value) !Value {
     return .{ .object = obj };
 }
 
+pub fn variantConstruct(typ: *Object, tag: []const u8, ordinal: usize, payload: Value) !Value {
+    const vv = try vmgc.vmAllocObject();
+    vv.* = .{ .variant_value = .{ .typ = typ, .tag = tag, .ordinal = ordinal, .payload = payload } };
+    return .{ .object = vv };
+}
+
 // `continuous` selects the wraparound convention:
 //   - discrete (int):  domain is `span = (max - min) + 1` inclusive integer
 //     steps, e.g. `cycle 0..23` has 24 distinct values and 24 wraps to 0.
