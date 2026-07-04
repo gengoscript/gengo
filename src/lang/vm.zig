@@ -18,6 +18,7 @@ const vms = @import("vm_state.zig");
 const vmgc = @import("vm_gc.zig");
 const vm_integrity = @import("vm_integrity.zig");
 const vmmap = @import("vm_map.zig");
+const vmarr = @import("vm_array.zig");
 const vmstr = @import("vm_string.zig");
 const vmtyp = @import("vm_types.zig");
 const vmbigint = @import("vm_bigint.zig");
@@ -1379,13 +1380,7 @@ fn opGetIndex(ctx: VMContext) !void {
                 try ctx.vs.vmPush(try vmgc.makeStringView(bytes[start .. start + w], src));
             },
             .array, .array_managed, .array_view, .array_capacity => {
-                const items = try vms.asArraySlice(obj);
-                const idx = try vms.vmIndexFromVal(idx_v);
-                if (idx >= items.len) {
-                    ctx.vs.setRuntimeErr("index {} out of bounds for array of length {}", .{ idx, items.len });
-                    return error.IndexOutOfBounds;
-                }
-                try ctx.vs.vmPush(items[idx]);
+                try ctx.vs.vmPush(try vmarr.arrayRead(obj, idx_v));
             },
             .map, .map_managed, .map_hashed => {
                 try ctx.vs.vmPush(try vmmap.mapGet(obj, idx_v) orelse .null);
@@ -1448,13 +1443,7 @@ fn opSetIndex(ctx: VMContext) !void {
     if (container != .object) return error.TypeError;
     switch (container.object.*) {
         .array, .array_managed, .array_view, .array_capacity => {
-            const items = try vms.asArraySlice(container.object);
-            const idx = try vms.vmIndexFromVal(idx_v);
-            if (idx >= items.len) {
-                ctx.vs.setRuntimeErr("index {} out of bounds for array of length {}", .{ idx, items.len });
-                return error.IndexOutOfBounds;
-            }
-            items[idx] = val;
+            try vmarr.arrayWrite(container.object, idx_v, val);
         },
         .map, .map_managed, .map_hashed => try vmmap.mapSet(container, idx_v, val),
         .struct_instance => |inst| {
@@ -2819,17 +2808,7 @@ fn runInner(ctx: VMContext) !void {
                             try ctx.vs.vmPush(try vmgc.makeStringView(bytes[r.start_b..r.end_b], src));
                         },
                         .array, .array_managed, .array_view, .array_capacity => {
-                            const items = try vms.asArraySlice(obj);
-                            const start: usize = if (has_start) try vms.vmSliceIndex(start_v, items.len) else 0;
-                            const end: usize = if (has_end) try vms.vmSliceIndex(end_v, items.len) else items.len;
-                            if (start > end) return error.IndexOutOfBounds;
-                            const out = try vmgc.vmAllocObject();
-                            const source = switch (obj.*) {
-                                .array_view => obj.array_view.source,
-                                else => obj,
-                            };
-                            out.* = .{ .array_view = .{ .items = items[start..end], .source = source } };
-                            try ctx.vs.vmPush(.{ .object = out });
+                            try ctx.vs.vmPush(try vmarr.arraySlice(obj, has_start, start_v, has_end, end_v));
                         },
                         else => return error.TypeError,
                     },
