@@ -2,6 +2,7 @@ const std = @import("std");
 const vms = @import("../vm_state.zig");
 const vmgc = @import("../vm_gc.zig");
 const vmmap = @import("../vm_map.zig");
+const vmtyp = @import("../vm_types.zig");
 const heap = @import("../../runtime/heap.zig");
 const vmod = @import("../value.zig");
 const Value = vmod.Value;
@@ -60,14 +61,7 @@ fn makeJV(arm: JVArm, payload: Value) !Value {
     };
     if (payload_is_obj) try vms.pushTempRoot(payload);
     defer if (payload_is_obj) vms.popTempRoot();
-    const obj = try vmgc.vmAllocObject();
-    obj.* = .{ .variant_value = .{
-        .typ = typ,
-        .tag = jv_arms[@intFromEnum(arm)].name,
-        .ordinal = @intFromEnum(arm),
-        .payload = payload,
-    } };
-    return .{ .object = obj };
+    return vmtyp.variantConstruct(typ, jv_arms[@intFromEnum(arm)].name, @intFromEnum(arm), payload);
 }
 
 fn jsonValueToTyped(jv: std.json.Value) !Value {

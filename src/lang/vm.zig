@@ -612,14 +612,7 @@ fn makeVariantArmValue(obj: *Object, vt: vmod.VariantTypeObj, arm_index: usize) 
         return .{ .object = ctor };
     }
 
-    const vv = try vmgc.vmAllocObject();
-    vv.* = .{ .variant_value = .{
-        .typ = obj,
-        .tag = arm.name,
-        .ordinal = arm_index,
-        .payload = .null,
-    } };
-    return .{ .object = vv };
+    return vmtyp.variantConstruct(obj, arm.name, arm_index, .null);
 }
 
 fn variantTypeFieldValue(ctx: VMContext, obj: *Object, name: []const u8) !Value {
@@ -994,14 +987,7 @@ fn performCall(ctx: VMContext, argc: u8) !void {
             if (vc.payload_type) |pt| {
                 if (!vmtyp.matchesTypeSpec(payload, pt)) return error.TypeError;
             }
-            const vv = try vmgc.vmAllocObject();
-            vv.* = .{ .variant_value = .{
-                .typ = vc.typ,
-                .tag = vc.tag,
-                .ordinal = vc.ordinal,
-                .payload = payload,
-            }};
-            try pop2push1(ctx, .{ .object = vv });
+            try pop2push1(ctx, try vmtyp.variantConstruct(vc.typ, vc.tag, vc.ordinal, payload));
         },
         .named_type_fn => |nf| {
             if (argc != 1) return error.ArityMismatch;
@@ -1504,16 +1490,14 @@ fn opInvokeMethod(ctx: VMContext) !void {
                 if (arm.payload_type) |pt| {
                     if (!vmtyp.matchesTypeSpec(payload, pt)) return error.TypeError;
                 }
-                const vv = try vmgc.vmAllocObject();
-                vv.* = .{ .variant_value = .{ .typ = recv.object, .tag = arm.name, .ordinal = vi, .payload = payload } };
+                const vv = try vmtyp.variantConstruct(recv.object, arm.name, vi, payload);
                 for (0..@as(usize, argc) + 1) |_| _ = try ctx.vs.vmPop();
-                try ctx.vs.vmPush(.{ .object = vv });
+                try ctx.vs.vmPush(vv);
             } else {
                 if (argc != 0) return error.ArityMismatch;
-                const vv = try vmgc.vmAllocObject();
-                vv.* = .{ .variant_value = .{ .typ = recv.object, .tag = arm.name, .ordinal = vi, .payload = .null } };
+                const vv = try vmtyp.variantConstruct(recv.object, arm.name, vi, .null);
                 _ = try ctx.vs.vmPop(); // pop recv
-                try ctx.vs.vmPush(.{ .object = vv });
+                try ctx.vs.vmPush(vv);
             }
         },
         .named_type => {
