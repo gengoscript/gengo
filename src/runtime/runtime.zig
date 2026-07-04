@@ -60,6 +60,8 @@ pub const Runtime = struct {
     last_compile_msg_len: u16 = 0,
     last_runtime_line: u32 = 0,
     last_runtime_col: u32 = 0,
+    last_runtime_path_buf: [module_compile.MaxModulePathBytes]u8 = undefined,
+    last_runtime_path_len: usize = 0,
     last_runtime_msg_buf: [512]u8 = undefined,
     last_runtime_msg_len: u16 = 0,
     panic_frames: [MaxFrames]vm.PanicFrame = undefined,
@@ -361,6 +363,7 @@ pub const Runtime = struct {
         self.last_compile_msg_len = 0;
         self.last_runtime_line = 0;
         self.last_runtime_col = 0;
+        self.last_runtime_path_len = 0;
         self.last_runtime_msg_len = 0;
         self.panic_depth = 0;
         self.test_count = 0;
@@ -373,15 +376,7 @@ pub const Runtime = struct {
         try vmnative.installHostModules(&self.globals_state, self.host_modules);
         try vmnative.installCapabilityModules(&self.globals_state, self.capabilityModules());
         vm.run(.{ .cs = self.chunk_state, .gs = &self.globals_state, .hs = &self.heap_state, .vs = &self.vm_state }) catch |err| {
-            self.last_runtime_line = vm.panicLine();
-            self.last_runtime_col = vm.panicCol();
-            const pf = vm.panicFrames();
-            self.panic_depth = pf.len;
-            var fi: usize = 0;
-            while (fi < pf.len) : (fi += 1) self.panic_frames[fi] = pf[fi];
-            const emsg = vm.runtimeErrMsg();
-            self.last_runtime_msg_len = @intCast(emsg.len);
-            @memcpy(self.last_runtime_msg_buf[0..emsg.len], emsg);
+            self.captureRuntimeError();
             return err;
         };
 
@@ -437,6 +432,7 @@ pub const Runtime = struct {
         self.last_compile_msg_len = 0;
         self.last_runtime_line = 0;
         self.last_runtime_col = 0;
+        self.last_runtime_path_len = 0;
         self.last_runtime_msg_len = 0;
         self.panic_depth = 0;
         self.activate();
@@ -781,6 +777,9 @@ pub const Runtime = struct {
     fn captureRuntimeError(self: *Runtime) void {
         self.last_runtime_line = vm.panicLine();
         self.last_runtime_col = vm.panicCol();
+        const rp = vm.panicPath();
+        self.last_runtime_path_len = @min(rp.len, self.last_runtime_path_buf.len);
+        @memcpy(self.last_runtime_path_buf[0..self.last_runtime_path_len], rp[0..self.last_runtime_path_len]);
         const pf = vm.panicFrames();
         self.panic_depth = pf.len;
         var fi: usize = 0;
@@ -804,6 +803,10 @@ pub const Runtime = struct {
 
     pub fn lastCompilePath(self: *Runtime) []const u8 {
         return self.last_compile_path_buf[0..self.last_compile_path_len];
+    }
+
+    pub fn lastRuntimePath(self: *Runtime) []const u8 {
+        return self.last_runtime_path_buf[0..self.last_runtime_path_len];
     }
 
     fn setLastCompilePath(self: *Runtime, path: []const u8) void {

@@ -80,6 +80,8 @@ pub const State = struct {
     defer_top: usize = 0,
     panic_line: u32 = 0,
     panic_col: u16 = 0,
+    panic_path: [chunk.MaxModuleSourcePath]u8 = undefined,
+    panic_path_len: u8 = 0,
     panic_frames: []PanicFrame = &[_]PanicFrame{},
     panic_depth: usize = 0,
     is_panicking: bool = false,
@@ -165,6 +167,7 @@ pub const State = struct {
         self.ops_budget_remaining = std.math.maxInt(u64);
         self.panic_line = 0;
         self.panic_col = 0;
+        self.panic_path_len = 0;
         self.panic_depth = 0;
         self.is_panicking = false;
         self.panic_value = .null;
@@ -208,6 +211,10 @@ pub const State = struct {
 
     pub fn panicCol(self: *State) u16 {
         return self.panic_col;
+    }
+
+    pub fn panicPath(self: *const State) []const u8 {
+        return self.panic_path[0..self.panic_path_len];
     }
 
     pub fn panicFrames(self: *State) []const PanicFrame {
@@ -378,6 +385,7 @@ pub fn currentCol() u16 { return g_state.currentCol(); }
 
 pub fn panicLine() u32 { return g_state.panicLine(); }
 pub fn panicCol() u16 { return g_state.panicCol(); }
+pub fn panicPath() []const u8 { return g_state.panicPath(); }
 pub fn panicFrames() []const PanicFrame { return g_state.panicFrames(); }
 
 pub inline fn vmPush(v: Value) !void { return g_state.vmPush(v); }

@@ -177,6 +177,35 @@ fn testLastError() void {
     out("  last_error: OK\n");
 }
 
+fn testRuntimeErrorPath() void {
+    const sources = [_]api.SourceEntry{
+        .{
+            .path = "app/lib.gengo",
+            .source =
+            \\pub func oob() int {
+            \\    const a = [10, 20, 30]
+            \\    return a[99]
+            \\}
+            ,
+        },
+    };
+    const rt = makeRt(.{ .allow_io = false, .module_sources = &sources });
+    const res = rt.runPath(
+        \\const lib = import("./lib")
+        \\const x = lib.oob()
+    , "app/main.gengo");
+    switch (res) {
+        .runtime_error => |e| {
+            if (e.path.len == 0) fail("engine FAIL: runtime_error.path is empty\n");
+            if (!std.mem.eql(u8, e.path, "app/lib.gengo"))
+                fail("engine FAIL: runtime_error.path should be app/lib.gengo\n");
+            if (e.line == 0) fail("engine FAIL: runtime_error.line is 0\n");
+        },
+        else => fail("engine FAIL: expected runtime error from library\n"),
+    }
+    out("  runtime error path: OK\n");
+}
+
 fn testIO() void {
     io.setWriteOverrides(captureWrite, captureWerr);
     defer io.clearWriteOverrides();
@@ -1152,6 +1181,7 @@ export fn _start() void {
     testCallWithArgs();
     testReset();
     testLastError();
+    testRuntimeErrorPath();
     testIO();
     testReplIncremental();
     testHostModules();

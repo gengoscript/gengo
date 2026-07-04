@@ -18,6 +18,16 @@ pub const MaxConst = 4096;
 // Sized at MaxConst*4 to cover both constant-pool strings and runtime-created strings
 // (type-name lookups, string-iterator steps, slice results, etc.) within one script run.
 pub const MaxStrSlices = MaxConst * 4;
+// Module boundary table — maps bytecode ranges to the source path they came from.
+// Mirrors MaxModules in module_compile.zig; enough for any realistic import graph.
+pub const MaxModuleBoundaries = 64;
+pub const MaxModuleSourcePath = 256;
+
+pub const ModuleBoundary = struct {
+    ip_start: u32 = 0,
+    path_len: u8 = 0,
+    path: [MaxModuleSourcePath]u8 = undefined,
+};
 
 pub const State = struct {
     code: [MaxCode]u8 = undefined,
@@ -89,6 +99,11 @@ pub const State = struct {
     // Set after the first successful verify(); subsequent run() entries skip re-verification.
     // Cleared by reset() so a re-compiled chunk is re-verified.
     verified: bool = false,
+
+    // Module boundary table: records (ip_start, path) pairs in emission order so that
+    // pathAt(ip) can walk backwards and return the source file for any bytecode position.
+    module_boundaries: [MaxModuleBoundaries]ModuleBoundary = undefined,
+    module_boundary_count: u8 = 0,
 
     // ── State methods (used by the compiler via an explicit *State pointer) ────────
 
@@ -782,6 +797,30 @@ pub const State = struct {
     pub fn codeByteAt(self: *const State, i: usize) u8 { return self.code[i]; }
     pub fn lineAt(self: *const State, i: usize) u16 { return self.lines[i]; }
     pub fn colAt(self: *const State, i: usize) u16 { return self.cols[i]; }
+
+    pub fn addModuleBoundary(self: *State, path: []const u8) void {
+        if (self.module_boundary_count >= MaxModuleBoundaries) return;
+        const idx = self.module_boundary_count;
+        self.module_boundaries[idx].ip_start = @intCast(self.code_len);
+        const copy_len = @min(path.len, MaxModuleSourcePath);
+        @memcpy(self.module_boundaries[idx].path[0..copy_len], path[0..copy_len]);
+        self.module_boundaries[idx].path_len = @intCast(copy_len);
+        self.module_boundary_count += 1;
+    }
+
+    // Walk the boundary table backwards to find the latest entry whose ip_start <= ip.
+    // Returns empty slice when no boundary covers ip (should not happen in practice).
+    pub fn pathAt(self: *const State, ip: usize) []const u8 {
+        var i = self.module_boundary_count;
+        while (i > 0) {
+            i -= 1;
+            if (self.module_boundaries[i].ip_start <= ip) {
+                const b = &self.module_boundaries[i];
+                return b.path[0..b.path_len];
+            }
+        }
+        return &[_]u8{};
+    }
     pub fn constAt(self: *const State, i: usize) !Value { if (i >= self.const_count) return error.BadConstantIndex; return self.consts[i]; }
     pub fn decodeAt(self: *State, pos: usize) !DecodedInstruction { return chunk_decoder.decodeAt(self, pos); }
     pub fn verify(self: *State) !void {
@@ -824,6 +863,7 @@ pub fn reset() void {
     g_state.std_call_patch_pos = null;
     g_state.verify_err_len = 0;
     g_state.verified = false;
+    g_state.module_boundary_count = 0;
 }
 
 fn foldBinOp(op: Op, lhs: Value, rhs: Value) ?Value {
@@ -894,6 +934,8 @@ pub fn codeByteAt(i: usize) u8 { return g_state.codeByteAt(i); }
 pub fn lineAt(i: usize) u16 { return g_state.lineAt(i); }
 pub fn colAt(i: usize) u16 { return g_state.colAt(i); }
 pub fn constAt(i: usize) !Value { return g_state.constAt(i); }
+pub fn addModuleBoundary(path: []const u8) void { g_state.addModuleBoundary(path); }
+pub fn pathAt(ip: usize) []const u8 { return g_state.pathAt(ip); }
 
 pub const DecodedInstruction = chunk_decoder.DecodedInstruction;
 

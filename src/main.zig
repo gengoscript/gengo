@@ -589,10 +589,12 @@ fn runCli(argv: []const []const u8) void {
                 printSourceLine(src, runtime.last_compile_line, runtime.last_compile_col);
             }
         } else if (runtime.last_runtime_line != 0) {
+            const runtime_path = if (runtime.lastRuntimePath().len != 0) runtime.lastRuntimePath() else script_name;
+            const runtime_src = if (std.mem.eql(u8, runtime_path, script_name)) src else "";
             printRuntimeErrorBlock(
                 "gengo: panic: ",
-                script_name,
-                src,
+                runtime_path,
+                runtime_src,
                 err,
                 runtime.last_runtime_line,
                 runtime.last_runtime_col,

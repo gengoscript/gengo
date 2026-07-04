@@ -418,6 +418,7 @@ pub const Session = struct {
             .check_global_ctx = self,
             .test_mode = if (emit_halt) self.test_mode else false,
         });
+        chunk.addModuleBoundary(self.modules[idx].path());
         compiler.compile(false) catch |err| {
             self.last_error_path = self.modules[idx].path();
             self.last_error_line = if (compiler.err_line != 0) compiler.err_line else compiler.prev.line;

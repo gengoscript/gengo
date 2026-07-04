@@ -504,6 +504,14 @@ int32_t engine_last_error_line(int32_t handle);
 /* Column number of the last error (1-based).  Returns 0 if no error. */
 int32_t engine_last_error_col(int32_t handle);
 
+/*
+ * Source file path of the last error.  Writes up to out_max_len bytes to out;
+ * returns the full path length (may exceed out_max_len).
+ * Returns 0 if no error, if the path is unknown, or the handle is invalid.
+ */
+int32_t engine_last_error_path(int32_t handle,
+                                char *out, int32_t out_max_len);
+
 #ifdef __cplusplus
 }
 #endif

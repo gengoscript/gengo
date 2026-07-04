@@ -166,6 +166,8 @@ const Engine = struct {
     last_error_len: u16 = 0,
     last_error_line: u32 = 0,
     last_error_col: u32 = 0,
+    last_error_path: [module_compile.MaxModulePathBytes]u8 = undefined,
+    last_error_path_len: u32 = 0,
     string_scratch: [MaxStringScratch]u8 = undefined,
     string_scratch_len: u16 = 0,
     wire_elem_buf: [256]ValueWire = undefined,
@@ -184,6 +186,7 @@ const Engine = struct {
         self.last_error_len = 0;
         self.last_error_line = 0;
         self.last_error_col = 0;
+        self.last_error_path_len = 0;
         self.string_scratch_len = 0;
         self.wire_elem_count = 0;
         self.write_callback = null;
@@ -237,11 +240,15 @@ const Engine = struct {
         self.last_error_len = 0;
         self.last_error_line = 0;
         self.last_error_col = 0;
+        self.last_error_path_len = 0;
     }
 
     fn setCompileError(self: *Engine, e: api.CompileError) void {
         self.last_error_line = e.line;
         self.last_error_col = e.col;
+        const cp = self.runtime.inner.lastCompilePath();
+        self.last_error_path_len = @intCast(@min(cp.len, self.last_error_path.len));
+        @memcpy(self.last_error_path[0..self.last_error_path_len], cp[0..self.last_error_path_len]);
         const s = if (e.kind == error.OutOfMemory)
             std.fmt.bufPrint(&self.last_error, "compilation failed: {s}", .{e.msg}) catch ""
         else
@@ -252,6 +259,8 @@ const Engine = struct {
     fn setRuntimeError(self: *Engine, e: api.RuntimeError) void {
         self.last_error_line = e.line;
         self.last_error_col = e.col;
+        self.last_error_path_len = @intCast(@min(e.path.len, self.last_error_path.len));
+        @memcpy(self.last_error_path[0..self.last_error_path_len], e.path[0..self.last_error_path_len]);
         const s = if (e.kind == error.OutOfMemory)
             std.fmt.bufPrint(&self.last_error, "panic: {s}", .{e.msg}) catch ""
         else
@@ -911,6 +920,17 @@ export fn engine_last_error_col(handle: i32) i32 {
     return @intCast(engine.last_error_col);
 }
 
+export fn engine_last_error_path(handle: i32, out_ptr: PtrInt, out_max_len: i32) i32 {
+    const engine = getEngine(handle) orelse return 0;
+    const path_len = engine.last_error_path_len;
+    const len = @min(@as(usize, @intCast(path_len)), @as(usize, @intCast(@max(out_max_len, 0))));
+    if (len > 0 and out_ptr != 0) {
+        const dest = wasmSliceMut(out_ptr, @intCast(len));
+        @memcpy(dest, engine.last_error_path[0..len]);
+    }
+    return @intCast(path_len);
+}
+
 export fn engine_set_write_fn(handle: i32, callback: ?WriteCallback) void {
     if (comptime is_wasm) return;
     const engine = getEngine(handle) orelse return;
@@ -1518,4 +1538,48 @@ test "engine_load_bundle loads zip and resolves imports" {
     engine_clear_bundles(h);
     const engine = getEngine(h).?;
     try std.testing.expectEqual(@as(u8, 0), engine.package_registry.count);
+}
+
+test "engine_last_error_path: runtime error in imported library reports library path" {
+    const h = engine_init();
+    try std.testing.expect(h > 0);
+    defer engine_destroy(h);
+
+    // Register a library with a function that panics (index out of bounds).
+    const lib_path = "mylib.gengo";
+    const lib_src =
+        \\pub func oob() int {
+        \\    const a = [10, 20, 30]
+        \\    return a[99]
+        \\}
+    ;
+    const add_rc = engine_add_source(
+        h,
+        @intCast(@intFromPtr(lib_path.ptr)), @intCast(lib_path.len),
+        @intCast(@intFromPtr(lib_src.ptr)), @intCast(lib_src.len),
+    );
+    try std.testing.expectEqual(@as(i32, 0), add_rc);
+
+    // Run a main script that calls into the library.
+    const main_src =
+        \\const lib = import("./mylib")
+        \\const x = lib.oob()
+    ;
+    const run_rc = engine_run_path(
+        h,
+        @intCast(@intFromPtr(main_src.ptr)), @intCast(main_src.len),
+        @intCast(@intFromPtr("main.gengo".ptr)), 9,
+    );
+    try std.testing.expectEqual(@as(i32, -2), run_rc); // runtime error
+
+    // Error line and col should point into the library, not the main script.
+    const err_line = engine_last_error_line(h);
+    try std.testing.expect(err_line > 0);
+
+    // engine_last_error_path must return the library path, not "main.gengo".
+    var path_buf: [256]u8 = undefined;
+    const path_len = engine_last_error_path(h, @intCast(@intFromPtr(&path_buf)), 256);
+    try std.testing.expect(path_len > 0);
+    const reported_path = path_buf[0..@intCast(path_len)];
+    try std.testing.expectEqualStrings("mylib.gengo", reported_path);
 }
