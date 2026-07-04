@@ -1,0 +1,19 @@
+const std = import("std")
+const grade = import("./grade")
+
+pub func score(correct int, total int) int {
+    if total <= 0 { return 0 }
+    const pct = (correct * 100) div total
+    if pct > 100 { return 100 }
+    return pct
+}
+
+pub func summary(name string, correct int, total int) string {
+    const pct = score(correct, total)
+    const g = grade.letter(pct)
+    var status string = "FAIL"
+    if grade.passed(pct) {
+        status = "PASS"
+    }
+    return name + ": " + std.conv.to_string(pct) + "% (" + g + ") - " + status
+}

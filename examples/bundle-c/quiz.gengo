@@ -1,0 +1,5 @@
+const calc = import("scoring/calc")
+
+pub func evaluate(name string, correct int, total int) string {
+    return calc.summary(name, correct, total)
+}

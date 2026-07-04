@@ -278,7 +278,7 @@ export class GengoEngine {
     const [namePtr, nameLen] = this.scratchString(name);
     const zipPtr = this.scratchPos;
     this.ensureScratch(zipData.byteLength);
-    new Uint8Array(this.mem.buffer, zipPtr, zipData.byteLength).set(zipData);
+    new Uint8Array(this.memory.buffer, zipPtr, zipData.byteLength).set(zipData);
     this.scratchPos += zipData.byteLength;
     const rc = this.callExport("engine_load_bundle", [
       this.handle, namePtr, nameLen, zipPtr, zipData.byteLength,
