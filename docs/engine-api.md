@@ -200,9 +200,9 @@ Returns the source line associated with the last error, or `0` if unavailable.
 
 Returns the source column associated with the last runtime error, or `0` if unavailable.
 
-## Package Bundles
+## Module Bundles
 
-Scripts can import modules from a package bundle registered on the engine. Packages require no special prefix in the script — `import("mylib/utils/strings")` resolves against registered packages transparently.
+Scripts can import modules from a bundle registered on the engine. Bundles require no special prefix in the script — `import("mylib/utils/strings")` resolves against registered bundles transparently.
 
 ### Evaluation order
 
@@ -211,12 +211,12 @@ Module resolution follows this order:
 1. Stdlib (`std`)
 2. Host modules (`host:` prefix)
 3. Import loader callback (if registered via `engine_set_import_loader`)
-4. Package bundles (registered via `engine_load_package` / `engine_load_package_dir`)
+4. Module bundles (registered via `engine_load_bundle` / `engine_load_bundle_dir`)
 5. In-memory sources (`engine_add_source`)
 
 ### Package format
 
-A package bundle is a standard ZIP file. Only `.gengo` files are loaded; other files are ignored. The module path within the package is the zip entry path with the `.gengo` extension stripped. For example, a zip entry `utils/strings.gengo` is importable as `import("mylib/utils/strings")` when loaded under the name `"mylib"`.
+A module bundle is a standard ZIP file. Only `.gengo` files are loaded; other files are ignored. The module path within the bundle is the zip entry path with the `.gengo` extension stripped. For example, a zip entry `utils/strings.gengo` is importable as `import("mylib/utils/strings")` when loaded under the name `"mylib"`.
 
 Limits per bundle call:
 
@@ -227,9 +227,9 @@ Limits per bundle call:
 | Max file size | 64 KiB |
 | Supported compression | store, deflate |
 
-### `engine_load_package(handle, name_ptr, name_len, zip_ptr, zip_len) -> i32`
+### `engine_load_bundle(handle, name_ptr, name_len, zip_ptr, zip_len) -> i32`
 
-Load a zip-format package bundle.
+Load a zip-format module bundle.
 
 Returns:
 
@@ -240,15 +240,15 @@ Returns:
 - `-4` if a file exceeds 64 KiB; or
 - `-5` for invalid zip data or package name.
 
-### `engine_load_package_dir(handle, name_ptr, name_len, dir_ptr, dir_len) -> i32`
+### `engine_load_bundle_dir(handle, name_ptr, name_len, dir_ptr, dir_len) -> i32`
 
-Load all `.gengo` files found recursively under `dir_path` into a package named `name`. This is a convenience for development — in production, use `engine_load_package` with a pre-built zip. Not available in WebAssembly builds (returns `-5`).
+Load all `.gengo` files found recursively under `dir_path` into a bundle named `name`. This is a convenience for development — in production, use `engine_load_bundle` with a pre-built zip. Not available in WebAssembly builds (returns `-5`).
 
-Returns the same codes as `engine_load_package`.
+Returns the same codes as `engine_load_bundle`.
 
-### `engine_clear_packages(handle) -> void`
+### `engine_clear_bundles(handle) -> void`
 
-Remove all registered packages. Does not affect `engine_add_source` entries or the import loader callback.
+Remove all registered module bundles. Does not affect `engine_add_source` entries or the import loader callback.
 
 ### C Example
 
@@ -263,7 +263,7 @@ fread(buf, 1, size, f);
 fclose(f);
 
 int h = engine_init();
-engine_load_package(h, "mylib", 5, buf, (int32_t)size);
+engine_load_bundle(h, "mylib", 5, buf, (int32_t)size);
 free(buf);
 
 /* Script imports work without any prefix */

@@ -269,10 +269,10 @@ export class GengoEngine {
   }
 
   /**
-   * Register a zip-format package bundle under the given name.
-   * Scripts import modules from the package with plain paths: import("name/path/to/module")
+   * Register a zip-format module bundle under the given name.
+   * Scripts import modules from the bundle with plain paths: import("name/path/to/module")
    */
-  loadPackage(name: string, zipData: Uint8Array): void {
+  loadBundle(name: string, zipData: Uint8Array): void {
     this.assertAlive();
     this.resetScratch();
     const [namePtr, nameLen] = this.scratchString(name);
@@ -280,16 +280,16 @@ export class GengoEngine {
     this.ensureScratch(zipData.byteLength);
     new Uint8Array(this.mem.buffer, zipPtr, zipData.byteLength).set(zipData);
     this.scratchPos += zipData.byteLength;
-    const rc = this.callExport("engine_load_package", [
+    const rc = this.callExport("engine_load_bundle", [
       this.handle, namePtr, nameLen, zipPtr, zipData.byteLength,
     ]);
-    if (rc !== RESULT_OK) throw new Error(`engine_load_package failed: ${rc}`);
+    if (rc !== RESULT_OK) throw new Error(`engine_load_bundle failed: ${rc}`);
   }
 
-  /** Remove all registered packages from the engine. */
-  clearPackages(): void {
+  /** Remove all registered module bundles from the engine. */
+  clearBundles(): void {
     this.assertAlive();
-    this.callExport("engine_clear_packages", [this.handle]);
+    this.callExport("engine_clear_bundles", [this.handle]);
   }
 
   addSource(path: string, source: string): void {

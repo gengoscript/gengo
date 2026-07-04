@@ -117,20 +117,20 @@ Call a named Gengoscript function with typed arguments.
 Read a global variable by name. Returns the current value, or `undefined` if
 no global with that name exists.
 
-### `engine.loadPackage(name, zipData): void`
+### `engine.loadBundle(name, zipData): void`
 
-Register a zip-format package bundle under the given package name. All `.gengo`
+Register a zip-format module bundle under the given name. All `.gengo`
 files in the zip become importable as `import("name/path/to/module")` — no
 special prefix is needed in the script.
 
 ```ts
-const zip = await fetch("/packages/mylib.zip").then(r => r.arrayBuffer());
-engine.loadPackage("mylib", new Uint8Array(zip));
+const zip = await fetch("/bundles/mylib.zip").then(r => r.arrayBuffer());
+engine.loadBundle("mylib", new Uint8Array(zip));
 ```
 
-### `engine.clearPackages(): void`
+### `engine.clearBundles(): void`
 
-Remove all registered packages from the engine.
+Remove all registered module bundles from the engine.
 
 ### `engine.addSource(path, source): void`
 
