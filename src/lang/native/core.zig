@@ -204,7 +204,7 @@ pub fn nativeConvToInt(v: Value) !Value {
         .boolean => |b| return .{ .int = if (b) 1 else 0 },
         .string => |s| { const n = common.parseFloat(s.bytes) orelse return error.TypeError; return .{ .int = @intFromFloat(n) }; },
         .object => |o| {
-            const s: []const u8 = if (o.* == .dyn_string) o.dyn_string else if (o.* == .string_view) o.string_view.bytes else return error.TypeError;
+            const s = try vmstr.stringBytesFromObj(o);
             const n = common.parseFloat(s) orelse return error.TypeError;
             const tr = @trunc(n);
             return .{ .int = @intFromFloat(tr) };
@@ -221,7 +221,7 @@ pub fn nativeConvToFloat(v: Value) !Value {
         .boolean => |b| return .{ .float = if (b) 1 else 0 },
         .string => |s| { const n = common.parseFloat(s.bytes) orelse return error.TypeError; return .{ .float = n }; },
         .object => |o| {
-            const s: []const u8 = if (o.* == .dyn_string) o.dyn_string else if (o.* == .string_view) o.string_view.bytes else return error.TypeError;
+            const s = try vmstr.stringBytesFromObj(o);
             const n = common.parseFloat(s) orelse return error.TypeError;
             return .{ .float = n };
         },
@@ -260,8 +260,7 @@ pub fn nativeConvToString(v: Value) !Value {
         .string => |s| vmgc.makeDynString(s.bytes),
         .object => |o| {
             if (o.* == .bigint) return vmbigint.toDynString(.{ .object = o });
-            const s: []const u8 = if (o.* == .dyn_string) o.dyn_string else if (o.* == .string_view) o.string_view.bytes else return error.TypeError;
-            return vmgc.makeDynString(s);
+            return vmgc.makeDynString(try vmstr.stringBytesFromObj(o));
         },
         .boolean => |b| vmgc.makeDynString(if (b) "true" else "false"),
         .int => |n| {

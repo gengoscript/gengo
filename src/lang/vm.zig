@@ -1372,12 +1372,7 @@ fn opGetIndex(ctx: VMContext) !void {
     switch (container) {
         .object => |obj| switch (obj.*) {
             .dyn_string, .string_view => {
-                const bytes = if (obj.* == .dyn_string) obj.dyn_string else obj.string_view.bytes;
-                const src = if (obj.* == .dyn_string) obj else obj.string_view.source;
-                const ridx = try vms.vmIndexFromVal(idx_v);
-                const start = try vmstr.utf8ByteOffsetForRuneIndexCached(bytes, ridx);
-                const w = try vmstr.utf8NextRuneByteLen(bytes, start);
-                try ctx.vs.vmPush(try vmgc.makeStringView(bytes[start .. start + w], src));
+                try ctx.vs.vmPush(try vmstr.stringIndex(container, idx_v));
             },
             .array, .array_managed, .array_view, .array_capacity => {
                 try ctx.vs.vmPush(try vmarr.arrayRead(obj, idx_v));
@@ -1405,11 +1400,8 @@ fn opGetIndex(ctx: VMContext) !void {
             },
             else => return error.TypeError,
         },
-        .string => |s| {
-            const ridx = try vms.vmIndexFromVal(idx_v);
-            const start = try vmstr.utf8ByteOffsetForRuneIndexCached(s.bytes, ridx);
-            const w = try vmstr.utf8NextRuneByteLen(s.bytes, start);
-            try ctx.vs.vmPush(try vmgc.makeDynString(s.bytes[start .. start + w]));
+        .string => {
+            try ctx.vs.vmPush(try vmstr.stringIndex(container, idx_v));
         },
         else => return error.TypeError,
     }
@@ -1712,17 +1704,6 @@ fn writeGlobalIC(ctx: VMContext, name_idx: usize, ic_base: usize, ic_slot: u16, 
         ctx.cs.patchByte(ic_base + 1, @intCast(slot & 0xFF));
         ctx.gs.setAt(slot, val);
     }
-}
-
-fn stringSliceRange(s: []const u8, has_start: bool, start_v: Value, has_end: bool, end_v: Value) !struct { start_b: usize, end_b: usize } {
-    const rune_len = try vmstr.utf8RuneCountCached(s);
-    const start_r: usize = if (has_start) try vms.vmSliceIndex(start_v, rune_len) else 0;
-    const end_r: usize = if (has_end) try vms.vmSliceIndex(end_v, rune_len) else rune_len;
-    if (start_r > end_r) return error.IndexOutOfBounds;
-    return .{
-        .start_b = try vmstr.utf8ByteOffsetForRuneIndexCached(s, start_r),
-        .end_b = try vmstr.utf8ByteOffsetForRuneIndexCached(s, end_r),
-    };
 }
 
 fn readGlobalIC(ctx: VMContext, name_idx: usize, ic_base: usize, ic_slot: u16) !Value {
@@ -2796,16 +2777,12 @@ fn runInner(ctx: VMContext) !void {
                 defer ctx.vs.popTempRoot();
 
                 switch (container) {
-                    .string => |s| {
-                        const r = try stringSliceRange(s.bytes, has_start, start_v, has_end, end_v);
-                        try ctx.vs.vmPush(try vmgc.makeDynString(s.bytes[r.start_b..r.end_b]));
+                    .string => {
+                        try ctx.vs.vmPush(try vmstr.stringSlice(container, has_start, start_v, has_end, end_v));
                     },
                     .object => |obj| switch (obj.*) {
                         .dyn_string, .string_view => {
-                            const bytes = if (obj.* == .dyn_string) obj.dyn_string else obj.string_view.bytes;
-                            const src = if (obj.* == .dyn_string) obj else obj.string_view.source;
-                            const r = try stringSliceRange(bytes, has_start, start_v, has_end, end_v);
-                            try ctx.vs.vmPush(try vmgc.makeStringView(bytes[r.start_b..r.end_b], src));
+                            try ctx.vs.vmPush(try vmstr.stringSlice(container, has_start, start_v, has_end, end_v));
                         },
                         .array, .array_managed, .array_view, .array_capacity => {
                             try ctx.vs.vmPush(try vmarr.arraySlice(obj, has_start, start_v, has_end, end_v));
