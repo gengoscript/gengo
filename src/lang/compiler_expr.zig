@@ -367,7 +367,11 @@ pub fn mapLit(c: anytype) !void {
 }
 
 pub fn numLit(c: anytype) !void {
-    const is_float = std.mem.indexOfAny(u8, c.prev.src, ".eE") != null;
+    const is_based = c.prev.src.len >= 2 and c.prev.src[0] == '0' and
+        (c.prev.src[1] == 'x' or c.prev.src[1] == 'X' or
+         c.prev.src[1] == 'b' or c.prev.src[1] == 'B' or
+         c.prev.src[1] == 'o' or c.prev.src[1] == 'O');
+    const is_float = !is_based and std.mem.indexOfAny(u8, c.prev.src, ".eE") != null;
     if (is_float) {
         const n = common.parseFloat(c.prev.src) orelse return error.BadNumber;
         try c.cs.emitConst(.{ .float = n }, c.prev.line);
