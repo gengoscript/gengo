@@ -20,3 +20,5 @@ gengo_acl.so
 
 # MkDocs build output
 site/
+examples/bundle-c/quiz_grader
+examples/bundle-c/scoring.zip
