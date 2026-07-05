@@ -46,6 +46,10 @@ pub const State = struct {
     // when two constants were emitted with nothing in between; used for constant folding.
     prev_const_code_pos: ?usize = null,
     prev_const_idx: u16 = 0,
+    // Whether the last/prev constant was newly added (not deduplicated). Used by the
+    // string-literal fold to correctly restore const_count.
+    last_const_was_new: bool = false,
+    prev_const_was_new: bool = false,
     // Peephole: track position of last `get_local` instruction (2 bytes: op + slot).
     // Used for triple-fusion: get_local + constant + eq/sub → get_local_const_eq/sub.
     // Verified via arithmetic (gl_pos + 2 == const_pos) rather than code inspection
@@ -299,13 +303,16 @@ pub const State = struct {
 
     // Add constant v and emit opcode + its 2-byte index.
     pub fn emitOpConst(self: *State, op: Op, v: Value, line: u32) !void {
+        const pre_count = self.const_count;
         const idx = try self.addConst(v);
         try self.emitConstIdx(op, idx, line);
         if (op == .constant) {
             self.prev_const_code_pos = self.last_const_code_pos;
             self.prev_const_idx = self.last_const_idx;
+            self.prev_const_was_new = self.last_const_was_new;
             self.last_const_code_pos = self.code_len - 3;
             self.last_const_idx = idx;
+            self.last_const_was_new = (idx == pre_count); // addConst never deduplicates
         } else {
             self.last_const_code_pos = null;
             self.prev_const_code_pos = null;
@@ -328,6 +335,53 @@ pub const State = struct {
                             self.prev_const_code_pos = null;
                             try self.emitConst(result, line);
                             return;
+                        }
+                        // String literal concatenation: "a" + "b" → "ab" at compile time.
+                        // Successive folds reduce "a"+"b"+"c"+... to a single constant.
+                        if (op == .add and lhs == .string and rhs == .string) {
+                            const a = lhs.string.bytes;
+                            const b = rhs.string.bytes;
+                            const total = a.len + b.len;
+                            if (total >= a.len) { // no overflow
+                                if (heap.bump(u8, total)) |buf| {
+                                    @memcpy(buf[0..a.len], a);
+                                    @memcpy(buf[a.len..total], b);
+                                    self.code_len = lhs_pos;
+                                    // Only reclaim pool slots that were freshly added (not deduped).
+                                    // const_count -= 2 is wrong when either constant was a dedup hit,
+                                    // because the deduped index may still be referenced by earlier code.
+                                    var restore = self.const_count;
+                                    if (self.last_const_was_new) restore -= 1;
+                                    if (self.prev_const_was_new) restore -= 1;
+                                    self.const_count = restore;
+                                    self.last_const_code_pos = null;
+                                    self.prev_const_code_pos = null;
+                                    // Dedup: reuse existing equal constant if present.
+                                    var folded_idx: ?u16 = null;
+                                    for (self.consts[0..self.const_count], 0..) |c, ci| {
+                                        if (c == .string and common.streq(c.string.bytes, buf[0..total])) {
+                                            folded_idx = @intCast(ci);
+                                            break;
+                                        }
+                                    }
+                                    const was_new = (folded_idx == null);
+                                    const idx: u16 = folded_idx orelse blk: {
+                                        if (self.const_count >= MaxConst) return error.TooManyConstants;
+                                        const ss = try self.internStr(buf[0..total]);
+                                        const i: u16 = @intCast(self.const_count);
+                                        self.consts[i] = .{ .string = ss };
+                                        self.const_count += 1;
+                                        break :blk i;
+                                    };
+                                    try self.emitConstIdx(.constant, idx, line);
+                                    self.prev_const_code_pos = null;
+                                    self.prev_const_was_new = false;
+                                    self.last_const_code_pos = self.code_len - 3;
+                                    self.last_const_idx = idx;
+                                    self.last_const_was_new = was_new;
+                                    return;
+                                }
+                            }
                         }
                     }
                 }
@@ -443,13 +497,16 @@ pub const State = struct {
 
     // Emit any opcode + string constant index.  Mirrors emitOpConst for strings.
     pub fn emitOpStringConst(self: *State, op: Op, s: []const u8, line: u32) !void {
+        const pre_count = self.const_count;
         const idx = try self.addStringConst(s);
         try self.emitConstIdx(op, idx, line);
         if (op == .constant) {
             self.prev_const_code_pos = self.last_const_code_pos;
             self.prev_const_idx = self.last_const_idx;
+            self.prev_const_was_new = self.last_const_was_new;
             self.last_const_code_pos = self.code_len - 3;
             self.last_const_idx = idx;
+            self.last_const_was_new = (idx == pre_count); // false when deduplicated
         } else {
             self.last_const_code_pos = null;
             self.prev_const_code_pos = null;
