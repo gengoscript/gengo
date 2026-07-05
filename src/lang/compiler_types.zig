@@ -146,6 +146,37 @@ pub const NamedTypeInfo = struct {
 const GlobalConstInfo = struct { name: []const u8 };
 const GlobalFuncInfo = struct { name: []const u8 };
 
+// ── Hash-index types for O(1) symbol lookup ─────────────────────────────────
+//
+// Two separate open-addressed hash tables keep type names (struct/interface/
+// named/variant) and global function names in disjoint namespaces, avoiding
+// any cross-kind collision between e.g. a type named "Foo" and a function also
+// named "Foo".  Global consts remain a linear scan (small count, rare path).
+//
+// TypeHashSize = 2048: load factor < 0.32 at the combined type ceiling of
+// MaxStructTypes+MaxInterfaceTypes+MaxNamedTypes+MaxVariantTypes = 640.
+// FuncHashSize = 1024: load factor < 0.50 at MaxGlobalFuncs = 512.
+
+const TypeSymbolKind = enum(u8) { struct_type, interface_type, named_type, variant_type };
+const TypeHashSize = 2048;
+const FuncHashSize = 1024;
+
+const TypeHashEntry = struct {
+    sub_idx: u16 = 0, // index into the kind's sub-array
+    kind: TypeSymbolKind = .struct_type,
+    occupied: bool = false,
+};
+const FuncHashEntry = struct {
+    sub_idx: u16 = 0,
+    occupied: bool = false,
+};
+
+// Comptime-zero arrays used as default field values so that TypeRegistry = .{}
+// gives properly initialised (all-empty) hash tables without an explicit reset.
+const empty_type_buckets = [1]TypeHashEntry{.{}} ** TypeHashSize;
+const empty_func_buckets = [1]FuncHashEntry{.{}} ** FuncHashSize;
+// ─────────────────────────────────────────────────────────────────────────────
+
 pub const TypeRegistry = struct {
     struct_types: [MaxStructTypes]StructTypeInfo = undefined,
     struct_type_count: usize = 0,
@@ -160,6 +191,10 @@ pub const TypeRegistry = struct {
     global_funcs: [MaxGlobalFuncs]GlobalFuncInfo = undefined,
     global_func_count: usize = 0,
 
+    // Hash indexes — initialised to all-empty via comptime defaults above.
+    type_buckets: [TypeHashSize]TypeHashEntry = empty_type_buckets,
+    func_buckets: [FuncHashSize]FuncHashEntry = empty_func_buckets,
+
     pub fn reset(self: *TypeRegistry) void {
         self.struct_type_count = 0;
         self.interface_type_count = 0;
@@ -167,27 +202,92 @@ pub const TypeRegistry = struct {
         self.variant_type_count = 0;
         self.global_const_count = 0;
         self.global_func_count = 0;
+        @memset(self.type_buckets[0..], .{});
+        @memset(self.func_buckets[0..], .{});
     }
 
-    pub fn hasStructType(self: *TypeRegistry, name: []const u8) bool {
-        for (self.struct_types[0..self.struct_type_count]) |t| {
-            if (common.streq(t.name, name)) return true;
+    // ── Hash helpers ──────────────────────────────────────────────────────────
+
+    fn nameAtTypeSlot(self: *const TypeRegistry, idx: usize) []const u8 {
+        const e = self.type_buckets[idx];
+        return switch (e.kind) {
+            .struct_type => self.struct_types[e.sub_idx].name,
+            .interface_type => self.interface_types[e.sub_idx].name,
+            .named_type => self.named_types[e.sub_idx].name,
+            .variant_type => self.variant_types[e.sub_idx].name,
+        };
+    }
+
+    fn typeSlotFor(self: *const TypeRegistry, name: []const u8) ?usize {
+        const mask: usize = TypeHashSize - 1;
+        var idx: usize = @intCast(common.hashBytes(name) & mask);
+        for (0..TypeHashSize) |_| {
+            const e = self.type_buckets[idx];
+            if (!e.occupied) return null;
+            if (common.streq(self.nameAtTypeSlot(idx), name)) return idx;
+            idx = (idx + 1) & mask;
         }
-        return false;
+        return null;
     }
 
-    pub fn hasStructTypeLocal(self: *TypeRegistry, name: []const u8) bool {
+    fn typeSlotForInsert(self: *const TypeRegistry, name: []const u8) ?usize {
+        const mask: usize = TypeHashSize - 1;
+        var idx: usize = @intCast(common.hashBytes(name) & mask);
+        for (0..TypeHashSize) |_| {
+            const e = self.type_buckets[idx];
+            if (!e.occupied or common.streq(self.nameAtTypeSlot(idx), name)) return idx;
+            idx = (idx + 1) & mask;
+        }
+        return null;
+    }
+
+    fn insertTypeSlot(self: *TypeRegistry, name: []const u8, kind: TypeSymbolKind, sub_idx: usize) void {
+        const slot = self.typeSlotForInsert(name) orelse return;
+        if (!self.type_buckets[slot].occupied) {
+            self.type_buckets[slot] = .{ .sub_idx = @intCast(sub_idx), .kind = kind, .occupied = true };
+        }
+    }
+
+    fn funcSlotFor(self: *const TypeRegistry, name: []const u8) ?usize {
+        const mask: usize = FuncHashSize - 1;
+        var idx: usize = @intCast(common.hashBytes(name) & mask);
+        for (0..FuncHashSize) |_| {
+            const e = self.func_buckets[idx];
+            if (!e.occupied) return null;
+            if (common.streq(self.global_funcs[e.sub_idx].name, name)) return idx;
+            idx = (idx + 1) & mask;
+        }
+        return null;
+    }
+
+    fn funcSlotForInsert(self: *const TypeRegistry, name: []const u8) ?usize {
+        const mask: usize = FuncHashSize - 1;
+        var idx: usize = @intCast(common.hashBytes(name) & mask);
+        for (0..FuncHashSize) |_| {
+            const e = self.func_buckets[idx];
+            if (!e.occupied or common.streq(self.global_funcs[e.sub_idx].name, name)) return idx;
+            idx = (idx + 1) & mask;
+        }
+        return null;
+    }
+
+    // ── Public API ────────────────────────────────────────────────────────────
+
+    pub fn hasStructType(self: *const TypeRegistry, name: []const u8) bool {
+        const slot = self.typeSlotFor(name) orelse return false;
+        return self.type_buckets[slot].kind == .struct_type;
+    }
+
+    pub fn hasStructTypeLocal(self: *const TypeRegistry, name: []const u8) bool {
         return self.hasStructType(name);
     }
 
-    pub fn hasInterfaceType(self: *TypeRegistry, name: []const u8) bool {
-        for (self.interface_types[0..self.interface_type_count]) |t| {
-            if (common.streq(t.name, name)) return true;
-        }
-        return false;
+    pub fn hasInterfaceType(self: *const TypeRegistry, name: []const u8) bool {
+        const slot = self.typeSlotFor(name) orelse return false;
+        return self.type_buckets[slot].kind == .interface_type;
     }
 
-    pub fn hasGlobalConst(self: *TypeRegistry, name: []const u8) bool {
+    pub fn hasGlobalConst(self: *const TypeRegistry, name: []const u8) bool {
         for (self.global_consts[0..self.global_const_count]) |c| {
             if (common.streq(c.name, name)) return true;
         }
@@ -204,67 +304,72 @@ pub const TypeRegistry = struct {
     pub fn addStructType(self: *TypeRegistry, name: []const u8) !void {
         if (self.hasStructType(name)) return error.DuplicateStructType;
         if (self.struct_type_count >= MaxStructTypes) return error.TooManyStructTypes;
-        self.struct_types[self.struct_type_count] = .{ .name = name };
+        const sub_idx = self.struct_type_count;
+        self.struct_types[sub_idx] = .{ .name = name };
         self.struct_type_count += 1;
+        self.insertTypeSlot(name, .struct_type, sub_idx);
     }
 
     pub fn addInterfaceType(self: *TypeRegistry, name: []const u8) !void {
         if (self.hasInterfaceType(name)) return error.DuplicateInterfaceType;
         if (self.interface_type_count >= MaxInterfaceTypes) return error.TooManyInterfaceTypes;
-        self.interface_types[self.interface_type_count] = .{ .name = name };
+        const sub_idx = self.interface_type_count;
+        self.interface_types[sub_idx] = .{ .name = name };
         self.interface_type_count += 1;
+        self.insertTypeSlot(name, .interface_type, sub_idx);
     }
 
-    pub fn hasNamedType(self: *TypeRegistry, name: []const u8) bool {
-        for (self.named_types[0..self.named_type_count]) |t| {
-            if (common.streq(t.name, name)) return true;
-        }
-        return false;
+    pub fn hasNamedType(self: *const TypeRegistry, name: []const u8) bool {
+        const slot = self.typeSlotFor(name) orelse return false;
+        return self.type_buckets[slot].kind == .named_type;
     }
 
-    pub fn getNamedTypeInfo(self: *TypeRegistry, name: []const u8) ?NamedTypeInfo {
-        for (self.named_types[0..self.named_type_count]) |t| {
-            if (common.streq(t.name, name)) return t;
-        }
-        return null;
+    pub fn getNamedTypeInfo(self: *const TypeRegistry, name: []const u8) ?NamedTypeInfo {
+        const slot = self.typeSlotFor(name) orelse return null;
+        const e = self.type_buckets[slot];
+        if (e.kind != .named_type) return null;
+        return self.named_types[e.sub_idx];
     }
 
     pub fn addNamedType(self: *TypeRegistry, info: NamedTypeInfo) !void {
         if (self.hasNamedType(info.name)) return error.DuplicateNamedType;
         if (self.named_type_count >= MaxNamedTypes) return error.TooManyNamedTypes;
-        self.named_types[self.named_type_count] = info;
+        const sub_idx = self.named_type_count;
+        self.named_types[sub_idx] = info;
         self.named_type_count += 1;
+        self.insertTypeSlot(info.name, .named_type, sub_idx);
     }
 
-    pub fn hasVariantType(self: *TypeRegistry, name: []const u8) bool {
-        for (self.variant_types[0..self.variant_type_count]) |t| {
-            if (common.streq(t.name, name)) return true;
-        }
-        return false;
+    pub fn hasVariantType(self: *const TypeRegistry, name: []const u8) bool {
+        const slot = self.typeSlotFor(name) orelse return false;
+        return self.type_buckets[slot].kind == .variant_type;
     }
 
-    pub fn hasAnyTypeName(self: *TypeRegistry, name: []const u8) bool {
-        return self.hasStructType(name) or self.hasInterfaceType(name) or
-            self.hasNamedType(name) or self.hasVariantType(name);
+    pub fn hasAnyTypeName(self: *const TypeRegistry, name: []const u8) bool {
+        return self.typeSlotFor(name) != null;
     }
 
     pub fn addVariantType(self: *TypeRegistry, name: []const u8) !void {
         if (self.hasVariantType(name)) return error.DuplicateVariantType;
         if (self.variant_type_count >= MaxVariantTypes) return error.TooManyVariantTypes;
-        self.variant_types[self.variant_type_count] = .{ .name = name };
+        const sub_idx = self.variant_type_count;
+        self.variant_types[sub_idx] = .{ .name = name };
         self.variant_type_count += 1;
+        self.insertTypeSlot(name, .variant_type, sub_idx);
     }
 
-    pub fn hasGlobalFunc(self: *TypeRegistry, name: []const u8) bool {
-        for (self.global_funcs[0..self.global_func_count]) |f| {
-            if (common.streq(f.name, name)) return true;
-        }
-        return false;
+    pub fn hasGlobalFunc(self: *const TypeRegistry, name: []const u8) bool {
+        return self.funcSlotFor(name) != null;
     }
 
     pub fn addGlobalFunc(self: *TypeRegistry, name: []const u8) !void {
         if (self.global_func_count >= MaxGlobalFuncs) return error.TooManyGlobalFuncs;
-        self.global_funcs[self.global_func_count] = .{ .name = name };
+        const sub_idx = self.global_func_count;
+        self.global_funcs[sub_idx] = .{ .name = name };
         self.global_func_count += 1;
+        const slot = self.funcSlotForInsert(name) orelse return;
+        if (!self.func_buckets[slot].occupied) {
+            self.func_buckets[slot] = .{ .sub_idx = @intCast(sub_idx), .occupied = true };
+        }
     }
 };
