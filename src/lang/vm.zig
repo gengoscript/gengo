@@ -1346,6 +1346,12 @@ fn opGetLocalGetField(ctx: VMContext) !void {
 fn opGetIndex(ctx: VMContext) !void {
     const idx_v = try ctx.vs.vmPop();
     const raw = try ctx.vs.vmPop();
+    // Fast path: hashed-map lookup never allocates → no GC roots needed,
+    // no unboxNamed, no full container-kind switch.
+    if (raw == .object and raw.object.* == .map_hashed) {
+        try ctx.vs.vmPush(try vmmap.mapGet(raw.object, idx_v) orelse .null);
+        return;
+    }
     var rooted_raw = false;
     var rooted_idx = false;
     if (raw == .object) { try ctx.vs.pushTempRoot(raw); rooted_raw = true; }
