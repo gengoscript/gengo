@@ -1122,11 +1122,9 @@ fn iterNext1(ctx: VMContext, it: *IterObj) !void {
             const ridx = it.rune_index;
             const start = try vmstr.utf8ByteOffsetForRuneIndexCached(it.string, ridx);
             const end = try vmstr.utf8ByteOffsetForRuneIndexCached(it.string, ridx + 1);
-            if (it.string_managed) {
-                try ctx.vs.vmPush(try vmgc.makeStringView(it.string[start..end], it.source.?));
-            } else {
-                try ctx.vs.vmPush(try vmgc.makeDynString(it.string[start..end]));
-            }
+            // source is null for both static strings and string_views of immortal bytes.
+            const source: ?*Object = if (it.string_managed) it.source else null;
+            try ctx.vs.vmPush(try vmstr.makeCharValue(it.string[start..end], source));
             it.index = end;
             it.rune_index += 1;
             try ctx.vs.vmPush(.{ .boolean = true });
@@ -1170,11 +1168,8 @@ fn iterNext2(ctx: VMContext, it: *IterObj) !void {
             const start = try vmstr.utf8ByteOffsetForRuneIndexCached(it.string, ridx);
             const end = try vmstr.utf8ByteOffsetForRuneIndexCached(it.string, ridx + 1);
             try ctx.vs.vmPush(.{ .int = @intCast(it.rune_index) });
-            if (it.string_managed) {
-                try ctx.vs.vmPush(try vmgc.makeStringView(it.string[start..end], it.source.?));
-            } else {
-                try ctx.vs.vmPush(try vmgc.makeDynString(it.string[start..end]));
-            }
+            const source: ?*Object = if (it.string_managed) it.source else null;
+            try ctx.vs.vmPush(try vmstr.makeCharValue(it.string[start..end], source));
             it.index = end;
             it.rune_index += 1;
             try ctx.vs.vmPush(.{ .boolean = true });
