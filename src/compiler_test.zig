@@ -1450,3 +1450,31 @@ test "string literal chain folds to a single compile-time constant" {
     try std.testing.expect(v == .string);
     try std.testing.expectEqualStrings("abc", v.string.bytes);
 }
+
+test "non-ASCII string iteration is zero-alloc and produces correct chars" {
+    var rt = try setup();
+    defer rt.deinit();
+    // "åäö" has 3 multi-byte runes. Iterating with for...in must not call
+    // makeDynString, and must not panic on a null-source string_view iterator
+    // (regression: aa0bf9f made static-string slices string_views with null
+    // source, but iterNext1/iterNext2 used it.source.? which would panic).
+    try rt.run(
+        \\func collect_static() string {
+        \\    s := "åäö"
+        \\    out := ""
+        \\    for ch in s { out = out + ch }
+        \\    return out
+        \\}
+        \\func collect_slice() string {
+        \\    s := "åäö"
+        \\    out := ""
+        \\    for ch in s[0:2] { out = out + ch }
+        \\    return out
+        \\}
+    );
+    const vmst = @import("lang/vm_state.zig");
+    const v1 = try rt.callGlobal("collect_static", &[_]Value{});
+    try std.testing.expectEqualStrings("åäö", try vmst.asStringValue(v1));
+    const v2 = try rt.callGlobal("collect_slice", &[_]Value{});
+    try std.testing.expectEqualStrings("åä", try vmst.asStringValue(v2));
+}

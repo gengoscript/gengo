@@ -106,33 +106,34 @@ pub fn stringSliceRange(s: []const u8, has_start: bool, start_v: Value, has_end:
     };
 }
 
+/// Return a Value for a single UTF-8 character slice.  ASCII bytes (0x00–0x7F)
+/// resolve to the comptime ascii_ss pool (zero allocation).  Multi-byte runes
+/// borrow `bytes` as a string_view; pass source=null when bytes are immortal.
+pub fn makeCharValue(bytes: []const u8, source: ?*Object) !Value {
+    if (bytes.len == 1 and bytes[0] < 128) return .{ .string = &ascii_ss[bytes[0]] };
+    return vmgc.makeStringView(bytes, source);
+}
+
 pub fn stringIndex(container: Value, idx_v: Value) !Value {
     const ridx = try vms.vmIndexFromVal(idx_v);
     switch (container) {
         .string => |s| {
             const start = try utf8ByteOffsetForRuneIndexCached(s.bytes, ridx);
             const w = try utf8NextRuneByteLen(s.bytes, start);
-            const b0 = s.bytes[start];
-            if (w == 1 and b0 < 128) return .{ .string = &ascii_ss[b0] };
-            // Non-ASCII: borrow a view into the immortal source bytes (null source = no GC parent).
-            return vmgc.makeStringView(s.bytes[start .. start + w], null);
+            return makeCharValue(s.bytes[start .. start + w], null);
         },
         .object => |obj| switch (obj.*) {
             .dyn_string => {
                 const bytes = obj.dyn_string;
                 const start = try utf8ByteOffsetForRuneIndexCached(bytes, ridx);
                 const w = try utf8NextRuneByteLen(bytes, start);
-                const b0 = bytes[start];
-                if (w == 1 and b0 < 128) return .{ .string = &ascii_ss[b0] };
-                return vmgc.makeStringView(bytes[start .. start + w], obj);
+                return makeCharValue(bytes[start .. start + w], obj);
             },
             .string_view => {
                 const sv = obj.string_view;
                 const start = try utf8ByteOffsetForRuneIndexCached(sv.bytes, ridx);
                 const w = try utf8NextRuneByteLen(sv.bytes, start);
-                const b0 = sv.bytes[start];
-                if (w == 1 and b0 < 128) return .{ .string = &ascii_ss[b0] };
-                return vmgc.makeStringView(sv.bytes[start .. start + w], sv.source);
+                return makeCharValue(sv.bytes[start .. start + w], sv.source);
             },
             else => return error.TypeError,
         },
