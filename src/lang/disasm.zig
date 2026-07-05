@@ -94,6 +94,11 @@ fn writeConst(idx: u16) void {
             else => io.write("<object>"),
         },
         .null => io.write("null"),
+        .named_scalar => |ns| {
+            io.write("<named:");
+            io.write(ns.typ.named_type.name);
+            io.write(">");
+        },
     }
 }
 

@@ -3,9 +3,10 @@ const chunk = @import("chunk.zig");
 const heap = @import("../runtime/heap.zig");
 const cfg = @import("../runtime/config.zig");
 const globals_mod = @import("globals.zig");
-const Value = @import("value.zig").Value;
-const Object = @import("value.zig").Object;
-const MapEntry = @import("value.zig").MapEntry;
+const vmod = @import("value.zig");
+const Value = vmod.Value;
+const Object = vmod.Object;
+const MapEntry = vmod.MapEntry;
 const builtin = @import("builtin");
 
 // Preset ceilings — these are the maximum any instance may request.
@@ -448,6 +449,7 @@ pub fn vmSliceIndex(v: Value, upper: usize) !usize {
 }
 
 fn unwrapNamed(v: Value) Value {
+    if (v == .named_scalar) return vmod.namedScalarInner(v.named_scalar);
     return switch (v) {
         .object => |o| switch (o.*) {
             .named_value => |nv| unwrapNamed(nv.value),
@@ -482,6 +484,7 @@ pub fn valueAsInt(v: Value) !i64 {
 }
 
 pub fn unboxNamed(v: Value) Value {
+    if (v == .named_scalar) return vmod.namedScalarInner(v.named_scalar);
     if (v == .object and v.object.* == .named_value) return v.object.named_value.value;
     return v;
 }

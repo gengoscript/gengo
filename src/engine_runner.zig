@@ -953,9 +953,8 @@ fn testNamedTypeReturn() void {
     const call_res = rt.call("makeMeter", &[_]Value{});
     switch (call_res) {
         .ok => |v| {
-            if (v != .object or v.object.* != .named_value) fail("engine FAIL: named type return type\n");
-            const inner = v.object.named_value.value;
-            if (inner != .int or inner.int != 5) fail("engine FAIL: named type inner value\n");
+            const ref = v.asNamed() orelse { fail("engine FAIL: named type return type\n"); return; };
+            if (ref.inner != .int or ref.inner.int != 5) fail("engine FAIL: named type inner value\n");
         },
         .runtime_error => |e| {
             writeAll(2, "named type call runtime: "); writeAll(2, e.msg); writeAll(2, "\n");
@@ -1003,8 +1002,8 @@ fn testRuntimeDisablePredicates() void {
     const call_res = rt.call("getA", &.{});
     switch (call_res) {
         .ok => |v| {
-            if (v != .object or v.object.* != .named_value) fail("engine FAIL: expected named value when predicates disabled\n");
-            if (v.object.named_value.value != .int or v.object.named_value.value.int != -1) fail("engine FAIL: expected -1 when predicates disabled\n");
+            const ref = v.asNamed() orelse { fail("engine FAIL: expected named value when predicates disabled\n"); return; };
+            if (ref.inner != .int or ref.inner.int != -1) fail("engine FAIL: expected -1 when predicates disabled\n");
         },
         else => fail("engine FAIL: expected call success when predicates disabled\n"),
     }

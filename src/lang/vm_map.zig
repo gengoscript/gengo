@@ -44,6 +44,7 @@ pub fn mapHashValue(v: Value) u64 {
             else => @intFromPtr(o),
         },
         .null => 0xcbf29ce484222325,
+        .named_scalar => |ns| hashMix64(@intFromPtr(ns.typ), mapHashValue(@import("value.zig").namedScalarInner(ns))),
     };
 }
 

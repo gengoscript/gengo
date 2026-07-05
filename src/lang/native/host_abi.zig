@@ -4,9 +4,10 @@ const heap = @import("../../runtime/heap.zig");
 const chunk = @import("../chunk.zig");
 const vms = @import("../vm_state.zig");
 const vmgc = @import("../vm_gc.zig");
-const Value = @import("../value.zig").Value;
-const Object = @import("../value.zig").Object;
-const MapEntry = @import("../value.zig").MapEntry;
+const vmod = @import("../value.zig");
+const Value = vmod.Value;
+const Object = vmod.Object;
+const MapEntry = vmod.MapEntry;
 const MaxNativeArgs = @import("native_ids.zig").MaxNativeArgs;
 
 fn makeWire(tag: host_abi.WireTag, flags: u8, payload: u64, len: u32) host_abi.ValueWire {
@@ -75,6 +76,7 @@ pub fn wireFromValue(v: Value) !host_abi.ValueWire {
             },
             else => return error.UnsupportedHostValueType,
         },
+        .named_scalar => |ns| wireFromValue(vmod.namedScalarInner(ns)),
     };
 }
 

@@ -93,6 +93,7 @@ fn sprintValueDepth(buf_or_null: ?[]u8, v: Value, depth: u32, ancestors: *[Print
             }
             return len;
         },
+        .named_scalar => |ns| return sprintValueDepth(buf_or_null, @import("../value.zig").namedScalarInner(ns), depth, ancestors, anc_count),
         .object => |obj| {
             for (ancestors[0..anc_count.*]) |a| {
                 if (a == obj) {
