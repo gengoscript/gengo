@@ -107,6 +107,22 @@ pub const NamedTypeObj = struct {
     default_val: Value = undefined,
 };
 pub const NamedValueObj = struct { typ: *Object, value: Value };
+
+/// Inline representation for scalar named types (int, float, decimal, rune, bool).
+/// Avoids a GC allocation per construction.  `bits` holds the raw bit pattern
+/// of the scalar value; interpret via `typ.named_type.base`.
+pub const NamedScalarValue = struct { typ: *Object, bits: u64 };
+
+pub fn namedScalarInner(ns: NamedScalarValue) Value {
+    return switch (ns.typ.named_type.base) {
+        .int     => .{ .int     = @bitCast(ns.bits) },
+        .float   => .{ .float   = @bitCast(ns.bits) },
+        .decimal => .{ .decimal = @bitCast(ns.bits) },
+        .rune    => .{ .rune    = @intCast(ns.bits)  },
+        .bool    => .{ .boolean = ns.bits != 0       },
+        else     => unreachable,
+    };
+}
 pub const EnumTypeObj = struct {
     name: []const u8,
     qualified_name: []const u8,
@@ -198,7 +214,7 @@ pub const Object = union(ObjTag) {
     bigint: BigIntObj,
 };
 
-pub const VTag = enum { int, float, decimal, rune, boolean, string, error_value, object, null };
+pub const VTag = enum { int, float, decimal, rune, boolean, string, error_value, object, null, named_scalar };
 
 /// Indirection wrapper that makes string payloads 8 bytes (pointer-sized) so
 /// the entire Value fits in 16 bytes.  Lives in chunk.g_state.str_slices[].
@@ -213,12 +229,12 @@ pub fn staticSS(comptime s: []const u8) *const StringSlice {
     return &S.v;
 }
 
-/// A Value is a tagged union (16 bytes: 8-byte tag word + 8-byte payload).
+/// A Value is a tagged union (24 bytes: tag + 16-byte payload for named_scalar).
 /// The `.string` and `.error_value` variants store a *const StringSlice so
-/// their payload fits in 8 bytes.  The StringSlice lives in a bump pool
+/// their scalar payloads fit in 8 bytes.  The StringSlice lives in a bump pool
 /// (chunk.g_state.str_slices); obtain one via chunk.internStr().
-/// The bytes the StringSlice points to MUST be immortal — same invariant as
-/// the old []const u8 variants.
+/// The bytes the StringSlice points to MUST be immortal.
+/// `.named_scalar` stores scalar named-type values inline without a GC allocation.
 pub const Value = union(VTag) {
     int: i64,
     float: f64,
@@ -229,11 +245,47 @@ pub const Value = union(VTag) {
     error_value: *const StringSlice,
     object: *Object,
     null,
+    named_scalar: NamedScalarValue,
+
+    /// Helper result type for named-value access independent of representation.
+    pub const NamedRef = struct { typ: *Object, inner: Value };
+
+    /// Return (typ, inner) for any named value (inline or GC). Null if not named.
+    pub fn asNamed(self: Value) ?NamedRef {
+        if (self == .named_scalar) {
+            const ns = self.named_scalar;
+            return .{ .typ = ns.typ, .inner = namedScalarInner(ns) };
+        }
+        if (self == .object and self.object.* == .named_value) {
+            const nv = self.object.named_value;
+            return .{ .typ = nv.typ, .inner = nv.value };
+        }
+        return null;
+    }
+
+    pub fn isNamed(self: Value) bool {
+        return self == .named_scalar or (self == .object and self.object.* == .named_value);
+    }
+
+    pub fn namedTyp(self: Value) ?*Object {
+        if (self == .named_scalar) return self.named_scalar.typ;
+        if (self == .object and self.object.* == .named_value) return self.object.named_value.typ;
+        return null;
+    }
+
+    pub fn namedInner(self: Value) ?Value {
+        if (self == .named_scalar) return namedScalarInner(self.named_scalar);
+        if (self == .object and self.object.* == .named_value) return self.object.named_value.value;
+        return null;
+    }
 
     pub fn asBool(self: Value) error{TypeError}!bool {
         if (self == .boolean) return self.boolean;
         // Named types over bool participate in conditions through their
         // base, the same way named ints participate in arithmetic.
+        if (self == .named_scalar) {
+            if (self.named_scalar.typ.named_type.base == .bool) return self.named_scalar.bits != 0;
+        }
         if (self == .object and self.object.* == .named_value) {
             const underlying = self.object.named_value.value;
             if (underlying == .boolean) return underlying.boolean;
@@ -268,11 +320,13 @@ pub const Value = union(VTag) {
         if (a == .object and b == .object and a.object.* == .enum_value and b.object.* == .enum_value) {
             return a.object.enum_value.typ == b.object.enum_value.typ and a.object.enum_value.ordinal == b.object.enum_value.ordinal;
         }
-        if (a == .object and b == .object and a.object.* == .named_value and b.object.* == .named_value) {
-            const an = a.object.named_value;
-            const bn = b.object.named_value;
-            if (an.typ != bn.typ) return false;
-            return equals(an.value, bn.value);
+        // Named value equality (handles inline and GC forms).
+        if (a.asNamed()) |an| {
+            if (b.asNamed()) |bn| {
+                if (an.typ != bn.typ) return false;
+                return equals(an.inner, bn.inner);
+            }
+            return false;
         }
         if (a == .object and b == .object and a.object.* == .variant_value and b.object.* == .variant_value) {
             const av = a.object.variant_value;
@@ -314,6 +368,7 @@ pub const Value = union(VTag) {
             .error_value => |x| common.streq(x.bytes, b.error_value.bytes),
             .object => |x| x == b.object,
             .null => true,
+            .named_scalar => unreachable, // handled above by asNamed()
         };
     }
 };
@@ -325,6 +380,8 @@ pub fn decimalScaledToFloat(raw: i64, scale: u8) f64 {
 }
 
 pub fn decimalLogicalNumber(v: Value) ?f64 {
+    if (v == .named_scalar and v.named_scalar.typ.named_type.base == .decimal)
+        return decimalScaledToFloat(@bitCast(v.named_scalar.bits), v.named_scalar.typ.named_type.scale);
     return switch (v) {
         .decimal => |d| decimalScaledToFloat(d, 0),
         .object => |obj| switch (obj.*) {
@@ -341,6 +398,8 @@ pub fn decimalLogicalNumber(v: Value) ?f64 {
 }
 
 pub fn decimalRawAndScale(v: Value) ?struct { raw: i64, scale: u8 } {
+    if (v == .named_scalar and v.named_scalar.typ.named_type.base == .decimal)
+        return .{ .raw = @bitCast(v.named_scalar.bits), .scale = v.named_scalar.typ.named_type.scale };
     return switch (v) {
         .decimal => |d| .{ .raw = d, .scale = 0 },
         .object => |obj| switch (obj.*) {

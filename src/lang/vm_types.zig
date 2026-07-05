@@ -3,9 +3,10 @@ const common = @import("common.zig");
 const globals = @import("globals.zig");
 const vms = @import("vm_state.zig");
 const vmgc = @import("vm_gc.zig");
-const Value = @import("value.zig").Value;
-const Object = @import("value.zig").Object;
-const MapEntry = @import("value.zig").MapEntry;
+const vmod = @import("value.zig");
+const Value = vmod.Value;
+const Object = vmod.Object;
+const MapEntry = vmod.MapEntry;
 const FieldTypeAlt = @import("value.zig").FieldTypeAlt;
 const FieldTypeSpec = @import("value.zig").FieldTypeSpec;
 const StructFieldSpec = @import("value.zig").StructFieldSpec;
@@ -27,6 +28,7 @@ pub fn namedBaseName(base: @import("value.zig").NamedTypeBase) []const u8 {
 }
 
 pub fn runtimeTypeName(v: Value) []const u8 {
+    if (v == .named_scalar) return v.named_scalar.typ.named_type.name;
     return switch (v) {
         .int => "int",
         .float => "float",
@@ -36,6 +38,7 @@ pub fn runtimeTypeName(v: Value) []const u8 {
         .string => "string",
         .error_value => "error",
         .null => "null",
+        .named_scalar => unreachable,
         .object => |obj| switch (obj.*) {
             .named_value => obj.named_value.typ.named_type.name,
             .enum_value => obj.enum_value.typ.enum_type.name,
@@ -146,21 +149,25 @@ pub fn matchesTypeAlt(v: Value, alt: FieldTypeAlt) bool {
         },
         .struct_t => v == .object and v.object.* == .struct_instance and common.streq(v.object.struct_instance.typ.struct_type.qualified_name, alt.struct_name),
         .interface_t => matchesInterfaceType(v, alt.interface_name),
-        .named_t => v == .object and switch (v.object.*) {
-            .named_value => namedTypeIsOrExtends(v.object.named_value.typ, alt.named_name),
-            .enum_value => blk: {
-                if (common.streq(v.object.enum_value.typ.enum_type.qualified_name, alt.named_name)) break :blk true;
-                const sub_val = globals.get(alt.named_name) orelse break :blk false;
-                if (!(sub_val == .object and sub_val.object.* == .enum_type)) break :blk false;
-                if (sub_val.object.enum_type.parent_name == null) break :blk false;
-                const parent_obj = resolveEnumParent(sub_val.object) orelse break :blk false;
-                if (parent_obj != v.object.enum_value.typ) break :blk false;
-                for (sub_val.object.enum_type.members) |m| {
-                    if (common.streq(m, v.object.enum_value.name)) break :blk true;
-                }
-                break :blk false;
-            },
-            else => false,
+        .named_t => named_t_blk: {
+            if (v == .named_scalar) break :named_t_blk namedTypeIsOrExtends(v.named_scalar.typ, alt.named_name);
+            if (!(v == .object)) break :named_t_blk false;
+            break :named_t_blk switch (v.object.*) {
+                .named_value => namedTypeIsOrExtends(v.object.named_value.typ, alt.named_name),
+                .enum_value => blk: {
+                    if (common.streq(v.object.enum_value.typ.enum_type.qualified_name, alt.named_name)) break :blk true;
+                    const sub_val = globals.get(alt.named_name) orelse break :blk false;
+                    if (!(sub_val == .object and sub_val.object.* == .enum_type)) break :blk false;
+                    if (sub_val.object.enum_type.parent_name == null) break :blk false;
+                    const parent_obj = resolveEnumParent(sub_val.object) orelse break :blk false;
+                    if (parent_obj != v.object.enum_value.typ) break :blk false;
+                    for (sub_val.object.enum_type.members) |m| {
+                        if (common.streq(m, v.object.enum_value.name)) break :blk true;
+                    }
+                    break :blk false;
+                },
+                else => false,
+            };
         },
         .variant_t => v == .object and v.object.* == .variant_value and
             common.streq(v.object.variant_value.typ.variant_type.qualified_name, alt.named_name),
@@ -296,7 +303,9 @@ pub fn interfaceMethodMatches(m: InterfaceMethodSpec, f: FuncObj) bool {
 }
 
 pub fn matchesInterfaceType(v: Value, iname: []const u8) bool {
-    const tname = switch (v) {
+    const tname = if (v == .named_scalar)
+        v.named_scalar.typ.named_type.qualified_name
+    else switch (v) {
         .object => |obj| switch (obj.*) {
             .struct_instance => obj.struct_instance.typ.struct_type.qualified_name,
             .named_value => obj.named_value.typ.named_type.qualified_name,
@@ -339,6 +348,17 @@ pub fn matchesInterfaceType(v: Value, iname: []const u8) bool {
 }
 
 pub fn makeNamedValue(typ_obj: *Object, inner: Value) !Value {
+    if (typ_obj.* == .named_type) {
+        const bits: ?u64 = switch (typ_obj.named_type.base) {
+            .int     => @as(u64, @bitCast(inner.int)),
+            .float   => @as(u64, @bitCast(inner.float)),
+            .decimal => @as(u64, @bitCast(inner.decimal)),
+            .rune    => @as(u64, inner.rune),
+            .bool    => if (inner.boolean) @as(u64, 1) else @as(u64, 0),
+            else     => null,
+        };
+        if (bits) |b| return .{ .named_scalar = .{ .typ = typ_obj, .bits = b } };
+    }
     const obj = try vmgc.vmAllocObject();
     obj.* = .{ .named_value = .{ .typ = typ_obj, .value = inner } };
     return .{ .object = obj };
@@ -405,10 +425,7 @@ pub fn constructNamedType(typ_obj: *Object, arg: Value) !Value {
     // Unwrap an already-typed named value so that re-constructing a value
     // of the same named type works consistently across all bases
     // (like valueAsNumber does for numeric bases).
-    const effective_arg = if (arg == .object and arg.object.* == .named_value)
-        arg.object.named_value.value
-    else
-        arg;
+    const effective_arg = arg.namedInner() orelse arg;
 
     var base_v: Value = undefined;
     switch (nt.base) {
@@ -611,7 +628,7 @@ pub fn applyNamedTypeFn(typ_obj: *Object, kind: @import("value.zig").NamedTypeFn
     if (typ_obj.* != .named_type) return error.TypeError;
     const nt = typ_obj.named_type;
     if (!nt.has_range) return error.TypeError;
-    const inner = if (arg == .object and arg.object.* == .named_value) arg.object.named_value.value else arg;
+    const inner = arg.namedInner() orelse arg;
     const n = try vms.valueAsNumber(inner);
     const delta: f64 = if (kind == .succ) 1.0 else -1.0;
     const result = n + delta;

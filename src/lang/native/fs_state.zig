@@ -5,10 +5,29 @@ const std = @import("std");
 // Scripts never see real paths. The host registers named mounts
 // ("data" -> "/var/app/data"); script paths must start with a mount
 // name and resolve inside it. Absolute paths and ".." are rejected.
+//
+// A mount can be backed by a real directory (MountKind.real_path) or by a
+// host-provided virtual driver (MountKind.driver) — see issue #183.
+
+pub const FsDriver = extern struct {
+    open:   ?*const fn (?*anyopaque, [*]const u8, i32, i32, *i32) callconv(.c) i32 = null,
+    read:   ?*const fn (?*anyopaque, i32, [*]u8, i32) callconv(.c) i32 = null,
+    write:  ?*const fn (?*anyopaque, i32, [*]const u8, i32) callconv(.c) i32 = null,
+    close:  ?*const fn (?*anyopaque, i32) callconv(.c) void = null,
+    exists: ?*const fn (?*anyopaque, [*]const u8, i32) callconv(.c) i32 = null,
+    list:   ?*const fn (?*anyopaque, [*]const u8, i32, [*]u8, i32) callconv(.c) i32 = null,
+    unlink: ?*const fn (?*anyopaque, [*]const u8, i32) callconv(.c) i32 = null,
+    mkdir:  ?*const fn (?*anyopaque, [*]const u8, i32) callconv(.c) i32 = null,
+};
+
+pub const MountKind = enum { real_path, driver };
 
 pub const Mount = struct {
     name: []const u8,
-    real: []const u8,
+    kind: MountKind = .real_path,
+    real: []const u8 = "",
+    driver: FsDriver = .{},
+    userdata: ?*anyopaque = null,
 };
 
 const MaxMounts = 16;
@@ -50,12 +69,13 @@ pub fn loadFromEngine(src: *const EngineState) void {
         @memcpy(g_state.str_buf[0..src.str_used], src.str_buf[0..src.str_used]);
     const src_base = @intFromPtr(&src.str_buf);
     for (0..src.count) |i| {
+        g_state.mounts[i] = src.mounts[i];
         const name_off = @intFromPtr(src.mounts[i].name.ptr) - src_base;
-        const real_off = @intFromPtr(src.mounts[i].real.ptr) - src_base;
-        g_state.mounts[i] = .{
-            .name = g_state.str_buf[name_off..][0..src.mounts[i].name.len],
-            .real = g_state.str_buf[real_off..][0..src.mounts[i].real.len],
-        };
+        g_state.mounts[i].name = g_state.str_buf[name_off..][0..src.mounts[i].name.len];
+        if (src.mounts[i].kind == .real_path and src.mounts[i].real.len > 0) {
+            const real_off = @intFromPtr(src.mounts[i].real.ptr) - src_base;
+            g_state.mounts[i].real = g_state.str_buf[real_off..][0..src.mounts[i].real.len];
+        }
     }
 }
 
@@ -84,12 +104,36 @@ pub fn addMountToState(state: *EngineState, name: []const u8, real: []const u8) 
 
     for (state.mounts[0..state.count]) |*m| {
         if (std.mem.eql(u8, m.name, name)) {
+            m.kind = .real_path;
             m.real = p;
+            m.driver = .{};
+            m.userdata = null;
             return;
         }
     }
     if (state.count >= MaxMounts) return error.TooManyMounts;
-    state.mounts[state.count] = .{ .name = n, .real = p };
+    state.mounts[state.count] = .{ .name = n, .kind = .real_path, .real = p };
+    state.count += 1;
+}
+
+/// Register a virtual driver mount into a specific EngineState.
+pub fn addDriverMountToState(state: *EngineState, name: []const u8, driver: FsDriver, userdata: ?*anyopaque) MountError!void {
+    if (name.len == 0 or std.mem.indexOfScalar(u8, name, '/') != null) return error.InvalidMountName;
+    if (state.str_used + name.len > state.str_buf.len) return error.OutOfMountSpace;
+    const n = state.str_buf[state.str_used..][0..name.len];
+    @memcpy(n, name);
+    state.str_used += name.len;
+    for (state.mounts[0..state.count]) |*m| {
+        if (std.mem.eql(u8, m.name, name)) {
+            m.kind = .driver;
+            m.real = "";
+            m.driver = driver;
+            m.userdata = userdata;
+            return;
+        }
+    }
+    if (state.count >= MaxMounts) return error.TooManyMounts;
+    state.mounts[state.count] = .{ .name = n, .kind = .driver, .driver = driver, .userdata = userdata };
     state.count += 1;
 }
 
@@ -98,16 +142,20 @@ pub fn setMounts(mounts: []const Mount) MountError!void {
     for (mounts) |m| try addMount(m.name, m.real);
 }
 
-pub const ResolveError = error{
+pub const LookupError = error{
     PathNotMounted,
     InvalidPath,
-    PathTooLong,
 };
 
-/// Resolve a script path ("data/file.txt") to a real path using the
-/// registered mounts. Rejects absolute paths, empty components, and
-/// "." / ".." traversal.
-pub fn resolve(path: []const u8, buf: []u8) ResolveError![]const u8 {
+pub const LookupResult = struct {
+    mount: *const Mount,
+    rest: []const u8,
+};
+
+/// Validate a script path and return the matching mount plus the path
+/// component after the mount name. Rejects absolute paths, empty
+/// components, and "." / ".." traversal.
+pub fn lookup(path: []const u8) LookupError!LookupResult {
     if (path.len == 0 or path[0] == '/') return error.InvalidPath;
 
     var it = std.mem.splitScalar(u8, path, '/');
@@ -120,16 +168,31 @@ pub fn resolve(path: []const u8, buf: []u8) ResolveError![]const u8 {
     const head = if (slash) |i| path[0..i] else path;
     const rest = if (slash) |i| path[i + 1 ..] else "";
 
-    const mount = for (g_state.mounts[0..g_state.count]) |m| {
+    const mount = for (g_state.mounts[0..g_state.count]) |*m| {
         if (std.mem.eql(u8, m.name, head)) break m;
     } else return error.PathNotMounted;
 
-    const need = mount.real.len + (if (rest.len > 0) rest.len + 1 else 0);
+    return .{ .mount = mount, .rest = rest };
+}
+
+pub const ResolveError = error{
+    PathNotMounted,
+    InvalidPath,
+    PathTooLong,
+};
+
+/// Resolve a script path ("data/file.txt") to a real OS path. Only valid
+/// for real_path mounts; returns PathNotMounted for driver mounts.
+pub fn resolve(path: []const u8, buf: []u8) ResolveError![]const u8 {
+    const lr = try lookup(path);
+    if (lr.mount.kind != .real_path) return error.PathNotMounted;
+    const rest = lr.rest;
+    const need = lr.mount.real.len + (if (rest.len > 0) rest.len + 1 else 0);
     if (need > buf.len) return error.PathTooLong;
-    @memcpy(buf[0..mount.real.len], mount.real);
-    if (rest.len == 0) return buf[0..mount.real.len];
-    buf[mount.real.len] = '/';
-    @memcpy(buf[mount.real.len + 1 ..][0..rest.len], rest);
+    @memcpy(buf[0..lr.mount.real.len], lr.mount.real);
+    if (rest.len == 0) return buf[0..lr.mount.real.len];
+    buf[lr.mount.real.len] = '/';
+    @memcpy(buf[lr.mount.real.len + 1 ..][0..rest.len], rest);
     return buf[0..need];
 }
 
@@ -194,4 +257,48 @@ test "mount strings are copied, not referenced" {
     real_buf = .{ 'X', 'X', 'X', 'X', 'X' };
     var buf: [256]u8 = undefined;
     try std.testing.expectEqualStrings("/tmpx/f", try resolve("data/f", &buf));
+}
+
+test "driver mount lookup returns mount and rest" {
+    clearMounts();
+    const drv: FsDriver = .{};
+    var state: EngineState = .{};
+    try addDriverMountToState(&state, "mem", drv, null);
+    // Load so g_state has the driver mount.
+    loadFromEngine(&state);
+
+    const lr = try lookup("mem/a/b");
+    try std.testing.expectEqual(MountKind.driver, lr.mount.kind);
+    try std.testing.expectEqualStrings("a/b", lr.rest);
+
+    const lr2 = try lookup("mem");
+    try std.testing.expectEqual(MountKind.driver, lr2.mount.kind);
+    try std.testing.expectEqualStrings("", lr2.rest);
+
+    // resolve() must fail for a driver mount.
+    var rbuf: [256]u8 = undefined;
+    try std.testing.expectError(error.PathNotMounted, resolve("mem/a/b", &rbuf));
+}
+
+test "driver mount survives loadFromEngine pointer fixup" {
+    clearMounts();
+    var state: EngineState = .{};
+    var sentinel: u32 = 0xdeadbeef;
+    const drv: FsDriver = .{};
+    try addDriverMountToState(&state, "vfs", drv, &sentinel);
+
+    loadFromEngine(&state);
+    try std.testing.expectEqual(@as(usize, 1), g_state.count);
+    try std.testing.expectEqual(MountKind.driver, g_state.mounts[0].kind);
+    try std.testing.expectEqualStrings("vfs", g_state.mounts[0].name);
+    try std.testing.expectEqual(@as(?*anyopaque, @ptrCast(&sentinel)), g_state.mounts[0].userdata);
+}
+
+test "driver mount replaces real_path mount with same name" {
+    clearMounts();
+    var state: EngineState = .{};
+    try addMountToState(&state, "data", "/real/path");
+    try addDriverMountToState(&state, "data", .{}, null);
+    try std.testing.expectEqual(@as(usize, 1), state.count);
+    try std.testing.expectEqual(MountKind.driver, state.mounts[0].kind);
 }

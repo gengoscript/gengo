@@ -96,8 +96,8 @@ fn namedTypeCommonAncestor(a: *Object, b: *Object) ?*Object {
 fn namedTypeCarrier(a: Value, b: Value) !?*Object {
     var ta: ?*Object = null;
     var tb: ?*Object = null;
-    if (a == .object and a.object.* == .named_value) ta = a.object.named_value.typ;
-    if (b == .object and b.object.* == .named_value) tb = b.object.named_value.typ;
+    if (a.namedTyp()) |t| ta = t;
+    if (b.namedTyp()) |t| tb = t;
     if (ta == null and tb == null) return null;
     if (ta == null or tb == null) return error.TypeError;
     if (ta.? == tb.?) return ta;
@@ -109,9 +109,8 @@ fn namedTypeCarrier(a: Value, b: Value) !?*Object {
 
 fn isStringValueOrNamedString(v: Value) bool {
     if (vms.isStringValue(v)) return true;
-    if (v == .object and v.object.* == .named_value) {
-        const nv = v.object.named_value;
-        if (nv.typ.* == .named_type and nv.typ.named_type.base == .string)
+    if (v.asNamed()) |ref| {
+        if (ref.typ.* == .named_type and ref.typ.named_type.base == .string)
             return true;
     }
     return false;
@@ -133,21 +132,23 @@ fn condAsBool(ctx: VMContext, v: Value, what: []const u8) !bool {
 }
 
 fn setBinaryTypeError(ctx: VMContext, op: []const u8, a: Value, b: Value) void {
-    const a_named = a == .object and a.object.* == .named_value;
-    const b_named = b == .object and b.object.* == .named_value;
+    const a_ref = a.asNamed();
+    const b_ref = b.asNamed();
+    const a_named = a_ref != null;
+    const b_named = b_ref != null;
     if (a_named and b_named) {
-        const ta = a.object.named_value.typ.named_type;
-        const tb = b.object.named_value.typ.named_type;
-        const ta_obj = a.object.named_value.typ;
-        const tb_obj = b.object.named_value.typ;
+        const ta_obj = a_ref.?.typ;
+        const tb_obj = b_ref.?.typ;
+        const ta = ta_obj.named_type;
+        const tb = tb_obj.named_type;
         if (ta.base == tb.base and !namedTypeIsSubOf(ta_obj, tb_obj) and !namedTypeIsSubOf(tb_obj, ta_obj) and namedTypeCommonAncestor(ta_obj, tb_obj) == null) {
             ctx.vs.setRuntimeErr("cannot apply '{s}' to {s} and {s}; convert one side explicitly before applying '{s}'", .{ op, ta.name, tb.name, op });
             return;
         }
     } else if (a_named != b_named) {
-        const named_v = if (a_named) a else b;
+        const named_ref = if (a_named) a_ref.? else b_ref.?;
         const raw_v = if (a_named) b else a;
-        const named_typ = named_v.object.named_value.typ.named_type;
+        const named_typ = named_ref.typ.named_type;
         const raw_name = vmtyp.runtimeTypeName(raw_v);
         ctx.vs.setRuntimeErr("cannot apply '{s}' to {s} and {s}; wrap the {s} with {s}(...) or unwrap the named value with {s}(...)", .{
             op,
@@ -239,12 +240,14 @@ fn numericBinaryOp(ctx: VMContext, a: Value, b: Value, comptime op: []const u8) 
 }
 
 fn checkNamedValueCompatibility(ctx: VMContext, a: Value, b: Value) !void {
-    const a_named = a == .object and a.object.* == .named_value;
-    const b_named = b == .object and b.object.* == .named_value;
+    const a_ref = a.asNamed();
+    const b_ref = b.asNamed();
+    const a_named = a_ref != null;
+    const b_named = b_ref != null;
     if (a_named and b_named) {
-        if (a.object.named_value.typ != b.object.named_value.typ) {
-            const ta = a.object.named_value.typ;
-            const tb = b.object.named_value.typ;
+        const ta = a_ref.?.typ;
+        const tb = b_ref.?.typ;
+        if (ta != tb) {
             // Two anonymous typed collections are compatible when they share the same
             // synthesized name (e.g. both "[]int") — each var decl creates its own
             // type object, so pointer equality would reject them.
@@ -257,9 +260,9 @@ fn checkNamedValueCompatibility(ctx: VMContext, a: Value, b: Value) !void {
             }
         }
     } else if (a_named != b_named) {
-        const named = if (a_named) a else b;
+        const named_ref = if (a_named) a_ref.? else b_ref.?;
         const plain = if (a_named) b else a;
-        const nt = named.object.named_value.typ.named_type;
+        const nt = named_ref.typ.named_type;
         // Anonymous typed arrays/maps compare transparently with plain arrays/maps.
         if (nt.is_anonymous and (nt.base == .array_t or nt.base == .map_t)) return;
         const nt_name = nt.name;
@@ -267,7 +270,7 @@ fn checkNamedValueCompatibility(ctx: VMContext, a: Value, b: Value) !void {
             ctx.vs.setRuntimeErr("cannot compare {s} with null; {s} is non-nullable — use ?{s} to allow null", .{ nt_name, nt_name, nt_name });
         } else {
             ctx.vs.setRuntimeErr("cannot mix {s} and {s}; wrap the {s} with {s}(...) or unwrap with {s}(...)", .{
-                nt_name, vmtyp.runtimeTypeName(plain), vmtyp.runtimeTypeName(plain), nt_name, vmtyp.namedBaseName(named.object.named_value.typ.named_type.base),
+                nt_name, vmtyp.runtimeTypeName(plain), vmtyp.runtimeTypeName(plain), nt_name, vmtyp.namedBaseName(named_ref.typ.named_type.base),
             });
         }
         return error.TypeError;
@@ -283,34 +286,30 @@ fn numericOpTag(a: Value, b: Value) !VTag {
 }
 
 fn decimalScalarPair(dec: Value, scalar: Value) ?struct { d: i64, n: i64, typ: *Object } {
-    if (dec != .object or dec.object.* != .named_value) return null;
-    if (dec.object.named_value.typ.named_type.base != .decimal) return null;
+    const ref = dec.asNamed() orelse return null;
+    if (ref.typ.named_type.base != .decimal) return null;
     if (scalar != .int or scalar.int < std.math.minInt(i64) or scalar.int >= std.math.maxInt(i64)) return null;
     return .{
-        .d = vms.valueAsDecimal(dec.object.named_value.value) catch return null,
+        .d = vms.valueAsDecimal(ref.inner) catch return null,
         .n = scalar.int,
-        .typ = dec.object.named_value.typ,
+        .typ = ref.typ,
     };
 }
 
 fn decimalOpValues(a: Value, b: Value) ?struct { lhs: i64, rhs: i64, typ: *Object } {
-    if (a == .object and a.object.* == .named_value and
-        b == .object and b.object.* == .named_value and
-        a.object.named_value.typ == b.object.named_value.typ and
-        a.object.named_value.typ.named_type.base == .decimal)
-    {
-        return .{
-            .lhs = vms.valueAsDecimal(a.object.named_value.value) catch return null,
-            .rhs = vms.valueAsDecimal(b.object.named_value.value) catch return null,
-            .typ = a.object.named_value.typ,
-        };
-    }
-    return null;
+    const ar = a.asNamed() orelse return null;
+    const br = b.asNamed() orelse return null;
+    if (ar.typ != br.typ or ar.typ.named_type.base != .decimal) return null;
+    return .{
+        .lhs = vms.valueAsDecimal(ar.inner) catch return null,
+        .rhs = vms.valueAsDecimal(br.inner) catch return null,
+        .typ = ar.typ,
+    };
 }
 
 fn pushDecimalResultWithCarrier(ctx: VMContext, typ: *Object, d: i64) !void {
     const wrapped = try vmtyp.coerceNamedTypeResult(typ, .{ .decimal = d });
-    try checkNamedTypePredicate(ctx, typ, wrapped.object.named_value.value);
+    try checkNamedTypePredicate(ctx, typ, wrapped.namedInner() orelse unreachable);
     try ctx.vs.vmPush(wrapped);
 }
 
@@ -412,14 +411,14 @@ fn makeNumeric(tag: VTag, n: f64) Value {
 
 fn wrapValueWithCarrier(ctx: VMContext, a: Value, b: Value, val: Value, op: []const u8) !Value {
     // Fast path: plain scalars carry no named type.
-    if (a != .object and b != .object) return val;
+    if (!a.isNamed() and !b.isNamed()) return val;
     const carrier = namedTypeCarrier(a, b) catch |err| {
         if (err == error.TypeError) setBinaryTypeError(ctx, op, a, b);
         return err;
     };
     if (carrier) |typ| {
         const wrapped = try vmtyp.coerceNamedTypeResult(typ, val);
-        try checkNamedTypePredicate(ctx, typ, wrapped.object.named_value.value);
+        try checkNamedTypePredicate(ctx, typ, wrapped.namedInner() orelse unreachable);
         return wrapped;
     }
     return val;
@@ -448,9 +447,9 @@ fn getShiftArgs(ctx: VMContext, op: []const u8) !struct { a: Value, b: Value, an
 
 fn pushUnaryIntResult(ctx: VMContext, v: Value, result: Value) !void {
     _ = try ctx.vs.vmPop();
-    if (v == .object and v.object.* == .named_value) {
-        const wrapped = try vmtyp.coerceNamedTypeResult(v.object.named_value.typ, result);
-        try checkNamedTypePredicate(ctx, v.object.named_value.typ, wrapped.object.named_value.value);
+    if (v.namedTyp()) |typ| {
+        const wrapped = try vmtyp.coerceNamedTypeResult(typ, result);
+        try checkNamedTypePredicate(ctx, typ, wrapped.namedInner() orelse unreachable);
         try ctx.vs.vmPush(wrapped);
     } else {
         try ctx.vs.vmPush(result);
@@ -679,6 +678,23 @@ fn resolveMapMethod(obj: *Object, mname: []const u8) !Value {
 }
 
 fn resolveMethodReceiver(ctx: VMContext, recv: Value, mname: []const u8) !MethodResolution {
+    if (recv == .named_scalar) {
+        var typ_obj: *Object = recv.named_scalar.typ;
+        while (true) {
+            const nt = switch (typ_obj.*) {
+                .named_type => |nt| nt,
+                else => return error.NotAMethodReceiver,
+            };
+            if (resolveQualifiedReceiverMethod(ctx, nt.qualified_name, mname)) |func| {
+                return .{ .func = func, .pass_recv = true };
+            } else |err| switch (err) {
+                error.UnknownMethod => {
+                    typ_obj = vmtyp.resolveParentType(typ_obj) orelse return error.UnknownMethod;
+                },
+                else => return err,
+            }
+        }
+    }
     if (recv != .object) return error.NotAMethodReceiver;
     switch (recv.object.*) {
         .struct_instance => |inst| return try resolveStructMethod(ctx, inst, mname),
@@ -964,7 +980,7 @@ fn performCall(ctx: VMContext, argc: u8) !void {
             if (argc != 1) return error.ArityMismatch;
             const arg = ctx.vs.stack[ctx.vs.stack_top - 1];
             const out = try vmtyp.constructNamedType(obj, arg);
-            try checkNamedTypePredicateChain(ctx, obj, out.object.named_value.value);
+            try checkNamedTypePredicateChain(ctx, obj, out.namedInner() orelse unreachable);
             try pop2push1(ctx, out);
         },
         .enum_type => |et| {
@@ -1399,12 +1415,11 @@ fn opSetIndex(ctx: VMContext) !void {
     const idx_v = try ctx.vs.vmPop();
     const raw_c = try ctx.vs.vmPop();
     // Unbox named collection; enforce element/key/value type constraints
-    const is_named_c = raw_c == .object and raw_c.object.* == .named_value;
-    const container = if (is_named_c) raw_c.object.named_value.value else raw_c;
-    if (is_named_c) {
-        const nv = raw_c.object.named_value;
-        if (nv.typ.* == .named_type) {
-            const nt = nv.typ.named_type;
+    const named_c_ref = raw_c.asNamed();
+    const container = if (named_c_ref) |ref| ref.inner else raw_c;
+    if (named_c_ref) |ref| {
+        if (ref.typ.* == .named_type) {
+            const nt = ref.typ.named_type;
             if (nt.base == .array_t) {
                 if (nt.elem_spec) |es| {
                     if (!vmtyp.matchesTypeSpec(val, es)) return error.TypeError;
@@ -1448,6 +1463,11 @@ fn opInvokeMethod(ctx: VMContext) !void {
     if (ctx.vs.stack_top < @as(usize, argc) + 1) return error.StackUnderflow;
     const recv_idx = ctx.vs.stack_top - argc - 1;
     const recv = ctx.vs.stack[recv_idx];
+    if (recv == .named_scalar) {
+        const resolved = try resolveMethodReceiver(ctx, recv, mname);
+        try insertReceiverAndCall(ctx, recv_idx, resolved.func, recv, argc);
+        return;
+    }
     if (recv != .object) return error.NotAMethodReceiver;
     switch (recv.object.*) {
         .struct_instance => |inst| {
@@ -1592,12 +1612,11 @@ fn opSetField(ctx: VMContext) !void {
     const name = name_val.string.bytes;
     const val = try ctx.vs.vmPop();
     const raw_c = try ctx.vs.vmPop();
-    const is_named_c = raw_c == .object and raw_c.object.* == .named_value;
-    const container = if (is_named_c) raw_c.object.named_value.value else raw_c;
-    if (is_named_c) {
-        const nv = raw_c.object.named_value;
-        if (nv.typ.* == .named_type) {
-            const nt = nv.typ.named_type;
+    const named_c_ref = raw_c.asNamed();
+    const container = if (named_c_ref) |ref| ref.inner else raw_c;
+    if (named_c_ref) |ref| {
+        if (ref.typ.* == .named_type) {
+            const nt = ref.typ.named_type;
             if (nt.base == .map_t) {
                 if (nt.val_spec) |vs| {
                     if (!vmtyp.matchesTypeSpec(val, vs)) return error.TypeError;
@@ -1652,14 +1671,11 @@ fn opDeferInvokeMethod(ctx: VMContext) !void {
     const recv = ctx.vs.stack[recv_idx];
     var func: Value = undefined;
     var pass_recv: bool = undefined;
-    switch (recv.object.*) {
-        .struct_instance, .map, .map_managed, .map_hashed, .named_value, .enum_value, .variant_value => {
-            const resolved = try resolveMethodReceiver(ctx, recv, mname);
-            func = resolved.func;
-            pass_recv = resolved.pass_recv;
-        },
-        else => return error.NotAMethodReceiver,
-    }
+    if (recv == .named_scalar or recv == .object) {
+        const resolved = try resolveMethodReceiver(ctx, recv, mname);
+        func = resolved.func;
+        pass_recv = resolved.pass_recv;
+    } else return error.NotAMethodReceiver;
     const extra: usize = if (pass_recv) 1 else 0;
     const total: usize = 1 + extra + @as(usize, argc);
     const arr_obj = try vmgc.vmAllocObject();
@@ -2891,7 +2907,7 @@ fn runInner(ctx: VMContext) !void {
                 const nt = &nt_val.object.named_type;
                 if (nt.has_default and nt.predicate != null) {
                     const constructed = try vmtyp.constructNamedType(nt_val.object, nt.default_val);
-                    try checkNamedTypePredicate(ctx, nt_val.object, constructed.object.named_value.value);
+                    try checkNamedTypePredicate(ctx, nt_val.object, constructed.namedInner() orelse unreachable);
                 }
             },
 

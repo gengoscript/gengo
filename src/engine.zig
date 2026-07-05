@@ -532,6 +532,7 @@ fn valueToWire(val: Value) !ValueWire {
             },
             else => return error.UnsupportedWireType,
         },
+        .named_scalar => |ns| return valueToWire(vmod.namedScalarInner(ns)),
     };
 }
 
@@ -968,6 +969,19 @@ export fn engine_mount_dir(handle: i32, name_ptr: PtrInt, name_len: i32, path_pt
     const name = wasmSlice(name_ptr, name_len);
     const path = wasmSlice(path_ptr, path_len);
     fs_state.addMountToState(&engine.fs_state, name, path) catch return -2;
+    return 0;
+}
+
+/// Register a virtual driver as a cap:fs mount ("name" -> driver callbacks).
+/// The driver struct and userdata are stored by value/pointer; the caller must
+/// ensure userdata remains valid for the lifetime of the engine handle.
+/// Returns 0 on success, -1 on invalid handle, -2 on invalid mount.
+export fn engine_mount_driver(handle: i32, name_ptr: PtrInt, name_len: i32, driver_ptr: PtrInt, userdata: ?*anyopaque) i32 {
+    const engine = getEngine(handle) orelse return -1;
+    if (name_len < 0 or driver_ptr == 0) return -2;
+    const name = wasmSlice(name_ptr, name_len);
+    const driver = @as(*const fs_state.FsDriver, @ptrFromInt(@as(usize, @intCast(driver_ptr)))).*;
+    fs_state.addDriverMountToState(&engine.fs_state, name, driver, userdata) catch return -2;
     return 0;
 }
 

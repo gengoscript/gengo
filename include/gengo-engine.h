@@ -479,6 +479,57 @@ int32_t engine_mount_dir(int32_t handle,
                          const char *name, int32_t name_len,
                          const char *path, int32_t path_len);
 
+/*
+ * Virtual filesystem driver callbacks for engine_mount_driver.
+ *
+ * open:   opens a file; flags 0=read, 1=write. Writes *out_fd on success.
+ *         Returns 0 on success, negative on error.
+ * read:   reads up to max_len bytes into buf from fd. Returns bytes read (0=EOF),
+ *         negative on error.
+ * write:  writes len bytes from buf to fd. Returns bytes written, negative on error.
+ * close:  closes fd. No return value.
+ * exists: returns >0 if path exists, 0 if not, negative on error.
+ * list:   fills out_buf with consecutive null-terminated file names and returns
+ *         the total bytes written, negative on error. Callers provide 65536 bytes.
+ * unlink: removes a file. Returns 0 on success, negative on error.
+ * mkdir:  creates a directory. Returns 0 on success, negative on error.
+ *
+ * Any callback may be NULL; calling the corresponding cap:fs operation on a
+ * mount with a NULL callback returns a CapabilityError to the script.
+ *
+ * path/path_len: the path component after the mount name (not null-terminated).
+ * userdata: opaque pointer passed through unchanged from engine_mount_driver.
+ */
+typedef struct {
+    int32_t (*open)  (void *userdata, const char *path, int32_t path_len,
+                      int32_t flags, int32_t *out_fd);
+    int32_t (*read)  (void *userdata, int32_t fd, char *buf, int32_t max_len);
+    int32_t (*write) (void *userdata, int32_t fd, const char *buf, int32_t len);
+    void    (*close) (void *userdata, int32_t fd);
+    int32_t (*exists)(void *userdata, const char *path, int32_t path_len);
+    int32_t (*list)  (void *userdata, const char *path, int32_t path_len,
+                      char *out_buf, int32_t out_max_len);
+    int32_t (*unlink) (void *userdata, const char *path, int32_t path_len);
+    int32_t (*mkdir) (void *userdata, const char *path, int32_t path_len);
+} gengo_fs_driver_t;
+
+/*
+ * Mount a virtual driver for use by scripts with the cap:fs capability.
+ * Works on all targets including WASM/WASI where real filesystem mounts
+ * are unavailable.
+ * name:       mount name used in script paths (e.g. "data" matches "data/...").
+ * driver:     pointer to a gengo_fs_driver_t; copied by value at call time.
+ * userdata:   passed unchanged to every driver callback; must remain valid
+ *             for the lifetime of the engine handle.
+ * Returns  0 on success,
+ *         -1 if the handle is invalid,
+ *         -2 if the mount table is full or the name is invalid.
+ */
+int32_t engine_mount_driver(int32_t handle,
+                             const char *name, int32_t name_len,
+                             const gengo_fs_driver_t *driver,
+                             void *userdata);
+
 /* ── Version ──────────────────────────────────────────────────────────────── */
 
 /*

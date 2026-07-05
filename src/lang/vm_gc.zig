@@ -40,6 +40,7 @@ fn markObjectQueue(ctx: VMContext, obj: *Object) void {
 }
 
 fn markValue(ctx: VMContext, v: Value) void {
+    if (v == .named_scalar) { markObjectQueue(ctx, v.named_scalar.typ); return; }
     if (v == .object) markObjectQueue(ctx, v.object);
 }
 

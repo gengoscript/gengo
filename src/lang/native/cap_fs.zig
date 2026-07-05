@@ -20,6 +20,33 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             if (argc != 1) return error.ArityMismatch;
             const path = vms.asStringValue(try vms.vmPeek(0)) catch return error.TypeError;
 
+            const lr = try fs_state.lookup(path);
+            if (lr.mount.kind == .driver) {
+                const drv = &lr.mount.driver;
+                const open_fn = drv.open orelse return error.CapabilityError;
+                const read_fn = drv.read orelse return error.CapabilityError;
+                const close_fn = drv.close orelse return error.CapabilityError;
+                var out_fd: i32 = -1;
+                if (open_fn(lr.mount.userdata, lr.rest.ptr, @intCast(lr.rest.len), 0, &out_fd) < 0)
+                    return error.CapabilityError;
+                defer close_fn(lr.mount.userdata, out_fd);
+                var chunks: std.ArrayList(u8) = .empty;
+                defer chunks.deinit(alloc);
+                var tmp: [4096]u8 = undefined;
+                while (true) {
+                    const n = read_fn(lr.mount.userdata, out_fd, &tmp, @intCast(tmp.len));
+                    if (n < 0) return error.CapabilityError;
+                    if (n == 0) break;
+                    chunks.appendSlice(alloc, tmp[0..@intCast(n)]) catch return error.CapabilityError;
+                }
+                const bytes = chunks.toOwnedSlice(alloc) catch return error.CapabilityError;
+                defer alloc.free(bytes);
+                const out = try vmgc.makeDynString(bytes);
+                vms.vmPopArgs(argc);
+                try vms.vmPush(out);
+                return;
+            }
+
             if (comptime builtin.os.tag == .wasi) {
                 vms.vmPopArgs(argc);
                 return error.CapabilityNotAvailable;
@@ -59,6 +86,15 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
         .cap_fs_exists => {
             if (argc != 1) return error.ArityMismatch;
             const path = vms.asStringValue(try vms.vmPeek(0)) catch return error.TypeError;
+
+            const lr = try fs_state.lookup(path);
+            if (lr.mount.kind == .driver) {
+                const exists_fn = lr.mount.driver.exists orelse return error.CapabilityError;
+                const rc = exists_fn(lr.mount.userdata, lr.rest.ptr, @intCast(lr.rest.len));
+                vms.vmPopArgs(argc);
+                try vms.vmPush(.{ .boolean = rc > 0 });
+                return;
+            }
 
             if (comptime builtin.os.tag == .wasi) {
                 vms.vmPopArgs(argc);
@@ -105,6 +141,22 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                 else => return error.TypeError,
             };
 
+            const lr = try fs_state.lookup(path);
+            if (lr.mount.kind == .driver) {
+                const open_fn = lr.mount.driver.open orelse return error.CapabilityError;
+                const write_fn = lr.mount.driver.write orelse return error.CapabilityError;
+                const close_fn = lr.mount.driver.close orelse return error.CapabilityError;
+                var out_fd: i32 = -1;
+                if (open_fn(lr.mount.userdata, lr.rest.ptr, @intCast(lr.rest.len), 1, &out_fd) < 0)
+                    return error.CapabilityError;
+                defer close_fn(lr.mount.userdata, out_fd);
+                if (write_fn(lr.mount.userdata, out_fd, content.ptr, @intCast(content.len)) < 0)
+                    return error.CapabilityError;
+                vms.vmPopArgs(argc);
+                try vms.vmPush(.{ .null = {} });
+                return;
+            }
+
             if (comptime builtin.os.tag == .wasi) {
                 vms.vmPopArgs(argc);
                 return error.CapabilityNotAvailable;
@@ -124,6 +176,44 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
         .cap_fs_list => {
             if (argc != 1) return error.ArityMismatch;
             const path = vms.asStringValue(try vms.vmPeek(0)) catch return error.TypeError;
+
+            const lr = try fs_state.lookup(path);
+            if (lr.mount.kind == .driver) {
+                const list_fn = lr.mount.driver.list orelse return error.CapabilityError;
+                const list_buf = alloc.alloc(u8, 65536) catch return error.CapabilityError;
+                defer alloc.free(list_buf);
+                const rc = list_fn(lr.mount.userdata, lr.rest.ptr, @intCast(lr.rest.len), list_buf.ptr, @intCast(list_buf.len));
+                if (rc < 0) return error.CapabilityError;
+                const list_data = list_buf[0..@intCast(rc)];
+                // Names are packed as consecutive null-terminated strings.
+                var name_count: usize = 0;
+                var pos: usize = 0;
+                while (pos < list_data.len) {
+                    const end = std.mem.indexOfScalarPos(u8, list_data, pos, 0) orelse break;
+                    if (end == pos) break;
+                    name_count += 1;
+                    pos = end + 1;
+                }
+                const result = try vmgc.vmAllocManagedSlice(Value, name_count);
+                const arr_obj = try vmgc.vmAllocObject();
+                arr_obj.* = .{ .array_managed = result[0..0] };
+                try vms.pushTempRoot(.{ .object = arr_obj });
+                defer vms.popTempRoot();
+                var idx: usize = 0;
+                pos = 0;
+                while (pos < list_data.len and idx < name_count) {
+                    const end = std.mem.indexOfScalarPos(u8, list_data, pos, 0) orelse break;
+                    if (end == pos) break;
+                    result[idx] = try vmgc.makeDynString(list_data[pos..end]);
+                    arr_obj.* = .{ .array_managed = result[0 .. idx + 1] };
+                    idx += 1;
+                    pos = end + 1;
+                }
+                arr_obj.* = .{ .array_managed = result };
+                vms.vmPopArgs(argc);
+                try vms.vmPush(.{ .object = arr_obj });
+                return;
+            }
 
             if (comptime builtin.os.tag == .wasi) {
                 vms.vmPopArgs(argc);
@@ -167,6 +257,16 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             if (argc != 1) return error.ArityMismatch;
             const path = vms.asStringValue(try vms.vmPeek(0)) catch return error.TypeError;
 
+            const lr = try fs_state.lookup(path);
+            if (lr.mount.kind == .driver) {
+                const delete_fn = lr.mount.driver.unlink orelse return error.CapabilityError;
+                if (delete_fn(lr.mount.userdata, lr.rest.ptr, @intCast(lr.rest.len)) < 0)
+                    return error.CapabilityError;
+                vms.vmPopArgs(argc);
+                try vms.vmPush(.{ .null = {} });
+                return;
+            }
+
             if (comptime builtin.os.tag == .wasi) {
                 vms.vmPopArgs(argc);
                 return error.CapabilityNotAvailable;
@@ -184,6 +284,16 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
         .cap_fs_mkdir => {
             if (argc != 1) return error.ArityMismatch;
             const path = vms.asStringValue(try vms.vmPeek(0)) catch return error.TypeError;
+
+            const lr = try fs_state.lookup(path);
+            if (lr.mount.kind == .driver) {
+                const mkdir_fn = lr.mount.driver.mkdir orelse return error.CapabilityError;
+                if (mkdir_fn(lr.mount.userdata, lr.rest.ptr, @intCast(lr.rest.len)) < 0)
+                    return error.CapabilityError;
+                vms.vmPopArgs(argc);
+                try vms.vmPush(.{ .null = {} });
+                return;
+            }
 
             if (comptime builtin.os.tag == .wasi) {
                 vms.vmPopArgs(argc);

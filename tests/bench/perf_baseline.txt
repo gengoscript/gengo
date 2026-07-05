@@ -1,4 +1,4 @@
-001_compute_stress total_ops=847972 gc_runs=73 alloc_objects=21152 string_concat_bytes=0
+001_compute_stress total_ops=847972 gc_runs=74 alloc_objects=21152 string_concat_bytes=0
 002_tiny_safe_math total_ops=2600 gc_runs=0 alloc_objects=120 string_concat_bytes=0
 003_fib_recursive total_ops=10255930 gc_runs=0 alloc_objects=35 string_concat_bytes=0
 004_fib_tail_recursive total_ops=323 gc_runs=0 alloc_objects=35 string_concat_bytes=0
@@ -13,5 +13,5 @@
 011_map_lookup_heavy total_ops=4400054 gc_runs=0 alloc_objects=35 string_concat_bytes=0
 012_std_namespace_access total_ops=1800020 gc_runs=0 alloc_objects=34 string_concat_bytes=0
 013_variant_dispatch total_ops=16200025 gc_runs=2041 alloc_objects=600035 string_concat_bytes=0
-014_named_type_range total_ops=5600024 gc_runs=1370 alloc_objects=400034 string_concat_bytes=0
+014_named_type_range total_ops=5600024 gc_runs=0 alloc_objects=34 string_concat_bytes=0
 015_nested_struct_methods total_ops=4500055 gc_runs=658 alloc_objects=200041 string_concat_bytes=0

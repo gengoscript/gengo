@@ -207,6 +207,7 @@ pub fn nativeConvToBool(v: Value) !Value {
         .null => false,
         // A heap-backed string must convert like a literal one; named values
         // convert through their underlying value.
+        .named_scalar => |ns| (try nativeConvToBool(vmod.namedScalarInner(ns))).boolean,
         .object => |obj| switch (obj.*) {
             .dyn_string => |s| s.len != 0,
             .string_view => |sv| sv.bytes.len != 0,
@@ -247,6 +248,7 @@ pub fn nativeConvToString(v: Value) !Value {
         },
         .null => vmgc.makeDynString("null"),
         .error_value => |e| vmgc.makeDynString(e.bytes),
+        .named_scalar => |ns| nativeConvToString(vmod.namedScalarInner(ns)),
     };
 }
 
@@ -260,6 +262,17 @@ pub fn nativeTypeNameValue(v: Value) !Value {
         .string => .{ .string = staticSS("string") },
         .error_value => .{ .string = staticSS("error") },
         .null => .{ .string = staticSS("null") },
+        .named_scalar => |ns| blk: {
+            const root_nt = rootNamedType(ns.typ).named_type;
+            if (root_nt.is_anonymous) {
+                break :blk switch (root_nt.base) {
+                    .array_t => .{ .string = staticSS("array") },
+                    .map_t => .{ .string = staticSS("map") },
+                    else => .{ .string = try chunk.internStr(root_nt.name) },
+                };
+            }
+            break :blk .{ .string = try chunk.internStr(root_nt.name) };
+        },
         .object => |obj| switch (obj.*) {
             .dyn_string, .string_view => .{ .string = staticSS("string") },
             .array, .array_managed, .array_view, .array_capacity => .{ .string = staticSS("array") },
@@ -299,7 +312,7 @@ pub fn nativeIsInt(v: Value) Value {
     return .{ .boolean = switch (v) {
         .int => true,
         .float => |n| isIntegralNumber(n),
-        .object => isNamedBase(v, .int),
+        .object, .named_scalar => isNamedBase(v, .int),
         else => false,
     } };
 }
@@ -308,7 +321,7 @@ pub fn nativeIsFloat(v: Value) Value {
     return .{ .boolean = switch (v) {
         .int => false,
         .float => |n| !isIntegralNumber(n),
-        .object => isNamedBase(v, .float),
+        .object, .named_scalar => isNamedBase(v, .float),
         else => false,
     } };
 }
@@ -344,6 +357,7 @@ fn rootNamedType(typ_obj: *Object) *Object {
 }
 
 fn isNamedBase(v: Value, base: @import("../value.zig").NamedTypeBase) bool {
+    if (v == .named_scalar) return rootNamedType(v.named_scalar.typ).named_type.base == base;
     if (!(v == .object and v.object.* == .named_value)) return false;
     return rootNamedType(v.object.named_value.typ).named_type.base == base;
 }
@@ -517,6 +531,7 @@ fn deepEqualValue(a: Value, b: Value, visits: []DeepEqVisit, visit_len: *usize) 
         .error_value => |x| common.streq(x.bytes, b.error_value.bytes),
         .null => true,
         .object => unreachable,
+        .named_scalar => |x| x.typ == b.named_scalar.typ and x.bits == b.named_scalar.bits,
     };
 }
 
