@@ -3,6 +3,21 @@ const vms = @import("vm_state.zig");
 const vmgc = @import("vm_gc.zig");
 const Value = @import("value.zig").Value;
 const Object = @import("value.zig").Object;
+const StringSlice = @import("value.zig").StringSlice;
+
+// Comptime-built pool of the 128 single-ASCII-byte strings (bytes 0x00–0x7F).
+// stringIndex / stringSlice return Value.string = &ascii_ss[b] for ASCII results:
+// no GC Object allocation, no byte copy.
+const ascii_bytes: [128]u8 = blk: {
+    var b: [128]u8 = undefined;
+    for (0..128) |i| b[i] = @intCast(i);
+    break :blk b;
+};
+const ascii_ss: [128]StringSlice = blk: {
+    var s: [128]StringSlice = undefined;
+    for (0..128) |i| s[i] = .{ .bytes = ascii_bytes[i .. i + 1] };
+    break :blk s;
+};
 
 pub fn utf8NextRuneByteLen(s: []const u8, byte_idx: usize) !usize {
     if (byte_idx >= s.len) return error.IndexOutOfBounds;
@@ -97,19 +112,26 @@ pub fn stringIndex(container: Value, idx_v: Value) !Value {
         .string => |s| {
             const start = try utf8ByteOffsetForRuneIndexCached(s.bytes, ridx);
             const w = try utf8NextRuneByteLen(s.bytes, start);
-            return vmgc.makeDynString(s.bytes[start .. start + w]);
+            const b0 = s.bytes[start];
+            if (w == 1 and b0 < 128) return .{ .string = &ascii_ss[b0] };
+            // Non-ASCII: borrow a view into the immortal source bytes (null source = no GC parent).
+            return vmgc.makeStringView(s.bytes[start .. start + w], null);
         },
         .object => |obj| switch (obj.*) {
             .dyn_string => {
                 const bytes = obj.dyn_string;
                 const start = try utf8ByteOffsetForRuneIndexCached(bytes, ridx);
                 const w = try utf8NextRuneByteLen(bytes, start);
+                const b0 = bytes[start];
+                if (w == 1 and b0 < 128) return .{ .string = &ascii_ss[b0] };
                 return vmgc.makeStringView(bytes[start .. start + w], obj);
             },
             .string_view => {
                 const sv = obj.string_view;
                 const start = try utf8ByteOffsetForRuneIndexCached(sv.bytes, ridx);
                 const w = try utf8NextRuneByteLen(sv.bytes, start);
+                const b0 = sv.bytes[start];
+                if (w == 1 and b0 < 128) return .{ .string = &ascii_ss[b0] };
                 return vmgc.makeStringView(sv.bytes[start .. start + w], sv.source);
             },
             else => return error.TypeError,
@@ -122,7 +144,10 @@ pub fn stringSlice(container: Value, has_start: bool, start_v: Value, has_end: b
     switch (container) {
         .string => |s| {
             const r = try stringSliceRange(s.bytes, has_start, start_v, has_end, end_v);
-            return vmgc.makeDynString(s.bytes[r.start_b..r.end_b]);
+            const sub = s.bytes[r.start_b..r.end_b];
+            if (sub.len == 1 and sub[0] < 128) return .{ .string = &ascii_ss[sub[0]] };
+            // Bytes are immortal (static string); borrow a view with no GC parent.
+            return vmgc.makeStringView(sub, null);
         },
         .object => |obj| switch (obj.*) {
             .dyn_string => {

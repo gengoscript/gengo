@@ -113,7 +113,7 @@ fn drainMarkQueue(ctx: VMContext) void {
                 if (et.parent) |p| markObjectQueue(ctx, p);
             },
             .string_view => |sv| {
-                if (ctx.hs.isObjectLive(sv.source)) markObjectQueue(ctx, sv.source);
+                if (sv.source) |src| if (ctx.hs.isObjectLive(src)) markObjectQueue(ctx, src);
             },
             // No GC-traced children; backing bytes are freed by the sweep.
             .dyn_string, .function, .native_function, .host_module_function, .struct_type, .interface_type, .string_builder, .bigint => {},
@@ -137,10 +137,10 @@ fn gcCheckIntegrityPostSweep(ctx: VMContext) void {
                 }
             },
             .string_view => |sv| {
-                if (!ctx.hs.isObjectLive(sv.source)) {
+                if (sv.source) |src| if (!ctx.hs.isObjectLive(src)) {
                     std.debug.print("GC INTEGRITY: string_view.source (obj {d}) is dead after sweep\n", .{i});
                     vm_integrity.fatal(error.GCInvariantFailure);
-                }
+                };
             },
             else => {},
         }
@@ -358,7 +358,7 @@ pub fn concatDynString(a: []const u8, b: []const u8) !Value {
     return .{ .object = obj };
 }
 
-pub fn makeStringView(bytes: []const u8, source: *Object) !Value {
+pub fn makeStringView(bytes: []const u8, source: ?*Object) !Value {
     const obj = try vmAllocObject();
     obj.* = .{ .string_view = .{ .bytes = bytes, .source = source } };
     return .{ .object = obj };
