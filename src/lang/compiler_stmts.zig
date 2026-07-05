@@ -1445,24 +1445,44 @@ pub fn switchStmt(c: anytype) anyerror!void {
                 end_count += 1;
                 try c.cs.patchJump(next_case);
             } else {
-                // Regular value case: dup switch-val, compare, jif_pop to next case.
-                // If matched (no jump), pop the switch-val before running the body so
-                // the stack is balanced on the jump-to-end path.
-                try c.cs.emitOp(.dup, c.prev.line);
-                if (is_type_switch) {
-                    try c.typeNameLiteral();
-                } else {
-                    try c.expr();
+                // Regular value case: supports a comma-separated list of values.
+                // For each value except the last:
+                //   dup; val; eq; jif_pop → try_next; jump → body_start
+                // For the last value:
+                //   dup; val; eq; jif_pop → next_case; fall through to body_start
+                const MaxCaseVals = 32;
+                var body_jumps: [MaxCaseVals]usize = undefined;
+                var body_jump_count: usize = 0;
+                const case_line = c.prev.line;
+
+                while (true) {
+                    try c.cs.emitOp(.dup, case_line);
+                    if (is_type_switch) {
+                        try c.typeNameLiteral();
+                    } else {
+                        try c.expr();
+                    }
+                    try c.cs.emitBinOpFused(.eq, case_line);
+
+                    if (c.match(.comma)) {
+                        const try_next = try c.cs.emitJump(.jif_pop, case_line);
+                        if (body_jump_count >= MaxCaseVals) { c.setErr("too many values in case (max {d})", .{MaxCaseVals}); return error.TooManySwitchCases; }
+                        body_jumps[body_jump_count] = try c.cs.emitJump(.jump, case_line);
+                        body_jump_count += 1;
+                        try c.cs.patchJump(try_next);
+                    } else {
+                        const next_case = try c.cs.emitJump(.jif_pop, case_line);
+                        for (body_jumps[0..body_jump_count]) |bj| try c.cs.patchJump(bj);
+                        try c.cs.emitOp(.pop, case_line);
+                        try c.consume(.lbrace);
+                        try block(c, );
+                        if (end_count >= MaxSwitchJumps) { c.setErr("too many switch cases (max {d})", .{MaxSwitchJumps}); return error.TooManySwitchCases; }
+                        end_jumps[end_count] = try c.cs.emitJump(.jump, c.prev.line);
+                        end_count += 1;
+                        try c.cs.patchJump(next_case);
+                        break;
+                    }
                 }
-                try c.cs.emitBinOpFused(.eq, c.prev.line);
-                const next_case = try c.cs.emitJump(.jif_pop, c.prev.line);
-                try c.cs.emitOp(.pop, c.prev.line); // consume the switch value
-                try c.consume(.lbrace);
-                try block(c, );
-                if (end_count >= MaxSwitchJumps) { c.setErr("too many switch cases (max {d})", .{MaxSwitchJumps}); return error.TooManySwitchCases; }
-                end_jumps[end_count] = try c.cs.emitJump(.jump, c.prev.line);
-                end_count += 1;
-                try c.cs.patchJump(next_case);
             }
             continue;
         }
