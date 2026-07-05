@@ -29,6 +29,29 @@ const NamedTypeBase = @import("../lang/value.zig").NamedTypeBase;
 const TypeCheck = ct.TypeCheck;
 const PrimType = ct.PrimType;
 
+const MaxReplSyms = MaxStructTypes + MaxInterfaceTypes + MaxNamedTypes + MaxVariantTypes + MaxGlobalFuncs;
+const ReplSymNameBufSize = MaxNamedTypes * 64 + MaxGlobalFuncs * 64; // 49 152 bytes
+
+const ReplSymKind = enum(u8) { struct_type, interface_type, named_type, variant_type, global_func };
+
+// Compact per-symbol record for REPL persistence.  Fields beyond is_cycle are
+// only meaningful when kind == .named_type; they are zero for other kinds.
+const ReplSymEntry = struct {
+    name_offset: u32 = 0,
+    name_len: u16 = 0,
+    kind: u8 = 0,           // ReplSymKind encoded as u8
+    base_u8: u8 = 0,        // NamedTypeBase as @intFromEnum (named_type only)
+    parent_offset: u32 = 0, // byte offset in repl_sym_name_buf; 0 = no parent
+    parent_len: u16 = 0,    // 0 = no parent
+    enum_member_count: u8 = 0,
+    scale: u8 = 0,
+    enum_member_offset: u32 = 0,
+    has_range: bool = false,
+    is_cycle: bool = false,
+    min: f64 = 0,
+    max: f64 = 0,
+};
+
 fn checkGlobalExists(ctx: *anyopaque, name: []const u8) bool {
     _ = ctx;
     return globals.has(name);
@@ -78,44 +101,17 @@ pub const Runtime = struct {
     repl_const_name_buf_used: usize = 0,
     repl_const_count: usize = 0,
 
-    // REPL named-type persistence (for subtype/typed-var resolution across lines)
-    repl_named_type_count: usize = 0,
-    repl_named_type_name_offsets: [MaxNamedTypes]u32 = undefined,
-    repl_named_type_name_lens: [MaxNamedTypes]u16 = undefined,
-    repl_named_type_bases: [MaxNamedTypes]NamedTypeBase = undefined,
-    repl_named_type_has_ranges: [MaxNamedTypes]bool = undefined,
-    repl_named_type_is_cycles: [MaxNamedTypes]bool = undefined,
-    repl_named_type_scales: [MaxNamedTypes]u8 = undefined,
-    repl_named_type_mins: [MaxNamedTypes]f64 = undefined,
-    repl_named_type_maxs: [MaxNamedTypes]f64 = undefined,
-    repl_named_type_parent_offsets: [MaxNamedTypes]u32 = undefined,
-    repl_named_type_parent_lens: [MaxNamedTypes]u16 = undefined,
-    repl_struct_type_count: usize = 0,
-    repl_struct_type_name_offsets: [MaxStructTypes]u32 = undefined,
-    repl_struct_type_name_lens: [MaxStructTypes]u16 = undefined,
-    repl_interface_type_count: usize = 0,
-    repl_interface_type_name_offsets: [MaxInterfaceTypes]u32 = undefined,
-    repl_interface_type_name_lens: [MaxInterfaceTypes]u16 = undefined,
-    repl_variant_type_count: usize = 0,
-    repl_variant_type_name_offsets: [MaxVariantTypes]u32 = undefined,
-    repl_variant_type_name_lens: [MaxVariantTypes]u16 = undefined,
-    repl_type_name_buf: [MaxNamedTypes * 64]u8 = undefined,
-    repl_type_name_buf_used: usize = 0,
+    // REPL type-and-func persistence (unified, for subtype/method duplicate-detection across lines).
+    repl_sym_count: usize = 0,
+    repl_syms: [MaxReplSyms]ReplSymEntry = undefined,
+    repl_sym_name_buf: [ReplSymNameBufSize]u8 = undefined,
+    repl_sym_name_buf_used: usize = 0,
 
     // REPL enum-member persistence: the parent enum's member list must survive
     // across lines so subtype declarations can validate member subsets and so
     // member access resolves. Members are packed as [len:u8][bytes]... per type.
-    repl_named_type_enum_member_counts: [MaxNamedTypes]u8 = undefined,
-    repl_named_type_enum_member_offsets: [MaxNamedTypes]u32 = undefined,
     repl_enum_member_buf: [MaxNamedTypes * 64]u8 = undefined,
     repl_enum_member_buf_used: usize = 0,
-
-    // #72: global-func persistence — function/method duplicate detection across lines
-    repl_global_func_count: usize = 0,
-    repl_global_func_name_offsets: [MaxGlobalFuncs]u32 = undefined,
-    repl_global_func_name_lens: [MaxGlobalFuncs]u16 = undefined,
-    repl_global_func_name_buf: [MaxGlobalFuncs * 64]u8 = undefined,
-    repl_global_func_name_buf_used: usize = 0,
 
     // #73: typed-global persistence — assignment type enforcement across lines.
     // Tags: 0=prim_int 1=prim_float 2=prim_decimal 3=prim_bool 4=prim_string
@@ -211,14 +207,11 @@ pub const Runtime = struct {
         vm.reset();
         heap.reset();
         chunk.reset();
-        self.repl_named_type_count = 0;
-        self.repl_struct_type_count = 0;
-        self.repl_interface_type_count = 0;
-        self.repl_variant_type_count = 0;
-        self.repl_type_name_buf_used = 0;
+        self.repl_sym_count = 0;
+        self.repl_sym_name_buf_used = 0;
+        self.repl_enum_member_buf_used = 0;
         self.repl_const_count = 0;
         self.repl_const_name_buf_used = 0;
-        self.repl_enum_member_buf_used = 0;
     }
 
     pub fn run(self: *Runtime, src: []const u8) !void {
@@ -508,57 +501,35 @@ pub const Runtime = struct {
         };
     }
 
-    fn restoreReplTypeNames(
-        self: *Runtime,
-        compiler: *Compiler,
-        offsets: []const u32,
-        lens: []const u16,
-        comptime addFn: anytype,
-    ) void {
-        for (offsets, lens) |offset, len| {
-            addFn(&compiler.registry, self.replTypeNameAt(offset, len)) catch {};
-        }
-    }
-
     fn restoreReplCompilerState(self: *Runtime, compiler: *Compiler) void {
-        self.restoreReplNamedTypes(compiler);
-        self.restoreReplTypeNames(compiler, self.repl_struct_type_name_offsets[0..self.repl_struct_type_count], self.repl_struct_type_name_lens[0..self.repl_struct_type_count], @TypeOf(compiler.registry).addStructType);
-        self.restoreReplTypeNames(compiler, self.repl_interface_type_name_offsets[0..self.repl_interface_type_count], self.repl_interface_type_name_lens[0..self.repl_interface_type_count], @TypeOf(compiler.registry).addInterfaceType);
-        self.restoreReplTypeNames(compiler, self.repl_variant_type_name_offsets[0..self.repl_variant_type_count], self.repl_variant_type_name_lens[0..self.repl_variant_type_count], @TypeOf(compiler.registry).addVariantType);
-        self.restoreReplGlobalFuncs(compiler);
+        for (self.repl_syms[0..self.repl_sym_count]) |e| {
+            const name = self.repl_sym_name_buf[e.name_offset..][0..e.name_len];
+            switch (@as(ReplSymKind, @enumFromInt(e.kind))) {
+                .struct_type => compiler.registry.addStructType(name) catch {},
+                .interface_type => compiler.registry.addInterfaceType(name) catch {},
+                .variant_type => compiler.registry.addVariantType(name) catch {},
+                .global_func => compiler.registry.addGlobalFunc(name) catch {},
+                .named_type => {
+                    const parent_name: ?[]const u8 = if (e.parent_len > 0)
+                        self.repl_sym_name_buf[e.parent_offset..][0..e.parent_len]
+                    else
+                        null;
+                    compiler.registry.addNamedType(.{
+                        .name = name,
+                        .base = @enumFromInt(e.base_u8),
+                        .has_range = e.has_range,
+                        .is_cycle = e.is_cycle,
+                        .scale = e.scale,
+                        .min = e.min,
+                        .max = e.max,
+                        .parent_name = parent_name,
+                        .enum_members = self.replEnumMembersAt(&e),
+                    }) catch {};
+                },
+            }
+        }
         self.restoreReplTypedGlobals(compiler);
         self.restoreReplNamespaceProvenance(compiler);
-    }
-
-    fn restoreReplNamedTypes(self: *Runtime, compiler: *Compiler) void {
-        var ti: usize = 0;
-        while (ti < self.repl_named_type_count) : (ti += 1) {
-            const name = self.replTypeNameAt(self.repl_named_type_name_offsets[ti], self.repl_named_type_name_lens[ti]);
-            const parent_name = if (self.repl_named_type_parent_lens[ti] > 0)
-                self.replTypeNameAt(self.repl_named_type_parent_offsets[ti], self.repl_named_type_parent_lens[ti])
-            else
-                null;
-            compiler.registry.addNamedType(.{
-                .name = name,
-                .base = self.repl_named_type_bases[ti],
-                .has_range = self.repl_named_type_has_ranges[ti],
-                .is_cycle = self.repl_named_type_is_cycles[ti],
-                .scale = self.repl_named_type_scales[ti],
-                .min = self.repl_named_type_mins[ti],
-                .max = self.repl_named_type_maxs[ti],
-                .parent_name = parent_name,
-                .enum_members = self.replEnumMembersAt(ti),
-            }) catch {};
-        }
-    }
-
-    fn restoreReplGlobalFuncs(self: *Runtime, compiler: *Compiler) void {
-        var ti: usize = 0;
-        while (ti < self.repl_global_func_count) : (ti += 1) {
-            compiler.registry.addGlobalFunc(
-                self.replGlobalFuncNameAt(self.repl_global_func_name_offsets[ti], self.repl_global_func_name_lens[ti]),
-            ) catch {};
-        }
     }
 
     fn restoreReplTypedGlobals(self: *Runtime, compiler: *Compiler) void {
@@ -589,122 +560,82 @@ pub const Runtime = struct {
         }
     }
 
-    fn persistReplTypeNames(
-        self: *Runtime,
-        compiler: *const Compiler,
-        comptime desc: struct {
-            registry_count: []const u8,
-            registry_entries: []const u8,
-            repl_count: []const u8,
-            repl_offsets: []const u8,
-            repl_lens: []const u8,
-            max: u32,
-            overflow_msg: []const u8,
-        },
-    ) !void {
-        var ti: usize = 0;
-        while (ti < @field(compiler.registry, desc.registry_count)) : (ti += 1) {
-            if (@field(self, desc.repl_count) >= desc.max)
-                return self.setReplOverflowError(desc.overflow_msg);
-            const idx = @field(self, desc.repl_count);
-            const saved_name = self.saveReplTypeName(@field(compiler.registry, desc.registry_entries)[ti].name) catch
-                return self.setReplOverflowError("REPL type name buffer full");
-            @field(self, desc.repl_offsets)[idx] = @intCast(@intFromPtr(saved_name.ptr) - @intFromPtr(&self.repl_type_name_buf));
-            @field(self, desc.repl_lens)[idx] = @intCast(saved_name.len);
-            @field(self, desc.repl_count) += 1;
-        }
-    }
-
     fn persistReplCompilerState(self: *Runtime, compiler: *const Compiler) !void {
-        try self.persistReplTypes(compiler);
-        self.persistReplGlobalFuncs(compiler);
+        try self.persistReplSymbols(compiler);
         self.persistReplTypedGlobals(compiler);
         self.persistReplNamespaceProvenance(compiler);
     }
 
-    fn persistReplTypes(self: *Runtime, compiler: *const Compiler) !void {
-        self.repl_named_type_count = 0;
-        self.repl_struct_type_count = 0;
-        self.repl_interface_type_count = 0;
-        self.repl_variant_type_count = 0;
-        self.repl_type_name_buf_used = 0;
+    fn persistReplSymbols(self: *Runtime, compiler: *const Compiler) !void {
+        self.repl_sym_count = 0;
+        self.repl_sym_name_buf_used = 0;
         self.repl_enum_member_buf_used = 0;
-        try self.persistReplNamedTypes(compiler);
-        try self.persistReplTypeNames(compiler, .{
-            .registry_count = "struct_type_count",
-            .registry_entries = "struct_types",
-            .repl_count = "repl_struct_type_count",
-            .repl_offsets = "repl_struct_type_name_offsets",
-            .repl_lens = "repl_struct_type_name_lens",
-            .max = MaxStructTypes,
-            .overflow_msg = "REPL type table full: too many struct type declarations",
-        });
-        try self.persistReplTypeNames(compiler, .{
-            .registry_count = "interface_type_count",
-            .registry_entries = "interface_types",
-            .repl_count = "repl_interface_type_count",
-            .repl_offsets = "repl_interface_type_name_offsets",
-            .repl_lens = "repl_interface_type_name_lens",
-            .max = MaxInterfaceTypes,
-            .overflow_msg = "REPL type table full: too many interface type declarations",
-        });
-        try self.persistReplTypeNames(compiler, .{
-            .registry_count = "variant_type_count",
-            .registry_entries = "variant_types",
-            .repl_count = "repl_variant_type_count",
-            .repl_offsets = "repl_variant_type_name_offsets",
-            .repl_lens = "repl_variant_type_name_lens",
-            .max = MaxVariantTypes,
-            .overflow_msg = "REPL type table full: too many variant type declarations",
-        });
-    }
 
-    fn persistReplNamedTypes(self: *Runtime, compiler: *const Compiler) !void {
+        // Named types (most complex entries: carry full NamedTypeInfo fields)
         var ti: usize = 0;
         while (ti < compiler.registry.named_type_count) : (ti += 1) {
             const ni = compiler.registry.named_types[ti];
-            if (self.repl_named_type_count >= MaxNamedTypes)
-                return self.setReplOverflowError("REPL type table full: too many named type declarations");
-            const idx = self.repl_named_type_count;
-            self.repl_named_type_enum_member_counts[idx] = 0;
-            const saved_name = self.saveReplTypeName(ni.name) catch
-                return self.setReplOverflowError("REPL type name buffer full");
-            self.repl_named_type_name_offsets[idx] = @intCast(@intFromPtr(saved_name.ptr) - @intFromPtr(&self.repl_type_name_buf));
-            self.repl_named_type_name_lens[idx] = @intCast(saved_name.len);
-            self.repl_named_type_bases[idx] = ni.base;
-            self.repl_named_type_has_ranges[idx] = ni.has_range;
-            self.repl_named_type_is_cycles[idx] = ni.is_cycle;
-            self.repl_named_type_scales[idx] = ni.scale;
-            self.repl_named_type_mins[idx] = ni.min;
-            self.repl_named_type_maxs[idx] = ni.max;
+            if (self.repl_sym_count >= MaxReplSyms)
+                return self.setReplOverflowError("REPL symbol table full: too many type declarations");
+            var e: ReplSymEntry = .{ .kind = @intFromEnum(ReplSymKind.named_type) };
+            const saved_name = self.saveReplSymName(ni.name) catch
+                return self.setReplOverflowError("REPL symbol name buffer full");
+            e.name_offset = @intCast(@intFromPtr(saved_name.ptr) - @intFromPtr(&self.repl_sym_name_buf));
+            e.name_len = @intCast(saved_name.len);
+            e.base_u8 = @intCast(@intFromEnum(ni.base));
+            e.has_range = ni.has_range;
+            e.is_cycle = ni.is_cycle;
+            e.scale = ni.scale;
+            e.min = ni.min;
+            e.max = ni.max;
             if (ni.parent_name) |pn| {
-                const saved_pn = self.saveReplTypeName(pn) catch
-                    return self.setReplOverflowError("REPL type name buffer full");
-                self.repl_named_type_parent_offsets[idx] = @intCast(@intFromPtr(saved_pn.ptr) - @intFromPtr(&self.repl_type_name_buf));
-                self.repl_named_type_parent_lens[idx] = @intCast(saved_pn.len);
-            } else {
-                self.repl_named_type_parent_lens[idx] = 0;
+                const saved_pn = self.saveReplSymName(pn) catch
+                    return self.setReplOverflowError("REPL symbol name buffer full");
+                e.parent_offset = @intCast(@intFromPtr(saved_pn.ptr) - @intFromPtr(&self.repl_sym_name_buf));
+                e.parent_len = @intCast(saved_pn.len);
             }
-            if (ni.enum_members) |members| self.saveReplEnumMembers(idx, members);
-            self.repl_named_type_count += 1;
+            if (ni.enum_members) |members| self.saveReplEnumMembersToEntry(&e, members);
+            self.repl_syms[self.repl_sym_count] = e;
+            self.repl_sym_count += 1;
+        }
+
+        // Struct / interface / variant types (name only)
+        ti = 0;
+        while (ti < compiler.registry.struct_type_count) : (ti += 1) {
+            if (self.repl_sym_count >= MaxReplSyms)
+                return self.setReplOverflowError("REPL symbol table full: too many struct type declarations");
+            try self.appendReplSimpleSym(compiler.registry.struct_types[ti].name, .struct_type);
+        }
+        ti = 0;
+        while (ti < compiler.registry.interface_type_count) : (ti += 1) {
+            if (self.repl_sym_count >= MaxReplSyms)
+                return self.setReplOverflowError("REPL symbol table full: too many interface type declarations");
+            try self.appendReplSimpleSym(compiler.registry.interface_types[ti].name, .interface_type);
+        }
+        ti = 0;
+        while (ti < compiler.registry.variant_type_count) : (ti += 1) {
+            if (self.repl_sym_count >= MaxReplSyms)
+                return self.setReplOverflowError("REPL symbol table full: too many variant type declarations");
+            try self.appendReplSimpleSym(compiler.registry.variant_types[ti].name, .variant_type);
+        }
+
+        // Global funcs (name only; overflow is graceful — duplicate detection degrades)
+        var fi: usize = 0;
+        while (fi < compiler.registry.global_func_count) : (fi += 1) {
+            if (self.repl_sym_count >= MaxReplSyms) break;
+            self.appendReplSimpleSym(compiler.registry.global_funcs[fi].name, .global_func) catch break;
         }
     }
 
-    fn persistReplGlobalFuncs(self: *Runtime, compiler: *const Compiler) void {
-        self.repl_global_func_count = 0;
-        self.repl_global_func_name_buf_used = 0;
-        var fi: usize = 0;
-        while (fi < compiler.registry.global_func_count) : (fi += 1) {
-            const fn_name = compiler.registry.global_funcs[fi].name;
-            if (self.repl_global_func_count >= MaxGlobalFuncs or
-                self.repl_global_func_name_buf_used + fn_name.len > self.repl_global_func_name_buf.len) break;
-            const start = self.repl_global_func_name_buf_used;
-            std.mem.copyForwards(u8, self.repl_global_func_name_buf[start .. start + fn_name.len], fn_name);
-            self.repl_global_func_name_offsets[self.repl_global_func_count] = @intCast(start);
-            self.repl_global_func_name_lens[self.repl_global_func_count] = @intCast(fn_name.len);
-            self.repl_global_func_name_buf_used += fn_name.len;
-            self.repl_global_func_count += 1;
-        }
+    fn appendReplSimpleSym(self: *Runtime, name: []const u8, kind: ReplSymKind) !void {
+        const saved = self.saveReplSymName(name) catch
+            return self.setReplOverflowError("REPL symbol name buffer full");
+        self.repl_syms[self.repl_sym_count] = .{
+            .name_offset = @intCast(@intFromPtr(saved.ptr) - @intFromPtr(&self.repl_sym_name_buf)),
+            .name_len = @intCast(saved.len),
+            .kind = @intFromEnum(kind),
+        };
+        self.repl_sym_count += 1;
     }
 
     fn persistReplTypedGlobals(self: *Runtime, compiler: *const Compiler) void {
@@ -823,14 +754,6 @@ pub const Runtime = struct {
         return error.OutOfMemory;
     }
 
-    fn replTypeNameAt(self: *Runtime, offset: u32, len: u16) []const u8 {
-        return self.repl_type_name_buf[offset..][0..len];
-    }
-
-    fn replGlobalFuncNameAt(self: *Runtime, offset: u32, len: u16) []const u8 {
-        return self.repl_global_func_name_buf[offset..][0..len];
-    }
-
     fn replTypedGlobalNameAt(self: *Runtime, offset: u32, len: u16) []const u8 {
         return self.repl_typed_global_name_buf[offset..][0..len];
     }
@@ -878,24 +801,23 @@ pub const Runtime = struct {
         };
     }
 
-    fn saveReplTypeName(self: *Runtime, name: []const u8) ![]const u8 {
-        // Always reserve and copy, even when the name already lives in this
-        // buffer: persist compacts from offset 0, and an unreserved reused
-        // slice gets clobbered by the next new name written over its bytes.
-        // Persist order preserves relative order, so an in-buffer source is
-        // always at or ahead of its destination — copyForwards handles the
-        // overlap.
-        if (self.repl_type_name_buf_used + name.len > self.repl_type_name_buf.len) return error.OutOfMemory;
-        const start = self.repl_type_name_buf_used;
-        std.mem.copyForwards(u8, self.repl_type_name_buf[start .. start + name.len], name);
-        self.repl_type_name_buf_used += name.len;
-        return self.repl_type_name_buf[start .. start + name.len];
+    // Always reserve and copy even when the name already lives in this buffer:
+    // persist compacts from offset 0, and an unreserved reused slice gets
+    // clobbered by the next name written over its bytes.  Persist order
+    // preserves relative order, so an in-buffer source is always at or ahead
+    // of its destination — copyForwards handles the overlap correctly.
+    fn saveReplSymName(self: *Runtime, name: []const u8) ![]const u8 {
+        if (self.repl_sym_name_buf_used + name.len > self.repl_sym_name_buf.len) return error.OutOfMemory;
+        const start = self.repl_sym_name_buf_used;
+        std.mem.copyForwards(u8, self.repl_sym_name_buf[start .. start + name.len], name);
+        self.repl_sym_name_buf_used += name.len;
+        return self.repl_sym_name_buf[start .. start + name.len];
     }
 
-    // Pack an enum type's member names for type `idx` as [len:u8][bytes]... into
-    // repl_enum_member_buf. On overflow the type is left with zero persisted
-    // members (graceful: validation simply can't run for that type next line).
-    fn saveReplEnumMembers(self: *Runtime, idx: usize, members: []const []const u8) void {
+    // Pack an enum type's member names as [len:u8][bytes]... into repl_enum_member_buf
+    // and record the offset/count in the entry.  On overflow the entry retains
+    // zero members (graceful: validation simply can't run for that type next line).
+    fn saveReplEnumMembersToEntry(self: *Runtime, e: *ReplSymEntry, members: []const []const u8) void {
         if (members.len == 0 or members.len > 255) return;
         var needed: usize = 0;
         for (members) |m| {
@@ -912,18 +834,18 @@ pub const Runtime = struct {
             pos += m.len;
         }
         self.repl_enum_member_buf_used = pos;
-        self.repl_named_type_enum_member_offsets[idx] = @intCast(start);
-        self.repl_named_type_enum_member_counts[idx] = @intCast(members.len);
+        e.enum_member_offset = @intCast(start);
+        e.enum_member_count = @intCast(members.len);
     }
 
-    // Rebuild the []const []const u8 member slice for persisted type `idx`.
+    // Rebuild the []const []const u8 member slice for the given entry.
     // The outer array is bump-allocated on the (REPL-persistent) heap; inner
     // slices point back into repl_enum_member_buf.
-    fn replEnumMembersAt(self: *Runtime, idx: usize) ?[]const []const u8 {
-        const count = self.repl_named_type_enum_member_counts[idx];
+    fn replEnumMembersAt(self: *Runtime, e: *const ReplSymEntry) ?[]const []const u8 {
+        const count = e.enum_member_count;
         if (count == 0) return null;
         const out = heap.bump([]const u8, count) orelse return null;
-        var pos: usize = self.repl_named_type_enum_member_offsets[idx];
+        var pos: usize = e.enum_member_offset;
         var i: usize = 0;
         while (i < count) : (i += 1) {
             const len = self.repl_enum_member_buf[pos];
