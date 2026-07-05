@@ -1435,17 +1435,11 @@ test {
 // After the fix, const_add string concatenation must NOT produce a .string
 // view into the fmt_scratch buffer; it should always allocate a dyn_string.
 // This test compiles a chain and verifies the result is a GC object.
-test "const_add string chain produces dyn_string, not str_acc view" {
+test "string literal chain folds to a single compile-time constant" {
     var rt = try setup();
     defer rt.deinit();
-    try compile(&rt,
-        \\func f() string {
-        \\    return "a" + "b" + "c"
-        \\}
-    );
-    // The constant pool should contain the string literals "a", "b", "c".
-    // After the fix, the result is a dyn_string object, not a .string view.
-    // We verify by running the function and checking the result type.
+    // "a"+"b"+"c" folds at compile time: the function returns Value.string (immortal),
+    // not a dyn_string object allocated at runtime.
     try rt.run(
         \\func f() string {
         \\    return "a" + "b" + "c"
@@ -1453,7 +1447,6 @@ test "const_add string chain produces dyn_string, not str_acc view" {
     );
 
     const v = try rt.callGlobal("f", &[_]Value{});
-    try std.testing.expect(v == .object);
-    try std.testing.expect(v.object.* == .dyn_string);
-    try std.testing.expectEqualStrings("abc", v.object.dyn_string);
+    try std.testing.expect(v == .string);
+    try std.testing.expectEqualStrings("abc", v.string.bytes);
 }
