@@ -151,8 +151,8 @@ pub const BigIntObj = struct {
 };
 
 pub const StringViewObj = struct {
-    bytes: []const u8,  // view into the source dyn_string's backing buffer
-    source: *Object,    // keeps the dyn_string alive so its backing buffer is not freed
+    bytes: []const u8, // view into a dyn_string's backing buffer, or immortal bytes when source=null
+    source: ?*Object,  // keeps the parent dyn_string alive; null when bytes are immortal
 };
 
 pub const ArrayViewObj = struct {
