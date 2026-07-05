@@ -1,0 +1,40 @@
+std := import("std")
+
+// Multi-value case: integers
+x := 2
+switch x {
+  case 1, 2, 3 { std.io.println("low") }
+  case 4, 5, 6 { std.io.println("mid") }
+  default       { std.io.println("high") }
+}
+
+// Multi-value case: strings
+day := "Sat"
+switch day {
+  case "Sat", "Sun" { std.io.println("weekend") }
+  default           { std.io.println("weekday") }
+}
+
+// Single-value cases alongside multi-value
+n := 0
+switch n {
+  case 0        { std.io.println("zero") }
+  case -1, 1    { std.io.println("one") }
+  default       { std.io.println("other") }
+}
+
+// Last value in list matches
+m := 6
+switch m {
+  case 1, 2, 3 { std.io.println("low") }
+  case 4, 5, 6 { std.io.println("mid") }
+  default       { std.io.println("high") }
+}
+
+// No match falls through to default
+z := 99
+switch z {
+  case 1, 2    { std.io.println("small") }
+  case 10, 20  { std.io.println("medium") }
+  default      { std.io.println("large") }
+}
