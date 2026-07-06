@@ -460,6 +460,19 @@ pub fn build(b: *std.Build) void {
     const cli_fast_step = b.step("cli-fast", "Build native CLI binary (ReleaseFast, for timing benchmarks)");
     cli_fast_step.dependOn(&install_native_fast.step);
 
+    const native_small_mod = b.createModule(.{
+        .root_source_file = b.path("src/main.zig"),
+        .target = native_target,
+        .optimize = .ReleaseSmall,
+        .strip = true,
+    });
+    native_small_mod.addImport("build_options", build_opts_mod);
+    const native_small_exe = b.addExecutable(.{ .name = "gengo", .root_module = native_small_mod });
+    native_small_exe.step.dependOn(&preset.step);
+    const install_native_small = b.addInstallArtifact(native_small_exe, .{});
+    const cli_small_step = b.step("cli-small", "Build native CLI binary (ReleaseSmall + strip, smallest binary)");
+    cli_small_step.dependOn(&install_native_small.step);
+
     // ── Native embed example ──────────────────────────────────────────────────
 
     const gengo_mod = b.createModule(.{
