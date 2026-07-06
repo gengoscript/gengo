@@ -3,6 +3,7 @@ const heap = @import("heap.zig");
 const MapEntry = @import("../lang/value.zig").MapEntry;
 const Object = @import("../lang/value.zig").Object;
 const Value = @import("../lang/value.zig").Value;
+const StructFieldSpec = @import("../lang/value.zig").StructFieldSpec;
 
 const test_heap_size = 1024;
 const test_max_objects = 8;
@@ -418,4 +419,64 @@ test "defrag frees scratch buffer when free block count exceeds stack buffer" {
     }
 
     heap.defragmentFreeLists();
+}
+
+// ── struct_type.fields compaction regression ──────────────────────────────
+//
+// Regression test for: struct_type.fields allocated via heap.bump() overflow
+// (when the compiler region is exhausted) was not tracked by compactManagedHeap().
+// After compaction, new overflow allocations overwrote the old fields address
+// without the struct_type pointer being updated, corrupting field lookups.
+
+test "compactManagedHeap updates struct_type.fields bumped to managed overflow" {
+    // Use a 1 MiB heap to guarantee partitioned mode (class regions + overflow).
+    var h: heap.State = .{};
+    try h.init(1024 * 1024, 64, std.testing.allocator);
+    defer h.deinit();
+    heap.setActive(&h);
+
+    // Fill the entire compiler region so the next bump() falls through to
+    // managed-heap overflow — the scenario that happens after compiling a large
+    // script and then running installStdGlobal().
+    _ = heap.bump(u8, h.compiler_end) orelse return error.TestFailed;
+
+    // Allocate a StructFieldSpec array via bump() — it lands in overflow.
+    const empty_alts = @import("../lang/value.zig").FieldTypeSpec{ .alts = &.{} };
+    const field_specs = (heap.bump(StructFieldSpec, 3) orelse return error.TestFailed)[0..3];
+    field_specs[0] = .{ .name = "alpha", .typ = empty_alts };
+    field_specs[1] = .{ .name = "beta",  .typ = empty_alts };
+    field_specs[2] = .{ .name = "gamma", .typ = empty_alts };
+    const orig_ptr = field_specs.ptr;
+
+    // Create a live struct_type pool object owning those fields.
+    const typ_obj = heap.allocObject() orelse return error.TestFailed;
+    typ_obj.* = .{ .struct_type = .{
+        .name = "T",
+        .qualified_name = "@module_type:T",
+        .fields = field_specs,
+    } };
+
+    // Mark only typ_obj live, then compact.
+    heap.markObject(typ_obj);
+    heap.sweepObjects();
+    heap.compactManagedHeap();
+
+    // The fields were in overflow and must have been moved to the packed region.
+    try std.testing.expect(typ_obj.struct_type.fields.ptr != orig_ptr);
+    try std.testing.expectEqual(@as(usize, 3), typ_obj.struct_type.fields.len);
+
+    // Overwrite the old overflow location with 0xFF to simulate subsequent
+    // managed allocations reusing that space.  Without the fix, the pointer
+    // would still point here and field name reads would return garbage.
+    const old_addr = @intFromPtr(orig_ptr);
+    const field_bytes = @sizeOf(StructFieldSpec) * 3;
+    if (old_addr + field_bytes <= @intFromPtr(h.heap.ptr) + h.heap.len) {
+        const old_mem: [*]u8 = @ptrFromInt(old_addr);
+        @memset(old_mem[0..field_bytes], 0xFF);
+    }
+
+    // Field names must still be correct at the new location.
+    try std.testing.expectEqualStrings("alpha", typ_obj.struct_type.fields[0].name);
+    try std.testing.expectEqualStrings("beta",  typ_obj.struct_type.fields[1].name);
+    try std.testing.expectEqualStrings("gamma", typ_obj.struct_type.fields[2].name);
 }
