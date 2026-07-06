@@ -21,6 +21,32 @@ versions, and the OS.
 
 ## Results
 
+### 2026-07-06, commit `3e6f102` (v0.5.1-dev)
+
+**Host**: AMD Ryzen 5 7600 (6-core/12-thread), Linux 6.12.86+deb13-amd64 x86_64
+
+**Engines**: Gengoscript v0.5.1-dev (native ReleaseSafe) · Lua 5.4.7 · Python 3.13.5 · Node v20.19.2 · [google/starlark-go](https://github.com/google/starlark-go) (devel, via `go install`) · [traefik/yaegi](https://github.com/traefik/yaegi) (Go interpreter, running real Go source) · [mattn/anko](https://github.com/mattn/anko) v0.1.8
+
+| Engine | `fib_recursive(32)` | `loop_sum` (20M) |
+| --- | --- | --- |
+| Gengo | 0.614s | 0.722s |
+| Lua 5.4 | 0.080s | 0.139s |
+| Node | 0.073s | 0.071s |
+| Python 3 | 0.154s | 1.166s |
+| Yaegi (Go interpreter) | 1.827s | 0.457s |
+| Anko | 8.605s | 4.960s |
+| Starlark | n/a — forbids recursive functions by design | 2.195s |
+
+Regression vs pre6 on both benchmarks, with two identified root causes: (1) `Value` grew
+from 16 → 24 bytes when inline named scalars were added (`named_scalar` member forces 16-byte
+union payload), adding stack cache pressure and more bytes per push/pop on every hot loop
+iteration; (2) the call IC introduced a hardware `div` on every warm call (Object pool index
+computed from pointer arithmetic through a non-power-of-2 stride). This snapshot already
+applies the IC fix (`noinline` + pointer comparison instead of index division); the remaining
+gap vs pre6 is dominated by the Value size expansion, which requires a redesign to recover.
+
+---
+
 ### 2026-06-28, commit `685ed63` (v0.5.0-pre6)
 
 **Host**: AMD Ryzen 5 7600 (6-core/12-thread), Linux 6.12.86+deb13-amd64 x86_64
