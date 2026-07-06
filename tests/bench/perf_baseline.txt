@@ -12,6 +12,6 @@
 010_string_concat_heavy total_ops=3000012 gc_runs=0 alloc_objects=34 string_concat_bytes=0
 011_map_lookup_heavy total_ops=4400054 gc_runs=0 alloc_objects=35 string_concat_bytes=0
 012_std_namespace_access total_ops=1800020 gc_runs=0 alloc_objects=34 string_concat_bytes=0
-013_variant_dispatch total_ops=16200025 gc_runs=2041 alloc_objects=600035 string_concat_bytes=0
+013_variant_dispatch total_ops=16200022 gc_runs=0 alloc_objects=35 string_concat_bytes=0
 014_named_type_range total_ops=5600024 gc_runs=0 alloc_objects=34 string_concat_bytes=0
 015_nested_struct_methods total_ops=4500055 gc_runs=658 alloc_objects=200041 string_concat_bytes=0

@@ -728,6 +728,10 @@ fn resolveMethodReceiver(ctx: VMContext, recv: Value, mname: []const u8) !Method
     }
 }
 
+fn resolveInlineVariantMethod(ctx: VMContext, iv: vmod.InlineVariantValue, mname: []const u8) !MethodResolution {
+    return .{ .func = try resolveQualifiedReceiverMethod(ctx, iv.typ.variant_type.qualified_name, mname), .pass_recv = true };
+}
+
 fn floatToIntSafe(n: f64) !i64 {
     if (!std.math.isFinite(n) or
         n < @as(f64, @floatFromInt(std.math.minInt(i64))) or
@@ -1406,6 +1410,14 @@ fn opGetIndex(ctx: VMContext) !void {
         .string => {
             try ctx.vs.vmPush(try vmstr.stringIndex(container, idx_v));
         },
+        .inline_variant => |iv| {
+            const key = try vms.asStringValue(idx_v);
+            const ordinal = vmod.inlineVariantOrdinal(iv);
+            const arm = iv.typ.variant_type.arms[ordinal];
+            if (arm.has_payload and common.streq(arm.payload_name, key)) {
+                try ctx.vs.vmPush(vmod.inlineVariantPayload(iv));
+            } else return error.TypeError;
+        },
         else => return error.TypeError,
     }
 }
@@ -1465,6 +1477,11 @@ fn opInvokeMethod(ctx: VMContext) !void {
     const recv = ctx.vs.stack[recv_idx];
     if (recv == .named_scalar) {
         const resolved = try resolveMethodReceiver(ctx, recv, mname);
+        try insertReceiverAndCall(ctx, recv_idx, resolved.func, recv, argc);
+        return;
+    }
+    if (recv == .inline_variant) {
+        const resolved = try resolveInlineVariantMethod(ctx, recv.inline_variant, mname);
         try insertReceiverAndCall(ctx, recv_idx, resolved.func, recv, argc);
         return;
     }
@@ -1599,6 +1616,17 @@ fn opGetField(ctx: VMContext) !void {
     if (raw == .object) { try ctx.vs.pushTempRoot(raw); rooted_raw = true; }
     defer if (rooted_raw) ctx.vs.popTempRoot();
     const container = vms.unboxNamed(raw);
+    if (container == .inline_variant) {
+        const iv = container.inline_variant;
+        const name = (try ctx.cs.constAt(name_idx)).string.bytes;
+        const ordinal = vmod.inlineVariantOrdinal(iv);
+        const arm = iv.typ.variant_type.arms[ordinal];
+        if (arm.has_payload and common.streq(arm.payload_name, name)) {
+            try ctx.vs.vmPush(vmod.inlineVariantPayload(iv));
+            return;
+        }
+        return error.TypeError;
+    }
     if (container != .object) return error.TypeError;
     try pushFieldFromObject(ctx, container.object, name_idx, ic_base, ic_type_idx, ic_fidx);
 }
@@ -1671,7 +1699,11 @@ fn opDeferInvokeMethod(ctx: VMContext) !void {
     const recv = ctx.vs.stack[recv_idx];
     var func: Value = undefined;
     var pass_recv: bool = undefined;
-    if (recv == .named_scalar or recv == .object) {
+    if (recv == .inline_variant) {
+        const resolved = try resolveInlineVariantMethod(ctx, recv.inline_variant, mname);
+        func = resolved.func;
+        pass_recv = resolved.pass_recv;
+    } else if (recv == .named_scalar or recv == .object) {
         const resolved = try resolveMethodReceiver(ctx, recv, mname);
         func = resolved.func;
         pass_recv = resolved.pass_recv;
@@ -2951,19 +2983,20 @@ fn runInner(ctx: VMContext) !void {
             },
 
             .variant_check => {
-                const arm = (try ctx.vs.vmConst()).string.bytes;
+                const arm_name = (try ctx.vs.vmConst()).string.bytes;
                 const v = try ctx.vs.vmPop();
-                const matches = v == .object and v.object.* == .variant_value and
-                    common.streq(v.object.variant_value.tag, arm);
+                const matches = if (v.asVariant()) |ref|
+                    common.streq(ref.typ.variant_type.arms[ref.ordinal].name, arm_name)
+                else false;
                 try ctx.vs.vmPush(.{ .boolean = matches });
             },
 
             .variant_payload => {
                 const v = try ctx.vs.vmPeek(0);
-                if (v != .object or v.object.* != .variant_value) return error.TypeError;
-                const vv = v.object.variant_value;
-                const arm = vv.typ.variant_type.arms[vv.ordinal];
-                if (arm.fields.len > 0) {
+                const ref = v.asVariant() orelse return error.TypeError;
+                const arm = ref.typ.variant_type.arms[ref.ordinal];
+                if (arm.fields.len > 0 and v == .object) {
+                    const vv = v.object.variant_value;
                     const map_obj = try vmgc.allocTempRooted(.{ .map = &[_]MapEntry{} });
                     defer ctx.vs.popTempRoot();
                     const items = try vmgc.vmAllocManagedSlice(MapEntry, arm.fields.len);
@@ -2973,7 +3006,7 @@ fn runInner(ctx: VMContext) !void {
                     try ctx.vs.vmPush(.{ .object = map_obj });
                 } else {
                     _ = try ctx.vs.vmPop();
-                    try ctx.vs.vmPush(vv.payload);
+                    try ctx.vs.vmPush(ref.payload);
                 }
             },
 

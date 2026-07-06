@@ -94,6 +94,32 @@ fn sprintValueDepth(buf_or_null: ?[]u8, v: Value, depth: u32, ancestors: *[Print
             return len;
         },
         .named_scalar => |ns| return sprintValueDepth(buf_or_null, @import("../value.zig").namedScalarInner(ns), depth, ancestors, anc_count),
+        .inline_variant => |iv| {
+            const vmod = @import("../value.zig");
+            const ordinal = vmod.inlineVariantOrdinal(iv);
+            const arm = iv.typ.variant_type.arms[ordinal];
+            const payload = vmod.inlineVariantPayload(iv);
+            const tn = iv.typ.variant_type.name;
+            const dot = ".";
+            var inner_len: usize = 0;
+            if (payload != .null) inner_len = try sprintValueDepth(null, payload, depth + 1, ancestors, anc_count);
+            const open = if (payload != .null) "(" else "";
+            const close = if (payload != .null) ")" else "";
+            const len = tn.len + dot.len + arm.name.len + open.len + inner_len + close.len;
+            if (buf_or_null) |buf| {
+                @memcpy(buf[0..tn.len], tn);
+                @memcpy(buf[tn.len..][0..dot.len], dot);
+                @memcpy(buf[tn.len + dot.len..][0..arm.name.len], arm.name);
+                var pos = tn.len + dot.len + arm.name.len;
+                if (open.len > 0) {
+                    buf[pos] = '('; pos += 1;
+                    pos += try sprintValueDepth(buf[pos..], payload, depth + 1, ancestors, anc_count);
+                    buf[pos] = ')'; pos += 1;
+                }
+                _ = &pos;
+            }
+            return len;
+        },
         .object => |obj| {
             for (ancestors[0..anc_count.*]) |a| {
                 if (a == obj) {
