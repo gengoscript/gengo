@@ -928,13 +928,14 @@ inline fn pop2push1(ctx: VMContext, v: Value) !void {
     try ctx.vs.vmPush(v);
 }
 
-fn performCallIC(ctx: VMContext, argc: u8, ic_base: usize, ic_slot: u16) !void {
+// noinline keeps this off the hot dispatch loop's register-allocation budget.
+noinline fn performCallIC(ctx: VMContext, argc: u8, ic_base: usize, ic_slot: u16) !void {
     if (ctx.vs.stack_top < @as(usize, argc) + 1) return error.StackUnderflow;
     const func_val = ctx.vs.stack[ctx.vs.stack_top - argc - 1];
     if (func_val == .object) {
         const obj = func_val.object;
-        const obj_idx = heap.objectPoolIndex(obj);
-        if (ic_slot != 0xFFFF and obj_idx == ic_slot) {
+        // Warm path: pointer comparison via objectAt (&obj_pool[idx]) — no division.
+        if (ic_slot != 0xFFFF and heap.objectAt(ic_slot) == obj) {
             return switch (obj.*) {
                 .function => |f| enterFunctionFrameWarm(ctx, f, obj, null, argc),
                 .closure  => |cl| enterFunctionFrameWarm(ctx, cl.func.function, cl.func, obj, argc),
@@ -942,17 +943,21 @@ fn performCallIC(ctx: VMContext, argc: u8, ic_base: usize, ic_slot: u16) !void {
             };
         }
         try performCall(ctx, argc);
-        if (ic_slot == 0xFFFF and obj_idx != 0xFFFF) {
-            switch (obj.*) {
-                .function => |f| if (!f.is_variadic and f.default_count == 0 and (f.arity == argc) and (!f.has_typed_params or vmtyp.canInlinePrimitiveArgs(f, argc))) {
-                    ctx.cs.patchByte(ic_base,     @intCast((obj_idx >> 8) & 0xFF));
-                    ctx.cs.patchByte(ic_base + 1, @intCast(obj_idx & 0xFF));
-                },
-                .closure => |cl| if (!cl.func.function.is_variadic and cl.func.function.default_count == 0 and (cl.func.function.arity == argc) and (!cl.func.function.has_typed_params or vmtyp.canInlinePrimitiveArgs(cl.func.function, argc))) {
-                    ctx.cs.patchByte(ic_base,     @intCast((obj_idx >> 8) & 0xFF));
-                    ctx.cs.patchByte(ic_base + 1, @intCast(obj_idx & 0xFF));
-                },
-                else => {},
+        // Cold path: warm the IC. Division happens once per call site.
+        if (ic_slot == 0xFFFF) {
+            const obj_idx = heap.objectPoolIndex(obj);
+            if (obj_idx != 0xFFFF) {
+                switch (obj.*) {
+                    .function => |f| if (!f.is_variadic and f.default_count == 0 and (f.arity == argc) and (!f.has_typed_params or vmtyp.canInlinePrimitiveArgs(f, argc))) {
+                        ctx.cs.patchByte(ic_base,     @intCast((obj_idx >> 8) & 0xFF));
+                        ctx.cs.patchByte(ic_base + 1, @intCast(obj_idx & 0xFF));
+                    },
+                    .closure => |cl| if (!cl.func.function.is_variadic and cl.func.function.default_count == 0 and (cl.func.function.arity == argc) and (!cl.func.function.has_typed_params or vmtyp.canInlinePrimitiveArgs(cl.func.function, argc))) {
+                        ctx.cs.patchByte(ic_base,     @intCast((obj_idx >> 8) & 0xFF));
+                        ctx.cs.patchByte(ic_base + 1, @intCast(obj_idx & 0xFF));
+                    },
+                    else => {},
+                }
             }
         }
         return;
