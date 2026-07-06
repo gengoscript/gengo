@@ -535,7 +535,7 @@ fn valueToWire(val: Value) !ValueWire {
         .named_scalar => |ns| return valueToWire(vmod.namedScalarInner(ns)),
         .inline_variant => |iv| {
             const ordinal = vmod.inlineVariantOrdinal(iv);
-            const tag = iv.typ.variant_type.arms[ordinal].name;
+            const tag = vmod.objectAtIdx(iv.typ_idx).variant_type.arms[ordinal].name;
             const wires = (heap.bump(ValueWire, 4) orelse return makeWire(@intFromEnum(WireTag.null), 0, 0))[0..4];
             wires[0] = try valueToWire(.{ .string = staticSS("tag") });
             wires[1] = try valueToWire(.{ .string = try chunk.internStr(tag) });
