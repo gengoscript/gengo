@@ -29,6 +29,7 @@ pub fn namedBaseName(base: @import("value.zig").NamedTypeBase) []const u8 {
 
 pub fn runtimeTypeName(v: Value) []const u8 {
     if (v == .named_scalar) return v.named_scalar.typ.named_type.name;
+    if (v == .inline_variant) return v.inline_variant.typ.variant_type.name;
     return switch (v) {
         .int => "int",
         .float => "float",
@@ -39,9 +40,11 @@ pub fn runtimeTypeName(v: Value) []const u8 {
         .error_value => "error",
         .null => "null",
         .named_scalar => unreachable,
+        .inline_variant => unreachable,
         .object => |obj| switch (obj.*) {
             .named_value => obj.named_value.typ.named_type.name,
             .enum_value => obj.enum_value.typ.enum_type.name,
+            .variant_value => obj.variant_value.typ.variant_type.name,
             .dyn_string, .string_view => "string",
             .array, .array_managed, .array_view, .array_capacity => "array",
             .map, .map_managed, .map_hashed => "map",
@@ -169,8 +172,9 @@ pub fn matchesTypeAlt(v: Value, alt: FieldTypeAlt) bool {
                 else => false,
             };
         },
-        .variant_t => v == .object and v.object.* == .variant_value and
-            common.streq(v.object.variant_value.typ.variant_type.qualified_name, alt.named_name),
+        .variant_t => if (v.asVariant()) |ref|
+            common.streq(ref.typ.variant_type.qualified_name, alt.named_name)
+        else false,
         .func_t => blk: {
             if (!(v == .object and (v.object.* == .function or v.object.* == .closure))) break :blk false;
             if (alt.func_params) |ps| {
@@ -305,6 +309,8 @@ pub fn interfaceMethodMatches(m: InterfaceMethodSpec, f: FuncObj) bool {
 pub fn matchesInterfaceType(v: Value, iname: []const u8) bool {
     const tname = if (v == .named_scalar)
         v.named_scalar.typ.named_type.qualified_name
+    else if (v == .inline_variant)
+        v.inline_variant.typ.variant_type.qualified_name
     else switch (v) {
         .object => |obj| switch (obj.*) {
             .struct_instance => obj.struct_instance.typ.struct_type.qualified_name,
@@ -365,6 +371,7 @@ pub fn makeNamedValue(typ_obj: *Object, inner: Value) !Value {
 }
 
 pub fn variantConstruct(typ: *Object, tag: []const u8, ordinal: usize, payload: Value) !Value {
+    if (vmod.tryMakeInlineVariant(typ, ordinal, payload)) |iv| return iv;
     const vv = try vmgc.vmAllocObject();
     vv.* = .{ .variant_value = .{ .typ = typ, .tag = tag, .ordinal = ordinal, .payload = payload } };
     return .{ .object = vv };

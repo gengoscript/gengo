@@ -45,6 +45,10 @@ pub fn mapHashValue(v: Value) u64 {
         },
         .null => 0xcbf29ce484222325,
         .named_scalar => |ns| hashMix64(@intFromPtr(ns.typ), mapHashValue(@import("value.zig").namedScalarInner(ns))),
+        .inline_variant => |iv| {
+            const vmod = @import("value.zig");
+            return hashMix64(hashMix64(@intFromPtr(iv.typ), iv.bits >> 48), mapHashValue(vmod.inlineVariantPayload(iv)));
+        },
     };
 }
 

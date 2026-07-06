@@ -214,7 +214,7 @@ pub const Object = union(ObjTag) {
     bigint: BigIntObj,
 };
 
-pub const VTag = enum { int, float, decimal, rune, boolean, string, error_value, object, null, named_scalar };
+pub const VTag = enum { int, float, decimal, rune, boolean, string, error_value, object, null, named_scalar, inline_variant };
 
 /// Indirection wrapper that makes string payloads 8 bytes (pointer-sized) so
 /// the entire Value fits in 16 bytes.  Lives in chunk.g_state.str_slices[].
@@ -229,12 +229,20 @@ pub fn staticSS(comptime s: []const u8) *const StringSlice {
     return &S.v;
 }
 
-/// A Value is a tagged union (24 bytes: tag + 16-byte payload for named_scalar).
+/// Inline variant value: scalar payload variants without a GC allocation.
+/// bits layout (64 bits):
+///   [63:60] payload_kind — 0=null, 1=int, 2=bool, 3=rune, 4=decimal
+///   [59:48] ordinal      — arm index (0..4095)
+///   [47:0]  payload_raw  — 48-bit payload (signed for int/decimal)
+pub const InlineVariantValue = struct { typ: *Object, bits: u64 };
+
+/// A Value is a tagged union (24 bytes: tag + 16-byte payload for named_scalar/inline_variant).
 /// The `.string` and `.error_value` variants store a *const StringSlice so
 /// their scalar payloads fit in 8 bytes.  The StringSlice lives in a bump pool
 /// (chunk.g_state.str_slices); obtain one via chunk.internStr().
 /// The bytes the StringSlice points to MUST be immortal.
 /// `.named_scalar` stores scalar named-type values inline without a GC allocation.
+/// `.inline_variant` stores simple variant arm values inline without a GC allocation.
 pub const Value = union(VTag) {
     int: i64,
     float: f64,
@@ -246,6 +254,7 @@ pub const Value = union(VTag) {
     object: *Object,
     null,
     named_scalar: NamedScalarValue,
+    inline_variant: InlineVariantValue,
 
     /// Helper result type for named-value access independent of representation.
     pub const NamedRef = struct { typ: *Object, inner: Value };
@@ -277,6 +286,26 @@ pub const Value = union(VTag) {
         if (self == .named_scalar) return namedScalarInner(self.named_scalar);
         if (self == .object and self.object.* == .named_value) return self.object.named_value.value;
         return null;
+    }
+
+    /// Helper result type for variant access independent of representation.
+    pub const VariantRef = struct { typ: *Object, ordinal: usize, payload: Value };
+
+    /// Return (typ, ordinal, payload) for any variant value (inline or GC). Null if not a variant value.
+    pub fn asVariant(self: Value) ?VariantRef {
+        if (self == .inline_variant) {
+            const iv = self.inline_variant;
+            return .{ .typ = iv.typ, .ordinal = inlineVariantOrdinal(iv), .payload = inlineVariantPayload(iv) };
+        }
+        if (self == .object and self.object.* == .variant_value) {
+            const vv = self.object.variant_value;
+            return .{ .typ = vv.typ, .ordinal = vv.ordinal, .payload = vv.payload };
+        }
+        return null;
+    }
+
+    pub fn isVariant(self: Value) bool {
+        return self == .inline_variant or (self == .object and self.object.* == .variant_value);
     }
 
     pub fn asBool(self: Value) error{TypeError}!bool {
@@ -328,17 +357,23 @@ pub const Value = union(VTag) {
             }
             return false;
         }
-        if (a == .object and b == .object and a.object.* == .variant_value and b.object.* == .variant_value) {
-            const av = a.object.variant_value;
-            const bv = b.object.variant_value;
-            if (av.typ != bv.typ) return false;
-            if (!common.streq(av.tag, bv.tag)) return false;
-            if (!equals(av.payload, bv.payload)) return false;
-            if (av.shared_values.len != bv.shared_values.len) return false;
-            for (av.shared_values, bv.shared_values) |x, y| if (!equals(x, y)) return false;
-            if (av.arm_fields.len != bv.arm_fields.len) return false;
-            for (av.arm_fields, bv.arm_fields) |x, y| if (!equals(x, y)) return false;
-            return true;
+        // Variant equality: compare type pointer + ordinal + payload (handles inline and GC).
+        if (a.asVariant()) |ar| {
+            if (b.asVariant()) |br| {
+                if (ar.typ != br.typ or ar.ordinal != br.ordinal) return false;
+                if (!equals(ar.payload, br.payload)) return false;
+                // GC variants may also carry shared_values and arm_fields.
+                if (a == .object and b == .object) {
+                    const av = a.object.variant_value;
+                    const bv = b.object.variant_value;
+                    if (av.shared_values.len != bv.shared_values.len) return false;
+                    for (av.shared_values, bv.shared_values) |x, y| if (!equals(x, y)) return false;
+                    if (av.arm_fields.len != bv.arm_fields.len) return false;
+                    for (av.arm_fields, bv.arm_fields) |x, y| if (!equals(x, y)) return false;
+                }
+                return true;
+            }
+            return false;
         }
         if (a == .object and b == .object and a.object.* == .bigint and b.object.* == .bigint) {
             return a.object.bigint.toConst().eql(b.object.bigint.toConst());
@@ -369,6 +404,7 @@ pub const Value = union(VTag) {
             .object => |x| x == b.object,
             .null => true,
             .named_scalar => unreachable, // handled above by asNamed()
+            .inline_variant => unreachable, // handled above by asVariant()
         };
     }
 };
@@ -444,4 +480,58 @@ pub fn formatDecimalString(raw: i64, scale: u8, buf: []u8) []u8 {
     while (pos > 0 and buf[pos - 1] == '0') pos -= 1;
     if (pos > 0 and buf[pos - 1] == '.') pos -= 1;
     return buf[0..pos];
+}
+
+/// Decode the ordinal from an InlineVariantValue.
+pub fn inlineVariantOrdinal(iv: InlineVariantValue) usize {
+    return @intCast((iv.bits >> 48) & 0x0FFF);
+}
+
+/// Decode the payload Value from an InlineVariantValue.
+pub fn inlineVariantPayload(iv: InlineVariantValue) Value {
+    const kind: u4 = @truncate(iv.bits >> 60);
+    const raw48: u64 = iv.bits & 0x0000_FFFF_FFFF_FFFF;
+    return switch (kind) {
+        0 => .null,
+        1 => blk: { // int — sign-extend from 48 bits
+            const v: i64 = if (raw48 & (@as(u64, 1) << 47) != 0)
+                @bitCast(raw48 | 0xFFFF_0000_0000_0000)
+            else
+                @bitCast(raw48);
+            break :blk .{ .int = v };
+        },
+        2 => .{ .boolean = raw48 != 0 },
+        3 => .{ .rune = @truncate(raw48) },
+        4 => blk: { // decimal — sign-extend from 48 bits
+            const v: i64 = if (raw48 & (@as(u64, 1) << 47) != 0)
+                @bitCast(raw48 | 0xFFFF_0000_0000_0000)
+            else
+                @bitCast(raw48);
+            break :blk .{ .decimal = v };
+        },
+        else => .null,
+    };
+}
+
+/// Try to build an inline_variant Value. Returns null if the combination cannot
+/// be represented inline (ordinal ≥ 4096, float/string/object payload, or int/
+/// decimal value outside the ±140T i48 range).
+pub fn tryMakeInlineVariant(typ: *Object, ordinal: usize, payload: Value) ?Value {
+    if (ordinal > 0xFFF) return null;
+    const ord_bits: u64 = @as(u64, ordinal) << 48;
+    const bits: u64 = switch (payload) {
+        .null => ord_bits,
+        .boolean => |b| (@as(u64, 2) << 60) | ord_bits | @as(u64, if (b) 1 else 0),
+        .rune => |r| (@as(u64, 3) << 60) | ord_bits | @as(u64, r),
+        .int => |n| blk: {
+            if (n < -(1 << 47) or n > ((1 << 47) - 1)) return null;
+            break :blk (@as(u64, 1) << 60) | ord_bits | (@as(u64, @bitCast(n)) & 0x0000_FFFF_FFFF_FFFF);
+        },
+        .decimal => |n| blk: {
+            if (n < -(1 << 47) or n > ((1 << 47) - 1)) return null;
+            break :blk (@as(u64, 4) << 60) | ord_bits | (@as(u64, @bitCast(n)) & 0x0000_FFFF_FFFF_FFFF);
+        },
+        else => return null,
+    };
+    return .{ .inline_variant = .{ .typ = typ, .bits = bits } };
 }

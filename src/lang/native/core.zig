@@ -208,6 +208,7 @@ pub fn nativeConvToBool(v: Value) !Value {
         // A heap-backed string must convert like a literal one; named values
         // convert through their underlying value.
         .named_scalar => |ns| (try nativeConvToBool(vmod.namedScalarInner(ns))).boolean,
+        .inline_variant => true,
         .object => |obj| switch (obj.*) {
             .dyn_string => |s| s.len != 0,
             .string_view => |sv| sv.bytes.len != 0,
@@ -249,6 +250,25 @@ pub fn nativeConvToString(v: Value) !Value {
         .null => vmgc.makeDynString("null"),
         .error_value => |e| vmgc.makeDynString(e.bytes),
         .named_scalar => |ns| nativeConvToString(vmod.namedScalarInner(ns)),
+        .inline_variant => |iv| blk: {
+            const ordinal = vmod.inlineVariantOrdinal(iv);
+            const arm = iv.typ.variant_type.arms[ordinal];
+            const payload = vmod.inlineVariantPayload(iv);
+            var buf: [1024]u8 = undefined;
+            var pos: usize = 0;
+            const tn = iv.typ.variant_type.name;
+            @memcpy(buf[pos..][0..tn.len], tn); pos += tn.len;
+            buf[pos] = '.'; pos += 1;
+            @memcpy(buf[pos..][0..arm.name.len], arm.name); pos += arm.name.len;
+            if (payload != .null) {
+                const inner_v = try nativeConvToString(payload);
+                const inner_s = try vms.asStringValue(inner_v);
+                buf[pos] = '('; pos += 1;
+                @memcpy(buf[pos..][0..inner_s.len], inner_s); pos += inner_s.len;
+                buf[pos] = ')'; pos += 1;
+            }
+            break :blk vmgc.makeDynString(buf[0..pos]);
+        },
     };
 }
 
@@ -305,6 +325,7 @@ pub fn nativeTypeNameValue(v: Value) !Value {
             .bigint => .{ .string = staticSS("bigint") },
             .cell => .{ .string = staticSS("cell") },
         },
+        .inline_variant => |iv| .{ .string = try chunk.internStr(iv.typ.variant_type.name) },
     };
 }
 
@@ -532,6 +553,7 @@ fn deepEqualValue(a: Value, b: Value, visits: []DeepEqVisit, visit_len: *usize) 
         .null => true,
         .object => unreachable,
         .named_scalar => |x| x.typ == b.named_scalar.typ and x.bits == b.named_scalar.bits,
+        .inline_variant => |x| x.typ == b.inline_variant.typ and x.bits == b.inline_variant.bits,
     };
 }
 

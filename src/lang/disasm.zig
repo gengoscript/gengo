@@ -99,6 +99,11 @@ fn writeConst(idx: u16) void {
             io.write(ns.typ.named_type.name);
             io.write(">");
         },
+        .inline_variant => |iv| {
+            io.write("<variant:");
+            io.write(iv.typ.variant_type.name);
+            io.write(">");
+        },
     }
 }
 

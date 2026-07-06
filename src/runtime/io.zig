@@ -285,6 +285,19 @@ fn printValueDepth(v: Value, depth: u32, ancestors: *[PrintMaxDepth]*const vmod.
         .named_scalar => |ns| {
             printValueDepth(vmod.namedScalarInner(ns), depth, ancestors, anc_count);
         },
+        .inline_variant => |iv| {
+            const ordinal = vmod.inlineVariantOrdinal(iv);
+            const arm = iv.typ.variant_type.arms[ordinal];
+            const payload = vmod.inlineVariantPayload(iv);
+            write(iv.typ.variant_type.name);
+            write(".");
+            write(arm.name);
+            if (payload != .null) {
+                write("(");
+                printValueDepth(payload, depth + 1, ancestors, anc_count);
+                write(")");
+            }
+        },
         .object => |obj| {
             // Cycle detection: if this object is in the ancestor chain, emit <cycle>.
             for (ancestors[0..anc_count.*]) |a| {
