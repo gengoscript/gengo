@@ -96,12 +96,12 @@ fn writeConst(idx: u16) void {
         .null => io.write("null"),
         .named_scalar => |ns| {
             io.write("<named:");
-            io.write(ns.typ.named_type.name);
+            io.write(value.objectAtIdx(ns.typ_idx).named_type.name);
             io.write(">");
         },
         .inline_variant => |iv| {
             io.write("<variant:");
-            io.write(iv.typ.variant_type.name);
+            io.write(value.objectAtIdx(iv.typ_idx).variant_type.name);
             io.write(">");
         },
     }

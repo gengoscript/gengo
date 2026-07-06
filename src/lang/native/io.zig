@@ -97,9 +97,10 @@ fn sprintValueDepth(buf_or_null: ?[]u8, v: Value, depth: u32, ancestors: *[Print
         .inline_variant => |iv| {
             const vmod = @import("../value.zig");
             const ordinal = vmod.inlineVariantOrdinal(iv);
-            const arm = iv.typ.variant_type.arms[ordinal];
+            const iv_typ = vmod.objectAtIdx(iv.typ_idx);
+            const arm = iv_typ.variant_type.arms[ordinal];
             const payload = vmod.inlineVariantPayload(iv);
-            const tn = iv.typ.variant_type.name;
+            const tn = iv_typ.variant_type.name;
             const dot = ".";
             var inner_len: usize = 0;
             if (payload != .null) inner_len = try sprintValueDepth(null, payload, depth + 1, ancestors, anc_count);

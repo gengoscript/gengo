@@ -40,8 +40,8 @@ fn markObjectQueue(ctx: VMContext, obj: *Object) void {
 }
 
 fn markValue(ctx: VMContext, v: Value) void {
-    if (v == .named_scalar) { markObjectQueue(ctx, v.named_scalar.typ); return; }
-    if (v == .inline_variant) { markObjectQueue(ctx, v.inline_variant.typ); return; }
+    if (v == .named_scalar) { markObjectQueue(ctx, heap.g_state.objectAt(v.named_scalar.typ_idx)); return; }
+    if (v == .inline_variant) { markObjectQueue(ctx, heap.g_state.objectAt(v.inline_variant.typ_idx)); return; }
     if (v == .object) markObjectQueue(ctx, v.object);
 }
 

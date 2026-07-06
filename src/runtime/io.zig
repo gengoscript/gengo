@@ -287,9 +287,10 @@ fn printValueDepth(v: Value, depth: u32, ancestors: *[PrintMaxDepth]*const vmod.
         },
         .inline_variant => |iv| {
             const ordinal = vmod.inlineVariantOrdinal(iv);
-            const arm = iv.typ.variant_type.arms[ordinal];
+            const iv_typ = vmod.objectAtIdx(iv.typ_idx);
+            const arm = iv_typ.variant_type.arms[ordinal];
             const payload = vmod.inlineVariantPayload(iv);
-            write(iv.typ.variant_type.name);
+            write(iv_typ.variant_type.name);
             write(".");
             write(arm.name);
             if (payload != .null) {

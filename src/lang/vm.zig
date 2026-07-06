@@ -679,7 +679,7 @@ fn resolveMapMethod(obj: *Object, mname: []const u8) !Value {
 
 fn resolveMethodReceiver(ctx: VMContext, recv: Value, mname: []const u8) !MethodResolution {
     if (recv == .named_scalar) {
-        var typ_obj: *Object = recv.named_scalar.typ;
+        var typ_obj: *Object = vmod.objectAtIdx(recv.named_scalar.typ_idx);
         while (true) {
             const nt = switch (typ_obj.*) {
                 .named_type => |nt| nt,
@@ -729,7 +729,7 @@ fn resolveMethodReceiver(ctx: VMContext, recv: Value, mname: []const u8) !Method
 }
 
 fn resolveInlineVariantMethod(ctx: VMContext, iv: vmod.InlineVariantValue, mname: []const u8) !MethodResolution {
-    return .{ .func = try resolveQualifiedReceiverMethod(ctx, iv.typ.variant_type.qualified_name, mname), .pass_recv = true };
+    return .{ .func = try resolveQualifiedReceiverMethod(ctx, vmod.objectAtIdx(iv.typ_idx).variant_type.qualified_name, mname), .pass_recv = true };
 }
 
 fn floatToIntSafe(n: f64) !i64 {
@@ -1418,7 +1418,7 @@ fn opGetIndex(ctx: VMContext) !void {
         .inline_variant => |iv| {
             const key = try vms.asStringValue(idx_v);
             const ordinal = vmod.inlineVariantOrdinal(iv);
-            const arm = iv.typ.variant_type.arms[ordinal];
+            const arm = vmod.objectAtIdx(iv.typ_idx).variant_type.arms[ordinal];
             if (arm.has_payload and common.streq(arm.payload_name, key)) {
                 try ctx.vs.vmPush(vmod.inlineVariantPayload(iv));
             } else return error.TypeError;
@@ -1625,7 +1625,7 @@ fn opGetField(ctx: VMContext) !void {
         const iv = container.inline_variant;
         const name = (try ctx.cs.constAt(name_idx)).string.bytes;
         const ordinal = vmod.inlineVariantOrdinal(iv);
-        const arm = iv.typ.variant_type.arms[ordinal];
+        const arm = vmod.objectAtIdx(iv.typ_idx).variant_type.arms[ordinal];
         if (arm.has_payload and common.streq(arm.payload_name, name)) {
             try ctx.vs.vmPush(vmod.inlineVariantPayload(iv));
             return;
