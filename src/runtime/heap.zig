@@ -3,8 +3,9 @@ const cfg = @import("config.zig");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 
-const Value = @import("../lang/value.zig").Value;
-const MapEntry = @import("../lang/value.zig").MapEntry;
+const val_mod = @import("../lang/value.zig");
+const Value = val_mod.Value;
+const MapEntry = val_mod.MapEntry;
 
 pub const HeapSize = cfg.heap_size_bytes;
 pub const MaxObjects = cfg.max_objects;
@@ -76,6 +77,7 @@ pub const State = struct {
             self.obj_next_free = try allocator.alloc(u16, max_objects);
         }
 
+        val_mod.obj_pool_ptr = self.obj_pool.ptr;
         self.obj_free_head = 0;
         self.obj_live_count = 0;
         var c: usize = 0;

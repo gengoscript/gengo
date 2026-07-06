@@ -252,11 +252,12 @@ pub fn nativeConvToString(v: Value) !Value {
         .named_scalar => |ns| nativeConvToString(vmod.namedScalarInner(ns)),
         .inline_variant => |iv| blk: {
             const ordinal = vmod.inlineVariantOrdinal(iv);
-            const arm = iv.typ.variant_type.arms[ordinal];
+            const iv_typ = vmod.objectAtIdx(iv.typ_idx);
+            const arm = iv_typ.variant_type.arms[ordinal];
             const payload = vmod.inlineVariantPayload(iv);
             var buf: [1024]u8 = undefined;
             var pos: usize = 0;
-            const tn = iv.typ.variant_type.name;
+            const tn = iv_typ.variant_type.name;
             @memcpy(buf[pos..][0..tn.len], tn); pos += tn.len;
             buf[pos] = '.'; pos += 1;
             @memcpy(buf[pos..][0..arm.name.len], arm.name); pos += arm.name.len;
@@ -283,7 +284,7 @@ pub fn nativeTypeNameValue(v: Value) !Value {
         .error_value => .{ .string = staticSS("error") },
         .null => .{ .string = staticSS("null") },
         .named_scalar => |ns| blk: {
-            const root_nt = rootNamedType(ns.typ).named_type;
+            const root_nt = rootNamedType(vmod.objectAtIdx(ns.typ_idx)).named_type;
             if (root_nt.is_anonymous) {
                 break :blk switch (root_nt.base) {
                     .array_t => .{ .string = staticSS("array") },
@@ -325,7 +326,7 @@ pub fn nativeTypeNameValue(v: Value) !Value {
             .bigint => .{ .string = staticSS("bigint") },
             .cell => .{ .string = staticSS("cell") },
         },
-        .inline_variant => |iv| .{ .string = try chunk.internStr(iv.typ.variant_type.name) },
+        .inline_variant => |iv| .{ .string = try chunk.internStr(vmod.objectAtIdx(iv.typ_idx).variant_type.name) },
     };
 }
 
@@ -378,7 +379,7 @@ fn rootNamedType(typ_obj: *Object) *Object {
 }
 
 fn isNamedBase(v: Value, base: @import("../value.zig").NamedTypeBase) bool {
-    if (v == .named_scalar) return rootNamedType(v.named_scalar.typ).named_type.base == base;
+    if (v == .named_scalar) return rootNamedType(vmod.objectAtIdx(v.named_scalar.typ_idx)).named_type.base == base;
     if (!(v == .object and v.object.* == .named_value)) return false;
     return rootNamedType(v.object.named_value.typ).named_type.base == base;
 }
@@ -552,8 +553,8 @@ fn deepEqualValue(a: Value, b: Value, visits: []DeepEqVisit, visit_len: *usize) 
         .error_value => |x| common.streq(x.bytes, b.error_value.bytes),
         .null => true,
         .object => unreachable,
-        .named_scalar => |x| x.typ == b.named_scalar.typ and x.bits == b.named_scalar.bits,
-        .inline_variant => |x| x.typ == b.inline_variant.typ and x.bits == b.inline_variant.bits,
+        .named_scalar => |x| @as(u64, @bitCast(x)) == @as(u64, @bitCast(b.named_scalar)),
+        .inline_variant => |x| @as(u64, @bitCast(x)) == @as(u64, @bitCast(b.inline_variant)),
     };
 }
 

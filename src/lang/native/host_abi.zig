@@ -79,7 +79,7 @@ pub fn wireFromValue(v: Value) !host_abi.ValueWire {
         .named_scalar => |ns| wireFromValue(vmod.namedScalarInner(ns)),
         .inline_variant => |iv| {
             const ordinal = vmod.inlineVariantOrdinal(iv);
-            const tag = iv.typ.variant_type.arms[ordinal].name;
+            const tag = vmod.objectAtIdx(iv.typ_idx).variant_type.arms[ordinal].name;
             const wires = (heap.bump(host_abi.ValueWire, 4) orelse return error.OutOfMemory)[0..4];
             wires[0] = try wireFromValue(.{ .string = try chunk.internStr("tag") });
             wires[1] = try wireFromValue(.{ .string = try chunk.internStr(tag) });

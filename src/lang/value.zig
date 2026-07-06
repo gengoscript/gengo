@@ -108,20 +108,61 @@ pub const NamedTypeObj = struct {
 };
 pub const NamedValueObj = struct { typ: *Object, value: Value };
 
-/// Inline representation for scalar named types (int, float, decimal, rune, bool).
-/// Avoids a GC allocation per construction.  `bits` holds the raw bit pattern
-/// of the scalar value; interpret via `typ.named_type.base`.
-pub const NamedScalarValue = struct { typ: *Object, bits: u64 };
+/// Pool base pointer for inline type-index → *Object decoding.
+/// Set by heap.zig during State.init(); valid before any VM execution.
+pub var obj_pool_ptr: [*]Object = undefined;
+
+/// Decode a pool index to the corresponding *Object.
+pub fn objectAtIdx(idx: u16) *Object { return &obj_pool_ptr[idx]; }
+
+/// Inline representation for scalar named types (int, decimal, rune, bool).
+/// Avoids a GC allocation per construction.
+/// Bit layout (64 bits, LSB first):
+///   [48:0]  payload  — 49-bit value (signed for int/decimal via sign-extend)
+///   [51:49] kind     — 0=int, 1=decimal, 2=rune, 3=bool  (float always uses GC)
+///   [63:52] typ_idx  — object pool index of the named_type Object (0..4095)
+/// Float named types and int/decimal values outside ±(2^48) fall back to GC named_value.
+pub const NamedScalarValue = packed struct(u64) {
+    payload: u49,
+    kind: u3,
+    typ_idx: u12,
+};
 
 pub fn namedScalarInner(ns: NamedScalarValue) Value {
-    return switch (ns.typ.named_type.base) {
-        .int     => .{ .int     = @bitCast(ns.bits) },
-        .float   => .{ .float   = @bitCast(ns.bits) },
-        .decimal => .{ .decimal = @bitCast(ns.bits) },
-        .rune    => .{ .rune    = @intCast(ns.bits)  },
-        .bool    => .{ .boolean = ns.bits != 0       },
-        else     => unreachable,
+    const raw: u49 = ns.payload;
+    const wide: u64 = raw;
+    const ext: u64 = if (raw & (@as(u49, 1) << 48) != 0) wide | @as(u64, 0xFFFE_0000_0000_0000) else wide;
+    return switch (ns.kind) {
+        0 => .{ .int     = @bitCast(ext) },
+        1 => .{ .decimal = @bitCast(ext) },
+        2 => .{ .rune    = @truncate(raw) },
+        3 => .{ .boolean = raw != 0 },
+        else => unreachable,
     };
+}
+
+/// Try to make an inline named scalar.  typ_idx must be the pre-computed pool
+/// index of typ_obj (caller verifies it fits in 12 bits).  Returns null if the
+/// inner value cannot be represented inline (float base, or int/decimal out of
+/// the ±(2^48) range).
+pub fn tryMakeInlineNamedScalar(typ_obj: *Object, typ_idx: u12, inner: Value) ?Value {
+    if (typ_obj.* != .named_type) return null;
+    const ns: NamedScalarValue = switch (typ_obj.named_type.base) {
+        .int => blk: {
+            const n = inner.int;
+            if (n < -(1 << 48) or n > ((1 << 48) - 1)) return null;
+            break :blk .{ .payload = @truncate(@as(u64, @bitCast(n))), .kind = 0, .typ_idx = typ_idx };
+        },
+        .decimal => blk: {
+            const n = inner.decimal;
+            if (n < -(1 << 48) or n > ((1 << 48) - 1)) return null;
+            break :blk .{ .payload = @truncate(@as(u64, @bitCast(n))), .kind = 1, .typ_idx = typ_idx };
+        },
+        .rune => .{ .payload = @intCast(inner.rune),                     .kind = 2, .typ_idx = typ_idx },
+        .bool => .{ .payload = if (inner.boolean) 1 else 0,              .kind = 3, .typ_idx = typ_idx },
+        else => return null, // float and compound types always use GC
+    };
+    return .{ .named_scalar = ns };
 }
 pub const EnumTypeObj = struct {
     name: []const u8,
@@ -230,13 +271,21 @@ pub fn staticSS(comptime s: []const u8) *const StringSlice {
 }
 
 /// Inline variant value: scalar payload variants without a GC allocation.
-/// bits layout (64 bits):
-///   [63:60] payload_kind — 0=null, 1=int, 2=bool, 3=rune, 4=decimal
-///   [59:48] ordinal      — arm index (0..4095)
-///   [47:0]  payload_raw  — 48-bit payload (signed for int/decimal)
-pub const InlineVariantValue = struct { typ: *Object, bits: u64 };
+/// Bit layout (64 bits, LSB first):
+///   [35:0]  payload  — 36-bit value (signed for int/decimal via sign-extend)
+///   [47:36] ordinal  — arm index (0..4095)
+///   [51:48] kind     — 0=null, 1=int, 2=bool, 3=rune, 4=decimal
+///   [63:52] typ_idx  — object pool index of the variant_type Object (0..4095)
+/// Variant types at pool index > 4095, float/string/object payloads, and int/decimal
+/// values outside ±(2^35) fall back to GC variant_value.
+pub const InlineVariantValue = packed struct(u64) {
+    payload: u36,
+    ordinal: u12,
+    kind: u4,
+    typ_idx: u12,
+};
 
-/// A Value is a tagged union (24 bytes: tag + 16-byte payload for named_scalar/inline_variant).
+/// A Value is a tagged union (16 bytes: tag + 8-byte payload).
 /// The `.string` and `.error_value` variants store a *const StringSlice so
 /// their scalar payloads fit in 8 bytes.  The StringSlice lives in a bump pool
 /// (chunk.g_state.str_slices); obtain one via chunk.internStr().
@@ -256,6 +305,8 @@ pub const Value = union(VTag) {
     named_scalar: NamedScalarValue,
     inline_variant: InlineVariantValue,
 
+    comptime { std.debug.assert(@sizeOf(Value) == 16); }
+
     /// Helper result type for named-value access independent of representation.
     pub const NamedRef = struct { typ: *Object, inner: Value };
 
@@ -263,7 +314,7 @@ pub const Value = union(VTag) {
     pub fn asNamed(self: Value) ?NamedRef {
         if (self == .named_scalar) {
             const ns = self.named_scalar;
-            return .{ .typ = ns.typ, .inner = namedScalarInner(ns) };
+            return .{ .typ = objectAtIdx(ns.typ_idx), .inner = namedScalarInner(ns) };
         }
         if (self == .object and self.object.* == .named_value) {
             const nv = self.object.named_value;
@@ -277,7 +328,7 @@ pub const Value = union(VTag) {
     }
 
     pub fn namedTyp(self: Value) ?*Object {
-        if (self == .named_scalar) return self.named_scalar.typ;
+        if (self == .named_scalar) return objectAtIdx(self.named_scalar.typ_idx);
         if (self == .object and self.object.* == .named_value) return self.object.named_value.typ;
         return null;
     }
@@ -295,7 +346,7 @@ pub const Value = union(VTag) {
     pub fn asVariant(self: Value) ?VariantRef {
         if (self == .inline_variant) {
             const iv = self.inline_variant;
-            return .{ .typ = iv.typ, .ordinal = inlineVariantOrdinal(iv), .payload = inlineVariantPayload(iv) };
+            return .{ .typ = objectAtIdx(iv.typ_idx), .ordinal = inlineVariantOrdinal(iv), .payload = inlineVariantPayload(iv) };
         }
         if (self == .object and self.object.* == .variant_value) {
             const vv = self.object.variant_value;
@@ -313,7 +364,8 @@ pub const Value = union(VTag) {
         // Named types over bool participate in conditions through their
         // base, the same way named ints participate in arithmetic.
         if (self == .named_scalar) {
-            if (self.named_scalar.typ.named_type.base == .bool) return self.named_scalar.bits != 0;
+            // kind 3 = bool (no heap lookup needed — kind is encoded in the bits)
+            if (self.named_scalar.kind == 3) return self.named_scalar.payload != 0;
         }
         if (self == .object and self.object.* == .named_value) {
             const underlying = self.object.named_value.value;
@@ -416,8 +468,13 @@ pub fn decimalScaledToFloat(raw: i64, scale: u8) f64 {
 }
 
 pub fn decimalLogicalNumber(v: Value) ?f64 {
-    if (v == .named_scalar and v.named_scalar.typ.named_type.base == .decimal)
-        return decimalScaledToFloat(@bitCast(v.named_scalar.bits), v.named_scalar.typ.named_type.scale);
+    if (v == .named_scalar and v.named_scalar.kind == 1) { // kind 1 = decimal
+        const ns = v.named_scalar;
+        const raw: u49 = ns.payload;
+        const wide: u64 = raw;
+        const ext = if (raw & (@as(u49, 1) << 48) != 0) wide | @as(u64, 0xFFFE_0000_0000_0000) else wide;
+        return decimalScaledToFloat(@bitCast(ext), objectAtIdx(ns.typ_idx).named_type.scale);
+    }
     return switch (v) {
         .decimal => |d| decimalScaledToFloat(d, 0),
         .object => |obj| switch (obj.*) {
@@ -434,8 +491,13 @@ pub fn decimalLogicalNumber(v: Value) ?f64 {
 }
 
 pub fn decimalRawAndScale(v: Value) ?struct { raw: i64, scale: u8 } {
-    if (v == .named_scalar and v.named_scalar.typ.named_type.base == .decimal)
-        return .{ .raw = @bitCast(v.named_scalar.bits), .scale = v.named_scalar.typ.named_type.scale };
+    if (v == .named_scalar and v.named_scalar.kind == 1) { // kind 1 = decimal
+        const ns = v.named_scalar;
+        const raw: u49 = ns.payload;
+        const wide: u64 = raw;
+        const ext = if (raw & (@as(u49, 1) << 48) != 0) wide | @as(u64, 0xFFFE_0000_0000_0000) else wide;
+        return .{ .raw = @bitCast(ext), .scale = objectAtIdx(ns.typ_idx).named_type.scale };
+    }
     return switch (v) {
         .decimal => |d| .{ .raw = d, .scale = 0 },
         .object => |obj| switch (obj.*) {
@@ -484,54 +546,44 @@ pub fn formatDecimalString(raw: i64, scale: u8, buf: []u8) []u8 {
 
 /// Decode the ordinal from an InlineVariantValue.
 pub fn inlineVariantOrdinal(iv: InlineVariantValue) usize {
-    return @intCast((iv.bits >> 48) & 0x0FFF);
+    return @intCast(iv.ordinal);
 }
 
 /// Decode the payload Value from an InlineVariantValue.
 pub fn inlineVariantPayload(iv: InlineVariantValue) Value {
-    const kind: u4 = @truncate(iv.bits >> 60);
-    const raw48: u64 = iv.bits & 0x0000_FFFF_FFFF_FFFF;
-    return switch (kind) {
+    const raw: u36 = iv.payload;
+    const wide: u64 = raw;
+    const ext: u64 = if (raw & (@as(u36, 1) << 35) != 0) wide | @as(u64, 0xFFFF_FFF0_0000_0000) else wide;
+    return switch (iv.kind) {
         0 => .null,
-        1 => blk: { // int — sign-extend from 48 bits
-            const v: i64 = if (raw48 & (@as(u64, 1) << 47) != 0)
-                @bitCast(raw48 | 0xFFFF_0000_0000_0000)
-            else
-                @bitCast(raw48);
-            break :blk .{ .int = v };
-        },
-        2 => .{ .boolean = raw48 != 0 },
-        3 => .{ .rune = @truncate(raw48) },
-        4 => blk: { // decimal — sign-extend from 48 bits
-            const v: i64 = if (raw48 & (@as(u64, 1) << 47) != 0)
-                @bitCast(raw48 | 0xFFFF_0000_0000_0000)
-            else
-                @bitCast(raw48);
-            break :blk .{ .decimal = v };
-        },
+        1 => .{ .int     = @bitCast(ext) },
+        2 => .{ .boolean = raw != 0 },
+        3 => .{ .rune    = @truncate(raw) },
+        4 => .{ .decimal = @bitCast(ext) },
         else => .null,
     };
 }
 
-/// Try to build an inline_variant Value. Returns null if the combination cannot
-/// be represented inline (ordinal ≥ 4096, float/string/object payload, or int/
-/// decimal value outside the ±140T i48 range).
-pub fn tryMakeInlineVariant(typ: *Object, ordinal: usize, payload: Value) ?Value {
+/// Try to build an inline_variant Value.  typ_idx is the pre-computed pool
+/// index of typ (caller ensures it fits in 12 bits).  Returns null if the
+/// combination cannot be represented inline (ordinal ≥ 4096, float/string/
+/// object payload, or int/decimal value outside the ±34G i36 range).
+pub fn tryMakeInlineVariant(typ_idx: u12, ordinal: usize, payload: Value) ?Value {
     if (ordinal > 0xFFF) return null;
-    const ord_bits: u64 = @as(u64, ordinal) << 48;
-    const bits: u64 = switch (payload) {
-        .null => ord_bits,
-        .boolean => |b| (@as(u64, 2) << 60) | ord_bits | @as(u64, if (b) 1 else 0),
-        .rune => |r| (@as(u64, 3) << 60) | ord_bits | @as(u64, r),
-        .int => |n| blk: {
-            if (n < -(1 << 47) or n > ((1 << 47) - 1)) return null;
-            break :blk (@as(u64, 1) << 60) | ord_bits | (@as(u64, @bitCast(n)) & 0x0000_FFFF_FFFF_FFFF);
+    const ord12: u12 = @intCast(ordinal);
+    const iv: InlineVariantValue = switch (payload) {
+        .null    => .{ .payload = 0, .ordinal = ord12, .kind = 0, .typ_idx = typ_idx },
+        .boolean => |b| .{ .payload = if (b) 1 else 0, .ordinal = ord12, .kind = 2, .typ_idx = typ_idx },
+        .rune    => |r| .{ .payload = @intCast(r),      .ordinal = ord12, .kind = 3, .typ_idx = typ_idx },
+        .int     => |n| blk: {
+            if (n < -(1 << 35) or n > ((1 << 35) - 1)) return null;
+            break :blk .{ .payload = @truncate(@as(u64, @bitCast(n))), .ordinal = ord12, .kind = 1, .typ_idx = typ_idx };
         },
         .decimal => |n| blk: {
-            if (n < -(1 << 47) or n > ((1 << 47) - 1)) return null;
-            break :blk (@as(u64, 4) << 60) | ord_bits | (@as(u64, @bitCast(n)) & 0x0000_FFFF_FFFF_FFFF);
+            if (n < -(1 << 35) or n > ((1 << 35) - 1)) return null;
+            break :blk .{ .payload = @truncate(@as(u64, @bitCast(n))), .ordinal = ord12, .kind = 4, .typ_idx = typ_idx };
         },
         else => return null,
     };
-    return .{ .inline_variant = .{ .typ = typ, .bits = bits } };
+    return .{ .inline_variant = iv };
 }

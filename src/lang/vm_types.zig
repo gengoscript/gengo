@@ -3,6 +3,7 @@ const common = @import("common.zig");
 const globals = @import("globals.zig");
 const vms = @import("vm_state.zig");
 const vmgc = @import("vm_gc.zig");
+const heap = @import("../runtime/heap.zig");
 const vmod = @import("value.zig");
 const Value = vmod.Value;
 const Object = vmod.Object;
@@ -28,8 +29,8 @@ pub fn namedBaseName(base: @import("value.zig").NamedTypeBase) []const u8 {
 }
 
 pub fn runtimeTypeName(v: Value) []const u8 {
-    if (v == .named_scalar) return v.named_scalar.typ.named_type.name;
-    if (v == .inline_variant) return v.inline_variant.typ.variant_type.name;
+    if (v == .named_scalar) return vmod.objectAtIdx(v.named_scalar.typ_idx).named_type.name;
+    if (v == .inline_variant) return vmod.objectAtIdx(v.inline_variant.typ_idx).variant_type.name;
     return switch (v) {
         .int => "int",
         .float => "float",
@@ -153,7 +154,7 @@ pub fn matchesTypeAlt(v: Value, alt: FieldTypeAlt) bool {
         .struct_t => v == .object and v.object.* == .struct_instance and common.streq(v.object.struct_instance.typ.struct_type.qualified_name, alt.struct_name),
         .interface_t => matchesInterfaceType(v, alt.interface_name),
         .named_t => named_t_blk: {
-            if (v == .named_scalar) break :named_t_blk namedTypeIsOrExtends(v.named_scalar.typ, alt.named_name);
+            if (v == .named_scalar) break :named_t_blk namedTypeIsOrExtends(vmod.objectAtIdx(v.named_scalar.typ_idx), alt.named_name);
             if (!(v == .object)) break :named_t_blk false;
             break :named_t_blk switch (v.object.*) {
                 .named_value => namedTypeIsOrExtends(v.object.named_value.typ, alt.named_name),
@@ -308,9 +309,9 @@ pub fn interfaceMethodMatches(m: InterfaceMethodSpec, f: FuncObj) bool {
 
 pub fn matchesInterfaceType(v: Value, iname: []const u8) bool {
     const tname = if (v == .named_scalar)
-        v.named_scalar.typ.named_type.qualified_name
+        vmod.objectAtIdx(v.named_scalar.typ_idx).named_type.qualified_name
     else if (v == .inline_variant)
-        v.inline_variant.typ.variant_type.qualified_name
+        vmod.objectAtIdx(v.inline_variant.typ_idx).variant_type.qualified_name
     else switch (v) {
         .object => |obj| switch (obj.*) {
             .struct_instance => obj.struct_instance.typ.struct_type.qualified_name,
@@ -355,15 +356,10 @@ pub fn matchesInterfaceType(v: Value, iname: []const u8) bool {
 
 pub fn makeNamedValue(typ_obj: *Object, inner: Value) !Value {
     if (typ_obj.* == .named_type) {
-        const bits: ?u64 = switch (typ_obj.named_type.base) {
-            .int     => @as(u64, @bitCast(inner.int)),
-            .float   => @as(u64, @bitCast(inner.float)),
-            .decimal => @as(u64, @bitCast(inner.decimal)),
-            .rune    => @as(u64, inner.rune),
-            .bool    => if (inner.boolean) @as(u64, 1) else @as(u64, 0),
-            else     => null,
-        };
-        if (bits) |b| return .{ .named_scalar = .{ .typ = typ_obj, .bits = b } };
+        const pool_idx = heap.g_state.objectPoolIndex(typ_obj);
+        if (pool_idx <= 0x0FFF) {
+            if (vmod.tryMakeInlineNamedScalar(typ_obj, @intCast(pool_idx), inner)) |v| return v;
+        }
     }
     const obj = try vmgc.vmAllocObject();
     obj.* = .{ .named_value = .{ .typ = typ_obj, .value = inner } };
@@ -371,7 +367,10 @@ pub fn makeNamedValue(typ_obj: *Object, inner: Value) !Value {
 }
 
 pub fn variantConstruct(typ: *Object, tag: []const u8, ordinal: usize, payload: Value) !Value {
-    if (vmod.tryMakeInlineVariant(typ, ordinal, payload)) |iv| return iv;
+    const pool_idx = heap.g_state.objectPoolIndex(typ);
+    if (pool_idx <= 0x0FFF) {
+        if (vmod.tryMakeInlineVariant(@intCast(pool_idx), ordinal, payload)) |iv| return iv;
+    }
     const vv = try vmgc.vmAllocObject();
     vv.* = .{ .variant_value = .{ .typ = typ, .tag = tag, .ordinal = ordinal, .payload = payload } };
     return .{ .object = vv };

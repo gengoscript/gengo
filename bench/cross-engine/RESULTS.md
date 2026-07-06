@@ -21,6 +21,28 @@ versions, and the OS.
 
 ## Results
 
+### 2026-07-06, Value size redesign (v0.5.1-dev)
+
+**Host**: AMD Ryzen 5 7600 (6-core/12-thread), Linux 6.12.86+deb13-amd64 x86_64
+
+**Engines**: Gengoscript v0.5.1-dev (native ReleaseSafe) · Lua 5.4.7 · Python 3.13.5 · Node v20.19.2
+
+| Engine | `fib_recursive(32)` | `loop_sum` (20M) |
+| --- | --- | --- |
+| Gengo | 0.506s | 0.429s |
+| Lua 5.4 | 0.080s | 0.139s |
+| Node | 0.073s | 0.071s |
+| Python 3 | 0.154s | 1.166s |
+
+`Value` shrunk from 24 → 16 bytes by redesigning `NamedScalarValue` and `InlineVariantValue`
+from `struct { typ: *Object, bits: u64 }` (16 bytes each) to `packed struct(u64)` (8 bytes
+each). The type pointer is replaced by a 12-bit object pool index encoded in the high bits.
+`loop_sum` recovered from 0.722s → 0.429s (≈0.414s pre-regression baseline). `fib_recursive`
+improved from 0.614s → 0.506s; the remaining gap vs. 0.359s pre-regression is from bigint
+overhead introduced in ec05aa7, unrelated to Value size.
+
+---
+
 ### 2026-07-06, commit `3e6f102` (v0.5.1-dev)
 
 **Host**: AMD Ryzen 5 7600 (6-core/12-thread), Linux 6.12.86+deb13-amd64 x86_64
