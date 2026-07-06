@@ -6,6 +6,7 @@ const build_options = @import("build_options");
 const val_mod = @import("../lang/value.zig");
 const Value = val_mod.Value;
 const MapEntry = val_mod.MapEntry;
+const StructFieldSpec = val_mod.StructFieldSpec;
 
 pub const HeapSize = cfg.heap_size_bytes;
 pub const MaxObjects = cfg.max_objects;
@@ -342,6 +343,15 @@ pub const State = struct {
                 if (si.fields.len > 0) {
                     out[n] = .{ .old_addr = @intFromPtr(si.fields.ptr), .block_size = self.managedBlockSize(si.fields.len * @sizeOf(MapEntry)), .new_addr = 0 };
                     n += 1;
+                }
+            },
+            .struct_type => |st| {
+                if (st.fields.len > 0) {
+                    const addr = @intFromPtr(st.fields.ptr);
+                    if (isManagedAddr(self, addr)) {
+                        out[n] = .{ .old_addr = addr, .block_size = st.fields.len * @sizeOf(StructFieldSpec), .new_addr = 0 };
+                        n += 1;
+                    }
                 }
             },
             .variant_value => |vv| {
@@ -708,7 +718,7 @@ pub const State = struct {
         // Phase 1: count live managed blocks.
         var count: usize = 0;
         for (0..self.obj_pool.len) |i| {
-            if (self.obj_live[i]) count += compactCountBlocks(&self.obj_pool[i]);
+            if (self.obj_live[i]) count += compactCountBlocks(self, &self.obj_pool[i]);
         }
         if (count == 0) return;
 
@@ -949,7 +959,17 @@ fn compactFindReloc(relocs: []const CompactReloc, addr: usize) ?usize {
     return r.new_addr + (addr - r.old_addr);
 }
 
-fn compactCountBlocks(obj: *const Object) usize {
+// Returns true if the raw address falls within the managed (non-compiler) heap region.
+fn isManagedAddr(self: *const State, addr: usize) bool {
+    const heap_base = @intFromPtr(self.heap.ptr);
+    const heap_end = heap_base + self.heap.len;
+    if (addr < heap_base or addr >= heap_end) return false;
+    const align_mask: usize = ManagedAlign - 1;
+    const managed_start = heap_base + ((self.compiler_end + align_mask) & ~align_mask);
+    return addr >= managed_start;
+}
+
+fn compactCountBlocks(self: *const State, obj: *const Object) usize {
     return switch (obj.*) {
         .dyn_string      => |s|  if (s.len > 0) 1 else 0,
         .string_builder  => |sb| if (sb.buf.len > 0) 1 else 0,
@@ -963,6 +983,7 @@ fn compactCountBlocks(obj: *const Object) usize {
             break :blk n;
         },
         .struct_instance => |si| if (si.fields.len > 0) 1 else 0,
+        .struct_type     => |st| if (st.fields.len > 0 and isManagedAddr(self, @intFromPtr(st.fields.ptr))) 1 else 0,
         .variant_value   => |vv| blk: {
             var n: usize = 0;
             if (vv.arm_fields.len > 0) n += 1;
@@ -1012,6 +1033,11 @@ fn compactUpdateObj(obj: *Object, relocs: []const CompactReloc) void {
         .struct_instance => |*si| {
             if (si.fields.len > 0) if (compactFindReloc(relocs, @intFromPtr(si.fields.ptr))) |na| {
                 si.fields = @as([*]MapEntry, @ptrCast(@alignCast(@as(*u8, @ptrFromInt(na)))))[0..si.fields.len];
+            };
+        },
+        .struct_type => |*st| {
+            if (st.fields.len > 0) if (compactFindReloc(relocs, @intFromPtr(st.fields.ptr))) |na| {
+                st.fields = @as([*]StructFieldSpec, @ptrCast(@alignCast(@as(*u8, @ptrFromInt(na)))))[0..st.fields.len];
             };
         },
         .variant_value => |*vv| {
