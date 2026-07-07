@@ -163,8 +163,11 @@ fn tplValToDynStr(v: Value) !Value {
             // Root o before any allocation so GC cannot sweep it or its managed bytes.
             try vms.pushTempRoot(.{ .object = o });
             defer vms.popTempRoot();
-            if (o.* == .dyn_string) return vmgc.makeDynString(o.dyn_string);
-            if (o.* == .string_view) return vmgc.makeDynString(o.string_view.bytes);
+            // Use makeDynStringFromObj so the copy re-reads o's bytes field AFTER
+            // vmAllocManagedBytes, avoiding a stale pointer if compactManagedHeap
+            // fires and updates o.dyn_string/o.string_view.bytes mid-allocation.
+            if (o.* == .dyn_string) return vmgc.makeDynStringFromObj(o);
+            if (o.* == .string_view) return vmgc.makeDynStringFromObj(o);
             // Named values render through their underlying value.
             if (o.* == .named_value) return tplValToDynStr(o.named_value.value);
             return vmgc.makeDynString("?");
@@ -173,19 +176,37 @@ fn tplValToDynStr(v: Value) !Value {
     };
 }
 
+/// Append a dyn_string Object's bytes to the builder, re-reading src.dyn_string
+/// AFTER vmAllocManagedBytes so that a compactManagedHeap triggered inside that
+/// call cannot leave us copying from a stale Zig-local []const u8.
+fn tplAppendDynStrToBuilder(sb_obj: *Object, src: *Object) !void {
+    const slen = src.dyn_string.len;
+    if (slen == 0) return;
+    const needed = sb_obj.string_builder.len + slen;
+    if (needed > sb_obj.string_builder.buf.len) {
+        const new_buf = try vmgc.vmAllocManagedBytes(needed);
+        const old_len = sb_obj.string_builder.len;
+        @memcpy(new_buf[0..old_len], sb_obj.string_builder.buf[0..old_len]);
+        @memcpy(new_buf[old_len..needed], src.dyn_string);
+        const old_buf = sb_obj.string_builder.buf;
+        sb_obj.string_builder.buf = new_buf;
+        sb_obj.string_builder.len = needed;
+        heap.freeBytesManaged(old_buf);
+        return;
+    }
+    @memcpy(sb_obj.string_builder.buf[sb_obj.string_builder.len..needed], src.dyn_string);
+    sb_obj.string_builder.len = needed;
+}
+
 fn tplAppendValToBuilder(sb_obj: *Object, val: Value) !void {
     if (val == .object) {
         try vms.pushTempRoot(val);
         defer vms.popTempRoot();
-        const sv = try tplValToDynStr(val);
-        try vms.pushTempRoot(sv);
-        defer vms.popTempRoot();
-        return tplAppendToBuilder(sb_obj, try tplAsStringVal(sv));
     }
     const sv = try tplValToDynStr(val);
     try vms.pushTempRoot(sv);
     defer vms.popTempRoot();
-    try tplAppendToBuilder(sb_obj, try tplAsStringVal(sv));
+    return tplAppendDynStrToBuilder(sb_obj, sv.object);
 }
 
 fn tplAppendToBuilder(sb_obj: *Object, s: []const u8) !void {
@@ -203,7 +224,9 @@ fn tplAppendToBuilder(sb_obj: *Object, s: []const u8) !void {
 }
 
 fn tplBuilderToStr(sb_obj: *Object) !Value {
-    return vmgc.makeDynString(sb_obj.string_builder.buf[0..sb_obj.string_builder.len]);
+    // makeDynStringFromObj re-reads sb_obj.string_builder after vmAllocManagedBytes,
+    // avoiding a stale slice if compactManagedHeap runs inside that allocation.
+    return vmgc.makeDynStringFromObj(sb_obj);
 }
 
 pub fn tplCountInsts(src: []const u8) !usize {
@@ -318,9 +341,9 @@ fn tplBuildObj(src_val: Value, ops: []Value, args: []Value, jmp: []Value) !*Obje
     const args_root_base = try vms.pushObjectTempRoots(args);
     defer vms.restoreTempRoots(args_root_base);
 
-    const any_alts = heap.bump(FieldTypeAlt, 1) orelse return error.OutOfMemory;
-    any_alts[0] = .{ .typ = .any };
-    const any_spec: FieldTypeSpec = .{ .alts = any_alts[0..1] };
+    // Use a comptime constant so the alts pointer lives in rodata, not the
+    // managed heap — compactManagedHeap cannot invalidate it.
+    const any_spec: FieldTypeSpec = .{ .alts = @constCast(&[_]FieldTypeAlt{.{ .typ = .any }}) };
 
     const field_specs = heap.bump(StructFieldSpec, 5) orelse return error.OutOfMemory;
     field_specs[0] = .{ .name = "__ops", .typ = any_spec, .is_const = true };

@@ -347,6 +347,36 @@ pub fn makeDynString(s: []const u8) !Value {
     return .{ .object = obj };
 }
 
+/// Safe copy from a live managed Object when vmAllocManagedBytes may compact.
+/// Callers passing a raw []const u8 derived from a managed Object to makeDynString
+/// risk reading a stale pointer if compactManagedHeap runs inside vmAllocManagedBytes
+/// and updates the Object field while the Zig-local slice stays at the old address.
+/// This variant re-reads the source bytes from src AFTER the allocation, ensuring
+/// the copy uses the post-compact pointer.  src must be temp-rooted by the caller
+/// and must be one of: dyn_string, string_view, string_builder.
+pub fn makeDynStringFromObj(src: *Object) !Value {
+    const ctx = vms.VMContext.fromActive();
+    const slen: usize = switch (src.*) {
+        .dyn_string  => |s|  s.len,
+        .string_view => |sv| sv.bytes.len,
+        .string_builder => |sb| sb.len,
+        else => return error.TypeError,
+    };
+    const obj = try allocTempRooted(.{ .dyn_string = &[_]u8{} });
+    defer ctx.vs.popTempRoot();
+    if (slen == 0) return .{ .object = obj };
+    const buf = try vmAllocManagedBytes(slen);
+    const src_bytes: []const u8 = switch (src.*) {
+        .dyn_string  => |s|  s,
+        .string_view => |sv| sv.bytes,
+        .string_builder => |sb| sb.buf[0..sb.len],
+        else => return error.TypeError,
+    };
+    @memcpy(buf[0..slen], src_bytes);
+    obj.* = .{ .dyn_string = buf[0..slen] };
+    return .{ .object = obj };
+}
+
 pub fn concatDynString(a: []const u8, b: []const u8) !Value {
     const ctx = vms.VMContext.fromActive();
     const obj = try allocTempRooted(.{ .dyn_string = &[_]u8{} });

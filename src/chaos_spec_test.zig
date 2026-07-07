@@ -501,3 +501,54 @@ test "spec pass cases differential" {
 
     if (count == 0) return error.NoSpecPassCases;
 }
+
+// Template compaction safety: verify that tplValToDynStr, tplAppendValToBuilder,
+// and tplBuilderToStr re-read managed-heap byte pointers AFTER vmAllocManagedBytes
+// rather than using a stale Zig-local []const u8 that compactManagedHeap would
+// have moved.  Running with a 256 KB heap makes compaction trigger after a few
+// dozen iterations rather than the ~400 rounds needed on the default 1 MB heap.
+test "template render with named-string type survives compactManagedHeap" {
+    var rt = try api.Runtime.init(.{
+        .allow_io      = true,
+        .allocator     = std.testing.allocator,
+        .heap_size_bytes = 256 * 1024,
+        .max_objects   = 512,
+    });
+    defer rt.deinit();
+
+    g_stdout = std.array_list.Managed(u8).init(std.testing.allocator);
+    g_stderr = std.array_list.Managed(u8).init(std.testing.allocator);
+    defer g_stdout.deinit();
+    defer g_stderr.deinit();
+
+    const src =
+        \\std := import("std")
+        \\type Html string
+        \\func make_row(i int) Html {
+        \\    label := "r" + std.conv.to_string(i)
+        \\    return Html(std.template.render("<b>{{.}}</b>", Html(label)))
+        \\}
+        \\acc := Html("")
+        \\i := 0
+        \\for i < 400 {
+        \\    acc = acc + make_row(i)
+        \\    i = i + 1
+        \\}
+        \\last := make_row(999)
+        \\std.io.println(string(last))
+        \\std.io.println("ok")
+    ;
+
+    const r = runWithCapture(&rt, src, "");
+    const result = r[0];
+    const output = r[1];
+
+    if (result != .ok) {
+        if (result == .runtime_error) {
+            std.debug.print("runtime error: {s}\n", .{result.runtime_error.msg});
+        }
+        return error.TestUnexpectedResult;
+    }
+
+    try std.testing.expectEqualStrings("<b>r999</b>\nok\n", output);
+}
