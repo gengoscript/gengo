@@ -259,7 +259,7 @@ pub fn verify(state: anytype) !void {
 
     {
         var func_body_count: usize = 0;
-        var func_ips: [256]usize = undefined;
+        var func_ips: [4096]usize = undefined;
         {
             for (state.consts[0..state.const_count]) |cv| {
                 if (cv == .object) {
