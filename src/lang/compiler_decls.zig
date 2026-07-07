@@ -307,8 +307,8 @@ pub fn methodDecl(c: anytype) !void {
                 return error.DuplicateField;
             }
             c.registry.addGlobalFunc(key) catch {
-                c.setErr("too many global functions (limit {d})", .{ct.MaxGlobalFuncs});
-                return error.TooManyGlobalFuncs;
+                c.setErr("too many global functions (limit {d})", .{ct.MaxGlobals});
+                return error.TooManyGlobals;
             };
         }
         try c.cs.emitOpStringConst(.def_global, key, kw.line);
@@ -339,8 +339,8 @@ pub fn namedFuncDecl(c: anytype, is_pub: bool) !void {
                 return error.DuplicateField;
             }
             c.registry.addGlobalFunc(qname) catch {
-                c.setErr("too many global functions (limit {d})", .{ct.MaxGlobalFuncs});
-                return error.TooManyGlobalFuncs;
+                c.setErr("too many global functions (limit {d})", .{ct.MaxGlobals});
+                return error.TooManyGlobals;
             };
         }
         try c.cs.emitOpStringConst(.def_global, qname, kw.line);

@@ -35,13 +35,9 @@ const MaxScopes = ct.MaxScopes;
 const MaxLoopDepth = ct.MaxLoopDepth;
 const MaxLoopBreaks = ct.MaxLoopBreaks;
 const MaxTypeAlts = ct.MaxTypeAlts;
-const MaxStructTypes = ct.MaxStructTypes;
-const MaxInterfaceTypes = ct.MaxInterfaceTypes;
 const MaxNamedTypes = ct.MaxNamedTypes;
-const MaxVariantTypes = ct.MaxVariantTypes;
 const MaxSwitchJumps = ct.MaxSwitchJumps;
 const MaxUpvalues = ct.MaxUpvalues;
-const MaxGlobalConsts = ct.MaxGlobalConsts;
 const MaxTestBlocks = ct.MaxTestBlocks;
 const MaxExprDepth = ct.MaxExprDepth;
 

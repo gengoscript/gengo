@@ -312,7 +312,7 @@ test "chaos fail cases" {
         if (std.mem.eql(u8, entry.name, "004_fewer_long_vars.gengo")) continue;
         // 012_string_pool_overflow depends on max_input_bytes vs string pool size mismatch
         if (std.mem.eql(u8, entry.name, "012_string_pool_overflow.gengo")) continue;
-        // 014_many_funcs expects TooManyGlobalFuncs; small heaps OOM before reaching the limit
+        // 014_many_funcs expects TooManyGlobals; small heaps OOM before reaching the limit
         if (std.mem.eql(u8, entry.name, "014_many_funcs.gengo") and cfg.heap_size_bytes < 512 * 1024) continue;
 
         const path = try std.fs.path.join(std.testing.allocator, &.{ "tests/chaos/fail", entry.name });

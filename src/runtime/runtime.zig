@@ -18,19 +18,16 @@ const Value = @import("../lang/value.zig").Value;
 
 const common = @import("../lang/common.zig");
 const ct = @import("../lang/compiler_types.zig");
-const MaxGlobalConsts = ct.MaxGlobalConsts;
-const MaxGlobalFuncs = ct.MaxGlobalFuncs;
+const MaxGlobals = ct.MaxGlobals;
+const MaxTypes = ct.MaxTypes;
 const MaxLocals = ct.MaxLocals;
 const MaxNamedTypes = ct.MaxNamedTypes;
-const MaxStructTypes = ct.MaxStructTypes;
-const MaxInterfaceTypes = ct.MaxInterfaceTypes;
-const MaxVariantTypes = ct.MaxVariantTypes;
 const NamedTypeBase = @import("../lang/value.zig").NamedTypeBase;
 const TypeCheck = ct.TypeCheck;
 const PrimType = ct.PrimType;
 
-const MaxReplSyms = MaxStructTypes + MaxInterfaceTypes + MaxNamedTypes + MaxVariantTypes + MaxGlobalFuncs;
-const ReplSymNameBufSize = MaxNamedTypes * 64 + MaxGlobalFuncs * 64; // 49 152 bytes
+const MaxReplSyms = MaxTypes + MaxNamedTypes + MaxGlobals;
+const ReplSymNameBufSize = MaxNamedTypes * 64 + MaxGlobals * 64;
 
 const ReplSymKind = enum(u8) { struct_type, interface_type, named_type, variant_type, global_func };
 
@@ -119,8 +116,8 @@ pub const Runtime = struct {
     test_count: u16 = 0,
     test_names: [MaxTests][]const u8 = undefined,
     test_failed: bool = false,
-    repl_const_names: [MaxGlobalConsts][]const u8 = undefined,
-    repl_const_name_buf: [MaxGlobalConsts * 64]u8 = undefined,
+    repl_const_names: [MaxGlobals][]const u8 = undefined,
+    repl_const_name_buf: [MaxGlobals * 64]u8 = undefined,
     repl_const_name_buf_used: usize = 0,
     repl_const_count: usize = 0,
 
@@ -471,11 +468,11 @@ pub const Runtime = struct {
             return err;
         };
 
-        var ci: usize = 0;
-        while (ci < compiler.registry.global_const_count) : (ci += 1) {
-            const cname = compiler.registry.global_consts[ci].name;
+        for (compiler.registry.func_buckets) |e| {
+            if (!e.occupied or !e.is_const) continue;
+            const cname = compiler.registry.global_symbols[e.sub_idx];
             if (!checkGlobalIsConst(self, cname)) {
-                if (self.repl_const_count >= MaxGlobalConsts or
+                if (self.repl_const_count >= MaxGlobals or
                     self.repl_const_name_buf_used + cname.len > self.repl_const_name_buf.len)
                 {
                     return self.setReplOverflowError("REPL const table full: too many global const declarations");
@@ -615,31 +612,25 @@ pub const Runtime = struct {
             self.repl_sym_count += 1;
         }
 
-        // Struct / interface / variant types (name only)
-        ti = 0;
-        while (ti < compiler.registry.struct_type_count) : (ti += 1) {
+        // Struct / interface / variant types (name only) — scan type hash
+        for (compiler.registry.type_buckets) |e| {
+            if (!e.occupied) continue;
+            const kind: ReplSymKind = switch (e.kind) {
+                .struct_type    => .struct_type,
+                .interface_type => .interface_type,
+                .variant_type   => .variant_type,
+                .named_type     => continue, // handled above
+            };
             if (self.repl_sym_count >= MaxReplSyms)
-                return self.setReplOverflowError("REPL symbol table full: too many struct type declarations");
-            try self.appendReplSimpleSym(compiler.registry.struct_types[ti].name, .struct_type);
-        }
-        ti = 0;
-        while (ti < compiler.registry.interface_type_count) : (ti += 1) {
-            if (self.repl_sym_count >= MaxReplSyms)
-                return self.setReplOverflowError("REPL symbol table full: too many interface type declarations");
-            try self.appendReplSimpleSym(compiler.registry.interface_types[ti].name, .interface_type);
-        }
-        ti = 0;
-        while (ti < compiler.registry.variant_type_count) : (ti += 1) {
-            if (self.repl_sym_count >= MaxReplSyms)
-                return self.setReplOverflowError("REPL symbol table full: too many variant type declarations");
-            try self.appendReplSimpleSym(compiler.registry.variant_types[ti].name, .variant_type);
+                return self.setReplOverflowError("REPL symbol table full: too many type declarations");
+            try self.appendReplSimpleSym(compiler.registry.type_names[e.sub_idx], kind);
         }
 
         // Global funcs (name only; overflow is graceful — duplicate detection degrades)
-        var fi: usize = 0;
-        while (fi < compiler.registry.global_func_count) : (fi += 1) {
+        for (compiler.registry.func_buckets) |e| {
+            if (!e.occupied or e.is_const) continue;
             if (self.repl_sym_count >= MaxReplSyms) break;
-            self.appendReplSimpleSym(compiler.registry.global_funcs[fi].name, .global_func) catch break;
+            self.appendReplSimpleSym(compiler.registry.global_symbols[e.sub_idx], .global_func) catch break;
         }
     }
 

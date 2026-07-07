@@ -21,14 +21,11 @@ pub const MaxLoopDepth = 16;
 pub const MaxLoopBreaks = 128;
 pub const MaxLoopVars = 2;
 pub const MaxTypeAlts = 8;
-pub const MaxStructTypes = 128;
-pub const MaxInterfaceTypes = 128;
+pub const MaxTypes = 512;       // struct + interface + variant combined
 pub const MaxNamedTypes = 256;
-pub const MaxVariantTypes = 128;
 pub const MaxSwitchJumps = 256;
 pub const MaxUpvalues = 64;
-pub const MaxGlobalConsts = 512;
-pub const MaxGlobalFuncs = 512;
+pub const MaxGlobals = 1024;    // funcs + consts combined
 pub const MaxExprDepth = 256;
 
 pub const Prec = enum(u8) {
@@ -123,9 +120,6 @@ pub const MultiAssignValueScratch = "__gengo_tmp_value";
 
 // --- TypeRegistry ---
 
-const StructTypeInfo = struct { name: []const u8 };
-const InterfaceTypeInfo = struct { name: []const u8 };
-const VariantTypeInfo = struct { name: []const u8 };
 pub const NamedTypeInfo = struct {
     name: []const u8,
     base: NamedTypeBase,
@@ -143,31 +137,36 @@ pub const NamedTypeInfo = struct {
     has_default: bool = false,
     default_val: value_mod.Value = undefined,
 };
-const GlobalConstInfo = struct { name: []const u8 };
-const GlobalFuncInfo = struct { name: []const u8 };
-
 // ── Hash-index types for O(1) symbol lookup ─────────────────────────────────
 //
-// Two separate open-addressed hash tables keep type names (struct/interface/
-// named/variant) and global function names in disjoint namespaces, avoiding
-// any cross-kind collision between e.g. a type named "Foo" and a function also
-// named "Foo".  Global consts remain a linear scan (small count, rare path).
+// Two open-addressed hash tables cover all compiler symbols:
 //
-// TypeHashSize = 2048: load factor < 0.32 at the combined type ceiling of
-// MaxStructTypes+MaxInterfaceTypes+MaxNamedTypes+MaxVariantTypes = 640.
-// FuncHashSize = 1024: load factor < 0.50 at MaxGlobalFuncs = 512.
+//   type_buckets  — struct, interface, variant, named types.
+//                   struct/interface/variant store only a name ([]const u8)
+//                   in type_names[sub_idx]; named types also store rich info
+//                   in named_types[sub_idx].  A single MaxTypes cap replaces
+//                   the old per-category MaxStructTypes/MaxInterfaceTypes/
+//                   MaxVariantTypes limits.
+//
+//   func_buckets  — global functions AND global consts, distinguished by the
+//                   is_const flag in the entry.  A single MaxGlobals cap
+//                   replaces the old separate MaxGlobalFuncs/MaxGlobalConsts.
+//
+// TypeHashSize = 2048: load factor < 0.25 at MaxTypes(512)+MaxNamedTypes(256).
+// FuncHashSize = 2048: load factor < 0.50 at MaxGlobals = 1024.
 
 const TypeSymbolKind = enum(u8) { struct_type, interface_type, named_type, variant_type };
 const TypeHashSize = 2048;
-const FuncHashSize = 1024;
+const FuncHashSize = 2048;
 
 const TypeHashEntry = struct {
-    sub_idx: u16 = 0, // index into the kind's sub-array
+    sub_idx: u16 = 0, // → type_names[] for struct/interface/variant; → named_types[] for named_type
     kind: TypeSymbolKind = .struct_type,
     occupied: bool = false,
 };
 const FuncHashEntry = struct {
-    sub_idx: u16 = 0,
+    sub_idx: u16 = 0, // → global_symbols[]
+    is_const: bool = false,
     occupied: bool = false,
 };
 
@@ -178,30 +177,24 @@ const empty_func_buckets = [1]FuncHashEntry{.{}} ** FuncHashSize;
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub const TypeRegistry = struct {
-    struct_types: [MaxStructTypes]StructTypeInfo = undefined,
-    struct_type_count: usize = 0,
-    interface_types: [MaxInterfaceTypes]InterfaceTypeInfo = undefined,
-    interface_type_count: usize = 0,
+    // struct/interface/variant: name only, stored in type_names[].
+    type_names: [MaxTypes][]const u8 = undefined,
+    type_name_count: usize = 0,
+    // named types: rich info stored in named_types[].
     named_types: [MaxNamedTypes]NamedTypeInfo = undefined,
     named_type_count: usize = 0,
-    variant_types: [MaxVariantTypes]VariantTypeInfo = undefined,
-    variant_type_count: usize = 0,
-    global_consts: [MaxGlobalConsts]GlobalConstInfo = undefined,
-    global_const_count: usize = 0,
-    global_funcs: [MaxGlobalFuncs]GlobalFuncInfo = undefined,
-    global_func_count: usize = 0,
+    // global funcs + consts unified; is_const distinguishes them.
+    global_symbols: [MaxGlobals][]const u8 = undefined,
+    global_count: usize = 0,
 
     // Hash indexes — initialised to all-empty via comptime defaults above.
     type_buckets: [TypeHashSize]TypeHashEntry = empty_type_buckets,
     func_buckets: [FuncHashSize]FuncHashEntry = empty_func_buckets,
 
     pub fn reset(self: *TypeRegistry) void {
-        self.struct_type_count = 0;
-        self.interface_type_count = 0;
+        self.type_name_count = 0;
         self.named_type_count = 0;
-        self.variant_type_count = 0;
-        self.global_const_count = 0;
-        self.global_func_count = 0;
+        self.global_count = 0;
         @memset(self.type_buckets[0..], .{});
         @memset(self.func_buckets[0..], .{});
     }
@@ -210,12 +203,10 @@ pub const TypeRegistry = struct {
 
     fn nameAtTypeSlot(self: *const TypeRegistry, idx: usize) []const u8 {
         const e = self.type_buckets[idx];
-        return switch (e.kind) {
-            .struct_type => self.struct_types[e.sub_idx].name,
-            .interface_type => self.interface_types[e.sub_idx].name,
-            .named_type => self.named_types[e.sub_idx].name,
-            .variant_type => self.variant_types[e.sub_idx].name,
-        };
+        return if (e.kind == .named_type)
+            self.named_types[e.sub_idx].name
+        else
+            self.type_names[e.sub_idx];
     }
 
     fn typeSlotFor(self: *const TypeRegistry, name: []const u8) ?usize {
@@ -248,13 +239,13 @@ pub const TypeRegistry = struct {
         }
     }
 
-    fn funcSlotFor(self: *const TypeRegistry, name: []const u8) ?usize {
+    fn funcSlotFor(self: *const TypeRegistry, name: []const u8, want_const: bool) ?usize {
         const mask: usize = FuncHashSize - 1;
         var idx: usize = @intCast(common.hashBytes(name) & mask);
         for (0..FuncHashSize) |_| {
             const e = self.func_buckets[idx];
             if (!e.occupied) return null;
-            if (common.streq(self.global_funcs[e.sub_idx].name, name)) return idx;
+            if (e.is_const == want_const and common.streq(self.global_symbols[e.sub_idx], name)) return idx;
             idx = (idx + 1) & mask;
         }
         return null;
@@ -265,7 +256,7 @@ pub const TypeRegistry = struct {
         var idx: usize = @intCast(common.hashBytes(name) & mask);
         for (0..FuncHashSize) |_| {
             const e = self.func_buckets[idx];
-            if (!e.occupied or common.streq(self.global_funcs[e.sub_idx].name, name)) return idx;
+            if (!e.occupied or common.streq(self.global_symbols[e.sub_idx], name)) return idx;
             idx = (idx + 1) & mask;
         }
         return null;
@@ -288,34 +279,35 @@ pub const TypeRegistry = struct {
     }
 
     pub fn hasGlobalConst(self: *const TypeRegistry, name: []const u8) bool {
-        for (self.global_consts[0..self.global_const_count]) |c| {
-            if (common.streq(c.name, name)) return true;
-        }
-        return false;
+        return self.funcSlotFor(name, true) != null;
     }
 
     pub fn addGlobalConst(self: *TypeRegistry, name: []const u8) !void {
         if (self.hasGlobalConst(name)) return;
-        if (self.global_const_count >= MaxGlobalConsts) return error.TooManyGlobals;
-        self.global_consts[self.global_const_count] = .{ .name = name };
-        self.global_const_count += 1;
+        if (self.global_count >= MaxGlobals) return error.TooManyGlobals;
+        const sub_idx = self.global_count;
+        self.global_symbols[sub_idx] = name;
+        self.global_count += 1;
+        const slot = self.funcSlotForInsert(name) orelse return;
+        if (!self.func_buckets[slot].occupied)
+            self.func_buckets[slot] = .{ .sub_idx = @intCast(sub_idx), .is_const = true, .occupied = true };
     }
 
     pub fn addStructType(self: *TypeRegistry, name: []const u8) !void {
         if (self.hasStructType(name)) return error.DuplicateStructType;
-        if (self.struct_type_count >= MaxStructTypes) return error.TooManyStructTypes;
-        const sub_idx = self.struct_type_count;
-        self.struct_types[sub_idx] = .{ .name = name };
-        self.struct_type_count += 1;
+        if (self.type_name_count >= MaxTypes) return error.TooManyTypes;
+        const sub_idx = self.type_name_count;
+        self.type_names[sub_idx] = name;
+        self.type_name_count += 1;
         self.insertTypeSlot(name, .struct_type, sub_idx);
     }
 
     pub fn addInterfaceType(self: *TypeRegistry, name: []const u8) !void {
         if (self.hasInterfaceType(name)) return error.DuplicateInterfaceType;
-        if (self.interface_type_count >= MaxInterfaceTypes) return error.TooManyInterfaceTypes;
-        const sub_idx = self.interface_type_count;
-        self.interface_types[sub_idx] = .{ .name = name };
-        self.interface_type_count += 1;
+        if (self.type_name_count >= MaxTypes) return error.TooManyTypes;
+        const sub_idx = self.type_name_count;
+        self.type_names[sub_idx] = name;
+        self.type_name_count += 1;
         self.insertTypeSlot(name, .interface_type, sub_idx);
     }
 
@@ -351,25 +343,24 @@ pub const TypeRegistry = struct {
 
     pub fn addVariantType(self: *TypeRegistry, name: []const u8) !void {
         if (self.hasVariantType(name)) return error.DuplicateVariantType;
-        if (self.variant_type_count >= MaxVariantTypes) return error.TooManyVariantTypes;
-        const sub_idx = self.variant_type_count;
-        self.variant_types[sub_idx] = .{ .name = name };
-        self.variant_type_count += 1;
+        if (self.type_name_count >= MaxTypes) return error.TooManyTypes;
+        const sub_idx = self.type_name_count;
+        self.type_names[sub_idx] = name;
+        self.type_name_count += 1;
         self.insertTypeSlot(name, .variant_type, sub_idx);
     }
 
     pub fn hasGlobalFunc(self: *const TypeRegistry, name: []const u8) bool {
-        return self.funcSlotFor(name) != null;
+        return self.funcSlotFor(name, false) != null;
     }
 
     pub fn addGlobalFunc(self: *TypeRegistry, name: []const u8) !void {
-        if (self.global_func_count >= MaxGlobalFuncs) return error.TooManyGlobalFuncs;
-        const sub_idx = self.global_func_count;
-        self.global_funcs[sub_idx] = .{ .name = name };
-        self.global_func_count += 1;
+        if (self.global_count >= MaxGlobals) return error.TooManyGlobals;
+        const sub_idx = self.global_count;
+        self.global_symbols[sub_idx] = name;
+        self.global_count += 1;
         const slot = self.funcSlotForInsert(name) orelse return;
-        if (!self.func_buckets[slot].occupied) {
-            self.func_buckets[slot] = .{ .sub_idx = @intCast(sub_idx), .occupied = true };
-        }
+        if (!self.func_buckets[slot].occupied)
+            self.func_buckets[slot] = .{ .sub_idx = @intCast(sub_idx), .is_const = false, .occupied = true };
     }
 };
