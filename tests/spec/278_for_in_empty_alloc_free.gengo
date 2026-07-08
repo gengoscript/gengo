@@ -1,0 +1,67 @@
+std := import("std")
+
+// #192: entering a for-in over an empty iterable must not allocate — iterInit
+// returns a shared immortal empty iterator instead of a fresh object.
+// Measured loops live inside functions: at global scope a for-in nested in
+// another loop miscompiles the next for-in (#193), and slicing (s[0:0]) is
+// excluded from the measured window because each slice expression allocates
+// a view object of its own.
+
+arr := []
+m := {}
+s := ""
+
+func spinEmpty(rounds int) int {
+    w := 0
+    for n := 0; n < rounds; n += 1 {
+        for i, v in arr { w += 1 }
+        for k, v in m { w += 1 }
+        for ch in s { w += 1 }
+    }
+    return w
+}
+
+func tally(base int, ...rest int) int {
+    t := base
+    for i, v in rest { t += v }
+    return t
+}
+
+// Warm up interning / inline caches before measuring.
+w0 := spinEmpty(1)
+w1 := tally(1)
+
+s1 := std.core.gc_stats_ext()
+before := s1.alloc_object_calls
+w := spinEmpty(500)
+s2 := std.core.gc_stats_ext()
+// The only allocation between the snapshots is s2's own stats map.
+std.io.println(s2.alloc_object_calls == before + 1)
+std.io.println(w)
+
+// Variadic + for-in over the shared empty-args array: fully alloc-free too.
+s3 := std.core.gc_stats_ext()
+b3 := s3.alloc_object_calls
+t := 0
+for n := 0; n < 500; n += 1 { t += tally(n) }
+s4 := std.core.gc_stats_ext()
+std.io.println(s4.alloc_object_calls == b3 + 1)
+std.io.println(t)
+
+// for-in over an empty slice view still iterates zero times (the slice
+// itself allocates a view; only the iterator is shared).
+func sliceSpin() int {
+    w2 := 0
+    for ch in s[0:0] { w2 += 1 }
+    return w2
+}
+std.io.println(sliceSpin())
+
+// Non-empty iteration is unaffected.
+func sumOf(xs []int) int {
+    total := 0
+    for i, v in xs { total += v }
+    return total
+}
+std.io.println(sumOf([1, 2, 3]))
+std.io.println(w0 + w1)
