@@ -21,11 +21,19 @@ func render_row(i int) Html {
 }
 
 // Build up a table by accumulating rows.  Keeping `table` live prevents GC
-// from reclaiming the intermediate strings, filling the heap until compaction.
+// from reclaiming the intermediate strings.  The accumulator is re-seeded
+// every 50 rows so the live set stays bounded: the CI stress preset runs
+// this suite on a 256 KB heap, and an unbounded table plus its concat
+// copies does not fit there.  The deterministic compaction regression
+// (400 renders against an explicit 256 KB heap) lives in chaos_spec_test's
+// "template render with named-string type survives compactManagedHeap".
 table := Html("")
 i := 0
 for i < 300 {
     table = table + render_row(i)
+    if i mod 50 == 49 {
+        table = render_row(i)
+    }
     i = i + 1
 }
 
