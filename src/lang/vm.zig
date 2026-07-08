@@ -1119,25 +1119,41 @@ fn tryTailCall(ctx: VMContext, argc: u8) !bool {
     return true;
 }
 
+// Shared immortal iterator for length-0 arrays, strings, and maps (#192).
+// Lives outside the object pool (never swept) and holds no heap pointers.
+// Safe to share because the only code that ever runs against it — the
+// exhausted check at the top of iterNext1/iterNext2 — reads index and length
+// and writes nothing. Saves one object allocation per for-in entry over an
+// empty iterable.
+var empty_iterator: Object = .{ .iterator = .{ .kind = .array, .index = 0 } };
+
 fn iterInit(v: Value) !Value {
-    const obj = try vmgc.vmAllocObject();
     const iv = vms.unboxNamed(v);
-    switch (iv) {
+    const it: IterObj = switch (iv) {
         .object => |o| switch (o.*) {
-            .dyn_string => |s| obj.* = .{ .iterator = .{ .kind = .string, .index = 0, .string = s, .string_managed = true, .source = o } },
-            .string_view => |sv| obj.* = .{ .iterator = .{ .kind = .string, .index = 0, .string = sv.bytes, .string_managed = true, .source = sv.source } },
-            .array_view => |av| obj.* = .{ .iterator = .{ .kind = .array, .index = 0, .array = av.items, .source = o } },
-            .array, .array_managed, .array_capacity => obj.* = .{ .iterator = .{ .kind = .array, .index = 0, .array = try vms.asArraySlice(o), .source = o } },
-            .map, .map_managed, .map_hashed => obj.* = .{ .iterator = .{ .kind = .map, .index = 0, .map = try vms.asMapSlice(o), .source = o } },
-            .named_type => |nt| {
+            .dyn_string => |s| .{ .kind = .string, .index = 0, .string = s, .string_managed = true, .source = o },
+            .string_view => |sv| .{ .kind = .string, .index = 0, .string = sv.bytes, .string_managed = true, .source = sv.source },
+            .array_view => |av| .{ .kind = .array, .index = 0, .array = av.items, .source = o },
+            .array, .array_managed, .array_capacity => .{ .kind = .array, .index = 0, .array = try vms.asArraySlice(o), .source = o },
+            .map, .map_managed, .map_hashed => .{ .kind = .map, .index = 0, .map = try vms.asMapSlice(o), .source = o },
+            .named_type => |nt| blk: {
                 if (!nt.has_range) return error.TypeError;
-                obj.* = .{ .iterator = .{ .kind = .range, .index = 0, .range_current = nt.min, .range_max = nt.max, .source = o } };
+                break :blk .{ .kind = .range, .index = 0, .range_current = nt.min, .range_max = nt.max, .source = o };
             },
             else => return error.TypeError,
         },
-        .string => |s| obj.* = .{ .iterator = .{ .kind = .string, .index = 0, .string = s.bytes, .string_managed = false } },
+        .string => |s| .{ .kind = .string, .index = 0, .string = s.bytes, .string_managed = false },
         else => return error.TypeError,
-    }
+    };
+    const is_empty = switch (it.kind) {
+        .array => it.array.len == 0,
+        .string => it.string.len == 0,
+        .map => it.map.len == 0,
+        .range => false, // min..max is inclusive: a range iterator is never empty
+    };
+    if (is_empty) return .{ .object = &empty_iterator };
+    const obj = try vmgc.vmAllocObject();
+    obj.* = .{ .iterator = it };
     return .{ .object = obj };
 }
 
