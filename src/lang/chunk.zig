@@ -11,6 +11,11 @@ const chunk_verifier = @import("chunk_verifier.zig");
 // Jump offsets are 32-bit (4 bytes, big-endian u32). MaxCode can therefore be very large;
 // 1 MiB is a practical ceiling that covers any realistic script.
 pub const MaxCode = 1048576;
+// Tail padding past MaxCode, covering the widest instruction (13 bytes). The VM
+// reads operand bytes without bounds checks after a bounds-checked opcode fetch;
+// the padding guarantees those reads stay inside the array even if ip were ever
+// to land on the last byte of code.
+pub const CodePad = 16;
 // Constant indices are two-byte (big-endian u16); 4096 is a practical ceiling well below
 // the u16 maximum while fitting comfortably in the GC heap.
 pub const MaxConst = 4096;
@@ -30,7 +35,7 @@ pub const ModuleBoundary = struct {
 };
 
 pub const State = struct {
-    code: [MaxCode]u8 = undefined,
+    code: [MaxCode + CodePad]u8 = undefined,
     lines: [MaxCode]u16 = undefined,
     cols: [MaxCode]u16 = undefined,
     consts: [MaxConst]Value = undefined,
@@ -103,6 +108,11 @@ pub const State = struct {
     // Set after the first successful verify(); subsequent run() entries skip re-verification.
     // Cleared by reset() so a re-compiled chunk is re-verified.
     verified: bool = false,
+    // Code length at the time of the last successful verify(). If code is appended
+    // afterwards (REPL lines, module compiles) or replaced (defuse), the length no
+    // longer matches and verify() re-runs. The VM's unchecked operand fetch relies
+    // on this: only verified bytecode ever executes.
+    verified_code_len: usize = 0,
 
     // Module boundary table: records (ip_start, path) pairs in emission order so that
     // pathAt(ip) can walk backwards and return the source file for any bytecode position.
@@ -881,9 +891,10 @@ pub const State = struct {
     pub fn constAt(self: *const State, i: usize) !Value { if (i >= self.const_count) return error.BadConstantIndex; return self.consts[i]; }
     pub fn decodeAt(self: *State, pos: usize) !DecodedInstruction { return chunk_decoder.decodeAt(self, pos); }
     pub fn verify(self: *State) !void {
-        if (self.verified) return;
+        if (self.verified and self.verified_code_len == self.code_len) return;
         try chunk_verifier.verify(self);
         self.verified = true;
+        self.verified_code_len = self.code_len;
     }
 };
 
@@ -920,6 +931,7 @@ pub fn reset() void {
     g_state.std_call_patch_pos = null;
     g_state.verify_err_len = 0;
     g_state.verified = false;
+    g_state.verified_code_len = 0;
     g_state.module_boundary_count = 0;
 }
 

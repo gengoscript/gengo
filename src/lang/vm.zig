@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const chunk = @import("chunk.zig");
 const common = @import("common.zig");
 const globals = @import("globals.zig");
@@ -1351,12 +1352,12 @@ fn pushFieldFromObject(ctx: VMContext, obj: *Object, name_idx: usize, ic_base: u
 }
 
 fn opGetLocalGetField(ctx: VMContext) !void {
-    const slot = try ctx.vs.vmByte();
+    const slot = opByte(ctx);
     ctx.vs.ip += 1; // skip embedded get_field opcode byte
-    const name_idx = try ctx.vs.vmShort();
+    const name_idx = opShort(ctx);
     const ic_base = ctx.vs.ip;
-    const ic_type_idx = try ctx.vs.vmShort();
-    const ic_fidx = try ctx.vs.vmByte();
+    const ic_type_idx = opShort(ctx);
+    const ic_fidx = opByte(ctx);
     const raw = try readLocalSlot(ctx, slot);
     const container = vms.unboxNamed(raw);
     if (container != .object) return error.TypeError;
@@ -1472,11 +1473,11 @@ fn opSetIndex(ctx: VMContext) !void {
 }
 
 fn opInvokeMethod(ctx: VMContext) !void {
-    const mname = (try ctx.vs.vmConst()).string.bytes;
-    const argc = try ctx.vs.vmByte();
+    const mname = (try opConst(ctx)).string.bytes;
+    const argc = opByte(ctx);
     const ic_base = ctx.vs.ip;
-    const ic_type_idx = try ctx.vs.vmShort(); // ic_type pool index (0xFFFF = cold)
-    const ic_func_idx = try ctx.vs.vmShort(); // ic_func pool index (0xFFFF = cold)
+    const ic_type_idx = opShort(ctx); // ic_type pool index (0xFFFF = cold)
+    const ic_func_idx = opShort(ctx); // ic_func pool index (0xFFFF = cold)
     if (ctx.vs.stack_top < @as(usize, argc) + 1) return error.StackUnderflow;
     const recv_idx = ctx.vs.stack_top - argc - 1;
     const recv = ctx.vs.stack[recv_idx];
@@ -1612,10 +1613,10 @@ fn opInvokeMethod(ctx: VMContext) !void {
 }
 
 fn opGetField(ctx: VMContext) !void {
-    const name_idx = try ctx.vs.vmShort();
+    const name_idx = opShort(ctx);
     const ic_base = ctx.vs.ip;
-    const ic_type_idx = try ctx.vs.vmShort();
-    const ic_fidx = try ctx.vs.vmByte();
+    const ic_type_idx = opShort(ctx);
+    const ic_fidx = opByte(ctx);
     const raw = try ctx.vs.vmPop();
     var rooted_raw = false;
     if (raw == .object) { try ctx.vs.pushTempRoot(raw); rooted_raw = true; }
@@ -1637,10 +1638,10 @@ fn opGetField(ctx: VMContext) !void {
 }
 
 fn opSetField(ctx: VMContext) !void {
-    const name_idx = try ctx.vs.vmShort();
+    const name_idx = opShort(ctx);
     const ic_base = ctx.vs.ip;
-    const ic_type_idx = try ctx.vs.vmShort();
-    const ic_fidx = try ctx.vs.vmByte();
+    const ic_type_idx = opShort(ctx);
+    const ic_fidx = opByte(ctx);
     const name_val = try ctx.cs.constAt(name_idx);
     const name = name_val.string.bytes;
     const val = try ctx.vs.vmPop();
@@ -1696,8 +1697,8 @@ fn insertReceiverAndCall(ctx: VMContext, recv_idx: usize, func: Value, recv: Val
 }
 
 fn opDeferInvokeMethod(ctx: VMContext) !void {
-    const mname = (try ctx.vs.vmConst()).string.bytes;
-    const argc = try ctx.vs.vmByte();
+    const mname = (try opConst(ctx)).string.bytes;
+    const argc = opByte(ctx);
     if (ctx.vs.defer_top >= ctx.vs.defer_stack.len) return error.DeferStackOverflow;
     if (ctx.vs.stack_top < @as(usize, argc) + 1) return error.StackUnderflow;
     const recv_idx = ctx.vs.stack_top - @as(usize, argc) - 1;
@@ -1774,33 +1775,99 @@ fn readLocalSlot(ctx: VMContext, slot: usize) !Value {
 }
 
 fn readGlobalConstPair(ctx: VMContext) !struct { g: Value, k: Value } {
-    const name_idx = try ctx.vs.vmShort();
+    const name_idx = opShort(ctx);
     const ic_base = ctx.vs.ip;
-    const ic_slot: u16 = @intCast(try ctx.vs.vmShort());
+    const ic_slot: u16 = @intCast(opShort(ctx));
     ctx.vs.ip += 1; // skip embedded const opcode byte
-    const k = try ctx.cs.constAt(try ctx.vs.vmShort());
+    const k = try ctx.cs.constAt(opShort(ctx));
     return .{ .g = try readGlobalIC(ctx, name_idx, ic_base, ic_slot), .k = k };
 }
 
 fn readLocalSlotAndConst(ctx: VMContext) !struct { slot: u8, k: Value } {
-    const slot = try ctx.vs.vmByte();
+    const slot = opByte(ctx);
     ctx.vs.ip += 1; // skip embedded const opcode byte
-    return .{ .slot = slot, .k = try ctx.cs.constAt(try ctx.vs.vmShort()) };
+    return .{ .slot = slot, .k = try ctx.cs.constAt(opShort(ctx)) };
 }
 
+// ── Operand fetch ─────────────────────────────────────────────────────────────
+// Unchecked reads: sound because run() verifies the chunk before runInner and
+// re-verifies whenever code_len changes (chunk.verified_code_len). The verifier
+// proves every instruction — opcode plus all operand bytes — lies within
+// code_len, and every jump target lands on an instruction start. The code array
+// carries chunk.CodePad tail bytes so that even an ip the verifier never blessed
+// (a corrupt function const) cannot read past the array.
+
+inline fn opByte(ctx: VMContext) u8 {
+    const code: [*]const u8 = &ctx.cs.code;
+    const b = code[ctx.vs.ip];
+    ctx.vs.ip += 1;
+    return b;
+}
+
+inline fn opShort(ctx: VMContext) usize {
+    const code: [*]const u8 = &ctx.cs.code;
+    const ip = ctx.vs.ip;
+    ctx.vs.ip = ip + 2;
+    return (@as(usize, code[ip]) << 8) | code[ip + 1];
+}
+
+inline fn opInt(ctx: VMContext) usize {
+    const code: [*]const u8 = &ctx.cs.code;
+    const ip = ctx.vs.ip;
+    ctx.vs.ip = ip + 4;
+    return (@as(usize, code[ip]) << 24) | (@as(usize, code[ip + 1]) << 16) | (@as(usize, code[ip + 2]) << 8) | code[ip + 3];
+}
+
+inline fn opConst(ctx: VMContext) !Value {
+    return ctx.cs.constAt(opShort(ctx));
+}
+
+// Fetch the next opcode. The only bounds-checked read in the dispatch path:
+// it doubles as the end-of-code guard, so operand reads that follow can be
+// unchecked (see above).
+inline fn dispatchNext(ctx: VMContext) !Op {
+    if (ctx.vs.ops_budget_remaining < std.math.maxInt(u64)) {
+        if (ctx.vs.ops_budget_remaining == 0) return error.InstructionBudgetExceeded;
+        ctx.vs.ops_budget_remaining -= 1;
+    }
+    if (ctx.vs.ip >= ctx.cs.code_len) return error.BytecodeOutOfBounds;
+    const op_raw = opByte(ctx);
+    if (op_raw >= std.meta.fields(Op).len) return error.InvalidChunkShape;
+    if (io.traceActive()) io.fireTrace(ctx.cs.lineAt(ctx.vs.ip - 1), ctx.cs.colAt(ctx.vs.ip - 1));
+    vmperf.countOp(op_raw);
+    return @enumFromInt(op_raw);
+}
+
+// On native targets execOne is force-inlined into each `inline else` arm of
+// runInner, reproducing the old single-function interpreter. On WASM it stays
+// a plain call: Debug builds would otherwise exceed wasmtime's per-function
+// locals limit (~200 inlined instantiations in one function).
+const exec_call_modifier: std.builtin.CallModifier =
+    if (builtin.target.cpu.arch.isWasm()) .auto else .always_inline;
+
 fn runInner(ctx: VMContext) !void {
-    while (true) {
-        if (ctx.vs.ops_budget_remaining < std.math.maxInt(u64)) {
-            if (ctx.vs.ops_budget_remaining == 0) return error.InstructionBudgetExceeded;
-            ctx.vs.ops_budget_remaining -= 1;
-        }
-        const op_raw = try ctx.vs.vmByte();
-        if (op_raw >= std.meta.fields(Op).len) return error.InvalidChunkShape;
-        if (io.traceActive()) io.fireTrace(ctx.cs.lineAt(ctx.vs.ip - 1), ctx.cs.colAt(ctx.vs.ip - 1));
-        vmperf.countOp(op_raw);
-        const op: Op = @enumFromInt(op_raw);
+    // Threaded dispatch: `inline else` instantiates its body once per opcode,
+    // so every `continue :dispatch` below compiles to its own indirect jump —
+    // the branch predictor sees one branch per opcode pair instead of a
+    // single megamorphic one.
+    @setEvalBranchQuota(100_000);
+    dispatch: switch (try dispatchNext(ctx)) {
+        inline else => |op| {
+            if (try @call(exec_call_modifier, execOne, .{ ctx, op })) return;
+            continue :dispatch (try dispatchNext(ctx));
+        },
+    }
+}
+
+// Execute one instruction whose opcode is comptime-known; the switch folds to
+// the matching arm per instantiation. Returns true when runInner must exit
+// (halt, or a `ret` that reached the call-depth target). The single-iteration
+// `for` exists so that bare `continue` inside the arms keeps meaning "next
+// instruction", exactly as in the old while-loop form of runInner.
+fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
+    for (0..1) |_| {
         switch (op) {
-            .constant => try ctx.vs.vmPush(try ctx.vs.vmConst()),
+            .constant => try ctx.vs.vmPush(try opConst(ctx)),
             .null_val => try ctx.vs.vmPush(.null),
             .true_val => try ctx.vs.vmPush(.{ .boolean = true }),
             .false_val => try ctx.vs.vmPush(.{ .boolean = false }),
@@ -1820,27 +1887,27 @@ fn runInner(ctx: VMContext) !void {
             },
 
             .def_global => {
-                const name = (try ctx.vs.vmConst()).string.bytes;
+                const name = (try opConst(ctx)).string.bytes;
                 try ctx.gs.def(name, try ctx.vs.vmPop());
             },
             .get_global => {
-                const name_idx = try ctx.vs.vmShort();
+                const name_idx = opShort(ctx);
                 const ic_base = ctx.vs.ip;
-                const ic_slot: u16 = @intCast(try ctx.vs.vmShort());
+                const ic_slot: u16 = @intCast(opShort(ctx));
                 try ctx.vs.vmPush(try readGlobalIC(ctx, name_idx, ic_base, ic_slot));
             },
             .set_global => {
-                const name_idx = try ctx.vs.vmShort();
+                const name_idx = opShort(ctx);
                 const ic_base = ctx.vs.ip;
-                const ic_slot: u16 = @intCast(try ctx.vs.vmShort());
+                const ic_slot: u16 = @intCast(opShort(ctx));
                 try writeGlobalIC(ctx, name_idx, ic_base, ic_slot, try ctx.vs.vmPop());
             },
             .inc_global_const => {
-                const name_idx = try ctx.vs.vmShort();
+                const name_idx = opShort(ctx);
                 const ic_base = ctx.vs.ip;
-                const ic_slot: u16 = @intCast(try ctx.vs.vmShort());
-                _ = try ctx.vs.vmByte(); // skip add_skip byte
-                const k = try ctx.cs.constAt(try ctx.vs.vmShort());
+                const ic_slot: u16 = @intCast(opShort(ctx));
+                _ = opByte(ctx); // skip add_skip byte
+                const k = try ctx.cs.constAt(opShort(ctx));
                 if (ic_slot != 0xFFFF) {
                     const v = ctx.gs.getAt(ic_slot);
                     const result: Value = if (v == .int and k == .int) .{ .int = v.int + k.int } else try computeAddResult(ctx, v, k);
@@ -1860,25 +1927,25 @@ fn runInner(ctx: VMContext) !void {
             },
 
             .get_local => {
-                const slot = try ctx.vs.vmByte();
+                const slot = opByte(ctx);
                 try ctx.vs.vmPush(try readLocalSlot(ctx, slot));
             },
             .set_local => {
-                const slot = try ctx.vs.vmByte();
+                const slot = opByte(ctx);
                 const base = vmFrameBase(ctx);
                 if (base + slot >= ctx.vs.stack.len) return error.StackOverflow;
                 writeFrameLocal(ctx, base + slot, try ctx.vs.vmPop());
             },
             .get_upvalue => {
-                try ctx.vs.vmPush((try readUpvalueCell(ctx, try ctx.vs.vmByte())).cell.value);
+                try ctx.vs.vmPush((try readUpvalueCell(ctx, opByte(ctx))).cell.value);
             },
             .set_upvalue => {
-                const idx = try ctx.vs.vmByte();
+                const idx = opByte(ctx);
                 const val = try ctx.vs.vmPop();
                 (try readUpvalueCell(ctx, idx)).cell.value = val;
             },
             .close_upvalue => {
-                const slot = try ctx.vs.vmByte();
+                const slot = opByte(ctx);
                 const base = vmFrameBase(ctx);
                 if (base + slot >= ctx.vs.stack.len) return error.StackOverflow;
                 const v = ctx.vs.stack[base + slot];
@@ -1887,7 +1954,7 @@ fn runInner(ctx: VMContext) !void {
                 }
             },
             .close_upvalue_loop => {
-                const slot = try ctx.vs.vmByte();
+                const slot = opByte(ctx);
                 const base = vmFrameBase(ctx);
                 if (base + slot < ctx.vs.stack.len) {
                     const v = ctx.vs.stack[base + slot];
@@ -1895,7 +1962,7 @@ fn runInner(ctx: VMContext) !void {
                         ctx.vs.stack[base + slot] = v.object.cell.value;
                     }
                 }
-                const off = try ctx.vs.vmInt();
+                const off = opInt(ctx);
                 if (off > ctx.vs.ip) return error.InvalidChunkShape;
                 ctx.vs.ip -= off;
             },
@@ -1906,27 +1973,27 @@ fn runInner(ctx: VMContext) !void {
                 try ctx.vs.vmPush(try computeAddResult(ctx, a, b));
             },
             .local_add_local => {
-                const dst = try ctx.vs.vmByte();
-                const src = try ctx.vs.vmByte();
+                const dst = opByte(ctx);
+                const src = opByte(ctx);
                 const a = try readLocalSlot(ctx, dst);
                 const b = try readLocalSlot(ctx, src);
                 const result: Value = if (a == .int and b == .int) .{ .int = a.int + b.int } else try computeAddResult(ctx, a, b);
                 writeFrameLocal(ctx, vmFrameBase(ctx) + dst, result);
             },
             .local_add_const => {
-                const dst = try ctx.vs.vmByte();
-                const k = try ctx.cs.constAt(try ctx.vs.vmShort());
+                const dst = opByte(ctx);
+                const k = try ctx.cs.constAt(opShort(ctx));
                 const a = try readLocalSlot(ctx, dst);
                 const result: Value = if (a == .int and k == .int) .{ .int = a.int + k.int } else try computeAddResult(ctx, a, k);
                 writeFrameLocal(ctx, vmFrameBase(ctx) + dst, result);
             },
             .local_add_const_loop => {
-                const dst = try ctx.vs.vmByte();
-                const k = try ctx.cs.constAt(try ctx.vs.vmShort());
+                const dst = opByte(ctx);
+                const k = try ctx.cs.constAt(opShort(ctx));
                 const a = try readLocalSlot(ctx, dst);
                 const result: Value = if (a == .int and k == .int) .{ .int = a.int + k.int } else try computeAddResult(ctx, a, k);
                 writeFrameLocal(ctx, vmFrameBase(ctx) + dst, result);
-                const off = try ctx.vs.vmInt();
+                const off = opInt(ctx);
                 if (off > ctx.vs.ip) return error.InvalidChunkShape;
                 ctx.vs.ip -= off;
             },
@@ -1936,7 +2003,7 @@ fn runInner(ctx: VMContext) !void {
                 const b = try ctx.vs.vmPop();
                 const a = try ctx.vs.vmPop();
                 const retval = try computeAddResult(ctx, a, b);
-                if (try doReturn(ctx, retval)) return;
+                if (try doReturn(ctx, retval)) return true;
             },
             .sub => {
                 const b = try ctx.vs.vmPop();
@@ -2251,7 +2318,7 @@ fn runInner(ctx: VMContext) !void {
                 try ctx.vs.vmPush(result);
             },
             .assert_type => {
-                const tag = try ctx.vs.vmByte();
+                const tag = opByte(ctx);
                 const v = try ctx.vs.vmPeek(0);
                 const ok = switch (tag) {
                     1 => v == .object and vms.isArrayObject(v.object),
@@ -2263,14 +2330,14 @@ fn runInner(ctx: VMContext) !void {
                 try typeAssert(ctx, v, ok, expected);
             },
             .assert_interface => {
-                const idx = try ctx.vs.vmShort();
+                const idx = opShort(ctx);
                 if (idx >= ctx.cs.constCount()) return error.InvalidChunkShape;
                 const name = (ctx.cs.constAt(idx) catch unreachable).string.bytes;
                 const v = try ctx.vs.vmPeek(0);
                 try typeAssert(ctx, v, vmtyp.matchesInterfaceType(v, name), name);
             },
             .assert_struct => {
-                const idx = try ctx.vs.vmShort();
+                const idx = opShort(ctx);
                 if (idx >= ctx.cs.constCount()) return error.InvalidChunkShape;
                 const name = (ctx.cs.constAt(idx) catch unreachable).string.bytes;
                 const v = try ctx.vs.vmPeek(0);
@@ -2343,14 +2410,14 @@ fn runInner(ctx: VMContext) !void {
 
             // Fused const+op: reads rhs constant, pops lhs from stack.
             .const_eq => {
-                const k = try ctx.cs.constAt(try ctx.vs.vmShort());
+                const k = try ctx.cs.constAt(opShort(ctx));
                 const a = try ctx.vs.vmPop();
                 if (a == .int and k == .int) { try ctx.vs.vmPush(.{ .boolean = a.int == k.int }); continue; }
                 try checkNamedValueCompatibility(ctx, a, k);
                 try ctx.vs.vmPush(.{ .boolean = Value.equals(vms.unboxNamed(a), vms.unboxNamed(k)) });
             },
             .const_sub => {
-                const k = try ctx.cs.constAt(try ctx.vs.vmShort());
+                const k = try ctx.cs.constAt(opShort(ctx));
                 const a = try ctx.vs.vmPop();
                 if (a == .int and k == .int) { try ctx.vs.vmPush(.{ .int = a.int - k.int }); continue; }
                 try pushSubResult(ctx, a, k);
@@ -2373,7 +2440,7 @@ fn runInner(ctx: VMContext) !void {
             },
             .get_local_const_sub_call => {
                 const p = try readLocalSlotAndConst(ctx);
-                const argc = try ctx.vs.vmByte();
+                const argc = opByte(ctx);
                 const ic_base = ctx.vs.ip;
                 const ic_slot: u16 = (@as(u16, ctx.cs.codeByteAt(ic_base)) << 8) | @as(u16, ctx.cs.codeByteAt(ic_base + 1));
                 ctx.vs.ip += 2;
@@ -2387,12 +2454,12 @@ fn runInner(ctx: VMContext) !void {
                 try performCallIC(ctx, argc, ic_base, ic_slot);
             },
             .call_global_local_sub_const => {
-                const name_idx = try ctx.vs.vmShort();
+                const name_idx = opShort(ctx);
                 const g_ic_base = ctx.vs.ip;
-                const g_ic_slot: u16 = @intCast(try ctx.vs.vmShort());
-                _ = try ctx.vs.vmByte(); // skip get_local_const_sub_call opcode byte
+                const g_ic_slot: u16 = @intCast(opShort(ctx));
+                _ = opByte(ctx); // skip get_local_const_sub_call opcode byte
                 const p = try readLocalSlotAndConst(ctx);
-                const argc = try ctx.vs.vmByte();
+                const argc = opByte(ctx);
                 const c_ic_base = ctx.vs.ip;
                 const c_ic_slot: u16 = (@as(u16, ctx.cs.codeByteAt(c_ic_base)) << 8) | @as(u16, ctx.cs.codeByteAt(c_ic_base + 1));
                 ctx.vs.ip += 2;
@@ -2432,7 +2499,7 @@ fn runInner(ctx: VMContext) !void {
             // Bytecode: [op][slot][skip][idx_hi][idx_lo][jmp_b3][jmp_b2][jmp_b1][jmp_b0]
             .get_local_const_eq_jif_pop => {
                 const p = try readLocalSlotAndConst(ctx);
-                const off = try ctx.vs.vmInt();
+                const off = opInt(ctx);
                 const a = try readLocalSlot(ctx, p.slot);
                 if (a == .int and p.k == .int) {
                     if (a.int != p.k.int) ctx.vs.ip += off;
@@ -2446,7 +2513,7 @@ fn runInner(ctx: VMContext) !void {
             // Bytecode: [op][slot][skip][idx_hi][idx_lo][exit_b3..b0]
             .get_local_const_lt_jif_pop => {
                 const p = try readLocalSlotAndConst(ctx);
-                const off = try ctx.vs.vmInt();
+                const off = opInt(ctx);
                 const a = try readLocalSlot(ctx, p.slot);
                 if (a == .int and p.k == .int) {
                     if (a.int >= p.k.int) ctx.vs.ip += off;
@@ -2459,7 +2526,7 @@ fn runInner(ctx: VMContext) !void {
             // Bytecode: [op][slot][skip][idx_hi][idx_lo][exit_b3..b0]
             .get_local_const_gt_jif_pop => {
                 const p = try readLocalSlotAndConst(ctx);
-                const off = try ctx.vs.vmInt();
+                const off = opInt(ctx);
                 const a = try readLocalSlot(ctx, p.slot);
                 if (a == .int and p.k == .int) {
                     if (a.int <= p.k.int) ctx.vs.ip += off;
@@ -2476,9 +2543,9 @@ fn runInner(ctx: VMContext) !void {
             .get_local_const_lt_jif_pop_jump => {
                 const p = try readLocalSlotAndConst(ctx);
                 const a = try readLocalSlot(ctx, p.slot);
-                const exit_off = try ctx.vs.vmInt();
+                const exit_off = opInt(ctx);
                 const ip_mid = ctx.vs.ip;
-                const body_off = try ctx.vs.vmInt();
+                const body_off = opInt(ctx);
                 const cond_true = if (a == .int and p.k == .int)
                     (a.int < p.k.int)
                 else blk: {
@@ -2526,7 +2593,7 @@ fn runInner(ctx: VMContext) !void {
             // Bytecode: [op][name_hi][name_lo][ic_hi][ic_lo][skip][val_hi][val_lo][jmp_b3][jmp_b2][jmp_b1][jmp_b0]
             .get_global_const_lt_jif_pop => {
                 const p = try readGlobalConstPair(ctx);
-                const off = try ctx.vs.vmInt();
+                const off = opInt(ctx);
                 if (p.g == .int and p.k == .int) {
                     if (p.g.int >= p.k.int) ctx.vs.ip += off;
                 } else {
@@ -2535,25 +2602,25 @@ fn runInner(ctx: VMContext) !void {
                 }
             },
             .const_add => {
-                const k = try ctx.cs.constAt(try ctx.vs.vmShort());
+                const k = try ctx.cs.constAt(opShort(ctx));
                 const a = try ctx.vs.vmPop();
                 try ctx.vs.vmPush(try computeAddResult(ctx, a, k));
             },
             .const_lt => {
-                const k = try ctx.cs.constAt(try ctx.vs.vmShort());
+                const k = try ctx.cs.constAt(opShort(ctx));
                 const a = try ctx.vs.vmPop();
                 const n = try compareNumericPair(ctx, a, k, "<");
                 try ctx.vs.vmPush(.{ .boolean = n.an < n.bn });
             },
             .const_gt => {
-                const k = try ctx.cs.constAt(try ctx.vs.vmShort());
+                const k = try ctx.cs.constAt(opShort(ctx));
                 const a = try ctx.vs.vmPop();
                 const n = try compareNumericPair(ctx, a, k, ">");
                 try ctx.vs.vmPush(.{ .boolean = n.an > n.bn });
             },
 
             .build_array => {
-                const count = try ctx.vs.vmByte();
+                const count = opByte(ctx);
                 const obj = try vmgc.allocTempRooted(.{ .array = &[_]Value{} });
                 defer ctx.vs.popTempRoot();
                 const items = try vmgc.vmAllocManagedSlice(Value, count);
@@ -2591,7 +2658,7 @@ fn runInner(ctx: VMContext) !void {
                 try ctx.vs.vmPush(.{ .object = obj });
             },
             .build_tuple => {
-                const count = try ctx.vs.vmByte();
+                const count = opByte(ctx);
                 const obj = try vmgc.allocTempRooted(.{ .array = &[_]Value{} });
                 defer ctx.vs.popTempRoot();
                 const items = try vmgc.vmAllocManagedSlice(Value, count);
@@ -2604,7 +2671,7 @@ fn runInner(ctx: VMContext) !void {
                 try ctx.vs.vmPush(.{ .object = obj });
             },
             .build_map => {
-                const count = try ctx.vs.vmByte();
+                const count = opByte(ctx);
                 const obj = try vmgc.allocTempRooted(.{ .map = &[_]MapEntry{} });
                 defer ctx.vs.popTempRoot();
                 const items = try vmgc.vmAllocManagedSlice(MapEntry, count);
@@ -2642,7 +2709,7 @@ fn runInner(ctx: VMContext) !void {
                 try ctx.vs.vmPush(.{ .object = inst_obj });
             },
             .build_struct_instance => {
-                const count = try ctx.vs.vmByte();
+                const count = opByte(ctx);
                 const typ_stack_dist = @as(usize, count) * 2;
                 if (ctx.vs.stack_top <= typ_stack_dist) return error.StackUnderflow;
                 const typ_peek = ctx.vs.stack[ctx.vs.stack_top - 1 - typ_stack_dist];
@@ -2776,13 +2843,13 @@ fn runInner(ctx: VMContext) !void {
                 }
             },
             .tuple_check_arity => {
-                const expect = try ctx.vs.vmByte();
+                const expect = opByte(ctx);
                 const tup = try ctx.vs.vmPeek(0);
                 if (tup != .object or !vms.isArrayObject(tup.object)) return error.TypeError;
                 if ((try vms.asArraySlice(tup.object)).len != expect) return error.ArityMismatch;
             },
             .tuple_get => {
-                const idx = try ctx.vs.vmByte();
+                const idx = opByte(ctx);
                 const tup = try ctx.vs.vmPop();
                 if (tup != .object or !vms.isArrayObject(tup.object)) return error.TypeError;
                 const a = try vms.asArraySlice(tup.object);
@@ -2790,7 +2857,7 @@ fn runInner(ctx: VMContext) !void {
                 try ctx.vs.vmPush(a[idx]);
             },
             .tuple_get_keep => {
-                const idx = try ctx.vs.vmByte();
+                const idx = opByte(ctx);
                 const tup = try ctx.vs.vmPeek(0);
                 if (tup != .object or !vms.isArrayObject(tup.object)) return error.TypeError;
                 const a = try vms.asArraySlice(tup.object);
@@ -2800,7 +2867,7 @@ fn runInner(ctx: VMContext) !void {
             .get_index => try opGetIndex(ctx),
             .set_index => try opSetIndex(ctx),
             .get_slice => {
-                const flags = try ctx.vs.vmByte();
+                const flags = opByte(ctx);
                 const has_start = (flags & 0b01) != 0;
                 const has_end = (flags & 0b10) != 0;
 
@@ -2851,7 +2918,7 @@ fn runInner(ctx: VMContext) !void {
                 try iterNext2(ctx, &itv.object.iterator);
             },
             .make_closure => {
-                const f = try ctx.vs.vmConst();
+                const f = try opConst(ctx);
                 if (f != .object or f.object.* != .function) return error.InvalidChunkShape;
                 const proto = f.object.function;
                 const ups = if (heap.bump(*Object, proto.capture_slots.len)) |u| u else blk: {
@@ -2888,20 +2955,20 @@ fn runInner(ctx: VMContext) !void {
             .invoke_method => try opInvokeMethod(ctx),
 
             .jump => {
-                const off = try ctx.vs.vmInt();
+                const off = opInt(ctx);
                 ctx.vs.ip += off;
             },
             .jump_if_false => {
-                const off = try ctx.vs.vmInt();
+                const off = opInt(ctx);
                 if (!(try condAsBool(ctx, try ctx.vs.vmPeek(0), "condition"))) ctx.vs.ip += off;
             },
             .jif_pop => {
-                const off = try ctx.vs.vmInt();
+                const off = opInt(ctx);
                 const cond = try ctx.vs.vmPop();
                 if (!(try condAsBool(ctx, cond, "condition"))) ctx.vs.ip += off;
             },
             .loop => {
-                const off = try ctx.vs.vmInt();
+                const off = opInt(ctx);
                 if (off > ctx.vs.ip) return error.InvalidChunkShape;
                 ctx.vs.ip -= off;
                 // If the back-edge target is a warm get_global IC, execute it inline
@@ -2913,11 +2980,11 @@ fn runInner(ctx: VMContext) !void {
             // Bytecode: [op][name_hi][name_lo][ic_hi][ic_lo][off_b3][off_b2][off_b1][off_b0]
             // IC layout and patch offsets are identical to set_global.
             .set_global_loop => {
-                const name_idx = try ctx.vs.vmShort();
+                const name_idx = opShort(ctx);
                 const ic_base = ctx.vs.ip;
-                const ic_slot: u16 = @intCast(try ctx.vs.vmShort());
+                const ic_slot: u16 = @intCast(opShort(ctx));
                 try writeGlobalIC(ctx, name_idx, ic_base, ic_slot, try ctx.vs.vmPop());
-                const off = try ctx.vs.vmInt();
+                const off = opInt(ctx);
                 if (off > ctx.vs.ip) return error.InvalidChunkShape;
                 ctx.vs.ip -= off;
                 // Same inline get_global as loop: skip one dispatch if warm.
@@ -2949,7 +3016,7 @@ fn runInner(ctx: VMContext) !void {
             },
 
             .call => {
-                const argc = try ctx.vs.vmByte();
+                const argc = opByte(ctx);
                 const ic_base = ctx.vs.ip;
                 const ic_slot: u16 = (@as(u16, ctx.cs.codeByteAt(ic_base)) << 8) | @as(u16, ctx.cs.codeByteAt(ic_base + 1));
                 ctx.vs.ip += 2;
@@ -2988,7 +3055,7 @@ fn runInner(ctx: VMContext) !void {
             },
 
             .variant_check => {
-                const arm_name = (try ctx.vs.vmConst()).string.bytes;
+                const arm_name = (try opConst(ctx)).string.bytes;
                 const v = try ctx.vs.vmPop();
                 const matches = if (v.asVariant()) |ref|
                     common.streq(ref.typ.variant_type.arms[ref.ordinal].name, arm_name)
@@ -3020,7 +3087,7 @@ fn runInner(ctx: VMContext) !void {
             .set_field => try opSetField(ctx),
 
             .defer_call => {
-                const argc = try ctx.vs.vmByte();
+                const argc = opByte(ctx);
                 if (ctx.vs.defer_top >= ctx.vs.defer_stack.len) return error.DeferStackOverflow;
                 const total: usize = @as(usize, argc) + 1;
                 if (ctx.vs.stack_top < total) return error.StackUnderflow;
@@ -3047,7 +3114,7 @@ fn runInner(ctx: VMContext) !void {
                         if (ctx.vs.frame_top == d) {
                             const t1 = vmperf.readTsc();
                             if (t1 > t0) vmperf.retCycles(t1 - t0);
-                            return;
+                            return true;
                         }
                     }
                     const t1 = vmperf.readTsc();
@@ -3057,7 +3124,7 @@ fn runInner(ctx: VMContext) !void {
                 if (try retSlowPath(ctx, retval)) {
                     const t1 = vmperf.readTsc();
                     if (t1 > t0) vmperf.retCycles(t1 - t0);
-                    return;
+                    return true;
                 }
                 const t1 = vmperf.readTsc();
                 if (t1 > t0) vmperf.retCycles(t1 - t0);
@@ -3068,19 +3135,20 @@ fn runInner(ctx: VMContext) !void {
             .get_local_ret => {
                 vmperf.breakOpChain();
                 if (ctx.vs.frame_top == 0) return error.ImpossibleOpcodeState;
-                const v = try readLocalSlot(ctx, try ctx.vs.vmByte());
-                if (try doReturn(ctx, v)) return;
+                const v = try readLocalSlot(ctx, opByte(ctx));
+                if (try doReturn(ctx, v)) return true;
             },
             .ret_const => {
                 vmperf.breakOpChain();
                 if (ctx.vs.frame_top == 0) return error.ImpossibleOpcodeState;
-                const k = try ctx.cs.constAt(try ctx.vs.vmShort());
-                if (try doReturn(ctx, k)) return;
+                const k = try ctx.cs.constAt(opShort(ctx));
+                if (try doReturn(ctx, k)) return true;
             },
 
-            .halt => { vmperf.breakOpChain(); return; },
+            .halt => { vmperf.breakOpChain(); return true; },
         }
     }
+    return false;
 }
 
 fn runDeferredCall(ctx: VMContext, deferred: Value) anyerror!void {
