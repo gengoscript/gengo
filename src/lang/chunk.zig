@@ -42,6 +42,14 @@ pub const State = struct {
     str_slices: [MaxStrSlices]StringSlice = undefined,
     code_len: usize = 0,
     const_count: usize = 0,
+    // Indices of constants that hold heap objects (function prototypes, type
+    // objects). The GC root-scans only these instead of walking the whole
+    // constant pool every collection (#187). Constant-folding rollbacks only
+    // ever retract scalar/string constants, so entries here never go stale in
+    // practice; the GC still guards with `idx < const_count` so a rollback
+    // could at worst re-mark a harmless slot, never miss a live object.
+    obj_const_idxs: [MaxConst]u16 = undefined,
+    obj_const_count: usize = 0,
     str_slice_count: usize = 0,
     pending_col: u16 = 0,
     // Peephole: track position of last `constant` instruction for const-op fusion and folding.
@@ -534,6 +542,10 @@ pub const State = struct {
         const idx = self.const_count;
         self.consts[idx] = v;
         self.const_count += 1;
+        if (v == .object) {
+            self.obj_const_idxs[self.obj_const_count] = @intCast(idx);
+            self.obj_const_count += 1;
+        }
         return @intCast(idx);
     }
 
@@ -908,6 +920,7 @@ pub fn setActive(state: *State) void {
 pub fn reset() void {
     g_state.code_len = 0;
     g_state.const_count = 0;
+    g_state.obj_const_count = 0;
     g_state.str_slice_count = 0;
     g_state.pending_col = 0;
     g_state.last_const_code_pos = null;
