@@ -133,13 +133,13 @@ fn gcCheckIntegrityPostSweep(ctx: VMContext) void {
         if (!live) continue;
         switch (obj.*) {
             .array_view => |av| {
-                if (!ctx.hs.isObjectLive(av.source)) {
+                if (!ctx.hs.isObjectLive(av.source) and !ctx.hs.isObjectImmortal(av.source)) {
                     std.debug.print("GC INTEGRITY: array_view.source (obj {d}) is dead after sweep\n", .{i});
                     vm_integrity.fatal(error.GCInvariantFailure);
                 }
             },
             .string_view => |sv| {
-                if (sv.source) |src| if (!ctx.hs.isObjectLive(src)) {
+                if (sv.source) |src| if (!ctx.hs.isObjectLive(src) and !ctx.hs.isObjectImmortal(src)) {
                     std.debug.print("GC INTEGRITY: string_view.source (obj {d}) is dead after sweep\n", .{i});
                     vm_integrity.fatal(error.GCInvariantFailure);
                 };

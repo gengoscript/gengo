@@ -1,0 +1,49 @@
+std := import("std")
+
+func tally(base int, ...rest int) int {
+    t := base
+    for i, v in rest {
+        t += v
+    }
+    return t
+}
+
+// Note: bodies must avoid for-in here — every for-in entry allocates an
+// iterator object, which would drown out the measurement below.
+func pass(base int, ...rest int) int {
+    return base + std.core.len(rest)
+}
+
+// Warm up interning / inline caches before measuring.
+w1 := tally(1)
+w2 := tally(1, 2)
+w3 := pass(1)
+
+// #189: variadic calls with zero extra args must not allocate — they pass
+// the shared immortal empty-args array instead of packing a fresh one.
+s1 := std.core.gc_stats_ext()
+before := s1.alloc_object_calls
+t := 0
+for i := 0; i < 1000; i += 1 {
+    t += pass(i)
+}
+s2 := std.core.gc_stats_ext()
+std.io.println(t)
+// The only allocation between the two snapshots is s2's own stats map.
+std.io.println(s2.alloc_object_calls == before + 1)
+
+// The shared empty array must behave like any other empty array.
+func probe(...args int) int {
+    return std.core.len(args)
+}
+std.io.println(probe())
+
+func extend(...args int) int {
+    more := std.core.append(args, 5)
+    return std.core.len(more) + std.core.len(args)
+}
+std.io.println(extend())
+
+// for-in over the shared empty array: zero iterations, values intact.
+std.io.println(tally(10))
+std.io.println(w1 + w2 + w3)

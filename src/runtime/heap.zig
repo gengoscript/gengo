@@ -557,6 +557,13 @@ pub const State = struct {
         return self.obj_live[idx];
     }
 
+    // True when ptr lives outside the object pool: a bump-allocated or static
+    // singleton (std type objects, the shared empty-args array). Such objects
+    // are never swept, so they are immortal by construction.
+    pub fn isObjectImmortal(self: *State, ptr: *Object) bool {
+        return self.objectIndex(ptr) == null;
+    }
+
     pub fn sweepObjects(self: *State) void {
         const max = self.obj_pool.len;
         var i: usize = 0;
