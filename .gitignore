@@ -22,3 +22,8 @@ gengo_acl.so
 site/
 examples/bundle-c/quiz_grader
 examples/bundle-c/scoring.zip
+
+# Profiling and local analysis artifacts
+perf.data*
+sizecheck
+examples/go-embed/go-embed

@@ -44,6 +44,26 @@ make parity
 
 `parity` checks that the native and WASM backends produce the same output. Run it when touching the VM or compiler.
 
+## Profiling
+
+Build the timing binary and profile with DWARF call graphs:
+
+```bash
+zig build -Dpreset=1m cli-fast
+perf record --call-graph dwarf -F 999 -- ./zig-out/bin/gengo-fast tests/bench/007_dispatch_loop.gengo
+perf report
+```
+
+Do not trust call-graph percentages from plain `perf record -g` on the
+ReleaseFast binary: frame-pointer unwinding misattributes inlined frames
+(e.g. allocation helpers showing up hot inside functions that never
+allocate). `--call-graph dwarf` resolves inline frames correctly.
+
+For per-opcode counters and allocation stats, build with `-Dperf=true` and
+check `std.core.gc_stats_ext()` from scripts (`alloc_object_calls`,
+`gc_runs`, `gc_time_ns`). Timing baselines for the benchmark set live in
+`tests/bench/time_baseline.txt`.
+
 ## Docs
 
 The public docs site is sourced from `docs/` and built by Gengoscript itself

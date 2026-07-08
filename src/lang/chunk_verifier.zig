@@ -259,14 +259,16 @@ pub fn verify(state: anytype) !void {
 
     {
         var func_body_count: usize = 0;
-        var func_ips: [4096]usize = undefined;
+        // u32 halves the stack footprint (16KB vs 32KB on 64-bit) — ips are
+        // bounded by MaxCode (1 MiB), well inside u32.
+        var func_ips: [4096]u32 = undefined;
         {
             for (state.consts[0..state.const_count]) |cv| {
                 if (cv == .object) {
                     switch (cv.object.*) {
                         .function => |f| {
                             if (f.ip < state.code_len and Bits.has(starts, f.ip)) {
-                                func_ips[func_body_count] = f.ip;
+                                func_ips[func_body_count] = @intCast(f.ip);
                                 func_body_count += 1;
                             }
                         },
