@@ -25,6 +25,9 @@ run zig build -Dpreset=1m native-cap
 run zig build -Dpreset=1m chaos
 run zig build -Dpreset=1m heap-test
 run zig build -Dpreset=1m cli
+# Mirror the CI stress lane (256 KB heap): tests that pass at 1m can still
+# OOM there, and this was the only CI job the hook didn't cover.
+run zig build -Dpreset=stress test
 
 echo "→ example and stress scripts..."
 for f in \
