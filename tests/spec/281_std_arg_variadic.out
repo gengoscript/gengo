@@ -1,0 +1,6 @@
+a:
+b: str:hello
+c: int:42 bool:true str:x
+d: float:3.14 rune:A
+e: err:oops
+Arg

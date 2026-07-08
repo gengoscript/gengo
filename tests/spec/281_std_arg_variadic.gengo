@@ -1,0 +1,34 @@
+std := import("std")
+
+// std.Arg is a stdlib variant covering all primitive types, enabling
+// heterogeneous variadic functions without exposing `any` to user code.
+
+func format_arg(a std.Arg) string {
+    switch a {
+        case .Int     as n { return "int:"     + std.conv.to_string(n) }
+        case .Float   as f { return "float:"   + std.conv.to_string(f) }
+        case .Decimal as d { return "decimal:" + std.conv.to_string(d) }
+        case .Rune    as r { return "rune:"    + std.conv.to_string(r) }
+        case .Bool    as b { return "bool:"    + std.conv.to_string(b) }
+        case .Str     as s { return "str:"     + s }
+        case .Err     as e { return "err:"     + string(e) }
+    }
+    return "?"
+}
+
+func log_args(prefix string, ...args std.Arg) string {
+    out := prefix + ":"
+    for a in args {
+        out = out + " " + format_arg(a)
+    }
+    return out
+}
+
+std.io.println(log_args("a"))
+std.io.println(log_args("b", std.Arg.Str("hello")))
+std.io.println(log_args("c", std.Arg.Int(42), std.Arg.Bool(true), std.Arg.Str("x")))
+std.io.println(log_args("d", std.Arg.Float(3.14), std.Arg.Rune('A')))
+std.io.println(log_args("e", std.Arg.Err(std.core.error("oops"))))
+
+// Verify std.Arg.name is accessible
+std.io.println(std.Arg.name)

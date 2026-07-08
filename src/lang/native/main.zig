@@ -36,6 +36,7 @@ const time_mod = @import("time.zig");
 const core_mod = @import("core.zig");
 const string_mod = @import("string.zig");
 const io_mod = @import("io.zig");
+const arg_mod = @import("arg.zig");
 const json_mod = @import("json.zig");
 const template_mod = @import("template.zig");
 const regexp_mod = @import("regexp.zig");
@@ -253,6 +254,10 @@ pub fn buildStdModule() !*Object {
     try vms.pushTempRoot(.{ .object = string_obj });
     defer vms.popTempRoot();
 
+    const arg_type_obj = try arg_mod.argGetType();
+    try vms.pushTempRoot(.{ .object = arg_type_obj });
+    defer vms.popTempRoot();
+
     const jv_type_obj = try json_mod.jsonValueGetType();
     try vms.pushTempRoot(.{ .object = jv_type_obj });
     defer vms.popTempRoot();
@@ -425,9 +430,10 @@ pub fn buildStdModule() !*Object {
         .{ .name = "sort", .value = .{ .object = sort_obj } },
         .{ .name = "array", .value = .{ .object = array_obj } },
         .{ .name = "bytes", .value = .{ .object = bytes_obj } },
-        .{ .name = "Time", .value = .{ .object = time_type_obj } },
-        .{ .name = "Regexp", .value = .{ .object = regexp_type_obj } },
-        .{ .name = "JSONValue", .value = .{ .object = jv_type_obj } },
+        .{ .name = "Arg",      .value = .{ .object = arg_type_obj } },
+        .{ .name = "Time",     .value = .{ .object = time_type_obj } },
+        .{ .name = "Regexp",   .value = .{ .object = regexp_type_obj } },
+        .{ .name = "JSONValue",.value = .{ .object = jv_type_obj } },
     };
     const std_obj = try makeNamespace("std", "@module_type:std", &std_entries);
     vms.vmState().std_module = std_obj;

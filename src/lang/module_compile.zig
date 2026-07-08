@@ -707,6 +707,10 @@ pub fn hasModuleExport(ctx: *anyopaque, path: []const u8, field: []const u8) boo
 }
 
 pub fn resolveModuleTypeKind(ctx: *anyopaque, path: []const u8, type_name: []const u8) ?ExportTypeKind {
+    if (common.streq(path, StdModulePath)) {
+        if (common.streq(type_name, "Arg")) return .variant_t;
+        return null;
+    }
     const s: *Session = @ptrCast(@alignCast(ctx));
     const idx = s.findModule(path) orelse return null;
     const rec = &s.modules[idx];

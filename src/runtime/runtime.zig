@@ -11,6 +11,7 @@ const vmnative = @import("../lang/vm_native.zig");
 const net_state = @import("../lang/native/net_state.zig");
 const native_time = @import("../lang/native/time.zig");
 const native_regexp = @import("../lang/native/regexp.zig");
+const native_arg = @import("../lang/native/arg.zig");
 const native_json = @import("../lang/native/json.zig");
 const native_rand = @import("../lang/native/rand.zig");
 const cfg = @import("config.zig");
@@ -183,6 +184,7 @@ pub const Runtime = struct {
     // process (reset() already does the same for the reuse path).
     fn clearNativeCaches() void {
         net_state.netReset();
+        native_arg.argClearCache();
         native_time.timeClearCache();
         native_regexp.reClearCache();
         native_json.jsonValueClearCache();
