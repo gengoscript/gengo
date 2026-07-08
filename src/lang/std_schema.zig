@@ -36,6 +36,7 @@ pub const top_level_entries = [_]Entry{
     .{ .name = "sort", .kind = .namespace },
     .{ .name = "array", .kind = .namespace },
     .{ .name = "bytes", .kind = .namespace },
+    .{ .name = "Arg",       .kind = .value },
     .{ .name = "Time",      .kind = .value },
     .{ .name = "Regexp",    .kind = .value },
     .{ .name = "JSONValue", .kind = .value },

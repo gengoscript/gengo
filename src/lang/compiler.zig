@@ -985,9 +985,12 @@ pub const Compiler = struct {
 
     pub fn resolveImportAliasPath(self: *Compiler, alias: []const u8) ?[]const u8 {
         if (self.resolveLocal(alias)) |slot| {
-            return self.currentScope().locals[slot].import_module_path;
+            const local = self.currentScope().locals[slot];
+            if (local.from_std) return "std";
+            return local.import_module_path;
         }
         const qname = self.qualifyGlobalName(alias) catch return null;
+        if (self.isStdModuleGlobal(qname)) return "std";
         return self.getImportModuleGlobalPath(qname);
     }
 
