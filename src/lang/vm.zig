@@ -471,6 +471,14 @@ fn pushStringResultWithCarrier(ctx: VMContext, a: Value, b: Value, raw: Value) !
     }
 }
 
+// Shared immortal empty-args array for variadic calls with zero extra
+// arguments. It lives outside the object pool, so mark and sweep ignore it,
+// and it holds no heap pointers, so one static instance is safe to share
+// across all calls and all runtimes. Sharing is sound because nothing mutates
+// a .array object in place: arrayAppend always allocates a new backing, and
+// index writes cannot land inside a length-0 array.
+var empty_args_array: Object = .{ .array = &[_]Value{} };
+
 fn prepareVariadicCall(ctx: VMContext, f: @import("value.zig").FuncObj, argc: u8) !void {
     if (!f.is_variadic) return;
     const fixed: usize = f.arity - 1;
@@ -478,6 +486,13 @@ fn prepareVariadicCall(ctx: VMContext, f: @import("value.zig").FuncObj, argc: u8
     if (ctx.vs.stack_top < @as(usize, argc)) return error.StackUnderflow;
     const start = ctx.vs.stack_top - argc;
     const extra: usize = argc - fixed;
+    if (extra == 0) {
+        // Nothing to pack: pass the shared empty array, allocation-free.
+        if (start + fixed >= ctx.vs.stack.len) return error.StackOverflow;
+        ctx.vs.stack[start + fixed] = .{ .object = &empty_args_array };
+        ctx.vs.stack_top = start + fixed + 1;
+        return;
+    }
     const arr_obj = try vmgc.allocTempRooted(.{ .array = &[_]Value{} });
     defer ctx.vs.popTempRoot();
     const items = try vmgc.vmAllocManagedSlice(Value, extra);
