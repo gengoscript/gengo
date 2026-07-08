@@ -1837,18 +1837,42 @@ inline fn opConst(ctx: VMContext) !Value {
     return ctx.cs.constAt(opShort(ctx));
 }
 
-// Fetch the next opcode. The only bounds-checked read in the dispatch path:
-// it doubles as the end-of-code guard, so operand reads that follow can be
-// unchecked (see above).
-inline fn dispatchNext(ctx: VMContext) !Op {
-    if (ctx.vs.ops_budget_remaining < std.math.maxInt(u64)) {
+// ── Dispatch gas ──────────────────────────────────────────────────────────────
+// Both rare per-instruction features — the op budget and the per-line trace
+// hook — hide behind one countdown: the hot loop pays a single decrement and
+// one predicted branch, and dispatchTick (cold) does the real work when the
+// counter hits zero. With a feature active the interval is 1 (tick every
+// instruction); otherwise it is a heartbeat that re-reads the feature state
+// every ~4M instructions, so enabling a trace or budget mid-run (e.g. from a
+// host callback) still takes effect within milliseconds.
+
+const DispatchHeartbeat: u64 = 1 << 22;
+
+inline fn dispatchGasInterval(ctx: VMContext) u64 {
+    return if (io.traceActive() or ctx.vs.ops_budget_remaining != std.math.maxInt(u64)) 1 else DispatchHeartbeat;
+}
+
+// Cold path, entered once per instruction only while a budget or trace is
+// active (interval 1), else once per heartbeat. ip points at the opcode byte
+// of the instruction about to execute. Returns the re-armed gas value: gas
+// lives in a runInner local passed by value, never in memory, so the hot
+// loop's decrement stays a register op instead of a serializing load/store.
+noinline fn dispatchTick(ctx: VMContext) !u64 {
+    if (ctx.vs.ops_budget_remaining != std.math.maxInt(u64)) {
         if (ctx.vs.ops_budget_remaining == 0) return error.InstructionBudgetExceeded;
         ctx.vs.ops_budget_remaining -= 1;
     }
+    if (io.traceActive()) io.fireTrace(ctx.cs.lineAt(ctx.vs.ip), ctx.cs.colAt(ctx.vs.ip));
+    return dispatchGasInterval(ctx);
+}
+
+// Fetch the next opcode. The only bounds-checked read in the dispatch path:
+// it doubles as the end-of-code guard, so operand reads that follow can be
+// unchecked (see above).
+inline fn fetchOp(ctx: VMContext) !Op {
     if (ctx.vs.ip >= ctx.cs.code_len) return error.BytecodeOutOfBounds;
     const op_raw = opByte(ctx);
     if (op_raw >= std.meta.fields(Op).len) return error.InvalidChunkShape;
-    if (io.traceActive()) io.fireTrace(ctx.cs.lineAt(ctx.vs.ip - 1), ctx.cs.colAt(ctx.vs.ip - 1));
     vmperf.countOp(op_raw);
     return @enumFromInt(op_raw);
 }
@@ -1866,10 +1890,18 @@ fn runInner(ctx: VMContext) !void {
     // the branch predictor sees one branch per opcode pair instead of a
     // single megamorphic one.
     @setEvalBranchQuota(100_000);
-    dispatch: switch (try dispatchNext(ctx)) {
+    // The gas countdown runs BEFORE each instruction (including the first),
+    // so an exhausted budget denies the instruction rather than letting one
+    // slip through, and a trace fires before the line it reports.
+    var gas: u64 = dispatchGasInterval(ctx);
+    gas -= 1;
+    if (gas == 0) gas = try dispatchTick(ctx);
+    dispatch: switch (try fetchOp(ctx)) {
         inline else => |op| {
             if (try @call(exec_call_modifier, execOne, .{ ctx, op })) return;
-            continue :dispatch (try dispatchNext(ctx));
+            gas -= 1;
+            if (gas == 0) gas = try dispatchTick(ctx);
+            continue :dispatch (try fetchOp(ctx));
         },
     }
 }

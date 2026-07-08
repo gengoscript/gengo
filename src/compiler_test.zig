@@ -1478,3 +1478,51 @@ test "non-ASCII string iteration is zero-alloc and produces correct chars" {
     const v2 = try rt.callGlobal("collect_slice", &[_]Value{});
     try std.testing.expectEqualStrings("åä", try vmst.asStringValue(v2));
 }
+
+// ── Dispatch gas: op budget + trace hook (#186) ──────────────────────────────
+
+test "op budget: small budget stops runaway loop, generous budget does not" {
+    var rt = try setup();
+    defer rt.deinit();
+    rt.setPolicy(.{ .max_ops = 100 });
+    const r = rt.run("for {}");
+    try std.testing.expectError(error.InstructionBudgetExceeded, r);
+
+    var rt2 = try setup();
+    defer rt2.deinit();
+    rt2.setPolicy(.{ .max_ops = 1_000_000 });
+    try rt2.run(
+        \\t := 0
+        \\for i := 0; i < 100; i += 1 { t += i }
+    );
+}
+
+var g_trace_hits: u32 = 0;
+fn testTraceFn(userdata: ?*anyopaque, handle: i32, line: i32, col: i32) callconv(.c) void {
+    _ = userdata;
+    _ = handle;
+    _ = line;
+    _ = col;
+    g_trace_hits += 1;
+}
+
+test "trace hook fires per line when installed, not at all when cleared" {
+    const io_mod = @import("runtime/io.zig");
+    var rt = try setup();
+    defer rt.deinit();
+
+    g_trace_hits = 0;
+    io_mod.setTrace(testTraceFn, null, -1);
+    defer io_mod.clearTrace();
+    try rt.run(
+        \\a := 1
+        \\b := 2
+        \\c := a + b
+    );
+    try std.testing.expect(g_trace_hits >= 3);
+
+    io_mod.clearTrace();
+    const hits_after_clear = g_trace_hits;
+    try rt.run("d := 4");
+    try std.testing.expectEqual(hits_after_clear, g_trace_hits);
+}
