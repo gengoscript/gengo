@@ -759,8 +759,17 @@ pub fn forInStmt(c: anytype) anyerror!void {
     try c.cs.emitOp(.iter_init, c.prev.line);
     // Claim a hidden local slot for the iterator so that body locals land on the
     // correct stack offsets. Without this, body-local slot N resolves to the iterator
-    // object instead of the actual value.
-    c.currentScope().local_count += 1;
+    // object instead of the actual value. The slot must be REGISTERED under an
+    // unmatchable name, not just counted: local_count resets leave stale entries in
+    // locals[], and a bare count bump re-exposes them — a previous loop's variable
+    // name at this index would shadow the current loop's variable in resolveLocal
+    // and make assignLoopVar overwrite the iterator on the stack (#193).
+    {
+        const scope = c.currentScope();
+        if (scope.local_count >= MaxLocals) { c.setErr("too many local variables (max {d})", .{MaxLocals}); return error.TooManyLocals; }
+        scope.locals[scope.local_count] = .{ .name = "" };
+        scope.local_count += 1;
+    }
     const body_keep: u8 = c.currentScope().local_count;
 
     const loop_start = c.cs.codeLen();

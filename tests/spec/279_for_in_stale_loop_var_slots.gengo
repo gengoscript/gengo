@@ -1,0 +1,59 @@
+std := import("std")
+
+// #193: a for-in nested inside another loop leaves stale loop-var names in
+// the compiler's locals table; the next for-in's hidden iterator slot then
+// re-exposed a stale entry, so resolveLocal bound the loop variable to the
+// iterator's stack slot and assignLoopVar clobbered the iterator (runtime
+// TypeError). Regression shapes for both global and function scope, and for
+// both the k and k,v forms.
+
+xs := [1, 2, 3]
+
+// Global scope, two-var form (the original repro).
+w := 0
+for n := 0; n < 3; n += 1 {
+    for i, v in xs { w += v }
+}
+sum := 0
+for i, v in xs { sum += v }
+std.io.println(w)
+std.io.println(sum)
+
+// Global scope, empty iterable in the nested loop.
+arr := []
+e := 0
+for n2 := 0; n2 < 3; n2 += 1 {
+    for i2, v2 in arr { e += 1 }
+}
+for i2, v2 in xs { e += v2 }
+std.io.println(e)
+
+// Global scope, single-var form.
+u := 0
+for n3 := 0; n3 < 2; n3 += 1 {
+    for x in xs { u += x }
+}
+for x in xs { u += x }
+std.io.println(u)
+
+// Function scope (no intervening local between the loops).
+func f(ys []int) int {
+    t := 0
+    for n := 0; n < 3; n += 1 {
+        for i, v in ys { t += v }
+    }
+    for i, v in ys { t += v }
+    return t
+}
+std.io.println(f(xs))
+
+// Function scope, for-in nested in for-in.
+func g(ys []int) int {
+    t := 0
+    for a, b in ys {
+        for i, v in ys { t += v }
+    }
+    for i, v in ys { t += v }
+    return t
+}
+std.io.println(g(xs))
