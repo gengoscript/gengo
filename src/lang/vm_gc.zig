@@ -165,7 +165,13 @@ pub fn collectGarbage() void {
 
     for (ctx.vs.temp_roots[0..ctx.vs.temp_root_top]) |v| markValue(ctx, v);
 
-    for (0..ctx.cs.constCount()) |i| markValue(ctx, ctx.cs.constAt(i) catch unreachable);
+    // Only constants holding heap objects are roots; scalars and strings need
+    // no marking. addConst records their indices so this walk skips the bulk
+    // of the pool (#187). The bound check guards against constant-folding
+    // rollbacks shrinking const_count below a recorded index.
+    for (ctx.cs.obj_const_idxs[0..ctx.cs.obj_const_count]) |ci| {
+        if (ci < ctx.cs.const_count) markValue(ctx, ctx.cs.consts[ci]);
+    }
 
     for (ctx.vs.defer_stack[0..ctx.vs.defer_top]) |v| markValue(ctx, v);
 
