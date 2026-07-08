@@ -14,13 +14,16 @@ const build_options = @import("build_options");
 
 const VMContext = vms.VMContext;
 
+// Monotonic ns for GC pause accounting (callers only ever take deltas).
 pub fn monoNowNs() u64 {
-    if (comptime builtin.os.tag != .wasi) {
-        return 0;
+    if (comptime builtin.os.tag == .wasi) {
+        var ns: std.os.wasi.timestamp_t = 0;
+        if (std.os.wasi.clock_time_get(.MONOTONIC, 1, &ns) != .SUCCESS) return 0;
+        return ns;
     }
-    var ns: std.os.wasi.timestamp_t = 0;
-    if (std.os.wasi.clock_time_get(.MONOTONIC, 1, &ns) != .SUCCESS) return 0;
-    return ns;
+    var ts: std.posix.timespec = undefined;
+    if (std.posix.system.clock_gettime(.MONOTONIC, &ts) != 0) return 0;
+    return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));
 }
 
 // Iterative mark worklist — each live object is pushed at most once (we mark
