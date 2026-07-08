@@ -72,6 +72,39 @@ const ReplNsEntry = struct {
 
 const MaxReplNsEntries = MaxLocals * 2; // up to MaxLocals std + MaxLocals import entries
 
+// All REPL cross-line persistence state, grouped so Runtime can hold it behind
+// a single heap pointer instead of ~250 KB of inline arrays (see Runtime.repl).
+const ReplPersist = struct {
+    const_names: [MaxGlobals][]const u8 = undefined,
+    const_name_buf: [MaxGlobals * 64]u8 = undefined,
+    const_name_buf_used: usize = 0,
+    const_count: usize = 0,
+
+    // REPL type-and-func persistence (unified, for subtype/method duplicate-detection across lines).
+    sym_count: usize = 0,
+    syms: [MaxReplSyms]ReplSymEntry = undefined,
+    sym_name_buf: [ReplSymNameBufSize]u8 = undefined,
+    sym_name_buf_used: usize = 0,
+
+    // REPL enum-member persistence: the parent enum's member list must survive
+    // across lines so subtype declarations can validate member subsets and so
+    // member access resolves. Members are packed as [len:u8][bytes]... per type.
+    enum_member_buf: [MaxNamedTypes * 64]u8 = undefined,
+    enum_member_buf_used: usize = 0,
+
+    // #73: typed-global persistence — assignment type enforcement across lines.
+    typed_global_count: usize = 0,
+    typed_globals: [MaxLocals]ReplTypedGlobalEntry = undefined,
+    typed_global_name_buf: [MaxLocals * 128]u8 = undefined,
+    typed_global_name_buf_used: usize = 0,
+
+    // #74: std/import namespace provenance persistence — unknown-field validation
+    ns_count: usize = 0,
+    ns_entries: [MaxReplNsEntries]ReplNsEntry = undefined,
+    ns_name_buf: [MaxLocals * 128]u8 = undefined,
+    ns_name_buf_used: usize = 0,
+};
+
 fn checkGlobalExists(ctx: *anyopaque, name: []const u8) bool {
     _ = ctx;
     return globals.has(name);
@@ -80,8 +113,8 @@ fn checkGlobalExists(ctx: *anyopaque, name: []const u8) bool {
 fn checkGlobalIsConst(ctx: *anyopaque, name: []const u8) bool {
     const self: *Runtime = @ptrCast(@alignCast(ctx));
     var i: usize = 0;
-    while (i < self.repl_const_count) : (i += 1) {
-        if (common.streq(self.repl_const_names[i], name)) return true;
+    while (i < self.repl.const_count) : (i += 1) {
+        if (common.streq(self.repl.const_names[i], name)) return true;
     }
     return false;
 }
@@ -116,40 +149,20 @@ pub const Runtime = struct {
     test_count: u16 = 0,
     test_names: [MaxTests][]const u8 = undefined,
     test_failed: bool = false,
-    repl_const_names: [MaxGlobals][]const u8 = undefined,
-    repl_const_name_buf: [MaxGlobals * 64]u8 = undefined,
-    repl_const_name_buf_used: usize = 0,
-    repl_const_count: usize = 0,
-
-    // REPL type-and-func persistence (unified, for subtype/method duplicate-detection across lines).
-    repl_sym_count: usize = 0,
-    repl_syms: [MaxReplSyms]ReplSymEntry = undefined,
-    repl_sym_name_buf: [ReplSymNameBufSize]u8 = undefined,
-    repl_sym_name_buf_used: usize = 0,
-
-    // REPL enum-member persistence: the parent enum's member list must survive
-    // across lines so subtype declarations can validate member subsets and so
-    // member access resolves. Members are packed as [len:u8][bytes]... per type.
-    repl_enum_member_buf: [MaxNamedTypes * 64]u8 = undefined,
-    repl_enum_member_buf_used: usize = 0,
-
-    // #73: typed-global persistence — assignment type enforcement across lines.
-    repl_typed_global_count: usize = 0,
-    repl_typed_globals: [MaxLocals]ReplTypedGlobalEntry = undefined,
-    repl_typed_global_name_buf: [MaxLocals * 128]u8 = undefined,
-    repl_typed_global_name_buf_used: usize = 0,
-
-    // #74: std/import namespace provenance persistence — unknown-field validation
-    repl_ns_count: usize = 0,
-    repl_ns_entries: [MaxReplNsEntries]ReplNsEntry = undefined,
-    repl_ns_name_buf: [MaxLocals * 128]u8 = undefined,
-    repl_ns_name_buf_used: usize = 0,
+    // REPL persistence block. Heap-allocated (like chunk_state) because it is
+    // ~250 KB of fixed arrays: keeping it inline made Runtime.init-by-value
+    // overflow the WASM shadow stack (api.Runtime.init holds up to three
+    // Runtime copies on the stack at once).
+    repl: *ReplPersist = undefined,
 
     pub fn init() Runtime {
         var rt: Runtime = .{};
         const cs = std.heap.page_allocator.create(chunk.State) catch @panic("OOM");
         cs.* = .{};
         rt.chunk_state = cs;
+        const rp = std.heap.page_allocator.create(ReplPersist) catch @panic("OOM");
+        rp.* = .{};
+        rt.repl = rp;
         chunk.setActive(rt.chunk_state);
         globals.setActive(&rt.globals_state);
         chunk.reset();
@@ -158,7 +171,22 @@ pub const Runtime = struct {
         vm.setActive(&rt.vm_state);
         vm.reset();
         heap.reset();
+        clearNativeCaches();
         return rt;
+    }
+
+    // Native modules cache singleton type objects (std.Time, std.Regexp,
+    // std.JSONValue) as module-level pointers into the heap that was active
+    // when they were first built. A new Runtime means a new heap, so those
+    // pointers are stale: clearing here prevents a later buildStdModule from
+    // handing out dangling objects when several runtimes are created in one
+    // process (reset() already does the same for the reuse path).
+    fn clearNativeCaches() void {
+        net_state.netReset();
+        native_time.timeClearCache();
+        native_regexp.reClearCache();
+        native_json.jsonValueClearCache();
+        native_rand.randResetState();
     }
 
     pub fn withPolicy(policy: vm.Policy) Runtime {
@@ -178,8 +206,12 @@ pub const Runtime = struct {
         const cs = try std.heap.page_allocator.create(chunk.State);
         errdefer std.heap.page_allocator.destroy(cs);
         cs.* = .{};
+        const rp = try std.heap.page_allocator.create(ReplPersist);
+        errdefer std.heap.page_allocator.destroy(rp);
+        rp.* = .{};
         @memset(std.mem.asBytes(self), 0);
         self.chunk_state = cs;
+        self.repl = rp;
         self.policy = policy;
         try self.heap_state.init(heap_size, max_objects, allocator);
         try self.vm_state.init(max_stack, max_frames, max_defers, heap_size, allocator);
@@ -191,12 +223,14 @@ pub const Runtime = struct {
         vm.setActive(&self.vm_state);
         vm.reset();
         heap.reset();
+        clearNativeCaches();
     }
 
     pub fn deinit(self: *Runtime) void {
         self.vm_state.deinit();
         self.heap_state.deinit();
         std.heap.page_allocator.destroy(self.chunk_state);
+        std.heap.page_allocator.destroy(self.repl);
     }
 
     pub fn setPolicy(self: *Runtime, policy: vm.Policy) void {
@@ -206,20 +240,16 @@ pub const Runtime = struct {
     pub fn reset(self: *Runtime) void {
         defer self.assertNoTempRootLeaks("Runtime.reset");
         self.activate();
-        net_state.netReset();
-        native_time.timeClearCache();
-        native_regexp.reClearCache();
-        native_json.jsonValueClearCache();
-        native_rand.randResetState();
+        clearNativeCaches();
         globals.reset();
         vm.reset();
         heap.reset();
         chunk.reset();
-        self.repl_sym_count = 0;
-        self.repl_sym_name_buf_used = 0;
-        self.repl_enum_member_buf_used = 0;
-        self.repl_const_count = 0;
-        self.repl_const_name_buf_used = 0;
+        self.repl.sym_count = 0;
+        self.repl.sym_name_buf_used = 0;
+        self.repl.enum_member_buf_used = 0;
+        self.repl.const_count = 0;
+        self.repl.const_name_buf_used = 0;
     }
 
     pub fn run(self: *Runtime, src: []const u8) !void {
@@ -472,16 +502,16 @@ pub const Runtime = struct {
             if (!e.occupied or !e.is_const) continue;
             const cname = compiler.registry.global_symbols[e.sub_idx];
             if (!checkGlobalIsConst(self, cname)) {
-                if (self.repl_const_count >= MaxGlobals or
-                    self.repl_const_name_buf_used + cname.len > self.repl_const_name_buf.len)
+                if (self.repl.const_count >= MaxGlobals or
+                    self.repl.const_name_buf_used + cname.len > self.repl.const_name_buf.len)
                 {
                     return self.setReplOverflowError("REPL const table full: too many global const declarations");
                 }
-                const start = self.repl_const_name_buf_used;
-                @memcpy(self.repl_const_name_buf[start .. start + cname.len], cname);
-                self.repl_const_names[self.repl_const_count] = self.repl_const_name_buf[start .. start + cname.len];
-                self.repl_const_name_buf_used += cname.len;
-                self.repl_const_count += 1;
+                const start = self.repl.const_name_buf_used;
+                @memcpy(self.repl.const_name_buf[start .. start + cname.len], cname);
+                self.repl.const_names[self.repl.const_count] = self.repl.const_name_buf[start .. start + cname.len];
+                self.repl.const_name_buf_used += cname.len;
+                self.repl.const_count += 1;
             }
         }
 
@@ -510,8 +540,8 @@ pub const Runtime = struct {
     }
 
     fn restoreReplCompilerState(self: *Runtime, compiler: *Compiler) void {
-        for (self.repl_syms[0..self.repl_sym_count]) |e| {
-            const name = self.repl_sym_name_buf[e.name_offset..][0..e.name_len];
+        for (self.repl.syms[0..self.repl.sym_count]) |e| {
+            const name = self.repl.sym_name_buf[e.name_offset..][0..e.name_len];
             switch (@as(ReplSymKind, @enumFromInt(e.kind))) {
                 .struct_type => compiler.registry.addStructType(name) catch {},
                 .interface_type => compiler.registry.addInterfaceType(name) catch {},
@@ -519,7 +549,7 @@ pub const Runtime = struct {
                 .global_func => compiler.registry.addGlobalFunc(name) catch {},
                 .named_type => {
                     const parent_name: ?[]const u8 = if (e.parent_len > 0)
-                        self.repl_sym_name_buf[e.parent_offset..][0..e.parent_len]
+                        self.repl.sym_name_buf[e.parent_offset..][0..e.parent_len]
                     else
                         null;
                     compiler.registry.addNamedType(.{
@@ -542,31 +572,31 @@ pub const Runtime = struct {
 
     fn restoreReplTypedGlobals(self: *Runtime, compiler: *Compiler) void {
         var ti: usize = 0;
-        while (ti < self.repl_typed_global_count and compiler.typed_global_count < MaxLocals) : (ti += 1) {
-            const e = self.repl_typed_globals[ti];
+        while (ti < self.repl.typed_global_count and compiler.typed_global_count < MaxLocals) : (ti += 1) {
+            const e = self.repl.typed_globals[ti];
             const tc = self.replTypedGlobalTypeCheckAt(e) orelse continue;
             compiler.typed_global_names[compiler.typed_global_count] =
-                self.repl_typed_global_name_buf[e.name_offset..][0..e.name_len];
+                self.repl.typed_global_name_buf[e.name_offset..][0..e.name_len];
             compiler.typed_global_type_checks[compiler.typed_global_count] = tc;
             compiler.typed_global_count += 1;
         }
     }
 
     fn restoreReplNamespaceProvenance(self: *Runtime, compiler: *Compiler) void {
-        for (self.repl_ns_entries[0..self.repl_ns_count]) |e| {
+        for (self.repl.ns_entries[0..self.repl.ns_count]) |e| {
             switch (@as(ReplNsKind, @enumFromInt(e.kind))) {
                 .std_global => {
                     if (compiler.std_module_global_count >= MaxLocals) continue;
                     compiler.std_module_global_names[compiler.std_module_global_count] =
-                        self.repl_ns_name_buf[e.name_offset..][0..e.name_len];
+                        self.repl.ns_name_buf[e.name_offset..][0..e.name_len];
                     compiler.std_module_global_count += 1;
                 },
                 .import_global => {
                     if (compiler.import_module_global_count >= MaxLocals) continue;
                     compiler.import_module_global_qnames[compiler.import_module_global_count] =
-                        self.repl_ns_name_buf[e.name_offset..][0..e.name_len];
+                        self.repl.ns_name_buf[e.name_offset..][0..e.name_len];
                     compiler.import_module_global_paths[compiler.import_module_global_count] =
-                        self.repl_ns_name_buf[e.path_offset..][0..e.path_len];
+                        self.repl.ns_name_buf[e.path_offset..][0..e.path_len];
                     compiler.import_module_global_count += 1;
                 },
             }
@@ -580,20 +610,20 @@ pub const Runtime = struct {
     }
 
     fn persistReplSymbols(self: *Runtime, compiler: *const Compiler) !void {
-        self.repl_sym_count = 0;
-        self.repl_sym_name_buf_used = 0;
-        self.repl_enum_member_buf_used = 0;
+        self.repl.sym_count = 0;
+        self.repl.sym_name_buf_used = 0;
+        self.repl.enum_member_buf_used = 0;
 
         // Named types (most complex entries: carry full NamedTypeInfo fields)
         var ti: usize = 0;
         while (ti < compiler.registry.named_type_count) : (ti += 1) {
             const ni = compiler.registry.named_types[ti];
-            if (self.repl_sym_count >= MaxReplSyms)
+            if (self.repl.sym_count >= MaxReplSyms)
                 return self.setReplOverflowError("REPL symbol table full: too many type declarations");
             var e: ReplSymEntry = .{ .kind = @intFromEnum(ReplSymKind.named_type) };
             const saved_name = self.saveReplSymName(ni.name) catch
                 return self.setReplOverflowError("REPL symbol name buffer full");
-            e.name_offset = @intCast(@intFromPtr(saved_name.ptr) - @intFromPtr(&self.repl_sym_name_buf));
+            e.name_offset = @intCast(@intFromPtr(saved_name.ptr) - @intFromPtr(&self.repl.sym_name_buf));
             e.name_len = @intCast(saved_name.len);
             e.base_u8 = @intCast(@intFromEnum(ni.base));
             e.has_range = ni.has_range;
@@ -604,12 +634,12 @@ pub const Runtime = struct {
             if (ni.parent_name) |pn| {
                 const saved_pn = self.saveReplSymName(pn) catch
                     return self.setReplOverflowError("REPL symbol name buffer full");
-                e.parent_offset = @intCast(@intFromPtr(saved_pn.ptr) - @intFromPtr(&self.repl_sym_name_buf));
+                e.parent_offset = @intCast(@intFromPtr(saved_pn.ptr) - @intFromPtr(&self.repl.sym_name_buf));
                 e.parent_len = @intCast(saved_pn.len);
             }
             if (ni.enum_members) |members| self.saveReplEnumMembersToEntry(&e, members);
-            self.repl_syms[self.repl_sym_count] = e;
-            self.repl_sym_count += 1;
+            self.repl.syms[self.repl.sym_count] = e;
+            self.repl.sym_count += 1;
         }
 
         // Struct / interface / variant types (name only) — scan type hash
@@ -621,7 +651,7 @@ pub const Runtime = struct {
                 .variant_type   => .variant_type,
                 .named_type     => continue, // handled above
             };
-            if (self.repl_sym_count >= MaxReplSyms)
+            if (self.repl.sym_count >= MaxReplSyms)
                 return self.setReplOverflowError("REPL symbol table full: too many type declarations");
             try self.appendReplSimpleSym(compiler.registry.type_names[e.sub_idx], kind);
         }
@@ -629,7 +659,7 @@ pub const Runtime = struct {
         // Global funcs (name only; overflow is graceful — duplicate detection degrades)
         for (compiler.registry.func_buckets) |e| {
             if (!e.occupied or e.is_const) continue;
-            if (self.repl_sym_count >= MaxReplSyms) break;
+            if (self.repl.sym_count >= MaxReplSyms) break;
             self.appendReplSimpleSym(compiler.registry.global_symbols[e.sub_idx], .global_func) catch break;
         }
     }
@@ -637,27 +667,27 @@ pub const Runtime = struct {
     fn appendReplSimpleSym(self: *Runtime, name: []const u8, kind: ReplSymKind) !void {
         const saved = self.saveReplSymName(name) catch
             return self.setReplOverflowError("REPL symbol name buffer full");
-        self.repl_syms[self.repl_sym_count] = .{
-            .name_offset = @intCast(@intFromPtr(saved.ptr) - @intFromPtr(&self.repl_sym_name_buf)),
+        self.repl.syms[self.repl.sym_count] = .{
+            .name_offset = @intCast(@intFromPtr(saved.ptr) - @intFromPtr(&self.repl.sym_name_buf)),
             .name_len = @intCast(saved.len),
             .kind = @intFromEnum(kind),
         };
-        self.repl_sym_count += 1;
+        self.repl.sym_count += 1;
     }
 
     fn persistReplTypedGlobals(self: *Runtime, compiler: *const Compiler) void {
-        self.repl_typed_global_count = 0;
-        self.repl_typed_global_name_buf_used = 0;
+        self.repl.typed_global_count = 0;
+        self.repl.typed_global_name_buf_used = 0;
         var tgi: usize = 0;
         while (tgi < compiler.typed_global_count) : (tgi += 1) {
             const gname = compiler.typed_global_names[tgi];
             const tc = compiler.typed_global_type_checks[tgi];
-            if (self.repl_typed_global_count >= MaxLocals) break;
+            if (self.repl.typed_global_count >= MaxLocals) break;
             const tag = replTypedGlobalTag(tc) orelse continue;
-            if (self.repl_typed_global_name_buf_used + gname.len > self.repl_typed_global_name_buf.len) break;
-            const gs = self.repl_typed_global_name_buf_used;
-            std.mem.copyForwards(u8, self.repl_typed_global_name_buf[gs .. gs + gname.len], gname);
-            self.repl_typed_global_name_buf_used += gname.len;
+            if (self.repl.typed_global_name_buf_used + gname.len > self.repl.typed_global_name_buf.len) break;
+            const gs = self.repl.typed_global_name_buf_used;
+            std.mem.copyForwards(u8, self.repl.typed_global_name_buf[gs .. gs + gname.len], gname);
+            self.repl.typed_global_name_buf_used += gname.len;
             var e: ReplTypedGlobalEntry = .{
                 .name_offset = @intCast(gs),
                 .name_len = @intCast(gname.len),
@@ -667,56 +697,56 @@ pub const Runtime = struct {
             };
             if (tag == 6) {
                 const ntname = tc.named;
-                if (self.repl_typed_global_name_buf_used + ntname.len > self.repl_typed_global_name_buf.len) break;
-                const ns = self.repl_typed_global_name_buf_used;
-                std.mem.copyForwards(u8, self.repl_typed_global_name_buf[ns .. ns + ntname.len], ntname);
+                if (self.repl.typed_global_name_buf_used + ntname.len > self.repl.typed_global_name_buf.len) break;
+                const ns = self.repl.typed_global_name_buf_used;
+                std.mem.copyForwards(u8, self.repl.typed_global_name_buf[ns .. ns + ntname.len], ntname);
                 e.named_type_offset = @intCast(ns);
                 e.named_type_len = @intCast(ntname.len);
-                self.repl_typed_global_name_buf_used += ntname.len;
+                self.repl.typed_global_name_buf_used += ntname.len;
             }
-            self.repl_typed_globals[self.repl_typed_global_count] = e;
-            self.repl_typed_global_count += 1;
+            self.repl.typed_globals[self.repl.typed_global_count] = e;
+            self.repl.typed_global_count += 1;
         }
     }
 
     fn persistReplNamespaceProvenance(self: *Runtime, compiler: *const Compiler) void {
-        self.repl_ns_count = 0;
-        self.repl_ns_name_buf_used = 0;
+        self.repl.ns_count = 0;
+        self.repl.ns_name_buf_used = 0;
         var si: usize = 0;
         while (si < compiler.std_module_global_count) : (si += 1) {
             const sname = compiler.std_module_global_names[si];
-            if (self.repl_ns_count >= MaxReplNsEntries or
-                self.repl_ns_name_buf_used + sname.len > self.repl_ns_name_buf.len) break;
-            const ss = self.repl_ns_name_buf_used;
-            std.mem.copyForwards(u8, self.repl_ns_name_buf[ss .. ss + sname.len], sname);
-            self.repl_ns_entries[self.repl_ns_count] = .{
+            if (self.repl.ns_count >= MaxReplNsEntries or
+                self.repl.ns_name_buf_used + sname.len > self.repl.ns_name_buf.len) break;
+            const ss = self.repl.ns_name_buf_used;
+            std.mem.copyForwards(u8, self.repl.ns_name_buf[ss .. ss + sname.len], sname);
+            self.repl.ns_entries[self.repl.ns_count] = .{
                 .name_offset = @intCast(ss),
                 .name_len = @intCast(sname.len),
                 .kind = @intFromEnum(ReplNsKind.std_global),
             };
-            self.repl_ns_name_buf_used += sname.len;
-            self.repl_ns_count += 1;
+            self.repl.ns_name_buf_used += sname.len;
+            self.repl.ns_count += 1;
         }
         var ii: usize = 0;
         while (ii < compiler.import_module_global_count) : (ii += 1) {
             const qn = compiler.import_module_global_qnames[ii];
             const ip = compiler.import_module_global_paths[ii];
-            if (self.repl_ns_count >= MaxReplNsEntries or
-                self.repl_ns_name_buf_used + qn.len + ip.len > self.repl_ns_name_buf.len) break;
-            const qs = self.repl_ns_name_buf_used;
-            std.mem.copyForwards(u8, self.repl_ns_name_buf[qs .. qs + qn.len], qn);
-            self.repl_ns_name_buf_used += qn.len;
-            const ps = self.repl_ns_name_buf_used;
-            std.mem.copyForwards(u8, self.repl_ns_name_buf[ps .. ps + ip.len], ip);
-            self.repl_ns_entries[self.repl_ns_count] = .{
+            if (self.repl.ns_count >= MaxReplNsEntries or
+                self.repl.ns_name_buf_used + qn.len + ip.len > self.repl.ns_name_buf.len) break;
+            const qs = self.repl.ns_name_buf_used;
+            std.mem.copyForwards(u8, self.repl.ns_name_buf[qs .. qs + qn.len], qn);
+            self.repl.ns_name_buf_used += qn.len;
+            const ps = self.repl.ns_name_buf_used;
+            std.mem.copyForwards(u8, self.repl.ns_name_buf[ps .. ps + ip.len], ip);
+            self.repl.ns_entries[self.repl.ns_count] = .{
                 .name_offset = @intCast(qs),
                 .name_len = @intCast(qn.len),
                 .path_offset = @intCast(ps),
                 .path_len = @intCast(ip.len),
                 .kind = @intFromEnum(ReplNsKind.import_global),
             };
-            self.repl_ns_name_buf_used += ip.len;
-            self.repl_ns_count += 1;
+            self.repl.ns_name_buf_used += ip.len;
+            self.repl.ns_count += 1;
         }
     }
 
@@ -777,7 +807,7 @@ pub const Runtime = struct {
             3 => .{ .prim = .bool },
             4 => .{ .prim = .string },
             5 => .{ .prim = .rune },
-            6 => .{ .named = self.repl_typed_global_name_buf[e.named_type_offset..][0..e.named_type_len] },
+            6 => .{ .named = self.repl.typed_global_name_buf[e.named_type_offset..][0..e.named_type_len] },
             7 => .{ .assert_arr = {} },
             8 => .{ .assert_map = {} },
             9 => .{ .assert_err = {} },
@@ -811,11 +841,11 @@ pub const Runtime = struct {
     // preserves relative order, so an in-buffer source is always at or ahead
     // of its destination — copyForwards handles the overlap correctly.
     fn saveReplSymName(self: *Runtime, name: []const u8) ![]const u8 {
-        if (self.repl_sym_name_buf_used + name.len > self.repl_sym_name_buf.len) return error.OutOfMemory;
-        const start = self.repl_sym_name_buf_used;
-        std.mem.copyForwards(u8, self.repl_sym_name_buf[start .. start + name.len], name);
-        self.repl_sym_name_buf_used += name.len;
-        return self.repl_sym_name_buf[start .. start + name.len];
+        if (self.repl.sym_name_buf_used + name.len > self.repl.sym_name_buf.len) return error.OutOfMemory;
+        const start = self.repl.sym_name_buf_used;
+        std.mem.copyForwards(u8, self.repl.sym_name_buf[start .. start + name.len], name);
+        self.repl.sym_name_buf_used += name.len;
+        return self.repl.sym_name_buf[start .. start + name.len];
     }
 
     // Pack an enum type's member names as [len:u8][bytes]... into repl_enum_member_buf
@@ -828,16 +858,16 @@ pub const Runtime = struct {
             if (m.len > 255) return;
             needed += 1 + m.len;
         }
-        if (self.repl_enum_member_buf_used + needed > self.repl_enum_member_buf.len) return;
-        const start = self.repl_enum_member_buf_used;
+        if (self.repl.enum_member_buf_used + needed > self.repl.enum_member_buf.len) return;
+        const start = self.repl.enum_member_buf_used;
         var pos = start;
         for (members) |m| {
-            self.repl_enum_member_buf[pos] = @intCast(m.len);
+            self.repl.enum_member_buf[pos] = @intCast(m.len);
             pos += 1;
-            std.mem.copyForwards(u8, self.repl_enum_member_buf[pos .. pos + m.len], m);
+            std.mem.copyForwards(u8, self.repl.enum_member_buf[pos .. pos + m.len], m);
             pos += m.len;
         }
-        self.repl_enum_member_buf_used = pos;
+        self.repl.enum_member_buf_used = pos;
         e.enum_member_offset = @intCast(start);
         e.enum_member_count = @intCast(members.len);
     }
@@ -852,9 +882,9 @@ pub const Runtime = struct {
         var pos: usize = e.enum_member_offset;
         var i: usize = 0;
         while (i < count) : (i += 1) {
-            const len = self.repl_enum_member_buf[pos];
+            const len = self.repl.enum_member_buf[pos];
             pos += 1;
-            out[i] = self.repl_enum_member_buf[pos .. pos + len];
+            out[i] = self.repl.enum_member_buf[pos .. pos + len];
             pos += len;
         }
         return out[0..count];
