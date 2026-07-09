@@ -58,7 +58,7 @@ fn stackEffect(op: Op, code: []const u8, ip: usize) struct { pop: u8, push: u8 }
 
         .get_index => .{ .pop = 2, .push = 1 },
 
-        .call => blk: {
+        .call, .call_tail => blk: {
             const argc = code[ip + 1];
             break :blk .{ .pop = argc + 1, .push = 1 };
         },
@@ -104,11 +104,11 @@ fn stackEffect(op: Op, code: []const u8, ip: usize) struct { pop: u8, push: u8 }
         .dup2 => .{ .pop = 0, .push = 2 },
 
         .close_upvalue, .tuple_check_arity, .validate_type_default => .{ .pop = 0, .push = 0 },
-        .get_local_const_sub_call => blk: {
+        .get_local_const_sub_call, .get_local_const_sub_call_tail => blk: {
             const argc = code[ip + 5];
             break :blk .{ .pop = argc, .push = 1 };
         },
-        .call_global_local_sub_const => blk: {
+        .call_global_local_sub_const, .call_global_local_sub_const_tail => blk: {
             const argc = code[ip + 10];
             _ = argc;
             break :blk .{ .pop = 0, .push = 1 };
@@ -222,11 +222,15 @@ pub fn verify(state: anytype) !void {
                     verifySetErr(state, "ip={d} ({s}): expected embedded const_lt, got {d}", .{ip, @tagName(inst.op), state.code[ip + 5]});
                     return error.BadOpcode;
                 },
-                .get_local_const_sub_call => if (state.code[ip + 2] != @intFromEnum(Op.const_sub)) {
+                .get_local_const_sub_call, .get_local_const_sub_call_tail => if (state.code[ip + 2] != @intFromEnum(Op.const_sub)) {
                     verifySetErr(state, "ip={d} ({s}): expected embedded const_sub, got {d}", .{ip, @tagName(inst.op), state.code[ip + 2]});
                     return error.BadOpcode;
                 },
                 .call_global_local_sub_const => if (state.code[ip + 5] != @intFromEnum(Op.get_local_const_sub_call)) {
+                    verifySetErr(state, "ip={d} ({s}): expected embedded get_local_const_sub_call, got {d}", .{ip, @tagName(inst.op), state.code[ip + 5]});
+                    return error.BadOpcode;
+                },
+                .call_global_local_sub_const_tail => if (state.code[ip + 5] != @intFromEnum(Op.get_local_const_sub_call)) {
                     verifySetErr(state, "ip={d} ({s}): expected embedded get_local_const_sub_call, got {d}", .{ip, @tagName(inst.op), state.code[ip + 5]});
                     return error.BadOpcode;
                 },

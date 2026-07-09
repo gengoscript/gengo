@@ -100,6 +100,11 @@ pub const State = struct {
     // Peephole: position of last close_upvalue instruction (2 bytes: op + slot).
     // Used for fusion: close_upvalue + loop → close_upvalue_loop.
     last_close_upvalue_pos: ?usize = null,
+    // Peephole: first byte of last call-like instruction (call / get_local_const_sub_call /
+    // call_global_local_sub_const). Cleared by any emitByte; set at the end of emitCall.
+    // Used by tryUpgradeLastCallToTailCall to promote the opcode when the compiler
+    // knows no close_upvalue instructions separate it from the upcoming ret.
+    last_call_pos: ?usize = null,
     // Peephole: position of last local_add_const instruction (4 bytes: op + dst + idx_hi + idx_lo).
     // Used for fusion: local_add_const + loop → local_add_const_loop.
     last_local_add_const_pos: ?usize = null,
@@ -139,6 +144,7 @@ pub const State = struct {
         self.lines[self.code_len] = @intCast(if (line > 0xffff) 0xffff else line);
         self.cols[self.code_len] = self.pending_col;
         self.code_len += 1;
+        self.last_call_pos = null;
     }
 
     pub fn emitOp(self: *State, op: Op, line: u32) !void {
@@ -236,16 +242,35 @@ pub const State = struct {
                     if (gg_pos + 5 == sub_pos) {
                         self.code[gg_pos] = @intFromEnum(Op.call_global_local_sub_const);
                         self.last_get_global_code_pos = null;
+                        self.last_call_pos = gg_pos;
+                        return;
                     }
                 }
+                self.last_call_pos = sub_pos;
                 return;
             }
             self.last_get_local_const_sub_pos = null;
         }
+        const call_pos = self.code_len;
         try self.emitByte(@intFromEnum(Op.call), line);
         try self.emitByte(argc, line);
         try self.emitByte(0xFF, line); // IC slot hi (cold)
         try self.emitByte(0xFF, line); // IC slot lo (cold)
+        self.last_call_pos = call_pos;
+    }
+
+    // If the last instruction emitted was a call-like opcode and no other bytes
+    // have been emitted since, upgrade it to the tail-position variant so the VM
+    // dispatch loop skips the tryTailCall probe on every non-tail call.
+    pub fn tryUpgradeLastCallToTailCall(self: *State) void {
+        const pos = self.last_call_pos orelse return;
+        self.code[pos] = switch (@as(Op, @enumFromInt(self.code[pos]))) {
+            .call                       => @intFromEnum(Op.call_tail),
+            .get_local_const_sub_call   => @intFromEnum(Op.get_local_const_sub_call_tail),
+            .call_global_local_sub_const => @intFromEnum(Op.call_global_local_sub_const_tail),
+            else => return,
+        };
+        self.last_call_pos = null;
     }
 
     pub fn emit2(self: *State, a: u8, b: u8, line: u32) !void {

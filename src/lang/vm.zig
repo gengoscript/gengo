@@ -2513,10 +2513,44 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 } else {
                     try pushSubResult(ctx, a, p.k);
                 }
+                try performCallIC(ctx, argc, ic_base, ic_slot);
+            },
+            .get_local_const_sub_call_tail => {
+                const p = try readLocalSlotAndConst(ctx);
+                const argc = opByte(ctx);
+                const ic_base = ctx.vs.ip;
+                const ic_slot: u16 = (@as(u16, ctx.cs.codeByteAt(ic_base)) << 8) | @as(u16, ctx.cs.codeByteAt(ic_base + 1));
+                ctx.vs.ip += 2;
+                const a = try readLocalSlot(ctx, p.slot);
+                if (a == .int and p.k == .int) {
+                    try ctx.vs.vmPush(.{ .int = a.int - p.k.int });
+                } else {
+                    try pushSubResult(ctx, a, p.k);
+                }
                 if (try tryTailCall(ctx, argc)) continue;
                 try performCallIC(ctx, argc, ic_base, ic_slot);
             },
             .call_global_local_sub_const => {
+                const name_idx = opShort(ctx);
+                const g_ic_base = ctx.vs.ip;
+                const g_ic_slot: u16 = @intCast(opShort(ctx));
+                _ = opByte(ctx); // skip get_local_const_sub_call opcode byte
+                const p = try readLocalSlotAndConst(ctx);
+                const argc = opByte(ctx);
+                const c_ic_base = ctx.vs.ip;
+                const c_ic_slot: u16 = (@as(u16, ctx.cs.codeByteAt(c_ic_base)) << 8) | @as(u16, ctx.cs.codeByteAt(c_ic_base + 1));
+                ctx.vs.ip += 2;
+                const callee = try readGlobalIC(ctx, name_idx, g_ic_base, g_ic_slot);
+                const a = try readLocalSlot(ctx, p.slot);
+                try ctx.vs.vmPush(callee);
+                if (a == .int and p.k == .int) {
+                    try ctx.vs.vmPush(.{ .int = a.int - p.k.int });
+                } else {
+                    try pushSubResult(ctx, a, p.k);
+                }
+                try performCallIC(ctx, argc, c_ic_base, c_ic_slot);
+            },
+            .call_global_local_sub_const_tail => {
                 const name_idx = opShort(ctx);
                 const g_ic_base = ctx.vs.ip;
                 const g_ic_slot: u16 = @intCast(opShort(ctx));
@@ -3079,6 +3113,16 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
             },
 
             .call => {
+                const argc = opByte(ctx);
+                const ic_base = ctx.vs.ip;
+                const ic_slot: u16 = (@as(u16, ctx.cs.codeByteAt(ic_base)) << 8) | @as(u16, ctx.cs.codeByteAt(ic_base + 1));
+                ctx.vs.ip += 2;
+                const t0 = vmperf.readTsc();
+                try performCallIC(ctx, argc, ic_base, ic_slot);
+                const t1 = vmperf.readTsc();
+                if (t1 > t0) vmperf.callCycles(t1 - t0);
+            },
+            .call_tail => {
                 const argc = opByte(ctx);
                 const ic_base = ctx.vs.ip;
                 const ic_slot: u16 = (@as(u16, ctx.cs.codeByteAt(ic_base)) << 8) | @as(u16, ctx.cs.codeByteAt(ic_base + 1));

@@ -52,7 +52,8 @@ fn expandedWidth(op: Op, old_width: usize) usize {
         .get_local_const_lt,
         .get_local_const_gt         => 6,   // get_local(2)+constant(3)+binop(1)
         // Fused get_local+const+sub+call
-        .get_local_const_sub_call   => 10,  // get_local(2)+constant(3)+sub(1)+call(4)
+        .get_local_const_sub_call,
+        .get_local_const_sub_call_tail => 10,  // get_local(2)+constant(3)+sub(1)+call(4)
         // Fused quad with jif_pop
         .get_local_const_eq_jif_pop,
         .get_local_const_lt_jif_pop,
@@ -65,7 +66,8 @@ fn expandedWidth(op: Op, old_width: usize) usize {
         // Fused local_add_const+loop
         .local_add_const_loop       => 13,  // get_local(2)+constant(3)+add(1)+set_local(2)+loop(5)
         // Hexa-fused get_global+get_local_const_sub_call: same 13 bytes, just byte 0 changes
-        .call_global_local_sub_const => 13, // get_global(5)+get_local_const_sub_call(8)
+        .call_global_local_sub_const,
+        .call_global_local_sub_const_tail => 13, // get_global(5)+get_local_const_sub_call(8)
         // Fused get_global_const_add+set_global (same global): expands to 8+5=13 bytes
         .inc_global_const            => 13, // get_global_const_add(8)+set_global(5)
         // Quint-fused: get_local+const_lt+jif_pop+jump
@@ -195,6 +197,12 @@ fn emitExpanded(
             dst[5] = opByte(.sub);
             dst[6] = opByte(.call); dst[7] = rb(old_ip, 5); dst[8] = 0xFF; dst[9] = 0xFF;
         },
+        .get_local_const_sub_call_tail => {
+            dst[0] = opByte(.get_local); dst[1] = rb(old_ip, 1);
+            dst[2] = opByte(.constant); dst[3] = rb(old_ip, 3); dst[4] = rb(old_ip, 4);
+            dst[5] = opByte(.sub);
+            dst[6] = opByte(.call_tail); dst[7] = rb(old_ip, 5); dst[8] = 0xFF; dst[9] = 0xFF;
+        },
 
         // ── quad: get_local + const_cmp + jif_pop ────────────────────────────
         // Layout: [op][slot][skip][idx_hi][idx_lo][jmp_b3..b0]  (9 bytes)
@@ -261,6 +269,12 @@ fn emitExpanded(
         .call_global_local_sub_const => {
             dst[0] = opByte(.get_global);
             for (1..13) |i| dst[i] = rb(old_ip, i);
+        },
+        .call_global_local_sub_const_tail => {
+            dst[0] = opByte(.get_global);
+            for (1..5) |i| dst[i] = rb(old_ip, i);
+            dst[5] = opByte(.get_local_const_sub_call_tail);
+            for (6..13) |i| dst[i] = rb(old_ip, i);
         },
 
         // ── fused local_add_const + loop ─────────────────────────────────────
