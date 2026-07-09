@@ -309,7 +309,7 @@ fn decimalOpValues(a: Value, b: Value) ?struct { lhs: i64, rhs: i64, typ: *Objec
 }
 
 fn pushDecimalResultWithCarrier(ctx: VMContext, typ: *Object, d: i64) !void {
-    const wrapped = try vmtyp.coerceNamedTypeResult(typ, .{ .decimal = d });
+    const wrapped = try vmtyp.coerceNamedTypeResult(ctx, typ, .{ .decimal = d });
     try checkNamedTypePredicate(ctx, typ, wrapped.namedInner() orelse unreachable);
     try ctx.vs.vmPush(wrapped);
 }
@@ -361,7 +361,7 @@ fn computeAddResult(ctx: VMContext, a: Value, b: Value) !Value {
         const sa = try vms.asStringValue(a);
         const sb = try vms.asStringValue(b);
         vmperf.countStringConcat(sa.len + sb.len);
-        const result = try vmgc.concatDynString(sa, sb);
+        const result = try vmgc.concatDynString(ctx, sa, sb);
         const carrier = namedTypeCarrier(a, b) catch |err| {
             if (err == error.TypeError) setBinaryTypeError(ctx, "+", a, b);
             return err;
@@ -369,14 +369,14 @@ fn computeAddResult(ctx: VMContext, a: Value, b: Value) !Value {
         if (carrier) |typ| {
             try ctx.vs.pushTempRoot(result);
             defer ctx.vs.popTempRoot();
-            return try vmtyp.makeNamedValue(typ, result);
+            return try vmtyp.makeNamedValue(ctx, typ, result);
         } else {
             return result;
         }
     } else if (decimalOpValues(a, b)) |dop| {
         const result = @addWithOverflow(dop.lhs, dop.rhs);
         if (result[1] != 0) return error.TypeError;
-        return try vmtyp.coerceNamedTypeResult(dop.typ, .{ .decimal = result[0] });
+        return try vmtyp.coerceNamedTypeResult(ctx, dop.typ, .{ .decimal = result[0] });
     } else {
         const tag = numericOpTag(a, b) catch |err| {
             if (err == error.TypeError) setBinaryTypeError(ctx, "+", a, b);
@@ -418,7 +418,7 @@ fn wrapValueWithCarrier(ctx: VMContext, a: Value, b: Value, val: Value, op: []co
         return err;
     };
     if (carrier) |typ| {
-        const wrapped = try vmtyp.coerceNamedTypeResult(typ, val);
+        const wrapped = try vmtyp.coerceNamedTypeResult(ctx, typ, val);
         try checkNamedTypePredicate(ctx, typ, wrapped.namedInner() orelse unreachable);
         return wrapped;
     }
@@ -449,7 +449,7 @@ fn getShiftArgs(ctx: VMContext, op: []const u8) !struct { a: Value, b: Value, an
 fn pushUnaryIntResult(ctx: VMContext, v: Value, result: Value) !void {
     _ = try ctx.vs.vmPop();
     if (v.namedTyp()) |typ| {
-        const wrapped = try vmtyp.coerceNamedTypeResult(typ, result);
+        const wrapped = try vmtyp.coerceNamedTypeResult(ctx, typ, result);
         try checkNamedTypePredicate(ctx, typ, wrapped.namedInner() orelse unreachable);
         try ctx.vs.vmPush(wrapped);
     } else {
@@ -465,7 +465,7 @@ fn pushStringResultWithCarrier(ctx: VMContext, a: Value, b: Value, raw: Value) !
     if (carrier) |typ| {
         try ctx.vs.pushTempRoot(raw);
         defer ctx.vs.popTempRoot();
-        try ctx.vs.vmPush(try vmtyp.makeNamedValue(typ, raw));
+        try ctx.vs.vmPush(try vmtyp.makeNamedValue(ctx, typ, raw));
     } else {
         try ctx.vs.vmPush(raw);
     }
@@ -493,9 +493,9 @@ fn prepareVariadicCall(ctx: VMContext, f: @import("value.zig").FuncObj, argc: u8
         ctx.vs.stack_top = start + fixed + 1;
         return;
     }
-    const arr_obj = try vmgc.allocTempRooted(.{ .array = &[_]Value{} });
+    const arr_obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
     defer ctx.vs.popTempRoot();
-    const items = try vmgc.vmAllocManagedSlice(Value, extra);
+    const items = try vmgc.vmAllocManagedSlice(ctx, Value, extra);
     @memcpy(items[0..extra], ctx.vs.stack[start + fixed .. start + fixed + extra]);
     arr_obj.* = .{ .array_managed = items[0..extra] };
     ctx.vs.stack[start + fixed] = .{ .object = arr_obj };
@@ -506,7 +506,7 @@ fn prepareVariadicCall(ctx: VMContext, f: @import("value.zig").FuncObj, argc: u8
 // For subtypes, the value's typ pointer is the PARENT enum and ordinal is the
 // parent's ordinal, so two values from different subtypes of the same parent
 // compare equal.  Returns error.UnknownStructField if the name is not a member.
-fn enumTypeAllocValue(obj: *Object, member_name: []const u8) !Value {
+fn enumTypeAllocValue(ctx: VMContext, obj: *Object, member_name: []const u8) !Value {
     const et = &obj.enum_type;
     if (et.parent_name != null) {
         // Subtype: first validate the name is in the subset members.
@@ -521,7 +521,7 @@ fn enumTypeAllocValue(obj: *Object, member_name: []const u8) !Value {
         for (parent_et.members, 0..) |m, pi| {
             if (common.streq(m, member_name)) {
                 const ordinal = if (parent_et.member_ints) |mi| mi[pi] else @as(i64, @intCast(pi));
-                const ev = try vmgc.vmAllocObject();
+                const ev = try vmgc.vmAllocObject(ctx);
                 ev.* = .{ .enum_value = .{ .typ = parent_obj, .name = m, .ordinal = ordinal } };
                 return .{ .object = ev };
             }
@@ -531,7 +531,7 @@ fn enumTypeAllocValue(obj: *Object, member_name: []const u8) !Value {
         for (et.members, 0..) |m, ei| {
             if (common.streq(m, member_name)) {
                 const ordinal = if (et.member_ints) |mi| mi[ei] else @as(i64, @intCast(ei));
-                const ev = try vmgc.vmAllocObject();
+                const ev = try vmgc.vmAllocObject(ctx);
                 ev.* = .{ .enum_value = .{ .typ = obj, .name = m, .ordinal = ordinal } };
                 return .{ .object = ev };
             }
@@ -541,11 +541,11 @@ fn enumTypeAllocValue(obj: *Object, member_name: []const u8) !Value {
 }
 
 fn enumTypeValuesValue(ctx: VMContext, obj: *Object, et: vmod.EnumTypeObj) !Value {
-    const arr_obj = try vmgc.allocTempRooted(.{ .array = &[_]Value{} });
+    const arr_obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
     defer ctx.vs.popTempRoot();
-    const items = try vmgc.vmAllocManagedSlice(Value, et.members.len);
+    const items = try vmgc.vmAllocManagedSlice(ctx, Value, et.members.len);
     for (et.members, 0..) |m, ei| {
-        items[ei] = try enumTypeAllocValue(obj, m);
+        items[ei] = try enumTypeAllocValue(ctx, obj, m);
         arr_obj.* = .{ .array_managed = items[0 .. ei + 1] };
     }
     return .{ .object = arr_obj };
@@ -571,25 +571,25 @@ fn enumTypeFieldValue(ctx: VMContext, obj: *Object, name: []const u8) !Value {
     if (common.streq(name, "name")) return .{ .string = try ctx.cs.internStr(et.name) };
     if (common.streq(name, "first")) {
         if (et.members.len == 0) return error.IndexOutOfBounds;
-        return try enumTypeAllocValue(obj, et.members[0]);
+        return try enumTypeAllocValue(ctx, obj, et.members[0]);
     }
     if (common.streq(name, "last")) {
         if (et.members.len == 0) return error.IndexOutOfBounds;
-        return try enumTypeAllocValue(obj, et.members[et.members.len - 1]);
+        return try enumTypeAllocValue(ctx, obj, et.members[et.members.len - 1]);
     }
     if (common.streq(name, "values")) return try enumTypeValuesValue(ctx, obj, et);
     if (common.streq(name, "from_int")) {
-        const fn_obj = try vmgc.vmAllocObject();
+        const fn_obj = try vmgc.vmAllocObject(ctx);
         fn_obj.* = .{ .enum_type_fn = .{ .typ = obj, .kind = .from_int } };
         return .{ .object = fn_obj };
     }
     if (common.streq(name, "succ") or common.streq(name, "pred")) {
-        const fn_obj = try vmgc.vmAllocObject();
+        const fn_obj = try vmgc.vmAllocObject(ctx);
         const kind: vmod.EnumTypeFnKind = if (common.streq(name, "succ")) .succ else .pred;
         fn_obj.* = .{ .enum_type_fn = .{ .typ = obj, .kind = kind } };
         return .{ .object = fn_obj };
     }
-    return try enumTypeAllocValue(obj, name);
+    return try enumTypeAllocValue(ctx, obj, name);
 }
 
 fn namedTypeFieldValue(ctx: VMContext, obj: *Object, name: []const u8) !Value {
@@ -597,15 +597,15 @@ fn namedTypeFieldValue(ctx: VMContext, obj: *Object, name: []const u8) !Value {
     if (common.streq(name, "name")) return .{ .string = try ctx.cs.internStr(nt.name) };
     if (common.streq(name, "first")) {
         if (!nt.has_range) return error.TypeError;
-        return try vmtyp.makeNamedValue(obj, if (nt.base == .float) .{ .float = nt.min } else .{ .int = @intFromFloat(nt.min) });
+        return try vmtyp.makeNamedValue(ctx, obj, if (nt.base == .float) .{ .float = nt.min } else .{ .int = @intFromFloat(nt.min) });
     }
     if (common.streq(name, "last")) {
         if (!nt.has_range) return error.TypeError;
-        return try vmtyp.makeNamedValue(obj, if (nt.base == .float) .{ .float = nt.max } else .{ .int = @intFromFloat(nt.max) });
+        return try vmtyp.makeNamedValue(ctx, obj, if (nt.base == .float) .{ .float = nt.max } else .{ .int = @intFromFloat(nt.max) });
     }
     if (common.streq(name, "succ") or common.streq(name, "pred")) {
         if (!nt.has_range) return error.TypeError;
-        const fn_obj = try vmgc.vmAllocObject();
+        const fn_obj = try vmgc.vmAllocObject(ctx);
         const kind: vmod.NamedTypeFnKind = if (common.streq(name, "succ")) .succ else .pred;
         fn_obj.* = .{ .named_type_fn = .{ .typ = obj, .kind = kind } };
         return .{ .object = fn_obj };
@@ -613,11 +613,11 @@ fn namedTypeFieldValue(ctx: VMContext, obj: *Object, name: []const u8) !Value {
     return error.UnknownStructField;
 }
 
-fn makeVariantArmValue(obj: *Object, vt: vmod.VariantTypeObj, arm_index: usize) !Value {
+fn makeVariantArmValue(ctx: VMContext, obj: *Object, vt: vmod.VariantTypeObj, arm_index: usize) !Value {
     const arm = vt.arms[arm_index];
     const has_shared = vt.shared_fields.len > 0;
     if (arm.has_payload or has_shared) {
-        const ctor = try vmgc.vmAllocObject();
+        const ctor = try vmgc.vmAllocObject(ctx);
         ctor.* = .{ .variant_ctor = .{
             .typ = obj,
             .tag = arm.name,
@@ -627,14 +627,14 @@ fn makeVariantArmValue(obj: *Object, vt: vmod.VariantTypeObj, arm_index: usize) 
         return .{ .object = ctor };
     }
 
-    return vmtyp.variantConstruct(obj, arm.name, arm_index, .null);
+    return vmtyp.variantConstruct(ctx, obj, arm.name, arm_index, .null);
 }
 
 fn variantTypeFieldValue(ctx: VMContext, obj: *Object, name: []const u8) !Value {
     const vt = obj.variant_type;
     if (common.streq(name, "name")) return .{ .string = try ctx.cs.internStr(vt.name) };
     for (vt.arms, 0..) |arm, vi| {
-        if (common.streq(arm.name, name)) return try makeVariantArmValue(obj, vt, vi);
+        if (common.streq(arm.name, name)) return try makeVariantArmValue(ctx, obj, vt, vi);
     }
     return error.UnknownStructField;
 }
@@ -763,7 +763,7 @@ fn checkNamedTypePredicate(ctx: VMContext, nt_obj: *Object, inner: Value) !void 
     if (!ctx.vs.policy.enable_predicates) return;
     const nt = nt_obj.named_type;
     if (nt.predicate) |pred| {
-        const result = callFunction(.{ .object = pred }, &[_]Value{inner}) catch |err| {
+        const result = callFunction(ctx, .{ .object = pred }, &[_]Value{inner}) catch |err| {
             if (err != error.PredicateFailed) {
                 ctx.vs.setRuntimeErr("{s}: inside predicate for {s}", .{ @errorName(err), nt.name });
             }
@@ -996,15 +996,15 @@ fn performCall(ctx: VMContext, argc: u8) !void {
             try enterFunctionFrame(ctx, cl.func.function, cl.func, obj, argc);
         },
         .native_function => |nf| {
-            try vmnative.callNative(nf, argc);
+            try vmnative.callNative(ctx, nf, argc);
         },
         .host_module_function => |hmf| {
-            try vmnative.callHostModule(hmf, argc);
+            try vmnative.callHostModule(ctx, hmf, argc);
         },
         .named_type => {
             if (argc != 1) return error.ArityMismatch;
             const arg = ctx.vs.stack[ctx.vs.stack_top - 1];
-            const out = try vmtyp.constructNamedType(obj, arg);
+            const out = try vmtyp.constructNamedType(ctx, obj, arg);
             try checkNamedTypePredicateChain(ctx, obj, out.namedInner() orelse unreachable);
             try pop2push1(ctx, out);
         },
@@ -1028,12 +1028,12 @@ fn performCall(ctx: VMContext, argc: u8) !void {
             if (vc.payload_type) |pt| {
                 if (!vmtyp.matchesTypeSpec(payload, pt)) return error.TypeError;
             }
-            try pop2push1(ctx, try vmtyp.variantConstruct(vc.typ, vc.tag, vc.ordinal, payload));
+            try pop2push1(ctx, try vmtyp.variantConstruct(ctx, vc.typ, vc.tag, vc.ordinal, payload));
         },
         .named_type_fn => |nf| {
             if (argc != 1) return error.ArityMismatch;
             const arg = ctx.vs.stack[ctx.vs.stack_top - 1];
-            const out = try vmtyp.applyNamedTypeFn(nf.typ, nf.kind, arg);
+            const out = try vmtyp.applyNamedTypeFn(ctx, nf.typ, nf.kind, arg);
             try pop2push1(ctx, out);
         },
         .enum_type_fn => |ef| {
@@ -1047,7 +1047,7 @@ fn performCall(ctx: VMContext, argc: u8) !void {
                     for (et.members, 0..) |m, mi| {
                         const ordinal = if (et.member_ints) |ints| ints[mi] else @as(i64, @intCast(mi));
                         if (ordinal == n) {
-                            const ev = try vmgc.vmAllocObject();
+                            const ev = try vmgc.vmAllocObject(ctx);
                             ev.* = .{ .enum_value = .{ .typ = ef.typ, .name = m, .ordinal = ordinal } };
                             try pop2push1(ctx, .{ .object = ev });
                             return;
@@ -1069,7 +1069,7 @@ fn performCall(ctx: VMContext, argc: u8) !void {
                     else
                         if (cur_idx == 0) et.members.len - 1 else cur_idx - 1;
                     const next_ordinal = if (et.member_ints) |ints| ints[next_idx] else @as(i64, @intCast(next_idx));
-                    const new_ev = try vmgc.vmAllocObject();
+                    const new_ev = try vmgc.vmAllocObject(ctx);
                     new_ev.* = .{ .enum_value = .{ .typ = ef.typ, .name = et.members[next_idx], .ordinal = next_ordinal } };
                     try pop2push1(ctx, .{ .object = new_ev });
                 },
@@ -1127,7 +1127,7 @@ fn tryTailCall(ctx: VMContext, argc: u8) !bool {
 // empty iterable.
 var empty_iterator: Object = .{ .iterator = .{ .kind = .array, .index = 0 } };
 
-fn iterInit(v: Value) !Value {
+fn iterInit(ctx: VMContext, v: Value) !Value {
     const iv = vms.unboxNamed(v);
     const it: IterObj = switch (iv) {
         .object => |o| switch (o.*) {
@@ -1152,7 +1152,7 @@ fn iterInit(v: Value) !Value {
         .range => false, // min..max is inclusive: a range iterator is never empty
     };
     if (is_empty) return .{ .object = &empty_iterator };
-    const obj = try vmgc.vmAllocObject();
+    const obj = try vmgc.vmAllocObject(ctx);
     obj.* = .{ .iterator = it };
     return .{ .object = obj };
 }
@@ -1181,7 +1181,7 @@ fn iterNext1(ctx: VMContext, it: *IterObj) !void {
             const end = try vmstr.utf8ByteOffsetForRuneIndexCached(it.string, ridx + 1);
             // source is null for both static strings and string_views of immortal bytes.
             const source: ?*Object = if (it.string_managed) it.source else null;
-            try ctx.vs.vmPush(try vmstr.makeCharValue(it.string[start..end], source));
+            try ctx.vs.vmPush(try vmstr.makeCharValue(ctx, it.string[start..end], source));
             it.index = end;
             it.rune_index += 1;
             try ctx.vs.vmPush(.{ .boolean = true });
@@ -1200,7 +1200,7 @@ fn iterNext1(ctx: VMContext, it: *IterObj) !void {
             }
             const typ_obj = it.source.?;
             const nt = typ_obj.named_type;
-            const val = try vmtyp.makeNamedValue(typ_obj, if (nt.base == .float) .{ .float = it.range_current } else .{ .int = @intFromFloat(it.range_current) });
+            const val = try vmtyp.makeNamedValue(ctx, typ_obj, if (nt.base == .float) .{ .float = it.range_current } else .{ .int = @intFromFloat(it.range_current) });
             const next = it.range_current + 1.0;
             if (next == it.range_current) return error.RangeError;
             it.range_current = next;
@@ -1226,7 +1226,7 @@ fn iterNext2(ctx: VMContext, it: *IterObj) !void {
             const end = try vmstr.utf8ByteOffsetForRuneIndexCached(it.string, ridx + 1);
             try ctx.vs.vmPush(.{ .int = @intCast(it.rune_index) });
             const source: ?*Object = if (it.string_managed) it.source else null;
-            try ctx.vs.vmPush(try vmstr.makeCharValue(it.string[start..end], source));
+            try ctx.vs.vmPush(try vmstr.makeCharValue(ctx, it.string[start..end], source));
             it.index = end;
             it.rune_index += 1;
             try ctx.vs.vmPush(.{ .boolean = true });
@@ -1284,10 +1284,10 @@ fn retSlowPath(ctx: VMContext, retval_in: Value) !bool {
                 retval = vms.unboxCell(raw);
             } else {
                 const nrc: usize = fsig.named_return_count;
-                const arr_obj = try vmgc.vmAllocObject();
+                const arr_obj = try vmgc.vmAllocObject(ctx);
                 arr_obj.* = .{ .array = &[_]Value{} };
                 try ctx.vs.pushTempRoot(.{ .object = arr_obj });
-                const items = try vmgc.vmAllocManagedSlice(Value, nrc);
+                const items = try vmgc.vmAllocManagedSlice(ctx, Value, nrc);
                 for (0..nrc) |ri| {
                     if (nrbase + ri >= ctx.vs.stack.len) return error.StackOverflow;
                     const raw = ctx.vs.stack[nrbase + ri];
@@ -1416,7 +1416,7 @@ fn opGetIndex(ctx: VMContext) !void {
     switch (container) {
         .object => |obj| switch (obj.*) {
             .dyn_string, .string_view => {
-                try ctx.vs.vmPush(try vmstr.stringIndex(container, idx_v));
+                try ctx.vs.vmPush(try vmstr.stringIndex(ctx, container, idx_v));
             },
             .array, .array_managed, .array_view, .array_capacity => {
                 try ctx.vs.vmPush(try vmarr.arrayRead(obj, idx_v));
@@ -1445,7 +1445,7 @@ fn opGetIndex(ctx: VMContext) !void {
             else => return error.TypeError,
         },
         .string => {
-            try ctx.vs.vmPush(try vmstr.stringIndex(container, idx_v));
+            try ctx.vs.vmPush(try vmstr.stringIndex(ctx, container, idx_v));
         },
         .inline_variant => |iv| {
             const key = try vms.asStringValue(idx_v);
@@ -1488,7 +1488,7 @@ fn opSetIndex(ctx: VMContext) !void {
         .array, .array_managed, .array_view, .array_capacity => {
             try vmarr.arrayWrite(container.object, idx_v, val);
         },
-        .map, .map_managed, .map_hashed => try vmmap.mapSet(container, idx_v, val),
+        .map, .map_managed, .map_hashed => try vmmap.mapSet(ctx, container, idx_v, val),
         .struct_instance => |inst| {
             const key = try vms.asStringValue(idx_v);
             const idx = vmtyp.findFieldIndex(inst.typ.struct_type.fields, key) orelse {
@@ -1565,12 +1565,12 @@ fn opInvokeMethod(ctx: VMContext) !void {
                 if (arm.payload_type) |pt| {
                     if (!vmtyp.matchesTypeSpec(payload, pt)) return error.TypeError;
                 }
-                const vv = try vmtyp.variantConstruct(recv.object, arm.name, vi, payload);
+                const vv = try vmtyp.variantConstruct(ctx, recv.object, arm.name, vi, payload);
                 for (0..@as(usize, argc) + 1) |_| _ = try ctx.vs.vmPop();
                 try ctx.vs.vmPush(vv);
             } else {
                 if (argc != 0) return error.ArityMismatch;
-                const vv = try vmtyp.variantConstruct(recv.object, arm.name, vi, .null);
+                const vv = try vmtyp.variantConstruct(ctx, recv.object, arm.name, vi, .null);
                 _ = try ctx.vs.vmPop(); // pop recv
                 try ctx.vs.vmPush(vv);
             }
@@ -1580,7 +1580,7 @@ fn opInvokeMethod(ctx: VMContext) !void {
             if (!common.streq(mname, "succ") and !common.streq(mname, "pred")) return error.UnknownMethod;
             const kind: @import("value.zig").NamedTypeFnKind = if (common.streq(mname, "succ")) .succ else .pred;
             const arg = ctx.vs.stack[recv_idx + 1];
-            const out = try vmtyp.applyNamedTypeFn(recv.object, kind, arg);
+            const out = try vmtyp.applyNamedTypeFn(ctx, recv.object, kind, arg);
             if (recv_idx >= ctx.vs.stack_top) return error.StackUnderflow;
             ctx.vs.stack_top = recv_idx;
             try ctx.vs.vmPush(out);
@@ -1592,7 +1592,7 @@ fn opInvokeMethod(ctx: VMContext) !void {
                 const needed = sb.len + s_bytes.len;
                 if (needed > sb.buf.len) {
                     // Grow: receiver stays on stack so GC keeps the object alive.
-                    const new_buf = try vmgc.vmAllocManagedBytes(needed);
+                    const new_buf = try vmgc.vmAllocManagedBytes(ctx, needed);
                     @memcpy(new_buf[0..sb.len], sb.buf[0..sb.len]);
                     const old_buf = sb.buf;
                     sb.buf = new_buf; // update before free so paranoia doesn't see the old ref
@@ -1605,7 +1605,7 @@ fn opInvokeMethod(ctx: VMContext) !void {
                 try ctx.vs.vmPush(.null);
             } else if (common.streq(mname, "str")) {
                 if (argc != 0) return error.ArityMismatch;
-                const result = try vmgc.makeDynString(sb.buf[0..sb.len]);
+                const result = try vmgc.makeDynString(ctx, sb.buf[0..sb.len]);
                 if (recv_idx >= ctx.vs.stack_top) return error.StackUnderflow;
                 ctx.vs.stack_top = recv_idx;
                 try ctx.vs.vmPush(result);
@@ -1712,7 +1712,7 @@ fn opSetField(ctx: VMContext) !void {
             if (!vmtyp.matchesFieldType(val, inst.typ.struct_type.fields[fi])) return error.StructFieldTypeMismatch;
             inst.fields[fi].value = val;
         },
-        .map, .map_managed, .map_hashed => try vmmap.mapSet(container, name_val, val),
+        .map, .map_managed, .map_hashed => try vmmap.mapSet(ctx, container, name_val, val),
         else => return error.TypeError,
     }
 }
@@ -1747,11 +1747,11 @@ fn opDeferInvokeMethod(ctx: VMContext) !void {
     } else return error.NotAMethodReceiver;
     const extra: usize = if (pass_recv) 1 else 0;
     const total: usize = 1 + extra + @as(usize, argc);
-    const arr_obj = try vmgc.vmAllocObject();
+    const arr_obj = try vmgc.vmAllocObject(ctx);
     arr_obj.* = .{ .array_managed = &[_]Value{} }; // safe init before GC can see it via temp root
     try ctx.vs.pushTempRoot(.{ .object = arr_obj });
     defer ctx.vs.popTempRoot();
-    const items = try vmgc.vmAllocManagedSlice(Value, total);
+    const items = try vmgc.vmAllocManagedSlice(ctx, Value, total);
     items[0] = func;
     if (pass_recv) items[1] = recv;
     @memcpy(items[1 + extra .. 1 + extra + @as(usize, argc)], ctx.vs.stack[recv_idx + 1 .. recv_idx + 1 + @as(usize, argc)]);
@@ -2339,14 +2339,14 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 if (vmod.decimalRawAndScale(raw)) |drs| {
                     var buf: [64]u8 = undefined;
                     const s = vmod.formatDecimalString(drs.raw, drs.scale, &buf);
-                    const out = try vmgc.makeDynString(s);
+                    const out = try vmgc.makeDynString(ctx, s);
                     _ = try ctx.vs.vmPop();
                     try ctx.vs.vmPush(out);
                     continue;
                 }
                 const v = vms.unboxNamed(raw);
                 if (v == .null) return error.TypeError;
-                const out = try vmnative.nativeConvToString(v);
+                const out = try vmnative.nativeConvToString(ctx, v);
                 _ = try ctx.vs.vmPop();
                 try ctx.vs.vmPush(out);
             },
@@ -2684,9 +2684,9 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
 
             .build_array => {
                 const count = opByte(ctx);
-                const obj = try vmgc.allocTempRooted(.{ .array = &[_]Value{} });
+                const obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
                 defer ctx.vs.popTempRoot();
-                const items = try vmgc.vmAllocManagedSlice(Value, count);
+                const items = try vmgc.vmAllocManagedSlice(ctx, Value, count);
                 var i: usize = count;
                 while (i > 0) {
                     i -= 1;
@@ -2722,9 +2722,9 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
             },
             .build_tuple => {
                 const count = opByte(ctx);
-                const obj = try vmgc.allocTempRooted(.{ .array = &[_]Value{} });
+                const obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
                 defer ctx.vs.popTempRoot();
-                const items = try vmgc.vmAllocManagedSlice(Value, count);
+                const items = try vmgc.vmAllocManagedSlice(ctx, Value, count);
                 var i: usize = count;
                 while (i > 0) {
                     i -= 1;
@@ -2735,9 +2735,9 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
             },
             .build_map => {
                 const count = opByte(ctx);
-                const obj = try vmgc.allocTempRooted(.{ .map = &[_]MapEntry{} });
+                const obj = try vmgc.allocTempRooted(ctx, .{ .map = &[_]MapEntry{} });
                 defer ctx.vs.popTempRoot();
-                const items = try vmgc.vmAllocManagedSlice(MapEntry, count);
+                const items = try vmgc.vmAllocManagedSlice(ctx, MapEntry, count);
                 var i: usize = count;
                 while (i > 0) {
                     i -= 1;
@@ -2749,7 +2749,7 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 // (they are no longer on the stack after vmPop above).
                 obj.* = .{ .map = items[0..count] };
                 const bcount = vmmap.mapBucketsForCount(count);
-                const buckets = try vmgc.vmAllocManagedSlice(i32, bcount);
+                const buckets = try vmgc.vmAllocManagedSlice(ctx, i32, bcount);
                 vmmap.mapBuildHashedBuckets(items[0..count], buckets);
                 obj.* = .{ .map_hashed = .{ .entries = items[0..count], .len = count, .buckets = buckets } };
                 try ctx.vs.vmPush(.{ .object = obj });
@@ -2759,9 +2759,9 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 if (typ_val != .object or typ_val.object.* != .struct_type) return error.TypeError;
                 const st = typ_val.object.struct_type;
                 const n = st.fields.len;
-                const inst_obj = try vmgc.allocTempRooted(.{ .array = &[_]Value{} });
+                const inst_obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
                 defer ctx.vs.popTempRoot();
-                const fields = try vmgc.vmAllocManagedSlice(MapEntry, n);
+                const fields = try vmgc.vmAllocManagedSlice(ctx, MapEntry, n);
                 for (fields, 0..) |*f, i| {
                     f.* = .{
                         .key = .{ .string = try ctx.cs.internStr(st.fields[i].name) },
@@ -2785,12 +2785,12 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                     const shared_count = vt.shared_fields.len;
                     const arm_field_count = arm.fields.len;
 
-                    const obj = try vmgc.allocTempRooted(.{ .array = &[_]Value{} });
+                    const obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
                     defer ctx.vs.popTempRoot();
 
                     const base = ctx.vs.stack_top - typ_stack_dist;
-                    const shared_vals = try vmgc.vmAllocManagedSlice(Value, shared_count);
-                    const arm_vals = if (arm_field_count > 0) try vmgc.vmAllocManagedSlice(Value, arm_field_count) else @as([]Value, &.{});
+                    const shared_vals = try vmgc.vmAllocManagedSlice(ctx, Value, shared_count);
+                    const arm_vals = if (arm_field_count > 0) try vmgc.vmAllocManagedSlice(ctx, Value, arm_field_count) else @as([]Value, &.{});
 
                     if (arm.has_payload and arm_field_count == 0) {
                         // Single-payload arm with shared fields
@@ -2871,8 +2871,8 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                     const st = typ_peek.object.struct_type;
                     if (st.fields.len > 255) return error.TooManyStructFields;
 
-                    const inst_fields = try vmgc.vmAllocManagedSlice(MapEntry, st.fields.len);
-                    const obj = try vmgc.allocTempRooted(.{ .array = &[_]Value{} });
+                    const inst_fields = try vmgc.vmAllocManagedSlice(ctx, MapEntry, st.fields.len);
+                    const obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
                     defer ctx.vs.popTempRoot();
 
                     const base = ctx.vs.stack_top - typ_stack_dist;
@@ -2946,14 +2946,14 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
 
                 switch (container) {
                     .string => {
-                        try ctx.vs.vmPush(try vmstr.stringSlice(container, has_start, start_v, has_end, end_v));
+                        try ctx.vs.vmPush(try vmstr.stringSlice(ctx, container, has_start, start_v, has_end, end_v));
                     },
                     .object => |obj| switch (obj.*) {
                         .dyn_string, .string_view => {
-                            try ctx.vs.vmPush(try vmstr.stringSlice(container, has_start, start_v, has_end, end_v));
+                            try ctx.vs.vmPush(try vmstr.stringSlice(ctx, container, has_start, start_v, has_end, end_v));
                         },
                         .array, .array_managed, .array_view, .array_capacity => {
-                            try ctx.vs.vmPush(try vmarr.arraySlice(obj, has_start, start_v, has_end, end_v));
+                            try ctx.vs.vmPush(try vmarr.arraySlice(ctx, obj, has_start, start_v, has_end, end_v));
                         },
                         else => return error.TypeError,
                     },
@@ -2966,7 +2966,7 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 // only reference in a Zig local, and the GC sweeps it — often
                 // reusing its slot for the iterator itself.
                 const v = try ctx.vs.vmPeek(0);
-                const it = try iterInit(v);
+                const it = try iterInit(ctx, v);
                 _ = try ctx.vs.vmPop();
                 try ctx.vs.vmPush(it);
             },
@@ -2985,7 +2985,7 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 if (f != .object or f.object.* != .function) return error.InvalidChunkShape;
                 const proto = f.object.function;
                 const ups = if (ctx.hs.bump(*Object, proto.capture_slots.len)) |u| u else blk: {
-                    vmgc.collectGarbage();
+                    vmgc.collectGarbage(ctx);
                     break :blk (ctx.hs.bump(*Object, proto.capture_slots.len) orelse return error.OutOfMemory);
                 };
                 const frame = if (ctx.vs.frame_top == 0) vms.Frame{ .ret_ip = 0, .base = 0, .closure = null, .func_obj = f.object, .defer_base = 0, .has_typed_returns = false } else ctx.vs.frames[ctx.vs.frame_top - 1];
@@ -3005,13 +3005,13 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                             u.* = cur.object;
                             continue;
                         }
-                        const cell = try vmgc.vmAllocObject();
+                        const cell = try vmgc.vmAllocObject(ctx);
                         cell.* = .{ .cell = .{ .value = cur } };
                         ctx.vs.stack[abs] = .{ .object = cell };
                         u.* = cell;
                     }
                 }
-                const clo = try vmgc.vmAllocObject();
+                const clo = try vmgc.vmAllocObject(ctx);
                 clo.* = .{ .closure = ClosureObj{ .func = f.object, .upvalues = ups[0..proto.capture_slots.len] } };
                 try ctx.vs.vmPush(.{ .object = clo });
             },
@@ -3073,7 +3073,7 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 if (nt_val != .object or nt_val.object.* != .named_type) return error.TypeError;
                 const nt = &nt_val.object.named_type;
                 if (nt.has_default and nt.predicate != null) {
-                    const constructed = try vmtyp.constructNamedType(nt_val.object, nt.default_val);
+                    const constructed = try vmtyp.constructNamedType(ctx, nt_val.object, nt.default_val);
                     try checkNamedTypePredicate(ctx, nt_val.object, constructed.namedInner() orelse unreachable);
                 }
             },
@@ -3132,9 +3132,9 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 const arm = ref.typ.variant_type.arms[ref.ordinal];
                 if (arm.fields.len > 0 and v == .object) {
                     const vv = v.object.variant_value;
-                    const map_obj = try vmgc.allocTempRooted(.{ .map = &[_]MapEntry{} });
+                    const map_obj = try vmgc.allocTempRooted(ctx, .{ .map = &[_]MapEntry{} });
                     defer ctx.vs.popTempRoot();
-                    const items = try vmgc.vmAllocManagedSlice(MapEntry, arm.fields.len);
+                    const items = try vmgc.vmAllocManagedSlice(ctx, MapEntry, arm.fields.len);
                     for (arm.fields, vv.arm_fields, items) |f, fv, *it| it.* = .{ .key = f.key, .value = fv };
                     map_obj.* = .{ .map = items[0..arm.fields.len] };
                     _ = try ctx.vs.vmPop();
@@ -3155,9 +3155,9 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 const total: usize = @as(usize, argc) + 1;
                 if (ctx.vs.stack_top < total) return error.StackUnderflow;
                 const start = ctx.vs.stack_top - total;
-                const arr_obj = try vmgc.allocTempRooted(.{ .array = &[_]Value{} });
+                const arr_obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
                 defer ctx.vs.popTempRoot();
-                const items = try vmgc.vmAllocManagedSlice(Value, total);
+                const items = try vmgc.vmAllocManagedSlice(ctx, Value, total);
                 @memcpy(items[0..total], ctx.vs.stack[start .. start + total]);
                 arr_obj.* = .{ .array_managed = items[0..total] };
                 ctx.vs.defer_stack[ctx.vs.defer_top] = .{ .object = arr_obj };
@@ -3336,8 +3336,8 @@ fn runPanicUnwind(ctx: VMContext, orig_err: anyerror) anyerror!void {
                 // Named returns: use the values from the (still-readable) stack slots;
                 // unnamed returns: fill with null.
                 const n: u8 = if (named_ret > 0) named_ret else @intCast(@min(ret_count, 255));
-                const tup_obj = try vmgc.allocTempRooted(.{ .array = &[_]Value{} });
-                const items = try vmgc.vmAllocManagedSlice(Value, n);
+                const tup_obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
+                const items = try vmgc.vmAllocManagedSlice(ctx, Value, n);
                 if (named_ret > 0) {
                     for (0..named_ret) |ri| {
                         const raw = ctx.vs.stack[rec_base + rec_arity + ri];
@@ -3390,8 +3390,8 @@ pub fn run(ctx: VMContext) anyerror!void {
     };
 }
 
-pub fn makeString(s: []const u8) !Value {
-    return vmgc.makeDynString(s);
+pub fn makeString(ctx: VMContext, s: []const u8) !Value {
+    return vmgc.makeDynString(ctx, s);
 }
 
 fn levenshteinDistance(a: []const u8, b: []const u8) usize {
@@ -3454,6 +3454,6 @@ pub fn callGlobal(ctx: VMContext, name: []const u8, args: []const Value) !Value 
     return callValue(ctx, fn_val, args);
 }
 
-pub fn callFunction(func_val: Value, args: []const Value) anyerror!Value {
-    return callValue(VMContext.fromActive(), func_val, args);
+pub fn callFunction(ctx: VMContext, func_val: Value, args: []const Value) anyerror!Value {
+    return callValue(ctx, func_val, args);
 }

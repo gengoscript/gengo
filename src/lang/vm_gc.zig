@@ -155,8 +155,7 @@ fn gcCheckIntegrityPostSweep(ctx: VMContext) void {
     // heap.paranoia is enabled (via freeBytesManaged).
 }
 
-pub fn collectGarbage() void {
-    const ctx = vms.VMContext.fromActive();
+pub fn collectGarbage(ctx: VMContext) void {
     const t0 = monoNowNs();
     mark_worklist_top = 0;
 
@@ -205,18 +204,17 @@ fn gcStress() bool {
     return gc_stress;
 }
 
-pub fn vmAllocObject() !*Object {
-    const ctx = vms.VMContext.fromActive();
-    if (gcStress()) collectGarbage();
+pub fn vmAllocObject(ctx: VMContext) !*Object {
+    if (gcStress()) collectGarbage(ctx);
     if (ctx.hs.liveObjectCount() >= ctx.vs.next_gc_objects) {
-        collectGarbage();
+        collectGarbage(ctx);
         ctx.vs.next_gc_objects = nextGcObjects(ctx, ctx.hs.liveObjectCount());
     }
     if (ctx.hs.allocObject()) |o| {
         ctx.vs.alloc_object_calls += 1;
         return o;
     }
-    collectGarbage();
+    collectGarbage(ctx);
     ctx.vs.next_gc_objects = nextGcObjects(ctx, ctx.hs.liveObjectCount());
     if (ctx.hs.allocObject()) |o| {
         ctx.vs.alloc_object_calls += 1;
@@ -234,26 +232,25 @@ fn gcStepThreshold(ctx: VMContext, used: usize) usize {
     return if (next >= sz) sz - sz / 16 else next;
 }
 
-pub fn vmAllocManagedSlice(comptime T: type, n: usize) ![]T {
-    const ctx = vms.VMContext.fromActive();
-    if (gcStress()) collectGarbage();
+pub fn vmAllocManagedSlice(ctx: VMContext, comptime T: type, n: usize) ![]T {
+    if (gcStress()) collectGarbage(ctx);
     if (@sizeOf(T) * n > ctx.hs.maxManagedAlloc()) {
         ctx.vs.setRuntimeErr("allocation of {d} bytes exceeds this heap's largest block ({d} bytes); configure a larger heap", .{ @sizeOf(T) * n, ctx.hs.maxManagedAlloc() });
         return error.AllocationTooLarge;
     }
     if (ctx.hs.usedBytes() >= ctx.vs.next_gc_heap_bytes) {
-        collectGarbage();
+        collectGarbage(ctx);
         ctx.vs.next_gc_heap_bytes = gcStepThreshold(ctx, ctx.hs.usedBytes());
     }
     if (ctx.hs.wouldBump(@sizeOf(T) * n) and ctx.hs.usedBytes() * 2 >= ctx.hs.heap.len) {
-        collectGarbage();
+        collectGarbage(ctx);
         ctx.vs.next_gc_heap_bytes = gcStepThreshold(ctx, ctx.hs.usedBytes());
     }
     if (ctx.hs.allocManagedSlice(T, n)) |s| {
         ctx.vs.alloc_managed_slice_calls += 1;
         return s;
     }
-    collectGarbage();
+    collectGarbage(ctx);
     ctx.vs.next_gc_heap_bytes = gcStepThreshold(ctx, ctx.hs.usedBytes());
     if (ctx.hs.allocManagedSlice(T, n)) |s| {
         ctx.vs.alloc_managed_slice_calls += 1;
@@ -267,15 +264,14 @@ pub fn vmAllocManagedSlice(comptime T: type, n: usize) ![]T {
     return error.OutOfMemory;
 }
 
-pub fn vmAllocManagedBytes(n: usize) ![]u8 {
-    const ctx = vms.VMContext.fromActive();
-    if (gcStress()) collectGarbage();
+pub fn vmAllocManagedBytes(ctx: VMContext, n: usize) ![]u8 {
+    if (gcStress()) collectGarbage(ctx);
     if (n > ctx.hs.maxManagedAlloc()) {
         ctx.vs.setRuntimeErr("allocation of {d} bytes exceeds this heap's largest block ({d} bytes); configure a larger heap", .{ n, ctx.hs.maxManagedAlloc() });
         return error.AllocationTooLarge;
     }
     if (ctx.hs.usedBytes() >= ctx.vs.next_gc_heap_bytes) {
-        collectGarbage();
+        collectGarbage(ctx);
         ctx.vs.next_gc_heap_bytes = gcStepThreshold(ctx, ctx.hs.usedBytes());
     }
     // Proactive GC: when the free list for this size class is empty and the
@@ -283,14 +279,14 @@ pub fn vmAllocManagedBytes(n: usize) ![]u8 {
     // induced OOM where small freed blocks fill their class free lists but
     // the needed class has no free blocks and the bump is exhausted.
     if (ctx.hs.wouldBump(n) and ctx.hs.usedBytes() * 2 >= ctx.hs.heap.len) {
-        collectGarbage();
+        collectGarbage(ctx);
         ctx.vs.next_gc_heap_bytes = gcStepThreshold(ctx, ctx.hs.usedBytes());
     }
     if (ctx.hs.allocBytesManaged(n)) |s| {
         ctx.vs.alloc_managed_bytes_calls += 1;
         return s;
     }
-    collectGarbage();
+    collectGarbage(ctx);
     ctx.vs.next_gc_heap_bytes = gcStepThreshold(ctx, ctx.hs.usedBytes());
     if (ctx.hs.allocBytesManaged(n)) |s| {
         ctx.vs.alloc_managed_bytes_calls += 1;
@@ -306,9 +302,8 @@ pub fn vmAllocManagedBytes(n: usize) ![]u8 {
     return error.OutOfMemory;
 }
 
-pub fn allocTempRooted(comptime safeInit: Object) !*Object {
-    const ctx = vms.VMContext.fromActive();
-    const obj = try vmAllocObject();
+pub fn allocTempRooted(ctx: VMContext, comptime safeInit: Object) !*Object {
+    const obj = try vmAllocObject(ctx);
     obj.* = safeInit;
     try ctx.vs.pushTempRoot(.{ .object = obj });
     return obj;
@@ -323,9 +318,9 @@ pub const TempRootedManagedValueArray = struct {
     }
 };
 
-pub fn allocTempRootedManagedValueArray(len: usize) !TempRootedManagedValueArray {
-    const obj = try allocTempRooted(.{ .array_managed = &[_]Value{} });
-    const values = try vmAllocManagedSlice(Value, len);
+pub fn allocTempRootedManagedValueArray(ctx: VMContext, len: usize) !TempRootedManagedValueArray {
+    const obj = try allocTempRooted(ctx, .{ .array_managed = &[_]Value{} });
+    const values = try vmAllocManagedSlice(ctx, Value, len);
     obj.* = .{ .array_managed = values[0..0] };
     return .{ .obj = obj, .values = values };
 }
@@ -339,18 +334,17 @@ pub const TempRootedManagedMap = struct {
     }
 };
 
-pub fn allocTempRootedManagedMap(len: usize) !TempRootedManagedMap {
-    const obj = try allocTempRooted(.{ .map = &[_]MapEntry{} });
-    const entries = try vmAllocManagedSlice(MapEntry, len);
+pub fn allocTempRootedManagedMap(ctx: VMContext, len: usize) !TempRootedManagedMap {
+    const obj = try allocTempRooted(ctx, .{ .map = &[_]MapEntry{} });
+    const entries = try vmAllocManagedSlice(ctx, MapEntry, len);
     obj.* = .{ .map = entries[0..0] };
     return .{ .obj = obj, .entries = entries };
 }
 
-pub fn makeDynString(s: []const u8) !Value {
-    const ctx = vms.VMContext.fromActive();
-    const obj = try allocTempRooted(.{ .dyn_string = &[_]u8{} });
+pub fn makeDynString(ctx: VMContext, s: []const u8) !Value {
+    const obj = try allocTempRooted(ctx, .{ .dyn_string = &[_]u8{} });
     defer ctx.vs.popTempRoot();
-    const buf = try vmAllocManagedBytes(s.len);
+    const buf = try vmAllocManagedBytes(ctx, s.len);
     @memcpy(buf[0..s.len], s);
     obj.* = .{ .dyn_string = buf[0..s.len] };
     return .{ .object = obj };
@@ -363,18 +357,17 @@ pub fn makeDynString(s: []const u8) !Value {
 /// This variant re-reads the source bytes from src AFTER the allocation, ensuring
 /// the copy uses the post-compact pointer.  src must be temp-rooted by the caller
 /// and must be one of: dyn_string, string_view, string_builder.
-pub fn makeDynStringFromObj(src: *Object) !Value {
-    const ctx = vms.VMContext.fromActive();
+pub fn makeDynStringFromObj(ctx: VMContext, src: *Object) !Value {
     const slen: usize = switch (src.*) {
         .dyn_string  => |s|  s.len,
         .string_view => |sv| sv.bytes.len,
         .string_builder => |sb| sb.len,
         else => return error.TypeError,
     };
-    const obj = try allocTempRooted(.{ .dyn_string = &[_]u8{} });
+    const obj = try allocTempRooted(ctx, .{ .dyn_string = &[_]u8{} });
     defer ctx.vs.popTempRoot();
     if (slen == 0) return .{ .object = obj };
-    const buf = try vmAllocManagedBytes(slen);
+    const buf = try vmAllocManagedBytes(ctx, slen);
     const src_bytes: []const u8 = switch (src.*) {
         .dyn_string  => |s|  s,
         .string_view => |sv| sv.bytes,
@@ -386,21 +379,20 @@ pub fn makeDynStringFromObj(src: *Object) !Value {
     return .{ .object = obj };
 }
 
-pub fn concatDynString(a: []const u8, b: []const u8) !Value {
-    const ctx = vms.VMContext.fromActive();
-    const obj = try allocTempRooted(.{ .dyn_string = &[_]u8{} });
+pub fn concatDynString(ctx: VMContext, a: []const u8, b: []const u8) !Value {
+    const obj = try allocTempRooted(ctx, .{ .dyn_string = &[_]u8{} });
     defer ctx.vs.popTempRoot();
     const total = a.len +% b.len;
     if (total < a.len) return error.OutOfMemory;
-    const buf = try vmAllocManagedBytes(total);
+    const buf = try vmAllocManagedBytes(ctx, total);
     @memcpy(buf[0..a.len], a);
     @memcpy(buf[a.len..total], b);
     obj.* = .{ .dyn_string = buf[0..total] };
     return .{ .object = obj };
 }
 
-pub fn makeStringView(bytes: []const u8, source: ?*Object) !Value {
-    const obj = try vmAllocObject();
+pub fn makeStringView(ctx: VMContext, bytes: []const u8, source: ?*Object) !Value {
+    const obj = try vmAllocObject(ctx);
     obj.* = .{ .string_view = .{ .bytes = bytes, .source = source } };
     return .{ .object = obj };
 }

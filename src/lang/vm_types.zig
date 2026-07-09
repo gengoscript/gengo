@@ -354,24 +354,26 @@ pub fn matchesInterfaceType(v: Value, iname: []const u8) bool {
     return true;
 }
 
-pub fn makeNamedValue(typ_obj: *Object, inner: Value) !Value {
+const VMContext = vms.VMContext;
+
+pub fn makeNamedValue(ctx: VMContext, typ_obj: *Object, inner: Value) !Value {
     if (typ_obj.* == .named_type) {
         const pool_idx = heap.objectPoolIndex(typ_obj);
         if (pool_idx <= 0x0FFF) {
             if (vmod.tryMakeInlineNamedScalar(typ_obj, @intCast(pool_idx), inner)) |v| return v;
         }
     }
-    const obj = try vmgc.vmAllocObject();
+    const obj = try vmgc.vmAllocObject(ctx);
     obj.* = .{ .named_value = .{ .typ = typ_obj, .value = inner } };
     return .{ .object = obj };
 }
 
-pub fn variantConstruct(typ: *Object, tag: []const u8, ordinal: usize, payload: Value) !Value {
+pub fn variantConstruct(ctx: VMContext, typ: *Object, tag: []const u8, ordinal: usize, payload: Value) !Value {
     const pool_idx = heap.objectPoolIndex(typ);
     if (pool_idx <= 0x0FFF) {
         if (vmod.tryMakeInlineVariant(@intCast(pool_idx), ordinal, payload)) |iv| return iv;
     }
-    const vv = try vmgc.vmAllocObject();
+    const vv = try vmgc.vmAllocObject(ctx);
     vv.* = .{ .variant_value = .{ .typ = typ, .tag = tag, .ordinal = ordinal, .payload = payload } };
     return .{ .object = vv };
 }
@@ -424,7 +426,7 @@ fn wrapCycleValue(min: f64, max: f64, n: f64, continuous: bool) !f64 {
     return result;
 }
 
-pub fn constructNamedType(typ_obj: *Object, arg: Value) !Value {
+pub fn constructNamedType(ctx: VMContext, typ_obj: *Object, arg: Value) !Value {
     if (typ_obj.* != .named_type) return error.TypeError;
     const nt = typ_obj.named_type;
 
@@ -558,10 +560,10 @@ pub fn constructNamedType(typ_obj: *Object, arg: Value) !Value {
         .string => {
             if (!vms.isStringValue(effective_arg)) return error.TypeError;
             const s = try vms.asStringValue(effective_arg);
-            const ds = try vmgc.makeDynString(s);
+            const ds = try vmgc.makeDynString(ctx, s);
             try vms.pushTempRoot(ds);
             defer vms.popTempRoot();
-            return makeNamedValue(typ_obj, ds);
+            return makeNamedValue(ctx, typ_obj, ds);
         },
         .bool => {
             if (effective_arg != .boolean) return error.TypeError;
@@ -574,7 +576,7 @@ pub fn constructNamedType(typ_obj: *Object, arg: Value) !Value {
                     if (!matchesTypeSpec(item, es)) return error.TypeError;
                 }
             }
-            return makeNamedValue(typ_obj, effective_arg);
+            return makeNamedValue(ctx, typ_obj, effective_arg);
         },
         .map_t => {
             if (!(effective_arg == .object and vms.isMapObject(effective_arg.object))) return error.TypeError;
@@ -586,11 +588,11 @@ pub fn constructNamedType(typ_obj: *Object, arg: Value) !Value {
                     }
                 }
             }
-            return makeNamedValue(typ_obj, effective_arg);
+            return makeNamedValue(ctx, typ_obj, effective_arg);
         },
         .enum_t => return error.TypeError,
     }
-    return makeNamedValue(typ_obj, base_v);
+    return makeNamedValue(ctx, typ_obj, base_v);
 }
 
 // Wraps an out-of-range decimal value (given as its unscaled real value `fv`)
@@ -603,34 +605,34 @@ fn wrapDecimalCycle(nt: @import("value.zig").NamedTypeObj, fv: f64, factor: f64)
     return @intFromFloat(raw);
 }
 
-pub fn coerceNamedTypeResult(typ_obj: *Object, arg: Value) !Value {
+pub fn coerceNamedTypeResult(ctx: VMContext, typ_obj: *Object, arg: Value) !Value {
     if (typ_obj.* != .named_type) return error.TypeError;
     const nt = typ_obj.named_type;
-    if (!nt.is_cycle) return constructNamedType(typ_obj, arg);
+    if (!nt.is_cycle) return constructNamedType(ctx, typ_obj, arg);
     switch (nt.base) {
         .int => {
             const n = try vms.valueAsNumber(arg);
             if (@trunc(n) != n) return error.TypeError;
             const wrapped = try wrapCycleValueWithError(nt.name, nt.min, nt.max, n, false);
-            return makeNamedValue(typ_obj, .{ .int = @intFromFloat(wrapped) });
+            return makeNamedValue(ctx, typ_obj, .{ .int = @intFromFloat(wrapped) });
         },
         .float => {
             const n = try vms.valueAsNumber(arg);
             const wrapped = try wrapCycleValueWithError(nt.name, nt.min, nt.max, n, true);
-            return makeNamedValue(typ_obj, .{ .float = wrapped });
+            return makeNamedValue(ctx, typ_obj, .{ .float = wrapped });
         },
         .decimal => {
             const d = try vms.valueAsDecimal(arg);
             const factor = std.math.pow(f64, 10.0, @floatFromInt(nt.scale));
             const fv = @as(f64, @floatFromInt(d)) / factor;
             const scaled = try wrapDecimalCycle(nt, fv, factor);
-            return makeNamedValue(typ_obj, .{ .decimal = scaled });
+            return makeNamedValue(ctx, typ_obj, .{ .decimal = scaled });
         },
         else => return error.TypeError,
     }
 }
 
-pub fn applyNamedTypeFn(typ_obj: *Object, kind: @import("value.zig").NamedTypeFnKind, arg: Value) !Value {
+pub fn applyNamedTypeFn(ctx: VMContext, typ_obj: *Object, kind: @import("value.zig").NamedTypeFnKind, arg: Value) !Value {
     if (typ_obj.* != .named_type) return error.TypeError;
     const nt = typ_obj.named_type;
     if (!nt.has_range) return error.TypeError;
@@ -640,13 +642,13 @@ pub fn applyNamedTypeFn(typ_obj: *Object, kind: @import("value.zig").NamedTypeFn
     const result = n + delta;
     if (result == n) { vms.setRuntimeErr("cannot increment non-finite or very large value", .{}); announcePanicMsg(); return error.RangeError; }
     if (nt.is_cycle) {
-        return makeNamedValue(typ_obj, if (nt.base == .float) .{ .float = try wrapCycleValue(nt.min, nt.max, result, true) } else .{ .int = @intFromFloat(try wrapCycleValue(nt.min, nt.max, result, false)) });
+        return makeNamedValue(ctx, typ_obj, if (nt.base == .float) .{ .float = try wrapCycleValue(nt.min, nt.max, result, true) } else .{ .int = @intFromFloat(try wrapCycleValue(nt.min, nt.max, result, false)) });
     } else {
         if (result < nt.min or result > nt.max) {
             setNamedRangeError(typ_obj, result);
             return error.RangeError;
         }
-        return makeNamedValue(typ_obj, if (nt.base == .float) .{ .float = result } else .{ .int = @intFromFloat(result) });
+        return makeNamedValue(ctx, typ_obj, if (nt.base == .float) .{ .float = result } else .{ .int = @intFromFloat(result) });
     }
 }
 

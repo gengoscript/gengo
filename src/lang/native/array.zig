@@ -6,6 +6,7 @@ const Value = @import("../value.zig").Value;
 const vm = @import("../vm.zig");
 const vmgc = @import("../vm_gc.zig");
 const vms = @import("../vm_state.zig");
+const VMContext = vms.VMContext;
 const vmtyp = @import("../vm_types.zig");
 
 fn predBool(v: Value) !bool {
@@ -15,7 +16,7 @@ fn predBool(v: Value) !bool {
     };
 }
 
-pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
+pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
     if (argc != nf.arity) return error.ArityMismatch;
     switch (@as(NativeFnId, @enumFromInt(nf.id))) {
         .array_filter => {
@@ -25,18 +26,18 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const arr_obj = arr_val.object;
             if (!vms.isArrayObject(arr_obj)) return error.TypeError;
             const items = try vms.asArraySlice(arr_obj);
-            const out_obj = try vmgc.allocTempRooted(.{ .array = &[_]Value{} });
+            const out_obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
             defer vms.popTempRoot();
             var count: usize = 0;
             for (items) |item| {
-                const ok = try vm.callFunction(fn_val, &.{item});
+                const ok = try vm.callFunction(ctx, fn_val, &.{item});
                 if (try predBool(ok)) count += 1;
             }
             if (count > 0) {
-                const out = try vmgc.vmAllocManagedSlice(Value, count);
+                const out = try vmgc.vmAllocManagedSlice(ctx, Value, count);
                 var idx: usize = 0;
                 for (items) |item| {
-                    const ok = try vm.callFunction(fn_val, &.{item});
+                    const ok = try vm.callFunction(ctx, fn_val, &.{item});
                     if (try predBool(ok)) {
                         out[idx] = item;
                         idx += 1;
@@ -61,10 +62,10 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                     total += 1;
                 }
             }
-            const out_obj = try vmgc.allocTempRooted(.{ .array = &[_]Value{} });
+            const out_obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
             defer vms.popTempRoot();
             if (total > 0) {
-                const out = try vmgc.vmAllocManagedSlice(Value, total);
+                const out = try vmgc.vmAllocManagedSlice(ctx, Value, total);
                 var idx: usize = 0;
                 for (items) |item| {
                     if (item == .object and vms.isArrayObject(item.object)) {
@@ -88,11 +89,11 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const arr_obj = arr_val.object;
             if (!vms.isArrayObject(arr_obj)) return error.TypeError;
             const items = try vms.asArraySlice(arr_obj);
-            const out_arr = try vmgc.allocTempRootedManagedValueArray(items.len);
+            const out_arr = try vmgc.allocTempRootedManagedValueArray(ctx, items.len);
             defer vms.popTempRoot();
             if (items.len > 0) {
                 for (items, 0..) |item, i| {
-                    out_arr.values[i] = try vm.callFunction(fn_val, &.{item});
+                    out_arr.values[i] = try vm.callFunction(ctx, fn_val, &.{item});
                     out_arr.publish(i + 1);
                 }
             }
@@ -111,7 +112,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             try vms.pushTempRoot(acc);
             defer vms.popTempRoot();
             for (items) |item| {
-                acc = try vm.callFunction(fn_val, &.{ acc, item });
+                acc = try vm.callFunction(ctx, fn_val, &.{ acc, item });
             }
             vms.vmPopArgs(argc);
             try vms.vmPush(acc);
@@ -129,11 +130,11 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             if (from < 0 or to > @as(i64, @intCast(items.len)) or from > to) return error.IndexOutOfBounds;
             const from_u: usize = @intCast(from);
             const to_u: usize = @intCast(to);
-            const out_obj = try vmgc.allocTempRooted(.{ .array = &[_]Value{} });
+            const out_obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
             defer vms.popTempRoot();
             const slice_len = to_u - from_u;
             if (slice_len > 0) {
-                const out = try vmgc.vmAllocManagedSlice(Value, slice_len);
+                const out = try vmgc.vmAllocManagedSlice(ctx, Value, slice_len);
                 @memcpy(out[0..slice_len], items[from_u..to_u]);
                 out_obj.* = .{ .array_managed = out[0..slice_len] };
             }
@@ -150,11 +151,11 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const a_items = try vms.asArraySlice(a_obj);
             const b_items = try vms.asArraySlice(b_obj);
             const pair_count = @min(a_items.len, b_items.len);
-            const out_arr = try vmgc.allocTempRootedManagedValueArray(pair_count);
+            const out_arr = try vmgc.allocTempRootedManagedValueArray(ctx, pair_count);
             defer vms.popTempRoot();
             if (pair_count > 0) {
                 for (0..pair_count) |i| {
-                    const pair_arr = try vmgc.allocTempRootedManagedValueArray(2);
+                    const pair_arr = try vmgc.allocTempRootedManagedValueArray(ctx, 2);
                     defer vms.popTempRoot();
                     pair_arr.values[0] = a_items[i];
                     pair_arr.values[1] = b_items[i];
@@ -175,7 +176,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const items = try vms.asArraySlice(arr_obj);
             var result: Value = .null;
             for (items) |item| {
-                const ok = try vm.callFunction(fn_val, &.{item});
+                const ok = try vm.callFunction(ctx, fn_val, &.{item});
                 if (try predBool(ok)) {
                     result = item;
                     break;
@@ -193,7 +194,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const items = try vms.asArraySlice(arr_obj);
             var result: Value = .{ .int = -1 };
             for (items, 0..) |item, i| {
-                const ok = try vm.callFunction(fn_val, &.{item});
+                const ok = try vm.callFunction(ctx, fn_val, &.{item});
                 if (try predBool(ok)) {
                     result = .{ .int = @intCast(i) };
                     break;
@@ -211,7 +212,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const items = try vms.asArraySlice(arr_obj);
             var result = true;
             for (items) |item| {
-                const ok = try vm.callFunction(fn_val, &.{item});
+                const ok = try vm.callFunction(ctx, fn_val, &.{item});
                 if (!(try predBool(ok))) {
                     result = false;
                     break;
@@ -229,7 +230,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const items = try vms.asArraySlice(arr_obj);
             var result = false;
             for (items) |item| {
-                const ok = try vm.callFunction(fn_val, &.{item});
+                const ok = try vm.callFunction(ctx, fn_val, &.{item});
                 if (try predBool(ok)) {
                     result = true;
                     break;
@@ -249,13 +250,13 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const sz: usize = @intCast(size);
             const items = try vms.asArraySlice(arr_obj);
             const chunk_count = if (items.len == 0) 0 else (items.len + sz - 1) / sz;
-            const out_arr = try vmgc.allocTempRootedManagedValueArray(chunk_count);
+            const out_arr = try vmgc.allocTempRootedManagedValueArray(ctx, chunk_count);
             defer vms.popTempRoot();
             if (chunk_count > 0) {
                 for (0..chunk_count) |ci| {
                     const from = ci * sz;
                     const to = @min(from + sz, items.len);
-                    const chunk_arr = try vmgc.allocTempRootedManagedValueArray(to - from);
+                    const chunk_arr = try vmgc.allocTempRootedManagedValueArray(ctx, to - from);
                     defer vms.popTempRoot();
                     @memcpy(chunk_arr.values, items[from..to]);
                     chunk_arr.publish(to - from);

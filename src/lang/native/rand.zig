@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const vms = @import("../vm_state.zig");
+const VMContext = vms.VMContext;
 const vmgc = @import("../vm_gc.zig");
 const Value = @import("../value.zig").Value;
 const Object = @import("../value.zig").Object;
@@ -63,13 +64,13 @@ pub fn nativeRandChoice(arr_obj: *Object) !Value {
     return items[idx];
 }
 
-pub fn nativeRandPerm(n_v: Value) !Value {
+pub fn nativeRandPerm(ctx: VMContext, n_v: Value) !Value {
     const n = try vms.valueAsInt(n_v);
     if (n < 0) return error.RangeError;
     const usize_n = @as(usize, @intCast(n));
-    const obj = try vmgc.allocTempRooted(.{ .array = &[_]Value{} });
+    const obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
     defer vms.popTempRoot();
-    const items = try vmgc.vmAllocManagedSlice(Value, usize_n);
+    const items = try vmgc.vmAllocManagedSlice(ctx, Value, usize_n);
     for (items, 0..) |*item, i| item.* = .{ .int = @intCast(i) };
     var j: usize = usize_n;
     while (j > 1) {
@@ -96,7 +97,7 @@ pub fn nativeRandNormFloat() Value {
     return .{ .float = u1_val * fac };
 }
 
-pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
+pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
     if (argc != nf.arity) return error.ArityMismatch;
     switch (@as(NativeFnId, @enumFromInt(nf.id))) {
         .rand_between => {
@@ -125,7 +126,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             try vms.vmPush(nativeRandNormFloat());
         },
         .rand_perm => {
-            const out = try nativeRandPerm(vms.vmTop(0));
+            const out = try nativeRandPerm(ctx, vms.vmTop(0));
             vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },

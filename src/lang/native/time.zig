@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const vms = @import("../vm_state.zig");
+const VMContext = vms.VMContext;
 const vmgc = @import("../vm_gc.zig");
 const heap = @import("../../runtime/heap.zig");
 const Value = @import("../value.zig").Value;
@@ -35,9 +36,9 @@ pub fn timeGetType() !*Object {
     return obj;
 }
 
-pub fn timeBuildObj(ms: f64) !Value {
+pub fn timeBuildObj(ctx: VMContext, ms: f64) !Value {
     // allocTempRooted: allocates, initializes, and roots obj before timeGetType can trigger GC
-    const obj = try vmgc.allocTempRooted(.{ .dyn_string = &[_]u8{} });
+    const obj = try vmgc.allocTempRooted(ctx, .{ .dyn_string = &[_]u8{} });
     defer vms.popTempRoot();
     const typ = try timeGetType();
     obj.* = .{ .named_value = .{ .typ = typ, .value = .{ .float = ms } } };
@@ -101,7 +102,7 @@ pub fn timeEpochMsToParts(ms: f64) struct { year: i32, month: u8, day: u8, hour:
     };
 }
 
-pub fn timeFormatStr(ms: f64, fmt: []const u8) !Value {
+pub fn timeFormatStr(ctx: VMContext, ms: f64, fmt: []const u8) !Value {
     const parts = timeEpochMsToParts(ms);
     const weekdays = [_][]const u8{ "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" };
     const weekdays_short = [_][]const u8{ "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
@@ -183,10 +184,10 @@ pub fn timeFormatStr(ms: f64, fmt: []const u8) !Value {
             i += 1;
         }
     }
-    return vmgc.makeDynString(buf[0..pos]);
+    return vmgc.makeDynString(ctx, buf[0..pos]);
 }
 
-pub fn timeParseStr(s: []const u8, fmt: []const u8) !Value {
+pub fn timeParseStr(ctx: VMContext, s: []const u8, fmt: []const u8) !Value {
     var year: i32 = 1970;
     var month: u8 = 1;
     var day: u8 = 1;
@@ -297,7 +298,7 @@ pub fn timeParseStr(s: []const u8, fmt: []const u8) !Value {
     if (si != s.len) return error.TypeError;
     const epoch_secs = timeCalendarToEpochSecs(year, month, day, hour, min, sec);
     const ms_f = @as(f64, @floatFromInt(epoch_secs)) * 1000.0 + @as(f64, @floatFromInt(ms));
-    return timeBuildObj(ms_f);
+    return timeBuildObj(ctx, ms_f);
 }
 
 fn parseDigit(c: u8) !u8 {
@@ -357,7 +358,7 @@ pub fn daysInMonth(year: i32, month: u8) u8 {
     };
 }
 
-pub fn timeAddDate(ms: f64, y_delta: i32, m_delta: i32, d_delta: i32) !Value {
+pub fn timeAddDate(ctx: VMContext, ms: f64, y_delta: i32, m_delta: i32, d_delta: i32) !Value {
     const p = timeEpochMsToParts(ms);
     var new_y = p.year + y_delta;
     var new_m = @as(i32, p.month) + m_delta;
@@ -380,10 +381,10 @@ pub fn timeAddDate(ms: f64, y_delta: i32, m_delta: i32, d_delta: i32) !Value {
     }
     const epoch_secs = timeCalendarToEpochSecs(new_y, @as(u8, @intCast(new_m)), @as(u8, @intCast(new_d)), p.hour, p.min, p.sec);
     const new_ms = @as(f64, @floatFromInt(epoch_secs)) * 1000.0 + @as(f64, @floatFromInt(p.ms));
-    return timeBuildObj(new_ms);
+    return timeBuildObj(ctx, new_ms);
 }
 
-pub fn timeIsoWeek(ms: f64) !Value {
+pub fn timeIsoWeek(ctx: VMContext, ms: f64) !Value {
     const p = timeEpochMsToParts(ms);
     // ISO weekday: Mon=1 .. Sun=7 (p.weekday is Sun=0 .. Sat=6)
     const iso_dow: i64 = if (p.weekday == 0) 7 else @as(i64, p.weekday);
@@ -419,8 +420,8 @@ pub fn timeIsoWeek(ms: f64) !Value {
     const first_thursday_doy: i64 = 1 + @mod(4 - jan1_iso_dow, 7);
     const week: i64 = @divFloor(week_thursday_doy - first_thursday_doy, 7) + 1;
 
-    const entries = try vmgc.vmAllocManagedSlice(MapEntry, 2);
-    const obj = try vmgc.allocTempRooted(.{ .map = &[_]MapEntry{} });
+    const entries = try vmgc.vmAllocManagedSlice(ctx, MapEntry, 2);
+    const obj = try vmgc.allocTempRooted(ctx, .{ .map = &[_]MapEntry{} });
     defer vms.popTempRoot();
     entries[0] = .{ .key = .{ .string = try chunk.internStr("year") }, .value = .{ .int = iso_year } };
     entries[1] = .{ .key = .{ .string = try chunk.internStr("week") }, .value = .{ .int = week } };
@@ -504,7 +505,7 @@ pub fn parseDuration(s: []const u8) !f64 {
     return if (neg) -total_ms else total_ms;
 }
 
-pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
+pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
     if (argc != nf.arity) return error.ArityMismatch;
     switch (@as(NativeFnId, @enumFromInt(nf.id))) {
         .time_add_date => {
@@ -512,7 +513,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const y = try vms.valueAsInt(vms.vmTop(2));
             const m = try vms.valueAsInt(vms.vmTop(1));
             const d = try vms.valueAsInt(vms.vmTop(0));
-            const out = try timeAddDate(ms, @intCast(y), @intCast(m), @intCast(d));
+            const out = try timeAddDate(ctx, ms, @intCast(y), @intCast(m), @intCast(d));
             vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
@@ -529,7 +530,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const n = try vms.valueAsNumber(vms.vmTop(0));
             if (@trunc(n) != n) return error.TypeError;
             vms.vmPopArgs(argc);
-            try vms.vmPush(try timeBuildObj(ms + n * multiplier));
+            try vms.vmPush(try timeBuildObj(ctx, ms + n * multiplier));
         },
         .time_after, .time_before, .time_equal => {
             const cmp_fn: NativeFnId = @enumFromInt(nf.id);
@@ -547,7 +548,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
         .time_format => {
             const ms = try timeGetMs(vms.vmTop(1));
             const fmt = try vms.asStringValue(vms.vmTop(0));
-            const out = try timeFormatStr(ms, fmt);
+            const out = try timeFormatStr(ctx, ms, fmt);
             vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
@@ -556,7 +557,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             if (@trunc(n) != n) return error.TypeError;
             vms.vmPopArgs(argc);
             const multiplier: f64 = if (@as(NativeFnId, @enumFromInt(nf.id)) == .time_from_unix) 1000.0 else 1.0;
-            try vms.vmPush(try timeBuildObj(n * multiplier));
+            try vms.vmPush(try timeBuildObj(ctx, n * multiplier));
         },
         .time_is_zero => {
             const ms = try timeGetMs(vms.vmTop(0));
@@ -565,12 +566,12 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
         },
         .time_now => {
             vms.vmPopArgs(argc);
-            try vms.vmPush(try timeBuildObj(timeNowMs()));
+            try vms.vmPush(try timeBuildObj(ctx, timeNowMs()));
         },
         .time_parse => {
             const s = try vms.asStringValue(vms.vmTop(1));
             const fmt = try vms.asStringValue(vms.vmTop(0));
-            const out = try timeParseStr(s, fmt);
+            const out = try timeParseStr(ctx, s, fmt);
             vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
@@ -578,8 +579,8 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const ms = try timeGetMs(vms.vmTop(0));
             const p = timeEpochMsToParts(ms);
             const field_count = 8;
-            const entries = try vmgc.vmAllocManagedSlice(MapEntry, field_count);
-            const obj = try vmgc.allocTempRooted(.{ .map = &[_]MapEntry{} });
+            const entries = try vmgc.vmAllocManagedSlice(ctx, MapEntry, field_count);
+            const obj = try vmgc.allocTempRooted(ctx, .{ .map = &[_]MapEntry{} });
             defer vms.popTempRoot();
             entries[0] = .{ .key = .{ .string = try chunk.internStr("year") }, .value = .{ .int = p.year } };
             entries[1] = .{ .key = .{ .string = try chunk.internStr("month") }, .value = .{ .int = p.month } };
@@ -627,7 +628,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
         },
         .time_iso_week => {
             const ms = try timeGetMs(vms.vmTop(0));
-            const out = try timeIsoWeek(ms);
+            const out = try timeIsoWeek(ctx, ms);
             vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },

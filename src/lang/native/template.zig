@@ -1,6 +1,7 @@
 const std = @import("std");
 const heap = @import("../../runtime/heap.zig");
 const vms = @import("../vm_state.zig");
+const VMContext = vms.VMContext;
 const vmgc = @import("../vm_gc.zig");
 const vmtyp = @import("../vm_types.zig");
 const Value = @import("../value.zig").Value;
@@ -144,21 +145,21 @@ fn tplEvalExpr(arg: Value, dot: Value, _funcs_val: Value) !Value {
     return .null;
 }
 
-fn tplValToDynStr(v: Value) !Value {
+fn tplValToDynStr(ctx: VMContext, v: Value) !Value {
     return switch (v) {
-        .null => vmgc.makeDynString("null"),
-        .boolean => |b| vmgc.makeDynString(if (b) "true" else "false"),
+        .null => vmgc.makeDynString(ctx, "null"),
+        .boolean => |b| vmgc.makeDynString(ctx, if (b) "true" else "false"),
         .int => |n| {
             var buf: [64]u8 = undefined;
             const s = std.fmt.bufPrint(buf[0..], "{d}", .{n}) catch return error.TypeError;
-            return vmgc.makeDynString(s);
+            return vmgc.makeDynString(ctx, s);
         },
         .float => |n| {
             var buf: [64]u8 = undefined;
             const s = std.fmt.bufPrint(buf[0..], "{d}", .{n}) catch return error.TypeError;
-            return vmgc.makeDynString(s);
+            return vmgc.makeDynString(ctx, s);
         },
-        .string => |s| vmgc.makeDynString(s.bytes),
+        .string => |s| vmgc.makeDynString(ctx, s.bytes),
         .object => |o| {
             // Root o before any allocation so GC cannot sweep it or its managed bytes.
             try vms.pushTempRoot(.{ .object = o });
@@ -166,25 +167,25 @@ fn tplValToDynStr(v: Value) !Value {
             // Use makeDynStringFromObj so the copy re-reads o's bytes field AFTER
             // vmAllocManagedBytes, avoiding a stale pointer if compactManagedHeap
             // fires and updates o.dyn_string/o.string_view.bytes mid-allocation.
-            if (o.* == .dyn_string) return vmgc.makeDynStringFromObj(o);
-            if (o.* == .string_view) return vmgc.makeDynStringFromObj(o);
+            if (o.* == .dyn_string) return vmgc.makeDynStringFromObj(ctx, o);
+            if (o.* == .string_view) return vmgc.makeDynStringFromObj(ctx, o);
             // Named values render through their underlying value.
-            if (o.* == .named_value) return tplValToDynStr(o.named_value.value);
-            return vmgc.makeDynString("?");
+            if (o.* == .named_value) return tplValToDynStr(ctx, o.named_value.value);
+            return vmgc.makeDynString(ctx, "?");
         },
-        else => vmgc.makeDynString("?"),
+        else => vmgc.makeDynString(ctx, "?"),
     };
 }
 
 /// Append a dyn_string Object's bytes to the builder, re-reading src.dyn_string
 /// AFTER vmAllocManagedBytes so that a compactManagedHeap triggered inside that
 /// call cannot leave us copying from a stale Zig-local []const u8.
-fn tplAppendDynStrToBuilder(sb_obj: *Object, src: *Object) !void {
+fn tplAppendDynStrToBuilder(ctx: VMContext, sb_obj: *Object, src: *Object) !void {
     const slen = src.dyn_string.len;
     if (slen == 0) return;
     const needed = sb_obj.string_builder.len + slen;
     if (needed > sb_obj.string_builder.buf.len) {
-        const new_buf = try vmgc.vmAllocManagedBytes(needed);
+        const new_buf = try vmgc.vmAllocManagedBytes(ctx, needed);
         const old_len = sb_obj.string_builder.len;
         @memcpy(new_buf[0..old_len], sb_obj.string_builder.buf[0..old_len]);
         @memcpy(new_buf[old_len..needed], src.dyn_string);
@@ -198,22 +199,22 @@ fn tplAppendDynStrToBuilder(sb_obj: *Object, src: *Object) !void {
     sb_obj.string_builder.len = needed;
 }
 
-fn tplAppendValToBuilder(sb_obj: *Object, val: Value) !void {
+fn tplAppendValToBuilder(ctx: VMContext, sb_obj: *Object, val: Value) !void {
     if (val == .object) {
         try vms.pushTempRoot(val);
         defer vms.popTempRoot();
     }
-    const sv = try tplValToDynStr(val);
+    const sv = try tplValToDynStr(ctx, val);
     try vms.pushTempRoot(sv);
     defer vms.popTempRoot();
-    return tplAppendDynStrToBuilder(sb_obj, sv.object);
+    return tplAppendDynStrToBuilder(ctx, sb_obj, sv.object);
 }
 
-fn tplAppendToBuilder(sb_obj: *Object, s: []const u8) !void {
+fn tplAppendToBuilder(ctx: VMContext, sb_obj: *Object, s: []const u8) !void {
     if (s.len == 0) return;
     const needed = sb_obj.string_builder.len + s.len;
     if (needed > sb_obj.string_builder.buf.len) {
-        const new_buf = try vmgc.vmAllocManagedBytes(needed);
+        const new_buf = try vmgc.vmAllocManagedBytes(ctx, needed);
         @memcpy(new_buf[0..sb_obj.string_builder.len], sb_obj.string_builder.buf[0..sb_obj.string_builder.len]);
         const old_buf = sb_obj.string_builder.buf;
         sb_obj.string_builder.buf = new_buf; // update before free so paranoia doesn't see the old ref
@@ -223,10 +224,10 @@ fn tplAppendToBuilder(sb_obj: *Object, s: []const u8) !void {
     sb_obj.string_builder.len = needed;
 }
 
-fn tplBuilderToStr(sb_obj: *Object) !Value {
+fn tplBuilderToStr(ctx: VMContext, sb_obj: *Object) !Value {
     // makeDynStringFromObj re-reads sb_obj.string_builder after vmAllocManagedBytes,
     // avoiding a stale slice if compactManagedHeap runs inside that allocation.
-    return vmgc.makeDynStringFromObj(sb_obj);
+    return vmgc.makeDynStringFromObj(ctx, sb_obj);
 }
 
 pub fn tplCountInsts(src: []const u8) !usize {
@@ -246,16 +247,16 @@ pub fn tplCountInsts(src: []const u8) !usize {
     return count;
 }
 
-fn tplSplitPath(s: []const u8, sep: []const u8) !Value {
+fn tplSplitPath(ctx: VMContext, s: []const u8, sep: []const u8) !Value {
     var count: usize = 1;
     var i: usize = 0;
     while (std.mem.indexOfPos(u8, s, i, sep)) |pos| {
         count += 1;
         i = pos + sep.len;
     }
-    const obj = try vmgc.allocTempRooted(.{ .array = &[_]Value{} });
+    const obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
     defer vms.popTempRoot();
-    const arr = try vmgc.vmAllocManagedSlice(Value, count);
+    const arr = try vmgc.vmAllocManagedSlice(ctx, Value, count);
     // Always copy: the template source may be a GC-managed string, and these
     // path arrays can outlive it inside a compiled template object. Attach
     // the slice as it fills so already-copied elements stay traced.
@@ -263,17 +264,17 @@ fn tplSplitPath(s: []const u8, sep: []const u8) !Value {
     var idx: usize = 0;
     i = 0;
     while (std.mem.indexOfPos(u8, s, i, sep)) |pos| {
-        arr[idx] = try vmgc.makeDynString(s[i..pos]);
+        arr[idx] = try vmgc.makeDynString(ctx, s[i..pos]);
         idx += 1;
         obj.* = .{ .array_managed = arr[0..idx] };
         i = pos + sep.len;
     }
-    arr[idx] = try vmgc.makeDynString(s[i..]);
+    arr[idx] = try vmgc.makeDynString(ctx, s[i..]);
     obj.* = .{ .array_managed = arr[0..count] };
     return .{ .object = obj };
 }
 
-fn tplEncodeExpr(expr: []const u8) !Value {
+fn tplEncodeExpr(ctx: VMContext, expr: []const u8) !Value {
     const trimmed = std.mem.trim(u8, expr, " \t\n\r");
     if (trimmed.len == 0) return .null;
     if (std.mem.eql(u8, trimmed, ".")) return .null;
@@ -281,14 +282,14 @@ fn tplEncodeExpr(expr: []const u8) !Value {
     if (trimmed[0] == '.') {
         const path = trimmed[1..];
         if (std.mem.indexOf(u8, path, ".")) |_| {
-            return try tplSplitPath(path, ".");
+            return try tplSplitPath(ctx, path, ".");
         }
         return .{ .string = try chunk.internStr(path) };
     }
     return .{ .string = try chunk.internStr(trimmed) };
 }
 
-fn tplParseTag(tag: []const u8) !struct { op: TplOp, arg: Value } {
+fn tplParseTag(ctx: VMContext, tag: []const u8) !struct { op: TplOp, arg: Value } {
     const trimmed = std.mem.trim(u8, tag, " \t\n\r");
     if (trimmed.len == 0) return error.InvalidTemplate;
 
@@ -300,15 +301,15 @@ fn tplParseTag(tag: []const u8) !struct { op: TplOp, arg: Value } {
 
     if (std.mem.startsWith(u8, trimmed, "if ")) {
         const expr = std.mem.trim(u8, trimmed[3..], " \t");
-        return .{ .op = .if_begin, .arg = try tplEncodeExpr(expr) };
+        return .{ .op = .if_begin, .arg = try tplEncodeExpr(ctx, expr) };
     }
     if (std.mem.startsWith(u8, trimmed, "range ")) {
         const expr = std.mem.trim(u8, trimmed[6..], " \t");
-        return .{ .op = .range_begin, .arg = try tplEncodeExpr(expr) };
+        return .{ .op = .range_begin, .arg = try tplEncodeExpr(ctx, expr) };
     }
     if (std.mem.startsWith(u8, trimmed, "with ")) {
         const expr = std.mem.trim(u8, trimmed[5..], " \t");
-        return .{ .op = .with_begin, .arg = try tplEncodeExpr(expr) };
+        return .{ .op = .with_begin, .arg = try tplEncodeExpr(ctx, expr) };
     }
     if (trimmed.len >= 2 and trimmed[0] == '$') {
         if (std.mem.indexOf(u8, trimmed, ":=")) |pos| {
@@ -321,7 +322,7 @@ fn tplParseTag(tag: []const u8) !struct { op: TplOp, arg: Value } {
     if (trimmed[0] == '.') {
         const path = trimmed[1..];
         if (std.mem.indexOf(u8, path, ".")) |_| {
-            return .{ .op = .chain, .arg = try tplSplitPath(path, ".") };
+            return .{ .op = .chain, .arg = try tplSplitPath(ctx, path, ".") };
         }
         return .{ .op = .field, .arg = .{ .string = try chunk.internStr(path) } };
     }
@@ -334,7 +335,7 @@ fn tplParseTag(tag: []const u8) !struct { op: TplOp, arg: Value } {
     return error.InvalidTemplate;
 }
 
-fn tplBuildObj(src_val: Value, ops: []Value, args: []Value, jmp: []Value) !*Object {
+fn tplBuildObj(ctx: VMContext, src_val: Value, ops: []Value, args: []Value, jmp: []Value) !*Object {
     // Push any GC objects in args as temp roots before any allocation that could
     // trigger GC. Without this, chain-path arrays from tplSplitPath stored in
     // args[] are unreachable during GC and get collected.
@@ -352,7 +353,7 @@ fn tplBuildObj(src_val: Value, ops: []Value, args: []Value, jmp: []Value) !*Obje
     field_specs[3] = .{ .name = "__src", .typ = any_spec, .is_const = true };
     field_specs[4] = .{ .name = "funcs", .typ = any_spec, .is_const = false };
 
-    const typ_obj = try vmgc.vmAllocObject();
+    const typ_obj = try vmgc.vmAllocObject(ctx);
     try vms.pushTempRoot(.{ .object = typ_obj });
     defer vms.popTempRoot();
     typ_obj.* = .{ .struct_type = StructTypeObj{
@@ -361,25 +362,25 @@ fn tplBuildObj(src_val: Value, ops: []Value, args: []Value, jmp: []Value) !*Obje
         .fields = field_specs[0..5],
     } };
 
-    const inst_fields = try vmgc.vmAllocManagedSlice(MapEntry, 5);
-    const inst_obj = try vmgc.vmAllocObject();
+    const inst_fields = try vmgc.vmAllocManagedSlice(ctx, MapEntry, 5);
+    const inst_obj = try vmgc.vmAllocObject(ctx);
     try vms.pushTempRoot(.{ .object = inst_obj });
     defer vms.popTempRoot();
     inst_obj.* = .{ .struct_instance = .{ .typ = typ_obj, .fields = inst_fields } };
 
-    const ops_obj = try vmgc.allocTempRooted(.{ .array = &[_]Value{} });
+    const ops_obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
     defer vms.popTempRoot();
     ops_obj.* = .{ .array_managed = ops };
 
-    const args_obj = try vmgc.allocTempRooted(.{ .array = &[_]Value{} });
+    const args_obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
     defer vms.popTempRoot();
     args_obj.* = .{ .array_managed = args };
 
-    const jmp_obj = try vmgc.allocTempRooted(.{ .array = &[_]Value{} });
+    const jmp_obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
     defer vms.popTempRoot();
     jmp_obj.* = .{ .array_managed = jmp };
 
-    const funcs_obj = try vmgc.vmAllocObject();
+    const funcs_obj = try vmgc.vmAllocObject(ctx);
     funcs_obj.* = .{ .map = &[_]MapEntry{} };
 
     inst_fields[0] = .{ .key = .{ .string = try chunk.internStr("__ops") }, .value = .{ .object = ops_obj } };
@@ -391,33 +392,33 @@ fn tplBuildObj(src_val: Value, ops: []Value, args: []Value, jmp: []Value) !*Obje
     return inst_obj;
 }
 
-pub fn tplParse(src_val: Value, src: []const u8) !Value {
+pub fn tplParse(ctx: VMContext, src_val: Value, src: []const u8) !Value {
     if (src.len == 0) {
-        const obj = try tplBuildObj(src_val, &[_]Value{}, &[_]Value{}, &[_]Value{});
+        const obj = try tplBuildObj(ctx, src_val, &[_]Value{}, &[_]Value{}, &[_]Value{});
         return .{ .object = obj };
     }
     const inst_count = try tplCountInsts(src);
     if (inst_count == 0) {
-        const obj = try tplBuildObj(src_val, &[_]Value{}, &[_]Value{}, &[_]Value{});
+        const obj = try tplBuildObj(ctx, src_val, &[_]Value{}, &[_]Value{}, &[_]Value{});
         return .{ .object = obj };
     }
     // Root the parse-time slices immediately so that GC triggered by tplParseTag
     // / tplSplitPath cannot sweep elements already written into args[].
-    const ops_root = try vmgc.allocTempRooted(.{ .array = &[_]Value{} });
+    const ops_root = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
     defer vms.popTempRoot();
-    const ops = try vmgc.vmAllocManagedSlice(Value, inst_count);
+    const ops = try vmgc.vmAllocManagedSlice(ctx, Value, inst_count);
     ops_root.* = .{ .array_managed = ops };
     for (ops) |*v| v.* = .null;
 
-    const args_root = try vmgc.allocTempRooted(.{ .array = &[_]Value{} });
+    const args_root = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
     defer vms.popTempRoot();
-    const args = try vmgc.vmAllocManagedSlice(Value, inst_count);
+    const args = try vmgc.vmAllocManagedSlice(ctx, Value, inst_count);
     args_root.* = .{ .array_managed = args };
     for (args) |*v| v.* = .null;
 
-    const jmp_root = try vmgc.allocTempRooted(.{ .array = &[_]Value{} });
+    const jmp_root = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
     defer vms.popTempRoot();
-    const jmp = try vmgc.vmAllocManagedSlice(Value, inst_count);
+    const jmp = try vmgc.vmAllocManagedSlice(ctx, Value, inst_count);
     jmp_root.* = .{ .array_managed = jmp };
     for (jmp) |*v| v.* = .null;
 
@@ -441,7 +442,7 @@ pub fn tplParse(src_val: Value, src: []const u8) !Value {
                 pos = end + 2;
                 continue;
             }
-            const parsed = try tplParseTag(tag);
+            const parsed = try tplParseTag(ctx, tag);
 
             if (parsed.op == .end) {
                 var scope_pop: f64 = 0;
@@ -525,7 +526,7 @@ pub fn tplParse(src_val: Value, src: []const u8) !Value {
     args_root.* = .{ .array = &[_]Value{} };
     jmp_root.* = .{ .array = &[_]Value{} };
 
-    const obj = try tplBuildObj(src_val, ops[0..idx], args[0..idx], jmp[0..idx]);
+    const obj = try tplBuildObj(ctx, src_val, ops[0..idx], args[0..idx], jmp[0..idx]);
     return .{ .object = obj };
 }
 
@@ -535,7 +536,7 @@ const IterState = struct {
     body_ip: usize,
 };
 
-pub fn tplExec(tmpl: *Object, data: Value) !Value {
+pub fn tplExec(ctx: VMContext, tmpl: *Object, data: Value) !Value {
     const ops_v = tplFieldValue(tmpl, "__ops");
     const args_v = tplFieldValue(tmpl, "__args");
     const jmp_v = tplFieldValue(tmpl, "__jmp");
@@ -546,7 +547,7 @@ pub fn tplExec(tmpl: *Object, data: Value) !Value {
     const args = tplAsArraySlice(args_v.object);
     const jmps = tplAsArraySlice(jmp_v.object);
 
-    const sb_obj = try vmgc.allocTempRooted(.{ .string_builder = .{ .buf = &[_]u8{}, .len = 0 } });
+    const sb_obj = try vmgc.allocTempRooted(ctx, .{ .string_builder = .{ .buf = &[_]u8{}, .len = 0 } });
     defer vms.popTempRoot();
 
     var ip: usize = 0;
@@ -567,13 +568,13 @@ pub fn tplExec(tmpl: *Object, data: Value) !Value {
         switch (op) {
             .text => {
                 const s = try tplAsStringVal(arg);
-                try tplAppendToBuilder(sb_obj, s);
+                try tplAppendToBuilder(ctx, sb_obj, s);
                 ip += 1;
             },
             .field => {
                 const fname = try tplAsStringVal(arg);
                 const val = try tplResolveField(dot_stack[scope_top], fname);
-                try tplAppendValToBuilder(sb_obj, val);
+                try tplAppendValToBuilder(ctx, sb_obj, val);
                 ip += 1;
             },
             .chain => {
@@ -583,11 +584,11 @@ pub fn tplExec(tmpl: *Object, data: Value) !Value {
                     const name = try tplAsStringVal(item);
                     cur = try tplResolveField(cur, name);
                 }
-                try tplAppendValToBuilder(sb_obj, cur);
+                try tplAppendValToBuilder(ctx, sb_obj, cur);
                 ip += 1;
             },
             .root_ref => {
-                try tplAppendValToBuilder(sb_obj, dot_stack[scope_top]);
+                try tplAppendValToBuilder(ctx, sb_obj, dot_stack[scope_top]);
                 ip += 1;
             },
             .var_ref, .call_fn, .assign, .break_inst, .continue_inst => {
@@ -688,22 +689,22 @@ pub fn tplExec(tmpl: *Object, data: Value) !Value {
         }
     }
 
-    return try tplBuilderToStr(sb_obj);
+    return try tplBuilderToStr(ctx, sb_obj);
 }
 
-pub fn tplRender(src_val: Value, src: []const u8, data: Value) !Value {
-    const tmpl_val = try tplParse(src_val, src);
+pub fn tplRender(ctx: VMContext, src_val: Value, src: []const u8, data: Value) !Value {
+    const tmpl_val = try tplParse(ctx, src_val, src);
     if (tmpl_val != .object) return error.TypeError;
     try vms.pushTempRoot(tmpl_val);
     defer vms.popTempRoot();
-    return try tplExec(tmpl_val.object, data);
+    return try tplExec(ctx, tmpl_val.object, data);
 }
 
 pub fn tplValid(src: []const u8) bool {
     return (tplCountInsts(src) catch return false) > 0;
 }
 
-pub fn tplAddFunc(tmpl_obj: *Object, name: []const u8, func_val: Value) !void {
+pub fn tplAddFunc(ctx: VMContext, tmpl_obj: *Object, name: []const u8, func_val: Value) !void {
     const funcs_v = tplFieldValue(tmpl_obj, "funcs");
     if (funcs_v != .object) return error.TypeError;
     const funcs_obj = funcs_v.object;
@@ -718,7 +719,7 @@ pub fn tplAddFunc(tmpl_obj: *Object, name: []const u8, func_val: Value) !void {
                     }
                 }
             }
-            const new_items = try vmgc.vmAllocManagedSlice(MapEntry, m.len + 1);
+            const new_items = try vmgc.vmAllocManagedSlice(ctx, MapEntry, m.len + 1);
             @memcpy(new_items[0..m.len], m);
             new_items[m.len] = .{ .key = .{ .string = try chunk.internStr(name) }, .value = func_val };
             funcs_obj.* = .{ .map_managed = new_items[0 .. m.len + 1] };
@@ -733,7 +734,7 @@ pub fn tplAddFunc(tmpl_obj: *Object, name: []const u8, func_val: Value) !void {
                     }
                 }
             }
-            const new_items = try vmgc.vmAllocManagedSlice(MapEntry, m.len + 1);
+            const new_items = try vmgc.vmAllocManagedSlice(ctx, MapEntry, m.len + 1);
             @memcpy(new_items[0..m.len], m);
             new_items[m.len] = .{ .key = .{ .string = try chunk.internStr(name) }, .value = func_val };
             heap.freeManagedSlice(MapEntry, m);
@@ -743,7 +744,7 @@ pub fn tplAddFunc(tmpl_obj: *Object, name: []const u8, func_val: Value) !void {
     }
 }
 
-pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
+pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
     switch (@as(NativeFnId, @enumFromInt(nf.id))) {
         .template_add_func => {
             if (argc != nf.arity) return error.ArityMismatch;
@@ -753,7 +754,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const func_val = vms.vmState().stack[top - 1];
             if (tmpl_val != .object) return error.TypeError;
             const name = try vms.asStringValue(name_val);
-            try tplAddFunc(tmpl_val.object, name, func_val);
+            try tplAddFunc(ctx, tmpl_val.object, name, func_val);
             _ = try vms.vmPop();
             _ = try vms.vmPop();
             _ = try vms.vmPop();
@@ -766,7 +767,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const tmpl_val = vms.vmState().stack[top - 2];
             const data = vms.vmState().stack[top - 1];
             if (tmpl_val != .object) return error.TypeError;
-            const out = try tplExec(tmpl_val.object, data);
+            const out = try tplExec(ctx, tmpl_val.object, data);
             _ = try vms.vmPop();
             _ = try vms.vmPop();
             _ = try vms.vmPop();
@@ -776,7 +777,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             if (argc != nf.arity) return error.ArityMismatch;
             const src_val = vms.vmState().stack[vms.vmState().stack_top - 1];
             const src = try vms.asStringValue(src_val);
-            const out = try tplParse(src_val, src);
+            const out = try tplParse(ctx, src_val, src);
             _ = try vms.vmPop();
             _ = try vms.vmPop();
             try vms.vmPush(out);
@@ -787,7 +788,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const src_val = vms.vmState().stack[top - 2];
             const data = vms.vmState().stack[top - 1];
             const src = try vms.asStringValue(src_val);
-            const out = try tplRender(src_val, src, data);
+            const out = try tplRender(ctx, src_val, src, data);
             _ = try vms.vmPop();
             _ = try vms.vmPop();
             _ = try vms.vmPop();

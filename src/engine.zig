@@ -378,6 +378,7 @@ fn wasmSliceMut(ptr: PtrInt, len: i32) []u8 {
 }
 
 fn wireToValue(wire: ValueWire) !Value {
+    const ctx = vms.VMContext.fromActive();
     return switch (wire.tag) {
         @intFromEnum(WireTag.null) => .null,
         @intFromEnum(WireTag.boolean) => Value{ .boolean = wire.payload != 0 },
@@ -397,21 +398,21 @@ fn wireToValue(wire: ValueWire) !Value {
         @intFromEnum(WireTag.@"error") => {
             if (wire.len == 0) return Value{ .error_value = try chunk.internStr("") };
             const data = @as([*]u8, @ptrFromInt(@as(usize, @intCast(wire.payload))))[0..@as(usize, @intCast(wire.len))];
-            const copy = try vmgc.vmAllocManagedBytes(wire.len);
+            const copy = try vmgc.vmAllocManagedBytes(ctx, wire.len);
             @memcpy(copy[0..wire.len], data);
             return Value{ .error_value = try chunk.internStr(copy[0..wire.len]) };
         },
         @intFromEnum(WireTag.string) => {
             if (wire.len == 0) return Value{ .string = try chunk.internStr("") };
             const data = @as([*]u8, @ptrFromInt(@as(usize, @intCast(wire.payload))))[0..@as(usize, @intCast(wire.len))];
-            return try vm.makeString(data);
+            return try vmgc.makeDynString(ctx, data);
         },
         @intFromEnum(WireTag.array) => {
             const count = wire.len;
             const elem_wires = @as([*]const ValueWire, @ptrFromInt(@as(usize, @intCast(wire.payload))))[0..count];
-            const arr_obj = try vmgc.allocTempRooted(.{ .array = &[_]Value{} });
+            const arr_obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
             defer vms.popTempRoot();
-            const items = try vmgc.vmAllocManagedSlice(Value, count);
+            const items = try vmgc.vmAllocManagedSlice(ctx, Value, count);
             for (elem_wires, 0..) |ew, i| {
                 items[i] = try wireToValue(ew);
             }
@@ -421,9 +422,9 @@ fn wireToValue(wire: ValueWire) !Value {
         @intFromEnum(WireTag.map) => {
             const count = wire.len;
             const pair_wires = @as([*]const ValueWire, @ptrFromInt(@as(usize, @intCast(wire.payload))))[0 .. count * 2];
-            const map_obj = try vmgc.allocTempRooted(.{ .map = &[_]MapEntry{} });
+            const map_obj = try vmgc.allocTempRooted(ctx, .{ .map = &[_]MapEntry{} });
             defer vms.popTempRoot();
-            const entries = try vmgc.vmAllocManagedSlice(MapEntry, count);
+            const entries = try vmgc.vmAllocManagedSlice(ctx, MapEntry, count);
             for (0..count) |i| {
                 entries[i] = .{
                     .key = try wireToValue(pair_wires[i * 2]),

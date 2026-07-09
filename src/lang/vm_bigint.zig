@@ -30,13 +30,13 @@ fn strBytes(v: Value) []const u8 {
 
 pub fn fromInt(ctx: VMContext, n: i64) !Value {
     const cap = Bi.calcLimbLen(n);
-    const obj = try vmgc.allocTempRooted(.{ .bigint = .{
+    const obj = try vmgc.allocTempRooted(ctx, .{ .bigint = .{
         .limbs = &[_]Limb{},
         .len = 0,
         .positive = true,
     } });
     defer ctx.vs.popTempRoot();
-    const limbs = try vmgc.vmAllocManagedSlice(Limb, cap);
+    const limbs = try vmgc.vmAllocManagedSlice(ctx, Limb, cap);
     const m = Bi.Mutable.init(limbs, n);
     obj.* = .{ .bigint = .{ .limbs = limbs, .len = m.len, .positive = m.positive } };
     return .{ .object = obj };
@@ -50,13 +50,13 @@ pub fn fromStrVal(ctx: VMContext, str_val: Value) !Value {
     const digit_str = if (initial.len > 0 and initial[0] == '-') initial[1..] else initial;
     const limb_cap = Bi.calcSetStringLimbCount(10, @max(digit_str.len, 1)) + 1;
 
-    const obj = try vmgc.allocTempRooted(.{ .bigint = .{
+    const obj = try vmgc.allocTempRooted(ctx, .{ .bigint = .{
         .limbs = &[_]Limb{},
         .len = 0,
         .positive = true,
     } });
     defer ctx.vs.popTempRoot();
-    const limbs = try vmgc.vmAllocManagedSlice(Limb, limb_cap);
+    const limbs = try vmgc.vmAllocManagedSlice(ctx, Limb, limb_cap);
 
     // Re-read bytes after potential compaction (pointer updated by compactUpdateObj)
     const str = strBytes(str_val);
@@ -87,10 +87,10 @@ pub fn toFloat(a: Value) f64 {
     return f;
 }
 
-pub fn toDynString(a: Value) !Value {
+pub fn toDynString(ctx: VMContext, a: Value) !Value {
     const bi = a.object.bigint;
     const ac = bi.toConst();
-    if (bi.len == 0 or ac.eqlZero()) return vmgc.makeDynString("0");
+    if (bi.len == 0 or ac.eqlZero()) return vmgc.makeDynString(ctx, "0");
 
     const str_cap = ac.sizeInBaseUpperBound(10);
     const str_buf = try std.heap.page_allocator.alloc(u8, str_cap);
@@ -104,7 +104,7 @@ pub fn toDynString(a: Value) !Value {
     defer if (scratch_cap > 0) std.heap.page_allocator.free(limb_scratch);
 
     const n = ac.toString(str_buf, 10, .lower, limb_scratch);
-    return vmgc.makeDynString(str_buf[0..n]);
+    return vmgc.makeDynString(ctx, str_buf[0..n]);
 }
 
 // ── Arithmetic helpers ────────────────────────────────────────────────────────
@@ -123,9 +123,9 @@ pub fn addBi(ctx: VMContext, a: Value, b: Value) !Value {
     defer ctx.vs.popTempRoot();
 
     const cap = @max(a.object.bigint.len, b.object.bigint.len) + 1;
-    const obj = try vmgc.allocTempRooted(.{ .bigint = .{ .limbs = &[_]Limb{}, .len = 0, .positive = true } });
+    const obj = try vmgc.allocTempRooted(ctx, .{ .bigint = .{ .limbs = &[_]Limb{}, .len = 0, .positive = true } });
     defer ctx.vs.popTempRoot();
-    const limbs = try vmgc.vmAllocManagedSlice(Limb, cap);
+    const limbs = try vmgc.vmAllocManagedSlice(ctx, Limb, cap);
 
     var r = Bi.Mutable{ .limbs = limbs, .len = 0, .positive = true };
     r.add(a.object.bigint.toConst(), b.object.bigint.toConst());
@@ -140,9 +140,9 @@ pub fn subBi(ctx: VMContext, a: Value, b: Value) !Value {
     defer ctx.vs.popTempRoot();
 
     const cap = @max(a.object.bigint.len, b.object.bigint.len) + 1;
-    const obj = try vmgc.allocTempRooted(.{ .bigint = .{ .limbs = &[_]Limb{}, .len = 0, .positive = true } });
+    const obj = try vmgc.allocTempRooted(ctx, .{ .bigint = .{ .limbs = &[_]Limb{}, .len = 0, .positive = true } });
     defer ctx.vs.popTempRoot();
-    const limbs = try vmgc.vmAllocManagedSlice(Limb, cap);
+    const limbs = try vmgc.vmAllocManagedSlice(ctx, Limb, cap);
 
     var r = Bi.Mutable{ .limbs = limbs, .len = 0, .positive = true };
     r.sub(a.object.bigint.toConst(), b.object.bigint.toConst());
@@ -157,9 +157,9 @@ pub fn mulBi(ctx: VMContext, a: Value, b: Value) !Value {
     defer ctx.vs.popTempRoot();
 
     const cap = @max(a.object.bigint.len + b.object.bigint.len, 1);
-    const obj = try vmgc.allocTempRooted(.{ .bigint = .{ .limbs = &[_]Limb{}, .len = 0, .positive = true } });
+    const obj = try vmgc.allocTempRooted(ctx, .{ .bigint = .{ .limbs = &[_]Limb{}, .len = 0, .positive = true } });
     defer ctx.vs.popTempRoot();
-    const limbs = try vmgc.vmAllocManagedSlice(Limb, cap);
+    const limbs = try vmgc.vmAllocManagedSlice(ctx, Limb, cap);
 
     var r = Bi.Mutable{ .limbs = limbs, .len = 0, .positive = true };
     // Pass empty limbs_buffer since result slice doesn't alias either operand.
@@ -181,9 +181,9 @@ pub fn intDivBi(ctx: VMContext, a: Value, b: Value) !Value {
     const a_len = a.object.bigint.len;
     const b_len = b.object.bigint.len;
     const q_cap = a_len + 1;
-    const obj = try vmgc.allocTempRooted(.{ .bigint = .{ .limbs = &[_]Limb{}, .len = 0, .positive = true } });
+    const obj = try vmgc.allocTempRooted(ctx, .{ .bigint = .{ .limbs = &[_]Limb{}, .len = 0, .positive = true } });
     defer ctx.vs.popTempRoot();
-    const q_limbs = try vmgc.vmAllocManagedSlice(Limb, q_cap);
+    const q_limbs = try vmgc.vmAllocManagedSlice(ctx, Limb, q_cap);
 
     const a_const = a.object.bigint.toConst();
     const b_const = b.object.bigint.toConst();
@@ -214,9 +214,9 @@ pub fn remBi(ctx: VMContext, a: Value, b: Value) !Value {
     const a_len = a.object.bigint.len;
     const b_len = b.object.bigint.len;
     const r_cap = b_len + 1;
-    const obj = try vmgc.allocTempRooted(.{ .bigint = .{ .limbs = &[_]Limb{}, .len = 0, .positive = true } });
+    const obj = try vmgc.allocTempRooted(ctx, .{ .bigint = .{ .limbs = &[_]Limb{}, .len = 0, .positive = true } });
     defer ctx.vs.popTempRoot();
-    const r_limbs = try vmgc.vmAllocManagedSlice(Limb, r_cap);
+    const r_limbs = try vmgc.vmAllocManagedSlice(ctx, Limb, r_cap);
 
     const a_const = a.object.bigint.toConst();
     const b_const = b.object.bigint.toConst();
@@ -261,9 +261,9 @@ pub fn powBi(ctx: VMContext, a: Value, exp: u32) !Value {
 
     try ctx.vs.pushTempRoot(a);
     defer ctx.vs.popTempRoot();
-    const obj = try vmgc.allocTempRooted(.{ .bigint = .{ .limbs = &[_]Limb{}, .len = 0, .positive = true } });
+    const obj = try vmgc.allocTempRooted(ctx, .{ .bigint = .{ .limbs = &[_]Limb{}, .len = 0, .positive = true } });
     defer ctx.vs.popTempRoot();
-    const r_limbs = try vmgc.vmAllocManagedSlice(Limb, @max(needed, 1));
+    const r_limbs = try vmgc.vmAllocManagedSlice(ctx, Limb, @max(needed, 1));
 
     const a_const = a.object.bigint.toConst();
     const scratch = try std.heap.page_allocator.alloc(Limb, @max(needed, 1));
@@ -280,9 +280,9 @@ pub fn negBi(ctx: VMContext, a: Value) !Value {
     const a_len = a.object.bigint.len;
     try ctx.vs.pushTempRoot(a);
     defer ctx.vs.popTempRoot();
-    const obj = try vmgc.allocTempRooted(.{ .bigint = .{ .limbs = &[_]Limb{}, .len = 0, .positive = true } });
+    const obj = try vmgc.allocTempRooted(ctx, .{ .bigint = .{ .limbs = &[_]Limb{}, .len = 0, .positive = true } });
     defer ctx.vs.popTempRoot();
-    const limbs = try vmgc.vmAllocManagedSlice(Limb, @max(a_len, 1));
+    const limbs = try vmgc.vmAllocManagedSlice(ctx, Limb, @max(a_len, 1));
 
     var r = Bi.Mutable{ .limbs = limbs, .len = 0, .positive = true };
     r.copy(a.object.bigint.toConst());
