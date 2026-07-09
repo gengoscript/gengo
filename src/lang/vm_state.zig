@@ -402,12 +402,6 @@ pub inline fn vmTop(dist: usize) Value { return g_state.vmTop(dist); }
 // Safe to call unchecked after arity has been verified.
 pub inline fn vmPopArgs(argc: u8) void { return g_state.vmPopArgs(argc); }
 
-pub fn vmByte() !u8 { return g_state.vmByte(); }
-
-pub fn vmShort() !usize { return g_state.vmShort(); }
-
-pub fn vmInt() !usize { return g_state.vmInt(); }
-
 pub fn pushTempRoot(v: Value) !void { return g_state.pushTempRoot(v); }
 
 pub fn popTempRoot() void { return g_state.popTempRoot(); }
@@ -421,8 +415,6 @@ pub fn assertTempRootDepth(expected: usize, comptime context: []const u8) void {
 pub fn pushObjectTempRoots(values: []const Value) !usize { return g_state.pushObjectTempRoots(values); }
 
 pub fn restoreTempRoots(base: usize) void { return g_state.restoreTempRoots(base); }
-
-pub fn vmConst() !Value { return g_state.vmConst(); }
 
 fn valToFloatIndex(v: Value) !f64 {
     const n: f64 = switch (v) {

@@ -43,8 +43,8 @@ fn markObjectQueue(ctx: VMContext, obj: *Object) void {
 }
 
 fn markValue(ctx: VMContext, v: Value) void {
-    if (v == .named_scalar) { markObjectQueue(ctx, heap.g_state.objectAt(v.named_scalar.typ_idx)); return; }
-    if (v == .inline_variant) { markObjectQueue(ctx, heap.g_state.objectAt(v.inline_variant.typ_idx)); return; }
+    if (v == .named_scalar) { markObjectQueue(ctx, ctx.hs.objectAt(v.named_scalar.typ_idx)); return; }
+    if (v == .inline_variant) { markObjectQueue(ctx, ctx.hs.objectAt(v.inline_variant.typ_idx)); return; }
     if (v == .object) markObjectQueue(ctx, v.object);
 }
 
@@ -190,9 +190,9 @@ pub fn collectGarbage() void {
     if (t1 > t0) ctx.vs.gc_time_ns += @intCast(t1 - t0);
 }
 
-fn nextGcObjects(live: usize) usize {
+fn nextGcObjects(ctx: VMContext, live: usize) usize {
     const obj_step = cfg.gc_object_step;
-    const max_obj = heap.g_state.maxObjects();
+    const max_obj = ctx.hs.maxObjects();
     const raw = (live * 2) + obj_step;
     return if (raw >= max_obj) max_obj - 1 else raw;
 }
@@ -210,14 +210,14 @@ pub fn vmAllocObject() !*Object {
     if (gcStress()) collectGarbage();
     if (ctx.hs.liveObjectCount() >= ctx.vs.next_gc_objects) {
         collectGarbage();
-        ctx.vs.next_gc_objects = nextGcObjects(ctx.hs.liveObjectCount());
+        ctx.vs.next_gc_objects = nextGcObjects(ctx, ctx.hs.liveObjectCount());
     }
     if (ctx.hs.allocObject()) |o| {
         ctx.vs.alloc_object_calls += 1;
         return o;
     }
     collectGarbage();
-    ctx.vs.next_gc_objects = nextGcObjects(ctx.hs.liveObjectCount());
+    ctx.vs.next_gc_objects = nextGcObjects(ctx, ctx.hs.liveObjectCount());
     if (ctx.hs.allocObject()) |o| {
         ctx.vs.alloc_object_calls += 1;
         return o;

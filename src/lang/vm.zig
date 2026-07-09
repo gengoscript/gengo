@@ -324,22 +324,22 @@ fn bigIntBinOpWithPromotion(ctx: VMContext, a: Value, b: Value, op: enum { add, 
             ctx.vs.setRuntimeErr("cannot apply '{s}' to bigint and {s}", .{ @tagName(op), vmtyp.runtimeTypeName(a) });
             return error.TypeError;
         }
-        a_big = try vmbigint.promoteInt(a.int, b);
+        a_big = try vmbigint.promoteInt(ctx, a.int, b);
     }
     if (!b_bi) {
         if (b != .int) {
             ctx.vs.setRuntimeErr("cannot apply '{s}' to bigint and {s}", .{ @tagName(op), vmtyp.runtimeTypeName(b) });
             return error.TypeError;
         }
-        b_big = try vmbigint.promoteInt(b.int, a_big);
+        b_big = try vmbigint.promoteInt(ctx, b.int, a_big);
     }
     return switch (op) {
-        .add => vmbigint.addBi(a_big, b_big),
-        .sub => vmbigint.subBi(a_big, b_big),
-        .mul => vmbigint.mulBi(a_big, b_big),
-        .int_div => vmbigint.intDivBi(a_big, b_big),
-        .rem => vmbigint.remBi(a_big, b_big),
-        .mod => vmbigint.modBi(a_big, b_big),
+        .add => vmbigint.addBi(ctx, a_big, b_big),
+        .sub => vmbigint.subBi(ctx, a_big, b_big),
+        .mul => vmbigint.mulBi(ctx, a_big, b_big),
+        .int_div => vmbigint.intDivBi(ctx, a_big, b_big),
+        .rem => vmbigint.remBi(ctx, a_big, b_big),
+        .mod => vmbigint.modBi(ctx, a_big, b_big),
     };
 }
 
@@ -951,7 +951,7 @@ noinline fn performCallIC(ctx: VMContext, argc: u8, ic_base: usize, ic_slot: u16
     if (func_val == .object) {
         const obj = func_val.object;
         // Warm path: pointer comparison via objectAt (&obj_pool[idx]) — no division.
-        if (ic_slot != 0xFFFF and heap.objectAt(ic_slot) == obj) {
+        if (ic_slot != 0xFFFF and ctx.hs.objectAt(ic_slot) == obj) {
             return switch (obj.*) {
                 .function => |f| enterFunctionFrameWarm(ctx, f, obj, null, argc),
                 .closure  => |cl| enterFunctionFrameWarm(ctx, cl.func.function, cl.func, obj, argc),
@@ -961,7 +961,7 @@ noinline fn performCallIC(ctx: VMContext, argc: u8, ic_base: usize, ic_slot: u16
         try performCall(ctx, argc);
         // Cold path: warm the IC. Division happens once per call site.
         if (ic_slot == 0xFFFF) {
-            const obj_idx = heap.objectPoolIndex(obj);
+            const obj_idx = ctx.hs.objectPoolIndex(obj);
             if (obj_idx != 0xFFFF) {
                 switch (obj.*) {
                     .function => |f| if (!f.is_variadic and f.default_count == 0 and (f.arity == argc) and (!f.has_typed_params or vmtyp.canInlinePrimitiveArgs(f, argc))) {
@@ -1330,7 +1330,7 @@ fn pushFieldFromObject(ctx: VMContext, obj: *Object, name_idx: usize, ic_base: u
             } else return error.TypeError;
         },
         .struct_instance => |inst| {
-            const tpi = heap.objectPoolIndex(inst.typ);
+            const tpi = ctx.hs.objectPoolIndex(inst.typ);
             if (ic_type_idx == @as(usize, tpi) and ic_fidx != 0xFF) {
                 try ctx.vs.vmPush(inst.fields[ic_fidx].value);
             } else {
@@ -1525,15 +1525,15 @@ fn opInvokeMethod(ctx: VMContext) !void {
     if (recv != .object) return error.NotAMethodReceiver;
     switch (recv.object.*) {
         .struct_instance => |inst| {
-            const tpi = heap.objectPoolIndex(inst.typ);
+            const tpi = ctx.hs.objectPoolIndex(inst.typ);
             var resolved: MethodResolution = undefined;
             if (ic_type_idx == @as(usize, tpi) and ic_func_idx != 0xFFFF) {
                 if (ic_func_idx >= heap.MaxObjects) return error.NotAMethodReceiver;
-                resolved = .{ .func = .{ .object = heap.objectAt(@intCast(ic_func_idx)) }, .pass_recv = true };
+                resolved = .{ .func = .{ .object = ctx.hs.objectAt(@intCast(ic_func_idx)) }, .pass_recv = true };
             } else {
                 resolved = try resolveStructMethod(ctx, inst, mname);
                 if (resolved.pass_recv and resolved.func == .object) {
-                    const fpi = heap.objectPoolIndex(resolved.func.object);
+                    const fpi = ctx.hs.objectPoolIndex(resolved.func.object);
                     if (fpi != 0xFFFF) {
                         ctx.cs.patchByte(ic_base + 0, @intCast((tpi >> 8) & 0xFF));
                         ctx.cs.patchByte(ic_base + 1, @intCast(tpi & 0xFF));
@@ -1596,7 +1596,7 @@ fn opInvokeMethod(ctx: VMContext) !void {
                     @memcpy(new_buf[0..sb.len], sb.buf[0..sb.len]);
                     const old_buf = sb.buf;
                     sb.buf = new_buf; // update before free so paranoia doesn't see the old ref
-                    heap.freeBytesManaged(old_buf);
+                    ctx.hs.freeBytesManaged(old_buf);
                 }
                 @memcpy(sb.buf[sb.len..][0..s_bytes.len], s_bytes);
                 sb.len = needed;
@@ -1692,7 +1692,7 @@ fn opSetField(ctx: VMContext) !void {
     if (container != .object) return error.TypeError;
     switch (container.object.*) {
         .struct_instance => |inst| {
-            const tpi = heap.objectPoolIndex(inst.typ);
+            const tpi = ctx.hs.objectPoolIndex(inst.typ);
             var fi: usize = undefined;
             if (ic_type_idx == @as(usize, tpi) and ic_fidx != 0xFF) {
                 fi = ic_fidx;
@@ -2225,9 +2225,9 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                     var a_big = a;
                     if (!vmbigint.isBigInt(a)) {
                         if (a != .int) { ctx.vs.setRuntimeErr("{s} ** bigint: base must be int or bigint", .{vmtyp.runtimeTypeName(a)}); return error.TypeError; }
-                        a_big = try vmbigint.fromInt(a.int);
+                        a_big = try vmbigint.fromInt(ctx, a.int);
                     }
-                    try ctx.vs.vmPush(try vmbigint.powBi(a_big, exp)); continue;
+                    try ctx.vs.vmPush(try vmbigint.powBi(ctx, a_big, exp)); continue;
                 }
                 const nop = try numericBinaryOp(ctx, a, b, "**");
                 try pushNumericResultWithCarrier(ctx, a, b, std.math.pow(f64, nop.an, nop.bn), nop.tag, "**");
@@ -2369,13 +2369,13 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 const result = if (vmbigint.isBigInt(v))
                     v
                 else if (v == .int)
-                    try vmbigint.fromInt(v.int)
+                    try vmbigint.fromInt(ctx, v.int)
                 else if (vms.isStringValue(v))
-                    vmbigint.fromStrVal(v) catch return error.TypeError
+                    vmbigint.fromStrVal(ctx, v) catch return error.TypeError
                 else if (v == .float) blk: {
                     if (!std.math.isFinite(v.float) or @trunc(v.float) != v.float) return error.TypeError;
                     if (v.float < -9.223372036854776e18 or v.float >= 9.223372036854776e18) return error.TypeError;
-                    break :blk try vmbigint.fromInt(@intFromFloat(v.float));
+                    break :blk try vmbigint.fromInt(ctx, @intFromFloat(v.float));
                 } else return error.TypeError;
                 _ = try ctx.vs.vmPop();
                 try ctx.vs.vmPush(result);
@@ -2416,7 +2416,7 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 const unboxed = vms.unboxNamed(v);
                 if (vmbigint.isBigInt(unboxed)) {
                     _ = try ctx.vs.vmPop();
-                    try ctx.vs.vmPush(try vmbigint.negBi(unboxed));
+                    try ctx.vs.vmPush(try vmbigint.negBi(ctx, unboxed));
                     continue;
                 }
                 const negated: Value = switch (unboxed) {
@@ -2984,9 +2984,9 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 const f = try opConst(ctx);
                 if (f != .object or f.object.* != .function) return error.InvalidChunkShape;
                 const proto = f.object.function;
-                const ups = if (heap.bump(*Object, proto.capture_slots.len)) |u| u else blk: {
+                const ups = if (ctx.hs.bump(*Object, proto.capture_slots.len)) |u| u else blk: {
                     vmgc.collectGarbage();
-                    break :blk (heap.bump(*Object, proto.capture_slots.len) orelse return error.OutOfMemory);
+                    break :blk (ctx.hs.bump(*Object, proto.capture_slots.len) orelse return error.OutOfMemory);
                 };
                 const frame = if (ctx.vs.frame_top == 0) vms.Frame{ .ret_ip = 0, .base = 0, .closure = null, .func_obj = f.object, .defer_base = 0, .has_typed_returns = false } else ctx.vs.frames[ctx.vs.frame_top - 1];
                 for (proto.capture_slots, ups) |enc, *u| {

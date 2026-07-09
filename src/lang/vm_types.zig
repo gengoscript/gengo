@@ -356,7 +356,7 @@ pub fn matchesInterfaceType(v: Value, iname: []const u8) bool {
 
 pub fn makeNamedValue(typ_obj: *Object, inner: Value) !Value {
     if (typ_obj.* == .named_type) {
-        const pool_idx = heap.g_state.objectPoolIndex(typ_obj);
+        const pool_idx = heap.objectPoolIndex(typ_obj);
         if (pool_idx <= 0x0FFF) {
             if (vmod.tryMakeInlineNamedScalar(typ_obj, @intCast(pool_idx), inner)) |v| return v;
         }
@@ -367,7 +367,7 @@ pub fn makeNamedValue(typ_obj: *Object, inner: Value) !Value {
 }
 
 pub fn variantConstruct(typ: *Object, tag: []const u8, ordinal: usize, payload: Value) !Value {
-    const pool_idx = heap.g_state.objectPoolIndex(typ);
+    const pool_idx = heap.objectPoolIndex(typ);
     if (pool_idx <= 0x0FFF) {
         if (vmod.tryMakeInlineVariant(@intCast(pool_idx), ordinal, payload)) |iv| return iv;
     }
