@@ -490,7 +490,7 @@ var _prop_ctx: u8 = 0;
 
 fn runAssert(src: []const u8, label: []const u8) void {
     resetAll();
-    vmnative.installStdGlobal(globals.activeState()) catch {};
+    vmnative.installStdGlobal(vm.VMContext.fromActive(), globals.activeState()) catch {};
     var c = Compiler.init(src, .{
         .module_ctx = &_prop_ctx,
         .resolve_import = propStdResolver,
@@ -517,7 +517,7 @@ fn runAssert(src: []const u8, label: []const u8) void {
 // patterns where the outcome is undefined or deliberately exceptional.
 fn runTolerant(src: []const u8) void {
     resetAll();
-    vmnative.installStdGlobal(globals.activeState()) catch {};
+    vmnative.installStdGlobal(vm.VMContext.fromActive(), globals.activeState()) catch {};
     var c = Compiler.init(src, .{
         .module_ctx = &_prop_ctx,
         .resolve_import = propStdResolver,

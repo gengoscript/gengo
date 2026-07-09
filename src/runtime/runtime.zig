@@ -376,9 +376,10 @@ pub const Runtime = struct {
         defer self.assertNoTempRootLeaks("Runtime.compileAndInstall");
         try self.compileOnly(src, path, provider);
         vm.setPolicy(self.policy);
-        try vmnative.installStdGlobal(&self.globals_state);
-        try vmnative.installHostModules(&self.globals_state, self.host_modules);
-        try vmnative.installCapabilityModules(&self.globals_state, self.capabilityModules());
+        const install_ctx: vms.VMContext = .{ .cs = self.chunk_state, .gs = &self.globals_state, .hs = &self.heap_state, .vs = &self.vm_state };
+        try vmnative.installStdGlobal(install_ctx, &self.globals_state);
+        try vmnative.installHostModules(install_ctx, &self.globals_state, self.host_modules);
+        try vmnative.installCapabilityModules(install_ctx, &self.globals_state, self.capabilityModules());
     }
 
     pub fn runPathWithProvider(self: *Runtime, src: []const u8, path: []const u8, provider: module_compile.SourceProvider, test_mode: bool) !void {
@@ -405,9 +406,10 @@ pub const Runtime = struct {
         vm.setPolicy(self.policy);
         try self.compileProgram(src, path, provider, test_mode);
 
-        try vmnative.installStdGlobal(&self.globals_state);
-        try vmnative.installHostModules(&self.globals_state, self.host_modules);
-        try vmnative.installCapabilityModules(&self.globals_state, self.capabilityModules());
+        const install_ctx: vms.VMContext = .{ .cs = self.chunk_state, .gs = &self.globals_state, .hs = &self.heap_state, .vs = &self.vm_state };
+        try vmnative.installStdGlobal(install_ctx, &self.globals_state);
+        try vmnative.installHostModules(install_ctx, &self.globals_state, self.host_modules);
+        try vmnative.installCapabilityModules(install_ctx, &self.globals_state, self.capabilityModules());
         vm.run(.{ .cs = self.chunk_state, .gs = &self.globals_state, .hs = &self.heap_state, .vs = &self.vm_state }) catch |err| {
             self.captureRuntimeError();
             return err;
@@ -519,9 +521,10 @@ pub const Runtime = struct {
 
         try self.persistReplCompilerState(&compiler);
 
-        try vmnative.installStdGlobal(&self.globals_state);
-        try vmnative.installHostModules(&self.globals_state, self.host_modules);
-        try vmnative.installCapabilityModules(&self.globals_state, repl_caps);
+        const install_ctx: vms.VMContext = .{ .cs = self.chunk_state, .gs = &self.globals_state, .hs = &self.heap_state, .vs = &self.vm_state };
+        try vmnative.installStdGlobal(install_ctx, &self.globals_state);
+        try vmnative.installHostModules(install_ctx, &self.globals_state, self.host_modules);
+        try vmnative.installCapabilityModules(install_ctx, &self.globals_state, repl_caps);
         vm.run(.{ .cs = self.chunk_state, .gs = &self.globals_state, .hs = &self.heap_state, .vs = &self.vm_state }) catch |err| {
             self.captureRuntimeError();
             return err;

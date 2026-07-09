@@ -74,8 +74,7 @@ fn makeNative(id: NativeFnId, arity: u8) !Value {
     return .{ .object = &native_fn_backing[idx] };
 }
 
-fn makeNamespace(display_name: []const u8, qualified_name: []const u8, entries: []const NamespaceEntry) !*Object {
-    const ctx = vms.VMContext.fromActive();
+fn makeNamespace(ctx: vms.VMContext, display_name: []const u8, qualified_name: []const u8, entries: []const NamespaceEntry) !*Object {
     const any_alts = heap.bump(FieldTypeAlt, 1) orelse return error.OutOfMemory;
     any_alts[0] = .{ .typ = .any };
     const any_spec: FieldTypeSpec = .{ .alts = any_alts[0..1] };
@@ -102,14 +101,14 @@ fn makeNamespace(display_name: []const u8, qualified_name: []const u8, entries: 
     return inst_obj;
 }
 
-pub fn buildStdModule() !*Object {
+pub fn buildStdModule(ctx: vms.VMContext) !*Object {
     if (vms.vmState().std_module) |m| return m;
 
     const fmt_entries = [_]NamespaceEntry{
         .{ .name = "format", .value = try makeNative(.io_sprintf, 255) },
         .{ .name = "stringify", .value = try makeNative(.fmt_stringify, 1) },
     };
-    const fmt_obj = try makeNamespace("fmt", "@module_type:std.fmt", &fmt_entries);
+    const fmt_obj = try makeNamespace(ctx,"fmt", "@module_type:std.fmt", &fmt_entries);
     try vms.pushTempRoot(.{ .object = fmt_obj });
     defer vms.popTempRoot();
 
@@ -123,7 +122,7 @@ pub fn buildStdModule() !*Object {
         .{ .name = "read", .value = try makeNative(.io_read, 0) },
         .{ .name = "readline", .value = try makeNative(.io_readline, 0) },
     };
-    const io_obj = try makeNamespace("io", "@module_type:std.io", &io_entries);
+    const io_obj = try makeNamespace(ctx,"io", "@module_type:std.io", &io_entries);
     try vms.pushTempRoot(.{ .object = io_obj });
     defer vms.popTempRoot();
 
@@ -155,7 +154,7 @@ pub fn buildStdModule() !*Object {
         .{ .name = "remove", .value = try makeNative(.core_remove, 2) },
         .{ .name = "recover", .value = try makeNative(.core_recover, 0) },
     };
-    const core_obj = try makeNamespace("core", "@module_type:std.core", &core_entries);
+    const core_obj = try makeNamespace(ctx,"core", "@module_type:std.core", &core_entries);
     try vms.pushTempRoot(.{ .object = core_obj });
     defer vms.popTempRoot();
 
@@ -165,7 +164,7 @@ pub fn buildStdModule() !*Object {
         .{ .name = "to_bool", .value = try makeNative(.conv_to_bool, 1) },
         .{ .name = "to_string", .value = try makeNative(.conv_to_string, 1) },
     };
-    const conv_obj = try makeNamespace("conv", "@module_type:std.conv", &conv_entries);
+    const conv_obj = try makeNamespace(ctx,"conv", "@module_type:std.conv", &conv_entries);
     try vms.pushTempRoot(.{ .object = conv_obj });
     defer vms.popTempRoot();
 
@@ -207,7 +206,7 @@ pub fn buildStdModule() !*Object {
         .{ .name = "sign", .value = try makeNative(.math_sign, 1) },
         .{ .name = "inf", .value = .{ .float = std.math.inf(f64) } },
     };
-    const math_obj = try makeNamespace("math", "@module_type:std.math", &math_entries);
+    const math_obj = try makeNamespace(ctx,"math", "@module_type:std.math", &math_entries);
     try vms.pushTempRoot(.{ .object = math_obj });
     defer vms.popTempRoot();
 
@@ -220,7 +219,7 @@ pub fn buildStdModule() !*Object {
         .{ .name = "perm", .value = try makeNative(.rand_perm, 1) },
         .{ .name = "norm_float", .value = try makeNative(.rand_norm_float, 0) },
     };
-    const rand_obj = try makeNamespace("rand", "@module_type:std.rand", &rand_entries);
+    const rand_obj = try makeNamespace(ctx,"rand", "@module_type:std.rand", &rand_entries);
     try vms.pushTempRoot(.{ .object = rand_obj });
     defer vms.popTempRoot();
 
@@ -251,7 +250,7 @@ pub fn buildStdModule() !*Object {
         .{ .name = "trim_suffix", .value = try makeNative(.str_trim_suffix, 2) },
         .{ .name = "split_n", .value = try makeNative(.str_split_n, 3) },
     };
-    const string_obj = try makeNamespace("string", "@module_type:std.string", &string_entries);
+    const string_obj = try makeNamespace(ctx,"string", "@module_type:std.string", &string_entries);
     try vms.pushTempRoot(.{ .object = string_obj });
     defer vms.popTempRoot();
 
@@ -271,7 +270,7 @@ pub fn buildStdModule() !*Object {
         .{ .name = "indent", .value = try makeNative(.json_indent, 2) },
         .{ .name = "Value", .value = .{ .object = jv_type_obj } },
     };
-    const json_obj = try makeNamespace("json", "@module_type:std.json", &json_entries);
+    const json_obj = try makeNamespace(ctx,"json", "@module_type:std.json", &json_entries);
     try vms.pushTempRoot(.{ .object = json_obj });
     defer vms.popTempRoot();
 
@@ -282,7 +281,7 @@ pub fn buildStdModule() !*Object {
         .{ .name = "render", .value = try makeNative(.template_render, 2) },
         .{ .name = "valid", .value = try makeNative(.template_valid, 1) },
     };
-    const template_obj = try makeNamespace("template", "@module_type:std.template", &template_entries);
+    const template_obj = try makeNamespace(ctx,"template", "@module_type:std.template", &template_entries);
     try vms.pushTempRoot(.{ .object = template_obj });
     defer vms.popTempRoot();
 
@@ -305,7 +304,7 @@ pub fn buildStdModule() !*Object {
         .{ .name = "day", .value = .{ .int = 86_400_000 } },
         .{ .name = "__type", .value = .{ .object = time_type_obj } },
     };
-    const time_obj = try makeNamespace("time", "@module_type:std.time", &time_entries);
+    const time_obj = try makeNamespace(ctx,"time", "@module_type:std.time", &time_entries);
     try vms.pushTempRoot(.{ .object = time_obj });
     defer vms.popTempRoot();
 
@@ -313,7 +312,7 @@ pub fn buildStdModule() !*Object {
         .{ .name = "encode", .value = try makeNative(.hex_encode, 1) },
         .{ .name = "decode", .value = try makeNative(.hex_decode, 1) },
     };
-    const hex_obj = try makeNamespace("hex", "@module_type:std.hex", &hex_entries);
+    const hex_obj = try makeNamespace(ctx,"hex", "@module_type:std.hex", &hex_entries);
     try vms.pushTempRoot(.{ .object = hex_obj });
     defer vms.popTempRoot();
 
@@ -323,7 +322,7 @@ pub fn buildStdModule() !*Object {
         .{ .name = "url_encode", .value = try makeNative(.base64_url_encode, 1) },
         .{ .name = "url_decode", .value = try makeNative(.base64_url_decode, 1) },
     };
-    const base64_obj = try makeNamespace("base64", "@module_type:std.base64", &base64_entries);
+    const base64_obj = try makeNamespace(ctx,"base64", "@module_type:std.base64", &base64_entries);
     try vms.pushTempRoot(.{ .object = base64_obj });
     defer vms.popTempRoot();
 
@@ -340,7 +339,7 @@ pub fn buildStdModule() !*Object {
         .{ .name = "compile", .value = try makeNative(.re_compile, 1) },
         .{ .name = "__type", .value = .{ .object = regexp_type_obj } },
     };
-    const regexp_obj = try makeNamespace("regexp", "@module_type:std.regexp", &regexp_entries);
+    const regexp_obj = try makeNamespace(ctx,"regexp", "@module_type:std.regexp", &regexp_entries);
     try vms.pushTempRoot(.{ .object = regexp_obj });
     defer vms.popTempRoot();
 
@@ -349,7 +348,7 @@ pub fn buildStdModule() !*Object {
         .{ .name = "desc", .value = try makeNative(.sort_desc, 1) },
         .{ .name = "by", .value = try makeNative(.sort_by, 2) },
     };
-    const sort_obj = try makeNamespace("sort", "@module_type:std.sort", &sort_entries);
+    const sort_obj = try makeNamespace(ctx,"sort", "@module_type:std.sort", &sort_entries);
     try vms.pushTempRoot(.{ .object = sort_obj });
     defer vms.popTempRoot();
 
@@ -366,7 +365,7 @@ pub fn buildStdModule() !*Object {
         .{ .name = "any", .value = try makeNative(.array_any, 2) },
         .{ .name = "chunk", .value = try makeNative(.array_chunk, 2) },
     };
-    const array_obj = try makeNamespace("array", "@module_type:std.array", &array_entries);
+    const array_obj = try makeNamespace(ctx,"array", "@module_type:std.array", &array_entries);
     try vms.pushTempRoot(.{ .object = array_obj });
     defer vms.popTempRoot();
 
@@ -410,7 +409,7 @@ pub fn buildStdModule() !*Object {
         .{ .name = "f64be_at", .value = try makeNative(.bytes_f64be_at, 2) },
         .{ .name = "f64le_at", .value = try makeNative(.bytes_f64le_at, 2) },
     };
-    const bytes_obj = try makeNamespace("bytes", "@module_type:std.bytes", &bytes_entries);
+    const bytes_obj = try makeNamespace(ctx,"bytes", "@module_type:std.bytes", &bytes_entries);
     try vms.pushTempRoot(.{ .object = bytes_obj });
     defer vms.popTempRoot();
 
@@ -436,14 +435,14 @@ pub fn buildStdModule() !*Object {
         .{ .name = "Regexp",   .value = .{ .object = regexp_type_obj } },
         .{ .name = "JSONValue",.value = .{ .object = jv_type_obj } },
     };
-    const std_obj = try makeNamespace("std", "@module_type:std", &std_entries);
+    const std_obj = try makeNamespace(ctx,"std", "@module_type:std", &std_entries);
     vms.vmState().std_module = std_obj;
     return std_obj;
 }
 
-pub fn installStdGlobal(gs: *globals.State) !void {
+pub fn installStdGlobal(ctx: vms.VMContext, gs: *globals.State) !void {
     if (gs.has(module_compile.StdModuleGlobalName)) return;
-    const std_obj = try buildStdModule();
+    const std_obj = try buildStdModule(ctx);
     try gs.def(module_compile.StdModuleGlobalName, .{ .object = std_obj });
     // Register leaf-node globals for direct-call optimization.
     // Each "module:std.{ns}.{func}" global allows the compiler to emit a single
@@ -546,8 +545,7 @@ pub fn installStdGlobal(gs: *globals.State) !void {
     }
 }
 
-pub fn installHostModules(gs: *globals.State, host_modules: []const module_compile.HostModuleDesc) !void {
-    const ctx = vms.VMContext.fromActive();
+pub fn installHostModules(ctx: vms.VMContext, gs: *globals.State, host_modules: []const module_compile.HostModuleDesc) !void {
     for (host_modules) |hm| {
         const global_name_buf = (heap.bump(u8, 5 + hm.name.len) orelse return error.OutOfMemory)[0 .. 5 + hm.name.len];
         @memcpy(global_name_buf[0..5], "host:");
@@ -601,8 +599,7 @@ pub fn installHostModules(gs: *globals.State, host_modules: []const module_compi
     }
 }
 
-pub fn installCapabilityModules(gs: *globals.State, cap_modules: []const module_compile.CapModuleDesc) !void {
-    const ctx = vms.VMContext.fromActive();
+pub fn installCapabilityModules(ctx: vms.VMContext, gs: *globals.State, cap_modules: []const module_compile.CapModuleDesc) !void {
     for (cap_modules) |cm| {
         const global_name_buf = (heap.bump(u8, 4 + cm.name.len) orelse return error.OutOfMemory)[0 .. 4 + cm.name.len];
         @memcpy(global_name_buf[0..4], "cap:");
