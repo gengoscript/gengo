@@ -119,6 +119,7 @@ pub const Op = enum(u8) {
     set_named_predicate, // pop predicate, set named_type.predicate on TOS
     validate_type_default, // if TOS named_type has both a default and a predicate, check the default now
     call,
+    call_tail, // tail-position call; same encoding as call; VM skips tryTailCall for plain call
     defer_call,
     defer_invoke_method,
     op_assert,
@@ -132,10 +133,12 @@ pub const Op = enum(u8) {
     ret_const,       // fused constant+ret: [op][idx_hi][idx_lo]; same 3-byte layout as `constant k`
     get_local_ret,   // fused get_local+ret: [op][slot]; same 2-byte layout as `get_local slot`
     get_local_const_sub_call, // fused get_local_const_sub+call: [op][slot][skip][idx_hi][idx_lo][argc] (6 bytes)
+    get_local_const_sub_call_tail, // tail-position variant; same encoding
     // Hexa-fused get_global+get_local+const+sub+call: 11-byte recursive-call fast path.
     // Layout: [op][name_hi][name_lo][ic_hi][ic_lo][glcs_skip][slot][const_sub_skip][idx_hi][idx_lo][argc]
     // Emitted when get_global immediately precedes get_local_const_sub_call.
     call_global_local_sub_const,
+    call_global_local_sub_const_tail, // tail-position variant; same encoding
     add_ret,         // fused add+ret: [op]; same 1-byte layout as `add`
     local_add_local, // fused get_local+get_local+add+set_local: [op][dst][src] (3 bytes); dst += src
     local_add_const, // fused get_local+const_add+set_local: [op][dst][idx_hi][idx_lo] (4 bytes); dst += k

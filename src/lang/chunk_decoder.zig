@@ -60,6 +60,7 @@ pub fn decodeAt(state: anytype, pos: usize) !DecodedInstruction {
 
         // call: [op][argc][ic_hi][ic_lo] — 4 bytes (IC slot = object pool index, 0xFFFF = cold)
         .call => .{ .op = op, .width = 4 },
+        .call_tail => .{ .op = op, .width = 4 },
 
         .get_local, .set_local, .get_upvalue, .set_upvalue, .close_upvalue,
         .get_local_ret, .defer_call,
@@ -96,13 +97,13 @@ pub fn decodeAt(state: anytype, pos: usize) !DecodedInstruction {
             .const_index = try readU16At(state, pos + 3),
         },
 
-        .get_local_const_sub_call => .{
+        .get_local_const_sub_call, .get_local_const_sub_call_tail => .{
             .op = op,
             .width = 8,
             .const_index = try readU16At(state, pos + 3),
         },
 
-        .call_global_local_sub_const => .{
+        .call_global_local_sub_const, .call_global_local_sub_const_tail => .{
             .op = op,
             .width = 13,
             .const_index = try readU16At(state, pos + 8),

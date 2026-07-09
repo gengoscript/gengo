@@ -223,11 +223,12 @@ pub fn disassemble() void {
             },
 
             // call: [op][argc][ic_hi][ic_lo]
-            .call => {
+            .call, .call_tail => {
                 const argc = chunk.codeByteAt(i);
                 const ic = (@as(u16, chunk.codeByteAt(i + 1)) << 8) | @as(u16, chunk.codeByteAt(i + 2));
                 i += 3;
-                io.write("call ");
+                io.write(@tagName(op));
+                io.write(" ");
                 writeNum(argc);
                 if (ic != 0xFFFF) {
                     io.write(" [ic=");
@@ -341,7 +342,7 @@ pub fn disassemble() void {
                 io.write("\n");
             },
             // --- get_local_const_sub + call fused: op + slot(1) + skip(1) + idx(2) + argc(1) ---
-            .get_local_const_sub_call => {
+            .get_local_const_sub_call, .get_local_const_sub_call_tail => {
                 const slot = chunk.codeByteAt(i);
                 i += 1;
                 i += 1; // skip byte
@@ -380,7 +381,7 @@ pub fn disassemble() void {
             },
 
             // --- hexa-fused: op + name(2) + ic(2) + glcs_skip(1) + slot(1) + sub_skip(1) + idx(2) + argc(1) ---
-            .call_global_local_sub_const => {
+            .call_global_local_sub_const, .call_global_local_sub_const_tail => {
                 const name_idx = readU16(i); i += 2;
                 const ic = readU16(i); i += 2;
                 i += 1; // skip get_local_const_sub_call byte
@@ -388,7 +389,8 @@ pub fn disassemble() void {
                 i += 1; // skip const_sub byte
                 const idx = readU16(i); i += 2;
                 const argc = chunk.codeByteAt(i); i += 1;
-                io.write("call_global_local_sub_const ");
+                io.write(@tagName(op));
+                io.write(" ");
                 writeConst(name_idx);
                 if (ic != 0xffff) {
                     io.write(" ic=");
