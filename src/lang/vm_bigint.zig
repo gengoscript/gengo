@@ -8,6 +8,8 @@ const Object = vmod.Object;
 const vms = @import("vm_state.zig");
 const vmgc = @import("vm_gc.zig");
 
+pub const VMContext = vms.VMContext;
+
 pub fn isBigInt(v: Value) bool {
     return v == .object and v.object.* == .bigint;
 }
@@ -26,8 +28,7 @@ fn strBytes(v: Value) []const u8 {
 
 // ── Construction ──────────────────────────────────────────────────────────────
 
-pub fn fromInt(n: i64) !Value {
-    const ctx = vms.VMContext.fromActive();
+pub fn fromInt(ctx: VMContext, n: i64) !Value {
     const cap = Bi.calcLimbLen(n);
     const obj = try vmgc.allocTempRooted(.{ .bigint = .{
         .limbs = &[_]Limb{},
@@ -43,8 +44,7 @@ pub fn fromInt(n: i64) !Value {
 
 // fromStrVal converts a string Value to bigint (decimal format, optional leading '-').
 // str_val must be alive (on stack or temp_roots) before calling.
-pub fn fromStrVal(str_val: Value) !Value {
-    const ctx = vms.VMContext.fromActive();
+pub fn fromStrVal(ctx: VMContext, str_val: Value) !Value {
     // Read length before allocating (length is stable across GC)
     const initial = strBytes(str_val);
     const digit_str = if (initial.len > 0 and initial[0] == '-') initial[1..] else initial;
@@ -110,15 +110,13 @@ pub fn toDynString(a: Value) !Value {
 // ── Arithmetic helpers ────────────────────────────────────────────────────────
 
 // Promote an int Value to bigint, keeping `other` alive during the allocation.
-pub fn promoteInt(n: i64, other: Value) !Value {
-    const ctx = vms.VMContext.fromActive();
+pub fn promoteInt(ctx: VMContext, n: i64, other: Value) !Value {
     try ctx.vs.pushTempRoot(other);
     defer ctx.vs.popTempRoot();
-    return fromInt(n);
+    return fromInt(ctx, n);
 }
 
-pub fn addBi(a: Value, b: Value) !Value {
-    const ctx = vms.VMContext.fromActive();
+pub fn addBi(ctx: VMContext, a: Value, b: Value) !Value {
     try ctx.vs.pushTempRoot(a);
     defer ctx.vs.popTempRoot();
     try ctx.vs.pushTempRoot(b);
@@ -135,8 +133,7 @@ pub fn addBi(a: Value, b: Value) !Value {
     return .{ .object = obj };
 }
 
-pub fn subBi(a: Value, b: Value) !Value {
-    const ctx = vms.VMContext.fromActive();
+pub fn subBi(ctx: VMContext, a: Value, b: Value) !Value {
     try ctx.vs.pushTempRoot(a);
     defer ctx.vs.popTempRoot();
     try ctx.vs.pushTempRoot(b);
@@ -153,8 +150,7 @@ pub fn subBi(a: Value, b: Value) !Value {
     return .{ .object = obj };
 }
 
-pub fn mulBi(a: Value, b: Value) !Value {
-    const ctx = vms.VMContext.fromActive();
+pub fn mulBi(ctx: VMContext, a: Value, b: Value) !Value {
     try ctx.vs.pushTempRoot(a);
     defer ctx.vs.popTempRoot();
     try ctx.vs.pushTempRoot(b);
@@ -172,10 +168,9 @@ pub fn mulBi(a: Value, b: Value) !Value {
     return .{ .object = obj };
 }
 
-pub fn intDivBi(a: Value, b: Value) !Value {
-    const ctx = vms.VMContext.fromActive();
+pub fn intDivBi(ctx: VMContext, a: Value, b: Value) !Value {
     if (b.object.bigint.toConst().eqlZero()) {
-        vms.vmState().setRuntimeErr("division by zero", .{});
+        ctx.vs.setRuntimeErr("division by zero", .{});
         return error.DivisionByZero;
     }
     try ctx.vs.pushTempRoot(a);
@@ -206,10 +201,9 @@ pub fn intDivBi(a: Value, b: Value) !Value {
     return .{ .object = obj };
 }
 
-pub fn remBi(a: Value, b: Value) !Value {
-    const ctx = vms.VMContext.fromActive();
+pub fn remBi(ctx: VMContext, a: Value, b: Value) !Value {
     if (b.object.bigint.toConst().eqlZero()) {
-        vms.vmState().setRuntimeErr("division by zero", .{});
+        ctx.vs.setRuntimeErr("division by zero", .{});
         return error.DivisionByZero;
     }
     try ctx.vs.pushTempRoot(a);
@@ -240,22 +234,20 @@ pub fn remBi(a: Value, b: Value) !Value {
     return .{ .object = obj };
 }
 
-pub fn modBi(a: Value, b: Value) !Value {
-    const ctx = vms.VMContext.fromActive();
-    const r = try remBi(a, b);
+pub fn modBi(ctx: VMContext, a: Value, b: Value) !Value {
+    const r = try remBi(ctx, a, b);
     const r_const = r.object.bigint.toConst();
     const b_const = b.object.bigint.toConst();
     // Floor mod: if remainder non-zero with different sign than divisor, add divisor.
     if (!r_const.eqlZero() and r_const.positive != b_const.positive) {
         try ctx.vs.pushTempRoot(r);
         defer ctx.vs.popTempRoot();
-        return addBi(r, b);
+        return addBi(ctx, r, b);
     }
     return r;
 }
 
-pub fn powBi(a: Value, exp: u32) !Value {
-    const ctx = vms.VMContext.fromActive();
+pub fn powBi(ctx: VMContext, a: Value, exp: u32) !Value {
     // Read metadata before allocation; limb values don't change during compaction.
     const a_len = a.object.bigint.len;
     const a_const_pre = a.object.bigint.toConst();
@@ -284,8 +276,7 @@ pub fn powBi(a: Value, exp: u32) !Value {
     return .{ .object = obj };
 }
 
-pub fn negBi(a: Value) !Value {
-    const ctx = vms.VMContext.fromActive();
+pub fn negBi(ctx: VMContext, a: Value) !Value {
     const a_len = a.object.bigint.len;
     try ctx.vs.pushTempRoot(a);
     defer ctx.vs.popTempRoot();
