@@ -1,5 +1,6 @@
 const common = @import("common.zig");
 const vms = @import("vm_state.zig");
+const VMContext = vms.VMContext;
 const vmgc = @import("vm_gc.zig");
 const vmperf = @import("vm_perf.zig");
 const heap = @import("../runtime/heap.zig");
@@ -136,8 +137,8 @@ pub fn mapHas(obj: *Object, key: Value) !bool {
     }
 }
 
-pub fn mapSet(container: Value, key: Value, val: Value) !void {
-    if (container.object.* == .map_hashed) return mapInsertHashed(container.object, key, val);
+pub fn mapSet(ctx: VMContext, container: Value, key: Value, val: Value) !void {
+    if (container.object.* == .map_hashed) return mapInsertHashed(ctx, container.object, key, val);
     const items = try vms.asMapSlice(container.object);
     if (mapFindLinear(items, key)) |fi| {
         items[fi].value = val;
@@ -146,14 +147,14 @@ pub fn mapSet(container: Value, key: Value, val: Value) !void {
     try vms.pushTempRoot(container);
     defer vms.popTempRoot();
     const new_len = items.len + 1;
-    const ext = try vmgc.vmAllocManagedSlice(MapEntry, new_len);
+    const ext = try vmgc.vmAllocManagedSlice(ctx, MapEntry, new_len);
     @memcpy(ext[0..items.len], items);
     ext[items.len] = .{ .key = key, .value = val };
     if (container.object.* == .map_managed) heap.freeManagedSlice(MapEntry, container.object.map_managed);
     container.object.* = .{ .map_managed = ext[0..new_len] };
     if (new_len > 8) {
         const bcount = mapBucketsForCount(new_len);
-        const buckets = try vmgc.vmAllocManagedSlice(i32, bcount);
+        const buckets = try vmgc.vmAllocManagedSlice(ctx, i32, bcount);
         mapBuildHashedBuckets(ext[0..new_len], buckets);
         container.object.* = .{ .map_hashed = .{ .entries = ext[0..new_len], .len = new_len, .buckets = buckets } };
     }
@@ -187,7 +188,7 @@ pub fn mapDelete(obj: *Object, key: Value) !Value {
     }
 }
 
-pub fn mapInsertHashed(obj: *Object, key: Value, val: Value) !void {
+pub fn mapInsertHashed(ctx: VMContext, obj: *Object, key: Value, val: Value) !void {
     if (obj.* != .map_hashed) return error.TypeError;
 
     if (obj.map_hashed.buckets.len == 0 or
@@ -201,10 +202,10 @@ pub fn mapInsertHashed(obj: *Object, key: Value, val: Value) !void {
         const new_len = old.len + 1;
         const new_cap = if (old.entries.len < 8) 8 else old.entries.len * 2;
         const out_cap = if (new_cap < new_len) new_len else new_cap;
-        const out_entries = try vmgc.vmAllocManagedSlice(MapEntry, out_cap);
+        const out_entries = try vmgc.vmAllocManagedSlice(ctx, MapEntry, out_cap);
         if (old.len > 0) @memcpy(out_entries[0..old.len], old.entries[0..old.len]);
         const bcount = mapBucketsForCount(out_cap);
-        const out_buckets = try vmgc.vmAllocManagedSlice(i32, bcount);
+        const out_buckets = try vmgc.vmAllocManagedSlice(ctx, i32, bcount);
         mapBuildHashedBuckets(out_entries[0..old.len], out_buckets);
         // Update the object before freeing old slices so paranoia doesn't see stale live refs.
         obj.* = .{ .map_hashed = .{ .entries = out_entries[0..out_cap], .len = old.len, .buckets = out_buckets } };

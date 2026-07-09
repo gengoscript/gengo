@@ -1,6 +1,7 @@
 const std = @import("std");
 const io = @import("../../runtime/io.zig");
 const vms = @import("../vm_state.zig");
+const VMContext = vms.VMContext;
 const vmgc = @import("../vm_gc.zig");
 const heap = @import("../../runtime/heap.zig");
 const Value = @import("../value.zig").Value;
@@ -703,39 +704,39 @@ fn fmtProcess(buf_opt: ?[]u8, fmt: []const u8, args_start: usize, argc: u8) !usi
     return total;
 }
 
-fn doSprintf(fmt_str: []const u8, args_start: usize, argc: u8) !Value {
+fn doSprintf(ctx: VMContext, fmt_str: []const u8, args_start: usize, argc: u8) !Value {
     const total = try fmtProcess(null, fmt_str, args_start, argc);
-    const obj = try vmgc.allocTempRooted(.{ .dyn_string = &[_]u8{} });
+    const obj = try vmgc.allocTempRooted(ctx, .{ .dyn_string = &[_]u8{} });
     defer vms.popTempRoot();
     if (total > 0) {
-        const buf = try vmgc.vmAllocManagedBytes(total);
+        const buf = try vmgc.vmAllocManagedBytes(ctx, total);
         _ = try fmtProcess(buf, fmt_str, args_start, argc);
         obj.* = .{ .dyn_string = buf[0..total] };
     }
     return .{ .object = obj };
 }
 
-fn printArgToErr(arg: Value) !void {
+fn printArgToErr(ctx: VMContext, arg: Value) !void {
     const n = try sprintValue(null, arg);
     if (n == 0) return;
-    const obj = try vmgc.allocTempRooted(.{ .dyn_string = &[_]u8{} });
+    const obj = try vmgc.allocTempRooted(ctx, .{ .dyn_string = &[_]u8{} });
     defer vms.popTempRoot();
-    const buf = try vmgc.vmAllocManagedBytes(n);
+    const buf = try vmgc.vmAllocManagedBytes(ctx, n);
     _ = try sprintValue(buf, arg);
     obj.* = .{ .dyn_string = buf[0..n] };
     io.werr(buf[0..n]);
 }
 
-fn bytesToValue(bytes: []const u8) !Value {
-    const obj = try vmgc.allocTempRooted(.{ .dyn_string = &[_]u8{} });
+fn bytesToValue(ctx: VMContext, bytes: []const u8) !Value {
+    const obj = try vmgc.allocTempRooted(ctx, .{ .dyn_string = &[_]u8{} });
     defer vms.popTempRoot();
-    const buf = try vmgc.vmAllocManagedBytes(bytes.len);
+    const buf = try vmgc.vmAllocManagedBytes(ctx, bytes.len);
     @memcpy(buf[0..bytes.len], bytes);
     obj.* = .{ .dyn_string = buf[0..bytes.len] };
     return .{ .object = obj };
 }
 
-pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
+pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
     switch (@as(NativeFnId, @enumFromInt(nf.id))) {
         .io_print => {
             if (!vms.vmState().policy.allow_io) return error.PermissionDenied;
@@ -749,7 +750,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const start = vms.vmState().stack_top - argc;
             if (argc < 1) return error.ArityMismatch;
             const fmt_str = try vms.asStringValue(vms.vmState().stack[start]);
-            const result = try doSprintf(fmt_str, start, argc);
+            const result = try doSprintf(ctx, fmt_str, start, argc);
             io.write(result.object.*.dyn_string);
             vms.vmPopArgs(argc);
             try vms.vmPush(.null);
@@ -780,14 +781,14 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const start = vms.vmState().stack_top - argc;
             if (argc < 1) return error.ArityMismatch;
             const fmt_str = try vms.asStringValue(vms.vmState().stack[start]);
-            const out = try doSprintf(fmt_str, start, argc);
+            const out = try doSprintf(ctx, fmt_str, start, argc);
             vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
         .io_eprint => {
             if (!vms.vmState().policy.allow_io) return error.PermissionDenied;
             const start = vms.vmState().stack_top - argc;
-            for (vms.vmState().stack[start .. start + argc]) |v| try printArgToErr(v);
+            for (vms.vmState().stack[start .. start + argc]) |v| try printArgToErr(ctx, v);
             vms.vmPopArgs(argc);
             try vms.vmPush(.null);
         },
@@ -796,7 +797,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const start = vms.vmState().stack_top - argc;
             if (argc < 1) return error.ArityMismatch;
             const fmt_str = try vms.asStringValue(vms.vmState().stack[start]);
-            const result = try doSprintf(fmt_str, start, argc);
+            const result = try doSprintf(ctx, fmt_str, start, argc);
             io.werr(result.object.*.dyn_string);
             vms.vmPopArgs(argc);
             try vms.vmPush(.null);
@@ -804,7 +805,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
         .io_eprintln => {
             if (!vms.vmState().policy.allow_io) return error.PermissionDenied;
             const start = vms.vmState().stack_top - argc;
-            for (vms.vmState().stack[start .. start + argc]) |v| try printArgToErr(v);
+            for (vms.vmState().stack[start .. start + argc]) |v| try printArgToErr(ctx, v);
             io.werr("\n");
             vms.vmPopArgs(argc);
             try vms.vmPush(.null);
@@ -813,7 +814,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             if (!vms.vmState().policy.allow_io) return error.PermissionDenied;
             var rbuf: [4096]u8 = undefined;
             const n = io.readBytesRaw(&rbuf, false);
-            const result: Value = if (n > 0) try bytesToValue(rbuf[0..@intCast(n)]) else .null;
+            const result: Value = if (n > 0) try bytesToValue(ctx, rbuf[0..@intCast(n)]) else .null;
             _ = try vms.vmPop();
             try vms.vmPush(result);
         },
@@ -825,7 +826,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                 var cnt: usize = @intCast(n);
                 if (cnt > 0 and rbuf[cnt - 1] == '\n') cnt -= 1;
                 if (cnt > 0 and rbuf[cnt - 1] == '\r') cnt -= 1;
-                break :blk try bytesToValue(rbuf[0..cnt]);
+                break :blk try bytesToValue(ctx, rbuf[0..cnt]);
             } else .null;
             _ = try vms.vmPop();
             try vms.vmPush(result);
@@ -834,10 +835,10 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             if (argc != 1) return error.ArityMismatch;
             const v = vms.vmState().stack[vms.vmState().stack_top - 1];
             const n = try sprintValue(null, v);
-            const obj = try vmgc.allocTempRooted(.{ .dyn_string = &[_]u8{} });
+            const obj = try vmgc.allocTempRooted(ctx, .{ .dyn_string = &[_]u8{} });
             defer vms.popTempRoot();
             if (n > 0) {
-                const buf = try vmgc.vmAllocManagedBytes(n);
+                const buf = try vmgc.vmAllocManagedBytes(ctx, n);
                 _ = try sprintValue(buf, v);
                 obj.* = .{ .dyn_string = buf[0..n] };
             }

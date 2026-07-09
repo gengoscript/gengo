@@ -1,14 +1,15 @@
 const std = @import("std");
 const vms = @import("../vm_state.zig");
+const VMContext = vms.VMContext;
 const vmgc = @import("../vm_gc.zig");
 const Value = @import("../value.zig").Value;
 const NativeFnId = @import("native_ids.zig").NativeFnId;
 const NativeFuncObj = @import("../value.zig").NativeFuncObj;
 
-fn makeBinaryString(bytes: []const u8) !Value {
-    const obj = try vmgc.allocTempRooted(.{ .dyn_string = &[_]u8{} });
+fn makeBinaryString(ctx: VMContext, bytes: []const u8) !Value {
+    const obj = try vmgc.allocTempRooted(ctx, .{ .dyn_string = &[_]u8{} });
     defer vms.popTempRoot();
-    const buf = try vmgc.vmAllocManagedBytes(bytes.len);
+    const buf = try vmgc.vmAllocManagedBytes(ctx, bytes.len);
     @memcpy(buf[0..bytes.len], bytes);
     obj.* = .{ .dyn_string = buf[0..bytes.len] };
     return .{ .object = obj };
@@ -62,25 +63,25 @@ fn readU64le(s: []const u8, i: usize) !i64 {
     return @as(i64, @bitCast(n));
 }
 
-pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
+pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
     if (argc != nf.arity) return error.ArityMismatch;
     switch (@as(NativeFnId, @enumFromInt(nf.id))) {
         .bytes_u8 => {
             const n: u8 = @truncate(@as(u64, @bitCast(try argAsI64(vms.vmTop(0)))) & 0xFF);
             const buf = [_]u8{n};
             vms.vmPopArgs(argc);
-            try vms.vmPush(try makeBinaryString(&buf));
+            try vms.vmPush(try makeBinaryString(ctx, &buf));
         },
         .bytes_pack => {
             const arr_val = vms.vmTop(0);
             if (arr_val != .object) return error.TypeError;
             const items = try vms.asArraySlice(arr_val.object);
-            const buf = try vmgc.vmAllocManagedBytes(items.len);
+            const buf = try vmgc.vmAllocManagedBytes(ctx, items.len);
             for (items, 0..) |item, i| {
                 const n = try argAsI64(item);
                 buf[i] = @truncate(@as(u64, @bitCast(n)) & 0xFF);
             }
-            const obj = try vmgc.allocTempRooted(.{ .dyn_string = &[_]u8{} });
+            const obj = try vmgc.allocTempRooted(ctx, .{ .dyn_string = &[_]u8{} });
             defer vms.popTempRoot();
             obj.* = .{ .dyn_string = buf[0..items.len] };
             vms.vmPopArgs(argc);
@@ -88,9 +89,9 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
         },
         .bytes_unpack => {
             const s = try vms.asStringValue(vms.vmTop(0));
-            const out_items = try vmgc.vmAllocManagedSlice(Value, s.len);
+            const out_items = try vmgc.vmAllocManagedSlice(ctx, Value, s.len);
             for (s, 0..) |b, i| out_items[i] = .{ .int = @as(i64, b) };
-            const obj = try vmgc.vmAllocObject();
+            const obj = try vmgc.vmAllocObject(ctx);
             obj.* = .{ .array_managed = out_items[0..s.len] };
             vms.vmPopArgs(argc);
             try vms.vmPush(.{ .object = obj });
@@ -127,7 +128,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                         const t_idx = @as(usize, @intCast(to));
                         // src_obj is still on the VM stack (vmTop(2)), so GC keeps it
                         // alive through the vmAllocObject call inside makeStringView.
-                        const result = try vmgc.makeStringView(s[f..t_idx], src_obj);
+                        const result = try vmgc.makeStringView(ctx, s[f..t_idx], src_obj);
                         vms.vmPopArgs(argc);
                         try vms.vmPush(result);
                         return;
@@ -139,7 +140,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                         const t_idx = @as(usize, @intCast(to));
                         // Chase through to the owning dyn_string so the view graph
                         // stays shallow: a view of a view still points at the root.
-                        const result = try vmgc.makeStringView(sv.bytes[f..t_idx], sv.source);
+                        const result = try vmgc.makeStringView(ctx, sv.bytes[f..t_idx], sv.source);
                         vms.vmPopArgs(argc);
                         try vms.vmPush(result);
                         return;
@@ -154,7 +155,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const f = @as(usize, @intCast(from));
             const t_idx = @as(usize, @intCast(to));
             vms.vmPopArgs(argc);
-            try vms.vmPush(try makeBinaryString(s[f..t_idx]));
+            try vms.vmPush(try makeBinaryString(ctx, s[f..t_idx]));
         },
         .bytes_repeat => {
             const s = try vms.asStringValue(vms.vmTop(1));
@@ -162,9 +163,9 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             if (n < 0) return error.RangeError;
             const count = @as(usize, @intCast(n));
             const total = s.len * count;
-            const buf = try vmgc.vmAllocManagedBytes(total);
+            const buf = try vmgc.vmAllocManagedBytes(ctx, total);
             for (0..count) |i| @memcpy(buf[i * s.len .. (i + 1) * s.len], s);
-            const obj = try vmgc.allocTempRooted(.{ .dyn_string = &[_]u8{} });
+            const obj = try vmgc.allocTempRooted(ctx, .{ .dyn_string = &[_]u8{} });
             defer vms.popTempRoot();
             obj.* = .{ .dyn_string = buf[0..total] };
             vms.vmPopArgs(argc);
@@ -175,7 +176,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const n: u16 = @truncate(@as(u64, @bitCast(try argAsI64(vms.vmTop(0)))) & 0xFFFF);
             const buf = [_]u8{ @as(u8, @intCast((n >> 8) & 0xFF)), @as(u8, @intCast(n & 0xFF)) };
             vms.vmPopArgs(argc);
-            try vms.vmPush(try makeBinaryString(&buf));
+            try vms.vmPush(try makeBinaryString(ctx, &buf));
         },
         .bytes_u32be => {
             const n: u32 = @truncate(@as(u64, @bitCast(try argAsI64(vms.vmTop(0)))) & 0xFFFFFFFF);
@@ -184,7 +185,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                 @as(u8, @intCast((n >> 8)  & 0xFF)), @as(u8, @intCast(n & 0xFF)),
             };
             vms.vmPopArgs(argc);
-            try vms.vmPush(try makeBinaryString(&buf));
+            try vms.vmPush(try makeBinaryString(ctx, &buf));
         },
         .bytes_u64be => {
             const raw = @as(u64, @bitCast(try argAsI64(vms.vmTop(0))));
@@ -195,13 +196,13 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                 @as(u8, @intCast((raw >> 8)  & 0xFF)), @as(u8, @intCast(raw & 0xFF)),
             };
             vms.vmPopArgs(argc);
-            try vms.vmPush(try makeBinaryString(&buf));
+            try vms.vmPush(try makeBinaryString(ctx, &buf));
         },
         .bytes_u16le => {
             const n: u16 = @truncate(@as(u64, @bitCast(try argAsI64(vms.vmTop(0)))) & 0xFFFF);
             const buf = [_]u8{ @as(u8, @intCast(n & 0xFF)), @as(u8, @intCast((n >> 8) & 0xFF)) };
             vms.vmPopArgs(argc);
-            try vms.vmPush(try makeBinaryString(&buf));
+            try vms.vmPush(try makeBinaryString(ctx, &buf));
         },
         .bytes_u32le => {
             const n: u32 = @truncate(@as(u64, @bitCast(try argAsI64(vms.vmTop(0)))) & 0xFFFFFFFF);
@@ -210,7 +211,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                 @as(u8, @intCast((n >> 16) & 0xFF)),   @as(u8, @intCast((n >> 24) & 0xFF)),
             };
             vms.vmPopArgs(argc);
-            try vms.vmPush(try makeBinaryString(&buf));
+            try vms.vmPush(try makeBinaryString(ctx, &buf));
         },
         .bytes_u64le => {
             const raw = @as(u64, @bitCast(try argAsI64(vms.vmTop(0))));
@@ -221,7 +222,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                 @as(u8, @intCast((raw >> 48) & 0xFF)),   @as(u8, @intCast((raw >> 56) & 0xFF)),
             };
             vms.vmPopArgs(argc);
-            try vms.vmPush(try makeBinaryString(&buf));
+            try vms.vmPush(try makeBinaryString(ctx, &buf));
         },
         // ── Integer decoding ─────────────────────────────────────────────────
         .bytes_u16be_at => {
@@ -315,7 +316,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const new_s = try vms.asStringValue(vms.vmTop(0));
             if (old_s.len == 0) {
                 vms.vmPopArgs(argc);
-                try vms.vmPush(try makeBinaryString(s));
+                try vms.vmPush(try makeBinaryString(ctx, s));
                 return;
             }
             var cnt: usize = 0;
@@ -326,11 +327,11 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             }
             if (cnt == 0) {
                 vms.vmPopArgs(argc);
-                try vms.vmPush(try makeBinaryString(s));
+                try vms.vmPush(try makeBinaryString(ctx, s));
                 return;
             }
             const new_len = s.len - cnt * old_s.len + cnt * new_s.len;
-            const buf = try vmgc.vmAllocManagedBytes(new_len);
+            const buf = try vmgc.vmAllocManagedBytes(ctx, new_len);
             var src: usize = 0;
             var dst: usize = 0;
             while (std.mem.indexOf(u8, s[src..], old_s)) |found| {
@@ -341,7 +342,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                 src += found + old_s.len;
             }
             @memcpy(buf[dst .. dst + (s.len - src)], s[src..]);
-            const obj = try vmgc.allocTempRooted(.{ .dyn_string = &[_]u8{} });
+            const obj = try vmgc.allocTempRooted(ctx, .{ .dyn_string = &[_]u8{} });
             defer vms.popTempRoot();
             obj.* = .{ .dyn_string = buf[0..new_len] };
             vms.vmPopArgs(argc);
@@ -360,7 +361,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                 @truncate(bits >> 8),  @truncate(bits),
             };
             vms.vmPopArgs(argc);
-            try vms.vmPush(try makeBinaryString(&buf));
+            try vms.vmPush(try makeBinaryString(ctx, &buf));
         },
         .bytes_f32le => {
             const fval: f32 = @floatCast(switch (vms.vmTop(0)) {
@@ -374,7 +375,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                 @truncate(bits >> 16), @truncate(bits >> 24),
             };
             vms.vmPopArgs(argc);
-            try vms.vmPush(try makeBinaryString(&buf));
+            try vms.vmPush(try makeBinaryString(ctx, &buf));
         },
         .bytes_f64be => {
             const fval: f64 = switch (vms.vmTop(0)) {
@@ -390,7 +391,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                 @truncate(bits >> 8),  @truncate(bits),
             };
             vms.vmPopArgs(argc);
-            try vms.vmPush(try makeBinaryString(&buf));
+            try vms.vmPush(try makeBinaryString(ctx, &buf));
         },
         .bytes_f64le => {
             const fval: f64 = switch (vms.vmTop(0)) {
@@ -406,7 +407,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                 @truncate(bits >> 48), @truncate(bits >> 56),
             };
             vms.vmPopArgs(argc);
-            try vms.vmPush(try makeBinaryString(&buf));
+            try vms.vmPush(try makeBinaryString(ctx, &buf));
         },
         // ── IEEE 754 float decoding ──────────────────────────────────────────
         .bytes_f32be_at => {

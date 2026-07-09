@@ -1,5 +1,6 @@
 const std = @import("std");
 const vms = @import("vm_state.zig");
+const VMContext = vms.VMContext;
 const vmgc = @import("vm_gc.zig");
 const Value = @import("value.zig").Value;
 const Object = @import("value.zig").Object;
@@ -109,31 +110,31 @@ pub fn stringSliceRange(s: []const u8, has_start: bool, start_v: Value, has_end:
 /// Return a Value for a single UTF-8 character slice.  ASCII bytes (0x00–0x7F)
 /// resolve to the comptime ascii_ss pool (zero allocation).  Multi-byte runes
 /// borrow `bytes` as a string_view; pass source=null when bytes are immortal.
-pub fn makeCharValue(bytes: []const u8, source: ?*Object) !Value {
+pub fn makeCharValue(ctx: VMContext, bytes: []const u8, source: ?*Object) !Value {
     if (bytes.len == 1 and bytes[0] < 128) return .{ .string = &ascii_ss[bytes[0]] };
-    return vmgc.makeStringView(bytes, source);
+    return vmgc.makeStringView(ctx, bytes, source);
 }
 
-pub fn stringIndex(container: Value, idx_v: Value) !Value {
+pub fn stringIndex(ctx: VMContext, container: Value, idx_v: Value) !Value {
     const ridx = try vms.vmIndexFromVal(idx_v);
     switch (container) {
         .string => |s| {
             const start = try utf8ByteOffsetForRuneIndexCached(s.bytes, ridx);
             const w = try utf8NextRuneByteLen(s.bytes, start);
-            return makeCharValue(s.bytes[start .. start + w], null);
+            return makeCharValue(ctx, s.bytes[start .. start + w], null);
         },
         .object => |obj| switch (obj.*) {
             .dyn_string => {
                 const bytes = obj.dyn_string;
                 const start = try utf8ByteOffsetForRuneIndexCached(bytes, ridx);
                 const w = try utf8NextRuneByteLen(bytes, start);
-                return makeCharValue(bytes[start .. start + w], obj);
+                return makeCharValue(ctx, bytes[start .. start + w], obj);
             },
             .string_view => {
                 const sv = obj.string_view;
                 const start = try utf8ByteOffsetForRuneIndexCached(sv.bytes, ridx);
                 const w = try utf8NextRuneByteLen(sv.bytes, start);
-                return makeCharValue(sv.bytes[start .. start + w], sv.source);
+                return makeCharValue(ctx, sv.bytes[start .. start + w], sv.source);
             },
             else => return error.TypeError,
         },
@@ -141,25 +142,25 @@ pub fn stringIndex(container: Value, idx_v: Value) !Value {
     }
 }
 
-pub fn stringSlice(container: Value, has_start: bool, start_v: Value, has_end: bool, end_v: Value) !Value {
+pub fn stringSlice(ctx: VMContext, container: Value, has_start: bool, start_v: Value, has_end: bool, end_v: Value) !Value {
     switch (container) {
         .string => |s| {
             const r = try stringSliceRange(s.bytes, has_start, start_v, has_end, end_v);
             const sub = s.bytes[r.start_b..r.end_b];
             if (sub.len == 1 and sub[0] < 128) return .{ .string = &ascii_ss[sub[0]] };
             // Bytes are immortal (static string); borrow a view with no GC parent.
-            return vmgc.makeStringView(sub, null);
+            return vmgc.makeStringView(ctx, sub, null);
         },
         .object => |obj| switch (obj.*) {
             .dyn_string => {
                 const bytes = obj.dyn_string;
                 const r = try stringSliceRange(bytes, has_start, start_v, has_end, end_v);
-                return vmgc.makeStringView(bytes[r.start_b..r.end_b], obj);
+                return vmgc.makeStringView(ctx, bytes[r.start_b..r.end_b], obj);
             },
             .string_view => {
                 const sv = obj.string_view;
                 const r = try stringSliceRange(sv.bytes, has_start, start_v, has_end, end_v);
-                return vmgc.makeStringView(sv.bytes[r.start_b..r.end_b], sv.source);
+                return vmgc.makeStringView(ctx, sv.bytes[r.start_b..r.end_b], sv.source);
             },
             else => return error.TypeError,
         },

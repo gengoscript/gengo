@@ -91,6 +91,7 @@ pub fn wireFromValue(v: Value) !host_abi.ValueWire {
 }
 
 pub fn valueFromWire(w: host_abi.ValueWire) !Value {
+    const ctx = vms.VMContext.fromActive();
     const tag: host_abi.WireTag = @enumFromInt(w.tag);
     return switch (tag) {
         .null => .null,
@@ -107,21 +108,21 @@ pub fn valueFromWire(w: host_abi.ValueWire) !Value {
         .@"error" => {
             if (w.len == 0) return Value{ .error_value = try chunk.internStr("") };
             const data = @as([*]u8, @ptrFromInt(@as(usize, @intCast(w.payload))))[0..@as(usize, @intCast(w.len))];
-            const copy = try vmgc.vmAllocManagedBytes(w.len);
+            const copy = try vmgc.vmAllocManagedBytes(ctx, w.len);
             @memcpy(copy[0..w.len], data);
             return .{ .error_value = try chunk.internStr(copy[0..w.len]) };
         },
         .string => {
             if (w.len == 0) return Value{ .string = try chunk.internStr("") };
             const data = @as([*]u8, @ptrFromInt(@as(usize, @intCast(w.payload))))[0..@as(usize, @intCast(w.len))];
-            return vmgc.makeDynString(data);
+            return vmgc.makeDynString(ctx, data);
         },
         .array => {
             const count = w.len;
             const elem_wires = @as([*]const host_abi.ValueWire, @ptrFromInt(@as(usize, @intCast(w.payload))))[0..count];
-            const arr_obj = try vmgc.allocTempRooted(.{ .array_managed = &[_]Value{} });
+            const arr_obj = try vmgc.allocTempRooted(ctx, .{ .array_managed = &[_]Value{} });
             defer vms.popTempRoot();
-            const items = try vmgc.vmAllocManagedSlice(Value, count);
+            const items = try vmgc.vmAllocManagedSlice(ctx, Value, count);
             arr_obj.* = .{ .array_managed = items[0..0] }; // publish immediately
             for (elem_wires, 0..) |ew, i| {
                 items[i] = try valueFromWire(ew);
@@ -132,9 +133,9 @@ pub fn valueFromWire(w: host_abi.ValueWire) !Value {
         .map => {
             const count = w.len;
             const pair_wires = @as([*]const host_abi.ValueWire, @ptrFromInt(@as(usize, @intCast(w.payload))))[0 .. count * 2];
-            const map_obj = try vmgc.allocTempRooted(.{ .map_managed = &[_]MapEntry{} });
+            const map_obj = try vmgc.allocTempRooted(ctx, .{ .map_managed = &[_]MapEntry{} });
             defer vms.popTempRoot();
-            const entries = try vmgc.vmAllocManagedSlice(MapEntry, count);
+            const entries = try vmgc.vmAllocManagedSlice(ctx, MapEntry, count);
             map_obj.* = .{ .map_managed = entries[0..0] }; // publish immediately
             for (0..count) |i| {
                 const k = try valueFromWire(pair_wires[i * 2]);
@@ -160,7 +161,7 @@ pub fn wireNumberToU64(w: host_abi.ValueWire) !u64 {
     return @intFromFloat(tr);
 }
 
-pub fn dispatchHostCallVariadic(comptime cap: u64, comptime call: host_abi.HostCall, argc: u8, start: usize, comptime nativeFn: anytype) !void {
+pub fn dispatchHostCallVariadic(ctx: vms.VMContext, comptime cap: u64, comptime call: host_abi.HostCall, argc: u8, start: usize, comptime nativeFn: anytype) !void {
     if (vms.vmState().policy.native_backend == .host) {
         try ensureHostReady();
         if ((vms.vmState().host_caps & cap) != 0) {
@@ -175,12 +176,12 @@ pub fn dispatchHostCallVariadic(comptime cap: u64, comptime call: host_abi.HostC
             return;
         }
     }
-    const result = try @call(.auto, nativeFn, .{start, argc});
+    const result = try @call(.auto, nativeFn, .{ctx, start, argc});
     vms.vmPopArgs(argc);
     try vms.vmPush(result);
 }
 
-pub fn dispatchHostCall1(comptime cap: u64, comptime call: host_abi.HostCall, argc: u8, comptime nativeFn: anytype) !void {
+pub fn dispatchHostCall1(ctx: vms.VMContext, comptime cap: u64, comptime call: host_abi.HostCall, argc: u8, comptime nativeFn: anytype) !void {
     if (vms.vmState().policy.native_backend == .host) {
         try ensureHostReady();
         if ((vms.vmState().host_caps & cap) != 0) {
@@ -194,7 +195,7 @@ pub fn dispatchHostCall1(comptime cap: u64, comptime call: host_abi.HostCall, ar
             return;
         }
     }
-    const out = try @call(.auto, nativeFn, .{vms.vmTop(0)});
+    const out = try @call(.auto, nativeFn, .{ctx, vms.vmTop(0)});
     vms.vmPopArgs(argc);
     try vms.vmPush(out);
 }

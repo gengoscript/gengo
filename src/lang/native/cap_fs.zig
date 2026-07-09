@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const vms = @import("../vm_state.zig");
+const VMContext = vms.VMContext;
 const vmgc = @import("../vm_gc.zig");
 const Value = @import("../value.zig").Value;
 const NativeFuncObj = @import("../value.zig").NativeFuncObj;
@@ -14,7 +15,7 @@ fn ioContext() std.Io {
     return std.Io.Threaded.global_single_threaded.io();
 }
 
-pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
+pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
     switch (@as(NativeFnId, @enumFromInt(nf.id))) {
         .cap_fs_read => {
             if (argc != 1) return error.ArityMismatch;
@@ -41,7 +42,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                 }
                 const bytes = chunks.toOwnedSlice(alloc) catch return error.CapabilityError;
                 defer alloc.free(bytes);
-                const out = try vmgc.makeDynString(bytes);
+                const out = try vmgc.makeDynString(ctx, bytes);
                 vms.vmPopArgs(argc);
                 try vms.vmPush(out);
                 return;
@@ -59,7 +60,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                 const io = ioContext();
                 const contents = std.Io.Dir.cwd().readFileAlloc(io, rpath, alloc, .unlimited) catch return error.CapabilityError;
                 defer alloc.free(contents);
-                const out = try vmgc.makeDynString(contents);
+                const out = try vmgc.makeDynString(ctx, contents);
                 vms.vmPopArgs(argc);
                 try vms.vmPush(out);
                 return;
@@ -79,7 +80,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             const contents = buf.toOwnedSlice(alloc) catch return error.CapabilityError;
             defer alloc.free(contents);
 
-            const out = try vmgc.makeDynString(contents);
+            const out = try vmgc.makeDynString(ctx, contents);
             vms.vmPopArgs(argc);
             try vms.vmPush(out);
         },
@@ -194,8 +195,8 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                     name_count += 1;
                     pos = end + 1;
                 }
-                const result = try vmgc.vmAllocManagedSlice(Value, name_count);
-                const arr_obj = try vmgc.vmAllocObject();
+                const result = try vmgc.vmAllocManagedSlice(ctx, Value, name_count);
+                const arr_obj = try vmgc.vmAllocObject(ctx);
                 arr_obj.* = .{ .array_managed = result[0..0] };
                 try vms.pushTempRoot(.{ .object = arr_obj });
                 defer vms.popTempRoot();
@@ -204,7 +205,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                 while (pos < list_data.len and idx < name_count) {
                     const end = std.mem.indexOfScalarPos(u8, list_data, pos, 0) orelse break;
                     if (end == pos) break;
-                    result[idx] = try vmgc.makeDynString(list_data[pos..end]);
+                    result[idx] = try vmgc.makeDynString(ctx, list_data[pos..end]);
                     arr_obj.* = .{ .array_managed = result[0 .. idx + 1] };
                     idx += 1;
                     pos = end + 1;
@@ -240,13 +241,13 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                     return error.CapabilityError;
                 };
             }
-            const result = try vmgc.vmAllocManagedSlice(Value, names.items.len);
-            const arr_obj = try vmgc.vmAllocObject();
+            const result = try vmgc.vmAllocManagedSlice(ctx, Value, names.items.len);
+            const arr_obj = try vmgc.vmAllocObject(ctx);
             arr_obj.* = .{ .array_managed = result[0..0] };
             try vms.pushTempRoot(.{ .object = arr_obj });
             defer vms.popTempRoot();
             for (names.items, 0..) |n, i| {
-                result[i] = try vmgc.makeDynString(n);
+                result[i] = try vmgc.makeDynString(ctx, n);
                 arr_obj.* = .{ .array_managed = result[0 .. i + 1] };
             }
             arr_obj.* = .{ .array_managed = result };
@@ -326,7 +327,8 @@ test "cap_fs path extraction accepts string and dyn_string" {
     try std.testing.expectEqualStrings("test.txt", s);
 
     // Dynamic string
-    const dyn = try vmgc.makeDynString("test.txt");
+    const ctx = vms.VMContext.fromActive();
+    const dyn = try vmgc.makeDynString(ctx, "test.txt");
     const ds = vms.asStringValue(dyn) catch return error.TestFailed;
     try std.testing.expectEqualStrings("test.txt", ds);
 

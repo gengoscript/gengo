@@ -18,41 +18,43 @@ const chunk = @import("../chunk.zig");
 
 const ResponseTypeQualifiedName = "@cap_type:http.Response";
 
-fn buildResponseStruct(status: i32, body: []const u8, hdr_map: std.StringHashMap([]const u8), ok: bool) !Value {
+const VMContext = vms.VMContext;
+
+fn buildResponseStruct(ctx: VMContext, status: i32, body: []const u8, hdr_map: std.StringHashMap([]const u8), ok: bool) !Value {
     const resp_type_val = globals.get(ResponseTypeQualifiedName) orelse return error.CapabilityError;
     const resp_type_obj = switch (resp_type_val) {
         .object => |o| o,
         else => return error.CapabilityError,
     };
 
-    const inst_fields = try vmgc.vmAllocManagedSlice(MapEntry, 4);
-    const inst_obj = try vmgc.vmAllocObject();
-    try vms.pushTempRoot(.{ .object = inst_obj });
-    defer vms.popTempRoot();
+    const inst_fields = try vmgc.vmAllocManagedSlice(ctx, MapEntry, 4);
+    const inst_obj = try vmgc.vmAllocObject(ctx);
+    try ctx.vs.pushTempRoot(.{ .object = inst_obj });
+    defer ctx.vs.popTempRoot();
     inst_obj.* = .{ .struct_instance = .{ .typ = resp_type_obj, .fields = inst_fields } };
 
     // body — root it immediately so it survives header allocations below
-    const body_val = try vmgc.makeDynString(body);
-    try vms.pushTempRoot(body_val);
-    defer vms.popTempRoot();
+    const body_val = try vmgc.makeDynString(ctx, body);
+    try ctx.vs.pushTempRoot(body_val);
+    defer ctx.vs.popTempRoot();
 
     // headers map — pre-init entries to .null so GC can safely trace mid-loop
     const hdr_count = hdr_map.count();
-    const hdr_entries = try vmgc.vmAllocManagedSlice(MapEntry, hdr_count);
+    const hdr_entries = try vmgc.vmAllocManagedSlice(ctx, MapEntry, hdr_count);
     for (hdr_entries) |*e| e.* = .{ .key = .null, .value = .null };
-    const hdr_obj = try vmgc.allocTempRooted(.{ .map = &[_]MapEntry{} });
-    defer vms.popTempRoot();
+    const hdr_obj = try vmgc.allocTempRooted(ctx, .{ .map = &[_]MapEntry{} });
+    defer ctx.vs.popTempRoot();
     // Assign map_managed before the loop so GC traces completed entries each iteration
     hdr_obj.* = .{ .map_managed = hdr_entries };
     {
         var it = hdr_map.iterator();
         var i: usize = 0;
         while (it.next()) |entry| : (i += 1) {
-            const key_val = try vmgc.makeDynString(entry.key_ptr.*);
+            const key_val = try vmgc.makeDynString(ctx, entry.key_ptr.*);
             // Root key_val across the val allocation so GC can't collect it
-            try vms.pushTempRoot(key_val);
-            defer vms.popTempRoot();
-            const val_val = try vmgc.makeDynString(entry.value_ptr.*);
+            try ctx.vs.pushTempRoot(key_val);
+            defer ctx.vs.popTempRoot();
+            const val_val = try vmgc.makeDynString(ctx, entry.value_ptr.*);
             hdr_entries[i] = .{ .key = key_val, .value = val_val };
         }
     }
@@ -65,72 +67,72 @@ fn buildResponseStruct(status: i32, body: []const u8, hdr_map: std.StringHashMap
     return .{ .object = inst_obj };
 }
 
-fn pushOkPair(resp: Value) !void {
+fn pushOkPair(ctx: VMContext, resp: Value) !void {
     // resp.object is unrooted on entry (caller popped its temp root); protect it before GC fires
-    try vms.pushTempRoot(resp);
-    defer vms.popTempRoot();
-    const arr = try vmgc.allocTempRootedManagedValueArray(2);
-    defer vms.popTempRoot();
+    try ctx.vs.pushTempRoot(resp);
+    defer ctx.vs.popTempRoot();
+    const arr = try vmgc.allocTempRootedManagedValueArray(ctx, 2);
+    defer ctx.vs.popTempRoot();
     arr.values[0] = resp;
     arr.values[1] = .null;
     arr.publish(2);
-    try vms.vmPush(.{ .object = arr.obj });
+    try ctx.vs.vmPush(.{ .object = arr.obj });
 }
 
-fn pushErrPair(comptime fmt: []const u8, args: anytype) !void {
+fn pushErrPair(ctx: VMContext, comptime fmt: []const u8, args: anytype) !void {
     var buf: [512]u8 = undefined;
     const msg = std.fmt.bufPrint(&buf, fmt, args) catch buf[0..];
-    const copy = try vmgc.vmAllocManagedBytes(msg.len);
+    const copy = try vmgc.vmAllocManagedBytes(ctx, msg.len);
     @memcpy(copy[0..msg.len], msg);
 
-    const arr = try vmgc.allocTempRootedManagedValueArray(2);
-    defer vms.popTempRoot();
+    const arr = try vmgc.allocTempRootedManagedValueArray(ctx, 2);
+    defer ctx.vs.popTempRoot();
     arr.values[0] = .null;
     arr.values[1] = .{ .error_value = try chunk.internStr(copy[0..msg.len]) };
     arr.publish(2);
-    try vms.vmPush(.{ .object = arr.obj });
+    try ctx.vs.vmPush(.{ .object = arr.obj });
 }
 
-pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
+pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
     switch (@as(NativeFnId, @enumFromInt(nf.id))) {
         .cap_http_get => {
             if (argc != 1) return error.ArityMismatch;
-            const arg0 = try vms.vmPop();
+            const arg0 = try ctx.vs.vmPop();
             const url = try vms.asStringValue(arg0);
-            _ = try vms.vmPop();
+            _ = try ctx.vs.vmPop();
 
             var result = http_state.httpFetch("GET", url, null, null, 0) catch |err| {
                 if (err == error.CapabilityNotAvailable) return error.CapabilityError;
-                try pushErrPair("http.get: {s}: {s}", .{ url, @errorName(err) });
+                try pushErrPair(ctx, "http.get: {s}: {s}", .{ url, @errorName(err) });
                 return;
             };
             defer result.deinit();
 
-            const resp_val = try buildResponseStruct(result.status, result.body, result.headers, result.ok);
-            try pushOkPair(resp_val);
+            const resp_val = try buildResponseStruct(ctx, result.status, result.body, result.headers, result.ok);
+            try pushOkPair(ctx, resp_val);
         },
         .cap_http_post => {
             if (argc != 2) return error.ArityMismatch;
-            const arg1 = try vms.vmPop();
-            const arg0 = try vms.vmPop();
+            const arg1 = try ctx.vs.vmPop();
+            const arg0 = try ctx.vs.vmPop();
             const url = try vms.asStringValue(arg0);
             const body = try vms.asStringValue(arg1);
-            _ = try vms.vmPop();
+            _ = try ctx.vs.vmPop();
 
             var result = http_state.httpFetch("POST", url, body, null, 0) catch |err| {
                 if (err == error.CapabilityNotAvailable) return error.CapabilityError;
-                try pushErrPair("http.post: {s}: {s}", .{ url, @errorName(err) });
+                try pushErrPair(ctx, "http.post: {s}: {s}", .{ url, @errorName(err) });
                 return;
             };
             defer result.deinit();
 
-            const resp_val = try buildResponseStruct(result.status, result.body, result.headers, result.ok);
-            try pushOkPair(resp_val);
+            const resp_val = try buildResponseStruct(ctx, result.status, result.body, result.headers, result.ok);
+            try pushOkPair(ctx, resp_val);
         },
         .cap_http_fetch => {
             if (argc != 2) return error.ArityMismatch;
-            const arg1 = try vms.vmPop();
-            const arg0 = try vms.vmPop();
+            const arg1 = try ctx.vs.vmPop();
+            const arg0 = try ctx.vs.vmPop();
             const url = try vms.asStringValue(arg0);
             const opts = switch (arg1) {
                 .object => |o| o,
@@ -198,19 +200,19 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
 
             var result = http_state.httpFetch(method, url, body, req_headers, timeout_ms) catch |err| {
                 if (err == error.CapabilityNotAvailable) return error.CapabilityError;
-                try pushErrPair("http.fetch: {s} {s}: {s}", .{ method, url, @errorName(err) });
+                try pushErrPair(ctx, "http.fetch: {s} {s}: {s}", .{ method, url, @errorName(err) });
                 return;
             };
             defer result.deinit();
 
-            const resp_val = try buildResponseStruct(result.status, result.body, result.headers, result.ok);
-            try pushOkPair(resp_val);
+            const resp_val = try buildResponseStruct(ctx, result.status, result.body, result.headers, result.ok);
+            try pushOkPair(ctx, resp_val);
         },
         else => unreachable,
     }
 }
 
-pub fn registerResponseType(gs: *globals.State) !void {
+pub fn registerResponseType(ctx: VMContext, gs: *globals.State) !void {
     if (gs.has(ResponseTypeQualifiedName)) return;
 
     const any_alts = heap.bump(FieldTypeAlt, 1) orelse return error.OutOfMemory;
@@ -223,9 +225,9 @@ pub fn registerResponseType(gs: *globals.State) !void {
     field_specs[2] = .{ .name = "headers", .typ = any_spec, .is_const = true };
     field_specs[3] = .{ .name = "ok", .typ = any_spec, .is_const = true };
 
-    const typ_obj = try vmgc.vmAllocObject();
-    try vms.pushTempRoot(.{ .object = typ_obj });
-    defer vms.popTempRoot();
+    const typ_obj = try vmgc.vmAllocObject(ctx);
+    try ctx.vs.pushTempRoot(.{ .object = typ_obj });
+    defer ctx.vs.popTempRoot();
     typ_obj.* = .{ .struct_type = StructTypeObj{
         .name = "Response",
         .qualified_name = ResponseTypeQualifiedName,

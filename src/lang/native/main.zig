@@ -75,6 +75,7 @@ fn makeNative(id: NativeFnId, arity: u8) !Value {
 }
 
 fn makeNamespace(display_name: []const u8, qualified_name: []const u8, entries: []const NamespaceEntry) !*Object {
+    const ctx = vms.VMContext.fromActive();
     const any_alts = heap.bump(FieldTypeAlt, 1) orelse return error.OutOfMemory;
     any_alts[0] = .{ .typ = .any };
     const any_spec: FieldTypeSpec = .{ .alts = any_alts[0..1] };
@@ -82,7 +83,7 @@ fn makeNamespace(display_name: []const u8, qualified_name: []const u8, entries: 
     const field_specs = heap.bump(StructFieldSpec, entries.len) orelse return error.OutOfMemory;
     for (field_specs[0..entries.len], entries) |*fs, e| fs.* = .{ .name = e.name, .typ = any_spec, .is_const = true };
 
-    const typ_obj = try vmgc.vmAllocObject();
+    const typ_obj = try vmgc.vmAllocObject(ctx);
     try vms.pushTempRoot(.{ .object = typ_obj });
     defer vms.popTempRoot();
     typ_obj.* = .{ .struct_type = StructTypeObj{
@@ -91,8 +92,8 @@ fn makeNamespace(display_name: []const u8, qualified_name: []const u8, entries: 
         .fields = field_specs[0..entries.len],
     } };
 
-    const inst_fields = try vmgc.vmAllocManagedSlice(MapEntry, entries.len);
-    const inst_obj = try vmgc.vmAllocObject();
+    const inst_fields = try vmgc.vmAllocManagedSlice(ctx, MapEntry, entries.len);
+    const inst_obj = try vmgc.vmAllocObject(ctx);
     try vms.pushTempRoot(.{ .object = inst_obj });
     defer vms.popTempRoot();
     inst_obj.* = .{ .struct_instance = .{ .typ = typ_obj, .fields = inst_fields } };
@@ -546,6 +547,7 @@ pub fn installStdGlobal(gs: *globals.State) !void {
 }
 
 pub fn installHostModules(gs: *globals.State, host_modules: []const module_compile.HostModuleDesc) !void {
+    const ctx = vms.VMContext.fromActive();
     for (host_modules) |hm| {
         const global_name_buf = (heap.bump(u8, 5 + hm.name.len) orelse return error.OutOfMemory)[0 .. 5 + hm.name.len];
         @memcpy(global_name_buf[0..5], "host:");
@@ -568,7 +570,7 @@ pub fn installHostModules(gs: *globals.State, host_modules: []const module_compi
         @memcpy(qual_name_buf[13..][0..hm.name.len], hm.name);
         const qualified_name = qual_name_buf[0 .. 13 + hm.name.len];
 
-        const typ_obj = try vmgc.vmAllocObject();
+        const typ_obj = try vmgc.vmAllocObject(ctx);
         try vms.pushTempRoot(.{ .object = typ_obj });
         defer vms.popTempRoot();
         typ_obj.* = .{ .struct_type = StructTypeObj{
@@ -577,14 +579,14 @@ pub fn installHostModules(gs: *globals.State, host_modules: []const module_compi
             .fields = field_specs[0..entries.len],
         } };
 
-        const inst_fields = try vmgc.vmAllocManagedSlice(MapEntry, entries.len);
-        const inst_obj = try vmgc.vmAllocObject();
+        const inst_fields = try vmgc.vmAllocManagedSlice(ctx, MapEntry, entries.len);
+        const inst_obj = try vmgc.vmAllocObject(ctx);
         try vms.pushTempRoot(.{ .object = inst_obj });
         defer vms.popTempRoot();
         inst_obj.* = .{ .struct_instance = .{ .typ = typ_obj, .fields = inst_fields } };
 
         for (inst_fields, 0..) |*fld, i| {
-            const func_obj = try vmgc.vmAllocObject();
+            const func_obj = try vmgc.vmAllocObject(ctx);
             func_obj.* = .{ .host_module_function = .{
                 .call_id = entries[i].call_id,
                 .arity = entries[i].arity,
@@ -600,6 +602,7 @@ pub fn installHostModules(gs: *globals.State, host_modules: []const module_compi
 }
 
 pub fn installCapabilityModules(gs: *globals.State, cap_modules: []const module_compile.CapModuleDesc) !void {
+    const ctx = vms.VMContext.fromActive();
     for (cap_modules) |cm| {
         const global_name_buf = (heap.bump(u8, 4 + cm.name.len) orelse return error.OutOfMemory)[0 .. 4 + cm.name.len];
         @memcpy(global_name_buf[0..4], "cap:");
@@ -654,7 +657,7 @@ pub fn installCapabilityModules(gs: *globals.State, cap_modules: []const module_
         @memcpy(qual_name_buf[10..][0..cm.name.len], cm.name);
         const qualified_name = qual_name_buf[0 .. 10 + cm.name.len];
 
-        const typ_obj = try vmgc.vmAllocObject();
+        const typ_obj = try vmgc.vmAllocObject(ctx);
         try vms.pushTempRoot(.{ .object = typ_obj });
         defer vms.popTempRoot();
         typ_obj.* = .{ .struct_type = StructTypeObj{
@@ -663,8 +666,8 @@ pub fn installCapabilityModules(gs: *globals.State, cap_modules: []const module_
             .fields = field_specs[0..top_count],
         } };
 
-        const inst_fields = try vmgc.vmAllocManagedSlice(MapEntry, top_count);
-        const inst_obj = try vmgc.vmAllocObject();
+        const inst_fields = try vmgc.vmAllocManagedSlice(ctx, MapEntry, top_count);
+        const inst_obj = try vmgc.vmAllocObject(ctx);
         try vms.pushTempRoot(.{ .object = inst_obj });
         defer vms.popTempRoot();
         inst_obj.* = .{ .struct_instance = .{ .typ = typ_obj, .fields = inst_fields } };
@@ -673,7 +676,7 @@ pub fn installCapabilityModules(gs: *globals.State, cap_modules: []const module_
         fi = 0;
         for (entries) |entry| {
             if (std.mem.indexOfScalar(u8, entry.name, '.') != null) continue;
-            const func_obj = try vmgc.vmAllocObject();
+            const func_obj = try vmgc.vmAllocObject(ctx);
             func_obj.* = .{ .native_function = .{ .id = entry.native_id, .arity = entry.arity } };
             inst_fields[fi] = .{ .key = .{ .string = try chunk.internStr(entry.name) }, .value = .{ .object = func_obj } };
             fi += 1;
@@ -707,7 +710,7 @@ pub fn installCapabilityModules(gs: *globals.State, cap_modules: []const module_
             sub_qual_buf[10 + cm.name.len] = '.';
             @memcpy(sub_qual_buf[10 + cm.name.len + 1 ..][0..ns.len], ns);
 
-            const sub_typ_obj = try vmgc.vmAllocObject();
+            const sub_typ_obj = try vmgc.vmAllocObject(ctx);
             try vms.pushTempRoot(.{ .object = sub_typ_obj });
             defer vms.popTempRoot();
             sub_typ_obj.* = .{ .struct_type = StructTypeObj{
@@ -716,8 +719,8 @@ pub fn installCapabilityModules(gs: *globals.State, cap_modules: []const module_
                 .fields = sub_field_specs[0..sub_count],
             } };
 
-            const sub_inst_fields = try vmgc.vmAllocManagedSlice(MapEntry, sub_count);
-            const sub_inst_obj = try vmgc.vmAllocObject();
+            const sub_inst_fields = try vmgc.vmAllocManagedSlice(ctx, MapEntry, sub_count);
+            const sub_inst_obj = try vmgc.vmAllocObject(ctx);
             try vms.pushTempRoot(.{ .object = sub_inst_obj });
             defer vms.popTempRoot();
             sub_inst_obj.* = .{ .struct_instance = .{ .typ = sub_typ_obj, .fields = sub_inst_fields } };
@@ -728,7 +731,7 @@ pub fn installCapabilityModules(gs: *globals.State, cap_modules: []const module_
                     std.mem.startsWith(u8, entry.name, ns) and
                     entry.name[ns.len] == '.')
                 {
-                    const func_obj = try vmgc.vmAllocObject();
+                    const func_obj = try vmgc.vmAllocObject(ctx);
                     func_obj.* = .{ .native_function = .{ .id = entry.native_id, .arity = entry.arity } };
                     sub_inst_fields[si] = .{
                         .key = .{ .string = try chunk.internStr(entry.name[ns.len + 1 ..]) },
@@ -746,7 +749,7 @@ pub fn installCapabilityModules(gs: *globals.State, cap_modules: []const module_
 
         if (comptime build_options.cap_http) {
             if (std.mem.eql(u8, cm.name, "http") and !gs.has("@cap_type:http.Response")) {
-                try cap_http_mod.registerResponseType(gs);
+                try cap_http_mod.registerResponseType(ctx, gs);
             }
         }
 
@@ -761,7 +764,7 @@ pub fn installCapabilityModules(gs: *globals.State, cap_modules: []const module_
                 const conn_field_specs = (heap.bump(StructFieldSpec, 1) orelse return error.OutOfMemory)[0..1];
                 conn_field_specs[0] = .{ .name = "_handle", .typ = conn_any_spec, .is_const = true };
 
-                const conn_typ_obj = try vmgc.vmAllocObject();
+                const conn_typ_obj = try vmgc.vmAllocObject(ctx);
                 try vms.pushTempRoot(.{ .object = conn_typ_obj });
                 defer vms.popTempRoot();
                 conn_typ_obj.* = .{ .struct_type = StructTypeObj{
@@ -797,44 +800,44 @@ pub fn installCapabilityModules(gs: *globals.State, cap_modules: []const module_
     }
 }
 
-pub fn callHostModule(hmf: HostModuleFuncObj, argc: u8) !void {
+pub fn callHostModule(ctx: vms.VMContext, hmf: HostModuleFuncObj, argc: u8) !void {
     if (hmf.arity != 255 and hmf.arity != argc) return error.ArityMismatch;
     if (argc > MaxNativeArgs) return error.ArityMismatch;
-    if (vms.vmState().policy.native_backend != .host) return error.HostNativeUnsupported;
+    if (ctx.vs.policy.native_backend != .host) return error.HostNativeUnsupported;
     try host_abi_mod.ensureHostReady();
-    const start = vms.vmState().stack_top - argc;
+    const start = ctx.vs.stack_top - argc;
     var args_wire: [MaxNativeArgs]host_abi.ValueWire = undefined;
-    for (args_wire[0..argc], vms.vmState().stack[start .. start + argc]) |*w, v| w.* = try host_abi_mod.wireFromValue(v);
+    for (args_wire[0..argc], ctx.vs.stack[start .. start + argc]) |*w, v| w.* = try host_abi_mod.wireFromValue(v);
     var out_wire = host_abi_mod.nullWire();
     try host_abi_mod.nativeCallRawChecked(hmf.call_id, args_wire[0..argc], &out_wire);
-    for (0..@as(usize, argc) + 1) |_| _ = try vms.vmPop();
+    for (0..@as(usize, argc) + 1) |_| _ = try ctx.vs.vmPop();
     const out = try host_abi_mod.valueFromWire(out_wire);
-    try vms.vmPush(out);
+    try ctx.vs.vmPush(out);
 }
 
-pub fn callNative(nf: NativeFuncObj, argc: u8) !void {
-    const temp_root_base = vms.tempRootDepth();
-    defer vms.assertTempRootDepth(temp_root_base, "native dispatch");
+pub fn callNative(ctx: vms.VMContext, nf: NativeFuncObj, argc: u8) !void {
+    const temp_root_base = ctx.vs.tempRootDepth();
+    defer ctx.vs.assertTempRootDepth(temp_root_base, "native dispatch");
     vmperf.countHostcall(nf.id);
     switch (@as(NativeFnId, @enumFromInt(nf.id))) {
-        .io_println, .io_print, .io_printf, .io_sprintf, .io_eprint, .io_eprintf, .io_eprintln, .io_read, .io_readline, .fmt_stringify => return io_mod.dispatch(nf, argc),
-        .core_len, .core_append, .core_error, .core_is_error, .core_gc, .core_gc_live_objects, .core_gc_stats, .core_bytelen, .core_gc_stats_ext, .core_delete, .core_has, .core_keys, .core_values, .core_contains, .core_remove, .core_type_of, .core_is_int, .core_is_float, .core_is_string, .core_is_array, .core_is_map, .core_is_struct, .core_is_null, .core_deep_equal, .core_clone, .core_recover => return core_mod.dispatch(nf, argc),
-        .conv_to_int, .conv_to_float, .conv_to_bool, .conv_to_string => return conv_mod.dispatch(nf, argc),
-        .math_abs, .math_sqrt, .math_floor, .math_ceil, .math_round, .math_sin, .math_cos, .math_tan, .math_log, .math_log2, .math_log10, .math_pow, .math_min, .math_max, .math_acos, .math_asin, .math_atan, .math_atan2, .math_cosh, .math_sinh, .math_tanh, .math_exp, .math_exp2, .math_trunc, .math_cbrt, .math_hypot, .math_mod, .math_nan, .math_is_nan, .math_is_inf, .math_clamp, .math_sign => return math_mod.dispatch(nf, argc),
-        .rand_float, .rand_intn, .rand_between, .rand_seed, .rand_choice, .rand_perm, .rand_norm_float => return rand_mod.dispatch(nf, argc),
-        .str_split, .str_join, .str_trim, .str_upper, .str_lower, .str_contains, .str_starts_with, .str_ends_with, .str_index_of, .str_replace, .str_last_index_of, .str_repeat, .str_split_once, .str_builder_new, .str_count, .str_fields, .str_pad_left, .str_pad_right, .str_equal_fold, .str_contains_any, .str_trim_left, .str_trim_right, .str_trim_prefix, .str_trim_suffix, .str_split_n => return string_mod.dispatch(nf, argc),
-        .json_parse, .json_stringify, .json_valid, .json_indent, .json_parse_value => return json_mod.dispatch(nf, argc),
-        .hex_encode, .hex_decode, .base64_encode, .base64_decode, .base64_url_encode, .base64_url_decode => return encode_mod.dispatch(nf, argc),
-        .template_parse, .template_execute, .template_add_func, .template_render, .template_valid => return template_mod.dispatch(nf, argc),
-        .time_now, .time_from_unix, .time_from_unix_ms, .time_parse, .time_unix, .time_unix_ms, .time_parts, .time_format, .time_add_ms, .time_add_s, .time_add_m, .time_add_h, .time_sub, .time_before, .time_after, .time_equal, .time_is_zero, .time_since, .time_until, .time_add_date, .time_parse_duration, .time_iso_week => return time_mod.dispatch(nf, argc),
-        .re_match, .re_find, .re_find_all, .re_replace, .re_split, .re_compile, .re_obj_match, .re_obj_find, .re_obj_find_all, .re_obj_replace, .re_obj_split => return regexp_mod.dispatch(nf, argc),
-        .array_filter, .array_map, .array_reduce, .array_slice, .array_zip, .array_flat, .array_find, .array_find_index, .array_all, .array_any, .array_chunk => return array_mod.dispatch(nf, argc),
-        .sort_asc, .sort_desc, .sort_by => return sort_mod.dispatch(nf, argc),
-        .bytes_u8, .bytes_pack, .bytes_unpack, .bytes_at, .bytes_len, .bytes_slice, .bytes_repeat, .bytes_u16be, .bytes_u32be, .bytes_u64be, .bytes_u16le, .bytes_u32le, .bytes_u64le, .bytes_u16be_at, .bytes_u32be_at, .bytes_u64be_at, .bytes_u16le_at, .bytes_u32le_at, .bytes_u64le_at, .bytes_index_of, .bytes_contains, .bytes_starts_with, .bytes_ends_with, .bytes_count, .bytes_replace, .bytes_f32be, .bytes_f32le, .bytes_f64be, .bytes_f64le, .bytes_f32be_at, .bytes_f32le_at, .bytes_f64be_at, .bytes_f64le_at => return bytes_mod.dispatch(nf, argc),
+        .io_println, .io_print, .io_printf, .io_sprintf, .io_eprint, .io_eprintf, .io_eprintln, .io_read, .io_readline, .fmt_stringify => return io_mod.dispatch(ctx, nf, argc),
+        .core_len, .core_append, .core_error, .core_is_error, .core_gc, .core_gc_live_objects, .core_gc_stats, .core_bytelen, .core_gc_stats_ext, .core_delete, .core_has, .core_keys, .core_values, .core_contains, .core_remove, .core_type_of, .core_is_int, .core_is_float, .core_is_string, .core_is_array, .core_is_map, .core_is_struct, .core_is_null, .core_deep_equal, .core_clone, .core_recover => return core_mod.dispatch(ctx, nf, argc),
+        .conv_to_int, .conv_to_float, .conv_to_bool, .conv_to_string => return conv_mod.dispatch(ctx, nf, argc),
+        .math_abs, .math_sqrt, .math_floor, .math_ceil, .math_round, .math_sin, .math_cos, .math_tan, .math_log, .math_log2, .math_log10, .math_pow, .math_min, .math_max, .math_acos, .math_asin, .math_atan, .math_atan2, .math_cosh, .math_sinh, .math_tanh, .math_exp, .math_exp2, .math_trunc, .math_cbrt, .math_hypot, .math_mod, .math_nan, .math_is_nan, .math_is_inf, .math_clamp, .math_sign => return math_mod.dispatch(ctx, nf, argc),
+        .rand_float, .rand_intn, .rand_between, .rand_seed, .rand_choice, .rand_perm, .rand_norm_float => return rand_mod.dispatch(ctx, nf, argc),
+        .str_split, .str_join, .str_trim, .str_upper, .str_lower, .str_contains, .str_starts_with, .str_ends_with, .str_index_of, .str_replace, .str_last_index_of, .str_repeat, .str_split_once, .str_builder_new, .str_count, .str_fields, .str_pad_left, .str_pad_right, .str_equal_fold, .str_contains_any, .str_trim_left, .str_trim_right, .str_trim_prefix, .str_trim_suffix, .str_split_n => return string_mod.dispatch(ctx, nf, argc),
+        .json_parse, .json_stringify, .json_valid, .json_indent, .json_parse_value => return json_mod.dispatch(ctx, nf, argc),
+        .hex_encode, .hex_decode, .base64_encode, .base64_decode, .base64_url_encode, .base64_url_decode => return encode_mod.dispatch(ctx, nf, argc),
+        .template_parse, .template_execute, .template_add_func, .template_render, .template_valid => return template_mod.dispatch(ctx, nf, argc),
+        .time_now, .time_from_unix, .time_from_unix_ms, .time_parse, .time_unix, .time_unix_ms, .time_parts, .time_format, .time_add_ms, .time_add_s, .time_add_m, .time_add_h, .time_sub, .time_before, .time_after, .time_equal, .time_is_zero, .time_since, .time_until, .time_add_date, .time_parse_duration, .time_iso_week => return time_mod.dispatch(ctx, nf, argc),
+        .re_match, .re_find, .re_find_all, .re_replace, .re_split, .re_compile, .re_obj_match, .re_obj_find, .re_obj_find_all, .re_obj_replace, .re_obj_split => return regexp_mod.dispatch(ctx, nf, argc),
+        .array_filter, .array_map, .array_reduce, .array_slice, .array_zip, .array_flat, .array_find, .array_find_index, .array_all, .array_any, .array_chunk => return array_mod.dispatch(ctx, nf, argc),
+        .sort_asc, .sort_desc, .sort_by => return sort_mod.dispatch(ctx, nf, argc),
+        .bytes_u8, .bytes_pack, .bytes_unpack, .bytes_at, .bytes_len, .bytes_slice, .bytes_repeat, .bytes_u16be, .bytes_u32be, .bytes_u64be, .bytes_u16le, .bytes_u32le, .bytes_u64le, .bytes_u16be_at, .bytes_u32be_at, .bytes_u64be_at, .bytes_u16le_at, .bytes_u32le_at, .bytes_u64le_at, .bytes_index_of, .bytes_contains, .bytes_starts_with, .bytes_ends_with, .bytes_count, .bytes_replace, .bytes_f32be, .bytes_f32le, .bytes_f64be, .bytes_f64le, .bytes_f32be_at, .bytes_f32le_at, .bytes_f64be_at, .bytes_f64le_at => return bytes_mod.dispatch(ctx, nf, argc),
         inline else => |id| {
             if (comptime build_options.cap_net) {
                 switch (id) {
-                    .cap_net_dial, .cap_net_read, .cap_net_write, .cap_net_close, .cap_net_local_addr, .cap_net_remote_addr, .cap_net_set_deadline, .cap_net_set_read_deadline, .cap_net_set_write_deadline => return cap_net_mod.dispatch(nf, argc),
+                    .cap_net_dial, .cap_net_read, .cap_net_write, .cap_net_close, .cap_net_local_addr, .cap_net_remote_addr, .cap_net_set_deadline, .cap_net_set_read_deadline, .cap_net_set_write_deadline => return cap_net_mod.dispatch(ctx, nf, argc),
                     else => {},
                 }
             }
@@ -846,13 +849,13 @@ pub fn callNative(nf: NativeFuncObj, argc: u8) !void {
                     .cap_fs_list,
                     .cap_fs_delete,
                     .cap_fs_mkdir,
-                    => return cap_fs_mod.dispatch(nf, argc),
+                    => return cap_fs_mod.dispatch(ctx, nf, argc),
                     else => {},
                 }
             }
             if (comptime build_options.cap_http) {
                 switch (id) {
-                    .cap_http_get, .cap_http_post, .cap_http_fetch => return cap_http_mod.dispatch(nf, argc),
+                    .cap_http_get, .cap_http_post, .cap_http_fetch => return cap_http_mod.dispatch(ctx, nf, argc),
                     else => {},
                 }
             }

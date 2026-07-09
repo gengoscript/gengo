@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const vms = @import("../vm_state.zig");
+const VMContext = vms.VMContext;
 const vmgc = @import("../vm_gc.zig");
 const Value = @import("../value.zig").Value;
 const NativeFnId = @import("native_ids.zig").NativeFnId;
@@ -63,9 +64,9 @@ fn pushCatchableNetError(err: anyerror) !void {
     try vms.vmPush(.{ .error_value = try chunk.internStr(msg) });
 }
 
-fn pushPageString(bytes: []u8) !void {
+fn pushPageString(ctx: VMContext, bytes: []u8) !void {
     defer std.heap.page_allocator.free(bytes);
-    const out = try vmgc.makeDynString(bytes);
+    const out = try vmgc.makeDynString(ctx, bytes);
     try vms.vmPush(out);
 }
 
@@ -73,7 +74,7 @@ fn ioContext() std.Io {
     return std.Io.Threaded.global_single_threaded.io();
 }
 
-pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
+pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
     switch (@as(NativeFnId, @enumFromInt(nf.id))) {
         .cap_net_dial => {
             if (argc != 2) return error.ArityMismatch;
@@ -99,8 +100,8 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                 else => return error.CapabilityError,
             };
 
-            const inst_fields = try vmgc.vmAllocManagedSlice(MapEntry, 1);
-            const inst_obj = try vmgc.vmAllocObject();
+            const inst_fields = try vmgc.vmAllocManagedSlice(ctx, MapEntry, 1);
+            const inst_obj = try vmgc.vmAllocObject(ctx);
             inst_obj.* = .{ .struct_instance = .{ .typ = conn_type_obj, .fields = inst_fields } };
             try vms.pushTempRoot(.{ .object = inst_obj });
             defer vms.popTempRoot();
@@ -121,7 +122,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                     try pushCatchableNetError(err);
                     return;
                 };
-                try pushPageString(buf);
+                try pushPageString(ctx, buf);
                 return;
             }
 
@@ -130,7 +131,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             // stack buffer, then copy into the GC heap via makeDynString.
             // Using a local buffer keeps netReadInto free of any GC interaction.
             if (max_bytes == 0) {
-                try vms.vmPush(try vmgc.makeDynString(""));
+                try vms.vmPush(try vmgc.makeDynString(ctx, ""));
                 return;
             }
             var local_buf: [4096]u8 = undefined;
@@ -139,7 +140,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
                 try pushCatchableNetError(err);
                 return;
             };
-            try vms.vmPush(try vmgc.makeDynString(read_dest[0..n]));
+            try vms.vmPush(try vmgc.makeDynString(ctx, read_dest[0..n]));
         },
         .cap_net_write => {
             if (argc != 2) return error.ArityMismatch;
@@ -171,7 +172,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             _ = try vms.vmPop();
 
             const addr = net_state.netLocalAddr(id) catch return error.CapabilityError;
-            try pushPageString(addr);
+            try pushPageString(ctx, addr);
         },
         .cap_net_remote_addr => {
             if (argc != 1) return error.ArityMismatch;
@@ -180,7 +181,7 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             _ = try vms.vmPop();
 
             const addr = net_state.netRemoteAddr(id) catch return error.CapabilityError;
-            try pushPageString(addr);
+            try pushPageString(ctx, addr);
         },
         .cap_net_set_deadline => {
             if (argc != 2) return error.ArityMismatch;

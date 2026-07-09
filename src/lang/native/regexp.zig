@@ -2,6 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const AlignedManaged = std.array_list.AlignedManaged;
 const vms = @import("../vm_state.zig");
+const VMContext = vms.VMContext;
 const vmgc = @import("../vm_gc.zig");
 const heap = @import("../../runtime/heap.zig");
 const Value = @import("../value.zig").Value;
@@ -49,12 +50,12 @@ pub fn reGetType() !*Object {
     return obj;
 }
 
-pub fn reBuildObj(pattern: []const u8) !Value {
+pub fn reBuildObj(ctx: VMContext, pattern: []const u8) !Value {
     // allocTempRooted: allocates, initializes, and roots obj before any further GC-triggering calls
-    const obj = try vmgc.allocTempRooted(.{ .dyn_string = &[_]u8{} });
+    const obj = try vmgc.allocTempRooted(ctx, .{ .dyn_string = &[_]u8{} });
     defer vms.popTempRoot();
     const typ = try reGetType();
-    const str_val = try vmgc.makeDynString(pattern);
+    const str_val = try vmgc.makeDynString(ctx, pattern);
     obj.* = .{ .named_value = .{ .typ = typ, .value = str_val } };
     return .{ .object = obj };
 }
@@ -495,33 +496,33 @@ pub fn nativeReMatch(pattern_val: Value, s_val: Value) !Value {
     return .{ .boolean = findMatch(alts, s) != null };
 }
 
-pub fn nativeReFind(pattern_val: Value, s_val: Value) !Value {
+pub fn nativeReFind(ctx: VMContext, pattern_val: Value, s_val: Value) !Value {
     const pattern = try reGetPattern(pattern_val);
     const s = try vms.asStringValue(s_val);
     const alts = try parsePattern(pattern);
     const m = findMatch(alts, s) orelse return .null;
-    return try vmgc.makeDynString(s[m[0]..m[1]]);
+    return try vmgc.makeDynString(ctx, s[m[0]..m[1]]);
 }
 
-pub fn nativeReFindAll(pattern_val: Value, s_val: Value) !Value {
+pub fn nativeReFindAll(ctx: VMContext, pattern_val: Value, s_val: Value) !Value {
     const pattern = try reGetPattern(pattern_val);
     const s = try vms.asStringValue(s_val);
     const alts = try parsePattern(pattern);
     const alloc = std.heap.page_allocator;
     const matches = try findAllMatches(alts, s, alloc);
     defer alloc.free(matches);
-    const obj = try vmgc.allocTempRooted(.{ .array_managed = &[_]Value{} });
+    const obj = try vmgc.allocTempRooted(ctx, .{ .array_managed = &[_]Value{} });
     defer vms.popTempRoot();
-    const result = try vmgc.vmAllocManagedSlice(Value, matches.len);
+    const result = try vmgc.vmAllocManagedSlice(ctx, Value, matches.len);
     obj.* = .{ .array_managed = result[0..0] };
     for (matches, 0..) |m, j| {
-        result[j] = try vmgc.makeDynString(s[m[0]..m[1]]);
+        result[j] = try vmgc.makeDynString(ctx, s[m[0]..m[1]]);
         obj.* = .{ .array_managed = result[0 .. j + 1] };
     }
     return .{ .object = obj };
 }
 
-pub fn nativeReReplace(pattern_val: Value, s_val: Value, repl_val: Value) !Value {
+pub fn nativeReReplace(ctx: VMContext, pattern_val: Value, s_val: Value, repl_val: Value) !Value {
     const pattern = try reGetPattern(pattern_val);
     const s = try vms.asStringValue(s_val);
     const repl = try vms.asStringValue(repl_val);
@@ -539,10 +540,10 @@ pub fn nativeReReplace(pattern_val: Value, s_val: Value, repl_val: Value) !Value
         try result.appendSlice(repl);
         i += m[1];
     }
-    return try vmgc.makeDynString(result.items);
+    return try vmgc.makeDynString(ctx, result.items);
 }
 
-pub fn nativeReSplit(pattern_val: Value, s_val: Value) !Value {
+pub fn nativeReSplit(ctx: VMContext, pattern_val: Value, s_val: Value) !Value {
     const pattern = try reGetPattern(pattern_val);
     const s = try vms.asStringValue(s_val);
     const alloc = std.heap.page_allocator;
@@ -558,56 +559,52 @@ pub fn nativeReSplit(pattern_val: Value, s_val: Value) !Value {
         try parts.append(s[i .. i + m[0]]);
         i += m[1];
     }
-    const obj = try vmgc.allocTempRooted(.{ .array_managed = &[_]Value{} });
+    const obj = try vmgc.allocTempRooted(ctx, .{ .array_managed = &[_]Value{} });
     defer vms.popTempRoot();
-    const result = try vmgc.vmAllocManagedSlice(Value, parts.items.len);
+    const result = try vmgc.vmAllocManagedSlice(ctx, Value, parts.items.len);
     obj.* = .{ .array_managed = result[0..0] };
     for (parts.items, 0..) |part, j| {
-        result[j] = try vmgc.makeDynString(part);
+        result[j] = try vmgc.makeDynString(ctx, part);
         obj.* = .{ .array_managed = result[0 .. j + 1] };
     }
     return .{ .object = obj };
 }
 
-pub fn nativeReCompile(pattern_val: Value) !Value {
+pub fn nativeReCompile(ctx: VMContext, pattern_val: Value) !Value {
     const pattern = try vms.asStringValue(pattern_val);
     // Validate by parsing (result goes into the cache for future use).
     _ = try parsePattern(pattern);
-    return try reBuildObj(pattern);
+    return try reBuildObj(ctx, pattern);
 }
 
-pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
+pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
     switch (@as(NativeFnId, @enumFromInt(nf.id))) {
         .re_compile => {
-
             if (argc != nf.arity) return error.ArityMismatch;
             const pattern_val = vms.vmState().stack[vms.vmState().stack_top - 1];
-            const result = try nativeReCompile(pattern_val);
+            const result = try nativeReCompile(ctx, pattern_val);
             _ = try vms.vmPop(); _ = try vms.vmPop();
             try vms.vmPush(result);
         },
         .re_find => {
-
             if (argc != nf.arity) return error.ArityMismatch;
             const top = vms.vmState().stack_top;
             const pattern_val = vms.vmState().stack[top - 2];
             const s_val = vms.vmState().stack[top - 1];
-            const result = try nativeReFind(pattern_val, s_val);
+            const result = try nativeReFind(ctx, pattern_val, s_val);
             _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
             try vms.vmPush(result);
         },
         .re_find_all => {
-
             if (argc != nf.arity) return error.ArityMismatch;
             const top = vms.vmState().stack_top;
             const pattern_val = vms.vmState().stack[top - 2];
             const s_val = vms.vmState().stack[top - 1];
-            const result = try nativeReFindAll(pattern_val, s_val);
+            const result = try nativeReFindAll(ctx, pattern_val, s_val);
             _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
             try vms.vmPush(result);
         },
         .re_match => {
-
             if (argc != nf.arity) return error.ArityMismatch;
             const top = vms.vmState().stack_top;
             const pattern_val = vms.vmState().stack[top - 2];
@@ -617,29 +614,26 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             try vms.vmPush(result);
         },
         .re_obj_find => {
-
             if (argc != nf.arity) return error.ArityMismatch;
             const top = vms.vmState().stack_top;
             const recv = vms.vmState().stack[top - 2];
             const s_val = vms.vmState().stack[top - 1];
             const pattern = try reGetPattern(recv);
-            const result = try nativeReFind(.{ .string = try chunk.internStr(pattern) }, s_val);
+            const result = try nativeReFind(ctx, .{ .string = try chunk.internStr(pattern) }, s_val);
             _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
             try vms.vmPush(result);
         },
         .re_obj_find_all => {
-
             if (argc != nf.arity) return error.ArityMismatch;
             const top = vms.vmState().stack_top;
             const recv = vms.vmState().stack[top - 2];
             const s_val = vms.vmState().stack[top - 1];
             const pattern = try reGetPattern(recv);
-            const result = try nativeReFindAll(.{ .string = try chunk.internStr(pattern) }, s_val);
+            const result = try nativeReFindAll(ctx, .{ .string = try chunk.internStr(pattern) }, s_val);
             _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
             try vms.vmPush(result);
         },
         .re_obj_match => {
-
             if (argc != nf.arity) return error.ArityMismatch;
             const top = vms.vmState().stack_top;
             const recv = vms.vmState().stack[top - 2];
@@ -650,46 +644,42 @@ pub fn dispatch(nf: NativeFuncObj, argc: u8) !void {
             try vms.vmPush(result);
         },
         .re_obj_replace => {
-
             if (argc != nf.arity) return error.ArityMismatch;
             const top = vms.vmState().stack_top;
             const recv = vms.vmState().stack[top - 3];
             const s_val = vms.vmState().stack[top - 2];
             const repl_val = vms.vmState().stack[top - 1];
             const pattern = try reGetPattern(recv);
-            const result = try nativeReReplace(.{ .string = try chunk.internStr(pattern) }, s_val, repl_val);
+            const result = try nativeReReplace(ctx, .{ .string = try chunk.internStr(pattern) }, s_val, repl_val);
             _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
             try vms.vmPush(result);
         },
         .re_obj_split => {
-
             if (argc != nf.arity) return error.ArityMismatch;
             const top = vms.vmState().stack_top;
             const recv = vms.vmState().stack[top - 2];
             const s_val = vms.vmState().stack[top - 1];
             const pattern = try reGetPattern(recv);
-            const result = try nativeReSplit(.{ .string = try chunk.internStr(pattern) }, s_val);
+            const result = try nativeReSplit(ctx, .{ .string = try chunk.internStr(pattern) }, s_val);
             _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
             try vms.vmPush(result);
         },
         .re_replace => {
-
             if (argc != nf.arity) return error.ArityMismatch;
             const top = vms.vmState().stack_top;
             const pattern_val = vms.vmState().stack[top - 3];
             const s_val = vms.vmState().stack[top - 2];
             const repl_val = vms.vmState().stack[top - 1];
-            const result = try nativeReReplace(pattern_val, s_val, repl_val);
+            const result = try nativeReReplace(ctx, pattern_val, s_val, repl_val);
             _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
             try vms.vmPush(result);
         },
         .re_split => {
-
             if (argc != nf.arity) return error.ArityMismatch;
             const top = vms.vmState().stack_top;
             const pattern_val = vms.vmState().stack[top - 2];
             const s_val = vms.vmState().stack[top - 1];
-            const result = try nativeReSplit(pattern_val, s_val);
+            const result = try nativeReSplit(ctx, pattern_val, s_val);
             _ = try vms.vmPop(); _ = try vms.vmPop(); _ = try vms.vmPop();
             try vms.vmPush(result);
         },
