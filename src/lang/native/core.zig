@@ -67,7 +67,7 @@ fn nativeMapExtract(ctx: VMContext, m_obj: *Object, comptime field: std.meta.Fie
     if (!vms.isMapObject(m_obj)) return error.TypeError;
     const items = try vms.asMapSlice(m_obj);
     const obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
-    defer vms.popTempRoot();
+    defer ctx.vs.popTempRoot();
     const out = try vmgc.vmAllocManagedSlice(ctx, Value, items.len);
     for (items, 0..) |entry, i| out[i] = @field(entry, @tagName(field));
     obj.* = .{ .array_managed = out[0..items.len] };
@@ -93,7 +93,7 @@ pub fn nativeRemove(ctx: VMContext, arr_obj: *Object, idx_val: Value) !Value {
     const idx = try vms.vmIndexFromVal(idx_val);
     if (idx >= items.len) return error.IndexOutOfBounds;
     const obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
-    defer vms.popTempRoot();
+    defer ctx.vs.popTempRoot();
     if (items.len > 1) {
         const out = try vmgc.vmAllocManagedSlice(ctx, Value, items.len - 1);
         @memcpy(out[0..idx], items[0..idx]);
@@ -105,7 +105,7 @@ pub fn nativeRemove(ctx: VMContext, arr_obj: *Object, idx_val: Value) !Value {
 
 pub fn nativeAppend(ctx: VMContext, start: usize, argc: u8) !Value {
     if (argc < 1) return error.ArityMismatch;
-    const first = vms.vmState().stack[start];
+    const first = ctx.vs.stack[start];
     const is_named = first == .object and first.object.* == .named_value and
         first.object.named_value.typ.* == .named_type and
         first.object.named_value.typ.named_type.base == .array_t;
@@ -113,23 +113,19 @@ pub fn nativeAppend(ctx: VMContext, start: usize, argc: u8) !Value {
     if (arr_val != .object or !vms.isArrayObject(arr_val.object)) return error.TypeError;
     if (is_named) {
         if (first.object.named_value.typ.named_type.elem_spec) |es| {
-            for (vms.vmState().stack[start + 1 .. start + argc]) |v| {
+            for (ctx.vs.stack[start + 1 .. start + argc]) |v| {
                 if (!vmtyp.matchesTypeSpec(v, es)) return error.TypeError;
             }
         }
     }
-    const elems = vms.vmState().stack[start + 1 .. start + argc];
+    const elems = ctx.vs.stack[start + 1 .. start + argc];
     const result = try vmarr.arrayAppend(ctx, arr_val.object, elems);
     if (is_named) {
-        try vms.pushTempRoot(result);
-        defer vms.popTempRoot();
+        try ctx.vs.pushTempRoot(result);
+        defer ctx.vs.popTempRoot();
         return try vmtyp.makeNamedValue(ctx, first.object.named_value.typ, result);
     }
     return result;
-}
-
-pub fn nativeErrorMsg(msg: []const u8) Value {
-    return .{ .error_value = try chunk.internStr(msg) };
 }
 
 pub fn nativeIsError(v: Value) Value {
@@ -138,29 +134,29 @@ pub fn nativeIsError(v: Value) Value {
 
 pub fn nativeGcStats(ctx: VMContext) !Value {
     const obj = try vmgc.allocTempRooted(ctx, .{ .map = &[_]MapEntry{} });
-    defer vms.popTempRoot();
+    defer ctx.vs.popTempRoot();
     const items = try vmgc.vmAllocManagedSlice(ctx, MapEntry, 3);
     obj.* = .{ .map = items[0..0] };
-    items[0] = .{ .key = .{ .string = try chunk.internStr("heap_used_bytes") }, .value = .{ .int = @intCast(heap.usedBytes()) } };
-    items[1] = .{ .key = .{ .string = try chunk.internStr("heap_size_bytes") }, .value = .{ .int = @intCast(heap.g_state.heap.len) } };
-    items[2] = .{ .key = .{ .string = try chunk.internStr("live_objects") }, .value = .{ .int = @intCast(heap.liveObjectCount()) } };
+    items[0] = .{ .key = .{ .string = try ctx.cs.internStr("heap_used_bytes") }, .value = .{ .int = @intCast(ctx.hs.usedBytes()) } };
+    items[1] = .{ .key = .{ .string = try ctx.cs.internStr("heap_size_bytes") }, .value = .{ .int = @intCast(heap.g_state.heap.len) } };
+    items[2] = .{ .key = .{ .string = try ctx.cs.internStr("live_objects") }, .value = .{ .int = @intCast(ctx.hs.liveObjectCount()) } };
     obj.* = .{ .map = items[0..3] };
     return .{ .object = obj };
 }
 
 pub fn nativeGcStatsExt(ctx: VMContext) !Value {
     const obj = try vmgc.allocTempRooted(ctx, .{ .map = &[_]MapEntry{} });
-    defer vms.popTempRoot();
+    defer ctx.vs.popTempRoot();
     const items = try vmgc.vmAllocManagedSlice(ctx, MapEntry, 8);
     obj.* = .{ .map = items[0..0] };
-    items[0] = .{ .key = .{ .string = try chunk.internStr("heap_used_bytes") }, .value = .{ .int = @intCast(heap.usedBytes()) } };
-    items[1] = .{ .key = .{ .string = try chunk.internStr("heap_size_bytes") }, .value = .{ .int = @intCast(heap.g_state.heap.len) } };
-    items[2] = .{ .key = .{ .string = try chunk.internStr("live_objects") }, .value = .{ .int = @intCast(heap.liveObjectCount()) } };
-    items[3] = .{ .key = .{ .string = try chunk.internStr("gc_runs") }, .value = .{ .int = @intCast(vms.vmState().gc_runs) } };
-    items[4] = .{ .key = .{ .string = try chunk.internStr("gc_time_ns") }, .value = .{ .int = @intCast(vms.vmState().gc_time_ns) } };
-    items[5] = .{ .key = .{ .string = try chunk.internStr("alloc_object_calls") }, .value = .{ .int = @intCast(vms.vmState().alloc_object_calls) } };
-    items[6] = .{ .key = .{ .string = try chunk.internStr("alloc_managed_slice_calls") }, .value = .{ .int = @intCast(vms.vmState().alloc_managed_slice_calls) } };
-    items[7] = .{ .key = .{ .string = try chunk.internStr("alloc_managed_bytes_calls") }, .value = .{ .int = @intCast(vms.vmState().alloc_managed_bytes_calls) } };
+    items[0] = .{ .key = .{ .string = try ctx.cs.internStr("heap_used_bytes") }, .value = .{ .int = @intCast(ctx.hs.usedBytes()) } };
+    items[1] = .{ .key = .{ .string = try ctx.cs.internStr("heap_size_bytes") }, .value = .{ .int = @intCast(heap.g_state.heap.len) } };
+    items[2] = .{ .key = .{ .string = try ctx.cs.internStr("live_objects") }, .value = .{ .int = @intCast(ctx.hs.liveObjectCount()) } };
+    items[3] = .{ .key = .{ .string = try ctx.cs.internStr("gc_runs") }, .value = .{ .int = @intCast(ctx.vs.gc_runs) } };
+    items[4] = .{ .key = .{ .string = try ctx.cs.internStr("gc_time_ns") }, .value = .{ .int = @intCast(ctx.vs.gc_time_ns) } };
+    items[5] = .{ .key = .{ .string = try ctx.cs.internStr("alloc_object_calls") }, .value = .{ .int = @intCast(ctx.vs.alloc_object_calls) } };
+    items[6] = .{ .key = .{ .string = try ctx.cs.internStr("alloc_managed_slice_calls") }, .value = .{ .int = @intCast(ctx.vs.alloc_managed_slice_calls) } };
+    items[7] = .{ .key = .{ .string = try ctx.cs.internStr("alloc_managed_bytes_calls") }, .value = .{ .int = @intCast(ctx.vs.alloc_managed_bytes_calls) } };
     obj.* = .{ .map = items[0..8] };
     return .{ .object = obj };
 }
@@ -280,7 +276,7 @@ pub fn nativeConvToString(ctx: VMContext, v: Value) !Value {
     };
 }
 
-pub fn nativeTypeNameValue(v: Value) !Value {
+pub fn nativeTypeNameValue(ctx: VMContext, v: Value) !Value {
     return switch (v) {
         .int => .{ .string = staticSS("int") },
         .float => .{ .string = staticSS("float") },
@@ -296,10 +292,10 @@ pub fn nativeTypeNameValue(v: Value) !Value {
                 break :blk switch (root_nt.base) {
                     .array_t => .{ .string = staticSS("array") },
                     .map_t => .{ .string = staticSS("map") },
-                    else => .{ .string = try chunk.internStr(root_nt.name) },
+                    else => .{ .string = try ctx.cs.internStr(root_nt.name) },
                 };
             }
-            break :blk .{ .string = try chunk.internStr(root_nt.name) };
+            break :blk .{ .string = try ctx.cs.internStr(root_nt.name) };
         },
         .object => |obj| switch (obj.*) {
             .dyn_string, .string_view => .{ .string = staticSS("string") },
@@ -308,34 +304,34 @@ pub fn nativeTypeNameValue(v: Value) !Value {
             .native_function => .{ .string = staticSS("native_func") },
             .host_module_function => .{ .string = staticSS("host_func") },
             .function, .closure, .named_type_fn, .enum_type_fn => .{ .string = staticSS("func") },
-            .struct_type => |st| .{ .string = try chunk.internStr(st.name) },
-            .interface_type => |it| .{ .string = try chunk.internStr(it.name) },
-            .named_type => |nt| .{ .string = try chunk.internStr(nt.name) },
+            .struct_type => |st| .{ .string = try ctx.cs.internStr(st.name) },
+            .interface_type => |it| .{ .string = try ctx.cs.internStr(it.name) },
+            .named_type => |nt| .{ .string = try ctx.cs.internStr(nt.name) },
             .named_value => |nv| blk: {
                 const root_nt = rootNamedType(nv.typ).named_type;
                 if (root_nt.is_anonymous) {
                     break :blk switch (root_nt.base) {
                         .array_t => .{ .string = staticSS("array") },
                         .map_t => .{ .string = staticSS("map") },
-                        else => .{ .string = try chunk.internStr(root_nt.name) },
+                        else => .{ .string = try ctx.cs.internStr(root_nt.name) },
                     };
                 }
-                break :blk .{ .string = try chunk.internStr(root_nt.name) };
+                break :blk .{ .string = try ctx.cs.internStr(root_nt.name) };
             },
-            .enum_type => |et| .{ .string = try chunk.internStr(et.name) },
-            .enum_value => |ev| .{ .string = try chunk.internStr(ev.typ.enum_type.name) },
-            .struct_instance => |inst| .{ .string = try chunk.internStr(inst.typ.struct_type.name) },
+            .enum_type => |et| .{ .string = try ctx.cs.internStr(et.name) },
+            .enum_value => |ev| .{ .string = try ctx.cs.internStr(ev.typ.enum_type.name) },
+            .struct_instance => |inst| .{ .string = try ctx.cs.internStr(inst.typ.struct_type.name) },
             .iterator => .{ .string = staticSS("iterator") },
-            .variant_type => |vt| .{ .string = try chunk.internStr(vt.name) },
-            .variant_value => |vv| .{ .string = try chunk.internStr(vv.typ.variant_type.name) },
-            .variant_ctor => |vc| .{ .string = try chunk.internStr(vc.typ.variant_type.name) },
+            .variant_type => |vt| .{ .string = try ctx.cs.internStr(vt.name) },
+            .variant_value => |vv| .{ .string = try ctx.cs.internStr(vv.typ.variant_type.name) },
+            .variant_ctor => |vc| .{ .string = try ctx.cs.internStr(vc.typ.variant_type.name) },
             .string_builder => .{ .string = staticSS("string_builder") },
             .bigint => .{ .string = staticSS("bigint") },
             .cell => .{ .string = staticSS("cell") },
-            .named_error_type => |net| .{ .string = try chunk.internStr(net.name) },
-            .named_error_value => |nev| .{ .string = try chunk.internStr(nev.typ.named_error_type.name) },
+            .named_error_type => |net| .{ .string = try ctx.cs.internStr(net.name) },
+            .named_error_value => |nev| .{ .string = try ctx.cs.internStr(nev.typ.named_error_type.name) },
         },
-        .inline_variant => |iv| .{ .string = try chunk.internStr(vmod.objectAtIdx(iv.typ_idx).variant_type.name) },
+        .inline_variant => |iv| .{ .string = try ctx.cs.internStr(vmod.objectAtIdx(iv.typ_idx).variant_type.name) },
     };
 }
 
@@ -400,7 +396,7 @@ const CloneVisit = struct { src: *Object, dst: *Object };
 
 pub fn makeTuple2(ctx: VMContext, a: Value, b: Value) !Value {
     const obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
-    defer vms.popTempRoot();
+    defer ctx.vs.popTempRoot();
     const items = try vmgc.vmAllocManagedSlice(ctx, Value, 2);
     items[0] = a;
     items[1] = b;
@@ -596,7 +592,7 @@ fn cloneObject(ctx: VMContext, src: *Object, visits: []CloneVisit, visit_len: *u
     switch (src.*) {
         .array, .array_managed, .array_view, .array_capacity => {
             const out_obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
-            defer vms.popTempRoot();
+            defer ctx.vs.popTempRoot();
             try cloneRemember(src, out_obj, visits, visit_len);
             const items = try vms.asArraySlice(src);
             const out = try vmgc.vmAllocManagedSlice(ctx, Value, items.len);
@@ -608,14 +604,14 @@ fn cloneObject(ctx: VMContext, src: *Object, visits: []CloneVisit, visit_len: *u
         .map, .map_managed, .map_hashed => {
             const entries = try vms.asMapSlice(src);
             const out_map = try vmgc.allocTempRootedManagedMap(ctx, entries.len);
-            defer vms.popTempRoot();
+            defer ctx.vs.popTempRoot();
             try cloneRemember(src, out_map.obj, visits, visit_len);
             for (entries, 0..) |entry, i| {
                 const k = try cloneValue(ctx, entry.key, visits, visit_len);
-                try vms.pushTempRoot(k);
+                try ctx.vs.pushTempRoot(k);
                 out_map.entries[i].key = k;
                 out_map.entries[i].value = try cloneValue(ctx, entry.value, visits, visit_len);
-                vms.popTempRoot();
+                ctx.vs.popTempRoot();
                 out_map.publish(i + 1);
             }
             return .{ .object = out_map.obj };
@@ -629,7 +625,7 @@ fn cloneObject(ctx: VMContext, src: *Object, visits: []CloneVisit, visit_len: *u
                 const new_buf = try vmgc.vmAllocManagedBytes(ctx, sb.len);
                 @memcpy(new_buf[0..sb.len], sb.buf[0..sb.len]);
                 out_obj.* = .{ .string_builder = .{ .buf = new_buf, .len = sb.len } };
-                vms.popTempRoot();
+                ctx.vs.popTempRoot();
             }
             return .{ .object = out_obj };
         },
@@ -638,7 +634,7 @@ fn cloneObject(ctx: VMContext, src: *Object, visits: []CloneVisit, visit_len: *u
         .named_type_fn, .enum_type_fn, .cell, .bigint => return .{ .object = src },
         .named_value => |nv| {
             const out_obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
-            defer vms.popTempRoot();
+            defer ctx.vs.popTempRoot();
             try cloneRemember(src, out_obj, visits, visit_len);
             out_obj.* = .{ .named_value = .{ .typ = nv.typ, .value = try cloneValue(ctx, nv.value, visits, visit_len) } };
             return .{ .object = out_obj };
@@ -650,7 +646,7 @@ fn cloneObject(ctx: VMContext, src: *Object, visits: []CloneVisit, visit_len: *u
         },
         .struct_instance => |inst| {
             const out_obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
-            defer vms.popTempRoot();
+            defer ctx.vs.popTempRoot();
             try cloneRemember(src, out_obj, visits, visit_len);
             const fields = try vmgc.vmAllocManagedSlice(ctx, MapEntry, inst.fields.len);
             for (fields) |*slot| slot.* = .{ .key = .null, .value = .null };
@@ -664,8 +660,8 @@ fn cloneObject(ctx: VMContext, src: *Object, visits: []CloneVisit, visit_len: *u
         .variant_value => |vv| {
             const out_obj = try vmgc.vmAllocObject(ctx);
             out_obj.* = .{ .variant_value = .{ .typ = vv.typ, .tag = vv.tag, .ordinal = vv.ordinal, .payload = .null, .shared_values = &[_]Value{}, .arm_fields = &[_]Value{} } };
-            try vms.pushTempRoot(.{ .object = out_obj });
-            defer vms.popTempRoot();
+            try ctx.vs.pushTempRoot(.{ .object = out_obj });
+            defer ctx.vs.popTempRoot();
             try cloneRemember(src, out_obj, visits, visit_len);
             var shared = try vmgc.vmAllocManagedSlice(ctx, Value, vv.shared_values.len);
             out_obj.variant_value.shared_values = shared[0..0]; // publish immediately
@@ -694,7 +690,7 @@ fn cloneObject(ctx: VMContext, src: *Object, visits: []CloneVisit, visit_len: *u
 pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
     switch (@as(NativeFnId, @enumFromInt(nf.id))) {
         .core_append => {
-            const start = vms.vmState().stack_top - argc;
+            const start = ctx.vs.stack_top - argc;
             try host_abi_mod.dispatchHostCallVariadic(ctx, host_abi.CAP_CORE_APPEND, .core_append, argc, start, nativeAppend);
         },
         .core_bytelen => {
@@ -703,129 +699,129 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
         },
         .core_clone => {
             if (argc != nf.arity) return error.ArityMismatch;
-            const out = try nativeClone(ctx, vms.vmTop(0));
-            vms.vmPopArgs(argc);
-            try vms.vmPush(out);
+            const out = try nativeClone(ctx, ctx.vs.vmTop(0));
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(out);
         },
         .core_contains => {
             if (argc != nf.arity) return error.ArityMismatch;
-            const arr_val = vms.unboxNamed(vms.vmTop(1));
-            const needle = vms.vmTop(0);
+            const arr_val = vms.unboxNamed(ctx.vs.vmTop(1));
+            const needle = ctx.vs.vmTop(0);
             if (arr_val != .object) return error.TypeError;
             const out = try nativeContains(arr_val.object, needle);
-            vms.vmPopArgs(argc);
-            try vms.vmPush(out);
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(out);
         },
         .core_deep_equal => {
             if (argc != nf.arity) return error.ArityMismatch;
-            const out = try nativeDeepEqual(vms.vmTop(1), vms.vmTop(0));
-            vms.vmPopArgs(argc);
-            try vms.vmPush(out);
+            const out = try nativeDeepEqual(ctx.vs.vmTop(1), ctx.vs.vmTop(0));
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(out);
         },
         .core_delete => {
             if (argc != nf.arity) return error.ArityMismatch;
-            const m_val = vms.unboxNamed(vms.vmTop(1));
-            const key = vms.vmTop(0);
+            const m_val = vms.unboxNamed(ctx.vs.vmTop(1));
+            const key = ctx.vs.vmTop(0);
             if (m_val != .object) return error.TypeError;
             const out = try nativeDelete(m_val.object, key);
-            vms.vmPopArgs(argc);
-            try vms.vmPush(out);
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(out);
         },
         .core_error => {
             if (argc != nf.arity) return error.ArityMismatch;
-            const msg = try vms.asStringValue(vms.vmTop(0));
+            const msg = try vms.asStringValue(ctx.vs.vmTop(0));
             const copy = try vmgc.vmAllocManagedBytes(ctx, msg.len);
             @memcpy(copy[0..msg.len], msg);
-            vms.vmPopArgs(argc);
-            try vms.vmPush(.{ .error_value = try chunk.internStr(copy[0..msg.len]) });
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(.{ .error_value = try ctx.cs.internStr(copy[0..msg.len]) });
         },
         .core_gc => {
             if (argc != nf.arity) return error.ArityMismatch;
             vmgc.collectGarbage(ctx);
-            vms.vmPopArgs(argc);
-            try vms.vmPush(.null);
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(.null);
         },
         .core_gc_live_objects => {
             if (argc != nf.arity) return error.ArityMismatch;
-            vms.vmPopArgs(argc);
-            try vms.vmPush(.{ .int = @intCast(heap.liveObjectCount()) });
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(.{ .int = @intCast(ctx.hs.liveObjectCount()) });
         },
         .core_gc_stats => {
             if (argc != nf.arity) return error.ArityMismatch;
             const out = try nativeGcStats(ctx);
-            vms.vmPopArgs(argc);
-            try vms.vmPush(out);
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(out);
         },
         .core_gc_stats_ext => {
             if (argc != nf.arity) return error.ArityMismatch;
             const out = try nativeGcStatsExt(ctx);
-            vms.vmPopArgs(argc);
-            try vms.vmPush(out);
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(out);
         },
         .core_has => {
             if (argc != nf.arity) return error.ArityMismatch;
-            const m_val = vms.unboxNamed(vms.vmTop(1));
-            const key = vms.vmTop(0);
+            const m_val = vms.unboxNamed(ctx.vs.vmTop(1));
+            const key = ctx.vs.vmTop(0);
             if (m_val != .object) return error.TypeError;
             const out = try nativeHas(m_val.object, key);
-            vms.vmPopArgs(argc);
-            try vms.vmPush(out);
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(out);
         },
         .core_is_array => {
             if (argc != nf.arity) return error.ArityMismatch;
-            const out = nativeIsArray(vms.vmTop(0));
-            vms.vmPopArgs(argc);
-            try vms.vmPush(out);
+            const out = nativeIsArray(ctx.vs.vmTop(0));
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(out);
         },
         .core_is_error => {
             if (argc != nf.arity) return error.ArityMismatch;
-            const arg = vms.vmTop(0);
-            vms.vmPopArgs(argc);
-            try vms.vmPush(.{ .boolean = arg == .error_value or (arg == .object and arg.object.* == .named_error_value) });
+            const arg = ctx.vs.vmTop(0);
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(.{ .boolean = arg == .error_value or (arg == .object and arg.object.* == .named_error_value) });
         },
         .core_is_float => {
             if (argc != nf.arity) return error.ArityMismatch;
-            const out = nativeIsFloat(vms.vmTop(0));
-            vms.vmPopArgs(argc);
-            try vms.vmPush(out);
+            const out = nativeIsFloat(ctx.vs.vmTop(0));
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(out);
         },
         .core_is_int => {
             if (argc != nf.arity) return error.ArityMismatch;
-            const out = nativeIsInt(vms.vmTop(0));
-            vms.vmPopArgs(argc);
-            try vms.vmPush(out);
+            const out = nativeIsInt(ctx.vs.vmTop(0));
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(out);
         },
         .core_is_map => {
             if (argc != nf.arity) return error.ArityMismatch;
-            const out = nativeIsMap(vms.vmTop(0));
-            vms.vmPopArgs(argc);
-            try vms.vmPush(out);
+            const out = nativeIsMap(ctx.vs.vmTop(0));
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(out);
         },
         .core_is_null => {
             if (argc != nf.arity) return error.ArityMismatch;
-            const out = nativeIsNull(vms.vmTop(0));
-            vms.vmPopArgs(argc);
-            try vms.vmPush(out);
+            const out = nativeIsNull(ctx.vs.vmTop(0));
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(out);
         },
         .core_is_string => {
             if (argc != nf.arity) return error.ArityMismatch;
-            const out = nativeIsString(vms.vmTop(0));
-            vms.vmPopArgs(argc);
-            try vms.vmPush(out);
+            const out = nativeIsString(ctx.vs.vmTop(0));
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(out);
         },
         .core_is_struct => {
             if (argc != nf.arity) return error.ArityMismatch;
-            const out = nativeIsStruct(vms.vmTop(0));
-            vms.vmPopArgs(argc);
-            try vms.vmPush(out);
+            const out = nativeIsStruct(ctx.vs.vmTop(0));
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(out);
         },
         .core_keys => {
             if (argc != nf.arity) return error.ArityMismatch;
-            const m_val = vms.unboxNamed(vms.vmTop(0));
+            const m_val = vms.unboxNamed(ctx.vs.vmTop(0));
             if (m_val != .object) return error.TypeError;
             const out = try nativeKeys(ctx, m_val.object);
-            vms.vmPopArgs(argc);
-            try vms.vmPush(out);
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(out);
         },
         .core_len => {
             if (argc != nf.arity) return error.ArityMismatch;
@@ -833,37 +829,37 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
         },
         .core_recover => {
             if (argc != nf.arity) return error.ArityMismatch;
-            vms.vmPopArgs(argc);
-            if (vms.vmState().is_panicking and !vms.vmState().recovered) {
-                const pv = vms.vmState().panic_value;
-                vms.vmState().recovered = true;
-                try vms.vmPush(pv);
+            ctx.vs.vmPopArgs(argc);
+            if (ctx.vs.is_panicking and !ctx.vs.recovered) {
+                const pv = ctx.vs.panic_value;
+                ctx.vs.recovered = true;
+                try ctx.vs.vmPush(pv);
             } else {
-                try vms.vmPush(.null);
+                try ctx.vs.vmPush(.null);
             }
         },
         .core_remove => {
             if (argc != nf.arity) return error.ArityMismatch;
-            const arr_val = vms.unboxNamed(vms.vmTop(1));
-            const idx_val = vms.vmTop(0);
+            const arr_val = vms.unboxNamed(ctx.vs.vmTop(1));
+            const idx_val = ctx.vs.vmTop(0);
             if (arr_val != .object) return error.TypeError;
             const out = try nativeRemove(ctx, arr_val.object, idx_val);
-            vms.vmPopArgs(argc);
-            try vms.vmPush(out);
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(out);
         },
         .core_type_of => {
             if (argc != nf.arity) return error.ArityMismatch;
-            const out = try nativeTypeNameValue(vms.vmTop(0));
-            vms.vmPopArgs(argc);
-            try vms.vmPush(out);
+            const out = try nativeTypeNameValue(ctx, ctx.vs.vmTop(0));
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(out);
         },
         .core_values => {
             if (argc != nf.arity) return error.ArityMismatch;
-            const m_val = vms.unboxNamed(vms.vmTop(0));
+            const m_val = vms.unboxNamed(ctx.vs.vmTop(0));
             if (m_val != .object) return error.TypeError;
             const out = try nativeValues(ctx, m_val.object);
-            vms.vmPopArgs(argc);
-            try vms.vmPush(out);
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(out);
         },
         else => {},
     }

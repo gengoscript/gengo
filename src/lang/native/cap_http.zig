@@ -21,7 +21,7 @@ const ResponseTypeQualifiedName = "@cap_type:http.Response";
 const VMContext = vms.VMContext;
 
 fn buildResponseStruct(ctx: VMContext, status: i32, body: []const u8, hdr_map: std.StringHashMap([]const u8), ok: bool) !Value {
-    const resp_type_val = globals.get(ResponseTypeQualifiedName) orelse return error.CapabilityError;
+    const resp_type_val = ctx.gs.get(ResponseTypeQualifiedName) orelse return error.CapabilityError;
     const resp_type_obj = switch (resp_type_val) {
         .object => |o| o,
         else => return error.CapabilityError,
@@ -59,10 +59,10 @@ fn buildResponseStruct(ctx: VMContext, status: i32, body: []const u8, hdr_map: s
         }
     }
 
-    inst_fields[0] = .{ .key = .{ .string = try chunk.internStr("status") }, .value = .{ .int = @as(i64, status) } };
-    inst_fields[1] = .{ .key = .{ .string = try chunk.internStr("body") }, .value = body_val };
-    inst_fields[2] = .{ .key = .{ .string = try chunk.internStr("headers") }, .value = .{ .object = hdr_obj } };
-    inst_fields[3] = .{ .key = .{ .string = try chunk.internStr("ok") }, .value = .{ .boolean = ok } };
+    inst_fields[0] = .{ .key = .{ .string = try ctx.cs.internStr("status") }, .value = .{ .int = @as(i64, status) } };
+    inst_fields[1] = .{ .key = .{ .string = try ctx.cs.internStr("body") }, .value = body_val };
+    inst_fields[2] = .{ .key = .{ .string = try ctx.cs.internStr("headers") }, .value = .{ .object = hdr_obj } };
+    inst_fields[3] = .{ .key = .{ .string = try ctx.cs.internStr("ok") }, .value = .{ .boolean = ok } };
 
     return .{ .object = inst_obj };
 }
@@ -88,7 +88,7 @@ fn pushErrPair(ctx: VMContext, comptime fmt: []const u8, args: anytype) !void {
     const arr = try vmgc.allocTempRootedManagedValueArray(ctx, 2);
     defer ctx.vs.popTempRoot();
     arr.values[0] = .null;
-    arr.values[1] = .{ .error_value = try chunk.internStr(copy[0..msg.len]) };
+    arr.values[1] = .{ .error_value = try ctx.cs.internStr(copy[0..msg.len]) };
     arr.publish(2);
     try ctx.vs.vmPush(.{ .object = arr.obj });
 }
@@ -138,7 +138,7 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
                 .object => |o| o,
                 else => return error.TypeError,
             };
-            _ = try vms.vmPop();
+            _ = try ctx.vs.vmPop();
 
             // Extract options from the map
             var method: []const u8 = "GET";
@@ -215,11 +215,11 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
 pub fn registerResponseType(ctx: VMContext, gs: *globals.State) !void {
     if (gs.has(ResponseTypeQualifiedName)) return;
 
-    const any_alts = heap.bump(FieldTypeAlt, 1) orelse return error.OutOfMemory;
+    const any_alts = ctx.hs.bump(FieldTypeAlt, 1) orelse return error.OutOfMemory;
     any_alts[0] = .{ .typ = .any };
     const any_spec: FieldTypeSpec = .{ .alts = any_alts[0..1] };
 
-    const field_specs = (heap.bump(StructFieldSpec, 4) orelse return error.OutOfMemory)[0..4];
+    const field_specs = (ctx.hs.bump(StructFieldSpec, 4) orelse return error.OutOfMemory)[0..4];
     field_specs[0] = .{ .name = "status", .typ = any_spec, .is_const = true };
     field_specs[1] = .{ .name = "body", .typ = any_spec, .is_const = true };
     field_specs[2] = .{ .name = "headers", .typ = any_spec, .is_const = true };

@@ -2435,7 +2435,7 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
             },
             .type_name => {
                 const v = try ctx.vs.vmPop();
-                try ctx.vs.vmPush(try vmnative.nativeTypeNameValue(v));
+                try ctx.vs.vmPush(try vmnative.nativeTypeNameValue(ctx, v));
             },
             .neg => {
                 const v = try ctx.vs.vmPeek(0);

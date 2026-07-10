@@ -3,6 +3,7 @@ const host_abi = @import("../../runtime/host_abi.zig");
 const heap = @import("../../runtime/heap.zig");
 const chunk = @import("../chunk.zig");
 const vms = @import("../vm_state.zig");
+const VMContext = vms.VMContext;
 const vmgc = @import("../vm_gc.zig");
 const vmod = @import("../value.zig");
 const Value = vmod.Value;
@@ -36,7 +37,7 @@ pub fn nativeCallRawChecked(id: u16, args: []const host_abi.ValueWire, out: *hos
     try checkCallStatus(host_abi.nativeCallRaw(id, args, out));
 }
 
-pub fn wireFromValue(v: Value) !host_abi.ValueWire {
+pub fn wireFromValue(ctx: VMContext, v: Value) !host_abi.ValueWire {
     return switch (v) {
         .null => nullWire(),
         .boolean => |b| makeWire(.boolean, 0, if (b) 1 else 0, 0),
@@ -51,40 +52,40 @@ pub fn wireFromValue(v: Value) !host_abi.ValueWire {
             .string_view => makeWire(.string, 0, @intCast(@intFromPtr(o.string_view.bytes.ptr)), @intCast(o.string_view.bytes.len)),
             .array, .array_managed, .array_view, .array_capacity => {
                 const items = try vms.asArraySlice(o);
-                const wires = (heap.bump(host_abi.ValueWire, items.len) orelse return error.OutOfMemory)[0..items.len];
+                const wires = (ctx.hs.bump(host_abi.ValueWire, items.len) orelse return error.OutOfMemory)[0..items.len];
                 for (items, 0..) |item, i| {
-                    wires[i] = try wireFromValue(item);
+                    wires[i] = try wireFromValue(ctx, item);
                 }
                 return makeWire(.array, 0, @intCast(@intFromPtr(wires.ptr)), @intCast(items.len));
             },
             .map, .map_managed, .map_hashed => {
                 const entries = try vms.asMapSlice(o);
-                const wires = (heap.bump(host_abi.ValueWire, entries.len * 2) orelse return error.OutOfMemory)[0 .. entries.len * 2];
+                const wires = (ctx.hs.bump(host_abi.ValueWire, entries.len * 2) orelse return error.OutOfMemory)[0 .. entries.len * 2];
                 for (entries, 0..) |entry, i| {
-                    wires[i * 2] = try wireFromValue(entry.key);
-                    wires[i * 2 + 1] = try wireFromValue(entry.value);
+                    wires[i * 2] = try wireFromValue(ctx, entry.key);
+                    wires[i * 2 + 1] = try wireFromValue(ctx, entry.value);
                 }
                 return makeWire(.map, 0, @intCast(@intFromPtr(wires.ptr)), @intCast(entries.len));
             },
             .variant_value => |vv| {
-                const wires = (heap.bump(host_abi.ValueWire, 4) orelse return error.OutOfMemory)[0..4];
-                wires[0] = try wireFromValue(.{ .string = try chunk.internStr("tag") });
-                wires[1] = try wireFromValue(.{ .string = try chunk.internStr(vv.tag) });
-                wires[2] = try wireFromValue(.{ .string = try chunk.internStr("value") });
-                wires[3] = try wireFromValue(vv.payload);
+                const wires = (ctx.hs.bump(host_abi.ValueWire, 4) orelse return error.OutOfMemory)[0..4];
+                wires[0] = try wireFromValue(ctx, .{ .string = try ctx.cs.internStr("tag") });
+                wires[1] = try wireFromValue(ctx, .{ .string = try ctx.cs.internStr(vv.tag) });
+                wires[2] = try wireFromValue(ctx, .{ .string = try ctx.cs.internStr("value") });
+                wires[3] = try wireFromValue(ctx, vv.payload);
                 return makeWire(.map, 0, @intCast(@intFromPtr(wires.ptr)), 2);
             },
             else => return error.UnsupportedHostValueType,
         },
-        .named_scalar => |ns| wireFromValue(vmod.namedScalarInner(ns)),
+        .named_scalar => |ns| wireFromValue(ctx, vmod.namedScalarInner(ns)),
         .inline_variant => |iv| {
             const ordinal = vmod.inlineVariantOrdinal(iv);
             const tag = vmod.objectAtIdx(iv.typ_idx).variant_type.arms[ordinal].name;
-            const wires = (heap.bump(host_abi.ValueWire, 4) orelse return error.OutOfMemory)[0..4];
-            wires[0] = try wireFromValue(.{ .string = try chunk.internStr("tag") });
-            wires[1] = try wireFromValue(.{ .string = try chunk.internStr(tag) });
-            wires[2] = try wireFromValue(.{ .string = try chunk.internStr("value") });
-            wires[3] = try wireFromValue(vmod.inlineVariantPayload(iv));
+            const wires = (ctx.hs.bump(host_abi.ValueWire, 4) orelse return error.OutOfMemory)[0..4];
+            wires[0] = try wireFromValue(ctx, .{ .string = try ctx.cs.internStr("tag") });
+            wires[1] = try wireFromValue(ctx, .{ .string = try ctx.cs.internStr(tag) });
+            wires[2] = try wireFromValue(ctx, .{ .string = try ctx.cs.internStr("value") });
+            wires[3] = try wireFromValue(ctx, vmod.inlineVariantPayload(iv));
             return makeWire(.map, 0, @intCast(@intFromPtr(wires.ptr)), 2);
         },
     };
@@ -106,14 +107,14 @@ pub fn valueFromWire(w: host_abi.ValueWire) !Value {
             return Value{ .float = @bitCast(w.payload) };
         },
         .@"error" => {
-            if (w.len == 0) return Value{ .error_value = try chunk.internStr("") };
+            if (w.len == 0) return Value{ .error_value = try ctx.cs.internStr("") };
             const data = @as([*]u8, @ptrFromInt(@as(usize, @intCast(w.payload))))[0..@as(usize, @intCast(w.len))];
             const copy = try vmgc.vmAllocManagedBytes(ctx, w.len);
             @memcpy(copy[0..w.len], data);
-            return .{ .error_value = try chunk.internStr(copy[0..w.len]) };
+            return .{ .error_value = try ctx.cs.internStr(copy[0..w.len]) };
         },
         .string => {
-            if (w.len == 0) return Value{ .string = try chunk.internStr("") };
+            if (w.len == 0) return Value{ .string = try ctx.cs.internStr("") };
             const data = @as([*]u8, @ptrFromInt(@as(usize, @intCast(w.payload))))[0..@as(usize, @intCast(w.len))];
             return vmgc.makeDynString(ctx, data);
         },
@@ -121,7 +122,7 @@ pub fn valueFromWire(w: host_abi.ValueWire) !Value {
             const count = w.len;
             const elem_wires = @as([*]const host_abi.ValueWire, @ptrFromInt(@as(usize, @intCast(w.payload))))[0..count];
             const arr_obj = try vmgc.allocTempRooted(ctx, .{ .array_managed = &[_]Value{} });
-            defer vms.popTempRoot();
+            defer ctx.vs.popTempRoot();
             const items = try vmgc.vmAllocManagedSlice(ctx, Value, count);
             arr_obj.* = .{ .array_managed = items[0..0] }; // publish immediately
             for (elem_wires, 0..) |ew, i| {
@@ -134,15 +135,15 @@ pub fn valueFromWire(w: host_abi.ValueWire) !Value {
             const count = w.len;
             const pair_wires = @as([*]const host_abi.ValueWire, @ptrFromInt(@as(usize, @intCast(w.payload))))[0 .. count * 2];
             const map_obj = try vmgc.allocTempRooted(ctx, .{ .map_managed = &[_]MapEntry{} });
-            defer vms.popTempRoot();
+            defer ctx.vs.popTempRoot();
             const entries = try vmgc.vmAllocManagedSlice(ctx, MapEntry, count);
             map_obj.* = .{ .map_managed = entries[0..0] }; // publish immediately
             for (0..count) |i| {
                 const k = try valueFromWire(pair_wires[i * 2]);
-                try vms.pushTempRoot(k);
+                try ctx.vs.pushTempRoot(k);
                 entries[i].key = k;
                 entries[i].value = try valueFromWire(pair_wires[i * 2 + 1]);
-                vms.popTempRoot();
+                ctx.vs.popTempRoot();
                 map_obj.* = .{ .map_managed = entries[0 .. i + 1] }; // grow visible
             }
             return .{ .object = map_obj };
@@ -162,47 +163,47 @@ pub fn wireNumberToU64(w: host_abi.ValueWire) !u64 {
 }
 
 pub fn dispatchHostCallVariadic(ctx: vms.VMContext, comptime cap: u64, comptime call: host_abi.HostCall, argc: u8, start: usize, comptime nativeFn: anytype) !void {
-    if (vms.vmState().policy.native_backend == .host) {
-        try ensureHostReady();
-        if ((vms.vmState().host_caps & cap) != 0) {
+    if (ctx.vs.policy.native_backend == .host) {
+        try ensureHostReady(ctx);
+        if ((ctx.vs.host_caps & cap) != 0) {
             if (argc > MaxNativeArgs) return error.ArityMismatch;
             var args_wire: [MaxNativeArgs]host_abi.ValueWire = undefined;
-            for (args_wire[0..argc], vms.vmState().stack[start .. start + argc]) |*w, v| w.* = try wireFromValue(v);
+            for (args_wire[0..argc], ctx.vs.stack[start .. start + argc]) |*w, v| w.* = try wireFromValue(ctx, v);
             var out = nullWire();
             try nativeCallChecked(call, args_wire[0..argc], &out);
             const result = try valueFromWire(out);
-            vms.vmPopArgs(argc);
-            try vms.vmPush(result);
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(result);
             return;
         }
     }
     const result = try @call(.auto, nativeFn, .{ctx, start, argc});
-    vms.vmPopArgs(argc);
-    try vms.vmPush(result);
+    ctx.vs.vmPopArgs(argc);
+    try ctx.vs.vmPush(result);
 }
 
 pub fn dispatchHostCall1(ctx: vms.VMContext, comptime cap: u64, comptime call: host_abi.HostCall, argc: u8, comptime nativeFn: anytype) !void {
-    if (vms.vmState().policy.native_backend == .host) {
-        try ensureHostReady();
-        if ((vms.vmState().host_caps & cap) != 0) {
+    if (ctx.vs.policy.native_backend == .host) {
+        try ensureHostReady(ctx);
+        if ((ctx.vs.host_caps & cap) != 0) {
             var arg_wire: [1]host_abi.ValueWire = undefined;
-            arg_wire[0] = try wireFromValue(vms.vmTop(0));
+            arg_wire[0] = try wireFromValue(ctx, ctx.vs.vmTop(0));
             var out_wire = nullWire();
             try nativeCallChecked(call, arg_wire[0..], &out_wire);
             const out = try valueFromWire(out_wire);
-            vms.vmPopArgs(argc);
-            try vms.vmPush(out);
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(out);
             return;
         }
     }
-    const out = try @call(.auto, nativeFn, .{ctx, vms.vmTop(0)});
-    vms.vmPopArgs(argc);
-    try vms.vmPush(out);
+    const out = try @call(.auto, nativeFn, .{ctx, ctx.vs.vmTop(0)});
+    ctx.vs.vmPopArgs(argc);
+    try ctx.vs.vmPush(out);
 }
 
-pub fn ensureHostReady() !void {
-    if (vms.vmState().policy.native_backend != .host) return;
-    if (vms.vmState().host_checked) return;
+pub fn ensureHostReady(ctx: VMContext) !void {
+    if (ctx.vs.policy.native_backend != .host) return;
+    if (ctx.vs.host_checked) return;
 
     var out = nullWire();
 
@@ -211,8 +212,8 @@ pub fn ensureHostReady() !void {
     switch (st_ver) {
         .ok => {},
         .unsupported => {
-            vms.vmState().host_caps = 0;
-            vms.vmState().host_checked = true;
+            ctx.vs.host_caps = 0;
+            ctx.vs.host_checked = true;
             return;
         },
         .denied => return error.PermissionDenied,
@@ -223,6 +224,6 @@ pub fn ensureHostReady() !void {
     if (version != host_abi.ABI_VERSION) return error.HostAbiVersionMismatch;
 
     try nativeCallChecked(.host_caps, empty[0..], &out);
-    vms.vmState().host_caps = try wireNumberToU64(out);
-    vms.vmState().host_checked = true;
+    ctx.vs.host_caps = try wireNumberToU64(out);
+    ctx.vs.host_checked = true;
 }

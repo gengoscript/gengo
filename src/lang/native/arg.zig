@@ -1,6 +1,6 @@
-const heap = @import("../../runtime/heap.zig");
 const vmod = @import("../value.zig");
 const Object = vmod.Object;
+const VMContext = @import("../vm_state.zig").VMContext;
 
 // Qualified name must match the "@mod:std.X" pattern the compiler builds
 // when it resolves a type annotation written as `std.Arg`.
@@ -22,9 +22,9 @@ pub fn argClearCache() void {
     arg_type_cache = null;
 }
 
-pub fn argGetType() !*Object {
+pub fn argGetType(ctx: VMContext) !*Object {
     if (arg_type_cache) |t| return t;
-    const buf = heap.bump(Object, 1) orelse return error.OutOfMemory;
+    const buf = ctx.hs.bump(Object, 1) orelse return error.OutOfMemory;
     const obj: *Object = @ptrCast(buf);
     obj.* = .{ .variant_type = .{
         .name = "Arg",

@@ -69,7 +69,7 @@ pub fn nativeRandPerm(ctx: VMContext, n_v: Value) !Value {
     if (n < 0) return error.RangeError;
     const usize_n = @as(usize, @intCast(n));
     const obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
-    defer vms.popTempRoot();
+    defer ctx.vs.popTempRoot();
     const items = try vmgc.vmAllocManagedSlice(ctx, Value, usize_n);
     for (items, 0..) |*item, i| item.* = .{ .int = @intCast(i) };
     var j: usize = usize_n;
@@ -101,39 +101,39 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
     if (argc != nf.arity) return error.ArityMismatch;
     switch (@as(NativeFnId, @enumFromInt(nf.id))) {
         .rand_between => {
-            const out = try nativeRandBetween(vms.vmTop(1), vms.vmTop(0));
-            vms.vmPopArgs(argc);
-            try vms.vmPush(out);
+            const out = try nativeRandBetween(ctx.vs.vmTop(1), ctx.vs.vmTop(0));
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(out);
         },
         .rand_choice => {
-            const arr_val = vms.unboxNamed(vms.vmTop(0));
+            const arr_val = vms.unboxNamed(ctx.vs.vmTop(0));
             if (arr_val != .object) return error.TypeError;
             const out = try nativeRandChoice(arr_val.object);
-            vms.vmPopArgs(argc);
-            try vms.vmPush(out);
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(out);
         },
         .rand_float => {
-            vms.vmPopArgs(argc);
-            try vms.vmPush(nativeRandFloat());
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(nativeRandFloat());
         },
         .rand_intn => {
-            const out = try nativeRandIntn(vms.vmTop(0));
-            vms.vmPopArgs(argc);
-            try vms.vmPush(out);
+            const out = try nativeRandIntn(ctx.vs.vmTop(0));
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(out);
         },
         .rand_norm_float => {
-            vms.vmPopArgs(argc);
-            try vms.vmPush(nativeRandNormFloat());
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(nativeRandNormFloat());
         },
         .rand_perm => {
-            const out = try nativeRandPerm(ctx, vms.vmTop(0));
-            vms.vmPopArgs(argc);
-            try vms.vmPush(out);
+            const out = try nativeRandPerm(ctx, ctx.vs.vmTop(0));
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(out);
         },
         .rand_seed => {
-            try nativeRandSeed(vms.vmTop(0));
-            vms.vmPopArgs(argc);
-            try vms.vmPush(.null);
+            try nativeRandSeed(ctx.vs.vmTop(0));
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(.null);
         },
         else => {},
     }

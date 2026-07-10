@@ -31,7 +31,7 @@ pub fn nativeStrSplit(ctx: VMContext, s: []const u8, sep: []const u8, managed: b
         }
     }
     const arr_obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
-    defer vms.popTempRoot();
+    defer ctx.vs.popTempRoot();
     if (count > 0) {
         const pieces = try vmgc.vmAllocManagedSlice(ctx, Value, count);
         // Attach the slice as it fills: substring() can trigger GC, and
@@ -70,7 +70,7 @@ pub fn nativeStrJoin(ctx: VMContext, arr_obj: *Object, sep: []const u8) !Value {
     var total: usize = sep.len * (items.len - 1);
     for (items) |v| total += (try vms.asStringValue(v)).len;
     const obj = try vmgc.allocTempRooted(ctx, .{ .dyn_string = &[_]u8{} });
-    defer vms.popTempRoot();
+    defer ctx.vs.popTempRoot();
     const buf = try vmgc.vmAllocManagedBytes(ctx, total);
     var pos: usize = 0;
     for (items, 0..) |v, idx| {
@@ -92,7 +92,7 @@ pub fn nativeStrTrim(ctx: VMContext, s: []const u8) !Value {
 
 fn nativeStrTransform(ctx: VMContext, s: []const u8, comptime transform: fn (u8) u8) !Value {
     const obj = try vmgc.allocTempRooted(ctx, .{ .dyn_string = &[_]u8{} });
-    defer vms.popTempRoot();
+    defer ctx.vs.popTempRoot();
     const buf = try vmgc.vmAllocManagedBytes(ctx, s.len);
     for (s, 0..) |b, i| buf[i] = transform(b);
     obj.* = .{ .dyn_string = buf[0..s.len] };
@@ -131,7 +131,7 @@ pub fn nativeStrReplace(ctx: VMContext, s: []const u8, old: []const u8, new: []c
     if (count == 0) return vmgc.makeDynString(ctx, s);
     const total = s.len + count * new.len - count * old.len;
     const obj = try vmgc.allocTempRooted(ctx, .{ .dyn_string = &[_]u8{} });
-    defer vms.popTempRoot();
+    defer ctx.vs.popTempRoot();
     const buf = try vmgc.vmAllocManagedBytes(ctx, total);
     var src_i: usize = 0;
     var dst_i: usize = 0;
@@ -160,7 +160,7 @@ pub fn nativeStrRepeat(ctx: VMContext, s: []const u8, count_v: Value) !Value {
     const count: usize = @intCast(n);
     const total = s.len * count;
     const obj = try vmgc.allocTempRooted(ctx, .{ .dyn_string = &[_]u8{} });
-    defer vms.popTempRoot();
+    defer ctx.vs.popTempRoot();
     const buf = try vmgc.vmAllocManagedBytes(ctx, total);
     var pos: usize = 0;
     for (0..count) |_| {
@@ -174,7 +174,7 @@ pub fn nativeStrRepeat(ctx: VMContext, s: []const u8, count_v: Value) !Value {
 pub fn nativeStrSplitOnce(ctx: VMContext, s: []const u8, sep: []const u8, managed: bool) !Value {
     const pos = std.mem.indexOf(u8, s, sep) orelse {
         const obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
-        defer vms.popTempRoot();
+        defer ctx.vs.popTempRoot();
         const items = try vmgc.vmAllocManagedSlice(ctx, Value, 2);
         items[0] = .null;
         items[1] = .null;
@@ -182,7 +182,7 @@ pub fn nativeStrSplitOnce(ctx: VMContext, s: []const u8, sep: []const u8, manage
         return .{ .object = obj };
     };
     const obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
-    defer vms.popTempRoot();
+    defer ctx.vs.popTempRoot();
     const items = try vmgc.vmAllocManagedSlice(ctx, Value, 2);
     items[0] = .null;
     items[1] = .null;
@@ -206,7 +206,7 @@ pub fn nativeStrFields(ctx: VMContext, s: []const u8) !Value {
         while (i < s.len and s[i] != ' ' and s[i] != '\t' and s[i] != '\n' and s[i] != '\r' and s[i] != 0x0b and s[i] != 0x0c) i += 1;
     }
     const arr_obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
-    defer vms.popTempRoot();
+    defer ctx.vs.popTempRoot();
     if (count > 0) {
         const pieces = try vmgc.vmAllocManagedSlice(ctx, Value, count);
         // Attach as it fills: makeDynString can trigger GC and earlier
@@ -237,7 +237,7 @@ pub fn nativeStrPadLeft(ctx: VMContext, s: []const u8, n_v: Value, pad: []const 
     const pad_needed = width - s.len;
     const total = width;
     const obj = try vmgc.allocTempRooted(ctx, .{ .dyn_string = &[_]u8{} });
-    defer vms.popTempRoot();
+    defer ctx.vs.popTempRoot();
     const buf = try vmgc.vmAllocManagedBytes(ctx, total);
     var pos: usize = 0;
     while (pos + pad.len <= pad_needed) {
@@ -260,7 +260,7 @@ pub fn nativeStrPadRight(ctx: VMContext, s: []const u8, n_v: Value, pad: []const
     if (width <= s.len or pad.len == 0) return vmgc.makeDynString(ctx, s);
     const total = width;
     const obj = try vmgc.allocTempRooted(ctx, .{ .dyn_string = &[_]u8{} });
-    defer vms.popTempRoot();
+    defer ctx.vs.popTempRoot();
     const buf = try vmgc.vmAllocManagedBytes(ctx, total);
     var pos: usize = 0;
     @memcpy(buf[pos..][0..s.len], s);
@@ -343,7 +343,7 @@ pub fn nativeStrSplitN(ctx: VMContext, s: []const u8, sep: []const u8, n_v: Valu
         }
     }
     const arr_obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
-    defer vms.popTempRoot();
+    defer ctx.vs.popTempRoot();
     const pieces = try vmgc.vmAllocManagedSlice(ctx, Value, count);
     // Attach as it fills: makeDynString can trigger GC and earlier elements
     // must be traced.
@@ -375,172 +375,172 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
         .str_builder_new => {
             const obj = try vmgc.vmAllocObject(ctx);
             obj.* = .{ .string_builder = .{ .buf = &[_]u8{}, .len = 0 } };
-            vms.vmPopArgs(argc);
-            try vms.vmPush(.{ .object = obj });
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(.{ .object = obj });
         },
         .str_contains => {
-            const s = try vms.asStringValue(vms.vmTop(1));
-            const sub = try vms.asStringValue(vms.vmTop(0));
-            vms.vmPopArgs(argc);
-            try vms.vmPush(nativeStrContains(s, sub));
+            const s = try vms.asStringValue(ctx.vs.vmTop(1));
+            const sub = try vms.asStringValue(ctx.vs.vmTop(0));
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(nativeStrContains(s, sub));
         },
         .str_contains_any => {
-            const s = try vms.asStringValue(vms.vmTop(1));
-            const chars = try vms.asStringValue(vms.vmTop(0));
-            vms.vmPopArgs(argc);
-            try vms.vmPush(nativeStrContainsAny(s, chars));
+            const s = try vms.asStringValue(ctx.vs.vmTop(1));
+            const chars = try vms.asStringValue(ctx.vs.vmTop(0));
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(nativeStrContainsAny(s, chars));
         },
         .str_count => {
-            const s = try vms.asStringValue(vms.vmTop(1));
-            const sub = try vms.asStringValue(vms.vmTop(0));
-            vms.vmPopArgs(argc);
-            try vms.vmPush(nativeStrCount(s, sub));
+            const s = try vms.asStringValue(ctx.vs.vmTop(1));
+            const sub = try vms.asStringValue(ctx.vs.vmTop(0));
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(nativeStrCount(s, sub));
         },
         .str_ends_with => {
-            const s = try vms.asStringValue(vms.vmTop(1));
-            const suffix = try vms.asStringValue(vms.vmTop(0));
-            vms.vmPopArgs(argc);
-            try vms.vmPush(nativeStrEndsWith(s, suffix));
+            const s = try vms.asStringValue(ctx.vs.vmTop(1));
+            const suffix = try vms.asStringValue(ctx.vs.vmTop(0));
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(nativeStrEndsWith(s, suffix));
         },
         .str_equal_fold => {
-            const s = try vms.asStringValue(vms.vmTop(1));
-            const t = try vms.asStringValue(vms.vmTop(0));
-            vms.vmPopArgs(argc);
-            try vms.vmPush(nativeStrEqualFold(s, t));
+            const s = try vms.asStringValue(ctx.vs.vmTop(1));
+            const t = try vms.asStringValue(ctx.vs.vmTop(0));
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(nativeStrEqualFold(s, t));
         },
         .str_fields => {
-            const s = try vms.asStringValue(vms.vmTop(0));
+            const s = try vms.asStringValue(ctx.vs.vmTop(0));
             const out = try nativeStrFields(ctx, s);
-            vms.vmPopArgs(argc);
-            try vms.vmPush(out);
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(out);
         },
         .str_index_of => {
-            const s = try vms.asStringValue(vms.vmTop(1));
-            const sub = try vms.asStringValue(vms.vmTop(0));
+            const s = try vms.asStringValue(ctx.vs.vmTop(1));
+            const sub = try vms.asStringValue(ctx.vs.vmTop(0));
             const out = try nativeStrIndexOf(s, sub);
-            vms.vmPopArgs(argc);
-            try vms.vmPush(out);
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(out);
         },
         .str_join => {
-            const arr_val = vms.vmTop(1);
-            const sep = try vms.asStringValue(vms.vmTop(0));
+            const arr_val = ctx.vs.vmTop(1);
+            const sep = try vms.asStringValue(ctx.vs.vmTop(0));
             if (arr_val != .object) return error.TypeError;
             const out = try nativeStrJoin(ctx, arr_val.object, sep);
-            vms.vmPopArgs(argc);
-            try vms.vmPush(out);
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(out);
         },
         .str_last_index_of => {
-            const s = try vms.asStringValue(vms.vmTop(1));
-            const sub = try vms.asStringValue(vms.vmTop(0));
+            const s = try vms.asStringValue(ctx.vs.vmTop(1));
+            const sub = try vms.asStringValue(ctx.vs.vmTop(0));
             const out = try nativeStrLastIndexOf(s, sub);
-            vms.vmPopArgs(argc);
-            try vms.vmPush(out);
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(out);
         },
         .str_lower => {
-            const s = try vms.asStringValue(vms.vmTop(0));
+            const s = try vms.asStringValue(ctx.vs.vmTop(0));
             const out = try nativeStrLower(ctx, s);
-            vms.vmPopArgs(argc);
-            try vms.vmPush(out);
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(out);
         },
         .str_pad_left => {
-            const s = try vms.asStringValue(vms.vmTop(2));
-            const n_v = vms.vmTop(1);
-            const pad = try vms.asStringValue(vms.vmTop(0));
+            const s = try vms.asStringValue(ctx.vs.vmTop(2));
+            const n_v = ctx.vs.vmTop(1);
+            const pad = try vms.asStringValue(ctx.vs.vmTop(0));
             const out = try nativeStrPadLeft(ctx, s, n_v, pad);
-            vms.vmPopArgs(argc);
-            try vms.vmPush(out);
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(out);
         },
         .str_pad_right => {
-            const s = try vms.asStringValue(vms.vmTop(2));
-            const n_v = vms.vmTop(1);
-            const pad = try vms.asStringValue(vms.vmTop(0));
+            const s = try vms.asStringValue(ctx.vs.vmTop(2));
+            const n_v = ctx.vs.vmTop(1);
+            const pad = try vms.asStringValue(ctx.vs.vmTop(0));
             const out = try nativeStrPadRight(ctx, s, n_v, pad);
-            vms.vmPopArgs(argc);
-            try vms.vmPush(out);
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(out);
         },
         .str_repeat => {
-            const s = try vms.asStringValue(vms.vmTop(1));
-            const out = try nativeStrRepeat(ctx, s, vms.vmTop(0));
-            vms.vmPopArgs(argc);
-            try vms.vmPush(out);
+            const s = try vms.asStringValue(ctx.vs.vmTop(1));
+            const out = try nativeStrRepeat(ctx, s, ctx.vs.vmTop(0));
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(out);
         },
         .str_replace => {
-            const s = try vms.asStringValue(vms.vmTop(2));
-            const old = try vms.asStringValue(vms.vmTop(1));
-            const new = try vms.asStringValue(vms.vmTop(0));
+            const s = try vms.asStringValue(ctx.vs.vmTop(2));
+            const old = try vms.asStringValue(ctx.vs.vmTop(1));
+            const new = try vms.asStringValue(ctx.vs.vmTop(0));
             const out = try nativeStrReplace(ctx, s, old, new);
-            vms.vmPopArgs(argc);
-            try vms.vmPush(out);
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(out);
         },
         .str_split => {
-            const src_val = vms.vmTop(1);
+            const src_val = ctx.vs.vmTop(1);
             const s = try vms.asStringValue(src_val);
-            const sep = try vms.asStringValue(vms.vmTop(0));
+            const sep = try vms.asStringValue(ctx.vs.vmTop(0));
             const out = try nativeStrSplit(ctx, s, sep, src_val == .object);
-            vms.vmPopArgs(argc);
-            try vms.vmPush(out);
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(out);
         },
         .str_split_once => {
-            const src_val = vms.vmTop(1);
+            const src_val = ctx.vs.vmTop(1);
             const s = try vms.asStringValue(src_val);
-            const sep = try vms.asStringValue(vms.vmTop(0));
+            const sep = try vms.asStringValue(ctx.vs.vmTop(0));
             const out = try nativeStrSplitOnce(ctx, s, sep, src_val == .object);
-            vms.vmPopArgs(argc);
-            try vms.vmPush(out);
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(out);
         },
         .str_starts_with => {
-            const s = try vms.asStringValue(vms.vmTop(1));
-            const prefix = try vms.asStringValue(vms.vmTop(0));
-            vms.vmPopArgs(argc);
-            try vms.vmPush(nativeStrStartsWith(s, prefix));
+            const s = try vms.asStringValue(ctx.vs.vmTop(1));
+            const prefix = try vms.asStringValue(ctx.vs.vmTop(0));
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(nativeStrStartsWith(s, prefix));
         },
         .str_trim => {
-            const s = try vms.asStringValue(vms.vmTop(0));
+            const s = try vms.asStringValue(ctx.vs.vmTop(0));
             const out = try nativeStrTrim(ctx, s);
-            vms.vmPopArgs(argc);
-            try vms.vmPush(out);
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(out);
         },
         .str_upper => {
-            const s = try vms.asStringValue(vms.vmTop(0));
+            const s = try vms.asStringValue(ctx.vs.vmTop(0));
             const out = try nativeStrUpper(ctx, s);
-            vms.vmPopArgs(argc);
-            try vms.vmPush(out);
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(out);
         },
         .str_trim_left => {
-            const s = try vms.asStringValue(vms.vmTop(1));
-            const cutset = try vms.asStringValue(vms.vmTop(0));
+            const s = try vms.asStringValue(ctx.vs.vmTop(1));
+            const cutset = try vms.asStringValue(ctx.vs.vmTop(0));
             const out = try nativeStrTrimLeft(ctx, s, cutset);
-            vms.vmPopArgs(argc);
-            try vms.vmPush(out);
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(out);
         },
         .str_trim_right => {
-            const s = try vms.asStringValue(vms.vmTop(1));
-            const cutset = try vms.asStringValue(vms.vmTop(0));
+            const s = try vms.asStringValue(ctx.vs.vmTop(1));
+            const cutset = try vms.asStringValue(ctx.vs.vmTop(0));
             const out = try nativeStrTrimRight(ctx, s, cutset);
-            vms.vmPopArgs(argc);
-            try vms.vmPush(out);
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(out);
         },
         .str_trim_prefix => {
-            const s = try vms.asStringValue(vms.vmTop(1));
-            const prefix = try vms.asStringValue(vms.vmTop(0));
+            const s = try vms.asStringValue(ctx.vs.vmTop(1));
+            const prefix = try vms.asStringValue(ctx.vs.vmTop(0));
             const out = try nativeStrTrimPrefix(ctx, s, prefix);
-            vms.vmPopArgs(argc);
-            try vms.vmPush(out);
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(out);
         },
         .str_trim_suffix => {
-            const s = try vms.asStringValue(vms.vmTop(1));
-            const suffix = try vms.asStringValue(vms.vmTop(0));
+            const s = try vms.asStringValue(ctx.vs.vmTop(1));
+            const suffix = try vms.asStringValue(ctx.vs.vmTop(0));
             const out = try nativeStrTrimSuffix(ctx, s, suffix);
-            vms.vmPopArgs(argc);
-            try vms.vmPush(out);
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(out);
         },
         .str_split_n => {
-            const s = try vms.asStringValue(vms.vmTop(2));
-            const sep = try vms.asStringValue(vms.vmTop(1));
-            const n_v = vms.vmTop(0);
+            const s = try vms.asStringValue(ctx.vs.vmTop(2));
+            const sep = try vms.asStringValue(ctx.vs.vmTop(1));
+            const n_v = ctx.vs.vmTop(0);
             const out = try nativeStrSplitN(ctx, s, sep, n_v);
-            vms.vmPopArgs(argc);
-            try vms.vmPush(out);
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(out);
         },
         else => {},
     }
