@@ -1,5 +1,6 @@
 const std = @import("std");
 const vms = @import("vm_state.zig");
+const VMContext = vms.VMContext;
 const heap = @import("../runtime/heap.zig");
 const chunk = @import("chunk.zig");
 const Op = @import("op.zig").Op;
@@ -41,12 +42,12 @@ pub const Snapshot = struct {
     gc_live_count: usize,
 };
 
-pub fn capture() Snapshot {
-    const state = vms.vmState();
+pub fn capture(ctx: VMContext) Snapshot {
+    const state = ctx.vs;
     const op_name = blk: {
         const ip = state.ip;
-        if (ip > 0 and ip - 1 < chunk.codeLen()) {
-            const raw = chunk.codeByteAt(ip - 1);
+        if (ip > 0 and ip - 1 < ctx.cs.codeLen()) {
+            const raw = ctx.cs.codeByteAt(ip - 1);
             if (raw < std.meta.fields(Op).len) {
                 break :blk @tagName(@as(Op, @enumFromInt(raw)));
             }
@@ -59,7 +60,7 @@ pub fn capture() Snapshot {
         .frame_depth = state.frame_top,
         .stack_top = state.stack_top,
         .temp_root_depth = state.temp_root_top,
-        .gc_live_count = heap.liveObjectCount(),
+        .gc_live_count = ctx.hs.liveObjectCount(),
     };
 }
 
@@ -79,8 +80,8 @@ pub fn isIntegrityError(err: anyerror) bool {
 
 /// Hard-stop with a structured diagnostic. Captures VM state and calls
 /// std.debug.panic — this path never unwinds to user code.
-pub fn fatal(err: anyerror) noreturn {
-    const snap = capture();
+pub fn fatal(ctx: VMContext, err: anyerror) noreturn {
+    const snap = capture(ctx);
     std.debug.panic(
         "VM integrity failure [{s}] op={s} ip={d} frames={d} stack={d} temp_roots={d} gc_live={d}",
         .{

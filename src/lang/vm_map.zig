@@ -144,13 +144,13 @@ pub fn mapSet(ctx: VMContext, container: Value, key: Value, val: Value) !void {
         items[fi].value = val;
         return;
     }
-    try vms.pushTempRoot(container);
-    defer vms.popTempRoot();
+    try ctx.vs.pushTempRoot(container);
+    defer ctx.vs.popTempRoot();
     const new_len = items.len + 1;
     const ext = try vmgc.vmAllocManagedSlice(ctx, MapEntry, new_len);
     @memcpy(ext[0..items.len], items);
     ext[items.len] = .{ .key = key, .value = val };
-    if (container.object.* == .map_managed) heap.freeManagedSlice(MapEntry, container.object.map_managed);
+    if (container.object.* == .map_managed) ctx.hs.freeManagedSlice(MapEntry, container.object.map_managed);
     container.object.* = .{ .map_managed = ext[0..new_len] };
     if (new_len > 8) {
         const bcount = mapBucketsForCount(new_len);
@@ -195,8 +195,8 @@ pub fn mapInsertHashed(ctx: VMContext, obj: *Object, key: Value, val: Value) !vo
         obj.map_hashed.len >= obj.map_hashed.entries.len or
         ((obj.map_hashed.len + 1) * 10 >= obj.map_hashed.buckets.len * 7))
     {
-        try vms.pushTempRoot(.{ .object = obj });
-        defer vms.popTempRoot();
+        try ctx.vs.pushTempRoot(.{ .object = obj });
+        defer ctx.vs.popTempRoot();
 
         const old = obj.map_hashed;
         const new_len = old.len + 1;
@@ -209,8 +209,8 @@ pub fn mapInsertHashed(ctx: VMContext, obj: *Object, key: Value, val: Value) !vo
         mapBuildHashedBuckets(out_entries[0..old.len], out_buckets);
         // Update the object before freeing old slices so paranoia doesn't see stale live refs.
         obj.* = .{ .map_hashed = .{ .entries = out_entries[0..out_cap], .len = old.len, .buckets = out_buckets } };
-        heap.freeManagedSlice(MapEntry, old.entries);
-        heap.freeManagedSlice(i32, old.buckets);
+        ctx.hs.freeManagedSlice(MapEntry, old.entries);
+        ctx.hs.freeManagedSlice(i32, old.buckets);
     }
 
     var hm = &obj.map_hashed;

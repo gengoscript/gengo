@@ -471,7 +471,7 @@ test "spec pass cases differential" {
         rt.inner.compileAndInstall(src, path, .filesystem) catch continue;
 
         // Build defused bytecode from the current (just-compiled) chunk.
-        const defused = vm_defuse.buildDefusedCode(alloc) catch continue;
+        const defused = vm_defuse.buildDefusedCode(vm.VMContext.fromActive().cs, alloc) catch continue;
         defer alloc.free(defused);
 
         if (defused.len > chunk.MaxCode) continue; // pathological; shouldn't happen

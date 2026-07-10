@@ -36,7 +36,7 @@ fn markObjectQueue(ctx: VMContext, obj: *Object) void {
     if (ctx.hs.isObjectMarked(obj)) return;
     ctx.hs.markObject(obj);
     if (mark_worklist_top >= mark_worklist.len) {
-        vm_integrity.fatal(error.GCInvariantFailure);
+        vm_integrity.fatal(ctx, error.GCInvariantFailure);
     }
     mark_worklist[mark_worklist_top] = obj;
     mark_worklist_top += 1;
@@ -54,7 +54,7 @@ fn drainMarkQueue(ctx: VMContext) void {
         const obj = mark_worklist[mark_worklist_top];
         switch (obj.*) {
             .array, .array_managed => {
-                for (vms.asArraySlice(obj) catch vm_integrity.fatal(error.GCInvariantFailure)) |v| markValue(ctx, v);
+                for (vms.asArraySlice(obj) catch vm_integrity.fatal(ctx, error.GCInvariantFailure)) |v| markValue(ctx, v);
             },
             .array_view => |av| {
                 if (ctx.hs.isObjectLive(av.source)) markObjectQueue(ctx, av.source);
@@ -63,7 +63,7 @@ fn drainMarkQueue(ctx: VMContext) void {
                 if (ctx.hs.isObjectLive(ac.backing)) markObjectQueue(ctx, ac.backing);
             },
             .map, .map_managed, .map_hashed => {
-                for (vms.asMapSlice(obj) catch vm_integrity.fatal(error.GCInvariantFailure)) |e| {
+                for (vms.asMapSlice(obj) catch vm_integrity.fatal(ctx, error.GCInvariantFailure)) |e| {
                     markValue(ctx, e.key);
                     markValue(ctx, e.value);
                 }
@@ -140,13 +140,13 @@ fn gcCheckIntegrityPostSweep(ctx: VMContext) void {
             .array_view => |av| {
                 if (!ctx.hs.isObjectLive(av.source) and !ctx.hs.isObjectImmortal(av.source)) {
                     std.debug.print("GC INTEGRITY: array_view.source (obj {d}) is dead after sweep\n", .{i});
-                    vm_integrity.fatal(error.GCInvariantFailure);
+                    vm_integrity.fatal(ctx, error.GCInvariantFailure);
                 }
             },
             .string_view => |sv| {
                 if (sv.source) |src| if (!ctx.hs.isObjectLive(src) and !ctx.hs.isObjectImmortal(src)) {
                     std.debug.print("GC INTEGRITY: string_view.source (obj {d}) is dead after sweep\n", .{i});
-                    vm_integrity.fatal(error.GCInvariantFailure);
+                    vm_integrity.fatal(ctx, error.GCInvariantFailure);
                 };
             },
             else => {},
