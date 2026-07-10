@@ -192,18 +192,18 @@ pub const State = struct {
         self.ops_budget_remaining = policy.max_ops orelse std.math.maxInt(u64);
     }
 
-    fn currentIpIdx(self: *State) usize {
-        const len = chunk.codeLen();
+    fn currentIpIdx(self: *State, cs: *const chunk.State) usize {
+        const len = cs.codeLen();
         if (len == 0) return 0;
         return if (self.ip == 0) 0 else @min(self.ip - 1, len - 1);
     }
 
-    pub fn currentLine(self: *State) u32 {
-        return chunk.lineAt(self.currentIpIdx());
+    pub fn currentLine(self: *State, cs: *const chunk.State) u32 {
+        return cs.lineAt(self.currentIpIdx(cs));
     }
 
-    pub fn currentCol(self: *State) u16 {
-        return chunk.colAt(self.currentIpIdx());
+    pub fn currentCol(self: *State, cs: *const chunk.State) u16 {
+        return cs.colAt(self.currentIpIdx(cs));
     }
 
     pub fn panicLine(self: *State) u32 {
@@ -251,27 +251,6 @@ pub const State = struct {
         self.stack_top -= @as(usize, argc) + 1;
     }
 
-    pub fn vmByte(self: *State) !u8 {
-        if (self.ip >= chunk.codeLen()) return error.BytecodeOutOfBounds;
-        const b = chunk.codeByteAt(self.ip);
-        self.ip += 1;
-        return b;
-    }
-
-    pub fn vmShort(self: *State) !usize {
-        const hi: usize = try self.vmByte();
-        const lo: usize = try self.vmByte();
-        return (hi << 8) | lo;
-    }
-
-    pub fn vmInt(self: *State) !usize {
-        const b3: usize = try self.vmByte();
-        const b2: usize = try self.vmByte();
-        const b1: usize = try self.vmByte();
-        const b0: usize = try self.vmByte();
-        return (b3 << 24) | (b2 << 16) | (b1 << 8) | b0;
-    }
-
     pub fn pushTempRoot(self: *State, v: Value) !void {
         if (self.temp_root_top >= MaxTempRoots) return error.BadTempRootDiscipline;
         self.temp_roots[self.temp_root_top] = v;
@@ -308,12 +287,6 @@ pub const State = struct {
 
     pub fn restoreTempRoots(self: *State, base: usize) void {
         self.temp_root_top = base;
-    }
-
-    pub fn vmConst(self: *State) !Value {
-        const idx = try self.vmShort();
-        if (idx >= chunk.constCount()) return error.InvalidChunkShape;
-        return chunk.constAt(idx) catch unreachable;
     }
 
     // ── .string immortality invariant debug check ───────────────────────────────
@@ -365,56 +338,11 @@ pub fn setActive(state: *State) void {
     g_state = state;
 }
 
-pub fn activeState() *State {
-    return g_state;
-}
-
 pub fn reset() void { return g_state.reset(); }
-
-pub fn resetExec() void { return g_state.resetExec(); }
-
-pub fn setRuntimeErr(comptime fmt: []const u8, args: anytype) void { return g_state.setRuntimeErr(fmt, args); }
-
-pub fn runtimeErrMsg() []const u8 { return g_state.runtimeErrMsg(); }
 
 pub fn setPolicy(policy: Policy) void { return g_state.setPolicy(policy); }
 
-fn currentIpIdx() usize { return g_state.currentIpIdx(); }
-
-pub fn currentLine() u32 { return g_state.currentLine(); }
-pub fn currentCol() u16 { return g_state.currentCol(); }
-
-pub fn panicLine() u32 { return g_state.panicLine(); }
-pub fn panicCol() u16 { return g_state.panicCol(); }
-pub fn panicPath() []const u8 { return g_state.panicPath(); }
-pub fn panicFrames() []const PanicFrame { return g_state.panicFrames(); }
-
-pub inline fn vmPush(v: Value) !void { return g_state.vmPush(v); }
-
-pub inline fn vmPop() !Value { return g_state.vmPop(); }
-
-pub inline fn vmPeek(dist: usize) !Value { return g_state.vmPeek(dist); }
-
-// Unchecked stack read for native dispatch — safe after arity has been verified.
-pub inline fn vmTop(dist: usize) Value { return g_state.vmTop(dist); }
-
-// Pop all arguments of a native call: argc user args plus the function object.
-// Safe to call unchecked after arity has been verified.
-pub inline fn vmPopArgs(argc: u8) void { return g_state.vmPopArgs(argc); }
-
-pub fn pushTempRoot(v: Value) !void { return g_state.pushTempRoot(v); }
-
-pub fn popTempRoot() void { return g_state.popTempRoot(); }
-
 pub fn tempRootDepth() usize { return g_state.tempRootDepth(); }
-
-pub fn assertNoTempRoots(comptime context: []const u8) void { return g_state.assertNoTempRoots(context); }
-
-pub fn assertTempRootDepth(expected: usize, comptime context: []const u8) void { return g_state.assertTempRootDepth(expected, context); }
-
-pub fn pushObjectTempRoots(values: []const Value) !usize { return g_state.pushObjectTempRoots(values); }
-
-pub fn restoreTempRoots(base: usize) void { return g_state.restoreTempRoots(base); }
 
 fn valToFloatIndex(v: Value) !f64 {
     const n: f64 = switch (v) {
@@ -516,10 +444,10 @@ pub fn asArraySlice(obj: *Object) ![]Value {
     };
 }
 
-pub fn cloneArraySlice(obj: *Object) ![]Value {
+pub fn cloneArraySlice(ctx: VMContext, obj: *Object) ![]Value {
     const items = try asArraySlice(obj);
     if (items.len == 0) return &[_]Value{};
-    const out = heap.allocManagedSlice(Value, items.len) orelse return error.OutOfMemory;
+    const out = ctx.hs.allocManagedSlice(Value, items.len) orelse return error.OutOfMemory;
     @memcpy(out[0..items.len], items);
     return out[0..items.len];
 }
@@ -556,8 +484,6 @@ pub fn asStringValue(v: Value) ![]const u8 {
     }
     return error.TypeError;
 }
-
-pub fn assertStringImmortal(v: Value) void { return g_state.assertStringImmortal(v); }
 
 /// Explicit execution context carrying all four state pointers.
 pub const VMContext = struct {

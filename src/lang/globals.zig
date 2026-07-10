@@ -135,15 +135,3 @@ pub fn activeState() *State {
 }
 
 pub fn reset() void                              { g_state.reset(); }
-pub fn compactValue(i: usize) Value              { return g_state.compactValue(i); }
-pub fn get(name: []const u8) ?Value              { return g_state.get(name); }
-pub fn findSlot(name: []const u8) ?u16           { return g_state.findSlot(name); }
-pub fn getAt(slot: u16) Value                    { return g_state.getAt(slot); }
-pub fn setAt(slot: u16, value: Value) void       { g_state.setAt(slot, value); }
-pub fn has(name: []const u8) bool                { return g_state.has(name); }
-pub fn set(name: []const u8, value: Value) bool  { return g_state.set(name, value); }
-pub fn def(name: []const u8, value: Value) !void { return g_state.def(name, value); }
-pub fn len() usize                               { return g_state.len(); }
-pub fn valueAt(i: usize) Value                   { return g_state.valueAt(i); }
-pub fn nameAt(i: usize) []const u8               { return g_state.nameAt(i); }
-pub fn debugSlotCount() usize                    { return g_state.debugSlotCount(); }

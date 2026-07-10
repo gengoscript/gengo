@@ -37,15 +37,7 @@ pub const MaxFrames = vms.MaxFrames;
 
 pub const setActive = vms.setActive;
 pub const reset = vms.reset;
-pub const resetExec = vms.resetExec;
 pub const setPolicy = vms.setPolicy;
-pub const currentLine = vms.currentLine;
-pub const currentCol = vms.currentCol;
-pub const panicLine = vms.panicLine;
-pub const panicCol = vms.panicCol;
-pub const panicPath = vms.panicPath;
-pub const panicFrames = vms.panicFrames;
-pub const runtimeErrMsg = vms.runtimeErrMsg;
 
 /// Explicit VM execution context. Re-exported from vm_state so callers
 /// that use vm.VMContext continue to work unchanged.
@@ -1038,8 +1030,8 @@ fn performCall(ctx: VMContext, argc: u8) !void {
                     .string => |ss| break :blk ss,
                     .error_value => |ss| break :blk ss,
                     .object => |ao| switch (ao.*) {
-                        .dyn_string => |s| break :blk try chunk.internStr(s),
-                        .string_view => |sv| break :blk try chunk.internStr(sv.bytes),
+                        .dyn_string => |s| break :blk try ctx.cs.internStr(s),
+                        .string_view => |sv| break :blk try ctx.cs.internStr(sv.bytes),
                         .named_error_value => |nev| break :blk nev.msg,
                         else => {},
                     },
@@ -3329,8 +3321,8 @@ fn runPanicUnwind(ctx: VMContext, orig_err: anyerror) anyerror!void {
     }
 
     if (ctx.vs.panic_line == 0) {
-        ctx.vs.panic_line = currentLine();
-        ctx.vs.panic_col = currentCol();
+        ctx.vs.panic_line = ctx.vs.currentLine(ctx.cs);
+        ctx.vs.panic_col = ctx.vs.currentCol(ctx.cs);
         const _path = ctx.cs.pathAt(if (ctx.vs.ip > 0) ctx.vs.ip - 1 else 0);
         const _plen: u8 = @intCast(@min(_path.len, ctx.vs.panic_path.len));
         @memcpy(ctx.vs.panic_path[0.._plen], _path[0.._plen]);
@@ -3514,7 +3506,7 @@ pub fn callGlobal(ctx: VMContext, name: []const u8, args: []const Value) !Value 
     globals.setActive(ctx.gs);
     heap.setActive(ctx.hs);
     vms.setActive(ctx.vs);
-    const fn_val = globals.get(name) orelse return error.NotDefined;
+    const fn_val = ctx.gs.get(name) orelse return error.NotDefined;
     if (fn_val != .object) return error.NotAFunction;
     const obj = fn_val.object;
     if (obj.* != .function and obj.* != .closure) return error.NotAFunction;

@@ -396,14 +396,14 @@ fn wireToValue(wire: ValueWire) !Value {
             break :blk if ((wire.flags & host_abi.FLAG_INTEGER) != 0) Value{ .int = @bitCast(wire.payload) } else Value{ .float = fval };
         },
         @intFromEnum(WireTag.@"error") => {
-            if (wire.len == 0) return Value{ .error_value = try chunk.internStr("") };
+            if (wire.len == 0) return Value{ .error_value = try ctx.cs.internStr("") };
             const data = @as([*]u8, @ptrFromInt(@as(usize, @intCast(wire.payload))))[0..@as(usize, @intCast(wire.len))];
             const copy = try vmgc.vmAllocManagedBytes(ctx, wire.len);
             @memcpy(copy[0..wire.len], data);
-            return Value{ .error_value = try chunk.internStr(copy[0..wire.len]) };
+            return Value{ .error_value = try ctx.cs.internStr(copy[0..wire.len]) };
         },
         @intFromEnum(WireTag.string) => {
-            if (wire.len == 0) return Value{ .string = try chunk.internStr("") };
+            if (wire.len == 0) return Value{ .string = try ctx.cs.internStr("") };
             const data = @as([*]u8, @ptrFromInt(@as(usize, @intCast(wire.payload))))[0..@as(usize, @intCast(wire.len))];
             return try vmgc.makeDynString(ctx, data);
         },
@@ -411,7 +411,7 @@ fn wireToValue(wire: ValueWire) !Value {
             const count = wire.len;
             const elem_wires = @as([*]const ValueWire, @ptrFromInt(@as(usize, @intCast(wire.payload))))[0..count];
             const arr_obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
-            defer vms.popTempRoot();
+            defer ctx.vs.popTempRoot();
             const items = try vmgc.vmAllocManagedSlice(ctx, Value, count);
             for (elem_wires, 0..) |ew, i| {
                 items[i] = try wireToValue(ew);
@@ -423,7 +423,7 @@ fn wireToValue(wire: ValueWire) !Value {
             const count = wire.len;
             const pair_wires = @as([*]const ValueWire, @ptrFromInt(@as(usize, @intCast(wire.payload))))[0 .. count * 2];
             const map_obj = try vmgc.allocTempRooted(ctx, .{ .map = &[_]MapEntry{} });
-            defer vms.popTempRoot();
+            defer ctx.vs.popTempRoot();
             const entries = try vmgc.vmAllocManagedSlice(ctx, MapEntry, count);
             for (0..count) |i| {
                 entries[i] = .{

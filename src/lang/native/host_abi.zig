@@ -91,8 +91,7 @@ pub fn wireFromValue(ctx: VMContext, v: Value) !host_abi.ValueWire {
     };
 }
 
-pub fn valueFromWire(w: host_abi.ValueWire) !Value {
-    const ctx = vms.VMContext.fromActive();
+pub fn valueFromWire(ctx: VMContext, w: host_abi.ValueWire) !Value {
     const tag: host_abi.WireTag = @enumFromInt(w.tag);
     return switch (tag) {
         .null => .null,
@@ -126,7 +125,7 @@ pub fn valueFromWire(w: host_abi.ValueWire) !Value {
             const items = try vmgc.vmAllocManagedSlice(ctx, Value, count);
             arr_obj.* = .{ .array_managed = items[0..0] }; // publish immediately
             for (elem_wires, 0..) |ew, i| {
-                items[i] = try valueFromWire(ew);
+                items[i] = try valueFromWire(ctx, ew);
                 arr_obj.* = .{ .array_managed = items[0 .. i + 1] }; // grow visible
             }
             return .{ .object = arr_obj };
@@ -139,10 +138,10 @@ pub fn valueFromWire(w: host_abi.ValueWire) !Value {
             const entries = try vmgc.vmAllocManagedSlice(ctx, MapEntry, count);
             map_obj.* = .{ .map_managed = entries[0..0] }; // publish immediately
             for (0..count) |i| {
-                const k = try valueFromWire(pair_wires[i * 2]);
+                const k = try valueFromWire(ctx, pair_wires[i * 2]);
                 try ctx.vs.pushTempRoot(k);
                 entries[i].key = k;
-                entries[i].value = try valueFromWire(pair_wires[i * 2 + 1]);
+                entries[i].value = try valueFromWire(ctx, pair_wires[i * 2 + 1]);
                 ctx.vs.popTempRoot();
                 map_obj.* = .{ .map_managed = entries[0 .. i + 1] }; // grow visible
             }
@@ -171,7 +170,7 @@ pub fn dispatchHostCallVariadic(ctx: vms.VMContext, comptime cap: u64, comptime 
             for (args_wire[0..argc], ctx.vs.stack[start .. start + argc]) |*w, v| w.* = try wireFromValue(ctx, v);
             var out = nullWire();
             try nativeCallChecked(call, args_wire[0..argc], &out);
-            const result = try valueFromWire(out);
+            const result = try valueFromWire(ctx, out);
             ctx.vs.vmPopArgs(argc);
             try ctx.vs.vmPush(result);
             return;
@@ -190,7 +189,7 @@ pub fn dispatchHostCall1(ctx: vms.VMContext, comptime cap: u64, comptime call: h
             arg_wire[0] = try wireFromValue(ctx, ctx.vs.vmTop(0));
             var out_wire = nullWire();
             try nativeCallChecked(call, arg_wire[0..], &out_wire);
-            const out = try valueFromWire(out_wire);
+            const out = try valueFromWire(ctx, out_wire);
             ctx.vs.vmPopArgs(argc);
             try ctx.vs.vmPush(out);
             return;

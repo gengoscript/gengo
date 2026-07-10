@@ -852,17 +852,14 @@ pub fn setActive(state: *State) void {
     g_state = state;
 }
 
-pub fn activeState() *State { return g_state; }
 
 pub fn reset() void { g_state.reset(); }
 
 // Largest single managed allocation the active heap supports.
-pub fn maxManagedAlloc() usize { return g_state.maxManagedAlloc(); }
 
 // Returns true if allocating n bytes would expand the bump pointer (i.e., the
 // slab free list for the class has no available block). Callers can use this
 // to decide whether to run GC proactively before a large allocation.
-pub fn wouldBump(n: usize) bool { return g_state.wouldBump(n); }
 
 pub fn bump(comptime T: type, n: usize) ?[*]T { return g_state.bump(T, n); }
 
@@ -870,9 +867,7 @@ pub fn allocBytesManaged(n: usize) ?[]u8 { return g_state.allocBytesManaged(n); 
 
 pub fn freeBytesManaged(buf: []u8) void { g_state.freeBytesManaged(buf); }
 
-pub fn allocManagedSlice(comptime T: type, n: usize) ?[]T { return g_state.allocManagedSlice(T, n); }
 
-pub fn freeManagedSlice(comptime T: type, s: []T) void { g_state.freeManagedSlice(T, s); }
 
 pub fn allocObject() ?*Object { return g_state.allocObject(); }
 
@@ -880,11 +875,9 @@ pub fn allocObject() ?*Object { return g_state.allocObject(); }
 pub fn objectPoolIndex(ptr: *Object) u16 { return g_state.objectPoolIndex(ptr); }
 
 // Returns a pointer to the object at the given pool index.
-pub fn objectAt(idx: u16) *Object { return g_state.objectAt(idx); }
 
 pub fn markObject(ptr: *Object) void { g_state.markObject(ptr); }
 
-pub fn isObjectMarked(ptr: *Object) bool { return g_state.isObjectMarked(ptr); }
 
 pub fn isObjectLive(ptr: *Object) bool { return g_state.isObjectLive(ptr); }
 
@@ -892,10 +885,8 @@ pub fn sweepObjects() void { g_state.sweepObjects(); }
 
 pub fn liveObjectCount() usize { return g_state.liveObjectCount(); }
 
-pub fn usedBytes() usize { return g_state.usedBytes(); }
 
 // Returns total bytes sitting in free lists across all classes.
-pub fn totalFreeListBytes() usize { return g_state.totalFreeListBytes(); }
 
 // Returns total free bytes in free lists and the largest single free block.
 pub fn fragmentationInfo() FragmentationInfo { return g_state.fragmentationInfo(); }
@@ -912,7 +903,6 @@ pub fn compactManagedHeap() void { g_state.compactManagedHeap(); }
 
 // Writes a compact free-list summary: "ci=N:depth,..." for non-empty classes.
 // buf must be large enough; returns the slice written.
-pub fn freeListSummary(buf: []u8) []u8 { return g_state.freeListSummary(buf); }
 
 // Debug tripwire. Enabled at compile time via -Dheap_paranoia=true, or at
 // runtime when the CLI sees GENGO_HEAP_PARANOIA=1.

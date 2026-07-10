@@ -107,8 +107,8 @@ const ReplPersist = struct {
 };
 
 fn checkGlobalExists(ctx: *anyopaque, name: []const u8) bool {
-    _ = ctx;
-    return globals.has(name);
+    const self: *Runtime = @ptrCast(@alignCast(ctx));
+    return self.globals_state.has(name);
 }
 
 fn checkGlobalIsConst(ctx: *anyopaque, name: []const u8) bool {
@@ -166,12 +166,12 @@ pub const Runtime = struct {
         rt.repl = rp;
         chunk.setActive(rt.chunk_state);
         globals.setActive(&rt.globals_state);
-        chunk.reset();
-        globals.reset();
+        rt.chunk_state.reset();
+        rt.globals_state.reset();
         heap.setActive(&rt.heap_state);
         vm.setActive(&rt.vm_state);
-        vm.reset();
-        heap.reset();
+        rt.vm_state.reset();
+        rt.heap_state.reset();
         clearNativeCaches();
         return rt;
     }
@@ -219,12 +219,12 @@ pub const Runtime = struct {
         try self.vm_state.init(max_stack, max_frames, max_defers, heap_size, allocator);
         chunk.setActive(self.chunk_state);
         globals.setActive(&self.globals_state);
-        chunk.reset();
-        globals.reset();
+        self.chunk_state.reset();
+        self.globals_state.reset();
         heap.setActive(&self.heap_state);
         vm.setActive(&self.vm_state);
-        vm.reset();
-        heap.reset();
+        self.vm_state.reset();
+        self.heap_state.reset();
         clearNativeCaches();
     }
 
@@ -243,10 +243,10 @@ pub const Runtime = struct {
         defer self.assertNoTempRootLeaks("Runtime.reset");
         self.activate();
         clearNativeCaches();
-        globals.reset();
-        vm.reset();
-        heap.reset();
-        chunk.reset();
+        self.globals_state.reset();
+        self.vm_state.reset();
+        self.heap_state.reset();
+        self.chunk_state.reset();
         self.repl.sym_count = 0;
         self.repl.sym_name_buf_used = 0;
         self.repl.enum_member_buf_used = 0;
@@ -375,7 +375,7 @@ pub const Runtime = struct {
     pub fn compileAndInstall(self: *Runtime, src: []const u8, path: []const u8, provider: module_compile.SourceProvider) !void {
         defer self.assertNoTempRootLeaks("Runtime.compileAndInstall");
         try self.compileOnly(src, path, provider);
-        vm.setPolicy(self.policy);
+        self.vm_state.setPolicy(self.policy);
         const install_ctx: vms.VMContext = .{ .cs = self.chunk_state, .gs = &self.globals_state, .hs = &self.heap_state, .vs = &self.vm_state };
         try vmnative.installStdGlobal(install_ctx, &self.globals_state);
         try vmnative.installHostModules(install_ctx, &self.globals_state, self.host_modules);
@@ -384,8 +384,8 @@ pub const Runtime = struct {
 
     pub fn runPathWithProvider(self: *Runtime, src: []const u8, path: []const u8, provider: module_compile.SourceProvider, test_mode: bool) !void {
         if (src.len > cfg.max_input_bytes) {
-            vms.setRuntimeErr("input exceeds max_input_bytes ({d})", .{cfg.max_input_bytes});
-            const emsg = vms.runtimeErrMsg();
+            self.vm_state.setRuntimeErr("input exceeds max_input_bytes ({d})", .{cfg.max_input_bytes});
+            const emsg = self.vm_state.runtimeErrMsg();
             self.last_runtime_msg_len = @intCast(emsg.len);
             @memcpy(self.last_runtime_msg_buf[0..emsg.len], emsg);
             return error.InputTooLong;
@@ -403,7 +403,7 @@ pub const Runtime = struct {
         self.test_count = 0;
         self.test_failed = false;
         self.reset();
-        vm.setPolicy(self.policy);
+        self.vm_state.setPolicy(self.policy);
         try self.compileProgram(src, path, provider, test_mode);
 
         const install_ctx: vms.VMContext = .{ .cs = self.chunk_state, .gs = &self.globals_state, .hs = &self.heap_state, .vs = &self.vm_state };
@@ -428,7 +428,7 @@ pub const Runtime = struct {
                     io.werr(self.test_names[ti]);
                     io.werr(": ");
                     io.werr(@errorName(err));
-                    const emsg = vm.runtimeErrMsg();
+                    const emsg = self.vm_state.runtimeErrMsg();
                     if (emsg.len > 0) {
                         io.werr(": ");
                         io.werr(emsg);
@@ -454,8 +454,8 @@ pub const Runtime = struct {
     // to share definitions and allocated objects.
     pub fn runIncremental(self: *Runtime, src: []const u8) !void {
         if (src.len > cfg.max_input_bytes) {
-            vms.setRuntimeErr("input exceeds max_input_bytes ({d})", .{cfg.max_input_bytes});
-            const emsg = vms.runtimeErrMsg();
+            self.vm_state.setRuntimeErr("input exceeds max_input_bytes ({d})", .{cfg.max_input_bytes});
+            const emsg = self.vm_state.runtimeErrMsg();
             self.last_runtime_msg_len = @intCast(emsg.len);
             @memcpy(self.last_runtime_msg_buf[0..emsg.len], emsg);
             return error.InputTooLong;
@@ -471,9 +471,9 @@ pub const Runtime = struct {
         self.last_runtime_msg_len = 0;
         self.panic_depth = 0;
         self.activate();
-        vm.setPolicy(self.policy);
-        chunk.reset();
-        vm.resetExec();
+        self.vm_state.setPolicy(self.policy);
+        self.chunk_state.reset();
+        self.vm_state.resetExec();
 
         const repl_caps: []const module_compile.CapModuleDesc = if (self.enabled_capabilities.len > 0) module_compile.AllCapabilities else &[_]module_compile.CapModuleDesc{};
         var session: module_compile.Session = .{};
@@ -534,7 +534,7 @@ pub const Runtime = struct {
     pub fn callGlobal(self: *Runtime, name: []const u8, args: []const Value) !Value {
         defer self.assertNoTempRootLeaks("Runtime.callGlobal");
         self.activate();
-        vm.setPolicy(self.policy);
+        self.vm_state.setPolicy(self.policy);
         self.last_compile_line = 0;
         self.last_compile_col = 0;
         self.last_compile_msg_len = 0;
@@ -757,23 +757,23 @@ pub const Runtime = struct {
     }
 
     fn captureRuntimeError(self: *Runtime) void {
-        self.last_runtime_line = vm.panicLine();
-        self.last_runtime_col = vm.panicCol();
-        const rp = vm.panicPath();
+        self.last_runtime_line = self.vm_state.panicLine();
+        self.last_runtime_col = self.vm_state.panicCol();
+        const rp = self.vm_state.panicPath();
         self.last_runtime_path_len = @min(rp.len, self.last_runtime_path_buf.len);
         @memcpy(self.last_runtime_path_buf[0..self.last_runtime_path_len], rp[0..self.last_runtime_path_len]);
-        const pf = vm.panicFrames();
+        const pf = self.vm_state.panicFrames();
         self.panic_depth = pf.len;
         var fi: usize = 0;
         while (fi < pf.len) : (fi += 1) self.panic_frames[fi] = pf[fi];
-        const emsg = vm.runtimeErrMsg();
+        const emsg = self.vm_state.runtimeErrMsg();
         self.last_runtime_msg_len = @intCast(emsg.len);
         @memcpy(self.last_runtime_msg_buf[0..emsg.len], emsg);
     }
 
     fn assertNoTempRootLeaks(self: *Runtime, comptime context: []const u8) void {
         self.activate();
-        vms.assertNoTempRoots(context);
+        self.vm_state.assertNoTempRoots(context);
     }
 
     pub fn activate(self: *Runtime) void {

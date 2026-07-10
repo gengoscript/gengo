@@ -185,7 +185,7 @@ fn fuzzValueWire() void {
         const wire = host_abi.wireFromValue(vm.VMContext.fromActive(), v) catch {
             fail("fuzz FAIL: wireFromValue failed\n");
         };
-        const round = host_abi.valueFromWire(wire) catch {
+        const round = host_abi.valueFromWire(vm.VMContext.fromActive(), wire) catch {
             fail("fuzz FAIL: valueFromWire failed\n");
         };
         // Check tag matches for non-string values
