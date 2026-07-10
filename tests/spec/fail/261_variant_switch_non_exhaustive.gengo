@@ -1,0 +1,13 @@
+type Status variant {
+    pending,
+    approved,
+    rejected,
+}
+
+func label(s Status) string {
+    switch s {
+        case .pending  { return "pending" }
+        case .approved { return "approved" }
+    }
+    return ""
+}

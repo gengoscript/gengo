@@ -18,4 +18,5 @@ switch arr {
         std.io.println(items[1])
         std.io.println(items[2])
     }
+    default {}
 }
