@@ -19,6 +19,45 @@ fn findEntry(namespace: []const Entry, field: []const u8) ?EntryKind {
     return null;
 }
 
+fn editDistance(a: []const u8, b: []const u8) usize {
+    if (a.len == 0) return b.len;
+    if (b.len == 0) return a.len;
+    var buf: [32 + 1][32 + 1]usize = undefined;
+    const na = @min(a.len, 32);
+    const nb = @min(b.len, 32);
+    for (0..na + 1) |i| buf[i][0] = i;
+    for (0..nb + 1) |j| buf[0][j] = j;
+    for (1..na + 1) |i| {
+        for (1..nb + 1) |j| {
+            const cost: usize = if (a[i - 1] == b[j - 1]) 0 else 1;
+            buf[i][j] = @min(@min(buf[i - 1][j] + 1, buf[i][j - 1] + 1), buf[i - 1][j - 1] + cost);
+        }
+    }
+    return buf[na][nb];
+}
+
+fn closestInNamespace(entries: []const Entry, field: []const u8) ?[]const u8 {
+    var best: ?[]const u8 = null;
+    var best_dist: usize = 3; // only suggest within distance 3
+    for (entries) |e| {
+        const d = editDistance(e.name, field);
+        if (d < best_dist) { best_dist = d; best = e.name; }
+    }
+    return best;
+}
+
+pub fn closestMatch(namespace: []const u8, field: []const u8) ?[]const u8 {
+    if (common.streq(namespace, "")) {
+        return closestInNamespace(&top_level_entries, field);
+    }
+    for (&namespaces) |ns| {
+        if (common.streq(ns.name, namespace)) {
+            return closestInNamespace(ns.entries, field);
+        }
+    }
+    return null;
+}
+
 pub const top_level_entries = [_]Entry{
     .{ .name = "io", .kind = .namespace },
     .{ .name = "fmt", .kind = .namespace },
