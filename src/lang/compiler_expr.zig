@@ -72,7 +72,7 @@ fn validateAndEmitTypeName(c: anytype, name: Token) !void {
             c.setErr("'{s}' is an interface, not a concrete type — '.type' never equals an interface name", .{name.src});
             return error.UnexpectedToken;
         }
-        if (!(c.registry.hasNamedType(name.src) or c.registry.hasStructTypeLocal(name.src) or c.registry.hasVariantType(name.src))) {
+        if (!(c.registry.hasNamedType(name.src) or c.registry.hasStructTypeLocal(name.src) or c.registry.hasVariantType(name.src) or c.registry.hasNamedErrorType(name.src))) {
             c.setErr("unknown type name '{s}'", .{name.src});
             return error.UnknownTypeName;
         }

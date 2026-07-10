@@ -46,6 +46,7 @@ pub fn runtimeTypeName(v: Value) []const u8 {
             .named_value => obj.named_value.typ.named_type.name,
             .enum_value => obj.enum_value.typ.enum_type.name,
             .variant_value => obj.variant_value.typ.variant_type.name,
+            .named_error_value => |nev| nev.typ.named_error_type.name,
             .dyn_string, .string_view => "string",
             .array, .array_managed, .array_view, .array_capacity => "array",
             .map, .map_managed, .map_hashed => "map",
@@ -127,7 +128,7 @@ pub fn matchesTypeAlt(v: Value, alt: FieldTypeAlt) bool {
         .rune_t => v == .rune,
         .boolean => v == .boolean,
         .string => vms.isStringValue(v),
-        .error_t => v == .error_value,
+        .error_t => v == .error_value or (v == .object and v.object.* == .named_error_value),
         .array => blk: {
             if (!(v == .object and vms.isArrayObject(v.object))) break :blk false;
             if (alt.elem_spec) |es| {

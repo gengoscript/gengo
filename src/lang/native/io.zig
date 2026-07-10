@@ -94,6 +94,7 @@ fn sprintValueDepth(buf_or_null: ?[]u8, v: Value, depth: u32, ancestors: *[Print
             }
             return len;
         },
+        // named_error_value is printed as TypeName(msg) by the .object branch below
         .named_scalar => |ns| return sprintValueDepth(buf_or_null, @import("../value.zig").namedScalarInner(ns), depth, ancestors, anc_count),
         .inline_variant => |iv| {
             const vmod = @import("../value.zig");
@@ -318,6 +319,18 @@ fn sprintValueDepth(buf_or_null: ?[]u8, v: Value, depth: u32, ancestors: *[Print
                         }
                         buf[pos] = ')'; pos += 1;
                     }
+                }
+                return len;
+            },
+            .named_error_value => |nev| {
+                const tn = nev.typ.named_error_type.name;
+                const msg = nev.msg.bytes;
+                const len = tn.len + 1 + msg.len + 1;
+                if (buf_or_null) |buf| {
+                    @memcpy(buf[0..tn.len], tn);
+                    buf[tn.len] = '(';
+                    @memcpy(buf[tn.len + 1..][0..msg.len], msg);
+                    buf[tn.len + 1 + msg.len] = ')';
                 }
                 return len;
             },

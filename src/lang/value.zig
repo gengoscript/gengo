@@ -222,7 +222,7 @@ pub const ArrayViewObj = struct {
 // Items 0..len are live; items len..capacity are always .null (safe for GC marking).
 pub const ArrayCapObj = struct { backing: *Object, len: usize };
 
-pub const ObjTag = enum { array, array_managed, array_view, array_capacity, map, map_managed, map_hashed, dyn_string, function, closure, cell, native_function, host_module_function, struct_type, interface_type, named_type, named_value, enum_type, enum_value, enum_type_fn, struct_instance, iterator, variant_type, variant_value, variant_ctor, named_type_fn, string_builder, string_view, bigint };
+pub const ObjTag = enum { array, array_managed, array_view, array_capacity, map, map_managed, map_hashed, dyn_string, function, closure, cell, native_function, host_module_function, struct_type, interface_type, named_type, named_value, enum_type, enum_value, enum_type_fn, struct_instance, iterator, variant_type, variant_value, variant_ctor, named_type_fn, string_builder, string_view, bigint, named_error_type, named_error_value };
 pub const Object = union(ObjTag) {
     array: []Value,
     array_managed: []Value,
@@ -253,6 +253,8 @@ pub const Object = union(ObjTag) {
     string_builder: StringBuilderObj,
     string_view: StringViewObj,
     bigint: BigIntObj,
+    named_error_type: struct { name: []const u8 },
+    named_error_value: struct { typ: *Object, msg: *const StringSlice },
 };
 
 pub const VTag = enum { int, float, decimal, rune, boolean, string, error_value, object, null, named_scalar, inline_variant };

@@ -358,6 +358,10 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
     if (c.match(.kw_struct)) return structDeclBody(c, kw, name_tok, is_pub);
     if (c.match(.kw_interface)) return interfaceDeclBody(c, kw, name_tok, is_pub);
     if (c.match(.kw_variant)) return variantDeclBody(c, kw, name_tok, is_pub);
+    if (c.cur.typ == .ident and common.streq(c.cur.src, "error")) {
+        c.advance(); // consume 'error'
+        return namedErrorTypeDecl(c, kw, name_tok, is_pub);
+    }
     const name = name_tok.src;
     if (!c.skipping_test_body) {
         if (c.registry.hasNamedType(name)) { c.setErr("duplicate type name '{s}'", .{name}); return error.DuplicateNamedType; }
@@ -1373,6 +1377,36 @@ pub fn variantDeclBody(c: anytype, kw: Token, name_tok: Token, is_pub: bool) !vo
     } };
     try c.cs.emitConst(.{ .object = vt }, kw.line);
     c.registry.setVariantObj(name, vt);
+    if (c.inFunc()) {
+        _ = try c.defineLocal(name, false);
+    } else {
+        try c.cs.emitOpStringConst(.def_global, qname, kw.line);
+        if (is_pub) try c.addExport(name, qname);
+    }
+    c.matchOpt(.semicolon);
+}
+
+pub fn namedErrorTypeDecl(c: anytype, kw: Token, name_tok: Token, is_pub: bool) !void {
+    const name = name_tok.src;
+    if (!c.skipping_test_body) {
+        if (c.registry.hasNamedErrorType(name)) { c.setErr("duplicate error type name '{s}'", .{name}); return error.DuplicateNamedType; }
+        if (!c.inFunc()) {
+            if (c.registry.hasAnyTypeName(name)) {
+                c.setErr("type name '{s}' conflicts with an existing type declaration", .{name});
+                return error.DuplicateNamedType;
+            }
+            const qn = try c.qualifyTypeName(name);
+            if (c.registry.hasGlobalFunc(qn)) {
+                c.setErr("name '{s}' already declared as a function", .{name});
+                return error.DuplicateField;
+            }
+        }
+        try c.registry.addNamedErrorType(name);
+    }
+    const qname = try c.qualifyTypeName(name);
+    const obj = heap.allocObject() orelse return error.OutOfMemory;
+    obj.* = .{ .named_error_type = .{ .name = try c.copyName(name) } };
+    try c.cs.emitConst(.{ .object = obj }, kw.line);
     if (c.inFunc()) {
         _ = try c.defineLocal(name, false);
     } else {

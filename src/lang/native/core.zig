@@ -218,6 +218,7 @@ pub fn nativeConvToBool(ctx: VMContext, v: Value) !Value {
             .dyn_string => |s| s.len != 0,
             .string_view => |sv| sv.bytes.len != 0,
             .named_value => |nv| (try nativeConvToBool(ctx, nv.value)).boolean,
+            .named_error_value => |nev| nev.msg.bytes.len != 0,
             else => true,
         },
     } };
@@ -233,6 +234,7 @@ pub fn nativeConvToString(ctx: VMContext, v: Value) !Value {
         .string => |s| vmgc.makeDynString(ctx, s.bytes),
         .object => |o| {
             if (o.* == .bigint) return vmbigint.toDynString(ctx, .{ .object = o });
+            if (o.* == .named_error_value) return vmgc.makeDynString(ctx, o.named_error_value.msg.bytes);
             return vmgc.makeDynString(ctx, try vmstr.stringBytesFromObj(o));
         },
         .boolean => |b| vmgc.makeDynString(ctx, if (b) "true" else "false"),
@@ -330,6 +332,8 @@ pub fn nativeTypeNameValue(v: Value) !Value {
             .string_builder => .{ .string = staticSS("string_builder") },
             .bigint => .{ .string = staticSS("bigint") },
             .cell => .{ .string = staticSS("cell") },
+            .named_error_type => |net| .{ .string = try chunk.internStr(net.name) },
+            .named_error_value => |nev| .{ .string = try chunk.internStr(nev.typ.named_error_type.name) },
         },
         .inline_variant => |iv| .{ .string = try chunk.internStr(vmod.objectAtIdx(iv.typ_idx).variant_type.name) },
     };
@@ -528,6 +532,11 @@ fn deepEqualObject(a: *Object, b: *Object, visits: []DeepEqVisit, visit_len: *us
         .enum_type_fn => |aef| return aef.typ == b.enum_type_fn.typ,
         .string_builder => |asb| return common.streq(asb.buf[0..asb.len], b.string_builder.buf[0..b.string_builder.len]),
         .bigint => |abi| return abi.toConst().eql(b.bigint.toConst()),
+        .named_error_type => |anet| return common.streq(anet.name, b.named_error_type.name),
+        .named_error_value => |anev| {
+            const bnev = b.named_error_value;
+            return anev.typ == bnev.typ and common.streq(anev.msg.bytes, bnev.msg.bytes);
+        },
     }
 }
 
@@ -673,6 +682,12 @@ fn cloneObject(ctx: VMContext, src: *Object, visits: []CloneVisit, visit_len: *u
             out_obj.variant_value.payload = try cloneValue(ctx, vv.payload, visits, visit_len);
             return .{ .object = out_obj };
         },
+        .named_error_value => |nev| {
+            const out_obj = try vmgc.vmAllocObject(ctx);
+            out_obj.* = .{ .named_error_value = .{ .typ = nev.typ, .msg = nev.msg } };
+            return .{ .object = out_obj };
+        },
+        .named_error_type => return .{ .object = src },
     }
 }
 
@@ -766,7 +781,7 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             if (argc != nf.arity) return error.ArityMismatch;
             const arg = vms.vmTop(0);
             vms.vmPopArgs(argc);
-            try vms.vmPush(.{ .boolean = arg == .error_value });
+            try vms.vmPush(.{ .boolean = arg == .error_value or (arg == .object and arg.object.* == .named_error_value) });
         },
         .core_is_float => {
             if (argc != nf.arity) return error.ArityMismatch;
