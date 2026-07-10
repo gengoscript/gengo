@@ -914,11 +914,20 @@ pub const Compiler = struct {
     pub fn checkStdNamespaceField(self: *Compiler, field: []const u8, line: u32) !void {
         const path = self.std_namespace_path orelse return;
         const kind = std_schema.lookup(path, field) orelse {
-            self.setErr("unknown field '{s}' in std{s}{s}", .{
-                field,
-                if (path.len > 0) "." else "",
-                if (path.len > 0) path else "",
-            });
+            if (std_schema.closestMatch(path, field)) |suggestion| {
+                self.setErr("unknown field '{s}' in std{s}{s}; did you mean '{s}'?", .{
+                    field,
+                    if (path.len > 0) "." else "",
+                    if (path.len > 0) path else "",
+                    suggestion,
+                });
+            } else {
+                self.setErr("unknown field '{s}' in std{s}{s}", .{
+                    field,
+                    if (path.len > 0) "." else "",
+                    if (path.len > 0) path else "",
+                });
+            }
             self.err_line = line;
             self.err_col = self.prev.col;
             return error.UnknownField;
