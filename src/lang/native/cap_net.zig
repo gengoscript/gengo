@@ -59,15 +59,15 @@ fn extractI64(arg: Value) !i64 {
     };
 }
 
-fn pushCatchableNetError(err: anyerror) !void {
+fn pushCatchableNetError(ctx: VMContext, err: anyerror) !void {
     const msg: []const u8 = if (err == error.DeadlineExceeded) "timeout" else net_state.lastNetErr();
-    try vms.vmPush(.{ .error_value = try chunk.internStr(msg) });
+    try ctx.vs.vmPush(.{ .error_value = try ctx.cs.internStr(msg) });
 }
 
 fn pushPageString(ctx: VMContext, bytes: []u8) !void {
     defer std.heap.page_allocator.free(bytes);
     const out = try vmgc.makeDynString(ctx, bytes);
-    try vms.vmPush(out);
+    try ctx.vs.vmPush(out);
 }
 
 fn ioContext() std.Io {
@@ -78,23 +78,23 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
     switch (@as(NativeFnId, @enumFromInt(nf.id))) {
         .cap_net_dial => {
             if (argc != 2) return error.ArityMismatch;
-            const arg1 = try vms.vmPop();
-            const arg0 = try vms.vmPop();
+            const arg1 = try ctx.vs.vmPop();
+            const arg0 = try ctx.vs.vmPop();
             const network = vms.asStringValue(arg0) catch return error.TypeError;
             const address = vms.asStringValue(arg1) catch return error.TypeError;
-            _ = try vms.vmPop();
+            _ = try ctx.vs.vmPop();
 
             if (!net_state.checkDialPolicy(address)) {
-                try vms.vmPush(.{ .error_value = try chunk.internStr("net.dial: refused by policy") });
+                try ctx.vs.vmPush(.{ .error_value = try ctx.cs.internStr("net.dial: refused by policy") });
                 return;
             }
 
             const id = net_state.netDial(network, address) catch {
-                try vms.vmPush(.{ .error_value = try chunk.internStr(net_state.lastNetErr()) });
+                try ctx.vs.vmPush(.{ .error_value = try ctx.cs.internStr(net_state.lastNetErr()) });
                 return;
             };
 
-            const conn_type_val = globals.get("@cap_type:net.Conn") orelse return error.CapabilityError;
+            const conn_type_val = ctx.gs.get("@cap_type:net.Conn") orelse return error.CapabilityError;
             const conn_type_obj = switch (conn_type_val) {
                 .object => |o| o,
                 else => return error.CapabilityError,
@@ -103,23 +103,23 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             const inst_fields = try vmgc.vmAllocManagedSlice(ctx, MapEntry, 1);
             const inst_obj = try vmgc.vmAllocObject(ctx);
             inst_obj.* = .{ .struct_instance = .{ .typ = conn_type_obj, .fields = inst_fields } };
-            try vms.pushTempRoot(.{ .object = inst_obj });
-            defer vms.popTempRoot();
-            inst_fields[0] = .{ .key = .{ .string = try chunk.internStr("_handle") }, .value = .{ .int = @as(i64, id) } };
-            try vms.vmPush(.{ .object = inst_obj });
+            try ctx.vs.pushTempRoot(.{ .object = inst_obj });
+            defer ctx.vs.popTempRoot();
+            inst_fields[0] = .{ .key = .{ .string = try ctx.cs.internStr("_handle") }, .value = .{ .int = @as(i64, id) } };
+            try ctx.vs.vmPush(.{ .object = inst_obj });
         },
         .cap_net_read => {
             if (argc != 2) return error.ArityMismatch;
-            const arg1 = try vms.vmPop();
-            const arg0 = try vms.vmPop();
+            const arg1 = try ctx.vs.vmPop();
+            const arg0 = try ctx.vs.vmPop();
             const id = try extractHandle(arg0);
             const max_bytes = try extractUsize(arg1);
-            _ = try vms.vmPop();
+            _ = try ctx.vs.vmPop();
 
             // Host/WASM path: use the page-allocator round-trip.
             if (net_state.hasHandlers() or comptime (builtin.os.tag == .wasi or builtin.os.tag == .windows)) {
                 const buf = net_state.netRead(id, max_bytes) catch |err| {
-                    try pushCatchableNetError(err);
+                    try pushCatchableNetError(ctx, err);
                     return;
                 };
                 try pushPageString(ctx, buf);
@@ -131,88 +131,88 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             // stack buffer, then copy into the GC heap via makeDynString.
             // Using a local buffer keeps netReadInto free of any GC interaction.
             if (max_bytes == 0) {
-                try vms.vmPush(try vmgc.makeDynString(ctx, ""));
+                try ctx.vs.vmPush(try vmgc.makeDynString(ctx, ""));
                 return;
             }
             var local_buf: [4096]u8 = undefined;
             const read_dest = local_buf[0..@min(max_bytes, local_buf.len)];
             const n = net_state.netReadInto(id, read_dest) catch |err| {
-                try pushCatchableNetError(err);
+                try pushCatchableNetError(ctx, err);
                 return;
             };
-            try vms.vmPush(try vmgc.makeDynString(ctx, read_dest[0..n]));
+            try ctx.vs.vmPush(try vmgc.makeDynString(ctx, read_dest[0..n]));
         },
         .cap_net_write => {
             if (argc != 2) return error.ArityMismatch;
-            const arg1 = try vms.vmPop();
-            const arg0 = try vms.vmPop();
+            const arg1 = try ctx.vs.vmPop();
+            const arg0 = try ctx.vs.vmPop();
             const id = try extractHandle(arg0);
             const data = vms.asStringValue(arg1) catch return error.TypeError;
-            _ = try vms.vmPop();
+            _ = try ctx.vs.vmPop();
 
             const n = net_state.netWrite(id, data) catch |err| {
-                try pushCatchableNetError(err);
+                try pushCatchableNetError(ctx, err);
                 return;
             };
-            try vms.vmPush(.{ .int = @intCast(n) });
+            try ctx.vs.vmPush(.{ .int = @intCast(n) });
         },
         .cap_net_close => {
             if (argc != 1) return error.ArityMismatch;
-            const arg0 = try vms.vmPop();
+            const arg0 = try ctx.vs.vmPop();
             const id = try extractHandle(arg0);
-            _ = try vms.vmPop();
+            _ = try ctx.vs.vmPop();
 
             net_state.netClose(id) catch return error.CapabilityError;
-            try vms.vmPush(.null);
+            try ctx.vs.vmPush(.null);
         },
         .cap_net_local_addr => {
             if (argc != 1) return error.ArityMismatch;
-            const arg0 = try vms.vmPop();
+            const arg0 = try ctx.vs.vmPop();
             const id = try extractHandle(arg0);
-            _ = try vms.vmPop();
+            _ = try ctx.vs.vmPop();
 
             const addr = net_state.netLocalAddr(id) catch return error.CapabilityError;
             try pushPageString(ctx, addr);
         },
         .cap_net_remote_addr => {
             if (argc != 1) return error.ArityMismatch;
-            const arg0 = try vms.vmPop();
+            const arg0 = try ctx.vs.vmPop();
             const id = try extractHandle(arg0);
-            _ = try vms.vmPop();
+            _ = try ctx.vs.vmPop();
 
             const addr = net_state.netRemoteAddr(id) catch return error.CapabilityError;
             try pushPageString(ctx, addr);
         },
         .cap_net_set_deadline => {
             if (argc != 2) return error.ArityMismatch;
-            const arg1 = try vms.vmPop();
-            const arg0 = try vms.vmPop();
+            const arg1 = try ctx.vs.vmPop();
+            const arg0 = try ctx.vs.vmPop();
             const id = try extractHandle(arg0);
             const ms = try extractI64(arg1);
-            _ = try vms.vmPop();
+            _ = try ctx.vs.vmPop();
             net_state.netSetDeadline(id, ms) catch return error.CapabilityError;
-            try vms.vmPush(.null);
+            try ctx.vs.vmPush(.null);
         },
         .cap_net_set_read_deadline => {
             if (argc != 2) return error.ArityMismatch;
-            const arg1 = try vms.vmPop();
-            const arg0 = try vms.vmPop();
+            const arg1 = try ctx.vs.vmPop();
+            const arg0 = try ctx.vs.vmPop();
             const id = try extractHandle(arg0);
             const ms = try extractI64(arg1);
-            _ = try vms.vmPop();
+            _ = try ctx.vs.vmPop();
             net_state.netSetReadDeadline(id, ms) catch return error.CapabilityError;
-            try vms.vmPush(.null);
+            try ctx.vs.vmPush(.null);
         },
         .cap_net_set_write_deadline => {
             if (argc != 2) return error.ArityMismatch;
-            const arg1 = try vms.vmPop();
-            const arg0 = try vms.vmPop();
+            const arg1 = try ctx.vs.vmPop();
+            const arg0 = try ctx.vs.vmPop();
             const id = try extractHandle(arg0);
             const ms = try extractI64(arg1);
-            _ = try vms.vmPop();
+            _ = try ctx.vs.vmPop();
 
             net_state.netSetWriteDeadline(id, ms) catch return error.CapabilityError;
-            try vms.vmPush(.null);
+            try ctx.vs.vmPush(.null);
         },
         else => unreachable,
     }

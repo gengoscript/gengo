@@ -22,10 +22,10 @@ pub fn timeClearCache() void {
     time_type_cache = null;
 }
 
-pub fn timeGetType() !*Object {
+pub fn timeGetType(ctx: VMContext) !*Object {
     if (time_type_cache) |t| return t;
     // Bump-allocate: permanent singleton; never swept, never triggers GC
-    const buf = heap.bump(Object, 1) orelse return error.OutOfMemory;
+    const buf = ctx.hs.bump(Object, 1) orelse return error.OutOfMemory;
     const obj: *Object = @ptrCast(buf);
     obj.* = .{ .named_type = .{
         .name = "Time",
@@ -39,8 +39,8 @@ pub fn timeGetType() !*Object {
 pub fn timeBuildObj(ctx: VMContext, ms: f64) !Value {
     // allocTempRooted: allocates, initializes, and roots obj before timeGetType can trigger GC
     const obj = try vmgc.allocTempRooted(ctx, .{ .dyn_string = &[_]u8{} });
-    defer vms.popTempRoot();
-    const typ = try timeGetType();
+    defer ctx.vs.popTempRoot();
+    const typ = try timeGetType(ctx);
     obj.* = .{ .named_value = .{ .typ = typ, .value = .{ .float = ms } } };
     return .{ .object = obj };
 }
@@ -422,9 +422,9 @@ pub fn timeIsoWeek(ctx: VMContext, ms: f64) !Value {
 
     const entries = try vmgc.vmAllocManagedSlice(ctx, MapEntry, 2);
     const obj = try vmgc.allocTempRooted(ctx, .{ .map = &[_]MapEntry{} });
-    defer vms.popTempRoot();
-    entries[0] = .{ .key = .{ .string = try chunk.internStr("year") }, .value = .{ .int = iso_year } };
-    entries[1] = .{ .key = .{ .string = try chunk.internStr("week") }, .value = .{ .int = week } };
+    defer ctx.vs.popTempRoot();
+    entries[0] = .{ .key = .{ .string = try ctx.cs.internStr("year") }, .value = .{ .int = iso_year } };
+    entries[1] = .{ .key = .{ .string = try ctx.cs.internStr("week") }, .value = .{ .int = week } };
     obj.* = .{ .map_managed = entries[0..2] };
     return .{ .object = obj };
 }
@@ -509,13 +509,13 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
     if (argc != nf.arity) return error.ArityMismatch;
     switch (@as(NativeFnId, @enumFromInt(nf.id))) {
         .time_add_date => {
-            const ms = try timeGetMs(vms.vmTop(3));
-            const y = try vms.valueAsInt(vms.vmTop(2));
-            const m = try vms.valueAsInt(vms.vmTop(1));
-            const d = try vms.valueAsInt(vms.vmTop(0));
+            const ms = try timeGetMs(ctx.vs.vmTop(3));
+            const y = try vms.valueAsInt(ctx.vs.vmTop(2));
+            const m = try vms.valueAsInt(ctx.vs.vmTop(1));
+            const d = try vms.valueAsInt(ctx.vs.vmTop(0));
             const out = try timeAddDate(ctx, ms, @intCast(y), @intCast(m), @intCast(d));
-            vms.vmPopArgs(argc);
-            try vms.vmPush(out);
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(out);
         },
         .time_add_h, .time_add_m, .time_add_ms, .time_add_s => {
             const add_fn: NativeFnId = @enumFromInt(nf.id);
@@ -526,111 +526,111 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
                 .time_add_s => 1000.0,
                 else => unreachable,
             };
-            const ms = try timeGetMs(vms.vmTop(1));
-            const n = try vms.valueAsNumber(vms.vmTop(0));
+            const ms = try timeGetMs(ctx.vs.vmTop(1));
+            const n = try vms.valueAsNumber(ctx.vs.vmTop(0));
             if (@trunc(n) != n) return error.TypeError;
-            vms.vmPopArgs(argc);
-            try vms.vmPush(try timeBuildObj(ctx, ms + n * multiplier));
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(try timeBuildObj(ctx, ms + n * multiplier));
         },
         .time_after, .time_before, .time_equal => {
             const cmp_fn: NativeFnId = @enumFromInt(nf.id);
-            const ms_a = try timeGetMs(vms.vmTop(1));
-            const ms_b = try timeGetMs(vms.vmTop(0));
-            vms.vmPopArgs(argc);
+            const ms_a = try timeGetMs(ctx.vs.vmTop(1));
+            const ms_b = try timeGetMs(ctx.vs.vmTop(0));
+            ctx.vs.vmPopArgs(argc);
             const cmp = switch (cmp_fn) {
                 .time_after => ms_a > ms_b,
                 .time_before => ms_a < ms_b,
                 .time_equal => ms_a == ms_b,
                 else => unreachable,
             };
-            try vms.vmPush(.{ .boolean = cmp });
+            try ctx.vs.vmPush(.{ .boolean = cmp });
         },
         .time_format => {
-            const ms = try timeGetMs(vms.vmTop(1));
-            const fmt = try vms.asStringValue(vms.vmTop(0));
+            const ms = try timeGetMs(ctx.vs.vmTop(1));
+            const fmt = try vms.asStringValue(ctx.vs.vmTop(0));
             const out = try timeFormatStr(ctx, ms, fmt);
-            vms.vmPopArgs(argc);
-            try vms.vmPush(out);
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(out);
         },
         .time_from_unix, .time_from_unix_ms => {
-            const n = try vms.valueAsNumber(vms.vmTop(0));
+            const n = try vms.valueAsNumber(ctx.vs.vmTop(0));
             if (@trunc(n) != n) return error.TypeError;
-            vms.vmPopArgs(argc);
+            ctx.vs.vmPopArgs(argc);
             const multiplier: f64 = if (@as(NativeFnId, @enumFromInt(nf.id)) == .time_from_unix) 1000.0 else 1.0;
-            try vms.vmPush(try timeBuildObj(ctx, n * multiplier));
+            try ctx.vs.vmPush(try timeBuildObj(ctx, n * multiplier));
         },
         .time_is_zero => {
-            const ms = try timeGetMs(vms.vmTop(0));
-            vms.vmPopArgs(argc);
-            try vms.vmPush(.{ .boolean = ms == 0 });
+            const ms = try timeGetMs(ctx.vs.vmTop(0));
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(.{ .boolean = ms == 0 });
         },
         .time_now => {
-            vms.vmPopArgs(argc);
-            try vms.vmPush(try timeBuildObj(ctx, timeNowMs()));
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(try timeBuildObj(ctx, timeNowMs()));
         },
         .time_parse => {
-            const s = try vms.asStringValue(vms.vmTop(1));
-            const fmt = try vms.asStringValue(vms.vmTop(0));
+            const s = try vms.asStringValue(ctx.vs.vmTop(1));
+            const fmt = try vms.asStringValue(ctx.vs.vmTop(0));
             const out = try timeParseStr(ctx, s, fmt);
-            vms.vmPopArgs(argc);
-            try vms.vmPush(out);
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(out);
         },
         .time_parts => {
-            const ms = try timeGetMs(vms.vmTop(0));
+            const ms = try timeGetMs(ctx.vs.vmTop(0));
             const p = timeEpochMsToParts(ms);
             const field_count = 8;
             const entries = try vmgc.vmAllocManagedSlice(ctx, MapEntry, field_count);
             const obj = try vmgc.allocTempRooted(ctx, .{ .map = &[_]MapEntry{} });
-            defer vms.popTempRoot();
-            entries[0] = .{ .key = .{ .string = try chunk.internStr("year") }, .value = .{ .int = p.year } };
-            entries[1] = .{ .key = .{ .string = try chunk.internStr("month") }, .value = .{ .int = p.month } };
-            entries[2] = .{ .key = .{ .string = try chunk.internStr("day") }, .value = .{ .int = p.day } };
-            entries[3] = .{ .key = .{ .string = try chunk.internStr("hour") }, .value = .{ .int = p.hour } };
-            entries[4] = .{ .key = .{ .string = try chunk.internStr("min") }, .value = .{ .int = p.min } };
-            entries[5] = .{ .key = .{ .string = try chunk.internStr("sec") }, .value = .{ .int = p.sec } };
-            entries[6] = .{ .key = .{ .string = try chunk.internStr("ms") }, .value = .{ .int = p.ms } };
-            entries[7] = .{ .key = .{ .string = try chunk.internStr("weekday") }, .value = .{ .int = p.weekday } };
+            defer ctx.vs.popTempRoot();
+            entries[0] = .{ .key = .{ .string = try ctx.cs.internStr("year") }, .value = .{ .int = p.year } };
+            entries[1] = .{ .key = .{ .string = try ctx.cs.internStr("month") }, .value = .{ .int = p.month } };
+            entries[2] = .{ .key = .{ .string = try ctx.cs.internStr("day") }, .value = .{ .int = p.day } };
+            entries[3] = .{ .key = .{ .string = try ctx.cs.internStr("hour") }, .value = .{ .int = p.hour } };
+            entries[4] = .{ .key = .{ .string = try ctx.cs.internStr("min") }, .value = .{ .int = p.min } };
+            entries[5] = .{ .key = .{ .string = try ctx.cs.internStr("sec") }, .value = .{ .int = p.sec } };
+            entries[6] = .{ .key = .{ .string = try ctx.cs.internStr("ms") }, .value = .{ .int = p.ms } };
+            entries[7] = .{ .key = .{ .string = try ctx.cs.internStr("weekday") }, .value = .{ .int = p.weekday } };
             obj.* = .{ .map_managed = entries[0..field_count] };
-            vms.vmPopArgs(argc);
-            try vms.vmPush(.{ .object = obj });
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(.{ .object = obj });
         },
         .time_since => {
-            const ms = try timeGetMs(vms.vmTop(0));
-            vms.vmPopArgs(argc);
-            try vms.vmPush(.{ .float = timeNowMs() - ms });
+            const ms = try timeGetMs(ctx.vs.vmTop(0));
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(.{ .float = timeNowMs() - ms });
         },
         .time_sub => {
-            const ms_a = try timeGetMs(vms.vmTop(1));
-            const ms_b = try timeGetMs(vms.vmTop(0));
-            vms.vmPopArgs(argc);
-            try vms.vmPush(.{ .float = ms_a - ms_b });
+            const ms_a = try timeGetMs(ctx.vs.vmTop(1));
+            const ms_b = try timeGetMs(ctx.vs.vmTop(0));
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(.{ .float = ms_a - ms_b });
         },
         .time_unix => {
-            const ms = try timeGetMs(vms.vmTop(0));
-            vms.vmPopArgs(argc);
-            try vms.vmPush(.{ .int = @floor(ms / 1000) });
+            const ms = try timeGetMs(ctx.vs.vmTop(0));
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(.{ .int = @floor(ms / 1000) });
         },
         .time_unix_ms => {
-            const ms = try timeGetMs(vms.vmTop(0));
-            vms.vmPopArgs(argc);
-            try vms.vmPush(.{ .float = ms });
+            const ms = try timeGetMs(ctx.vs.vmTop(0));
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(.{ .float = ms });
         },
         .time_until => {
-            const ms = try timeGetMs(vms.vmTop(0));
-            vms.vmPopArgs(argc);
-            try vms.vmPush(.{ .float = ms - timeNowMs() });
+            const ms = try timeGetMs(ctx.vs.vmTop(0));
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(.{ .float = ms - timeNowMs() });
         },
         .time_parse_duration => {
-            const s = try vms.asStringValue(vms.vmTop(0));
+            const s = try vms.asStringValue(ctx.vs.vmTop(0));
             const ms = try parseDuration(s);
-            vms.vmPopArgs(argc);
-            try vms.vmPush(.{ .float = ms });
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(.{ .float = ms });
         },
         .time_iso_week => {
-            const ms = try timeGetMs(vms.vmTop(0));
+            const ms = try timeGetMs(ctx.vs.vmTop(0));
             const out = try timeIsoWeek(ctx, ms);
-            vms.vmPopArgs(argc);
-            try vms.vmPush(out);
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(out);
         },
         else => {},
     }

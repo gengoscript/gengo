@@ -13,7 +13,7 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
     if (argc != nf.arity) return error.ArityMismatch;
     switch (@as(NativeFnId, @enumFromInt(nf.id))) {
         .sort_asc => {
-            const arr_val = vms.vmTop(0);
+            const arr_val = ctx.vs.vmTop(0);
             if (arr_val != .object) return error.TypeError;
             const arr_obj = arr_val.object;
             if (!vms.isArrayObject(arr_obj)) return error.TypeError;
@@ -32,12 +32,12 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             }
             const out_obj = try vmgc.vmAllocObject(ctx);
             out_obj.* = .{ .array_managed = items[0..n] };
-            vms.vmPopArgs(argc);
-            try vms.vmPush(.{ .object = out_obj });
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(.{ .object = out_obj });
         },
         .sort_by => {
-            const fn_val = vms.vmTop(0);
-            const arr_val = vms.vmTop(1);
+            const fn_val = ctx.vs.vmTop(0);
+            const arr_val = ctx.vs.vmTop(1);
             if (arr_val != .object) return error.TypeError;
             const arr_obj = arr_val.object;
             if (!vms.isArrayObject(arr_obj)) return error.TypeError;
@@ -51,7 +51,7 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
                     while (j > 0) : (j -= 1) {
                         const cmp = try vm.callFunction(ctx, fn_val, &.{ items[j - 1], key });
                         const less = if (cmp == .int) cmp.int < 0 else if (cmp == .float) cmp.float < 0 else cmp.asBool() catch {
-                            vms.setRuntimeErr("comparator must return int, float, or bool, got {s}", .{vmtyp.runtimeTypeName(cmp)});
+                            ctx.vs.setRuntimeErr("comparator must return int, float, or bool, got {s}", .{vmtyp.runtimeTypeName(cmp)});
                             return error.TypeError;
                         };
                         if (less) break;
@@ -62,11 +62,11 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             }
             const out_obj = try vmgc.vmAllocObject(ctx);
             out_obj.* = .{ .array_managed = items[0..n] };
-            vms.vmPopArgs(argc);
-            try vms.vmPush(.{ .object = out_obj });
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(.{ .object = out_obj });
         },
         .sort_desc => {
-            const arr_val = vms.vmTop(0);
+            const arr_val = ctx.vs.vmTop(0);
             if (arr_val != .object) return error.TypeError;
             const arr_obj = arr_val.object;
             if (!vms.isArrayObject(arr_obj)) return error.TypeError;
@@ -85,8 +85,8 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             }
             const out_obj = try vmgc.vmAllocObject(ctx);
             out_obj.* = .{ .array_managed = items[0..n] };
-            vms.vmPopArgs(argc);
-            try vms.vmPush(.{ .object = out_obj });
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(.{ .object = out_obj });
         },
         else => {},
     }

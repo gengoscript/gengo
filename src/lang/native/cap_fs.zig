@@ -19,7 +19,7 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
     switch (@as(NativeFnId, @enumFromInt(nf.id))) {
         .cap_fs_read => {
             if (argc != 1) return error.ArityMismatch;
-            const path = vms.asStringValue(try vms.vmPeek(0)) catch return error.TypeError;
+            const path = vms.asStringValue(try ctx.vs.vmPeek(0)) catch return error.TypeError;
 
             const lr = try fs_state.lookup(path);
             if (lr.mount.kind == .driver) {
@@ -43,13 +43,13 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
                 const bytes = chunks.toOwnedSlice(alloc) catch return error.CapabilityError;
                 defer alloc.free(bytes);
                 const out = try vmgc.makeDynString(ctx, bytes);
-                vms.vmPopArgs(argc);
-                try vms.vmPush(out);
+                ctx.vs.vmPopArgs(argc);
+                try ctx.vs.vmPush(out);
                 return;
             }
 
             if (comptime builtin.os.tag == .wasi) {
-                vms.vmPopArgs(argc);
+                ctx.vs.vmPopArgs(argc);
                 return error.CapabilityNotAvailable;
             }
 
@@ -61,8 +61,8 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
                 const contents = std.Io.Dir.cwd().readFileAlloc(io, rpath, alloc, .unlimited) catch return error.CapabilityError;
                 defer alloc.free(contents);
                 const out = try vmgc.makeDynString(ctx, contents);
-                vms.vmPopArgs(argc);
-                try vms.vmPush(out);
+                ctx.vs.vmPopArgs(argc);
+                try ctx.vs.vmPush(out);
                 return;
             }
 
@@ -81,24 +81,24 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             defer alloc.free(contents);
 
             const out = try vmgc.makeDynString(ctx, contents);
-            vms.vmPopArgs(argc);
-            try vms.vmPush(out);
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(out);
         },
         .cap_fs_exists => {
             if (argc != 1) return error.ArityMismatch;
-            const path = vms.asStringValue(try vms.vmPeek(0)) catch return error.TypeError;
+            const path = vms.asStringValue(try ctx.vs.vmPeek(0)) catch return error.TypeError;
 
             const lr = try fs_state.lookup(path);
             if (lr.mount.kind == .driver) {
                 const exists_fn = lr.mount.driver.exists orelse return error.CapabilityError;
                 const rc = exists_fn(lr.mount.userdata, lr.rest.ptr, @intCast(lr.rest.len));
-                vms.vmPopArgs(argc);
-                try vms.vmPush(.{ .boolean = rc > 0 });
+                ctx.vs.vmPopArgs(argc);
+                try ctx.vs.vmPush(.{ .boolean = rc > 0 });
                 return;
             }
 
             if (comptime builtin.os.tag == .wasi) {
-                vms.vmPopArgs(argc);
+                ctx.vs.vmPopArgs(argc);
                 return error.CapabilityNotAvailable;
             }
 
@@ -109,33 +109,33 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
                 const io = ioContext();
                 std.Io.Dir.cwd().access(io, rpath, .{}) catch |err| switch (err) {
                     error.FileNotFound => {
-                        vms.vmPopArgs(argc);
-                        try vms.vmPush(.{ .boolean = false });
+                        ctx.vs.vmPopArgs(argc);
+                        try ctx.vs.vmPush(.{ .boolean = false });
                         return;
                     },
                     else => return error.CapabilityError,
                 };
-                vms.vmPopArgs(argc);
-                try vms.vmPush(.{ .boolean = true });
+                ctx.vs.vmPopArgs(argc);
+                try ctx.vs.vmPush(.{ .boolean = true });
                 return;
             }
 
             const fd = std.posix.openat(std.posix.AT.FDCWD, rpath, .{ .ACCMODE = .RDONLY, .CLOEXEC = true }, 0) catch |err| switch (err) {
                 error.FileNotFound => {
-                    vms.vmPopArgs(argc);
-                    try vms.vmPush(.{ .boolean = false });
+                    ctx.vs.vmPopArgs(argc);
+                    try ctx.vs.vmPush(.{ .boolean = false });
                     return;
                 },
                 else => return error.CapabilityError,
             };
             _ = std.posix.system.close(fd);
-            vms.vmPopArgs(argc);
-            try vms.vmPush(.{ .boolean = true });
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(.{ .boolean = true });
         },
         .cap_fs_write => {
             if (argc != 2) return error.ArityMismatch;
-            const path = vms.asStringValue(try vms.vmPeek(1)) catch return error.TypeError;
-            const arg1 = try vms.vmPeek(0);
+            const path = vms.asStringValue(try ctx.vs.vmPeek(1)) catch return error.TypeError;
+            const arg1 = try ctx.vs.vmPeek(0);
             const content: []const u8 = switch (arg1) {
                 .string => |s| s.bytes,
                 .object => |o| if (o.* == .dyn_string) o.dyn_string else if (o.* == .string_view) o.string_view.bytes else return error.TypeError,
@@ -153,13 +153,13 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
                 defer close_fn(lr.mount.userdata, out_fd);
                 if (write_fn(lr.mount.userdata, out_fd, content.ptr, @intCast(content.len)) < 0)
                     return error.CapabilityError;
-                vms.vmPopArgs(argc);
-                try vms.vmPush(.{ .null = {} });
+                ctx.vs.vmPopArgs(argc);
+                try ctx.vs.vmPush(.{ .null = {} });
                 return;
             }
 
             if (comptime builtin.os.tag == .wasi) {
-                vms.vmPopArgs(argc);
+                ctx.vs.vmPopArgs(argc);
                 return error.CapabilityNotAvailable;
             }
 
@@ -171,12 +171,12 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             const file = cwd.createFile(io, rpath, .{}) catch return error.CapabilityError;
             defer file.close(io);
             file.writeStreamingAll(io, content) catch return error.CapabilityError;
-            vms.vmPopArgs(argc);
-            try vms.vmPush(.{ .null = {} });
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(.{ .null = {} });
         },
         .cap_fs_list => {
             if (argc != 1) return error.ArityMismatch;
-            const path = vms.asStringValue(try vms.vmPeek(0)) catch return error.TypeError;
+            const path = vms.asStringValue(try ctx.vs.vmPeek(0)) catch return error.TypeError;
 
             const lr = try fs_state.lookup(path);
             if (lr.mount.kind == .driver) {
@@ -198,8 +198,8 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
                 const result = try vmgc.vmAllocManagedSlice(ctx, Value, name_count);
                 const arr_obj = try vmgc.vmAllocObject(ctx);
                 arr_obj.* = .{ .array_managed = result[0..0] };
-                try vms.pushTempRoot(.{ .object = arr_obj });
-                defer vms.popTempRoot();
+                try ctx.vs.pushTempRoot(.{ .object = arr_obj });
+                defer ctx.vs.popTempRoot();
                 var idx: usize = 0;
                 pos = 0;
                 while (pos < list_data.len and idx < name_count) {
@@ -211,13 +211,13 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
                     pos = end + 1;
                 }
                 arr_obj.* = .{ .array_managed = result };
-                vms.vmPopArgs(argc);
-                try vms.vmPush(.{ .object = arr_obj });
+                ctx.vs.vmPopArgs(argc);
+                try ctx.vs.vmPush(.{ .object = arr_obj });
                 return;
             }
 
             if (comptime builtin.os.tag == .wasi) {
-                vms.vmPopArgs(argc);
+                ctx.vs.vmPopArgs(argc);
                 return error.CapabilityNotAvailable;
             }
 
@@ -244,32 +244,32 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             const result = try vmgc.vmAllocManagedSlice(ctx, Value, names.items.len);
             const arr_obj = try vmgc.vmAllocObject(ctx);
             arr_obj.* = .{ .array_managed = result[0..0] };
-            try vms.pushTempRoot(.{ .object = arr_obj });
-            defer vms.popTempRoot();
+            try ctx.vs.pushTempRoot(.{ .object = arr_obj });
+            defer ctx.vs.popTempRoot();
             for (names.items, 0..) |n, i| {
                 result[i] = try vmgc.makeDynString(ctx, n);
                 arr_obj.* = .{ .array_managed = result[0 .. i + 1] };
             }
             arr_obj.* = .{ .array_managed = result };
-            vms.vmPopArgs(argc);
-            try vms.vmPush(.{ .object = arr_obj });
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(.{ .object = arr_obj });
         },
         .cap_fs_delete => {
             if (argc != 1) return error.ArityMismatch;
-            const path = vms.asStringValue(try vms.vmPeek(0)) catch return error.TypeError;
+            const path = vms.asStringValue(try ctx.vs.vmPeek(0)) catch return error.TypeError;
 
             const lr = try fs_state.lookup(path);
             if (lr.mount.kind == .driver) {
                 const delete_fn = lr.mount.driver.unlink orelse return error.CapabilityError;
                 if (delete_fn(lr.mount.userdata, lr.rest.ptr, @intCast(lr.rest.len)) < 0)
                     return error.CapabilityError;
-                vms.vmPopArgs(argc);
-                try vms.vmPush(.{ .null = {} });
+                ctx.vs.vmPopArgs(argc);
+                try ctx.vs.vmPush(.{ .null = {} });
                 return;
             }
 
             if (comptime builtin.os.tag == .wasi) {
-                vms.vmPopArgs(argc);
+                ctx.vs.vmPopArgs(argc);
                 return error.CapabilityNotAvailable;
             }
 
@@ -279,25 +279,25 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             const io = ioContext();
             const cwd = std.Io.Dir.cwd();
             cwd.deleteFile(io, rpath) catch return error.CapabilityError;
-            vms.vmPopArgs(argc);
-            try vms.vmPush(.{ .null = {} });
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(.{ .null = {} });
         },
         .cap_fs_mkdir => {
             if (argc != 1) return error.ArityMismatch;
-            const path = vms.asStringValue(try vms.vmPeek(0)) catch return error.TypeError;
+            const path = vms.asStringValue(try ctx.vs.vmPeek(0)) catch return error.TypeError;
 
             const lr = try fs_state.lookup(path);
             if (lr.mount.kind == .driver) {
                 const mkdir_fn = lr.mount.driver.mkdir orelse return error.CapabilityError;
                 if (mkdir_fn(lr.mount.userdata, lr.rest.ptr, @intCast(lr.rest.len)) < 0)
                     return error.CapabilityError;
-                vms.vmPopArgs(argc);
-                try vms.vmPush(.{ .null = {} });
+                ctx.vs.vmPopArgs(argc);
+                try ctx.vs.vmPush(.{ .null = {} });
                 return;
             }
 
             if (comptime builtin.os.tag == .wasi) {
-                vms.vmPopArgs(argc);
+                ctx.vs.vmPopArgs(argc);
                 return error.CapabilityNotAvailable;
             }
 
@@ -307,8 +307,8 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             const io = ioContext();
             const cwd = std.Io.Dir.cwd();
             cwd.createDirPath(io, rpath) catch return error.CapabilityError;
-            vms.vmPopArgs(argc);
-            try vms.vmPush(.{ .null = {} });
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(.{ .null = {} });
         },
         else => unreachable,
     }
@@ -322,12 +322,13 @@ test "cap_fs path extraction accepts string and dyn_string" {
     rt.initWithPolicy(.{ .allow_io = false }) catch return error.TestFailed;
     defer rt.deinit();
 
+    const ctx = vms.VMContext.fromActive();
+
     // Literal string
-    const s = vms.asStringValue(.{ .string = try chunk.internStr("test.txt") }) catch return error.TestFailed;
+    const s = vms.asStringValue(.{ .string = try ctx.cs.internStr("test.txt") }) catch return error.TestFailed;
     try std.testing.expectEqualStrings("test.txt", s);
 
     // Dynamic string
-    const ctx = vms.VMContext.fromActive();
     const dyn = try vmgc.makeDynString(ctx, "test.txt");
     const ds = vms.asStringValue(dyn) catch return error.TestFailed;
     try std.testing.expectEqualStrings("test.txt", ds);

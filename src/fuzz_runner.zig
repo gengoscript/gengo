@@ -182,7 +182,7 @@ fn fuzzValueWire() void {
     };
 
     for (test_values) |v| {
-        const wire = host_abi.wireFromValue(v) catch {
+        const wire = host_abi.wireFromValue(vm.VMContext.fromActive(), v) catch {
             fail("fuzz FAIL: wireFromValue failed\n");
         };
         const round = host_abi.valueFromWire(wire) catch {
