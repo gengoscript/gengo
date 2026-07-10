@@ -865,7 +865,39 @@ pub const State = struct {
         try self.emitByte(@intCast(offset & 0xff), line);
     }
 
-    pub fn codeLen(self: *State) usize {
+    pub fn reset(self: *State) void {
+
+        self.code_len = 0;
+        self.const_count = 0;
+        self.obj_const_count = 0;
+        self.str_slice_count = 0;
+        self.pending_col = 0;
+        self.last_const_code_pos = null;
+        self.last_const_idx = 0;
+        self.prev_const_code_pos = null;
+        self.prev_const_idx = 0;
+        self.last_get_local_code_pos = null;
+        self.last_triple_eq_pos = null;
+        self.last_triple_lt_pos = null;
+        self.last_triple_gt_pos = null;
+        self.last_get_local_const_sub_pos = null;
+        self.last_get_local_const_add_pos = null;
+        self.last_get_global_code_pos = null;
+        self.last_triple_global_eq_pos = null;
+        self.last_triple_global_lt_pos = null;
+        self.last_set_global_code_pos = null;
+        self.last_quad_lt_jif_pos = null;
+        self.last_close_upvalue_pos = null;
+        self.last_local_add_const_pos = null;
+        self.last_get_global_const_add_pos = null;
+        self.std_call_patch_pos = null;
+        self.verify_err_len = 0;
+        self.verified = false;
+        self.verified_code_len = 0;
+        self.module_boundary_count = 0;
+    }
+
+    pub fn codeLen(self: *const State) usize {
         return self.code_len;
     }
 
@@ -942,36 +974,7 @@ pub fn setActive(state: *State) void {
     g_state = state;
 }
 
-pub fn reset() void {
-    g_state.code_len = 0;
-    g_state.const_count = 0;
-    g_state.obj_const_count = 0;
-    g_state.str_slice_count = 0;
-    g_state.pending_col = 0;
-    g_state.last_const_code_pos = null;
-    g_state.last_const_idx = 0;
-    g_state.prev_const_code_pos = null;
-    g_state.prev_const_idx = 0;
-    g_state.last_get_local_code_pos = null;
-    g_state.last_triple_eq_pos = null;
-    g_state.last_triple_lt_pos = null;
-    g_state.last_triple_gt_pos = null;
-    g_state.last_get_local_const_sub_pos = null;
-    g_state.last_get_local_const_add_pos = null;
-    g_state.last_get_global_code_pos = null;
-    g_state.last_triple_global_eq_pos = null;
-    g_state.last_triple_global_lt_pos = null;
-    g_state.last_set_global_code_pos = null;
-    g_state.last_quad_lt_jif_pos = null;
-    g_state.last_close_upvalue_pos = null;
-    g_state.last_local_add_const_pos = null;
-    g_state.last_get_global_const_add_pos = null;
-    g_state.std_call_patch_pos = null;
-    g_state.verify_err_len = 0;
-    g_state.verified = false;
-    g_state.verified_code_len = 0;
-    g_state.module_boundary_count = 0;
-}
+pub fn reset() void { g_state.reset(); }
 
 fn foldBinOp(op: Op, lhs: Value, rhs: Value) ?Value {
     if (lhs == .int and rhs == .int) {
@@ -1011,7 +1014,6 @@ pub fn emitConstIdx(op: Op, idx: u16, line: u32) !void { return g_state.emitCons
 pub fn emitOpConst(op: Op, v: Value, line: u32) !void { return g_state.emitOpConst(op, v, line); }
 pub fn emitBinOpFused(op: Op, line: u32) !void { return g_state.emitBinOpFused(op, line); }
 pub fn internStr(s: []const u8) !*const StringSlice { return g_state.internStr(s); }
-pub fn internStrCopy(s: []const u8) !*const StringSlice { return g_state.internStrCopy(s); }
 pub fn addStringConst(s: []const u8) !u16 { return g_state.addStringConst(s); }
 pub fn emitOpStringConst(op: Op, s: []const u8, line: u32) !void { return g_state.emitOpStringConst(op, s, line); }
 pub fn emitStringConst(s: []const u8, line: u32) !void { return g_state.emitStringConst(s, line); }
@@ -1028,7 +1030,6 @@ pub fn emitDeferInvokeMethod(name: []const u8, argc: u8, line: u32) !void { retu
 pub fn emitJump(op: Op, line: u32) !usize { return g_state.emitJump(op, line); }
 pub fn patchJump(offset: usize) !void { return g_state.patchJump(offset); }
 pub fn emitLoop(loop_start: usize, line: u32) !void { return g_state.emitLoop(loop_start, line); }
-pub fn codeLen() usize { return g_state.codeLen(); }
 pub fn markStdCallPatchPos() void { g_state.markStdCallPatchPos(); }
 pub fn stdCallPatchPos() ?usize { return g_state.stdCallPatchPos(); }
 pub fn clearStdCallPatchPos() void { g_state.clearStdCallPatchPos(); }
@@ -1036,13 +1037,8 @@ pub fn truncateTo(pos: usize) void { g_state.truncateTo(pos); }
 
 // ── VM/verifier-only functions (unchanged, use g_state directly) ──────────────
 
-pub fn constCount() usize { return g_state.constCount(); }
-pub fn codeByteAt(i: usize) u8 { return g_state.codeByteAt(i); }
-pub fn lineAt(i: usize) u16 { return g_state.lineAt(i); }
-pub fn colAt(i: usize) u16 { return g_state.colAt(i); }
 pub fn constAt(i: usize) !Value { return g_state.constAt(i); }
 pub fn addModuleBoundary(path: []const u8) void { g_state.addModuleBoundary(path); }
-pub fn pathAt(ip: usize) []const u8 { return g_state.pathAt(ip); }
 
 pub const DecodedInstruction = chunk_decoder.DecodedInstruction;
 

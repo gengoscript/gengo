@@ -808,7 +808,7 @@ pub fn callHostModule(ctx: vms.VMContext, hmf: HostModuleFuncObj, argc: u8) !voi
     var out_wire = host_abi_mod.nullWire();
     try host_abi_mod.nativeCallRawChecked(hmf.call_id, args_wire[0..argc], &out_wire);
     for (0..@as(usize, argc) + 1) |_| _ = try ctx.vs.vmPop();
-    const out = try host_abi_mod.valueFromWire(out_wire);
+    const out = try host_abi_mod.valueFromWire(ctx, out_wire);
     try ctx.vs.vmPush(out);
 }
 

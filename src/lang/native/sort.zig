@@ -17,7 +17,7 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             if (arr_val != .object) return error.TypeError;
             const arr_obj = arr_val.object;
             if (!vms.isArrayObject(arr_obj)) return error.TypeError;
-            var items = try vms.cloneArraySlice(arr_obj);
+            var items = try vms.cloneArraySlice(ctx, arr_obj);
             const n = items.len;
             if (n > 1) {
                 var i: usize = 1;
@@ -41,7 +41,7 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             if (arr_val != .object) return error.TypeError;
             const arr_obj = arr_val.object;
             if (!vms.isArrayObject(arr_obj)) return error.TypeError;
-            var items = try vms.cloneArraySlice(arr_obj);
+            var items = try vms.cloneArraySlice(ctx, arr_obj);
             const n = items.len;
             if (n > 1) {
                 var i: usize = 1;
@@ -70,7 +70,7 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             if (arr_val != .object) return error.TypeError;
             const arr_obj = arr_val.object;
             if (!vms.isArrayObject(arr_obj)) return error.TypeError;
-            var items = try vms.cloneArraySlice(arr_obj);
+            var items = try vms.cloneArraySlice(ctx, arr_obj);
             const n = items.len;
             if (n > 1) {
                 var i: usize = 1;

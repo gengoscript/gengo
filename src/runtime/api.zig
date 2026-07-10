@@ -197,39 +197,24 @@ pub const Runtime = struct {
     }
 
     pub fn heapUsedBytes(self: *Runtime) usize {
-        const prev_heap = heap.g_state;
-        defer heap.setActive(prev_heap);
-        heap.setActive(&self.inner.heap_state);
-        return heap.usedBytes();
+        return self.inner.heap_state.usedBytes();
     }
 
     pub fn heapTotalFreeListBytes(self: *Runtime) usize {
-        const prev_heap = heap.g_state;
-        defer heap.setActive(prev_heap);
-        heap.setActive(&self.inner.heap_state);
-        return heap.totalFreeListBytes();
+        return self.inner.heap_state.totalFreeListBytes();
     }
 
     pub fn heapFragmentationInfo(self: *Runtime) HeapFragmentationInfo {
-        const prev_heap = heap.g_state;
-        defer heap.setActive(prev_heap);
-        heap.setActive(&self.inner.heap_state);
-        const info = heap.fragmentationInfo();
+        const info = self.inner.heap_state.fragmentationInfo();
         return .{ .free_bytes = info.free_bytes, .largest_block = info.largest_block };
     }
 
     pub fn heapFreeListSummary(self: *Runtime, buf: []u8) []u8 {
-        const prev_heap = heap.g_state;
-        defer heap.setActive(prev_heap);
-        heap.setActive(&self.inner.heap_state);
-        return heap.freeListSummary(buf);
+        return self.inner.heap_state.freeListSummary(buf);
     }
 
     pub fn heapLiveObjectCount(self: *Runtime) usize {
-        const prev_heap = heap.g_state;
-        defer heap.setActive(prev_heap);
-        heap.setActive(&self.inner.heap_state);
-        return heap.liveObjectCount();
+        return self.inner.heap_state.liveObjectCount();
     }
 };
 

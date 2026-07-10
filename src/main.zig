@@ -536,7 +536,7 @@ fn runCli(argv: []const []const u8) void {
             }
             die(1);
         };
-        disasm.disassemble();
+        disasm.disassemble(vm.VMContext.fromActive().cs);
         die(0);
     }
 
@@ -553,15 +553,15 @@ fn runCli(argv: []const []const u8) void {
             }
             io.werrInt(@intCast(heap_size / 1024));
             io.werr("k); bump=");
-            io.werrInt(@intCast(heap_rt.usedBytes() / 1024));
+            io.werrInt(@intCast(vm.VMContext.fromActive().hs.usedBytes() / 1024));
             io.werr("k free=");
-            io.werrInt(@intCast(heap_rt.totalFreeListBytes() / 1024));
+            io.werrInt(@intCast(vm.VMContext.fromActive().hs.totalFreeListBytes() / 1024));
             io.werr("k live_objs=");
             io.werrInt(@intCast(heap_rt.liveObjectCount()));
             io.werr(" gc_runs=");
             io.werrInt(@intCast(vms.vmState().gc_runs));
             var fl_buf: [256]u8 = undefined;
-            const fl_summary = heap_rt.freeListSummary(&fl_buf);
+            const fl_summary = vm.VMContext.fromActive().hs.freeListSummary(&fl_buf);
             if (fl_summary.len > 0) {
                 io.werr(" free_lists=[");
                 io.werr(fl_summary);
