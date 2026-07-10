@@ -23,13 +23,12 @@ const chunk = @import("../chunk.zig");
 const staticSS = vmod.staticSS;
 
 pub fn nativeLen(ctx: VMContext, v: Value) !Value {
-    _ = ctx;
     const uv = vms.unboxNamed(v);
     const n: usize = switch (uv) {
-        .string => |s| try vmstr.utf8RuneCountCached(s.bytes),
+        .string => |s| try vmstr.utf8RuneCountCached(ctx, s.bytes),
         .object => |obj| switch (obj.*) {
-            .dyn_string => |s| try vmstr.utf8RuneCountCached(s),
-            .string_view => |sv| try vmstr.utf8RuneCountCached(sv.bytes),
+            .dyn_string => |s| try vmstr.utf8RuneCountCached(ctx, s),
+            .string_view => |sv| try vmstr.utf8RuneCountCached(ctx, sv.bytes),
             .array, .array_managed, .array_view, .array_capacity => (try vms.asArraySlice(obj)).len,
             .map, .map_managed, .map_hashed => (try vms.asMapSlice(obj)).len,
             .struct_instance => |s| s.fields.len,
@@ -114,7 +113,7 @@ pub fn nativeAppend(ctx: VMContext, start: usize, argc: u8) !Value {
     if (is_named) {
         if (first.object.named_value.typ.named_type.elem_spec) |es| {
             for (ctx.vs.stack[start + 1 .. start + argc]) |v| {
-                if (!vmtyp.matchesTypeSpec(v, es)) return error.TypeError;
+                if (!vmtyp.matchesTypeSpec(ctx, v, es)) return error.TypeError;
             }
         }
     }
@@ -138,7 +137,7 @@ pub fn nativeGcStats(ctx: VMContext) !Value {
     const items = try vmgc.vmAllocManagedSlice(ctx, MapEntry, 3);
     obj.* = .{ .map = items[0..0] };
     items[0] = .{ .key = .{ .string = try ctx.cs.internStr("heap_used_bytes") }, .value = .{ .int = @intCast(ctx.hs.usedBytes()) } };
-    items[1] = .{ .key = .{ .string = try ctx.cs.internStr("heap_size_bytes") }, .value = .{ .int = @intCast(heap.g_state.heap.len) } };
+    items[1] = .{ .key = .{ .string = try ctx.cs.internStr("heap_size_bytes") }, .value = .{ .int = @intCast(ctx.hs.heap.len) } };
     items[2] = .{ .key = .{ .string = try ctx.cs.internStr("live_objects") }, .value = .{ .int = @intCast(ctx.hs.liveObjectCount()) } };
     obj.* = .{ .map = items[0..3] };
     return .{ .object = obj };
@@ -150,7 +149,7 @@ pub fn nativeGcStatsExt(ctx: VMContext) !Value {
     const items = try vmgc.vmAllocManagedSlice(ctx, MapEntry, 8);
     obj.* = .{ .map = items[0..0] };
     items[0] = .{ .key = .{ .string = try ctx.cs.internStr("heap_used_bytes") }, .value = .{ .int = @intCast(ctx.hs.usedBytes()) } };
-    items[1] = .{ .key = .{ .string = try ctx.cs.internStr("heap_size_bytes") }, .value = .{ .int = @intCast(heap.g_state.heap.len) } };
+    items[1] = .{ .key = .{ .string = try ctx.cs.internStr("heap_size_bytes") }, .value = .{ .int = @intCast(ctx.hs.heap.len) } };
     items[2] = .{ .key = .{ .string = try ctx.cs.internStr("live_objects") }, .value = .{ .int = @intCast(ctx.hs.liveObjectCount()) } };
     items[3] = .{ .key = .{ .string = try ctx.cs.internStr("gc_runs") }, .value = .{ .int = @intCast(ctx.vs.gc_runs) } };
     items[4] = .{ .key = .{ .string = try ctx.cs.internStr("gc_time_ns") }, .value = .{ .int = @intCast(ctx.vs.gc_time_ns) } };
@@ -287,7 +286,7 @@ pub fn nativeTypeNameValue(ctx: VMContext, v: Value) !Value {
         .error_value => .{ .string = staticSS("error") },
         .null => .{ .string = staticSS("null") },
         .named_scalar => |ns| blk: {
-            const root_nt = rootNamedType(vmod.objectAtIdx(ns.typ_idx)).named_type;
+            const root_nt = rootNamedType(ctx, vmod.objectAtIdx(ns.typ_idx)).named_type;
             if (root_nt.is_anonymous) {
                 break :blk switch (root_nt.base) {
                     .array_t => .{ .string = staticSS("array") },
@@ -308,7 +307,7 @@ pub fn nativeTypeNameValue(ctx: VMContext, v: Value) !Value {
             .interface_type => |it| .{ .string = try ctx.cs.internStr(it.name) },
             .named_type => |nt| .{ .string = try ctx.cs.internStr(nt.name) },
             .named_value => |nv| blk: {
-                const root_nt = rootNamedType(nv.typ).named_type;
+                const root_nt = rootNamedType(ctx, nv.typ).named_type;
                 if (root_nt.is_anonymous) {
                     break :blk switch (root_nt.base) {
                         .array_t => .{ .string = staticSS("array") },
@@ -335,34 +334,34 @@ pub fn nativeTypeNameValue(ctx: VMContext, v: Value) !Value {
     };
 }
 
-pub fn nativeIsInt(v: Value) Value {
+pub fn nativeIsInt(ctx: VMContext, v: Value) Value {
     return .{ .boolean = switch (v) {
         .int => true,
         .float => |n| isIntegralNumber(n),
-        .object, .named_scalar => isNamedBase(v, .int),
+        .object, .named_scalar => isNamedBase(ctx, v, .int),
         else => false,
     } };
 }
 
-pub fn nativeIsFloat(v: Value) Value {
+pub fn nativeIsFloat(ctx: VMContext, v: Value) Value {
     return .{ .boolean = switch (v) {
         .int => false,
         .float => |n| !isIntegralNumber(n),
-        .object, .named_scalar => isNamedBase(v, .float),
+        .object, .named_scalar => isNamedBase(ctx, v, .float),
         else => false,
     } };
 }
 
-pub fn nativeIsString(v: Value) Value {
-    return .{ .boolean = vms.isStringValue(v) or isNamedBase(v, .string) };
+pub fn nativeIsString(ctx: VMContext, v: Value) Value {
+    return .{ .boolean = vms.isStringValue(v) or isNamedBase(ctx, v, .string) };
 }
 
-pub fn nativeIsArray(v: Value) Value {
-    return .{ .boolean = (v == .object and vms.isArrayObject(v.object)) or isNamedBase(v, .array_t) };
+pub fn nativeIsArray(ctx: VMContext, v: Value) Value {
+    return .{ .boolean = (v == .object and vms.isArrayObject(v.object)) or isNamedBase(ctx, v, .array_t) };
 }
 
-pub fn nativeIsMap(v: Value) Value {
-    return .{ .boolean = (v == .object and vms.isMapObject(v.object)) or isNamedBase(v, .map_t) };
+pub fn nativeIsMap(ctx: VMContext, v: Value) Value {
+    return .{ .boolean = (v == .object and vms.isMapObject(v.object)) or isNamedBase(ctx, v, .map_t) };
 }
 
 pub fn nativeIsStruct(v: Value) Value {
@@ -377,16 +376,16 @@ fn isIntegralNumber(n: f64) bool {
     return @trunc(n) == n;
 }
 
-fn rootNamedType(typ_obj: *Object) *Object {
+fn rootNamedType(ctx: VMContext, typ_obj: *Object) *Object {
     var cur = typ_obj;
-    while (vmtyp.resolveParentType(cur)) |parent| cur = parent;
+    while (vmtyp.resolveParentType(ctx, cur)) |parent| cur = parent;
     return cur;
 }
 
-fn isNamedBase(v: Value, base: @import("../value.zig").NamedTypeBase) bool {
-    if (v == .named_scalar) return rootNamedType(vmod.objectAtIdx(v.named_scalar.typ_idx)).named_type.base == base;
+fn isNamedBase(ctx: VMContext, v: Value, base: @import("../value.zig").NamedTypeBase) bool {
+    if (v == .named_scalar) return rootNamedType(ctx, vmod.objectAtIdx(v.named_scalar.typ_idx)).named_type.base == base;
     if (!(v == .object and v.object.* == .named_value)) return false;
-    return rootNamedType(v.object.named_value.typ).named_type.base == base;
+    return rootNamedType(ctx, v.object.named_value.typ).named_type.base == base;
 }
 
 const MaxDeepVisits = 1024;
@@ -769,7 +768,7 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
         },
         .core_is_array => {
             if (argc != nf.arity) return error.ArityMismatch;
-            const out = nativeIsArray(ctx.vs.vmTop(0));
+            const out = nativeIsArray(ctx, ctx.vs.vmTop(0));
             ctx.vs.vmPopArgs(argc);
             try ctx.vs.vmPush(out);
         },
@@ -781,19 +780,19 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
         },
         .core_is_float => {
             if (argc != nf.arity) return error.ArityMismatch;
-            const out = nativeIsFloat(ctx.vs.vmTop(0));
+            const out = nativeIsFloat(ctx, ctx.vs.vmTop(0));
             ctx.vs.vmPopArgs(argc);
             try ctx.vs.vmPush(out);
         },
         .core_is_int => {
             if (argc != nf.arity) return error.ArityMismatch;
-            const out = nativeIsInt(ctx.vs.vmTop(0));
+            const out = nativeIsInt(ctx, ctx.vs.vmTop(0));
             ctx.vs.vmPopArgs(argc);
             try ctx.vs.vmPush(out);
         },
         .core_is_map => {
             if (argc != nf.arity) return error.ArityMismatch;
-            const out = nativeIsMap(ctx.vs.vmTop(0));
+            const out = nativeIsMap(ctx, ctx.vs.vmTop(0));
             ctx.vs.vmPopArgs(argc);
             try ctx.vs.vmPush(out);
         },
@@ -805,7 +804,7 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
         },
         .core_is_string => {
             if (argc != nf.arity) return error.ArityMismatch;
-            const out = nativeIsString(ctx.vs.vmTop(0));
+            const out = nativeIsString(ctx, ctx.vs.vmTop(0));
             ctx.vs.vmPopArgs(argc);
             try ctx.vs.vmPush(out);
         },

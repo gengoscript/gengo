@@ -397,7 +397,7 @@ fn runDefused(src: []const u8) OutcomeTag {
     chunk.emitOp(.halt, 1) catch return .other;
 
     const alloc = std.heap.page_allocator;
-    const defused = vm_defuse.buildDefusedCode(alloc) catch return .other;
+    const defused = vm_defuse.buildDefusedCode(vm.VMContext.fromActive().cs, alloc) catch return .other;
     defer alloc.free(defused);
 
     @memcpy(chunk.g_state.code[0..defused.len], defused);

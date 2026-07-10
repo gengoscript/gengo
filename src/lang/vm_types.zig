@@ -60,54 +60,54 @@ pub fn runtimeTypeName(v: Value) []const u8 {
 // core.recover() returns the human-readable message instead of just the
 // Zig error-name string.  runPanicUnwind skips the self-@memcpy when it
 // detects that pending_panic_message already points into runtime_err_buf.
-inline fn announcePanicMsg() void {
-    vms.vmState().pending_panic_message = vms.runtimeErrMsg();
+inline fn announcePanicMsg(ctx: VMContext) void {
+    ctx.vs.pending_panic_message = ctx.vs.runtimeErrMsg();
 }
 
-fn setNamedRangeError(typ_obj: *Object, value: f64) void {
+fn setNamedRangeError(ctx: VMContext, typ_obj: *Object, value: f64) void {
     const nt = typ_obj.named_type;
     if (!std.math.isFinite(value)) {
-        vms.setRuntimeErr("{s}: {d} is outside {d}..{d}", .{ nt.name, value, nt.min, nt.max });
+        ctx.vs.setRuntimeErr("{s}: {d} is outside {d}..{d}", .{ nt.name, value, nt.min, nt.max });
     } else switch (nt.base) {
-        .int, .rune => vms.setRuntimeErr("{s}: {d} is outside {d}..{d}", .{
+        .int, .rune => ctx.vs.setRuntimeErr("{s}: {d} is outside {d}..{d}", .{
             nt.name,
             @as(i64, @intFromFloat(@trunc(value))),
             @as(i64, @intFromFloat(@trunc(nt.min))),
             @as(i64, @intFromFloat(@trunc(nt.max))),
         }),
-        else => vms.setRuntimeErr("{s}: {d} is outside {d}..{d}", .{ nt.name, value, nt.min, nt.max }),
+        else => ctx.vs.setRuntimeErr("{s}: {d} is outside {d}..{d}", .{ nt.name, value, nt.min, nt.max }),
     }
-    announcePanicMsg();
+    announcePanicMsg(ctx);
 }
 
 // Resolve and cache the parent enum type pointer for enum subtypes.
-pub fn resolveEnumParent(obj: *Object) ?*Object {
+pub fn resolveEnumParent(ctx: VMContext, obj: *Object) ?*Object {
     if (obj.* != .enum_type) return null;
     if (obj.enum_type.parent) |cached| return cached;
     const pname = obj.enum_type.parent_name orelse return null;
-    const pval = globals.get(pname) orelse return null;
+    const pval = ctx.gs.get(pname) orelse return null;
     if (!(pval == .object and pval.object.* == .enum_type)) return null;
     obj.enum_type.parent = pval.object;
     return pval.object;
 }
 
 // Resolve and cache the parent type pointer, avoiding repeated globals lookups.
-pub fn resolveParentType(obj: *Object) ?*Object {
+pub fn resolveParentType(ctx: VMContext, obj: *Object) ?*Object {
     if (obj.* != .named_type) return null;
     if (obj.named_type.parent_obj) |cached| return cached;
     const pname = obj.named_type.parent_name orelse return null;
-    const pval = globals.get(pname) orelse return null;
+    const pval = ctx.gs.get(pname) orelse return null;
     if (!(pval == .object and pval.object.* == .named_type)) return null;
     obj.named_type.parent_obj = pval.object;
     return pval.object;
 }
 
-pub fn namedTypeIsOrExtends(typ_obj: *Object, target_name: []const u8) bool {
+pub fn namedTypeIsOrExtends(ctx: VMContext, typ_obj: *Object, target_name: []const u8) bool {
     if (typ_obj.* != .named_type) return false;
     var cur: *Object = typ_obj;
     while (true) {
         if (common.streq(cur.named_type.qualified_name, target_name)) return true;
-        cur = resolveParentType(cur) orelse return false;
+        cur = resolveParentType(ctx, cur) orelse return false;
     }
 }
 
@@ -118,7 +118,7 @@ pub fn findFieldIndex(fields: []const StructFieldSpec, key: []const u8) ?usize {
     return null;
 }
 
-pub fn matchesTypeAlt(v: Value, alt: FieldTypeAlt) bool {
+pub fn matchesTypeAlt(ctx: VMContext, v: Value, alt: FieldTypeAlt) bool {
     return switch (alt.typ) {
         .any => true,
         .null_t => v == .null,
@@ -134,7 +134,7 @@ pub fn matchesTypeAlt(v: Value, alt: FieldTypeAlt) bool {
             if (alt.elem_spec) |es| {
                 const items = vms.asArraySlice(v.object) catch unreachable;
                 for (items) |item| {
-                    if (!matchesTypeSpec(item, es)) break :blk false;
+                    if (!matchesTypeSpec(ctx, item, es)) break :blk false;
                 }
             }
             break :blk true;
@@ -144,27 +144,27 @@ pub fn matchesTypeAlt(v: Value, alt: FieldTypeAlt) bool {
             if (alt.key_spec) |ks| {
                 const entries = vms.asMapSlice(v.object) catch unreachable;
                 for (entries) |e| {
-                    if (!matchesTypeSpec(e.key, ks)) break :blk false;
+                    if (!matchesTypeSpec(ctx, e.key, ks)) break :blk false;
                     if (alt.val_spec) |vs| {
-                        if (!matchesTypeSpec(e.value, vs)) break :blk false;
+                        if (!matchesTypeSpec(ctx, e.value, vs)) break :blk false;
                     }
                 }
             }
             break :blk true;
         },
         .struct_t => v == .object and v.object.* == .struct_instance and common.streq(v.object.struct_instance.typ.struct_type.qualified_name, alt.struct_name),
-        .interface_t => matchesInterfaceType(v, alt.interface_name),
+        .interface_t => matchesInterfaceType(ctx, v, alt.interface_name),
         .named_t => named_t_blk: {
-            if (v == .named_scalar) break :named_t_blk namedTypeIsOrExtends(vmod.objectAtIdx(v.named_scalar.typ_idx), alt.named_name);
+            if (v == .named_scalar) break :named_t_blk namedTypeIsOrExtends(ctx, vmod.objectAtIdx(v.named_scalar.typ_idx), alt.named_name);
             if (!(v == .object)) break :named_t_blk false;
             break :named_t_blk switch (v.object.*) {
-                .named_value => namedTypeIsOrExtends(v.object.named_value.typ, alt.named_name),
+                .named_value => namedTypeIsOrExtends(ctx, v.object.named_value.typ, alt.named_name),
                 .enum_value => blk: {
                     if (common.streq(v.object.enum_value.typ.enum_type.qualified_name, alt.named_name)) break :blk true;
-                    const sub_val = globals.get(alt.named_name) orelse break :blk false;
+                    const sub_val = ctx.gs.get(alt.named_name) orelse break :blk false;
                     if (!(sub_val == .object and sub_val.object.* == .enum_type)) break :blk false;
                     if (sub_val.object.enum_type.parent_name == null) break :blk false;
-                    const parent_obj = resolveEnumParent(sub_val.object) orelse break :blk false;
+                    const parent_obj = resolveEnumParent(ctx, sub_val.object) orelse break :blk false;
                     if (parent_obj != v.object.enum_value.typ) break :blk false;
                     for (sub_val.object.enum_type.members) |m| {
                         if (common.streq(m, v.object.enum_value.name)) break :blk true;
@@ -192,13 +192,13 @@ pub fn matchesTypeAlt(v: Value, alt: FieldTypeAlt) bool {
     };
 }
 
-pub fn matchesFieldType(v: Value, spec: StructFieldSpec) bool {
-    return matchesTypeSpec(v, spec.typ);
+pub fn matchesFieldType(ctx: VMContext, v: Value, spec: StructFieldSpec) bool {
+    return matchesTypeSpec(ctx, v, spec.typ);
 }
 
-pub fn matchesTypeSpec(v: Value, spec: FieldTypeSpec) bool {
+pub fn matchesTypeSpec(ctx: VMContext, v: Value, spec: FieldTypeSpec) bool {
     for (spec.alts) |alt| {
-        if (matchesTypeAlt(v, alt)) return true;
+        if (matchesTypeAlt(ctx, v, alt)) return true;
     }
     return false;
 }
@@ -308,7 +308,7 @@ pub fn interfaceMethodMatches(m: InterfaceMethodSpec, f: FuncObj) bool {
     return true;
 }
 
-pub fn matchesInterfaceType(v: Value, iname: []const u8) bool {
+pub fn matchesInterfaceType(ctx: VMContext, v: Value, iname: []const u8) bool {
     const tname = if (v == .named_scalar)
         vmod.objectAtIdx(v.named_scalar.typ_idx).named_type.qualified_name
     else if (v == .inline_variant)
@@ -323,7 +323,7 @@ pub fn matchesInterfaceType(v: Value, iname: []const u8) bool {
         },
         else => return false,
     };
-    const iv = globals.get(iname) orelse return false;
+    const iv = ctx.gs.get(iname) orelse return false;
     if (!(iv == .object and iv.object.* == .interface_type)) return false;
     const it = iv.object.interface_type;
     for (it.methods) |m| {
@@ -333,7 +333,7 @@ pub fn matchesInterfaceType(v: Value, iname: []const u8) bool {
         @memcpy(key_buf[0..tname.len], tname);
         key_buf[tname.len] = '.';
         @memcpy(key_buf[tname.len + 1 .. total], m.name);
-        const fnv = globals.get(key_buf[0..total]) orelse return false;
+        const fnv = ctx.gs.get(key_buf[0..total]) orelse return false;
         if (!(fnv == .object)) return false;
         switch (fnv.object.*) {
             .function, .closure => {
@@ -359,7 +359,7 @@ const VMContext = vms.VMContext;
 
 pub fn makeNamedValue(ctx: VMContext, typ_obj: *Object, inner: Value) !Value {
     if (typ_obj.* == .named_type) {
-        const pool_idx = heap.objectPoolIndex(typ_obj);
+        const pool_idx = ctx.hs.objectPoolIndex(typ_obj);
         if (pool_idx <= 0x0FFF) {
             if (vmod.tryMakeInlineNamedScalar(typ_obj, @intCast(pool_idx), inner)) |v| return v;
         }
@@ -370,7 +370,7 @@ pub fn makeNamedValue(ctx: VMContext, typ_obj: *Object, inner: Value) !Value {
 }
 
 pub fn variantConstruct(ctx: VMContext, typ: *Object, tag: []const u8, ordinal: usize, payload: Value) !Value {
-    const pool_idx = heap.objectPoolIndex(typ);
+    const pool_idx = ctx.hs.objectPoolIndex(typ);
     if (pool_idx <= 0x0FFF) {
         if (vmod.tryMakeInlineVariant(@intCast(pool_idx), ordinal, payload)) |iv| return iv;
     }
@@ -385,10 +385,10 @@ pub fn variantConstruct(ctx: VMContext, typ: *Object, tag: []const u8, ordinal: 
 //   - continuous (float/decimal): the endpoints are identified with each
 //     other, e.g. `cycle 0.0..360.0` treats 360.0 as the same point as 0.0,
 //     so `span = max - min` and the maximum itself wraps to the minimum.
-fn wrapCycleValueWithError(name: []const u8, min: f64, max: f64, n: f64, continuous: bool) !f64 {
+fn wrapCycleValueWithError(ctx: VMContext, name: []const u8, min: f64, max: f64, n: f64, continuous: bool) !f64 {
     return wrapCycleValue(min, max, n, continuous) catch |err| {
         if (err == error.RangeError) {
-            vms.setRuntimeErr("{s}: {d} is outside cyclic range {d}..{d}", .{ name, n, min, max });
+            ctx.vs.setRuntimeErr("{s}: {d} is outside cyclic range {d}..{d}", .{ name, n, min, max });
         }
         return err;
     };
@@ -441,26 +441,26 @@ pub fn constructNamedType(ctx: VMContext, typ_obj: *Object, arg: Value) !Value {
         .int => {
             const n = vms.valueAsNumber(effective_arg) catch |err| {
                 if (err == error.TypeError) {
-                    vms.setRuntimeErr("cannot construct {s} from {s}; convert to {s} first", .{ nt.name, runtimeTypeName(effective_arg), namedBaseName(nt.base) });
-                    announcePanicMsg();
+                    ctx.vs.setRuntimeErr("cannot construct {s} from {s}; convert to {s} first", .{ nt.name, runtimeTypeName(effective_arg), namedBaseName(nt.base) });
+                    announcePanicMsg(ctx);
                 }
                 return err;
             };
             if (!std.math.isFinite(n)) {
-                setNamedRangeError(typ_obj, n);
+                setNamedRangeError(ctx, typ_obj, n);
                 return error.RangeError;
             }
             if (@trunc(n) != n) {
-                vms.setRuntimeErr("cannot construct {s} from {s}; convert to {s} first", .{ nt.name, runtimeTypeName(effective_arg), namedBaseName(nt.base) });
-                announcePanicMsg();
+                ctx.vs.setRuntimeErr("cannot construct {s} from {s}; convert to {s} first", .{ nt.name, runtimeTypeName(effective_arg), namedBaseName(nt.base) });
+                announcePanicMsg(ctx);
                 return error.TypeError;
             }
             if (nt.has_range and (n < nt.min or n > nt.max)) {
                 if (nt.is_cycle) {
-                    const wrapped = try wrapCycleValueWithError(nt.name, nt.min, nt.max, n, false);
+                    const wrapped = try wrapCycleValueWithError(ctx, nt.name, nt.min, nt.max, n, false);
                     base_v = .{ .int = @intFromFloat(wrapped) };
                 } else {
-                    setNamedRangeError(typ_obj, n);
+                    setNamedRangeError(ctx, typ_obj, n);
                     return error.RangeError;
                 }
             } else {
@@ -470,13 +470,13 @@ pub fn constructNamedType(ctx: VMContext, typ_obj: *Object, arg: Value) !Value {
         .float => {
             const n = vms.valueAsNumber(effective_arg) catch |err| {
                 if (err == error.TypeError) {
-                    vms.setRuntimeErr("cannot construct {s} from {s}; convert to {s} first", .{ nt.name, runtimeTypeName(effective_arg), namedBaseName(nt.base) });
-                    announcePanicMsg();
+                    ctx.vs.setRuntimeErr("cannot construct {s} from {s}; convert to {s} first", .{ nt.name, runtimeTypeName(effective_arg), namedBaseName(nt.base) });
+                    announcePanicMsg(ctx);
                 }
                 return err;
             };
             if (!std.math.isFinite(n)) {
-                setNamedRangeError(typ_obj, n);
+                setNamedRangeError(ctx, typ_obj, n);
                 return error.RangeError;
             }
             // Continuous cycle: max is identified with min, so n == max must
@@ -484,10 +484,10 @@ pub fn constructNamedType(ctx: VMContext, typ_obj: *Object, arg: Value) !Value {
             const out_of_bounds = if (nt.is_cycle) n < nt.min or n >= nt.max else n < nt.min or n > nt.max;
             if (nt.has_range and out_of_bounds) {
                 if (nt.is_cycle) {
-                    const wrapped = try wrapCycleValueWithError(nt.name, nt.min, nt.max, n, true);
+                    const wrapped = try wrapCycleValueWithError(ctx, nt.name, nt.min, nt.max, n, true);
                     base_v = .{ .float = wrapped };
                 } else {
-                    setNamedRangeError(typ_obj, n);
+                    setNamedRangeError(ctx, typ_obj, n);
                     return error.RangeError;
                 }
             } else {
@@ -520,9 +520,9 @@ pub fn constructNamedType(ctx: VMContext, typ_obj: *Object, arg: Value) !Value {
                 const out_of_bounds = if (nt.is_cycle) fv < nt.min or fv >= nt.max else fv < nt.min or fv > nt.max;
                 if (out_of_bounds) {
                     if (nt.is_cycle) {
-                        base_v = .{ .decimal = try wrapDecimalCycle(nt, fv, factor) };
+                        base_v = .{ .decimal = try wrapDecimalCycle(ctx, nt, fv, factor) };
                     } else {
-                        setNamedRangeError(typ_obj, fv);
+                        setNamedRangeError(ctx, typ_obj, fv);
                         return error.RangeError;
                     }
                 } else {
@@ -541,8 +541,8 @@ pub fn constructNamedType(ctx: VMContext, typ_obj: *Object, arg: Value) !Value {
                 },
                 .float => |n| blk: {
                     if (!std.math.isFinite(n)) {
-                        vms.setRuntimeErr("{s}: {d} is outside {d}..{d}", .{ nt.name, n, nt.min, nt.max });
-                        announcePanicMsg();
+                        ctx.vs.setRuntimeErr("{s}: {d} is outside {d}..{d}", .{ nt.name, n, nt.min, nt.max });
+                        announcePanicMsg(ctx);
                         return error.RangeError;
                     }
                     const t = @trunc(n);
@@ -554,7 +554,7 @@ pub fn constructNamedType(ctx: VMContext, typ_obj: *Object, arg: Value) !Value {
             const rf: f64 = @floatFromInt(r);
             base_v = .{ .rune = r };
             if (nt.has_range and (rf < nt.min or rf > nt.max)) {
-                setNamedRangeError(typ_obj, rf);
+                setNamedRangeError(ctx, typ_obj, rf);
                 return error.RangeError;
             }
         },
@@ -562,8 +562,8 @@ pub fn constructNamedType(ctx: VMContext, typ_obj: *Object, arg: Value) !Value {
             if (!vms.isStringValue(effective_arg)) return error.TypeError;
             const s = try vms.asStringValue(effective_arg);
             const ds = try vmgc.makeDynString(ctx, s);
-            try vms.pushTempRoot(ds);
-            defer vms.popTempRoot();
+            try ctx.vs.pushTempRoot(ds);
+            defer ctx.vs.popTempRoot();
             return makeNamedValue(ctx, typ_obj, ds);
         },
         .bool => {
@@ -574,7 +574,7 @@ pub fn constructNamedType(ctx: VMContext, typ_obj: *Object, arg: Value) !Value {
             if (!(effective_arg == .object and vms.isArrayObject(effective_arg.object))) return error.TypeError;
             if (nt.elem_spec) |es| {
                 for (try vms.asArraySlice(effective_arg.object)) |item| {
-                    if (!matchesTypeSpec(item, es)) return error.TypeError;
+                    if (!matchesTypeSpec(ctx, item, es)) return error.TypeError;
                 }
             }
             return makeNamedValue(ctx, typ_obj, effective_arg);
@@ -583,9 +583,9 @@ pub fn constructNamedType(ctx: VMContext, typ_obj: *Object, arg: Value) !Value {
             if (!(effective_arg == .object and vms.isMapObject(effective_arg.object))) return error.TypeError;
             if (nt.key_spec) |ks| {
                 for (try vms.asMapSlice(effective_arg.object)) |e| {
-                    if (!matchesTypeSpec(e.key, ks)) return error.TypeError;
+                    if (!matchesTypeSpec(ctx, e.key, ks)) return error.TypeError;
                     if (nt.val_spec) |vs| {
-                        if (!matchesTypeSpec(e.value, vs)) return error.TypeError;
+                        if (!matchesTypeSpec(ctx, e.value, vs)) return error.TypeError;
                     }
                 }
             }
@@ -599,8 +599,8 @@ pub fn constructNamedType(ctx: VMContext, typ_obj: *Object, arg: Value) !Value {
 // Wraps an out-of-range decimal value (given as its unscaled real value `fv`)
 // into the named type's cyclic domain and rescales it back to the fixed-point
 // integer representation.
-fn wrapDecimalCycle(nt: @import("value.zig").NamedTypeObj, fv: f64, factor: f64) !i64 {
-    const wrapped = try wrapCycleValueWithError(nt.name, nt.min, nt.max, fv, true);
+fn wrapDecimalCycle(ctx: VMContext, nt: @import("value.zig").NamedTypeObj, fv: f64, factor: f64) !i64 {
+    const wrapped = try wrapCycleValueWithError(ctx, nt.name, nt.min, nt.max, fv, true);
     const raw = @round(wrapped * factor);
     if (!std.math.isFinite(raw) or raw < -std.math.pow(f64, 2.0, 63.0) or raw >= std.math.pow(f64, 2.0, 63.0)) return error.TypeError;
     return @intFromFloat(raw);
@@ -614,19 +614,19 @@ pub fn coerceNamedTypeResult(ctx: VMContext, typ_obj: *Object, arg: Value) !Valu
         .int => {
             const n = try vms.valueAsNumber(arg);
             if (@trunc(n) != n) return error.TypeError;
-            const wrapped = try wrapCycleValueWithError(nt.name, nt.min, nt.max, n, false);
+            const wrapped = try wrapCycleValueWithError(ctx, nt.name, nt.min, nt.max, n, false);
             return makeNamedValue(ctx, typ_obj, .{ .int = @intFromFloat(wrapped) });
         },
         .float => {
             const n = try vms.valueAsNumber(arg);
-            const wrapped = try wrapCycleValueWithError(nt.name, nt.min, nt.max, n, true);
+            const wrapped = try wrapCycleValueWithError(ctx, nt.name, nt.min, nt.max, n, true);
             return makeNamedValue(ctx, typ_obj, .{ .float = wrapped });
         },
         .decimal => {
             const d = try vms.valueAsDecimal(arg);
             const factor = std.math.pow(f64, 10.0, @floatFromInt(nt.scale));
             const fv = @as(f64, @floatFromInt(d)) / factor;
-            const scaled = try wrapDecimalCycle(nt, fv, factor);
+            const scaled = try wrapDecimalCycle(ctx, nt, fv, factor);
             return makeNamedValue(ctx, typ_obj, .{ .decimal = scaled });
         },
         else => return error.TypeError,
@@ -641,25 +641,25 @@ pub fn applyNamedTypeFn(ctx: VMContext, typ_obj: *Object, kind: @import("value.z
     const n = try vms.valueAsNumber(inner);
     const delta: f64 = if (kind == .succ) 1.0 else -1.0;
     const result = n + delta;
-    if (result == n) { vms.setRuntimeErr("cannot increment non-finite or very large value", .{}); announcePanicMsg(); return error.RangeError; }
+    if (result == n) { ctx.vs.setRuntimeErr("cannot increment non-finite or very large value", .{}); announcePanicMsg(ctx); return error.RangeError; }
     if (nt.is_cycle) {
         return makeNamedValue(ctx, typ_obj, if (nt.base == .float) .{ .float = try wrapCycleValue(nt.min, nt.max, result, true) } else .{ .int = @intFromFloat(try wrapCycleValue(nt.min, nt.max, result, false)) });
     } else {
         if (result < nt.min or result > nt.max) {
-            setNamedRangeError(typ_obj, result);
+            setNamedRangeError(ctx, typ_obj, result);
             return error.RangeError;
         }
         return makeNamedValue(ctx, typ_obj, if (nt.base == .float) .{ .float = result } else .{ .int = @intFromFloat(result) });
     }
 }
 
-fn argTypeError(f: FuncObj, i: usize, spec: FieldTypeSpec, arg: Value) error{TypeError} {
+fn argTypeError(ctx: VMContext, f: FuncObj, i: usize, spec: FieldTypeSpec, arg: Value) error{TypeError} {
     var buf: [128]u8 = undefined;
     const expected = fieldTypeSpecStr(&buf, spec);
     if (f.name.len > 0) {
-        vms.setRuntimeErr("{s}: arg {}: expected {s}, got {s}", .{ f.name, i + 1, expected, runtimeTypeName(arg) });
+        ctx.vs.setRuntimeErr("{s}: arg {}: expected {s}, got {s}", .{ f.name, i + 1, expected, runtimeTypeName(arg) });
     } else {
-        vms.setRuntimeErr("arg {}: expected {s}, got {s}", .{ i + 1, expected, runtimeTypeName(arg) });
+        ctx.vs.setRuntimeErr("arg {}: expected {s}, got {s}", .{ i + 1, expected, runtimeTypeName(arg) });
     }
     return error.TypeError;
 }
@@ -686,46 +686,46 @@ pub fn canInlinePrimitiveArgs(f: FuncObj, argc: u8) bool {
     return true;
 }
 
-pub fn enforcePrimitiveFuncArgTypes(f: FuncObj, argc: u8) !void {
-    const vs = vms.vmState();
+pub fn enforcePrimitiveFuncArgTypes(ctx: VMContext, f: FuncObj, argc: u8) !void {
+    const vs = ctx.vs;
     const base = vs.stack_top - argc;
     for (0..f.arity) |i| {
         const spec = f.param_types[i];
         // A non-primitive spec here means GC pool-slot reuse; fall back.
-        if (!isPrimitiveTypeSpec(spec)) return enforceFuncArgTypes(f, argc);
+        if (!isPrimitiveTypeSpec(spec)) return enforceFuncArgTypes(ctx, f, argc);
         const arg = vs.stack[base + i];
-        if (!matchesTypeAlt(arg, spec.alts[0])) return argTypeError(f, i, spec, arg);
+        if (!matchesTypeAlt(ctx, arg, spec.alts[0])) return argTypeError(ctx, f, i, spec, arg);
     }
 }
 
-pub fn enforceFuncArgTypes(f: FuncObj, argc: u8) !void {
+pub fn enforceFuncArgTypes(ctx: VMContext, f: FuncObj, argc: u8) !void {
     if (!f.has_typed_params) return;
     const fixed: usize = if (f.is_variadic) f.arity - 1 else f.arity;
     for (0..fixed) |i| {
-        const arg = vms.vmState().stack[vms.vmState().stack_top - argc + i];
-        if (!matchesTypeSpec(arg, f.param_types[i])) return argTypeError(f, i, f.param_types[i], arg);
+        const arg = ctx.vs.stack[ctx.vs.stack_top - argc + i];
+        if (!matchesTypeSpec(ctx, arg, f.param_types[i])) return argTypeError(ctx, f, i, f.param_types[i], arg);
     }
     if (f.is_variadic) {
         for (fixed..@as(usize, argc)) |i| {
-            const arg = vms.vmState().stack[vms.vmState().stack_top - argc + i];
-            if (!matchesTypeSpec(arg, f.variadic_type)) return argTypeError(f, i, f.variadic_type, arg);
+            const arg = ctx.vs.stack[ctx.vs.stack_top - argc + i];
+            if (!matchesTypeSpec(ctx, arg, f.variadic_type)) return argTypeError(ctx, f, i, f.variadic_type, arg);
         }
     }
 }
 
-pub fn enforceFuncReturnTypes(f: FuncObj, retval: Value) !void {
+pub fn enforceFuncReturnTypes(ctx: VMContext, f: FuncObj, retval: Value) !void {
     if (!f.has_typed_returns) return;
     if (f.return_types.len == 0) return;
     // Named returns are programmer-controlled and may be null-initialized; skip enforcement.
     if (f.named_return_count > 0) return;
     if (f.return_types.len == 1) {
-        if (!matchesTypeSpec(retval, f.return_types[0])) {
+        if (!matchesTypeSpec(ctx, retval, f.return_types[0])) {
             var buf: [128]u8 = undefined;
             const expected = fieldTypeSpecStr(&buf, f.return_types[0]);
             if (f.name.len > 0) {
-                vms.setRuntimeErr("{s}: expected return {s}, got {s}", .{ f.name, expected, runtimeTypeName(retval) });
+                ctx.vs.setRuntimeErr("{s}: expected return {s}, got {s}", .{ f.name, expected, runtimeTypeName(retval) });
             } else {
-                vms.setRuntimeErr("expected return {s}, got {s}", .{ expected, runtimeTypeName(retval) });
+                ctx.vs.setRuntimeErr("expected return {s}, got {s}", .{ expected, runtimeTypeName(retval) });
             }
             return error.TypeError;
         }
@@ -735,13 +735,13 @@ pub fn enforceFuncReturnTypes(f: FuncObj, retval: Value) !void {
     const arr = try vms.asArraySlice(retval.object);
     if (arr.len != f.return_types.len) return error.ArityMismatch;
     for (arr, f.return_types, 0..) |v, rt, i| {
-        if (!matchesTypeSpec(v, rt)) {
+        if (!matchesTypeSpec(ctx, v, rt)) {
             var buf: [128]u8 = undefined;
             const expected = fieldTypeSpecStr(&buf, rt);
             if (f.name.len > 0) {
-                vms.setRuntimeErr("{s}: return {}: expected {s}, got {s}", .{ f.name, i + 1, expected, runtimeTypeName(v) });
+                ctx.vs.setRuntimeErr("{s}: return {}: expected {s}, got {s}", .{ f.name, i + 1, expected, runtimeTypeName(v) });
             } else {
-                vms.setRuntimeErr("return {}: expected {s}, got {s}", .{ i + 1, expected, runtimeTypeName(v) });
+                ctx.vs.setRuntimeErr("return {}: expected {s}, got {s}", .{ i + 1, expected, runtimeTypeName(v) });
             }
             return error.TypeError;
         }

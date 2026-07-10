@@ -5,21 +5,21 @@ const heap = @import("../runtime/heap.zig");
 const Value = @import("value.zig").Value;
 const Object = @import("value.zig").Object;
 
-pub fn arrayRead(obj: *Object, idx_v: Value) !Value {
+pub fn arrayRead(ctx: VMContext, obj: *Object, idx_v: Value) !Value {
     const items = try vms.asArraySlice(obj);
     const idx = try vms.vmIndexFromVal(idx_v);
     if (idx >= items.len) {
-        vms.setRuntimeErr("index {} out of bounds for array of length {}", .{ idx, items.len });
+        ctx.vs.setRuntimeErr("index {} out of bounds for array of length {}", .{ idx, items.len });
         return error.IndexOutOfBounds;
     }
     return items[idx];
 }
 
-pub fn arrayWrite(obj: *Object, idx_v: Value, val: Value) !void {
+pub fn arrayWrite(ctx: VMContext, obj: *Object, idx_v: Value, val: Value) !void {
     const items = try vms.asArraySlice(obj);
     const idx = try vms.vmIndexFromVal(idx_v);
     if (idx >= items.len) {
-        vms.setRuntimeErr("index {} out of bounds for array of length {}", .{ idx, items.len });
+        ctx.vs.setRuntimeErr("index {} out of bounds for array of length {}", .{ idx, items.len });
         return error.IndexOutOfBounds;
     }
     items[idx] = val;
@@ -58,10 +58,10 @@ pub fn arrayAppend(ctx: VMContext, arr_obj: *Object, elems: []const Value) !Valu
     // Slow path: allocate a new backing buffer with 2x growth, capped at the
     // heap's largest single block so we never trigger AllocationTooLarge early.
     const ideal_cap = @max(new_len * 2, new_len + 4);
-    const max_cap_values = heap.maxManagedAlloc() / @sizeOf(Value);
+    const max_cap_values = ctx.hs.maxManagedAlloc() / @sizeOf(Value);
     const new_cap = if (ideal_cap <= max_cap_values) ideal_cap else @max(new_len, max_cap_values);
     const backing_obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
-    defer vms.popTempRoot();
+    defer ctx.vs.popTempRoot();
     const out = try vmgc.vmAllocManagedSlice(ctx, Value, new_cap);
     @memcpy(out[0..base.len], base);
     @memcpy(out[base.len .. base.len + elems.len], elems);

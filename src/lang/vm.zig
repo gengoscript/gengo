@@ -75,26 +75,26 @@ fn panicMessageFromValue(ctx: VMContext, v: Value) []const u8 {
     return "AssertionFailed";
 }
 
-fn namedTypeIsSubOf(sub: *Object, ancestor: *Object) bool {
+fn namedTypeIsSubOf(ctx: VMContext, sub: *Object, ancestor: *Object) bool {
     if (sub == ancestor) return true;
-    var cur = vmtyp.resolveParentType(sub) orelse return false;
+    var cur = vmtyp.resolveParentType(ctx, sub) orelse return false;
     while (true) {
         if (cur == ancestor) return true;
-        cur = vmtyp.resolveParentType(cur) orelse return false;
+        cur = vmtyp.resolveParentType(ctx, cur) orelse return false;
     }
 }
 
-fn namedTypeCommonAncestor(a: *Object, b: *Object) ?*Object {
+fn namedTypeCommonAncestor(ctx: VMContext, a: *Object, b: *Object) ?*Object {
     if (a == b) return a;
     // Walk the chain of b's ancestors; for each, check if a is a subtype of it.
-    var cur = vmtyp.resolveParentType(b) orelse return null;
+    var cur = vmtyp.resolveParentType(ctx, b) orelse return null;
     while (true) {
-        if (namedTypeIsSubOf(a, cur)) return cur;
-        cur = vmtyp.resolveParentType(cur) orelse return null;
+        if (namedTypeIsSubOf(ctx, a, cur)) return cur;
+        cur = vmtyp.resolveParentType(ctx, cur) orelse return null;
     }
 }
 
-fn namedTypeCarrier(a: Value, b: Value) !?*Object {
+fn namedTypeCarrier(ctx: VMContext, a: Value, b: Value) !?*Object {
     var ta: ?*Object = null;
     var tb: ?*Object = null;
     if (a.namedTyp()) |t| ta = t;
@@ -102,9 +102,9 @@ fn namedTypeCarrier(a: Value, b: Value) !?*Object {
     if (ta == null and tb == null) return null;
     if (ta == null or tb == null) return error.TypeError;
     if (ta.? == tb.?) return ta;
-    if (namedTypeIsSubOf(ta.?, tb.?)) return tb.?;
-    if (namedTypeIsSubOf(tb.?, ta.?)) return ta.?;
-    if (namedTypeCommonAncestor(ta.?, tb.?)) |lca| return lca;
+    if (namedTypeIsSubOf(ctx, ta.?, tb.?)) return tb.?;
+    if (namedTypeIsSubOf(ctx, tb.?, ta.?)) return ta.?;
+    if (namedTypeCommonAncestor(ctx, ta.?, tb.?)) |lca| return lca;
     return error.TypeError;
 }
 
@@ -142,7 +142,7 @@ fn setBinaryTypeError(ctx: VMContext, op: []const u8, a: Value, b: Value) void {
         const tb_obj = b_ref.?.typ;
         const ta = ta_obj.named_type;
         const tb = tb_obj.named_type;
-        if (ta.base == tb.base and !namedTypeIsSubOf(ta_obj, tb_obj) and !namedTypeIsSubOf(tb_obj, ta_obj) and namedTypeCommonAncestor(ta_obj, tb_obj) == null) {
+        if (ta.base == tb.base and !namedTypeIsSubOf(ctx, ta_obj, tb_obj) and !namedTypeIsSubOf(ctx, tb_obj, ta_obj) and namedTypeCommonAncestor(ctx, ta_obj, tb_obj) == null) {
             ctx.vs.setRuntimeErr("cannot apply '{s}' to {s} and {s}; convert one side explicitly before applying '{s}'", .{ op, ta.name, tb.name, op });
             return;
         }
@@ -255,7 +255,7 @@ fn checkNamedValueCompatibility(ctx: VMContext, a: Value, b: Value) !void {
             if (ta.named_type.is_anonymous and tb.named_type.is_anonymous and
                 ta.named_type.base == tb.named_type.base and
                 std.mem.eql(u8, ta.named_type.name, tb.named_type.name)) return;
-            if (!namedTypeIsSubOf(ta, tb) and !namedTypeIsSubOf(tb, ta) and namedTypeCommonAncestor(ta, tb) == null) {
+            if (!namedTypeIsSubOf(ctx, ta, tb) and !namedTypeIsSubOf(ctx, tb, ta) and namedTypeCommonAncestor(ctx, ta, tb) == null) {
                 ctx.vs.setRuntimeErr("cannot mix {s} and {s}; convert one side explicitly", .{ ta.named_type.name, tb.named_type.name });
                 return error.TypeError;
             }
@@ -362,7 +362,7 @@ fn computeAddResult(ctx: VMContext, a: Value, b: Value) !Value {
         const sb = try vms.asStringValue(b);
         vmperf.countStringConcat(sa.len + sb.len);
         const result = try vmgc.concatDynString(ctx, sa, sb);
-        const carrier = namedTypeCarrier(a, b) catch |err| {
+        const carrier = namedTypeCarrier(ctx, a, b) catch |err| {
             if (err == error.TypeError) setBinaryTypeError(ctx, "+", a, b);
             return err;
         };
@@ -413,7 +413,7 @@ fn makeNumeric(tag: VTag, n: f64) Value {
 fn wrapValueWithCarrier(ctx: VMContext, a: Value, b: Value, val: Value, op: []const u8) !Value {
     // Fast path: plain scalars carry no named type.
     if (!a.isNamed() and !b.isNamed()) return val;
-    const carrier = namedTypeCarrier(a, b) catch |err| {
+    const carrier = namedTypeCarrier(ctx, a, b) catch |err| {
         if (err == error.TypeError) setBinaryTypeError(ctx, op, a, b);
         return err;
     };
@@ -458,7 +458,7 @@ fn pushUnaryIntResult(ctx: VMContext, v: Value, result: Value) !void {
 }
 
 fn pushStringResultWithCarrier(ctx: VMContext, a: Value, b: Value, raw: Value) !void {
-    const carrier = namedTypeCarrier(a, b) catch |err| {
+    const carrier = namedTypeCarrier(ctx, a, b) catch |err| {
         if (err == error.TypeError) setBinaryTypeError(ctx, "+", a, b);
         return err;
     };
@@ -516,7 +516,7 @@ fn enumTypeAllocValue(ctx: VMContext, obj: *Object, member_name: []const u8) !Va
         }
         if (!in_sub) return error.UnknownStructField;
         // Resolve parent and find the ordinal there.
-        const parent_obj = vmtyp.resolveEnumParent(obj) orelse return error.UnknownStructField;
+        const parent_obj = vmtyp.resolveEnumParent(ctx, obj) orelse return error.UnknownStructField;
         const parent_et = &parent_obj.enum_type;
         for (parent_et.members, 0..) |m, pi| {
             if (common.streq(m, member_name)) {
@@ -705,7 +705,7 @@ fn resolveMethodReceiver(ctx: VMContext, recv: Value, mname: []const u8) !Method
                 return .{ .func = func, .pass_recv = true };
             } else |err| switch (err) {
                 error.UnknownMethod => {
-                    typ_obj = vmtyp.resolveParentType(typ_obj) orelse return error.UnknownMethod;
+                    typ_obj = vmtyp.resolveParentType(ctx, typ_obj) orelse return error.UnknownMethod;
                 },
                 else => return err,
             }
@@ -728,7 +728,7 @@ fn resolveMethodReceiver(ctx: VMContext, recv: Value, mname: []const u8) !Method
                     return .{ .func = func, .pass_recv = true };
                 } else |err| switch (err) {
                     error.UnknownMethod => {
-                        typ_obj = vmtyp.resolveParentType(typ_obj) orelse return error.UnknownMethod;
+                        typ_obj = vmtyp.resolveParentType(ctx, typ_obj) orelse return error.UnknownMethod;
                     },
                     else => return err,
                 }
@@ -810,7 +810,7 @@ fn checkNamedTypePredicateChain(ctx: VMContext, nt_obj: *Object, inner: Value) !
         if (chain_len >= chain.len) break;
         chain[chain_len] = t;
         chain_len += 1;
-        cur = vmtyp.resolveParentType(t);
+        cur = vmtyp.resolveParentType(ctx, t);
     }
     // Evaluate from root to current (reverse order).
     var i: usize = chain_len;
@@ -880,7 +880,7 @@ fn enterFunctionFrameWarm(ctx: VMContext, f: @import("value.zig").FuncObj, func_
     if (f.arity != argc or f.is_variadic or f.default_count != 0) {
         return enterFunctionFrame(ctx, f, func_obj, closure, argc);
     }
-    if (f.has_typed_params) try vmtyp.enforcePrimitiveFuncArgTypes(f, argc);
+    if (f.has_typed_params) try vmtyp.enforcePrimitiveFuncArgTypes(ctx, f, argc);
     if (ctx.vs.frame_top >= ctx.vs.frames.len) return error.CallStackOverflow;
     ctx.vs.frames[ctx.vs.frame_top] = .{
         .ret_ip = ctx.vs.ip,
@@ -923,7 +923,7 @@ fn enterFunctionFrame(ctx: VMContext, f: @import("value.zig").FuncObj, func_obj:
             return error.ArityMismatch;
         }
     }
-    if (f.has_typed_params) try vmtyp.enforceFuncArgTypes(f, effective_argc);
+    if (f.has_typed_params) try vmtyp.enforceFuncArgTypes(ctx, f, effective_argc);
     try prepareVariadicCall(ctx, f, effective_argc);
     if (ctx.vs.frame_top >= ctx.vs.frames.len) return error.CallStackOverflow;
     ctx.vs.frames[ctx.vs.frame_top] = .{
@@ -1013,7 +1013,7 @@ fn performCall(ctx: VMContext, argc: u8) !void {
             if (argc != 1) return error.ArityMismatch;
             const arg = ctx.vs.stack[ctx.vs.stack_top - 1];
             if (arg != .object or arg.object.* != .enum_value) return error.TypeError;
-            const parent_obj = vmtyp.resolveEnumParent(obj) orelse return error.TypeError;
+            const parent_obj = vmtyp.resolveEnumParent(ctx, obj) orelse return error.TypeError;
             if (arg.object.enum_value.typ != parent_obj) return error.TypeError;
             var found = false;
             for (et.members) |m| {
@@ -1026,7 +1026,7 @@ fn performCall(ctx: VMContext, argc: u8) !void {
             if (argc != 1) return error.ArityMismatch;
             const payload = ctx.vs.stack[ctx.vs.stack_top - 1];
             if (vc.payload_type) |pt| {
-                if (!vmtyp.matchesTypeSpec(payload, pt)) return error.TypeError;
+                if (!vmtyp.matchesTypeSpec(ctx, payload, pt)) return error.TypeError;
             }
             try pop2push1(ctx, try vmtyp.variantConstruct(ctx, vc.typ, vc.tag, vc.ordinal, payload));
         },
@@ -1136,7 +1136,7 @@ fn tryTailCall(ctx: VMContext, argc: u8) !bool {
     };
     if (f.is_variadic) return false;
     if (f.arity != argc) return false;
-    if (f.has_typed_params) try vmtyp.enforceFuncArgTypes(f, argc);
+    if (f.has_typed_params) try vmtyp.enforceFuncArgTypes(ctx, f, argc);
     for (0..argc) |i| writeFrameLocal(ctx, frame.base + i, ctx.vs.stack[callee_idx + 1 + i]);
     frame.closure = closure;
     frame.func_obj = f_obj;
@@ -1203,8 +1203,8 @@ fn iterNext1(ctx: VMContext, it: *IterObj) !void {
         .string => {
             if (!try iterAdvance(ctx, it.index < it.string.len)) return;
             const ridx = it.rune_index;
-            const start = try vmstr.utf8ByteOffsetForRuneIndexCached(it.string, ridx);
-            const end = try vmstr.utf8ByteOffsetForRuneIndexCached(it.string, ridx + 1);
+            const start = try vmstr.utf8ByteOffsetForRuneIndexCached(ctx, it.string, ridx);
+            const end = try vmstr.utf8ByteOffsetForRuneIndexCached(ctx, it.string, ridx + 1);
             // source is null for both static strings and string_views of immortal bytes.
             const source: ?*Object = if (it.string_managed) it.source else null;
             try ctx.vs.vmPush(try vmstr.makeCharValue(ctx, it.string[start..end], source));
@@ -1248,8 +1248,8 @@ fn iterNext2(ctx: VMContext, it: *IterObj) !void {
         .string => {
             if (!try iterAdvance(ctx, it.index < it.string.len)) return;
             const ridx = it.rune_index;
-            const start = try vmstr.utf8ByteOffsetForRuneIndexCached(it.string, ridx);
-            const end = try vmstr.utf8ByteOffsetForRuneIndexCached(it.string, ridx + 1);
+            const start = try vmstr.utf8ByteOffsetForRuneIndexCached(ctx, it.string, ridx);
+            const end = try vmstr.utf8ByteOffsetForRuneIndexCached(ctx, it.string, ridx + 1);
             try ctx.vs.vmPush(.{ .int = @intCast(it.rune_index) });
             const source: ?*Object = if (it.string_managed) it.source else null;
             try ctx.vs.vmPush(try vmstr.makeCharValue(ctx, it.string[start..end], source));
@@ -1329,7 +1329,7 @@ fn retSlowPath(ctx: VMContext, retval_in: Value) !bool {
     ctx.vs.popTempRoot();
     ctx.vs.frame_top = fi;
     if (frame.has_typed_returns) {
-        if (fsig_ret) |fsig| try vmtyp.enforceFuncReturnTypes(fsig, retval);
+        if (fsig_ret) |fsig| try vmtyp.enforceFuncReturnTypes(ctx, fsig, retval);
     }
     ctx.vs.stack_top = if (frame.base > 0) frame.base - 1 else 0;
     ctx.vs.ip = frame.ret_ip;
@@ -1445,7 +1445,7 @@ fn opGetIndex(ctx: VMContext) !void {
                 try ctx.vs.vmPush(try vmstr.stringIndex(ctx, container, idx_v));
             },
             .array, .array_managed, .array_view, .array_capacity => {
-                try ctx.vs.vmPush(try vmarr.arrayRead(obj, idx_v));
+                try ctx.vs.vmPush(try vmarr.arrayRead(ctx, obj, idx_v));
             },
             .map, .map_managed, .map_hashed => {
                 try ctx.vs.vmPush(try vmmap.mapGet(obj, idx_v) orelse .null);
@@ -1497,14 +1497,14 @@ fn opSetIndex(ctx: VMContext) !void {
             const nt = ref.typ.named_type;
             if (nt.base == .array_t) {
                 if (nt.elem_spec) |es| {
-                    if (!vmtyp.matchesTypeSpec(val, es)) return error.TypeError;
+                    if (!vmtyp.matchesTypeSpec(ctx, val, es)) return error.TypeError;
                 }
             } else if (nt.base == .map_t) {
                 if (nt.key_spec) |ks| {
-                    if (!vmtyp.matchesTypeSpec(idx_v, ks)) return error.TypeError;
+                    if (!vmtyp.matchesTypeSpec(ctx, idx_v, ks)) return error.TypeError;
                 }
                 if (nt.val_spec) |vs| {
-                    if (!vmtyp.matchesTypeSpec(val, vs)) return error.TypeError;
+                    if (!vmtyp.matchesTypeSpec(ctx, val, vs)) return error.TypeError;
                 }
             }
         }
@@ -1512,7 +1512,7 @@ fn opSetIndex(ctx: VMContext) !void {
     if (container != .object) return error.TypeError;
     switch (container.object.*) {
         .array, .array_managed, .array_view, .array_capacity => {
-            try vmarr.arrayWrite(container.object, idx_v, val);
+            try vmarr.arrayWrite(ctx, container.object, idx_v, val);
         },
         .map, .map_managed, .map_hashed => try vmmap.mapSet(ctx, container, idx_v, val),
         .struct_instance => |inst| {
@@ -1522,7 +1522,7 @@ fn opSetIndex(ctx: VMContext) !void {
                 return error.UnknownStructField;
             };
             if (inst.typ.struct_type.fields[idx].is_const) { ctx.vs.setRuntimeErr("field '{s}' of '{s}' is const", .{ key, inst.typ.struct_type.name }); return error.AssignToConst; }
-            if (!vmtyp.matchesFieldType(val, inst.typ.struct_type.fields[idx])) return error.StructFieldTypeMismatch;
+            if (!vmtyp.matchesFieldType(ctx, val, inst.typ.struct_type.fields[idx])) return error.StructFieldTypeMismatch;
             inst.fields[idx].value = val;
         },
         else => return error.TypeError,
@@ -1589,7 +1589,7 @@ fn opInvokeMethod(ctx: VMContext) !void {
                 if (argc != 1) return error.ArityMismatch;
                 const payload = ctx.vs.stack[ctx.vs.stack_top - 1];
                 if (arm.payload_type) |pt| {
-                    if (!vmtyp.matchesTypeSpec(payload, pt)) return error.TypeError;
+                    if (!vmtyp.matchesTypeSpec(ctx, payload, pt)) return error.TypeError;
                 }
                 const vv = try vmtyp.variantConstruct(ctx, recv.object, arm.name, vi, payload);
                 for (0..@as(usize, argc) + 1) |_| _ = try ctx.vs.vmPop();
@@ -1710,7 +1710,7 @@ fn opSetField(ctx: VMContext) !void {
             const nt = ref.typ.named_type;
             if (nt.base == .map_t) {
                 if (nt.val_spec) |vs| {
-                    if (!vmtyp.matchesTypeSpec(val, vs)) return error.TypeError;
+                    if (!vmtyp.matchesTypeSpec(ctx, val, vs)) return error.TypeError;
                 }
             }
         }
@@ -1735,7 +1735,7 @@ fn opSetField(ctx: VMContext) !void {
                 }
             }
             if (inst.typ.struct_type.fields[fi].is_const) { ctx.vs.setRuntimeErr("field '{s}' of '{s}' is const", .{ name, inst.typ.struct_type.name }); return error.AssignToConst; }
-            if (!vmtyp.matchesFieldType(val, inst.typ.struct_type.fields[fi])) return error.StructFieldTypeMismatch;
+            if (!vmtyp.matchesFieldType(ctx, val, inst.typ.struct_type.fields[fi])) return error.StructFieldTypeMismatch;
             inst.fields[fi].value = val;
         },
         .map, .map_managed, .map_hashed => try vmmap.mapSet(ctx, container, name_val, val),
@@ -2423,7 +2423,7 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 if (idx >= ctx.cs.constCount()) return error.InvalidChunkShape;
                 const name = (ctx.cs.constAt(idx) catch unreachable).string.bytes;
                 const v = try ctx.vs.vmPeek(0);
-                try typeAssert(ctx, v, vmtyp.matchesInterfaceType(v, name), name);
+                try typeAssert(ctx, v, vmtyp.matchesInterfaceType(ctx, v, name), name);
             },
             .assert_struct => {
                 const idx = opShort(ctx);
@@ -2947,7 +2947,7 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                         };
                         if (seen[idx]) { ctx.vs.setRuntimeErr("duplicate field '{s}' in struct literal", .{key_s}); return error.DuplicateField; }
                         seen[idx] = true;
-                        if (!vmtyp.matchesFieldType(val, st.fields[idx])) return error.StructFieldTypeMismatch;
+                        if (!vmtyp.matchesFieldType(ctx, val, st.fields[idx])) return error.StructFieldTypeMismatch;
                         inst_fields[idx] = .{ .key = st.fields[idx].key, .value = val };
                     }
 
@@ -3455,7 +3455,7 @@ pub fn run(ctx: VMContext) anyerror!void {
     runInner(ctx) catch |err| {
         // Runtime integrity failures hard-stop with diagnostics — they represent
         // impossible VM states in a program that already passed the verifier.
-        if (vm_integrity.isIntegrityError(err)) vm_integrity.fatal(err);
+        if (vm_integrity.isIntegrityError(err)) vm_integrity.fatal(ctx, err);
         return runPanicUnwind(ctx, err);
     };
 }
