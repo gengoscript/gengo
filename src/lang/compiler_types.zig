@@ -156,7 +156,7 @@ pub const NamedTypeInfo = struct {
 // TypeHashSize = 2048: load factor < 0.25 at MaxTypes(512)+MaxNamedTypes(256).
 // FuncHashSize = 2048: load factor < 0.50 at MaxGlobals = 1024.
 
-const TypeSymbolKind = enum(u8) { struct_type, interface_type, named_type, variant_type };
+const TypeSymbolKind = enum(u8) { struct_type, interface_type, named_type, variant_type, named_error_type };
 const TypeHashSize = 2048;
 const FuncHashSize = 2048;
 
@@ -373,6 +373,21 @@ pub const TypeRegistry = struct {
             match = obj;
         }
         return match;
+    }
+
+    pub fn hasNamedErrorType(self: *const TypeRegistry, name: []const u8) bool {
+        const slot = self.typeSlotFor(name) orelse return false;
+        return self.type_buckets[slot].kind == .named_error_type;
+    }
+
+    pub fn addNamedErrorType(self: *TypeRegistry, name: []const u8) !void {
+        if (self.hasNamedErrorType(name)) return error.DuplicateNamedErrorType;
+        if (self.hasAnyTypeName(name)) return error.DuplicateNamedType;
+        if (self.type_name_count >= MaxTypes) return error.TooManyTypes;
+        const sub_idx = self.type_name_count;
+        self.type_names[sub_idx] = name;
+        self.type_name_count += 1;
+        self.insertTypeSlot(name, .named_error_type, sub_idx);
     }
 
     pub fn hasAnyTypeName(self: *const TypeRegistry, name: []const u8) bool {

@@ -1,0 +1,36 @@
+std := import("std")
+
+type NotFound error
+type PermissionDenied error
+
+func lookup(key string) (string, error) {
+    if key == "missing" {
+        return "", NotFound("no row")
+    }
+    if key == "secret" {
+        return "", PermissionDenied("forbidden")
+    }
+    return key, std.core.error("")
+}
+
+func label(err error) string {
+    switch err.type {
+        case NotFound         { return "not-found" }
+        case PermissionDenied { return "denied" }
+        default               { return "other" }
+    }
+    return "other"
+}
+
+_, e1 := lookup("missing")
+_, e2 := lookup("secret")
+
+std.io.println(label(e1))
+std.io.println(label(e2))
+std.io.println(std.core.is_error(e1))
+std.io.println(std.core.is_error(e2))
+std.io.println(string(e1))
+std.io.println(string(e2))
+std.io.println(e1.type == NotFound)
+std.io.println(e2.type == PermissionDenied)
+std.io.println(e1.type == PermissionDenied)

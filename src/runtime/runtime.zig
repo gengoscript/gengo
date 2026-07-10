@@ -651,10 +651,11 @@ pub const Runtime = struct {
         for (compiler.registry.type_buckets) |e| {
             if (!e.occupied) continue;
             const kind: ReplSymKind = switch (e.kind) {
-                .struct_type    => .struct_type,
-                .interface_type => .interface_type,
-                .variant_type   => .variant_type,
-                .named_type     => continue, // handled above
+                .struct_type       => .struct_type,
+                .interface_type    => .interface_type,
+                .variant_type      => .variant_type,
+                .named_error_type  => .struct_type, // display as a type in REPL
+                .named_type        => continue, // handled above
             };
             if (self.repl.sym_count >= MaxReplSyms)
                 return self.setReplOverflowError("REPL symbol table full: too many type declarations");

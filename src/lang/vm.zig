@@ -1030,6 +1030,32 @@ fn performCall(ctx: VMContext, argc: u8) !void {
             }
             try pop2push1(ctx, try vmtyp.variantConstruct(ctx, vc.typ, vc.tag, vc.ordinal, payload));
         },
+        .named_error_type => {
+            if (argc != 1) return error.ArityMismatch;
+            const arg = ctx.vs.stack[ctx.vs.stack_top - 1];
+            const msg_ss: *const StringSlice = blk: {
+                switch (arg) {
+                    .string => |ss| break :blk ss,
+                    .error_value => |ss| break :blk ss,
+                    .object => |ao| switch (ao.*) {
+                        .dyn_string => |s| break :blk try chunk.internStr(s),
+                        .string_view => |sv| break :blk try chunk.internStr(sv.bytes),
+                        .named_error_value => |nev| break :blk nev.msg,
+                        else => {},
+                    },
+                    else => {},
+                }
+                ctx.vs.setRuntimeErr("named error constructor requires a string, got {s}", .{vmtyp.runtimeTypeName(arg)});
+                return error.TypeError;
+            };
+            const nev = try vmgc.vmAllocObject(ctx);
+            nev.* = .{ .named_error_value = .{ .typ = obj, .msg = msg_ss } };
+            try pop2push1(ctx, .{ .object = nev });
+        },
+        .named_error_value => {
+            ctx.vs.setRuntimeErr("cannot call a named error value", .{});
+            return error.NotAFunction;
+        },
         .named_type_fn => |nf| {
             if (argc != 1) return error.ArityMismatch;
             const arg = ctx.vs.stack[ctx.vs.stack_top - 1];

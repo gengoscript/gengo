@@ -120,6 +120,8 @@ fn drainMarkQueue(ctx: VMContext) void {
             .string_view => |sv| {
                 if (sv.source) |src| if (ctx.hs.isObjectLive(src)) markObjectQueue(ctx, src);
             },
+            .named_error_type => {},
+            .named_error_value => |nev| markObjectQueue(ctx, nev.typ),
             // No GC-traced children; backing bytes are freed by the sweep.
             .dyn_string, .function, .native_function, .host_module_function, .struct_type, .interface_type, .string_builder, .bigint => {},
         }
