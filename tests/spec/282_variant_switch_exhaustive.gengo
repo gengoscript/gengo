@@ -1,0 +1,20 @@
+std := import("std")
+
+type Decision variant {
+    allow,
+    deny(reason string),
+    review,
+}
+
+func check(d Decision) string {
+    switch d {
+        case .allow  { return "allowed" }
+        case .deny   { return "denied" }
+        case .review { return "in review" }
+    }
+    return ""
+}
+
+std.io.println(check(Decision.allow()))
+std.io.println(check(Decision.deny("policy")))
+std.io.println(check(Decision.review()))

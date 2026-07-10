@@ -1372,6 +1372,7 @@ pub fn variantDeclBody(c: anytype, kw: Token, name_tok: Token, is_pub: bool) !vo
         .shared_fields = shared_fields,
     } };
     try c.cs.emitConst(.{ .object = vt }, kw.line);
+    c.registry.setVariantObj(name, vt);
     if (c.inFunc()) {
         _ = try c.defineLocal(name, false);
     } else {

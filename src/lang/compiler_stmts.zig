@@ -1423,6 +1423,8 @@ pub fn switchStmt(c: anytype) anyerror!void {
     var end_jumps: [MaxSwitchJumps]usize = undefined;
     var end_count: usize = 0;
     var saw_default = false;
+    var seen_arms: [MaxSwitchJumps][]const u8 = undefined;
+    var seen_arm_count: usize = 0;
 
     while (!c.check(.rbrace) and !c.check(.eof)) {
         if (c.match(.kw_case)) {
@@ -1434,6 +1436,10 @@ pub fn switchStmt(c: anytype) anyerror!void {
                 if (c.cur.typ != .ident) return c.err("expected identifier, found {s}", .{c.tokenName(c.cur.typ)});
                 const arm_name_tok = c.cur;
                 c.advance(); // consume arm name
+                if (seen_arm_count < MaxSwitchJumps) {
+                    seen_arms[seen_arm_count] = arm_name_tok.src;
+                    seen_arm_count += 1;
+                }
                 var binding: ?[]const u8 = null;
                 if (c.match(.kw_as)) {
                     if (c.cur.typ != .ident) return c.err("expected identifier after 'as', found {s}", .{c.tokenName(c.cur.typ)});
@@ -1522,6 +1528,40 @@ pub fn switchStmt(c: anytype) anyerror!void {
         }
 
         return c.err("expected 'case' or 'default', found {s}", .{c.tokenName(c.cur.typ)});
+    }
+
+    // Exhaustiveness check: if no default was present and we saw at least one
+    // variant arm, try to identify the variant type and report any missing arms.
+    if (!saw_default and seen_arm_count > 0 and !is_type_switch) {
+        if (c.registry.findVariantForArms(seen_arms[0..seen_arm_count])) |vobj| {
+            const all_arms = vobj.variant_type.arms;
+            if (all_arms.len > seen_arm_count) {
+                // Build a comma-separated list of missing arm names.
+                var missing_buf: [512]u8 = undefined;
+                var missing_len: usize = 0;
+                for (all_arms) |a| {
+                    var covered = false;
+                    for (seen_arms[0..seen_arm_count]) |s| {
+                        if (common.streq(a.name, s)) { covered = true; break; }
+                    }
+                    if (!covered) {
+                        if (missing_len > 0 and missing_len + 2 < missing_buf.len) {
+                            missing_buf[missing_len] = ',';
+                            missing_buf[missing_len + 1] = ' ';
+                            missing_len += 2;
+                        }
+                        if (missing_len + 1 + a.name.len < missing_buf.len) {
+                            missing_buf[missing_len] = '.';
+                            missing_len += 1;
+                            @memcpy(missing_buf[missing_len..missing_len + a.name.len], a.name);
+                            missing_len += a.name.len;
+                        }
+                    }
+                }
+                c.setErr("non-exhaustive switch on {s}: missing {s}", .{ vobj.variant_type.name, missing_buf[0..missing_len] });
+                return error.NonExhaustiveSwitch;
+            }
+        }
     }
 
     try c.consume(.rbrace);

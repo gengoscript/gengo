@@ -5,6 +5,7 @@ const value_mod = @import("value.zig");
 pub const Token = token.Token;
 pub const NamedTypeBase = value_mod.NamedTypeBase;
 pub const FieldTypeSpec = value_mod.FieldTypeSpec;
+pub const Object = value_mod.Object;
 
 pub const ExportTypeKind = enum(u8) {
     func_or_var,
@@ -174,6 +175,7 @@ const FuncHashEntry = struct {
 // gives properly initialised (all-empty) hash tables without an explicit reset.
 const empty_type_buckets = [1]TypeHashEntry{.{}} ** TypeHashSize;
 const empty_func_buckets = [1]FuncHashEntry{.{}} ** FuncHashSize;
+const empty_variant_objs = [1]?*Object{null} ** MaxTypes;
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub const TypeRegistry = struct {
@@ -191,12 +193,17 @@ pub const TypeRegistry = struct {
     type_buckets: [TypeHashSize]TypeHashEntry = empty_type_buckets,
     func_buckets: [FuncHashSize]FuncHashEntry = empty_func_buckets,
 
+    // For each type_names[] slot: if the entry is a variant_type, the compiled
+    // *Object is stored here so switchStmt can check arm exhaustiveness.
+    variant_objs: [MaxTypes]?*Object = empty_variant_objs,
+
     pub fn reset(self: *TypeRegistry) void {
         self.type_name_count = 0;
         self.named_type_count = 0;
         self.global_count = 0;
         @memset(self.type_buckets[0..], .{});
         @memset(self.func_buckets[0..], .{});
+        @memset(self.variant_objs[0..], null);
     }
 
     // ── Hash helpers ──────────────────────────────────────────────────────────
@@ -335,6 +342,37 @@ pub const TypeRegistry = struct {
     pub fn hasVariantType(self: *const TypeRegistry, name: []const u8) bool {
         const slot = self.typeSlotFor(name) orelse return false;
         return self.type_buckets[slot].kind == .variant_type;
+    }
+
+    pub fn setVariantObj(self: *TypeRegistry, name: []const u8, obj: *Object) void {
+        const slot = self.typeSlotFor(name) orelse return;
+        const e = self.type_buckets[slot];
+        if (e.kind != .variant_type) return;
+        self.variant_objs[e.sub_idx] = obj;
+    }
+
+    /// Return the unique variant type whose arm set is a superset of `seen_arms`,
+    /// or null if zero or more than one type qualifies (ambiguous or unknown).
+    pub fn findVariantForArms(self: *const TypeRegistry, seen_arms: []const []const u8) ?*Object {
+        var match: ?*Object = null;
+        for (0..self.type_name_count) |i| {
+            const obj = self.variant_objs[i] orelse continue;
+            if (obj.* != .variant_type) continue;
+            const arms = obj.variant_type.arms;
+            // Every seen arm must be present in this type's arm list.
+            var all_match = true;
+            for (seen_arms) |sa| {
+                var found = false;
+                for (arms) |a| {
+                    if (common.streq(a.name, sa)) { found = true; break; }
+                }
+                if (!found) { all_match = false; break; }
+            }
+            if (!all_match) continue;
+            if (match != null) return null; // ambiguous
+            match = obj;
+        }
+        return match;
     }
 
     pub fn hasAnyTypeName(self: *const TypeRegistry, name: []const u8) bool {
