@@ -26,20 +26,17 @@ pub fn monoNowNs() u64 {
     return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));
 }
 
-// Iterative mark worklist — each live object is pushed at most once (we mark
-// before pushing, so duplicates are never enqueued).
-var mark_worklist: [cfg.max_objects]*Object = undefined;
-var mark_worklist_top: usize = 0;
-
+// Iterative mark worklist (lives in heap.State) — each live object is pushed
+// at most once (we mark before pushing, so duplicates are never enqueued).
 fn markObjectQueue(ctx: VMContext, obj: *Object) void {
     if (!ctx.hs.isObjectLive(obj)) return;
     if (ctx.hs.isObjectMarked(obj)) return;
     ctx.hs.markObject(obj);
-    if (mark_worklist_top >= mark_worklist.len) {
+    if (ctx.hs.mark_worklist_top >= ctx.hs.mark_worklist.len) {
         vm_integrity.fatal(ctx, error.GCInvariantFailure);
     }
-    mark_worklist[mark_worklist_top] = obj;
-    mark_worklist_top += 1;
+    ctx.hs.mark_worklist[ctx.hs.mark_worklist_top] = obj;
+    ctx.hs.mark_worklist_top += 1;
 }
 
 fn markValue(ctx: VMContext, v: Value) void {
@@ -49,9 +46,9 @@ fn markValue(ctx: VMContext, v: Value) void {
 }
 
 fn drainMarkQueue(ctx: VMContext) void {
-    while (mark_worklist_top > 0) {
-        mark_worklist_top -= 1;
-        const obj = mark_worklist[mark_worklist_top];
+    while (ctx.hs.mark_worklist_top > 0) {
+        ctx.hs.mark_worklist_top -= 1;
+        const obj = ctx.hs.mark_worklist[ctx.hs.mark_worklist_top];
         switch (obj.*) {
             .array, .array_managed => {
                 for (vms.asArraySlice(obj) catch vm_integrity.fatal(ctx, error.GCInvariantFailure)) |v| markValue(ctx, v);
@@ -159,7 +156,7 @@ fn gcCheckIntegrityPostSweep(ctx: VMContext) void {
 
 pub fn collectGarbage(ctx: VMContext) void {
     const t0 = monoNowNs();
-    mark_worklist_top = 0;
+    ctx.hs.mark_worklist_top = 0;
 
     for (ctx.vs.stack[0..ctx.vs.stack_top]) |v| markValue(ctx, v);
 
