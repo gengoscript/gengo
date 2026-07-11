@@ -1526,3 +1526,133 @@ test "trace hook fires per line when installed, not at all when cleared" {
     try rt.run("d := 4");
     try std.testing.expectEqual(hits_after_clear, g_trace_hits);
 }
+
+// ── Multi-runtime isolation (#190) ─────────────────────────────────────────
+
+const value_mod = @import("lang/value.zig");
+const fs_state_mod = @import("lang/native/fs_state.zig");
+
+const isolation_src_a =
+    \\std := import("std")
+    \\type Celsius int
+    \\c := Celsius(21)
+    \\func temp() Celsius { return c }
+    \\func hit(s string) bool { return std.regexp.match("^ab+c$", s) }
+;
+const isolation_src_b =
+    \\std := import("std")
+    \\type Celsius int
+    \\c := Celsius(42)
+    \\func temp() Celsius { return c }
+    \\func hit(s string) bool { return std.regexp.match("^xy+z$", s) }
+;
+
+test "two runtimes stay isolated across interleaved calls (#190)" {
+    var a = try setup();
+    defer a.deinit();
+    var b = try setup();
+    defer b.deinit();
+
+    try a.run(isolation_src_a);
+    try b.run(isolation_src_b);
+
+    // Globals and named scalars: each callGlobal activates its runtime, so
+    // the inline named_scalar decode must resolve through that runtime's
+    // object pool. Read inner values immediately, while the owner is active.
+    const ta = try a.callGlobal("temp", &.{});
+    const ia = ta.namedInner() orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(i64, 21), ia.int);
+
+    const tb = try b.callGlobal("temp", &.{});
+    const ib = tb.namedInner() orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(i64, 42), ib.int);
+
+    // Back to A: its state must be untouched by B's run.
+    const ta2 = try a.callGlobal("temp", &.{});
+    const ia2 = ta2.namedInner() orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(i64, 21), ia2.int);
+
+    // Regexp pattern caches are per-runtime: each runtime matches only its
+    // own pattern even though both scripts call the same function name.
+    const abbc: Value = .{ .string = value_mod.staticSS("abbc") };
+    const xyyz: Value = .{ .string = value_mod.staticSS("xyyz") };
+    const ra1 = try a.callGlobal("hit", &.{abbc});
+    try std.testing.expect(ra1 == .boolean and ra1.boolean);
+    const rb1 = try b.callGlobal("hit", &.{abbc});
+    try std.testing.expect(rb1 == .boolean and !rb1.boolean);
+    const ra2 = try a.callGlobal("hit", &.{xyyz});
+    try std.testing.expect(ra2 == .boolean and !ra2.boolean);
+    const rb2 = try b.callGlobal("hit", &.{xyyz});
+    try std.testing.expect(rb2 == .boolean and rb2.boolean);
+}
+
+test "per-runtime fs mount tables switch with activation (#190)" {
+    var a = try setup();
+    defer a.deinit();
+    var b = try setup();
+    defer b.deinit();
+
+    try fs_state_mod.addMountToState(&a.fs_mounts, "data", "/a-root");
+    try fs_state_mod.addMountToState(&b.fs_mounts, "data", "/b-root");
+
+    var buf: [256]u8 = undefined;
+    a.activate();
+    try std.testing.expectEqualStrings("/a-root/f", try fs_state_mod.resolve("data/f", &buf));
+    b.activate();
+    try std.testing.expectEqualStrings("/b-root/f", try fs_state_mod.resolve("data/f", &buf));
+    a.activate();
+    try std.testing.expectEqualStrings("/a-root/f", try fs_state_mod.resolve("data/f", &buf));
+}
+
+// Worker for the concurrent isolation test: builds its own Runtime, runs a
+// GC-heavy script parameterized by seed, and checks every call's result so
+// any cross-thread contamination shows up as a wrong value.
+fn isolationWorker(seed: i64, failed: *std.atomic.Value(bool)) void {
+    var src_buf: [512]u8 = undefined;
+    const src = std.fmt.bufPrint(&src_buf,
+        \\std := import("std")
+        \\type T int
+        \\base := T({d})
+        \\func step(i int) int {{
+        \\    s := ""
+        \\    for j := 0; j < 40; j += 1 {{ s += "x" }}
+        \\    t := T(i)
+        \\    return std.core.len(s) + int(t) + int(base)
+        \\}}
+    , .{seed}) catch {
+        failed.store(true, .seq_cst);
+        return;
+    };
+
+    var rt: Runtime = .{};
+    rt.initWithConfig(.{}, heap.HeapSize, heap.MaxObjects, vms.MaxStack, vms.MaxFrames, cfg.max_defers, std.heap.page_allocator) catch {
+        failed.store(true, .seq_cst);
+        return;
+    };
+    defer rt.deinit();
+
+    rt.run(src) catch {
+        failed.store(true, .seq_cst);
+        return;
+    };
+    var i: i64 = 0;
+    while (i < 300) : (i += 1) {
+        const r = rt.callGlobal("step", &.{.{ .int = i }}) catch {
+            failed.store(true, .seq_cst);
+            return;
+        };
+        if (r != .int or r.int != 40 + i + seed) {
+            failed.store(true, .seq_cst);
+            return;
+        }
+    }
+}
+
+test "two runtimes run concurrently on separate threads (#190)" {
+    var failed = std.atomic.Value(bool).init(false);
+    const t1 = try std.Thread.spawn(.{}, isolationWorker, .{ @as(i64, 1000), &failed });
+    const t2 = try std.Thread.spawn(.{}, isolationWorker, .{ @as(i64, 5000), &failed });
+    t1.join();
+    t2.join();
+    try std.testing.expect(!failed.load(.seq_cst));
+}
