@@ -8,6 +8,7 @@ const Value = vmod.Value;
 const Object = vmod.Object;
 const MapEntry = vmod.MapEntry;
 const builtin = @import("builtin");
+const regexp_mod = @import("native/regexp.zig");
 
 // Preset ceilings — these are the maximum any instance may request.
 pub const MaxStack = cfg.max_stack;
@@ -93,6 +94,15 @@ pub const State = struct {
     has_pending_panic_value: bool = false,
     runtime_err_buf: [256]u8 = undefined,
     runtime_err_len: u16 = 0,
+    // Per-runtime native caches: the singleton type objects point into this
+    // runtime's heap, and the regexp pattern cache is keyed by pattern pointers
+    // owned by this runtime. Cleared in reset() so a reused State never hands
+    // out objects from a previous heap.
+    arg_type_cache: ?*Object = null,
+    jv_type_cache: ?*Object = null,
+    time_type_cache: ?*Object = null,
+    regexp_type_cache: ?*Object = null,
+    re_pattern_cache: regexp_mod.PatternCache = .{},
     allocator: std.mem.Allocator = std.heap.page_allocator,
 
     pub fn init(self: *State, max_stack: usize, max_frames: usize, max_defers: usize, heap_size: usize, allocator: std.mem.Allocator) !void {
@@ -154,6 +164,11 @@ pub const State = struct {
         self.alloc_object_calls = 0;
         self.alloc_managed_slice_calls = 0;
         self.alloc_managed_bytes_calls = 0;
+        self.arg_type_cache = null;
+        self.jv_type_cache = null;
+        self.time_type_cache = null;
+        self.regexp_type_cache = null;
+        self.re_pattern_cache.clear();
     }
 
     // Reset only execution state; preserve globals, heap, GC objects, and std_module.
