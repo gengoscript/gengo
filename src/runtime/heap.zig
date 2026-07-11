@@ -39,6 +39,7 @@ const WasmBacking = if (builtin.target.cpu.arch == .wasm32) struct {
     obj_marked: [MaxObjects]bool = [_]bool{false} ** MaxObjects,
     obj_live: [MaxObjects]bool = [_]bool{false} ** MaxObjects,
     obj_next_free: [MaxObjects]u16 = undefined,
+    mark_worklist: [MaxObjects]*Object = undefined,
 } else struct {};
 
 var g_wasm_backing: WasmBacking = .{};
@@ -57,6 +58,14 @@ pub const State = struct {
     obj_next_free: []u16 = &[_]u16{},
     obj_free_head: u16 = 0xffff,
     obj_live_count: usize = 0,
+    // Iterative GC mark worklist (scratch; only valid during a collection).
+    // Sized to max_objects: each live object is pushed at most once.
+    mark_worklist: []*Object = &[_]*Object{},
+    mark_worklist_top: usize = 0,
+    // Pool index of the object currently being swept; used by assertNotLive to
+    // exclude the dead object's own region from the overlap check (it still has
+    // obj_live=true when freeBytesManaged is called on its backing).
+    sweep_exclude_idx: usize = 0xFFFF,
     free_blocks: [ClassCount]?*u8 = [_]?*u8{null} ** ClassCount,
     class_count: usize = BaseClassCount,
     allocator: std.mem.Allocator = std.heap.page_allocator,
@@ -70,12 +79,14 @@ pub const State = struct {
             self.obj_marked = &g_wasm_backing.obj_marked;
             self.obj_live = &g_wasm_backing.obj_live;
             self.obj_next_free = &g_wasm_backing.obj_next_free;
+            self.mark_worklist = &g_wasm_backing.mark_worklist;
         } else {
             self.heap = try allocator.alignedAlloc(u8, .@"16", heap_size);
             self.obj_pool = try allocator.alloc(Object, max_objects);
             self.obj_marked = try allocator.alloc(bool, max_objects);
             self.obj_live = try allocator.alloc(bool, max_objects);
             self.obj_next_free = try allocator.alloc(u16, max_objects);
+            self.mark_worklist = try allocator.alloc(*Object, max_objects);
         }
 
         val_mod.obj_pool_ptr = self.obj_pool.ptr;
@@ -149,6 +160,7 @@ pub const State = struct {
         if (self.obj_marked.len > 0) self.allocator.free(self.obj_marked);
         if (self.obj_live.len > 0) self.allocator.free(self.obj_live);
         if (self.obj_next_free.len > 0) self.allocator.free(self.obj_next_free);
+        if (self.mark_worklist.len > 0) self.allocator.free(self.mark_worklist);
         self.* = .{};
     }
 
@@ -173,7 +185,7 @@ pub const State = struct {
         var i: usize = 0;
         while (i < self.obj_pool.len) : (i += 1) {
             if (!self.obj_live[i]) continue;
-            if (i == sweep_exclude_idx) continue; // the dead object being swept
+            if (i == self.sweep_exclude_idx) continue; // the dead object being swept
             const region: ?[]const u8 = switch (self.obj_pool[i]) {
                 .dyn_string => |ds| ds,
                 .string_builder => |sb| sb.buf,
@@ -573,7 +585,7 @@ pub const State = struct {
                 self.obj_marked[i] = false;
                 continue;
             }
-            if (paranoiaOn()) sweep_exclude_idx = i;
+            if (paranoiaOn()) self.sweep_exclude_idx = i;
             switch (@as(ObjTag, self.obj_pool[i])) {
                 .dyn_string => self.freeBytesManaged(self.obj_pool[i].dyn_string),
                 .array_managed => self.freeManagedSlice(@import("../lang/value.zig").Value, self.obj_pool[i].array_managed),
@@ -915,11 +927,6 @@ fn paranoiaOn() bool {
     if (comptime build_options.heap_paranoia) return true;
     return paranoia;
 }
-
-// Pool index of the object currently being swept; used by assertNotLive to
-// exclude the dead object's own region from the overlap check (it still has
-// obj_live=true when freeBytesManaged is called on its backing).
-var sweep_exclude_idx: usize = 0xFFFF;
 
 // ── Managed heap compaction ────────────────────────────────────────────────
 //
