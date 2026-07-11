@@ -850,6 +850,10 @@ pub fn setActive(state: *State) void {
         _ = state.init(HeapSize, MaxObjects, state.allocator) catch {};
     }
     g_state = state;
+    // Keep the inline-value decode base (named_scalar/inline_variant pool
+    // indices) pointed at the active heap's object pool, so values decode
+    // against the runtime that produced them when runtimes are switched.
+    if (state.obj_pool.len > 0) val_mod.obj_pool_ptr = state.obj_pool.ptr;
 }
 
 
