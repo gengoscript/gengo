@@ -16,14 +16,8 @@ const arg_arms = [_]vmod.VariantArmSpec{
     .{ .name = "Err",     .has_payload = true },
 };
 
-var arg_type_cache: ?*Object = null;
-
-pub fn argClearCache() void {
-    arg_type_cache = null;
-}
-
 pub fn argGetType(ctx: VMContext) !*Object {
-    if (arg_type_cache) |t| return t;
+    if (ctx.vs.arg_type_cache) |t| return t;
     const buf = ctx.hs.bump(Object, 1) orelse return error.OutOfMemory;
     const obj: *Object = @ptrCast(buf);
     obj.* = .{ .variant_type = .{
@@ -31,6 +25,6 @@ pub fn argGetType(ctx: VMContext) !*Object {
         .qualified_name = ArgQualifiedName,
         .arms = &arg_arms,
     } };
-    arg_type_cache = obj;
+    ctx.vs.arg_type_cache = obj;
     return obj;
 }

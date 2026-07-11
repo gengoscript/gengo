@@ -14,30 +14,31 @@ const chunk = @import("../chunk.zig");
 const RegexpQualifiedName = "@std.regexp.obj";
 const MaxPatternLen = 4096;
 
-var regexp_type_cache: ?*Object = null;
-
 // Compiled pattern cache — avoids re-parsing constant patterns on every predicate check.
 // Keyed by (pointer, length): stable for constant-pool strings and bump-heap objects alike.
-// Owned by the cache; freed on reClearCache().  LRU-evict at MaxCacheEntries.
+// Owned per-runtime (lives in vm_state.State) so a cached pattern pointer never
+// outlives the runtime whose memory it points into.  LRU-evict at MaxCacheEntries.
 const PatternCacheEntry = struct {
     pattern_ptr: [*]const u8,
     pattern_len: usize,
     alts: []Alt,
 };
 const MaxCacheEntries = 32;
-var pattern_cache: [MaxCacheEntries]PatternCacheEntry = undefined;
-var pattern_cache_len: usize = 0;
+
+pub const PatternCache = struct {
+    entries: [MaxCacheEntries]PatternCacheEntry = undefined,
+    len: usize = 0,
+
+    pub fn clear(self: *PatternCache) void {
+        for (self.entries[0..self.len]) |entry| freeAlts(entry.alts);
+        self.len = 0;
+    }
+};
 
 // ── Regex type helpers ───────────────────────────────────────────────────────
 
-pub fn reClearCache() void {
-    regexp_type_cache = null;
-    for (pattern_cache[0..pattern_cache_len]) |entry| freeAlts(entry.alts);
-    pattern_cache_len = 0;
-}
-
 pub fn reGetType(ctx: VMContext) !*Object {
-    if (regexp_type_cache) |t| return t;
+    if (ctx.vs.regexp_type_cache) |t| return t;
     // Bump-allocate: permanent singleton; never swept, never triggers GC
     const buf = ctx.hs.bump(Object, 1) orelse return error.OutOfMemory;
     const obj: *Object = @ptrCast(buf);
@@ -46,7 +47,7 @@ pub fn reGetType(ctx: VMContext) !*Object {
         .qualified_name = RegexpQualifiedName,
         .base = .string,
     } };
-    regexp_type_cache = obj;
+    ctx.vs.regexp_type_cache = obj;
     return obj;
 }
 
@@ -467,39 +468,40 @@ fn freeAlts(alts: []Alt) void {
 
 // Return compiled pattern alts, parsing only on first use per (ptr, len) key.
 // The cache owns the memory; callers must NOT call freeAlts on the returned slice.
-fn parsePattern(pattern: []const u8) ParseError![]Alt {
+fn parsePattern(ctx: VMContext, pattern: []const u8) ParseError![]Alt {
     if (pattern.len > MaxPatternLen) return error.PatternTooLong;
+    const cache = &ctx.vs.re_pattern_cache;
     // Fast path: check cache by pointer identity (stable for constant-pool and bump-heap strings).
-    for (pattern_cache[0..pattern_cache_len]) |entry| {
+    for (cache.entries[0..cache.len]) |entry| {
         if (entry.pattern_ptr == pattern.ptr and entry.pattern_len == pattern.len) {
             return entry.alts;
         }
     }
     // Slow path: parse and cache.
     const alts = try parseAlts(std.heap.page_allocator, pattern, 0, pattern.len);
-    if (pattern_cache_len < MaxCacheEntries) {
-        pattern_cache[pattern_cache_len] = .{ .pattern_ptr = pattern.ptr, .pattern_len = pattern.len, .alts = alts };
-        pattern_cache_len += 1;
+    if (cache.len < MaxCacheEntries) {
+        cache.entries[cache.len] = .{ .pattern_ptr = pattern.ptr, .pattern_len = pattern.len, .alts = alts };
+        cache.len += 1;
     } else {
         // Evict oldest entry (index 0) and append new one at the end.
-        freeAlts(pattern_cache[0].alts);
-        for (0..MaxCacheEntries - 1) |i| pattern_cache[i] = pattern_cache[i + 1];
-        pattern_cache[MaxCacheEntries - 1] = .{ .pattern_ptr = pattern.ptr, .pattern_len = pattern.len, .alts = alts };
+        freeAlts(cache.entries[0].alts);
+        for (0..MaxCacheEntries - 1) |i| cache.entries[i] = cache.entries[i + 1];
+        cache.entries[MaxCacheEntries - 1] = .{ .pattern_ptr = pattern.ptr, .pattern_len = pattern.len, .alts = alts };
     }
     return alts;
 }
 
-pub fn nativeReMatch(pattern_val: Value, s_val: Value) !Value {
+pub fn nativeReMatch(ctx: VMContext, pattern_val: Value, s_val: Value) !Value {
     const pattern = try reGetPattern(pattern_val);
     const s = try vms.asStringValue(s_val);
-    const alts = try parsePattern(pattern);
+    const alts = try parsePattern(ctx, pattern);
     return .{ .boolean = findMatch(alts, s) != null };
 }
 
 pub fn nativeReFind(ctx: VMContext, pattern_val: Value, s_val: Value) !Value {
     const pattern = try reGetPattern(pattern_val);
     const s = try vms.asStringValue(s_val);
-    const alts = try parsePattern(pattern);
+    const alts = try parsePattern(ctx, pattern);
     const m = findMatch(alts, s) orelse return .null;
     return try vmgc.makeDynString(ctx, s[m[0]..m[1]]);
 }
@@ -507,7 +509,7 @@ pub fn nativeReFind(ctx: VMContext, pattern_val: Value, s_val: Value) !Value {
 pub fn nativeReFindAll(ctx: VMContext, pattern_val: Value, s_val: Value) !Value {
     const pattern = try reGetPattern(pattern_val);
     const s = try vms.asStringValue(s_val);
-    const alts = try parsePattern(pattern);
+    const alts = try parsePattern(ctx, pattern);
     const alloc = std.heap.page_allocator;
     const matches = try findAllMatches(alts, s, alloc);
     defer alloc.free(matches);
@@ -527,7 +529,7 @@ pub fn nativeReReplace(ctx: VMContext, pattern_val: Value, s_val: Value, repl_va
     const s = try vms.asStringValue(s_val);
     const repl = try vms.asStringValue(repl_val);
     const alloc = std.heap.page_allocator;
-    const alts = try parsePattern(pattern);
+    const alts = try parsePattern(ctx, pattern);
     var result = AlignedManaged(u8, null).init(alloc);
     defer result.deinit();
     var i: usize = 0;
@@ -547,7 +549,7 @@ pub fn nativeReSplit(ctx: VMContext, pattern_val: Value, s_val: Value) !Value {
     const pattern = try reGetPattern(pattern_val);
     const s = try vms.asStringValue(s_val);
     const alloc = std.heap.page_allocator;
-    const alts = try parsePattern(pattern);
+    const alts = try parsePattern(ctx, pattern);
     var parts = AlignedManaged([]const u8, null).init(alloc);
     defer parts.deinit();
     var i: usize = 0;
@@ -573,7 +575,7 @@ pub fn nativeReSplit(ctx: VMContext, pattern_val: Value, s_val: Value) !Value {
 pub fn nativeReCompile(ctx: VMContext, pattern_val: Value) !Value {
     const pattern = try vms.asStringValue(pattern_val);
     // Validate by parsing (result goes into the cache for future use).
-    _ = try parsePattern(pattern);
+    _ = try parsePattern(ctx, pattern);
     return try reBuildObj(ctx, pattern);
 }
 
@@ -609,7 +611,7 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             const top = ctx.vs.stack_top;
             const pattern_val = ctx.vs.stack[top - 2];
             const s_val = ctx.vs.stack[top - 1];
-            const result = try nativeReMatch(pattern_val, s_val);
+            const result = try nativeReMatch(ctx, pattern_val, s_val);
             _ = try ctx.vs.vmPop(); _ = try ctx.vs.vmPop(); _ = try ctx.vs.vmPop();
             try ctx.vs.vmPush(result);
         },
@@ -639,7 +641,7 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             const recv = ctx.vs.stack[top - 2];
             const s_val = ctx.vs.stack[top - 1];
             const pattern = try reGetPattern(recv);
-            const result = try nativeReMatch(.{ .string = try ctx.cs.internStr(pattern) }, s_val);
+            const result = try nativeReMatch(ctx, .{ .string = try ctx.cs.internStr(pattern) }, s_val);
             _ = try ctx.vs.vmPop(); _ = try ctx.vs.vmPop(); _ = try ctx.vs.vmPop();
             try ctx.vs.vmPush(result);
         },

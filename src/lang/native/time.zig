@@ -16,14 +16,8 @@ const w32 = std.os.windows;
 extern "kernel32" fn GetSystemTimeAsFileTime(lpSystemTimeAsFileTime: *w32.FILETIME) callconv(.winapi) void;
 
 const TimeTypeQualifiedName = "@std.time.obj";
-var time_type_cache: ?*Object = null;
-
-pub fn timeClearCache() void {
-    time_type_cache = null;
-}
-
 pub fn timeGetType(ctx: VMContext) !*Object {
-    if (time_type_cache) |t| return t;
+    if (ctx.vs.time_type_cache) |t| return t;
     // Bump-allocate: permanent singleton; never swept, never triggers GC
     const buf = ctx.hs.bump(Object, 1) orelse return error.OutOfMemory;
     const obj: *Object = @ptrCast(buf);
@@ -32,7 +26,7 @@ pub fn timeGetType(ctx: VMContext) !*Object {
         .qualified_name = TimeTypeQualifiedName,
         .base = .int,
     } };
-    time_type_cache = obj;
+    ctx.vs.time_type_cache = obj;
     return obj;
 }
 

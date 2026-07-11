@@ -9,10 +9,6 @@ const vm = @import("../lang/vm.zig");
 const vms = @import("../lang/vm_state.zig");
 const vmnative = @import("../lang/vm_native.zig");
 const net_state = @import("../lang/native/net_state.zig");
-const native_time = @import("../lang/native/time.zig");
-const native_regexp = @import("../lang/native/regexp.zig");
-const native_arg = @import("../lang/native/arg.zig");
-const native_json = @import("../lang/native/json.zig");
 const native_rand = @import("../lang/native/rand.zig");
 const cfg = @import("config.zig");
 const Value = @import("../lang/value.zig").Value;
@@ -176,18 +172,11 @@ pub const Runtime = struct {
         return rt;
     }
 
-    // Native modules cache singleton type objects (std.Time, std.Regexp,
-    // std.JSONValue) as module-level pointers into the heap that was active
-    // when they were first built. A new Runtime means a new heap, so those
-    // pointers are stale: clearing here prevents a later buildStdModule from
-    // handing out dangling objects when several runtimes are created in one
-    // process (reset() already does the same for the reuse path).
+    // Reset the process-global native state a fresh Runtime should not
+    // inherit. The per-runtime native caches (singleton type objects, regexp
+    // pattern cache) live in vm_state.State and are cleared by its reset().
     fn clearNativeCaches() void {
         net_state.netReset();
-        native_arg.argClearCache();
-        native_time.timeClearCache();
-        native_regexp.reClearCache();
-        native_json.jsonValueClearCache();
         native_rand.randResetState();
     }
 

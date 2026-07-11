@@ -31,14 +31,8 @@ const jv_arms = [_]vmod.VariantArmSpec{
     .{ .name = "jobject", .has_payload = true },
 };
 
-var jv_type_cache: ?*Object = null;
-
-pub fn jsonValueClearCache() void {
-    jv_type_cache = null;
-}
-
 pub fn jsonValueGetType(ctx: VMContext) !*Object {
-    if (jv_type_cache) |t| return t;
+    if (ctx.vs.jv_type_cache) |t| return t;
     // Bump-allocate: permanent singleton; never swept, never triggers GC
     const buf = ctx.hs.bump(Object, 1) orelse return error.OutOfMemory;
     const obj: *Object = @ptrCast(buf);
@@ -47,7 +41,7 @@ pub fn jsonValueGetType(ctx: VMContext) !*Object {
         .qualified_name = JsonValueQualifiedName,
         .arms = &jv_arms,
     } };
-    jv_type_cache = obj;
+    ctx.vs.jv_type_cache = obj;
     return obj;
 }
 
