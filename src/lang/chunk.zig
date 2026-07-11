@@ -968,7 +968,10 @@ pub const State = struct {
 };
 
 var g_default_state: State = .{};
-pub var g_state: *State = &g_default_state;
+// threadlocal: each OS thread tracks its own active runtime, so two Runtimes
+// driven from different threads never stomp each other's active pointers
+// (#190). Single-threaded targets (WASI) lower this to a plain global.
+pub threadlocal var g_state: *State = &g_default_state;
 
 pub fn setActive(state: *State) void {
     g_state = state;

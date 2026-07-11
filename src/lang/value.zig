@@ -112,7 +112,7 @@ pub const NamedValueObj = struct { typ: *Object, value: Value };
 /// Set by heap.zig during State.init() and re-pointed by heap.setActive(),
 /// so it always tracks the active runtime's object pool. Values carrying
 /// pool indices (named_scalar/inline_variant) must not cross runtimes.
-pub var obj_pool_ptr: [*]Object = undefined;
+pub threadlocal var obj_pool_ptr: [*]Object = undefined;
 
 /// Decode a pool index to the corresponding *Object.
 pub fn objectAtIdx(idx: u16) *Object { return &obj_pool_ptr[idx]; }

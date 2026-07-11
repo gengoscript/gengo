@@ -855,7 +855,7 @@ pub const State = struct {
 };
 
 var g_default_state: State = .{};
-pub var g_state: *State = &g_default_state;
+pub threadlocal var g_state: *State = &g_default_state;
 
 pub fn setActive(state: *State) void {
     if (state.obj_pool.len == 0 and state == &g_default_state) {

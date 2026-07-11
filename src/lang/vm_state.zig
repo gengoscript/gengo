@@ -340,7 +340,7 @@ pub const State = struct {
 };
 
 var g_default_state: State = .{};
-var g_state: *State = &g_default_state;
+threadlocal var g_state: *State = &g_default_state;
 
 pub inline fn vmState() *State {
     return g_state;
