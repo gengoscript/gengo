@@ -150,7 +150,6 @@ const Engine = struct {
     net_handlers: ?net_state.HandlerSet = null,
     net_policy: net_state.PolicyState = .{},
     http_handler: ?http_state.HandlerSet = null,
-    fs_state: fs_state.EngineState = .{},
     source_entries: [MaxSources]api.SourceEntry = undefined,
     source_count: u8 = 0,
     path_bufs: [MaxSources][256]u8 = undefined,
@@ -194,7 +193,7 @@ const Engine = struct {
         self.net_handlers = null;
         self.net_policy = .{};
         self.http_handler = null;
-        self.fs_state = .{};
+        self.runtime.inner.fs_mounts.clear();
         self.import_loader_fn = null;
         self.import_loader_ctx = null;
         self.trace_fn = null;
@@ -338,7 +337,7 @@ fn pushCapState(engine: *Engine) ?*Engine {
     net_state.applyHandlers(engine.net_handlers);
     net_state.applyPolicy(engine.net_policy);
     http_state.applyHandler(engine.http_handler);
-    fs_state.loadFromEngine(&engine.fs_state);
+    fs_state.setActive(&engine.runtime.inner.fs_mounts);
     io.setTrace(engine.trace_fn, engine.trace_userdata, engineToHandle(engine));
     return prev;
 }
@@ -352,7 +351,6 @@ fn popCapState(prev: ?*Engine) void {
         net_state.applyHandlers(p.net_handlers);
         net_state.applyPolicy(p.net_policy);
         http_state.applyHandler(p.http_handler);
-        fs_state.loadFromEngine(&p.fs_state);
         io.setTrace(p.trace_fn, p.trace_userdata, engineToHandle(p));
         p.runtime.inner.activate();
     } else {
@@ -362,7 +360,7 @@ fn popCapState(prev: ?*Engine) void {
         net_state.applyHandlers(null);
         net_state.clearPolicy();
         http_state.applyHandler(null);
-        fs_state.clearMounts();
+        fs_state.setActive(fs_state.defaultState());
         io.clearTrace();
     }
 }
@@ -979,7 +977,7 @@ export fn engine_mount_dir(handle: i32, name_ptr: PtrInt, name_len: i32, path_pt
     if (name_len < 0 or path_len < 0) return -2;
     const name = wasmSlice(name_ptr, name_len);
     const path = wasmSlice(path_ptr, path_len);
-    fs_state.addMountToState(&engine.fs_state, name, path) catch return -2;
+    fs_state.addMountToState(&engine.runtime.inner.fs_mounts, name, path) catch return -2;
     return 0;
 }
 
@@ -992,7 +990,7 @@ export fn engine_mount_driver(handle: i32, name_ptr: PtrInt, name_len: i32, driv
     if (name_len < 0 or driver_ptr == 0) return -2;
     const name = wasmSlice(name_ptr, name_len);
     const driver = @as(*const fs_state.FsDriver, @ptrFromInt(@as(usize, @intCast(driver_ptr)))).*;
-    fs_state.addDriverMountToState(&engine.fs_state, name, driver, userdata) catch return -2;
+    fs_state.addDriverMountToState(&engine.runtime.inner.fs_mounts, name, driver, userdata) catch return -2;
     return 0;
 }
 

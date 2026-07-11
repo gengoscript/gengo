@@ -9,6 +9,7 @@ const vm = @import("../lang/vm.zig");
 const vms = @import("../lang/vm_state.zig");
 const vmnative = @import("../lang/vm_native.zig");
 const net_state = @import("../lang/native/net_state.zig");
+const fs_state = @import("../lang/native/fs_state.zig");
 const native_rand = @import("../lang/native/rand.zig");
 const cfg = @import("config.zig");
 const Value = @import("../lang/value.zig").Value;
@@ -143,6 +144,10 @@ pub const Runtime = struct {
     globals_state: globals.State = .{},
     heap_state: heap.State = .{},
     vm_state: vm.State = .{},
+    // Per-runtime cap:fs mount table; activate() points the fs_state module at
+    // it. Seeded from the process default so CLI --mount flags (registered
+    // before the Runtime exists) carry over.
+    fs_mounts: fs_state.EngineState = .{},
     test_count: u16 = 0,
     test_names: [MaxTests][]const u8 = undefined,
     test_failed: bool = false,
@@ -168,6 +173,7 @@ pub const Runtime = struct {
         vm.setActive(&rt.vm_state);
         rt.vm_state.reset();
         rt.heap_state.reset();
+        rt.fs_mounts = fs_state.defaultState().*;
         clearNativeCaches();
         return rt;
     }
@@ -214,6 +220,8 @@ pub const Runtime = struct {
         vm.setActive(&self.vm_state);
         self.vm_state.reset();
         self.heap_state.reset();
+        self.fs_mounts = fs_state.defaultState().*;
+        fs_state.setActive(&self.fs_mounts);
         clearNativeCaches();
     }
 
@@ -770,6 +778,7 @@ pub const Runtime = struct {
         globals.setActive(&self.globals_state);
         heap.setActive(&self.heap_state);
         vm.setActive(&self.vm_state);
+        fs_state.setActive(&self.fs_mounts);
     }
 
     pub fn lastCompilePath(self: *Runtime) []const u8 {
