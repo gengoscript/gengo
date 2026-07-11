@@ -834,7 +834,7 @@ pub const Compiler = struct {
         }
         return self.registry.hasNamedType(name) or self.registry.hasStructTypeLocal(name) or
             self.registry.hasInterfaceType(name) or self.registry.hasVariantType(name) or
-            self.registry.hasGenericType(name);
+            self.registry.hasGenericType(name) or self.registry.hasTypeAlias(name);
     }
 
     pub fn addExport(self: *Compiler, name: []const u8, global_name: []const u8) !void {

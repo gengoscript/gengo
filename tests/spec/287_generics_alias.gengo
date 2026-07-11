@@ -1,0 +1,40 @@
+type Stack[T] struct {
+    items []T
+}
+
+type IntStack Stack[int]
+type StringStack Stack[string]
+
+s := IntStack{ items: [1, 2, 3] }
+assert s.items[0] == 1
+assert s.items[2] == 3
+
+// Function accepting the alias as a param type.
+func peek(s IntStack) int {
+    return s.items[0]
+}
+assert peek(s) == 1
+
+// .type comparison via alias resolves to the underlying instantiation name.
+assert s.type == IntStack
+
+// StringStack alias
+ss := StringStack{ items: ["hello", "world"] }
+assert ss.items[1] == "world"
+
+// Result variant alias
+type Result[T, E] variant {
+    ok(value T),
+    err(e E),
+}
+type IntResult Result[int, string]
+
+r := IntResult.ok{ value: 42 }
+switch r {
+    case .ok as v {
+        assert v == 42
+    }
+    case .err {
+        assert false
+    }
+}

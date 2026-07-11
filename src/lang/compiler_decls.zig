@@ -550,6 +550,34 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
     const base_name = c.cur.src;
     c.advance();
 
+    // Generic instantiation alias: type IntStack Stack[int]
+    if (c.cur.typ == .lbracket and c.registry.hasGenericType(base_name)) {
+        const ginfo = c.registry.getGenericType(base_name).?;
+        var args: [ct.MaxTypeParams]FieldTypeSpec = undefined;
+        const arg_count = try parseInstArgSpecs(c, base_name, ginfo.param_count, &args);
+        if (argsHaveTypeParam(args[0..arg_count])) return c.err("generic alias arguments cannot contain type parameters", .{});
+        const target_qname = try applyGenericInst(c, base_name, args[0..arg_count], kw.line);
+        if (!c.skipping_test_body) {
+            const cached = c.registry.getCachedInstByQname(target_qname).?;
+            try c.registry.addTypeAlias(.{
+                .name = name,
+                .target_qname = target_qname,
+                .target_key = cached.key,
+                .kind = ginfo.kind,
+            });
+            // Emit the target type object under the alias global too.
+            try c.cs.emitConst(.{ .object = cached.obj }, kw.line);
+            if (c.inFunc()) {
+                _ = try c.defineLocal(name, false);
+            } else {
+                try c.cs.emitOpStringConst(.def_global, qname, kw.line);
+                if (is_pub) try c.addExport(name, qname);
+            }
+        }
+        c.matchOpt(.semicolon);
+        return;
+    }
+
     var base: NamedTypeBase = undefined;
     var parent_has_range = false;
     var parent_is_cycle = false;
@@ -1220,6 +1248,11 @@ pub fn parseFieldTypeSpec(c: anytype) !FieldTypeSpec {
                 alt = .{ .typ = .named_t, .named_name = try c.qualifyTypeName(tname) };
             } else if (c.registry.hasVariantType(tname)) {
                 alt = .{ .typ = .variant_t, .named_name = try c.qualifyTypeName(tname) };
+            } else if (c.registry.getTypeAlias(tname)) |alias| {
+                alt = switch (alias.kind) {
+                    .struct_t  => .{ .typ = .struct_t,  .struct_name = alias.target_qname },
+                    .variant_t => .{ .typ = .variant_t, .named_name  = alias.target_qname },
+                };
             } else if (c.cur.typ == .lbracket and c.registry.hasGenericType(tname)) {
                 // Generic instantiation: Stack[int], Result[T, E], etc.
                 // If any type arg still contains a type_param (we're inside a template body),
