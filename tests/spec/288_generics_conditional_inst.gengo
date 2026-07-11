@@ -1,0 +1,23 @@
+// Generic type instantiation inside a conditional branch must not break
+// later unconditional uses of the same type in the same function call.
+
+type Box[T] struct { val T }
+
+func make_box[T](x T, skip bool) Box[T] {
+    if skip {
+        // First compile-time encounter of Box[T] instantiation is here.
+        // If this branch is NOT taken at runtime, the type must still be
+        // defined for the unconditional return below.
+        return Box[T]{ val: x }
+    }
+    return Box[T]{ val: x }
+}
+
+a := make_box[int](10, false)
+b := make_box[int](20, true)
+c := make_box[string]("hi", false)
+
+std := import("std")
+std.io.println(a.val)
+std.io.println(b.val)
+std.io.println(c.val)

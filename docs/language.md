@@ -939,21 +939,53 @@ func map_array[T, U](xs []T, f func(T) U) []U {
 }
 ```
 
-Call a generic function by supplying explicit type arguments:
+Call a generic function by passing arguments directly — type arguments are
+inferred from context:
+
+```gengo
+n  := identity(42)
+s  := identity("hello")
+
+nums    := [1, 2, 3]
+doubled := map_array(nums, func(x int) int { return x * 2 })
+```
+
+Explicit type arguments are also accepted and their count is validated:
 
 ```gengo
 n  := identity[int](42)
-s  := identity[string]("hello")
-
-nums    := [1, 2, 3]
 doubled := map_array[int, int](nums, func(x int) int { return x * 2 })
 ```
 
 Generic functions use **erased** type parameters at runtime: the compiled
 function body treats type-parameter-typed arguments as `any`. The type
-arguments at the call site are validated for count but not yet checked
-against the actual argument types. Type inference (omitting `[T]` at
-call sites) is not yet supported.
+arguments at the call site are not checked against actual argument types.
+
+### Generic Constraints
+
+Type parameters may carry built-in constraints using `:` syntax:
+
+```gengo
+func sum[T: numeric](xs []T, zero T, add func(T, T) T) T {
+    total := zero
+    for x in xs { total = add(total, x) }
+    return total
+}
+
+func max_of[T: ordered](a T, b T) T {
+    if a > b { return a }
+    return b
+}
+```
+
+Constraints are enforced when explicit type arguments are written. Inferred
+calls (no `[T]`) skip the check. Three built-in constraints are available:
+
+| Constraint   | Accepted types |
+|:-------------|:---------------|
+| `numeric`    | `int`, `float`, `decimal`, `rune`, and named subtypes of those |
+| `ordered`    | Everything `numeric` accepts, plus `string` and named string subtypes |
+| `comparable` | Any type (same as no constraint; useful as documentation) |
 
 ### Generic Type Aliases
 

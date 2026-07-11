@@ -537,9 +537,10 @@ pub fn varExpr(c: anytype, name: Token) !void {
         const gfi = c.registry.getGenericFunc(name.src).?;
         c.advance(); // consume '['
         var arg_count: u8 = 0;
+        var arg_specs: [ct.MaxTypeParams]value_mod.FieldTypeSpec = undefined;
         if (!c.check(.rbracket)) {
             while (true) {
-                _ = try compiler_decls.parseFieldTypeSpec(c);
+                arg_specs[arg_count] = try compiler_decls.parseFieldTypeSpec(c);
                 arg_count += 1;
                 if (!c.match(.comma)) break;
                 if (c.check(.rbracket)) break;
@@ -550,6 +551,7 @@ pub fn varExpr(c: anytype, name: Token) !void {
             c.setErr("wrong number of type arguments for '{s}': expected {d}, got {d}", .{ name.src, gfi.param_count, arg_count });
             return error.WrongTypeArgCount;
         }
+        try compiler_decls.checkTypeArgConstraints(c, gfi.params[0..gfi.param_count], arg_specs[0..arg_count], name.src, name.line);
     }
     if (c.check(.lbrace) and looksLikeStructLiteral(c, )) {
         const is_known_type = c.registry.hasStructTypeLocal(name.src) or

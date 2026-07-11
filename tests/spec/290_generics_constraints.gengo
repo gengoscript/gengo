@@ -1,0 +1,32 @@
+// Built-in constraint predicates on generic type parameters.
+// numeric: int, float, decimal, rune, and named subtypes thereof.
+// ordered: numeric + string, and named string subtypes.
+// comparable: any type (explicit; same as unconstrained).
+
+std := import("std")
+
+type Score int
+
+func add_two[T: numeric](a T, b T) T { return a + b }
+func pick_larger[T: ordered](a T, b T) T {
+    if a > b { return a }
+    return b
+}
+func wrap[T: comparable](x T) T { return x }
+
+// numeric: primitives
+std.io.println(add_two[int](3, 4))
+std.io.println(add_two[float](1.5, 2.5))
+
+// numeric: named subtype of int
+s1 := add_two[Score](Score(10), Score(20))
+std.io.println(s1)
+
+// ordered: numeric types
+std.io.println(pick_larger[int](7, 3))
+
+// comparable: any type including bool
+std.io.println(wrap[bool](true))
+
+// Inferred calls — no explicit type args, no constraint check
+std.io.println(add_two(100, 200))
