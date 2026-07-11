@@ -424,7 +424,7 @@ pub const TypeRegistry = struct {
     }
 
     pub fn hasAnyTypeName(self: *const TypeRegistry, name: []const u8) bool {
-        return self.typeSlotFor(name) != null;
+        return self.typeSlotFor(name) != null or self.hasGenericType(name);
     }
 
     pub fn addVariantType(self: *TypeRegistry, name: []const u8) !void {
@@ -479,8 +479,8 @@ pub const TypeRegistry = struct {
         return null;
     }
 
-    pub fn addInstCache(self: *TypeRegistry, entry: InstCacheEntry) void {
-        if (self.inst_count >= MaxInstantiations) return;
+    pub fn addInstCache(self: *TypeRegistry, entry: InstCacheEntry) !void {
+        if (self.inst_count >= MaxInstantiations) return error.TooManyInstantiations;
         self.inst_cache[self.inst_count] = entry;
         self.inst_count += 1;
     }

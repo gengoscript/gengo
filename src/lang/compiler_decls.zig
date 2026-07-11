@@ -379,7 +379,10 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
     }
 
     if (c.match(.kw_struct)) return structDeclBody(c, kw, name_tok, is_pub, tparams[0..tparam_count]);
-    if (c.match(.kw_interface)) return interfaceDeclBody(c, kw, name_tok, is_pub);
+    if (c.match(.kw_interface)) {
+        if (tparam_count > 0) return c.err("generic interfaces are not yet supported", .{});
+        return interfaceDeclBody(c, kw, name_tok, is_pub);
+    }
     if (c.match(.kw_variant)) return variantDeclBody(c, kw, name_tok, is_pub, tparams[0..tparam_count]);
     if (c.cur.typ == .ident and common.streq(c.cur.src, "error")) {
         c.advance(); // consume 'error'
@@ -780,10 +783,12 @@ fn altTypeStr(buf: []u8, alt: value_mod.FieldTypeAlt) []const u8 {
         .array => blk: {
             if (alt.elem_spec) |es| {
                 if (es.alts.len > 0) {
-                    const inner = altTypeStr(buf[2..], es.alts[0]);
+                    var inner_buf: [126]u8 = undefined;
+                    const inner = altTypeStr(&inner_buf, es.alts[0]);
                     const need = 2 + inner.len;
                     if (need <= buf.len) {
                         buf[0] = '['; buf[1] = ']';
+                        @memcpy(buf[2..need], inner);
                         break :blk buf[0..need];
                     }
                 }
@@ -821,7 +826,7 @@ fn buildInstKey(tname: []const u8, args: []const FieldTypeSpec) ![]const u8 {
         if (i > 0 and pos < buf.len) { buf[pos] = ','; pos += 1; }
         var tmp: [64]u8 = undefined;
         const s = specTypeStr(&tmp, arg);
-        const avail = @min(s.len, buf.len - 1 - pos);
+        const avail = @min(s.len, buf.len -| 1 -| pos);
         @memcpy(buf[pos..pos + avail], s[0..avail]);
         pos += avail;
     }
@@ -928,7 +933,7 @@ fn applyGenericInst(c: anytype, tname: []const u8, args: []const FieldTypeSpec, 
     if (c.registry.getCachedInst(key)) |entry| return entry.qname;
 
     const base_qname = try c.qualifyTypeName(tname);
-    const key_suffix = key[tname.len..];
+    const key_suffix = key[@min(tname.len, 128)..];
     const qname_buf = heap.bump(u8, base_qname.len + key_suffix.len) orelse return error.OutOfMemory;
     @memcpy(qname_buf[0..base_qname.len], base_qname);
     @memcpy(qname_buf[base_qname.len..], key_suffix);
@@ -974,7 +979,7 @@ fn applyGenericInst(c: anytype, tname: []const u8, args: []const FieldTypeSpec, 
         }
         try c.cs.emitConst(.{ .object = inst_obj }, line);
         try c.cs.emitOpStringConst(.def_global, qname, line);
-        c.registry.addInstCache(.{ .key = key, .qname = qname, .obj = inst_obj });
+        try c.registry.addInstCache(.{ .key = key, .qname = qname, .obj = inst_obj });
     }
 
     return qname;
@@ -1267,7 +1272,7 @@ pub fn structDeclBody(c: anytype, kw: Token, name: Token, is_pub: bool, tparams:
     const is_generic = tparam_count > 0;
 
     if (!c.skipping_test_body and !c.inFunc()) {
-        if (c.registry.hasStructType(name.src) or (is_generic and c.registry.hasGenericType(name.src))) {
+        if (c.registry.hasStructType(name.src) or c.registry.hasGenericType(name.src)) {
             c.setErr("duplicate struct name '{s}'", .{name.src});
             return error.DuplicateStructType;
         }
@@ -1288,6 +1293,7 @@ pub fn structDeclBody(c: anytype, kw: Token, name: Token, is_pub: bool, tparams:
         c.type_param_count = tparam_count;
         for (tparams, 0..) |tp, i| c.type_params[i] = tp;
     }
+    errdefer c.type_param_count = saved_param_count;
 
     try c.consume(.lbrace);
 
@@ -1587,7 +1593,7 @@ pub fn variantDeclBody(c: anytype, kw: Token, name_tok: Token, is_pub: bool, tpa
     const is_generic = tparam_count > 0;
 
     if (!c.skipping_test_body) {
-        if (c.registry.hasVariantType(name) or (is_generic and c.registry.hasGenericType(name))) { c.setErr("duplicate variant type name '{s}'", .{name}); return error.DuplicateVariantType; }
+        if (c.registry.hasVariantType(name) or c.registry.hasGenericType(name)) { c.setErr("duplicate variant type name '{s}'", .{name}); return error.DuplicateVariantType; }
         if (!c.inFunc()) {
             if (c.registry.hasAnyTypeName(name)) {
                 c.setErr("type name '{s}' conflicts with an existing type declaration", .{name});
@@ -1607,6 +1613,7 @@ pub fn variantDeclBody(c: anytype, kw: Token, name_tok: Token, is_pub: bool, tpa
         c.type_param_count = tparam_count;
         for (tparams, 0..) |tp, i| c.type_params[i] = tp;
     }
+    errdefer c.type_param_count = saved_param_count;
 
     try c.consume(.lbrace);
 
