@@ -103,6 +103,11 @@ pub const State = struct {
     time_type_cache: ?*Object = null,
     regexp_type_cache: ?*Object = null,
     re_pattern_cache: regexp_mod.PatternCache = .{},
+    // Backing for native_function Objects, indexed by NativeFnId discriminant
+    // (enum(u8), so 256 slots). Outside the GC-managed heap: never marked,
+    // never swept, never moved by compaction. buildStdModule refreshes the
+    // slots it uses, so no reset is needed.
+    native_fn_backing: [256]Object = undefined,
     allocator: std.mem.Allocator = std.heap.page_allocator,
 
     pub fn init(self: *State, max_stack: usize, max_frames: usize, max_defers: usize, heap_size: usize, allocator: std.mem.Allocator) !void {
