@@ -1,0 +1,5 @@
+func identity[T](x T) T {
+    return x
+}
+// Too many type arguments
+identity[int, string](42)

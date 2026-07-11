@@ -919,7 +919,41 @@ std.io.println(std.core.len(w.inner.items))   // 3
 ```
 
 Type parameters may carry an optional constraint name (currently parsed but
-not yet enforced). Functions with type parameters are not yet supported.
+not yet enforced).
+
+### Generic Functions
+
+Functions can also take type parameters using the same `[T]` syntax:
+
+```gengo
+func identity[T](x T) T {
+    return x
+}
+
+func map_array[T, U](xs []T, f func(T) U) []U {
+    result := []
+    for x in xs {
+        result = std.core.append(result, f(x))
+    }
+    return result
+}
+```
+
+Call a generic function by supplying explicit type arguments:
+
+```gengo
+n  := identity[int](42)
+s  := identity[string]("hello")
+
+nums    := [1, 2, 3]
+doubled := map_array[int, int](nums, func(x int) int { return x * 2 })
+```
+
+Generic functions use **erased** type parameters at runtime: the compiled
+function body treats type-parameter-typed arguments as `any`. The type
+arguments at the call site are validated for count but not yet checked
+against the actual argument types. Type inference (omitting `[T]` at
+call sites) is not yet supported.
 
 ## Capability Imports
 

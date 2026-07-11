@@ -5,6 +5,7 @@
 ### Language
 
 - **Generic struct and variant types** — `type Stack[T] struct { items []T }` and `type Result[T, E] variant { ok(value T), err(e E) }`. Instantiate by supplying concrete type arguments: `Stack[int]{ items: [] }`, `Result[int, string].ok{ value: 42 }`. Type parameters are substituted at compile time; each instantiation is a distinct concrete type. Nested generic fields (e.g. `Stack[T]` inside `Wrapper[T]`) resolve correctly when the outer type is instantiated.
+- **Generic functions** — `func map_array[T, U](xs []T, f func(T) U) []U`. Call with explicit type arguments: `map_array[int, string](nums, fn)`. Type parameters are erased at runtime (treated as `any`); the type-argument count is validated at the call site. Type inference is not yet supported.
 - **Named error types** — `type NotFound error` declares a named error variant. Named errors are ordinary `error` values and can be distinguished by `.type`: `e.type == NotFound`, `switch e.type { case NotFound { ... } }`.
 - **`when` guards on switch cases** — Both value and variant cases may carry a `when` condition. The guard sees the `as` binding. A failed guard falls through to the next case: `case .ok as v when v > 0 { ... }`.
 - **Exhaustiveness checking for variant switch** — A variant `switch` inside a function is now checked at compile time. Every arm must be covered by at least one unguarded case, or the switch must have a `default`. A missing arm is a `NonExhaustiveSwitch` compile error.

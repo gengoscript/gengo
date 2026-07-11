@@ -263,7 +263,19 @@ pub fn isNamedFuncDecl(c: anytype) bool {
     const t1 = lx.next();
     if (t1.typ != .ident) return false;
     const t2 = lx.next();
-    return t2.typ == .lparen;
+    if (t2.typ == .lparen) return true;
+    if (t2.typ != .lbracket) return false;
+    // Generic func: func name[T, U]( — scan through [idents] and confirm '('
+    while (true) {
+        const t = lx.next();
+        switch (t.typ) {
+            .rbracket => break,
+            .eof => return false,
+            .ident, .comma => {},
+            else => return false,
+        }
+    }
+    return lx.next().typ == .lparen;
 }
 
 pub fn methodDecl(c: anytype) !void {
@@ -325,9 +337,40 @@ pub fn namedFuncDecl(c: anytype, is_pub: bool) !void {
         return c.err("'{s}' is a type name and cannot be used as a function name", .{name.src});
     c.advance(); // consume function name
 
+    // Parse optional generic type parameters: func name[T, U](...)
+    var tparams: [ct.MaxTypeParams]ct.GenericParam = undefined;
+    var tparam_count: u8 = 0;
+    if (c.cur.typ == .lbracket) {
+        c.advance(); // consume '['
+        while (true) {
+            if (c.cur.typ != .ident) return c.err("expected type parameter name, found {s}", .{c.tokenName(c.cur.typ)});
+            const pname = c.cur.src;
+            c.advance();
+            var constraint: []const u8 = "";
+            if (c.cur.typ == .ident) { constraint = c.cur.src; c.advance(); }
+            if (tparam_count >= ct.MaxTypeParams) return c.err("too many type parameters (max {d})", .{ct.MaxTypeParams});
+            tparams[tparam_count] = .{ .name = pname, .constraint = constraint };
+            tparam_count += 1;
+            if (!c.match(.comma)) break;
+            if (c.check(.rbracket)) break;
+        }
+        try c.consume(.rbracket);
+    }
+    const is_generic = tparam_count > 0;
+
+    // Push type params into compiler scope for function body parsing
+    const saved_param_count = c.type_param_count;
+    if (is_generic) {
+        c.type_param_count = tparam_count;
+        for (tparams[0..tparam_count], 0..) |tp, i| c.type_params[i] = tp;
+    }
+    errdefer c.type_param_count = saved_param_count;
+
     // current token is '('; compile as a named function for return-type enforcement
     _ = try c.compileFuncWithPrefix(&[_][]const u8{}, true, null);
     if (c.last_func_obj) |fo| fo.function.name = name.src;
+
+    c.type_param_count = saved_param_count;
 
     if (c.inFunc()) {
         _ = try c.defineLocal(name.src, false);
@@ -342,6 +385,11 @@ pub fn namedFuncDecl(c: anytype, is_pub: bool) !void {
                 c.setErr("too many global functions (limit {d})", .{ct.MaxGlobals});
                 return error.TooManyGlobals;
             };
+            if (is_generic) {
+                var gi: ct.GenericFuncInfo = .{ .name = try c.copyName(name.src), .param_count = tparam_count, .qname = qname };
+                for (tparams[0..tparam_count], 0..) |tp, i| gi.params[i] = tp;
+                try c.registry.addGenericFunc(gi);
+            }
         }
         try c.cs.emitOpStringConst(.def_global, qname, kw.line);
         if (is_pub) try c.addExport(name.src, qname);

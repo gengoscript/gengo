@@ -527,6 +527,25 @@ pub fn varExpr(c: anytype, name: Token) !void {
         }
         return;
     }
+    // Generic function call with explicit type args: name[T, U](args)
+    if (c.check(.lbracket) and c.registry.hasGenericFunc(name.src)) {
+        const gfi = c.registry.getGenericFunc(name.src).?;
+        c.advance(); // consume '['
+        var arg_count: u8 = 0;
+        if (!c.check(.rbracket)) {
+            while (true) {
+                _ = try compiler_decls.parseFieldTypeSpec(c);
+                arg_count += 1;
+                if (!c.match(.comma)) break;
+                if (c.check(.rbracket)) break;
+            }
+        }
+        try c.consume(.rbracket);
+        if (arg_count != gfi.param_count) {
+            c.setErr("wrong number of type arguments for '{s}': expected {d}, got {d}", .{ name.src, gfi.param_count, arg_count });
+            return error.WrongTypeArgCount;
+        }
+    }
     if (c.check(.lbrace) and looksLikeStructLiteral(c, )) {
         const is_known_type = c.registry.hasStructTypeLocal(name.src) or
             c.registry.hasNamedType(name.src) or
