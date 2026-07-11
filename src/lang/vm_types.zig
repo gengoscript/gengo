@@ -189,6 +189,8 @@ pub fn matchesTypeAlt(ctx: VMContext, v: Value, alt: FieldTypeAlt) bool {
             }
             break :blk true;
         },
+        // type_param alts should only exist in generic templates, never in instantiated specs.
+        .type_param => false,
     };
 }
 
@@ -234,6 +236,7 @@ fn fieldTypeAltStr(buf: *[128]u8, alt: FieldTypeAlt) []const u8 {
         .named_t => alt.named_name,
         .variant_t => alt.named_name,
         .func_t => "func",
+        .type_param => alt.param_name,
     };
 }
 

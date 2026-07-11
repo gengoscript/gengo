@@ -355,9 +355,32 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
     if (c.cur.typ != .ident) return c.err("expected identifier, found {s}", .{c.tokenName(c.cur.typ)});
     const name_tok = c.cur;
     c.advance(); // name
-    if (c.match(.kw_struct)) return structDeclBody(c, kw, name_tok, is_pub);
+
+    // Parse optional generic type parameters: [T] or [T Constraint, U].
+    // Only consume [...]  when a scan confirms the pattern is [idents] struct|variant|interface
+    // — otherwise the '[' belongs to the underlying type expression (e.g. [K]V map alias).
+    var tparams: [ct.MaxTypeParams]ct.GenericParam = undefined;
+    var tparam_count: u8 = 0;
+    if (c.cur.typ == .lbracket and c.looksLikeGenericTypeParams()) {
+        c.advance(); // consume '['
+        while (true) {
+            if (c.cur.typ != .ident) return c.err("expected type parameter name, found {s}", .{c.tokenName(c.cur.typ)});
+            const pname = c.cur.src;
+            c.advance();
+            var constraint: []const u8 = "";
+            if (c.cur.typ == .ident) { constraint = c.cur.src; c.advance(); }
+            if (tparam_count >= ct.MaxTypeParams) return c.err("too many type parameters (max {d})", .{ct.MaxTypeParams});
+            tparams[tparam_count] = .{ .name = pname, .constraint = constraint };
+            tparam_count += 1;
+            if (!c.match(.comma)) break;
+            if (c.check(.rbracket)) break;
+        }
+        try c.consume(.rbracket);
+    }
+
+    if (c.match(.kw_struct)) return structDeclBody(c, kw, name_tok, is_pub, tparams[0..tparam_count]);
     if (c.match(.kw_interface)) return interfaceDeclBody(c, kw, name_tok, is_pub);
-    if (c.match(.kw_variant)) return variantDeclBody(c, kw, name_tok, is_pub);
+    if (c.match(.kw_variant)) return variantDeclBody(c, kw, name_tok, is_pub, tparams[0..tparam_count]);
     if (c.cur.typ == .ident and common.streq(c.cur.src, "error")) {
         c.advance(); // consume 'error'
         return namedErrorTypeDecl(c, kw, name_tok, is_pub);
@@ -705,6 +728,266 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
     c.matchOpt(.semicolon);
 }
 
+// ── Generic type helpers ──────────────────────────────────────────────────────
+
+fn argsHaveTypeParam(args: []const FieldTypeSpec) bool {
+    for (args) |a| for (a.alts) |aa| { if (aa.typ == .type_param) return true; };
+    return false;
+}
+
+/// Build "[int,string]" suffix from concrete arg specs (no allocation — caller provides buf).
+fn instArgSuffix(buf: []u8, args: []const FieldTypeSpec) []const u8 {
+    var pos: usize = 0;
+    if (pos < buf.len) { buf[pos] = '['; pos += 1; }
+    for (args, 0..) |arg, i| {
+        if (i > 0 and pos < buf.len) { buf[pos] = ','; pos += 1; }
+        var tmp: [64]u8 = undefined;
+        const s = specTypeStr(&tmp, arg);
+        const avail = @min(s.len, buf.len -| pos -| 1);
+        @memcpy(buf[pos..pos + avail], s[0..avail]);
+        pos += avail;
+    }
+    if (pos < buf.len) { buf[pos] = ']'; pos += 1; }
+    return buf[0..pos];
+}
+
+/// Allocate and return "<base_qname>[arg1,arg2,...]" on the bump heap.
+fn instQNameFromBase(base_qname: []const u8, args: []const FieldTypeSpec) ![]const u8 {
+    var sbuf: [128]u8 = undefined;
+    const suffix = instArgSuffix(&sbuf, args);
+    const total = base_qname.len + suffix.len;
+    const out = heap.bump(u8, total) orelse return error.OutOfMemory;
+    @memcpy(out[0..base_qname.len], base_qname);
+    @memcpy(out[base_qname.len..total], suffix);
+    return out[0..total];
+}
+
+fn altTypeStr(buf: []u8, alt: value_mod.FieldTypeAlt) []const u8 {
+    return switch (alt.typ) {
+        .int => "int",
+        .float => "float",
+        .boolean => "bool",
+        .string => "string",
+        .rune_t => "rune",
+        .decimal_t => "decimal",
+        .null_t => "null",
+        .error_t => "error",
+        .any => "any",
+        .struct_t => alt.struct_name,
+        .named_t, .variant_t => alt.named_name,
+        .interface_t => alt.interface_name,
+        .type_param => alt.param_name,
+        .array => blk: {
+            if (alt.elem_spec) |es| {
+                if (es.alts.len > 0) {
+                    const inner = altTypeStr(buf[2..], es.alts[0]);
+                    const need = 2 + inner.len;
+                    if (need <= buf.len) {
+                        buf[0] = '['; buf[1] = ']';
+                        break :blk buf[0..need];
+                    }
+                }
+            }
+            break :blk "[]_";
+        },
+        .map => "map[_]_",
+        .func_t => "func(_)",
+    };
+}
+
+fn specTypeStr(buf: []u8, spec: FieldTypeSpec) []const u8 {
+    if (spec.alts.len == 0) return "any";
+    if (spec.alts.len == 1) return altTypeStr(buf, spec.alts[0]);
+    var pos: usize = 0;
+    for (spec.alts, 0..) |alt, i| {
+        if (i > 0 and pos < buf.len) { buf[pos] = '|'; pos += 1; }
+        var tmp: [32]u8 = undefined;
+        const s = altTypeStr(&tmp, alt);
+        const avail = @min(s.len, buf.len - pos);
+        @memcpy(buf[pos..pos + avail], s[0..avail]);
+        pos += avail;
+    }
+    return buf[0..pos];
+}
+
+fn buildInstKey(tname: []const u8, args: []const FieldTypeSpec) ![]const u8 {
+    var buf: [256]u8 = undefined;
+    var pos: usize = 0;
+    const tn = @min(tname.len, 128);
+    @memcpy(buf[pos..pos + tn], tname[0..tn]);
+    pos += tn;
+    buf[pos] = '['; pos += 1;
+    for (args, 0..) |arg, i| {
+        if (i > 0 and pos < buf.len) { buf[pos] = ','; pos += 1; }
+        var tmp: [64]u8 = undefined;
+        const s = specTypeStr(&tmp, arg);
+        const avail = @min(s.len, buf.len - 1 - pos);
+        @memcpy(buf[pos..pos + avail], s[0..avail]);
+        pos += avail;
+    }
+    if (pos < buf.len) { buf[pos] = ']'; pos += 1; }
+    const k = heap.bump(u8, pos) orelse return error.OutOfMemory;
+    @memcpy(k[0..pos], buf[0..pos]);
+    return k[0..pos];
+}
+
+/// Recursively substitute type_param alts in a FieldTypeSpec, expanding them to the provided args.
+/// For struct_t/variant_t alts with generic_args (deferred nested generics), substitutes the
+/// args and rebuilds the concrete qualified name without needing the compiler context.
+fn substituteSpec(spec: FieldTypeSpec, params: []const ct.GenericParam, args: []const FieldTypeSpec) !FieldTypeSpec {
+    // Count total output alts (type_param alts expand to all alts of the arg spec).
+    var total: usize = 0;
+    for (spec.alts) |alt| {
+        if (alt.typ == .type_param) {
+            for (params, args) |p, a| {
+                if (common.streq(p.name, alt.param_name)) { total += a.alts.len; break; }
+            }
+        } else {
+            total += 1;
+        }
+    }
+    const new_alts = heap.bump(value_mod.FieldTypeAlt, total) orelse return error.OutOfMemory;
+    var out: usize = 0;
+    for (spec.alts) |alt| {
+        if (alt.typ == .type_param) {
+            for (params, args) |p, a| {
+                if (common.streq(p.name, alt.param_name)) {
+                    for (a.alts) |aa| { new_alts[out] = aa; out += 1; }
+                    break;
+                }
+            }
+        } else if ((alt.typ == .struct_t or alt.typ == .variant_t) and alt.generic_args.len > 0) {
+            // Deferred nested generic (e.g. Stack[T] inside Wrapper[T]'s template).
+            // Substitute the stored arg specs, then rebuild the concrete qualified name.
+            var new_arg_buf: [ct.MaxTypeParams]FieldTypeSpec = undefined;
+            for (alt.generic_args, 0..) |ga, i| {
+                new_arg_buf[i] = try substituteSpec(ga, params, args);
+            }
+            const base_qname = if (alt.typ == .struct_t) alt.struct_name else alt.named_name;
+            const qname = try instQNameFromBase(base_qname, new_arg_buf[0..alt.generic_args.len]);
+            new_alts[out] = if (alt.typ == .struct_t)
+                .{ .typ = .struct_t, .struct_name = qname }
+            else
+                .{ .typ = .variant_t, .named_name = qname };
+            out += 1;
+        } else {
+            new_alts[out] = alt;
+            if (alt.elem_spec) |es| {
+                const ns = try substituteSpec(es, params, args);
+                const ep = heap.bump(FieldTypeSpec, 1) orelse return error.OutOfMemory;
+                ep[0] = ns;
+                new_alts[out].elem_spec = ep[0];
+            }
+            if (alt.key_spec) |ks| {
+                const ns = try substituteSpec(ks, params, args);
+                const kp = heap.bump(FieldTypeSpec, 1) orelse return error.OutOfMemory;
+                kp[0] = ns;
+                new_alts[out].key_spec = kp[0];
+            }
+            if (alt.val_spec) |vs| {
+                const ns = try substituteSpec(vs, params, args);
+                const vp = heap.bump(FieldTypeSpec, 1) orelse return error.OutOfMemory;
+                vp[0] = ns;
+                new_alts[out].val_spec = vp[0];
+            }
+            out += 1;
+        }
+    }
+    return .{ .alts = new_alts[0..total] };
+}
+
+/// Parse `[T1, T2, ...]` from the token stream into out_args; returns arg count.
+fn parseInstArgSpecs(c: anytype, tname: []const u8, param_count: u8, out_args: *[ct.MaxTypeParams]FieldTypeSpec) anyerror!u8 {
+    try c.consume(.lbracket);
+    var arg_count: u8 = 0;
+    if (!c.check(.rbracket)) {
+        while (true) {
+            if (arg_count >= param_count) {
+                c.setErr("too many type arguments for '{s}' (expected {d})", .{ tname, param_count });
+                return error.WrongTypeArgCount;
+            }
+            out_args[arg_count] = try parseFieldTypeSpec(c);
+            arg_count += 1;
+            if (!c.match(.comma)) break;
+            if (c.check(.rbracket)) break;
+        }
+    }
+    try c.consume(.rbracket);
+    if (arg_count != param_count) {
+        c.setErr("wrong number of type arguments for '{s}': expected {d}, got {d}", .{ tname, param_count, arg_count });
+        return error.WrongTypeArgCount;
+    }
+    return arg_count;
+}
+
+/// Instantiate a generic type with pre-computed concrete args. Emits a def_global on first use.
+fn applyGenericInst(c: anytype, tname: []const u8, args: []const FieldTypeSpec, line: u32) anyerror![]const u8 {
+    const ginfo = c.registry.getGenericType(tname).?;
+    const key = try buildInstKey(tname, args);
+
+    if (c.registry.getCachedInst(key)) |entry| return entry.qname;
+
+    const base_qname = try c.qualifyTypeName(tname);
+    const key_suffix = key[tname.len..];
+    const qname_buf = heap.bump(u8, base_qname.len + key_suffix.len) orelse return error.OutOfMemory;
+    @memcpy(qname_buf[0..base_qname.len], base_qname);
+    @memcpy(qname_buf[base_qname.len..], key_suffix);
+    const qname = qname_buf[0..base_qname.len + key_suffix.len];
+
+    if (!c.skipping_test_body) {
+        const inst_obj = heap.allocObject() orelse return error.OutOfMemory;
+        switch (ginfo.kind) {
+            .struct_t => {
+                const tmpl = ginfo.template_obj.struct_type;
+                const new_fields = heap.bump(StructFieldSpec, tmpl.fields.len) orelse return error.OutOfMemory;
+                for (tmpl.fields, 0..) |f, i| {
+                    const new_typ = try substituteSpec(f.typ, ginfo.params[0..ginfo.param_count], args);
+                    new_fields[i] = .{ .name = f.name, .typ = new_typ, .is_const = f.is_const, .key = f.key };
+                }
+                inst_obj.* = .{ .struct_type = .{ .name = key, .qualified_name = qname, .fields = new_fields[0..tmpl.fields.len] } };
+                try c.registry.addStructType(key);
+            },
+            .variant_t => {
+                const tmpl = ginfo.template_obj.variant_type;
+                const new_arms = heap.bump(VariantArmSpec, tmpl.arms.len) orelse return error.OutOfMemory;
+                for (tmpl.arms, 0..) |arm, i| {
+                    new_arms[i] = arm;
+                    if (arm.payload_type) |pt| {
+                        const np = try substituteSpec(pt, ginfo.params[0..ginfo.param_count], args);
+                        const npp = heap.bump(FieldTypeSpec, 1) orelse return error.OutOfMemory;
+                        npp[0] = np;
+                        new_arms[i].payload_type = npp[0];
+                    }
+                    if (arm.fields.len > 0) {
+                        const nf = heap.bump(StructFieldSpec, arm.fields.len) orelse return error.OutOfMemory;
+                        for (arm.fields, 0..) |f, fi| {
+                            const nt = try substituteSpec(f.typ, ginfo.params[0..ginfo.param_count], args);
+                            nf[fi] = .{ .name = f.name, .typ = nt, .is_const = f.is_const, .key = f.key };
+                        }
+                        new_arms[i].fields = nf[0..arm.fields.len];
+                    }
+                }
+                inst_obj.* = .{ .variant_type = .{ .name = key, .qualified_name = qname, .arms = new_arms[0..tmpl.arms.len] } };
+                try c.registry.addVariantType(key);
+                c.registry.setVariantObj(key, inst_obj);
+            },
+        }
+        try c.cs.emitConst(.{ .object = inst_obj }, line);
+        try c.cs.emitOpStringConst(.def_global, qname, line);
+        c.registry.addInstCache(.{ .key = key, .qname = qname, .obj = inst_obj });
+    }
+
+    return qname;
+}
+
+/// Parse `[T1, T2, ...]` and instantiate the named generic type. Returns the qualified name.
+pub fn instantiateGenericType(c: anytype, tname: []const u8, line: u32) anyerror![]const u8 {
+    const ginfo = c.registry.getGenericType(tname).?;
+    var args: [ct.MaxTypeParams]FieldTypeSpec = undefined;
+    const arg_count = try parseInstArgSpecs(c, tname, ginfo.param_count, &args);
+    return applyGenericInst(c, tname, args[0..arg_count], line);
+}
+
 pub fn parseConstraintBounds(c: anytype) !struct { is_cycle: bool, min: f64, max: f64 } {
     const is_cycle = if (c.match(.kw_range))
         false
@@ -841,45 +1124,76 @@ pub fn parseFieldTypeSpec(c: anytype) !FieldTypeSpec {
             }
         } else {
         alt = .{ .typ = .struct_t, .struct_name = tname };
-        if (common.streq(tname, "int")) {
-            alt = .{ .typ = .int };
-        } else if (common.streq(tname, "float")) {
-            alt = .{ .typ = .float };
-        } else if (common.streq(tname, "rune")) {
-            alt = .{ .typ = .rune_t };
-        } else if (common.streq(tname, "bool")) {
-            alt = .{ .typ = .boolean };
-        } else if (common.streq(tname, "string")) {
-            alt = .{ .typ = .string };
-        } else if (common.streq(tname, "error")) {
-            alt = .{ .typ = .error_t };
-        } else if (common.streq(tname, "bigint")) {
-            alt = .{ .typ = .any };
-        } else if (common.streq(tname, "array")) {
-            return c.err("use '[]T' syntax for array types", .{});
-        } else if (common.streq(tname, "map")) {
-            var ks: ?FieldTypeSpec = null;
-            var vs: ?FieldTypeSpec = null;
-            if (c.match(.lbracket)) {
-                ks = try parseFieldTypeSpec(c, );
-                try c.consume(.rbracket);
-                vs = try parseFieldTypeSpec(c, );
-            } else {
-                return c.err("use 'map[K]V' syntax for map types", .{});
+        // Active generic type parameter (e.g. T inside type Stack[T] struct { ... }).
+        found_type_param: {
+            for (c.type_params[0..c.type_param_count]) |tp| {
+                if (common.streq(tp.name, tname)) {
+                    alt = .{ .typ = .type_param, .param_name = tp.name };
+                    break :found_type_param;
+                }
             }
-            alt = .{ .typ = .map, .key_spec = ks, .val_spec = vs };
-        } else if (c.registry.hasStructTypeLocal(tname)) {
-            alt = .{ .typ = .struct_t, .struct_name = try c.qualifyTypeName(tname) };
-        } else if (c.registry.hasInterfaceType(tname)) {
-            alt = .{ .typ = .interface_t, .interface_name = try c.qualifyTypeName(tname) };
-        } else if (c.registry.hasNamedType(tname)) {
-            alt = .{ .typ = .named_t, .named_name = try c.qualifyTypeName(tname) };
-        } else if (c.registry.hasVariantType(tname)) {
-            alt = .{ .typ = .variant_t, .named_name = try c.qualifyTypeName(tname) };
-        } else if (!c.skipping_test_body) {
-            c.setErr("unknown type '{s}'", .{tname});
-            return error.UnknownType;
-        }
+            if (common.streq(tname, "int")) {
+                alt = .{ .typ = .int };
+            } else if (common.streq(tname, "float")) {
+                alt = .{ .typ = .float };
+            } else if (common.streq(tname, "rune")) {
+                alt = .{ .typ = .rune_t };
+            } else if (common.streq(tname, "bool")) {
+                alt = .{ .typ = .boolean };
+            } else if (common.streq(tname, "string")) {
+                alt = .{ .typ = .string };
+            } else if (common.streq(tname, "error")) {
+                alt = .{ .typ = .error_t };
+            } else if (common.streq(tname, "bigint")) {
+                alt = .{ .typ = .any };
+            } else if (common.streq(tname, "array")) {
+                return c.err("use '[]T' syntax for array types", .{});
+            } else if (common.streq(tname, "map")) {
+                var ks: ?FieldTypeSpec = null;
+                var vs: ?FieldTypeSpec = null;
+                if (c.match(.lbracket)) {
+                    ks = try parseFieldTypeSpec(c, );
+                    try c.consume(.rbracket);
+                    vs = try parseFieldTypeSpec(c, );
+                } else {
+                    return c.err("use 'map[K]V' syntax for map types", .{});
+                }
+                alt = .{ .typ = .map, .key_spec = ks, .val_spec = vs };
+            } else if (c.registry.hasStructTypeLocal(tname)) {
+                alt = .{ .typ = .struct_t, .struct_name = try c.qualifyTypeName(tname) };
+            } else if (c.registry.hasInterfaceType(tname)) {
+                alt = .{ .typ = .interface_t, .interface_name = try c.qualifyTypeName(tname) };
+            } else if (c.registry.hasNamedType(tname)) {
+                alt = .{ .typ = .named_t, .named_name = try c.qualifyTypeName(tname) };
+            } else if (c.registry.hasVariantType(tname)) {
+                alt = .{ .typ = .variant_t, .named_name = try c.qualifyTypeName(tname) };
+            } else if (c.cur.typ == .lbracket and c.registry.hasGenericType(tname)) {
+                // Generic instantiation: Stack[int], Result[T, E], etc.
+                // If any type arg still contains a type_param (we're inside a template body),
+                // store a deferred representation so substituteSpec can resolve it later.
+                const ginfo = c.registry.getGenericType(tname).?;
+                var arg_specs: [ct.MaxTypeParams]FieldTypeSpec = undefined;
+                const arg_count = try parseInstArgSpecs(c, tname, ginfo.param_count, &arg_specs);
+                if (argsHaveTypeParam(arg_specs[0..arg_count])) {
+                    const base_qname = try c.qualifyTypeName(tname);
+                    const stored = heap.bump(FieldTypeSpec, arg_count) orelse return error.OutOfMemory;
+                    @memcpy(stored[0..arg_count], arg_specs[0..arg_count]);
+                    alt = switch (ginfo.kind) {
+                        .struct_t  => .{ .typ = .struct_t,  .struct_name = base_qname, .generic_args = stored[0..arg_count] },
+                        .variant_t => .{ .typ = .variant_t, .named_name  = base_qname, .generic_args = stored[0..arg_count] },
+                    };
+                } else {
+                    const qname = try applyGenericInst(c, tname, arg_specs[0..arg_count], c.prev.line);
+                    alt = switch (ginfo.kind) {
+                        .struct_t  => .{ .typ = .struct_t,  .struct_name = qname },
+                        .variant_t => .{ .typ = .variant_t, .named_name  = qname },
+                    };
+                }
+            } else if (!c.skipping_test_body) {
+                c.setErr("unknown type '{s}'", .{tname});
+                return error.UnknownType;
+            }
+        } // end found_type_param
         } // end else (not dot)
     }
 
@@ -948,9 +1262,12 @@ fn checkStructFieldType(c: anytype, spec: FieldTypeSpec, qself: []const u8, insi
     }
 }
 
-pub fn structDeclBody(c: anytype, kw: Token, name: Token, is_pub: bool) !void {
+pub fn structDeclBody(c: anytype, kw: Token, name: Token, is_pub: bool, tparams: []const ct.GenericParam) !void {
+    const tparam_count: u8 = @intCast(tparams.len);
+    const is_generic = tparam_count > 0;
+
     if (!c.skipping_test_body and !c.inFunc()) {
-        if (c.registry.hasStructType(name.src)) {
+        if (c.registry.hasStructType(name.src) or (is_generic and c.registry.hasGenericType(name.src))) {
             c.setErr("duplicate struct name '{s}'", .{name.src});
             return error.DuplicateStructType;
         }
@@ -963,7 +1280,15 @@ pub fn structDeclBody(c: anytype, kw: Token, name: Token, is_pub: bool) !void {
             return error.DuplicateField;
         }
     }
-    if (!c.skipping_test_body) try c.registry.addStructType(name.src);
+    if (!is_generic and !c.skipping_test_body) try c.registry.addStructType(name.src);
+
+    // Push type params into compiler scope for body parsing.
+    const saved_param_count = c.type_param_count;
+    if (is_generic) {
+        c.type_param_count = tparam_count;
+        for (tparams, 0..) |tp, i| c.type_params[i] = tp;
+    }
+
     try c.consume(.lbrace);
 
     var field_specs: [MaxLocals]StructFieldSpec = undefined;
@@ -983,8 +1308,9 @@ pub fn structDeclBody(c: anytype, kw: Token, name: Token, is_pub: bool) !void {
             if (c.cur.typ == .ident or c.cur.typ == .question or c.cur.typ == .kw_func or c.cur.typ == .lbracket) {
                 // Space syntax: field type  (colon no longer used)
                 spec.typ = try parseFieldTypeSpec(c, );
-                if (!c.skipping_test_body) try checkStructFieldType(c, spec.typ, try c.qualifyTypeName(name.src), false);
+                if (!is_generic and !c.skipping_test_body) try checkStructFieldType(c, spec.typ, try c.qualifyTypeName(name.src), false);
             } else {
+                c.type_param_count = saved_param_count;
                 return c.err("expected type annotation for struct field '{s}'", .{fname});
             }
 
@@ -995,10 +1321,26 @@ pub fn structDeclBody(c: anytype, kw: Token, name: Token, is_pub: bool) !void {
         }
     }
     try c.consume(.rbrace);
+    c.type_param_count = saved_param_count;
 
     const fields = heap.bump(StructFieldSpec, count) orelse return error.OutOfMemory;
     @memcpy(fields[0..count], field_specs[0..count]);
     for (fields[0..count]) |*f| f.key = .{ .string = try c.cs.internStr(f.name) };
+
+    if (is_generic) {
+        // Store as a template — no emission, no global. Instantiation happens on use.
+        if (!c.skipping_test_body) {
+            const tmpl = heap.allocObject() orelse return error.OutOfMemory;
+            const qname = try c.qualifyTypeName(name.src);
+            tmpl.* = .{ .struct_type = .{ .name = try c.copyName(name.src), .qualified_name = qname, .fields = fields[0..count] } };
+            var gi: ct.GenericTypeInfo = .{ .name = try c.copyName(name.src), .kind = .struct_t, .param_count = tparam_count, .template_obj = tmpl };
+            for (tparams, 0..) |tp, i| gi.params[i] = tp;
+            try c.registry.addGenericType(gi);
+        }
+        c.matchOpt(.semicolon);
+        return;
+    }
+
     const qname = try c.qualifyTypeName(name.src);
     const st = heap.allocObject() orelse return error.OutOfMemory;
     st.* = .{ .struct_type = StructTypeObj{ .name = try c.copyName(name.src), .qualified_name = qname, .fields = fields[0..count] } };
@@ -1239,10 +1581,13 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
     c.matchOpt(.semicolon);
 }
 
-pub fn variantDeclBody(c: anytype, kw: Token, name_tok: Token, is_pub: bool) !void {
+pub fn variantDeclBody(c: anytype, kw: Token, name_tok: Token, is_pub: bool, tparams: []const ct.GenericParam) !void {
     const name = name_tok.src;
+    const tparam_count: u8 = @intCast(tparams.len);
+    const is_generic = tparam_count > 0;
+
     if (!c.skipping_test_body) {
-        if (c.registry.hasVariantType(name)) { c.setErr("duplicate variant type name '{s}'", .{name}); return error.DuplicateVariantType; }
+        if (c.registry.hasVariantType(name) or (is_generic and c.registry.hasGenericType(name))) { c.setErr("duplicate variant type name '{s}'", .{name}); return error.DuplicateVariantType; }
         if (!c.inFunc()) {
             if (c.registry.hasAnyTypeName(name)) {
                 c.setErr("type name '{s}' conflicts with an existing type declaration", .{name});
@@ -1253,8 +1598,16 @@ pub fn variantDeclBody(c: anytype, kw: Token, name_tok: Token, is_pub: bool) !vo
                 return error.DuplicateField;
             }
         }
-        try c.registry.addVariantType(name);
+        if (!is_generic) try c.registry.addVariantType(name);
     }
+
+    // Push type params into compiler scope for body parsing.
+    const saved_param_count = c.type_param_count;
+    if (is_generic) {
+        c.type_param_count = tparam_count;
+        for (tparams, 0..) |tp, i| c.type_params[i] = tp;
+    }
+
     try c.consume(.lbrace);
 
     var shared_tmp: [MaxLocals]StructFieldSpec = undefined;
@@ -1367,6 +1720,8 @@ pub fn variantDeclBody(c: anytype, kw: Token, name_tok: Token, is_pub: bool) !vo
     const arms = heap.bump(VariantArmSpec, arm_count) orelse return error.OutOfMemory;
     @memcpy(arms[0..arm_count], arms_tmp[0..arm_count]);
 
+    c.type_param_count = saved_param_count;
+
     const qname = try c.qualifyTypeName(name);
     const vt = heap.allocObject() orelse return error.OutOfMemory;
     vt.* = .{ .variant_type = VariantTypeObj{
@@ -1375,6 +1730,18 @@ pub fn variantDeclBody(c: anytype, kw: Token, name_tok: Token, is_pub: bool) !vo
         .arms = arms[0..arm_count],
         .shared_fields = shared_fields,
     } };
+
+    if (is_generic) {
+        // Store as a template — no emission, no global.
+        if (!c.skipping_test_body) {
+            var gi: ct.GenericTypeInfo = .{ .name = try c.copyName(name), .kind = .variant_t, .param_count = tparam_count, .template_obj = vt };
+            for (tparams, 0..) |tp, i| gi.params[i] = tp;
+            try c.registry.addGenericType(gi);
+        }
+        c.matchOpt(.semicolon);
+        return;
+    }
+
     try c.cs.emitConst(.{ .object = vt }, kw.line);
     c.registry.setVariantObj(name, vt);
     if (c.inFunc()) {
