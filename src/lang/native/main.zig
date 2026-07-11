@@ -24,12 +24,6 @@ const FieldTypeSpec = @import("../value.zig").FieldTypeSpec;
 const StructFieldSpec = @import("../value.zig").StructFieldSpec;
 const StructTypeObj = @import("../value.zig").StructTypeObj;
 
-// Static backing for native_function Objects, indexed by NativeFnId discriminant.
-// NativeFnId is enum(u8) so discriminants fit in [0, 256).
-// Lives outside the GC-managed heap so compactManagedHeap never overwrites them.
-// Each run of buildStdModule re-initialises the slots it uses.
-var native_fn_backing: [256]Object = undefined;
-
 const rand_mod = @import("rand.zig");
 const encode_mod = @import("encode.zig");
 const time_mod = @import("time.zig");
@@ -64,14 +58,14 @@ const NamespaceEntry = struct {
     value: Value,
 };
 
-fn makeNative(id: NativeFnId, arity: u8) !Value {
-    // Store in a static array outside the GC-managed heap.  This means:
+fn makeNative(ctx: vms.VMContext, id: NativeFnId, arity: u8) !Value {
+    // Store in the runtime's backing array outside the GC-managed heap.  This means:
     // - GC never marks or sweeps these objects (isObjectLive returns false).
     // - compactManagedHeap never overwrites them (they are not in heap[]).
     // - Each buildStdModule call refreshes the slot; no separate reset needed.
     const idx = @intFromEnum(id);
-    native_fn_backing[idx] = .{ .native_function = .{ .id = idx, .arity = arity } };
-    return .{ .object = &native_fn_backing[idx] };
+    ctx.vs.native_fn_backing[idx] = .{ .native_function = .{ .id = idx, .arity = arity } };
+    return .{ .object = &ctx.vs.native_fn_backing[idx] };
 }
 
 fn makeNamespace(ctx: vms.VMContext, display_name: []const u8, qualified_name: []const u8, entries: []const NamespaceEntry) !*Object {
@@ -105,105 +99,105 @@ pub fn buildStdModule(ctx: vms.VMContext) !*Object {
     if (ctx.vs.std_module) |m| return m;
 
     const fmt_entries = [_]NamespaceEntry{
-        .{ .name = "format", .value = try makeNative(.io_sprintf, 255) },
-        .{ .name = "stringify", .value = try makeNative(.fmt_stringify, 1) },
+        .{ .name = "format", .value = try makeNative(ctx, .io_sprintf, 255) },
+        .{ .name = "stringify", .value = try makeNative(ctx, .fmt_stringify, 1) },
     };
     const fmt_obj = try makeNamespace(ctx,"fmt", "@module_type:std.fmt", &fmt_entries);
     try ctx.vs.pushTempRoot(.{ .object = fmt_obj });
     defer ctx.vs.popTempRoot();
 
     const io_entries = [_]NamespaceEntry{
-        .{ .name = "println", .value = try makeNative(.io_println, 255) },
-        .{ .name = "printf", .value = try makeNative(.io_printf, 255) },
-        .{ .name = "print", .value = try makeNative(.io_print, 255) },
-        .{ .name = "eprint", .value = try makeNative(.io_eprint, 255) },
-        .{ .name = "eprintf", .value = try makeNative(.io_eprintf, 255) },
-        .{ .name = "eprintln", .value = try makeNative(.io_eprintln, 255) },
-        .{ .name = "read", .value = try makeNative(.io_read, 0) },
-        .{ .name = "readline", .value = try makeNative(.io_readline, 0) },
+        .{ .name = "println", .value = try makeNative(ctx, .io_println, 255) },
+        .{ .name = "printf", .value = try makeNative(ctx, .io_printf, 255) },
+        .{ .name = "print", .value = try makeNative(ctx, .io_print, 255) },
+        .{ .name = "eprint", .value = try makeNative(ctx, .io_eprint, 255) },
+        .{ .name = "eprintf", .value = try makeNative(ctx, .io_eprintf, 255) },
+        .{ .name = "eprintln", .value = try makeNative(ctx, .io_eprintln, 255) },
+        .{ .name = "read", .value = try makeNative(ctx, .io_read, 0) },
+        .{ .name = "readline", .value = try makeNative(ctx, .io_readline, 0) },
     };
     const io_obj = try makeNamespace(ctx,"io", "@module_type:std.io", &io_entries);
     try ctx.vs.pushTempRoot(.{ .object = io_obj });
     defer ctx.vs.popTempRoot();
 
     const core_entries = [_]NamespaceEntry{
-        .{ .name = "len", .value = try makeNative(.core_len, 1) },
-        .{ .name = "append", .value = try makeNative(.core_append, 255) },
-        .{ .name = "error", .value = try makeNative(.core_error, 1) },
-        .{ .name = "is_error", .value = try makeNative(.core_is_error, 1) },
-        .{ .name = "type_of", .value = try makeNative(.core_type_of, 1) },
-        .{ .name = "is_int", .value = try makeNative(.core_is_int, 1) },
-        .{ .name = "is_float", .value = try makeNative(.core_is_float, 1) },
-        .{ .name = "is_string", .value = try makeNative(.core_is_string, 1) },
-        .{ .name = "is_array", .value = try makeNative(.core_is_array, 1) },
-        .{ .name = "is_map", .value = try makeNative(.core_is_map, 1) },
-        .{ .name = "is_struct", .value = try makeNative(.core_is_struct, 1) },
-        .{ .name = "is_null", .value = try makeNative(.core_is_null, 1) },
-        .{ .name = "deep_equal", .value = try makeNative(.core_deep_equal, 2) },
-        .{ .name = "clone", .value = try makeNative(.core_clone, 1) },
-        .{ .name = "gc", .value = try makeNative(.core_gc, 0) },
-        .{ .name = "gc_live_objects", .value = try makeNative(.core_gc_live_objects, 0) },
-        .{ .name = "gc_stats", .value = try makeNative(.core_gc_stats, 0) },
-        .{ .name = "bytelen", .value = try makeNative(.core_bytelen, 1) },
-        .{ .name = "gc_stats_ext", .value = try makeNative(.core_gc_stats_ext, 0) },
-        .{ .name = "delete", .value = try makeNative(.core_delete, 2) },
-        .{ .name = "has", .value = try makeNative(.core_has, 2) },
-        .{ .name = "keys", .value = try makeNative(.core_keys, 1) },
-        .{ .name = "values", .value = try makeNative(.core_values, 1) },
-        .{ .name = "contains", .value = try makeNative(.core_contains, 2) },
-        .{ .name = "remove", .value = try makeNative(.core_remove, 2) },
-        .{ .name = "recover", .value = try makeNative(.core_recover, 0) },
+        .{ .name = "len", .value = try makeNative(ctx, .core_len, 1) },
+        .{ .name = "append", .value = try makeNative(ctx, .core_append, 255) },
+        .{ .name = "error", .value = try makeNative(ctx, .core_error, 1) },
+        .{ .name = "is_error", .value = try makeNative(ctx, .core_is_error, 1) },
+        .{ .name = "type_of", .value = try makeNative(ctx, .core_type_of, 1) },
+        .{ .name = "is_int", .value = try makeNative(ctx, .core_is_int, 1) },
+        .{ .name = "is_float", .value = try makeNative(ctx, .core_is_float, 1) },
+        .{ .name = "is_string", .value = try makeNative(ctx, .core_is_string, 1) },
+        .{ .name = "is_array", .value = try makeNative(ctx, .core_is_array, 1) },
+        .{ .name = "is_map", .value = try makeNative(ctx, .core_is_map, 1) },
+        .{ .name = "is_struct", .value = try makeNative(ctx, .core_is_struct, 1) },
+        .{ .name = "is_null", .value = try makeNative(ctx, .core_is_null, 1) },
+        .{ .name = "deep_equal", .value = try makeNative(ctx, .core_deep_equal, 2) },
+        .{ .name = "clone", .value = try makeNative(ctx, .core_clone, 1) },
+        .{ .name = "gc", .value = try makeNative(ctx, .core_gc, 0) },
+        .{ .name = "gc_live_objects", .value = try makeNative(ctx, .core_gc_live_objects, 0) },
+        .{ .name = "gc_stats", .value = try makeNative(ctx, .core_gc_stats, 0) },
+        .{ .name = "bytelen", .value = try makeNative(ctx, .core_bytelen, 1) },
+        .{ .name = "gc_stats_ext", .value = try makeNative(ctx, .core_gc_stats_ext, 0) },
+        .{ .name = "delete", .value = try makeNative(ctx, .core_delete, 2) },
+        .{ .name = "has", .value = try makeNative(ctx, .core_has, 2) },
+        .{ .name = "keys", .value = try makeNative(ctx, .core_keys, 1) },
+        .{ .name = "values", .value = try makeNative(ctx, .core_values, 1) },
+        .{ .name = "contains", .value = try makeNative(ctx, .core_contains, 2) },
+        .{ .name = "remove", .value = try makeNative(ctx, .core_remove, 2) },
+        .{ .name = "recover", .value = try makeNative(ctx, .core_recover, 0) },
     };
     const core_obj = try makeNamespace(ctx,"core", "@module_type:std.core", &core_entries);
     try ctx.vs.pushTempRoot(.{ .object = core_obj });
     defer ctx.vs.popTempRoot();
 
     const conv_entries = [_]NamespaceEntry{
-        .{ .name = "to_int", .value = try makeNative(.conv_to_int, 1) },
-        .{ .name = "to_float", .value = try makeNative(.conv_to_float, 1) },
-        .{ .name = "to_bool", .value = try makeNative(.conv_to_bool, 1) },
-        .{ .name = "to_string", .value = try makeNative(.conv_to_string, 1) },
+        .{ .name = "to_int", .value = try makeNative(ctx, .conv_to_int, 1) },
+        .{ .name = "to_float", .value = try makeNative(ctx, .conv_to_float, 1) },
+        .{ .name = "to_bool", .value = try makeNative(ctx, .conv_to_bool, 1) },
+        .{ .name = "to_string", .value = try makeNative(ctx, .conv_to_string, 1) },
     };
     const conv_obj = try makeNamespace(ctx,"conv", "@module_type:std.conv", &conv_entries);
     try ctx.vs.pushTempRoot(.{ .object = conv_obj });
     defer ctx.vs.popTempRoot();
 
     const math_entries = [_]NamespaceEntry{
-        .{ .name = "abs", .value = try makeNative(.math_abs, 1) },
-        .{ .name = "sqrt", .value = try makeNative(.math_sqrt, 1) },
-        .{ .name = "floor", .value = try makeNative(.math_floor, 1) },
-        .{ .name = "ceil", .value = try makeNative(.math_ceil, 1) },
-        .{ .name = "round", .value = try makeNative(.math_round, 1) },
-        .{ .name = "sin", .value = try makeNative(.math_sin, 1) },
-        .{ .name = "cos", .value = try makeNative(.math_cos, 1) },
-        .{ .name = "tan", .value = try makeNative(.math_tan, 1) },
-        .{ .name = "log", .value = try makeNative(.math_log, 1) },
-        .{ .name = "log2", .value = try makeNative(.math_log2, 1) },
-        .{ .name = "log10", .value = try makeNative(.math_log10, 1) },
-        .{ .name = "pow", .value = try makeNative(.math_pow, 2) },
-        .{ .name = "min", .value = try makeNative(.math_min, 2) },
-        .{ .name = "max", .value = try makeNative(.math_max, 2) },
-        .{ .name = "acos", .value = try makeNative(.math_acos, 1) },
-        .{ .name = "asin", .value = try makeNative(.math_asin, 1) },
-        .{ .name = "atan", .value = try makeNative(.math_atan, 1) },
-        .{ .name = "atan2", .value = try makeNative(.math_atan2, 2) },
-        .{ .name = "cosh", .value = try makeNative(.math_cosh, 1) },
-        .{ .name = "sinh", .value = try makeNative(.math_sinh, 1) },
-        .{ .name = "tanh", .value = try makeNative(.math_tanh, 1) },
-        .{ .name = "exp", .value = try makeNative(.math_exp, 1) },
-        .{ .name = "exp2", .value = try makeNative(.math_exp2, 1) },
-        .{ .name = "trunc", .value = try makeNative(.math_trunc, 1) },
-        .{ .name = "cbrt", .value = try makeNative(.math_cbrt, 1) },
-        .{ .name = "hypot", .value = try makeNative(.math_hypot, 2) },
-        .{ .name = "mod", .value = try makeNative(.math_mod, 2) },
-        .{ .name = "nan", .value = try makeNative(.math_nan, 0) },
-        .{ .name = "is_nan", .value = try makeNative(.math_is_nan, 1) },
-        .{ .name = "is_inf", .value = try makeNative(.math_is_inf, 2) },
+        .{ .name = "abs", .value = try makeNative(ctx, .math_abs, 1) },
+        .{ .name = "sqrt", .value = try makeNative(ctx, .math_sqrt, 1) },
+        .{ .name = "floor", .value = try makeNative(ctx, .math_floor, 1) },
+        .{ .name = "ceil", .value = try makeNative(ctx, .math_ceil, 1) },
+        .{ .name = "round", .value = try makeNative(ctx, .math_round, 1) },
+        .{ .name = "sin", .value = try makeNative(ctx, .math_sin, 1) },
+        .{ .name = "cos", .value = try makeNative(ctx, .math_cos, 1) },
+        .{ .name = "tan", .value = try makeNative(ctx, .math_tan, 1) },
+        .{ .name = "log", .value = try makeNative(ctx, .math_log, 1) },
+        .{ .name = "log2", .value = try makeNative(ctx, .math_log2, 1) },
+        .{ .name = "log10", .value = try makeNative(ctx, .math_log10, 1) },
+        .{ .name = "pow", .value = try makeNative(ctx, .math_pow, 2) },
+        .{ .name = "min", .value = try makeNative(ctx, .math_min, 2) },
+        .{ .name = "max", .value = try makeNative(ctx, .math_max, 2) },
+        .{ .name = "acos", .value = try makeNative(ctx, .math_acos, 1) },
+        .{ .name = "asin", .value = try makeNative(ctx, .math_asin, 1) },
+        .{ .name = "atan", .value = try makeNative(ctx, .math_atan, 1) },
+        .{ .name = "atan2", .value = try makeNative(ctx, .math_atan2, 2) },
+        .{ .name = "cosh", .value = try makeNative(ctx, .math_cosh, 1) },
+        .{ .name = "sinh", .value = try makeNative(ctx, .math_sinh, 1) },
+        .{ .name = "tanh", .value = try makeNative(ctx, .math_tanh, 1) },
+        .{ .name = "exp", .value = try makeNative(ctx, .math_exp, 1) },
+        .{ .name = "exp2", .value = try makeNative(ctx, .math_exp2, 1) },
+        .{ .name = "trunc", .value = try makeNative(ctx, .math_trunc, 1) },
+        .{ .name = "cbrt", .value = try makeNative(ctx, .math_cbrt, 1) },
+        .{ .name = "hypot", .value = try makeNative(ctx, .math_hypot, 2) },
+        .{ .name = "mod", .value = try makeNative(ctx, .math_mod, 2) },
+        .{ .name = "nan", .value = try makeNative(ctx, .math_nan, 0) },
+        .{ .name = "is_nan", .value = try makeNative(ctx, .math_is_nan, 1) },
+        .{ .name = "is_inf", .value = try makeNative(ctx, .math_is_inf, 2) },
         .{ .name = "pi", .value = .{ .float = std.math.pi } },
         .{ .name = "e", .value = .{ .float = std.math.e } },
         .{ .name = "phi", .value = .{ .float = 1.618033988749895 } },
-        .{ .name = "clamp", .value = try makeNative(.math_clamp, 3) },
-        .{ .name = "sign", .value = try makeNative(.math_sign, 1) },
+        .{ .name = "clamp", .value = try makeNative(ctx, .math_clamp, 3) },
+        .{ .name = "sign", .value = try makeNative(ctx, .math_sign, 1) },
         .{ .name = "inf", .value = .{ .float = std.math.inf(f64) } },
     };
     const math_obj = try makeNamespace(ctx,"math", "@module_type:std.math", &math_entries);
@@ -211,44 +205,44 @@ pub fn buildStdModule(ctx: vms.VMContext) !*Object {
     defer ctx.vs.popTempRoot();
 
     const rand_entries = [_]NamespaceEntry{
-        .{ .name = "float", .value = try makeNative(.rand_float, 0) },
-        .{ .name = "intn", .value = try makeNative(.rand_intn, 1) },
-        .{ .name = "between", .value = try makeNative(.rand_between, 2) },
-        .{ .name = "seed", .value = try makeNative(.rand_seed, 1) },
-        .{ .name = "choice", .value = try makeNative(.rand_choice, 1) },
-        .{ .name = "perm", .value = try makeNative(.rand_perm, 1) },
-        .{ .name = "norm_float", .value = try makeNative(.rand_norm_float, 0) },
+        .{ .name = "float", .value = try makeNative(ctx, .rand_float, 0) },
+        .{ .name = "intn", .value = try makeNative(ctx, .rand_intn, 1) },
+        .{ .name = "between", .value = try makeNative(ctx, .rand_between, 2) },
+        .{ .name = "seed", .value = try makeNative(ctx, .rand_seed, 1) },
+        .{ .name = "choice", .value = try makeNative(ctx, .rand_choice, 1) },
+        .{ .name = "perm", .value = try makeNative(ctx, .rand_perm, 1) },
+        .{ .name = "norm_float", .value = try makeNative(ctx, .rand_norm_float, 0) },
     };
     const rand_obj = try makeNamespace(ctx,"rand", "@module_type:std.rand", &rand_entries);
     try ctx.vs.pushTempRoot(.{ .object = rand_obj });
     defer ctx.vs.popTempRoot();
 
     const string_entries = [_]NamespaceEntry{
-        .{ .name = "split", .value = try makeNative(.str_split, 2) },
-        .{ .name = "join", .value = try makeNative(.str_join, 2) },
-        .{ .name = "trim", .value = try makeNative(.str_trim, 1) },
-        .{ .name = "upper", .value = try makeNative(.str_upper, 1) },
-        .{ .name = "lower", .value = try makeNative(.str_lower, 1) },
-        .{ .name = "contains", .value = try makeNative(.str_contains, 2) },
-        .{ .name = "starts_with", .value = try makeNative(.str_starts_with, 2) },
-        .{ .name = "ends_with", .value = try makeNative(.str_ends_with, 2) },
-        .{ .name = "index_of", .value = try makeNative(.str_index_of, 2) },
-        .{ .name = "replace", .value = try makeNative(.str_replace, 3) },
-        .{ .name = "last_index_of", .value = try makeNative(.str_last_index_of, 2) },
-        .{ .name = "repeat", .value = try makeNative(.str_repeat, 2) },
-        .{ .name = "split_once", .value = try makeNative(.str_split_once, 2) },
-        .{ .name = "builder", .value = try makeNative(.str_builder_new, 0) },
-        .{ .name = "count", .value = try makeNative(.str_count, 2) },
-        .{ .name = "fields", .value = try makeNative(.str_fields, 1) },
-        .{ .name = "pad_left", .value = try makeNative(.str_pad_left, 3) },
-        .{ .name = "pad_right", .value = try makeNative(.str_pad_right, 3) },
-        .{ .name = "equal_fold", .value = try makeNative(.str_equal_fold, 2) },
-        .{ .name = "contains_any", .value = try makeNative(.str_contains_any, 2) },
-        .{ .name = "trim_left", .value = try makeNative(.str_trim_left, 2) },
-        .{ .name = "trim_right", .value = try makeNative(.str_trim_right, 2) },
-        .{ .name = "trim_prefix", .value = try makeNative(.str_trim_prefix, 2) },
-        .{ .name = "trim_suffix", .value = try makeNative(.str_trim_suffix, 2) },
-        .{ .name = "split_n", .value = try makeNative(.str_split_n, 3) },
+        .{ .name = "split", .value = try makeNative(ctx, .str_split, 2) },
+        .{ .name = "join", .value = try makeNative(ctx, .str_join, 2) },
+        .{ .name = "trim", .value = try makeNative(ctx, .str_trim, 1) },
+        .{ .name = "upper", .value = try makeNative(ctx, .str_upper, 1) },
+        .{ .name = "lower", .value = try makeNative(ctx, .str_lower, 1) },
+        .{ .name = "contains", .value = try makeNative(ctx, .str_contains, 2) },
+        .{ .name = "starts_with", .value = try makeNative(ctx, .str_starts_with, 2) },
+        .{ .name = "ends_with", .value = try makeNative(ctx, .str_ends_with, 2) },
+        .{ .name = "index_of", .value = try makeNative(ctx, .str_index_of, 2) },
+        .{ .name = "replace", .value = try makeNative(ctx, .str_replace, 3) },
+        .{ .name = "last_index_of", .value = try makeNative(ctx, .str_last_index_of, 2) },
+        .{ .name = "repeat", .value = try makeNative(ctx, .str_repeat, 2) },
+        .{ .name = "split_once", .value = try makeNative(ctx, .str_split_once, 2) },
+        .{ .name = "builder", .value = try makeNative(ctx, .str_builder_new, 0) },
+        .{ .name = "count", .value = try makeNative(ctx, .str_count, 2) },
+        .{ .name = "fields", .value = try makeNative(ctx, .str_fields, 1) },
+        .{ .name = "pad_left", .value = try makeNative(ctx, .str_pad_left, 3) },
+        .{ .name = "pad_right", .value = try makeNative(ctx, .str_pad_right, 3) },
+        .{ .name = "equal_fold", .value = try makeNative(ctx, .str_equal_fold, 2) },
+        .{ .name = "contains_any", .value = try makeNative(ctx, .str_contains_any, 2) },
+        .{ .name = "trim_left", .value = try makeNative(ctx, .str_trim_left, 2) },
+        .{ .name = "trim_right", .value = try makeNative(ctx, .str_trim_right, 2) },
+        .{ .name = "trim_prefix", .value = try makeNative(ctx, .str_trim_prefix, 2) },
+        .{ .name = "trim_suffix", .value = try makeNative(ctx, .str_trim_suffix, 2) },
+        .{ .name = "split_n", .value = try makeNative(ctx, .str_split_n, 3) },
     };
     const string_obj = try makeNamespace(ctx,"string", "@module_type:std.string", &string_entries);
     try ctx.vs.pushTempRoot(.{ .object = string_obj });
@@ -263,11 +257,11 @@ pub fn buildStdModule(ctx: vms.VMContext) !*Object {
     defer ctx.vs.popTempRoot();
 
     const json_entries = [_]NamespaceEntry{
-        .{ .name = "parse", .value = try makeNative(.json_parse, 1) },
-        .{ .name = "parse_value", .value = try makeNative(.json_parse_value, 1) },
-        .{ .name = "stringify", .value = try makeNative(.json_stringify, 1) },
-        .{ .name = "valid", .value = try makeNative(.json_valid, 1) },
-        .{ .name = "indent", .value = try makeNative(.json_indent, 2) },
+        .{ .name = "parse", .value = try makeNative(ctx, .json_parse, 1) },
+        .{ .name = "parse_value", .value = try makeNative(ctx, .json_parse_value, 1) },
+        .{ .name = "stringify", .value = try makeNative(ctx, .json_stringify, 1) },
+        .{ .name = "valid", .value = try makeNative(ctx, .json_valid, 1) },
+        .{ .name = "indent", .value = try makeNative(ctx, .json_indent, 2) },
         .{ .name = "Value", .value = .{ .object = jv_type_obj } },
     };
     const json_obj = try makeNamespace(ctx,"json", "@module_type:std.json", &json_entries);
@@ -275,11 +269,11 @@ pub fn buildStdModule(ctx: vms.VMContext) !*Object {
     defer ctx.vs.popTempRoot();
 
     const template_entries = [_]NamespaceEntry{
-        .{ .name = "parse", .value = try makeNative(.template_parse, 1) },
-        .{ .name = "execute", .value = try makeNative(.template_execute, 2) },
-        .{ .name = "add_func", .value = try makeNative(.template_add_func, 3) },
-        .{ .name = "render", .value = try makeNative(.template_render, 2) },
-        .{ .name = "valid", .value = try makeNative(.template_valid, 1) },
+        .{ .name = "parse", .value = try makeNative(ctx, .template_parse, 1) },
+        .{ .name = "execute", .value = try makeNative(ctx, .template_execute, 2) },
+        .{ .name = "add_func", .value = try makeNative(ctx, .template_add_func, 3) },
+        .{ .name = "render", .value = try makeNative(ctx, .template_render, 2) },
+        .{ .name = "valid", .value = try makeNative(ctx, .template_valid, 1) },
     };
     const template_obj = try makeNamespace(ctx,"template", "@module_type:std.template", &template_entries);
     try ctx.vs.pushTempRoot(.{ .object = template_obj });
@@ -290,13 +284,13 @@ pub fn buildStdModule(ctx: vms.VMContext) !*Object {
     defer ctx.vs.popTempRoot();
 
     const time_entries = [_]NamespaceEntry{
-        .{ .name = "now", .value = try makeNative(.time_now, 0) },
-        .{ .name = "from_unix", .value = try makeNative(.time_from_unix, 1) },
-        .{ .name = "from_unix_ms", .value = try makeNative(.time_from_unix_ms, 1) },
-        .{ .name = "parse", .value = try makeNative(.time_parse, 2) },
-        .{ .name = "since", .value = try makeNative(.time_since, 1) },
-        .{ .name = "until", .value = try makeNative(.time_until, 1) },
-        .{ .name = "parse_duration", .value = try makeNative(.time_parse_duration, 1) },
+        .{ .name = "now", .value = try makeNative(ctx, .time_now, 0) },
+        .{ .name = "from_unix", .value = try makeNative(ctx, .time_from_unix, 1) },
+        .{ .name = "from_unix_ms", .value = try makeNative(ctx, .time_from_unix_ms, 1) },
+        .{ .name = "parse", .value = try makeNative(ctx, .time_parse, 2) },
+        .{ .name = "since", .value = try makeNative(ctx, .time_since, 1) },
+        .{ .name = "until", .value = try makeNative(ctx, .time_until, 1) },
+        .{ .name = "parse_duration", .value = try makeNative(ctx, .time_parse_duration, 1) },
         .{ .name = "ms", .value = .{ .int = 1 } },
         .{ .name = "second", .value = .{ .int = 1000 } },
         .{ .name = "minute", .value = .{ .int = 60_000 } },
@@ -309,18 +303,18 @@ pub fn buildStdModule(ctx: vms.VMContext) !*Object {
     defer ctx.vs.popTempRoot();
 
     const hex_entries = [_]NamespaceEntry{
-        .{ .name = "encode", .value = try makeNative(.hex_encode, 1) },
-        .{ .name = "decode", .value = try makeNative(.hex_decode, 1) },
+        .{ .name = "encode", .value = try makeNative(ctx, .hex_encode, 1) },
+        .{ .name = "decode", .value = try makeNative(ctx, .hex_decode, 1) },
     };
     const hex_obj = try makeNamespace(ctx,"hex", "@module_type:std.hex", &hex_entries);
     try ctx.vs.pushTempRoot(.{ .object = hex_obj });
     defer ctx.vs.popTempRoot();
 
     const base64_entries = [_]NamespaceEntry{
-        .{ .name = "encode", .value = try makeNative(.base64_encode, 1) },
-        .{ .name = "decode", .value = try makeNative(.base64_decode, 1) },
-        .{ .name = "url_encode", .value = try makeNative(.base64_url_encode, 1) },
-        .{ .name = "url_decode", .value = try makeNative(.base64_url_decode, 1) },
+        .{ .name = "encode", .value = try makeNative(ctx, .base64_encode, 1) },
+        .{ .name = "decode", .value = try makeNative(ctx, .base64_decode, 1) },
+        .{ .name = "url_encode", .value = try makeNative(ctx, .base64_url_encode, 1) },
+        .{ .name = "url_decode", .value = try makeNative(ctx, .base64_url_decode, 1) },
     };
     const base64_obj = try makeNamespace(ctx,"base64", "@module_type:std.base64", &base64_entries);
     try ctx.vs.pushTempRoot(.{ .object = base64_obj });
@@ -331,12 +325,12 @@ pub fn buildStdModule(ctx: vms.VMContext) !*Object {
     defer ctx.vs.popTempRoot();
 
     const regexp_entries = [_]NamespaceEntry{
-        .{ .name = "match", .value = try makeNative(.re_match, 2) },
-        .{ .name = "find", .value = try makeNative(.re_find, 2) },
-        .{ .name = "find_all", .value = try makeNative(.re_find_all, 2) },
-        .{ .name = "replace", .value = try makeNative(.re_replace, 3) },
-        .{ .name = "split", .value = try makeNative(.re_split, 2) },
-        .{ .name = "compile", .value = try makeNative(.re_compile, 1) },
+        .{ .name = "match", .value = try makeNative(ctx, .re_match, 2) },
+        .{ .name = "find", .value = try makeNative(ctx, .re_find, 2) },
+        .{ .name = "find_all", .value = try makeNative(ctx, .re_find_all, 2) },
+        .{ .name = "replace", .value = try makeNative(ctx, .re_replace, 3) },
+        .{ .name = "split", .value = try makeNative(ctx, .re_split, 2) },
+        .{ .name = "compile", .value = try makeNative(ctx, .re_compile, 1) },
         .{ .name = "__type", .value = .{ .object = regexp_type_obj } },
     };
     const regexp_obj = try makeNamespace(ctx,"regexp", "@module_type:std.regexp", &regexp_entries);
@@ -344,26 +338,26 @@ pub fn buildStdModule(ctx: vms.VMContext) !*Object {
     defer ctx.vs.popTempRoot();
 
     const sort_entries = [_]NamespaceEntry{
-        .{ .name = "asc", .value = try makeNative(.sort_asc, 1) },
-        .{ .name = "desc", .value = try makeNative(.sort_desc, 1) },
-        .{ .name = "by", .value = try makeNative(.sort_by, 2) },
+        .{ .name = "asc", .value = try makeNative(ctx, .sort_asc, 1) },
+        .{ .name = "desc", .value = try makeNative(ctx, .sort_desc, 1) },
+        .{ .name = "by", .value = try makeNative(ctx, .sort_by, 2) },
     };
     const sort_obj = try makeNamespace(ctx,"sort", "@module_type:std.sort", &sort_entries);
     try ctx.vs.pushTempRoot(.{ .object = sort_obj });
     defer ctx.vs.popTempRoot();
 
     const array_entries = [_]NamespaceEntry{
-        .{ .name = "filter", .value = try makeNative(.array_filter, 2) },
-        .{ .name = "map", .value = try makeNative(.array_map, 2) },
-        .{ .name = "reduce", .value = try makeNative(.array_reduce, 3) },
-        .{ .name = "slice", .value = try makeNative(.array_slice, 3) },
-        .{ .name = "zip", .value = try makeNative(.array_zip, 2) },
-        .{ .name = "flat", .value = try makeNative(.array_flat, 1) },
-        .{ .name = "find", .value = try makeNative(.array_find, 2) },
-        .{ .name = "find_index", .value = try makeNative(.array_find_index, 2) },
-        .{ .name = "all", .value = try makeNative(.array_all, 2) },
-        .{ .name = "any", .value = try makeNative(.array_any, 2) },
-        .{ .name = "chunk", .value = try makeNative(.array_chunk, 2) },
+        .{ .name = "filter", .value = try makeNative(ctx, .array_filter, 2) },
+        .{ .name = "map", .value = try makeNative(ctx, .array_map, 2) },
+        .{ .name = "reduce", .value = try makeNative(ctx, .array_reduce, 3) },
+        .{ .name = "slice", .value = try makeNative(ctx, .array_slice, 3) },
+        .{ .name = "zip", .value = try makeNative(ctx, .array_zip, 2) },
+        .{ .name = "flat", .value = try makeNative(ctx, .array_flat, 1) },
+        .{ .name = "find", .value = try makeNative(ctx, .array_find, 2) },
+        .{ .name = "find_index", .value = try makeNative(ctx, .array_find_index, 2) },
+        .{ .name = "all", .value = try makeNative(ctx, .array_all, 2) },
+        .{ .name = "any", .value = try makeNative(ctx, .array_any, 2) },
+        .{ .name = "chunk", .value = try makeNative(ctx, .array_chunk, 2) },
     };
     const array_obj = try makeNamespace(ctx,"array", "@module_type:std.array", &array_entries);
     try ctx.vs.pushTempRoot(.{ .object = array_obj });
@@ -371,43 +365,43 @@ pub fn buildStdModule(ctx: vms.VMContext) !*Object {
 
     const bytes_entries = [_]NamespaceEntry{
         // Construction
-        .{ .name = "u8", .value = try makeNative(.bytes_u8, 1) },
-        .{ .name = "pack", .value = try makeNative(.bytes_pack, 1) },
-        .{ .name = "repeat", .value = try makeNative(.bytes_repeat, 2) },
+        .{ .name = "u8", .value = try makeNative(ctx, .bytes_u8, 1) },
+        .{ .name = "pack", .value = try makeNative(ctx, .bytes_pack, 1) },
+        .{ .name = "repeat", .value = try makeNative(ctx, .bytes_repeat, 2) },
         // Decomposition
-        .{ .name = "unpack", .value = try makeNative(.bytes_unpack, 1) },
-        .{ .name = "at", .value = try makeNative(.bytes_at, 2) },
-        .{ .name = "slice", .value = try makeNative(.bytes_slice, 3) },
-        .{ .name = "len", .value = try makeNative(.bytes_len, 1) },
+        .{ .name = "unpack", .value = try makeNative(ctx, .bytes_unpack, 1) },
+        .{ .name = "at", .value = try makeNative(ctx, .bytes_at, 2) },
+        .{ .name = "slice", .value = try makeNative(ctx, .bytes_slice, 3) },
+        .{ .name = "len", .value = try makeNative(ctx, .bytes_len, 1) },
         // Integer encoding
-        .{ .name = "u16be", .value = try makeNative(.bytes_u16be, 1) },
-        .{ .name = "u32be", .value = try makeNative(.bytes_u32be, 1) },
-        .{ .name = "u64be", .value = try makeNative(.bytes_u64be, 1) },
-        .{ .name = "u16le", .value = try makeNative(.bytes_u16le, 1) },
-        .{ .name = "u32le", .value = try makeNative(.bytes_u32le, 1) },
-        .{ .name = "u64le", .value = try makeNative(.bytes_u64le, 1) },
+        .{ .name = "u16be", .value = try makeNative(ctx, .bytes_u16be, 1) },
+        .{ .name = "u32be", .value = try makeNative(ctx, .bytes_u32be, 1) },
+        .{ .name = "u64be", .value = try makeNative(ctx, .bytes_u64be, 1) },
+        .{ .name = "u16le", .value = try makeNative(ctx, .bytes_u16le, 1) },
+        .{ .name = "u32le", .value = try makeNative(ctx, .bytes_u32le, 1) },
+        .{ .name = "u64le", .value = try makeNative(ctx, .bytes_u64le, 1) },
         // Integer decoding
-        .{ .name = "u16be_at", .value = try makeNative(.bytes_u16be_at, 2) },
-        .{ .name = "u32be_at", .value = try makeNative(.bytes_u32be_at, 2) },
-        .{ .name = "u64be_at", .value = try makeNative(.bytes_u64be_at, 2) },
-        .{ .name = "u16le_at", .value = try makeNative(.bytes_u16le_at, 2) },
-        .{ .name = "u32le_at", .value = try makeNative(.bytes_u32le_at, 2) },
-        .{ .name = "u64le_at", .value = try makeNative(.bytes_u64le_at, 2) },
+        .{ .name = "u16be_at", .value = try makeNative(ctx, .bytes_u16be_at, 2) },
+        .{ .name = "u32be_at", .value = try makeNative(ctx, .bytes_u32be_at, 2) },
+        .{ .name = "u64be_at", .value = try makeNative(ctx, .bytes_u64be_at, 2) },
+        .{ .name = "u16le_at", .value = try makeNative(ctx, .bytes_u16le_at, 2) },
+        .{ .name = "u32le_at", .value = try makeNative(ctx, .bytes_u32le_at, 2) },
+        .{ .name = "u64le_at", .value = try makeNative(ctx, .bytes_u64le_at, 2) },
         // Byte-level search
-        .{ .name = "index_of", .value = try makeNative(.bytes_index_of, 2) },
-        .{ .name = "contains", .value = try makeNative(.bytes_contains, 2) },
-        .{ .name = "starts_with", .value = try makeNative(.bytes_starts_with, 2) },
-        .{ .name = "ends_with", .value = try makeNative(.bytes_ends_with, 2) },
-        .{ .name = "count", .value = try makeNative(.bytes_count, 2) },
-        .{ .name = "replace", .value = try makeNative(.bytes_replace, 3) },
-        .{ .name = "f32be", .value = try makeNative(.bytes_f32be, 1) },
-        .{ .name = "f32le", .value = try makeNative(.bytes_f32le, 1) },
-        .{ .name = "f64be", .value = try makeNative(.bytes_f64be, 1) },
-        .{ .name = "f64le", .value = try makeNative(.bytes_f64le, 1) },
-        .{ .name = "f32be_at", .value = try makeNative(.bytes_f32be_at, 2) },
-        .{ .name = "f32le_at", .value = try makeNative(.bytes_f32le_at, 2) },
-        .{ .name = "f64be_at", .value = try makeNative(.bytes_f64be_at, 2) },
-        .{ .name = "f64le_at", .value = try makeNative(.bytes_f64le_at, 2) },
+        .{ .name = "index_of", .value = try makeNative(ctx, .bytes_index_of, 2) },
+        .{ .name = "contains", .value = try makeNative(ctx, .bytes_contains, 2) },
+        .{ .name = "starts_with", .value = try makeNative(ctx, .bytes_starts_with, 2) },
+        .{ .name = "ends_with", .value = try makeNative(ctx, .bytes_ends_with, 2) },
+        .{ .name = "count", .value = try makeNative(ctx, .bytes_count, 2) },
+        .{ .name = "replace", .value = try makeNative(ctx, .bytes_replace, 3) },
+        .{ .name = "f32be", .value = try makeNative(ctx, .bytes_f32be, 1) },
+        .{ .name = "f32le", .value = try makeNative(ctx, .bytes_f32le, 1) },
+        .{ .name = "f64be", .value = try makeNative(ctx, .bytes_f64be, 1) },
+        .{ .name = "f64le", .value = try makeNative(ctx, .bytes_f64le, 1) },
+        .{ .name = "f32be_at", .value = try makeNative(ctx, .bytes_f32be_at, 2) },
+        .{ .name = "f32le_at", .value = try makeNative(ctx, .bytes_f32le_at, 2) },
+        .{ .name = "f64be_at", .value = try makeNative(ctx, .bytes_f64be_at, 2) },
+        .{ .name = "f64le_at", .value = try makeNative(ctx, .bytes_f64le_at, 2) },
     };
     const bytes_obj = try makeNamespace(ctx,"bytes", "@module_type:std.bytes", &bytes_entries);
     try ctx.vs.pushTempRoot(.{ .object = bytes_obj });
@@ -481,13 +475,13 @@ pub fn installStdGlobal(ctx: vms.VMContext, gs: *globals.State) !void {
         const exec_buf = (ctx.hs.bump(u8, 64) orelse return error.OutOfMemory)[0..64];
         const exec_key = std.fmt.bufPrint(exec_buf, "{s}.{s}", .{ TemplateTypeQualifiedName, "execute" }) catch return error.OutOfMemory;
         if (!gs.has(exec_key)) {
-            const exec_native = try makeNative(.template_execute, 2);
+            const exec_native = try makeNative(ctx, .template_execute, 2);
             try gs.def(exec_key, exec_native);
         }
         const af_buf = (ctx.hs.bump(u8, 64) orelse return error.OutOfMemory)[0..64];
         const af_key = std.fmt.bufPrint(af_buf, "{s}.{s}", .{ TemplateTypeQualifiedName, "add_func" }) catch return error.OutOfMemory;
         if (!gs.has(af_key)) {
-            const af_native = try makeNative(.template_add_func, 3);
+            const af_native = try makeNative(ctx, .template_add_func, 3);
             try gs.def(af_key, af_native);
         }
     }
@@ -518,7 +512,7 @@ pub fn installStdGlobal(ctx: vms.VMContext, gs: *globals.State) !void {
             kbuf[TimeTypeQualifiedName.len] = '.';
             @memcpy(kbuf[TimeTypeQualifiedName.len + 1 .. needed], m.name);
             if (!gs.has(kbuf)) {
-                const n = try makeNative(m.id, m.arity);
+                const n = try makeNative(ctx, m.id, m.arity);
                 try gs.def(kbuf, n);
             }
         }
@@ -538,7 +532,7 @@ pub fn installStdGlobal(ctx: vms.VMContext, gs: *globals.State) !void {
             kbuf[RegexpTypeQualifiedName.len] = '.';
             @memcpy(kbuf[RegexpTypeQualifiedName.len + 1 .. needed], m.name);
             if (!gs.has(kbuf)) {
-                const n = try makeNative(m.id, m.arity);
+                const n = try makeNative(ctx, m.id, m.arity);
                 try gs.def(kbuf, n);
             }
         }
@@ -788,7 +782,7 @@ pub fn installCapabilityModules(ctx: vms.VMContext, gs: *globals.State, cap_modu
                     kbuf[conn_qual_name.len] = '.';
                     @memcpy(kbuf[conn_qual_name.len + 1 .. needed], m.name);
                     if (!gs.has(kbuf)) {
-                        const n = try makeNative(m.id, m.arity);
+                        const n = try makeNative(ctx, m.id, m.arity);
                         try gs.def(kbuf, n);
                     }
                 }
