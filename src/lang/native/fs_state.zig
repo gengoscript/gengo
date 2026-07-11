@@ -83,7 +83,7 @@ pub const EngineState = struct {
 };
 
 var g_default_state: EngineState = .{};
-var g_state: *EngineState = &g_default_state;
+threadlocal var g_state: *EngineState = &g_default_state;
 
 /// Point the module at a specific runtime's mount table. Called from
 /// Runtime.activate() alongside the chunk/globals/heap/vm setActive calls.
