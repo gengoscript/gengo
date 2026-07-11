@@ -73,6 +73,11 @@ fn validateAndEmitTypeName(c: anytype, name: Token) !void {
             c.setErr("'{s}' is an interface, not a concrete type — '.type' never equals an interface name", .{name.src});
             return error.UnexpectedToken;
         }
+        if (c.registry.getTypeAlias(name.src)) |alias| {
+            // Alias resolves to the target's short name (e.g. "Stack[int]").
+            try c.cs.emitStringConst(alias.target_key, name.line);
+            return;
+        }
         if (!(c.registry.hasNamedType(name.src) or c.registry.hasStructTypeLocal(name.src) or c.registry.hasVariantType(name.src) or c.registry.hasNamedErrorType(name.src))) {
             c.setErr("unknown type name '{s}'", .{name.src});
             return error.UnknownTypeName;
@@ -549,9 +554,17 @@ pub fn varExpr(c: anytype, name: Token) !void {
     if (c.check(.lbrace) and looksLikeStructLiteral(c, )) {
         const is_known_type = c.registry.hasStructTypeLocal(name.src) or
             c.registry.hasNamedType(name.src) or
-            c.registry.hasVariantType(name.src);
+            c.registry.hasVariantType(name.src) or
+            c.registry.hasTypeAlias(name.src);
         if (is_known_type) {
-            try structInstanceLit(c, name);
+            if (c.registry.getTypeAlias(name.src)) |alias| {
+                // Load the canonical type object (e.g. @mod:Stack[int]) not @mod:IntStack,
+                // so build_struct_instance gets the type with the correct field definitions.
+                try c.cs.emitGetGlobal(alias.target_qname, name.line);
+                try structInstanceLitAfterValue(c, name.line);
+            } else {
+                try structInstanceLit(c, name);
+            }
             return;
         }
         // Not a registered type. If there are actual fields it's a clear error.
@@ -569,7 +582,7 @@ pub fn varExpr(c: anytype, name: Token) !void {
     if ((c.check(.eq_eq) or c.check(.bang_eq)) and
         (isTypeNamePrimitive(name.src) or c.registry.hasNamedType(name.src) or
          c.registry.hasStructTypeLocal(name.src) or c.registry.hasVariantType(name.src) or
-         c.registry.hasInterfaceType(name.src)))
+         c.registry.hasInterfaceType(name.src) or c.registry.hasTypeAlias(name.src)))
     {
         try validateAndEmitTypeName(c, name);
         const is_eq = c.cur.typ == .eq_eq;

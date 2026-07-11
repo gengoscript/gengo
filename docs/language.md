@@ -955,6 +955,32 @@ arguments at the call site are validated for count but not yet checked
 against the actual argument types. Type inference (omitting `[T]` at
 call sites) is not yet supported.
 
+### Generic Type Aliases
+
+A named alias gives a concrete generic instantiation a shorter name:
+
+```gengo
+type IntStack Stack[int]
+type StringResult Result[string, error]
+```
+
+The alias is fully transparent: `IntStack` and `Stack[int]` refer to the
+same runtime type and may be used interchangeably as field types, function
+parameters, and struct literals.
+
+```gengo
+s := IntStack{ items: [1, 2, 3] }   // same as Stack[int]{ items: ... }
+
+func peek(s IntStack) int {
+    return s.items[0]
+}
+
+assert s.type == IntStack            // true — alias resolves to "Stack[int]"
+```
+
+Alias arguments must be concrete (no type parameters). Aliases of
+generic types cannot be defined inside a generic body.
+
 ## Capability Imports
 
 Capability imports are how a script asks for access to host resources. The

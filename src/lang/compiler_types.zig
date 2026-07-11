@@ -32,6 +32,7 @@ pub const MaxTypeParams = 8;
 pub const MaxGenericTypes = 64;
 pub const MaxGenericFuncs = 64;
 pub const MaxInstantiations = 256;
+pub const MaxTypeAliases = 128;
 
 pub const GenericParam = struct {
     name: []const u8,
@@ -53,6 +54,13 @@ pub const GenericFuncInfo = struct {
     params: [MaxTypeParams]GenericParam = undefined,
     param_count: u8 = 0,
     qname: []const u8 = "",
+};
+
+pub const TypeAliasInfo = struct {
+    name: []const u8,
+    target_qname: []const u8,
+    target_key: []const u8,
+    kind: GenericTypeKind,
 };
 
 pub const InstCacheEntry = struct {
@@ -238,6 +246,9 @@ pub const TypeRegistry = struct {
     // Instantiation cache: "Stack[int]" → concrete *Object, reset each compile.
     inst_cache: [MaxInstantiations]InstCacheEntry = undefined,
     inst_count: usize = 0,
+    // Named aliases of generic instantiations: type IntStack Stack[int]
+    type_aliases: [MaxTypeAliases]TypeAliasInfo = undefined,
+    type_alias_count: usize = 0,
 
     pub fn reset(self: *TypeRegistry) void {
         self.type_name_count = 0;
@@ -246,6 +257,7 @@ pub const TypeRegistry = struct {
         self.generic_count = 0;
         self.generic_func_count = 0;
         self.inst_count = 0;
+        self.type_alias_count = 0;
         @memset(self.type_buckets[0..], .{});
         @memset(self.func_buckets[0..], .{});
         @memset(self.variant_objs[0..], null);
@@ -436,7 +448,7 @@ pub const TypeRegistry = struct {
     }
 
     pub fn hasAnyTypeName(self: *const TypeRegistry, name: []const u8) bool {
-        return self.typeSlotFor(name) != null or self.hasGenericType(name);
+        return self.typeSlotFor(name) != null or self.hasGenericType(name) or self.hasTypeAlias(name);
     }
 
     pub fn addVariantType(self: *TypeRegistry, name: []const u8) !void {
@@ -513,9 +525,37 @@ pub const TypeRegistry = struct {
         return null;
     }
 
+    pub fn getCachedInstByQname(self: *const TypeRegistry, qname: []const u8) ?InstCacheEntry {
+        for (self.inst_cache[0..self.inst_count]) |e| {
+            if (common.streq(e.qname, qname)) return e;
+        }
+        return null;
+    }
+
     pub fn addInstCache(self: *TypeRegistry, entry: InstCacheEntry) !void {
         if (self.inst_count >= MaxInstantiations) return error.TooManyInstantiations;
         self.inst_cache[self.inst_count] = entry;
         self.inst_count += 1;
+    }
+
+    pub fn hasTypeAlias(self: *const TypeRegistry, name: []const u8) bool {
+        for (self.type_aliases[0..self.type_alias_count]) |*a| {
+            if (common.streq(a.name, name)) return true;
+        }
+        return false;
+    }
+
+    pub fn getTypeAlias(self: *const TypeRegistry, name: []const u8) ?TypeAliasInfo {
+        for (self.type_aliases[0..self.type_alias_count]) |a| {
+            if (common.streq(a.name, name)) return a;
+        }
+        return null;
+    }
+
+    pub fn addTypeAlias(self: *TypeRegistry, info: TypeAliasInfo) !void {
+        if (self.hasTypeAlias(info.name)) return error.DuplicateTypeName;
+        if (self.type_alias_count >= MaxTypeAliases) return error.TooManyTypes;
+        self.type_aliases[self.type_alias_count] = info;
+        self.type_alias_count += 1;
     }
 };
