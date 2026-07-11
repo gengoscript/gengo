@@ -8,6 +8,12 @@ const std = @import("std");
 //
 // A mount can be backed by a real directory (MountKind.real_path) or by a
 // host-provided virtual driver (MountKind.driver) — see issue #183.
+//
+// The mount table follows the same active-pointer pattern as the other
+// runtime states (#190): each Runtime owns an EngineState and Runtime.activate()
+// points the module-level active pointer at it. Mount strings are stored as
+// offsets into the state's own str_buf, so an EngineState is plain data and
+// safe to copy by value.
 
 pub const FsDriver = extern struct {
     open:   ?*const fn (?*anyopaque, [*]const u8, i32, i32, *i32) callconv(.c) i32 = null,
@@ -22,6 +28,9 @@ pub const FsDriver = extern struct {
 
 pub const MountKind = enum { real_path, driver };
 
+/// Public mount description: input to addMount/setMounts, output of lookup().
+/// The name/real slices of a Mount returned by lookup() point into the active
+/// state's buffer and are valid for immediate use only.
 pub const Mount = struct {
     name: []const u8,
     kind: MountKind = .real_path,
@@ -33,16 +42,64 @@ pub const Mount = struct {
 const MaxMounts = 16;
 const StrBufSize = 4096;
 
-/// Per-engine mount table. Slices in `mounts` point into `str_buf` by offset;
-/// copy via `loadFromEngine`/`saveToEngine` to keep pointers valid.
+// Internal record: strings as (offset, len) into the owning state's str_buf,
+// so the state has no self-referencing pointers.
+const MountRec = struct {
+    name_off: u32 = 0,
+    name_len: u32 = 0,
+    kind: MountKind = .real_path,
+    real_off: u32 = 0,
+    real_len: u32 = 0,
+    driver: FsDriver = .{},
+    userdata: ?*anyopaque = null,
+};
+
+/// Per-runtime (or per-engine) mount table. Plain data — copyable by value.
 pub const EngineState = struct {
-    mounts: [MaxMounts]Mount = undefined,
+    mounts: [MaxMounts]MountRec = undefined,
     count: usize = 0,
     str_buf: [StrBufSize]u8 = undefined,
     str_used: usize = 0,
+
+    pub fn clear(self: *EngineState) void {
+        self.count = 0;
+        self.str_used = 0;
+    }
+
+    fn nameOf(self: *const EngineState, rec: *const MountRec) []const u8 {
+        return self.str_buf[rec.name_off..][0..rec.name_len];
+    }
+
+    pub fn mountAt(self: *const EngineState, i: usize) Mount {
+        const rec = &self.mounts[i];
+        return .{
+            .name = self.nameOf(rec),
+            .kind = rec.kind,
+            .real = self.str_buf[rec.real_off..][0..rec.real_len],
+            .driver = rec.driver,
+            .userdata = rec.userdata,
+        };
+    }
 };
 
-var g_state: EngineState = .{};
+var g_default_state: EngineState = .{};
+var g_state: *EngineState = &g_default_state;
+
+/// Point the module at a specific runtime's mount table. Called from
+/// Runtime.activate() alongside the chunk/globals/heap/vm setActive calls.
+pub fn setActive(state: *EngineState) void {
+    g_state = state;
+}
+
+pub fn activeState() *EngineState {
+    return g_state;
+}
+
+/// The process-default table: what the CLI's --mount flag populates before a
+/// Runtime exists, and what a fresh Runtime inherits at init.
+pub fn defaultState() *EngineState {
+    return &g_default_state;
+}
 
 pub const MountError = error{
     TooManyMounts,
@@ -52,41 +109,21 @@ pub const MountError = error{
 };
 
 pub fn clearMounts() void {
-    g_state.count = 0;
-    g_state.str_used = 0;
+    g_state.clear();
 }
 
 pub fn mountCount() usize {
     return g_state.count;
 }
 
-/// Copy an engine's mount state into the active global, fixing up slice
-/// pointers so they reference the global's str_buf rather than the engine's.
-pub fn loadFromEngine(src: *const EngineState) void {
-    g_state.count = src.count;
-    g_state.str_used = src.str_used;
-    if (src.str_used > 0)
-        @memcpy(g_state.str_buf[0..src.str_used], src.str_buf[0..src.str_used]);
-    const src_base = @intFromPtr(&src.str_buf);
-    for (0..src.count) |i| {
-        g_state.mounts[i] = src.mounts[i];
-        const name_off = @intFromPtr(src.mounts[i].name.ptr) - src_base;
-        g_state.mounts[i].name = g_state.str_buf[name_off..][0..src.mounts[i].name.len];
-        if (src.mounts[i].kind == .real_path and src.mounts[i].real.len > 0) {
-            const real_off = @intFromPtr(src.mounts[i].real.ptr) - src_base;
-            g_state.mounts[i].real = g_state.str_buf[real_off..][0..src.mounts[i].real.len];
-        }
-    }
-}
-
-/// Register a mount into the active global state. Strings are copied into
+/// Register a mount into the active state. Strings are copied into
 /// the state buffer; re-adding an existing name replaces its target.
 pub fn addMount(name: []const u8, real: []const u8) MountError!void {
-    try addMountToState(&g_state, name, real);
+    try addMountToState(g_state, name, real);
 }
 
 /// Register a mount into a specific EngineState. Use this when populating
-/// an engine's per-instance state outside of a run/call (e.g. engine_mount_dir).
+/// a runtime's per-instance state outside of a run/call (e.g. engine_mount_dir).
 pub fn addMountToState(state: *EngineState, name: []const u8, real: []const u8) MountError!void {
     if (name.len == 0 or std.mem.indexOfScalar(u8, name, '/') != null) return error.InvalidMountName;
     if (real.len == 0) return error.InvalidMountPath;
@@ -96,23 +133,30 @@ pub fn addMountToState(state: *EngineState, name: []const u8, real: []const u8) 
     while (r.len > 1 and r[r.len - 1] == '/') r = r[0 .. r.len - 1];
 
     if (state.str_used + name.len + r.len > state.str_buf.len) return error.OutOfMountSpace;
-    const p = state.str_buf[state.str_used + name.len ..][0..r.len];
-    const n = state.str_buf[state.str_used..][0..name.len];
-    @memcpy(n, name);
-    @memcpy(p, r);
+    const name_off: u32 = @intCast(state.str_used);
+    const real_off: u32 = @intCast(state.str_used + name.len);
+    @memcpy(state.str_buf[name_off..][0..name.len], name);
+    @memcpy(state.str_buf[real_off..][0..r.len], r);
     state.str_used += name.len + r.len;
 
     for (state.mounts[0..state.count]) |*m| {
-        if (std.mem.eql(u8, m.name, name)) {
+        if (std.mem.eql(u8, state.nameOf(m), name)) {
             m.kind = .real_path;
-            m.real = p;
+            m.real_off = real_off;
+            m.real_len = @intCast(r.len);
             m.driver = .{};
             m.userdata = null;
             return;
         }
     }
     if (state.count >= MaxMounts) return error.TooManyMounts;
-    state.mounts[state.count] = .{ .name = n, .kind = .real_path, .real = p };
+    state.mounts[state.count] = .{
+        .name_off = name_off,
+        .name_len = @intCast(name.len),
+        .kind = .real_path,
+        .real_off = real_off,
+        .real_len = @intCast(r.len),
+    };
     state.count += 1;
 }
 
@@ -120,20 +164,27 @@ pub fn addMountToState(state: *EngineState, name: []const u8, real: []const u8) 
 pub fn addDriverMountToState(state: *EngineState, name: []const u8, driver: FsDriver, userdata: ?*anyopaque) MountError!void {
     if (name.len == 0 or std.mem.indexOfScalar(u8, name, '/') != null) return error.InvalidMountName;
     if (state.str_used + name.len > state.str_buf.len) return error.OutOfMountSpace;
-    const n = state.str_buf[state.str_used..][0..name.len];
-    @memcpy(n, name);
+    const name_off: u32 = @intCast(state.str_used);
+    @memcpy(state.str_buf[name_off..][0..name.len], name);
     state.str_used += name.len;
     for (state.mounts[0..state.count]) |*m| {
-        if (std.mem.eql(u8, m.name, name)) {
+        if (std.mem.eql(u8, state.nameOf(m), name)) {
             m.kind = .driver;
-            m.real = "";
+            m.real_off = 0;
+            m.real_len = 0;
             m.driver = driver;
             m.userdata = userdata;
             return;
         }
     }
     if (state.count >= MaxMounts) return error.TooManyMounts;
-    state.mounts[state.count] = .{ .name = n, .kind = .driver, .driver = driver, .userdata = userdata };
+    state.mounts[state.count] = .{
+        .name_off = name_off,
+        .name_len = @intCast(name.len),
+        .kind = .driver,
+        .driver = driver,
+        .userdata = userdata,
+    };
     state.count += 1;
 }
 
@@ -148,7 +199,7 @@ pub const LookupError = error{
 };
 
 pub const LookupResult = struct {
-    mount: *const Mount,
+    mount: Mount,
     rest: []const u8,
 };
 
@@ -168,11 +219,12 @@ pub fn lookup(path: []const u8) LookupError!LookupResult {
     const head = if (slash) |i| path[0..i] else path;
     const rest = if (slash) |i| path[i + 1 ..] else "";
 
-    const mount = for (g_state.mounts[0..g_state.count]) |*m| {
-        if (std.mem.eql(u8, m.name, head)) break m;
-    } else return error.PathNotMounted;
-
-    return .{ .mount = mount, .rest = rest };
+    for (g_state.mounts[0..g_state.count], 0..) |*m, i| {
+        if (std.mem.eql(u8, g_state.nameOf(m), head)) {
+            return .{ .mount = g_state.mountAt(i), .rest = rest };
+        }
+    }
+    return error.PathNotMounted;
 }
 
 pub const ResolveError = error{
@@ -260,12 +312,10 @@ test "mount strings are copied, not referenced" {
 }
 
 test "driver mount lookup returns mount and rest" {
-    clearMounts();
-    const drv: FsDriver = .{};
     var state: EngineState = .{};
-    try addDriverMountToState(&state, "mem", drv, null);
-    // Load so g_state has the driver mount.
-    loadFromEngine(&state);
+    try addDriverMountToState(&state, "mem", .{}, null);
+    setActive(&state);
+    defer setActive(&g_default_state);
 
     const lr = try lookup("mem/a/b");
     try std.testing.expectEqual(MountKind.driver, lr.mount.kind);
@@ -280,22 +330,25 @@ test "driver mount lookup returns mount and rest" {
     try std.testing.expectError(error.PathNotMounted, resolve("mem/a/b", &rbuf));
 }
 
-test "driver mount survives loadFromEngine pointer fixup" {
-    clearMounts();
+test "EngineState is safe to copy by value" {
     var state: EngineState = .{};
     var sentinel: u32 = 0xdeadbeef;
-    const drv: FsDriver = .{};
-    try addDriverMountToState(&state, "vfs", drv, &sentinel);
+    try addMountToState(&state, "data", "/real/path");
+    try addDriverMountToState(&state, "vfs", .{}, &sentinel);
 
-    loadFromEngine(&state);
-    try std.testing.expectEqual(@as(usize, 1), g_state.count);
-    try std.testing.expectEqual(MountKind.driver, g_state.mounts[0].kind);
-    try std.testing.expectEqualStrings("vfs", g_state.mounts[0].name);
-    try std.testing.expectEqual(@as(?*anyopaque, @ptrCast(&sentinel)), g_state.mounts[0].userdata);
+    // Offsets, not pointers: a plain struct copy stays self-consistent.
+    var copy = state;
+    state.str_buf[0] = 'X'; // corrupt the original to prove independence
+
+    try std.testing.expectEqual(@as(usize, 2), copy.count);
+    try std.testing.expectEqualStrings("data", copy.mountAt(0).name);
+    try std.testing.expectEqualStrings("/real/path", copy.mountAt(0).real);
+    try std.testing.expectEqual(MountKind.driver, copy.mountAt(1).kind);
+    try std.testing.expectEqualStrings("vfs", copy.mountAt(1).name);
+    try std.testing.expectEqual(@as(?*anyopaque, @ptrCast(&sentinel)), copy.mountAt(1).userdata);
 }
 
 test "driver mount replaces real_path mount with same name" {
-    clearMounts();
     var state: EngineState = .{};
     try addMountToState(&state, "data", "/real/path");
     try addDriverMountToState(&state, "data", .{}, null);

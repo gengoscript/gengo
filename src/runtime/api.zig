@@ -11,9 +11,11 @@ pub const HostModuleDesc = @import("../lang/module_compile.zig").HostModuleDesc;
 const fs_state = @import("../lang/native/fs_state.zig");
 pub const FsMount = fs_state.Mount;
 
-/// Register the host directories visible to cap:fs scripts for process-global
-/// Zig-embedding use. For per-engine isolation use `Config.fs_mounts` instead.
-/// Replaces any previously registered mounts.
+/// Register the host directories visible to cap:fs scripts. Targets the
+/// active mount table: the most recently initialized/activated Runtime's
+/// table, or the process default (inherited by Runtimes created later) when
+/// called before any Runtime exists. For explicit per-runtime control use
+/// `Runtime.setFsMounts`. Replaces any previously registered mounts.
 pub fn setFsMounts(mounts: []const FsMount) fs_state.MountError!void {
     try fs_state.setMounts(mounts);
 }
@@ -152,6 +154,13 @@ pub const Runtime = struct {
     pub fn setConfig(self: *Runtime, config: Config) void {
         self.inner.setPolicy(policyFromConfig(config));
         self.applyConfigState(config);
+    }
+
+    /// Register the host directories visible to cap:fs scripts in this
+    /// Runtime only. Replaces any previously registered mounts.
+    pub fn setFsMounts(self: *Runtime, mounts: []const FsMount) fs_state.MountError!void {
+        self.inner.fs_mounts.clear();
+        for (mounts) |m| try fs_state.addMountToState(&self.inner.fs_mounts, m.name, m.real);
     }
 
     pub fn run(self: *Runtime, src: []const u8) RuntimeResult {
