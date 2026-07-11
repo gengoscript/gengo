@@ -419,7 +419,19 @@ If a script passes an unsupported value to a host module, the VM will raise
 Treat a runtime instance as single-threaded. Do not call into the same
 `api.Runtime` from multiple threads at once.
 
-Separate runtime instances may be used independently.
+Separate runtime instances are fully isolated — each owns its compiled
+chunk, globals, heap, GC state, native caches, and cap:fs mount table — and
+may be used independently, including concurrently from different threads
+(one runtime per thread; the active-runtime tracking is thread-local).
+
+Two caveats:
+
+- Values obtained from one runtime (via `callGlobal` or host-module calls)
+  must not be passed to or decoded under another runtime; inline values
+  carry indices into their owner's object pool. Convert to host types first.
+- Host-boundary configuration is process-global by design: io write/read
+  overrides, trace hooks, net/http handler sets, and the `std.rand` seed
+  state are shared by all runtimes in the process.
 
 ## Further Reading
 
