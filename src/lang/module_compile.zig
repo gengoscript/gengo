@@ -349,8 +349,21 @@ pub const Session = struct {
                     const name_tok = lex.next();
                     if (name_tok.typ != .ident) continue;
                     var peek = lex;
-                    if (peek.next().typ == .lparen) {
+                    const after_name = peek.next();
+                    if (after_name.typ == .lparen) {
                         try self.registerGlobalName(name_tok.src, prefix);
+                    } else if (after_name.typ == .lbracket) {
+                        // Generic function: func name[T, U]( — skip past [...]
+                        var depth: i32 = 1;
+                        while (depth > 0) {
+                            const t = peek.next();
+                            if (t.typ == .lbracket) depth += 1
+                            else if (t.typ == .rbracket) depth -= 1
+                            else if (t.typ == .eof) break;
+                        }
+                        if (peek.next().typ == .lparen) {
+                            try self.registerGlobalName(name_tok.src, prefix);
+                        }
                     }
                 },
                 .kw_const, .kw_var => {

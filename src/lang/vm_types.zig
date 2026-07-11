@@ -152,7 +152,17 @@ pub fn matchesTypeAlt(ctx: VMContext, v: Value, alt: FieldTypeAlt) bool {
             }
             break :blk true;
         },
-        .struct_t => v == .object and v.object.* == .struct_instance and common.streq(v.object.struct_instance.typ.struct_type.qualified_name, alt.struct_name),
+        .struct_t => blk: {
+            if (!(v == .object and v.object.* == .struct_instance)) break :blk false;
+            const qname = v.object.struct_instance.typ.struct_type.qualified_name;
+            // Exact match, or deferred generic: accept any instantiation of the base type.
+            if (common.streq(qname, alt.struct_name)) break :blk true;
+            if (alt.generic_args.len > 0) {
+                if (std.mem.startsWith(u8, qname, alt.struct_name) and
+                    qname.len > alt.struct_name.len and qname[alt.struct_name.len] == '[') break :blk true;
+            }
+            break :blk false;
+        },
         .interface_t => matchesInterfaceType(ctx, v, alt.interface_name),
         .named_t => named_t_blk: {
             if (v == .named_scalar) break :named_t_blk namedTypeIsOrExtends(ctx, vmod.objectAtIdx(v.named_scalar.typ_idx), alt.named_name);
@@ -174,9 +184,17 @@ pub fn matchesTypeAlt(ctx: VMContext, v: Value, alt: FieldTypeAlt) bool {
                 else => false,
             };
         },
-        .variant_t => if (v.asVariant()) |ref|
-            common.streq(ref.typ.variant_type.qualified_name, alt.named_name)
-        else false,
+        .variant_t => blk: {
+            const ref = v.asVariant() orelse break :blk false;
+            const qname = ref.typ.variant_type.qualified_name;
+            if (common.streq(qname, alt.named_name)) break :blk true;
+            // Deferred generic: accept any instantiation of the base variant type.
+            if (alt.generic_args.len > 0) {
+                if (std.mem.startsWith(u8, qname, alt.named_name) and
+                    qname.len > alt.named_name.len and qname[alt.named_name.len] == '[') break :blk true;
+            }
+            break :blk false;
+        },
         .func_t => blk: {
             if (!(v == .object and (v.object.* == .function or v.object.* == .closure))) break :blk false;
             if (alt.func_params) |ps| {
@@ -189,8 +207,8 @@ pub fn matchesTypeAlt(ctx: VMContext, v: Value, alt: FieldTypeAlt) bool {
             }
             break :blk true;
         },
-        // type_param alts should only exist in generic templates, never in instantiated specs.
-        .type_param => false,
+        // type_param in a compiled generic function body — erased to any at runtime.
+        .type_param => true,
     };
 }
 

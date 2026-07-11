@@ -30,6 +30,7 @@ pub const MaxGlobals = 1024;    // funcs + consts combined
 pub const MaxExprDepth = 256;
 pub const MaxTypeParams = 8;
 pub const MaxGenericTypes = 64;
+pub const MaxGenericFuncs = 64;
 pub const MaxInstantiations = 256;
 
 pub const GenericParam = struct {
@@ -45,6 +46,13 @@ pub const GenericTypeInfo = struct {
     params: [MaxTypeParams]GenericParam = undefined,
     param_count: u8 = 0,
     template_obj: *Object,
+};
+
+pub const GenericFuncInfo = struct {
+    name: []const u8 = "",
+    params: [MaxTypeParams]GenericParam = undefined,
+    param_count: u8 = 0,
+    qname: []const u8 = "",
 };
 
 pub const InstCacheEntry = struct {
@@ -224,6 +232,9 @@ pub const TypeRegistry = struct {
     // Generic type templates (not yet instantiated).
     generic_types: [MaxGenericTypes]GenericTypeInfo = undefined,
     generic_count: usize = 0,
+    // Generic function templates.
+    generic_funcs: [MaxGenericFuncs]GenericFuncInfo = undefined,
+    generic_func_count: usize = 0,
     // Instantiation cache: "Stack[int]" → concrete *Object, reset each compile.
     inst_cache: [MaxInstantiations]InstCacheEntry = undefined,
     inst_count: usize = 0,
@@ -233,6 +244,7 @@ pub const TypeRegistry = struct {
         self.named_type_count = 0;
         self.global_count = 0;
         self.generic_count = 0;
+        self.generic_func_count = 0;
         self.inst_count = 0;
         @memset(self.type_buckets[0..], .{});
         @memset(self.func_buckets[0..], .{});
@@ -470,6 +482,28 @@ pub const TypeRegistry = struct {
         if (self.generic_count >= MaxGenericTypes) return error.TooManyTypes;
         self.generic_types[self.generic_count] = info;
         self.generic_count += 1;
+    }
+
+    // ── Generic functions ─────────────────────────────────────────────────────
+
+    pub fn hasGenericFunc(self: *const TypeRegistry, name: []const u8) bool {
+        for (self.generic_funcs[0..self.generic_func_count]) |*gf| {
+            if (common.streq(gf.name, name)) return true;
+        }
+        return false;
+    }
+
+    pub fn getGenericFunc(self: *const TypeRegistry, name: []const u8) ?*const GenericFuncInfo {
+        for (self.generic_funcs[0..self.generic_func_count]) |*gf| {
+            if (common.streq(gf.name, name)) return gf;
+        }
+        return null;
+    }
+
+    pub fn addGenericFunc(self: *TypeRegistry, info: GenericFuncInfo) !void {
+        if (self.generic_func_count >= MaxGenericFuncs) return error.TooManyTypes;
+        self.generic_funcs[self.generic_func_count] = info;
+        self.generic_func_count += 1;
     }
 
     pub fn getCachedInst(self: *const TypeRegistry, key: []const u8) ?InstCacheEntry {
