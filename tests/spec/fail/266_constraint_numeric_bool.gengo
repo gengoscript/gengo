@@ -1,0 +1,2 @@
+func add[T: numeric](a T, b T) T { return a + b }
+x := add[bool](true, false)

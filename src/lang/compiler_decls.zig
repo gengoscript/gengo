@@ -265,13 +265,13 @@ pub fn isNamedFuncDecl(c: anytype) bool {
     const t2 = lx.next();
     if (t2.typ == .lparen) return true;
     if (t2.typ != .lbracket) return false;
-    // Generic func: func name[T, U]( — scan through [idents] and confirm '('
+    // Generic func: func name[T, U]( or func name[T: constraint]( — scan through [...] and confirm '('
     while (true) {
         const t = lx.next();
         switch (t.typ) {
             .rbracket => break,
             .eof => return false,
-            .ident, .comma => {},
+            .ident, .comma, .colon => {},
             else => return false,
         }
     }
@@ -337,7 +337,7 @@ pub fn namedFuncDecl(c: anytype, is_pub: bool) !void {
         return c.err("'{s}' is a type name and cannot be used as a function name", .{name.src});
     c.advance(); // consume function name
 
-    // Parse optional generic type parameters: func name[T, U](...)
+    // Parse optional generic type parameters: func name[T, U](...) or func name[T: numeric, U: ordered](...)
     var tparams: [ct.MaxTypeParams]ct.GenericParam = undefined;
     var tparam_count: u8 = 0;
     if (c.cur.typ == .lbracket) {
@@ -347,7 +347,13 @@ pub fn namedFuncDecl(c: anytype, is_pub: bool) !void {
             const pname = c.cur.src;
             c.advance();
             var constraint: []const u8 = "";
-            if (c.cur.typ == .ident) { constraint = c.cur.src; c.advance(); }
+            if (c.match(.colon)) {
+                if (c.cur.typ != .ident) return c.err("expected constraint name after ':'", .{});
+                constraint = c.cur.src;
+                if (!isKnownConstraint(constraint))
+                    return c.err("unknown constraint '{s}': expected 'numeric', 'ordered', or 'comparable'", .{constraint});
+                c.advance();
+            }
             if (tparam_count >= ct.MaxTypeParams) return c.err("too many type parameters (max {d})", .{ct.MaxTypeParams});
             tparams[tparam_count] = .{ .name = pname, .constraint = constraint };
             tparam_count += 1;
@@ -416,7 +422,13 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
             const pname = c.cur.src;
             c.advance();
             var constraint: []const u8 = "";
-            if (c.cur.typ == .ident) { constraint = c.cur.src; c.advance(); }
+            if (c.match(.colon)) {
+                if (c.cur.typ != .ident) return c.err("expected constraint name after ':'", .{});
+                constraint = c.cur.src;
+                if (!isKnownConstraint(constraint))
+                    return c.err("unknown constraint '{s}': expected 'numeric', 'ordered', or 'comparable'", .{constraint});
+                c.advance();
+            }
             if (tparam_count >= ct.MaxTypeParams) return c.err("too many type parameters (max {d})", .{ct.MaxTypeParams});
             tparams[tparam_count] = .{ .name = pname, .constraint = constraint };
             tparam_count += 1;
@@ -814,6 +826,85 @@ fn argsHaveTypeParam(args: []const FieldTypeSpec) bool {
     return false;
 }
 
+pub fn isKnownConstraint(name: []const u8) bool {
+    return common.streq(name, "numeric") or
+           common.streq(name, "ordered") or
+           common.streq(name, "comparable");
+}
+
+// Short human-readable name for a type arg in error messages.
+fn typeArgLabel(spec: FieldTypeSpec) []const u8 {
+    if (spec.alts.len == 0) return "?";
+    const alt = spec.alts[0];
+    return switch (alt.typ) {
+        .int       => "int",
+        .float     => "float",
+        .decimal_t => "decimal",
+        .rune_t    => "rune",
+        .boolean   => "bool",
+        .string    => "string",
+        .error_t   => "error",
+        .array     => "[]...",
+        .map       => "map[...]",
+        .func_t    => "func",
+        .any       => "any",
+        .null_t    => "null",
+        .type_param    => alt.param_name,
+        .struct_t      => alt.struct_name,
+        .named_t       => alt.named_name,
+        .variant_t     => alt.named_name,
+        .interface_t   => alt.interface_name,
+    };
+}
+
+fn satisfiesConstraint(constraint: []const u8, spec: FieldTypeSpec, registry: *const ct.TypeRegistry) bool {
+    if (constraint.len == 0 or common.streq(constraint, "comparable")) return true;
+    if (spec.alts.len == 0) return false;
+    const alt = spec.alts[0];
+
+    // Resolve named type info, stripping module prefix if needed.
+    const namedInfo = struct {
+        fn get(reg: *const ct.TypeRegistry, qname: []const u8) ?ct.NamedTypeInfo {
+            if (reg.getNamedTypeInfo(qname)) |i| return i;
+            // Strip "prefix.Name" → "Name"
+            if (std.mem.lastIndexOfScalar(u8, qname, '.')) |dot|
+                return reg.getNamedTypeInfo(qname[dot + 1 ..]);
+            return null;
+        }
+    }.get;
+
+    const is_numeric = switch (alt.typ) {
+        .int, .float, .decimal_t, .rune_t => true,
+        .named_t => if (namedInfo(registry, alt.named_name)) |info| switch (info.base) {
+            .int, .float, .decimal, .rune => true,
+            else => false,
+        } else false,
+        else => false,
+    };
+    if (common.streq(constraint, "numeric")) return is_numeric;
+
+    const is_ordered = is_numeric or switch (alt.typ) {
+        .string => true,
+        .named_t => if (namedInfo(registry, alt.named_name)) |info| info.base == .string else false,
+        else => false,
+    };
+    return is_ordered; // constraint == "ordered"
+}
+
+pub fn checkTypeArgConstraints(c: anytype, params: []const ct.GenericParam, args: []const FieldTypeSpec, func_name: []const u8, line: u32) !void {
+    _ = line;
+    for (params, 0..) |param, i| {
+        if (i >= args.len) break;
+        if (param.constraint.len == 0) continue;
+        if (!satisfiesConstraint(param.constraint, args[i], &c.registry)) {
+            c.setErr("'{s}' does not satisfy constraint '{s}' on type parameter '{s}' of '{s}'", .{
+                typeArgLabel(args[i]), param.constraint, param.name, func_name,
+            });
+            return error.ConstraintViolation;
+        }
+    }
+}
+
 /// Build "[int,string]" suffix from concrete arg specs (no allocation — caller provides buf).
 fn instArgSuffix(buf: []u8, args: []const FieldTypeSpec) []const u8 {
     var pos: usize = 0;
@@ -1001,12 +1092,23 @@ fn parseInstArgSpecs(c: anytype, tname: []const u8, param_count: u8, out_args: *
     return arg_count;
 }
 
-/// Instantiate a generic type with pre-computed concrete args. Emits a def_global on first use.
+/// Instantiate a generic type with pre-computed concrete args. Emits a def_global at first use
+/// and at every subsequent use inside a generic function body (type-param args). This ensures
+/// every execution path defines the type before any get_global, since globals.def() is idempotent.
 fn applyGenericInst(c: anytype, tname: []const u8, args: []const FieldTypeSpec, line: u32) anyerror![]const u8 {
     const ginfo = c.registry.getGenericType(tname).?;
     const key = try buildInstKey(tname, args);
 
-    if (c.registry.getCachedInst(key)) |entry| return entry.qname;
+    if (c.registry.getCachedInst(key)) |entry| {
+        // Re-emit def_global when type-param args are present inside a function body.
+        // The first emission may have been in a conditional branch that skipped at runtime,
+        // leaving the global undefined for later get_global calls on a different path.
+        if (!c.skipping_test_body and argsHaveTypeParam(args) and c.inFunc()) {
+            try c.cs.emitConst(.{ .object = entry.obj }, line);
+            try c.cs.emitOpStringConst(.def_global, entry.qname, line);
+        }
+        return entry.qname;
+    }
 
     const base_qname = try c.qualifyTypeName(tname);
     const key_suffix = key[@min(tname.len, 128)..];

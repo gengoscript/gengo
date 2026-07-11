@@ -1,0 +1,120 @@
+std := import("std")
+
+// ────────────────────────────────────────────────────────────────────────────
+//  Generic infrastructure
+//
+//  Two reusable types and two reusable functions.
+//  Everything below — exam scores and product margins — reuses them unchanged.
+// ────────────────────────────────────────────────────────────────────────────
+
+// Accumulated statistics for any ordered numeric type T.
+type Summary[T] struct {
+    count int,
+    total T,
+    lo    T,
+    hi    T,
+}
+
+// One entry in a ranked list: position, value, and display label.
+type Ranked[T] struct {
+    rank  int,
+    value T,
+    label string,
+}
+
+// summarize computes min, max, and total over any slice of T.
+// Caller supplies zero, an add function, and a less-than predicate —
+// making this work for int, float, decimal, or any user-defined numeric type.
+func summarize[T](xs []T, zero T,
+                  add func(T, T) T,
+                  lt  func(T, T) bool) Summary[T] {
+    n := std.core.len(xs)
+    if n == 0 {
+        return Summary[T]{ count: 0, total: zero, lo: zero, hi: zero }
+    }
+    total := xs[0]
+    lo    := xs[0]
+    hi    := xs[0]
+    for i := 1; i < n; i += 1 {
+        total = add(total, xs[i])
+        if lt(xs[i], lo) { lo = xs[i] }
+        if lt(hi, xs[i]) { hi = xs[i] }
+    }
+    return Summary[T]{ count: n, total: total, lo: lo, hi: hi }
+}
+
+// rank_all assigns a rank to every element by counting how many others are
+// strictly larger, so the best gets rank 1 and ties share a rank.
+func rank_all[T](labels []string, values []T,
+                 lt func(T, T) bool) []Ranked[T] {
+    n      := std.core.len(values)
+    result := []
+    for i := 0; i < n; i += 1 {
+        rank := 1
+        for j := 0; j < n; j += 1 {
+            if lt(values[i], values[j]) { rank = rank + 1 }
+        }
+        result = std.core.append(result, Ranked[T]{
+            rank: rank, value: values[i], label: labels[i],
+        })
+    }
+    return result
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+//  Type aliases — concrete names for the instantiations used in this script
+// ────────────────────────────────────────────────────────────────────────────
+
+type IntSummary   Summary[int]
+type FloatSummary Summary[float]
+
+// ────────────────────────────────────────────────────────────────────────────
+//  Scenario 1 — exam scores (int)
+// ────────────────────────────────────────────────────────────────────────────
+
+students := ["Alice", "Bob", "Carol", "Dave", "Eve"]
+scores   := [88,       74,    95,      61,     82]
+
+sc := summarize(scores,
+    0,
+    func(a int, b int) int  { return a + b },
+    func(a int, b int) bool { return a < b })
+
+std.io.println("=== Exam Results ===")
+std.io.println("Count:  ", sc.count)
+std.io.println("High:   ", sc.hi)
+std.io.println("Low:    ", sc.lo)
+std.io.println("Avg:    ", sc.total / sc.count)
+
+board := rank_all(students, scores, func(a int, b int) bool { return a < b })
+std.io.println("Rankings:")
+for e in board {
+    std.io.println("  #", e.rank, "  ", e.label, " (", e.value, ")")
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+//  Scenario 2 — product profit margins (float)
+//
+//  Same two functions, different concrete types — no annotation needed.
+// ────────────────────────────────────────────────────────────────────────────
+
+products := ["Widget",  "Gadget", "Doohickey", "Thingamajig"]
+margins  := [0.50,       0.25,     0.75,        1.00]
+
+pm := summarize(margins,
+    0.0,
+    func(a float, b float) float { return a + b },
+    func(a float, b float) bool  { return a < b })
+
+std.io.println("")
+std.io.println("=== Product Margins ===")
+std.io.println("Count:  ", pm.count)
+std.io.println("Best:   ", pm.hi)
+std.io.println("Worst:  ", pm.lo)
+std.io.println("Total:  ", pm.total)
+
+pboard := rank_all(products, margins, func(a float, b float) bool { return a < b })
+std.io.println("Rankings:")
+for e in pboard {
+    std.io.println("  #", e.rank, "  ", e.label, " (", e.value, ")")
+}

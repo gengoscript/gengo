@@ -1,0 +1,35 @@
+// Type arguments on generic function calls are optional.
+// The compiler infers them from context; explicit [T] is still accepted.
+
+std := import("std")
+
+func identity[T](x T) T { return x }
+
+func pair[T, U](a T, b U) int {
+    _ := a
+    _ := b
+    return 1
+}
+
+type Box[T] struct { val T }
+
+func boxed[T](x T) Box[T] {
+    return Box[T]{ val: x }
+}
+
+// Inferred
+a := identity(42)
+b := identity("hello")
+c := pair(1, "x")
+d := boxed(99)
+e := boxed("world")
+
+// Explicit type args still work
+f := identity[int](7)
+
+std.io.println(a)
+std.io.println(b)
+std.io.println(c)
+std.io.println(d.val)
+std.io.println(e.val)
+std.io.println(f)
