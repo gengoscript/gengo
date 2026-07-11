@@ -109,7 +109,9 @@ pub const NamedTypeObj = struct {
 pub const NamedValueObj = struct { typ: *Object, value: Value };
 
 /// Pool base pointer for inline type-index → *Object decoding.
-/// Set by heap.zig during State.init(); valid before any VM execution.
+/// Set by heap.zig during State.init() and re-pointed by heap.setActive(),
+/// so it always tracks the active runtime's object pool. Values carrying
+/// pool indices (named_scalar/inline_variant) must not cross runtimes.
 pub var obj_pool_ptr: [*]Object = undefined;
 
 /// Decode a pool index to the corresponding *Object.
