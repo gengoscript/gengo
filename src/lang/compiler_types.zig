@@ -28,6 +28,30 @@ pub const MaxSwitchJumps = 256;
 pub const MaxUpvalues = 64;
 pub const MaxGlobals = 1024;    // funcs + consts combined
 pub const MaxExprDepth = 256;
+pub const MaxTypeParams = 8;
+pub const MaxGenericTypes = 64;
+pub const MaxInstantiations = 256;
+
+pub const GenericParam = struct {
+    name: []const u8,
+    constraint: []const u8 = "",
+};
+
+pub const GenericTypeKind = enum(u8) { struct_t, variant_t };
+
+pub const GenericTypeInfo = struct {
+    name: []const u8,
+    kind: GenericTypeKind,
+    params: [MaxTypeParams]GenericParam = undefined,
+    param_count: u8 = 0,
+    template_obj: *Object,
+};
+
+pub const InstCacheEntry = struct {
+    key: []const u8,
+    qname: []const u8,
+    obj: *Object,
+};
 
 pub const Prec = enum(u8) {
     none,
@@ -197,10 +221,19 @@ pub const TypeRegistry = struct {
     // *Object is stored here so switchStmt can check arm exhaustiveness.
     variant_objs: [MaxTypes]?*Object = empty_variant_objs,
 
+    // Generic type templates (not yet instantiated).
+    generic_types: [MaxGenericTypes]GenericTypeInfo = undefined,
+    generic_count: usize = 0,
+    // Instantiation cache: "Stack[int]" → concrete *Object, reset each compile.
+    inst_cache: [MaxInstantiations]InstCacheEntry = undefined,
+    inst_count: usize = 0,
+
     pub fn reset(self: *TypeRegistry) void {
         self.type_name_count = 0;
         self.named_type_count = 0;
         self.global_count = 0;
+        self.generic_count = 0;
+        self.inst_count = 0;
         @memset(self.type_buckets[0..], .{});
         @memset(self.func_buckets[0..], .{});
         @memset(self.variant_objs[0..], null);
@@ -415,5 +448,40 @@ pub const TypeRegistry = struct {
         const slot = self.funcSlotForInsert(name) orelse return;
         if (!self.func_buckets[slot].occupied)
             self.func_buckets[slot] = .{ .sub_idx = @intCast(sub_idx), .is_const = false, .occupied = true };
+    }
+
+    // ── Generic types ─────────────────────────────────────────────────────────
+
+    pub fn hasGenericType(self: *const TypeRegistry, name: []const u8) bool {
+        for (self.generic_types[0..self.generic_count]) |*gt| {
+            if (common.streq(gt.name, name)) return true;
+        }
+        return false;
+    }
+
+    pub fn getGenericType(self: *const TypeRegistry, name: []const u8) ?*const GenericTypeInfo {
+        for (self.generic_types[0..self.generic_count]) |*gt| {
+            if (common.streq(gt.name, name)) return gt;
+        }
+        return null;
+    }
+
+    pub fn addGenericType(self: *TypeRegistry, info: GenericTypeInfo) !void {
+        if (self.generic_count >= MaxGenericTypes) return error.TooManyTypes;
+        self.generic_types[self.generic_count] = info;
+        self.generic_count += 1;
+    }
+
+    pub fn getCachedInst(self: *const TypeRegistry, key: []const u8) ?InstCacheEntry {
+        for (self.inst_cache[0..self.inst_count]) |e| {
+            if (common.streq(e.key, key)) return e;
+        }
+        return null;
+    }
+
+    pub fn addInstCache(self: *TypeRegistry, entry: InstCacheEntry) void {
+        if (self.inst_count >= MaxInstantiations) return;
+        self.inst_cache[self.inst_count] = entry;
+        self.inst_count += 1;
     }
 };

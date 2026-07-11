@@ -622,6 +622,40 @@ std.io.println(h1 + h2)           // prints: <p>hi</p>
 std.io.println(Html("<hr>") + Html("<br>"))
 ```
 
+### Named Error Types
+
+An error type is a named `error` variant. It lets callers distinguish failure
+causes by type rather than by string matching:
+
+```gengo
+type NotFound error
+type PermissionDenied error
+
+func lookup(key string) (string, error) {
+    if key == "missing"  { return "", NotFound("no row") }
+    if key == "secret"   { return "", PermissionDenied("forbidden") }
+    return key, std.core.error("")
+}
+```
+
+Named errors are ordinary `error` values: `std.core.is_error` returns `true`,
+`string(e)` returns the message, and they pass typed function parameters that
+expect `error`. The type is inspectable with `.type`:
+
+```gengo
+_, e := lookup("missing")
+
+switch e.type {
+    case NotFound         { std.io.println("not found") }
+    case PermissionDenied { std.io.println("denied") }
+    default               { std.io.println("other") }
+}
+
+std.io.println(e.type == NotFound)           // true
+std.io.println(e.type == PermissionDenied)   // false
+std.io.println(string(e))                    // no row
+```
+
 ### Named Array and Map Types
 
 A named type can also wrap an array or map, using the same bracket syntax as
@@ -748,6 +782,11 @@ switch r {
 }
 ```
 
+A variant `switch` inside a function is **exhaustive**: every arm must be
+covered by at least one unguarded case, or the switch must have a `default`.
+A missing arm is a compile error (`NonExhaustiveSwitch`). Variant switches at
+the top level of a script are not checked for exhaustiveness.
+
 Variant cases accept `when` guards too, and the guard sees the `as` binding.
 A guarded case does not fully cover its arm, so exhaustiveness requires each
 arm to have an unguarded case (or the switch a `default`):
@@ -829,6 +868,58 @@ std.io.println(sum(Acc{ total: 5.0 }))  // 6.0
 Method parameters in an interface can be written as bare types
 (`add(float)`) or name-type pairs (`add(x float)`); the names are
 documentation only and do not affect satisfaction.
+
+## Generic Types
+
+Struct and variant types can be parameterised with one or more type
+parameters, written in `[T]` after the type name:
+
+```gengo
+type Stack[T] struct {
+    items []T,
+}
+
+type Result[T, E] variant {
+    ok(value T),
+    err(e E),
+}
+```
+
+Instantiate a generic type by supplying concrete type arguments wherever the
+type is used. Each distinct combination of arguments is a separate concrete
+type:
+
+```gengo
+s := Stack[int]{ items: [] }
+s2 := Stack[string]{ items: ["hello", "world"] }
+
+r  := Result[int, string].ok{ value: 42 }
+r2 := Result[int, string].err{ e: "not found" }
+```
+
+Pattern matching works the same as for non-generic variants. The `as`
+binding names the payload directly:
+
+```gengo
+switch r {
+    case .ok as v  { std.io.println(v) }    // v is the int 42
+    case .err as e { std.io.println(e) }
+}
+```
+
+Generic types can reference other generic types in their field definitions.
+When the outer type is instantiated the inner type argument is substituted
+automatically:
+
+```gengo
+type Wrapper[T] struct { inner Stack[T] }
+
+w := Wrapper[int]{ inner: Stack[int]{ items: [1, 2, 3] } }
+std.io.println(std.core.len(w.inner.items))   // 3
+```
+
+Type parameters may carry an optional constraint name (currently parsed but
+not yet enforced). Functions with type parameters are not yet supported.
 
 ## Capability Imports
 

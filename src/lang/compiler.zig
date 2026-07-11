@@ -130,6 +130,10 @@ pub const Compiler = struct {
     require_type_suffix: bool = false,
     type_suffix_consumed: bool = false,
 
+    // Active generic type parameters in scope (only non-zero while compiling a generic type body).
+    type_params: [ct.MaxTypeParams]ct.GenericParam = undefined,
+    type_param_count: u8 = 0,
+
     // ── Lifecycle ────────────────────────────────────────────────────────────────
 
     pub fn init(src: []const u8, options: CompilerOptions) Compiler {
@@ -782,6 +786,27 @@ pub const Compiler = struct {
     pub fn peekTT(self: *Compiler) TT {
         var lx = self.lex;
         return lx.next().typ;
+    }
+
+    /// Returns true if the current `[` token begins a generic type-parameter list
+    /// (i.e. the `[ident, ...] struct|variant|interface` pattern), without consuming.
+    /// Used to disambiguate `type Stack[T] struct` from `type Tags [K]V`.
+    pub fn looksLikeGenericTypeParams(self: *Compiler) bool {
+        var lx = self.lex;
+        // If peek_tok is set, lx is already past it; start with peek_tok.
+        var t: Token = if (self.peek_tok) |pt| pt else lx.next();
+        while (true) {
+            switch (t.typ) {
+                .rbracket => break,
+                .eof => return false,
+                .ident => {},
+                .comma => {},
+                else => return false,
+            }
+            t = lx.next();
+        }
+        const after = lx.next();
+        return after.typ == .kw_struct or after.typ == .kw_variant or after.typ == .kw_interface;
     }
 
     // ── Module and name helpers ──────────────────────────────────────────────────

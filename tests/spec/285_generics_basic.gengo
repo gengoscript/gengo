@@ -1,0 +1,41 @@
+std := import("std")
+
+// Generic struct
+type Stack[T] struct { items []T }
+
+// Generic variant
+type Result[T, E] variant {
+    ok(value T),
+    err(e E),
+}
+
+// Struct literal instantiation
+s := Stack[int]{ items: [] }
+assert std.core.len(s.items) == 0
+
+s2 := Stack[string]{ items: ["hello", "world"] }
+assert std.core.len(s2.items) == 2
+
+// Multiple type params
+type Pair[A, B] struct { first A, second B }
+p := Pair[int, string]{ first: 1, second: "hello" }
+assert p.first == 1
+assert p.second == "hello"
+
+// Variant instantiation
+r := Result[int, string].ok{ value: 42 }
+switch r {
+    case .ok as v { assert v == 42 }
+    case .err     { assert false }
+}
+
+r2 := Result[int, string].err{ e: "boom" }
+switch r2 {
+    case .ok      { assert false }
+    case .err as v { assert v == "boom" }
+}
+
+// Generic type as field type in another struct
+type Wrapper[T] struct { inner Stack[T] }
+w := Wrapper[int]{ inner: Stack[int]{ items: [1, 2, 3] } }
+assert std.core.len(w.inner.items) == 3

@@ -194,6 +194,49 @@ The entries below describe the public library surface. This page is intentionall
 - Returns a new array with the element at `index` removed
 - Errors: `TypeError` on non-array, `IndexOutOfBounds`
 
+## std.Arg
+
+`std.Arg` is a built-in variant that covers all primitive scalar types. It
+exists so library authors can write heterogeneous variadic functions without
+exposing the unsafe `any` type to callers.
+
+### Arms
+
+| Arm | Payload type |
+|-----|-------------|
+| `std.Arg.Int(n)` | `int` |
+| `std.Arg.Float(f)` | `float` |
+| `std.Arg.Decimal(d)` | `decimal` (any scale) |
+| `std.Arg.Rune(r)` | `rune` |
+| `std.Arg.Bool(b)` | `bool` |
+| `std.Arg.Str(s)` | `string` |
+| `std.Arg.Err(e)` | `error` |
+
+### Usage
+
+Declare a variadic parameter typed `std.Arg` and switch over the arm to
+dispatch on the actual scalar type:
+
+```gengo
+func log_args(prefix string, ...args std.Arg) string {
+    out := prefix + ":"
+    for a in args {
+        switch a {
+            case .Int   as n { out = out + " int:" + std.conv.to_string(n) }
+            case .Str   as s { out = out + " str:" + s }
+            case .Bool  as b { out = out + " bool:" + std.conv.to_string(b) }
+            case .Float as f { out = out + " float:" + std.conv.to_string(f) }
+            case .Rune  as r { out = out + " rune:" + std.conv.to_string(r) }
+            case .Err   as e { out = out + " err:" + string(e) }
+            case .Decimal as d { out = out + " dec:" + std.conv.to_string(d) }
+        }
+    }
+    return out
+}
+
+log_args("x", std.Arg.Int(42), std.Arg.Bool(true), std.Arg.Str("hi"))
+```
+
 ## std.conv
 
 ### `std.conv.to_int(x)`

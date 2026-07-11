@@ -9,6 +9,7 @@ const token = @import("token.zig");
 const value_mod = @import("value.zig");
 const ct = @import("compiler_types.zig");
 const std_schema = @import("std_schema.zig");
+const compiler_decls = @import("compiler_decls.zig");
 
 const Token = token.Token;
 const TT = token.TT;
@@ -514,6 +515,15 @@ pub fn varExpr(c: anytype, name: Token) !void {
             try c.cs.emitOp(.cast_bigint, name.line);
         } else {
             try c.cs.emitOp(.cast_string, name.line);
+        }
+        return;
+    }
+    // Generic struct/variant instantiation with literal: Stack[int]{ items: [] }
+    if (c.check(.lbracket) and c.registry.hasGenericType(name.src)) {
+        const qname = try compiler_decls.instantiateGenericType(c, name.src, name.line);
+        try c.cs.emitGetGlobal(qname, name.line);
+        if (c.check(.lbrace) and looksLikeStructLiteral(c, )) {
+            try structInstanceLitAfterValue(c, name.line);
         }
         return;
     }

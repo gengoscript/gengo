@@ -1679,6 +1679,7 @@ fn fieldTypeAltLabel(alt: FieldTypeAlt) []const u8 {
             @memcpy(buf[2 + k.len .. len], v);
             break :blk buf[0..len];
         },
+        .type_param => alt.param_name,
     };
 }
 

@@ -4,6 +4,10 @@
 
 ### Language
 
+- **Generic struct and variant types** — `type Stack[T] struct { items []T }` and `type Result[T, E] variant { ok(value T), err(e E) }`. Instantiate by supplying concrete type arguments: `Stack[int]{ items: [] }`, `Result[int, string].ok{ value: 42 }`. Type parameters are substituted at compile time; each instantiation is a distinct concrete type. Nested generic fields (e.g. `Stack[T]` inside `Wrapper[T]`) resolve correctly when the outer type is instantiated.
+- **Named error types** — `type NotFound error` declares a named error variant. Named errors are ordinary `error` values and can be distinguished by `.type`: `e.type == NotFound`, `switch e.type { case NotFound { ... } }`.
+- **`when` guards on switch cases** — Both value and variant cases may carry a `when` condition. The guard sees the `as` binding. A failed guard falls through to the next case: `case .ok as v when v > 0 { ... }`.
+- **Exhaustiveness checking for variant switch** — A variant `switch` inside a function is now checked at compile time. Every arm must be covered by at least one unguarded case, or the switch must have a `default`. A missing arm is a `NonExhaustiveSwitch` compile error.
 - **Default parameter values** — Trailing function parameters may declare a literal default (`func f(a int, b int = 1) int`). Callers may omit any suffix of defaulted parameters.
 - **Hex, binary, and octal literals** — `0xFF`, `0b1010_1111`, `0o755`. Digit separators (`_`) work in all bases. Valid in expressions, range bounds, and default values.
 - **Enum representation values** — `type Status enum { pending = 0, active = 1, done = 2 }`. Unspecified members auto-increment. `.int` on a value returns its integer representation. `T.from_int(n)` does the reverse lookup, returning `?T`.
@@ -13,10 +17,15 @@
 - **Range bounds with any numeric base** — `type Port int range 1..0xFFFF` and similar are now valid.
 - **Named type bounds** — `T.first` and `T.last` on ranged named types return the boundary as a named-type value.
 
+### Standard Library
+
+- **`std.Arg`** — Built-in variant covering all primitive scalar types (`Int`, `Float`, `Decimal`, `Rune`, `Bool`, `Str`, `Err`). Use it to write type-safe heterogeneous variadic functions without exposing `any`.
+
 ### Fixes
 
 - Struct and enum variable declarations following a `std` import no longer trigger a spurious "unknown field in std" compile error.
 - Arity mismatch errors now show `expected 1-2 argument(s)` when a function has defaults, and no longer include a stray leading comma in the function signature.
+- Unknown `std.*` namespace fields now suggest the closest matching name in the error message.
 
 ---
 

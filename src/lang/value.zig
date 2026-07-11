@@ -39,17 +39,24 @@ pub const FieldTypeTag = enum {
     named_t,
     variant_t,
     func_t,
+    type_param, // unresolved generic type parameter (name in param_name)
 };
 pub const FieldTypeAlt = struct {
     typ: FieldTypeTag,
     struct_name: []const u8 = "",
     interface_name: []const u8 = "",
     named_name: []const u8 = "",
+    param_name: []const u8 = "",           // for type_param
     elem_spec: ?FieldTypeSpec = null,      // for array[T]
     key_spec: ?FieldTypeSpec = null,       // for map[K,V]
     val_spec: ?FieldTypeSpec = null,       // for map[K,V]
     func_params: ?[]const FieldTypeSpec = null,  // for func(T...) R
     func_returns: ?[]const FieldTypeSpec = null, // for func(T...) R
+    // For struct_t/variant_t alts produced inside a generic template body when some
+    // type args still contain type_param alts: struct_name/named_name holds the
+    // qualified base name (e.g. "@mod:Stack"), generic_args holds the un-substituted
+    // arg specs.  substituteSpec replaces them with the concrete qualified name.
+    generic_args: []const FieldTypeSpec = &.{},
 };
 pub const FieldTypeSpec = struct {
     alts: []FieldTypeAlt,
