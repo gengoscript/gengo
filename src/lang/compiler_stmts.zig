@@ -1436,40 +1436,94 @@ pub fn switchStmt(c: anytype) anyerror!void {
                 if (c.cur.typ != .ident) return c.err("expected identifier, found {s}", .{c.tokenName(c.cur.typ)});
                 const arm_name_tok = c.cur;
                 c.advance(); // consume arm name
-                if (seen_arm_count < MaxSwitchJumps) {
-                    seen_arms[seen_arm_count] = arm_name_tok.src;
-                    seen_arm_count += 1;
-                }
                 var binding: ?[]const u8 = null;
                 if (c.match(.kw_as)) {
                     if (c.cur.typ != .ident) return c.err("expected identifier after 'as', found {s}", .{c.tokenName(c.cur.typ)});
                     binding = c.cur.src;
                     c.advance();
                 }
+                // A guarded case does not fully cover its arm, so only
+                // unguarded cases count toward exhaustiveness.
+                const has_guard = c.check(.kw_when);
+                if (!has_guard and seen_arm_count < MaxSwitchJumps) {
+                    seen_arms[seen_arm_count] = arm_name_tok.src;
+                    seen_arm_count += 1;
+                }
                 // Emit: dup, variant_check arm_name, jump_if_false [H]
                 try c.cs.emitOp(.dup, dot_line);
                 try c.cs.emitOpStringConst(.variant_check, arm_name_tok.src, dot_line);
                 const next_case = try c.cs.emitJump(.jif_pop, dot_line);
-                // Handle switch value and optional binding
+                // Handle switch value and optional binding.
                 const local_before = c.currentScope().local_count;
+                // A guarded binding cannot consume the scrutinee in place: the
+                // guard may fail, and the next case still needs the value. Pin
+                // the scrutinee's stack slot as a hidden local and bind a
+                // duplicated payload on top; a failed guard pops the binding
+                // and leaves the scrutinee for the next case.
+                var guarded_local_binding = false;
                 if (binding != null) {
                     if (c.isKnownTypeName(binding.?))
                         return c.err("'{s}' is a type name and cannot be used as a binding name", .{binding.?});
-                    try c.cs.emitOp(.variant_payload, dot_line);
-                    if (c.inFunc()) {
+                    if (has_guard and c.inFunc()) {
+                        _ = try c.defineLocal("_ scrutinee", true);
+                        try c.cs.emitOp(.dup, dot_line);
+                        try c.cs.emitOp(.variant_payload, dot_line);
                         _ = try c.defineLocal(binding.?, false);
-                    } else {
+                        guarded_local_binding = true;
+                    } else if (has_guard) {
+                        // Global scope: def_global pops the payload copy, so
+                        // the scrutinee survives a failed guard on its own.
+                        try c.cs.emitOp(.dup, dot_line);
+                        try c.cs.emitOp(.variant_payload, dot_line);
                         try c.cs.emitOpStringConst(.def_global, try c.qualifyGlobalName(binding.?), dot_line);
+                    } else {
+                        try c.cs.emitOp(.variant_payload, dot_line);
+                        if (c.inFunc()) {
+                            _ = try c.defineLocal(binding.?, false);
+                        } else {
+                            try c.cs.emitOpStringConst(.def_global, try c.qualifyGlobalName(binding.?), dot_line);
+                        }
                     }
-                } else {
-                    try c.cs.emitOp(.pop, dot_line); // discard switch value
+                }
+                var guard_fail: ?usize = null;
+                if (has_guard) {
+                    _ = c.match(.kw_when);
+                    const guard_line = c.prev.line;
+                    // Compile the guard at case-body depth: like body reads,
+                    // references (e.g. the def_global binding at global scope)
+                    // resolve at runtime rather than via the eager top-level
+                    // undefined-variable check.
+                    c.block_depth += 1;
+                    try c.expr();
+                    c.block_depth -= 1;
+                    guard_fail = try c.cs.emitJump(.jif_pop, guard_line);
+                }
+                // Consume the scrutinee on the matched path. The guarded local
+                // binding keeps it pinned as the hidden local instead (cleanup
+                // pops it); an unguarded binding already consumed it in place.
+                if (binding == null or (has_guard and !c.inFunc())) {
+                    try c.cs.emitOp(.pop, dot_line);
                 }
                 try c.consume(.lbrace);
                 try block(c, );
+                // Snapshot before cleanup truncates the table: if the guard
+                // captured the binding in a closure, the fail path must close
+                // that upvalue before dropping the slot.
+                const binding_captured = guarded_local_binding and
+                    c.currentScope().locals[local_before + 1].is_captured;
                 try c.cleanupLocals(local_before, c.prev.line);
                 if (end_count >= MaxSwitchJumps) { c.setErr("too many switch cases (max {d})", .{MaxSwitchJumps}); return error.TooManySwitchCases; }
                 end_jumps[end_count] = try c.cs.emitJump(.jump, c.prev.line);
                 end_count += 1;
+                if (guarded_local_binding) {
+                    // Failed guard lands here with [scrutinee, binding]: drop
+                    // the binding, then fall into the next case's test.
+                    try c.cs.patchJump(guard_fail.?);
+                    if (binding_captured) try c.cs.emit2(@intFromEnum(Op.close_upvalue), local_before + 1, c.prev.line);
+                    try c.cs.emitOp(.pop, dot_line);
+                } else if (guard_fail) |gf| {
+                    try c.cs.patchJump(gf);
+                }
                 try c.cs.patchJump(next_case);
             } else {
                 // Regular value case: supports a comma-separated list of values.
@@ -1500,6 +1554,17 @@ pub fn switchStmt(c: anytype) anyerror!void {
                     } else {
                         const next_case = try c.cs.emitJump(.jif_pop, case_line);
                         for (body_jumps[0..body_jump_count]) |bj| try c.cs.patchJump(bj);
+                        // Optional guard after the value list: evaluated with
+                        // the scrutinee still on the stack, so a failed guard
+                        // falls through to the next case like a failed match.
+                        var guard_fail: ?usize = null;
+                        if (c.match(.kw_when)) {
+                            const guard_line = c.prev.line;
+                            c.block_depth += 1;
+                            try c.expr();
+                            c.block_depth -= 1;
+                            guard_fail = try c.cs.emitJump(.jif_pop, guard_line);
+                        }
                         try c.cs.emitOp(.pop, case_line);
                         try c.consume(.lbrace);
                         try block(c, );
@@ -1507,6 +1572,7 @@ pub fn switchStmt(c: anytype) anyerror!void {
                         end_jumps[end_count] = try c.cs.emitJump(.jump, c.prev.line);
                         end_count += 1;
                         try c.cs.patchJump(next_case);
+                        if (guard_fail) |gf| try c.cs.patchJump(gf);
                         break;
                     }
                 }

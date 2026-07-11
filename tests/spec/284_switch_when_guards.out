@@ -1,0 +1,12 @@
+https
+http
+unprivileged
+privileged
+denied: policy
+denied
+allowed (strict)
+allowed
+negative
+small
+large
+success 204

@@ -351,6 +351,19 @@ switch status {
 }
 ```
 
+A case may carry a `when` guard: the case matches only if its pattern matches
+*and* the guard expression is truthy. A failed guard falls through to the
+next case, so cases are tested top to bottom:
+
+```gengo
+switch port {
+    case 80, 443 when port == 443 { return "https" }
+    case 80, 443                  { return "http" }
+    case port when port > 1024    { return "unprivileged" }
+    default                       { return "privileged" }
+}
+```
+
 Pattern-based branching uses `switch` (see [Enums and Variants](#enums-and-variants)).
 
 ## Functions
@@ -731,6 +744,19 @@ switch ev {
 switch r {
     case .ok as v   { return v }
     case .err as msg { return msg }
+    case .pending   { return "pending" }
+}
+```
+
+Variant cases accept `when` guards too, and the guard sees the `as` binding.
+A guarded case does not fully cover its arm, so exhaustiveness requires each
+arm to have an unguarded case (or the switch a `default`):
+
+```gengo
+switch r {
+    case .err as msg when std.core.len(msg) > 0 { return "error: " + msg }
+    case .err       { return "error" }
+    case .ok as v   { return v }
     case .pending   { return "pending" }
 }
 ```

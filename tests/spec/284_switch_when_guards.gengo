@@ -1,0 +1,65 @@
+std := import("std")
+
+// Value cases with guards: first match (pattern AND guard) wins.
+func classify(port int) string {
+    switch port {
+        case 80, 443 when port == 443 { return "https" }
+        case 80, 443                  { return "http" }
+        case port when port > 1024    { return "unprivileged" }
+        default                       { return "privileged" }
+    }
+    return ""
+}
+
+std.io.println(classify(443))
+std.io.println(classify(80))
+std.io.println(classify(8080))
+std.io.println(classify(22))
+
+// Variant arm guards, with and without payload bindings.
+type Decision variant {
+    allow,
+    deny(reason string),
+}
+
+func explain(d Decision, strict bool) string {
+    switch d {
+        case .deny as r when std.core.len(r) > 0 { return "denied: " + r }
+        case .deny                               { return "denied" }
+        case .allow when strict                  { return "allowed (strict)" }
+        case .allow                              { return "allowed" }
+    }
+    return ""
+}
+
+std.io.println(explain(Decision.deny("policy"), false))
+std.io.println(explain(Decision.deny(""), false))
+std.io.println(explain(Decision.allow(), true))
+std.io.println(explain(Decision.allow(), false))
+
+// Guard falls through to default when no case matches.
+func bucket(n int) string {
+    switch n {
+        case n when n < 0    { return "negative" }
+        case n when n < 100  { return "small" }
+        default              { return "large" }
+    }
+    return ""
+}
+
+std.io.println(bucket(-5))
+std.io.println(bucket(42))
+std.io.println(bucket(1000))
+
+// Guards at global scope with a variant binding.
+type Reply variant {
+    ok(code int),
+    err,
+}
+
+r := Reply.ok(204)
+switch r {
+    case .ok as code when code >= 300 { std.io.println("redirect-or-error") }
+    case .ok as code                  { std.io.println("success " + std.conv.to_string(code)) }
+    case .err                         { std.io.println("error") }
+}
