@@ -1,0 +1,44 @@
+std := import("std")
+
+// Basic: null LHS yields RHS
+x := null
+std.io.println(x ?? "default")
+
+// Non-null LHS yields LHS
+y := "hello"
+std.io.println(y ?? "default")
+
+// Right-associative chaining: a ?? b ?? c
+a := null
+b := null
+std.io.println(a ?? b ?? "fallback")
+
+a2 := null
+b2 := "middle"
+std.io.println(a2 ?? b2 ?? "fallback")
+
+// Works with numeric types
+n := null
+std.io.println(std.conv.to_string(n ?? 42))
+
+// Short-circuit: RHS only evaluated when LHS is null
+counter := 0
+func side_effect() int {
+    counter = counter + 1
+    return 99
+}
+val := 7
+result := val ?? side_effect()
+std.io.println(std.conv.to_string(result))
+std.io.println(std.conv.to_string(counter))  // must be 0: side_effect not called
+
+val2 := null
+result2 := val2 ?? side_effect()
+std.io.println(std.conv.to_string(result2))
+std.io.println(std.conv.to_string(counter))  // must be 1: side_effect called once
+
+// Works with nullable typed variable
+var s ?string = null
+std.io.println(s ?? "was null")
+s = "assigned"
+std.io.println(s ?? "was null")

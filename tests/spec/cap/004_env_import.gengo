@@ -1,0 +1,17 @@
+std := import("std")
+env := import("cap:env")
+
+// get() returns null for unknown variable
+result := env.get("GENGO_TEST_NONEXISTENT_XYZ_12345")
+std.io.println(result ?? "absent")
+
+// get() with ?? integrates naturally
+path := env.get("PATH") ?? "(no path)"
+std.io.println(std.core.type_of(path))
+
+// list() returns a map
+all := env.list()
+std.io.println(std.core.type_of(all))
+
+// list() result is non-null
+std.io.println(all != null)

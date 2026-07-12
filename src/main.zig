@@ -23,6 +23,7 @@ const vms = @import("lang/vm_state.zig");
 const cfg = @import("runtime/config.zig");
 const heap_rt = @import("runtime/heap.zig");
 const fs_state = @import("lang/native/fs_state.zig");
+const cap_env = if (build_opts.cap_env) @import("lang/native/cap_env.zig") else struct {};
 const disasm = @import("lang/disasm.zig");
 
 const MaxArgs = 32;
@@ -651,6 +652,7 @@ pub fn main(init: std.process.Init.Minimal) void {
             }
         }
     }
+    if (comptime build_opts.cap_env) cap_env.setEnvironBlock(init.environ.block);
     var argv_storage: [MaxArgs][]const u8 = undefined;
     var n: usize = 0;
 

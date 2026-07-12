@@ -256,6 +256,7 @@ pub const Compiler = struct {
             .dotdot => "'..'",
             .ellipsis => "'...'",
             .question => "'?'",
+            .question_question => "'??'",
             .plus => "'+'",
             .minus => "'-'",
             .star => "'*'",

@@ -44,6 +44,7 @@ const build_options = @import("build_options");
 const cap_net_mod = if (build_options.cap_net) @import("cap_net.zig") else struct {};
 const cap_fs_mod = if (build_options.cap_fs) @import("cap_fs.zig") else struct {};
 const cap_http_mod = if (build_options.cap_http) @import("cap_http.zig") else struct {};
+const cap_env_mod = if (build_options.cap_env) @import("cap_env.zig") else struct {};
 
 const TemplateTypeQualifiedName = "@std.template.obj";
 const TimeTypeQualifiedName = "@std.time.obj";
@@ -847,6 +848,12 @@ pub fn callNative(ctx: vms.VMContext, nf: NativeFuncObj, argc: u8) !void {
             if (comptime build_options.cap_http) {
                 switch (id) {
                     .cap_http_get, .cap_http_post, .cap_http_fetch => return cap_http_mod.dispatch(ctx, nf, argc),
+                    else => {},
+                }
+            }
+            if (comptime build_options.cap_env) {
+                switch (id) {
+                    .cap_env_get, .cap_env_list => return cap_env_mod.dispatch(ctx, nf, argc),
                     else => {},
                 }
             }
