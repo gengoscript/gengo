@@ -20,7 +20,7 @@ fn isUnconditionalBranch(op: Op) bool {
 
 fn isConditionalBranch(op: Op) bool {
     return switch (op) {
-        .jump_if_false, .jif_pop,
+        .jump_if_false, .jump_if_not_null, .jif_pop,
         .get_local_const_eq_jif_pop, .get_local_const_lt_jif_pop, .get_local_const_gt_jif_pop,
         .get_global_const_lt_jif_pop,
         .get_local_const_lt_jif_pop_jump => true,
@@ -129,7 +129,7 @@ fn stackEffect(op: Op, code: []const u8, ip: usize) struct { pop: u8, push: u8 }
         .ret_const, .get_local_ret => .{ .pop = 0, .push = 0 },
         .add_ret => .{ .pop = 2, .push = 0 },
 
-        .jump, .loop, .set_global_loop, .close_upvalue_loop, .jump_if_false => .{ .pop = 0, .push = 0 },
+        .jump, .loop, .set_global_loop, .close_upvalue_loop, .jump_if_false, .jump_if_not_null => .{ .pop = 0, .push = 0 },
         .get_local_const_eq_jif_pop, .get_local_const_lt_jif_pop, .get_local_const_gt_jif_pop,
         .get_local_const_lt_jif_pop_jump,
         .get_global_const_lt_jif_pop => .{ .pop = 0, .push = 0 },

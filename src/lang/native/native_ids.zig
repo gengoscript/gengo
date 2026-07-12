@@ -226,6 +226,8 @@ pub const NativeFnId = enum(u8) {
     bytes_f32le_at    = 230,
     bytes_f64be_at    = 231,
     bytes_f64le_at    = 232,
+    cap_env_get       = 233,
+    cap_env_list      = 234,
 };
 
 pub const MaxNativeArgs = 255;

@@ -72,6 +72,7 @@ pub const InstCacheEntry = struct {
 pub const Prec = enum(u8) {
     none,
     assign,
+    null_coalesce,
     or_,
     and_,
     eq_,

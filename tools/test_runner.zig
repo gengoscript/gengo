@@ -134,7 +134,7 @@ fn runConformance(alloc: std.mem.Allocator, wasmtime: []const u8, wasm_path: []c
     }
 
     // Collect capability cases
-    const cap_flags = "--cap net --cap fs --cap http";
+    const cap_flags = "--cap net --cap fs --cap http --cap env";
     const cap_dirs = [_][]const u8{ "tests/spec/cap", "tests/spec/cap/fail" };
     for (cap_dirs) |cap_dir| {
         var cap_cases: [MaxCases][]const u8 = undefined;

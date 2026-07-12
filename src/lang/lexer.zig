@@ -92,7 +92,7 @@ pub const Lexer = struct {
             ';' => self.tok(.semicolon),
             ':' => self.tok(if (self.eat('=')) .colon_eq else .colon),
             '.' => self.tok(if (self.eat('.')) (if (self.eat('.')) .ellipsis else .dotdot) else .dot),
-            '?' => self.tok(.question),
+            '?' => self.tok(if (self.eat('?')) .question_question else .question),
             '+' => self.tok(if (self.eat('+')) .plus_plus else if (self.eat('=')) .plus_eq else .plus),
             '-' => self.tok(if (self.eat('-')) .minus_minus else if (self.eat('=')) .minus_eq else .minus),
             '*' => self.tok(if (self.eat('*')) .star_star else if (self.eat('=')) .star_eq else .star),

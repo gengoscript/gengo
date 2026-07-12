@@ -202,7 +202,7 @@ pub fn disassemble(cs: *const chunk.State) void {
             },
 
             // --- jumps: 4-byte forward offset ---
-            .jump, .jump_if_false, .jif_pop => {
+            .jump, .jump_if_false, .jump_if_not_null, .jif_pop => {
                 const off = readU32(cs, i);
                 i += 4;
                 const target = start + 5 + @as(usize, off);

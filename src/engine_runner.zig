@@ -877,27 +877,34 @@ fn testStructReturn() void {
     const call_res = rt.call("makePoint", &[_]Value{});
     switch (call_res) {
         .ok => |v| {
-            if (v != .object or v.object.* != .struct_instance) fail("engine FAIL: struct return type\n");
-            const fields = v.object.struct_instance.fields;
-            if (fields.len != 2) fail("engine FAIL: struct field count\n");
-            // fields are MapEntry with string keys
-            var found_x = false;
-            var found_y = false;
-            for (fields) |f| {
-                const key = switch (f.key) {
-                    .string => |s| s.bytes,
-                    .object => |o| if (o.* == .dyn_string) o.dyn_string else if (o.* == .string_view) o.string_view.bytes else fail("engine FAIL: struct bad key type\n"),
-                    else => fail("engine FAIL: struct bad key type\n"),
-                };
-                if (std.mem.eql(u8, key, "x")) {
-                    if (f.value != .int or f.value.int != 1) fail("engine FAIL: struct x field\n");
-                    found_x = true;
-                } else if (std.mem.eql(u8, key, "y")) {
-                    if (f.value != .int or f.value.int != 2) fail("engine FAIL: struct y field\n");
-                    found_y = true;
-                }
+            if (v != .object) fail("engine FAIL: struct return type\n");
+            const obj = v.object;
+            // Point has 2 fields — may be small_struct_instance or struct_instance
+            var x_val: Value = .null;
+            var y_val: Value = .null;
+            switch (obj.*) {
+                .struct_instance => |si| {
+                    for (si.fields) |f| {
+                        const key: []const u8 = switch (f.key) {
+                            .string => |s| s.bytes,
+                            .object => |o| if (o.* == .dyn_string) o.dyn_string else if (o.* == .string_view) o.string_view.bytes else fail("engine FAIL: struct bad key\n"),
+                            else => fail("engine FAIL: struct bad key\n"),
+                        };
+                        if (std.mem.eql(u8, key, "x")) x_val = f.value;
+                        if (std.mem.eql(u8, key, "y")) y_val = f.value;
+                    }
+                },
+                .small_struct_instance => |ssi| {
+                    const fields = ssi.typ.struct_type.fields;
+                    for (fields, 0..) |field, i| {
+                        if (std.mem.eql(u8, field.name, "x")) x_val = ssi.v[i];
+                        if (std.mem.eql(u8, field.name, "y")) y_val = ssi.v[i];
+                    }
+                },
+                else => fail("engine FAIL: struct return type\n"),
             }
-            if (!found_x or !found_y) fail("engine FAIL: struct missing fields\n");
+            if (x_val != .int or x_val.int != 1) fail("engine FAIL: struct x field\n");
+            if (y_val != .int or y_val.int != 2) fail("engine FAIL: struct y field\n");
         },
         .runtime_error => |e| {
             writeAll(2, "struct call runtime: "); writeAll(2, e.msg); writeAll(2, "\n");

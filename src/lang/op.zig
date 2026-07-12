@@ -112,6 +112,7 @@ pub const Op = enum(u8) {
     invoke_method,
     jump,
     jump_if_false,
+    jump_if_not_null, // peek TOS; if not null, jump forward by offset (value stays); used by ??
     jif_pop,          // pop condition then jump if it was falsy; used by if/while/for/switch
     loop,
     set_global_loop,  // fused: set_global (5 bytes) + loop back-edge (2 bytes); same IC layout

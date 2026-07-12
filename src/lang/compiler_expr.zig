@@ -311,6 +311,15 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
         try c.cs.patchJump(j_end);
         return;
     }
+    // ?? — null-coalescing: if LHS is not null, jump past pop+RHS; else pop null and eval RHS.
+    // Right-associative: recurse at same precedence level so `a ?? b ?? c` = `a ?? (b ?? c)`.
+    if (tt == .question_question) {
+        const j = try c.cs.emitJump(.jump_if_not_null, line);
+        try c.cs.emitOp(.pop, line);
+        try parsePrecedence(c, p);
+        try c.cs.patchJump(j);
+        return;
+    }
 
     // ** is right-associative: recurse at same level so 2**3**2 = 2**(3**2)
     if (tt == .star_star) {
@@ -626,6 +635,7 @@ pub fn varExpr(c: anytype, name: Token) !void {
 
 fn tokPrec(tt: TT) Prec {
     return switch (tt) {
+        .question_question => .null_coalesce,
         .kw_or, .pipe_pipe => .or_,
         .kw_and, .amp_amp => .and_,
         .eq_eq, .bang_eq => .eq_,

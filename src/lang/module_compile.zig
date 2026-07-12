@@ -121,6 +121,14 @@ pub const cap_http_desc: CapModuleDesc = .{
     },
 };
 
+pub const cap_env_desc: CapModuleDesc = .{
+    .name = "env",
+    .functions = &.{
+        .{ .name = "get",  .arity = 1, .native_id = 233 },
+        .{ .name = "list", .arity = 0, .native_id = 234 },
+    },
+};
+
 const _cap_storage = blk: {
     var caps: [MaxCapabilities]CapModuleDesc = undefined;
     var i: usize = 0;
@@ -136,9 +144,13 @@ const _cap_storage = blk: {
         caps[i] = cap_http_desc;
         i += 1;
     }
+    if (build_options.cap_env) {
+        caps[i] = cap_env_desc;
+        i += 1;
+    }
     break :blk caps;
 };
-const _cap_count: usize = @as(usize, @intFromBool(build_options.cap_net)) + @as(usize, @intFromBool(build_options.cap_fs)) + @as(usize, @intFromBool(build_options.cap_http));
+const _cap_count: usize = @as(usize, @intFromBool(build_options.cap_net)) + @as(usize, @intFromBool(build_options.cap_fs)) + @as(usize, @intFromBool(build_options.cap_http)) + @as(usize, @intFromBool(build_options.cap_env));
 pub const AllCapabilities = _cap_storage[0.._cap_count];
 
 pub const MaxCapabilities = 16;
