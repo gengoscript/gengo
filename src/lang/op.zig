@@ -120,6 +120,10 @@ pub const Op = enum(u8) {
     validate_type_default, // if TOS named_type has both a default and a predicate, check the default now
     call,
     call_tail, // tail-position call; same encoding as call; VM skips tryTailCall for plain call
+    // Spread call: callee has named_return_count >= 2 and the call site destructures
+    // the result directly. The ret handler pushes spread_n individual values instead
+    // of boxing into a tuple.  Layout: [op][argc][spread_n][ic_hi][ic_lo] (5 bytes).
+    call_spread,
     defer_call,
     defer_invoke_method,
     op_assert,

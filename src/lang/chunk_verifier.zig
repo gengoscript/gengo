@@ -62,6 +62,11 @@ fn stackEffect(op: Op, code: []const u8, ip: usize) struct { pop: u8, push: u8 }
             const argc = code[ip + 1];
             break :blk .{ .pop = argc + 1, .push = 1 };
         },
+        .call_spread => blk: {
+            const argc = code[ip + 1];
+            const spread_n = code[ip + 2];
+            break :blk .{ .pop = argc + 1, .push = spread_n };
+        },
         .defer_call => blk: {
             const argc = code[ip + 1];
             break :blk .{ .pop = argc + 1, .push = 0 };

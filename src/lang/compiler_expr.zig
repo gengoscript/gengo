@@ -246,6 +246,12 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
         return;
     }
     if (tt == .lparen) {
+        // Capture spread info for this callee before parsing args (which may overwrite it).
+        const callee_spread_n = c.pending_call_spread_count;
+        c.pending_call_spread_count = 0;
+        // Prevent the multi-assign context from bleeding into nested calls (e.g. f(g())).
+        const outer_lhs_count = c.multi_assign_lhs_count;
+        c.multi_assign_lhs_count = 0;
         var argc: u8 = 0;
         if (!c.check(.rparen)) {
             while (true) {
@@ -257,7 +263,21 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
         }
         try c.consume(.rparen);
         c.cs.setCol(col);
-        try c.cs.emitCall(argc, line);
+        c.multi_assign_lhs_count = outer_lhs_count;
+        if (callee_spread_n >= 2) {
+            // All N≥2 named-return calls use call_spread so the verifier tracks N values.
+            // The callee (via ret or retSlowPath) always pushes N individual values.
+            try c.cs.emitCallSpread(argc, callee_spread_n, line);
+            if (outer_lhs_count == callee_spread_n) {
+                // Spread-compatible context: signal multiAssignOrDecl to consume N directly.
+                c.last_spread_return_count = callee_spread_n;
+            } else {
+                // Non-spread context: re-pack the N spread values into a single tuple.
+                try c.cs.emit2(@intFromEnum(Op.build_tuple), callee_spread_n, line);
+            }
+        } else {
+            try c.cs.emitCall(argc, line);
+        }
         return;
     }
 

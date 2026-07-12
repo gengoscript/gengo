@@ -678,10 +678,9 @@ pub fn emitImplicitReturn(scope: *FuncInfo, cs: *chunk.State, line: u32) !void {
     } else if (scope.named_return_count == 1) {
         try cs.emit2(@intFromEnum(Op.get_local), scope.named_return_base, line);
     } else {
-        for (0..scope.named_return_count) |ri| {
-            try cs.emit2(@intFromEnum(Op.get_local), scope.named_return_base + @as(u8, @intCast(ri)), line);
-        }
-        try cs.emit2(@intFromEnum(Op.build_tuple), scope.named_return_count, line);
+        // Push null as a placeholder; the ret handler detects named_return_count>=2
+        // and reads directly from slots, pushing N values for the caller (no GC).
+        try cs.emitOp(.null_val, line);
     }
 }
 
@@ -1063,32 +1062,63 @@ pub fn multiBindStmt(c: anytype, is_decl: bool) !void {
     }
 
     try c.consume(if (is_decl) .colon_eq else .eq);
+    // Signal to infixExpr(.lparen) that this is a multi-assign context of `count` values.
+    c.multi_assign_lhs_count = count;
+    c.last_spread_return_count = 0;
     _ = try emitExprListTuple(c, );
-    try c.cs.emit2(@intFromEnum(Op.tuple_check_arity), count, c.prev.line);
+    const spread_n = c.last_spread_return_count;
+    c.multi_assign_lhs_count = 0;
+    c.last_spread_return_count = 0;
 
-    for (0..count) |ii| {
-        const i: u8 = @intCast(ii);
-        if (is_decl) {
-            const is_trap_slot = names[i].typ == .kw_trap;
-            try c.cs.emitOp(.dup, names[i].line);
-            try c.cs.emit2(@intFromEnum(Op.tuple_get), i, names[i].line);
-            if (is_trap_slot) {
-                try c.cs.emitOp(.op_trap_check, names[i].line);
-            } else if (c.inFunc()) {
-                try c.emitSetVar(names[i]);
+    if (spread_n == count) {
+        // Spread path: callee pushed N values (vN-1 on top, v0 below).
+        // Assign in reverse order: pop vN-1 → names[N-1], ..., pop v0 → names[0].
+        for (0..count) |rii| {
+            const i: u8 = @intCast(count - 1 - rii);
+            if (is_decl) {
+                const is_trap_slot = names[i].typ == .kw_trap;
+                if (is_trap_slot) {
+                    try c.cs.emitOp(.op_trap_check, names[i].line);
+                } else if (c.inFunc()) {
+                    try c.emitSetVar(names[i]);
+                } else {
+                    try c.cs.emitOpStringConst(.def_global, try c.qualifyGlobalName(names[i].src), names[i].line);
+                }
             } else {
-                try c.cs.emitOpStringConst(.def_global, try c.qualifyGlobalName(names[i].src), names[i].line);
+                if (targets[i].step_count == 0) try c.ensureMutableBinding(targets[i].root);
+                const vidx: u16 = try c.cs.addStringConst(MultiAssignValueScratch);
+                try c.cs.emitConstIdx(.def_global, vidx, targets[i].root.line);
+                try emitAssignTargetPath(c, targets[i], steps[0..step_count]);
             }
-        } else {
-            if (targets[i].step_count == 0) try c.ensureMutableBinding(targets[i].root);
-            const vidx: u16 = try c.cs.addStringConst(MultiAssignValueScratch);
-            try c.cs.emitOp(.dup, targets[i].root.line);
-            try c.cs.emit2(@intFromEnum(Op.tuple_get), i, targets[i].root.line);
-            try c.cs.emitConstIdx(.def_global, vidx, targets[i].root.line);
-            try emitAssignTargetPath(c, targets[i], steps[0..step_count]);
         }
+        // No final pop: all values consumed individually.
+    } else {
+        // Tuple path: one tuple value on the stack.
+        try c.cs.emit2(@intFromEnum(Op.tuple_check_arity), count, c.prev.line);
+        for (0..count) |ii| {
+            const i: u8 = @intCast(ii);
+            if (is_decl) {
+                const is_trap_slot = names[i].typ == .kw_trap;
+                try c.cs.emitOp(.dup, names[i].line);
+                try c.cs.emit2(@intFromEnum(Op.tuple_get), i, names[i].line);
+                if (is_trap_slot) {
+                    try c.cs.emitOp(.op_trap_check, names[i].line);
+                } else if (c.inFunc()) {
+                    try c.emitSetVar(names[i]);
+                } else {
+                    try c.cs.emitOpStringConst(.def_global, try c.qualifyGlobalName(names[i].src), names[i].line);
+                }
+            } else {
+                if (targets[i].step_count == 0) try c.ensureMutableBinding(targets[i].root);
+                const vidx: u16 = try c.cs.addStringConst(MultiAssignValueScratch);
+                try c.cs.emitOp(.dup, targets[i].root.line);
+                try c.cs.emit2(@intFromEnum(Op.tuple_get), i, targets[i].root.line);
+                try c.cs.emitConstIdx(.def_global, vidx, targets[i].root.line);
+                try emitAssignTargetPath(c, targets[i], steps[0..step_count]);
+            }
+        }
+        try c.cs.emitOp(.pop, c.prev.line);
     }
-    try c.cs.emitOp(.pop, c.prev.line);
     c.matchOpt(.semicolon);
 }
 

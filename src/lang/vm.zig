@@ -881,6 +881,8 @@ fn enterFunctionFrameWarm(ctx: VMContext, f: @import("value.zig").FuncObj, func_
         .func_obj = func_obj,
         .defer_base = ctx.vs.defer_top,
         .has_typed_returns = f.has_typed_returns,
+        .named_return_count = f.named_return_count,
+        .func_arity = f.arity,
     };
     ctx.vs.frame_top += 1;
     ctx.vs.ip = f.ip;
@@ -925,6 +927,8 @@ fn enterFunctionFrame(ctx: VMContext, f: @import("value.zig").FuncObj, func_obj:
         .func_obj = func_obj,
         .defer_base = ctx.vs.defer_top,
         .has_typed_returns = f.has_typed_returns,
+        .named_return_count = f.named_return_count,
+        .func_arity = f.arity,
     };
     ctx.vs.frame_top += 1;
     ctx.vs.ip = f.ip;
@@ -1301,19 +1305,25 @@ fn retSlowPath(ctx: VMContext, retval_in: Value) !bool {
                 const raw = ctx.vs.stack[nrbase];
                 retval = vms.unboxCell(raw);
             } else {
+                // Spread: push N values directly — no allocation, no tuple boxing.
+                // Read all values before unwinding so slots aren't clobbered.
+                var spread_vals: [64]Value = undefined;
                 const nrc: usize = fsig.named_return_count;
-                const arr_obj = try vmgc.vmAllocObject(ctx);
-                arr_obj.* = .{ .array = &[_]Value{} };
-                try ctx.vs.pushTempRoot(.{ .object = arr_obj });
-                const items = try vmgc.vmAllocManagedSlice(ctx, Value, nrc);
                 for (0..nrc) |ri| {
                     if (nrbase + ri >= ctx.vs.stack.len) return error.StackOverflow;
-                    const raw = ctx.vs.stack[nrbase + ri];
-                    items[ri] = vms.unboxCell(raw);
+                    spread_vals[ri] = vms.unboxCell(ctx.vs.stack[nrbase + ri]);
                 }
-                arr_obj.* = .{ .array_managed = items[0..nrc] };
-                ctx.vs.popTempRoot();
-                retval = .{ .object = arr_obj };
+                const frame_base = frame.base;
+                const frame_ret_ip = frame.ret_ip;
+                // Temp root depth is now at saved_temp_root (null_val popped above).
+                ctx.vs.frame_top = fi;
+                ctx.vs.stack_top = if (frame_base > 0) frame_base - 1 else 0;
+                ctx.vs.ip = frame_ret_ip;
+                for (0..nrc) |ri| try ctx.vs.vmPush(spread_vals[ri]);
+                if (ctx.vs.call_depth_target) |d| {
+                    if (ctx.vs.frame_top == d) return true;
+                }
+                return false;
             }
             try ctx.vs.pushTempRoot(retval);
         }
@@ -3040,7 +3050,7 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                     vmgc.collectGarbage(ctx);
                     break :blk (ctx.hs.bump(*Object, proto.capture_slots.len) orelse return error.OutOfMemory);
                 };
-                const frame = if (ctx.vs.frame_top == 0) vms.Frame{ .ret_ip = 0, .base = 0, .closure = null, .func_obj = f.object, .defer_base = 0, .has_typed_returns = false } else ctx.vs.frames[ctx.vs.frame_top - 1];
+                const frame = if (ctx.vs.frame_top == 0) vms.Frame{ .ret_ip = 0, .base = 0, .closure = null, .func_obj = f.object, .defer_base = 0, .has_typed_returns = false, .named_return_count = 0, .func_arity = 0 } else ctx.vs.frames[ctx.vs.frame_top - 1];
                 for (proto.capture_slots, ups) |enc, *u| {
                     const is_upvalue = (enc & 0x80) != 0;
                     const idx = enc & 0x7f;
@@ -3151,6 +3161,21 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 const t1 = vmperf.readTsc();
                 if (t1 > t0) vmperf.callCycles(t1 - t0);
             },
+            .call_spread => {
+                // Layout: [call_spread][argc][spread_n][ic_hi][ic_lo]
+                // The ret handler detects named_return_count >= 2 and pushes N values;
+                // this opcode is identical to call at the VM level — the spread_n byte
+                // exists only so the verifier tracks the correct stack depth.
+                const argc = opByte(ctx);
+                ctx.vs.ip += 1; // skip spread_n (used only by verifier)
+                const ic_base = ctx.vs.ip;
+                const ic_slot: u16 = (@as(u16, ctx.cs.codeByteAt(ic_base)) << 8) | @as(u16, ctx.cs.codeByteAt(ic_base + 1));
+                ctx.vs.ip += 2;
+                const t0 = vmperf.readTsc();
+                try performCallIC(ctx, argc, ic_base, ic_slot);
+                const t1 = vmperf.readTsc();
+                if (t1 > t0) vmperf.callCycles(t1 - t0);
+            },
             .op_assert => {
                 const cond = try ctx.vs.vmPop();
                 if (cond != .boolean) return error.TypeError;
@@ -3233,6 +3258,33 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 const t0 = vmperf.readTsc();
                 const retval = try ctx.vs.vmPop();
                 const fi = ctx.vs.frame_top - 1;
+                const frame_nrc = ctx.vs.frames[fi].named_return_count;
+                // Spread fast path: multi-named-return with no defers — push N values
+                // directly from slots without boxing into a GC-allocated tuple.
+                if (frame_nrc >= 2 and ctx.vs.defer_top == ctx.vs.frames[fi].defer_base) {
+                    const nrbase = ctx.vs.frames[fi].base + @as(usize, ctx.vs.frames[fi].func_arity);
+                    var vals: [64]Value = undefined;
+                    for (0..frame_nrc) |i| {
+                        if (nrbase + i >= ctx.vs.stack.len) return error.StackOverflow;
+                        vals[i] = vms.unboxCell(ctx.vs.stack[nrbase + i]);
+                    }
+                    const frame_ret_ip = ctx.vs.frames[fi].ret_ip;
+                    const frame_base = ctx.vs.frames[fi].base;
+                    ctx.vs.frame_top = fi;
+                    ctx.vs.stack_top = if (frame_base > 0) frame_base - 1 else 0;
+                    ctx.vs.ip = frame_ret_ip;
+                    for (0..frame_nrc) |i| try ctx.vs.vmPush(vals[i]);
+                    if (ctx.vs.call_depth_target) |d| {
+                        if (ctx.vs.frame_top == d) {
+                            const t1 = vmperf.readTsc();
+                            if (t1 > t0) vmperf.retCycles(t1 - t0);
+                            return true;
+                        }
+                    }
+                    const t1 = vmperf.readTsc();
+                    if (t1 > t0) vmperf.retCycles(t1 - t0);
+                    continue;
+                }
                 if (canReturnFast(ctx, fi, retval)) {
                     try doReturnFast(ctx, fi, retval);
                     if (ctx.vs.call_depth_target) |d| {
@@ -3394,23 +3446,19 @@ fn runPanicUnwind(ctx: VMContext, orig_err: anyerror) anyerror!void {
                     ctx.vs.vmPush(.null) catch {};
                 }
             } else {
-                // Multi-value return: build a tuple of the right size.
-                // Named returns: use the values from the (still-readable) stack slots;
-                // unnamed returns: fill with null.
-                const n: u8 = if (named_ret > 0) named_ret else @intCast(@min(ret_count, 255));
-                const tup_obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
-                const items = try vmgc.vmAllocManagedSlice(ctx, Value, n);
+                // Multi-value return: callers use call_spread and expect N individual values.
+                // Read from named-return slots (still accessible before the frame was used).
+                const n: usize = if (named_ret > 0) named_ret else @min(ret_count, 255);
+                var spread_vals: [64]Value = undefined;
                 if (named_ret > 0) {
-                    for (0..named_ret) |ri| {
+                    for (0..n) |ri| {
                         const raw = ctx.vs.stack[rec_base + rec_arity + ri];
-                        items[ri] = vms.unboxCell(raw);
+                        spread_vals[ri] = vms.unboxCell(raw);
                     }
                 } else {
-                    @memset(items, .null);
+                    for (0..n) |ri| spread_vals[ri] = .null;
                 }
-                tup_obj.* = .{ .array_managed = items };
-                ctx.vs.popTempRoot();
-                try ctx.vs.vmPush(.{ .object = tup_obj });
+                for (0..n) |ri| try ctx.vs.vmPush(spread_vals[ri]);
             }
             // If the recovered function was called via callGlobal (not from inside
             // bytecode), ret_ip points past halt/end-of-code.  The ret opcode's
