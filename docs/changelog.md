@@ -4,6 +4,7 @@
 
 ### Language
 
+- **`??` null-coalescing operator** — `a ?? b` returns `a` if it is not `null`, otherwise evaluates and returns `b`. Short-circuits (right-hand side is skipped when the left-hand side is non-null). Right-associative: `a ?? b ?? c` is `a ?? (b ?? c)`.
 - **Generic struct and variant types** — `type Stack[T] struct { items []T }` and `type Result[T, E] variant { ok(value T), err(e E) }`. Instantiate by supplying concrete type arguments: `Stack[int]{ items: [] }`, `Result[int, string].ok{ value: 42 }`. Type parameters are substituted at compile time; each instantiation is a distinct concrete type. Nested generic fields (e.g. `Stack[T]` inside `Wrapper[T]`) resolve correctly when the outer type is instantiated.
 - **Generic functions** — `func map_array[T, U](xs []T, f func(T) U) []U`. Type arguments may be omitted and are inferred from the call context: `map_array(nums, fn)`. Explicit type arguments are also accepted and their count is validated: `map_array[int, string](nums, fn)`. Type parameters are erased at runtime (treated as `any`).
 - **Generic constraints** — Type parameters may carry built-in constraints using `:` syntax: `func sort[T: ordered](xs []T)`. Constraints are enforced at explicit call sites. Three built-in constraints are supported: `numeric` (int, float, decimal, rune, and named subtypes), `ordered` (numeric + string and named string subtypes), and `comparable` (any type).
@@ -22,6 +23,7 @@
 
 ### Standard Library
 
+- **`cap:env`** — New capability module for process environment access. `env.get(name)` returns `string|null`; `env.list()` returns `[string]string`. Requires the host to enable the `env` capability; a script importing `cap:env` without host permission fails at compile time.
 - **`std.Arg`** — Built-in variant covering all primitive scalar types (`Int`, `Float`, `Decimal`, `Rune`, `Bool`, `Str`, `Err`). Use it to write type-safe heterogeneous variadic functions without exposing `any`.
 
 ### Fixes
