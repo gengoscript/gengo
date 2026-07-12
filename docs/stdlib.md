@@ -98,6 +98,7 @@ The entries below describe the public library surface. This page is intentionall
 ### `std.core.len(x)`
 - String: rune count (Unicode code points)
 - Array/map/struct instance: element/field count
+- Tuple: element count
 - Errors: `TypeError` on unsupported input
 
 ### `std.core.bytelen(s)`
@@ -122,8 +123,9 @@ The entries below describe the public library surface. This page is intentionall
 
 ### `std.core.type_of(v)`
 - Returns stable runtime type name
-- Plain scalars report names like `int`, `float`, `bool`, `string`, `error`, `null`
+- Plain scalars report names like `int`, `float`, `decimal`, `bigint`, `bool`, `string`, `error`, `null`
 - Named values and struct instances report their declared type name
+- Anonymous typed arrays and maps report composite names such as `[]int` or `[string]int`
 
 ### `std.core.is_int(v)`
 - `true` for integral numbers and named integer values
@@ -248,8 +250,9 @@ log_args("x", std.Arg.Int(42), std.Arg.Bool(true), std.Arg.Str("hi"))
 - Errors: `TypeError` on invalid conversion
 
 ### `std.conv.to_bool(x)`
-- Explicit conversion to boolean: `false`, `null`, `0`, and `""` convert to
-  `false`; everything else converts to `true`
+- Explicit conversion to boolean: `false`, `null`, `0`, and `""`
+  convert to `false`; everything else converts to `true` (including empty arrays)
+- Named values convert through their underlying value
 - This is the only truthiness in the language — `if`/`not`/`and`/`or` and
   template `{{if}}` require an actual `bool`
 

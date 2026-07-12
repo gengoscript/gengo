@@ -28,6 +28,19 @@ int32_t gengo_native_call(uint16_t id,
 | `len` | `u32` |
 | `reserved2` | `u32` |
 
+Layout note: `ValueWire` is a 24-byte `extern struct`. There is a 4-byte pad
+between `reserved` and `payload`, so the byte offsets are:
+
+| Offset | Field |
+|---|---|
+| `0` | `tag` |
+| `1` | `flags` |
+| `2` | `reserved` |
+| `4` | padding |
+| `8` | `payload` |
+| `16` | `len` |
+| `20` | `reserved2` |
+
 Supported tags:
 
 | Tag | Meaning |
@@ -40,7 +53,20 @@ Supported tags:
 | `5` | map |
 | `6` | error |
 
-For booleans, `payload` is `0` or `1`. For numbers, `payload` contains the bit pattern of an `f64`. For strings and errors, `payload` is a guest pointer and `len` is the byte length. For arrays, `payload` is a pointer to `len` consecutive `ValueWire` elements. For maps, `payload` is a pointer to `len * 2` consecutive `ValueWire` elements arranged as key-value pairs.
+For booleans, `payload` is `0` or `1`. For strings and errors, `payload` is a
+guest pointer and `len` is the byte length. For arrays, `payload` is a pointer
+to `len` consecutive `ValueWire` elements. For maps, `payload` is a pointer to
+`len * 2` consecutive `ValueWire` elements arranged as key-value pairs.
+
+`number` is a tagged numeric bucket. The concrete numeric kind is selected by
+the `flags` field:
+
+| Flag | Meaning |
+|---|---|
+| `0` | `payload` is an `f64` bit pattern (`float`) |
+| `1 << 0` | `payload` is raw `i64` bits (`int`) |
+| `1 << 1` | `payload` is raw fixed-point `i64` bits (`decimal`) |
+| `1 << 2` | `payload` is a Unicode code point (`rune`) |
 
 ## Status Codes
 
