@@ -3060,8 +3060,8 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                         for (st.fields, seen[0..st.fields.len]) |f, s| {
                             if (!s) { ctx.vs.setRuntimeErr("missing required field '{s}' in struct literal", .{f.name}); return error.MissingStructField; }
                         }
-                        ctx.vs.stack_top -= typ_stack_dist + 1;
                         const obj = try vmgc.vmAllocObject(ctx);
+                        ctx.vs.stack_top -= typ_stack_dist + 1;
                         obj.* = .{ .small_struct_instance = .{ .typ = typ_peek.object, .count = @intCast(st.fields.len), .v = inline_vals } };
                         try ctx.vs.vmPush(.{ .object = obj });
                     } else {
