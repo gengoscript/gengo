@@ -124,6 +124,16 @@ name = "Ada"
 name = null
 ```
 
+The `??` (null-coalescing) operator returns the left-hand side if it is not
+`null`, otherwise it evaluates and returns the right-hand side:
+
+```gengo
+label := name ?? "anonymous"
+```
+
+The right-hand side is only evaluated when the left-hand side is `null`
+(short-circuit). `??` is right-associative: `a ?? b ?? c` is `a ?? (b ?? c)`.
+
 A key design rule: **numeric types do not mix implicitly**. `int` and `float`
 cannot be combined in arithmetic or ordering comparisons (`1.5 + 1` and
 `1.5 > 1` are both type errors). Convert one side explicitly —
@@ -1051,6 +1061,10 @@ r  := Result[int, string].ok{ value: 42 }
 r2 := Result[int, string].err{ e: "not found" }
 ```
 
+This instantiation is compile-time and concrete. `Stack[int]` and
+`Stack[string]` are different runtime types, not one shared erased container
+type.
+
 Pattern matching works the same as for non-generic variants. The `as`
 binding names the payload directly:
 
@@ -1111,9 +1125,43 @@ n  := identity[int](42)
 doubled := map_array[int, int](nums, func(x int) int { return x * 2 })
 ```
 
+Inference works from ordinary value arguments and from generic return
+positions:
+
+```gengo
+type Box[T] struct { val T }
+
+func boxed[T](x T) Box[T] {
+    return Box[T]{ val: x }
+}
+
+a := identity(42)     // T = int
+b := boxed("world")   // T = string
+```
+
+If you write explicit type arguments, the count must match the declaration.
+For example, `identity[int, string](42)` fails with `WrongTypeArgCount`.
+
 Generic functions use **erased** type parameters at runtime: the compiled
 function body treats type-parameter-typed arguments as `any`. The type
-arguments at the call site are not checked against actual argument types.
+arguments at the call site are not reified as runtime values. Concrete types
+still matter at the call boundary and in instantiated return types like
+`Box[int]`.
+
+Generic type instantiations are available wherever the compiler encounters
+them, even if the first occurrence sits in a branch that is not taken at
+runtime:
+
+```gengo
+type Box[T] struct { val T }
+
+func make_box[T](x T, skip bool) Box[T] {
+    if skip {
+        return Box[T]{ val: x }
+    }
+    return Box[T]{ val: x }
+}
+```
 
 ### Generic Constraints
 
@@ -1141,6 +1189,28 @@ calls (no `[T]`) skip the check. Three built-in constraints are available:
 | `ordered`    | Everything `numeric` accepts, plus `string` and named string subtypes |
 | `comparable` | Any type (same as no constraint; useful as documentation) |
 
+Examples:
+
+```gengo
+type Score int
+type Label string
+
+func add_two[T: numeric](a T, b T) T { return a + b }
+func pick_larger[T: ordered](a T, b T) T {
+    if a > b { return a }
+    return b
+}
+
+std.io.println(add_two[int](3, 4))             // 7
+std.io.println(add_two[Score](Score(10), Score(20))) // 30
+std.io.println(pick_larger[Label](Label("a"), Label("z")))
+```
+
+An unknown constraint name such as `Hashable` is a compile-time error
+(`UnexpectedToken` in the current implementation). A mismatched explicit
+constraint instantiation such as `add_two[bool](true, false)` fails with
+`ConstraintViolation`.
+
 ### Generic Type Aliases
 
 A named alias gives a concrete generic instantiation a shorter name:
@@ -1165,7 +1235,8 @@ assert s.type == IntStack            // true — alias resolves to "Stack[int]"
 ```
 
 Alias arguments must be concrete (no type parameters). Aliases of
-generic types cannot be defined inside a generic body.
+generic types cannot be defined inside a generic body. `type BadAlias Stack[T]`
+outside a generic scope fails with `UnknownType`.
 
 ## Capability Imports
 
@@ -1179,6 +1250,7 @@ Current public capability modules:
 - `cap:http` — outgoing HTTP requests
 - `cap:fs` — filesystem access (restricted to host-registered mounts)
 - `cap:net` — raw socket operations
+- `cap:env` — read-only access to process environment variables
 
 Each capability module exposes a well-defined API. A script that only
 imports `std` and its own relative modules cannot touch the network or

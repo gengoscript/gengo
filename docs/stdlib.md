@@ -14,6 +14,11 @@ std := import("std")
 
 The entries below describe the public library surface. This page is intentionally reference-shaped: look up a function here once you already know which part of `std` you need.
 
+Where a function is naturally generic, this page uses informal generic-style
+signatures like `[T]` or `[K, V]` to show the type relationship between
+arguments and results. These are documentation signatures, not callable
+syntax on `std` itself.
+
 ## std.io
 
 ### `std.io.println(...args)`
@@ -105,7 +110,7 @@ The entries below describe the public library surface. This page is intentionall
 - String: UTF-8 byte count
 - Errors: `TypeError` on unsupported input
 
-### `std.core.append(arr, ...items)`
+### `std.core.append[T](arr []T, ...items T)`
 - Returns new array with appended items
 - Errors: `TypeError` if first arg is not array
 
@@ -172,27 +177,27 @@ The entries below describe the public library surface. This page is intentionall
 ### `std.core.gc_stats_ext()`
 - Returns extended GC stats with keys: `heap_used_bytes`, `heap_size_bytes`, `live_objects`, `gc_runs`, `gc_time_ns`, `alloc_object_calls`, `alloc_managed_slice_calls`, `alloc_managed_bytes_calls`
 
-### `std.core.keys(map)`
+### `std.core.keys[K, V](map [K]V)`
 - Returns array of all keys in a map
 - Errors: `TypeError` on non-map
 
-### `std.core.values(map)`
+### `std.core.values[K, V](map [K]V)`
 - Returns array of all values in a map
 - Errors: `TypeError` on non-map
 
-### `std.core.has(map, key)`
+### `std.core.has[K, V](map [K]V, key K)`
 - Returns `true` iff `key` exists in `map`
 - Errors: `TypeError` on non-map
 
-### `std.core.delete(map, key)`
+### `std.core.delete[K, V](map [K]V, key K)`
 - Removes `key` from `map`; returns the removed value or `null`
 - Errors: `TypeError` on non-map
 
-### `std.core.contains(arr, needle)`
+### `std.core.contains[T](arr []T, needle T)`
 - Returns `true` iff `arr` contains `needle` (uses `deep_equal`)
 - Errors: `TypeError` on non-array
 
-### `std.core.remove(arr, index)`
+### `std.core.remove[T](arr []T, index int)`
 - Returns a new array with the element at `index` removed
 - Errors: `TypeError` on non-array, `IndexOutOfBounds`
 
@@ -335,50 +340,51 @@ log_args("x", std.Arg.Int(42), std.Arg.Bool(true), std.Arg.Str("hi"))
 
 ## std.array
 
-### `std.array.filter(arr, pred)`
+### `std.array.filter[T](arr []T, pred func(T) bool)`
 - Returns array of elements where `pred(element)` is `true`
 
-### `std.array.map(arr, fn)`
+### `std.array.map[T, U](arr []T, fn func(T) U)`
 - Returns array of `fn(element)` for each element
 
-### `std.array.reduce(arr, fn, init)`
+### `std.array.reduce[T, U](arr []T, fn func(U, T) U, init U)`
 - Folds `arr` left-to-right: `fn(init, arr[0])`, then `fn(result, arr[1])`, etc.
 
-### `std.array.slice(arr, start, end)`
+### `std.array.slice[T](arr []T, start int, end int)`
 - Returns sub-array from `start` (inclusive) to `end` (exclusive)
 
-### `std.array.zip(a, b)`
+### `std.array.zip[A, B](a []A, b []B)`
 - Returns array of pairs `[a[0], b[0]], [a[1], b[1]], …`
 
 ### `std.array.flat(arr)`
 - Flattens one level of nesting: `[[1,2],[3]]` → `[1,2,3]`
 
-### `std.array.find(arr, pred)`
+### `std.array.find[T](arr []T, pred func(T) bool)`
 - Returns first element where `pred(element)` is `true`, or `null`
 
-### `std.array.find_index(arr, pred)`
+### `std.array.find_index[T](arr []T, pred func(T) bool)`
 - Returns index of first element where `pred(element)` is `true`, or `-1`
 
-### `std.array.all(arr, pred)`
+### `std.array.all[T](arr []T, pred func(T) bool)`
 - Returns `true` if `pred(element)` is `true` for every element
 
-### `std.array.any(arr, pred)`
+### `std.array.any[T](arr []T, pred func(T) bool)`
 - Returns `true` if `pred(element)` is `true` for at least one element
 
-### `std.array.chunk(arr, size)`
+### `std.array.chunk[T](arr []T, size int)`
 - Splits `arr` into sub-arrays of length `size`; last chunk may be shorter
 - Errors: `RangeError` if `size <= 0`
 
 ## std.sort
 
-### `std.sort.asc(arr)`
+### `std.sort.asc[T: ordered](arr []T)`
 - Returns a new array sorted in ascending order (int, float, or string elements); the original is unchanged
 
-### `std.sort.desc(arr)`
+### `std.sort.desc[T: ordered](arr []T)`
 - Returns a new array sorted in descending order; the original is unchanged
 
-### `std.sort.by(arr, key_fn)`
-- Returns a new array sorted by the value returned by `key_fn(element)` for each element; the original is unchanged
+### `std.sort.by[T](arr []T, cmp func(T, T) ...)`
+- Returns a new array sorted using a comparator called as `cmp(left, right)`; the original is unchanged
+- `cmp` may return a negative / zero / positive `int` or `float`, or a `bool` where `true` means `left < right`
 
 ## std.math
 
@@ -822,3 +828,39 @@ Go-style text templates with `{{` / `}}` delimiters.
 | `%b` | short month | `%%` | literal `%` |
 
 `parse` accepts: `%Y` (4-digit year), `%y` (2-digit year, 2000-based), `%m`, `%d`, `%H`, `%M`, `%S`, `%L` (milliseconds), `%B` (full month name), `%a` (weekday name, consumed but not used), `%W` (week number, consumed but not used). All times are UTC.
+
+---
+
+## cap:env
+
+Read-only access to the host process environment. Requires the host to enable
+the `env` capability (e.g. `--cap env` on the CLI). A script that imports
+`cap:env` will fail to compile if the host has not enabled it.
+
+```gengo
+env := import("cap:env")
+```
+
+### Functions
+
+#### `env.get(name string) string|null`
+
+Returns the value of the named environment variable, or `null` if it is not
+set.
+
+```gengo
+env  := import("cap:env")
+home := env.get("HOME") ?? "/tmp"
+```
+
+#### `env.list() [string]string`
+
+Returns all environment variables as a map from name to value.
+
+```gengo
+env  := import("cap:env")
+vars := env.list()
+for k, v in vars {
+    std.io.println(k + "=" + v)
+}
+```
