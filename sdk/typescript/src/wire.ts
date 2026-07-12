@@ -67,6 +67,7 @@ function writeWireHeader(ctx: WireWriteCtx, tag: WireTag): number {
   writeU8(ctx, tag);
   writeU8(ctx, 0); // flags
   writeU16(ctx, 0); // reserved
+  writeU32(ctx, 0); // ABI padding before payload
   writeU64(ctx, 0n); // payload placeholder
   writeU32(ctx, 0); // len placeholder
   writeU32(ctx, 0); // reserved2
@@ -75,8 +76,8 @@ function writeWireHeader(ctx: WireWriteCtx, tag: WireTag): number {
 
 /** Patch a previously written header with payload (u64) and len (u32). */
 function patchWire(ctx: WireWriteCtx, headerOff: number, payload: bigint, len: number): void {
-  ctx.dv.setBigUint64(headerOff + 4, payload, true);
-  ctx.dv.setUint32(headerOff + 12, len, true);
+  ctx.dv.setBigUint64(headerOff + 8, payload, true);
+  ctx.dv.setUint32(headerOff + 16, len, true);
 }
 
 /**
@@ -150,6 +151,17 @@ export function encodeGVal(ctx: WireWriteCtx, val: GVal): number {
       patchWire(ctx, off, BigInt(pairStart), entryCount);
       return ctx.pos;
     }
+    case "err": {
+      const bytes = new TextEncoder().encode(val.v);
+      const ptrOff = ctx.pos;
+      for (let i = 0; i < bytes.length; i++) {
+        ctx.dv.setUint8(ctx.pos, bytes[i]);
+        ctx.pos += 1;
+      }
+      const off = writeWireHeader(ctx, WireTag.Err);
+      patchWire(ctx, off, BigInt(ptrOff), bytes.length);
+      return ctx.pos;
+    }
   }
 }
 
@@ -179,8 +191,8 @@ function readU64(ctx: WireReadCtx, off: number): bigint {
  */
 export function decodeGVal(ctx: WireReadCtx, off: number): [GVal, number] {
   const tag = readU8(ctx, off) as WireTag;
-  const payload = readU64(ctx, off + 4);
-  const len = readU32(ctx, off + 12);
+  const payload = readU64(ctx, off + 8);
+  const len = readU32(ctx, off + 16);
   const nextOff = off + WIRE_SIZE;
 
   switch (tag) {
