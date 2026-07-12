@@ -238,6 +238,17 @@ fn sprintValueDepth(buf_or_null: ?[]u8, v: Value, depth: u32, ancestors: *[Print
                 }
                 return len;
             },
+            .small_struct_instance => |ssi| {
+                const prefix = "<struct ";
+                const suffix = ">";
+                const len = prefix.len + ssi.typ.struct_type.name.len + suffix.len;
+                if (buf_or_null) |buf| {
+                    @memcpy(buf[0..prefix.len], prefix);
+                    @memcpy(buf[prefix.len..][0..ssi.typ.struct_type.name.len], ssi.typ.struct_type.name);
+                    @memcpy(buf[prefix.len + ssi.typ.struct_type.name.len..][0..suffix.len], suffix);
+                }
+                return len;
+            },
             .interface_type => |it| {
                 const prefix = "<interface ";
                 const suffix = ">";

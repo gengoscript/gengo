@@ -77,6 +77,10 @@ fn drainMarkQueue(ctx: VMContext) void {
                     markValue(ctx, f.value);
                 }
             },
+            .small_struct_instance => |ssi| {
+                markObjectQueue(ctx, ssi.typ);
+                for (0..@as(usize, ssi.count)) |i| markValue(ctx, ssi.v[i]);
+            },
             .named_value => |nv| {
                 markObjectQueue(ctx, nv.typ);
                 markValue(ctx, nv.value);

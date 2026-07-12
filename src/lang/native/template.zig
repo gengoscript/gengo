@@ -90,6 +90,12 @@ fn tplResolveField(data: Value, field: []const u8) !Value {
             }
             return .null;
         },
+        .small_struct_instance => |ssi| {
+            for (0..@as(usize, ssi.count)) |i| {
+                if (std.mem.eql(u8, ssi.typ.struct_type.fields[i].name, field)) return ssi.v[i];
+            }
+            return .null;
+        },
         else => return .null,
     }
 }

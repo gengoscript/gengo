@@ -153,8 +153,12 @@ pub fn matchesTypeAlt(ctx: VMContext, v: Value, alt: FieldTypeAlt) bool {
             break :blk true;
         },
         .struct_t => blk: {
-            if (!(v == .object and v.object.* == .struct_instance)) break :blk false;
-            const qname = v.object.struct_instance.typ.struct_type.qualified_name;
+            const qname = if (v == .object and v.object.* == .struct_instance)
+                v.object.struct_instance.typ.struct_type.qualified_name
+            else if (v == .object and v.object.* == .small_struct_instance)
+                v.object.small_struct_instance.typ.struct_type.qualified_name
+            else
+                break :blk false;
             // Exact match, or deferred generic: accept any instantiation of the base type.
             if (common.streq(qname, alt.struct_name)) break :blk true;
             if (alt.generic_args.len > 0) {
@@ -337,6 +341,7 @@ pub fn matchesInterfaceType(ctx: VMContext, v: Value, iname: []const u8) bool {
     else switch (v) {
         .object => |obj| switch (obj.*) {
             .struct_instance => obj.struct_instance.typ.struct_type.qualified_name,
+            .small_struct_instance => obj.small_struct_instance.typ.struct_type.qualified_name,
             .named_value => obj.named_value.typ.named_type.qualified_name,
             .enum_value => obj.enum_value.typ.enum_type.qualified_name,
             .variant_value => obj.variant_value.typ.variant_type.qualified_name,
