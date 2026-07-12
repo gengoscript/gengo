@@ -39,16 +39,16 @@ lib/mylib/
 
 Modules within the bundle can import each other with relative paths:
 
-```
-# inside net/http.gengo
-const url = import("./url")       # resolves to mylib/net/url
-const util = import("../utils")   # resolves to mylib/utils
+```gengo
+// inside net/http.gengo
+url := import("./url")        // resolves to mylib/net/url
+util := import("../utils")    // resolves to mylib/utils
 ```
 
 An entry script outside the bundle uses absolute bundle paths:
 
-```
-const http = import("mylib/net/http")
+```gengo
+http := import("mylib/net/http")
 ```
 
 ---

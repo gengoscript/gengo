@@ -397,7 +397,8 @@ The **host-module wire boundary** is more restricted. Values are serialised into
 `ValueWire` structs (scalar tag + payload + length) before crossing to the host
 callback. The wire format supports:
 
-- `null`, `boolean`, `int`, `float`, `rune`, `decimal`
+- `null`, `boolean`, and a `number` wire tag whose flags distinguish `int`,
+  `float`, `rune`, and `decimal`
 - `string` (including dyn strings)
 - `error` (message string)
 - `array` of any wire-supported element

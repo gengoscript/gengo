@@ -10,6 +10,10 @@ The public documentation is split by task:
 4. Use `embedding.md`, `engine-api.md`, and `host-abi.md` when integrating Gengoscript into a host.
 5. Read `security.md` before embedding untrusted scripts in production.
 
+For repository readers, `language.md` and `stdlib.md` are the main
+human-readable references, while `../tests/spec/` is the executable
+conformance suite that pins down edge-case behaviour.
+
 This directory is the source set for `docs.gengoscript.org`.
 
 Project-internal material lives outside the public docs:

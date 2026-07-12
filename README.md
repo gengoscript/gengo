@@ -119,8 +119,10 @@ const gengo = @import("gengo");
 const api = gengo.api;
 const Value = gengo.Value;
 
-var rt: api.Runtime = undefined;
-try rt.initWithPolicy(.{ .allow_io = false, .max_ops = 50_000 });
+var rt = try api.Runtime.init(.{
+    .allow_io = false,
+    .max_ops = 50_000,
+});
 defer rt.deinit();
 
 // Load the user's script once
@@ -133,7 +135,6 @@ switch (rt.run(user_script_source)) {
 // Call the script's exported function on each record
 const result = rt.call("validate", &.{
     Value{ .int = @intCast(record.severity) },
-    Value{ .string = record.source },
 });
 const verdict = switch (result) {
     .ok => |v| v.boolean,
@@ -146,9 +147,9 @@ The user script might look like this:
 ```gengo
 type Severity int range 0..5
 
-pub func validate(severity int, source string) bool {
+pub func validate(severity int) bool {
     s := Severity(severity)
-    return s >= Severity(3) and source == "network"
+    return s >= Severity(3)
 }
 ```
 
@@ -229,7 +230,7 @@ For a step-by-step walkthrough, see [docs/tutorial-first-script.md](docs/tutoria
 
 ## Language and embedding
 
-Gengoscript uses a Go-adjacent syntax and leans on a stricter type system for domain scripting. Beyond ordinary structs and functions, the language includes named scalars, range types, predicate types, cyclic types, variants, typed arrays and maps, pattern-matching `switch`, closures, multi-file modules, and in-source `test` blocks.
+Gengoscript uses a Go-adjacent syntax and leans on a stricter type system for domain scripting. Beyond ordinary structs and functions, the language includes named scalars, range types, predicate types, cyclic types, enums, variants, interfaces, generic functions and types, typed arrays and maps, pattern-matching `switch`, variadics, multi-return functions, closures, multi-file modules, and in-source `test` blocks.
 
 The TypeScript SDK in `sdk/typescript/` wraps `gengo-engine.wasm` and handles value encoding for JavaScript hosts.
 

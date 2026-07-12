@@ -267,7 +267,7 @@ engine_load_bundle(h, "mylib", 5, buf, (int32_t)size);
 free(buf);
 
 /* Script imports work without any prefix */
-const char *src = "const m = import(\"mylib/utils\")\n"
+const char *src = "m := import(\"mylib/utils\")\n"
                   "pub func run() string { return m.greet(\"world\") }\n";
 engine_run(h, src, (int32_t)strlen(src));
 ```
@@ -441,11 +441,12 @@ engine_set_trace_fn(handle, NULL, NULL);  /* clear */
 | `0` | `tag` | `u8` |
 | `1` | `flags` | `u8` |
 | `2` | `reserved` | `u16` |
-| `4` | `payload` | `u64` |
-| `12` | `len` | `u32` |
-| `16` | `reserved2` | `u32` |
+| `4` | padding | `u32` |
+| `8` | `payload` | `u64` |
+| `16` | `len` | `u32` |
+| `20` | `reserved2` | `u32` |
 
-Supported tags: `null` (0), `boolean` (1), `number` (2), `string` (3), `array` (4), `map` (5), `error` (6). For arrays, `payload` is a pointer to `len` consecutive `ValueWire` elements. For maps, `payload` is a pointer to `len * 2` elements arranged as key-value pairs. For strings and errors, `payload` is a guest pointer and `len` is the byte length. See `host-abi.md` for the full wire format reference.
+Supported tags: `null` (0), `boolean` (1), `number` (2), `string` (3), `array` (4), `map` (5), `error` (6). `number` uses the `flags` byte to distinguish `float`, `int`, `decimal`, and `rune`. For arrays, `payload` is a pointer to `len` consecutive `ValueWire` elements. For maps, `payload` is a pointer to `len * 2` elements arranged as key-value pairs. For strings and errors, `payload` is a guest pointer and `len` is the byte length. See `host-abi.md` for the full wire format reference.
 
 ## JavaScript Example
 

@@ -1,8 +1,14 @@
 # Gengoscript Language Guide
 
-This page describes the public language model of Gengoscript. It is intended to help readers write and review scripts, not to serve as an internal implementation dump.
+This page describes the public language model of Gengoscript. It is meant to
+be read by humans first, but it is also written to be mechanically clear:
+examples are concrete, terminology is consistent, and edge cases are called
+out where they change how code behaves.
 
 For library functions, see `stdlib.md`. For embedding and capability control, see `embedding.md`.
+
+Within this repository, the executable conformance suite in `tests/spec/` is
+the final authority on language behaviour. This guide tracks that surface.
 
 ## Design Shape
 
@@ -39,12 +45,14 @@ Kinds of import:
 
 Built-ins are accessed through namespaces such as `std.io.println(...)` and `std.core.len(...)`. Legacy global forms such as `println(...)` are not supported.
 
-### Exporting Types from Modules
+### Exporting from Modules
 
-A source module can export types with `pub`:
+A source module can export functions, values, and types with `pub`:
 
 ```gengo
 // geometry/shapes.gengo
+pub const version := "v1"
+pub func origin() Point { return Point{ x: 0, y: 0 } }
 pub type Point struct { x int, y int }
 pub type Distance int
 ```
@@ -91,17 +99,30 @@ Embedded runtimes created through the Zig API are unrestricted unless `source_ro
 
 The value types fall into three groups. Scalar types hold a single value:
 
-- `int`, `float`, `bool`, `string`, `rune`, `null`, `error`
+- `int`, `float`, `decimal`, `bigint`, `bool`, `string`, `rune`, `null`, `error`
 
 Collection types hold multiple values:
 
-- arrays, maps, structs
+- arrays, maps, structs, tuples
+
+Tuple values exist, but they are a narrow surface today: scripts mainly see
+them when a multi-value return is captured into a single variable rather than
+destructured. There is no separate tuple literal or tuple type declaration
+syntax documented for general use.
 
 Functions are values too — they can be passed around, assigned, and closed
 over.
 
 Strings are UTF-8. `std.core.len(s)` counts Unicode code points, while
 `std.core.bytelen(s)` counts bytes.
+
+Optional types use `?T`. A value of type `?T` is either `null` or a `T`:
+
+```gengo
+var name ?string
+name = "Ada"
+name = null
+```
 
 A key design rule: **numeric types do not mix implicitly**. `int` and `float`
 cannot be combined in arithmetic or ordering comparisons (`1.5 + 1` and
@@ -111,6 +132,18 @@ named types: an `Age` only mixes with an `Age` (or its subtypes), never with
 a bare `int`. This is intentional — it prevents the kind of subtle precision
 loss and domain confusion that plague languages with implicit numeric
 coercion.
+
+`bigint` is the arbitrary-precision integer type. Construct it with
+`bigint(...)` from an `int`, a whole-number `float`, or a decimal string:
+
+```gengo
+x := bigint(42)
+y := bigint("99999999999999999999999999999999")
+z := 1 + bigint(2)     // mixed int + bigint promotes to bigint
+```
+
+`bigint` supports integer arithmetic, comparison, unary `-`, `div`, `rem`,
+`mod`, and exponentiation with `**`. It does not implicitly mix with `float`.
 
 ## Variables and Constants
 
@@ -132,7 +165,9 @@ How each form works:
   mutated.
 - `var name Type = value` — mutable with an explicit type annotation. The
   initializer may be omitted, in which case the variable gets the zero value
-  (e.g. `0` for `int`, `""` for `string`, `null` for optional types).
+  (e.g. `0` for `int`, `""` for `string`, `null` for optional types). For a
+  named scalar type with a declared `default`, that default value is used
+  instead of the base type's zero value.
 - `const name Type = value` — typed immutable binding.
 
 Assignment uses `=`. Compound assignment forms (`+=`, `-=`, `*=`, `/=`) are
@@ -212,6 +247,42 @@ Floating-point literals support scientific notation:
 f := 1.5e2    // 150.0
 f := 2.5e-1   // 0.25
 ```
+
+## Explicit Conversions
+
+Gengoscript uses explicit conversion syntax rather than implicit coercion.
+The general form is `TypeName(value)`:
+
+```gengo
+n := int(3.9)          // 3
+f := float(true)       // 1.0
+b := bool(2)           // true
+s := string(`A`)       // "A"
+x := bigint("123456")
+```
+
+Named types use the same syntax for construction and re-boxing:
+
+```gengo
+type UserId string
+type Age int range 0..100
+
+id := UserId("u-1")
+age := Age(42)
+
+raw_id := string(id)
+raw_age := int(age)
+```
+
+Important distinctions:
+
+- Built-in casts and named-type constructors are part of the language.
+- `std.conv.*` functions are library helpers with slightly different
+  behaviour and coverage.
+- `std.conv.to_string(null)` returns `""`, but `string(null)` is a runtime
+  `TypeError`.
+- Constructing a named type still enforces its `range`, `cycle`,
+  `predicate`, and `default` rules where applicable.
 
 ## Collections
 
@@ -352,7 +423,7 @@ switch status {
 ```
 
 A case may carry a `when` guard: the case matches only if its pattern matches
-*and* the guard expression is truthy. A failed guard falls through to the
+*and* the guard expression evaluates to `bool(true)`. A failed guard falls through to the
 next case, so cases are tested top to bottom:
 
 ```gengo
@@ -391,6 +462,18 @@ greet("World", "Hi")     // "Hi World"
 Default values must be literals (number, string, bool, or `null`). All
 parameters after the first defaulted one must also have defaults.
 
+Variadic parameters use `...` and must appear last:
+
+```gengo
+func sum(base int, ...rest int) int {
+    total := base
+    for x in rest { total += x }
+    return total
+}
+```
+
+The variadic parameter is an array value inside the function. It may be empty.
+
 Multi-value return types are written in parentheses:
 
 ```gengo
@@ -403,9 +486,51 @@ lo, hi := min_max(7, 3)  // destructure into two variables
 std.io.println(lo, hi)
 ```
 
+If a call returning multiple values is assigned to a single variable, the
+values are captured as a tuple:
+
+```gengo
+pair := min_max(7, 3)
+std.io.println(std.core.len(pair))   // 2
+```
+
+This is currently the main user-facing way tuple values appear in scripts.
+
+Named returns declare local result variables in the function signature. A bare
+`return` returns their current values:
+
+```gengo
+func divide(a float, b float) (result float, err ?error) {
+    if b == 0 {
+        err = std.core.error("division by zero")
+        return
+    }
+    result = a / b
+    return
+}
+```
+
 Functions, types, and variables may be exported from a source module with `pub`. Closures capture variables from the enclosing scope by reference.
 
-Named returns let a `defer` modify the function's return value before it exits:
+Methods use a receiver in front of the function name. Structs, named scalar
+types, enums, and variants can all have methods:
+
+```gengo
+type Meters int
+
+func (m Meters) doubled() Meters {
+    return Meters(int(m) * 2)
+}
+```
+
+Method-call syntax is sugar for passing the receiver as the first argument:
+`x.f(y)` and `Type.f(x, y)` mean the same thing.
+
+Receivers are values, not implicit references. Reassigning receiver fields
+inside a method does not mutate the caller's variable unless the receiver
+contains shared heap-backed state that the method mutates explicitly.
+
+Named returns also let a `defer` modify the function's return value before it exits:
 
 ```gengo
 func safe_div(a int, b int) (result int) {
@@ -497,6 +622,17 @@ p := Percent(0.50)
 
 Decimal types support the same arithmetic, range, predicate, and subtype features as integer named types. They do not mix with bare `float` or `int`.
 
+Named scalar types may also declare a default value. A `var` declaration with
+no initializer uses that default:
+
+```gengo
+type Port int range 1..65535 default 443
+type Enabled bool default true
+
+var p Port
+var on Enabled
+```
+
 Range types reject out-of-range values at construction time:
 
 ```gengo
@@ -515,6 +651,20 @@ Range bounds can be written in any numeric base. The type object exposes
 ```gengo
 std.io.println(Port.first)   // Port(1)
 std.io.println(Port.last)    // Port(65535)
+```
+
+Named numeric types also expose `.succ(value)` and `.pred(value)` on the type
+object. Range types step by one and clamp to the declared domain; cycle types
+step by one and wrap:
+
+```gengo
+type Step int range 1..100
+type Hour int cycle 0..23
+
+std.io.println(Step.succ(Step(50)))   // 51
+std.io.println(Step.pred(Step(50)))   // 49
+std.io.println(Hour.succ(Hour(23)))   // 0
+std.io.println(Hour.pred(Hour(0)))    // 23
 ```
 
 Cycle types wrap through their declared domain during arithmetic. `cycle`
@@ -553,6 +703,9 @@ subtype AdminId UserId    // distinct name, substitutable for UserId
 type Flag bool
 subtype Strict Flag       // works in conditions like its parent
 ```
+
+Subtypes inherit the parent type's methods. That inheritance is transitive
+across subtype chains.
 
 Enum subtypes narrow the member set instead:
 
@@ -722,18 +875,19 @@ s := Status.from_int(2)               // done
 std.io.println(Status.from_int(99))   // null
 ```
 
-Enum values also expose `.succ()`, `.pred()`, and `.ordinal`:
+Enum values expose `.ordinal`, and the type object exposes `succ(...)` and
+`pred(...)` helpers:
 
-- `.succ()` — the next member, wrapping from the last back to the first.
-- `.pred()` — the previous member, wrapping from the first back to the last.
-- `.ordinal` — the 0-based position of this member in declaration order, independent of any representation value.
+- `T.succ(v)` — the next member, wrapping from the last back to the first.
+- `T.pred(v)` — the previous member, wrapping from the first back to the last.
+- `v.ordinal` — the 0-based position of this member in declaration order, independent of any representation value.
 
 ```gengo
 type Day enum { mon, tue, wed, thu, fri, sat, sun }
 
-std.io.println(Day.fri.succ())    // sat
-std.io.println(Day.sun.succ())    // mon  (wraps)
-std.io.println(Day.mon.pred())    // sun  (wraps)
+std.io.println(Day.succ(Day.fri))    // sat
+std.io.println(Day.succ(Day.sun))    // mon  (wraps)
+std.io.println(Day.pred(Day.mon))    // sun  (wraps)
 std.io.println(Day.wed.ordinal)   // 2
 ```
 
@@ -829,7 +983,7 @@ cannot be assigned to a variable, passed as an argument, or chained further
 (`x.type.foo` is a compile error), and a `switch x.type { }` cannot mix in
 variant-arm patterns (`case .arm_name`). The right-hand side must be a
 concrete type: a primitive (`int`, `float`, `bool`, `string`, `rune`,
-`decimal`, `error`, `map`) or a declared named/struct/enum/variant type —
+`decimal`, `bigint`, `error`, `map`) or a declared named/struct/enum/variant type —
 **not** an interface, since interfaces are method-set constraints, not
 concrete runtime types, so `.type` can never equal an interface name.
 
@@ -918,8 +1072,8 @@ w := Wrapper[int]{ inner: Stack[int]{ items: [1, 2, 3] } }
 std.io.println(std.core.len(w.inner.items))   // 3
 ```
 
-Type parameters may carry an optional constraint name (currently parsed but
-not yet enforced).
+Type parameters may also carry optional constraints using the same `:`
+syntax described below for generic functions.
 
 ### Generic Functions
 
