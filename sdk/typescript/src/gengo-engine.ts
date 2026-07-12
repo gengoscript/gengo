@@ -245,7 +245,8 @@ export class GengoEngine {
     ]);
     if (rc === RESULT_RUNTIME_ERR) {
       const err = this.readError(rc);
-      throw new Error(`engine_call failed: ${err.message} (${err.line}:${err.col})`);
+      if (!err.ok) throw new Error(`engine_call failed: ${err.message} (${err.line}:${err.col})`);
+      throw new Error("engine_call failed: unknown runtime error");
     }
 
     const readCtx: WireReadCtx = { dv: this.dv };

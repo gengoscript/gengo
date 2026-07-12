@@ -3,7 +3,15 @@
   "version": "0.5.1-dev",
   "version_comment": "Keep in sync with build.zig gengo_version",
   "description": "Gengoscript embeddable scripting engine — TypeScript SDK for the WASM runtime",
-  "keywords": ["gengo", "gengoscript", "scripting", "wasm", "engine", "embed", "sandbox"],
+  "keywords": [
+    "gengo",
+    "gengoscript",
+    "scripting",
+    "wasm",
+    "engine",
+    "embed",
+    "sandbox"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -24,6 +32,7 @@
   ],
   "scripts": {
     "build": "tsc",
+    "test": "npm run build && node --test test/*.mjs",
     "prepublishOnly": "tsc"
   },
   "devDependencies": {
