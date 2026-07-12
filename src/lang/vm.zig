@@ -3338,6 +3338,8 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 const v = try ctx.vs.vmPop();
                 const matches = if (v.asVariant()) |ref|
                     common.streq(ref.typ.variant_type.arms[ref.ordinal].name, arm_name)
+                else if (v == .object and v.object.* == .enum_value)
+                    common.streq(v.object.enum_value.name, arm_name)
                 else false;
                 try ctx.vs.vmPush(.{ .boolean = matches });
             },
