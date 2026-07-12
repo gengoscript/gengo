@@ -391,6 +391,11 @@ pub fn namedFuncDecl(c: anytype, is_pub: bool) !void {
                 c.setErr("too many global functions (limit {d})", .{ct.MaxGlobals});
                 return error.TooManyGlobals;
             };
+            if (c.last_func_obj) |fo| {
+                if (fo.function.named_return_count >= 2) {
+                    c.registry.setGlobalFuncReturnCount(qname, fo.function.named_return_count);
+                }
+            }
             if (is_generic) {
                 var gi: ct.GenericFuncInfo = .{ .name = try c.copyName(name.src), .param_count = tparam_count, .qname = qname };
                 for (tparams[0..tparam_count], 0..) |tp, i| gi.params[i] = tp;

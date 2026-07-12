@@ -237,6 +237,22 @@ pub fn disassemble(cs: *const chunk.State) void {
                 }
                 io.write("\n");
             },
+            .call_spread => {
+                const argc = cs.codeByteAt(i);
+                const spread_n = cs.codeByteAt(i + 1);
+                const ic = (@as(u16, cs.codeByteAt(i + 2)) << 8) | @as(u16, cs.codeByteAt(i + 3));
+                i += 4;
+                io.write("call_spread ");
+                writeNum(argc);
+                io.write(" n=");
+                writeNum(spread_n);
+                if (ic != 0xFFFF) {
+                    io.write(" [ic=");
+                    writeNum(ic);
+                    io.write("]");
+                }
+                io.write("\n");
+            },
 
             // --- 1-byte operand ops ---
             .get_local, .set_local, .get_upvalue, .set_upvalue, .close_upvalue,

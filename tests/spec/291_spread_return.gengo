@@ -1,0 +1,51 @@
+std := import("std")
+
+// Basic 2-named-return spread (no defers, fast path)
+func divmod(a int, b int) (q int, r int) {
+    q = a / b
+    r = a rem b
+    return
+}
+
+// 3-named-return spread
+func triple(x int) (a int, b int, c int) {
+    a = x
+    b = x * 2
+    c = x * 3
+    return
+}
+
+// Named-return with defer (slow path — defers modify the values)
+func addSuffix(x int) (lo int, hi int) {
+    lo = x
+    hi = x + 100
+    defer func() {
+        lo = lo + 1
+        hi = hi + 1
+    }()
+    return
+}
+
+// Single named return — not affected by spread
+func double(x int) (out int) {
+    out = x * 2
+    return
+}
+
+q, r := divmod(17, 5)
+std.io.printf("q=%v r=%v\n", q, r)
+
+p, s := divmod(100, 7)
+std.io.printf("p=%v s=%v\n", p, s)
+
+a, b, c := triple(4)
+std.io.printf("a=%v b=%v c=%v\n", a, b, c)
+
+lo, hi := addSuffix(10)
+std.io.printf("lo=%v hi=%v\n", lo, hi)
+
+std.io.println(double(7))
+
+// Non-destructure: single-var captures the tuple
+tup := divmod(13, 3)
+std.io.println(std.core.len(tup))

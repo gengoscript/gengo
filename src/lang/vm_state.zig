@@ -45,6 +45,8 @@ pub const Frame = struct {
     func_obj: *Object,
     defer_base: usize,
     has_typed_returns: bool,
+    named_return_count: u8,
+    func_arity: u8,
 };
 
 pub const PanicFrame = struct { line: u16, name: []const u8 };

@@ -228,6 +228,8 @@ pub const TypeRegistry = struct {
     // global funcs + consts unified; is_const distinguishes them.
     global_symbols: [MaxGlobals][]const u8 = undefined,
     global_count: usize = 0,
+    // named_return_count for functions that return multiple named values (≥2).
+    global_named_return_counts: [MaxGlobals]u8 = [1]u8{0} ** MaxGlobals,
 
     // Hash indexes — initialised to all-empty via comptime defaults above.
     type_buckets: [TypeHashSize]TypeHashEntry = empty_type_buckets,
@@ -462,6 +464,18 @@ pub const TypeRegistry = struct {
 
     pub fn hasGlobalFunc(self: *const TypeRegistry, name: []const u8) bool {
         return self.funcSlotFor(name, false) != null;
+    }
+
+    pub fn setGlobalFuncReturnCount(self: *TypeRegistry, name: []const u8, count: u8) void {
+        const slot = self.funcSlotFor(name, false) orelse return;
+        const sub_idx = self.func_buckets[slot].sub_idx;
+        self.global_named_return_counts[sub_idx] = count;
+    }
+
+    pub fn getGlobalFuncReturnCount(self: *const TypeRegistry, name: []const u8) u8 {
+        const slot = self.funcSlotFor(name, false) orelse return 0;
+        const sub_idx = self.func_buckets[slot].sub_idx;
+        return self.global_named_return_counts[sub_idx];
     }
 
     pub fn addGlobalFunc(self: *TypeRegistry, name: []const u8) !void {

@@ -259,6 +259,19 @@ pub const State = struct {
         self.last_call_pos = call_pos;
     }
 
+    // Emit a spread-return call: [call_spread][argc][spread_n][ic_hi][ic_lo].
+    // The verifier knows this call pushes spread_n values; the ret handler performs
+    // the actual spreading by reading named-return slots directly.
+    pub fn emitCallSpread(self: *State, argc: u8, spread_n: u8, line: u32) !void {
+        const call_pos = self.code_len;
+        try self.emitByte(@intFromEnum(Op.call_spread), line);
+        try self.emitByte(argc, line);
+        try self.emitByte(spread_n, line);
+        try self.emitByte(0xFF, line); // IC slot hi (cold)
+        try self.emitByte(0xFF, line); // IC slot lo (cold)
+        self.last_call_pos = call_pos;
+    }
+
     // If the last instruction emitted was a call-like opcode and no other bytes
     // have been emitted since, upgrade it to the tail-position variant so the VM
     // dispatch loop skips the tryTailCall probe on every non-tail call.
@@ -1012,6 +1025,7 @@ pub fn setCol(col: u32) void { g_state.setCol(col); }
 pub fn emitByte(b: u8, line: u32) !void { return g_state.emitByte(b, line); }
 pub fn emitOp(op: Op, line: u32) !void { return g_state.emitOp(op, line); }
 pub fn emitCall(argc: u8, line: u32) !void { return g_state.emitCall(argc, line); }
+pub fn emitCallSpread(argc: u8, spread_n: u8, line: u32) !void { return g_state.emitCallSpread(argc, spread_n, line); }
 pub fn emit2(a: u8, b: u8, line: u32) !void { return g_state.emit2(a, b, line); }
 pub fn emitConstIdx(op: Op, idx: u16, line: u32) !void { return g_state.emitConstIdx(op, idx, line); }
 pub fn emitOpConst(op: Op, v: Value, line: u32) !void { return g_state.emitOpConst(op, v, line); }

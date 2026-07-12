@@ -61,6 +61,8 @@ pub fn decodeAt(state: anytype, pos: usize) !DecodedInstruction {
         // call: [op][argc][ic_hi][ic_lo] — 4 bytes (IC slot = object pool index, 0xFFFF = cold)
         .call => .{ .op = op, .width = 4 },
         .call_tail => .{ .op = op, .width = 4 },
+        // call_spread: [op][argc][spread_n][ic_hi][ic_lo] — 5 bytes
+        .call_spread => .{ .op = op, .width = 5 },
 
         .get_local, .set_local, .get_upvalue, .set_upvalue, .close_upvalue,
         .get_local_ret, .defer_call,

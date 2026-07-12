@@ -2,6 +2,20 @@
 
 This changelog tracks notable language/runtime changes by implementation date.
 
+## 2026-07-12 (v0.5.1-dev)
+
+### Performance — Zero-allocation named-return spread (#188)
+
+Multi-named-return functions called in a destructuring context (`a, b := f()`) now produce **zero GC allocations** on the common path (no defers), down from four.
+
+Previously, `emitImplicitReturn` built a tuple (2 allocs) that `retSlowPath` immediately discarded and rebuilt (2 more allocs). Now:
+
+- A new `call_spread N` opcode tells the bytecode verifier that the call pushes N individual values. The VM `ret` handler and `retSlowPath` both push the named-return slots as N separate stack values — no boxing.
+- For non-destructuring callers (`x := f()`, `f()` as argument), a `build_tuple N` is emitted after the call to re-pack N values into one (1 alloc, down from 2).
+- Panic recovery (`std.core.recover()`) in multi-named-return functions also spreads N values correctly.
+
+No language changes. Existing code is unaffected.
+
 ## 2026-07-03 (v0.5.1-dev)
 
 ### Feature — Module Bundles (#48)

@@ -134,6 +134,16 @@ pub const Compiler = struct {
     type_params: [ct.MaxTypeParams]ct.GenericParam = undefined,
     type_param_count: u8 = 0,
 
+    // Spread-return optimization state:
+    // Set in emitGetVar when the variable is a known multi-named-return global function.
+    // Read and consumed by infixExpr(.lparen) immediately after the call.
+    pending_call_spread_count: u8 = 0,
+    // Set by multiAssignOrDecl before emitExprListTuple; 0 outside that context.
+    multi_assign_lhs_count: u8 = 0,
+    // Set by infixExpr(.lparen) when callee_spread_n == multi_assign_lhs_count;
+    // read by multiAssignOrDecl after emitExprListTuple.
+    last_spread_return_count: u8 = 0,
+
     // ── Lifecycle ────────────────────────────────────────────────────────────────
 
     pub fn init(src: []const u8, options: CompilerOptions) Compiler {
@@ -358,6 +368,7 @@ pub const Compiler = struct {
 
     pub fn emitGetVar(self: *Compiler, name: Token) !void {
         self.cs.setCol(name.col);
+        self.pending_call_spread_count = 0;
         if (self.resolveLocal(name.src)) |slot| {
             const local = self.currentScope().locals[slot];
             if (local.from_std) {
@@ -390,6 +401,7 @@ pub const Compiler = struct {
                 self.cs.markStdCallPatchPos();
             }
             try self.cs.emitGetGlobal(qname, name.line);
+            self.pending_call_spread_count = self.registry.getGlobalFuncReturnCount(qname);
             if (self.isStdModuleGlobal(qname)) {
                 self.setStdNamespacePath("");
             } else if (self.getImportModuleGlobalPath(qname)) |path| {
