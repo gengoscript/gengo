@@ -1,0 +1,44 @@
+std := import("std")
+
+// Structs with ≤4 fields use inline storage (no managed-slice allocation).
+
+type Point struct {
+    x int,
+    y int,
+}
+
+func (p Point) sum() int {
+    return p.x + p.y
+}
+
+p := Point{ x: 3, y: 4 }
+std.io.println(p.x)
+std.io.println(p.y)
+std.io.println(p.sum())
+
+p.x = 10
+p.y = 20
+std.io.println(p.x)
+std.io.println(p.sum())
+
+type Color struct {
+    r int,
+    g int,
+    b int,
+    a int,
+}
+
+c := Color{ r: 255, g: 128, b: 0, a: 255 }
+std.io.println(c.r)
+std.io.println(c.a)
+
+// clone preserves independence
+d := std.core.clone(c)
+d.r = 0
+std.io.println(c.r)
+std.io.println(d.r)
+
+// is_struct / len
+std.io.println(std.core.is_struct(p))
+std.io.println(std.core.len(p))
+std.io.println(std.core.len(c))

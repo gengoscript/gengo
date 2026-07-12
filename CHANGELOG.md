@@ -4,6 +4,17 @@ This changelog tracks notable language/runtime changes by implementation date.
 
 ## 2026-07-12 (v0.5.1-dev)
 
+### Performance — Small struct inline storage (#157)
+
+Struct instances with ≤4 fields are now stored as a new `small_struct_instance` Object variant with inline field values (`[4]Value`), eliminating the secondary managed-slice allocation that every struct construction previously required.
+
+- `build_struct_instance` and `zero_struct` use inline storage for ≤4-field structs.
+- All field access (`get_field`, `set_field`), method dispatch, index operations, GC tracing, deep-clone, and all native helpers (`len`, `is_struct`, `type_name`) handle both variants transparently.
+- Structs with ≥5 fields continue to use the managed-slice path unchanged.
+- The inline cache for `get_field`/`set_field` continues to work identically: it keys on the struct type's pool index, which is the same for both variants.
+
+For typical user structs (2–4 fields), this halves the GC object count per construction: one Object allocation instead of two.
+
 ### Performance — Zero-allocation named-return spread (#188)
 
 Multi-named-return functions called in a destructuring context (`a, b := f()`) now produce **zero GC allocations** on the common path (no defers), down from four.

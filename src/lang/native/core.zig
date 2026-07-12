@@ -32,6 +32,7 @@ pub fn nativeLen(ctx: VMContext, v: Value) !Value {
             .array, .array_managed, .array_view, .array_capacity => (try vms.asArraySlice(obj)).len,
             .map, .map_managed, .map_hashed => (try vms.asMapSlice(obj)).len,
             .struct_instance => |s| s.fields.len,
+            .small_struct_instance => |s| s.count,
             else => return error.TypeError,
         },
         else => return error.TypeError,
@@ -320,6 +321,7 @@ pub fn nativeTypeNameValue(ctx: VMContext, v: Value) !Value {
             .enum_type => |et| .{ .string = try ctx.cs.internStr(et.name) },
             .enum_value => |ev| .{ .string = try ctx.cs.internStr(ev.typ.enum_type.name) },
             .struct_instance => |inst| .{ .string = try ctx.cs.internStr(inst.typ.struct_type.name) },
+            .small_struct_instance => |ssi| .{ .string = try ctx.cs.internStr(ssi.typ.struct_type.name) },
             .iterator => .{ .string = staticSS("iterator") },
             .variant_type => |vt| .{ .string = try ctx.cs.internStr(vt.name) },
             .variant_value => |vv| .{ .string = try ctx.cs.internStr(vv.typ.variant_type.name) },
@@ -365,7 +367,7 @@ pub fn nativeIsMap(ctx: VMContext, v: Value) Value {
 }
 
 pub fn nativeIsStruct(v: Value) Value {
-    return .{ .boolean = v == .object and v.object.* == .struct_instance };
+    return .{ .boolean = v == .object and (v.object.* == .struct_instance or v.object.* == .small_struct_instance) };
 }
 
 pub fn nativeIsNull(v: Value) Value {
@@ -491,15 +493,24 @@ fn deepEqualObject(a: *Object, b: *Object, visits: []DeepEqVisit, visit_len: *us
         .enum_type => |aet| return common.streq(aet.qualified_name, b.enum_type.qualified_name),
         .enum_value => |aev| { const bev = b.enum_value; return aev.typ == bev.typ and aev.ordinal == bev.ordinal; },
         .struct_instance => |asi| {
+            if (b.* != .struct_instance) return false;
             const bsi = b.struct_instance;
             if (asi.typ != bsi.typ) return false;
             try appendVisitedPair(a, b, visits, visit_len);
             if (asi.fields.len != bsi.fields.len) return false;
             for (asi.fields, bsi.fields) |af, bf| {
-                const ak = vms.asStringValue(af.key) catch return false;
-                const bk = vms.asStringValue(bf.key) catch return false;
-                if (!common.streq(ak, bk)) return false;
                 if (!try deepEqualValue(af.value, bf.value, visits, visit_len)) return false;
+            }
+            return true;
+        },
+        .small_struct_instance => |assi| {
+            if (b.* != .small_struct_instance) return false;
+            const bssi = b.small_struct_instance;
+            if (assi.typ != bssi.typ) return false;
+            try appendVisitedPair(a, b, visits, visit_len);
+            if (assi.count != bssi.count) return false;
+            for (0..@as(usize, assi.count)) |i| {
+                if (!try deepEqualValue(assi.v[i], bssi.v[i], visits, visit_len)) return false;
             }
             return true;
         },
@@ -653,6 +664,16 @@ fn cloneObject(ctx: VMContext, src: *Object, visits: []CloneVisit, visit_len: *u
             for (inst.fields, 0..) |field, i| {
                 fields[i].key = field.key;
                 fields[i].value = try cloneValue(ctx, field.value, visits, visit_len);
+            }
+            return .{ .object = out_obj };
+        },
+        .small_struct_instance => |ssi| {
+            const out_obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
+            defer ctx.vs.popTempRoot();
+            out_obj.* = .{ .small_struct_instance = .{ .typ = ssi.typ, .count = ssi.count, .v = ssi.v } };
+            try cloneRemember(src, out_obj, visits, visit_len);
+            for (0..@as(usize, ssi.count)) |i| {
+                out_obj.small_struct_instance.v[i] = try cloneValue(ctx, ssi.v[i], visits, visit_len);
             }
             return .{ .object = out_obj };
         },

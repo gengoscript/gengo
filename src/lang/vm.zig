@@ -677,6 +677,22 @@ fn resolveStructMethod(ctx: VMContext, inst: vmod.StructInstanceObj, mname: []co
     }
 }
 
+fn resolveSmallStructMethod(ctx: VMContext, ssi: vmod.SmallStructObj, mname: []const u8) !MethodResolution {
+    if (resolveQualifiedReceiverMethod(ctx, ssi.typ.struct_type.qualified_name, mname)) |method_func| {
+        return .{ .func = method_func, .pass_recv = true };
+    } else |err| switch (err) {
+        error.UnknownMethod => {
+            const fi = vmtyp.findFieldIndex(ssi.typ.struct_type.fields, mname) orelse {
+                if (isModuleNamespaceStruct(ssi.typ)) return error.UnknownStructField;
+                return error.UnknownMethod;
+            };
+            if (fi >= @as(usize, ssi.count)) return error.UnknownStructField;
+            return .{ .func = ssi.v[fi], .pass_recv = false };
+        },
+        else => return err,
+    }
+}
+
 fn resolveMapMethod(obj: *Object, mname: []const u8) !Value {
     const items = try vms.asMapSlice(obj);
     for (items) |e| {
@@ -706,6 +722,7 @@ fn resolveMethodReceiver(ctx: VMContext, recv: Value, mname: []const u8) !Method
     if (recv != .object) return error.NotAMethodReceiver;
     switch (recv.object.*) {
         .struct_instance => |inst| return try resolveStructMethod(ctx, inst, mname),
+        .small_struct_instance => |ssi| return try resolveSmallStructMethod(ctx, ssi, mname),
         .map, .map_managed, .map_hashed => {
             return .{ .func = try resolveMapMethod(recv.object, mname), .pass_recv = false };
         },
@@ -1374,6 +1391,23 @@ fn pushFieldFromObject(ctx: VMContext, obj: *Object, name_idx: usize, ic_base: u
                 try ctx.vs.vmPush(inst.fields[fi].value);
             }
         },
+        .small_struct_instance => |ssi| {
+            const tpi = ctx.hs.objectPoolIndex(ssi.typ);
+            if (ic_type_idx == @as(usize, tpi) and ic_fidx != 0xFF) {
+                try ctx.vs.vmPush(ssi.v[ic_fidx]);
+            } else {
+                const fi = vmtyp.findFieldIndex(ssi.typ.struct_type.fields, name) orelse {
+                    ctx.vs.setRuntimeErr("no field '{s}' on type '{s}'", .{ name, ssi.typ.struct_type.name });
+                    return error.UnknownStructField;
+                };
+                if (fi <= 0xFE) {
+                    ctx.cs.patchByte(ic_base,     @intCast((tpi >> 8) & 0xFF));
+                    ctx.cs.patchByte(ic_base + 1, @intCast(tpi & 0xFF));
+                    ctx.cs.patchByte(ic_base + 2, @intCast(fi));
+                }
+                try ctx.vs.vmPush(ssi.v[fi]);
+            }
+        },
         .map, .map_managed, .map_hashed => {
             if (common.streq(name, "len")) {
                 const items = try vms.asMapSlice(obj);
@@ -1457,6 +1491,11 @@ fn opGetIndex(ctx: VMContext) !void {
                 const idx = vmtyp.findFieldIndex(inst.typ.struct_type.fields, key) orelse return error.UnknownStructField;
                 try ctx.vs.vmPush(inst.fields[idx].value);
             },
+            .small_struct_instance => |ssi| {
+                const key = try vms.asStringValue(idx_v);
+                const idx = vmtyp.findFieldIndex(ssi.typ.struct_type.fields, key) orelse return error.UnknownStructField;
+                try ctx.vs.vmPush(ssi.v[idx]);
+            },
             .enum_type => {
                 try ctx.vs.vmPush(try enumTypeFieldValue(ctx, obj, try vms.asStringValue(idx_v)));
             },
@@ -1527,6 +1566,16 @@ fn opSetIndex(ctx: VMContext) !void {
             if (!vmtyp.matchesFieldType(ctx, val, inst.typ.struct_type.fields[idx])) return error.StructFieldTypeMismatch;
             inst.fields[idx].value = val;
         },
+        .small_struct_instance => |*ssi| {
+            const key = try vms.asStringValue(idx_v);
+            const idx = vmtyp.findFieldIndex(ssi.typ.struct_type.fields, key) orelse {
+                ctx.vs.setRuntimeErr("no field '{s}' on type '{s}'", .{ key, ssi.typ.struct_type.name });
+                return error.UnknownStructField;
+            };
+            if (ssi.typ.struct_type.fields[idx].is_const) { ctx.vs.setRuntimeErr("field '{s}' of '{s}' is const", .{ key, ssi.typ.struct_type.name }); return error.AssignToConst; }
+            if (!vmtyp.matchesFieldType(ctx, val, ssi.typ.struct_type.fields[idx])) return error.StructFieldTypeMismatch;
+            ssi.v[idx] = val;
+        },
         else => return error.TypeError,
     }
 }
@@ -1560,6 +1609,31 @@ fn opInvokeMethod(ctx: VMContext) !void {
                 resolved = .{ .func = .{ .object = ctx.hs.objectAt(@intCast(ic_func_idx)) }, .pass_recv = true };
             } else {
                 resolved = try resolveStructMethod(ctx, inst, mname);
+                if (resolved.pass_recv and resolved.func == .object) {
+                    const fpi = ctx.hs.objectPoolIndex(resolved.func.object);
+                    if (fpi != 0xFFFF) {
+                        ctx.cs.patchByte(ic_base + 0, @intCast((tpi >> 8) & 0xFF));
+                        ctx.cs.patchByte(ic_base + 1, @intCast(tpi & 0xFF));
+                        ctx.cs.patchByte(ic_base + 2, @intCast((fpi >> 8) & 0xFF));
+                        ctx.cs.patchByte(ic_base + 3, @intCast(fpi & 0xFF));
+                    }
+                }
+            }
+            if (resolved.pass_recv) {
+                try insertReceiverAndCall(ctx, recv_idx, resolved.func, recv, argc);
+            } else {
+                ctx.vs.stack[recv_idx] = resolved.func;
+                try performCall(ctx, argc);
+            }
+        },
+        .small_struct_instance => |ssi| {
+            const tpi = ctx.hs.objectPoolIndex(ssi.typ);
+            var resolved: MethodResolution = undefined;
+            if (ic_type_idx == @as(usize, tpi) and ic_func_idx != 0xFFFF) {
+                if (ic_func_idx >= heap.MaxObjects) return error.NotAMethodReceiver;
+                resolved = .{ .func = .{ .object = ctx.hs.objectAt(@intCast(ic_func_idx)) }, .pass_recv = true };
+            } else {
+                resolved = try resolveSmallStructMethod(ctx, ssi, mname);
                 if (resolved.pass_recv and resolved.func == .object) {
                     const fpi = ctx.hs.objectPoolIndex(resolved.func.object);
                     if (fpi != 0xFFFF) {
@@ -1739,6 +1813,27 @@ fn opSetField(ctx: VMContext) !void {
             if (inst.typ.struct_type.fields[fi].is_const) { ctx.vs.setRuntimeErr("field '{s}' of '{s}' is const", .{ name, inst.typ.struct_type.name }); return error.AssignToConst; }
             if (!vmtyp.matchesFieldType(ctx, val, inst.typ.struct_type.fields[fi])) return error.StructFieldTypeMismatch;
             inst.fields[fi].value = val;
+        },
+        .small_struct_instance => |*ssi| {
+            const tpi = ctx.hs.objectPoolIndex(ssi.typ);
+            var fi: usize = undefined;
+            if (ic_type_idx == @as(usize, tpi) and ic_fidx != 0xFF) {
+                fi = ic_fidx;
+            } else {
+                const found = vmtyp.findFieldIndex(ssi.typ.struct_type.fields, name) orelse {
+                    ctx.vs.setRuntimeErr("no field '{s}' on type '{s}'", .{ name, ssi.typ.struct_type.name });
+                    return error.UnknownStructField;
+                };
+                fi = found;
+                if (found <= 0xFE) {
+                    ctx.cs.patchByte(ic_base,     @intCast((tpi >> 8) & 0xFF));
+                    ctx.cs.patchByte(ic_base + 1, @intCast(tpi & 0xFF));
+                    ctx.cs.patchByte(ic_base + 2, @intCast(found));
+                }
+            }
+            if (ssi.typ.struct_type.fields[fi].is_const) { ctx.vs.setRuntimeErr("field '{s}' of '{s}' is const", .{ name, ssi.typ.struct_type.name }); return error.AssignToConst; }
+            if (!vmtyp.matchesFieldType(ctx, val, ssi.typ.struct_type.fields[fi])) return error.StructFieldTypeMismatch;
+            ssi.v[fi] = val;
         },
         .map, .map_managed, .map_hashed => try vmmap.mapSet(ctx, container, name_val, val),
         else => return error.TypeError,
@@ -2432,7 +2527,10 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 if (idx >= ctx.cs.constCount()) return error.InvalidChunkShape;
                 const name = (ctx.cs.constAt(idx) catch unreachable).string.bytes;
                 const v = try ctx.vs.vmPeek(0);
-                const ok = v == .object and v.object.* == .struct_instance and common.streq(v.object.struct_instance.typ.struct_type.qualified_name, name);
+                const ok = v == .object and (
+                    (v.object.* == .struct_instance and common.streq(v.object.struct_instance.typ.struct_type.qualified_name, name)) or
+                    (v.object.* == .small_struct_instance and common.streq(v.object.small_struct_instance.typ.struct_type.qualified_name, name))
+                );
                 try typeAssert(ctx, v, ok, name);
             },
             .type_name => {
@@ -2821,17 +2919,25 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 if (typ_val != .object or typ_val.object.* != .struct_type) return error.TypeError;
                 const st = typ_val.object.struct_type;
                 const n = st.fields.len;
-                const inst_obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
-                defer ctx.vs.popTempRoot();
-                const fields = try vmgc.vmAllocManagedSlice(ctx, MapEntry, n);
-                for (fields, 0..) |*f, i| {
-                    f.* = .{
-                        .key = .{ .string = try ctx.cs.internStr(st.fields[i].name) },
-                        .value = zeroValueForFieldSpec(st.fields[i].typ),
-                    };
+                if (n <= vmod.SmallStructMaxFields) {
+                    var inline_vals: [vmod.SmallStructMaxFields]Value = [_]Value{.null} ** vmod.SmallStructMaxFields;
+                    for (0..n) |i| inline_vals[i] = zeroValueForFieldSpec(st.fields[i].typ);
+                    const obj = try vmgc.vmAllocObject(ctx);
+                    obj.* = .{ .small_struct_instance = .{ .typ = typ_val.object, .count = @intCast(n), .v = inline_vals } };
+                    try ctx.vs.vmPush(.{ .object = obj });
+                } else {
+                    const inst_obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
+                    defer ctx.vs.popTempRoot();
+                    const fields = try vmgc.vmAllocManagedSlice(ctx, MapEntry, n);
+                    for (fields, 0..) |*f, i| {
+                        f.* = .{
+                            .key = .{ .string = try ctx.cs.internStr(st.fields[i].name) },
+                            .value = zeroValueForFieldSpec(st.fields[i].typ),
+                        };
+                    }
+                    inst_obj.* = .{ .struct_instance = .{ .typ = typ_val.object, .fields = fields } };
+                    try ctx.vs.vmPush(.{ .object = inst_obj });
                 }
-                inst_obj.* = .{ .struct_instance = .{ .typ = typ_val.object, .fields = fields } };
-                try ctx.vs.vmPush(.{ .object = inst_obj });
             },
             .build_struct_instance => {
                 const count = opByte(ctx);
@@ -2933,36 +3039,55 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                     const st = typ_peek.object.struct_type;
                     if (st.fields.len > 255) return error.TooManyStructFields;
 
-                    const inst_fields = try vmgc.vmAllocManagedSlice(ctx, MapEntry, st.fields.len);
-                    const obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
-                    defer ctx.vs.popTempRoot();
-
                     const base = ctx.vs.stack_top - typ_stack_dist;
                     var seen: [255]bool = [_]bool{false} ** 255;
-                    for (0..@as(usize, count)) |ci| {
-                        const key = ctx.vs.stack[base + ci * 2];
-                        const val = ctx.vs.stack[base + ci * 2 + 1];
-                        const key_s = try vms.asStringValue(key);
-                        const idx = vmtyp.findFieldIndex(st.fields, key_s) orelse {
-                            ctx.vs.setRuntimeErr("no field '{s}' on type '{s}'", .{ key_s, st.name });
-                            return error.UnknownStructField;
-                        };
-                        if (seen[idx]) { ctx.vs.setRuntimeErr("duplicate field '{s}' in struct literal", .{key_s}); return error.DuplicateField; }
-                        seen[idx] = true;
-                        if (!vmtyp.matchesFieldType(ctx, val, st.fields[idx])) return error.StructFieldTypeMismatch;
-                        inst_fields[idx] = .{ .key = st.fields[idx].key, .value = val };
+
+                    if (st.fields.len <= vmod.SmallStructMaxFields) {
+                        var inline_vals: [vmod.SmallStructMaxFields]Value = [_]Value{.null} ** vmod.SmallStructMaxFields;
+                        for (0..@as(usize, count)) |ci| {
+                            const key = ctx.vs.stack[base + ci * 2];
+                            const val = ctx.vs.stack[base + ci * 2 + 1];
+                            const key_s = try vms.asStringValue(key);
+                            const idx = vmtyp.findFieldIndex(st.fields, key_s) orelse {
+                                ctx.vs.setRuntimeErr("no field '{s}' on type '{s}'", .{ key_s, st.name });
+                                return error.UnknownStructField;
+                            };
+                            if (seen[idx]) { ctx.vs.setRuntimeErr("duplicate field '{s}' in struct literal", .{key_s}); return error.DuplicateField; }
+                            seen[idx] = true;
+                            if (!vmtyp.matchesFieldType(ctx, val, st.fields[idx])) return error.StructFieldTypeMismatch;
+                            inline_vals[idx] = val;
+                        }
+                        for (st.fields, seen[0..st.fields.len]) |f, s| {
+                            if (!s) { ctx.vs.setRuntimeErr("missing required field '{s}' in struct literal", .{f.name}); return error.MissingStructField; }
+                        }
+                        ctx.vs.stack_top -= typ_stack_dist + 1;
+                        const obj = try vmgc.vmAllocObject(ctx);
+                        obj.* = .{ .small_struct_instance = .{ .typ = typ_peek.object, .count = @intCast(st.fields.len), .v = inline_vals } };
+                        try ctx.vs.vmPush(.{ .object = obj });
+                    } else {
+                        const inst_fields = try vmgc.vmAllocManagedSlice(ctx, MapEntry, st.fields.len);
+                        const obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
+                        defer ctx.vs.popTempRoot();
+                        for (0..@as(usize, count)) |ci| {
+                            const key = ctx.vs.stack[base + ci * 2];
+                            const val = ctx.vs.stack[base + ci * 2 + 1];
+                            const key_s = try vms.asStringValue(key);
+                            const idx = vmtyp.findFieldIndex(st.fields, key_s) orelse {
+                                ctx.vs.setRuntimeErr("no field '{s}' on type '{s}'", .{ key_s, st.name });
+                                return error.UnknownStructField;
+                            };
+                            if (seen[idx]) { ctx.vs.setRuntimeErr("duplicate field '{s}' in struct literal", .{key_s}); return error.DuplicateField; }
+                            seen[idx] = true;
+                            if (!vmtyp.matchesFieldType(ctx, val, st.fields[idx])) return error.StructFieldTypeMismatch;
+                            inst_fields[idx] = .{ .key = st.fields[idx].key, .value = val };
+                        }
+                        for (st.fields, seen[0..st.fields.len]) |f, s| {
+                            if (!s) { ctx.vs.setRuntimeErr("missing required field '{s}' in struct literal", .{f.name}); return error.MissingStructField; }
+                        }
+                        ctx.vs.stack_top -= typ_stack_dist + 1;
+                        obj.* = .{ .struct_instance = .{ .typ = typ_peek.object, .fields = inst_fields } };
+                        try ctx.vs.vmPush(.{ .object = obj });
                     }
-
-                    for (st.fields, seen[0..st.fields.len]) |f, s| {
-                        if (!s) { ctx.vs.setRuntimeErr("missing required field '{s}' in struct literal", .{f.name}); return error.MissingStructField; }
-                    }
-
-                    ctx.vs.stack_top -= typ_stack_dist + 1;
-
-                    obj.* = .{
-                        .struct_instance = .{ .typ = typ_peek.object, .fields = inst_fields },
-                    };
-                    try ctx.vs.vmPush(.{ .object = obj });
                 } else {
                     return error.TypeError;
                 }

@@ -503,6 +503,15 @@ fn valueToWire(val: Value) !ValueWire {
                 try fillMapWires(entries, wires);
                 return makeWire(@intFromEnum(WireTag.map), @intFromPtr(wires.ptr), @intCast(entries.len));
             },
+            .small_struct_instance => |ssi| {
+                const n = @as(usize, ssi.count);
+                const wires = (heap.bump(ValueWire, n * 2) orelse return makeWire(@intFromEnum(WireTag.null), 0, 0))[0 .. n * 2];
+                for (0..n) |i| {
+                    wires[i * 2] = try valueToWire(ssi.typ.struct_type.fields[i].key);
+                    wires[i * 2 + 1] = try valueToWire(ssi.v[i]);
+                }
+                return makeWire(@intFromEnum(WireTag.map), @intFromPtr(wires.ptr), @intCast(n));
+            },
             .named_value => |nv| return valueToWire(nv.value),
             .enum_value => |ev| makeWire(@intFromEnum(WireTag.string), @intFromPtr(ev.name.ptr), @intCast(ev.name.len)),
             .variant_value => |vv| {
@@ -587,6 +596,18 @@ fn valueToWireWithScratch(val: Value, scratch: *Engine) !ValueWire {
                 scratch.wire_elem_count = @intCast(entries.len * 2);
                 try fillMapWires(entries, wires);
                 return makeWire(@intFromEnum(WireTag.map), @intFromPtr(wires.ptr), @intCast(entries.len));
+            },
+            .small_struct_instance => |ssi| {
+                const n = @as(usize, ssi.count);
+                const max_entries = scratch.wire_elem_buf.len / 2;
+                if (n > max_entries) return error.WireBufferOverflow;
+                const wires = &scratch.wire_elem_buf;
+                scratch.wire_elem_count = @intCast(n * 2);
+                for (0..n) |i| {
+                    wires[i * 2] = try valueToWire(ssi.typ.struct_type.fields[i].key);
+                    wires[i * 2 + 1] = try valueToWire(ssi.v[i]);
+                }
+                return makeWire(@intFromEnum(WireTag.map), @intFromPtr(wires.ptr), @intCast(n));
             },
             else => return try valueToWire(val),
         },

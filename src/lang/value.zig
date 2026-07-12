@@ -185,6 +185,12 @@ pub const EnumValueObj = struct { typ: *Object, name: []const u8, ordinal: i64 }
 pub const EnumTypeFnKind = enum { from_int, succ, pred };
 pub const EnumTypeFnObj = struct { typ: *Object, kind: EnumTypeFnKind = .from_int };
 pub const StructInstanceObj = struct { typ: *Object, fields: []MapEntry };
+pub const SmallStructMaxFields = 4;
+pub const SmallStructObj = struct {
+    typ: *Object,
+    count: u8,
+    v: [SmallStructMaxFields]Value,
+};
 pub const CellObj = struct { value: Value };
 pub const ClosureObj = struct { func: *Object, upvalues: []*Object };
 pub const IterKind = enum { array, string, map, range };
@@ -231,7 +237,7 @@ pub const ArrayViewObj = struct {
 // Items 0..len are live; items len..capacity are always .null (safe for GC marking).
 pub const ArrayCapObj = struct { backing: *Object, len: usize };
 
-pub const ObjTag = enum { array, array_managed, array_view, array_capacity, map, map_managed, map_hashed, dyn_string, function, closure, cell, native_function, host_module_function, struct_type, interface_type, named_type, named_value, enum_type, enum_value, enum_type_fn, struct_instance, iterator, variant_type, variant_value, variant_ctor, named_type_fn, string_builder, string_view, bigint, named_error_type, named_error_value };
+pub const ObjTag = enum { array, array_managed, array_view, array_capacity, map, map_managed, map_hashed, dyn_string, function, closure, cell, native_function, host_module_function, struct_type, interface_type, named_type, named_value, enum_type, enum_value, enum_type_fn, struct_instance, small_struct_instance, iterator, variant_type, variant_value, variant_ctor, named_type_fn, string_builder, string_view, bigint, named_error_type, named_error_value };
 pub const Object = union(ObjTag) {
     array: []Value,
     array_managed: []Value,
@@ -254,6 +260,7 @@ pub const Object = union(ObjTag) {
     enum_value: EnumValueObj,
     enum_type_fn: EnumTypeFnObj,
     struct_instance: StructInstanceObj,
+    small_struct_instance: SmallStructObj,
     iterator: IterObj,
     variant_type: VariantTypeObj,
     variant_value: VariantValueObj,

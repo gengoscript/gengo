@@ -409,6 +409,17 @@ fn printValueDepth(v: Value, depth: u32, ancestors: *[PrintMaxDepth]*const vmod.
                     }
                     write("}");
                 },
+                .small_struct_instance => |ssi| {
+                    write(ssi.typ.struct_type.name);
+                    write("{");
+                    for (0..@as(usize, ssi.count)) |i| {
+                        if (i > 0) write(", ");
+                        write(ssi.typ.struct_type.fields[i].name);
+                        write(": ");
+                        printValueDepth(ssi.v[i], depth + 1, ancestors, anc_count);
+                    }
+                    write("}");
+                },
                 .iterator => write("<iter>"),
                 .variant_type => |vt| {
                     write("<variant ");
