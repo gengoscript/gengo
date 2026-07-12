@@ -123,9 +123,9 @@ The entries below describe the public library surface. This page is intentionall
 
 ### `std.core.type_of(v)`
 - Returns stable runtime type name
-- Plain scalars report names like `int`, `float`, `decimal`, `bigint`, `bool`, `string`, `error`, `null`
+- Plain scalars report names like `int`, `float`, `decimal`, `bigint`, `bool`, `string`, `rune`, `error`, `null`
 - Named values and struct instances report their declared type name
-- Anonymous typed arrays and maps report composite names such as `[]int` or `[string]int`
+- Anonymous typed arrays and maps report `array` and `map`
 
 ### `std.core.is_int(v)`
 - `true` for integral numbers and named integer values
@@ -251,7 +251,7 @@ log_args("x", std.Arg.Int(42), std.Arg.Bool(true), std.Arg.Str("hi"))
 
 ### `std.conv.to_bool(x)`
 - Explicit conversion to boolean: `false`, `null`, `0`, and `""`
-  convert to `false`; everything else converts to `true` (including empty arrays)
+  convert to `false`; everything else converts to `true`
 - Named values convert through their underlying value
 - This is the only truthiness in the language — `if`/`not`/`and`/`or` and
   template `{{if}}` require an actual `bool`
@@ -384,6 +384,7 @@ log_args("x", std.Arg.Int(42), std.Arg.Bool(true), std.Arg.Str("hi"))
 
 ### `std.math.abs(x)`
 - Absolute value of `x`
+- Integer inputs stay `int`; floating inputs stay `float`
 
 ### `std.math.sqrt(x)`
 - Square root of `x`
@@ -402,6 +403,7 @@ log_args("x", std.Arg.Int(42), std.Arg.Bool(true), std.Arg.Str("hi"))
 
 ### `std.math.min(a, b)` / `std.math.max(a, b)`
 - Minimum / maximum of two numbers
+- When both inputs are `int`, the result stays `int`
 
 ### `std.math.pi`
 - π ≈ 3.14159265358979… (constant)
@@ -488,17 +490,20 @@ log_args("x", std.Arg.Int(42), std.Arg.Bool(true), std.Arg.Str("hi"))
 
 ### `std.json.parse(s)`
 - Parses a JSON string and returns the corresponding gengo value
-- JSON null → `null`, booleans → `bool`, numbers → `number`, strings → `string`, arrays → array, objects → map
+- JSON null → `null`, booleans → `bool`, strings → `string`, arrays → array, objects → map
+- Integer JSON numbers become `int`; non-integral JSON numbers become `float`
 - Errors: `TypeError` on invalid JSON
 
 ### `std.json.parse_value(s)`
 - Parses a JSON string and returns a `std.JSONValue` variant value
 - Use this when the JSON structure is not known ahead of time; the result can be pattern-matched exhaustively with `switch`
+- Integer JSON numbers become `.jint`; non-integral JSON numbers become `.jfloat`
 - Errors: `TypeError` on invalid JSON
 
 ### `std.json.stringify(v)`
 - Serializes a gengo value to a JSON string
 - Arrays → JSON arrays, maps → JSON objects (string keys required), scalars → JSON primitives
+- Named scalar values serialize as their underlying scalar
 - Non-serializable values (struct instances, closures, etc.) emit `null`
 - Returns `string`
 
@@ -728,6 +733,11 @@ Go-style text templates with `{{` / `}}` delimiters.
 - Compiles `src` into a reusable `Template` object
 - Errors: `InvalidTemplate` on malformed template
 
+### `std.template.execute(tmpl, data)`
+- Executes a compiled template object returned by `std.template.parse`
+- Equivalent to `tmpl.execute(data)`
+- Returns the rendered string
+
 ### `Template.execute(data)`
 - Executes a compiled template against `data`
 - Returns the rendered string
@@ -738,6 +748,8 @@ Go-style text templates with `{{` / `}}` delimiters.
 ### `std.template.add_func(tmpl, name, fn)`
 - Registers a named function on a compiled template for use in `{{call_fn}}` tags
 - Returns `null`
+
+`Template.add_func(name, fn)` is the equivalent method-call form.
 
 ### Syntax
 
@@ -776,7 +788,7 @@ Go-style text templates with `{{` / `}}` delimiters.
 | Method | Returns | Notes |
 |---|---|---|
 | `.unix()` | `int` | Whole seconds since epoch |
-| `.unix_ms()` | `int` | Same as raw value |
+| `.unix_ms()` | `float` | Milliseconds since epoch |
 | `.parts()` | `map` | Keys: `year month day hour min sec ms weekday` (0=Sunday) |
 | `.format(fmt)` | `string` | |
 | `.add_ms(n)` | `std.Time` | |
@@ -790,11 +802,12 @@ Go-style text templates with `{{` / `}}` delimiters.
 | `.is_zero()` | `bool` | |
 | `.since()` | `float` | Milliseconds elapsed since this time (now − self) |
 | `.until()` | `float` | Milliseconds until this time (self − now) |
-| `.add_date(years, months, days, ms)` | `std.Time` | Adds calendar units |
-| `.iso_week()` | `map` | Keys: `year`, `week`, `day` (ISO 8601 week date) |
+| `.add_date(years, months, days)` | `std.Time` | Adds calendar units |
+| `.iso_week()` | `map` | Keys: `year`, `week` |
 
 ### `std.time.parse_duration(s)`
-- Parses a duration string like `"1h30m"`, `"2.5s"`, `"100ms"` into milliseconds
+- Parses a duration string like `"1h30m"`, `"2.5s"`, `"100ms"`, `"1us"`, or `"1ns"` into milliseconds
+- Supports leading `+`/`-`, compound forms, bare zero, and both `µs` and `μs`
 - Returns `float`
 
 ### Format verbs

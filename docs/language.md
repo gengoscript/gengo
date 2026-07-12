@@ -777,7 +777,7 @@ std.io.println(Html("<hr>") + Html("<br>"))
 
 ### Named Error Types
 
-An error type is a named `error` variant. It lets callers distinguish failure
+An error type is a named `error` type. It lets callers distinguish failure
 causes by type rather than by string matching:
 
 ```gengo
