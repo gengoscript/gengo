@@ -17,6 +17,36 @@ pub const Op = enum(u8) {
     add,
     sub,
     mul,
+    add_int,
+    sub_int,
+    mul_int,
+    div_int,
+    eqz_int,
+    eq_int,
+    nez_int,
+    ne_int,
+    ltz_int,
+    lt_int,
+    gtz_int,
+    gt_int,
+    abs,
+    floor,
+    ceil,
+    trunc,
+    nearest,
+    min,
+    max,
+    sign,
+    sqrt,
+    clamp,
+    add_float,
+    sub_float,
+    mul_float,
+    div_float,
+    eq_float,
+    ne_float,
+    lt_float,
+    gt_float,
     // Fused constant+binop: reads u16 const_idx, pops TOS (left operand),
     // applies op with the constant as right operand, pushes result.
     // Emitted by the peephole when `constant k` immediately precedes the op.
@@ -148,6 +178,7 @@ pub const Op = enum(u8) {
     local_add_local, // fused get_local+get_local+add+set_local: [op][dst][src] (3 bytes); dst += src
     local_add_const, // fused get_local+const_add+set_local: [op][dst][idx_hi][idx_lo] (4 bytes); dst += k
     local_add_const_loop, // fused local_add_const+loop: [op][dst][idx_hi][idx_lo][off_b3..b0] (8 bytes)
+    local_add_field, // fused get_local+get_local_get_field+add+set_local: [op][dst][src][skip][name_hi][name_lo][ic_hi][ic_lo][ic_fidx] (9 bytes); dst += src.field
     // Fused get_global_const_add+set_global (same global): 8-byte in-place global increment.
     // Layout: [op][name_hi][name_lo][ic_hi][ic_lo][add_skip][val_hi][val_lo] (same as get_global_const_add)
     // Emitted when get_global_const_add immediately precedes set_global with the same name.

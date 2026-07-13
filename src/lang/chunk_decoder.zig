@@ -209,6 +209,12 @@ pub fn decodeAt(state: anytype, pos: usize) !DecodedInstruction {
             };
         },
 
+        .local_add_field => .{
+            .op = op,
+            .width = 9,
+            .const_index = try readU16At(state, pos + 4),
+        },
+
         else => .{
             .op = op,
             .width = 1,

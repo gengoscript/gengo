@@ -79,6 +79,8 @@ fn expandedWidth(op: Op, old_width: usize) usize {
         .get_global_const_lt        => 8,   // get_global(5)+const_op(3)
         // get_local_get_field: same 8 bytes, but expand to get_local+get_field
         .get_local_get_field        => 8,   // get_local(2)+get_field(6)
+        // local_add_field expands to get_local+get_local_get_field+add+set_local
+        .local_add_field            => 13,  // get_local(2)+get_local_get_field(8)+add(1)+set_local(2)
         // Everything else: same size
         else                        => old_width,
     };
@@ -133,6 +135,22 @@ fn emitExpanded(
             dst[2] = opByte(.constant); dst[3] = ih; dst[4] = il;
             dst[5] = opByte(.add);
             dst[6] = opByte(.set_local); dst[7] = d;
+        },
+        .local_add_field => {
+            // [op][dst][src][skip][name_hi][name_lo][ic_hi][ic_lo][ic_fidx]
+            // expands to: get_local dst; get_local_get_field src skip name ic; add; set_local dst
+            const d = rb(code, old_ip, 1);
+            dst[ 0] = opByte(.get_local); dst[1] = d;
+            dst[ 2] = opByte(.get_local_get_field);
+            dst[ 3] = rb(code, old_ip, 2); // src slot
+            dst[ 4] = rb(code, old_ip, 3); // skip byte
+            dst[ 5] = rb(code, old_ip, 4); // name_hi
+            dst[ 6] = rb(code, old_ip, 5); // name_lo
+            dst[ 7] = rb(code, old_ip, 6); // ic_hi
+            dst[ 8] = rb(code, old_ip, 7); // ic_lo
+            dst[ 9] = rb(code, old_ip, 8); // ic_fidx
+            dst[10] = opByte(.add);
+            dst[11] = opByte(.set_local); dst[12] = d;
         },
 
         // ── const+binop (pop left, push left op const) ───────────────────────

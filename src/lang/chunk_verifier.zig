@@ -44,10 +44,18 @@ fn stackEffect(op: Op, code: []const u8, ip: usize) struct { pop: u8, push: u8 }
         .set_named_predicate => .{ .pop = 1, .push = 0 },
 
         .add, .sub, .mul, .div, .int_div, .rem, .mod, .pow,
+        .add_int, .sub_int, .mul_int, .div_int,
+        .eq_int, .ne_int, .lt_int, .gt_int,
+        .add_float, .sub_float, .mul_float, .div_float,
+        .eq_float, .ne_float, .lt_float, .gt_float,
         .bit_and, .bit_or, .bit_xor, .shl, .shr,
-        .eq, .gt, .lt => .{ .pop = 2, .push = 1 },
+        .eq, .gt, .lt,
+        .min, .max => .{ .pop = 2, .push = 1 },
+        .clamp => .{ .pop = 3, .push = 1 },
+        .eqz_int, .nez_int, .ltz_int, .gtz_int => .{ .pop = 1, .push = 1 },
 
         .neg, .not, .bit_not,
+        .abs, .floor, .ceil, .trunc, .nearest, .sign, .sqrt,
         .cast_int, .cast_float, .cast_decimal, .cast_bool, .cast_string, .cast_rune, .cast_bigint,
         .type_name, .variant_check, .variant_payload,
         .const_eq, .const_sub, .const_add, .const_lt, .const_gt,
@@ -122,6 +130,7 @@ fn stackEffect(op: Op, code: []const u8, ip: usize) struct { pop: u8, push: u8 }
         .local_add_local => .{ .pop = 0, .push = 0 },
         .local_add_const => .{ .pop = 0, .push = 0 },
         .local_add_const_loop => .{ .pop = 0, .push = 0 },
+        .local_add_field => .{ .pop = 0, .push = 0 },
         .op_assert_msg => .{ .pop = 2, .push = 0 },
         .op_trap_check => .{ .pop = 1, .push = 0 },
 
@@ -241,6 +250,10 @@ pub fn verify(state: anytype) !void {
                 },
                 .get_local_get_field => if (state.code[ip + 2] != @intFromEnum(Op.get_field)) {
                     verifySetErr(state, "ip={d} ({s}): expected embedded get_field, got {d}", .{ip, @tagName(inst.op), state.code[ip + 2]});
+                    return error.BadOpcode;
+                },
+                .local_add_field => if (state.code[ip + 3] != @intFromEnum(Op.get_field)) {
+                    verifySetErr(state, "ip={d} ({s}): expected embedded get_field, got {d}", .{ip, @tagName(inst.op), state.code[ip + 3]});
                     return error.BadOpcode;
                 },
                 else => {},

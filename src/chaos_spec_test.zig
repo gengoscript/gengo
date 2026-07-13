@@ -479,6 +479,9 @@ test "spec pass cases differential" {
         // Install defused code.
         @memcpy(chunk.g_state.code[0..defused.len], defused);
         chunk.g_state.code_len = defused.len;
+        chunk.g_state.verified = false;
+        chunk.g_state.verified_code_len = 0;
+        vm.VMContext.fromActive().vs.resetExec();
 
         // Discard output; we only check that it doesn't error.
         g_stdout = std.array_list.Managed(u8).init(alloc);
