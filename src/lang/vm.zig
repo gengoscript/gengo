@@ -892,11 +892,11 @@ fn enterFunctionFrameWarm(ctx: VMContext, f: @import("value.zig").FuncObj, func_
     if (f.has_typed_params) try vmtyp.enforcePrimitiveFuncArgTypes(ctx, f, argc);
     if (ctx.vs.frame_top >= ctx.vs.frames.len) return error.CallStackOverflow;
     ctx.vs.frames[ctx.vs.frame_top] = .{
-        .ret_ip = ctx.vs.ip,
-        .base = ctx.vs.stack_top - f.arity,
+        .ret_ip = @intCast(ctx.vs.ip),
+        .base = @intCast(ctx.vs.stack_top - f.arity),
         .closure = closure,
         .func_obj = func_obj,
-        .defer_base = ctx.vs.defer_top,
+        .defer_base = @intCast(ctx.vs.defer_top),
         .has_typed_returns = f.has_typed_returns,
         .named_return_count = f.named_return_count,
         .func_arity = f.arity,
@@ -938,11 +938,11 @@ fn enterFunctionFrame(ctx: VMContext, f: @import("value.zig").FuncObj, func_obj:
     try prepareVariadicCall(ctx, f, effective_argc);
     if (ctx.vs.frame_top >= ctx.vs.frames.len) return error.CallStackOverflow;
     ctx.vs.frames[ctx.vs.frame_top] = .{
-        .ret_ip = ctx.vs.ip,
-        .base = ctx.vs.stack_top - f.arity,
+        .ret_ip = @intCast(ctx.vs.ip),
+        .base = @intCast(ctx.vs.stack_top - f.arity),
         .closure = closure,
         .func_obj = func_obj,
-        .defer_base = ctx.vs.defer_top,
+        .defer_base = @intCast(ctx.vs.defer_top),
         .has_typed_returns = f.has_typed_returns,
         .named_return_count = f.named_return_count,
         .func_arity = f.arity,
@@ -1375,10 +1375,12 @@ fn pushFieldFromObject(ctx: VMContext, obj: *Object, name_idx: usize, ic_base: u
             } else return error.TypeError;
         },
         .struct_instance => |inst| {
-            const tpi = ctx.hs.objectPoolIndex(inst.typ);
-            if (ic_type_idx == @as(usize, tpi) and ic_fidx != 0xFF) {
+            if (ic_fidx != 0xFF and ic_type_idx < heap.MaxObjects and
+                ctx.hs.objectAt(@intCast(ic_type_idx)) == inst.typ)
+            {
                 try ctx.vs.vmPush(inst.fields[ic_fidx].value);
             } else {
+                const tpi = ctx.hs.objectPoolIndex(inst.typ);
                 const fi = vmtyp.findFieldIndex(inst.typ.struct_type.fields, name) orelse {
                     ctx.vs.setRuntimeErr("no field '{s}' on type '{s}'", .{ name, inst.typ.struct_type.name });
                     return error.UnknownStructField;
@@ -1392,10 +1394,12 @@ fn pushFieldFromObject(ctx: VMContext, obj: *Object, name_idx: usize, ic_base: u
             }
         },
         .small_struct_instance => |ssi| {
-            const tpi = ctx.hs.objectPoolIndex(ssi.typ);
-            if (ic_type_idx == @as(usize, tpi) and ic_fidx != 0xFF) {
+            if (ic_fidx != 0xFF and ic_type_idx < heap.MaxObjects and
+                ctx.hs.objectAt(@intCast(ic_type_idx)) == ssi.typ)
+            {
                 try ctx.vs.vmPush(ssi.v[ic_fidx]);
             } else {
+                const tpi = ctx.hs.objectPoolIndex(ssi.typ);
                 const fi = vmtyp.findFieldIndex(ssi.typ.struct_type.fields, name) orelse {
                     ctx.vs.setRuntimeErr("no field '{s}' on type '{s}'", .{ name, ssi.typ.struct_type.name });
                     return error.UnknownStructField;
@@ -1452,6 +1456,23 @@ fn opGetLocalGetField(ctx: VMContext) !void {
     const ic_type_idx = opShort(ctx);
     const ic_fidx = opByte(ctx);
     const raw = try readLocalSlot(ctx, slot);
+    if (ic_fidx != 0xFF and ic_type_idx < heap.MaxObjects and raw == .object) {
+        switch (raw.object.*) {
+            .small_struct_instance => |ssi| {
+                if (ctx.hs.objectAt(@intCast(ic_type_idx)) == ssi.typ) {
+                    try ctx.vs.vmPush(ssi.v[ic_fidx]);
+                    return;
+                }
+            },
+            .struct_instance => |inst| {
+                if (ctx.hs.objectAt(@intCast(ic_type_idx)) == inst.typ) {
+                    try ctx.vs.vmPush(inst.fields[ic_fidx].value);
+                    return;
+                }
+            },
+            else => {},
+        }
+    }
     const container = vms.unboxNamed(raw);
     if (container != .object) return error.TypeError;
     try pushFieldFromObject(ctx, container.object, name_idx, ic_base, ic_type_idx, ic_fidx);
@@ -1602,12 +1623,13 @@ fn opInvokeMethod(ctx: VMContext) !void {
     if (recv != .object) return error.NotAMethodReceiver;
     switch (recv.object.*) {
         .struct_instance => |inst| {
-            const tpi = ctx.hs.objectPoolIndex(inst.typ);
             var resolved: MethodResolution = undefined;
-            if (ic_type_idx == @as(usize, tpi) and ic_func_idx != 0xFFFF) {
-                if (ic_func_idx >= heap.MaxObjects) return error.NotAMethodReceiver;
+            if (ic_func_idx < heap.MaxObjects and ic_type_idx < heap.MaxObjects and
+                ctx.hs.objectAt(@intCast(ic_type_idx)) == inst.typ)
+            {
                 resolved = .{ .func = .{ .object = ctx.hs.objectAt(@intCast(ic_func_idx)) }, .pass_recv = true };
             } else {
+                const tpi = ctx.hs.objectPoolIndex(inst.typ);
                 resolved = try resolveStructMethod(ctx, inst, mname);
                 if (resolved.pass_recv and resolved.func == .object) {
                     const fpi = ctx.hs.objectPoolIndex(resolved.func.object);
@@ -1627,12 +1649,13 @@ fn opInvokeMethod(ctx: VMContext) !void {
             }
         },
         .small_struct_instance => |ssi| {
-            const tpi = ctx.hs.objectPoolIndex(ssi.typ);
             var resolved: MethodResolution = undefined;
-            if (ic_type_idx == @as(usize, tpi) and ic_func_idx != 0xFFFF) {
-                if (ic_func_idx >= heap.MaxObjects) return error.NotAMethodReceiver;
+            if (ic_func_idx < heap.MaxObjects and ic_type_idx < heap.MaxObjects and
+                ctx.hs.objectAt(@intCast(ic_type_idx)) == ssi.typ)
+            {
                 resolved = .{ .func = .{ .object = ctx.hs.objectAt(@intCast(ic_func_idx)) }, .pass_recv = true };
             } else {
+                const tpi = ctx.hs.objectPoolIndex(ssi.typ);
                 resolved = try resolveSmallStructMethod(ctx, ssi, mname);
                 if (resolved.pass_recv and resolved.func == .object) {
                     const fpi = ctx.hs.objectPoolIndex(resolved.func.object);
@@ -1751,6 +1774,23 @@ fn opGetField(ctx: VMContext) !void {
     const ic_type_idx = opShort(ctx);
     const ic_fidx = opByte(ctx);
     const raw = try ctx.vs.vmPop();
+    if (ic_fidx != 0xFF and ic_type_idx < heap.MaxObjects and raw == .object) {
+        switch (raw.object.*) {
+            .small_struct_instance => |ssi| {
+                if (ctx.hs.objectAt(@intCast(ic_type_idx)) == ssi.typ) {
+                    try ctx.vs.vmPush(ssi.v[ic_fidx]);
+                    return;
+                }
+            },
+            .struct_instance => |inst| {
+                if (ctx.hs.objectAt(@intCast(ic_type_idx)) == inst.typ) {
+                    try ctx.vs.vmPush(inst.fields[ic_fidx].value);
+                    return;
+                }
+            },
+            else => {},
+        }
+    }
     var rooted_raw = false;
     if (raw == .object) { try ctx.vs.pushTempRoot(raw); rooted_raw = true; }
     defer if (rooted_raw) ctx.vs.popTempRoot();
