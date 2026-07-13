@@ -121,6 +121,14 @@ zig build -Dpreset=1m
 
 Never trust the binary timestamp alone to confirm a rebuild happened. Run the binary and verify observable behavior changed, or check that the binary's mtime advanced past your last source edit.
 
+## Compiler tests and stdout
+
+`zig build compiler-test` (and `zig build test`) runs the test binary with `--listen=-`, which uses stdin/stdout as a binary IPC channel between the test binary and the build runner.
+
+**Never use `allow_io = true` in `src/compiler_test.zig`** unless the test genuinely needs to verify real filesystem or network IO. When `allow_io = true`, `std.io.println` writes raw text to the process's stdout — the same fd the IPC protocol uses. This corrupts the protocol; the build runner receives garbage, fails to parse it, and eventually sends SIGTERM to the test binary. The test appears to hang (or crash with TERM) only when run via `zig build`, not when the binary is invoked directly (where `--listen=-` is absent).
+
+Use `allow_io = false` and replace any `std.io.println` calls in the test source with `assert` statements that verify the same values.
+
 ## Test execution
 
 Read `CONTRIBUTING.md` before starting any non-trivial task. It documents the build presets, test commands, and commit conventions for this project.

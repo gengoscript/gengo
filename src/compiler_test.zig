@@ -10,6 +10,8 @@ const api = @import("runtime/api.zig");
 const cfg = @import("runtime/config.zig");
 const Value = @import("lang/value.zig").Value;
 const module_compile = @import("lang/module_compile.zig");
+const vm = @import("lang/vm.zig");
+const vm_defuse = @import("lang/vm_defuse.zig");
 
 fn setup() !Runtime {
     var rt: Runtime = .{};
@@ -901,7 +903,7 @@ test "chunk: verify context on BadConstantIndex" {
     try std.testing.expect(std.mem.indexOf(u8, msg, "ip=0") != null);
 }
 
-test "compiler: std direct call lowers to leaf global" {
+test "compiler: std math abs direct call lowers to intrinsic op" {
     var rt = try setup();
     defer rt.deinit();
 
@@ -911,20 +913,241 @@ test "compiler: std direct call lowers to leaf global" {
     , "");
 
     const c = rt.chunk_state;
-    var found_direct = false;
-    var found_get_field = false;
+    var found_abs = false;
+    var found_direct_abs_global = false;
     var ip: usize = 0;
     while (ip < c.code_len) {
         const inst = try chunk.decodeAt(ip);
-        if (inst.op == .get_field) found_get_field = true;
+        if (inst.op == .abs) found_abs = true;
         if (inst.op == .get_global and inst.const_index != null) {
             const name = (try chunk.constAt(inst.const_index.?)).string.bytes;
-            if (std.mem.eql(u8, name, "module:std.math.abs")) found_direct = true;
+            if (std.mem.eql(u8, name, "module:std.math.abs")) found_direct_abs_global = true;
         }
         ip += inst.width;
     }
-    try std.testing.expect(found_direct);
-    try std.testing.expect(!found_get_field);
+    try std.testing.expect(found_abs);
+    try std.testing.expect(!found_direct_abs_global);
+}
+
+test "compiler: std math rounding direct calls lower to intrinsic ops" {
+    var rt = try setup();
+    defer rt.deinit();
+
+    try compileWithSession(&rt,
+        \\std := import("std")
+        \\func a(x float) float { return std.math.floor(x) }
+        \\func b(x float) float { return std.math.ceil(x) }
+        \\func c(x float) float { return std.math.trunc(x) }
+        \\func d(x float) float { return std.math.round(x) }
+    , "");
+
+    const c = rt.chunk_state;
+    var found_floor = false;
+    var found_ceil = false;
+    var found_trunc = false;
+    var found_nearest = false;
+    var ip: usize = 0;
+    while (ip < c.code_len) {
+        const inst = try chunk.decodeAt(ip);
+        if (inst.op == .floor) found_floor = true;
+        if (inst.op == .ceil) found_ceil = true;
+        if (inst.op == .trunc) found_trunc = true;
+        if (inst.op == .nearest) found_nearest = true;
+        ip += inst.width;
+    }
+    try std.testing.expect(found_floor);
+    try std.testing.expect(found_ceil);
+    try std.testing.expect(found_trunc);
+    try std.testing.expect(found_nearest);
+}
+
+test "compiler: std math min max sign direct calls lower to intrinsic ops" {
+    var rt = try setup();
+    defer rt.deinit();
+
+    try compileWithSession(&rt,
+        \\std := import("std")
+        \\func a(x int, y int) int { return std.math.min(x, y) }
+        \\func b(x float, y float) float { return std.math.max(x, y) }
+        \\func c(x int) int { return std.math.sign(x) }
+    , "");
+
+    const c = rt.chunk_state;
+    var found_min = false;
+    var found_max = false;
+    var found_sign = false;
+    var found_direct_min_global = false;
+    var found_direct_max_global = false;
+    var found_direct_sign_global = false;
+    var ip: usize = 0;
+    while (ip < c.code_len) {
+        const inst = try chunk.decodeAt(ip);
+        if (inst.op == .min) found_min = true;
+        if (inst.op == .max) found_max = true;
+        if (inst.op == .sign) found_sign = true;
+        if (inst.op == .get_global and inst.const_index != null) {
+            const name = (try chunk.constAt(inst.const_index.?)).string.bytes;
+            if (std.mem.eql(u8, name, "module:std.math.min")) found_direct_min_global = true;
+            if (std.mem.eql(u8, name, "module:std.math.max")) found_direct_max_global = true;
+            if (std.mem.eql(u8, name, "module:std.math.sign")) found_direct_sign_global = true;
+        }
+        ip += inst.width;
+    }
+    try std.testing.expect(found_min);
+    try std.testing.expect(found_max);
+    try std.testing.expect(found_sign);
+    try std.testing.expect(!found_direct_min_global);
+    try std.testing.expect(!found_direct_max_global);
+    try std.testing.expect(!found_direct_sign_global);
+}
+
+test "compiler: std math sqrt clamp direct calls lower to intrinsic ops" {
+    var rt = try setup();
+    defer rt.deinit();
+
+    try compileWithSession(&rt,
+        \\std := import("std")
+        \\func a(x float) float { return std.math.sqrt(x) }
+        \\func b(x float, lo float, hi float) float { return std.math.clamp(x, lo, hi) }
+    , "");
+
+    const c = rt.chunk_state;
+    var found_sqrt = false;
+    var found_clamp = false;
+    var found_direct_sqrt_global = false;
+    var found_direct_clamp_global = false;
+    var ip: usize = 0;
+    while (ip < c.code_len) {
+        const inst = try chunk.decodeAt(ip);
+        if (inst.op == .sqrt) found_sqrt = true;
+        if (inst.op == .clamp) found_clamp = true;
+        if (inst.op == .get_global and inst.const_index != null) {
+            const name = (try chunk.constAt(inst.const_index.?)).string.bytes;
+            if (std.mem.eql(u8, name, "module:std.math.sqrt")) found_direct_sqrt_global = true;
+            if (std.mem.eql(u8, name, "module:std.math.clamp")) found_direct_clamp_global = true;
+        }
+        ip += inst.width;
+    }
+    try std.testing.expect(found_sqrt);
+    try std.testing.expect(found_clamp);
+    try std.testing.expect(!found_direct_sqrt_global);
+    try std.testing.expect(!found_direct_clamp_global);
+}
+
+test "compiler: std math intrinsic direct call results" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func ai(x int) int { return std.math.abs(x) }
+        \\func af(x float) float { return std.math.abs(x) }
+        \\func fl(x float) float { return std.math.floor(x) }
+        \\func ce(x float) float { return std.math.ceil(x) }
+        \\func tr(x float) float { return std.math.trunc(x) }
+        \\func rd(x float) float { return std.math.round(x) }
+    );
+    const ai = try rt.callGlobal("ai", &.{.{ .int = -5 }});
+    try std.testing.expect(ai == .int and ai.int == 5);
+    const af = try rt.callGlobal("af", &.{.{ .float = -5.5 }});
+    try std.testing.expect(af == .float);
+    try std.testing.expectApproxEqRel(@as(f64, 5.5), af.float, 1e-12);
+    const fl = try rt.callGlobal("fl", &.{.{ .float = 3.7 }});
+    try std.testing.expect(fl == .float);
+    try std.testing.expectApproxEqRel(@as(f64, 3.0), fl.float, 1e-12);
+    const ce = try rt.callGlobal("ce", &.{.{ .float = 3.1 }});
+    try std.testing.expect(ce == .float);
+    try std.testing.expectApproxEqRel(@as(f64, 4.0), ce.float, 1e-12);
+    const tr = try rt.callGlobal("tr", &.{.{ .float = 3.7 }});
+    try std.testing.expect(tr == .float);
+    try std.testing.expectApproxEqRel(@as(f64, 3.0), tr.float, 1e-12);
+    const rd = try rt.callGlobal("rd", &.{.{ .float = 3.5 }});
+    try std.testing.expect(rd == .float);
+    try std.testing.expectApproxEqRel(@as(f64, 4.0), rd.float, 1e-12);
+}
+
+test "compiler: std math min max sign intrinsic direct call results" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func mi(x int, y int) int { return std.math.min(x, y) }
+        \\func mf(x float, y float) float { return std.math.min(x, y) }
+        \\func xi(x int, y int) int { return std.math.max(x, y) }
+        \\func xf(x float, y float) float { return std.math.max(x, y) }
+        \\func si(x int) int { return std.math.sign(x) }
+        \\func sf(x float) float { return std.math.sign(x) }
+    );
+    const mi = try rt.callGlobal("mi", &.{.{ .int = 8 }, .{ .int = 3 }});
+    try std.testing.expect(mi == .int and mi.int == 3);
+    const mf = try rt.callGlobal("mf", &.{.{ .float = 8.5 }, .{ .float = 3.25 }});
+    try std.testing.expect(mf == .float);
+    try std.testing.expectApproxEqRel(@as(f64, 3.25), mf.float, 1e-12);
+    const xi = try rt.callGlobal("xi", &.{.{ .int = 8 }, .{ .int = 3 }});
+    try std.testing.expect(xi == .int and xi.int == 8);
+    const xf = try rt.callGlobal("xf", &.{.{ .float = 8.5 }, .{ .float = 3.25 }});
+    try std.testing.expect(xf == .float);
+    try std.testing.expectApproxEqRel(@as(f64, 8.5), xf.float, 1e-12);
+    const si = try rt.callGlobal("si", &.{.{ .int = -7 }});
+    try std.testing.expect(si == .int and si.int == -1);
+    const sf = try rt.callGlobal("sf", &.{.{ .float = 0.0 }});
+    try std.testing.expect(sf == .float);
+    try std.testing.expectApproxEqRel(@as(f64, 0.0), sf.float, 1e-12);
+}
+
+test "compiler: std math sqrt clamp intrinsic direct call results" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func sq(x float) float { return std.math.sqrt(x) }
+        \\func cl(x int, lo int, hi int) float { return std.math.clamp(x, lo, hi) }
+        \\func cf(x float, lo float, hi float) float { return std.math.clamp(x, lo, hi) }
+    );
+    const sq = try rt.callGlobal("sq", &.{.{ .float = 100.0 }});
+    try std.testing.expect(sq == .float);
+    try std.testing.expectApproxEqRel(@as(f64, 10.0), sq.float, 1e-12);
+    const cl = try rt.callGlobal("cl", &.{.{ .int = 20 }, .{ .int = 1 }, .{ .int = 10 }});
+    try std.testing.expect(cl == .float);
+    try std.testing.expectApproxEqRel(@as(f64, 10.0), cl.float, 1e-12);
+    const cf = try rt.callGlobal("cf", &.{.{ .float = 0.5 }, .{ .float = 1.0 }, .{ .float = 10.0 }});
+    try std.testing.expect(cf == .float);
+    try std.testing.expectApproxEqRel(@as(f64, 1.0), cf.float, 1e-12);
+}
+
+test "compiler: std math intrinsic direct calls survive defuse" {
+    var rt = try api.Runtime.init(.{ .allow_io = false, .allocator = std.testing.allocator });
+    defer rt.deinit();
+
+    const src =
+        \\std := import("std")
+        \\
+        \\// abs/min/max/sign preserve int when all inputs are int; verify via assert
+        \\// so no stdout writes corrupt the --listen=- IPC channel.
+        \\assert std.math.abs(-5) == 5
+        \\assert std.math.abs(-5.5) == 5.5
+        \\assert std.math.min(2, 9) == 2
+        \\assert std.math.max(2, 9) == 9
+        \\assert std.math.sign(-7) == -1
+        \\assert std.math.sqrt(100.0) == 10.0
+        \\assert std.math.clamp(20, 1, 10) == 10
+        \\
+        \\total := 0
+        \\i := -3
+        \\total = total + std.math.abs(i)
+        \\assert total == 3
+    ;
+    try rt.inner.compileAndInstall(src, "tests/spec/189_math_int_preservation.gengo", .filesystem);
+
+    const defused = try vm_defuse.buildDefusedCode(vm.VMContext.fromActive().cs, std.testing.allocator);
+    defer std.testing.allocator.free(defused);
+
+    @memcpy(chunk.g_state.code[0..defused.len], defused);
+    chunk.g_state.code_len = defused.len;
+    chunk.g_state.verified = false;
+    chunk.g_state.verified_code_len = 0;
+    vm.VMContext.fromActive().vs.resetExec();
+
+    try vm.run(vm.VMContext.fromActive());
 }
 
 test "compiler: struct field access" {
@@ -1380,6 +1603,407 @@ test "compiler: get_local_const_lt_jif_pop quad fusion result" {
     try std.testing.expect(r1 == .int and r1.int == 10);
     const r2 = try rt.callGlobal("f", &.{.{ .int = 10 }});
     try std.testing.expect(r2 == .int and r2.int == 20);
+}
+
+test "compiler: typed int compound mul/div opcodes fire" {
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\func f() int {
+        \\    var x int = 8
+        \\    x += 2
+        \\    x -= 3
+        \\    x *= 4
+        \\    x /= 7
+        \\    return x
+        \\}
+    );
+    const c = rt.chunk_state;
+    var found_mul = false;
+    var found_div = false;
+    for (c.code[0..c.code_len]) |op| {
+        if (op == @intFromEnum(Op.mul_int)) found_mul = true;
+        if (op == @intFromEnum(Op.div_int)) found_div = true;
+    }
+    try std.testing.expect(found_mul);
+    try std.testing.expect(found_div);
+}
+
+test "compiler: typed int compound arithmetic result" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func f() int {
+        \\    var x int = 8
+        \\    x += 2
+        \\    x -= 3
+        \\    x *= 4
+        \\    x /= 7
+        \\    return x
+        \\}
+    );
+    const r = try rt.callGlobal("f", &.{});
+    try std.testing.expect(r == .int and r.int == 4);
+}
+
+test "compiler: typed int expression add sub mul div opcodes fire" {
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\func addsub(a int, b int) int {
+        \\    return a + b - a
+        \\}
+        \\
+        \\func muldiv(a int, b int) float {
+        \\    return (a * b) / a
+        \\}
+    );
+    const c = rt.chunk_state;
+    var found_add = false;
+    var found_sub = false;
+    var found_mul = false;
+    var found_div = false;
+    for (c.code[0..c.code_len]) |op| {
+        if (op == @intFromEnum(Op.add_int)) found_add = true;
+        if (op == @intFromEnum(Op.sub_int)) found_sub = true;
+        if (op == @intFromEnum(Op.mul_int)) found_mul = true;
+        if (op == @intFromEnum(Op.div_int)) found_div = true;
+    }
+    try std.testing.expect(found_add);
+    try std.testing.expect(found_sub);
+    try std.testing.expect(found_mul);
+    try std.testing.expect(found_div);
+}
+
+test "compiler: typed int expression arithmetic result" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func addsub(a int, b int) int {
+        \\    return a + b - a
+        \\}
+        \\
+        \\func muldiv(a int, b int) float {
+        \\    return (a * b) / a
+        \\}
+    );
+    const r1 = try rt.callGlobal("addsub", &.{.{ .int = 8 }, .{ .int = 3 }});
+    try std.testing.expect(r1 == .int and r1.int == 3);
+    const r2 = try rt.callGlobal("muldiv", &.{.{ .int = 8 }, .{ .int = 3 }});
+    try std.testing.expect(r2 == .float);
+    try std.testing.expectApproxEqRel(@as(f64, 3.0), r2.float, 1e-12);
+}
+
+test "compiler: typed int expression keeps const add fusion" {
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\func f(x int) int {
+        \\    return x + 1
+        \\}
+    );
+    const c = rt.chunk_state;
+    var found_const_add = false;
+    var found_typed_add = false;
+    for (c.code[0..c.code_len]) |op| {
+        if (op == @intFromEnum(Op.get_local_const_add) or op == @intFromEnum(Op.const_add)) found_const_add = true;
+        if (op == @intFromEnum(Op.add_int)) found_typed_add = true;
+    }
+    try std.testing.expect(found_const_add);
+    try std.testing.expect(!found_typed_add);
+}
+
+test "compiler: typed int expression comparison opcodes fire" {
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\func cmp(a int, b int) bool {
+        \\    return a == b or a != b or a < b or a > b
+        \\}
+    );
+    const c = rt.chunk_state;
+    var found_eq = false;
+    var found_ne = false;
+    var found_lt = false;
+    var found_gt = false;
+    for (c.code[0..c.code_len]) |op| {
+        if (op == @intFromEnum(Op.eq_int)) found_eq = true;
+        if (op == @intFromEnum(Op.ne_int)) found_ne = true;
+        if (op == @intFromEnum(Op.lt_int)) found_lt = true;
+        if (op == @intFromEnum(Op.gt_int)) found_gt = true;
+    }
+    try std.testing.expect(found_eq);
+    try std.testing.expect(found_ne);
+    try std.testing.expect(found_lt);
+    try std.testing.expect(found_gt);
+}
+
+test "compiler: typed int expression comparison result" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func cmp(a int, b int) bool {
+        \\    return a == b or a != b or a < b or a > b
+        \\}
+    );
+    const r1 = try rt.callGlobal("cmp", &.{.{ .int = 4 }, .{ .int = 4 }});
+    try std.testing.expect(r1 == .boolean and r1.boolean);
+    const r2 = try rt.callGlobal("cmp", &.{.{ .int = 3 }, .{ .int = 4 }});
+    try std.testing.expect(r2 == .boolean and r2.boolean);
+    const r3 = try rt.callGlobal("cmp", &.{.{ .int = 5 }, .{ .int = 4 }});
+    try std.testing.expect(r3 == .boolean and r3.boolean);
+}
+
+test "compiler: typed int eqz opcode fires for computed zero compare" {
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\func cmp(a int, b int) bool {
+        \\    return (a - b) == 0 or (a - b) != 0
+        \\}
+    );
+    const c = rt.chunk_state;
+    var found_eqz = false;
+    for (c.code[0..c.code_len]) |op| {
+        if (op == @intFromEnum(Op.eqz_int)) {
+            found_eqz = true;
+            break;
+        }
+    }
+    try std.testing.expect(found_eqz);
+}
+
+test "compiler: typed int eqz result" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func isZero(a int, b int) bool {
+        \\    return (a - b) == 0
+        \\}
+        \\
+        \\func notZero(a int, b int) bool {
+        \\    return (a - b) != 0
+        \\}
+    );
+    const r1 = try rt.callGlobal("isZero", &.{.{ .int = 4 }, .{ .int = 4 }});
+    try std.testing.expect(r1 == .boolean and r1.boolean);
+    const r2 = try rt.callGlobal("isZero", &.{.{ .int = 4 }, .{ .int = 3 }});
+    try std.testing.expect(r2 == .boolean and !r2.boolean);
+    const r3 = try rt.callGlobal("notZero", &.{.{ .int = 4 }, .{ .int = 3 }});
+    try std.testing.expect(r3 == .boolean and r3.boolean);
+}
+
+test "compiler: typed int zero compare opcodes fire" {
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\func cmp(a int, b int) bool {
+        \\    return (a - b) == 0 or (a - b) != 0 or (a - b) < 0 or (a - b) > 0 or (a - b) <= 0 or (a - b) >= 0
+        \\}
+    );
+    const c = rt.chunk_state;
+    var found_eqz = false;
+    var found_nez = false;
+    var found_ltz = false;
+    var found_gtz = false;
+    for (c.code[0..c.code_len]) |op| {
+        if (op == @intFromEnum(Op.eqz_int)) found_eqz = true;
+        if (op == @intFromEnum(Op.nez_int)) found_nez = true;
+        if (op == @intFromEnum(Op.ltz_int)) found_ltz = true;
+        if (op == @intFromEnum(Op.gtz_int)) found_gtz = true;
+    }
+    try std.testing.expect(found_eqz);
+    try std.testing.expect(found_nez);
+    try std.testing.expect(found_ltz);
+    try std.testing.expect(found_gtz);
+}
+
+test "compiler: typed int zero compare result" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func isNeg(a int, b int) bool {
+        \\    return (a - b) < 0
+        \\}
+        \\
+        \\func isPos(a int, b int) bool {
+        \\    return (a - b) > 0
+        \\}
+        \\
+        \\func isNonPos(a int, b int) bool {
+        \\    return (a - b) <= 0
+        \\}
+        \\
+        \\func isNonNeg(a int, b int) bool {
+        \\    return (a - b) >= 0
+        \\}
+        \\
+        \\func isNonZero(a int, b int) bool {
+        \\    return (a - b) != 0
+        \\}
+    );
+    const r1 = try rt.callGlobal("isNeg", &.{.{ .int = 3 }, .{ .int = 4 }});
+    try std.testing.expect(r1 == .boolean and r1.boolean);
+    const r2 = try rt.callGlobal("isPos", &.{.{ .int = 5 }, .{ .int = 4 }});
+    try std.testing.expect(r2 == .boolean and r2.boolean);
+    const r3 = try rt.callGlobal("isNonPos", &.{.{ .int = 4 }, .{ .int = 4 }});
+    try std.testing.expect(r3 == .boolean and r3.boolean);
+    const r4 = try rt.callGlobal("isNonNeg", &.{.{ .int = 4 }, .{ .int = 4 }});
+    try std.testing.expect(r4 == .boolean and r4.boolean);
+    const r5 = try rt.callGlobal("isNonZero", &.{.{ .int = 4 }, .{ .int = 3 }});
+    try std.testing.expect(r5 == .boolean and r5.boolean);
+}
+
+test "compiler: typed int comparison keeps const fusion" {
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\func f(x int) bool {
+        \\    return x == 1 or x != 2 or x < 2 or x > 0
+        \\}
+    );
+    const c = rt.chunk_state;
+    var found_const = false;
+    var found_typed = false;
+    for (c.code[0..c.code_len]) |op| {
+        if (op == @intFromEnum(Op.get_local_const_eq) or op == @intFromEnum(Op.get_local_const_lt) or op == @intFromEnum(Op.get_local_const_gt) or
+            op == @intFromEnum(Op.const_eq) or op == @intFromEnum(Op.const_lt) or op == @intFromEnum(Op.const_gt)) found_const = true;
+        if (op == @intFromEnum(Op.eq_int) or op == @intFromEnum(Op.ne_int) or op == @intFromEnum(Op.lt_int) or op == @intFromEnum(Op.gt_int)) found_typed = true;
+    }
+    try std.testing.expect(found_const);
+    try std.testing.expect(!found_typed);
+}
+
+test "compiler: typed float compound mul/div opcodes fire" {
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\func f() float {
+        \\    var x float = 8.0
+        \\    x += 2.0
+        \\    x -= 3.0
+        \\    x *= 4.0
+        \\    x /= 7.0
+        \\    return x
+        \\}
+    );
+    const c = rt.chunk_state;
+    var found_mul = false;
+    var found_div = false;
+    for (c.code[0..c.code_len]) |op| {
+        if (op == @intFromEnum(Op.mul_float)) found_mul = true;
+        if (op == @intFromEnum(Op.div_float)) found_div = true;
+    }
+    try std.testing.expect(found_mul);
+    try std.testing.expect(found_div);
+}
+
+test "compiler: typed float expression add sub mul div opcodes fire" {
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\func addsub(a float, b float) float {
+        \\    return a + b - a
+        \\}
+        \\
+        \\func muldiv(a float, b float) float {
+        \\    return (a * b) / a
+        \\}
+    );
+    const c = rt.chunk_state;
+    var found_add = false;
+    var found_sub = false;
+    var found_mul = false;
+    var found_div = false;
+    for (c.code[0..c.code_len]) |op| {
+        if (op == @intFromEnum(Op.add_float)) found_add = true;
+        if (op == @intFromEnum(Op.sub_float)) found_sub = true;
+        if (op == @intFromEnum(Op.mul_float)) found_mul = true;
+        if (op == @intFromEnum(Op.div_float)) found_div = true;
+    }
+    try std.testing.expect(found_add);
+    try std.testing.expect(found_sub);
+    try std.testing.expect(found_mul);
+    try std.testing.expect(found_div);
+}
+
+test "compiler: typed float compound arithmetic result" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func f() float {
+        \\    var x float = 8.0
+        \\    x += 2.0
+        \\    x -= 3.0
+        \\    x *= 4.0
+        \\    x /= 7.0
+        \\    return x
+        \\}
+    );
+    const r = try rt.callGlobal("f", &.{});
+    try std.testing.expect(r == .float);
+    try std.testing.expectApproxEqRel(@as(f64, 4.0), r.float, 1e-12);
+}
+
+test "compiler: typed float expression arithmetic result" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func addsub(a float, b float) float {
+        \\    return a + b - a
+        \\}
+        \\
+        \\func muldiv(a float, b float) float {
+        \\    return (a * b) / a
+        \\}
+    );
+    const r1 = try rt.callGlobal("addsub", &.{.{ .float = 8.0 }, .{ .float = 3.5 }});
+    try std.testing.expect(r1 == .float);
+    try std.testing.expectApproxEqRel(@as(f64, 3.5), r1.float, 1e-12);
+    const r2 = try rt.callGlobal("muldiv", &.{.{ .float = 8.0 }, .{ .float = 3.5 }});
+    try std.testing.expect(r2 == .float);
+    try std.testing.expectApproxEqRel(@as(f64, 3.5), r2.float, 1e-12);
+}
+
+test "compiler: typed float expression comparison opcodes fire" {
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\func cmp(a float, b float) bool {
+        \\    return a == b or a != b or a < b or a > b
+        \\}
+    );
+    const c = rt.chunk_state;
+    var found_eq = false;
+    var found_ne = false;
+    var found_lt = false;
+    var found_gt = false;
+    for (c.code[0..c.code_len]) |op| {
+        if (op == @intFromEnum(Op.eq_float)) found_eq = true;
+        if (op == @intFromEnum(Op.ne_float)) found_ne = true;
+        if (op == @intFromEnum(Op.lt_float)) found_lt = true;
+        if (op == @intFromEnum(Op.gt_float)) found_gt = true;
+    }
+    try std.testing.expect(found_eq);
+    try std.testing.expect(found_ne);
+    try std.testing.expect(found_lt);
+    try std.testing.expect(found_gt);
+}
+
+test "compiler: typed float expression comparison result" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func cmp(a float, b float) bool {
+        \\    return a == b or a != b or a < b or a > b
+        \\}
+    );
+    const r1 = try rt.callGlobal("cmp", &.{.{ .float = 4.0 }, .{ .float = 4.0 }});
+    try std.testing.expect(r1 == .boolean and r1.boolean);
+    const r2 = try rt.callGlobal("cmp", &.{.{ .float = 3.0 }, .{ .float = 4.0 }});
+    try std.testing.expect(r2 == .boolean and r2.boolean);
+    const r3 = try rt.callGlobal("cmp", &.{.{ .float = 5.0 }, .{ .float = 4.0 }});
+    try std.testing.expect(r3 == .boolean and r3.boolean);
 }
 
 // ── expression depth limit ──────────────────────────────────────────────────
