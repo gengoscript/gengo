@@ -1,0 +1,160 @@
+std := import("std")
+
+// Self-timing VM benchmark.
+// Each section times one characteristic workload and prints:
+//   name  Xms  Y ns/iter  Z Mop/s
+//
+// Iteration counts are chosen so each test takes roughly 500–3000 ms at the
+// current baseline, giving reliable ms-precision results.
+//
+// Baseline (2026-07, ReleaseFast cli-fast -Dpreset=1m, x86-64 Linux):
+//   dispatch     2800 ms   28 ns/iter   35 Mop/s   (4 ops/iter)
+//   func-call     840 ms   84 ns/iter   11 Mop/s   (+56 ns vs dispatch = frame overhead)
+//   fib35        1710 ms  185 ns/iter    5 Mop/s   (9.2M recursive calls)
+//   struct-read   520 ms  104 ns/iter    9 Mop/s   (3 GET_FIELD per iter, compound expr, globals)
+//   fn-field-acc  350 ms   70 ns/iter   14 Mop/s   (3 local_add_field per iter, fn-local vars)
+//   method-call   606 ms  606 ns/iter    1 Mop/s   (2 method calls + 2 struct allocs)
+//   float-arith   525 ms   52 ns/iter   19 Mop/s   (2 float ops per iter)
+//   alloc-struct  445 ms  148 ns/iter    6 Mop/s   (1 struct alloc + 1 field read)
+
+// ── Helpers ───────────────────────────────────────────────────────────────
+
+func rpt(name string, ms float, n int) {
+    ns   := int(ms * 1000000.0 / float(n))
+    mops := int(float(n) / ms / 1000.0)
+    std.io.println(name + std.conv.to_string(int(ms)) + " ms  " +
+                   std.conv.to_string(ns) + " ns/iter  " +
+                   std.conv.to_string(mops) + " Mop/s")
+}
+
+// ── 1. Dispatch throughput ────────────────────────────────────────────────
+// Tightest possible loop: increment-and-store, ~4 opcodes per iteration.
+// This is the floor — every other benchmark will be slower than this.
+// Matches tests/bench/007_dispatch_loop.gengo for direct comparison.
+
+t := std.time.now()
+n := 0
+for i := 0; i < 100000000; i++ {
+    n = n + 1
+}
+rpt("dispatch     ", std.time.since(t), 100000000)
+if n == 0 { std.io.println("(sink)") }  // prevent dead-code elimination
+
+// ── 2. Function call overhead ─────────────────────────────────────────────
+// Trivial function called in a tight loop.  The function body is one opcode;
+// everything else is call-frame setup and teardown.
+
+func trivial_inc(x int) int { return x + 1 }
+
+t = std.time.now()
+nc := 0
+for i := 0; i < 10000000; i++ {
+    nc = trivial_inc(nc)
+}
+rpt("func-call    ", std.time.since(t), 10000000)
+
+// ── 3. Recursive call tree: fib(35) ──────────────────────────────────────
+// 9,227,465 recursive calls.  Stresses call-frame allocation under a deep,
+// irregular call tree — a realistic worst case for the call mechanism.
+
+func fib(x int) int {
+    if x < 2 { return x }
+    return fib(x-1) + fib(x-2)
+}
+
+t = std.time.now()
+fib_result := fib(35)
+rpt("fib35-rec    ", std.time.since(t), 9227465)
+assert fib_result == 9227465
+
+// ── 4. Struct field reads ─────────────────────────────────────────────────
+// Three field reads per iteration with no allocation.  Isolates the cost of
+// GET_FIELD opcodes from everything else.
+
+type Point struct { x int, y int, z int }
+
+t = std.time.now()
+pt  := Point{ x: 1, y: 2, z: 3 }
+sf  := 0
+for i := 0; i < 5000000; i++ {
+    sf = sf + pt.x + pt.y + pt.z
+}
+rpt("struct-read  ", std.time.since(t), 5000000)
+
+// ── 4b. Function-local field accumulation ─────────────────────────────────
+// Same three field reads but inside a function with separate assignments.
+// Each compiles to local_add_field (fused get_local+get_local_get_field+add+set_local, 9 bytes),
+// 3 dispatches per iteration instead of 12 for the unfused form.
+
+func field_accum(n int) int {
+    p   := Point{ x: 1, y: 2, z: 3 }
+    sum := 0
+    for i := 0; i < n; i++ {
+        sum = sum + p.x
+        sum = sum + p.y
+        sum = sum + p.z
+    }
+    return sum
+}
+
+t = std.time.now()
+fa_result := field_accum(5000000)
+rpt("fn-field-acc ", std.time.since(t), 5000000)
+if fa_result == 0 { std.io.println("(sink)") }
+
+// ── 5. Method dispatch ────────────────────────────────────────────────────
+// Two method calls per iteration, each returning a new struct.  Combines
+// receiver lookup, field reads, and struct allocation.
+
+type Vec2 struct { x int, y int }
+
+func (v Vec2) add(o Vec2) Vec2 {
+    return Vec2{ x: v.x + o.x, y: v.y + o.y }
+}
+
+func (v Vec2) dot() int {
+    return v.x * v.x + v.y * v.y
+}
+
+type Body struct { pos Vec2, vel Vec2, mass int }
+
+func (b Body) step() Body {
+    return Body{ pos: b.pos.add(b.vel), vel: b.vel, mass: b.mass }
+}
+
+func (b Body) energy() int {
+    return b.mass * b.vel.dot()
+}
+
+t = std.time.now()
+body  := Body{ pos: Vec2{ x: 0, y: 0 }, vel: Vec2{ x: 1, y: 2 }, mass: 10 }
+etot  := 0
+for i := 0; i < 1000000; i++ {
+    body = body.step()
+    etot = etot + body.energy()
+}
+rpt("method-call  ", std.time.since(t), 1000000)
+
+// ── 6. Float arithmetic ───────────────────────────────────────────────────
+// Floating-point multiply and add per iteration.  Checks whether the VM
+// takes a different path for floats vs integers.
+
+t = std.time.now()
+fx := 1.0
+for i := 0; i < 10000000; i++ {
+    fx = fx * 1.0000001 + 0.0000001
+}
+rpt("float-arith  ", std.time.since(t), 10000000)
+if fx == 0.0 { std.io.println("(sink)") }
+
+// ── 7. Allocation pressure ────────────────────────────────────────────────
+// Allocates a new Point every iteration.  Measures the bump allocator hot
+// path and GC trigger cost amortised over many small objects.
+
+t = std.time.now()
+atot := 0
+for i := 0; i < 3000000; i++ {
+    q   := Point{ x: i, y: i + 1, z: i + 2 }
+    atot = atot + q.x
+}
+rpt("alloc-struct ", std.time.since(t), 3000000)

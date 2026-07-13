@@ -337,7 +337,11 @@ pub fn compileFuncWithPrefix(c: anytype, prefix: []const []const u8, is_named: b
                 return error.DuplicateLocal;
             }
         }
-        scope.locals[pi] = .{ .name = param_names[pi], .is_const = param_const[pi] };
+        scope.locals[pi] = .{
+            .name = param_names[pi],
+            .is_const = param_const[pi],
+            .type_check = c.typeCheckFromFieldTypeSpec(param_types[pi]),
+        };
     }
     scope.local_count = arity;
 
@@ -356,21 +360,7 @@ pub fn compileFuncWithPrefix(c: anytype, prefix: []const []const u8, is_named: b
                     return error.DuplicateLocal;
                 }
             }
-            const rc: TypeCheck = if (return_types[ri].alts.len == 1) blk: {
-                switch (return_types[ri].alts[0].typ) {
-                    .int => break :blk .{ .prim = .int },
-                    .float => break :blk .{ .prim = .float },
-                    .decimal_t => break :blk .{ .prim = .decimal },
-                    .boolean => break :blk .{ .prim = .bool },
-                    .string => break :blk .{ .prim = .string },
-                    .rune_t => break :blk .{ .prim = .rune },
-                    .named_t => break :blk .{ .named = return_types[ri].alts[0].named_name },
-                    .array => break :blk .{ .assert_arr = {} },
-                    .map => break :blk .{ .assert_map = {} },
-                    .error_t => break :blk .{ .assert_err = {} },
-                    else => break :blk .{ .none = {} },
-                }
-            } else .{ .none = {} };
+            const rc: TypeCheck = c.typeCheckFromFieldTypeSpec(return_types[ri]);
             scope.locals[@as(usize, arity) + ri] = .{ .name = return_names[ri], .is_const = false, .type_check = rc };
             scope.local_count += 1;
             const rt = return_types[ri];
@@ -473,8 +463,6 @@ pub fn compoundStmt(c: anytype) !void {
     c.advance();
     const op_tok = c.cur;
     c.advance();
-    try c.emitGetVar(name);
-    try c.expr();
     const op: Op = switch (op_tok.typ) {
         .plus_eq => .add,
         .minus_eq => .sub,
@@ -487,7 +475,11 @@ pub fn compoundStmt(c: anytype) !void {
         .gt_gt_eq => .shr,
         else => return c.err("unsupported compound assignment operator", .{}),
     };
-    try c.cs.emitBinOpFused(op, op_tok.line);
+    try c.emitGetVar(name);
+    c.beginExprPrimCapture();
+    try c.expr();
+    const selected_op = c.selectTypedArithmeticOp(op, c.exprPrimInfoForBinding(name.src), c.endExprPrimCapture());
+    try c.cs.emitBinOpFused(selected_op, op_tok.line);
     const tc = c.getLocalTypeCheck(name.src);
     if (tc) |t| try c.emitVarTypeEpilog(t, op_tok.line);
     try c.emitSetVar(name);

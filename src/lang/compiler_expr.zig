@@ -131,6 +131,7 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
     const col = c.prev.col;
 
     if (tt == .dot) {
+        c.clearCurrentExprPrimInfo();
         if (c.cur.typ == .kw_type) {
             c.advance(); // consume 'type'
             try c.cs.emitOp(.type_name, line);
@@ -174,15 +175,45 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
                         c.cs.truncateTo(patch_pos);
                         try c.cs.emitGetGlobal(direct_name, prop.line);
                         var argc: u8 = 0;
+                        var first_arg_info = c.currentExprPrimInfo();
+                        var second_arg_info = first_arg_info;
+                        var third_arg_info = first_arg_info;
                         if (!c.check(.rparen)) {
                             while (true) {
+                                if (argc <= 2) c.beginExprPrimCapture();
                                 try expr(c, );
+                                if (argc == 0) {
+                                    first_arg_info = c.endExprPrimCapture();
+                                } else if (argc == 1) {
+                                    second_arg_info = c.endExprPrimCapture();
+                                } else if (argc == 2) {
+                                    third_arg_info = c.endExprPrimCapture();
+                                }
                                 argc += 1;
                                 if (!c.match(.comma)) break;
                                 if (c.check(.rparen)) break;
                             }
                         }
                         try c.consume(.rparen);
+                        if (c.selectStdMathUnaryIntrinsicOp(direct_name, argc)) |intrinsic_op| {
+                            c.cs.deleteCodeRange(patch_pos, 5);
+                            try c.cs.emitOp(intrinsic_op, prop.line);
+                            c.setCurrentExprPrimInfo(c.stdMathUnaryIntrinsicResultInfo(direct_name, first_arg_info));
+                            return;
+                        }
+                        if (c.selectStdMathBinaryIntrinsicOp(direct_name, argc)) |intrinsic_op| {
+                            c.cs.deleteCodeRange(patch_pos, 5);
+                            try c.cs.emitOp(intrinsic_op, prop.line);
+                            c.setCurrentExprPrimInfo(c.stdMathBinaryIntrinsicResultInfo(direct_name, first_arg_info, second_arg_info));
+                            return;
+                        }
+                        if (c.selectStdMathTernaryIntrinsicOp(direct_name, argc)) |intrinsic_op| {
+                            c.cs.deleteCodeRange(patch_pos, 5);
+                            try c.cs.emitOp(intrinsic_op, prop.line);
+                            c.setCurrentExprPrimInfo(c.stdMathTernaryIntrinsicResultInfo(direct_name, first_arg_info, second_arg_info, third_arg_info));
+                            return;
+                        }
+                        c.clearCurrentExprPrimInfo();
                         try c.cs.emitCall(argc, prop.line);
                         return;
                     }
@@ -218,6 +249,7 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
     c.std_namespace_path = null;
     c.import_module_path = null;
     if (tt == .lbracket) {
+        c.clearCurrentExprPrimInfo();
         if (c.match(.colon)) {
             var flags: u8 = 0;
             if (!c.check(.rbracket)) {
@@ -246,6 +278,7 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
         return;
     }
     if (tt == .lparen) {
+        c.clearCurrentExprPrimInfo();
         // Capture spread info for this callee before parsing args (which may overwrite it).
         const callee_spread_n = c.pending_call_spread_count;
         c.pending_call_spread_count = 0;
@@ -296,6 +329,7 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
 
     const p = tokPrec(tt);
     if (tt == .kw_and) {
+        c.clearCurrentExprPrimInfo();
         const j = try c.cs.emitJump(.jump_if_false, line);
         try c.cs.emitOp(.pop, line);
         try parsePrecedence(c, p.next());
@@ -303,6 +337,7 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
         return;
     }
     if (tt == .kw_or) {
+        c.clearCurrentExprPrimInfo();
         const j_else = try c.cs.emitJump(.jump_if_false, line);
         const j_end = try c.cs.emitJump(.jump, line);
         try c.cs.patchJump(j_else);
@@ -314,6 +349,7 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
     // ?? — null-coalescing: if LHS is not null, jump past pop+RHS; else pop null and eval RHS.
     // Right-associative: recurse at same precedence level so `a ?? b ?? c` = `a ?? (b ?? c)`.
     if (tt == .question_question) {
+        c.clearCurrentExprPrimInfo();
         const j = try c.cs.emitJump(.jump_if_not_null, line);
         try c.cs.emitOp(.pop, line);
         try parsePrecedence(c, p);
@@ -323,18 +359,21 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
 
     // ** is right-associative: recurse at same level so 2**3**2 = 2**(3**2)
     if (tt == .star_star) {
+        c.clearCurrentExprPrimInfo();
         try parsePrecedence(c, p);
         c.cs.setCol(col);
         try c.cs.emitOp(.pow, line);
         return;
     }
+    const lhs_info = c.currentExprPrimInfo();
     try parsePrecedence(c, p.next());
+    const rhs_info = c.childExprPrimInfo();
     c.cs.setCol(col);
     switch (tt) {
-        .plus  => try c.cs.emitBinOpFused(.add, line),
-        .minus => try c.cs.emitBinOpFused(.sub, line),
-        .star  => try c.cs.emitOp(.mul, line),
-        .slash => try c.cs.emitOp(.div, line),
+        .plus  => try c.cs.emitBinOpFused(c.selectTypedArithmeticOp(.add, lhs_info, rhs_info), line),
+        .minus => try c.cs.emitBinOpFused(c.selectTypedArithmeticOp(.sub, lhs_info, rhs_info), line),
+        .star  => try c.cs.emitOp(c.selectTypedArithmeticOp(.mul, lhs_info, rhs_info), line),
+        .slash => try c.cs.emitOp(c.selectTypedArithmeticOp(.div, lhs_info, rhs_info), line),
         .kw_div => try c.cs.emitOp(.int_div, line),
         .kw_rem => try c.cs.emitOp(.rem, line),
         .kw_mod => try c.cs.emitOp(.mod, line),
@@ -343,23 +382,74 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
         .caret => try c.cs.emitOp(.bit_xor, line),
         .lt_lt => try c.cs.emitOp(.shl, line),
         .gt_gt => try c.cs.emitOp(.shr, line),
-        .eq_eq => try c.cs.emitBinOpFused(.eq, line),
+        .eq_eq => {
+            if (c.selectZeroIntCompare(.eq_eq, lhs_info, rhs_info)) |zero_cmp| {
+                try c.cs.emitOp(.pop, line);
+                try c.cs.emitOp(zero_cmp.op, line);
+                if (zero_cmp.needs_not) try c.cs.emitOp(.not, line);
+            } else {
+                try c.cs.emitBinOpFused(c.selectTypedComparisonOp(.eq, lhs_info, rhs_info), line);
+            }
+        },
         .bang_eq => {
-            try c.cs.emitBinOpFused(.eq, line);
-            try c.cs.emitOp(.not, line);
+            if (c.selectZeroIntCompare(.bang_eq, lhs_info, rhs_info)) |zero_cmp| {
+                try c.cs.emitOp(.pop, line);
+                try c.cs.emitOp(zero_cmp.op, line);
+                if (zero_cmp.needs_not) try c.cs.emitOp(.not, line);
+            } else if (c.selectTypedNotEqualOp(lhs_info, rhs_info)) |op| {
+                try c.cs.emitOp(op, line);
+            } else {
+                try c.cs.emitBinOpFused(c.selectTypedComparisonOp(.eq, lhs_info, rhs_info), line);
+                try c.cs.emitOp(.not, line);
+            }
         },
-        .gt => try c.cs.emitBinOpFused(.gt, line),
+        .gt => {
+            if (c.selectZeroIntCompare(.gt, lhs_info, rhs_info)) |zero_cmp| {
+                try c.cs.emitOp(.pop, line);
+                try c.cs.emitOp(zero_cmp.op, line);
+                if (zero_cmp.needs_not) try c.cs.emitOp(.not, line);
+            } else {
+                try c.cs.emitBinOpFused(c.selectTypedComparisonOp(.gt, lhs_info, rhs_info), line);
+            }
+        },
         .gt_eq => {
-            try c.cs.emitBinOpFused(.lt, line);
-            try c.cs.emitOp(.not, line);
+            if (c.selectZeroIntCompare(.gt_eq, lhs_info, rhs_info)) |zero_cmp| {
+                try c.cs.emitOp(.pop, line);
+                try c.cs.emitOp(zero_cmp.op, line);
+                if (zero_cmp.needs_not) try c.cs.emitOp(.not, line);
+            } else {
+                try c.cs.emitBinOpFused(c.selectTypedComparisonOp(.lt, lhs_info, rhs_info), line);
+                try c.cs.emitOp(.not, line);
+            }
         },
-        .lt => try c.cs.emitBinOpFused(.lt, line),
+        .lt => {
+            if (c.selectZeroIntCompare(.lt, lhs_info, rhs_info)) |zero_cmp| {
+                try c.cs.emitOp(.pop, line);
+                try c.cs.emitOp(zero_cmp.op, line);
+                if (zero_cmp.needs_not) try c.cs.emitOp(.not, line);
+            } else {
+                try c.cs.emitBinOpFused(c.selectTypedComparisonOp(.lt, lhs_info, rhs_info), line);
+            }
+        },
         .lt_eq => {
-            try c.cs.emitOp(.gt, line);
-            try c.cs.emitOp(.not, line);
+            if (c.selectZeroIntCompare(.lt_eq, lhs_info, rhs_info)) |zero_cmp| {
+                try c.cs.emitOp(.pop, line);
+                try c.cs.emitOp(zero_cmp.op, line);
+                if (zero_cmp.needs_not) try c.cs.emitOp(.not, line);
+            } else {
+                try c.cs.emitOp(c.selectTypedComparisonOp(.gt, lhs_info, rhs_info), line);
+                try c.cs.emitOp(.not, line);
+            }
         },
         else => unreachable,
     }
+    c.setCurrentExprPrimResult(switch (tt) {
+        .plus => .add,
+        .minus => .sub,
+        .star => .mul,
+        .slash => .div,
+        else => .halt,
+    }, lhs_info, rhs_info);
 }
 
 pub fn looksLikeStructLiteral(c: anytype) bool {
@@ -423,29 +513,68 @@ pub fn parsePrecedence(c: anytype, p: Prec) anyerror!void {
     }
     c.expr_depth += 1;
     defer { c.expr_depth -= 1; }
+    c.clearCurrentExprPrimInfo();
     c.advance();
     const pfx = c.prev.typ;
     switch (pfx) {
-        .number => try numLit(c, ),
-        .string => try strLitExpr(c, ),
-        .rune => try runeLitExpr(c, ),
-        .kw_true => try c.cs.emitOp(.true_val, c.prev.line),
-        .kw_false => try c.cs.emitOp(.false_val, c.prev.line),
-        .kw_null => try c.cs.emitOp(.null_val, c.prev.line),
-        .ident => try varExpr(c, c.prev),
-        .minus, .kw_not, .tilde => try unaryExpr(c, pfx),
+        .number => {
+            c.noteCurrentExprPrimFromToken(c.prev);
+            try numLit(c, );
+        },
+        .string => {
+            c.clearCurrentExprPrimInfo();
+            try strLitExpr(c, );
+        },
+        .rune => {
+            c.clearCurrentExprPrimInfo();
+            try runeLitExpr(c, );
+        },
+        .kw_true => {
+            c.clearCurrentExprPrimInfo();
+            try c.cs.emitOp(.true_val, c.prev.line);
+        },
+        .kw_false => {
+            c.clearCurrentExprPrimInfo();
+            try c.cs.emitOp(.false_val, c.prev.line);
+        },
+        .kw_null => {
+            c.clearCurrentExprPrimInfo();
+            try c.cs.emitOp(.null_val, c.prev.line);
+        },
+        .ident => {
+            c.noteCurrentExprPrimFromToken(c.prev);
+            try varExpr(c, c.prev);
+        },
+        .minus, .kw_not, .tilde => {
+            c.clearCurrentExprPrimInfo();
+            try unaryExpr(c, pfx);
+        },
         .bang => {
+            c.clearCurrentExprPrimInfo();
             c.setErr("'!' is no longer supported; use 'not'", .{});
             return error.ExpectedExpression;
         },
         .lparen => {
             try expr(c, );
             try c.consume(.rparen);
+            c.propagateChildExprPrimInfo();
         },
-        .lbracket => try arrayLit(c, ),
-        .lbrace => try mapLit(c, ),
-        .kw_func => try c.funcLit(),
-        .kw_import => try importExpr(c, ),
+        .lbracket => {
+            c.clearCurrentExprPrimInfo();
+            try arrayLit(c, );
+        },
+        .lbrace => {
+            c.clearCurrentExprPrimInfo();
+            try mapLit(c, );
+        },
+        .kw_func => {
+            c.clearCurrentExprPrimInfo();
+            try c.funcLit();
+        },
+        .kw_import => {
+            c.clearCurrentExprPrimInfo();
+            try importExpr(c, );
+        },
         .err_invalid_char => return error.InvalidChar,
         .err_unterminated_string => { c.setErr("unterminated string literal", .{}); return error.UnterminatedString; },
         .err_string_pool_exhausted => { c.setErr("string pool exhausted (max {d}KB)", .{@import("lexer.zig").StrPoolSize / 1024}); return error.UnterminatedString; },

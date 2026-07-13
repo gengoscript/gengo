@@ -318,6 +318,28 @@ pub const State = struct {
             }
         }
         if (a == @intFromEnum(Op.set_local)) {
+            // Fusion: get_local dst; get_local_get_field src field; add; set_local dst
+            // → local_add_field (9 bytes, 1 dispatch).
+            if (self.code_len >= 13) {
+                const q = self.code_len - 13;
+                if (self.code[q] == @intFromEnum(Op.get_local) and
+                    self.code[q + 1] == b and
+                    self.code[q + 2] == @intFromEnum(Op.get_local_get_field) and
+                    self.code[q + 10] == @intFromEnum(Op.add))
+                {
+                    self.code[q] = @intFromEnum(Op.local_add_field);
+                    // dst stays at q+1; shift [src][skip][name_hi][name_lo][ic_hi][ic_lo][ic_fidx] left by 1
+                    self.code[q + 2] = self.code[q + 3]; // src slot
+                    self.code[q + 3] = self.code[q + 4]; // embedded get_field skip byte
+                    self.code[q + 4] = self.code[q + 5]; // name_hi
+                    self.code[q + 5] = self.code[q + 6]; // name_lo
+                    self.code[q + 6] = self.code[q + 7]; // ic_type_hi
+                    self.code[q + 7] = self.code[q + 8]; // ic_type_lo
+                    self.code[q + 8] = self.code[q + 9]; // ic_fidx
+                    self.code_len = q + 9;
+                    return;
+                }
+            }
             // Fusion: get_local_const_add dst K + set_local dst → local_add_const dst K_hi K_lo (4 bytes, 1 dispatch).
             if (self.last_get_local_const_add_pos) |pos| {
                 self.last_get_local_const_add_pos = null;
@@ -942,6 +964,35 @@ pub const State = struct {
         self.last_close_upvalue_pos = null;
     }
 
+    pub fn deleteCodeRange(self: *State, start: usize, len: usize) void {
+        if (len == 0 or start >= self.code_len or start + len > self.code_len) return;
+        const tail_start = start + len;
+        const new_len = self.code_len - len;
+        std.mem.copyForwards(u8, self.code[start..new_len], self.code[tail_start..self.code_len]);
+        std.mem.copyForwards(u16, self.lines[start..new_len], self.lines[tail_start..self.code_len]);
+        std.mem.copyForwards(u16, self.cols[start..new_len], self.cols[tail_start..self.code_len]);
+        self.code_len = new_len;
+        self.last_get_local_code_pos = null;
+        self.last_const_code_pos = null;
+        self.last_set_global_code_pos = null;
+        self.last_triple_eq_pos = null;
+        self.last_triple_lt_pos = null;
+        self.last_triple_gt_pos = null;
+        self.last_get_local_const_sub_pos = null;
+        self.last_get_local_const_add_pos = null;
+        self.last_quad_lt_jif_pos = null;
+        self.last_close_upvalue_pos = null;
+        self.last_get_global_code_pos = null;
+        self.last_triple_global_eq_pos = null;
+        self.last_triple_global_lt_pos = null;
+        self.last_call_pos = null;
+        self.last_local_add_const_pos = null;
+        self.last_get_global_const_add_pos = null;
+        self.std_call_patch_pos = null;
+        self.verified = false;
+        self.verified_code_len = 0;
+    }
+
     pub fn constCount(self: *const State) usize { return self.const_count; }
     pub fn codeByteAt(self: *const State, i: usize) u8 { return self.code[i]; }
     pub fn lineAt(self: *const State, i: usize) u16 { return self.lines[i]; }
@@ -1051,6 +1102,7 @@ pub fn markStdCallPatchPos() void { g_state.markStdCallPatchPos(); }
 pub fn stdCallPatchPos() ?usize { return g_state.stdCallPatchPos(); }
 pub fn clearStdCallPatchPos() void { g_state.clearStdCallPatchPos(); }
 pub fn truncateTo(pos: usize) void { g_state.truncateTo(pos); }
+pub fn deleteCodeRange(start: usize, len: usize) void { g_state.deleteCodeRange(start, len); }
 
 // ── VM/verifier-only functions (unchanged, use g_state directly) ──────────────
 

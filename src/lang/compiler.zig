@@ -52,6 +52,19 @@ const AssignTarget = ct.AssignTarget;
 const MultiAssignValueScratch = ct.MultiAssignValueScratch;
 const TypeRegistry = ct.TypeRegistry;
 const TypeCheck = ct.TypeCheck;
+const PrimType = ct.PrimType;
+
+const ExprPrimInfo = struct {
+    prim: ?PrimType = null,
+    is_constant: bool = false,
+    is_plain_binding: bool = false,
+    is_zero_int: bool = false,
+};
+
+const ZeroIntCompare = struct {
+    op: Op,
+    needs_not: bool = false,
+};
 
 pub const ImportResolverFn = *const fn (ctx: *anyopaque, importer_path: []const u8, import_name: []const u8) anyerror![]const u8;
 
@@ -138,6 +151,8 @@ pub const Compiler = struct {
     // Set in emitGetVar when the variable is a known multi-named-return global function.
     // Read and consumed by infixExpr(.lparen) immediately after the call.
     pending_call_spread_count: u8 = 0,
+    expr_prim_info: [MaxExprDepth + 2]ExprPrimInfo = [_]ExprPrimInfo{.{}} ** (MaxExprDepth + 2),
+    expr_prim_capture_depth: ?u16 = null,
     // Set by multiAssignOrDecl before emitExprListTuple; 0 outside that context.
     multi_assign_lhs_count: u8 = 0,
     // Set by infixExpr(.lparen) when callee_spread_n == multi_assign_lhs_count;
@@ -448,6 +463,282 @@ pub const Compiler = struct {
             if (common.streq(n, qname)) return tc;
         }
         return null;
+    }
+
+    fn primitiveTypeFromNumberTok(tok: Token) PrimType {
+        const is_based = tok.src.len >= 2 and tok.src[0] == '0' and
+            (tok.src[1] == 'x' or tok.src[1] == 'X' or
+             tok.src[1] == 'b' or tok.src[1] == 'B' or
+             tok.src[1] == 'o' or tok.src[1] == 'O');
+        const is_float = !is_based and std.mem.indexOfAny(u8, tok.src, ".eE") != null;
+        return if (is_float) .float else .int;
+    }
+
+    pub fn typeCheckFromFieldTypeSpec(self: *Compiler, spec: value_mod.FieldTypeSpec) TypeCheck {
+        _ = self;
+        if (spec.alts.len != 1) return .{ .none = {} };
+        return switch (spec.alts[0].typ) {
+            .int => .{ .prim = .int },
+            .float => .{ .prim = .float },
+            .decimal_t => .{ .prim = .decimal },
+            .boolean => .{ .prim = .bool },
+            .string => .{ .prim = .string },
+            .rune_t => .{ .prim = .rune },
+            .named_t => .{ .named = spec.alts[0].named_name },
+            .array => .{ .assert_arr = {} },
+            .map => .{ .assert_map = {} },
+            .error_t => .{ .assert_err = {} },
+            else => .{ .none = {} },
+        };
+    }
+
+    pub fn clearCurrentExprPrimInfo(self: *Compiler) void {
+        self.expr_prim_info[self.expr_depth] = .{};
+    }
+
+    pub fn setCurrentExprPrimInfo(self: *Compiler, info: ExprPrimInfo) void {
+        self.expr_prim_info[self.expr_depth] = info;
+    }
+
+    pub fn currentExprPrimInfo(self: *Compiler) ExprPrimInfo {
+        return self.expr_prim_info[self.expr_depth];
+    }
+
+    pub fn childExprPrimInfo(self: *Compiler) ExprPrimInfo {
+        return self.expr_prim_info[self.expr_depth + 1];
+    }
+
+    pub fn propagateChildExprPrimInfo(self: *Compiler) void {
+        self.expr_prim_info[self.expr_depth] = self.childExprPrimInfo();
+    }
+
+    pub fn noteCurrentExprPrimFromToken(self: *Compiler, tok: Token) void {
+        switch (tok.typ) {
+            .number => self.expr_prim_info[self.expr_depth] = .{
+                .prim = primitiveTypeFromNumberTok(tok),
+                .is_constant = true,
+                .is_plain_binding = false,
+                .is_zero_int = primitiveTypeFromNumberTok(tok) == .int and common.parseInt(tok.src) == 0,
+            },
+            .ident => {
+                const tc = self.getLocalTypeCheck(tok.src) orelse {
+                    self.clearCurrentExprPrimInfo();
+                    return;
+                };
+                self.expr_prim_info[self.expr_depth] = switch (tc) {
+                    .prim => |p| switch (p) {
+                        .int, .float => .{ .prim = p, .is_constant = false, .is_plain_binding = true, .is_zero_int = false },
+                        else => .{},
+                    },
+                    else => .{},
+                };
+            },
+            else => self.clearCurrentExprPrimInfo(),
+        }
+    }
+
+    pub fn beginExprPrimCapture(self: *Compiler) void {
+        self.expr_prim_capture_depth = self.expr_depth;
+    }
+
+    pub fn endExprPrimCapture(self: *Compiler) ExprPrimInfo {
+        const capture_depth = self.expr_prim_capture_depth orelse return .{};
+        self.expr_prim_capture_depth = null;
+        return self.expr_prim_info[capture_depth + 1];
+    }
+
+    pub fn exprPrimInfoForBinding(self: *Compiler, name: []const u8) ExprPrimInfo {
+        const lhs_tc = self.getLocalTypeCheck(name) orelse return .{};
+        const lhs_prim = switch (lhs_tc) {
+            .prim => |p| switch (p) {
+                .int, .float => p,
+                else => return .{},
+            },
+            else => return .{},
+        };
+        return .{ .prim = lhs_prim, .is_constant = false };
+    }
+
+    pub fn selectTypedArithmeticOp(self: *Compiler, op: Op, lhs: ExprPrimInfo, rhs: ExprPrimInfo) Op {
+        _ = self;
+        const lhs_prim = lhs.prim orelse return op;
+        const rhs_prim = rhs.prim orelse return op;
+        if (lhs_prim != rhs_prim) return op;
+        return switch (lhs_prim) {
+            .int => switch (op) {
+                .add => if (lhs.is_constant or rhs.is_constant) op else .add_int,
+                .sub => if (lhs.is_constant or rhs.is_constant) op else .sub_int,
+                .mul => if (lhs.is_constant and rhs.is_constant) op else .mul_int,
+                .div => if (lhs.is_constant and rhs.is_constant) op else .div_int,
+                else => op,
+            },
+            .float => switch (op) {
+                .add => if (lhs.is_constant or rhs.is_constant) op else .add_float,
+                .sub => if (lhs.is_constant or rhs.is_constant) op else .sub_float,
+                .mul => if (lhs.is_constant and rhs.is_constant) op else .mul_float,
+                .div => if (lhs.is_constant and rhs.is_constant) op else .div_float,
+                else => op,
+            },
+            else => op,
+        };
+    }
+
+    pub fn selectTypedComparisonOp(self: *Compiler, op: Op, lhs: ExprPrimInfo, rhs: ExprPrimInfo) Op {
+        _ = self;
+        const lhs_prim = lhs.prim orelse return op;
+        const rhs_prim = rhs.prim orelse return op;
+        if (lhs_prim != rhs_prim) return op;
+        return switch (lhs_prim) {
+            .int => switch (op) {
+                .eq, .lt, .gt => if (lhs.is_constant or rhs.is_constant) op else switch (op) {
+                    .eq => .eq_int,
+                    .lt => .lt_int,
+                    .gt => .gt_int,
+                    else => unreachable,
+                },
+                else => op,
+            },
+            .float => switch (op) {
+                .eq, .lt, .gt => if (lhs.is_constant or rhs.is_constant) op else switch (op) {
+                    .eq => .eq_float,
+                    .lt => .lt_float,
+                    .gt => .gt_float,
+                    else => unreachable,
+                },
+                else => op,
+            },
+            else => op,
+        };
+    }
+
+    pub fn selectTypedNotEqualOp(self: *Compiler, lhs: ExprPrimInfo, rhs: ExprPrimInfo) ?Op {
+        _ = self;
+        const lhs_prim = lhs.prim orelse return null;
+        const rhs_prim = rhs.prim orelse return null;
+        if (lhs_prim != rhs_prim) return null;
+        if (lhs.is_constant or rhs.is_constant) return null;
+        return switch (lhs_prim) {
+            .int => .ne_int,
+            .float => .ne_float,
+            else => null,
+        };
+    }
+
+    pub fn setCurrentExprPrimResult(self: *Compiler, op: Op, lhs: ExprPrimInfo, rhs: ExprPrimInfo) void {
+        const lhs_prim = lhs.prim orelse {
+            self.clearCurrentExprPrimInfo();
+            return;
+        };
+        const rhs_prim = rhs.prim orelse {
+            self.clearCurrentExprPrimInfo();
+            return;
+        };
+        if (lhs_prim != rhs_prim) {
+            self.clearCurrentExprPrimInfo();
+            return;
+        }
+        const is_constant = lhs.is_constant and rhs.is_constant;
+        self.expr_prim_info[self.expr_depth] = switch (op) {
+            .add, .sub, .mul => .{ .prim = lhs_prim, .is_constant = is_constant, .is_zero_int = is_constant and lhs_prim == .int and switch (op) {
+                .add => lhs.is_zero_int and rhs.is_zero_int,
+                .sub => lhs.is_zero_int and rhs.is_zero_int,
+                .mul => lhs.is_zero_int or rhs.is_zero_int,
+                else => false,
+            } },
+            .div => .{ .prim = if (lhs_prim == .int) .float else lhs_prim, .is_constant = is_constant, .is_zero_int = false },
+            else => .{},
+        };
+    }
+
+    pub fn selectZeroIntCompare(self: *Compiler, tt: TT, lhs: ExprPrimInfo, rhs: ExprPrimInfo) ?ZeroIntCompare {
+        _ = self;
+        if (!(lhs.prim == .int and rhs.prim == .int)) return null;
+        if (!(rhs.is_zero_int and !lhs.is_constant and !lhs.is_plain_binding)) return null;
+        return switch (tt) {
+            .eq_eq => .{ .op = .eqz_int },
+            .bang_eq => .{ .op = .nez_int },
+            .lt => .{ .op = .ltz_int },
+            .gt => .{ .op = .gtz_int },
+            .lt_eq => .{ .op = .gtz_int, .needs_not = true },
+            .gt_eq => .{ .op = .ltz_int, .needs_not = true },
+            else => null,
+        };
+    }
+
+    pub fn selectStdMathUnaryIntrinsicOp(self: *Compiler, direct_name: []const u8, argc: u8) ?Op {
+        _ = self;
+        if (argc != 1) return null;
+        if (common.streq(direct_name, "module:std.math.abs")) return .abs;
+        if (common.streq(direct_name, "module:std.math.floor")) return .floor;
+        if (common.streq(direct_name, "module:std.math.ceil")) return .ceil;
+        if (common.streq(direct_name, "module:std.math.trunc")) return .trunc;
+        if (common.streq(direct_name, "module:std.math.round")) return .nearest;
+        if (common.streq(direct_name, "module:std.math.sign")) return .sign;
+        if (common.streq(direct_name, "module:std.math.sqrt")) return .sqrt;
+        return null;
+    }
+
+    pub fn selectStdMathBinaryIntrinsicOp(self: *Compiler, direct_name: []const u8, argc: u8) ?Op {
+        _ = self;
+        if (argc != 2) return null;
+        if (common.streq(direct_name, "module:std.math.min")) return .min;
+        if (common.streq(direct_name, "module:std.math.max")) return .max;
+        return null;
+    }
+
+    pub fn selectStdMathTernaryIntrinsicOp(self: *Compiler, direct_name: []const u8, argc: u8) ?Op {
+        _ = self;
+        if (argc != 3) return null;
+        if (common.streq(direct_name, "module:std.math.clamp")) return .clamp;
+        return null;
+    }
+
+    pub fn stdMathUnaryIntrinsicResultInfo(self: *Compiler, direct_name: []const u8, arg_info: ExprPrimInfo) ExprPrimInfo {
+        _ = self;
+        if (common.streq(direct_name, "module:std.math.abs")) {
+            return switch (arg_info.prim orelse return .{}) {
+                .int => .{ .prim = .int, .is_constant = arg_info.is_constant, .is_zero_int = arg_info.is_zero_int },
+                .float => .{ .prim = .float, .is_constant = arg_info.is_constant },
+                else => .{},
+            };
+        }
+        if (common.streq(direct_name, "module:std.math.floor") or
+            common.streq(direct_name, "module:std.math.ceil") or
+            common.streq(direct_name, "module:std.math.trunc") or
+            common.streq(direct_name, "module:std.math.round"))
+        {
+            return .{ .prim = .float, .is_constant = arg_info.is_constant };
+        }
+        if (common.streq(direct_name, "module:std.math.sign")) {
+            return switch (arg_info.prim orelse return .{}) {
+                .int => .{ .prim = .int, .is_constant = arg_info.is_constant, .is_zero_int = arg_info.is_zero_int },
+                .float => .{ .prim = .float, .is_constant = arg_info.is_constant },
+                else => .{},
+            };
+        }
+        if (common.streq(direct_name, "module:std.math.sqrt")) {
+            return .{ .prim = .float, .is_constant = arg_info.is_constant };
+        }
+        return .{};
+    }
+
+    pub fn stdMathBinaryIntrinsicResultInfo(self: *Compiler, direct_name: []const u8, lhs_info: ExprPrimInfo, rhs_info: ExprPrimInfo) ExprPrimInfo {
+        _ = self;
+        if (!(common.streq(direct_name, "module:std.math.min") or common.streq(direct_name, "module:std.math.max"))) return .{};
+        const lhs_prim = lhs_info.prim orelse return .{};
+        const rhs_prim = rhs_info.prim orelse return .{};
+        if (lhs_prim != rhs_prim) return .{};
+        return switch (lhs_prim) {
+            .int => .{ .prim = .int, .is_constant = lhs_info.is_constant and rhs_info.is_constant, .is_zero_int = lhs_info.is_zero_int and rhs_info.is_zero_int },
+            .float => .{ .prim = .float, .is_constant = lhs_info.is_constant and rhs_info.is_constant },
+            else => .{},
+        };
+    }
+
+    pub fn stdMathTernaryIntrinsicResultInfo(self: *Compiler, direct_name: []const u8, first_info: ExprPrimInfo, second_info: ExprPrimInfo, third_info: ExprPrimInfo) ExprPrimInfo {
+        _ = self;
+        if (!common.streq(direct_name, "module:std.math.clamp")) return .{};
+        return .{ .prim = .float, .is_constant = first_info.is_constant and second_info.is_constant and third_info.is_constant };
     }
 
     pub fn emitVarTypeProlog(self: *Compiler, tc: TypeCheck, line: u32) !void {

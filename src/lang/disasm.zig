@@ -606,6 +606,28 @@ pub fn disassemble(cs: *const chunk.State) void {
                 writeConst(cs, idx);
                 io.write("\n");
             },
+            // --- local_add_field: op + dst(1) + src(1) + skip(1) + name(2) + ic_type(2) + ic_fidx(1) ---
+            .local_add_field => {
+                const dst = cs.codeByteAt(i); i += 1;
+                const src = cs.codeByteAt(i); i += 1;
+                i += 1; // skip byte
+                const name_idx = readU16(cs, i); i += 2;
+                const ic_type = readU16(cs, i); i += 2;
+                const ic_fidx = cs.codeByteAt(i); i += 1;
+                io.write("local_add_field dst=");
+                writeNum(dst);
+                io.write(" src=");
+                writeNum(src);
+                io.write(" field=");
+                writeConst(cs, name_idx);
+                if (ic_type != 0xffff) {
+                    io.write(" ic_type=");
+                    writeNum(ic_type);
+                    io.write(" ic_fidx=");
+                    writeNum(ic_fidx);
+                }
+                io.write("\n");
+            },
             // --- fused local += const + loop: op + dst(1) + idx(2) + off(4) ---
             .local_add_const_loop => {
                 const dst = cs.codeByteAt(i); i += 1;
