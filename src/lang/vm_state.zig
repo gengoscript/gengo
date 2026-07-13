@@ -39,14 +39,16 @@ pub const Policy = struct {
 };
 
 pub const Frame = struct {
-    ret_ip: usize,
-    base: usize,
-    closure: ?*Object,
-    func_obj: *Object,
-    defer_base: usize,
+    // Code, stack, and defer depths are bounded well below 4 GiB; storing them
+    // as u32 cuts per-frame footprint without changing semantics.
+    ret_ip: u32,
+    base: u32,
+    defer_base: u32,
     has_typed_returns: bool,
     named_return_count: u8,
     func_arity: u8,
+    closure: ?*Object,
+    func_obj: *Object,
 };
 
 pub const PanicFrame = struct { line: u16, name: []const u8 };
