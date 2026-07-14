@@ -1,0 +1,5 @@
+std := import("std")
+type Counter int range 5..100
+var x Counter = Counter(10)
+x++
+std.io.println(int(x))
