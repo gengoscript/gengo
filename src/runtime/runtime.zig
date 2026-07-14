@@ -526,6 +526,14 @@ pub const Runtime = struct {
             self.captureRuntimeError();
             return err;
         };
+        if (self.vm_state.stack_top > 0) {
+            const v = self.vm_state.stack[self.vm_state.stack_top - 1];
+            self.vm_state.stack_top -= 1;
+            if (v != .null) {
+                io.printValue(v);
+                io.write("\n");
+            }
+        }
     }
 
     pub fn callGlobal(self: *Runtime, name: []const u8, args: []const Value) !Value {

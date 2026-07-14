@@ -1424,9 +1424,11 @@ pub fn stmt(c: anytype) anyerror!void {
 
     c.repl_expr_ok = saved;
     try c.expr();
-    try c.cs.emitOp(.pop, c.prev.line);
-    if (c.options.repl_mode and c.repl_expr_ok and c.cs.codeLen() > 0) {
-        c.repl_expr_pop_pos = c.cs.codeLen() - 1;
+    if (c.options.repl_mode and c.repl_expr_ok) {
+        if (c.repl_pending_pop) try c.cs.emitOp(.pop, c.prev.line);
+        c.repl_pending_pop = true;
+    } else {
+        try c.cs.emitOp(.pop, c.prev.line);
     }
     c.matchOpt(.semicolon);
 }
