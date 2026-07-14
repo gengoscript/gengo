@@ -12,6 +12,7 @@ const Value = @import("lang/value.zig").Value;
 const module_compile = @import("lang/module_compile.zig");
 const vm = @import("lang/vm.zig");
 const vm_defuse = @import("lang/vm_defuse.zig");
+const chunk_decoder = @import("lang/chunk_decoder.zig");
 
 fn setup() !Runtime {
     var rt: Runtime = .{};
@@ -1865,10 +1866,16 @@ test "compiler: typed int comparison keeps const fusion" {
     const c = rt.chunk_state;
     var found_const = false;
     var found_typed = false;
-    for (c.code[0..c.code_len]) |op| {
-        if (op == @intFromEnum(Op.get_local_const_eq) or op == @intFromEnum(Op.get_local_const_lt) or op == @intFromEnum(Op.get_local_const_gt) or
-            op == @intFromEnum(Op.const_eq) or op == @intFromEnum(Op.const_lt) or op == @intFromEnum(Op.const_gt)) found_const = true;
-        if (op == @intFromEnum(Op.eq_int) or op == @intFromEnum(Op.ne_int) or op == @intFromEnum(Op.lt_int) or op == @intFromEnum(Op.gt_int)) found_typed = true;
+    var i: usize = 0;
+    while (i < c.code_len) {
+        const inst = chunk_decoder.decodeAt(c, i) catch break;
+        switch (inst.op) {
+            .get_local_const_eq, .get_local_const_lt, .get_local_const_gt,
+            .const_eq, .const_lt, .const_gt => found_const = true,
+            .eq_int, .ne_int, .lt_int, .gt_int => found_typed = true,
+            else => {},
+        }
+        i += inst.width;
     }
     try std.testing.expect(found_const);
     try std.testing.expect(!found_typed);

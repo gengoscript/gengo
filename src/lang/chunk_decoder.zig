@@ -25,7 +25,7 @@ pub fn decodeAt(state: anytype, pos: usize) !DecodedInstruction {
     if (pos >= state.code_len) return error.BytecodeOutOfBounds;
 
     const raw = state.code[pos];
-    const max_op = @intFromEnum(Op.halt);
+    const max_op = @intFromEnum(Op.inc_global_const);
     if (raw > max_op) return error.BadOpcode;
     const op: Op = @enumFromInt(raw);
 
@@ -38,7 +38,7 @@ pub fn decodeAt(state: anytype, pos: usize) !DecodedInstruction {
             .const_index = try readU16At(state, pos + 1),
         },
 
-        .jump, .jump_if_false, .jif_pop => blk: {
+        .jump, .jump_if_false, .jump_if_not_null, .jif_pop => blk: {
             const off = try readU32At(state, pos + 1);
             break :blk .{
                 .op = op,

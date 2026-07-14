@@ -45,14 +45,14 @@ fn stackEffect(op: Op, code: []const u8, ip: usize) struct { pop: u8, push: u8 }
 
         .add, .sub, .mul, .div, .int_div, .rem, .mod, .pow,
         .add_int, .sub_int, .mul_int, .div_int,
-        .eq_int, .ne_int, .lt_int, .gt_int,
+        .eq_int, .ne_int, .lt_int, .le_int, .gt_int, .ge_int,
         .add_float, .sub_float, .mul_float, .div_float,
-        .eq_float, .ne_float, .lt_float, .gt_float,
+        .eq_float, .ne_float, .lt_float, .le_float, .gt_float, .ge_float,
         .bit_and, .bit_or, .bit_xor, .shl, .shr,
-        .eq, .gt, .lt,
+        .eq, .ne, .lt, .le, .gt, .ge,
         .min, .max => .{ .pop = 2, .push = 1 },
         .clamp => .{ .pop = 3, .push = 1 },
-        .eqz_int, .nez_int, .ltz_int, .gtz_int => .{ .pop = 1, .push = 1 },
+        .eqz_int, .nez_int, .ltz_int, .lez_int, .gtz_int, .gez_int => .{ .pop = 1, .push = 1 },
 
         .neg, .not, .bit_not,
         .abs, .floor, .ceil, .trunc, .nearest, .sign, .sqrt,
@@ -143,7 +143,7 @@ fn stackEffect(op: Op, code: []const u8, ip: usize) struct { pop: u8, push: u8 }
         .get_local_const_lt_jif_pop_jump,
         .get_global_const_lt_jif_pop => .{ .pop = 0, .push = 0 },
 
-        .halt => .{ .pop = 0, .push = 0 },
+        .halt, .op_unreachable => .{ .pop = 0, .push = 0 },
     };
 }
 
