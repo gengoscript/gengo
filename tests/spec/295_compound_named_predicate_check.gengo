@@ -1,0 +1,5 @@
+std := import("std")
+type Score int predicate func(x) { return x >= 0 and x <= 100 }
+s := Score(50)
+s += Score(10)
+std.io.println(int(s))

@@ -470,7 +470,7 @@ pub const Compiler = struct {
         return if (is_float) .float else .int;
     }
 
-    fn namedTypeBaseToPrim(base: NamedTypeBase) ?PrimType {
+    pub fn namedTypeBaseToPrim(base: NamedTypeBase) ?PrimType {
         return switch (base) {
             .int => .int,
             .float => .float,
@@ -480,6 +480,12 @@ pub const Compiler = struct {
             .rune => .rune,
             .array_t, .map_t, .enum_t => null,
         };
+    }
+
+    pub fn namedTypeCheckBasePrim(self: *Compiler, tc: TypeCheck) ?PrimType {
+        if (tc != .named) return null;
+        const info = self.registry.getNamedTypeInfo(tc.named) orelse return null;
+        return namedTypeBaseToPrim(info.base);
     }
 
     pub fn typeCheckFromFieldTypeSpec(self: *Compiler, spec: value_mod.FieldTypeSpec) TypeCheck {

@@ -302,6 +302,7 @@ fn decimalOpValues(a: Value, b: Value) ?struct { lhs: i64, rhs: i64, typ: *Objec
 
 fn pushDecimalResultWithCarrier(ctx: VMContext, typ: *Object, d: i64) !void {
     const wrapped = try vmtyp.coerceNamedTypeResult(ctx, typ, .{ .decimal = d });
+    try checkNamedTypePredicateChain(ctx, typ, wrapped.namedInner() orelse unreachable);
     try ctx.vs.vmPush(wrapped);
 }
 
@@ -410,6 +411,7 @@ fn wrapValueWithCarrier(ctx: VMContext, a: Value, b: Value, val: Value, op: []co
     };
     if (carrier) |typ| {
         const wrapped = try vmtyp.coerceNamedTypeResult(ctx, typ, val);
+        try checkNamedTypePredicateChain(ctx, typ, wrapped.namedInner() orelse unreachable);
         return wrapped;
     }
     return val;
@@ -440,6 +442,7 @@ fn pushUnaryIntResult(ctx: VMContext, v: Value, result: Value) !void {
     _ = try ctx.vs.vmPop();
     if (v.namedTyp()) |typ| {
         const wrapped = try vmtyp.coerceNamedTypeResult(ctx, typ, result);
+        try checkNamedTypePredicateChain(ctx, typ, wrapped.namedInner() orelse unreachable);
         try ctx.vs.vmPush(wrapped);
     } else {
         try ctx.vs.vmPush(result);

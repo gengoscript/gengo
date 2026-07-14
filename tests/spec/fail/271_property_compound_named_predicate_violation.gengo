@@ -1,0 +1,4 @@
+type Score int predicate func(x) { return x >= 0 and x <= 100 }
+type Board struct { score Score }
+b := Board{ score: Score(95) }
+b.score += Score(10)

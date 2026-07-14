@@ -1,0 +1,5 @@
+std := import("std")
+type Flags int predicate func(x) { return true }
+f := Flags(5)
+g := ~f
+std.io.println(int(g))

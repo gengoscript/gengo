@@ -481,7 +481,9 @@ pub fn compoundStmt(c: anytype) !void {
     const selected_op = c.selectTypedArithmeticOp(op, c.exprPrimInfoForBinding(name.src), c.endExprPrimCapture());
     try c.cs.emitBinOpFused(selected_op, op_tok.line);
     const tc = c.getLocalTypeCheck(name.src);
-    if (tc) |t| try c.emitVarTypeEpilog(t, op_tok.line);
+    if (tc) |t| {
+        if (t != .named) try c.emitVarTypeEpilog(t, op_tok.line);
+    }
     try c.emitSetVar(name);
     c.matchOpt(.semicolon);
 }
@@ -886,10 +888,27 @@ pub fn incrStmt(c: anytype) !void {
     const is_inc = c.cur.typ == .plus_plus;
     c.advance();
     try c.emitGetVar(name);
-    try c.cs.emitConst(.{ .int = 1.0 }, name.line);
-    try c.cs.emitBinOpFused(if (is_inc) .add else .sub, name.line);
     const tc = c.getLocalTypeCheck(name.src);
-    if (tc) |t| try c.emitVarTypeEpilog(t, name.line);
+    if (tc) |t| {
+        if (t == .named) {
+            const base_prim = c.namedTypeCheckBasePrim(t);
+            try c.emitVarTypeProlog(t, name.line);
+            if (base_prim == .float) {
+                try c.cs.emitConst(.{ .float = 1.0 }, name.line);
+            } else {
+                try c.cs.emitConst(.{ .int = 1.0 }, name.line);
+            }
+            try c.cs.emitCall(1, name.line);
+            try c.cs.emitBinOpFused(if (is_inc) .add else .sub, name.line);
+        } else {
+            try c.cs.emitConst(.{ .int = 1.0 }, name.line);
+            try c.cs.emitBinOpFused(if (is_inc) .add else .sub, name.line);
+            try c.emitVarTypeEpilog(t, name.line);
+        }
+    } else {
+        try c.cs.emitConst(.{ .int = 1.0 }, name.line);
+        try c.cs.emitBinOpFused(if (is_inc) .add else .sub, name.line);
+    }
     try c.emitSetVar(name);
     c.matchOpt(.semicolon);
 }
