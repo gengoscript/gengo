@@ -1,7 +1,7 @@
 # Opcode Reference
 
-Gengo uses a single-byte opcode space (u8, 256 slots). 157 of 256 are
-assigned, leaving 99 free for future use.
+Gengo uses a single-byte opcode space (u8, 256 slots). 156 of 256 are
+assigned, leaving 100 free for future use.
 
 Hover a cell to see the full instruction name and description.
 
@@ -27,8 +27,8 @@ var OPS=[
   [0x01,"unrech","op_unreachable — dead-code sentinel; traps if reached"],
   [0x02,"jump",  "jump — unconditional branch (4-byte offset)"],
   [0x03,"jif",   "jump_if_false — branch if TOS falsy"],
-  [0x04,"jif·p", "jif_pop — pop then branch if falsy"],
-  [0x05,"jinn",  "jump_if_not_null — peek TOS; jump if not null (used by ??)"],
+  [0x04,"jif·p", "jif_pop — pop+branch on false"],
+  [0x05,"jinn",  "jump_if_not_null — non-null peek+jump (?? operator)"],
   [0x06,"loop",  "loop — back-edge jump"],
   [0x07,"call",  "call — function call [op][argc][ic_hi][ic_lo]"],
   [0x08,"call·t","call_tail — tail-position call"],
@@ -36,23 +36,23 @@ var OPS=[
   [0x0A,"dcall", "defer_call — deferred function call"],
   [0x0B,"invoke","invoke_method — method dispatch with inline cache"],
   [0x0C,"dinvk", "defer_invoke_method — deferred method call"],
-  [0x0D,"ret",   "ret — return from function"],
-  [0x0E,"get·l", "get_local — load local by slot [op][slot]"],
-  [0x0F,"set·l", "set_local — store local by slot"],
-  [0x10,"get·g", "get_global — load global by name const-idx"],
-  [0x11,"set·g", "set_global — store global"],
-  [0x12,"def·g", "def_global — define global variable"],
-  [0x13,"get·u", "get_upvalue — load closed-over variable"],
-  [0x14,"set·u", "set_upvalue — store closed-over variable"],
-  [0x15,"close", "close_upvalue — hoist local into heap cell"],
-  [0x16,"mkcls", "make_closure — wrap function + upvalue array"],
-  [0x17,"const", "constant — push constant-pool value [op][hi][lo]"],
-  [0x18,"null",  "null_val — push null"],
-  [0x19,"true",  "true_val — push true"],
-  [0x1A,"false", "false_val — push false"],
-  [0x1B,"dup",   "dup — duplicate TOS"],
-  [0x1C,"dup2",  "dup2 — duplicate top two values"],
-  [0x1D,"pop",   "pop — discard TOS"],
+  [0x0D,"ret",   "ret — function return"],
+  [0x0E,"get·l", "get_local — local slot read [op][slot]"],
+  [0x0F,"set·l", "set_local — local slot write"],
+  [0x10,"get·g", "get_global — global name read (const-idx)"],
+  [0x11,"set·g", "set_global — global write"],
+  [0x12,"def·g", "def_global — global variable definition"],
+  [0x13,"get·u", "get_upvalue — upvalue read"],
+  [0x14,"set·u", "set_upvalue — upvalue write"],
+  [0x15,"close", "close_upvalue — local-to-heap-cell promotion"],
+  [0x16,"mkcls", "make_closure — function+upvalue wrapper"],
+  [0x17,"const", "constant — constant pool load [op][hi][lo]"],
+  [0x18,"null",  "null_val — null literal"],
+  [0x19,"true",  "true_val — true literal"],
+  [0x1A,"false", "false_val — false literal"],
+  [0x1B,"dup",   "dup — TOS duplicate"],
+  [0x1C,"dup2",  "dup2 — top-2 duplicate"],
+  [0x1D,"pop",   "pop — TOS discard"],
   [0x1E,"add",   "add — generic addition"],
   [0x1F,"sub",   "sub — generic subtraction"],
   [0x20,"mul",   "mul — generic multiplication"],
@@ -118,34 +118,33 @@ var OPS=[
   [0x5C,"c·str", "cast_string — value → string"],
   [0x5D,"c·run", "cast_rune — value → rune"],
   [0x5E,"c·big", "cast_bigint — value → bigint"],
-  [0x5F,"a·typ", "assert_type — assert array/map/error kind"],
-  [0x60,"a·ifc", "assert_interface — assert interface conformance"],
-  [0x61,"a·str", "assert_struct — assert struct type"],
-  [0x62,"tynam", "type_name — push runtime type name string"],
-  [0x63,"s·prd", "set_named_predicate — attach predicate to named type"],
-  [0x64,"v·dft", "validate_type_default — check named type default"],
-  [0x65,"assrt", "op_assert — assert condition"],
-  [0x66,"ass·m", "op_assert_msg — assert with message"],
+  [0x5F,"a·typ", "assert_type — array/map/error kind assertion"],
+  [0x60,"a·ifc", "assert_interface — interface conformance assertion"],
+  [0x61,"a·str", "assert_struct — struct type assertion"],
+  [0x62,"tynam", "type_name — runtime type name (.type operator)"],
+  [0x63,"s·prd", "set_named_predicate — named type predicate attachment"],
+  [0x64,"v·dft", "validate_type_default — named type default validation"],
+  [0x65,"assrt", "op_assert — condition assertion"],
+  [0x66,"ass·m", "op_assert_msg — condition assertion with message"],
   [0x67,"trap",  "op_trap_check — recover trap check"],
-  [0x68,"v·chk", "variant_check — check variant tag"],
-  [0x69,"v·pay", "variant_payload — extract variant payload"],
-  [0x6A,"b·arr", "build_array — build array from N stack values"],
-  [0x6B,"b·map", "build_map — build map from N key-value pairs"],
-  [0x6C,"b·tup", "build_tuple — build tuple from N values"],
-  [0x6D,"b·str", "build_struct_instance — build struct"],
-  [0x6E,"z·str", "zero_struct — push zero-valued struct"],
-  [0x6F,"t·ari", "tuple_check_arity — check tuple element count"],
-  [0x70,"t·get", "tuple_get — read element, pop tuple"],
-  [0x71,"t·gk",  "tuple_get_keep — read element, keep tuple"],
+  [0x68,"v·chk", "variant_check — variant tag check"],
+  [0x69,"v·pay", "variant_payload — variant payload extraction"],
+  [0x6A,"b·arr", "build_array — array build from N stack values"],
+  [0x6B,"b·map", "build_map — map build from N key-value pairs"],
+  [0x6C,"b·tup", "build_tuple — tuple build from N values"],
+  [0x6D,"b·str", "build_struct_instance — struct instance build"],
+  [0x6E,"z·str", "zero_struct — zero-valued struct literal"],
+  [0x6F,"t·ari", "tuple_check_arity — tuple arity check"],
+  [0x70,"t·get", "tuple_get — tuple element read (pop)"],
+  [0x71,"t·gk",  "tuple_get_keep — tuple element read (keep)"],
   [0x72,"g·idx", "get_index — array/map index read"],
   [0x73,"s·idx", "set_index — array/map index write"],
   [0x74,"g·slc", "get_slice — array slice [lo:hi]"],
   [0x75,"g·fld", "get_field — struct field read with inline cache"],
   [0x76,"s·fld", "set_field — struct field write with inline cache"],
-  [0x77,"it·in", "iter_init — initialize for-in iterator"],
-  [0x78,"it·n1", "iter_next1 — advance iterator, push 1 value"],
-  [0x79,"it·n2", "iter_next2 — advance iterator, push 2 values"],
-  [0x7A,"repl",  "repl_print — REPL only: print TOS if not null, then pop"],
+  [0x77,"it·in", "iter_init — for-in iterator initialization"],
+  [0x78,"it·n1", "iter_next1 — iterator step, 1 value"],
+  [0x79,"it·n2", "iter_next2 — iterator step, 2 values"],
   [0xC0,"c_eq",  "const_eq — fused constant+eq"],
   [0xC1,"c_sub", "const_sub — fused constant+sub"],
   [0xC2,"c_add", "const_add — fused constant+add"],
@@ -220,23 +219,22 @@ for(var r=0;r<16;r++){
 |-------|-------|-------|
 | 0x00–0x06 | 7 | Control flow |
 | 0x07–0x0D | 7 | Call / return |
-| 0x0E–0x16 | 9 | Variables + closure |
+| 0x0E–0x16 | 9 | Variables / closure |
 | 0x17–0x1D | 7 | Stack / literals |
 | 0x1E–0x26 | 9 | Generic arithmetic |
-| 0x27–0x2D | 7 | Generic comparison + logic |
+| 0x27–0x2D | 7 | Generic comparison / logic |
 | 0x2E–0x3D | 16 | Typed int (i64) |
 | 0x3E–0x47 | 10 | Typed float (f64) |
 | 0x48–0x51 | 10 | Math intrinsics |
 | 0x52–0x57 | 6 | Bitwise |
 | 0x58–0x5E | 7 | Cast |
-| 0x5F–0x69 | 11 | Type system + assertions |
-| 0x6A–0x79 | 16 | Collections + struct |
-| 0x7A | 1 | Special (REPL) |
-| 0x7B–0xBF | 69 | Free (reserved for future core ops) |
+| 0x5F–0x69 | 11 | Type system / assertions |
+| 0x6A–0x79 | 16 | Collections / struct |
+| 0x7A–0xBF | 70 | Free (reserved for future core ops) |
 | 0xC0–0xE1 | 34 | Fused / peephole |
 | 0xE2–0xFF | 30 | Free (within fused block) |
 
-Total assigned: 157 of 256 slots.
+Total assigned: 156 of 256 slots.
 
 ## Instruction widths
 

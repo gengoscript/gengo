@@ -125,7 +125,7 @@ pub const Compiler = struct {
     test_count: u16 = 0,
 
     repl_expr_ok: bool = true,
-    repl_expr_pop_pos: ?usize = null,
+    repl_pending_pop: bool = false,
     in_loop_init: bool = false,
     loop_body_depth: u8 = 0,
     skipping_test_body: bool = false,
@@ -177,17 +177,12 @@ pub const Compiler = struct {
         self.err_line = 0;
         self.expr_depth = 0;
         self.repl_expr_ok = true;
-        self.repl_expr_pop_pos = null;
+        self.repl_pending_pop = false;
         self.advance();
         while (!self.check(.eof)) {
             try self.failOnLexerError();
             self.repl_expr_ok = true;
             try self.decl();
-        }
-        if (self.options.repl_mode) {
-            if (self.repl_expr_pop_pos) |pos| {
-                self.cs.code[pos] = @intFromEnum(Op.repl_print);
-            }
         }
         if (emit_halt) try self.cs.emitOp(.halt, self.prev.line);
     }

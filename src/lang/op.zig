@@ -151,10 +151,7 @@ pub const Op = enum(u8) {
     iter_next1       = 0x78,
     iter_next2       = 0x79,
 
-    // ── Special ───────────────────────────────────────────────────────────────
-    repl_print       = 0x7A, // REPL-only: print TOS if not null, then pop
-
-    // 0x7B–0xBF: reserved for future core ops (69 slots)
+    // 0x7A–0xBF: reserved for future core ops (70 slots)
 
     // ── Fused / peephole (0xC0–0xFF, 64 slots) ───────────────────────────────
     // Fused constant+binop: reads u16 const_idx, pops TOS (left operand),

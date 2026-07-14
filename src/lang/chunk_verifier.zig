@@ -40,7 +40,7 @@ fn stackEffect(op: Op, code: []const u8, ip: usize) struct { pop: u8, push: u8 }
         .get_local_get_field => .{ .pop = 0, .push = 1 },
 
         .pop, .def_global, .set_global, .set_local, .set_upvalue,
-        .set_field, .jif_pop, .op_assert, .repl_print,
+        .set_field, .jif_pop, .op_assert,
         .set_named_predicate => .{ .pop = 1, .push = 0 },
 
         .add, .sub, .mul, .div, .int_div, .rem, .mod, .pow,
