@@ -56,6 +56,7 @@ const PrimType = ct.PrimType;
 
 const ExprPrimInfo = struct {
     prim: ?PrimType = null,
+    named_type: ?[]const u8 = null,
     is_constant: bool = false,
     is_plain_binding: bool = false,
     is_zero_int: bool = false,
@@ -469,6 +470,18 @@ pub const Compiler = struct {
         return if (is_float) .float else .int;
     }
 
+    fn namedTypeBaseToPrim(base: NamedTypeBase) ?PrimType {
+        return switch (base) {
+            .int => .int,
+            .float => .float,
+            .decimal => .decimal,
+            .string => .string,
+            .bool => .bool,
+            .rune => .rune,
+            .array_t, .map_t, .enum_t => null,
+        };
+    }
+
     pub fn typeCheckFromFieldTypeSpec(self: *Compiler, spec: value_mod.FieldTypeSpec) TypeCheck {
         _ = self;
         if (spec.alts.len != 1) return .{ .none = {} };
@@ -525,6 +538,11 @@ pub const Compiler = struct {
                         .int, .float => .{ .prim = p, .is_constant = false, .is_plain_binding = true, .is_zero_int = false },
                         else => .{},
                     },
+                    .named => |n| blk: {
+                        const info = self.registry.getNamedTypeInfo(n) orelse break :blk ExprPrimInfo{};
+                        const p = namedTypeBaseToPrim(info.base) orelse break :blk ExprPrimInfo{};
+                        break :blk .{ .prim = p, .named_type = n, .is_constant = false, .is_plain_binding = true, .is_zero_int = false };
+                    },
                     else => .{},
                 };
             },
@@ -549,6 +567,13 @@ pub const Compiler = struct {
                 .int, .float => p,
                 else => return .{},
             },
+            .named => |n| {
+                const info = self.registry.getNamedTypeInfo(n) orelse return .{};
+                return switch (namedTypeBaseToPrim(info.base) orelse return .{}) {
+                    .int, .float => |p| .{ .prim = p, .named_type = n, .is_constant = false },
+                    else => .{},
+                };
+            },
             else => return .{},
         };
         return .{ .prim = lhs_prim, .is_constant = false };
@@ -559,6 +584,7 @@ pub const Compiler = struct {
         const lhs_prim = lhs.prim orelse return op;
         const rhs_prim = rhs.prim orelse return op;
         if (lhs_prim != rhs_prim) return op;
+        if (lhs.named_type != null or rhs.named_type != null) return op;
         return switch (lhs_prim) {
             .int => switch (op) {
                 .add => if (lhs.is_constant or rhs.is_constant) op else .add_int,
@@ -583,6 +609,7 @@ pub const Compiler = struct {
         const lhs_prim = lhs.prim orelse return op;
         const rhs_prim = rhs.prim orelse return op;
         if (lhs_prim != rhs_prim) return op;
+        if (lhs.named_type != null or rhs.named_type != null) return op;
         return switch (lhs_prim) {
             .int => switch (op) {
                 .eq, .ne, .lt, .le, .gt, .ge => if (lhs.is_constant or rhs.is_constant) op else switch (op) {
@@ -617,6 +644,7 @@ pub const Compiler = struct {
         const lhs_prim = lhs.prim orelse return null;
         const rhs_prim = rhs.prim orelse return null;
         if (lhs_prim != rhs_prim) return null;
+        if (lhs.named_type != null or rhs.named_type != null) return null;
         if (lhs.is_constant or rhs.is_constant) return null;
         return switch (lhs_prim) {
             .int => .ne_int,
@@ -639,14 +667,21 @@ pub const Compiler = struct {
             return;
         }
         const is_constant = lhs.is_constant and rhs.is_constant;
+        const result_named: ?[]const u8 = if (lhs.named_type) |ln|
+            if (rhs.named_type) |rn|
+                if (common.streq(ln, rn)) ln else null
+            else
+                null
+        else
+            null;
         self.expr_prim_info[self.expr_depth] = switch (op) {
-            .add, .sub, .mul => .{ .prim = lhs_prim, .is_constant = is_constant, .is_zero_int = is_constant and lhs_prim == .int and switch (op) {
+            .add, .sub, .mul => .{ .prim = lhs_prim, .named_type = result_named, .is_constant = is_constant, .is_zero_int = is_constant and lhs_prim == .int and switch (op) {
                 .add => lhs.is_zero_int and rhs.is_zero_int,
                 .sub => lhs.is_zero_int and rhs.is_zero_int,
                 .mul => lhs.is_zero_int or rhs.is_zero_int,
                 else => false,
             } },
-            .div => .{ .prim = if (lhs_prim == .int) .float else lhs_prim, .is_constant = is_constant, .is_zero_int = false },
+            .div => .{ .prim = if (lhs_prim == .int) .float else lhs_prim, .named_type = null, .is_constant = is_constant, .is_zero_int = false },
             else => .{},
         };
     }
@@ -654,6 +689,7 @@ pub const Compiler = struct {
     pub fn selectZeroIntCompare(self: *Compiler, tt: TT, lhs: ExprPrimInfo, rhs: ExprPrimInfo) ?ZeroIntCompare {
         _ = self;
         if (!(lhs.prim == .int and rhs.prim == .int)) return null;
+        if (lhs.named_type != null or rhs.named_type != null) return null;
         if (!(rhs.is_zero_int and !lhs.is_constant and !lhs.is_plain_binding)) return null;
         return switch (tt) {
             .eq_eq  => .{ .op = .eqz_int },
