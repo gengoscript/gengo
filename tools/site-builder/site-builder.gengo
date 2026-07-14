@@ -33,6 +33,7 @@ const chapterOrder := [
     "stdlib.md",
     "embedding.md",
     "engine-api.md",
+    "opcodes.md",
     "host-abi.md",
     "security.md",
     "changelog.md",
@@ -265,6 +266,7 @@ func mdToHtml(src string) Html {
     var lines := str.split(src, "\n")
     var i := 0
     var inCode := false
+    var codeIsRawHtml := false
     var codeBuf := ""
     var paraBuf := ""
     var ulOpen := false
@@ -310,15 +312,22 @@ func mdToHtml(src string) Html {
         // Code blocks
         if str.starts_with(line, "```") {
             if inCode {
-                html.write("<pre><code>")
-                html.write(escapeHtml(trimEnd(codeBuf)))
-                html.write("</code></pre>\n")
+                if codeIsRawHtml {
+                    html.write(Html(trimEnd(codeBuf)))
+                    html.write("\n")
+                } else {
+                    html.write("<pre><code>")
+                    html.write(escapeHtml(trimEnd(codeBuf)))
+                    html.write("</code></pre>\n")
+                }
                 codeBuf = ""
                 inCode = false
+                codeIsRawHtml = false
             } else {
                 flushPara()
                 closeLists()
                 inCode = true
+                codeIsRawHtml = str.trim(line) == "```html"
             }
             continue
         }

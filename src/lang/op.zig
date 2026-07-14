@@ -154,64 +154,67 @@ pub const Op = enum(u8) {
     // ── Special ───────────────────────────────────────────────────────────────
     repl_print       = 0x7A, // REPL-only: print TOS if not null, then pop
 
-    // ── Fused / peephole ──────────────────────────────────────────────────────
+    // 0x7B–0xBF: reserved for future core ops (69 slots)
+
+    // ── Fused / peephole (0xC0–0xFF, 64 slots) ───────────────────────────────
     // Fused constant+binop: reads u16 const_idx, pops TOS (left operand),
     // applies op with the constant as right operand, pushes result.
-    const_eq         = 0x7B,
-    const_sub        = 0x7C,
-    const_add        = 0x7D,
-    const_lt         = 0x7E,
-    const_gt         = 0x7F,
+    const_eq         = 0xC0,
+    const_sub        = 0xC1,
+    const_add        = 0xC2,
+    const_lt         = 0xC3,
+    const_gt         = 0xC4,
     // Triple-fused get_local+constant+binop. Same 5-byte layout as
     // get_local(2) + const_eq/sub/add/lt/gt(3). The middle byte (the original const_*
     // opcode, now a skip byte) is read and discarded by the VM.
-    get_local_const_eq  = 0x80,
-    get_local_const_sub = 0x81,
-    get_local_const_add = 0x82,
-    get_local_const_lt  = 0x83,
-    get_local_const_gt  = 0x84,
+    get_local_const_eq  = 0xC5,
+    get_local_const_sub = 0xC6,
+    get_local_const_add = 0xC7,
+    get_local_const_lt  = 0xC8,
+    get_local_const_gt  = 0xC9,
     // Quad-fused get_local+constant+eq+jif_pop: 9-byte conditional branch.
     // Layout: [op][slot][skip][idx_hi][idx_lo][jmp_hi][jmp_lo]
-    get_local_const_eq_jif_pop  = 0x85,
+    get_local_const_eq_jif_pop  = 0xCA,
     // Quad-fused get_local+constant+lt/gt+jif_pop: 9-byte conditional branch.
     // Layout: [op][slot][skip][idx_hi][idx_lo][exit_b3][exit_b2][exit_b1][exit_b0]
-    get_local_const_lt_jif_pop  = 0x86,
-    get_local_const_gt_jif_pop  = 0x87,
+    get_local_const_lt_jif_pop  = 0xCB,
+    get_local_const_gt_jif_pop  = 0xCC,
     // Quint-fused get_local+constant+lt+jif_pop+jump: 13-byte for-loop header.
     // Layout: [op][slot][skip][idx_hi][idx_lo][exit_b3..b0][body_b3..b0]
-    get_local_const_lt_jif_pop_jump = 0x88,
+    get_local_const_lt_jif_pop_jump = 0xCD,
     // Triple-fused get_global+constant+binop. 8-byte layout:
     // [op][glob_hi][glob_lo][ic_hi][ic_lo][skip][val_hi][val_lo]
-    get_global_const_eq  = 0x89,
-    get_global_const_sub = 0x8A,
-    get_global_const_add = 0x8B,
-    get_global_const_lt  = 0x8C,
+    get_global_const_eq  = 0xCE,
+    get_global_const_sub = 0xCF,
+    get_global_const_add = 0xD0,
+    get_global_const_lt  = 0xD1,
     // Quad-fused get_global+constant+lt+jif_pop: 12-byte conditional branch.
     // Layout: [op][glob_hi][glob_lo][ic_hi][ic_lo][skip][val_hi][val_lo][jmp_b3..b0]
-    get_global_const_lt_jif_pop = 0x8D,
+    get_global_const_lt_jif_pop = 0xD2,
     // Fused get_local+get_field: 8-byte load-and-read-field.
     // Layout: [op][slot][skip=get_field_byte][name_hi][name_lo][ic_type_hi][ic_type_lo][ic_fidx]
-    get_local_get_field  = 0x8E,
+    get_local_get_field  = 0xD3,
     // Fused loop variants
-    set_global_loop      = 0x8F, // fused: set_global (5 bytes) + loop back-edge (2 bytes); same IC layout
-    close_upvalue_loop   = 0x90, // fused: close_upvalue (2 bytes) + loop back-edge; layout: [op][slot][off_b3..b0] (6 bytes)
+    set_global_loop      = 0xD4, // fused: set_global (5 bytes) + loop back-edge (2 bytes); same IC layout
+    close_upvalue_loop   = 0xD5, // fused: close_upvalue (2 bytes) + loop back-edge; layout: [op][slot][off_b3..b0] (6 bytes)
     // Fused ret variants
-    ret_const            = 0x91, // fused constant+ret: [op][idx_hi][idx_lo]
-    get_local_ret        = 0x92, // fused get_local+ret: [op][slot]
+    ret_const            = 0xD6, // fused constant+ret: [op][idx_hi][idx_lo]
+    get_local_ret        = 0xD7, // fused get_local+ret: [op][slot]
     // Fused call variants
-    get_local_const_sub_call      = 0x93, // fused get_local_const_sub+call: [op][slot][skip][idx_hi][idx_lo][argc] (6 bytes)
-    get_local_const_sub_call_tail = 0x94, // tail-position variant; same encoding
+    get_local_const_sub_call      = 0xD8, // fused get_local_const_sub+call: [op][slot][skip][idx_hi][idx_lo][argc] (6 bytes)
+    get_local_const_sub_call_tail = 0xD9, // tail-position variant; same encoding
     // Hexa-fused get_global+get_local+const+sub+call: 11-byte recursive-call fast path.
     // Layout: [op][name_hi][name_lo][ic_hi][ic_lo][glcs_skip][slot][const_sub_skip][idx_hi][idx_lo][argc]
-    call_global_local_sub_const      = 0x95,
-    call_global_local_sub_const_tail = 0x96, // tail-position variant; same encoding
+    call_global_local_sub_const      = 0xDA,
+    call_global_local_sub_const_tail = 0xDB, // tail-position variant; same encoding
     // Fused arithmetic
-    add_ret          = 0x97, // fused add+ret: [op]
-    local_add_local  = 0x98, // fused get_local+get_local+add+set_local: [op][dst][src] (3 bytes); dst += src
-    local_add_const  = 0x99, // fused get_local+const_add+set_local: [op][dst][idx_hi][idx_lo] (4 bytes); dst += k
-    local_add_const_loop = 0x9A, // fused local_add_const+loop: [op][dst][idx_hi][idx_lo][off_b3..b0] (8 bytes)
-    local_add_field  = 0x9B, // fused get_local+get_local_get_field+add+set_local: [op][dst][src][skip][name_hi][name_lo][ic_hi][ic_lo][ic_fidx] (9 bytes); dst += src.field
+    add_ret          = 0xDC, // fused add+ret: [op]
+    local_add_local  = 0xDD, // fused get_local+get_local+add+set_local: [op][dst][src] (3 bytes); dst += src
+    local_add_const  = 0xDE, // fused get_local+const_add+set_local: [op][dst][idx_hi][idx_lo] (4 bytes); dst += k
+    local_add_const_loop = 0xDF, // fused local_add_const+loop: [op][dst][idx_hi][idx_lo][off_b3..b0] (8 bytes)
+    local_add_field  = 0xE0, // fused get_local+get_local_get_field+add+set_local: [op][dst][src][skip][name_hi][name_lo][ic_hi][ic_lo][ic_fidx] (9 bytes); dst += src.field
     // Fused get_global_const_add+set_global (same global): 8-byte in-place global increment.
     // Layout: [op][name_hi][name_lo][ic_hi][ic_lo][add_skip][val_hi][val_lo]
-    inc_global_const = 0x9C,
+    inc_global_const = 0xE1,
+    // 0xE2–0xFF: free within fused block (30 slots)
 };

@@ -2051,7 +2051,9 @@ noinline fn dispatchTick(ctx: VMContext) !u64 {
 inline fn fetchOp(ctx: VMContext) !Op {
     if (ctx.vs.ip >= ctx.cs.code_len) return error.BytecodeOutOfBounds;
     const op_raw = opByte(ctx);
-    if (op_raw >= std.meta.fields(Op).len) return error.InvalidChunkShape;
+    if (op_raw > @intFromEnum(Op.repl_print) and
+        (op_raw < @intFromEnum(Op.const_eq) or op_raw > @intFromEnum(Op.inc_global_const)))
+        return error.InvalidChunkShape;
     vmperf.countOp(op_raw);
     return @enumFromInt(op_raw);
 }
