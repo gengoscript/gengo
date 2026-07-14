@@ -2289,14 +2289,13 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 ctx.vs.setRuntimeErr("cannot compare {s} with zero using int less-than-zero test", .{vmtyp.runtimeTypeName(a)});
                 return error.TypeError;
             },
-            .lt_int => {
-                const b = try ctx.vs.vmPop();
+            .lez_int => {
                 const a = try ctx.vs.vmPop();
-                if (a == .int and b == .int) {
-                    try ctx.vs.vmPush(.{ .boolean = a.int < b.int });
+                if (a == .int) {
+                    try ctx.vs.vmPush(.{ .boolean = a.int <= 0 });
                     continue;
                 }
-                setBinaryTypeError(ctx, "<", a, b);
+                ctx.vs.setRuntimeErr("cannot compare {s} with zero using int less-than-or-equal-zero test", .{vmtyp.runtimeTypeName(a)});
                 return error.TypeError;
             },
             .gtz_int => {
@@ -2308,6 +2307,35 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 ctx.vs.setRuntimeErr("cannot compare {s} with zero using int greater-than-zero test", .{vmtyp.runtimeTypeName(a)});
                 return error.TypeError;
             },
+            .gez_int => {
+                const a = try ctx.vs.vmPop();
+                if (a == .int) {
+                    try ctx.vs.vmPush(.{ .boolean = a.int >= 0 });
+                    continue;
+                }
+                ctx.vs.setRuntimeErr("cannot compare {s} with zero using int greater-than-or-equal-zero test", .{vmtyp.runtimeTypeName(a)});
+                return error.TypeError;
+            },
+            .lt_int => {
+                const b = try ctx.vs.vmPop();
+                const a = try ctx.vs.vmPop();
+                if (a == .int and b == .int) {
+                    try ctx.vs.vmPush(.{ .boolean = a.int < b.int });
+                    continue;
+                }
+                setBinaryTypeError(ctx, "<", a, b);
+                return error.TypeError;
+            },
+            .le_int => {
+                const b = try ctx.vs.vmPop();
+                const a = try ctx.vs.vmPop();
+                if (a == .int and b == .int) {
+                    try ctx.vs.vmPush(.{ .boolean = a.int <= b.int });
+                    continue;
+                }
+                setBinaryTypeError(ctx, "<=", a, b);
+                return error.TypeError;
+            },
             .gt_int => {
                 const b = try ctx.vs.vmPop();
                 const a = try ctx.vs.vmPop();
@@ -2316,6 +2344,16 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                     continue;
                 }
                 setBinaryTypeError(ctx, ">", a, b);
+                return error.TypeError;
+            },
+            .ge_int => {
+                const b = try ctx.vs.vmPop();
+                const a = try ctx.vs.vmPop();
+                if (a == .int and b == .int) {
+                    try ctx.vs.vmPush(.{ .boolean = a.int >= b.int });
+                    continue;
+                }
+                setBinaryTypeError(ctx, ">=", a, b);
                 return error.TypeError;
             },
             .add_float => {
@@ -2420,6 +2458,26 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                     continue;
                 }
                 setBinaryTypeError(ctx, ">", a, b);
+                return error.TypeError;
+            },
+            .le_float => {
+                const b = try ctx.vs.vmPop();
+                const a = try ctx.vs.vmPop();
+                if (a == .float and b == .float) {
+                    try ctx.vs.vmPush(.{ .boolean = a.float <= b.float });
+                    continue;
+                }
+                setBinaryTypeError(ctx, "<=", a, b);
+                return error.TypeError;
+            },
+            .ge_float => {
+                const b = try ctx.vs.vmPop();
+                const a = try ctx.vs.vmPop();
+                if (a == .float and b == .float) {
+                    try ctx.vs.vmPush(.{ .boolean = a.float >= b.float });
+                    continue;
+                }
+                setBinaryTypeError(ctx, ">=", a, b);
                 return error.TypeError;
             },
             .local_add_local => {
@@ -2956,6 +3014,46 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 }
                 const n = try compareNumericPair(ctx, a, b, "<");
                 try ctx.vs.vmPush(.{ .boolean = n.an < n.bn });
+            },
+            .ne => {
+                const b = try ctx.vs.vmPop();
+                const a = try ctx.vs.vmPop();
+                if (a == .int and b == .int) { try ctx.vs.vmPush(.{ .boolean = a.int != b.int }); continue; }
+                if (a == .boolean and b == .boolean) { try ctx.vs.vmPush(.{ .boolean = a.boolean != b.boolean }); continue; }
+                try checkNamedValueCompatibility(ctx, a, b);
+                try ctx.vs.vmPush(.{ .boolean = !Value.equals(vms.unboxNamed(a), vms.unboxNamed(b)) });
+            },
+            .le => {
+                const b = try ctx.vs.vmPop();
+                const a = try ctx.vs.vmPop();
+                if (a == .int and b == .int) { try ctx.vs.vmPush(.{ .boolean = a.int <= b.int }); continue; }
+                if (vmbigint.isBigInt(a) or vmbigint.isBigInt(b)) {
+                    const ord = vmbigint.compareValues(a, b) catch {
+                        ctx.vs.setRuntimeErr("cannot compare bigint and {s}", .{vmtyp.runtimeTypeName(if (vmbigint.isBigInt(a)) b else a)});
+                        return error.TypeError;
+                    };
+                    try ctx.vs.vmPush(.{ .boolean = ord != .gt }); continue;
+                }
+                const n = try compareNumericPair(ctx, a, b, "<=");
+                try ctx.vs.vmPush(.{ .boolean = n.an <= n.bn });
+            },
+            .ge => {
+                const b = try ctx.vs.vmPop();
+                const a = try ctx.vs.vmPop();
+                if (a == .int and b == .int) { try ctx.vs.vmPush(.{ .boolean = a.int >= b.int }); continue; }
+                if (vmbigint.isBigInt(a) or vmbigint.isBigInt(b)) {
+                    const ord = vmbigint.compareValues(a, b) catch {
+                        ctx.vs.setRuntimeErr("cannot compare bigint and {s}", .{vmtyp.runtimeTypeName(if (vmbigint.isBigInt(a)) b else a)});
+                        return error.TypeError;
+                    };
+                    try ctx.vs.vmPush(.{ .boolean = ord != .lt }); continue;
+                }
+                const n = try compareNumericPair(ctx, a, b, ">=");
+                try ctx.vs.vmPush(.{ .boolean = n.an >= n.bn });
+            },
+            .op_unreachable => {
+                ctx.vs.setRuntimeErr("executed unreachable instruction", .{});
+                return error.Unreachable;
             },
 
             // Fused const+op: reads rhs constant, pops lhs from stack.

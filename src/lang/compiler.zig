@@ -590,19 +590,25 @@ pub const Compiler = struct {
         if (lhs_prim != rhs_prim) return op;
         return switch (lhs_prim) {
             .int => switch (op) {
-                .eq, .lt, .gt => if (lhs.is_constant or rhs.is_constant) op else switch (op) {
+                .eq, .ne, .lt, .le, .gt, .ge => if (lhs.is_constant or rhs.is_constant) op else switch (op) {
                     .eq => .eq_int,
+                    .ne => .ne_int,
                     .lt => .lt_int,
+                    .le => .le_int,
                     .gt => .gt_int,
+                    .ge => .ge_int,
                     else => unreachable,
                 },
                 else => op,
             },
             .float => switch (op) {
-                .eq, .lt, .gt => if (lhs.is_constant or rhs.is_constant) op else switch (op) {
+                .eq, .ne, .lt, .le, .gt, .ge => if (lhs.is_constant or rhs.is_constant) op else switch (op) {
                     .eq => .eq_float,
+                    .ne => .ne_float,
                     .lt => .lt_float,
+                    .le => .le_float,
                     .gt => .gt_float,
+                    .ge => .ge_float,
                     else => unreachable,
                 },
                 else => op,
@@ -655,13 +661,13 @@ pub const Compiler = struct {
         if (!(lhs.prim == .int and rhs.prim == .int)) return null;
         if (!(rhs.is_zero_int and !lhs.is_constant and !lhs.is_plain_binding)) return null;
         return switch (tt) {
-            .eq_eq => .{ .op = .eqz_int },
+            .eq_eq  => .{ .op = .eqz_int },
             .bang_eq => .{ .op = .nez_int },
-            .lt => .{ .op = .ltz_int },
-            .gt => .{ .op = .gtz_int },
-            .lt_eq => .{ .op = .gtz_int, .needs_not = true },
-            .gt_eq => .{ .op = .ltz_int, .needs_not = true },
-            else => null,
+            .lt     => .{ .op = .ltz_int },
+            .lt_eq  => .{ .op = .lez_int },
+            .gt     => .{ .op = .gtz_int },
+            .gt_eq  => .{ .op = .gez_int },
+            else    => null,
         };
     }
 

@@ -1,188 +1,217 @@
 pub const Op = enum(u8) {
-    constant,
-    null_val,
-    true_val,
-    false_val,
-    dup,
-    dup2,
-    pop,
-    def_global,
-    get_global,
-    set_global,
-    get_local,
-    set_local,
-    get_upvalue,
-    set_upvalue,
-    close_upvalue,   // u8: local slot — move cell value back to stack, giving next iteration a fresh capture
-    add,
-    sub,
-    mul,
-    add_int,
-    sub_int,
-    mul_int,
-    div_int,
-    eqz_int,
-    eq_int,
-    nez_int,
-    ne_int,
-    ltz_int,
-    lt_int,
-    gtz_int,
-    gt_int,
-    abs,
-    floor,
-    ceil,
-    trunc,
-    nearest,
-    min,
-    max,
-    sign,
-    sqrt,
-    clamp,
-    add_float,
-    sub_float,
-    mul_float,
-    div_float,
-    eq_float,
-    ne_float,
-    lt_float,
-    gt_float,
+    // ── Control flow ──────────────────────────────────────────────────────────
+    halt             = 0x00, // normal program/function end
+    op_unreachable   = 0x01, // dead-code sentinel; traps if reached
+    jump             = 0x02,
+    jump_if_false    = 0x03,
+    jif_pop          = 0x04, // pop condition then jump if falsy
+    jump_if_not_null = 0x05, // peek TOS; if not null, jump (value stays); used by ??
+    loop             = 0x06,
+
+    // ── Call / return ─────────────────────────────────────────────────────────
+    call             = 0x07,
+    call_tail        = 0x08, // tail-position call; same encoding as call
+    // Spread call: callee has named_return_count >= 2 and the call site destructures
+    // the result directly. Layout: [op][argc][spread_n][ic_hi][ic_lo] (5 bytes).
+    call_spread      = 0x09,
+    defer_call       = 0x0A,
+    invoke_method    = 0x0B,
+    defer_invoke_method = 0x0C,
+    ret              = 0x0D,
+
+    // ── Variables + closure ───────────────────────────────────────────────────
+    get_local        = 0x0E,
+    set_local        = 0x0F,
+    get_global       = 0x10,
+    set_global       = 0x11,
+    def_global       = 0x12,
+    get_upvalue      = 0x13,
+    set_upvalue      = 0x14,
+    close_upvalue    = 0x15, // u8: local slot — move cell value back to stack, giving next iteration a fresh capture
+    make_closure     = 0x16,
+
+    // ── Stack / literals ──────────────────────────────────────────────────────
+    constant         = 0x17,
+    null_val         = 0x18,
+    true_val         = 0x19,
+    false_val        = 0x1A,
+    dup              = 0x1B,
+    dup2             = 0x1C,
+    pop              = 0x1D,
+
+    // ── Generic arithmetic ────────────────────────────────────────────────────
+    add              = 0x1E,
+    sub              = 0x1F,
+    mul              = 0x20,
+    div              = 0x21,
+    int_div          = 0x22,
+    rem              = 0x23,
+    mod              = 0x24,
+    pow              = 0x25,
+    neg              = 0x26,
+
+    // ── Generic comparison / logic ────────────────────────────────────────────
+    eq               = 0x27,
+    ne               = 0x28,
+    lt               = 0x29,
+    le               = 0x2A,
+    gt               = 0x2B,
+    ge               = 0x2C,
+    not              = 0x2D,
+
+    // ── Typed int (i64) ───────────────────────────────────────────────────────
+    add_int          = 0x2E,
+    sub_int          = 0x2F,
+    mul_int          = 0x30,
+    div_int          = 0x31,
+    // zero-compare: pop one int, compare against 0
+    eqz_int          = 0x32,
+    nez_int          = 0x33,
+    ltz_int          = 0x34,
+    lez_int          = 0x35,
+    gtz_int          = 0x36,
+    gez_int          = 0x37,
+    // general compare: pop two ints
+    eq_int           = 0x38,
+    ne_int           = 0x39,
+    lt_int           = 0x3A,
+    le_int           = 0x3B,
+    gt_int           = 0x3C,
+    ge_int           = 0x3D,
+
+    // ── Typed float (f64) ─────────────────────────────────────────────────────
+    add_float        = 0x3E,
+    sub_float        = 0x3F,
+    mul_float        = 0x40,
+    div_float        = 0x41,
+    eq_float         = 0x42,
+    ne_float         = 0x43,
+    lt_float         = 0x44,
+    le_float         = 0x45,
+    gt_float         = 0x46,
+    ge_float         = 0x47,
+
+    // ── Math intrinsics ───────────────────────────────────────────────────────
+    abs              = 0x48,
+    floor            = 0x49,
+    ceil             = 0x4A,
+    trunc            = 0x4B,
+    nearest          = 0x4C,
+    min              = 0x4D,
+    max              = 0x4E,
+    sign             = 0x4F,
+    sqrt             = 0x50,
+    clamp            = 0x51,
+
+    // ── Bitwise ───────────────────────────────────────────────────────────────
+    bit_and          = 0x52,
+    bit_or           = 0x53,
+    bit_xor          = 0x54,
+    bit_not          = 0x55,
+    shl              = 0x56,
+    shr              = 0x57,
+
+    // ── Cast ──────────────────────────────────────────────────────────────────
+    cast_int         = 0x58,
+    cast_float       = 0x59,
+    cast_decimal     = 0x5A,
+    cast_bool        = 0x5B,
+    cast_string      = 0x5C,
+    cast_rune        = 0x5D,
+    cast_bigint      = 0x5E,
+
+    // ── Type system + assertions ──────────────────────────────────────────────
+    assert_type      = 0x5F, // operand byte: 1=array 2=map 3=error
+    assert_interface = 0x60, // u16: const index of interface type name
+    assert_struct    = 0x61, // u16: const index of struct type name
+    type_name        = 0x62, // pops a value, pushes its runtime type name as a string (the `.type` operator)
+    set_named_predicate   = 0x63, // pop predicate, set named_type.predicate on TOS
+    validate_type_default = 0x64, // if TOS named_type has both a default and a predicate, check the default now
+    op_assert        = 0x65,
+    op_assert_msg    = 0x66,
+    op_trap_check    = 0x67,
+    variant_check    = 0x68, // u16 const_idx: pop dup'd value, push bool (tag match)
+    variant_payload  = 0x69, // pop variant_value, push payload
+
+    // ── Collections + struct ─────────────────────────────────────────────────
+    build_array      = 0x6A,
+    build_map        = 0x6B,
+    build_tuple      = 0x6C,
+    build_struct_instance = 0x6D,
+    zero_struct      = 0x6E,
+    tuple_check_arity = 0x6F,
+    tuple_get        = 0x70,
+    tuple_get_keep   = 0x71,
+    get_index        = 0x72,
+    set_index        = 0x73,
+    get_slice        = 0x74,
+    get_field        = 0x75, // u16:name_const_idx, u16:ic_type_pool_idx, u8:ic_field_idx — struct field read with inline cache
+    set_field        = 0x76, // u16:name_const_idx, u16:ic_type_pool_idx, u8:ic_field_idx — struct field write with inline cache
+    iter_init        = 0x77,
+    iter_next1       = 0x78,
+    iter_next2       = 0x79,
+
+    // ── Special ───────────────────────────────────────────────────────────────
+    repl_print       = 0x7A, // REPL-only: print TOS if not null, then pop
+
+    // ── Fused / peephole ──────────────────────────────────────────────────────
     // Fused constant+binop: reads u16 const_idx, pops TOS (left operand),
     // applies op with the constant as right operand, pushes result.
-    // Emitted by the peephole when `constant k` immediately precedes the op.
-    const_eq,
-    const_sub,
-    const_add,
-    const_lt,
-    const_gt,
+    const_eq         = 0x7B,
+    const_sub        = 0x7C,
+    const_add        = 0x7D,
+    const_lt         = 0x7E,
+    const_gt         = 0x7F,
     // Triple-fused get_local+constant+binop. Same 5-byte layout as
     // get_local(2) + const_eq/sub/add/lt/gt(3). The middle byte (the original const_*
     // opcode, now a skip byte) is read and discarded by the VM.
-    // Emitted when get_local immediately precedes a const_eq, const_sub, const_add, const_lt, or const_gt.
-    get_local_const_eq,
-    get_local_const_sub,
-    get_local_const_add,
-    get_local_const_lt,
-    get_local_const_gt,
+    get_local_const_eq  = 0x80,
+    get_local_const_sub = 0x81,
+    get_local_const_add = 0x82,
+    get_local_const_lt  = 0x83,
+    get_local_const_gt  = 0x84,
     // Quad-fused get_local+constant+eq+jif_pop: 9-byte conditional branch.
     // Layout: [op][slot][skip][idx_hi][idx_lo][jmp_hi][jmp_lo]
-    // Emitted when get_local_const_eq immediately precedes jif_pop.
-    get_local_const_eq_jif_pop,
-    // Quad-fused get_local+constant+lt+jif_pop: 9-byte conditional branch.
-    // Layout: [op][slot][skip=const_lt_byte][idx_hi][idx_lo][exit_b3][exit_b2][exit_b1][exit_b0]
-    // Emitted when get_local_const_lt immediately precedes jif_pop.
-    get_local_const_lt_jif_pop,
-    // Quad-fused get_local+constant+gt+jif_pop: 9-byte conditional branch.
-    // Layout: [op][slot][skip=const_gt_byte][idx_hi][idx_lo][exit_b3][exit_b2][exit_b1][exit_b0]
-    // Emitted when get_local_const_gt immediately precedes jif_pop.
-    get_local_const_gt_jif_pop,
+    get_local_const_eq_jif_pop  = 0x85,
+    // Quad-fused get_local+constant+lt/gt+jif_pop: 9-byte conditional branch.
+    // Layout: [op][slot][skip][idx_hi][idx_lo][exit_b3][exit_b2][exit_b1][exit_b0]
+    get_local_const_lt_jif_pop  = 0x86,
+    get_local_const_gt_jif_pop  = 0x87,
     // Quint-fused get_local+constant+lt+jif_pop+jump: 13-byte for-loop header.
     // Layout: [op][slot][skip][idx_hi][idx_lo][exit_b3..b0][body_b3..b0]
-    // When a < k: ip += body_off (jump to body, past post-increment).
-    // When a >= k: ip (at mid, after exit_off read) += exit_off (jump to loop end).
-    // Emitted when get_local_const_lt_jif_pop immediately precedes jump.
-    get_local_const_lt_jif_pop_jump,
+    get_local_const_lt_jif_pop_jump = 0x88,
     // Triple-fused get_global+constant+binop. 8-byte layout:
     // [op][glob_hi][glob_lo][ic_hi][ic_lo][skip][val_hi][val_lo]
-    // Emitted when get_global immediately precedes a const_eq, const_sub, const_add, or const_lt.
-    get_global_const_eq,
-    get_global_const_sub,
-    get_global_const_add,
-    get_global_const_lt,
+    get_global_const_eq  = 0x89,
+    get_global_const_sub = 0x8A,
+    get_global_const_add = 0x8B,
+    get_global_const_lt  = 0x8C,
     // Quad-fused get_global+constant+lt+jif_pop: 12-byte conditional branch.
-    // Layout: [op][glob_hi][glob_lo][ic_hi][ic_lo][skip][val_hi][val_lo][jmp_b3][jmp_b2][jmp_b1][jmp_b0]
-    // Emitted when get_global_const_lt immediately precedes jif_pop.
-    get_global_const_lt_jif_pop,
+    // Layout: [op][glob_hi][glob_lo][ic_hi][ic_lo][skip][val_hi][val_lo][jmp_b3..b0]
+    get_global_const_lt_jif_pop = 0x8D,
     // Fused get_local+get_field: 8-byte load-and-read-field.
     // Layout: [op][slot][skip=get_field_byte][name_hi][name_lo][ic_type_hi][ic_type_lo][ic_fidx]
-    // Emitted when get_local immediately precedes get_field.
-    get_local_get_field,
-    div,
-    int_div,
-    rem,
-    mod,
-    pow,
-    bit_and,
-    bit_or,
-    bit_xor,
-    bit_not,
-    shl,
-    shr,
-    cast_int,
-    cast_float,
-    cast_decimal,
-    cast_bool,
-    cast_string,
-    cast_rune,
-    cast_bigint,
-    assert_type, // operand byte: 1=array 2=map 3=error
-    assert_interface, // u16: const index of interface type name
-    assert_struct,    // u16: const index of struct type name
-    type_name, // pops a value, pushes its runtime type name as a string (the `.type` operator)
-    neg,
-    not,
-    eq,
-    gt,
-    lt,
-    build_array,
-    build_map,
-    build_tuple,
-    build_struct_instance,
-    zero_struct,
-    tuple_check_arity,
-    tuple_get,
-    tuple_get_keep,
-    get_index,
-    set_index,
-    get_slice,
-    iter_init,
-    iter_next1,
-    iter_next2,
-    make_closure,
-    invoke_method,
-    jump,
-    jump_if_false,
-    jump_if_not_null, // peek TOS; if not null, jump forward by offset (value stays); used by ??
-    jif_pop,          // pop condition then jump if it was falsy; used by if/while/for/switch
-    loop,
-    set_global_loop,  // fused: set_global (5 bytes) + loop back-edge (2 bytes); same IC layout
-    close_upvalue_loop, // fused: close_upvalue (2 bytes) + loop back-edge; layout: [op][slot][off_b3..b0] (6 bytes)
-    set_named_predicate, // pop predicate, set named_type.predicate on TOS
-    validate_type_default, // if TOS named_type has both a default and a predicate, check the default now
-    call,
-    call_tail, // tail-position call; same encoding as call; VM skips tryTailCall for plain call
-    // Spread call: callee has named_return_count >= 2 and the call site destructures
-    // the result directly. The ret handler pushes spread_n individual values instead
-    // of boxing into a tuple.  Layout: [op][argc][spread_n][ic_hi][ic_lo] (5 bytes).
-    call_spread,
-    defer_call,
-    defer_invoke_method,
-    op_assert,
-    op_assert_msg,
-    op_trap_check,
-    variant_check,   // u16 const_idx: pop dup'd value, push bool (tag match)
-    variant_payload, // pop variant_value, push payload
-    get_field,       // u16:name_const_idx, u16:ic_type_pool_idx, u8:ic_field_idx — struct field read with inline cache
-    set_field,       // u16:name_const_idx, u16:ic_type_pool_idx, u8:ic_field_idx — struct field write with inline cache
-    ret,
-    ret_const,       // fused constant+ret: [op][idx_hi][idx_lo]; same 3-byte layout as `constant k`
-    get_local_ret,   // fused get_local+ret: [op][slot]; same 2-byte layout as `get_local slot`
-    get_local_const_sub_call, // fused get_local_const_sub+call: [op][slot][skip][idx_hi][idx_lo][argc] (6 bytes)
-    get_local_const_sub_call_tail, // tail-position variant; same encoding
+    get_local_get_field  = 0x8E,
+    // Fused loop variants
+    set_global_loop      = 0x8F, // fused: set_global (5 bytes) + loop back-edge (2 bytes); same IC layout
+    close_upvalue_loop   = 0x90, // fused: close_upvalue (2 bytes) + loop back-edge; layout: [op][slot][off_b3..b0] (6 bytes)
+    // Fused ret variants
+    ret_const            = 0x91, // fused constant+ret: [op][idx_hi][idx_lo]
+    get_local_ret        = 0x92, // fused get_local+ret: [op][slot]
+    // Fused call variants
+    get_local_const_sub_call      = 0x93, // fused get_local_const_sub+call: [op][slot][skip][idx_hi][idx_lo][argc] (6 bytes)
+    get_local_const_sub_call_tail = 0x94, // tail-position variant; same encoding
     // Hexa-fused get_global+get_local+const+sub+call: 11-byte recursive-call fast path.
     // Layout: [op][name_hi][name_lo][ic_hi][ic_lo][glcs_skip][slot][const_sub_skip][idx_hi][idx_lo][argc]
-    // Emitted when get_global immediately precedes get_local_const_sub_call.
-    call_global_local_sub_const,
-    call_global_local_sub_const_tail, // tail-position variant; same encoding
-    add_ret,         // fused add+ret: [op]; same 1-byte layout as `add`
-    local_add_local, // fused get_local+get_local+add+set_local: [op][dst][src] (3 bytes); dst += src
-    local_add_const, // fused get_local+const_add+set_local: [op][dst][idx_hi][idx_lo] (4 bytes); dst += k
-    local_add_const_loop, // fused local_add_const+loop: [op][dst][idx_hi][idx_lo][off_b3..b0] (8 bytes)
-    local_add_field, // fused get_local+get_local_get_field+add+set_local: [op][dst][src][skip][name_hi][name_lo][ic_hi][ic_lo][ic_fidx] (9 bytes); dst += src.field
+    call_global_local_sub_const      = 0x95,
+    call_global_local_sub_const_tail = 0x96, // tail-position variant; same encoding
+    // Fused arithmetic
+    add_ret          = 0x97, // fused add+ret: [op]
+    local_add_local  = 0x98, // fused get_local+get_local+add+set_local: [op][dst][src] (3 bytes); dst += src
+    local_add_const  = 0x99, // fused get_local+const_add+set_local: [op][dst][idx_hi][idx_lo] (4 bytes); dst += k
+    local_add_const_loop = 0x9A, // fused local_add_const+loop: [op][dst][idx_hi][idx_lo][off_b3..b0] (8 bytes)
+    local_add_field  = 0x9B, // fused get_local+get_local_get_field+add+set_local: [op][dst][src][skip][name_hi][name_lo][ic_hi][ic_lo][ic_fidx] (9 bytes); dst += src.field
     // Fused get_global_const_add+set_global (same global): 8-byte in-place global increment.
-    // Layout: [op][name_hi][name_lo][ic_hi][ic_lo][add_skip][val_hi][val_lo] (same as get_global_const_add)
-    // Emitted when get_global_const_add immediately precedes set_global with the same name.
-    inc_global_const,
-    repl_print,      // REPL-only: print TOS if not null, then pop
-    halt,
+    // Layout: [op][name_hi][name_lo][ic_hi][ic_lo][add_skip][val_hi][val_lo]
+    inc_global_const = 0x9C,
 };

@@ -395,19 +395,14 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
             if (c.selectZeroIntCompare(.bang_eq, lhs_info, rhs_info)) |zero_cmp| {
                 try c.cs.emitOp(.pop, line);
                 try c.cs.emitOp(zero_cmp.op, line);
-                if (zero_cmp.needs_not) try c.cs.emitOp(.not, line);
-            } else if (c.selectTypedNotEqualOp(lhs_info, rhs_info)) |op| {
-                try c.cs.emitOp(op, line);
             } else {
-                try c.cs.emitBinOpFused(c.selectTypedComparisonOp(.eq, lhs_info, rhs_info), line);
-                try c.cs.emitOp(.not, line);
+                try c.cs.emitBinOpFused(c.selectTypedComparisonOp(.ne, lhs_info, rhs_info), line);
             }
         },
         .gt => {
             if (c.selectZeroIntCompare(.gt, lhs_info, rhs_info)) |zero_cmp| {
                 try c.cs.emitOp(.pop, line);
                 try c.cs.emitOp(zero_cmp.op, line);
-                if (zero_cmp.needs_not) try c.cs.emitOp(.not, line);
             } else {
                 try c.cs.emitBinOpFused(c.selectTypedComparisonOp(.gt, lhs_info, rhs_info), line);
             }
@@ -416,17 +411,14 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
             if (c.selectZeroIntCompare(.gt_eq, lhs_info, rhs_info)) |zero_cmp| {
                 try c.cs.emitOp(.pop, line);
                 try c.cs.emitOp(zero_cmp.op, line);
-                if (zero_cmp.needs_not) try c.cs.emitOp(.not, line);
             } else {
-                try c.cs.emitBinOpFused(c.selectTypedComparisonOp(.lt, lhs_info, rhs_info), line);
-                try c.cs.emitOp(.not, line);
+                try c.cs.emitBinOpFused(c.selectTypedComparisonOp(.ge, lhs_info, rhs_info), line);
             }
         },
         .lt => {
             if (c.selectZeroIntCompare(.lt, lhs_info, rhs_info)) |zero_cmp| {
                 try c.cs.emitOp(.pop, line);
                 try c.cs.emitOp(zero_cmp.op, line);
-                if (zero_cmp.needs_not) try c.cs.emitOp(.not, line);
             } else {
                 try c.cs.emitBinOpFused(c.selectTypedComparisonOp(.lt, lhs_info, rhs_info), line);
             }
@@ -435,10 +427,8 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
             if (c.selectZeroIntCompare(.lt_eq, lhs_info, rhs_info)) |zero_cmp| {
                 try c.cs.emitOp(.pop, line);
                 try c.cs.emitOp(zero_cmp.op, line);
-                if (zero_cmp.needs_not) try c.cs.emitOp(.not, line);
             } else {
-                try c.cs.emitOp(c.selectTypedComparisonOp(.gt, lhs_info, rhs_info), line);
-                try c.cs.emitOp(.not, line);
+                try c.cs.emitBinOpFused(c.selectTypedComparisonOp(.le, lhs_info, rhs_info), line);
             }
         },
         else => unreachable,
