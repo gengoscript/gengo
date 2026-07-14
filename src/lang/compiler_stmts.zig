@@ -887,25 +887,23 @@ pub fn incrStmt(c: anytype) !void {
     c.advance();
     const is_inc = c.cur.typ == .plus_plus;
     c.advance();
-    try c.emitGetVar(name);
     const tc = c.getLocalTypeCheck(name.src);
     if (tc) |t| {
         if (t == .named) {
-            const base_prim = c.namedTypeCheckBasePrim(t);
             try c.emitVarTypeProlog(t, name.line);
-            if (base_prim == .float) {
-                try c.cs.emitConst(.{ .float = 1.0 }, name.line);
-            } else {
-                try c.cs.emitConst(.{ .int = 1.0 }, name.line);
-            }
-            try c.cs.emitCall(1, name.line);
+            try c.emitGetVar(name);
+            try c.cs.emitOp(.named_inner, name.line);
+            try c.cs.emitConst(.{ .int = 1.0 }, name.line);
             try c.cs.emitBinOpFused(if (is_inc) .add else .sub, name.line);
+            try c.cs.emitCall(1, name.line);
         } else {
+            try c.emitGetVar(name);
             try c.cs.emitConst(.{ .int = 1.0 }, name.line);
             try c.cs.emitBinOpFused(if (is_inc) .add else .sub, name.line);
             try c.emitVarTypeEpilog(t, name.line);
         }
     } else {
+        try c.emitGetVar(name);
         try c.cs.emitConst(.{ .int = 1.0 }, name.line);
         try c.cs.emitBinOpFused(if (is_inc) .add else .sub, name.line);
     }
