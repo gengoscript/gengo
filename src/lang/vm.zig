@@ -302,7 +302,6 @@ fn decimalOpValues(a: Value, b: Value) ?struct { lhs: i64, rhs: i64, typ: *Objec
 
 fn pushDecimalResultWithCarrier(ctx: VMContext, typ: *Object, d: i64) !void {
     const wrapped = try vmtyp.coerceNamedTypeResult(ctx, typ, .{ .decimal = d });
-    try checkNamedTypePredicate(ctx, typ, wrapped.namedInner() orelse unreachable);
     try ctx.vs.vmPush(wrapped);
 }
 
@@ -411,7 +410,6 @@ fn wrapValueWithCarrier(ctx: VMContext, a: Value, b: Value, val: Value, op: []co
     };
     if (carrier) |typ| {
         const wrapped = try vmtyp.coerceNamedTypeResult(ctx, typ, val);
-        try checkNamedTypePredicate(ctx, typ, wrapped.namedInner() orelse unreachable);
         return wrapped;
     }
     return val;
@@ -442,7 +440,6 @@ fn pushUnaryIntResult(ctx: VMContext, v: Value, result: Value) !void {
     _ = try ctx.vs.vmPop();
     if (v.namedTyp()) |typ| {
         const wrapped = try vmtyp.coerceNamedTypeResult(ctx, typ, result);
-        try checkNamedTypePredicate(ctx, typ, wrapped.namedInner() orelse unreachable);
         try ctx.vs.vmPush(wrapped);
     } else {
         try ctx.vs.vmPush(result);
@@ -2051,7 +2048,7 @@ noinline fn dispatchTick(ctx: VMContext) !u64 {
 inline fn fetchOp(ctx: VMContext) !Op {
     if (ctx.vs.ip >= ctx.cs.code_len) return error.BytecodeOutOfBounds;
     const op_raw = opByte(ctx);
-    if (op_raw > @intFromEnum(Op.iter_next2) and
+    if (op_raw > @intFromEnum(Op.check_named_predicate) and
         (op_raw < @intFromEnum(Op.const_eq) or op_raw > @intFromEnum(Op.inc_global_const)))
         return error.InvalidChunkShape;
     vmperf.countOp(op_raw);
@@ -3719,6 +3716,18 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 if (nt.has_default and nt.predicate != null) {
                     const constructed = try vmtyp.constructNamedType(ctx, nt_val.object, nt.default_val);
                     try checkNamedTypePredicate(ctx, nt_val.object, constructed.namedInner() orelse unreachable);
+                }
+            },
+
+            .named_inner => {
+                const val = try ctx.vs.vmPop();
+                try ctx.vs.vmPush(val.namedInner() orelse val);
+            },
+
+            .check_named_predicate => {
+                const val = try ctx.vs.vmPeek(0);
+                if (val.namedTyp()) |nt_obj| {
+                    try checkNamedTypePredicate(ctx, nt_obj, val.namedInner() orelse unreachable);
                 }
             },
 

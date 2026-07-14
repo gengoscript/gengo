@@ -512,6 +512,12 @@ pub const Compiler = struct {
         return self.expr_prim_info[self.expr_depth];
     }
 
+    pub fn emitPredicateCheck(self: *Compiler, line: u32) !void {
+        if (self.currentExprPrimInfo().named_type != null) {
+            try self.cs.emitOp(.check_named_predicate, line);
+        }
+    }
+
     pub fn childExprPrimInfo(self: *Compiler) ExprPrimInfo {
         return self.expr_prim_info[self.expr_depth + 1];
     }
@@ -734,7 +740,7 @@ pub const Compiler = struct {
         _ = self;
         if (common.streq(direct_name, "module:std.math.abs")) {
             return switch (arg_info.prim orelse return .{}) {
-                .int => .{ .prim = .int, .is_constant = arg_info.is_constant, .is_zero_int = arg_info.is_zero_int },
+                .int => .{ .prim = .int, .named_type = arg_info.named_type, .is_constant = arg_info.is_constant, .is_zero_int = arg_info.is_zero_int },
                 .float => .{ .prim = .float, .is_constant = arg_info.is_constant },
                 else => .{},
             };
