@@ -151,7 +151,10 @@ pub const Op = enum(u8) {
     iter_next1       = 0x78,
     iter_next2       = 0x79,
 
-    // 0x7A–0xBF: reserved for future core ops (70 slots)
+    named_inner          = 0x7A, // pop Value.named(T, v), push v
+    check_named_predicate = 0x7B, // pop value; if named, check predicate on its type
+
+    // 0x7C–0xBF: reserved for future core ops (68 slots)
 
     // ── Fused / peephole (0xC0–0xFF, 64 slots) ───────────────────────────────
     // Fused constant+binop: reads u16 const_idx, pops TOS (left operand),

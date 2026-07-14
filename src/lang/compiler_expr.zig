@@ -199,6 +199,7 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
                             c.cs.deleteCodeRange(patch_pos, 5);
                             try c.cs.emitOp(intrinsic_op, prop.line);
                             c.setCurrentExprPrimInfo(c.stdMathUnaryIntrinsicResultInfo(direct_name, first_arg_info));
+                            try c.emitPredicateCheck(prop.line);
                             return;
                         }
                         if (c.selectStdMathBinaryIntrinsicOp(direct_name, argc)) |intrinsic_op| {
@@ -440,6 +441,7 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
         .slash => .div,
         else => .halt,
     }, lhs_info, rhs_info);
+    try c.emitPredicateCheck(line);
 }
 
 pub fn looksLikeStructLiteral(c: anytype) bool {
@@ -645,7 +647,17 @@ pub fn structInstanceLitAfterValue(c: anytype, line: u32) !void {
 pub fn unaryExpr(c: anytype, tt: TT) !void {
     try parsePrecedence(c, .unary);
     switch (tt) {
-        .minus => try c.cs.emitOp(.neg, c.prev.line),
+        .minus => {
+            try c.cs.emitOp(.neg, c.prev.line);
+            const child_info = c.childExprPrimInfo();
+            if (child_info.named_type) |nt| {
+                c.expr_prim_info[c.expr_depth] = .{
+                    .prim = child_info.prim,
+                    .named_type = nt,
+                };
+                try c.emitPredicateCheck(c.prev.line);
+            }
+        },
         .kw_not => try c.cs.emitOp(.not, c.prev.line),
         .tilde => try c.cs.emitOp(.bit_not, c.prev.line),
         else => unreachable,

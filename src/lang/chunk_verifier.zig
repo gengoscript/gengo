@@ -58,6 +58,7 @@ fn stackEffect(op: Op, code: []const u8, ip: usize) struct { pop: u8, push: u8 }
         .abs, .floor, .ceil, .trunc, .nearest, .sign, .sqrt,
         .cast_int, .cast_float, .cast_decimal, .cast_bool, .cast_string, .cast_rune, .cast_bigint,
         .type_name, .variant_check, .variant_payload,
+        .named_inner,
         .const_eq, .const_sub, .const_add, .const_lt, .const_gt,
         .assert_type, .assert_interface, .assert_struct,
         .tuple_get => .{ .pop = 1, .push = 1 },
@@ -116,7 +117,8 @@ fn stackEffect(op: Op, code: []const u8, ip: usize) struct { pop: u8, push: u8 }
         .dup => .{ .pop = 0, .push = 1 },
         .dup2 => .{ .pop = 0, .push = 2 },
 
-        .close_upvalue, .tuple_check_arity, .validate_type_default => .{ .pop = 0, .push = 0 },
+        .close_upvalue, .tuple_check_arity, .validate_type_default,
+        .check_named_predicate => .{ .pop = 0, .push = 0 },
         .get_local_const_sub_call, .get_local_const_sub_call_tail => blk: {
             const argc = code[ip + 5];
             break :blk .{ .pop = argc, .push = 1 };
