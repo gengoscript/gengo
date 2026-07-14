@@ -1,0 +1,3 @@
+type Flags int predicate func(x) { return x >= 0 }
+f := Flags(0)
+g := ~f
