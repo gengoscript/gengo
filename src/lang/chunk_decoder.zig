@@ -25,8 +25,10 @@ pub fn decodeAt(state: anytype, pos: usize) !DecodedInstruction {
     if (pos >= state.code_len) return error.BytecodeOutOfBounds;
 
     const raw = state.code[pos];
-    const max_op = @intFromEnum(Op.inc_global_const);
-    if (raw > max_op) return error.BadOpcode;
+    // Reject bytes in the gap between core ops and fused ops (0x7B–0xBF),
+    // and bytes above the last fused op.
+    if (raw > @intFromEnum(Op.repl_print) and raw < @intFromEnum(Op.const_eq)) return error.BadOpcode;
+    if (raw > @intFromEnum(Op.inc_global_const)) return error.BadOpcode;
     const op: Op = @enumFromInt(raw);
 
     return switch (op) {
