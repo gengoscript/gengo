@@ -518,9 +518,17 @@ pub const Compiler = struct {
         return self.expr_prim_info[self.expr_depth];
     }
 
-    pub fn emitPredicateCheck(self: *Compiler, line: u32) !void {
-        if (self.currentExprPrimInfo().named_type != null) {
-            try self.cs.emitOp(.check_named_predicate, line);
+    pub fn emitPredicateCheck(self: *Compiler, tc: TypeCheck, line: u32) !void {
+        switch (tc) {
+            .named => try self.cs.emitOp(.check_named_predicate, line),
+            else => {},
+        }
+    }
+
+    /// Legacy wrapper: emit predicate check for the current expression's named type.
+    pub fn emitPredicateCheckCurrent(self: *Compiler, line: u32) !void {
+        if (self.currentExprPrimInfo().named_type) |name| {
+            try self.emitPredicateCheck(.{ .named = name }, line);
         }
     }
 
