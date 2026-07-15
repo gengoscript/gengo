@@ -471,7 +471,7 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
         },
         else => unreachable,
     }
-    c.setCurrentExprPrimResult(switch (tt) {
+    try c.setCurrentExprPrimResult(switch (tt) {
         .plus => .add,
         .minus => .sub,
         .star => .mul,

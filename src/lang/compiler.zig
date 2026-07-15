@@ -665,7 +665,7 @@ pub const Compiler = struct {
         };
     }
 
-    pub fn setCurrentExprPrimResult(self: *Compiler, op: Op, lhs: ExprPrimInfo, rhs: ExprPrimInfo) void {
+    pub fn setCurrentExprPrimResult(self: *Compiler, op: Op, lhs: ExprPrimInfo, rhs: ExprPrimInfo) !void {
         const lhs_prim = lhs.prim orelse {
             self.clearCurrentExprPrimInfo();
             return;
@@ -679,6 +679,14 @@ pub const Compiler = struct {
             return;
         }
         const is_constant = lhs.is_constant and rhs.is_constant;
+        if (lhs.named_type) |ln| {
+            if (rhs.named_type) |rn| {
+                if (!common.streq(ln, rn) and !self.registry.areNamedTypesCompatible(ln, rn)) {
+                    self.setErr("cannot mix named types '{s}' and '{s}' in '{s}' operation", .{ ln, rn, @tagName(op) });
+                    return error.TypeMismatch;
+                }
+            }
+        }
         const result_named: ?[]const u8 = if (lhs.named_type) |ln|
             if (rhs.named_type) |rn|
                 if (common.streq(ln, rn)) ln else null
