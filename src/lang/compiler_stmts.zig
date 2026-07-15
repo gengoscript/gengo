@@ -1752,6 +1752,12 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
             self_ref_slot = sr;
         }
         try c.expr();
+        // Infer named type from constructor call: d := Meters(5) → TypeCheck.named = "Meters"
+        if (inferred_type_check == .none) {
+            if (c.currentExprPrimInfo().named_type) |nt| {
+                inferred_type_check = .{ .named = nt };
+            }
+        }
         if (self_ref_slot != null) {
             try c.cs.emit2(@intFromEnum(Op.set_local), self_ref_slot.?, name.line);
         }
