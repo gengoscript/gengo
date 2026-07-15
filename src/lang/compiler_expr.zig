@@ -278,6 +278,8 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
         return;
     }
     if (tt == .lparen) {
+        // Save callee's named_type info before clearing (set by varExpr for named type constructors).
+        const callee_named_type = c.currentExprPrimInfo().named_type;
         c.clearCurrentExprPrimInfo();
         // Capture spread info for this callee before parsing args (which may overwrite it).
         const callee_spread_n = c.pending_call_spread_count;
@@ -310,6 +312,10 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
             }
         } else {
             try c.cs.emitCall(argc, line);
+        }
+        // Propagate named_type from callee (e.g. Meters(5) → named_type = "Meters").
+        if (callee_named_type) |nt| {
+            c.expr_prim_info[c.expr_depth] = .{ .named_type = nt };
         }
         return;
     }
@@ -748,6 +754,12 @@ pub fn varExpr(c: anytype, name: Token) !void {
         try c.cs.emitOp(.eq, name.line);
         if (!is_eq) try c.cs.emitOp(.not, name.line);
         return;
+    }
+    // If this is a known named type, record it in ExprPrimInfo so that
+    // infixExpr(.lparen) can detect a constructor call and propagate the type.
+    if (c.registry.hasNamedType(name.src)) {
+        const qname = try c.qualifyTypeName(name.src);
+        c.expr_prim_info[c.expr_depth] = .{ .named_type = qname };
     }
     try c.emitGetVar(name);
 }
