@@ -2051,7 +2051,7 @@ noinline fn dispatchTick(ctx: VMContext) !u64 {
 inline fn fetchOp(ctx: VMContext) !Op {
     if (ctx.vs.ip >= ctx.cs.code_len) return error.BytecodeOutOfBounds;
     const op_raw = opByte(ctx);
-    if (op_raw > @intFromEnum(Op.check_named_predicate) and
+    if (op_raw > @intFromEnum(Op.swap) and
         (op_raw < @intFromEnum(Op.const_eq) or op_raw > @intFromEnum(Op.inc_global_const)))
         return error.InvalidChunkShape;
     vmperf.countOp(op_raw);
@@ -3725,6 +3725,13 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
             .named_inner => {
                 const val = try ctx.vs.vmPop();
                 try ctx.vs.vmPush(val.namedInner() orelse val);
+            },
+
+            .swap => {
+                const a = try ctx.vs.vmPop();
+                const b = try ctx.vs.vmPop();
+                try ctx.vs.vmPush(a);
+                try ctx.vs.vmPush(b);
             },
 
             .check_named_predicate => {
