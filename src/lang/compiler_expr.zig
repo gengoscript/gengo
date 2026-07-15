@@ -254,7 +254,8 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
                     try c.cs.emitGetGlobal(method_buf[0..found_len], prop.line);
                     try c.cs.emitOp(.swap, prop.line);
                     try c.cs.emitCall(argc + 1, prop.line);
-                    c.clearCurrentExprPrimInfo();
+                    // Propagate named_type to the result so chained calls also get static dispatch.
+                    c.expr_prim_info[c.expr_depth] = .{ .named_type = nt };
                     return;
                 }
                 // Fall through to dynamic dispatch if method not found at compile time.
@@ -269,6 +270,10 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
         try c.cs.emitGetField(prop.src, line);
         if (c.check(.lbrace) and looksLikeStructLiteral(c, )) {
             try structInstanceLitAfterValue(c, prop.line);
+        }
+        // Propagate named_type through field access (e.g. enum member reads).
+        if (receiver_named_type) |nt| {
+            c.expr_prim_info[c.expr_depth] = .{ .named_type = nt };
         }
         return;
     }
