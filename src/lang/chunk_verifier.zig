@@ -63,6 +63,8 @@ fn stackEffect(op: Op, code: []const u8, ip: usize) struct { pop: u8, push: u8 }
         .assert_type, .assert_interface, .assert_struct,
         .tuple_get => .{ .pop = 1, .push = 1 },
 
+        .swap => .{ .pop = 2, .push = 2 },
+
         .set_index => .{ .pop = 3, .push = 0 },
 
         .get_index => .{ .pop = 2, .push = 1 },

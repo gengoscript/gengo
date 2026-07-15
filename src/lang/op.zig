@@ -155,6 +155,7 @@ pub const Op = enum(u8) {
     check_named_predicate = 0x7B, // pop value; if named, check predicate on its type
 
     // 0x7C–0xBF: reserved for future core ops (68 slots)
+    swap = 0x7C, // swap top two stack values
 
     // ── Fused / peephole (0xC0–0xFF, 64 slots) ───────────────────────────────
     // Fused constant+binop: reads u16 const_idx, pops TOS (left operand),

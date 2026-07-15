@@ -224,6 +224,27 @@ pub const State = struct {
                 }
             }
         }
+        // swap disrupts operand ordering — reset peephole trackers to prevent
+        // invalid fusion of instructions that no longer sit next to their operands.
+        if (op == .swap) {
+            self.last_const_code_pos = null;
+            self.prev_const_code_pos = null;
+            self.last_get_local_code_pos = null;
+            self.last_triple_eq_pos = null;
+            self.last_triple_lt_pos = null;
+            self.last_triple_gt_pos = null;
+            self.last_get_local_const_sub_pos = null;
+            self.last_get_local_const_add_pos = null;
+            self.last_get_global_code_pos = null;
+            self.last_triple_global_eq_pos = null;
+            self.last_triple_global_lt_pos = null;
+            self.last_set_global_code_pos = null;
+            self.last_quad_lt_jif_pos = null;
+            self.last_close_upvalue_pos = null;
+            self.last_call_pos = null;
+            self.last_local_add_const_pos = null;
+            self.last_get_global_const_add_pos = null;
+        }
         return self.emitByte(@intFromEnum(op), line);
     }
 

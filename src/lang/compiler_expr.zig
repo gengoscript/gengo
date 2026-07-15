@@ -131,6 +131,8 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
     const col = c.prev.col;
 
     if (tt == .dot) {
+        // Save receiver's named_type before clearing (for static method dispatch in 3b).
+        const receiver_named_type = c.currentExprPrimInfo().named_type;
         c.clearCurrentExprPrimInfo();
         if (c.cur.typ == .kw_type) {
             c.advance(); // consume 'type'
@@ -232,6 +234,21 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
             try c.consume(.rparen);
             if (is_std_func) {
                 try c.cs.emitCall(argc, prop.line);
+            } else if (receiver_named_type) |nt| {
+                // Static method dispatch: look up named_type.method at compile time.
+                var method_buf: [128]u8 = undefined;
+                const method_name = std.fmt.bufPrint(&method_buf, "{s}.{s}", .{ nt, prop.src }) catch "";
+                if (c.registry.hasGlobalFunc(method_name)) {
+                    // Receiver is on the stack. Push the function, swap, then call.
+                    // Stack: [receiver] → [receiver, func] → [func, receiver] → [func, receiver, args...]
+                    try c.cs.emitGetGlobal(method_name, prop.line);
+                    try c.cs.emitOp(.swap, prop.line);
+                    try c.cs.emitCall(argc + 1, prop.line);
+                    c.clearCurrentExprPrimInfo();
+                    return;
+                }
+                // Fall through to dynamic dispatch if method not found at compile time.
+                try c.cs.emitInvokeMethod(prop.src, argc, line);
             } else {
                 try c.cs.emitInvokeMethod(prop.src, argc, line);
             }
