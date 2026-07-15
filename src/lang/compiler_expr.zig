@@ -407,69 +407,104 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
     try parsePrecedence(c, p.next());
     const rhs_info = c.childExprPrimInfo();
     c.cs.setCol(col);
-    switch (tt) {
-        .plus  => try c.cs.emitBinOpFused(c.selectTypedArithmeticOp(.add, lhs_info, rhs_info), line),
-        .minus => try c.cs.emitBinOpFused(c.selectTypedArithmeticOp(.sub, lhs_info, rhs_info), line),
-        .star  => try c.cs.emitOp(c.selectTypedArithmeticOp(.mul, lhs_info, rhs_info), line),
-        .slash => try c.cs.emitOp(c.selectTypedArithmeticOp(.div, lhs_info, rhs_info), line),
-        .kw_div => try c.cs.emitOp(.int_div, line),
-        .kw_rem => try c.cs.emitOp(.rem, line),
-        .kw_mod => try c.cs.emitOp(.mod, line),
-        .amp   => try c.cs.emitOp(.bit_and, line),
-        .pipe  => try c.cs.emitOp(.bit_or, line),
-        .caret => try c.cs.emitOp(.bit_xor, line),
-        .lt_lt => try c.cs.emitOp(.shl, line),
-        .gt_gt => try c.cs.emitOp(.shr, line),
-        .eq_eq => {
-            if (c.selectZeroIntCompare(.eq_eq, lhs_info, rhs_info)) |zero_cmp| {
-                try c.cs.emitOp(.pop, line);
-                try c.cs.emitOp(zero_cmp.op, line);
-                if (zero_cmp.needs_not) try c.cs.emitOp(.not, line);
-            } else {
-                try c.cs.emitBinOpFused(c.selectTypedComparisonOp(.eq, lhs_info, rhs_info), line);
-            }
-        },
-        .bang_eq => {
-            if (c.selectZeroIntCompare(.bang_eq, lhs_info, rhs_info)) |zero_cmp| {
-                try c.cs.emitOp(.pop, line);
-                try c.cs.emitOp(zero_cmp.op, line);
-            } else {
-                try c.cs.emitBinOpFused(c.selectTypedComparisonOp(.ne, lhs_info, rhs_info), line);
-            }
-        },
-        .gt => {
-            if (c.selectZeroIntCompare(.gt, lhs_info, rhs_info)) |zero_cmp| {
-                try c.cs.emitOp(.pop, line);
-                try c.cs.emitOp(zero_cmp.op, line);
-            } else {
-                try c.cs.emitBinOpFused(c.selectTypedComparisonOp(.gt, lhs_info, rhs_info), line);
-            }
-        },
-        .gt_eq => {
-            if (c.selectZeroIntCompare(.gt_eq, lhs_info, rhs_info)) |zero_cmp| {
-                try c.cs.emitOp(.pop, line);
-                try c.cs.emitOp(zero_cmp.op, line);
-            } else {
-                try c.cs.emitBinOpFused(c.selectTypedComparisonOp(.ge, lhs_info, rhs_info), line);
-            }
-        },
-        .lt => {
-            if (c.selectZeroIntCompare(.lt, lhs_info, rhs_info)) |zero_cmp| {
-                try c.cs.emitOp(.pop, line);
-                try c.cs.emitOp(zero_cmp.op, line);
-            } else {
-                try c.cs.emitBinOpFused(c.selectTypedComparisonOp(.lt, lhs_info, rhs_info), line);
-            }
-        },
-        .lt_eq => {
-            if (c.selectZeroIntCompare(.lt_eq, lhs_info, rhs_info)) |zero_cmp| {
-                try c.cs.emitOp(.pop, line);
-                try c.cs.emitOp(zero_cmp.op, line);
-            } else {
-                try c.cs.emitBinOpFused(c.selectTypedComparisonOp(.le, lhs_info, rhs_info), line);
-            }
-        },
-        else => unreachable,
+    // Named-type interleave: when both operands share the same non-decimal, non-string named type,
+    // unwrap both to raw scalars, apply the typed opcode, and re-wrap via the constructor.
+    const interleave_nt: ?[]const u8 = blk: {
+        const ln = lhs_info.named_type orelse break :blk null;
+        const rn = rhs_info.named_type orelse break :blk null;
+        if (!common.streq(ln, rn)) break :blk null;
+        if (tt != .plus and tt != .minus and tt != .star) break :blk null;
+        if (c.registry.getNamedTypeInfo(ln)) |nti| {
+            if (nti.base == .decimal or nti.base == .string) break :blk null;
+        }
+        break :blk ln;
+    };
+    if (interleave_nt) |nt| {
+        // Stack: [lhs_named, rhs_named]
+        // swap/named_inner twice to unwrap both operands to raw scalars.
+        try c.cs.emitOp(.swap, line);
+        try c.cs.emitOp(.named_inner, line);
+        try c.cs.emitOp(.swap, line);
+        try c.cs.emitOp(.named_inner, line);
+        var clear_lhs = lhs_info;
+        clear_lhs.named_type = null;
+        var clear_rhs = rhs_info;
+        clear_rhs.named_type = null;
+        switch (tt) {
+            .plus  => try c.cs.emitOp(c.selectTypedArithmeticOp(.add, clear_lhs, clear_rhs), line),
+            .minus => try c.cs.emitOp(c.selectTypedArithmeticOp(.sub, clear_lhs, clear_rhs), line),
+            .star  => try c.cs.emitOp(c.selectTypedArithmeticOp(.mul, clear_lhs, clear_rhs), line),
+            else => unreachable,
+        }
+        // Stack: [result] — re-wrap via constructor (applies predicates).
+        try c.cs.emitGetGlobal(nt, line);
+        try c.cs.emitOp(.swap, line);
+        try c.cs.emitCall(1, line);
+    } else {
+        switch (tt) {
+            .plus  => try c.cs.emitBinOpFused(c.selectTypedArithmeticOp(.add, lhs_info, rhs_info), line),
+            .minus => try c.cs.emitBinOpFused(c.selectTypedArithmeticOp(.sub, lhs_info, rhs_info), line),
+            .star  => try c.cs.emitOp(c.selectTypedArithmeticOp(.mul, lhs_info, rhs_info), line),
+            .slash => try c.cs.emitOp(c.selectTypedArithmeticOp(.div, lhs_info, rhs_info), line),
+            .kw_div => try c.cs.emitOp(.int_div, line),
+            .kw_rem => try c.cs.emitOp(.rem, line),
+            .kw_mod => try c.cs.emitOp(.mod, line),
+            .amp   => try c.cs.emitOp(.bit_and, line),
+            .pipe  => try c.cs.emitOp(.bit_or, line),
+            .caret => try c.cs.emitOp(.bit_xor, line),
+            .lt_lt => try c.cs.emitOp(.shl, line),
+            .gt_gt => try c.cs.emitOp(.shr, line),
+            .eq_eq => {
+                if (c.selectZeroIntCompare(.eq_eq, lhs_info, rhs_info)) |zero_cmp| {
+                    try c.cs.emitOp(.pop, line);
+                    try c.cs.emitOp(zero_cmp.op, line);
+                    if (zero_cmp.needs_not) try c.cs.emitOp(.not, line);
+                } else {
+                    try c.cs.emitBinOpFused(c.selectTypedComparisonOp(.eq, lhs_info, rhs_info), line);
+                }
+            },
+            .bang_eq => {
+                if (c.selectZeroIntCompare(.bang_eq, lhs_info, rhs_info)) |zero_cmp| {
+                    try c.cs.emitOp(.pop, line);
+                    try c.cs.emitOp(zero_cmp.op, line);
+                } else {
+                    try c.cs.emitBinOpFused(c.selectTypedComparisonOp(.ne, lhs_info, rhs_info), line);
+                }
+            },
+            .gt => {
+                if (c.selectZeroIntCompare(.gt, lhs_info, rhs_info)) |zero_cmp| {
+                    try c.cs.emitOp(.pop, line);
+                    try c.cs.emitOp(zero_cmp.op, line);
+                } else {
+                    try c.cs.emitBinOpFused(c.selectTypedComparisonOp(.gt, lhs_info, rhs_info), line);
+                }
+            },
+            .gt_eq => {
+                if (c.selectZeroIntCompare(.gt_eq, lhs_info, rhs_info)) |zero_cmp| {
+                    try c.cs.emitOp(.pop, line);
+                    try c.cs.emitOp(zero_cmp.op, line);
+                } else {
+                    try c.cs.emitBinOpFused(c.selectTypedComparisonOp(.ge, lhs_info, rhs_info), line);
+                }
+            },
+            .lt => {
+                if (c.selectZeroIntCompare(.lt, lhs_info, rhs_info)) |zero_cmp| {
+                    try c.cs.emitOp(.pop, line);
+                    try c.cs.emitOp(zero_cmp.op, line);
+                } else {
+                    try c.cs.emitBinOpFused(c.selectTypedComparisonOp(.lt, lhs_info, rhs_info), line);
+                }
+            },
+            .lt_eq => {
+                if (c.selectZeroIntCompare(.lt_eq, lhs_info, rhs_info)) |zero_cmp| {
+                    try c.cs.emitOp(.pop, line);
+                    try c.cs.emitOp(zero_cmp.op, line);
+                } else {
+                    try c.cs.emitBinOpFused(c.selectTypedComparisonOp(.le, lhs_info, rhs_info), line);
+                }
+            },
+            else => unreachable,
+        }
     }
     try c.setCurrentExprPrimResult(switch (tt) {
         .plus => .add,
@@ -682,11 +717,28 @@ pub fn structInstanceLitAfterValue(c: anytype, line: u32) !void {
 
 pub fn unaryExpr(c: anytype, tt: TT) !void {
     try parsePrecedence(c, .unary);
+    const op_info = c.childExprPrimInfo();
+    const op_named_type: ?[]const u8 = blk: {
+        if (tt != .minus and tt != .tilde) break :blk null;
+        const nt = op_info.named_type orelse break :blk null;
+        if (c.registry.getNamedTypeInfo(nt)) |nti| {
+            if (nti.base == .decimal or nti.base == .string) break :blk null;
+        }
+        break :blk nt;
+    };
+    if (op_named_type) |nt| {
+        try c.cs.emitOp(.named_inner, c.prev.line);
+        try c.cs.emitGetGlobal(nt, c.prev.line);
+        try c.cs.emitOp(.swap, c.prev.line);
+    }
     switch (tt) {
         .minus => try c.cs.emitOp(.neg, c.prev.line),
         .kw_not => try c.cs.emitOp(.not, c.prev.line),
         .tilde => try c.cs.emitOp(.bit_not, c.prev.line),
         else => unreachable,
+    }
+    if (op_named_type) |_| {
+        try c.cs.emitCall(1, c.prev.line);
     }
 }
 
