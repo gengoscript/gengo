@@ -2287,3 +2287,73 @@ test "two runtimes run concurrently on separate threads (#190)" {
     t2.join();
     try std.testing.expect(!failed.load(.seq_cst));
 }
+
+test "compiler: named-type local method call lowers to direct global call (3b)" {
+    var rt = try setup();
+    defer rt.deinit();
+
+    try compileWithSession(&rt,
+        \\type Meters int
+        \\func (m Meters) doubled() Meters { return Meters(int(m) * 2) }
+        \\func go() {
+        \\    x := Meters(5)
+        \\    x.doubled()
+        \\}
+    , "");
+
+    const c = rt.chunk_state;
+    var found_swap = false;
+    var found_invoke_method = false;
+    var found_meters_doubled = false;
+    var ip: usize = 0;
+    while (ip < c.code_len) {
+        const inst = try chunk.decodeAt(ip);
+        if (inst.op == .swap) found_swap = true;
+        if (inst.op == .invoke_method) found_invoke_method = true;
+        if (inst.op == .get_global and inst.const_index != null) {
+            const name = (try chunk.constAt(inst.const_index.?)).string.bytes;
+            if (std.mem.eql(u8, name, "Meters.doubled")) found_meters_doubled = true;
+        }
+        ip += inst.width;
+    }
+    try std.testing.expect(found_swap);
+    try std.testing.expect(found_meters_doubled);
+    try std.testing.expect(!found_invoke_method);
+}
+
+test "compiler: named-type subtype method call resolves inherited method via chain (3b)" {
+    var rt = try setup();
+    defer rt.deinit();
+
+    try compileWithSession(&rt,
+        \\type Meters int
+        \\func (m Meters) times(n int) int { return int(m) * n }
+        \\subtype SmallMeters Meters range 0..100
+        \\func go() {
+        \\    x := SmallMeters(5)
+        \\    x.times(3)
+        \\}
+    , "");
+
+    const c = rt.chunk_state;
+    var found_swap = false;
+    var found_invoke_method = false;
+    var found_meters_times = false;
+    var found_small_meters_times = false;
+    var ip: usize = 0;
+    while (ip < c.code_len) {
+        const inst = try chunk.decodeAt(ip);
+        if (inst.op == .swap) found_swap = true;
+        if (inst.op == .invoke_method) found_invoke_method = true;
+        if (inst.op == .get_global and inst.const_index != null) {
+            const name = (try chunk.constAt(inst.const_index.?)).string.bytes;
+            if (std.mem.eql(u8, name, "Meters.times")) found_meters_times = true;
+            if (std.mem.eql(u8, name, "SmallMeters.times")) found_small_meters_times = true;
+        }
+        ip += inst.width;
+    }
+    try std.testing.expect(found_swap);
+    try std.testing.expect(found_meters_times);
+    try std.testing.expect(!found_small_meters_times);
+    try std.testing.expect(!found_invoke_method);
+}

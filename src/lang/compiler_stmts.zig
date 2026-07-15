@@ -1731,6 +1731,7 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
         return c.err("'{s}' is a type name and cannot be used as a variable name", .{name.src});
     c.advance();
     var inferred_type_check: TypeCheck = .{ .none = {} };
+    var inferred_named_type: ?[]const u8 = null; // named type inferred from := RHS
     var self_ref_slot: ?u8 = null;
     if (c.match(.colon_eq) or c.match(.eq)) {
         // Self-reference pre-allocation: if the RHS is a function literal and we are
@@ -1752,11 +1753,11 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
             self_ref_slot = sr;
         }
         try c.expr();
-        // Infer named type from constructor call: d := Meters(5) → TypeCheck.named = "Meters"
+        // Infer named type from constructor call: d := Meters(5) → used for TypeCheck on the local.
+        // childExprPrimInfo reads depth+1 — where the child expr() wrote its result.
+        // Stored separately so inferred_type_check stays .none (avoiding spurious code emission).
         if (inferred_type_check == .none) {
-            if (c.currentExprPrimInfo().named_type) |nt| {
-                inferred_type_check = .{ .named = nt };
-            }
+            inferred_named_type = c.childExprPrimInfo().named_type;
         }
         if (self_ref_slot != null) {
             try c.cs.emit2(@intFromEnum(Op.set_local), self_ref_slot.?, name.line);
@@ -1939,7 +1940,12 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
     if (c.inFunc() or c.in_loop_init or c.loop_body_depth > 0) {
         if (self_ref_slot == null) {
             const slot = try c.defineLocal(name.src, is_const);
-            c.currentScope().locals[slot].type_check = inferred_type_check;
+            c.currentScope().locals[slot].type_check = if (inferred_type_check != .none)
+                inferred_type_check
+            else if (inferred_named_type) |nt|
+                .{ .named = nt }
+            else
+                inferred_type_check;
             if (c.std_namespace_path != null and c.std_namespace_path.?.len == 0) {
                 c.currentScope().locals[slot].from_std = true;
             }

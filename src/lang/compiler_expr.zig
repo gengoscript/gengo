@@ -235,13 +235,23 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
             if (is_std_func) {
                 try c.cs.emitCall(argc, prop.line);
             } else if (receiver_named_type) |nt| {
-                // Static method dispatch: look up named_type.method at compile time.
+                // Static method dispatch: walk inheritance chain to find Type.method at compile time.
                 var method_buf: [128]u8 = undefined;
-                const method_name = std.fmt.bufPrint(&method_buf, "{s}.{s}", .{ nt, prop.src }) catch "";
-                if (c.registry.hasGlobalFunc(method_name)) {
+                var found_len: usize = 0;
+                var lookup: ?[]const u8 = nt;
+                while (lookup) |cur_nt| {
+                    const candidate = std.fmt.bufPrint(&method_buf, "{s}.{s}", .{ cur_nt, prop.src }) catch "";
+                    if (c.registry.hasGlobalFunc(candidate)) {
+                        found_len = candidate.len;
+                        break;
+                    }
+                    const info = c.registry.getNamedTypeInfo(cur_nt) orelse break;
+                    lookup = info.parent_name;
+                }
+                if (found_len > 0) {
                     // Receiver is on the stack. Push the function, swap, then call.
                     // Stack: [receiver] → [receiver, func] → [func, receiver] → [func, receiver, args...]
-                    try c.cs.emitGetGlobal(method_name, prop.line);
+                    try c.cs.emitGetGlobal(method_buf[0..found_len], prop.line);
                     try c.cs.emitOp(.swap, prop.line);
                     try c.cs.emitCall(argc + 1, prop.line);
                     c.clearCurrentExprPrimInfo();
