@@ -77,7 +77,6 @@ pub fn wireFromValue(ctx: VMContext, v: Value) !host_abi.ValueWire {
             },
             else => return error.UnsupportedHostValueType,
         },
-        .named_scalar => |ns| wireFromValue(ctx, vmod.namedScalarInner(ns)),
         .inline_variant => |iv| {
             const ordinal = vmod.inlineVariantOrdinal(iv);
             const tag = vmod.objectAtIdx(iv.typ_idx).variant_type.arms[ordinal].name;

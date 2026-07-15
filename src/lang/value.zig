@@ -118,61 +118,12 @@ pub const NamedValueObj = struct { typ: *Object, value: Value };
 /// Pool base pointer for inline type-index → *Object decoding.
 /// Set by heap.zig during State.init() and re-pointed by heap.setActive(),
 /// so it always tracks the active runtime's object pool. Values carrying
-/// pool indices (named_scalar/inline_variant) must not cross runtimes.
+/// pool indices (inline_variant) must not cross runtimes.
 pub threadlocal var obj_pool_ptr: [*]Object = undefined;
 
 /// Decode a pool index to the corresponding *Object.
 pub fn objectAtIdx(idx: u16) *Object { return &obj_pool_ptr[idx]; }
 
-/// Inline representation for scalar named types (int, decimal, rune, bool).
-/// Avoids a GC allocation per construction.
-/// Bit layout (64 bits, LSB first):
-///   [48:0]  payload  — 49-bit value (signed for int/decimal via sign-extend)
-///   [51:49] kind     — 0=int, 1=decimal, 2=rune, 3=bool  (float always uses GC)
-///   [63:52] typ_idx  — object pool index of the named_type Object (0..4095)
-/// Float named types and int/decimal values outside ±(2^48) fall back to GC named_value.
-pub const NamedScalarValue = packed struct(u64) {
-    payload: u49,
-    kind: u3,
-    typ_idx: u12,
-};
-
-pub fn namedScalarInner(ns: NamedScalarValue) Value {
-    const raw: u49 = ns.payload;
-    const wide: u64 = raw;
-    const ext: u64 = if (raw & (@as(u49, 1) << 48) != 0) wide | @as(u64, 0xFFFE_0000_0000_0000) else wide;
-    return switch (ns.kind) {
-        0 => .{ .int     = @bitCast(ext) },
-        1 => .{ .decimal = @bitCast(ext) },
-        2 => .{ .rune    = @truncate(raw) },
-        3 => .{ .boolean = raw != 0 },
-        else => unreachable,
-    };
-}
-
-/// Try to make an inline named scalar.  typ_idx must be the pre-computed pool
-/// index of typ_obj (caller verifies it fits in 12 bits).  Returns null if the
-/// inner value cannot be represented inline (float base, or int/decimal out of
-/// the ±(2^48) range).
-pub fn tryMakeInlineNamedScalar(typ_obj: *Object, typ_idx: u12, inner: Value) ?Value {
-    if (typ_obj.* != .named_type) return null;
-    const ns: NamedScalarValue = switch (typ_obj.named_type.base) {
-        .int => blk: {
-            const n = inner.int;
-            if (n < -(1 << 48) or n > ((1 << 48) - 1)) return null;
-            break :blk .{ .payload = @truncate(@as(u64, @bitCast(n))), .kind = 0, .typ_idx = typ_idx };
-        },
-        .decimal => blk: {
-            const n = inner.decimal;
-            if (n < -(1 << 48) or n > ((1 << 48) - 1)) return null;
-            break :blk .{ .payload = @truncate(@as(u64, @bitCast(n))), .kind = 1, .typ_idx = typ_idx };
-        },
-        .rune => .{ .payload = @intCast(inner.rune),                     .kind = 2, .typ_idx = typ_idx },
-        .bool => .{ .payload = if (inner.boolean) 1 else 0,              .kind = 3, .typ_idx = typ_idx },
-        else => return null, // float and compound types always use GC
-    };
-    return .{ .named_scalar = ns };
-}
 pub const EnumTypeObj = struct {
     name: []const u8,
     qualified_name: []const u8,
@@ -273,7 +224,7 @@ pub const Object = union(ObjTag) {
     named_error_value: struct { typ: *Object, msg: *const StringSlice },
 };
 
-pub const VTag = enum { int, float, decimal, rune, boolean, string, error_value, object, null, named_scalar, inline_variant };
+pub const VTag = enum { int, float, decimal, rune, boolean, string, error_value, object, null, inline_variant };
 
 /// Indirection wrapper that makes string payloads 8 bytes (pointer-sized) so
 /// the entire Value fits in 16 bytes.  Lives in chunk.g_state.str_slices[].
@@ -308,7 +259,6 @@ pub const InlineVariantValue = packed struct(u64) {
 /// their scalar payloads fit in 8 bytes.  The StringSlice lives in a bump pool
 /// (chunk.g_state.str_slices); obtain one via chunk.internStr().
 /// The bytes the StringSlice points to MUST be immortal.
-/// `.named_scalar` stores scalar named-type values inline without a GC allocation.
 /// `.inline_variant` stores simple variant arm values inline without a GC allocation.
 pub const Value = union(VTag) {
     int: i64,
@@ -320,7 +270,6 @@ pub const Value = union(VTag) {
     error_value: *const StringSlice,
     object: *Object,
     null,
-    named_scalar: NamedScalarValue,
     inline_variant: InlineVariantValue,
 
     comptime { std.debug.assert(@sizeOf(Value) == 16); }
@@ -328,12 +277,8 @@ pub const Value = union(VTag) {
     /// Helper result type for named-value access independent of representation.
     pub const NamedRef = struct { typ: *Object, inner: Value };
 
-    /// Return (typ, inner) for any named value (inline or GC). Null if not named.
+    /// Return (typ, inner) for any named value (GC-backed). Null if not named.
     pub fn asNamed(self: Value) ?NamedRef {
-        if (self == .named_scalar) {
-            const ns = self.named_scalar;
-            return .{ .typ = objectAtIdx(ns.typ_idx), .inner = namedScalarInner(ns) };
-        }
         if (self == .object and self.object.* == .named_value) {
             const nv = self.object.named_value;
             return .{ .typ = nv.typ, .inner = nv.value };
@@ -342,17 +287,15 @@ pub const Value = union(VTag) {
     }
 
     pub fn isNamed(self: Value) bool {
-        return self == .named_scalar or (self == .object and self.object.* == .named_value);
+        return self == .object and self.object.* == .named_value;
     }
 
     pub fn namedTyp(self: Value) ?*Object {
-        if (self == .named_scalar) return objectAtIdx(self.named_scalar.typ_idx);
         if (self == .object and self.object.* == .named_value) return self.object.named_value.typ;
         return null;
     }
 
     pub fn namedInner(self: Value) ?Value {
-        if (self == .named_scalar) return namedScalarInner(self.named_scalar);
         if (self == .object and self.object.* == .named_value) return self.object.named_value.value;
         return null;
     }
@@ -381,10 +324,6 @@ pub const Value = union(VTag) {
         if (self == .boolean) return self.boolean;
         // Named types over bool participate in conditions through their
         // base, the same way named ints participate in arithmetic.
-        if (self == .named_scalar) {
-            // kind 3 = bool (no heap lookup needed — kind is encoded in the bits)
-            if (self.named_scalar.kind == 3) return self.named_scalar.payload != 0;
-        }
         if (self == .object and self.object.* == .named_value) {
             const underlying = self.object.named_value.value;
             if (underlying == .boolean) return underlying.boolean;
@@ -473,7 +412,6 @@ pub const Value = union(VTag) {
             .error_value => |x| common.streq(x.bytes, b.error_value.bytes),
             .object => |x| x == b.object,
             .null => true,
-            .named_scalar => unreachable, // handled above by asNamed()
             .inline_variant => unreachable, // handled above by asVariant()
         };
     }
@@ -486,13 +424,6 @@ pub fn decimalScaledToFloat(raw: i64, scale: u8) f64 {
 }
 
 pub fn decimalLogicalNumber(v: Value) ?f64 {
-    if (v == .named_scalar and v.named_scalar.kind == 1) { // kind 1 = decimal
-        const ns = v.named_scalar;
-        const raw: u49 = ns.payload;
-        const wide: u64 = raw;
-        const ext = if (raw & (@as(u49, 1) << 48) != 0) wide | @as(u64, 0xFFFE_0000_0000_0000) else wide;
-        return decimalScaledToFloat(@bitCast(ext), objectAtIdx(ns.typ_idx).named_type.scale);
-    }
     return switch (v) {
         .decimal => |d| decimalScaledToFloat(d, 0),
         .object => |obj| switch (obj.*) {
@@ -509,13 +440,6 @@ pub fn decimalLogicalNumber(v: Value) ?f64 {
 }
 
 pub fn decimalRawAndScale(v: Value) ?struct { raw: i64, scale: u8 } {
-    if (v == .named_scalar and v.named_scalar.kind == 1) { // kind 1 = decimal
-        const ns = v.named_scalar;
-        const raw: u49 = ns.payload;
-        const wide: u64 = raw;
-        const ext = if (raw & (@as(u49, 1) << 48) != 0) wide | @as(u64, 0xFFFE_0000_0000_0000) else wide;
-        return .{ .raw = @bitCast(ext), .scale = objectAtIdx(ns.typ_idx).named_type.scale };
-    }
     return switch (v) {
         .decimal => |d| .{ .raw = d, .scale = 0 },
         .object => |obj| switch (obj.*) {

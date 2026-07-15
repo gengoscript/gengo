@@ -94,11 +94,6 @@ fn writeConst(cs: *const chunk.State, idx: u16) void {
             else => io.write("<object>"),
         },
         .null => io.write("null"),
-        .named_scalar => |ns| {
-            io.write("<named:");
-            io.write(value.objectAtIdx(ns.typ_idx).named_type.name);
-            io.write(">");
-        },
         .inline_variant => |iv| {
             io.write("<variant:");
             io.write(value.objectAtIdx(iv.typ_idx).variant_type.name);

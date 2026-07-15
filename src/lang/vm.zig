@@ -702,23 +702,6 @@ fn resolveMapMethod(obj: *Object, mname: []const u8) !Value {
 }
 
 fn resolveMethodReceiver(ctx: VMContext, recv: Value, mname: []const u8) !MethodResolution {
-    if (recv == .named_scalar) {
-        var typ_obj: *Object = vmod.objectAtIdx(recv.named_scalar.typ_idx);
-        while (true) {
-            const nt = switch (typ_obj.*) {
-                .named_type => |nt| nt,
-                else => return error.NotAMethodReceiver,
-            };
-            if (resolveQualifiedReceiverMethod(ctx, nt.qualified_name, mname)) |func| {
-                return .{ .func = func, .pass_recv = true };
-            } else |err| switch (err) {
-                error.UnknownMethod => {
-                    typ_obj = vmtyp.resolveParentType(ctx, typ_obj) orelse return error.UnknownMethod;
-                },
-                else => return err,
-            }
-        }
-    }
     if (recv != .object) return error.NotAMethodReceiver;
     switch (recv.object.*) {
         .struct_instance => |inst| return try resolveStructMethod(ctx, inst, mname),
@@ -1610,11 +1593,6 @@ fn opInvokeMethod(ctx: VMContext) !void {
     if (ctx.vs.stack_top < @as(usize, argc) + 1) return error.StackUnderflow;
     const recv_idx = ctx.vs.stack_top - argc - 1;
     const recv = ctx.vs.stack[recv_idx];
-    if (recv == .named_scalar) {
-        const resolved = try resolveMethodReceiver(ctx, recv, mname);
-        try insertReceiverAndCall(ctx, recv_idx, resolved.func, recv, argc);
-        return;
-    }
     if (recv == .inline_variant) {
         const resolved = try resolveInlineVariantMethod(ctx, recv.inline_variant, mname);
         try insertReceiverAndCall(ctx, recv_idx, resolved.func, recv, argc);
@@ -1903,7 +1881,7 @@ fn opDeferInvokeMethod(ctx: VMContext) !void {
         const resolved = try resolveInlineVariantMethod(ctx, recv.inline_variant, mname);
         func = resolved.func;
         pass_recv = resolved.pass_recv;
-    } else if (recv == .named_scalar or recv == .object) {
+    } else if (recv == .object) {
         const resolved = try resolveMethodReceiver(ctx, recv, mname);
         func = resolved.func;
         pass_recv = resolved.pass_recv;
