@@ -136,7 +136,14 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
         c.clearCurrentExprPrimInfo();
         if (c.cur.typ == .kw_type) {
             c.advance(); // consume 'type'
-            try c.cs.emitOp(.type_name, line);
+            if (receiver_named_type) |nt| {
+                // Static: receiver's named type is known at compile time.
+                // Pop the receiver and push its type name as a string constant.
+                try c.cs.emitOp(.pop, line);
+                try c.cs.emitStringConst(nt, line);
+            } else {
+                try c.cs.emitOp(.type_name, line);
+            }
             if (c.check(.eq_eq) or c.check(.bang_eq)) {
                 const is_eq = c.cur.typ == .eq_eq;
                 c.advance();
@@ -222,6 +229,29 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
                 }
                 try c.cs.emitGetField(prop.src, prop.line);
             }
+            // Resolve static method dispatch before compiling args so the function is
+            // placed on the stack below the receiver: [func, receiver, arg1..argN].
+            // call(argc+1) then finds func as callee for any argc.
+            var static_method_buf: [128]u8 = undefined;
+            var static_method_len: usize = 0;
+            if (!is_std_func) {
+                if (receiver_named_type) |nt| {
+                    var lookup: ?[]const u8 = nt;
+                    while (lookup) |cur_nt| {
+                        const candidate = std.fmt.bufPrint(&static_method_buf, "{s}.{s}", .{ cur_nt, prop.src }) catch "";
+                        if (c.registry.hasGlobalFunc(candidate)) {
+                            static_method_len = candidate.len;
+                            break;
+                        }
+                        const info = c.registry.getNamedTypeInfo(cur_nt) orelse break;
+                        lookup = info.parent_name;
+                    }
+                    if (static_method_len > 0) {
+                        try c.cs.emitGetGlobal(static_method_buf[0..static_method_len], prop.line);
+                        try c.cs.emitOp(.swap, prop.line);
+                    }
+                }
+            }
             var argc: u8 = 0;
             if (!c.check(.rparen)) {
                 while (true) {
@@ -234,32 +264,10 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
             try c.consume(.rparen);
             if (is_std_func) {
                 try c.cs.emitCall(argc, prop.line);
-            } else if (receiver_named_type) |nt| {
-                // Static method dispatch: walk inheritance chain to find Type.method at compile time.
-                var method_buf: [128]u8 = undefined;
-                var found_len: usize = 0;
-                var lookup: ?[]const u8 = nt;
-                while (lookup) |cur_nt| {
-                    const candidate = std.fmt.bufPrint(&method_buf, "{s}.{s}", .{ cur_nt, prop.src }) catch "";
-                    if (c.registry.hasGlobalFunc(candidate)) {
-                        found_len = candidate.len;
-                        break;
-                    }
-                    const info = c.registry.getNamedTypeInfo(cur_nt) orelse break;
-                    lookup = info.parent_name;
-                }
-                if (found_len > 0) {
-                    // Receiver is on the stack. Push the function, swap, then call.
-                    // Stack: [receiver] → [receiver, func] → [func, receiver] → [func, receiver, args...]
-                    try c.cs.emitGetGlobal(method_buf[0..found_len], prop.line);
-                    try c.cs.emitOp(.swap, prop.line);
-                    try c.cs.emitCall(argc + 1, prop.line);
-                    // Propagate named_type to the result so chained calls also get static dispatch.
-                    c.expr_prim_info[c.expr_depth] = .{ .named_type = nt };
-                    return;
-                }
-                // Fall through to dynamic dispatch if method not found at compile time.
-                try c.cs.emitInvokeMethod(prop.src, argc, line);
+            } else if (static_method_len > 0) {
+                try c.cs.emitCall(argc + 1, prop.line);
+                c.expr_prim_info[c.expr_depth] = .{ .named_type = receiver_named_type.? };
+                return;
             } else {
                 try c.cs.emitInvokeMethod(prop.src, argc, line);
             }

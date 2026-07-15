@@ -1992,6 +1992,16 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
                 c.typed_global_names[c.typed_global_count] = qname;
                 c.typed_global_type_checks[c.typed_global_count] = inferred_type_check;
                 c.typed_global_count += 1;
+            } else if (inferred_named_type) |nt| {
+                // :=-inferred named-type globals go into the inferred array, not typed_global_type_checks.
+                // This enables TypeMismatch detection without causing assignStmt to emit prolog/epilog.
+                if (c.inferred_named_global_count >= MaxLocals) {
+                    c.setErr("too many typed globals (limit {d})", .{MaxLocals});
+                    return error.TooManyGlobals;
+                }
+                c.inferred_named_global_names[c.inferred_named_global_count] = qname;
+                c.inferred_named_global_types[c.inferred_named_global_count] = nt;
+                c.inferred_named_global_count += 1;
             }
             if (c.std_namespace_path != null and c.std_namespace_path.?.len == 0) {
                 if (c.std_module_global_count >= MaxLocals) {

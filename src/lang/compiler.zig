@@ -121,6 +121,11 @@ pub const Compiler = struct {
     typed_global_names: [MaxLocals][]const u8 = undefined,
     typed_global_type_checks: [MaxLocals]TypeCheck = undefined,
     typed_global_count: u8 = 0,
+    // Inferred named-type globals (:= declarations): tracked for TypeMismatch detection only.
+    // NOT in typed_global_type_checks so assignStmt does not emit prolog/epilog for them.
+    inferred_named_global_names: [MaxLocals][]const u8 = undefined,
+    inferred_named_global_types: [MaxLocals][]const u8 = undefined,
+    inferred_named_global_count: u8 = 0,
 
     test_names: [MaxTestBlocks][]const u8 = undefined,
     test_count: u16 = 0,
@@ -461,6 +466,15 @@ pub const Compiler = struct {
         return null;
     }
 
+    pub fn lookupInferredNamedGlobal(self: *Compiler, name: []const u8) ?[]const u8 {
+        const qname = self.qualifyGlobalName(name) catch return null;
+        const count = self.inferred_named_global_count;
+        for (self.inferred_named_global_names[0..count], self.inferred_named_global_types[0..count]) |n, nt| {
+            if (common.streq(n, qname)) return nt;
+        }
+        return null;
+    }
+
     fn primitiveTypeFromNumberTok(tok: Token) PrimType {
         const is_based = tok.src.len >= 2 and tok.src[0] == '0' and
             (tok.src[1] == 'x' or tok.src[1] == 'X' or
@@ -549,22 +563,28 @@ pub const Compiler = struct {
                 .is_zero_int = primitiveTypeFromNumberTok(tok) == .int and common.parseInt(tok.src) == 0,
             },
             .ident => {
-                const tc = self.getLocalTypeCheck(tok.src) orelse {
-                    self.clearCurrentExprPrimInfo();
-                    return;
-                };
-                self.expr_prim_info[self.expr_depth] = switch (tc) {
-                    .prim => |p| switch (p) {
-                        .int, .float => .{ .prim = p, .is_constant = false, .is_plain_binding = true, .is_zero_int = false },
+                if (self.getLocalTypeCheck(tok.src)) |tc| {
+                    self.expr_prim_info[self.expr_depth] = switch (tc) {
+                        .prim => |p| switch (p) {
+                            .int, .float => .{ .prim = p, .is_constant = false, .is_plain_binding = true, .is_zero_int = false },
+                            else => .{},
+                        },
+                        .named => |n| blk: {
+                            const info = self.registry.getNamedTypeInfo(n) orelse break :blk ExprPrimInfo{};
+                            const p = namedTypeBaseToPrim(info.base) orelse break :blk ExprPrimInfo{};
+                            break :blk .{ .prim = p, .named_type = n, .is_constant = false, .is_plain_binding = true, .is_zero_int = false };
+                        },
                         else => .{},
-                    },
-                    .named => |n| blk: {
-                        const info = self.registry.getNamedTypeInfo(n) orelse break :blk ExprPrimInfo{};
-                        const p = namedTypeBaseToPrim(info.base) orelse break :blk ExprPrimInfo{};
-                        break :blk .{ .prim = p, .named_type = n, .is_constant = false, .is_plain_binding = true, .is_zero_int = false };
-                    },
-                    else => .{},
-                };
+                    };
+                } else if (self.lookupInferredNamedGlobal(tok.src)) |n| {
+                    // Inferred named-type global: tracked only for TypeMismatch detection.
+                    // Not in typed_global_type_checks so assignStmt does not wrap results.
+                    const info = self.registry.getNamedTypeInfo(n) orelse { self.clearCurrentExprPrimInfo(); return; };
+                    const p = namedTypeBaseToPrim(info.base) orelse { self.clearCurrentExprPrimInfo(); return; };
+                    self.expr_prim_info[self.expr_depth] = .{ .prim = p, .named_type = n, .is_constant = false, .is_plain_binding = true, .is_zero_int = false };
+                } else {
+                    self.clearCurrentExprPrimInfo();
+                }
             },
             else => self.clearCurrentExprPrimInfo(),
         }
