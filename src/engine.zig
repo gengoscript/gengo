@@ -540,7 +540,6 @@ fn valueToWire(val: Value) !ValueWire {
             },
             else => return error.UnsupportedWireType,
         },
-        .named_scalar => |ns| return valueToWire(vmod.namedScalarInner(ns)),
         .inline_variant => |iv| {
             const ordinal = vmod.inlineVariantOrdinal(iv);
             const tag = vmod.objectAtIdx(iv.typ_idx).variant_type.arms[ordinal].name;

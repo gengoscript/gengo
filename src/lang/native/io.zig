@@ -94,8 +94,6 @@ fn sprintValueDepth(buf_or_null: ?[]u8, v: Value, depth: u32, ancestors: *[Print
             }
             return len;
         },
-        // named_error_value is printed as TypeName(msg) by the .object branch below
-        .named_scalar => |ns| return sprintValueDepth(buf_or_null, @import("../value.zig").namedScalarInner(ns), depth, ancestors, anc_count),
         .inline_variant => |iv| {
             const vmod = @import("../value.zig");
             const ordinal = vmod.inlineVariantOrdinal(iv);

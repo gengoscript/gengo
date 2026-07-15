@@ -29,7 +29,6 @@ pub fn namedBaseName(base: @import("value.zig").NamedTypeBase) []const u8 {
 }
 
 pub fn runtimeTypeName(v: Value) []const u8 {
-    if (v == .named_scalar) return vmod.objectAtIdx(v.named_scalar.typ_idx).named_type.name;
     if (v == .inline_variant) return vmod.objectAtIdx(v.inline_variant.typ_idx).variant_type.name;
     return switch (v) {
         .int => "int",
@@ -40,7 +39,6 @@ pub fn runtimeTypeName(v: Value) []const u8 {
         .string => "string",
         .error_value => "error",
         .null => "null",
-        .named_scalar => unreachable,
         .inline_variant => unreachable,
         .object => |obj| switch (obj.*) {
             .named_value => obj.named_value.typ.named_type.name,
@@ -169,7 +167,6 @@ pub fn matchesTypeAlt(ctx: VMContext, v: Value, alt: FieldTypeAlt) bool {
         },
         .interface_t => matchesInterfaceType(ctx, v, alt.interface_name),
         .named_t => named_t_blk: {
-            if (v == .named_scalar) break :named_t_blk namedTypeIsOrExtends(ctx, vmod.objectAtIdx(v.named_scalar.typ_idx), alt.named_name);
             if (!(v == .object)) break :named_t_blk false;
             break :named_t_blk switch (v.object.*) {
                 .named_value => namedTypeIsOrExtends(ctx, v.object.named_value.typ, alt.named_name),
@@ -334,9 +331,7 @@ pub fn interfaceMethodMatches(m: InterfaceMethodSpec, f: FuncObj) bool {
 }
 
 pub fn matchesInterfaceType(ctx: VMContext, v: Value, iname: []const u8) bool {
-    const tname = if (v == .named_scalar)
-        vmod.objectAtIdx(v.named_scalar.typ_idx).named_type.qualified_name
-    else if (v == .inline_variant)
+    const tname = if (v == .inline_variant)
         vmod.objectAtIdx(v.inline_variant.typ_idx).variant_type.qualified_name
     else switch (v) {
         .object => |obj| switch (obj.*) {
@@ -384,12 +379,6 @@ pub fn matchesInterfaceType(ctx: VMContext, v: Value, iname: []const u8) bool {
 const VMContext = vms.VMContext;
 
 pub fn makeNamedValue(ctx: VMContext, typ_obj: *Object, inner: Value) !Value {
-    if (typ_obj.* == .named_type) {
-        const pool_idx = ctx.hs.objectPoolIndex(typ_obj);
-        if (pool_idx <= 0x0FFF) {
-            if (vmod.tryMakeInlineNamedScalar(typ_obj, @intCast(pool_idx), inner)) |v| return v;
-        }
-    }
     const obj = try vmgc.vmAllocObject(ctx);
     obj.* = .{ .named_value = .{ .typ = typ_obj, .value = inner } };
     return .{ .object = obj };

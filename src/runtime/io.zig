@@ -282,9 +282,6 @@ fn printValueDepth(v: Value, depth: u32, ancestors: *[PrintMaxDepth]*const vmod.
             write(")");
         },
         .null => write("null"),
-        .named_scalar => |ns| {
-            printValueDepth(vmod.namedScalarInner(ns), depth, ancestors, anc_count);
-        },
         .inline_variant => |iv| {
             const ordinal = vmod.inlineVariantOrdinal(iv);
             const iv_typ = vmod.objectAtIdx(iv.typ_idx);
