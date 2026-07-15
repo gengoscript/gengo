@@ -390,6 +390,24 @@ pub const TypeRegistry = struct {
         return self.named_types[e.sub_idx];
     }
 
+    /// Returns true if a and b are the same type, or one is an ancestor of the other.
+    pub fn areNamedTypesCompatible(self: *const TypeRegistry, a: []const u8, b: []const u8) bool {
+        if (common.streq(a, b)) return true;
+        var cur = a;
+        while (self.getNamedTypeInfo(cur)) |info| {
+            if (common.streq(cur, b)) return true;
+            const parent = info.parent_name orelse break;
+            cur = parent;
+        }
+        cur = b;
+        while (self.getNamedTypeInfo(cur)) |info| {
+            if (common.streq(cur, a)) return true;
+            const parent = info.parent_name orelse break;
+            cur = parent;
+        }
+        return false;
+    }
+
     pub fn addNamedType(self: *TypeRegistry, info: NamedTypeInfo) !void {
         if (self.hasNamedType(info.name)) return error.DuplicateNamedType;
         if (self.named_type_count >= MaxNamedTypes) return error.TooManyNamedTypes;
