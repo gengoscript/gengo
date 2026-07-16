@@ -116,6 +116,29 @@ fn testRunPathWithSourceProvider() void {
     out("  run_path with sources: OK\n");
 }
 
+fn testRegisteredPackageImports() void {
+    const sources = [_]api.SourceEntry{
+        .{ .path = "lib/math.gengo", .source = "pub func answer() int { return 40 }\n" },
+        .{ .path = "lib/time/mod.gengo", .source = "pub func answer() int { return 2 }\n" },
+    };
+    const rt = makeRt(.{ .allow_io = false, .module_sources = &sources });
+    const res = rt.runPath(
+        \\math := import("lib/math")
+        \\time := import("lib/time")
+        \\func answer() int { return math.answer() + time.answer() }
+    , "main.gengo");
+    if (res != .ok) fail("engine FAIL: registered package import setup failed\n");
+
+    const call_res = rt.call("answer", &.{});
+    switch (call_res) {
+        .ok => |v| {
+            if (v != .int or v.int != 42) fail("engine FAIL: registered package import result\n");
+        },
+        else => fail("engine FAIL: registered package import call failed\n"),
+    }
+    out("  registered package imports: OK\n");
+}
+
 fn testCallWithArgs() void {
     const rt = initWithAllowIO(false);
     const res = rt.run(
@@ -1211,6 +1234,7 @@ export fn _start() void {
     testReset();
     testLastError();
     testRuntimeErrorPath();
+    testRegisteredPackageImports();
     testIO();
     testReplIncremental();
     testHostModules();
