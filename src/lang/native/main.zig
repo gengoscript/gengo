@@ -133,6 +133,7 @@ pub fn buildStdModule(ctx: vms.VMContext) !*Object {
     var math_entries: [module_descriptor.mathExports.len]NamespaceEntry = undefined;
     for (module_descriptor.mathExports, 0..) |entry, i| {
         math_entries[i] = .{ .name = entry.name, .value = switch (entry.kind) {
+            .namespace => unreachable,
             .function => try makeNative(ctx, entry.native_id.?, entry.arity),
             .value => .{ .float = entry.float_value },
         } };
@@ -168,6 +169,7 @@ pub fn buildStdModule(ctx: vms.VMContext) !*Object {
     var json_entries: [module_descriptor.jsonExports.len]NamespaceEntry = undefined;
     for (module_descriptor.jsonExports, 0..) |entry, i| {
         json_entries[i] = .{ .name = entry.name, .value = switch (entry.kind) {
+            .namespace => unreachable,
             .function => try makeNative(ctx, entry.native_id.?, entry.arity),
             .value => if (entry.is_type_object) .{ .object = jv_type_obj } else .{ .int = entry.int_value },
         } };
@@ -191,6 +193,7 @@ pub fn buildStdModule(ctx: vms.VMContext) !*Object {
     var time_entries: [module_descriptor.timeExports.len + 1]NamespaceEntry = undefined;
     for (module_descriptor.timeExports, 0..) |entry, i| {
         time_entries[i] = .{ .name = entry.name, .value = switch (entry.kind) {
+            .namespace => unreachable,
             .function => try makeNative(ctx, entry.native_id.?, entry.arity),
             .value => .{ .int = entry.int_value },
         } };

@@ -21,7 +21,7 @@ pub const NativeMethod = struct {
     arity: u8,
 };
 
-pub const StdExportKind = enum { function, value };
+pub const StdExportKind = enum { namespace, function, value };
 
 pub const StdNamespaceExport = struct {
     name: []const u8,
@@ -31,6 +31,29 @@ pub const StdNamespaceExport = struct {
     int_value: i64 = 0,
     float_value: f64 = 0,
     is_type_object: bool = false,
+};
+
+pub const stdExports = [_]StdNamespaceExport{
+    .{ .name = "io", .kind = .namespace },
+    .{ .name = "fmt", .kind = .namespace },
+    .{ .name = "core", .kind = .namespace },
+    .{ .name = "conv", .kind = .namespace },
+    .{ .name = "math", .kind = .namespace },
+    .{ .name = "rand", .kind = .namespace },
+    .{ .name = "string", .kind = .namespace },
+    .{ .name = "json", .kind = .namespace },
+    .{ .name = "template", .kind = .namespace },
+    .{ .name = "time", .kind = .namespace },
+    .{ .name = "hex", .kind = .namespace },
+    .{ .name = "base64", .kind = .namespace },
+    .{ .name = "regexp", .kind = .namespace },
+    .{ .name = "sort", .kind = .namespace },
+    .{ .name = "array", .kind = .namespace },
+    .{ .name = "bytes", .kind = .namespace },
+    .{ .name = "Arg", .kind = .value, .is_type_object = true },
+    .{ .name = "Time", .kind = .value, .is_type_object = true },
+    .{ .name = "Regexp", .kind = .value, .is_type_object = true },
+    .{ .name = "JSONValue", .kind = .value, .is_type_object = true },
 };
 
 pub const timeExports = [_]StdNamespaceExport{
@@ -315,8 +338,10 @@ pub fn resolveType(module_path: []const u8, name: []const u8) ?ModuleTypeInfo {
     return null;
 }
 
-pub fn lookupStdNamespaceExport(namespace: []const u8, name: []const u8) ?StdExportKind {
-    const exports: []const StdNamespaceExport = if (common.streq(namespace, "time"))
+fn exportsForStdNamespace(namespace: []const u8) ?[]const StdNamespaceExport {
+    return if (namespace.len == 0)
+        &stdExports
+    else if (common.streq(namespace, "time"))
         &timeExports
     else if (common.streq(namespace, "fmt"))
         &fmtExports
@@ -349,11 +374,46 @@ pub fn lookupStdNamespaceExport(namespace: []const u8, name: []const u8) ?StdExp
     else if (common.streq(namespace, "json"))
         &jsonExports
     else
-        return null;
+        null;
+}
+
+pub fn lookupStdNamespaceExport(namespace: []const u8, name: []const u8) ?StdExportKind {
+    const exports = exportsForStdNamespace(namespace) orelse return null;
     for (exports) |entry| {
         if (common.streq(entry.name, name)) return entry.kind;
     }
     return null;
+}
+
+fn editDistance(a: []const u8, b: []const u8) usize {
+    if (a.len == 0) return b.len;
+    if (b.len == 0) return a.len;
+    var buf: [32 + 1][32 + 1]usize = undefined;
+    const na = @min(a.len, 32);
+    const nb = @min(b.len, 32);
+    for (0..na + 1) |i| buf[i][0] = i;
+    for (0..nb + 1) |j| buf[0][j] = j;
+    for (1..na + 1) |i| {
+        for (1..nb + 1) |j| {
+            const cost: usize = if (a[i - 1] == b[j - 1]) 0 else 1;
+            buf[i][j] = @min(@min(buf[i - 1][j] + 1, buf[i][j - 1] + 1), buf[i - 1][j - 1] + cost);
+        }
+    }
+    return buf[na][nb];
+}
+
+pub fn closestStdNamespaceExport(namespace: []const u8, name: []const u8) ?[]const u8 {
+    const exports = exportsForStdNamespace(namespace) orelse return null;
+    var best: ?[]const u8 = null;
+    var best_dist: usize = 3;
+    for (exports) |entry| {
+        const distance = editDistance(entry.name, name);
+        if (distance < best_dist) {
+            best_dist = distance;
+            best = entry.name;
+        }
+    }
+    return best;
 }
 
 pub fn seedCompilerRegistry(registry: *ct.TypeRegistry) !void {
@@ -397,4 +457,9 @@ test "std conv descriptor exposes all conversion functions" {
 
 test "std hex descriptor exposes encode and decode" {
     try std.testing.expectEqual(@as(usize, 2), hexExports.len);
+}
+
+test "std descriptor resolves top-level namespaces and suggestions" {
+    try std.testing.expectEqual(.namespace, lookupStdNamespaceExport("", "time").?);
+    try std.testing.expectEqualStrings("time", closestStdNamespaceExport("", "tim").?);
 }

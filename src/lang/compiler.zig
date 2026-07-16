@@ -7,10 +7,10 @@ const op_mod = @import("op.zig");
 const token = @import("token.zig");
 const value_mod = @import("value.zig");
 const ct = @import("compiler_types.zig");
-const std_schema = @import("std_schema.zig");
 const compiler_decls = @import("compiler_decls.zig");
 const compiler_stmts = @import("compiler_stmts.zig");
 const compiler_expr = @import("compiler_expr.zig");
+const module_descriptor = @import("module_descriptor.zig");
 
 const Lexer = lexer_mod.Lexer;
 const FieldTypeAlt = value_mod.FieldTypeAlt;
@@ -1329,8 +1329,8 @@ pub const Compiler = struct {
 
     pub fn checkStdNamespaceField(self: *Compiler, field: []const u8, line: u32) !void {
         const path = self.std_namespace_path orelse return;
-        const kind = std_schema.lookup(path, field) orelse {
-            if (std_schema.closestMatch(path, field)) |suggestion| {
+        const kind = module_descriptor.lookupStdNamespaceExport(path, field) orelse {
+            if (module_descriptor.closestStdNamespaceExport(path, field)) |suggestion| {
                 self.setErr("unknown field '{s}' in std{s}{s}; did you mean '{s}'?", .{
                     field,
                     if (path.len > 0) "." else "",

@@ -8,7 +8,6 @@ const heap = @import("../runtime/heap.zig");
 const token = @import("token.zig");
 const value_mod = @import("value.zig");
 const ct = @import("compiler_types.zig");
-const std_schema = @import("std_schema.zig");
 const compiler_decls = @import("compiler_decls.zig");
 
 const Token = token.Token;
