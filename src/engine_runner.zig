@@ -284,7 +284,7 @@ fn testHostModules() void {
     const rt = makeRt(.{ .allow_io = false, .native_backend = .host, .host_modules = &host_mods });
 
     const res = rt.run(
-        \\db := import("mydb")
+        \\db := import("host:mydb")
         \\func testQuery() {
         \\    _ = db.query("SELECT 1", [])
         \\}
@@ -305,6 +305,32 @@ fn testHostModules() void {
     out("  host modules: OK\n");
 }
 
+fn testHostAndSourcePackageCollision() void {
+    const host_funcs = [_]api.HostModuleFuncDesc{.{ .name = "ping", .arity = 0, .call_id = 0x1002 }};
+    const host_mods = [_]api.HostModuleDesc{.{ .name = "db", .functions = &host_funcs }};
+    const sources = [_]api.SourceEntry{.{ .path = "db.gengo", .source = "pub func answer() int { return 42 }\n" }};
+    const rt = makeRt(.{ .allow_io = false, .native_backend = .host, .host_modules = &host_mods, .module_sources = &sources });
+
+    const res = rt.runPath(
+        \\source := import("db")
+        \\bridge := import("host:db")
+        \\func answer() int {
+        \\    _ = bridge
+        \\    return source.answer()
+        \\}
+    , "main.gengo");
+    if (res != .ok) fail("engine FAIL: host/source package collision setup failed\n");
+
+    const call_res = rt.call("answer", &.{});
+    switch (call_res) {
+        .ok => |v| {
+            if (v != .int or v.int != 42) fail("engine FAIL: host/source package collision result\n");
+        },
+        else => fail("engine FAIL: host/source package collision call failed\n"),
+    }
+    out("  host/source package collision: OK\n");
+}
+
 fn testHostModuleUnknownField() void {
     const host_funcs = [_]api.HostModuleFuncDesc{
         .{ .name = "query", .arity = 2, .call_id = 0x1000 },
@@ -316,7 +342,7 @@ fn testHostModuleUnknownField() void {
 
     // Accessing a non-existent host module field should fail at compile time
     const res = rt.run(
-        \\db := import("mydb")
+        \\db := import("host:mydb")
         \\func testUnknown() {
         \\    _ = db.nonexistent()
         \\}
@@ -522,7 +548,7 @@ fn testHostModuleArrayArgs() void {
     const rt = makeRt(.{ .allow_io = false, .native_backend = .host, .host_modules = &host_mods });
 
     const res = rt.run(
-        \\p := import("proc")
+        \\p := import("host:proc")
         \\func testArr() {
         \\    _ = p.process([1, 2, 3], {"k": "v"})
         \\}
@@ -1238,6 +1264,7 @@ export fn _start() void {
     testIO();
     testReplIncremental();
     testHostModules();
+    testHostAndSourcePackageCollision();
     testHostModuleUnknownField();
     testFailedModuleReimport();
     testArrayWireResult();
