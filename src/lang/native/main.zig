@@ -256,28 +256,34 @@ pub fn buildStdModule(ctx: vms.VMContext) !*Object {
     try ctx.vs.pushTempRoot(.{ .object = bytes_obj });
     defer ctx.vs.popTempRoot();
 
-    const std_entries = [_]NamespaceEntry{
-        .{ .name = "io", .value = .{ .object = io_obj } },
-        .{ .name = "fmt", .value = .{ .object = fmt_obj } },
-        .{ .name = "core", .value = .{ .object = core_obj } },
-        .{ .name = "conv", .value = .{ .object = conv_obj } },
-        .{ .name = "math", .value = .{ .object = math_obj } },
-        .{ .name = "rand", .value = .{ .object = rand_obj } },
-        .{ .name = "string", .value = .{ .object = string_obj } },
-        .{ .name = "json", .value = .{ .object = json_obj } },
-        .{ .name = "template", .value = .{ .object = template_obj } },
-        .{ .name = "time", .value = .{ .object = time_obj } },
-        .{ .name = "hex", .value = .{ .object = hex_obj } },
-        .{ .name = "base64", .value = .{ .object = base64_obj } },
-        .{ .name = "regexp", .value = .{ .object = regexp_obj } },
-        .{ .name = "sort", .value = .{ .object = sort_obj } },
-        .{ .name = "array", .value = .{ .object = array_obj } },
-        .{ .name = "bytes", .value = .{ .object = bytes_obj } },
-        .{ .name = "Arg",      .value = .{ .object = arg_type_obj } },
-        .{ .name = "Time",     .value = .{ .object = time_type_obj } },
-        .{ .name = "Regexp",   .value = .{ .object = regexp_type_obj } },
-        .{ .name = "JSONValue",.value = .{ .object = jv_type_obj } },
-    };
+    var std_entries: [module_descriptor.stdExports.len]NamespaceEntry = undefined;
+    for (module_descriptor.stdExports, 0..) |entry, i| {
+        std_entries[i] = .{
+            .name = entry.name,
+            .value = .{ .object = switch (entry.top_level_member.?) {
+                .io => io_obj,
+                .fmt => fmt_obj,
+                .core => core_obj,
+                .conv => conv_obj,
+                .math => math_obj,
+                .rand => rand_obj,
+                .string => string_obj,
+                .json => json_obj,
+                .template => template_obj,
+                .time => time_obj,
+                .hex => hex_obj,
+                .base64 => base64_obj,
+                .regexp => regexp_obj,
+                .sort => sort_obj,
+                .array => array_obj,
+                .bytes => bytes_obj,
+                .arg_type => arg_type_obj,
+                .time_type => time_type_obj,
+                .regexp_type => regexp_type_obj,
+                .json_value_type => jv_type_obj,
+            } },
+        };
+    }
     const std_obj = try makeNamespace(ctx,"std", "@module_type:std", &std_entries);
     ctx.vs.std_module = std_obj;
     return std_obj;
