@@ -93,14 +93,19 @@ Use `runPath` instead of `run` when the script uses relative imports.
 
 Compile errors report the source line, column, kind, and message. Runtime errors report the kind, line, column, message, and stack frames.
 
-## Relative Imports
+## Source Imports
 
-If scripts import sibling modules, use one of these approaches:
+If scripts import source modules, use one of these approaches:
 
 - `module_sources` for a fixed in-memory source table; or
 - `module_source_provider` for dynamic lookup.
 
 `module_source_provider` takes precedence when both are present.
+
+For both relative and registered package imports, resolution tries the exact
+path, then `.gengo`, then `/mod.gengo`. For example, a source entry named
+`lib/time/mod.gengo` is imported as `import("lib/time")`; a source entry named
+`lib/math.gengo` is imported as `import("lib/math")`.
 
 ### Import Sandboxing
 
@@ -136,6 +141,9 @@ var rt = api.Runtime.init(.{
 }) catch return;
 defer rt.deinit();
 ```
+
+The script can import this registered entry with `import("app/pkg")`, or with
+`import("./pkg")` from another source file under `app`.
 
 ## Capabilities
 
@@ -318,7 +326,7 @@ explicitly.
 ```zig
 var rt = api.Runtime.init(.{
     .host_modules = &.{.{
-        .name = "host:db",
+        .name = "db",
         .functions = &.{.{ .name = "lookup", .arity = 1, .call_id = 0 }},
     }},
 }) catch return;
