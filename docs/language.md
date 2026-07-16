@@ -41,7 +41,22 @@ Kinds of import:
 - `std` for the standard library;
 - `cap:*` for host-enabled capabilities such as HTTP or filesystem access;
 - `host:*` for host-defined modules; and
-- relative imports such as `./math` for source modules.
+- source imports, either relative (`./math`) or registered package names
+  (`acme/math`).
+
+Source import resolution is deterministic. The engine tries the exact path,
+then the path plus `.gengo`, then the path plus `/mod.gengo`. Extensions are
+therefore optional in source code:
+
+```gengo
+local_math := import("./math")       // ./math.gengo or ./math/mod.gengo
+pkg_math   := import("acme/math")    // registered acme/math.gengo or acme/math/mod.gengo
+```
+
+Bare source imports resolve only through registered source tables, source
+providers, or package roots. They do not grant host access. `host:*` remains
+the explicit namespace for host-registered modules, while `cap:*` remains the
+explicit, policy-gated namespace for capabilities.
 
 Built-ins are accessed through namespaces such as `std.io.println(...)` and `std.core.len(...)`. Legacy global forms such as `println(...)` are not supported.
 
