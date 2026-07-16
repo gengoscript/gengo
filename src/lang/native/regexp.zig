@@ -11,7 +11,7 @@ const NativeFnId = @import("native_ids.zig").NativeFnId;
 const NativeFuncObj = @import("../value.zig").NativeFuncObj;
 const chunk = @import("../chunk.zig");
 
-const RegexpQualifiedName = "@std.regexp.obj";
+const RegexpQualifiedName = @import("../module_descriptor.zig").RegexpQualifiedName;
 const MaxPatternLen = 4096;
 
 // Compiled pattern cache — avoids re-parsing constant patterns on every predicate check.
