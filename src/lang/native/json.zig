@@ -19,7 +19,7 @@ const NativeFuncObj = @import("../value.zig").NativeFuncObj;
 //       jarray([]JSONValue), jobject([string]JSONValue),
 //   }
 
-pub const JsonValueQualifiedName = "@std.json.Value";
+pub const JsonValueQualifiedName = @import("../module_descriptor.zig").JsonValueQualifiedName;
 
 const jv_arms = [_]vmod.VariantArmSpec{
     .{ .name = "jnull" },

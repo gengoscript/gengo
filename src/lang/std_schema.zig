@@ -1,3 +1,4 @@
+const std = @import("std");
 const common = @import("common.zig");
 
 const EntryKind = enum { namespace, function, value };
@@ -203,6 +204,11 @@ pub const string_entries = [_]Entry{
     .{ .name = "pad_right", .kind = .function },
     .{ .name = "equal_fold", .kind = .function },
     .{ .name = "contains_any", .kind = .function },
+    .{ .name = "trim_left", .kind = .function },
+    .{ .name = "trim_right", .kind = .function },
+    .{ .name = "trim_prefix", .kind = .function },
+    .{ .name = "trim_suffix", .kind = .function },
+    .{ .name = "split_n", .kind = .function },
 };
 
 pub const json_entries = [_]Entry{
@@ -210,6 +216,7 @@ pub const json_entries = [_]Entry{
     .{ .name = "parse_value", .kind = .function },
     .{ .name = "stringify",   .kind = .function },
     .{ .name = "valid",       .kind = .function },
+    .{ .name = "indent",      .kind = .function },
     .{ .name = "Value",       .kind = .value },
 };
 
@@ -228,6 +235,7 @@ pub const time_entries = [_]Entry{
     .{ .name = "parse", .kind = .function },
     .{ .name = "since", .kind = .function },
     .{ .name = "until", .kind = .function },
+    .{ .name = "parse_duration", .kind = .function },
     .{ .name = "ms", .kind = .value },
     .{ .name = "second", .kind = .value },
     .{ .name = "minute", .kind = .value },
@@ -324,6 +332,11 @@ pub const array_entries = [_]Entry{
     .{ .name = "slice", .kind = .function },
     .{ .name = "zip", .kind = .function },
     .{ .name = "flat", .kind = .function },
+    .{ .name = "find", .kind = .function },
+    .{ .name = "find_index", .kind = .function },
+    .{ .name = "all", .kind = .function },
+    .{ .name = "any", .kind = .function },
+    .{ .name = "chunk", .kind = .function },
 };
 
 pub fn lookup(namespace: []const u8, field: []const u8) ?EntryKind {
@@ -336,4 +349,133 @@ pub fn lookup(namespace: []const u8, field: []const u8) ?EntryKind {
         }
     }
     return null;
+}
+
+test "time schema matches the native module descriptor" {
+    const descriptor = @import("module_descriptor.zig");
+    for (descriptor.timeExports) |entry| {
+        const schema_kind = lookup("time", entry.name) orelse return error.MissingSchemaExport;
+        switch (entry.kind) {
+            .function => try std.testing.expect(schema_kind == .function),
+            .value => try std.testing.expect(schema_kind == .value),
+        }
+    }
+    for (time_entries) |entry| {
+        try std.testing.expect(descriptor.lookupStdNamespaceExport("time", entry.name) != null);
+    }
+}
+
+test "regexp schema matches the native module descriptor" {
+    const descriptor = @import("module_descriptor.zig");
+    for (descriptor.regexpExports) |entry| {
+        try std.testing.expect(lookup("regexp", entry.name) == .function);
+    }
+    for (regexp_entries) |entry| {
+        try std.testing.expect(descriptor.lookupStdNamespaceExport("regexp", entry.name) != null);
+    }
+}
+
+test "json schema matches the native module descriptor" {
+    const descriptor = @import("module_descriptor.zig");
+    for (descriptor.jsonExports) |entry| {
+        const schema_kind = lookup("json", entry.name) orelse return error.MissingSchemaExport;
+        switch (entry.kind) {
+            .function => try std.testing.expect(schema_kind == .function),
+            .value => try std.testing.expect(schema_kind == .value),
+        }
+    }
+    for (json_entries) |entry| {
+        try std.testing.expect(descriptor.lookupStdNamespaceExport("json", entry.name) != null);
+    }
+}
+
+test "io and fmt schemas match the native module descriptor" {
+    const descriptor = @import("module_descriptor.zig");
+    for (descriptor.ioExports) |entry| {
+        try std.testing.expect(lookup("io", entry.name) == .function);
+    }
+    for (descriptor.fmtExports) |entry| {
+        try std.testing.expect(lookup("fmt", entry.name) == .function);
+    }
+}
+
+test "conv schema matches the native module descriptor" {
+    const descriptor = @import("module_descriptor.zig");
+    for (descriptor.convExports) |entry| {
+        try std.testing.expect(lookup("conv", entry.name) == .function);
+    }
+}
+
+test "hex schema matches the native module descriptor" {
+    const descriptor = @import("module_descriptor.zig");
+    for (descriptor.hexExports) |entry| {
+        try std.testing.expect(lookup("hex", entry.name) == .function);
+    }
+}
+
+test "base64 schema matches the native module descriptor" {
+    const descriptor = @import("module_descriptor.zig");
+    for (descriptor.base64Exports) |entry| {
+        try std.testing.expect(lookup("base64", entry.name) == .function);
+    }
+}
+
+test "sort schema matches the native module descriptor" {
+    const descriptor = @import("module_descriptor.zig");
+    for (descriptor.sortExports) |entry| {
+        try std.testing.expect(lookup("sort", entry.name) == .function);
+    }
+}
+
+test "array schema matches the native module descriptor" {
+    const descriptor = @import("module_descriptor.zig");
+    for (descriptor.arrayExports) |entry| {
+        try std.testing.expect(lookup("array", entry.name) == .function);
+    }
+}
+
+test "rand schema matches the native module descriptor" {
+    const descriptor = @import("module_descriptor.zig");
+    for (descriptor.randExports) |entry| {
+        try std.testing.expect(lookup("rand", entry.name) == .function);
+    }
+}
+
+test "template schema matches the native module descriptor" {
+    const descriptor = @import("module_descriptor.zig");
+    for (descriptor.templateExports) |entry| {
+        try std.testing.expect(lookup("template", entry.name) == .function);
+    }
+}
+
+test "core schema matches the native module descriptor" {
+    const descriptor = @import("module_descriptor.zig");
+    for (descriptor.coreExports) |entry| {
+        try std.testing.expect(lookup("core", entry.name) == .function);
+    }
+}
+
+test "math schema matches the native module descriptor" {
+    const descriptor = @import("module_descriptor.zig");
+    for (descriptor.mathExports) |entry| {
+        const schema_kind = lookup("math", entry.name) orelse return error.MissingSchemaExport;
+        switch (entry.kind) {
+            .function => try std.testing.expect(schema_kind == .function),
+            .value => try std.testing.expect(schema_kind == .value),
+        }
+    }
+}
+
+test "string schema matches the native module descriptor" {
+    const descriptor = @import("module_descriptor.zig");
+    for (descriptor.stringExports) |entry| {
+        try std.testing.expect(lookup("string", entry.name) == .function);
+    }
+}
+
+test "bytes schema matches the native module descriptor" {
+    const descriptor = @import("module_descriptor.zig");
+    for (descriptor.bytesExports) |entry| {
+        try std.testing.expect(lookup("bytes", entry.name) == .function);
+    }
 }

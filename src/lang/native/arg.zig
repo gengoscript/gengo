@@ -4,7 +4,7 @@ const VMContext = @import("../vm_state.zig").VMContext;
 
 // Qualified name must match the "@mod:std.X" pattern the compiler builds
 // when it resolves a type annotation written as `std.Arg`.
-pub const ArgQualifiedName = "@mod:std.Arg";
+pub const ArgQualifiedName = @import("../module_descriptor.zig").ArgQualifiedName;
 
 const arg_arms = [_]vmod.VariantArmSpec{
     .{ .name = "Int",     .has_payload = true },

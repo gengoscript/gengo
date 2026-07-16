@@ -15,7 +15,7 @@ const w32 = std.os.windows;
 
 extern "kernel32" fn GetSystemTimeAsFileTime(lpSystemTimeAsFileTime: *w32.FILETIME) callconv(.winapi) void;
 
-const TimeTypeQualifiedName = "@std.time.obj";
+const TimeTypeQualifiedName = @import("../module_descriptor.zig").TimeQualifiedName;
 pub fn timeGetType(ctx: VMContext) !*Object {
     if (ctx.vs.time_type_cache) |t| return t;
     // Bump-allocate: permanent singleton; never swept, never triggers GC
