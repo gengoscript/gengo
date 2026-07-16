@@ -84,7 +84,7 @@ engine.registerModule("mydb", [
 ]);
 
 engine.run(`
-  db := import("mydb")
+  db := import("host:mydb")
   rows := db.query("SELECT 1", [])
 `);
 ```

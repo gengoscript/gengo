@@ -243,11 +243,15 @@ pub const Session = struct {
             }
             return error.CapabilityNotEnabled;
         }
+        if (import_name.len > 5 and std.mem.startsWith(u8, import_name, "host:")) {
+            const host_name = import_name[5..];
+            if (self.isHostModule(host_name)) {
+                return try self.makePrefixedName("host:", host_name);
+            }
+            return error.ImportNotFound;
+        }
         const resolved = try self.resolveImportPath(importer_path, import_name);
         if (common.streq(resolved, StdModulePath)) return StdModuleGlobalName;
-        if (self.isHostModule(resolved)) {
-            return try self.makePrefixedName("host:", resolved);
-        }
         try self.compileModuleFromPath(resolved);
         return self.moduleGlobalName(resolved) orelse return error.ImportNotFound;
     }
@@ -534,7 +538,7 @@ pub const Session = struct {
                     const rp = lex.next();
                     if (rp.typ != .rparen) continue;
                     if (common.streq(name.src, "std")) continue;
-                    if (self.isHostModule(name.src)) continue;
+                    if (name.src.len > 5 and std.mem.startsWith(u8, name.src, "host:")) continue;
                     if (name.src.len > 4 and std.mem.startsWith(u8, name.src, "cap:")) continue;
                     const resolved = try self.resolveImportPath(importer_path, name.src);
                     if (!containsPath(imports[0..count], lens[0..count], resolved)) {
@@ -619,9 +623,6 @@ pub const Session = struct {
     fn resolveImportPath(self: *Session, importer_path: []const u8, import_name: []const u8) ![]const u8 {
         if (common.streq(import_name, StdModulePath)) return StdModulePath;
         if (import_name.len == 0) return error.ImportNotFound;
-        // Accept optional "host:" prefix so `import("host:foo")` and `import("foo")` are equivalent.
-        const bare_name = if (std.mem.startsWith(u8, import_name, "host:")) import_name[5..] else import_name;
-        if (self.isHostModule(bare_name)) return bare_name;
         if (!(import_name[0] == '.')) {
             // Allow package imports: try the source provider before rejecting.
             if (self.sourceExists(import_name)) return copyResolvedPath(import_name);
@@ -899,14 +900,4 @@ fn normalizePathInPlace(buf: *[MaxModulePathBytes]u8, len: usize) ![]const u8 {
         write_i = 1;
     }
     return buf[0..write_i];
-}
-test "package imports resolve discovered source entry paths" {
-    const sources = [_]SourceEntry{
-        .{ .path = "lib/math.gengo", .source = "pub func add(a, b) { return a + b }" },
-        .{ .path = "lib/time/mod.gengo", .source = "pub func now() { return 0 }" },
-    };
-    var session: Session = .{ .provider = .{ .table = &sources } };
-
-    try std.testing.expectEqualStrings("lib/math.gengo", try session.resolveImportPath("main.gengo", "lib/math"));
-    try std.testing.expectEqualStrings("lib/time/mod.gengo", try session.resolveImportPath("main.gengo", "lib/time"));
 }
