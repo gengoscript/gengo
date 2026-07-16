@@ -627,7 +627,10 @@ pub const Session = struct {
             if (self.sourceExists(import_name)) return copyResolvedPath(import_name);
             var pkg_ext_buf: [MaxModulePathBytes]u8 = undefined;
             const with_ext = try appendSuffix(&pkg_ext_buf, import_name, ".gengo");
-            if (self.sourceExists(with_ext)) return copyResolvedPath(import_name);
+            if (self.sourceExists(with_ext)) return copyResolvedPath(with_ext);
+            var pkg_mod_buf: [MaxModulePathBytes]u8 = undefined;
+            const with_mod = try appendSuffix(&pkg_mod_buf, import_name, "/mod.gengo");
+            if (self.sourceExists(with_mod)) return copyResolvedPath(with_mod);
             self.last_error_path = importer_path;
             self.setScanError("unsupported import '{s}'; relative imports must start with '.', or use 'cap:'/'host:' prefix, or register a package", .{import_name});
             return error.UnsupportedImportModule;
@@ -896,4 +899,14 @@ fn normalizePathInPlace(buf: *[MaxModulePathBytes]u8, len: usize) ![]const u8 {
         write_i = 1;
     }
     return buf[0..write_i];
+}
+test "package imports resolve discovered source entry paths" {
+    const sources = [_]SourceEntry{
+        .{ .path = "lib/math.gengo", .source = "pub func add(a, b) { return a + b }" },
+        .{ .path = "lib/time/mod.gengo", .source = "pub func now() { return 0 }" },
+    };
+    var session: Session = .{ .provider = .{ .table = &sources } };
+
+    try std.testing.expectEqualStrings("lib/math.gengo", try session.resolveImportPath("main.gengo", "lib/math"));
+    try std.testing.expectEqualStrings("lib/time/mod.gengo", try session.resolveImportPath("main.gengo", "lib/time"));
 }
