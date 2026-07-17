@@ -120,7 +120,7 @@ fn stackEffect(op: Op, code: []const u8, ip: usize) struct { pop: u8, push: u8 }
         .dup2 => .{ .pop = 0, .push = 2 },
 
         .close_upvalue, .tuple_check_arity, .validate_type_default,
-        .check_named_predicate => .{ .pop = 0, .push = 0 },
+        .check_named_predicate, .validate_named_range => .{ .pop = 0, .push = 0 },
         .get_local_const_sub_call, .get_local_const_sub_call_tail => blk: {
             const argc = code[ip + 5];
             break :blk .{ .pop = argc, .push = 1 };

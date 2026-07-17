@@ -143,6 +143,10 @@ var OPS=[
   [0x75,"g·fld", "get_field — struct field read with inline cache"],
   [0x76,"s·fld", "set_field — struct field write with inline cache"],
   [0x77,"it·in", "iter_init — for-in iterator initialization"],
+  [0x7A,"n·in",  "named_inner — unwrap a runtime named value when one exists"],
+  [0x7B,"n·prd", "check_named_predicate — u16 named-type constant; validate TOS predicate chain"],
+  [0x7C,"swap",  "swap — exchange the top two stack values"],
+  [0x7D,"n·rng", "validate_named_range — u16 named-type constant; normalize/validate TOS range or cycle"],
   [0x78,"it·n1", "iter_next1 — iterator step, 1 value"],
   [0x79,"it·n2", "iter_next2 — iterator step, 2 values"],
   [0xC0,"c_eq",  "const_eq — fused constant+eq"],
@@ -230,7 +234,8 @@ for(var r=0;r<16;r++){
 | 0x58–0x5E | 7 | Cast |
 | 0x5F–0x69 | 11 | Type system / assertions |
 | 0x6A–0x79 | 16 | Collections / struct |
-| 0x7A–0xBF | 70 | Free (reserved for future core ops) |
+| 0x7A–0x7D | 4 | Named-scalar validation / stack |
+| 0x7E–0xBF | 66 | Free (reserved for future core ops) |
 | 0xC0–0xE1 | 34 | Fused / peephole |
 | 0xE2–0xFF | 30 | Free (within fused block) |
 
@@ -245,7 +250,7 @@ after the opcode byte.
 |-------|---------|
 | 1 byte | Most arithmetic, comparison, stack ops |
 | 2 bytes | `get_local`, `set_local`, `get_upvalue`, `build_array`, … |
-| 3 bytes | `constant`, `const_eq/sub/add/lt/gt`, `assert_interface`, … |
+| 3 bytes | `constant`, `const_eq/sub/add/lt/gt`, `assert_interface`, `check_named_predicate`, `validate_named_range`, … |
 | 4 bytes | `call`, `call_tail`, `local_add_const` |
 | 5 bytes | `get_local_const_*`, `jump`, `jump_if_false`, `loop`, `get_global`, … |
 | 6 bytes | `get_field`, `set_field`, `get_local_const_sub_call`, `close_upvalue_loop` |

@@ -127,9 +127,10 @@ syntax on `std` itself.
 - Returns `null` if not unwinding or if already recovered
 
 ### `std.core.type_of(v)`
-- Returns stable runtime type name
+- Returns a stable type name
 - Plain scalars report names like `int`, `float`, `decimal`, `bigint`, `bool`, `string`, `rune`, `error`, `null`
-- Named values and struct instances report their declared type name
+- A statically known named scalar expression returns its declared name, even though its runtime value is the base scalar
+- Dynamically typed named scalars report their base runtime type; named runtime values and struct instances report their declared type name
 - Anonymous typed arrays and maps report `array` and `map`
 
 ### `std.core.is_int(v)`

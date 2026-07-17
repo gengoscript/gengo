@@ -27,14 +27,15 @@ pub fn decodeAt(state: anytype, pos: usize) !DecodedInstruction {
     const raw = state.code[pos];
     // Reject bytes in the gap between core ops and fused ops (0x7D–0xBF),
     // and bytes above the last fused op.
-    if (raw > @intFromEnum(Op.swap) and raw < @intFromEnum(Op.const_eq)) return error.BadOpcode;
+    if (raw > @intFromEnum(Op.validate_named_range) and raw < @intFromEnum(Op.const_eq)) return error.BadOpcode;
     if (raw > @intFromEnum(Op.inc_global_const)) return error.BadOpcode;
     const op: Op = @enumFromInt(raw);
 
     return switch (op) {
         .constant, .def_global, .make_closure, .ret_const,
         .const_eq, .const_sub, .const_add, .const_lt, .const_gt,
-        .assert_interface, .assert_struct, .variant_check => .{
+        .assert_interface, .assert_struct, .variant_check,
+        .check_named_predicate, .validate_named_range => .{
             .op = op,
             .width = 3,
             .const_index = try readU16At(state, pos + 1),

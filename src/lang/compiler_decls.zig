@@ -44,7 +44,10 @@ pub fn emitZeroValue(c: anytype, tc: TypeCheck, line: u32) !void {
             .bool => try c.cs.emitOp(.false_val, line),
             .string => try c.cs.emitStringConst("", line),
             .rune => try c.cs.emitConst(.{ .rune = 0 }, line),
-            .bigint => { try c.cs.emitConst(.{ .int = 0.0 }, line); try c.cs.emitOp(.cast_bigint, line); },
+            .bigint => {
+                try c.cs.emitConst(.{ .int = 0.0 }, line);
+                try c.cs.emitOp(.cast_bigint, line);
+            },
         },
         .assert_arr => try c.cs.emit2(@intFromEnum(Op.build_array), 0, line),
         .assert_map => try c.cs.emit2(@intFromEnum(Op.build_map), 0, line),
@@ -134,7 +137,10 @@ pub fn interfaceDeclBody(c: anytype, kw: Token, name: Token, is_pub: bool) !void
     var mcount: u8 = 0;
     while (!c.check(.rbrace)) {
         if (c.cur.typ != .ident) return c.err("expected identifier, found {s}", .{c.tokenName(c.cur.typ)});
-        if (mcount >= MaxLocals) { c.setErr("too many fields (max {d})", .{MaxLocals}); return error.TooManyFields; }
+        if (mcount >= MaxLocals) {
+            c.setErr("too many fields (max {d})", .{MaxLocals});
+            return error.TooManyFields;
+        }
         const mname = try c.copyName(c.cur.src);
         for (methods_tmp[0..mcount]) |m| {
             if (common.streq(m.name, mname)) {
@@ -172,9 +178,14 @@ pub fn interfaceDeclBody(c: anytype, kw: Token, name: Token, is_pub: bool) !void
                     c.setErr("expected type annotation, found {s}", .{c.tokenName(c.cur.typ)});
                     return error.ExpectedTypeAnnotation;
                 }
-                const ptype: FieldTypeSpec = try parseFieldTypeSpec(c, );
+                const ptype: FieldTypeSpec = try parseFieldTypeSpec(
+                    c,
+                );
                 if (!(ptype.alts.len == 1 and ptype.alts[0].typ == .any)) has_typed_params = true;
-                if (arity >= MaxLocals) { c.setErr("too many parameters (max {d})", .{MaxLocals}); return error.TooManyParams; }
+                if (arity >= MaxLocals) {
+                    c.setErr("too many parameters (max {d})", .{MaxLocals});
+                    return error.TooManyParams;
+                }
                 ptypes_tmp[arity] = ptype;
                 arity += 1;
                 if (vari) {
@@ -193,8 +204,13 @@ pub fn interfaceDeclBody(c: anytype, kw: Token, name: Token, is_pub: bool) !void
         var has_typed_returns = false;
         if (c.match(.lparen)) {
             while (true) {
-                if (rcount >= MaxLocals) { c.setErr("too many return types (max {d})", .{MaxLocals}); return error.TooManyParams; }
-                returns_tmp[rcount] = try parseFieldTypeSpec(c, );
+                if (rcount >= MaxLocals) {
+                    c.setErr("too many return types (max {d})", .{MaxLocals});
+                    return error.TooManyParams;
+                }
+                returns_tmp[rcount] = try parseFieldTypeSpec(
+                    c,
+                );
                 rcount += 1;
                 has_typed_returns = true;
                 if (!c.match(.comma)) break;
@@ -202,7 +218,9 @@ pub fn interfaceDeclBody(c: anytype, kw: Token, name: Token, is_pub: bool) !void
             }
             try c.consume(.rparen);
         } else if (c.cur.typ == .question or c.cur.typ == .ident or c.cur.typ == .kw_func or c.cur.typ == .lbracket) {
-            returns_tmp[0] = try parseFieldTypeSpec(c, );
+            returns_tmp[0] = try parseFieldTypeSpec(
+                c,
+            );
             rcount = 1;
             has_typed_returns = true;
         }
@@ -287,7 +305,10 @@ pub fn methodDecl(c: anytype) !void {
     if (c.cur.typ != .ident) return c.err("expected identifier, found {s}", .{c.tokenName(c.cur.typ)});
     const recv_type = c.cur.src;
     c.advance();
-    if (c.registry.hasInterfaceType(recv_type)) { c.setErr("cannot define method on interface type '{s}'", .{recv_type}); return error.MethodOnInterface; }
+    if (c.registry.hasInterfaceType(recv_type)) {
+        c.setErr("cannot define method on interface type '{s}'", .{recv_type});
+        return error.MethodOnInterface;
+    }
     if (!c.skipping_test_body and !c.registry.hasStructType(recv_type) and !c.registry.hasNamedType(recv_type) and !c.registry.hasVariantType(recv_type)) {
         c.setErr("method receiver '{s}' is not a declared type", .{recv_type});
         return error.UnknownReceiverType;
@@ -321,6 +342,7 @@ pub fn methodDecl(c: anytype) !void {
                 c.setErr("too many global functions (limit {d})", .{ct.MaxGlobals});
                 return error.TooManyGlobals;
             };
+            if (c.last_func_obj) |fo| c.registry.setGlobalFuncObj(key, fo);
         }
         try c.cs.emitOpStringConst(.def_global, key, kw.line);
     }
@@ -391,6 +413,7 @@ pub fn namedFuncDecl(c: anytype, is_pub: bool) !void {
                 return error.TooManyGlobals;
             };
             if (c.last_func_obj) |fo| {
+                c.registry.setGlobalFuncObj(qname, fo);
                 if (fo.function.named_return_count >= 2) {
                     c.registry.setGlobalFuncReturnCount(qname, fo.function.named_return_count);
                 }
@@ -454,7 +477,10 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
     }
     const name = name_tok.src;
     if (!c.skipping_test_body) {
-        if (c.registry.hasNamedType(name)) { c.setErr("duplicate type name '{s}'", .{name}); return error.DuplicateNamedType; }
+        if (c.registry.hasNamedType(name)) {
+            c.setErr("duplicate type name '{s}'", .{name});
+            return error.DuplicateNamedType;
+        }
         if (!c.inFunc()) {
             if (c.registry.hasAnyTypeName(name)) {
                 c.setErr("type name '{s}' conflicts with an existing type declaration", .{name});
@@ -479,15 +505,23 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
         if (!c.check(.rbrace)) {
             while (true) {
                 if (c.cur.typ != .ident) return c.err("expected identifier, found {s}", .{c.tokenName(c.cur.typ)});
-                if (mcount >= MaxLocals) { c.setErr("too many enum members (max {d})", .{MaxLocals}); return error.TooManyFields; }
+                if (mcount >= MaxLocals) {
+                    c.setErr("too many enum members (max {d})", .{MaxLocals});
+                    return error.TooManyFields;
+                }
                 const mname = c.cur.src;
                 for (members_tmp[0..mcount]) |m| {
-                    if (common.streq(m, mname)) { c.setErr("duplicate member '{s}' in enum", .{mname}); return error.DuplicateField; }
+                    if (common.streq(m, mname)) {
+                        c.setErr("duplicate member '{s}' in enum", .{mname});
+                        return error.DuplicateField;
+                    }
                 }
                 members_tmp[mcount] = try c.copyName(mname);
                 c.advance();
                 if (c.match(.eq)) {
-                    const v = try parseSignedNumber(c, );
+                    const v = try parseSignedNumber(
+                        c,
+                    );
                     next_int = @intFromFloat(v);
                     has_explicit_ints = true;
                 }
@@ -538,7 +572,9 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
     if (c.cur.typ == .lbracket) {
         // type Name []T (named array) or type Name [K]V (named map) — shares
         // the same array/map disambiguation as struct fields and 'var'.
-        const spec: FieldTypeSpec = try parseFieldTypeSpec(c, );
+        const spec: FieldTypeSpec = try parseFieldTypeSpec(
+            c,
+        );
         if (spec.alts.len != 1 or (spec.alts[0].typ != .array and spec.alts[0].typ != .map)) {
             return c.err("expected an array ('[]T') or map ('[K]V') type", .{});
         }
@@ -627,9 +663,13 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
         return c.err("use '[]T' syntax for array types", .{});
     } else if (common.streq(base_name, "map")) {
         try c.consume(.lbracket);
-        const ks = try parseFieldTypeSpec(c, );
+        const ks = try parseFieldTypeSpec(
+            c,
+        );
         try c.consume(.rbracket);
-        const vs = try parseFieldTypeSpec(c, );
+        const vs = try parseFieldTypeSpec(
+            c,
+        );
         if (!c.skipping_test_body) try c.registry.addNamedType(.{ .name = name, .base = .map_t, .key_spec = ks, .val_spec = vs });
         const nt = heap.allocObject() orelse return error.OutOfMemory;
         nt.* = .{ .named_type = NamedTypeObj{ .name = try c.copyName(name), .qualified_name = qname, .base = .map_t, .key_spec = ks, .val_spec = vs } };
@@ -653,9 +693,9 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
         parent_is_cycle = parent.is_cycle;
         parent_min = parent.min;
         parent_max = parent.max;
-        parent_name_str = base_name;          // #78: preserve parent chain
-        parent_scale = parent.scale;           // #79: inherit decimal scale
-        parent_elem_spec = parent.elem_spec;   // #76: inherit collection specs
+        parent_name_str = base_name; // #78: preserve parent chain
+        parent_scale = parent.scale; // #79: inherit decimal scale
+        parent_elem_spec = parent.elem_spec; // #76: inherit collection specs
         parent_key_spec = parent.key_spec;
         parent_val_spec = parent.val_spec;
     } else return c.err("unknown type '{s}'", .{base_name});
@@ -685,7 +725,9 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
     if (c.check(.kw_range) or c.check(.kw_cycle)) {
         if (base != .int and base != .float and base != .decimal and base != .rune)
             return c.err("range and cycle constraints require a numeric parent type (int, float, decimal, or rune)", .{});
-        const constraint = try parseConstraintBounds(c, );
+        const constraint = try parseConstraintBounds(
+            c,
+        );
         if (constraint.is_cycle and base != .int and base != .float and base != .decimal)
             return c.err("'cycle' constraint requires a numeric base type (int, float, or decimal)", .{});
         has_range = true;
@@ -772,6 +814,7 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
         .base = base,
         .has_range = has_range,
         .is_cycle = is_cycle,
+        .has_predicate = predicate_obj != null or predicate_uv_count > 0,
         .scale = scale,
         .min = min,
         .max = max,
@@ -807,6 +850,7 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
         .has_default = has_default,
         .default_val = default_val,
     } };
+    if (!c.skipping_test_body) c.registry.setNamedTypeRuntimeObject(name, nt);
     try c.cs.emitConst(.{ .object = nt }, kw.line);
     if (predicate_uv_count > 0) {
         try c.cs.emitOp(.set_named_predicate, kw.line);
@@ -826,14 +870,16 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
 // ── Generic type helpers ──────────────────────────────────────────────────────
 
 fn argsHaveTypeParam(args: []const FieldTypeSpec) bool {
-    for (args) |a| for (a.alts) |aa| { if (aa.typ == .type_param) return true; };
+    for (args) |a| for (a.alts) |aa| {
+        if (aa.typ == .type_param) return true;
+    };
     return false;
 }
 
 pub fn isKnownConstraint(name: []const u8) bool {
     return common.streq(name, "numeric") or
-           common.streq(name, "ordered") or
-           common.streq(name, "comparable");
+        common.streq(name, "ordered") or
+        common.streq(name, "comparable");
 }
 
 // Short human-readable name for a type arg in error messages.
@@ -841,23 +887,23 @@ fn typeArgLabel(spec: FieldTypeSpec) []const u8 {
     if (spec.alts.len == 0) return "?";
     const alt = spec.alts[0];
     return switch (alt.typ) {
-        .int       => "int",
-        .float     => "float",
+        .int => "int",
+        .float => "float",
         .decimal_t => "decimal",
-        .rune_t    => "rune",
-        .boolean   => "bool",
-        .string    => "string",
-        .error_t   => "error",
-        .array     => "[]...",
-        .map       => "map[...]",
-        .func_t    => "func",
-        .any       => "any",
-        .null_t    => "null",
-        .type_param    => alt.param_name,
-        .struct_t      => alt.struct_name,
-        .named_t       => alt.named_name,
-        .variant_t     => alt.named_name,
-        .interface_t   => alt.interface_name,
+        .rune_t => "rune",
+        .boolean => "bool",
+        .string => "string",
+        .error_t => "error",
+        .array => "[]...",
+        .map => "map[...]",
+        .func_t => "func",
+        .any => "any",
+        .null_t => "null",
+        .type_param => alt.param_name,
+        .struct_t => alt.struct_name,
+        .named_t => alt.named_name,
+        .variant_t => alt.named_name,
+        .interface_t => alt.interface_name,
     };
 }
 
@@ -912,16 +958,25 @@ pub fn checkTypeArgConstraints(c: anytype, params: []const ct.GenericParam, args
 /// Build "[int,string]" suffix from concrete arg specs (no allocation — caller provides buf).
 fn instArgSuffix(buf: []u8, args: []const FieldTypeSpec) []const u8 {
     var pos: usize = 0;
-    if (pos < buf.len) { buf[pos] = '['; pos += 1; }
+    if (pos < buf.len) {
+        buf[pos] = '[';
+        pos += 1;
+    }
     for (args, 0..) |arg, i| {
-        if (i > 0 and pos < buf.len) { buf[pos] = ','; pos += 1; }
+        if (i > 0 and pos < buf.len) {
+            buf[pos] = ',';
+            pos += 1;
+        }
         var tmp: [64]u8 = undefined;
         const s = specTypeStr(&tmp, arg);
         const avail = @min(s.len, buf.len -| pos -| 1);
-        @memcpy(buf[pos..pos + avail], s[0..avail]);
+        @memcpy(buf[pos .. pos + avail], s[0..avail]);
         pos += avail;
     }
-    if (pos < buf.len) { buf[pos] = ']'; pos += 1; }
+    if (pos < buf.len) {
+        buf[pos] = ']';
+        pos += 1;
+    }
     return buf[0..pos];
 }
 
@@ -958,7 +1013,8 @@ fn altTypeStr(buf: []u8, alt: value_mod.FieldTypeAlt) []const u8 {
                     const inner = altTypeStr(&inner_buf, es.alts[0]);
                     const need = 2 + inner.len;
                     if (need <= buf.len) {
-                        buf[0] = '['; buf[1] = ']';
+                        buf[0] = '[';
+                        buf[1] = ']';
                         @memcpy(buf[2..need], inner);
                         break :blk buf[0..need];
                     }
@@ -976,11 +1032,14 @@ fn specTypeStr(buf: []u8, spec: FieldTypeSpec) []const u8 {
     if (spec.alts.len == 1) return altTypeStr(buf, spec.alts[0]);
     var pos: usize = 0;
     for (spec.alts, 0..) |alt, i| {
-        if (i > 0 and pos < buf.len) { buf[pos] = '|'; pos += 1; }
+        if (i > 0 and pos < buf.len) {
+            buf[pos] = '|';
+            pos += 1;
+        }
         var tmp: [32]u8 = undefined;
         const s = altTypeStr(&tmp, alt);
         const avail = @min(s.len, buf.len - pos);
-        @memcpy(buf[pos..pos + avail], s[0..avail]);
+        @memcpy(buf[pos .. pos + avail], s[0..avail]);
         pos += avail;
     }
     return buf[0..pos];
@@ -990,18 +1049,25 @@ fn buildInstKey(tname: []const u8, args: []const FieldTypeSpec) ![]const u8 {
     var buf: [256]u8 = undefined;
     var pos: usize = 0;
     const tn = @min(tname.len, 128);
-    @memcpy(buf[pos..pos + tn], tname[0..tn]);
+    @memcpy(buf[pos .. pos + tn], tname[0..tn]);
     pos += tn;
-    buf[pos] = '['; pos += 1;
+    buf[pos] = '[';
+    pos += 1;
     for (args, 0..) |arg, i| {
-        if (i > 0 and pos < buf.len) { buf[pos] = ','; pos += 1; }
+        if (i > 0 and pos < buf.len) {
+            buf[pos] = ',';
+            pos += 1;
+        }
         var tmp: [64]u8 = undefined;
         const s = specTypeStr(&tmp, arg);
         const avail = @min(s.len, buf.len -| 1 -| pos);
-        @memcpy(buf[pos..pos + avail], s[0..avail]);
+        @memcpy(buf[pos .. pos + avail], s[0..avail]);
         pos += avail;
     }
-    if (pos < buf.len) { buf[pos] = ']'; pos += 1; }
+    if (pos < buf.len) {
+        buf[pos] = ']';
+        pos += 1;
+    }
     const k = heap.bump(u8, pos) orelse return error.OutOfMemory;
     @memcpy(k[0..pos], buf[0..pos]);
     return k[0..pos];
@@ -1016,7 +1082,10 @@ fn substituteSpec(spec: FieldTypeSpec, params: []const ct.GenericParam, args: []
     for (spec.alts) |alt| {
         if (alt.typ == .type_param) {
             for (params, args) |p, a| {
-                if (common.streq(p.name, alt.param_name)) { total += a.alts.len; break; }
+                if (common.streq(p.name, alt.param_name)) {
+                    total += a.alts.len;
+                    break;
+                }
             }
         } else {
             total += 1;
@@ -1028,7 +1097,10 @@ fn substituteSpec(spec: FieldTypeSpec, params: []const ct.GenericParam, args: []
         if (alt.typ == .type_param) {
             for (params, args) |p, a| {
                 if (common.streq(p.name, alt.param_name)) {
-                    for (a.alts) |aa| { new_alts[out] = aa; out += 1; }
+                    for (a.alts) |aa| {
+                        new_alts[out] = aa;
+                        out += 1;
+                    }
                     break;
                 }
             }
@@ -1119,7 +1191,7 @@ fn applyGenericInst(c: anytype, tname: []const u8, args: []const FieldTypeSpec, 
     const qname_buf = heap.bump(u8, base_qname.len + key_suffix.len) orelse return error.OutOfMemory;
     @memcpy(qname_buf[0..base_qname.len], base_qname);
     @memcpy(qname_buf[base_qname.len..], key_suffix);
-    const qname = qname_buf[0..base_qname.len + key_suffix.len];
+    const qname = qname_buf[0 .. base_qname.len + key_suffix.len];
 
     if (!c.skipping_test_body) {
         const inst_obj = heap.allocObject() orelse return error.OutOfMemory;
@@ -1182,9 +1254,13 @@ pub fn parseConstraintBounds(c: anytype) !struct { is_cycle: bool, min: f64, max
         true
     else
         return c.err("expected 'range' or 'cycle', found {s}", .{c.tokenName(c.cur.typ)});
-    const min = try parseSignedNumber(c, );
+    const min = try parseSignedNumber(
+        c,
+    );
     try c.consume(.dotdot);
-    const max = try parseSignedNumber(c, );
+    const max = try parseSignedNumber(
+        c,
+    );
     if (min > max) {
         c.setErr("range minimum ({d}) must not exceed maximum ({d})", .{ min, max });
         return error.RangeError;
@@ -1197,7 +1273,10 @@ pub fn parseFieldTypeSpec(c: anytype) !FieldTypeSpec {
     var count: u8 = 0;
 
     if (c.match(.question)) {
-        if (count >= MaxTypeAlts) { c.setErr("too many type alternatives (max {d})", .{MaxTypeAlts}); return error.TooManyTypeAlternatives; }
+        if (count >= MaxTypeAlts) {
+            c.setErr("too many type alternatives (max {d})", .{MaxTypeAlts});
+            return error.TooManyTypeAlternatives;
+        }
         tmp[count] = .{ .typ = .null_t };
         count += 1;
     }
@@ -1208,7 +1287,9 @@ pub fn parseFieldTypeSpec(c: anytype) !FieldTypeSpec {
         if (c.check(.rbracket)) {
             // SliceType: []T
             c.advance(); // consume ']'
-            const es = try parseFieldTypeSpec(c, );
+            const es = try parseFieldTypeSpec(
+                c,
+            );
             const ep = heap.bump(FieldTypeSpec, 1) orelse return error.OutOfMemory;
             ep[0] = es;
             alt = .{ .typ = .array, .elem_spec = ep[0] };
@@ -1218,13 +1299,17 @@ pub fn parseFieldTypeSpec(c: anytype) !FieldTypeSpec {
             // shape is what a forgotten map value type looks like, and
             // letting it quietly mean "array of T" instead would mask
             // exactly that mistake. Arrays are written '[]T'.
-            const first_spec = try parseFieldTypeSpec(c, );
+            const first_spec = try parseFieldTypeSpec(
+                c,
+            );
             try c.consume(.rbracket);
             if (!(c.cur.typ == .ident or c.cur.typ == .kw_func or c.cur.typ == .lbracket or c.cur.typ == .question)) {
                 c.setErr("expected a value type after '[...]' — write 'map[K]V' for a map, or '[]T' for an array", .{});
                 return error.ExpectedTypeName;
             }
-            const second_spec = try parseFieldTypeSpec(c, );
+            const second_spec = try parseFieldTypeSpec(
+                c,
+            );
             const kp = heap.bump(FieldTypeSpec, 1) orelse return error.OutOfMemory;
             kp[0] = first_spec;
             const vp = heap.bump(FieldTypeSpec, 1) orelse return error.OutOfMemory;
@@ -1238,8 +1323,13 @@ pub fn parseFieldTypeSpec(c: anytype) !FieldTypeSpec {
         var func_param_count: u8 = 0;
         if (!c.check(.rparen)) {
             while (true) {
-                if (func_param_count >= MaxLocals) { c.setErr("too many parameters (max {d})", .{MaxLocals}); return error.TooManyParams; }
-                func_params_tmp[func_param_count] = try parseFieldTypeSpec(c, );
+                if (func_param_count >= MaxLocals) {
+                    c.setErr("too many parameters (max {d})", .{MaxLocals});
+                    return error.TooManyParams;
+                }
+                func_params_tmp[func_param_count] = try parseFieldTypeSpec(
+                    c,
+                );
                 func_param_count += 1;
                 if (!c.match(.comma)) break;
                 if (c.check(.rparen)) break;
@@ -1250,15 +1340,22 @@ pub fn parseFieldTypeSpec(c: anytype) !FieldTypeSpec {
         var func_return_count: u8 = 0;
         if (c.match(.lparen)) {
             while (true) {
-                if (func_return_count >= MaxLocals) { c.setErr("too many parameters (max {d})", .{MaxLocals}); return error.TooManyParams; }
-                func_returns_tmp[func_return_count] = try parseFieldTypeSpec(c, );
+                if (func_return_count >= MaxLocals) {
+                    c.setErr("too many parameters (max {d})", .{MaxLocals});
+                    return error.TooManyParams;
+                }
+                func_returns_tmp[func_return_count] = try parseFieldTypeSpec(
+                    c,
+                );
                 func_return_count += 1;
                 if (!c.match(.comma)) break;
                 if (c.check(.rparen)) break;
             }
             try c.consume(.rparen);
         } else if (c.cur.typ == .question or c.cur.typ == .ident or c.cur.typ == .kw_func or c.cur.typ == .lbracket) {
-            func_returns_tmp[0] = try parseFieldTypeSpec(c, );
+            func_returns_tmp[0] = try parseFieldTypeSpec(
+                c,
+            );
             func_return_count = 1;
         }
         const fp = if (func_param_count > 0) blk: {
@@ -1284,21 +1381,12 @@ pub fn parseFieldTypeSpec(c: anytype) !FieldTypeSpec {
                 if (c.cur.typ != .ident) return c.err("expected type name after '.', found {s}", .{c.tokenName(c.cur.typ)});
                 const type_name = c.cur.src;
                 c.advance();
-                if (c.resolveModuleTypeName(mod_path, type_name)) |kind| {
-                    // Qualified name: "@mod:PATH.TypeName" — matches how the module compiler registers types.
-                    const prefix_len = "@mod:".len + mod_path.len;
-                    const qname_len = prefix_len + 1 + type_name.len;
-                    const qname_buf = heap.bump(u8, qname_len) orelse return error.OutOfMemory;
-                    @memcpy(qname_buf[0.."@mod:".len], "@mod:");
-                    @memcpy(qname_buf["@mod:".len..prefix_len], mod_path);
-                    qname_buf[prefix_len] = '.';
-                    @memcpy(qname_buf[prefix_len + 1 .. qname_len], type_name);
-                    const qname = qname_buf[0..qname_len];
-                    alt = switch (kind) {
-                        .struct_t    => .{ .typ = .struct_t,    .struct_name    = qname },
-                        .interface_t => .{ .typ = .interface_t, .interface_name = qname },
-                        .named_t     => .{ .typ = .named_t,     .named_name     = qname },
-                        .variant_t   => .{ .typ = .variant_t,   .named_name     = qname },
+                if (c.resolveModuleTypeName(mod_path, type_name)) |info| {
+                    alt = switch (info.kind) {
+                        .struct_t => .{ .typ = .struct_t, .struct_name = info.qualified_name },
+                        .interface_t => .{ .typ = .interface_t, .interface_name = info.qualified_name },
+                        .named_t => .{ .typ = .named_t, .named_name = info.qualified_name },
+                        .variant_t => .{ .typ = .variant_t, .named_name = info.qualified_name },
                         .func_or_var => return c.err("'{s}.{s}' is not a type", .{ tname, type_name }),
                     };
                 } else if (!c.skipping_test_body) {
@@ -1310,86 +1398,93 @@ pub fn parseFieldTypeSpec(c: anytype) !FieldTypeSpec {
                 return error.UnknownType;
             }
         } else {
-        alt = .{ .typ = .struct_t, .struct_name = tname };
-        // Active generic type parameter (e.g. T inside type Stack[T] struct { ... }).
-        found_type_param: {
-            for (c.type_params[0..c.type_param_count]) |tp| {
-                if (common.streq(tp.name, tname)) {
-                    alt = .{ .typ = .type_param, .param_name = tp.name };
-                    break :found_type_param;
+            alt = .{ .typ = .struct_t, .struct_name = tname };
+            // Active generic type parameter (e.g. T inside type Stack[T] struct { ... }).
+            found_type_param: {
+                for (c.type_params[0..c.type_param_count]) |tp| {
+                    if (common.streq(tp.name, tname)) {
+                        alt = .{ .typ = .type_param, .param_name = tp.name };
+                        break :found_type_param;
+                    }
                 }
-            }
-            if (common.streq(tname, "int")) {
-                alt = .{ .typ = .int };
-            } else if (common.streq(tname, "float")) {
-                alt = .{ .typ = .float };
-            } else if (common.streq(tname, "rune")) {
-                alt = .{ .typ = .rune_t };
-            } else if (common.streq(tname, "bool")) {
-                alt = .{ .typ = .boolean };
-            } else if (common.streq(tname, "string")) {
-                alt = .{ .typ = .string };
-            } else if (common.streq(tname, "error")) {
-                alt = .{ .typ = .error_t };
-            } else if (common.streq(tname, "bigint")) {
-                alt = .{ .typ = .any };
-            } else if (common.streq(tname, "array")) {
-                return c.err("use '[]T' syntax for array types", .{});
-            } else if (common.streq(tname, "map")) {
-                var ks: ?FieldTypeSpec = null;
-                var vs: ?FieldTypeSpec = null;
-                if (c.match(.lbracket)) {
-                    ks = try parseFieldTypeSpec(c, );
-                    try c.consume(.rbracket);
-                    vs = try parseFieldTypeSpec(c, );
-                } else {
-                    return c.err("use 'map[K]V' syntax for map types", .{});
-                }
-                alt = .{ .typ = .map, .key_spec = ks, .val_spec = vs };
-            } else if (c.registry.hasStructTypeLocal(tname)) {
-                alt = .{ .typ = .struct_t, .struct_name = try c.qualifyTypeName(tname) };
-            } else if (c.registry.hasInterfaceType(tname)) {
-                alt = .{ .typ = .interface_t, .interface_name = try c.qualifyTypeName(tname) };
-            } else if (c.registry.hasNamedType(tname)) {
-                alt = .{ .typ = .named_t, .named_name = try c.qualifyTypeName(tname) };
-            } else if (c.registry.hasVariantType(tname)) {
-                alt = .{ .typ = .variant_t, .named_name = try c.qualifyTypeName(tname) };
-            } else if (c.registry.getTypeAlias(tname)) |alias| {
-                alt = switch (alias.kind) {
-                    .struct_t  => .{ .typ = .struct_t,  .struct_name = alias.target_qname },
-                    .variant_t => .{ .typ = .variant_t, .named_name  = alias.target_qname },
-                };
-            } else if (c.cur.typ == .lbracket and c.registry.hasGenericType(tname)) {
-                // Generic instantiation: Stack[int], Result[T, E], etc.
-                // If any type arg still contains a type_param (we're inside a template body),
-                // store a deferred representation so substituteSpec can resolve it later.
-                const ginfo = c.registry.getGenericType(tname).?;
-                var arg_specs: [ct.MaxTypeParams]FieldTypeSpec = undefined;
-                const arg_count = try parseInstArgSpecs(c, tname, ginfo.param_count, &arg_specs);
-                if (argsHaveTypeParam(arg_specs[0..arg_count])) {
-                    const base_qname = try c.qualifyTypeName(tname);
-                    const stored = heap.bump(FieldTypeSpec, arg_count) orelse return error.OutOfMemory;
-                    @memcpy(stored[0..arg_count], arg_specs[0..arg_count]);
-                    alt = switch (ginfo.kind) {
-                        .struct_t  => .{ .typ = .struct_t,  .struct_name = base_qname, .generic_args = stored[0..arg_count] },
-                        .variant_t => .{ .typ = .variant_t, .named_name  = base_qname, .generic_args = stored[0..arg_count] },
+                if (common.streq(tname, "int")) {
+                    alt = .{ .typ = .int };
+                } else if (common.streq(tname, "float")) {
+                    alt = .{ .typ = .float };
+                } else if (common.streq(tname, "rune")) {
+                    alt = .{ .typ = .rune_t };
+                } else if (common.streq(tname, "bool")) {
+                    alt = .{ .typ = .boolean };
+                } else if (common.streq(tname, "string")) {
+                    alt = .{ .typ = .string };
+                } else if (common.streq(tname, "error")) {
+                    alt = .{ .typ = .error_t };
+                } else if (common.streq(tname, "bigint")) {
+                    alt = .{ .typ = .any };
+                } else if (common.streq(tname, "array")) {
+                    return c.err("use '[]T' syntax for array types", .{});
+                } else if (common.streq(tname, "map")) {
+                    var ks: ?FieldTypeSpec = null;
+                    var vs: ?FieldTypeSpec = null;
+                    if (c.match(.lbracket)) {
+                        ks = try parseFieldTypeSpec(
+                            c,
+                        );
+                        try c.consume(.rbracket);
+                        vs = try parseFieldTypeSpec(
+                            c,
+                        );
+                    } else {
+                        return c.err("use 'map[K]V' syntax for map types", .{});
+                    }
+                    alt = .{ .typ = .map, .key_spec = ks, .val_spec = vs };
+                } else if (c.registry.hasStructTypeLocal(tname)) {
+                    alt = .{ .typ = .struct_t, .struct_name = try c.qualifyTypeName(tname) };
+                } else if (c.registry.hasInterfaceType(tname)) {
+                    alt = .{ .typ = .interface_t, .interface_name = try c.qualifyTypeName(tname) };
+                } else if (c.registry.hasNamedType(tname)) {
+                    alt = .{ .typ = .named_t, .named_name = try c.qualifyTypeName(tname) };
+                } else if (c.registry.hasVariantType(tname)) {
+                    alt = .{ .typ = .variant_t, .named_name = try c.qualifyTypeName(tname) };
+                } else if (c.registry.getTypeAlias(tname)) |alias| {
+                    alt = switch (alias.kind) {
+                        .struct_t => .{ .typ = .struct_t, .struct_name = alias.target_qname },
+                        .variant_t => .{ .typ = .variant_t, .named_name = alias.target_qname },
                     };
-                } else {
-                    const qname = try applyGenericInst(c, tname, arg_specs[0..arg_count], c.prev.line);
-                    alt = switch (ginfo.kind) {
-                        .struct_t  => .{ .typ = .struct_t,  .struct_name = qname },
-                        .variant_t => .{ .typ = .variant_t, .named_name  = qname },
-                    };
+                } else if (c.cur.typ == .lbracket and c.registry.hasGenericType(tname)) {
+                    // Generic instantiation: Stack[int], Result[T, E], etc.
+                    // If any type arg still contains a type_param (we're inside a template body),
+                    // store a deferred representation so substituteSpec can resolve it later.
+                    const ginfo = c.registry.getGenericType(tname).?;
+                    var arg_specs: [ct.MaxTypeParams]FieldTypeSpec = undefined;
+                    const arg_count = try parseInstArgSpecs(c, tname, ginfo.param_count, &arg_specs);
+                    if (argsHaveTypeParam(arg_specs[0..arg_count])) {
+                        const base_qname = try c.qualifyTypeName(tname);
+                        const stored = heap.bump(FieldTypeSpec, arg_count) orelse return error.OutOfMemory;
+                        @memcpy(stored[0..arg_count], arg_specs[0..arg_count]);
+                        alt = switch (ginfo.kind) {
+                            .struct_t => .{ .typ = .struct_t, .struct_name = base_qname, .generic_args = stored[0..arg_count] },
+                            .variant_t => .{ .typ = .variant_t, .named_name = base_qname, .generic_args = stored[0..arg_count] },
+                        };
+                    } else {
+                        const qname = try applyGenericInst(c, tname, arg_specs[0..arg_count], c.prev.line);
+                        alt = switch (ginfo.kind) {
+                            .struct_t => .{ .typ = .struct_t, .struct_name = qname },
+                            .variant_t => .{ .typ = .variant_t, .named_name = qname },
+                        };
+                    }
+                } else if (!c.skipping_test_body) {
+                    c.setErr("unknown type '{s}'", .{tname});
+                    return error.UnknownType;
                 }
-            } else if (!c.skipping_test_body) {
-                c.setErr("unknown type '{s}'", .{tname});
-                return error.UnknownType;
-            }
-        } // end found_type_param
+            } // end found_type_param
         } // end else (not dot)
     }
 
-    if (count >= MaxTypeAlts) { c.setErr("too many type alternatives (max {d})", .{MaxTypeAlts}); return error.TooManyTypeAlternatives; }
+    if (count >= MaxTypeAlts) {
+        c.setErr("too many type alternatives (max {d})", .{MaxTypeAlts});
+        return error.TooManyTypeAlternatives;
+    }
     tmp[count] = alt;
     count += 1;
 
@@ -1415,7 +1510,10 @@ fn checkStructFieldType(c: anytype, spec: FieldTypeSpec, qself: []const u8, insi
     // so self-reference is safe.
     var is_nullable = false;
     for (spec.alts) |alt| {
-        if (alt.typ == .null_t) { is_nullable = true; break; }
+        if (alt.typ == .null_t) {
+            is_nullable = true;
+            break;
+        }
     }
     const ref_ctx = inside_ref or is_nullable;
     for (spec.alts) |alt| {
@@ -1490,17 +1588,25 @@ pub fn structDeclBody(c: anytype, kw: Token, name: Token, is_pub: bool, tparams:
         while (true) {
             const field_is_const = c.match(.kw_const);
             if (c.cur.typ != .ident) return c.err("expected identifier, found {s}", .{c.tokenName(c.cur.typ)});
-            if (count >= MaxLocals) { c.setErr("too many fields (max {d})", .{MaxLocals}); return error.TooManyFields; }
+            if (count >= MaxLocals) {
+                c.setErr("too many fields (max {d})", .{MaxLocals});
+                return error.TooManyFields;
+            }
             const fname = try c.copyName(c.cur.src);
             for (field_specs[0..count]) |fs| {
-                if (common.streq(fs.name, fname)) { c.setErr("duplicate field name '{s}'", .{fname}); return error.DuplicateField; }
+                if (common.streq(fs.name, fname)) {
+                    c.setErr("duplicate field name '{s}'", .{fname});
+                    return error.DuplicateField;
+                }
             }
             c.advance();
 
             var spec = StructFieldSpec{ .name = fname, .typ = .{ .alts = &[_]FieldTypeAlt{} }, .is_const = field_is_const };
             if (c.cur.typ == .ident or c.cur.typ == .question or c.cur.typ == .kw_func or c.cur.typ == .lbracket) {
                 // Space syntax: field type  (colon no longer used)
-                spec.typ = try parseFieldTypeSpec(c, );
+                spec.typ = try parseFieldTypeSpec(
+                    c,
+                );
                 if (!is_generic and !c.skipping_test_body) try checkStructFieldType(c, spec.typ, try c.qualifyTypeName(name.src), false);
             } else {
                 c.type_param_count = saved_param_count;
@@ -1537,6 +1643,7 @@ pub fn structDeclBody(c: anytype, kw: Token, name: Token, is_pub: bool, tparams:
     const qname = try c.qualifyTypeName(name.src);
     const st = heap.allocObject() orelse return error.OutOfMemory;
     st.* = .{ .struct_type = StructTypeObj{ .name = try c.copyName(name.src), .qualified_name = qname, .fields = fields[0..count] } };
+    if (!c.skipping_test_body) c.registry.setStructObj(name.src, st);
     try c.cs.emitConst(.{ .object = st }, kw.line);
 
     if (c.inFunc()) {
@@ -1560,11 +1667,17 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
     const parent_name = c.cur.src;
     c.advance(); // parent name
 
-    const parent_info = c.registry.getNamedTypeInfo(parent_name) orelse { c.setErr("unknown type '{s}'", .{parent_name}); return error.UnexpectedToken; };
+    const parent_info = c.registry.getNamedTypeInfo(parent_name) orelse {
+        c.setErr("unknown type '{s}'", .{parent_name});
+        return error.UnexpectedToken;
+    };
 
     // Handle enum subtype: subtype Weekend_Days Days { Saturday, Sunday }
     if (parent_info.base == .enum_t) {
-        if (c.registry.hasNamedType(name)) { c.setErr("duplicate type name '{s}'", .{name}); return error.DuplicateNamedType; }
+        if (c.registry.hasNamedType(name)) {
+            c.setErr("duplicate type name '{s}'", .{name});
+            return error.DuplicateNamedType;
+        }
         const qname = try c.qualifyTypeName(name);
         const qparent = try c.qualifyTypeName(parent_name);
         if (!c.check(.lbrace))
@@ -1575,10 +1688,16 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
         if (!c.check(.rbrace)) {
             while (true) {
                 if (c.cur.typ != .ident) return c.err("expected identifier, found {s}", .{c.tokenName(c.cur.typ)});
-                if (mcount >= MaxLocals) { c.setErr("too many enum members (max {d})", .{MaxLocals}); return error.TooManyFields; }
+                if (mcount >= MaxLocals) {
+                    c.setErr("too many enum members (max {d})", .{MaxLocals});
+                    return error.TooManyFields;
+                }
                 const smname = c.cur.src;
                 for (members_tmp[0..mcount]) |m| {
-                    if (common.streq(m, smname)) { c.setErr("duplicate member '{s}' in enum subtype", .{smname}); return error.DuplicateField; }
+                    if (common.streq(m, smname)) {
+                        c.setErr("duplicate member '{s}' in enum subtype", .{smname});
+                        return error.DuplicateField;
+                    }
                 }
                 members_tmp[mcount] = try c.copyName(smname);
                 mcount += 1;
@@ -1595,7 +1714,10 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
             for (members[0..mcount]) |m| {
                 var found = false;
                 for (parent_members) |pm| {
-                    if (common.streq(m, pm)) { found = true; break; }
+                    if (common.streq(m, pm)) {
+                        found = true;
+                        break;
+                    }
                 }
                 if (!found) {
                     c.setErr("'{s}' is not a member of {s}", .{ m, parent_name });
@@ -1627,7 +1749,10 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
         return;
     }
 
-    if (!c.skipping_test_body and c.registry.hasNamedType(name)) { c.setErr("duplicate type name '{s}'", .{name}); return error.DuplicateNamedType; }
+    if (!c.skipping_test_body and c.registry.hasNamedType(name)) {
+        c.setErr("duplicate type name '{s}'", .{name});
+        return error.DuplicateNamedType;
+    }
 
     const base = parent_info.base;
     var has_range = parent_info.has_range;
@@ -1642,7 +1767,9 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
 
     if (c.check(.kw_range) or c.check(.kw_cycle)) {
         if (!is_numeric) return c.err("range and cycle constraints require a numeric parent type (int, float, decimal, or rune)", .{});
-        const constraint = try parseConstraintBounds(c, );
+        const constraint = try parseConstraintBounds(
+            c,
+        );
         if (constraint.is_cycle and base != .int and base != .float and base != .decimal)
             return c.err("'cycle' constraint requires a numeric base type (int, float, or decimal)", .{});
         if (parent_info.has_range) {
@@ -1731,6 +1858,7 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
         .base = base,
         .has_range = has_range,
         .is_cycle = is_cycle,
+        .has_predicate = predicate_obj != null or predicate_uv_count > 0,
         .scale = scale,
         .min = min,
         .max = max,
@@ -1758,6 +1886,7 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
         .has_default = has_default,
         .default_val = default_val,
     } };
+    if (!c.skipping_test_body) c.registry.setNamedTypeRuntimeObject(name, nt);
     try c.cs.emitConst(.{ .object = nt }, kw.line);
     if (predicate_uv_count > 0) {
         try c.cs.emitOp(.set_named_predicate, kw.line);
@@ -1780,7 +1909,10 @@ pub fn variantDeclBody(c: anytype, kw: Token, name_tok: Token, is_pub: bool, tpa
     const is_generic = tparam_count > 0;
 
     if (!c.skipping_test_body) {
-        if (c.registry.hasVariantType(name) or c.registry.hasGenericType(name)) { c.setErr("duplicate variant type name '{s}'", .{name}); return error.DuplicateVariantType; }
+        if (c.registry.hasVariantType(name) or c.registry.hasGenericType(name)) {
+            c.setErr("duplicate variant type name '{s}'", .{name});
+            return error.DuplicateVariantType;
+        }
         if (!c.inFunc()) {
             if (c.registry.hasAnyTypeName(name)) {
                 c.setErr("type name '{s}' conflicts with an existing type declaration", .{name});
@@ -1827,11 +1959,19 @@ pub fn variantDeclBody(c: anytype, kw: Token, name_tok: Token, is_pub: bool, tpa
                         c.advance();
                     }
                 }
-                payload_type = try parseFieldTypeSpec(c, );
+                payload_type = try parseFieldTypeSpec(
+                    c,
+                );
                 try c.consume(.rparen);
-                if (arm_count >= MaxLocals) { c.setErr("too many local variables (max {d})", .{MaxLocals}); return error.TooManyLocals; }
+                if (arm_count >= MaxLocals) {
+                    c.setErr("too many local variables (max {d})", .{MaxLocals});
+                    return error.TooManyLocals;
+                }
                 for (arms_tmp[0..arm_count]) |a| {
-                    if (common.streq(a.name, entry_name)) { c.setErr("duplicate arm '{s}' in variant", .{entry_name}); return error.DuplicateField; }
+                    if (common.streq(a.name, entry_name)) {
+                        c.setErr("duplicate arm '{s}' in variant", .{entry_name});
+                        return error.DuplicateField;
+                    }
                 }
                 arms_tmp[arm_count] = .{
                     .name = entry_name,
@@ -1847,16 +1987,24 @@ pub fn variantDeclBody(c: anytype, kw: Token, name_tok: Token, is_pub: bool, tpa
                 if (!c.check(.rbrace)) {
                     while (true) {
                         if (c.cur.typ != .ident) return c.err("expected identifier, found {s}", .{c.tokenName(c.cur.typ)});
-                        if (field_count >= MaxLocals) { c.setErr("too many fields (max {d})", .{MaxLocals}); return error.TooManyFields; }
+                        if (field_count >= MaxLocals) {
+                            c.setErr("too many fields (max {d})", .{MaxLocals});
+                            return error.TooManyFields;
+                        }
                         const fname = try c.copyName(c.cur.src);
                         for (field_specs[0..field_count]) |fs| {
-                            if (common.streq(fs.name, fname)) { c.setErr("duplicate field '{s}' in variant arm", .{fname}); return error.DuplicateField; }
+                            if (common.streq(fs.name, fname)) {
+                                c.setErr("duplicate field '{s}' in variant arm", .{fname});
+                                return error.DuplicateField;
+                            }
                         }
                         c.advance();
                         if (!(c.cur.typ == .ident or c.cur.typ == .question or c.cur.typ == .kw_func or c.cur.typ == .lbracket))
                             return c.err("expected type annotation for variant arm field '{s}'", .{fname});
                         var spec = StructFieldSpec{ .name = fname, .typ = .{ .alts = &[_]FieldTypeAlt{} } };
-                        spec.typ = try parseFieldTypeSpec(c, );
+                        spec.typ = try parseFieldTypeSpec(
+                            c,
+                        );
                         field_specs[field_count] = spec;
                         field_count += 1;
                         if (!c.match(.comma)) break;
@@ -1867,9 +2015,15 @@ pub fn variantDeclBody(c: anytype, kw: Token, name_tok: Token, is_pub: bool, tpa
                 const fields = heap.bump(StructFieldSpec, field_count) orelse return error.OutOfMemory;
                 @memcpy(fields[0..field_count], field_specs[0..field_count]);
                 for (fields[0..field_count]) |*f| f.key = .{ .string = try c.cs.internStr(f.name) };
-                if (arm_count >= MaxLocals) { c.setErr("too many local variables (max {d})", .{MaxLocals}); return error.TooManyLocals; }
+                if (arm_count >= MaxLocals) {
+                    c.setErr("too many local variables (max {d})", .{MaxLocals});
+                    return error.TooManyLocals;
+                }
                 for (arms_tmp[0..arm_count]) |a| {
-                    if (common.streq(a.name, entry_name)) { c.setErr("duplicate arm '{s}' in variant", .{entry_name}); return error.DuplicateField; }
+                    if (common.streq(a.name, entry_name)) {
+                        c.setErr("duplicate arm '{s}' in variant", .{entry_name});
+                        return error.DuplicateField;
+                    }
                 }
                 arms_tmp[arm_count] = .{
                     .name = entry_name,
@@ -1879,19 +2033,33 @@ pub fn variantDeclBody(c: anytype, kw: Token, name_tok: Token, is_pub: bool, tpa
                 arm_count += 1;
             } else if (c.cur.typ == .comma or c.cur.typ == .rbrace) {
                 // No-payload arm: name
-                if (arm_count >= MaxLocals) { c.setErr("too many local variables (max {d})", .{MaxLocals}); return error.TooManyLocals; }
+                if (arm_count >= MaxLocals) {
+                    c.setErr("too many local variables (max {d})", .{MaxLocals});
+                    return error.TooManyLocals;
+                }
                 for (arms_tmp[0..arm_count]) |a| {
-                    if (common.streq(a.name, entry_name)) { c.setErr("duplicate arm '{s}' in variant", .{entry_name}); return error.DuplicateField; }
+                    if (common.streq(a.name, entry_name)) {
+                        c.setErr("duplicate arm '{s}' in variant", .{entry_name});
+                        return error.DuplicateField;
+                    }
                 }
                 arms_tmp[arm_count] = .{ .name = entry_name };
                 arm_count += 1;
             } else if (c.cur.typ == .ident or c.cur.typ == .question or c.cur.typ == .kw_func or c.cur.typ == .lbracket) {
                 // Shared field: name type
-                if (shared_count >= MaxLocals) { c.setErr("too many fields (max {d})", .{MaxLocals}); return error.TooManyFields; }
-                for (shared_tmp[0..shared_count]) |sf| {
-                    if (common.streq(sf.name, entry_name)) { c.setErr("duplicate field '{s}' in variant shared fields", .{entry_name}); return error.DuplicateField; }
+                if (shared_count >= MaxLocals) {
+                    c.setErr("too many fields (max {d})", .{MaxLocals});
+                    return error.TooManyFields;
                 }
-                const spec = StructFieldSpec{ .name = entry_name, .typ = try parseFieldTypeSpec(c, ) };
+                for (shared_tmp[0..shared_count]) |sf| {
+                    if (common.streq(sf.name, entry_name)) {
+                        c.setErr("duplicate field '{s}' in variant shared fields", .{entry_name});
+                        return error.DuplicateField;
+                    }
+                }
+                const spec = StructFieldSpec{ .name = entry_name, .typ = try parseFieldTypeSpec(
+                    c,
+                ) };
                 shared_tmp[shared_count] = spec;
                 shared_count += 1;
             } else {
@@ -1950,7 +2118,10 @@ pub fn variantDeclBody(c: anytype, kw: Token, name_tok: Token, is_pub: bool, tpa
 pub fn namedErrorTypeDecl(c: anytype, kw: Token, name_tok: Token, is_pub: bool) !void {
     const name = name_tok.src;
     if (!c.skipping_test_body) {
-        if (c.registry.hasNamedErrorType(name)) { c.setErr("duplicate error type name '{s}'", .{name}); return error.DuplicateNamedType; }
+        if (c.registry.hasNamedErrorType(name)) {
+            c.setErr("duplicate error type name '{s}'", .{name});
+            return error.DuplicateNamedType;
+        }
         if (!c.inFunc()) {
             if (c.registry.hasAnyTypeName(name)) {
                 c.setErr("type name '{s}' conflicts with an existing type declaration", .{name});

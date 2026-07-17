@@ -57,6 +57,8 @@ const PrimType = ct.PrimType;
 const ExprPrimInfo = struct {
     prim: ?PrimType = null,
     named_type: ?[]const u8 = null,
+    struct_type: ?[]const u8 = null,
+    index_result_spec: ?FieldTypeSpec = null,
     is_constant: bool = false,
     is_plain_binding: bool = false,
     is_zero_int: bool = false,
@@ -77,7 +79,7 @@ pub const CompilerOptions = struct {
     module_ctx: ?*anyopaque = null,
     resolve_import: ?ImportResolverFn = null,
     has_module_export: ?*const fn (ctx: *anyopaque, path: []const u8, field: []const u8) bool = null,
-    resolve_module_type: ?*const fn (ctx: *anyopaque, path: []const u8, name: []const u8) ?ct.ExportTypeKind = null,
+    resolve_module_type: ?*const fn (ctx: *anyopaque, path: []const u8, name: []const u8) ?module_descriptor.ModuleTypeInfo = null,
     test_mode: bool = false,
     repl_mode: bool = false,
     check_global_exists: ?*const fn (ctx: *anyopaque, name: []const u8) bool = null,
@@ -113,6 +115,7 @@ pub const Compiler = struct {
 
     std_namespace_path: ?[]const u8 = null,
     std_module_global_names: [MaxLocals][]const u8 = undefined,
+    std_module_global_paths: [MaxLocals][]const u8 = undefined,
     std_module_global_count: u8 = 0,
     import_module_path: ?[]const u8 = null,
     import_module_global_qnames: [MaxLocals][]const u8 = undefined,
@@ -157,8 +160,10 @@ pub const Compiler = struct {
     // Set in emitGetVar when the variable is a known multi-named-return global function.
     // Read and consumed by infixExpr(.lparen) immediately after the call.
     pending_call_spread_count: u8 = 0,
+    pending_call_qname: ?[]const u8 = null,
     expr_prim_info: [MaxExprDepth + 2]ExprPrimInfo = [_]ExprPrimInfo{.{}} ** (MaxExprDepth + 2),
-    expr_prim_capture_depth: ?u16 = null,
+    expr_prim_capture_depths: [MaxExprDepth + 2]u16 = undefined,
+    expr_prim_capture_count: u16 = 0,
     // Set by multiAssignOrDecl before emitExprListTuple; 0 outside that context.
     multi_assign_lhs_count: u8 = 0,
     // Set by infixExpr(.lparen) when callee_spread_n == multi_assign_lhs_count;
@@ -177,6 +182,7 @@ pub const Compiler = struct {
 
     pub fn compile(self: *Compiler, emit_halt: bool) !void {
         if (!self.options.repl_mode) self.registry.reset();
+        try module_descriptor.seedCompilerRegistry(&self.registry);
         self.export_count = 0;
         self.err_msg_len = 0;
         self.err_col = 0;
@@ -358,7 +364,10 @@ pub const Compiler = struct {
 
     pub fn defineLocal(self: *Compiler, name: []const u8, is_const: bool) !u8 {
         const scope = self.currentScope();
-        if (scope.local_count >= MaxLocals) { self.setErr("too many local variables (max {d})", .{MaxLocals}); return error.TooManyLocals; }
+        if (scope.local_count >= MaxLocals) {
+            self.setErr("too many local variables (max {d})", .{MaxLocals});
+            return error.TooManyLocals;
+        }
         if (name.len > 0 and name[0] != '_') {
             for (scope.locals[0..scope.local_count]) |local| {
                 if (common.streq(local.name, name)) {
@@ -386,14 +395,16 @@ pub const Compiler = struct {
     pub fn emitGetVar(self: *Compiler, name: Token) !void {
         self.cs.setCol(name.col);
         self.pending_call_spread_count = 0;
+        self.pending_call_qname = null;
         if (self.resolveLocal(name.src)) |slot| {
             const local = self.currentScope().locals[slot];
             if (local.from_std) {
                 self.cs.markStdCallPatchPos();
             }
             try self.cs.emit2(@intFromEnum(Op.get_local), slot, name.line);
-            if (local.from_std) {
-                self.setStdNamespacePath("");
+            self.pending_call_qname = null;
+            if (local.std_namespace_path) |path| {
+                self.setStdNamespacePath(path);
             } else if (local.import_module_path) |path| {
                 self.setImportModulePath(path);
             } else {
@@ -401,6 +412,7 @@ pub const Compiler = struct {
             }
         } else if (self.resolveUpvalue(name.src)) |uv| {
             try self.cs.emit2(@intFromEnum(Op.get_upvalue), uv, name.line);
+            self.pending_call_qname = null;
             self.clearNamespaceProvenance();
         } else {
             const qname = try self.qualifyGlobalName(name.src);
@@ -414,13 +426,14 @@ pub const Compiler = struct {
                     }
                 }
             }
-            if (self.isStdModuleGlobal(qname)) {
+            if (self.getStdModuleGlobalPath(qname)) |_| {
                 self.cs.markStdCallPatchPos();
             }
             try self.cs.emitGetGlobal(qname, name.line);
             self.pending_call_spread_count = self.registry.getGlobalFuncReturnCount(qname);
-            if (self.isStdModuleGlobal(qname)) {
-                self.setStdNamespacePath("");
+            self.pending_call_qname = qname;
+            if (self.getStdModuleGlobalPath(qname)) |path| {
+                self.setStdNamespacePath(path);
             } else if (self.getImportModuleGlobalPath(qname)) |path| {
                 self.setImportModulePath(path);
             } else {
@@ -429,11 +442,60 @@ pub const Compiler = struct {
         }
     }
 
-    fn isStdModuleGlobal(self: *Compiler, name: []const u8) bool {
-        for (self.std_module_global_names[0..self.std_module_global_count]) |n| {
-            if (common.streq(n, name)) return true;
+    fn namedTypeAssignableTo(self: *Compiler, arg_named: []const u8, param_named: []const u8) bool {
+        if (common.streq(arg_named, param_named)) return true;
+        var cur: []const u8 = arg_named;
+        while (self.registry.getNamedTypeInfo(cur)) |info| {
+            const parent = info.parent_name orelse return false;
+            if (common.streq(parent, param_named)) return true;
+            cur = parent;
         }
         return false;
+    }
+
+    pub fn checkDirectCallArgCompatibility(self: *Compiler, func_obj: *Object, arg_index: usize, arg_info: ExprPrimInfo, line: u32) !void {
+        if (func_obj.* != .function) return;
+        const f = func_obj.function;
+        if (arg_index >= f.param_types.len) return;
+        const spec = f.param_types[arg_index];
+        if (spec.alts.len != 1) return;
+        const alt = spec.alts[0];
+        switch (alt.typ) {
+            .int, .float, .decimal_t, .boolean, .string, .rune_t => {
+                if (arg_info.named_type) |nt| {
+                    const expected = switch (alt.typ) {
+                        .int => "int",
+                        .float => "float",
+                        .decimal_t => "decimal",
+                        .boolean => "bool",
+                        .string => "string",
+                        .rune_t => "rune",
+                        else => unreachable,
+                    };
+                    self.setErr("cannot pass {s} to parameter of type {s}; convert explicitly", .{ nt, expected });
+                    self.err_line = line;
+                    return error.TypeError;
+                }
+            },
+            .named_t => {
+                if (arg_info.named_type) |nt| {
+                    if (!self.namedTypeAssignableTo(nt, alt.named_name)) {
+                        self.setErr("cannot pass {s} to parameter of type {s}", .{ nt, alt.named_name });
+                        self.err_line = line;
+                        return error.TypeError;
+                    }
+                }
+            },
+            else => {},
+        }
+    }
+
+    fn getStdModuleGlobalPath(self: *Compiler, name: []const u8) ?[]const u8 {
+        const count = self.std_module_global_count;
+        for (self.std_module_global_names[0..count], self.std_module_global_paths[0..count]) |n, path| {
+            if (common.streq(n, name)) return path;
+        }
+        return null;
     }
 
     fn getImportModuleGlobalPath(self: *Compiler, name: []const u8) ?[]const u8 {
@@ -478,8 +540,8 @@ pub const Compiler = struct {
     fn primitiveTypeFromNumberTok(tok: Token) PrimType {
         const is_based = tok.src.len >= 2 and tok.src[0] == '0' and
             (tok.src[1] == 'x' or tok.src[1] == 'X' or
-             tok.src[1] == 'b' or tok.src[1] == 'B' or
-             tok.src[1] == 'o' or tok.src[1] == 'O');
+                tok.src[1] == 'b' or tok.src[1] == 'B' or
+                tok.src[1] == 'o' or tok.src[1] == 'O');
         const is_float = !is_based and std.mem.indexOfAny(u8, tok.src, ".eE") != null;
         return if (is_float) .float else .int;
     }
@@ -513,11 +575,46 @@ pub const Compiler = struct {
             .string => .{ .prim = .string },
             .rune_t => .{ .prim = .rune },
             .named_t => .{ .named = spec.alts[0].named_name },
-            .array => .{ .assert_arr = {} },
-            .map => .{ .assert_map = {} },
+            .array => .{ .assert_arr = spec.alts[0].elem_spec },
+            .map => .{ .assert_map = spec.alts[0].val_spec },
             .error_t => .{ .assert_err = {} },
             else => .{ .none = {} },
         };
+    }
+
+    pub fn exprPrimInfoFromFieldTypeSpec(self: *Compiler, spec: value_mod.FieldTypeSpec) ExprPrimInfo {
+        const tc = self.typeCheckFromFieldTypeSpec(spec);
+        return switch (tc) {
+            .prim => |prim| .{ .prim = prim },
+            .named => |name| blk: {
+                const info = self.registry.getNamedTypeInfo(name) orelse break :blk .{};
+                const prim = namedTypeBaseToPrim(info.base) orelse break :blk .{};
+                break :blk .{ .prim = prim, .named_type = name };
+            },
+            .assert_arr, .assert_map => |element_spec| .{ .index_result_spec = element_spec },
+            else => .{},
+        };
+    }
+
+    pub fn exprPrimInfoFromNamedType(self: *Compiler, name: []const u8) ExprPrimInfo {
+        const info = self.registry.getNamedTypeInfo(name) orelse return .{ .named_type = name };
+        const prim = namedTypeBaseToPrim(info.base) orelse return .{ .named_type = name };
+        return .{ .prim = prim, .named_type = name };
+    }
+
+    fn exprPrimInfoFromTypeCheck(self: *Compiler, tc: TypeCheck) ExprPrimInfo {
+        if (tc == .anon_typed) {
+            const idx = tc.anon_typed;
+            if (idx >= self.cs.const_count or self.cs.consts[idx] != .object) return .{};
+            const obj = self.cs.consts[idx].object;
+            if (obj.* != .named_type) return .{};
+            return switch (obj.named_type.base) {
+                .array_t => .{ .index_result_spec = obj.named_type.elem_spec },
+                .map_t => .{ .index_result_spec = obj.named_type.val_spec },
+                else => .{},
+            };
+        }
+        return .{};
     }
 
     pub fn clearCurrentExprPrimInfo(self: *Compiler) void {
@@ -534,15 +631,50 @@ pub const Compiler = struct {
 
     pub fn emitPredicateCheck(self: *Compiler, tc: TypeCheck, line: u32) !void {
         switch (tc) {
-            .named => try self.cs.emitOp(.check_named_predicate, line),
+            .named => |name| {
+                if (!self.namedTypeHasPredicate(name)) return;
+                try self.emitNamedTypeValidationOp(.check_named_predicate, name, line);
+            },
             else => {},
         }
+    }
+
+    pub fn emitNamedValidation(self: *Compiler, tc: TypeCheck, line: u32) !void {
+        switch (tc) {
+            .named => |name| {
+                const info = self.registry.getNamedTypeInfo(name) orelse return;
+                if (info.has_range) try self.emitNamedTypeValidationOp(.validate_named_range, name, line);
+                try self.emitPredicateCheck(tc, line);
+            },
+            else => {},
+        }
+    }
+
+    fn emitNamedTypeValidationOp(self: *Compiler, op: Op, name: []const u8, line: u32) !void {
+        const info = self.registry.getNamedTypeInfo(name) orelse return;
+        const idx = self.registry.namedTypeRuntimeConstIdx(name) orelse blk: {
+            const obj = info.runtime_obj orelse return;
+            const new_idx = try self.cs.addConst(.{ .object = obj });
+            self.registry.setNamedTypeRuntimeConstIdx(name, new_idx);
+            break :blk new_idx;
+        };
+        try self.cs.emitConstIdx(op, idx, line);
+    }
+
+    fn namedTypeHasPredicate(self: *Compiler, name: []const u8) bool {
+        var current: ?[]const u8 = name;
+        while (current) |current_name| {
+            const info = self.registry.getNamedTypeInfo(current_name) orelse return false;
+            if (info.has_predicate) return true;
+            current = info.parent_name;
+        }
+        return false;
     }
 
     /// Legacy wrapper: emit predicate check for the current expression's named type.
     pub fn emitPredicateCheckCurrent(self: *Compiler, line: u32) !void {
         if (self.currentExprPrimInfo().named_type) |name| {
-            try self.emitPredicateCheck(.{ .named = name }, line);
+            try self.emitNamedValidation(.{ .named = name }, line);
         }
     }
 
@@ -574,13 +706,22 @@ pub const Compiler = struct {
                             const p = namedTypeBaseToPrim(info.base) orelse break :blk ExprPrimInfo{};
                             break :blk .{ .prim = p, .named_type = n, .is_constant = false, .is_plain_binding = true, .is_zero_int = false };
                         },
+                        .assert_arr, .assert_map => |element_spec| .{ .index_result_spec = element_spec },
+                        .struct_type => |n| .{ .struct_type = n },
+                        .anon_typed => self.exprPrimInfoFromTypeCheck(tc),
                         else => .{},
                     };
                 } else if (self.lookupInferredNamedGlobal(tok.src)) |n| {
                     // Inferred named-type global: tracked only for TypeMismatch detection.
                     // Not in typed_global_type_checks so assignStmt does not wrap results.
-                    const info = self.registry.getNamedTypeInfo(n) orelse { self.clearCurrentExprPrimInfo(); return; };
-                    const p = namedTypeBaseToPrim(info.base) orelse { self.clearCurrentExprPrimInfo(); return; };
+                    const info = self.registry.getNamedTypeInfo(n) orelse {
+                        self.clearCurrentExprPrimInfo();
+                        return;
+                    };
+                    const p = namedTypeBaseToPrim(info.base) orelse {
+                        self.clearCurrentExprPrimInfo();
+                        return;
+                    };
                     self.expr_prim_info[self.expr_depth] = .{ .prim = p, .named_type = n, .is_constant = false, .is_plain_binding = true, .is_zero_int = false };
                 } else {
                     self.clearCurrentExprPrimInfo();
@@ -591,12 +732,15 @@ pub const Compiler = struct {
     }
 
     pub fn beginExprPrimCapture(self: *Compiler) void {
-        self.expr_prim_capture_depth = self.expr_depth;
+        if (self.expr_prim_capture_count >= self.expr_prim_capture_depths.len) return;
+        self.expr_prim_capture_depths[self.expr_prim_capture_count] = self.expr_depth;
+        self.expr_prim_capture_count += 1;
     }
 
     pub fn endExprPrimCapture(self: *Compiler) ExprPrimInfo {
-        const capture_depth = self.expr_prim_capture_depth orelse return .{};
-        self.expr_prim_capture_depth = null;
+        if (self.expr_prim_capture_count == 0) return .{};
+        self.expr_prim_capture_count -= 1;
+        const capture_depth = self.expr_prim_capture_depths[self.expr_prim_capture_count];
         return self.expr_prim_info[capture_depth + 1];
     }
 
@@ -624,7 +768,6 @@ pub const Compiler = struct {
         const lhs_prim = lhs.prim orelse return op;
         const rhs_prim = rhs.prim orelse return op;
         if (lhs_prim != rhs_prim) return op;
-        if (lhs.named_type != null or rhs.named_type != null) return op;
         return switch (lhs_prim) {
             .int => switch (op) {
                 .add => if (lhs.is_constant or rhs.is_constant) op else .add_int,
@@ -649,30 +792,29 @@ pub const Compiler = struct {
         const lhs_prim = lhs.prim orelse return op;
         const rhs_prim = rhs.prim orelse return op;
         if (lhs_prim != rhs_prim) return op;
-        if (lhs.named_type != null or rhs.named_type != null) return op;
         return switch (lhs_prim) {
             .int => switch (op) {
-                .eq, .ne, .lt, .le, .gt, .ge => if (lhs.is_constant or rhs.is_constant) op else switch (op) {
+                .eq, .lt, .gt => if (lhs.is_constant or rhs.is_constant) op else switch (op) {
                     .eq => .eq_int,
-                    .ne => .ne_int,
                     .lt => .lt_int,
-                    .le => .le_int,
                     .gt => .gt_int,
-                    .ge => .ge_int,
                     else => unreachable,
                 },
+                .ne => if (lhs.is_constant or rhs.is_constant) op else .ne_int,
+                .le => .le_int,
+                .ge => .ge_int,
                 else => op,
             },
             .float => switch (op) {
-                .eq, .ne, .lt, .le, .gt, .ge => if (lhs.is_constant or rhs.is_constant) op else switch (op) {
+                .eq, .lt, .gt => if (lhs.is_constant or rhs.is_constant) op else switch (op) {
                     .eq => .eq_float,
-                    .ne => .ne_float,
                     .lt => .lt_float,
-                    .le => .le_float,
                     .gt => .gt_float,
-                    .ge => .ge_float,
                     else => unreachable,
                 },
+                .ne => if (lhs.is_constant or rhs.is_constant) op else .ne_float,
+                .le => .le_float,
+                .ge => .ge_float,
                 else => op,
             },
             else => op,
@@ -684,7 +826,6 @@ pub const Compiler = struct {
         const lhs_prim = lhs.prim orelse return null;
         const rhs_prim = rhs.prim orelse return null;
         if (lhs_prim != rhs_prim) return null;
-        if (lhs.named_type != null or rhs.named_type != null) return null;
         if (lhs.is_constant or rhs.is_constant) return null;
         return switch (lhs_prim) {
             .int => .ne_int,
@@ -694,6 +835,47 @@ pub const Compiler = struct {
     }
 
     pub fn setCurrentExprPrimResult(self: *Compiler, op: Op, lhs: ExprPrimInfo, rhs: ExprPrimInfo) !void {
+        // Named-type compatibility applies regardless of whether prims are tracked
+        // (constructor results carry named_type but not prim).
+        if (lhs.named_type) |ln| {
+            if (rhs.named_type) |rn| {
+                if (!common.streq(ln, rn) and !self.registry.areNamedTypesCompatible(ln, rn)) {
+                    self.setErr("cannot mix named types '{s}' and '{s}' in '{s}' operation", .{ ln, rn, @tagName(op) });
+                    return error.TypeMismatch;
+                }
+            } else if (rhs.prim) |rp| {
+                // Named erased scalar + plain scalar: reject (e.g. Age(20) + 1).
+                // Constructor calls set named_type but not prim; use registry for base type.
+                const is_erased = if (self.registry.getNamedTypeInfo(ln)) |info|
+                    switch (info.base) {
+                        .int, .float, .bool, .rune => true,
+                        else => false,
+                    }
+                else
+                    false;
+                if (is_erased and (rp == .int or rp == .float or rp == .bool or rp == .rune)) {
+                    self.setErr("cannot apply '{s}' to {s} and {s}; use {s}(value) or unwrap with the base type", .{ @tagName(op), ln, @tagName(rp), ln });
+                    return error.TypeMismatch;
+                }
+            }
+        } else if (rhs.named_type) |rn| {
+            // Symmetric: plain scalar op named erased scalar (e.g. 1 + Age(20)).
+            const is_erased = if (self.registry.getNamedTypeInfo(rn)) |info|
+                switch (info.base) {
+                    .int, .float, .bool, .rune => true,
+                    else => false,
+                }
+            else
+                false;
+            if (is_erased) {
+                if (lhs.prim) |lp| {
+                    if (lp == .int or lp == .float or lp == .bool or lp == .rune) {
+                        self.setErr("cannot apply '{s}' to {s} and {s}; use {s}(value) or unwrap with the base type", .{ @tagName(op), @tagName(lp), rn, rn });
+                        return error.TypeMismatch;
+                    }
+                }
+            }
+        }
         const lhs_prim = lhs.prim orelse {
             self.clearCurrentExprPrimInfo();
             return;
@@ -707,14 +889,6 @@ pub const Compiler = struct {
             return;
         }
         const is_constant = lhs.is_constant and rhs.is_constant;
-        if (lhs.named_type) |ln| {
-            if (rhs.named_type) |rn| {
-                if (!common.streq(ln, rn) and !self.registry.areNamedTypesCompatible(ln, rn)) {
-                    self.setErr("cannot mix named types '{s}' and '{s}' in '{s}' operation", .{ ln, rn, @tagName(op) });
-                    return error.TypeMismatch;
-                }
-            }
-        }
         const result_named: ?[]const u8 = if (lhs.named_type) |ln|
             if (rhs.named_type) |rn|
                 if (common.streq(ln, rn)) ln else null
@@ -729,7 +903,8 @@ pub const Compiler = struct {
                 .mul => lhs.is_zero_int or rhs.is_zero_int,
                 else => false,
             } },
-            .div => .{ .prim = if (lhs_prim == .int) .float else lhs_prim, .named_type = null, .is_constant = is_constant, .is_zero_int = false },
+            .div => .{ .prim = if (lhs_prim == .int) .float else lhs_prim, .named_type = if (lhs_prim == .float) result_named else null, .is_constant = is_constant, .is_zero_int = false },
+            .int_div, .rem, .mod, .bit_and, .bit_or, .bit_xor => .{ .prim = lhs_prim, .named_type = result_named, .is_constant = is_constant, .is_zero_int = false },
             else => .{},
         };
     }
@@ -737,16 +912,15 @@ pub const Compiler = struct {
     pub fn selectZeroIntCompare(self: *Compiler, tt: TT, lhs: ExprPrimInfo, rhs: ExprPrimInfo) ?ZeroIntCompare {
         _ = self;
         if (!(lhs.prim == .int and rhs.prim == .int)) return null;
-        if (lhs.named_type != null or rhs.named_type != null) return null;
         if (!(rhs.is_zero_int and !lhs.is_constant and !lhs.is_plain_binding)) return null;
         return switch (tt) {
-            .eq_eq  => .{ .op = .eqz_int },
+            .eq_eq => .{ .op = .eqz_int },
             .bang_eq => .{ .op = .nez_int },
-            .lt     => .{ .op = .ltz_int },
-            .lt_eq  => .{ .op = .lez_int },
-            .gt     => .{ .op = .gtz_int },
-            .gt_eq  => .{ .op = .gez_int },
-            else    => null,
+            .lt => .{ .op = .ltz_int },
+            .lt_eq => .{ .op = .lez_int },
+            .gt => .{ .op = .gtz_int },
+            .gt_eq => .{ .op = .gez_int },
+            else => null,
         };
     }
 
@@ -813,9 +987,16 @@ pub const Compiler = struct {
         const lhs_prim = lhs_info.prim orelse return .{};
         const rhs_prim = rhs_info.prim orelse return .{};
         if (lhs_prim != rhs_prim) return .{};
+        const named_type = if (lhs_info.named_type) |lhs_name|
+            if (rhs_info.named_type) |rhs_name|
+                if (common.streq(lhs_name, rhs_name)) lhs_name else null
+            else
+                null
+        else
+            null;
         return switch (lhs_prim) {
-            .int => .{ .prim = .int, .is_constant = lhs_info.is_constant and rhs_info.is_constant, .is_zero_int = lhs_info.is_zero_int and rhs_info.is_zero_int },
-            .float => .{ .prim = .float, .is_constant = lhs_info.is_constant and rhs_info.is_constant },
+            .int => .{ .prim = .int, .named_type = named_type, .is_constant = lhs_info.is_constant and rhs_info.is_constant, .is_zero_int = lhs_info.is_zero_int and rhs_info.is_zero_int },
+            .float => .{ .prim = .float, .named_type = named_type, .is_constant = lhs_info.is_constant and rhs_info.is_constant },
             else => .{},
         };
     }
@@ -823,11 +1004,16 @@ pub const Compiler = struct {
     pub fn stdMathTernaryIntrinsicResultInfo(self: *Compiler, direct_name: []const u8, first_info: ExprPrimInfo, second_info: ExprPrimInfo, third_info: ExprPrimInfo) ExprPrimInfo {
         _ = self;
         if (!common.streq(direct_name, "module:std.math.clamp")) return .{};
-        return .{ .prim = .float, .is_constant = first_info.is_constant and second_info.is_constant and third_info.is_constant };
+        if (first_info.prim != .float or second_info.prim != .float or third_info.prim != .float) return .{};
+        const first_name = first_info.named_type orelse return .{ .prim = .float, .is_constant = first_info.is_constant and second_info.is_constant and third_info.is_constant };
+        const second_name = second_info.named_type orelse return .{ .prim = .float, .is_constant = first_info.is_constant and second_info.is_constant and third_info.is_constant };
+        const third_name = third_info.named_type orelse return .{ .prim = .float, .is_constant = first_info.is_constant and second_info.is_constant and third_info.is_constant };
+        return .{ .prim = .float, .named_type = if (common.streq(first_name, second_name) and common.streq(first_name, third_name)) first_name else null, .is_constant = first_info.is_constant and second_info.is_constant and third_info.is_constant };
     }
 
     pub fn emitVarTypeProlog(self: *Compiler, tc: TypeCheck, line: u32) !void {
         if (tc == .named) {
+            if (self.isErasedNamedType(tc.named)) return;
             try self.cs.emitGetGlobal(tc.named, line);
         } else if (tc == .anon_typed) {
             try self.cs.emitConstIdx(.constant, tc.anon_typed, line);
@@ -846,7 +1032,13 @@ pub const Compiler = struct {
                 .rune => .cast_rune,
                 .bigint => .cast_bigint,
             }, line),
-            .named => try self.cs.emitCall(1, line),
+            .named => |name| {
+                if (self.isErasedNamedType(name)) {
+                    try self.emitNamedValidation(tc, line);
+                } else {
+                    try self.cs.emitCall(1, line);
+                }
+            },
             .assert_arr => try self.cs.emit2(@intFromEnum(Op.assert_type), 1, line),
             .assert_map => try self.cs.emit2(@intFromEnum(Op.assert_type), 2, line),
             .assert_err => try self.cs.emit2(@intFromEnum(Op.assert_type), 3, line),
@@ -860,6 +1052,14 @@ pub const Compiler = struct {
             },
             .anon_typed => try self.cs.emitCall(1, line),
         }
+    }
+
+    fn isErasedNamedType(self: *Compiler, name: []const u8) bool {
+        const info = self.registry.getNamedTypeInfo(name) orelse return false;
+        return switch (info.base) {
+            .int, .float, .bool, .rune => true,
+            else => false,
+        };
     }
 
     fn resolveUpvalue(self: *Compiler, name: []const u8) ?u8 {
@@ -955,7 +1155,10 @@ pub const Compiler = struct {
     }
 
     pub fn pushLoop(self: *Compiler, continue_target: usize, local_keep: u8, body_keep: u8, iter_pops: u8) !void {
-        if (self.loop_depth >= MaxLoopDepth) { self.setErr("too many nested loops (max {d})", .{MaxLoopDepth}); return error.TooManyNestedLoops; }
+        if (self.loop_depth >= MaxLoopDepth) {
+            self.setErr("too many nested loops (max {d})", .{MaxLoopDepth});
+            return error.TooManyNestedLoops;
+        }
         self.loops[self.loop_depth] = .{
             .continue_target = continue_target,
             .local_keep = local_keep,
@@ -975,7 +1178,10 @@ pub const Compiler = struct {
     }
 
     pub fn emitBreak(self: *Compiler, line: u32) !void {
-        if (self.loop_depth == 0) { self.setErr("'break' outside of loop", .{}); return error.BreakOutsideLoop; }
+        if (self.loop_depth == 0) {
+            self.setErr("'break' outside of loop", .{});
+            return error.BreakOutsideLoop;
+        }
         const loop = self.currentLoop();
         // Save so code after the if-break block sees the correct local count (non-break path).
         const saved: u8 = self.currentScope().local_count;
@@ -986,14 +1192,20 @@ pub const Compiler = struct {
         }
         try self.cleanupLocals(loop.local_keep, line);
         const off = try self.cs.emitJump(.jump, line);
-        if (loop.break_count >= MaxLoopBreaks) { self.setErr("too many 'break' statements in loop (max {d})", .{MaxLoopBreaks}); return error.TooManyBreaksInLoop; }
+        if (loop.break_count >= MaxLoopBreaks) {
+            self.setErr("too many 'break' statements in loop (max {d})", .{MaxLoopBreaks});
+            return error.TooManyBreaksInLoop;
+        }
         loop.break_offsets[loop.break_count] = off;
         loop.break_count += 1;
         self.currentScope().local_count = saved;
     }
 
     pub fn emitContinue(self: *Compiler, line: u32) !void {
-        if (self.loop_depth == 0) { self.setErr("'continue' outside of loop", .{}); return error.ContinueOutsideLoop; }
+        if (self.loop_depth == 0) {
+            self.setErr("'continue' outside of loop", .{});
+            return error.ContinueOutsideLoop;
+        }
         const loop = self.currentLoop();
         const saved: u8 = self.currentScope().local_count;
         try self.cleanupLocals(loop.body_keep, line);
@@ -1009,7 +1221,10 @@ pub const Compiler = struct {
     pub fn decl(self: *Compiler) anyerror!void {
         self.clearNamespaceProvenance();
         if (self.match(.kw_pub)) {
-            if (self.inFunc()) { self.setErr("invalid 'pub' target", .{}); return error.InvalidPubTarget; }
+            if (self.inFunc()) {
+                self.setErr("invalid 'pub' target", .{});
+                return error.InvalidPubTarget;
+            }
             try self.pubDecl();
         } else if (self.match(.kw_test)) {
             try self.testDecl();
@@ -1130,11 +1345,13 @@ pub const Compiler = struct {
             try self.namedFuncDecl(true);
             return;
         }
-        return { self.setErr("invalid 'pub' target", .{}); return error.InvalidPubTarget; };
+        return {
+            self.setErr("invalid 'pub' target", .{});
+            return error.InvalidPubTarget;
+        };
     }
 
     // ── Type declarations ────────────────────────────────────────────────────────
-
 
     pub fn advance(self: *Compiler) void {
         self.prev = self.cur;
@@ -1230,9 +1447,15 @@ pub const Compiler = struct {
         if (self.skipping_test_body) return;
         const stable_name = try self.copyName(name);
         for (self.exports[0..self.export_count]) |e| {
-            if (common.streq(e.name, stable_name)) { self.setErr("duplicate export name '{s}'", .{stable_name}); return error.DuplicateExport; }
+            if (common.streq(e.name, stable_name)) {
+                self.setErr("duplicate export name '{s}'", .{stable_name});
+                return error.DuplicateExport;
+            }
         }
-        if (self.export_count >= MaxLocals) { self.setErr("too many fields (max {d})", .{MaxLocals}); return error.TooManyFields; }
+        if (self.export_count >= MaxLocals) {
+            self.setErr("too many fields (max {d})", .{MaxLocals});
+            return error.TooManyFields;
+        }
         self.exports[self.export_count] = .{ .name = stable_name, .global_name = global_name };
         self.export_count += 1;
     }
@@ -1316,7 +1539,10 @@ pub const Compiler = struct {
             while (true) {
                 switch (t.typ) {
                     .lparen, .lbracket => depth += 1,
-                    .rparen, .rbracket => { depth -= 1; if (depth < 0) return false; },
+                    .rparen, .rbracket => {
+                        depth -= 1;
+                        if (depth < 0) return false;
+                    },
                     .eq => if (depth == 0) return true,
                     .lbrace, .semicolon, .eof => return false,
                     else => {},
@@ -1407,19 +1633,18 @@ pub const Compiler = struct {
         self.std_namespace_path = null;
     }
 
-
     pub fn resolveImportAliasPath(self: *Compiler, alias: []const u8) ?[]const u8 {
         if (self.resolveLocal(alias)) |slot| {
             const local = self.currentScope().locals[slot];
-            if (local.from_std) return "std";
+            if (local.std_namespace_path != null or local.from_std) return "std";
             return local.import_module_path;
         }
         const qname = self.qualifyGlobalName(alias) catch return null;
-        if (self.isStdModuleGlobal(qname)) return "std";
+        if (self.getStdModuleGlobalPath(qname) != null) return "std";
         return self.getImportModuleGlobalPath(qname);
     }
 
-    pub fn resolveModuleTypeName(self: *Compiler, path: []const u8, type_name: []const u8) ?ct.ExportTypeKind {
+    pub fn resolveModuleTypeName(self: *Compiler, path: []const u8, type_name: []const u8) ?module_descriptor.ModuleTypeInfo {
         const cb = self.options.resolve_module_type orelse return null;
         return cb(self.options.module_ctx.?, path, type_name);
     }
@@ -1514,4 +1739,4 @@ pub const Compiler = struct {
     pub const varExpr = compiler_expr.varExpr;
     const variantDeclBody = compiler_decls.variantDeclBody;
     const whileForStmt = compiler_stmts.whileForStmt;
-    };
+};

@@ -1,1 +1,2 @@
-TypeError
+TypeMismatch
+cannot apply 'add' to Age and int; use Age(value) or unwrap with the base type

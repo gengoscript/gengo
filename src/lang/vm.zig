@@ -339,7 +339,10 @@ fn computeAddResult(ctx: VMContext, a: Value, b: Value) !Value {
     if (a == .int and b == .int) return .{ .int = a.int + b.int };
     if (a == .float and b == .float) {
         const r = a.float + b.float;
-        if (!std.math.isFinite(r)) { ctx.vs.setRuntimeErr("non-finite value in arithmetic operation", .{}); return error.TypeError; }
+        if (!std.math.isFinite(r)) {
+            ctx.vs.setRuntimeErr("non-finite value in arithmetic operation", .{});
+            return error.TypeError;
+        }
         return .{ .float = r };
     }
     if (vmbigint.isBigInt(a) or vmbigint.isBigInt(b)) {
@@ -504,7 +507,10 @@ fn enumTypeAllocValue(ctx: VMContext, obj: *Object, member_name: []const u8) !Va
         // Subtype: first validate the name is in the subset members.
         var in_sub = false;
         for (et.members) |m| {
-            if (common.streq(m, member_name)) { in_sub = true; break; }
+            if (common.streq(m, member_name)) {
+                in_sub = true;
+                break;
+            }
         }
         if (!in_sub) return error.UnknownStructField;
         // Resolve parent and find the ordinal there.
@@ -546,13 +552,13 @@ fn enumTypeValuesValue(ctx: VMContext, obj: *Object, et: vmod.EnumTypeObj) !Valu
 fn zeroValueForFieldSpec(spec: vmod.FieldTypeSpec) Value {
     for (spec.alts) |alt| {
         switch (alt.typ) {
-            .null_t   => return .null,
-            .int      => return .{ .int = 0 },
-            .float    => return .{ .float = 0 },
+            .null_t => return .null,
+            .int => return .{ .int = 0 },
+            .float => return .{ .float = 0 },
             .decimal_t => return .{ .decimal = 0 },
-            .boolean  => return .{ .boolean = false },
-            .rune_t   => return .{ .rune = 0 },
-            else      => {},
+            .boolean => return .{ .boolean = false },
+            .rune_t => return .{ .rune = 0 },
+            else => {},
         }
     }
     return .null;
@@ -589,11 +595,19 @@ fn namedTypeFieldValue(ctx: VMContext, obj: *Object, name: []const u8) !Value {
     if (common.streq(name, "name")) return .{ .string = try ctx.cs.internStr(nt.name) };
     if (common.streq(name, "first")) {
         if (!nt.has_range) return error.TypeError;
-        return try vmtyp.makeNamedValue(ctx, obj, if (nt.base == .float) .{ .float = nt.min } else .{ .int = @intFromFloat(nt.min) });
+        const raw = if (nt.base == .float) Value{ .float = nt.min } else Value{ .int = @intFromFloat(nt.min) };
+        return if (nt.base == .decimal or nt.base == .string or nt.base == .array_t or nt.base == .map_t)
+            try vmtyp.makeNamedValue(ctx, obj, raw)
+        else
+            raw;
     }
     if (common.streq(name, "last")) {
         if (!nt.has_range) return error.TypeError;
-        return try vmtyp.makeNamedValue(ctx, obj, if (nt.base == .float) .{ .float = nt.max } else .{ .int = @intFromFloat(nt.max) });
+        const raw = if (nt.base == .float) Value{ .float = nt.max } else Value{ .int = @intFromFloat(nt.max) };
+        return if (nt.base == .decimal or nt.base == .string or nt.base == .array_t or nt.base == .map_t)
+            try vmtyp.makeNamedValue(ctx, obj, raw)
+        else
+            raw;
     }
     if (common.streq(name, "succ") or common.streq(name, "pred")) {
         if (!nt.has_range) return error.TypeError;
@@ -764,17 +778,17 @@ fn checkNamedTypePredicate(ctx: VMContext, nt_obj: *Object, inner: Value) !void 
         if (result != .boolean or !result.boolean) {
             var vbuf: [64]u8 = undefined;
             const vstr: []const u8 = switch (inner) {
-                .int     => |n| std.fmt.bufPrint(&vbuf, "{d}", .{n}) catch "?",
-                .float   => |n| std.fmt.bufPrint(&vbuf, "{d}", .{n}) catch "?",
+                .int => |n| std.fmt.bufPrint(&vbuf, "{d}", .{n}) catch "?",
+                .float => |n| std.fmt.bufPrint(&vbuf, "{d}", .{n}) catch "?",
                 .decimal => |d| std.fmt.bufPrint(&vbuf, "{d}", .{d}) catch "?",
-                .string  => |s| s.bytes,
+                .string => |s| s.bytes,
                 .boolean => |b| if (b) "true" else "false",
-                .rune    => |r| blk: {
+                .rune => |r| blk: {
                     const n = std.unicode.utf8Encode(r, vbuf[0..4]) catch 0;
                     break :blk vbuf[0..n];
                 },
-                .object  => |o| if (o.* == .dyn_string) o.dyn_string else if (o.* == .string_view) o.string_view.bytes else "?",
-                else     => "?",
+                .object => |o| if (o.* == .dyn_string) o.dyn_string else if (o.* == .string_view) o.string_view.bytes else "?",
+                else => "?",
             };
             if (nt.predicate_msg) |msg| {
                 ctx.vs.setRuntimeErr("{s}({s}): {s}", .{ nt.name, vstr, msg });
@@ -788,6 +802,87 @@ fn checkNamedTypePredicate(ctx: VMContext, nt_obj: *Object, inner: Value) !void 
             return error.PredicateFailed;
         }
     }
+}
+
+fn checkFieldNamedTypePredicate(ctx: VMContext, field: @import("value.zig").StructFieldSpec, val: Value) !void {
+    if (comptime !build_options.predicates) return;
+    if (!ctx.vs.policy.enable_predicates) return;
+    for (field.typ.alts) |alt| {
+        if (alt.typ == .named_t) {
+            const nt_val = ctx.gs.get(alt.named_name) orelse return;
+            if (nt_val == .object and nt_val.object.* == .named_type) {
+                try checkNamedTypePredicateChain(ctx, nt_val.object, val.namedInner() orelse val);
+            }
+            return;
+        }
+    }
+}
+
+fn validateErasedNamedValueForSpec(ctx: VMContext, spec: @import("value.zig").FieldTypeSpec, val: Value) !void {
+    if (spec.alts.len != 1) return;
+    const alt = spec.alts[0];
+    switch (alt.typ) {
+        .named_t => {
+            if (val == .object) return;
+            const nt_val = ctx.gs.get(alt.named_name) orelse return;
+            if (nt_val != .object or nt_val.object.* != .named_type) return;
+            const normalized = try vmtyp.constructNamedType(ctx, nt_val.object, val);
+            try checkNamedTypePredicateChain(ctx, nt_val.object, normalized.namedInner() orelse normalized);
+        },
+        .array => {
+            if (!(val == .object and vms.isArrayObject(val.object))) return;
+            const elem_spec = alt.elem_spec orelse return;
+            for (try vms.asArraySlice(val.object)) |item| {
+                try validateErasedNamedValueForSpec(ctx, elem_spec, item);
+            }
+        },
+        .map => {
+            if (!(val == .object and vms.isMapObject(val.object))) return;
+            const key_spec = alt.key_spec orelse return;
+            const value_spec = alt.val_spec orelse return;
+            for (try vms.asMapSlice(val.object)) |entry| {
+                try validateErasedNamedValueForSpec(ctx, key_spec, entry.key);
+                try validateErasedNamedValueForSpec(ctx, value_spec, entry.value);
+            }
+        },
+        else => {},
+    }
+}
+
+fn validateNamedCollectionElements(ctx: VMContext, typ_obj: *Object, val: Value) !void {
+    const nt = typ_obj.named_type;
+    if (nt.base != .array_t and nt.base != .map_t) return;
+    const inner = val.namedInner() orelse val;
+    if (!(inner == .object)) return error.TypeError;
+    switch (nt.base) {
+        .array_t => {
+            const elem_spec = nt.elem_spec orelse return;
+            const items = try vms.asArraySlice(inner.object);
+            for (items) |item| try validateErasedNamedValueForSpec(ctx, elem_spec, item);
+        },
+        .map_t => {
+            const key_spec = nt.key_spec orelse return;
+            const value_spec = nt.val_spec orelse return;
+            const entries = try vms.asMapSlice(inner.object);
+            for (entries) |entry| {
+                try validateErasedNamedValueForSpec(ctx, key_spec, entry.key);
+                try validateErasedNamedValueForSpec(ctx, value_spec, entry.value);
+            }
+        },
+        else => {},
+    }
+}
+
+fn fieldHasNamedType(field: @import("value.zig").StructFieldSpec) bool {
+    for (field.typ.alts) |alt| {
+        if (alt.typ == .named_t) return true;
+    }
+    return false;
+}
+
+fn coerceStructFieldValue(ctx: VMContext, field: @import("value.zig").StructFieldSpec, val: Value) !Value {
+    if (vmtyp.coerceErasedValueForSpec(ctx, field.typ, val) catch null) |coerced| return coerced;
+    return val;
 }
 
 // Walk the parent chain and check each predicate in order (parent first).
@@ -894,7 +989,11 @@ fn enterFunctionFrame(ctx: VMContext, f: @import("value.zig").FuncObj, func_obj:
         if (argc < f.arity - 1) {
             var sig_buf: [256]u8 = undefined;
             const sig = vmtyp.funcSignatureStr(&sig_buf, f);
-            if (f.name.len > 0) { ctx.vs.setRuntimeErr("{s}: expected at least {} argument(s), got {} for {s}", .{ f.name, f.arity - 1, argc, sig }); } else { ctx.vs.setRuntimeErr("expected at least {} argument(s), got {} for {s}", .{ f.arity - 1, argc, sig }); }
+            if (f.name.len > 0) {
+                ctx.vs.setRuntimeErr("{s}: expected at least {} argument(s), got {} for {s}", .{ f.name, f.arity - 1, argc, sig });
+            } else {
+                ctx.vs.setRuntimeErr("expected at least {} argument(s), got {} for {s}", .{ f.arity - 1, argc, sig });
+            }
             return error.ArityMismatch;
         }
     } else if (f.arity != argc) {
@@ -910,9 +1009,17 @@ fn enterFunctionFrame(ctx: VMContext, f: @import("value.zig").FuncObj, func_obj:
             const sig = vmtyp.funcSignatureStr(&sig_buf, f);
             const min_argc = f.arity - f.default_count;
             if (f.name.len > 0) {
-                if (f.default_count > 0) { ctx.vs.setRuntimeErr("{s}: expected {}-{} argument(s), got {} for {s}", .{ f.name, min_argc, f.arity, argc, sig }); } else { ctx.vs.setRuntimeErr("{s}: expected {} argument(s), got {} for {s}", .{ f.name, f.arity, argc, sig }); }
+                if (f.default_count > 0) {
+                    ctx.vs.setRuntimeErr("{s}: expected {}-{} argument(s), got {} for {s}", .{ f.name, min_argc, f.arity, argc, sig });
+                } else {
+                    ctx.vs.setRuntimeErr("{s}: expected {} argument(s), got {} for {s}", .{ f.name, f.arity, argc, sig });
+                }
             } else {
-                if (f.default_count > 0) { ctx.vs.setRuntimeErr("expected {}-{} argument(s), got {} for {s}", .{ min_argc, f.arity, argc, sig }); } else { ctx.vs.setRuntimeErr("expected {} argument(s), got {} for {s}", .{ f.arity, argc, sig }); }
+                if (f.default_count > 0) {
+                    ctx.vs.setRuntimeErr("expected {}-{} argument(s), got {} for {s}", .{ min_argc, f.arity, argc, sig });
+                } else {
+                    ctx.vs.setRuntimeErr("expected {} argument(s), got {} for {s}", .{ f.arity, argc, sig });
+                }
             }
             return error.ArityMismatch;
         }
@@ -950,8 +1057,8 @@ noinline fn performCallIC(ctx: VMContext, argc: u8, ic_base: usize, ic_slot: u16
         if (ic_slot != 0xFFFF and ctx.hs.objectAt(ic_slot) == obj) {
             return switch (obj.*) {
                 .function => |f| enterFunctionFrameWarm(ctx, f, obj, null, argc),
-                .closure  => |cl| enterFunctionFrameWarm(ctx, cl.func.function, cl.func, obj, argc),
-                else      => performCall(ctx, argc),
+                .closure => |cl| enterFunctionFrameWarm(ctx, cl.func.function, cl.func, obj, argc),
+                else => performCall(ctx, argc),
             };
         }
         try performCall(ctx, argc);
@@ -961,11 +1068,11 @@ noinline fn performCallIC(ctx: VMContext, argc: u8, ic_base: usize, ic_slot: u16
             if (obj_idx != 0xFFFF) {
                 switch (obj.*) {
                     .function => |f| if (!f.is_variadic and f.default_count == 0 and (f.arity == argc) and (!f.has_typed_params or vmtyp.canInlinePrimitiveArgs(f, argc))) {
-                        ctx.cs.patchByte(ic_base,     @intCast((obj_idx >> 8) & 0xFF));
+                        ctx.cs.patchByte(ic_base, @intCast((obj_idx >> 8) & 0xFF));
                         ctx.cs.patchByte(ic_base + 1, @intCast(obj_idx & 0xFF));
                     },
                     .closure => |cl| if (!cl.func.function.is_variadic and cl.func.function.default_count == 0 and (cl.func.function.arity == argc) and (!cl.func.function.has_typed_params or vmtyp.canInlinePrimitiveArgs(cl.func.function, argc))) {
-                        ctx.cs.patchByte(ic_base,     @intCast((obj_idx >> 8) & 0xFF));
+                        ctx.cs.patchByte(ic_base, @intCast((obj_idx >> 8) & 0xFF));
                         ctx.cs.patchByte(ic_base + 1, @intCast(obj_idx & 0xFF));
                     },
                     else => {},
@@ -1001,7 +1108,8 @@ fn performCall(ctx: VMContext, argc: u8) !void {
             if (argc != 1) return error.ArityMismatch;
             const arg = ctx.vs.stack[ctx.vs.stack_top - 1];
             const out = try vmtyp.constructNamedType(ctx, obj, arg);
-            try checkNamedTypePredicateChain(ctx, obj, out.namedInner() orelse unreachable);
+            try validateNamedCollectionElements(ctx, obj, out);
+            try checkNamedTypePredicateChain(ctx, obj, out.namedInner() orelse out);
             try pop2push1(ctx, out);
         },
         .enum_type => |et| {
@@ -1013,7 +1121,10 @@ fn performCall(ctx: VMContext, argc: u8) !void {
             if (arg.object.enum_value.typ != parent_obj) return error.TypeError;
             var found = false;
             for (et.members) |m| {
-                if (common.streq(m, arg.object.enum_value.name)) { found = true; break; }
+                if (common.streq(m, arg.object.enum_value.name)) {
+                    found = true;
+                    break;
+                }
             }
             if (!found) return error.RangeError;
             try pop2push1(ctx, arg);
@@ -1083,13 +1194,16 @@ fn performCall(ctx: VMContext, argc: u8) !void {
                     var cur_idx: usize = 0;
                     var found: bool = false;
                     for (et.members, 0..) |m, mi| {
-                        if (common.streq(m, ev.name)) { cur_idx = mi; found = true; break; }
+                        if (common.streq(m, ev.name)) {
+                            cur_idx = mi;
+                            found = true;
+                            break;
+                        }
                     }
                     if (!found) return error.UnknownStructField;
                     const next_idx: usize = if (ef.kind == .succ)
                         (cur_idx + 1) % et.members.len
-                    else
-                        if (cur_idx == 0) et.members.len - 1 else cur_idx - 1;
+                    else if (cur_idx == 0) et.members.len - 1 else cur_idx - 1;
                     const next_ordinal = if (et.member_ints) |ints| ints[next_idx] else @as(i64, @intCast(next_idx));
                     const new_ev = try vmgc.vmAllocObject(ctx);
                     new_ev.* = .{ .enum_value = .{ .typ = ef.typ, .name = et.members[next_idx], .ordinal = next_ordinal } };
@@ -1222,7 +1336,11 @@ fn iterNext1(ctx: VMContext, it: *IterObj) !void {
             }
             const typ_obj = it.source.?;
             const nt = typ_obj.named_type;
-            const val = try vmtyp.makeNamedValue(ctx, typ_obj, if (nt.base == .float) .{ .float = it.range_current } else .{ .int = @intFromFloat(it.range_current) });
+            const raw = if (nt.base == .float) Value{ .float = it.range_current } else Value{ .int = @intFromFloat(it.range_current) };
+            const val = if (nt.base == .decimal or nt.base == .string or nt.base == .array_t or nt.base == .map_t)
+                try vmtyp.makeNamedValue(ctx, typ_obj, raw)
+            else
+                raw;
             const next = it.range_current + 1.0;
             if (next == it.range_current) return error.RangeError;
             it.range_current = next;
@@ -1369,7 +1487,7 @@ fn pushFieldFromObject(ctx: VMContext, obj: *Object, name_idx: usize, ic_base: u
                     return error.UnknownStructField;
                 };
                 if (fi <= 0xFE) {
-                    ctx.cs.patchByte(ic_base,     @intCast((tpi >> 8) & 0xFF));
+                    ctx.cs.patchByte(ic_base, @intCast((tpi >> 8) & 0xFF));
                     ctx.cs.patchByte(ic_base + 1, @intCast(tpi & 0xFF));
                     ctx.cs.patchByte(ic_base + 2, @intCast(fi));
                 }
@@ -1388,7 +1506,7 @@ fn pushFieldFromObject(ctx: VMContext, obj: *Object, name_idx: usize, ic_base: u
                     return error.UnknownStructField;
                 };
                 if (fi <= 0xFE) {
-                    ctx.cs.patchByte(ic_base,     @intCast((tpi >> 8) & 0xFF));
+                    ctx.cs.patchByte(ic_base, @intCast((tpi >> 8) & 0xFF));
                     ctx.cs.patchByte(ic_base + 1, @intCast(tpi & 0xFF));
                     ctx.cs.patchByte(ic_base + 2, @intCast(fi));
                 }
@@ -1472,8 +1590,14 @@ fn opGetIndex(ctx: VMContext) !void {
     }
     var rooted_raw = false;
     var rooted_idx = false;
-    if (raw == .object) { try ctx.vs.pushTempRoot(raw); rooted_raw = true; }
-    if (idx_v == .object) { try ctx.vs.pushTempRoot(idx_v); rooted_idx = true; }
+    if (raw == .object) {
+        try ctx.vs.pushTempRoot(raw);
+        rooted_raw = true;
+    }
+    if (idx_v == .object) {
+        try ctx.vs.pushTempRoot(idx_v);
+        rooted_idx = true;
+    }
     defer {
         if (rooted_idx) ctx.vs.popTempRoot();
         if (rooted_raw) ctx.vs.popTempRoot();
@@ -1566,7 +1690,10 @@ fn opSetIndex(ctx: VMContext) !void {
                 ctx.vs.setRuntimeErr("no field '{s}' on type '{s}'", .{ key, inst.typ.struct_type.name });
                 return error.UnknownStructField;
             };
-            if (inst.typ.struct_type.fields[idx].is_const) { ctx.vs.setRuntimeErr("field '{s}' of '{s}' is const", .{ key, inst.typ.struct_type.name }); return error.AssignToConst; }
+            if (inst.typ.struct_type.fields[idx].is_const) {
+                ctx.vs.setRuntimeErr("field '{s}' of '{s}' is const", .{ key, inst.typ.struct_type.name });
+                return error.AssignToConst;
+            }
             if (!vmtyp.matchesFieldType(ctx, val, inst.typ.struct_type.fields[idx])) return error.StructFieldTypeMismatch;
             inst.fields[idx].value = val;
         },
@@ -1576,7 +1703,10 @@ fn opSetIndex(ctx: VMContext) !void {
                 ctx.vs.setRuntimeErr("no field '{s}' on type '{s}'", .{ key, ssi.typ.struct_type.name });
                 return error.UnknownStructField;
             };
-            if (ssi.typ.struct_type.fields[idx].is_const) { ctx.vs.setRuntimeErr("field '{s}' of '{s}' is const", .{ key, ssi.typ.struct_type.name }); return error.AssignToConst; }
+            if (ssi.typ.struct_type.fields[idx].is_const) {
+                ctx.vs.setRuntimeErr("field '{s}' of '{s}' is const", .{ key, ssi.typ.struct_type.name });
+                return error.AssignToConst;
+            }
             if (!vmtyp.matchesFieldType(ctx, val, ssi.typ.struct_type.fields[idx])) return error.StructFieldTypeMismatch;
             ssi.v[idx] = val;
         },
@@ -1770,7 +1900,10 @@ fn opGetField(ctx: VMContext) !void {
         }
     }
     var rooted_raw = false;
-    if (raw == .object) { try ctx.vs.pushTempRoot(raw); rooted_raw = true; }
+    if (raw == .object) {
+        try ctx.vs.pushTempRoot(raw);
+        rooted_raw = true;
+    }
     defer if (rooted_raw) ctx.vs.popTempRoot();
     const container = vms.unboxNamed(raw);
     if (container == .inline_variant) {
@@ -1823,14 +1956,19 @@ fn opSetField(ctx: VMContext) !void {
                 };
                 fi = found;
                 if (found <= 0xFE) {
-                    ctx.cs.patchByte(ic_base,     @intCast((tpi >> 8) & 0xFF));
+                    ctx.cs.patchByte(ic_base, @intCast((tpi >> 8) & 0xFF));
                     ctx.cs.patchByte(ic_base + 1, @intCast(tpi & 0xFF));
                     ctx.cs.patchByte(ic_base + 2, @intCast(found));
                 }
             }
-            if (inst.typ.struct_type.fields[fi].is_const) { ctx.vs.setRuntimeErr("field '{s}' of '{s}' is const", .{ name, inst.typ.struct_type.name }); return error.AssignToConst; }
-            if (!vmtyp.matchesFieldType(ctx, val, inst.typ.struct_type.fields[fi])) return error.StructFieldTypeMismatch;
-            inst.fields[fi].value = val;
+            if (inst.typ.struct_type.fields[fi].is_const) {
+                ctx.vs.setRuntimeErr("field '{s}' of '{s}' is const", .{ name, inst.typ.struct_type.name });
+                return error.AssignToConst;
+            }
+            const checked = try coerceStructFieldValue(ctx, inst.typ.struct_type.fields[fi], val);
+            if (!vmtyp.matchesFieldType(ctx, checked, inst.typ.struct_type.fields[fi]) and !(checked != .object and fieldHasNamedType(inst.typ.struct_type.fields[fi]))) return error.StructFieldTypeMismatch;
+            try checkFieldNamedTypePredicate(ctx, inst.typ.struct_type.fields[fi], checked);
+            inst.fields[fi].value = checked;
         },
         .small_struct_instance => |*ssi| {
             const tpi = ctx.hs.objectPoolIndex(ssi.typ);
@@ -1844,14 +1982,19 @@ fn opSetField(ctx: VMContext) !void {
                 };
                 fi = found;
                 if (found <= 0xFE) {
-                    ctx.cs.patchByte(ic_base,     @intCast((tpi >> 8) & 0xFF));
+                    ctx.cs.patchByte(ic_base, @intCast((tpi >> 8) & 0xFF));
                     ctx.cs.patchByte(ic_base + 1, @intCast(tpi & 0xFF));
                     ctx.cs.patchByte(ic_base + 2, @intCast(found));
                 }
             }
-            if (ssi.typ.struct_type.fields[fi].is_const) { ctx.vs.setRuntimeErr("field '{s}' of '{s}' is const", .{ name, ssi.typ.struct_type.name }); return error.AssignToConst; }
-            if (!vmtyp.matchesFieldType(ctx, val, ssi.typ.struct_type.fields[fi])) return error.StructFieldTypeMismatch;
-            ssi.v[fi] = val;
+            if (ssi.typ.struct_type.fields[fi].is_const) {
+                ctx.vs.setRuntimeErr("field '{s}' of '{s}' is const", .{ name, ssi.typ.struct_type.name });
+                return error.AssignToConst;
+            }
+            const checked = try coerceStructFieldValue(ctx, ssi.typ.struct_type.fields[fi], val);
+            if (!vmtyp.matchesFieldType(ctx, checked, ssi.typ.struct_type.fields[fi]) and !(checked != .object and fieldHasNamedType(ssi.typ.struct_type.fields[fi]))) return error.StructFieldTypeMismatch;
+            try checkFieldNamedTypePredicate(ctx, ssi.typ.struct_type.fields[fi], checked);
+            ssi.v[fi] = checked;
         },
         .map, .map_managed, .map_hashed => try vmmap.mapSet(ctx, container, name_val, val),
         else => return error.TypeError,
@@ -1911,7 +2054,7 @@ fn writeGlobalIC(ctx: VMContext, name_idx: usize, ic_base: usize, ic_slot: u16, 
             ctx.vs.setRuntimeErr("'{s}' is not defined", .{name});
             return error.NotDefined;
         };
-        ctx.cs.patchByte(ic_base,     @intCast((slot >> 8) & 0xFF));
+        ctx.cs.patchByte(ic_base, @intCast((slot >> 8) & 0xFF));
         ctx.cs.patchByte(ic_base + 1, @intCast(slot & 0xFF));
         ctx.gs.setAt(slot, val);
     }
@@ -1929,7 +2072,7 @@ fn readGlobalIC(ctx: VMContext, name_idx: usize, ic_base: usize, ic_slot: u16) !
         }
         return error.NotDefined;
     };
-    ctx.cs.patchByte(ic_base,     @intCast((slot >> 8) & 0xFF));
+    ctx.cs.patchByte(ic_base, @intCast((slot >> 8) & 0xFF));
     ctx.cs.patchByte(ic_base + 1, @intCast(slot & 0xFF));
     return ctx.gs.getAt(slot);
 }
@@ -2029,7 +2172,7 @@ noinline fn dispatchTick(ctx: VMContext) !u64 {
 inline fn fetchOp(ctx: VMContext) !Op {
     if (ctx.vs.ip >= ctx.cs.code_len) return error.BytecodeOutOfBounds;
     const op_raw = opByte(ctx);
-    if (op_raw > @intFromEnum(Op.swap) and
+    if (op_raw > @intFromEnum(Op.validate_named_range) and
         (op_raw < @intFromEnum(Op.const_eq) or op_raw > @intFromEnum(Op.inc_global_const)))
         return error.InvalidChunkShape;
     vmperf.countOp(op_raw);
@@ -2116,7 +2259,7 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                         ctx.vs.setRuntimeErr("'{s}' is not defined", .{name});
                         return error.NotDefined;
                     };
-                    ctx.cs.patchByte(ic_base,     @intCast((slot >> 8) & 0xFF));
+                    ctx.cs.patchByte(ic_base, @intCast((slot >> 8) & 0xFF));
                     ctx.cs.patchByte(ic_base + 1, @intCast(slot & 0xFF));
                     const v = ctx.gs.getAt(slot);
                     const result: Value = if (v == .int and k == .int) .{ .int = v.int + k.int } else try computeAddResult(ctx, v, k);
@@ -2521,14 +2664,22 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
             .sub => {
                 const b = try ctx.vs.vmPop();
                 const a = try ctx.vs.vmPop();
-                if (a == .int and b == .int) { try ctx.vs.vmPush(.{ .int = a.int - b.int }); continue; }
+                if (a == .int and b == .int) {
+                    try ctx.vs.vmPush(.{ .int = a.int - b.int });
+                    continue;
+                }
                 if (a == .float and b == .float) {
                     const r = a.float - b.float;
-                    if (!std.math.isFinite(r)) { ctx.vs.setRuntimeErr("non-finite value in arithmetic operation", .{}); return error.TypeError; }
-                    try ctx.vs.vmPush(.{ .float = r }); continue;
+                    if (!std.math.isFinite(r)) {
+                        ctx.vs.setRuntimeErr("non-finite value in arithmetic operation", .{});
+                        return error.TypeError;
+                    }
+                    try ctx.vs.vmPush(.{ .float = r });
+                    continue;
                 }
                 if (vmbigint.isBigInt(a) or vmbigint.isBigInt(b)) {
-                    try ctx.vs.vmPush(try bigIntBinOpWithPromotion(ctx, a, b, .sub)); continue;
+                    try ctx.vs.vmPush(try bigIntBinOpWithPromotion(ctx, a, b, .sub));
+                    continue;
                 }
                 if (decimalOpValues(a, b)) |dop| {
                     const result = @subWithOverflow(dop.lhs, dop.rhs);
@@ -2541,14 +2692,22 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
             .mul => {
                 const b = try ctx.vs.vmPop();
                 const a = try ctx.vs.vmPop();
-                if (a == .int and b == .int) { try ctx.vs.vmPush(.{ .int = a.int * b.int }); continue; }
+                if (a == .int and b == .int) {
+                    try ctx.vs.vmPush(.{ .int = a.int * b.int });
+                    continue;
+                }
                 if (a == .float and b == .float) {
                     const r = a.float * b.float;
-                    if (!std.math.isFinite(r)) { ctx.vs.setRuntimeErr("non-finite value in arithmetic operation", .{}); return error.TypeError; }
-                    try ctx.vs.vmPush(.{ .float = r }); continue;
+                    if (!std.math.isFinite(r)) {
+                        ctx.vs.setRuntimeErr("non-finite value in arithmetic operation", .{});
+                        return error.TypeError;
+                    }
+                    try ctx.vs.vmPush(.{ .float = r });
+                    continue;
                 }
                 if (vmbigint.isBigInt(a) or vmbigint.isBigInt(b)) {
-                    try ctx.vs.vmPush(try bigIntBinOpWithPromotion(ctx, a, b, .mul)); continue;
+                    try ctx.vs.vmPush(try bigIntBinOpWithPromotion(ctx, a, b, .mul));
+                    continue;
                 }
                 if (decimalOpValues(a, b)) |_| {
                     return error.TypeError;
@@ -2565,31 +2724,51 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 const b = try ctx.vs.vmPop();
                 const a = try ctx.vs.vmPop();
                 if (a == .int and b == .int) {
-                    if (b.int == 0) { ctx.vs.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
+                    if (b.int == 0) {
+                        ctx.vs.setRuntimeErr("division by zero", .{});
+                        return error.DivisionByZero;
+                    }
                     try ctx.vs.vmPush(.{ .float = @as(f64, @floatFromInt(a.int)) / @as(f64, @floatFromInt(b.int)) });
                     continue;
                 }
                 if (vmbigint.isBigInt(a) or vmbigint.isBigInt(b)) {
                     const af: f64 = if (vmbigint.isBigInt(a)) vmbigint.toFloat(a) else @floatFromInt(a.int);
                     const bf: f64 = if (vmbigint.isBigInt(b)) vmbigint.toFloat(b) else @floatFromInt(b.int);
-                    if (bf == 0.0) { ctx.vs.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
-                    try ctx.vs.vmPush(.{ .float = af / bf }); continue;
+                    if (bf == 0.0) {
+                        ctx.vs.setRuntimeErr("division by zero", .{});
+                        return error.DivisionByZero;
+                    }
+                    try ctx.vs.vmPush(.{ .float = af / bf });
+                    continue;
                 }
                 if (a == .float and b == .float) {
-                    if (b.float == 0.0) { ctx.vs.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
+                    if (b.float == 0.0) {
+                        ctx.vs.setRuntimeErr("division by zero", .{});
+                        return error.DivisionByZero;
+                    }
                     const r = a.float / b.float;
-                    if (!std.math.isFinite(r)) { ctx.vs.setRuntimeErr("non-finite value in arithmetic operation", .{}); return error.TypeError; }
-                    try ctx.vs.vmPush(.{ .float = r }); continue;
+                    if (!std.math.isFinite(r)) {
+                        ctx.vs.setRuntimeErr("non-finite value in arithmetic operation", .{});
+                        return error.TypeError;
+                    }
+                    try ctx.vs.vmPush(.{ .float = r });
+                    continue;
                 }
                 if (decimalOpValues(a, b)) |_| {
                     return error.TypeError;
                 } else if (decimalScalarPair(a, b)) |p| {
-                    if (p.n == 0) { ctx.vs.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
+                    if (p.n == 0) {
+                        ctx.vs.setRuntimeErr("division by zero", .{});
+                        return error.DivisionByZero;
+                    }
                     if (p.d == std.math.minInt(i64) and p.n == -1) return error.TypeError;
                     try pushDecimalResultWithCarrier(ctx, p.typ, @divTrunc(p.d, p.n));
                 } else {
                     const nop = try numericBinaryOp(ctx, a, b, "/");
-                    if (nop.bn == 0.0) { ctx.vs.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
+                    if (nop.bn == 0.0) {
+                        ctx.vs.setRuntimeErr("division by zero", .{});
+                        return error.DivisionByZero;
+                    }
                     try pushNumericResultWithCarrier(ctx, a, b, nop.an / nop.bn, nop.tag, "/");
                 }
             },
@@ -2597,22 +2776,37 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 const b = try ctx.vs.vmPop();
                 const a = try ctx.vs.vmPop();
                 if (a == .int and b == .int) {
-                    if (b.int == 0) { ctx.vs.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
+                    if (b.int == 0) {
+                        ctx.vs.setRuntimeErr("division by zero", .{});
+                        return error.DivisionByZero;
+                    }
                     const result: i64 = if (a.int == std.math.minInt(i64) and b.int == -1) std.math.minInt(i64) else @divTrunc(a.int, b.int);
-                    try ctx.vs.vmPush(.{ .int = result }); continue;
+                    try ctx.vs.vmPush(.{ .int = result });
+                    continue;
                 }
                 if (vmbigint.isBigInt(a) or vmbigint.isBigInt(b)) {
-                    try ctx.vs.vmPush(try bigIntBinOpWithPromotion(ctx, a, b, .int_div)); continue;
+                    try ctx.vs.vmPush(try bigIntBinOpWithPromotion(ctx, a, b, .int_div));
+                    continue;
                 }
                 if (a == .float and b == .float) {
-                    if (b.float == 0.0) { ctx.vs.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
-                    try ctx.vs.vmPush(.{ .float = @floor(a.float / b.float) }); continue;
+                    if (b.float == 0.0) {
+                        ctx.vs.setRuntimeErr("division by zero", .{});
+                        return error.DivisionByZero;
+                    }
+                    try ctx.vs.vmPush(.{ .float = @floor(a.float / b.float) });
+                    continue;
                 }
                 const nop = try numericBinaryOp(ctx, a, b, "div");
-                if (nop.bn == 0.0) { ctx.vs.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
+                if (nop.bn == 0.0) {
+                    ctx.vs.setRuntimeErr("division by zero", .{});
+                    return error.DivisionByZero;
+                }
                 const an_int: i64 = @intFromFloat(nop.an);
                 const bn_int: i64 = @intFromFloat(nop.bn);
-                if (bn_int == 0) { ctx.vs.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
+                if (bn_int == 0) {
+                    ctx.vs.setRuntimeErr("division by zero", .{});
+                    return error.DivisionByZero;
+                }
                 const result: i64 = if (an_int == std.math.minInt(i64) and bn_int == -1) std.math.minInt(i64) else @divTrunc(an_int, bn_int);
                 try pushNumericResultWithCarrier(ctx, a, b, @floatFromInt(result), nop.tag, "div");
             },
@@ -2620,39 +2814,63 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 const b = try ctx.vs.vmPop();
                 const a = try ctx.vs.vmPop();
                 if (a == .int and b == .int) {
-                    if (b.int == 0) { ctx.vs.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
+                    if (b.int == 0) {
+                        ctx.vs.setRuntimeErr("division by zero", .{});
+                        return error.DivisionByZero;
+                    }
                     const result: i64 = if (a.int == std.math.minInt(i64) and b.int == -1) 0 else @rem(a.int, b.int);
-                    try ctx.vs.vmPush(.{ .int = result }); continue;
+                    try ctx.vs.vmPush(.{ .int = result });
+                    continue;
                 }
                 if (vmbigint.isBigInt(a) or vmbigint.isBigInt(b)) {
-                    try ctx.vs.vmPush(try bigIntBinOpWithPromotion(ctx, a, b, .rem)); continue;
+                    try ctx.vs.vmPush(try bigIntBinOpWithPromotion(ctx, a, b, .rem));
+                    continue;
                 }
                 if (a == .float and b == .float) {
-                    if (b.float == 0.0) { ctx.vs.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
-                    try ctx.vs.vmPush(.{ .float = common.fmod(a.float, b.float) }); continue;
+                    if (b.float == 0.0) {
+                        ctx.vs.setRuntimeErr("division by zero", .{});
+                        return error.DivisionByZero;
+                    }
+                    try ctx.vs.vmPush(.{ .float = common.fmod(a.float, b.float) });
+                    continue;
                 }
                 const nop = try numericBinaryOp(ctx, a, b, "rem");
-                if (nop.bn == 0.0) { ctx.vs.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
+                if (nop.bn == 0.0) {
+                    ctx.vs.setRuntimeErr("division by zero", .{});
+                    return error.DivisionByZero;
+                }
                 try pushNumericResultWithCarrier(ctx, a, b, common.fmod(nop.an, nop.bn), nop.tag, "rem");
             },
             .mod => {
                 const b = try ctx.vs.vmPop();
                 const a = try ctx.vs.vmPop();
                 if (a == .int and b == .int) {
-                    if (b.int == 0) { ctx.vs.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
+                    if (b.int == 0) {
+                        ctx.vs.setRuntimeErr("division by zero", .{});
+                        return error.DivisionByZero;
+                    }
                     const result: i64 = @mod(a.int, b.int);
-                    try ctx.vs.vmPush(.{ .int = result }); continue;
+                    try ctx.vs.vmPush(.{ .int = result });
+                    continue;
                 }
                 if (vmbigint.isBigInt(a) or vmbigint.isBigInt(b)) {
-                    try ctx.vs.vmPush(try bigIntBinOpWithPromotion(ctx, a, b, .mod)); continue;
+                    try ctx.vs.vmPush(try bigIntBinOpWithPromotion(ctx, a, b, .mod));
+                    continue;
                 }
                 if (a == .float and b == .float) {
-                    if (b.float == 0.0) { ctx.vs.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
+                    if (b.float == 0.0) {
+                        ctx.vs.setRuntimeErr("division by zero", .{});
+                        return error.DivisionByZero;
+                    }
                     const r = a.float - @floor(a.float / b.float) * b.float;
-                    try ctx.vs.vmPush(.{ .float = r }); continue;
+                    try ctx.vs.vmPush(.{ .float = r });
+                    continue;
                 }
                 const nop = try numericBinaryOp(ctx, a, b, "mod");
-                if (nop.bn == 0.0) { ctx.vs.setRuntimeErr("division by zero", .{}); return error.DivisionByZero; }
+                if (nop.bn == 0.0) {
+                    ctx.vs.setRuntimeErr("division by zero", .{});
+                    return error.DivisionByZero;
+                }
                 const r = nop.an - @floor(nop.an / nop.bn) * nop.bn;
                 try pushNumericResultWithCarrier(ctx, a, b, r, nop.tag, "mod");
             },
@@ -2660,24 +2878,32 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 const b = try ctx.vs.vmPop();
                 const a = try ctx.vs.vmPop();
                 if (vmbigint.isBigInt(a) or vmbigint.isBigInt(b)) {
-                    const exp_i64: i64 = if (b == .int) b.int
-                    else if (vmbigint.isBigInt(b)) vmbigint.toInt(b) catch {
+                    const exp_i64: i64 = if (b == .int) b.int else if (vmbigint.isBigInt(b)) vmbigint.toInt(b) catch {
                         ctx.vs.setRuntimeErr("bigint: exponent too large", .{});
                         return error.RangeError;
-                    }
-                    else {
+                    } else {
                         ctx.vs.setRuntimeErr("bigint ** {s}: exponent must be int or bigint", .{vmtyp.runtimeTypeName(b)});
                         return error.TypeError;
                     };
-                    if (exp_i64 < 0) { ctx.vs.setRuntimeErr("bigint: negative exponent not supported", .{}); return error.TypeError; }
-                    if (exp_i64 > std.math.maxInt(u32)) { ctx.vs.setRuntimeErr("bigint: exponent too large", .{}); return error.RangeError; }
+                    if (exp_i64 < 0) {
+                        ctx.vs.setRuntimeErr("bigint: negative exponent not supported", .{});
+                        return error.TypeError;
+                    }
+                    if (exp_i64 > std.math.maxInt(u32)) {
+                        ctx.vs.setRuntimeErr("bigint: exponent too large", .{});
+                        return error.RangeError;
+                    }
                     const exp: u32 = @intCast(exp_i64);
                     var a_big = a;
                     if (!vmbigint.isBigInt(a)) {
-                        if (a != .int) { ctx.vs.setRuntimeErr("{s} ** bigint: base must be int or bigint", .{vmtyp.runtimeTypeName(a)}); return error.TypeError; }
+                        if (a != .int) {
+                            ctx.vs.setRuntimeErr("{s} ** bigint: base must be int or bigint", .{vmtyp.runtimeTypeName(a)});
+                            return error.TypeError;
+                        }
                         a_big = try vmbigint.fromInt(ctx, a.int);
                     }
-                    try ctx.vs.vmPush(try vmbigint.powBi(ctx, a_big, exp)); continue;
+                    try ctx.vs.vmPush(try vmbigint.powBi(ctx, a_big, exp));
+                    continue;
                 }
                 const nop = try numericBinaryOp(ctx, a, b, "**");
                 try pushNumericResultWithCarrier(ctx, a, b, std.math.pow(f64, nop.an, nop.bn), nop.tag, "**");
@@ -2854,10 +3080,8 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 if (idx >= ctx.cs.constCount()) return error.InvalidChunkShape;
                 const name = (ctx.cs.constAt(idx) catch unreachable).string.bytes;
                 const v = try ctx.vs.vmPeek(0);
-                const ok = v == .object and (
-                    (v.object.* == .struct_instance and common.streq(v.object.struct_instance.typ.struct_type.qualified_name, name)) or
-                    (v.object.* == .small_struct_instance and common.streq(v.object.small_struct_instance.typ.struct_type.qualified_name, name))
-                );
+                const ok = v == .object and ((v.object.* == .struct_instance and common.streq(v.object.struct_instance.typ.struct_type.qualified_name, name)) or
+                    (v.object.* == .small_struct_instance and common.streq(v.object.small_struct_instance.typ.struct_type.qualified_name, name)));
                 try typeAssert(ctx, v, ok, name);
             },
             .type_name => {
@@ -2954,21 +3178,31 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
             .eq => {
                 const b = try ctx.vs.vmPop();
                 const a = try ctx.vs.vmPop();
-                if (a == .int and b == .int) { try ctx.vs.vmPush(.{ .boolean = a.int == b.int }); continue; }
-                if (a == .boolean and b == .boolean) { try ctx.vs.vmPush(.{ .boolean = a.boolean == b.boolean }); continue; }
+                if (a == .int and b == .int) {
+                    try ctx.vs.vmPush(.{ .boolean = a.int == b.int });
+                    continue;
+                }
+                if (a == .boolean and b == .boolean) {
+                    try ctx.vs.vmPush(.{ .boolean = a.boolean == b.boolean });
+                    continue;
+                }
                 try checkNamedValueCompatibility(ctx, a, b);
                 try ctx.vs.vmPush(.{ .boolean = Value.equals(vms.unboxNamed(a), vms.unboxNamed(b)) });
             },
             .gt => {
                 const b = try ctx.vs.vmPop();
                 const a = try ctx.vs.vmPop();
-                if (a == .int and b == .int) { try ctx.vs.vmPush(.{ .boolean = a.int > b.int }); continue; }
+                if (a == .int and b == .int) {
+                    try ctx.vs.vmPush(.{ .boolean = a.int > b.int });
+                    continue;
+                }
                 if (vmbigint.isBigInt(a) or vmbigint.isBigInt(b)) {
                     const ord = vmbigint.compareValues(a, b) catch {
                         ctx.vs.setRuntimeErr("cannot compare bigint and {s}", .{vmtyp.runtimeTypeName(if (vmbigint.isBigInt(a)) b else a)});
                         return error.TypeError;
                     };
-                    try ctx.vs.vmPush(.{ .boolean = ord == .gt }); continue;
+                    try ctx.vs.vmPush(.{ .boolean = ord == .gt });
+                    continue;
                 }
                 const n = try compareNumericPair(ctx, a, b, ">");
                 try ctx.vs.vmPush(.{ .boolean = n.an > n.bn });
@@ -2976,13 +3210,17 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
             .lt => {
                 const b = try ctx.vs.vmPop();
                 const a = try ctx.vs.vmPop();
-                if (a == .int and b == .int) { try ctx.vs.vmPush(.{ .boolean = a.int < b.int }); continue; }
+                if (a == .int and b == .int) {
+                    try ctx.vs.vmPush(.{ .boolean = a.int < b.int });
+                    continue;
+                }
                 if (vmbigint.isBigInt(a) or vmbigint.isBigInt(b)) {
                     const ord = vmbigint.compareValues(a, b) catch {
                         ctx.vs.setRuntimeErr("cannot compare bigint and {s}", .{vmtyp.runtimeTypeName(if (vmbigint.isBigInt(a)) b else a)});
                         return error.TypeError;
                     };
-                    try ctx.vs.vmPush(.{ .boolean = ord == .lt }); continue;
+                    try ctx.vs.vmPush(.{ .boolean = ord == .lt });
+                    continue;
                 }
                 const n = try compareNumericPair(ctx, a, b, "<");
                 try ctx.vs.vmPush(.{ .boolean = n.an < n.bn });
@@ -2990,21 +3228,31 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
             .ne => {
                 const b = try ctx.vs.vmPop();
                 const a = try ctx.vs.vmPop();
-                if (a == .int and b == .int) { try ctx.vs.vmPush(.{ .boolean = a.int != b.int }); continue; }
-                if (a == .boolean and b == .boolean) { try ctx.vs.vmPush(.{ .boolean = a.boolean != b.boolean }); continue; }
+                if (a == .int and b == .int) {
+                    try ctx.vs.vmPush(.{ .boolean = a.int != b.int });
+                    continue;
+                }
+                if (a == .boolean and b == .boolean) {
+                    try ctx.vs.vmPush(.{ .boolean = a.boolean != b.boolean });
+                    continue;
+                }
                 try checkNamedValueCompatibility(ctx, a, b);
                 try ctx.vs.vmPush(.{ .boolean = !Value.equals(vms.unboxNamed(a), vms.unboxNamed(b)) });
             },
             .le => {
                 const b = try ctx.vs.vmPop();
                 const a = try ctx.vs.vmPop();
-                if (a == .int and b == .int) { try ctx.vs.vmPush(.{ .boolean = a.int <= b.int }); continue; }
+                if (a == .int and b == .int) {
+                    try ctx.vs.vmPush(.{ .boolean = a.int <= b.int });
+                    continue;
+                }
                 if (vmbigint.isBigInt(a) or vmbigint.isBigInt(b)) {
                     const ord = vmbigint.compareValues(a, b) catch {
                         ctx.vs.setRuntimeErr("cannot compare bigint and {s}", .{vmtyp.runtimeTypeName(if (vmbigint.isBigInt(a)) b else a)});
                         return error.TypeError;
                     };
-                    try ctx.vs.vmPush(.{ .boolean = ord != .gt }); continue;
+                    try ctx.vs.vmPush(.{ .boolean = ord != .gt });
+                    continue;
                 }
                 const n = try compareNumericPair(ctx, a, b, "<=");
                 try ctx.vs.vmPush(.{ .boolean = n.an <= n.bn });
@@ -3012,13 +3260,17 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
             .ge => {
                 const b = try ctx.vs.vmPop();
                 const a = try ctx.vs.vmPop();
-                if (a == .int and b == .int) { try ctx.vs.vmPush(.{ .boolean = a.int >= b.int }); continue; }
+                if (a == .int and b == .int) {
+                    try ctx.vs.vmPush(.{ .boolean = a.int >= b.int });
+                    continue;
+                }
                 if (vmbigint.isBigInt(a) or vmbigint.isBigInt(b)) {
                     const ord = vmbigint.compareValues(a, b) catch {
                         ctx.vs.setRuntimeErr("cannot compare bigint and {s}", .{vmtyp.runtimeTypeName(if (vmbigint.isBigInt(a)) b else a)});
                         return error.TypeError;
                     };
-                    try ctx.vs.vmPush(.{ .boolean = ord != .lt }); continue;
+                    try ctx.vs.vmPush(.{ .boolean = ord != .lt });
+                    continue;
                 }
                 const n = try compareNumericPair(ctx, a, b, ">=");
                 try ctx.vs.vmPush(.{ .boolean = n.an >= n.bn });
@@ -3032,14 +3284,20 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
             .const_eq => {
                 const k = try ctx.cs.constAt(opShort(ctx));
                 const a = try ctx.vs.vmPop();
-                if (a == .int and k == .int) { try ctx.vs.vmPush(.{ .boolean = a.int == k.int }); continue; }
+                if (a == .int and k == .int) {
+                    try ctx.vs.vmPush(.{ .boolean = a.int == k.int });
+                    continue;
+                }
                 try checkNamedValueCompatibility(ctx, a, k);
                 try ctx.vs.vmPush(.{ .boolean = Value.equals(vms.unboxNamed(a), vms.unboxNamed(k)) });
             },
             .const_sub => {
                 const k = try ctx.cs.constAt(opShort(ctx));
                 const a = try ctx.vs.vmPop();
-                if (a == .int and k == .int) { try ctx.vs.vmPush(.{ .int = a.int - k.int }); continue; }
+                if (a == .int and k == .int) {
+                    try ctx.vs.vmPush(.{ .int = a.int - k.int });
+                    continue;
+                }
                 try pushSubResult(ctx, a, k);
             },
 
@@ -3048,14 +3306,20 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
             .get_local_const_eq => {
                 const p = try readLocalSlotAndConst(ctx);
                 const a = try readLocalSlot(ctx, p.slot);
-                if (a == .int and p.k == .int) { try ctx.vs.vmPush(.{ .boolean = a.int == p.k.int }); continue; }
+                if (a == .int and p.k == .int) {
+                    try ctx.vs.vmPush(.{ .boolean = a.int == p.k.int });
+                    continue;
+                }
                 try checkNamedValueCompatibility(ctx, a, p.k);
                 try ctx.vs.vmPush(.{ .boolean = Value.equals(vms.unboxNamed(a), vms.unboxNamed(p.k)) });
             },
             .get_local_const_sub => {
                 const p = try readLocalSlotAndConst(ctx);
                 const a = try readLocalSlot(ctx, p.slot);
-                if (a == .int and p.k == .int) { try ctx.vs.vmPush(.{ .int = a.int - p.k.int }); continue; }
+                if (a == .int and p.k == .int) {
+                    try ctx.vs.vmPush(.{ .int = a.int - p.k.int });
+                    continue;
+                }
                 try pushSubResult(ctx, a, p.k);
             },
             .get_local_const_sub_call => {
@@ -3131,20 +3395,29 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
             .get_local_const_add => {
                 const p = try readLocalSlotAndConst(ctx);
                 const a = try readLocalSlot(ctx, p.slot);
-                if (a == .int and p.k == .int) { try ctx.vs.vmPush(.{ .int = a.int + p.k.int }); continue; }
+                if (a == .int and p.k == .int) {
+                    try ctx.vs.vmPush(.{ .int = a.int + p.k.int });
+                    continue;
+                }
                 try ctx.vs.vmPush(try computeAddResult(ctx, a, p.k));
             },
             .get_local_const_lt => {
                 const p = try readLocalSlotAndConst(ctx);
                 const a = try readLocalSlot(ctx, p.slot);
-                if (a == .int and p.k == .int) { try ctx.vs.vmPush(.{ .boolean = a.int < p.k.int }); continue; }
+                if (a == .int and p.k == .int) {
+                    try ctx.vs.vmPush(.{ .boolean = a.int < p.k.int });
+                    continue;
+                }
                 const n = try compareNumericPair(ctx, a, p.k, "<");
                 try ctx.vs.vmPush(.{ .boolean = n.an < n.bn });
             },
             .get_local_const_gt => {
                 const p = try readLocalSlotAndConst(ctx);
                 const a = try readLocalSlot(ctx, p.slot);
-                if (a == .int and p.k == .int) { try ctx.vs.vmPush(.{ .boolean = a.int > p.k.int }); continue; }
+                if (a == .int and p.k == .int) {
+                    try ctx.vs.vmPush(.{ .boolean = a.int > p.k.int });
+                    continue;
+                }
                 const n = try compareNumericPair(ctx, a, p.k, ">");
                 try ctx.vs.vmPush(.{ .boolean = n.an > n.bn });
             },
@@ -3223,23 +3496,35 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
             // Bytecode: [op][name_hi][name_lo][ic_hi][ic_lo][skip][val_hi][val_lo]
             .get_global_const_eq => {
                 const p = try readGlobalConstPair(ctx);
-                if (p.g == .int and p.k == .int) { try ctx.vs.vmPush(.{ .boolean = p.g.int == p.k.int }); continue; }
+                if (p.g == .int and p.k == .int) {
+                    try ctx.vs.vmPush(.{ .boolean = p.g.int == p.k.int });
+                    continue;
+                }
                 try checkNamedValueCompatibility(ctx, p.g, p.k);
                 try ctx.vs.vmPush(.{ .boolean = Value.equals(vms.unboxNamed(p.g), vms.unboxNamed(p.k)) });
             },
             .get_global_const_sub => {
                 const p = try readGlobalConstPair(ctx);
-                if (p.g == .int and p.k == .int) { try ctx.vs.vmPush(.{ .int = p.g.int - p.k.int }); continue; }
+                if (p.g == .int and p.k == .int) {
+                    try ctx.vs.vmPush(.{ .int = p.g.int - p.k.int });
+                    continue;
+                }
                 try pushSubResult(ctx, p.g, p.k);
             },
             .get_global_const_add => {
                 const p = try readGlobalConstPair(ctx);
-                if (p.g == .int and p.k == .int) { try ctx.vs.vmPush(.{ .int = p.g.int + p.k.int }); continue; }
+                if (p.g == .int and p.k == .int) {
+                    try ctx.vs.vmPush(.{ .int = p.g.int + p.k.int });
+                    continue;
+                }
                 try ctx.vs.vmPush(try computeAddResult(ctx, p.g, p.k));
             },
             .get_global_const_lt => {
                 const p = try readGlobalConstPair(ctx);
-                if (p.g == .int and p.k == .int) { try ctx.vs.vmPush(.{ .boolean = p.g.int < p.k.int }); continue; }
+                if (p.g == .int and p.k == .int) {
+                    try ctx.vs.vmPush(.{ .boolean = p.g.int < p.k.int });
+                    continue;
+                }
                 const n = try compareNumericPair(ctx, p.g, p.k, "<");
                 try ctx.vs.vmPush(.{ .boolean = n.an < n.bn });
             },
@@ -3297,7 +3582,10 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                         }
                         if (first_is_float) {
                             switch (item.*) {
-                                .int => |n| { item.* = .{ .float = @floatFromInt(n) }; continue; },
+                                .int => |n| {
+                                    item.* = .{ .float = @floatFromInt(n) };
+                                    continue;
+                                },
                                 else => {},
                             }
                         }
@@ -3401,11 +3689,17 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                             const val = ctx.vs.stack[base + ci * 2 + 1];
                             const key_s = try vms.asStringValue(key);
                             if (vmtyp.findFieldIndex(vt.shared_fields, key_s)) |idx| {
-                                if (shared_seen[idx]) { ctx.vs.setRuntimeErr("duplicate field '{s}' in variant literal", .{key_s}); return error.DuplicateField; }
+                                if (shared_seen[idx]) {
+                                    ctx.vs.setRuntimeErr("duplicate field '{s}' in variant literal", .{key_s});
+                                    return error.DuplicateField;
+                                }
                                 shared_seen[idx] = true;
                                 shared_vals[idx] = val;
                             } else if (common.streq(key_s, arm.payload_name)) {
-                                if (payload_seen) { ctx.vs.setRuntimeErr("duplicate field '{s}' in variant literal", .{key_s}); return error.DuplicateField; }
+                                if (payload_seen) {
+                                    ctx.vs.setRuntimeErr("duplicate field '{s}' in variant literal", .{key_s});
+                                    return error.DuplicateField;
+                                }
                                 payload_seen = true;
                                 payload_val = val;
                             } else {
@@ -3414,9 +3708,15 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                             }
                         }
                         for (vt.shared_fields, shared_seen[0..shared_count]) |sf, seen| {
-                            if (!seen) { ctx.vs.setRuntimeErr("missing required field '{s}' in variant literal", .{sf.name}); return error.MissingStructField; }
+                            if (!seen) {
+                                ctx.vs.setRuntimeErr("missing required field '{s}' in variant literal", .{sf.name});
+                                return error.MissingStructField;
+                            }
                         }
-                        if (arm.has_payload and !payload_seen) { ctx.vs.setRuntimeErr("missing required field '{s}' in variant literal", .{arm.payload_name}); return error.MissingStructField; }
+                        if (arm.has_payload and !payload_seen) {
+                            ctx.vs.setRuntimeErr("missing required field '{s}' in variant literal", .{arm.payload_name});
+                            return error.MissingStructField;
+                        }
 
                         ctx.vs.stack_top -= typ_stack_dist + 1;
                         obj.* = .{ .variant_value = .{
@@ -3435,12 +3735,18 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                             const val = ctx.vs.stack[base + ci * 2 + 1];
                             const key_s = try vms.asStringValue(key);
                             if (vmtyp.findFieldIndex(vt.shared_fields, key_s)) |idx| {
-                                if (seen[idx]) { ctx.vs.setRuntimeErr("duplicate field '{s}' in variant literal", .{key_s}); return error.DuplicateField; }
+                                if (seen[idx]) {
+                                    ctx.vs.setRuntimeErr("duplicate field '{s}' in variant literal", .{key_s});
+                                    return error.DuplicateField;
+                                }
                                 seen[idx] = true;
                                 shared_vals[idx] = val;
                             } else if (vmtyp.findFieldIndex(arm.fields, key_s)) |idx| {
                                 const seen_idx = shared_count + idx;
-                                if (seen[seen_idx]) { ctx.vs.setRuntimeErr("duplicate field '{s}' in variant literal", .{key_s}); return error.DuplicateField; }
+                                if (seen[seen_idx]) {
+                                    ctx.vs.setRuntimeErr("duplicate field '{s}' in variant literal", .{key_s});
+                                    return error.DuplicateField;
+                                }
                                 seen[seen_idx] = true;
                                 arm_vals[idx] = val;
                             } else {
@@ -3449,10 +3755,16 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                             }
                         }
                         for (seen[0..shared_count], vt.shared_fields) |s, sf| {
-                            if (!s) { ctx.vs.setRuntimeErr("missing required field '{s}' in variant literal", .{sf.name}); return error.MissingStructField; }
+                            if (!s) {
+                                ctx.vs.setRuntimeErr("missing required field '{s}' in variant literal", .{sf.name});
+                                return error.MissingStructField;
+                            }
                         }
                         for (seen[shared_count..total_fields], arm.fields) |s, af| {
-                            if (!s) { ctx.vs.setRuntimeErr("missing required field '{s}' in variant literal", .{af.name}); return error.MissingStructField; }
+                            if (!s) {
+                                ctx.vs.setRuntimeErr("missing required field '{s}' in variant literal", .{af.name});
+                                return error.MissingStructField;
+                            }
                         }
 
                         ctx.vs.stack_top -= typ_stack_dist + 1;
@@ -3483,13 +3795,20 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                                 ctx.vs.setRuntimeErr("no field '{s}' on type '{s}'", .{ key_s, st.name });
                                 return error.UnknownStructField;
                             };
-                            if (seen[idx]) { ctx.vs.setRuntimeErr("duplicate field '{s}' in struct literal", .{key_s}); return error.DuplicateField; }
+                            if (seen[idx]) {
+                                ctx.vs.setRuntimeErr("duplicate field '{s}' in struct literal", .{key_s});
+                                return error.DuplicateField;
+                            }
                             seen[idx] = true;
-                            if (!vmtyp.matchesFieldType(ctx, val, st.fields[idx])) return error.StructFieldTypeMismatch;
-                            inline_vals[idx] = val;
+                            const checked = try coerceStructFieldValue(ctx, st.fields[idx], val);
+                            if (!vmtyp.matchesFieldType(ctx, checked, st.fields[idx]) and !(checked != .object and fieldHasNamedType(st.fields[idx]))) return error.StructFieldTypeMismatch;
+                            inline_vals[idx] = checked;
                         }
                         for (st.fields, seen[0..st.fields.len]) |f, s| {
-                            if (!s) { ctx.vs.setRuntimeErr("missing required field '{s}' in struct literal", .{f.name}); return error.MissingStructField; }
+                            if (!s) {
+                                ctx.vs.setRuntimeErr("missing required field '{s}' in struct literal", .{f.name});
+                                return error.MissingStructField;
+                            }
                         }
                         const obj = try vmgc.vmAllocObject(ctx);
                         ctx.vs.stack_top -= typ_stack_dist + 1;
@@ -3507,13 +3826,20 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                                 ctx.vs.setRuntimeErr("no field '{s}' on type '{s}'", .{ key_s, st.name });
                                 return error.UnknownStructField;
                             };
-                            if (seen[idx]) { ctx.vs.setRuntimeErr("duplicate field '{s}' in struct literal", .{key_s}); return error.DuplicateField; }
+                            if (seen[idx]) {
+                                ctx.vs.setRuntimeErr("duplicate field '{s}' in struct literal", .{key_s});
+                                return error.DuplicateField;
+                            }
                             seen[idx] = true;
-                            if (!vmtyp.matchesFieldType(ctx, val, st.fields[idx])) return error.StructFieldTypeMismatch;
-                            inst_fields[idx] = .{ .key = st.fields[idx].key, .value = val };
+                            const checked = try coerceStructFieldValue(ctx, st.fields[idx], val);
+                            if (!vmtyp.matchesFieldType(ctx, checked, st.fields[idx]) and !(checked != .object and fieldHasNamedType(st.fields[idx]))) return error.StructFieldTypeMismatch;
+                            inst_fields[idx] = .{ .key = st.fields[idx].key, .value = checked };
                         }
                         for (st.fields, seen[0..st.fields.len]) |f, s| {
-                            if (!s) { ctx.vs.setRuntimeErr("missing required field '{s}' in struct literal", .{f.name}); return error.MissingStructField; }
+                            if (!s) {
+                                ctx.vs.setRuntimeErr("missing required field '{s}' in struct literal", .{f.name});
+                                return error.MissingStructField;
+                            }
                         }
                         ctx.vs.stack_top -= typ_stack_dist + 1;
                         obj.* = .{ .struct_instance = .{ .typ = typ_peek.object, .fields = inst_fields } };
@@ -3696,7 +4022,7 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 const nt = &nt_val.object.named_type;
                 if (nt.has_default and nt.predicate != null) {
                     const constructed = try vmtyp.constructNamedType(ctx, nt_val.object, nt.default_val);
-                    try checkNamedTypePredicate(ctx, nt_val.object, constructed.namedInner() orelse unreachable);
+                    try checkNamedTypePredicate(ctx, nt_val.object, constructed.namedInner() orelse constructed);
                 }
             },
 
@@ -3713,10 +4039,17 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
             },
 
             .check_named_predicate => {
+                const type_val = try opConst(ctx);
+                if (type_val != .object or type_val.object.* != .named_type) return error.TypeError;
                 const val = try ctx.vs.vmPeek(0);
-                if (val.namedTyp()) |nt_obj| {
-                    try checkNamedTypePredicate(ctx, nt_obj, val.namedInner() orelse unreachable);
-                }
+                try checkNamedTypePredicateChain(ctx, type_val.object, val);
+            },
+
+            .validate_named_range => {
+                const type_val = try opConst(ctx);
+                if (type_val != .object or type_val.object.* != .named_type) return error.TypeError;
+                const val = try ctx.vs.vmPeek(0);
+                ctx.vs.stack[ctx.vs.stack_top - 1] = try vmtyp.coerceNamedTypeResult(ctx, type_val.object, val);
             },
 
             .call => {
@@ -3790,7 +4123,8 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                     common.streq(ref.typ.variant_type.arms[ref.ordinal].name, arm_name)
                 else if (v == .object and v.object.* == .enum_value)
                     common.streq(v.object.enum_value.name, arm_name)
-                else false;
+                else
+                    false;
                 try ctx.vs.vmPush(.{ .boolean = matches });
             },
 
@@ -3903,7 +4237,10 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 if (try doReturn(ctx, k)) return true;
             },
 
-            .halt => { vmperf.breakOpChain(); return true; },
+            .halt => {
+                vmperf.breakOpChain();
+                return true;
+            },
         }
     }
     return false;
@@ -4101,7 +4438,7 @@ fn levenshteinDistance(a: []const u8, b: []const u8) usize {
             const cost: usize = if (a[i] == b[j]) 0 else 1;
             cur[j + 1] = @min(@min(cur[j] + 1, prev[j + 1] + 1), prev[j] + cost);
         }
-        @memcpy(prev[0..n + 1], cur[0..n + 1]);
+        @memcpy(prev[0 .. n + 1], cur[0 .. n + 1]);
     }
     return cur[n];
 }
@@ -4112,7 +4449,10 @@ fn findSimilarName(ctx: VMContext, name: []const u8) ?[]const u8 {
     for (0..ctx.gs.len()) |i| {
         const candidate = ctx.gs.nameAt(i);
         const d = levenshteinDistance(name, candidate);
-        if (d < best_dist) { best_dist = d; best = candidate; }
+        if (d < best_dist) {
+            best_dist = d;
+            best = candidate;
+        }
     }
     return best;
 }

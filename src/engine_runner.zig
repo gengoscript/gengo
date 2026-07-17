@@ -22,8 +22,13 @@ fn writeAll(fd: std.os.wasi.fd_t, s: []const u8) void {
     }
 }
 
-fn out(s: []const u8) void { writeAll(1, s); }
-fn fail(msg: []const u8) noreturn { writeAll(2, msg); std.os.wasi.proc_exit(1); }
+fn out(s: []const u8) void {
+    writeAll(1, s);
+}
+fn fail(msg: []const u8) noreturn {
+    writeAll(2, msg);
+    std.os.wasi.proc_exit(1);
+}
 
 var capture_buf: [4096]u8 = undefined;
 var capture_len: usize = 0;
@@ -308,15 +313,17 @@ fn testHostModules() void {
 fn testHostAndSourcePackageCollision() void {
     const host_funcs = [_]api.HostModuleFuncDesc{.{ .name = "ping", .arity = 0, .call_id = 0x1002 }};
     const host_mods = [_]api.HostModuleDesc{.{ .name = "db", .functions = &host_funcs }};
-    const sources = [_]api.SourceEntry{.{ .path = "db.gengo", .source = "pub func answer() int { return 42 }\n" }};
+    const sources = [_]api.SourceEntry{.{ .path = "db", .source = "pub func answer() int { return 42 }\n" }};
     const rt = makeRt(.{ .allow_io = false, .native_backend = .host, .host_modules = &host_mods, .module_sources = &sources });
 
     const res = rt.runPath(
         \\source := import("db")
         \\bridge := import("host:db")
         \\func answer() int {
-        \\    _ = bridge
         \\    return source.answer()
+        \\}
+        \\func pingBridge() {
+        \\    bridge.ping()
         \\}
     , "main.gengo");
     if (res != .ok) fail("engine FAIL: host/source package collision setup failed\n");
@@ -328,7 +335,36 @@ fn testHostAndSourcePackageCollision() void {
         },
         else => fail("engine FAIL: host/source package collision call failed\n"),
     }
+    const host_call_res = rt.call("pingBridge", &.{});
+    switch (host_call_res) {
+        .runtime_error => {},
+        else => fail("engine FAIL: host/source package collision host call\n"),
+    }
     out("  host/source package collision: OK\n");
+}
+
+fn testCapabilityAndSourcePackageCollision() void {
+    const sources = [_]api.SourceEntry{.{ .path = "env", .source = "pub func answer() int { return 42 }\n" }};
+    const rt = makeRt(.{ .allow_io = false, .module_sources = &sources, .capabilities = &.{"env"} });
+
+    const res = rt.runPath(
+        \\source := import("env")
+        \\cap := import("cap:env")
+        \\func answer() int {
+        \\    _ = cap.get("HOME")
+        \\    return source.answer()
+        \\}
+    , "main.gengo");
+    if (res != .ok) fail("engine FAIL: cap/source package collision setup failed\n");
+
+    const call_res = rt.call("answer", &.{});
+    switch (call_res) {
+        .ok => |v| {
+            if (v != .int or v.int != 42) fail("engine FAIL: cap/source package collision result\n");
+        },
+        else => fail("engine FAIL: cap/source package collision call failed\n"),
+    }
+    out("  cap/source package collision: OK\n");
 }
 
 fn testHostModuleUnknownField() void {
@@ -756,8 +792,18 @@ fn testNetCapabilityHandlers() void {
     const res = rt.run(test_src);
     switch (res) {
         .ok => {},
-        .compile_error => |e| { writeAll(2, "engine FAIL: net handler compile: "); writeAll(2, e.msg); writeAll(2, "\n"); std.os.wasi.proc_exit(1); },
-        .runtime_error => |e| { writeAll(2, "engine FAIL: net handler runtime: "); writeAll(2, e.msg); writeAll(2, "\n"); std.os.wasi.proc_exit(1); },
+        .compile_error => |e| {
+            writeAll(2, "engine FAIL: net handler compile: ");
+            writeAll(2, e.msg);
+            writeAll(2, "\n");
+            std.os.wasi.proc_exit(1);
+        },
+        .runtime_error => |e| {
+            writeAll(2, "engine FAIL: net handler runtime: ");
+            writeAll(2, e.msg);
+            writeAll(2, "\n");
+            std.os.wasi.proc_exit(1);
+        },
     }
 
     const all_res = rt.call("testAll", &.{});
@@ -869,8 +915,18 @@ fn testInitWithConfig() void {
     const res = rt.run("std := import(\"std\")\nstd.io.println(42)");
     switch (res) {
         .ok => {},
-        .compile_error => |e| { writeAll(2, "engine FAIL: config compile: "); writeAll(2, e.msg); writeAll(2, "\n"); std.os.wasi.proc_exit(1); },
-        .runtime_error => |e| { writeAll(2, "engine FAIL: config runtime: "); writeAll(2, e.msg); writeAll(2, "\n"); std.os.wasi.proc_exit(1); },
+        .compile_error => |e| {
+            writeAll(2, "engine FAIL: config compile: ");
+            writeAll(2, e.msg);
+            writeAll(2, "\n");
+            std.os.wasi.proc_exit(1);
+        },
+        .runtime_error => |e| {
+            writeAll(2, "engine FAIL: config runtime: ");
+            writeAll(2, e.msg);
+            writeAll(2, "\n");
+            std.os.wasi.proc_exit(1);
+        },
     }
     out("  init_with_config: OK\n");
 }
@@ -956,7 +1012,9 @@ fn testStructReturn() void {
             if (y_val != .int or y_val.int != 2) fail("engine FAIL: struct y field\n");
         },
         .runtime_error => |e| {
-            writeAll(2, "struct call runtime: "); writeAll(2, e.msg); writeAll(2, "\n");
+            writeAll(2, "struct call runtime: ");
+            writeAll(2, e.msg);
+            writeAll(2, "\n");
             fail("engine FAIL: struct call failed\n");
         },
     }
@@ -972,8 +1030,16 @@ fn testRuneReturn() void {
     );
     if (res != .ok) {
         switch (res) {
-            .compile_error => |e| { writeAll(2, "rune setup compile: "); writeAll(2, e.msg); writeAll(2, "\n"); },
-            .runtime_error => |e| { writeAll(2, "rune setup runtime: "); writeAll(2, e.msg); writeAll(2, "\n"); },
+            .compile_error => |e| {
+                writeAll(2, "rune setup compile: ");
+                writeAll(2, e.msg);
+                writeAll(2, "\n");
+            },
+            .runtime_error => |e| {
+                writeAll(2, "rune setup runtime: ");
+                writeAll(2, e.msg);
+                writeAll(2, "\n");
+            },
             else => {},
         }
         fail("engine FAIL: rune return setup\n");
@@ -1009,11 +1075,14 @@ fn testNamedTypeReturn() void {
     const call_res = rt.call("makeMeter", &[_]Value{});
     switch (call_res) {
         .ok => |v| {
-            const ref = v.asNamed() orelse { fail("engine FAIL: named type return type\n"); return; };
-            if (ref.inner != .int or ref.inner.int != 5) fail("engine FAIL: named type inner value\n");
+            const inner = v.namedInner() orelse v;
+            if (inner != .int) fail("engine FAIL: named type return type\n");
+            if (inner.int != 5) fail("engine FAIL: named type inner value\n");
         },
         .runtime_error => |e| {
-            writeAll(2, "named type call runtime: "); writeAll(2, e.msg); writeAll(2, "\n");
+            writeAll(2, "named type call runtime: ");
+            writeAll(2, e.msg);
+            writeAll(2, "\n");
             fail("engine FAIL: named type call failed\n");
         },
     }
@@ -1037,7 +1106,9 @@ fn testErrorReturn() void {
             if (!std.mem.eql(u8, v.error_value.bytes, "boom")) fail("engine FAIL: error return message\n");
         },
         .runtime_error => |e| {
-            writeAll(2, "error call runtime: "); writeAll(2, e.msg); writeAll(2, "\n");
+            writeAll(2, "error call runtime: ");
+            writeAll(2, e.msg);
+            writeAll(2, "\n");
             fail("engine FAIL: error call failed\n");
         },
     }
@@ -1058,8 +1129,9 @@ fn testRuntimeDisablePredicates() void {
     const call_res = rt.call("getA", &.{});
     switch (call_res) {
         .ok => |v| {
-            const ref = v.asNamed() orelse { fail("engine FAIL: expected named value when predicates disabled\n"); return; };
-            if (ref.inner != .int or ref.inner.int != -1) fail("engine FAIL: expected -1 when predicates disabled\n");
+            const inner = v.namedInner() orelse v;
+            if (inner != .int) fail("engine FAIL: expected named value when predicates disabled\n");
+            if (inner.int != -1) fail("engine FAIL: expected -1 when predicates disabled\n");
         },
         else => fail("engine FAIL: expected call success when predicates disabled\n"),
     }
@@ -1111,8 +1183,18 @@ fn testHttpCapability() void {
     const res = rt.run(test_src);
     switch (res) {
         .ok => {},
-        .compile_error => |e| { writeAll(2, "engine FAIL: http handler compile: "); writeAll(2, e.msg); writeAll(2, "\n"); std.os.wasi.proc_exit(1); },
-        .runtime_error => |e| { writeAll(2, "engine FAIL: http handler runtime: "); writeAll(2, e.msg); writeAll(2, "\n"); std.os.wasi.proc_exit(1); },
+        .compile_error => |e| {
+            writeAll(2, "engine FAIL: http handler compile: ");
+            writeAll(2, e.msg);
+            writeAll(2, "\n");
+            std.os.wasi.proc_exit(1);
+        },
+        .runtime_error => |e| {
+            writeAll(2, "engine FAIL: http handler runtime: ");
+            writeAll(2, e.msg);
+            writeAll(2, "\n");
+            std.os.wasi.proc_exit(1);
+        },
     }
 
     const get_res = rt.call("testGet", &.{});
@@ -1171,7 +1253,8 @@ fn readFileWasi(alloc: std.mem.Allocator, path: []const u8) ![]u8 {
     const rc = wasi.path_open(
         cwd_preopen_fd,
         .{},
-        path.ptr, path.len,
+        path.ptr,
+        path.len,
         .{},
         .{ .FD_READ = true, .FD_SEEK = true },
         .{ .FD_READ = true, .FD_SEEK = true },
@@ -1256,15 +1339,16 @@ export fn _start() void {
     testHexLiterals();
     testMultiHandle();
     testRunPathWithSourceProvider();
+    testRegisteredPackageImports();
     testCallWithArgs();
     testReset();
     testLastError();
     testRuntimeErrorPath();
-    testRegisteredPackageImports();
     testIO();
     testReplIncremental();
     testHostModules();
     testHostAndSourcePackageCollision();
+    testCapabilityAndSourcePackageCollision();
     testHostModuleUnknownField();
     testFailedModuleReimport();
     testArrayWireResult();

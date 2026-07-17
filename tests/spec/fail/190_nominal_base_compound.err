@@ -1,2 +1,2 @@
-TypeError
-cannot apply '+' to Age and int; wrap the int with Age(...) or unwrap the named value with int(...)
+TypeMismatch
+cannot apply 'add' to Age and int; use Age(value) or unwrap with the base type

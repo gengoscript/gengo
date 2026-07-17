@@ -25,6 +25,7 @@ const heap_rt = @import("runtime/heap.zig");
 const fs_state = @import("lang/native/fs_state.zig");
 const cap_env = if (build_opts.cap_env) @import("lang/native/cap_env.zig") else struct {};
 const disasm = @import("lang/disasm.zig");
+const bundle = @import("bundle.zig");
 
 const MaxArgs = 32;
 const ArgBufSize = 4096;
@@ -273,7 +274,156 @@ fn parseHeapSize(s: []const u8) usize {
     return n * multiplier;
 }
 
+fn printBundleUsage() void {
+    io.write("Usage: gengo bundle --entry <archive-path.gengo> -o <bundle.zip> [options] [folder ...]\n");
+    io.write("\n");
+    io.write("Options:\n");
+    io.write("  --root <name>=<folder>  Add a source root (repeatable)\n");
+    io.write("  --entry <path>          Entrypoint path within the archive, e.g. app/main.gengo\n");
+    io.write("  -o, --output <path>     Output ZIP path\n");
+    io.write("  --include <glob>        Include matching .gengo files (repeatable)\n");
+    io.write("  --exclude <glob>        Exclude matching files (repeatable; wins over include)\n");
+    io.write("\n");
+    io.write("A positional folder is equivalent to --root <basename>=<folder>.\n");
+}
+
+fn rootNameFromPath(path: []const u8) []const u8 {
+    var end = path.len;
+    while (end > 0 and (path[end - 1] == '/' or path[end - 1] == '\\')) : (end -= 1) {}
+    if (end == 0) return path;
+    var start = end;
+    while (start > 0 and path[start - 1] != '/' and path[start - 1] != '\\') : (start -= 1) {}
+    return path[start..end];
+}
+
+fn runBundle(args: []const []const u8) void {
+    if (comptime builtin.os.tag == .wasi) {
+        io.werr("gengo: bundle is available only in the native CLI\n");
+        die(1);
+    }
+
+    var roots: [MaxArgs]bundle.Root = undefined;
+    var root_count: usize = 0;
+    var includes: [MaxArgs][]const u8 = undefined;
+    var include_count: usize = 0;
+    var excludes: [MaxArgs][]const u8 = undefined;
+    var exclude_count: usize = 0;
+    var entry: ?[]const u8 = null;
+    var output: ?[]const u8 = null;
+
+    var index: usize = 0;
+    while (index < args.len) {
+        const arg = args[index];
+        if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
+            printBundleUsage();
+            die(0);
+        }
+        if (std.mem.eql(u8, arg, "--entry") or std.mem.eql(u8, arg, "-o") or std.mem.eql(u8, arg, "--output") or std.mem.eql(u8, arg, "--root") or std.mem.eql(u8, arg, "--include") or std.mem.eql(u8, arg, "--exclude")) {
+            if (index + 1 >= args.len) {
+                io.werr("gengo: bundle option requires a value: ");
+                io.werr(arg);
+                io.werr("\n");
+                die(1);
+            }
+            const value = args[index + 1];
+            if (std.mem.eql(u8, arg, "--entry")) {
+                entry = value;
+            } else if (std.mem.eql(u8, arg, "-o") or std.mem.eql(u8, arg, "--output")) {
+                output = value;
+            } else if (std.mem.eql(u8, arg, "--root")) {
+                const eq = std.mem.indexOfScalar(u8, value, '=') orelse {
+                    io.werr("gengo: --root expects name=folder: ");
+                    io.werr(value);
+                    io.werr("\n");
+                    die(1);
+                };
+                if (root_count >= roots.len) {
+                    io.werr("gengo: too many bundle roots\n");
+                    die(1);
+                }
+                roots[root_count] = .{ .name = value[0..eq], .directory = value[eq + 1 ..] };
+                root_count += 1;
+            } else if (std.mem.eql(u8, arg, "--include")) {
+                if (include_count >= includes.len) {
+                    io.werr("gengo: too many --include patterns\n");
+                    die(1);
+                }
+                includes[include_count] = value;
+                include_count += 1;
+            } else {
+                if (exclude_count >= excludes.len) {
+                    io.werr("gengo: too many --exclude patterns\n");
+                    die(1);
+                }
+                excludes[exclude_count] = value;
+                exclude_count += 1;
+            }
+            index += 2;
+            continue;
+        }
+        if (std.mem.startsWith(u8, arg, "-")) {
+            io.werr("gengo: unknown bundle option: ");
+            io.werr(arg);
+            io.werr("\n");
+            die(1);
+        }
+        if (root_count >= roots.len) {
+            io.werr("gengo: too many bundle roots\n");
+            die(1);
+        }
+        roots[root_count] = .{ .name = rootNameFromPath(arg), .directory = arg };
+        root_count += 1;
+        index += 1;
+    }
+
+    const entry_path = entry orelse {
+        io.werr("gengo: bundle requires --entry <archive-path.gengo>\n");
+        die(1);
+    };
+    const output_path = output orelse {
+        io.werr("gengo: bundle requires -o <bundle.zip>\n");
+        die(1);
+    };
+    const result = bundle.buildFromRoots(
+        std.heap.page_allocator,
+        roots[0..root_count],
+        entry_path,
+        includes[0..include_count],
+        excludes[0..exclude_count],
+    ) catch |err| {
+        io.werr("gengo: cannot build bundle: ");
+        io.werr(@errorName(err));
+        io.werr("\n");
+        die(1);
+    };
+    defer std.heap.page_allocator.free(result.archive);
+
+    const io_ctx = std.Io.Threaded.global_single_threaded.io();
+    const file = std.Io.Dir.cwd().createFile(io_ctx, output_path, .{}) catch {
+        io.werr("gengo: cannot create bundle: ");
+        io.werr(output_path);
+        io.werr("\n");
+        die(1);
+    };
+    defer file.close(io_ctx);
+    file.writeStreamingAll(io_ctx, result.archive) catch {
+        io.werr("gengo: cannot write bundle: ");
+        io.werr(output_path);
+        io.werr("\n");
+        die(1);
+    };
+    io.write("gengo: bundled ");
+    io.writeInt(@intCast(result.source_count));
+    io.write(" source files to ");
+    io.write(output_path);
+    io.write("\n");
+}
+
 fn runCli(argv: []const []const u8) void {
+    if (argv.len > 1 and std.mem.eql(u8, argv[1], "bundle")) {
+        runBundle(argv[2..]);
+        return;
+    }
     var script_path: ?[]const u8 = null;
     var script_name: []const u8 = "<stdin>";
     var script_index: usize = 1;

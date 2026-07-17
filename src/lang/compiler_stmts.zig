@@ -98,7 +98,9 @@ pub fn cForStmt(c: anytype) anyerror!void {
         if (c.cur.typ == .ident) loop_var_name = c.cur.src;
         try varDecl(c, true, true);
     } else if (c.check(.ident) and c.peekTT() == .eq) {
-        try assignStmt(c, );
+        try assignStmt(
+            c,
+        );
     } else {
         try c.expr();
         try c.cs.emitOp(.pop, c.prev.line);
@@ -119,13 +121,19 @@ pub fn cForStmt(c: anytype) anyerror!void {
         const body_j = try c.cs.emitJump(.jump, c.prev.line);
         const post_start = c.cs.codeLen();
         if (c.check(.ident) and (c.peekTT() == .plus_plus or c.peekTT() == .minus_minus)) {
-            try incrStmt(c, );
+            try incrStmt(
+                c,
+            );
         } else if (c.check(.ident) and c.peekTT() == .eq) {
-            try assignStmt(c, );
+            try assignStmt(
+                c,
+            );
         } else if (c.check(.ident)) {
             const ptt = c.peekTT();
             if (ptt == .plus_eq or ptt == .minus_eq or ptt == .star_eq or ptt == .slash_eq or ptt == .amp_eq or ptt == .pipe_eq or ptt == .caret_eq or ptt == .lt_lt_eq or ptt == .gt_gt_eq) {
-                try compoundStmt(c, );
+                try compoundStmt(
+                    c,
+                );
             } else {
                 try c.expr();
                 try c.cs.emitOp(.pop, c.prev.line);
@@ -149,7 +157,9 @@ pub fn cForStmt(c: anytype) anyerror!void {
     }
     try c.consume(.lbrace);
     c.loop_body_depth += 1;
-    try block(c, );
+    try block(
+        c,
+    );
     c.loop_body_depth -= 1;
     for (c.currentLoop().loop_var_slots[0..c.currentLoop().loop_var_count]) |slot| {
         try c.cs.emit2(@intFromEnum(Op.close_upvalue), slot, c.prev.line);
@@ -215,7 +225,10 @@ pub fn compileFuncWithPrefix(c: anytype, prefix: []const []const u8, is_named: b
     const any_spec: FieldTypeSpec = .{ .alts = any_alts[0..1] };
     variadic_type = any_spec;
 
-    if (prefix.len > MaxLocals) { c.setErr("too many parameters (max {d})", .{MaxLocals}); return error.TooManyParams; }
+    if (prefix.len > MaxLocals) {
+        c.setErr("too many parameters (max {d})", .{MaxLocals});
+        return error.TooManyParams;
+    }
     for (prefix) |p| {
         if (c.isKnownTypeName(p))
             return c.err("'{s}' is a type name and cannot be used as a receiver name", .{p});
@@ -226,7 +239,10 @@ pub fn compileFuncWithPrefix(c: anytype, prefix: []const []const u8, is_named: b
 
     if (!c.check(.rparen)) {
         while (true) {
-            if (arity >= MaxLocals) { c.setErr("too many parameters (max {d})", .{MaxLocals}); return error.TooManyParams; }
+            if (arity >= MaxLocals) {
+                c.setErr("too many parameters (max {d})", .{MaxLocals});
+                return error.TooManyParams;
+            }
             const vari = if (predicate_base != null) false else c.match(.ellipsis);
             const p_is_const = if (predicate_base != null) false else c.match(.kw_const);
             if (c.cur.typ != .ident) return c.err("expected identifier, found {s}", .{c.tokenName(c.cur.typ)});
@@ -258,7 +274,10 @@ pub fn compileFuncWithPrefix(c: anytype, prefix: []const []const u8, is_named: b
                 if (c.check(.rparen)) break;
                 continue;
             }
-            if (c.cur.typ != .question and c.cur.typ != .ident and c.cur.typ != .kw_func and c.cur.typ != .lbracket) { c.setErr("expected type annotation, found {s}", .{c.tokenName(c.cur.typ)}); return error.ExpectedTypeAnnotation; }
+            if (c.cur.typ != .question and c.cur.typ != .ident and c.cur.typ != .kw_func and c.cur.typ != .lbracket) {
+                c.setErr("expected type annotation, found {s}", .{c.tokenName(c.cur.typ)});
+                return error.ExpectedTypeAnnotation;
+            }
             const ptype: FieldTypeSpec = try c.parseFieldTypeSpec();
             param_types[arity - 1] = ptype;
             if (vari) {
@@ -297,7 +316,10 @@ pub fn compileFuncWithPrefix(c: anytype, prefix: []const []const u8, is_named: b
         const is_named_returns = c.cur.typ == .ident and
             (c.peekToken().typ == .ident or c.peekToken().typ == .question or c.peekToken().typ == .kw_func or c.peekToken().typ == .lbracket);
         while (true) {
-            if (return_count >= MaxLocals) { c.setErr("too many return types (max {d})", .{MaxLocals}); return error.TooManyParams; }
+            if (return_count >= MaxLocals) {
+                c.setErr("too many return types (max {d})", .{MaxLocals});
+                return error.TooManyParams;
+            }
             if (is_named_returns) {
                 if (c.cur.typ != .ident) return c.err("expected identifier, found {s}", .{c.tokenName(c.cur.typ)});
                 if (c.isKnownTypeName(c.cur.src))
@@ -353,7 +375,7 @@ pub fn compileFuncWithPrefix(c: anytype, prefix: []const []const u8, is_named: b
         scope.named_return_base = arity;
         scope.named_return_count = named_return_count;
         for (0..@as(usize, named_return_count)) |ri| {
-            for (scope.locals[0..arity + ri]) |local| {
+            for (scope.locals[0 .. arity + ri]) |local| {
                 if (common.streq(local.name, return_names[ri])) {
                     c.setErr("named return '{s}' conflicts with existing local binding", .{return_names[ri]});
                     return error.DuplicateLocal;
@@ -365,20 +387,13 @@ pub fn compileFuncWithPrefix(c: anytype, prefix: []const []const u8, is_named: b
             const rt = return_types[ri];
             if (rt.alts.len == 1) {
                 switch (rt.alts[0].typ) {
-                    .int =>
-                        try c.cs.emitConst(.{ .int = 0.0 }, @intCast(func_ip)),
-                    .float =>
-                        try c.cs.emitConst(.{ .float = 0.0 }, @intCast(func_ip)),
-                    .rune_t =>
-                        try c.cs.emitConst(.{ .rune = 0 }, @intCast(func_ip)),
-                    .decimal_t =>
-                        try c.cs.emitConst(.{ .decimal = 0 }, @intCast(func_ip)),
-                    .boolean =>
-                        try c.cs.emitOp(.false_val, @intCast(func_ip)),
-                    .string =>
-                        try c.cs.emitStringConst("", @intCast(func_ip)),
-                    else =>
-                        try c.cs.emitOp(.null_val, @intCast(func_ip)),
+                    .int => try c.cs.emitConst(.{ .int = 0.0 }, @intCast(func_ip)),
+                    .float => try c.cs.emitConst(.{ .float = 0.0 }, @intCast(func_ip)),
+                    .rune_t => try c.cs.emitConst(.{ .rune = 0 }, @intCast(func_ip)),
+                    .decimal_t => try c.cs.emitConst(.{ .decimal = 0 }, @intCast(func_ip)),
+                    .boolean => try c.cs.emitOp(.false_val, @intCast(func_ip)),
+                    .string => try c.cs.emitStringConst("", @intCast(func_ip)),
+                    else => try c.cs.emitOp(.null_val, @intCast(func_ip)),
                 }
             } else {
                 try c.cs.emitOp(.null_val, @intCast(func_ip));
@@ -474,14 +489,46 @@ pub fn compoundStmt(c: anytype) !void {
         .gt_gt_eq => .shr,
         else => return c.err("unsupported compound assignment operator", .{}),
     };
+    const tc = c.getLocalTypeCheck(name.src);
+    const is_named_tc = if (tc) |t| t == .named else false;
+    // Also handle :=-inferred named-type globals (not in typed_global_type_checks).
+    const inferred_nt = if (!is_named_tc) c.lookupInferredNamedGlobal(name.src) else null;
+    const is_named = is_named_tc or inferred_nt != null;
+    const named_type = if (is_named_tc) tc.?.named else inferred_nt;
+    const is_erased_named = if (named_type) |nt| blk: {
+        const info = c.registry.getNamedTypeInfo(nt) orelse break :blk false;
+        break :blk switch (info.base) {
+            .int, .float, .bool, .rune => true,
+            else => false,
+        };
+    } else false;
+    if (is_named_tc) {
+        if (!is_erased_named) try c.emitVarTypeProlog(tc.?, op_tok.line);
+    } else if (inferred_nt) |nt| {
+        if (!is_erased_named) try c.cs.emitGetGlobal(nt, op_tok.line);
+    }
     try c.emitGetVar(name);
+    if (is_named and !is_erased_named) try c.cs.emitOp(.named_inner, op_tok.line);
     c.beginExprPrimCapture();
     try c.expr();
-    const selected_op = c.selectTypedArithmeticOp(op, c.exprPrimInfoForBinding(name.src), c.endExprPrimCapture());
+    const rhs_info = c.endExprPrimCapture();
+    // Named-type + plain scalar is a type error (e.g. named_age += 1).
+    if (is_named and rhs_info.named_type == null and rhs_info.prim != null) {
+        const lhs_nt = if (is_named_tc) tc.?.named else inferred_nt.?;
+        c.setErr("cannot apply '{s}' to {s} and {s}; use {s}(value) or unwrap with the base type", .{ @tagName(op), lhs_nt, @tagName(rhs_info.prim.?), lhs_nt });
+        return error.TypeMismatch;
+    }
+    if (is_named and !is_erased_named) try c.cs.emitOp(.named_inner, op_tok.line);
+    const selected_op = c.selectTypedArithmeticOp(op, c.exprPrimInfoForBinding(name.src), rhs_info);
     try c.cs.emitBinOpFused(selected_op, op_tok.line);
-    const tc = c.getLocalTypeCheck(name.src);
-    if (tc) |t| {
-        if (t != .named) try c.emitVarTypeEpilog(t, op_tok.line);
+    if (is_named) {
+        if (is_erased_named) {
+            try c.emitNamedValidation(.{ .named = named_type.? }, op_tok.line);
+        } else {
+            try c.cs.emitCall(1, op_tok.line);
+        }
+    } else if (tc) |t| {
+        try c.emitVarTypeEpilog(t, op_tok.line);
     }
     try c.emitSetVar(name);
     c.matchOpt(.semicolon);
@@ -495,7 +542,10 @@ pub fn declareLoopVar(c: anytype, name: Token) !void {
 }
 
 pub fn deferStmt(c: anytype) !void {
-    if (!c.inFunc()) { c.setErr("'defer' outside of function", .{}); return error.DeferOutsideFunction; }
+    if (!c.inFunc()) {
+        c.setErr("'defer' outside of function", .{});
+        return error.DeferOutsideFunction;
+    }
     // Parse the callee: a primary expression followed by any chain of
     // .prop and [index] accesses, stopping before the outermost call '('.
     c.advance();
@@ -515,7 +565,9 @@ pub fn deferStmt(c: anytype) !void {
                 c.registry.hasVariantType(c.prev.src);
             try c.varExpr(c.prev);
         },
-        .kw_func => try funcLit(c, ),
+        .kw_func => try funcLit(
+            c,
+        ),
         .lparen => {
             try c.expr();
             try c.consume(.rparen);
@@ -527,9 +579,18 @@ pub fn deferStmt(c: anytype) !void {
             return;
         },
         .err_invalid_char => return error.InvalidChar,
-        .err_unterminated_string => { c.setErr("unterminated string literal", .{}); return error.UnterminatedString; },
-        .err_string_pool_exhausted => { c.setErr("string pool exhausted (max {d}KB)", .{@import("lexer.zig").StrPoolSize / 1024}); return error.UnterminatedString; },
-        else => { c.setErr("expected expression, found {s}", .{c.tokenName(c.cur.typ)}); return error.ExpectedExpression; },
+        .err_unterminated_string => {
+            c.setErr("unterminated string literal", .{});
+            return error.UnterminatedString;
+        },
+        .err_string_pool_exhausted => {
+            c.setErr("string pool exhausted (max {d}KB)", .{@import("lexer.zig").StrPoolSize / 1024});
+            return error.UnterminatedString;
+        },
+        else => {
+            c.setErr("expected expression, found {s}", .{c.tokenName(c.cur.typ)});
+            return error.ExpectedExpression;
+        },
     }
     // Consume chained .prop and [index]; when .prop( is seen it's a deferred method call.
     while (true) {
@@ -542,7 +603,10 @@ pub fn deferStmt(c: anytype) !void {
             try c.cs.emitOp(.get_index, line);
         } else if (c.cur.typ == .dot) {
             c.advance();
-            if (!c.cur.typ.isFieldName()) { c.setErr("expected property name, found {s}", .{c.tokenName(c.cur.typ)}); return error.ExpectedPropertyName; }
+            if (!c.cur.typ.isFieldName()) {
+                c.setErr("expected property name, found {s}", .{c.tokenName(c.cur.typ)});
+                return error.ExpectedPropertyName;
+            }
             const prop = c.cur;
             c.advance();
             if (c.cur.typ == .lparen) {
@@ -552,10 +616,33 @@ pub fn deferStmt(c: anytype) !void {
                     // stack is not a valid method receiver. Truncate it and treat the first
                     // argument as the receiver instead, matching regular `instance.method()`.
                     c.cs.truncateTo(base_code_pos);
+                    const direct_named_method: ?[]const u8 = blk: {
+                        if (!c.registry.hasNamedType(base_type_name)) break :blk null;
+                        var lookup_name: ?[]const u8 = base_type_name;
+                        while (lookup_name) |cur_name| {
+                            const qrecv = try c.qualifyTypeName(cur_name);
+                            const total = qrecv.len + 1 + prop.src.len;
+                            const key_buf = heap.bump(u8, total) orelse return error.OutOfMemory;
+                            @memcpy(key_buf[0..qrecv.len], qrecv);
+                            key_buf[qrecv.len] = '.';
+                            @memcpy(key_buf[qrecv.len + 1 .. total], prop.src);
+                            const candidate = key_buf[0..total];
+                            if (c.registry.hasGlobalFunc(candidate)) break :blk candidate;
+                            const info = c.registry.getNamedTypeInfo(cur_name) orelse break;
+                            lookup_name = info.parent_name;
+                        }
+                        break :blk null;
+                    };
+                    if (direct_named_method) |qmethod| {
+                        try c.cs.emitGetGlobal(qmethod, prop.line);
+                    }
                     var total_argc: u8 = 0;
                     if (!c.check(.rparen)) {
                         while (true) {
-                            if (total_argc == 255) { c.setErr("too many elements (max {d})", .{MaxLocals}); return error.TooManyElements; }
+                            if (total_argc == 255) {
+                                c.setErr("too many elements (max {d})", .{MaxLocals});
+                                return error.TooManyElements;
+                            }
                             try c.expr();
                             total_argc += 1;
                             if (!c.match(.comma)) break;
@@ -567,14 +654,21 @@ pub fn deferStmt(c: anytype) !void {
                         c.setErr("'{s}.{s}(...)' requires at least one argument (the receiver instance)", .{ base_type_name, prop.src });
                         return error.ArityMismatch;
                     }
-                    try c.cs.emitDeferInvokeMethod(prop.src, total_argc - 1, prop.line);
+                    if (direct_named_method != null) {
+                        try c.cs.emit2(@intFromEnum(Op.defer_call), total_argc, prop.line);
+                    } else {
+                        try c.cs.emitDeferInvokeMethod(prop.src, total_argc - 1, prop.line);
+                    }
                     c.matchOpt(.semicolon);
                     return;
                 }
                 var argc: u8 = 0;
                 if (!c.check(.rparen)) {
                     while (true) {
-                        if (argc == 255) { c.setErr("too many elements (max {d})", .{MaxLocals}); return error.TooManyElements; }
+                        if (argc == 255) {
+                            c.setErr("too many elements (max {d})", .{MaxLocals});
+                            return error.TooManyElements;
+                        }
                         try c.expr();
                         argc += 1;
                         if (!c.match(.comma)) break;
@@ -593,12 +687,18 @@ pub fn deferStmt(c: anytype) !void {
         }
     }
     // Deferred regular call.
-    if (!c.match(.lparen)) { c.setErr("'defer' requires a function call expression", .{}); return error.DeferRequiresCall; }
+    if (!c.match(.lparen)) {
+        c.setErr("'defer' requires a function call expression", .{});
+        return error.DeferRequiresCall;
+    }
     const call_line = c.prev.line;
     var argc: u8 = 0;
     if (!c.check(.rparen)) {
         while (true) {
-            if (argc == 255) { c.setErr("too many elements (max {d})", .{MaxLocals}); return error.TooManyElements; }
+            if (argc == 255) {
+                c.setErr("too many elements (max {d})", .{MaxLocals});
+                return error.TooManyElements;
+            }
             try c.expr();
             argc += 1;
             if (!c.match(.comma)) break;
@@ -657,7 +757,10 @@ pub fn emitExprListTuple(c: anytype) !u8 {
     try c.expr();
     count += 1;
     while (c.match(.comma)) {
-        if (count == 255) { c.setErr("too many elements (max {d})", .{MaxLocals}); return error.TooManyElements; }
+        if (count == 255) {
+            c.setErr("too many elements (max {d})", .{MaxLocals});
+            return error.TooManyElements;
+        }
         try c.expr();
         count += 1;
     }
@@ -758,7 +861,10 @@ pub fn forInStmt(c: anytype) anyerror!void {
     // and make assignLoopVar overwrite the iterator on the stack (#193).
     {
         const scope = c.currentScope();
-        if (scope.local_count >= MaxLocals) { c.setErr("too many local variables (max {d})", .{MaxLocals}); return error.TooManyLocals; }
+        if (scope.local_count >= MaxLocals) {
+            c.setErr("too many local variables (max {d})", .{MaxLocals});
+            return error.TooManyLocals;
+        }
         scope.locals[scope.local_count] = .{ .name = "" };
         scope.local_count += 1;
     }
@@ -792,7 +898,9 @@ pub fn forInStmt(c: anytype) anyerror!void {
 
     try c.consume(.lbrace);
     c.loop_body_depth += 1;
-    try block(c, );
+    try block(
+        c,
+    );
     c.loop_body_depth -= 1;
     for (c.currentLoop().loop_var_slots[0..c.currentLoop().loop_var_count]) |slot| {
         try c.cs.emit2(@intFromEnum(Op.close_upvalue), slot, c.prev.line);
@@ -817,12 +925,22 @@ pub fn forInStmt(c: anytype) anyerror!void {
 }
 
 pub fn forStmt(c: anytype) anyerror!void {
-    if (isForIn(c, )) {
-        try forInStmt(c, );
-    } else if (isCStyleFor(c, )) {
-        try cForStmt(c, );
+    if (isForIn(
+        c,
+    )) {
+        try forInStmt(
+            c,
+        );
+    } else if (isCStyleFor(
+        c,
+    )) {
+        try cForStmt(
+            c,
+        );
     } else {
-        try whileForStmt(c, );
+        try whileForStmt(
+            c,
+        );
     }
 }
 
@@ -843,7 +961,9 @@ pub fn hasInitSemicolon(c: anytype) bool {
 pub fn ifStmt(c: anytype) anyerror!void {
     const local_base: u8 = c.currentScope().local_count;
 
-    if (hasInitSemicolon(c, )) {
+    if (hasInitSemicolon(
+        c,
+    )) {
         if (c.check(.ident) and c.peekTT() == .colon_eq) {
             try varDecl(c, false, false);
         } else if (c.check(.ident) and c.isTypedVarDecl()) {
@@ -851,7 +971,9 @@ pub fn ifStmt(c: anytype) anyerror!void {
         } else if (c.match(.kw_const)) {
             try varDecl(c, true, true);
         } else if (c.check(.ident) and c.peekTT() == .eq) {
-            try assignStmt(c, );
+            try assignStmt(
+                c,
+            );
         } else {
             try c.expr();
             try c.cs.emitOp(.pop, c.prev.line);
@@ -863,17 +985,23 @@ pub fn ifStmt(c: anytype) anyerror!void {
     try c.consume(.lbrace);
 
     const then_j = try c.cs.emitJump(.jif_pop, c.prev.line);
-    try block(c, );
+    try block(
+        c,
+    );
 
     const else_j = try c.cs.emitJump(.jump, c.prev.line);
     try c.cs.patchJump(then_j);
 
     if (c.match(.kw_else)) {
         if (c.match(.kw_if)) {
-            try ifStmt(c, );
+            try ifStmt(
+                c,
+            );
         } else {
             try c.consume(.lbrace);
-            try block(c, );
+            try block(
+                c,
+            );
         }
     }
     try c.cs.patchJump(else_j);
@@ -889,12 +1017,24 @@ pub fn incrStmt(c: anytype) !void {
     const tc = c.getLocalTypeCheck(name.src);
     if (tc) |t| {
         if (t == .named) {
-            try c.emitVarTypeProlog(t, name.line);
-            try c.emitGetVar(name);
-            try c.cs.emitOp(.named_inner, name.line);
-            try c.cs.emitConst(.{ .int = 1.0 }, name.line);
-            try c.cs.emitBinOpFused(if (is_inc) .add else .sub, name.line);
-            try c.cs.emitCall(1, name.line);
+            const info = c.registry.getNamedTypeInfo(t.named);
+            const is_erased_named = if (info) |nt| switch (nt.base) {
+                .int, .float, .bool, .rune => true,
+                else => false,
+            } else false;
+            if (is_erased_named) {
+                try c.emitGetVar(name);
+                try c.cs.emitConst(.{ .int = 1.0 }, name.line);
+                try c.cs.emitBinOpFused(if (is_inc) .add else .sub, name.line);
+                try c.emitNamedValidation(t, name.line);
+            } else {
+                try c.emitVarTypeProlog(t, name.line);
+                try c.emitGetVar(name);
+                try c.cs.emitOp(.named_inner, name.line);
+                try c.cs.emitConst(.{ .int = 1.0 }, name.line);
+                try c.cs.emitBinOpFused(if (is_inc) .add else .sub, name.line);
+                try c.cs.emitCall(1, name.line);
+            }
         } else {
             try c.emitGetVar(name);
             try c.cs.emitConst(.{ .int = 1.0 }, name.line);
@@ -1073,7 +1213,9 @@ pub fn multiBindStmt(c: anytype, is_decl: bool) !void {
     // Signal to infixExpr(.lparen) that this is a multi-assign context of `count` values.
     c.multi_assign_lhs_count = count;
     c.last_spread_return_count = 0;
-    _ = try emitExprListTuple(c, );
+    _ = try emitExprListTuple(
+        c,
+    );
     const spread_n = c.last_spread_return_count;
     c.multi_assign_lhs_count = 0;
     c.last_spread_return_count = 0;
@@ -1135,22 +1277,34 @@ pub fn parseAssignTargetList(c: anytype, targets: *[MaxLocals]AssignTarget, step
     var scount: u16 = 0;
     while (true) {
         if (c.cur.typ != .ident) return c.err("expected identifier, found {s}", .{c.tokenName(c.cur.typ)});
-        if (tcount >= MaxLocals) { c.setErr("too many local variables (max {d})", .{MaxLocals}); return error.TooManyLocals; }
+        if (tcount >= MaxLocals) {
+            c.setErr("too many local variables (max {d})", .{MaxLocals});
+            return error.TooManyLocals;
+        }
         const root = c.cur;
         c.advance();
         const start = scount;
 
         while (true) {
             if (c.match(.dot)) {
-                if (!c.cur.typ.isFieldName()) { c.setErr("expected property name, found {s}", .{c.tokenName(c.cur.typ)}); return error.ExpectedPropertyName; }
-                if (scount >= steps.len) { c.setErr("too many elements (max {d})", .{MaxLocals}); return error.TooManyElements; }
+                if (!c.cur.typ.isFieldName()) {
+                    c.setErr("expected property name, found {s}", .{c.tokenName(c.cur.typ)});
+                    return error.ExpectedPropertyName;
+                }
+                if (scount >= steps.len) {
+                    c.setErr("too many elements (max {d})", .{MaxLocals});
+                    return error.TooManyElements;
+                }
                 steps[scount] = .{ .dot_name = c.cur.src };
                 scount += 1;
                 c.advance();
                 continue;
             }
             if (c.match(.lbracket)) {
-                if (scount >= steps.len) { c.setErr("too many elements (max {d})", .{MaxLocals}); return error.TooManyElements; }
+                if (scount >= steps.len) {
+                    c.setErr("too many elements (max {d})", .{MaxLocals});
+                    return error.TooManyElements;
+                }
                 if (c.cur.typ == .number) {
                     const n = common.parseFloat(c.cur.src) orelse return error.BadNumber;
                     steps[scount] = .{ .index_number = n };
@@ -1186,7 +1340,10 @@ pub fn parseNameList(c: anytype, out: *[MaxLocals]Token) !u8 {
     var count: u8 = 0;
     while (true) {
         if (c.cur.typ != .ident and c.cur.typ != .kw_trap) return c.err("expected identifier or 'trap', found {s}", .{c.tokenName(c.cur.typ)});
-        if (count >= MaxLocals) { c.setErr("too many local variables (max {d})", .{MaxLocals}); return error.TooManyLocals; }
+        if (count >= MaxLocals) {
+            c.setErr("too many local variables (max {d})", .{MaxLocals});
+            return error.TooManyLocals;
+        }
         out[count] = c.cur;
         count += 1;
         c.advance();
@@ -1209,7 +1366,10 @@ pub fn propertyAssignStmt(c: anytype) !void {
 
     while (true) {
         if (c.match(.dot)) {
-            if (!c.cur.typ.isFieldName()) { c.setErr("expected property name, found {s}", .{c.tokenName(c.cur.typ)}); return error.ExpectedPropertyName; }
+            if (!c.cur.typ.isFieldName()) {
+                c.setErr("expected property name, found {s}", .{c.tokenName(c.cur.typ)});
+                return error.ExpectedPropertyName;
+            }
             const prop = c.cur;
             c.advance();
             if (c.check(.eq) or c.check(.plus_eq) or c.check(.minus_eq) or c.check(.star_eq) or c.check(.slash_eq) or c.check(.amp_eq) or c.check(.pipe_eq) or c.check(.caret_eq) or c.check(.lt_lt_eq) or c.check(.gt_gt_eq)) {
@@ -1288,7 +1448,10 @@ pub fn propertyAssignStmt(c: anytype) !void {
 }
 
 pub fn returnStmt(c: anytype) !void {
-    if (!c.inFunc()) { c.setErr("'return' outside of function", .{}); return error.ReturnOutsideFunction; }
+    if (!c.inFunc()) {
+        c.setErr("'return' outside of function", .{});
+        return error.ReturnOutsideFunction;
+    }
     const line = c.prev.line;
     const scope = c.currentScope();
     if (c.check(.rbrace) or c.check(.eof) or c.check(.semicolon)) {
@@ -1312,8 +1475,13 @@ pub fn returnStmt(c: anytype) !void {
         }
         try emitImplicitReturn(scope, c.cs, line);
     } else {
-        if (scope.is_named and !scope.has_typed_returns) { c.setErr("named-return function must declare return types", .{}); return error.MissingReturnType; }
-        _ = try emitExprListTuple(c, );
+        if (scope.is_named and !scope.has_typed_returns) {
+            c.setErr("named-return function must declare return types", .{});
+            return error.MissingReturnType;
+        }
+        _ = try emitExprListTuple(
+            c,
+        );
     }
     // Close any captured locals before returning. Without this, the get_local_ret
     // peephole (get_local + ret → fused) would skip the close_upvalue that
@@ -1331,7 +1499,10 @@ pub fn returnStmt(c: anytype) !void {
         while (ci > 0) {
             ci -= 1;
             if (ci >= scope.named_return_base and ci < scope.named_return_base + scope.named_return_count) continue;
-            if (scope.locals[ci].is_captured) { any_capture = true; break; }
+            if (scope.locals[ci].is_captured) {
+                any_capture = true;
+                break;
+            }
         }
         if (!any_capture) c.cs.tryUpgradeLastCallToTailCall();
     }
@@ -1370,27 +1541,39 @@ pub fn stmt(c: anytype) anyerror!void {
         return;
     }
     if (c.match(.kw_return)) {
-        try returnStmt(c, );
+        try returnStmt(
+            c,
+        );
         return;
     }
     if (c.match(.kw_defer)) {
-        try deferStmt(c, );
+        try deferStmt(
+            c,
+        );
         return;
     }
     if (c.match(.kw_assert)) {
-        try assertStmt(c, );
+        try assertStmt(
+            c,
+        );
         return;
     }
     if (c.match(.kw_if)) {
-        try ifStmt(c, );
+        try ifStmt(
+            c,
+        );
         return;
     }
     if (c.match(.kw_for)) {
-        try forStmt(c, );
+        try forStmt(
+            c,
+        );
         return;
     }
     if (c.match(.kw_switch)) {
-        try switchStmt(c, );
+        try switchStmt(
+            c,
+        );
         return;
     }
     if (c.match(.kw_var)) {
@@ -1412,28 +1595,44 @@ pub fn stmt(c: anytype) anyerror!void {
             try multiBindStmt(c, true);
             return;
         }
-        if ((ptt == .comma or ptt == .dot or ptt == .lbracket) and isMultiAssignEq(c, )) {
+        if ((ptt == .comma or ptt == .dot or ptt == .lbracket) and isMultiAssignEq(
+            c,
+        )) {
             try multiBindStmt(c, false);
             return;
         }
         if (ptt == .plus_plus or ptt == .minus_minus) {
-            try incrStmt(c, );
+            try incrStmt(
+                c,
+            );
             return;
         }
         if (ptt == .plus_eq or ptt == .minus_eq or ptt == .star_eq or ptt == .slash_eq or ptt == .amp_eq or ptt == .pipe_eq or ptt == .caret_eq or ptt == .lt_lt_eq or ptt == .gt_gt_eq) {
-            try compoundStmt(c, );
+            try compoundStmt(
+                c,
+            );
             return;
         }
         if (ptt == .eq) {
-            try assignStmt(c, );
+            try assignStmt(
+                c,
+            );
             return;
         }
-        if ((ptt == .dot or ptt == .lbracket) and isPropertyAssign(c, )) {
-            try propertyAssignStmt(c, );
+        if ((ptt == .dot or ptt == .lbracket) and isPropertyAssign(
+            c,
+        )) {
+            try propertyAssignStmt(
+                c,
+            );
             return;
         }
-        if (ptt == .lbracket and isIndexAssign(c, )) {
-            try indexAssignStmt(c, );
+        if (ptt == .lbracket and isIndexAssign(
+            c,
+        )) {
+            try indexAssignStmt(
+                c,
+            );
             return;
         }
     }
@@ -1545,14 +1744,19 @@ pub fn switchStmt(c: anytype) anyerror!void {
                     try c.cs.emitOp(.pop, dot_line);
                 }
                 try c.consume(.lbrace);
-                try block(c, );
+                try block(
+                    c,
+                );
                 // Snapshot before cleanup truncates the table: if the guard
                 // captured the binding in a closure, the fail path must close
                 // that upvalue before dropping the slot.
                 const binding_captured = guarded_local_binding and
                     c.currentScope().locals[local_before + 1].is_captured;
                 try c.cleanupLocals(local_before, c.prev.line);
-                if (end_count >= MaxSwitchJumps) { c.setErr("too many switch cases (max {d})", .{MaxSwitchJumps}); return error.TooManySwitchCases; }
+                if (end_count >= MaxSwitchJumps) {
+                    c.setErr("too many switch cases (max {d})", .{MaxSwitchJumps});
+                    return error.TooManySwitchCases;
+                }
                 end_jumps[end_count] = try c.cs.emitJump(.jump, c.prev.line);
                 end_count += 1;
                 if (guarded_local_binding) {
@@ -1587,7 +1791,10 @@ pub fn switchStmt(c: anytype) anyerror!void {
 
                     if (c.match(.comma)) {
                         const try_next = try c.cs.emitJump(.jif_pop, case_line);
-                        if (body_jump_count >= MaxCaseVals) { c.setErr("too many values in case (max {d})", .{MaxCaseVals}); return error.TooManySwitchCases; }
+                        if (body_jump_count >= MaxCaseVals) {
+                            c.setErr("too many values in case (max {d})", .{MaxCaseVals});
+                            return error.TooManySwitchCases;
+                        }
                         body_jumps[body_jump_count] = try c.cs.emitJump(.jump, case_line);
                         body_jump_count += 1;
                         try c.cs.patchJump(try_next);
@@ -1607,8 +1814,13 @@ pub fn switchStmt(c: anytype) anyerror!void {
                         }
                         try c.cs.emitOp(.pop, case_line);
                         try c.consume(.lbrace);
-                        try block(c, );
-                        if (end_count >= MaxSwitchJumps) { c.setErr("too many switch cases (max {d})", .{MaxSwitchJumps}); return error.TooManySwitchCases; }
+                        try block(
+                            c,
+                        );
+                        if (end_count >= MaxSwitchJumps) {
+                            c.setErr("too many switch cases (max {d})", .{MaxSwitchJumps});
+                            return error.TooManySwitchCases;
+                        }
                         end_jumps[end_count] = try c.cs.emitJump(.jump, c.prev.line);
                         end_count += 1;
                         try c.cs.patchJump(next_case);
@@ -1621,13 +1833,21 @@ pub fn switchStmt(c: anytype) anyerror!void {
         }
 
         if (c.match(.kw_default)) {
-            if (saw_default) { c.setErr("duplicate 'default' case in switch", .{}); return error.DuplicateDefaultCase; }
+            if (saw_default) {
+                c.setErr("duplicate 'default' case in switch", .{});
+                return error.DuplicateDefaultCase;
+            }
             saw_default = true;
             // Pop the switch value that is still on the stack when default is reached.
             try c.cs.emitOp(.pop, c.prev.line);
             try c.consume(.lbrace);
-            try block(c, );
-            if (end_count >= MaxSwitchJumps) { c.setErr("too many switch cases (max {d})", .{MaxSwitchJumps}); return error.TooManySwitchCases; }
+            try block(
+                c,
+            );
+            if (end_count >= MaxSwitchJumps) {
+                c.setErr("too many switch cases (max {d})", .{MaxSwitchJumps});
+                return error.TooManySwitchCases;
+            }
             end_jumps[end_count] = try c.cs.emitJump(.jump, c.prev.line);
             end_count += 1;
             continue;
@@ -1648,7 +1868,10 @@ pub fn switchStmt(c: anytype) anyerror!void {
                 for (all_arms) |a| {
                     var covered = false;
                     for (seen_arms[0..seen_arm_count]) |s| {
-                        if (common.streq(a.name, s)) { covered = true; break; }
+                        if (common.streq(a.name, s)) {
+                            covered = true;
+                            break;
+                        }
                     }
                     if (!covered) {
                         if (missing_len > 0 and missing_len + 2 < missing_buf.len) {
@@ -1659,7 +1882,7 @@ pub fn switchStmt(c: anytype) anyerror!void {
                         if (missing_len + 1 + a.name.len < missing_buf.len) {
                             missing_buf[missing_len] = '.';
                             missing_len += 1;
-                            @memcpy(missing_buf[missing_len..missing_len + a.name.len], a.name);
+                            @memcpy(missing_buf[missing_len .. missing_len + a.name.len], a.name);
                             missing_len += a.name.len;
                         }
                     }
@@ -1743,8 +1966,9 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
             try c.cs.emitOp(.null_val, name.line);
             const sr = try c.defineLocal(name.src, is_const);
             c.currentScope().locals[sr].type_check = inferred_type_check;
-            if (c.std_namespace_path != null and c.std_namespace_path.?.len == 0) {
+            if (c.std_namespace_path != null) {
                 c.currentScope().locals[sr].from_std = true;
+                c.currentScope().locals[sr].std_namespace_path = c.std_namespace_path.?;
             }
             if (c.import_module_path) |path| {
                 c.currentScope().locals[sr].import_module_path = path;
@@ -1768,7 +1992,8 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
         const nt = heap.allocObject() orelse return error.OutOfMemory;
         if (is_map) {
             nt.* = .{ .named_type = .{
-                .name = type_label, .qualified_name = type_label,
+                .name = type_label,
+                .qualified_name = type_label,
                 .base = .map_t,
                 .is_anonymous = true,
                 .key_spec = ts.alts[0].key_spec,
@@ -1776,7 +2001,8 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
             } };
         } else {
             nt.* = .{ .named_type = .{
-                .name = type_label, .qualified_name = type_label,
+                .name = type_label,
+                .qualified_name = type_label,
                 .base = .array_t,
                 .is_anonymous = true,
                 .elem_spec = ts.alts[0].elem_spec,
@@ -1809,21 +2035,21 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
     } else if (c.cur.typ == .ident or c.cur.typ == .question) {
         const type_name = if (c.cur.typ == .ident) c.cur.src else "";
         const type_spec = try c.parseFieldTypeSpec();
-        // Module-qualified types (e.g. `var d t.Distance = ...`): the alias is not a
-        // local type; the resolved qualified name is in the FieldTypeSpec.
+        // Module-qualified types carry their canonical runtime identity in the
+        // FieldTypeSpec, which need not use the source-module `@mod:` prefix.
         const resolved_mod_type: bool = blk: {
             if (type_spec.alts.len == 0) break :blk false;
             const alt = type_spec.alts[0];
             switch (alt.typ) {
-                .named_t, .variant_t => if (std.mem.startsWith(u8, alt.named_name, "@mod:")) {
+                .named_t, .variant_t => if (alt.named_name.len > 0 and alt.named_name[0] == '@') {
                     inferred_type_check = .{ .named = alt.named_name };
                     break :blk true;
                 },
-                .struct_t => if (std.mem.startsWith(u8, alt.struct_name, "@mod:")) {
+                .struct_t => if (alt.struct_name.len > 0 and alt.struct_name[0] == '@') {
                     inferred_type_check = .{ .struct_type = alt.struct_name };
                     break :blk true;
                 },
-                .interface_t => if (std.mem.startsWith(u8, alt.interface_name, "@mod:")) {
+                .interface_t => if (alt.interface_name.len > 0 and alt.interface_name[0] == '@') {
                     inferred_type_check = .{ .interface_type = alt.interface_name };
                     break :blk true;
                 },
@@ -1832,37 +2058,40 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
             break :blk false;
         };
         if (!resolved_mod_type) {
-        if (common.streq(type_name, "int") or common.streq(type_name, "float") or common.streq(type_name, "bool")) {
-            if (common.streq(type_name, "int")) {
-                inferred_type_check = .{ .prim = .int };
-            } else if (common.streq(type_name, "float")) {
-                inferred_type_check = .{ .prim = .float };
+            if (common.streq(type_name, "int") or common.streq(type_name, "float") or common.streq(type_name, "bool")) {
+                if (common.streq(type_name, "int")) {
+                    inferred_type_check = .{ .prim = .int };
+                } else if (common.streq(type_name, "float")) {
+                    inferred_type_check = .{ .prim = .float };
+                } else {
+                    inferred_type_check = .{ .prim = .bool };
+                }
+            } else if (type_name.len > 0 and c.registry.hasNamedType(type_name)) {
+                inferred_type_check = .{ .named = try c.qualifyTypeName(type_name) };
+            } else if (common.streq(type_name, "string")) {
+                inferred_type_check = .{ .prim = .string };
+            } else if (common.streq(type_name, "rune")) {
+                inferred_type_check = .{ .prim = .rune };
+            } else if (common.streq(type_name, "bigint")) {
+                inferred_type_check = .{ .prim = .bigint };
+            } else if (common.streq(type_name, "array")) {
+                return c.err("use '[]T' syntax for array types", .{});
+            } else if (common.streq(type_name, "map")) {
+                inferred_type_check = c.typeCheckFromFieldTypeSpec(type_spec);
+            } else if (common.streq(type_name, "error")) {
+                inferred_type_check = .{ .assert_err = {} };
+            } else if (c.registry.hasInterfaceType(type_name)) {
+                inferred_type_check = .{ .interface_type = type_name };
+            } else if (c.registry.hasStructTypeLocal(type_name)) {
+                inferred_type_check = .{ .struct_type = type_name };
+            } else if (type_name.len == 0) {
+                // No type check for nullable type
             } else {
-                inferred_type_check = .{ .prim = .bool };
+                return {
+                    c.setErr("unknown type name '{s}'", .{type_name});
+                    return error.UnknownTypeName;
+                };
             }
-        } else if (type_name.len > 0 and c.registry.hasNamedType(type_name)) {
-            inferred_type_check = .{ .named = try c.qualifyTypeName(type_name) };
-        } else if (common.streq(type_name, "string")) {
-            inferred_type_check = .{ .prim = .string };
-        } else if (common.streq(type_name, "rune")) {
-            inferred_type_check = .{ .prim = .rune };
-        } else if (common.streq(type_name, "bigint")) {
-            inferred_type_check = .{ .prim = .bigint };
-        } else if (common.streq(type_name, "array")) {
-            return c.err("use '[]T' syntax for array types", .{});
-        } else if (common.streq(type_name, "map")) {
-            inferred_type_check = .{ .assert_map = {} };
-        } else if (common.streq(type_name, "error")) {
-            inferred_type_check = .{ .assert_err = {} };
-        } else if (c.registry.hasInterfaceType(type_name)) {
-            inferred_type_check = .{ .interface_type = type_name };
-        } else if (c.registry.hasStructTypeLocal(type_name)) {
-            inferred_type_check = .{ .struct_type = type_name };
-        } else if (type_name.len == 0) {
-            // No type check for nullable type
-        } else {
-            return { c.setErr("unknown type name '{s}'", .{type_name}); return error.UnknownTypeName; };
-        }
         }
         // Named-type constructor must be pushed before the argument value
         // because performCall expects the callee at stack[top - argc - 1].
@@ -1945,8 +2174,9 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
                 .{ .named = nt }
             else
                 inferred_type_check;
-            if (c.std_namespace_path != null and c.std_namespace_path.?.len == 0) {
+            if (c.std_namespace_path != null) {
                 c.currentScope().locals[slot].from_std = true;
+                c.currentScope().locals[slot].std_namespace_path = c.std_namespace_path.?;
             }
             if (c.import_module_path) |path| {
                 c.currentScope().locals[slot].import_module_path = path;
@@ -1957,7 +2187,10 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
             }
         }
     } else {
-        if (!is_const and c.registry.hasGlobalConst(name.src)) { c.setErr("cannot assign to const variable '{s}'", .{name.src}); return error.AssignToConst; }
+        if (!is_const and c.registry.hasGlobalConst(name.src)) {
+            c.setErr("cannot assign to const variable '{s}'", .{name.src});
+            return error.AssignToConst;
+        }
         if (c.options.check_global_is_const) |f| {
             if (f(c.options.check_global_ctx.?, name.src)) {
                 if (is_const) {
@@ -2002,12 +2235,13 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
                 c.inferred_named_global_types[c.inferred_named_global_count] = nt;
                 c.inferred_named_global_count += 1;
             }
-            if (c.std_namespace_path != null and c.std_namespace_path.?.len == 0) {
+            if (c.std_namespace_path != null) {
                 if (c.std_module_global_count >= MaxLocals) {
                     c.setErr("too many std-module globals (limit {d})", .{MaxLocals});
                     return error.TooManyGlobals;
                 }
                 c.std_module_global_names[c.std_module_global_count] = qname;
+                c.std_module_global_paths[c.std_module_global_count] = c.std_namespace_path.?;
                 c.std_module_global_count += 1;
             }
             if (c.import_module_path) |path| {
@@ -2037,7 +2271,9 @@ pub fn whileForStmt(c: anytype) anyerror!void {
     } else {
         try c.consume(.lbrace);
     }
-    try block(c, );
+    try block(
+        c,
+    );
     try c.cs.emitLoop(loop_start, c.prev.line);
     if (!infinite) try c.cs.patchJump(exit_j);
     const loop = c.popLoop();

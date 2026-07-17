@@ -58,7 +58,8 @@ const ReplTypedGlobalEntry = struct {
 };
 
 // Compact record for one std-import or module-import global (namespace provenance).
-// path_offset/len are only meaningful when kind == .import_global.
+// path_offset/len carry the std namespace path for .std_global and the module path
+// for .import_global.
 const ReplNsKind = enum(u8) { std_global, import_global };
 const ReplNsEntry = struct {
     name_offset: u32 = 0,
@@ -347,6 +348,7 @@ pub const Runtime = struct {
             .module_ctx = &session,
             .resolve_import = module_compile.Session.resolveImportOpaque,
             .has_module_export = module_compile.hasModuleExport,
+            .resolve_module_type = module_compile.resolveModuleTypeKind,
             .test_mode = test_mode,
         });
         compiler.compile(true) catch |err| {
@@ -480,6 +482,7 @@ pub const Runtime = struct {
         var compiler = Compiler.init(src, .{
             .module_ctx = &session,
             .resolve_import = module_compile.Session.resolveImportOpaque,
+            .resolve_module_type = module_compile.resolveModuleTypeKind,
             .repl_mode = true,
             .check_global_exists = checkGlobalExists,
             .check_global_is_const = checkGlobalIsConst,
@@ -599,6 +602,8 @@ pub const Runtime = struct {
                     if (compiler.std_module_global_count >= MaxLocals) continue;
                     compiler.std_module_global_names[compiler.std_module_global_count] =
                         self.repl.ns_name_buf[e.name_offset..][0..e.name_len];
+                    compiler.std_module_global_paths[compiler.std_module_global_count] =
+                        self.repl.ns_name_buf[e.path_offset..][0..e.path_len];
                     compiler.std_module_global_count += 1;
                 },
                 .import_global => {
@@ -726,16 +731,22 @@ pub const Runtime = struct {
         var si: usize = 0;
         while (si < compiler.std_module_global_count) : (si += 1) {
             const sname = compiler.std_module_global_names[si];
+            const spath = compiler.std_module_global_paths[si];
             if (self.repl.ns_count >= MaxReplNsEntries or
-                self.repl.ns_name_buf_used + sname.len > self.repl.ns_name_buf.len) break;
+                self.repl.ns_name_buf_used + sname.len + spath.len > self.repl.ns_name_buf.len) break;
             const ss = self.repl.ns_name_buf_used;
             std.mem.copyForwards(u8, self.repl.ns_name_buf[ss .. ss + sname.len], sname);
+            self.repl.ns_name_buf_used += sname.len;
+            const ps = self.repl.ns_name_buf_used;
+            std.mem.copyForwards(u8, self.repl.ns_name_buf[ps .. ps + spath.len], spath);
             self.repl.ns_entries[self.repl.ns_count] = .{
                 .name_offset = @intCast(ss),
                 .name_len = @intCast(sname.len),
+                .path_offset = @intCast(ps),
+                .path_len = @intCast(spath.len),
                 .kind = @intFromEnum(ReplNsKind.std_global),
             };
-            self.repl.ns_name_buf_used += sname.len;
+            self.repl.ns_name_buf_used += spath.len;
             self.repl.ns_count += 1;
         }
         var ii: usize = 0;
@@ -820,8 +831,8 @@ pub const Runtime = struct {
             4 => .{ .prim = .string },
             5 => .{ .prim = .rune },
             6 => .{ .named = self.repl.typed_global_name_buf[e.named_type_offset..][0..e.named_type_len] },
-            7 => .{ .assert_arr = {} },
-            8 => .{ .assert_map = {} },
+            7 => .{ .assert_arr = null },
+            8 => .{ .assert_map = null },
             9 => .{ .assert_err = {} },
             10 => .{ .prim = .bigint },
             else => null,

@@ -158,6 +158,33 @@ a bare `int`. This is intentional — it prevents the kind of subtle precision
 loss and domain confusion that plague languages with implicit numeric
 coercion.
 
+### Named Scalar Execution Model
+
+Named scalar types are nominal at the language level, but `int`, `float`,
+`bool`, and `rune` named values are represented by their base value at runtime.
+For example, `Meters(5)` is a bare runtime integer, not an allocating wrapper.
+The compiler retains the `Meters` identity while compiling the expression and
+uses it to reject invalid mixing, select typed bytecode such as `add_int` or
+`div_float`, select statically known methods, and emit validation after an
+operation that produces another `Meters` value.
+
+Constraints are therefore explicit bytecode at the point where a result is
+created: range and cycle normalization use `validate_named_range`; predicates
+use `check_named_predicate`. This keeps language-level nominal typing intact
+without making ordinary scalar arithmetic rediscover type identity in the VM.
+
+This applies to values flowing through locals, fields, function returns,
+typed arrays/maps, static method calls, unary and bitwise operations, shifts,
+and supported `std.math` intrinsics. A shift count is an `int`-based value
+(plain or named); the left operand determines the named result type.
+
+`decimal`, `string`, named arrays/maps, native values, and dynamically typed
+boundaries may still carry runtime named objects because their behavior needs
+runtime identity or extra representation data. Dynamically typed scalar
+values report their base runtime type; when the compiler knows an expression's
+named scalar type, `.type` and `std.core.type_of(...)` emit that declared name
+as a compile-time string constant.
+
 `bigint` is the arbitrary-precision integer type. Construct it with
 `bigint(...)` from an `int`, a whole-number `float`, or a decimal string:
 

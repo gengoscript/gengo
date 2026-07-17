@@ -1,1 +1,2 @@
-TypeError
+TypeMismatch
+cannot mix named types 'Age' and 'Score' in 'lt' operation
