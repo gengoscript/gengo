@@ -936,12 +936,39 @@ pub const Compiler = struct {
                     return error.TypeMismatch;
                 }
             }
+            // bigint promotes only from int; mixing with float is always a VM error.
+            const bigint_float = (lhs_prim == .bigint and rhs_prim == .float) or
+                (lhs_prim == .float and rhs_prim == .bigint);
+            if (bigint_float) {
+                const is_arith = op == .add or op == .sub or op == .mul or op == .div or op == .rem or op == .mod or op == .int_div;
+                if (is_arith) {
+                    self.setErr("cannot mix bigint and float; convert explicitly with bigint(...) or float(...)", .{});
+                    return error.TypeMismatch;
+                }
+            }
+            // Mixed bitwise: both operands must be int or rune (the VM's valueAsInt contract).
+            const is_bitwise_op = op == .bit_and or op == .bit_or or op == .bit_xor;
+            if (is_bitwise_op) {
+                const bad_prim: ?PrimType = if (lhs_prim != .int and lhs_prim != .rune)
+                    lhs_prim
+                else if (rhs_prim != .int and rhs_prim != .rune)
+                    rhs_prim
+                else
+                    null;
+                if (bad_prim) |bp| {
+                    const sym: []const u8 = switch (op) {
+                        .bit_and => "&", .bit_or => "|", .bit_xor => "^", else => @tagName(op),
+                    };
+                    self.setErr("'{s}' requires int operands; {s} is not valid here", .{ sym, @tagName(bp) });
+                    return error.TypeMismatch;
+                }
+            }
             self.clearCurrentExprPrimInfo();
             return;
         }
         const is_constant = lhs.is_constant and rhs.is_constant;
-        // Non-integer prims on bitwise ops.
-        if (lhs_prim == .float or lhs_prim == .bool or lhs_prim == .string) {
+        // Bitwise ops follow the VM's valueAsInt: only int and rune are valid operands.
+        if (lhs_prim != .int and lhs_prim != .rune) {
             const is_bitwise = op == .bit_and or op == .bit_or or op == .bit_xor;
             if (is_bitwise) {
                 const sym: []const u8 = switch (op) {
@@ -990,7 +1017,7 @@ pub const Compiler = struct {
             .div => .{ .prim = if (lhs_prim == .int) .float else lhs_prim, .named_type = if (lhs_prim == .float) result_named else null, .is_constant = is_constant, .is_zero_int = false },
             .int_div, .rem, .mod, .bit_and, .bit_or, .bit_xor => .{ .prim = lhs_prim, .named_type = result_named, .is_constant = is_constant, .is_zero_int = false },
             .lt, .eq => .{ .prim = .bool, .is_constant = is_constant },
-            .halt => .{ .prim = .int, .is_constant = is_constant }, // shifts: both operands already verified int
+            .halt => .{ .prim = .int, .is_constant = is_constant }, // shifts: result is always int (rune operands coerce)
             else => .{},
         };
     }

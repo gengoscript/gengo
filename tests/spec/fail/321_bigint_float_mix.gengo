@@ -1,0 +1,3 @@
+var a bigint = bigint(10)
+var f float = 1.5
+_ = a + f

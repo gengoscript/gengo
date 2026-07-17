@@ -159,7 +159,8 @@ test "api runtime leaves no temp roots after GC-heavy success and error churn" {
         \\}
         \\
         \\func explode() int {
-        \\    return 1 + "x"
+        \\    m := {}
+        \\    return 1 + m["missing"]
         \\}
     ) == .ok);
     try expectNoTempRoots();

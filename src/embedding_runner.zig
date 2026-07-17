@@ -63,7 +63,7 @@ fn expectCompileError() void {
 fn expectRuntimeError() void {
     const rt = makeRt(.{ .allow_io = false });
     const res = rt.run(
-        \\func bad() int { return 1 + "x" }
+        \\func bad() int { m := {} return 1 + m["missing"] }
     );
     switch (res) {
         .ok => {},

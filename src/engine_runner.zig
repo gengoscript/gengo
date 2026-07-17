@@ -212,7 +212,7 @@ fn testLastError() void {
 
     // Runtime error via call
     const r2 = rt.run(
-        \\func fail() int { return 1 + "x" }
+        \\func fail() int { m := {} return 1 + m["missing"] }
     );
     if (r2 != .ok) fail("engine FAIL: last_error setup\n");
 
