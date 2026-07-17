@@ -22,11 +22,11 @@ pub const MaxLoopDepth = 16;
 pub const MaxLoopBreaks = 128;
 pub const MaxLoopVars = 2;
 pub const MaxTypeAlts = 8;
-pub const MaxTypes = 512;       // struct + interface + variant combined
+pub const MaxTypes = 512; // struct + interface + variant combined
 pub const MaxNamedTypes = 256;
 pub const MaxSwitchJumps = 256;
 pub const MaxUpvalues = 64;
-pub const MaxGlobals = 1024;    // funcs + consts combined
+pub const MaxGlobals = 1024; // funcs + consts combined
 pub const MaxExprDepth = 256;
 pub const MaxTypeParams = 8;
 pub const MaxGenericTypes = 64;
@@ -106,8 +106,8 @@ pub const TypeCheck = union(enum) {
     none: void,
     prim: PrimType,
     named: []const u8,
-    assert_arr: void,
-    assert_map: void,
+    assert_arr: ?FieldTypeSpec,
+    assert_map: ?FieldTypeSpec,
     assert_err: void,
     interface_type: []const u8,
     struct_type: []const u8,
@@ -118,6 +118,7 @@ pub const Local = struct {
     name: []const u8,
     is_const: bool = false,
     from_std: bool = false,
+    std_namespace_path: ?[]const u8 = null,
     import_module_path: ?[]const u8 = null,
     is_captured: bool = false,
     type_check: TypeCheck = .{ .none = {} },
@@ -165,8 +166,11 @@ pub const MultiAssignValueScratch = "__gengo_tmp_value";
 pub const NamedTypeInfo = struct {
     name: []const u8,
     base: NamedTypeBase,
+    runtime_obj: ?*Object = null,
+    runtime_const_idx: ?u16 = null,
     has_range: bool = false,
     is_cycle: bool = false,
+    has_predicate: bool = false,
     scale: u8 = 0,
     min: f64 = 0,
     max: f64 = 0,
@@ -217,6 +221,7 @@ const FuncHashEntry = struct {
 const empty_type_buckets = [1]TypeHashEntry{.{}} ** TypeHashSize;
 const empty_func_buckets = [1]FuncHashEntry{.{}} ** FuncHashSize;
 const empty_variant_objs = [1]?*Object{null} ** MaxTypes;
+const empty_struct_objs = [1]?*Object{null} ** MaxTypes;
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub const TypeRegistry = struct {
@@ -231,6 +236,7 @@ pub const TypeRegistry = struct {
     global_count: usize = 0,
     // named_return_count for functions that return multiple named values (≥2).
     global_named_return_counts: [MaxGlobals]u8 = [1]u8{0} ** MaxGlobals,
+    global_func_objs: [MaxGlobals]?*Object = [1]?*Object{null} ** MaxGlobals,
 
     // Hash indexes — initialised to all-empty via comptime defaults above.
     type_buckets: [TypeHashSize]TypeHashEntry = empty_type_buckets,
@@ -239,6 +245,7 @@ pub const TypeRegistry = struct {
     // For each type_names[] slot: if the entry is a variant_type, the compiled
     // *Object is stored here so switchStmt can check arm exhaustiveness.
     variant_objs: [MaxTypes]?*Object = empty_variant_objs,
+    struct_objs: [MaxTypes]?*Object = empty_struct_objs,
 
     // Generic type templates (not yet instantiated).
     generic_types: [MaxGenericTypes]GenericTypeInfo = undefined,
@@ -257,6 +264,7 @@ pub const TypeRegistry = struct {
         self.type_name_count = 0;
         self.named_type_count = 0;
         self.global_count = 0;
+        @memset(self.global_func_objs[0..], null);
         self.generic_count = 0;
         self.generic_func_count = 0;
         self.inst_count = 0;
@@ -264,6 +272,7 @@ pub const TypeRegistry = struct {
         @memset(self.type_buckets[0..], .{});
         @memset(self.func_buckets[0..], .{});
         @memset(self.variant_objs[0..], null);
+        @memset(self.struct_objs[0..], null);
     }
 
     // ── Hash helpers ──────────────────────────────────────────────────────────
@@ -369,6 +378,20 @@ pub const TypeRegistry = struct {
         self.insertTypeSlot(name, .struct_type, sub_idx);
     }
 
+    pub fn setStructObj(self: *TypeRegistry, name: []const u8, obj: *Object) void {
+        const slot = self.typeSlotFor(name) orelse return;
+        const entry = self.type_buckets[slot];
+        if (entry.kind != .struct_type) return;
+        self.struct_objs[entry.sub_idx] = obj;
+    }
+
+    pub fn getStructObj(self: *const TypeRegistry, name: []const u8) ?*Object {
+        const slot = self.typeSlotFor(name) orelse return null;
+        const entry = self.type_buckets[slot];
+        if (entry.kind != .struct_type) return null;
+        return self.struct_objs[entry.sub_idx];
+    }
+
     pub fn addInterfaceType(self: *TypeRegistry, name: []const u8) !void {
         if (self.hasInterfaceType(name)) return error.DuplicateInterfaceType;
         if (self.type_name_count >= MaxTypes) return error.TooManyTypes;
@@ -417,6 +440,27 @@ pub const TypeRegistry = struct {
         self.insertTypeSlot(info.name, .named_type, sub_idx);
     }
 
+    pub fn setNamedTypeRuntimeObject(self: *TypeRegistry, name: []const u8, obj: *Object) void {
+        const slot = self.typeSlotFor(name) orelse return;
+        const entry = self.type_buckets[slot];
+        if (entry.kind != .named_type) return;
+        self.named_types[entry.sub_idx].runtime_obj = obj;
+    }
+
+    pub fn namedTypeRuntimeConstIdx(self: *const TypeRegistry, name: []const u8) ?u16 {
+        const slot = self.typeSlotFor(name) orelse return null;
+        const entry = self.type_buckets[slot];
+        if (entry.kind != .named_type) return null;
+        return self.named_types[entry.sub_idx].runtime_const_idx;
+    }
+
+    pub fn setNamedTypeRuntimeConstIdx(self: *TypeRegistry, name: []const u8, idx: u16) void {
+        const slot = self.typeSlotFor(name) orelse return;
+        const entry = self.type_buckets[slot];
+        if (entry.kind != .named_type) return;
+        self.named_types[entry.sub_idx].runtime_const_idx = idx;
+    }
+
     pub fn hasVariantType(self: *const TypeRegistry, name: []const u8) bool {
         const slot = self.typeSlotFor(name) orelse return false;
         return self.type_buckets[slot].kind == .variant_type;
@@ -442,9 +486,15 @@ pub const TypeRegistry = struct {
             for (seen_arms) |sa| {
                 var found = false;
                 for (arms) |a| {
-                    if (common.streq(a.name, sa)) { found = true; break; }
+                    if (common.streq(a.name, sa)) {
+                        found = true;
+                        break;
+                    }
                 }
-                if (!found) { all_match = false; break; }
+                if (!found) {
+                    all_match = false;
+                    break;
+                }
             }
             if (!all_match) continue;
             if (match != null) return null; // ambiguous
@@ -495,6 +545,18 @@ pub const TypeRegistry = struct {
         const slot = self.funcSlotFor(name, false) orelse return 0;
         const sub_idx = self.func_buckets[slot].sub_idx;
         return self.global_named_return_counts[sub_idx];
+    }
+
+    pub fn setGlobalFuncObj(self: *TypeRegistry, name: []const u8, obj: *Object) void {
+        const slot = self.funcSlotFor(name, false) orelse return;
+        const sub_idx = self.func_buckets[slot].sub_idx;
+        self.global_func_objs[sub_idx] = obj;
+    }
+
+    pub fn getGlobalFuncObj(self: *const TypeRegistry, name: []const u8) ?*Object {
+        const slot = self.funcSlotFor(name, false) orelse return null;
+        const sub_idx = self.func_buckets[slot].sub_idx;
+        return self.global_func_objs[sub_idx];
     }
 
     pub fn addGlobalFunc(self: *TypeRegistry, name: []const u8) !void {

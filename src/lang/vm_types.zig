@@ -167,7 +167,11 @@ pub fn matchesTypeAlt(ctx: VMContext, v: Value, alt: FieldTypeAlt) bool {
         },
         .interface_t => matchesInterfaceType(ctx, v, alt.interface_name),
         .named_t => named_t_blk: {
-            if (!(v == .object)) break :named_t_blk false;
+            if (v != .object) {
+                const nt_val = ctx.gs.get(alt.named_name) orelse break :named_t_blk false;
+                if (nt_val != .object or nt_val.object.* != .named_type) break :named_t_blk false;
+                break :named_t_blk bareScalarMatchesNamedBase(nt_val.object.named_type.base, v);
+            }
             break :named_t_blk switch (v.object.*) {
                 .named_value => namedTypeIsOrExtends(ctx, v.object.named_value.typ, alt.named_name),
                 .enum_value => blk: {
@@ -294,11 +298,15 @@ fn fieldTypeAltEqual(a: FieldTypeAlt, b: FieldTypeAlt) bool {
             const ap = a.func_params orelse &[_]FieldTypeSpec{};
             const bp = b.func_params orelse &[_]FieldTypeSpec{};
             if (ap.len != bp.len) break :blk false;
-            for (ap, bp) |pa, pb| { if (!fieldTypeSpecEqual(pa, pb)) break :blk false; }
+            for (ap, bp) |pa, pb| {
+                if (!fieldTypeSpecEqual(pa, pb)) break :blk false;
+            }
             const ar = a.func_returns orelse &[_]FieldTypeSpec{};
             const br = b.func_returns orelse &[_]FieldTypeSpec{};
             if (ar.len != br.len) break :blk false;
-            for (ar, br) |ra, rb| { if (!fieldTypeSpecEqual(ra, rb)) break :blk false; }
+            for (ar, br) |ra, rb| {
+                if (!fieldTypeSpecEqual(ra, rb)) break :blk false;
+            }
             break :blk true;
         },
         else => true,
@@ -608,7 +616,9 @@ pub fn constructNamedType(ctx: VMContext, typ_obj: *Object, arg: Value) !Value {
         },
         .enum_t => return error.TypeError,
     }
-    return makeNamedValue(ctx, typ_obj, base_v);
+    // Scalar named types (int, float, rune, bool) are erased: return the bare value.
+    // Decimal stays boxed because arithmetic needs the scale from the typ carrier.
+    return if (nt.base == .decimal) makeNamedValue(ctx, typ_obj, base_v) else base_v;
 }
 
 // Wraps an out-of-range decimal value (given as its unscaled real value `fv`)
@@ -630,12 +640,12 @@ pub fn coerceNamedTypeResult(ctx: VMContext, typ_obj: *Object, arg: Value) !Valu
             const n = try vms.valueAsNumber(arg);
             if (@trunc(n) != n) return error.TypeError;
             const wrapped = try wrapCycleValueWithError(ctx, nt.name, nt.min, nt.max, n, false);
-            return makeNamedValue(ctx, typ_obj, .{ .int = @intFromFloat(wrapped) });
+            return .{ .int = @intFromFloat(wrapped) };
         },
         .float => {
             const n = try vms.valueAsNumber(arg);
             const wrapped = try wrapCycleValueWithError(ctx, nt.name, nt.min, nt.max, n, true);
-            return makeNamedValue(ctx, typ_obj, .{ .float = wrapped });
+            return .{ .float = wrapped };
         },
         .decimal => {
             const d = try vms.valueAsDecimal(arg);
@@ -656,15 +666,22 @@ pub fn applyNamedTypeFn(ctx: VMContext, typ_obj: *Object, kind: @import("value.z
     const n = try vms.valueAsNumber(inner);
     const delta: f64 = if (kind == .succ) 1.0 else -1.0;
     const result = n + delta;
-    if (result == n) { ctx.vs.setRuntimeErr("cannot increment non-finite or very large value", .{}); announcePanicMsg(ctx); return error.RangeError; }
+    if (result == n) {
+        ctx.vs.setRuntimeErr("cannot increment non-finite or very large value", .{});
+        announcePanicMsg(ctx);
+        return error.RangeError;
+    }
     if (nt.is_cycle) {
-        return makeNamedValue(ctx, typ_obj, if (nt.base == .float) .{ .float = try wrapCycleValue(nt.min, nt.max, result, true) } else .{ .int = @intFromFloat(try wrapCycleValue(nt.min, nt.max, result, false)) });
+        return if (nt.base == .float)
+            Value{ .float = try wrapCycleValue(nt.min, nt.max, result, true) }
+        else
+            Value{ .int = @intFromFloat(try wrapCycleValue(nt.min, nt.max, result, false)) };
     } else {
         if (result < nt.min or result > nt.max) {
             setNamedRangeError(ctx, typ_obj, result);
             return error.RangeError;
         }
-        return makeNamedValue(ctx, typ_obj, if (nt.base == .float) .{ .float = result } else .{ .int = @intFromFloat(result) });
+        return if (nt.base == .float) Value{ .float = result } else Value{ .int = @intFromFloat(result) };
     }
 }
 
@@ -677,6 +694,55 @@ fn argTypeError(ctx: VMContext, f: FuncObj, i: usize, spec: FieldTypeSpec, arg: 
         ctx.vs.setRuntimeErr("arg {}: expected {s}, got {s}", .{ i + 1, expected, runtimeTypeName(arg) });
     }
     return error.TypeError;
+}
+
+fn bareScalarMatchesNamedBase(base: @import("value.zig").NamedTypeBase, v: Value) bool {
+    return switch (base) {
+        .int => v == .int or v == .rune,
+        .float => v == .float,
+        .bool => v == .boolean,
+        .rune => v == .rune,
+        else => false,
+    };
+}
+
+fn reifyErasedNamedInterfaceArg(ctx: VMContext, arg: Value, iname: []const u8) !?Value {
+    const temp_root_base = ctx.vs.tempRootDepth();
+    defer ctx.vs.restoreTempRoots(temp_root_base);
+    var match: ?Value = null;
+    for (0..ctx.gs.len()) |i| {
+        const candidate = ctx.gs.valueAt(i);
+        if (!(candidate == .object and candidate.object.* == .named_type)) continue;
+        const nt_obj = candidate.object;
+        const nt = nt_obj.named_type;
+        if (!bareScalarMatchesNamedBase(nt.base, arg)) continue;
+        const wrapped = try makeNamedValue(ctx, nt_obj, arg);
+        if (!matchesInterfaceType(ctx, wrapped, iname)) continue;
+        if (match != null) return null;
+        match = wrapped;
+        try ctx.vs.pushTempRoot(wrapped);
+    }
+    return match;
+}
+
+pub fn coerceErasedValueForSpec(ctx: VMContext, spec: FieldTypeSpec, arg: Value) !?Value {
+    if (arg == .object or arg == .inline_variant) return null;
+    if (spec.alts.len != 1) return null;
+    return switch (spec.alts[0].typ) {
+        .named_t => blk: {
+            const nt_val = ctx.gs.get(spec.alts[0].named_name) orelse break :blk null;
+            if (nt_val != .object or nt_val.object.* != .named_type) break :blk null;
+            const nt = nt_val.object.named_type;
+            if (!bareScalarMatchesNamedBase(nt.base, arg)) break :blk null;
+            break :blk try constructNamedType(ctx, nt_val.object, arg);
+        },
+        .interface_t => try reifyErasedNamedInterfaceArg(ctx, arg, spec.alts[0].interface_name),
+        else => null,
+    };
+}
+
+fn isSingleNamedTypeSpec(spec: FieldTypeSpec) bool {
+    return spec.alts.len == 1 and spec.alts[0].typ == .named_t;
 }
 
 // A primitive spec is a single-alt spec whose alt is a scalar with no
@@ -717,12 +783,24 @@ pub fn enforceFuncArgTypes(ctx: VMContext, f: FuncObj, argc: u8) !void {
     if (!f.has_typed_params) return;
     const fixed: usize = if (f.is_variadic) f.arity - 1 else f.arity;
     for (0..fixed) |i| {
-        const arg = ctx.vs.stack[ctx.vs.stack_top - argc + i];
+        const slot = ctx.vs.stack_top - argc + i;
+        var arg = ctx.vs.stack[slot];
+        if (coerceErasedValueForSpec(ctx, f.param_types[i], arg) catch null) |coerced| {
+            ctx.vs.stack[slot] = coerced;
+            if (isSingleNamedTypeSpec(f.param_types[i])) continue;
+            arg = coerced;
+        }
         if (!matchesTypeSpec(ctx, arg, f.param_types[i])) return argTypeError(ctx, f, i, f.param_types[i], arg);
     }
     if (f.is_variadic) {
         for (fixed..@as(usize, argc)) |i| {
-            const arg = ctx.vs.stack[ctx.vs.stack_top - argc + i];
+            const slot = ctx.vs.stack_top - argc + i;
+            var arg = ctx.vs.stack[slot];
+            if (coerceErasedValueForSpec(ctx, f.variadic_type, arg) catch null) |coerced| {
+                ctx.vs.stack[slot] = coerced;
+                if (isSingleNamedTypeSpec(f.variadic_type)) continue;
+                arg = coerced;
+            }
             if (!matchesTypeSpec(ctx, arg, f.variadic_type)) return argTypeError(ctx, f, i, f.variadic_type, arg);
         }
     }
@@ -734,6 +812,10 @@ pub fn enforceFuncReturnTypes(ctx: VMContext, f: FuncObj, retval: Value) !void {
     // Named returns are programmer-controlled and may be null-initialized; skip enforcement.
     if (f.named_return_count > 0) return;
     if (f.return_types.len == 1) {
+        if (coerceErasedValueForSpec(ctx, f.return_types[0], retval) catch null) |coerced| {
+            if (isSingleNamedTypeSpec(f.return_types[0])) return;
+            if (matchesTypeSpec(ctx, coerced, f.return_types[0])) return;
+        }
         if (!matchesTypeSpec(ctx, retval, f.return_types[0])) {
             var buf: [128]u8 = undefined;
             const expected = fieldTypeSpecStr(&buf, f.return_types[0]);
@@ -806,7 +888,7 @@ pub fn funcSignatureStr(buf: *[256]u8, f: FuncObj) []const u8 {
     var wi: usize = 0;
     const prefix = if (f.name.len > 0) f.name else "func";
     if (wi + prefix.len > 255) return "func";
-    @memcpy(buf[wi..wi + prefix.len], prefix);
+    @memcpy(buf[wi .. wi + prefix.len], prefix);
     wi += prefix.len;
     if (wi >= 255) return buf[0..wi];
     buf[wi] = '(';
@@ -816,23 +898,41 @@ pub fn funcSignatureStr(buf: *[256]u8, f: FuncObj) []const u8 {
     for (f.param_types[0..fixed]) |pt| {
         var tbuf: [128]u8 = undefined;
         const tstr = fieldTypeSpecStr(&tbuf, pt);
-        if (!first_param and wi < 255) { buf[wi] = ','; wi += 1; buf[wi] = ' '; wi += 1; }
+        if (!first_param and wi < 255) {
+            buf[wi] = ',';
+            wi += 1;
+            buf[wi] = ' ';
+            wi += 1;
+        }
         first_param = false;
         if (wi + tstr.len > 255) break;
-        @memcpy(buf[wi..wi + tstr.len], tstr);
+        @memcpy(buf[wi .. wi + tstr.len], tstr);
         wi += tstr.len;
     }
     if (f.is_variadic) {
         var vbuf: [128]u8 = undefined;
         const vstr = fieldTypeSpecStr(&vbuf, f.variadic_type);
-        if (!first_param and wi < 255) { buf[wi] = ','; wi += 1; buf[wi] = ' '; wi += 1; }
+        if (!first_param and wi < 255) {
+            buf[wi] = ',';
+            wi += 1;
+            buf[wi] = ' ';
+            wi += 1;
+        }
         _ = &first_param;
         if (wi + vstr.len + 3 <= 255) {
-            @memcpy(buf[wi..wi + vstr.len], vstr);
+            @memcpy(buf[wi .. wi + vstr.len], vstr);
             wi += vstr.len;
-            buf[wi] = '.'; wi += 1; buf[wi] = '.'; wi += 1; buf[wi] = '.'; wi += 1;
+            buf[wi] = '.';
+            wi += 1;
+            buf[wi] = '.';
+            wi += 1;
+            buf[wi] = '.';
+            wi += 1;
         }
     }
-    if (wi < 255) { buf[wi] = ')'; wi += 1; }
+    if (wi < 255) {
+        buf[wi] = ')';
+        wi += 1;
+    }
     return buf[0..wi];
 }

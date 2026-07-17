@@ -51,6 +51,7 @@ fn compileWithSession(rt: *Runtime, src: []const u8, path: []const u8) !void {
         .module_ctx = &session,
         .resolve_import = module_compile.Session.resolveImportOpaque,
         .has_module_export = module_compile.hasModuleExport,
+        .resolve_module_type = module_compile.resolveModuleTypeKind,
     });
     _ = path;
     try compiler.compile(true);
@@ -1078,14 +1079,14 @@ test "compiler: std math min max sign intrinsic direct call results" {
         \\func si(x int) int { return std.math.sign(x) }
         \\func sf(x float) float { return std.math.sign(x) }
     );
-    const mi = try rt.callGlobal("mi", &.{.{ .int = 8 }, .{ .int = 3 }});
+    const mi = try rt.callGlobal("mi", &.{ .{ .int = 8 }, .{ .int = 3 } });
     try std.testing.expect(mi == .int and mi.int == 3);
-    const mf = try rt.callGlobal("mf", &.{.{ .float = 8.5 }, .{ .float = 3.25 }});
+    const mf = try rt.callGlobal("mf", &.{ .{ .float = 8.5 }, .{ .float = 3.25 } });
     try std.testing.expect(mf == .float);
     try std.testing.expectApproxEqRel(@as(f64, 3.25), mf.float, 1e-12);
-    const xi = try rt.callGlobal("xi", &.{.{ .int = 8 }, .{ .int = 3 }});
+    const xi = try rt.callGlobal("xi", &.{ .{ .int = 8 }, .{ .int = 3 } });
     try std.testing.expect(xi == .int and xi.int == 8);
-    const xf = try rt.callGlobal("xf", &.{.{ .float = 8.5 }, .{ .float = 3.25 }});
+    const xf = try rt.callGlobal("xf", &.{ .{ .float = 8.5 }, .{ .float = 3.25 } });
     try std.testing.expect(xf == .float);
     try std.testing.expectApproxEqRel(@as(f64, 8.5), xf.float, 1e-12);
     const si = try rt.callGlobal("si", &.{.{ .int = -7 }});
@@ -1107,10 +1108,10 @@ test "compiler: std math sqrt clamp intrinsic direct call results" {
     const sq = try rt.callGlobal("sq", &.{.{ .float = 100.0 }});
     try std.testing.expect(sq == .float);
     try std.testing.expectApproxEqRel(@as(f64, 10.0), sq.float, 1e-12);
-    const cl = try rt.callGlobal("cl", &.{.{ .int = 20 }, .{ .int = 1 }, .{ .int = 10 }});
+    const cl = try rt.callGlobal("cl", &.{ .{ .int = 20 }, .{ .int = 1 }, .{ .int = 10 } });
     try std.testing.expect(cl == .float);
     try std.testing.expectApproxEqRel(@as(f64, 10.0), cl.float, 1e-12);
-    const cf = try rt.callGlobal("cf", &.{.{ .float = 0.5 }, .{ .float = 1.0 }, .{ .float = 10.0 }});
+    const cf = try rt.callGlobal("cf", &.{ .{ .float = 0.5 }, .{ .float = 1.0 }, .{ .float = 10.0 } });
     try std.testing.expect(cf == .float);
     try std.testing.expectApproxEqRel(@as(f64, 1.0), cf.float, 1e-12);
 }
@@ -1149,6 +1150,388 @@ test "compiler: std math intrinsic direct calls survive defuse" {
     vm.VMContext.fromActive().vs.resetExec();
 
     try vm.run(vm.VMContext.fromActive());
+}
+
+test "compiler: defused named-type interface arg survives gc stress reification" {
+    var rt = try api.Runtime.init(.{ .allow_io = false, .allocator = std.testing.allocator });
+    defer rt.deinit();
+
+    const src =
+        \\type Meters int
+        \\type Decoy1 int
+        \\type Decoy2 int
+        \\type Decoy3 int
+        \\type Decoy4 int
+        \\type Decoy5 int
+        \\
+        \\func (m Meters) doubled() Meters {
+        \\    return Meters(int(m) * 2)
+        \\}
+        \\
+        \\type HasDouble interface { doubled() Meters }
+        \\
+        \\func accept(h HasDouble) {
+        \\    assert int(h.doubled()) == 14
+        \\}
+        \\
+        \\accept(Meters(7))
+    ;
+    try rt.inner.compileAndInstall(src, "tests/spec/191_non_struct_interface.gengo", .filesystem);
+
+    const defused = try vm_defuse.buildDefusedCode(vm.VMContext.fromActive().cs, std.testing.allocator);
+    defer std.testing.allocator.free(defused);
+
+    @memcpy(chunk.g_state.code[0..defused.len], defused);
+    chunk.g_state.code_len = defused.len;
+    chunk.g_state.verified = false;
+    chunk.g_state.verified_code_len = 0;
+    vm.VMContext.fromActive().vs.resetExec();
+
+    try vm.run(vm.VMContext.fromActive());
+}
+
+test "compiler: std.core.type_of on named local lowers to nominal type string" {
+    var rt = try setup();
+    defer rt.deinit();
+
+    try runSrc(&rt,
+        \\std := import("std")
+        \\type Age int
+        \\func f() string {
+        \\    age := Age(7)
+        \\    return std.core.type_of(age)
+        \\}
+    );
+
+    const c = rt.chunk_state;
+    var found_runtime_type_of = false;
+    var ip: usize = 0;
+    while (ip < c.code_len) {
+        const inst = try chunk.decodeAt(ip);
+        if (inst.op == .get_global and inst.const_index != null) {
+            const name = (try chunk.constAt(inst.const_index.?)).string.bytes;
+            if (std.mem.eql(u8, name, "module:std.core.type_of")) found_runtime_type_of = true;
+        }
+        ip += inst.width;
+    }
+    try std.testing.expect(!found_runtime_type_of);
+
+    const out = try rt.callGlobal("f", &.{});
+    const s = try vms.asStringValue(out);
+    try std.testing.expectEqualStrings("Age", s);
+}
+
+test "compiler: std.core.type_of preserves nominal result of named arithmetic" {
+    var rt = try setup();
+    defer rt.deinit();
+
+    try runSrc(&rt,
+        \\std := import("std")
+        \\type Index int
+        \\func f() string {
+        \\    a := Index(10)
+        \\    b := Index(3)
+        \\    r := a div b
+        \\    return std.core.type_of(r)
+        \\}
+    );
+
+    const out = try rt.callGlobal("f", &.{});
+    const s = try vms.asStringValue(out);
+    try std.testing.expectEqualStrings("Index", s);
+}
+
+test "compiler: named int arithmetic lowers to add_int without runtime unwrapping" {
+    var rt = try setup();
+    defer rt.deinit();
+
+    try compile(&rt,
+        \\type Meter int range 0..100
+        \\func add(a Meter, b Meter) Meter {
+        \\    return a + b
+        \\}
+    );
+
+    const c = rt.chunk_state;
+    var found_add_int = false;
+    var found_named_inner = false;
+    var found_named_range = false;
+    var found_named_predicate = false;
+    for (c.code[0..c.code_len]) |op| {
+        if (op == @intFromEnum(Op.add_int)) found_add_int = true;
+        if (op == @intFromEnum(Op.named_inner)) found_named_inner = true;
+        if (op == @intFromEnum(Op.validate_named_range)) found_named_range = true;
+        if (op == @intFromEnum(Op.check_named_predicate)) found_named_predicate = true;
+    }
+    try std.testing.expect(found_add_int);
+    try std.testing.expect(!found_named_inner);
+    try std.testing.expect(found_named_range);
+    try std.testing.expect(!found_named_predicate);
+}
+
+test "compiler: named scalar arithmetic validates its result without a constructor call" {
+    var rt = try setup();
+    defer rt.deinit();
+
+    try runSrc(&rt,
+        \\type Score int range 0..200 predicate func(x) { return x >= 0 and x <= 100 }
+        \\func add() Score {
+        \\    return Score(60) + Score(50)
+        \\}
+    );
+
+    try std.testing.expectError(error.PredicateFailed, rt.callGlobal("add", &.{}));
+
+    const c = rt.chunk_state;
+    var found_named_predicate = false;
+    var found_ge_int = false;
+    var found_le_int = false;
+    var range_const_idx: ?usize = null;
+    var predicate_const_idx: ?usize = null;
+    var ip: usize = 0;
+    while (ip < c.code_len) {
+        const inst = try chunk.decodeAt(ip);
+        if (inst.op == .check_named_predicate) {
+            found_named_predicate = true;
+            predicate_const_idx = inst.const_index;
+        }
+        if (inst.op == .validate_named_range) range_const_idx = inst.const_index;
+        if (inst.op == .ge_int) found_ge_int = true;
+        if (inst.op == .le_int) found_le_int = true;
+        ip += inst.width;
+    }
+    try std.testing.expect(found_named_predicate);
+    try std.testing.expectEqual(range_const_idx, predicate_const_idx);
+    try std.testing.expect(found_ge_int);
+    try std.testing.expect(found_le_int);
+}
+
+test "compiler: named scalar field and return values retain typed lowering" {
+    var rt = try setup();
+    defer rt.deinit();
+
+    try runSrc(&rt,
+        \\std := import("std")
+        \\type Meter int range 0..100
+        \\type Reading struct { value Meter }
+        \\func fromReading(r Reading) Meter { return r.value }
+        \\func add(r Reading, extra Meter) string {
+        \\    return std.core.type_of(fromReading(r) + extra)
+        \\}
+    );
+
+    const c = rt.chunk_state;
+    var found_add_int = false;
+    var found_named_inner = false;
+    for (c.code[0..c.code_len]) |op| {
+        if (op == @intFromEnum(Op.add_int)) found_add_int = true;
+        if (op == @intFromEnum(Op.named_inner)) found_named_inner = true;
+    }
+    try std.testing.expect(found_add_int);
+    try std.testing.expect(!found_named_inner);
+}
+
+test "compiler: indexed named scalars retain typed lowering" {
+    var rt = try setup();
+    defer rt.deinit();
+
+    try compile(&rt,
+        \\type Meter int range 0..100
+        \\func fromArray(xs []Meter, extra Meter) Meter { return xs[0] + extra }
+        \\func fromMap(xs map[string]Meter, extra Meter) Meter { return xs["main"] + extra }
+    );
+
+    const c = rt.chunk_state;
+    var add_int_count: usize = 0;
+    var range_check_count: usize = 0;
+    var found_named_inner = false;
+    for (c.code[0..c.code_len]) |op| {
+        if (op == @intFromEnum(Op.add_int)) add_int_count += 1;
+        if (op == @intFromEnum(Op.validate_named_range)) range_check_count += 1;
+        if (op == @intFromEnum(Op.named_inner)) found_named_inner = true;
+    }
+    try std.testing.expectEqual(@as(usize, 2), add_int_count);
+    try std.testing.expectEqual(@as(usize, 2), range_check_count);
+    try std.testing.expect(!found_named_inner);
+}
+
+test "compiler: indexed named scalars retain nominal behavior" {
+    var rt = try setup();
+    defer rt.deinit();
+
+    try runSrc(&rt,
+        \\std := import("std")
+        \\type Meter int range 0..100
+        \\type Score int predicate func(x) { return x >= 0 and x <= 100 }
+        \\func fromArray() Meter {
+        \\    var xs []Meter = [Meter(40)]
+        \\    return xs[0] + Meter(20)
+        \\}
+        \\func fromMap() string {
+        \\    var xs map[string]Meter = {"main": Meter(40)}
+        \\    return std.core.type_of(xs["main"] + Meter(20))
+        \\}
+        \\func invalidCollection() { var xs []Meter = [150] }
+        \\func invalidPredicateCollection() { var xs []Score = [101] }
+    );
+
+    const array_result = try rt.callGlobal("fromArray", &.{});
+    try std.testing.expect(array_result == .int);
+    try std.testing.expectEqual(@as(i64, 60), array_result.int);
+    const map_result = try rt.callGlobal("fromMap", &.{});
+    const map_type = try vms.asStringValue(map_result);
+    try std.testing.expectEqualStrings("Meter", map_type);
+    try std.testing.expectError(error.RangeError, rt.callGlobal("invalidCollection", &.{}));
+    try std.testing.expectError(error.PredicateFailed, rt.callGlobal("invalidPredicateCollection", &.{}));
+}
+
+test "compiler: static named method uses its declared return type" {
+    var rt = try setup();
+    defer rt.deinit();
+
+    try runSrc(&rt,
+        \\type Meter int
+        \\type Count int
+        \\func (m Meter) asCount() Count { return Count(int(m)) }
+        \\func add(m Meter, n Count) Count { return m.asCount() + n }
+    );
+
+    const result = try rt.callGlobal("add", &.{ .{ .int = 2 }, .{ .int = 3 } });
+    try std.testing.expect(result == .int);
+    try std.testing.expectEqual(@as(i64, 5), result.int);
+}
+
+test "compiler: named float division retains typed lowering and validation" {
+    var rt = try setup();
+    defer rt.deinit();
+
+    try runSrc(&rt,
+        \\type Ratio float range 0.0..10.0
+        \\func divide(a Ratio, b Ratio) Ratio { return a / b }
+    );
+
+    const c = rt.chunk_state;
+    var found_div_float = false;
+    var found_range_check = false;
+    for (c.code[0..c.code_len]) |op| {
+        if (op == @intFromEnum(Op.div_float)) found_div_float = true;
+        if (op == @intFromEnum(Op.validate_named_range)) found_range_check = true;
+    }
+    try std.testing.expect(found_div_float);
+    try std.testing.expect(found_range_check);
+    try std.testing.expectError(error.RangeError, rt.callGlobal("divide", &.{ .{ .float = 8.0 }, .{ .float = 0.5 } }));
+}
+
+test "compiler: named unary result retains nominal type" {
+    var rt = try setup();
+    defer rt.deinit();
+
+    try runSrc(&rt,
+        \\std := import("std")
+        \\type Delta int range -100..100
+        \\func typeOfNegated(v Delta) string { return std.core.type_of(-v) }
+    );
+
+    const result = try rt.callGlobal("typeOfNegated", &.{.{ .int = 4 }});
+    const name = try vms.asStringValue(result);
+    try std.testing.expectEqualStrings("Delta", name);
+}
+
+test "compiler: named bool not retains and validates nominal type" {
+    var rt = try setup();
+    defer rt.deinit();
+
+    try runSrc(&rt,
+        \\std := import("std")
+        \\type Enabled bool predicate func(v) { return v }
+        \\func invert(v Enabled) Enabled { return not v }
+        \\func typeOfEnabled(v Enabled) string { return std.core.type_of(not v) }
+    );
+
+    const type_result = try rt.callGlobal("typeOfEnabled", &.{.{ .boolean = false }});
+    const name = try vms.asStringValue(type_result);
+    try std.testing.expectEqualStrings("Enabled", name);
+    try std.testing.expectError(error.PredicateFailed, rt.callGlobal("invert", &.{.{ .boolean = true }}));
+}
+
+test "compiler: named bitwise result retains and validates nominal type" {
+    var rt = try setup();
+    defer rt.deinit();
+
+    try runSrc(&rt,
+        \\std := import("std")
+        \\type Mask int range 0..255
+        \\func combine(a Mask, b Mask) string { return std.core.type_of((a & b) | (a ^ b)) }
+    );
+
+    const result = try rt.callGlobal("combine", &.{ .{ .int = 12 }, .{ .int = 10 } });
+    const name = try vms.asStringValue(result);
+    try std.testing.expectEqualStrings("Mask", name);
+}
+
+test "compiler: named math intrinsic validates its result" {
+    var rt = try setup();
+    defer rt.deinit();
+
+    try runSrc(&rt,
+        \\std := import("std")
+        \\type Negative int range -10..-1
+        \\func absolute(v Negative) int { x := std.math.abs(v); return int(x) }
+    );
+
+    try std.testing.expectError(error.RangeError, rt.callGlobal("absolute", &.{.{ .int = -2 }}));
+}
+
+test "compiler: named shifts retain the left type and validate results" {
+    var rt = try setup();
+    defer rt.deinit();
+
+    try runSrc(&rt,
+        \\std := import("std")
+        \\type Bits int range 0..63
+        \\type Count int
+        \\func shiftPlain(v Bits) string { return std.core.type_of(v << 1) }
+        \\func shiftNamed(v Bits, n Count) string { return std.core.type_of(v << n) }
+        \\func shiftOutOfRange(v Bits) int { result := v << 6; return int(result) }
+    );
+
+    const plain = try rt.callGlobal("shiftPlain", &.{.{ .int = 2 }});
+    try std.testing.expectEqualStrings("Bits", try vms.asStringValue(plain));
+    const named = try rt.callGlobal("shiftNamed", &.{ .{ .int = 2 }, .{ .int = 1 } });
+    try std.testing.expectEqualStrings("Bits", try vms.asStringValue(named));
+    try std.testing.expectError(error.RangeError, rt.callGlobal("shiftOutOfRange", &.{.{ .int = 2 }}));
+}
+
+test "compiler: named shift count must have an int base" {
+    var rt = try setup();
+    defer rt.deinit();
+
+    try std.testing.expectError(error.TypeMismatch, compile(&rt,
+        \\type Bits int
+        \\func invalid(v Bits) Bits { return v << 1.0 }
+    ));
+}
+
+test "compiler: named min max clamp retain and validate nominal type" {
+    var rt = try setup();
+    defer rt.deinit();
+
+    try runSrc(&rt,
+        \\std := import("std")
+        \\type Temperature float range 0.0..100.0
+        \\func minType(a Temperature, b Temperature) string { return std.core.type_of(std.math.min(a, b)) }
+        \\func maxType(a Temperature, b Temperature) string { return std.core.type_of(std.math.max(a, b)) }
+        \\func clampType(v Temperature, lo Temperature, hi Temperature) string { return std.core.type_of(std.math.clamp(v, lo, hi)) }
+        \\func invalidClamp(v Temperature) float { result := std.math.clamp(v, Temperature(110.0), Temperature(120.0)); return float(result) }
+    );
+
+    const min_result = try rt.callGlobal("minType", &.{ .{ .float = 20.0 }, .{ .float = 30.0 } });
+    try std.testing.expectEqualStrings("Temperature", try vms.asStringValue(min_result));
+    const max_result = try rt.callGlobal("maxType", &.{ .{ .float = 20.0 }, .{ .float = 30.0 } });
+    try std.testing.expectEqualStrings("Temperature", try vms.asStringValue(max_result));
+    const clamp_result = try rt.callGlobal("clampType", &.{ .{ .float = 20.0 }, .{ .float = 0.0 }, .{ .float = 80.0 } });
+    try std.testing.expectEqualStrings("Temperature", try vms.asStringValue(clamp_result));
+    try std.testing.expectError(error.RangeError, rt.callGlobal("invalidClamp", &.{.{ .float = 20.0 }}));
 }
 
 test "compiler: struct field access" {
@@ -1688,9 +2071,9 @@ test "compiler: typed int expression arithmetic result" {
         \\    return (a * b) / a
         \\}
     );
-    const r1 = try rt.callGlobal("addsub", &.{.{ .int = 8 }, .{ .int = 3 }});
+    const r1 = try rt.callGlobal("addsub", &.{ .{ .int = 8 }, .{ .int = 3 } });
     try std.testing.expect(r1 == .int and r1.int == 3);
-    const r2 = try rt.callGlobal("muldiv", &.{.{ .int = 8 }, .{ .int = 3 }});
+    const r2 = try rt.callGlobal("muldiv", &.{ .{ .int = 8 }, .{ .int = 3 } });
     try std.testing.expect(r2 == .float);
     try std.testing.expectApproxEqRel(@as(f64, 3.0), r2.float, 1e-12);
 }
@@ -1747,11 +2130,11 @@ test "compiler: typed int expression comparison result" {
         \\    return a == b or a != b or a < b or a > b
         \\}
     );
-    const r1 = try rt.callGlobal("cmp", &.{.{ .int = 4 }, .{ .int = 4 }});
+    const r1 = try rt.callGlobal("cmp", &.{ .{ .int = 4 }, .{ .int = 4 } });
     try std.testing.expect(r1 == .boolean and r1.boolean);
-    const r2 = try rt.callGlobal("cmp", &.{.{ .int = 3 }, .{ .int = 4 }});
+    const r2 = try rt.callGlobal("cmp", &.{ .{ .int = 3 }, .{ .int = 4 } });
     try std.testing.expect(r2 == .boolean and r2.boolean);
-    const r3 = try rt.callGlobal("cmp", &.{.{ .int = 5 }, .{ .int = 4 }});
+    const r3 = try rt.callGlobal("cmp", &.{ .{ .int = 5 }, .{ .int = 4 } });
     try std.testing.expect(r3 == .boolean and r3.boolean);
 }
 
@@ -1786,11 +2169,11 @@ test "compiler: typed int eqz result" {
         \\    return (a - b) != 0
         \\}
     );
-    const r1 = try rt.callGlobal("isZero", &.{.{ .int = 4 }, .{ .int = 4 }});
+    const r1 = try rt.callGlobal("isZero", &.{ .{ .int = 4 }, .{ .int = 4 } });
     try std.testing.expect(r1 == .boolean and r1.boolean);
-    const r2 = try rt.callGlobal("isZero", &.{.{ .int = 4 }, .{ .int = 3 }});
+    const r2 = try rt.callGlobal("isZero", &.{ .{ .int = 4 }, .{ .int = 3 } });
     try std.testing.expect(r2 == .boolean and !r2.boolean);
-    const r3 = try rt.callGlobal("notZero", &.{.{ .int = 4 }, .{ .int = 3 }});
+    const r3 = try rt.callGlobal("notZero", &.{ .{ .int = 4 }, .{ .int = 3 } });
     try std.testing.expect(r3 == .boolean and r3.boolean);
 }
 
@@ -1843,15 +2226,15 @@ test "compiler: typed int zero compare result" {
         \\    return (a - b) != 0
         \\}
     );
-    const r1 = try rt.callGlobal("isNeg", &.{.{ .int = 3 }, .{ .int = 4 }});
+    const r1 = try rt.callGlobal("isNeg", &.{ .{ .int = 3 }, .{ .int = 4 } });
     try std.testing.expect(r1 == .boolean and r1.boolean);
-    const r2 = try rt.callGlobal("isPos", &.{.{ .int = 5 }, .{ .int = 4 }});
+    const r2 = try rt.callGlobal("isPos", &.{ .{ .int = 5 }, .{ .int = 4 } });
     try std.testing.expect(r2 == .boolean and r2.boolean);
-    const r3 = try rt.callGlobal("isNonPos", &.{.{ .int = 4 }, .{ .int = 4 }});
+    const r3 = try rt.callGlobal("isNonPos", &.{ .{ .int = 4 }, .{ .int = 4 } });
     try std.testing.expect(r3 == .boolean and r3.boolean);
-    const r4 = try rt.callGlobal("isNonNeg", &.{.{ .int = 4 }, .{ .int = 4 }});
+    const r4 = try rt.callGlobal("isNonNeg", &.{ .{ .int = 4 }, .{ .int = 4 } });
     try std.testing.expect(r4 == .boolean and r4.boolean);
-    const r5 = try rt.callGlobal("isNonZero", &.{.{ .int = 4 }, .{ .int = 3 }});
+    const r5 = try rt.callGlobal("isNonZero", &.{ .{ .int = 4 }, .{ .int = 3 } });
     try std.testing.expect(r5 == .boolean and r5.boolean);
 }
 
@@ -1870,8 +2253,7 @@ test "compiler: typed int comparison keeps const fusion" {
     while (i < c.code_len) {
         const inst = chunk_decoder.decodeAt(c, i) catch break;
         switch (inst.op) {
-            .get_local_const_eq, .get_local_const_lt, .get_local_const_gt,
-            .const_eq, .const_lt, .const_gt => found_const = true,
+            .get_local_const_eq, .get_local_const_lt, .get_local_const_gt, .const_eq, .const_lt, .const_gt => found_const = true,
             .eq_int, .ne_int, .lt_int, .gt_int => found_typed = true,
             else => {},
         }
@@ -1964,10 +2346,10 @@ test "compiler: typed float expression arithmetic result" {
         \\    return (a * b) / a
         \\}
     );
-    const r1 = try rt.callGlobal("addsub", &.{.{ .float = 8.0 }, .{ .float = 3.5 }});
+    const r1 = try rt.callGlobal("addsub", &.{ .{ .float = 8.0 }, .{ .float = 3.5 } });
     try std.testing.expect(r1 == .float);
     try std.testing.expectApproxEqRel(@as(f64, 3.5), r1.float, 1e-12);
-    const r2 = try rt.callGlobal("muldiv", &.{.{ .float = 8.0 }, .{ .float = 3.5 }});
+    const r2 = try rt.callGlobal("muldiv", &.{ .{ .float = 8.0 }, .{ .float = 3.5 } });
     try std.testing.expect(r2 == .float);
     try std.testing.expectApproxEqRel(@as(f64, 3.5), r2.float, 1e-12);
 }
@@ -2005,11 +2387,11 @@ test "compiler: typed float expression comparison result" {
         \\    return a == b or a != b or a < b or a > b
         \\}
     );
-    const r1 = try rt.callGlobal("cmp", &.{.{ .float = 4.0 }, .{ .float = 4.0 }});
+    const r1 = try rt.callGlobal("cmp", &.{ .{ .float = 4.0 }, .{ .float = 4.0 } });
     try std.testing.expect(r1 == .boolean and r1.boolean);
-    const r2 = try rt.callGlobal("cmp", &.{.{ .float = 3.0 }, .{ .float = 4.0 }});
+    const r2 = try rt.callGlobal("cmp", &.{ .{ .float = 3.0 }, .{ .float = 4.0 } });
     try std.testing.expect(r2 == .boolean and r2.boolean);
-    const r3 = try rt.callGlobal("cmp", &.{.{ .float = 5.0 }, .{ .float = 4.0 }});
+    const r3 = try rt.callGlobal("cmp", &.{ .{ .float = 5.0 }, .{ .float = 4.0 } });
     try std.testing.expect(r3 == .boolean and r3.boolean);
 }
 
@@ -2191,16 +2573,19 @@ test "two runtimes stay isolated across interleaved calls (#190)" {
     // the inline named_scalar decode must resolve through that runtime's
     // object pool. Read inner values immediately, while the owner is active.
     const ta = try a.callGlobal("temp", &.{});
-    const ia = ta.namedInner() orelse return error.TestUnexpectedResult;
+    const ia = ta.namedInner() orelse ta;
+    try std.testing.expect(ia == .int);
     try std.testing.expectEqual(@as(i64, 21), ia.int);
 
     const tb = try b.callGlobal("temp", &.{});
-    const ib = tb.namedInner() orelse return error.TestUnexpectedResult;
+    const ib = tb.namedInner() orelse tb;
+    try std.testing.expect(ib == .int);
     try std.testing.expectEqual(@as(i64, 42), ib.int);
 
     // Back to A: its state must be untouched by B's run.
     const ta2 = try a.callGlobal("temp", &.{});
-    const ia2 = ta2.namedInner() orelse return error.TestUnexpectedResult;
+    const ia2 = ta2.namedInner() orelse ta2;
+    try std.testing.expect(ia2 == .int);
     try std.testing.expectEqual(@as(i64, 21), ia2.int);
 
     // Regexp pattern caches are per-runtime: each runtime matches only its
@@ -2356,4 +2741,37 @@ test "compiler: named-type subtype method call resolves inherited method via cha
     try std.testing.expect(found_meters_times);
     try std.testing.expect(!found_small_meters_times);
     try std.testing.expect(!found_invoke_method);
+}
+
+test "compiler: defer named-type qualified method lowers to direct deferred call" {
+    var rt = try setup();
+    defer rt.deinit();
+
+    try compileWithSession(&rt,
+        \\type MyInt int
+        \\func (m MyInt) show() {}
+        \\func run() {
+        \\    defer MyInt.show(MyInt(42))
+        \\}
+    , "");
+
+    const c = rt.chunk_state;
+    var found_defer_call = false;
+    var found_defer_invoke_method = false;
+    var found_show_global = false;
+    var ip: usize = 0;
+    while (ip < c.code_len) {
+        const inst = try chunk.decodeAt(ip);
+        if (inst.op == .defer_call) found_defer_call = true;
+        if (inst.op == .defer_invoke_method) found_defer_invoke_method = true;
+        if (inst.op == .get_global and inst.const_index != null) {
+            const name = (try chunk.constAt(inst.const_index.?)).string.bytes;
+            if (std.mem.eql(u8, name, "MyInt.show")) found_show_global = true;
+        }
+        ip += inst.width;
+    }
+
+    try std.testing.expect(found_defer_call);
+    try std.testing.expect(found_show_global);
+    try std.testing.expect(!found_defer_invoke_method);
 }

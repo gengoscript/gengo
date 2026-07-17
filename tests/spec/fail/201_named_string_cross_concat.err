@@ -1,1 +1,2 @@
-TypeError
+TypeMismatch
+cannot mix named types 'Html' and 'Css' in 'add' operation

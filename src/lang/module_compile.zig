@@ -12,6 +12,7 @@ const cfg = @import("../runtime/config.zig");
 const globals = @import("globals.zig");
 const source_io = @import("../runtime/source_io.zig");
 const build_options = @import("build_options");
+const module_descriptor = @import("module_descriptor.zig");
 
 pub const MaxModules = 64;
 pub const MaxImportsPerModule = 64;
@@ -103,12 +104,12 @@ pub const cap_net_desc: CapModuleDesc = .{
 pub const cap_fs_desc: CapModuleDesc = .{
     .name = "fs",
     .functions = &.{
-        .{ .name = "read",   .arity = 1, .native_id = 161 },
+        .{ .name = "read", .arity = 1, .native_id = 161 },
         .{ .name = "exists", .arity = 1, .native_id = 162 },
-        .{ .name = "write",  .arity = 2, .native_id = 188 },
-        .{ .name = "list",   .arity = 1, .native_id = 189 },
+        .{ .name = "write", .arity = 2, .native_id = 188 },
+        .{ .name = "list", .arity = 1, .native_id = 189 },
         .{ .name = "delete", .arity = 1, .native_id = 190 },
-        .{ .name = "mkdir",  .arity = 1, .native_id = 191 },
+        .{ .name = "mkdir", .arity = 1, .native_id = 191 },
     },
 };
 
@@ -124,7 +125,7 @@ pub const cap_http_desc: CapModuleDesc = .{
 pub const cap_env_desc: CapModuleDesc = .{
     .name = "env",
     .functions = &.{
-        .{ .name = "get",  .arity = 1, .native_id = 233 },
+        .{ .name = "get", .arity = 1, .native_id = 233 },
         .{ .name = "list", .arity = 0, .native_id = 234 },
     },
 };
@@ -373,9 +374,7 @@ pub const Session = struct {
                         var depth: i32 = 1;
                         while (depth > 0) {
                             const t = peek.next();
-                            if (t.typ == .lbracket) depth += 1
-                            else if (t.typ == .rbracket) depth -= 1
-                            else if (t.typ == .eof) break;
+                            if (t.typ == .lbracket) depth += 1 else if (t.typ == .rbracket) depth -= 1 else if (t.typ == .eof) break;
                         }
                         if (peek.next().typ == .lparen) {
                             try self.registerGlobalName(name_tok.src, prefix);
@@ -575,7 +574,7 @@ pub const Session = struct {
         self.modules[idx].path_len = path.len;
         @memcpy(self.modules[idx].path_buf[0..path.len], path);
         if (!is_root) {
-            self.modules[idx].global_name = try self.makePrefixedName("host:", path);
+            self.modules[idx].global_name = try self.makePrefixedName("@mod:", path);
             self.modules[idx].prefix = try self.makePrefixedName("@mod:", path);
             self.modules[idx].struct_name = try self.makePrefixedName("@module_type:", path);
         }
@@ -718,8 +717,9 @@ pub fn hasModuleExport(ctx: *anyopaque, path: []const u8, field: []const u8) boo
             }
         }
         // Check host modules
+        const host_key = if (std.mem.startsWith(u8, path, "host:")) path[5..] else path;
         for (self.host_module_descs) |hm| {
-            if (common.streq(hm.name, path)) {
+            if (common.streq(hm.name, host_key)) {
                 for (hm.functions) |func| {
                     if (common.streq(func.name, field)) return true;
                 }
@@ -735,16 +735,19 @@ pub fn hasModuleExport(ctx: *anyopaque, path: []const u8, field: []const u8) boo
     return false;
 }
 
-pub fn resolveModuleTypeKind(ctx: *anyopaque, path: []const u8, type_name: []const u8) ?ExportTypeKind {
-    if (common.streq(path, StdModulePath)) {
-        if (common.streq(type_name, "Arg")) return .variant_t;
-        return null;
-    }
+pub fn resolveModuleTypeKind(ctx: *anyopaque, path: []const u8, type_name: []const u8) ?module_descriptor.ModuleTypeInfo {
+    if (module_descriptor.resolveType(path, type_name)) |info| return info;
     const s: *Session = @ptrCast(@alignCast(ctx));
     const idx = s.findModule(path) orelse return null;
     const rec = &s.modules[idx];
     for (rec.export_names[0..rec.export_count], rec.export_type_kinds[0..rec.export_count]) |n, k| {
-        if (common.streq(n, type_name)) return k;
+        if (common.streq(n, type_name)) {
+            var qname_buf: [MaxModulePathBytes + 64]u8 = undefined;
+            const qname = std.fmt.bufPrint(&qname_buf, "@mod:{s}.{s}", .{ path, type_name }) catch return null;
+            const qname_copy = heap.bump(u8, qname.len) orelse return null;
+            @memcpy(qname_copy, qname);
+            return .{ .kind = k, .qualified_name = qname_copy[0..qname.len] };
+        }
     }
     return null;
 }
@@ -776,7 +779,7 @@ fn pathIsUnderRoot(path: []const u8, root: []const u8) bool {
     // "." means the cwd: any relative path that hasn't escaped upward is allowed.
     if (common.streq(root, ".")) {
         return !(path.len == 0 or path[0] == '/' or
-                 common.streq(path, "..") or std.mem.startsWith(u8, path, "../"));
+            common.streq(path, "..") or std.mem.startsWith(u8, path, "../"));
     }
     // Strip leading "./" from root so "./modbus" matches normalized path "modbus/…".
     const r = if (std.mem.startsWith(u8, root, "./")) root[2..] else root;

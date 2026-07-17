@@ -173,8 +173,7 @@ pub fn disassemble(cs: *const chunk.State) void {
         const raw = cs.codeByteAt(i);
         i += 1;
 
-        const max_op = @intFromEnum(Op.halt);
-        if (raw > max_op) {
+        if ((raw > @intFromEnum(Op.validate_named_range) and raw < @intFromEnum(Op.const_eq)) or raw > @intFromEnum(Op.inc_global_const)) {
             io.write("???\n");
             continue;
         }
@@ -185,7 +184,8 @@ pub fn disassemble(cs: *const chunk.State) void {
             .constant, .def_global, .make_closure, .ret_const,
             .const_eq, .const_sub, .const_add, .const_lt, .const_gt,
             .variant_check,
-            .assert_interface, .assert_struct => {
+            .assert_interface, .assert_struct,
+            .check_named_predicate, .validate_named_range => {
                 const idx = readU16(cs, i);
                 i += 2;
                 io.write(@tagName(op));

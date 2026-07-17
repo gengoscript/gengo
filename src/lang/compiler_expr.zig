@@ -40,8 +40,13 @@ pub fn arrayLit(c: anytype) !void {
     var count: u8 = 0;
     if (!c.check(.rbracket)) {
         while (true) {
-            try expr(c, );
-            if (count == 255) { c.setErr("too many elements (max {d})", .{MaxLocals}); return error.TooManyElements; }
+            try expr(
+                c,
+            );
+            if (count == 255) {
+                c.setErr("too many elements (max {d})", .{MaxLocals});
+                return error.TooManyElements;
+            }
             count += 1;
             if (!c.match(.comma)) break;
             if (c.check(.rbracket)) break;
@@ -88,7 +93,10 @@ fn validateAndEmitTypeName(c: anytype, name: Token) !void {
 // Parses a bare type name used opposite a `.type` expression — either as the
 // other side of == / != , or as a `case` label in a `.type`-headed switch.
 pub fn typeNameLiteral(c: anytype) !void {
-    if (c.cur.typ != .ident) { c.setErr("expected a type name, found {s}", .{c.tokenName(c.cur.typ)}); return error.ExpectedTypeName; }
+    if (c.cur.typ != .ident) {
+        c.setErr("expected a type name, found {s}", .{c.tokenName(c.cur.typ)});
+        return error.ExpectedTypeName;
+    }
     const name = c.cur;
     c.advance();
     try validateAndEmitTypeName(c, name);
@@ -102,12 +110,21 @@ pub fn expr(c: anytype) !void {
 
 pub fn importExpr(c: anytype) !void {
     try c.consume(.lparen);
-    if (c.cur.typ != .string) { c.setErr("expected string literal, found {s}", .{c.tokenName(c.cur.typ)}); return error.ExpectedStringLiteral; }
+    if (c.cur.typ != .string) {
+        c.setErr("expected string literal, found {s}", .{c.tokenName(c.cur.typ)});
+        return error.ExpectedStringLiteral;
+    }
     const name = c.cur.src;
     c.advance();
     try c.consume(.rparen);
-    const ctx = c.options.module_ctx orelse { c.setErr("unsupported import module '{s}'", .{name}); return error.UnsupportedImportModule; };
-    const resolver = c.options.resolve_import orelse { c.setErr("unsupported import module '{s}'", .{name}); return error.UnsupportedImportModule; };
+    const ctx = c.options.module_ctx orelse {
+        c.setErr("unsupported import module '{s}'", .{name});
+        return error.UnsupportedImportModule;
+    };
+    const resolver = c.options.resolve_import orelse {
+        c.setErr("unsupported import module '{s}'", .{name});
+        return error.UnsupportedImportModule;
+    };
     const mod_name = try resolver(ctx, c.options.module_path, name);
     if (common.streq(name, "std")) {
         c.cs.markStdCallPatchPos();
@@ -116,11 +133,14 @@ pub fn importExpr(c: anytype) !void {
     if (common.streq(name, "std") and common.streq(mod_name, "module:std")) {
         c.std_namespace_path = "";
         c.import_module_path = null;
-    } else if (mod_name.len > 5 and std.mem.startsWith(u8, mod_name, "host:")) {
+    } else if (mod_name.len > 5 and std.mem.startsWith(u8, mod_name, "@mod:")) {
         c.import_module_path = mod_name[5..];
         c.std_namespace_path = null;
+    } else if (mod_name.len > 5 and std.mem.startsWith(u8, mod_name, "host:")) {
+        c.import_module_path = mod_name;
+        c.std_namespace_path = null;
     } else if (mod_name.len > 4 and std.mem.startsWith(u8, mod_name, "cap:")) {
-        c.import_module_path = mod_name[4..];
+        c.import_module_path = mod_name;
         c.std_namespace_path = null;
     }
 }
@@ -131,7 +151,8 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
 
     if (tt == .dot) {
         // Save receiver's named_type before clearing (for static method dispatch in 3b).
-        const receiver_named_type = c.currentExprPrimInfo().named_type;
+        const receiver_info = c.currentExprPrimInfo();
+        const receiver_named_type = receiver_info.named_type;
         c.clearCurrentExprPrimInfo();
         if (c.cur.typ == .kw_type) {
             c.advance(); // consume 'type'
@@ -146,7 +167,9 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
             if (c.check(.eq_eq) or c.check(.bang_eq)) {
                 const is_eq = c.cur.typ == .eq_eq;
                 c.advance();
-                try typeNameLiteral(c, );
+                try typeNameLiteral(
+                    c,
+                );
                 try c.cs.emitOp(.eq, line);
                 if (!is_eq) try c.cs.emitOp(.not, line);
                 return;
@@ -163,7 +186,10 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
             c.setErr("'.type' can only be compared with '==' or '!=', or used as a switch scrutinee", .{});
             return error.UnexpectedToken;
         }
-        if (!c.cur.typ.isFieldName()) { c.setErr("expected property name, found {s}", .{c.tokenName(c.cur.typ)}); return error.ExpectedPropertyName; }
+        if (!c.cur.typ.isFieldName()) {
+            c.setErr("expected property name, found {s}", .{c.tokenName(c.cur.typ)});
+            return error.ExpectedPropertyName;
+        }
         const prop = c.cur;
         c.advance();
         if (c.match(.lparen)) {
@@ -189,7 +215,9 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
                         if (!c.check(.rparen)) {
                             while (true) {
                                 if (argc <= 2) c.beginExprPrimCapture();
-                                try expr(c, );
+                                try expr(
+                                    c,
+                                );
                                 if (argc == 0) {
                                     first_arg_info = c.endExprPrimCapture();
                                 } else if (argc == 1) {
@@ -206,20 +234,35 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
                         if (c.selectStdMathUnaryIntrinsicOp(direct_name, argc)) |intrinsic_op| {
                             c.cs.deleteCodeRange(patch_pos, 5);
                             try c.cs.emitOp(intrinsic_op, prop.line);
-                            c.setCurrentExprPrimInfo(c.stdMathUnaryIntrinsicResultInfo(direct_name, first_arg_info));
+                            const result_info = c.stdMathUnaryIntrinsicResultInfo(direct_name, first_arg_info);
+                            c.setCurrentExprPrimInfo(result_info);
+                            if (result_info.named_type) |nt| try c.emitNamedValidation(.{ .named = nt }, prop.line);
                             return;
                         }
                         if (c.selectStdMathBinaryIntrinsicOp(direct_name, argc)) |intrinsic_op| {
                             c.cs.deleteCodeRange(patch_pos, 5);
                             try c.cs.emitOp(intrinsic_op, prop.line);
-                            c.setCurrentExprPrimInfo(c.stdMathBinaryIntrinsicResultInfo(direct_name, first_arg_info, second_arg_info));
+                            const result_info = c.stdMathBinaryIntrinsicResultInfo(direct_name, first_arg_info, second_arg_info);
+                            c.setCurrentExprPrimInfo(result_info);
+                            if (result_info.named_type) |nt| try c.emitNamedValidation(.{ .named = nt }, prop.line);
                             return;
                         }
                         if (c.selectStdMathTernaryIntrinsicOp(direct_name, argc)) |intrinsic_op| {
                             c.cs.deleteCodeRange(patch_pos, 5);
                             try c.cs.emitOp(intrinsic_op, prop.line);
-                            c.setCurrentExprPrimInfo(c.stdMathTernaryIntrinsicResultInfo(direct_name, first_arg_info, second_arg_info, third_arg_info));
+                            const result_info = c.stdMathTernaryIntrinsicResultInfo(direct_name, first_arg_info, second_arg_info, third_arg_info);
+                            c.setCurrentExprPrimInfo(result_info);
+                            if (result_info.named_type) |nt| try c.emitNamedValidation(.{ .named = nt }, prop.line);
                             return;
+                        }
+                        if (common.streq(direct_name, "module:std.core.type_of") and argc == 1) {
+                            if (first_arg_info.named_type) |nt| {
+                                c.cs.deleteCodeRange(patch_pos, 5);
+                                try c.cs.emitOp(.pop, prop.line);
+                                try c.cs.emitStringConst(nt, prop.line);
+                                c.setCurrentExprPrimInfo(.{ .prim = .string, .is_constant = true });
+                                return;
+                            }
                         }
                         c.clearCurrentExprPrimInfo();
                         try c.cs.emitCall(argc, prop.line);
@@ -254,7 +297,9 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
             var argc: u8 = 0;
             if (!c.check(.rparen)) {
                 while (true) {
-                    try expr(c, );
+                    try expr(
+                        c,
+                    );
                     argc += 1;
                     if (!c.match(.comma)) break;
                     if (c.check(.rparen)) break;
@@ -265,7 +310,15 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
                 try c.cs.emitCall(argc, prop.line);
             } else if (static_method_len > 0) {
                 try c.cs.emitCall(argc + 1, prop.line);
-                c.expr_prim_info[c.expr_depth] = .{ .named_type = receiver_named_type.? };
+                if (c.registry.getGlobalFuncObj(static_method_buf[0..static_method_len])) |func_obj| {
+                    if (func_obj.* == .function and func_obj.function.return_types.len == 1) {
+                        c.expr_prim_info[c.expr_depth] = c.exprPrimInfoFromFieldTypeSpec(func_obj.function.return_types[0]);
+                    } else {
+                        c.clearCurrentExprPrimInfo();
+                    }
+                } else {
+                    c.expr_prim_info[c.expr_depth] = c.exprPrimInfoFromNamedType(receiver_named_type.?);
+                }
                 return;
             } else {
                 try c.cs.emitInvokeMethod(prop.src, argc, line);
@@ -275,12 +328,23 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
         try c.checkStdNamespaceField(prop.src, line);
         try c.checkImportModuleField(prop.src, line);
         try c.cs.emitGetField(prop.src, line);
-        if (c.check(.lbrace) and looksLikeStructLiteral(c, )) {
+        if (c.check(.lbrace) and looksLikeStructLiteral(
+            c,
+        )) {
             try structInstanceLitAfterValue(c, prop.line);
         }
         // Propagate named_type through field access (e.g. enum member reads).
         if (receiver_named_type) |nt| {
             c.expr_prim_info[c.expr_depth] = .{ .named_type = nt };
+        } else if (receiver_info.struct_type) |struct_name| {
+            if (c.registry.getStructObj(struct_name)) |struct_obj| {
+                for (struct_obj.struct_type.fields) |field| {
+                    if (common.streq(field.name, prop.src)) {
+                        c.expr_prim_info[c.expr_depth] = c.exprPrimInfoFromFieldTypeSpec(field.typ);
+                        break;
+                    }
+                }
+            }
         }
         return;
     }
@@ -288,11 +352,14 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
     c.std_namespace_path = null;
     c.import_module_path = null;
     if (tt == .lbracket) {
+        const receiver_info = c.currentExprPrimInfo();
         c.clearCurrentExprPrimInfo();
         if (c.match(.colon)) {
             var flags: u8 = 0;
             if (!c.check(.rbracket)) {
-                try expr(c, );
+                try expr(
+                    c,
+                );
                 flags |= 0b10;
             }
             try c.consume(.rbracket);
@@ -300,11 +367,15 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
             return;
         }
 
-        try expr(c, );
+        try expr(
+            c,
+        );
         if (c.match(.colon)) {
             var flags: u8 = 0b01;
             if (!c.check(.rbracket)) {
-                try expr(c, );
+                try expr(
+                    c,
+                );
                 flags |= 0b10;
             }
             try c.consume(.rbracket);
@@ -314,22 +385,35 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
 
         try c.consume(.rbracket);
         try c.cs.emitOp(.get_index, line);
+        if (receiver_info.index_result_spec) |element_spec| {
+            c.setCurrentExprPrimInfo(c.exprPrimInfoFromFieldTypeSpec(element_spec));
+        }
         return;
     }
     if (tt == .lparen) {
         // Save callee's named_type info before clearing (set by varExpr for named type constructors).
         const callee_named_type = c.currentExprPrimInfo().named_type;
+        const callee_qname = c.pending_call_qname;
         c.clearCurrentExprPrimInfo();
         // Capture spread info for this callee before parsing args (which may overwrite it).
         const callee_spread_n = c.pending_call_spread_count;
         c.pending_call_spread_count = 0;
+        c.pending_call_qname = null;
         // Prevent the multi-assign context from bleeding into nested calls (e.g. f(g())).
         const outer_lhs_count = c.multi_assign_lhs_count;
         c.multi_assign_lhs_count = 0;
+        const callee_func_obj = if (callee_qname) |qname| c.registry.getGlobalFuncObj(qname) else null;
         var argc: u8 = 0;
         if (!c.check(.rparen)) {
             while (true) {
-                try expr(c, );
+                c.beginExprPrimCapture();
+                try expr(
+                    c,
+                );
+                const arg_info = c.endExprPrimCapture();
+                if (callee_func_obj) |func_obj| {
+                    try c.checkDirectCallArgCompatibility(func_obj, argc, arg_info, line);
+                }
                 argc += 1;
                 if (!c.match(.comma)) break;
                 if (c.check(.rparen)) break;
@@ -354,7 +438,11 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
         }
         // Propagate named_type from callee (e.g. Meters(5) → named_type = "Meters").
         if (callee_named_type) |nt| {
-            c.expr_prim_info[c.expr_depth] = .{ .named_type = nt };
+            c.expr_prim_info[c.expr_depth] = c.exprPrimInfoFromNamedType(nt);
+        } else if (callee_func_obj) |func_obj| {
+            if (func_obj.* == .function and func_obj.function.return_types.len == 1) {
+                c.expr_prim_info[c.expr_depth] = c.exprPrimInfoFromFieldTypeSpec(func_obj.function.return_types[0]);
+            }
         }
         return;
     }
@@ -414,50 +502,59 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
     try parsePrecedence(c, p.next());
     const rhs_info = c.childExprPrimInfo();
     c.cs.setCol(col);
-    // Named-type interleave: when both operands share the same non-decimal, non-string named type,
-    // unwrap both to raw scalars, apply the typed opcode, and re-wrap via the constructor.
+    const shift_named_type: ?[]const u8 = blk: {
+        if (tt != .lt_lt and tt != .gt_gt) break :blk null;
+        const nt = lhs_info.named_type orelse break :blk null;
+        if (lhs_info.prim != .int or rhs_info.prim != .int) break :blk null;
+        break :blk nt;
+    };
+    if (shift_named_type) |nt| {
+        try c.cs.emitOp(if (tt == .lt_lt) .shl else .shr, line);
+        try c.emitNamedValidation(.{ .named = nt }, line);
+        c.setCurrentExprPrimInfo(.{ .prim = .int, .named_type = nt });
+        return;
+    }
+    // Scalar named values are already represented by their bare runtime scalar.
+    // Keep the compiler's nominal information, emit the typed base operation, then
+    // validate the result with the compiler-selected named type.
     const interleave_nt: ?[]const u8 = blk: {
         const ln = lhs_info.named_type orelse break :blk null;
         const rn = rhs_info.named_type orelse break :blk null;
         if (!common.streq(ln, rn)) break :blk null;
-        if (tt != .plus and tt != .minus and tt != .star) break :blk null;
+        if (tt != .plus and tt != .minus and tt != .star and tt != .slash and tt != .kw_div and tt != .kw_rem and tt != .kw_mod and tt != .amp and tt != .pipe and tt != .caret) break :blk null;
+        if (tt == .slash and lhs_info.prim != .float) break :blk null;
+        if ((tt == .amp or tt == .pipe or tt == .caret) and lhs_info.prim != .int) break :blk null;
         if (c.registry.getNamedTypeInfo(ln)) |nti| {
             if (nti.base == .decimal or nti.base == .string) break :blk null;
         }
         break :blk ln;
     };
     if (interleave_nt) |nt| {
-        // Stack: [lhs_named, rhs_named]
-        // swap/named_inner twice to unwrap both operands to raw scalars.
-        try c.cs.emitOp(.swap, line);
-        try c.cs.emitOp(.named_inner, line);
-        try c.cs.emitOp(.swap, line);
-        try c.cs.emitOp(.named_inner, line);
-        var clear_lhs = lhs_info;
-        clear_lhs.named_type = null;
-        var clear_rhs = rhs_info;
-        clear_rhs.named_type = null;
         switch (tt) {
-            .plus  => try c.cs.emitOp(c.selectTypedArithmeticOp(.add, clear_lhs, clear_rhs), line),
-            .minus => try c.cs.emitOp(c.selectTypedArithmeticOp(.sub, clear_lhs, clear_rhs), line),
-            .star  => try c.cs.emitOp(c.selectTypedArithmeticOp(.mul, clear_lhs, clear_rhs), line),
-            else => unreachable,
-        }
-        // Stack: [result] — re-wrap via constructor (applies predicates).
-        try c.cs.emitGetGlobal(nt, line);
-        try c.cs.emitOp(.swap, line);
-        try c.cs.emitCall(1, line);
-    } else {
-        switch (tt) {
-            .plus  => try c.cs.emitBinOpFused(c.selectTypedArithmeticOp(.add, lhs_info, rhs_info), line),
-            .minus => try c.cs.emitBinOpFused(c.selectTypedArithmeticOp(.sub, lhs_info, rhs_info), line),
-            .star  => try c.cs.emitOp(c.selectTypedArithmeticOp(.mul, lhs_info, rhs_info), line),
+            .plus => try c.cs.emitOp(c.selectTypedArithmeticOp(.add, lhs_info, rhs_info), line),
+            .minus => try c.cs.emitOp(c.selectTypedArithmeticOp(.sub, lhs_info, rhs_info), line),
+            .star => try c.cs.emitOp(c.selectTypedArithmeticOp(.mul, lhs_info, rhs_info), line),
             .slash => try c.cs.emitOp(c.selectTypedArithmeticOp(.div, lhs_info, rhs_info), line),
             .kw_div => try c.cs.emitOp(.int_div, line),
             .kw_rem => try c.cs.emitOp(.rem, line),
             .kw_mod => try c.cs.emitOp(.mod, line),
-            .amp   => try c.cs.emitOp(.bit_and, line),
-            .pipe  => try c.cs.emitOp(.bit_or, line),
+            .amp => try c.cs.emitOp(.bit_and, line),
+            .pipe => try c.cs.emitOp(.bit_or, line),
+            .caret => try c.cs.emitOp(.bit_xor, line),
+            else => unreachable,
+        }
+        try c.emitNamedValidation(.{ .named = nt }, line);
+    } else {
+        switch (tt) {
+            .plus => try c.cs.emitBinOpFused(c.selectTypedArithmeticOp(.add, lhs_info, rhs_info), line),
+            .minus => try c.cs.emitBinOpFused(c.selectTypedArithmeticOp(.sub, lhs_info, rhs_info), line),
+            .star => try c.cs.emitOp(c.selectTypedArithmeticOp(.mul, lhs_info, rhs_info), line),
+            .slash => try c.cs.emitOp(c.selectTypedArithmeticOp(.div, lhs_info, rhs_info), line),
+            .kw_div => try c.cs.emitOp(.int_div, line),
+            .kw_rem => try c.cs.emitOp(.rem, line),
+            .kw_mod => try c.cs.emitOp(.mod, line),
+            .amp => try c.cs.emitOp(.bit_and, line),
+            .pipe => try c.cs.emitOp(.bit_or, line),
             .caret => try c.cs.emitOp(.bit_xor, line),
             .lt_lt => try c.cs.emitOp(.shl, line),
             .gt_gt => try c.cs.emitOp(.shr, line),
@@ -518,6 +615,14 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
         .minus => .sub,
         .star => .mul,
         .slash => .div,
+        .kw_div => .int_div,
+        .kw_rem => .rem,
+        .kw_mod => .mod,
+        .amp => .bit_and,
+        .pipe => .bit_or,
+        .caret => .bit_xor,
+        .eq_eq, .bang_eq => .eq,
+        .lt, .lt_eq, .gt, .gt_eq => .lt,
         else => .halt,
     }, lhs_info, rhs_info);
 }
@@ -546,12 +651,19 @@ pub fn mapLit(c: anytype) !void {
     var count: u8 = 0;
     if (!c.check(.rbrace)) {
         while (true) {
-            if (count == 255) { c.setErr("too many elements (max {d})", .{MaxLocals}); return error.TooManyElements; }
+            if (count == 255) {
+                c.setErr("too many elements (max {d})", .{MaxLocals});
+                return error.TooManyElements;
+            }
 
-            try expr(c, );
+            try expr(
+                c,
+            );
 
             try c.consume(.colon);
-            try expr(c, );
+            try expr(
+                c,
+            );
             count += 1;
             if (!c.match(.comma)) break;
             if (c.check(.rbrace)) break;
@@ -564,8 +676,8 @@ pub fn mapLit(c: anytype) !void {
 pub fn numLit(c: anytype) !void {
     const is_based = c.prev.src.len >= 2 and c.prev.src[0] == '0' and
         (c.prev.src[1] == 'x' or c.prev.src[1] == 'X' or
-         c.prev.src[1] == 'b' or c.prev.src[1] == 'B' or
-         c.prev.src[1] == 'o' or c.prev.src[1] == 'O');
+            c.prev.src[1] == 'b' or c.prev.src[1] == 'B' or
+            c.prev.src[1] == 'o' or c.prev.src[1] == 'O');
     const is_float = !is_based and std.mem.indexOfAny(u8, c.prev.src, ".eE") != null;
     if (is_float) {
         const n = common.parseFloat(c.prev.src) orelse return error.BadNumber;
@@ -582,22 +694,30 @@ pub fn parsePrecedence(c: anytype, p: Prec) anyerror!void {
         return error.ExpressionTooDeep;
     }
     c.expr_depth += 1;
-    defer { c.expr_depth -= 1; }
+    defer {
+        c.expr_depth -= 1;
+    }
     c.clearCurrentExprPrimInfo();
     c.advance();
     const pfx = c.prev.typ;
     switch (pfx) {
         .number => {
             c.noteCurrentExprPrimFromToken(c.prev);
-            try numLit(c, );
+            try numLit(
+                c,
+            );
         },
         .string => {
             c.clearCurrentExprPrimInfo();
-            try strLitExpr(c, );
+            try strLitExpr(
+                c,
+            );
         },
         .rune => {
             c.clearCurrentExprPrimInfo();
-            try runeLitExpr(c, );
+            try runeLitExpr(
+                c,
+            );
         },
         .kw_true => {
             c.clearCurrentExprPrimInfo();
@@ -625,17 +745,23 @@ pub fn parsePrecedence(c: anytype, p: Prec) anyerror!void {
             return error.ExpectedExpression;
         },
         .lparen => {
-            try expr(c, );
+            try expr(
+                c,
+            );
             try c.consume(.rparen);
             c.propagateChildExprPrimInfo();
         },
         .lbracket => {
             c.clearCurrentExprPrimInfo();
-            try arrayLit(c, );
+            try arrayLit(
+                c,
+            );
         },
         .lbrace => {
             c.clearCurrentExprPrimInfo();
-            try mapLit(c, );
+            try mapLit(
+                c,
+            );
         },
         .kw_func => {
             c.clearCurrentExprPrimInfo();
@@ -643,12 +769,23 @@ pub fn parsePrecedence(c: anytype, p: Prec) anyerror!void {
         },
         .kw_import => {
             c.clearCurrentExprPrimInfo();
-            try importExpr(c, );
+            try importExpr(
+                c,
+            );
         },
         .err_invalid_char => return error.InvalidChar,
-        .err_unterminated_string => { c.setErr("unterminated string literal", .{}); return error.UnterminatedString; },
-        .err_string_pool_exhausted => { c.setErr("string pool exhausted (max {d}KB)", .{@import("lexer.zig").StrPoolSize / 1024}); return error.UnterminatedString; },
-        else => { c.setErr("expected expression, found {s}", .{c.tokenName(c.cur.typ)}); return error.ExpectedExpression; },
+        .err_unterminated_string => {
+            c.setErr("unterminated string literal", .{});
+            return error.UnterminatedString;
+        },
+        .err_string_pool_exhausted => {
+            c.setErr("string pool exhausted (max {d}KB)", .{@import("lexer.zig").StrPoolSize / 1024});
+            return error.UnterminatedString;
+        },
+        else => {
+            c.setErr("expected expression, found {s}", .{c.tokenName(c.cur.typ)});
+            return error.ExpectedExpression;
+        },
     }
     while (@intFromEnum(p) <= @intFromEnum(tokPrec(c.cur.typ))) {
         c.advance();
@@ -677,7 +814,10 @@ pub fn structInstanceLit(c: anytype, type_name: Token) !void {
     var count: u8 = 0;
     if (!c.check(.rbrace)) {
         while (true) {
-            if (count == 255) { c.setErr("too many elements (max {d})", .{MaxLocals}); return error.TooManyElements; }
+            if (count == 255) {
+                c.setErr("too many elements (max {d})", .{MaxLocals});
+                return error.TooManyElements;
+            }
             if (c.check(.ident)) {
                 const key_tok = c.cur;
                 c.advance();
@@ -687,7 +827,9 @@ pub fn structInstanceLit(c: anytype, type_name: Token) !void {
                 c.advance();
             } else return c.err("expected identifier or string key, found {s}", .{c.tokenName(c.cur.typ)});
             try c.consume(.colon);
-            try expr(c, );
+            try expr(
+                c,
+            );
             count += 1;
             if (!c.match(.comma)) break;
             if (c.check(.rbrace)) break;
@@ -702,7 +844,10 @@ pub fn structInstanceLitAfterValue(c: anytype, line: u32) !void {
     var count: u8 = 0;
     if (!c.check(.rbrace)) {
         while (true) {
-            if (count == 255) { c.setErr("too many elements (max {d})", .{MaxLocals}); return error.TooManyElements; }
+            if (count == 255) {
+                c.setErr("too many elements (max {d})", .{MaxLocals});
+                return error.TooManyElements;
+            }
             if (c.check(.ident)) {
                 const key_tok = c.cur;
                 c.advance();
@@ -712,7 +857,9 @@ pub fn structInstanceLitAfterValue(c: anytype, line: u32) !void {
                 c.advance();
             } else return c.err("expected identifier or string key, found {s}", .{c.tokenName(c.cur.typ)});
             try c.consume(.colon);
-            try expr(c, );
+            try expr(
+                c,
+            );
             count += 1;
             if (!c.match(.comma)) break;
             if (c.check(.rbrace)) break;
@@ -726,17 +873,16 @@ pub fn unaryExpr(c: anytype, tt: TT) !void {
     try parsePrecedence(c, .unary);
     const op_info = c.childExprPrimInfo();
     const op_named_type: ?[]const u8 = blk: {
-        if (tt != .minus and tt != .tilde) break :blk null;
+        if (tt != .minus and tt != .tilde and tt != .kw_not) break :blk null;
         const nt = op_info.named_type orelse break :blk null;
         if (c.registry.getNamedTypeInfo(nt)) |nti| {
+            if (tt == .kw_not and nti.base != .bool) break :blk null;
             if (nti.base == .decimal or nti.base == .string) break :blk null;
         }
         break :blk nt;
     };
     if (op_named_type) |nt| {
-        try c.cs.emitOp(.named_inner, c.prev.line);
-        try c.cs.emitGetGlobal(nt, c.prev.line);
-        try c.cs.emitOp(.swap, c.prev.line);
+        _ = nt;
     }
     switch (tt) {
         .minus => try c.cs.emitOp(.neg, c.prev.line),
@@ -745,15 +891,19 @@ pub fn unaryExpr(c: anytype, tt: TT) !void {
         else => unreachable,
     }
     if (op_named_type) |_| {
-        try c.cs.emitCall(1, c.prev.line);
+        try c.emitNamedValidation(.{ .named = op_named_type.? }, c.prev.line);
+        c.setCurrentExprPrimInfo(.{ .prim = op_info.prim, .named_type = op_named_type.? });
     }
 }
 
 pub fn varExpr(c: anytype, name: Token) !void {
     if ((common.streq(name.src, "int") or common.streq(name.src, "float") or
-         common.streq(name.src, "bool") or common.streq(name.src, "string") or
-         common.streq(name.src, "bigint")) and c.match(.lparen)) {
-        try expr(c, );
+        common.streq(name.src, "bool") or common.streq(name.src, "string") or
+        common.streq(name.src, "bigint")) and c.match(.lparen))
+    {
+        try expr(
+            c,
+        );
         try c.consume(.rparen);
         if (common.streq(name.src, "int")) {
             try c.cs.emitOp(.cast_int, name.line);
@@ -772,7 +922,9 @@ pub fn varExpr(c: anytype, name: Token) !void {
     if (c.check(.lbracket) and c.registry.hasGenericType(name.src)) {
         const qname = try compiler_decls.instantiateGenericType(c, name.src, name.line);
         try c.cs.emitGetGlobal(qname, name.line);
-        if (c.check(.lbrace) and looksLikeStructLiteral(c, )) {
+        if (c.check(.lbrace) and looksLikeStructLiteral(
+            c,
+        )) {
             try structInstanceLitAfterValue(c, name.line);
         }
         return;
@@ -798,7 +950,9 @@ pub fn varExpr(c: anytype, name: Token) !void {
         }
         try compiler_decls.checkTypeArgConstraints(c, gfi.params[0..gfi.param_count], arg_specs[0..arg_count], name.src, name.line);
     }
-    if (c.check(.lbrace) and looksLikeStructLiteral(c, )) {
+    if (c.check(.lbrace) and looksLikeStructLiteral(
+        c,
+    )) {
         const is_known_type = c.registry.hasStructTypeLocal(name.src) or
             c.registry.hasNamedType(name.src) or
             c.registry.hasVariantType(name.src) or
@@ -816,7 +970,9 @@ pub fn varExpr(c: anytype, name: Token) !void {
         }
         // Not a registered type. If there are actual fields it's a clear error.
         // Empty braces fall through — they may be a block (if-body, loop body, etc.).
-        if (looksLikeNonEmptyStructLiteral(c, )) {
+        if (looksLikeNonEmptyStructLiteral(
+            c,
+        )) {
             if (c.resolveLocal(name.src) != null) {
                 return c.err("'{s}' is a variable, not a type", .{name.src});
             }
@@ -828,15 +984,17 @@ pub fn varExpr(c: anytype, name: Token) !void {
     // with == is never affected.
     if ((c.check(.eq_eq) or c.check(.bang_eq)) and
         (isTypeNamePrimitive(name.src) or c.registry.hasNamedType(name.src) or
-         c.registry.hasStructTypeLocal(name.src) or c.registry.hasVariantType(name.src) or
-         c.registry.hasInterfaceType(name.src) or c.registry.hasTypeAlias(name.src)))
+            c.registry.hasStructTypeLocal(name.src) or c.registry.hasVariantType(name.src) or
+            c.registry.hasInterfaceType(name.src) or c.registry.hasTypeAlias(name.src)))
     {
         try validateAndEmitTypeName(c, name);
         const is_eq = c.cur.typ == .eq_eq;
         c.advance();
         c.require_type_suffix = true;
         c.type_suffix_consumed = false;
-        try expr(c, );
+        try expr(
+            c,
+        );
         if (!c.type_suffix_consumed) {
             c.require_type_suffix = false;
             c.setErr("expected '{s}' to be compared against a '.type' expression", .{name.src});

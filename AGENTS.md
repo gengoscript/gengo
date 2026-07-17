@@ -135,6 +135,8 @@ Read `CONTRIBUTING.md` before starting any non-trivial task. It documents the bu
 
 Use the narrowest relevant test command first.
 
+When diagnosing a failing test run, capture the full output from a single run to a logfile first and inspect that logfile. Do not repeatedly rerun the same test command with different `grep` filters that guess at the failure text.
+
 After the focused tests pass, run the broader test suite when practical. For any change that touches the runtime, heap, VM, or compiler, also run with GC stress enabled:
 
 ```bash
