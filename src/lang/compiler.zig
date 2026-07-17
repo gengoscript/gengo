@@ -922,18 +922,54 @@ pub const Compiler = struct {
                     return;
                 }
             }
+            // Catch arithmetic/bitwise on non-numeric prims (e.g. "foo" - 1, true + x).
+            const lhs_non_numeric = lhs_prim == .bool or lhs_prim == .string;
+            const rhs_non_numeric = rhs_prim == .bool or rhs_prim == .string;
+            if (lhs_non_numeric or rhs_non_numeric) {
+                const is_arith_or_bitwise = op == .add or op == .sub or op == .mul or op == .div or op == .rem or op == .mod or op == .int_div or op == .bit_and or op == .bit_or or op == .bit_xor;
+                if (is_arith_or_bitwise) {
+                    const sym: []const u8 = switch (op) {
+                        .add => "+", .sub => "-", .mul => "*", .div => "/", .rem => "rem", .mod => "mod", .int_div => "div",
+                        .bit_and => "&", .bit_or => "|", .bit_xor => "^", else => @tagName(op),
+                    };
+                    self.setErr("cannot apply '{s}' to {s} and {s}", .{ sym, @tagName(lhs_prim), @tagName(rhs_prim) });
+                    return error.TypeMismatch;
+                }
+            }
             self.clearCurrentExprPrimInfo();
             return;
         }
         const is_constant = lhs.is_constant and rhs.is_constant;
-        // Float operands on bitwise ops (same type, both float).
-        if (lhs_prim == .float) {
+        // Non-integer prims on bitwise ops.
+        if (lhs_prim == .float or lhs_prim == .bool or lhs_prim == .string) {
             const is_bitwise = op == .bit_and or op == .bit_or or op == .bit_xor;
             if (is_bitwise) {
                 const sym: []const u8 = switch (op) {
                     .bit_and => "&", .bit_or => "|", .bit_xor => "^", else => @tagName(op),
                 };
-                self.setErr("'{s}' requires int operands; float is not valid here", .{sym});
+                self.setErr("'{s}' requires int operands; {s} is not valid here", .{ sym, @tagName(lhs_prim) });
+                return error.TypeMismatch;
+            }
+        }
+        // Arithmetic on bool operands.
+        if (lhs_prim == .bool) {
+            const is_arith = op == .add or op == .sub or op == .mul or op == .div or op == .rem or op == .mod or op == .int_div;
+            if (is_arith) {
+                const sym: []const u8 = switch (op) {
+                    .add => "+", .sub => "-", .mul => "*", .div => "/", .rem => "rem", .mod => "mod", .int_div => "div", else => @tagName(op),
+                };
+                self.setErr("cannot apply '{s}' to bool operands", .{sym});
+                return error.TypeMismatch;
+            }
+        }
+        // Arithmetic on strings (except '+' which concatenates).
+        if (lhs_prim == .string) {
+            const is_non_concat_arith = op == .sub or op == .mul or op == .div or op == .rem or op == .mod or op == .int_div;
+            if (is_non_concat_arith) {
+                const sym: []const u8 = switch (op) {
+                    .sub => "-", .mul => "*", .div => "/", .rem => "rem", .mod => "mod", .int_div => "div", else => @tagName(op),
+                };
+                self.setErr("cannot apply '{s}' to string operands; use '+' for concatenation", .{sym});
                 return error.TypeMismatch;
             }
         }
@@ -954,6 +990,7 @@ pub const Compiler = struct {
             .div => .{ .prim = if (lhs_prim == .int) .float else lhs_prim, .named_type = if (lhs_prim == .float) result_named else null, .is_constant = is_constant, .is_zero_int = false },
             .int_div, .rem, .mod, .bit_and, .bit_or, .bit_xor => .{ .prim = lhs_prim, .named_type = result_named, .is_constant = is_constant, .is_zero_int = false },
             .lt, .eq => .{ .prim = .bool, .is_constant = is_constant },
+            .halt => .{ .prim = .int, .is_constant = is_constant }, // shifts: both operands already verified int
             else => .{},
         };
     }

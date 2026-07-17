@@ -1,1 +1,2 @@
-TypeError
+TypeMismatch
+cannot apply '&' to string and int

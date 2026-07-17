@@ -556,8 +556,28 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
             .amp => try c.cs.emitOp(.bit_and, line),
             .pipe => try c.cs.emitOp(.bit_or, line),
             .caret => try c.cs.emitOp(.bit_xor, line),
-            .lt_lt => try c.cs.emitOp(.shl, line),
-            .gt_gt => try c.cs.emitOp(.shr, line),
+            .lt_lt => {
+                if (lhs_info.prim) |lp| if (lp != .int) {
+                    c.setErr("'<<' requires int operands; left operand is {s}", .{@tagName(lp)});
+                    return error.TypeMismatch;
+                };
+                if (rhs_info.prim) |rp| if (rp != .int) {
+                    c.setErr("shift amount must be int; got {s}", .{@tagName(rp)});
+                    return error.TypeMismatch;
+                };
+                try c.cs.emitOp(.shl, line);
+            },
+            .gt_gt => {
+                if (lhs_info.prim) |lp| if (lp != .int) {
+                    c.setErr("'>>' requires int operands; left operand is {s}", .{@tagName(lp)});
+                    return error.TypeMismatch;
+                };
+                if (rhs_info.prim) |rp| if (rp != .int) {
+                    c.setErr("shift amount must be int; got {s}", .{@tagName(rp)});
+                    return error.TypeMismatch;
+                };
+                try c.cs.emitOp(.shr, line);
+            },
             .eq_eq => {
                 if (c.selectZeroIntCompare(.eq_eq, lhs_info, rhs_info)) |zero_cmp| {
                     try c.cs.emitOp(.pop, line);

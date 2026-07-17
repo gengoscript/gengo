@@ -47,6 +47,7 @@ fn checkBoolCondition(c: anytype) !void {
 pub fn assertStmt(c: anytype) !void {
     const line = c.prev.line;
     try c.expr();
+    try checkBoolCondition(c);
     if (c.match(.comma)) {
         try c.expr();
         try c.cs.emitOp(.op_assert_msg, line);
