@@ -174,14 +174,9 @@ fn valueAsNumberForOp(ctx: VMContext, v: Value, other: Value, op: []const u8) !f
 // Ordering comparisons follow the same strictness as arithmetic: raw int
 // and float do not mix (Ada/Go draw this line at typed values too).
 fn checkComparableNumeric(ctx: VMContext, a: Value, b: Value, op: []const u8) !void {
-    const ea = vms.unboxNamed(a);
-    const eb = vms.unboxNamed(b);
-    const ea_raw = ea == .int or ea == .float;
-    const eb_raw = eb == .int or eb == .float;
-    if (ea_raw and eb_raw and @as(VTag, ea) != @as(VTag, eb)) {
-        ctx.vs.setRuntimeErr("cannot apply '{s}' to {s} and {s}; use matching numeric types such as 2.0 or float(2)", .{ op, vmtyp.runtimeTypeName(a), vmtyp.runtimeTypeName(b) });
-        return error.TypeError;
-    }
+    _ = ctx; _ = a; _ = b; _ = op;
+    // int and float are compatible for ordering comparisons: the int is widened to float.
+    // Non-numeric types are caught downstream by valueAsNumberForCompare.
 }
 
 fn valueAsNumberForCompare(ctx: VMContext, v: Value, other: Value) !f64 {
@@ -271,9 +266,6 @@ fn checkNamedValueCompatibility(ctx: VMContext, a: Value, b: Value) !void {
 }
 
 fn numericOpTag(a: Value, b: Value) !VTag {
-    const a_raw = a == .int or a == .float;
-    const b_raw = b == .int or b == .float;
-    if (a_raw and b_raw and @as(VTag, a) != @as(VTag, b)) return error.TypeError;
     if (a == .float or b == .float) return .float;
     return .int;
 }

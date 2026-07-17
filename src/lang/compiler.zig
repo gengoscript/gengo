@@ -462,19 +462,35 @@ pub const Compiler = struct {
         const alt = spec.alts[0];
         switch (alt.typ) {
             .int, .float, .decimal_t, .boolean, .string, .rune_t => {
+                const expected_name: []const u8 = switch (alt.typ) {
+                    .int => "int",
+                    .float => "float",
+                    .decimal_t => "decimal",
+                    .boolean => "bool",
+                    .string => "string",
+                    .rune_t => "rune",
+                    else => unreachable,
+                };
                 if (arg_info.named_type) |nt| {
-                    const expected = switch (alt.typ) {
-                        .int => "int",
-                        .float => "float",
-                        .decimal_t => "decimal",
-                        .boolean => "bool",
-                        .string => "string",
-                        .rune_t => "rune",
-                        else => unreachable,
-                    };
-                    self.setErr("cannot pass {s} to parameter of type {s}; convert explicitly", .{ nt, expected });
+                    self.setErr("cannot pass {s} to parameter of type {s}; convert explicitly", .{ nt, expected_name });
                     self.err_line = line;
                     return error.TypeError;
+                }
+                if (arg_info.prim) |arg_p| {
+                    const expected_prim: PrimType = switch (alt.typ) {
+                        .int => .int,
+                        .float => .float,
+                        .decimal_t => .decimal,
+                        .boolean => .bool,
+                        .string => .string,
+                        .rune_t => .rune,
+                        else => unreachable,
+                    };
+                    if (arg_p != expected_prim) {
+                        self.setErr("cannot pass {s} to parameter of type {s}; convert explicitly", .{ @tagName(arg_p), expected_name });
+                        self.err_line = line;
+                        return error.TypeError;
+                    }
                 }
             },
             .named_t => {
@@ -697,10 +713,7 @@ pub const Compiler = struct {
             .ident => {
                 if (self.getLocalTypeCheck(tok.src)) |tc| {
                     self.expr_prim_info[self.expr_depth] = switch (tc) {
-                        .prim => |p| switch (p) {
-                            .int, .float => .{ .prim = p, .is_constant = false, .is_plain_binding = true, .is_zero_int = false },
-                            else => .{},
-                        },
+                        .prim => |p| .{ .prim = p, .is_constant = false, .is_plain_binding = true, .is_zero_int = false },
                         .named => |n| blk: {
                             const info = self.registry.getNamedTypeInfo(n) orelse break :blk ExprPrimInfo{};
                             const p = namedTypeBaseToPrim(info.base) orelse break :blk ExprPrimInfo{};
@@ -885,10 +898,45 @@ pub const Compiler = struct {
             return;
         };
         if (lhs_prim != rhs_prim) {
+            const int_float = (lhs_prim == .int and rhs_prim == .float) or
+                (lhs_prim == .float and rhs_prim == .int);
+            if (int_float) {
+                const is_bitwise = op == .bit_and or op == .bit_or or op == .bit_xor;
+                if (is_bitwise) {
+                    const sym: []const u8 = switch (op) {
+                        .bit_and => "&", .bit_or => "|", .bit_xor => "^", else => @tagName(op),
+                    };
+                    self.setErr("'{s}' requires int operands; float is not valid here", .{sym});
+                    return error.TypeMismatch;
+                }
+                // Error only when both sides are typed bindings (e.g. var x int + var y float).
+                // Mixing a binding with a literal (e.g. x_float == 0) is allowed; VM widens.
+                if (lhs.is_plain_binding and rhs.is_plain_binding) {
+                    self.setErr("cannot mix int and float; use float(x) or 2.0 for explicit conversion", .{});
+                    return error.TypeMismatch;
+                }
+                // At least one side is a literal or has no tracked type; VM widens int to float.
+                const is_arithmetic = op == .add or op == .sub or op == .mul or op == .div or op == .rem or op == .mod or op == .int_div;
+                if (is_arithmetic) {
+                    self.expr_prim_info[self.expr_depth] = .{ .prim = .float, .is_constant = lhs.is_constant and rhs.is_constant };
+                    return;
+                }
+            }
             self.clearCurrentExprPrimInfo();
             return;
         }
         const is_constant = lhs.is_constant and rhs.is_constant;
+        // Float operands on bitwise ops (same type, both float).
+        if (lhs_prim == .float) {
+            const is_bitwise = op == .bit_and or op == .bit_or or op == .bit_xor;
+            if (is_bitwise) {
+                const sym: []const u8 = switch (op) {
+                    .bit_and => "&", .bit_or => "|", .bit_xor => "^", else => @tagName(op),
+                };
+                self.setErr("'{s}' requires int operands; float is not valid here", .{sym});
+                return error.TypeMismatch;
+            }
+        }
         const result_named: ?[]const u8 = if (lhs.named_type) |ln|
             if (rhs.named_type) |rn|
                 if (common.streq(ln, rn)) ln else null
@@ -905,6 +953,7 @@ pub const Compiler = struct {
             } },
             .div => .{ .prim = if (lhs_prim == .int) .float else lhs_prim, .named_type = if (lhs_prim == .float) result_named else null, .is_constant = is_constant, .is_zero_int = false },
             .int_div, .rem, .mod, .bit_and, .bit_or, .bit_xor => .{ .prim = lhs_prim, .named_type = result_named, .is_constant = is_constant, .is_zero_int = false },
+            .lt, .eq => .{ .prim = .bool, .is_constant = is_constant },
             else => .{},
         };
     }

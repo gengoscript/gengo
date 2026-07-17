@@ -1,0 +1,3 @@
+var x int = 5
+var y float = 1.5
+_ = x + y

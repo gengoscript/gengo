@@ -1,2 +1,2 @@
-TypeError
-cannot negate string
+TypeMismatch
+unary '-' requires numeric operand; got string

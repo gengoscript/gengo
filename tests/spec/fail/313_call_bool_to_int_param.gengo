@@ -1,0 +1,2 @@
+func expects_int(x int) int { return x }
+_ = expects_int(true)

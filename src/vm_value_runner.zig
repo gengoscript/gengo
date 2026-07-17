@@ -450,16 +450,16 @@ fn testAddOverflow() void {
 }
 
 fn testMixedIntFloatError() void {
+    // int + float now widens to float; 3 + 2.5 = 5.5
     resetAll();
     chunk.emitConst(.{ .int = 3 }, 1) catch fail("mixed int const");
     chunk.emitConst(.{ .float = 2.5 }, 1) catch fail("mixed float const");
     chunk.emitOp(.add, 1) catch fail("mixed add");
     chunk.emitOp(.halt, 1) catch fail("mixed halt");
-    vm.run(vm.VMContext.fromActive()) catch |e| {
-        if (e == error.TypeError) return;
-        fail("mixed int+float: expected TypeError");
-    };
-    fail("mixed int+float: expected error, got success");
+    vm.run(vm.VMContext.fromActive()) catch fail("mixed int+float: unexpected error");
+    expect(vms.vmState().stack_top == 1, "mixed int+float: expected stack_top == 1");
+    const result = vms.vmState().stack[0];
+    expect(result == .float and result.float == 5.5, "mixed int+float: expected float 5.5");
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────
@@ -497,7 +497,7 @@ export fn _start() void {
     testDivByZero();           out("  div by zero: OK\n");
     testModByZero();           out("  mod by zero: OK\n");
     testAddOverflow();         out("  add overflow: OK\n");
-    testMixedIntFloatError();  out("  mixed int+float: OK\n");
+    testMixedIntFloatError();  out("  mixed int+float widening: OK\n");
     out("vm-value OK\n");
     std.os.wasi.proc_exit(0);
 }

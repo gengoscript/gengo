@@ -34,6 +34,16 @@ const MaxScopes = ct.MaxScopes;
 const StructTypeObj = value_mod.StructTypeObj;
 const InterfaceTypeObj = value_mod.InterfaceTypeObj;
 
+fn checkBoolCondition(c: anytype) !void {
+    const info = c.childExprPrimInfo();
+    if (info.prim) |p| {
+        if (p != .bool) {
+            c.setErr("condition must be bool; got {s}; use a comparison or explicit cast", .{@tagName(p)});
+            return error.TypeMismatch;
+        }
+    }
+}
+
 pub fn assertStmt(c: anytype) !void {
     const line = c.prev.line;
     try c.expr();
@@ -113,6 +123,7 @@ pub fn cForStmt(c: anytype) anyerror!void {
 
     if (!c.match(.semicolon)) {
         try c.expr();
+        try checkBoolCondition(c);
         try c.consume(.semicolon);
         exit_j = try c.cs.emitJump(.jif_pop, c.prev.line);
     }
@@ -982,6 +993,7 @@ pub fn ifStmt(c: anytype) anyerror!void {
     }
 
     try c.expr();
+    try checkBoolCondition(c);
     try c.consume(.lbrace);
 
     const then_j = try c.cs.emitJump(.jif_pop, c.prev.line);
@@ -2266,6 +2278,7 @@ pub fn whileForStmt(c: anytype) anyerror!void {
     var exit_j: usize = 0;
     if (!infinite) {
         try c.expr();
+        try checkBoolCondition(c);
         try c.consume(.lbrace);
         exit_j = try c.cs.emitJump(.jif_pop, c.prev.line);
     } else {

@@ -1,0 +1,5 @@
+std := import("std")
+std.io.println(1.5 > 1)
+std.io.println(1 < 1.5)
+std.io.println(1 <= 1.0)
+std.io.println(2.0 >= 2)

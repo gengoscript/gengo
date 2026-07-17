@@ -1,2 +1,2 @@
-TypeError
-'not' operand must be bool, got int
+TypeMismatch
+'not' requires bool operand; got int

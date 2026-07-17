@@ -456,7 +456,7 @@ fn testReplIncremental() void {
         else => fail("engine FAIL: expected AssignToConst across repl lines\n"),
     }
 
-    const r7 = rt.runIncremental("x += 1.5");
+    const r7 = rt.runIncremental("x + \"hello\"");
     switch (r7) {
         .runtime_error => |e| {
             if (e.kind != error.TypeError) fail("engine FAIL: expected runtime TypeError in repl\n");

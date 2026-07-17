@@ -708,23 +708,23 @@ pub fn parsePrecedence(c: anytype, p: Prec) anyerror!void {
             );
         },
         .string => {
-            c.clearCurrentExprPrimInfo();
+            c.setCurrentExprPrimInfo(.{ .prim = .string, .is_constant = true });
             try strLitExpr(
                 c,
             );
         },
         .rune => {
-            c.clearCurrentExprPrimInfo();
+            c.setCurrentExprPrimInfo(.{ .prim = .rune, .is_constant = true });
             try runeLitExpr(
                 c,
             );
         },
         .kw_true => {
-            c.clearCurrentExprPrimInfo();
+            c.setCurrentExprPrimInfo(.{ .prim = .bool, .is_constant = true });
             try c.cs.emitOp(.true_val, c.prev.line);
         },
         .kw_false => {
-            c.clearCurrentExprPrimInfo();
+            c.setCurrentExprPrimInfo(.{ .prim = .bool, .is_constant = true });
             try c.cs.emitOp(.false_val, c.prev.line);
         },
         .kw_null => {
@@ -893,6 +893,37 @@ pub fn unaryExpr(c: anytype, tt: TT) !void {
     if (op_named_type) |_| {
         try c.emitNamedValidation(.{ .named = op_named_type.? }, c.prev.line);
         c.setCurrentExprPrimInfo(.{ .prim = op_info.prim, .named_type = op_named_type.? });
+    } else {
+        switch (tt) {
+            .kw_not => {
+                if (op_info.prim) |p| {
+                    if (p != .bool) {
+                        c.setErr("'not' requires bool operand; got {s}", .{@tagName(p)});
+                        return error.TypeMismatch;
+                    }
+                }
+                c.setCurrentExprPrimInfo(.{ .prim = .bool, .is_constant = op_info.is_constant });
+            },
+            .tilde => {
+                if (op_info.prim) |p| {
+                    if (p != .int and p != .bigint) {
+                        c.setErr("'~' requires int operand; got {s}", .{@tagName(p)});
+                        return error.TypeMismatch;
+                    }
+                }
+                c.setCurrentExprPrimInfo(.{ .prim = op_info.prim orelse .int, .is_constant = op_info.is_constant });
+            },
+            .minus => {
+                if (op_info.prim) |p| {
+                    if (p != .int and p != .float and p != .bigint and p != .decimal) {
+                        c.setErr("unary '-' requires numeric operand; got {s}", .{@tagName(p)});
+                        return error.TypeMismatch;
+                    }
+                    c.setCurrentExprPrimInfo(.{ .prim = p, .is_constant = op_info.is_constant });
+                }
+            },
+            else => {},
+        }
     }
 }
 
