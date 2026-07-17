@@ -1,0 +1,14 @@
+std := import("std")
+
+func later(t std.Time) std.Time {
+    return t.add_ms(1)
+}
+
+var now std.Time = std.time.now()
+std.io.println(later(now).is_zero())
+
+func matches(re std.Regexp) bool {
+    return re.match("gengo")
+}
+
+std.io.println(matches(std.regexp.compile("gengo")))
