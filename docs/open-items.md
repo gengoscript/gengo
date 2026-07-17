@@ -4,17 +4,7 @@ Things that are designed or partially built but not yet complete.
 
 ---
 
-## 1. Tail Call Optimisation
-
-**Status:** not implemented.
-
-Recursive functions work but deep recursion will overflow the call stack. No TCO pass exists in the compiler or VM. This is a known limitation for recursion-heavy programs.
-
-When this matters: any algorithm expressed as mutual or deep self-recursion — most everything else is covered by `for`/`for-in`.
-
----
-
-## 2. GBC — Gengo Bytecode Cache
+## 1. GBC — Gengo Bytecode Cache
 
 **Status:** spec complete (`docs/gbc-spec.md`), implementation not started.
 
@@ -24,7 +14,7 @@ Suggested first milestone: a minimal round-trip writer/reader for a simple scrip
 
 ---
 
-## 3. Standard Library Struct Migration
+## 2. Standard Library Struct Migration
 
 **Status:** not done, low urgency.
 
@@ -34,7 +24,7 @@ This becomes more relevant once the module system is used heavily. At that point
 
 ---
 
-## 4. Exit Criteria
+## 3. Exit Criteria
 
 These were the v0 exit criteria. They now apply to whatever the next milestone is declared to be:
 
