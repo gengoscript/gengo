@@ -55,6 +55,41 @@ http := import("mylib/net/http")
 
 ## Building a zip bundle
 
+### CLI builder
+
+The native CLI can build a portable application or library bundle directly.
+Each `--root` gives files a stable archive-relative prefix; use several roots
+when an application shares source with other directories.
+
+```sh
+gengo bundle \
+  --root app=./app \
+  --root shared=./shared \
+  --entry app/main.gengo \
+  --exclude '**/*_test.gengo' \
+  -o build/demo.zip
+```
+
+This stores `app/main.gengo` and `shared/...` in the ZIP, along with a
+`gengo.manifest` containing the entrypoint. `--entry` is an archive-relative
+source path and must be included by the selected roots and filters. The host
+chooses the bundle's registered name, so registering this archive as `demo`
+makes its entry module importable as `demo/app/main`.
+
+`--include` and `--exclude` are repeatable glob filters for paths relative to
+each root. By default all `.gengo` files are included; exclusions win. A
+positional directory is also accepted and uses its basename as the root name:
+
+```sh
+gengo bundle app shared --entry app/main.gengo -o build/demo.zip
+```
+
+The command writes standard stored ZIP files, compatible with
+`engine_load_bundle` and the TypeScript SDK. It does not assign a host bundle
+name or run the entrypoint: that remains the embedding application's job.
+
+### Other ZIP tools
+
 Create the zip from inside the library root so entries are stored without the
 bundle name prefix.  Given the layout above:
 
