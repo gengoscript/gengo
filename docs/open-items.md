@@ -14,17 +14,7 @@ Suggested first milestone: a minimal round-trip writer/reader for a simple scrip
 
 ---
 
-## 2. Standard Library Struct Migration
-
-**Status:** not done, low urgency.
-
-`std` namespaces (`std.io`, `std.math`, etc.) are currently backed by synthetic struct instances with `any`-typed fields. Field access works, but unknown field access gives a struct error rather than a clean module-missing diagnostic, and there is no static export information.
-
-This becomes more relevant once the module system is used heavily. At that point migrating `std` to the same struct-backed module model as source modules would unify the mental model.
-
----
-
-## 3. Exit Criteria
+## 2. Exit Criteria
 
 These were the v0 exit criteria. They now apply to whatever the next milestone is declared to be:
 
