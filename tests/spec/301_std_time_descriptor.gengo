@@ -1,0 +1,4 @@
+std := import("std")
+
+std.io.println(std.time.parse_duration("2s"))
+std.io.println(std.time.minute)

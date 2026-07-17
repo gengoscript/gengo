@@ -1,0 +1,4 @@
+std := import("std")
+
+std.io.println(std.regexp.match("^gen", "gengo"))
+std.io.println(std.regexp.replace("go", "gengo", "script"))
