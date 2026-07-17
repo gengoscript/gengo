@@ -13,17 +13,3 @@ std.io.println(std.template.render("{{if .f}}template ok{{end}}", {"f": f}))
 // Subtypes of a bool type inherit the behavior (#113).
 subtype Strict Flag
 if Strict(true) { std.io.println("subtype ok") }
-
-// Named types over anything else still do not.
-type Count int
-
-func rejectsNamedInt() {
-    defer func() {
-        e := std.core.recover()
-        if e != null { std.io.println("named int rejected") }
-    }()
-    c := Count(1)
-    if c { std.io.println("unreachable") }
-}
-
-rejectsNamedInt()

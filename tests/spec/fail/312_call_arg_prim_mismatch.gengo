@@ -1,0 +1,3 @@
+func expects_int(x int) int { return x }
+var y float = 1.5
+_ = expects_int(y)
