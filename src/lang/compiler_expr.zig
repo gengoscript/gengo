@@ -556,23 +556,24 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
             .amp => try c.cs.emitOp(.bit_and, line),
             .pipe => try c.cs.emitOp(.bit_or, line),
             .caret => try c.cs.emitOp(.bit_xor, line),
+            // Shifts follow the VM's valueAsInt: int and rune are valid operands.
             .lt_lt => {
-                if (lhs_info.prim) |lp| if (lp != .int) {
+                if (lhs_info.prim) |lp| if (lp != .int and lp != .rune) {
                     c.setErr("'<<' requires int operands; left operand is {s}", .{@tagName(lp)});
                     return error.TypeMismatch;
                 };
-                if (rhs_info.prim) |rp| if (rp != .int) {
+                if (rhs_info.prim) |rp| if (rp != .int and rp != .rune) {
                     c.setErr("shift amount must be int; got {s}", .{@tagName(rp)});
                     return error.TypeMismatch;
                 };
                 try c.cs.emitOp(.shl, line);
             },
             .gt_gt => {
-                if (lhs_info.prim) |lp| if (lp != .int) {
+                if (lhs_info.prim) |lp| if (lp != .int and lp != .rune) {
                     c.setErr("'>>' requires int operands; left operand is {s}", .{@tagName(lp)});
                     return error.TypeMismatch;
                 };
-                if (rhs_info.prim) |rp| if (rp != .int) {
+                if (rhs_info.prim) |rp| if (rp != .int and rp != .rune) {
                     c.setErr("shift amount must be int; got {s}", .{@tagName(rp)});
                     return error.TypeMismatch;
                 };
@@ -925,13 +926,14 @@ pub fn unaryExpr(c: anytype, tt: TT) !void {
                 c.setCurrentExprPrimInfo(.{ .prim = .bool, .is_constant = op_info.is_constant });
             },
             .tilde => {
+                // Matches the VM's valueAsInt: int and rune coerce; bigint does not.
                 if (op_info.prim) |p| {
-                    if (p != .int and p != .bigint) {
+                    if (p != .int and p != .rune) {
                         c.setErr("'~' requires int operand; got {s}", .{@tagName(p)});
                         return error.TypeMismatch;
                     }
                 }
-                c.setCurrentExprPrimInfo(.{ .prim = op_info.prim orelse .int, .is_constant = op_info.is_constant });
+                c.setCurrentExprPrimInfo(.{ .prim = .int, .is_constant = op_info.is_constant });
             },
             .minus => {
                 if (op_info.prim) |p| {
@@ -958,14 +960,19 @@ pub fn varExpr(c: anytype, name: Token) !void {
         try c.consume(.rparen);
         if (common.streq(name.src, "int")) {
             try c.cs.emitOp(.cast_int, name.line);
+            c.setCurrentExprPrimInfo(.{ .prim = .int });
         } else if (common.streq(name.src, "float")) {
             try c.cs.emitOp(.cast_float, name.line);
+            c.setCurrentExprPrimInfo(.{ .prim = .float });
         } else if (common.streq(name.src, "bool")) {
             try c.cs.emitOp(.cast_bool, name.line);
+            c.setCurrentExprPrimInfo(.{ .prim = .bool });
         } else if (common.streq(name.src, "bigint")) {
             try c.cs.emitOp(.cast_bigint, name.line);
+            c.setCurrentExprPrimInfo(.{ .prim = .bigint });
         } else {
             try c.cs.emitOp(.cast_string, name.line);
+            c.setCurrentExprPrimInfo(.{ .prim = .string });
         }
         return;
     }

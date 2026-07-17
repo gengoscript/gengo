@@ -1,0 +1,2 @@
+TypeMismatch
+'&' requires int operands; bigint is not valid here

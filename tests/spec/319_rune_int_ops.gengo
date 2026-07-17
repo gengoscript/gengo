@@ -1,0 +1,10 @@
+std := import("std")
+
+// Runes are int-compatible in bitwise, shift, and arithmetic contexts.
+var r rune = `A`
+std.io.println(r << 1)
+std.io.println(r >> 1)
+std.io.println(r & 15)
+std.io.println(r | 32)
+std.io.println(~r)
+std.io.println(r + 1)
