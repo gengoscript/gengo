@@ -82,7 +82,7 @@ pub const EngineState = struct {
     }
 };
 
-var g_default_state: EngineState = .{};
+pub var g_default_state: EngineState = .{};
 threadlocal var g_state: *EngineState = &g_default_state;
 
 /// Point the module at a specific runtime's mount table. Called from
@@ -206,7 +206,7 @@ pub const LookupResult = struct {
 /// Validate a script path and return the matching mount plus the path
 /// component after the mount name. Rejects absolute paths, empty
 /// components, and "." / ".." traversal.
-pub fn lookup(path: []const u8) LookupError!LookupResult {
+pub fn lookup(es: *EngineState, path: []const u8) LookupError!LookupResult {
     if (path.len == 0 or path[0] == '/') return error.InvalidPath;
 
     var it = std.mem.splitScalar(u8, path, '/');
@@ -219,9 +219,9 @@ pub fn lookup(path: []const u8) LookupError!LookupResult {
     const head = if (slash) |i| path[0..i] else path;
     const rest = if (slash) |i| path[i + 1 ..] else "";
 
-    for (g_state.mounts[0..g_state.count], 0..) |*m, i| {
-        if (std.mem.eql(u8, g_state.nameOf(m), head)) {
-            return .{ .mount = g_state.mountAt(i), .rest = rest };
+    for (es.mounts[0..es.count], 0..) |*m, i| {
+        if (std.mem.eql(u8, es.nameOf(m), head)) {
+            return .{ .mount = es.mountAt(i), .rest = rest };
         }
     }
     return error.PathNotMounted;
@@ -235,8 +235,8 @@ pub const ResolveError = error{
 
 /// Resolve a script path ("data/file.txt") to a real OS path. Only valid
 /// for real_path mounts; returns PathNotMounted for driver mounts.
-pub fn resolve(path: []const u8, buf: []u8) ResolveError![]const u8 {
-    const lr = try lookup(path);
+pub fn resolve(es: *EngineState, path: []const u8, buf: []u8) ResolveError![]const u8 {
+    const lr = try lookup(es, path);
     if (lr.mount.kind != .real_path) return error.PathNotMounted;
     const rest = lr.rest;
     const need = lr.mount.real.len + (if (rest.len > 0) rest.len + 1 else 0);
@@ -249,85 +249,83 @@ pub fn resolve(path: []const u8, buf: []u8) ResolveError![]const u8 {
 }
 
 test "resolve maps mount name to real path" {
-    clearMounts();
-    try addMount("data", "/var/app/data");
+    var state: EngineState = .{};
+    try addMountToState(&state, "data", "/var/app/data");
     var buf: [256]u8 = undefined;
-    try std.testing.expectEqualStrings("/var/app/data/file.txt", try resolve("data/file.txt", &buf));
-    try std.testing.expectEqualStrings("/var/app/data", try resolve("data", &buf));
-    try std.testing.expectEqualStrings("/var/app/data/a/b/c", try resolve("data/a/b/c", &buf));
+    try std.testing.expectEqualStrings("/var/app/data/file.txt", try resolve(&state, "data/file.txt", &buf));
+    try std.testing.expectEqualStrings("/var/app/data", try resolve(&state, "data", &buf));
+    try std.testing.expectEqualStrings("/var/app/data/a/b/c", try resolve(&state, "data/a/b/c", &buf));
 }
 
 test "resolve rejects unmounted prefixes" {
-    clearMounts();
-    try addMount("data", "/var/app/data");
+    var state: EngineState = .{};
+    try addMountToState(&state, "data", "/var/app/data");
     var buf: [256]u8 = undefined;
-    try std.testing.expectError(error.PathNotMounted, resolve("etc/passwd", &buf));
-    try std.testing.expectError(error.PathNotMounted, resolve("datax/file", &buf));
+    try std.testing.expectError(error.PathNotMounted, resolve(&state, "etc/passwd", &buf));
+    try std.testing.expectError(error.PathNotMounted, resolve(&state, "datax/file", &buf));
 }
 
 test "resolve rejects absolute paths and traversal" {
-    clearMounts();
-    try addMount("data", "/var/app/data");
+    var state: EngineState = .{};
+    try addMountToState(&state, "data", "/var/app/data");
     var buf: [256]u8 = undefined;
-    try std.testing.expectError(error.InvalidPath, resolve("/etc/passwd", &buf));
-    try std.testing.expectError(error.InvalidPath, resolve("data/../etc/passwd", &buf));
-    try std.testing.expectError(error.InvalidPath, resolve("data/./x", &buf));
-    try std.testing.expectError(error.InvalidPath, resolve("..", &buf));
-    try std.testing.expectError(error.InvalidPath, resolve("", &buf));
-    try std.testing.expectError(error.InvalidPath, resolve("data//x", &buf));
-    try std.testing.expectError(error.InvalidPath, resolve("data/", &buf));
+    try std.testing.expectError(error.InvalidPath, resolve(&state, "/etc/passwd", &buf));
+    try std.testing.expectError(error.InvalidPath, resolve(&state, "data/../etc/passwd", &buf));
+    try std.testing.expectError(error.InvalidPath, resolve(&state, "data/./x", &buf));
+    try std.testing.expectError(error.InvalidPath, resolve(&state, "..", &buf));
+    try std.testing.expectError(error.InvalidPath, resolve(&state, "", &buf));
+    try std.testing.expectError(error.InvalidPath, resolve(&state, "data//x", &buf));
+    try std.testing.expectError(error.InvalidPath, resolve(&state, "data/", &buf));
 }
 
 test "resolve with no mounts always fails" {
-    clearMounts();
+    var state: EngineState = .{};
     var buf: [256]u8 = undefined;
-    try std.testing.expectError(error.PathNotMounted, resolve("data/file.txt", &buf));
+    try std.testing.expectError(error.PathNotMounted, resolve(&state, "data/file.txt", &buf));
 }
 
 test "addMount validates and normalises" {
-    clearMounts();
-    try std.testing.expectError(error.InvalidMountName, addMount("", "/x"));
-    try std.testing.expectError(error.InvalidMountName, addMount("a/b", "/x"));
-    try std.testing.expectError(error.InvalidMountPath, addMount("a", ""));
+    var state: EngineState = .{};
+    try std.testing.expectError(error.InvalidMountName, addMountToState(&state, "", "/x"));
+    try std.testing.expectError(error.InvalidMountName, addMountToState(&state, "a/b", "/x"));
+    try std.testing.expectError(error.InvalidMountPath, addMountToState(&state, "a", ""));
 
-    try addMount("data", "/var/data///");
+    try addMountToState(&state, "data", "/var/data///");
     var buf: [256]u8 = undefined;
-    try std.testing.expectEqualStrings("/var/data/f", try resolve("data/f", &buf));
+    try std.testing.expectEqualStrings("/var/data/f", try resolve(&state, "data/f", &buf));
 
     // Replacing an existing mount keeps the count stable.
-    try addMount("data", "/other");
-    try std.testing.expectEqual(@as(usize, 1), mountCount());
-    try std.testing.expectEqualStrings("/other/f", try resolve("data/f", &buf));
+    try addMountToState(&state, "data", "/other");
+    try std.testing.expectEqual(@as(usize, 1), state.count);
+    try std.testing.expectEqualStrings("/other/f", try resolve(&state, "data/f", &buf));
 }
 
 test "mount strings are copied, not referenced" {
-    clearMounts();
+    var state: EngineState = .{};
     var name_buf: [4]u8 = .{ 'd', 'a', 't', 'a' };
     var real_buf: [5]u8 = .{ '/', 't', 'm', 'p', 'x' };
-    try addMount(&name_buf, &real_buf);
+    try addMountToState(&state, &name_buf, &real_buf);
     name_buf = .{ 'X', 'X', 'X', 'X' };
     real_buf = .{ 'X', 'X', 'X', 'X', 'X' };
     var buf: [256]u8 = undefined;
-    try std.testing.expectEqualStrings("/tmpx/f", try resolve("data/f", &buf));
+    try std.testing.expectEqualStrings("/tmpx/f", try resolve(&state, "data/f", &buf));
 }
 
 test "driver mount lookup returns mount and rest" {
     var state: EngineState = .{};
     try addDriverMountToState(&state, "mem", .{}, null);
-    setActive(&state);
-    defer setActive(&g_default_state);
 
-    const lr = try lookup("mem/a/b");
+    const lr = try lookup(&state, "mem/a/b");
     try std.testing.expectEqual(MountKind.driver, lr.mount.kind);
     try std.testing.expectEqualStrings("a/b", lr.rest);
 
-    const lr2 = try lookup("mem");
+    const lr2 = try lookup(&state, "mem");
     try std.testing.expectEqual(MountKind.driver, lr2.mount.kind);
     try std.testing.expectEqualStrings("", lr2.rest);
 
     // resolve() must fail for a driver mount.
     var rbuf: [256]u8 = undefined;
-    try std.testing.expectError(error.PathNotMounted, resolve("mem/a/b", &rbuf));
+    try std.testing.expectError(error.PathNotMounted, resolve(&state, "mem/a/b", &rbuf));
 }
 
 test "EngineState is safe to copy by value" {

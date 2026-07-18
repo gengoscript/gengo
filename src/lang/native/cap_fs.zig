@@ -21,7 +21,7 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             if (argc != 1) return error.ArityMismatch;
             const path = vms.asStringValue(try ctx.vs.vmPeek(0)) catch return error.TypeError;
 
-            const lr = try fs_state.lookup(path);
+            const lr = try fs_state.lookup(ctx.vs.fs_es, path);
             if (lr.mount.kind == .driver) {
                 const drv = &lr.mount.driver;
                 const open_fn = drv.open orelse return error.CapabilityError;
@@ -54,7 +54,7 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             }
 
             var rbuf: [4096]u8 = undefined;
-            const rpath = try fs_state.resolve(path, &rbuf);
+            const rpath = try fs_state.resolve(ctx.vs.fs_es, path, &rbuf);
 
             if (comptime builtin.os.tag == .windows) {
                 const io = ioContext();
@@ -88,7 +88,7 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             if (argc != 1) return error.ArityMismatch;
             const path = vms.asStringValue(try ctx.vs.vmPeek(0)) catch return error.TypeError;
 
-            const lr = try fs_state.lookup(path);
+            const lr = try fs_state.lookup(ctx.vs.fs_es, path);
             if (lr.mount.kind == .driver) {
                 const exists_fn = lr.mount.driver.exists orelse return error.CapabilityError;
                 const rc = exists_fn(lr.mount.userdata, lr.rest.ptr, @intCast(lr.rest.len));
@@ -103,7 +103,7 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             }
 
             var rbuf: [4096]u8 = undefined;
-            const rpath = try fs_state.resolve(path, &rbuf);
+            const rpath = try fs_state.resolve(ctx.vs.fs_es, path, &rbuf);
 
             if (comptime builtin.os.tag == .windows) {
                 const io = ioContext();
@@ -142,7 +142,7 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
                 else => return error.TypeError,
             };
 
-            const lr = try fs_state.lookup(path);
+            const lr = try fs_state.lookup(ctx.vs.fs_es, path);
             if (lr.mount.kind == .driver) {
                 const open_fn = lr.mount.driver.open orelse return error.CapabilityError;
                 const write_fn = lr.mount.driver.write orelse return error.CapabilityError;
@@ -164,7 +164,7 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             }
 
             var rbuf: [4096]u8 = undefined;
-            const rpath = try fs_state.resolve(path, &rbuf);
+            const rpath = try fs_state.resolve(ctx.vs.fs_es, path, &rbuf);
 
             const io = ioContext();
             const cwd = std.Io.Dir.cwd();
@@ -178,7 +178,7 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             if (argc != 1) return error.ArityMismatch;
             const path = vms.asStringValue(try ctx.vs.vmPeek(0)) catch return error.TypeError;
 
-            const lr = try fs_state.lookup(path);
+            const lr = try fs_state.lookup(ctx.vs.fs_es, path);
             if (lr.mount.kind == .driver) {
                 const list_fn = lr.mount.driver.list orelse return error.CapabilityError;
                 const list_buf = alloc.alloc(u8, 65536) catch return error.CapabilityError;
@@ -222,7 +222,7 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             }
 
             var rbuf: [4096]u8 = undefined;
-            const rpath = try fs_state.resolve(path, &rbuf);
+            const rpath = try fs_state.resolve(ctx.vs.fs_es, path, &rbuf);
 
             const io = ioContext();
             const cwd = std.Io.Dir.cwd();
@@ -258,7 +258,7 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             if (argc != 1) return error.ArityMismatch;
             const path = vms.asStringValue(try ctx.vs.vmPeek(0)) catch return error.TypeError;
 
-            const lr = try fs_state.lookup(path);
+            const lr = try fs_state.lookup(ctx.vs.fs_es, path);
             if (lr.mount.kind == .driver) {
                 const delete_fn = lr.mount.driver.unlink orelse return error.CapabilityError;
                 if (delete_fn(lr.mount.userdata, lr.rest.ptr, @intCast(lr.rest.len)) < 0)
@@ -274,7 +274,7 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             }
 
             var rbuf: [4096]u8 = undefined;
-            const rpath = try fs_state.resolve(path, &rbuf);
+            const rpath = try fs_state.resolve(ctx.vs.fs_es, path, &rbuf);
 
             const io = ioContext();
             const cwd = std.Io.Dir.cwd();
@@ -286,7 +286,7 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             if (argc != 1) return error.ArityMismatch;
             const path = vms.asStringValue(try ctx.vs.vmPeek(0)) catch return error.TypeError;
 
-            const lr = try fs_state.lookup(path);
+            const lr = try fs_state.lookup(ctx.vs.fs_es, path);
             if (lr.mount.kind == .driver) {
                 const mkdir_fn = lr.mount.driver.mkdir orelse return error.CapabilityError;
                 if (mkdir_fn(lr.mount.userdata, lr.rest.ptr, @intCast(lr.rest.len)) < 0)
@@ -302,7 +302,7 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             }
 
             var rbuf: [4096]u8 = undefined;
-            const rpath = try fs_state.resolve(path, &rbuf);
+            const rpath = try fs_state.resolve(ctx.vs.fs_es, path, &rbuf);
 
             const io = ioContext();
             const cwd = std.Io.Dir.cwd();
