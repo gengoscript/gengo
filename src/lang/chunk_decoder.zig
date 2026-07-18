@@ -1,4 +1,5 @@
 const std = @import("std");
+const chunk = @import("chunk.zig");
 const Op = @import("op.zig").Op;
 
 pub const DecodedInstruction = struct {
@@ -8,12 +9,12 @@ pub const DecodedInstruction = struct {
     jump_target: ?usize = null,
 };
 
-fn readU16At(state: anytype, pos: usize) !u16 {
+fn readU16At(state: *const chunk.State, pos: usize) !u16 {
     if (pos + 1 >= state.code_len) return error.BytecodeOutOfBounds;
     return (@as(u16, state.code[pos]) << 8) | @as(u16, state.code[pos + 1]);
 }
 
-fn readU32At(state: anytype, pos: usize) !u32 {
+fn readU32At(state: *const chunk.State, pos: usize) !u32 {
     if (pos + 3 >= state.code_len) return error.BytecodeOutOfBounds;
     return (@as(u32, state.code[pos]) << 24) |
         (@as(u32, state.code[pos + 1]) << 16) |
@@ -21,7 +22,7 @@ fn readU32At(state: anytype, pos: usize) !u32 {
         @as(u32, state.code[pos + 3]);
 }
 
-pub fn decodeAt(state: anytype, pos: usize) !DecodedInstruction {
+pub fn decodeAt(state: *const chunk.State, pos: usize) !DecodedInstruction {
     if (pos >= state.code_len) return error.BytecodeOutOfBounds;
 
     const raw = state.code[pos];
