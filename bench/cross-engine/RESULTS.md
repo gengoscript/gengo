@@ -21,6 +21,48 @@ versions, and the OS.
 
 ## Results
 
+### 2026-07-18, commit `4600f43` — reserved opcode slots (v0.5.1-dev)
+
+**Host**: AMD Ryzen 5 7600 (6-core/12-thread), Linux 6.12.94+deb13-amd64 x86_64
+
+**Engines**: Gengoscript v0.5.1-dev (native ReleaseSafe) · Lua 5.4.7 · Python 3.13.5 · Node v20.19.2 · [google/starlark-go](https://github.com/google/starlark-go) (devel, via `go install`) · [traefik/yaegi](https://github.com/traefik/yaegi) (Go interpreter, running real Go source) · [mattn/anko](https://github.com/mattn/anko) v0.1.8
+
+| Engine | `fib_recursive(32)` | `loop_sum` (20M) |
+| --- | --- | --- |
+| Gengo | 0.579s | 0.377s |
+| Lua 5.4 | 0.095s | 0.142s |
+| Node | 0.074s | 0.072s |
+| Python 3 | 0.190s | 1.218s |
+| Yaegi (Go interpreter) | 1.852s | 0.470s |
+| Anko | 8.353s | 4.901s |
+| Starlark | n/a — forbids recursive functions by design | 2.205s |
+
+This snapshot documents the recovery from an opcode-layout regression. The
+2026-07-14 move of fused ops to fixed slots 0xC0–0xE1 (`17f808f`) made `Op` a
+sparse enum(u8) — 96 of 256 byte values were not members — and every dispatch
+site paid for the hole (sparse-membership handling on `@enumFromInt` plus
+extra range branches in `fetchOp`), regressing `loop_sum` from 0.429s to
+~0.49s steady-state. The fix (`4600f43`) keeps every opcode value exactly
+where it is (values are wire-stable by design, for a future bytecode cache)
+and declares the free slots as `reserved_*` trap opcodes, making the enum
+dense over the full u8 range. `fetchOp` now has no validity branch at all;
+reserved bytes trap through a single cold dispatch arm.
+
+Steady-state medians (7 consecutive runs, warm CPU): `loop_sum` 0.365s —
+the best recorded value for this benchmark — and `fib_recursive` 0.47s. The
+table above uses the standard 3-invocation methodology, where each engine
+runs once per invocation from cold; single-shot ~0.5s runs are noticeably
+sensitive to CPU frequency ramp, which is most of the gap between 0.579 and
+0.47 on `fib`. Per-opcode execution counts are unchanged from the 2026-07-06
+baseline on all hot-loop benchmarks (`tools/perf-baseline.sh`), confirming
+the regression and recovery were purely per-dispatch cost, not bytecode
+changes. A padding experiment along the way: adding 66 *instantiated* dummy
+opcodes cost ~50% on `loop_sum` (icache pressure from per-op dispatch-loop
+copies) — reserved slots are near-free only because their instantiations
+reduce to a bare error return.
+
+---
+
 ### 2026-07-06, Value size redesign (v0.5.1-dev)
 
 **Host**: AMD Ryzen 5 7600 (6-core/12-thread), Linux 6.12.86+deb13-amd64 x86_64
