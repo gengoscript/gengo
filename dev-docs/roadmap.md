@@ -24,7 +24,17 @@ This becomes more relevant once the module system is used heavily. At that point
 
 ---
 
-## 3. Exit Criteria
+## 3. Engine Improvement Plan (July 2026)
+
+**Status:** in progress, tracked in [`improvement-plan-2026-07.md`](improvement-plan-2026-07.md).
+
+Architecture debt (setActive removal, peephole consolidation, error sets),
+safety hardening (Debug asserts for the verifier-proved unchecked stack ops),
+and the remaining fib call-overhead items. See the plan for order and status.
+
+---
+
+## 4. Exit Criteria
 
 1. All core capabilities are `done` and covered by conformance cases.
 2. Conformance suite runs in CI on every PR.
