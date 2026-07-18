@@ -25,10 +25,7 @@ pub fn decodeAt(state: anytype, pos: usize) !DecodedInstruction {
     if (pos >= state.code_len) return error.BytecodeOutOfBounds;
 
     const raw = state.code[pos];
-    // Reject bytes in the gap between core ops and fused ops (0x7D–0xBF),
-    // and bytes above the last fused op.
-    if (raw > @intFromEnum(Op.validate_named_range) and raw < @intFromEnum(Op.const_eq)) return error.BadOpcode;
-    if (raw > @intFromEnum(Op.inc_global_const)) return error.BadOpcode;
+    if (@import("op.zig").is_reserved[raw]) return error.BadOpcode;
     const op: Op = @enumFromInt(raw);
 
     return switch (op) {

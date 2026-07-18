@@ -5,7 +5,8 @@ const common = @import("common.zig");
 const globals = @import("globals.zig");
 const heap = @import("../runtime/heap.zig");
 const cfg = @import("../runtime/config.zig");
-const Op = @import("op.zig").Op;
+const op_module = @import("op.zig");
+const Op = op_module.Op;
 const vmod = @import("value.zig");
 const Value = vmod.Value;
 const VTag = vmod.VTag;
@@ -2164,9 +2165,10 @@ noinline fn dispatchTick(ctx: VMContext) !u64 {
 inline fn fetchOp(ctx: VMContext) !Op {
     if (ctx.vs.ip >= ctx.cs.code_len) return error.BytecodeOutOfBounds;
     const op_raw = opByte(ctx);
-    if (op_raw > @intFromEnum(Op.validate_named_range) and
-        (op_raw < @intFromEnum(Op.const_eq) or op_raw > @intFromEnum(Op.inc_global_const)))
-        return error.InvalidChunkShape;
+    // No validity check needed: Op declares every u8 value (free slots are
+    // reserved_* trap ops), so any byte is a member and reserved bytes fail
+    // in dispatch. Keeping this branch-free matters — fetchOp is inlined
+    // into every dispatch site.
     vmperf.countOp(op_raw);
     return @enumFromInt(op_raw);
 }
@@ -2192,10 +2194,17 @@ fn runInner(ctx: VMContext) !void {
     if (gas == 0) gas = try dispatchTick(ctx);
     dispatch: switch (try fetchOp(ctx)) {
         inline else => |op| {
-            if (try @call(exec_call_modifier, execOne, .{ ctx, op })) return;
-            gas -= 1;
-            if (gas == 0) gas = try dispatchTick(ctx);
-            continue :dispatch (try fetchOp(ctx));
+            // Reserved (unassigned) opcodes trap here; the comptime branch
+            // keeps their instantiations to a bare error return, so they add
+            // no dispatch-loop code for the real opcodes to share icache with.
+            if (comptime op_module.isReservedOp(op)) {
+                return error.InvalidChunkShape;
+            } else {
+                if (try @call(exec_call_modifier, execOne, .{ ctx, op })) return;
+                gas -= 1;
+                if (gas == 0) gas = try dispatchTick(ctx);
+                continue :dispatch (try fetchOp(ctx));
+            }
         },
     }
 }
@@ -4233,6 +4242,10 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 vmperf.breakOpChain();
                 return true;
             },
+            // Reserved slots trap in runInner's dispatch before execOne is
+            // ever instantiated for them; a real opcode missing an arm above
+            // still fails to compile because its instantiation lands here.
+            else => comptime unreachable,
         }
     }
     return false;
