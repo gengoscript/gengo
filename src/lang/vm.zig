@@ -903,7 +903,7 @@ fn checkNamedTypePredicateChain(ctx: VMContext, nt_obj: *Object, inner: Value) !
     }
 }
 
-fn canReturnFast(ctx: VMContext, fi: usize, retval: Value) bool {
+inline fn canReturnFast(ctx: VMContext, fi: usize, retval: Value) bool {
     const frame = &ctx.vs.frames[fi];
     if (ctx.vs.defer_top != frame.defer_base) return false;
     if (!frame.has_typed_returns) return true;
@@ -958,7 +958,7 @@ fn readUpvalueCell(ctx: VMContext, idx: usize) !*Object {
 // Warm call path: IC confirmed same callee.
 // Arity/default/variadic checks are only skipped for call sites we explicitly
 // decided were safe to cache in performCallIC.
-fn enterFunctionFrameWarm(ctx: VMContext, f: @import("value.zig").FuncObj, func_obj: *Object, closure: ?*Object, argc: u8, args_preverified: bool) !void {
+inline fn enterFunctionFrameWarm(ctx: VMContext, f: @import("value.zig").FuncObj, func_obj: *Object, closure: ?*Object, argc: u8, args_preverified: bool) !void {
     // GC pool-slot reuse can put a different function at the cached index.
     // Re-verify the IC invariants before trusting f.arity for the frame base.
     if (f.arity != argc or f.is_variadic or f.default_count != 0) {
@@ -2077,8 +2077,15 @@ fn writeGlobalIC(ctx: VMContext, name_idx: usize, ic_base: usize, ic_slot: u16, 
     }
 }
 
-fn readGlobalIC(ctx: VMContext, name_idx: usize, ic_base: usize, ic_slot: u16) !Value {
+// Warm path inline (one compare + slot load, measured 4.8% of fib as an
+// outlined call); the miss path with its IC patching and did-you-mean
+// machinery stays outlined.
+inline fn readGlobalIC(ctx: VMContext, name_idx: usize, ic_base: usize, ic_slot: u16) !Value {
     if (ic_slot != 0xFFFF) return ctx.gs.getAt(ic_slot);
+    return readGlobalCold(ctx, name_idx, ic_base);
+}
+
+noinline fn readGlobalCold(ctx: VMContext, name_idx: usize, ic_base: usize) !Value {
     const name = (try ctx.cs.constAt(name_idx)).string.bytes;
     const slot = ctx.gs.findSlot(name) orelse {
         const suggestion = findSimilarName(ctx, name);
@@ -2725,7 +2732,11 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 if (ctx.vs.frame_top == 0) return error.ImpossibleOpcodeState;
                 const b = ctx.vs.vmPopU();
                 const a = ctx.vs.vmPopU();
-                const retval = try computeAddResult(ctx, a, b);
+                // Inline int fast path: the outlined generic cost 2.6% of fib.
+                const retval = if (a == .int and b == .int)
+                    Value{ .int = a.int + b.int }
+                else
+                    try computeAddResult(ctx, a, b);
                 if (try doReturn(ctx, retval)) return true;
             },
             .sub => {
