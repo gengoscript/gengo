@@ -1,6 +1,7 @@
 const std = @import("std");
 const Op = @import("op.zig").Op;
 const chunk_decoder = @import("chunk_decoder.zig");
+const chunk = @import("chunk.zig");
 
 const DecodedInstruction = chunk_decoder.DecodedInstruction;
 
@@ -136,16 +137,16 @@ pub fn stackEffect(op: Op, code: []const u8, ip: usize) struct { pop: u8, push: 
     };
 }
 
-fn verifySetErr(state: anytype, comptime fmt: []const u8, args: anytype) void {
+fn verifySetErr(state: *chunk.State, comptime fmt: []const u8, args: anytype) void {
     state.verify_err_len = (std.fmt.bufPrint(&state.verify_err_buf, fmt, args) catch unreachable).len;
 }
 
-pub fn verify(state: anytype) !void {
+pub fn verify(state: *chunk.State, alloc: std.mem.Allocator) !void {
     if (state.code_len == 0) return;
 
     const bit_len = (state.code_len + 7) / 8;
-    const starts = try std.heap.page_allocator.alloc(u8, bit_len);
-    defer std.heap.page_allocator.free(starts);
+    const starts = try alloc.alloc(u8, bit_len);
+    defer alloc.free(starts);
     @memset(starts, 0);
 
     const Bits = struct {
@@ -293,15 +294,15 @@ pub fn verify(state: anytype) !void {
             // Returns the maximum stack depth (relative to entry) reached on
             // any path — the frame-entry capacity check that makes unchecked
             // stack ops in the body safe.
-            fn run(entry_ip: usize, check_ret: bool, starts_arg: []u8, state_arg: anytype) !i32 {
-                var depth = try std.heap.page_allocator.alloc(?i32, state_arg.code_len);
-                defer std.heap.page_allocator.free(depth);
+            fn run(entry_ip: usize, check_ret: bool, starts_arg: []u8, state_arg: *chunk.State, a: std.mem.Allocator) !i32 {
+                var depth = try a.alloc(?i32, state_arg.code_len);
+                defer a.free(depth);
                 @memset(depth, null);
 
                 const WorkItem = struct { ip: usize, depth: i32 };
-                var work = try std.ArrayListUnmanaged(WorkItem).initCapacity(std.heap.page_allocator, state_arg.code_len);
-                defer work.deinit(std.heap.page_allocator);
-                try work.append(std.heap.page_allocator, .{ .ip = entry_ip, .depth = 0 });
+                var work = try std.ArrayListUnmanaged(WorkItem).initCapacity(a, state_arg.code_len);
+                defer work.deinit(a);
+                try work.append(a, .{ .ip = entry_ip, .depth = 0 });
 
                 var max_depth: i32 = 0;
                 var head: usize = 0;
@@ -345,13 +346,13 @@ pub fn verify(state: anytype) !void {
                     if (!is_ret and !is_uncond) {
                         const next_ip = current_ip + inst.width;
                         if (next_ip < state_arg.code_len) {
-                            try work.append(std.heap.page_allocator, .{ .ip = next_ip, .depth = new_depth });
+                            try work.append(a, .{ .ip = next_ip, .depth = new_depth });
                         }
                     }
 
                     if (is_branch or is_uncond) {
                         if (inst.jump_target) |target| {
-                            try work.append(std.heap.page_allocator, .{ .ip = target, .depth = new_depth });
+                            try work.append(a, .{ .ip = target, .depth = new_depth });
                         }
                     }
                 }
@@ -359,9 +360,9 @@ pub fn verify(state: anytype) !void {
             }
         };
 
-        state.main_max_stack = @intCast(try BfsRunner.run(0, true, starts, state));
+        state.main_max_stack = @intCast(try BfsRunner.run(0, true, starts, state, alloc));
         for (func_ips[0..func_body_count]) |fip| {
-            const fmax = try BfsRunner.run(fip, false, starts, state);
+            const fmax = try BfsRunner.run(fip, false, starts, state, alloc);
             const fmax16 = std.math.cast(u16, fmax) orelse {
                 verifySetErr(state, "ip={d}: function max stack depth {d} exceeds u16", .{ fip, fmax });
                 return error.StackOverflow;

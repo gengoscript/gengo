@@ -4503,7 +4503,7 @@ pub fn run(ctx: VMContext) anyerror!void {
     globals.setActive(ctx.gs);
     heap.setActive(ctx.hs);
     vms.setActive(ctx.vs);
-    ctx.cs.verify() catch |err| {
+    ctx.cs.verify(ctx.vs.allocator) catch |err| {
         if (ctx.cs.verify_err_len > 0) {
             ctx.vs.setRuntimeErr("verifier: {s}", .{ctx.cs.verify_err_buf[0..ctx.cs.verify_err_len]});
             ctx.vs.pending_panic_message = ctx.vs.runtimeErrMsg();

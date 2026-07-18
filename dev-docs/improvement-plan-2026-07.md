@@ -70,7 +70,7 @@ Acceptance: `tools/perf-baseline.sh check` byte-identical (op counts prove
 fusion decisions unchanged) + defuse differential green. Medium effort,
 medium risk — do in one commit, revert-friendly.
 
-### A3. Concrete types at module seams `[ ]`
+### A3. Concrete types at module seams `[x]` (2026-07-18)
 
 Replace `state: anytype` in `chunk_verifier.zig`/`chunk_decoder.zig` with
 `*chunk.State` (breaking whatever import cycle motivated it — forward-decl
@@ -85,12 +85,19 @@ worth the churn.
 surfaces so callers get exhaustive-switch checking. Do after A1 to avoid
 fighting the same files twice.
 
-### A5. Verifier scratch memory `[ ]`
+### A5. Verifier scratch memory `[x]` (2026-07-18)
 
 `chunk_verifier.verify` allocates its depth array + worklist from
 `page_allocator` per verify — the only ad-hoc allocation in an otherwise
 statically-allocated core. Route through the runtime's allocator or a fixed
 scratch region (code capped at 1 MiB → bounded worst case). Small.
+
+Done: verify(state, alloc) — vm.run passes the runtime's allocator
+(vs.allocator); the module-level test wrapper passes page_allocator
+explicitly. A fixed scratch region was rejected: worst case is ~24 MB for
+1 MiB of code. Done together with A3: decoder/verifier signatures are now
+`*const chunk.State` / `*chunk.State` — the import cycle the `anytype`
+presumably dodged is legal lazy analysis in Zig.
 
 ## Track B — Safety hardening
 
@@ -188,7 +195,7 @@ opcode costs icache (the reserved-slot padding experiment measured ~0.7%
 per instantiated op) — the remaining margin doesn't clear that bar.
 Revisit only with profile evidence.
 
-### C6. Warm-IC invariant re-check `[ ]` (investigate)
+### C6. Warm-IC invariant re-check `[x]` — measured out (2026-07-18): disabling it entirely is within noise on fib; the three compares ride on FuncObj data the frame entry loads anyway. Keep the check.
 
 Three loads+compares per warm call re-verify arity/variadic/defaults
 because GC pool-slot reuse can swap objects. Compile-time function objects

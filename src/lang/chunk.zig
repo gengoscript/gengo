@@ -1069,9 +1069,9 @@ pub const State = struct {
     pub fn decodeAt(self: *State, pos: usize) !DecodedInstruction {
         return chunk_decoder.decodeAt(self, pos);
     }
-    pub fn verify(self: *State) !void {
+    pub fn verify(self: *State, alloc: std.mem.Allocator) !void {
         if (self.verified and self.verified_code_len == self.code_len) return;
-        try chunk_verifier.verify(self);
+        try chunk_verifier.verify(self, alloc);
         self.verified = true;
         self.verified_code_len = self.code_len;
     }
@@ -1244,5 +1244,5 @@ pub fn decodeAt(pos: usize) !DecodedInstruction {
     return g_state.decodeAt(pos);
 }
 pub fn verify() !void {
-    return g_state.verify();
+    return g_state.verify(std.heap.page_allocator);
 }
