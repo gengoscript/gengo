@@ -186,12 +186,20 @@ objects, which die and free their slots, so naive pinning doesn't work.
 Needs a design (e.g. pin function objects only + IC records whether it
 cached a pinned object). Investigate before building.
 
-### C2. Frame slimming `[ ]`
+### C2. Frame slimming `[x]`
 
 8-field frame write per call includes fields most functions never use
 (`defer_base`, `named_return_count`, `has_typed_returns`). Investigate
 packing/lazy-fill. Measure-first (house rule: no claimed win without cycle
 evidence).
+
+Done 2026-07-18. The closure/func_obj pointer pair merged into one `callee`
+(the invoked object; function derives from it), defer_base narrowed to u16.
+Key lesson: the resulting 24-byte frame was ~9% SLOWER on fib — a
+non-power-of-2 stride turns frames[frame_top] into a multiply (same disease
+as the old IC pool-index division). Padded back to 32-byte stride with an
+unwritten `_stride_pad`: best of both (fewer stores, shift indexing).
+fib(32) ~0.305s. **Rule: hot-array element sizes must be powers of two.**
 
 ### C3. Precomputed prim-tag array (C1 fallback) `[x]` — moot, C1 landed fully
 
