@@ -2615,11 +2615,17 @@ test "per-runtime fs mount tables switch with activation (#190)" {
 
     var buf: [256]u8 = undefined;
     a.activate();
-    try std.testing.expectEqualStrings("/a-root/f", try fs_state_mod.resolve("data/f", &buf));
     b.activate();
-    try std.testing.expectEqualStrings("/b-root/f", try fs_state_mod.resolve("data/f", &buf));
+    // VM-path isolation: activate() binds each runtime's vm_state.fs_es to
+    // its own mount table (the Runtime struct may move between init and the
+    // first activate, so binding happens at the pinned-address entry points).
+    // Each binding stays correct regardless of which runtime activated last.
+    try std.testing.expectEqualStrings("/a-root/f", try fs_state_mod.resolve(a.vm_state.fs_es, "data/f", &buf));
+    try std.testing.expectEqualStrings("/b-root/f", try fs_state_mod.resolve(b.vm_state.fs_es, "data/f", &buf));
+    // The entry-layer active pointer follows the most recent activate().
+    try std.testing.expectEqualStrings("/b-root/f", try fs_state_mod.resolve(fs_state_mod.activeState(), "data/f", &buf));
     a.activate();
-    try std.testing.expectEqualStrings("/a-root/f", try fs_state_mod.resolve("data/f", &buf));
+    try std.testing.expectEqualStrings("/a-root/f", try fs_state_mod.resolve(fs_state_mod.activeState(), "data/f", &buf));
 }
 
 // Worker for the concurrent isolation test: builds its own Runtime, runs a

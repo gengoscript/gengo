@@ -9,6 +9,7 @@ const Object = vmod.Object;
 const MapEntry = vmod.MapEntry;
 const builtin = @import("builtin");
 const regexp_mod = @import("native/regexp.zig");
+const fs_state_mod = @import("native/fs_state.zig");
 
 // Preset ceilings — these are the maximum any instance may request.
 pub const MaxStack = cfg.max_stack;
@@ -71,6 +72,10 @@ pub const State = struct {
     // maxInt means "no target" — frame_top can never reach it, so the hot
     // return path needs only a single integer compare, no optional unwrap.
     call_depth_target: usize = std.math.maxInt(usize),
+    // This runtime's fs mount table (A1: explicit state instead of the
+    // fs_state threadlocal). Set once by Runtime init to its own fs_mounts;
+    // the default points at the process-default table the CLI populates.
+    fs_es: *fs_state_mod.EngineState = &fs_state_mod.g_default_state,
     temp_roots: [MaxTempRoots]Value = undefined,
     temp_root_top: usize = 0,
     rune_cache_ptr: usize = 0,

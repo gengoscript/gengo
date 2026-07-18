@@ -43,7 +43,13 @@ Value decode needs a pool base pointer) and stays, repointed on activate.
   TEST/ENTRY-POINT ONLY comment — their only callers are the
   hand-assembled-bytecode test runners and the WASM export layer, which
   cannot receive a context.
-- Phase 3 `[ ]` `fs_state`/`cap_fs` EngineState threadlocal → context.
+- Phase 3 `[x]` `fs_state.lookup/resolve` take an explicit `*EngineState`;
+  cap_fs reads it via `ctx.vs.fs_es`, bound per-runtime in `activate()` (not
+  init — the Runtime struct may move by value before first use; entry points
+  all run on the pinned address). The threadlocal remains only for the
+  CLI --mount pre-runtime flow and the entry layer. The #190 isolation test
+  now asserts the stronger property: each runtime's binding stays correct
+  regardless of which runtime activated last.
 - Phase 4 `[ ]` entry points: Compiler.init/test runners stop reading
   g_state; `setActive` shrinks to Runtime.activate repointing
   `obj_pool_ptr` only.

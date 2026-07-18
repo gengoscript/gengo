@@ -799,6 +799,10 @@ pub const Runtime = struct {
         heap.setActive(&self.heap_state);
         vm.setActive(&self.vm_state);
         fs_state.setActive(&self.fs_mounts);
+        // Bound here, not at init: the Runtime struct may be moved by value
+        // between init and first use; activate() always runs on the pinned
+        // address (every run/call entry point calls it).
+        self.vm_state.fs_es = &self.fs_mounts;
     }
 
     pub fn lastCompilePath(self: *Runtime) []const u8 {
