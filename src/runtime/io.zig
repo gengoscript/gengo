@@ -142,25 +142,48 @@ fn formatInt(v: i64, comptime emit: fn ([]const u8) void) void {
     } else formatUint(@intCast(v), emit);
 }
 
-pub fn writeUint(v: u64) void { formatUint(v, write); }
-pub fn writeInt(v: i64) void { formatInt(v, write); }
-pub fn werrUint(v: u64) void { formatUint(v, werr); }
-pub fn werrInt(v: i64) void { formatInt(v, werr); }
+pub fn writeUint(v: u64) void {
+    formatUint(v, write);
+}
+pub fn writeInt(v: i64) void {
+    formatInt(v, write);
+}
+pub fn werrUint(v: u64) void {
+    formatUint(v, werr);
+}
+pub fn werrInt(v: i64) void {
+    formatInt(v, werr);
+}
 
 pub fn writeF64Prec(v: f64, prec: usize) void {
-    if (v != v) { write("NaN"); return; }
-    if (std.math.isInf(v)) { write(if (v > 0) "Inf" else "-Inf"); return; }
+    if (v != v) {
+        write("NaN");
+        return;
+    }
+    if (std.math.isInf(v)) {
+        write(if (v > 0) "Inf" else "-Inf");
+        return;
+    }
     var n = v;
-    if (n < 0.0) { write("-"); n = -n; }
+    if (n < 0.0) {
+        write("-");
+        n = -n;
+    }
     var scale: f64 = 1.0;
     var pi: usize = 0;
     while (pi < prec) : (pi += 1) scale *= 10.0;
     const scaled = @round(n * scale);
     const scaled_div = @trunc(scaled / scale);
-    if (scaled_div < 0 or scaled_div >= std.math.pow(f64, 2.0, 64.0)) { write("?"); return; }
+    if (scaled_div < 0 or scaled_div >= std.math.pow(f64, 2.0, 64.0)) {
+        write("?");
+        return;
+    }
     const int_part: u64 = @intFromFloat(scaled_div);
     const frac_mod = @mod(scaled, scale);
-    if (frac_mod < 0 or frac_mod >= std.math.pow(f64, 2.0, 64.0)) { write("?"); return; }
+    if (frac_mod < 0 or frac_mod >= std.math.pow(f64, 2.0, 64.0)) {
+        write("?");
+        return;
+    }
     const frac_raw: u64 = @intFromFloat(frac_mod);
     writeUint(int_part);
     if (prec == 0) return;
@@ -447,10 +470,22 @@ fn printValueDepth(v: Value, depth: u32, ancestors: *[PrintMaxDepth]*const vmod.
                 },
                 .named_type_fn, .enum_type_fn => write("<func>"),
                 .string_builder => write("<builder>"),
-                .named_error_type => |net| { write("<error type "); write(net.name); write(">"); },
-                .named_error_value => |nev| { write(nev.typ.named_error_type.name); write("("); write(nev.msg.bytes); write(")"); },
+                .named_error_type => |net| {
+                    write("<error type ");
+                    write(net.name);
+                    write(">");
+                },
+                .named_error_value => |nev| {
+                    write(nev.typ.named_error_type.name);
+                    write("(");
+                    write(nev.msg.bytes);
+                    write(")");
+                },
                 .bigint => |bi| {
-                    const s = bi.toConst().toStringAlloc(std.heap.page_allocator, 10, .lower) catch { write("<bigint>"); return; };
+                    const s = bi.toConst().toStringAlloc(std.heap.page_allocator, 10, .lower) catch {
+                        write("<bigint>");
+                        return;
+                    };
                     defer std.heap.page_allocator.free(s);
                     write(s);
                 },

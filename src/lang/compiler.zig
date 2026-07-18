@@ -904,7 +904,10 @@ pub const Compiler = struct {
                 const is_bitwise = op == .bit_and or op == .bit_or or op == .bit_xor;
                 if (is_bitwise) {
                     const sym: []const u8 = switch (op) {
-                        .bit_and => "&", .bit_or => "|", .bit_xor => "^", else => @tagName(op),
+                        .bit_and => "&",
+                        .bit_or => "|",
+                        .bit_xor => "^",
+                        else => @tagName(op),
                     };
                     self.setErr("'{s}' requires int operands; float is not valid here", .{sym});
                     return error.TypeMismatch;
@@ -929,8 +932,17 @@ pub const Compiler = struct {
                 const is_arith_or_bitwise = op == .add or op == .sub or op == .mul or op == .div or op == .rem or op == .mod or op == .int_div or op == .bit_and or op == .bit_or or op == .bit_xor;
                 if (is_arith_or_bitwise) {
                     const sym: []const u8 = switch (op) {
-                        .add => "+", .sub => "-", .mul => "*", .div => "/", .rem => "rem", .mod => "mod", .int_div => "div",
-                        .bit_and => "&", .bit_or => "|", .bit_xor => "^", else => @tagName(op),
+                        .add => "+",
+                        .sub => "-",
+                        .mul => "*",
+                        .div => "/",
+                        .rem => "rem",
+                        .mod => "mod",
+                        .int_div => "div",
+                        .bit_and => "&",
+                        .bit_or => "|",
+                        .bit_xor => "^",
+                        else => @tagName(op),
                     };
                     self.setErr("cannot apply '{s}' to {s} and {s}", .{ sym, @tagName(lhs_prim), @tagName(rhs_prim) });
                     return error.TypeMismatch;
@@ -957,7 +969,10 @@ pub const Compiler = struct {
                     null;
                 if (bad_prim) |bp| {
                     const sym: []const u8 = switch (op) {
-                        .bit_and => "&", .bit_or => "|", .bit_xor => "^", else => @tagName(op),
+                        .bit_and => "&",
+                        .bit_or => "|",
+                        .bit_xor => "^",
+                        else => @tagName(op),
                     };
                     self.setErr("'{s}' requires int operands; {s} is not valid here", .{ sym, @tagName(bp) });
                     return error.TypeMismatch;
@@ -972,7 +987,10 @@ pub const Compiler = struct {
             const is_bitwise = op == .bit_and or op == .bit_or or op == .bit_xor;
             if (is_bitwise) {
                 const sym: []const u8 = switch (op) {
-                    .bit_and => "&", .bit_or => "|", .bit_xor => "^", else => @tagName(op),
+                    .bit_and => "&",
+                    .bit_or => "|",
+                    .bit_xor => "^",
+                    else => @tagName(op),
                 };
                 self.setErr("'{s}' requires int operands; {s} is not valid here", .{ sym, @tagName(lhs_prim) });
                 return error.TypeMismatch;
@@ -983,7 +1001,14 @@ pub const Compiler = struct {
             const is_arith = op == .add or op == .sub or op == .mul or op == .div or op == .rem or op == .mod or op == .int_div;
             if (is_arith) {
                 const sym: []const u8 = switch (op) {
-                    .add => "+", .sub => "-", .mul => "*", .div => "/", .rem => "rem", .mod => "mod", .int_div => "div", else => @tagName(op),
+                    .add => "+",
+                    .sub => "-",
+                    .mul => "*",
+                    .div => "/",
+                    .rem => "rem",
+                    .mod => "mod",
+                    .int_div => "div",
+                    else => @tagName(op),
                 };
                 self.setErr("cannot apply '{s}' to bool operands", .{sym});
                 return error.TypeMismatch;
@@ -994,7 +1019,13 @@ pub const Compiler = struct {
             const is_non_concat_arith = op == .sub or op == .mul or op == .div or op == .rem or op == .mod or op == .int_div;
             if (is_non_concat_arith) {
                 const sym: []const u8 = switch (op) {
-                    .sub => "-", .mul => "*", .div => "/", .rem => "rem", .mod => "mod", .int_div => "div", else => @tagName(op),
+                    .sub => "-",
+                    .mul => "*",
+                    .div => "/",
+                    .rem => "rem",
+                    .mod => "mod",
+                    .int_div => "div",
+                    else => @tagName(op),
                 };
                 self.setErr("cannot apply '{s}' to string operands; use '+' for concatenation", .{sym});
                 return error.TypeMismatch;

@@ -132,9 +132,9 @@ fn expectRunPathWithSources() void {
         .{
             .path = "app/pkg/mod.gengo",
             .source =
-                \\pub func answer() int {
-                \\    return 42
-                \\}
+            \\pub func answer() int {
+            \\    return 42
+            \\}
             ,
         },
     };
@@ -185,9 +185,9 @@ fn expectRunPathWithSourceProvider() void {
         .{
             .path = "mem/math.gengo",
             .source =
-                \\pub func add(a int, b int) int {
-                \\    return a + b
-                \\}
+            \\pub func add(a int, b int) int {
+            \\    return a + b
+            \\}
             ,
         },
     };
@@ -220,12 +220,12 @@ fn expectRunPathWithSourceProvider() void {
 fn expectImportLoaderWithFallback() void {
     const table_entries = [_]api.SourceEntry{
         .{ .path = "mod/fallback.gengo", .source =
-            \\pub func fromTable() string { return "table" }
+        \\pub func fromTable() string { return "table" }
         },
     };
     const callback_entries = [_]api.SourceEntry{
         .{ .path = "mod/callback.gengo", .source =
-            \\pub func fromCallback() string { return "callback" }
+        \\pub func fromCallback() string { return "callback" }
         },
     };
     const callback_set = MemorySourceSet{ .entries = &callback_entries };
@@ -273,10 +273,7 @@ fn expectImportLoaderWithFallback() void {
     const call_res = rt.call("get", &[_]Value{});
     switch (call_res) {
         .ok => |v| {
-            const s = if (v == .string) v.string.bytes
-                else if (v == .object and v.object.* == .dyn_string) v.object.dyn_string
-                else if (v == .object and v.object.* == .string_view) v.object.string_view.bytes
-                else null;
+            const s = if (v == .string) v.string.bytes else if (v == .object and v.object.* == .dyn_string) v.object.dyn_string else if (v == .object and v.object.* == .string_view) v.object.string_view.bytes else null;
             if (s == null or !std.mem.eql(u8, s.?, "callbacktable"))
                 fail("embedding FAIL: importLoaderWithFallback result\n");
         },

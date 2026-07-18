@@ -99,7 +99,7 @@ pub fn valueFromWire(ctx: VMContext, w: host_abi.ValueWire) !Value {
             return Value{ .decimal = @bitCast(w.payload) };
         } else if ((w.flags & host_abi.FLAG_RUNE) != 0) {
             return Value{ .rune = @intCast(w.payload) };
-        } else if ((w.flags & host_abi.FLAG_INTEGER) !=  0) {
+        } else if ((w.flags & host_abi.FLAG_INTEGER) != 0) {
             return Value{ .int = @bitCast(w.payload) };
         } else {
             return Value{ .float = @bitCast(w.payload) };
@@ -175,7 +175,7 @@ pub fn dispatchHostCallVariadic(ctx: vms.VMContext, comptime cap: u64, comptime 
             return;
         }
     }
-    const result = try @call(.auto, nativeFn, .{ctx, start, argc});
+    const result = try @call(.auto, nativeFn, .{ ctx, start, argc });
     ctx.vs.vmPopArgs(argc);
     try ctx.vs.vmPush(result);
 }
@@ -194,7 +194,7 @@ pub fn dispatchHostCall1(ctx: vms.VMContext, comptime cap: u64, comptime call: h
             return;
         }
     }
-    const out = try @call(.auto, nativeFn, .{ctx, ctx.vs.vmTop(0)});
+    const out = try @call(.auto, nativeFn, .{ ctx, ctx.vs.vmTop(0) });
     ctx.vs.vmPopArgs(argc);
     try ctx.vs.vmPush(out);
 }

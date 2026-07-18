@@ -72,7 +72,10 @@ pub fn mapFindHashedIndex(entries: []MapEntry, buckets: []i32, key: Value) ?usiz
     var idx: usize = @intCast(mapHashValue(key) & mask);
     for (0..buckets.len) |probes| {
         const b = buckets[idx];
-        if (b < 0) { vmperf.countMapProbe(probes + 1); return null; }
+        if (b < 0) {
+            vmperf.countMapProbe(probes + 1);
+            return null;
+        }
         const ei: usize = @intCast(b);
         if (ei < entries.len and mapKeyEquals(entries[ei].key, key)) {
             vmperf.countMapProbe(probes + 1);

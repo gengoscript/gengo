@@ -12,25 +12,29 @@ pub const perf_enabled: bool = build_options.perf;
 const OpCount = 256;
 
 pub const PerfCounters = struct {
-    op_counts:           [OpCount]u64          = [_]u64{0}                        ** OpCount,
-    op_pair_counts:      [OpCount][OpCount]u64 = [_][OpCount]u64{[_]u64{0} ** OpCount} ** OpCount,
-    string_concat_bytes: u64                   = 0,
-    map_probe_total:     u64                   = 0,
-    map_probe_ops:       u64                   = 0,
-    gc_marked_total:     u64                   = 0,
-    gc_swept_total:      u64                   = 0,
-    hostcall_counts:     [256]u64              = [_]u64{0}                        ** 256,
-    call_cycles:         u64                   = 0,
-    call_count:          u64                   = 0,
-    ret_cycles:          u64                   = 0,
-    ret_count:           u64                   = 0,
-    prev_op:             u8                    = 0xFF,
+    op_counts: [OpCount]u64 = [_]u64{0} ** OpCount,
+    op_pair_counts: [OpCount][OpCount]u64 = [_][OpCount]u64{[_]u64{0} ** OpCount} ** OpCount,
+    string_concat_bytes: u64 = 0,
+    map_probe_total: u64 = 0,
+    map_probe_ops: u64 = 0,
+    gc_marked_total: u64 = 0,
+    gc_swept_total: u64 = 0,
+    hostcall_counts: [256]u64 = [_]u64{0} ** 256,
+    call_cycles: u64 = 0,
+    call_count: u64 = 0,
+    ret_cycles: u64 = 0,
+    ret_count: u64 = 0,
+    prev_op: u8 = 0xFF,
 };
 
 var g_counters: PerfCounters = .{};
 
-pub fn counters() *PerfCounters { return &g_counters; }
-pub fn resetCounters() void { g_counters = .{}; }
+pub fn counters() *PerfCounters {
+    return &g_counters;
+}
+pub fn resetCounters() void {
+    g_counters = .{};
+}
 
 pub inline fn countOp(op_raw: u8) void {
     if (!perf_enabled) return;
@@ -88,10 +92,9 @@ pub inline fn readTsc() u64 {
         asm volatile (
             \\ rdtsc
             : [eax] "={eax}" (eax),
-              [edx] "={edx}" (edx)
+              [edx] "={edx}" (edx),
             :
-            : .{ .memory = true }
-        );
+            : .{ .memory = true });
         return (@as(u64, edx) << 32) | eax;
     }
     var ts: u64 = 0;
@@ -100,13 +103,21 @@ pub inline fn readTsc() u64 {
 }
 
 fn writeU64Err(v: u64) void {
-    if (v == 0) { io.werr("0"); return; }
+    if (v == 0) {
+        io.werr("0");
+        return;
+    }
     var buf: [24]u8 = undefined;
     var n = v;
     var len: usize = 0;
-    while (n > 0) : (n /= 10) { buf[len] = '0' + @as(u8, @intCast(n % 10)); len += 1; }
+    while (n > 0) : (n /= 10) {
+        buf[len] = '0' + @as(u8, @intCast(n % 10));
+        len += 1;
+    }
     for (0..len / 2) |i| {
-        const t = buf[i]; buf[i] = buf[len - 1 - i]; buf[len - 1 - i] = t;
+        const t = buf[i];
+        buf[i] = buf[len - 1 - i];
+        buf[len - 1 - i] = t;
     }
     io.werr(buf[0..len]);
 }
@@ -115,16 +126,36 @@ pub fn printSummary(gc_runs: u64, gc_time_ns: u64, alloc_objs: u64, alloc_slices
     if (!perf_enabled) return;
     const c = &g_counters;
 
-    io.werr("PERF:gc_runs=");             writeU64Err(gc_runs);           io.werr("\n");
-    io.werr("PERF:gc_time_ns=");          writeU64Err(gc_time_ns);        io.werr("\n");
-    io.werr("PERF:gc_marked_total=");     writeU64Err(c.gc_marked_total); io.werr("\n");
-    io.werr("PERF:gc_swept_total=");      writeU64Err(c.gc_swept_total);  io.werr("\n");
-    io.werr("PERF:alloc_objects=");       writeU64Err(alloc_objs);        io.werr("\n");
-    io.werr("PERF:alloc_managed_slices=");writeU64Err(alloc_slices);      io.werr("\n");
-    io.werr("PERF:alloc_managed_bytes_calls="); writeU64Err(alloc_bytes_calls); io.werr("\n");
-    io.werr("PERF:string_concat_bytes="); writeU64Err(c.string_concat_bytes); io.werr("\n");
-    io.werr("PERF:map_probe_total=");     writeU64Err(c.map_probe_total); io.werr("\n");
-    io.werr("PERF:map_probe_ops=");       writeU64Err(c.map_probe_ops);   io.werr("\n");
+    io.werr("PERF:gc_runs=");
+    writeU64Err(gc_runs);
+    io.werr("\n");
+    io.werr("PERF:gc_time_ns=");
+    writeU64Err(gc_time_ns);
+    io.werr("\n");
+    io.werr("PERF:gc_marked_total=");
+    writeU64Err(c.gc_marked_total);
+    io.werr("\n");
+    io.werr("PERF:gc_swept_total=");
+    writeU64Err(c.gc_swept_total);
+    io.werr("\n");
+    io.werr("PERF:alloc_objects=");
+    writeU64Err(alloc_objs);
+    io.werr("\n");
+    io.werr("PERF:alloc_managed_slices=");
+    writeU64Err(alloc_slices);
+    io.werr("\n");
+    io.werr("PERF:alloc_managed_bytes_calls=");
+    writeU64Err(alloc_bytes_calls);
+    io.werr("\n");
+    io.werr("PERF:string_concat_bytes=");
+    writeU64Err(c.string_concat_bytes);
+    io.werr("\n");
+    io.werr("PERF:map_probe_total=");
+    writeU64Err(c.map_probe_total);
+    io.werr("\n");
+    io.werr("PERF:map_probe_ops=");
+    writeU64Err(c.map_probe_ops);
+    io.werr("\n");
 
     const op_names = comptime blk: {
         var names: [OpCount][]const u8 = [_][]const u8{"unknown"} ** OpCount;
@@ -135,7 +166,11 @@ pub fn printSummary(gc_runs: u64, gc_time_ns: u64, alloc_objs: u64, alloc_slices
     for (0..OpCount) |i| {
         const cnt = c.op_counts[i];
         if (cnt > 0) {
-            io.werr("PERF:op:"); io.werr(op_names[i]); io.werr("="); writeU64Err(cnt); io.werr("\n");
+            io.werr("PERF:op:");
+            io.werr(op_names[i]);
+            io.werr("=");
+            writeU64Err(cnt);
+            io.werr("\n");
         }
     }
 
@@ -143,8 +178,13 @@ pub fn printSummary(gc_runs: u64, gc_time_ns: u64, alloc_objs: u64, alloc_slices
         for (0..OpCount) |b| {
             const cnt = c.op_pair_counts[a][b];
             if (cnt > 0) {
-                io.werr("PERF:pair:"); io.werr(op_names[a]); io.werr(","); io.werr(op_names[b]);
-                io.werr("="); writeU64Err(cnt); io.werr("\n");
+                io.werr("PERF:pair:");
+                io.werr(op_names[a]);
+                io.werr(",");
+                io.werr(op_names[b]);
+                io.werr("=");
+                writeU64Err(cnt);
+                io.werr("\n");
             }
         }
     }
@@ -152,11 +192,23 @@ pub fn printSummary(gc_runs: u64, gc_time_ns: u64, alloc_objs: u64, alloc_slices
     for (0..256) |hci| {
         const cnt = c.hostcall_counts[hci];
         if (cnt == 0) continue;
-        io.werr("PERF:hostcall:"); writeU64Err(@intCast(hci)); io.werr("="); writeU64Err(cnt); io.werr("\n");
+        io.werr("PERF:hostcall:");
+        writeU64Err(@intCast(hci));
+        io.werr("=");
+        writeU64Err(cnt);
+        io.werr("\n");
     }
 
-    io.werr("PERF:call_cycles=");        writeU64Err(c.call_cycles); io.werr("\n");
-    io.werr("PERF:call_count=");         writeU64Err(c.call_count);  io.werr("\n");
-    io.werr("PERF:ret_cycles=");         writeU64Err(c.ret_cycles);  io.werr("\n");
-    io.werr("PERF:ret_count=");          writeU64Err(c.ret_count);   io.werr("\n");
+    io.werr("PERF:call_cycles=");
+    writeU64Err(c.call_cycles);
+    io.werr("\n");
+    io.werr("PERF:call_count=");
+    writeU64Err(c.call_count);
+    io.werr("\n");
+    io.werr("PERF:ret_cycles=");
+    writeU64Err(c.ret_cycles);
+    io.werr("\n");
+    io.werr("PERF:ret_count=");
+    writeU64Err(c.ret_count);
+    io.werr("\n");
 }

@@ -29,10 +29,7 @@ pub fn decodeAt(state: anytype, pos: usize) !DecodedInstruction {
     const op: Op = @enumFromInt(raw);
 
     return switch (op) {
-        .constant, .def_global, .make_closure, .ret_const,
-        .const_eq, .const_sub, .const_add, .const_lt, .const_gt,
-        .assert_interface, .assert_struct, .variant_check,
-        .check_named_predicate, .validate_named_range => .{
+        .constant, .def_global, .make_closure, .ret_const, .const_eq, .const_sub, .const_add, .const_lt, .const_gt, .assert_interface, .assert_struct, .variant_check, .check_named_predicate, .validate_named_range => .{
             .op = op,
             .width = 3,
             .const_index = try readU16At(state, pos + 1),
@@ -64,11 +61,7 @@ pub fn decodeAt(state: anytype, pos: usize) !DecodedInstruction {
         // call_spread: [op][argc][spread_n][ic_hi][ic_lo] — 5 bytes
         .call_spread => .{ .op = op, .width = 5 },
 
-        .get_local, .set_local, .get_upvalue, .set_upvalue, .close_upvalue,
-        .get_local_ret, .defer_call,
-        .build_array, .build_map, .build_tuple, .build_struct_instance,
-        .tuple_check_arity, .tuple_get, .tuple_get_keep,
-        .get_slice, .assert_type => .{
+        .get_local, .set_local, .get_upvalue, .set_upvalue, .close_upvalue, .get_local_ret, .defer_call, .build_array, .build_map, .build_tuple, .build_struct_instance, .tuple_check_arity, .tuple_get, .tuple_get_keep, .get_slice, .assert_type => .{
             .op = op,
             .width = 2,
         },
@@ -91,9 +84,7 @@ pub fn decodeAt(state: anytype, pos: usize) !DecodedInstruction {
             .const_index = try readU16At(state, pos + 1),
         },
 
-        .get_local_const_eq, .get_local_const_sub,
-        .get_local_const_add, .get_local_const_lt,
-        .get_local_const_gt => .{
+        .get_local_const_eq, .get_local_const_sub, .get_local_const_add, .get_local_const_lt, .get_local_const_gt => .{
             .op = op,
             .width = 5,
             .const_index = try readU16At(state, pos + 3),
@@ -117,8 +108,7 @@ pub fn decodeAt(state: anytype, pos: usize) !DecodedInstruction {
             .const_index = try readU16At(state, pos + 6),
         },
 
-        .get_local_const_eq_jif_pop, .get_local_const_lt_jif_pop,
-        .get_local_const_gt_jif_pop => blk: {
+        .get_local_const_eq_jif_pop, .get_local_const_lt_jif_pop, .get_local_const_gt_jif_pop => blk: {
             const off = try readU32At(state, pos + 5);
             break :blk .{
                 .op = op,
@@ -140,8 +130,7 @@ pub fn decodeAt(state: anytype, pos: usize) !DecodedInstruction {
             };
         },
 
-        .get_global_const_eq, .get_global_const_sub,
-        .get_global_const_add, .get_global_const_lt => .{
+        .get_global_const_eq, .get_global_const_sub, .get_global_const_add, .get_global_const_lt => .{
             .op = op,
             .width = 8,
             .const_index = try readU16At(state, pos + 6),

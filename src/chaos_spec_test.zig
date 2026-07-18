@@ -512,10 +512,10 @@ test "spec pass cases differential" {
 // dozen iterations rather than the ~400 rounds needed on the default 1 MB heap.
 test "template render with named-string type survives compactManagedHeap" {
     var rt = try api.Runtime.init(.{
-        .allow_io      = true,
-        .allocator     = std.testing.allocator,
+        .allow_io = true,
+        .allocator = std.testing.allocator,
         .heap_size_bytes = 256 * 1024,
-        .max_objects   = 512,
+        .max_objects = 512,
     });
     defer rt.deinit();
 

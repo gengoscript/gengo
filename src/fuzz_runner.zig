@@ -25,21 +25,30 @@ fn writeAll(fd: std.os.wasi.fd_t, s: []const u8) void {
     }
 }
 
-fn out(s: []const u8) void { writeAll(1, s); }
-fn fail(msg: []const u8) noreturn { writeAll(2, msg); std.os.wasi.proc_exit(1); }
+fn out(s: []const u8) void {
+    writeAll(1, s);
+}
+fn fail(msg: []const u8) noreturn {
+    writeAll(2, msg);
+    std.os.wasi.proc_exit(1);
+}
 
 // ── Simple PRNG ─────────────────────────────────────────────────────────────
 
 var g_rng_state: u64 = 0;
 
-fn rngSeed(s: u64) void { g_rng_state = s; }
+fn rngSeed(s: u64) void {
+    g_rng_state = s;
+}
 
 fn rngU64() u64 {
     g_rng_state = g_rng_state *% 6364136223846793005 +% 1;
     return g_rng_state;
 }
 
-fn rngBool() bool { return (rngU64() & 1) == 1; }
+fn rngBool() bool {
+    return (rngU64() & 1) == 1;
+}
 
 fn rngRange(min: usize, max: usize) usize {
     if (min > max) return min;
@@ -62,15 +71,17 @@ fn resetAll() void {
 fn fuzzCompiler() void {
     const seeds = [_]u64{ 1, 42, 123, 999, 0xDEADBEEF, 0xCAFEBABE, 0x1337, 0x1234567890ABCDEF };
     const token_fragments = [_][]const u8{
-        "x", "y", "foo", "bar", "123", "456.789", "true", "false", "null",
-        "\"hello\"", "\"world\"", "func", "var", "const", "if", "else", "for",
-        "in", "while", "return", "break", "continue", "defer", "panic", "recover",
-        "type", "struct", "interface", "import", "map", "array", "int", "float",
-        "bool", "string", "rune", "error", "decimal", "[]", "[", "]", "{", "}",
-        "(", ")", ",", ";", ":", "=", "==", "!=", "<", ">", "+", "-", "*", "/", "%",
-        "&", "|", "^", "~", "<<", ">>", "and", "or", "not", "+=", "-=", "*=", "/=",
-        ":=", "=>", ".", "..", "range", "score", "name", "age", "Score", "Name", "Age",
-        "\n", " ", "\t", "", "0", "-", "+", "\\", "\"", "'", "`", "#", "@", "$", "%",
+        "x",         "y",         "foo",   "bar",      "123",   "456.789", "true",    "false",  "null",
+        "\"hello\"", "\"world\"", "func",  "var",      "const", "if",      "else",    "for",    "in",
+        "while",     "return",    "break", "continue", "defer", "panic",   "recover", "type",   "struct",
+        "interface", "import",    "map",   "array",    "int",   "float",   "bool",    "string", "rune",
+        "error",     "decimal",   "[]",    "[",        "]",     "{",       "}",       "(",      ")",
+        ",",         ";",         ":",     "=",        "==",    "!=",      "<",       ">",      "+",
+        "-",         "*",         "/",     "%",        "&",     "|",       "^",       "~",      "<<",
+        ">>",        "and",       "or",    "not",      "+=",    "-=",      "*=",      "/=",     ":=",
+        "=>",        ".",         "..",    "range",    "score", "name",    "age",     "Score",  "Name",
+        "Age",       "\n",        " ",     "\t",       "",      "0",       "-",       "+",      "\\",
+        "\"",        "'",         "`",     "#",        "@",     "$",       "%",
     };
 
     var buf: [512]u8 = undefined;
@@ -123,12 +134,10 @@ fn fuzzVmBytecode() void {
 
 fn fuzzVmArithmetic() void {
     const edge_values = [_]f64{
-        0, 1, -1, 0.0, -0.0,
-        std.math.inf(f64), -std.math.inf(f64),
-        std.math.floatMax(f64), -std.math.floatMax(f64),
-        std.math.floatMin(f64), -std.math.floatMin(f64),
-        2.220446049250313e-16, 1e308, -1e308, 1e-308, -1e-308,
-        std.math.nan(f64),
+        0,                       1,                     -1,                     0.0,                     -0.0,
+        std.math.inf(f64),       -std.math.inf(f64),    std.math.floatMax(f64), -std.math.floatMax(f64), std.math.floatMin(f64),
+        -std.math.floatMin(f64), 2.220446049250313e-16, 1e308,                  -1e308,                  1e-308,
+        -1e-308,                 std.math.nan(f64),
     };
 
     var trial: usize = 0;
@@ -138,16 +147,24 @@ fn fuzzVmArithmetic() void {
         const op = trial % 3;
 
         resetAll();
-        chunk.emitConst(.{ .float = a }, 1) catch { continue; };
-        chunk.emitConst(.{ .float = b }, 1) catch { continue; };
+        chunk.emitConst(.{ .float = a }, 1) catch {
+            continue;
+        };
+        chunk.emitConst(.{ .float = b }, 1) catch {
+            continue;
+        };
         const op_code: @import("lang/op.zig").Op = switch (op) {
             0 => .add,
             1 => .sub,
             2 => .div,
             else => unreachable,
         };
-        chunk.emitOp(op_code, 1) catch { continue; };
-        chunk.emitOp(.halt, 1) catch { continue; };
+        chunk.emitOp(op_code, 1) catch {
+            continue;
+        };
+        chunk.emitOp(.halt, 1) catch {
+            continue;
+        };
         vm.run(vm.VMContext.fromActive()) catch {};
     }
     out("  vm arithmetic boundary fuzz: OK\n");
@@ -296,9 +313,13 @@ fn fuzzForInNesting() void {
             }
 
             var compiler = Compiler.init(buf[0..pos], .{});
-            compiler.compile(true) catch { continue; };
+            compiler.compile(true) catch {
+                continue;
+            };
             chunk.emitOp(.halt, 1) catch continue;
-            vm.run(vm.VMContext.fromActive()) catch { continue; };
+            vm.run(vm.VMContext.fromActive()) catch {
+                continue;
+            };
         }
     }
     out("  for-in/C-for nesting fuzz: OK\n");
@@ -342,7 +363,7 @@ fn fuzzValidAdversarialBytecode() void {
     const depths = [_]usize{ 1, 2, 3, 7, 8, 15, 16, 31, 32, 63, 64, 127, 128, 255, 256, 511 };
     const null_byte = @intFromEnum(op_mod.Op.null_val);
     const true_byte = @intFromEnum(op_mod.Op.true_val);
-    const eq_byte   = @intFromEnum(op_mod.Op.eq);
+    const eq_byte = @intFromEnum(op_mod.Op.eq);
     const halt_byte = @intFromEnum(op_mod.Op.halt);
 
     for (depths) |depth| {
@@ -373,11 +394,11 @@ const OutcomeTag = enum { ok, type_error, range_error, not_defined, predicate_er
 
 fn classifyErr(e: anyerror) OutcomeTag {
     return switch (e) {
-        error.TypeError        => .type_error,
-        error.RangeError       => .range_error,
-        error.NotDefined       => .not_defined,
-        error.PredicateError   => .predicate_error,
-        else                   => .other,
+        error.TypeError => .type_error,
+        error.RangeError => .range_error,
+        error.NotDefined => .not_defined,
+        error.PredicateError => .predicate_error,
+        else => .other,
     };
 }
 
@@ -525,7 +546,9 @@ fn runTolerant(src: []const u8) void {
         .module_ctx = &_prop_ctx,
         .resolve_import = propStdResolver,
     });
-    c.compile(true) catch { return; };
+    c.compile(true) catch {
+        return;
+    };
     chunk.emitOp(.halt, 1) catch {};
     vm.run(vm.VMContext.fromActive()) catch {};
 }

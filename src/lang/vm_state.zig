@@ -66,7 +66,11 @@ pub const State = struct {
     configured_heap_size: usize = 0,
     next_gc_objects: usize = 256,
     next_gc_heap_bytes: usize = 0,
-    call_depth_target: ?usize = null,
+    // Frame depth at which runInner should stop and return to the host
+    // (re-entrant calls: engine call API, predicates, deferred calls).
+    // maxInt means "no target" — frame_top can never reach it, so the hot
+    // return path needs only a single integer compare, no optional unwrap.
+    call_depth_target: usize = std.math.maxInt(usize),
     temp_roots: [MaxTempRoots]Value = undefined,
     temp_root_top: usize = 0,
     rune_cache_ptr: usize = 0,
@@ -186,7 +190,7 @@ pub const State = struct {
         self.stack_top = 0;
         self.ip = 0;
         self.frame_top = 0;
-        self.call_depth_target = null;
+        self.call_depth_target = std.math.maxInt(usize);
         self.temp_root_top = 0;
         self.defer_top = 0;
         self.ops_budget_remaining = std.math.maxInt(u64);
@@ -257,6 +261,22 @@ pub const State = struct {
         if (self.stack_top == 0) return error.StackUnderflow;
         self.stack_top -= 1;
         return self.stack[self.stack_top];
+    }
+
+    // Unchecked stack ops. Safe ONLY inside a frame whose entry passed the
+    // verifier-proved max_stack capacity check (enterFunctionFrame*/run), and
+    // only in opcode handlers whose stackEffect fully accounts the transient
+    // peak — pops must precede pushes within the op. Call-internal pushes
+    // (callee + args beyond the op's net effect) must use the checked vmPush.
+    pub inline fn vmPushU(self: *State, v: Value) void {
+        self.assertStringImmortal(v);
+        self.stack.ptr[self.stack_top] = v;
+        self.stack_top +%= 1;
+    }
+
+    pub inline fn vmPopU(self: *State) Value {
+        self.stack_top -%= 1;
+        return self.stack.ptr[self.stack_top];
     }
 
     pub inline fn vmPeek(self: *State, dist: usize) !Value {
@@ -362,11 +382,17 @@ pub fn setActive(state: *State) void {
     g_state = state;
 }
 
-pub fn reset() void { return g_state.reset(); }
+pub fn reset() void {
+    return g_state.reset();
+}
 
-pub fn setPolicy(policy: Policy) void { return g_state.setPolicy(policy); }
+pub fn setPolicy(policy: Policy) void {
+    return g_state.setPolicy(policy);
+}
 
-pub fn tempRootDepth() usize { return g_state.tempRootDepth(); }
+pub fn tempRootDepth() usize {
+    return g_state.tempRootDepth();
+}
 
 fn valToFloatIndex(v: Value) !f64 {
     const n: f64 = switch (v) {

@@ -207,53 +207,53 @@ pub fn timeParseStr(ctx: VMContext, s: []const u8, fmt: []const u8) !Value {
                 if (si >= s.len) return error.TypeError;
                 if (s[si] == '-') {
                     if (si + 5 > s.len) return error.TypeError;
-                    year = std.fmt.parseInt(i32, s[si..si+5], 10) catch return error.TypeError;
+                    year = std.fmt.parseInt(i32, s[si .. si + 5], 10) catch return error.TypeError;
                     si += 5;
                 } else {
                     if (si + 4 > s.len) return error.TypeError;
-                    year = std.fmt.parseInt(i32, s[si..si+4], 10) catch return error.TypeError;
+                    year = std.fmt.parseInt(i32, s[si .. si + 4], 10) catch return error.TypeError;
                     si += 4;
                 }
             },
             'y' => {
                 if (si + 2 > s.len) return error.TypeError;
-                const cy = std.fmt.parseInt(u8, s[si..si+2], 10) catch return error.TypeError;
+                const cy = std.fmt.parseInt(u8, s[si .. si + 2], 10) catch return error.TypeError;
                 year = 2000 + @as(i32, cy);
                 si += 2;
             },
             'm' => {
                 if (si + 2 > s.len) return error.TypeError;
-                month = std.fmt.parseInt(u8, s[si..si+2], 10) catch return error.TypeError;
+                month = std.fmt.parseInt(u8, s[si .. si + 2], 10) catch return error.TypeError;
                 if (month < 1 or month > 12) return error.RangeError;
                 si += 2;
             },
             'd' => {
                 if (si + 2 > s.len) return error.TypeError;
-                day = std.fmt.parseInt(u8, s[si..si+2], 10) catch return error.TypeError;
+                day = std.fmt.parseInt(u8, s[si .. si + 2], 10) catch return error.TypeError;
                 if (day < 1 or day > 31) return error.RangeError;
                 si += 2;
             },
             'H' => {
                 if (si + 2 > s.len) return error.TypeError;
-                hour = std.fmt.parseInt(u8, s[si..si+2], 10) catch return error.TypeError;
+                hour = std.fmt.parseInt(u8, s[si .. si + 2], 10) catch return error.TypeError;
                 if (hour > 23) return error.RangeError;
                 si += 2;
             },
             'M' => {
                 if (si + 2 > s.len) return error.TypeError;
-                min = std.fmt.parseInt(u8, s[si..si+2], 10) catch return error.TypeError;
+                min = std.fmt.parseInt(u8, s[si .. si + 2], 10) catch return error.TypeError;
                 if (min > 59) return error.RangeError;
                 si += 2;
             },
             'S' => {
                 if (si + 2 > s.len) return error.TypeError;
-                sec = std.fmt.parseInt(u8, s[si..si+2], 10) catch return error.TypeError;
+                sec = std.fmt.parseInt(u8, s[si .. si + 2], 10) catch return error.TypeError;
                 if (sec > 59) return error.RangeError;
                 si += 2;
             },
             'L' => {
                 if (si + 3 > s.len) return error.TypeError;
-                ms = std.fmt.parseInt(u16, s[si..si+3], 10) catch return error.TypeError;
+                ms = std.fmt.parseInt(u16, s[si .. si + 3], 10) catch return error.TypeError;
                 si += 3;
             },
             'B' => {
@@ -305,7 +305,10 @@ fn parseDigit(c: u8) !u8 {
 pub fn timeCalendarToEpochSecs(year: i32, month: u8, day: u8, hour: u8, min: u8, sec: u8) i64 {
     var y: i32 = year;
     var m: i32 = @as(i32, month);
-    if (m <= 2) { y -= 1; m += 12; }
+    if (m <= 2) {
+        y -= 1;
+        m += 12;
+    }
     const era = @divFloor(y, 400);
     const yoe = y - era * 400;
     const doy = @divTrunc(153 * (m - 3) + 2, 5) + @as(i32, day) - 1;
@@ -356,13 +359,22 @@ pub fn timeAddDate(ctx: VMContext, ms: f64, y_delta: i32, m_delta: i32, d_delta:
     const p = timeEpochMsToParts(ms);
     var new_y = p.year + y_delta;
     var new_m = @as(i32, p.month) + m_delta;
-    while (new_m > 12) { new_m -= 12; new_y += 1; }
-    while (new_m < 1) { new_m += 12; new_y -= 1; }
+    while (new_m > 12) {
+        new_m -= 12;
+        new_y += 1;
+    }
+    while (new_m < 1) {
+        new_m += 12;
+        new_y -= 1;
+    }
     var new_d = @as(i32, p.day) + d_delta;
     // Normalize day underflow with a loop to handle multi-month spans.
     while (new_d < 1) {
         new_m -= 1;
-        if (new_m < 1) { new_m += 12; new_y -= 1; }
+        if (new_m < 1) {
+            new_m += 12;
+            new_y -= 1;
+        }
         new_d += @as(i32, daysInMonth(new_y, @intCast(new_m)));
     }
     // Normalize day overflow with a loop to handle multi-month spans.
@@ -370,7 +382,10 @@ pub fn timeAddDate(ctx: VMContext, ms: f64, y_delta: i32, m_delta: i32, d_delta:
     while (new_d > cur_dim) {
         new_d -= cur_dim;
         new_m += 1;
-        if (new_m > 12) { new_m -= 12; new_y += 1; }
+        if (new_m > 12) {
+            new_m -= 12;
+            new_y += 1;
+        }
         cur_dim = @as(i32, daysInMonth(new_y, @intCast(new_m)));
     }
     const epoch_secs = timeCalendarToEpochSecs(new_y, @as(u8, @intCast(new_m)), @as(u8, @intCast(new_d)), p.hour, p.min, p.sec);
@@ -429,8 +444,12 @@ pub fn parseDuration(s: []const u8) !f64 {
     var neg = false;
 
     // optional sign
-    if (s[0] == '-') { neg = true; i = 1; }
-    else if (s[0] == '+') { i = 1; }
+    if (s[0] == '-') {
+        neg = true;
+        i = 1;
+    } else if (s[0] == '+') {
+        i = 1;
+    }
 
     // special case: bare zero requires no unit (matches Go)
     if (i < s.len and s[i] == '0' and i + 1 == s.len) return 0.0;
@@ -482,16 +501,11 @@ pub fn parseDuration(s: []const u8) !f64 {
 
         const unit = s[unit_start..i];
         const multiplier: f64 =
-            if (std.mem.eql(u8, unit, "ns"))   1.0 / 1_000_000.0
-            else if (std.mem.eql(u8, unit, "us") or
-                     std.mem.eql(u8, unit, "\xc2\xb5s") or  // µs  U+00B5
-                     std.mem.eql(u8, unit, "\xce\xbcs"))     // μs  U+03BC
+            if (std.mem.eql(u8, unit, "ns")) 1.0 / 1_000_000.0 else if (std.mem.eql(u8, unit, "us") or
+            std.mem.eql(u8, unit, "\xc2\xb5s") or // µs  U+00B5
+            std.mem.eql(u8, unit, "\xce\xbcs")) // μs  U+03BC
                 1.0 / 1_000.0
-            else if (std.mem.eql(u8, unit, "ms"))   1.0
-            else if (std.mem.eql(u8, unit, "s"))    1_000.0
-            else if (std.mem.eql(u8, unit, "m"))    60_000.0
-            else if (std.mem.eql(u8, unit, "h"))    3_600_000.0
-            else return error.ParseError;
+            else if (std.mem.eql(u8, unit, "ms")) 1.0 else if (std.mem.eql(u8, unit, "s")) 1_000.0 else if (std.mem.eql(u8, unit, "m")) 60_000.0 else if (std.mem.eql(u8, unit, "h")) 3_600_000.0 else return error.ParseError;
 
         total_ms += num * multiplier;
     }

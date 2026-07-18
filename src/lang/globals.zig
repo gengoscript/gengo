@@ -134,4 +134,6 @@ pub fn activeState() *State {
     return g_state;
 }
 
-pub fn reset() void                              { g_state.reset(); }
+pub fn reset() void {
+    g_state.reset();
+}

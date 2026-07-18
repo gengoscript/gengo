@@ -16,14 +16,14 @@ const std = @import("std");
 // safe to copy by value.
 
 pub const FsDriver = extern struct {
-    open:   ?*const fn (?*anyopaque, [*]const u8, i32, i32, *i32) callconv(.c) i32 = null,
-    read:   ?*const fn (?*anyopaque, i32, [*]u8, i32) callconv(.c) i32 = null,
-    write:  ?*const fn (?*anyopaque, i32, [*]const u8, i32) callconv(.c) i32 = null,
-    close:  ?*const fn (?*anyopaque, i32) callconv(.c) void = null,
+    open: ?*const fn (?*anyopaque, [*]const u8, i32, i32, *i32) callconv(.c) i32 = null,
+    read: ?*const fn (?*anyopaque, i32, [*]u8, i32) callconv(.c) i32 = null,
+    write: ?*const fn (?*anyopaque, i32, [*]const u8, i32) callconv(.c) i32 = null,
+    close: ?*const fn (?*anyopaque, i32) callconv(.c) void = null,
     exists: ?*const fn (?*anyopaque, [*]const u8, i32) callconv(.c) i32 = null,
-    list:   ?*const fn (?*anyopaque, [*]const u8, i32, [*]u8, i32) callconv(.c) i32 = null,
+    list: ?*const fn (?*anyopaque, [*]const u8, i32, [*]u8, i32) callconv(.c) i32 = null,
     unlink: ?*const fn (?*anyopaque, [*]const u8, i32) callconv(.c) i32 = null,
-    mkdir:  ?*const fn (?*anyopaque, [*]const u8, i32) callconv(.c) i32 = null,
+    mkdir: ?*const fn (?*anyopaque, [*]const u8, i32) callconv(.c) i32 = null,
 };
 
 pub const MountKind = enum { real_path, driver };

@@ -90,7 +90,7 @@ fn sprintValueDepth(buf_or_null: ?[]u8, v: Value, depth: u32, ancestors: *[Print
             if (buf_or_null) |buf| {
                 @memcpy(buf[0..prefix.len], prefix);
                 @memcpy(buf[prefix.len..][0..s.bytes.len], s.bytes);
-                @memcpy(buf[prefix.len + s.bytes.len..][0..suffix.len], suffix);
+                @memcpy(buf[prefix.len + s.bytes.len ..][0..suffix.len], suffix);
             }
             return len;
         },
@@ -110,12 +110,14 @@ fn sprintValueDepth(buf_or_null: ?[]u8, v: Value, depth: u32, ancestors: *[Print
             if (buf_or_null) |buf| {
                 @memcpy(buf[0..tn.len], tn);
                 @memcpy(buf[tn.len..][0..dot.len], dot);
-                @memcpy(buf[tn.len + dot.len..][0..arm.name.len], arm.name);
+                @memcpy(buf[tn.len + dot.len ..][0..arm.name.len], arm.name);
                 var pos = tn.len + dot.len + arm.name.len;
                 if (open.len > 0) {
-                    buf[pos] = '('; pos += 1;
+                    buf[pos] = '(';
+                    pos += 1;
                     pos += try sprintValueDepth(buf[pos..], payload, depth + 1, ancestors, anc_count);
-                    buf[pos] = ')'; pos += 1;
+                    buf[pos] = ')';
+                    pos += 1;
                 }
                 _ = &pos;
             }
@@ -140,213 +142,227 @@ fn sprintValueDepth(buf_or_null: ?[]u8, v: Value, depth: u32, ancestors: *[Print
                     if (buf_or_null) |buf| @memcpy(buf[0..sv.bytes.len], sv.bytes);
                     return sv.bytes.len;
                 },
-            .array, .array_managed, .array_view, .array_capacity => {
-                const items = try vms.asArraySlice(obj);
-                var len: usize = 1;
-                var needs_comma = false;
-                for (items) |item| {
-                    if (needs_comma) len += 2;
-                    len += try sprintValueDepth(null, item, depth + 1, ancestors, anc_count);
-                    needs_comma = true;
-                }
-                len += 1;
-                if (buf_or_null) |buf| {
-                    var pos: usize = 0;
-                    buf[pos] = '['; pos += 1;
-                    needs_comma = false;
+                .array, .array_managed, .array_view, .array_capacity => {
+                    const items = try vms.asArraySlice(obj);
+                    var len: usize = 1;
+                    var needs_comma = false;
                     for (items) |item| {
-                        if (needs_comma) { @memcpy(buf[pos..][0..2], ", "); pos += 2; }
-                        pos += try sprintValueDepth(buf[pos..], item, depth + 1, ancestors, anc_count);
+                        if (needs_comma) len += 2;
+                        len += try sprintValueDepth(null, item, depth + 1, ancestors, anc_count);
                         needs_comma = true;
                     }
-                    buf[pos] = ']';
-                }
-                return len;
-            },
-            .map, .map_managed, .map_hashed => {
-                const items = try vms.asMapSlice(obj);
-                var len: usize = 1;
-                var needs_comma = false;
-                for (items) |item| {
-                    if (needs_comma) len += 2;
-                    len += try sprintValueDepth(null, item.key, depth + 1, ancestors, anc_count);
-                    len += 2;
-                    len += try sprintValueDepth(null, item.value, depth + 1, ancestors, anc_count);
-                    needs_comma = true;
-                }
-                len += 1;
-                if (buf_or_null) |buf| {
-                    var pos: usize = 0;
-                    buf[pos] = '{'; pos += 1;
-                    needs_comma = false;
-                    for (items) |item| {
-                        if (needs_comma) { @memcpy(buf[pos..][0..2], ", "); pos += 2; }
-                        pos += try sprintValueDepth(buf[pos..], item.key, depth + 1, ancestors, anc_count);
-                        @memcpy(buf[pos..][0..2], ": "); pos += 2;
-                        pos += try sprintValueDepth(buf[pos..], item.value, depth + 1, ancestors, anc_count);
-                        needs_comma = true;
-                    }
-                    buf[pos] = '}';
-                }
-                return len;
-            },
-            .named_value => |nv| return try sprintValueDepth(buf_or_null, nv.value, depth + 1, ancestors, anc_count),
-            .function => {
-                if (buf_or_null) |buf| @memcpy(buf[0..6], "<func>");
-                return 6;
-            },
-            .closure => {
-                if (buf_or_null) |buf| @memcpy(buf[0..9], "<closure>");
-                return 9;
-            },
-            .native_function => {
-                if (buf_or_null) |buf| @memcpy(buf[0..13], "<native-func>");
-                return 13;
-            },
-            .struct_type => |st| {
-                const prefix = "<struct ";
-                const suffix = ">";
-                const len = prefix.len + st.name.len + suffix.len;
-                if (buf_or_null) |buf| {
-                    @memcpy(buf[0..prefix.len], prefix);
-                    @memcpy(buf[prefix.len..][0..st.name.len], st.name);
-                    @memcpy(buf[prefix.len + st.name.len..][0..suffix.len], suffix);
-                }
-                return len;
-            },
-            .named_type => |nt| {
-                const prefix = "<type ";
-                const suffix = ">";
-                const len = prefix.len + nt.name.len + suffix.len;
-                if (buf_or_null) |buf| {
-                    @memcpy(buf[0..prefix.len], prefix);
-                    @memcpy(buf[prefix.len..][0..nt.name.len], nt.name);
-                    @memcpy(buf[prefix.len + nt.name.len..][0..suffix.len], suffix);
-                }
-                return len;
-            },
-            .struct_instance => |inst| {
-                const prefix = "<struct ";
-                const suffix = ">";
-                const len = prefix.len + inst.typ.struct_type.name.len + suffix.len;
-                if (buf_or_null) |buf| {
-                    @memcpy(buf[0..prefix.len], prefix);
-                    @memcpy(buf[prefix.len..][0..inst.typ.struct_type.name.len], inst.typ.struct_type.name);
-                    @memcpy(buf[prefix.len + inst.typ.struct_type.name.len..][0..suffix.len], suffix);
-                }
-                return len;
-            },
-            .small_struct_instance => |ssi| {
-                const prefix = "<struct ";
-                const suffix = ">";
-                const len = prefix.len + ssi.typ.struct_type.name.len + suffix.len;
-                if (buf_or_null) |buf| {
-                    @memcpy(buf[0..prefix.len], prefix);
-                    @memcpy(buf[prefix.len..][0..ssi.typ.struct_type.name.len], ssi.typ.struct_type.name);
-                    @memcpy(buf[prefix.len + ssi.typ.struct_type.name.len..][0..suffix.len], suffix);
-                }
-                return len;
-            },
-            .interface_type => |it| {
-                const prefix = "<interface ";
-                const suffix = ">";
-                const len = prefix.len + it.name.len + suffix.len;
-                if (buf_or_null) |buf| {
-                    @memcpy(buf[0..prefix.len], prefix);
-                    @memcpy(buf[prefix.len..][0..it.name.len], it.name);
-                    @memcpy(buf[prefix.len + it.name.len..][0..suffix.len], suffix);
-                }
-                return len;
-            },
-            .enum_type => |et| {
-                const prefix = "<enum ";
-                const suffix = ">";
-                const len = prefix.len + et.name.len + suffix.len;
-                if (buf_or_null) |buf| {
-                    @memcpy(buf[0..prefix.len], prefix);
-                    @memcpy(buf[prefix.len..][0..et.name.len], et.name);
-                    @memcpy(buf[prefix.len + et.name.len..][0..suffix.len], suffix);
-                }
-                return len;
-            },
-            .enum_value => |ev| {
-                if (buf_or_null) |buf| @memcpy(buf[0..ev.name.len], ev.name);
-                return ev.name.len;
-            },
-            .variant_type => |vt| {
-                const prefix = "<variant ";
-                const suffix = ">";
-                const len = prefix.len + vt.name.len + suffix.len;
-                if (buf_or_null) |buf| {
-                    @memcpy(buf[0..prefix.len], prefix);
-                    @memcpy(buf[prefix.len..][0..vt.name.len], vt.name);
-                    @memcpy(buf[prefix.len + vt.name.len..][0..suffix.len], suffix);
-                }
-                return len;
-            },
-            .variant_ctor => |vc| {
-                const tn = vc.typ.variant_type.name;
-                const dot = ".";
-                const len = tn.len + dot.len + vc.tag.len;
-                if (buf_or_null) |buf| {
-                    @memcpy(buf[0..tn.len], tn);
-                    @memcpy(buf[tn.len..][0..dot.len], dot);
-                    @memcpy(buf[tn.len + dot.len..][0..vc.tag.len], vc.tag);
-                }
-                return len;
-            },
-            .variant_value => |vv| {
-                const tn = vv.typ.variant_type.name;
-                const dot = ".";
-                var inner_len: usize = 0;
-                if (vv.arm_fields.len > 0) {
-                    for (vv.arm_fields) |f| {
-                        inner_len += try sprintValueDepth(null, f, depth + 1, ancestors, anc_count);
-                    }
-                    inner_len += (vv.arm_fields.len - 1) * 2; // ", " separators
-                } else if (vv.payload != .null) {
-                    inner_len = try sprintValueDepth(null, vv.payload, depth + 1, ancestors, anc_count);
-                }
-                const open = if (vv.payload != .null or vv.arm_fields.len > 0) "(" else "";
-                const close = if (vv.payload != .null or vv.arm_fields.len > 0) ")" else "";
-                const len = tn.len + dot.len + vv.tag.len + open.len + inner_len + close.len;
-                if (buf_or_null) |buf| {
-                    @memcpy(buf[0..tn.len], tn);
-                    @memcpy(buf[tn.len..][0..dot.len], dot);
-                    const tag_start = tn.len + dot.len;
-                    @memcpy(buf[tag_start..][0..vv.tag.len], vv.tag);
-                    var pos = tag_start + vv.tag.len;
-                    if (open.len > 0) {
-                        buf[pos] = '('; pos += 1;
-                        if (vv.arm_fields.len > 0) {
-                            for (vv.arm_fields, 0..) |f, fi| {
-                                if (fi > 0) { @memcpy(buf[pos..][0..2], ", "); pos += 2; }
-                                pos += try sprintValueDepth(buf[pos..], f, depth + 1, ancestors, anc_count);
+                    len += 1;
+                    if (buf_or_null) |buf| {
+                        var pos: usize = 0;
+                        buf[pos] = '[';
+                        pos += 1;
+                        needs_comma = false;
+                        for (items) |item| {
+                            if (needs_comma) {
+                                @memcpy(buf[pos..][0..2], ", ");
+                                pos += 2;
                             }
-                        } else {
-                            pos += try sprintValueDepth(buf[pos..], vv.payload, depth + 1, ancestors, anc_count);
+                            pos += try sprintValueDepth(buf[pos..], item, depth + 1, ancestors, anc_count);
+                            needs_comma = true;
                         }
-                        buf[pos] = ')'; pos += 1;
+                        buf[pos] = ']';
                     }
-                }
-                return len;
-            },
-            .named_error_value => |nev| {
-                const tn = nev.typ.named_error_type.name;
-                const msg = nev.msg.bytes;
-                const len = tn.len + 1 + msg.len + 1;
-                if (buf_or_null) |buf| {
-                    @memcpy(buf[0..tn.len], tn);
-                    buf[tn.len] = '(';
-                    @memcpy(buf[tn.len + 1..][0..msg.len], msg);
-                    buf[tn.len + 1 + msg.len] = ')';
-                }
-                return len;
-            },
-             else => {
-                if (buf_or_null) |buf| @memcpy(buf[0..4], "null");
-                return 4;
-            },
+                    return len;
+                },
+                .map, .map_managed, .map_hashed => {
+                    const items = try vms.asMapSlice(obj);
+                    var len: usize = 1;
+                    var needs_comma = false;
+                    for (items) |item| {
+                        if (needs_comma) len += 2;
+                        len += try sprintValueDepth(null, item.key, depth + 1, ancestors, anc_count);
+                        len += 2;
+                        len += try sprintValueDepth(null, item.value, depth + 1, ancestors, anc_count);
+                        needs_comma = true;
+                    }
+                    len += 1;
+                    if (buf_or_null) |buf| {
+                        var pos: usize = 0;
+                        buf[pos] = '{';
+                        pos += 1;
+                        needs_comma = false;
+                        for (items) |item| {
+                            if (needs_comma) {
+                                @memcpy(buf[pos..][0..2], ", ");
+                                pos += 2;
+                            }
+                            pos += try sprintValueDepth(buf[pos..], item.key, depth + 1, ancestors, anc_count);
+                            @memcpy(buf[pos..][0..2], ": ");
+                            pos += 2;
+                            pos += try sprintValueDepth(buf[pos..], item.value, depth + 1, ancestors, anc_count);
+                            needs_comma = true;
+                        }
+                        buf[pos] = '}';
+                    }
+                    return len;
+                },
+                .named_value => |nv| return try sprintValueDepth(buf_or_null, nv.value, depth + 1, ancestors, anc_count),
+                .function => {
+                    if (buf_or_null) |buf| @memcpy(buf[0..6], "<func>");
+                    return 6;
+                },
+                .closure => {
+                    if (buf_or_null) |buf| @memcpy(buf[0..9], "<closure>");
+                    return 9;
+                },
+                .native_function => {
+                    if (buf_or_null) |buf| @memcpy(buf[0..13], "<native-func>");
+                    return 13;
+                },
+                .struct_type => |st| {
+                    const prefix = "<struct ";
+                    const suffix = ">";
+                    const len = prefix.len + st.name.len + suffix.len;
+                    if (buf_or_null) |buf| {
+                        @memcpy(buf[0..prefix.len], prefix);
+                        @memcpy(buf[prefix.len..][0..st.name.len], st.name);
+                        @memcpy(buf[prefix.len + st.name.len ..][0..suffix.len], suffix);
+                    }
+                    return len;
+                },
+                .named_type => |nt| {
+                    const prefix = "<type ";
+                    const suffix = ">";
+                    const len = prefix.len + nt.name.len + suffix.len;
+                    if (buf_or_null) |buf| {
+                        @memcpy(buf[0..prefix.len], prefix);
+                        @memcpy(buf[prefix.len..][0..nt.name.len], nt.name);
+                        @memcpy(buf[prefix.len + nt.name.len ..][0..suffix.len], suffix);
+                    }
+                    return len;
+                },
+                .struct_instance => |inst| {
+                    const prefix = "<struct ";
+                    const suffix = ">";
+                    const len = prefix.len + inst.typ.struct_type.name.len + suffix.len;
+                    if (buf_or_null) |buf| {
+                        @memcpy(buf[0..prefix.len], prefix);
+                        @memcpy(buf[prefix.len..][0..inst.typ.struct_type.name.len], inst.typ.struct_type.name);
+                        @memcpy(buf[prefix.len + inst.typ.struct_type.name.len ..][0..suffix.len], suffix);
+                    }
+                    return len;
+                },
+                .small_struct_instance => |ssi| {
+                    const prefix = "<struct ";
+                    const suffix = ">";
+                    const len = prefix.len + ssi.typ.struct_type.name.len + suffix.len;
+                    if (buf_or_null) |buf| {
+                        @memcpy(buf[0..prefix.len], prefix);
+                        @memcpy(buf[prefix.len..][0..ssi.typ.struct_type.name.len], ssi.typ.struct_type.name);
+                        @memcpy(buf[prefix.len + ssi.typ.struct_type.name.len ..][0..suffix.len], suffix);
+                    }
+                    return len;
+                },
+                .interface_type => |it| {
+                    const prefix = "<interface ";
+                    const suffix = ">";
+                    const len = prefix.len + it.name.len + suffix.len;
+                    if (buf_or_null) |buf| {
+                        @memcpy(buf[0..prefix.len], prefix);
+                        @memcpy(buf[prefix.len..][0..it.name.len], it.name);
+                        @memcpy(buf[prefix.len + it.name.len ..][0..suffix.len], suffix);
+                    }
+                    return len;
+                },
+                .enum_type => |et| {
+                    const prefix = "<enum ";
+                    const suffix = ">";
+                    const len = prefix.len + et.name.len + suffix.len;
+                    if (buf_or_null) |buf| {
+                        @memcpy(buf[0..prefix.len], prefix);
+                        @memcpy(buf[prefix.len..][0..et.name.len], et.name);
+                        @memcpy(buf[prefix.len + et.name.len ..][0..suffix.len], suffix);
+                    }
+                    return len;
+                },
+                .enum_value => |ev| {
+                    if (buf_or_null) |buf| @memcpy(buf[0..ev.name.len], ev.name);
+                    return ev.name.len;
+                },
+                .variant_type => |vt| {
+                    const prefix = "<variant ";
+                    const suffix = ">";
+                    const len = prefix.len + vt.name.len + suffix.len;
+                    if (buf_or_null) |buf| {
+                        @memcpy(buf[0..prefix.len], prefix);
+                        @memcpy(buf[prefix.len..][0..vt.name.len], vt.name);
+                        @memcpy(buf[prefix.len + vt.name.len ..][0..suffix.len], suffix);
+                    }
+                    return len;
+                },
+                .variant_ctor => |vc| {
+                    const tn = vc.typ.variant_type.name;
+                    const dot = ".";
+                    const len = tn.len + dot.len + vc.tag.len;
+                    if (buf_or_null) |buf| {
+                        @memcpy(buf[0..tn.len], tn);
+                        @memcpy(buf[tn.len..][0..dot.len], dot);
+                        @memcpy(buf[tn.len + dot.len ..][0..vc.tag.len], vc.tag);
+                    }
+                    return len;
+                },
+                .variant_value => |vv| {
+                    const tn = vv.typ.variant_type.name;
+                    const dot = ".";
+                    var inner_len: usize = 0;
+                    if (vv.arm_fields.len > 0) {
+                        for (vv.arm_fields) |f| {
+                            inner_len += try sprintValueDepth(null, f, depth + 1, ancestors, anc_count);
+                        }
+                        inner_len += (vv.arm_fields.len - 1) * 2; // ", " separators
+                    } else if (vv.payload != .null) {
+                        inner_len = try sprintValueDepth(null, vv.payload, depth + 1, ancestors, anc_count);
+                    }
+                    const open = if (vv.payload != .null or vv.arm_fields.len > 0) "(" else "";
+                    const close = if (vv.payload != .null or vv.arm_fields.len > 0) ")" else "";
+                    const len = tn.len + dot.len + vv.tag.len + open.len + inner_len + close.len;
+                    if (buf_or_null) |buf| {
+                        @memcpy(buf[0..tn.len], tn);
+                        @memcpy(buf[tn.len..][0..dot.len], dot);
+                        const tag_start = tn.len + dot.len;
+                        @memcpy(buf[tag_start..][0..vv.tag.len], vv.tag);
+                        var pos = tag_start + vv.tag.len;
+                        if (open.len > 0) {
+                            buf[pos] = '(';
+                            pos += 1;
+                            if (vv.arm_fields.len > 0) {
+                                for (vv.arm_fields, 0..) |f, fi| {
+                                    if (fi > 0) {
+                                        @memcpy(buf[pos..][0..2], ", ");
+                                        pos += 2;
+                                    }
+                                    pos += try sprintValueDepth(buf[pos..], f, depth + 1, ancestors, anc_count);
+                                }
+                            } else {
+                                pos += try sprintValueDepth(buf[pos..], vv.payload, depth + 1, ancestors, anc_count);
+                            }
+                            buf[pos] = ')';
+                            pos += 1;
+                        }
+                    }
+                    return len;
+                },
+                .named_error_value => |nev| {
+                    const tn = nev.typ.named_error_type.name;
+                    const msg = nev.msg.bytes;
+                    const len = tn.len + 1 + msg.len + 1;
+                    if (buf_or_null) |buf| {
+                        @memcpy(buf[0..tn.len], tn);
+                        buf[tn.len] = '(';
+                        @memcpy(buf[tn.len + 1 ..][0..msg.len], msg);
+                        buf[tn.len + 1 + msg.len] = ')';
+                    }
+                    return len;
+                },
+                else => {
+                    if (buf_or_null) |buf| @memcpy(buf[0..4], "null");
+                    return 4;
+                },
             }
         },
     }
@@ -404,7 +420,10 @@ fn isNumericVerb(v: u8) bool {
 }
 
 fn fmtUint64(buf: []u8, v: u64, base: u8, upper: bool) []u8 {
-    if (v == 0) { buf[0] = '0'; return buf[0..1]; }
+    if (v == 0) {
+        buf[0] = '0';
+        return buf[0..1];
+    }
     const digs = if (upper) "0123456789ABCDEF" else "0123456789abcdef";
     var tmp: [64]u8 = undefined;
     var len: usize = 0;
@@ -451,7 +470,10 @@ fn fmtInt(scratch: *[2048]u8, arg: Value, spec: FmtSpec) ![]const u8 {
     const digits = fmtUint64(&digits_buf, mag, base, upper);
 
     var pos: usize = 0;
-    if (sign != 0) { scratch[pos] = sign; pos += 1; }
+    if (sign != 0) {
+        scratch[pos] = sign;
+        pos += 1;
+    }
     @memcpy(scratch[pos..][0..alt.len], alt);
     pos += alt.len;
     @memcpy(scratch[pos..][0..digits.len], digits);
@@ -461,16 +483,16 @@ fn fmtInt(scratch: *[2048]u8, arg: Value, spec: FmtSpec) ![]const u8 {
 
 fn fmtF64Fixed(buf: []u8, abs_v: f64, prec: usize) usize {
     const s: []const u8 = switch (prec) {
-        0  => std.fmt.bufPrint(buf, "{d:.0}",  .{abs_v}) catch return 0,
-        1  => std.fmt.bufPrint(buf, "{d:.1}",  .{abs_v}) catch return 0,
-        2  => std.fmt.bufPrint(buf, "{d:.2}",  .{abs_v}) catch return 0,
-        3  => std.fmt.bufPrint(buf, "{d:.3}",  .{abs_v}) catch return 0,
-        4  => std.fmt.bufPrint(buf, "{d:.4}",  .{abs_v}) catch return 0,
-        5  => std.fmt.bufPrint(buf, "{d:.5}",  .{abs_v}) catch return 0,
-        6  => std.fmt.bufPrint(buf, "{d:.6}",  .{abs_v}) catch return 0,
-        7  => std.fmt.bufPrint(buf, "{d:.7}",  .{abs_v}) catch return 0,
-        8  => std.fmt.bufPrint(buf, "{d:.8}",  .{abs_v}) catch return 0,
-        9  => std.fmt.bufPrint(buf, "{d:.9}",  .{abs_v}) catch return 0,
+        0 => std.fmt.bufPrint(buf, "{d:.0}", .{abs_v}) catch return 0,
+        1 => std.fmt.bufPrint(buf, "{d:.1}", .{abs_v}) catch return 0,
+        2 => std.fmt.bufPrint(buf, "{d:.2}", .{abs_v}) catch return 0,
+        3 => std.fmt.bufPrint(buf, "{d:.3}", .{abs_v}) catch return 0,
+        4 => std.fmt.bufPrint(buf, "{d:.4}", .{abs_v}) catch return 0,
+        5 => std.fmt.bufPrint(buf, "{d:.5}", .{abs_v}) catch return 0,
+        6 => std.fmt.bufPrint(buf, "{d:.6}", .{abs_v}) catch return 0,
+        7 => std.fmt.bufPrint(buf, "{d:.7}", .{abs_v}) catch return 0,
+        8 => std.fmt.bufPrint(buf, "{d:.8}", .{abs_v}) catch return 0,
+        9 => std.fmt.bufPrint(buf, "{d:.9}", .{abs_v}) catch return 0,
         10 => std.fmt.bufPrint(buf, "{d:.10}", .{abs_v}) catch return 0,
         11 => std.fmt.bufPrint(buf, "{d:.11}", .{abs_v}) catch return 0,
         12 => std.fmt.bufPrint(buf, "{d:.12}", .{abs_v}) catch return 0,
@@ -486,32 +508,58 @@ fn fmtF64Fixed(buf: []u8, abs_v: f64, prec: usize) usize {
 fn fmtF64Sci(buf: []u8, abs_v: f64, prec: usize, upper: bool) usize {
     var pos: usize = 0;
     if (abs_v == 0.0) {
-        buf[pos] = '0'; pos += 1;
-        if (prec > 0) { buf[pos] = '.'; pos += 1; @memset(buf[pos..][0..prec], '0'); pos += prec; }
-        buf[pos] = if (upper) 'E' else 'e'; pos += 1;
-        @memcpy(buf[pos..][0..3], "+00"); pos += 3;
+        buf[pos] = '0';
+        pos += 1;
+        if (prec > 0) {
+            buf[pos] = '.';
+            pos += 1;
+            @memset(buf[pos..][0..prec], '0');
+            pos += prec;
+        }
+        buf[pos] = if (upper) 'E' else 'e';
+        pos += 1;
+        @memcpy(buf[pos..][0..3], "+00");
+        pos += 3;
         return pos;
     }
     const log = std.math.log10(abs_v);
     var exp: i32 = @intFromFloat(@floor(log));
     var mant = abs_v / std.math.pow(f64, 10.0, @as(f64, @floatFromInt(exp)));
-    if (mant >= 10.0) { mant /= 10.0; exp += 1; } else if (mant < 1.0) { mant *= 10.0; exp -= 1; }
+    if (mant >= 10.0) {
+        mant /= 10.0;
+        exp += 1;
+    } else if (mant < 1.0) {
+        mant *= 10.0;
+        exp -= 1;
+    }
     const scale = std.math.pow(f64, 10.0, @as(f64, @floatFromInt(prec)));
-    if (@round(mant * scale) >= 10.0 * scale) { mant /= 10.0; exp += 1; }
+    if (@round(mant * scale) >= 10.0 * scale) {
+        mant /= 10.0;
+        exp += 1;
+    }
     pos += fmtF64Fixed(buf[pos..], mant, prec);
-    buf[pos] = if (upper) 'E' else 'e'; pos += 1;
-    buf[pos] = if (exp >= 0) '+' else '-'; pos += 1;
+    buf[pos] = if (upper) 'E' else 'e';
+    pos += 1;
+    buf[pos] = if (exp >= 0) '+' else '-';
+    pos += 1;
     const abs_exp: u32 = @intCast(@abs(exp));
-    if (abs_exp < 10) { buf[pos] = '0'; pos += 1; }
+    if (abs_exp < 10) {
+        buf[pos] = '0';
+        pos += 1;
+    }
     var exp_tmp: [8]u8 = undefined;
     const exp_s = fmtUint64(&exp_tmp, abs_exp, 10, false);
-    @memcpy(buf[pos..][0..exp_s.len], exp_s); pos += exp_s.len;
+    @memcpy(buf[pos..][0..exp_s.len], exp_s);
+    pos += exp_s.len;
     return pos;
 }
 
 fn stripTrailingZeros(buf: []u8, end: usize) usize {
     var dot: ?usize = null;
-    for (buf[0..end], 0..) |c, k| if (c == '.') { dot = k; break; };
+    for (buf[0..end], 0..) |c, k| if (c == '.') {
+        dot = k;
+        break;
+    };
     const d = dot orelse return end;
     var e = end;
     while (e > d + 1 and buf[e - 1] == '0') e -= 1;
@@ -521,10 +569,16 @@ fn stripTrailingZeros(buf: []u8, end: usize) usize {
 
 fn stripTrailingZerosBeforeExp(buf: []u8, end: usize) usize {
     var e_pos: ?usize = null;
-    for (buf[0..end], 0..) |c, k| if (c == 'e' or c == 'E') { e_pos = k; break; };
+    for (buf[0..end], 0..) |c, k| if (c == 'e' or c == 'E') {
+        e_pos = k;
+        break;
+    };
     const ep = e_pos orelse return end;
     var dot: ?usize = null;
-    for (buf[0..ep], 0..) |c, k| if (c == '.') { dot = k; break; };
+    for (buf[0..ep], 0..) |c, k| if (c == '.') {
+        dot = k;
+        break;
+    };
     const d = dot orelse return end;
     var mend = ep;
     while (mend > d + 1 and buf[mend - 1] == '0') mend -= 1;
@@ -538,7 +592,10 @@ fn stripTrailingZerosBeforeExp(buf: []u8, end: usize) usize {
 
 fn fmtF64General(buf: []u8, abs_v: f64, prec_in: usize, upper: bool) usize {
     const p = if (prec_in == 0) @as(usize, 1) else prec_in;
-    if (abs_v == 0.0) { buf[0] = '0'; return 1; }
+    if (abs_v == 0.0) {
+        buf[0] = '0';
+        return 1;
+    }
     const log = std.math.log10(abs_v);
     const exp: i32 = @intFromFloat(@floor(log));
     if (exp < -4 or exp >= @as(i32, @intCast(p))) {
@@ -554,17 +611,31 @@ fn fmtF64General(buf: []u8, abs_v: f64, prec_in: usize, upper: bool) usize {
 }
 
 fn fmtFloat(buf: []u8, v: f64, verb: u8, prec_in: i32, spec: FmtSpec) usize {
-    if (v != v) { @memcpy(buf[0..3], "NaN"); return 3; }
+    if (v != v) {
+        @memcpy(buf[0..3], "NaN");
+        return 3;
+    }
     var pos: usize = 0;
     const neg = v < 0.0 or (v == 0.0 and std.math.signbit(v));
     const abs = @abs(v);
     if (std.math.isInf(abs)) {
-        if (neg) { @memcpy(buf[0..4], "-Inf"); return 4; }
-        @memcpy(buf[0..3], "Inf"); return 3;
+        if (neg) {
+            @memcpy(buf[0..4], "-Inf");
+            return 4;
+        }
+        @memcpy(buf[0..3], "Inf");
+        return 3;
     }
-    if (neg) { buf[pos] = '-'; pos += 1; }
-    else if (spec.plus_sign) { buf[pos] = '+'; pos += 1; }
-    else if (spec.space_sign) { buf[pos] = ' '; pos += 1; }
+    if (neg) {
+        buf[pos] = '-';
+        pos += 1;
+    } else if (spec.plus_sign) {
+        buf[pos] = '+';
+        pos += 1;
+    } else if (spec.space_sign) {
+        buf[pos] = ' ';
+        pos += 1;
+    }
     const prec: usize = if (prec_in < 0) 6 else @intCast(prec_in);
     pos += switch (verb) {
         'f' => fmtF64Fixed(buf[pos..], abs, prec),
@@ -580,7 +651,8 @@ fn fmtFloat(buf: []u8, v: f64, verb: u8, prec_in: i32, spec: FmtSpec) usize {
 fn fmtQuoted(buf: []u8, s: []const u8) usize {
     var pos: usize = 0;
     if (pos + 2 > buf.len) return 0;
-    buf[pos] = '"'; pos += 1;
+    buf[pos] = '"';
+    pos += 1;
     for (s) |c| {
         const needed: usize = switch (c) {
             '\\', '"', '\n', '\r', '\t' => 2,
@@ -589,21 +661,46 @@ fn fmtQuoted(buf: []u8, s: []const u8) usize {
         };
         if (pos + needed + 1 > buf.len) break;
         switch (c) {
-            '\\' => { buf[pos] = '\\'; buf[pos+1] = '\\'; pos += 2; },
-            '"'  => { buf[pos] = '\\'; buf[pos+1] = '"';  pos += 2; },
-            '\n' => { buf[pos] = '\\'; buf[pos+1] = 'n';  pos += 2; },
-            '\r' => { buf[pos] = '\\'; buf[pos+1] = 'r';  pos += 2; },
-            '\t' => { buf[pos] = '\\'; buf[pos+1] = 't';  pos += 2; },
+            '\\' => {
+                buf[pos] = '\\';
+                buf[pos + 1] = '\\';
+                pos += 2;
+            },
+            '"' => {
+                buf[pos] = '\\';
+                buf[pos + 1] = '"';
+                pos += 2;
+            },
+            '\n' => {
+                buf[pos] = '\\';
+                buf[pos + 1] = 'n';
+                pos += 2;
+            },
+            '\r' => {
+                buf[pos] = '\\';
+                buf[pos + 1] = 'r';
+                pos += 2;
+            },
+            '\t' => {
+                buf[pos] = '\\';
+                buf[pos + 1] = 't';
+                pos += 2;
+            },
             0...8, 11, 12, 14...31, 127 => {
-                buf[pos]   = '\\'; buf[pos+1] = 'x';
-                buf[pos+2] = "0123456789abcdef"[c >> 4];
-                buf[pos+3] = "0123456789abcdef"[c & 0xF];
+                buf[pos] = '\\';
+                buf[pos + 1] = 'x';
+                buf[pos + 2] = "0123456789abcdef"[c >> 4];
+                buf[pos + 3] = "0123456789abcdef"[c & 0xF];
                 pos += 4;
             },
-            else => { buf[pos] = c; pos += 1; },
+            else => {
+                buf[pos] = c;
+                pos += 1;
+            },
         }
     }
-    buf[pos] = '"'; pos += 1;
+    buf[pos] = '"';
+    pos += 1;
     return pos;
 }
 
@@ -657,7 +754,10 @@ fn fmtProcess(ctx: VMContext, buf_opt: ?[]u8, fmt: []const u8, args_start: usize
     var scratch: [2048]u8 = undefined;
 
     while (fi < fmt.len) {
-        if (fmt[fi] != '%') { fi += 1; continue; }
+        if (fmt[fi] != '%') {
+            fi += 1;
+            continue;
+        }
 
         const plain = fmt[plain_start..fi];
         if (buf_opt) |b| @memcpy(b[total..][0..plain.len], plain);
@@ -668,7 +768,9 @@ fn fmtProcess(ctx: VMContext, buf_opt: ?[]u8, fmt: []const u8, args_start: usize
 
         if (fmt[fi] == '%') {
             if (buf_opt) |b| b[total] = '%';
-            total += 1; fi += 1; plain_start = fi;
+            total += 1;
+            fi += 1;
+            plain_start = fi;
             continue;
         }
 
@@ -685,10 +787,10 @@ fn fmtProcess(ctx: VMContext, buf_opt: ?[]u8, fmt: []const u8, args_start: usize
             if (buf_opt) |b| {
                 if (spec.left_align) {
                     _ = try sprintValue(b[total..][0..core_len], arg);
-                    @memset(b[total + core_len..][0..pad], ' ');
+                    @memset(b[total + core_len ..][0..pad], ' ');
                 } else {
                     @memset(b[total..][0..pad], ' ');
-                    _ = try sprintValue(b[total + pad..][0..core_len], arg);
+                    _ = try sprintValue(b[total + pad ..][0..core_len], arg);
                 }
             }
             total += core_len + pad;
@@ -700,19 +802,19 @@ fn fmtProcess(ctx: VMContext, buf_opt: ?[]u8, fmt: []const u8, args_start: usize
         if (buf_opt) |b| {
             if (spec.left_align) {
                 @memcpy(b[total..][0..core.len], core);
-                @memset(b[total + core.len..][0..pad], ' ');
+                @memset(b[total + core.len ..][0..pad], ' ');
             } else if (spec.zero_pad and isNumericVerb(spec.verb) and pad > 0) {
                 if (core.len > 0 and (core[0] == '-' or core[0] == '+' or core[0] == ' ')) {
                     b[total] = core[0];
-                    @memset(b[total + 1..][0..pad], '0');
-                    @memcpy(b[total + 1 + pad..][0..core.len - 1], core[1..]);
+                    @memset(b[total + 1 ..][0..pad], '0');
+                    @memcpy(b[total + 1 + pad ..][0 .. core.len - 1], core[1..]);
                 } else {
                     @memset(b[total..][0..pad], '0');
-                    @memcpy(b[total + pad..][0..core.len], core);
+                    @memcpy(b[total + pad ..][0..core.len], core);
                 }
             } else {
                 @memset(b[total..][0..pad], ' ');
-                @memcpy(b[total + pad..][0..core.len], core);
+                @memcpy(b[total + pad ..][0..core.len], core);
             }
         }
         total += core.len + pad;

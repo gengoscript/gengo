@@ -332,5 +332,4 @@ test "cap_fs path extraction accepts string and dyn_string" {
     const dyn = try vmgc.makeDynString(ctx, "test.txt");
     const ds = vms.asStringValue(dyn) catch return error.TestFailed;
     try std.testing.expectEqualStrings("test.txt", ds);
-
 }

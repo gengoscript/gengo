@@ -38,7 +38,7 @@ pub fn build(b: *std.Build) void {
 
     // Copy preset config file into place.
     const preset = b.addSystemCommand(&.{
-        "bash", "-c",
+        "bash",                                                                                                                   "-c",
         b.fmt("cp src/runtime/config_{s}.zig src/runtime/config.zig && echo 'Applied preset: {s}'", .{ preset_opt, preset_opt }),
     });
 

@@ -13,19 +13,19 @@ const MaxPolicyRules = 32;
 pub const PolicyAction = enum(u8) { deny = 0, allow = 1 };
 
 const PatternKind = enum(u8) {
-    match_all,       // "*"
-    hostname_exact,  // "api.example.com"
+    match_all, // "*"
+    hostname_exact, // "api.example.com"
     wildcard_suffix, // "*.example.com" — suffix stored as ".example.com"
-    ipv4_exact,      // stored as 4 bytes in data[0..4]
-    ipv4_cidr,       // stored as 4 bytes + prefix_len
-    ipv6_exact,      // stored as 16 bytes in data[0..16]
-    ipv6_cidr,       // stored as 16 bytes + prefix_len
+    ipv4_exact, // stored as 4 bytes in data[0..4]
+    ipv4_cidr, // stored as 4 bytes + prefix_len
+    ipv6_exact, // stored as 16 bytes in data[0..16]
+    ipv6_cidr, // stored as 16 bytes + prefix_len
 };
 
 const NetPolicyRule = struct {
     action: PolicyAction,
     kind: PatternKind,
-    port: u16,        // 0 = any port
+    port: u16, // 0 = any port
     data: [64]u8 = undefined,
     data_len: u8 = 0,
     prefix_len: u8 = 0,
@@ -397,7 +397,9 @@ pub fn netDial(network: []const u8, address: []const u8) !u32 {
             error.Closed => break,
         };
         switch (result) {
-            .address => |addr| { if (ip == null) ip = addr; },
+            .address => |addr| {
+                if (ip == null) ip = addr;
+            },
             .canonical_name => {},
         }
     }
@@ -583,7 +585,7 @@ pub fn netReadInto(id: u32, dest: []u8) !usize {
     }
     const avail = conn.rbuf_end - conn.rbuf_pos;
     const n = @min(dest.len, avail);
-    @memcpy(dest[0..n], conn.rbuf[conn.rbuf_pos..conn.rbuf_pos + n]);
+    @memcpy(dest[0..n], conn.rbuf[conn.rbuf_pos .. conn.rbuf_pos + n]);
     conn.rbuf_pos += n;
     return n;
 }

@@ -7,13 +7,13 @@ const VMContext = @import("../vm_state.zig").VMContext;
 pub const ArgQualifiedName = @import("../module_descriptor.zig").ArgQualifiedName;
 
 const arg_arms = [_]vmod.VariantArmSpec{
-    .{ .name = "Int",     .has_payload = true },
-    .{ .name = "Float",   .has_payload = true },
+    .{ .name = "Int", .has_payload = true },
+    .{ .name = "Float", .has_payload = true },
     .{ .name = "Decimal", .has_payload = true },
-    .{ .name = "Rune",    .has_payload = true },
-    .{ .name = "Bool",    .has_payload = true },
-    .{ .name = "Str",     .has_payload = true },
-    .{ .name = "Err",     .has_payload = true },
+    .{ .name = "Rune", .has_payload = true },
+    .{ .name = "Bool", .has_payload = true },
+    .{ .name = "Str", .has_payload = true },
+    .{ .name = "Err", .has_payload = true },
 };
 
 pub fn argGetType(ctx: VMContext) !*Object {

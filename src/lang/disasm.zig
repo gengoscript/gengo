@@ -11,9 +11,9 @@ fn readU16(cs: *const chunk.State, pos: usize) u16 {
 
 fn readU32(cs: *const chunk.State, pos: usize) u32 {
     return (@as(u32, cs.codeByteAt(pos)) << 24) |
-           (@as(u32, cs.codeByteAt(pos + 1)) << 16) |
-           (@as(u32, cs.codeByteAt(pos + 2)) << 8) |
-           @as(u32, cs.codeByteAt(pos + 3));
+        (@as(u32, cs.codeByteAt(pos + 1)) << 16) |
+        (@as(u32, cs.codeByteAt(pos + 2)) << 8) |
+        @as(u32, cs.codeByteAt(pos + 3));
 }
 
 fn writeOffset(n: usize) void {
@@ -181,11 +181,7 @@ pub fn disassemble(cs: *const chunk.State) void {
 
         switch (op) {
             // --- 2-byte const index ops ---
-            .constant, .def_global, .make_closure, .ret_const,
-            .const_eq, .const_sub, .const_add, .const_lt, .const_gt,
-            .variant_check,
-            .assert_interface, .assert_struct,
-            .check_named_predicate, .validate_named_range => {
+            .constant, .def_global, .make_closure, .ret_const, .const_eq, .const_sub, .const_add, .const_lt, .const_gt, .variant_check, .assert_interface, .assert_struct, .check_named_predicate, .validate_named_range => {
                 const idx = readU16(cs, i);
                 i += 2;
                 io.write(@tagName(op));
@@ -250,11 +246,7 @@ pub fn disassemble(cs: *const chunk.State) void {
             },
 
             // --- 1-byte operand ops ---
-            .get_local, .set_local, .get_upvalue, .set_upvalue, .close_upvalue,
-            .get_local_ret, .defer_call,
-            .build_array, .build_map, .build_tuple, .build_struct_instance,
-            .tuple_check_arity, .tuple_get, .tuple_get_keep,
-            .get_slice, .assert_type => {
+            .get_local, .set_local, .get_upvalue, .set_upvalue, .close_upvalue, .get_local_ret, .defer_call, .build_array, .build_map, .build_tuple, .build_struct_instance, .tuple_check_arity, .tuple_get, .tuple_get_keep, .get_slice, .assert_type => {
                 const slot = cs.codeByteAt(i);
                 i += 1;
                 io.write(@tagName(op));
@@ -336,8 +328,7 @@ pub fn disassemble(cs: *const chunk.State) void {
             },
 
             // --- triple-fused: op + slot(1) + skip(1) + idx(2) ---
-            .get_local_const_eq, .get_local_const_sub,
-            .get_local_const_add, .get_local_const_lt, .get_local_const_gt => {
+            .get_local_const_eq, .get_local_const_sub, .get_local_const_add, .get_local_const_lt, .get_local_const_gt => {
                 const slot = cs.codeByteAt(i);
                 i += 1;
                 i += 1; // skip byte
@@ -374,10 +365,13 @@ pub fn disassemble(cs: *const chunk.State) void {
             },
             // --- inc_global_const: op + name(2) + ic(2) + add_skip(1) + val(2) ---
             .inc_global_const => {
-                const name_idx = readU16(cs, i); i += 2;
-                const ic = readU16(cs, i); i += 2;
+                const name_idx = readU16(cs, i);
+                i += 2;
+                const ic = readU16(cs, i);
+                i += 2;
                 i += 1; // skip add byte
-                const val_idx = readU16(cs, i); i += 2;
+                const val_idx = readU16(cs, i);
+                i += 2;
                 io.write("inc_global_const ");
                 writeConst(cs, name_idx);
                 if (ic != 0xffff) {
@@ -393,13 +387,18 @@ pub fn disassemble(cs: *const chunk.State) void {
 
             // --- hexa-fused: op + name(2) + ic(2) + glcs_skip(1) + slot(1) + sub_skip(1) + idx(2) + argc(1) ---
             .call_global_local_sub_const, .call_global_local_sub_const_tail => {
-                const name_idx = readU16(cs, i); i += 2;
-                const ic = readU16(cs, i); i += 2;
+                const name_idx = readU16(cs, i);
+                i += 2;
+                const ic = readU16(cs, i);
+                i += 2;
                 i += 1; // skip get_local_const_sub_call byte
-                const slot = cs.codeByteAt(i); i += 1;
+                const slot = cs.codeByteAt(i);
+                i += 1;
                 i += 1; // skip const_sub byte
-                const idx = readU16(cs, i); i += 2;
-                const argc = cs.codeByteAt(i); i += 1;
+                const idx = readU16(cs, i);
+                i += 2;
+                const argc = cs.codeByteAt(i);
+                i += 1;
                 io.write(@tagName(op));
                 io.write(" ");
                 writeConst(cs, name_idx);
@@ -419,8 +418,7 @@ pub fn disassemble(cs: *const chunk.State) void {
             },
 
             // --- quad-fused: op + slot(1) + skip(1) + idx(2) + jmp(4) ---
-            .get_local_const_eq_jif_pop, .get_local_const_lt_jif_pop,
-            .get_local_const_gt_jif_pop => {
+            .get_local_const_eq_jif_pop, .get_local_const_lt_jif_pop, .get_local_const_gt_jif_pop => {
                 const slot = cs.codeByteAt(i);
                 i += 1;
                 i += 1; // skip byte
@@ -468,8 +466,7 @@ pub fn disassemble(cs: *const chunk.State) void {
             },
 
             // --- global triple-fused: op + name(2) + ic(2) + skip(1) + idx(2) ---
-            .get_global_const_eq, .get_global_const_sub,
-            .get_global_const_add, .get_global_const_lt => {
+            .get_global_const_eq, .get_global_const_sub, .get_global_const_add, .get_global_const_lt => {
                 const name_idx = readU16(cs, i);
                 i += 2;
                 const ic = readU16(cs, i);
@@ -581,8 +578,10 @@ pub fn disassemble(cs: *const chunk.State) void {
             },
             // --- fused local += local: op + dst(1) + src(1) ---
             .local_add_local => {
-                const dst = cs.codeByteAt(i); i += 1;
-                const src = cs.codeByteAt(i); i += 1;
+                const dst = cs.codeByteAt(i);
+                i += 1;
+                const src = cs.codeByteAt(i);
+                i += 1;
                 io.write("local_add_local dst=");
                 writeNum(dst);
                 io.write(" src=");
@@ -591,8 +590,10 @@ pub fn disassemble(cs: *const chunk.State) void {
             },
             // --- fused local += const: op + dst(1) + idx(2) ---
             .local_add_const => {
-                const dst = cs.codeByteAt(i); i += 1;
-                const idx = readU16(cs, i); i += 2;
+                const dst = cs.codeByteAt(i);
+                i += 1;
+                const idx = readU16(cs, i);
+                i += 2;
                 io.write("local_add_const dst=");
                 writeNum(dst);
                 io.write(" [");
@@ -603,12 +604,17 @@ pub fn disassemble(cs: *const chunk.State) void {
             },
             // --- local_add_field: op + dst(1) + src(1) + skip(1) + name(2) + ic_type(2) + ic_fidx(1) ---
             .local_add_field => {
-                const dst = cs.codeByteAt(i); i += 1;
-                const src = cs.codeByteAt(i); i += 1;
+                const dst = cs.codeByteAt(i);
+                i += 1;
+                const src = cs.codeByteAt(i);
+                i += 1;
                 i += 1; // skip byte
-                const name_idx = readU16(cs, i); i += 2;
-                const ic_type = readU16(cs, i); i += 2;
-                const ic_fidx = cs.codeByteAt(i); i += 1;
+                const name_idx = readU16(cs, i);
+                i += 2;
+                const ic_type = readU16(cs, i);
+                i += 2;
+                const ic_fidx = cs.codeByteAt(i);
+                i += 1;
                 io.write("local_add_field dst=");
                 writeNum(dst);
                 io.write(" src=");
@@ -625,9 +631,12 @@ pub fn disassemble(cs: *const chunk.State) void {
             },
             // --- fused local += const + loop: op + dst(1) + idx(2) + off(4) ---
             .local_add_const_loop => {
-                const dst = cs.codeByteAt(i); i += 1;
-                const idx = readU16(cs, i); i += 2;
-                const off = readU32(cs, i); i += 4;
+                const dst = cs.codeByteAt(i);
+                i += 1;
+                const idx = readU16(cs, i);
+                i += 2;
+                const off = readU32(cs, i);
+                i += 4;
                 const target = start + 8 - @as(usize, off);
                 io.write("local_add_const_loop dst=");
                 writeNum(dst);

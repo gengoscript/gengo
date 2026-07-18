@@ -325,8 +325,12 @@ fn matchAlt(alt: Alt, s: []const u8, pos: usize) ?usize {
     while (i < alt.len) {
         const node = alt[i];
         switch (node.kind) {
-            .caret => { if (p != 0) return null; },
-            .dollar => { if (p != s.len) return null; },
+            .caret => {
+                if (p != 0) return null;
+            },
+            .dollar => {
+                if (p != s.len) return null;
+            },
             .literal, .dot, .char_class, .char_class_neg => {
                 if (p >= s.len or !matchOne(s[p], node)) return null;
                 p += 1;
@@ -585,7 +589,8 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             if (argc != nf.arity) return error.ArityMismatch;
             const pattern_val = ctx.vs.stack[ctx.vs.stack_top - 1];
             const result = try nativeReCompile(ctx, pattern_val);
-            _ = try ctx.vs.vmPop(); _ = try ctx.vs.vmPop();
+            _ = try ctx.vs.vmPop();
+            _ = try ctx.vs.vmPop();
             try ctx.vs.vmPush(result);
         },
         .re_find => {
@@ -594,7 +599,9 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             const pattern_val = ctx.vs.stack[top - 2];
             const s_val = ctx.vs.stack[top - 1];
             const result = try nativeReFind(ctx, pattern_val, s_val);
-            _ = try ctx.vs.vmPop(); _ = try ctx.vs.vmPop(); _ = try ctx.vs.vmPop();
+            _ = try ctx.vs.vmPop();
+            _ = try ctx.vs.vmPop();
+            _ = try ctx.vs.vmPop();
             try ctx.vs.vmPush(result);
         },
         .re_find_all => {
@@ -603,7 +610,9 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             const pattern_val = ctx.vs.stack[top - 2];
             const s_val = ctx.vs.stack[top - 1];
             const result = try nativeReFindAll(ctx, pattern_val, s_val);
-            _ = try ctx.vs.vmPop(); _ = try ctx.vs.vmPop(); _ = try ctx.vs.vmPop();
+            _ = try ctx.vs.vmPop();
+            _ = try ctx.vs.vmPop();
+            _ = try ctx.vs.vmPop();
             try ctx.vs.vmPush(result);
         },
         .re_match => {
@@ -612,7 +621,9 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             const pattern_val = ctx.vs.stack[top - 2];
             const s_val = ctx.vs.stack[top - 1];
             const result = try nativeReMatch(ctx, pattern_val, s_val);
-            _ = try ctx.vs.vmPop(); _ = try ctx.vs.vmPop(); _ = try ctx.vs.vmPop();
+            _ = try ctx.vs.vmPop();
+            _ = try ctx.vs.vmPop();
+            _ = try ctx.vs.vmPop();
             try ctx.vs.vmPush(result);
         },
         .re_obj_find => {
@@ -622,7 +633,9 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             const s_val = ctx.vs.stack[top - 1];
             const pattern = try reGetPattern(recv);
             const result = try nativeReFind(ctx, .{ .string = try ctx.cs.internStr(pattern) }, s_val);
-            _ = try ctx.vs.vmPop(); _ = try ctx.vs.vmPop(); _ = try ctx.vs.vmPop();
+            _ = try ctx.vs.vmPop();
+            _ = try ctx.vs.vmPop();
+            _ = try ctx.vs.vmPop();
             try ctx.vs.vmPush(result);
         },
         .re_obj_find_all => {
@@ -632,7 +645,9 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             const s_val = ctx.vs.stack[top - 1];
             const pattern = try reGetPattern(recv);
             const result = try nativeReFindAll(ctx, .{ .string = try ctx.cs.internStr(pattern) }, s_val);
-            _ = try ctx.vs.vmPop(); _ = try ctx.vs.vmPop(); _ = try ctx.vs.vmPop();
+            _ = try ctx.vs.vmPop();
+            _ = try ctx.vs.vmPop();
+            _ = try ctx.vs.vmPop();
             try ctx.vs.vmPush(result);
         },
         .re_obj_match => {
@@ -642,7 +657,9 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             const s_val = ctx.vs.stack[top - 1];
             const pattern = try reGetPattern(recv);
             const result = try nativeReMatch(ctx, .{ .string = try ctx.cs.internStr(pattern) }, s_val);
-            _ = try ctx.vs.vmPop(); _ = try ctx.vs.vmPop(); _ = try ctx.vs.vmPop();
+            _ = try ctx.vs.vmPop();
+            _ = try ctx.vs.vmPop();
+            _ = try ctx.vs.vmPop();
             try ctx.vs.vmPush(result);
         },
         .re_obj_replace => {
@@ -653,7 +670,10 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             const repl_val = ctx.vs.stack[top - 1];
             const pattern = try reGetPattern(recv);
             const result = try nativeReReplace(ctx, .{ .string = try ctx.cs.internStr(pattern) }, s_val, repl_val);
-            _ = try ctx.vs.vmPop(); _ = try ctx.vs.vmPop(); _ = try ctx.vs.vmPop(); _ = try ctx.vs.vmPop();
+            _ = try ctx.vs.vmPop();
+            _ = try ctx.vs.vmPop();
+            _ = try ctx.vs.vmPop();
+            _ = try ctx.vs.vmPop();
             try ctx.vs.vmPush(result);
         },
         .re_obj_split => {
@@ -663,7 +683,9 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             const s_val = ctx.vs.stack[top - 1];
             const pattern = try reGetPattern(recv);
             const result = try nativeReSplit(ctx, .{ .string = try ctx.cs.internStr(pattern) }, s_val);
-            _ = try ctx.vs.vmPop(); _ = try ctx.vs.vmPop(); _ = try ctx.vs.vmPop();
+            _ = try ctx.vs.vmPop();
+            _ = try ctx.vs.vmPop();
+            _ = try ctx.vs.vmPop();
             try ctx.vs.vmPush(result);
         },
         .re_replace => {
@@ -673,7 +695,10 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             const s_val = ctx.vs.stack[top - 2];
             const repl_val = ctx.vs.stack[top - 1];
             const result = try nativeReReplace(ctx, pattern_val, s_val, repl_val);
-            _ = try ctx.vs.vmPop(); _ = try ctx.vs.vmPop(); _ = try ctx.vs.vmPop(); _ = try ctx.vs.vmPop();
+            _ = try ctx.vs.vmPop();
+            _ = try ctx.vs.vmPop();
+            _ = try ctx.vs.vmPop();
+            _ = try ctx.vs.vmPop();
             try ctx.vs.vmPush(result);
         },
         .re_split => {
@@ -682,7 +707,9 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             const pattern_val = ctx.vs.stack[top - 2];
             const s_val = ctx.vs.stack[top - 1];
             const result = try nativeReSplit(ctx, pattern_val, s_val);
-            _ = try ctx.vs.vmPop(); _ = try ctx.vs.vmPop(); _ = try ctx.vs.vmPop();
+            _ = try ctx.vs.vmPop();
+            _ = try ctx.vs.vmPop();
+            _ = try ctx.vs.vmPop();
             try ctx.vs.vmPush(result);
         },
         else => {},

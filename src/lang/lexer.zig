@@ -10,46 +10,46 @@ const Token = token.Token;
 pub const StrPoolSize: usize = 128 * 1024;
 
 const keyword_map = std.StaticStringMap(TT).initComptime(.{
-    .{ "and",       .kw_and },
-    .{ "as",        .kw_as },
-    .{ "assert",    .kw_assert },
-    .{ "break",     .kw_break },
-    .{ "case",      .kw_case },
-    .{ "const",     .kw_const },
-    .{ "continue",  .kw_continue },
-    .{ "cycle",     .kw_cycle },
-    .{ "default",   .kw_default },
-    .{ "defer",     .kw_defer },
-    .{ "div",       .kw_div },
-    .{ "mod",       .kw_mod },
-    .{ "rem",       .kw_rem },
-    .{ "else",      .kw_else },
-    .{ "enum",      .kw_enum },
-    .{ "false",     .kw_false },
-    .{ "for",       .kw_for },
-    .{ "func",      .kw_func },
-    .{ "if",        .kw_if },
-    .{ "import",    .kw_import },
-    .{ "in",        .kw_in },
+    .{ "and", .kw_and },
+    .{ "as", .kw_as },
+    .{ "assert", .kw_assert },
+    .{ "break", .kw_break },
+    .{ "case", .kw_case },
+    .{ "const", .kw_const },
+    .{ "continue", .kw_continue },
+    .{ "cycle", .kw_cycle },
+    .{ "default", .kw_default },
+    .{ "defer", .kw_defer },
+    .{ "div", .kw_div },
+    .{ "mod", .kw_mod },
+    .{ "rem", .kw_rem },
+    .{ "else", .kw_else },
+    .{ "enum", .kw_enum },
+    .{ "false", .kw_false },
+    .{ "for", .kw_for },
+    .{ "func", .kw_func },
+    .{ "if", .kw_if },
+    .{ "import", .kw_import },
+    .{ "in", .kw_in },
     .{ "interface", .kw_interface },
-    .{ "not",       .kw_not },
-    .{ "null",      .kw_null },
-    .{ "message",   .kw_message },
-    .{ "or",        .kw_or },
+    .{ "not", .kw_not },
+    .{ "null", .kw_null },
+    .{ "message", .kw_message },
+    .{ "or", .kw_or },
     .{ "predicate", .kw_predicate },
-    .{ "pub",       .kw_pub },
-    .{ "range",     .kw_range },
-    .{ "return",    .kw_return },
-    .{ "struct",    .kw_struct },
-    .{ "subtype",   .kw_subtype },
-    .{ "switch",    .kw_switch },
-    .{ "test",      .kw_test },
-    .{ "trap",      .kw_trap },
-    .{ "true",      .kw_true },
-    .{ "type",      .kw_type },
-    .{ "var",       .kw_var },
-    .{ "variant",   .kw_variant },
-    .{ "when",      .kw_when },
+    .{ "pub", .kw_pub },
+    .{ "range", .kw_range },
+    .{ "return", .kw_return },
+    .{ "struct", .kw_struct },
+    .{ "subtype", .kw_subtype },
+    .{ "switch", .kw_switch },
+    .{ "test", .kw_test },
+    .{ "trap", .kw_trap },
+    .{ "true", .kw_true },
+    .{ "type", .kw_type },
+    .{ "var", .kw_var },
+    .{ "variant", .kw_variant },
+    .{ "when", .kw_when },
 });
 
 pub const Lexer = struct {
@@ -130,11 +130,16 @@ pub const Lexer = struct {
                     if (self.peekNext() == '/') {
                         while (!self.atEnd() and self.peek() != '\n') _ = self.adv();
                     } else if (self.peekNext() == '*') {
-                        _ = self.adv(); _ = self.adv(); // consume '/*'
+                        _ = self.adv();
+                        _ = self.adv(); // consume '/*'
                         while (!self.atEnd()) {
-                            if (self.peek() == '\n') { self.line += 1; self.line_start = self.pos + 1; }
+                            if (self.peek() == '\n') {
+                                self.line += 1;
+                                self.line_start = self.pos + 1;
+                            }
                             if (self.peek() == '*' and self.peekNext() == '/') {
-                                _ = self.adv(); _ = self.adv(); // consume '*/'
+                                _ = self.adv();
+                                _ = self.adv(); // consume '*/'
                                 break;
                             }
                             _ = self.adv();
@@ -368,7 +373,7 @@ pub const Lexer = struct {
         return std.unicode.utf8ByteSequenceLength(c) catch 0;
     }
     fn decodeCodepoint(self: *Lexer, len: usize) u21 {
-        return std.unicode.utf8Decode(self.src[self.pos..self.pos + len]) catch 0;
+        return std.unicode.utf8Decode(self.src[self.pos .. self.pos + len]) catch 0;
     }
 };
 
@@ -377,12 +382,11 @@ const testing = std.testing;
 test "lexer: keywords" {
     var lex = Lexer{ .src = "as assert break case const continue cycle default defer else enum false for func if import in interface message null predicate pub range return struct subtype switch test trap true type var variant when" };
     const expected = comptime [_]TT{
-        .kw_as, .kw_assert, .kw_break, .kw_case, .kw_const, .kw_continue, .kw_cycle,
-        .kw_default, .kw_defer, .kw_else, .kw_enum, .kw_false, .kw_for,
-        .kw_func, .kw_if, .kw_import, .kw_in, .kw_interface, .kw_message,
-        .kw_null, .kw_predicate, .kw_pub, .kw_range, .kw_return, .kw_struct,
-        .kw_subtype, .kw_switch, .kw_test, .kw_trap, .kw_true, .kw_type,
-        .kw_var, .kw_variant, .kw_when,
+        .kw_as,      .kw_assert, .kw_break,  .kw_case,      .kw_const,   .kw_continue, .kw_cycle,
+        .kw_default, .kw_defer,  .kw_else,   .kw_enum,      .kw_false,   .kw_for,      .kw_func,
+        .kw_if,      .kw_import, .kw_in,     .kw_interface, .kw_message, .kw_null,     .kw_predicate,
+        .kw_pub,     .kw_range,  .kw_return, .kw_struct,    .kw_subtype, .kw_switch,   .kw_test,
+        .kw_trap,    .kw_true,   .kw_type,   .kw_var,       .kw_variant, .kw_when,
     };
     inline for (expected) |exp| {
         const tok = lex.next();
@@ -433,8 +437,8 @@ test "lexer: ascii ident followed by UTF-8 continues ident" {
 test "lexer: single-char punctuation" {
     var lex = Lexer{ .src = "(){}[],;:." };
     const expected = comptime [_]TT{
-        .lparen, .rparen, .lbrace, .rbrace, .lbracket, .rbracket,
-        .comma, .semicolon, .colon, .dot,
+        .lparen, .rparen,    .lbrace, .rbrace, .lbracket, .rbracket,
+        .comma,  .semicolon, .colon,  .dot,
     };
     inline for (expected) |exp| try testing.expectEqual(exp, lex.next().typ);
     try testing.expectEqual(.eof, lex.next().typ);
@@ -443,11 +447,10 @@ test "lexer: single-char punctuation" {
 test "lexer: operators" {
     var lex = Lexer{ .src = "?~!= == <= >= << >> <<= >>= := += -= *= /= %= &= |= ^= ++ -- ** && ||" };
     const expected = comptime [_]TT{
-        .question, .tilde, .bang_eq, .eq_eq, .lt_eq, .gt_eq,
-        .lt_lt, .gt_gt, .lt_lt_eq, .gt_gt_eq, .colon_eq,
-        .plus_eq, .minus_eq, .star_eq, .slash_eq, .percent_eq,
-        .amp_eq, .pipe_eq, .caret_eq,
-        .plus_plus, .minus_minus, .star_star, .amp_amp, .pipe_pipe,
+        .question, .tilde,     .bang_eq,     .eq_eq,      .lt_eq,    .gt_eq,
+        .lt_lt,    .gt_gt,     .lt_lt_eq,    .gt_gt_eq,   .colon_eq, .plus_eq,
+        .minus_eq, .star_eq,   .slash_eq,    .percent_eq, .amp_eq,   .pipe_eq,
+        .caret_eq, .plus_plus, .minus_minus, .star_star,  .amp_amp,  .pipe_pipe,
     };
     inline for (expected) |exp| try testing.expectEqual(exp, lex.next().typ);
     try testing.expectEqual(.eof, lex.next().typ);

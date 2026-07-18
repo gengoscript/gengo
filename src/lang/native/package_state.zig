@@ -35,7 +35,7 @@ pub fn clearRegistry(reg: *PackageRegistry) void {
 
 pub fn resolve(reg: *const PackageRegistry, import_path: []const u8) ?[]const u8 {
     const path = if (std.mem.endsWith(u8, import_path, ".gengo"))
-        import_path[0..import_path.len - 6]
+        import_path[0 .. import_path.len - 6]
     else
         import_path;
 
@@ -128,7 +128,7 @@ pub fn loadFromZip(reg: *PackageRegistry, name: []const u8, data: []const u8) Lo
         if (!std.mem.endsWith(u8, filename, ".gengo")) continue;
         if (std.mem.indexOf(u8, filename, "..") != null) continue;
 
-        const module_path = filename[0..filename.len - 6];
+        const module_path = filename[0 .. filename.len - 6];
         if (module_path.len == 0 or module_path.len > 127) continue;
 
         if (pkg.file_count >= MaxFilesPerPackage) return error.FileTableFull;
@@ -211,7 +211,7 @@ pub fn loadFromDir(reg: *PackageRegistry, name: []const u8, dir_path: []const u8
         const raw_path: []const u8 = entry.path;
         if (std.mem.indexOf(u8, raw_path, "..") != null) continue;
         if (raw_path.len < 6) continue;
-        const mod_path = raw_path[0..raw_path.len - 6];
+        const mod_path = raw_path[0 .. raw_path.len - 6];
         if (mod_path.len == 0 or mod_path.len > 127) continue;
         if (pkg.file_count >= MaxFilesPerPackage) return error.FileTableFull;
 

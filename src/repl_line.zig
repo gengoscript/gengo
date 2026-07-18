@@ -8,32 +8,32 @@ const std = @import("std");
 // ── termios (Linux x86-64 layout) ──────────────────────────────────────────
 
 const Termios = extern struct {
-    iflag:  u32,
-    oflag:  u32,
-    cflag:  u32,
-    lflag:  u32,
-    line:   u8,
-    cc:     [19]u8,
+    iflag: u32,
+    oflag: u32,
+    cflag: u32,
+    lflag: u32,
+    line: u8,
+    cc: [19]u8,
     ispeed: u32,
     ospeed: u32,
 };
 
-const TCGETS:  usize = 0x5401;
+const TCGETS: usize = 0x5401;
 const TCSETSF: usize = 0x5404;
 
-const ISIG:   u32 = 0x0001;
+const ISIG: u32 = 0x0001;
 const ICANON: u32 = 0x0002;
-const ECHO:   u32 = 0x0008;
-const ECHOE:  u32 = 0x0010;
-const ECHOK:  u32 = 0x0020;
+const ECHO: u32 = 0x0008;
+const ECHOE: u32 = 0x0010;
+const ECHOK: u32 = 0x0020;
 const ECHONL: u32 = 0x0040;
 const IEXTEN: u32 = 0x8000;
 const BRKINT: u32 = 0x0002;
-const ICRNL:  u32 = 0x0100;
-const IXON:   u32 = 0x0400;
+const ICRNL: u32 = 0x0100;
+const IXON: u32 = 0x0400;
 
 const VTIME: usize = 5;
-const VMIN:  usize = 6;
+const VMIN: usize = 6;
 
 fn tcGet(t: *Termios) bool {
     return std.os.linux.syscall3(.ioctl, 0, TCGETS, @intFromPtr(t)) == 0;
@@ -45,12 +45,12 @@ fn tcSet(t: *const Termios) void {
 
 // ── history ────────────────────────────────────────────────────────────────
 
-const HistCap    = 50;
+const HistCap = 50;
 const HistMaxLen = 512;
 
-var hist_buf:   [HistCap][HistMaxLen]u8 = undefined;
-var hist_lens:  [HistCap]usize          = [_]usize{0} ** HistCap;
-var hist_count: usize                   = 0;
+var hist_buf: [HistCap][HistMaxLen]u8 = undefined;
+var hist_lens: [HistCap]usize = [_]usize{0} ** HistCap;
+var hist_count: usize = 0;
 
 fn histPush(line: []const u8) void {
     if (line.len == 0) return;
@@ -119,17 +119,17 @@ pub fn readLine(prompt: []const u8, buf: []u8) ?[]const u8 {
     var raw = orig;
     raw.lflag &= ~(ISIG | ICANON | ECHO | ECHOE | ECHOK | ECHONL | IEXTEN);
     raw.iflag &= ~(BRKINT | ICRNL | IXON);
-    raw.cc[VMIN]  = 1;
+    raw.cc[VMIN] = 1;
     raw.cc[VTIME] = 0;
     tcSet(&raw);
     defer tcSet(&orig);
 
     sysWrite(prompt);
 
-    var len:      usize = 0;
-    var cursor:   usize = 0;
+    var len: usize = 0;
+    var cursor: usize = 0;
     var hist_pos: usize = 0; // 0 = live input, 1 = most recent history entry
-    var saved:    [HistMaxLen]u8 = undefined;
+    var saved: [HistMaxLen]u8 = undefined;
     var saved_len: usize = 0;
 
     while (true) {
@@ -155,7 +155,7 @@ pub fn readLine(prompt: []const u8, buf: []u8) ?[]const u8 {
             },
             0x03 => { // Ctrl+C — cancel line, show new prompt from caller
                 sysWrite("^C\r\n");
-                len    = 0;
+                len = 0;
                 cursor = 0;
                 hist_pos = 0;
                 return buf[0..0];
@@ -173,7 +173,7 @@ pub fn readLine(prompt: []const u8, buf: []u8) ?[]const u8 {
                 redraw(prompt, buf[0..len], cursor);
             },
             0x15 => { // Ctrl+U — kill whole line
-                len    = 0;
+                len = 0;
                 cursor = 0;
                 redraw(prompt, buf[0..len], cursor);
             },
@@ -181,7 +181,7 @@ pub fn readLine(prompt: []const u8, buf: []u8) ?[]const u8 {
                 if (cursor > 0) {
                     std.mem.copyForwards(u8, buf[cursor - 1 .. len - 1], buf[cursor..len]);
                     cursor -= 1;
-                    len    -= 1;
+                    len -= 1;
                     redraw(prompt, buf[0..len], cursor);
                 }
             },
@@ -194,11 +194,17 @@ pub fn readLine(prompt: []const u8, buf: []u8) ?[]const u8 {
                     // Extended: ESC [ N ~
                     if (sysRead(seq[2..3]) != 1 or seq[2] != '~') continue;
                     switch (seq[1]) {
-                        '1' => { cursor = 0;   redraw(prompt, buf[0..len], cursor); }, // Home
-                        '4' => { cursor = len; redraw(prompt, buf[0..len], cursor); }, // End
+                        '1' => {
+                            cursor = 0;
+                            redraw(prompt, buf[0..len], cursor);
+                        }, // Home
+                        '4' => {
+                            cursor = len;
+                            redraw(prompt, buf[0..len], cursor);
+                        }, // End
                         '3' => { // Delete
                             if (cursor < len) {
-                                std.mem.copyForwards(u8, buf[cursor..len - 1], buf[cursor + 1..len]);
+                                std.mem.copyForwards(u8, buf[cursor .. len - 1], buf[cursor + 1 .. len]);
                                 len -= 1;
                                 redraw(prompt, buf[0..len], cursor);
                             }
@@ -219,7 +225,7 @@ pub fn readLine(prompt: []const u8, buf: []u8) ?[]const u8 {
                             hist_pos += 1;
                             const n = @min(entry.len, buf.len);
                             @memcpy(buf[0..n], entry[0..n]);
-                            len    = n;
+                            len = n;
                             cursor = len;
                             redraw(prompt, buf[0..len], cursor);
                         }
@@ -251,19 +257,25 @@ pub fn readLine(prompt: []const u8, buf: []u8) ?[]const u8 {
                             redraw(prompt, buf[0..len], cursor);
                         }
                     },
-                    'H' => { cursor = 0;   redraw(prompt, buf[0..len], cursor); }, // Home
-                    'F' => { cursor = len; redraw(prompt, buf[0..len], cursor); }, // End
+                    'H' => {
+                        cursor = 0;
+                        redraw(prompt, buf[0..len], cursor);
+                    }, // Home
+                    'F' => {
+                        cursor = len;
+                        redraw(prompt, buf[0..len], cursor);
+                    }, // End
                     else => {},
                 }
             },
             else => {
                 if (c >= 0x20 and c != 0x7f and len < buf.len) {
                     if (cursor < len) {
-                        std.mem.copyBackwards(u8, buf[cursor + 1..len + 1], buf[cursor..len]);
+                        std.mem.copyBackwards(u8, buf[cursor + 1 .. len + 1], buf[cursor..len]);
                     }
                     buf[cursor] = c;
                     cursor += 1;
-                    len    += 1;
+                    len += 1;
                     redraw(prompt, buf[0..len], cursor);
                 }
             },
