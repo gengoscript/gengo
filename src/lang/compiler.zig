@@ -139,6 +139,10 @@ pub const Compiler = struct {
     loop_body_depth: u8 = 0,
     skipping_test_body: bool = false,
     cs: *chunk.State = undefined,
+    // Explicit heap handle, latched at init like cs. All compiler allocation
+    // goes through this — never through heap's threadlocal-active wrappers —
+    // so a compiler instance is bound to exactly one runtime's heap (A1).
+    hs: *heap.State = undefined,
 
     // `.type` is only valid directly compared with ==/!=, or as a switch
     // scrutinee. parsing_switch_scrutinee gates the latter; switch_scrutinee_is_type
@@ -177,6 +181,7 @@ pub const Compiler = struct {
         c.scopes[0] = .{};
         c.scope_depth = 1;
         c.cs = chunk.g_state;
+        c.hs = heap.g_state;
         return c;
     }
 
@@ -320,16 +325,16 @@ pub const Compiler = struct {
     pub fn emitModuleObject(self: *Compiler) !void {
         if (self.options.module_global_name.len == 0) return;
 
-        const any_alts = heap.bump(FieldTypeAlt, 1) orelse return error.OutOfMemory;
+        const any_alts = self.hs.bump(FieldTypeAlt, 1) orelse return error.OutOfMemory;
         any_alts[0] = .{ .typ = .any };
         const any_spec: FieldTypeSpec = .{ .alts = any_alts[0..1] };
 
-        const fields = heap.bump(StructFieldSpec, self.export_count) orelse return error.OutOfMemory;
+        const fields = self.hs.bump(StructFieldSpec, self.export_count) orelse return error.OutOfMemory;
         for (fields[0..self.export_count], self.exports[0..self.export_count]) |*f, e| {
             f.* = .{ .name = e.name, .typ = any_spec, .is_const = true };
         }
 
-        const st = heap.allocObject() orelse return error.OutOfMemory;
+        const st = self.hs.allocObject() orelse return error.OutOfMemory;
         const struct_name = if (self.options.module_struct_name.len != 0) self.options.module_struct_name else self.options.module_prefix;
         st.* = .{ .struct_type = StructTypeObj{ .name = self.copyName(self.moduleBaseName()) catch struct_name, .qualified_name = struct_name, .fields = fields[0..self.export_count] } };
         try self.cs.emitConst(.{ .object = st }, self.prev.line);
@@ -1425,7 +1430,7 @@ pub const Compiler = struct {
         self.test_count += 1;
         self.test_names[idx] = label;
 
-        const name_buf = heap.bump(u8, 32) orelse return error.OutOfMemory;
+        const name_buf = self.hs.bump(u8, 32) orelse return error.OutOfMemory;
         const name_str = std.fmt.bufPrint(name_buf[0..32], "__test_{d}", .{idx}) catch return error.OutOfMemory;
 
         const jump_over = try self.cs.emitJump(.jump, line);
@@ -1451,7 +1456,7 @@ pub const Compiler = struct {
         self.scope_depth -= 1;
         try self.cs.patchJump(jump_over);
 
-        const func_obj = heap.allocObject() orelse return error.OutOfMemory;
+        const func_obj = self.hs.allocObject() orelse return error.OutOfMemory;
         func_obj.* = .{ .function = .{
             .ip = func_ip,
             .arity = 0,
@@ -1564,7 +1569,7 @@ pub const Compiler = struct {
     pub fn qualifyGlobalName(self: *Compiler, name: []const u8) ![]const u8 {
         if (self.options.module_prefix.len == 0) return name;
         const total = self.options.module_prefix.len + 1 + name.len;
-        const buf = heap.bump(u8, total) orelse return error.OutOfMemory;
+        const buf = self.hs.bump(u8, total) orelse return error.OutOfMemory;
         @memcpy(buf[0..self.options.module_prefix.len], self.options.module_prefix);
         buf[self.options.module_prefix.len] = '.';
         @memcpy(buf[self.options.module_prefix.len + 1 .. total], name);
@@ -1794,8 +1799,7 @@ pub const Compiler = struct {
     }
 
     pub fn copyName(self: *Compiler, name: []const u8) ![]const u8 {
-        _ = self;
-        const out = heap.bump(u8, name.len) orelse return error.OutOfMemory;
+        const out = self.hs.bump(u8, name.len) orelse return error.OutOfMemory;
         @memcpy(out[0..name.len], name);
         return out[0..name.len];
     }

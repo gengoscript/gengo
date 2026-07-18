@@ -11,7 +11,7 @@ Status legend: `[ ]` open · `[~]` in progress · `[x]` done (with commit)
 
 ## Track A — Architecture debt
 
-### A1. Kill `setActive` — finish the `VMContext` migration `[ ]`
+### A1. Kill `setActive` — finish the `VMContext` migration `[~]`
 
 The threadlocal active-pointer pattern (`chunk.setActive`, `heap.setActive`,
 `vms.setActive`, `globals.setActive`, `VMContext.fromActive`) coexists with
@@ -26,6 +26,22 @@ Plan: migrate file-by-file, leaves first (thread a context/allocator handle
 into heap and value), engine/runtime entry points last; delete the
 threadlocals and `fromActive` when the count reaches zero. Tests stay green
 at every step. Medium-large effort, low per-step risk.
+
+Survey findings (2026-07-18): VM + natives are already clean — zero
+module-level heap calls, everything via `ctx.hs`. `value.zig`'s
+`obj_pool_ptr` threadlocal is a deliberate perf exception (packed 16-byte
+Value decode needs a pool base pointer) and stays, repointed on activate.
+
+- Phase 1 `[x]` compiler: all 66 `heap.bump`/`heap.allocObject` calls now go
+  through an explicit `Compiler.hs` handle latched at init (like `cs`);
+  generics helpers (`substituteSpec`/`instQNameFromBase`/`buildInstKey`) and
+  `fieldTypeAltLabel` take `hs` params.
+- Phase 2 `[ ]` module-level wrapper callers (chunk/globals/vm_state
+  delegating wrappers) — migrate callers to explicit state, delete wrappers.
+- Phase 3 `[ ]` `fs_state`/`cap_fs` EngineState threadlocal → context.
+- Phase 4 `[ ]` entry points: Compiler.init/test runners stop reading
+  g_state; `setActive` shrinks to Runtime.activate repointing
+  `obj_pool_ptr` only.
 
 ### A2. Consolidate the peephole trackers `[ ]`
 
