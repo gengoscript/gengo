@@ -6,7 +6,10 @@ const build_options = @import("build_options");
 
 pub const perf_enabled: bool = build_options.perf;
 
-const OpCount = std.meta.fields(Op).len;
+// Counters are indexed by the raw opcode byte. Op is a sparse enum(u8) —
+// blocks reserve free slots, so values exceed the field count — which means
+// the arrays must span the full u8 range, not std.meta.fields(Op).len.
+const OpCount = 256;
 
 pub const PerfCounters = struct {
     op_counts:           [OpCount]u64          = [_]u64{0}                        ** OpCount,
@@ -124,9 +127,8 @@ pub fn printSummary(gc_runs: u64, gc_time_ns: u64, alloc_objs: u64, alloc_slices
     io.werr("PERF:map_probe_ops=");       writeU64Err(c.map_probe_ops);   io.werr("\n");
 
     const op_names = comptime blk: {
-        const fields = std.meta.fields(Op);
-        var names: [OpCount][]const u8 = undefined;
-        for (fields, 0..) |f, i| names[i] = f.name;
+        var names: [OpCount][]const u8 = [_][]const u8{"unknown"} ** OpCount;
+        for (std.meta.fields(Op)) |f| names[f.value] = f.name;
         break :blk names;
     };
 
