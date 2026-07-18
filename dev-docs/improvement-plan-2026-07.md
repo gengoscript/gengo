@@ -70,6 +70,18 @@ Acceptance: `tools/perf-baseline.sh check` byte-identical (op counts prove
 fusion decisions unchanged) + defuse differential green. Medium effort,
 medium risk — do in one commit, revert-friendly.
 
+Survey 2026-07-18: the invalidation is NOT uniform — 9 wholesale clear
+blocks with 5 distinct tracker subsets (8/8/8/9/10/13/15/15/17 clears at
+chunk.zig lines ~236, 831, 850, 871, 893, 911, 939, 980, 1000). Which
+trackers deliberately survive which boundary is load-bearing for fusion
+decisions, so the ring-buffer redesign needs per-block analysis first:
+for each block, determine whether its subset is intentional (a fusion
+that legitimately spans that boundary) or accidental drift. The
+acceptance harness catches both failure directions (over-invalidation →
+op counts change; under-invalidation → defuse differential/tests), so
+iterate against it. Needs a fresh session with full attention — do not
+attempt as a tail-end task.
+
 ### A3. Concrete types at module seams `[x]` (2026-07-18)
 
 Replace `state: anytype` in `chunk_verifier.zig`/`chunk_decoder.zig` with
@@ -78,12 +90,20 @@ or a small shared-types module). Explicitly out of scope: the compiler's
 `c: anytype` threading (~79 sites) — one consistent internal idiom, not
 worth the churn.
 
-### A4. Narrow error sets `[ ]`
+### A4. Narrow error sets `[x]` — declined with reasoning (2026-07-18)
 
 33 `anyerror` signatures in `src/lang/`, including `execOne`'s
 `anyerror!bool`. Define `VmError`/`CompileError` sets for the public
 surfaces so callers get exhaustive-switch checking. Do after A1 to avoid
 fighting the same files twice.
+
+Declined after survey: 151 distinct error tags exist, and no consumer
+performs exhaustive error switching — the API boundary maps errors via
+result unions and `@errorName` strings. Because the VM call graph is
+recursive, Zig requires *explicit* (not inferred) sets on every signature
+in the cycle, so a full enumeration is a permanent maintenance tax with
+no safety payoff today. Revisit only when a consumer that switches on
+error sets appears (the GBC loader is the likely candidate).
 
 ### A5. Verifier scratch memory `[x]` (2026-07-18)
 
