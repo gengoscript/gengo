@@ -156,7 +156,7 @@ pub fn interfaceDeclBody(c: anytype, kw: Token, name: Token, is_pub: bool) !void
         var is_variadic = false;
         var variadic_type: FieldTypeSpec = undefined;
         var has_typed_params = false;
-        const any_alts = heap.bump(FieldTypeAlt, 1) orelse return error.OutOfMemory;
+        const any_alts = c.hs.bump(FieldTypeAlt, 1) orelse return error.OutOfMemory;
         any_alts[0] = .{ .typ = .any };
         const any_spec: FieldTypeSpec = .{ .alts = any_alts[0..1] };
         variadic_type = any_spec;
@@ -225,9 +225,9 @@ pub fn interfaceDeclBody(c: anytype, kw: Token, name: Token, is_pub: bool) !void
             has_typed_returns = true;
         }
 
-        const ptypes = heap.bump(FieldTypeSpec, arity) orelse return error.OutOfMemory;
+        const ptypes = c.hs.bump(FieldTypeSpec, arity) orelse return error.OutOfMemory;
         @memcpy(ptypes[0..arity], ptypes_tmp[0..arity]);
-        const rtypes = heap.bump(FieldTypeSpec, rcount) orelse return error.OutOfMemory;
+        const rtypes = c.hs.bump(FieldTypeSpec, rcount) orelse return error.OutOfMemory;
         @memcpy(rtypes[0..rcount], returns_tmp[0..rcount]);
 
         methods_tmp[mcount] = .{
@@ -244,10 +244,10 @@ pub fn interfaceDeclBody(c: anytype, kw: Token, name: Token, is_pub: bool) !void
         c.matchOpt(.comma);
     }
     try c.consume(.rbrace);
-    const methods = heap.bump(InterfaceMethodSpec, mcount) orelse return error.OutOfMemory;
+    const methods = c.hs.bump(InterfaceMethodSpec, mcount) orelse return error.OutOfMemory;
     @memcpy(methods[0..mcount], methods_tmp[0..mcount]);
     const qname = try c.qualifyTypeName(name.src);
-    const it = heap.allocObject() orelse return error.OutOfMemory;
+    const it = c.hs.allocObject() orelse return error.OutOfMemory;
     it.* = .{ .interface_type = InterfaceTypeObj{ .name = try c.copyName(name.src), .qualified_name = qname, .methods = methods[0..mcount] } };
     try c.cs.emitConst(.{ .object = it }, kw.line);
     if (c.inFunc()) {
@@ -323,7 +323,7 @@ pub fn methodDecl(c: anytype) !void {
 
     const qrecv_type = try c.qualifyTypeName(recv_type);
     const total = qrecv_type.len + 1 + method_name.len;
-    const key_buf = heap.bump(u8, total) orelse return error.OutOfMemory;
+    const key_buf = c.hs.bump(u8, total) orelse return error.OutOfMemory;
     @memcpy(key_buf[0..qrecv_type.len], qrecv_type);
     key_buf[qrecv_type.len] = '.';
     @memcpy(key_buf[qrecv_type.len + 1 .. total], method_name);
@@ -540,10 +540,10 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
             }
         }
         try c.consume(.rbrace);
-        const members = heap.bump([]const u8, mcount) orelse return error.OutOfMemory;
+        const members = c.hs.bump([]const u8, mcount) orelse return error.OutOfMemory;
         @memcpy(members[0..mcount], members_tmp[0..mcount]);
         const member_ints: ?[]const i64 = if (has_explicit_ints) blk: {
-            const mi = heap.bump(i64, mcount) orelse return error.OutOfMemory;
+            const mi = c.hs.bump(i64, mcount) orelse return error.OutOfMemory;
             @memcpy(mi[0..mcount], mints_tmp[0..mcount]);
             break :blk mi[0..mcount];
         } else null;
@@ -556,7 +556,7 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
             .max = 0,
             .enum_members = members[0..mcount],
         });
-        const et = heap.allocObject() orelse return error.OutOfMemory;
+        const et = c.hs.allocObject() orelse return error.OutOfMemory;
         et.* = .{ .enum_type = .{ .name = try c.copyName(name), .qualified_name = qname, .members = members[0..mcount], .member_ints = member_ints } };
         try c.cs.emitConst(.{ .object = et }, kw.line);
         if (c.inFunc()) {
@@ -579,7 +579,7 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
             return c.err("expected an array ('[]T') or map ('[K]V') type", .{});
         }
         const alt = spec.alts[0];
-        const nt = heap.allocObject() orelse return error.OutOfMemory;
+        const nt = c.hs.allocObject() orelse return error.OutOfMemory;
         if (alt.typ == .array) {
             if (!c.skipping_test_body) try c.registry.addNamedType(.{ .name = name, .base = .array_t, .elem_spec = alt.elem_spec });
             nt.* = .{ .named_type = NamedTypeObj{ .name = try c.copyName(name), .qualified_name = qname, .base = .array_t, .elem_spec = alt.elem_spec } };
@@ -671,7 +671,7 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
             c,
         );
         if (!c.skipping_test_body) try c.registry.addNamedType(.{ .name = name, .base = .map_t, .key_spec = ks, .val_spec = vs });
-        const nt = heap.allocObject() orelse return error.OutOfMemory;
+        const nt = c.hs.allocObject() orelse return error.OutOfMemory;
         nt.* = .{ .named_type = NamedTypeObj{ .name = try c.copyName(name), .qualified_name = qname, .base = .map_t, .key_spec = ks, .val_spec = vs } };
         try c.cs.emitConst(.{ .object = nt }, kw.line);
         if (c.inFunc()) {
@@ -758,7 +758,7 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
         predicate_uv_count = try c.compileFuncWithPrefix(&[_][]const u8{}, false, base);
         const func_obj = c.last_func_obj orelse return error.NotAFunction;
         if (predicate_uv_count == 0) {
-            const cl = heap.allocObject() orelse return error.OutOfMemory;
+            const cl = c.hs.allocObject() orelse return error.OutOfMemory;
             cl.* = .{ .closure = .{ .func = func_obj, .upvalues = &[_]*Object{} } };
             predicate_obj = cl;
         } else {
@@ -831,7 +831,7 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
         try c.qualifyTypeName(pn)
     else
         null;
-    const nt = heap.allocObject() orelse return error.OutOfMemory;
+    const nt = c.hs.allocObject() orelse return error.OutOfMemory;
     nt.* = .{ .named_type = NamedTypeObj{
         .name = try c.copyName(name),
         .qualified_name = qname,
@@ -981,11 +981,11 @@ fn instArgSuffix(buf: []u8, args: []const FieldTypeSpec) []const u8 {
 }
 
 /// Allocate and return "<base_qname>[arg1,arg2,...]" on the bump heap.
-fn instQNameFromBase(base_qname: []const u8, args: []const FieldTypeSpec) ![]const u8 {
+fn instQNameFromBase(hs: *heap.State, base_qname: []const u8, args: []const FieldTypeSpec) ![]const u8 {
     var sbuf: [128]u8 = undefined;
     const suffix = instArgSuffix(&sbuf, args);
     const total = base_qname.len + suffix.len;
-    const out = heap.bump(u8, total) orelse return error.OutOfMemory;
+    const out = hs.bump(u8, total) orelse return error.OutOfMemory;
     @memcpy(out[0..base_qname.len], base_qname);
     @memcpy(out[base_qname.len..total], suffix);
     return out[0..total];
@@ -1045,7 +1045,7 @@ fn specTypeStr(buf: []u8, spec: FieldTypeSpec) []const u8 {
     return buf[0..pos];
 }
 
-fn buildInstKey(tname: []const u8, args: []const FieldTypeSpec) ![]const u8 {
+fn buildInstKey(hs: *heap.State, tname: []const u8, args: []const FieldTypeSpec) ![]const u8 {
     var buf: [256]u8 = undefined;
     var pos: usize = 0;
     const tn = @min(tname.len, 128);
@@ -1068,7 +1068,7 @@ fn buildInstKey(tname: []const u8, args: []const FieldTypeSpec) ![]const u8 {
         buf[pos] = ']';
         pos += 1;
     }
-    const k = heap.bump(u8, pos) orelse return error.OutOfMemory;
+    const k = hs.bump(u8, pos) orelse return error.OutOfMemory;
     @memcpy(k[0..pos], buf[0..pos]);
     return k[0..pos];
 }
@@ -1076,7 +1076,7 @@ fn buildInstKey(tname: []const u8, args: []const FieldTypeSpec) ![]const u8 {
 /// Recursively substitute type_param alts in a FieldTypeSpec, expanding them to the provided args.
 /// For struct_t/variant_t alts with generic_args (deferred nested generics), substitutes the
 /// args and rebuilds the concrete qualified name without needing the compiler context.
-fn substituteSpec(spec: FieldTypeSpec, params: []const ct.GenericParam, args: []const FieldTypeSpec) !FieldTypeSpec {
+fn substituteSpec(hs: *heap.State, spec: FieldTypeSpec, params: []const ct.GenericParam, args: []const FieldTypeSpec) !FieldTypeSpec {
     // Count total output alts (type_param alts expand to all alts of the arg spec).
     var total: usize = 0;
     for (spec.alts) |alt| {
@@ -1091,7 +1091,7 @@ fn substituteSpec(spec: FieldTypeSpec, params: []const ct.GenericParam, args: []
             total += 1;
         }
     }
-    const new_alts = heap.bump(value_mod.FieldTypeAlt, total) orelse return error.OutOfMemory;
+    const new_alts = hs.bump(value_mod.FieldTypeAlt, total) orelse return error.OutOfMemory;
     var out: usize = 0;
     for (spec.alts) |alt| {
         if (alt.typ == .type_param) {
@@ -1109,10 +1109,10 @@ fn substituteSpec(spec: FieldTypeSpec, params: []const ct.GenericParam, args: []
             // Substitute the stored arg specs, then rebuild the concrete qualified name.
             var new_arg_buf: [ct.MaxTypeParams]FieldTypeSpec = undefined;
             for (alt.generic_args, 0..) |ga, i| {
-                new_arg_buf[i] = try substituteSpec(ga, params, args);
+                new_arg_buf[i] = try substituteSpec(hs, ga, params, args);
             }
             const base_qname = if (alt.typ == .struct_t) alt.struct_name else alt.named_name;
-            const qname = try instQNameFromBase(base_qname, new_arg_buf[0..alt.generic_args.len]);
+            const qname = try instQNameFromBase(hs, base_qname, new_arg_buf[0..alt.generic_args.len]);
             new_alts[out] = if (alt.typ == .struct_t)
                 .{ .typ = .struct_t, .struct_name = qname }
             else
@@ -1121,20 +1121,20 @@ fn substituteSpec(spec: FieldTypeSpec, params: []const ct.GenericParam, args: []
         } else {
             new_alts[out] = alt;
             if (alt.elem_spec) |es| {
-                const ns = try substituteSpec(es, params, args);
-                const ep = heap.bump(FieldTypeSpec, 1) orelse return error.OutOfMemory;
+                const ns = try substituteSpec(hs, es, params, args);
+                const ep = hs.bump(FieldTypeSpec, 1) orelse return error.OutOfMemory;
                 ep[0] = ns;
                 new_alts[out].elem_spec = ep[0];
             }
             if (alt.key_spec) |ks| {
-                const ns = try substituteSpec(ks, params, args);
-                const kp = heap.bump(FieldTypeSpec, 1) orelse return error.OutOfMemory;
+                const ns = try substituteSpec(hs, ks, params, args);
+                const kp = hs.bump(FieldTypeSpec, 1) orelse return error.OutOfMemory;
                 kp[0] = ns;
                 new_alts[out].key_spec = kp[0];
             }
             if (alt.val_spec) |vs| {
-                const ns = try substituteSpec(vs, params, args);
-                const vp = heap.bump(FieldTypeSpec, 1) orelse return error.OutOfMemory;
+                const ns = try substituteSpec(hs, vs, params, args);
+                const vp = hs.bump(FieldTypeSpec, 1) orelse return error.OutOfMemory;
                 vp[0] = ns;
                 new_alts[out].val_spec = vp[0];
             }
@@ -1173,7 +1173,7 @@ fn parseInstArgSpecs(c: anytype, tname: []const u8, param_count: u8, out_args: *
 /// every execution path defines the type before any get_global, since globals.def() is idempotent.
 fn applyGenericInst(c: anytype, tname: []const u8, args: []const FieldTypeSpec, line: u32) anyerror![]const u8 {
     const ginfo = c.registry.getGenericType(tname).?;
-    const key = try buildInstKey(tname, args);
+    const key = try buildInstKey(c.hs, tname, args);
 
     if (c.registry.getCachedInst(key)) |entry| {
         // Re-emit def_global when type-param args are present inside a function body.
@@ -1188,19 +1188,19 @@ fn applyGenericInst(c: anytype, tname: []const u8, args: []const FieldTypeSpec, 
 
     const base_qname = try c.qualifyTypeName(tname);
     const key_suffix = key[@min(tname.len, 128)..];
-    const qname_buf = heap.bump(u8, base_qname.len + key_suffix.len) orelse return error.OutOfMemory;
+    const qname_buf = c.hs.bump(u8, base_qname.len + key_suffix.len) orelse return error.OutOfMemory;
     @memcpy(qname_buf[0..base_qname.len], base_qname);
     @memcpy(qname_buf[base_qname.len..], key_suffix);
     const qname = qname_buf[0 .. base_qname.len + key_suffix.len];
 
     if (!c.skipping_test_body) {
-        const inst_obj = heap.allocObject() orelse return error.OutOfMemory;
+        const inst_obj = c.hs.allocObject() orelse return error.OutOfMemory;
         switch (ginfo.kind) {
             .struct_t => {
                 const tmpl = ginfo.template_obj.struct_type;
-                const new_fields = heap.bump(StructFieldSpec, tmpl.fields.len) orelse return error.OutOfMemory;
+                const new_fields = c.hs.bump(StructFieldSpec, tmpl.fields.len) orelse return error.OutOfMemory;
                 for (tmpl.fields, 0..) |f, i| {
-                    const new_typ = try substituteSpec(f.typ, ginfo.params[0..ginfo.param_count], args);
+                    const new_typ = try substituteSpec(c.hs, f.typ, ginfo.params[0..ginfo.param_count], args);
                     new_fields[i] = .{ .name = f.name, .typ = new_typ, .is_const = f.is_const, .key = f.key };
                 }
                 inst_obj.* = .{ .struct_type = .{ .name = key, .qualified_name = qname, .fields = new_fields[0..tmpl.fields.len] } };
@@ -1208,19 +1208,19 @@ fn applyGenericInst(c: anytype, tname: []const u8, args: []const FieldTypeSpec, 
             },
             .variant_t => {
                 const tmpl = ginfo.template_obj.variant_type;
-                const new_arms = heap.bump(VariantArmSpec, tmpl.arms.len) orelse return error.OutOfMemory;
+                const new_arms = c.hs.bump(VariantArmSpec, tmpl.arms.len) orelse return error.OutOfMemory;
                 for (tmpl.arms, 0..) |arm, i| {
                     new_arms[i] = arm;
                     if (arm.payload_type) |pt| {
-                        const np = try substituteSpec(pt, ginfo.params[0..ginfo.param_count], args);
-                        const npp = heap.bump(FieldTypeSpec, 1) orelse return error.OutOfMemory;
+                        const np = try substituteSpec(c.hs, pt, ginfo.params[0..ginfo.param_count], args);
+                        const npp = c.hs.bump(FieldTypeSpec, 1) orelse return error.OutOfMemory;
                         npp[0] = np;
                         new_arms[i].payload_type = npp[0];
                     }
                     if (arm.fields.len > 0) {
-                        const nf = heap.bump(StructFieldSpec, arm.fields.len) orelse return error.OutOfMemory;
+                        const nf = c.hs.bump(StructFieldSpec, arm.fields.len) orelse return error.OutOfMemory;
                         for (arm.fields, 0..) |f, fi| {
-                            const nt = try substituteSpec(f.typ, ginfo.params[0..ginfo.param_count], args);
+                            const nt = try substituteSpec(c.hs, f.typ, ginfo.params[0..ginfo.param_count], args);
                             nf[fi] = .{ .name = f.name, .typ = nt, .is_const = f.is_const, .key = f.key };
                         }
                         new_arms[i].fields = nf[0..arm.fields.len];
@@ -1290,7 +1290,7 @@ pub fn parseFieldTypeSpec(c: anytype) !FieldTypeSpec {
             const es = try parseFieldTypeSpec(
                 c,
             );
-            const ep = heap.bump(FieldTypeSpec, 1) orelse return error.OutOfMemory;
+            const ep = c.hs.bump(FieldTypeSpec, 1) orelse return error.OutOfMemory;
             ep[0] = es;
             alt = .{ .typ = .array, .elem_spec = ep[0] };
         } else {
@@ -1310,9 +1310,9 @@ pub fn parseFieldTypeSpec(c: anytype) !FieldTypeSpec {
             const second_spec = try parseFieldTypeSpec(
                 c,
             );
-            const kp = heap.bump(FieldTypeSpec, 1) orelse return error.OutOfMemory;
+            const kp = c.hs.bump(FieldTypeSpec, 1) orelse return error.OutOfMemory;
             kp[0] = first_spec;
-            const vp = heap.bump(FieldTypeSpec, 1) orelse return error.OutOfMemory;
+            const vp = c.hs.bump(FieldTypeSpec, 1) orelse return error.OutOfMemory;
             vp[0] = second_spec;
             alt = .{ .typ = .map, .key_spec = kp[0], .val_spec = vp[0] };
         }
@@ -1359,12 +1359,12 @@ pub fn parseFieldTypeSpec(c: anytype) !FieldTypeSpec {
             func_return_count = 1;
         }
         const fp = if (func_param_count > 0) blk: {
-            const ps = heap.bump(FieldTypeSpec, func_param_count) orelse return error.OutOfMemory;
+            const ps = c.hs.bump(FieldTypeSpec, func_param_count) orelse return error.OutOfMemory;
             @memcpy(ps[0..func_param_count], func_params_tmp[0..func_param_count]);
             break :blk ps[0..func_param_count];
         } else @as([]FieldTypeSpec, &.{});
         const fr = if (func_return_count > 0) blk: {
-            const rs = heap.bump(FieldTypeSpec, func_return_count) orelse return error.OutOfMemory;
+            const rs = c.hs.bump(FieldTypeSpec, func_return_count) orelse return error.OutOfMemory;
             @memcpy(rs[0..func_return_count], func_returns_tmp[0..func_return_count]);
             break :blk rs[0..func_return_count];
         } else @as([]FieldTypeSpec, &.{});
@@ -1460,7 +1460,7 @@ pub fn parseFieldTypeSpec(c: anytype) !FieldTypeSpec {
                     const arg_count = try parseInstArgSpecs(c, tname, ginfo.param_count, &arg_specs);
                     if (argsHaveTypeParam(arg_specs[0..arg_count])) {
                         const base_qname = try c.qualifyTypeName(tname);
-                        const stored = heap.bump(FieldTypeSpec, arg_count) orelse return error.OutOfMemory;
+                        const stored = c.hs.bump(FieldTypeSpec, arg_count) orelse return error.OutOfMemory;
                         @memcpy(stored[0..arg_count], arg_specs[0..arg_count]);
                         alt = switch (ginfo.kind) {
                             .struct_t => .{ .typ = .struct_t, .struct_name = base_qname, .generic_args = stored[0..arg_count] },
@@ -1488,7 +1488,7 @@ pub fn parseFieldTypeSpec(c: anytype) !FieldTypeSpec {
     tmp[count] = alt;
     count += 1;
 
-    const alts = heap.bump(FieldTypeAlt, count) orelse return error.OutOfMemory;
+    const alts = c.hs.bump(FieldTypeAlt, count) orelse return error.OutOfMemory;
     @memcpy(alts[0..count], tmp[0..count]);
     return .{ .alts = alts[0..count] };
 }
@@ -1622,14 +1622,14 @@ pub fn structDeclBody(c: anytype, kw: Token, name: Token, is_pub: bool, tparams:
     try c.consume(.rbrace);
     c.type_param_count = saved_param_count;
 
-    const fields = heap.bump(StructFieldSpec, count) orelse return error.OutOfMemory;
+    const fields = c.hs.bump(StructFieldSpec, count) orelse return error.OutOfMemory;
     @memcpy(fields[0..count], field_specs[0..count]);
     for (fields[0..count]) |*f| f.key = .{ .string = try c.cs.internStr(f.name) };
 
     if (is_generic) {
         // Store as a template — no emission, no global. Instantiation happens on use.
         if (!c.skipping_test_body) {
-            const tmpl = heap.allocObject() orelse return error.OutOfMemory;
+            const tmpl = c.hs.allocObject() orelse return error.OutOfMemory;
             const qname = try c.qualifyTypeName(name.src);
             tmpl.* = .{ .struct_type = .{ .name = try c.copyName(name.src), .qualified_name = qname, .fields = fields[0..count] } };
             var gi: ct.GenericTypeInfo = .{ .name = try c.copyName(name.src), .kind = .struct_t, .param_count = tparam_count, .template_obj = tmpl };
@@ -1641,7 +1641,7 @@ pub fn structDeclBody(c: anytype, kw: Token, name: Token, is_pub: bool, tparams:
     }
 
     const qname = try c.qualifyTypeName(name.src);
-    const st = heap.allocObject() orelse return error.OutOfMemory;
+    const st = c.hs.allocObject() orelse return error.OutOfMemory;
     st.* = .{ .struct_type = StructTypeObj{ .name = try c.copyName(name.src), .qualified_name = qname, .fields = fields[0..count] } };
     if (!c.skipping_test_body) c.registry.setStructObj(name.src, st);
     try c.cs.emitConst(.{ .object = st }, kw.line);
@@ -1707,7 +1707,7 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
             }
         }
         try c.consume(.rbrace);
-        const members = heap.bump([]const u8, mcount) orelse return error.OutOfMemory;
+        const members = c.hs.bump([]const u8, mcount) orelse return error.OutOfMemory;
         @memcpy(members[0..mcount], members_tmp[0..mcount]);
         // Validate each member exists in the parent enum
         if (parent_info.enum_members) |parent_members| {
@@ -1731,7 +1731,7 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
             .parent_name = parent_name,
             .enum_members = members[0..mcount],
         });
-        const et = heap.allocObject() orelse return error.OutOfMemory;
+        const et = c.hs.allocObject() orelse return error.OutOfMemory;
         et.* = .{ .enum_type = .{
             .name = try c.copyName(name),
             .qualified_name = qname,
@@ -1796,7 +1796,7 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
         predicate_uv_count = try c.compileFuncWithPrefix(&[_][]const u8{}, false, base);
         const func_obj = c.last_func_obj orelse return error.NotAFunction;
         if (predicate_uv_count == 0) {
-            const cl = heap.allocObject() orelse return error.OutOfMemory;
+            const cl = c.hs.allocObject() orelse return error.OutOfMemory;
             cl.* = .{ .closure = .{ .func = func_obj, .upvalues = &[_]*Object{} } };
             predicate_obj = cl;
         } else {
@@ -1870,7 +1870,7 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
 
     const qname = try c.qualifyTypeName(name);
     const qparent = try c.qualifyTypeName(parent_name);
-    const nt = heap.allocObject() orelse return error.OutOfMemory;
+    const nt = c.hs.allocObject() orelse return error.OutOfMemory;
     nt.* = .{ .named_type = NamedTypeObj{
         .name = try c.copyName(name),
         .qualified_name = qname,
@@ -2012,7 +2012,7 @@ pub fn variantDeclBody(c: anytype, kw: Token, name_tok: Token, is_pub: bool, tpa
                     }
                 }
                 try c.consume(.rbrace);
-                const fields = heap.bump(StructFieldSpec, field_count) orelse return error.OutOfMemory;
+                const fields = c.hs.bump(StructFieldSpec, field_count) orelse return error.OutOfMemory;
                 @memcpy(fields[0..field_count], field_specs[0..field_count]);
                 for (fields[0..field_count]) |*f| f.key = .{ .string = try c.cs.internStr(f.name) };
                 if (arm_count >= MaxLocals) {
@@ -2073,19 +2073,19 @@ pub fn variantDeclBody(c: anytype, kw: Token, name_tok: Token, is_pub: bool, tpa
     try c.consume(.rbrace);
 
     const shared_fields = if (shared_count > 0) blk: {
-        const sf = heap.bump(StructFieldSpec, shared_count) orelse return error.OutOfMemory;
+        const sf = c.hs.bump(StructFieldSpec, shared_count) orelse return error.OutOfMemory;
         @memcpy(sf[0..shared_count], shared_tmp[0..shared_count]);
         for (sf[0..shared_count]) |*f| f.key = .{ .string = try c.cs.internStr(f.name) };
         break :blk sf[0..shared_count];
     } else @as([]const StructFieldSpec, &.{});
 
-    const arms = heap.bump(VariantArmSpec, arm_count) orelse return error.OutOfMemory;
+    const arms = c.hs.bump(VariantArmSpec, arm_count) orelse return error.OutOfMemory;
     @memcpy(arms[0..arm_count], arms_tmp[0..arm_count]);
 
     c.type_param_count = saved_param_count;
 
     const qname = try c.qualifyTypeName(name);
-    const vt = heap.allocObject() orelse return error.OutOfMemory;
+    const vt = c.hs.allocObject() orelse return error.OutOfMemory;
     vt.* = .{ .variant_type = VariantTypeObj{
         .name = try c.copyName(name),
         .qualified_name = qname,
@@ -2136,7 +2136,7 @@ pub fn namedErrorTypeDecl(c: anytype, kw: Token, name_tok: Token, is_pub: bool) 
         try c.registry.addNamedErrorType(name);
     }
     const qname = try c.qualifyTypeName(name);
-    const obj = heap.allocObject() orelse return error.OutOfMemory;
+    const obj = c.hs.allocObject() orelse return error.OutOfMemory;
     obj.* = .{ .named_error_type = .{ .name = try c.copyName(name) } };
     try c.cs.emitConst(.{ .object = obj }, kw.line);
     if (c.inFunc()) {

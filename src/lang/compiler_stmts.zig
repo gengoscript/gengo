@@ -232,7 +232,7 @@ pub fn compileFuncWithPrefix(c: anytype, prefix: []const []const u8, is_named: b
     var is_variadic = false;
     var variadic_type: FieldTypeSpec = undefined;
 
-    const any_alts = heap.bump(FieldTypeAlt, 1) orelse return error.OutOfMemory;
+    const any_alts = c.hs.bump(FieldTypeAlt, 1) orelse return error.OutOfMemory;
     any_alts[0] = .{ .typ = .any };
     const any_spec: FieldTypeSpec = .{ .alts = any_alts[0..1] };
     variadic_type = any_spec;
@@ -270,7 +270,7 @@ pub fn compileFuncWithPrefix(c: anytype, prefix: []const []const u8, is_named: b
                     const ptype: FieldTypeSpec = try c.parseFieldTypeSpec();
                     param_types[arity - 1] = ptype;
                 } else {
-                    const alt = heap.bump(FieldTypeAlt, 1) orelse return error.OutOfMemory;
+                    const alt = c.hs.bump(FieldTypeAlt, 1) orelse return error.OutOfMemory;
                     alt[0] = switch (pb) {
                         .int => .{ .typ = .int },
                         .float => .{ .typ = .float },
@@ -318,7 +318,7 @@ pub fn compileFuncWithPrefix(c: anytype, prefix: []const []const u8, is_named: b
     var named_return_count: u8 = 0;
 
     if (predicate_base != null) {
-        const alt = heap.bump(FieldTypeAlt, 1) orelse return error.OutOfMemory;
+        const alt = c.hs.bump(FieldTypeAlt, 1) orelse return error.OutOfMemory;
         alt[0] = .{ .typ = .boolean };
         return_types[0] = .{ .alts = alt[0..1] };
         return_count = 1;
@@ -430,26 +430,26 @@ pub fn compileFuncWithPrefix(c: anytype, prefix: []const []const u8, is_named: b
     try c.cs.patchJump(jump_over);
 
     const uv_count = scope.upvalue_count;
-    const slots = heap.bump(u8, uv_count) orelse return error.OutOfMemory;
+    const slots = c.hs.bump(u8, uv_count) orelse return error.OutOfMemory;
     for (scope.upvalues[0..uv_count], slots[0..uv_count]) |uv, *s| {
         s.* = (if (uv.from_upvalue) @as(u8, 0x80) else @as(u8, 0x00)) | uv.index;
     }
 
-    const ptypes = heap.bump(FieldTypeSpec, arity) orelse return error.OutOfMemory;
+    const ptypes = c.hs.bump(FieldTypeSpec, arity) orelse return error.OutOfMemory;
     var has_typed_params = false;
     for (ptypes[0..arity], param_types[0..arity]) |*pt, src| {
         pt.* = src;
         if (!(src.alts.len == 1 and src.alts[0].typ == .any)) has_typed_params = true;
     }
 
-    const rtypes = heap.bump(FieldTypeSpec, return_count) orelse return error.OutOfMemory;
+    const rtypes = c.hs.bump(FieldTypeSpec, return_count) orelse return error.OutOfMemory;
     @memcpy(rtypes[0..return_count], return_types[0..return_count]);
 
     var default_count: u8 = 0;
     for (0..@as(usize, arity)) |pi| {
         if (param_has_default[pi]) default_count += 1;
     }
-    const defaults = heap.bump(value_mod.Value, default_count) orelse return error.OutOfMemory;
+    const defaults = c.hs.bump(value_mod.Value, default_count) orelse return error.OutOfMemory;
     if (default_count > 0) {
         var di: usize = 0;
         for (0..@as(usize, arity)) |pi| {
@@ -460,7 +460,7 @@ pub fn compileFuncWithPrefix(c: anytype, prefix: []const []const u8, is_named: b
         }
     }
 
-    const func_obj = heap.allocObject() orelse return error.OutOfMemory;
+    const func_obj = c.hs.allocObject() orelse return error.OutOfMemory;
     func_obj.* = .{ .function = .{
         .ip = func_ip,
         .arity = arity,
@@ -634,7 +634,7 @@ pub fn deferStmt(c: anytype) !void {
                         while (lookup_name) |cur_name| {
                             const qrecv = try c.qualifyTypeName(cur_name);
                             const total = qrecv.len + 1 + prop.src.len;
-                            const key_buf = heap.bump(u8, total) orelse return error.OutOfMemory;
+                            const key_buf = c.hs.bump(u8, total) orelse return error.OutOfMemory;
                             @memcpy(key_buf[0..qrecv.len], qrecv);
                             key_buf[qrecv.len] = '.';
                             @memcpy(key_buf[qrecv.len + 1 .. total], prop.src);
@@ -819,16 +819,16 @@ fn compileDeferBlock(c: anytype) !void {
     try c.cs.patchJump(jump_over);
 
     const uv_count = scope.upvalue_count;
-    const slots = heap.bump(u8, uv_count) orelse return error.OutOfMemory;
+    const slots = c.hs.bump(u8, uv_count) orelse return error.OutOfMemory;
     for (scope.upvalues[0..uv_count], slots[0..uv_count]) |uv, *s| {
         s.* = (if (uv.from_upvalue) @as(u8, 0x80) else @as(u8, 0x00)) | uv.index;
     }
 
-    const any_alts = heap.bump(FieldTypeAlt, 1) orelse return error.OutOfMemory;
+    const any_alts = c.hs.bump(FieldTypeAlt, 1) orelse return error.OutOfMemory;
     any_alts[0] = .{ .typ = .any };
     const any_spec: FieldTypeSpec = .{ .alts = any_alts[0..1] };
 
-    const func_obj = heap.allocObject() orelse return error.OutOfMemory;
+    const func_obj = c.hs.allocObject() orelse return error.OutOfMemory;
     func_obj.* = .{ .function = .{
         .ip = func_ip,
         .arity = 0,
@@ -1912,7 +1912,7 @@ pub fn switchStmt(c: anytype) anyerror!void {
     for (end_jumps[0..end_count]) |j| try c.cs.patchJump(j);
 }
 
-fn fieldTypeAltLabel(alt: FieldTypeAlt) []const u8 {
+fn fieldTypeAltLabel(hs: *heap.State, alt: FieldTypeAlt) []const u8 {
     return switch (alt.typ) {
         .int => "int",
         .float => "float",
@@ -1929,10 +1929,10 @@ fn fieldTypeAltLabel(alt: FieldTypeAlt) []const u8 {
         .interface_t => alt.interface_name,
         .array => blk: {
             const inner = if (alt.elem_spec) |es|
-                if (es.alts.len > 0) fieldTypeAltLabel(es.alts[0]) else "any"
+                if (es.alts.len > 0) fieldTypeAltLabel(hs, es.alts[0]) else "any"
             else
                 "any";
-            const buf = heap.bump(u8, inner.len + 2) orelse break :blk "array";
+            const buf = hs.bump(u8, inner.len + 2) orelse break :blk "array";
             buf[0] = '[';
             buf[1] = ']';
             @memcpy(buf[2 .. inner.len + 2], inner);
@@ -1940,15 +1940,15 @@ fn fieldTypeAltLabel(alt: FieldTypeAlt) []const u8 {
         },
         .map => blk: {
             const k = if (alt.key_spec) |ks|
-                if (ks.alts.len > 0) fieldTypeAltLabel(ks.alts[0]) else "any"
+                if (ks.alts.len > 0) fieldTypeAltLabel(hs, ks.alts[0]) else "any"
             else
                 "any";
             const v = if (alt.val_spec) |vs|
-                if (vs.alts.len > 0) fieldTypeAltLabel(vs.alts[0]) else "any"
+                if (vs.alts.len > 0) fieldTypeAltLabel(hs, vs.alts[0]) else "any"
             else
                 "any";
             const len = 1 + k.len + 1 + v.len;
-            const buf = heap.bump(u8, len) orelse break :blk "map";
+            const buf = hs.bump(u8, len) orelse break :blk "map";
             buf[0] = '[';
             @memcpy(buf[1 .. 1 + k.len], k);
             buf[1 + k.len] = ']';
@@ -2001,8 +2001,8 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
     } else if (c.cur.typ == .lbracket) {
         const ts = try c.parseFieldTypeSpec();
         const is_map = ts.alts.len > 0 and ts.alts[0].typ == .map;
-        const type_label = if (ts.alts.len > 0) fieldTypeAltLabel(ts.alts[0]) else if (is_map) "map" else "array";
-        const nt = heap.allocObject() orelse return error.OutOfMemory;
+        const type_label = if (ts.alts.len > 0) fieldTypeAltLabel(c.hs, ts.alts[0]) else if (is_map) "map" else "array";
+        const nt = c.hs.allocObject() orelse return error.OutOfMemory;
         if (is_map) {
             nt.* = .{ .named_type = .{
                 .name = type_label,
