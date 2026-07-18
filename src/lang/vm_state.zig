@@ -40,16 +40,23 @@ pub const Policy = struct {
 };
 
 pub const Frame = struct {
-    // Code, stack, and defer depths are bounded well below 4 GiB; storing them
-    // as u32 cuts per-frame footprint without changing semantics.
+    // Code, stack, and defer depths are bounded well below their integer
+    // ranges; narrow fields cut the per-call frame write from 32 to 24 bytes.
     ret_ip: u32,
     base: u32,
-    defer_base: u32,
+    // Defer-stack index at entry; max_defers caps at 65535 (stress preset).
+    defer_base: u16,
     has_typed_returns: bool,
     named_return_count: u8,
     func_arity: u8,
-    closure: ?*Object,
-    func_obj: *Object,
+    // The object as invoked — a .closure or a plain .function. The function
+    // object derives from it (cl.func for closures); upvalue access requires
+    // the .closure tag. Replaces the former closure/func_obj pair.
+    callee: *Object,
+    // Never written or read: pads the frame to a 32-byte power-of-2 stride so
+    // frames[frame_top] indexes with a shift, not a multiply. A 24-byte frame
+    // measured ~9% SLOWER on fib despite fewer stores.
+    _stride_pad: u64 = undefined,
 };
 
 pub const PanicFrame = struct { line: u16, name: []const u8 };
