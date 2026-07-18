@@ -5,7 +5,7 @@ const chunk = @import("lang/chunk.zig");
 const vm = @import("lang/vm.zig");
 const vm_defuse = @import("lang/vm_defuse.zig");
 const heap = @import("runtime/heap.zig");
-const cfg = @import("runtime/config.zig");
+const cfg = @import("runtime_config");
 
 var g_stdout: std.array_list.Managed(u8) = undefined;
 var g_stderr: std.array_list.Managed(u8) = undefined;

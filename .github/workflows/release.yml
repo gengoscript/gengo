@@ -9,7 +9,10 @@ jobs:
   release:
     runs-on: ubuntu-latest
     env:
-      WASMTIME_VERSION: v45.0.0
+      WASMTIME_VERSION: v46.0.1
+      WASMTIME_SHA256: 9ae0b17ea298bcc52277a8208d6ab7fae8e1a89579672f9d82f9d86c116edb62
+      BINARYEN_VERSION: version_130
+      BINARYEN_SHA256: 0a18362361ad05465118cd8eeb72edaeec89de6894bc283576ef4e07aa3babcc
     permissions:
       contents: write
     steps:
@@ -23,13 +26,22 @@ jobs:
 
       - name: Install wasmtime
         run: |
-          curl -sSf https://wasmtime.dev/install.sh | bash -s -- --version "$WASMTIME_VERSION"
+          TARBALL="wasmtime-${WASMTIME_VERSION}-x86_64-linux.tar.xz"
+          URL="https://github.com/bytecodealliance/wasmtime/releases/download/${WASMTIME_VERSION}/${TARBALL}"
+          curl -fsSL "$URL" -o "/tmp/${TARBALL}"
+          echo "${WASMTIME_SHA256}  /tmp/${TARBALL}" | sha256sum --check --strict
+          tar -xJf "/tmp/${TARBALL}" -C /tmp
+          mkdir -p "$HOME/.wasmtime/bin"
+          mv "/tmp/wasmtime-${WASMTIME_VERSION}-x86_64-linux/wasmtime" "$HOME/.wasmtime/bin/"
           echo "$HOME/.wasmtime/bin" >> "$GITHUB_PATH"
 
       - name: Install wasm-opt
         run: |
-          curl -sL https://github.com/WebAssembly/binaryen/releases/download/version_130/binaryen-version_130-x86_64-linux.tar.gz | tar xz
-          echo "$PWD/binaryen-version_130/bin" >> "$GITHUB_PATH"
+          TARBALL="binaryen-${BINARYEN_VERSION}-x86_64-linux.tar.gz"
+          curl -fsSL "https://github.com/WebAssembly/binaryen/releases/download/${BINARYEN_VERSION}/${TARBALL}" -o "/tmp/${TARBALL}"
+          echo "${BINARYEN_SHA256}  /tmp/${TARBALL}" | sha256sum --check --strict
+          tar -xzf "/tmp/${TARBALL}"
+          echo "$PWD/binaryen-${BINARYEN_VERSION}/bin" >> "$GITHUB_PATH"
 
       - name: Install llvm-strip
         run: sudo apt-get install -y --no-install-recommends llvm
@@ -55,12 +67,18 @@ jobs:
           zig build -Dpreset=1m engine-release-fs
           zig build -Dpreset=1m engine-release-minimal
 
+      - name: Run conformance tests against ReleaseFast WASM
+        run: zig build -Dpreset=1m conformance-release
+
       - name: Optimise and stage WASM artifacts
         run: |
           mkdir -p dist
           for name in gengo-cli gengo-engine gengo-engine-net gengo-engine-fs gengo-engine-minimal; do
-            wasm-opt -Oz --strip-debug "build/${name}.wasm" -o "dist/${name}.wasm"
+            wasm-opt -Oz --strip-debug "build/release/${name}.wasm" -o "dist/${name}.wasm"
           done
+
+      - name: Run conformance tests against packaged WASM
+        run: zig build -Dpreset=1m -Dconformance_wasm=dist/gengo-cli.wasm conformance-artifact
 
       # ── Native CLI per target ──────────────────────────────────────
 

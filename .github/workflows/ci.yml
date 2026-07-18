@@ -1,5 +1,11 @@
 name: gengo-ci
 
+env:
+  WASMTIME_VERSION: v46.0.1
+  WASMTIME_SHA256: 9ae0b17ea298bcc52277a8208d6ab7fae8e1a89579672f9d82f9d86c116edb62
+  BINARYEN_VERSION: version_130
+  BINARYEN_SHA256: 0a18362361ad05465118cd8eeb72edaeec89de6894bc283576ef4e07aa3babcc
+
 on:
   push:
     branches:
@@ -9,8 +15,6 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    env:
-      WASMTIME_VERSION: v45.0.0
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -30,18 +34,26 @@ jobs:
             curl -fsSL --retry 3 --retry-delay 5 "$URL" -o "/tmp/${TARBALL}" && break
             [ "$attempt" -lt 3 ] && sleep 15 || exit 1
           done
+          echo "${WASMTIME_SHA256}  /tmp/${TARBALL}" | sha256sum --check --strict
           tar -xJf "/tmp/${TARBALL}" -C /tmp
           mkdir -p "$HOME/.wasmtime/bin"
           mv "/tmp/wasmtime-${WASMTIME_VERSION}-x86_64-linux/wasmtime" "$HOME/.wasmtime/bin/"
           echo "$HOME/.wasmtime/bin" >> "$GITHUB_PATH"
 
-      - name: Run VM safety unit tests
-        run: zig build unit
+      - name: Install wasm-opt
+        run: |
+          TARBALL="binaryen-${BINARYEN_VERSION}-x86_64-linux.tar.gz"
+          curl -fsSL "https://github.com/WebAssembly/binaryen/releases/download/${BINARYEN_VERSION}/${TARBALL}" -o "/tmp/${TARBALL}"
+          echo "${BINARYEN_SHA256}  /tmp/${TARBALL}" | sha256sum --check --strict
+          tar -xzf "/tmp/${TARBALL}"
+          echo "$PWD/binaryen-${BINARYEN_VERSION}/bin" >> "$GITHUB_PATH"
 
-      - name: Build WASI binary
-        run: zig build -Dpreset=dev wasi
+      - name: Check formatting and whitespace
+        run: |
+          zig fmt --check build.zig src tools examples
+          git diff --check
 
-      - name: Run conformance tests
+      - name: Run test suite
         run: zig build -Dpreset=dev test
 
       - name: Run benchmarks
@@ -96,8 +108,6 @@ jobs:
 
   stress-test:
     runs-on: ubuntu-latest
-    env:
-      WASMTIME_VERSION: v45.0.0
     steps:
       - uses: actions/checkout@v4
       - uses: mlugg/setup-zig@v2
@@ -112,17 +122,23 @@ jobs:
             curl -fsSL --retry 3 --retry-delay 5 "$URL" -o "/tmp/${TARBALL}" && break
             [ "$attempt" -lt 3 ] && sleep 15 || exit 1
           done
+          echo "${WASMTIME_SHA256}  /tmp/${TARBALL}" | sha256sum --check --strict
           tar -xJf "/tmp/${TARBALL}" -C /tmp
           mkdir -p "$HOME/.wasmtime/bin"
           mv "/tmp/wasmtime-${WASMTIME_VERSION}-x86_64-linux/wasmtime" "$HOME/.wasmtime/bin/"
           echo "$HOME/.wasmtime/bin" >> "$GITHUB_PATH"
+      - name: Install wasm-opt
+        run: |
+          TARBALL="binaryen-${BINARYEN_VERSION}-x86_64-linux.tar.gz"
+          curl -fsSL "https://github.com/WebAssembly/binaryen/releases/download/${BINARYEN_VERSION}/${TARBALL}" -o "/tmp/${TARBALL}"
+          echo "${BINARYEN_SHA256}  /tmp/${TARBALL}" | sha256sum --check --strict
+          tar -xzf "/tmp/${TARBALL}"
+          echo "$PWD/binaryen-${BINARYEN_VERSION}/bin" >> "$GITHUB_PATH"
       - name: Run tests under stress preset (tight heap/stack limits)
         run: zig build -Dpreset=stress test
 
   gc-stress-test:
     runs-on: ubuntu-latest
-    env:
-      WASMTIME_VERSION: v45.0.0
     steps:
       - uses: actions/checkout@v4
       - uses: mlugg/setup-zig@v2
@@ -137,17 +153,23 @@ jobs:
             curl -fsSL --retry 3 --retry-delay 5 "$URL" -o "/tmp/${TARBALL}" && break
             [ "$attempt" -lt 3 ] && sleep 15 || exit 1
           done
+          echo "${WASMTIME_SHA256}  /tmp/${TARBALL}" | sha256sum --check --strict
           tar -xJf "/tmp/${TARBALL}" -C /tmp
           mkdir -p "$HOME/.wasmtime/bin"
           mv "/tmp/wasmtime-${WASMTIME_VERSION}-x86_64-linux/wasmtime" "$HOME/.wasmtime/bin/"
           echo "$HOME/.wasmtime/bin" >> "$GITHUB_PATH"
+      - name: Install wasm-opt
+        run: |
+          TARBALL="binaryen-${BINARYEN_VERSION}-x86_64-linux.tar.gz"
+          curl -fsSL "https://github.com/WebAssembly/binaryen/releases/download/${BINARYEN_VERSION}/${TARBALL}" -o "/tmp/${TARBALL}"
+          echo "${BINARYEN_SHA256}  /tmp/${TARBALL}" | sha256sum --check --strict
+          tar -xzf "/tmp/${TARBALL}"
+          echo "$PWD/binaryen-${BINARYEN_VERSION}/bin" >> "$GITHUB_PATH"
       - name: Run GC stress tests (GC on every allocation)
         run: zig build -Dpreset=dev -Dgc_stress=true test
 
   heap-paranoia-test:
     runs-on: ubuntu-latest
-    env:
-      WASMTIME_VERSION: v45.0.0
     steps:
       - uses: actions/checkout@v4
       - uses: mlugg/setup-zig@v2
@@ -162,17 +184,23 @@ jobs:
             curl -fsSL --retry 3 --retry-delay 5 "$URL" -o "/tmp/${TARBALL}" && break
             [ "$attempt" -lt 3 ] && sleep 15 || exit 1
           done
+          echo "${WASMTIME_SHA256}  /tmp/${TARBALL}" | sha256sum --check --strict
           tar -xJf "/tmp/${TARBALL}" -C /tmp
           mkdir -p "$HOME/.wasmtime/bin"
           mv "/tmp/wasmtime-${WASMTIME_VERSION}-x86_64-linux/wasmtime" "$HOME/.wasmtime/bin/"
           echo "$HOME/.wasmtime/bin" >> "$GITHUB_PATH"
+      - name: Install wasm-opt
+        run: |
+          TARBALL="binaryen-${BINARYEN_VERSION}-x86_64-linux.tar.gz"
+          curl -fsSL "https://github.com/WebAssembly/binaryen/releases/download/${BINARYEN_VERSION}/${TARBALL}" -o "/tmp/${TARBALL}"
+          echo "${BINARYEN_SHA256}  /tmp/${TARBALL}" | sha256sum --check --strict
+          tar -xzf "/tmp/${TARBALL}"
+          echo "$PWD/binaryen-${BINARYEN_VERSION}/bin" >> "$GITHUB_PATH"
       - name: Run tests with heap paranoia (assert no live regions overwritten)
         run: zig build -Dpreset=dev -Dheap_paranoia=true test
 
   parity-test:
     runs-on: ubuntu-latest
-    env:
-      WASMTIME_VERSION: v45.0.0
     steps:
       - uses: actions/checkout@v4
       - uses: mlugg/setup-zig@v2
@@ -187,9 +215,17 @@ jobs:
             curl -fsSL --retry 3 --retry-delay 5 "$URL" -o "/tmp/${TARBALL}" && break
             [ "$attempt" -lt 3 ] && sleep 15 || exit 1
           done
+          echo "${WASMTIME_SHA256}  /tmp/${TARBALL}" | sha256sum --check --strict
           tar -xJf "/tmp/${TARBALL}" -C /tmp
           mkdir -p "$HOME/.wasmtime/bin"
           mv "/tmp/wasmtime-${WASMTIME_VERSION}-x86_64-linux/wasmtime" "$HOME/.wasmtime/bin/"
           echo "$HOME/.wasmtime/bin" >> "$GITHUB_PATH"
+      - name: Install wasm-opt
+        run: |
+          TARBALL="binaryen-${BINARYEN_VERSION}-x86_64-linux.tar.gz"
+          curl -fsSL "https://github.com/WebAssembly/binaryen/releases/download/${BINARYEN_VERSION}/${TARBALL}" -o "/tmp/${TARBALL}"
+          echo "${BINARYEN_SHA256}  /tmp/${TARBALL}" | sha256sum --check --strict
+          tar -xzf "/tmp/${TARBALL}"
+          echo "$PWD/binaryen-${BINARYEN_VERSION}/bin" >> "$GITHUB_PATH"
       - name: Run host/embedded backend parity tests
         run: zig build -Dpreset=dev parity

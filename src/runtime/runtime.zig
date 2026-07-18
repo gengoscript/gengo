@@ -11,7 +11,7 @@ const vmnative = @import("../lang/vm_native.zig");
 const net_state = @import("../lang/native/net_state.zig");
 const fs_state = @import("../lang/native/fs_state.zig");
 const native_rand = @import("../lang/native/rand.zig");
-const cfg = @import("config.zig");
+const cfg = @import("runtime_config");
 const Value = @import("../lang/value.zig").Value;
 
 const common = @import("../lang/common.zig");
@@ -118,7 +118,7 @@ fn checkGlobalIsConst(ctx: *anyopaque, name: []const u8) bool {
     return false;
 }
 
-const MaxFrames = @import("../runtime/config.zig").max_frames;
+const MaxFrames = @import("runtime_config").max_frames;
 const MaxTests = ct.MaxTestBlocks;
 
 pub const Runtime = struct {

@@ -1,5 +1,5 @@
 const std = @import("std");
-const cfg = @import("config.zig");
+const cfg = @import("runtime_config");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 
