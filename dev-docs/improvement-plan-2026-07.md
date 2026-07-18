@@ -148,6 +148,36 @@ and is never flagged. Recursive self-calls resolve through a new
 in-progress-signature stack (registration happens post-body), which also
 extends the compile-time arg checks to recursion. C3 is moot.
 
+### C4. Return-side proof flag `[ ]`
+
+`checkPrimitiveReturn` runs on every return from a typed-return function
+(measured ~1-2% incl. the isPrimitiveReturn derefs in canReturnFast). The
+compiler can prove return sites the same way C1 proved args: track
+"all return sites proven" per function body (ExprPrimInfo vs declared
+return types, prim single-alt only), stamp a `returns_proven` bit on
+FuncObj, and let frame entry store `has_typed_returns and !returns_proven`.
+Sound regardless of binding mutability — the proof is about the function's
+own body. Bonus: provable mismatches become compile errors, implementing
+the previously deferred return-type compile checking.
+
+### C5. Immediate-operand fused variants `[ ]`
+
+From the Lua comparison (LTI/ADDI embed small ints in the instruction):
+our hot fused ops load constants through the pool (`consts[idx]`) — two
+pool indirections per fib node. Add i16-immediate variants of the hottest
+const-fused ops using reserved opcode slots. Small win (~2-4%), moderate
+surface (compiler emit, VM, verifier, defuse, disasm, opcodes.md) — do
+after C2/C4, measure per the house rule.
+
+### C6. Warm-IC invariant re-check `[ ]` (investigate)
+
+Three loads+compares per warm call re-verify arity/variadic/defaults
+because GC pool-slot reuse can swap objects. Compile-time function objects
+are const-rooted (never collected) — but ICs also cache runtime closure
+objects, which die and free their slots, so naive pinning doesn't work.
+Needs a design (e.g. pin function objects only + IC records whether it
+cached a pinned object). Investigate before building.
+
 ### C2. Frame slimming `[ ]`
 
 8-field frame write per call includes fields most functions never use
@@ -156,6 +186,26 @@ packing/lazy-fill. Measure-first (house rule: no claimed win without cycle
 evidence).
 
 ### C3. Precomputed prim-tag array (C1 fallback) `[x]` — moot, C1 landed fully
+
+### Strategic note — decide Tier 2 vs Tier 3 before GBC (2026-07-18)
+
+Bytecode-level comparison of fib across engines: Gengo dispatches ~4
+instructions per call node vs Lua's ~10 and CPython's ~13, but at ~53
+cycles per dispatch vs Lua's ~6 and CPython's ~10. Dispatch count is
+already best-in-class — further fusion is pennies (quantitative
+vindication of the opcode-caution policy). The gap is per-instruction
+cost: 16-byte Value stack traffic (doReturn's movups = 60% of its time),
+frame writes, IC re-verification, pool indirection.
+
+- Tier 2: **TOS-in-register caching** (thread a tos: Value through the
+  labeled-switch dispatch) — the last big win inside the stack ISA;
+  compatible with GBC's frozen wire format. Est. 0.32 → ~0.22-0.25.
+- Tier 3: register VM — Lua parity (~6 cycles/insn) but a new ISA.
+  **Must be decided before GBC ships a stable bytecode format**; after
+  that it means a translation layer or breaking the cache.
+
+Also: --disasm prints ??? for call_global_local_sub_const's trailing
+call-IC bytes — cosmetic decoder-width gap, fix in passing.
 
 If C1's encoding is unpalatable: store expected `VTag` per param at FuncObj
 creation so enforcement is a tag-compare loop with no `matchesTypeAlt`
