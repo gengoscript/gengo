@@ -26,7 +26,7 @@
 const path   = require('node:path');
 const { Engine } = require('./gengo_engine');
 
-const WASM_PATH = path.join(__dirname, '..', '..', 'build', 'gengo-engine.wasm');
+const WASM_PATH = path.join(__dirname, '..', '..', 'build', 'debug', 'gengo-engine.wasm');
 
 // ---------------------------------------------------------------------------
 // Release policy scripts

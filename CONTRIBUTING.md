@@ -10,7 +10,7 @@ Thanks for helping improve gengo.
 
 ## Build Presets
 
-Four presets are available: `256k` (constrained), `1m` (default), `16m` (large), `unlimited`.
+Six presets are available: `256k` (constrained), `1m` (default), `16m` (large), `unlimited`, `dev`, and `stress`.
 
 Pass `-Dpreset=<name>` to any `zig build` command. For any change that touches the runtime, heap, or VM also run with GC stress enabled:
 
@@ -20,6 +20,13 @@ zig build -Dpreset=1m -Dgc_stress=true test
 
 `-Dgc_stress=true` forces a GC on every allocation — the harshest check for unrooted-value bugs.
 
+The WASM test and benchmark targets require Wasmtime on `PATH`. For a local
+installation elsewhere, pass `-Dwasmtime=/path/to/wasmtime` to `zig build`.
+The Make targets accept the same override as
+`make test WASMTIME=/path/to/wasmtime`.
+They also require Binaryen's `wasm-opt`, which is used to build the explicit
+optimised test artifact at `build/test/gengo-cli.wasm`.
+
 ## Local Validation
 
 Run these before opening a PR:
@@ -28,6 +35,9 @@ Run these before opening a PR:
 make wasi
 make test
 ```
+
+`make` uses the `dev` preset. Its runtime limits currently match `1m`; use an
+explicit `zig build -Dpreset=<name>` command when validating a specific preset.
 
 For runtime, heap, or VM changes also run:
 

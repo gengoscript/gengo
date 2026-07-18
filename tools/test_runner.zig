@@ -57,7 +57,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
     }
 
     const wasmtime = if (args.len > 2) args[2] else "wasmtime";
-    const wasm_path = if (args.len > 3) args[3] else "build/gengo-cli.wasm";
+    const wasm_path = if (args.len > 3) args[3] else "build/test/gengo-cli.wasm";
 
     if (!commandExists(alloc, wasmtime)) {
         std.debug.print("wasmtime binary not found: {s}\n", .{wasmtime});

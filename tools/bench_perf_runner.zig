@@ -32,7 +32,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
     const args = argv_storage[0..arg_count];
 
     const wasmtime = if (args.len > 1) args[1] else "wasmtime";
-    const wasm_path = if (args.len > 2) args[2] else "build/gengo-perf.wasm";
+    const wasm_path = if (args.len > 2) args[2] else "build/debug/gengo-perf.wasm";
     const bench_dir = if (args.len > 3) args[3] else "tests/bench";
     const perf_dir = if (args.len > 4) args[4] else "build/perf";
 
@@ -154,7 +154,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
             _ = std.c.dup2(stderr_pipe[1], 2);
             _ = std.c.close(stdout_pipe[1]);
             _ = std.c.close(stderr_pipe[1]);
-            // Build command string: wasmtime --dir . build/gengo-perf.wasm -- case.gengo
+            // Build command string: wasmtime --dir . build/debug/gengo-perf.wasm -- case.gengo
             const cmd = try std.fmt.allocPrint(alloc, "{s} --dir . {s} -- {s}", .{ wasmtime, wasm_path, case.path });
             defer alloc.free(cmd);
             const cmd_z = try toCStr(alloc, cmd);

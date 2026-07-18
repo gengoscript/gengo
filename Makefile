@@ -1,5 +1,6 @@
 ZIG ?= zig
 PRESET ?= dev
+WASMTIME ?= wasmtime
 
 .PHONY: wasi
 wasi:
@@ -13,25 +14,25 @@ wasi-release:
 config-dev:
 	@echo "Use: zig build -Dpreset=dev <step>"
 
-.PHONY: config-tiny
-config-tiny:
-	@echo "Use: zig build -Dpreset=tiny <step>"
+.PHONY: config-256k
+config-256k:
+	@echo "Use: zig build -Dpreset=256k <step>"
 
 .PHONY: config-stress
 config-stress:
 	@echo "Use: zig build -Dpreset=stress <step>"
 
-.PHONY: wasi-tiny
-wasi-tiny:
-	$(ZIG) build -Dpreset=tiny wasi
+.PHONY: wasi-256k
+wasi-256k:
+	$(ZIG) build -Dpreset=256k wasi
 
 .PHONY: wasi-stress
 wasi-stress:
 	$(ZIG) build -Dpreset=stress wasi
 
-.PHONY: wasi-release-tiny
-wasi-release-tiny:
-	$(ZIG) build -Dpreset=tiny wasi-release
+.PHONY: wasi-release-256k
+wasi-release-256k:
+	$(ZIG) build -Dpreset=256k wasi-release
 
 .PHONY: wasi-release-stress
 wasi-release-stress:
@@ -39,44 +40,44 @@ wasi-release-stress:
 
 .PHONY: unit
 unit:
-	$(ZIG) build -Dpreset=dev unit
+	$(ZIG) build -Dpreset=dev -Dwasmtime=$(WASMTIME) unit
 
 .PHONY: conformance
 conformance:
-	$(ZIG) build -Dpreset=$(PRESET) test
+	$(ZIG) build -Dpreset=$(PRESET) -Dwasmtime=$(WASMTIME) test
 
 .PHONY: test
 test:
-	$(ZIG) build -Dpreset=dev test
+	$(ZIG) build -Dpreset=dev -Dwasmtime=$(WASMTIME) test
 
 .PHONY: bench
 bench:
-	$(ZIG) build -Dpreset=dev bench
+	$(ZIG) build -Dpreset=dev -Dwasmtime=$(WASMTIME) bench
 
 .PHONY: bench-release
 bench-release:
-	$(ZIG) build -Dpreset=dev bench-release
+	$(ZIG) build -Dpreset=dev -Dwasmtime=$(WASMTIME) bench-release
 
-.PHONY: bench-tiny
-bench-tiny:
-	$(ZIG) build -Dpreset=tiny bench
+.PHONY: bench-256k
+bench-256k:
+	$(ZIG) build -Dpreset=256k -Dwasmtime=$(WASMTIME) bench
 
 .PHONY: bench-stress
 bench-stress:
-	GENGO_BENCH_INCLUDE_STRESS=1 $(ZIG) build -Dpreset=stress bench
+	GENGO_BENCH_INCLUDE_STRESS=1 $(ZIG) build -Dpreset=stress -Dwasmtime=$(WASMTIME) bench
 
-.PHONY: bench-release-tiny
-bench-release-tiny:
-	$(ZIG) build -Dpreset=tiny bench-release
+.PHONY: bench-release-256k
+bench-release-256k:
+	$(ZIG) build -Dpreset=256k -Dwasmtime=$(WASMTIME) bench-release
 
 .PHONY: bench-release-stress
 bench-release-stress:
-	GENGO_BENCH_INCLUDE_STRESS=1 $(ZIG) build -Dpreset=stress bench-release
+	GENGO_BENCH_INCLUDE_STRESS=1 $(ZIG) build -Dpreset=stress -Dwasmtime=$(WASMTIME) bench-release
 
 .PHONY: bench-recursion-stress
 bench-recursion-stress:
-	GENGO_BENCH_INCLUDE_STRESS=1 GENGO_BENCH_FILTER='005_fib_recursive_35_stress.gengo' $(ZIG) build -Dpreset=stress bench-release
+	GENGO_BENCH_INCLUDE_STRESS=1 GENGO_BENCH_FILTER='005_fib_recursive_35_stress.gengo' $(ZIG) build -Dpreset=stress -Dwasmtime=$(WASMTIME) bench-release
 
 .PHONY: parity
 parity:
-	$(ZIG) build -Dpreset=$(PRESET) parity
+	$(ZIG) build -Dpreset=$(PRESET) -Dwasmtime=$(WASMTIME) parity

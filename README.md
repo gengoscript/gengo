@@ -178,11 +178,11 @@ zig build -Dpreset=1m cli
 
 # WASI runtime
 zig build -Dpreset=1m wasi
-wasmtime --dir . ./build/gengo-cli.wasm -- script.gengo
+wasmtime --dir . ./build/debug/gengo-cli.wasm -- script.gengo
 
 # Engine WASM
 zig build -Dpreset=1m engine-build
-# → build/gengo-engine.wasm
+# → build/debug/gengo-engine.wasm
 
 # Native shared library
 zig build -Dpreset=1m engine-native

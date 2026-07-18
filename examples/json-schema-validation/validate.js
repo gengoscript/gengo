@@ -29,7 +29,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { Engine } = require('../release-gate/gengo_engine');
 
-const WASM_PATH = path.join(__dirname, '..', '..', 'build', 'gengo-engine.wasm');
+const WASM_PATH = path.join(__dirname, '..', '..', 'build', 'debug', 'gengo-engine.wasm');
 const SCHEMA_PATH = path.join(__dirname, 'schema.gengo');
 
 const REQUESTS = [

@@ -20,8 +20,8 @@ pub fn setFsMounts(mounts: []const FsMount) fs_state.MountError!void {
     try fs_state.setMounts(mounts);
 }
 
-const MaxFrames = @import("config.zig").max_frames;
-const cfg = @import("config.zig");
+const MaxFrames = @import("runtime_config").max_frames;
+const cfg = @import("runtime_config");
 
 pub const Config = struct {
     allow_io: bool = true,

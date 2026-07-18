@@ -1,14 +1,37 @@
 const std = @import("std");
 
+pub fn presetConfigPath(preset: []const u8) ?[]const u8 {
+    if (std.mem.eql(u8, preset, "256k")) return "src/runtime/config_256k.zig";
+    if (std.mem.eql(u8, preset, "1m")) return "src/runtime/config_1m.zig";
+    if (std.mem.eql(u8, preset, "16m")) return "src/runtime/config_16m.zig";
+    if (std.mem.eql(u8, preset, "unlimited")) return "src/runtime/config_unlimited.zig";
+    if (std.mem.eql(u8, preset, "dev")) return "src/runtime/config_dev.zig";
+    if (std.mem.eql(u8, preset, "stress")) return "src/runtime/config_stress.zig";
+    return null;
+}
+
+pub fn wasmArtifactPath(mode: []const u8, name: []const u8) []const u8 {
+    if (std.mem.eql(u8, mode, "debug")) {
+        if (std.mem.eql(u8, name, "gengo-cli.wasm")) return "debug/gengo-cli.wasm";
+        if (std.mem.eql(u8, name, "gengo-engine.wasm")) return "debug/gengo-engine.wasm";
+        if (std.mem.eql(u8, name, "gengo-perf.wasm")) return "debug/gengo-perf.wasm";
+    }
+    if (std.mem.eql(u8, mode, "test")) {
+        if (std.mem.eql(u8, name, "gengo-cli.wasm")) return "test/gengo-cli.wasm";
+    }
+    if (std.mem.eql(u8, mode, "release")) {
+        if (std.mem.eql(u8, name, "gengo-cli.wasm")) return "release/gengo-cli.wasm";
+        if (std.mem.eql(u8, name, "gengo-engine.wasm")) return "release/gengo-engine.wasm";
+        if (std.mem.eql(u8, name, "gengo-engine-net.wasm")) return "release/gengo-engine-net.wasm";
+        if (std.mem.eql(u8, name, "gengo-engine-fs.wasm")) return "release/gengo-engine-fs.wasm";
+        if (std.mem.eql(u8, name, "gengo-engine-minimal.wasm")) return "release/gengo-engine-minimal.wasm";
+    }
+    unreachable;
+}
+
 pub fn build(b: *std.Build) void {
     const preset_opt = b.option([]const u8, "preset", "runtime preset: 256k|1m|16m|unlimited|dev|stress") orelse "1m";
-    const valid = std.mem.eql(u8, preset_opt, "256k") or
-        std.mem.eql(u8, preset_opt, "1m") or
-        std.mem.eql(u8, preset_opt, "16m") or
-        std.mem.eql(u8, preset_opt, "unlimited") or
-        std.mem.eql(u8, preset_opt, "dev") or
-        std.mem.eql(u8, preset_opt, "stress");
-    if (!valid) @panic("invalid -Dpreset, expected 256k|1m|16m|unlimited|dev|stress");
+    const preset_config_path = presetConfigPath(preset_opt) orelse @panic("invalid -Dpreset, expected 256k|1m|16m|unlimited|dev|stress");
 
     const perf_opt = b.option(bool, "perf", "Enable performance counters (outputs PERF: lines to stderr)") orelse false;
     const gc_stress_opt = b.option(bool, "gc_stress", "Force GC on every allocation to detect unrooted-value bugs") orelse false;
@@ -32,15 +55,11 @@ pub fn build(b: *std.Build) void {
     build_opts.addOption(bool, "gengo_host", gengo_host_opt);
     build_opts.addOption([]const u8, "version", gengo_version);
     const build_opts_mod = build_opts.createModule();
+    const runtime_config_mod = b.createModule(.{ .root_source_file = b.path(preset_config_path) });
 
     const wasmtime_opt = b.option([]const u8, "wasmtime", "path to wasmtime binary") orelse "wasmtime";
     const test_filter_opt = b.option([]const u8, "test_filter", "Filter test cases by filename substring (chaos, native-cap)");
-
-    // Copy preset config file into place.
-    const preset = b.addSystemCommand(&.{
-        "bash",                                                                                                                   "-c",
-        b.fmt("cp src/runtime/config_{s}.zig src/runtime/config.zig && echo 'Applied preset: {s}'", .{ preset_opt, preset_opt }),
-    });
+    const conformance_wasm_opt = b.option([]const u8, "conformance_wasm", "WASM artifact to test with the conformance runner");
 
     const wasm_target = b.resolveTargetQuery(.{
         .cpu_arch = .wasm32,
@@ -49,39 +68,40 @@ pub fn build(b: *std.Build) void {
 
     // ── Main runtime ──────────────────────────────────────────────────────────
 
-    const gengo_debug = addWasmExe(b, "gengo-cli", "src/main.zig", wasm_target, .Debug, &preset.step, build_opts_mod);
-    const gengo_release = addWasmExe(b, "gengo-cli", "src/main.zig", wasm_target, .ReleaseFast, &preset.step, build_opts_mod);
+    const gengo_debug = addWasmExe(b, "gengo-cli", "src/main.zig", wasm_target, .Debug, build_opts_mod, runtime_config_mod);
+    const gengo_release = addWasmExe(b, "gengo-cli", "src/main.zig", wasm_target, .ReleaseFast, build_opts_mod, runtime_config_mod);
 
-    const install_debug = installWasm(b, gengo_debug, "gengo-cli.wasm");
-    const install_release = installWasm(b, gengo_release, "gengo-cli.wasm");
+    const install_debug = installWasm(b, gengo_debug, wasmArtifactPath("debug", "gengo-cli.wasm"));
+    const install_release = installWasm(b, gengo_release, wasmArtifactPath("release", "gengo-cli.wasm"));
+    const install_test = installOptimizedWasm(b, gengo_release, wasmArtifactPath("test", "gengo-cli.wasm"));
 
     // ── Engine (WASM exports for host embedding) ─────────────────────────────
 
-    const engine_debug = addWasmExe(b, "gengo-engine", "src/engine.zig", wasm_target, .Debug, &preset.step, build_opts_mod);
-    const engine_release = addWasmExe(b, "gengo-engine", "src/engine.zig", wasm_target, .ReleaseFast, &preset.step, build_opts_mod);
+    const engine_debug = addWasmExe(b, "gengo-engine", "src/engine.zig", wasm_target, .Debug, build_opts_mod, runtime_config_mod);
+    const engine_release = addWasmExe(b, "gengo-engine", "src/engine.zig", wasm_target, .ReleaseFast, build_opts_mod, runtime_config_mod);
 
-    const install_engine_debug = installWasm(b, engine_debug, "gengo-engine.wasm");
-    const install_engine_release = installWasm(b, engine_release, "gengo-engine.wasm");
+    const install_engine_debug = installWasm(b, engine_debug, wasmArtifactPath("debug", "gengo-engine.wasm"));
+    const install_engine_release = installWasm(b, engine_release, wasmArtifactPath("release", "gengo-engine.wasm"));
 
     // ── Test runners (build + run immediately, no permanent artifact) ─────────
 
-    const vm_safety_exe = addWasmExe(b, "vm-safety-runner", "src/vm_safety_runner.zig", wasm_target, .Debug, &preset.step, build_opts_mod);
+    const vm_safety_exe = addWasmExe(b, "vm-safety-runner", "src/vm_safety_runner.zig", wasm_target, .Debug, build_opts_mod, runtime_config_mod);
     const run_vm_safety = b.addSystemCommand(&.{ wasmtime_opt, "--dir", "/" });
     run_vm_safety.addArtifactArg(vm_safety_exe);
 
-    const vm_value_exe = addWasmExe(b, "vm-value-runner", "src/vm_value_runner.zig", wasm_target, .Debug, &preset.step, build_opts_mod);
+    const vm_value_exe = addWasmExe(b, "vm-value-runner", "src/vm_value_runner.zig", wasm_target, .Debug, build_opts_mod, runtime_config_mod);
     const run_vm_value = b.addSystemCommand(&.{ wasmtime_opt, "--dir", "/" });
     run_vm_value.addArtifactArg(vm_value_exe);
 
-    const embedding_exe = addWasmExe(b, "embedding-runner", "src/embedding_runner.zig", wasm_target, .Debug, &preset.step, build_opts_mod);
+    const embedding_exe = addWasmExe(b, "embedding-runner", "src/embedding_runner.zig", wasm_target, .Debug, build_opts_mod, runtime_config_mod);
     const run_embedding = b.addSystemCommand(&.{ wasmtime_opt, "--dir", "/" });
     run_embedding.addArtifactArg(embedding_exe);
 
-    const engine_runner_exe = addWasmExe(b, "engine-runner", "src/engine_runner.zig", wasm_target, .Debug, &preset.step, build_opts_mod);
+    const engine_runner_exe = addWasmExe(b, "engine-runner", "src/engine_runner.zig", wasm_target, .Debug, build_opts_mod, runtime_config_mod);
     const run_engine_runner = b.addSystemCommand(&.{ wasmtime_opt, "--dir", "/", "--dir", "." });
     run_engine_runner.addArtifactArg(engine_runner_exe);
 
-    const fuzz_runner_exe = addWasmExe(b, "fuzz-runner", "src/fuzz_runner.zig", wasm_target, .Debug, &preset.step, build_opts_mod);
+    const fuzz_runner_exe = addWasmExe(b, "fuzz-runner", "src/fuzz_runner.zig", wasm_target, .Debug, build_opts_mod, runtime_config_mod);
     const run_fuzz_runner = b.addSystemCommand(&.{ wasmtime_opt, "--dir", "/" });
     run_fuzz_runner.addArtifactArg(fuzz_runner_exe);
 
@@ -97,7 +117,7 @@ pub fn build(b: *std.Build) void {
     fuzz_gc_stress_opts.addOption(bool, "gengo_host", gengo_host_opt);
     fuzz_gc_stress_opts.addOption([]const u8, "version", gengo_version);
     const fuzz_gc_stress_opts_mod = fuzz_gc_stress_opts.createModule();
-    const fuzz_gc_stress_exe = addWasmExe(b, "fuzz-runner-gc-stress", "src/fuzz_runner.zig", wasm_target, .Debug, &preset.step, fuzz_gc_stress_opts_mod);
+    const fuzz_gc_stress_exe = addWasmExe(b, "fuzz-runner-gc-stress", "src/fuzz_runner.zig", wasm_target, .Debug, fuzz_gc_stress_opts_mod, runtime_config_mod);
     const run_fuzz_gc_stress = b.addSystemCommand(&.{ wasmtime_opt, "--dir", "/" });
     run_fuzz_gc_stress.addArtifactArg(fuzz_gc_stress_exe);
 
@@ -114,10 +134,21 @@ pub fn build(b: *std.Build) void {
     // ── Conformance ───────────────────────────────────────────────────────────
 
     const run_conformance = b.addRunArtifact(test_runner_exe);
-    run_conformance.step.dependOn(&install_debug.step);
+    run_conformance.step.dependOn(&install_test.step);
     run_conformance.addArg("conformance");
     run_conformance.addArg(wasmtime_opt);
-    run_conformance.addArg("build/gengo-cli.wasm");
+    run_conformance.addArg("build/test/gengo-cli.wasm");
+
+    const run_conformance_release = b.addRunArtifact(test_runner_exe);
+    run_conformance_release.step.dependOn(&install_test.step);
+    run_conformance_release.addArg("conformance");
+    run_conformance_release.addArg(wasmtime_opt);
+    run_conformance_release.addArg("build/test/gengo-cli.wasm");
+
+    const run_conformance_artifact = b.addRunArtifact(test_runner_exe);
+    run_conformance_artifact.addArg("conformance");
+    run_conformance_artifact.addArg(wasmtime_opt);
+    run_conformance_artifact.addArg(conformance_wasm_opt orelse "build/test/gengo-cli.wasm");
 
     // ── Named steps ───────────────────────────────────────────────────────────
 
@@ -126,6 +157,12 @@ pub fn build(b: *std.Build) void {
 
     const wasi_release_step = b.step("wasi-release", "Build WASI runtime (ReleaseFast)");
     wasi_release_step.dependOn(&install_release.step);
+
+    const conformance_release_step = b.step("conformance-release", "Run conformance tests against the ReleaseFast WASI runtime");
+    conformance_release_step.dependOn(&run_conformance_release.step);
+
+    const conformance_artifact_step = b.step("conformance-artifact", "Run conformance tests against -Dconformance_wasm");
+    conformance_artifact_step.dependOn(&run_conformance_artifact.step);
 
     const engine_build_step = b.step("engine-build", "Build engine WASM module (Debug)");
     engine_build_step.dependOn(&install_engine_debug.step);
@@ -150,8 +187,8 @@ pub fn build(b: *std.Build) void {
     net_http_opts.addOption(bool, "gengo_host", true);
     net_http_opts.addOption([]const u8, "version", gengo_version);
     const net_http_opts_mod = net_http_opts.createModule();
-    const engine_net_http = addWasmExe(b, "gengo-engine", "src/engine.zig", wasm_target, .ReleaseFast, &preset.step, net_http_opts_mod);
-    const install_engine_net_http = installWasmAs(b, engine_net_http, "gengo-engine-net.wasm");
+    const engine_net_http = addWasmExe(b, "gengo-engine", "src/engine.zig", wasm_target, .ReleaseFast, net_http_opts_mod, runtime_config_mod);
+    const install_engine_net_http = installWasmAs(b, engine_net_http, wasmArtifactPath("release", "gengo-engine-net.wasm"));
     const net_http_step = b.step("engine-release-net", "Build engine with net+http (ReleaseFast)");
     net_http_step.dependOn(&install_engine_net_http.step);
 
@@ -167,8 +204,8 @@ pub fn build(b: *std.Build) void {
     fs_opts.addOption(bool, "gengo_host", true);
     fs_opts.addOption([]const u8, "version", gengo_version);
     const fs_opts_mod = fs_opts.createModule();
-    const engine_fs = addWasmExe(b, "gengo-engine", "src/engine.zig", wasm_target, .ReleaseFast, &preset.step, fs_opts_mod);
-    const install_engine_fs = installWasmAs(b, engine_fs, "gengo-engine-fs.wasm");
+    const engine_fs = addWasmExe(b, "gengo-engine", "src/engine.zig", wasm_target, .ReleaseFast, fs_opts_mod, runtime_config_mod);
+    const install_engine_fs = installWasmAs(b, engine_fs, wasmArtifactPath("release", "gengo-engine-fs.wasm"));
     const fs_step = b.step("engine-release-fs", "Build engine with fs only (ReleaseFast)");
     fs_step.dependOn(&install_engine_fs.step);
 
@@ -184,8 +221,8 @@ pub fn build(b: *std.Build) void {
     minimal_opts.addOption(bool, "gengo_host", false);
     minimal_opts.addOption([]const u8, "version", gengo_version);
     const minimal_opts_mod = minimal_opts.createModule();
-    const engine_minimal = addWasmExe(b, "gengo-engine", "src/engine.zig", wasm_target, .ReleaseFast, &preset.step, minimal_opts_mod);
-    const install_engine_minimal = installWasmAs(b, engine_minimal, "gengo-engine-minimal.wasm");
+    const engine_minimal = addWasmExe(b, "gengo-engine", "src/engine.zig", wasm_target, .ReleaseFast, minimal_opts_mod, runtime_config_mod);
+    const install_engine_minimal = installWasmAs(b, engine_minimal, wasmArtifactPath("release", "gengo-engine-minimal.wasm"));
     const minimal_step = b.step("engine-release-minimal", "Build engine with no capabilities (ReleaseFast)");
     minimal_step.dependOn(&install_engine_minimal.step);
 
@@ -199,12 +236,12 @@ pub fn build(b: *std.Build) void {
         .optimize = .Debug,
     });
     engine_native_mod.addImport("build_options", build_opts_mod);
+    engine_native_mod.addImport("runtime_config", runtime_config_mod);
     const engine_native = b.addLibrary(.{
         .linkage = .dynamic,
         .name = "gengo-engine",
         .root_module = engine_native_mod,
     });
-    engine_native.step.dependOn(&preset.step);
     const install_engine_native = b.addInstallArtifact(engine_native, .{});
 
     const engine_native_release_mod = b.createModule(.{
@@ -213,12 +250,12 @@ pub fn build(b: *std.Build) void {
         .optimize = .ReleaseFast,
     });
     engine_native_release_mod.addImport("build_options", build_opts_mod);
+    engine_native_release_mod.addImport("runtime_config", runtime_config_mod);
     const engine_native_release = b.addLibrary(.{
         .linkage = .dynamic,
         .name = "gengo-engine",
         .root_module = engine_native_release_mod,
     });
-    engine_native_release.step.dependOn(&preset.step);
     const install_engine_native_release = b.addInstallArtifact(engine_native_release, .{});
 
     const engine_native_step = b.step("engine-native", "Build native shared library (Debug)");
@@ -235,11 +272,21 @@ pub fn build(b: *std.Build) void {
         .optimize = .Debug,
     });
     const lexer_test = b.addTest(.{ .root_module = lexer_test_mod });
-    lexer_test.step.dependOn(&preset.step);
     const run_lexer_tests = b.addRunArtifact(lexer_test);
 
     const lexer_test_step = b.step("lexer-test", "Run lexer unit tests");
     lexer_test_step.dependOn(&run_lexer_tests.step);
+
+    const build_test_mod = b.createModule(.{
+        .root_source_file = b.path("build_test.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const build_test = b.addTest(.{ .root_module = build_test_mod });
+    const run_build_tests = b.addRunArtifact(build_test);
+
+    const build_test_step = b.step("build-test", "Run build graph contract tests");
+    build_test_step.dependOn(&run_build_tests.step);
 
     // ── Heap / GC unit tests (native Zig test runner) ─────────────────────────
     // Uses a wrapper root at src/ so that runtime/heap.zig can import ../lang/value.zig.
@@ -250,8 +297,8 @@ pub fn build(b: *std.Build) void {
         .optimize = .Debug,
     });
     heap_test_mod.addImport("build_options", build_opts_mod);
+    heap_test_mod.addImport("runtime_config", runtime_config_mod);
     const heap_test = b.addTest(.{ .root_module = heap_test_mod });
-    heap_test.step.dependOn(&preset.step);
     const run_heap_tests = b.addRunArtifact(heap_test);
 
     const heap_test_step = b.step("heap-test", "Run heap and GC invariant tests");
@@ -265,10 +312,8 @@ pub fn build(b: *std.Build) void {
         .optimize = .Debug,
     });
     compiler_test_mod.addImport("build_options", build_opts_mod);
+    compiler_test_mod.addImport("runtime_config", runtime_config_mod);
     const compiler_test = b.addTest(.{ .root_module = compiler_test_mod });
-    // Test compiles read the preset-generated src/runtime/config.zig; without
-    // this edge they race the copy and can see a truncated file (CI flake).
-    compiler_test.step.dependOn(&preset.step);
     const run_compiler_tests = b.addRunArtifact(compiler_test);
 
     const compiler_test_step = b.step("compiler-test", "Run compiler bytecode output tests");
@@ -282,8 +327,8 @@ pub fn build(b: *std.Build) void {
         .optimize = .Debug,
     });
     embedding_frag_test_mod.addImport("build_options", build_opts_mod);
+    embedding_frag_test_mod.addImport("runtime_config", runtime_config_mod);
     const embedding_frag_test = b.addTest(.{ .root_module = embedding_frag_test_mod });
-    embedding_frag_test.step.dependOn(&preset.step);
     const run_embedding_frag_tests = b.addRunArtifact(embedding_frag_test);
 
     const embedding_frag_test_step = b.step("embedding-frag-test", "Run long-lived embedding fragmentation harness tests");
@@ -297,8 +342,8 @@ pub fn build(b: *std.Build) void {
         .optimize = .Debug,
     });
     chaos_spec_test_mod.addImport("build_options", build_opts_mod);
+    chaos_spec_test_mod.addImport("runtime_config", runtime_config_mod);
     const chaos_spec_test = b.addTest(.{ .root_module = chaos_spec_test_mod });
-    chaos_spec_test.step.dependOn(&preset.step);
     const run_chaos_spec_tests = b.addRunArtifact(chaos_spec_test);
 
     const chaos_spec_test_step = b.step("chaos-spec-test", "Run chaos and spec/fail cases in-process");
@@ -316,6 +361,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_embedding_frag_tests.step);
     test_step.dependOn(&run_chaos_spec_tests.step);
     test_step.dependOn(&run_lexer_tests.step);
+    test_step.dependOn(&run_build_tests.step);
     test_step.dependOn(&run_vm_safety.step);
     test_step.dependOn(&run_vm_value.step);
     test_step.dependOn(&run_embedding.step);
@@ -325,10 +371,10 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_conformance.step);
 
     const run_bench = b.addRunArtifact(test_runner_exe);
-    run_bench.step.dependOn(&install_debug.step);
+    run_bench.step.dependOn(&install_test.step);
     run_bench.addArg("bench");
     run_bench.addArg(wasmtime_opt);
-    run_bench.addArg("build/gengo-cli.wasm");
+    run_bench.addArg("build/test/gengo-cli.wasm");
     const bench_step = b.step("bench", "Run benchmark suite");
     bench_step.dependOn(&run_bench.step);
 
@@ -336,7 +382,7 @@ pub fn build(b: *std.Build) void {
     run_bench_release.step.dependOn(&install_release.step);
     run_bench_release.addArg("bench");
     run_bench_release.addArg(wasmtime_opt);
-    run_bench_release.addArg("build/gengo-cli.wasm");
+    run_bench_release.addArg("build/release/gengo-cli.wasm");
     const bench_release_step = b.step("bench-release", "Run benchmark suite (ReleaseFast)");
     bench_release_step.dependOn(&run_bench_release.step);
 
@@ -353,8 +399,8 @@ pub fn build(b: *std.Build) void {
     perf_opts.addOption(bool, "gengo_host", gengo_host_opt);
     perf_opts.addOption([]const u8, "version", gengo_version);
     const perf_opts_mod = perf_opts.createModule();
-    const gengo_perf = addWasmExe(b, "gengo-perf", "src/main.zig", wasm_target, .Debug, &preset.step, perf_opts_mod);
-    const install_perf = installWasmAs(b, gengo_perf, "gengo-perf.wasm");
+    const gengo_perf = addWasmExe(b, "gengo-perf", "src/main.zig", wasm_target, .Debug, perf_opts_mod, runtime_config_mod);
+    const install_perf = installWasmAs(b, gengo_perf, wasmArtifactPath("debug", "gengo-perf.wasm"));
 
     const bench_perf_runner_mod = b.createModule(.{
         .root_source_file = b.path("tools/bench_perf_runner.zig"),
@@ -366,6 +412,7 @@ pub fn build(b: *std.Build) void {
     const run_bench_perf = b.addRunArtifact(bench_perf_runner_exe);
     run_bench_perf.step.dependOn(&install_perf.step);
     run_bench_perf.addArg(wasmtime_opt);
+    run_bench_perf.addArg("build/debug/gengo-perf.wasm");
     const bench_perf_step = b.step("bench-perf", "Run benchmarks with perf counters (PERF: lines on stderr)");
     bench_perf_step.dependOn(&run_bench_perf.step);
 
@@ -376,10 +423,10 @@ pub fn build(b: *std.Build) void {
     fuzz_gc_stress_step.dependOn(&run_fuzz_gc_stress.step);
 
     const run_parity = b.addRunArtifact(test_runner_exe);
-    run_parity.step.dependOn(&install_debug.step);
+    run_parity.step.dependOn(&install_test.step);
     run_parity.addArg("parity");
     run_parity.addArg(wasmtime_opt);
-    run_parity.addArg("build/gengo-cli.wasm");
+    run_parity.addArg("build/test/gengo-cli.wasm");
     const parity_step = b.step("parity", "Run host/embedded parity tests");
     parity_step.dependOn(&run_parity.step);
 
@@ -391,8 +438,8 @@ pub fn build(b: *std.Build) void {
         .optimize = .Debug,
     });
     native_mod.addImport("build_options", build_opts_mod);
+    native_mod.addImport("runtime_config", runtime_config_mod);
     const native_exe = b.addExecutable(.{ .name = "gengo", .root_module = native_mod });
-    native_exe.step.dependOn(&preset.step);
     const install_native = b.addInstallArtifact(native_exe, .{});
 
     b.getInstallStep().dependOn(&install_native.step);
@@ -416,11 +463,11 @@ pub fn build(b: *std.Build) void {
         .optimize = .Debug,
     });
     embedding_frag_runner_mod.addImport("build_options", build_opts_mod);
+    embedding_frag_runner_mod.addImport("runtime_config", runtime_config_mod);
     const embedding_frag_runner = b.addExecutable(.{
         .name = "embedding-frag-runner",
         .root_module = embedding_frag_runner_mod,
     });
-    embedding_frag_runner.step.dependOn(&preset.step);
     const run_embedding_frag = b.addRunArtifact(embedding_frag_runner);
     if (b.args) |args| run_embedding_frag.addArgs(args);
     const embedding_frag_step = b.step("embedding-frag", "Run the long-lived embedding fragmentation harness");
@@ -448,8 +495,8 @@ pub fn build(b: *std.Build) void {
         .optimize = .ReleaseSafe,
     });
     native_release_mod.addImport("build_options", build_opts_mod);
+    native_release_mod.addImport("runtime_config", runtime_config_mod);
     const native_release_exe = b.addExecutable(.{ .name = "gengo", .root_module = native_release_mod });
-    native_release_exe.step.dependOn(&preset.step);
     const install_native_release = b.addInstallArtifact(native_release_exe, .{});
 
     const cli_release_step = b.step("cli-release", "Build native CLI binary (ReleaseSafe)");
@@ -461,8 +508,8 @@ pub fn build(b: *std.Build) void {
         .optimize = .ReleaseFast,
     });
     native_fast_mod.addImport("build_options", build_opts_mod);
+    native_fast_mod.addImport("runtime_config", runtime_config_mod);
     const native_fast_exe = b.addExecutable(.{ .name = "gengo-fast", .root_module = native_fast_mod });
-    native_fast_exe.step.dependOn(&preset.step);
     const install_native_fast = b.addInstallArtifact(native_fast_exe, .{});
     const cli_fast_step = b.step("cli-fast", "Build native CLI binary (ReleaseFast, for timing benchmarks)");
     cli_fast_step.dependOn(&install_native_fast.step);
@@ -474,8 +521,8 @@ pub fn build(b: *std.Build) void {
         .strip = true,
     });
     native_small_mod.addImport("build_options", build_opts_mod);
+    native_small_mod.addImport("runtime_config", runtime_config_mod);
     const native_small_exe = b.addExecutable(.{ .name = "gengo", .root_module = native_small_mod });
-    native_small_exe.step.dependOn(&preset.step);
     const install_native_small = b.addInstallArtifact(native_small_exe, .{});
     const cli_small_step = b.step("cli-small", "Build native CLI binary (ReleaseSmall + strip, smallest binary)");
     cli_small_step.dependOn(&install_native_small.step);
@@ -488,6 +535,7 @@ pub fn build(b: *std.Build) void {
         .optimize = .Debug,
     });
     gengo_mod.addImport("build_options", build_opts_mod);
+    gengo_mod.addImport("runtime_config", runtime_config_mod);
     const host_embed_mod = b.createModule(.{
         .root_source_file = b.path("examples/embed-host/main.zig"),
         .target = b.graph.host,
@@ -498,7 +546,6 @@ pub fn build(b: *std.Build) void {
         .name = "embed-host-example",
         .root_module = host_embed_mod,
     });
-    host_embed_exe.step.dependOn(&preset.step);
     const run_host_embed = b.addRunArtifact(host_embed_exe);
     const embed_example_step = b.step("embed-example", "Build and run native host embedding example");
     embed_example_step.dependOn(&run_host_embed.step);
@@ -510,8 +557,8 @@ fn addWasmExe(
     root: []const u8,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
-    depends_on: *std.Build.Step,
     opts_mod: *std.Build.Module,
+    runtime_config_mod: *std.Build.Module,
 ) *std.Build.Step.Compile {
     const mod = b.createModule(.{
         .root_source_file = b.path(root),
@@ -519,6 +566,7 @@ fn addWasmExe(
         .optimize = optimize,
     });
     mod.addImport("build_options", opts_mod);
+    mod.addImport("runtime_config", runtime_config_mod);
     const exe = b.addExecutable(.{
         .name = name,
         .root_module = mod,
@@ -526,7 +574,6 @@ fn addWasmExe(
     exe.entry = .disabled;
     exe.rdynamic = true;
     exe.stack_size = 4 * 1024 * 1024;
-    exe.step.dependOn(depends_on);
     return exe;
 }
 
@@ -543,7 +590,18 @@ fn installWasmAs(
     exe: *std.Build.Step.Compile,
     dest_name: []const u8,
 ) *std.Build.Step.Run {
-    const step = b.addSystemCommand(&.{ "bash", "-c", "mkdir -p build && cp \"$1\" \"build/$2\" && if command -v wasm-opt >/dev/null 2>&1; then wasm-opt -O3 --strip-debug \"build/$2\" -o \"build/$2\"; fi", "--" });
+    const step = b.addSystemCommand(&.{ "bash", "-c", "mkdir -p \"build/$(dirname \"$2\")\" && cp \"$1\" \"build/$2\"", "--" });
+    step.addFileArg(exe.getEmittedBin());
+    step.addArg(dest_name);
+    return step;
+}
+
+fn installOptimizedWasm(
+    b: *std.Build,
+    exe: *std.Build.Step.Compile,
+    dest_name: []const u8,
+) *std.Build.Step.Run {
+    const step = b.addSystemCommand(&.{ "bash", "-c", "mkdir -p \"build/$(dirname \"$2\")\" && cp \"$1\" \"build/$2\" && wasm-opt -O3 --strip-debug \"build/$2\" -o \"build/$2\"", "--" });
     step.addFileArg(exe.getEmittedBin());
     step.addArg(dest_name);
     return step;
