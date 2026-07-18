@@ -11,7 +11,7 @@ Status legend: `[ ]` open · `[~]` in progress · `[x]` done (with commit)
 
 ## Track A — Architecture debt
 
-### A1. Kill `setActive` — finish the `VMContext` migration `[~]`
+### A1. Kill `setActive` — finish the `VMContext` migration `[x]`
 
 The threadlocal active-pointer pattern (`chunk.setActive`, `heap.setActive`,
 `vms.setActive`, `globals.setActive`, `VMContext.fromActive`) coexists with
@@ -50,9 +50,14 @@ Value decode needs a pool base pointer) and stays, repointed on activate.
   CLI --mount pre-runtime flow and the entry layer. The #190 isolation test
   now asserts the stronger property: each runtime's binding stays correct
   regardless of which runtime activated last.
-- Phase 4 `[ ]` entry points: Compiler.init/test runners stop reading
-  g_state; `setActive` shrinks to Runtime.activate repointing
-  `obj_pool_ptr` only.
+- Phase 4 `[x]` `Compiler.init(src, cs, hs, options)` takes explicit state;
+  production passes its runtime's own, test runners pass the module
+  defaults explicitly. Endpoint reached: the only remaining active-state
+  readers are the state modules' own fenced entry machinery (vm.run's
+  setActive block, which also repoints value.zig's `obj_pool_ptr` — the
+  documented perf exception for packed Value decode), the CLI --mount
+  pre-runtime flow, the WASM export layer, and tests. Production
+  compiler/VM/runtime code reads no hidden active state.
 
 ### A2. Consolidate the peephole trackers `[ ]`
 
