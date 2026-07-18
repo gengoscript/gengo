@@ -21,6 +21,35 @@ versions, and the OS.
 
 ## Results
 
+### 2026-07-18 (later), commit `3a7620f` — proven-call-site enforcement skip (v0.5.1-dev)
+
+**Host**: AMD Ryzen 5 7600 (6-core/12-thread), Linux 6.12.94+deb13-amd64 x86_64
+
+**Engines**: unchanged from the snapshot below.
+
+| Engine | `fib_recursive(32)` | `loop_sum` (20M) |
+| --- | --- | --- |
+| Gengo | 0.344s | 0.39s |
+| Lua 5.4 | 0.080s | — |
+| Python 3 | 0.171s | — |
+| Node | 0.084s | — |
+
+Two changes, taken together: `func name()` declarations became immutable
+(Go semantics), letting direct call sites whose argument types the compiler
+proved skip per-call runtime arg enforcement entirely (an argc-byte flag,
+commit `3a7620f`); and `fib_recursive.gengo` now uses the declaration form
+`func fib(n int)` — matching what every other engine's script already uses
+(`local function fib`, `def fib`, `function fib`) — instead of the
+`fib := func` closure form, which as a mutable binding is deliberately not
+provable. fib(32) steady-state ~0.34s (was 0.44s at the snapshot below,
+0.50s before the opcode-layout fix): now ~2× behind CPython and ~4.3×
+behind Lua, from ~3× and ~6× at the start of the day. `loop_sum` unchanged
+(its ops never enter the call path). Verifier-proved stack bounds
+(`dcdb578`) also landed between these snapshots; its win is broad but
+small on these two microbenchmarks.
+
+---
+
 ### 2026-07-18, commit `4600f43` — reserved opcode slots (v0.5.1-dev)
 
 **Host**: AMD Ryzen 5 7600 (6-core/12-thread), Linux 6.12.94+deb13-amd64 x86_64
