@@ -173,6 +173,15 @@ pub const Compiler = struct {
     // Set by infixExpr(.lparen) when callee_spread_n == multi_assign_lhs_count;
     // read by multiAssignOrDecl after emitExprListTuple.
     last_spread_return_count: u8 = 0,
+    // Signatures of `func name()` declarations whose bodies are currently
+    // being compiled: registration in the registry happens only after the
+    // body, so recursive self-calls resolve their arg types through this
+    // stack instead. Pushed by compileFuncWithPrefix when funcDecl hands it
+    // a qname via pending_func_qname.
+    in_progress_sigs: [MaxScopes]CallSigView = undefined,
+    in_progress_sig_qnames: [MaxScopes][]const u8 = undefined,
+    in_progress_sig_count: u8 = 0,
+    pending_func_qname: ?[]const u8 = null,
 
     // ── Lifecycle ────────────────────────────────────────────────────────────────
 
@@ -461,11 +470,9 @@ pub const Compiler = struct {
         return false;
     }
 
-    pub fn checkDirectCallArgCompatibility(self: *Compiler, func_obj: *Object, arg_index: usize, arg_info: ExprPrimInfo, line: u32) !void {
-        if (func_obj.* != .function) return;
-        const f = func_obj.function;
-        if (arg_index >= f.param_types.len) return;
-        const spec = f.param_types[arg_index];
+    pub fn checkDirectCallArgCompatibility(self: *Compiler, sig: CallSigView, arg_index: usize, arg_info: ExprPrimInfo, line: u32) !void {
+        if (arg_index >= sig.param_types.len) return;
+        const spec = sig.param_types[arg_index];
         if (spec.alts.len != 1) return;
         const alt = spec.alts[0];
         switch (alt.typ) {
@@ -512,6 +519,55 @@ pub const Compiler = struct {
             },
             else => {},
         }
+    }
+
+    // Callee signature as seen from a direct call site — from the registry
+    // (declared functions) or the in-progress stack (recursive self-calls).
+    pub const CallSigView = struct {
+        arity: u8,
+        is_variadic: bool,
+        default_count: u8,
+        param_types: []const FieldTypeSpec,
+    };
+
+    pub fn callSigForQname(self: *Compiler, qname_opt: ?[]const u8) ?CallSigView {
+        const qname = qname_opt orelse return null;
+        if (self.registry.getGlobalFuncObj(qname)) |fo| {
+            if (fo.* != .function) return null;
+            const f = fo.function;
+            return .{ .arity = f.arity, .is_variadic = f.is_variadic, .default_count = f.default_count, .param_types = f.param_types };
+        }
+        var i = self.in_progress_sig_count;
+        while (i > 0) {
+            i -= 1;
+            if (common.streq(self.in_progress_sig_qnames[i], qname)) return self.in_progress_sigs[i];
+        }
+        return null;
+    }
+
+    // True when the compiler can prove the runtime arg-type check
+    // (vm_types.matchesTypeAlt) will pass for this argument. Proven call
+    // sites set the 0x80 flag on the call's argc byte and the warm call path
+    // skips per-call enforcement entirely (~25% of fib's runtime).
+    // Conservative by construction: unknown prim, named carriers, multi-alt
+    // or non-primitive param specs, and decimal (boxed carrier) all refuse.
+    pub fn argProvenForParam(self: *Compiler, sig: CallSigView, arg_index: usize, arg_info: ExprPrimInfo) bool {
+        _ = self;
+        if (arg_index >= sig.param_types.len) return false;
+        const spec = sig.param_types[arg_index];
+        if (spec.alts.len != 1) return false;
+        const alt = spec.alts[0];
+        if (alt.typ == .any) return true;
+        if (arg_info.named_type != null) return false;
+        const p = arg_info.prim orelse return false;
+        return switch (alt.typ) {
+            .int => p == .int or p == .rune, // VM accepts rune in int context
+            .float => p == .float or p == .rune,
+            .boolean => p == .bool,
+            .string => p == .string,
+            .rune_t => p == .rune,
+            else => false,
+        };
     }
 
     fn getStdModuleGlobalPath(self: *Compiler, name: []const u8) ?[]const u8 {
@@ -1246,6 +1302,17 @@ pub const Compiler = struct {
             return;
         }
         if (self.registry.hasGlobalConst(name.src)) return self.constAssignErr(name);
+        // `func name()` declarations are immutable (Go semantics): call sites
+        // are type-checked — and warm calls skip runtime arg enforcement —
+        // against the declared signature, which is only sound if the binding
+        // can never change. `name := func(...)` remains the mutable form.
+        const qname = try self.qualifyGlobalName(name.src);
+        if (self.registry.hasGlobalFunc(qname)) {
+            self.setErr("cannot assign to function '{s}'; func declarations are immutable — use '{s} := func(...)' for a reassignable binding", .{ name.src, name.src });
+            self.err_line = name.line;
+            self.err_col = @intCast(name.col);
+            return error.AssignToConst;
+        }
         if (self.options.check_global_is_const) |f| {
             if (f(self.options.check_global_ctx.?, name.src)) return self.constAssignErr(name);
         }

@@ -403,7 +403,9 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
         const outer_lhs_count = c.multi_assign_lhs_count;
         c.multi_assign_lhs_count = 0;
         const callee_func_obj = if (callee_qname) |qname| c.registry.getGlobalFuncObj(qname) else null;
+        const callee_sig = c.callSigForQname(callee_qname);
         var argc: u8 = 0;
+        var args_proven = callee_sig != null;
         if (!c.check(.rparen)) {
             while (true) {
                 c.beginExprPrimCapture();
@@ -411,8 +413,9 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
                     c,
                 );
                 const arg_info = c.endExprPrimCapture();
-                if (callee_func_obj) |func_obj| {
-                    try c.checkDirectCallArgCompatibility(func_obj, argc, arg_info, line);
+                if (callee_sig) |sig| {
+                    try c.checkDirectCallArgCompatibility(sig, argc, arg_info, line);
+                    args_proven = args_proven and c.argProvenForParam(sig, argc, arg_info);
                 }
                 argc += 1;
                 if (!c.match(.comma)) break;
@@ -434,7 +437,14 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
                 try c.cs.emit2(@intFromEnum(Op.build_tuple), callee_spread_n, line);
             }
         } else {
-            try c.cs.emitCall(argc, line);
+            // 0x80 on the argc byte: every argument's runtime type check is
+            // compiler-proven, so the warm call path may skip enforcement.
+            // Safe to steal the bit — args are capped at MaxLocals (64).
+            const proven = args_proven and blk: {
+                const sig = callee_sig orelse break :blk false;
+                break :blk !sig.is_variadic and sig.default_count == 0 and sig.arity == argc;
+            };
+            try c.cs.emitCall(if (proven) argc | 0x80 else argc, line);
         }
         // Propagate named_type from callee (e.g. Meters(5) → named_type = "Meters").
         if (callee_named_type) |nt| {

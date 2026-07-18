@@ -129,13 +129,24 @@ Context: fib(32) 0.45s vs Python 0.19s (realistic target), Lua 0.095s
 the 2026-07-18 session: bytecode is already optimal (~3.8 dispatches/call);
 cost is in call/return machinery.
 
-### C1. "Args pre-verified" call-site flag `[ ]`
+### C1. "Args pre-verified" call-site flag `[x]`
 
 The compiler statically rejects wrong-prim args at direct call sites
 (compile-time prim checks, commits `a02da24`..`66d1963`), yet the VM still
 runs `enforcePrimitiveFuncArgTypes` on every warm call (fib pays it per
 call for `x int`). Encode one "types proven" bit at fused call sites and
 skip enforcement when set. Biggest remaining identified per-call cost.
+
+Done 2026-07-18. Measured ceiling was 0.44s → 0.33s with enforcement
+removed outright; landed win: fib(32) decl form 0.44 → 0.385s. Encoding:
+0x80 on the call argc byte (args capped at 64), flowing unchanged through
+fusion and defuse; verifier/disasm mask it. Soundness required a language
+decision (Mikael, 2026-07-18): **`func name()` declarations are immutable**
+(Go semantics) — assignment is a compile error — because call sites are
+checked against the declared signature. `name := func(...)` stays mutable
+and is never flagged. Recursive self-calls resolve through a new
+in-progress-signature stack (registration happens post-body), which also
+extends the compile-time arg checks to recursion. C3 is moot.
 
 ### C2. Frame slimming `[ ]`
 
@@ -144,7 +155,7 @@ skip enforcement when set. Biggest remaining identified per-call cost.
 packing/lazy-fill. Measure-first (house rule: no claimed win without cycle
 evidence).
 
-### C3. Precomputed prim-tag array (C1 fallback) `[ ]`
+### C3. Precomputed prim-tag array (C1 fallback) `[x]` — moot, C1 landed fully
 
 If C1's encoding is unpalatable: store expected `VTag` per param at FuncObj
 creation so enforcement is a tag-compare loop with no `matchesTypeAlt`

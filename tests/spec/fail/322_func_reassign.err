@@ -1,0 +1,2 @@
+AssignToConst
+cannot assign to function 'f'; func declarations are immutable

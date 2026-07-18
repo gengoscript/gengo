@@ -55,7 +55,7 @@ pub fn stackEffect(op: Op, code: []const u8, ip: usize) struct { pop: u8, push: 
         .get_index => .{ .pop = 2, .push = 1 },
 
         .call, .call_tail => blk: {
-            const argc = code[ip + 1];
+            const argc = code[ip + 1] & 0x7F; // 0x80 = args-preverified flag
             break :blk .{ .pop = argc + 1, .push = 1 };
         },
         .call_spread => blk: {
@@ -106,7 +106,7 @@ pub fn stackEffect(op: Op, code: []const u8, ip: usize) struct { pop: u8, push: 
 
         .close_upvalue, .tuple_check_arity, .validate_type_default, .check_named_predicate, .validate_named_range => .{ .pop = 0, .push = 0 },
         .get_local_const_sub_call, .get_local_const_sub_call_tail => blk: {
-            const argc = code[ip + 5];
+            const argc = code[ip + 5] & 0x7F; // 0x80 = args-preverified flag
             break :blk .{ .pop = argc, .push = 1 };
         },
         .call_global_local_sub_const, .call_global_local_sub_const_tail => blk: {
