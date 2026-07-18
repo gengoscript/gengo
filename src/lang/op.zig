@@ -1,3 +1,5 @@
+const std = @import("std");
+
 pub const Op = enum(u8) {
     // ── Control flow ──────────────────────────────────────────────────────────
     halt             = 0x00, // normal program/function end
@@ -154,9 +156,81 @@ pub const Op = enum(u8) {
     named_inner          = 0x7A, // pop Value.named(T, v), push v
     check_named_predicate = 0x7B, // u16 named-type const; validate TOS range/cycle/predicate
 
-    // 0x7C–0xBF: reserved for future core ops (68 slots)
     swap = 0x7C, // swap top two stack values
     validate_named_range = 0x7D, // u16 named-type const; validate or cycle-normalize TOS
+
+    // ── Reserved slots ───────────────────────────────────────────────────────
+    // Free opcode space, declared as trap ops so the enum is dense over the
+    // full u8 range — a sparse enum costs ~20% dispatch throughput (sparse
+    // membership checks at every dispatch site). To add an opcode, RENAME a
+    // reserved slot; never renumber existing ops — values are wire-stable.
+    reserved_7e = 0x7E,
+    reserved_7f = 0x7F,
+    reserved_80 = 0x80,
+    reserved_81 = 0x81,
+    reserved_82 = 0x82,
+    reserved_83 = 0x83,
+    reserved_84 = 0x84,
+    reserved_85 = 0x85,
+    reserved_86 = 0x86,
+    reserved_87 = 0x87,
+    reserved_88 = 0x88,
+    reserved_89 = 0x89,
+    reserved_8a = 0x8A,
+    reserved_8b = 0x8B,
+    reserved_8c = 0x8C,
+    reserved_8d = 0x8D,
+    reserved_8e = 0x8E,
+    reserved_8f = 0x8F,
+    reserved_90 = 0x90,
+    reserved_91 = 0x91,
+    reserved_92 = 0x92,
+    reserved_93 = 0x93,
+    reserved_94 = 0x94,
+    reserved_95 = 0x95,
+    reserved_96 = 0x96,
+    reserved_97 = 0x97,
+    reserved_98 = 0x98,
+    reserved_99 = 0x99,
+    reserved_9a = 0x9A,
+    reserved_9b = 0x9B,
+    reserved_9c = 0x9C,
+    reserved_9d = 0x9D,
+    reserved_9e = 0x9E,
+    reserved_9f = 0x9F,
+    reserved_a0 = 0xA0,
+    reserved_a1 = 0xA1,
+    reserved_a2 = 0xA2,
+    reserved_a3 = 0xA3,
+    reserved_a4 = 0xA4,
+    reserved_a5 = 0xA5,
+    reserved_a6 = 0xA6,
+    reserved_a7 = 0xA7,
+    reserved_a8 = 0xA8,
+    reserved_a9 = 0xA9,
+    reserved_aa = 0xAA,
+    reserved_ab = 0xAB,
+    reserved_ac = 0xAC,
+    reserved_ad = 0xAD,
+    reserved_ae = 0xAE,
+    reserved_af = 0xAF,
+    reserved_b0 = 0xB0,
+    reserved_b1 = 0xB1,
+    reserved_b2 = 0xB2,
+    reserved_b3 = 0xB3,
+    reserved_b4 = 0xB4,
+    reserved_b5 = 0xB5,
+    reserved_b6 = 0xB6,
+    reserved_b7 = 0xB7,
+    reserved_b8 = 0xB8,
+    reserved_b9 = 0xB9,
+    reserved_ba = 0xBA,
+    reserved_bb = 0xBB,
+    reserved_bc = 0xBC,
+    reserved_bd = 0xBD,
+    reserved_be = 0xBE,
+    reserved_bf = 0xBF,
+
 
     // ── Fused / peephole (0xC0–0xFF, 64 slots) ───────────────────────────────
     // Fused constant+binop: reads u16 const_idx, pops TOS (left operand),
@@ -218,5 +292,55 @@ pub const Op = enum(u8) {
     // Fused get_global_const_add+set_global (same global): 8-byte in-place global increment.
     // Layout: [op][name_hi][name_lo][ic_hi][ic_lo][add_skip][val_hi][val_lo]
     inc_global_const = 0xE1,
-    // 0xE2–0xFF: free within fused block (30 slots)
+
+    // Reserved slots within the fused block — same rules as above.
+    reserved_e2 = 0xE2,
+    reserved_e3 = 0xE3,
+    reserved_e4 = 0xE4,
+    reserved_e5 = 0xE5,
+    reserved_e6 = 0xE6,
+    reserved_e7 = 0xE7,
+    reserved_e8 = 0xE8,
+    reserved_e9 = 0xE9,
+    reserved_ea = 0xEA,
+    reserved_eb = 0xEB,
+    reserved_ec = 0xEC,
+    reserved_ed = 0xED,
+    reserved_ee = 0xEE,
+    reserved_ef = 0xEF,
+    reserved_f0 = 0xF0,
+    reserved_f1 = 0xF1,
+    reserved_f2 = 0xF2,
+    reserved_f3 = 0xF3,
+    reserved_f4 = 0xF4,
+    reserved_f5 = 0xF5,
+    reserved_f6 = 0xF6,
+    reserved_f7 = 0xF7,
+    reserved_f8 = 0xF8,
+    reserved_f9 = 0xF9,
+    reserved_fa = 0xFA,
+    reserved_fb = 0xFB,
+    reserved_fc = 0xFC,
+    reserved_fd = 0xFD,
+    reserved_fe = 0xFE,
+    reserved_ff = 0xFF,
 };
+
+// True for byte values that are reserved (unassigned) slots. Indexed by the
+// raw bytecode byte. The decoder rejects these; the VM dispatch traps on them.
+pub const is_reserved: [256]bool = blk: {
+    @setEvalBranchQuota(10_000);
+    var v = [_]bool{false} ** 256;
+    for (@typeInfo(Op).@"enum".fields) |f| {
+        if (isReservedName(f.name)) v[f.value] = true;
+    }
+    break :blk v;
+};
+
+pub inline fn isReservedOp(comptime op: Op) bool {
+    return comptime isReservedName(@tagName(op));
+}
+
+fn isReservedName(name: []const u8) bool {
+    return std.mem.startsWith(u8, name, "reserved_");
+}
