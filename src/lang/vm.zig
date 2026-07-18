@@ -978,7 +978,7 @@ inline fn enterFunctionFrameWarm(ctx: VMContext, f: @import("value.zig").FuncObj
         .closure = closure,
         .func_obj = func_obj,
         .defer_base = @intCast(ctx.vs.defer_top),
-        .has_typed_returns = f.has_typed_returns,
+        .has_typed_returns = f.has_typed_returns and !f.returns_proven,
         .named_return_count = f.named_return_count,
         .func_arity = f.arity,
     };
@@ -1038,7 +1038,7 @@ fn enterFunctionFrame(ctx: VMContext, f: @import("value.zig").FuncObj, func_obj:
         .closure = closure,
         .func_obj = func_obj,
         .defer_base = @intCast(ctx.vs.defer_top),
-        .has_typed_returns = f.has_typed_returns,
+        .has_typed_returns = f.has_typed_returns and !f.returns_proven,
         .named_return_count = f.named_return_count,
         .func_arity = f.arity,
     };
@@ -1269,6 +1269,12 @@ fn tryTailCall(ctx: VMContext, argc: u8, args_preverified: bool) !bool {
     for (0..argc) |i| writeFrameLocal(ctx, frame.base + i, ctx.vs.stack[callee_idx + 1 + i]);
     frame.closure = closure;
     frame.func_obj = f_obj;
+    // The reused frame must carry the NEW callee's return typing — it
+    // previously kept the old function's, so a tail call into a typed-return
+    // function skipped return enforcement (and vice versa took the slow path).
+    frame.has_typed_returns = f.has_typed_returns and !f.returns_proven;
+    frame.named_return_count = f.named_return_count;
+    frame.func_arity = f.arity;
     ctx.vs.stack_top = frame.base + argc;
     // Reused frame, new body: re-establish the verifier-proved stack bound.
     if (ctx.vs.stack_top + f.max_stack > ctx.vs.stack.len) return error.StackOverflow;

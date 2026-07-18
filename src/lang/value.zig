@@ -17,6 +17,12 @@ pub const FuncObj = struct {
     // defaults[0] corresponds to param[arity - default_count].
     defaults: []const Value = &[_]Value{},
     default_count: u8 = 0,
+    // Every return site's value type is compiler-proven against the declared
+    // single primitive return type AND the implicit end-of-body return is
+    // unreachable — frame entry then clears the frame's has_typed_returns so
+    // returns skip checkPrimitiveReturn. Property of this function's own
+    // body, sound regardless of how the function is bound or called.
+    returns_proven: bool = false,
     // Verifier-proved maximum operand-stack depth of the function body,
     // relative to the frame's entry stack_top. Checked once at frame entry so
     // the body can run unchecked stack ops. Stamped by chunk_verifier.verify;

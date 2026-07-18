@@ -133,6 +133,16 @@ pub const FuncInfo = struct {
     named_return_count: u8 = 0,
     is_named: bool = false,
     has_typed_returns: bool = false,
+    // Return-proof tracking (C4). return_prim is set when the function
+    // declares exactly one primitive single-alt return type; each return
+    // site either proves its value against it or clears all_returns_proven.
+    // body_ends_with_return guards the compiler-emitted implicit null
+    // return: only when the body's last top-level statement is a return is
+    // that implicit site unreachable, making the function-level proof sound.
+    return_prim: ?PrimType = null,
+    all_returns_proven: bool = true,
+    body_ends_with_return: bool = false,
+    body_block_depth: u8 = 0,
 };
 
 pub const LoopCtx = struct {

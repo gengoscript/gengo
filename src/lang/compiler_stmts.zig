@@ -362,6 +362,18 @@ pub fn compileFuncWithPrefix(c: anytype, prefix: []const []const u8, is_named: b
     const scope = c.currentScope();
     scope.is_named = is_named;
     scope.has_typed_returns = has_typed_returns;
+    if (named_return_count == 0 and return_count == 1 and return_types[0].alts.len == 1) {
+        scope.return_prim = switch (return_types[0].alts[0].typ) {
+            .int => .int,
+            .float => .float,
+            .boolean => .bool,
+            .string => .string,
+            .rune_t => .rune,
+            // decimal is a boxed carrier; named/complex types need the
+            // runtime's coercion path — not provable here.
+            else => null,
+        };
+    }
 
     for (0..@as(usize, arity)) |pi| {
         for (scope.locals[0..pi]) |local| {
@@ -447,7 +459,11 @@ pub fn compileFuncWithPrefix(c: anytype, prefix: []const []const u8, is_named: b
     const saved = c.repl_expr_ok;
     c.repl_expr_ok = false;
     const body_local_base: u8 = arity + named_return_count;
-    while (!c.check(.rbrace) and !c.check(.eof)) try c.decl();
+    scope.body_block_depth = c.block_depth;
+    while (!c.check(.rbrace) and !c.check(.eof)) {
+        scope.body_ends_with_return = false;
+        try c.decl();
+    }
     try c.consume(.rbrace);
     c.repl_expr_ok = saved;
     try c.cleanupLocals(body_local_base, c.prev.line);
@@ -504,6 +520,7 @@ pub fn compileFuncWithPrefix(c: anytype, prefix: []const []const u8, is_named: b
         .named_return_count = named_return_count,
         .defaults = defaults[0..default_count],
         .default_count = default_count,
+        .returns_proven = scope.return_prim != null and scope.all_returns_proven and scope.body_ends_with_return,
     } };
     c.last_func_obj = func_obj;
     if (predicate_base == null) {
@@ -1497,8 +1514,11 @@ pub fn returnStmt(c: anytype) !void {
     }
     const line = c.prev.line;
     const scope = c.currentScope();
+    if (c.block_depth == scope.body_block_depth) scope.body_ends_with_return = true;
     if (c.check(.rbrace) or c.check(.eof) or c.check(.semicolon)) {
         // Bare return: use named return variables if present, otherwise null.
+        // Returning null from a primitive-typed function is never provable.
+        if (scope.return_prim != null) scope.all_returns_proven = false;
         try emitImplicitReturn(scope, c.cs, line);
     } else if (scope.named_return_count > 0) {
         // Named-return function with explicit value(s): assign to the named return
@@ -1522,9 +1542,41 @@ pub fn returnStmt(c: anytype) !void {
             c.setErr("named-return function must declare return types", .{});
             return error.MissingReturnType;
         }
-        _ = try emitExprListTuple(
-            c,
-        );
+        // First return expression, with prim capture for the return proof.
+        c.beginExprPrimCapture();
+        try c.expr();
+        const rinfo = c.endExprPrimCapture();
+        var rcount: u8 = 1;
+        while (c.match(.comma)) {
+            if (rcount == 255) {
+                c.setErr("too many elements (max {d})", .{MaxLocals});
+                return error.TooManyElements;
+            }
+            try c.expr();
+            rcount += 1;
+        }
+        if (rcount > 1) try c.cs.emit2(@intFromEnum(Op.build_tuple), rcount, c.prev.line);
+        if (scope.return_prim) |rp| {
+            if (rcount != 1 or rinfo.named_type != null) {
+                scope.all_returns_proven = false;
+            } else if (rinfo.prim) |p| {
+                const ok = switch (rp) {
+                    .int => p == .int or p == .rune, // mirrors checkPrimitiveReturn
+                    .float => p == .float or p == .rune,
+                    .bool => p == .bool,
+                    .string => p == .string,
+                    .rune => p == .rune,
+                    else => false,
+                };
+                if (!ok) {
+                    c.setErr("cannot return {s} from function returning {s}; convert explicitly", .{ @tagName(p), @tagName(rp) });
+                    c.err_line = line;
+                    return error.TypeError;
+                }
+            } else {
+                scope.all_returns_proven = false;
+            }
+        }
     }
     // Close any captured locals before returning. Without this, the get_local_ret
     // peephole (get_local + ret → fused) would skip the close_upvalue that
