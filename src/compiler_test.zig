@@ -41,6 +41,7 @@ fn compileWithSession(rt: *Runtime, src: []const u8, path: []const u8) !void {
     heap.reset();
 
     var session: module_compile.Session = .{};
+    session.hs = heap.g_state;
     session.provider = .{ .table = &.{} };
     session.host_module_names = &.{};
     session.host_module_descs = &.{};

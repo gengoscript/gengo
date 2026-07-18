@@ -36,8 +36,13 @@ Value decode needs a pool base pointer) and stays, repointed on activate.
   through an explicit `Compiler.hs` handle latched at init (like `cs`);
   generics helpers (`substituteSpec`/`instQNameFromBase`/`buildInstKey`) and
   `fieldTypeAltLabel` take `hs` params.
-- Phase 2 `[ ]` module-level wrapper callers (chunk/globals/vm_state
-  delegating wrappers) — migrate callers to explicit state, delete wrappers.
+- Phase 2 `[x]` production wrapper callers migrated: module_compile.Session
+  carries an explicit `hs` (set by Runtime.initCompileSession / test
+  harnesses) and uses `compiler.cs` for chunk emission; runtime.zig uses
+  `self.heap_state`. The delegating wrappers remain but are fenced with a
+  TEST/ENTRY-POINT ONLY comment — their only callers are the
+  hand-assembled-bytecode test runners and the WASM export layer, which
+  cannot receive a context.
 - Phase 3 `[ ]` `fs_state`/`cap_fs` EngineState threadlocal → context.
 - Phase 4 `[ ]` entry points: Compiler.init/test runners stop reading
   g_state; `setActive` shrinks to Runtime.activate repointing

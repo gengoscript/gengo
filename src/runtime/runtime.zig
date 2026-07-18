@@ -269,7 +269,7 @@ pub const Runtime = struct {
     }
 
     fn buildHostModuleNames(self: *Runtime) ![]const []const u8 {
-        const names_ptr = heap.bump([]const u8, self.host_modules.len) orelse return error.OutOfMemory;
+        const names_ptr = self.heap_state.bump([]const u8, self.host_modules.len) orelse return error.OutOfMemory;
         const names = names_ptr[0..self.host_modules.len];
         for (names, self.host_modules) |*n, hm| n.* = hm.name;
         return names;
@@ -284,6 +284,7 @@ pub const Runtime = struct {
         test_mode: bool,
     ) void {
         session.* = .{};
+        session.hs = &self.heap_state;
         session.provider = provider;
         session.source_root = self.source_root;
         const n = @min(self.module_roots.len, module_compile.MaxModuleRoots);
@@ -901,7 +902,7 @@ pub const Runtime = struct {
     fn replEnumMembersAt(self: *Runtime, e: *const ReplSymEntry) ?[]const []const u8 {
         const count = e.enum_member_count;
         if (count == 0) return null;
-        const out = heap.bump([]const u8, count) orelse return null;
+        const out = self.heap_state.bump([]const u8, count) orelse return null;
         var pos: usize = e.enum_member_offset;
         var i: usize = 0;
         while (i < count) : (i += 1) {
