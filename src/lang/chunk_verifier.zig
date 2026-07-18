@@ -25,17 +25,28 @@ fn isConditionalBranch(op: Op) bool {
     };
 }
 
-fn stackEffect(op: Op, code: []const u8, ip: usize) struct { pop: u8, push: u8 } {
+// Also used by the VM's Debug-build net-effect assertion (vm.zig runInner):
+// the verifier's stack-bound proof is only as good as this table, so Debug
+// runs check every executed op's actual net effect against it.
+pub fn stackEffect(op: Op, code: []const u8, ip: usize) struct { pop: u8, push: u8 } {
     return switch (op) {
-        .constant, .null_val, .true_val, .false_val, .get_local, .get_upvalue, .get_global, .get_field, .make_closure, .tuple_get_keep, .get_local_const_eq, .get_local_const_sub, .get_local_const_add, .get_local_const_lt, .get_local_const_gt, .get_global_const_eq, .get_global_const_sub, .get_global_const_add, .get_global_const_lt, .get_local_get_field => .{ .pop = 0, .push = 1 },
+        .constant, .null_val, .true_val, .false_val, .get_local, .get_upvalue, .get_global, .make_closure, .tuple_get_keep, .get_local_const_eq, .get_local_const_sub, .get_local_const_add, .get_local_const_lt, .get_local_const_gt, .get_global_const_eq, .get_global_const_sub, .get_global_const_add, .get_global_const_lt, .get_local_get_field => .{ .pop = 0, .push = 1 },
 
-        .pop, .def_global, .set_global, .set_local, .set_upvalue, .set_field, .jif_pop, .op_assert, .set_named_predicate => .{ .pop = 1, .push = 0 },
+        .pop, .def_global, .set_global, .set_local, .set_upvalue, .jif_pop, .op_assert, .set_named_predicate => .{ .pop = 1, .push = 0 },
+        // set_field pops the value AND the receiver (found by the VM's Debug
+        // net-effect assertion; it was previously modeled as pop=1).
+        .set_field => .{ .pop = 2, .push = 0 },
 
         .add, .sub, .mul, .div, .int_div, .rem, .mod, .pow, .add_int, .sub_int, .mul_int, .div_int, .eq_int, .ne_int, .lt_int, .le_int, .gt_int, .ge_int, .add_float, .sub_float, .mul_float, .div_float, .eq_float, .ne_float, .lt_float, .le_float, .gt_float, .ge_float, .bit_and, .bit_or, .bit_xor, .shl, .shr, .eq, .ne, .lt, .le, .gt, .ge, .min, .max => .{ .pop = 2, .push = 1 },
         .clamp => .{ .pop = 3, .push = 1 },
         .eqz_int, .nez_int, .ltz_int, .lez_int, .gtz_int, .gez_int => .{ .pop = 1, .push = 1 },
 
-        .neg, .not, .bit_not, .abs, .floor, .ceil, .trunc, .nearest, .sign, .sqrt, .cast_int, .cast_float, .cast_decimal, .cast_bool, .cast_string, .cast_rune, .cast_bigint, .type_name, .variant_check, .variant_payload, .named_inner, .const_eq, .const_sub, .const_add, .const_lt, .const_gt, .assert_type, .assert_interface, .assert_struct, .tuple_get => .{ .pop = 1, .push = 1 },
+        .neg, .not, .bit_not, .abs, .floor, .ceil, .trunc, .nearest, .sign, .sqrt, .cast_int, .cast_float, .cast_decimal, .cast_bool, .cast_string, .cast_rune, .cast_bigint, .type_name, .variant_check, .variant_payload, .named_inner, .const_eq, .const_sub, .const_add, .const_lt, .const_gt, .assert_type, .assert_interface, .assert_struct, .tuple_get,
+        // get_field pops the receiver and pushes the field value. (It was
+        // historically grouped with the fused get_local_get_field above, which
+        // over-modeled depth by 1 per field read — found by the VM's Debug
+        // net-effect assertion the day it was added.)
+        .get_field => .{ .pop = 1, .push = 1 },
 
         .swap => .{ .pop = 2, .push = 2 },
 

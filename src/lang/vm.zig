@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const chunk = @import("chunk.zig");
+const chunk_verifier = @import("chunk_verifier.zig");
 const common = @import("common.zig");
 const globals = @import("globals.zig");
 const heap = @import("../runtime/heap.zig");
@@ -2201,6 +2202,28 @@ inline fn fetchOp(ctx: VMContext) !Op {
 const exec_call_modifier: std.builtin.CallModifier =
     if (builtin.target.cpu.arch.isWasm()) .auto else .always_inline;
 
+// Ops whose stack effect is governed by frame semantics (calls enter frames,
+// returns unwind them, tail calls rearrange the stack in place) rather than
+// the plain pop/push model the Debug-build effect check can compare against.
+fn effectCheckExempt(comptime op: Op) bool {
+    return switch (op) {
+        .call, .call_tail, .call_spread, .defer_call, .invoke_method, .defer_invoke_method,
+        .get_local_const_sub_call, .get_local_const_sub_call_tail,
+        .call_global_local_sub_const, .call_global_local_sub_const_tail,
+        .ret, .ret_const, .get_local_ret, .add_ret, .halt, .op_unreachable,
+        // Variable effect: iterator steps push value(s)+true while iterating
+        // but only false on exhaustion. The table declares the maximum (right
+        // for the capacity bound), so the exact-net assertion can't apply.
+        .iter_next1, .iter_next2,
+        // These execute the back-edge target's get_global inline when its IC
+        // is warm (tryInlineGetGlobal), so their observed effect includes the
+        // swallowed instruction's push.
+        .loop, .set_global_loop,
+        => true,
+        else => false,
+    };
+}
+
 fn runInner(ctx: VMContext) !void {
     // Threaded dispatch: `inline else` instantiates its body once per opcode,
     // so every `continue :dispatch` below compiles to its own indirect jump —
@@ -2220,6 +2243,26 @@ fn runInner(ctx: VMContext) !void {
             // no dispatch-loop code for the real opcodes to share icache with.
             if (comptime op_module.isReservedOp(op)) {
                 return error.InvalidChunkShape;
+            } else if (comptime builtin.mode == .Debug and !effectCheckExempt(op)) {
+                // Debug builds verify the stackEffect table — the foundation
+                // of the verifier's stack-bound proof — against every op the
+                // suite actually executes. Frame-depth guard skips ops whose
+                // handler entered/left a frame (nested predicate calls etc.).
+                const dbg_op_ip = ctx.vs.ip - 1;
+                const dbg_stack = ctx.vs.stack_top;
+                const dbg_frame = ctx.vs.frame_top;
+                if (try @call(exec_call_modifier, execOne, .{ ctx, op })) return;
+                if (ctx.vs.frame_top == dbg_frame) {
+                    const eff = chunk_verifier.stackEffect(op, &ctx.cs.code, dbg_op_ip);
+                    const want = dbg_stack - @as(usize, eff.pop) + @as(usize, eff.push);
+                    if (ctx.vs.stack_top != want) std.debug.panic(
+                        "stackEffect table violated by {s} at ip={d}: declared pop={d} push={d}, stack {d} -> {d}",
+                        .{ @tagName(op), dbg_op_ip, eff.pop, eff.push, dbg_stack, ctx.vs.stack_top },
+                    );
+                }
+                gas -= 1;
+                if (gas == 0) gas = try dispatchTick(ctx);
+                continue :dispatch (try fetchOp(ctx));
             } else {
                 if (try @call(exec_call_modifier, execOne, .{ ctx, op })) return;
                 gas -= 1;
