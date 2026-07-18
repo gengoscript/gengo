@@ -285,6 +285,7 @@ pub const Runtime = struct {
     ) void {
         session.* = .{};
         session.hs = &self.heap_state;
+        session.cs = self.chunk_state;
         session.provider = provider;
         session.source_root = self.source_root;
         const n = @min(self.module_roots.len, module_compile.MaxModuleRoots);
@@ -345,7 +346,7 @@ pub const Runtime = struct {
 
         var session: module_compile.Session = .{};
         self.initCompileSession(&session, provider, hm_names, caps, test_mode);
-        var compiler = Compiler.init(src, .{
+        var compiler = Compiler.init(src, self.chunk_state, &self.heap_state, .{
             .module_ctx = &session,
             .resolve_import = module_compile.Session.resolveImportOpaque,
             .has_module_export = module_compile.hasModuleExport,
@@ -480,7 +481,7 @@ pub const Runtime = struct {
         session.host_module_descs = self.host_modules;
         session.enabled_capabilities = self.enabled_capabilities;
         session.capability_modules = repl_caps;
-        var compiler = Compiler.init(src, .{
+        var compiler = Compiler.init(src, self.chunk_state, &self.heap_state, .{
             .module_ctx = &session,
             .resolve_import = module_compile.Session.resolveImportOpaque,
             .resolve_module_type = module_compile.resolveModuleTypeKind,

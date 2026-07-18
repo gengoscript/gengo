@@ -98,7 +98,7 @@ fn fuzzCompiler() void {
                 @memcpy(buf[len..][0..to_copy], frag[0..to_copy]);
                 len += to_copy;
             }
-            var compiler = Compiler.init(buf[0..len], .{});
+            var compiler = Compiler.init(buf[0..len], chunk.g_state, heap.g_state, .{});
             compiler.compile(true) catch {};
         }
     }
@@ -240,7 +240,7 @@ fn fuzzNamedTypeBoundaries() void {
     for (test_cases) |tc| {
         var src_buf: [256]u8 = undefined;
         const src = std.fmt.bufPrint(&src_buf, "std.core.{s}({s})\n", .{ tc.base, tc.val }) catch continue;
-        var compiler = Compiler.init(src, .{});
+        var compiler = Compiler.init(src, chunk.g_state, heap.g_state, .{});
         compiler.compile(true) catch {};
         chunk.emitOp(.halt, 1) catch continue;
         vm.run(vm.VMContext.fromActive()) catch {};
@@ -312,7 +312,7 @@ fn fuzzForInNesting() void {
                 pos += 1;
             }
 
-            var compiler = Compiler.init(buf[0..pos], .{});
+            var compiler = Compiler.init(buf[0..pos], chunk.g_state, heap.g_state, .{});
             compiler.compile(true) catch {
                 continue;
             };
@@ -336,7 +336,7 @@ fn fuzzStackHeapBoundaries() void {
         \\    return deep(n - 1) + 1
         \\}
         \\deep(100)
-    , .{});
+    , chunk.g_state, heap.g_state, .{});
     compiler.compile(true) catch {};
     chunk.emitOp(.halt, 1) catch {};
     vm.run(vm.VMContext.fromActive()) catch {};
@@ -348,7 +348,7 @@ fn fuzzStackHeapBoundaries() void {
         \\for i := 0; i < 1000; i++ {
         \\    arr[i] = i
         \\}
-    , .{});
+    , chunk.g_state, heap.g_state, .{});
     compiler2.compile(true) catch {};
     chunk.emitOp(.halt, 1) catch {};
     vm.run(vm.VMContext.fromActive()) catch {};
@@ -404,7 +404,7 @@ fn classifyErr(e: anyerror) OutcomeTag {
 
 fn runNormal(src: []const u8) OutcomeTag {
     resetAll();
-    var c = Compiler.init(src, .{});
+    var c = Compiler.init(src, chunk.g_state, heap.g_state, .{});
     c.compile(true) catch return .other;
     chunk.emitOp(.halt, 1) catch return .other;
     vm.run(vm.VMContext.fromActive()) catch |e| return classifyErr(e);
@@ -413,7 +413,7 @@ fn runNormal(src: []const u8) OutcomeTag {
 
 fn runDefused(src: []const u8) OutcomeTag {
     resetAll();
-    var c = Compiler.init(src, .{});
+    var c = Compiler.init(src, chunk.g_state, heap.g_state, .{});
     c.compile(true) catch return .other;
     chunk.emitOp(.halt, 1) catch return .other;
 
@@ -515,7 +515,7 @@ var _prop_ctx: u8 = 0;
 fn runAssert(src: []const u8, label: []const u8) void {
     resetAll();
     vmnative.installStdGlobal(vm.VMContext.fromActive(), globals.activeState()) catch {};
-    var c = Compiler.init(src, .{
+    var c = Compiler.init(src, chunk.g_state, heap.g_state, .{
         .module_ctx = &_prop_ctx,
         .resolve_import = propStdResolver,
     });
@@ -542,7 +542,7 @@ fn runAssert(src: []const u8, label: []const u8) void {
 fn runTolerant(src: []const u8) void {
     resetAll();
     vmnative.installStdGlobal(vm.VMContext.fromActive(), globals.activeState()) catch {};
-    var c = Compiler.init(src, .{
+    var c = Compiler.init(src, chunk.g_state, heap.g_state, .{
         .module_ctx = &_prop_ctx,
         .resolve_import = propStdResolver,
     });

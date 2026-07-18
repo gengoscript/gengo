@@ -162,6 +162,7 @@ pub const Session = struct {
     // never through heap's threadlocal-active wrappers. Set by
     // Runtime.initCompileSession / test harnesses right after construction.
     hs: *heap.State = undefined,
+    cs: *chunk.State = undefined,
     modules: [MaxModules]ModuleRecord = undefined,
     module_count: usize = 0,
     source_buf: [cfg.max_input_bytes]u8 = undefined,
@@ -437,7 +438,7 @@ pub const Session = struct {
             self.last_error_path = self.modules[idx].path();
             return err;
         };
-        var compiler = Compiler.init(src, .{
+        var compiler = Compiler.init(src, self.cs, self.hs, .{
             .module_path = self.modules[idx].path(),
             .module_prefix = self.modules[idx].prefix,
             .module_struct_name = self.modules[idx].struct_name,

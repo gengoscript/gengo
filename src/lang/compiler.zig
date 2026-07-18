@@ -176,12 +176,15 @@ pub const Compiler = struct {
 
     // ── Lifecycle ────────────────────────────────────────────────────────────────
 
-    pub fn init(src: []const u8, options: CompilerOptions) Compiler {
+    // Callers name the chunk and heap the compiler works against — production
+    // passes its runtime's own state; test runners pass the module defaults
+    // explicitly (chunk.g_state / heap.g_state). No hidden active-state reads.
+    pub fn init(src: []const u8, cs: *chunk.State, hs: *heap.State, options: CompilerOptions) Compiler {
         var c = Compiler{ .lex = .{ .src = src }, .options = options };
         c.scopes[0] = .{};
         c.scope_depth = 1;
-        c.cs = chunk.g_state;
-        c.hs = heap.g_state;
+        c.cs = cs;
+        c.hs = hs;
         return c;
     }
 

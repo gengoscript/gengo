@@ -28,7 +28,7 @@ fn compile(rt: *Runtime, src: []const u8) !void {
     globals.reset();
     heap.reset();
 
-    var compiler = Compiler.init(src, .{});
+    var compiler = Compiler.init(src, chunk.g_state, heap.g_state, .{});
     try compiler.compile(true);
 }
 
@@ -48,7 +48,7 @@ fn compileWithSession(rt: *Runtime, src: []const u8, path: []const u8) !void {
     session.enabled_capabilities = &.{};
     session.capability_modules = &.{};
 
-    var compiler = Compiler.init(src, .{
+    var compiler = Compiler.init(src, chunk.g_state, heap.g_state, .{
         .module_ctx = &session,
         .resolve_import = module_compile.Session.resolveImportOpaque,
         .has_module_export = module_compile.hasModuleExport,
