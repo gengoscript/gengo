@@ -148,7 +148,7 @@ and is never flagged. Recursive self-calls resolve through a new
 in-progress-signature stack (registration happens post-body), which also
 extends the compile-time arg checks to recursion. C3 is moot.
 
-### C4. Return-side proof flag `[ ]`
+### C4. Return-side proof flag `[x]`
 
 `checkPrimitiveReturn` runs on every return from a typed-return function
 (measured ~1-2% incl. the isPrimitiveReturn derefs in canReturnFast). The
@@ -159,6 +159,14 @@ FuncObj, and let frame entry store `has_typed_returns and !returns_proven`.
 Sound regardless of binding mutability — the proof is about the function's
 own body. Bonus: provable mismatches become compile errors, implementing
 the previously deferred return-type compile checking.
+
+Done 2026-07-18 (d798578): fib(32) 0.32 → 0.31s. Soundness: the implicit
+end-of-body null return must be unreachable — proven only when the body's
+last top-level statement is a return (body_ends_with_return, tracked at
+body block depth); bare returns clear the proof. Fixed in passing:
+tryTailCall reused the frame without updating has_typed_returns /
+named_return_count / func_arity — a tail call into a typed-return function
+skipped return enforcement entirely (pre-existing hole). Fail test 325.
 
 ### C5. Immediate-operand fused variants `[ ]`
 
