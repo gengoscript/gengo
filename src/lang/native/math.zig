@@ -20,7 +20,11 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             ctx.vs.vmPopArgs(argc);
             if (@abs(n) > 1.0) return error.RangeError;
             const fn_id: NativeFnId = @enumFromInt(nf.id);
-            const result = switch (fn_id) { .math_acos => std.math.acos(n), .math_asin => std.math.asin(n), else => unreachable };
+            const result = switch (fn_id) {
+                .math_acos => std.math.acos(n),
+                .math_asin => std.math.asin(n),
+                else => unreachable,
+            };
             if (!std.math.isFinite(result)) return error.RangeError;
             try ctx.vs.vmPush(.{ .float = result });
         },
@@ -97,7 +101,12 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             ctx.vs.vmPopArgs(argc);
             if (n <= 0.0) return error.RangeError;
             const fn_id: NativeFnId = @enumFromInt(nf.id);
-            const result = switch (fn_id) { .math_log => @log(n), .math_log10 => @log10(n), .math_log2 => @log2(n), else => unreachable };
+            const result = switch (fn_id) {
+                .math_log => @log(n),
+                .math_log10 => @log10(n),
+                .math_log2 => @log2(n),
+                else => unreachable,
+            };
             if (!std.math.isFinite(result)) return error.RangeError;
             try ctx.vs.vmPush(.{ .float = result });
         },

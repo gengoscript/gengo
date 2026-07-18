@@ -34,10 +34,10 @@ const ReplSymKind = enum(u8) { struct_type, interface_type, named_type, variant_
 const ReplSymEntry = struct {
     name_offset: u32 = 0,
     name_len: u16 = 0,
-    kind: u8 = 0,           // ReplSymKind encoded as u8
-    base_u8: u8 = 0,        // NamedTypeBase as @intFromEnum (named_type only)
+    kind: u8 = 0, // ReplSymKind encoded as u8
+    base_u8: u8 = 0, // NamedTypeBase as @intFromEnum (named_type only)
     parent_offset: u32 = 0, // byte offset in repl_sym_name_buf; 0 = no parent
-    parent_len: u16 = 0,    // 0 = no parent
+    parent_len: u16 = 0, // 0 = no parent
     enum_member_count: u8 = 0,
     scale: u8 = 0,
     enum_member_offset: u32 = 0,
@@ -66,7 +66,7 @@ const ReplNsEntry = struct {
     path_offset: u32 = 0,
     name_len: u16 = 0,
     path_len: u16 = 0,
-    kind: u8 = 0,            // ReplNsKind encoded as u8
+    kind: u8 = 0, // ReplNsKind encoded as u8
 };
 
 const MaxReplNsEntries = MaxLocals * 2; // up to MaxLocals std + MaxLocals import entries
@@ -661,11 +661,11 @@ pub const Runtime = struct {
         for (compiler.registry.type_buckets) |e| {
             if (!e.occupied) continue;
             const kind: ReplSymKind = switch (e.kind) {
-                .struct_type       => .struct_type,
-                .interface_type    => .interface_type,
-                .variant_type      => .variant_type,
-                .named_error_type  => .struct_type, // display as a type in REPL
-                .named_type        => continue, // handled above
+                .struct_type => .struct_type,
+                .interface_type => .interface_type,
+                .variant_type => .variant_type,
+                .named_error_type => .struct_type, // display as a type in REPL
+                .named_type => continue, // handled above
             };
             if (self.repl.sym_count >= MaxReplSyms)
                 return self.setReplOverflowError("REPL symbol table full: too many type declarations");

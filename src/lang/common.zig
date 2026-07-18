@@ -19,7 +19,10 @@ pub fn parseFloat(s: []const u8) ?f64 {
     if (s.len == 0) return null;
     var i: usize = 0;
     var neg = false;
-    if (s[i] == '-') { neg = true; i += 1; }
+    if (s[i] == '-') {
+        neg = true;
+        i += 1;
+    }
     if (i >= s.len or s[i] < '0' or s[i] > '9') return null;
     if (s[i] == '0' and i + 1 < s.len) {
         const prefix = s[i + 1];
@@ -31,10 +34,7 @@ pub fn parseFloat(s: []const u8) ?f64 {
             while (i < s.len) : (i += 1) {
                 const ch = s[i];
                 if (ch == '_') continue;
-                const nib: u8 = if (ch >= '0' and ch <= '9') ch - '0'
-                                else if (ch >= 'a' and ch <= 'f') ch - 'a' + 10
-                                else if (ch >= 'A' and ch <= 'F') ch - 'A' + 10
-                                else return null;
+                const nib: u8 = if (ch >= '0' and ch <= '9') ch - '0' else if (ch >= 'a' and ch <= 'f') ch - 'a' + 10 else if (ch >= 'A' and ch <= 'F') ch - 'A' + 10 else return null;
                 v = v * 16 + nib;
             }
             const r: f64 = @floatFromInt(v);
@@ -88,8 +88,10 @@ pub fn parseFloat(s: []const u8) ?f64 {
     var exp_neg = false;
     if (i < s.len and (s[i] == 'e' or s[i] == 'E')) {
         i += 1;
-        if (i < s.len and s[i] == '-') { exp_neg = true; i += 1; }
-        else if (i < s.len and s[i] == '+') i += 1;
+        if (i < s.len and s[i] == '-') {
+            exp_neg = true;
+            i += 1;
+        } else if (i < s.len and s[i] == '+') i += 1;
         while (i < s.len and s[i] >= '0' and s[i] <= '9') : (i += 1) {
             exp = exp * 10.0 + @as(f64, @floatFromInt(s[i] - '0'));
         }
@@ -111,7 +113,10 @@ pub fn parseInt(s: []const u8) ?i64 {
     if (s.len == 0) return null;
     var i: usize = 0;
     var neg = false;
-    if (s[i] == '-') { neg = true; i += 1; }
+    if (s[i] == '-') {
+        neg = true;
+        i += 1;
+    }
     if (i >= s.len or s[i] < '0' or s[i] > '9') return null;
     if (s[i] == '0' and i + 1 < s.len) {
         const prefix = s[i + 1];
@@ -122,10 +127,7 @@ pub fn parseInt(s: []const u8) ?i64 {
             while (i < s.len) : (i += 1) {
                 const ch = s[i];
                 if (ch == '_') continue;
-                const nib: u64 = if (ch >= '0' and ch <= '9') ch - '0'
-                                  else if (ch >= 'a' and ch <= 'f') ch - 'a' + 10
-                                  else if (ch >= 'A' and ch <= 'F') ch - 'A' + 10
-                                  else return null;
+                const nib: u64 = if (ch >= '0' and ch <= '9') ch - '0' else if (ch >= 'a' and ch <= 'f') ch - 'a' + 10 else if (ch >= 'A' and ch <= 'F') ch - 'A' + 10 else return null;
                 v = v *% 16 +% nib;
             }
             return if (neg) -@as(i64, @bitCast(v)) else @as(i64, @bitCast(v));

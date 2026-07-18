@@ -102,7 +102,7 @@ pub const TT = enum {
     pub fn isFieldName(self: TT) bool {
         return self == .ident or
             (@intFromEnum(self) >= @intFromEnum(TT.kw_true) and
-             @intFromEnum(self) <= @intFromEnum(TT.kw_as));
+                @intFromEnum(self) <= @intFromEnum(TT.kw_as));
     }
 };
 

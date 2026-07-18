@@ -74,8 +74,12 @@ fn nativeMapExtract(ctx: VMContext, m_obj: *Object, comptime field: std.meta.Fie
     return .{ .object = obj };
 }
 
-pub fn nativeKeys(ctx: VMContext, m_obj: *Object) !Value { return nativeMapExtract(ctx, m_obj, .key); }
-pub fn nativeValues(ctx: VMContext, m_obj: *Object) !Value { return nativeMapExtract(ctx, m_obj, .value); }
+pub fn nativeKeys(ctx: VMContext, m_obj: *Object) !Value {
+    return nativeMapExtract(ctx, m_obj, .key);
+}
+pub fn nativeValues(ctx: VMContext, m_obj: *Object) !Value {
+    return nativeMapExtract(ctx, m_obj, .value);
+}
 
 pub fn nativeContains(arr_obj: *Object, needle: Value) !Value {
     if (!vms.isArrayObject(arr_obj)) return error.TypeError;
@@ -168,7 +172,10 @@ pub fn nativeConvToInt(ctx: VMContext, v: Value) !Value {
         .float => |n| return .{ .int = @intFromFloat(n) },
         .rune => |r| return .{ .int = @intCast(r) },
         .boolean => |b| return .{ .int = if (b) 1 else 0 },
-        .string => |s| { const n = common.parseFloat(s.bytes) orelse return error.TypeError; return .{ .int = @intFromFloat(n) }; },
+        .string => |s| {
+            const n = common.parseFloat(s.bytes) orelse return error.TypeError;
+            return .{ .int = @intFromFloat(n) };
+        },
         .object => |o| {
             const s = try vmstr.stringBytesFromObj(o);
             const n = common.parseFloat(s) orelse return error.TypeError;
@@ -186,7 +193,10 @@ pub fn nativeConvToFloat(ctx: VMContext, v: Value) !Value {
         .float => |n| return .{ .float = n },
         .rune => |r| return .{ .float = @floatFromInt(r) },
         .boolean => |b| return .{ .float = if (b) 1 else 0 },
-        .string => |s| { const n = common.parseFloat(s.bytes) orelse return error.TypeError; return .{ .float = n }; },
+        .string => |s| {
+            const n = common.parseFloat(s.bytes) orelse return error.TypeError;
+            return .{ .float = n };
+        },
         .object => |o| {
             const s = try vmstr.stringBytesFromObj(o);
             const n = common.parseFloat(s) orelse return error.TypeError;
@@ -197,26 +207,28 @@ pub fn nativeConvToFloat(ctx: VMContext, v: Value) !Value {
 }
 
 pub fn nativeConvToBool(ctx: VMContext, v: Value) !Value {
-    return .{ .boolean = switch (v) {
-        .boolean => |b| b,
-        .int => |n| n != 0.0,
-        .float => |n| n != 0.0,
-        .decimal => |d| d != 0,
-        .rune => |r| r != 0,
-        .string => |s| s.bytes.len != 0,
-        .error_value => |e| e.bytes.len != 0,
-        .null => false,
-        // A heap-backed string must convert like a literal one; named values
-        // convert through their underlying value.
-        .inline_variant => true,
-        .object => |obj| switch (obj.*) {
-            .dyn_string => |s| s.len != 0,
-            .string_view => |sv| sv.bytes.len != 0,
-            .named_value => |nv| (try nativeConvToBool(ctx, nv.value)).boolean,
-            .named_error_value => |nev| nev.msg.bytes.len != 0,
-            else => true,
+    return .{
+        .boolean = switch (v) {
+            .boolean => |b| b,
+            .int => |n| n != 0.0,
+            .float => |n| n != 0.0,
+            .decimal => |d| d != 0,
+            .rune => |r| r != 0,
+            .string => |s| s.bytes.len != 0,
+            .error_value => |e| e.bytes.len != 0,
+            .null => false,
+            // A heap-backed string must convert like a literal one; named values
+            // convert through their underlying value.
+            .inline_variant => true,
+            .object => |obj| switch (obj.*) {
+                .dyn_string => |s| s.len != 0,
+                .string_view => |sv| sv.bytes.len != 0,
+                .named_value => |nv| (try nativeConvToBool(ctx, nv.value)).boolean,
+                .named_error_value => |nev| nev.msg.bytes.len != 0,
+                else => true,
+            },
         },
-    } };
+    };
 }
 
 pub fn nativeConvToString(ctx: VMContext, v: Value) !Value {
@@ -259,15 +271,21 @@ pub fn nativeConvToString(ctx: VMContext, v: Value) !Value {
             var buf: [1024]u8 = undefined;
             var pos: usize = 0;
             const tn = iv_typ.variant_type.name;
-            @memcpy(buf[pos..][0..tn.len], tn); pos += tn.len;
-            buf[pos] = '.'; pos += 1;
-            @memcpy(buf[pos..][0..arm.name.len], arm.name); pos += arm.name.len;
+            @memcpy(buf[pos..][0..tn.len], tn);
+            pos += tn.len;
+            buf[pos] = '.';
+            pos += 1;
+            @memcpy(buf[pos..][0..arm.name.len], arm.name);
+            pos += arm.name.len;
             if (payload != .null) {
                 const inner_v = try nativeConvToString(ctx, payload);
                 const inner_s = try vms.asStringValue(inner_v);
-                buf[pos] = '('; pos += 1;
-                @memcpy(buf[pos..][0..inner_s.len], inner_s); pos += inner_s.len;
-                buf[pos] = ')'; pos += 1;
+                buf[pos] = '(';
+                pos += 1;
+                @memcpy(buf[pos..][0..inner_s.len], inner_s);
+                pos += inner_s.len;
+                buf[pos] = ')';
+                pos += 1;
             }
             break :blk vmgc.makeDynString(ctx, buf[0..pos]);
         },
@@ -441,8 +459,7 @@ fn deepEqualMap(a_entries: []const MapEntry, b_entries: []const MapEntry, visits
 fn deepEqualObject(a: *Object, b: *Object, visits: []DeepEqVisit, visit_len: *usize) anyerror!bool {
     if (a == b) return true;
     if (std.meta.activeTag(a.*) != std.meta.activeTag(b.*)) {
-        if ((a.* == .array or a.* == .array_managed) and (b.* == .array or b.* == .array_managed)) {
-        } else if (vms.isMapObject(a) and vms.isMapObject(b)) {
+        if ((a.* == .array or a.* == .array_managed) and (b.* == .array or b.* == .array_managed)) {} else if (vms.isMapObject(a) and vms.isMapObject(b)) {
             return try deepEqualMap(try vms.asMapSlice(a), try vms.asMapSlice(b), visits, visit_len);
         } else {
             return false;
@@ -455,7 +472,9 @@ fn deepEqualObject(a: *Object, b: *Object, visits: []DeepEqVisit, visit_len: *us
             const aa = try vms.asArraySlice(a);
             const bb = try vms.asArraySlice(b);
             if (aa.len != bb.len) return false;
-            for (aa, 0..) |item, i| { if (!try deepEqualValue(item, bb[i], visits, visit_len)) return false; }
+            for (aa, 0..) |item, i| {
+                if (!try deepEqualValue(item, bb[i], visits, visit_len)) return false;
+            }
             return true;
         },
         .map, .map_managed, .map_hashed => {
@@ -466,8 +485,14 @@ fn deepEqualObject(a: *Object, b: *Object, visits: []DeepEqVisit, visit_len: *us
         .string_view => return common.streq(a.string_view.bytes, b.string_view.bytes),
         .function, .closure, .iterator => return a == b,
         .cell => return try deepEqualValue(a.cell.value, b.cell.value, visits, visit_len),
-        .native_function => |anf| { const bnf = b.native_function; return anf.id == bnf.id and anf.arity == bnf.arity; },
-        .host_module_function => |ahf| { const bhf = b.host_module_function; return ahf.call_id == bhf.call_id and ahf.arity == bhf.arity; },
+        .native_function => |anf| {
+            const bnf = b.native_function;
+            return anf.id == bnf.id and anf.arity == bnf.arity;
+        },
+        .host_module_function => |ahf| {
+            const bhf = b.host_module_function;
+            return ahf.call_id == bhf.call_id and ahf.arity == bhf.arity;
+        },
         .struct_type => |ast| return common.streq(ast.qualified_name, b.struct_type.qualified_name),
         .interface_type => |ait| return common.streq(ait.qualified_name, b.interface_type.qualified_name),
         .named_type => |ant| return common.streq(ant.qualified_name, b.named_type.qualified_name),
@@ -477,7 +502,10 @@ fn deepEqualObject(a: *Object, b: *Object, visits: []DeepEqVisit, visit_len: *us
             return try deepEqualValue(anv.value, b.named_value.value, visits, visit_len);
         },
         .enum_type => |aet| return common.streq(aet.qualified_name, b.enum_type.qualified_name),
-        .enum_value => |aev| { const bev = b.enum_value; return aev.typ == bev.typ and aev.ordinal == bev.ordinal; },
+        .enum_value => |aev| {
+            const bev = b.enum_value;
+            return aev.typ == bev.typ and aev.ordinal == bev.ordinal;
+        },
         .struct_instance => |asi| {
             if (b.* != .struct_instance) return false;
             const bsi = b.struct_instance;
@@ -520,7 +548,10 @@ fn deepEqualObject(a: *Object, b: *Object, visits: []DeepEqVisit, visit_len: *us
             const bvc = b.variant_ctor;
             return avc.typ == bvc.typ and avc.ordinal == bvc.ordinal and common.streq(avc.tag, bvc.tag);
         },
-        .named_type_fn => |anf| { const bnf = b.named_type_fn; return anf.typ == bnf.typ and anf.kind == bnf.kind; },
+        .named_type_fn => |anf| {
+            const bnf = b.named_type_fn;
+            return anf.typ == bnf.typ and anf.kind == bnf.kind;
+        },
         .enum_type_fn => |aef| return aef.typ == b.enum_type_fn.typ,
         .string_builder => |asb| return common.streq(asb.buf[0..asb.len], b.string_builder.buf[0..b.string_builder.len]),
         .bigint => |abi| return abi.toConst().eql(b.bigint.toConst()),
@@ -564,7 +595,9 @@ fn deepEqualValue(a: Value, b: Value, visits: []DeepEqVisit, visit_len: *usize) 
 }
 
 fn cloneFindExisting(src: *Object, visits: []const CloneVisit, visit_len: usize) ?*Object {
-    for (visits[0..visit_len]) |v| { if (v.src == src) return v.dst; }
+    for (visits[0..visit_len]) |v| {
+        if (v.src == src) return v.dst;
+    }
     return null;
 }
 
@@ -615,8 +648,7 @@ fn cloneObject(ctx: VMContext, src: *Object, visits: []CloneVisit, visit_len: *u
         .string_view => |sv| return vmgc.makeDynString(ctx, sv.bytes),
         .string_builder => |sb| {
             const out_obj = try vmgc.allocTempRooted(ctx, .{ .string_builder = .{ .buf = &[_]u8{}, .len = 0 } });
-            if (sb.len == 0) {
-            } else {
+            if (sb.len == 0) {} else {
                 const new_buf = try vmgc.vmAllocManagedBytes(ctx, sb.len);
                 @memcpy(new_buf[0..sb.len], sb.buf[0..sb.len]);
                 out_obj.* = .{ .string_builder = .{ .buf = new_buf, .len = sb.len } };
@@ -624,9 +656,7 @@ fn cloneObject(ctx: VMContext, src: *Object, visits: []CloneVisit, visit_len: *u
             }
             return .{ .object = out_obj };
         },
-        .function, .closure, .native_function, .host_module_function, .struct_type, .interface_type,
-        .named_type, .enum_type, .iterator, .variant_type, .variant_ctor,
-        .named_type_fn, .enum_type_fn, .cell, .bigint => return .{ .object = src },
+        .function, .closure, .native_function, .host_module_function, .struct_type, .interface_type, .named_type, .enum_type, .iterator, .variant_type, .variant_ctor, .named_type_fn, .enum_type_fn, .cell, .bigint => return .{ .object = src },
         .named_value => |nv| {
             const out_obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
             defer ctx.vs.popTempRoot();

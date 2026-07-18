@@ -99,8 +99,12 @@ fn nativeStrTransform(ctx: VMContext, s: []const u8, comptime transform: fn (u8)
     return .{ .object = obj };
 }
 
-pub fn nativeStrUpper(ctx: VMContext, s: []const u8) !Value { return nativeStrTransform(ctx, s, std.ascii.toUpper); }
-pub fn nativeStrLower(ctx: VMContext, s: []const u8) !Value { return nativeStrTransform(ctx, s, std.ascii.toLower); }
+pub fn nativeStrUpper(ctx: VMContext, s: []const u8) !Value {
+    return nativeStrTransform(ctx, s, std.ascii.toUpper);
+}
+pub fn nativeStrLower(ctx: VMContext, s: []const u8) !Value {
+    return nativeStrTransform(ctx, s, std.ascii.toLower);
+}
 
 pub fn nativeStrContains(s: []const u8, sub: []const u8) Value {
     return .{ .boolean = std.mem.indexOf(u8, s, sub) != null };

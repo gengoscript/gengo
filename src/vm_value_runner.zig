@@ -18,8 +18,12 @@ fn writeAll(fd: std.os.wasi.fd_t, s: []const u8) void {
     }
 }
 
-fn out(s: []const u8) void { writeAll(1, s); }
-fn err(s: []const u8) void { writeAll(2, s); }
+fn out(s: []const u8) void {
+    writeAll(1, s);
+}
+fn err(s: []const u8) void {
+    writeAll(2, s);
+}
 
 fn fail(msg: []const u8) noreturn {
     err("vm-value FAIL: ");
@@ -48,7 +52,7 @@ fn emitConstBytecode(idx: u16) !void {
 fn emitOffset4(off: u32) !void {
     try chunk.emitByte(@intCast((off >> 24) & 0xff), 1);
     try chunk.emitByte(@intCast((off >> 16) & 0xff), 1);
-    try chunk.emitByte(@intCast((off >> 8)  & 0xff), 1);
+    try chunk.emitByte(@intCast((off >> 8) & 0xff), 1);
     try chunk.emitByte(@intCast(off & 0xff), 1);
 }
 
@@ -465,39 +469,72 @@ fn testMixedIntFloatError() void {
 // ── Entry point ───────────────────────────────────────────────────────────
 
 export fn _start() void {
-    testNullVal();             out("  null_val: OK\n");
-    testTrueVal();             out("  true_val: OK\n");
-    testFalseVal();            out("  false_val: OK\n");
-    testConstantInt();         out("  constant int: OK\n");
-    testConstantFloat();       out("  constant float: OK\n");
-    testConstantString();      out("  constant string: OK\n");
-    testConstantRune();        out("  constant rune: OK\n");
-    testConstantDecimal();     out("  constant decimal: OK\n");
-    testAddInt();              out("  add int: OK\n");
-    testSubInt();              out("  sub int: OK\n");
-    testMulInt();              out("  mul int: OK\n");
-    testDivInt();              out("  div int: OK\n");
-    testModInt();              out("  mod int: OK\n");
-    testAddFloat();            out("  add float: OK\n");
-    testSubFloat();            out("  sub float: OK\n");
-    testNegInt();              out("  neg int: OK\n");
-    testCastIntFromFloat();    out("  cast int from float: OK\n");
-    testNotBool();             out("  not bool: OK\n");
-    testConstEqTrue();         out("  const_eq true: OK\n");
-    testConstEqFalse();        out("  const_eq false: OK\n");
-    testConstSub();            out("  const_sub: OK\n");
-    testConstAdd();            out("  const_add: OK\n");
-    testDup();                 out("  dup: OK\n");
-    testPop();                 out("  pop: OK\n");
-    testDup2();                out("  dup2: OK\n");
-    testJifPopTaken();         out("  jif_pop taken: OK\n");
-    testJifPopNotTaken();      out("  jif_pop not taken: OK\n");
-    testShl();                 out("  shl: OK\n");
-    testShlOverflow();         out("  shl overflow: OK\n");
-    testDivByZero();           out("  div by zero: OK\n");
-    testModByZero();           out("  mod by zero: OK\n");
-    testAddOverflow();         out("  add overflow: OK\n");
-    testMixedIntFloatError();  out("  mixed int+float widening: OK\n");
+    testNullVal();
+    out("  null_val: OK\n");
+    testTrueVal();
+    out("  true_val: OK\n");
+    testFalseVal();
+    out("  false_val: OK\n");
+    testConstantInt();
+    out("  constant int: OK\n");
+    testConstantFloat();
+    out("  constant float: OK\n");
+    testConstantString();
+    out("  constant string: OK\n");
+    testConstantRune();
+    out("  constant rune: OK\n");
+    testConstantDecimal();
+    out("  constant decimal: OK\n");
+    testAddInt();
+    out("  add int: OK\n");
+    testSubInt();
+    out("  sub int: OK\n");
+    testMulInt();
+    out("  mul int: OK\n");
+    testDivInt();
+    out("  div int: OK\n");
+    testModInt();
+    out("  mod int: OK\n");
+    testAddFloat();
+    out("  add float: OK\n");
+    testSubFloat();
+    out("  sub float: OK\n");
+    testNegInt();
+    out("  neg int: OK\n");
+    testCastIntFromFloat();
+    out("  cast int from float: OK\n");
+    testNotBool();
+    out("  not bool: OK\n");
+    testConstEqTrue();
+    out("  const_eq true: OK\n");
+    testConstEqFalse();
+    out("  const_eq false: OK\n");
+    testConstSub();
+    out("  const_sub: OK\n");
+    testConstAdd();
+    out("  const_add: OK\n");
+    testDup();
+    out("  dup: OK\n");
+    testPop();
+    out("  pop: OK\n");
+    testDup2();
+    out("  dup2: OK\n");
+    testJifPopTaken();
+    out("  jif_pop taken: OK\n");
+    testJifPopNotTaken();
+    out("  jif_pop not taken: OK\n");
+    testShl();
+    out("  shl: OK\n");
+    testShlOverflow();
+    out("  shl overflow: OK\n");
+    testDivByZero();
+    out("  div by zero: OK\n");
+    testModByZero();
+    out("  mod by zero: OK\n");
+    testAddOverflow();
+    out("  add overflow: OK\n");
+    testMixedIntFloatError();
+    out("  mixed int+float widening: OK\n");
     out("vm-value OK\n");
     std.os.wasi.proc_exit(0);
 }

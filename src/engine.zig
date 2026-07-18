@@ -251,7 +251,7 @@ const Engine = struct {
         const s = if (e.kind == error.OutOfMemory)
             std.fmt.bufPrint(&self.last_error, "compilation failed: {s}", .{e.msg}) catch ""
         else
-            std.fmt.bufPrint(&self.last_error, "compile error: {s}: {s}", .{@errorName(e.kind), e.msg}) catch "";
+            std.fmt.bufPrint(&self.last_error, "compile error: {s}: {s}", .{ @errorName(e.kind), e.msg }) catch "";
         self.last_error_len = @intCast(s.len);
     }
 
@@ -263,7 +263,7 @@ const Engine = struct {
         const s = if (e.kind == error.OutOfMemory)
             std.fmt.bufPrint(&self.last_error, "panic: {s}", .{e.msg}) catch ""
         else
-            std.fmt.bufPrint(&self.last_error, "panic: {s}: {s}", .{@errorName(e.kind), e.msg}) catch "";
+            std.fmt.bufPrint(&self.last_error, "panic: {s}: {s}", .{ @errorName(e.kind), e.msg }) catch "";
         self.last_error_len = @intCast(s.len);
     }
 
@@ -309,7 +309,7 @@ fn sourceProviderFromLoader(engine: *Engine) ?api.SourceProvider {
     return api.SourceProvider{ .callback = .{
         .ctx = engine,
         .load = importLoaderWrapper,
-    }};
+    } };
 }
 
 fn getEngine(handle: i32) ?*Engine {
@@ -520,7 +520,7 @@ fn valueToWire(val: Value) !ValueWire {
                 const shared_count = @min(vv.shared_values.len, vtype.shared_fields.len);
                 const arm_field_count = @min(vv.arm_fields.len, arm_spec.fields.len);
                 const total_entries = 2 + shared_count + arm_field_count;
-                const wires = (heap.bump(ValueWire, total_entries * 2) orelse return makeWire(@intFromEnum(WireTag.null), 0, 0))[0..total_entries * 2];
+                const wires = (heap.bump(ValueWire, total_entries * 2) orelse return makeWire(@intFromEnum(WireTag.null), 0, 0))[0 .. total_entries * 2];
                 wires[0] = try valueToWire(.{ .string = staticSS("tag") });
                 wires[1] = try valueToWire(.{ .string = try chunk.internStr(vv.tag) });
                 wires[2] = try valueToWire(.{ .string = staticSS("value") });
@@ -705,14 +705,20 @@ export fn engine_destroy(handle: i32) void {
 
 export fn engine_run(handle: i32, src_ptr: PtrInt, src_len: i32) i32 {
     const engine = getEngine(handle) orelse return -1;
-    if (src_len < 0) { engine.setError("engine_run: src_len must not be negative"); return -1; }
+    if (src_len < 0) {
+        engine.setError("engine_run: src_len must not be negative");
+        return -1;
+    }
     const src = wasmSlice(src_ptr, src_len);
     setupHostModules(engine);
     const prev = pushCapState(engine);
     defer popCapState(prev);
     const res = engine.runtime.run(src);
     return switch (res) {
-        .ok => { engine.clearError(); return 0; },
+        .ok => {
+            engine.clearError();
+            return 0;
+        },
         .compile_error => |e| {
             engine.setCompileError(e);
             return -1;
@@ -726,7 +732,10 @@ export fn engine_run(handle: i32, src_ptr: PtrInt, src_len: i32) i32 {
 
 export fn engine_run_path(handle: i32, src_ptr: PtrInt, src_len: i32, path_ptr: PtrInt, path_len: i32) i32 {
     const engine = getEngine(handle) orelse return -1;
-    if (src_len < 0 or path_len < 0) { engine.setError("engine_run_path: lengths must not be negative"); return -1; }
+    if (src_len < 0 or path_len < 0) {
+        engine.setError("engine_run_path: lengths must not be negative");
+        return -1;
+    }
     const src = wasmSlice(src_ptr, src_len);
     const path = wasmSlice(path_ptr, path_len);
     setupHostModules(engine);
@@ -734,7 +743,10 @@ export fn engine_run_path(handle: i32, src_ptr: PtrInt, src_len: i32, path_ptr: 
     defer popCapState(prev);
     const res = engine.runtime.runPath(src, path);
     return switch (res) {
-        .ok => { engine.clearError(); return 0; },
+        .ok => {
+            engine.clearError();
+            return 0;
+        },
         .compile_error => |e| {
             engine.setCompileError(e);
             return -1;
@@ -1315,30 +1327,24 @@ test "engine_call: recover() in defer intercepts panic" {
     // "eu" is a valid region — should return true.
     var arg_wire: ValueWire = .{ .tag = 3, .flags = 0, .payload = @bitCast(@intFromPtr("eu".ptr)), .len = 2 };
     var out_wire: ValueWire = undefined;
-    const rc_good = engine_call(h, @intCast(@intFromPtr("check".ptr)), 5,
-                                @intCast(@intFromPtr(&arg_wire)), 1,
-                                @intCast(@intFromPtr(&out_wire)));
+    const rc_good = engine_call(h, @intCast(@intFromPtr("check".ptr)), 5, @intCast(@intFromPtr(&arg_wire)), 1, @intCast(@intFromPtr(&out_wire)));
     try std.testing.expectEqual(0, rc_good);
     try std.testing.expectEqual(@as(u8, 1), out_wire.tag); // boolean
-    try std.testing.expect(out_wire.payload != 0);         // true
+    try std.testing.expect(out_wire.payload != 0); // true
 
     // "mars" fails the predicate; recover() should intercept and return false.
     var bad_arg: ValueWire = .{ .tag = 3, .flags = 0, .payload = @bitCast(@intFromPtr("mars".ptr)), .len = 4 };
     var bad_out: ValueWire = undefined;
-    const rc_bad = engine_call(h, @intCast(@intFromPtr("check".ptr)), 5,
-                               @intCast(@intFromPtr(&bad_arg)), 1,
-                               @intCast(@intFromPtr(&bad_out)));
+    const rc_bad = engine_call(h, @intCast(@intFromPtr("check".ptr)), 5, @intCast(@intFromPtr(&bad_arg)), 1, @intCast(@intFromPtr(&bad_out)));
     // Must return 0 (recover handled it), NOT -2.
     try std.testing.expectEqual(0, rc_bad);
     try std.testing.expectEqual(@as(u8, 1), bad_out.tag); // boolean
-    try std.testing.expect(bad_out.payload == 0);         // false
+    try std.testing.expect(bad_out.payload == 0); // false
 
     // The recovered error message must be the human-readable predicate message,
     // not the bare Zig error name "PredicateFailed".
     var err_out: ValueWire = undefined;
-    const rc_err = engine_call(h, @intCast(@intFromPtr("get_last_err".ptr)), 12,
-                               0, 0,
-                               @intCast(@intFromPtr(&err_out)));
+    const rc_err = engine_call(h, @intCast(@intFromPtr("get_last_err".ptr)), 12, 0, 0, @intCast(@intFromPtr(&err_out)));
     try std.testing.expectEqual(0, rc_err);
     try std.testing.expectEqual(@as(u8, 3), err_out.tag); // string
     const err_str = @as([*]const u8, @ptrFromInt(@as(usize, @bitCast(err_out.payload))))[0..err_out.len];
@@ -1407,8 +1413,14 @@ test "engine_list_functions" {
         fn cb(userdata: ?*anyopaque, name_ptr: [*]const u8, name_len: i32, arity: i32) callconv(.c) void {
             const self = @as(*@This(), @ptrCast(@alignCast(userdata.?)));
             const name = name_ptr[0..@intCast(name_len)];
-            if (std.mem.eql(u8, name, "add")) { self.found_add = true; self.add_arity = arity; }
-            if (std.mem.eql(u8, name, "greet")) { self.found_greet = true; self.greet_arity = arity; }
+            if (std.mem.eql(u8, name, "add")) {
+                self.found_add = true;
+                self.add_arity = arity;
+            }
+            if (std.mem.eql(u8, name, "greet")) {
+                self.found_greet = true;
+                self.greet_arity = arity;
+            }
         }
     };
     var ctx: Ctx = .{};
@@ -1530,29 +1542,30 @@ test "engine_load_bundle loads zip and resolves imports" {
     //   utils/math.gengo   — pub func add(a int, b int) int { return a + b }
     //   README.md          — skipped (not .gengo)
     const zip_data = [_]u8{
-        80,75,3,4,20,0,0,0,0,0,178,77,228,92,149,106,139,212,61,0,0,0,61,0,0,0,17,0,0,0,
-        117,116,105,108,115,47,103,114,101,101,116,46,103,101,110,103,111,112,117,98,32,102,
-        117,110,99,32,103,114,101,101,116,40,110,97,109,101,32,115,116,114,105,110,103,41,32,
-        115,116,114,105,110,103,32,123,32,114,101,116,117,114,110,32,34,104,101,108,108,111,
-        32,34,32,43,32,110,97,109,101,32,125,80,75,3,4,20,0,0,0,0,0,178,77,228,92,204,98,20,
-        108,47,0,0,0,47,0,0,0,16,0,0,0,117,116,105,108,115,47,109,97,116,104,46,103,101,110,
-        103,111,112,117,98,32,102,117,110,99,32,97,100,100,40,97,32,105,110,116,44,32,98,32,
-        105,110,116,41,32,105,110,116,32,123,32,114,101,116,117,114,110,32,97,32,43,32,98,32,
-        125,80,75,3,4,20,0,0,0,0,0,178,77,228,92,97,57,152,145,12,0,0,0,12,0,0,0,9,0,0,0,
-        82,69,65,68,77,69,46,109,100,112,97,99,107,97,103,101,32,100,111,99,115,80,75,1,2,20,
-        3,20,0,0,0,0,0,178,77,228,92,149,106,139,212,61,0,0,0,61,0,0,0,17,0,0,0,0,0,0,0,0,
-        0,0,0,128,1,0,0,0,0,117,116,105,108,115,47,103,114,101,101,116,46,103,101,110,103,111,
-        80,75,1,2,20,3,20,0,0,0,0,0,178,77,228,92,204,98,20,108,47,0,0,0,47,0,0,0,16,0,0,0,
-        0,0,0,0,0,0,0,0,128,1,108,0,0,0,117,116,105,108,115,47,109,97,116,104,46,103,101,110,
-        103,111,80,75,1,2,20,3,20,0,0,0,0,0,178,77,228,92,97,57,152,145,12,0,0,0,12,0,0,0,
-        9,0,0,0,0,0,0,0,0,0,0,0,128,1,201,0,0,0,82,69,65,68,77,69,46,109,100,80,75,5,6,0,0,
-        0,0,3,0,3,0,180,0,0,0,252,0,0,0,0,0,
+        80,  75,  3,   4,   20,  0,   0,   0,   0,   0,   178, 77,  228, 92,  149, 106, 139, 212, 61,  0,   0,   0,   61,  0,   0,   0,   17,  0,   0,   0,
+        117, 116, 105, 108, 115, 47,  103, 114, 101, 101, 116, 46,  103, 101, 110, 103, 111, 112, 117, 98,  32,  102, 117, 110, 99,  32,  103, 114, 101, 101,
+        116, 40,  110, 97,  109, 101, 32,  115, 116, 114, 105, 110, 103, 41,  32,  115, 116, 114, 105, 110, 103, 32,  123, 32,  114, 101, 116, 117, 114, 110,
+        32,  34,  104, 101, 108, 108, 111, 32,  34,  32,  43,  32,  110, 97,  109, 101, 32,  125, 80,  75,  3,   4,   20,  0,   0,   0,   0,   0,   178, 77,
+        228, 92,  204, 98,  20,  108, 47,  0,   0,   0,   47,  0,   0,   0,   16,  0,   0,   0,   117, 116, 105, 108, 115, 47,  109, 97,  116, 104, 46,  103,
+        101, 110, 103, 111, 112, 117, 98,  32,  102, 117, 110, 99,  32,  97,  100, 100, 40,  97,  32,  105, 110, 116, 44,  32,  98,  32,  105, 110, 116, 41,
+        32,  105, 110, 116, 32,  123, 32,  114, 101, 116, 117, 114, 110, 32,  97,  32,  43,  32,  98,  32,  125, 80,  75,  3,   4,   20,  0,   0,   0,   0,
+        0,   178, 77,  228, 92,  97,  57,  152, 145, 12,  0,   0,   0,   12,  0,   0,   0,   9,   0,   0,   0,   82,  69,  65,  68,  77,  69,  46,  109, 100,
+        112, 97,  99,  107, 97,  103, 101, 32,  100, 111, 99,  115, 80,  75,  1,   2,   20,  3,   20,  0,   0,   0,   0,   0,   178, 77,  228, 92,  149, 106,
+        139, 212, 61,  0,   0,   0,   61,  0,   0,   0,   17,  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   128, 1,   0,   0,   0,   0,   117, 116,
+        105, 108, 115, 47,  103, 114, 101, 101, 116, 46,  103, 101, 110, 103, 111, 80,  75,  1,   2,   20,  3,   20,  0,   0,   0,   0,   0,   178, 77,  228,
+        92,  204, 98,  20,  108, 47,  0,   0,   0,   47,  0,   0,   0,   16,  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   128, 1,   108, 0,   0,
+        0,   117, 116, 105, 108, 115, 47,  109, 97,  116, 104, 46,  103, 101, 110, 103, 111, 80,  75,  1,   2,   20,  3,   20,  0,   0,   0,   0,   0,   178,
+        77,  228, 92,  97,  57,  152, 145, 12,  0,   0,   0,   12,  0,   0,   0,   9,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   128, 1,   201,
+        0,   0,   0,   82,  69,  65,  68,  77,  69,  46,  109, 100, 80,  75,  5,   6,   0,   0,   0,   0,   3,   0,   3,   0,   180, 0,   0,   0,   252, 0,
+        0,   0,   0,   0,
     };
 
     const rc = engine_load_bundle(
         h,
-        @intCast(@intFromPtr("mylib".ptr)), 5,
-        @intCast(@intFromPtr(&zip_data)), @intCast(zip_data.len),
+        @intCast(@intFromPtr("mylib".ptr)),
+        5,
+        @intCast(@intFromPtr(&zip_data)),
+        @intCast(zip_data.len),
     );
     try std.testing.expectEqual(@as(i32, 0), rc);
 
@@ -1598,8 +1611,10 @@ test "engine_last_error_path: runtime error in imported library reports library 
     ;
     const add_rc = engine_add_source(
         h,
-        @intCast(@intFromPtr(lib_path.ptr)), @intCast(lib_path.len),
-        @intCast(@intFromPtr(lib_src.ptr)), @intCast(lib_src.len),
+        @intCast(@intFromPtr(lib_path.ptr)),
+        @intCast(lib_path.len),
+        @intCast(@intFromPtr(lib_src.ptr)),
+        @intCast(lib_src.len),
     );
     try std.testing.expectEqual(@as(i32, 0), add_rc);
 
@@ -1610,8 +1625,10 @@ test "engine_last_error_path: runtime error in imported library reports library 
     ;
     const run_rc = engine_run_path(
         h,
-        @intCast(@intFromPtr(main_src.ptr)), @intCast(main_src.len),
-        @intCast(@intFromPtr("main.gengo".ptr)), 9,
+        @intCast(@intFromPtr(main_src.ptr)),
+        @intCast(main_src.len),
+        @intCast(@intFromPtr("main.gengo".ptr)),
+        9,
     );
     try std.testing.expectEqual(@as(i32, -2), run_rc); // runtime error
 

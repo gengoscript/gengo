@@ -444,7 +444,7 @@ test "compactManagedHeap updates struct_type.fields bumped to managed overflow" 
     const empty_alts = @import("../lang/value.zig").FieldTypeSpec{ .alts = &.{} };
     const field_specs = (heap.bump(StructFieldSpec, 3) orelse return error.TestFailed)[0..3];
     field_specs[0] = .{ .name = "alpha", .typ = empty_alts };
-    field_specs[1] = .{ .name = "beta",  .typ = empty_alts };
+    field_specs[1] = .{ .name = "beta", .typ = empty_alts };
     field_specs[2] = .{ .name = "gamma", .typ = empty_alts };
     const orig_ptr = field_specs.ptr;
 
@@ -477,6 +477,6 @@ test "compactManagedHeap updates struct_type.fields bumped to managed overflow" 
 
     // Field names must still be correct at the new location.
     try std.testing.expectEqualStrings("alpha", typ_obj.struct_type.fields[0].name);
-    try std.testing.expectEqualStrings("beta",  typ_obj.struct_type.fields[1].name);
+    try std.testing.expectEqualStrings("beta", typ_obj.struct_type.fields[1].name);
     try std.testing.expectEqualStrings("gamma", typ_obj.struct_type.fields[2].name);
 }

@@ -121,6 +121,10 @@ pub const State = struct {
     // Set after the first successful verify(); subsequent run() entries skip re-verification.
     // Cleared by reset() so a re-compiled chunk is re-verified.
     verified: bool = false,
+    // Verifier-proved max operand-stack depth of top-level code (relative to
+    // the stack position where execution starts). Function bodies carry their
+    // own bound in FuncObj.max_stack.
+    main_max_stack: u32 = 0,
     // Code length at the time of the last successful verify(). If code is appended
     // afterwards (REPL lines, module compiles) or replaced (defuse), the length no
     // longer matches and verify() re-runs. The VM's unchecked operand fetch relies
@@ -299,8 +303,8 @@ pub const State = struct {
     pub fn tryUpgradeLastCallToTailCall(self: *State) void {
         const pos = self.last_call_pos orelse return;
         self.code[pos] = switch (@as(Op, @enumFromInt(self.code[pos]))) {
-            .call                       => @intFromEnum(Op.call_tail),
-            .get_local_const_sub_call   => @intFromEnum(Op.get_local_const_sub_call_tail),
+            .call => @intFromEnum(Op.call_tail),
+            .get_local_const_sub_call => @intFromEnum(Op.get_local_const_sub_call_tail),
             .call_global_local_sub_const => @intFromEnum(Op.call_global_local_sub_const_tail),
             else => return,
         };
@@ -384,7 +388,7 @@ pub const State = struct {
                 {
                     const src = self.code[p + 3];
                     self.code[p] = @intFromEnum(Op.local_add_local);
-                    self.code[p + 1] = b;   // dst
+                    self.code[p + 1] = b; // dst
                     self.code[p + 2] = src; // src
                     self.code_len = p + 3;
                     return;
@@ -489,11 +493,11 @@ pub const State = struct {
         if (self.last_const_code_pos) |pos| {
             if (pos + 3 == self.code_len) {
                 const fused: ?Op = switch (op) {
-                    .eq  => .const_eq,
+                    .eq => .const_eq,
                     .sub => .const_sub,
                     .add => .const_add,
-                    .lt  => .const_lt,
-                    .gt  => .const_gt,
+                    .lt => .const_lt,
+                    .gt => .const_gt,
                     else => null,
                 };
                 if (fused) |fop| {
@@ -504,12 +508,12 @@ pub const State = struct {
                     if (self.last_get_local_code_pos) |gl_pos| {
                         if (gl_pos + 2 == pos) {
                             const triple: ?Op = switch (fop) {
-                                .const_eq  => .get_local_const_eq,
+                                .const_eq => .get_local_const_eq,
                                 .const_sub => .get_local_const_sub,
                                 .const_add => .get_local_const_add,
-                                .const_lt  => .get_local_const_lt,
-                                .const_gt  => .get_local_const_gt,
-                                else       => null,
+                                .const_lt => .get_local_const_lt,
+                                .const_gt => .get_local_const_gt,
+                                else => null,
                             };
                             if (triple) |top| {
                                 self.code[gl_pos] = @intFromEnum(top);
@@ -534,11 +538,11 @@ pub const State = struct {
                     if (self.last_get_global_code_pos) |gg_pos| {
                         if (gg_pos + 5 == pos) {
                             const triple: ?Op = switch (fop) {
-                                .const_eq  => .get_global_const_eq,
+                                .const_eq => .get_global_const_eq,
                                 .const_sub => .get_global_const_sub,
                                 .const_add => .get_global_const_add,
-                                .const_lt  => .get_global_const_lt,
-                                else       => null,
+                                .const_lt => .get_global_const_lt,
+                                else => null,
                             };
                             if (triple) |top| {
                                 self.code[gg_pos] = @intFromEnum(top);
@@ -669,7 +673,8 @@ pub const State = struct {
             self.last_get_global_const_add_pos = null;
             if (ga_pos + 8 == self.code_len and
                 self.code[ga_pos + 1] == @as(u8, @intCast((idx >> 8) & 0xff)) and
-                self.code[ga_pos + 2] == @as(u8, @intCast(idx & 0xff))) {
+                self.code[ga_pos + 2] == @as(u8, @intCast(idx & 0xff)))
+            {
                 self.code[ga_pos] = @intFromEnum(Op.inc_global_const);
                 self.last_set_global_code_pos = null;
                 return;
@@ -818,9 +823,9 @@ pub const State = struct {
     pub fn patchJump(self: *State, offset: usize) !void {
         const jump = self.code_len - offset - 4;
         if (jump > 0xffffffff) return error.JumpTooLarge;
-        self.code[offset]     = @intCast((jump >> 24) & 0xff);
+        self.code[offset] = @intCast((jump >> 24) & 0xff);
         self.code[offset + 1] = @intCast((jump >> 16) & 0xff);
-        self.code[offset + 2] = @intCast((jump >> 8)  & 0xff);
+        self.code[offset + 2] = @intCast((jump >> 8) & 0xff);
         self.code[offset + 3] = @intCast(jump & 0xff);
         // Suppress pending peephole fusion across this boundary.
         self.last_const_code_pos = null;
@@ -855,7 +860,7 @@ pub const State = struct {
                 if (offset > 0xffffffff) return error.LoopTooLarge;
                 try self.emitByte(@intCast((offset >> 24) & 0xff), line);
                 try self.emitByte(@intCast((offset >> 16) & 0xff), line);
-                try self.emitByte(@intCast((offset >> 8)  & 0xff), line);
+                try self.emitByte(@intCast((offset >> 8) & 0xff), line);
                 try self.emitByte(@intCast(offset & 0xff), line);
                 return;
             }
@@ -876,7 +881,7 @@ pub const State = struct {
                 if (offset > 0xffffffff) return error.LoopTooLarge;
                 try self.emitByte(@intCast((offset >> 24) & 0xff), line);
                 try self.emitByte(@intCast((offset >> 16) & 0xff), line);
-                try self.emitByte(@intCast((offset >> 8)  & 0xff), line);
+                try self.emitByte(@intCast((offset >> 8) & 0xff), line);
                 try self.emitByte(@intCast(offset & 0xff), line);
                 return;
             }
@@ -898,7 +903,7 @@ pub const State = struct {
                 if (offset > 0xffffffff) return error.LoopTooLarge;
                 try self.emitByte(@intCast((offset >> 24) & 0xff), line);
                 try self.emitByte(@intCast((offset >> 16) & 0xff), line);
-                try self.emitByte(@intCast((offset >> 8)  & 0xff), line);
+                try self.emitByte(@intCast((offset >> 8) & 0xff), line);
                 try self.emitByte(@intCast(offset & 0xff), line);
                 return;
             }
@@ -917,12 +922,11 @@ pub const State = struct {
         if (offset > 0xffffffff) return error.LoopTooLarge;
         try self.emitByte(@intCast((offset >> 24) & 0xff), line);
         try self.emitByte(@intCast((offset >> 16) & 0xff), line);
-        try self.emitByte(@intCast((offset >> 8)  & 0xff), line);
+        try self.emitByte(@intCast((offset >> 8) & 0xff), line);
         try self.emitByte(@intCast(offset & 0xff), line);
     }
 
     pub fn reset(self: *State) void {
-
         self.code_len = 0;
         self.const_count = 0;
         self.obj_const_count = 0;
@@ -1014,10 +1018,18 @@ pub const State = struct {
         self.verified_code_len = 0;
     }
 
-    pub fn constCount(self: *const State) usize { return self.const_count; }
-    pub fn codeByteAt(self: *const State, i: usize) u8 { return self.code[i]; }
-    pub fn lineAt(self: *const State, i: usize) u16 { return self.lines[i]; }
-    pub fn colAt(self: *const State, i: usize) u16 { return self.cols[i]; }
+    pub fn constCount(self: *const State) usize {
+        return self.const_count;
+    }
+    pub fn codeByteAt(self: *const State, i: usize) u8 {
+        return self.code[i];
+    }
+    pub fn lineAt(self: *const State, i: usize) u16 {
+        return self.lines[i];
+    }
+    pub fn colAt(self: *const State, i: usize) u16 {
+        return self.cols[i];
+    }
 
     pub fn addModuleBoundary(self: *State, path: []const u8) void {
         if (self.module_boundary_count >= MaxModuleBoundaries) return;
@@ -1042,8 +1054,13 @@ pub const State = struct {
         }
         return &[_]u8{};
     }
-    pub fn constAt(self: *const State, i: usize) !Value { if (i >= self.const_count) return error.BadConstantIndex; return self.consts[i]; }
-    pub fn decodeAt(self: *State, pos: usize) !DecodedInstruction { return chunk_decoder.decodeAt(self, pos); }
+    pub fn constAt(self: *const State, i: usize) !Value {
+        if (i >= self.const_count) return error.BadConstantIndex;
+        return self.consts[i];
+    }
+    pub fn decodeAt(self: *State, pos: usize) !DecodedInstruction {
+        return chunk_decoder.decodeAt(self, pos);
+    }
     pub fn verify(self: *State) !void {
         if (self.verified and self.verified_code_len == self.code_len) return;
         try chunk_verifier.verify(self);
@@ -1062,14 +1079,25 @@ pub fn setActive(state: *State) void {
     g_state = state;
 }
 
-pub fn reset() void { g_state.reset(); }
+pub fn reset() void {
+    g_state.reset();
+}
 
 fn foldBinOp(op: Op, lhs: Value, rhs: Value) ?Value {
     if (lhs == .int and rhs == .int) {
         return switch (op) {
-            .add => blk: { const r = @addWithOverflow(lhs.int, rhs.int); break :blk if (r[1] != 0) null else Value{ .int = r[0] }; },
-            .sub => blk: { const r = @subWithOverflow(lhs.int, rhs.int); break :blk if (r[1] != 0) null else Value{ .int = r[0] }; },
-            .mul => blk: { const r = @mulWithOverflow(lhs.int, rhs.int); break :blk if (r[1] != 0) null else Value{ .int = r[0] }; },
+            .add => blk: {
+                const r = @addWithOverflow(lhs.int, rhs.int);
+                break :blk if (r[1] != 0) null else Value{ .int = r[0] };
+            },
+            .sub => blk: {
+                const r = @subWithOverflow(lhs.int, rhs.int);
+                break :blk if (r[1] != 0) null else Value{ .int = r[0] };
+            },
+            .mul => blk: {
+                const r = @mulWithOverflow(lhs.int, rhs.int);
+                break :blk if (r[1] != 0) null else Value{ .int = r[0] };
+            },
             // int / int produces float (true division), matching the runtime .div opcode.
             .div => if (rhs.int == 0) null else Value{ .float = @as(f64, @floatFromInt(lhs.int)) / @as(f64, @floatFromInt(rhs.int)) },
             .rem => if (rhs.int == 0 or (lhs.int == std.math.minInt(i64) and rhs.int == -1)) null else Value{ .int = @rem(lhs.int, rhs.int) },
@@ -1093,44 +1121,114 @@ fn foldBinOp(op: Op, lhs: Value, rhs: Value) ?Value {
 
 // ── Module-level wrapper functions (delegate to g_state methods) ──────────────
 
-pub fn setCol(col: u32) void { g_state.setCol(col); }
-pub fn emitByte(b: u8, line: u32) !void { return g_state.emitByte(b, line); }
-pub fn emitOp(op: Op, line: u32) !void { return g_state.emitOp(op, line); }
-pub fn emitCall(argc: u8, line: u32) !void { return g_state.emitCall(argc, line); }
-pub fn emitCallSpread(argc: u8, spread_n: u8, line: u32) !void { return g_state.emitCallSpread(argc, spread_n, line); }
-pub fn emit2(a: u8, b: u8, line: u32) !void { return g_state.emit2(a, b, line); }
-pub fn emitConstIdx(op: Op, idx: u16, line: u32) !void { return g_state.emitConstIdx(op, idx, line); }
-pub fn emitOpConst(op: Op, v: Value, line: u32) !void { return g_state.emitOpConst(op, v, line); }
-pub fn emitBinOpFused(op: Op, line: u32) !void { return g_state.emitBinOpFused(op, line); }
-pub fn internStr(s: []const u8) !*const StringSlice { return g_state.internStr(s); }
-pub fn addStringConst(s: []const u8) !u16 { return g_state.addStringConst(s); }
-pub fn emitOpStringConst(op: Op, s: []const u8, line: u32) !void { return g_state.emitOpStringConst(op, s, line); }
-pub fn emitStringConst(s: []const u8, line: u32) !void { return g_state.emitStringConst(s, line); }
-pub fn addConst(v: Value) !u16 { return g_state.addConst(v); }
-pub fn emitConst(v: Value, line: u32) !void { return g_state.emitConst(v, line); }
-pub fn patchByte(offset: usize, val: u8) void { g_state.patchByte(offset, val); }
-pub fn emitGetGlobal(name: []const u8, line: u32) !void { return g_state.emitGetGlobal(name, line); }
-pub fn emitGetGlobalIdx(idx: u16, line: u32) !void { return g_state.emitGetGlobalIdx(idx, line); }
-pub fn emitSetGlobal(name: []const u8, line: u32) !void { return g_state.emitSetGlobal(name, line); }
-pub fn emitGetField(name: []const u8, line: u32) !void { return g_state.emitGetField(name, line); }
-pub fn emitSetField(name: []const u8, line: u32) !void { return g_state.emitSetField(name, line); }
-pub fn emitInvokeMethod(name: []const u8, argc: u8, line: u32) !void { return g_state.emitInvokeMethod(name, argc, line); }
-pub fn emitDeferInvokeMethod(name: []const u8, argc: u8, line: u32) !void { return g_state.emitDeferInvokeMethod(name, argc, line); }
-pub fn emitJump(op: Op, line: u32) !usize { return g_state.emitJump(op, line); }
-pub fn patchJump(offset: usize) !void { return g_state.patchJump(offset); }
-pub fn emitLoop(loop_start: usize, line: u32) !void { return g_state.emitLoop(loop_start, line); }
-pub fn markStdCallPatchPos() void { g_state.markStdCallPatchPos(); }
-pub fn stdCallPatchPos() ?usize { return g_state.stdCallPatchPos(); }
-pub fn clearStdCallPatchPos() void { g_state.clearStdCallPatchPos(); }
-pub fn truncateTo(pos: usize) void { g_state.truncateTo(pos); }
-pub fn deleteCodeRange(start: usize, len: usize) void { g_state.deleteCodeRange(start, len); }
+pub fn setCol(col: u32) void {
+    g_state.setCol(col);
+}
+pub fn emitByte(b: u8, line: u32) !void {
+    return g_state.emitByte(b, line);
+}
+pub fn emitOp(op: Op, line: u32) !void {
+    return g_state.emitOp(op, line);
+}
+pub fn emitCall(argc: u8, line: u32) !void {
+    return g_state.emitCall(argc, line);
+}
+pub fn emitCallSpread(argc: u8, spread_n: u8, line: u32) !void {
+    return g_state.emitCallSpread(argc, spread_n, line);
+}
+pub fn emit2(a: u8, b: u8, line: u32) !void {
+    return g_state.emit2(a, b, line);
+}
+pub fn emitConstIdx(op: Op, idx: u16, line: u32) !void {
+    return g_state.emitConstIdx(op, idx, line);
+}
+pub fn emitOpConst(op: Op, v: Value, line: u32) !void {
+    return g_state.emitOpConst(op, v, line);
+}
+pub fn emitBinOpFused(op: Op, line: u32) !void {
+    return g_state.emitBinOpFused(op, line);
+}
+pub fn internStr(s: []const u8) !*const StringSlice {
+    return g_state.internStr(s);
+}
+pub fn addStringConst(s: []const u8) !u16 {
+    return g_state.addStringConst(s);
+}
+pub fn emitOpStringConst(op: Op, s: []const u8, line: u32) !void {
+    return g_state.emitOpStringConst(op, s, line);
+}
+pub fn emitStringConst(s: []const u8, line: u32) !void {
+    return g_state.emitStringConst(s, line);
+}
+pub fn addConst(v: Value) !u16 {
+    return g_state.addConst(v);
+}
+pub fn emitConst(v: Value, line: u32) !void {
+    return g_state.emitConst(v, line);
+}
+pub fn patchByte(offset: usize, val: u8) void {
+    g_state.patchByte(offset, val);
+}
+pub fn emitGetGlobal(name: []const u8, line: u32) !void {
+    return g_state.emitGetGlobal(name, line);
+}
+pub fn emitGetGlobalIdx(idx: u16, line: u32) !void {
+    return g_state.emitGetGlobalIdx(idx, line);
+}
+pub fn emitSetGlobal(name: []const u8, line: u32) !void {
+    return g_state.emitSetGlobal(name, line);
+}
+pub fn emitGetField(name: []const u8, line: u32) !void {
+    return g_state.emitGetField(name, line);
+}
+pub fn emitSetField(name: []const u8, line: u32) !void {
+    return g_state.emitSetField(name, line);
+}
+pub fn emitInvokeMethod(name: []const u8, argc: u8, line: u32) !void {
+    return g_state.emitInvokeMethod(name, argc, line);
+}
+pub fn emitDeferInvokeMethod(name: []const u8, argc: u8, line: u32) !void {
+    return g_state.emitDeferInvokeMethod(name, argc, line);
+}
+pub fn emitJump(op: Op, line: u32) !usize {
+    return g_state.emitJump(op, line);
+}
+pub fn patchJump(offset: usize) !void {
+    return g_state.patchJump(offset);
+}
+pub fn emitLoop(loop_start: usize, line: u32) !void {
+    return g_state.emitLoop(loop_start, line);
+}
+pub fn markStdCallPatchPos() void {
+    g_state.markStdCallPatchPos();
+}
+pub fn stdCallPatchPos() ?usize {
+    return g_state.stdCallPatchPos();
+}
+pub fn clearStdCallPatchPos() void {
+    g_state.clearStdCallPatchPos();
+}
+pub fn truncateTo(pos: usize) void {
+    g_state.truncateTo(pos);
+}
+pub fn deleteCodeRange(start: usize, len: usize) void {
+    g_state.deleteCodeRange(start, len);
+}
 
 // ── VM/verifier-only functions (unchanged, use g_state directly) ──────────────
 
-pub fn constAt(i: usize) !Value { return g_state.constAt(i); }
-pub fn addModuleBoundary(path: []const u8) void { g_state.addModuleBoundary(path); }
+pub fn constAt(i: usize) !Value {
+    return g_state.constAt(i);
+}
+pub fn addModuleBoundary(path: []const u8) void {
+    g_state.addModuleBoundary(path);
+}
 
 pub const DecodedInstruction = chunk_decoder.DecodedInstruction;
 
-pub fn decodeAt(pos: usize) !DecodedInstruction { return g_state.decodeAt(pos); }
-pub fn verify() !void { return g_state.verify(); }
+pub fn decodeAt(pos: usize) !DecodedInstruction {
+    return g_state.decodeAt(pos);
+}
+pub fn verify() !void {
+    return g_state.verify();
+}

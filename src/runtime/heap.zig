@@ -824,31 +824,64 @@ pub const State = struct {
             }
             if (depth == 0) continue;
             if (!first) {
-                if (pos < buf.len) { buf[pos] = ','; pos += 1; }
+                if (pos < buf.len) {
+                    buf[pos] = ',';
+                    pos += 1;
+                }
             }
             first = false;
             // write "ci=N:depth"
             const prefix = "ci=";
-            for (prefix) |c| { if (pos < buf.len) { buf[pos] = c; pos += 1; } }
+            for (prefix) |c| {
+                if (pos < buf.len) {
+                    buf[pos] = c;
+                    pos += 1;
+                }
+            }
             // ci index as decimal
             var tmp: [4]u8 = undefined;
             var n: usize = ci;
             var tlen: usize = 0;
-            if (n == 0) { tmp[0] = '0'; tlen = 1; } else {
-                while (n > 0) : (n /= 10) { tmp[tlen] = @intCast('0' + n % 10); tlen += 1; }
+            if (n == 0) {
+                tmp[0] = '0';
+                tlen = 1;
+            } else {
+                while (n > 0) : (n /= 10) {
+                    tmp[tlen] = @intCast('0' + n % 10);
+                    tlen += 1;
+                }
                 std.mem.reverse(u8, tmp[0..tlen]);
             }
-            for (tmp[0..tlen]) |c| { if (pos < buf.len) { buf[pos] = c; pos += 1; } }
-            if (pos < buf.len) { buf[pos] = ':'; pos += 1; }
+            for (tmp[0..tlen]) |c| {
+                if (pos < buf.len) {
+                    buf[pos] = c;
+                    pos += 1;
+                }
+            }
+            if (pos < buf.len) {
+                buf[pos] = ':';
+                pos += 1;
+            }
             // depth as decimal
             var d: usize = depth;
             var dlen: usize = 0;
             var dtmp: [8]u8 = undefined;
-            if (d == 0) { dtmp[0] = '0'; dlen = 1; } else {
-                while (d > 0) : (d /= 10) { dtmp[dlen] = @intCast('0' + d % 10); dlen += 1; }
+            if (d == 0) {
+                dtmp[0] = '0';
+                dlen = 1;
+            } else {
+                while (d > 0) : (d /= 10) {
+                    dtmp[dlen] = @intCast('0' + d % 10);
+                    dlen += 1;
+                }
                 std.mem.reverse(u8, dtmp[0..dlen]);
             }
-            for (dtmp[0..dlen]) |c| { if (pos < buf.len) { buf[pos] = c; pos += 1; } }
+            for (dtmp[0..dlen]) |c| {
+                if (pos < buf.len) {
+                    buf[pos] = c;
+                    pos += 1;
+                }
+            }
         }
         return buf[0..pos];
     }
@@ -868,8 +901,9 @@ pub fn setActive(state: *State) void {
     if (state.obj_pool.len > 0) val_mod.obj_pool_ptr = state.obj_pool.ptr;
 }
 
-
-pub fn reset() void { g_state.reset(); }
+pub fn reset() void {
+    g_state.reset();
+}
 
 // Largest single managed allocation the active heap supports.
 
@@ -877,45 +911,65 @@ pub fn reset() void { g_state.reset(); }
 // slab free list for the class has no available block). Callers can use this
 // to decide whether to run GC proactively before a large allocation.
 
-pub fn bump(comptime T: type, n: usize) ?[*]T { return g_state.bump(T, n); }
+pub fn bump(comptime T: type, n: usize) ?[*]T {
+    return g_state.bump(T, n);
+}
 
-pub fn allocBytesManaged(n: usize) ?[]u8 { return g_state.allocBytesManaged(n); }
+pub fn allocBytesManaged(n: usize) ?[]u8 {
+    return g_state.allocBytesManaged(n);
+}
 
-pub fn freeBytesManaged(buf: []u8) void { g_state.freeBytesManaged(buf); }
+pub fn freeBytesManaged(buf: []u8) void {
+    g_state.freeBytesManaged(buf);
+}
 
-
-
-pub fn allocObject() ?*Object { return g_state.allocObject(); }
+pub fn allocObject() ?*Object {
+    return g_state.allocObject();
+}
 
 // Returns the object pool index (0..maxObjects-1) or 0xFFFF if ptr is not in the pool.
-pub fn objectPoolIndex(ptr: *Object) u16 { return g_state.objectPoolIndex(ptr); }
+pub fn objectPoolIndex(ptr: *Object) u16 {
+    return g_state.objectPoolIndex(ptr);
+}
 
 // Returns a pointer to the object at the given pool index.
 
-pub fn markObject(ptr: *Object) void { g_state.markObject(ptr); }
+pub fn markObject(ptr: *Object) void {
+    g_state.markObject(ptr);
+}
 
+pub fn isObjectLive(ptr: *Object) bool {
+    return g_state.isObjectLive(ptr);
+}
 
-pub fn isObjectLive(ptr: *Object) bool { return g_state.isObjectLive(ptr); }
+pub fn sweepObjects() void {
+    g_state.sweepObjects();
+}
 
-pub fn sweepObjects() void { g_state.sweepObjects(); }
-
-pub fn liveObjectCount() usize { return g_state.liveObjectCount(); }
-
+pub fn liveObjectCount() usize {
+    return g_state.liveObjectCount();
+}
 
 // Returns total bytes sitting in free lists across all classes.
 
 // Returns total free bytes in free lists and the largest single free block.
-pub fn fragmentationInfo() FragmentationInfo { return g_state.fragmentationInfo(); }
+pub fn fragmentationInfo() FragmentationInfo {
+    return g_state.fragmentationInfo();
+}
 
 // Collects all free blocks from all classes, sorts by address, merges
 // adjacent blocks, and rebuilds the free lists with the largest possible
 // class blocks. This recovers fragmentation where adjacent free blocks of
 // different classes prevent buddy coalescing.
-pub fn defragmentFreeLists() void { g_state.defragmentFreeLists(); }
+pub fn defragmentFreeLists() void {
+    g_state.defragmentFreeLists();
+}
 
 // Move all live managed allocations to a contiguous region at managed_start,
 // then reset the bump pointer so all freed space forms one contiguous block.
-pub fn compactManagedHeap() void { g_state.compactManagedHeap(); }
+pub fn compactManagedHeap() void {
+    g_state.compactManagedHeap();
+}
 
 // Writes a compact free-list summary: "ci=N:depth,..." for non-empty classes.
 // buf must be large enough; returns the slice written.
@@ -979,26 +1033,26 @@ fn isManagedAddr(self: *const State, addr: usize) bool {
 
 fn compactCountBlocks(self: *const State, obj: *const Object) usize {
     return switch (obj.*) {
-        .dyn_string      => |s|  if (s.len > 0) 1 else 0,
-        .string_builder  => |sb| if (sb.buf.len > 0) 1 else 0,
-        .array_managed   => |a|  if (a.len > 0) 1 else 0,
-        .map             => |m|  if (m.len > 0) 1 else 0,
-        .map_managed     => |m|  if (m.len > 0) 1 else 0,
-        .map_hashed      => |mh| blk: {
+        .dyn_string => |s| if (s.len > 0) 1 else 0,
+        .string_builder => |sb| if (sb.buf.len > 0) 1 else 0,
+        .array_managed => |a| if (a.len > 0) 1 else 0,
+        .map => |m| if (m.len > 0) 1 else 0,
+        .map_managed => |m| if (m.len > 0) 1 else 0,
+        .map_hashed => |mh| blk: {
             var n: usize = 0;
             if (mh.entries.len > 0) n += 1;
             if (mh.buckets.len > 0) n += 1;
             break :blk n;
         },
         .struct_instance => |si| if (si.fields.len > 0) 1 else 0,
-        .struct_type     => |st| if (st.fields.len > 0 and isManagedAddr(self, @intFromPtr(st.fields.ptr))) 1 else 0,
-        .variant_value   => |vv| blk: {
+        .struct_type => |st| if (st.fields.len > 0 and isManagedAddr(self, @intFromPtr(st.fields.ptr))) 1 else 0,
+        .variant_value => |vv| blk: {
             var n: usize = 0;
             if (vv.arm_fields.len > 0) n += 1;
             if (vv.shared_values.len > 0) n += 1;
             break :blk n;
         },
-        .bigint          => |bi| if (bi.limbs.len > 0) 1 else 0,
+        .bigint => |bi| if (bi.limbs.len > 0) 1 else 0,
         else => 0,
     };
 }

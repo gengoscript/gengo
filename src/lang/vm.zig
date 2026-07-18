@@ -175,7 +175,10 @@ fn valueAsNumberForOp(ctx: VMContext, v: Value, other: Value, op: []const u8) !f
 // Ordering comparisons follow the same strictness as arithmetic: raw int
 // and float do not mix (Ada/Go draw this line at typed values too).
 fn checkComparableNumeric(ctx: VMContext, a: Value, b: Value, op: []const u8) !void {
-    _ = ctx; _ = a; _ = b; _ = op;
+    _ = ctx;
+    _ = a;
+    _ = b;
+    _ = op;
     // int and float are compatible for ordering comparisons: the int is widened to float.
     // Non-numeric types are caught downstream by valueAsNumberForCompare.
 }
@@ -426,8 +429,8 @@ fn pushNumericResultWithCarrier(ctx: VMContext, a: Value, b: Value, n: f64, tag:
 }
 
 fn getShiftArgs(ctx: VMContext, op: []const u8) !struct { a: Value, b: Value, an: i64, shift: u6 } {
-    const b = try ctx.vs.vmPop();
-    const a = try ctx.vs.vmPop();
+    const b = ctx.vs.vmPopU();
+    const a = ctx.vs.vmPopU();
     const an = try valueAsIntForOp(ctx, a, b, op);
     const bn = try valueAsIntForOp(ctx, b, a, op);
     if (bn < 0) return error.RangeError;
@@ -925,21 +928,21 @@ fn tryInlineGetGlobal(ctx: VMContext) !void {
 fn doReturn(ctx: VMContext, retval: Value) !bool {
     const fi = ctx.vs.frame_top - 1;
     if (canReturnFast(ctx, fi, retval)) {
-        try doReturnFast(ctx, fi, retval);
-        if (ctx.vs.call_depth_target) |d| {
-            if (ctx.vs.frame_top == d) return true;
-        }
+        doReturnFast(ctx, fi, retval);
+        if (ctx.vs.frame_top == ctx.vs.call_depth_target) return true;
         return false;
     }
     return try retSlowPath(ctx, retval);
 }
 
-fn doReturnFast(ctx: VMContext, fi: usize, retval: Value) !void {
+fn doReturnFast(ctx: VMContext, fi: usize, retval: Value) void {
     const frame = &ctx.vs.frames[fi];
     ctx.vs.frame_top = fi;
     ctx.vs.stack_top = if (frame.base > 0) frame.base - 1 else 0;
     ctx.vs.ip = frame.ret_ip;
-    try ctx.vs.vmPush(retval);
+    // In bounds without a check: the result lands at most where the callee
+    // function value already sat (base - 1), inside occupied stack.
+    ctx.vs.vmPushU(retval);
 }
 
 fn readUpvalueCell(ctx: VMContext, idx: usize) !*Object {
@@ -962,6 +965,10 @@ fn enterFunctionFrameWarm(ctx: VMContext, f: @import("value.zig").FuncObj, func_
     }
     if (f.has_typed_params) try vmtyp.enforcePrimitiveFuncArgTypes(ctx, f, argc);
     if (ctx.vs.frame_top >= ctx.vs.frames.len) return error.CallStackOverflow;
+    // One capacity check for the whole body: the verifier proved no path
+    // exceeds f.max_stack slots above the entry stack_top, so opcode handlers
+    // may use unchecked stack ops inside this frame.
+    if (ctx.vs.stack_top + f.max_stack > ctx.vs.stack.len) return error.StackOverflow;
     ctx.vs.frames[ctx.vs.frame_top] = .{
         .ret_ip = @intCast(ctx.vs.ip),
         .base = @intCast(ctx.vs.stack_top - f.arity),
@@ -1020,6 +1027,8 @@ fn enterFunctionFrame(ctx: VMContext, f: @import("value.zig").FuncObj, func_obj:
     if (f.has_typed_params) try vmtyp.enforceFuncArgTypes(ctx, f, effective_argc);
     try prepareVariadicCall(ctx, f, effective_argc);
     if (ctx.vs.frame_top >= ctx.vs.frames.len) return error.CallStackOverflow;
+    // See enterFunctionFrameWarm: verifier-proved bound, checked once per call.
+    if (ctx.vs.stack_top + f.max_stack > ctx.vs.stack.len) return error.StackOverflow;
     ctx.vs.frames[ctx.vs.frame_top] = .{
         .ret_ip = @intCast(ctx.vs.ip),
         .base = @intCast(ctx.vs.stack_top - f.arity),
@@ -1034,14 +1043,20 @@ fn enterFunctionFrame(ctx: VMContext, f: @import("value.zig").FuncObj, func_obj:
     ctx.vs.ip = f.ip;
 }
 
+// Unchecked: every caller is an opcode handler whose stackEffect declares
+// pop 2 / push 1, so the verifier proved depth >= 2 and capacity for the push.
 inline fn pop2push1(ctx: VMContext, v: Value) !void {
-    _ = try ctx.vs.vmPop();
-    _ = try ctx.vs.vmPop();
-    try ctx.vs.vmPush(v);
+    _ = ctx.vs.vmPopU();
+    _ = ctx.vs.vmPopU();
+    ctx.vs.vmPushU(v);
 }
 
 // noinline keeps this off the hot dispatch loop's register-allocation budget.
-noinline fn performCallIC(ctx: VMContext, argc: u8, ic_base: usize, ic_slot: u16) !void {
+// Warm path inline at the dispatch site: an IC hit costs a pointer compare
+// and frame entry, with no native call/ret or argument spill. The miss path
+// stays outlined so its IC-patching machinery doesn't bloat the ~7 fused
+// call-op instantiations that inline this.
+inline fn performCallIC(ctx: VMContext, argc: u8, ic_base: usize, ic_slot: u16) !void {
     if (ctx.vs.stack_top < @as(usize, argc) + 1) return error.StackUnderflow;
     const func_val = ctx.vs.stack[ctx.vs.stack_top - argc - 1];
     if (func_val == .object) {
@@ -1054,6 +1069,14 @@ noinline fn performCallIC(ctx: VMContext, argc: u8, ic_base: usize, ic_slot: u16
                 else => performCall(ctx, argc),
             };
         }
+    }
+    return performCallColdIC(ctx, argc, ic_base, ic_slot);
+}
+
+noinline fn performCallColdIC(ctx: VMContext, argc: u8, ic_base: usize, ic_slot: u16) !void {
+    const func_val = ctx.vs.stack[ctx.vs.stack_top - argc - 1];
+    if (func_val == .object) {
+        const obj = func_val.object;
         try performCall(ctx, argc);
         // Cold path: warm the IC. Division happens once per call site.
         if (ic_slot == 0xFFFF) {
@@ -1244,6 +1267,8 @@ fn tryTailCall(ctx: VMContext, argc: u8) !bool {
     frame.closure = closure;
     frame.func_obj = f_obj;
     ctx.vs.stack_top = frame.base + argc;
+    // Reused frame, new body: re-establish the verifier-proved stack bound.
+    if (ctx.vs.stack_top + f.max_stack > ctx.vs.stack.len) return error.StackOverflow;
     ctx.vs.ip = f.ip;
     return true;
 }
@@ -1431,9 +1456,7 @@ fn retSlowPath(ctx: VMContext, retval_in: Value) !bool {
                 ctx.vs.stack_top = if (frame_base > 0) frame_base - 1 else 0;
                 ctx.vs.ip = frame_ret_ip;
                 for (0..nrc) |ri| try ctx.vs.vmPush(spread_vals[ri]);
-                if (ctx.vs.call_depth_target) |d| {
-                    if (ctx.vs.frame_top == d) return true;
-                }
+                if (ctx.vs.frame_top == ctx.vs.call_depth_target) return true;
                 return false;
             }
             try ctx.vs.pushTempRoot(retval);
@@ -1447,9 +1470,7 @@ fn retSlowPath(ctx: VMContext, retval_in: Value) !bool {
     ctx.vs.stack_top = if (frame.base > 0) frame.base - 1 else 0;
     ctx.vs.ip = frame.ret_ip;
     try ctx.vs.vmPush(retval);
-    if (ctx.vs.call_depth_target) |d| {
-        if (ctx.vs.frame_top == d) return true;
-    }
+    if (ctx.vs.frame_top == ctx.vs.call_depth_target) return true;
     return false;
 }
 
@@ -2217,16 +2238,16 @@ fn runInner(ctx: VMContext) !void {
 fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
     for (0..1) |_| {
         switch (op) {
-            .constant => try ctx.vs.vmPush(try opConst(ctx)),
-            .null_val => try ctx.vs.vmPush(.null),
-            .true_val => try ctx.vs.vmPush(.{ .boolean = true }),
-            .false_val => try ctx.vs.vmPush(.{ .boolean = false }),
-            .dup => try ctx.vs.vmPush(try ctx.vs.vmPeek(0)),
+            .constant => ctx.vs.vmPushU(try opConst(ctx)),
+            .null_val => ctx.vs.vmPushU(.null),
+            .true_val => ctx.vs.vmPushU(.{ .boolean = true }),
+            .false_val => ctx.vs.vmPushU(.{ .boolean = false }),
+            .dup => ctx.vs.vmPushU(try ctx.vs.vmPeek(0)),
             .dup2 => {
                 try ctx.vs.vmPush(try ctx.vs.vmPeek(1));
                 try ctx.vs.vmPush(try ctx.vs.vmPeek(1));
             },
-            .pop => _ = try ctx.vs.vmPop(),
+            .pop => _ = ctx.vs.vmPopU(),
 
             .def_global => {
                 const name = (try opConst(ctx)).string.bytes;
@@ -2270,13 +2291,13 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
 
             .get_local => {
                 const slot = opByte(ctx);
-                try ctx.vs.vmPush(try readLocalSlot(ctx, slot));
+                ctx.vs.vmPushU(try readLocalSlot(ctx, slot));
             },
             .set_local => {
                 const slot = opByte(ctx);
                 const base = vmFrameBase(ctx);
                 if (base + slot >= ctx.vs.stack.len) return error.StackOverflow;
-                writeFrameLocal(ctx, base + slot, try ctx.vs.vmPop());
+                writeFrameLocal(ctx, base + slot, ctx.vs.vmPopU());
             },
             .get_upvalue => {
                 try ctx.vs.vmPush((try readUpvalueCell(ctx, opByte(ctx))).cell.value);
@@ -2310,13 +2331,13 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
             },
 
             .add => {
-                const b = try ctx.vs.vmPop();
-                const a = try ctx.vs.vmPop();
+                const b = ctx.vs.vmPopU();
+                const a = ctx.vs.vmPopU();
                 try ctx.vs.vmPush(try computeAddResult(ctx, a, b));
             },
             .add_int => {
-                const b = try ctx.vs.vmPop();
-                const a = try ctx.vs.vmPop();
+                const b = ctx.vs.vmPopU();
+                const a = ctx.vs.vmPopU();
                 if (a == .int and b == .int) {
                     try ctx.vs.vmPush(.{ .int = a.int + b.int });
                     continue;
@@ -2325,8 +2346,8 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 return error.TypeError;
             },
             .sub_int => {
-                const b = try ctx.vs.vmPop();
-                const a = try ctx.vs.vmPop();
+                const b = ctx.vs.vmPopU();
+                const a = ctx.vs.vmPopU();
                 if (a == .int and b == .int) {
                     try ctx.vs.vmPush(.{ .int = a.int - b.int });
                     continue;
@@ -2335,8 +2356,8 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 return error.TypeError;
             },
             .mul_int => {
-                const b = try ctx.vs.vmPop();
-                const a = try ctx.vs.vmPop();
+                const b = ctx.vs.vmPopU();
+                const a = ctx.vs.vmPopU();
                 if (a == .int and b == .int) {
                     try ctx.vs.vmPush(.{ .int = a.int * b.int });
                     continue;
@@ -2345,8 +2366,8 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 return error.TypeError;
             },
             .div_int => {
-                const b = try ctx.vs.vmPop();
-                const a = try ctx.vs.vmPop();
+                const b = ctx.vs.vmPopU();
+                const a = ctx.vs.vmPopU();
                 if (a == .int and b == .int) {
                     if (b.int == 0) {
                         ctx.vs.setRuntimeErr("division by zero", .{});
@@ -2377,8 +2398,8 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 return error.TypeError;
             },
             .eq_int => {
-                const b = try ctx.vs.vmPop();
-                const a = try ctx.vs.vmPop();
+                const b = ctx.vs.vmPopU();
+                const a = ctx.vs.vmPopU();
                 if (a == .int and b == .int) {
                     try ctx.vs.vmPush(.{ .boolean = a.int == b.int });
                     continue;
@@ -2387,8 +2408,8 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 return error.TypeError;
             },
             .ne_int => {
-                const b = try ctx.vs.vmPop();
-                const a = try ctx.vs.vmPop();
+                const b = ctx.vs.vmPopU();
+                const a = ctx.vs.vmPopU();
                 if (a == .int and b == .int) {
                     try ctx.vs.vmPush(.{ .boolean = a.int != b.int });
                     continue;
@@ -2433,8 +2454,8 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 return error.TypeError;
             },
             .lt_int => {
-                const b = try ctx.vs.vmPop();
-                const a = try ctx.vs.vmPop();
+                const b = ctx.vs.vmPopU();
+                const a = ctx.vs.vmPopU();
                 if (a == .int and b == .int) {
                     try ctx.vs.vmPush(.{ .boolean = a.int < b.int });
                     continue;
@@ -2443,8 +2464,8 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 return error.TypeError;
             },
             .le_int => {
-                const b = try ctx.vs.vmPop();
-                const a = try ctx.vs.vmPop();
+                const b = ctx.vs.vmPopU();
+                const a = ctx.vs.vmPopU();
                 if (a == .int and b == .int) {
                     try ctx.vs.vmPush(.{ .boolean = a.int <= b.int });
                     continue;
@@ -2453,8 +2474,8 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 return error.TypeError;
             },
             .gt_int => {
-                const b = try ctx.vs.vmPop();
-                const a = try ctx.vs.vmPop();
+                const b = ctx.vs.vmPopU();
+                const a = ctx.vs.vmPopU();
                 if (a == .int and b == .int) {
                     try ctx.vs.vmPush(.{ .boolean = a.int > b.int });
                     continue;
@@ -2463,8 +2484,8 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 return error.TypeError;
             },
             .ge_int => {
-                const b = try ctx.vs.vmPop();
-                const a = try ctx.vs.vmPop();
+                const b = ctx.vs.vmPopU();
+                const a = ctx.vs.vmPopU();
                 if (a == .int and b == .int) {
                     try ctx.vs.vmPush(.{ .boolean = a.int >= b.int });
                     continue;
@@ -2473,8 +2494,8 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 return error.TypeError;
             },
             .add_float => {
-                const b = try ctx.vs.vmPop();
-                const a = try ctx.vs.vmPop();
+                const b = ctx.vs.vmPopU();
+                const a = ctx.vs.vmPopU();
                 if (a == .float and b == .float) {
                     const r = a.float + b.float;
                     if (!std.math.isFinite(r)) {
@@ -2488,8 +2509,8 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 return error.TypeError;
             },
             .sub_float => {
-                const b = try ctx.vs.vmPop();
-                const a = try ctx.vs.vmPop();
+                const b = ctx.vs.vmPopU();
+                const a = ctx.vs.vmPopU();
                 if (a == .float and b == .float) {
                     const r = a.float - b.float;
                     if (!std.math.isFinite(r)) {
@@ -2503,8 +2524,8 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 return error.TypeError;
             },
             .mul_float => {
-                const b = try ctx.vs.vmPop();
-                const a = try ctx.vs.vmPop();
+                const b = ctx.vs.vmPopU();
+                const a = ctx.vs.vmPopU();
                 if (a == .float and b == .float) {
                     const r = a.float * b.float;
                     if (!std.math.isFinite(r)) {
@@ -2518,8 +2539,8 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 return error.TypeError;
             },
             .div_float => {
-                const b = try ctx.vs.vmPop();
-                const a = try ctx.vs.vmPop();
+                const b = ctx.vs.vmPopU();
+                const a = ctx.vs.vmPopU();
                 if (a == .float and b == .float) {
                     if (b.float == 0.0) {
                         ctx.vs.setRuntimeErr("division by zero", .{});
@@ -2537,8 +2558,8 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 return error.TypeError;
             },
             .eq_float => {
-                const b = try ctx.vs.vmPop();
-                const a = try ctx.vs.vmPop();
+                const b = ctx.vs.vmPopU();
+                const a = ctx.vs.vmPopU();
                 if (a == .float and b == .float) {
                     try ctx.vs.vmPush(.{ .boolean = a.float == b.float });
                     continue;
@@ -2547,8 +2568,8 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 return error.TypeError;
             },
             .ne_float => {
-                const b = try ctx.vs.vmPop();
-                const a = try ctx.vs.vmPop();
+                const b = ctx.vs.vmPopU();
+                const a = ctx.vs.vmPopU();
                 if (a == .float and b == .float) {
                     try ctx.vs.vmPush(.{ .boolean = a.float != b.float });
                     continue;
@@ -2557,8 +2578,8 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 return error.TypeError;
             },
             .lt_float => {
-                const b = try ctx.vs.vmPop();
-                const a = try ctx.vs.vmPop();
+                const b = ctx.vs.vmPopU();
+                const a = ctx.vs.vmPopU();
                 if (a == .float and b == .float) {
                     try ctx.vs.vmPush(.{ .boolean = a.float < b.float });
                     continue;
@@ -2567,8 +2588,8 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 return error.TypeError;
             },
             .gt_float => {
-                const b = try ctx.vs.vmPop();
-                const a = try ctx.vs.vmPop();
+                const b = ctx.vs.vmPopU();
+                const a = ctx.vs.vmPopU();
                 if (a == .float and b == .float) {
                     try ctx.vs.vmPush(.{ .boolean = a.float > b.float });
                     continue;
@@ -2577,8 +2598,8 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 return error.TypeError;
             },
             .le_float => {
-                const b = try ctx.vs.vmPop();
-                const a = try ctx.vs.vmPop();
+                const b = ctx.vs.vmPopU();
+                const a = ctx.vs.vmPopU();
                 if (a == .float and b == .float) {
                     try ctx.vs.vmPush(.{ .boolean = a.float <= b.float });
                     continue;
@@ -2587,8 +2608,8 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 return error.TypeError;
             },
             .ge_float => {
-                const b = try ctx.vs.vmPop();
-                const a = try ctx.vs.vmPop();
+                const b = ctx.vs.vmPopU();
+                const a = ctx.vs.vmPopU();
                 if (a == .float and b == .float) {
                     try ctx.vs.vmPush(.{ .boolean = a.float >= b.float });
                     continue;
@@ -2657,14 +2678,14 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
             .add_ret => {
                 vmperf.breakOpChain();
                 if (ctx.vs.frame_top == 0) return error.ImpossibleOpcodeState;
-                const b = try ctx.vs.vmPop();
-                const a = try ctx.vs.vmPop();
+                const b = ctx.vs.vmPopU();
+                const a = ctx.vs.vmPopU();
                 const retval = try computeAddResult(ctx, a, b);
                 if (try doReturn(ctx, retval)) return true;
             },
             .sub => {
-                const b = try ctx.vs.vmPop();
-                const a = try ctx.vs.vmPop();
+                const b = ctx.vs.vmPopU();
+                const a = ctx.vs.vmPopU();
                 if (a == .int and b == .int) {
                     try ctx.vs.vmPush(.{ .int = a.int - b.int });
                     continue;
@@ -2691,8 +2712,8 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 }
             },
             .mul => {
-                const b = try ctx.vs.vmPop();
-                const a = try ctx.vs.vmPop();
+                const b = ctx.vs.vmPopU();
+                const a = ctx.vs.vmPopU();
                 if (a == .int and b == .int) {
                     try ctx.vs.vmPush(.{ .int = a.int * b.int });
                     continue;
@@ -2722,8 +2743,8 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 }
             },
             .div => {
-                const b = try ctx.vs.vmPop();
-                const a = try ctx.vs.vmPop();
+                const b = ctx.vs.vmPopU();
+                const a = ctx.vs.vmPopU();
                 if (a == .int and b == .int) {
                     if (b.int == 0) {
                         ctx.vs.setRuntimeErr("division by zero", .{});
@@ -2774,8 +2795,8 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 }
             },
             .int_div => {
-                const b = try ctx.vs.vmPop();
-                const a = try ctx.vs.vmPop();
+                const b = ctx.vs.vmPopU();
+                const a = ctx.vs.vmPopU();
                 if (a == .int and b == .int) {
                     if (b.int == 0) {
                         ctx.vs.setRuntimeErr("division by zero", .{});
@@ -2812,8 +2833,8 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 try pushNumericResultWithCarrier(ctx, a, b, @floatFromInt(result), nop.tag, "div");
             },
             .rem => {
-                const b = try ctx.vs.vmPop();
-                const a = try ctx.vs.vmPop();
+                const b = ctx.vs.vmPopU();
+                const a = ctx.vs.vmPopU();
                 if (a == .int and b == .int) {
                     if (b.int == 0) {
                         ctx.vs.setRuntimeErr("division by zero", .{});
@@ -2843,8 +2864,8 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 try pushNumericResultWithCarrier(ctx, a, b, common.fmod(nop.an, nop.bn), nop.tag, "rem");
             },
             .mod => {
-                const b = try ctx.vs.vmPop();
-                const a = try ctx.vs.vmPop();
+                const b = ctx.vs.vmPopU();
+                const a = ctx.vs.vmPopU();
                 if (a == .int and b == .int) {
                     if (b.int == 0) {
                         ctx.vs.setRuntimeErr("division by zero", .{});
@@ -2876,8 +2897,8 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 try pushNumericResultWithCarrier(ctx, a, b, r, nop.tag, "mod");
             },
             .pow => {
-                const b = try ctx.vs.vmPop();
-                const a = try ctx.vs.vmPop();
+                const b = ctx.vs.vmPopU();
+                const a = ctx.vs.vmPopU();
                 if (vmbigint.isBigInt(a) or vmbigint.isBigInt(b)) {
                     const exp_i64: i64 = if (b == .int) b.int else if (vmbigint.isBigInt(b)) vmbigint.toInt(b) catch {
                         ctx.vs.setRuntimeErr("bigint: exponent too large", .{});
@@ -2910,18 +2931,18 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 try pushNumericResultWithCarrier(ctx, a, b, std.math.pow(f64, nop.an, nop.bn), nop.tag, "**");
             },
             .bit_and => {
-                const b = try ctx.vs.vmPop();
-                const a = try ctx.vs.vmPop();
+                const b = ctx.vs.vmPopU();
+                const a = ctx.vs.vmPopU();
                 try pushIntResultWithCarrier(ctx, a, b, try valueAsIntForOp(ctx, a, b, "&") & try valueAsIntForOp(ctx, b, a, "&"), "&");
             },
             .bit_or => {
-                const b = try ctx.vs.vmPop();
-                const a = try ctx.vs.vmPop();
+                const b = ctx.vs.vmPopU();
+                const a = ctx.vs.vmPopU();
                 try pushIntResultWithCarrier(ctx, a, b, try valueAsIntForOp(ctx, a, b, "|") | try valueAsIntForOp(ctx, b, a, "|"), "|");
             },
             .bit_xor => {
-                const b = try ctx.vs.vmPop();
-                const a = try ctx.vs.vmPop();
+                const b = ctx.vs.vmPopU();
+                const a = ctx.vs.vmPopU();
                 try pushIntResultWithCarrier(ctx, a, b, try valueAsIntForOp(ctx, a, b, "^") ^ try valueAsIntForOp(ctx, b, a, "^"), "^");
             },
             .bit_not => {
@@ -3123,15 +3144,15 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 try ctx.vs.vmPush(.{ .float = @abs(try vms.valueAsNumber(v)) });
             },
             .min => {
-                const b = try ctx.vs.vmPop();
-                const a = try ctx.vs.vmPop();
+                const b = ctx.vs.vmPopU();
+                const a = ctx.vs.vmPopU();
                 const bn = try vms.valueAsNumber(b);
                 const an = try vms.valueAsNumber(a);
                 try ctx.vs.vmPush(if (a == .int and b == .int) .{ .int = @intFromFloat(@min(an, bn)) } else .{ .float = @min(an, bn) });
             },
             .max => {
-                const b = try ctx.vs.vmPop();
-                const a = try ctx.vs.vmPop();
+                const b = ctx.vs.vmPopU();
+                const a = ctx.vs.vmPopU();
                 const bn = try vms.valueAsNumber(b);
                 const an = try vms.valueAsNumber(a);
                 try ctx.vs.vmPush(if (a == .int and b == .int) .{ .int = @intFromFloat(@max(an, bn)) } else .{ .float = @max(an, bn) });
@@ -3177,8 +3198,8 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 try ctx.vs.vmPush(.{ .boolean = !(try condAsBool(ctx, v, "'not' operand")) });
             },
             .eq => {
-                const b = try ctx.vs.vmPop();
-                const a = try ctx.vs.vmPop();
+                const b = ctx.vs.vmPopU();
+                const a = ctx.vs.vmPopU();
                 if (a == .int and b == .int) {
                     try ctx.vs.vmPush(.{ .boolean = a.int == b.int });
                     continue;
@@ -3191,8 +3212,8 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 try ctx.vs.vmPush(.{ .boolean = Value.equals(vms.unboxNamed(a), vms.unboxNamed(b)) });
             },
             .gt => {
-                const b = try ctx.vs.vmPop();
-                const a = try ctx.vs.vmPop();
+                const b = ctx.vs.vmPopU();
+                const a = ctx.vs.vmPopU();
                 if (a == .int and b == .int) {
                     try ctx.vs.vmPush(.{ .boolean = a.int > b.int });
                     continue;
@@ -3209,8 +3230,8 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 try ctx.vs.vmPush(.{ .boolean = n.an > n.bn });
             },
             .lt => {
-                const b = try ctx.vs.vmPop();
-                const a = try ctx.vs.vmPop();
+                const b = ctx.vs.vmPopU();
+                const a = ctx.vs.vmPopU();
                 if (a == .int and b == .int) {
                     try ctx.vs.vmPush(.{ .boolean = a.int < b.int });
                     continue;
@@ -3227,8 +3248,8 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 try ctx.vs.vmPush(.{ .boolean = n.an < n.bn });
             },
             .ne => {
-                const b = try ctx.vs.vmPop();
-                const a = try ctx.vs.vmPop();
+                const b = ctx.vs.vmPopU();
+                const a = ctx.vs.vmPopU();
                 if (a == .int and b == .int) {
                     try ctx.vs.vmPush(.{ .boolean = a.int != b.int });
                     continue;
@@ -3241,8 +3262,8 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 try ctx.vs.vmPush(.{ .boolean = !Value.equals(vms.unboxNamed(a), vms.unboxNamed(b)) });
             },
             .le => {
-                const b = try ctx.vs.vmPop();
-                const a = try ctx.vs.vmPop();
+                const b = ctx.vs.vmPopU();
+                const a = ctx.vs.vmPopU();
                 if (a == .int and b == .int) {
                     try ctx.vs.vmPush(.{ .boolean = a.int <= b.int });
                     continue;
@@ -3259,8 +3280,8 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 try ctx.vs.vmPush(.{ .boolean = n.an <= n.bn });
             },
             .ge => {
-                const b = try ctx.vs.vmPop();
-                const a = try ctx.vs.vmPop();
+                const b = ctx.vs.vmPopU();
+                const a = ctx.vs.vmPopU();
                 if (a == .int and b == .int) {
                     try ctx.vs.vmPush(.{ .boolean = a.int >= b.int });
                     continue;
@@ -4190,25 +4211,21 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                     ctx.vs.stack_top = if (frame_base > 0) frame_base - 1 else 0;
                     ctx.vs.ip = frame_ret_ip;
                     for (0..frame_nrc) |i| try ctx.vs.vmPush(vals[i]);
-                    if (ctx.vs.call_depth_target) |d| {
-                        if (ctx.vs.frame_top == d) {
-                            const t1 = vmperf.readTsc();
-                            if (t1 > t0) vmperf.retCycles(t1 - t0);
-                            return true;
-                        }
+                    if (ctx.vs.frame_top == ctx.vs.call_depth_target) {
+                        const t1 = vmperf.readTsc();
+                        if (t1 > t0) vmperf.retCycles(t1 - t0);
+                        return true;
                     }
                     const t1 = vmperf.readTsc();
                     if (t1 > t0) vmperf.retCycles(t1 - t0);
                     continue;
                 }
                 if (canReturnFast(ctx, fi, retval)) {
-                    try doReturnFast(ctx, fi, retval);
-                    if (ctx.vs.call_depth_target) |d| {
-                        if (ctx.vs.frame_top == d) {
-                            const t1 = vmperf.readTsc();
-                            if (t1 > t0) vmperf.retCycles(t1 - t0);
-                            return true;
-                        }
+                    doReturnFast(ctx, fi, retval);
+                    if (ctx.vs.frame_top == ctx.vs.call_depth_target) {
+                        const t1 = vmperf.readTsc();
+                        if (t1 > t0) vmperf.retCycles(t1 - t0);
+                        return true;
                     }
                     const t1 = vmperf.readTsc();
                     if (t1 > t0) vmperf.retCycles(t1 - t0);
@@ -4302,7 +4319,7 @@ fn runPanicUnwind(ctx: VMContext, orig_err: anyerror) anyerror!void {
         const _plen: u8 = @intCast(@min(_path.len, ctx.vs.panic_path.len));
         @memcpy(ctx.vs.panic_path[0.._plen], _path[0.._plen]);
         ctx.vs.panic_path_len = _plen;
-        const stop_depth = ctx.vs.call_depth_target orelse 0;
+        const stop_depth = if (ctx.vs.call_depth_target == std.math.maxInt(usize)) 0 else ctx.vs.call_depth_target;
         var depth: usize = 0;
         var fi: usize = ctx.vs.frame_top;
         while (fi > stop_depth and depth < ctx.vs.frames.len) {
@@ -4319,7 +4336,7 @@ fn runPanicUnwind(ctx: VMContext, orig_err: anyerror) anyerror!void {
         }
         ctx.vs.panic_depth = depth;
     }
-    const stop_depth = ctx.vs.call_depth_target orelse 0;
+    const stop_depth = if (ctx.vs.call_depth_target == std.math.maxInt(usize)) 0 else ctx.vs.call_depth_target;
     while (ctx.vs.frame_top > stop_depth) {
         const frame_defer_base = ctx.vs.frames[ctx.vs.frame_top - 1].defer_base;
         while (ctx.vs.defer_top > frame_defer_base) {
@@ -4387,9 +4404,7 @@ fn runPanicUnwind(ctx: VMContext, orig_err: anyerror) anyerror!void {
             // bytecode), ret_ip points past halt/end-of-code.  The ret opcode's
             // fast path already handles this via call_depth_target; mirror that here
             // so recover() works when the caller is engine_call, not just the CLI.
-            if (ctx.vs.call_depth_target) |d| {
-                if (ctx.vs.frame_top == d) return;
-            }
+            if (ctx.vs.frame_top == ctx.vs.call_depth_target) return;
             return run(ctx);
         }
         ctx.vs.frame_top -= 1;
@@ -4415,6 +4430,12 @@ pub fn run(ctx: VMContext) anyerror!void {
         }
         return runPanicUnwind(ctx, err);
     };
+    // Top-level analog of the frame-entry stack bound: the verifier proved
+    // top-level code never exceeds main_max_stack slots above the entry point.
+    if (ctx.vs.stack_top + ctx.cs.main_max_stack > ctx.vs.stack.len) {
+        ctx.vs.setRuntimeErr("stack overflow: top-level code needs {d} slots", .{ctx.cs.main_max_stack});
+        return runPanicUnwind(ctx, error.StackOverflow);
+    }
     runInner(ctx) catch |err| {
         // Runtime integrity failures hard-stop with diagnostics — they represent
         // impossible VM states in a program that already passed the verifier.

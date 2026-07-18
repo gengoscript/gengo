@@ -17,6 +17,12 @@ pub const FuncObj = struct {
     // defaults[0] corresponds to param[arity - default_count].
     defaults: []const Value = &[_]Value{},
     default_count: u8 = 0,
+    // Verifier-proved maximum operand-stack depth of the function body,
+    // relative to the frame's entry stack_top. Checked once at frame entry so
+    // the body can run unchecked stack ops. Stamped by chunk_verifier.verify;
+    // the maxInt default makes an unstamped function fail loudly at call time
+    // instead of running unprotected.
+    max_stack: u16 = std.math.maxInt(u16),
 };
 pub const MapEntry = struct { key: Value, value: Value };
 pub const MapHashedObj = struct { entries: []MapEntry, len: usize, buckets: []i32 };
@@ -46,11 +52,11 @@ pub const FieldTypeAlt = struct {
     struct_name: []const u8 = "",
     interface_name: []const u8 = "",
     named_name: []const u8 = "",
-    param_name: []const u8 = "",           // for type_param
-    elem_spec: ?FieldTypeSpec = null,      // for array[T]
-    key_spec: ?FieldTypeSpec = null,       // for map[K,V]
-    val_spec: ?FieldTypeSpec = null,       // for map[K,V]
-    func_params: ?[]const FieldTypeSpec = null,  // for func(T...) R
+    param_name: []const u8 = "", // for type_param
+    elem_spec: ?FieldTypeSpec = null, // for array[T]
+    key_spec: ?FieldTypeSpec = null, // for map[K,V]
+    val_spec: ?FieldTypeSpec = null, // for map[K,V]
+    func_params: ?[]const FieldTypeSpec = null, // for func(T...) R
     func_returns: ?[]const FieldTypeSpec = null, // for func(T...) R
     // For struct_t/variant_t alts produced inside a generic template body when some
     // type args still contain type_param alts: struct_name/named_name holds the
@@ -122,15 +128,17 @@ pub const NamedValueObj = struct { typ: *Object, value: Value };
 pub threadlocal var obj_pool_ptr: [*]Object = undefined;
 
 /// Decode a pool index to the corresponding *Object.
-pub fn objectAtIdx(idx: u16) *Object { return &obj_pool_ptr[idx]; }
+pub fn objectAtIdx(idx: u16) *Object {
+    return &obj_pool_ptr[idx];
+}
 
 pub const EnumTypeObj = struct {
     name: []const u8,
     qualified_name: []const u8,
     members: []const []const u8,
-    member_ints: ?[]const i64 = null,  // explicit representation values; null = use ordinal position
-    parent_name: ?[]const u8 = null,   // non-null marks enum subtype
-    parent: ?*Object = null,           // lazily resolved parent pointer
+    member_ints: ?[]const i64 = null, // explicit representation values; null = use ordinal position
+    parent_name: ?[]const u8 = null, // non-null marks enum subtype
+    parent: ?*Object = null, // lazily resolved parent pointer
 };
 pub const EnumValueObj = struct { typ: *Object, name: []const u8, ordinal: i64 };
 pub const EnumTypeFnKind = enum { from_int, succ, pred };
@@ -159,14 +167,14 @@ pub const IterObj = struct {
 };
 
 pub const StringBuilderObj = struct {
-    buf: []u8,   // managed bytes (full class-size block)
-    len: usize,  // bytes actually written
+    buf: []u8, // managed bytes (full class-size block)
+    len: usize, // bytes actually written
 };
 
 pub const BigIntObj = struct {
     limbs: []std.math.big.Limb, // GC-managed; .len = allocated capacity
-    len: usize,                  // live limb count
-    positive: bool,              // true = non-negative
+    len: usize, // live limb count
+    positive: bool, // true = non-negative
 
     pub fn toConst(self: BigIntObj) std.math.big.int.Const {
         return .{ .limbs = self.limbs[0..self.len], .positive = self.positive };
@@ -175,12 +183,12 @@ pub const BigIntObj = struct {
 
 pub const StringViewObj = struct {
     bytes: []const u8, // view into a dyn_string's backing buffer, or immortal bytes when source=null
-    source: ?*Object,  // keeps the parent dyn_string alive; null when bytes are immortal
+    source: ?*Object, // keeps the parent dyn_string alive; null when bytes are immortal
 };
 
 pub const ArrayViewObj = struct {
-    items: []Value,   // view into the source array object's backing storage
-    source: *Object,  // keeps the source array alive so the slice does not dangle
+    items: []Value, // view into the source array object's backing storage
+    source: *Object, // keeps the source array alive so the slice does not dangle
 };
 
 // Growable array backed by a shared array_managed Object.
@@ -235,7 +243,9 @@ pub const StringSlice = struct { bytes: []const u8 };
 /// Returns a stable pointer to a comptime-allocated StringSlice for a string
 /// literal. No pool allocation, no errors. Use for permanent static strings.
 pub fn staticSS(comptime s: []const u8) *const StringSlice {
-    const S = struct { const v: StringSlice = .{ .bytes = s }; };
+    const S = struct {
+        const v: StringSlice = .{ .bytes = s };
+    };
     return &S.v;
 }
 
@@ -272,7 +282,9 @@ pub const Value = union(VTag) {
     null,
     inline_variant: InlineVariantValue,
 
-    comptime { std.debug.assert(@sizeOf(Value) == 16); }
+    comptime {
+        std.debug.assert(@sizeOf(Value) == 16);
+    }
 
     /// Helper result type for named-value access independent of representation.
     pub const NamedRef = struct { typ: *Object, inner: Value };
@@ -478,8 +490,11 @@ pub fn formatDecimalString(raw: i64, scale: u8, buf: []u8) []u8 {
     var frac_buf: [20]u8 = undefined;
     const frac_digits = std.fmt.bufPrint(&frac_buf, "{d}", .{@as(i64, @intCast(frac_raw))}) catch "";
     const pad_len = scale - frac_digits.len;
-    for (0..pad_len) |_| { buf[pos] = '0'; pos += 1; }
-    @memcpy(buf[pos..pos + frac_digits.len], frac_digits);
+    for (0..pad_len) |_| {
+        buf[pos] = '0';
+        pos += 1;
+    }
+    @memcpy(buf[pos .. pos + frac_digits.len], frac_digits);
     pos += frac_digits.len;
     while (pos > 0 and buf[pos - 1] == '0') pos -= 1;
     if (pos > 0 and buf[pos - 1] == '.') pos -= 1;
@@ -498,9 +513,9 @@ pub fn inlineVariantPayload(iv: InlineVariantValue) Value {
     const ext: u64 = if (raw & (@as(u36, 1) << 35) != 0) wide | @as(u64, 0xFFFF_FFF0_0000_0000) else wide;
     return switch (iv.kind) {
         0 => .null,
-        1 => .{ .int     = @bitCast(ext) },
+        1 => .{ .int = @bitCast(ext) },
         2 => .{ .boolean = raw != 0 },
-        3 => .{ .rune    = @truncate(raw) },
+        3 => .{ .rune = @truncate(raw) },
         4 => .{ .decimal = @bitCast(ext) },
         else => .null,
     };
@@ -514,10 +529,10 @@ pub fn tryMakeInlineVariant(typ_idx: u12, ordinal: usize, payload: Value) ?Value
     if (ordinal > 0xFFF) return null;
     const ord12: u12 = @intCast(ordinal);
     const iv: InlineVariantValue = switch (payload) {
-        .null    => .{ .payload = 0, .ordinal = ord12, .kind = 0, .typ_idx = typ_idx },
+        .null => .{ .payload = 0, .ordinal = ord12, .kind = 0, .typ_idx = typ_idx },
         .boolean => |b| .{ .payload = if (b) 1 else 0, .ordinal = ord12, .kind = 2, .typ_idx = typ_idx },
-        .rune    => |r| .{ .payload = @intCast(r),      .ordinal = ord12, .kind = 3, .typ_idx = typ_idx },
-        .int     => |n| blk: {
+        .rune => |r| .{ .payload = @intCast(r), .ordinal = ord12, .kind = 3, .typ_idx = typ_idx },
+        .int => |n| blk: {
             if (n < -(1 << 35) or n > ((1 << 35) - 1)) return null;
             break :blk .{ .payload = @truncate(@as(u64, @bitCast(n))), .ordinal = ord12, .kind = 1, .typ_idx = typ_idx };
         },

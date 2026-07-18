@@ -234,11 +234,17 @@ const FdReader = struct {
         const self: *FdReader = @alignCast(@fieldParentPtr("interface", r));
         if (self.deadline_ms > 0) {
             const remaining = self.deadline_ms - monotonicMs();
-            if (remaining <= 0) { self.timed_out = true; return error.ReadFailed; }
+            if (remaining <= 0) {
+                self.timed_out = true;
+                return error.ReadFailed;
+            }
             const poll_ms: i32 = @intCast(@min(remaining, std.math.maxInt(i32)));
             var pfd = [1]std.posix.pollfd{.{ .fd = self.fd, .events = std.posix.POLL.IN, .revents = 0 }};
             const rc = std.posix.poll(&pfd, poll_ms) catch return error.ReadFailed;
-            if (rc == 0) { self.timed_out = true; return error.ReadFailed; }
+            if (rc == 0) {
+                self.timed_out = true;
+                return error.ReadFailed;
+            }
         }
         const dest = limit.slice(w.writableSliceGreedy(1) catch return error.WriteFailed);
         const n = std.posix.read(self.fd, dest) catch |err| {
@@ -275,18 +281,30 @@ const FdWriter = struct {
         while (remaining.len > 0) {
             if (self.deadline_ms > 0) {
                 const rem_time = self.deadline_ms - monotonicMs();
-                if (rem_time <= 0) { self.timed_out = true; return error.WriteFailed; }
+                if (rem_time <= 0) {
+                    self.timed_out = true;
+                    return error.WriteFailed;
+                }
                 const poll_ms: i32 = @intCast(@min(rem_time, std.math.maxInt(i32)));
                 var pfd = [1]std.posix.pollfd{.{ .fd = self.fd, .events = std.posix.POLL.OUT, .revents = 0 }};
                 const rc = std.posix.poll(&pfd, poll_ms) catch return error.WriteFailed;
-                if (rc == 0) { self.timed_out = true; return error.WriteFailed; }
+                if (rc == 0) {
+                    self.timed_out = true;
+                    return error.WriteFailed;
+                }
             }
             while (true) {
                 const rc = std.posix.system.write(self.fd, remaining.ptr, @min(remaining.len, max_count));
                 switch (std.posix.errno(rc)) {
-                    .SUCCESS => { remaining = remaining[@intCast(rc)..]; break; },
+                    .SUCCESS => {
+                        remaining = remaining[@intCast(rc)..];
+                        break;
+                    },
                     .INTR => continue,
-                    .AGAIN => { self.timed_out = true; return error.WriteFailed; },
+                    .AGAIN => {
+                        self.timed_out = true;
+                        return error.WriteFailed;
+                    },
                     else => return error.WriteFailed,
                 }
             }

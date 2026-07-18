@@ -167,7 +167,11 @@ fn printSourceLine(src: []const u8, line: u32, col: u32) void {
 
     var digit_count: usize = 0;
     var tmp = line;
-    if (tmp == 0) { digit_count = 1; } else { while (tmp > 0) : (tmp /= 10) digit_count += 1; }
+    if (tmp == 0) {
+        digit_count = 1;
+    } else {
+        while (tmp > 0) : (tmp /= 10) digit_count += 1;
+    }
 
     io.werr("   ");
     io.werrInt(@intCast(line));
@@ -618,21 +622,21 @@ fn runCli(argv: []const []const u8) void {
 
     const total = if (eval_source == null)
         readSource(script_path, &g_src_buf) catch |err| {
-        if (err == error.InputTooLong) {
-            io.werr("gengo: input is larger than max_input_bytes (");
-            io.werrInt(cfg.max_input_bytes);
-            io.werr("); configure a larger preset\n");
+            if (err == error.InputTooLong) {
+                io.werr("gengo: input is larger than max_input_bytes (");
+                io.werrInt(cfg.max_input_bytes);
+                io.werr("); configure a larger preset\n");
+                die(1);
+            }
+            if (script_path) |p| {
+                io.werr("gengo: cannot open: ");
+                io.werr(p);
+            } else {
+                io.werr("gengo: cannot read stdin");
+            }
+            io.werr("\n");
             die(1);
         }
-        if (script_path) |p| {
-            io.werr("gengo: cannot open: ");
-            io.werr(p);
-        } else {
-            io.werr("gengo: cannot read stdin");
-        }
-        io.werr("\n");
-        die(1);
-    }
     else
         0;
     const src: []const u8 = if (eval_source) |es| es else g_src_buf[0..total];
@@ -692,9 +696,7 @@ fn runCli(argv: []const []const u8) void {
     }
 
     runtime.runPathWithProvider(src, script_arg, .filesystem, test_mode) catch |err| {
-        vmperf.printSummary(vms.vmState().gc_runs, vms.vmState().gc_time_ns,
-            vms.vmState().alloc_object_calls, vms.vmState().alloc_managed_slice_calls,
-            vms.vmState().alloc_managed_bytes_calls);
+        vmperf.printSummary(vms.vmState().gc_runs, vms.vmState().gc_time_ns, vms.vmState().alloc_object_calls, vms.vmState().alloc_managed_slice_calls, vms.vmState().alloc_managed_bytes_calls);
 
         if (err == error.OutOfMemory) {
             if (runtime.last_compile_line != 0) {
@@ -777,9 +779,7 @@ fn runCli(argv: []const []const u8) void {
         die(1);
     };
 
-    vmperf.printSummary(vms.vmState().gc_runs, vms.vmState().gc_time_ns,
-        vms.vmState().alloc_object_calls, vms.vmState().alloc_managed_slice_calls,
-        vms.vmState().alloc_managed_bytes_calls);
+    vmperf.printSummary(vms.vmState().gc_runs, vms.vmState().gc_time_ns, vms.vmState().alloc_object_calls, vms.vmState().alloc_managed_slice_calls, vms.vmState().alloc_managed_bytes_calls);
     die(if (runtime.test_failed) 1 else 0);
 }
 

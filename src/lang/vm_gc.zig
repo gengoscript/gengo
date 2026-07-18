@@ -40,7 +40,10 @@ fn markObjectQueue(ctx: VMContext, obj: *Object) void {
 }
 
 fn markValue(ctx: VMContext, v: Value) void {
-    if (v == .inline_variant) { markObjectQueue(ctx, ctx.hs.objectAt(v.inline_variant.typ_idx)); return; }
+    if (v == .inline_variant) {
+        markObjectQueue(ctx, ctx.hs.objectAt(v.inline_variant.typ_idx));
+        return;
+    }
     if (v == .object) markObjectQueue(ctx, v.object);
 }
 
@@ -361,7 +364,7 @@ pub fn makeDynString(ctx: VMContext, s: []const u8) !Value {
 /// and must be one of: dyn_string, string_view, string_builder.
 pub fn makeDynStringFromObj(ctx: VMContext, src: *Object) !Value {
     const slen: usize = switch (src.*) {
-        .dyn_string  => |s|  s.len,
+        .dyn_string => |s| s.len,
         .string_view => |sv| sv.bytes.len,
         .string_builder => |sb| sb.len,
         else => return error.TypeError,
@@ -371,7 +374,7 @@ pub fn makeDynStringFromObj(ctx: VMContext, src: *Object) !Value {
     if (slen == 0) return .{ .object = obj };
     const buf = try vmAllocManagedBytes(ctx, slen);
     const src_bytes: []const u8 = switch (src.*) {
-        .dyn_string  => |s|  s,
+        .dyn_string => |s| s,
         .string_view => |sv| sv.bytes,
         .string_builder => |sb| sb.buf[0..sb.len],
         else => return error.TypeError,

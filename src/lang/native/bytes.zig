@@ -17,9 +17,9 @@ fn makeBinaryString(ctx: VMContext, bytes: []const u8) !Value {
 
 fn argAsI64(v: Value) !i64 {
     return switch (v) {
-        .int   => |n| n,
+        .int => |n| n,
         .float => |n| @as(i64, @intFromFloat(n)),
-        else   => error.TypeError,
+        else => error.TypeError,
     };
 }
 
@@ -31,8 +31,8 @@ fn readU16be(s: []const u8, i: usize) !i64 {
 
 fn readU32be(s: []const u8, i: usize) !i64 {
     if (i + 4 > s.len) return error.RangeError;
-    const n: u32 = (@as(u32, s[i]) << 24) | (@as(u32, s[i+1]) << 16) |
-                   (@as(u32, s[i+2]) << 8)  |  @as(u32, s[i+3]);
+    const n: u32 = (@as(u32, s[i]) << 24) | (@as(u32, s[i + 1]) << 16) |
+        (@as(u32, s[i + 2]) << 8) | @as(u32, s[i + 3]);
     return @as(i64, n);
 }
 
@@ -51,8 +51,8 @@ fn readU16le(s: []const u8, i: usize) !i64 {
 
 fn readU32le(s: []const u8, i: usize) !i64 {
     if (i + 4 > s.len) return error.RangeError;
-    const n: u32 = @as(u32, s[i]) | (@as(u32, s[i+1]) << 8) |
-                   (@as(u32, s[i+2]) << 16) | (@as(u32, s[i+3]) << 24);
+    const n: u32 = @as(u32, s[i]) | (@as(u32, s[i + 1]) << 8) |
+        (@as(u32, s[i + 2]) << 16) | (@as(u32, s[i + 3]) << 24);
     return @as(i64, n);
 }
 
@@ -97,7 +97,7 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             try ctx.vs.vmPush(.{ .object = obj });
         },
         .bytes_at => {
-            const s   = try vms.asStringValue(ctx.vs.vmTop(1));
+            const s = try vms.asStringValue(ctx.vs.vmTop(1));
             const idx = try argAsI64(ctx.vs.vmTop(0));
             if (idx < 0 or idx >= @as(i64, @intCast(s.len))) return error.RangeError;
             const b = s[@as(usize, @intCast(idx))];
@@ -112,7 +112,7 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
         .bytes_slice => {
             const src_val = ctx.vs.vmTop(2);
             const from = try argAsI64(ctx.vs.vmTop(1));
-            const to   = try argAsI64(ctx.vs.vmTop(0));
+            const to = try argAsI64(ctx.vs.vmTop(0));
             // When the source is a GC-managed string object, return a zero-copy
             // string_view instead of allocating and copying bytes.  The view keeps
             // the source object alive via its .source pointer, so the backing buffer
@@ -149,7 +149,7 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
                 }
             }
             // Slow path: static string — must copy since it has no GC object header.
-            const s    = try vms.asStringValue(src_val);
+            const s = try vms.asStringValue(src_val);
             const slen = @as(i64, @intCast(s.len));
             if (from < 0 or to < from or to > slen) return error.RangeError;
             const f = @as(usize, @intCast(from));
@@ -182,7 +182,7 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             const n: u32 = @truncate(@as(u64, @bitCast(try argAsI64(ctx.vs.vmTop(0)))) & 0xFFFFFFFF);
             const buf = [_]u8{
                 @as(u8, @intCast((n >> 24) & 0xFF)), @as(u8, @intCast((n >> 16) & 0xFF)),
-                @as(u8, @intCast((n >> 8)  & 0xFF)), @as(u8, @intCast(n & 0xFF)),
+                @as(u8, @intCast((n >> 8) & 0xFF)),  @as(u8, @intCast(n & 0xFF)),
             };
             ctx.vs.vmPopArgs(argc);
             try ctx.vs.vmPush(try makeBinaryString(ctx, &buf));
@@ -193,7 +193,7 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
                 @as(u8, @intCast((raw >> 56) & 0xFF)), @as(u8, @intCast((raw >> 48) & 0xFF)),
                 @as(u8, @intCast((raw >> 40) & 0xFF)), @as(u8, @intCast((raw >> 32) & 0xFF)),
                 @as(u8, @intCast((raw >> 24) & 0xFF)), @as(u8, @intCast((raw >> 16) & 0xFF)),
-                @as(u8, @intCast((raw >> 8)  & 0xFF)), @as(u8, @intCast(raw & 0xFF)),
+                @as(u8, @intCast((raw >> 8) & 0xFF)),  @as(u8, @intCast(raw & 0xFF)),
             };
             ctx.vs.vmPopArgs(argc);
             try ctx.vs.vmPush(try makeBinaryString(ctx, &buf));
@@ -207,8 +207,8 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
         .bytes_u32le => {
             const n: u32 = @truncate(@as(u64, @bitCast(try argAsI64(ctx.vs.vmTop(0)))) & 0xFFFFFFFF);
             const buf = [_]u8{
-                @as(u8, @intCast(n & 0xFF)),           @as(u8, @intCast((n >> 8)  & 0xFF)),
-                @as(u8, @intCast((n >> 16) & 0xFF)),   @as(u8, @intCast((n >> 24) & 0xFF)),
+                @as(u8, @intCast(n & 0xFF)),         @as(u8, @intCast((n >> 8) & 0xFF)),
+                @as(u8, @intCast((n >> 16) & 0xFF)), @as(u8, @intCast((n >> 24) & 0xFF)),
             };
             ctx.vs.vmPopArgs(argc);
             try ctx.vs.vmPush(try makeBinaryString(ctx, &buf));
@@ -216,10 +216,10 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
         .bytes_u64le => {
             const raw = @as(u64, @bitCast(try argAsI64(ctx.vs.vmTop(0))));
             const buf = [_]u8{
-                @as(u8, @intCast(raw & 0xFF)),           @as(u8, @intCast((raw >> 8)  & 0xFF)),
-                @as(u8, @intCast((raw >> 16) & 0xFF)),   @as(u8, @intCast((raw >> 24) & 0xFF)),
-                @as(u8, @intCast((raw >> 32) & 0xFF)),   @as(u8, @intCast((raw >> 40) & 0xFF)),
-                @as(u8, @intCast((raw >> 48) & 0xFF)),   @as(u8, @intCast((raw >> 56) & 0xFF)),
+                @as(u8, @intCast(raw & 0xFF)),         @as(u8, @intCast((raw >> 8) & 0xFF)),
+                @as(u8, @intCast((raw >> 16) & 0xFF)), @as(u8, @intCast((raw >> 24) & 0xFF)),
+                @as(u8, @intCast((raw >> 32) & 0xFF)), @as(u8, @intCast((raw >> 40) & 0xFF)),
+                @as(u8, @intCast((raw >> 48) & 0xFF)), @as(u8, @intCast((raw >> 56) & 0xFF)),
             };
             ctx.vs.vmPopArgs(argc);
             try ctx.vs.vmPush(try makeBinaryString(ctx, &buf));
@@ -269,33 +269,33 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
         },
         // ── Byte-level search ────────────────────────────────────────────────
         .bytes_index_of => {
-            const s   = try vms.asStringValue(ctx.vs.vmTop(1));
+            const s = try vms.asStringValue(ctx.vs.vmTop(1));
             const sub = try vms.asStringValue(ctx.vs.vmTop(0));
             const idx: i64 = if (std.mem.indexOf(u8, s, sub)) |pos| @as(i64, @intCast(pos)) else -1;
             ctx.vs.vmPopArgs(argc);
             try ctx.vs.vmPush(.{ .int = idx });
         },
         .bytes_contains => {
-            const s   = try vms.asStringValue(ctx.vs.vmTop(1));
+            const s = try vms.asStringValue(ctx.vs.vmTop(1));
             const sub = try vms.asStringValue(ctx.vs.vmTop(0));
             const found = std.mem.indexOf(u8, s, sub) != null;
             ctx.vs.vmPopArgs(argc);
             try ctx.vs.vmPush(.{ .boolean = found });
         },
         .bytes_starts_with => {
-            const s   = try vms.asStringValue(ctx.vs.vmTop(1));
+            const s = try vms.asStringValue(ctx.vs.vmTop(1));
             const pre = try vms.asStringValue(ctx.vs.vmTop(0));
             ctx.vs.vmPopArgs(argc);
             try ctx.vs.vmPush(.{ .boolean = std.mem.startsWith(u8, s, pre) });
         },
         .bytes_ends_with => {
-            const s   = try vms.asStringValue(ctx.vs.vmTop(1));
+            const s = try vms.asStringValue(ctx.vs.vmTop(1));
             const suf = try vms.asStringValue(ctx.vs.vmTop(0));
             ctx.vs.vmPopArgs(argc);
             try ctx.vs.vmPush(.{ .boolean = std.mem.endsWith(u8, s, suf) });
         },
         .bytes_count => {
-            const s   = try vms.asStringValue(ctx.vs.vmTop(1));
+            const s = try vms.asStringValue(ctx.vs.vmTop(1));
             const sub = try vms.asStringValue(ctx.vs.vmTop(0));
             var cnt: i64 = 0;
             if (sub.len == 0) {
@@ -311,7 +311,7 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             try ctx.vs.vmPush(.{ .int = cnt });
         },
         .bytes_replace => {
-            const s     = try vms.asStringValue(ctx.vs.vmTop(2));
+            const s = try vms.asStringValue(ctx.vs.vmTop(2));
             const old_s = try vms.asStringValue(ctx.vs.vmTop(1));
             const new_s = try vms.asStringValue(ctx.vs.vmTop(0));
             if (old_s.len == 0) {
@@ -352,8 +352,8 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
         .bytes_f32be => {
             const fval: f32 = @floatCast(switch (ctx.vs.vmTop(0)) {
                 .float => |n| n,
-                .int   => |n| @as(f64, @floatFromInt(n)),
-                else   => return error.TypeError,
+                .int => |n| @as(f64, @floatFromInt(n)),
+                else => return error.TypeError,
             });
             const bits = @as(u32, @bitCast(fval));
             const buf = [_]u8{
@@ -366,8 +366,8 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
         .bytes_f32le => {
             const fval: f32 = @floatCast(switch (ctx.vs.vmTop(0)) {
                 .float => |n| n,
-                .int   => |n| @as(f64, @floatFromInt(n)),
-                else   => return error.TypeError,
+                .int => |n| @as(f64, @floatFromInt(n)),
+                else => return error.TypeError,
             });
             const bits = @as(u32, @bitCast(fval));
             const buf = [_]u8{
@@ -380,8 +380,8 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
         .bytes_f64be => {
             const fval: f64 = switch (ctx.vs.vmTop(0)) {
                 .float => |n| n,
-                .int   => |n| @floatFromInt(n),
-                else   => return error.TypeError,
+                .int => |n| @floatFromInt(n),
+                else => return error.TypeError,
             };
             const bits = @as(u64, @bitCast(fval));
             const buf = [_]u8{
@@ -396,8 +396,8 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
         .bytes_f64le => {
             const fval: f64 = switch (ctx.vs.vmTop(0)) {
                 .float => |n| n,
-                .int   => |n| @floatFromInt(n),
-                else   => return error.TypeError,
+                .int => |n| @floatFromInt(n),
+                else => return error.TypeError,
             };
             const bits = @as(u64, @bitCast(fval));
             const buf = [_]u8{
@@ -414,8 +414,8 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             const s = try vms.asStringValue(ctx.vs.vmTop(1));
             const i = @as(usize, @intCast(try argAsI64(ctx.vs.vmTop(0))));
             if (i + 4 > s.len) return error.RangeError;
-            const bits: u32 = (@as(u32, s[i]) << 24) | (@as(u32, s[i+1]) << 16) |
-                              (@as(u32, s[i+2]) << 8)  |  @as(u32, s[i+3]);
+            const bits: u32 = (@as(u32, s[i]) << 24) | (@as(u32, s[i + 1]) << 16) |
+                (@as(u32, s[i + 2]) << 8) | @as(u32, s[i + 3]);
             ctx.vs.vmPopArgs(argc);
             try ctx.vs.vmPush(.{ .float = @as(f64, @as(f32, @bitCast(bits))) });
         },
@@ -423,8 +423,8 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             const s = try vms.asStringValue(ctx.vs.vmTop(1));
             const i = @as(usize, @intCast(try argAsI64(ctx.vs.vmTop(0))));
             if (i + 4 > s.len) return error.RangeError;
-            const bits: u32 = @as(u32, s[i]) | (@as(u32, s[i+1]) << 8) |
-                              (@as(u32, s[i+2]) << 16) | (@as(u32, s[i+3]) << 24);
+            const bits: u32 = @as(u32, s[i]) | (@as(u32, s[i + 1]) << 8) |
+                (@as(u32, s[i + 2]) << 16) | (@as(u32, s[i + 3]) << 24);
             ctx.vs.vmPopArgs(argc);
             try ctx.vs.vmPush(.{ .float = @as(f64, @as(f32, @bitCast(bits))) });
         },
