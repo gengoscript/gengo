@@ -958,13 +958,15 @@ fn readUpvalueCell(ctx: VMContext, idx: usize) !*Object {
 // Warm call path: IC confirmed same callee.
 // Arity/default/variadic checks are only skipped for call sites we explicitly
 // decided were safe to cache in performCallIC.
-fn enterFunctionFrameWarm(ctx: VMContext, f: @import("value.zig").FuncObj, func_obj: *Object, closure: ?*Object, argc: u8) !void {
+fn enterFunctionFrameWarm(ctx: VMContext, f: @import("value.zig").FuncObj, func_obj: *Object, closure: ?*Object, argc: u8, args_preverified: bool) !void {
     // GC pool-slot reuse can put a different function at the cached index.
     // Re-verify the IC invariants before trusting f.arity for the frame base.
     if (f.arity != argc or f.is_variadic or f.default_count != 0) {
         return enterFunctionFrame(ctx, f, func_obj, closure, argc);
     }
-    if (f.has_typed_params) try vmtyp.enforcePrimitiveFuncArgTypes(ctx, f, argc);
+    // Skipped when the compiler proved every arg's type at the call site
+    // (the 0x80 argc flag) — worth ~25% on call-dense code like fib.
+    if (f.has_typed_params and !args_preverified) try vmtyp.enforcePrimitiveFuncArgTypes(ctx, f, argc);
     if (ctx.vs.frame_top >= ctx.vs.frames.len) return error.CallStackOverflow;
     // One capacity check for the whole body: the verifier proved no path
     // exceeds f.max_stack slots above the entry stack_top, so opcode handlers
@@ -1057,7 +1059,7 @@ inline fn pop2push1(ctx: VMContext, v: Value) !void {
 // and frame entry, with no native call/ret or argument spill. The miss path
 // stays outlined so its IC-patching machinery doesn't bloat the ~7 fused
 // call-op instantiations that inline this.
-inline fn performCallIC(ctx: VMContext, argc: u8, ic_base: usize, ic_slot: u16) !void {
+inline fn performCallIC(ctx: VMContext, argc: u8, args_preverified: bool, ic_base: usize, ic_slot: u16) !void {
     if (ctx.vs.stack_top < @as(usize, argc) + 1) return error.StackUnderflow;
     const func_val = ctx.vs.stack[ctx.vs.stack_top - argc - 1];
     if (func_val == .object) {
@@ -1065,8 +1067,8 @@ inline fn performCallIC(ctx: VMContext, argc: u8, ic_base: usize, ic_slot: u16) 
         // Warm path: pointer comparison via objectAt (&obj_pool[idx]) — no division.
         if (ic_slot != 0xFFFF and ctx.hs.objectAt(ic_slot) == obj) {
             return switch (obj.*) {
-                .function => |f| enterFunctionFrameWarm(ctx, f, obj, null, argc),
-                .closure => |cl| enterFunctionFrameWarm(ctx, cl.func.function, cl.func, obj, argc),
+                .function => |f| enterFunctionFrameWarm(ctx, f, obj, null, argc, args_preverified),
+                .closure => |cl| enterFunctionFrameWarm(ctx, cl.func.function, cl.func, obj, argc, args_preverified),
                 else => performCall(ctx, argc),
             };
         }
@@ -1242,7 +1244,7 @@ fn writeFrameLocal(ctx: VMContext, abs_slot: usize, v: Value) void {
     }
 }
 
-fn tryTailCall(ctx: VMContext, argc: u8) !bool {
+fn tryTailCall(ctx: VMContext, argc: u8, args_preverified: bool) !bool {
     if (ctx.vs.frame_top == 0) return false;
     if (ctx.vs.ip >= ctx.cs.codeLen()) return false;
     const next_op: Op = @enumFromInt(ctx.cs.codeByteAt(ctx.vs.ip));
@@ -1263,7 +1265,7 @@ fn tryTailCall(ctx: VMContext, argc: u8) !bool {
     };
     if (f.is_variadic) return false;
     if (f.arity != argc) return false;
-    if (f.has_typed_params) try vmtyp.enforceFuncArgTypes(ctx, f, argc);
+    if (f.has_typed_params and !args_preverified) try vmtyp.enforceFuncArgTypes(ctx, f, argc);
     for (0..argc) |i| writeFrameLocal(ctx, frame.base + i, ctx.vs.stack[callee_idx + 1 + i]);
     frame.closure = closure;
     frame.func_obj = f_obj;
@@ -3389,7 +3391,10 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
             },
             .get_local_const_sub_call => {
                 const p = try readLocalSlotAndConst(ctx);
-                const argc = opByte(ctx);
+                const argc_raw = opByte(ctx);
+                // 0x80 = compiler proved every arg's runtime type check.
+                const argc = argc_raw & 0x7F;
+                const pv = (argc_raw & 0x80) != 0;
                 const ic_base = ctx.vs.ip;
                 const ic_slot: u16 = (@as(u16, ctx.cs.codeByteAt(ic_base)) << 8) | @as(u16, ctx.cs.codeByteAt(ic_base + 1));
                 ctx.vs.ip += 2;
@@ -3399,11 +3404,14 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 } else {
                     try pushSubResult(ctx, a, p.k);
                 }
-                try performCallIC(ctx, argc, ic_base, ic_slot);
+                try performCallIC(ctx, argc, pv, ic_base, ic_slot);
             },
             .get_local_const_sub_call_tail => {
                 const p = try readLocalSlotAndConst(ctx);
-                const argc = opByte(ctx);
+                const argc_raw = opByte(ctx);
+                // 0x80 = compiler proved every arg's runtime type check.
+                const argc = argc_raw & 0x7F;
+                const pv = (argc_raw & 0x80) != 0;
                 const ic_base = ctx.vs.ip;
                 const ic_slot: u16 = (@as(u16, ctx.cs.codeByteAt(ic_base)) << 8) | @as(u16, ctx.cs.codeByteAt(ic_base + 1));
                 ctx.vs.ip += 2;
@@ -3413,8 +3421,8 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 } else {
                     try pushSubResult(ctx, a, p.k);
                 }
-                if (try tryTailCall(ctx, argc)) continue;
-                try performCallIC(ctx, argc, ic_base, ic_slot);
+                if (try tryTailCall(ctx, argc, pv)) continue;
+                try performCallIC(ctx, argc, pv, ic_base, ic_slot);
             },
             .call_global_local_sub_const => {
                 const name_idx = opShort(ctx);
@@ -3422,7 +3430,9 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 const g_ic_slot: u16 = @intCast(opShort(ctx));
                 _ = opByte(ctx); // skip get_local_const_sub_call opcode byte
                 const p = try readLocalSlotAndConst(ctx);
-                const argc = opByte(ctx);
+                const argc_raw = opByte(ctx);
+                const argc = argc_raw & 0x7F;
+                const pv = (argc_raw & 0x80) != 0;
                 const c_ic_base = ctx.vs.ip;
                 const c_ic_slot: u16 = (@as(u16, ctx.cs.codeByteAt(c_ic_base)) << 8) | @as(u16, ctx.cs.codeByteAt(c_ic_base + 1));
                 ctx.vs.ip += 2;
@@ -3434,7 +3444,7 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 } else {
                     try pushSubResult(ctx, a, p.k);
                 }
-                try performCallIC(ctx, argc, c_ic_base, c_ic_slot);
+                try performCallIC(ctx, argc, pv, c_ic_base, c_ic_slot);
             },
             .call_global_local_sub_const_tail => {
                 const name_idx = opShort(ctx);
@@ -3442,7 +3452,9 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 const g_ic_slot: u16 = @intCast(opShort(ctx));
                 _ = opByte(ctx); // skip get_local_const_sub_call opcode byte
                 const p = try readLocalSlotAndConst(ctx);
-                const argc = opByte(ctx);
+                const argc_raw = opByte(ctx);
+                const argc = argc_raw & 0x7F;
+                const pv = (argc_raw & 0x80) != 0;
                 const c_ic_base = ctx.vs.ip;
                 const c_ic_slot: u16 = (@as(u16, ctx.cs.codeByteAt(c_ic_base)) << 8) | @as(u16, ctx.cs.codeByteAt(c_ic_base + 1));
                 ctx.vs.ip += 2;
@@ -3454,8 +3466,8 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 } else {
                     try pushSubResult(ctx, a, p.k);
                 }
-                if (try tryTailCall(ctx, argc)) continue;
-                try performCallIC(ctx, argc, c_ic_base, c_ic_slot);
+                if (try tryTailCall(ctx, argc, pv)) continue;
+                try performCallIC(ctx, argc, pv, c_ic_base, c_ic_slot);
             },
             .get_local_const_add => {
                 const p = try readLocalSlotAndConst(ctx);
@@ -4118,23 +4130,29 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
             },
 
             .call => {
-                const argc = opByte(ctx);
+                const argc_raw = opByte(ctx);
+                // 0x80 = compiler proved every arg's runtime type check.
+                const argc = argc_raw & 0x7F;
+                const pv = (argc_raw & 0x80) != 0;
                 const ic_base = ctx.vs.ip;
                 const ic_slot: u16 = (@as(u16, ctx.cs.codeByteAt(ic_base)) << 8) | @as(u16, ctx.cs.codeByteAt(ic_base + 1));
                 ctx.vs.ip += 2;
                 const t0 = vmperf.readTsc();
-                try performCallIC(ctx, argc, ic_base, ic_slot);
+                try performCallIC(ctx, argc, pv, ic_base, ic_slot);
                 const t1 = vmperf.readTsc();
                 if (t1 > t0) vmperf.callCycles(t1 - t0);
             },
             .call_tail => {
-                const argc = opByte(ctx);
+                const argc_raw = opByte(ctx);
+                // 0x80 = compiler proved every arg's runtime type check.
+                const argc = argc_raw & 0x7F;
+                const pv = (argc_raw & 0x80) != 0;
                 const ic_base = ctx.vs.ip;
                 const ic_slot: u16 = (@as(u16, ctx.cs.codeByteAt(ic_base)) << 8) | @as(u16, ctx.cs.codeByteAt(ic_base + 1));
                 ctx.vs.ip += 2;
-                if (try tryTailCall(ctx, argc)) continue;
+                if (try tryTailCall(ctx, argc, pv)) continue;
                 const t0 = vmperf.readTsc();
-                try performCallIC(ctx, argc, ic_base, ic_slot);
+                try performCallIC(ctx, argc, pv, ic_base, ic_slot);
                 const t1 = vmperf.readTsc();
                 if (t1 > t0) vmperf.callCycles(t1 - t0);
             },
@@ -4149,7 +4167,8 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 const ic_slot: u16 = (@as(u16, ctx.cs.codeByteAt(ic_base)) << 8) | @as(u16, ctx.cs.codeByteAt(ic_base + 1));
                 ctx.vs.ip += 2;
                 const t0 = vmperf.readTsc();
-                try performCallIC(ctx, argc, ic_base, ic_slot);
+                // Spread calls are never flagged by the compiler.
+                try performCallIC(ctx, argc, false, ic_base, ic_slot);
                 const t1 = vmperf.readTsc();
                 if (t1 > t0) vmperf.callCycles(t1 - t0);
             },

@@ -394,6 +394,7 @@ pub fn namedFuncDecl(c: anytype, is_pub: bool) !void {
     errdefer c.type_param_count = saved_param_count;
 
     // current token is '('; compile as a named function for return-type enforcement
+    if (!is_generic) c.pending_func_qname = try c.qualifyGlobalName(name.src);
     _ = try c.compileFuncWithPrefix(&[_][]const u8{}, true, null);
     if (c.last_func_obj) |fo| fo.function.name = name.src;
 

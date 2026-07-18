@@ -413,6 +413,36 @@ pub fn compileFuncWithPrefix(c: anytype, prefix: []const []const u8, is_named: b
         }
     }
 
+    // Expose this declaration's signature to its own body: recursive
+    // self-calls resolve arg types (and the args-preverified call flag)
+    // through the in-progress stack, since registry registration happens
+    // only after the body compiles. pending_func_qname is set by funcDecl
+    // for non-generic `func name()` declarations only.
+    var pushed_sig = false;
+    if (c.pending_func_qname) |q| {
+        c.pending_func_qname = null;
+        if (c.in_progress_sig_count < c.in_progress_sigs.len) {
+            const sig_ptypes = c.hs.bump(FieldTypeSpec, arity) orelse return error.OutOfMemory;
+            for (sig_ptypes[0..arity], param_types[0..arity]) |*pt, s| pt.* = s;
+            var sig_dc: u8 = 0;
+            for (0..@as(usize, arity)) |pi| {
+                if (param_has_default[pi]) sig_dc += 1;
+            }
+            c.in_progress_sig_qnames[c.in_progress_sig_count] = q;
+            c.in_progress_sigs[c.in_progress_sig_count] = .{
+                .arity = arity,
+                .is_variadic = is_variadic,
+                .default_count = sig_dc,
+                .param_types = sig_ptypes[0..arity],
+            };
+            c.in_progress_sig_count += 1;
+            pushed_sig = true;
+        }
+    }
+    defer if (pushed_sig) {
+        c.in_progress_sig_count -= 1;
+    };
+
     try c.consume(.lbrace);
     const saved = c.repl_expr_ok;
     c.repl_expr_ok = false;

@@ -215,7 +215,7 @@ pub fn disassemble(cs: *const chunk.State) void {
 
             // call: [op][argc][ic_hi][ic_lo]
             .call, .call_tail => {
-                const argc = cs.codeByteAt(i);
+                const argc = cs.codeByteAt(i) & 0x7F;
                 const ic = (@as(u16, cs.codeByteAt(i + 1)) << 8) | @as(u16, cs.codeByteAt(i + 2));
                 i += 3;
                 io.write(@tagName(op));
@@ -229,7 +229,7 @@ pub fn disassemble(cs: *const chunk.State) void {
                 io.write("\n");
             },
             .call_spread => {
-                const argc = cs.codeByteAt(i);
+                const argc = cs.codeByteAt(i) & 0x7F;
                 const spread_n = cs.codeByteAt(i + 1);
                 const ic = (@as(u16, cs.codeByteAt(i + 2)) << 8) | @as(u16, cs.codeByteAt(i + 3));
                 i += 4;
@@ -295,7 +295,7 @@ pub fn disassemble(cs: *const chunk.State) void {
             .invoke_method => {
                 const name_idx = readU16(cs, i);
                 i += 2;
-                const argc = cs.codeByteAt(i);
+                const argc = cs.codeByteAt(i) & 0x7F;
                 i += 1;
                 const ic_type = readU16(cs, i);
                 i += 2;
@@ -318,7 +318,7 @@ pub fn disassemble(cs: *const chunk.State) void {
             .defer_invoke_method => {
                 const name_idx = readU16(cs, i);
                 i += 2;
-                const argc = cs.codeByteAt(i);
+                const argc = cs.codeByteAt(i) & 0x7F;
                 i += 1;
                 io.write("defer_invoke_method ");
                 writeConst(cs, name_idx);
@@ -350,7 +350,7 @@ pub fn disassemble(cs: *const chunk.State) void {
                 i += 1; // skip byte
                 const idx = readU16(cs, i);
                 i += 2;
-                const argc = cs.codeByteAt(i);
+                const argc = cs.codeByteAt(i) & 0x7F;
                 i += 1;
                 io.write(@tagName(op));
                 io.write(" local=");
@@ -397,7 +397,7 @@ pub fn disassemble(cs: *const chunk.State) void {
                 i += 1; // skip const_sub byte
                 const idx = readU16(cs, i);
                 i += 2;
-                const argc = cs.codeByteAt(i);
+                const argc = cs.codeByteAt(i) & 0x7F;
                 i += 1;
                 io.write(@tagName(op));
                 io.write(" ");
