@@ -268,13 +268,17 @@ pub const State = struct {
     // only in opcode handlers whose stackEffect fully accounts the transient
     // peak — pops must precede pushes within the op. Call-internal pushes
     // (callee + args beyond the op's net effect) must use the checked vmPush.
+    // Debug builds assert the verifier's guarantee on every use, so the test
+    // and fuzz suites exercise it; release builds trust it.
     pub inline fn vmPushU(self: *State, v: Value) void {
+        if (builtin.mode == .Debug) std.debug.assert(self.stack_top < self.stack.len);
         self.assertStringImmortal(v);
         self.stack.ptr[self.stack_top] = v;
         self.stack_top +%= 1;
     }
 
     pub inline fn vmPopU(self: *State) Value {
+        if (builtin.mode == .Debug) std.debug.assert(self.stack_top > 0);
         self.stack_top -%= 1;
         return self.stack.ptr[self.stack_top];
     }

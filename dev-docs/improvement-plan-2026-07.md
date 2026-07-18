@@ -62,20 +62,33 @@ scratch region (code capped at 1 MiB → bounded worst case). Small.
 
 ## Track B — Safety hardening
 
-### B1. Debug assertions in `vmPushU`/`vmPopU` `[ ]`
+### B1. Debug assertions in `vmPushU`/`vmPopU` `[x]`
 
 After `dcdb578` these are the only two functions where a verifier bug
 corrupts memory instead of crashing. Add Debug-mode bounds asserts (free in
 release) so Debug test runs + fuzz verify the verifier's stack-bound
 guarantee on every push/pop instead of trusting it. Tiny.
 
-### B2. Transient-peak invariant as a tested property `[ ]`
+### B2. Transient-peak invariant as a tested property `[x]`
 
 The unchecked-op safety argument ("pops precede pushes within an op; the
 op's declared stackEffect covers the transient peak") lives in comments.
 Add a Debug-build check: record `stack_top` at dispatch, assert on the next
 dispatch that the excursion stayed within the declared envelope. Catches any
 future handler that pushes beyond its declared effect. Small, pairs with B1.
+
+Done 2026-07-18. Found two real table bugs on day one: `get_field` was
+modeled pop=0 (actual pop=1 — receiver) and `set_field` pop=1 (actual
+pop=2 — value + receiver); both under-modeled pops are underflow-soundness
+holes relevant to GBC (external bytecode). Exempt from the exact-net check:
+call/ret families (frame semantics), `iter_next1/2` (variable effect, table
+declares max), `loop`/`set_global_loop` (tryInlineGetGlobal swallows the
+next instruction's push).
+
+Follow-up surfaced (add to backlog): the verifier's first-visit-wins depth
+marking tolerates path-dependent depth divergence (iterator exhaustion path
+is 1 shallower than modeled). Harmless for compiler-emitted bytecode;
+should become a hard verifier error before GBC accepts external bytecode.
 
 ## Track C — Performance (fib call-overhead hunt, remaining items)
 
