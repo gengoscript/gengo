@@ -168,7 +168,7 @@ tryTailCall reused the frame without updating has_typed_returns /
 named_return_count / func_arity — a tail call into a typed-return function
 skipped return enforcement entirely (pre-existing hole). Fail test 325.
 
-### C5. Immediate-operand fused variants `[ ]`
+### C5. Immediate-operand fused variants `[x]` — resolved without new opcodes
 
 From the Lua comparison (LTI/ADDI embed small ints in the instruction):
 our hot fused ops load constants through the pool (`consts[idx]`) — two
@@ -176,6 +176,17 @@ pool indirections per fib node. Add i16-immediate variants of the hottest
 const-fused ops using reserved opcode slots. Small win (~2-4%), moderate
 surface (compiler emit, VM, verifier, defuse, disasm, opcodes.md) — do
 after C2/C4, measure per the house rule.
+
+Resolved 2026-07-18 the zero-opcode way: `constAtU` — unchecked const
+access for indices the verifier already validates (chunk_verifier pass 1
+rejects any decoded const_index >= const_count; audited that every
+opConst/readLocalSlotAndConst caller is a decoder-extracted op; the one
+unvalidated second index, cglsc's global-name idx, is cold-path-only and
+keeps constAt). fib 0.305 → ~0.295s, loop_sum 0.37 → 0.36s. True i16
+immediates would additionally save the 16-byte pool load, but each new
+opcode costs icache (the reserved-slot padding experiment measured ~0.7%
+per instantiated op) — the remaining margin doesn't clear that bar.
+Revisit only with profile evidence.
 
 ### C6. Warm-IC invariant re-check `[ ]` (investigate)
 
