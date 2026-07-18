@@ -2125,10 +2125,12 @@ fn readGlobalConstPair(ctx: VMContext) !struct { g: Value, k: Value } {
     return .{ .g = try readGlobalIC(ctx, name_idx, ic_base, ic_slot), .k = k };
 }
 
-fn readLocalSlotAndConst(ctx: VMContext) !struct { slot: u8, k: Value } {
+inline fn readLocalSlotAndConst(ctx: VMContext) !struct { slot: u8, k: Value } {
     const slot = opByte(ctx);
     ctx.vs.ip += 1; // skip embedded const opcode byte
-    return .{ .slot = slot, .k = try ctx.cs.constAt(opShort(ctx)) };
+    // Verifier-validated const index (decoder extracts it for the whole
+    // get_local_const_* family); see chunk.State.constAtU.
+    return .{ .slot = slot, .k = ctx.cs.constAtU(opShort(ctx)) };
 }
 
 // ── Operand fetch ─────────────────────────────────────────────────────────────
@@ -2161,7 +2163,9 @@ inline fn opInt(ctx: VMContext) usize {
 }
 
 inline fn opConst(ctx: VMContext) !Value {
-    return ctx.cs.constAt(opShort(ctx));
+    // Verifier-validated index (decoder extracts const_index for every op
+    // that routes here); see chunk.State.constAtU.
+    return ctx.cs.constAtU(opShort(ctx));
 }
 
 // ── Dispatch gas ──────────────────────────────────────────────────────────────

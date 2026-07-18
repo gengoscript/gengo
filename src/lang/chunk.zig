@@ -1058,6 +1058,14 @@ pub const State = struct {
         if (i >= self.const_count) return error.BadConstantIndex;
         return self.consts[i];
     }
+    // Unchecked const access. Sound ONLY for indices the verifier validated:
+    // chunk_verifier pass 1 rejects any decoded const_index >= const_count
+    // before execution, so hot handlers reading those operands skip the
+    // bounds branch. Indices the decoder does NOT extract (e.g. the global
+    // name index embedded in call_global_local_sub_const) must use constAt.
+    pub fn constAtU(self: *const State, i: usize) Value {
+        return (self.consts[0..].ptr + i)[0];
+    }
     pub fn decodeAt(self: *State, pos: usize) !DecodedInstruction {
         return chunk_decoder.decodeAt(self, pos);
     }
