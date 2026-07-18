@@ -158,6 +158,10 @@ pub const MaxCapabilities = 16;
 pub const MaxModuleRoots = 8;
 
 pub const Session = struct {
+    // Explicit heap handle (A1): all session allocation goes through this,
+    // never through heap's threadlocal-active wrappers. Set by
+    // Runtime.initCompileSession / test harnesses right after construction.
+    hs: *heap.State = undefined,
     modules: [MaxModules]ModuleRecord = undefined,
     module_count: usize = 0,
     source_buf: [cfg.max_input_bytes]u8 = undefined,
@@ -306,7 +310,7 @@ pub const Session = struct {
         };
         // Copy source to the bump heap so that recursive loadSource calls
         // (which reuse source_buf) do not overwrite it before we compile this module.
-        const src_copy = heap.bump(u8, src_raw.len) orelse {
+        const src_copy = self.hs.bump(u8, src_raw.len) orelse {
             self.saveFailedModule(idx);
             return error.OutOfMemory;
         };
@@ -330,7 +334,7 @@ pub const Session = struct {
         if (name.len > 0 and name[0] == '_') return;
         const qname = if (prefix.len > 0) blk: {
             const total = prefix.len + 1 + name.len;
-            const buf = heap.bump(u8, total) orelse return error.OutOfMemory;
+            const buf = self.hs.bump(u8, total) orelse return error.OutOfMemory;
             @memcpy(buf[0..prefix.len], prefix);
             buf[prefix.len] = '.';
             @memcpy(buf[prefix.len + 1 .. total], name);
@@ -340,7 +344,7 @@ pub const Session = struct {
             self.setScanError("too many global declarations (max {d})", .{chunk.MaxConst});
             return error.TooManyGlobals;
         }
-        const copy = heap.bump(u8, qname.len) orelse return error.OutOfMemory;
+        const copy = self.hs.bump(u8, qname.len) orelse return error.OutOfMemory;
         @memcpy(copy[0..qname.len], qname);
         self.known_globals.?[self.known_global_count] = copy[0..qname.len];
         self.known_global_count += 1;
@@ -349,7 +353,7 @@ pub const Session = struct {
     fn scanGlobalDeclarations(self: *Session, src: []const u8, prefix: []const u8) !void {
         self.known_global_count = 0;
         if (self.known_globals == null) {
-            self.known_globals = heap.bump([]const u8, chunk.MaxConst) orelse return error.OutOfMemory;
+            self.known_globals = self.hs.bump([]const u8, chunk.MaxConst) orelse return error.OutOfMemory;
         }
         var lex: Lexer = .{ .src = src };
         var brace_depth: u32 = 0;
@@ -446,7 +450,7 @@ pub const Session = struct {
             .check_global_ctx = self,
             .test_mode = if (emit_halt) self.test_mode else false,
         });
-        chunk.addModuleBoundary(self.modules[idx].path());
+        compiler.cs.addModuleBoundary(self.modules[idx].path());
         compiler.compile(false) catch |err| {
             self.last_error_path = self.modules[idx].path();
             self.last_error_line = if (compiler.err_line != 0) compiler.err_line else compiler.prev.line;
@@ -498,7 +502,7 @@ pub const Session = struct {
             }
         }
         try compiler.emitModuleObject();
-        if (emit_halt) try chunk.emitOp(.halt, compiler.prev.line);
+        if (emit_halt) try compiler.cs.emitOp(.halt, compiler.prev.line);
         self.modules[idx].state = .compiled;
     }
 
@@ -584,9 +588,8 @@ pub const Session = struct {
     }
 
     fn makePrefixedName(self: *Session, prefix: []const u8, path: []const u8) ![]const u8 {
-        _ = self;
         const total = prefix.len + path.len;
-        const buf = heap.bump(u8, total) orelse return error.OutOfMemory;
+        const buf = self.hs.bump(u8, total) orelse return error.OutOfMemory;
         @memcpy(buf[0..prefix.len], prefix);
         @memcpy(buf[prefix.len..total], path);
         return buf[0..total];
@@ -624,13 +627,13 @@ pub const Session = struct {
         if (import_name.len == 0) return error.ImportNotFound;
         if (!(import_name[0] == '.')) {
             // Allow package imports: try the source provider before rejecting.
-            if (self.sourceExists(import_name)) return copyResolvedPath(import_name);
+            if (self.sourceExists(import_name)) return copyResolvedPath(self, import_name);
             var pkg_ext_buf: [MaxModulePathBytes]u8 = undefined;
             const with_ext = try appendSuffix(&pkg_ext_buf, import_name, ".gengo");
-            if (self.sourceExists(with_ext)) return copyResolvedPath(with_ext);
+            if (self.sourceExists(with_ext)) return copyResolvedPath(self, with_ext);
             var pkg_mod_buf: [MaxModulePathBytes]u8 = undefined;
             const with_mod = try appendSuffix(&pkg_mod_buf, import_name, "/mod.gengo");
-            if (self.sourceExists(with_mod)) return copyResolvedPath(with_mod);
+            if (self.sourceExists(with_mod)) return copyResolvedPath(self, with_mod);
             self.last_error_path = importer_path;
             self.setScanError("unsupported import '{s}'; relative imports must start with '.', or use 'cap:'/'host:' prefix, or register a package", .{import_name});
             return error.UnsupportedImportModule;
@@ -647,15 +650,15 @@ pub const Session = struct {
             return error.ImportOutsideRoot;
         }
 
-        if (self.sourceExists(exact)) return copyResolvedPath(exact);
+        if (self.sourceExists(exact)) return copyResolvedPath(self, exact);
 
         var ext_buf: [MaxModulePathBytes]u8 = undefined;
         const with_ext = try appendSuffix(&ext_buf, exact, ".gengo");
-        if (self.sourceExists(with_ext)) return copyResolvedPath(with_ext);
+        if (self.sourceExists(with_ext)) return copyResolvedPath(self, with_ext);
 
         var mod_buf: [MaxModulePathBytes]u8 = undefined;
         const with_mod = try appendSuffix(&mod_buf, exact, "/mod.gengo");
-        if (self.sourceExists(with_mod)) return copyResolvedPath(with_mod);
+        if (self.sourceExists(with_mod)) return copyResolvedPath(self, with_mod);
 
         self.last_error_path = importer_path;
         self.setScanError("import '{s}' not found from '{s}'; tried '{s}', '{s}', and '{s}'", .{
@@ -744,7 +747,7 @@ pub fn resolveModuleTypeKind(ctx: *anyopaque, path: []const u8, type_name: []con
         if (common.streq(n, type_name)) {
             var qname_buf: [MaxModulePathBytes + 64]u8 = undefined;
             const qname = std.fmt.bufPrint(&qname_buf, "@mod:{s}.{s}", .{ path, type_name }) catch return null;
-            const qname_copy = heap.bump(u8, qname.len) orelse return null;
+            const qname_copy = s.hs.bump(u8, qname.len) orelse return null;
             @memcpy(qname_copy, qname);
             return .{ .kind = k, .qualified_name = qname_copy[0..qname.len] };
         }
@@ -790,8 +793,8 @@ fn pathIsUnderRoot(path: []const u8, root: []const u8) bool {
     return path[r.len] == '/';
 }
 
-fn copyResolvedPath(path: []const u8) ![]const u8 {
-    const out = heap.bump(u8, path.len) orelse return error.OutOfMemory;
+fn copyResolvedPath(self: *Session, path: []const u8) ![]const u8 {
+    const out = self.hs.bump(u8, path.len) orelse return error.OutOfMemory;
     @memcpy(out[0..path.len], path);
     return out[0..path.len];
 }

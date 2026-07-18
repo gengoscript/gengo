@@ -267,7 +267,7 @@ pub const InlineVariantValue = packed struct(u64) {
 /// A Value is a tagged union (16 bytes: tag + 8-byte payload).
 /// The `.string` and `.error_value` variants store a *const StringSlice so
 /// their scalar payloads fit in 8 bytes.  The StringSlice lives in a bump pool
-/// (chunk.g_state.str_slices); obtain one via chunk.internStr().
+/// (chunk.g_state.str_slices); obtain one via chunk.State.internStr().
 /// The bytes the StringSlice points to MUST be immortal.
 /// `.inline_variant` stores simple variant arm values inline without a GC allocation.
 pub const Value = union(VTag) {

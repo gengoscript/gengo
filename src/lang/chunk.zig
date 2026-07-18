@@ -1120,6 +1120,12 @@ fn foldBinOp(op: Op, lhs: Value, rhs: Value) ?Value {
 }
 
 // ── Module-level wrapper functions (delegate to g_state methods) ──────────────
+// TEST/ENTRY-POINT USE ONLY. Production code (compiler, module_compile, VM,
+// runtime) must go through an explicit *State handle — these wrappers exist
+// for the hand-assembled-bytecode test runners (vm_value_runner,
+// vm_safety_runner, fuzz_runner, compiler_test) and the WASM export layer,
+// which have no way to receive a context. Do not add production callers;
+// see dev-docs/improvement-plan-2026-07.md A1.
 
 pub fn setCol(col: u32) void {
     g_state.setCol(col);
