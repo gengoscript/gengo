@@ -146,7 +146,32 @@ format: under the serialize-defused design, specialized ops normalize to
 their generic forms on the wire (like fusions), so this entire program
 spends no format-stability budget.
 
-### Strategic decision — Tier 2 vs Tier 3 (blocks GBC format freeze)
+### Strategic decision — RESOLVED 2026-07-19 (Mikael)
+
+**Tier 2 adopted as the mechanism; the full sweep is demand-driven; Tier 3
+declined; GBC is unblocked.** The spike's ret-family conversion (+6% on
+fib, loop parity) is merged to main. Rationale: full Tier 2 approaches —
+does not beat — CPython on call-heavy code (~0.22-0.25 vs 0.17), and
+Gengo's target workloads (policy/validation/embedded rules) are not
+call-dense; the effort budget goes to GBC, the product feature embedders
+actually feel. The sweep resumes if and when a real embedded workload
+shows call-dominated cost. Tier 3 (register VM) is declined absent a
+Lua-parity requirement; the stack ISA and the ratified wire design freeze.
+
+**GBC execution order** (each step independently shippable):
+1. `[x]` Merge the TOS spike (+6%).
+2. Fusion pass (A2 redefined): build the instruction-selection pass over
+   verified bytecode, then DELETE the 16 emission-time trackers and their
+   9 invalidation blocks. Acceptance adjusted from byte-identical: defused
+   differential green, benchmarks neutral-or-better, perf-baseline deltas
+   each explained by a named additional fusion (a clean pass may legally
+   fuse MORE than the trackers did).
+3. GBC writer/reader over the defused form (the compiler's natural
+   pre-pass output).
+4. Verifier hardening with the loader: depth-divergence hard error,
+   second-const-index validation.
+
+### Historical framing — Tier 2 vs Tier 3 (decided above)
 
 Bytecode comparison across engines: Gengo dispatches ~4 insns per fib call
 node (Lua ~10, CPython ~13) at ~53 cycles each (Lua ~6, CPython ~10).
