@@ -102,6 +102,12 @@ pub const PrimType = enum {
     bigint,
 };
 
+pub const CompileTimeConst = union(enum) {
+    number: f64,
+    string: []const u8,
+    boolean: bool,
+};
+
 pub const TypeCheck = union(enum) {
     none: void,
     prim: PrimType,

@@ -1,0 +1,27 @@
+std := import("std")
+limits := import("./modules/constants/limits")
+
+const lower := 10
+const stride := 5
+const upper := lower + stride * 4
+const initial := upper div 2
+const greeting := "hello"
+const enabled := true
+
+type LocalPort int range lower..upper default initial
+subtype DerivedLocalPort LocalPort range (lower + stride)..upper default initial
+type RemotePort int range limits.minimum..limits.maximum default limits.default_port
+type Greeting string default greeting
+type Enabled bool default enabled
+
+var local LocalPort
+var derived DerivedLocalPort
+var remote RemotePort
+var message Greeting
+var flag Enabled
+
+std.io.println(local)
+std.io.println(derived)
+std.io.println(remote)
+std.io.println(message)
+std.io.println(flag)

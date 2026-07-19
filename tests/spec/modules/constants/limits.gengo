@@ -1,0 +1,3 @@
+pub const minimum := 100
+pub const maximum := minimum + 100
+pub const default_port := maximum - 50
