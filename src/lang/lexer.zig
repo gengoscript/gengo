@@ -17,8 +17,6 @@ const keyword_map = std.StaticStringMap(TT).initComptime(.{
     .{ "case", .kw_case },
     .{ "const", .kw_const },
     .{ "continue", .kw_continue },
-    .{ "cycle", .kw_cycle },
-    .{ "default", .kw_default },
     .{ "defer", .kw_defer },
     .{ "div", .kw_div },
     .{ "mod", .kw_mod },
@@ -34,11 +32,8 @@ const keyword_map = std.StaticStringMap(TT).initComptime(.{
     .{ "interface", .kw_interface },
     .{ "not", .kw_not },
     .{ "null", .kw_null },
-    .{ "message", .kw_message },
     .{ "or", .kw_or },
-    .{ "predicate", .kw_predicate },
     .{ "pub", .kw_pub },
-    .{ "range", .kw_range },
     .{ "return", .kw_return },
     .{ "struct", .kw_struct },
     .{ "subtype", .kw_subtype },
@@ -380,13 +375,15 @@ pub const Lexer = struct {
 const testing = std.testing;
 
 test "lexer: keywords" {
-    var lex = Lexer{ .src = "as assert break case const continue cycle default defer else enum false for func if import in interface message null predicate pub range return struct subtype switch test trap true type var variant when" };
+    // range/cycle/default/predicate/message are contextual (clause words in
+    // type declarations and switch bodies) and lex as plain identifiers.
+    var lex = Lexer{ .src = "as assert break case const continue defer else enum false for func if import in interface null pub return struct subtype switch test trap true type var variant when range cycle default predicate message" };
     const expected = comptime [_]TT{
-        .kw_as,      .kw_assert, .kw_break,  .kw_case,      .kw_const,   .kw_continue, .kw_cycle,
-        .kw_default, .kw_defer,  .kw_else,   .kw_enum,      .kw_false,   .kw_for,      .kw_func,
-        .kw_if,      .kw_import, .kw_in,     .kw_interface, .kw_message, .kw_null,     .kw_predicate,
-        .kw_pub,     .kw_range,  .kw_return, .kw_struct,    .kw_subtype, .kw_switch,   .kw_test,
-        .kw_trap,    .kw_true,   .kw_type,   .kw_var,       .kw_variant, .kw_when,
+        .kw_as,     .kw_assert,    .kw_break, .kw_case, .kw_const,  .kw_continue, .kw_defer,
+        .kw_else,   .kw_enum,      .kw_false, .kw_for,  .kw_func,   .kw_if,       .kw_import,
+        .kw_in,     .kw_interface, .kw_null,  .kw_pub,  .kw_return, .kw_struct,   .kw_subtype,
+        .kw_switch, .kw_test,      .kw_trap,  .kw_true, .kw_type,   .kw_var,      .kw_variant,
+        .kw_when,   .ident,        .ident,    .ident,   .ident,     .ident,
     };
     inline for (expected) |exp| {
         const tok = lex.next();

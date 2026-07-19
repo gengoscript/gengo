@@ -256,14 +256,11 @@ pub const Compiler = struct {
             .kw_in => "'in'",
             .kw_switch => "'switch'",
             .kw_case => "'case'",
-            .kw_default => "'default'",
             .kw_return => "'return'",
             .kw_func => "'func'",
             .kw_struct => "'struct'",
             .kw_interface => "'interface'",
             .kw_type => "'type'",
-            .kw_range => "'range'",
-            .kw_cycle => "'cycle'",
             .kw_enum => "'enum'",
             .kw_import => "'import'",
             .kw_var => "'var'",
@@ -280,13 +277,11 @@ pub const Compiler = struct {
             .kw_subtype => "'subtype'",
             .kw_pub => "'pub'",
             .kw_test => "'test'",
-            .kw_message => "'message'",
             .kw_and => "'and'",
             .kw_or => "'or'",
             .kw_not => "'not'",
             .kw_as => "'as'",
             .kw_when => "'when'",
-            .kw_predicate => "'predicate'",
             .lparen => "'('",
             .rparen => "')'",
             .lbrace => "'{'",
@@ -1598,6 +1593,45 @@ pub const Compiler = struct {
             self.cur = self.lex.next();
         }
         self.cs.setCol(self.prev.col);
+    }
+
+    // ── Contextual keywords ──────────────────────────────────────────────
+    // The type-declaration clause words (range, cycle, default, predicate,
+    // message) and switch 'default' have meaning only in their clause
+    // positions and are ordinary identifiers everywhere else. Only the
+    // declaration heads 'type' and 'subtype' stay globally reserved —
+    // contextualizing those would collide with `name Type = value` syntax.
+    pub fn checkWord(self: *Compiler, word: []const u8) bool {
+        return self.cur.typ == .ident and common.streq(self.cur.src, word);
+    }
+
+    pub fn matchWord(self: *Compiler, word: []const u8) bool {
+        if (!self.checkWord(word)) return false;
+        self.advance();
+        return true;
+    }
+
+    // Gengo is newline-insensitive, so a statement beginning with a clause
+    // word can directly follow a type declaration. The word is a clause only
+    // when what follows can begin its clause form; an assignment or access
+    // operator after the word means it is an identifier statement instead.
+    // Misclassified corner cases fail loudly at parse — nothing is silently
+    // reinterpreted (e.g. `range x = 5` or a bare call `range(...)` directly
+    // after a type declaration is rejected as a malformed clause; rename or
+    // reorder to resolve). `(` stays clause-compatible: bounds like
+    // `range (lower + stride)..upper` are legitimate clause syntax.
+    pub fn checkClauseWord(self: *Compiler, word: []const u8) bool {
+        if (!self.checkWord(word)) return false;
+        return switch (self.peekToken().typ) {
+            .colon_eq, .eq, .plus_eq, .minus_eq, .star_eq, .slash_eq, .dot, .lbracket, .comma, .colon, .rparen, .rbrace, .semicolon => false,
+            else => true,
+        };
+    }
+
+    pub fn matchClauseWord(self: *Compiler, word: []const u8) bool {
+        if (!self.checkClauseWord(word)) return false;
+        self.advance();
+        return true;
     }
 
     pub fn peekToken(self: *Compiler) Token {

@@ -50,15 +50,11 @@ gate; CI's wasm conformance sweep can then eventually retire.
 
 `docs/language.md` does not yet cover: `func name()` declarations are
 immutable (assignment is a compile error; `name := func(...)` is the
-mutable form), and provable arg/return type mismatches at direct call
-sites and return statements are now compile errors. User-facing docs gap.
-
-### Language question: contextual `message` keyword
-
-`message` is reserved (named-type predicate message) and cannot be used as
-an identifier — Mikael's own spec case 327 tripped on `var message`. It has
-meaning in exactly one syntactic position; decide whether it should be
-contextual. (Same question may apply to other single-position keywords.)
+mutable form); provable arg/return type mismatches at direct call sites
+and return statements are now compile errors; and the clause words
+(range, cycle, default, predicate, message) are contextual — usable as
+identifiers — with only `type`/`subtype` reserved (decided 2026-07-19).
+The reserved-words list needs updating accordingly. User-facing docs gap.
 
 ### GBC preparation checklist (before the bytecode cache accepts external chunks)
 
