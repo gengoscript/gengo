@@ -499,6 +499,59 @@ func add(a int, b int) int {
 }
 ```
 
+### Function Declarations Are Immutable
+
+`func name(...)` declares an immutable binding, as in Go — assigning to the
+name afterwards is a compile error:
+
+```gengo
+func fib(n int) int {
+    if n < 2 { return n }
+    return fib(n - 1) + fib(n - 2)
+}
+
+// fib = 5   // compile error: cannot assign to function 'fib';
+//           // func declarations are immutable
+```
+
+For a reassignable function-valued binding, use the variable form:
+
+```gengo
+handler := func(x int) int { return x }
+handler = func(x int) int { return x * 2 }   // ok — := is a mutable binding
+```
+
+Immutability is what makes the compile-time call checking below sound: call
+sites are validated against the declared signature, which the binding can
+never change out from under them. It also makes declared functions the
+faster form — the runtime skips per-call argument and return type checks
+that the compiler already proved.
+
+### Compile-Time Type Checking
+
+When both sides of a type judgment are visible to the compiler, mismatches
+are compile errors instead of runtime errors:
+
+```gengo
+func f(x int) int { return x }
+
+// f("hi")       // compile error: cannot pass string to parameter of
+//               // type int; convert explicitly
+
+func g() int {
+    // return "oops"   // compile error: cannot return string from
+    //                 // function returning int; convert explicitly
+    return 1
+}
+```
+
+This applies to direct calls of declared functions — including recursive
+calls inside the function's own body — and to `return` statements in
+functions with a single primitive return type. Values the compiler cannot
+type statically (an `any` value, a map lookup, a call through a mutable
+`:=` binding) are still checked at runtime exactly as before; the compiler
+only rejects earlier what would have failed later.
+
 Trailing parameters may declare a default value with `=`. Callers can omit
 any suffix of defaulted parameters:
 
@@ -684,6 +737,27 @@ type Enabled bool default true
 var p Port
 var on Enabled
 ```
+
+The clause words `range`, `cycle`, `default`, `predicate`, and `message`
+are contextual: they act as keywords only in their clause positions inside
+a `type` or `subtype` declaration (and `default` in `switch` bodies), and
+are ordinary identifiers everywhere else:
+
+```gengo
+type Port int range 1..65535 default 8080
+
+range := 10          // fine — 'range' is just a name here
+message := "hello"   // fine
+```
+
+Only `type` and `subtype` themselves are reserved words of this family.
+Because the language is newline-insensitive, a statement that *begins* with
+a clause word directly after a type declaration is disambiguated by what
+follows the word (an assignment or access operator means it is an
+identifier). The rare unresolvable forms — such as a bare call statement
+`range(...)` on the line directly after a type declaration — are rejected
+with a parse error rather than silently reinterpreted; reorder the
+statements to resolve.
 
 Range types reject out-of-range values at construction time:
 
