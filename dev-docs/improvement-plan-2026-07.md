@@ -46,16 +46,6 @@ trigger decisions, call-flag emission (0x80), return-proof stamping.
 CLI output diff) at the full spec corpus to make it the real cross-target
 gate; CI's wasm conformance sweep can then eventually retire.
 
-### Docs: the 2026-07-18 language changes are undocumented
-
-`docs/language.md` does not yet cover: `func name()` declarations are
-immutable (assignment is a compile error; `name := func(...)` is the
-mutable form); provable arg/return type mismatches at direct call sites
-and return statements are now compile errors; and the clause words
-(range, cycle, default, predicate, message) are contextual — usable as
-identifiers — with only `type`/`subtype` reserved (decided 2026-07-19).
-The reserved-words list needs updating accordingly. User-facing docs gap.
-
 ### GBC preparation checklist (before the bytecode cache accepts external chunks)
 
 - **Decide Tier 2 vs Tier 3 first** — see strategic note below.
