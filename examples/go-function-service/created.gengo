@@ -1,0 +1,5 @@
+const http = import("host:http")
+
+pub func handle(method string, path string, query string, body string) string {
+    return http.json(201, "{\"message\":\"created by Gengo\",\"method\":\"" + method + "\"}")
+}

@@ -1,0 +1,9 @@
+const http = import("host:http")
+
+pub func handle(method string, path string, query string, body string) string {
+    return http.text(200,
+        "method: " + method + "\n" +
+        "path: " + path + "\n" +
+        "query: " + query + "\n" +
+        "body: " + body + "\n")
+}

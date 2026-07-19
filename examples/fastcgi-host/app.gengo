@@ -1,0 +1,39 @@
+const std = import("std")
+
+const page = std.template.parse(
+    "<!doctype html>\n" +
+    "<html lang=\"en\">\n" +
+    "<head>\n" +
+    "  <meta charset=\"utf-8\">\n" +
+    "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n" +
+    "  <title>Gengo FastCGI</title>\n" +
+    "  <style>body{margin:0;background:#f5f0e8;color:#1e2d24;font-family:Georgia,serif}main{max-width:42rem;margin:8vh auto;padding:2.5rem;background:#fffdf8;border-top:6px solid #ce5c31;box-shadow:0 1rem 3rem #1e2d2420}.eyebrow{color:#9d4321;font:700 .8rem/1.2 monospace;letter-spacing:.12em;text-transform:uppercase}h1{font-size:2.4rem;margin:.3rem 0 2rem}dl{display:grid;grid-template-columns:7rem 1fr;gap:.7rem}dt{font-weight:bold}dd{margin:0;overflow-wrap:anywhere}pre{padding:1rem;background:#1e2d24;color:#f5f0e8;overflow:auto}</style>\n" +
+    "</head>\n" +
+    "<body><main>\n" +
+    "  <p class=\"eyebrow\">Gengo FastCGI</p>\n" +
+    "  <h1>{{.method}} {{.path}}</h1>\n" +
+    "  <dl><dt>Query</dt><dd>{{.query}}</dd><dt>Body bytes</dt><dd>{{.body_len}}</dd></dl>\n" +
+    "  {{if .has_body}}<h2>Request body</h2><pre>{{.body}}</pre>{{end}}\n" +
+    "</main></body>\n" +
+    "</html>\n"
+)
+
+func html_escape(value string) string {
+    value = std.string.replace(value, "&", "&amp;")
+    value = std.string.replace(value, "<", "&lt;")
+    value = std.string.replace(value, ">", "&gt;")
+    value = std.string.replace(value, "\"", "&quot;")
+    return std.string.replace(value, "'", "&#39;")
+}
+
+pub func handle(method string, path string, query string, body string) string {
+    const content = page.execute({
+        "method": html_escape(method),
+        "path": html_escape(path),
+        "query": html_escape(query),
+        "body": html_escape(body),
+        "body_len": std.core.bytelen(body),
+        "has_body": body != "",
+    })
+    return "Status: 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n\r\n" + content
+}
