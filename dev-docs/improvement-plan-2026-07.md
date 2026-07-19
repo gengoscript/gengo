@@ -83,6 +83,42 @@ gate; CI's wasm conformance sweep can then eventually retire.
   runtime ever diverges. Prefix/namespace ops stay reserved for the one
   scenario that reopens the question: the runtime exceeding 256 ops.
 
+### Specialization roadmap (opcode-space spending — AFTER the Tier 2 decision)
+
+Mikael's direction 2026-07-19: the language is near feature-complete; spend
+opcode space on optimization where it pays. The bar, measured: each
+instantiated op costs ~0.7% icache tax on all code (the reserved-slot
+padding experiment), and specialization pays only where dispatch+tag cost
+dominates the operation's real work (the engine-comparison lesson).
+
+Ranked candidates:
+1. **std.conv lowering — free win, zero new ops**: to_int/to_string/
+   to_float are semantically the existing cast_* ops; extend the std-call
+   peephole to emit them directly, deleting full call overhead.
+2. **Decimal benchmark, then maybe decimal ops**: no decimal benchmark
+   exists; write one (billing-style workload) and measure the generic
+   path's dispatch share. Decimal is the one generic-routed type where
+   specialization might clear the bar (inline representation, modest work,
+   compile-time provable operands via ExprPrimInfo, and Gengo's declared
+   domain makes it plausibly hot). Bigint and string concat stay catch-all:
+   their work dwarfs dispatch.
+3. **Stdlib intrinsics as ops**: len (trivial work, full call cost —
+   strongest candidate), append; precedent: the math intrinsics are
+   already ops.
+4. **Constant-key map access**: m["literal"] via get_index today;
+   011_map_lookup_heavy exists to measure against.
+
+Not ops: GC. Allocation sites already are ops; bytecode-visible collection
+would encode today's GC strategy into chunks and buy nothing (gas provides
+interruption points). Revisit only if a generational GC introduces write
+barriers.
+
+Sequencing: after the Tier 2 (TOS caching) decision — it rewrites every
+handler, and specialized ops added before it get rewritten twice. Wire
+format: under the serialize-defused design, specialized ops normalize to
+their generic forms on the wire (like fusions), so this entire program
+spends no format-stability budget.
+
 ### Strategic decision — Tier 2 vs Tier 3 (blocks GBC format freeze)
 
 Bytecode comparison across engines: Gengo dispatches ~4 insns per fib call
