@@ -17,6 +17,8 @@ runtime panics, and runaway scripts as host-recoverable failures, not crashes.
 | [`billing-plugins`](billing-plugins) | Python | Per-merchant discount logic, each in its own isolated engine instance |
 | [`go-embed`](go-embed) | Go | Minimal `cgo` host using the native C engine surface: load once, call functions, decode scalar results |
 | [`embed-host`](embed-host) | Zig | Embedding via the native `api.Runtime` surface directly, no C ABI boundary |
+| [`fastcgi-host`](fastcgi-host) | C | A sequential FastCGI responder that preloads a Gengoscript request handler |
+| [`go-function-service`](go-function-service) | Go | Authenticated Gengoscript function uploads, persistent routes, constrained execution, and HTTP serving |
 
 ## Picking an example to start from
 

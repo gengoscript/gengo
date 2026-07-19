@@ -1,0 +1,7 @@
+std := import("std")
+http := import("host:http")
+
+pub func handle(method string, path string, query string, body string) string {
+    now := std.time.now()
+    return http.text(200, now.format("%Y-%m-%d %H:%M:%S UTC") + "\n")
+}

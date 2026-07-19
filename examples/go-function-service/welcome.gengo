@@ -1,0 +1,14 @@
+const std = import("std")
+const http = import("host:http")
+
+const page = std.template.parse(
+    "<!doctype html><html><head><meta charset=\"utf-8\">" +
+    "<title>Welcome</title></head><body>" +
+    "<h1>{{.method}} {{.path}}</h1><p>Query: {{.query}}</p>" +
+    "</body></html>"
+)
+
+pub func handle(method string, path string, query string, body string) string {
+    const html = page.execute({"method": method, "path": path, "query": query})
+    return http.html(200, html)
+}
