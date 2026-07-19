@@ -1,0 +1,22 @@
+std := import("std")
+
+// range/cycle/default/predicate/message are contextual: clause words inside
+// type declarations, ordinary identifiers everywhere else. Only 'type' and
+// 'subtype' are reserved declaration heads.
+type Port int range 1..65535 predicate func(x) { return x != 6666 } message "6666 is cursed" default 8080
+
+range := 1
+cycle := 2
+default := 3
+predicate := 4
+message := "hello"
+
+func describe(default int) int {
+    return default * 2
+}
+
+var p Port
+std.io.println(p)
+std.io.println(range + cycle + default + predicate)
+std.io.println(message)
+std.io.println(describe(21))

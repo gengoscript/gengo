@@ -1930,7 +1930,7 @@ pub fn switchStmt(c: anytype) anyerror!void {
             continue;
         }
 
-        if (c.match(.kw_default)) {
+        if (c.matchWord("default")) {
             if (saw_default) {
                 c.setErr("duplicate 'default' case in switch", .{});
                 return error.DuplicateDefaultCase;

@@ -17,11 +17,11 @@ type Enabled bool default enabled
 var local LocalPort
 var derived DerivedLocalPort
 var remote RemotePort
-var salutation Greeting
+var message Greeting
 var flag Enabled
 
 std.io.println(local)
 std.io.println(derived)
 std.io.println(remote)
-std.io.println(salutation)
+std.io.println(message)
 std.io.println(flag)

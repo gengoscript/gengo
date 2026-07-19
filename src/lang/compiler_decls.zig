@@ -724,7 +724,7 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
     var is_cycle = false;
     var min: f64 = 0;
     var max: f64 = 0;
-    if (c.check(.kw_range) or c.check(.kw_cycle)) {
+    if (c.checkClauseWord("range") or c.checkClauseWord("cycle")) {
         if (base != .int and base != .float and base != .decimal and base != .rune)
             return c.err("range and cycle constraints require a numeric parent type (int, float, decimal, or rune)", .{});
         const constraint = try parseConstraintBounds(
@@ -752,7 +752,7 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
     var predicate_uv_count: u8 = 0;
     var predicate_msg: ?[]const u8 = null;
 
-    if (c.match(.kw_predicate)) {
+    if (c.matchClauseWord("predicate")) {
         if (base == .array_t or base == .map_t or base == .enum_t) {
             return c.err("predicate not supported for collection or enum types", .{});
         }
@@ -767,7 +767,7 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
             const cidx: u16 = try c.cs.addConst(.{ .object = func_obj });
             try c.cs.emitConstIdx(.make_closure, cidx, c.prev.line);
         }
-        if (c.match(.kw_message)) {
+        if (c.matchClauseWord("message")) {
             if (c.cur.typ != .string) return c.err("expected string literal after 'message'", .{});
             predicate_msg = try c.copyName(c.cur.src);
             c.advance();
@@ -776,7 +776,7 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
 
     var has_default = false;
     var default_val: value_mod.Value = undefined;
-    if (c.match(.kw_default)) {
+    if (c.matchClauseWord("default")) {
         default_val = try parseNamedDefault(c, base);
         has_default = true;
     }
@@ -1229,9 +1229,9 @@ pub fn instantiateGenericType(c: anytype, tname: []const u8, line: u32) anyerror
 }
 
 pub fn parseConstraintBounds(c: anytype) !struct { is_cycle: bool, min: f64, max: f64 } {
-    const is_cycle = if (c.match(.kw_range))
+    const is_cycle = if (c.matchWord("range"))
         false
-    else if (c.match(.kw_cycle))
+    else if (c.matchWord("cycle"))
         true
     else
         return c.err("expected 'range' or 'cycle', found {s}", .{c.tokenName(c.cur.typ)});
@@ -1903,7 +1903,7 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
     if (!is_scalar)
         return c.err("subtype parent must be a scalar named type (int, float, decimal, string, bool, or rune base)", .{});
 
-    if (c.check(.kw_range) or c.check(.kw_cycle)) {
+    if (c.checkClauseWord("range") or c.checkClauseWord("cycle")) {
         if (!is_numeric) return c.err("range and cycle constraints require a numeric parent type (int, float, decimal, or rune)", .{});
         const constraint = try parseConstraintBounds(
             c,
@@ -1926,7 +1926,7 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
     var predicate_uv_count: u8 = 0;
     var predicate_msg: ?[]const u8 = null;
 
-    if (c.match(.kw_predicate)) {
+    if (c.matchClauseWord("predicate")) {
         if (base == .array_t or base == .map_t or base == .enum_t) {
             return c.err("predicate not supported for collection or enum types", .{});
         }
@@ -1941,7 +1941,7 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
             const cidx: u16 = try c.cs.addConst(.{ .object = func_obj });
             try c.cs.emitConstIdx(.make_closure, cidx, c.prev.line);
         }
-        if (c.match(.kw_message)) {
+        if (c.matchClauseWord("message")) {
             if (c.cur.typ != .string) return c.err("expected string literal after 'message'", .{});
             predicate_msg = try c.copyName(c.cur.src);
             c.advance();
@@ -1950,7 +1950,7 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
 
     var has_default = false;
     var default_val: value_mod.Value = undefined;
-    if (c.match(.kw_default)) {
+    if (c.matchClauseWord("default")) {
         default_val = try parseNamedDefault(c, base);
         has_default = true;
     }
