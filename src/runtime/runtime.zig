@@ -5,6 +5,7 @@ const globals = @import("../lang/globals.zig");
 const heap = @import("heap.zig");
 const io = @import("io.zig");
 const module_compile = @import("../lang/module_compile.zig");
+const fusion_pass = @import("../lang/fusion_pass.zig");
 const vm = @import("../lang/vm.zig");
 const vms = @import("../lang/vm_state.zig");
 const vmnative = @import("../lang/vm_native.zig");
@@ -341,6 +342,7 @@ pub const Runtime = struct {
                 return err;
             };
             if (test_mode) self.copyTestNamesFromSession(&session);
+            try fusion_pass.fuse(self.chunk_state, self.vm_state.allocator);
             return;
         }
 
@@ -358,6 +360,7 @@ pub const Runtime = struct {
             return err;
         };
         if (test_mode) self.copyTestNamesFromCompiler(&compiler);
+        try fusion_pass.fuse(self.chunk_state, self.vm_state.allocator);
     }
 
     pub fn compileOnly(self: *Runtime, src: []const u8, path: []const u8, provider: module_compile.SourceProvider) !void {
@@ -503,6 +506,7 @@ pub const Runtime = struct {
             self.setLastCompilePath("");
             return err;
         };
+        try fusion_pass.fuse(self.chunk_state, self.vm_state.allocator);
 
         for (compiler.registry.func_buckets) |e| {
             if (!e.occupied or !e.is_const) continue;

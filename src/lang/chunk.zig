@@ -63,54 +63,6 @@ pub const State = struct {
     // string-literal fold to correctly restore const_count.
     last_const_was_new: bool = false,
     prev_const_was_new: bool = false,
-    // Peephole: track position of last `get_local` instruction (2 bytes: op + slot).
-    // Used for triple-fusion: get_local + constant + eq/sub → get_local_const_eq/sub.
-    // Verified via arithmetic (gl_pos + 2 == const_pos) rather than code inspection
-    // to avoid false positives from data bytes of preceding instructions.
-    last_get_local_code_pos: ?usize = null,
-    // Peephole: position of the last get_local_const_eq triple-fused instruction.
-    // Used for quad-fusion: get_local_const_eq + jif_pop → get_local_const_eq_jif_pop.
-    last_triple_eq_pos: ?usize = null,
-    // Peephole: position of the last get_local_const_lt triple-fused instruction.
-    // Used for quad-fusion: get_local_const_lt + jif_pop → get_local_const_lt_jif_pop.
-    last_triple_lt_pos: ?usize = null,
-    // Peephole: position of the last get_local_const_gt triple-fused instruction.
-    // Used for quad-fusion: get_local_const_gt + jif_pop → get_local_const_gt_jif_pop.
-    last_triple_gt_pos: ?usize = null,
-    // Peephole: position of the last get_local_const_sub triple-fused instruction.
-    // Used for fusion: get_local_const_sub + call → get_local_const_sub_call.
-    last_get_local_const_sub_pos: ?usize = null,
-    // Peephole: position of the last get_local_const_add triple-fused instruction.
-    // Used for fusion: get_local_const_add + set_local → local_add_const.
-    last_get_local_const_add_pos: ?usize = null,
-    // Peephole: track position of last `get_global` instruction (5 bytes: op + name_idx(2) + ic_slot(2)).
-    // Used for triple-fusion: get_global + constant + eq/sub → get_global_const_eq/sub.
-    last_get_global_code_pos: ?usize = null,
-    // Peephole: position of the last get_global_const_eq triple-fused instruction (cleared by patchJump/emitLoop).
-    last_triple_global_eq_pos: ?usize = null,
-    // Peephole: position of the last get_global_const_lt triple-fused instruction.
-    // Used for quad-fusion: get_global_const_lt + jif_pop → get_global_const_lt_jif_pop.
-    last_triple_global_lt_pos: ?usize = null,
-    // Peephole: position of the last set_global instruction.
-    // Used for fusion: set_global + loop → set_global_loop.
-    last_set_global_code_pos: ?usize = null,
-    // Peephole: position of last get_local_const_lt_jif_pop quad-fused instruction (9 bytes).
-    // Used for quint-fusion: get_local_const_lt_jif_pop + jump → get_local_const_lt_jif_pop_jump.
-    last_quad_lt_jif_pos: ?usize = null,
-    // Peephole: position of last close_upvalue instruction (2 bytes: op + slot).
-    // Used for fusion: close_upvalue + loop → close_upvalue_loop.
-    last_close_upvalue_pos: ?usize = null,
-    // Peephole: first byte of last call-like instruction (call / get_local_const_sub_call /
-    // call_global_local_sub_const). Cleared by any emitByte; set at the end of emitCall.
-    // Used by tryUpgradeLastCallToTailCall to promote the opcode when the compiler
-    // knows no close_upvalue instructions separate it from the upcoming ret.
-    last_call_pos: ?usize = null,
-    // Peephole: position of last local_add_const instruction (4 bytes: op + dst + idx_hi + idx_lo).
-    // Used for fusion: local_add_const + loop → local_add_const_loop.
-    last_local_add_const_pos: ?usize = null,
-    // Peephole: position of last get_global_const_add instruction (8 bytes).
-    // Used for fusion: get_global_const_add X k + set_global X → inc_global_const X k.
-    last_get_global_const_add_pos: ?usize = null,
     // Code-position patch: position before get_global "module:std" (or get_local for a from_std local).
     // Used by the std direct-call peephole to truncate back and emit a single get_global
     // "module:std.{ns}.{func}" instead of std-namespace load + field traversal + call.
@@ -148,7 +100,6 @@ pub const State = struct {
         self.lines[self.code_len] = @intCast(if (line > 0xffff) 0xffff else line);
         self.cols[self.code_len] = self.pending_col;
         self.code_len += 1;
-        self.last_call_pos = null;
     }
 
     pub fn emitOp(self: *State, op: Op, line: u32) !void {
@@ -192,209 +143,33 @@ pub const State = struct {
                 }
             }
         }
-        // Peephole: constant k immediately preceding ret → ret_const k (3 bytes, 1 dispatch).
-        if (op == .ret) {
-            if (self.last_const_code_pos) |pos| {
-                if (pos + 3 == self.code_len) {
-                    self.code[pos] = @intFromEnum(Op.ret_const);
-                    self.last_const_code_pos = null;
-                    return; // ret_const reuses the 3-byte constant slot; no extra byte needed
-                }
-            }
-            // Peephole: get_local slot immediately preceding ret → get_local_ret slot (2 bytes, 1 dispatch).
-            if (self.last_get_local_code_pos) |gl_pos| {
-                if (gl_pos + 2 == self.code_len) {
-                    self.code[gl_pos] = @intFromEnum(Op.get_local_ret);
-                    self.last_get_local_code_pos = null;
-                    return; // get_local_ret reuses the 2-byte get_local slot; no extra byte needed
-                }
-            }
-            // Peephole: add immediately preceding ret → add_ret (1 byte, 1 dispatch).
-            if (self.code_len > 0) {
-                const prev = self.code[self.code_len - 1];
-                if (prev == @intFromEnum(Op.add)) {
-                    self.code[self.code_len - 1] = @intFromEnum(Op.add_ret);
-                    return; // overwrites the add opcode in place
-                }
-            }
-        }
-        // Peephole: get_local_const_sub immediately preceding call → get_local_const_sub_call (8 bytes, 1 dispatch).
-        if (op == .call) {
-            if (self.last_get_local_const_sub_pos) |sub_pos| {
-                if (sub_pos + 5 == self.code_len) {
-                    self.code[sub_pos] = @intFromEnum(Op.get_local_const_sub_call);
-                    self.last_get_local_const_sub_pos = null;
-                    return; // reuses the 5-byte get_local_const_sub + 1-byte argc
-                }
-            }
-        }
-        // swap disrupts operand ordering — reset peephole trackers to prevent
-        // invalid fusion of instructions that no longer sit next to their operands.
-        if (op == .swap) {
-            self.last_const_code_pos = null;
-            self.prev_const_code_pos = null;
-            self.last_get_local_code_pos = null;
-            self.last_triple_eq_pos = null;
-            self.last_triple_lt_pos = null;
-            self.last_triple_gt_pos = null;
-            self.last_get_local_const_sub_pos = null;
-            self.last_get_local_const_add_pos = null;
-            self.last_get_global_code_pos = null;
-            self.last_triple_global_eq_pos = null;
-            self.last_triple_global_lt_pos = null;
-            self.last_set_global_code_pos = null;
-            self.last_quad_lt_jif_pos = null;
-            self.last_close_upvalue_pos = null;
-            self.last_call_pos = null;
-            self.last_local_add_const_pos = null;
-            self.last_get_global_const_add_pos = null;
-        }
         return self.emitByte(@intFromEnum(op), line);
     }
 
     // Emit a call instruction: [call][argc][ic_hi][ic_lo] (4 bytes, cold IC = 0xFFFF).
-    // Fuses into get_local_const_sub_call (8 bytes) or call_global_local_sub_const (13 bytes)
-    // when preceded by the matching sequence; call IC bytes are always appended.
+    // Fusion into get_local_const_sub_call / call_global_local_sub_const / the
+    // tail-call variants happens in the load-time fusion pass, not here.
     pub fn emitCall(self: *State, argc: u8, line: u32) !void {
-        if (self.last_get_local_const_sub_pos) |sub_pos| {
-            if (sub_pos + 5 == self.code_len) {
-                self.code[sub_pos] = @intFromEnum(Op.get_local_const_sub_call);
-                try self.emitByte(argc, line);
-                try self.emitByte(0xFF, line); // call IC slot hi (cold)
-                try self.emitByte(0xFF, line); // call IC slot lo (cold)
-                self.last_get_local_const_sub_pos = null;
-                if (self.last_get_global_code_pos) |gg_pos| {
-                    if (gg_pos + 5 == sub_pos) {
-                        self.code[gg_pos] = @intFromEnum(Op.call_global_local_sub_const);
-                        self.last_get_global_code_pos = null;
-                        self.last_call_pos = gg_pos;
-                        return;
-                    }
-                }
-                self.last_call_pos = sub_pos;
-                return;
-            }
-            self.last_get_local_const_sub_pos = null;
-        }
-        const call_pos = self.code_len;
         try self.emitByte(@intFromEnum(Op.call), line);
         try self.emitByte(argc, line);
         try self.emitByte(0xFF, line); // IC slot hi (cold)
         try self.emitByte(0xFF, line); // IC slot lo (cold)
-        self.last_call_pos = call_pos;
     }
 
     // Emit a spread-return call: [call_spread][argc][spread_n][ic_hi][ic_lo].
     // The verifier knows this call pushes spread_n values; the ret handler performs
     // the actual spreading by reading named-return slots directly.
     pub fn emitCallSpread(self: *State, argc: u8, spread_n: u8, line: u32) !void {
-        const call_pos = self.code_len;
         try self.emitByte(@intFromEnum(Op.call_spread), line);
         try self.emitByte(argc, line);
         try self.emitByte(spread_n, line);
         try self.emitByte(0xFF, line); // IC slot hi (cold)
         try self.emitByte(0xFF, line); // IC slot lo (cold)
-        self.last_call_pos = call_pos;
-    }
-
-    // If the last instruction emitted was a call-like opcode and no other bytes
-    // have been emitted since, upgrade it to the tail-position variant so the VM
-    // dispatch loop skips the tryTailCall probe on every non-tail call.
-    pub fn tryUpgradeLastCallToTailCall(self: *State) void {
-        const pos = self.last_call_pos orelse return;
-        self.code[pos] = switch (@as(Op, @enumFromInt(self.code[pos]))) {
-            .call => @intFromEnum(Op.call_tail),
-            .get_local_const_sub_call => @intFromEnum(Op.get_local_const_sub_call_tail),
-            .call_global_local_sub_const => @intFromEnum(Op.call_global_local_sub_const_tail),
-            else => return,
-        };
-        self.last_call_pos = null;
     }
 
     pub fn emit2(self: *State, a: u8, b: u8, line: u32) !void {
         try self.emitByte(a, line);
         try self.emitByte(b, line);
-        if (a == @intFromEnum(Op.get_local)) {
-            self.last_get_local_code_pos = self.code_len - 2;
-        }
-        if (a == @intFromEnum(Op.close_upvalue)) {
-            self.last_close_upvalue_pos = self.code_len - 2;
-        } else {
-            self.last_close_upvalue_pos = null;
-        }
-        if (a == @intFromEnum(Op.call)) {
-            if (self.last_get_local_const_sub_pos) |sub_pos| {
-                if (sub_pos + 5 == self.code_len - 2) {
-                    self.code[sub_pos] = @intFromEnum(Op.get_local_const_sub_call);
-                    self.code[sub_pos + 5] = b; // argc moves to position 5
-                    self.code_len -= 1;
-                    self.last_get_local_const_sub_pos = null;
-                    // Hexa-fusion: get_global immediately before get_local_const_sub_call
-                    // → call_global_local_sub_const (13 bytes, 1 dispatch).
-                    if (self.last_get_global_code_pos) |gg_pos| {
-                        if (gg_pos + 5 == sub_pos) {
-                            self.code[gg_pos] = @intFromEnum(Op.call_global_local_sub_const);
-                            self.last_get_global_code_pos = null;
-                        }
-                    }
-                } else {
-                    self.last_get_local_const_sub_pos = null; // stale tracker
-                }
-            }
-        }
-        if (a == @intFromEnum(Op.set_local)) {
-            // Fusion: get_local dst; get_local_get_field src field; add; set_local dst
-            // → local_add_field (9 bytes, 1 dispatch).
-            if (self.code_len >= 13) {
-                const q = self.code_len - 13;
-                if (self.code[q] == @intFromEnum(Op.get_local) and
-                    self.code[q + 1] == b and
-                    self.code[q + 2] == @intFromEnum(Op.get_local_get_field) and
-                    self.code[q + 10] == @intFromEnum(Op.add))
-                {
-                    self.code[q] = @intFromEnum(Op.local_add_field);
-                    // dst stays at q+1; shift [src][skip][name_hi][name_lo][ic_hi][ic_lo][ic_fidx] left by 1
-                    self.code[q + 2] = self.code[q + 3]; // src slot
-                    self.code[q + 3] = self.code[q + 4]; // embedded get_field skip byte
-                    self.code[q + 4] = self.code[q + 5]; // name_hi
-                    self.code[q + 5] = self.code[q + 6]; // name_lo
-                    self.code[q + 6] = self.code[q + 7]; // ic_type_hi
-                    self.code[q + 7] = self.code[q + 8]; // ic_type_lo
-                    self.code[q + 8] = self.code[q + 9]; // ic_fidx
-                    self.code_len = q + 9;
-                    return;
-                }
-            }
-            // Fusion: get_local_const_add dst K + set_local dst → local_add_const dst K_hi K_lo (4 bytes, 1 dispatch).
-            if (self.last_get_local_const_add_pos) |pos| {
-                self.last_get_local_const_add_pos = null;
-                if (pos + 5 == self.code_len - 2 and self.code[pos + 1] == b) {
-                    self.code[pos] = @intFromEnum(Op.local_add_const);
-                    // Shift K_hi/K_lo left over the skipped const_add byte: [dst][skip][K_hi][K_lo] → [dst][K_hi][K_lo]
-                    self.code[pos + 2] = self.code[pos + 3];
-                    self.code[pos + 3] = self.code[pos + 4];
-                    self.code_len = pos + 4;
-                    self.last_local_add_const_pos = pos;
-                    return;
-                }
-            }
-            // Fusion: get_local dst; get_local src; add; set_local dst → local_add_local dst src (3 bytes, 1 dispatch).
-            if (self.code_len >= 7) {
-                const p = self.code_len - 7;
-                if (self.code[p] == @intFromEnum(Op.get_local) and
-                    self.code[p + 1] == b and
-                    self.code[p + 2] == @intFromEnum(Op.get_local) and
-                    self.code[p + 4] == @intFromEnum(Op.add))
-                {
-                    const src = self.code[p + 3];
-                    self.code[p] = @intFromEnum(Op.local_add_local);
-                    self.code[p + 1] = b; // dst
-                    self.code[p + 2] = src; // src
-                    self.code_len = p + 3;
-                    return;
-                }
-            }
-        }
     }
 
     // Emit opcode + 2-byte constant index (big-endian).
@@ -490,78 +265,6 @@ pub const State = struct {
                 }
             }
         }
-        if (self.last_const_code_pos) |pos| {
-            if (pos + 3 == self.code_len) {
-                const fused: ?Op = switch (op) {
-                    .eq => .const_eq,
-                    .sub => .const_sub,
-                    .add => .const_add,
-                    .lt => .const_lt,
-                    .gt => .const_gt,
-                    else => null,
-                };
-                if (fused) |fop| {
-                    self.code[pos] = @intFromEnum(fop);
-                    // Triple fusion: get_local (2 bytes) must be provably the instruction
-                    // immediately before the constant — use position arithmetic, not a
-                    // code-byte inspect, to avoid false positives from preceding data bytes.
-                    if (self.last_get_local_code_pos) |gl_pos| {
-                        if (gl_pos + 2 == pos) {
-                            const triple: ?Op = switch (fop) {
-                                .const_eq => .get_local_const_eq,
-                                .const_sub => .get_local_const_sub,
-                                .const_add => .get_local_const_add,
-                                .const_lt => .get_local_const_lt,
-                                .const_gt => .get_local_const_gt,
-                                else => null,
-                            };
-                            if (triple) |top| {
-                                self.code[gl_pos] = @intFromEnum(top);
-                                // Layout: [top][slot][fop_byte(skip)][idx_hi][idx_lo]
-                                // code[gl_pos+1] = slot, code[pos] = fop (skip byte),
-                                // code[pos+1..+2] = const_idx — all unchanged.
-                                if (top == .get_local_const_eq) {
-                                    self.last_triple_eq_pos = gl_pos;
-                                } else if (top == .get_local_const_lt) {
-                                    self.last_triple_lt_pos = gl_pos;
-                                } else if (top == .get_local_const_gt) {
-                                    self.last_triple_gt_pos = gl_pos;
-                                } else if (top == .get_local_const_sub) {
-                                    self.last_get_local_const_sub_pos = gl_pos;
-                                } else if (top == .get_local_const_add) {
-                                    self.last_get_local_const_add_pos = gl_pos;
-                                }
-                            }
-                        }
-                    }
-                    // Triple fusion: get_global (5 bytes) immediately before constant (3 bytes).
-                    if (self.last_get_global_code_pos) |gg_pos| {
-                        if (gg_pos + 5 == pos) {
-                            const triple: ?Op = switch (fop) {
-                                .const_eq => .get_global_const_eq,
-                                .const_sub => .get_global_const_sub,
-                                .const_add => .get_global_const_add,
-                                .const_lt => .get_global_const_lt,
-                                else => null,
-                            };
-                            if (triple) |top| {
-                                self.code[gg_pos] = @intFromEnum(top);
-                                if (top == .get_global_const_eq) {
-                                    self.last_triple_global_eq_pos = gg_pos;
-                                } else if (top == .get_global_const_lt) {
-                                    self.last_triple_global_lt_pos = gg_pos;
-                                } else if (top == .get_global_const_add) {
-                                    self.last_get_global_const_add_pos = gg_pos;
-                                }
-                                self.last_get_global_code_pos = null;
-                            }
-                        }
-                    }
-                    self.last_const_code_pos = null;
-                    return;
-                }
-            }
-        }
         self.last_const_code_pos = null;
         try self.emitOp(op, line);
     }
@@ -651,7 +354,6 @@ pub const State = struct {
         try self.emitByte(@intCast(idx & 0xff), line);
         try self.emitByte(0xff, line);
         try self.emitByte(0xff, line);
-        self.last_get_global_code_pos = self.code_len - 5;
     }
 
     // Emit get_global when constant index is already known.
@@ -661,31 +363,16 @@ pub const State = struct {
         try self.emitByte(@intCast(idx & 0xff), line);
         try self.emitByte(0xff, line);
         try self.emitByte(0xff, line);
-        self.last_get_global_code_pos = self.code_len - 5;
     }
 
     // Emit set_global: op + name_idx(2) + ic_slot(2, cold=0xFFFF).
     pub fn emitSetGlobal(self: *State, name: []const u8, line: u32) !void {
         const idx = try self.addStringConst(name);
-        // Peephole: get_global_const_add X k immediately preceding set_global X
-        // → inc_global_const X k (8 bytes, 1 dispatch). Saves 1 dispatch for n += k patterns.
-        if (self.last_get_global_const_add_pos) |ga_pos| {
-            self.last_get_global_const_add_pos = null;
-            if (ga_pos + 8 == self.code_len and
-                self.code[ga_pos + 1] == @as(u8, @intCast((idx >> 8) & 0xff)) and
-                self.code[ga_pos + 2] == @as(u8, @intCast(idx & 0xff)))
-            {
-                self.code[ga_pos] = @intFromEnum(Op.inc_global_const);
-                self.last_set_global_code_pos = null;
-                return;
-            }
-        }
         try self.emitByte(@intFromEnum(Op.set_global), line);
         try self.emitByte(@intCast((idx >> 8) & 0xff), line);
         try self.emitByte(@intCast(idx & 0xff), line);
         try self.emitByte(0xff, line);
         try self.emitByte(0xff, line);
-        self.last_set_global_code_pos = self.code_len - 5;
     }
 
     // Emit get_field: op + name_idx(2) + ic_type(2, cold=0xFFFF) + ic_fidx(1, cold=0xFF).
@@ -697,14 +384,6 @@ pub const State = struct {
         try self.emitByte(0xff, line);
         try self.emitByte(0xff, line);
         try self.emitByte(0xff, line);
-        // Peephole: get_local immediately before get_field → get_local_get_field (8 bytes, 1 dispatch).
-        if (self.last_get_local_code_pos) |gl_pos| {
-            if (gl_pos + 8 == self.code_len) {
-                self.code[gl_pos] = @intFromEnum(Op.get_local_get_field);
-                self.last_get_local_code_pos = null;
-                self.last_const_code_pos = null;
-            }
-        }
     }
 
     // Emit set_field: op + name_idx(2) + ic_type(2, cold=0xFFFF) + ic_fidx(1, cold=0xFF).
@@ -740,78 +419,9 @@ pub const State = struct {
         try self.emitByte(argc, line);
     }
 
+    // Jump/loop fusion (quad/quint patterns, close_upvalue+loop, etc.) happens
+    // in the load-time fusion pass; the emitter always writes the plain form.
     pub fn emitJump(self: *State, op: Op, line: u32) !usize {
-        // Quint fusion: get_local_const_lt_jif_pop immediately preceding jump →
-        // get_local_const_lt_jif_pop_jump (13 bytes).
-        if (op == .jump) {
-            if (self.last_quad_lt_jif_pos) |tp| {
-                if (tp + 9 == self.code_len) {
-                    self.code[tp] = @intFromEnum(Op.get_local_const_lt_jif_pop_jump);
-                    try self.emitByte(0xff, line);
-                    try self.emitByte(0xff, line);
-                    try self.emitByte(0xff, line);
-                    try self.emitByte(0xff, line);
-                    self.last_quad_lt_jif_pos = null;
-                    return self.code_len - 4;
-                }
-            }
-        }
-        // Quad fusion: get_local_const_eq immediately preceding jif_pop →
-        // get_local_const_eq_jif_pop (9 bytes, saves 1 dispatch per conditional check).
-        if (op == .jif_pop) {
-            if (self.last_triple_eq_pos) |tp| {
-                if (tp + 5 == self.code_len) {
-                    self.code[tp] = @intFromEnum(Op.get_local_const_eq_jif_pop);
-                    try self.emitByte(0xff, line);
-                    try self.emitByte(0xff, line);
-                    try self.emitByte(0xff, line);
-                    try self.emitByte(0xff, line);
-                    self.last_triple_eq_pos = null;
-                    return self.code_len - 4;
-                }
-            }
-            // Quad fusion: get_local_const_lt immediately preceding jif_pop →
-            // get_local_const_lt_jif_pop (9 bytes, saves 1 dispatch per conditional check).
-            if (self.last_triple_lt_pos) |tp| {
-                if (tp + 5 == self.code_len) {
-                    self.code[tp] = @intFromEnum(Op.get_local_const_lt_jif_pop);
-                    try self.emitByte(0xff, line);
-                    try self.emitByte(0xff, line);
-                    try self.emitByte(0xff, line);
-                    try self.emitByte(0xff, line);
-                    self.last_triple_lt_pos = null;
-                    const result = self.code_len - 4;
-                    self.last_quad_lt_jif_pos = tp; // track for quint-fusion
-                    return result;
-                }
-            }
-            // Quad fusion: get_local_const_gt immediately preceding jif_pop →
-            // get_local_const_gt_jif_pop (9 bytes, saves 1 dispatch per conditional check).
-            if (self.last_triple_gt_pos) |tp| {
-                if (tp + 5 == self.code_len) {
-                    self.code[tp] = @intFromEnum(Op.get_local_const_gt_jif_pop);
-                    try self.emitByte(0xff, line);
-                    try self.emitByte(0xff, line);
-                    try self.emitByte(0xff, line);
-                    try self.emitByte(0xff, line);
-                    self.last_triple_gt_pos = null;
-                    return self.code_len - 4;
-                }
-            }
-            // Quad fusion: get_global_const_lt immediately preceding jif_pop →
-            // get_global_const_lt_jif_pop (12 bytes, saves 1 dispatch per conditional check).
-            if (self.last_triple_global_lt_pos) |tp| {
-                if (tp + 8 == self.code_len) {
-                    self.code[tp] = @intFromEnum(Op.get_global_const_lt_jif_pop);
-                    try self.emitByte(0xff, line);
-                    try self.emitByte(0xff, line);
-                    try self.emitByte(0xff, line);
-                    try self.emitByte(0xff, line);
-                    self.last_triple_global_lt_pos = null;
-                    return self.code_len - 4;
-                }
-            }
-        }
         try self.emitOp(op, line);
         try self.emitByte(0xff, line);
         try self.emitByte(0xff, line);
@@ -827,96 +437,9 @@ pub const State = struct {
         self.code[offset + 1] = @intCast((jump >> 16) & 0xff);
         self.code[offset + 2] = @intCast((jump >> 8) & 0xff);
         self.code[offset + 3] = @intCast(jump & 0xff);
-        // Suppress pending peephole fusion across this boundary.
-        self.last_const_code_pos = null;
-        self.last_get_local_code_pos = null;
-        self.last_triple_eq_pos = null;
-        self.last_triple_lt_pos = null;
-        self.last_triple_gt_pos = null;
-        self.last_get_global_code_pos = null;
-        self.last_triple_global_eq_pos = null;
-        self.last_triple_global_lt_pos = null;
-        self.last_set_global_code_pos = null;
-        self.last_quad_lt_jif_pos = null;
-        self.last_close_upvalue_pos = null;
-        self.last_local_add_const_pos = null;
-        self.last_get_global_const_add_pos = null;
     }
 
     pub fn emitLoop(self: *State, loop_start: usize, line: u32) !void {
-        // Peephole: close_upvalue (2 bytes) immediately preceding loop → close_upvalue_loop (6 bytes).
-        if (self.last_close_upvalue_pos) |cu_pos| {
-            if (cu_pos + 2 == self.code_len) {
-                self.last_const_code_pos = null;
-                self.last_get_local_code_pos = null;
-                self.last_triple_eq_pos = null;
-                self.last_triple_lt_pos = null;
-                self.last_set_global_code_pos = null;
-                self.last_quad_lt_jif_pos = null;
-                self.last_close_upvalue_pos = null;
-                self.last_local_add_const_pos = null;
-                self.code[cu_pos] = @intFromEnum(Op.close_upvalue_loop);
-                const offset = self.code_len - loop_start + 4;
-                if (offset > 0xffffffff) return error.LoopTooLarge;
-                try self.emitByte(@intCast((offset >> 24) & 0xff), line);
-                try self.emitByte(@intCast((offset >> 16) & 0xff), line);
-                try self.emitByte(@intCast((offset >> 8) & 0xff), line);
-                try self.emitByte(@intCast(offset & 0xff), line);
-                return;
-            }
-        }
-        // Peephole: local_add_const (4 bytes) immediately preceding loop → local_add_const_loop (8 bytes).
-        if (self.last_local_add_const_pos) |lac_pos| {
-            if (lac_pos + 4 == self.code_len) {
-                self.last_const_code_pos = null;
-                self.last_get_local_code_pos = null;
-                self.last_triple_eq_pos = null;
-                self.last_triple_lt_pos = null;
-                self.last_set_global_code_pos = null;
-                self.last_quad_lt_jif_pos = null;
-                self.last_close_upvalue_pos = null;
-                self.last_local_add_const_pos = null;
-                self.code[lac_pos] = @intFromEnum(Op.local_add_const_loop);
-                const offset = self.code_len - loop_start + 4;
-                if (offset > 0xffffffff) return error.LoopTooLarge;
-                try self.emitByte(@intCast((offset >> 24) & 0xff), line);
-                try self.emitByte(@intCast((offset >> 16) & 0xff), line);
-                try self.emitByte(@intCast((offset >> 8) & 0xff), line);
-                try self.emitByte(@intCast(offset & 0xff), line);
-                return;
-            }
-        }
-        // Peephole: if the last emitted instruction is set_global (5 bytes), fuse it with
-        // the back-edge into set_global_loop.
-        if (self.last_set_global_code_pos) |sg_pos| {
-            if (sg_pos + 5 == self.code_len) {
-                self.last_const_code_pos = null;
-                self.last_get_local_code_pos = null;
-                self.last_triple_eq_pos = null;
-                self.last_triple_lt_pos = null;
-                self.last_set_global_code_pos = null;
-                self.last_quad_lt_jif_pos = null;
-                self.last_close_upvalue_pos = null;
-                self.last_local_add_const_pos = null;
-                self.code[sg_pos] = @intFromEnum(Op.set_global_loop);
-                const offset = self.code_len - loop_start + 4;
-                if (offset > 0xffffffff) return error.LoopTooLarge;
-                try self.emitByte(@intCast((offset >> 24) & 0xff), line);
-                try self.emitByte(@intCast((offset >> 16) & 0xff), line);
-                try self.emitByte(@intCast((offset >> 8) & 0xff), line);
-                try self.emitByte(@intCast(offset & 0xff), line);
-                return;
-            }
-        }
-        self.last_const_code_pos = null;
-        self.last_get_local_code_pos = null;
-        self.last_triple_eq_pos = null;
-        self.last_triple_lt_pos = null;
-        self.last_triple_gt_pos = null;
-        self.last_set_global_code_pos = null;
-        self.last_quad_lt_jif_pos = null;
-        self.last_close_upvalue_pos = null;
-        self.last_local_add_const_pos = null;
         try self.emitOp(.loop, line);
         const offset = self.code_len - loop_start + 4;
         if (offset > 0xffffffff) return error.LoopTooLarge;
@@ -936,20 +459,6 @@ pub const State = struct {
         self.last_const_idx = 0;
         self.prev_const_code_pos = null;
         self.prev_const_idx = 0;
-        self.last_get_local_code_pos = null;
-        self.last_triple_eq_pos = null;
-        self.last_triple_lt_pos = null;
-        self.last_triple_gt_pos = null;
-        self.last_get_local_const_sub_pos = null;
-        self.last_get_local_const_add_pos = null;
-        self.last_get_global_code_pos = null;
-        self.last_triple_global_eq_pos = null;
-        self.last_triple_global_lt_pos = null;
-        self.last_set_global_code_pos = null;
-        self.last_quad_lt_jif_pos = null;
-        self.last_close_upvalue_pos = null;
-        self.last_local_add_const_pos = null;
-        self.last_get_global_const_add_pos = null;
         self.std_call_patch_pos = null;
         self.verify_err_len = 0;
         self.verified = false;
@@ -975,18 +484,7 @@ pub const State = struct {
 
     pub fn truncateTo(self: *State, pos: usize) void {
         self.code_len = pos;
-        // Clear all position-based peephole trackers whose stored positions now lie
-        // in the truncated region.
-        self.last_get_local_code_pos = null;
         self.last_const_code_pos = null;
-        self.last_set_global_code_pos = null;
-        self.last_triple_eq_pos = null;
-        self.last_triple_lt_pos = null;
-        self.last_triple_gt_pos = null;
-        self.last_get_local_const_sub_pos = null;
-        self.last_get_local_const_add_pos = null;
-        self.last_quad_lt_jif_pos = null;
-        self.last_close_upvalue_pos = null;
     }
 
     pub fn deleteCodeRange(self: *State, start: usize, len: usize) void {
@@ -997,22 +495,7 @@ pub const State = struct {
         std.mem.copyForwards(u16, self.lines[start..new_len], self.lines[tail_start..self.code_len]);
         std.mem.copyForwards(u16, self.cols[start..new_len], self.cols[tail_start..self.code_len]);
         self.code_len = new_len;
-        self.last_get_local_code_pos = null;
         self.last_const_code_pos = null;
-        self.last_set_global_code_pos = null;
-        self.last_triple_eq_pos = null;
-        self.last_triple_lt_pos = null;
-        self.last_triple_gt_pos = null;
-        self.last_get_local_const_sub_pos = null;
-        self.last_get_local_const_add_pos = null;
-        self.last_quad_lt_jif_pos = null;
-        self.last_close_upvalue_pos = null;
-        self.last_get_global_code_pos = null;
-        self.last_triple_global_eq_pos = null;
-        self.last_triple_global_lt_pos = null;
-        self.last_call_pos = null;
-        self.last_local_add_const_pos = null;
-        self.last_get_global_const_add_pos = null;
         self.std_call_patch_pos = null;
         self.verified = false;
         self.verified_code_len = 0;
