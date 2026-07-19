@@ -21,7 +21,9 @@ The source files for the components described here:
 |---|---|
 | Value and Object types | `src/lang/value.zig` |
 | Opcodes | `src/lang/op.zig` |
-| Bytecode emitter and peephole | `src/lang/chunk.zig` |
+| Bytecode emitter (core ops only, plus constant folding) | `src/lang/chunk.zig` |
+| Load-time fusion pass (core → fused/specialized ops) | `src/lang/fusion_pass.zig` |
+| Fused → core defusion (reverse direction) | `src/lang/vm_defuse.zig` |
 | VM state (stack, frames, etc.) | `src/lang/vm_state.zig` |
 | Dispatch loop and op handlers | `src/lang/vm.zig` |
 | GC | `src/lang/vm_gc.zig` |
@@ -260,52 +262,95 @@ All opcode handlers are plain Zig functions or inline code. The opcode byte is c
 
 ---
 
-## 6. Peephole Fusions
+## 6. The Fusion Pass
 
-The compiler's `chunk.zig` emitter runs a **single-pass peephole optimizer**: as each instruction is emitted, a small set of tracked positions allows the emitter to detect patterns spanning 2–4 instructions and replace them with a single fused instruction.
+The compiler's `chunk.zig` emitter is a plain single-pass code generator: it
+emits only **core ops** and never tracks or rewrites already-emitted bytes
+(the one exception is constant folding — see §6.4). Every compile path
+(`Runtime.compileOnly`, `compileProgram`, the REPL's `runIncremental`) then
+runs the compiled chunk through `fusion_pass.fuse()`, a separate rewrite
+pass that turns core-op bytecode into the VM's fused/specialized
+instruction set before the verifier's final check and first execution.
 
-Fused instructions reduce dispatch count. They do not change observable semantics.
+This split — plain emission, then a dedicated rewrite pass — exists so
+there is exactly **one** fusion implementation shared by fresh compiles and
+(eventually) loads from the bytecode cache, instead of an emission-time
+peephole and a separate load-time pass that could silently disagree. Prior
+to 2026-07-19 the emitter carried its own peephole optimizer with 16
+tracked positions and per-boundary invalidation logic; that machinery is
+gone (`4ea7207`) now that the pass is load-bearing everywhere.
 
-### 6.1 Tracking State
+Fused instructions reduce dispatch count. They do not change observable
+semantics: `vm_defuse.zig` expands any fused chunk back to core ops, and
+the differential in `chaos_spec_test.zig` ("spec pass cases refuse
+differential") proves compile → defuse → fuse → run reproduces the
+original output for the entire spec corpus.
 
-The `chunk.State` struct carries several nullable position fields:
+### 6.1 How the Pass Works
 
-| Field | Tracks |
-|---|---|
-| `last_const_code_pos` | Position of the last `constant k` instruction |
-| `last_get_local_code_pos` | Position of the last `get_local slot` instruction |
-| `last_triple_eq_pos` | Position of the last `get_local_const_eq` (triple-fused) |
-| `last_triple_lt_pos` | Position of the last `get_local_const_lt` (triple-fused) |
-| `last_get_local_const_sub_pos` | Position of the last `get_local_const_sub` triple |
-| `last_get_local_const_add_pos` | Position of the last `get_local_const_add` triple |
-| `last_set_global_code_pos` | Position of the last `set_global n` instruction |
+`fusion_pass.zig` treats every fusion as a rewrite of **adjacent
+instructions** — a pair, or (for `local_add_local`/`local_add_field`) a
+fixed 4-instruction window — with a single legality rule: **the second
+instruction of the pair/window must not be a branch target.** Function
+entry points and module boundaries count as targets too, alongside jump
+destinations. This one rule replaces the emitter's nine separate
+invalidation blocks, because "is this position jumped to?" is exactly the
+condition under which fusing across it would be unsound (something could
+resume execution mid-fused-instruction).
 
-When a pattern fires, the emitter overwrites the tracked position in-place and truncates `code_len`, effectively replacing multiple already-emitted instructions with one.
+The pass runs its pair/window rewrite to a fixpoint: each iteration can
+fuse instructions that the previous iteration just made adjacent (e.g. a
+triple forms, then a quad forms on top of the triple, then a quint on top
+of that). A round-count safety valve stops runaway iteration; in practice
+the fixpoint is reached in about 4 stages for the deepest chains (the
+for-loop header quint, the recursive-call hexa-fusion chain).
 
 ### 6.2 Fusion Table
 
-| Fused opcode | Replaces | Width | Dispatch reduction |
-|---|---|---|---|
-| `ret_const k` | `constant k` + `ret` | 3 bytes | 2 → 1 |
-| `get_local_ret s` | `get_local s` + `ret` | 2 bytes | 2 → 1 |
-| `add_ret` | `add` + `ret` | 1 byte | 2 → 1 |
-| `const_eq/sub/add/lt k` | `constant k` + `eq/sub/add/lt` | 3 bytes | 2 → 1 |
-| `get_local_const_eq/sub/add/lt s k` | `get_local s` + `const_eq/sub/add/lt k` | 5 bytes | 3 → 1 |
-| `get_local_const_eq_jif_pop s k off` | `get_local_const_eq s k` + `jif_pop off` | 9 bytes | 4 → 1 |
-| `get_local_const_lt_jif_pop s k off` | `get_local_const_lt s k` + `jif_pop off` | 9 bytes | 4 → 1 |
-| `get_local_get_field s name` | `get_local s` + `get_field name` | 8 bytes | 2 → 1 |
-| `get_local_const_sub_call s k n` | `get_local_const_sub s k` + `call n` | 6 bytes | 4 → 1 |
-| `local_add_const dst k` | `get_local_const_add dst k` + `set_local dst` | 4 bytes | 3 → 1 |
-| `local_add_local dst src` | `get_local dst` + `get_local src` + `add` + `set_local dst` | 3 bytes | 4 → 1 |
-| `set_global_loop name` | `set_global name` + `loop off` | 9 bytes | 2 → 1 |
+The mnemonic-level catalog of fused opcodes, their byte widths, and their
+constituent core-op sequences is `docs/opcodes.md` — that is the single
+source of truth (kept in sync with `op.zig`) and is not duplicated here.
+As of 2026-07-19 the pass covers every fusion the old emitter peephole
+covered, including the call-fusion chain
+(`get_local_const_sub_call[_tail]`, `call_global_local_sub_const[_tail]`),
+the for-loop header quint (`get_local_const_lt_jif_pop_jump`), and the two
+4-wide window fusions (`local_add_local`, `local_add_field`).
 
-`local_add_const` and `local_add_local` include an integer fast-path in their handlers: when both operands are `.int`, the addition is performed directly as `f64 + f64` with a `isFinite` check, skipping the general `computeAddResult` path that handles strings, decimals, named types, and overflow.
+Several fused handlers include an integer fast-path: when both operands
+are `.int`, the VM performs the addition/subtraction directly rather than
+going through the generic `computeAddResult` path that also handles
+strings, decimals, named types, and overflow.
 
 ### 6.3 Encoding Contract for Fused Opcodes
 
-Each fused opcode occupies a fixed number of bytes. The VM handler reads exactly those bytes. No fused instruction may straddle a jump target, because the verifier enumerates instruction boundaries without re-running the peephole.
+Each fused opcode occupies a fixed number of bytes. The VM handler reads
+exactly those bytes. No fused instruction may straddle a jump target — the
+pass's legality rule guarantees this at rewrite time, and the verifier
+independently enumerates instruction boundaries over the already-fused
+chunk, so a violation would be caught rather than silently corrupting
+control flow.
 
-A **skip byte** appears in some fused instructions (e.g., `get_local_const_add`) as the position that held the original constituent opcode before fusion. The VM handler reads and discards it. This preserves the encoding length so that the IC slot positions already patched by prior instructions remain valid.
+A **skip byte** appears in some fused instructions (e.g.,
+`get_local_const_add`) as the position that held one of the original
+constituent opcodes before fusion. The VM handler reads and discards it.
+This keeps the encoding width predictable and leaves room for an inline
+cache slot at a fixed offset within the fused instruction.
+
+Fused values are **frozen today, exactly like core ops** — see
+`docs/opcodes.md`'s stability note. The GBC checklist below ratifies a
+future where they become private and freely renumberable, but that only
+takes effect once the bytecode cache ships a wire format that serializes
+the defused (core-ops-only) form exclusively; no such loader exists yet.
+
+### 6.4 Constant Folding Stays at Emission
+
+Constant folding (e.g. `2 + 3` → the constant `5`, adjacent string literal
+concatenation) is **not** a fusion and is not part of the pass — it
+mutates the constant pool itself, which is wire content under the
+bytecode-cache design, so it must happen once, at compile time, before any
+chunk is written or cached. The emitter's constant-position trackers
+(`last_const_code_pos` and friends) exist solely to support folding and
+were deliberately kept when the fusion trackers were deleted.
 
 ---
 

@@ -8,34 +8,6 @@ their full context lives in the referenced commits, code comments, and
 
 ## Open
 
-### A2. Consolidate the peephole trackers
-
-16 `last_*_pos: ?usize` fields in `chunk.zig`, each with its own implicit
-set/clear contract against `patchJump`/`emitLoop`/`emitByte`. Replace with a
-small ring buffer of the last N emitted instructions `{ op, pos }` and a
-single `invalidate()`; fusions pattern-match on the window.
-
-Survey 2026-07-18: the invalidation is NOT uniform — 9 wholesale clear
-blocks with 5 distinct tracker subsets (8/8/8/9/10/13/15/15/17 clears at
-chunk.zig lines ~236, 831, 850, 871, 893, 911, 939, 980, 1000). Which
-trackers deliberately survive which boundary is load-bearing for fusion
-decisions, so the redesign needs per-block analysis first: for each block,
-determine whether its subset is intentional (a fusion that legitimately
-spans that boundary) or accidental drift.
-
-Acceptance: `tools/perf-baseline.sh check` byte-identical (op counts prove
-fusion decisions unchanged) + defuse differential green. The harness
-catches both failure directions (over-invalidation → op counts change;
-under-invalidation → differential/tests). Needs a fresh session with full
-attention — do not attempt as a tail-end task.
-
-REDEFINED by the GBC design (see checklist below): rather than
-consolidating the emission-time trackers, build the load/compile-time
-instruction-selection pass and delete emission-time fusion entirely —
-one fusion implementation serving both fresh compiles and cache loads.
-Sequence after the Tier 2 decision (the pass emits whatever instruction
-set the execution model lands on).
-
 ### A6. Native-lane test coverage (ongoing practice + backfill)
 
 Practice (permanent): every language-semantics fix gets a NATIVE test in
@@ -160,29 +132,12 @@ Lua-parity requirement; the stack ISA and the ratified wire design freeze.
 
 **GBC execution order** (each step independently shippable):
 1. `[x]` Merge the TOS spike (+6%).
-2. Fusion pass (A2 redefined): build the instruction-selection pass over
-   verified bytecode, then DELETE the 16 emission-time trackers and their
-   9 invalidation blocks. Acceptance adjusted from byte-identical: defused
-   differential green, benchmarks neutral-or-better, perf-baseline deltas
-   each explained by a named additional fusion (a clean pass may legally
-   fuse MORE than the trackers did).
-   PHASE A DONE (2026-07-19): lang/fusion_pass.zig — pair-table rewriter
-   run to fixpoint (every fusion is a pair of the previous stage's output),
-   legality = "second instruction is not a branch target" (one rule
-   replacing all nine invalidation blocks; quint body offsets surfaced as
-   targets manually — the decoder hides them). Verified by the new
-   refuse differential in chaos_spec_test: all 254 spec cases compile →
-   defuse → fuse → run with identical output, and the pass recovers 81%
-   of the emitter's fusion by byte-weight (63137 emitter / 64131 defused /
-   63326 pass). Remaining for Phase B: the five uncovered patterns
-   (glsc/cglsc call chains, get_local_get_field, inc_global_const,
-   local_add_local, local_add_field — the 189-byte gap), then the
-   emitter-tracker deletion. Constant folding stays in the compiler by
-   design (it mutates the const pool = wire content).
+2. `[x]` Fusion pass (A2 redefined) — DONE, see the completed ledger and
+   `dev-docs/design/vm-architecture.md` §6.
 3. GBC writer/reader over the defused form (the compiler's natural
-   pre-pass output).
+   pre-pass output). NOT STARTED.
 4. Verifier hardening with the loader: depth-divergence hard error,
-   second-const-index validation.
+   second-const-index validation. NOT STARTED.
 
 ### Historical framing — Tier 2 vs Tier 3 (decided above)
 
@@ -239,3 +194,8 @@ Zen review + fib hunt outcomes; details in the commits.
   `dcdb578`, profile-guided inlining `0f8d60e`, engine #203 `0bff256`,
   api.run provider fix `dc5521b`, enum-typed bindings `c3af28b`, native
   host modules `ff920e6`
+- A2 (redefined): load-time fusion pass replaces the 16 emitter peephole
+  trackers — `660e690` (phase A), `8f58d02` (phase B, full pattern
+  parity), `4ea7207` (wired into production, trackers deleted, -525
+  lines in chunk.zig). perf-baseline zero-change across 17 cases; see
+  `dev-docs/design/vm-architecture.md` §6 for the design writeup.
