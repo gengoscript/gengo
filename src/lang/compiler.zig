@@ -1262,10 +1262,22 @@ pub const Compiler = struct {
         }
     }
 
+    pub fn isEnumTypeName(self: *Compiler, name: []const u8) bool {
+        const info = self.registry.getNamedTypeInfo(name) orelse return false;
+        return info.base == .enum_t;
+    }
+
     fn isErasedNamedType(self: *Compiler, name: []const u8) bool {
         const info = self.registry.getNamedTypeInfo(name) orelse return false;
         return switch (info.base) {
             .int, .float, .bool, .rune => true,
+            // Enum types are erased for prolog/epilog purposes: they are not
+            // constructors (TypeName(value) is NotAFunction for a plain enum),
+            // and the erased epilog (emitNamedValidation) is a no-op for them
+            // (no range, no predicate). Enum-aware consumers such as the
+            // zero-init default still see the .named check and branch on
+            // base == .enum_t themselves.
+            .enum_t => true,
             else => false,
         };
     }

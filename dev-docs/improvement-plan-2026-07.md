@@ -149,6 +149,29 @@ marking tolerates path-dependent depth divergence (iterator exhaustion path
 is 1 shallower than modeled). Harmless for compiler-emitted bytecode;
 should become a hard verifier error before GBC accepts external bytecode.
 
+### A6. Native-lane coverage for language semantics `[ ]` (added 2026-07-19)
+
+Mikael's observation, proven by the enum-assignment regression: language
+cases live overwhelmingly in the spec/.gengo conformance suite (wasmtime
+lane) and the stress scripts — the slowest gates. The enum bug passed the
+dev suite, fuzz, and perf-baseline, and was caught only by the pre-push
+battery's stress-script lane.
+
+Practice going forward (start applying immediately, backfill
+opportunistically):
+1. Every language-semantics fix gets a NATIVE test in compiler_test.zig
+   alongside (not instead of) its spec case.
+2. Prefer bytecode-shape assertions (compile + walk with chunk.decodeAt,
+   assert op presence/absence) where the bug is a miscompile — they catch
+   it in microseconds with no execution, and the pattern already exists
+   (see "enum-typed assignment emits no constructor call").
+3. Candidates for backfill: the typed-assignment prolog/epilog matrix
+   (prim/named/erased/enum × :=/var/compound/incdec/named-return), fusion
+   decisions, call-flag emission (0x80), return-proof stamping.
+
+The spec suite remains the semantics-of-record; the native lane exists so
+regressions die at `zig build test` speed instead of pre-push speed.
+
 ## Track C — Performance (fib call-overhead hunt, remaining items)
 
 Context: fib(32) 0.45s vs Python 0.19s (realistic target), Lua 0.095s

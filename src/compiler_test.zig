@@ -2681,6 +2681,64 @@ test "two runtimes run concurrently on separate threads (#190)" {
     try std.testing.expect(!failed.load(.seq_cst));
 }
 
+test "compiler: enum-typed assignment emits no constructor call" {
+    // Regression for the simlab2 NotAFunction crash: the named-type
+    // assignment epilog compiled enum-typed assignments (inferred := AND
+    // explicit var) to a Priority(value) constructor call, which enum types
+    // cannot satisfy. This asserts the compile SHAPE — no call opcodes may
+    // appear at all in a script whose source contains no calls — so the
+    // miscompile is caught without executing anything.
+    var rt = try setup();
+    defer rt.deinit();
+
+    try compileWithSession(&rt,
+        \\type Priority enum { low, medium, high }
+        \\func pick() Priority {
+        \\    pri := Priority.medium
+        \\    pri = Priority.high
+        \\    return pri
+        \\}
+        \\var explicit Priority = Priority.low
+        \\explicit = Priority.medium
+    , "");
+
+    const c = rt.chunk_state;
+    var ip: usize = 0;
+    while (ip < c.code_len) {
+        const inst = try chunk.decodeAt(ip);
+        switch (inst.op) {
+            .call, .call_tail, .call_spread, .get_local_const_sub_call, .get_local_const_sub_call_tail, .call_global_local_sub_const, .call_global_local_sub_const_tail => {
+                std.debug.print("unexpected {s} at ip={d}\n", .{ @tagName(inst.op), ip });
+                return error.TestUnexpectedResult;
+            },
+            else => {},
+        }
+        ip += inst.width;
+    }
+}
+
+test "compiler: enum-typed bindings assign and zero-init correctly" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Priority enum { low, medium, high }
+        \\var explicit Priority = Priority.low
+        \\explicit = Priority.medium
+        \\var zeroed Priority
+        \\func check() int {
+        \\    pri := Priority.medium
+        \\    pri = Priority.high
+        \\    ok := 0
+        \\    if pri == Priority.high { ok = ok + 1 }
+        \\    if explicit == Priority.medium { ok = ok + 1 }
+        \\    if zeroed == Priority.low { ok = ok + 1 }
+        \\    return ok
+        \\}
+    );
+    const r = try rt.callGlobal("check", &.{});
+    try std.testing.expect(r == .int and r.int == 3);
+}
+
 test "compiler: named-type local method call lowers to direct global call (3b)" {
     var rt = try setup();
     defer rt.deinit();

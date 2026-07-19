@@ -557,7 +557,8 @@ pub fn compoundStmt(c: anytype) !void {
     const is_erased_named = if (named_type) |nt| blk: {
         const info = c.registry.getNamedTypeInfo(nt) orelse break :blk false;
         break :blk switch (info.base) {
-            .int, .float, .bool, .rune => true,
+            // .enum_t: see isErasedNamedType — enums take the erased path.
+            .int, .float, .bool, .rune, .enum_t => true,
             else => false,
         };
     } else false;
@@ -1079,7 +1080,8 @@ pub fn incrStmt(c: anytype) !void {
         if (t == .named) {
             const info = c.registry.getNamedTypeInfo(t.named);
             const is_erased_named = if (info) |nt| switch (nt.base) {
-                .int, .float, .bool, .rune => true,
+                // .enum_t: see isErasedNamedType — enums take the erased path.
+                .int, .float, .bool, .rune, .enum_t => true,
                 else => false,
             } else false;
             if (is_erased_named) {
@@ -2190,7 +2192,13 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
         }
         // Named-type constructor must be pushed before the argument value
         // because performCall expects the callee at stack[top - argc - 1].
-        if (inferred_type_check == .named) {
+        // Enums with an initializer skip the push entirely: enum types are
+        // not constructors (the call would be NotAFunction). The no-init
+        // zero-default path still needs the type object on the stack — its
+        // enum branch reads the first member off it via get_field.
+        if (inferred_type_check == .named and
+            !(c.check(.eq) and c.isEnumTypeName(inferred_type_check.named)))
+        {
             try c.cs.emitGetGlobal(inferred_type_check.named, name.line);
         }
         if (c.match(.eq)) {
@@ -2218,7 +2226,10 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
                     .bigint => try c.cs.emitOp(.cast_bigint, name.line),
                 }
             } else if (inferred_type_check == .named) {
-                try c.cs.emitCall(1, name.line);
+                // Enums: no constructor call — no type object was pushed.
+                if (!c.isEnumTypeName(inferred_type_check.named)) {
+                    try c.cs.emitCall(1, name.line);
+                }
             } else if (inferred_type_check == .assert_map) {
                 try c.cs.emit2(@intFromEnum(Op.assert_type), 2, name.line);
             } else if (inferred_type_check == .assert_err) {
