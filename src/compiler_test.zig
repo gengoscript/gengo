@@ -12,6 +12,7 @@ const Value = @import("lang/value.zig").Value;
 const module_compile = @import("lang/module_compile.zig");
 const vm = @import("lang/vm.zig");
 const vm_defuse = @import("lang/vm_defuse.zig");
+const fusion_pass = @import("lang/fusion_pass.zig");
 const chunk_decoder = @import("lang/chunk_decoder.zig");
 
 fn setup() !Runtime {
@@ -30,6 +31,7 @@ fn compile(rt: *Runtime, src: []const u8) !void {
 
     var compiler = Compiler.init(src, chunk.g_state, heap.g_state, .{});
     try compiler.compile(true);
+    try fusion_pass.fuse(chunk.g_state, rt.vm_state.allocator);
 }
 
 fn compileWithSession(rt: *Runtime, src: []const u8, path: []const u8) !void {
@@ -56,6 +58,7 @@ fn compileWithSession(rt: *Runtime, src: []const u8, path: []const u8) !void {
     });
     _ = path;
     try compiler.compile(true);
+    try fusion_pass.fuse(chunk.g_state, rt.vm_state.allocator);
 }
 
 const CompileSnapshot = struct {

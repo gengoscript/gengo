@@ -1588,22 +1588,9 @@ pub fn returnStmt(c: anytype) !void {
     // Named return variables (slots [named_return_base .. named_return_base+named_return_count))
     // must NOT be closed here: retSlowPath reads them AFTER deferred functions run, and
     // closing them severs the connection between the deferred closure's upvalue and the slot.
+    // Tail-call upgrade (call immediately followed by ret → call_tail) is decided
+    // by the load-time fusion pass, which sees whether close_upvalue intervened.
     var idx: u8 = scope.local_count;
-    // If no close_upvalue instructions will be emitted between the last call and ret,
-    // upgrade that call to its tail-position variant so the VM skips tryTailCall.
-    {
-        var any_capture = false;
-        var ci: u8 = scope.local_count;
-        while (ci > 0) {
-            ci -= 1;
-            if (ci >= scope.named_return_base and ci < scope.named_return_base + scope.named_return_count) continue;
-            if (scope.locals[ci].is_captured) {
-                any_capture = true;
-                break;
-            }
-        }
-        if (!any_capture) c.cs.tryUpgradeLastCallToTailCall();
-    }
     while (idx > 0) {
         idx -= 1;
         if (idx >= scope.named_return_base and idx < scope.named_return_base + scope.named_return_count) {
