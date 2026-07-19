@@ -343,9 +343,11 @@ provide a callback mechanism for host modules. If you register a host module
 and the script calls it, the VM will raise `HostNativeUnsupported`.
 
 Host modules only work when the runtime is compiled with
-`native_backend = .host`, which is the mode used by the WASM/C-compatible
-engine surface (`engine-api.md`). In that mode, the host registers a callback
-function that the VM invokes through the `gengo_host` import.
+`native_backend = .host`. The C engine API supports this on both primary
+embedding targets: native callers register `engine_set_host_call_fn`, while
+WASM callers provide the `gengo_host.gengo_native_call` import. The Zig
+`api.Runtime` surface does not currently expose a native callback registration
+hook.
 
 If you are embedding from Zig and want script-to-host communication, the
 supported path is to run the script, then call back into the host from the

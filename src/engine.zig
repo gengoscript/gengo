@@ -37,6 +37,7 @@ const ReadCallback = *const fn (ptr: [*]u8, max_len: i32, is_line: i32) callconv
 const TraceFn = io.TraceFn;
 const GlobalsCallback = *const fn (?*anyopaque, [*]const u8, i32, *const ValueWire) callconv(.c) void;
 const FunctionsCallback = *const fn (?*anyopaque, [*]const u8, i32, i32) callconv(.c) void;
+const HostCallCallback = host_abi.NativeHostCallFn;
 
 // Active-engine state — set for the duration of engine_run / engine_call so that
 // write/read callbacks and capability handlers resolve to the calling engine's
@@ -147,6 +148,8 @@ const Engine = struct {
     // engine_run / engine_call via pushEngineState / popEngineState.
     write_callback: ?WriteCallback = null,
     read_callback: ?ReadCallback = null,
+    host_call_callback: ?HostCallCallback = null,
+    host_call_ctx: ?*anyopaque = null,
     net_handlers: ?net_state.HandlerSet = null,
     net_policy: net_state.PolicyState = .{},
     http_handler: ?http_state.HandlerSet = null,
@@ -190,6 +193,8 @@ const Engine = struct {
         self.wire_elem_count = 0;
         self.write_callback = null;
         self.read_callback = null;
+        self.host_call_callback = null;
+        self.host_call_ctx = null;
         self.net_handlers = null;
         self.net_policy = .{};
         self.http_handler = null;
@@ -334,6 +339,7 @@ fn pushEngineState(engine: *Engine) ?*Engine {
     engine.runtime.inner.activate();
     write_callback = engine.write_callback;
     read_callback = engine.read_callback;
+    host_abi.setNativeHostCall(engine.host_call_callback, engine.host_call_ctx);
     net_state.applyHandlers(engine.net_handlers);
     net_state.applyPolicy(engine.net_policy);
     http_state.applyHandler(engine.http_handler);
@@ -348,6 +354,7 @@ fn popEngineState(prev: ?*Engine) void {
         g_active_engine = p;
         write_callback = p.write_callback;
         read_callback = p.read_callback;
+        host_abi.setNativeHostCall(p.host_call_callback, p.host_call_ctx);
         net_state.applyHandlers(p.net_handlers);
         net_state.applyPolicy(p.net_policy);
         http_state.applyHandler(p.http_handler);
@@ -357,6 +364,7 @@ fn popEngineState(prev: ?*Engine) void {
         g_active_engine = null;
         write_callback = null;
         read_callback = null;
+        host_abi.setNativeHostCall(null, null);
         net_state.applyHandlers(null);
         net_state.clearPolicy();
         http_state.applyHandler(null);
@@ -864,6 +872,13 @@ export fn engine_set_import_loader(handle: i32, load_fn: ?ImportLoaderFn, ctx: ?
     return 0;
 }
 
+export fn engine_set_host_call_fn(handle: i32, callback: ?HostCallCallback, ctx: ?*anyopaque) i32 {
+    const engine = getEngine(handle) orelse return -1;
+    engine.host_call_callback = callback;
+    engine.host_call_ctx = ctx;
+    return 0;
+}
+
 fn validateModuleName(name: []const u8) bool {
     if (name.len == 0 or name.len > 64) return false;
     if (name[0] == '@') return false;
@@ -876,10 +891,6 @@ fn validateModuleName(name: []const u8) bool {
 
 export fn engine_register_module(handle: i32, name_ptr: PtrInt, name_len: i32, funcs_ptr: PtrInt, funcs_count: i32) i32 {
     const engine = getEngine(handle) orelse return -1;
-    if (comptime !is_wasm) {
-        engine.setError("host modules are not supported on native targets (WASM only)");
-        return -6;
-    }
     if (engine.host_module_count >= MaxHostModules) return -3;
     if (funcs_count < 0 or funcs_count > MaxHostModuleFuncs) return -4;
 
@@ -1328,6 +1339,79 @@ test "engine_call converts wires in the selected engine heap" {
     try std.testing.expectEqual(0, rc);
     try std.testing.expectEqual(@as(u8, @intFromEnum(WireTag.number)), out.tag);
     try std.testing.expectEqual(@as(i64, 1), @as(i64, @bitCast(out.payload)));
+}
+
+test "native host modules dispatch through the registered callback" {
+    if (comptime is_wasm) return;
+
+    const CallbackContext = struct {
+        module_calls: usize = 0,
+        factor: i64 = 2,
+        deny: bool = false,
+
+        fn callback(context: ?*anyopaque, id: u16, args: [*]const ValueWire, argc: u16, out: *ValueWire) callconv(.c) i32 {
+            const self = @as(*@This(), @ptrCast(@alignCast(context.?)));
+            switch (id) {
+                @intFromEnum(host_abi.HostCall.abi_version) => {
+                    out.* = .{ .tag = @intFromEnum(WireTag.number), .flags = 0, .reserved = 0, .payload = @bitCast(@as(f64, @floatFromInt(host_abi.ABI_VERSION))), .len = 0, .reserved2 = 0 };
+                    return @intFromEnum(host_abi.CallStatus.ok);
+                },
+                @intFromEnum(host_abi.HostCall.host_caps) => {
+                    out.* = .{ .tag = @intFromEnum(WireTag.number), .flags = 0, .reserved = 0, .payload = @bitCast(@as(f64, 0)), .len = 0, .reserved2 = 0 };
+                    return @intFromEnum(host_abi.CallStatus.ok);
+                },
+                HostModuleCallIdBase => {
+                    if (argc != 1 or args[0].tag != @intFromEnum(WireTag.number) or (args[0].flags & host_abi.FLAG_INTEGER) == 0) return @intFromEnum(host_abi.CallStatus.bad_args);
+                    if (self.deny) return @intFromEnum(host_abi.CallStatus.denied);
+                    self.module_calls += 1;
+                    const value: i64 = @bitCast(args[0].payload);
+                    out.* = .{ .tag = @intFromEnum(WireTag.number), .flags = host_abi.FLAG_INTEGER, .reserved = 0, .payload = @bitCast(value * self.factor), .len = 0, .reserved2 = 0 };
+                    return @intFromEnum(host_abi.CallStatus.ok);
+                },
+                else => return @intFromEnum(host_abi.CallStatus.unsupported),
+            }
+        }
+    };
+
+    const handle = engine_init();
+    try std.testing.expect(handle > 0);
+    defer engine_destroy(handle);
+
+    var context: CallbackContext = .{};
+    try std.testing.expectEqual(0, engine_set_host_call_fn(handle, CallbackContext.callback, &context));
+    const funcs = [_]HostModuleFuncDef{.{ .name_ptr = @intFromPtr("double".ptr), .name_len = 6, .arity = 1 }};
+    try std.testing.expectEqual(0, engine_register_module(handle, @intFromPtr("math".ptr), 4, @intFromPtr(&funcs), funcs.len));
+
+    const source =
+        \\math := import("host:math")
+        \\pub func answer() int { return math.double(21) }
+    ;
+    try std.testing.expectEqual(0, engine_run(handle, @intFromPtr(source.ptr), source.len));
+    var out: ValueWire = undefined;
+    try std.testing.expectEqual(0, engine_call(handle, @intFromPtr("answer".ptr), 6, 0, 0, @intFromPtr(&out)));
+    try std.testing.expectEqual(@as(u8, @intFromEnum(WireTag.number)), out.tag);
+    try std.testing.expectEqual(@as(i64, 42), @as(i64, @bitCast(out.payload)));
+    try std.testing.expectEqual(@as(usize, 1), context.module_calls);
+
+    context.deny = true;
+    try std.testing.expectEqual(-2, engine_call(handle, @intFromPtr("answer".ptr), 6, 0, 0, @intFromPtr(&out)));
+    context.deny = false;
+
+    const second = engine_init();
+    try std.testing.expect(second > 0);
+    defer engine_destroy(second);
+    var second_context: CallbackContext = .{ .factor = 3 };
+    try std.testing.expectEqual(0, engine_set_host_call_fn(second, CallbackContext.callback, &second_context));
+    try std.testing.expectEqual(0, engine_register_module(second, @intFromPtr("math".ptr), 4, @intFromPtr(&funcs), funcs.len));
+    try std.testing.expectEqual(0, engine_run(second, @intFromPtr(source.ptr), source.len));
+    var second_out: ValueWire = undefined;
+    try std.testing.expectEqual(0, engine_call(second, @intFromPtr("answer".ptr), 6, 0, 0, @intFromPtr(&second_out)));
+    try std.testing.expectEqual(@as(i64, 63), @as(i64, @bitCast(second_out.payload)));
+    try std.testing.expectEqual(@as(usize, 1), second_context.module_calls);
+
+    try std.testing.expectEqual(0, engine_call(handle, @intFromPtr("answer".ptr), 6, 0, 0, @intFromPtr(&out)));
+    try std.testing.expectEqual(@as(i64, 42), @as(i64, @bitCast(out.payload)));
+    try std.testing.expectEqual(@as(usize, 2), context.module_calls);
 }
 
 test "engine_call: recover() in defer intercepts panic" {

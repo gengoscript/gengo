@@ -55,6 +55,20 @@ typedef struct {
     uint32_t  arity;
 } gengo_host_module_func_def_t;
 
+/*
+ * Called when a Gengoscript function invokes a registered host:* module.
+ * The callback must return one of the gengo host ABI status codes:
+ *   0 = success, 1 = unsupported, 2 = denied, 3 = bad arguments, 4 = failed.
+ * args and any memory referenced by args are valid only for this call. The
+ * callback-owned data referenced by out must remain valid until the enclosing
+ * engine_run or engine_call call returns.
+ */
+typedef int32_t (*gengo_host_call_fn)(void *ctx,
+                                      uint16_t call_id,
+                                      const gengo_value_wire_t *args,
+                                      uint16_t argc,
+                                      gengo_value_wire_t *out);
+
 /* ── Import loader callback ────────────────────────────────────────────────── */
 
 /*
@@ -193,19 +207,27 @@ int32_t engine_add_source(int32_t handle,
 /*
  * Register a host module so that Gengoscript code can import it.
  * funcs: pointer to an array of gengo_host_module_func_def_t.
- * NOTE: Host modules are only supported on WASM targets. On native
- *       shared-library builds this function always returns -6.
  * Returns 0 on success,
  *        -1 if the engine handle is invalid,
  *        -3 if the module table is full,
  *        -4 if funcs_count is out of range,
- *        -5 if the module name is invalid,
- *        -6 if host modules are not supported on this platform (WASM only).
+ *        -5 if the module name is invalid.
  */
 int32_t engine_register_module(int32_t handle,
                                const char *name, int32_t name_len,
                                const gengo_host_module_func_def_t *funcs,
                                int32_t funcs_count);
+
+/*
+ * Set the native host-module dispatcher for this engine. The callback is used
+ * for host ABI negotiation and for every registered host:* function call.
+ * Pass NULL to clear the dispatcher; subsequent host calls fail with
+ * HostNativeUnsupported.
+ * Returns 0 on success, -1 if the engine handle is invalid.
+ */
+int32_t engine_set_host_call_fn(int32_t handle,
+                                gengo_host_call_fn callback,
+                                void *ctx);
 
 /* ── Import loader registration ───────────────────────────────────────────── */
 
