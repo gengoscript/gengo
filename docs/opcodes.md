@@ -1,7 +1,33 @@
 # Opcode Reference
 
-Gengo uses a single-byte opcode space (u8, 256 slots). 156 of 256 are
-assigned, leaving 100 free for future use.
+Gengo uses a single-byte opcode space (u8, 256 slots). 160 of 256 are
+assigned, leaving 96 free for future use.
+
+Two kinds of opcode live in this space, distinguished only by numeric
+range — there is no tag byte or separate namespace; the VM dispatches on
+both identically. **Core ops** (0x00–0x7D) are what the compiler emits
+directly. **Fused/specialized ops** (0xC0–0xE1) are never emitted by the
+compiler — they are produced from core-op bytecode by a separate
+load-time rewrite pass (`src/lang/fusion_pass.zig`) that runs after
+verification and before execution, replacing common 2–4 instruction
+patterns (e.g. `constant` + `eq` → `const_eq`) with a single fused
+instruction. This keeps the compiler simple (one code path, no
+emission-time pattern tracking) while still letting the VM dispatch fused
+forms at execution time. The rewrite is exact and reversible:
+`src/lang/vm_defuse.zig` expands fused code back to core ops, and a
+differential test (`chaos_spec_test.zig`, "spec pass cases refuse
+differential") compiles every spec case, defuses it, re-fuses it, and
+checks the output is unchanged.
+
+**Stability today: fused values are frozen, same as core ops.** The plan
+is for fused values to eventually become a private VM-internal detail,
+free to renumber between versions — but that only becomes true once the
+bytecode cache (GBC, `dev-docs/design/gbc-spec.md`) ships with a wire
+format that serializes the *defused*, core-ops-only form exclusively.
+That loader does not exist yet (see `dev-docs/roadmap.md`). Until it does,
+nothing decouples a fused opcode's numeric value from anything that might
+depend on it, so the same rule applies to the whole table: don't renumber
+an assigned slot, add new ops only by claiming a `reserved_*` slot.
 
 Hover a cell to see the full instruction name and description.
 
@@ -239,7 +265,7 @@ for(var r=0;r<16;r++){
 | 0xC0–0xE1 | 34 | Fused / peephole |
 | 0xE2–0xFF | 30 | Free (within fused block) |
 
-Total assigned: 156 of 256 slots.
+Total assigned: 160 of 256 slots.
 
 ## Instruction widths
 
