@@ -180,9 +180,11 @@ the reserved `message` keyword as a variable name. Native fuzz landed
 2026-07-19: fuzz_runner is dual-target (std.start entry on both), the
 fuzz-native step runs the full corpus against native codegen — where the
 unchecked stack ops, proof flags, and fused handlers actually live — and
-the pre-push hook runs it before the wasm lanes. Remaining from the
-testing-reorg survey: vm_value/vm_safety as native test roots, parity-lane
-corpus expansion (only 2 files today), and the A6 bytecode-shape backfill.
+the pre-push hook runs it before the wasm lanes. vm_value/vm_safety
+runners are dual-target too (2026-07-19): the vm-native step runs them on
+host codegen and `zig build test` gates both targets. Remaining:
+parity-lane corpus expansion (only 2 files today) and the A6
+bytecode-shape backfill.
 
 ## Track C — Performance (fib call-overhead hunt, remaining items)
 

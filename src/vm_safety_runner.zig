@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 const chunk = @import("lang/chunk.zig");
 const globals = @import("lang/globals.zig");
@@ -7,14 +8,30 @@ const Runtime = @import("runtime/runtime.zig").Runtime;
 const Value = @import("lang/value.zig").Value;
 const vm = @import("lang/vm.zig");
 
-fn writeAll(fd: std.os.wasi.fd_t, s: []const u8) void {
-    var off: usize = 0;
-    while (off < s.len) {
-        var iov = [1]std.os.wasi.ciovec_t{.{ .base = s[off..].ptr, .len = s.len - off }};
-        var wrote: usize = 0;
-        if (std.os.wasi.fd_write(fd, &iov, iov.len, &wrote) != .SUCCESS or wrote == 0) return;
-        off += wrote;
+const is_wasm = builtin.target.cpu.arch.isWasm();
+
+fn writeAll(fd: i32, s: []const u8) void {
+    if (comptime is_wasm) {
+        var off: usize = 0;
+        while (off < s.len) {
+            var iov = [1]std.os.wasi.ciovec_t{.{ .base = s[off..].ptr, .len = s.len - off }};
+            var wrote: usize = 0;
+            if (std.os.wasi.fd_write(fd, &iov, iov.len, &wrote) != .SUCCESS or wrote == 0) return;
+            off += wrote;
+        }
+    } else {
+        var off: usize = 0;
+        while (off < s.len) {
+            const wrote = std.c.write(fd, s[off..].ptr, s.len - off);
+            if (wrote <= 0) return;
+            off += @intCast(wrote);
+        }
     }
+}
+
+fn exitProc(code: u8) noreturn {
+    if (comptime is_wasm) std.os.wasi.proc_exit(code);
+    std.process.exit(code);
 }
 
 fn out(s: []const u8) void {
@@ -304,76 +321,80 @@ fn runModByZero() !void {
     return error.TestFailed;
 }
 
-export fn _start() void {
+fn runAll() void {
     runStackUnderflow() catch {
-        std.os.wasi.proc_exit(1);
+        exitProc(1);
     };
     runBytecodeOutOfBounds() catch {
-        std.os.wasi.proc_exit(1);
+        exitProc(1);
     };
     runBadConstantIndex() catch {
-        std.os.wasi.proc_exit(1);
+        exitProc(1);
     };
     runBadOpcode() catch {
-        std.os.wasi.proc_exit(1);
+        exitProc(1);
     };
     runInstructionBudgetExceeded() catch {
-        std.os.wasi.proc_exit(1);
+        exitProc(1);
     };
     runSetNamedPredicateTypeError() catch {
-        std.os.wasi.proc_exit(1);
+        exitProc(1);
     };
     runRuntimeIsolation() catch {
-        std.os.wasi.proc_exit(1);
+        exitProc(1);
     };
     runDupStackUnderflow() catch {
-        std.os.wasi.proc_exit(1);
+        exitProc(1);
     };
     runDup2StackUnderflow() catch {
-        std.os.wasi.proc_exit(1);
+        exitProc(1);
     };
     runDivByZero() catch {
-        std.os.wasi.proc_exit(1);
+        exitProc(1);
     };
     runModByZero() catch {
-        std.os.wasi.proc_exit(1);
+        exitProc(1);
     };
     runCallNumber() catch {
-        std.os.wasi.proc_exit(1);
+        exitProc(1);
     };
     runReturnAtTopLevel() catch {
-        std.os.wasi.proc_exit(1);
+        exitProc(1);
     };
     runRetConstAtTopLevel() catch {
-        std.os.wasi.proc_exit(1);
+        exitProc(1);
     };
     runBadJumpTarget() catch {
-        std.os.wasi.proc_exit(1);
+        exitProc(1);
     };
     runNegOnNonNumber() catch {
-        std.os.wasi.proc_exit(1);
+        exitProc(1);
     };
     runAssertOnNonBoolean() catch {
-        std.os.wasi.proc_exit(1);
+        exitProc(1);
     };
     runAssertMsgOnNonBoolean() catch {
-        std.os.wasi.proc_exit(1);
+        exitProc(1);
     };
     runTrapCheckOnNonNull() catch {
-        std.os.wasi.proc_exit(1);
+        exitProc(1);
     };
     runVariantPayloadOnNonObject() catch {
-        std.os.wasi.proc_exit(1);
+        exitProc(1);
     };
     runAssertTypeInvalidTag() catch {
-        std.os.wasi.proc_exit(1);
+        exitProc(1);
     };
     runSetNamedPredicateBadNtVal() catch {
-        std.os.wasi.proc_exit(1);
+        exitProc(1);
     };
     runDeferCallStackUnderflow() catch {
-        std.os.wasi.proc_exit(1);
+        exitProc(1);
     };
     out("vm-safety OK\n");
-    std.os.wasi.proc_exit(0);
+    exitProc(0);
+}
+
+pub fn main() void {
+    runAll();
 }
