@@ -135,17 +135,28 @@ Pass `NULL` to clear the callback.
 
 Registers a host-defined module that scripts can import through the `host:` prefix.
 
-**Platform restriction:** host modules are only supported on WASM targets. On
-native shared-library builds this function always fails with `-6`.
-
 Returns:
 
 - `0` on success;
 - `-1` for invalid handle;
 - `-3` if the module table is full;
 - `-4` if `funcs_count` is out of range;
-- `-5` for invalid module name; or
-- `-6` if host modules are not supported on this platform (WASM only).
+- `-5` for invalid module name.
+
+Register the native dispatcher with `engine_set_host_call_fn` before a script
+invokes a registered module. WASM hosts provide the same dispatcher through
+the `gengo_host.gengo_native_call` import.
+
+### `engine_set_host_call_fn(handle, callback, ctx) -> i32`
+
+Registers the native dispatcher for this engine's `host:*` modules. The
+callback receives the module function call ID and `ValueWire` arguments, and
+returns a `ValueWire` result plus a host ABI status code. Pass `NULL` to clear
+the dispatcher.
+
+This callback is per-engine. It is activated only while that engine is running
+or calling an exported function, so separate engine instances may safely use
+different host-module contexts when called serially.
 
 ## Capabilities
 

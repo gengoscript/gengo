@@ -32,6 +32,22 @@ pub const CallStatus = enum(i32) {
     failed = 4,
 };
 
+pub const NativeHostCallFn = *const fn (
+    ctx: ?*anyopaque,
+    id: u16,
+    args: [*]const ValueWire,
+    argc: u16,
+    out: *ValueWire,
+) callconv(.c) i32;
+
+var native_host_call_fn: ?NativeHostCallFn = null;
+var native_host_call_ctx: ?*anyopaque = null;
+
+pub fn setNativeHostCall(fn_ptr: ?NativeHostCallFn, ctx: ?*anyopaque) void {
+    native_host_call_fn = fn_ptr;
+    native_host_call_ctx = ctx;
+}
+
 pub const HostCall = enum(u16) {
     abi_version = 0,
     io_println = 1,
@@ -66,11 +82,12 @@ pub fn nativeCall(id: HostCall, args: []const ValueWire, out: *ValueWire) CallSt
 }
 
 pub fn nativeCallRaw(id: u16, args: []const ValueWire, out: *ValueWire) CallStatus {
-    if (!comptime hasHostImport()) return .unsupported;
-    const Host = struct {
-        extern "gengo_host" fn gengo_native_call(id: u16, args_ptr: [*]const ValueWire, argc: u16, out_ptr: *ValueWire) i32;
-    };
-    const rc = Host.gengo_native_call(id, args.ptr, @intCast(args.len), out);
+    const rc = if (comptime hasHostImport()) blk: {
+        const Host = struct {
+            extern "gengo_host" fn gengo_native_call(id_: u16, args_ptr: [*]const ValueWire, argc: u16, out_ptr: *ValueWire) i32;
+        };
+        break :blk Host.gengo_native_call(id, args.ptr, @intCast(args.len), out);
+    } else if (native_host_call_fn) |callback| callback(native_host_call_ctx, id, args.ptr, @intCast(args.len), out) else return .unsupported;
     return switch (rc) {
         0 => .ok,
         1 => .unsupported,

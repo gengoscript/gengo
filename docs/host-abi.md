@@ -4,16 +4,18 @@ This page defines the host bridge used when the Gengoscript VM runs with the `ho
 
 Use this document when you are implementing `gengo_native_call`. For the broader embedding surface, see `engine-api.md`.
 
-## Imported Function
+## Dispatch Entry Point
 
-The guest imports one function from module `gengo_host`:
+Native embeddings register this callback with `engine_set_host_call_fn`:
 
 ```c
-int32_t gengo_native_call(uint16_t id,
-                          ValueWire* args_ptr,
-                          uint16_t argc,
-                          ValueWire* out_ptr);
+int32_t callback(void *ctx, uint16_t id,
+                 const ValueWire *args_ptr, uint16_t argc,
+                 ValueWire *out_ptr);
 ```
+
+WASM embeddings provide the same call shape as the
+`gengo_host.gengo_native_call` import (without the native `ctx` pointer).
 
 ## `ValueWire`
 
