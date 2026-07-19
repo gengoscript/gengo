@@ -43,8 +43,8 @@ const FunctionsCallback = *const fn (?*anyopaque, [*]const u8, i32, i32) callcon
 // per-instance configuration rather than a process-global slot.
 var g_active_engine: ?*Engine = null;
 
-// Process-global active slots — overwritten by pushCapState before each
-// engine_run / engine_call and cleared by popCapState on return.
+// Process-global active slots — overwritten by pushEngineState for each ABI
+// operation and restored by popEngineState on return.
 var write_callback: ?WriteCallback = null;
 var read_callback: ?ReadCallback = null;
 
@@ -144,7 +144,7 @@ var engine_slots: [MaxEngines]EngineSlot = [_]EngineSlot{.{}} ** MaxEngines;
 const Engine = struct {
     runtime: api.Runtime,
     // Per-engine capability state — applied to the process globals during
-    // engine_run / engine_call via pushCapState / popCapState.
+    // engine_run / engine_call via pushEngineState / popEngineState.
     write_callback: ?WriteCallback = null,
     read_callback: ?ReadCallback = null,
     net_handlers: ?net_state.HandlerSet = null,
@@ -326,12 +326,12 @@ fn engineToHandle(engine: *const Engine) i32 {
     return -1;
 }
 
-// Push the engine's per-instance capability state into the process globals so
-// that write/read hooks and capability modules use this engine's configuration.
-// Returns the previous active engine for restore (supports future re-entrancy).
-fn pushCapState(engine: *Engine) ?*Engine {
+// Activate every process-global runtime and capability view for one ABI call.
+// The returned engine is restored on exit, supporting nested host callbacks.
+fn pushEngineState(engine: *Engine) ?*Engine {
     const prev = g_active_engine;
     g_active_engine = engine;
+    engine.runtime.inner.activate();
     write_callback = engine.write_callback;
     read_callback = engine.read_callback;
     net_state.applyHandlers(engine.net_handlers);
@@ -342,8 +342,8 @@ fn pushCapState(engine: *Engine) ?*Engine {
     return prev;
 }
 
-// Restore the process globals to the previous engine's state (or clear them).
-fn popCapState(prev: ?*Engine) void {
+// Restore the process-global runtime and capability views after an ABI call.
+fn popEngineState(prev: ?*Engine) void {
     if (prev) |p| {
         g_active_engine = p;
         write_callback = p.write_callback;
@@ -695,7 +695,7 @@ export fn engine_destroy(handle: i32) void {
     engine_slots[idx].active = false;
     // If this was the last active engine, clear I/O overrides so the next
     // engine_init() starts clean. Capability state (net/http/fs) is already
-    // per-engine and cleared by popCapState on each run/call exit.
+    // per-engine and cleared by popEngineState on each run/call exit.
     for (&engine_slots) |*s| {
         if (s.active) return;
     }
@@ -711,8 +711,8 @@ export fn engine_run(handle: i32, src_ptr: PtrInt, src_len: i32) i32 {
     }
     const src = wasmSlice(src_ptr, src_len);
     setupHostModules(engine);
-    const prev = pushCapState(engine);
-    defer popCapState(prev);
+    const prev = pushEngineState(engine);
+    defer popEngineState(prev);
     const res = engine.runtime.run(src);
     return switch (res) {
         .ok => {
@@ -739,8 +739,8 @@ export fn engine_run_path(handle: i32, src_ptr: PtrInt, src_len: i32, path_ptr: 
     const src = wasmSlice(src_ptr, src_len);
     const path = wasmSlice(path_ptr, path_len);
     setupHostModules(engine);
-    const prev = pushCapState(engine);
-    defer popCapState(prev);
+    const prev = pushEngineState(engine);
+    defer popEngineState(prev);
     const res = engine.runtime.runPath(src, path);
     return switch (res) {
         .ok => {
@@ -762,8 +762,8 @@ export fn engine_call(handle: i32, name_ptr: PtrInt, name_len: i32, args_ptr: Pt
     const engine = getEngine(handle) orelse return -1;
     const name = wasmSlice(name_ptr, name_len);
     setupHostModules(engine);
-    const prev = pushCapState(engine);
-    defer popCapState(prev);
+    const prev = pushEngineState(engine);
+    defer popEngineState(prev);
 
     var args: [64]Value = undefined;
     if (argc < 0) {
@@ -808,6 +808,8 @@ export fn engine_call(handle: i32, name_ptr: PtrInt, name_len: i32, args_ptr: Pt
 
 export fn engine_reset(handle: i32) void {
     const engine = getEngine(handle) orelse return;
+    const prev = pushEngineState(engine);
+    defer popEngineState(prev);
     engine.clearError();
     engine.runtime.reset();
 }
@@ -1031,6 +1033,8 @@ export fn engine_mount_driver(handle: i32, name_ptr: PtrInt, name_len: i32, driv
 /// invalid, -2 if the name is not defined.
 export fn engine_get_global(handle: i32, name_ptr: PtrInt, name_len: i32, out_ptr: PtrInt) i32 {
     const engine = getEngine(handle) orelse return -1;
+    const prev = pushEngineState(engine);
+    defer popEngineState(prev);
     const name = wasmSlice(name_ptr, name_len);
     const gs = &engine.runtime.inner.globals_state;
     const val = gs.get(name) orelse return -2;
@@ -1047,6 +1051,8 @@ export fn engine_get_global(handle: i32, name_ptr: PtrInt, name_len: i32, out_pt
 export fn engine_list_globals(handle: i32, callback: ?GlobalsCallback, userdata: ?*anyopaque) i32 {
     if (comptime is_wasm) return -1;
     const engine = getEngine(handle) orelse return -1;
+    const prev = pushEngineState(engine);
+    defer popEngineState(prev);
     const cb = callback orelse return 0;
     const gs = &engine.runtime.inner.globals_state;
     var i: usize = 0;
@@ -1227,62 +1233,101 @@ test "engine_add_source rejects path and source exceeding buffer" {
 }
 
 test "engine_call rejects wire serialization overflow" {
+    // wire_elem_buf holds 256 ValueWire entries: a 256-element array is the
+    // largest that serializes; 257 must fail. Arrays are built at runtime —
+    // array literals cap at 64 elements (TooManyElements), which is why the
+    // original literal-based version of this test could never compile.
     const h = engine_init();
     try std.testing.expect(h > 0);
+    defer engine_destroy(h);
 
-    // Build a source string that returns an array with exactly 256 elements
-    var src_buf: [2048]u8 = undefined;
-    var src_len: usize = 0;
-    const prefix = "func ok() []int { return [";
-    @memcpy(src_buf[0..prefix.len], prefix);
-    src_len = prefix.len;
-    var i: usize = 0;
-    while (i < 256) : (i += 1) {
-        const n = std.fmt.bufPrint(src_buf[src_len..], "{d}", .{i}) catch break;
-        src_len += n.len;
-        if (i < 255) {
-            src_buf[src_len] = ',';
-            src_len += 1;
-        }
-    }
-    const suffix = "] }\n";
-    @memcpy(src_buf[src_len..][0..suffix.len], suffix);
-    src_len += suffix.len;
-
-    const ok = engine_run(h, @intCast(@intFromPtr(src_buf[0..src_len].ptr)), @intCast(src_len));
+    const ok_src =
+        \\std := import("std")
+        \\func ok() []int {
+        \\    arr := []
+        \\    for i := 0; i < 256; i += 1 { arr = std.core.append(arr, i) }
+        \\    return arr
+        \\}
+    ;
+    const ok = engine_run(h, @intCast(@intFromPtr(ok_src.ptr)), @intCast(ok_src.len));
     try std.testing.expectEqual(0, ok);
 
     var out_wire: ValueWire = undefined;
     const call_ok = engine_call(h, @intCast(@intFromPtr("ok".ptr)), 2, 0, 0, @intCast(@intFromPtr(&out_wire)));
     try std.testing.expectEqual(0, call_ok);
 
-    // Build a source string that returns an array with 257 elements (one over)
+    // One element over the wire buffer: serialization must fail.
     const h2 = engine_init();
     try std.testing.expect(h2 > 0);
-    var src_buf2: [2048]u8 = undefined;
-    var src_len2: usize = 0;
-    const prefix2 = "func fail() []int { return [";
-    @memcpy(src_buf2[0..prefix2.len], prefix2);
-    src_len2 = prefix2.len;
-    var j: usize = 0;
-    while (j < 257) : (j += 1) {
-        const n = std.fmt.bufPrint(src_buf2[src_len2..], "{d}", .{j}) catch break;
-        src_len2 += n.len;
-        if (j < 256) {
-            src_buf2[src_len2] = ',';
-            src_len2 += 1;
-        }
-    }
-    const suffix2 = "] }\n";
-    @memcpy(src_buf2[src_len2..][0..suffix2.len], suffix2);
-    src_len2 += suffix2.len;
+    defer engine_destroy(h2);
 
-    const fail_run = engine_run(h2, @intCast(@intFromPtr(src_buf2[0..src_len2].ptr)), @intCast(src_len2));
+    const fail_src =
+        \\std := import("std")
+        \\func fail() []int {
+        \\    arr := []
+        \\    for i := 0; i < 257; i += 1 { arr = std.core.append(arr, i) }
+        \\    return arr
+        \\}
+    ;
+    const fail_run = engine_run(h2, @intCast(@intFromPtr(fail_src.ptr)), @intCast(fail_src.len));
     try std.testing.expectEqual(0, fail_run);
 
     var out_wire2: ValueWire = undefined;
     const call_fail = engine_call(h2, @intCast(@intFromPtr("fail".ptr)), 4, 0, 0, @intCast(@intFromPtr(&out_wire2)));
     try std.testing.expectEqual(-2, call_fail);
+}
+
+test "engine_call converts wires in the selected engine heap" {
+    const config: InstanceConfig = .{
+        .heap_size_bytes = 1024 * 1024,
+        .max_objects = 2048,
+        .max_stack = 512,
+        .max_frames = 64,
+        .max_defers = 128,
+        .max_ops = -1,
+        .allow_io = false,
+    };
+    const first = engine_init_with_config(@intFromPtr(&config));
+    try std.testing.expect(first > 0);
+    defer engine_destroy(first);
+    const second = engine_init_with_config(@intFromPtr(&config));
+    try std.testing.expect(second > 0);
+    defer engine_destroy(second);
+
+    const first_src = "func accept(value string) int { return 1 }\n";
+    try std.testing.expectEqual(0, engine_run(first, @intFromPtr(first_src.ptr), first_src.len));
+
+    // Leave the second engine almost full and active. Before the activation
+    // guard, the argument string for first was allocated in this heap.
+    const second_engine = getEngine(second).?;
+    second_engine.runtime.inner.activate();
+    const second_ctx = vms.VMContext.fromActive();
+    var ballast: [60000]u8 = undefined;
+    @memset(&ballast, 'b');
+    var roots: [14]Value = undefined;
+    for (&roots) |*root| {
+        root.* = try vmgc.makeDynString(second_ctx, &ballast);
+        try second_ctx.vs.pushTempRoot(root.*);
+    }
+    defer {
+        for (roots) |_| second_ctx.vs.popTempRoot();
+    }
+
+    var data: [60000]u8 = undefined;
+    @memset(&data, 'a');
+    var arg: ValueWire = .{
+        .tag = @intFromEnum(WireTag.string),
+        .flags = 0,
+        .reserved = 0,
+        .payload = @intFromPtr(&data),
+        .len = data.len,
+        .reserved2 = 0,
+    };
+    var out: ValueWire = undefined;
+    const rc = engine_call(first, @intFromPtr("accept".ptr), 6, @intFromPtr(&arg), 1, @intFromPtr(&out));
+    try std.testing.expectEqual(0, rc);
+    try std.testing.expectEqual(@as(u8, @intFromEnum(WireTag.number)), out.tag);
+    try std.testing.expectEqual(@as(i64, 1), @as(i64, @bitCast(out.payload)));
 }
 
 test "engine_call: recover() in defer intercepts panic" {
@@ -1325,7 +1370,7 @@ test "engine_call: recover() in defer intercepts panic" {
     try std.testing.expectEqual(0, run_rc);
 
     // "eu" is a valid region — should return true.
-    var arg_wire: ValueWire = .{ .tag = 3, .flags = 0, .payload = @bitCast(@intFromPtr("eu".ptr)), .len = 2 };
+    var arg_wire: ValueWire = .{ .tag = 3, .flags = 0, .reserved = 0, .payload = @bitCast(@intFromPtr("eu".ptr)), .len = 2, .reserved2 = 0 };
     var out_wire: ValueWire = undefined;
     const rc_good = engine_call(h, @intCast(@intFromPtr("check".ptr)), 5, @intCast(@intFromPtr(&arg_wire)), 1, @intCast(@intFromPtr(&out_wire)));
     try std.testing.expectEqual(0, rc_good);
@@ -1333,7 +1378,7 @@ test "engine_call: recover() in defer intercepts panic" {
     try std.testing.expect(out_wire.payload != 0); // true
 
     // "mars" fails the predicate; recover() should intercept and return false.
-    var bad_arg: ValueWire = .{ .tag = 3, .flags = 0, .payload = @bitCast(@intFromPtr("mars".ptr)), .len = 4 };
+    var bad_arg: ValueWire = .{ .tag = 3, .flags = 0, .reserved = 0, .payload = @bitCast(@intFromPtr("mars".ptr)), .len = 4, .reserved2 = 0 };
     var bad_out: ValueWire = undefined;
     const rc_bad = engine_call(h, @intCast(@intFromPtr("check".ptr)), 5, @intCast(@intFromPtr(&bad_arg)), 1, @intCast(@intFromPtr(&bad_out)));
     // Must return 0 (recover handled it), NOT -2.
@@ -1571,12 +1616,13 @@ test "engine_load_bundle loads zip and resolves imports" {
 
     // Run a script that imports from the package
     const src =
+        \\std := import("std")
         \\const greet = import("mylib/utils/greet")
         \\const math = import("mylib/utils/math")
         \\pub func main() string {
         \\    const g = greet.greet("world")
         \\    const n = math.add(3, 5)
-        \\    return g + " " + std.conv.intToStr(n)
+        \\    return g + " " + std.conv.to_string(n)
         \\}
     ;
     const run_rc = engine_run(h, @intCast(@intFromPtr(src.ptr)), @intCast(src.len));
