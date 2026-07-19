@@ -72,6 +72,16 @@ gate; CI's wasm conformance sweep can then eventually retire.
   the hot path (~4 dispatches/node on fib, all fused), and a prefix adds a
   fetch + second indirect jump per execution — engines with JITs pay
   prefix decode once per function, we would pay it every dispatch.
+  Refinement (same discussion): under this scheme the separation is POLICY,
+  not encoding — no prefix bytes, no hard numeric partition. Only the core
+  set carries the reserved-slot freeze (it IS the wire format, append-only
+  growth); fused opcode values become fully private and freely renumberable
+  (the 0xC0 boundary demotes from contract to documentation, and fused can
+  take any non-core slot if it outgrows its region). GBC snapshots the core
+  opcode table into its own spec rather than referencing op.zig — identity
+  mapping at load while values match, a byte-translation table if the
+  runtime ever diverges. Prefix/namespace ops stay reserved for the one
+  scenario that reopens the question: the runtime exceeding 256 ops.
 
 ### Strategic decision — Tier 2 vs Tier 3 (blocks GBC format freeze)
 
