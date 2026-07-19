@@ -74,11 +74,6 @@ frame writes, pool indirection).
   decided BEFORE GBC ships a stable format; after that it means a
   translation layer or breaking the cache.
 
-### Minor
-
-- `--disasm` prints `???` for `call_global_local_sub_const`'s trailing
-  call-IC bytes (decoder-width gap in disasm) — fix in passing.
-
 ---
 
 ## Completed ledger (2026-07-18..19)

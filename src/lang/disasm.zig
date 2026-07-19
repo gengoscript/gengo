@@ -399,6 +399,10 @@ pub fn disassemble(cs: *const chunk.State) void {
                 i += 2;
                 const argc = cs.codeByteAt(i) & 0x7F;
                 i += 1;
+                // Trailing call-IC slot (2 bytes) — previously unconsumed,
+                // which made the decoder print the bytes as ??? opcodes.
+                const call_ic = readU16(cs, i);
+                i += 2;
                 io.write(@tagName(op));
                 io.write(" ");
                 writeConst(cs, name_idx);
@@ -414,6 +418,10 @@ pub fn disassemble(cs: *const chunk.State) void {
                 writeConst(cs, idx);
                 io.write(" argc=");
                 writeNum(argc);
+                if (call_ic != 0xffff) {
+                    io.write(" call_ic=");
+                    writeNum(call_ic);
+                }
                 io.write("\n");
             },
 
