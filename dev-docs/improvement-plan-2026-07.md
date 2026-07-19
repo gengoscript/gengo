@@ -161,6 +161,24 @@ frame writes, pool indirection).
   decided BEFORE GBC ships a stable format; after that it means a
   translation layer or breaking the cache.
 
+**SPIKE RESULTS (2026-07-19, branch spike/tos-caching, commit 53fcc56):**
+a lazy one-slot cache with only the ret family converted (3 ops) measures
+fib 0.31 → 0.29 (-6%) with loop_sum at exact parity, full suite +
+differential + both fuzz lanes green. Mechanism validated end-to-end;
+unconverted ops are shimmed (spill-first) so correctness never depends on
+conversion coverage — the full sweep can proceed incrementally, op by op,
+against the always-green harness. Three binding implementation constraints
+recorded in the spike commit (no errdefer in the dispatch fn: +80% icache
+disaster; ts must be a register-promotable local, not a pointer param;
+spill helper needs exec_call_modifier for wasm/native divergence).
+Honest extrapolation: -6% from the smallest possible slice supports the
+0.22-0.25 estimate directionally but does not prove it; each converted
+op family will report its own number during the sweep. Decision framing:
+even full Tier 2 lands ~3× Lua — if Lua parity is ever the goal, Tier 3
+remains the only road; if the goal is comfortable CPython dominance in an
+embeddable engine, Tier 2 suffices and preserves the ratified ISA + GBC
+design unchanged.
+
 ---
 
 ## Completed ledger (2026-07-18..19)
