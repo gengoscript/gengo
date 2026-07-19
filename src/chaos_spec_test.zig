@@ -526,10 +526,12 @@ test "spec pass cases refuse differential" {
         return error.TestUnexpectedResult;
     }
     if (count == 0) return error.NoSpecPassCases;
-    // The pass must actually fuse: aggregate fused size strictly below the
-    // defused input (guards against a silently pattern-blind pass).
+    // The pass must fuse at least as much as the emitter peephole (by
+    // aggregate byte weight): a regression here means a pattern went blind.
+    // (As of Phase B the pass beats the emitter — its single target-based
+    // legality rule fuses across boundaries where trackers invalidate.)
     std.debug.print("refuse differential: {d} cases, emitter {d} / defused {d} -> pass {d} bytes\n", .{ count, total_original, total_defused, total_fused });
-    try std.testing.expect(total_fused < total_defused);
+    try std.testing.expect(total_fused <= total_original);
 }
 
 // ── Spec pass cases — native output conformance ──────────────────────────
