@@ -18,6 +18,12 @@ run() {
 
 echo "=== pre-push checks ==="
 
+# Mirror CI's formatting gate first — it fails in seconds, the battery in
+# minutes. (CI-only lanes not mirrored here, by cost: -Dgc_stress=true test,
+# -Dheap_paranoia=true test.)
+run zig fmt --check build.zig src tools examples
+run git diff --check
+
 run zig build -Dpreset=1m test
 run zig build -Dpreset=1m parity
 run zig build -Dpreset=1m bench
