@@ -29,6 +29,13 @@ catches both failure directions (over-invalidation → op counts change;
 under-invalidation → differential/tests). Needs a fresh session with full
 attention — do not attempt as a tail-end task.
 
+REDEFINED by the GBC design (see checklist below): rather than
+consolidating the emission-time trackers, build the load/compile-time
+instruction-selection pass and delete emission-time fusion entirely —
+one fusion implementation serving both fresh compiles and cache loads.
+Sequence after the Tier 2 decision (the pass emits whatever instruction
+set the execution model lands on).
+
 ### A6. Native-lane test coverage (ongoing practice + backfill)
 
 Practice (permanent): every language-semantics fix gets a NATIVE test in
@@ -82,6 +89,26 @@ gate; CI's wasm conformance sweep can then eventually retire.
   mapping at load while values match, a byte-translation table if the
   runtime ever diverges. Prefix/namespace ops stay reserved for the one
   scenario that reopens the question: the runtime exceeding 256 ops.
+- **Ratified architecture (2026-07-19 discussion): a VM-private instruction
+  tier selected by a rewriting pass.** The wire carries only the stable
+  semantic set; between verify and execute, a linear instruction-selection
+  pass rewrites verified core bytecode into the VM's private specialized
+  set (jump-target remapping included — vm_defuse already implements the
+  reverse direction with the same ip-map machinery, and the defused
+  differential test is the correctness harness, already green on every
+  battery). Boundary, stated honestly: FUSIONS are derivable from bytecode
+  patterns alone and live in the private tier; TYPED ops (add_int, future
+  add_decimal) encode compile-time type facts a loader cannot re-derive,
+  so they stay on the wire side (append-only growth — permitted by
+  design). A hints side-section is the documented upgrade path if typed-op
+  churn ever matters.
+- **Consequence for A2**: the best resolution is no longer consolidating
+  the 16 emission-time peephole trackers — it is DELETING them. The
+  compiler emits plain core ops; the selection pass fuses, identically for
+  fresh compiles and cache loads. One fusion implementation, testable in
+  isolation against the differential, instead of two that must agree.
+  A2 = build the pass, then remove the emitter peephole against the
+  byte-identical perf-baseline acceptance harness.
 
 ### Specialization roadmap (opcode-space spending — AFTER the Tier 2 decision)
 
