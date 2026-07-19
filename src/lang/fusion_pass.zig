@@ -11,11 +11,16 @@
 // fixpoint: each iteration fuses what the previous one made adjacent,
 // mirroring the emitter's staged construction.
 //
-// Phase A scope (standalone; emission-time fusion still active): the pair
-// families below. Not yet covered: local_add_local (4-wide pattern),
-// get_local_get_field, the call-fusion chain (glsc/cglsc), inc_global_const,
-// local_add_field. Constant folding is OUT OF SCOPE by design — it mutates
-// the constant pool (wire content) and stays in the compiler.
+// Multi-instruction fusions that are not chains of pairs (local_add_local,
+// local_add_field) match as an explicit 4-instruction window with the same
+// legality rule applied to each interior position. Constant folding is OUT
+// OF SCOPE by design — it mutates the constant pool (wire content) and
+// stays in the compiler.
+//
+// Tail-call note: call+ret flips to call_tail in the first round, before
+// get_local_const_sub can form, so the fused call chain grows from the
+// _tail variants (glc_sub + call_tail → glsc_tail → cglsc_tail); no ret
+// flip is ever needed on an already-fused call op.
 
 const std = @import("std");
 const chunk = @import("chunk.zig");
@@ -61,6 +66,7 @@ fn pairFusion(a: Op, b: Op, same_slot: bool) ?Op {
             .const_add => .get_local_const_add,
             .const_lt => .get_local_const_lt,
             .const_gt => .get_local_const_gt,
+            .get_field => .get_local_get_field,
             .ret => .get_local_ret,
             else => null,
         },
@@ -69,6 +75,13 @@ fn pairFusion(a: Op, b: Op, same_slot: bool) ?Op {
             .const_sub => .get_global_const_sub,
             .const_add => .get_global_const_add,
             .const_lt => .get_global_const_lt,
+            .get_local_const_sub_call => .call_global_local_sub_const,
+            .get_local_const_sub_call_tail => .call_global_local_sub_const_tail,
+            else => null,
+        },
+        .get_local_const_sub => switch (b) {
+            .call => .get_local_const_sub_call,
+            .call_tail => .get_local_const_sub_call_tail,
             else => null,
         },
         .get_local_const_eq => if (b == .jif_pop) .get_local_const_eq_jif_pop else null,
@@ -91,8 +104,41 @@ fn pairFusionFull(cs: *const chunk.State, a_pos: usize, a: Op, b_pos: usize, b: 
         if (b == .set_local and cs.code[a_pos + 1] == cs.code[b_pos + 1]) return .local_add_const;
         return null;
     }
+    if (a == .get_global_const_add) {
+        // g = g + k: only when both name operands agree.
+        if (b == .set_global and
+            cs.code[a_pos + 1] == cs.code[b_pos + 1] and
+            cs.code[a_pos + 2] == cs.code[b_pos + 2]) return .inc_global_const;
+        return null;
+    }
     const same_slot = false;
     return pairFusion(a, b, same_slot);
+}
+
+// The two 4-instruction fusions: get_local dst; <src push>; add; set_local dst.
+// Caller has already cleared b_pos as a branch target; interior positions
+// (add, set_local) are checked here.
+fn fuse4At(cs: *const chunk.State, a_pos: usize, b_pos: usize, b: Op, old_len: usize, targets: Bits) ?Op {
+    const b_width: usize = switch (b) {
+        .get_local => 2,
+        .get_local_get_field => 8,
+        else => return null,
+    };
+    const c_pos = b_pos + b_width; // add
+    const d_pos = c_pos + 1; // set_local
+    if (d_pos + 2 > old_len) return null;
+    if (opAt(cs, c_pos) != .add or opAt(cs, d_pos) != .set_local) return null;
+    if (cs.code[a_pos + 1] != cs.code[d_pos + 1]) return null; // dst slot match
+    if (targets.has(c_pos) or targets.has(d_pos)) return null;
+    return if (b == .get_local) .local_add_local else .local_add_field;
+}
+
+fn fuse4Consumed(f: Op) usize {
+    return switch (f) {
+        .local_add_local => 7, // get_local(2)+get_local(2)+add(1)+set_local(2)
+        .local_add_field => 13, // get_local(2)+get_local_get_field(8)+add(1)+set_local(2)
+        else => unreachable,
+    };
 }
 
 pub const FuseError = error{ OutOfMemory, BytecodeOutOfBounds, BadOpcode, BadConstantIndex, BadJumpTarget };
@@ -131,6 +177,11 @@ fn fuseOnce(cs: *chunk.State, alloc: std.mem.Allocator) FuseError!bool {
                 if (fip < old_len) targets.set(fip);
             }
         }
+        // Module boundaries are entry points too: fusing across one would
+        // leave its ip_start pointing into a fused pair's interior.
+        for (cs.module_boundaries[0..cs.module_boundary_count]) |mb| {
+            if (mb.ip_start < old_len) targets.set(mb.ip_start);
+        }
     }
 
     // Pass B: measure — decide fusions, build old→new position map.
@@ -159,6 +210,18 @@ fn fuseOnce(cs: *chunk.State, alloc: std.mem.Allocator) FuseError!bool {
                     ip_map[ip + inst.width] = @intCast(new_ip);
                     new_ip += fusedWidth(f);
                     ip += inst.width + b_inst.width;
+                    changed = true;
+                    continue;
+                },
+                .fuse4 => |f| {
+                    // Map all three interior instruction starts to the fused start.
+                    const b_pos = ip + inst.width;
+                    const b_inst = try chunk_decoder.decodeAt(cs, b_pos);
+                    ip_map[b_pos] = @intCast(new_ip);
+                    ip_map[b_pos + b_inst.width] = @intCast(new_ip); // add
+                    ip_map[b_pos + b_inst.width + 1] = @intCast(new_ip); // set_local
+                    new_ip += fusedWidth(f);
+                    ip += fuse4Consumed(f);
                     changed = true;
                     continue;
                 },
@@ -209,6 +272,11 @@ fn fuseOnce(cs: *chunk.State, alloc: std.mem.Allocator) FuseError!bool {
                     new_len += try emitFused(cs, f, ip, inst, b_pos, b_inst, out, start, ip_map);
                     ip = b_pos + b_inst.width;
                 },
+                .fuse4 => |f| {
+                    const b_pos = ip + inst.width;
+                    new_len += emitFused4(cs, f, ip, b_pos, out, start);
+                    ip += fuse4Consumed(f);
+                },
             }
             // Line/col attribution: the whole (possibly fused) emission
             // carries the source position of its first origin instruction.
@@ -258,7 +326,7 @@ fn fuseOnce(cs: *chunk.State, alloc: std.mem.Allocator) FuseError!bool {
     return true;
 }
 
-const Decision = union(enum) { keep, flip_tail, fuse: Op };
+const Decision = union(enum) { keep, flip_tail, fuse: Op, fuse4: Op };
 
 fn decideAt(cs: *const chunk.State, ip: usize, inst: chunk_decoder.DecodedInstruction, old_len: usize, targets: Bits) FuseError!Decision {
     const b_pos = ip + inst.width;
@@ -268,6 +336,9 @@ fn decideAt(cs: *const chunk.State, ip: usize, inst: chunk_decoder.DecodedInstru
     // Tail upgrade: an opcode flip, not a merge — always safe, target or not.
     if (a == .call and b == .ret) return .flip_tail;
     if (targets.has(b_pos)) return .keep;
+    if (a == .get_local) {
+        if (fuse4At(cs, ip, b_pos, b, old_len, targets)) |f| return .{ .fuse4 = f };
+    }
     if (pairFusionFull(cs, ip, a, b_pos, b)) |f| return .{ .fuse = f };
     return .keep;
 }
@@ -277,12 +348,17 @@ fn fusedWidth(f: Op) usize {
         .const_eq, .const_sub, .const_add, .const_lt, .const_gt, .ret_const => 3,
         .get_local_const_eq, .get_local_const_sub, .get_local_const_add, .get_local_const_lt, .get_local_const_gt => 5,
         .get_global_const_eq, .get_global_const_sub, .get_global_const_add, .get_global_const_lt => 8,
+        .get_local_const_sub_call, .get_local_const_sub_call_tail => 8,
+        .call_global_local_sub_const, .call_global_local_sub_const_tail => 13,
+        .get_local_get_field, .inc_global_const => 8,
         .get_local_const_eq_jif_pop, .get_local_const_lt_jif_pop, .get_local_const_gt_jif_pop, .set_global_loop => 9,
         .get_global_const_lt_jif_pop => 12,
         .get_local_const_lt_jif_pop_jump => 13,
         .local_add_const => 4,
         .local_add_const_loop => 8,
         .close_upvalue_loop => 6,
+        .local_add_local => 3,
+        .local_add_field => 9,
         .get_local_ret => 2,
         .add_ret => 1,
         else => unreachable,
@@ -362,6 +438,28 @@ fn emitFused(cs: *const chunk.State, f: Op, a_pos: usize, a_inst: chunk_decoder.
             out[start + 6] = cs.code[b_pos + 1];
             out[start + 7] = cs.code[b_pos + 2];
         },
+        // [glsc][slot][skip=const_sub op][idx2][argc][ic2] from glc_sub(5) + call(4)
+        .get_local_const_sub_call, .get_local_const_sub_call_tail => {
+            @memcpy(out[start + 1 ..][0..4], cs.code[a_pos + 1 ..][0..4]);
+            @memcpy(out[start + 5 ..][0..3], cs.code[b_pos + 1 ..][0..3]); // argc + call IC
+        },
+        // [cglsc][name2][ic2][skip][glsc operands verbatim]. The skip byte is
+        // always the NON-tail glsc opcode — tailness lives in byte 0 only
+        // (the emitter's ret-flip touched byte 0 alone; verifier checks this).
+        .call_global_local_sub_const, .call_global_local_sub_const_tail => {
+            @memcpy(out[start + 1 ..][0..4], cs.code[a_pos + 1 ..][0..4]);
+            out[start + 5] = @intFromEnum(Op.get_local_const_sub_call);
+            @memcpy(out[start + 6 ..][0..7], cs.code[b_pos + 1 ..][0..7]);
+        },
+        // [glgf][slot][skip=get_field op][name2][ic_type2][ic_fidx] from get_local(2) + get_field(6)
+        .get_local_get_field => {
+            out[start + 1] = cs.code[a_pos + 1];
+            @memcpy(out[start + 2 ..][0..6], cs.code[b_pos..][0..6]);
+        },
+        // [igc] = ggc_add's bytes with the opcode swapped; set_global (same name) dropped
+        .inc_global_const => {
+            @memcpy(out[start + 1 ..][0..7], cs.code[a_pos + 1 ..][0..7]);
+        },
         // [quad][slot][skip][idx2][off4]: off base = start+9
         .get_local_const_eq_jif_pop, .get_local_const_lt_jif_pop, .get_local_const_gt_jif_pop => {
             @memcpy(out[start + 1 ..][0..4], cs.code[a_pos + 1 ..][0..4]);
@@ -411,6 +509,19 @@ fn emitFused(cs: *const chunk.State, f: Op, a_pos: usize, a_inst: chunk_decoder.
         else => unreachable,
     }
     return w;
+}
+
+fn emitFused4(cs: *const chunk.State, f: Op, a_pos: usize, b_pos: usize, out: []u8, start: usize) usize {
+    out[start] = @intFromEnum(f);
+    out[start + 1] = cs.code[a_pos + 1]; // dst slot
+    switch (f) {
+        // [lal][dst][src] from get_local+get_local+add+set_local
+        .local_add_local => out[start + 2] = cs.code[b_pos + 1],
+        // [laf][dst][src][skip][name2][ic2][fidx]: glgf operand bytes verbatim
+        .local_add_field => @memcpy(out[start + 2 ..][0..7], cs.code[b_pos + 1 ..][0..7]),
+        else => unreachable,
+    }
+    return fusedWidth(f);
 }
 
 fn a_inst_target(cs: *const chunk.State, a_pos: usize) usize {
