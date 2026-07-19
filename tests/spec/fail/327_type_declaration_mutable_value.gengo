@@ -1,0 +1,2 @@
+var maximum := 65535
+type Port int range 1..maximum

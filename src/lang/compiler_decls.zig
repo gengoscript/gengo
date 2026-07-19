@@ -5,6 +5,7 @@ const Op = @import("op.zig").Op;
 const FuncType = @import("op.zig").FuncType;
 const common = @import("common.zig");
 const heap = @import("../runtime/heap.zig");
+const lexer_mod = @import("lexer.zig");
 const token = @import("token.zig");
 const value_mod = @import("value.zig");
 const ct = @import("compiler_types.zig");
@@ -776,28 +777,7 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
     var has_default = false;
     var default_val: value_mod.Value = undefined;
     if (c.match(.kw_default)) {
-        switch (base) {
-            .int, .float, .rune, .decimal => {
-                if (c.cur.typ != .number) return c.err("expected number after 'default'", .{});
-                default_val = .{ .float = common.parseFloat(c.cur.src) orelse return c.err("invalid number literal", .{}) };
-                c.advance();
-            },
-            .string => {
-                if (c.cur.typ != .string) return c.err("expected string literal after 'default'", .{});
-                default_val = .{ .string = try c.cs.internStr(try c.copyName(c.cur.src)) };
-                c.advance();
-            },
-            .bool => {
-                if (c.match(.kw_true)) {
-                    default_val = .{ .boolean = true };
-                } else if (c.match(.kw_false)) {
-                    default_val = .{ .boolean = false };
-                } else {
-                    return c.err("expected true or false after 'default'", .{});
-                }
-            },
-            else => return c.err("'default' not supported for this base type", .{}),
-        }
+        default_val = try parseNamedDefault(c, base);
         has_default = true;
     }
 
@@ -1255,18 +1235,175 @@ pub fn parseConstraintBounds(c: anytype) !struct { is_cycle: bool, min: f64, max
         true
     else
         return c.err("expected 'range' or 'cycle', found {s}", .{c.tokenName(c.cur.typ)});
-    const min = try parseSignedNumber(
-        c,
-    );
+    const min_value = try consumeCompileTimeConst(c) orelse return compileTimeConstErr(c);
+    const min = switch (min_value) {
+        .number => |value| value,
+        else => return compileTimeConstErr(c),
+    };
     try c.consume(.dotdot);
-    const max = try parseSignedNumber(
-        c,
-    );
+    const max_value = try consumeCompileTimeConst(c) orelse return compileTimeConstErr(c);
+    const max = switch (max_value) {
+        .number => |value| value,
+        else => return compileTimeConstErr(c),
+    };
     if (min > max) {
         c.setErr("range minimum ({d}) must not exceed maximum ({d})", .{ min, max });
         return error.RangeError;
     }
     return .{ .is_cycle = is_cycle, .min = min, .max = max };
+}
+
+const ConstExprCursor = struct {
+    lex: lexer_mod.Lexer,
+    prev: Token,
+    cur: Token,
+
+    fn advance(self: *ConstExprCursor) void {
+        self.prev = self.cur;
+        self.cur = self.lex.next();
+    }
+};
+
+fn compileTimeConstErr(c: anytype) error{CompileTimeConstant} {
+    c.setErr("type declarations require a compile-time constant expression", .{});
+    c.err_col = c.cur.col;
+    c.err_line = c.cur.line;
+    return error.CompileTimeConstant;
+}
+
+pub fn parseCompileTimeConst(c: anytype) anyerror!?ct.CompileTimeConst {
+    var cursor = ConstExprCursor{ .lex = c.lex, .prev = c.prev, .cur = c.cur };
+    return parseConstSum(c, &cursor);
+}
+
+fn consumeCompileTimeConst(c: anytype) anyerror!?ct.CompileTimeConst {
+    var cursor = ConstExprCursor{ .lex = c.lex, .prev = c.prev, .cur = c.cur };
+    const value = try parseConstSum(c, &cursor);
+    c.lex = cursor.lex;
+    c.prev = cursor.prev;
+    c.cur = cursor.cur;
+    c.peek_tok = null;
+    return value;
+}
+
+fn parseConstSum(c: anytype, cursor: *ConstExprCursor) anyerror!?ct.CompileTimeConst {
+    var value = try parseConstProduct(c, cursor) orelse return null;
+    while (cursor.cur.typ == .plus or cursor.cur.typ == .minus) {
+        const op = cursor.cur.typ;
+        cursor.advance();
+        const right = try parseConstProduct(c, cursor) orelse return null;
+        const lhs = switch (value) {
+            .number => |n| n,
+            else => return null,
+        };
+        const rhs = switch (right) {
+            .number => |n| n,
+            else => return null,
+        };
+        value = .{ .number = if (op == .plus) lhs + rhs else lhs - rhs };
+    }
+    return value;
+}
+
+fn parseConstProduct(c: anytype, cursor: *ConstExprCursor) anyerror!?ct.CompileTimeConst {
+    var value = try parseConstUnary(c, cursor) orelse return null;
+    while (cursor.cur.typ == .star or cursor.cur.typ == .star_star or cursor.cur.typ == .slash or cursor.cur.typ == .kw_div or cursor.cur.typ == .kw_rem or cursor.cur.typ == .kw_mod) {
+        const op = cursor.cur.typ;
+        cursor.advance();
+        const right = try parseConstUnary(c, cursor) orelse return null;
+        const lhs = switch (value) {
+            .number => |n| n,
+            else => return null,
+        };
+        const rhs = switch (right) {
+            .number => |n| n,
+            else => return null,
+        };
+        if (rhs == 0) return null;
+        value = .{ .number = switch (op) {
+            .star => lhs * rhs,
+            .star_star => std.math.pow(f64, lhs, rhs),
+            .slash => lhs / rhs,
+            .kw_div => @floor(lhs / rhs),
+            .kw_rem => @rem(lhs, rhs),
+            .kw_mod => @mod(lhs, rhs),
+            else => unreachable,
+        } };
+    }
+    return value;
+}
+
+fn parseConstUnary(c: anytype, cursor: *ConstExprCursor) anyerror!?ct.CompileTimeConst {
+    if (cursor.cur.typ == .minus) {
+        cursor.advance();
+        const value = try parseConstUnary(c, cursor) orelse return null;
+        return switch (value) {
+            .number => |number| .{ .number = -number },
+            else => null,
+        };
+    }
+    return parseConstPrimary(c, cursor);
+}
+
+fn parseConstPrimary(c: anytype, cursor: *ConstExprCursor) anyerror!?ct.CompileTimeConst {
+    switch (cursor.cur.typ) {
+        .number => {
+            const number = common.parseFloat(cursor.cur.src) orelse return null;
+            cursor.advance();
+            return .{ .number = number };
+        },
+        .string => {
+            const value = try c.copyName(cursor.cur.src);
+            cursor.advance();
+            return .{ .string = value };
+        },
+        .kw_true => {
+            cursor.advance();
+            return .{ .boolean = true };
+        },
+        .kw_false => {
+            cursor.advance();
+            return .{ .boolean = false };
+        },
+        .ident => {
+            const name = cursor.cur.src;
+            cursor.advance();
+            if (cursor.cur.typ != .dot) return c.getCompileTimeConst(name);
+            cursor.advance();
+            if (cursor.cur.typ != .ident) return null;
+            const field = cursor.cur.src;
+            cursor.advance();
+            const path = c.resolveImportAliasPath(name) orelse return null;
+            return c.resolveModuleConstant(path, field);
+        },
+        .lparen => {
+            cursor.advance();
+            const value = try parseConstSum(c, cursor) orelse return null;
+            if (cursor.cur.typ != .rparen) return null;
+            cursor.advance();
+            return value;
+        },
+        else => return null,
+    }
+}
+
+fn parseNamedDefault(c: anytype, base: NamedTypeBase) !value_mod.Value {
+    const value = try consumeCompileTimeConst(c) orelse return compileTimeConstErr(c);
+    return switch (base) {
+        .int, .float, .rune, .decimal => switch (value) {
+            .number => |number| .{ .float = number },
+            else => c.err("expected number after 'default'", .{}),
+        },
+        .string => switch (value) {
+            .string => |string| .{ .string = try c.cs.internStr(string) },
+            else => c.err("expected string literal after 'default'", .{}),
+        },
+        .bool => switch (value) {
+            .boolean => |boolean| .{ .boolean = boolean },
+            else => c.err("expected true or false after 'default'", .{}),
+        },
+        else => c.err("'default' not supported for this base type", .{}),
+    };
 }
 
 pub fn parseFieldTypeSpec(c: anytype) !FieldTypeSpec {
@@ -1814,28 +1951,7 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
     var has_default = false;
     var default_val: value_mod.Value = undefined;
     if (c.match(.kw_default)) {
-        switch (base) {
-            .int, .float, .rune, .decimal => {
-                if (c.cur.typ != .number) return c.err("expected number after 'default'", .{});
-                default_val = .{ .float = common.parseFloat(c.cur.src) orelse return c.err("invalid number literal", .{}) };
-                c.advance();
-            },
-            .string => {
-                if (c.cur.typ != .string) return c.err("expected string literal after 'default'", .{});
-                default_val = .{ .string = try c.cs.internStr(try c.copyName(c.cur.src)) };
-                c.advance();
-            },
-            .bool => {
-                if (c.match(.kw_true)) {
-                    default_val = .{ .boolean = true };
-                } else if (c.match(.kw_false)) {
-                    default_val = .{ .boolean = false };
-                } else {
-                    return c.err("expected true or false after 'default'", .{});
-                }
-            },
-            else => return c.err("'default' not supported for this base type", .{}),
-        }
+        default_val = try parseNamedDefault(c, base);
         has_default = true;
     }
 

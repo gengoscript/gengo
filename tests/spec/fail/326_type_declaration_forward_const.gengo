@@ -1,0 +1,2 @@
+type Port int range 1..maximum
+const maximum := 65535

@@ -13,6 +13,7 @@ const globals = @import("globals.zig");
 const source_io = @import("../runtime/source_io.zig");
 const build_options = @import("build_options");
 const module_descriptor = @import("module_descriptor.zig");
+const CompileTimeConst = ct.CompileTimeConst;
 
 pub const MaxModules = 64;
 pub const MaxImportsPerModule = 64;
@@ -53,6 +54,7 @@ const ModuleRecord = struct {
     state: ModuleState = .loading,
     export_names: [MaxModuleExports][]const u8 = undefined,
     export_type_kinds: [MaxModuleExports]ExportTypeKind = undefined,
+    export_const_values: [MaxModuleExports]?CompileTimeConst = [_]?CompileTimeConst{null} ** MaxModuleExports,
     export_count: u8 = 0,
 
     // Saved error info when compilation fails (state == .failed)
@@ -447,6 +449,7 @@ pub const Session = struct {
             .resolve_import = resolveImportOpaque,
             .has_module_export = hasModuleExport,
             .resolve_module_type = resolveModuleTypeKind,
+            .resolve_module_constant = resolveModuleConstant,
             .check_global_exists = checkGlobalExistsInSession,
             .check_global_ctx = self,
             .test_mode = if (emit_halt) self.test_mode else false,
@@ -488,8 +491,10 @@ pub const Session = struct {
             self.modules[idx].export_names[0..compiler.export_count],
             self.modules[idx].export_type_kinds[0..compiler.export_count],
             compiler.exports[0..compiler.export_count],
-        ) |*n, *k, e| {
+            0..compiler.export_count,
+        ) |*n, *k, e, export_index| {
             n.* = e.name;
+            self.modules[idx].export_const_values[export_index] = compiler.getCompileTimeConst(e.name);
             if (compiler.registry.hasStructType(e.name)) {
                 k.* = .struct_t;
             } else if (compiler.registry.hasInterfaceType(e.name)) {
@@ -752,6 +757,16 @@ pub fn resolveModuleTypeKind(ctx: *anyopaque, path: []const u8, type_name: []con
             @memcpy(qname_copy, qname);
             return .{ .kind = k, .qualified_name = qname_copy[0..qname.len] };
         }
+    }
+    return null;
+}
+
+pub fn resolveModuleConstant(ctx: *anyopaque, path: []const u8, name: []const u8) ?CompileTimeConst {
+    const s: *Session = @ptrCast(@alignCast(ctx));
+    const idx = s.findModule(path) orelse return null;
+    const rec = &s.modules[idx];
+    for (rec.export_names[0..rec.export_count], rec.export_const_values[0..rec.export_count]) |export_name, value| {
+        if (common.streq(export_name, name)) return value;
     }
     return null;
 }

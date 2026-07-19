@@ -8,6 +8,7 @@ const heap = @import("../runtime/heap.zig");
 const token = @import("token.zig");
 const value_mod = @import("value.zig");
 const ct = @import("compiler_types.zig");
+const compiler_decls = @import("compiler_decls.zig");
 
 const Token = token.Token;
 const TT = token.TT;
@@ -2052,7 +2053,11 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
     var inferred_type_check: TypeCheck = .{ .none = {} };
     var inferred_named_type: ?[]const u8 = null; // named type inferred from := RHS
     var self_ref_slot: ?u8 = null;
+    var compile_time_const: ?ct.CompileTimeConst = null;
     if (c.match(.colon_eq) or c.match(.eq)) {
+        if (is_const and !c.inFunc() and !c.in_loop_init and c.loop_body_depth == 0) {
+            compile_time_const = try compiler_decls.parseCompileTimeConst(c);
+        }
         // Self-reference pre-allocation: if the RHS is a function literal and we are
         // inside a function, pre-push null and register the local BEFORE compiling the
         // RHS. This allows the inner closure's capture to find the local in scope (so it
@@ -2360,6 +2365,7 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
                 c.import_module_global_count += 1;
             }
             if (is_const) try c.registry.addGlobalConst(name.src);
+            if (compile_time_const) |value| try c.addCompileTimeConst(name.src, value);
         }
     }
     c.matchOpt(.semicolon);

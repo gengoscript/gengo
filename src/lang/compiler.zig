@@ -80,6 +80,7 @@ pub const CompilerOptions = struct {
     resolve_import: ?ImportResolverFn = null,
     has_module_export: ?*const fn (ctx: *anyopaque, path: []const u8, field: []const u8) bool = null,
     resolve_module_type: ?*const fn (ctx: *anyopaque, path: []const u8, name: []const u8) ?module_descriptor.ModuleTypeInfo = null,
+    resolve_module_constant: ?*const fn (ctx: *anyopaque, path: []const u8, name: []const u8) ?ct.CompileTimeConst = null,
     test_mode: bool = false,
     repl_mode: bool = false,
     check_global_exists: ?*const fn (ctx: *anyopaque, name: []const u8) bool = null,
@@ -129,6 +130,9 @@ pub const Compiler = struct {
     inferred_named_global_names: [MaxLocals][]const u8 = undefined,
     inferred_named_global_types: [MaxLocals][]const u8 = undefined,
     inferred_named_global_count: u8 = 0,
+    compile_time_const_names: [ct.MaxGlobals][]const u8 = undefined,
+    compile_time_const_values: [ct.MaxGlobals]ct.CompileTimeConst = undefined,
+    compile_time_const_count: u16 = 0,
 
     test_names: [MaxTestBlocks][]const u8 = undefined,
     test_count: u16 = 0,
@@ -205,6 +209,7 @@ pub const Compiler = struct {
         self.err_col = 0;
         self.err_line = 0;
         self.expr_depth = 0;
+        self.compile_time_const_count = 0;
         self.repl_expr_ok = true;
         self.repl_pending_pop = false;
         self.advance();
@@ -1878,6 +1883,25 @@ pub const Compiler = struct {
     pub fn resolveModuleTypeName(self: *Compiler, path: []const u8, type_name: []const u8) ?module_descriptor.ModuleTypeInfo {
         const cb = self.options.resolve_module_type orelse return null;
         return cb(self.options.module_ctx.?, path, type_name);
+    }
+
+    pub fn getCompileTimeConst(self: *const Compiler, name: []const u8) ?ct.CompileTimeConst {
+        for (self.compile_time_const_names[0..self.compile_time_const_count], self.compile_time_const_values[0..self.compile_time_const_count]) |known_name, value| {
+            if (common.streq(known_name, name)) return value;
+        }
+        return null;
+    }
+
+    pub fn addCompileTimeConst(self: *Compiler, name: []const u8, value: ct.CompileTimeConst) !void {
+        if (self.compile_time_const_count >= ct.MaxGlobals) return error.TooManyGlobals;
+        self.compile_time_const_names[self.compile_time_const_count] = try self.copyName(name);
+        self.compile_time_const_values[self.compile_time_const_count] = value;
+        self.compile_time_const_count += 1;
+    }
+
+    pub fn resolveModuleConstant(self: *Compiler, path: []const u8, name: []const u8) ?ct.CompileTimeConst {
+        const cb = self.options.resolve_module_constant orelse return null;
+        return cb(self.options.module_ctx.?, path, name);
     }
 
     pub fn copyName(self: *Compiler, name: []const u8) ![]const u8 {
