@@ -2254,6 +2254,93 @@ fn effectCheckExempt(comptime op: Op) bool {
     };
 }
 
+// ── TOS caching spike (branch: spike/tos-caching) ───────────────────────────
+// Lazy one-slot top-of-stack cache threaded through the dispatch loop. The
+// logical operand stack is (memory stack) ++ (ts.v when ts.full). Invariants:
+// - Unconverted ops always see a fully materialized memory stack: the
+//   dispatch shim spills before running them. Calls, GC-allocating paths,
+//   panics, and host returns therefore never depend on conversion coverage.
+// - Converted ops (the ret family, v1) may consume the cached top and may
+//   leave their result cached instead of stored — deleting the store→load
+//   round trip that profiling showed dominates doReturn (60% one movups).
+// - All converted ops are in effectCheckExempt (ret family), so the Debug
+//   net-effect assertions are unaffected.
+const TosState = struct { v: Value, full: bool };
+
+fn tosConverted(comptime op: Op) bool {
+    return switch (op) {
+        .add_ret, .ret_const, .get_local_ret => true,
+        else => false,
+    };
+}
+
+// Plain fn, not inline: runInner references it from every dispatch arm, and
+// ~160 inlined copies (each with a 16-byte Value temp) exceed wasmtime's
+// per-function locals limit in Debug builds. ReleaseSafe inlines it anyway.
+fn tosSpill(ctx: VMContext, ts: *TosState) void {
+    if (ts.full) {
+        ctx.vs.vmPushU(ts.v);
+        ts.full = false;
+    }
+}
+
+// Register-delivering variant of doReturn: the fast path caches the return
+// value instead of storing it; the slow path (defers, typed returns, spread)
+// materializes through memory exactly as before.
+inline fn doReturnTos(ctx: VMContext, retval: Value, ts: *TosState) !bool {
+    const fi = ctx.vs.frame_top - 1;
+    if (canReturnFast(ctx, fi, retval)) {
+        const frame = &ctx.vs.frames[fi];
+        ctx.vs.frame_top = fi;
+        ctx.vs.stack_top = if (frame.base > 0) frame.base - 1 else 0;
+        ctx.vs.ip = frame.ret_ip;
+        ts.v = retval;
+        ts.full = true;
+        if (ctx.vs.frame_top == ctx.vs.call_depth_target) return true;
+        return false;
+    }
+    return try retSlowPath(ctx, retval);
+}
+
+// Converted handlers. Callers guarantee ts was NOT spilled for these ops.
+fn execOneTos(ctx: VMContext, comptime op: Op, ts: *TosState) anyerror!bool {
+    switch (op) {
+        .add_ret => {
+            vmperf.breakOpChain();
+            if (ctx.vs.frame_top == 0) return error.ImpossibleOpcodeState;
+            const b = if (ts.full) blk: {
+                ts.full = false;
+                break :blk ts.v;
+            } else ctx.vs.vmPopU();
+            const a = ctx.vs.vmPopU();
+            // Inline int fast path; the generic path may allocate (string
+            // concat roots its operands internally, same as the memory form).
+            const retval = if (a == .int and b == .int)
+                Value{ .int = a.int + b.int }
+            else
+                try computeAddResult(ctx, a, b);
+            if (try doReturnTos(ctx, retval, ts)) return true;
+        },
+        .ret_const => {
+            vmperf.breakOpChain();
+            if (ctx.vs.frame_top == 0) return error.ImpossibleOpcodeState;
+            tosSpill(ctx, ts);
+            const k = try opConst(ctx);
+            if (try doReturnTos(ctx, k, ts)) return true;
+        },
+        .get_local_ret => {
+            vmperf.breakOpChain();
+            if (ctx.vs.frame_top == 0) return error.ImpossibleOpcodeState;
+            tosSpill(ctx, ts);
+            const slot = opByte(ctx);
+            const v = try readLocalSlot(ctx, slot);
+            if (try doReturnTos(ctx, v, ts)) return true;
+        },
+        else => comptime unreachable,
+    }
+    return false;
+}
+
 fn runInner(ctx: VMContext) !void {
     // Threaded dispatch: `inline else` instantiates its body once per opcode,
     // so every `continue :dispatch` below compiles to its own indirect jump —
@@ -2264,6 +2351,13 @@ fn runInner(ctx: VMContext) !void {
     // so an exhausted budget denies the instruction rather than letting one
     // slip through, and a trace fires before the line it reports.
     var gas: u64 = dispatchGasInterval(ctx);
+    // TOS cache state. A local (not a pointer parameter) so LLVM can keep it
+    // register-resident across the dispatch loop; error-path spilling is
+    // handled by targeted catch pads in the CONVERTED branch only — every
+    // other branch spills before running its handler, so errors there can
+    // never see a full cache. (An errdefer here plants a spill pad on every
+    // try-edge of ~160 arms: measured +80% on loop_sum from icache bloat.)
+    var ts: TosState = .{ .v = undefined, .full = false };
     gas -= 1;
     if (gas == 0) gas = try dispatchTick(ctx);
     dispatch: switch (try fetchOp(ctx)) {
@@ -2273,11 +2367,30 @@ fn runInner(ctx: VMContext) !void {
             // no dispatch-loop code for the real opcodes to share icache with.
             if (comptime op_module.isReservedOp(op)) {
                 return error.InvalidChunkShape;
+            } else if (comptime tosConverted(op)) {
+                const done = @call(exec_call_modifier, execOneTos, .{ ctx, op, &ts }) catch |e| {
+                    if (ts.full) ctx.vs.vmPushU(ts.v);
+                    return e;
+                };
+                if (done) {
+                    if (ts.full) ctx.vs.vmPushU(ts.v);
+                    return;
+                }
+                gas -= 1;
+                if (gas == 0) gas = dispatchTick(ctx) catch |e| {
+                    if (ts.full) ctx.vs.vmPushU(ts.v);
+                    return e;
+                };
+                continue :dispatch (fetchOp(ctx) catch |e| {
+                    if (ts.full) ctx.vs.vmPushU(ts.v);
+                    return e;
+                });
             } else if (comptime builtin.mode == .Debug and !effectCheckExempt(op)) {
                 // Debug builds verify the stackEffect table — the foundation
                 // of the verifier's stack-bound proof — against every op the
                 // suite actually executes. Frame-depth guard skips ops whose
                 // handler entered/left a frame (nested predicate calls etc.).
+                @call(exec_call_modifier, tosSpill, .{ ctx, &ts });
                 const dbg_op_ip = ctx.vs.ip - 1;
                 const dbg_stack = ctx.vs.stack_top;
                 const dbg_frame = ctx.vs.frame_top;
@@ -2294,6 +2407,9 @@ fn runInner(ctx: VMContext) !void {
                 if (gas == 0) gas = try dispatchTick(ctx);
                 continue :dispatch (try fetchOp(ctx));
             } else {
+                // Unconverted op: materialize the cached top first — the old
+                // handlers require a complete memory stack.
+                @call(exec_call_modifier, tosSpill, .{ ctx, &ts });
                 if (try @call(exec_call_modifier, execOne, .{ ctx, op })) return;
                 gas -= 1;
                 if (gas == 0) gas = try dispatchTick(ctx);
