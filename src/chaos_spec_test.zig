@@ -4,6 +4,7 @@ const io = @import("runtime/io.zig");
 const chunk = @import("lang/chunk.zig");
 const vm = @import("lang/vm.zig");
 const vm_defuse = @import("lang/vm_defuse.zig");
+const fusion_pass = @import("lang/fusion_pass.zig");
 const heap = @import("runtime/heap.zig");
 const cfg = @import("runtime_config");
 
@@ -444,6 +445,92 @@ test "spec fail cases" {
 // For every spec pass case: compile, defuse the bytecode, run the defused
 // version, and verify it also succeeds. Divergence means a fused opcode or
 // IC path produces different semantics from the expanded primitives.
+
+// ── Spec pass cases — refuse differential (defuse → fusion pass → run) ───
+// Validates the load/compile-time fusion pass (lang/fusion_pass.zig, the
+// forward direction of vm_defuse and the GBC load path): every pass case is
+// compiled, DEFUSED to core ops (the future wire format), re-FUSED by the
+// pass, executed, and its output compared against .out. Divergence means
+// the pass mis-rewrote an instruction or a branch target.
+test "spec pass cases refuse differential" {
+    const alloc = std.testing.allocator;
+    const io_ref = std.Io.Threaded.global_single_threaded.io();
+    const cwd = std.Io.Dir.cwd();
+    var d = try cwd.openDir(io_ref, "tests/spec", .{ .iterate = true });
+    defer d.close(io_ref);
+
+    var iter = d.iterate();
+    var count: usize = 0;
+    var failures: usize = 0;
+    var total_original: usize = 0;
+    var total_defused: usize = 0;
+    var total_fused: usize = 0;
+    while (try iter.next(io_ref)) |entry| {
+        if (entry.kind != .file) continue;
+        if (!std.mem.eql(u8, std.fs.path.extension(entry.name), ".gengo")) continue;
+        const path = try std.fs.path.join(alloc, &.{ "tests/spec", entry.name });
+        defer alloc.free(path);
+        const src = readFileAlloc(alloc, path, 1024 * 1024) catch continue;
+        defer alloc.free(src);
+        const out_path = try std.fmt.allocPrint(alloc, "{s}.out", .{path[0 .. path.len - 6]});
+        defer alloc.free(out_path);
+        const expected = readFileAlloc(alloc, out_path, 1024 * 1024) catch continue;
+        defer alloc.free(expected);
+
+        var rt = try setup();
+        defer rt.deinit();
+        rt.inner.compileAndInstall(src, path, .filesystem) catch continue;
+
+        // Defuse to core ops, install, then re-fuse with the pass.
+        const original_len = chunk.g_state.code_len;
+        const defused = vm_defuse.buildDefusedCode(vm.VMContext.fromActive().cs, alloc) catch continue;
+        defer alloc.free(defused);
+        if (defused.len > chunk.MaxCode) continue;
+        @memcpy(chunk.g_state.code[0..defused.len], defused);
+        chunk.g_state.code_len = defused.len;
+        chunk.g_state.verified = false;
+        chunk.g_state.verified_code_len = 0;
+        total_original += original_len;
+        total_defused += defused.len;
+        defer total_fused += chunk.g_state.code_len;
+        fusion_pass.fuse(chunk.g_state, alloc) catch |e| {
+            std.debug.print("refuse FAIL (pass error): {s}: {s}\n", .{ path, @errorName(e) });
+            failures += 1;
+            continue;
+        };
+        vm.VMContext.fromActive().vs.resetExec();
+
+        g_stdout = std.array_list.Managed(u8).init(alloc);
+        g_stderr = std.array_list.Managed(u8).init(alloc);
+        defer g_stdout.deinit();
+        defer g_stderr.deinit();
+        io.setWriteOverrides(captureStdout, captureStderr);
+        defer io.clearWriteOverrides();
+
+        vm.run(vm.VMContext.fromActive()) catch |e| {
+            std.debug.print("refuse FAIL (runtime): {s}: {s}\n", .{ path, @errorName(e) });
+            failures += 1;
+            continue;
+        };
+        const combined = try std.mem.concat(alloc, u8, &.{ g_stdout.items, g_stderr.items });
+        defer alloc.free(combined);
+        if (!std.mem.eql(u8, expected, combined)) {
+            std.debug.print("refuse FAIL (output mismatch): {s}\n", .{path});
+            failures += 1;
+            continue;
+        }
+        count += 1;
+    }
+    if (failures != 0) {
+        std.debug.print("refuse differential: {d} passed, {d} FAILED\n", .{ count, failures });
+        return error.TestUnexpectedResult;
+    }
+    if (count == 0) return error.NoSpecPassCases;
+    // The pass must actually fuse: aggregate fused size strictly below the
+    // defused input (guards against a silently pattern-blind pass).
+    std.debug.print("refuse differential: {d} cases, emitter {d} / defused {d} -> pass {d} bytes\n", .{ count, total_original, total_defused, total_fused });
+    try std.testing.expect(total_fused < total_defused);
+}
 
 // ── Spec pass cases — native output conformance ──────────────────────────
 // Until 2026-07-19 the wasm conformance runner was the ONLY place pass-case
