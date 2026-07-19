@@ -164,7 +164,11 @@ pub const Runtime = struct {
     }
 
     pub fn run(self: *Runtime, src: []const u8) RuntimeResult {
-        self.inner.run(src) catch |err| {
+        // Route through the configured source provider like runPath does:
+        // module_sources / module_source_provider from setConfig (bundles,
+        // import loaders) must be visible to plain run() too — inner.run
+        // would hardcode the filesystem provider.
+        self.inner.runPathWithProvider(src, "", defaultSourceProvider(self), false) catch |err| {
             return self.classifyRunResult(err);
         };
         return .ok;
