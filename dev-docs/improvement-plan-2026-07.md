@@ -58,6 +58,20 @@ gate; CI's wasm conformance sweep can then eventually retire.
   about uniformly.
 - A4 revisit trigger: the GBC loader will be the first consumer that
   switches on error sets; define typed error sets then, not before.
+- **Design proposal (2026-07-19, from Mikael's WASM-prefix question):
+  serialize the DEFUSED core-ops-only form as the wire format.** Fused ops
+  are provably an optimization detail (vm_defuse + the differential test);
+  keeping them out of the wire format means they need zero stability — no
+  format bumps for new fusions (deletes gbc-spec.md §950's accepted cache
+  invalidation), a ~90-op verification surface for external bytecode, and
+  a correct-by-construction v1 load path (run defused; re-fuse at load as
+  v2 — which makes A2's peephole consolidation load-bearing GBC
+  infrastructure, since a window-based fuser is most of a bytecode-to-
+  bytecode fusion pass). A WASM-style prefix byte was considered and
+  rejected for the runtime encoding: in an interpreter the fused ops are
+  the hot path (~4 dispatches/node on fib, all fused), and a prefix adds a
+  fetch + second indirect jump per execution — engines with JITs pay
+  prefix decode once per function, we would pay it every dispatch.
 
 ### Strategic decision — Tier 2 vs Tier 3 (blocks GBC format freeze)
 
