@@ -1,0 +1,21 @@
+std := import("std")
+
+type Priority enum { low, medium, high, critical }
+
+// Regression: enum-typed bindings (inferred AND explicit) must be assignable.
+// The named-type assignment epilog used to compile to Priority(value) — a
+// constructor call — which fails with NotAFunction for enum types.
+func pick(i int) Priority {
+    pri := Priority.medium
+    if i rem 5 == 0 { pri = Priority.high }
+    if i rem 11 == 0 { pri = Priority.critical }
+    return pri
+}
+
+var explicit Priority = Priority.low
+explicit = Priority.medium
+
+std.io.println(pick(10))
+std.io.println(pick(11))
+std.io.println(pick(3))
+std.io.println(explicit)
