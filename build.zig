@@ -288,6 +288,19 @@ pub fn build(b: *std.Build) void {
     const build_test_step = b.step("build-test", "Run build graph contract tests");
     build_test_step.dependOn(&run_build_tests.step);
 
+    const engine_api_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/engine.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    engine_api_test_mod.addImport("build_options", build_opts_mod);
+    engine_api_test_mod.addImport("runtime_config", runtime_config_mod);
+    const engine_api_test = b.addTest(.{ .root_module = engine_api_test_mod });
+    const run_engine_api_tests = b.addRunArtifact(engine_api_test);
+
+    const engine_api_test_step = b.step("engine-api-test", "Run native engine C API tests");
+    engine_api_test_step.dependOn(&run_engine_api_tests.step);
+
     // ── Heap / GC unit tests (native Zig test runner) ─────────────────────────
     // Uses a wrapper root at src/ so that runtime/heap.zig can import ../lang/value.zig.
 
