@@ -166,6 +166,19 @@ Lua-parity requirement; the stack ISA and the ratified wire design freeze.
    differential green, benchmarks neutral-or-better, perf-baseline deltas
    each explained by a named additional fusion (a clean pass may legally
    fuse MORE than the trackers did).
+   PHASE A DONE (2026-07-19): lang/fusion_pass.zig — pair-table rewriter
+   run to fixpoint (every fusion is a pair of the previous stage's output),
+   legality = "second instruction is not a branch target" (one rule
+   replacing all nine invalidation blocks; quint body offsets surfaced as
+   targets manually — the decoder hides them). Verified by the new
+   refuse differential in chaos_spec_test: all 254 spec cases compile →
+   defuse → fuse → run with identical output, and the pass recovers 81%
+   of the emitter's fusion by byte-weight (63137 emitter / 64131 defused /
+   63326 pass). Remaining for Phase B: the five uncovered patterns
+   (glsc/cglsc call chains, get_local_get_field, inc_global_const,
+   local_add_local, local_add_field — the 189-byte gap), then the
+   emitter-tracker deletion. Constant folding stays in the compiler by
+   design (it mutates the const pool = wire content).
 3. GBC writer/reader over the defused form (the compiler's natural
    pre-pass output).
 4. Verifier hardening with the loader: depth-divergence hard error,
