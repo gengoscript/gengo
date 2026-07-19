@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 const chunk = @import("lang/chunk.zig");
 const globals = @import("lang/globals.zig");
@@ -15,14 +16,33 @@ const staticSS = vmod.staticSS;
 const module_compile = @import("lang/module_compile.zig");
 const op_mod = @import("lang/op.zig");
 
-fn writeAll(fd: std.os.wasi.fd_t, s: []const u8) void {
-    var off: usize = 0;
-    while (off < s.len) {
-        var iov = [1]std.os.wasi.ciovec_t{.{ .base = s[off..].ptr, .len = s.len - off }};
-        var wrote: usize = 0;
-        if (std.os.wasi.fd_write(fd, &iov, iov.len, &wrote) != .SUCCESS or wrote == 0) return;
-        off += wrote;
+// Dual-target: the runner ships as a WASI executable (the artifact-facing
+// lane) AND as a native executable (fuzz-native) so native codegen — the
+// unchecked stack ops, proof flags, fused handlers — gets fuzzed too.
+const is_wasm = builtin.target.cpu.arch.isWasm();
+
+fn writeAll(fd: i32, s: []const u8) void {
+    if (comptime is_wasm) {
+        var off: usize = 0;
+        while (off < s.len) {
+            var iov = [1]std.os.wasi.ciovec_t{.{ .base = s[off..].ptr, .len = s.len - off }};
+            var wrote: usize = 0;
+            if (std.os.wasi.fd_write(fd, &iov, iov.len, &wrote) != .SUCCESS or wrote == 0) return;
+            off += wrote;
+        }
+    } else {
+        var off: usize = 0;
+        while (off < s.len) {
+            const wrote = std.c.write(fd, s[off..].ptr, s.len - off);
+            if (wrote <= 0) return;
+            off += @intCast(wrote);
+        }
     }
+}
+
+fn exitProc(code: u8) noreturn {
+    if (comptime is_wasm) std.os.wasi.proc_exit(code);
+    std.process.exit(code);
 }
 
 fn out(s: []const u8) void {
@@ -30,7 +50,7 @@ fn out(s: []const u8) void {
 }
 fn fail(msg: []const u8) noreturn {
     writeAll(2, msg);
-    std.os.wasi.proc_exit(1);
+    exitProc(1);
 }
 
 // ── Simple PRNG ─────────────────────────────────────────────────────────────
@@ -523,7 +543,7 @@ fn runAssert(src: []const u8, label: []const u8) void {
         out("property FAIL (compile): ");
         out(label);
         out("\n");
-        std.os.wasi.proc_exit(1);
+        exitProc(1);
     };
     chunk.emitOp(.halt, 1) catch {};
     vm.run(vm.VMContext.fromActive()) catch |e| {
@@ -531,7 +551,7 @@ fn runAssert(src: []const u8, label: []const u8) void {
             out("property FAIL (panic): ");
             out(label);
             out("\n");
-            std.os.wasi.proc_exit(1);
+            exitProc(1);
         }
         // Other errors (OOM, etc.) are not property failures.
     };
@@ -1106,7 +1126,7 @@ fn propVariantExplosion() void {
 
 // ── Main ────────────────────────────────────────────────────────────────────
 
-export fn _start() void {
+fn fuzzAll() void {
     fuzzCompiler();
     fuzzVmBytecode();
     fuzzValidAdversarialBytecode();
@@ -1125,5 +1145,9 @@ export fn _start() void {
     propIteratorInvalidation();
     propVariantExplosion();
     out("fuzz OK\n");
-    std.os.wasi.proc_exit(0);
+    exitProc(0);
+}
+
+pub fn main() void {
+    fuzzAll();
 }

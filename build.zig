@@ -432,6 +432,22 @@ pub fn build(b: *std.Build) void {
     const fuzz_step = b.step("fuzz", "Run fuzz tests (compiler, VM, and boundary inputs)");
     fuzz_step.dependOn(&run_fuzz_runner.step);
 
+    // Native fuzz lane: same corpus, native codegen — the unchecked stack
+    // ops, proof flags, and fused handlers only exist as native machine code,
+    // and wasmtime throttles iteration throughput besides.
+    const fuzz_native_mod = b.createModule(.{
+        .root_source_file = b.path("src/fuzz_runner.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    fuzz_native_mod.addImport("build_options", build_opts_mod);
+    fuzz_native_mod.addImport("runtime_config", runtime_config_mod);
+    fuzz_native_mod.link_libc = true;
+    const fuzz_native_exe = b.addExecutable(.{ .name = "fuzz-runner-native", .root_module = fuzz_native_mod });
+    const run_fuzz_native = b.addRunArtifact(fuzz_native_exe);
+    const fuzz_native_step = b.step("fuzz-native", "Run fuzz tests natively (native codegen paths)");
+    fuzz_native_step.dependOn(&run_fuzz_native.step);
+
     const fuzz_gc_stress_step = b.step("fuzz-gc-stress", "Run fuzz tests under gc_stress (GC on every allocation)");
     fuzz_gc_stress_step.dependOn(&run_fuzz_gc_stress.step);
 

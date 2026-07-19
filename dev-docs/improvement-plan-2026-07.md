@@ -176,10 +176,13 @@ Progress 2026-07-19: native spec-pass output conformance landed — all
 top-level spec cases now diff stdout+stderr against .out natively in
 chaos_spec_test (previously only the wasm runner compared output; the
 defused differential discarded it). Found on day one: 327's spec case used
-the reserved `message` keyword as a variable name. Remaining from the
-testing-reorg survey: native fuzz build, vm_value/vm_safety as native test
-roots, parity-lane corpus expansion (only 2 files today), and the A6
-bytecode-shape backfill.
+the reserved `message` keyword as a variable name. Native fuzz landed
+2026-07-19: fuzz_runner is dual-target (std.start entry on both), the
+fuzz-native step runs the full corpus against native codegen — where the
+unchecked stack ops, proof flags, and fused handlers actually live — and
+the pre-push hook runs it before the wasm lanes. Remaining from the
+testing-reorg survey: vm_value/vm_safety as native test roots, parity-lane
+corpus expansion (only 2 files today), and the A6 bytecode-shape backfill.
 
 ## Track C — Performance (fib call-overhead hunt, remaining items)
 
