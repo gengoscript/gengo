@@ -172,6 +172,15 @@ opportunistically):
 The spec suite remains the semantics-of-record; the native lane exists so
 regressions die at `zig build test` speed instead of pre-push speed.
 
+Progress 2026-07-19: native spec-pass output conformance landed — all
+top-level spec cases now diff stdout+stderr against .out natively in
+chaos_spec_test (previously only the wasm runner compared output; the
+defused differential discarded it). Found on day one: 327's spec case used
+the reserved `message` keyword as a variable name. Remaining from the
+testing-reorg survey: native fuzz build, vm_value/vm_safety as native test
+roots, parity-lane corpus expansion (only 2 files today), and the A6
+bytecode-shape backfill.
+
 ## Track C — Performance (fib call-overhead hunt, remaining items)
 
 Context: fib(32) 0.45s vs Python 0.19s (realistic target), Lua 0.095s

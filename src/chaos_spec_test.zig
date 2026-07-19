@@ -445,6 +445,79 @@ test "spec fail cases" {
 // version, and verify it also succeeds. Divergence means a fused opcode or
 // IC path produces different semantics from the expanded primitives.
 
+// ── Spec pass cases — native output conformance ──────────────────────────
+// Until 2026-07-19 the wasm conformance runner was the ONLY place pass-case
+// stdout was compared against the .out files; natively the corpus ran just
+// once (defused) with output discarded, so output-affecting miscompiles
+// gated at wasmtime/pre-push speed instead of zig-test speed. This sweep
+// runs every top-level spec pass case natively and diffs its output.
+// The cap/ subdirectory stays wasm-lane-only: those cases exercise
+// capability wiring this harness does not mount.
+test "spec pass cases native output" {
+    const alloc = std.testing.allocator;
+    const io_ref = std.Io.Threaded.global_single_threaded.io();
+    const cwd = std.Io.Dir.cwd();
+    var d = try cwd.openDir(io_ref, "tests/spec", .{ .iterate = true });
+    defer d.close(io_ref);
+
+    var iter = d.iterate();
+    var count: usize = 0;
+    var failures: usize = 0;
+    while (try iter.next(io_ref)) |entry| {
+        if (entry.kind != .file) continue;
+        const ext = std.fs.path.extension(entry.name);
+        if (!std.mem.eql(u8, ext, ".gengo")) continue;
+
+        const path = try std.fs.path.join(alloc, &.{ "tests/spec", entry.name });
+        defer alloc.free(path);
+        const src = readFileAlloc(alloc, path, 1024 * 1024) catch continue;
+        defer alloc.free(src);
+        const out_path = try std.fmt.allocPrint(alloc, "{s}.out", .{path[0 .. path.len - 6]});
+        defer alloc.free(out_path);
+        // No .out file: not an output-conformance case (mirrors the runner).
+        const expected = readFileAlloc(alloc, out_path, 1024 * 1024) catch continue;
+        defer alloc.free(expected);
+
+        var rt = try setup();
+        defer rt.deinit();
+        g_stdout = std.array_list.Managed(u8).init(alloc);
+        g_stderr = std.array_list.Managed(u8).init(alloc);
+        defer g_stdout.deinit();
+        defer g_stderr.deinit();
+
+        const r = runWithCapture(&rt, src, path);
+        switch (r[0]) {
+            .ok => {},
+            .compile_error => |e| {
+                std.debug.print("spec native FAIL (compile): {s}: {s}\n", .{ path, e.msg });
+                failures += 1;
+                continue;
+            },
+            .runtime_error => |e| {
+                std.debug.print("spec native FAIL (runtime): {s}: {s}\n", .{ path, e.msg });
+                failures += 1;
+                continue;
+            },
+        }
+        // The conformance runner compares stdout followed by stderr against
+        // .out (see test_runner runShellCommand); match those semantics so
+        // cases like 207_io_eprint keep one expectation file.
+        const combined = try std.mem.concat(alloc, u8, &.{ r[1], r[2] });
+        defer alloc.free(combined);
+        if (!std.mem.eql(u8, expected, combined)) {
+            std.debug.print("spec native FAIL (output mismatch): {s}\n  want: {s}\n  got:  {s}\n", .{ path, expected, combined });
+            failures += 1;
+            continue;
+        }
+        count += 1;
+    }
+    if (failures != 0) {
+        std.debug.print("spec native output: {d} passed, {d} FAILED\n", .{ count, failures });
+        return error.TestUnexpectedResult;
+    }
+    if (count == 0) return error.NoSpecPassCases;
+}
+
 test "spec pass cases differential" {
     const alloc = std.testing.allocator;
     const io_ref = std.Io.Threaded.global_single_threaded.io();
