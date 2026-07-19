@@ -448,6 +448,38 @@ pub fn build(b: *std.Build) void {
     const fuzz_native_step = b.step("fuzz-native", "Run fuzz tests natively (native codegen paths)");
     fuzz_native_step.dependOn(&run_fuzz_native.step);
 
+    // Native builds of the hand-assembled-bytecode runners: their signal is
+    // target-independent VM semantics, so they gate the native codegen too.
+    const vm_value_native_mod = b.createModule(.{
+        .root_source_file = b.path("src/vm_value_runner.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    vm_value_native_mod.addImport("build_options", build_opts_mod);
+    vm_value_native_mod.addImport("runtime_config", runtime_config_mod);
+    vm_value_native_mod.link_libc = true;
+    const vm_value_native_exe = b.addExecutable(.{ .name = "vm-value-runner-native", .root_module = vm_value_native_mod });
+    const run_vm_value_native = b.addRunArtifact(vm_value_native_exe);
+
+    const vm_safety_native_mod = b.createModule(.{
+        .root_source_file = b.path("src/vm_safety_runner.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    vm_safety_native_mod.addImport("build_options", build_opts_mod);
+    vm_safety_native_mod.addImport("runtime_config", runtime_config_mod);
+    vm_safety_native_mod.link_libc = true;
+    const vm_safety_native_exe = b.addExecutable(.{ .name = "vm-safety-runner-native", .root_module = vm_safety_native_mod });
+    const run_vm_safety_native = b.addRunArtifact(vm_safety_native_exe);
+
+    const vm_native_step = b.step("vm-native", "Run VM value/safety runners natively");
+    vm_native_step.dependOn(&run_vm_value_native.step);
+    vm_native_step.dependOn(&run_vm_safety_native.step);
+    // Part of the main test gate: their semantics are target-independent,
+    // so they must hold on native codegen too.
+    test_step.dependOn(&run_vm_value_native.step);
+    test_step.dependOn(&run_vm_safety_native.step);
+
     const fuzz_gc_stress_step = b.step("fuzz-gc-stress", "Run fuzz tests under gc_stress (GC on every allocation)");
     fuzz_gc_stress_step.dependOn(&run_fuzz_gc_stress.step);
 
