@@ -2223,18 +2223,32 @@ const exec_call_modifier: std.builtin.CallModifier =
 // the plain pop/push model the Debug-build effect check can compare against.
 fn effectCheckExempt(comptime op: Op) bool {
     return switch (op) {
-        .call, .call_tail, .call_spread, .defer_call, .invoke_method, .defer_invoke_method,
-        .get_local_const_sub_call, .get_local_const_sub_call_tail,
-        .call_global_local_sub_const, .call_global_local_sub_const_tail,
-        .ret, .ret_const, .get_local_ret, .add_ret, .halt, .op_unreachable,
+        .call,
+        .call_tail,
+        .call_spread,
+        .defer_call,
+        .invoke_method,
+        .defer_invoke_method,
+        .get_local_const_sub_call,
+        .get_local_const_sub_call_tail,
+        .call_global_local_sub_const,
+        .call_global_local_sub_const_tail,
+        .ret,
+        .ret_const,
+        .get_local_ret,
+        .add_ret,
+        .halt,
+        .op_unreachable,
         // Variable effect: iterator steps push value(s)+true while iterating
         // but only false on exhaustion. The table declares the maximum (right
         // for the capacity bound), so the exact-net assertion can't apply.
-        .iter_next1, .iter_next2,
+        .iter_next1,
+        .iter_next2,
         // These execute the back-edge target's get_global inline when its IC
         // is warm (tryInlineGetGlobal), so their observed effect includes the
         // swallowed instruction's push.
-        .loop, .set_global_loop,
+        .loop,
+        .set_global_loop,
         => true,
         else => false,
     };
