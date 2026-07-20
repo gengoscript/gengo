@@ -24,17 +24,7 @@ This becomes more relevant once the module system is used heavily. At that point
 
 ---
 
-## 3. Engine Improvement Plan (July 2026)
-
-**Status:** in progress, tracked in [`improvement-plan-2026-07.md`](improvement-plan-2026-07.md).
-
-Architecture debt (setActive removal, peephole consolidation, error sets),
-safety hardening (Debug asserts for the verifier-proved unchecked stack ops),
-and the remaining fib call-overhead items. See the plan for order and status.
-
----
-
-## 4. Exit Criteria
+## 3. Exit Criteria
 
 1. All core capabilities are `done` and covered by conformance cases.
 2. Conformance suite runs in CI on every PR.
@@ -56,3 +46,4 @@ and the remaining fib call-overhead items. See the plan for order and status.
 | Custom allocator in engine config (#71) | Implemented: `6e2332a` |
 | `cap:fs` ~900 ms cold-start from `std.Io.Threaded` (#73) | Fixed: `cb7bb89` |
 | `engine_last_error` unreachable after `engine_init_with_config` failure (#74) | Fixed: `19972f6` |
+| Engine Improvement Plan (July 2026) architecture debt sweep | Redistributed 2026-07-20: durable content → `dev-docs/design/vm-architecture.md` §5.2/§6, standing test practice → `dev-docs/testing.md`, remaining work → issues #5, #204, #205, #206; historical record archived at `dev-docs/archive/improvement-plan-2026-07.md` |
