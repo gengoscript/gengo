@@ -247,7 +247,7 @@ pub fn disassemble(cs: *const chunk.State) void {
             },
 
             // --- 1-byte operand ops ---
-            .get_local, .set_local, .get_upvalue, .set_upvalue, .close_upvalue, .get_local_ret, .defer_call, .build_array, .build_map, .build_tuple, .build_struct_instance, .tuple_check_arity, .tuple_get, .tuple_get_keep, .get_slice, .assert_type, .append => {
+            .get_local, .set_local, .get_upvalue, .set_upvalue, .close_upvalue, .get_local_ret, .defer_call, .build_array, .build_map, .build_tuple, .build_struct_instance, .tuple_check_arity, .tuple_get, .tuple_get_keep, .get_slice, .assert_type, .append, .bytes_decode => {
                 const slot = cs.codeByteAt(i);
                 i += 1;
                 io.write(@tagName(op));
@@ -636,6 +636,27 @@ pub fn disassemble(cs: *const chunk.State) void {
                     io.write(" ic_fidx=");
                     writeNum(ic_fidx);
                 }
+                io.write("\n");
+            },
+            // --- field_add_const: op + slot(1) + skip(1) + name(2) + ic_type(2) + ic_fidx(1) + k(2) + sf_name(2) + sf_ic_type(2) + sf_ic_fidx(1) ---
+            .field_add_const => {
+                const slot = cs.codeByteAt(i);
+                i += 1;
+                i += 1; // skip byte
+                const name_idx = readU16(cs, i);
+                i += 2;
+                i += 3; // ic_type(2) + ic_fidx(1) for the read side
+                const k_idx = readU16(cs, i);
+                i += 2;
+                i += 5; // set_field's own name(2)+ic_type(2)+ic_fidx(1), redundant with name_idx above
+                io.write("field_add_const slot=");
+                writeNum(slot);
+                io.write(" field=");
+                writeConst(cs, name_idx);
+                io.write(" k=[");
+                writeNum(k_idx);
+                io.write("] ");
+                writeConst(cs, k_idx);
                 io.write("\n");
             },
             // --- fused local += const + loop: op + dst(1) + idx(2) + off(4) ---

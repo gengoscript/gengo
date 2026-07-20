@@ -176,6 +176,26 @@ pub const Op = enum(u8) {
     // same nativeAppend the native-call path uses, so there is no separate
     // behavior to keep in sync — same rationale as len above.
     append = 0x7F,
+    // Pops one value, pushes its raw byte length (no UTF-8 rune counting,
+    // unlike len above). Lowered at compile time from std.core.bytelen(x);
+    // same rationale as len/append — the VM handler calls the exact same
+    // nativeByteLen the native-call path uses. Found to be even more
+    // frequent than len in real code (gengo-mqtt/gengo-modbus), issue #207.
+    bytelen = 0x80,
+    // [op][kind]: pops offset then data (string), decodes a fixed-width
+    // value at that offset per `kind` (std.lang.native.bytes.DecodeKind:
+    // 0=byte_at 1=u16be 2=u16le 3=u32be 4=u32le 5=u64be 6=u64le 7=f32be
+    // 8=f32le 9=f64be 10=f64le), pushes an int (0-6) or float (7-10).
+    // Lowered at compile time from std.bytes.{at,u16be_at,...}; the VM
+    // handler calls the exact same bytes.zig decodeAt the native-call path
+    // uses. One parameterized op instead of 11 separate ones — the operand
+    // byte is an internal branch inside a single already-dispatched
+    // handler, not a second dispatch level (that's the rejected prefix
+    // scheme; this is the same pattern assert_type already uses). Encode
+    // direction (u8/u16be/u32be/...) intentionally NOT done here — each
+    // allocates a result string, so dispatch is a smaller fraction of the
+    // real work; measure before doing, per issue #207.
+    bytes_decode = 0x81,
 
     // ── Reserved slots ───────────────────────────────────────────────────────
     // Free opcode space, declared as trap ops so the enum is dense over the
@@ -194,8 +214,6 @@ pub const Op = enum(u8) {
     // ever exhausted, the answer is build/link-time-selected fused-op-set
     // profiles (zero per-instruction cost — a compile-time choice, not a
     // runtime branch), not widening or prefixing.
-    reserved_80 = 0x80,
-    reserved_81 = 0x81,
     reserved_82 = 0x82,
     reserved_83 = 0x83,
     reserved_84 = 0x84,
@@ -322,9 +340,19 @@ pub const Op = enum(u8) {
     // Fused get_global_const_add+set_global (same global): 8-byte in-place global increment.
     // Layout: [op][name_hi][name_lo][ic_hi][ic_lo][add_skip][val_hi][val_lo]
     inc_global_const = 0xE1,
+    // Fused get_local+get_local_get_field+const_add+set_field (same slot,
+    // same field name): field = field + const, e.g. c.tx_id = c.tx_id + 1.
+    // Delegates the read and write to opGetLocalGetField/opSetField
+    // verbatim rather than reimplementing their type-coercion/const-field/
+    // named-type/IC logic — same-field validation happens at fusion time
+    // (fusion_pass.zig), not by re-deriving set_field's semantics here.
+    // Layout: [op][glgf: slot,skip,name_hi,name_lo,ic_hi,ic_lo,ic_fidx (7)]
+    //         [const idx_hi][const idx_lo][sf: name_hi,name_lo,ic_hi,ic_lo,ic_fidx (5)]
+    // (15 bytes). Found independently in gengo-modbus/gengo-mqtt as a
+    // transaction/packet-ID counter idiom, issue #207.
+    field_add_const = 0xE2,
 
     // Reserved slots within the fused block — same rules as above.
-    reserved_e2 = 0xE2,
     reserved_e3 = 0xE3,
     reserved_e4 = 0xE4,
     reserved_e5 = 0xE5,

@@ -61,6 +61,7 @@ pub fn stackEffect(op: Op, code: []const u8, ip: usize) struct { pop: u8, push: 
         .cast_bigint,
         .type_name,
         .len,
+        .bytelen,
         .variant_check,
         .variant_payload,
         .named_inner,
@@ -85,6 +86,7 @@ pub fn stackEffect(op: Op, code: []const u8, ip: usize) struct { pop: u8, push: 
         .set_index => .{ .pop = 3, .push = 0 },
 
         .get_index => .{ .pop = 2, .push = 1 },
+        .bytes_decode => .{ .pop = 2, .push = 1 },
 
         .call, .call_tail => blk: {
             const argc = code[ip + 1] & 0x7F; // 0x80 = args-preverified flag
@@ -155,6 +157,7 @@ pub fn stackEffect(op: Op, code: []const u8, ip: usize) struct { pop: u8, push: 
         .local_add_const => .{ .pop = 0, .push = 0 },
         .local_add_const_loop => .{ .pop = 0, .push = 0 },
         .local_add_field => .{ .pop = 0, .push = 0 },
+        .field_add_const => .{ .pop = 0, .push = 0 },
         .op_assert_msg => .{ .pop = 2, .push = 0 },
         .op_trap_check => .{ .pop = 1, .push = 0 },
 
@@ -168,7 +171,7 @@ pub fn stackEffect(op: Op, code: []const u8, ip: usize) struct { pop: u8, push: 
         .halt, .op_unreachable => .{ .pop = 0, .push = 0 },
 
         // Reserved slots: rejected by decodeAt before stackEffect runs.
-        .reserved_80, .reserved_81, .reserved_82, .reserved_83, .reserved_84, .reserved_85, .reserved_86, .reserved_87, .reserved_88, .reserved_89, .reserved_8a, .reserved_8b, .reserved_8c, .reserved_8d, .reserved_8e, .reserved_8f, .reserved_90, .reserved_91, .reserved_92, .reserved_93, .reserved_94, .reserved_95, .reserved_96, .reserved_97, .reserved_98, .reserved_99, .reserved_9a, .reserved_9b, .reserved_9c, .reserved_9d, .reserved_9e, .reserved_9f, .reserved_a0, .reserved_a1, .reserved_a2, .reserved_a3, .reserved_a4, .reserved_a5, .reserved_a6, .reserved_a7, .reserved_a8, .reserved_a9, .reserved_aa, .reserved_ab, .reserved_ac, .reserved_ad, .reserved_ae, .reserved_af, .reserved_b0, .reserved_b1, .reserved_b2, .reserved_b3, .reserved_b4, .reserved_b5, .reserved_b6, .reserved_b7, .reserved_b8, .reserved_b9, .reserved_ba, .reserved_bb, .reserved_bc, .reserved_bd, .reserved_be, .reserved_bf, .reserved_e2, .reserved_e3, .reserved_e4, .reserved_e5, .reserved_e6, .reserved_e7, .reserved_e8, .reserved_e9, .reserved_ea, .reserved_eb, .reserved_ec, .reserved_ed, .reserved_ee, .reserved_ef, .reserved_f0, .reserved_f1, .reserved_f2, .reserved_f3, .reserved_f4, .reserved_f5, .reserved_f6, .reserved_f7, .reserved_f8, .reserved_f9, .reserved_fa, .reserved_fb, .reserved_fc, .reserved_fd, .reserved_fe, .reserved_ff => unreachable,
+        .reserved_82, .reserved_83, .reserved_84, .reserved_85, .reserved_86, .reserved_87, .reserved_88, .reserved_89, .reserved_8a, .reserved_8b, .reserved_8c, .reserved_8d, .reserved_8e, .reserved_8f, .reserved_90, .reserved_91, .reserved_92, .reserved_93, .reserved_94, .reserved_95, .reserved_96, .reserved_97, .reserved_98, .reserved_99, .reserved_9a, .reserved_9b, .reserved_9c, .reserved_9d, .reserved_9e, .reserved_9f, .reserved_a0, .reserved_a1, .reserved_a2, .reserved_a3, .reserved_a4, .reserved_a5, .reserved_a6, .reserved_a7, .reserved_a8, .reserved_a9, .reserved_aa, .reserved_ab, .reserved_ac, .reserved_ad, .reserved_ae, .reserved_af, .reserved_b0, .reserved_b1, .reserved_b2, .reserved_b3, .reserved_b4, .reserved_b5, .reserved_b6, .reserved_b7, .reserved_b8, .reserved_b9, .reserved_ba, .reserved_bb, .reserved_bc, .reserved_bd, .reserved_be, .reserved_bf, .reserved_e3, .reserved_e4, .reserved_e5, .reserved_e6, .reserved_e7, .reserved_e8, .reserved_e9, .reserved_ea, .reserved_eb, .reserved_ec, .reserved_ed, .reserved_ee, .reserved_ef, .reserved_f0, .reserved_f1, .reserved_f2, .reserved_f3, .reserved_f4, .reserved_f5, .reserved_f6, .reserved_f7, .reserved_f8, .reserved_f9, .reserved_fa, .reserved_fb, .reserved_fc, .reserved_fd, .reserved_fe, .reserved_ff => unreachable,
     };
 }
 

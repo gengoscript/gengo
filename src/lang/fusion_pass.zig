@@ -116,19 +116,33 @@ fn pairFusionFull(cs: *const chunk.State, a_pos: usize, a: Op, b_pos: usize, b: 
     return pairFusion(a, b, same_slot);
 }
 
-// The two 4-instruction fusions: get_local dst; <src push>; add; set_local dst.
+// The three 4-instruction fusions:
+//   get_local dst; <src push>; add; set_local dst           -> local_add_{local,field}
+//   get_local slot; get_local_get_field(same slot); const_add; set_field(same field) -> field_add_const
 // Caller has already cleared b_pos as a branch target; interior positions
-// (add, set_local) are checked here.
+// (the third and fourth instructions) are checked here.
 fn fuse4At(cs: *const chunk.State, a_pos: usize, b_pos: usize, b: Op, old_len: usize, targets: Bits) ?Op {
     const b_width: usize = switch (b) {
         .get_local => 2,
         .get_local_get_field => 8,
         else => return null,
     };
-    const c_pos = b_pos + b_width; // add
+    const c_pos = b_pos + b_width;
+    if (c_pos >= old_len) return null;
+    const c = opAt(cs, c_pos);
+    if (c == .const_add and b == .get_local_get_field) {
+        const d_pos = c_pos + 3; // const_add width
+        if (d_pos + 6 > old_len) return null;
+        if (opAt(cs, d_pos) != .set_field) return null;
+        if (cs.code[a_pos + 1] != cs.code[b_pos + 1]) return null; // receiver slot match
+        // Field name (u16 const index): glgf's at b_pos+3, set_field's at d_pos+1.
+        if (cs.code[b_pos + 3] != cs.code[d_pos + 1] or cs.code[b_pos + 4] != cs.code[d_pos + 2]) return null;
+        if (targets.has(c_pos) or targets.has(d_pos)) return null;
+        return .field_add_const;
+    }
     const d_pos = c_pos + 1; // set_local
     if (d_pos + 2 > old_len) return null;
-    if (opAt(cs, c_pos) != .add or opAt(cs, d_pos) != .set_local) return null;
+    if (c != .add or opAt(cs, d_pos) != .set_local) return null;
     if (cs.code[a_pos + 1] != cs.code[d_pos + 1]) return null; // dst slot match
     if (targets.has(c_pos) or targets.has(d_pos)) return null;
     return if (b == .get_local) .local_add_local else .local_add_field;
@@ -138,8 +152,16 @@ fn fuse4Consumed(f: Op) usize {
     return switch (f) {
         .local_add_local => 7, // get_local(2)+get_local(2)+add(1)+set_local(2)
         .local_add_field => 13, // get_local(2)+get_local_get_field(8)+add(1)+set_local(2)
+        .field_add_const => 19, // get_local(2)+get_local_get_field(8)+const_add(3)+set_field(6)
         else => unreachable,
     };
+}
+
+// Width of the 3rd instruction (add / const_add) in a fuse4 window — Pass B
+// uses this to mark the 3rd/4th interior positions correctly; add is 1 byte,
+// const_add is 3.
+fn fuse4ThirdWidth(f: Op) usize {
+    return if (f == .field_add_const) 3 else 1;
 }
 
 pub const FuseError = error{ OutOfMemory, BytecodeOutOfBounds, BadOpcode, BadConstantIndex, BadJumpTarget };
@@ -216,11 +238,15 @@ fn fuseOnce(cs: *chunk.State, alloc: std.mem.Allocator) FuseError!bool {
                 },
                 .fuse4 => |f| {
                     // Map all three interior instruction starts to the fused start.
+                    // The 3rd instruction's width varies (add=1, const_add=3 for
+                    // field_add_const), so it's looked up rather than assumed.
                     const b_pos = ip + inst.width;
                     const b_inst = try chunk_decoder.decodeAt(cs, b_pos);
+                    const c_pos = b_pos + b_inst.width;
+                    const d_pos = c_pos + fuse4ThirdWidth(f);
                     ip_map[b_pos] = @intCast(new_ip);
-                    ip_map[b_pos + b_inst.width] = @intCast(new_ip); // add
-                    ip_map[b_pos + b_inst.width + 1] = @intCast(new_ip); // set_local
+                    ip_map[c_pos] = @intCast(new_ip);
+                    ip_map[d_pos] = @intCast(new_ip);
                     new_ip += fusedWidth(f);
                     ip += fuse4Consumed(f);
                     changed = true;
@@ -360,6 +386,7 @@ fn fusedWidth(f: Op) usize {
         .close_upvalue_loop => 6,
         .local_add_local => 3,
         .local_add_field => 9,
+        .field_add_const => 15,
         .get_local_ret => 2,
         .add_ret => 1,
         else => unreachable,
@@ -514,6 +541,15 @@ fn emitFused(cs: *const chunk.State, f: Op, a_pos: usize, a_inst: chunk_decoder.
 
 fn emitFused4(cs: *const chunk.State, f: Op, a_pos: usize, b_pos: usize, out: []u8, start: usize) usize {
     out[start] = @intFromEnum(f);
+    if (f == .field_add_const) {
+        // [fac][glgf verbatim: slot,skip,name2,ic_type2,ic_fidx (7)][k idx(2)][set_field verbatim: name2,ic_type2,ic_fidx (5)]
+        @memcpy(out[start + 1 ..][0..7], cs.code[b_pos + 1 ..][0..7]);
+        const c_pos = b_pos + 8; // get_local_get_field's width
+        @memcpy(out[start + 8 ..][0..2], cs.code[c_pos + 1 ..][0..2]);
+        const d_pos = c_pos + 3; // const_add's width
+        @memcpy(out[start + 10 ..][0..5], cs.code[d_pos + 1 ..][0..5]);
+        return fusedWidth(f);
+    }
     out[start + 1] = cs.code[a_pos + 1]; // dst slot
     switch (f) {
         // [lal][dst][src] from get_local+get_local+add+set_local

@@ -62,7 +62,7 @@ pub fn decodeAt(state: *const chunk.State, pos: usize) !DecodedInstruction {
         // call_spread: [op][argc][spread_n][ic_hi][ic_lo] — 5 bytes
         .call_spread => .{ .op = op, .width = 5 },
 
-        .get_local, .set_local, .get_upvalue, .set_upvalue, .close_upvalue, .get_local_ret, .defer_call, .build_array, .build_map, .build_tuple, .build_struct_instance, .tuple_check_arity, .tuple_get, .tuple_get_keep, .get_slice, .assert_type, .append => .{
+        .get_local, .set_local, .get_upvalue, .set_upvalue, .close_upvalue, .get_local_ret, .defer_call, .build_array, .build_map, .build_tuple, .build_struct_instance, .tuple_check_arity, .tuple_get, .tuple_get_keep, .get_slice, .assert_type, .append, .bytes_decode => .{
             .op = op,
             .width = 2,
         },
@@ -203,6 +203,13 @@ pub fn decodeAt(state: *const chunk.State, pos: usize) !DecodedInstruction {
             .op = op,
             .width = 9,
             .const_index = try readU16At(state, pos + 4),
+        },
+
+        // [op][slot][skip][name_hi][name_lo][ic_hi][ic_lo][ic_fidx][k_hi][k_lo][sf_name_hi][sf_name_lo][sf_ic_hi][sf_ic_lo][sf_ic_fidx]
+        .field_add_const => .{
+            .op = op,
+            .width = 15,
+            .const_index = try readU16At(state, pos + 3),
         },
 
         else => .{

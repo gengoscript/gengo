@@ -1599,6 +1599,24 @@ fn opGetLocalGetField(ctx: VMContext) !void {
     try pushFieldFromObject(ctx, container.object, name_idx, ic_base, ic_type_idx, ic_fidx);
 }
 
+// Fused get_local + get_local_get_field + const_add + set_field (same slot,
+// same field name): field = field + const. Delegates the read and write to
+// opGetLocalGetField/opSetField verbatim rather than reimplementing their
+// type-coercion/const-field/named-type/map-value-type/IC logic — those are
+// genuinely complex (see opSetField below) and re-deriving them here would
+// risk silently diverging from the real semantics. Same-slot/same-field
+// legality is checked once, at fusion time (fusion_pass.zig), not here.
+fn opFieldAddConst(ctx: VMContext) !void {
+    const slot = ctx.cs.codeByteAt(ctx.vs.ip); // peek: opGetLocalGetField consumes it itself
+    try ctx.vs.vmPush(try readLocalSlot(ctx, slot));
+    try opGetLocalGetField(ctx);
+    const k = try ctx.cs.constAt(opShort(ctx));
+    const a = try ctx.vs.vmPop();
+    const result: Value = if (a == .int and k == .int) .{ .int = a.int + k.int } else try computeAddResult(ctx, a, k);
+    try ctx.vs.vmPush(result);
+    try opSetField(ctx);
+}
+
 fn opGetIndex(ctx: VMContext) !void {
     const idx_v = try ctx.vs.vmPop();
     const raw = try ctx.vs.vmPop();
@@ -2864,6 +2882,7 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                     try computeAddResult(ctx, a, field_val);
                 writeFrameLocal(ctx, vmFrameBase(ctx) + dst, result);
             },
+            .field_add_const => try opFieldAddConst(ctx),
             .add_ret => {
                 vmperf.breakOpChain();
                 if (ctx.vs.frame_top == 0) return error.ImpossibleOpcodeState;
@@ -3306,6 +3325,17 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
             .len => {
                 const v = try ctx.vs.vmPop();
                 try ctx.vs.vmPush(try vmnative.nativeLen(ctx, v));
+            },
+            .bytelen => {
+                const v = try ctx.vs.vmPop();
+                try ctx.vs.vmPush(try vmnative.nativeByteLen(ctx, v));
+            },
+            .bytes_decode => {
+                const kind: vmnative.BytesDecodeKind = @enumFromInt(opByte(ctx));
+                const offset_v = try ctx.vs.vmPop();
+                const data_v = try ctx.vs.vmPop();
+                const s = try vms.asStringValue(data_v);
+                try ctx.vs.vmPush(try vmnative.bytesDecodeAt(kind, s, offset_v));
             },
             .append => {
                 const argc = opByte(ctx);

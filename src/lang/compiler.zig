@@ -1270,6 +1270,44 @@ pub const Compiler = struct {
         return null;
     }
 
+    // Same rationale as len: the .bytelen op's VM handler calls the exact
+    // same nativeByteLen used by the native-call path.
+    pub fn selectStdCoreByteLenIntrinsicOp(self: *Compiler, direct_name: []const u8, argc: u8) ?Op {
+        _ = self;
+        if (argc != 1) return null;
+        if (common.streq(direct_name, "module:std.core.bytelen")) return .bytelen;
+        return null;
+    }
+
+    // std.bytes decode-family intrinsics: one op (.bytes_decode), an operand
+    // byte selecting the width/endianness/kind (must match
+    // native/bytes.zig's DecodeKind exactly). Unconditional, same rationale
+    // as len/append/bytelen — the op calls the exact same bytes.zig
+    // decodeAt the native-call path uses. Returns the emitted kind byte and
+    // whether the result is int or float, for the caller to set result info.
+    pub fn selectStdBytesDecodeIntrinsicOp(self: *Compiler, direct_name: []const u8, argc: u8) ?struct { kind: u8, is_float: bool } {
+        _ = self;
+        if (argc != 2) return null;
+        const Entry = struct { name: []const u8, kind: u8, is_float: bool };
+        const table = [_]Entry{
+            .{ .name = "module:std.bytes.at", .kind = 0, .is_float = false },
+            .{ .name = "module:std.bytes.u16be_at", .kind = 1, .is_float = false },
+            .{ .name = "module:std.bytes.u16le_at", .kind = 2, .is_float = false },
+            .{ .name = "module:std.bytes.u32be_at", .kind = 3, .is_float = false },
+            .{ .name = "module:std.bytes.u32le_at", .kind = 4, .is_float = false },
+            .{ .name = "module:std.bytes.u64be_at", .kind = 5, .is_float = false },
+            .{ .name = "module:std.bytes.u64le_at", .kind = 6, .is_float = false },
+            .{ .name = "module:std.bytes.f32be_at", .kind = 7, .is_float = true },
+            .{ .name = "module:std.bytes.f32le_at", .kind = 8, .is_float = true },
+            .{ .name = "module:std.bytes.f64be_at", .kind = 9, .is_float = true },
+            .{ .name = "module:std.bytes.f64le_at", .kind = 10, .is_float = true },
+        };
+        for (table) |e| {
+            if (common.streq(direct_name, e.name)) return .{ .kind = e.kind, .is_float = e.is_float };
+        }
+        return null;
+    }
+
     // std.core.append lowers unconditionally for the same reason len does:
     // the .append op's VM handler calls the exact same nativeAppend used by
     // the native-call path (named-array-type unwrap/rewrap, element
