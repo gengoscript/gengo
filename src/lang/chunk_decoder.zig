@@ -62,7 +62,7 @@ pub fn decodeAt(state: *const chunk.State, pos: usize) !DecodedInstruction {
         // call_spread: [op][argc][spread_n][ic_hi][ic_lo] — 5 bytes
         .call_spread => .{ .op = op, .width = 5 },
 
-        .get_local, .set_local, .get_upvalue, .set_upvalue, .close_upvalue, .get_local_ret, .defer_call, .build_array, .build_map, .build_tuple, .build_struct_instance, .tuple_check_arity, .tuple_get, .tuple_get_keep, .get_slice, .assert_type => .{
+        .get_local, .set_local, .get_upvalue, .set_upvalue, .close_upvalue, .get_local_ret, .defer_call, .build_array, .build_map, .build_tuple, .build_struct_instance, .tuple_check_arity, .tuple_get, .tuple_get_keep, .get_slice, .assert_type, .append => .{
             .op = op,
             .width = 2,
         },

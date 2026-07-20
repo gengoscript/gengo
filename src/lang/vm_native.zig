@@ -8,3 +8,5 @@ pub const installHostModules = native_main.installHostModules;
 pub const installCapabilityModules = native_main.installCapabilityModules;
 pub const nativeConvToString = native_core.nativeConvToString;
 pub const nativeTypeNameValue = native_core.nativeTypeNameValue;
+pub const nativeLen = native_core.nativeLen;
+pub const nativeAppend = native_core.nativeAppend;

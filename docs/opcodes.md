@@ -1,11 +1,22 @@
 # Opcode Reference
 
-Gengo uses a single-byte opcode space (u8, 256 slots). 160 of 256 are
-assigned, leaving 96 free for future use.
+Gengo uses a single-byte opcode space (u8, 256 slots): 192 slots
+(0x00–0xBF) for **core ops** the compiler emits, and the last 64 slots
+(0xC0–0xFF) reserved as flexible, VM-private space for **fused ops** —
+opcodes the load-time fusion pass selects, never the compiler, free to
+change shape release to release since nothing outside the VM depends on
+their numeric identity. See "Opcode space policy" below for why this
+split is fixed and doesn't move.
+
+Of the 192 core slots, 128 are assigned and 64 remain free for future
+core primitives — permanent once claimed, since core is what GBC's wire
+format will encode. Of the 64 fused slots, 34 are assigned and 30 remain
+free for future fused patterns. That's 162 of 256 slots assigned overall,
+94 free.
 
 Two kinds of opcode live in this space, distinguished only by numeric
 range — there is no tag byte or separate namespace; the VM dispatches on
-both identically. **Core ops** (0x00–0x7D) are what the compiler emits
+both identically. **Core ops** (0x00–0x7F) are what the compiler emits
 directly. **Fused/specialized ops** (0xC0–0xE1) are never emitted by the
 compiler — they are produced from core-op bytecode by a separate
 load-time rewrite pass (`src/lang/fusion_pass.zig`) that runs after
@@ -221,6 +232,8 @@ var OPS=[
   [0x7D,"n·rng", "validate_named_range — u16 named-type constant; normalize/validate TOS range or cycle"],
   [0x78,"it·n1", "iter_next1 — iterator step, 1 value"],
   [0x79,"it·n2", "iter_next2 — iterator step, 2 values"],
+  [0x7E,"len",   "len — pop a value, push its length (string rune count, array/map size, struct field count); lowered from std.core.len(x)"],
+  [0x7F,"append","append — [op][argc]; pop argc values (array + items), push the resulting array; lowered from std.core.append(a, ...items)"],
   [0xC0,"c_eq",  "const_eq — fused constant+eq"],
   [0xC1,"c_sub", "const_sub — fused constant+sub"],
   [0xC2,"c_add", "const_add — fused constant+add"],
@@ -307,11 +320,12 @@ for(var r=0;r<16;r++){
 | 0x5F–0x69 | 11 | Type system / assertions |
 | 0x6A–0x79 | 16 | Collections / struct |
 | 0x7A–0x7D | 4 | Named-scalar validation / stack |
-| 0x7E–0xBF | 66 | Free (reserved for future core ops) |
+| 0x7E–0x7F | 2 | Stdlib intrinsics (len, append) |
+| 0x80–0xBF | 64 | Free (reserved for future core ops) |
 | 0xC0–0xE1 | 34 | Fused / peephole |
 | 0xE2–0xFF | 30 | Free (within fused block) |
 
-Total assigned: 160 of 256 slots.
+Total assigned: 162 of 256 slots.
 
 The 0x00–0xBF (core, 192 slots) / 0xC0–0xFF (fused, 64 slots) boundary is
 permanent policy — see "Opcode space policy" above. It does not move to
