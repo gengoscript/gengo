@@ -38,7 +38,11 @@ LD_LIBRARY_PATH=../../zig-out/lib go run .
 
 * `cgo` binding to the native C engine surface
 * `engine_init`, `engine_run`, `engine_call`, and `engine_destroy`
-* integer and string wire values
+* scalar wire values (int, bool, string) via `gengo-wire.h`'s builders/readers
+* array and map wire values via `gengo_wire_array`/`gengo_wire_map` and
+  `gengo_wire_array_at`/`gengo_wire_map_key_at`/`gengo_wire_map_value_at` —
+  the backing element storage is caller-owned Go memory and must outlive the
+  `engine_call` that references it
 * a long-lived engine handle that loads once and calls many times
 
 ## Files

@@ -1,0 +1,12 @@
+type Score int range 0..100
+
+pub func evaluate(name string, raw_score int) string {
+    if raw_score < 0 or raw_score > 100 {
+        return "invalid score"
+    }
+    score := Score(raw_score)
+    if score >= Score(60) {
+        return name + ": approved"
+    }
+    return name + ": review"
+}

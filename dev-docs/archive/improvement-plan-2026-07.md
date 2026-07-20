@@ -5,7 +5,7 @@ longer defines current work — everything with lasting value has been
 redistributed:
 
 - Opcode-space policy (192/64 core/fused split, the rejected prefix-byte
-  and unbuilt u16 alternatives) → `docs/opcodes.md` "Opcode space policy",
+  and unbuilt u16 alternatives) → `dev-docs/opcodes.md` "Opcode space policy",
   `dev-docs/design/vm-architecture.md` §6.5, `src/lang/op.zig` comments.
 - The fusion pass architecture (A2, redefined) →
   `dev-docs/design/vm-architecture.md` §6.
@@ -52,4 +52,4 @@ Zen review + fib hunt outcomes; details in the commits.
   `dev-docs/design/vm-architecture.md` §5.2.
 - Prefix-dispatch spike for fused opcodes (2026-07-20): built, measured
   (9% slower on fib_recursive, 25% slower on dispatch_loop), rejected,
-  reverted in full. See `docs/opcodes.md` "Opcode space policy".
+  reverted in full. See `dev-docs/opcodes.md` "Opcode space policy".

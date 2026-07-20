@@ -1,0 +1,9 @@
+type Status variant {
+    pending,
+    approved,
+}
+
+s := Status.pending
+switch s {
+    case .pending { }
+}

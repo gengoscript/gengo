@@ -1,0 +1,4 @@
+fs := import("cap:fs")
+std := import("std")
+
+std.io.println(fs.exists("docs/capabilities.md"))

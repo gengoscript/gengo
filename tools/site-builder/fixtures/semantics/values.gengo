@@ -1,0 +1,28 @@
+std := import("std")
+
+items := [1]
+other_items := items
+other_items[0] = 3
+std.io.println(items[0])
+
+labels := {"score": 1}
+other_labels := labels
+other_labels["score"] = 9
+std.io.println(labels["score"])
+
+prefix := items[0:1]
+prefix[0] = 7
+std.io.println(items[0])
+
+var count int
+std.io.println(count)
+
+var callback func() int
+std.io.println(callback == null)
+
+std.io.println(2 ** 3 ** 2)
+std.io.println(1 << 2 + 1)
+
+missing := {"present": 1}
+std.io.println(missing["absent"] == null)
+std.io.println(std.core.has(missing, "absent"))

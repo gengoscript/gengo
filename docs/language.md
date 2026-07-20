@@ -46,7 +46,9 @@ Kinds of import:
 
 Source import resolution is deterministic. The engine tries the exact path,
 then the path plus `.gengo`, then the path plus `/mod.gengo`. Extensions are
-therefore optional in source code:
+therefore optional in source code. A resolved source path identifies one
+module for a compilation: importing that same resolved path more than once
+does not compile a second independent module.
 
 ```gengo
 local_math := import("./math")       // ./math.gengo or ./math/mod.gengo
@@ -62,7 +64,7 @@ Built-ins are accessed through namespaces such as `std.io.println(...)` and `std
 
 ### Exporting from Modules
 
-A source module can export functions, values, and types with `pub`:
+A source module can export constants, functions, and types with `pub`:
 
 ```gengo
 // geometry/shapes.gengo
@@ -71,6 +73,30 @@ pub func origin() Point { return Point{ x: 0, y: 0 } }
 pub type Point struct { x int, y int }
 pub type Distance int
 ```
+
+`pub` is valid only at a module's top level. It applies to `const`, `func`,
+`type`, and `subtype`; `pub var` and `pub name := value` are not supported.
+An imported module exposes only its `pub` declarations. Its private helpers
+remain usable by code in that module, but access such as `geometry.helper()`
+is a compile error.
+
+### Dependency Order and Cycles
+
+Before compiling a source module, the compiler discovers and compiles its
+source dependencies. This lets a module refer to the exported declarations of
+an imported module regardless of where the `import(...)` expression appears
+in the source file.
+
+Source-import cycles are rejected at compile time with `ImportCycle`. For
+example, if `a.gengo` imports `b.gengo` and `b.gengo` imports `a.gengo`, the
+program does not run. Restructure shared declarations into a third module.
+
+The compiler currently establishes dependency compilation order, but the
+language does not yet promise a separate cross-module order for observable
+top-level initialization. Keep module initialization independent of ordering;
+put order-sensitive work behind an exported function called by the root
+script. This is a documented limitation, not an invitation to rely on the
+current bytecode layout.
 
 ### Module-Qualified Types
 
@@ -114,7 +140,12 @@ Embedded runtimes created through the Zig API are unrestricted unless `source_ro
 
 The value types fall into three groups. Scalar types hold a single value:
 
-- `int`, `float`, `decimal`, `bigint`, `bool`, `string`, `rune`, `null`, `error`
+- `int`, `float`, `bigint`, `bool`, `string`, `rune`, `null`, `error`
+
+Fixed-point decimals are currently declared through named decimal types such
+as `type Money decimal 2`. Although decimal values have a runtime type name,
+the current compiler does not accept `decimal` as a standalone variable type;
+see `known-limitations.md`.
 
 Collection types hold multiple values:
 
@@ -128,8 +159,99 @@ syntax documented for general use.
 Functions are values too — they can be passed around, assigned, and closed
 over.
 
+### Evaluation Order
+
+Gengoscript evaluates expression operands from left to right. This applies to
+binary operators, function-call arguments, array elements, and each map key
+followed by its corresponding value. A call evaluates its callee before its
+arguments. `&&`, `||`, and `??` are the exceptions: their right operand is
+evaluated only when needed.
+
+For an indexed assignment such as `target[index] = value`, the target and
+index are evaluated before `value`; the write happens after all three have
+been evaluated. In a multi-assignment, the complete right-hand side is
+evaluated before any target is assigned.
+
+Do not rely on a particular map iteration order or mutate a map while
+iterating it; neither behaviour is specified yet.
+
+### Copying, Aliasing, and Mutation
+
+Assignments of scalar values copy the value. Strings are immutable. Arrays,
+maps, and array slices are reference-backed: assigning one to another aliases
+the same mutable collection, and an index or map write through either name is
+visible through the other. Array slicing also aliases the source array.
+
+```gengo
+std := import("std")
+
+items := [1]
+other_items := items
+other_items[0] = 3
+std.io.println(items[0]) // 3
+
+scores := {"Ada": 1}
+other_scores := scores
+other_scores["Ada"] = 9
+std.io.println(scores["Ada"]) // 9
+
+prefix := items[0:1]
+prefix[0] = 7
+std.io.println(items[0]) // 7
+```
+
+Struct assignment and value receivers copy the struct's direct fields. A
+field that itself holds an array, map, closure, or other reference-backed
+value still refers to the same underlying value after that copy. Function
+arguments follow the same rule. Closures capture enclosing variables by
+reference, so a closure observes a later assignment to a captured variable.
+
+Use `std.core.clone` when an independent, deep copy is required. It is the
+explicit copying operation; ordinary collection assignment is not a clone.
+
 Strings are UTF-8. `std.core.len(s)` counts Unicode code points, while
 `std.core.bytelen(s)` counts bytes.
+
+### Strings, Runes, and Bytes
+
+String indexing, slicing, and `for`-in iteration use rune (Unicode code
+point) positions, not byte offsets. An indexed string expression returns a
+single-rune string, not a `rune` numeric value. Bounds are zero-based and a
+bad index or slice boundary raises `IndexOutOfBounds`.
+
+```gengo
+std := import("std")
+s := "åäö"
+
+std.io.println(std.core.len(s))     // 3 runes
+std.io.println(std.core.bytelen(s)) // 6 UTF-8 bytes
+std.io.println(s[1])                // ä
+std.io.println(s[1:3])              // äö
+
+for i, ch in s {
+    // i is a rune index; ch is a one-rune string.
+    std.io.println(i, ch)
+}
+```
+
+Rune literals use backticks, for example `` `å` ``. A typed declaration can
+convert an integer Unicode code point to `rune`; converting that rune to
+`string` produces its UTF-8 encoding:
+
+```gengo
+var letter rune = 229
+text := string(letter) // "å"
+```
+
+There is no supported callable `rune(...)` conversion at present, and a
+string does not implicitly convert to a rune. Use indexing when the string is
+known to contain at least one rune, or keep the text as a string.
+
+The language string operations validate UTF-8 when they need rune boundaries:
+`len`, indexing, slicing, and iteration raise `TypeError` for malformed
+UTF-8. Binary strings created by `std.bytes` may contain arbitrary bytes; use
+only `std.bytes` operations with those values unless the bytes are known to
+be valid UTF-8. `std.bytes` positions and lengths are always byte offsets.
 
 Optional types use `?T`. A value of type `?T` is either `null` or a `T`:
 
@@ -179,7 +301,7 @@ and supported `std.math` intrinsics. A shift count is an `int`-based value
 (plain or named); the left operand determines the named result type.
 
 `decimal`, `string`, named arrays/maps, native values, and dynamically typed
-boundaries may still carry runtime named objects because their behavior needs
+boundaries may still carry runtime named objects because their behaviour needs
 runtime identity or extra representation data. Dynamically typed scalar
 values report their base runtime type; when the compiler knows an expression's
 named scalar type, `.type` and `std.core.type_of(...)` emit that declared name
@@ -222,8 +344,50 @@ How each form works:
   instead of the base type's zero value.
 - `const name Type = value` — typed immutable binding.
 
+### Zero Values
+
+An initializer may be omitted only from a mutable `var` declaration. The
+implemented zero values are:
+
+| Declared type | Value without an initializer |
+|---|---|
+| `int`, `float`, `bigint` | `0` |
+| `bool` | `false` |
+| `string` | `""` |
+| `rune` | code point `0` |
+| `[]T`, `[K]V`, named array/map types | a non-null empty collection |
+| `?T`, `error`, interface type, function type | `null` |
+| struct type | a struct whose fields have their own zero values |
+| enum type | its first declared member |
+| named scalar | its declared `default`, otherwise its base zero value, subject to its constraints |
+
+A constrained named scalar may therefore have no usable implicit zero. For
+example, `type Id int range 1..100; var id Id` is rejected because `0` is
+outside the declared range. Supply an initializer or declare a valid
+`default`. Variant types are not currently accepted as a `var` declaration
+type, so they have no documented implicit zero value.
+
 Assignment uses `=`. Compound assignment forms (`+=`, `-=`, `*=`, `/=`) are
 supported for numeric types.
+
+### Scope and Name Resolution
+
+A module-level declaration belongs to that source module. A block introduces
+a nested local scope; function parameters, named returns, `:=` bindings, and
+loop bindings are local to the function or block that declares them. A local
+binding may shadow an outer local or module-level name. Once the nested scope
+ends, the outer binding is visible again.
+
+Within one local scope, declaring the same binding name twice is a compile
+error. A local binding is visible only after its declaration. Named functions
+are different: their declarations are collected before function bodies are
+compiled, so functions can call later-declared functions and can be
+recursive. The conformance suite covers this forward-reference rule.
+
+Avoid depending on forward references between module-level mutable values.
+The compiler has a pre-scan for global declarations, but initialization is
+still emitted in source order; write a declaration before code that needs its
+value.
 
 Bitwise operators work on integer types (`int` and named integer types):
 
@@ -248,10 +412,63 @@ Integer division and remainder use keyword operators, following Ada/Pascal conve
 
 `/` divides floats (or integer-to-float when both sides are the same named float type). For integer truncating division use `div`; for float floor division also use `div`. All three keyword operators work on named numeric types.
 
-Identifier rules follow Go: the first character must be a Unicode letter or
-underscore; subsequent characters may be Unicode letters, decimal digits, or
-underscores. Identifiers are not normalized — two identifiers that differ at
-the byte level are distinct even if they look the same on screen.
+### Operator Precedence
+
+The following table is in descending precedence. Operators on the same row are
+left-associative unless the table says otherwise. `=` and compound assignments
+are statements, not expression operators.
+
+| Operators | Associativity |
+|---|---|
+| calls `()`, indexing/slicing `[]`, field and method access `.` | left |
+| unary `-`, `~`, `not` | right (prefix) |
+| `**` | right |
+| `*`, `/`, `div`, `rem`, `mod` | left |
+| `+`, `-` | left |
+| `<<`, `>>` | left |
+| `&` | left |
+| `^` | left |
+| `\|` | left |
+| `<`, `<=`, `>`, `>=` | left |
+| `==`, `!=` | left |
+| `and` | left, short-circuiting |
+| `or` | left, short-circuiting |
+| `??` | right, short-circuiting |
+
+The symbolic forms `&&` and `||` are not supported; use `and` and `or`.
+Parenthesize expressions when a reader could reasonably mistake the grouping.
+
+## Lexical Structure
+
+Source text is UTF-8. An identifier starts with a Unicode letter or `_` and
+continues with Unicode letters, Unicode decimal digits, or `_`. Identifiers
+are case-sensitive and are not normalized: two spellings that differ in their
+UTF-8 bytes are different names even if they look alike.
+
+The reserved keywords are:
+
+```text
+and as assert break case const continue defer div else enum false for func
+if import in interface mod not null or pub rem return struct subtype switch
+test trap true type var variant when
+```
+
+`range`, `cycle`, `default`, `predicate`, and `message` are contextual
+keywords. They have their special meaning only in a type declaration or
+`switch` clause and can otherwise be used as ordinary identifiers. All other
+keywords above are reserved everywhere.
+
+Whitespace separates tokens. `//` starts a line comment and `/* ... */`
+starts a block comment; block comments may span lines. An unterminated block
+comment consumes the rest of the file rather than producing a separate lexical
+error. A `#!` line is ignored only when it is the first two bytes of a source
+file, allowing a script shebang.
+
+Malformed UTF-8 where the lexer expects an identifier is an `InvalidChar`
+compile error. Strings are byte sequences: a double-quoted `\xHH` escape can
+intentionally create bytes that are not valid UTF-8. Rune-aware string
+operations then reject those bytes as described in [Strings, Runes, and
+Bytes](#strings-runes-and-bytes).
 
 One gotcha: **type names cannot be shadowed**. No variable, function,
 parameter, receiver, named return, or loop variable may share a name with a
@@ -266,6 +483,18 @@ Strings:
 "escaped"
 'raw'
 ```
+
+Double-quoted strings process these escapes: `\n`, `\r`, `\t`, `\\`, `\"`,
+`\'`, `\xHH` (one byte), `\uHHHH` (one Unicode code point), and `\UHHHHHHHH`
+(one Unicode code point). `\u` and `\U` are encoded as UTF-8. An unknown
+one-character escape drops the backslash and keeps that character; do not use
+unknown escapes as a portability mechanism. A double-quoted string cannot
+contain an unescaped newline.
+
+Single-quoted strings are raw byte strings. Backslashes are ordinary bytes,
+and the quote character ends the string; use a double-quoted string when an
+embedded quote or escape is required. Single-quoted strings also cannot span a
+newline.
 
 Multiline raw strings use a Zig-style `\\` prefix per line:
 
@@ -283,6 +512,10 @@ Rune literals use backticks:
 `🙂`
 ```
 
+A rune literal must contain exactly one Unicode code point. It has no escape
+syntax: write the code point itself, or construct a `rune` from an integer in a
+typed declaration when appropriate.
+
 Integer literals can be written in decimal, hexadecimal, binary, or octal.
 Digit separators (`_`) are allowed in all bases:
 
@@ -293,12 +526,19 @@ x := 0b1111_1111
 x := 0o377
 ```
 
-Floating-point literals support scientific notation:
+Floating-point literals support scientific notation. Numeric separators are
+accepted in the integral and fractional decimal parts, but not in the
+exponent:
 
 ```gengo
 f := 1.5e2    // 150.0
 f := 2.5e-1   // 0.25
 ```
+
+The lexer has one numeric-literal token. Whether an unsuffixed numeric literal
+is accepted as an `int`, `float`, or a named decimal value is decided by the
+surrounding type rule; there is no separate decimal literal suffix. A numeric
+literal that overflows or does not match its required type is a compile error.
 
 ## Explicit Conversions
 
@@ -355,6 +595,29 @@ std.io.println(user.name)
 Map keys are expressions: quote string keys (`"name"`), or use a variable
 to key dynamically (`{k: 1}` uses the *value* of `k`). A bare identifier
 in key position is a variable reference, not a string.
+
+Map lookup never raises an error for an absent key: `m[key]` evaluates to
+`null`. Use `std.core.has(m, key)` when `null` is also a meaningful stored
+value. `std.core.delete(m, key)` removes a key and returns its former value,
+or `null` when absent.
+
+Map key acceptance is currently runtime-defined rather than restricted by a
+separate language-level “comparable key” rule. Primitive and enum keys are
+supported; do not use mutable arrays, maps, structs, closures, or other
+composite values as portable map keys. Typed maps still check their declared
+key and value types when values cross a typed boundary.
+
+Arrays use zero-based, non-negative integer indices. Reading or writing an
+index outside `0 .. len-1` is a runtime `IndexOutOfBounds` panic. A slice
+allows an end index equal to `len`, but both bounds must be non-negative and
+the start must not exceed the end. `std.core.append` returns an array value;
+assign its result when growing an array.
+
+Iteration visits the collection representation currently held when the loop
+starts. Map entry order is deliberately unspecified and can change when keys
+are inserted or deleted. Do not mutate a map’s membership during `for`-in;
+the current iterator retains an internal entry slice and the resulting
+behaviour is not a language guarantee.
 
 Structs:
 
@@ -529,7 +792,7 @@ that the compiler already proved.
 
 ### Compile-Time Type Checking
 
-When both sides of a type judgment are visible to the compiler, mismatches
+When both sides of a type judgement are visible to the compiler, mismatches
 are compile errors instead of runtime errors:
 
 ```gengo
@@ -615,7 +878,8 @@ func divide(a float, b float) (result float, err ?error) {
 }
 ```
 
-Functions, types, and variables may be exported from a source module with `pub`. Closures capture variables from the enclosing scope by reference.
+Functions, constants, and types may be exported from a source module with
+`pub`. Closures capture variables from the enclosing scope by reference.
 
 Methods use a receiver in front of the function name. Structs, named scalar
 types, enums, and variants can all have methods:
@@ -682,7 +946,9 @@ func with_report() {
 }
 ```
 
-`std.core.recover()` catches a panic from inside a `defer` function and stops the unwind. It returns the panic payload (an `error` value), or `null` if no panic is in progress.
+`std.core.recover()` catches a panic from inside a `defer` function and stops
+the unwind. It returns the original panic payload, which can be an `error` or
+another value, or `null` if no panic is in progress.
 
 ```gengo
 core := std.core
@@ -700,6 +966,37 @@ func attempt(x int) (ok bool) {
 ```
 
 `recover()` only has effect when called directly inside a `defer` function during an active panic. Calling it outside a defer, or after the panic has already been recovered, returns `null`.
+
+### Trap Results
+
+`trap` is a special name permitted in a multi-value declaration. Its value is
+checked after assignment: `null` continues normally, while any non-null value
+starts a panic unwind with that value as the payload. This makes functions
+that return `(value, ?error)` convenient to use with `defer`/`recover`:
+
+```gengo
+std := import("std")
+
+func divide(a float, b float) (float, ?error) {
+    if b == 0.0 { return 0.0, std.core.error("division by zero") }
+    return a / b, null
+}
+
+func report() {
+    defer func() {
+        payload := std.core.recover()
+        if payload != null { std.io.println("failed:", payload) }
+    }()
+
+    answer, trap := divide(10.0, 0.0)
+    std.io.println(answer) // unreachable when trap is non-null
+}
+```
+
+`trap` is only valid as one target in a `:=` multi-value declaration; it is
+not an ordinary variable and cannot be assigned later. A non-error payload is
+legal, so callers must not assume `std.core.is_error(recover())` is always
+true.
 
 ## Named Types
 
@@ -1062,10 +1359,9 @@ switch r {
 }
 ```
 
-A variant `switch` inside a function is **exhaustive**: every arm must be
-covered by at least one unguarded case, or the switch must have a `default`.
-A missing arm is a compile error (`NonExhaustiveSwitch`). Variant switches at
-the top level of a script are not checked for exhaustiveness.
+A variant `switch` is **exhaustive**: every arm must be covered by at least
+one unguarded case, or the switch must have a `default`. A missing arm is a
+compile error (`NonExhaustiveSwitch`) at both top level and inside functions.
 
 Variant cases accept `when` guards too, and the guard sees the `as` binding.
 A guarded case does not fully cover its arm, so exhaustiveness requires each
@@ -1296,8 +1592,23 @@ func max_of[T: ordered](a T, b T) T {
 }
 ```
 
-Constraints are enforced when explicit type arguments are written. Inferred
-calls (no `[T]`) skip the check. Three built-in constraints are available:
+> **Known limitation — inferred constraints are not checked.** Constraints are
+> enforced when explicit type arguments are written. Inferred calls (no
+> `[T]`) skip the check, even when inference determines a type that does not
+> satisfy the declared constraint. This is an implementation limitation, not
+> a guarantee. Write explicit type arguments when constraint enforcement is
+> required.
+
+For example, the inferred call below currently succeeds, whereas
+`identity_numeric[bool](true)` fails with `ConstraintViolation`:
+
+```gengo
+func identity_numeric[T: numeric](x T) T { return x }
+
+ok := identity_numeric(true) // currently accepted; bool is not numeric
+```
+
+Three built-in constraints are available:
 
 | Constraint   | Accepted types |
 |:-------------|:---------------|
@@ -1398,15 +1709,18 @@ Three kinds of things can go wrong:
   imports, type mismatches. Caught before any code executes.
 - **Runtime errors** — the script started but panicked. Division by zero,
   out-of-bounds access, a `range` or `predicate` violation. These unwind
-  through `defer` frames and can be caught with `recover()`.
+  through `defer` frames and can be caught when `recover()` is called by a
+  deferred function.
 - **First-class `error` values** — created explicitly inside the language
   with `std.core.error(msg)`. These are ordinary values that can be checked
   and passed around, not panics.
 
-On top of these, the host may enforce resource budgets — instruction
-limits, heap size caps, maximum call depth — that stop misbehaving scripts
-before they can consume too much. These limits are a normal part of
-embedding, not a sign that something is broken.
+On top of these, the host may enforce resource budgets. Exceeding an
+instruction limit raises the recoverable runtime panic
+`InstructionBudgetExceeded`; allocation exhaustion and configured stack/frame
+limits also stop execution. A VM operation budget does not measure work done
+inside a host callback, filesystem driver, or network handler. These limits
+are a normal part of embedding, not a sign that something is broken.
 
 ## Testing
 

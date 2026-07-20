@@ -19,6 +19,34 @@ signatures like `[T]` or `[K, V]` to show the type relationship between
 arguments and results. These are documentation signatures, not callable
 syntax on `std` itself.
 
+## Namespace Index
+
+| Namespace | Purpose |
+|---|---|
+| `std.io`, `std.fmt` | Script output/input and formatted text. |
+| `std.core` | Collections, type predicates, errors, cloning, and GC inspection. |
+| `std.Arg` | Variant used for heterogeneous scalar arguments. |
+| `std.conv` | Explicit value conversions. |
+| `std.string`, `std.bytes` | UTF-8 string operations and byte-oriented binary operations. |
+| `std.array`, `std.sort` | Array construction and sorting. |
+| `std.math`, `std.rand` | Numeric operations and non-cryptographic pseudorandom values. |
+| `std.json`, `std.hex`, `std.base64` | Data interchange and text encodings. |
+| `std.regexp`, `std.template` | Pattern matching and template rendering. |
+| `std.Time`, `std.time` | Time values and time-related helpers. |
+
+Capability modules such as `cap:env` and `cap:fs` are deliberately not part
+of `std`; their authority and availability are documented in `capabilities.md`.
+
+## Reference Conventions
+
+Unless an entry says otherwise, values returned by `std` are owned by the
+script runtime. A returned array or map is a normal mutable Gengoscript value;
+assigning it aliases that collection under the language rules in `language.md`.
+An entry that says “Errors” names a runtime panic, not an ordinary returned
+`error` value. Check each signature: capability-style `(value, error)` results
+are not the general `std` convention. Complexity is omitted where no stable
+implementation-independent bound is currently guaranteed.
+
 ## std.io
 
 ### `std.io.println(...args)`
@@ -54,7 +82,7 @@ syntax on `std` itself.
 - Reads one line from stdin (up to 4096 bytes), stripping the trailing `\n` / `\r\n`.
 - Returns the line as a string, or `null` on EOF.
 
-### Format verbs
+### `std.io` format verbs
 
 | Verb | Meaning |
 |------|---------|
@@ -123,7 +151,8 @@ syntax on `std` itself.
 
 ### `std.core.recover()`
 - Called inside a `defer` function during a panic unwind
-- Returns the panic payload (an `error` value) and marks the panic as recovered
+- Returns the original panic payload and marks the panic as recovered; the
+  payload may be an `error` or another non-null value from `trap`
 - Returns `null` if not unwinding or if already recovered
 
 ### `std.core.type_of(v)`
@@ -322,13 +351,16 @@ log_args("x", std.Arg.Int(42), std.Arg.Bool(true), std.Arg.Str("hi"))
 - Splits `s` by ASCII whitespace (spaces, tabs, newlines) into an array
 
 ### `std.string.pad_left(s, width, pad)` / `std.string.pad_right(s, width, pad)`
-- Pads `s` to `width` using `pad` (first rune only) on the left or right
+- Pads to a **byte width** using the bytes in `pad`; a multi-byte `pad` can be
+  truncated at the final byte boundary. Do not use these functions when the
+  result must preserve UTF-8 rune boundaries.
 
 ### `std.string.equal_fold(a, b)`
 - Case-insensitive equality for ASCII strings
 
 ### `std.string.contains_any(s, chars)`
-- Returns `true` if any rune in `chars` appears in `s`
+- Returns `true` if any byte in `chars` appears in `s`; it is not a
+  Unicode-rune operation.
 
 ### `std.string.trim_left(s, chars)` / `std.string.trim_right(s, chars)`
 - Trims leading or trailing bytes that appear in `chars` (single-byte characters only; multi-byte runes in `chars` are not recognised)
@@ -338,6 +370,8 @@ log_args("x", std.Arg.Int(42), std.Arg.Bool(true), std.Arg.Str("hi"))
 
 ### `std.string.split_n(s, sep, n)`
 - Splits `s` by `sep` into at most `n` substrings; final element contains the rest
+- With an empty separator, current behaviour is byte-oriented. Use
+  `std.string.split(s, "")` when splitting valid UTF-8 into runes.
 
 ## std.array
 
@@ -581,14 +615,15 @@ Raw byte string construction, decomposition, integer encoding/decoding, and
 byte-indexed search. Unlike `std.string`, all positions and lengths here are
 **byte offsets**, not rune indices.
 
-**Background**: Gengo strings are UTF-8. `string(rune(n))` for `n > 127`
-produces a multi-byte UTF-8 sequence, not the raw byte `n`. `std.bytes.u8` is
-the escape hatch: it takes any integer 0–255 and produces a 1-byte binary
-string.
+**Background**: Gengo strings are UTF-8. A typed rune declaration followed by
+`string(r)` for a value above 127 produces a multi-byte UTF-8 sequence, not
+the raw byte value. `std.bytes.u8` is the escape hatch: it takes any integer
+0–255 and produces a 1-byte binary string.
 
 ### `std.bytes.u8(n)`
 - Returns a 1-byte binary string containing raw byte `n & 255`
-- This is the primitive for building binary data; `string(rune(200))` is **not** equivalent (it produces a 2-byte UTF-8 sequence)
+- This is the primitive for building binary data; converting a rune value to
+  `string` is **not** equivalent (it produces UTF-8 bytes)
 
 ### `std.bytes.pack(bs)`
 - Converts an array of integer byte values (0–255 each) to a binary string
@@ -817,7 +852,7 @@ Go-style text templates with `{{` / `}}` delimiters.
 - Supports leading `+`/`-`, compound forms, bare zero, and both `µs` and `μs`
 - Returns `float`
 
-### Format verbs
+### `std.time` format verbs
 
 | Verb | Output | Verb | Output |
 |---|---|---|---|
@@ -829,39 +864,3 @@ Go-style text templates with `{{` / `}}` delimiters.
 | `%b` | short month | `%%` | literal `%` |
 
 `parse` accepts: `%Y` (4-digit year), `%y` (2-digit year, 2000-based), `%m`, `%d`, `%H`, `%M`, `%S`, `%L` (milliseconds), `%B` (full month name), `%a` (weekday name, consumed but not used), `%W` (week number, consumed but not used). All times are UTC.
-
----
-
-## cap:env
-
-Read-only access to the host process environment. Requires the host to enable
-the `env` capability (e.g. `--cap env` on the CLI). A script that imports
-`cap:env` will fail to compile if the host has not enabled it.
-
-```gengo
-env := import("cap:env")
-```
-
-### Functions
-
-#### `env.get(name string) string|null`
-
-Returns the value of the named environment variable, or `null` if it is not
-set.
-
-```gengo
-env  := import("cap:env")
-home := env.get("HOME") ?? "/tmp"
-```
-
-#### `env.list() [string]string`
-
-Returns all environment variables as a map from name to value.
-
-```gengo
-env  := import("cap:env")
-vars := env.list()
-for k, v in vars {
-    std.io.println(k + "=" + v)
-}
-```

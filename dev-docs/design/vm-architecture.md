@@ -329,7 +329,7 @@ for-loop header quint, the recursive-call hexa-fusion chain).
 ### 6.2 Fusion Table
 
 The mnemonic-level catalog of fused opcodes, their byte widths, and their
-constituent core-op sequences is `docs/opcodes.md` — that is the single
+constituent core-op sequences is `dev-docs/opcodes.md` — that is the single
 source of truth (kept in sync with `op.zig`) and is not duplicated here.
 As of 2026-07-19 the pass covers every fusion the old emitter peephole
 covered, including the call-fusion chain
@@ -365,7 +365,7 @@ This keeps the encoding width predictable and leaves room for an inline
 cache slot at a fixed offset within the fused instruction.
 
 Fused values are **frozen today, exactly like core ops** — see
-`docs/opcodes.md`'s stability note. The GBC checklist below ratifies a
+`dev-docs/opcodes.md`'s stability note. The GBC checklist below ratifies a
 future where they become private and freely renumberable, but that only
 takes effect once the bytecode cache ships a wire format that serializes
 the defused (core-ops-only) form exclusively; no such loader exists yet.
@@ -384,7 +384,7 @@ were deliberately kept when the fusion trackers were deleted.
 
 The 0x00–0xBF (core, 192 slots) / 0xC0–0xFF (fused, 64 slots) split is
 fixed policy — full rationale and the numeric slot summary live in
-`docs/opcodes.md` ("Opcode space policy"), not duplicated here. The short
+`dev-docs/opcodes.md` ("Opcode space policy"), not duplicated here. The short
 version: core is what GBC's wire format will encode, so a core slot spent
 is permanent, while fused ops stay VM-private and renumberable forever
 (this pass regenerates them fresh on every load). The reservation is

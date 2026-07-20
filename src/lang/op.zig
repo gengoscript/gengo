@@ -205,7 +205,7 @@ pub const Op = enum(u8) {
     //
     // 0x00-0xBF (192 slots) is core, 0xC0-0xFF (64 slots) is fused — this
     // boundary is PERMANENT POLICY (ratified 2026-07-20, see
-    // docs/opcodes.md "Opcode space policy"), not just current usage. It
+    // dev-docs/opcodes.md "Opcode space policy"), not just current usage. It
     // does not move to grow either side, and it is not a u8-width limit to
     // route around: a u16 field and a WASM-style prefix byte for fused ops
     // were both considered; the prefix was built as a real prototype and

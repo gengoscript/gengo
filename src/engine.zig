@@ -1341,6 +1341,35 @@ test "engine_call converts wires in the selected engine heap" {
     try std.testing.expectEqual(@as(i64, 1), @as(i64, @bitCast(out.payload)));
 }
 
+test "engine_call drops named decimal scale in ValueWire v2" {
+    const handle = engine_init();
+    try std.testing.expect(handle > 0);
+    defer engine_destroy(handle);
+
+    const source =
+        \\type Money decimal 2
+        \\pub func price() Money { return Money(12.34) }
+    ;
+    try std.testing.expectEqual(0, engine_run(handle, @intFromPtr(source.ptr), source.len));
+
+    var out: ValueWire = undefined;
+    try std.testing.expectEqual(0, engine_call(handle, @intFromPtr("price".ptr), 5, 0, 0, @intFromPtr(&out)));
+    try std.testing.expectEqual(@as(u8, @intFromEnum(WireTag.number)), out.tag);
+    try std.testing.expectEqual(host_abi.FLAG_DECIMAL, out.flags);
+    try std.testing.expectEqual(@as(i64, 1234), @as(i64, @bitCast(out.payload)));
+    try std.testing.expectEqual(@as(u32, 0), out.len);
+    // No ValueWire field carries Money's scale (2) or nominal type identity.
+}
+
+test "ValueWire v2 layout is stable" {
+    try std.testing.expectEqual(@as(usize, 24), @sizeOf(ValueWire));
+    try std.testing.expectEqual(@as(usize, 8), @offsetOf(ValueWire, "payload"));
+    try std.testing.expectEqual(@as(usize, 16), @offsetOf(ValueWire, "len"));
+    try std.testing.expectEqual(@as(usize, 20), @offsetOf(ValueWire, "reserved2"));
+    try std.testing.expectEqual(@as(u8, 2), @intFromEnum(WireTag.number));
+    try std.testing.expectEqual(@as(u8, 1 << 1), host_abi.FLAG_DECIMAL);
+}
+
 test "native host modules dispatch through the registered callback" {
     if (comptime is_wasm) return;
 

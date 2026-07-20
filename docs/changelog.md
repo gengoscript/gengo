@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-### Language
+### Language (unreleased)
 
 - **`??` null-coalescing operator** — `a ?? b` returns `a` if it is not `null`, otherwise evaluates and returns `b`. Short-circuits (right-hand side is skipped when the left-hand side is non-null). Right-associative: `a ?? b ?? c` is `a ?? (b ?? c)`.
 - **Generic struct and variant types** — `type Stack[T] struct { items []T }` and `type Result[T, E] variant { ok(value T), err(e E) }`. Instantiate by supplying concrete type arguments: `Stack[int]{ items: [] }`, `Result[int, string].ok{ value: 42 }`. Type parameters are substituted at compile time; each instantiation is a distinct concrete type. Nested generic fields (e.g. `Stack[T]` inside `Wrapper[T]`) resolve correctly when the outer type is instantiated.
@@ -21,22 +21,23 @@
 - **Range bounds with any numeric base** — `type Port int range 1..0xFFFF` and similar are now valid.
 - **Named type bounds** — `T.first` and `T.last` on ranged named types return the boundary as a named-type value.
 
-### Standard Library
+### Standard Library (unreleased)
 
 - **`cap:env`** — New capability module for process environment access. `env.get(name)` returns `string|null`; `env.list()` returns `[string]string`. Requires the host to enable the `env` capability; a script importing `cap:env` without host permission fails at compile time.
 - **`std.Arg`** — Built-in variant covering all primitive scalar types (`Int`, `Float`, `Decimal`, `Rune`, `Bool`, `Str`, `Err`). Use it to write type-safe heterogeneous variadic functions without exposing `any`.
 
-### Fixes
+### Fixes (unreleased)
 
 - Struct and enum variable declarations following a `std` import no longer trigger a spurious "unknown field in std" compile error.
 - Arity mismatch errors now show `expected 1-2 argument(s)` when a function has defaults, and no longer include a stray leading comma in the function signature.
 - Unknown `std.*` namespace fields now suggest the closest matching name in the error message.
+- **Named-type range and predicate validation at call boundaries** — a dynamically-typed value (from `std.json.parse`, a host embedding call, or any other erased/`any` source) arriving at a function parameter or return value declared as a named range or predicate type is now actually validated against that type's constraint. Previously the validation error was silently discarded and the raw, unchecked value was passed through — `Port(99999)` panicked correctly when constructed directly, but a script or host could smuggle `99999` past a `Port int range 1..65535` parameter without it ever panicking.
 
 ---
 
 ## v0.5.0 — 2026-06-15
 
-### Language
+### Language (v0.5.0)
 
 - **Boolean-only conditions** — `if`, `not`, `and`, `or`, and template `{{if}}` now require actual `bool` values. Non-boolean values (non-zero integers, non-null strings, etc.) that were previously treated as truthy/falsy now produce a runtime `TypeError`. Use `std.conv.to_bool` for explicit conversion.
 - **Type names cannot be shadowed** — No binding form may use a type name: variables, functions, parameters, loop variables, and named returns all reject primitive type names and every declared type.
@@ -48,7 +49,7 @@
 - **Enum subtype validation** — `subtype Bogus Days { tuesday }` with a member the parent does not have is now a compile error instead of compiling silently.
 - **Unicode identifiers** — Identifiers may contain Unicode letters and decimal digits, following the same rules as Go.
 
-### Standard Library
+### Standard Library (v0.5.0)
 
 - **std.regexp** — Backtracking NFA regexp engine with `.match`, `.find`, `.find_all`, `.replace`, `.split`, and `.compile`.
 - **std.string.builder** — Mutable string builder with `.write`, `.str`, and `.reset`.
@@ -66,7 +67,7 @@
 - **REPL type persistence** — `type`, `subtype`, `struct`, `interface`, and `variant` declarations now persist across REPL lines.
 - **Instruction budget** — `max_ops` in `api.Config` enforces a hard limit on VM instructions per run.
 
-### Fixes
+### Fixes (v0.5.0)
 
 - **Strict int/float comparison** — Ordering comparisons now follow the same strictness as arithmetic: `1.5 > 1` is a `TypeError`, matching `1.5 + 1`.
 - **Nominal type strictness** — Named-type values no longer mix with bare base-type values in arithmetic, comparison, or compound assignment.

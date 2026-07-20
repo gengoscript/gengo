@@ -1,115 +1,94 @@
 # Gengoscript Quickstart
 
-This page covers the shortest path to building Gengoscript, running a script, and checking that the local toolchain works.
+Gengoscript is an embeddable language for applications that need scriptable
+logic without giving scripts ambient machine access. Use it when the host owns
+I/O, capabilities, and resource limits; it is not a replacement for an
+operating-system sandbox.
 
-For a guided first example, see `tutorial-first-script.md`.
+## Choose how to try or install it
 
-## Requirements
+- **Use the playground:** open [playground.gengoscript.org](https://playground.gengoscript.org)
+  to write and run a script without installing the CLI.
+- **Use a released binary:** download the artifact for your platform from the
+  [GitHub Releases page](https://github.com/gengoscript/gengo/releases). Use
+  the release notes and artifact checksums for that release; this main-branch
+  page does not substitute for release-specific installation instructions.
+- **Build from source:** use the next section when developing Gengoscript,
+  testing main-branch behaviour, or when no suitable release artifact exists.
 
-- Zig `0.16.0` ([download](https://ziglang.org/download/))
-- wasmtime ([download](https://wasmtime.dev/)) available on `PATH`
+## Requirements and supported hosts
 
-## Build
+You need a normal shell, Git, and Zig **0.16.0**. Native CLI development is
+tested on Linux in this checkout. The WASI CLI is run with Wasmtime in CI.
+Browser use loads the separate engine WASM artifact; see `typescript-sdk.md`.
 
-Build the native CLI:
+## Build from source
 
-```bash
+From the directory where you want the source checkout:
+
+```sh
+git clone https://github.com/gengoscript/gengo.git
+cd gengo
 zig build -Dpreset=1m cli
-```
-
-Build the WASI runtime:
-
-```bash
 zig build -Dpreset=1m wasi
 ```
 
-Build the embeddable engine artefacts:
+Every remaining command in the source-build route assumes the repository root
+(`gengo`) as its working directory. The native artifact is `zig-out/bin/gengo`;
+the WASI CLI is `build/debug/gengo-cli.wasm`.
 
-```bash
+## Your first script
+
+Create `hello.gengo` in the repository root:
+
+```gengo
+std := import("std")
+std.io.println("hello, Gengoscript")
+```
+
+Run it:
+
+```sh
+./zig-out/bin/gengo hello.gengo
+```
+
+Expected output:
+
+```text
+hello, Gengoscript
+```
+
+Start the REPL with `./zig-out/bin/gengo`; exit it with EOF (`Ctrl-D` on Unix).
+Run the same file through WASI:
+
+```sh
+wasmtime --dir . ./build/debug/gengo-cli.wasm -- hello.gengo
+```
+
+The `--dir .` mount lets the WASI process read `hello.gengo`; it does not grant
+a script `cap:fs` unless that capability and a mount are separately configured.
+
+## Browser and integration paths
+
+Build the browser-oriented engine artifact with:
+
+```sh
 zig build -Dpreset=1m engine-build
-zig build -Dpreset=1m engine-native
 ```
 
-Outputs:
+It writes `build/debug/gengo-engine.wasm`. Load that artifact from a browser
+with the TypeScript SDK described in `typescript-sdk.md`. For Zig embedding,
+read `embedding.md`; for C and other native hosts, start with `engine-api.md`
+and `host-abi.md`.
 
-- `zig-out/bin/gengo`
-- `build/debug/gengo-cli.wasm`
-- `build/debug/gengo-engine.wasm`
-- `zig-out/lib/libgengo-engine.so` on Linux
+## Common failures
 
-## Run a Script
+| Symptom | What to check |
+|---|---|
+| `zig: command not found` or build version errors | Install Zig 0.16.0 and confirm `zig version`. |
+| `wasmtime: command not found` | Install Wasmtime or pass `-Dwasmtime=/path/to/wasmtime` to test builds. |
+| `gengo: compile error` | Check the file path, syntax, and imports; relative imports are restricted to the script directory unless `--modules` is supplied. |
+| WASI cannot open the script | Run from the repository root and include `--dir .`. |
+| Capability import rejected | The host/build has not enabled that capability; see `capability-matrix.md`. |
 
-Native CLI:
-
-```bash
-./zig-out/bin/gengo script.gengo
-```
-
-WASI runtime:
-
-```bash
-wasmtime --dir . ./build/debug/gengo-cli.wasm -- script.gengo
-```
-
-The `test`, `parity`, and `bench` build steps also invoke `wasmtime`. If it is not on `PATH`, pass `-Dwasmtime=/path/to/wasmtime` to the relevant `zig build` command.
-
-Run the CLI with no arguments to start the REPL:
-
-```bash
-./zig-out/bin/gengo
-```
-
-### Allowing Extra Module Directories
-
-By default, file imports are restricted to the script's own directory. Pass `--modules` (repeatable) to allow additional directories:
-
-```bash
-./zig-out/bin/gengo --modules /app/lib --modules /app/shared script.gengo
-```
-
-For the WASI binary, ensure wasmtime mounts any extra directories too:
-
-```bash
-wasmtime --dir . --dir /app/lib ./build/debug/gengo-cli.wasm -- --modules /app/lib script.gengo
-```
-
-## Validate the Build
-
-Run the conformance suite:
-
-```bash
-zig build -Dpreset=1m test
-```
-
-Run parity checks between the embedded and host backends when relevant:
-
-```bash
-zig build -Dpreset=1m parity
-```
-
-Run benchmarks when you need performance data:
-
-```bash
-zig build -Dpreset=1m bench
-```
-
-## Presets
-
-Presets control the heap and stack budgets baked into the binary:
-
-| Preset | Heap | Use |
-|---|---|---|
-| `256k` | 256 KiB | Constrained embedded targets |
-| `1m` | 1 MiB | Default — CLI and general scripting |
-| `16m` | 16 MiB | Production embedding / large workloads |
-| `unlimited` | 256 MiB | No practical limits |
-
-Apply a preset with `-Dpreset=<name>`.
-
-For GC correctness testing, combine any preset with `-Dgc_stress=true` (forces GC on every allocation).
-
-## Next Steps
-
-- `tutorial-first-script.md` for a first script
-- `embedding.md` for Zig embedding
-- `engine-api.md` for C-compatible host integration
+For a progressive language tutorial, continue to `tutorial-first-script.md`.

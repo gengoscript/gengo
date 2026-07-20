@@ -29,8 +29,10 @@ typedef enum {
  *
  *   bit 0 (GENGO_WIRE_FLAG_INTEGER): payload is raw int64 bits (two's complement).
  *          Without this flag the number is treated as a float (f64 bits).
- *   bit 1 (GENGO_WIRE_FLAG_DECIMAL): payload is a raw i64 fixed-point value
- *          (scale ×1000, matching Gengoscript's decimal type). No f64 precision loss.
+ *   bit 1 (GENGO_WIRE_FLAG_DECIMAL): payload is a raw i64 decimal carrier.
+ *          ValueWire v2 does not encode a decimal scale or named type, so a
+ *          host cannot reconstruct either across this boundary. No f64
+ *          precision loss occurs for the raw carrier itself.
  *   bit 2 (GENGO_WIRE_FLAG_RUNE):    payload is a Unicode codepoint (u21).
  *          Decodes to Gengoscript's rune type rather than a numeric type.
  */
