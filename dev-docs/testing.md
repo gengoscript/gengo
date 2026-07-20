@@ -9,6 +9,10 @@ etc.) must stay at the top of `src/`: a Zig module root cannot import files
 outside its own directory tree, and moving the two test roots behind a module
 boundary would also silently drop their `test` blocks from collection.
 
+## Native-lane test coverage (standing practice)
+
+Every language-semantics fix gets a **native test in `compiler_test.zig`** alongside its spec case, not instead of one. Prefer bytecode-shape assertions (compile, then walk with `chunk.decodeAt`, asserting op presence/absence) when the bug is a miscompile — they catch it with zero execution, and they fail closer to the actual defect than a spec case's output diff does.
+
 ## Conformance
 
 Run full conformance suite:

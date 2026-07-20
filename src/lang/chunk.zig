@@ -616,7 +616,8 @@ fn foldBinOp(op: Op, lhs: Value, rhs: Value) ?Value {
 // for the hand-assembled-bytecode test runners (vm_value_runner,
 // vm_safety_runner, fuzz_runner, compiler_test) and the WASM export layer,
 // which have no way to receive a context. Do not add production callers;
-// see dev-docs/improvement-plan-2026-07.md A1.
+// see the "A1 setActive migration" entry in
+// dev-docs/archive/improvement-plan-2026-07.md.
 
 pub fn setCol(col: u32) void {
     g_state.setCol(col);
