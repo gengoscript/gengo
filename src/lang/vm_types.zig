@@ -1,4 +1,8 @@
 const std = @import("std");
+// vm.zig imports this file (vmtyp); this reverse edge only reaches
+// checkNamedTypePredicateChain, a leaf pub fn, so it does not cycle at
+// comptime — verified by building successfully.
+const vm_mod = @import("vm.zig");
 const common = @import("common.zig");
 const globals = @import("globals.zig");
 const vms = @import("vm_state.zig");
@@ -734,7 +738,14 @@ pub fn coerceErasedValueForSpec(ctx: VMContext, spec: FieldTypeSpec, arg: Value)
             if (nt_val != .object or nt_val.object.* != .named_type) break :blk null;
             const nt = nt_val.object.named_type;
             if (!bareScalarMatchesNamedBase(nt.base, arg)) break :blk null;
-            break :blk try constructNamedType(ctx, nt_val.object, arg);
+            // Constructing must carry the same weight as an explicit Type(x)
+            // call site: range/cycle checks happen inside constructNamedType
+            // itself, and a custom `predicate` still has to run here too, or
+            // an erased dynamic value (host wire, json.parse, any) could
+            // reach a named-typed parameter without ever being validated.
+            const constructed = try constructNamedType(ctx, nt_val.object, arg);
+            try vm_mod.checkNamedTypePredicateChain(ctx, nt_val.object, constructed.namedInner() orelse constructed);
+            break :blk constructed;
         },
         .interface_t => try reifyErasedNamedInterfaceArg(ctx, arg, spec.alts[0].interface_name),
         else => null,
@@ -785,7 +796,7 @@ pub fn enforceFuncArgTypes(ctx: VMContext, f: FuncObj, argc: u8) !void {
     for (0..fixed) |i| {
         const slot = ctx.vs.stack_top - argc + i;
         var arg = ctx.vs.stack[slot];
-        if (coerceErasedValueForSpec(ctx, f.param_types[i], arg) catch null) |coerced| {
+        if (try coerceErasedValueForSpec(ctx, f.param_types[i], arg)) |coerced| {
             ctx.vs.stack[slot] = coerced;
             if (isSingleNamedTypeSpec(f.param_types[i])) continue;
             arg = coerced;
@@ -796,7 +807,7 @@ pub fn enforceFuncArgTypes(ctx: VMContext, f: FuncObj, argc: u8) !void {
         for (fixed..@as(usize, argc)) |i| {
             const slot = ctx.vs.stack_top - argc + i;
             var arg = ctx.vs.stack[slot];
-            if (coerceErasedValueForSpec(ctx, f.variadic_type, arg) catch null) |coerced| {
+            if (try coerceErasedValueForSpec(ctx, f.variadic_type, arg)) |coerced| {
                 ctx.vs.stack[slot] = coerced;
                 if (isSingleNamedTypeSpec(f.variadic_type)) continue;
                 arg = coerced;
@@ -812,7 +823,7 @@ pub fn enforceFuncReturnTypes(ctx: VMContext, f: FuncObj, retval: Value) !void {
     // Named returns are programmer-controlled and may be null-initialized; skip enforcement.
     if (f.named_return_count > 0) return;
     if (f.return_types.len == 1) {
-        if (coerceErasedValueForSpec(ctx, f.return_types[0], retval) catch null) |coerced| {
+        if (try coerceErasedValueForSpec(ctx, f.return_types[0], retval)) |coerced| {
             if (isSingleNamedTypeSpec(f.return_types[0])) return;
             if (matchesTypeSpec(ctx, coerced, f.return_types[0])) return;
         }

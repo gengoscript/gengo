@@ -1,0 +1,9 @@
+std := import("std")
+type PositiveInt int predicate func(x) { return x > 0 } message "must be positive"
+
+pub func describe(p PositiveInt) string {
+    return std.conv.to_string(int(p))
+}
+
+data := std.json.parse("-5")
+std.io.println(describe(data))

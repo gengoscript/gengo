@@ -1449,20 +1449,39 @@ test "compiler: named unary result retains nominal type" {
     try std.testing.expectEqualStrings("Delta", name);
 }
 
-test "compiler: named bool not retains and validates nominal type" {
+test "compiler: named bool not retains nominal type" {
     var rt = try setup();
     defer rt.deinit();
 
     try runSrc(&rt,
         \\std := import("std")
-        \\type Enabled bool predicate func(v) { return v }
-        \\func invert(v Enabled) Enabled { return not v }
-        \\func typeOfEnabled(v Enabled) string { return std.core.type_of(not v) }
+        \\type Flag bool
+        \\func typeOfFlag(v Flag) string { return std.core.type_of(not v) }
     );
 
-    const type_result = try rt.callGlobal("typeOfEnabled", &.{.{ .boolean = false }});
+    const type_result = try rt.callGlobal("typeOfFlag", &.{.{ .boolean = true }});
     const name = try vms.asStringValue(type_result);
-    try std.testing.expectEqualStrings("Enabled", name);
+    try std.testing.expectEqualStrings("Flag", name);
+}
+
+test "compiler: named bool predicate validates at both argument and return boundaries" {
+    var rt = try setup();
+    defer rt.deinit();
+
+    try runSrc(&rt,
+        \\type Enabled bool predicate func(v) { return v }
+        \\func invert(v Enabled) Enabled { return not v }
+        \\func identity(v Enabled) Enabled { return v }
+    );
+
+    // Argument-type boundary: a dynamic value arriving as a call argument
+    // (as opposed to a compiler-proven static call site) must still run the
+    // predicate — previously silently bypassed for erased scalar named
+    // types (int/float/rune/bool), which let any value through unchecked.
+    try std.testing.expectError(error.PredicateFailed, rt.callGlobal("identity", &.{.{ .boolean = false }}));
+    _ = try rt.callGlobal("identity", &.{.{ .boolean = true }});
+
+    // Return-type boundary: not(true) is false, an invalid Enabled.
     try std.testing.expectError(error.PredicateFailed, rt.callGlobal("invert", &.{.{ .boolean = true }}));
 }
 
