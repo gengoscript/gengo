@@ -260,6 +260,26 @@ All opcode handlers are plain Zig functions or inline code. The opcode byte is c
 
 **Fused opcodes**: see §6.
 
+### 5.2 TOS Caching (Tier 2, ratified 2026-07-19)
+
+A **lazy one-slot top-of-stack cache** is threaded through `runInner` as a local `TosState{ v: Value, full: bool }`. The logical operand stack is conceptually `(memory stack) ++ (ts.v when ts.full)` — when `full`, the true top-of-stack value lives in `ts.v` (register-resident, not on the memory stack) instead of having been pushed and immediately popped again by the next instruction.
+
+**Scope, deliberately narrow**: only three ops are converted to read/write the cache — `add_ret`, `ret_const`, `get_local_ret` (the `ret` family). `tosConverted(op)` is the single switch that decides this. Every other opcode runs unconverted and is guaranteed to see a fully materialized memory stack: the dispatch loop spills the cache (`tosSpill`, pushing `ts.v` back to memory if `full`) immediately before running any unconverted handler. Calls, GC-allocating paths, panics, and host-boundary returns therefore never have to reason about cache coverage — the cache is invisible to everything except the three converted ops.
+
+**Why it's worth a dedicated cache slot for just the `ret` family**: profiling showed `doReturn`'s `movups` (the value copy from register to the frame's stack slot) accounted for 60% of its own samples — a pure store→load round trip for a value that the very next instruction (the caller resuming) would immediately load again. Caching the return value in a register-resident local instead of memory deletes that round trip for the hot path where a function's last statement is `return <expr>`.
+
+**Measured result** (`branch spike/tos-caching`, commit `53fcc56`): fib 0.31s → 0.29s (-6%), `loop_sum` at exact parity (as expected — no `ret`-family instruction is on that benchmark's hot path). Full suite, differential, and both fuzz lanes green.
+
+**Ratified decision**: Tier 2 (this mechanism, extended incrementally) is adopted; the full sweep beyond the `ret` family is **demand-driven**, not scheduled — extend it only if a real embedded workload shows call-dominated cost. A register-VM rewrite (Tier 3, Lua-parity territory) was declined absent a Lua-parity requirement: even a fully swept Tier 2 lands at roughly 3× Lua's per-instruction cost (a fundamentally different ISA is what closes that gap, not more caching within the stack ISA), and Gengo's target workloads (policy/validation/embedded rules) are not call-dense enough for that gap to matter in practice. This also unblocked GBC: Tier 3 would have meant deciding on a new instruction set before freezing a wire format; declining it let the wire format (§6.3) ratify without waiting on a performance-tier decision.
+
+**Three binding implementation constraints**, found during the spike and worth preserving for anyone converting further ops:
+
+1. **No `errdefer` in the dispatch function.** An `errdefer` that spills the cache on every `try`-edge was measured at +80% icache bloat on `loop_sum` (roughly 160 dispatch arms each gaining a spill pad). Error-path spilling is instead handled by narrow, explicit `catch` blocks only on the converted branch — every other branch already spills before running its handler, so unconverted ops never need an error-path spill at all.
+2. **`ts` must be a register-promotable local, not a pointer parameter.** Passing it by pointer defeats the point of the cache — LLVM can only keep a plain local resident across the dispatch loop, not something reached through a pointer.
+3. **The spill helper needs `exec_call_modifier`** (the same wasm/native dispatch-modifier split used throughout `runInner`) to behave consistently across targets — see §5's note on `exec_call_modifier` in the main dispatch loop.
+
+Converted ops stay on `effectCheckExempt`'s list (§ handler code), so the Debug-mode `stackEffect` net-effect assertion — which walks the *unconverted* handler path — is unaffected by cache state.
+
 ---
 
 ## 6. The Fusion Pass
@@ -351,6 +371,26 @@ bytecode-cache design, so it must happen once, at compile time, before any
 chunk is written or cached. The emitter's constant-position trackers
 (`last_const_code_pos` and friends) exist solely to support folding and
 were deliberately kept when the fusion trackers were deleted.
+
+### 6.5 Opcode Space Policy (ratified 2026-07-20, permanent)
+
+The 0x00–0xBF (core, 192 slots) / 0xC0–0xFF (fused, 64 slots) split is
+fixed policy — full rationale and the numeric slot summary live in
+`docs/opcodes.md` ("Opcode space policy"), not duplicated here. The short
+version: core is what GBC's wire format will encode, so a core slot spent
+is permanent, while fused ops stay VM-private and renumberable forever
+(this pass regenerates them fresh on every load). The reservation is
+asymmetric because the cost of running out is asymmetric — core gets the
+bigger cushion because its mistakes can't be taken back.
+
+A WASM-style prefix-byte scheme for fused ops (marker opcode + a second
+indexed dispatch into the real handler) was built as a working prototype
+and measured: 9% slower on `fib_recursive`, 25% slower on `dispatch_loop`
+(ReleaseFast, hyperfine). Rejected — the extra fetch + second dispatch
+costs the most on exactly the instructions fusion targets (hot loop
+back-edges). Do not re-propose a prefix or a u16 opcode field without new
+measured data; if the 64 fused slots ever run out, the answer is
+build/link-time-selected fused-op-set profiles, not a wire-format change.
 
 ---
 

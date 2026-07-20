@@ -29,6 +29,52 @@ nothing decouples a fused opcode's numeric value from anything that might
 depend on it, so the same rule applies to the whole table: don't renumber
 an assigned slot, add new ops only by claiming a `reserved_*` slot.
 
+## Opcode space policy (ratified 2026-07-20, permanent)
+
+The 0x00–0xBF / 0xC0–0xFF split — **192 slots for core, 64 for
+fused/specialized** — is fixed policy, not an incidental byproduct of
+current usage. It does not move. Rationale:
+
+- **Core ops are what GBC's wire format will encode.** Once the bytecode
+  cache ships, every core slot spent is permanent — it has to mean the
+  same thing forever, across every cache ever written. Core needs the
+  bigger reservation precisely because a mistake there is unrecoverable.
+- **Fused ops stay VM-private and renumberable forever**, GBC or not — the
+  load-time fusion pass (`src/lang/fusion_pass.zig`) regenerates them
+  fresh from source on every load, so nothing external ever depends on
+  their numeric identity. This has already been exercised once in
+  practice: `get_global_const_eq_jif_pop` was added, found to never fire,
+  and deleted (`3366941`) — a slot reclaimed at zero cost. Running low on
+  fused slots is cheap to fix; running low on core slots is not.
+- The asymmetry, not growth rate, is why the reservation is asymmetric:
+  the side where mistakes are permanent gets the bigger cushion.
+
+**Rejected alternatives, with measured cost — do not re-propose without
+new data:**
+
+- **u16 opcode field.** Not built or measured as of this writing; if
+  fused-slot pressure ever gets real (see fallback below), a real
+  prototype is the next thing to build, not a straight adoption.
+- **WASM-style prefix byte for fused ops** (a marker opcode + a second
+  indexed dispatch into the real handler). Built as a real, working
+  prototype (`prefix_spike.zig`, 2026-07-20) covering the 6
+  highest-frequency fused ops and measured with hyperfine on ReleaseFast:
+  **9% slower on `fib_recursive`, 25% slower on `dispatch_loop`.** Loop
+  back-edges are the hottest instructions in the VM, and they're exactly
+  where the extra fetch + second indirect jump costs the most — the
+  "amortize over N replaced dispatches" theory does not hold in practice.
+  Reverted in full; see the prior discussion in this doc's history for
+  the walkthrough.
+
+**Fallback if the 64 fused slots are ever exhausted: build/link-time-
+selected fused-op-set profiles**, not a wire-format or dispatch change.
+Different builds compile in different fusion-pattern tables and VM
+dispatch arms for the same numeric range — a compile-time choice, not a
+runtime branch, so it costs nothing per-instruction (a given running
+binary only ever has one fused set live). This is already consistent with
+today's reality: fused bytecode isn't a portable wire format pre-GBC
+anyway, since it's regenerated per load from source.
+
 Hover a cell to see the full instruction name and description.
 
 ```html
@@ -266,6 +312,10 @@ for(var r=0;r<16;r++){
 | 0xE2–0xFF | 30 | Free (within fused block) |
 
 Total assigned: 160 of 256 slots.
+
+The 0x00–0xBF (core, 192 slots) / 0xC0–0xFF (fused, 64 slots) boundary is
+permanent policy — see "Opcode space policy" above. It does not move to
+grow either side.
 
 ## Instruction widths
 
