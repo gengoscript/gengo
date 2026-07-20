@@ -17,7 +17,14 @@ const chunk_decoder = @import("lang/chunk_decoder.zig");
 
 fn setup() !Runtime {
     var rt: Runtime = .{};
-    try rt.initWithConfig(.{}, heap.HeapSize, heap.MaxObjects, vms.MaxStack, vms.MaxFrames, cfg.max_defers, std.testing.allocator);
+    // allow_io=false: this file has no setWriteOverrides capture, so any test
+    // that called println with real I/O allowed would write raw bytes to fd 1
+    // — the same fd zig's --listen=- test protocol uses for its own message
+    // framing, corrupting it (diagnosed 2026-07-13, see feedback_allow_io_tests
+    // memory). Tests needing real I/O must set allow_io=true explicitly AND
+    // wrap execution in a setWriteOverrides-guarded capture, same as
+    // chaos_spec_test.zig's runWithCapture.
+    try rt.initWithConfig(.{ .allow_io = false }, heap.HeapSize, heap.MaxObjects, vms.MaxStack, vms.MaxFrames, cfg.max_defers, std.testing.allocator);
     return rt;
 }
 
