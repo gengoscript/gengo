@@ -1,4 +1,17 @@
-# Build Process Proposal
+# Build Process Proposal (archived, largely implemented)
+
+Originally added 2026-07-18 alongside the commit that implemented most of
+it (`099741e`, "build: make WASM artifacts reproducible and verified").
+Was mistakenly placed under `docs/` (the published `docs.gengoscript.org`
+site) instead of `dev-docs/` — nothing here is end-user or embedder
+relevant. Moved here 2026-07-20; not re-verified line by line, but
+confirmed substantially done at time of move: `runtime_config` build
+module exists (Priority 1), `build/debug`/`build/release` distinct
+install paths exist (Priority 2), a `wasm-opt` release artifact step and
+`zig fmt --check` + `git diff --check` exist in CI (Priority 3). Kept for
+historical traceability, not as a live checklist — if any acceptance
+criterion below is still unmet, open a GitHub issue for it rather than
+reviving this file.
 
 ## Goal
 
