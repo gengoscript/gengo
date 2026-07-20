@@ -1,0 +1,9 @@
+std := import("std")
+type Port int range 1..65535
+
+pub func describe(p Port) string {
+    return std.conv.to_string(int(p))
+}
+
+data := std.json.parse("99999")
+std.io.println(describe(data))

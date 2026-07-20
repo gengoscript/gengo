@@ -878,12 +878,12 @@ fn fieldHasNamedType(field: @import("value.zig").StructFieldSpec) bool {
 }
 
 fn coerceStructFieldValue(ctx: VMContext, field: @import("value.zig").StructFieldSpec, val: Value) !Value {
-    if (vmtyp.coerceErasedValueForSpec(ctx, field.typ, val) catch null) |coerced| return coerced;
+    if (try vmtyp.coerceErasedValueForSpec(ctx, field.typ, val)) |coerced| return coerced;
     return val;
 }
 
 // Walk the parent chain and check each predicate in order (parent first).
-fn checkNamedTypePredicateChain(ctx: VMContext, nt_obj: *Object, inner: Value) !void {
+pub fn checkNamedTypePredicateChain(ctx: VMContext, nt_obj: *Object, inner: Value) !void {
     if (comptime !build_options.predicates) return;
     if (!ctx.vs.policy.enable_predicates) return;
     // Collect all types in the chain from current to root.
