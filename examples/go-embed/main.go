@@ -60,6 +60,18 @@ pub func is_even(n int) bool {
 pub func greet(name string) string {
     return "hello " + name
 }
+
+pub func sum(xs []int) int {
+    total := 0
+    for x in xs {
+        total += x
+    }
+    return total
+}
+
+pub func counts() [string]int {
+    return {"bumps": 3, "greets": 1}
+}
 `
 
 	mustRun(handle, src)
@@ -69,7 +81,11 @@ pub func greet(name string) string {
 
 	call := func(name *C.char, nameLen int, args []C.gengo_value_wire_t) C.gengo_value_wire_t {
 		var out C.gengo_value_wire_t
-		if rc := C.engine_call(handle, name, C.int32_t(nameLen), &args[0], C.int32_t(len(args)), &out); rc != 0 {
+		var argPtr *C.gengo_value_wire_t
+		if len(args) > 0 {
+			argPtr = &args[0]
+		}
+		if rc := C.engine_call(handle, name, C.int32_t(nameLen), argPtr, C.int32_t(len(args)), &out); rc != 0 {
 			panic(engineError(handle))
 		}
 		return out
@@ -107,4 +123,26 @@ pub func greet(name string) string {
 	defer C.free(unsafe.Pointer(strBuf))
 	C.gengo_wire_read_str(&greetOut, strBuf, 256)
 	fmt.Printf("greet(\"gopher\") -> %s\n", C.GoString(strBuf))
+
+	// Composite values: gengo_wire_array()/gengo_wire_map() from gengo-wire.h
+	// build these without hand-rolling the pointer/length convention. The
+	// backing element slice must outlive the engine_call, same as a string.
+	sumName := C.CString("sum")
+	defer C.free(unsafe.Pointer(sumName))
+	elems := []C.gengo_value_wire_t{
+		C.gengo_wire_int(1), C.gengo_wire_int(2), C.gengo_wire_int(3), C.gengo_wire_int(4),
+	}
+	arrayArg := C.gengo_wire_array(&elems[0], C.uint32_t(len(elems)))
+	sumOut := call(sumName, 3, []C.gengo_value_wire_t{arrayArg})
+	fmt.Printf("sum([1,2,3,4]) -> %d\n", int64(C.gengo_wire_as_int(&sumOut)))
+
+	countsName := C.CString("counts")
+	defer C.free(unsafe.Pointer(countsName))
+	countsOut := call(countsName, 6, nil)
+	for i := C.uint32_t(0); i < C.gengo_wire_map_len(&countsOut); i++ {
+		key := C.gengo_wire_map_key_at(&countsOut, i)
+		val := C.gengo_wire_map_value_at(&countsOut, i)
+		C.gengo_wire_read_str(key, strBuf, 256)
+		fmt.Printf("counts()[%s] -> %d\n", C.GoString(strBuf), int64(C.gengo_wire_as_int(val)))
+	}
 }

@@ -13,7 +13,7 @@ From the repository root:
 zig build -Dpreset=1m cli
 
 # Run the site builder (requires cap:fs)
-./zig-out/bin/gengo --cap fs --mount root=. tools/site-builder/site-builder.gengo
+./zig-out/bin/gengo --heap 4m --cap fs --mount root=. tools/site-builder/site-builder.gengo
 ```
 
 This reads `.md` files from `docs/` and writes HTML to `build/site/`.
@@ -23,7 +23,8 @@ Paths are mount-based (`root/` maps to the repository root).
 
 - Converts the Markdown the docs actually use:
   - Headers (`#`, `##`, `###`), paragraphs, blockquotes, horizontal rules
-  - Code blocks and inline code, with HTML escaping throughout
+  - Code blocks and inline code, with HTML escaping throughout; `gengo` fences
+    receive grayscale syntax highlighting based on lexer keyword categories
   - Bold and italic, links, images
   - Unordered lists with one level of nesting, ordered lists
   - Tables (`| a | b |` with a `|---|` separator row)
@@ -36,7 +37,7 @@ Paths are mount-based (`root/` maps to the repository root).
 
 ## Limitations
 
-- No footnotes, no deeper list nesting, no syntax highlighting
+- No footnotes or deeper list nesting
 - No search index
 - No live reload
 

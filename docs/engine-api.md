@@ -33,6 +33,29 @@ When a function returns an error code, call `engine_last_error` to fetch the mes
 
 Arguments and return values cross the boundary as `ValueWire`. See the `ValueWire layout` section below.
 
+### Ownership and lifetime
+
+The caller allocates the `ValueWire` argument array and the top-level output
+record. Keep input records, strings, and nested array/map records readable for
+the duration of `engine_call`; the engine copies input values before returning.
+Treat them as read-only while the call runs.
+
+On success, `out` itself remains caller-owned. Its referenced strings and
+nested records are engine-owned scratch storage. Copy them before the next
+operation on the same engine (`engine_run`, `engine_call`, `engine_get_global`,
+or enumeration), `engine_reset`, or `engine_destroy`; none may be retained
+after destruction. A returned collection is limited by the engine's current
+wire scratch capacity (256 element records; maps consume two records per
+entry), and serialization failure is reported as a runtime error.
+
+`gengo_host_call_fn` arguments are engine-owned and valid only while the
+callback is executing. A callback may provide an output wire backed by host
+memory, but that memory must remain valid until the callback returns; the
+engine converts it immediately. Do not mutate callback input, re-enter the
+same engine, or call one engine concurrently. Engine activation uses
+process-global runtime views, so separate instances should also be serialized
+unless the implementation explicitly gains a concurrency guarantee.
+
 ## Engine Lifecycle
 
 ### `engine_init() -> i32`
@@ -108,6 +131,77 @@ Returns:
 - `-1` if the function is missing or the handle is invalid; or
 - `-2` for runtime error during the call.
 
+### Complete native C example
+
+This minimal host loads a script, calls its exported `add` function, checks the
+integer `ValueWire` result, and destroys the engine on every path. It is kept
+as the executable fixture `tools/site-builder/fixtures/c_engine/add.c`.
+
+```c
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+#include "gengo-engine.h"
+
+int main(void) {
+    static const char source[] =
+        "pub func add(a int, b int) int { return a + b }\n";
+    int32_t engine = engine_init();
+    if (engine <= 0) return 1;
+
+    if (engine_run(engine, source, (int32_t)strlen(source)) != 0) {
+        engine_destroy(engine);
+        return 1;
+    }
+
+    gengo_value_wire_t args[2] = {
+        { .tag = GENGO_WIRE_NUMBER, .flags = GENGO_WIRE_FLAG_INTEGER, .payload = 40 },
+        { .tag = GENGO_WIRE_NUMBER, .flags = GENGO_WIRE_FLAG_INTEGER, .payload = 2 },
+    };
+    gengo_value_wire_t out = {0};
+    int32_t rc = engine_call(engine, "add", 3, args, 2, &out);
+    if (rc != 0 || out.tag != GENGO_WIRE_NUMBER ||
+        out.flags != GENGO_WIRE_FLAG_INTEGER || out.payload != 42) {
+        engine_destroy(engine);
+        return 1;
+    }
+
+    puts("42");
+    engine_destroy(engine);
+    return 0;
+}
+```
+
+From the repository root on Linux, build the native engine and fixture:
+
+```bash
+zig build -Dpreset=1m engine-native
+cc -std=c11 -Wall -Wextra -Iinclude tools/site-builder/fixtures/c_engine/add.c \
+  -Lzig-out/lib -Wl,-rpath,'$ORIGIN/../zig-out/lib' -lgengo-engine -o build/gengo-c-add
+./build/gengo-c-add
+```
+
+Expected output is `42`. On macOS or Windows, use the shared-library naming
+and runtime search-path convention for that platform. After a successful
+`engine_call`, `out` remains caller-owned but any string, array, or map data it
+references is engine scratch storage; copy it before the next engine operation.
+
+### Building values with `gengo-wire.h`
+
+`include/gengo-wire.h` has `static inline` builders and readers for every
+`ValueWire` tag, including composite ones: `gengo_wire_array`/`gengo_wire_map`
+build array/map arguments or return values without hand-encoding the pointer
+and length convention from the layout table above, and
+`gengo_wire_array_at`/`gengo_wire_map_key_at`/`gengo_wire_map_value_at` read
+them back. The element/pair storage passed to `gengo_wire_array`/
+`gengo_wire_map` is caller-owned and must remain valid for the duration of the
+`engine_call` that references it, exactly like a string wire's backing buffer.
+
+`tools/site-builder/fixtures/c_engine/composite.c` is the executable fixture:
+it passes an array argument and reads back a map result. Any C-ABI host
+language (including Go through `cgo`) can call these inline functions
+directly; see `examples/go-embed` for a worked Go version of the same pattern.
+
 ## Modules and Sources
 
 ### `engine_add_source(handle, path_ptr, path_len, src_ptr, src_len) -> i32`
@@ -154,9 +248,10 @@ callback receives the module function call ID and `ValueWire` arguments, and
 returns a `ValueWire` result plus a host ABI status code. Pass `NULL` to clear
 the dispatcher.
 
-This callback is per-engine. It is activated only while that engine is running
-or calling an exported function, so separate engine instances may safely use
-different host-module contexts when called serially.
+This callback and context are per-engine. They are activated only while that
+engine is running or calling an exported function. The callback may not safely
+re-enter or concurrently use the engine; separate engines may use different
+contexts when calls are serialized.
 
 ## Capabilities
 
@@ -261,7 +356,7 @@ Returns the same codes as `engine_load_bundle`.
 
 Remove all registered module bundles. Does not affect `engine_add_source` entries or the import loader callback.
 
-### C Example
+### Bundle-loading C example
 
 ```c
 /* Load a pre-built package zip from disk */
@@ -330,7 +425,7 @@ Returns:
 
 Remove all rules. Default-allow is restored.
 
-### C Example
+### Net-policy C example
 
 ```c
 /* Allowlist: only internal network and one external API */
@@ -419,7 +514,7 @@ Pass `NULL` for `callback` to clear the hook.
 
 No-op on WASM targets.
 
-### C Example
+### Introspection C example
 
 ```c
 /* Dump all globals after running a script. */

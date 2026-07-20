@@ -1,6 +1,8 @@
 # Gengoscript Host ABI v2
 
-This page defines the host bridge used when the Gengoscript VM runs with the `host` native backend.
+This page defines the ABI v2 host bridge used when the Gengoscript VM runs with
+the `host` native backend. ABI v2 has no cross-version stability promise;
+hosts must require an exact version match.
 
 Use this document when you are implementing `gengo_native_call`. For the broader embedding surface, see `engine-api.md`.
 
@@ -60,6 +62,12 @@ guest pointer and `len` is the byte length. For arrays, `payload` is a pointer
 to `len` consecutive `ValueWire` elements. For maps, `payload` is a pointer to
 `len * 2` consecutive `ValueWire` elements arranged as key-value pairs.
 
+C hosts should build and read these with `include/gengo-wire.h`'s
+`gengo_wire_array`/`gengo_wire_map` and `gengo_wire_array_at`/
+`gengo_wire_map_key_at`/`gengo_wire_map_value_at` rather than encoding the
+pointer/length convention by hand; see `engine-api.md`'s "Building values with
+gengo-wire.h" section.
+
 `number` is a tagged numeric bucket. The concrete numeric kind is selected by
 the `flags` field:
 
@@ -69,6 +77,58 @@ the `flags` field:
 | `1 << 0` | `payload` is raw `i64` bits (`int`) |
 | `1 << 1` | `payload` is raw fixed-point `i64` bits (`decimal`) |
 | `1 << 2` | `payload` is a Unicode code point (`rune`) |
+
+Native `ValueWire` is a C struct, not a portable byte stream: access its fields
+through the public header and use the host target's C ABI. The documented
+24-byte layout applies to the supported C/Zig ABI. WASM linear-memory fields
+are little-endian at the offsets above. `reserved` and `reserved2` must be
+zero. Native `payload` values that address data are pointers; in WASM they are
+linear-memory byte offsets.
+
+### Decimal ABI limitation
+
+The built-in `decimal` has scale **0**: its raw carrier represents a whole
+number. A declared type such as `type Money decimal 2` has a static scale and
+stores an `i64` carrier (`1234` means `12.34`). `ValueWire` v2 transmits only
+that raw `i64` with `FLAG_DECIMAL`; it does not transmit scale, named type, or
+constraints. A host receiving raw `1234` cannot tell whether it was built-in
+decimal `1234`, `decimal 2` `12.34`, or `decimal 3` `1.234`.
+
+On a host-to-script return, a decimal wire becomes the unscaled built-in
+decimal carrier. It is neither rescaled nor checked against a named decimal
+type. Overflow is limited to the signed `i64` carrier; no separate decimal
+overflow conversion occurs at the wire boundary. TypeScript currently cannot
+emit `FLAG_DECIMAL`, so it is not a lossless decimal binding.
+
+Example, WASM little-endian bytes for raw carrier 1234 (`0x04d2`), with
+decimal flag and zero length:
+
+```text
+02 02 00 00 00 00 00 00  d2 04 00 00 00 00 00 00  00 00 00 00  00 00 00 00
+^  ^     ^ reserved/pad      payload (u64)         ^ len (u32)  ^ reserved2
+tag flags                                          (0)          (0)
+```
+
+This is an ABI design limitation. A future ABI needs an explicit scale (and,
+if nominal identity matters, type identity) to round-trip declared decimals.
+The executable `engine_call drops named decimal scale in ValueWire v2` test in
+`src/engine.zig` locks this current behaviour down.
+
+## Ownership, lifetime, reentrancy, and concurrency
+
+The caller owns `args_ptr`, `out_ptr`, and all memory they reference. Input
+wires and nested array/map wires must remain readable for the `engine_call`.
+The engine copies incoming values before returning and does not retain caller
+buffers. Callback argument wires are engine-owned scratch storage and are valid
+only during that callback.
+
+The callback owns any buffer referenced by its `out_ptr`; keep it valid until
+the callback returns, then the host may reclaim it because the engine converts
+the value immediately. Treat callback input as read-only. The current API does
+not promise callback reentrancy or concurrent use of one engine. Serialise all
+engine calls: activation uses process-global runtime views even though instances
+have separate VM state. Host handlers must also be made thread-safe by the
+host.
 
 ## Status Codes
 

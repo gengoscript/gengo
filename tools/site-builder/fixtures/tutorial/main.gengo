@@ -1,0 +1,14 @@
+std := import("std")
+policy := import("./policy")
+
+pub func evaluate(name string, raw_score int) string {
+    return policy.evaluate(name, raw_score)
+}
+
+test "approval policy" {
+    assert(evaluate("Ada", 91) == "Ada: approved")
+    assert(evaluate("Ada", 101) == "invalid score")
+}
+
+std.io.println(evaluate("Ada", 91))
+std.io.println(evaluate("Ada", 101))

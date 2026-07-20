@@ -66,6 +66,34 @@ static inline gengo_value_wire_t gengo_wire_str(const char *s)
     return gengo_wire_str_n(s, s ? (uint32_t)strlen(s) : 0u);
 }
 
+/*
+ * elems must point to `count` consecutive gengo_value_wire_t values and
+ * remain valid for the duration of the engine_call/callback return that
+ * uses this wire — this function does not copy or allocate.
+ */
+static inline gengo_value_wire_t gengo_wire_array(const gengo_value_wire_t *elems, uint32_t count)
+{
+    gengo_value_wire_t v = gengo_wire_null();
+    v.tag     = GENGO_WIRE_ARRAY;
+    v.payload = (uint64_t)(uintptr_t)elems;
+    v.len     = count;
+    return v;
+}
+
+/*
+ * kv_pairs must point to `entry_count * 2` consecutive gengo_value_wire_t
+ * values, alternating key, value, key, value, ... and remain valid for the
+ * duration of the engine_call/callback return that uses this wire.
+ */
+static inline gengo_value_wire_t gengo_wire_map(const gengo_value_wire_t *kv_pairs, uint32_t entry_count)
+{
+    gengo_value_wire_t v = gengo_wire_null();
+    v.tag     = GENGO_WIRE_MAP;
+    v.payload = (uint64_t)(uintptr_t)kv_pairs;
+    v.len     = entry_count;
+    return v;
+}
+
 /* ── Readers ──────────────────────────────────────────────────────────────── */
 
 static inline int gengo_wire_as_bool(const gengo_value_wire_t *v)
@@ -116,6 +144,37 @@ static inline size_t gengo_wire_read_str(const gengo_value_wire_t *v,
     memcpy(buf, (const void *)(uintptr_t)v->payload, n);
     buf[n] = '\0';
     return n;
+}
+
+static inline uint32_t gengo_wire_array_len(const gengo_value_wire_t *v)
+{
+    return v->tag == GENGO_WIRE_ARRAY ? v->len : 0u;
+}
+
+/* Returns NULL if v is not an array or index is out of bounds. */
+static inline const gengo_value_wire_t *gengo_wire_array_at(const gengo_value_wire_t *v, uint32_t index)
+{
+    if (v->tag != GENGO_WIRE_ARRAY || index >= v->len) return NULL;
+    return &((const gengo_value_wire_t *)(uintptr_t)v->payload)[index];
+}
+
+static inline uint32_t gengo_wire_map_len(const gengo_value_wire_t *v)
+{
+    return v->tag == GENGO_WIRE_MAP ? v->len : 0u;
+}
+
+/* Returns NULL if v is not a map or index is out of bounds. */
+static inline const gengo_value_wire_t *gengo_wire_map_key_at(const gengo_value_wire_t *v, uint32_t index)
+{
+    if (v->tag != GENGO_WIRE_MAP || index >= v->len) return NULL;
+    return &((const gengo_value_wire_t *)(uintptr_t)v->payload)[index * 2u];
+}
+
+/* Returns NULL if v is not a map or index is out of bounds. */
+static inline const gengo_value_wire_t *gengo_wire_map_value_at(const gengo_value_wire_t *v, uint32_t index)
+{
+    if (v->tag != GENGO_WIRE_MAP || index >= v->len) return NULL;
+    return &((const gengo_value_wire_t *)(uintptr_t)v->payload)[index * 2u + 1u];
 }
 
 #endif /* GENGO_WIRE_H */

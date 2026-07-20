@@ -61,8 +61,33 @@ defer rt.deinit();
 
 ## Minimal Example
 
+The complete maintained example is `examples/embed-host/main.zig`. From the
+repository root, build and run it with:
+
+```bash
+zig build -Dpreset=1m embed-example
+```
+
+It prints:
+
+```text
+bump(2) -> 2
+bump(5) -> 7
+```
+
+That example imports the package through the repository build graph:
+
 ```zig
-var rt = api.Runtime.init(.{ .allow_io = false }) catch return;
+const gengo = @import("gengo");
+const api = gengo.api;
+const Value = gengo.Value;
+```
+
+The essential load/call lifecycle is:
+
+```zig
+var rt: api.Runtime = undefined;
+try rt.initWithPolicy(.{ .allow_io = false, .max_ops = 200_000 });
 defer rt.deinit();
 
 switch (rt.run(
@@ -75,11 +100,17 @@ switch (rt.run(
     .runtime_error => |e| return e.kind,
 }
 
-const result = rt.call("add", &.{
+const result = rt.call("add", &[_]Value{
     .{ .int = 40 },
     .{ .int = 2 },
 });
 ```
+
+The fixture checks this complete import/build configuration on every
+documentation CI run. For an application outside this repository, add the
+same `src/root.zig` module and its `build_options`/`runtime_config`
+dependencies to the application's `build.zig`; those build-graph details are
+not yet a versioned package-installation contract.
 
 Use `runPath` instead of `run` when the script uses relative imports.
 
@@ -161,6 +192,13 @@ Current public capabilities:
 - `"http"`
 - `"fs"`
 - `"net"`
+- `"env"`
+
+See `capability-matrix.md` for the target-specific availability and security
+requirements. A capability is useful only when its required handler or mount
+has also been registered by the host. In particular, enabling `"env"` makes
+the script import `cap:env`; use its `env.get(name)` operation to pass selected
+host environment variables into a script.
 
 ### Filesystem Mounts
 
@@ -260,8 +298,8 @@ cycles can fragment the heap: freed backing blocks of different size classes
 may be adjacent but cannot coalesce through the buddy system alone.
 
 Signs of fragmentation: allocations fail with `OutOfMemory` even though
-`totalFreeListBytes()` reports sufficient free bytes, or GC runs increasingly
-frequently without reclaiming usable space.
+`heapTotalFreeListBytes()` reports sufficient free bytes, or GC runs
+increasingly frequently without reclaiming usable space.
 
 ### Mitigation
 
@@ -293,10 +331,21 @@ a separate runtime per batch.
 
 ### Monitoring
 
-The public `api.Runtime` surface does not currently expose heap-fragmentation
-diagnostics. In practice, watch for repeated `heap exhausted` results from
-`run()` or `call()` in long-lived runtimes and treat them as a signal to reset
-or rotate the runtime instance.
+Use the public diagnostics to distinguish ordinary heap pressure from a small
+largest free block:
+
+```zig
+const info = rt.heapFragmentationInfo();
+std.log.info("used={d} free={d} largest_block={d}", .{
+    rt.heapUsedBytes(),
+    info.free_bytes,
+    info.largest_block,
+});
+```
+
+Watch for repeated `heap exhausted` results from `run()` or `call()` together
+with a large `free_bytes` value but a small `largest_block`. That pattern is a
+signal to reset or rotate the runtime instance.
 
 ### Measuring Your Workload
 

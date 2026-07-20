@@ -1,0 +1,93 @@
+// Generated public-documentation checks. Run after site-builder.gengo.
+// Requires cap:fs because it reads the checkout and generated site.
+
+std := import("std")
+fs := import("cap:fs")
+
+core := std.core
+str := std.string
+
+func checkLocalLinks(html string) {
+    var first := true
+    for part in str.split(html, "href=\"") {
+        if first {
+            first = false
+            continue
+        }
+        if not str.contains(part, "\"") { continue }
+        const quoted := str.split_once(part, "\"")
+        var target := quoted[0]
+        if str.contains(target, "#") {
+            const pieces := str.split_once(target, "#")
+            target = pieces[0]
+        }
+        if target == "" or str.starts_with(target, "http://") or
+            str.starts_with(target, "https://") or str.starts_with(target, "mailto:") or
+            str.starts_with(target, "../") {
+            continue
+        }
+        assert(fs.exists("root/build/site/" + target))
+    }
+}
+
+assert(fs.exists("root/build/site/index.html"))
+assert(not fs.exists("root/build/site/opcodes.html"))
+assert(fs.exists("root/dev-docs/opcodes.md"))
+
+// Maintainer-audience audit material must stay contributor-only, not published.
+for name in ["documentation-inventory", "documentation-contradictions", "documentation-plan", "feature-matrix"] {
+    assert(not fs.exists("root/build/site/" + name + ".html"))
+    assert(not fs.exists("root/docs/" + name + ".md"))
+    assert(fs.exists("root/dev-docs/" + name + ".md"))
+}
+
+const build := fs.read("root/build.zig")
+const builder := fs.read("root/tools/site-builder/site-builder.gengo")
+assert(str.contains(build, "const gengo_version = \"0.5.1-dev\""))
+assert(str.contains(builder, "const documentationVersion := \"0.5.1-dev\""))
+
+for page in fs.list("root/build/site") {
+    if str.ends_with(page, ".html") {
+        const html := fs.read("root/build/site/" + page)
+        assert(str.contains(html, "<span class=\"doc-version\">0.5.1-dev"))
+        assert(str.contains(html, "<p class=\"doc-status\">Documentation status: main branch / unreleased"))
+        assert(str.contains(html, "<meta name=\"robots\" content=\"index,follow,max-image-preview:large\">"))
+        assert(str.contains(html, "<meta property=\"og:locale\" content=\"en_US\">"))
+        assert(str.contains(html, "<script type=\"application/ld+json\">"))
+        assert(str.contains(html, "https://schema.org"))
+        assert(not str.contains(html, "twitter:"))
+        assert(str.contains(html, "Build: "))
+        assert(str.contains(html, "<nav class=\"site-nav\""))
+        if page != "index.html" {
+            assert(str.contains(html, "<nav class=\"breadcrumbs\""))
+        }
+        if page != "index.html" and str.contains(html, "<h2 id=") {
+            assert(str.contains(html, "<aside class=\"page-toc\""))
+        }
+        assert(not str.contains(html, "<li class=\"toc-level-3\""))
+        assert(not str.contains(html, "<h2>"))
+        checkLocalLinks(html)
+    }
+}
+
+const capabilityPages := [
+    "root/docs/capability-matrix.md",
+    "root/docs/capabilities.md",
+    "root/docs/embedding.md",
+    "root/docs/security.md",
+]
+for page in capabilityPages {
+    assert(str.contains(fs.read(page), "cap:env"))
+}
+assert(not str.contains(fs.read("root/docs/stdlib.md"), "## cap:env"))
+assert(fs.exists("root/docs/capabilities.md"))
+assert(str.contains(fs.read("root/docs/capabilities.md"), "## `cap:env`"))
+
+const languagePage := fs.read("root/build/site/language.html")
+assert(str.contains(languagePage, "<code class=\"language-gengo\">"))
+assert(str.contains(languagePage, "<span class=\"tok-keyword\">import</span>"))
+assert(str.contains(languagePage, "<td><code>|</code></td><td>Bitwise OR</td>"))
+
+// Keep core referenced so a future compiler does not silently permit an empty
+// generated page collection without this verifier noticing it.
+assert(core.len(fs.list("root/build/site")) > 0)

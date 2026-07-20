@@ -84,7 +84,7 @@ Build the static site locally:
 
 ```bash
 zig build -Dpreset=1m cli
-./zig-out/bin/gengo --cap fs --mount root=. tools/site-builder/site-builder.gengo
+./zig-out/bin/gengo --heap 4m --cap fs --mount root=. tools/site-builder/site-builder.gengo
 ```
 
 Preview it:

@@ -34,8 +34,25 @@ jobs:
           version: 0.16.0
       - name: Build gengo CLI
         run: zig build -Dpreset=1m cli
-      - name: Build site with gengo
-        run: ./zig-out/bin/gengo --cap fs --mount root=. tools/site-builder/site-builder.gengo
+      - name: Check Zig embedding fixture
+        run: zig build -Dpreset=1m embed-example
+      - name: Check native C embedding fixture
+        run: |
+          zig build -Dpreset=1m engine-native
+          cc -std=c11 -Wall -Wextra -Iinclude tools/site-builder/fixtures/c_engine/add.c -Lzig-out/lib '-Wl,-rpath,$ORIGIN/../zig-out/lib' -lgengo-engine -o build/gengo-c-add
+          test "$(./build/gengo-c-add)" = "42"
+          cc -std=c11 -Wall -Wextra -Iinclude tools/site-builder/fixtures/c_engine/composite.c -Lzig-out/lib '-Wl,-rpath,$ORIGIN/../zig-out/lib' -lgengo-engine -o build/gengo-c-composite
+          test "$(./build/gengo-c-composite)" = "ok"
+      - name: Verify generated site and quickstart fixture
+        run: |
+          ./zig-out/bin/gengo --heap 4m --cap fs --mount root=. tools/site-builder/site-builder.gengo
+          ./zig-out/bin/gengo --heap 4m --cap fs --mount root=. tools/site-builder/verify-site.gengo
+          test "$(./zig-out/bin/gengo tools/site-builder/fixtures/hello.gengo)" = "hello, Gengoscript"
+          test "$(./zig-out/bin/gengo tools/site-builder/fixtures/tutorial/main.gengo)" = "$(printf 'Ada: approved\ninvalid score')"
+          test "$(./zig-out/bin/gengo tools/site-builder/fixtures/semantics/values.gengo)" = "$(printf '3\n9\n7\n0\ntrue\n512\n8\ntrue\nfalse')"
+          test "$(./zig-out/bin/gengo tools/site-builder/fixtures/semantics/unicode.gengo)" = "$(printf '3\n6\nä\näö\n2\nå')"
+          test "$(APP_REGION=ci ./zig-out/bin/gengo --cap env tools/site-builder/fixtures/capabilities/env.gengo)" = "ci"
+          test "$(./zig-out/bin/gengo --cap fs --mount docs=docs tools/site-builder/fixtures/capabilities/fs.gengo)" = "true"
       - uses: actions/upload-pages-artifact@v3
         with:
           path: build/site

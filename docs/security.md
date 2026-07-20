@@ -72,10 +72,62 @@ System access is opt-in through capability modules:
 | `http` | `cap:http` | Outbound HTTP |
 | `fs` | `cap:fs` | Filesystem access through named mounts |
 | `net` | `cap:net` | Raw network operations |
+| `env` | `cap:env` | Read-only process environment access |
 
 Enabling one capability does not enable the others.
 
+The full target and host-registration inventory is `capability-matrix.md`.
+In particular, `cap:env` can expose inherited secrets: enable it only with a
+host-side allowlist. `cap:http` and `cap:net` callbacks are host authority;
+use default-deny address, port, redirect, timeout, and response-size policies
+for untrusted scripts. The VM operation budget does not account for time spent
+inside host callbacks.
+
 For `cap:fs`, scripts can only reach host-registered mounts. Absolute paths and path traversal are rejected before any syscall.
+
+### Network and HTTP policy
+
+Do not enable `cap:http` or `cap:net` for untrusted scripts with an implicit
+allow-all policy. In particular, the current native network dial policy allows
+all destinations when it has no rules. The host must provide the restriction;
+the VM cannot infer a safe destination from a URL or address string.
+
+A restrictive policy should, at minimum:
+
+- start deny-by-default and allow only required schemes, hostnames/IP ranges,
+  and ports;
+- resolve and validate every destination address, including IPv4 and IPv6,
+  and reject loopback, link-local, private, and other internal ranges unless
+  explicitly required;
+- validate redirect destinations with the same policy, and account for DNS
+  rebinding by validating the address used for each connection;
+- set connect, read, write, and total-request timeouts; cap request and
+  response sizes; and limit redirect count; and
+- treat HTTP status as application data, not proof that the destination or
+  response is trustworthy.
+
+These controls defend against SSRF and data exfiltration. They also prevent a
+small number of VM instructions from causing a long blocking host operation.
+The instruction budget does not interrupt a running HTTP or socket callback.
+
+### Filesystem policy
+
+Mount names restrict the script-visible path syntax, but they are not a
+complete filesystem sandbox. The host or filesystem driver remains responsible
+for symlink escape, time-of-check/time-of-use races, device files, recursive
+enumeration, quotas, and per-file or total-size limits. Prefer a dedicated,
+read-only directory or a virtual driver for untrusted read-only workloads.
+Do not mount a writable application, configuration, or credential directory
+merely because path traversal is rejected.
+
+### Environment policy
+
+`cap:env` is read-only but can disclose credentials, tokens, proxy settings,
+and deployment metadata inherited by the host process. Prefer passing one
+specific non-secret value through `env.get`, or better, through a narrowly
+designed `host:` function. Do not expose `env.list()` to untrusted scripts
+when the process environment contains secrets. WASI and native hosts can have
+different inherited environments; review them independently.
 
 ## Import Sandboxing
 
@@ -98,6 +150,14 @@ Embedded runtimes created through the Zig API are unrestricted unless `source_ro
 Host-defined modules are imported through `host:` paths such as `import("host:db")`. Scripts can call only the functions the host explicitly registers.
 
 Host functions run in ordinary host code, outside the VM instruction budget. They should therefore be treated as trusted integration points and kept fast and predictable.
+
+Host callbacks should enforce their own input-size, timeout, allocation, and
+concurrency limits. They must not assume that a bounded VM operation count
+means a bounded amount of host work. Treat callback re-entry into the same
+engine as an advanced integration case and follow the ownership and reentry
+rules in `host-abi.md`; independent engine instances are not an
+operating-system isolation boundary against memory-unsafe native code or a
+malicious callback.
 
 ## Instance Isolation
 
@@ -127,4 +187,7 @@ For production use:
 - enable only the capabilities the use case needs;
 - register only the host functions the script should be allowed to call;
 - set `source_root` (and optionally `module_roots`) in the embedding config to restrict which files scripts can import; and
-- use a WebAssembly sandbox as defence in depth for higher-risk deployments.
+- apply explicit deny-by-default network/HTTP policy, timeout, and response-size limits before enabling `cap:http` or `cap:net`;
+- use dedicated read-only or virtual filesystem mounts, with host-side size and symlink policy, before enabling `cap:fs`;
+- avoid `cap:env` for untrusted scripts unless the supplied environment is intentionally safe to disclose; and
+- use a WebAssembly sandbox or separate OS process as defence in depth for higher-risk deployments.
