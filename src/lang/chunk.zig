@@ -499,6 +499,35 @@ pub const State = struct {
         self.std_call_patch_pos = null;
         self.verified = false;
         self.verified_code_len = 0;
+        // Everything at or after tail_start shifted left by len bytes, but
+        // absolute positions recorded elsewhere (a function's entry ip, a
+        // module boundary's start) were captured before this call and don't
+        // move on their own — an intrinsic call site whose argument is a
+        // function literal (its body compiled, and its FuncObj.ip captured,
+        // entirely after this range) would otherwise end up with a stale
+        // entry point once the preamble ahead of it is deleted (found via
+        // std.core.append(arr, func() ... { ... }) inside a loop). Only the
+        // call-site rewrites in compiler_expr.zig ever call this, always to
+        // remove a std-call's get_global preamble, so the deleted range is
+        // never itself a function body or a jump target — a uniform shift
+        // of anything at or after tail_start is sufficient, no per-op width
+        // remapping needed (unlike fusion_pass.zig's ip_map, which handles
+        // instructions changing width, not a fixed-size block removal).
+        for (self.consts[0..self.const_count]) |*cv| {
+            if (cv.* != .object) continue;
+            switch (cv.object.*) {
+                .function => |*f| if (f.ip >= tail_start) {
+                    f.ip -= len;
+                },
+                .closure => |*cl| if (cl.func.* == .function and cl.func.function.ip >= tail_start) {
+                    cl.func.function.ip -= len;
+                },
+                else => {},
+            }
+        }
+        for (self.module_boundaries[0..self.module_boundary_count]) |*mb| {
+            if (mb.ip_start >= tail_start) mb.ip_start -= @intCast(len);
+        }
     }
 
     pub fn constCount(self: *const State) usize {
