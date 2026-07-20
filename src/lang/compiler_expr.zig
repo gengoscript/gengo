@@ -276,10 +276,22 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
                             c.setCurrentExprPrimInfo(.{ .prim = .int });
                             return;
                         }
+                        if (c.selectStdCoreByteLenIntrinsicOp(direct_name, argc)) |intrinsic_op| {
+                            c.cs.deleteCodeRange(patch_pos, 5);
+                            try c.cs.emitOp(intrinsic_op, prop.line);
+                            c.setCurrentExprPrimInfo(.{ .prim = .int });
+                            return;
+                        }
                         if (c.selectStdCoreAppendIntrinsicOp(direct_name, argc)) |intrinsic_op| {
                             c.cs.deleteCodeRange(patch_pos, 5);
                             try c.cs.emit2(@intFromEnum(intrinsic_op), argc, prop.line);
                             c.clearCurrentExprPrimInfo();
+                            return;
+                        }
+                        if (c.selectStdBytesDecodeIntrinsicOp(direct_name, argc)) |decode| {
+                            c.cs.deleteCodeRange(patch_pos, 5);
+                            try c.cs.emit2(@intFromEnum(Op.bytes_decode), decode.kind, prop.line);
+                            c.setCurrentExprPrimInfo(.{ .prim = if (decode.is_float) .float else .int });
                             return;
                         }
                         c.clearCurrentExprPrimInfo();

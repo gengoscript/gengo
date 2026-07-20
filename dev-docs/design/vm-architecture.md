@@ -309,9 +309,10 @@ original output for the entire spec corpus.
 ### 6.1 How the Pass Works
 
 `fusion_pass.zig` treats every fusion as a rewrite of **adjacent
-instructions** — a pair, or (for `local_add_local`/`local_add_field`) a
-fixed 4-instruction window — with a single legality rule: **the second
-instruction of the pair/window must not be a branch target.** Function
+instructions** — a pair, or (for `local_add_local`/`local_add_field`/
+`field_add_const`) a fixed 4-instruction window — with a single legality
+rule: **the second instruction of the pair/window must not be a branch
+target.** Function
 entry points and module boundaries count as targets too, alongside jump
 destinations. This one rule replaces the emitter's nine separate
 invalidation blocks, because "is this position jumped to?" is exactly the
@@ -333,8 +334,15 @@ source of truth (kept in sync with `op.zig`) and is not duplicated here.
 As of 2026-07-19 the pass covers every fusion the old emitter peephole
 covered, including the call-fusion chain
 (`get_local_const_sub_call[_tail]`, `call_global_local_sub_const[_tail]`),
-the for-loop header quint (`get_local_const_lt_jif_pop_jump`), and the two
-4-wide window fusions (`local_add_local`, `local_add_field`).
+the for-loop header quint (`get_local_const_lt_jif_pop_jump`), and the
+4-wide window fusions (`local_add_local`, `local_add_field`). A third
+4-wide window fusion, `field_add_const` (`field = field + const`, e.g.
+`c.tx_id = c.tx_id + 1`), was added 2026-07-20 — found independently in
+two real embedder codebases as a transaction/packet-ID counter idiom
+(issue #207). Unlike the other two, it delegates its read and write to
+`opGetLocalGetField`/`opSetField` verbatim rather than reimplementing
+their logic inline, since `set_field`'s type-coercion/const-field/
+named-type/map-value-type handling is too complex to safely re-derive.
 
 Several fused handlers include an integer fast-path: when both operands
 are `.int`, the VM performs the addition/subtraction directly rather than

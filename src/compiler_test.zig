@@ -2969,3 +2969,129 @@ test "compiler: append with a closure argument inside a loop keeps correct entry
         \\check()
     );
 }
+
+test "compiler: std.core.bytelen lowers to the bytelen op" {
+    var rt = try setup();
+    defer rt.deinit();
+    try compileWithSession(&rt,
+        \\std := import("std")
+        \\func f(s string) int {
+        \\    return std.core.bytelen(s)
+        \\}
+    , "");
+    const c = rt.chunk_state;
+    try std.testing.expect(try hasOp(c, .bytelen));
+}
+
+test "compiler: std.core.bytelen counts raw bytes, not runes" {
+    var rt = try setup();
+    defer rt.deinit();
+    try rt.run(
+        \\std := import("std")
+        \\assert std.core.bytelen("hello") == 5
+        \\assert std.core.bytelen("åäö") == 6
+        \\assert std.core.len("åäö") == 3
+    );
+}
+
+test "compiler: std.bytes decode family lowers to bytes_decode with the correct kind byte" {
+    var rt = try setup();
+    defer rt.deinit();
+    try compileWithSession(&rt,
+        \\std := import("std")
+        \\b := std.bytes
+        \\func f(s string, i int) int {
+        \\    return b.u16be_at(s, i)
+        \\}
+    , "");
+    const c = rt.chunk_state;
+    var found = false;
+    var ip: usize = 0;
+    while (ip < c.code_len) {
+        const inst = try chunk_decoder.decodeAt(c, ip);
+        if (inst.op == .bytes_decode) {
+            // kind=1 is u16be_at (native/bytes.zig's DecodeKind).
+            try std.testing.expectEqual(@as(u8, 1), c.code[ip + 1]);
+            found = true;
+        }
+        ip += inst.width;
+    }
+    try std.testing.expect(found);
+}
+
+test "compiler: std.bytes decode family matches the native-call path byte for byte" {
+    // The op and the native call must produce identical results for every
+    // kind (0-10): the op calls native/bytes.zig's decodeAt directly, but
+    // this guards against the two ever being wired to different logic.
+    var rt = try setup();
+    defer rt.deinit();
+    try rt.run(
+        \\std := import("std")
+        \\b := std.bytes
+        \\data := b.u8(0x12) + b.u16be(0x3456) + b.u32be(0x789ABCDE) + b.u64be(0x0102030405060708) + b.f32be(3.5) + b.f64be(2.5)
+        \\assert b.at(data, 0) == 0x12
+        \\assert b.u16be_at(data, 1) == 0x3456
+        \\assert b.u16le_at(data, 1) == 0x5634
+        \\assert b.u32be_at(data, 3) == 0x789ABCDE
+        \\assert b.u64be_at(data, 7) == 0x0102030405060708
+        \\assert b.f32be_at(data, 15) == 3.5
+        \\assert b.f64be_at(data, 19) == 2.5
+    );
+}
+
+test "compiler: field = field + const fuses into field_add_const" {
+    // The "c.tx_id = c.tx_id + 1" idiom (found independently in gengo-modbus
+    // and gengo-mqtt as a transaction/packet-ID counter), issue #207.
+    var rt = try setup();
+    defer rt.deinit();
+    try compileWithSession(&rt,
+        \\type Client struct {
+        \\    tx_id int,
+        \\}
+        \\func (c Client) next() int {
+        \\    c.tx_id = c.tx_id + 1
+        \\    return c.tx_id
+        \\}
+    , "");
+    const c = rt.chunk_state;
+    try std.testing.expect(try hasOp(c, .field_add_const));
+    try std.testing.expect(!(try hasOp(c, .set_field)));
+}
+
+test "compiler: field_add_const increments correctly across repeated calls" {
+    var rt = try setup();
+    defer rt.deinit();
+    try rt.run(
+        \\type Client struct {
+        \\    tx_id int,
+        \\}
+        \\func (c Client) next() int {
+        \\    c.tx_id = c.tx_id + 1
+        \\    return c.tx_id
+        \\}
+        \\cl := Client { tx_id: 0 }
+        \\assert cl.next() == 1
+        \\assert cl.next() == 2
+        \\assert cl.next() == 3
+    );
+}
+
+test "compiler: field_add_const preserves const-field and named-type checks" {
+    // field_add_const delegates the write to opSetField verbatim rather than
+    // reimplementing its type-coercion/const-field logic — this guards that
+    // delegation actually happens (a hand-rolled write would risk silently
+    // skipping the const check).
+    var rt = try setup();
+    defer rt.deinit();
+    const result = rt.run(
+        \\type Foo struct {
+        \\    const x int,
+        \\}
+        \\func (f Foo) bump() {
+        \\    f.x = f.x + 1
+        \\}
+        \\foo := Foo { x: 0 }
+        \\foo.bump()
+    );
+    try std.testing.expectError(error.AssignToConst, result);
+}

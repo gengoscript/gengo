@@ -1,5 +1,6 @@
 const native_main = @import("native/main.zig");
 const native_core = @import("native/core.zig");
+const native_bytes = @import("native/bytes.zig");
 
 pub const callNative = native_main.callNative;
 pub const callHostModule = native_main.callHostModule;
@@ -10,3 +11,6 @@ pub const nativeConvToString = native_core.nativeConvToString;
 pub const nativeTypeNameValue = native_core.nativeTypeNameValue;
 pub const nativeLen = native_core.nativeLen;
 pub const nativeAppend = native_core.nativeAppend;
+pub const nativeByteLen = native_core.nativeByteLen;
+pub const BytesDecodeKind = native_bytes.DecodeKind;
+pub const bytesDecodeAt = native_bytes.decodeAt;

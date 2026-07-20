@@ -63,6 +63,75 @@ fn readU64le(s: []const u8, i: usize) !i64 {
     return @as(i64, @bitCast(n));
 }
 
+fn readF32be(s: []const u8, i: usize) !f64 {
+    if (i + 4 > s.len) return error.RangeError;
+    const bits: u32 = (@as(u32, s[i]) << 24) | (@as(u32, s[i + 1]) << 16) |
+        (@as(u32, s[i + 2]) << 8) | @as(u32, s[i + 3]);
+    return @as(f64, @as(f32, @bitCast(bits)));
+}
+
+fn readF32le(s: []const u8, i: usize) !f64 {
+    if (i + 4 > s.len) return error.RangeError;
+    const bits: u32 = @as(u32, s[i]) | (@as(u32, s[i + 1]) << 8) |
+        (@as(u32, s[i + 2]) << 16) | (@as(u32, s[i + 3]) << 24);
+    return @as(f64, @as(f32, @bitCast(bits)));
+}
+
+fn readF64be(s: []const u8, i: usize) !f64 {
+    if (i + 8 > s.len) return error.RangeError;
+    var bits: u64 = 0;
+    for (0..8) |k| bits = (bits << 8) | s[i + k];
+    return @bitCast(bits);
+}
+
+fn readF64le(s: []const u8, i: usize) !f64 {
+    if (i + 8 > s.len) return error.RangeError;
+    var bits: u64 = 0;
+    for (0..8) |k| bits |= @as(u64, s[i + k]) << @as(u6, @intCast(k * 8));
+    return @bitCast(bits);
+}
+
+// Single source of truth for every "decode a fixed-width value from a byte
+// string at an offset" operation — called both by the native dispatch below
+// (bytes_at/bytes_u16be_at/...) and by the VM's dedicated .bytes_decode op
+// (see op.zig), so the two paths can never behave differently. Mirrors the
+// exact bounds-check style each variant already had: byte_at compares as i64
+// (catches a negative offset cleanly); the multi-byte reads cast to usize
+// first (an existing, unchanged behavior — not something introduced here).
+pub const DecodeKind = enum(u8) {
+    byte_at = 0,
+    u16be = 1,
+    u16le = 2,
+    u32be = 3,
+    u32le = 4,
+    u64be = 5,
+    u64le = 6,
+    f32be = 7,
+    f32le = 8,
+    f64be = 9,
+    f64le = 10,
+};
+
+pub fn decodeAt(kind: DecodeKind, s: []const u8, offset_arg: Value) !Value {
+    switch (kind) {
+        .byte_at => {
+            const idx = try argAsI64(offset_arg);
+            if (idx < 0 or idx >= @as(i64, @intCast(s.len))) return error.RangeError;
+            return .{ .int = @as(i64, s[@as(usize, @intCast(idx))]) };
+        },
+        .u16be => return .{ .int = try readU16be(s, @intCast(try argAsI64(offset_arg))) },
+        .u16le => return .{ .int = try readU16le(s, @intCast(try argAsI64(offset_arg))) },
+        .u32be => return .{ .int = try readU32be(s, @intCast(try argAsI64(offset_arg))) },
+        .u32le => return .{ .int = try readU32le(s, @intCast(try argAsI64(offset_arg))) },
+        .u64be => return .{ .int = try readU64be(s, @intCast(try argAsI64(offset_arg))) },
+        .u64le => return .{ .int = try readU64le(s, @intCast(try argAsI64(offset_arg))) },
+        .f32be => return .{ .float = try readF32be(s, @intCast(try argAsI64(offset_arg))) },
+        .f32le => return .{ .float = try readF32le(s, @intCast(try argAsI64(offset_arg))) },
+        .f64be => return .{ .float = try readF64be(s, @intCast(try argAsI64(offset_arg))) },
+        .f64le => return .{ .float = try readF64le(s, @intCast(try argAsI64(offset_arg))) },
+    }
+}
+
 pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
     if (argc != nf.arity) return error.ArityMismatch;
     switch (@as(NativeFnId, @enumFromInt(nf.id))) {
@@ -98,11 +167,9 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
         },
         .bytes_at => {
             const s = try vms.asStringValue(ctx.vs.vmTop(1));
-            const idx = try argAsI64(ctx.vs.vmTop(0));
-            if (idx < 0 or idx >= @as(i64, @intCast(s.len))) return error.RangeError;
-            const b = s[@as(usize, @intCast(idx))];
+            const result = try decodeAt(.byte_at, s, ctx.vs.vmTop(0));
             ctx.vs.vmPopArgs(argc);
-            try ctx.vs.vmPush(.{ .int = @as(i64, b) });
+            try ctx.vs.vmPush(result);
         },
         .bytes_len => {
             const s = try vms.asStringValue(ctx.vs.vmTop(0));
@@ -227,45 +294,39 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
         // ── Integer decoding ─────────────────────────────────────────────────
         .bytes_u16be_at => {
             const s = try vms.asStringValue(ctx.vs.vmTop(1));
-            const i = @as(usize, @intCast(try argAsI64(ctx.vs.vmTop(0))));
-            const n = try readU16be(s, i);
+            const result = try decodeAt(.u16be, s, ctx.vs.vmTop(0));
             ctx.vs.vmPopArgs(argc);
-            try ctx.vs.vmPush(.{ .int = n });
+            try ctx.vs.vmPush(result);
         },
         .bytes_u32be_at => {
             const s = try vms.asStringValue(ctx.vs.vmTop(1));
-            const i = @as(usize, @intCast(try argAsI64(ctx.vs.vmTop(0))));
-            const n = try readU32be(s, i);
+            const result = try decodeAt(.u32be, s, ctx.vs.vmTop(0));
             ctx.vs.vmPopArgs(argc);
-            try ctx.vs.vmPush(.{ .int = n });
+            try ctx.vs.vmPush(result);
         },
         .bytes_u64be_at => {
             const s = try vms.asStringValue(ctx.vs.vmTop(1));
-            const i = @as(usize, @intCast(try argAsI64(ctx.vs.vmTop(0))));
-            const n = try readU64be(s, i);
+            const result = try decodeAt(.u64be, s, ctx.vs.vmTop(0));
             ctx.vs.vmPopArgs(argc);
-            try ctx.vs.vmPush(.{ .int = n });
+            try ctx.vs.vmPush(result);
         },
         .bytes_u16le_at => {
             const s = try vms.asStringValue(ctx.vs.vmTop(1));
-            const i = @as(usize, @intCast(try argAsI64(ctx.vs.vmTop(0))));
-            const n = try readU16le(s, i);
+            const result = try decodeAt(.u16le, s, ctx.vs.vmTop(0));
             ctx.vs.vmPopArgs(argc);
-            try ctx.vs.vmPush(.{ .int = n });
+            try ctx.vs.vmPush(result);
         },
         .bytes_u32le_at => {
             const s = try vms.asStringValue(ctx.vs.vmTop(1));
-            const i = @as(usize, @intCast(try argAsI64(ctx.vs.vmTop(0))));
-            const n = try readU32le(s, i);
+            const result = try decodeAt(.u32le, s, ctx.vs.vmTop(0));
             ctx.vs.vmPopArgs(argc);
-            try ctx.vs.vmPush(.{ .int = n });
+            try ctx.vs.vmPush(result);
         },
         .bytes_u64le_at => {
             const s = try vms.asStringValue(ctx.vs.vmTop(1));
-            const i = @as(usize, @intCast(try argAsI64(ctx.vs.vmTop(0))));
-            const n = try readU64le(s, i);
+            const result = try decodeAt(.u64le, s, ctx.vs.vmTop(0));
             ctx.vs.vmPopArgs(argc);
-            try ctx.vs.vmPush(.{ .int = n });
+            try ctx.vs.vmPush(result);
         },
         // ── Byte-level search ────────────────────────────────────────────────
         .bytes_index_of => {
@@ -412,39 +473,27 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
         // ── IEEE 754 float decoding ──────────────────────────────────────────
         .bytes_f32be_at => {
             const s = try vms.asStringValue(ctx.vs.vmTop(1));
-            const i = @as(usize, @intCast(try argAsI64(ctx.vs.vmTop(0))));
-            if (i + 4 > s.len) return error.RangeError;
-            const bits: u32 = (@as(u32, s[i]) << 24) | (@as(u32, s[i + 1]) << 16) |
-                (@as(u32, s[i + 2]) << 8) | @as(u32, s[i + 3]);
+            const result = try decodeAt(.f32be, s, ctx.vs.vmTop(0));
             ctx.vs.vmPopArgs(argc);
-            try ctx.vs.vmPush(.{ .float = @as(f64, @as(f32, @bitCast(bits))) });
+            try ctx.vs.vmPush(result);
         },
         .bytes_f32le_at => {
             const s = try vms.asStringValue(ctx.vs.vmTop(1));
-            const i = @as(usize, @intCast(try argAsI64(ctx.vs.vmTop(0))));
-            if (i + 4 > s.len) return error.RangeError;
-            const bits: u32 = @as(u32, s[i]) | (@as(u32, s[i + 1]) << 8) |
-                (@as(u32, s[i + 2]) << 16) | (@as(u32, s[i + 3]) << 24);
+            const result = try decodeAt(.f32le, s, ctx.vs.vmTop(0));
             ctx.vs.vmPopArgs(argc);
-            try ctx.vs.vmPush(.{ .float = @as(f64, @as(f32, @bitCast(bits))) });
+            try ctx.vs.vmPush(result);
         },
         .bytes_f64be_at => {
             const s = try vms.asStringValue(ctx.vs.vmTop(1));
-            const i = @as(usize, @intCast(try argAsI64(ctx.vs.vmTop(0))));
-            if (i + 8 > s.len) return error.RangeError;
-            var bits: u64 = 0;
-            for (0..8) |k| bits = (bits << 8) | s[i + k];
+            const result = try decodeAt(.f64be, s, ctx.vs.vmTop(0));
             ctx.vs.vmPopArgs(argc);
-            try ctx.vs.vmPush(.{ .float = @bitCast(bits) });
+            try ctx.vs.vmPush(result);
         },
         .bytes_f64le_at => {
             const s = try vms.asStringValue(ctx.vs.vmTop(1));
-            const i = @as(usize, @intCast(try argAsI64(ctx.vs.vmTop(0))));
-            if (i + 8 > s.len) return error.RangeError;
-            var bits: u64 = 0;
-            for (0..8) |k| bits |= @as(u64, s[i + k]) << @as(u6, @intCast(k * 8));
+            const result = try decodeAt(.f64le, s, ctx.vs.vmTop(0));
             ctx.vs.vmPopArgs(argc);
-            try ctx.vs.vmPush(.{ .float = @bitCast(bits) });
+            try ctx.vs.vmPush(result);
         },
         else => {},
     }

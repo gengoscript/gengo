@@ -8,16 +8,16 @@ change shape release to release since nothing outside the VM depends on
 their numeric identity. See "Opcode space policy" below for why this
 split is fixed and doesn't move.
 
-Of the 192 core slots, 128 are assigned and 64 remain free for future
+Of the 192 core slots, 130 are assigned and 62 remain free for future
 core primitives — permanent once claimed, since core is what GBC's wire
-format will encode. Of the 64 fused slots, 34 are assigned and 30 remain
-free for future fused patterns. That's 162 of 256 slots assigned overall,
-94 free.
+format will encode. Of the 64 fused slots, 35 are assigned and 29 remain
+free for future fused patterns. That's 165 of 256 slots assigned overall,
+91 free.
 
 Two kinds of opcode live in this space, distinguished only by numeric
 range — there is no tag byte or separate namespace; the VM dispatches on
-both identically. **Core ops** (0x00–0x7F) are what the compiler emits
-directly. **Fused/specialized ops** (0xC0–0xE1) are never emitted by the
+both identically. **Core ops** (0x00–0x81) are what the compiler emits
+directly. **Fused/specialized ops** (0xC0–0xE2) are never emitted by the
 compiler — they are produced from core-op bytecode by a separate
 load-time rewrite pass (`src/lang/fusion_pass.zig`) that runs after
 verification and before execution, replacing common 2–4 instruction
@@ -234,6 +234,8 @@ var OPS=[
   [0x79,"it·n2", "iter_next2 — iterator step, 2 values"],
   [0x7E,"len",   "len — pop a value, push its length (string rune count, array/map size, struct field count); lowered from std.core.len(x)"],
   [0x7F,"append","append — [op][argc]; pop argc values (array + items), push the resulting array; lowered from std.core.append(a, ...items)"],
+  [0x80,"blen",  "bytelen — pop a value, push its raw byte length (no rune counting); lowered from std.core.bytelen(x)"],
+  [0x81,"b·dec", "bytes_decode — [op][kind]; pop offset then data, decode a fixed-width int/float at that offset; lowered from std.bytes.{at,u16be_at,u32be_at,u64be_at,u16le_at,u32le_at,u64le_at,f32be_at,f32le_at,f64be_at,f64le_at}"],
   [0xC0,"c_eq",  "const_eq — fused constant+eq"],
   [0xC1,"c_sub", "const_sub — fused constant+sub"],
   [0xC2,"c_add", "const_add — fused constant+add"],
@@ -267,7 +269,8 @@ var OPS=[
   [0xDE,"l·ac",  "local_add_const — dst += k (4 bytes)"],
   [0xDF,"l·acl", "local_add_const_loop — fused dst+=k + loop (8 bytes)"],
   [0xE0,"l·af",  "local_add_field — dst += src.field (9 bytes)"],
-  [0xE1,"igc",   "inc_global_const — global += const in-place (8 bytes)"]
+  [0xE1,"igc",   "inc_global_const — global += const in-place (8 bytes)"],
+  [0xE2,"f·ac",  "field_add_const — field += const in-place, e.g. c.tx_id = c.tx_id + 1 (15 bytes)"]
 ];
 var by={};
 for(var i=0;i<OPS.length;i++) by[OPS[i][0]]=OPS[i];
@@ -320,12 +323,12 @@ for(var r=0;r<16;r++){
 | 0x5F–0x69 | 11 | Type system / assertions |
 | 0x6A–0x79 | 16 | Collections / struct |
 | 0x7A–0x7D | 4 | Named-scalar validation / stack |
-| 0x7E–0x7F | 2 | Stdlib intrinsics (len, append) |
-| 0x80–0xBF | 64 | Free (reserved for future core ops) |
-| 0xC0–0xE1 | 34 | Fused / peephole |
-| 0xE2–0xFF | 30 | Free (within fused block) |
+| 0x7E–0x81 | 4 | Stdlib intrinsics (len, append, bytelen, bytes_decode) |
+| 0x82–0xBF | 62 | Free (reserved for future core ops) |
+| 0xC0–0xE2 | 35 | Fused / peephole |
+| 0xE3–0xFF | 29 | Free (within fused block) |
 
-Total assigned: 162 of 256 slots.
+Total assigned: 165 of 256 slots.
 
 The 0x00–0xBF (core, 192 slots) / 0xC0–0xFF (fused, 64 slots) boundary is
 permanent policy — see "Opcode space policy" above. It does not move to
@@ -349,3 +352,4 @@ after the opcode byte.
 | 11 bytes | `call_global_local_sub_const` |
 | 12 bytes | `get_global_const_lt_jif_pop` |
 | 13 bytes | `get_local_const_lt_jif_pop_jump`, `call_global_local_sub_const_tail` |
+| 15 bytes | `field_add_const` |
