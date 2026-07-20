@@ -3303,6 +3303,21 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 const v = try ctx.vs.vmPop();
                 try ctx.vs.vmPush(try vmnative.nativeTypeNameValue(ctx, v));
             },
+            .len => {
+                const v = try ctx.vs.vmPop();
+                try ctx.vs.vmPush(try vmnative.nativeLen(ctx, v));
+            },
+            .append => {
+                const argc = opByte(ctx);
+                const start = ctx.vs.stack_top - argc;
+                // Items must stay rooted on the stack while nativeAppend runs
+                // (arrayAppend allocates), so collapse stack_top only after
+                // the call returns — matching dispatchHostCallVariadic's
+                // order for the same reason.
+                const result = try vmnative.nativeAppend(ctx, start, argc);
+                ctx.vs.stack_top = start;
+                try ctx.vs.vmPush(result);
+            },
             .neg => {
                 const v = try ctx.vs.vmPeek(0);
                 const unboxed = vms.unboxNamed(v);

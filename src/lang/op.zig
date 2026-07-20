@@ -159,6 +159,24 @@ pub const Op = enum(u8) {
     swap = 0x7C, // swap top two stack values
     validate_named_range = 0x7D, // u16 named-type const; validate or cycle-normalize TOS
 
+    // Stdlib intrinsic. Thematically a Collections op (sibling of
+    // build_array/get_index/tuple_get above), but that block is a
+    // contiguous already-numbered run with zero slack — slots are
+    // append-only, so this claims the next free one instead; the reserved
+    // range is a flat pool, not zoned by category (see the reserved-slot
+    // note below). Pops one value, pushes its length (string: rune count;
+    // array/map: element count; struct: field count). Lowered at compile
+    // time from std.core.len(x); the VM handler calls the exact same
+    // nativeLen the native-call path uses, so there is no separate
+    // behavior to keep in sync.
+    len = 0x7E,
+    // [op][argc]: pops argc values (the array, then argc-1 append items),
+    // pushes the resulting (possibly new) array. Lowered at compile time
+    // from std.core.append(a, ...items); the VM handler calls the exact
+    // same nativeAppend the native-call path uses, so there is no separate
+    // behavior to keep in sync — same rationale as len above.
+    append = 0x7F,
+
     // ── Reserved slots ───────────────────────────────────────────────────────
     // Free opcode space, declared as trap ops so the enum is dense over the
     // full u8 range — a sparse enum costs ~20% dispatch throughput (sparse
@@ -176,8 +194,6 @@ pub const Op = enum(u8) {
     // ever exhausted, the answer is build/link-time-selected fused-op-set
     // profiles (zero per-instruction cost — a compile-time choice, not a
     // runtime branch), not widening or prefixing.
-    reserved_7e = 0x7E,
-    reserved_7f = 0x7F,
     reserved_80 = 0x80,
     reserved_81 = 0x81,
     reserved_82 = 0x82,

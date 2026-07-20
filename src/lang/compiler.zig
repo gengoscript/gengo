@@ -1219,6 +1219,71 @@ pub const Compiler = struct {
         return .{ .prim = .float, .named_type = if (common.streq(first_name, second_name) and common.streq(first_name, third_name)) first_name else null, .is_constant = first_info.is_constant and second_info.is_constant and third_info.is_constant };
     }
 
+    // std.conv.to_int/to_float/to_string lower to the existing cast_* ops
+    // ONLY when provably safe — they are NOT unconditionally equivalent:
+    // cast_int/cast_float have no string-parsing branch (to_int("42")
+    // succeeds, int("42") errors with TypeError), and cast_int/cast_float
+    // don't accept decimal/bigint inputs the way nativeConvToInt/Float's
+    // native-call path silently does not either in the other direction
+    // (nativeConvToInt has no decimal/bigint arm and errors; cast_int
+    // handles both). Gating on a provably non-string, non-decimal,
+    // non-bigint static prim (int/float/rune/bool) avoids all of that: a
+    // value with one of those tracked prim types is, by the compiler's own
+    // static-typing invariant (already relied on elsewhere for typed-op
+    // selection), never null and never one of the divergent cases.
+    // to_string -> cast_string has a narrower gap: cast_string explicitly
+    // rejects .null (to_string(null) returns "null"; string(null) errors),
+    // but is identical to nativeConvToString for every other value it
+    // accepts (it calls nativeConvToString directly) — so any known,
+    // non-null prim type is sufficient here, not just the numeric four.
+    pub fn selectStdConvIntrinsicOp(self: *Compiler, direct_name: []const u8, argc: u8, arg_info: ExprPrimInfo) ?Op {
+        _ = self;
+        if (argc != 1) return null;
+        const prim = arg_info.prim orelse return null;
+        if (common.streq(direct_name, "module:std.conv.to_string")) return .cast_string;
+        const is_safe_numeric = switch (prim) {
+            .int, .float, .rune, .bool => true,
+            else => false,
+        };
+        if (!is_safe_numeric) return null;
+        if (common.streq(direct_name, "module:std.conv.to_int")) return .cast_int;
+        if (common.streq(direct_name, "module:std.conv.to_float")) return .cast_float;
+        return null;
+    }
+
+    pub fn stdConvIntrinsicResultInfo(self: *Compiler, direct_name: []const u8) ExprPrimInfo {
+        _ = self;
+        if (common.streq(direct_name, "module:std.conv.to_int")) return .{ .prim = .int };
+        if (common.streq(direct_name, "module:std.conv.to_float")) return .{ .prim = .float };
+        if (common.streq(direct_name, "module:std.conv.to_string")) return .{ .prim = .string };
+        return .{};
+    }
+
+    // std.core.len lowers unconditionally: unlike std.conv above, this isn't
+    // reconciling two independently-implemented functions that happened to
+    // diverge — the .len op's VM handler calls the exact same nativeLen used
+    // by the native-call path, so there is no behavior to keep in sync.
+    pub fn selectStdCoreLenIntrinsicOp(self: *Compiler, direct_name: []const u8, argc: u8) ?Op {
+        _ = self;
+        if (argc != 1) return null;
+        if (common.streq(direct_name, "module:std.core.len")) return .len;
+        return null;
+    }
+
+    // std.core.append lowers unconditionally for the same reason len does:
+    // the .append op's VM handler calls the exact same nativeAppend used by
+    // the native-call path (named-array-type unwrap/rewrap, element
+    // type-checking against elem_spec included), so there is no separate
+    // behavior to keep in sync. nativeAppend requires argc >= 1 (the array
+    // itself); mirrored here rather than lowering a call that would only
+    // fail at runtime with the same error the ordinary call path would give.
+    pub fn selectStdCoreAppendIntrinsicOp(self: *Compiler, direct_name: []const u8, argc: u8) ?Op {
+        _ = self;
+        if (argc < 1) return null;
+        if (common.streq(direct_name, "module:std.core.append")) return .append;
+        return null;
+    }
+
     pub fn emitVarTypeProlog(self: *Compiler, tc: TypeCheck, line: u32) !void {
         if (tc == .named) {
             if (self.isErasedNamedType(tc.named)) return;

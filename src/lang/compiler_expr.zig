@@ -264,6 +264,24 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
                                 return;
                             }
                         }
+                        if (c.selectStdConvIntrinsicOp(direct_name, argc, first_arg_info)) |intrinsic_op| {
+                            c.cs.deleteCodeRange(patch_pos, 5);
+                            try c.cs.emitOp(intrinsic_op, prop.line);
+                            c.setCurrentExprPrimInfo(c.stdConvIntrinsicResultInfo(direct_name));
+                            return;
+                        }
+                        if (c.selectStdCoreLenIntrinsicOp(direct_name, argc)) |intrinsic_op| {
+                            c.cs.deleteCodeRange(patch_pos, 5);
+                            try c.cs.emitOp(intrinsic_op, prop.line);
+                            c.setCurrentExprPrimInfo(.{ .prim = .int });
+                            return;
+                        }
+                        if (c.selectStdCoreAppendIntrinsicOp(direct_name, argc)) |intrinsic_op| {
+                            c.cs.deleteCodeRange(patch_pos, 5);
+                            try c.cs.emit2(@intFromEnum(intrinsic_op), argc, prop.line);
+                            c.clearCurrentExprPrimInfo();
+                            return;
+                        }
                         c.clearCurrentExprPrimInfo();
                         try c.cs.emitCall(argc, prop.line);
                         return;

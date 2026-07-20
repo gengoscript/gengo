@@ -2851,3 +2851,121 @@ test "compiler: defer named-type qualified method lowers to direct deferred call
     try std.testing.expect(found_show_global);
     try std.testing.expect(!found_defer_invoke_method);
 }
+
+fn hasOp(c: *chunk.State, op: Op) !bool {
+    var ip: usize = 0;
+    while (ip < c.code_len) {
+        const inst = try chunk_decoder.decodeAt(c, ip);
+        if (inst.op == op) return true;
+        ip += inst.width;
+    }
+    return false;
+}
+
+test "compiler: std.conv.to_float/to_int lower to cast_float/cast_int for a provably numeric arg" {
+    var rt = try setup();
+    defer rt.deinit();
+    try compileWithSession(&rt,
+        \\std := import("std")
+        \\func f() float {
+        \\    var a int = 42
+        \\    return std.conv.to_float(a)
+        \\}
+        \\func g() int {
+        \\    var b float = 3.14
+        \\    return std.conv.to_int(b)
+        \\}
+    , "");
+    const c = rt.chunk_state;
+    try std.testing.expect(try hasOp(c, .cast_float));
+    try std.testing.expect(try hasOp(c, .cast_int));
+}
+
+test "compiler: std.conv.to_int/to_float do NOT lower when the arg could be a string" {
+    // A regression guard for the divergence found 2026-07-20: cast_int/cast_float
+    // have no string-parsing branch (unlike nativeConvToInt/Float), so lowering
+    // must stay gated on a provably non-string static prim. Without the gate,
+    // to_int("123")/to_float("2.5") would start erroring instead of parsing.
+    var rt = try setup();
+    defer rt.deinit();
+    try compileWithSession(&rt,
+        \\std := import("std")
+        \\func f() int {
+        \\    return std.conv.to_int("123")
+        \\}
+    , "");
+    const c = rt.chunk_state;
+    try std.testing.expect(!(try hasOp(c, .cast_int)));
+    try std.testing.expect(try hasOp(c, .call) or try hasOp(c, .call_tail));
+}
+
+test "compiler: std.conv.to_string does NOT lower for a null-typed arg" {
+    // cast_string rejects .null (string(null) errors) while
+    // nativeConvToString returns "null" for it (std.conv.to_string(null)
+    // succeeds) — the gate must exclude untyped/null arguments.
+    var rt = try setup();
+    defer rt.deinit();
+    try compileWithSession(&rt,
+        \\std := import("std")
+        \\func f() string {
+        \\    return std.conv.to_string(null)
+        \\}
+    , "");
+    const c = rt.chunk_state;
+    try std.testing.expect(!(try hasOp(c, .cast_string)));
+    try std.testing.expect(try hasOp(c, .call) or try hasOp(c, .call_tail));
+}
+
+test "compiler: std.core.len lowers to the len op" {
+    var rt = try setup();
+    defer rt.deinit();
+    try compileWithSession(&rt,
+        \\std := import("std")
+        \\func f(a []int) int {
+        \\    return std.core.len(a)
+        \\}
+    , "");
+    const c = rt.chunk_state;
+    try std.testing.expect(try hasOp(c, .len));
+}
+
+test "compiler: std.core.append lowers to the append op" {
+    var rt = try setup();
+    defer rt.deinit();
+    try compileWithSession(&rt,
+        \\std := import("std")
+        \\func f(a []int) []int {
+        \\    return std.core.append(a, 1, 2)
+        \\}
+    , "");
+    const c = rt.chunk_state;
+    try std.testing.expect(try hasOp(c, .append));
+}
+
+test "compiler: append with a closure argument inside a loop keeps correct entry points (regression, deleteCodeRange)" {
+    // deleteCodeRange previously shifted bytecode without adjusting FuncObj.ip
+    // or module boundaries recorded before the call — invisible for every
+    // prior intrinsic (math/type_of/conv/len), whose arguments are plain
+    // value expressions, but append(arr, func() {...}) compiles a whole
+    // nested function body after the deleted preamble, exposing it as a
+    // stack-underflow verifier failure (found via
+    // tests/spec/146_loop_closure_capture.gengo, 2026-07-20).
+    var rt = try setup();
+    defer rt.deinit();
+    try rt.run(
+        \\std := import("std")
+        \\func check() {
+        \\    funcs := []
+        \\    i := 0
+        \\    for i < 3 {
+        \\        captured := i
+        \\        funcs = std.core.append(funcs, func() int { return captured })
+        \\        i += 1
+        \\    }
+        \\    assert funcs[0]() == 0
+        \\    assert funcs[1]() == 1
+        \\    assert funcs[2]() == 2
+        \\}
+        \\check()
+    );
+}

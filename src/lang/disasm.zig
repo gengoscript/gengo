@@ -1,6 +1,7 @@
 const std = @import("std");
 const chunk = @import("chunk.zig");
-const Op = @import("op.zig").Op;
+const op_mod = @import("op.zig");
+const Op = op_mod.Op;
 const io = @import("../runtime/io.zig");
 const value = @import("value.zig");
 const Value = value.Value;
@@ -173,7 +174,7 @@ pub fn disassemble(cs: *const chunk.State) void {
         const raw = cs.codeByteAt(i);
         i += 1;
 
-        if ((raw > @intFromEnum(Op.validate_named_range) and raw < @intFromEnum(Op.const_eq)) or raw > @intFromEnum(Op.inc_global_const)) {
+        if (op_mod.is_reserved[raw]) {
             io.write("???\n");
             continue;
         }
@@ -246,7 +247,7 @@ pub fn disassemble(cs: *const chunk.State) void {
             },
 
             // --- 1-byte operand ops ---
-            .get_local, .set_local, .get_upvalue, .set_upvalue, .close_upvalue, .get_local_ret, .defer_call, .build_array, .build_map, .build_tuple, .build_struct_instance, .tuple_check_arity, .tuple_get, .tuple_get_keep, .get_slice, .assert_type => {
+            .get_local, .set_local, .get_upvalue, .set_upvalue, .close_upvalue, .get_local_ret, .defer_call, .build_array, .build_map, .build_tuple, .build_struct_instance, .tuple_check_arity, .tuple_get, .tuple_get_keep, .get_slice, .assert_type, .append => {
                 const slot = cs.codeByteAt(i);
                 i += 1;
                 io.write(@tagName(op));
