@@ -164,6 +164,18 @@ pub const Op = enum(u8) {
     // full u8 range — a sparse enum costs ~20% dispatch throughput (sparse
     // membership checks at every dispatch site). To add an opcode, RENAME a
     // reserved slot; never renumber existing ops — values are wire-stable.
+    //
+    // 0x00-0xBF (192 slots) is core, 0xC0-0xFF (64 slots) is fused — this
+    // boundary is PERMANENT POLICY (ratified 2026-07-20, see
+    // docs/opcodes.md "Opcode space policy"), not just current usage. It
+    // does not move to grow either side, and it is not a u8-width limit to
+    // route around: a u16 field and a WASM-style prefix byte for fused ops
+    // were both considered; the prefix was built as a real prototype and
+    // measured at 9-25% slower (loop back-edges are the hottest ops in the
+    // VM and pay the extra dispatch the worst). If the 64 fused slots are
+    // ever exhausted, the answer is build/link-time-selected fused-op-set
+    // profiles (zero per-instruction cost — a compile-time choice, not a
+    // runtime branch), not widening or prefixing.
     reserved_7e = 0x7E,
     reserved_7f = 0x7F,
     reserved_80 = 0x80,
@@ -232,6 +244,9 @@ pub const Op = enum(u8) {
     reserved_bf = 0xBF,
 
     // ── Fused / peephole (0xC0–0xFF, 64 slots) ───────────────────────────────
+    // This range is permanently reserved for fused ops — see the policy
+    // note above the 0x7E reserved-slot block. Do not extend fused ops
+    // below 0xC0; do not shrink this block to grow core.
     // Fused constant+binop: reads u16 const_idx, pops TOS (left operand),
     // applies op with the constant as right operand, pushes result.
     const_eq = 0xC0,
