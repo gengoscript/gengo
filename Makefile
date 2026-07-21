@@ -77,7 +77,3 @@ bench-release-stress:
 .PHONY: bench-recursion-stress
 bench-recursion-stress:
 	GENGO_BENCH_INCLUDE_STRESS=1 GENGO_BENCH_FILTER='005_fib_recursive_35_stress.gengo' $(ZIG) build -Dpreset=stress -Dwasmtime=$(WASMTIME) bench-release
-
-.PHONY: parity
-parity:
-	$(ZIG) build -Dpreset=$(PRESET) -Dwasmtime=$(WASMTIME) parity

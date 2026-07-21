@@ -26,18 +26,6 @@ Notes:
 - Pass cases are in `tests/spec/*.gengo` with matching `.out` files.
 - Fail cases are in `tests/spec/fail/*.gengo` with matching `.err` token files.
 
-## Parity Harness
-
-Run embedded vs host-backend parity checks:
-
-```bash
-zig build -Dpreset=1m parity
-```
-
-Notes:
-- Parity cases live in `tests/parity/*.gengo`.
-- Host backend gracefully falls back to VM-local implementations when host import is unavailable.
-
 ## Bench Harness
 
 Run benchmarks:

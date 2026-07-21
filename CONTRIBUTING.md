@@ -49,10 +49,7 @@ If relevant, also run:
 
 ```bash
 make bench
-make parity
 ```
-
-`parity` checks that the native and WASM backends produce the same output. Run it when touching the VM or compiler.
 
 ## Profiling
 

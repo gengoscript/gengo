@@ -24,7 +24,19 @@ This becomes more relevant once the module system is used heavily. At that point
 
 ---
 
-## 3. Exit Criteria
+## 3. Host-backend override parity has no real test coverage
+
+**Status:** gap identified 2026-07-21, not scheduled.
+
+The VM's `native_backend` policy (`--backend embedded`/`--backend host`) lets a host override built-in natives (`std.core.len`/`append`/`bytelen`, `std.conv.*`, `std.io.println` — the 8 `CAP_*` capabilities in `src/runtime/host_abi.zig`) with its own implementation, dispatched through `gengo_native_call`. No test ever registers a *real* alternate implementation and diffs its output against the embedded one.
+
+`tests/parity/` (removed, see #205) ran the plain CLI/WASM binary under `wasmtime run` with `--backend host` — but `hasHostImport()` is gated on `builtin.target.cpu.arch == .wasm32 and root.is_embedded_engine`, true only for the `gengo-engine.wasm`/`libgengo-engine.so` embedding targets, never for the CLI. The CLI never registers `native_host_call_fn` either, so `nativeCallRaw` always returns `.unsupported` and every call falls back to the embedded path — `--backend host` on the CLI is architecturally a no-op, for any input, always. `engine_runner.zig`'s existing host-module tests only check that calling an *unregistered* host function produces the correct error; they don't register real implementations of the 8 override capabilities either.
+
+Real coverage would need a native (or WASM component-model) test harness that registers a genuine `native_host_call_fn` implementing those 8 capabilities, runs scripts with `--backend host` against it, and diffs the result against both golden output and the embedded-backend result. That's new test infrastructure, not a corpus expansion.
+
+---
+
+## 4. Exit Criteria
 
 1. All core capabilities are `done` and covered by conformance cases.
 2. Conformance suite runs in CI on every PR.
