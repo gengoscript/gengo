@@ -48,28 +48,16 @@ pub fn setNativeHostCall(fn_ptr: ?NativeHostCallFn, ctx: ?*anyopaque) void {
     native_host_call_ctx = ctx;
 }
 
+// std natives (std.core.len/append/bytelen, std.conv.*, std.io.println) are
+// never host-overridable — see dev-docs/roadmap.md. abi_version is the only
+// call a host ever receives outside of its own registered host-module
+// functions (see module_compile.zig's HostModuleFuncDesc/call_id), used to
+// gate compatibility before any host-module call is dispatched.
 pub const HostCall = enum(u16) {
     abi_version = 0,
-    io_println = 1,
-    core_len = 2,
-    host_caps = 3,
-    core_append = 4,
-    core_bytelen = 5,
-    conv_to_int = 6,
-    conv_to_float = 7,
-    conv_to_bool = 8,
-    conv_to_string = 9,
 };
 
 pub const ABI_VERSION: u64 = 2;
-pub const CAP_IO_PRINTLN: u64 = 1 << 0;
-pub const CAP_CORE_LEN: u64 = 1 << 1;
-pub const CAP_CORE_APPEND: u64 = 1 << 2;
-pub const CAP_CORE_BYTELEN: u64 = 1 << 3;
-pub const CAP_CONV_TO_INT: u64 = 1 << 4;
-pub const CAP_CONV_TO_FLOAT: u64 = 1 << 5;
-pub const CAP_CONV_TO_BOOL: u64 = 1 << 6;
-pub const CAP_CONV_TO_STRING: u64 = 1 << 7;
 
 fn hasHostImport() bool {
     if (builtin.target.cpu.arch != .wasm32) return false;

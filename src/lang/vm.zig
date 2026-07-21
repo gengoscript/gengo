@@ -3193,8 +3193,8 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 const start = ctx.vs.stack_top - argc;
                 // Items must stay rooted on the stack while nativeAppend runs
                 // (arrayAppend allocates), so collapse stack_top only after
-                // the call returns — matching dispatchHostCallVariadic's
-                // order for the same reason.
+                // the call returns — matching callNativeVariadic's order in
+                // native/host_abi.zig for the same reason.
                 const result = try vmnative.nativeAppend(ctx, start, argc);
                 ctx.vs.stack_top = start;
                 try ctx.vs.vmPush(result);

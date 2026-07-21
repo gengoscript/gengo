@@ -1,8 +1,18 @@
-# Gengoscript Host ABI v2
+# Gengoscript Host ABI
 
-This page defines the ABI v2 host bridge used when the Gengoscript VM runs with
-the `host` native backend. ABI v2 has no cross-version stability promise;
-hosts must require an exact version match.
+This page defines the host bridge used when the Gengoscript VM runs with the
+`host` native backend, and its `gengo_native_call` dispatch entry point. The
+ABI has no cross-version stability promise; hosts must require an exact
+version match.
+
+`std.*` natives (`std.core.len`/`append`/`bytelen`, `std.conv.*`,
+`std.io.println`) are never routed through this bridge — a host cannot
+override their behavior, so the same call means the same thing regardless of
+which host it runs under. The only thing that crosses this boundary is
+**host modules**: functions the host explicitly registers under an
+`import("host:name")` namespace (see `engine-api.md`'s host module section).
+`abi_version` exists purely to gate that a host module call is dispatched to
+a compatible host before any call_id is sent.
 
 Use this document when you are implementing `gengo_native_call`. For the broader embedding surface, see `engine-api.md`.
 
@@ -147,38 +157,14 @@ Return values from `gengo_native_call`:
 | ID | Name | Arguments | Result |
 |---|---|---|---|
 | `0` | `abi_version` | none | number |
-| `1` | `io_println` | variadic | `null` |
-| `2` | `core_len` | 1 | number |
-| `3` | `host_caps` | none | number bitmask |
-| `4` | `core_append` | variadic | array value |
-| `5` | `core_bytelen` | 1 | number |
-| `6` | `conv_to_int` | 1 | number |
-| `7` | `conv_to_float` | 1 | number |
-| `8` | `conv_to_bool` | 1 | boolean |
-| `9` | `conv_to_string` | 1 | string |
+
+Every other call ID the host receives is a **host module** call, identified
+by the `call_id` the host itself chose when registering that function (see
+`engine-api.md`). There is no fixed, engine-defined call beyond `abi_version`.
 
 ## ABI Version
 
-The current ABI version is `2`.
-
-The VM requires an exact version match when using the host backend. A host that still implements ABI v1 must be upgraded before it can be used with the current guest.
-
-## Capability Bits
-
-`host_caps` returns a bitmask describing which host-dispatched operations are available.
-
-| Bit | Constant | Native |
-|---|---|---|
-| `1 << 0` | `CAP_IO_PRINTLN` | `io_println` |
-| `1 << 1` | `CAP_CORE_LEN` | `core_len` |
-| `1 << 2` | `CAP_CORE_APPEND` | `core_append` |
-| `1 << 3` | `CAP_CORE_BYTELEN` | `core_bytelen` |
-| `1 << 4` | `CAP_CONV_TO_INT` | `conv_to_int` |
-| `1 << 5` | `CAP_CONV_TO_FLOAT` | `conv_to_float` |
-| `1 << 6` | `CAP_CONV_TO_BOOL` | `conv_to_bool` |
-| `1 << 7` | `CAP_CONV_TO_STRING` | `conv_to_string` |
-
-If a capability bit is absent, the VM falls back to its embedded implementation for that native where a fallback exists.
+The current ABI version is `2`. The VM requires an exact version match when using the host backend.
 
 ## Safety Notes
 
