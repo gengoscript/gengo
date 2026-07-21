@@ -40,7 +40,10 @@ BENCH_SCRIPTS=(
 )
 
 echo "→ building ReleaseFast binary..." >&2
-zig build cli-fast -Dpreset=1m 2>&1 | grep -v "^$" >&2
+# grep exits 1 on a fully-cached build (zero lines of output), which would
+# otherwise abort the script under pipefail; see tools/profile-vm.sh for the
+# same fix.
+zig build cli-fast -Dpreset=1m 2>&1 | { grep -v "^$" || true; } >&2
 
 echo >&2
 
