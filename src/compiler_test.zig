@@ -3114,3 +3114,61 @@ test "compiler: field_add_const preserves const-field and named-type checks" {
     );
     try std.testing.expectError(error.AssignToConst, result);
 }
+
+test "compiler: m[\"literal\"] lowers to get_index_const_str, not constant+get_index" {
+    // Issue #206: a bare string-literal index is known at compile time, so
+    // it's lowered directly rather than pushing the key onto the stack.
+    var rt = try setup();
+    defer rt.deinit();
+    try compileWithSession(&rt,
+        \\m := { "alpha": 1 }
+        \\x := m["alpha"]
+    , "");
+    const c = rt.chunk_state;
+    try std.testing.expect(try hasOp(c, .get_index_const_str));
+    try std.testing.expect(!(try hasOp(c, .get_index)));
+}
+
+test "compiler: m[key] with a non-literal index still uses generic get_index" {
+    // Guards the lowering's own boundary: only a bare literal token
+    // immediately closed by ']' qualifies — a computed key must still go
+    // through the fully generic path.
+    var rt = try setup();
+    defer rt.deinit();
+    try compileWithSession(&rt,
+        \\m := { "alpha": 1 }
+        \\key := "alpha"
+        \\x := m[key]
+    , "");
+    const c = rt.chunk_state;
+    try std.testing.expect(try hasOp(c, .get_index));
+    try std.testing.expect(!(try hasOp(c, .get_index_const_str)));
+}
+
+test "compiler: get_index_const_str map lookup returns correct values and null on miss" {
+    var rt = try setup();
+    defer rt.deinit();
+    try rt.run(
+        \\m := { "alpha": 1, "bravo": 2 }
+        \\assert m["alpha"] == 1
+        \\assert m["bravo"] == 2
+        \\assert m["charlie"] == null
+    );
+}
+
+test "compiler: get_index_const_str falls back to generic get_index for non-map receivers" {
+    // A bare string-literal index isn't only used for maps (struct field
+    // access via bracket syntax uses the same syntax shape) — the fallback
+    // path in opGetIndexConstStr must delegate to opGetIndex verbatim.
+    var rt = try setup();
+    defer rt.deinit();
+    try rt.run(
+        \\type Point struct {
+        \\    x int,
+        \\    y int,
+        \\}
+        \\p := Point { x: 3, y: 4 }
+        \\assert p["x"] == 3
+        \\assert p["y"] == 4
+    );
+}

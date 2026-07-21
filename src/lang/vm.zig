@@ -1692,6 +1692,25 @@ fn opGetIndex(ctx: VMContext) !void {
     }
 }
 
+// get_index specialized for a compile-time-constant string key (#206): the
+// key never touches the operand stack. map_hashed (the common receiver, see
+// tests/bench/011_map_lookup_heavy.gengo) is handled directly with the same
+// vmmap.mapGet the generic path uses; every other receiver kind pushes the
+// constant back and delegates to opGetIndex verbatim so non-map indexing
+// logic exists in exactly one place.
+fn opGetIndexConstStr(ctx: VMContext) !void {
+    const name_idx = opShort(ctx);
+    const raw = try ctx.vs.vmPop();
+    if (raw == .object and raw.object.* == .map_hashed) {
+        const key = try ctx.cs.constAt(name_idx);
+        try ctx.vs.vmPush(try vmmap.mapGet(raw.object, key) orelse .null);
+        return;
+    }
+    try ctx.vs.vmPush(raw);
+    try ctx.vs.vmPush(try ctx.cs.constAt(name_idx));
+    try opGetIndex(ctx);
+}
+
 fn opSetIndex(ctx: VMContext) !void {
     const val = try ctx.vs.vmPop();
     const idx_v = try ctx.vs.vmPop();
@@ -4142,6 +4161,7 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 try ctx.vs.vmPush(a[idx]);
             },
             .get_index => try opGetIndex(ctx),
+            .get_index_const_str => try opGetIndexConstStr(ctx),
             .set_index => try opSetIndex(ctx),
             .get_slice => {
                 const flags = opByte(ctx);

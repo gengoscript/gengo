@@ -8,15 +8,15 @@ change shape release to release since nothing outside the VM depends on
 their numeric identity. See "Opcode space policy" below for why this
 split is fixed and doesn't move.
 
-Of the 192 core slots, 130 are assigned and 62 remain free for future
+Of the 192 core slots, 131 are assigned and 61 remain free for future
 core primitives — permanent once claimed, since core is what GBC's wire
 format will encode. Of the 64 fused slots, 35 are assigned and 29 remain
-free for future fused patterns. That's 165 of 256 slots assigned overall,
-91 free.
+free for future fused patterns. That's 166 of 256 slots assigned overall,
+90 free.
 
 Two kinds of opcode live in this space, distinguished only by numeric
 range — there is no tag byte or separate namespace; the VM dispatches on
-both identically. **Core ops** (0x00–0x81) are what the compiler emits
+both identically. **Core ops** (0x00–0x82) are what the compiler emits
 directly. **Fused/specialized ops** (0xC0–0xE2) are never emitted by the
 compiler — they are produced from core-op bytecode by a separate
 load-time rewrite pass (`src/lang/fusion_pass.zig`) that runs after
@@ -236,6 +236,7 @@ var OPS=[
   [0x7F,"append","append — [op][argc]; pop argc values (array + items), push the resulting array; lowered from std.core.append(a, ...items)"],
   [0x80,"blen",  "bytelen — pop a value, push its raw byte length (no rune counting); lowered from std.core.bytelen(x)"],
   [0x81,"b·dec", "bytes_decode — [op][kind]; pop offset then data, decode a fixed-width int/float at that offset; lowered from std.bytes.{at,u16be_at,u32be_at,u64be_at,u16le_at,u32le_at,u64le_at,f32be_at,f32le_at,f64be_at,f64le_at}"],
+  [0x82,"gi·cs", "get_index_const_str — u16:name_const_idx; get_index specialized for a bare string-literal index (m[\"literal\"]); map_hashed reads the key straight from the constant pool, everything else falls back to opGetIndex"],
   [0xC0,"c_eq",  "const_eq — fused constant+eq"],
   [0xC1,"c_sub", "const_sub — fused constant+sub"],
   [0xC2,"c_add", "const_add — fused constant+add"],
@@ -324,11 +325,12 @@ for(var r=0;r<16;r++){
 | 0x6A–0x79 | 16 | Collections / struct |
 | 0x7A–0x7D | 4 | Named-scalar validation / stack |
 | 0x7E–0x81 | 4 | Stdlib intrinsics (len, append, bytelen, bytes_decode) |
-| 0x82–0xBF | 62 | Free (reserved for future core ops) |
+| 0x82 | 1 | get_index_const_str (constant-key map/index access, #206) |
+| 0x83–0xBF | 61 | Free (reserved for future core ops) |
 | 0xC0–0xE2 | 35 | Fused / peephole |
 | 0xE3–0xFF | 29 | Free (within fused block) |
 
-Total assigned: 165 of 256 slots.
+Total assigned: 166 of 256 slots.
 
 The 0x00–0xBF (core, 192 slots) / 0xC0–0xFF (fused, 64 slots) boundary is
 permanent policy — see "Opcode space policy" above. It does not move to

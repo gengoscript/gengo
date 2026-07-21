@@ -172,7 +172,10 @@ require_cmd zig
 require_cmd perf
 
 echo "→ building native ReleaseFast CLI..." >&2
-zig build cli-fast -Dpreset="$PRESET" 2>&1 | grep -v '^$' >&2
+# grep exits 1 on a fully-cached build (zero lines of output, so nothing to
+# filter) which would otherwise kill the script under pipefail before
+# profiling starts; `|| true` keeps that case from aborting the run.
+zig build cli-fast -Dpreset="$PRESET" 2>&1 | { grep -v '^$' || true; } >&2
 
 [[ -x "$BINARY" ]] || die "missing built binary: $BINARY"
 

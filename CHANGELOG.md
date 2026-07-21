@@ -2,6 +2,29 @@
 
 This changelog tracks notable language/runtime changes by implementation date.
 
+## 2026-07-21 (v0.5.1-dev)
+
+### Performance — Decimal construction no longer recomputes pow(10, scale) (#206)
+
+`tests/bench/016_decimal_billing.gengo` (a billing-style price\*qty→total workload) was added to measure whether decimal arithmetic is dispatch-bound enough to justify dedicated `decimal_add`/`decimal_mul` opcodes, per #206's decimal item. Profiling (`tools/profile-vm.sh`) showed `lang.vm_types.constructNamedType` — the shared named-type constructor every decimal arithmetic result passes through — spending the bulk of its time in `std.math.pow(f64, 10.0, scale)`, called fresh on every single decimal construction, plus a `std.math.pow(f64, 2.0, 63.0)` i64-range-boundary check likewise recomputed every call instead of being a constant.
+
+Fixed at the root rather than papering over it with new ops:
+
+- `value.zig`'s new `decimalScaleFactor(scale)` indexes a fixed 19-entry `pow10` table (decimal scale is compiler-validated to 0..18) instead of calling the transcendental `std.math.pow`. Used by both decimal construction (`vm_types.zig`) and decimal-to-float conversion (`decimalScaledToFloat`).
+- The four `std.math.pow(f64, 2.0, 63.0)` bounds checks in `vm_types.zig`'s decimal construction path became a single named `f64` constant.
+
+Measured on `016_decimal_billing.gengo` (`perf stat`, 20 runs): -15% instructions, -10% cycles, -9% wall time. Confirms the issue's own framing — once the redundant work is removed, decimal's real remaining cost (heap allocation to box the result, since decimal values carry their scale via the named-type pointer) dwarfs dispatch cost the same way bigint/string-concat already do, so **no dedicated decimal opcodes were added**; the opcode-space budget stays unspent.
+
+Also fixed in the course of getting a measurement: `zig build bench-perf`'s WASM build (`gengo-perf`) was compiled at `.Debug` optimize level, which — now that the interpreter's opcode switch has grown past 165 assigned slots (#207) — emits enough unmerged per-arm locals that wasmtime's translator rejected the module outright ("too many locals"), silently breaking the perf-counter baseline lane. Switched to `.ReleaseSafe` (same safety checks as Debug, but with the register allocation that keeps locals under wasmtime's limit); `tests/bench/perf_baseline.txt` regenerated and now current with #207's bytelen/bytes_decode/field_add_const op-count reductions, which had never actually landed in the baseline file. `tools/profile-vm.sh` had an unrelated `pipefail`/`grep` bug that aborted the script on any fully-cached (zero-output) build; fixed alongside since it blocked this investigation.
+
+### Performance — `get_index_const_str`: constant-key map access (#206)
+
+The last item of #206's specialization roadmap. `m["literal"]` — a bare string-literal index, the overwhelmingly common shape for map access (`tests/bench/011_map_lookup_heavy.gengo`) — went through generic `get_index` (pop key, pop receiver, unbox, switch on receiver kind) even though the key is already known at compile time.
+
+New core op `get_index_const_str = 0x82` (`u16:name_const_idx`), lowered directly at the compiler's `[` handling site (`compiler_expr.zig`) when the index expression is a single bare string-literal token immediately closed by `]` — this is a compile-time lowering, not a fusion-pass rewrite, since there's no multi-instruction runtime pattern to match (the key never gets pushed onto the stack in the first place). `map_hashed` (the common case) reads the key straight out of the constant pool and calls the same `vmmap.mapGet` the generic path uses; every other receiver kind (array/struct/named wrapper/...) pushes the constant back and delegates to `opGetIndex` verbatim, so non-map indexing logic exists in exactly one place.
+
+Measured on `011_map_lookup_heavy.gengo` (`perf stat`, 30 runs): -5.8% instructions, -8.8% cycles, -8% wall time. Op count for that benchmark drops by exactly 800,000 (4 lookups × 200,000 iterations × 1 fewer instruction each).
+
 ## 2026-07-12 (v0.5.1-dev)
 
 ### Performance — Small struct inline storage (#157)

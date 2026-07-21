@@ -397,6 +397,23 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
             return;
         }
 
+        // A bare string literal immediately closed by ']' (m["literal"], not
+        // m["a"+"b"] or m[f()]) can only be a bracket-index read, never a
+        // slice — the ':' checks below can't fire. Lower it straight to
+        // get_index_const_str instead of going through expr() (which would
+        // emit a separate `constant` push) — issue #206.
+        if (c.check(.string) and c.peekToken().typ == .rbracket) {
+            c.advance();
+            const key_src = c.prev.src;
+            const key_line = c.prev.line;
+            try c.consume(.rbracket);
+            try c.cs.emitOpStringConst(.get_index_const_str, key_src, key_line);
+            if (receiver_info.index_result_spec) |element_spec| {
+                c.setCurrentExprPrimInfo(c.exprPrimInfoFromFieldTypeSpec(element_spec));
+            }
+            return;
+        }
+
         try expr(
             c,
         );
