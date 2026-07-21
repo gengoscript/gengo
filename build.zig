@@ -399,7 +399,12 @@ pub fn build(b: *std.Build) void {
     const bench_release_step = b.step("bench-release", "Run benchmark suite (ReleaseFast)");
     bench_release_step.dependOn(&run_bench_release.step);
 
-    // bench-perf: perf-instrumented debug build; outputs PERF: lines to stderr
+    // bench-perf: perf-instrumented build; outputs PERF: lines to stderr.
+    // ReleaseSafe, not Debug: an unoptimized runInner (256-way opcode switch)
+    // now emits enough per-arm locals that wasmtime's translator rejects the
+    // module ("too many locals"). ReleaseSafe keeps every safety check Debug
+    // has (bounds/overflow checks, no UB-triggered miscounting) while running
+    // mem2reg/register allocation, so PERF: counters stay deterministic.
     const perf_opts = b.addOptions();
     perf_opts.addOption(bool, "perf", true);
     perf_opts.addOption(bool, "gc_stress", gc_stress_opt);
@@ -412,7 +417,7 @@ pub fn build(b: *std.Build) void {
     perf_opts.addOption(bool, "gengo_host", gengo_host_opt);
     perf_opts.addOption([]const u8, "version", gengo_version);
     const perf_opts_mod = perf_opts.createModule();
-    const gengo_perf = addWasmExe(b, "gengo-perf", "src/main.zig", wasm_target, .Debug, perf_opts_mod, runtime_config_mod);
+    const gengo_perf = addWasmExe(b, "gengo-perf", "src/main.zig", wasm_target, .ReleaseSafe, perf_opts_mod, runtime_config_mod);
     const install_perf = installWasmAs(b, gengo_perf, wasmArtifactPath("debug", "gengo-perf.wasm"));
 
     const bench_perf_runner_mod = b.createModule(.{

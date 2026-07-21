@@ -435,10 +435,23 @@ pub const Value = union(VTag) {
     }
 };
 
+// Decimal scale is validated to 0..18 at type-declaration time
+// (compiler_decls.zig), so a fixed table covers every valid scale without
+// falling back to a transcendental std.math.pow(10, scale) call on every
+// decimal construction/comparison/format (measured as ~60% of self time in
+// the decimal-billing benchmark's add path, see #206).
+const decimal_pow10 = [19]f64{
+    1e0,  1e1,  1e2,  1e3,  1e4,  1e5,  1e6,  1e7,  1e8,  1e9,
+    1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18,
+};
+
+pub fn decimalScaleFactor(scale: u8) f64 {
+    return decimal_pow10[scale];
+}
+
 pub fn decimalScaledToFloat(raw: i64, scale: u8) f64 {
     if (scale == 0) return @floatFromInt(raw);
-    const factor = std.math.pow(f64, 10.0, @floatFromInt(scale));
-    return @as(f64, @floatFromInt(raw)) / factor;
+    return @as(f64, @floatFromInt(raw)) / decimalScaleFactor(scale);
 }
 
 pub fn decimalLogicalNumber(v: Value) ?f64 {

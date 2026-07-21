@@ -1,0 +1,25 @@
+std := import("std")
+
+// Exercises decimal scale 0 and scale 18 — the two boundary indices of the
+// fixed pow10 lookup table used by decimal construction (#206). A regression
+// here (e.g. an off-by-one in the table) would silently corrupt every
+// decimal value at these scales.
+
+type Whole decimal 0
+w1 := Whole(5)
+w2 := Whole(3)
+std.io.println(w1 + w2)
+std.io.println(float(w1))
+
+type Micro decimal 18
+m1 := Micro(1.5)
+m2 := Micro(2.25)
+std.io.println(m1 + m2)
+std.io.println(float(m1))
+
+// Same-scale addition still respects a range constraint at scale 18.
+type SmallMicro decimal 18 range 0..5
+s := SmallMicro(1.5) + SmallMicro(2.5)
+std.io.println(s)
+
+std.io.println("done")

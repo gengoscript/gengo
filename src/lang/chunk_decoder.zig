@@ -30,7 +30,7 @@ pub fn decodeAt(state: *const chunk.State, pos: usize) !DecodedInstruction {
     const op: Op = @enumFromInt(raw);
 
     return switch (op) {
-        .constant, .def_global, .make_closure, .ret_const, .const_eq, .const_sub, .const_add, .const_lt, .const_gt, .assert_interface, .assert_struct, .variant_check, .check_named_predicate, .validate_named_range => .{
+        .constant, .def_global, .make_closure, .ret_const, .const_eq, .const_sub, .const_add, .const_lt, .const_gt, .assert_interface, .assert_struct, .variant_check, .check_named_predicate, .validate_named_range, .get_index_const_str => .{
             .op = op,
             .width = 3,
             .const_index = try readU16At(state, pos + 1),

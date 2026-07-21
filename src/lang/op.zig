@@ -196,6 +196,20 @@ pub const Op = enum(u8) {
     // allocates a result string, so dispatch is a smaller fraction of the
     // real work; measure before doing, per issue #207.
     bytes_decode = 0x81,
+    // u16:name_const_idx — get_index specialized for a compile-time-constant
+    // string key (`m["literal"]`, the exact case `m[expr]` cannot cover:
+    // lowered only when the index expression is a single bare string-literal
+    // token, checked at the compiler's `[` handling site before the generic
+    // expr() call ever runs, so there is no "constant key; get_index" pair to
+    // fuse after the fact). Skips pushing the key onto the operand stack
+    // entirely. The map_hashed case (the common one — see
+    // tests/bench/011_map_lookup_heavy.gengo) reads the key straight out of
+    // the constant pool and calls the same vmmap.mapGet the generic path
+    // uses; every other receiver kind (array/struct/named wrapper/...) falls
+    // back to pushing the constant and delegating to opGetIndex verbatim, so
+    // there is exactly one place that implements non-map indexing. Issue
+    // #206.
+    get_index_const_str = 0x82,
 
     // ── Reserved slots ───────────────────────────────────────────────────────
     // Free opcode space, declared as trap ops so the enum is dense over the
@@ -214,7 +228,6 @@ pub const Op = enum(u8) {
     // ever exhausted, the answer is build/link-time-selected fused-op-set
     // profiles (zero per-instruction cost — a compile-time choice, not a
     // runtime branch), not widening or prefixing.
-    reserved_82 = 0x82,
     reserved_83 = 0x83,
     reserved_84 = 0x84,
     reserved_85 = 0x85,

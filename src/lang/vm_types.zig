@@ -18,6 +18,13 @@ const StructFieldSpec = @import("value.zig").StructFieldSpec;
 const InterfaceMethodSpec = @import("value.zig").InterfaceMethodSpec;
 const FuncObj = @import("value.zig").FuncObj;
 
+// 2^63 as f64 (exact — a power of two): the i64 range boundary used to reject
+// an out-of-range decimal before the f64->i64 cast. A named constant instead
+// of std.math.pow(f64, 2.0, 63.0), which otherwise runs on every decimal
+// construction (see decimalScaleFactor's comment in value.zig for the sibling
+// fix, both found profiling #206's decimal benchmark).
+const i64_f64_bound: f64 = 9223372036854775808.0;
+
 pub fn namedBaseName(base: @import("value.zig").NamedTypeBase) []const u8 {
     return switch (base) {
         .int => "int",
@@ -523,18 +530,18 @@ pub fn constructNamedType(ctx: VMContext, typ_obj: *Object, arg: Value) !Value {
         },
         .decimal => {
             const scale = nt.scale;
-            const factor = std.math.pow(f64, 10.0, @floatFromInt(scale));
+            const factor = vmod.decimalScaleFactor(scale);
             const scaled: i64 = switch (effective_arg) {
                 .int => |n| blk: {
                     const raw = @round(@as(f64, @floatFromInt(n)) * factor);
                     if (!std.math.isFinite(raw)) return error.TypeError;
-                    if (raw < -std.math.pow(f64, 2.0, 63.0) or raw >= std.math.pow(f64, 2.0, 63.0)) return error.TypeError;
+                    if (raw < -i64_f64_bound or raw >= i64_f64_bound) return error.TypeError;
                     break :blk @intFromFloat(raw);
                 },
                 .float => |n| blk: {
                     const raw = @round(n * factor);
                     if (!std.math.isFinite(raw)) return error.TypeError;
-                    if (raw < -std.math.pow(f64, 2.0, 63.0) or raw >= std.math.pow(f64, 2.0, 63.0)) return error.TypeError;
+                    if (raw < -i64_f64_bound or raw >= i64_f64_bound) return error.TypeError;
                     break :blk @intFromFloat(raw);
                 },
                 .decimal => |d| d,
@@ -631,7 +638,7 @@ pub fn constructNamedType(ctx: VMContext, typ_obj: *Object, arg: Value) !Value {
 fn wrapDecimalCycle(ctx: VMContext, nt: @import("value.zig").NamedTypeObj, fv: f64, factor: f64) !i64 {
     const wrapped = try wrapCycleValueWithError(ctx, nt.name, nt.min, nt.max, fv, true);
     const raw = @round(wrapped * factor);
-    if (!std.math.isFinite(raw) or raw < -std.math.pow(f64, 2.0, 63.0) or raw >= std.math.pow(f64, 2.0, 63.0)) return error.TypeError;
+    if (!std.math.isFinite(raw) or raw < -i64_f64_bound or raw >= i64_f64_bound) return error.TypeError;
     return @intFromFloat(raw);
 }
 
@@ -653,7 +660,7 @@ pub fn coerceNamedTypeResult(ctx: VMContext, typ_obj: *Object, arg: Value) !Valu
         },
         .decimal => {
             const d = try vms.valueAsDecimal(arg);
-            const factor = std.math.pow(f64, 10.0, @floatFromInt(nt.scale));
+            const factor = vmod.decimalScaleFactor(nt.scale);
             const fv = @as(f64, @floatFromInt(d)) / factor;
             const scaled = try wrapDecimalCycle(ctx, nt, fv, factor);
             return makeNamedValue(ctx, typ_obj, .{ .decimal = scaled });
