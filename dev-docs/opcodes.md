@@ -8,11 +8,11 @@ change shape release to release since nothing outside the VM depends on
 their numeric identity. See "Opcode space policy" below for why this
 split is fixed and doesn't move.
 
-Of the 192 core slots, 131 are assigned and 61 remain free for future
+Of the 192 core slots, 117 are assigned and 75 remain free for future
 core primitives — permanent once claimed, since core is what GBC's wire
 format will encode. Of the 64 fused slots, 35 are assigned and 29 remain
-free for future fused patterns. That's 166 of 256 slots assigned overall,
-90 free.
+free for future fused patterns. That's 152 of 256 slots assigned overall,
+104 free.
 
 Two kinds of opcode live in this space, distinguished only by numeric
 range — there is no tag byte or separate namespace; the VM dispatches on
@@ -152,26 +152,12 @@ var OPS=[
   [0x2B,"gt",    "gt — generic greater-than"],
   [0x2C,"ge",    "ge — generic greater-or-equal"],
   [0x2D,"not",   "not — boolean negation"],
-  [0x2E,"add·i", "add_int — i64 addition"],
-  [0x2F,"sub·i", "sub_int — i64 subtraction"],
-  [0x30,"mul·i", "mul_int — i64 multiplication"],
-  [0x31,"div·i", "div_int — i64 division"],
   [0x32,"eqz·i", "eqz_int — i64 == 0"],
   [0x33,"nez·i", "nez_int — i64 != 0"],
   [0x34,"ltz·i", "ltz_int — i64 < 0"],
   [0x35,"lez·i", "lez_int — i64 <= 0"],
   [0x36,"gtz·i", "gtz_int — i64 > 0"],
   [0x37,"gez·i", "gez_int — i64 >= 0"],
-  [0x38,"eq·i",  "eq_int — i64 equality"],
-  [0x39,"ne·i",  "ne_int — i64 inequality"],
-  [0x3A,"lt·i",  "lt_int — i64 less-than"],
-  [0x3B,"le·i",  "le_int — i64 less-or-equal"],
-  [0x3C,"gt·i",  "gt_int — i64 greater-than"],
-  [0x3D,"ge·i",  "ge_int — i64 greater-or-equal"],
-  [0x3E,"add·f", "add_float — f64 addition"],
-  [0x3F,"sub·f", "sub_float — f64 subtraction"],
-  [0x40,"mul·f", "mul_float — f64 multiplication"],
-  [0x41,"div·f", "div_float — f64 division"],
   [0x42,"eq·f",  "eq_float — f64 equality"],
   [0x43,"ne·f",  "ne_float — f64 inequality"],
   [0x44,"lt·f",  "lt_float — f64 less-than"],
@@ -316,8 +302,11 @@ for(var r=0;r<16;r++){
 | 0x17–0x1D | 7 | Stack / literals |
 | 0x1E–0x26 | 9 | Generic arithmetic |
 | 0x27–0x2D | 7 | Generic comparison / logic |
-| 0x2E–0x3D | 16 | Typed int (i64) |
-| 0x3E–0x47 | 10 | Typed float (f64) |
+| 0x2E–0x31 | 4 | Free (reserved for future core ops) |
+| 0x32–0x37 | 6 | Int zero-compare (eqz_int..gez_int) |
+| 0x38–0x3D | 6 | Free (reserved for future core ops) |
+| 0x3E–0x41 | 4 | Free (reserved for future core ops) |
+| 0x42–0x47 | 6 | Typed float comparison (eq_float..ge_float) |
 | 0x48–0x51 | 10 | Math intrinsics |
 | 0x52–0x57 | 6 | Bitwise |
 | 0x58–0x5E | 7 | Cast |
@@ -330,7 +319,7 @@ for(var r=0;r<16;r++){
 | 0xC0–0xE2 | 35 | Fused / peephole |
 | 0xE3–0xFF | 29 | Free (within fused block) |
 
-Total assigned: 166 of 256 slots.
+Total assigned: 152 of 256 slots.
 
 The 0x00–0xBF (core, 192 slots) / 0xC0–0xFF (fused, 64 slots) boundary is
 permanent policy — see "Opcode space policy" above. It does not move to

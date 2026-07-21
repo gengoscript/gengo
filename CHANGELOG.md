@@ -25,6 +25,14 @@ New core op `get_index_const_str = 0x82` (`u16:name_const_idx`), lowered directl
 
 Measured on `011_map_lookup_heavy.gengo` (`perf stat`, 30 runs): -5.8% instructions, -8.8% cycles, -8% wall time. Op count for that benchmark drops by exactly 800,000 (4 lookups × 200,000 iterations × 1 fewer instruction each).
 
+### Performance — Reclaimed 14 of the 26 typed-arithmetic opcodes (7d4e39d)
+
+Re-measured whether splitting `add_int`/`sub_int`/etc. out of the generic arithmetic ops was worth the permanent opcode-space spend. Mostly not: `sub_int`/`mul_int`/`div_int`, `eq_int`/`ne_int`/`lt_int`/`le_int`/`gt_int`/`ge_int`, and `sub_float`/`mul_float`/`div_float` (12 ops) turned out to be byte-for-byte redundant — the generic ops already inline the identical fast path. `add_int` measured ~3% *slower* than generic `.add` despite fewer instructions (icache/branch cost), and `add_float` was statistically neutral. Both also silently defeated fusions (`local_add_local`, `add_ret`, `const_add`) since those only pattern-match the generic opcode, not its typed sibling — confirmed with `--disasm`.
+
+Kept: the 6 int zero-compare shortcuts (genuinely save a whole instruction) and the 6 float comparisons (generic comparisons only inline an int fast path, not float — `lt_float` measured ~2.5% faster than the fallback). Math intrinsics unaffected.
+
+14 slots reclaimed to `reserved_*` in `op.zig`; never released, so nothing depended on the values. `dev-docs/opcodes.md` now shows 152/256 slots assigned (was 166).
+
 ## 2026-07-12 (v0.5.1-dev)
 
 ### Performance — Small struct inline storage (#157)

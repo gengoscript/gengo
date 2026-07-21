@@ -588,10 +588,10 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
     };
     if (interleave_nt) |nt| {
         switch (tt) {
-            .plus => try c.cs.emitOp(c.selectTypedArithmeticOp(.add, lhs_info, rhs_info), line),
-            .minus => try c.cs.emitOp(c.selectTypedArithmeticOp(.sub, lhs_info, rhs_info), line),
-            .star => try c.cs.emitOp(c.selectTypedArithmeticOp(.mul, lhs_info, rhs_info), line),
-            .slash => try c.cs.emitOp(c.selectTypedArithmeticOp(.div, lhs_info, rhs_info), line),
+            .plus => try c.cs.emitOp(.add, line),
+            .minus => try c.cs.emitOp(.sub, line),
+            .star => try c.cs.emitOp(.mul, line),
+            .slash => try c.cs.emitOp(.div, line),
             .kw_div => try c.cs.emitOp(.int_div, line),
             .kw_rem => try c.cs.emitOp(.rem, line),
             .kw_mod => try c.cs.emitOp(.mod, line),
@@ -603,10 +603,10 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
         try c.emitNamedValidation(.{ .named = nt }, line);
     } else {
         switch (tt) {
-            .plus => try c.cs.emitBinOpFused(c.selectTypedArithmeticOp(.add, lhs_info, rhs_info), line),
-            .minus => try c.cs.emitBinOpFused(c.selectTypedArithmeticOp(.sub, lhs_info, rhs_info), line),
-            .star => try c.cs.emitOp(c.selectTypedArithmeticOp(.mul, lhs_info, rhs_info), line),
-            .slash => try c.cs.emitOp(c.selectTypedArithmeticOp(.div, lhs_info, rhs_info), line),
+            .plus => try c.cs.emitBinOpFused(.add, line),
+            .minus => try c.cs.emitBinOpFused(.sub, line),
+            .star => try c.cs.emitOp(.mul, line),
+            .slash => try c.cs.emitOp(.div, line),
             .kw_div => try c.cs.emitOp(.int_div, line),
             .kw_rem => try c.cs.emitOp(.rem, line),
             .kw_mod => try c.cs.emitOp(.mod, line),

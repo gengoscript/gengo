@@ -840,74 +840,26 @@ pub const Compiler = struct {
         return .{ .prim = lhs_prim, .is_constant = false };
     }
 
-    pub fn selectTypedArithmeticOp(self: *Compiler, op: Op, lhs: ExprPrimInfo, rhs: ExprPrimInfo) Op {
-        _ = self;
-        const lhs_prim = lhs.prim orelse return op;
-        const rhs_prim = rhs.prim orelse return op;
-        if (lhs_prim != rhs_prim) return op;
-        return switch (lhs_prim) {
-            .int => switch (op) {
-                .add => if (lhs.is_constant or rhs.is_constant) op else .add_int,
-                .sub => if (lhs.is_constant or rhs.is_constant) op else .sub_int,
-                .mul => if (lhs.is_constant and rhs.is_constant) op else .mul_int,
-                .div => if (lhs.is_constant and rhs.is_constant) op else .div_int,
-                else => op,
-            },
-            .float => switch (op) {
-                .add => if (lhs.is_constant or rhs.is_constant) op else .add_float,
-                .sub => if (lhs.is_constant or rhs.is_constant) op else .sub_float,
-                .mul => if (lhs.is_constant and rhs.is_constant) op else .mul_float,
-                .div => if (lhs.is_constant and rhs.is_constant) op else .div_float,
-                else => op,
-            },
-            else => op,
-        };
-    }
-
+    // Only float comparisons get a typed opcode: generic .eq/.ne/.lt/.gt/.le/.ge
+    // only inline an int fast path, so float still falls through to a real
+    // function call. int comparisons and add/sub/mul/div (both int and float)
+    // used to get typed opcodes too; removed 2026-07-21, see CHANGELOG.md.
     pub fn selectTypedComparisonOp(self: *Compiler, op: Op, lhs: ExprPrimInfo, rhs: ExprPrimInfo) Op {
         _ = self;
         const lhs_prim = lhs.prim orelse return op;
         const rhs_prim = rhs.prim orelse return op;
-        if (lhs_prim != rhs_prim) return op;
-        return switch (lhs_prim) {
-            .int => switch (op) {
-                .eq, .lt, .gt => if (lhs.is_constant or rhs.is_constant) op else switch (op) {
-                    .eq => .eq_int,
-                    .lt => .lt_int,
-                    .gt => .gt_int,
-                    else => unreachable,
-                },
-                .ne => if (lhs.is_constant or rhs.is_constant) op else .ne_int,
-                .le => .le_int,
-                .ge => .ge_int,
-                else => op,
+        if (lhs_prim != .float or rhs_prim != .float) return op;
+        return switch (op) {
+            .eq, .lt, .gt => if (lhs.is_constant or rhs.is_constant) op else switch (op) {
+                .eq => .eq_float,
+                .lt => .lt_float,
+                .gt => .gt_float,
+                else => unreachable,
             },
-            .float => switch (op) {
-                .eq, .lt, .gt => if (lhs.is_constant or rhs.is_constant) op else switch (op) {
-                    .eq => .eq_float,
-                    .lt => .lt_float,
-                    .gt => .gt_float,
-                    else => unreachable,
-                },
-                .ne => if (lhs.is_constant or rhs.is_constant) op else .ne_float,
-                .le => .le_float,
-                .ge => .ge_float,
-                else => op,
-            },
+            .ne => if (lhs.is_constant or rhs.is_constant) op else .ne_float,
+            .le => .le_float,
+            .ge => .ge_float,
             else => op,
-        };
-    }
-
-    pub fn selectTypedNotEqualOp(self: *Compiler, lhs: ExprPrimInfo, rhs: ExprPrimInfo) ?Op {
-        _ = self;
-        const lhs_prim = lhs.prim orelse return null;
-        const rhs_prim = rhs.prim orelse return null;
-        if (lhs_prim != rhs_prim) return null;
-        if (lhs.is_constant or rhs.is_constant) return null;
-        return switch (lhs_prim) {
-            .int => .ne_int,
-            .float => .ne_float,
-            else => null,
         };
     }
 

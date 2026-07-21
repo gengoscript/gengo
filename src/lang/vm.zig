@@ -2561,50 +2561,6 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 const a = ctx.vs.vmPopU();
                 try ctx.vs.vmPush(try computeAddResult(ctx, a, b));
             },
-            .add_int => {
-                const b = ctx.vs.vmPopU();
-                const a = ctx.vs.vmPopU();
-                if (a == .int and b == .int) {
-                    try ctx.vs.vmPush(.{ .int = a.int + b.int });
-                    continue;
-                }
-                setBinaryTypeError(ctx, "+", a, b);
-                return error.TypeError;
-            },
-            .sub_int => {
-                const b = ctx.vs.vmPopU();
-                const a = ctx.vs.vmPopU();
-                if (a == .int and b == .int) {
-                    try ctx.vs.vmPush(.{ .int = a.int - b.int });
-                    continue;
-                }
-                setBinaryTypeError(ctx, "-", a, b);
-                return error.TypeError;
-            },
-            .mul_int => {
-                const b = ctx.vs.vmPopU();
-                const a = ctx.vs.vmPopU();
-                if (a == .int and b == .int) {
-                    try ctx.vs.vmPush(.{ .int = a.int * b.int });
-                    continue;
-                }
-                setBinaryTypeError(ctx, "*", a, b);
-                return error.TypeError;
-            },
-            .div_int => {
-                const b = ctx.vs.vmPopU();
-                const a = ctx.vs.vmPopU();
-                if (a == .int and b == .int) {
-                    if (b.int == 0) {
-                        ctx.vs.setRuntimeErr("division by zero", .{});
-                        return error.DivisionByZero;
-                    }
-                    try ctx.vs.vmPush(.{ .float = @as(f64, @floatFromInt(a.int)) / @as(f64, @floatFromInt(b.int)) });
-                    continue;
-                }
-                setBinaryTypeError(ctx, "/", a, b);
-                return error.TypeError;
-            },
             .eqz_int => {
                 const a = try ctx.vs.vmPop();
                 if (a == .int) {
@@ -2621,26 +2577,6 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                     continue;
                 }
                 ctx.vs.setRuntimeErr("cannot compare {s} with zero using int non-zero test", .{vmtyp.runtimeTypeName(a)});
-                return error.TypeError;
-            },
-            .eq_int => {
-                const b = ctx.vs.vmPopU();
-                const a = ctx.vs.vmPopU();
-                if (a == .int and b == .int) {
-                    try ctx.vs.vmPush(.{ .boolean = a.int == b.int });
-                    continue;
-                }
-                setBinaryTypeError(ctx, "==", a, b);
-                return error.TypeError;
-            },
-            .ne_int => {
-                const b = ctx.vs.vmPopU();
-                const a = ctx.vs.vmPopU();
-                if (a == .int and b == .int) {
-                    try ctx.vs.vmPush(.{ .boolean = a.int != b.int });
-                    continue;
-                }
-                setBinaryTypeError(ctx, "!=", a, b);
                 return error.TypeError;
             },
             .ltz_int => {
@@ -2677,110 +2613,6 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                     continue;
                 }
                 ctx.vs.setRuntimeErr("cannot compare {s} with zero using int greater-than-or-equal-zero test", .{vmtyp.runtimeTypeName(a)});
-                return error.TypeError;
-            },
-            .lt_int => {
-                const b = ctx.vs.vmPopU();
-                const a = ctx.vs.vmPopU();
-                if (a == .int and b == .int) {
-                    try ctx.vs.vmPush(.{ .boolean = a.int < b.int });
-                    continue;
-                }
-                setBinaryTypeError(ctx, "<", a, b);
-                return error.TypeError;
-            },
-            .le_int => {
-                const b = ctx.vs.vmPopU();
-                const a = ctx.vs.vmPopU();
-                if (a == .int and b == .int) {
-                    try ctx.vs.vmPush(.{ .boolean = a.int <= b.int });
-                    continue;
-                }
-                setBinaryTypeError(ctx, "<=", a, b);
-                return error.TypeError;
-            },
-            .gt_int => {
-                const b = ctx.vs.vmPopU();
-                const a = ctx.vs.vmPopU();
-                if (a == .int and b == .int) {
-                    try ctx.vs.vmPush(.{ .boolean = a.int > b.int });
-                    continue;
-                }
-                setBinaryTypeError(ctx, ">", a, b);
-                return error.TypeError;
-            },
-            .ge_int => {
-                const b = ctx.vs.vmPopU();
-                const a = ctx.vs.vmPopU();
-                if (a == .int and b == .int) {
-                    try ctx.vs.vmPush(.{ .boolean = a.int >= b.int });
-                    continue;
-                }
-                setBinaryTypeError(ctx, ">=", a, b);
-                return error.TypeError;
-            },
-            .add_float => {
-                const b = ctx.vs.vmPopU();
-                const a = ctx.vs.vmPopU();
-                if (a == .float and b == .float) {
-                    const r = a.float + b.float;
-                    if (!std.math.isFinite(r)) {
-                        ctx.vs.setRuntimeErr("non-finite value in arithmetic operation", .{});
-                        return error.TypeError;
-                    }
-                    try ctx.vs.vmPush(.{ .float = r });
-                    continue;
-                }
-                setBinaryTypeError(ctx, "+", a, b);
-                return error.TypeError;
-            },
-            .sub_float => {
-                const b = ctx.vs.vmPopU();
-                const a = ctx.vs.vmPopU();
-                if (a == .float and b == .float) {
-                    const r = a.float - b.float;
-                    if (!std.math.isFinite(r)) {
-                        ctx.vs.setRuntimeErr("non-finite value in arithmetic operation", .{});
-                        return error.TypeError;
-                    }
-                    try ctx.vs.vmPush(.{ .float = r });
-                    continue;
-                }
-                setBinaryTypeError(ctx, "-", a, b);
-                return error.TypeError;
-            },
-            .mul_float => {
-                const b = ctx.vs.vmPopU();
-                const a = ctx.vs.vmPopU();
-                if (a == .float and b == .float) {
-                    const r = a.float * b.float;
-                    if (!std.math.isFinite(r)) {
-                        ctx.vs.setRuntimeErr("non-finite value in arithmetic operation", .{});
-                        return error.TypeError;
-                    }
-                    try ctx.vs.vmPush(.{ .float = r });
-                    continue;
-                }
-                setBinaryTypeError(ctx, "*", a, b);
-                return error.TypeError;
-            },
-            .div_float => {
-                const b = ctx.vs.vmPopU();
-                const a = ctx.vs.vmPopU();
-                if (a == .float and b == .float) {
-                    if (b.float == 0.0) {
-                        ctx.vs.setRuntimeErr("division by zero", .{});
-                        return error.DivisionByZero;
-                    }
-                    const r = a.float / b.float;
-                    if (!std.math.isFinite(r)) {
-                        ctx.vs.setRuntimeErr("non-finite value in arithmetic operation", .{});
-                        return error.TypeError;
-                    }
-                    try ctx.vs.vmPush(.{ .float = r });
-                    continue;
-                }
-                setBinaryTypeError(ctx, "/", a, b);
                 return error.TypeError;
             },
             .eq_float => {

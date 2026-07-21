@@ -580,8 +580,7 @@ pub fn compoundStmt(c: anytype) !void {
         return error.TypeMismatch;
     }
     if (is_named and !is_erased_named) try c.cs.emitOp(.named_inner, op_tok.line);
-    const selected_op = c.selectTypedArithmeticOp(op, c.exprPrimInfoForBinding(name.src), rhs_info);
-    try c.cs.emitBinOpFused(selected_op, op_tok.line);
+    try c.cs.emitBinOpFused(op, op_tok.line);
     if (is_named) {
         if (is_erased_named) {
             try c.emitNamedValidation(.{ .named = named_type.? }, op_tok.line);
