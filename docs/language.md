@@ -286,9 +286,9 @@ Named scalar types are nominal at the language level, but `int`, `float`,
 `bool`, and `rune` named values are represented by their base value at runtime.
 For example, `Meters(5)` is a bare runtime integer, not an allocating wrapper.
 The compiler retains the `Meters` identity while compiling the expression and
-uses it to reject invalid mixing, select typed bytecode such as `add_int` or
-`div_float`, select statically known methods, and emit validation after an
-operation that produces another `Meters` value.
+uses it to reject invalid mixing, select statically known methods, and emit
+validation after an operation that produces another `Meters` value — all
+without ever unwrapping to a boxed representation.
 
 Constraints are therefore explicit bytecode at the point where a result is
 created: range and cycle normalization use `validate_named_range`; predicates

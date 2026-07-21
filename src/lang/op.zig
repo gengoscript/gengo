@@ -62,30 +62,34 @@ pub const Op = enum(u8) {
     not = 0x2D,
 
     // ── Typed int (i64) ───────────────────────────────────────────────────────
-    add_int = 0x2E,
-    sub_int = 0x2F,
-    mul_int = 0x30,
-    div_int = 0x31,
-    // zero-compare: pop one int, compare against 0
+    // reserved_2e..reserved_31, reserved_38..reserved_3d: were add_int/sub_int/
+    // mul_int/div_int and eq_int/ne_int/lt_int/le_int/gt_int/ge_int, reclaimed
+    // 2026-07-21 — measured no benefit over the generic ops (see CHANGELOG.md).
+    reserved_2e = 0x2E,
+    reserved_2f = 0x2F,
+    reserved_30 = 0x30,
+    reserved_31 = 0x31,
+    // zero-compare: pop one int, compare against 0.
     eqz_int = 0x32,
     nez_int = 0x33,
     ltz_int = 0x34,
     lez_int = 0x35,
     gtz_int = 0x36,
     gez_int = 0x37,
-    // general compare: pop two ints
-    eq_int = 0x38,
-    ne_int = 0x39,
-    lt_int = 0x3A,
-    le_int = 0x3B,
-    gt_int = 0x3C,
-    ge_int = 0x3D,
+    reserved_38 = 0x38,
+    reserved_39 = 0x39,
+    reserved_3a = 0x3A,
+    reserved_3b = 0x3B,
+    reserved_3c = 0x3C,
+    reserved_3d = 0x3D,
 
     // ── Typed float (f64) ─────────────────────────────────────────────────────
-    add_float = 0x3E,
-    sub_float = 0x3F,
-    mul_float = 0x40,
-    div_float = 0x41,
+    // reserved_3e..reserved_41: were add_float/sub_float/mul_float/div_float,
+    // reclaimed alongside their int counterparts (2026-07-21, see CHANGELOG.md).
+    reserved_3e = 0x3E,
+    reserved_3f = 0x3F,
+    reserved_40 = 0x40,
+    reserved_41 = 0x41,
     eq_float = 0x42,
     ne_float = 0x43,
     lt_float = 0x44,

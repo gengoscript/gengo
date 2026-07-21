@@ -1253,7 +1253,7 @@ test "compiler: std.core.type_of preserves nominal result of named arithmetic" {
     try std.testing.expectEqualStrings("Index", s);
 }
 
-test "compiler: named int arithmetic lowers to add_int without runtime unwrapping" {
+test "compiler: named int arithmetic lowers to add without runtime unwrapping" {
     var rt = try setup();
     defer rt.deinit();
 
@@ -1265,17 +1265,17 @@ test "compiler: named int arithmetic lowers to add_int without runtime unwrappin
     );
 
     const c = rt.chunk_state;
-    var found_add_int = false;
+    var found_add = false;
     var found_named_inner = false;
     var found_named_range = false;
     var found_named_predicate = false;
     for (c.code[0..c.code_len]) |op| {
-        if (op == @intFromEnum(Op.add_int)) found_add_int = true;
+        if (op == @intFromEnum(Op.add)) found_add = true;
         if (op == @intFromEnum(Op.named_inner)) found_named_inner = true;
         if (op == @intFromEnum(Op.validate_named_range)) found_named_range = true;
         if (op == @intFromEnum(Op.check_named_predicate)) found_named_predicate = true;
     }
-    try std.testing.expect(found_add_int);
+    try std.testing.expect(found_add);
     try std.testing.expect(!found_named_inner);
     try std.testing.expect(found_named_range);
     try std.testing.expect(!found_named_predicate);
@@ -1296,8 +1296,8 @@ test "compiler: named scalar arithmetic validates its result without a construct
 
     const c = rt.chunk_state;
     var found_named_predicate = false;
-    var found_ge_int = false;
-    var found_le_int = false;
+    var found_ge = false;
+    var found_le = false;
     var range_const_idx: ?usize = null;
     var predicate_const_idx: ?usize = null;
     var ip: usize = 0;
@@ -1308,17 +1308,17 @@ test "compiler: named scalar arithmetic validates its result without a construct
             predicate_const_idx = inst.const_index;
         }
         if (inst.op == .validate_named_range) range_const_idx = inst.const_index;
-        if (inst.op == .ge_int) found_ge_int = true;
-        if (inst.op == .le_int) found_le_int = true;
+        if (inst.op == .ge) found_ge = true;
+        if (inst.op == .le) found_le = true;
         ip += inst.width;
     }
     try std.testing.expect(found_named_predicate);
     try std.testing.expectEqual(range_const_idx, predicate_const_idx);
-    try std.testing.expect(found_ge_int);
-    try std.testing.expect(found_le_int);
+    try std.testing.expect(found_ge);
+    try std.testing.expect(found_le);
 }
 
-test "compiler: named scalar field and return values retain typed lowering" {
+test "compiler: named scalar field and return values avoid runtime unwrapping" {
     var rt = try setup();
     defer rt.deinit();
 
@@ -1333,17 +1333,17 @@ test "compiler: named scalar field and return values retain typed lowering" {
     );
 
     const c = rt.chunk_state;
-    var found_add_int = false;
+    var found_add = false;
     var found_named_inner = false;
     for (c.code[0..c.code_len]) |op| {
-        if (op == @intFromEnum(Op.add_int)) found_add_int = true;
+        if (op == @intFromEnum(Op.add)) found_add = true;
         if (op == @intFromEnum(Op.named_inner)) found_named_inner = true;
     }
-    try std.testing.expect(found_add_int);
+    try std.testing.expect(found_add);
     try std.testing.expect(!found_named_inner);
 }
 
-test "compiler: indexed named scalars retain typed lowering" {
+test "compiler: indexed named scalars avoid runtime unwrapping" {
     var rt = try setup();
     defer rt.deinit();
 
@@ -1354,15 +1354,15 @@ test "compiler: indexed named scalars retain typed lowering" {
     );
 
     const c = rt.chunk_state;
-    var add_int_count: usize = 0;
+    var add_count: usize = 0;
     var range_check_count: usize = 0;
     var found_named_inner = false;
     for (c.code[0..c.code_len]) |op| {
-        if (op == @intFromEnum(Op.add_int)) add_int_count += 1;
+        if (op == @intFromEnum(Op.add)) add_count += 1;
         if (op == @intFromEnum(Op.validate_named_range)) range_check_count += 1;
         if (op == @intFromEnum(Op.named_inner)) found_named_inner = true;
     }
-    try std.testing.expectEqual(@as(usize, 2), add_int_count);
+    try std.testing.expectEqual(@as(usize, 2), add_count);
     try std.testing.expectEqual(@as(usize, 2), range_check_count);
     try std.testing.expect(!found_named_inner);
 }
@@ -1413,7 +1413,7 @@ test "compiler: static named method uses its declared return type" {
     try std.testing.expectEqual(@as(i64, 5), result.int);
 }
 
-test "compiler: named float division retains typed lowering and validation" {
+test "compiler: named float division avoids runtime unwrapping and validates its range" {
     var rt = try setup();
     defer rt.deinit();
 
@@ -1423,13 +1423,13 @@ test "compiler: named float division retains typed lowering and validation" {
     );
 
     const c = rt.chunk_state;
-    var found_div_float = false;
+    var found_div = false;
     var found_range_check = false;
     for (c.code[0..c.code_len]) |op| {
-        if (op == @intFromEnum(Op.div_float)) found_div_float = true;
+        if (op == @intFromEnum(Op.div)) found_div = true;
         if (op == @intFromEnum(Op.validate_named_range)) found_range_check = true;
     }
-    try std.testing.expect(found_div_float);
+    try std.testing.expect(found_div);
     try std.testing.expect(found_range_check);
     try std.testing.expectError(error.RangeError, rt.callGlobal("divide", &.{ .{ .float = 8.0 }, .{ .float = 0.5 } }));
 }
@@ -2020,30 +2020,6 @@ test "compiler: get_local_const_lt_jif_pop quad fusion result" {
     try std.testing.expect(r2 == .int and r2.int == 20);
 }
 
-test "compiler: typed int compound mul/div opcodes fire" {
-    var rt = try setup();
-    defer rt.deinit();
-    try compile(&rt,
-        \\func f() int {
-        \\    var x int = 8
-        \\    x += 2
-        \\    x -= 3
-        \\    x *= 4
-        \\    x /= 7
-        \\    return x
-        \\}
-    );
-    const c = rt.chunk_state;
-    var found_mul = false;
-    var found_div = false;
-    for (c.code[0..c.code_len]) |op| {
-        if (op == @intFromEnum(Op.mul_int)) found_mul = true;
-        if (op == @intFromEnum(Op.div_int)) found_div = true;
-    }
-    try std.testing.expect(found_mul);
-    try std.testing.expect(found_div);
-}
-
 test "compiler: typed int compound arithmetic result" {
     var rt = try setup();
     defer rt.deinit();
@@ -2059,35 +2035,6 @@ test "compiler: typed int compound arithmetic result" {
     );
     const r = try rt.callGlobal("f", &.{});
     try std.testing.expect(r == .int and r.int == 4);
-}
-
-test "compiler: typed int expression add sub mul div opcodes fire" {
-    var rt = try setup();
-    defer rt.deinit();
-    try compile(&rt,
-        \\func addsub(a int, b int) int {
-        \\    return a + b - a
-        \\}
-        \\
-        \\func muldiv(a int, b int) float {
-        \\    return (a * b) / a
-        \\}
-    );
-    const c = rt.chunk_state;
-    var found_add = false;
-    var found_sub = false;
-    var found_mul = false;
-    var found_div = false;
-    for (c.code[0..c.code_len]) |op| {
-        if (op == @intFromEnum(Op.add_int)) found_add = true;
-        if (op == @intFromEnum(Op.sub_int)) found_sub = true;
-        if (op == @intFromEnum(Op.mul_int)) found_mul = true;
-        if (op == @intFromEnum(Op.div_int)) found_div = true;
-    }
-    try std.testing.expect(found_add);
-    try std.testing.expect(found_sub);
-    try std.testing.expect(found_mul);
-    try std.testing.expect(found_div);
 }
 
 test "compiler: typed int expression arithmetic result" {
@@ -2119,38 +2066,10 @@ test "compiler: typed int expression keeps const add fusion" {
     );
     const c = rt.chunk_state;
     var found_const_add = false;
-    var found_typed_add = false;
     for (c.code[0..c.code_len]) |op| {
         if (op == @intFromEnum(Op.get_local_const_add) or op == @intFromEnum(Op.const_add)) found_const_add = true;
-        if (op == @intFromEnum(Op.add_int)) found_typed_add = true;
     }
     try std.testing.expect(found_const_add);
-    try std.testing.expect(!found_typed_add);
-}
-
-test "compiler: typed int expression comparison opcodes fire" {
-    var rt = try setup();
-    defer rt.deinit();
-    try compile(&rt,
-        \\func cmp(a int, b int) bool {
-        \\    return a == b or a != b or a < b or a > b
-        \\}
-    );
-    const c = rt.chunk_state;
-    var found_eq = false;
-    var found_ne = false;
-    var found_lt = false;
-    var found_gt = false;
-    for (c.code[0..c.code_len]) |op| {
-        if (op == @intFromEnum(Op.eq_int)) found_eq = true;
-        if (op == @intFromEnum(Op.ne_int)) found_ne = true;
-        if (op == @intFromEnum(Op.lt_int)) found_lt = true;
-        if (op == @intFromEnum(Op.gt_int)) found_gt = true;
-    }
-    try std.testing.expect(found_eq);
-    try std.testing.expect(found_ne);
-    try std.testing.expect(found_lt);
-    try std.testing.expect(found_gt);
 }
 
 test "compiler: typed int expression comparison result" {
@@ -2279,72 +2198,16 @@ test "compiler: typed int comparison keeps const fusion" {
     );
     const c = rt.chunk_state;
     var found_const = false;
-    var found_typed = false;
     var i: usize = 0;
     while (i < c.code_len) {
         const inst = chunk_decoder.decodeAt(c, i) catch break;
         switch (inst.op) {
             .get_local_const_eq, .get_local_const_lt, .get_local_const_gt, .const_eq, .const_lt, .const_gt => found_const = true,
-            .eq_int, .ne_int, .lt_int, .gt_int => found_typed = true,
             else => {},
         }
         i += inst.width;
     }
     try std.testing.expect(found_const);
-    try std.testing.expect(!found_typed);
-}
-
-test "compiler: typed float compound mul/div opcodes fire" {
-    var rt = try setup();
-    defer rt.deinit();
-    try compile(&rt,
-        \\func f() float {
-        \\    var x float = 8.0
-        \\    x += 2.0
-        \\    x -= 3.0
-        \\    x *= 4.0
-        \\    x /= 7.0
-        \\    return x
-        \\}
-    );
-    const c = rt.chunk_state;
-    var found_mul = false;
-    var found_div = false;
-    for (c.code[0..c.code_len]) |op| {
-        if (op == @intFromEnum(Op.mul_float)) found_mul = true;
-        if (op == @intFromEnum(Op.div_float)) found_div = true;
-    }
-    try std.testing.expect(found_mul);
-    try std.testing.expect(found_div);
-}
-
-test "compiler: typed float expression add sub mul div opcodes fire" {
-    var rt = try setup();
-    defer rt.deinit();
-    try compile(&rt,
-        \\func addsub(a float, b float) float {
-        \\    return a + b - a
-        \\}
-        \\
-        \\func muldiv(a float, b float) float {
-        \\    return (a * b) / a
-        \\}
-    );
-    const c = rt.chunk_state;
-    var found_add = false;
-    var found_sub = false;
-    var found_mul = false;
-    var found_div = false;
-    for (c.code[0..c.code_len]) |op| {
-        if (op == @intFromEnum(Op.add_float)) found_add = true;
-        if (op == @intFromEnum(Op.sub_float)) found_sub = true;
-        if (op == @intFromEnum(Op.mul_float)) found_mul = true;
-        if (op == @intFromEnum(Op.div_float)) found_div = true;
-    }
-    try std.testing.expect(found_add);
-    try std.testing.expect(found_sub);
-    try std.testing.expect(found_mul);
-    try std.testing.expect(found_div);
 }
 
 test "compiler: typed float compound arithmetic result" {
