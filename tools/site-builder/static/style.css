@@ -161,12 +161,13 @@ hr { border: none; border-top: 0.08rem solid var(--muted-ink); margin: 2.5rem 0;
 img { max-width: 100%; }
 
 footer.pagenav {
-    display: flex;
-    justify-content: space-between;
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
     gap: 1em;
     margin: 1em 0 2em;
 }
 
+footer.pagenav .prev { text-align: left; }
 footer.pagenav .up { text-align: center; }
 footer.pagenav .next { text-align: right; }
 
