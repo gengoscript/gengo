@@ -4,15 +4,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Zig](https://img.shields.io/badge/Zig-0.16.0-orange?logo=zig)](https://ziglang.org/)
 
-Domain constraints belong in the type system, not in validation code written after the fact.
+Domain constraints belong in the type system, not in validation code written after the fact. Ada knew this in the 1970s: put constraints where the language can enforce them.
 
-Ada knew this in the 1970s: put constraints where the language can enforce them.
-
-Somewhere along the way, scripting made it normal to push those constraints out of the language and into validation code.
-
-Gengoscript brings that old lesson back to embedded scripting.
-
-It is a capability-bounded, embeddable scripting language written in Zig, designed to run typed user logic under explicit host control — natively or as WebAssembly.
+Gengoscript brings that old lesson back to embedded scripting. It is a capability-bounded, embeddable scripting language written in Zig, designed to run typed user logic under explicit host control — natively or as WebAssembly.
 
 You write the host application.
 
@@ -21,7 +15,6 @@ Your users write Gengoscript.
 The engine runs their scripts in a controlled environment, where the host decides what they may see, call, and use.
 
 **[Try it in the browser](https://playground.gengoscript.org/)** · **[Read the docs](https://docs.gengoscript.org/)** · **[Browse examples](examples/)** · **[Benchmarks](bench/cross-engine/RESULTS.md)**
-
 
 ## At a glance
 
@@ -41,6 +34,73 @@ It is not trying to be:
 * a large batteries-included application platform
 
 
+## Story time
+
+US$327.6 million bought NASA two Mars Surveyor '98 spacecraft, their launches and mission operations. In 1999, one of them, the Mars Climate Orbiter, vanished during its orbit-insertion burn.
+
+Post-loss reconstruction placed its first periapsis at 57 kilometres, below the roughly 80-kilometre survival limit. Like anyone who has spent time on social media, it met far more friction than it should have. NASA concluded that it was either destroyed in the atmosphere or passed through it and escaped into heliocentric space.
+
+The root cause was a classic. No, not an off-by-one error: one ground system supplied pound-force seconds while another expected newton-seconds. The navigation software therefore underestimated the effects of the spacecraft's thruster firings by a factor of 4.45 and calculated the wrong trajectory.
+
+A bare floating-point value does not know what it measures. Neither does the compiler, unless you make the unit part of the type.
+
+```ada
+type Newton_Seconds is new Long_Float;
+type Pound_Force_Seconds is new Long_Float;
+```
+
+With distinct unit types, the compiler rejects accidental mixing and demands an explicit conversion. A linter can then flag each conversion for review.
+
+---
+
+Four satellites and a brand-new rocket, gone 37 seconds after main-engine ignition. Beat that, Nicolas Cage.
+
+On 4 June 1996, Ariane 5 Flight 501, still carrying that exquisite new-rocket smell, veered off course, broke up and triggered its self-destruct system. As if it were trying to impress Berlioz. No? Wagner, then. Still no? Fine.
+
+The immediate fault was code forcing a 64-bit floating-point value down the throat of a signed 16-bit integer. The value, a horizontal-bias term derived from the rocket's motion, would not fit. Think André the Giant dating Édith Piaf. The conversion raised an operand error.
+
+How could this happen? The software had been reused from Ariane 4. It included an alignment routine that served no purpose after lift-off on Ariane 5 but remained active for about 40 seconds because of a legacy Ariane 4 requirement. Ariane 5's flight profile drove the value beyond anything Ariane 4 had produced.
+
+Only four of the seven relevant conversions had overflow protection. The design relied on assumptions that had held for Ariane 4 and on a requirement to keep the processor's workload below 80 per cent.
+
+The exception was not uncaught. The software detected it and, as specified, shut down the inertial reference processor. The backup unit had already failed from the same error. The remaining unit then sent diagnostic data that the onboard computer read as flight data, commanding extreme nozzle movements. The rocket veered, broke up and self-destructed.
+
+Here is the irony: the software was written in Ada, and Ada did its job. It raised the exception. The failure lay in the unsafe range assumption, the missing protection and the identical software in both redundant units. The system's response to the error turned those faults into a catastrophe.
+
+```ada
+type Horizontal_Bias_16 is range -32_768 .. 32_767;
+```
+
+A range type helps only if the checks remain enabled or the absence of range failures is proved before flight.
+
+---
+
+Onwards to something less costly. In fact, it may have made money rather than lost it, though not for the reason its owners intended.
+
+*The Legend of Zelda: The Wind Waker* is a Nintendo game first released in 2002, in which you play as a young boy named Link. Wait, who am I kidding? I do not need to explain *Zelda* to you, do I, Gordon of Kirkcaldy, Fife, as you take another bite of that pineapple pizza?
+
+The game is famous in speedrunning circles partly because of a glitch that allows Link to swim very, very fast.
+
+The technique, known as superswimming, uses rapid, precise movements of the control stick to build up a vast amount of speed, often by moving it back and forth between opposite directions.
+
+No. Stop that, Gordon. The mind on that one. Utter filth.
+
+Where was I? Yes.
+
+The trick works because of how the game handles movement speed. Under the right conditions, Link can accumulate a large negative speed value instead of being held to the intended limit. When the player releases that stored speed, young Link shoots across the sea like a tiny speedboat or a cartoon version of *Swiss Army Man*.
+
+This defect did not cost several hundred million dollars, but it was still behaviour the programmers did not intend.
+
+```ada
+Maximum_Player_Speed : constant := 30.0;
+
+subtype Player_Speed is Long_Float
+  range -Maximum_Player_Speed .. Maximum_Player_Speed;
+```
+
+Sorted.
+
+
 ## Why it exists
 
 Sometimes you want users to define logic without rebuilding or redeploying the host application every time that logic changes. But once users can write logic, they can also consume resources, reach into systems, and create states the host never meant to allow.
@@ -51,9 +111,7 @@ The usual options all carry a cost.
 
 Python is familiar, but heavy and hard to isolate well. Lua is small and embeddable, but its type system is loose. JavaScript is everywhere, but brings a large surface area. A custom DSL can fit the problem, but takes time to design and maintain. JSON and YAML are useful for data, but they are not programming languages.
 
-Gengoscript is built for this space: more expressive than configuration, but designed from the start to run under host control. Imports are explicit. Capabilities exist only when the host enables them. Execution can be bounded. Domain rules can live in named types, ranges, predicate types, cycles, enums, variants, and subtypes instead of scattered validation code.
-
-It is a contained scripting engine with explicit integration points, isolated runtime instances, hard limits, and WebAssembly as a primary target.
+Gengoscript is built for this space: more expressive than configuration, but designed from the start to run under host control. Imports are explicit, capabilities exist only when enabled, execution can be bounded, and domain rules can live in named types instead of scattered validation code.
 
 
 ## What Gengoscript gives you
@@ -153,7 +211,7 @@ If `severity` is outside `0..5`, the script fails while constructing `Severity`.
 That same pattern works for deploy gates, routing rules, policy checks, and data validation. The host calls the function. The script makes the decision.
 
 
-## Safety model
+## Runtime boundaries
 
 * No ambient filesystem, network, process, or reflection access.
 * Host functions exist only if the host registers them.
@@ -241,9 +299,9 @@ If I were younger, perhaps I would have found the exercise entertaining. It is l
 
 Yet another language...
 
-Yes, and in time, I hope this little project of mine will be useful to someone. Perhaps even myself. But please, before it is stable, if you do decide to play around with it, do not use it for anything critical. I test it in as many ways as I can think of, and it should be judged by the same standard as any other software: what it does, how well it is specified, how reliably it behaves, and how maintainable the code is in practice.
+Yes, and in time, I hope this little project of mine will be useful to someone. Perhaps even myself. But before it is stable, do not use it for anything critical. It should be judged by the same standard as any other software: what it does, how well it is specified, how reliably it behaves, and how maintainable the code is in practice.
 
-Bear in mind that it is not an artisanally hand-carved compiler produced by a lone bearded language monk in a candlelit room while Gregorian chants or the Mongolian folk tones of The Hu play in the background. Gengoscript is a project invented by a human. I think I am human, at least. Perhaps I am a brain in a jar, but either way, expect pragmatic choices. There are rough edges; I can name several off the top of my head. Parts of the codebase may look as though overly enthusiastic monkeys were given keyboards and a deadline.
+It is not an artisanally hand-carved compiler produced by a lone bearded language monk in a candlelit room while Gregorian chants or the Mongolian folk tones of The Hu play in the background. Gengoscript is a project invented by a human. I think I am human, at least. Perhaps I am a brain in a jar, but either way, expect pragmatic choices and rough edges. Parts of the codebase may look as though overly enthusiastic monkeys were given keyboards and a deadline.
 
 In some ways, that is the truth.
 
