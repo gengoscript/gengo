@@ -36,6 +36,11 @@ pub const Policy = struct {
     allow_io: bool = true,
     native_backend: NativeBackend = .embedded,
     max_ops: ?u64 = null,
+    // gengo --test --profile: forces per-instruction gas accounting on (see
+    // dispatchGasInterval in vm.zig) even with no real max_ops budget, so
+    // ops_budget_remaining decrements every instruction instead of only
+    // every ~4M-instruction heartbeat, and enables the peak_* fields below.
+    profile_mode: bool = false,
     enable_predicates: bool = true,
 };
 
@@ -70,6 +75,13 @@ pub const State = struct {
     frame_top: usize = 0,
     std_module: ?*Object = null,
     host_checked: bool = false,
+    // gengo --test --profile only (see Policy.profile_mode). The caller
+    // (Runtime's test-block loop) resets each to the current baseline
+    // before running a block, then reads it back after — these only ever
+    // grow during execution, they are not reset by the VM itself.
+    peak_stack_depth: usize = 0,
+    peak_heap_bytes: usize = 0,
+    peak_live_objects: usize = 0,
     configured_heap_size: usize = 0,
     next_gc_objects: usize = 256,
     next_gc_heap_bytes: usize = 0,
@@ -227,7 +239,12 @@ pub const State = struct {
 
     pub fn setPolicy(self: *State, policy: Policy) void {
         self.policy = policy;
-        self.ops_budget_remaining = policy.max_ops orelse std.math.maxInt(u64);
+        // profile_mode with no real budget: anything other than maxInt(u64)
+        // makes dispatchGasInterval tick every instruction instead of only
+        // every heartbeat, so ops_budget_remaining actually decrements and
+        // (budget_before - budget_after) gives an exact per-block op count.
+        self.ops_budget_remaining = policy.max_ops orelse
+            (if (policy.profile_mode) std.math.maxInt(u64) - 1 else std.math.maxInt(u64));
     }
 
     fn currentIpIdx(self: *State, cs: *const chunk.State) usize {
