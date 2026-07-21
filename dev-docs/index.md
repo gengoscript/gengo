@@ -4,7 +4,7 @@ This directory holds contributor and project-internal documentation rather than 
 
 Contents:
 
-- `testing.md` — conformance, parity, and benchmark harnesses
+- `testing.md` — conformance and benchmark harnesses
 - `roadmap.md` — current open items and exit criteria
 - `opcodes.md` — VM opcode reference (fused-op internals; not public language semantics)
 - `design/compiler-architecture.md` — compiler conceptual reference: single-pass Pratt parser, expression/statement/declaration compilation, type system, scope/upvalues, module resolution

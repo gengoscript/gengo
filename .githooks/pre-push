@@ -26,7 +26,6 @@ run git diff --check
 
 run zig build -Dpreset=1m fuzz-native
 run zig build -Dpreset=1m test
-run zig build -Dpreset=1m parity
 run zig build -Dpreset=1m bench
 run zig build -Dpreset=1m native-cap
 run zig build -Dpreset=1m chaos

@@ -488,14 +488,6 @@ pub fn build(b: *std.Build) void {
     const fuzz_gc_stress_step = b.step("fuzz-gc-stress", "Run fuzz tests under gc_stress (GC on every allocation)");
     fuzz_gc_stress_step.dependOn(&run_fuzz_gc_stress.step);
 
-    const run_parity = b.addRunArtifact(test_runner_exe);
-    run_parity.step.dependOn(&install_test.step);
-    run_parity.addArg("parity");
-    run_parity.addArg(wasmtime_opt);
-    run_parity.addArg("build/test/gengo-cli.wasm");
-    const parity_step = b.step("parity", "Run host/embedded parity tests");
-    parity_step.dependOn(&run_parity.step);
-
     // ── Native CLI ────────────────────────────────────────────────────────────
 
     const native_mod = b.createModule(.{

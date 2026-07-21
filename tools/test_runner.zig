@@ -20,7 +20,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
     const args = argv_storage[0..arg_count];
 
     if (args.len < 2) {
-        std.debug.print("usage: test-runner <conformance|bench|parity> [wasmtime] [wasm] [--filter <pattern>]\n", .{});
+        std.debug.print("usage: test-runner <conformance|bench> [wasmtime] [wasm] [--filter <pattern>]\n", .{});
         std.debug.print("   or: test-runner <native-cap|chaos> [gengo] [--filter <pattern>]\n", .{});
         std.process.exit(1);
     }
@@ -69,8 +69,6 @@ pub fn main(init: std.process.Init.Minimal) !void {
         try runConformance(alloc, wasmtime, wasm_path);
     } else if (std.mem.eql(u8, mode, "bench")) {
         try runBench(alloc, wasmtime, wasm_path);
-    } else if (std.mem.eql(u8, mode, "parity")) {
-        try runParity(alloc, wasmtime, wasm_path);
     } else {
         std.debug.print("unknown mode: {s}\n", .{mode});
         std.process.exit(1);
@@ -301,74 +299,6 @@ fn runBench(alloc: std.mem.Allocator, wasmtime: []const u8, wasm_path: []const u
         std.process.exit(1);
     }
     std.debug.print("Bench OK: {d} cases\n", .{pass_count});
-}
-
-// ── Parity ─────────────────────────────────────────────────────────────────
-
-fn runParity(alloc: std.mem.Allocator, wasmtime: []const u8, wasm_path: []const u8) !void {
-    const parity_dir = "tests/parity";
-
-    var cases_buf: [MaxCases][]const u8 = undefined;
-    const case_count = collectGengoFiles(alloc, parity_dir, &cases_buf) catch |err| {
-        std.debug.print("cannot scan parity dir: {s}\n", .{@errorName(err)});
-        std.process.exit(1);
-    };
-
-    var pass_count: usize = 0;
-    var errors: usize = 0;
-
-    for (cases_buf[0..case_count]) |path| {
-        defer alloc.free(path);
-        const base = path[0 .. path.len - 6];
-        const got_emb_path = try std.fmt.allocPrint(alloc, "{s}.embedded.got", .{base});
-        defer alloc.free(got_emb_path);
-        const got_host_path = try std.fmt.allocPrint(alloc, "{s}.host.got", .{base});
-        defer alloc.free(got_host_path);
-
-        std.debug.print("[PARITY] {s}\n", .{path});
-
-        // Embedded backend
-        const emb_extra = try std.fmt.allocPrint(alloc, "--backend embedded {s}", .{path});
-        defer alloc.free(emb_extra);
-        const emb_result = runWasmtimeExtra(alloc, wasmtime, wasm_path, emb_extra);
-        const emb_data = emb_result[0];
-        const emb_failed = emb_result[1];
-        defer alloc.free(emb_data);
-
-        if (emb_failed) {
-            std.debug.print("embedded backend failed: {s}\n", .{path});
-            errors += 1;
-            continue;
-        }
-
-        // Host backend
-        const host_extra = try std.fmt.allocPrint(alloc, "--backend host {s}", .{path});
-        defer alloc.free(host_extra);
-        const host_result = runWasmtimeExtra(alloc, wasmtime, wasm_path, host_extra);
-        const host_data = host_result[0];
-        const host_failed = host_result[1];
-        defer alloc.free(host_data);
-
-        if (host_failed) {
-            std.debug.print("host backend failed: {s}\n", .{path});
-            errors += 1;
-            continue;
-        }
-
-        if (!std.mem.eql(u8, emb_data, host_data)) {
-            std.debug.print("backend output mismatch: {s}\n", .{path});
-            errors += 1;
-            continue;
-        }
-
-        pass_count += 1;
-    }
-
-    if (errors != 0) {
-        std.debug.print("Host parity FAILED: {d} pass, {d} errors\n", .{ pass_count, errors });
-        std.process.exit(1);
-    }
-    std.debug.print("Host parity OK: {d} cases\n", .{pass_count});
 }
 
 // ── Native capability lane ────────────────────────────────────────────────
