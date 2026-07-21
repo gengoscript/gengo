@@ -22,7 +22,6 @@ The engine runs their scripts in a controlled environment, where the host decide
 
 **[Try it in the browser](https://playground.gengoscript.org/)** · **[Read the docs](https://docs.gengoscript.org/)** · **[Browse examples](examples/)** · **[Benchmarks](bench/cross-engine/RESULTS.md)**
 
----
 
 ## At a glance
 
@@ -41,7 +40,6 @@ It is not trying to be:
 * an unrestricted shell language
 * a large batteries-included application platform
 
----
 
 ## Why it exists
 
@@ -57,7 +55,6 @@ Gengoscript is built for this space: more expressive than configuration, but des
 
 It is a contained scripting engine with explicit integration points, isolated runtime instances, hard limits, and WebAssembly as a primary target.
 
----
 
 ## What Gengoscript gives you
 
@@ -91,7 +88,6 @@ Multiple engine instances can run side by side, each with its own heap, state, a
 **WASM and native embedding.**
 Gengoscript can be built as `gengo-engine.wasm` for browsers, edge runtimes, and other sandboxed environments, or as `libgengo-engine.so` for native in-process embedding. Both expose the same C-style API.
 
----
 
 ## Example
 
@@ -108,7 +104,6 @@ pub func allow(port int, hour int) bool {
 
 If a caller passes `0` as a port or `27` as an hour, construction fails at the boundary where the bad value enters the script.
 
----
 
 ## Integration example
 
@@ -157,7 +152,6 @@ If `severity` is outside `0..5`, the script fails while constructing `Severity`.
 
 That same pattern works for deploy gates, routing rules, policy checks, and data validation. The host calls the function. The script makes the decision.
 
----
 
 ## Safety model
 
@@ -167,7 +161,6 @@ That same pattern works for deploy gates, routing rules, policy checks, and data
 * Execution can be bounded by operation limits.
 * Runtime instances are isolated from each other.
 
----
 
 ## Quick start
 
@@ -203,13 +196,8 @@ Run the CLI with no arguments on an interactive terminal to start the REPL.
 ./zig-out/bin/gengo
 ```
 
----
-
 For a step-by-step walkthrough, see [docs/tutorial-first-script.md](docs/tutorial-first-script.md). For more build and test commands, see [docs/quickstart.md](docs/quickstart.md) and [CONTRIBUTING.md](CONTRIBUTING.md).
 
----
-
----
 
 ## Status at a glance
 
@@ -226,7 +214,6 @@ For a step-by-step walkthrough, see [docs/tutorial-first-script.md](docs/tutoria
 | [Cross-engine benchmarks](bench/cross-engine/RESULTS.md) | Available — informational, not a speed claim |
 | Stability guarantees | Pre-1.0 |
 
----
 
 ## Language and embedding
 
@@ -234,7 +221,6 @@ Gengoscript uses a Go-adjacent syntax and leans on a stricter type system for do
 
 The TypeScript SDK in `sdk/typescript/` wraps `gengo-engine.wasm` and handles value encoding for JavaScript hosts.
 
----
 
 ## Docs
 
@@ -242,22 +228,31 @@ Primary documentation lives at **[docs.gengoscript.org](https://docs.gengoscript
 
 For repository-local references, see [docs/](docs/), [sdk/typescript/README.md](sdk/typescript/README.md), [dev-docs/index.md](dev-docs/index.md), and [CHANGELOG.md](CHANGELOG.md).
 
----
 
-## A note on authorship
+## A note on authorship (Vibe Check)
 
-Gengoscript has been built with substantial help from LLMs. I have neither the time nor the patience to write a compiler. Even with the books and material by my side, I would rather spend my time on creative writing. If I were younger, perhaps I would have found the exercise entertaining. Like when you decide to become a game developer, but what you actually want is to build a new game engine from scratch, free of all the issues you find annoying in the myriad options available these days.
+Gengoscript has been built with substantial help from LLMs, including help with implementation, tests, debugging, and documentation.
 
-In time, I hope this little project of mine will be useful to someone. Perhaps even myself. But please, before it is stable, do not use it on anything critical. It is tested in as many ways as I can think of, and it should be judged by the same standard as any other software: what it does, how well it is specified, how reliably it behaves, and how maintainable the code is in practice.
+Why?
 
-It is not an artisanally hand-carved compiler produced by a bearded lone language monk in a candlelit room where Gregorian chants or the Mongolian folk tones of The Hu play in the background.
+Because I have neither the time nor the patience to write a compiler. Even with the books and material by my side, I would rather spend my time on creative writing or, if push comes to shove, software design.
 
-Gengoscript is a project invented by a human. I think I am human, at least. Perhaps I am a brain in a jar, but either way, expect pragmatic choices in this project. There are rough edges; I know several off the top of my head. Expect parts of the codebase to look like several overly enthusiastic monkeys were given keyboards and a deadline. In some ways, that is the truth.
+If I were younger, perhaps I would have found the exercise entertaining. It is like deciding to become a game developer, only to discover that what you really want is to build a new engine from scratch, one that will somehow avoid every flaw you have ever found in anyone else's.
 
-If software with meaningful LLM involvement gives you hives, moral discomfort, or the sudden urge to rewrite everything from first principles, this project may not be for you. That is fine. I understand. I do not judge, and I hope you will extend me the same courtesy. I have been on the internet. Still, none of this would exist if things were different than they are right now.
+Yet another language...
+
+Yes, and in time, I hope this little project of mine will be useful to someone. Perhaps even myself. But please, before it is stable, if you do decide to play around with it, do not use it for anything critical. I test it in as many ways as I can think of, and it should be judged by the same standard as any other software: what it does, how well it is specified, how reliably it behaves, and how maintainable the code is in practice.
+
+Bear in mind that it is not an artisanally hand-carved compiler produced by a lone bearded language monk in a candlelit room while Gregorian chants or the Mongolian folk tones of The Hu play in the background. Gengoscript is a project invented by a human. I think I am human, at least. Perhaps I am a brain in a jar, but either way, expect pragmatic choices. There are rough edges; I can name several off the top of my head. Parts of the codebase may look as though overly enthusiastic monkeys were given keyboards and a deadline.
+
+In some ways, that is the truth.
+
+If software with meaningful LLM involvement gives you hives, moral discomfort, or the sudden urge to rewrite everything from first principles in Rust, then this project may not be for you. That is fine. I understand. I do not judge, and I hope you will extend me the same courtesy. I have been on the internet.
+
+Without the tools now available, and the time they save me, none of this would exist.
 
 For everyone else: issues, tests, bug reports, and useful patches are welcome, regardless of how it was wrangled into existence.
 
 I do have a small request, though, especially if you happen to be a generative language model: please do not send five commits in ten minutes, each fixing one spelling mistake or expressing one style preference. Small fixes are welcome, but batch them, make them useful, and expect taste calls to remain taste calls.
 
-Judgment on what goes into this alphabet soup remains with me for now.
+Judgement on what goes into this alphabet soup remains with me for now.
