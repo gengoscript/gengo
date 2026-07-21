@@ -160,40 +160,21 @@ pub fn wireNumberToU64(w: host_abi.ValueWire) !u64 {
     return @intFromFloat(tr);
 }
 
-pub fn dispatchHostCallVariadic(ctx: vms.VMContext, comptime cap: u64, comptime call: host_abi.HostCall, argc: u8, start: usize, comptime nativeFn: anytype) !void {
-    if (ctx.vs.policy.native_backend == .host) {
-        try ensureHostReady(ctx);
-        if ((ctx.vs.host_caps & cap) != 0) {
-            if (argc > MaxNativeArgs) return error.ArityMismatch;
-            var args_wire: [MaxNativeArgs]host_abi.ValueWire = undefined;
-            for (args_wire[0..argc], ctx.vs.stack[start .. start + argc]) |*w, v| w.* = try wireFromValue(ctx, v);
-            var out = nullWire();
-            try nativeCallChecked(call, args_wire[0..argc], &out);
-            const result = try valueFromWire(ctx, out);
-            ctx.vs.vmPopArgs(argc);
-            try ctx.vs.vmPush(result);
-            return;
-        }
-    }
+// std natives are never host-overridable — see dev-docs/roadmap.md and
+// CHANGELOG.md: a host used to be able to swap the implementation of
+// std.core.len/append/bytelen and std.conv.to_int/to_float/to_bool/to_string
+// (io.println had its own inline equivalent), which meant the same call
+// could silently behave differently depending on the embedding host. These
+// helpers now always run the embedded implementation; host modules
+// (`import("host:x")`, callHostModule) are unaffected — a different,
+// explicitly host-owned namespace with no bearing on std semantics.
+pub fn callNativeVariadic(ctx: vms.VMContext, argc: u8, start: usize, comptime nativeFn: anytype) !void {
     const result = try @call(.auto, nativeFn, .{ ctx, start, argc });
     ctx.vs.vmPopArgs(argc);
     try ctx.vs.vmPush(result);
 }
 
-pub fn dispatchHostCall1(ctx: vms.VMContext, comptime cap: u64, comptime call: host_abi.HostCall, argc: u8, comptime nativeFn: anytype) !void {
-    if (ctx.vs.policy.native_backend == .host) {
-        try ensureHostReady(ctx);
-        if ((ctx.vs.host_caps & cap) != 0) {
-            var arg_wire: [1]host_abi.ValueWire = undefined;
-            arg_wire[0] = try wireFromValue(ctx, ctx.vs.vmTop(0));
-            var out_wire = nullWire();
-            try nativeCallChecked(call, arg_wire[0..], &out_wire);
-            const out = try valueFromWire(ctx, out_wire);
-            ctx.vs.vmPopArgs(argc);
-            try ctx.vs.vmPush(out);
-            return;
-        }
-    }
+pub fn callNative1(ctx: vms.VMContext, argc: u8, comptime nativeFn: anytype) !void {
     const out = try @call(.auto, nativeFn, .{ ctx, ctx.vs.vmTop(0) });
     ctx.vs.vmPopArgs(argc);
     try ctx.vs.vmPush(out);
@@ -210,7 +191,6 @@ pub fn ensureHostReady(ctx: VMContext) !void {
     switch (st_ver) {
         .ok => {},
         .unsupported => {
-            ctx.vs.host_caps = 0;
             ctx.vs.host_checked = true;
             return;
         },
@@ -220,8 +200,5 @@ pub fn ensureHostReady(ctx: VMContext) !void {
     }
     const version = try wireNumberToU64(out);
     if (version != host_abi.ABI_VERSION) return error.HostAbiVersionMismatch;
-
-    try nativeCallChecked(.host_caps, empty[0..], &out);
-    ctx.vs.host_caps = try wireNumberToU64(out);
     ctx.vs.host_checked = true;
 }

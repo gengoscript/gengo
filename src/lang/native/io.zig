@@ -9,9 +9,6 @@ const Object = @import("../value.zig").Object;
 const MapEntry = @import("../value.zig").MapEntry;
 const NativeFnId = @import("native_ids.zig").NativeFnId;
 const NativeFuncObj = @import("../value.zig").NativeFuncObj;
-const host_abi = @import("../../runtime/host_abi.zig");
-const host_abi_mod = @import("host_abi.zig");
-const MaxNativeArgs = @import("native_ids.zig").MaxNativeArgs;
 const chunk = @import("../chunk.zig");
 
 const PrintMaxDepth = 64;
@@ -881,20 +878,6 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
         },
         .io_println => {
             if (!ctx.vs.policy.allow_io) return error.PermissionDenied;
-            if (ctx.vs.policy.native_backend == .host) {
-                try host_abi_mod.ensureHostReady(ctx);
-                if ((ctx.vs.host_caps & host_abi.CAP_IO_PRINTLN) != 0) {
-                    if (argc > MaxNativeArgs) return error.ArityMismatch;
-                    const start = ctx.vs.stack_top - argc;
-                    var args_wire: [MaxNativeArgs]host_abi.ValueWire = undefined;
-                    for (args_wire[0..argc], ctx.vs.stack[start .. start + argc]) |*w, v| w.* = try host_abi_mod.wireFromValue(ctx, v);
-                    var out = host_abi_mod.nullWire();
-                    try host_abi_mod.nativeCallChecked(.io_println, args_wire[0..argc], &out);
-                    ctx.vs.vmPopArgs(argc);
-                    try ctx.vs.vmPush(.null);
-                    return;
-                }
-            }
             const start = ctx.vs.stack_top - argc;
             for (ctx.vs.stack[start .. start + argc]) |v| io.printValue(v);
             io.write("\n");

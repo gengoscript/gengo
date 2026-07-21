@@ -2,6 +2,14 @@
 
 This changelog tracks notable language/runtime changes by implementation date.
 
+## 2026-07-21 (later) (v0.5.1-dev)
+
+### Embedding — std natives are no longer host-overridable
+
+A host could intercept 8 built-in natives (`std.core.len`/`append`/`bytelen`, `std.conv.to_int`/`to_float`/`to_bool`/`to_string`, `std.io.println`) via a capability-bitmask handshake (`host_caps`) and substitute its own implementation. That meant the same call could silently behave differently depending on which host an embedded script happened to run under — no script-visible signal, no naming difference, just different behavior for what reads as a plain stdlib call.
+
+Removed entirely: the `host_caps` handshake, the 8 `CAP_*` bits, and the corresponding `HostCall` wire IDs (`src/runtime/host_abi.zig`). These 8 natives now always run their embedded implementation, unconditionally, regardless of `--backend`/`native_backend`. **`import("host:name")` host modules are unaffected** — they're a different, explicitly host-owned namespace (the host chooses the name and the `call_id`), not a substitution for something that looks like a builtin, and continue to work exactly as before. `ABI_VERSION` unchanged (still `2`) — the ABI has never been official at any level, so there's nothing to version-bump against.
+
 ## 2026-07-21 (v0.5.1-dev)
 
 ### Performance — Decimal construction no longer recomputes pow(10, scale) (#206)

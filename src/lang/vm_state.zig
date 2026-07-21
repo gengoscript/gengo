@@ -70,7 +70,6 @@ pub const State = struct {
     frame_top: usize = 0,
     std_module: ?*Object = null,
     host_checked: bool = false,
-    host_caps: u64 = 0,
     configured_heap_size: usize = 0,
     next_gc_objects: usize = 256,
     next_gc_heap_bytes: usize = 0,
@@ -176,7 +175,6 @@ pub const State = struct {
         self.resetExec();
         self.std_module = null;
         self.host_checked = false;
-        self.host_caps = 0;
         self.next_gc_objects = 256;
         self.next_gc_heap_bytes = if (self.configured_heap_size > 0) self.configured_heap_size / 2 else heap.HeapSize / 2;
         self.rune_cache_ptr = 0;

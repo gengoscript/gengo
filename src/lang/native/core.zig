@@ -16,7 +16,6 @@ const MapEntry = vmod.MapEntry;
 const StructFieldSpec = vmod.StructFieldSpec;
 const NativeFnId = @import("native_ids.zig").NativeFnId;
 const NativeFuncObj = vmod.NativeFuncObj;
-const host_abi = @import("../../runtime/host_abi.zig");
 const host_abi_mod = @import("host_abi.zig");
 const MaxNativeArgs = @import("native_ids.zig").MaxNativeArgs;
 const chunk = @import("../chunk.zig");
@@ -726,11 +725,11 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
     switch (@as(NativeFnId, @enumFromInt(nf.id))) {
         .core_append => {
             const start = ctx.vs.stack_top - argc;
-            try host_abi_mod.dispatchHostCallVariadic(ctx, host_abi.CAP_CORE_APPEND, .core_append, argc, start, nativeAppend);
+            try host_abi_mod.callNativeVariadic(ctx, argc, start, nativeAppend);
         },
         .core_bytelen => {
             if (argc != nf.arity) return error.ArityMismatch;
-            try host_abi_mod.dispatchHostCall1(ctx, host_abi.CAP_CORE_BYTELEN, .core_bytelen, argc, nativeByteLen);
+            try host_abi_mod.callNative1(ctx, argc, nativeByteLen);
         },
         .core_clone => {
             if (argc != nf.arity) return error.ArityMismatch;
@@ -860,7 +859,7 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
         },
         .core_len => {
             if (argc != nf.arity) return error.ArityMismatch;
-            try host_abi_mod.dispatchHostCall1(ctx, host_abi.CAP_CORE_LEN, .core_len, argc, nativeLen);
+            try host_abi_mod.callNative1(ctx, argc, nativeLen);
         },
         .core_recover => {
             if (argc != nf.arity) return error.ArityMismatch;

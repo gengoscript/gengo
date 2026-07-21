@@ -1385,10 +1385,6 @@ test "native host modules dispatch through the registered callback" {
                     out.* = .{ .tag = @intFromEnum(WireTag.number), .flags = 0, .reserved = 0, .payload = @bitCast(@as(f64, @floatFromInt(host_abi.ABI_VERSION))), .len = 0, .reserved2 = 0 };
                     return @intFromEnum(host_abi.CallStatus.ok);
                 },
-                @intFromEnum(host_abi.HostCall.host_caps) => {
-                    out.* = .{ .tag = @intFromEnum(WireTag.number), .flags = 0, .reserved = 0, .payload = @bitCast(@as(f64, 0)), .len = 0, .reserved2 = 0 };
-                    return @intFromEnum(host_abi.CallStatus.ok);
-                },
                 HostModuleCallIdBase => {
                     if (argc != 1 or args[0].tag != @intFromEnum(WireTag.number) or (args[0].flags & host_abi.FLAG_INTEGER) == 0) return @intFromEnum(host_abi.CallStatus.bad_args);
                     if (self.deny) return @intFromEnum(host_abi.CallStatus.denied);
