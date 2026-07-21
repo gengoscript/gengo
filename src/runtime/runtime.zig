@@ -422,11 +422,37 @@ pub const Runtime = struct {
         if (test_mode and self.test_count > 0) {
             var passed: u8 = 0;
             var failed: u8 = 0;
+            const profiling = self.vm_state.policy.profile_mode;
+            // Component-wise max across all blocks, not a sum — "what's the
+            // largest any single block needed" is the number that sizes an
+            // embedder's engine_init_with_config ceilings.
+            var peak_ops: u64 = 0;
+            var peak_heap: usize = 0;
+            var peak_stack: usize = 0;
+            var peak_objects: usize = 0;
             var ti: u8 = 0;
             while (ti < self.test_count) : (ti += 1) {
                 var name_buf: [32]u8 = undefined;
                 const name = std.fmt.bufPrint(&name_buf, "__test_{d}", .{ti}) catch continue;
-                _ = vm.callGlobal(.{ .cs = self.chunk_state, .gs = &self.globals_state, .hs = &self.heap_state, .vs = &self.vm_state }, name, &[_]Value{}) catch |err| {
+
+                const ops_before = self.vm_state.ops_budget_remaining;
+                if (profiling) {
+                    self.vm_state.peak_stack_depth = self.vm_state.stack_top;
+                    self.vm_state.peak_heap_bytes = self.heap_state.usedBytes();
+                    self.vm_state.peak_live_objects = self.heap_state.liveObjectCount();
+                }
+
+                const call_result = vm.callGlobal(.{ .cs = self.chunk_state, .gs = &self.globals_state, .hs = &self.heap_state, .vs = &self.vm_state }, name, &[_]Value{});
+
+                const ops_used = ops_before -% self.vm_state.ops_budget_remaining;
+                if (profiling) {
+                    peak_ops = @max(peak_ops, ops_used);
+                    peak_heap = @max(peak_heap, self.vm_state.peak_heap_bytes);
+                    peak_stack = @max(peak_stack, self.vm_state.peak_stack_depth);
+                    peak_objects = @max(peak_objects, self.vm_state.peak_live_objects);
+                }
+
+                _ = call_result catch |err| {
                     failed += 1;
                     io.werr("FAIL: ");
                     io.werr(self.test_names[ti]);
@@ -437,12 +463,14 @@ pub const Runtime = struct {
                         io.werr(": ");
                         io.werr(emsg);
                     }
+                    if (profiling) self.writeProfileColumns(ops_used, self.vm_state.peak_heap_bytes, self.vm_state.peak_stack_depth, self.vm_state.peak_live_objects);
                     io.werr("\n");
                     continue;
                 };
                 passed += 1;
                 io.werr("PASS: ");
                 io.werr(self.test_names[ti]);
+                if (profiling) self.writeProfileColumns(ops_used, self.vm_state.peak_heap_bytes, self.vm_state.peak_stack_depth, self.vm_state.peak_live_objects);
                 io.werr("\n");
             }
             io.werr("\n");
@@ -450,8 +478,27 @@ pub const Runtime = struct {
             io.werr(" passed, ");
             io.writeInt(@intCast(failed));
             io.werr(" failed\n");
+            if (profiling) {
+                io.werr("peak across all tests: ");
+                self.writeProfileColumns(peak_ops, peak_heap, peak_stack, peak_objects);
+                io.werr("\n");
+            }
             if (failed > 0) self.test_failed = true;
         }
+    }
+
+    // gengo --test --profile: appended after a PASS/FAIL line and used
+    // standalone for the final "peak across all tests" summary.
+    fn writeProfileColumns(self: *Runtime, ops: u64, heap_bytes: usize, stack_depth: usize, objects: usize) void {
+        _ = self;
+        io.werr("  ops=");
+        io.werrUint(ops);
+        io.werr(" heap=");
+        io.werrUint(@intCast(heap_bytes));
+        io.werr(" stack=");
+        io.werrUint(@intCast(stack_depth));
+        io.werr(" objects=");
+        io.werrUint(@intCast(objects));
     }
 
     // Run src without resetting globals or heap — allows successive REPL lines

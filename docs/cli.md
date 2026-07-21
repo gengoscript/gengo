@@ -35,6 +35,7 @@ script from standard input instead.
 | `--version` | Print the CLI version and exit. |
 | `--disasm` | Compile and print a bytecode disassembly without running the script. This is an implementation-debugging aid, not language semantics. |
 | `--test` | Run top-level `test` blocks rather than ordinary script execution. A failed test exits unsuccessfully. |
+| `--profile` | With `--test`, print each block's instruction count and peak heap bytes/stack depth/live object count, plus a final peak-across-all-blocks summary line. Does not affect pass/fail behavior or the exit code. Forces per-instruction instruction counting on for the run, which costs real speed — a diagnostic aid, not something to leave on by default. |
 | `--cap name` | Enable one named capability. Repeat for several capabilities. See `capabilities.md`; no capability is enabled merely by importing it. |
 | `--modules path` | Permit source imports from one additional directory. Repeatable, up to eight paths. The script directory remains the default source root. |
 | `--max-ops n` | Limit VM instruction execution to `n`. `0` means unlimited. This limit does not account for work inside host callbacks. |

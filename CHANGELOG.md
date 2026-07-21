@@ -2,6 +2,18 @@
 
 This changelog tracks notable language/runtime changes by implementation date.
 
+## 2026-07-21 (latest) (v0.5.1-dev)
+
+### Tooling — `gengo --test --profile` (#58)
+
+Each `test` block already compiles to a synthetic `__test_N` global run through one isolated loop in `Runtime.runPathWithProvider` (`vm.callGlobal`, sequential, pass/fail tracked) — that loop turned out to be exactly the wrapping point #58 needed, making this a smaller change than its `P3`/`v0.9.0` label suggested.
+
+- **Stack peak**: reuses the verifier-proved `f.max_stack` bound `enterFunctionFrame`/`enterFunctionFrameWarm` already check on every call (`ctx.vs.stack_top + f.max_stack`) — an upper bound on capacity used, not a per-push sampled maximum, so it costs one extra branch at an already-existing call-entry checkpoint instead of touching the push/pop hot path at all.
+- **Heap bytes / live objects peak**: `usedBytes()`/`liveObjectCount()` only ever grow at allocation time (GC only shrinks them), so checking-and-updating a peak at `vmAllocObject`/`vmAllocManagedSlice`/`vmAllocManagedBytes`'s 8 success points is sufficient to capture the true peak.
+- **Ops count**: `ops_budget_remaining` only decrements when a real `max_ops` budget is set — an unbudgeted run takes a batched "heartbeat" dispatch path specifically to avoid a per-instruction accounting cost. `profile_mode` forces the interval to 1 (tick every instruction) with no real budget, so `budget_before - budget_after` gives an exact per-block count; this is the one part of the feature with a real, expected runtime cost (a diagnostic flag, not something to run by default).
+
+All three are gated behind a new `Policy.profile_mode` field, zero cost when off. Verified with `tools/time-bench.sh compare`: no measurable regression on any benchmark.
+
 ## 2026-07-21 (later) (v0.5.1-dev)
 
 ### Embedding — std natives are no longer host-overridable

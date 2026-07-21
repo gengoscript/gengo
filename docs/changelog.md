@@ -26,6 +26,10 @@
 - **`cap:env`** — New capability module for process environment access. `env.get(name)` returns `string|null`; `env.list()` returns `[string]string`. Requires the host to enable the `env` capability; a script importing `cap:env` without host permission fails at compile time.
 - **`std.Arg`** — Built-in variant covering all primitive scalar types (`Int`, `Float`, `Decimal`, `Rune`, `Bool`, `Str`, `Err`). Use it to write type-safe heterogeneous variadic functions without exposing `any`.
 
+### Tooling (unreleased)
+
+- **`gengo --test --profile`** — reports each `test` block's instruction count and peak heap bytes/stack depth/live object count, plus a final peak-across-all-blocks summary line, so integrators can size `engine_init_with_config`'s resource ceilings from measured workload data instead of guessing. Does not affect pass/fail behavior or the exit code; does cost real speed (forces per-instruction accounting on for the run), so it's a diagnostic flag, not something to leave on by default.
+
 ### Fixes (unreleased)
 
 - Struct and enum variable declarations following a `std` import no longer trigger a spurious "unknown field in std" compile error.

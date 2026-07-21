@@ -435,6 +435,7 @@ fn runCli(argv: []const []const u8) void {
     var backend: vm.Policy.NativeBackend = .embedded;
     var max_ops: ?u64 = null;
     var test_mode: bool = false;
+    var profile_mode: bool = false;
     var disasm_mode: bool = false;
     var cap_names: [8][]const u8 = undefined;
     var cap_count: usize = 0;
@@ -455,6 +456,7 @@ fn runCli(argv: []const []const u8) void {
             io.write("  --version          Print version and exit\n");
             io.write("  --disasm           Compile and print bytecode disassembly; do not run\n");
             io.write("  --test             Run test blocks in the script\n");
+            io.write("  --profile          With --test, report peak ops/heap/stack/objects per block\n");
             io.write("  --cap <name>       Enable a named capability (repeatable)\n");
             io.write("  --modules <path>   Allow imports from an extra directory (repeatable)\n");
             io.write("  --max-ops <n>      Limit instruction count (0 = unlimited)\n");
@@ -579,6 +581,11 @@ fn runCli(argv: []const []const u8) void {
             script_index += 1;
             continue;
         }
+        if (std.mem.eql(u8, a, "--profile")) {
+            profile_mode = true;
+            script_index += 1;
+            continue;
+        }
         if (std.mem.eql(u8, a, "--version")) {
             io.write("Gengoscript v");
             io.write(build_opts.version);
@@ -650,6 +657,7 @@ fn runCli(argv: []const []const u8) void {
         .allow_io = true,
         .native_backend = backend,
         .max_ops = max_ops,
+        .profile_mode = profile_mode,
     }, heap_size, max_objects, vms.MaxStack, vms.MaxFrames, cfg.max_defers, std.heap.page_allocator) catch {
         io.werr("gengo: runtime init failed\n");
         die(1);

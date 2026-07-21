@@ -209,6 +209,19 @@ fn gcStress() bool {
     return gc_stress;
 }
 
+// gengo --test --profile only: object-slot and managed-slice allocation are
+// the only two places usedBytes()/liveObjectCount() can grow — GC only ever
+// shrinks them — so checking here after a successful allocation is
+// sufficient to capture the true peak, without touching the push/pop hot
+// path at all.
+inline fn recordProfilePeaks(ctx: VMContext) void {
+    if (!ctx.vs.policy.profile_mode) return;
+    const objs = ctx.hs.liveObjectCount();
+    if (objs > ctx.vs.peak_live_objects) ctx.vs.peak_live_objects = objs;
+    const bytes = ctx.hs.usedBytes();
+    if (bytes > ctx.vs.peak_heap_bytes) ctx.vs.peak_heap_bytes = bytes;
+}
+
 pub fn vmAllocObject(ctx: VMContext) !*Object {
     if (gcStress()) collectGarbage(ctx);
     if (ctx.hs.liveObjectCount() >= ctx.vs.next_gc_objects) {
@@ -217,12 +230,14 @@ pub fn vmAllocObject(ctx: VMContext) !*Object {
     }
     if (ctx.hs.allocObject()) |o| {
         ctx.vs.alloc_object_calls += 1;
+        recordProfilePeaks(ctx);
         return o;
     }
     collectGarbage(ctx);
     ctx.vs.next_gc_objects = nextGcObjects(ctx, ctx.hs.liveObjectCount());
     if (ctx.hs.allocObject()) |o| {
         ctx.vs.alloc_object_calls += 1;
+        recordProfilePeaks(ctx);
         return o;
     }
     return error.OutOfMemory;
@@ -253,17 +268,20 @@ pub fn vmAllocManagedSlice(ctx: VMContext, comptime T: type, n: usize) ![]T {
     }
     if (ctx.hs.allocManagedSlice(T, n)) |s| {
         ctx.vs.alloc_managed_slice_calls += 1;
+        recordProfilePeaks(ctx);
         return s;
     }
     collectGarbage(ctx);
     ctx.vs.next_gc_heap_bytes = gcStepThreshold(ctx, ctx.hs.usedBytes());
     if (ctx.hs.allocManagedSlice(T, n)) |s| {
         ctx.vs.alloc_managed_slice_calls += 1;
+        recordProfilePeaks(ctx);
         return s;
     }
     ctx.hs.compactManagedHeap();
     if (ctx.hs.allocManagedSlice(T, n)) |s| {
         ctx.vs.alloc_managed_slice_calls += 1;
+        recordProfilePeaks(ctx);
         return s;
     }
     return error.OutOfMemory;
@@ -289,12 +307,14 @@ pub fn vmAllocManagedBytes(ctx: VMContext, n: usize) ![]u8 {
     }
     if (ctx.hs.allocBytesManaged(n)) |s| {
         ctx.vs.alloc_managed_bytes_calls += 1;
+        recordProfilePeaks(ctx);
         return s;
     }
     collectGarbage(ctx);
     ctx.vs.next_gc_heap_bytes = gcStepThreshold(ctx, ctx.hs.usedBytes());
     if (ctx.hs.allocBytesManaged(n)) |s| {
         ctx.vs.alloc_managed_bytes_calls += 1;
+        recordProfilePeaks(ctx);
         return s;
     }
     // Last resort: compact live managed data into a contiguous region so that
@@ -302,6 +322,7 @@ pub fn vmAllocManagedBytes(ctx: VMContext, n: usize) ![]u8 {
     ctx.hs.compactManagedHeap();
     if (ctx.hs.allocBytesManaged(n)) |s| {
         ctx.vs.alloc_managed_bytes_calls += 1;
+        recordProfilePeaks(ctx);
         return s;
     }
     return error.OutOfMemory;

@@ -972,6 +972,7 @@ inline fn enterFunctionFrameWarm(ctx: VMContext, f: @import("value.zig").FuncObj
     // exceeds f.max_stack slots above the entry stack_top, so opcode handlers
     // may use unchecked stack ops inside this frame.
     if (ctx.vs.stack_top + f.max_stack > ctx.vs.stack.len) return error.StackOverflow;
+    recordProfileStackPeak(ctx, f.max_stack);
     ctx.vs.frames[ctx.vs.frame_top] = .{
         .ret_ip = @intCast(ctx.vs.ip),
         .base = @intCast(ctx.vs.stack_top - f.arity),
@@ -983,6 +984,18 @@ inline fn enterFunctionFrameWarm(ctx: VMContext, f: @import("value.zig").FuncObj
     };
     ctx.vs.frame_top += 1;
     ctx.vs.ip = f.ip;
+}
+
+// gengo --test --profile only: this is the verifier-proved *capacity*
+// consumed by the frame being entered (ctx.vs.stack_top + f.max_stack), not
+// a per-push sampled maximum — reusing the same bound enterFunctionFrame*
+// already checks means zero new cost on the push/pop hot path. An upper
+// bound on capacity used is also the more useful number for sizing an
+// embedder's stack limit than one observed sample run's exact depth.
+inline fn recordProfileStackPeak(ctx: VMContext, max_stack: u16) void {
+    if (!ctx.vs.policy.profile_mode) return;
+    const candidate = ctx.vs.stack_top + max_stack;
+    if (candidate > ctx.vs.peak_stack_depth) ctx.vs.peak_stack_depth = candidate;
 }
 
 fn enterFunctionFrame(ctx: VMContext, f: @import("value.zig").FuncObj, func_obj: *Object, closure: ?*Object, argc: u8) !void {
@@ -1031,6 +1044,7 @@ fn enterFunctionFrame(ctx: VMContext, f: @import("value.zig").FuncObj, func_obj:
     if (ctx.vs.frame_top >= ctx.vs.frames.len) return error.CallStackOverflow;
     // See enterFunctionFrameWarm: verifier-proved bound, checked once per call.
     if (ctx.vs.stack_top + f.max_stack > ctx.vs.stack.len) return error.StackOverflow;
+    recordProfileStackPeak(ctx, f.max_stack);
     ctx.vs.frames[ctx.vs.frame_top] = .{
         .ret_ip = @intCast(ctx.vs.ip),
         .base = @intCast(ctx.vs.stack_top - f.arity),
