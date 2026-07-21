@@ -3035,3 +3035,182 @@ test "compiler: get_index_const_str falls back to generic get_index for non-map 
         \\assert p["y"] == 4
     );
 }
+
+// ── #204 native-lane backfill: call-flag emission (argc | 0x80) ────────────
+//
+// selectTypedArithmeticOp-adjacent but distinct: this is compiler.zig's
+// argProvenForParam/checkDirectCallArgCompatibility machinery (see
+// dev-docs/design/compiler-architecture.md §3's "Calls" paragraph), which
+// sets the top bit of a direct call's argc byte when every argument is
+// compiler-provably type-correct against the resolved callee signature,
+// letting the VM's warm call path skip runtime arg-type enforcement
+// entirely. Had zero native coverage before this (#204).
+
+fn findCallArgcByte(c: *chunk.State) ?u8 {
+    var ip: usize = 0;
+    while (ip < c.code_len) {
+        const op: Op = @enumFromInt(c.code[ip]);
+        if (op == .call) return c.code[ip + 1];
+        const decoded = c.decodeAt(ip) catch return null;
+        ip += decoded.width;
+    }
+    return null;
+}
+
+test "compiler: direct call with provable literal args sets the 0x80 proven bit" {
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\func add(a int, b int) int {
+        \\    return a + b
+        \\}
+        \\x := add(1, 2)
+    );
+    const c = rt.chunk_state;
+    const argc_byte = findCallArgcByte(c) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u8, 2 | 0x80), argc_byte);
+}
+
+test "compiler: direct call with an erased-type arg does not set the proven bit" {
+    // The argument's static type is unknown at the call site (it flows
+    // through std.json.parse, an any-typed source) — argProvenForParam must
+    // refuse, not assume, since the runtime value could be any type.
+    var rt = try setup();
+    defer rt.deinit();
+    try compileWithSession(&rt,
+        \\std := import("std")
+        \\func add(a int, b int) int {
+        \\    return a + b
+        \\}
+        \\data := std.json.parse("1")
+        \\x := add(data, 2)
+    , "");
+    const c = rt.chunk_state;
+    const argc_byte = findCallArgcByte(c) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u8, 0), argc_byte & 0x80);
+}
+
+test "compiler: direct call to a function with default params never sets the proven bit" {
+    // proven additionally requires default_count == 0 (see the call site's
+    // "proven" computation in compiler_expr.zig) — a call site can supply
+    // provably-correct args and still not be a full-arity, default-free
+    // match, so it must not skip runtime enforcement.
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\func add(a int, b int = 1) int {
+        \\    return a + b
+        \\}
+        \\x := add(1, 2)
+    );
+    const c = rt.chunk_state;
+    const argc_byte = findCallArgcByte(c) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u8, 0), argc_byte & 0x80);
+}
+
+test "compiler: call through an indirect/unknown callee does not set the proven bit" {
+    // callee_sig is only resolved for a direct, statically-known callee
+    // (registry lookup or in-progress recursive self-call) — calling
+    // through a plain local variable holding a closure has no signature to
+    // prove arguments against.
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\func add(a int, b int) int {
+        \\    return a + b
+        \\}
+        \\f := add
+        \\x := f(1, 2)
+    );
+    const c = rt.chunk_state;
+    const argc_byte = findCallArgcByte(c) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u8, 0), argc_byte & 0x80);
+}
+
+// ── #204 native-lane backfill: return-proof stamping (returns_proven) ──────
+//
+// See dev-docs/design/compiler-architecture.md §4's "Return-type proof"
+// paragraph: a single-primitive-return function whose body provably always
+// returns, with every return matching the declared type, gets its FuncObj
+// stamped returns_proven — letting the VM trust the return value's type
+// instead of re-checking it at runtime. Had zero native coverage (#204).
+
+fn findFuncObjNamed(c: *chunk.State, name: []const u8) ?@import("lang/value.zig").FuncObj {
+    var i: usize = 0;
+    while (i < c.const_count) : (i += 1) {
+        if (c.consts[i] == .object and c.consts[i].object.* == .function) {
+            const func = c.consts[i].object.*.function;
+            if (std.mem.eql(u8, func.name, name)) return func;
+        }
+    }
+    return null;
+}
+
+test "compiler: function whose body always returns the declared primitive type is proven" {
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\func classify(x int) string {
+        \\    if x < 0 {
+        \\        return "negative"
+        \\    }
+        \\    return "non-negative"
+        \\}
+    );
+    const c = rt.chunk_state;
+    const func = findFuncObjNamed(c, "classify") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(func.returns_proven);
+}
+
+test "compiler: function with a fallthrough (implicit null return) path is not proven" {
+    // The `if` branch returns, but there is no unconditional return after
+    // it — the implicit end-of-body null return is reachable, so the
+    // compiler cannot prove every path returns the declared type.
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\func classify(x int) string {
+        \\    if x < 0 {
+        \\        return "negative"
+        \\    }
+        \\}
+    );
+    const c = rt.chunk_state;
+    const func = findFuncObjNamed(c, "classify") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!func.returns_proven);
+}
+
+test "compiler: multi-named-return function is not returns_proven" {
+    // returns_proven is specifically single-primitive-return (scope.return_prim
+    // != null); named-return / multi-value functions use a different
+    // mechanism (call_spread) entirely and must not be stamped.
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\func divmod(a int, b int) (q int, r int) {
+        \\    q = a / b
+        \\    r = a rem b
+        \\    return
+        \\}
+    );
+    const c = rt.chunk_state;
+    const func = findFuncObjNamed(c, "divmod") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!func.returns_proven);
+}
+
+test "compiler: function returning a named type is not returns_proven" {
+    // return_prim tracks primitive return types only; a named-type return
+    // takes a different validation path (named-type construction/predicate
+    // checks) and is deliberately excluded from this proof.
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\type Meters int range 0..1000
+        \\func clampMeters(x int) Meters {
+        \\    return Meters(x)
+        \\}
+    );
+    const c = rt.chunk_state;
+    const func = findFuncObjNamed(c, "clampMeters") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!func.returns_proven);
+}
