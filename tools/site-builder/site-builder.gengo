@@ -21,6 +21,7 @@ const srcDir    := "root/docs"
 const outDir    := "root/build/site"
 const staticDir := "root/tools/site-builder/static"
 const cssPath   := "style.css"
+const staticAssets := ["favicon.svg", "favicon-32.png", "apple-touch-icon.png"]
 const siteBase  := "https://docs.gengoscript.org/"
 const repoBlob  := "https://github.com/gengoscript/gengo/blob/main/"
 // Keep this in sync with build.zig. The -dev suffix means this site documents
@@ -89,6 +90,9 @@ const pageShellSrc :=
     \\<meta name="description" content="{{.desc}}">
     \\<meta name="robots" content="index,follow,max-image-preview:large">
     \\<meta name="application-name" content="Gengoscript Documentation">
+    \\<link rel="icon" href="favicon.svg" type="image/svg+xml">
+    \\<link rel="icon" href="favicon-32.png" type="image/png" sizes="32x32">
+    \\<link rel="apple-touch-icon" href="apple-touch-icon.png">
     \\<link rel="canonical" href="{{.canonical}}">
     \\<meta property="og:type" content="{{.ogType}}">
     \\<meta property="og:locale" content="en_US">
@@ -980,8 +984,11 @@ func main() {
     sitemap.write("</urlset>\n")
     fs.write(outDir + "/sitemap.xml", sitemap.str())
 
-    // Ship the stylesheet next to the pages.
+    // Ship the stylesheet and favicon assets next to the pages.
     fs.write(outDir + "/" + cssPath, fs.read(staticDir + "/" + cssPath))
+    for name in staticAssets {
+        fs.write(outDir + "/" + name, fs.read(staticDir + "/" + name))
+    }
 }
 
 main()

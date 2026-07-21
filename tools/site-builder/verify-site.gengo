@@ -34,6 +34,10 @@ assert(fs.exists("root/build/site/index.html"))
 assert(not fs.exists("root/build/site/opcodes.html"))
 assert(fs.exists("root/dev-docs/opcodes.md"))
 
+for name in ["favicon.svg", "favicon-32.png", "apple-touch-icon.png"] {
+    assert(fs.exists("root/build/site/" + name))
+}
+
 // Maintainer-audience audit material must stay contributor-only, not published.
 for name in ["documentation-inventory", "documentation-contradictions", "documentation-plan", "feature-matrix"] {
     assert(not fs.exists("root/build/site/" + name + ".html"))
@@ -52,6 +56,8 @@ for page in fs.list("root/build/site") {
         assert(str.contains(html, "<span class=\"doc-version\">0.5.1-dev"))
         assert(str.contains(html, "<p class=\"doc-status\">Documentation status: main branch / unreleased"))
         assert(str.contains(html, "<meta name=\"robots\" content=\"index,follow,max-image-preview:large\">"))
+        assert(str.contains(html, "<link rel=\"icon\" href=\"favicon.svg\""))
+        assert(str.contains(html, "<link rel=\"apple-touch-icon\" href=\"apple-touch-icon.png\">"))
         assert(str.contains(html, "<meta property=\"og:locale\" content=\"en_US\">"))
         assert(str.contains(html, "<script type=\"application/ld+json\">"))
         assert(str.contains(html, "https://schema.org"))
