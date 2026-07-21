@@ -51,7 +51,7 @@ for f in \
 done
 
 echo "→ site builder (docs e2e)..."
-if ! "$G" --cap fs --mount root=. tools/site-builder/site-builder.gengo > /dev/null 2>&1; then
+if ! "$G" --heap 4m --cap fs --mount root=. tools/site-builder/site-builder.gengo > /dev/null 2>&1; then
     echo "  FAIL: site builder"
     fail=1
 else
