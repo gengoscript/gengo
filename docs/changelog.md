@@ -32,6 +32,7 @@
 
 ### Fixes (unreleased)
 
+- **Named-return of a boxed named type** — a function with a named return of a named type over a non-scalar base (e.g. `type Tag string`, used as `func f() (result Tag)`) panicked with `NotAFunction` when returning a value explicitly (`return Tag(s)`). Named returns of scalar/enum-based named types (`type Meters int`) were unaffected.
 - Struct and enum variable declarations following a `std` import no longer trigger a spurious "unknown field in std" compile error.
 - Arity mismatch errors now show `expected 1-2 argument(s)` when a function has defaults, and no longer include a stray leading comma in the function signature.
 - Unknown `std.*` namespace fields now suggest the closest matching name in the error message.

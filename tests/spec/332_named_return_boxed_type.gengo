@@ -1,0 +1,25 @@
+std := import("std")
+
+// Named-return slots with a non-scalar (boxed) named base type must run the
+// constructor call correctly (compiler must push its callee via the same
+// prolog/epilog pairing used by assignStmt/compoundStmt/incrStmt), not just
+// the erased-scalar fast path.
+type Tag string
+type Meters int
+
+// Explicit return expression into a single boxed named-return slot.
+func makeTag(s string) (result Tag) {
+    return Tag(s)
+}
+
+// Explicit return expressions into multiple named-return slots, mixing a
+// boxed (Tag) and an erased-scalar (Meters) named type in the same return.
+func makeBoth(s string, m int) (t Tag, mm Meters) {
+    return Tag(s), Meters(m)
+}
+
+std.io.println(string(makeTag("hello")))
+
+t, m := makeBoth("world", 7)
+std.io.println(string(t))
+std.io.println(string(int(m)))

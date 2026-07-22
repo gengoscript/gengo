@@ -2,6 +2,14 @@
 
 This changelog tracks notable language/runtime changes by implementation date.
 
+## 2026-07-22 (latest) (v0.5.1-dev)
+
+### Fix — named-return of a boxed named type panicked with `NotAFunction` (#204)
+
+Found while backfilling #204's typed-assignment prolog/epilog matrix: `returnStmt` called `emitVarTypeEpilog` for a named-return slot without first calling `emitVarTypeProlog`, unlike `assignStmt`/`compoundStmt`/`incrStmt`, which all already pair the two. For a named-return type over a non-scalar base (`type Tag string` used as `func f() (result Tag)`), the epilog's `.named` branch emits a real constructor `call(1)` — but with no prolog, there was no constructor callee pushed under the return value, so the call treated the just-built return value itself as the callee: `return Tag(s)` panicked `NotAFunction` at runtime. Named-return types over an erased scalar/enum base (`Meters int`) were unaffected — their epilog branch is `validate_named_range`/`check_named_predicate`, which needs no callee.
+
+Fixed in `compiler_stmts.zig`'s `returnStmt` by calling `emitVarTypeProlog` before compiling each named-return slot's expression, exactly mirroring the other three call sites. Regression coverage: `tests/spec/332_named_return_boxed_type.gengo` (behavioral) plus native bytecode-shape tests in `compiler_test.zig` covering the erased-vs-boxed distinction across compound-assign, increment/decrement, and named-return (closes the "typed-assignment prolog/epilog matrix" half of #204; the fusion-pass trigger-decision matrix half remains open).
+
 ## 2026-07-21 (latest) (v0.5.1-dev)
 
 ### Tooling — `gengo --test --profile` (#58)
