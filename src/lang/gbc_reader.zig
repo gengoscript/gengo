@@ -118,7 +118,16 @@ const ByteReader = struct {
 const any_type_alts = [1]value_mod.FieldTypeAlt{.{ .typ = .any }};
 const any_type_spec: value_mod.FieldTypeSpec = .{ .alts = @constCast(&any_type_alts) };
 
-const SectionEntry = struct { id: u32, flags: u32, offset: u64, length: u64 };
+// offset/length are stored as usize, not the wire's u64: on the loop that
+// builds these (in read()), each entry is validated against body.len (a
+// usize) before being cast down, so the cast is proven safe there — every
+// downstream use (slicing BYTECODE/CONSTANTS/FUNCTIONS out of body) then
+// needs no cast of its own. Doing the narrowing once, right after the bound
+// check, instead of at every slice site also avoids a real portability bug:
+// a bare u64 doesn't implicitly narrow to usize, and usize is 32-bit on
+// wasm32 — this doesn't compile-error on a 64-bit host build but does on
+// wasm32-wasi (found via the wasm32 CI/pre-push build, not the native one).
+const SectionEntry = struct { id: u32, flags: u32, offset: usize, length: usize };
 
 const RawFuncEntry = struct {
     name_constant_idx: u32,
@@ -236,7 +245,12 @@ pub fn read(bytes: []const u8, cs: *chunk.State, hs: *heap.State, alloc: std.mem
     r.pos = header_end;
 
     if (header_end + body_length > bytes.len) return error.TruncatedBody;
-    const body = bytes[header_end..][0..body_length];
+    // Proven to fit (body_length <= bytes.len - header_end <= bytes.len, and
+    // bytes.len is already a usize) — safe to narrow now that the check above
+    // has run. A bare u64 doesn't implicitly narrow to usize (32-bit on
+    // wasm32), so this cast can't be deferred to the slice expression itself.
+    const body_len: usize = @intCast(body_length);
+    const body = bytes[header_end..][0..body_len];
     if (std.hash.XxHash64.hash(0, body) != body_checksum) return error.BodyChecksumMismatch;
 
     // Body: section table.
@@ -252,7 +266,8 @@ pub fn read(bytes: []const u8, cs: *chunk.State, hs: *heap.State, alloc: std.mem
         const offset = try br.u64_();
         const length = try br.u64_();
         if (offset + length > body.len) return error.SectionOutOfBounds;
-        sections[i] = .{ .id = id, .flags = flags, .offset = offset, .length = length };
+        // Proven to fit, same reasoning as body_len above.
+        sections[i] = .{ .id = id, .flags = flags, .offset = @intCast(offset), .length = @intCast(length) };
     }
 
     const bytecode_sec = findSection(sections, gbc_writer.SEC_BYTECODE) orelse return error.MissingRequiredSection;
