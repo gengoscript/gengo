@@ -3942,6 +3942,45 @@ test "gbc: writer + reader round-trip produces identical execution results" {
     try std.testing.expectEqual(expected.int, actual.int);
 }
 
+test "gbc: a whole-valued float constant round-trips as .float, not .int" {
+    // Regression: CONST_NUMBER/CONST_INT used to share one f64 wire slot,
+    // reconstructed by a "no fractional part -> int" heuristic on read. A
+    // literal like 1.0 is a genuine .float at compile time but is also
+    // exactly representable as an integer, so the old heuristic silently
+    // turned it into .int on load — this only surfaced once a test returned
+    // a whole-valued float directly (found while adding variant support,
+    // #5), since every earlier GBC test happened to avoid that exact shape.
+    const src =
+        \\func f() float {
+        \\    return 1.0
+        \\}
+    ;
+
+    var rt2 = try setup();
+    defer rt2.deinit();
+    try compile(&rt2, src);
+    const bytes = try gbc_writer.write(rt2.chunk_state, std.testing.allocator, .{ .root_source = src });
+    defer std.testing.allocator.free(bytes);
+
+    var rt3 = try setup();
+    defer rt3.deinit();
+    chunk.setActive(rt3.chunk_state);
+    globals.setActive(&rt3.globals_state);
+    heap.setActive(&rt3.heap_state);
+    chunk.reset();
+    globals.reset();
+    heap.reset();
+    try gbc_reader.read(bytes, chunk.g_state, heap.g_state, rt3.vm_state.allocator);
+    try fusion_pass.fuse(chunk.g_state, rt3.vm_state.allocator);
+
+    const ctx: vm.VMContext = .{ .cs = rt3.chunk_state, .gs = &rt3.globals_state, .hs = &rt3.heap_state, .vs = &rt3.vm_state };
+    try vm.run(ctx);
+    const actual = try vm.callGlobal(ctx, "f", &.{});
+
+    try std.testing.expect(actual == .float);
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), actual.float, 1e-9);
+}
+
 test "gbc: writer supports struct-typed constants" {
     var rt = try setup();
     defer rt.deinit();
@@ -4010,6 +4049,56 @@ test "gbc: struct and named-type constants round-trip through write+read and exe
     const actual = try vm.callGlobal(ctx, "f", &.{});
 
     try std.testing.expectEqual(expected.int, actual.int);
+}
+
+test "gbc: variant-type constants (shared fields, record arm, single-payload arm, no-payload arm) round-trip through write+read and execute correctly" {
+    const src =
+        \\type Shape variant {
+        \\    x float,
+        \\    circle { radius float },
+        \\    tag(label string),
+        \\    point,
+        \\}
+        \\func area(s Shape) float {
+        \\    switch s {
+        \\        case .circle { return s.radius * 2.0 }
+        \\        case .tag { return 0.0 }
+        \\        case .point { return 0.0 }
+        \\    }
+        \\}
+        \\func f() float {
+        \\    c := Shape.circle { x: 1.0, radius: 5.0 }
+        \\    return c.x + area(c)
+        \\}
+    ;
+
+    var rt1 = try setup();
+    defer rt1.deinit();
+    try runSrc(&rt1, src);
+    const expected = try rt1.callGlobal("f", &.{});
+
+    var rt2 = try setup();
+    defer rt2.deinit();
+    try compile(&rt2, src);
+    const bytes = try gbc_writer.write(rt2.chunk_state, std.testing.allocator, .{ .root_source = src });
+    defer std.testing.allocator.free(bytes);
+
+    var rt3 = try setup();
+    defer rt3.deinit();
+    chunk.setActive(rt3.chunk_state);
+    globals.setActive(&rt3.globals_state);
+    heap.setActive(&rt3.heap_state);
+    chunk.reset();
+    globals.reset();
+    heap.reset();
+    try gbc_reader.read(bytes, chunk.g_state, heap.g_state, rt3.vm_state.allocator);
+    try fusion_pass.fuse(chunk.g_state, rt3.vm_state.allocator);
+
+    const ctx: vm.VMContext = .{ .cs = rt3.chunk_state, .gs = &rt3.globals_state, .hs = &rt3.heap_state, .vs = &rt3.vm_state };
+    try vm.run(ctx);
+    const actual = try vm.callGlobal(ctx, "f", &.{});
+
+    try std.testing.expectApproxEqAbs(expected.float, actual.float, 1e-9);
 }
 
 test "gbc: reader rejects a corrupted magic" {

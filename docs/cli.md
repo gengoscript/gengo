@@ -88,14 +88,14 @@ gengo app.gbc                         # run the cached artifact, repeatedly
 This is early — the current implementation covers a first milestone (see
 `dev-docs/design/gbc-spec.md` and GitHub issue #5), not the full format:
 
-- `struct` and named-type values (including range/cycle/clamp-constrained
-  ones, and a struct field or named collection referencing another type by
-  name) are supported. Not yet supported: enums, interfaces, variants, a
-  named type with a `predicate`, or a closure with captures stored as a
-  constant (a plain top-level function, or a captureless closure attached
-  via ordinary bytecode execution rather than embedded as a constant, both
-  work). `--emit-gbc` fails with a clear error naming the limitation rather
-  than producing a broken artifact.
+- `struct`, named-type, and `variant` values (including range/cycle/clamp-
+  constrained named types, and a struct field, variant arm/shared field, or
+  named collection referencing another type by name) are supported. Not yet
+  supported: enums, interfaces, a named type with a `predicate`, or a closure
+  with captures stored as a constant (a plain top-level function, or a
+  captureless closure attached via ordinary bytecode execution rather than
+  embedded as a constant, both work). `--emit-gbc` fails with a clear error
+  naming the limitation rather than producing a broken artifact.
 - The artifact records a hash of the source it was compiled from, but the
   CLI does not yet check it against the current source file before running
   a `.gbc` — nothing currently stops you from running a `.gbc` that no

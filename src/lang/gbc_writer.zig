@@ -47,11 +47,25 @@ pub const CONST_STRING: u8 = 0x02;
 pub const CONST_NULL: u8 = 0x03;
 pub const CONST_BOOL: u8 = 0x04;
 pub const CONST_RUNE: u8 = 0x05;
+pub const CONST_INT: u8 = 0x06;
 pub const CONST_FUNC_REF: u8 = 0x07;
 pub const CONST_TYPE_REF: u8 = 0x08;
 
 pub const TYPE_KIND_STRUCT: u8 = 0x01;
 pub const TYPE_KIND_NAMED: u8 = 0x02;
+// 0x03 (ENUM) and 0x04 (INTERFACE) are reserved by gbc-spec.md §8.6 for
+// not-yet-implemented type kinds — skipped here rather than reused, so
+// adding them later doesn't renumber VARIANT.
+pub const TYPE_KIND_VARIANT: u8 = 0x05;
+
+// Variant arm shapes (wire-only discriminant; derived from the in-memory
+// VariantArmSpec's has_payload/fields combination rather than stored on it
+// directly — see writeVariantArm). NONE = bare arm name, no data.
+// SINGLE_PAYLOAD = `arm(T)` — payload_name/payload_type only. RECORD =
+// `arm { a T, b U, ... }` — a struct-field list, zero or more fields.
+pub const VARIANT_ARM_NONE: u8 = 0x00;
+pub const VARIANT_ARM_SINGLE_PAYLOAD: u8 = 0x01;
+pub const VARIANT_ARM_RECORD: u8 = 0x02;
 
 // FieldTypeTag wire values, matching gbc-spec.md §9.2. Only the shapes a
 // struct field / named-collection elem/key/val spec actually needs are
@@ -279,7 +293,7 @@ fn writeTypeSpec(w: *ByteWriter, spec: value_mod.FieldTypeSpec) WriteError!void 
     }
 }
 
-const TypeEntryKind = enum { struct_t, named_t };
+const TypeEntryKind = enum { struct_t, named_t, variant_t };
 
 const TypeEntryInfo = struct {
     kind: TypeEntryKind,
@@ -287,7 +301,35 @@ const TypeEntryInfo = struct {
     qualified_name: []const u8,
     st: ?*const value_mod.StructTypeObj = null,
     nt: ?*const value_mod.NamedTypeObj = null,
+    vt: ?*const value_mod.VariantTypeObj = null,
 };
+
+// Shared by STRUCT type entries, a variant's shared_fields, and a record-
+// shaped variant arm's fields — all three are plain []StructFieldSpec lists
+// with the same wire shape (name, type, is_const; key is derivable from name
+// so it isn't written, see gbc_reader.zig).
+fn writeFieldList(w: *ByteWriter, fields: []const value_mod.StructFieldSpec) WriteError!void {
+    try w.u16_(@intCast(fields.len));
+    for (fields) |f| {
+        try w.str_(f.name);
+        try writeTypeSpec(w, f.typ);
+        try w.bool8(f.is_const);
+    }
+}
+
+fn writeVariantArm(w: *ByteWriter, arm: value_mod.VariantArmSpec) WriteError!void {
+    try w.str_(arm.name);
+    if (arm.fields.len > 0) {
+        try w.u8_(VARIANT_ARM_RECORD);
+        try writeFieldList(w, arm.fields);
+    } else if (arm.has_payload) {
+        try w.u8_(VARIANT_ARM_SINGLE_PAYLOAD);
+        try w.str_(arm.payload_name);
+        try writeTypeSpec(w, arm.payload_type.?);
+    } else {
+        try w.u8_(VARIANT_ARM_NONE);
+    }
+}
 
 fn writeTypesSection(w: *ByteWriter, types: []const TypeEntryInfo) WriteError!void {
     try w.u32_(@intCast(types.len));
@@ -297,13 +339,16 @@ fn writeTypesSection(w: *ByteWriter, types: []const TypeEntryInfo) WriteError!vo
                 try w.u8_(TYPE_KIND_STRUCT);
                 try w.str_(te.name);
                 try w.str_(te.qualified_name);
-                const st = te.st.?;
-                try w.u16_(@intCast(st.fields.len));
-                for (st.fields) |f| {
-                    try w.str_(f.name);
-                    try writeTypeSpec(w, f.typ);
-                    try w.bool8(f.is_const);
-                }
+                try writeFieldList(w, te.st.?.fields);
+            },
+            .variant_t => {
+                try w.u8_(TYPE_KIND_VARIANT);
+                try w.str_(te.name);
+                try w.str_(te.qualified_name);
+                const vt = te.vt.?;
+                try writeFieldList(w, vt.shared_fields);
+                try w.u16_(@intCast(vt.arms.len));
+                for (vt.arms) |arm| try writeVariantArm(w, arm);
             },
             .named_t => {
                 try w.u8_(TYPE_KIND_NAMED);
@@ -376,8 +421,8 @@ pub fn write(cs: *chunk.State, alloc: std.mem.Allocator, opts: WriteOptions) Wri
     const defused_code = try vm_defuse.buildDefusedCode(cs, alloc);
     defer alloc.free(defused_code);
 
-    // Collect function and struct/named-type constants. Still unsupported:
-    // closures with captures, enums, interfaces, variants, and predicate-
+    // Collect function, struct/named-type, and variant-type constants. Still
+    // unsupported: closures with captures, enums, interfaces, and predicate-
     // bearing named types (see the .named_type case below).
     var funcs: std.ArrayListUnmanaged(FuncEntryInfo) = .empty;
     defer funcs.deinit(alloc);
@@ -390,8 +435,14 @@ pub fn write(cs: *chunk.State, alloc: std.mem.Allocator, opts: WriteOptions) Wri
     for (cs.consts[0..cs.const_count]) |v| {
         switch (v) {
             .int => |n| {
-                try consts_w.u8_(CONST_NUMBER);
-                try consts_w.f64_(@floatFromInt(n));
+                // A dedicated tag, not NUMBER/f64: .int and .float are two
+                // distinct, never-implicitly-mixed Value tags at runtime
+                // (Gengo enforces nominal int/float strictness), so encoding
+                // .int through f64 and reconstructing the tag on read via a
+                // "no fractional part" heuristic is wrong for any
+                // whole-valued float constant (1.0 would come back as .int).
+                try consts_w.u8_(CONST_INT);
+                try consts_w.i64_(n);
             },
             .float => |n| {
                 try consts_w.u8_(CONST_NUMBER);
@@ -446,6 +497,16 @@ pub fn write(cs: *chunk.State, alloc: std.mem.Allocator, opts: WriteOptions) Wri
                             .name = nt.name,
                             .qualified_name = nt.qualified_name,
                             .nt = nt,
+                        });
+                        try consts_w.u8_(CONST_TYPE_REF);
+                        try consts_w.u32_(@intCast(types.items.len - 1));
+                    },
+                    .variant_type => |*vt| {
+                        try types.append(alloc, .{
+                            .kind = .variant_t,
+                            .name = vt.name,
+                            .qualified_name = vt.qualified_name,
+                            .vt = vt,
                         });
                         try consts_w.u8_(CONST_TYPE_REF);
                         try consts_w.u32_(@intCast(types.items.len - 1));
