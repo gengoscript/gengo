@@ -1,10 +1,11 @@
 # Gengoscript Bytecode Cache — File Format Specification
 
 **Status:** Draft\
-**Version:** 0.5\
+**Version:** 0.6\
 **Scope:** GBC artifact only (see §2 for artifact class definitions)
 
 **Revision history**
+- 0.6 — Add `TYPE_REF` constant tag (§8.2) and a `DECIMAL_T` `FieldTypeAlt` tag (§9.2, `0x0F`). `TYPE_REF` mirrors `FUNC_REF`: the constant pool had no way to represent "this slot is a struct or named type," but `def_global` for a `type X struct {...}`/`type X int ...` declaration needs one, and a struct field referencing another type by name needs the referenced type's own constant slot to exist independently of the reference itself. `DECIMAL_T` fixes an omission: the `FieldTypeAlt` table never had a tag for `decimal` at all (every other scalar base — `int`/`float`/`rune_t`/`bool`/`string` — had one), so a struct field or named-collection element declared `decimal` had no way to round-trip. Both found while extending GBC to support struct and (predicate-free) named-type values in the constant pool (#5) — the original milestone deliberately scoped these out and rejected them with `error.UnsupportedConstant`.
 - 0.5 — Add `FUNC_REF` constant tag (§8.2): the constant pool previously had no way to represent "this slot is a function," but `make_closure`'s bytecode operand is a constant-pool index that must resolve to one. Found while starting implementation (#5) — the FUNCTIONS section was specified as a self-contained side-table with no stated link back to CONSTANTS, and a real chunk's function objects are referenced by constant-pool index, not looked up by name/position separately. `FUNC_REF` holds a `u32` index into `SEC_FUNCTIONS`; the loader resolves it to a constructed `FuncObj` and installs that into the constant slot before running any code. Also fix an arithmetic error: §6.1's own field table sums to 184 bytes (7×`u16` + 3×`u32` + 6 reserved + `i64` + 4×`hash32` + 2×`u64` = 184), not the 192 stated in three places (the `header_size` field description, the "total defined header size" line, and Phase 1 check #4) — found the same way, by implementing a writer against the table and a reader that rejected its own output. Corrected all three to 184; no field was added or removed.
 - 0.1 — Initial draft
 - 0.2 — Rename `stdlib_hash` → `module_provider_hash`; add `resolved_id` and `artifact_body_hash` to dependency entries; add `bytecode_length` and `local_count` to function entries; add `Bool` and `Rune` constant tags; rewrite `FieldTypeAlt` as per-tag encodings; fix `options_hash` canonical encoding widths; remove mutual-exclusion rule for `CHECKED_ARITHMETIC`/`OPTIMISED` from format; clarify header-size compatibility (no smaller-than-required); reorder validation phases; note f64 bounds limitation; note script/module philosophy
@@ -388,10 +389,13 @@ Each `Constant` is a tag byte followed by tag-specific data:
 | `BOOL` | `0x04` | `bool8` | Boolean value. |
 | `RUNE` | `0x05` | `u32` | Unicode code point (0–0x10FFFF). Reject values outside this range. |
 | `FUNC_REF` | `0x07` | `u32` | Index into `SEC_FUNCTIONS`. See below. |
+| `TYPE_REF` | `0x08` | `u32` | Index into `SEC_TYPES`. See below. |
 
 > **Reserved tag `INT` (`0x06`, `i64`):** Not used in v1 — the current VM represents all numbers as `f64` internally. This tag is reserved for a future format version when the VM gains a distinct integer representation. Writers must not emit it; loaders must reject it.
 
 **`FUNC_REF`**: the constant pool has no self-contained representation for a function or closure — `make_closure` (and any other instruction addressing a function by constant index) resolves through this indirection instead. A `FUNC_REF` constant's `u32` value must be `< function_count` in `SEC_FUNCTIONS` (§8.3); a loader constructs the function object described by that `FunctionEntry` and installs it at this constant-pool slot before any bytecode runs. Referencing the same `FunctionEntry` from more than one `FUNC_REF` constant is invalid (each function has exactly one home constant slot) and must be rejected. `FUNC_REF` must not appear in any other constant-consuming context (e.g. as a value produced by the `constant` opcode) — it exists solely to let a `SEC_FUNCTIONS` entry occupy a constant-pool slot.
+
+**`TYPE_REF`**: the same indirection as `FUNC_REF`, for a struct or named type — `def_global` for a `type X struct {...}`/`type X int ...` declaration needs a constant-pool slot to hold the type object. A `TYPE_REF` constant's `u32` value must be `< type_count` in `SEC_TYPES` (§8.6); a loader constructs the `STRUCT` or `NAMED` type object described by that `TypeEntry` and installs it at this constant-pool slot before any bytecode runs. Same one-home-slot-per-entry rule as `FUNC_REF`. A struct field or named-collection element/key/value referencing *another* type by name (a `STRUCT_T`/`NAMED_T`/etc. `FieldTypeAlt`) does so by qualified-name string, not by a nested `TYPE_REF` — see §9.2 — so the referenced type's own `TYPE_REF` constant (if it has one) is independent of any reference to it.
 
 Constants are indexed from 0. Instructions reference constants by `u16` or `u32` index as defined in the instruction set.
 
@@ -726,6 +730,10 @@ func_params       : [func_param_count]TypeSpec
 func_return_count : u16
 func_returns      : [func_return_count]TypeSpec
 ```
+
+**`DECIMAL_T` (`0x0F`)** — no additional fields.
+
+> **Note:** `decimal` was missing from this table entirely through v0.5 despite being an ordinary scalar base (`NUMBER`'s own kind-specific fields make no distinction, but `FieldTypeAlt` needs a tag to mark a struct field or named-collection element/key/value as decimal-typed, the same way `INT`/`FLOAT`/`RUNE_T` do). Found while extending GBC's struct/named-type support to actually round-trip `decimal` fields (#5). Added at `0x0F`, after `FUNC_T`, rather than renumbering.
 
 ---
 

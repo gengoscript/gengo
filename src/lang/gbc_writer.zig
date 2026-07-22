@@ -48,6 +48,32 @@ pub const CONST_NULL: u8 = 0x03;
 pub const CONST_BOOL: u8 = 0x04;
 pub const CONST_RUNE: u8 = 0x05;
 pub const CONST_FUNC_REF: u8 = 0x07;
+pub const CONST_TYPE_REF: u8 = 0x08;
+
+pub const TYPE_KIND_STRUCT: u8 = 0x01;
+pub const TYPE_KIND_NAMED: u8 = 0x02;
+
+// FieldTypeTag wire values, matching gbc-spec.md §9.2. Only the shapes a
+// struct field / named-collection elem/key/val spec actually needs are
+// supported this increment (see writeTypeSpec's doc comment) — func_t and
+// type_param are rejected with error.UnsupportedFieldType rather than
+// silently mis-encoded.
+pub const FT_ANY: u8 = 0x00;
+pub const FT_NULL_T: u8 = 0x01;
+pub const FT_INT: u8 = 0x02;
+pub const FT_FLOAT: u8 = 0x03;
+pub const FT_RUNE_T: u8 = 0x04;
+pub const FT_BOOLEAN: u8 = 0x05;
+pub const FT_STRING: u8 = 0x06;
+pub const FT_ERROR_T: u8 = 0x07;
+pub const FT_ARRAY: u8 = 0x08;
+pub const FT_MAP: u8 = 0x09;
+pub const FT_STRUCT_T: u8 = 0x0A;
+pub const FT_INTERFACE_T: u8 = 0x0B;
+pub const FT_NAMED_T: u8 = 0x0C;
+pub const FT_VARIANT_T: u8 = 0x0D;
+// FT_FUNC_T = 0x0E is spec'd but unsupported (rejected, see writeTypeSpec).
+pub const FT_DECIMAL_T: u8 = 0x0F;
 
 pub const WriteOptions = struct {
     entry_kind: EntryKind = .script,
@@ -64,7 +90,9 @@ pub const WriteOptions = struct {
 
 pub const WriteError = error{
     TooManyFunctions,
+    TooManyTypes,
     UnsupportedConstant,
+    UnsupportedFieldType,
     BadBytecode,
     BytecodeOutOfBounds,
     BadOpcode,
@@ -187,9 +215,120 @@ fn deriveFuncLength(code: []const u8, ip: u32) WriteError!u32 {
 
 fn writeTypeSpecNone(w: *ByteWriter) !void {
     // A single ANY alt — used for fields this milestone doesn't populate
-    // (param/return types are out of scope until TYPES-table support lands).
+    // (function param/return types are out of scope until callers need
+    // typed-arg-check-preserving GBC; see the has_typed_params/returns
+    // note in gbc_reader.zig).
     try w.u8_(1); // alt_count
     try w.u8_(0x00); // ANY
+}
+
+// Real FieldTypeSpec/FieldTypeAlt encoder, used for struct fields and named
+// array/map elem/key/val specs (both genuinely read at runtime — see the
+// #5 struct/named-type support research: struct field types drive real
+// per-construction/per-write type + named-predicate checks, not just
+// compile-time-only bookkeeping like function param/return types are for
+// now). Supports every scalar tag plus one level of struct_t/interface_t/
+// named_t/variant_t (by qualified-name string, no further indirection
+// needed — matchesTypeAlt resolves those by name at runtime too) and
+// recurses into array/map elem/key/val specs. Rejects func_t and
+// type_param (generics-only, out of scope) with UnsupportedFieldType
+// rather than silently mis-encoding them.
+fn writeTypeSpec(w: *ByteWriter, spec: value_mod.FieldTypeSpec) WriteError!void {
+    try w.u8_(@intCast(spec.alts.len));
+    for (spec.alts) |alt| {
+        switch (alt.typ) {
+            .any => try w.u8_(FT_ANY),
+            .null_t => try w.u8_(FT_NULL_T),
+            .int => try w.u8_(FT_INT),
+            .float => try w.u8_(FT_FLOAT),
+            .decimal_t => try w.u8_(FT_DECIMAL_T),
+            .rune_t => try w.u8_(FT_RUNE_T),
+            .boolean => try w.u8_(FT_BOOLEAN),
+            .string => try w.u8_(FT_STRING),
+            .error_t => try w.u8_(FT_ERROR_T),
+            .array => {
+                try w.u8_(FT_ARRAY);
+                try w.bool8(alt.elem_spec != null);
+                if (alt.elem_spec) |es| try writeTypeSpec(w, es);
+            },
+            .map => {
+                try w.u8_(FT_MAP);
+                try w.bool8(alt.key_spec != null);
+                if (alt.key_spec) |ks| try writeTypeSpec(w, ks);
+                try w.bool8(alt.val_spec != null);
+                if (alt.val_spec) |vs| try writeTypeSpec(w, vs);
+            },
+            .struct_t => {
+                try w.u8_(FT_STRUCT_T);
+                try w.str_(alt.struct_name);
+            },
+            .interface_t => {
+                try w.u8_(FT_INTERFACE_T);
+                try w.str_(alt.interface_name);
+            },
+            .named_t => {
+                try w.u8_(FT_NAMED_T);
+                try w.str_(alt.named_name);
+            },
+            .variant_t => {
+                try w.u8_(FT_VARIANT_T);
+                try w.str_(alt.named_name);
+            },
+            .func_t, .type_param => return error.UnsupportedFieldType,
+        }
+    }
+}
+
+const TypeEntryKind = enum { struct_t, named_t };
+
+const TypeEntryInfo = struct {
+    kind: TypeEntryKind,
+    name: []const u8,
+    qualified_name: []const u8,
+    st: ?*const value_mod.StructTypeObj = null,
+    nt: ?*const value_mod.NamedTypeObj = null,
+};
+
+fn writeTypesSection(w: *ByteWriter, types: []const TypeEntryInfo) WriteError!void {
+    try w.u32_(@intCast(types.len));
+    for (types) |te| {
+        switch (te.kind) {
+            .struct_t => {
+                try w.u8_(TYPE_KIND_STRUCT);
+                try w.str_(te.name);
+                try w.str_(te.qualified_name);
+                const st = te.st.?;
+                try w.u16_(@intCast(st.fields.len));
+                for (st.fields) |f| {
+                    try w.str_(f.name);
+                    try writeTypeSpec(w, f.typ);
+                    try w.bool8(f.is_const);
+                }
+            },
+            .named_t => {
+                try w.u8_(TYPE_KIND_NAMED);
+                try w.str_(te.name);
+                try w.str_(te.qualified_name);
+                const nt = te.nt.?;
+                try w.u8_(@intFromEnum(nt.base));
+                try w.bool8(nt.has_range);
+                try w.bool8(nt.is_cycle);
+                try w.bool8(nt.is_clamp);
+                try w.f64_(nt.min);
+                try w.f64_(nt.max);
+                try w.str_(nt.parent_name orelse "");
+                // elem_spec/key_spec/val_spec (array_t/map_t bases only —
+                // null for the six scalar bases). Written as an explicit
+                // present-flag + spec, mirroring ARRAY/MAP's own encoding.
+                try w.bool8(nt.elem_spec != null);
+                if (nt.elem_spec) |es| try writeTypeSpec(w, es);
+                try w.bool8(nt.key_spec != null);
+                if (nt.key_spec) |ks| try writeTypeSpec(w, ks);
+                try w.bool8(nt.val_spec != null);
+                if (nt.val_spec) |vs| try writeTypeSpec(w, vs);
+            },
+        }
+    }
 }
 
 // Index of the STRING constant equal to `name` in cs.consts[0..const_count],
@@ -237,10 +376,13 @@ pub fn write(cs: *chunk.State, alloc: std.mem.Allocator, opts: WriteOptions) Wri
     const defused_code = try vm_defuse.buildDefusedCode(cs, alloc);
     defer alloc.free(defused_code);
 
-    // Collect function constants (must be .function objects only — closures
-    // with captures, named/struct types are out of this milestone's scope).
+    // Collect function and struct/named-type constants. Still unsupported:
+    // closures with captures, enums, interfaces, variants, and predicate-
+    // bearing named types (see the .named_type case below).
     var funcs: std.ArrayListUnmanaged(FuncEntryInfo) = .empty;
     defer funcs.deinit(alloc);
+    var types: std.ArrayListUnmanaged(TypeEntryInfo) = .empty;
+    defer types.deinit(alloc);
 
     var consts_w = ByteWriter{ .alloc = alloc };
     defer consts_w.deinit();
@@ -271,17 +413,45 @@ pub fn write(cs: *chunk.State, alloc: std.mem.Allocator, opts: WriteOptions) Wri
                 try consts_w.str_(ss.bytes);
             },
             .object => |obj| {
-                if (obj.* != .function) return error.UnsupportedConstant;
-                const f = &obj.function;
-                const length = try deriveFuncLength(defused_code, @intCast(f.ip));
-                try funcs.append(alloc, .{
-                    .name = f.name,
-                    .ip = @intCast(f.ip),
-                    .length = length,
-                    .f = f,
-                });
-                try consts_w.u8_(CONST_FUNC_REF);
-                try consts_w.u32_(@intCast(funcs.items.len - 1));
+                switch (obj.*) {
+                    .function => |*f| {
+                        const length = try deriveFuncLength(defused_code, @intCast(f.ip));
+                        try funcs.append(alloc, .{
+                            .name = f.name,
+                            .ip = @intCast(f.ip),
+                            .length = length,
+                            .f = f,
+                        });
+                        try consts_w.u8_(CONST_FUNC_REF);
+                        try consts_w.u32_(@intCast(funcs.items.len - 1));
+                    },
+                    .struct_type => |*st| {
+                        try types.append(alloc, .{
+                            .kind = .struct_t,
+                            .name = st.name,
+                            .qualified_name = st.qualified_name,
+                            .st = st,
+                        });
+                        try consts_w.u8_(CONST_TYPE_REF);
+                        try consts_w.u32_(@intCast(types.items.len - 1));
+                    },
+                    .named_type => |*nt| {
+                        // Predicates need a captureless-closure-in-a-constant
+                        // encoding this increment doesn't implement yet (see
+                        // gbc_reader.zig's NAMED-type notes) — reject rather
+                        // than silently dropping the predicate.
+                        if (nt.predicate != null) return error.UnsupportedConstant;
+                        try types.append(alloc, .{
+                            .kind = .named_t,
+                            .name = nt.name,
+                            .qualified_name = nt.qualified_name,
+                            .nt = nt,
+                        });
+                        try consts_w.u8_(CONST_TYPE_REF);
+                        try consts_w.u32_(@intCast(types.items.len - 1));
+                    },
+                    else => return error.UnsupportedConstant,
+                }
             },
             else => return error.UnsupportedConstant,
         }
@@ -290,6 +460,10 @@ pub fn write(cs: *chunk.State, alloc: std.mem.Allocator, opts: WriteOptions) Wri
     var funcs_w = ByteWriter{ .alloc = alloc };
     defer funcs_w.deinit();
     try writeFunctionsSection(&funcs_w, cs, funcs.items);
+
+    var types_w = ByteWriter{ .alloc = alloc };
+    defer types_w.deinit();
+    try writeTypesSection(&types_w, types.items);
 
     // Empty sections for this milestone.
     var empty_u32_w = ByteWriter{ .alloc = alloc };
@@ -308,7 +482,7 @@ pub fn write(cs: *chunk.State, alloc: std.mem.Allocator, opts: WriteOptions) Wri
         .{ .id = SEC_FUNCTIONS, .data = funcs_w.buf.items },
         .{ .id = SEC_NATIVE_IMPORTS, .data = native_imports_w.buf.items },
         .{ .id = SEC_EXPORTS, .data = empty_u32_w.buf.items },
-        .{ .id = SEC_TYPES, .data = empty_u32_w.buf.items },
+        .{ .id = SEC_TYPES, .data = types_w.buf.items },
         .{ .id = SEC_DEPENDENCY_TABLE, .data = empty_u32_w.buf.items },
     };
 

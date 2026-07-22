@@ -40,8 +40,11 @@ pub const ReadError = error{
     SectionOutOfBounds,
     MalformedSection,
     BadConstantTag,
+    BadFieldTypeTag,
     FuncRefOutOfRange,
+    TypeRefOutOfRange,
     TooManyFunctions,
+    TooManyTypes,
     TooManyConstants,
     CodeTooLarge,
 } || std.mem.Allocator.Error;
@@ -150,15 +153,159 @@ fn readAnyTypeSpec(r: *ByteReader) !void {
     const alt_count = try r.u8_();
     var i: u8 = 0;
     while (i < alt_count) : (i += 1) {
-        // This milestone never writes a non-ANY TypeSpec, so a single tag
-        // byte with no further fields is all any current writer emits.
-        // (Fuller decoding — array/map/struct/etc. alt shapes — comes with
-        // TYPES-table support.)
+        // Function param/return types are still always written as a single
+        // ANY alt (see gbc_writer.zig's writeFunctionsSection) — this only
+        // needs to skip that one shape, not the full TypeSpec grammar
+        // readTypeSpec below handles for struct fields / named collections.
         _ = try r.u8_();
     }
 }
 
-fn readFunctionsSection(r: *ByteReader, alloc: std.mem.Allocator) ![]RawFuncEntry {
+// Real decoder for struct field / named-collection elem/key/val specs —
+// mirrors gbc_writer.zig's writeTypeSpec exactly. Strings embedded in alts
+// (struct_name/interface_name/named_name) are copied to the heap (via
+// copyStr), not left as slices into the wire buffer: unlike CONST_STRING
+// constants (which already go through cs.internStr's own heap copy), these
+// live inside a FieldTypeSpec attached to a long-lived StructTypeObj/
+// NamedTypeObj, and the caller's wire-bytes buffer is not guaranteed to
+// outlive that object (it isn't, in general — only happens to for the CLI's
+// static g_src_buf).
+fn readTypeSpec(r: *ByteReader, hs: *heap.State, alloc: std.mem.Allocator) ReadError!value_mod.FieldTypeSpec {
+    const alt_count = try r.u8_();
+    // hs.bump (GC heap), not alloc — this FieldTypeSpec gets embedded into a
+    // long-lived StructFieldSpec/NamedTypeObj, same reasoning as
+    // readFunctionsSection's capture_slots above.
+    const alts = (hs.bump(value_mod.FieldTypeAlt, alt_count) orelse return error.OutOfMemory)[0..alt_count];
+    var i: u8 = 0;
+    while (i < alt_count) : (i += 1) {
+        const tag = try r.u8_();
+        alts[i] = switch (tag) {
+            gbc_writer.FT_ANY => .{ .typ = .any },
+            gbc_writer.FT_NULL_T => .{ .typ = .null_t },
+            gbc_writer.FT_INT => .{ .typ = .int },
+            gbc_writer.FT_FLOAT => .{ .typ = .float },
+            gbc_writer.FT_DECIMAL_T => .{ .typ = .decimal_t },
+            gbc_writer.FT_RUNE_T => .{ .typ = .rune_t },
+            gbc_writer.FT_BOOLEAN => .{ .typ = .boolean },
+            gbc_writer.FT_STRING => .{ .typ = .string },
+            gbc_writer.FT_ERROR_T => .{ .typ = .error_t },
+            gbc_writer.FT_ARRAY => blk: {
+                const has_elem = try r.bool8();
+                const elem: ?value_mod.FieldTypeSpec = if (has_elem) try readTypeSpec(r, hs, alloc) else null;
+                break :blk .{ .typ = .array, .elem_spec = elem };
+            },
+            gbc_writer.FT_MAP => blk: {
+                const has_key = try r.bool8();
+                const key: ?value_mod.FieldTypeSpec = if (has_key) try readTypeSpec(r, hs, alloc) else null;
+                const has_val = try r.bool8();
+                const val: ?value_mod.FieldTypeSpec = if (has_val) try readTypeSpec(r, hs, alloc) else null;
+                break :blk .{ .typ = .map, .key_spec = key, .val_spec = val };
+            },
+            gbc_writer.FT_STRUCT_T => .{ .typ = .struct_t, .struct_name = try copyStr(hs, try r.str_()) },
+            gbc_writer.FT_INTERFACE_T => .{ .typ = .interface_t, .interface_name = try copyStr(hs, try r.str_()) },
+            gbc_writer.FT_NAMED_T => .{ .typ = .named_t, .named_name = try copyStr(hs, try r.str_()) },
+            gbc_writer.FT_VARIANT_T => .{ .typ = .variant_t, .named_name = try copyStr(hs, try r.str_()) },
+            else => return error.BadFieldTypeTag,
+        };
+    }
+    return .{ .alts = alts };
+}
+
+fn copyStr(hs: *heap.State, s: []const u8) ![]const u8 {
+    if (s.len == 0) return "";
+    const buf = hs.bump(u8, s.len) orelse return error.OutOfMemory;
+    @memcpy(buf[0..s.len], s);
+    return buf[0..s.len];
+}
+
+const RawTypeEntry = struct {
+    kind: u8,
+    name: []const u8,
+    qualified_name: []const u8,
+    // STRUCT
+    fields: []value_mod.StructFieldSpec = &.{},
+    // NAMED
+    base: value_mod.NamedTypeBase = .int,
+    has_range: bool = false,
+    is_cycle: bool = false,
+    is_clamp: bool = false,
+    min: f64 = 0,
+    max: f64 = 0,
+    parent_name: []const u8 = "",
+    elem_spec: ?value_mod.FieldTypeSpec = null,
+    key_spec: ?value_mod.FieldTypeSpec = null,
+    val_spec: ?value_mod.FieldTypeSpec = null,
+};
+
+fn readTypesSection(r: *ByteReader, cs: *chunk.State, hs: *heap.State, alloc: std.mem.Allocator) ReadError![]RawTypeEntry {
+    const count = try r.u32_();
+    if (count > 65536) return error.TooManyTypes;
+    const out = try alloc.alloc(RawTypeEntry, count);
+    var i: u32 = 0;
+    while (i < count) : (i += 1) {
+        const kind = try r.u8_();
+        const name = try copyStr(hs, try r.str_());
+        const qualified_name = try copyStr(hs, try r.str_());
+        switch (kind) {
+            gbc_writer.TYPE_KIND_STRUCT => {
+                const field_count = try r.u16_();
+                // hs.bump, not alloc — embedded into the long-lived
+                // StructTypeObj this entry builds (see read()'s
+                // CONST_TYPE_REF case), same reasoning as above.
+                const fields = (hs.bump(value_mod.StructFieldSpec, field_count) orelse return error.OutOfMemory)[0..field_count];
+                var fi: u16 = 0;
+                while (fi < field_count) : (fi += 1) {
+                    const fname = try copyStr(hs, try r.str_());
+                    const ftype = try readTypeSpec(r, hs, alloc);
+                    const is_const = try r.bool8();
+                    // key is derivable from name (matches how the compiler
+                    // itself sets it — see compiler_decls.zig — so it's not
+                    // written to the wire at all): internStr doesn't copy,
+                    // and fname is already a heap-owned copy from copyStr
+                    // above, so this is safe without a second allocation.
+                    fields[fi] = .{ .name = fname, .typ = ftype, .is_const = is_const, .key = .{ .string = try cs.internStr(fname) } };
+                }
+                out[i] = .{ .kind = kind, .name = name, .qualified_name = qualified_name, .fields = fields };
+            },
+            gbc_writer.TYPE_KIND_NAMED => {
+                const base_byte = try r.u8_();
+                if (base_byte > @intFromEnum(value_mod.NamedTypeBase.enum_t)) return error.MalformedSection;
+                const base: value_mod.NamedTypeBase = @enumFromInt(base_byte);
+                const has_range = try r.bool8();
+                const is_cycle = try r.bool8();
+                const is_clamp = try r.bool8();
+                const min = try r.f64_();
+                const max = try r.f64_();
+                const parent_name = try copyStr(hs, try r.str_());
+                const has_elem = try r.bool8();
+                const elem_spec: ?value_mod.FieldTypeSpec = if (has_elem) try readTypeSpec(r, hs, alloc) else null;
+                const has_key = try r.bool8();
+                const key_spec: ?value_mod.FieldTypeSpec = if (has_key) try readTypeSpec(r, hs, alloc) else null;
+                const has_val = try r.bool8();
+                const val_spec: ?value_mod.FieldTypeSpec = if (has_val) try readTypeSpec(r, hs, alloc) else null;
+                out[i] = .{
+                    .kind = kind,
+                    .name = name,
+                    .qualified_name = qualified_name,
+                    .base = base,
+                    .has_range = has_range,
+                    .is_cycle = is_cycle,
+                    .is_clamp = is_clamp,
+                    .min = min,
+                    .max = max,
+                    .parent_name = parent_name,
+                    .elem_spec = elem_spec,
+                    .key_spec = key_spec,
+                    .val_spec = val_spec,
+                };
+            },
+            else => return error.MalformedSection,
+        }
+    }
+    return out;
+}
+
+fn readFunctionsSection(r: *ByteReader, hs: *heap.State, alloc: std.mem.Allocator) ![]RawFuncEntry {
     const count = try r.u32_();
     if (count > 65536) return error.TooManyFunctions;
     const out = try alloc.alloc(RawFuncEntry, count);
@@ -181,7 +328,11 @@ fn readFunctionsSection(r: *ByteReader, alloc: std.mem.Allocator) ![]RawFuncEntr
         var ri: u16 = 0;
         while (ri < return_type_count) : (ri += 1) try readAnyTypeSpec(r);
         const capture_slot_count = try r.u8_();
-        const capture_slots = try alloc.alloc(u8, capture_slot_count);
+        // hs.bump (GC heap), not alloc: this slice is embedded directly into
+        // the FuncObj constant this entry builds (see read()'s CONST_FUNC_REF
+        // case) and must live as long as that object does, not just for the
+        // duration of read() — alloc is freed/reused after read() returns.
+        const capture_slots = (hs.bump(u8, capture_slot_count) orelse return error.OutOfMemory)[0..capture_slot_count];
         var ci: u8 = 0;
         while (ci < capture_slot_count) : (ci += 1) capture_slots[ci] = try r.u8_();
         out[i] = .{
@@ -273,6 +424,7 @@ pub fn read(bytes: []const u8, cs: *chunk.State, hs: *heap.State, alloc: std.mem
     const bytecode_sec = findSection(sections, gbc_writer.SEC_BYTECODE) orelse return error.MissingRequiredSection;
     const constants_sec = findSection(sections, gbc_writer.SEC_CONSTANTS) orelse return error.MissingRequiredSection;
     const functions_sec = findSection(sections, gbc_writer.SEC_FUNCTIONS) orelse return error.MissingRequiredSection;
+    const types_sec = findSection(sections, gbc_writer.SEC_TYPES) orelse return error.MissingRequiredSection;
 
     // BYTECODE: copy directly into the fresh chunk.
     const code_bytes = body[bytecode_sec.offset..][0..bytecode_sec.length];
@@ -282,11 +434,17 @@ pub fn read(bytes: []const u8, cs: *chunk.State, hs: *heap.State, alloc: std.mem
     @memset(cs.lines[0..code_bytes.len], 0);
     @memset(cs.cols[0..code_bytes.len], 0);
 
-    // FUNCTIONS: parsed before CONSTANTS since FUNC_REF constants index into it.
+    // FUNCTIONS/TYPES: parsed before CONSTANTS since FUNC_REF/TYPE_REF
+    // constants index into them.
     const functions_bytes = body[functions_sec.offset..][0..functions_sec.length];
     var fr = ByteReader{ .bytes = functions_bytes };
-    const raw_funcs = try readFunctionsSection(&fr, alloc);
+    const raw_funcs = try readFunctionsSection(&fr, hs, alloc);
     defer alloc.free(raw_funcs);
+
+    const types_bytes = body[types_sec.offset..][0..types_sec.length];
+    var tr = ByteReader{ .bytes = types_bytes };
+    const raw_types = try readTypesSection(&tr, cs, hs, alloc);
+    defer alloc.free(raw_types);
 
     // CONSTANTS.
     const constants_bytes = body[constants_sec.offset..][0..constants_sec.length];
@@ -361,6 +519,49 @@ pub fn read(bytes: []const u8, cs: *chunk.State, hs: *heap.State, alloc: std.mem
                         .named_return_count = rf.named_return_count,
                     },
                 };
+                break :blk Value{ .object = obj };
+            },
+            gbc_writer.CONST_TYPE_REF => blk: {
+                const tidx = try cr.u32_();
+                if (tidx >= raw_types.len) return error.TypeRefOutOfRange;
+                const rt = raw_types[tidx];
+                const obj = hs.allocObject() orelse return error.OutOfMemory;
+                switch (rt.kind) {
+                    gbc_writer.TYPE_KIND_STRUCT => {
+                        obj.* = .{ .struct_type = .{
+                            .name = rt.name,
+                            .qualified_name = rt.qualified_name,
+                            .fields = rt.fields,
+                        } };
+                    },
+                    gbc_writer.TYPE_KIND_NAMED => {
+                        obj.* = .{
+                            .named_type = .{
+                                .name = rt.name,
+                                .qualified_name = rt.qualified_name,
+                                .base = rt.base,
+                                .has_range = rt.has_range,
+                                .is_cycle = rt.is_cycle,
+                                .is_clamp = rt.is_clamp,
+                                .min = rt.min,
+                                .max = rt.max,
+                                // Empty string means "no parent" (matches the
+                                // writer, which writes "" for a null
+                                // parent_name) — never a real qualified name,
+                                // since qualified names are always non-empty.
+                                .parent_name = if (rt.parent_name.len == 0) null else rt.parent_name,
+                                .elem_spec = rt.elem_spec,
+                                .key_spec = rt.key_spec,
+                                .val_spec = rt.val_spec,
+                                // predicate stays null: the writer rejects any
+                                // predicate-bearing named type with
+                                // error.UnsupportedConstant rather than reach
+                                // here (see gbc_writer.zig's .named_type case).
+                            },
+                        };
+                    },
+                    else => return error.MalformedSection,
+                }
                 break :blk Value{ .object = obj };
             },
             else => return error.BadConstantTag,
