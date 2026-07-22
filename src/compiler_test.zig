@@ -3667,3 +3667,216 @@ test "compiler: clamp is rejected on a non-numeric base, same as range/cycle" {
         \\type BadBase string clamp 0..100
     ));
 }
+
+// ── #210: limited operator overloading via reserved dunder methods ────────
+//
+// See dunderMethodName/dunderOpForBinaryTok/checkDunderConflict/
+// validateDunderSignature/lookupDunderCallee in compiler.zig, and
+// tryEmitDunderBinaryOp/unaryExpr's __neg__ branch in compiler_expr.zig for
+// the compile-time desugar (a + b -> a.__add__(b), same get_global+swap+call
+// shape as static method dispatch). tryStructDunderBinary/Unary in vm.zig
+// cover the runtime fallback needed inside type-erased generic bodies.
+
+test "compiler: a + b desugars to a direct call when the LHS struct type declares __add__" {
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\type Vec2 struct { x float, y float }
+        \\func (a Vec2) __add__(b Vec2) Vec2 { return a }
+        \\func f(a Vec2, b Vec2) Vec2 { return a + b }
+    );
+    const c = rt.chunk_state;
+    try std.testing.expect(try hasOp(c, .swap));
+    try std.testing.expect(try hasOp(c, .get_global));
+    try std.testing.expectEqual(@as(usize, 0), countOp(c, .add));
+}
+
+test "compiler: struct dunder arithmetic and unary minus compute correctly" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Vec2 struct { x float, y float }
+        \\func (a Vec2) __add__(b Vec2) Vec2 { return Vec2 { x: a.x + b.x, y: a.y + b.y } }
+        \\func (a Vec2) __sub__(b Vec2) Vec2 { return Vec2 { x: a.x - b.x, y: a.y - b.y } }
+        \\func (v Vec2) __neg__() Vec2 { return Vec2 { x: -v.x, y: -v.y } }
+        \\func addX() float {
+        \\    a := Vec2 { x: 1.0, y: 2.0 }
+        \\    b := Vec2 { x: 3.0, y: 4.0 }
+        \\    return (a + b).x
+        \\}
+        \\func subX() float {
+        \\    a := Vec2 { x: 5.0, y: 2.0 }
+        \\    b := Vec2 { x: 3.0, y: 4.0 }
+        \\    return (a - b).x
+        \\}
+        \\func negX() float {
+        \\    v := Vec2 { x: 5.0, y: 2.0 }
+        \\    return (-v).x
+        \\}
+    );
+    const va = try rt.callGlobal("addX", &.{});
+    try std.testing.expectApproxEqAbs(@as(f64, 4.0), va.float, 1e-9);
+    const vs = try rt.callGlobal("subX", &.{});
+    try std.testing.expectApproxEqAbs(@as(f64, 2.0), vs.float, 1e-9);
+    const vn = try rt.callGlobal("negX", &.{});
+    try std.testing.expectApproxEqAbs(@as(f64, -5.0), vn.float, 1e-9);
+}
+
+test "compiler: __compare__ drives all four ordering operators" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Box struct { v int }
+        \\func (a Box) __compare__(b Box) int {
+        \\    if a.v < b.v { return -1 }
+        \\    if a.v > b.v { return 1 }
+        \\    return 0
+        \\}
+        \\func lt() bool { return Box{v:1} < Box{v:2} }
+        \\func gt() bool { return Box{v:2} > Box{v:1} }
+        \\func le() bool { return Box{v:2} <= Box{v:2} }
+        \\func ge() bool { return Box{v:2} >= Box{v:2} }
+        \\func ltFalse() bool { return Box{v:2} < Box{v:1} }
+    );
+    try std.testing.expect((try rt.callGlobal("lt", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("gt", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("le", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("ge", &.{})).boolean);
+    try std.testing.expect(!(try rt.callGlobal("ltFalse", &.{})).boolean);
+}
+
+test "compiler: __eq__ drives == and != for a struct" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Box struct { v int }
+        \\func (a Box) __eq__(b Box) bool { return a.v == b.v }
+        \\func eq() bool { return Box{v:3} == Box{v:3} }
+        \\func neq() bool { return Box{v:3} != Box{v:4} }
+        \\func eqFalse() bool { return Box{v:3} == Box{v:4} }
+    );
+    try std.testing.expect((try rt.callGlobal("eq", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("neq", &.{})).boolean);
+    try std.testing.expect(!(try rt.callGlobal("eqFalse", &.{})).boolean);
+}
+
+test "compiler: declaring a dunder that conflicts with an already-working built-in operator is a compile error" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.DunderConflict, compile(&rt,
+        \\type Meters int
+        \\func (a Meters) __add__(b Meters) Meters { return a }
+    ));
+}
+
+test "compiler: a dunder that fills a genuine gap (decimal __rem__, __compare__) is allowed" {
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\type Money decimal 2
+        \\func (a Money) __rem__(b Money) Money { return a }
+        \\func (a Money) __compare__(b Money) int { return 0 }
+    );
+}
+
+test "compiler: a dunder with the wrong arity, param type, or return type is rejected" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.DunderSignatureMismatch, compile(&rt,
+        \\type Vec2 struct { x float, y float }
+        \\func (a Vec2) __add__(b Vec2, extra int) Vec2 { return a }
+    ));
+    var rt2 = try setup();
+    defer rt2.deinit();
+    try std.testing.expectError(error.DunderSignatureMismatch, compile(&rt2,
+        \\type Vec2 struct { x float, y float }
+        \\type Other struct { z int }
+        \\func (a Vec2) __add__(b Other) Vec2 { return a }
+    ));
+    var rt3 = try setup();
+    defer rt3.deinit();
+    try std.testing.expectError(error.DunderSignatureMismatch, compile(&rt3,
+        \\type Vec2 struct { x float, y float }
+        \\func (a Vec2) __eq__(b Vec2) int { return 0 }
+    ));
+}
+
+test "compiler: __compare__ satisfies the ordered generic constraint" {
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\type Box struct { v int }
+        \\func (a Box) __compare__(b Box) int { return 0 }
+        \\func biggest[T: ordered](xs []T) T { return xs[0] }
+        \\func f(boxes []Box) Box { return biggest[Box](boxes) }
+    );
+}
+
+test "compiler: dunder operators work at runtime inside a type-erased generic function body" {
+    // The compile-time desugar can't fire here (T is erased inside the
+    // generic body), so this exercises the VM-level runtime fallback
+    // (tryStructDunderBinary in vm.zig) instead.
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Box struct { v int }
+        \\func (a Box) __compare__(b Box) int {
+        \\    if a.v < b.v { return -1 }
+        \\    if a.v > b.v { return 1 }
+        \\    return 0
+        \\}
+        \\func biggest[T: ordered](xs []T) T {
+        \\    m := xs[0]
+        \\    i := 1
+        \\    for i < 3 {
+        \\        if xs[i] > m { m = xs[i] }
+        \\        i = i + 1
+        \\    }
+        \\    return m
+        \\}
+        \\func f() int {
+        \\    boxes := [Box{v:3}, Box{v:7}, Box{v:1}]
+        \\    best := biggest[Box](boxes)
+        \\    return best.v
+        \\}
+    );
+    const result = try rt.callGlobal("f", &.{});
+    try std.testing.expectEqual(@as(i64, 7), result.int);
+}
+
+test "compiler: := infers struct type for dunder dispatch, same as an explicitly var-typed local" {
+    // Struct literals previously left no ExprPrimInfo on their own result at
+    // all, and := never inferred struct_type for a local either — both
+    // fixed (compiler_expr.zig's structInstanceLit, compiler_stmts.zig's
+    // varDecl) so operator overloading works from ordinary short-decl style,
+    // not only from an explicitly `var x StructType`-typed local.
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Vec2 struct { x float, y float }
+        \\func (a Vec2) __add__(b Vec2) Vec2 { return Vec2 { x: a.x + b.x, y: a.y + b.y } }
+        \\func f() float {
+        \\    a := Vec2 { x: 1.0, y: 2.0 }
+        \\    b := Vec2 { x: 3.0, y: 4.0 }
+        \\    c := a + b
+        \\    return c.x
+        \\}
+    );
+    const result = try rt.callGlobal("f", &.{});
+    try std.testing.expectApproxEqAbs(@as(f64, 4.0), result.float, 1e-9);
+}
+
+test "compiler: := infers struct type for a top-level global too" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Vec2 struct { x float, y float }
+        \\func (a Vec2) __add__(b Vec2) Vec2 { return Vec2 { x: a.x + b.x, y: a.y + b.y } }
+        \\a := Vec2 { x: 1.0, y: 2.0 }
+        \\b := Vec2 { x: 3.0, y: 4.0 }
+        \\c := a + b
+        \\func f() float { return c.x }
+    );
+    const result = try rt.callGlobal("f", &.{});
+    try std.testing.expectApproxEqAbs(@as(f64, 4.0), result.float, 1e-9);
+}

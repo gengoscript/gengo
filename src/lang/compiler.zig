@@ -130,6 +130,15 @@ pub const Compiler = struct {
     inferred_named_global_names: [MaxLocals][]const u8 = undefined,
     inferred_named_global_types: [MaxLocals][]const u8 = undefined,
     inferred_named_global_count: u8 = 0,
+    // Same idea, for :=-inferred struct-typed globals (#210: needed so a
+    // dunder method declared on the struct is reachable from a top-level
+    // `a := Vec3{...}` read, not only from an explicitly `var a Vec3`-typed
+    // one). Structs have no prolog/epilog mechanism at all, so there's no
+    // sharp reason this couldn't live in typed_global_type_checks directly —
+    // kept as a separate table anyway, matching the named-type precedent.
+    inferred_struct_global_names: [MaxLocals][]const u8 = undefined,
+    inferred_struct_global_types: [MaxLocals][]const u8 = undefined,
+    inferred_struct_global_count: u8 = 0,
     compile_time_const_names: [ct.MaxGlobals][]const u8 = undefined,
     compile_time_const_values: [ct.MaxGlobals]ct.CompileTimeConst = undefined,
     compile_time_const_count: u16 = 0,
@@ -617,6 +626,15 @@ pub const Compiler = struct {
         return null;
     }
 
+    pub fn lookupInferredStructGlobal(self: *Compiler, name: []const u8) ?[]const u8 {
+        const qname = self.qualifyGlobalName(name) catch return null;
+        const count = self.inferred_struct_global_count;
+        for (self.inferred_struct_global_names[0..count], self.inferred_struct_global_types[0..count]) |n, st| {
+            if (common.streq(n, qname)) return st;
+        }
+        return null;
+    }
+
     fn primitiveTypeFromNumberTok(tok: Token) PrimType {
         const is_based = tok.src.len >= 2 and tok.src[0] == '0' and
             (tok.src[1] == 'x' or tok.src[1] == 'X' or
@@ -638,6 +656,159 @@ pub const Compiler = struct {
         };
     }
 
+    // ── #210: limited operator overloading via reserved dunder methods ────
+    //
+    // A struct-based (or non-conflicting-base named) type may declare
+    // __add__/__sub__/__mul__/__div__/__rem__/__neg__/__eq__/__compare__ as
+    // ordinary methods (no new keyword). The compiler desugars the matching
+    // operator to a direct call at compile time when the LHS's static type
+    // declares one — same mechanism as the existing static method-dispatch
+    // used for `.dot` calls (get_global + swap + call), just triggered by an
+    // operator token instead of `.name(...)` syntax. No new opcode.
+    //
+    // Exact-match only, permanently, not just for a first version: Gengo has
+    // no method overloading anywhere (two methods of the same name on one
+    // receiver is a compile error, see methodDecl's "duplicate method"
+    // check), so an asymmetric-operand form (Rust's `impl Add<Rhs>`) would
+    // require exactly the overloading the language doesn't have.
+    pub const DunderOp = enum { add, sub, mul, div, rem, neg, eq, compare };
+
+    pub fn dunderMethodName(op: DunderOp) []const u8 {
+        return switch (op) {
+            .add => "__add__",
+            .sub => "__sub__",
+            .mul => "__mul__",
+            .div => "__div__",
+            .rem => "__rem__",
+            .neg => "__neg__",
+            .eq => "__eq__",
+            .compare => "__compare__",
+        };
+    }
+
+    pub fn dunderOpFromName(name: []const u8) ?DunderOp {
+        if (common.streq(name, "__add__")) return .add;
+        if (common.streq(name, "__sub__")) return .sub;
+        if (common.streq(name, "__mul__")) return .mul;
+        if (common.streq(name, "__div__")) return .div;
+        if (common.streq(name, "__rem__")) return .rem;
+        if (common.streq(name, "__neg__")) return .neg;
+        if (common.streq(name, "__eq__")) return .eq;
+        if (common.streq(name, "__compare__")) return .compare;
+        return null;
+    }
+
+    pub fn dunderOpForBinaryTok(tt: TT) ?DunderOp {
+        return switch (tt) {
+            .plus => .add,
+            .minus => .sub,
+            .star => .mul,
+            .slash => .div,
+            .kw_rem => .rem,
+            .eq_eq, .bang_eq => .eq,
+            .lt, .gt, .lt_eq, .gt_eq => .compare,
+            else => null,
+        };
+    }
+
+    // True when `base` already has a real, correctly-working implementation
+    // of `op` today — declaring the matching dunder is then a compile error
+    // (see issue #210's per-operator conflict table; verified against the
+    // actual VM behavior, not assumed from what "should" work). Struct
+    // receivers have no NamedTypeBase and never reach this function.
+    pub fn baseHasBuiltinOperator(base: NamedTypeBase, op: DunderOp) bool {
+        return switch (base) {
+            .int, .float, .rune => true, // full arithmetic + comparison already work
+            .decimal => switch (op) {
+                .rem, .compare => false, // verified broken at runtime today
+                else => true, // + - * / == and unary - all work
+            },
+            .bool => op == .eq, // only == has a dedicated fast path
+            .string => op == .add or op == .eq, // concat and content equality work; ordering doesn't
+            .array_t, .map_t => false, // nothing works, including == (reference identity, not a real op)
+            .enum_t => op == .eq, // ordinal equality is real; ordering doesn't work
+        };
+    }
+
+    // Look up "{qualifiedTypeName}.{dunderName}" as a global function, into
+    // caller-supplied `buf` (avoids returning a slice into a stack-local
+    // buffer). Named-type receivers walk the parent chain, matching the
+    // existing static-method-dispatch lookup in compiler_expr.zig's `.dot`
+    // handling; struct receivers have no parent chain to walk.
+    pub fn lookupDunderCallee(self: *Compiler, buf: []u8, type_name: []const u8, is_struct: bool, op: DunderOp) ?[]const u8 {
+        const dname = dunderMethodName(op);
+        if (is_struct) {
+            const candidate = std.fmt.bufPrint(buf, "{s}.{s}", .{ type_name, dname }) catch return null;
+            return if (self.registry.hasGlobalFunc(candidate)) candidate else null;
+        }
+        var lookup: ?[]const u8 = type_name;
+        while (lookup) |cur| {
+            const candidate = std.fmt.bufPrint(buf, "{s}.{s}", .{ cur, dname }) catch return null;
+            if (self.registry.hasGlobalFunc(candidate)) return candidate;
+            const info = self.registry.getNamedTypeInfo(cur) orelse break;
+            lookup = info.parent_name;
+        }
+        return null;
+    }
+
+    // Pre-compilation: does declaring `method_name` on `recv_type` conflict
+    // with a real, working built-in operator? Struct receivers never
+    // conflict (structs have no built-in operators today beyond reference
+    // equality, which does not count as "real" per the design decision).
+    pub fn checkDunderConflict(self: *Compiler, recv_type: []const u8, is_struct: bool, method_name: []const u8) !void {
+        if (is_struct) return;
+        const op = dunderOpFromName(method_name) orelse return;
+        const info = self.registry.getNamedTypeInfo(recv_type) orelse return;
+        if (baseHasBuiltinOperator(info.base, op)) {
+            self.setErr("'{s}' already has a built-in '{s}'; operator overloading is only for operators its base type doesn't already define", .{ recv_type, dunderMethodName(op) });
+            return error.DunderConflict;
+        }
+    }
+
+    fn fieldTypeSpecIsExactlyType(spec: value_mod.FieldTypeSpec, qname: []const u8, is_struct: bool) bool {
+        if (spec.alts.len != 1) return false;
+        const alt = spec.alts[0];
+        if (is_struct) return alt.typ == .struct_t and common.streq(alt.struct_name, qname);
+        return alt.typ == .named_t and common.streq(alt.named_name, qname);
+    }
+
+    // Post-compilation: does the just-compiled method's signature match what
+    // this dunder requires? Binary ops: arity 1, no defaults/variadic,
+    // parameter type exactly the receiver's own type, return type exactly
+    // the receiver's own type (__eq__: bool; __compare__: int). __neg__:
+    // arity 0, return type exactly the receiver's own type.
+    pub fn validateDunderSignature(self: *Compiler, op: DunderOp, recv_qname: []const u8, is_struct: bool, func_obj: *value_mod.Object) !void {
+        if (func_obj.* != .function) return;
+        const f = func_obj.function;
+        // arity counts the receiver as param[0] (methodDecl passes it as a
+        // prefix param typed `.any`, see compileFuncWithPrefix) — binary
+        // dunders need one more explicit param beyond that, unary none.
+        const expected_arity: u8 = if (op == .neg) 1 else 2;
+        if (f.arity != expected_arity or f.is_variadic or f.default_count != 0) {
+            const expected_explicit: u8 = expected_arity - 1;
+            self.setErr("'{s}' must take exactly {d} argument(s) of type '{s}', with no defaults", .{ dunderMethodName(op), expected_explicit, recv_qname });
+            return error.DunderSignatureMismatch;
+        }
+        if (expected_arity == 2 and !fieldTypeSpecIsExactlyType(f.param_types[1], recv_qname, is_struct)) {
+            self.setErr("'{s}' parameter must be exactly '{s}'", .{ dunderMethodName(op), recv_qname });
+            return error.DunderSignatureMismatch;
+        }
+        const ok_return = switch (op) {
+            .eq => f.return_types.len == 1 and f.return_types[0].alts.len == 1 and f.return_types[0].alts[0].typ == .boolean,
+            .compare => f.return_types.len == 1 and f.return_types[0].alts.len == 1 and f.return_types[0].alts[0].typ == .int,
+            else => f.return_types.len == 1 and fieldTypeSpecIsExactlyType(f.return_types[0], recv_qname, is_struct),
+        };
+        if (!ok_return) {
+            const expect_str = switch (op) {
+                .eq => "bool",
+                .compare => "int",
+                else => recv_qname,
+            };
+            self.setErr("'{s}' must return exactly '{s}'", .{ dunderMethodName(op), expect_str });
+            return error.DunderSignatureMismatch;
+        }
+    }
+
     pub fn namedTypeCheckBasePrim(self: *Compiler, tc: TypeCheck) ?PrimType {
         if (tc != .named) return null;
         const info = self.registry.getNamedTypeInfo(tc.named) orelse return null;
@@ -655,6 +826,7 @@ pub const Compiler = struct {
             .string => .{ .prim = .string },
             .rune_t => .{ .prim = .rune },
             .named_t => .{ .named = spec.alts[0].named_name },
+            .struct_t => .{ .struct_type = spec.alts[0].struct_name },
             .array => .{ .assert_arr = spec.alts[0].elem_spec },
             .map => .{ .assert_map = spec.alts[0].val_spec },
             .error_t => .{ .assert_err = {} },
@@ -672,6 +844,7 @@ pub const Compiler = struct {
                 break :blk .{ .prim = prim, .named_type = name };
             },
             .assert_arr, .assert_map => |element_spec| .{ .index_result_spec = element_spec },
+            .struct_type => |name| .{ .struct_type = name },
             else => .{},
         };
     }
@@ -800,6 +973,8 @@ pub const Compiler = struct {
                         return;
                     };
                     self.expr_prim_info[self.expr_depth] = .{ .prim = p, .named_type = n, .is_constant = false, .is_plain_binding = true, .is_zero_int = false };
+                } else if (self.lookupInferredStructGlobal(tok.src)) |st| {
+                    self.expr_prim_info[self.expr_depth] = .{ .struct_type = st, .is_constant = false, .is_plain_binding = true, .is_zero_int = false };
                 } else {
                     self.clearCurrentExprPrimInfo();
                 }

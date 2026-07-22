@@ -21,6 +21,7 @@
 - **Range bounds with any numeric base** — `type Port int range 1..0xFFFF` and similar are now valid.
 - **Named type bounds** — `T.first` and `T.last` on ranged named types return the boundary as a named-type value.
 - **`clamp` — a third named-type range mode** — `type Percent int clamp 0..100` saturates an out-of-bounds value to the nearest bound instead of raising a range error (`range`) or wrapping (`cycle`). Works on `int`/`float`/`decimal`/`rune` bases, is inherited by subtypes, and composes with `predicate` (clamping runs first; the predicate then checks the clamped result). `default` is still validated strictly against the range regardless of mode.
+- **Limited operator overloading via reserved dunder methods** — a struct (or non-conflicting-base named) type may declare `__add__`/`__sub__`/`__mul__`/`__div__`/`__rem__`/`__neg__`/`__eq__`/`__compare__` as ordinary methods; `a + b` desugars to `a.__add__(b)` when the compiler can resolve `a`'s static type at compile time, and falls back to a runtime lookup inside type-erased generic function bodies. `__compare__` backs all four ordering operators at once (Kotlin's `compareTo` trick); `!=` is derived from `__eq__`. No asymmetric operand form — the parameter type must be exactly the receiver's own type. A named type may only declare a dunder for an operator its base doesn't already implement (declaring `__add__` on an `int`-based type is a compile error). A type declaring `__compare__`/`__eq__` also satisfies the `ordered`/`comparable` generic constraints.
 
 ### Standard Library (unreleased)
 

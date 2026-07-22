@@ -332,6 +332,52 @@ fn bigIntBinOpWithPromotion(ctx: VMContext, a: Value, b: Value, op: enum { add, 
     };
 }
 
+fn structTypeOf(v: Value) ?*Object {
+    if (v != .object) return null;
+    return switch (v.object.*) {
+        .struct_instance => |si| si.typ,
+        .small_struct_instance => |ssi| ssi.typ,
+        else => null,
+    };
+}
+
+// #210: runtime fallback for dunder-overloaded operators, needed when the
+// compiler couldn't resolve them at compile time — chiefly inside a
+// type-erased generic function body, where the compile-time desugar in
+// compiler_expr.zig has no concrete static type to dispatch against. Both
+// operands must be the same struct type; structs are never monomorphized,
+// so pointer equality on the type object is both valid and cheap. Returns
+// null (not an error) when no dunder applies, so every call site falls
+// through to its existing error path unchanged. Reuses callFunction, the
+// same reentrant-call idiom already used for named-type predicates and
+// std.array/std.sort callbacks — safe here because both operands are
+// already off the value stack (popped) with no allocation happening before
+// the call, so nothing needs extra GC rooting (see the string-concat branch
+// below for the pattern were that ever to change).
+// noinline: these sit in the hot dispatch loop's biggest switch (interp's
+// main function). Every extra byte of inlined code at each of the ~9 call
+// sites grows that switch's total size, which costs I-cache/branch-predictor
+// performance on tight dispatch loops (fib-style recursion) even though the
+// bodies below never execute on those paths — measured via
+// tools/time-bench.sh, not assumed.
+noinline fn tryStructDunderBinary(ctx: VMContext, a: Value, b: Value, dunder: []const u8) !?Value {
+    const at = structTypeOf(a) orelse return null;
+    const bt = structTypeOf(b) orelse return null;
+    if (at != bt) return null;
+    var buf: [160]u8 = undefined;
+    const key = std.fmt.bufPrint(&buf, "{s}.{s}", .{ at.struct_type.qualified_name, dunder }) catch return null;
+    const method = ctx.gs.get(key) orelse return null;
+    return try callFunction(ctx, method, &.{ a, b });
+}
+
+noinline fn tryStructDunderUnary(ctx: VMContext, v: Value, dunder: []const u8) !?Value {
+    const vt = structTypeOf(v) orelse return null;
+    var buf: [160]u8 = undefined;
+    const key = std.fmt.bufPrint(&buf, "{s}.{s}", .{ vt.struct_type.qualified_name, dunder }) catch return null;
+    const method = ctx.gs.get(key) orelse return null;
+    return try callFunction(ctx, method, &.{v});
+}
+
 fn computeAddResult(ctx: VMContext, a: Value, b: Value) !Value {
     if (a == .int and b == .int) return .{ .int = a.int + b.int };
     if (a == .float and b == .float) {
@@ -342,6 +388,7 @@ fn computeAddResult(ctx: VMContext, a: Value, b: Value) !Value {
         }
         return .{ .float = r };
     }
+    if (try tryStructDunderBinary(ctx, a, b, "__add__")) |r| return r;
     if (vmbigint.isBigInt(a) or vmbigint.isBigInt(b)) {
         return bigIntBinOpWithPromotion(ctx, a, b, .add);
     }
@@ -385,6 +432,10 @@ fn computeAddResult(ctx: VMContext, a: Value, b: Value) !Value {
 }
 
 fn pushSubResult(ctx: VMContext, a: Value, b: Value) !void {
+    if (try tryStructDunderBinary(ctx, a, b, "__sub__")) |r| {
+        try ctx.vs.vmPush(r);
+        return;
+    }
     const an = try valueAsNumberForOp(ctx, a, b, "-");
     const bn = try valueAsNumberForOp(ctx, b, a, "-");
     const tag = numericOpTag(a, b) catch |err| {
@@ -2804,6 +2855,10 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                     try ctx.vs.vmPush(.{ .float = r });
                     continue;
                 }
+                if (try tryStructDunderBinary(ctx, a, b, "__mul__")) |r| {
+                    try ctx.vs.vmPush(r);
+                    continue;
+                }
                 if (vmbigint.isBigInt(a) or vmbigint.isBigInt(b)) {
                     try ctx.vs.vmPush(try bigIntBinOpWithPromotion(ctx, a, b, .mul));
                     continue;
@@ -2851,6 +2906,10 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                         return error.TypeError;
                     }
                     try ctx.vs.vmPush(.{ .float = r });
+                    continue;
+                }
+                if (try tryStructDunderBinary(ctx, a, b, "__div__")) |r| {
+                    try ctx.vs.vmPush(r);
                     continue;
                 }
                 if (decimalOpValues(a, b)) |_| {
@@ -2931,6 +2990,10 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                         return error.DivisionByZero;
                     }
                     try ctx.vs.vmPush(.{ .float = common.fmod(a.float, b.float) });
+                    continue;
+                }
+                if (try tryStructDunderBinary(ctx, a, b, "__rem__")) |r| {
+                    try ctx.vs.vmPush(r);
                     continue;
                 }
                 const nop = try numericBinaryOp(ctx, a, b, "rem");
@@ -3225,6 +3288,11 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                     .int => |n| .{ .int = -n },
                     .float => |n| .{ .float = -n },
                     else => {
+                        if (try tryStructDunderUnary(ctx, unboxed, "__neg__")) |r| {
+                            _ = try ctx.vs.vmPop();
+                            try ctx.vs.vmPush(r);
+                            continue;
+                        }
                         _ = try ctx.vs.vmPop();
                         ctx.vs.setRuntimeErr("cannot negate {s}", .{vmtyp.runtimeTypeName(v)});
                         return error.TypeError;
@@ -3311,6 +3379,10 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                     try ctx.vs.vmPush(.{ .boolean = a.boolean == b.boolean });
                     continue;
                 }
+                if (try tryStructDunderBinary(ctx, a, b, "__eq__")) |r| {
+                    try ctx.vs.vmPush(r);
+                    continue;
+                }
                 try checkNamedValueCompatibility(ctx, a, b);
                 try ctx.vs.vmPush(.{ .boolean = Value.equals(vms.unboxNamed(a), vms.unboxNamed(b)) });
             },
@@ -3327,6 +3399,10 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                         return error.TypeError;
                     };
                     try ctx.vs.vmPush(.{ .boolean = ord == .gt });
+                    continue;
+                }
+                if (try tryStructDunderBinary(ctx, a, b, "__compare__")) |r| {
+                    try ctx.vs.vmPush(.{ .boolean = r.int > 0 });
                     continue;
                 }
                 const n = try compareNumericPair(ctx, a, b, ">");
@@ -3347,6 +3423,10 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                     try ctx.vs.vmPush(.{ .boolean = ord == .lt });
                     continue;
                 }
+                if (try tryStructDunderBinary(ctx, a, b, "__compare__")) |r| {
+                    try ctx.vs.vmPush(.{ .boolean = r.int < 0 });
+                    continue;
+                }
                 const n = try compareNumericPair(ctx, a, b, "<");
                 try ctx.vs.vmPush(.{ .boolean = n.an < n.bn });
             },
@@ -3359,6 +3439,10 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 }
                 if (a == .boolean and b == .boolean) {
                     try ctx.vs.vmPush(.{ .boolean = a.boolean != b.boolean });
+                    continue;
+                }
+                if (try tryStructDunderBinary(ctx, a, b, "__eq__")) |r| {
+                    try ctx.vs.vmPush(.{ .boolean = !r.boolean });
                     continue;
                 }
                 try checkNamedValueCompatibility(ctx, a, b);
@@ -3379,6 +3463,10 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                     try ctx.vs.vmPush(.{ .boolean = ord != .gt });
                     continue;
                 }
+                if (try tryStructDunderBinary(ctx, a, b, "__compare__")) |r| {
+                    try ctx.vs.vmPush(.{ .boolean = r.int <= 0 });
+                    continue;
+                }
                 const n = try compareNumericPair(ctx, a, b, "<=");
                 try ctx.vs.vmPush(.{ .boolean = n.an <= n.bn });
             },
@@ -3395,6 +3483,10 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                         return error.TypeError;
                     };
                     try ctx.vs.vmPush(.{ .boolean = ord != .lt });
+                    continue;
+                }
+                if (try tryStructDunderBinary(ctx, a, b, "__compare__")) |r| {
+                    try ctx.vs.vmPush(.{ .boolean = r.int >= 0 });
                     continue;
                 }
                 const n = try compareNumericPair(ctx, a, b, ">=");

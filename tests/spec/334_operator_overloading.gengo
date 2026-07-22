@@ -1,0 +1,74 @@
+std := import("std")
+
+// Limited operator overloading via reserved dunder methods (#210): a
+// struct-based (or non-conflicting-base named) type may declare
+// __add__/__sub__/__mul__/__div__/__rem__/__neg__/__eq__/__compare__ as
+// ordinary methods. `a + b` desugars to `a.__add__(b)` when the compiler
+// can see a's static type declares one; __compare__ backs all four
+// ordering operators (Kotlin's compareTo trick).
+type Vec2 struct { x float, y float }
+
+func (a Vec2) __add__(b Vec2) Vec2 {
+    return Vec2 { x: a.x + b.x, y: a.y + b.y }
+}
+
+func (a Vec2) __sub__(b Vec2) Vec2 {
+    return Vec2 { x: a.x - b.x, y: a.y - b.y }
+}
+
+func (v Vec2) __neg__() Vec2 {
+    return Vec2 { x: -v.x, y: -v.y }
+}
+
+func (a Vec2) __eq__(b Vec2) bool {
+    return a.x == b.x and a.y == b.y
+}
+
+type Box struct { v int }
+
+func (a Box) __compare__(b Box) int {
+    if a.v < b.v { return -1 }
+    if a.v > b.v { return 1 }
+    return 0
+}
+
+// A generic function operating on the erased type parameter T: the
+// compile-time desugar can't resolve __compare__ here (T is unknown until
+// called), so this exercises the VM-level runtime fallback instead.
+func biggest[T: ordered](xs []T) T {
+    m := xs[0]
+    i := 1
+    for i < std.core.len(xs) {
+        if xs[i] > m { m = xs[i] }
+        i = i + 1
+    }
+    return m
+}
+
+a := Vec2 { x: 1.0, y: 2.0 }
+b := Vec2 { x: 3.0, y: 4.0 }
+
+c := a + b
+std.io.println(c.x)
+std.io.println(c.y)
+
+d := a - b
+std.io.println(d.x)
+std.io.println(d.y)
+
+e := -a
+std.io.println(e.x)
+std.io.println(e.y)
+
+std.io.println(a == Vec2 { x: 1.0, y: 2.0 })
+std.io.println(a == b)
+std.io.println(a != b)
+
+boxes := [Box{v:3}, Box{v:7}, Box{v:1}]
+best := biggest[Box](boxes)
+std.io.println(best.v)
+
+std.io.println(Box{v:1} < Box{v:2})
+std.io.println(Box{v:2} > Box{v:1})
+std.io.println(Box{v:2} <= Box{v:2})
+std.io.println(Box{v:2} >= Box{v:2})

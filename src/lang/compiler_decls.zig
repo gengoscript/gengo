@@ -319,10 +319,18 @@ pub fn methodDecl(c: anytype) !void {
     const method_name = c.cur.src;
     c.advance();
 
+    const is_struct_recv = c.registry.hasStructType(recv_type);
+    if (!c.skipping_test_body) try c.checkDunderConflict(recv_type, is_struct_recv, method_name);
+
     var prefix: [1][]const u8 = .{recv_name};
     _ = try c.compileFuncWithPrefix(prefix[0..], true, null);
 
     const qrecv_type = try c.qualifyTypeName(recv_type);
+    if (!c.skipping_test_body) {
+        if (Compiler.dunderOpFromName(method_name)) |dop| {
+            if (c.last_func_obj) |fo| try c.validateDunderSignature(dop, qrecv_type, is_struct_recv, fo);
+        }
+    }
     const total = qrecv_type.len + 1 + method_name.len;
     const key_buf = c.hs.bump(u8, total) orelse return error.OutOfMemory;
     @memcpy(key_buf[0..qrecv_type.len], qrecv_type);
@@ -926,7 +934,22 @@ fn satisfiesConstraint(constraint: []const u8, spec: FieldTypeSpec, registry: *c
         .named_t => if (namedInfo(registry, alt.named_name)) |info| info.base == .string else false,
         else => false,
     };
-    return is_ordered; // constraint == "ordered"
+    if (is_ordered) return true;
+
+    // #210: a struct (or non-numeric/non-string named) type also satisfies
+    // 'ordered' if it declares __compare__ — the same dunder that drives
+    // </>/<=/>= at the operator level.
+    var buf: [160]u8 = undefined;
+    const qname: ?[]const u8 = switch (alt.typ) {
+        .struct_t => alt.struct_name,
+        .named_t => alt.named_name,
+        else => null,
+    };
+    if (qname) |q| {
+        const key = std.fmt.bufPrint(&buf, "{s}.__compare__", .{q}) catch return false;
+        if (registry.hasGlobalFunc(key)) return true;
+    }
+    return false; // constraint == "ordered"
 }
 
 pub fn checkTypeArgConstraints(c: anytype, params: []const ct.GenericParam, args: []const FieldTypeSpec, func_name: []const u8, line: u32) !void {
