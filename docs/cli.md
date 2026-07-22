@@ -34,6 +34,7 @@ script from standard input instead.
 | `--help`, `-h` | Print the option summary and exit. |
 | `--version` | Print the CLI version and exit. |
 | `--disasm` | Compile and print a bytecode disassembly without running the script. This is an implementation-debugging aid, not language semantics. |
+| `--emit-gbc path` | Compile the script and write a GBC (Gengo Bytecode Cache) artifact to `path`; do not run. See below. |
 | `--test` | Run top-level `test` blocks rather than ordinary script execution. A failed test exits unsuccessfully. |
 | `--profile` | With `--test`, print each block's instruction count and peak heap bytes/stack depth/live object count, plus a final peak-across-all-blocks summary line. Does not affect pass/fail behavior or the exit code. Forces per-instruction instruction counting on for the run, which costs real speed — a diagnostic aid, not something to leave on by default. |
 | `--cap name` | Enable one named capability. Repeat for several capabilities. See `capabilities.md`; no capability is enabled merely by importing it. |
@@ -71,6 +72,32 @@ gengo --cap fs --mount assets=./assets app/main.gengo
 
 The script can then use paths under `assets/...`. See the capability reference
 for traversal, symlink, and host-platform limits.
+
+## GBC (Bytecode Cache)
+
+`--emit-gbc path` compiles a script and writes a `.gbc` artifact instead of
+running it. A `.gbc` file passed as the script argument runs directly,
+skipping parsing and compilation entirely — the file is recognized by its
+magic bytes, not its extension, though naming it `.gbc` is the convention:
+
+```bash
+gengo --emit-gbc app.gbc app.gengo    # compile once
+gengo app.gbc                         # run the cached artifact, repeatedly
+```
+
+This is early — the current implementation covers a first milestone (see
+`dev-docs/design/gbc-spec.md` and GitHub issue #5), not the full format:
+
+- Scripts using `struct`/named-type values or closures with captures are not
+  yet supported; `--emit-gbc` fails with a clear error naming the limitation
+  rather than producing a broken artifact.
+- The artifact records a hash of the source it was compiled from, but the
+  CLI does not yet check it against the current source file before running
+  a `.gbc` — nothing currently stops you from running a `.gbc` that no
+  longer matches its `.gengo` source. Treat a `.gbc` as something you
+  regenerate whenever its source changes, not as a transparent, self-invalidating
+  cache yet.
+- `--emit-gbc` is not currently supported when running the WASI build.
 
 ## REPL
 

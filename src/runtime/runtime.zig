@@ -6,6 +6,7 @@ const heap = @import("heap.zig");
 const io = @import("io.zig");
 const module_compile = @import("../lang/module_compile.zig");
 const fusion_pass = @import("../lang/fusion_pass.zig");
+const gbc_reader = @import("../lang/gbc_reader.zig");
 const vm = @import("../lang/vm.zig");
 const vms = @import("../lang/vm_state.zig");
 const vmnative = @import("../lang/vm_native.zig");
@@ -385,6 +386,35 @@ pub const Runtime = struct {
         try vmnative.installStdGlobal(install_ctx, &self.globals_state);
         try vmnative.installHostModules(install_ctx, &self.globals_state, self.host_modules);
         try vmnative.installCapabilityModules(install_ctx, &self.globals_state, self.capabilityModules());
+    }
+
+    // Loads and runs a GBC artifact directly (no source, no compilation) —
+    // the "ship a .gbc to a constrained host" path #5's spec motivates.
+    // Mirrors runPathWithProvider's post-compile tail exactly (install
+    // natives, vm.run), just with gbc_reader.read()+fusion_pass.fuse() in
+    // place of compileProgram(). Test blocks are out of scope for this GBC
+    // milestone (no test-name metadata is serialized yet), so this doesn't
+    // support --test the way runPathWithProvider does.
+    pub fn runFromGbc(self: *Runtime, bytes: []const u8) !void {
+        defer self.assertNoTempRootLeaks("Runtime.runFromGbc");
+        self.last_runtime_line = 0;
+        self.last_runtime_col = 0;
+        self.last_runtime_path_len = 0;
+        self.last_runtime_msg_len = 0;
+        self.panic_depth = 0;
+        self.reset();
+        self.vm_state.setPolicy(self.policy);
+        try gbc_reader.read(bytes, self.chunk_state, &self.heap_state, self.vm_state.allocator);
+        try fusion_pass.fuse(self.chunk_state, self.vm_state.allocator);
+
+        const install_ctx: vms.VMContext = .{ .cs = self.chunk_state, .gs = &self.globals_state, .hs = &self.heap_state, .vs = &self.vm_state };
+        try vmnative.installStdGlobal(install_ctx, &self.globals_state);
+        try vmnative.installHostModules(install_ctx, &self.globals_state, self.host_modules);
+        try vmnative.installCapabilityModules(install_ctx, &self.globals_state, self.capabilityModules());
+        vm.run(install_ctx) catch |err| {
+            self.captureRuntimeError();
+            return err;
+        };
     }
 
     pub fn runPathWithProvider(self: *Runtime, src: []const u8, path: []const u8, provider: module_compile.SourceProvider, test_mode: bool) !void {
