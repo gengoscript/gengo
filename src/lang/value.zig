@@ -112,6 +112,7 @@ pub const NamedTypeObj = struct {
     is_anonymous: bool = false,
     has_range: bool = false,
     is_cycle: bool = false,
+    is_clamp: bool = false,
     scale: u8 = 0,
     min: f64 = 0,
     max: f64 = 0,

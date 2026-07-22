@@ -20,6 +20,7 @@
 - **Enum zero-initialisation** — `var s Status` now initialises to the first declared member. Previously it panicked.
 - **Range bounds with any numeric base** — `type Port int range 1..0xFFFF` and similar are now valid.
 - **Named type bounds** — `T.first` and `T.last` on ranged named types return the boundary as a named-type value.
+- **`clamp` — a third named-type range mode** — `type Percent int clamp 0..100` saturates an out-of-bounds value to the nearest bound instead of raising a range error (`range`) or wrapping (`cycle`). Works on `int`/`float`/`decimal`/`rune` bases, is inherited by subtypes, and composes with `predicate` (clamping runs first; the predicate then checks the clamped result). `default` is still validated strictly against the range regardless of mode.
 
 ### Standard Library (unreleased)
 

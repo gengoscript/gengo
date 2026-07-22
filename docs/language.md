@@ -453,7 +453,7 @@ if import in interface mod not null or pub rem return struct subtype switch
 test trap true type var variant when
 ```
 
-`range`, `cycle`, `default`, `predicate`, and `message` are contextual
+`range`, `cycle`, `clamp`, `default`, `predicate`, and `message` are contextual
 keywords. They have their special meaning only in a type declaration or
 `switch` clause and can otherwise be used as ordinary identifiers. All other
 keywords above are reserved everywhere.
@@ -1035,7 +1035,7 @@ var p Port
 var on Enabled
 ```
 
-The clause words `range`, `cycle`, `default`, `predicate`, and `message`
+The clause words `range`, `cycle`, `clamp`, `default`, `predicate`, and `message`
 are contextual: they act as keywords only in their clause positions inside
 a `type` or `subtype` declaration (and `default` in `switch` bodies), and
 are ordinary identifiers everywhere else:
@@ -1077,17 +1077,21 @@ std.io.println(Port.last)    // Port(65535)
 ```
 
 Named numeric types also expose `.succ(value)` and `.pred(value)` on the type
-object. Range types step by one and clamp to the declared domain; cycle types
-step by one and wrap:
+object. Range types step by one and raise a runtime range error if the result
+would fall outside the declared domain; cycle types step by one and wrap;
+clamp types step by one and saturate at the nearest bound instead of erroring:
 
 ```gengo
 type Step int range 1..100
 type Hour int cycle 0..23
+type Bounded int clamp 1..100
 
-std.io.println(Step.succ(Step(50)))   // 51
-std.io.println(Step.pred(Step(50)))   // 49
-std.io.println(Hour.succ(Hour(23)))   // 0
-std.io.println(Hour.pred(Hour(0)))    // 23
+std.io.println(Step.succ(Step(50)))      // 51
+std.io.println(Step.pred(Step(50)))      // 49
+// Step.succ(Step(100))                  // runtime range error — 101 is out of bounds
+std.io.println(Hour.succ(Hour(23)))      // 0
+std.io.println(Hour.pred(Hour(0)))       // 23
+std.io.println(Bounded.succ(Bounded(100)))  // 100 — saturates instead of erroring
 ```
 
 Cycle types wrap through their declared domain during arithmetic. `cycle`
@@ -1110,6 +1114,31 @@ type Degrees float cycle 0.0..360.0
 
 std.io.println(Degrees(360.0))            // 0 — max wraps to min
 std.io.println(Degrees(350.0) + Degrees(20.0))  // 10
+```
+
+`clamp` is a third domain mode: instead of raising a range error or wrapping,
+an out-of-bounds value saturates to the nearest bound. It works on any
+numeric base — `int`, `float`, `decimal`, or `rune` — and is inherited by
+subtypes the same way `range`/`cycle` are:
+
+```gengo
+type Percent int clamp 0..100
+
+std.io.println(Percent(150))   // 100
+std.io.println(Percent(-10))   // 0
+std.io.println(Percent(50))    // 50
+```
+
+Clamping only affects the `min..max` bound; a `predicate` on the same type
+still runs afterward, checking the clamped result rather than the original
+value. A `default` value is still validated strictly against the range at
+compile time — `clamp` does not relax that check:
+
+```gengo
+type EvenPercent int clamp 0..100 predicate func(x) { return x rem 2 == 0 }
+
+std.io.println(EvenPercent(200))   // 100 — clamps to 100, which is even
+// EvenPercent(99)                 // predicate failure — 99 is in range, not clamped, and odd
 ```
 
 Subtypes allow narrower domains inside an existing named type. Any scalar

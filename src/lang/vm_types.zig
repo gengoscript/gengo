@@ -461,6 +461,17 @@ fn wrapCycleValue(min: f64, max: f64, n: f64, continuous: bool) !f64 {
     return result;
 }
 
+// Saturate `n` to `min..max` instead of erroring or wrapping. Unlike
+// wrapCycleValue, there's no discrete/continuous distinction to make — a
+// clamped max is a valid value in both the int and float/decimal cases,
+// matching plain 'range' semantics at the boundary, not 'cycle' semantics.
+fn clampValue(min: f64, max: f64, n: f64) !f64 {
+    if (!std.math.isFinite(n)) return error.RangeError;
+    if (n < min) return min;
+    if (n > max) return max;
+    return n;
+}
+
 pub fn constructNamedType(ctx: VMContext, typ_obj: *Object, arg: Value) !Value {
     if (typ_obj.* != .named_type) return error.TypeError;
     const nt = typ_obj.named_type;
@@ -493,6 +504,9 @@ pub fn constructNamedType(ctx: VMContext, typ_obj: *Object, arg: Value) !Value {
                 if (nt.is_cycle) {
                     const wrapped = try wrapCycleValueWithError(ctx, nt.name, nt.min, nt.max, n, false);
                     base_v = .{ .int = @intFromFloat(wrapped) };
+                } else if (nt.is_clamp) {
+                    const clamped = try clampValue(nt.min, nt.max, n);
+                    base_v = .{ .int = @intFromFloat(clamped) };
                 } else {
                     setNamedRangeError(ctx, typ_obj, n);
                     return error.RangeError;
@@ -520,6 +534,9 @@ pub fn constructNamedType(ctx: VMContext, typ_obj: *Object, arg: Value) !Value {
                 if (nt.is_cycle) {
                     const wrapped = try wrapCycleValueWithError(ctx, nt.name, nt.min, nt.max, n, true);
                     base_v = .{ .float = wrapped };
+                } else if (nt.is_clamp) {
+                    const clamped = try clampValue(nt.min, nt.max, n);
+                    base_v = .{ .float = clamped };
                 } else {
                     setNamedRangeError(ctx, typ_obj, n);
                     return error.RangeError;
@@ -555,6 +572,11 @@ pub fn constructNamedType(ctx: VMContext, typ_obj: *Object, arg: Value) !Value {
                 if (out_of_bounds) {
                     if (nt.is_cycle) {
                         base_v = .{ .decimal = try wrapDecimalCycle(ctx, nt, fv, factor) };
+                    } else if (nt.is_clamp) {
+                        const clamped = try clampValue(nt.min, nt.max, fv);
+                        const raw = @round(clamped * factor);
+                        if (!std.math.isFinite(raw) or raw < -i64_f64_bound or raw >= i64_f64_bound) return error.TypeError;
+                        base_v = .{ .decimal = @intFromFloat(raw) };
                     } else {
                         setNamedRangeError(ctx, typ_obj, fv);
                         return error.RangeError;
@@ -586,10 +608,16 @@ pub fn constructNamedType(ctx: VMContext, typ_obj: *Object, arg: Value) !Value {
                 else => return error.TypeError,
             };
             const rf: f64 = @floatFromInt(r);
-            base_v = .{ .rune = r };
             if (nt.has_range and (rf < nt.min or rf > nt.max)) {
-                setNamedRangeError(ctx, typ_obj, rf);
-                return error.RangeError;
+                if (nt.is_clamp) {
+                    const clamped = try clampValue(nt.min, nt.max, rf);
+                    base_v = .{ .rune = @intFromFloat(clamped) };
+                } else {
+                    setNamedRangeError(ctx, typ_obj, rf);
+                    return error.RangeError;
+                }
+            } else {
+                base_v = .{ .rune = r };
             }
         },
         .string => {
@@ -687,6 +715,9 @@ pub fn applyNamedTypeFn(ctx: VMContext, typ_obj: *Object, kind: @import("value.z
             Value{ .float = try wrapCycleValue(nt.min, nt.max, result, true) }
         else
             Value{ .int = @intFromFloat(try wrapCycleValue(nt.min, nt.max, result, false)) };
+    } else if (nt.is_clamp) {
+        const clamped = try clampValue(nt.min, nt.max, result);
+        return if (nt.base == .float) Value{ .float = clamped } else Value{ .int = @intFromFloat(clamped) };
     } else {
         if (result < nt.min or result > nt.max) {
             setNamedRangeError(ctx, typ_obj, result);
