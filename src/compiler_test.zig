@@ -3214,3 +3214,129 @@ test "compiler: function returning a named type is not returns_proven" {
     const func = findFuncObjNamed(c, "clampMeters") orelse return error.TestUnexpectedResult;
     try std.testing.expect(!func.returns_proven);
 }
+
+// ── #204 native-lane backfill: typed-assignment prolog/epilog matrix ──────
+//
+// See dev-docs/design/compiler-architecture.md §9's "Erased vs. boxed named
+// types" invariant: named types over a scalar/enum base are erased at
+// runtime, so the compiler emits validate-in-place ops (validate_named_range
+// / check_named_predicate) instead of a real constructor call; named types
+// over a non-scalar base (string/array/map) always go through a real
+// get_global+call(1) constructor. This distinction is threaded through
+// compoundStmt, incrStmt, and returnStmt's named-return epilogs. Had zero
+// native coverage before this (#204).
+
+fn countOp(c: *chunk.State, op: Op) usize {
+    var count: usize = 0;
+    for (c.code[0..c.code_len]) |byte| {
+        if (byte == @intFromEnum(op)) count += 1;
+    }
+    return count;
+}
+
+test "compiler: compound assign on an erased-named local validates in place" {
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\type Meters int range 0..1000
+        \\func bump(m Meters) Meters {
+        \\    m += Meters(5)
+        \\    return m
+        \\}
+    );
+    const c = rt.chunk_state;
+    try std.testing.expect(countOp(c, .validate_named_range) >= 1);
+    try std.testing.expectEqual(@as(usize, 0), countOp(c, .named_inner));
+}
+
+test "compiler: compound assign on a boxed-named local unwraps and reconstructs" {
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\type Tag string
+        \\func shout(t Tag) Tag {
+        \\    t += Tag("!")
+        \\    return t
+        \\}
+    );
+    const c = rt.chunk_state;
+    // Boxed path: get_global (constructor callee) before the epilog's call,
+    // named_inner to unwrap both operands, and no validate_named_range
+    // (the VM's .named_type call handler does the validation, not the
+    // compiler's fast-path ops).
+    try std.testing.expect(countOp(c, .named_inner) >= 1);
+    try std.testing.expectEqual(@as(usize, 0), countOp(c, .validate_named_range));
+    try std.testing.expectEqual(@as(usize, 0), countOp(c, .check_named_predicate));
+}
+
+test "compiler: increment on an erased-named local validates in place" {
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\type Meters int range 0..1000
+        \\func step(m Meters) Meters {
+        \\    m++
+        \\    return m
+        \\}
+    );
+    const c = rt.chunk_state;
+    try std.testing.expect(countOp(c, .validate_named_range) >= 1);
+    try std.testing.expectEqual(@as(usize, 0), countOp(c, .named_inner));
+}
+
+test "compiler: decrement on a boxed-named local unwraps and reconstructs" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\type Count []int
+        \\func shrink(c Count) string { c--; return std.core.type_of(c) }
+    );
+    const c = rt.chunk_state;
+    try std.testing.expect(countOp(c, .named_inner) >= 1);
+    try std.testing.expectEqual(@as(usize, 0), countOp(c, .validate_named_range));
+}
+
+test "compiler: named-return of a boxed named type constructs correctly (regression)" {
+    // Previously returnStmt called emitVarTypeEpilog for a named-return slot
+    // without first calling emitVarTypeProlog — for a boxed (non-scalar
+    // base) named-return type this meant the epilog's `call(1)` had no
+    // constructor callee pushed under the return value, and treated the
+    // already-built value itself as the callee: `return Tag(s)` panicked
+    // with NotAFunction at runtime. Fixed by pushing the prolog's
+    // get_global before compiling the return expression, exactly like
+    // assignStmt/compoundStmt/incrStmt already did.
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Tag string
+        \\func makeTag(s string) (result Tag) {
+        \\    return Tag(s)
+        \\}
+    );
+    const result = try rt.callGlobal("makeTag", &.{.{ .string = value_mod.staticSS("hello") }});
+    const named = result.asNamed() orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("Tag", named.typ.named_type.name);
+}
+
+test "compiler: multi named-return with mixed erased and boxed types constructs both correctly" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Tag string
+        \\type Meters int range 0..1000
+        \\func makeBoth(s string, m int) (t Tag, mm Meters) {
+        \\    return Tag(s), Meters(m)
+        \\}
+    );
+    const c = rt.chunk_state;
+    // The boxed Tag slot's epilog is a second get_global+call wrapping the
+    // already-constructed source value (2 get_global "Tag": one from the
+    // `Tag(s)` source expression, one from the epilog's own prolog); the
+    // erased Meters slot's epilog is a validate_named_range with no extra
+    // call or get_global at all (its one get_global/call pair comes solely
+    // from the `Meters(m)` source expression, not from its epilog).
+    try std.testing.expectEqual(@as(usize, 3), countOp(c, .get_global));
+    try std.testing.expectEqual(@as(usize, 3), countOp(c, .call));
+    try std.testing.expect(countOp(c, .validate_named_range) >= 1);
+}

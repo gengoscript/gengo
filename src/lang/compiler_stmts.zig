@@ -1526,15 +1526,19 @@ pub fn returnStmt(c: anytype) !void {
         // Named-return function with explicit value(s): assign to the named return
         // slots first so deferred closures can observe and modify them.
         if (scope.named_return_count == 1) {
+            const tc = scope.locals[scope.named_return_base].type_check;
+            try c.emitVarTypeProlog(tc, line);
             try c.expr();
-            try c.emitVarTypeEpilog(scope.locals[scope.named_return_base].type_check, line);
+            try c.emitVarTypeEpilog(tc, line);
             try c.cs.emit2(@intFromEnum(Op.set_local), scope.named_return_base, line);
         } else {
             for (0..scope.named_return_count) |ri| {
                 if (ri > 0) try c.consume(.comma);
                 const slot: u8 = scope.named_return_base + @as(u8, @intCast(ri));
+                const tc = scope.locals[slot].type_check;
+                try c.emitVarTypeProlog(tc, line);
                 try c.expr();
-                try c.emitVarTypeEpilog(scope.locals[slot].type_check, line);
+                try c.emitVarTypeEpilog(tc, line);
                 try c.cs.emit2(@intFromEnum(Op.set_local), slot, line);
             }
         }
