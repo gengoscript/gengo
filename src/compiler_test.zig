@@ -14,6 +14,8 @@ const vm = @import("lang/vm.zig");
 const vm_defuse = @import("lang/vm_defuse.zig");
 const fusion_pass = @import("lang/fusion_pass.zig");
 const chunk_decoder = @import("lang/chunk_decoder.zig");
+const gbc_writer = @import("lang/gbc_writer.zig");
+const gbc_reader = @import("lang/gbc_reader.zig");
 
 fn setup() !Runtime {
     var rt: Runtime = .{};
@@ -3879,4 +3881,118 @@ test "compiler: := infers struct type for a top-level global too" {
     );
     const result = try rt.callGlobal("f", &.{});
     try std.testing.expectApproxEqAbs(@as(f64, 4.0), result.float, 1e-9);
+}
+
+// ── #5: GBC (Gengo Bytecode Cache) — first milestone round-trip ───────────
+//
+// gbc_writer.write() serializes the DEFUSED (core-ops-only) form of an
+// already-compiled, already-fused chunk; gbc_reader.read() loads that back
+// into a fresh chunk.State, and the caller re-runs fusion_pass.fuse() —
+// exactly the same step the normal compile pipeline (runtime.zig's
+// compileProgram) already performs — before executing. Globals are
+// populated by running the loaded top-level code, not by any separate
+// globals table; see both modules' doc comments for the full design.
+//
+// This milestone deliberately does not implement most of the spec's 27
+// validation checks (§11.1) — magic/header/body-checksum bounds only. See
+// dev-docs/design/gbc-spec.md and issue #5 for the full remaining scope.
+
+test "gbc: writer + reader round-trip produces identical execution results" {
+    const src =
+        \\func addOne(x int) int {
+        \\    return x + 1
+        \\}
+        \\func compute() int {
+        \\    a := addOne(10)
+        \\    b := addOne(a)
+        \\    return a + b
+        \\}
+    ;
+
+    var rt1 = try setup();
+    defer rt1.deinit();
+    try runSrc(&rt1, src); // must actually execute top-level code to define compute/addOne as globals
+    const expected = try rt1.callGlobal("compute", &.{});
+
+    // Compiled separately (not reused from rt1) because gbc_writer.write()
+    // mutates the chunk it's given (buildDefusedCode remaps FuncObj.ip to
+    // match the defused bytes it returns, leaving cs.code inconsistent with
+    // those ips) — see gbc_writer.zig's module doc.
+    var rt2 = try setup();
+    defer rt2.deinit();
+    try compile(&rt2, src);
+    const bytes = try gbc_writer.write(rt2.chunk_state, std.testing.allocator, .{ .root_source = src });
+    defer std.testing.allocator.free(bytes);
+
+    var rt3 = try setup();
+    defer rt3.deinit();
+    chunk.setActive(rt3.chunk_state);
+    globals.setActive(&rt3.globals_state);
+    heap.setActive(&rt3.heap_state);
+    chunk.reset();
+    globals.reset();
+    heap.reset();
+    try gbc_reader.read(bytes, chunk.g_state, heap.g_state, rt3.vm_state.allocator);
+    try fusion_pass.fuse(chunk.g_state, rt3.vm_state.allocator);
+
+    const ctx: vm.VMContext = .{ .cs = rt3.chunk_state, .gs = &rt3.globals_state, .hs = &rt3.heap_state, .vs = &rt3.vm_state };
+    try vm.run(ctx); // executes the loaded top-level code, defining addOne/compute as globals
+    const actual = try vm.callGlobal(ctx, "compute", &.{});
+
+    try std.testing.expectEqual(expected.int, actual.int);
+}
+
+test "gbc: writer rejects a struct-typed constant (out of scope for this milestone)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\type Point struct { x int, y int }
+        \\func origin() Point { return Point { x: 0, y: 0 } }
+    );
+    try std.testing.expectError(error.UnsupportedConstant, gbc_writer.write(rt.chunk_state, std.testing.allocator, .{ .root_source = "" }));
+}
+
+test "gbc: reader rejects a corrupted magic" {
+    var rt2 = try setup();
+    defer rt2.deinit();
+    try compile(&rt2, "func f() int { return 1 }");
+    const bytes = try gbc_writer.write(rt2.chunk_state, std.testing.allocator, .{ .root_source = "func f() int { return 1 }" });
+    defer std.testing.allocator.free(bytes);
+
+    const corrupted = try std.testing.allocator.dupe(u8, bytes);
+    defer std.testing.allocator.free(corrupted);
+    corrupted[0] = 0x00;
+
+    var rt3 = try setup();
+    defer rt3.deinit();
+    chunk.setActive(rt3.chunk_state);
+    globals.setActive(&rt3.globals_state);
+    heap.setActive(&rt3.heap_state);
+    chunk.reset();
+    globals.reset();
+    heap.reset();
+    try std.testing.expectError(error.InvalidMagic, gbc_reader.read(corrupted, chunk.g_state, heap.g_state, rt3.vm_state.allocator));
+}
+
+test "gbc: reader rejects a corrupted body checksum" {
+    var rt2 = try setup();
+    defer rt2.deinit();
+    try compile(&rt2, "func f() int { return 1 }");
+    const bytes = try gbc_writer.write(rt2.chunk_state, std.testing.allocator, .{ .root_source = "func f() int { return 1 }" });
+    defer std.testing.allocator.free(bytes);
+
+    const corrupted = try std.testing.allocator.dupe(u8, bytes);
+    defer std.testing.allocator.free(corrupted);
+    // Flip a byte inside the body (past the 8-byte magic + 192-byte header).
+    corrupted[8 + gbc_writer.HEADER_SIZE + 4] ^= 0xFF;
+
+    var rt3 = try setup();
+    defer rt3.deinit();
+    chunk.setActive(rt3.chunk_state);
+    globals.setActive(&rt3.globals_state);
+    heap.setActive(&rt3.heap_state);
+    chunk.reset();
+    globals.reset();
+    heap.reset();
+    try std.testing.expectError(error.BodyChecksumMismatch, gbc_reader.read(corrupted, chunk.g_state, heap.g_state, rt3.vm_state.allocator));
 }
