@@ -4,6 +4,21 @@ This changelog tracks notable language/runtime changes by implementation date.
 
 ## 2026-07-22 (latest) (v0.5.1-dev)
 
+### Language — `clamp`, a third named-type range mode (#208)
+
+`range` (hard `RangeError`) and `cycle` (modular wrap) already shared one grammar clause (`parseConstraintBounds`) and one dispatch point (`is_cycle` throughout `vm_types.zig`'s `constructNamedType`/`applyNamedTypeFn`). Added `clamp` as a third option at that same clause — `type Percent int clamp 0..100` saturates an out-of-bounds value to the nearest bound instead of erroring or wrapping.
+
+- New `is_clamp: bool` field alongside `is_cycle` on both `NamedTypeObj` (`value.zig`, the runtime object) and `NamedTypeInfo` (`compiler_types.zig`, the compile-time registry), propagated through both named-type declaration sites in `compiler_decls.zig` (top-level `type` and `subtype`), parent/subtype inheritance, and REPL cross-line persistence (`runtime.zig`).
+- New `clampValue` helper in `vm_types.zig`, wired into `constructNamedType`'s `int`/`float`/`decimal`/`rune` branches and `applyNamedTypeFn` (`.succ`/`.pred`) — each gets an `else if (nt.is_clamp)` branch alongside the existing `is_cycle` branch. `rune` previously had no `is_cycle` branch at all (cycle is restricted to `int`/`float`/`decimal`); clamp has no such restriction and applies to all four range-eligible bases.
+- Composes with the rest of the range-constraint machinery for free: clamping happens inside the same validation step `predicate` already runs after, so a clamped value is then predicate-checked like any other value — clamp doesn't bypass `predicate`, it just changes what value reaches it. `default` is unaffected — still validated strictly against `min..max` at compile time regardless of mode, since clamp's leniency is about construction-time values, not the type's own declared default.
+- No opcode changes: `validate_named_range` already dispatches through `coerceNamedTypeResult`/`constructNamedType`, so the mode-specific behavior lives entirely in those two functions.
+
+Found and fixed a pre-existing, unrelated doc/behavior mismatch while writing this up: `docs/language.md` claimed plain `range` types "clamp to the declared domain" for `.succ()`/`.pred()` at the boundary — they actually raise `RangeError` (verified: `Step.succ(Step(100))` panics for `type Step int range 1..100`). Corrected the wording before introducing the real `clamp` mode, to avoid the two concepts colliding.
+
+Also updated four existing fail-case `.err` files (`252_range_on_string_type`, `253_range_on_bool_type`, `203_subtype_non_numeric_range`, `204_subtype_non_numeric_cycle`) whose expected-error substrings no longer matched after the compiler's error message changed from "range and cycle constraints..." to "range, cycle, and clamp constraints...".
+
+## 2026-07-22 (earlier) (v0.5.1-dev)
+
 ### Fix — named-return of a boxed named type panicked with `NotAFunction` (#204)
 
 Found while backfilling #204's typed-assignment prolog/epilog matrix: `returnStmt` called `emitVarTypeEpilog` for a named-return slot without first calling `emitVarTypeProlog`, unlike `assignStmt`/`compoundStmt`/`incrStmt`, which all already pair the two. For a named-return type over a non-scalar base (`type Tag string` used as `func f() (result Tag)`), the epilog's `.named` branch emits a real constructor `call(1)` — but with no prolog, there was no constructor callee pushed under the return value, so the call treated the just-built return value itself as the callee: `return Tag(s)` panicked `NotAFunction` at runtime. Named-return types over an erased scalar/enum base (`Meters int`) were unaffected — their epilog branch is `validate_named_range`/`check_named_predicate`, which needs no callee.

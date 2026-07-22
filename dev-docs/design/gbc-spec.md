@@ -508,6 +508,7 @@ Each `StructField`: `name : str`, `type : TypeSpec`, `is_const : bool8`
 base        : u8      // 0=int 1=float 2=string 3=bool 4=rune 5=array 6=map 7=enum_t
 has_range   : bool8
 is_cycle    : bool8
+is_clamp    : bool8    // mutually exclusive with is_cycle; both false = hard range (RangeError)
 min         : f64     // present only if has_range; see note below
 max         : f64     // present only if has_range; see note below
 parent_name : str     // empty if not a subtype

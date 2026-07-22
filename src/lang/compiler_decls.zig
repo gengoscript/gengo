@@ -635,6 +635,7 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
     var base: NamedTypeBase = undefined;
     var parent_has_range = false;
     var parent_is_cycle = false;
+    var parent_is_clamp = false;
     var parent_min: f64 = 0;
     var parent_max: f64 = 0;
     var parent_name_str: ?[]const u8 = null;
@@ -693,6 +694,7 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
         base = parent.base;
         parent_has_range = parent.has_range;
         parent_is_cycle = parent.is_cycle;
+        parent_is_clamp = parent.is_clamp;
         parent_min = parent.min;
         parent_max = parent.max;
         parent_name_str = base_name; // #78: preserve parent chain
@@ -722,11 +724,12 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
 
     var has_range = false;
     var is_cycle = false;
+    var is_clamp = false;
     var min: f64 = 0;
     var max: f64 = 0;
-    if (c.checkClauseWord("range") or c.checkClauseWord("cycle")) {
+    if (c.checkClauseWord("range") or c.checkClauseWord("cycle") or c.checkClauseWord("clamp")) {
         if (base != .int and base != .float and base != .decimal and base != .rune)
-            return c.err("range and cycle constraints require a numeric parent type (int, float, decimal, or rune)", .{});
+            return c.err("range, cycle, and clamp constraints require a numeric parent type (int, float, decimal, or rune)", .{});
         const constraint = try parseConstraintBounds(
             c,
         );
@@ -734,6 +737,7 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
             return c.err("'cycle' constraint requires a numeric base type (int, float, or decimal)", .{});
         has_range = true;
         is_cycle = constraint.is_cycle;
+        is_clamp = constraint.is_clamp;
         min = constraint.min;
         max = constraint.max;
     }
@@ -743,6 +747,7 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
         } else {
             has_range = true;
             is_cycle = parent_is_cycle;
+            is_clamp = parent_is_clamp;
             min = parent_min;
             max = parent_max;
         }
@@ -795,6 +800,7 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
         .base = base,
         .has_range = has_range,
         .is_cycle = is_cycle,
+        .is_clamp = is_clamp,
         .has_predicate = predicate_obj != null or predicate_uv_count > 0,
         .scale = scale,
         .min = min,
@@ -820,6 +826,7 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
         .base = base,
         .has_range = has_range,
         .is_cycle = is_cycle,
+        .is_clamp = is_clamp,
         .min = min,
         .max = max,
         .parent_name = qparent_name,
@@ -1228,13 +1235,16 @@ pub fn instantiateGenericType(c: anytype, tname: []const u8, line: u32) anyerror
     return applyGenericInst(c, tname, args[0..arg_count], line);
 }
 
-pub fn parseConstraintBounds(c: anytype) !struct { is_cycle: bool, min: f64, max: f64 } {
-    const is_cycle = if (c.matchWord("range"))
-        false
-    else if (c.matchWord("cycle"))
-        true
-    else
-        return c.err("expected 'range' or 'cycle', found {s}", .{c.tokenName(c.cur.typ)});
+pub fn parseConstraintBounds(c: anytype) !struct { is_cycle: bool, is_clamp: bool, min: f64, max: f64 } {
+    var is_cycle = false;
+    var is_clamp = false;
+    if (c.matchWord("range")) {} else if (c.matchWord("cycle")) {
+        is_cycle = true;
+    } else if (c.matchWord("clamp")) {
+        is_clamp = true;
+    } else {
+        return c.err("expected 'range', 'cycle', or 'clamp', found {s}", .{c.tokenName(c.cur.typ)});
+    }
     const min_value = try consumeCompileTimeConst(c) orelse return compileTimeConstErr(c);
     const min = switch (min_value) {
         .number => |value| value,
@@ -1250,7 +1260,7 @@ pub fn parseConstraintBounds(c: anytype) !struct { is_cycle: bool, min: f64, max
         c.setErr("range minimum ({d}) must not exceed maximum ({d})", .{ min, max });
         return error.RangeError;
     }
-    return .{ .is_cycle = is_cycle, .min = min, .max = max };
+    return .{ .is_cycle = is_cycle, .is_clamp = is_clamp, .min = min, .max = max };
 }
 
 const ConstExprCursor = struct {
@@ -1895,6 +1905,7 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
     const base = parent_info.base;
     var has_range = parent_info.has_range;
     var is_cycle = parent_info.is_cycle;
+    var is_clamp = parent_info.is_clamp;
     var min: f64 = parent_info.min;
     var max: f64 = parent_info.max;
     const scale = parent_info.scale;
@@ -1903,8 +1914,8 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
     if (!is_scalar)
         return c.err("subtype parent must be a scalar named type (int, float, decimal, string, bool, or rune base)", .{});
 
-    if (c.checkClauseWord("range") or c.checkClauseWord("cycle")) {
-        if (!is_numeric) return c.err("range and cycle constraints require a numeric parent type (int, float, decimal, or rune)", .{});
+    if (c.checkClauseWord("range") or c.checkClauseWord("cycle") or c.checkClauseWord("clamp")) {
+        if (!is_numeric) return c.err("range, cycle, and clamp constraints require a numeric parent type (int, float, decimal, or rune)", .{});
         const constraint = try parseConstraintBounds(
             c,
         );
@@ -1918,6 +1929,7 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
         }
         has_range = true;
         is_cycle = constraint.is_cycle;
+        is_clamp = constraint.is_clamp;
         min = constraint.min;
         max = constraint.max;
     }
@@ -1975,6 +1987,7 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
         .base = base,
         .has_range = has_range,
         .is_cycle = is_cycle,
+        .is_clamp = is_clamp,
         .has_predicate = predicate_obj != null or predicate_uv_count > 0,
         .scale = scale,
         .min = min,
@@ -1994,6 +2007,7 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
         .base = base,
         .has_range = has_range,
         .is_cycle = is_cycle,
+        .is_clamp = is_clamp,
         .scale = scale,
         .min = min,
         .max = max,

@@ -1,0 +1,36 @@
+std := import("std")
+
+// clamp: a third named-type range mode alongside range (hard error) and
+// cycle (modular wrap) — saturates an out-of-bounds value to the nearest
+// bound instead of erroring or wrapping.
+type Percent int clamp 0..100
+type Ratio float clamp 0.0..1.0
+type Grade decimal 2 clamp 0.0..100.0
+type Letter rune clamp 65..90
+
+// clamp is inherited by subtypes, same as range/cycle.
+type StrictPercent Percent
+
+// clamp composes with predicate: clamping happens first, the predicate then
+// checks the (possibly clamped) result.
+type EvenPercent int clamp 0..100 predicate func(x) { return x rem 2 == 0 }
+
+std.io.println(int(Percent(150)))
+std.io.println(int(Percent(-10)))
+std.io.println(int(Percent(50)))
+
+std.io.println(float(Ratio(2.5)))
+std.io.println(float(Ratio(-1.0)))
+
+std.io.println(float(Grade(150.0)))
+
+std.io.println(string(Letter(200)))
+std.io.println(string(Letter(0)))
+
+// succ saturates at the upper bound instead of raising RangeError
+p := Percent(100)
+std.io.println(int(Percent.succ(p)))
+
+std.io.println(int(StrictPercent(500)))
+
+std.io.println(int(EvenPercent(200)))

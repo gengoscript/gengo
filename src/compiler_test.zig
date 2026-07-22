@@ -3578,3 +3578,92 @@ test "fusion: get_local_const_add does not fuse into local_add_const across mism
     try std.testing.expectEqual(@as(usize, 0), countOp(c, .local_add_const));
     try std.testing.expect(try hasOp(c, .set_local));
 }
+
+// ── #208: named-type range 'clamp' mode ────────────────────────────────────
+//
+// A third range mode alongside 'range' (hard RangeError) and 'cycle'
+// (modular wrap): saturates an out-of-bounds value to the nearest bound
+// instead of erroring or wrapping. See vm_types.zig's clampValue and its
+// call sites in constructNamedType (int/float/decimal/rune) and
+// applyNamedTypeFn (succ/pred).
+
+test "compiler: clamp saturates int/float/decimal/rune to their bounds" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Percent int clamp 0..100
+        \\type Ratio float clamp 0.0..1.0
+        \\type Letter rune clamp 65..90
+        \\func mkPercent(x int) Percent { return Percent(x) }
+        \\func mkRatio(x float) Ratio { return Ratio(x) }
+        \\func mkLetter(x int) Letter { return Letter(x) }
+    );
+    const high = try rt.callGlobal("mkPercent", &.{.{ .int = 150 }});
+    try std.testing.expectEqual(@as(i64, 100), high.int);
+    const low = try rt.callGlobal("mkPercent", &.{.{ .int = -10 }});
+    try std.testing.expectEqual(@as(i64, 0), low.int);
+    const in_range = try rt.callGlobal("mkPercent", &.{.{ .int = 50 }});
+    try std.testing.expectEqual(@as(i64, 50), in_range.int);
+
+    const ratio_high = try rt.callGlobal("mkRatio", &.{.{ .float = 2.5 }});
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), ratio_high.float, 1e-9);
+
+    const letter_high = try rt.callGlobal("mkLetter", &.{.{ .int = 200 }});
+    try std.testing.expectEqual(@as(u21, 90), letter_high.rune);
+}
+
+test "compiler: clamp raises no RangeError, unlike plain range, on an out-of-bounds construction" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Hard int range 0..100
+        \\type Soft int clamp 0..100
+        \\func mkHard(x int) Hard { return Hard(x) }
+        \\func mkSoft(x int) Soft { return Soft(x) }
+    );
+    try std.testing.expectError(error.RangeError, rt.callGlobal("mkHard", &.{.{ .int = 150 }}));
+    const soft = try rt.callGlobal("mkSoft", &.{.{ .int = 150 }});
+    try std.testing.expectEqual(@as(i64, 100), soft.int);
+}
+
+test "compiler: clamp composes with predicate — clamping happens first, predicate checks the clamped result" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type EvenPercent int clamp 0..100 predicate func(x) { return x rem 2 == 0 }
+        \\func mkEvenPercent(x int) EvenPercent { return EvenPercent(x) }
+    );
+    // 200 clamps to 100 (even) — passes the predicate on the clamped value.
+    const clamped_even = try rt.callGlobal("mkEvenPercent", &.{.{ .int = 200 }});
+    try std.testing.expectEqual(@as(i64, 100), clamped_even.int);
+    // 99 is within 0..100 so it is NOT clamped, and fails the predicate as-is.
+    try std.testing.expectError(error.PredicateFailed, rt.callGlobal("mkEvenPercent", &.{.{ .int = 99 }}));
+}
+
+test "compiler: clamp is inherited by a subtype, same as range/cycle" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Percent int clamp 0..100
+        \\type StrictPercent Percent
+        \\func mkStrict(x int) StrictPercent { return StrictPercent(x) }
+    );
+    const result = try rt.callGlobal("mkStrict", &.{.{ .int = 500 }});
+    try std.testing.expectEqual(@as(i64, 100), result.int);
+}
+
+test "compiler: a default value must still be within bounds under clamp — clamp does not relax default validation" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.RangeError, compile(&rt,
+        \\type BadDefault int clamp 0..100 default 500
+    ));
+}
+
+test "compiler: clamp is rejected on a non-numeric base, same as range/cycle" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.UnexpectedToken, compile(&rt,
+        \\type BadBase string clamp 0..100
+    ));
+}

@@ -186,6 +186,7 @@ pub const NamedTypeInfo = struct {
     runtime_const_idx: ?u16 = null,
     has_range: bool = false,
     is_cycle: bool = false,
+    is_clamp: bool = false,
     has_predicate: bool = false,
     scale: u8 = 0,
     min: f64 = 0,
