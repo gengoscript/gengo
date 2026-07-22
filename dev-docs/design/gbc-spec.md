@@ -1,10 +1,11 @@
 # Gengoscript Bytecode Cache — File Format Specification
 
 **Status:** Draft\
-**Version:** 0.7\
+**Version:** 0.8\
 **Scope:** GBC artifact only (see §2 for artifact class definitions)
 
 **Revision history**
+- 0.8 — Add an `INTERFACE` `TypeEntry` kind (§8.6, `0x04`, the slot already reserved for it) with a method list reusing `FunctionEntry`'s own param/return/variadic-type shape. Complete `FunctionEntry`'s param/return/variadic `TypeSpec` encoding (§8.3) — always specified, but the writer had deferred it (writing empty placeholders and forcing `has_typed_params`/`has_typed_returns` false on load) until a real consumer needed it; `interfaceMethodMatches` (`vm_types.zig`) compares an interface method's declared param/return types against the *actual* implementing function's types on every conformance check, so a placeholder here would make a real, correctly-typed interface silently fail to match its implementation once loaded from a `.gbc`. Extend the `NAMED` `TypeEntry` (§8.6) with fields it always needed but never had wire slots for: `is_anonymous` (read at runtime for anonymous array/map-typed-local equality), `scale` (decimal fixed-point precision), a predicate reference (resolved through the same `SEC_FUNCTIONS` indirection as a plain function — a captureless predicate, the only kind compiled at module/type scope, needs no upvalue encoding), `predicate_msg`, and `has_default`/`default_val` (always a `float`/`string`/`bool` per the language's own `parseNamedDefault`). All four found via the same "research before implementing" process as prior entries (#5): reading the actual opcode/VM code that consumes each field, not assuming a shape.
 - 0.7 — Add a `VARIANT` `TypeEntry` kind (§8.6, `0x03`) with arm records (name, shape — none/single-payload/record — and a record arm's field list) and a type-level shared-field list, extending `TYPE_REF` (§8.2) to cover variant types. Un-reserve the `INT` constant tag (`0x06`, §8.2): promote it from "reserved for a future format version" to actually used now, fixing a real ambiguity bug where a `.int` and a whole-valued `.float` (e.g. `1.0`) were indistinguishable on the wire (both went through `NUMBER` as `f64`, reconstructed by a "no fractional part → int" heuristic) — `.int` values now write through `INT` as a raw `i64`, `.float` always through `NUMBER`, no heuristic. Both found while extending GBC to support variant-type values in the constant pool (#5): the variant work's first round-trip test happened to be the first one to return a whole-valued float constant, surfacing the pre-existing `NUMBER`/`INT` ambiguity that every earlier struct/named-type/function test had accidentally avoided.
 - 0.6 — Add `TYPE_REF` constant tag (§8.2) and a `DECIMAL_T` `FieldTypeAlt` tag (§9.2, `0x0F`). `TYPE_REF` mirrors `FUNC_REF`: the constant pool had no way to represent "this slot is a struct or named type," but `def_global` for a `type X struct {...}`/`type X int ...` declaration needs one, and a struct field referencing another type by name needs the referenced type's own constant slot to exist independently of the reference itself. `DECIMAL_T` fixes an omission: the `FieldTypeAlt` table never had a tag for `decimal` at all (every other scalar base — `int`/`float`/`rune_t`/`bool`/`string` — had one), so a struct field or named-collection element declared `decimal` had no way to round-trip. Both found while extending GBC to support struct and (predicate-free) named-type values in the constant pool (#5) — the original milestone deliberately scoped these out and rejected them with `error.UnsupportedConstant`.
 - 0.5 — Add `FUNC_REF` constant tag (§8.2): the constant pool previously had no way to represent "this slot is a function," but `make_closure`'s bytecode operand is a constant-pool index that must resolve to one. Found while starting implementation (#5) — the FUNCTIONS section was specified as a self-contained side-table with no stated link back to CONSTANTS, and a real chunk's function objects are referenced by constant-pool index, not looked up by name/position separately. `FUNC_REF` holds a `u32` index into `SEC_FUNCTIONS`; the loader resolves it to a constructed `FuncObj` and installs that into the constant slot before running any code. Also fix an arithmetic error: §6.1's own field table sums to 184 bytes (7×`u16` + 3×`u32` + 6 reserved + `i64` + 4×`hash32` + 2×`u64` = 184), not the 192 stated in three places (the `header_size` field description, the "total defined header size" line, and Phase 1 check #4) — found the same way, by implementing a writer against the table and a reader that rejected its own output. Corrected all three to 184; no field was added or removed.
@@ -397,7 +398,7 @@ Each `Constant` is a tag byte followed by tag-specific data:
 
 **`FUNC_REF`**: the constant pool has no self-contained representation for a function or closure — `make_closure` (and any other instruction addressing a function by constant index) resolves through this indirection instead. A `FUNC_REF` constant's `u32` value must be `< function_count` in `SEC_FUNCTIONS` (§8.3); a loader constructs the function object described by that `FunctionEntry` and installs it at this constant-pool slot before any bytecode runs. Referencing the same `FunctionEntry` from more than one `FUNC_REF` constant is invalid (each function has exactly one home constant slot) and must be rejected. `FUNC_REF` must not appear in any other constant-consuming context (e.g. as a value produced by the `constant` opcode) — it exists solely to let a `SEC_FUNCTIONS` entry occupy a constant-pool slot.
 
-**`TYPE_REF`**: the same indirection as `FUNC_REF`, for a struct, named, or variant type — `def_global` for a `type X struct {...}`/`type X int ...`/`type X variant {...}` declaration needs a constant-pool slot to hold the type object. A `TYPE_REF` constant's `u32` value must be `< type_count` in `SEC_TYPES` (§8.6); a loader constructs the `STRUCT`, `NAMED`, or `VARIANT` type object described by that `TypeEntry` and installs it at this constant-pool slot before any bytecode runs. Same one-home-slot-per-entry rule as `FUNC_REF`. A struct field or named-collection element/key/value referencing *another* type by name (a `STRUCT_T`/`NAMED_T`/etc. `FieldTypeAlt`) does so by qualified-name string, not by a nested `TYPE_REF` — see §9.2 — so the referenced type's own `TYPE_REF` constant (if it has one) is independent of any reference to it.
+**`TYPE_REF`**: the same indirection as `FUNC_REF`, for a struct, named, variant, or interface type — `def_global` for a `type X struct {...}`/`type X int ...`/`type X variant {...}`/`type X interface {...}` declaration needs a constant-pool slot to hold the type object. A `TYPE_REF` constant's `u32` value must be `< type_count` in `SEC_TYPES` (§8.6); a loader constructs the `STRUCT`, `NAMED`, `VARIANT`, or `INTERFACE` type object described by that `TypeEntry` and installs it at this constant-pool slot before any bytecode runs. Same one-home-slot-per-entry rule as `FUNC_REF`. A struct field or named-collection element/key/value referencing *another* type by name (a `STRUCT_T`/`NAMED_T`/etc. `FieldTypeAlt`) does so by qualified-name string, not by a nested `TYPE_REF` — see §9.2 — so the referenced type's own `TYPE_REF` constant (if it has one) is independent of any reference to it.
 
 Constants are indexed from 0. Instructions reference constants by `u16` or `u32` index as defined in the instruction set.
 
@@ -515,13 +516,37 @@ Each `StructField`: `name : str`, `type : TypeSpec`, `is_const : bool8`
 
 **NAMED** (`0x02`) — after common fields:
 ```
-base        : u8      // 0=int 1=float 2=string 3=bool 4=rune 5=array 6=map 7=enum_t
-has_range   : bool8
-is_cycle    : bool8
-is_clamp    : bool8    // mutually exclusive with is_cycle; both false = hard range (RangeError)
-min         : f64     // present only if has_range; see note below
-max         : f64     // present only if has_range; see note below
-parent_name : str     // empty if not a subtype
+base           : u8      // 0=int 1=float 2=string 3=bool 4=rune 5=array 6=map 7=enum_t
+has_range      : bool8
+is_cycle       : bool8
+is_clamp       : bool8    // mutually exclusive with is_cycle; both false = hard range (RangeError)
+min            : f64     // present only if has_range; see note below
+max            : f64     // present only if has_range; see note below
+parent_name    : str     // empty if not a subtype
+elem_spec_present : bool8
+elem_spec      : TypeSpec  // only if elem_spec_present — array_t base only
+key_spec_present  : bool8
+key_spec       : TypeSpec  // only if key_spec_present — map_t base only
+val_spec_present  : bool8
+val_spec       : TypeSpec  // only if val_spec_present — map_t base only
+is_anonymous   : bool8    // an implicit wrapper for a bare `[]T`/`map[K]V`-typed
+                          // local, not a user `type X ...` — read at runtime for
+                          // anonymous array/map-typed-value equality
+scale          : u8       // decimal fixed-point precision; 0 for every non-decimal base
+has_predicate  : bool8
+predicate_func_idx : u32  // present only if has_predicate — index into SEC_FUNCTIONS
+                          // (§8.3); the loader wraps the resulting FuncObj in a
+                          // zero-upvalue closure. A predicate declared inside a
+                          // function body (capturing that function's own locals)
+                          // is out of scope — writers must reject it rather than
+                          // encode a captures-carrying closure here.
+has_predicate_msg  : bool8  // present only if has_predicate
+predicate_msg      : str    // present only if has_predicate_msg
+has_default    : bool8
+default_val    : f64 | str | bool8  // present only if has_default; shape depends
+                                     // on base — float for int/float/rune/decimal,
+                                     // str for string, bool8 for bool (array_t/
+                                     // map_t/enum_t bases never have a default)
 ```
 
 > **v1 limitation:** Range bounds are stored as `f64` regardless of whether the base type is integer or float. This matches the current VM's internal representation but loses exact representation for integers whose absolute value exceeds 2^53. A future format version should introduce a tagged `Bound` encoding. Until then, implementations must not define integer-typed named types with range bounds outside ±2^53, and loaders should reject such artifacts.

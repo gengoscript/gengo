@@ -138,6 +138,9 @@ const RawFuncEntry = struct {
     length: u32,
     arity: u8,
     is_variadic: bool,
+    variadic_type: value_mod.FieldTypeSpec,
+    param_types: []value_mod.FieldTypeSpec,
+    return_types: []value_mod.FieldTypeSpec,
     has_typed_params: bool,
     has_typed_returns: bool,
     named_return_count: u8,
@@ -149,20 +152,40 @@ fn findSection(sections: []const SectionEntry, id: u32) ?SectionEntry {
     return null;
 }
 
-fn readAnyTypeSpec(r: *ByteReader) !void {
-    const alt_count = try r.u8_();
-    var i: u8 = 0;
-    while (i < alt_count) : (i += 1) {
-        // Function param/return types are still always written as a single
-        // ANY alt (see gbc_writer.zig's writeFunctionsSection) — this only
-        // needs to skip that one shape, not the full TypeSpec grammar
-        // readTypeSpec below handles for struct fields / named collections.
-        _ = try r.u8_();
-    }
+// Builds the .function-tagged heap object a SEC_FUNCTIONS entry describes —
+// shared by a plain CONST_FUNC_REF constant and a named type's predicate
+// (whose FuncObj is registered into SEC_FUNCTIONS the same way, but is
+// referenced from a NAMED TypeEntry's predicate_func_idx instead of its own
+// CONST_FUNC_REF constant — see read()'s CONST_TYPE_REF/TYPE_KIND_NAMED case).
+fn buildFuncObjFromRaw(hs: *heap.State, cs: *chunk.State, rf: RawFuncEntry) !*value_mod.Object {
+    const name: []const u8 = if (rf.name_constant_idx == 0xFFFFFFFF or rf.name_constant_idx >= cs.const_count)
+        ""
+    else if (cs.consts[rf.name_constant_idx] == .string)
+        cs.consts[rf.name_constant_idx].string.bytes
+    else
+        "";
+    const obj = hs.allocObject() orelse return error.OutOfMemory;
+    obj.* = .{
+        .function = FuncObj{
+            .ip = rf.ip,
+            .arity = rf.arity,
+            .is_variadic = rf.is_variadic,
+            .variadic_type = rf.variadic_type,
+            .capture_slots = rf.capture_slots,
+            .param_types = rf.param_types,
+            .has_typed_params = rf.has_typed_params,
+            .return_types = rf.return_types,
+            .has_typed_returns = rf.has_typed_returns,
+            .name = name,
+            .named_return_count = rf.named_return_count,
+        },
+    };
+    return obj;
 }
 
-// Real decoder for struct field / named-collection elem/key/val specs —
-// mirrors gbc_writer.zig's writeTypeSpec exactly. Strings embedded in alts
+// Real decoder for struct field / named-collection elem/key/val specs and
+// function/interface-method param/return/variadic types — mirrors
+// gbc_writer.zig's writeTypeSpec exactly. Strings embedded in alts
 // (struct_name/interface_name/named_name) are copied to the heap (via
 // copyStr), not left as slices into the wire buffer: unlike CONST_STRING
 // constants (which already go through cs.internStr's own heap copy), these
@@ -259,6 +282,32 @@ fn readVariantArm(r: *ByteReader, cs: *chunk.State, hs: *heap.State, alloc: std.
     };
 }
 
+// Mirrors gbc_writer.zig's writeInterfaceMethod exactly.
+fn readInterfaceMethod(r: *ByteReader, hs: *heap.State, alloc: std.mem.Allocator) ReadError!value_mod.InterfaceMethodSpec {
+    const name = try copyStr(hs, try r.str_());
+    const arity = try r.u8_();
+    const is_variadic = try r.bool8();
+    const variadic_type: value_mod.FieldTypeSpec = if (is_variadic) try readTypeSpec(r, hs, alloc) else any_type_spec;
+    const has_typed_params = try r.bool8();
+    const has_typed_returns = try r.bool8();
+    const param_type_count = try r.u16_();
+    const param_types = (hs.bump(value_mod.FieldTypeSpec, param_type_count) orelse return error.OutOfMemory)[0..param_type_count];
+    for (param_types) |*pt| pt.* = try readTypeSpec(r, hs, alloc);
+    const return_type_count = try r.u16_();
+    const return_types = (hs.bump(value_mod.FieldTypeSpec, return_type_count) orelse return error.OutOfMemory)[0..return_type_count];
+    for (return_types) |*rt| rt.* = try readTypeSpec(r, hs, alloc);
+    return .{
+        .name = name,
+        .arity = arity,
+        .is_variadic = is_variadic,
+        .variadic_type = variadic_type,
+        .param_types = param_types,
+        .return_types = return_types,
+        .has_typed_params = has_typed_params,
+        .has_typed_returns = has_typed_returns,
+    };
+}
+
 const RawTypeEntry = struct {
     kind: u8,
     name: []const u8,
@@ -268,6 +317,8 @@ const RawTypeEntry = struct {
     // VARIANT
     shared_fields: []value_mod.StructFieldSpec = &.{},
     arms: []value_mod.VariantArmSpec = &.{},
+    // INTERFACE
+    methods: []value_mod.InterfaceMethodSpec = &.{},
     // NAMED
     base: value_mod.NamedTypeBase = .int,
     has_range: bool = false,
@@ -279,6 +330,15 @@ const RawTypeEntry = struct {
     elem_spec: ?value_mod.FieldTypeSpec = null,
     key_spec: ?value_mod.FieldTypeSpec = null,
     val_spec: ?value_mod.FieldTypeSpec = null,
+    is_anonymous: bool = false,
+    scale: u8 = 0,
+    // Deferred, not resolved here: resolving to a real predicate *Object
+    // needs raw_funcs, which isn't in scope until read()'s CONSTANTS loop
+    // (see the CONST_TYPE_REF/TYPE_KIND_NAMED case below).
+    predicate_func_idx: ?u32 = null,
+    predicate_msg: ?[]const u8 = null,
+    has_default: bool = false,
+    default_val: Value = .null,
 };
 
 fn readTypesSection(r: *ByteReader, cs: *chunk.State, hs: *heap.State, alloc: std.mem.Allocator) ReadError![]RawTypeEntry {
@@ -319,6 +379,29 @@ fn readTypesSection(r: *ByteReader, cs: *chunk.State, hs: *heap.State, alloc: st
                 const key_spec: ?value_mod.FieldTypeSpec = if (has_key) try readTypeSpec(r, hs, alloc) else null;
                 const has_val = try r.bool8();
                 const val_spec: ?value_mod.FieldTypeSpec = if (has_val) try readTypeSpec(r, hs, alloc) else null;
+                const is_anonymous = try r.bool8();
+                const scale = try r.u8_();
+                const has_predicate = try r.bool8();
+                var predicate_func_idx: ?u32 = null;
+                var predicate_msg: ?[]const u8 = null;
+                if (has_predicate) {
+                    predicate_func_idx = try r.u32_();
+                    const has_msg = try r.bool8();
+                    if (has_msg) predicate_msg = try copyStr(hs, try r.str_());
+                }
+                const has_default = try r.bool8();
+                var default_val: Value = .null;
+                if (has_default) {
+                    default_val = switch (base) {
+                        .int, .float, .rune, .decimal => Value{ .float = try r.f64_() },
+                        .string => blk: {
+                            const s = try copyStr(hs, try r.str_());
+                            break :blk Value{ .string = try cs.internStr(s) };
+                        },
+                        .bool => Value{ .boolean = try r.bool8() },
+                        .array_t, .map_t, .enum_t => return error.MalformedSection,
+                    };
+                }
                 out[i] = .{
                     .kind = kind,
                     .name = name,
@@ -333,7 +416,20 @@ fn readTypesSection(r: *ByteReader, cs: *chunk.State, hs: *heap.State, alloc: st
                     .elem_spec = elem_spec,
                     .key_spec = key_spec,
                     .val_spec = val_spec,
+                    .is_anonymous = is_anonymous,
+                    .scale = scale,
+                    .predicate_func_idx = predicate_func_idx,
+                    .predicate_msg = predicate_msg,
+                    .has_default = has_default,
+                    .default_val = default_val,
                 };
+            },
+            gbc_writer.TYPE_KIND_INTERFACE => {
+                const method_count = try r.u16_();
+                const methods = (hs.bump(value_mod.InterfaceMethodSpec, method_count) orelse return error.OutOfMemory)[0..method_count];
+                var mi: u16 = 0;
+                while (mi < method_count) : (mi += 1) methods[mi] = try readInterfaceMethod(r, hs, alloc);
+                out[i] = .{ .kind = kind, .name = name, .qualified_name = qualified_name, .methods = methods };
             },
             else => return error.MalformedSection,
         }
@@ -353,16 +449,16 @@ fn readFunctionsSection(r: *ByteReader, hs: *heap.State, alloc: std.mem.Allocato
         _ = try r.u16_(); // local_count — unused by this reader (see writer's comment)
         const arity = try r.u8_();
         const is_variadic = try r.bool8();
-        if (is_variadic) try readAnyTypeSpec(r);
+        const variadic_type: value_mod.FieldTypeSpec = if (is_variadic) try readTypeSpec(r, hs, alloc) else any_type_spec;
         const has_typed_params = try r.bool8();
         const has_typed_returns = try r.bool8();
         const named_return_count = try r.u8_();
         const param_type_count = try r.u16_();
-        var pi: u16 = 0;
-        while (pi < param_type_count) : (pi += 1) try readAnyTypeSpec(r);
+        const param_types = (hs.bump(value_mod.FieldTypeSpec, param_type_count) orelse return error.OutOfMemory)[0..param_type_count];
+        for (param_types) |*pt| pt.* = try readTypeSpec(r, hs, alloc);
         const return_type_count = try r.u16_();
-        var ri: u16 = 0;
-        while (ri < return_type_count) : (ri += 1) try readAnyTypeSpec(r);
+        const return_types = (hs.bump(value_mod.FieldTypeSpec, return_type_count) orelse return error.OutOfMemory)[0..return_type_count];
+        for (return_types) |*rt| rt.* = try readTypeSpec(r, hs, alloc);
         const capture_slot_count = try r.u8_();
         // hs.bump (GC heap), not alloc: this slice is embedded directly into
         // the FuncObj constant this entry builds (see read()'s CONST_FUNC_REF
@@ -377,6 +473,9 @@ fn readFunctionsSection(r: *ByteReader, hs: *heap.State, alloc: std.mem.Allocato
             .length = length,
             .arity = arity,
             .is_variadic = is_variadic,
+            .variadic_type = variadic_type,
+            .param_types = param_types,
+            .return_types = return_types,
             .has_typed_params = has_typed_params,
             .has_typed_returns = has_typed_returns,
             .named_return_count = named_return_count,
@@ -510,40 +609,7 @@ pub fn read(bytes: []const u8, cs: *chunk.State, hs: *heap.State, alloc: std.mem
             gbc_writer.CONST_FUNC_REF => blk: {
                 const fidx = try cr.u32_();
                 if (fidx >= raw_funcs.len) return error.FuncRefOutOfRange;
-                const rf = raw_funcs[fidx];
-                const name: []const u8 = if (rf.name_constant_idx == 0xFFFFFFFF or rf.name_constant_idx >= cs.const_count)
-                    ""
-                else if (cs.consts[rf.name_constant_idx] == .string)
-                    cs.consts[rf.name_constant_idx].string.bytes
-                else
-                    "";
-                const obj = hs.allocObject() orelse return error.OutOfMemory;
-                obj.* = .{
-                    .function = FuncObj{
-                        .ip = rf.ip,
-                        .arity = rf.arity,
-                        .is_variadic = rf.is_variadic,
-                        .variadic_type = any_type_spec,
-                        .capture_slots = rf.capture_slots,
-                        .param_types = &.{},
-                        // Forced false regardless of the wire value: param_types/
-                        // return_types are always empty until TYPES-table
-                        // support lands (param_type_count is always written as
-                        // 0 today — see the writer). vm_types.zig only ever
-                        // indexes param_types/return_types when has_typed_params/
-                        // has_typed_returns is true, so leaving the original
-                        // (possibly-true) wire value here with an empty slice
-                        // would be an out-of-bounds read the first time a typed
-                        // arg-check ran. Correctness-safe (just skips runtime
-                        // argument/return type checks for loaded functions,
-                        // same as an unproven function), not silently unsafe.
-                        .has_typed_params = false,
-                        .return_types = &.{},
-                        .has_typed_returns = false,
-                        .name = name,
-                        .named_return_count = rf.named_return_count,
-                    },
-                };
+                const obj = try buildFuncObjFromRaw(hs, cs, raw_funcs[fidx]);
                 break :blk Value{ .object = obj };
             },
             gbc_writer.CONST_TYPE_REF => blk: {
@@ -560,14 +626,31 @@ pub fn read(bytes: []const u8, cs: *chunk.State, hs: *heap.State, alloc: std.mem
                         } };
                     },
                     gbc_writer.TYPE_KIND_NAMED => {
+                        // Predicate: resolve predicate_func_idx (deferred by
+                        // readTypesSection, since raw_funcs isn't in scope
+                        // there) through the same SEC_FUNCTIONS machinery a
+                        // CONST_FUNC_REF constant uses, then wrap in a
+                        // zero-upvalue closure — matching what the compiler
+                        // itself always produces for a captureless predicate
+                        // (compiler_decls.zig's namedTypeDecl/subtypeDecl).
+                        var predicate: ?*value_mod.Object = null;
+                        if (rt.predicate_func_idx) |pidx| {
+                            if (pidx >= raw_funcs.len) return error.FuncRefOutOfRange;
+                            const fobj = try buildFuncObjFromRaw(hs, cs, raw_funcs[pidx]);
+                            const closure_obj = hs.allocObject() orelse return error.OutOfMemory;
+                            closure_obj.* = .{ .closure = .{ .func = fobj, .upvalues = &[_]*value_mod.Object{} } };
+                            predicate = closure_obj;
+                        }
                         obj.* = .{
                             .named_type = .{
                                 .name = rt.name,
                                 .qualified_name = rt.qualified_name,
                                 .base = rt.base,
+                                .is_anonymous = rt.is_anonymous,
                                 .has_range = rt.has_range,
                                 .is_cycle = rt.is_cycle,
                                 .is_clamp = rt.is_clamp,
+                                .scale = rt.scale,
                                 .min = rt.min,
                                 .max = rt.max,
                                 // Empty string means "no parent" (matches the
@@ -578,10 +661,10 @@ pub fn read(bytes: []const u8, cs: *chunk.State, hs: *heap.State, alloc: std.mem
                                 .elem_spec = rt.elem_spec,
                                 .key_spec = rt.key_spec,
                                 .val_spec = rt.val_spec,
-                                // predicate stays null: the writer rejects any
-                                // predicate-bearing named type with
-                                // error.UnsupportedConstant rather than reach
-                                // here (see gbc_writer.zig's .named_type case).
+                                .predicate = predicate,
+                                .predicate_msg = rt.predicate_msg,
+                                .has_default = rt.has_default,
+                                .default_val = rt.default_val,
                             },
                         };
                     },
@@ -591,6 +674,13 @@ pub fn read(bytes: []const u8, cs: *chunk.State, hs: *heap.State, alloc: std.mem
                             .qualified_name = rt.qualified_name,
                             .arms = rt.arms,
                             .shared_fields = rt.shared_fields,
+                        } };
+                    },
+                    gbc_writer.TYPE_KIND_INTERFACE => {
+                        obj.* = .{ .interface_type = .{
+                            .name = rt.name,
+                            .qualified_name = rt.qualified_name,
+                            .methods = rt.methods,
                         } };
                     },
                     else => return error.MalformedSection,
