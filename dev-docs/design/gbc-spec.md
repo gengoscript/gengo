@@ -1,10 +1,11 @@
 # Gengoscript Bytecode Cache — File Format Specification
 
-**Status:** Draft  
-**Version:** 0.4  
+**Status:** Draft\
+**Version:** 0.5\
 **Scope:** GBC artifact only (see §2 for artifact class definitions)
 
 **Revision history**
+- 0.5 — Add `FUNC_REF` constant tag (§8.2): the constant pool previously had no way to represent "this slot is a function," but `make_closure`'s bytecode operand is a constant-pool index that must resolve to one. Found while starting implementation (#5) — the FUNCTIONS section was specified as a self-contained side-table with no stated link back to CONSTANTS, and a real chunk's function objects are referenced by constant-pool index, not looked up by name/position separately. `FUNC_REF` holds a `u32` index into `SEC_FUNCTIONS`; the loader resolves it to a constructed `FuncObj` and installs that into the constant slot before running any code. Also fix an arithmetic error: §6.1's own field table sums to 184 bytes (7×`u16` + 3×`u32` + 6 reserved + `i64` + 4×`hash32` + 2×`u64` = 184), not the 192 stated in three places (the `header_size` field description, the "total defined header size" line, and Phase 1 check #4) — found the same way, by implementing a writer against the table and a reader that rejected its own output. Corrected all three to 184; no field was added or removed.
 - 0.1 — Initial draft
 - 0.2 — Rename `stdlib_hash` → `module_provider_hash`; add `resolved_id` and `artifact_body_hash` to dependency entries; add `bytecode_length` and `local_count` to function entries; add `Bool` and `Rune` constant tags; rewrite `FieldTypeAlt` as per-tag encodings; fix `options_hash` canonical encoding widths; remove mutual-exclusion rule for `CHECKED_ARITHMETIC`/`OPTIMISED` from format; clarify header-size compatibility (no smaller-than-required); reorder validation phases; note f64 bounds limitation; note script/module philosophy
 - 0.4 — Fix "inclusive" wording on half-open range; add `bytes` primitive; wrap domain labels in `str()`; remove `hash32(SHA-256(...))` redundancy; rename `artifact_hash` → `artifact_body_hash` with body-only scope note; add Phase 4 general content-validity check; add §11.2 implementation-defined limits; define `ENTRY_SCRIPT` importability rule
@@ -169,7 +170,7 @@ The header begins at file offset 8. Its total size in bytes — including the `h
 
 | File offset | Header offset | Size | Type | Field | Description |
 |-------------|---------------|------|------|-------|-------------|
-| 8 | 0 | 2 | `u16` | `header_size` | Total header size in bytes. Current minimum for `header_version` 1: 192. |
+| 8 | 0 | 2 | `u16` | `header_size` | Total header size in bytes. Current minimum for `header_version` 1: 184. |
 | 10 | 2 | 2 | `u16` | `header_version` | Version of this header layout. Current value: 1. |
 | 12 | 4 | 2 | `u16` | `format_major` | Bytecode format major version. |
 | 14 | 6 | 2 | `u16` | `format_minor` | Bytecode format minor version. |
@@ -188,7 +189,7 @@ The header begins at file offset 8. Its total size in bytes — including the `h
 | 176 | 168 | 8 | `u64` | `body_length` | Length of the body in bytes. |
 | 184 | 176 | 8 | `u64` | `body_checksum` | xxHash64 of the body bytes. |
 
-Total defined header size for `header_version` 1: **192 bytes** (file offsets 8–199 inclusive).
+Total defined header size for `header_version` 1: **184 bytes** (file offsets 8–191 inclusive).
 
 ### 6.2 Flags Bitfield
 
@@ -386,8 +387,11 @@ Each `Constant` is a tag byte followed by tag-specific data:
 | `NULL` | `0x03` | — | No data bytes. |
 | `BOOL` | `0x04` | `bool8` | Boolean value. |
 | `RUNE` | `0x05` | `u32` | Unicode code point (0–0x10FFFF). Reject values outside this range. |
+| `FUNC_REF` | `0x07` | `u32` | Index into `SEC_FUNCTIONS`. See below. |
 
 > **Reserved tag `INT` (`0x06`, `i64`):** Not used in v1 — the current VM represents all numbers as `f64` internally. This tag is reserved for a future format version when the VM gains a distinct integer representation. Writers must not emit it; loaders must reject it.
+
+**`FUNC_REF`**: the constant pool has no self-contained representation for a function or closure — `make_closure` (and any other instruction addressing a function by constant index) resolves through this indirection instead. A `FUNC_REF` constant's `u32` value must be `< function_count` in `SEC_FUNCTIONS` (§8.3); a loader constructs the function object described by that `FunctionEntry` and installs it at this constant-pool slot before any bytecode runs. Referencing the same `FunctionEntry` from more than one `FUNC_REF` constant is invalid (each function has exactly one home constant slot) and must be rejected. `FUNC_REF` must not appear in any other constant-consuming context (e.g. as a value produced by the `constant` opcode) — it exists solely to let a `SEC_FUNCTIONS` entry occupy a constant-pool slot.
 
 Constants are indexed from 0. Instructions reference constants by `u16` or `u32` index as defined in the instruction set.
 
@@ -773,7 +777,7 @@ These checks require no content interpretation beyond reading fixed-offset bytes
 | 1 | Magic bytes match exactly | `InvalidMagic` |
 | 2 | File is at least `8 + header_size` bytes | `TruncatedHeader` |
 | 3 | `header_version` is within the supported range | `UnsupportedHeaderVersion(n)` |
-| 4 | `header_size >= 192` (minimum for `header_version` 1) | `HeaderTooSmall` |
+| 4 | `header_size >= 184` (minimum for `header_version` 1) | `HeaderTooSmall` |
 | 5 | Reserved bytes in header are all zero | `NonZeroReserved` |
 | 6 | `format_major` matches loader's supported major | `FormatMajorMismatch(artifact, loader)` |
 | 7 | `format_minor <= loader's format_minor` | `FormatMinorTooNew(artifact, loader)` |
