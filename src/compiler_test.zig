@@ -3942,14 +3942,74 @@ test "gbc: writer + reader round-trip produces identical execution results" {
     try std.testing.expectEqual(expected.int, actual.int);
 }
 
-test "gbc: writer rejects a struct-typed constant (out of scope for this milestone)" {
+test "gbc: writer supports struct-typed constants" {
     var rt = try setup();
     defer rt.deinit();
     try compile(&rt,
         \\type Point struct { x int, y int }
         \\func origin() Point { return Point { x: 0, y: 0 } }
     );
+    const bytes = try gbc_writer.write(rt.chunk_state, std.testing.allocator, .{ .root_source = "" });
+    std.testing.allocator.free(bytes);
+}
+
+test "gbc: writer rejects an enum-typed constant (out of scope for this increment)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\type Status enum { pending, active, done }
+        \\func f() Status { return Status.active }
+    );
     try std.testing.expectError(error.UnsupportedConstant, gbc_writer.write(rt.chunk_state, std.testing.allocator, .{ .root_source = "" }));
+}
+
+test "gbc: writer rejects a predicate-bearing named type (out of scope for this increment)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\type Score int predicate func(x) { return x >= 0 and x <= 100 }
+        \\func f() Score { return Score(50) }
+    );
+    try std.testing.expectError(error.UnsupportedConstant, gbc_writer.write(rt.chunk_state, std.testing.allocator, .{ .root_source = "" }));
+}
+
+test "gbc: struct and named-type constants round-trip through write+read and execute correctly" {
+    const src =
+        \\type Meters int range 0..1000
+        \\type Reading struct { value Meters, label string }
+        \\func f() int {
+        \\    r := Reading { value: Meters(42), label: "test" }
+        \\    return int(r.value)
+        \\}
+    ;
+
+    var rt1 = try setup();
+    defer rt1.deinit();
+    try runSrc(&rt1, src);
+    const expected = try rt1.callGlobal("f", &.{});
+
+    var rt2 = try setup();
+    defer rt2.deinit();
+    try compile(&rt2, src);
+    const bytes = try gbc_writer.write(rt2.chunk_state, std.testing.allocator, .{ .root_source = src });
+    defer std.testing.allocator.free(bytes);
+
+    var rt3 = try setup();
+    defer rt3.deinit();
+    chunk.setActive(rt3.chunk_state);
+    globals.setActive(&rt3.globals_state);
+    heap.setActive(&rt3.heap_state);
+    chunk.reset();
+    globals.reset();
+    heap.reset();
+    try gbc_reader.read(bytes, chunk.g_state, heap.g_state, rt3.vm_state.allocator);
+    try fusion_pass.fuse(chunk.g_state, rt3.vm_state.allocator);
+
+    const ctx: vm.VMContext = .{ .cs = rt3.chunk_state, .gs = &rt3.globals_state, .hs = &rt3.heap_state, .vs = &rt3.vm_state };
+    try vm.run(ctx);
+    const actual = try vm.callGlobal(ctx, "f", &.{});
+
+    try std.testing.expectEqual(expected.int, actual.int);
 }
 
 test "gbc: reader rejects a corrupted magic" {
