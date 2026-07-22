@@ -218,12 +218,56 @@ fn copyStr(hs: *heap.State, s: []const u8) ![]const u8 {
     return buf[0..s.len];
 }
 
+// Shared by STRUCT type entries, a variant's shared_fields, and a record-
+// shaped variant arm's fields — mirrors gbc_writer.zig's writeFieldList.
+// hs.bump, not alloc: the returned slice is embedded into a long-lived
+// StructTypeObj/VariantTypeObj/VariantArmSpec (see read()'s CONST_TYPE_REF
+// case), not just used for the duration of read().
+fn readFieldList(r: *ByteReader, cs: *chunk.State, hs: *heap.State, alloc: std.mem.Allocator) ReadError![]value_mod.StructFieldSpec {
+    const field_count = try r.u16_();
+    const fields = (hs.bump(value_mod.StructFieldSpec, field_count) orelse return error.OutOfMemory)[0..field_count];
+    var fi: u16 = 0;
+    while (fi < field_count) : (fi += 1) {
+        const fname = try copyStr(hs, try r.str_());
+        const ftype = try readTypeSpec(r, hs, alloc);
+        const is_const = try r.bool8();
+        // key is derivable from name (matches how the compiler itself sets
+        // it — see compiler_decls.zig — so it's not written to the wire at
+        // all): internStr doesn't copy, and fname is already a heap-owned
+        // copy from copyStr above, so this is safe without a second
+        // allocation.
+        fields[fi] = .{ .name = fname, .typ = ftype, .is_const = is_const, .key = .{ .string = try cs.internStr(fname) } };
+    }
+    return fields;
+}
+
+fn readVariantArm(r: *ByteReader, cs: *chunk.State, hs: *heap.State, alloc: std.mem.Allocator) ReadError!value_mod.VariantArmSpec {
+    const name = try copyStr(hs, try r.str_());
+    const arm_kind = try r.u8_();
+    return switch (arm_kind) {
+        gbc_writer.VARIANT_ARM_NONE => .{ .name = name },
+        gbc_writer.VARIANT_ARM_SINGLE_PAYLOAD => blk: {
+            const payload_name = try copyStr(hs, try r.str_());
+            const payload_type = try readTypeSpec(r, hs, alloc);
+            break :blk .{ .name = name, .has_payload = true, .payload_name = payload_name, .payload_type = payload_type };
+        },
+        gbc_writer.VARIANT_ARM_RECORD => blk: {
+            const fields = try readFieldList(r, cs, hs, alloc);
+            break :blk .{ .name = name, .has_payload = fields.len > 0, .fields = fields };
+        },
+        else => return error.MalformedSection,
+    };
+}
+
 const RawTypeEntry = struct {
     kind: u8,
     name: []const u8,
     qualified_name: []const u8,
     // STRUCT
     fields: []value_mod.StructFieldSpec = &.{},
+    // VARIANT
+    shared_fields: []value_mod.StructFieldSpec = &.{},
+    arms: []value_mod.VariantArmSpec = &.{},
     // NAMED
     base: value_mod.NamedTypeBase = .int,
     has_range: bool = false,
@@ -248,24 +292,16 @@ fn readTypesSection(r: *ByteReader, cs: *chunk.State, hs: *heap.State, alloc: st
         const qualified_name = try copyStr(hs, try r.str_());
         switch (kind) {
             gbc_writer.TYPE_KIND_STRUCT => {
-                const field_count = try r.u16_();
-                // hs.bump, not alloc — embedded into the long-lived
-                // StructTypeObj this entry builds (see read()'s
-                // CONST_TYPE_REF case), same reasoning as above.
-                const fields = (hs.bump(value_mod.StructFieldSpec, field_count) orelse return error.OutOfMemory)[0..field_count];
-                var fi: u16 = 0;
-                while (fi < field_count) : (fi += 1) {
-                    const fname = try copyStr(hs, try r.str_());
-                    const ftype = try readTypeSpec(r, hs, alloc);
-                    const is_const = try r.bool8();
-                    // key is derivable from name (matches how the compiler
-                    // itself sets it — see compiler_decls.zig — so it's not
-                    // written to the wire at all): internStr doesn't copy,
-                    // and fname is already a heap-owned copy from copyStr
-                    // above, so this is safe without a second allocation.
-                    fields[fi] = .{ .name = fname, .typ = ftype, .is_const = is_const, .key = .{ .string = try cs.internStr(fname) } };
-                }
+                const fields = try readFieldList(r, cs, hs, alloc);
                 out[i] = .{ .kind = kind, .name = name, .qualified_name = qualified_name, .fields = fields };
+            },
+            gbc_writer.TYPE_KIND_VARIANT => {
+                const shared_fields = try readFieldList(r, cs, hs, alloc);
+                const arm_count = try r.u16_();
+                const arms = (hs.bump(value_mod.VariantArmSpec, arm_count) orelse return error.OutOfMemory)[0..arm_count];
+                var ai: u16 = 0;
+                while (ai < arm_count) : (ai += 1) arms[ai] = try readVariantArm(r, cs, hs, alloc);
+                out[i] = .{ .kind = kind, .name = name, .qualified_name = qualified_name, .shared_fields = shared_fields, .arms = arms };
             },
             gbc_writer.TYPE_KIND_NAMED => {
                 const base_byte = try r.u8_();
@@ -455,19 +491,8 @@ pub fn read(bytes: []const u8, cs: *chunk.State, hs: *heap.State, alloc: std.mem
     while (ci < const_count) : (ci += 1) {
         const tag = try cr.u8_();
         const v: Value = switch (tag) {
-            gbc_writer.CONST_NUMBER => blk: {
-                const n = try cr.f64_();
-                // The wire format doesn't distinguish int/float (both are
-                // NUMBER/f64, matching the current VM's f64-only constant
-                // representation, §8.2) — round-trip through int if exact,
-                // matching how the compiler itself decides int vs float at
-                // parse time (this reader has no source text to re-parse,
-                // so it recovers the same decision from the value shape).
-                break :blk if (@trunc(n) == n and n >= -9007199254740992.0 and n <= 9007199254740992.0)
-                    Value{ .int = @intFromFloat(n) }
-                else
-                    Value{ .float = n };
-            },
+            gbc_writer.CONST_NUMBER => Value{ .float = try cr.f64_() },
+            gbc_writer.CONST_INT => Value{ .int = try cr.i64_() },
             gbc_writer.CONST_STRING => blk: {
                 const s = try cr.str_();
                 const copy = hs.bump(u8, s.len) orelse return error.OutOfMemory;
@@ -559,6 +584,14 @@ pub fn read(bytes: []const u8, cs: *chunk.State, hs: *heap.State, alloc: std.mem
                                 // here (see gbc_writer.zig's .named_type case).
                             },
                         };
+                    },
+                    gbc_writer.TYPE_KIND_VARIANT => {
+                        obj.* = .{ .variant_type = .{
+                            .name = rt.name,
+                            .qualified_name = rt.qualified_name,
+                            .arms = rt.arms,
+                            .shared_fields = rt.shared_fields,
+                        } };
                     },
                     else => return error.MalformedSection,
                 }

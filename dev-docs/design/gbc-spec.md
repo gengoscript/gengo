@@ -1,10 +1,11 @@
 # Gengoscript Bytecode Cache — File Format Specification
 
 **Status:** Draft\
-**Version:** 0.6\
+**Version:** 0.7\
 **Scope:** GBC artifact only (see §2 for artifact class definitions)
 
 **Revision history**
+- 0.7 — Add a `VARIANT` `TypeEntry` kind (§8.6, `0x03`) with arm records (name, shape — none/single-payload/record — and a record arm's field list) and a type-level shared-field list, extending `TYPE_REF` (§8.2) to cover variant types. Un-reserve the `INT` constant tag (`0x06`, §8.2): promote it from "reserved for a future format version" to actually used now, fixing a real ambiguity bug where a `.int` and a whole-valued `.float` (e.g. `1.0`) were indistinguishable on the wire (both went through `NUMBER` as `f64`, reconstructed by a "no fractional part → int" heuristic) — `.int` values now write through `INT` as a raw `i64`, `.float` always through `NUMBER`, no heuristic. Both found while extending GBC to support variant-type values in the constant pool (#5): the variant work's first round-trip test happened to be the first one to return a whole-valued float constant, surfacing the pre-existing `NUMBER`/`INT` ambiguity that every earlier struct/named-type/function test had accidentally avoided.
 - 0.6 — Add `TYPE_REF` constant tag (§8.2) and a `DECIMAL_T` `FieldTypeAlt` tag (§9.2, `0x0F`). `TYPE_REF` mirrors `FUNC_REF`: the constant pool had no way to represent "this slot is a struct or named type," but `def_global` for a `type X struct {...}`/`type X int ...` declaration needs one, and a struct field referencing another type by name needs the referenced type's own constant slot to exist independently of the reference itself. `DECIMAL_T` fixes an omission: the `FieldTypeAlt` table never had a tag for `decimal` at all (every other scalar base — `int`/`float`/`rune_t`/`bool`/`string` — had one), so a struct field or named-collection element declared `decimal` had no way to round-trip. Both found while extending GBC to support struct and (predicate-free) named-type values in the constant pool (#5) — the original milestone deliberately scoped these out and rejected them with `error.UnsupportedConstant`.
 - 0.5 — Add `FUNC_REF` constant tag (§8.2): the constant pool previously had no way to represent "this slot is a function," but `make_closure`'s bytecode operand is a constant-pool index that must resolve to one. Found while starting implementation (#5) — the FUNCTIONS section was specified as a self-contained side-table with no stated link back to CONSTANTS, and a real chunk's function objects are referenced by constant-pool index, not looked up by name/position separately. `FUNC_REF` holds a `u32` index into `SEC_FUNCTIONS`; the loader resolves it to a constructed `FuncObj` and installs that into the constant slot before running any code. Also fix an arithmetic error: §6.1's own field table sums to 184 bytes (7×`u16` + 3×`u32` + 6 reserved + `i64` + 4×`hash32` + 2×`u64` = 184), not the 192 stated in three places (the `header_size` field description, the "total defined header size" line, and Phase 1 check #4) — found the same way, by implementing a writer against the table and a reader that rejected its own output. Corrected all three to 184; no field was added or removed.
 - 0.1 — Initial draft
@@ -383,19 +384,20 @@ Each `Constant` is a tag byte followed by tag-specific data:
 
 | Tag | Value | Data | Description |
 |-----|-------|------|-------------|
-| `NUMBER` | `0x01` | `f64` | IEEE 754 double. |
+| `NUMBER` | `0x01` | `f64` | IEEE 754 double. A `.float`-tagged Value only — see `INT` below; a writer must never emit `NUMBER` for a `.int`-tagged Value even when the integer is exactly representable as `f64`. |
 | `STRING` | `0x02` | `str` | UTF-8 string. |
 | `NULL` | `0x03` | — | No data bytes. |
 | `BOOL` | `0x04` | `bool8` | Boolean value. |
 | `RUNE` | `0x05` | `u32` | Unicode code point (0–0x10FFFF). Reject values outside this range. |
+| `INT` | `0x06` | `i64` | A `.int`-tagged Value. See below. |
 | `FUNC_REF` | `0x07` | `u32` | Index into `SEC_FUNCTIONS`. See below. |
 | `TYPE_REF` | `0x08` | `u32` | Index into `SEC_TYPES`. See below. |
 
-> **Reserved tag `INT` (`0x06`, `i64`):** Not used in v1 — the current VM represents all numbers as `f64` internally. This tag is reserved for a future format version when the VM gains a distinct integer representation. Writers must not emit it; loaders must reject it.
+**`INT`**: the VM's `Value` union carries `.int` and `.float` as two distinct, never-implicitly-mixed tags (Gengo enforces nominal int/float strictness in arithmetic, comparison, and named-type binding — see `docs/changelog.md`'s "Strict int/float comparison" and "Nominal type strictness" entries) — the wire format must preserve which one a constant was, not merely a value that happens to look like one. Prior to this tag's introduction, both `.int` and `.float` were written through `NUMBER` as `f64`, and a loader reconstructed the tag with a "no fractional part → int" heuristic (§8.2, pre-0.7) — that heuristic is wrong for a whole-valued float (`1.0`, `2.0`, ...), silently turning it into `.int` on load and breaking any code that depends on it staying a float. `INT` removes the ambiguity: writers emit `.int` values through `INT` (raw `i64`, no round-tripping through `f64` and its 2^53 exact-integer ceiling) and `.float` values through `NUMBER`; loaders never guess. Found via the first round-trip test that returned a whole-valued float constant (`#5`, extending variant-type support) — every prior test happened to avoid that exact shape.
 
 **`FUNC_REF`**: the constant pool has no self-contained representation for a function or closure — `make_closure` (and any other instruction addressing a function by constant index) resolves through this indirection instead. A `FUNC_REF` constant's `u32` value must be `< function_count` in `SEC_FUNCTIONS` (§8.3); a loader constructs the function object described by that `FunctionEntry` and installs it at this constant-pool slot before any bytecode runs. Referencing the same `FunctionEntry` from more than one `FUNC_REF` constant is invalid (each function has exactly one home constant slot) and must be rejected. `FUNC_REF` must not appear in any other constant-consuming context (e.g. as a value produced by the `constant` opcode) — it exists solely to let a `SEC_FUNCTIONS` entry occupy a constant-pool slot.
 
-**`TYPE_REF`**: the same indirection as `FUNC_REF`, for a struct or named type — `def_global` for a `type X struct {...}`/`type X int ...` declaration needs a constant-pool slot to hold the type object. A `TYPE_REF` constant's `u32` value must be `< type_count` in `SEC_TYPES` (§8.6); a loader constructs the `STRUCT` or `NAMED` type object described by that `TypeEntry` and installs it at this constant-pool slot before any bytecode runs. Same one-home-slot-per-entry rule as `FUNC_REF`. A struct field or named-collection element/key/value referencing *another* type by name (a `STRUCT_T`/`NAMED_T`/etc. `FieldTypeAlt`) does so by qualified-name string, not by a nested `TYPE_REF` — see §9.2 — so the referenced type's own `TYPE_REF` constant (if it has one) is independent of any reference to it.
+**`TYPE_REF`**: the same indirection as `FUNC_REF`, for a struct, named, or variant type — `def_global` for a `type X struct {...}`/`type X int ...`/`type X variant {...}` declaration needs a constant-pool slot to hold the type object. A `TYPE_REF` constant's `u32` value must be `< type_count` in `SEC_TYPES` (§8.6); a loader constructs the `STRUCT`, `NAMED`, or `VARIANT` type object described by that `TypeEntry` and installs it at this constant-pool slot before any bytecode runs. Same one-home-slot-per-entry rule as `FUNC_REF`. A struct field or named-collection element/key/value referencing *another* type by name (a `STRUCT_T`/`NAMED_T`/etc. `FieldTypeAlt`) does so by qualified-name string, not by a nested `TYPE_REF` — see §9.2 — so the referenced type's own `TYPE_REF` constant (if it has one) is independent of any reference to it.
 
 Constants are indexed from 0. Instructions reference constants by `u16` or `u32` index as defined in the instruction set.
 
@@ -554,18 +556,39 @@ InterfaceMethod {
 
 **VARIANT** (`0x05`) — after common fields:
 ```
-arm_count : u16
-arms      : [arm_count]VariantArm
+shared_field_count : u16
+shared_fields      : [shared_field_count]StructField
+arm_count          : u16
+arms               : [arm_count]VariantArm
 ```
-Each `VariantArm`:
+`shared_fields` are fields declared directly in the variant body outside any
+arm (`name type`, not inside an arm's `{...}`/`(...)`) — common to every arm
+of the type, using the same `StructField` shape §8.6's `STRUCT` kind defines
+above. Each `VariantArm`:
 ```
 VariantArm {
-  name              : str
-  has_payload       : bool8
-  payload_name      : str        // present only if has_payload
-  payload_type      : TypeSpec   // present only if has_payload
+  name     : str
+  arm_kind : u8   // 0=NONE  1=SINGLE_PAYLOAD  2=RECORD
+  // NONE: no further fields — a bare tag, e.g. `point` in `point,`.
+  // SINGLE_PAYLOAD (present only if arm_kind == 1):
+  payload_name : str        // e.g. `value` in `ok(value int)`
+  payload_type : TypeSpec
+  // RECORD (present only if arm_kind == 2):
+  field_count  : u16
+  fields       : [field_count]StructField   // e.g. `{ topic string, qos Qos }`
 }
 ```
+A variant arm has exactly one of two source shapes — `arm(payload_type)` (one
+positional/named payload) or `arm { f1 T1, f2 T2, ... }` (zero or more named
+fields, struct-style) — plus a bare no-payload form (`arm,`). `arm_kind`
+makes the wire encoding explicit rather than inferring it from field/payload
+presence, since a `RECORD` arm may have zero fields (`arm {}`), same shape as
+`NONE` in every respect except which construction syntax accepted it.
+`ordinal` (an arm's position in `arms`) is never itself semantically
+significant on load — `switch`/field access always re-resolve an arm by
+`name`, not by index (see the `variant_check` opcode and
+`variantTypeFieldValue`) — so a loader is free to preserve or renumber
+this array's order.
 
 ### 8.7 DEPENDENCY\_TABLE
 
