@@ -3340,3 +3340,241 @@ test "compiler: multi named-return with mixed erased and boxed types constructs 
     try std.testing.expectEqual(@as(usize, 3), countOp(c, .call));
     try std.testing.expect(countOp(c, .validate_named_range) >= 1);
 }
+
+// ── #204 native-lane backfill: fusion pass trigger decisions ──────────────
+//
+// See lang/fusion_pass.zig's module doc and dev-docs/design/vm-architecture.md
+// §6: every fusion is a legality-checked rewrite of adjacent core ops into a
+// VM-private fused op, run by `compile()`/`compileWithSession()` (both call
+// fusion_pass.fuse() already, so every test in this file already observes
+// post-fusion bytecode). These tests assert the *specific* trigger shape for
+// each fused op that had zero direct native coverage before this pass, plus
+// one legality-boundary case (same_slot). Had zero native coverage (#204).
+
+test "fusion: global read + constant binop fuses to get_global_const_X" {
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\g := 10
+        \\func geqc() bool { return g == 5 }
+        \\func gaddc() int { return g + 5 }
+        \\func gltc() bool { return g < 5 }
+        \\func gsubc() int { return g - 5 }
+    );
+    const c = rt.chunk_state;
+    try std.testing.expectEqual(@as(usize, 1), countOp(c, .get_global_const_eq));
+    try std.testing.expectEqual(@as(usize, 1), countOp(c, .get_global_const_add));
+    try std.testing.expectEqual(@as(usize, 1), countOp(c, .get_global_const_lt));
+    try std.testing.expectEqual(@as(usize, 1), countOp(c, .get_global_const_sub));
+}
+
+test "fusion: add immediately before ret fuses to add_ret" {
+    // Two different locals summed and returned directly: neither get_local
+    // pairs with the other (no pairFusion rule joins two get_locals), so the
+    // only fusable pair left is the trailing add+ret.
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\func addTwo(a int, b int) int { return a + b }
+    );
+    const c = rt.chunk_state;
+    try std.testing.expectEqual(@as(usize, 1), countOp(c, .add_ret));
+    try std.testing.expectEqual(@as(usize, 0), countOp(c, .add));
+}
+
+test "fusion: local struct field read fuses to get_local_get_field" {
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\type Point struct { x int, y int }
+        \\func fieldRead(p Point) int { return p.x }
+    );
+    const c = rt.chunk_state;
+    try std.testing.expectEqual(@as(usize, 1), countOp(c, .get_local_get_field));
+}
+
+test "fusion: bare local return fuses to get_local_ret" {
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\func identity(x int) int { return x }
+    );
+    const c = rt.chunk_state;
+    try std.testing.expectEqual(@as(usize, 1), countOp(c, .get_local_ret));
+}
+
+test "fusion: while-loop condition on a global with a constant fuses to get_global_const_lt_jif_pop" {
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\g := 10
+        \\func gforlt() int {
+        \\    i := 0
+        \\    for g < 100 {
+        \\        i = i + 1
+        \\    }
+        \\    return i
+        \\}
+    );
+    const c = rt.chunk_state;
+    try std.testing.expectEqual(@as(usize, 1), countOp(c, .get_global_const_lt_jif_pop));
+}
+
+test "fusion: while-loop condition on a local with > and a constant fuses to get_local_const_gt_jif_pop" {
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\func countdown() int {
+        \\    i := 5
+        \\    for i > 0 {
+        \\        i = i - 1
+        \\    }
+        \\    return i
+        \\}
+    );
+    const c = rt.chunk_state;
+    try std.testing.expectEqual(@as(usize, 1), countOp(c, .get_local_const_gt_jif_pop));
+}
+
+test "fusion: C-style for-loop header (local < constant) fuses to the quint get_local_const_lt_jif_pop_jump" {
+    // The jump-to-body-first layout a C-for uses (skip the post-statement on
+    // the loop's first iteration) is the one shape that places an
+    // unconditional jump directly after the get_local_const_lt_jif_pop quad,
+    // letting it grow into the 13-byte quint.
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\func cfor() int {
+        \\    x := 0
+        \\    for i := 0; i < 5; i++ {
+        \\        x = x + i
+        \\    }
+        \\    return x
+        \\}
+    );
+    const c = rt.chunk_state;
+    try std.testing.expectEqual(@as(usize, 1), countOp(c, .get_local_const_lt_jif_pop_jump));
+}
+
+test "fusion: C-style for-loop's per-iteration capture close fuses to close_upvalue_loop" {
+    // Every iteration of a C-for rebinds the loop variable (for capture
+    // correctness), closing it right before the loop's back-edge — this is
+    // what supplies close_upvalue_loop's trigger, independent of whether the
+    // loop body actually captures the variable in a closure.
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\func cfor() int {
+        \\    x := 0
+        \\    for i := 0; i < 5; i++ {
+        \\        x = x + i
+        \\    }
+        \\    return x
+        \\}
+    );
+    const c = rt.chunk_state;
+    try std.testing.expectEqual(@as(usize, 1), countOp(c, .close_upvalue_loop));
+}
+
+test "fusion: top-level global compound-add fuses to inc_global_const" {
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\g := 10
+        \\func incGlobal() { g += 5 }
+    );
+    const c = rt.chunk_state;
+    try std.testing.expectEqual(@as(usize, 1), countOp(c, .inc_global_const));
+}
+
+test "fusion: loop-body compound-add on a local fuses to local_add_const, and to local_add_const_loop when it directly precedes the back-edge" {
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\func loopLocalAdd(n int) int {
+        \\    x := 0
+        \\    i := 0
+        \\    for i < n {
+        \\        x += 3
+        \\        i = i + 1
+        \\    }
+        \\    return x
+        \\}
+    );
+    const c = rt.chunk_state;
+    // x += 3 isn't the loop's last statement (i = i + 1 follows it), so it
+    // fuses only as far as local_add_const; the trailing i = i + 1 IS last,
+    // so it grows the extra step to local_add_const_loop.
+    try std.testing.expectEqual(@as(usize, 1), countOp(c, .local_add_const));
+    try std.testing.expectEqual(@as(usize, 1), countOp(c, .local_add_const_loop));
+}
+
+test "fusion: global assignment as a loop's last statement fuses to set_global_loop" {
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\g := 0
+        \\func loopGlobalAssign(n int) int {
+        \\    i := 0
+        \\    for i < n {
+        \\        i = i + 1
+        \\        g = i
+        \\    }
+        \\    return g
+        \\}
+    );
+    const c = rt.chunk_state;
+    try std.testing.expectEqual(@as(usize, 1), countOp(c, .set_global_loop));
+}
+
+test "fusion: local = local + local fuses to the 4-window local_add_local" {
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\func addLocal() int {
+        \\    a := 1
+        \\    b := 2
+        \\    a += b
+        \\    return a
+        \\}
+    );
+    const c = rt.chunk_state;
+    try std.testing.expectEqual(@as(usize, 1), countOp(c, .local_add_local));
+}
+
+test "fusion: local += struct field fuses to the 4-window local_add_field" {
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\type Point struct { x int, y int }
+        \\func addField() int {
+        \\    x := 1
+        \\    p := Point{x: 1, y: 2}
+        \\    x += p.y
+        \\    return x
+        \\}
+    );
+    const c = rt.chunk_state;
+    try std.testing.expectEqual(@as(usize, 1), countOp(c, .local_add_field));
+}
+
+test "fusion: get_local_const_add does not fuse into local_add_const across mismatched slots" {
+    // Legality boundary: local_add_const additionally requires the read slot
+    // and the write slot to match (same_slot in pairFusionFull) — a plain
+    // reassignment into a *different* local must leave get_local_const_add
+    // and set_local as two separate instructions, not one fused op.
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\func f() int {
+        \\    x := 10
+        \\    y := 0
+        \\    y = x + 5
+        \\    return y
+        \\}
+    );
+    const c = rt.chunk_state;
+    try std.testing.expectEqual(@as(usize, 1), countOp(c, .get_local_const_add));
+    try std.testing.expectEqual(@as(usize, 0), countOp(c, .local_add_const));
+    try std.testing.expect(try hasOp(c, .set_local));
+}
