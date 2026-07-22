@@ -4002,15 +4002,32 @@ test "gbc: writer rejects an enum-typed constant (out of scope for this incremen
     try std.testing.expectError(error.UnsupportedConstant, gbc_writer.write(rt.chunk_state, std.testing.allocator, .{ .root_source = "" }));
 }
 
-test "gbc: writer rejects a predicate-bearing named type (out of scope for this increment)" {
+test "gbc: writer supports a captureless (module-scope) predicate-bearing named type" {
     var rt = try setup();
     defer rt.deinit();
     try compile(&rt,
         \\type Score int predicate func(x) { return x >= 0 and x <= 100 }
         \\func f() Score { return Score(50) }
     );
-    try std.testing.expectError(error.UnsupportedConstant, gbc_writer.write(rt.chunk_state, std.testing.allocator, .{ .root_source = "" }));
+    const bytes = try gbc_writer.write(rt.chunk_state, std.testing.allocator, .{ .root_source = "" });
+    std.testing.allocator.free(bytes);
 }
+
+// Note: a named type declared inside a function, with a predicate that
+// captures that function's own locals (predicate_uv_count > 0 in
+// compiler_decls.zig's namedTypeDecl/subtypeDecl), cannot currently be
+// exercised in a test at all — it hits a real, pre-existing, GBC-unrelated
+// compiler bug the moment the enclosing function runs (a bytecode
+// emission-order bug: `make_closure` is emitted before the named type's own
+// `emitConst`, but the `set_named_predicate` opcode expects the opposite
+// stack order — TypeError, unconditionally, on every call). gbc_writer.zig's
+// `cl.upvalues.len > 0` rejection in the .named_type case is still correct
+// defensive code (this write()-time constant is a *pre-existing* heap
+// object shared with running bytecode, per compiler_decls.zig, so a caller
+// that ran code before calling write() could in principle reach it once
+// that separate bug is fixed) — just not something this suite can exercise
+// today. gengo-mqtt's own predicates are all module-scope (captureless), so
+// this doesn't block real-world use; flagged separately, not fixed here.
 
 test "gbc: struct and named-type constants round-trip through write+read and execute correctly" {
     const src =
@@ -4099,6 +4116,166 @@ test "gbc: variant-type constants (shared fields, record arm, single-payload arm
     const actual = try vm.callGlobal(ctx, "f", &.{});
 
     try std.testing.expectApproxEqAbs(expected.float, actual.float, 1e-9);
+}
+
+test "gbc: a predicate-bearing named type still enforces its predicate after round-tripping" {
+    // Note: `f` returns `int`, not `Score`, deliberately — a function whose
+    // *declared, checked* return type is itself a predicate-bearing named
+    // type hits a separate, pre-existing, GBC-unrelated VM bug (confirmed
+    // via `git stash` to already reproduce on plain interpreted execution
+    // with zero GBC involvement — see issue #212): enforceFuncReturnTypes's
+    // named_t path re-invokes the predicate as a reentrant VM call while
+    // already mid-`ret`-opcode-handling, which corrupts the frame stack.
+    // Constructing `Score(n)` as a local (not a checked function return)
+    // exercises the predicate without going anywhere near that path.
+    const src =
+        \\type Score int predicate func(x) { return x >= 0 and x <= 100 }
+        \\func f(n int) int {
+        \\    s := Score(n)
+        \\    return int(s)
+        \\}
+    ;
+
+    var rt1 = try setup();
+    defer rt1.deinit();
+    try runSrc(&rt1, src);
+    const expected_ok = try rt1.callGlobal("f", &.{.{ .int = 50 }});
+    try std.testing.expectError(error.PredicateFailed, rt1.callGlobal("f", &.{.{ .int = 200 }}));
+
+    var rt2 = try setup();
+    defer rt2.deinit();
+    try compile(&rt2, src);
+    const bytes = try gbc_writer.write(rt2.chunk_state, std.testing.allocator, .{ .root_source = src });
+    defer std.testing.allocator.free(bytes);
+
+    var rt3 = try setup();
+    defer rt3.deinit();
+    chunk.setActive(rt3.chunk_state);
+    globals.setActive(&rt3.globals_state);
+    heap.setActive(&rt3.heap_state);
+    chunk.reset();
+    globals.reset();
+    heap.reset();
+    try gbc_reader.read(bytes, chunk.g_state, heap.g_state, rt3.vm_state.allocator);
+    try fusion_pass.fuse(chunk.g_state, rt3.vm_state.allocator);
+
+    const ctx: vm.VMContext = .{ .cs = rt3.chunk_state, .gs = &rt3.globals_state, .hs = &rt3.heap_state, .vs = &rt3.vm_state };
+    try vm.run(ctx);
+    const actual_ok = try vm.callGlobal(ctx, "f", &.{.{ .int = 50 }});
+    try std.testing.expectEqual(expected_ok.int, actual_ok.int);
+    try std.testing.expectError(error.PredicateFailed, vm.callGlobal(ctx, "f", &.{.{ .int = 200 }}));
+}
+
+test "gbc: interface-type constants round-trip and assert_interface still enforces conformance" {
+    // Exercises the exact concern that made interface support riskier than
+    // struct/named/variant: interfaceMethodMatches (vm_types.zig) compares
+    // an interface method's declared param/return types against the actual
+    // implementing function's FuncObj.param_types/return_types at every
+    // assert_interface check — if the loaded FuncObj's types were left
+    // empty/placeholder (as function param/return types were before this
+    // increment), a real, correctly-typed conformance would wrongly fail
+    // after a GBC round-trip. Covers both a conforming type (succeeds) and
+    // a non-conforming one (still rejected) through the loaded artifact.
+    const src =
+        \\type Adder interface {
+        \\    add(int) int,
+        \\}
+        \\type Counter struct { n int }
+        \\func (c Counter) add(x int) int { return c.n + x }
+        \\type NotAnAdder struct { z int }
+        \\func call_add(a Adder, x int) int { return a.add(x) }
+        \\func good() int {
+        \\    c := Counter { n: 10 }
+        \\    return call_add(c, 5)
+        \\}
+        \\func bad() int {
+        \\    n := NotAnAdder { z: 1 }
+        \\    return call_add(n, 1)
+        \\}
+    ;
+
+    var rt1 = try setup();
+    defer rt1.deinit();
+    try runSrc(&rt1, src);
+    const expected = try rt1.callGlobal("good", &.{});
+    try std.testing.expectError(error.TypeError, rt1.callGlobal("bad", &.{}));
+
+    var rt2 = try setup();
+    defer rt2.deinit();
+    try compile(&rt2, src);
+    const bytes = try gbc_writer.write(rt2.chunk_state, std.testing.allocator, .{ .root_source = src });
+    defer std.testing.allocator.free(bytes);
+
+    var rt3 = try setup();
+    defer rt3.deinit();
+    chunk.setActive(rt3.chunk_state);
+    globals.setActive(&rt3.globals_state);
+    heap.setActive(&rt3.heap_state);
+    chunk.reset();
+    globals.reset();
+    heap.reset();
+    try gbc_reader.read(bytes, chunk.g_state, heap.g_state, rt3.vm_state.allocator);
+    try fusion_pass.fuse(chunk.g_state, rt3.vm_state.allocator);
+
+    const ctx: vm.VMContext = .{ .cs = rt3.chunk_state, .gs = &rt3.globals_state, .hs = &rt3.heap_state, .vs = &rt3.vm_state };
+    try vm.run(ctx);
+    const actual = try vm.callGlobal(ctx, "good", &.{});
+    try std.testing.expectEqual(expected.int, actual.int);
+    try std.testing.expectError(error.TypeError, vm.callGlobal(ctx, "bad", &.{}));
+}
+
+test "gbc: a named type's default value and is_anonymous/scale round-trip correctly" {
+    // Regression coverage for fields the writer previously silently dropped
+    // from NAMED entries entirely (not rejected — just never written, a gap
+    // found while extending GBC for predicates/interfaces): a non-zero
+    // `default` on a range-constrained named type (zero-init must produce
+    // the declared default, not the base type's ordinary zero), and `scale`
+    // (decimal fixed-point precision — a zero-inited Price must compare
+    // equal to a freshly constructed Price(9.99), which only holds if both
+    // share the same scale-encoded raw representation).
+    const src =
+        \\type Grade int range 1..5 default 3
+        \\type Price decimal 2 default 9.99
+        \\func f() int {
+        \\    var g Grade
+        \\    return int(g)
+        \\}
+        \\func p() bool {
+        \\    var pr Price
+        \\    return pr == Price(9.99)
+        \\}
+    ;
+
+    var rt1 = try setup();
+    defer rt1.deinit();
+    try runSrc(&rt1, src);
+    const expected_g = try rt1.callGlobal("f", &.{});
+    const expected_p = try rt1.callGlobal("p", &.{});
+
+    var rt2 = try setup();
+    defer rt2.deinit();
+    try compile(&rt2, src);
+    const bytes = try gbc_writer.write(rt2.chunk_state, std.testing.allocator, .{ .root_source = src });
+    defer std.testing.allocator.free(bytes);
+
+    var rt3 = try setup();
+    defer rt3.deinit();
+    chunk.setActive(rt3.chunk_state);
+    globals.setActive(&rt3.globals_state);
+    heap.setActive(&rt3.heap_state);
+    chunk.reset();
+    globals.reset();
+    heap.reset();
+    try gbc_reader.read(bytes, chunk.g_state, heap.g_state, rt3.vm_state.allocator);
+    try fusion_pass.fuse(chunk.g_state, rt3.vm_state.allocator);
+
+    const ctx: vm.VMContext = .{ .cs = rt3.chunk_state, .gs = &rt3.globals_state, .hs = &rt3.heap_state, .vs = &rt3.vm_state };
+    try vm.run(ctx);
+    const actual_g = try vm.callGlobal(ctx, "f", &.{});
+    const actual_p = try vm.callGlobal(ctx, "p", &.{});
+    try std.testing.expectEqual(expected_g.int, actual_g.int);
+    try std.testing.expectEqual(expected_p.boolean, actual_p.boolean);
+    try std.testing.expect(actual_p.boolean);
 }
 
 test "gbc: reader rejects a corrupted magic" {

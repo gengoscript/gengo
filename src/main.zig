@@ -734,7 +734,7 @@ fn runCli(argv: []const []const u8) void {
             io.werr("gengo: cannot emit GBC: ");
             io.werr(@errorName(err));
             if (err == error.UnsupportedConstant) {
-                io.werr(" (this script uses a feature GBC caching doesn't support yet: enums, interfaces, a named type with a predicate, or a closure with captures stored as a constant — see issue #5)");
+                io.werr(" (this script uses a feature GBC caching doesn't support yet: enums, a predicate declared inside a function body (rather than at module/type scope), or a closure with real captures stored as a constant — see issue #5)");
             }
             io.werr("\n");
             die(1);

@@ -53,9 +53,10 @@ pub const CONST_TYPE_REF: u8 = 0x08;
 
 pub const TYPE_KIND_STRUCT: u8 = 0x01;
 pub const TYPE_KIND_NAMED: u8 = 0x02;
-// 0x03 (ENUM) and 0x04 (INTERFACE) are reserved by gbc-spec.md §8.6 for
-// not-yet-implemented type kinds — skipped here rather than reused, so
-// adding them later doesn't renumber VARIANT.
+// 0x03 (ENUM) is reserved by gbc-spec.md §8.6 for a not-yet-implemented type
+// kind — skipped here rather than reused, so adding it later doesn't
+// renumber INTERFACE/VARIANT.
+pub const TYPE_KIND_INTERFACE: u8 = 0x04;
 pub const TYPE_KIND_VARIANT: u8 = 0x05;
 
 // Variant arm shapes (wire-only discriminant; derived from the in-memory
@@ -227,26 +228,20 @@ fn deriveFuncLength(code: []const u8, ip: u32) WriteError!u32 {
     return @intCast(target - ip);
 }
 
-fn writeTypeSpecNone(w: *ByteWriter) !void {
-    // A single ANY alt — used for fields this milestone doesn't populate
-    // (function param/return types are out of scope until callers need
-    // typed-arg-check-preserving GBC; see the has_typed_params/returns
-    // note in gbc_reader.zig).
-    try w.u8_(1); // alt_count
-    try w.u8_(0x00); // ANY
-}
-
-// Real FieldTypeSpec/FieldTypeAlt encoder, used for struct fields and named
-// array/map elem/key/val specs (both genuinely read at runtime — see the
-// #5 struct/named-type support research: struct field types drive real
-// per-construction/per-write type + named-predicate checks, not just
-// compile-time-only bookkeeping like function param/return types are for
-// now). Supports every scalar tag plus one level of struct_t/interface_t/
-// named_t/variant_t (by qualified-name string, no further indirection
-// needed — matchesTypeAlt resolves those by name at runtime too) and
-// recurses into array/map elem/key/val specs. Rejects func_t and
-// type_param (generics-only, out of scope) with UnsupportedFieldType
-// rather than silently mis-encoding them.
+// Real FieldTypeSpec/FieldTypeAlt encoder, used for struct fields, named
+// array/map elem/key/val specs, and function/method param/return/variadic
+// types (struct field types drive real per-construction/per-write type +
+// named-predicate checks; function/method types are load-bearing too —
+// interfaceMethodMatches, vm_types.zig, compares an interface method's
+// declared param/return types against the actual implementing function's
+// FuncObj.param_types/return_types at every assert_interface check, so a
+// placeholder here would make real, correctly-typed interface conformance
+// fail once the implementing function came from a loaded chunk). Supports
+// every scalar tag plus one level of struct_t/interface_t/named_t/variant_t
+// (by qualified-name string, no further indirection needed — matchesTypeAlt
+// resolves those by name at runtime too) and recurses into array/map
+// elem/key/val specs. Rejects func_t and type_param (generics-only, out of
+// scope) with UnsupportedFieldType rather than silently mis-encoding them.
 fn writeTypeSpec(w: *ByteWriter, spec: value_mod.FieldTypeSpec) WriteError!void {
     try w.u8_(@intCast(spec.alts.len));
     for (spec.alts) |alt| {
@@ -293,7 +288,7 @@ fn writeTypeSpec(w: *ByteWriter, spec: value_mod.FieldTypeSpec) WriteError!void 
     }
 }
 
-const TypeEntryKind = enum { struct_t, named_t, variant_t };
+const TypeEntryKind = enum { struct_t, named_t, variant_t, interface_t };
 
 const TypeEntryInfo = struct {
     kind: TypeEntryKind,
@@ -302,7 +297,25 @@ const TypeEntryInfo = struct {
     st: ?*const value_mod.StructTypeObj = null,
     nt: ?*const value_mod.NamedTypeObj = null,
     vt: ?*const value_mod.VariantTypeObj = null,
+    it: ?*const value_mod.InterfaceTypeObj = null,
+    // named_t only: index into SEC_FUNCTIONS for nt.predicate's underlying
+    // FuncObj, resolved the same way a FUNC_REF constant is (see write()'s
+    // .named_type case) — null if the named type has no predicate.
+    predicate_func_idx: ?u32 = null,
 };
+
+fn writeInterfaceMethod(w: *ByteWriter, m: value_mod.InterfaceMethodSpec) WriteError!void {
+    try w.str_(m.name);
+    try w.u8_(m.arity);
+    try w.bool8(m.is_variadic);
+    if (m.is_variadic) try writeTypeSpec(w, m.variadic_type);
+    try w.bool8(m.has_typed_params);
+    try w.bool8(m.has_typed_returns);
+    try w.u16_(@intCast(m.param_types.len));
+    for (m.param_types) |pt| try writeTypeSpec(w, pt);
+    try w.u16_(@intCast(m.return_types.len));
+    for (m.return_types) |rt| try writeTypeSpec(w, rt);
+}
 
 // Shared by STRUCT type entries, a variant's shared_fields, and a record-
 // shaped variant arm's fields — all three are plain []StructFieldSpec lists
@@ -371,6 +384,46 @@ fn writeTypesSection(w: *ByteWriter, types: []const TypeEntryInfo) WriteError!vo
                 if (nt.key_spec) |ks| try writeTypeSpec(w, ks);
                 try w.bool8(nt.val_spec != null);
                 if (nt.val_spec) |vs| try writeTypeSpec(w, vs);
+                // is_anonymous: read at runtime for anonymous array/map-typed
+                // named-type equality (vm.zig's cast_value/type-compare
+                // path) — an implicit wrapper the compiler emits for a bare
+                // `[]T`/`map[K]V`-typed local, not just a user `type X ...`.
+                try w.bool8(nt.is_anonymous);
+                // scale: decimal fixed-point scale, read at runtime for
+                // formatting/conversion of a decimal-based named type
+                // (value.zig/vm_types.zig) — 0 for every non-decimal base.
+                try w.u8_(nt.scale);
+                // Predicate: resolved through the same FUNC_REF-style
+                // SEC_FUNCTIONS indirection as a plain function constant
+                // (registered into `funcs` by write()'s .named_type case,
+                // since the predicate's FuncObj never gets its own
+                // independent constant-pool slot at compile time).
+                try w.bool8(te.predicate_func_idx != null);
+                if (te.predicate_func_idx) |pidx| {
+                    try w.u32_(pidx);
+                    try w.bool8(nt.predicate_msg != null);
+                    if (nt.predicate_msg) |msg| try w.str_(msg);
+                }
+                // Default value: always one of float (int/float/rune/decimal
+                // bases)/string/bool per parseNamedDefault — array/map/enum_t
+                // bases never reach here with has_default true.
+                try w.bool8(nt.has_default);
+                if (nt.has_default) {
+                    switch (nt.base) {
+                        .int, .float, .rune, .decimal => try w.f64_(nt.default_val.float),
+                        .string => try w.str_(nt.default_val.string.bytes),
+                        .bool => try w.bool8(nt.default_val.boolean),
+                        .array_t, .map_t, .enum_t => return error.UnsupportedConstant,
+                    }
+                }
+            },
+            .interface_t => {
+                try w.u8_(TYPE_KIND_INTERFACE);
+                try w.str_(te.name);
+                try w.str_(te.qualified_name);
+                const it = te.it.?;
+                try w.u16_(@intCast(it.methods.len));
+                for (it.methods) |m| try writeInterfaceMethod(w, m);
             },
         }
     }
@@ -402,15 +455,28 @@ fn writeFunctionsSection(w: *ByteWriter, cs: *chunk.State, funcs: []const FuncEn
         try w.u16_(0);
         try w.u8_(fe.f.arity);
         try w.bool8(fe.f.is_variadic);
-        if (fe.f.is_variadic) try writeTypeSpecNone(w);
+        if (fe.f.is_variadic) try writeTypeSpec(w, fe.f.variadic_type);
         try w.bool8(fe.f.has_typed_params);
         try w.bool8(fe.f.has_typed_returns);
         try w.u8_(fe.f.named_return_count);
-        try w.u16_(0); // param_type_count (deferred — no TYPES-table support yet)
-        try w.u16_(0); // return_type_count (deferred)
+        try w.u16_(@intCast(fe.f.param_types.len));
+        for (fe.f.param_types) |pt| try writeTypeSpec(w, pt);
+        try w.u16_(@intCast(fe.f.return_types.len));
+        for (fe.f.return_types) |rt| try writeTypeSpec(w, rt);
         try w.u8_(@intCast(fe.f.capture_slots.len));
         try w.rawBytes(fe.f.capture_slots);
     }
+}
+
+// Registers a FuncObj into `funcs` (the SEC_FUNCTIONS side-table being
+// built) and returns its index — shared by plain `.function` constants and
+// a predicate closure's underlying FuncObj (which never gets its own
+// independent constant-pool slot at compile time, see write()'s
+// .named_type case, so the writer has to register it manually here).
+fn registerFunc(funcs: *std.ArrayListUnmanaged(FuncEntryInfo), alloc: std.mem.Allocator, defused_code: []const u8, f: *const value_mod.FuncObj, name: []const u8) WriteError!u32 {
+    const length = try deriveFuncLength(defused_code, @intCast(f.ip));
+    try funcs.append(alloc, .{ .name = name, .ip = @intCast(f.ip), .length = length, .f = f });
+    return @intCast(funcs.items.len - 1);
 }
 
 /// Writes a GBC artifact for `cs` (which must already be compiled and fused,
@@ -421,9 +487,11 @@ pub fn write(cs: *chunk.State, alloc: std.mem.Allocator, opts: WriteOptions) Wri
     const defused_code = try vm_defuse.buildDefusedCode(cs, alloc);
     defer alloc.free(defused_code);
 
-    // Collect function, struct/named-type, and variant-type constants. Still
-    // unsupported: closures with captures, enums, interfaces, and predicate-
-    // bearing named types (see the .named_type case below).
+    // Collect function, struct/named/variant/interface-type constants, and
+    // a named type's predicate (if captureless). Still unsupported: enums,
+    // closures with real (non-empty) captures, and a predicate declared
+    // in-function rather than at module/type scope (see the .named_type
+    // case below).
     var funcs: std.ArrayListUnmanaged(FuncEntryInfo) = .empty;
     defer funcs.deinit(alloc);
     var types: std.ArrayListUnmanaged(TypeEntryInfo) = .empty;
@@ -466,15 +534,9 @@ pub fn write(cs: *chunk.State, alloc: std.mem.Allocator, opts: WriteOptions) Wri
             .object => |obj| {
                 switch (obj.*) {
                     .function => |*f| {
-                        const length = try deriveFuncLength(defused_code, @intCast(f.ip));
-                        try funcs.append(alloc, .{
-                            .name = f.name,
-                            .ip = @intCast(f.ip),
-                            .length = length,
-                            .f = f,
-                        });
+                        const idx = try registerFunc(&funcs, alloc, defused_code, f, f.name);
                         try consts_w.u8_(CONST_FUNC_REF);
-                        try consts_w.u32_(@intCast(funcs.items.len - 1));
+                        try consts_w.u32_(idx);
                     },
                     .struct_type => |*st| {
                         try types.append(alloc, .{
@@ -487,16 +549,34 @@ pub fn write(cs: *chunk.State, alloc: std.mem.Allocator, opts: WriteOptions) Wri
                         try consts_w.u32_(@intCast(types.items.len - 1));
                     },
                     .named_type => |*nt| {
-                        // Predicates need a captureless-closure-in-a-constant
-                        // encoding this increment doesn't implement yet (see
-                        // gbc_reader.zig's NAMED-type notes) — reject rather
-                        // than silently dropping the predicate.
-                        if (nt.predicate != null) return error.UnsupportedConstant;
+                        // A predicate closure is always compiled captureless
+                        // for a module-scope type declaration (resolveUpvalue
+                        // can't find anything to capture at scope_depth <= 1
+                        // — see #5 research) — the compiler still always
+                        // wraps it in a .closure object even with zero
+                        // upvalues, never a bare .function. Register its
+                        // underlying FuncObj the same way a plain function
+                        // constant is registered; a predicate declared
+                        // in-function (real, non-empty captures) is out of
+                        // scope for this increment.
+                        var predicate_func_idx: ?u32 = null;
+                        if (nt.predicate) |pred_obj| {
+                            const pf: *const value_mod.FuncObj = switch (pred_obj.*) {
+                                .closure => |*cl| blk: {
+                                    if (cl.upvalues.len > 0) return error.UnsupportedConstant;
+                                    break :blk &cl.func.function;
+                                },
+                                .function => |*ff| ff,
+                                else => return error.UnsupportedConstant,
+                            };
+                            predicate_func_idx = try registerFunc(&funcs, alloc, defused_code, pf, "");
+                        }
                         try types.append(alloc, .{
                             .kind = .named_t,
                             .name = nt.name,
                             .qualified_name = nt.qualified_name,
                             .nt = nt,
+                            .predicate_func_idx = predicate_func_idx,
                         });
                         try consts_w.u8_(CONST_TYPE_REF);
                         try consts_w.u32_(@intCast(types.items.len - 1));
@@ -507,6 +587,16 @@ pub fn write(cs: *chunk.State, alloc: std.mem.Allocator, opts: WriteOptions) Wri
                             .name = vt.name,
                             .qualified_name = vt.qualified_name,
                             .vt = vt,
+                        });
+                        try consts_w.u8_(CONST_TYPE_REF);
+                        try consts_w.u32_(@intCast(types.items.len - 1));
+                    },
+                    .interface_type => |*it| {
+                        try types.append(alloc, .{
+                            .kind = .interface_t,
+                            .name = it.name,
+                            .qualified_name = it.qualified_name,
+                            .it = it,
                         });
                         try consts_w.u8_(CONST_TYPE_REF);
                         try consts_w.u32_(@intCast(types.items.len - 1));
