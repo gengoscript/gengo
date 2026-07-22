@@ -145,6 +145,52 @@ pub fn importExpr(c: anytype) !void {
     }
 }
 
+// #210: desugar a binary operator to a direct dunder-method call when the
+// LHS's static type (struct or named) declares one. Must run BEFORE the RHS
+// is parsed: the call convention needs [callee, receiver, arg] on the stack,
+// and the receiver (LHS) is already pushed by this point in the Pratt
+// parse, so the callee has to be inserted via get_global+swap while only
+// LHS is on the stack — exactly how static `.dot` method calls already work
+// (see this file's `.dot` handling). Returns true if it fully handled (and
+// emitted) the operator; false means "not a dunder-eligible operator here,
+// proceed with the normal path" and the RHS has NOT been parsed yet.
+fn tryEmitDunderBinaryOp(c: anytype, tt: TT, lhs_info: anytype, p: Prec, line: u32) !bool {
+    const op = Compiler.dunderOpForBinaryTok(tt) orelse return false;
+    const is_struct = lhs_info.struct_type != null;
+    const type_name = lhs_info.struct_type orelse (lhs_info.named_type orelse return false);
+    var buf: [160]u8 = undefined;
+    const callee = c.lookupDunderCallee(&buf, type_name, is_struct, op) orelse return false;
+    try c.cs.emitGetGlobal(callee, line);
+    try c.cs.emitOp(.swap, line);
+    try parsePrecedence(c, p.next());
+    try c.cs.emitCall(2, line);
+    switch (op) {
+        .eq => {
+            if (tt == .bang_eq) try c.cs.emitOp(.not, line);
+            c.setCurrentExprPrimInfo(.{ .prim = .bool });
+        },
+        .compare => {
+            // Kotlin's compareTo trick: one method backs all four ordering
+            // operators — call it, then compare the returned int against 0.
+            try c.cs.emitConst(.{ .int = 0 }, line);
+            const cmp_op: Op = switch (tt) {
+                .lt => .lt,
+                .gt => .gt,
+                .lt_eq => .le,
+                .gt_eq => .ge,
+                else => unreachable,
+            };
+            try c.cs.emitBinOpFused(cmp_op, line);
+            c.setCurrentExprPrimInfo(.{ .prim = .bool });
+        },
+        else => {
+            // Arithmetic dunders return exactly the receiver's own type.
+            c.setCurrentExprPrimInfo(lhs_info);
+        },
+    }
+    return true;
+}
+
 pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
     const line = c.prev.line;
     const col = c.prev.col;
@@ -556,6 +602,7 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
         return;
     }
     const lhs_info = c.currentExprPrimInfo();
+    if (try tryEmitDunderBinaryOp(c, tt, lhs_info, p, line)) return;
     try parsePrecedence(c, p.next());
     const rhs_info = c.childExprPrimInfo();
     c.cs.setCol(col);
@@ -915,6 +962,15 @@ pub fn structInstanceLit(c: anytype, type_name: Token) !void {
     }
     try c.consume(.rbrace);
     try c.cs.emit2(@intFromEnum(Op.build_struct_instance), count, type_name.line);
+    // #210: struct literals previously left no ExprPrimInfo on their own
+    // result at all — needed so a dunder method declared on the struct is
+    // reachable from an expression built directly from a literal (not just
+    // one read back out of a variable).
+    if (c.registry.hasStructTypeLocal(type_name.src)) {
+        c.setCurrentExprPrimInfo(.{ .struct_type = try c.qualifyTypeName(type_name.src) });
+    } else {
+        c.clearCurrentExprPrimInfo();
+    }
 }
 
 pub fn structInstanceLitAfterValue(c: anytype, line: u32) !void {
@@ -950,6 +1006,23 @@ pub fn structInstanceLitAfterValue(c: anytype, line: u32) !void {
 pub fn unaryExpr(c: anytype, tt: TT) !void {
     try parsePrecedence(c, .unary);
     const op_info = c.childExprPrimInfo();
+    // #210: unary '-' desugars to __neg__() when the operand's static type
+    // (struct or named) declares one. The operand is already on the stack
+    // by this point (parsed above), so callee+swap is inserted after it,
+    // same [callee, receiver] convention as the binary dunder path.
+    if (tt == .minus) {
+        const is_struct = op_info.struct_type != null;
+        if (op_info.struct_type orelse op_info.named_type) |type_name| {
+            var buf: [160]u8 = undefined;
+            if (c.lookupDunderCallee(&buf, type_name, is_struct, .neg)) |callee| {
+                try c.cs.emitGetGlobal(callee, c.prev.line);
+                try c.cs.emitOp(.swap, c.prev.line);
+                try c.cs.emitCall(1, c.prev.line);
+                c.setCurrentExprPrimInfo(op_info);
+                return;
+            }
+        }
+    }
     const op_named_type: ?[]const u8 = blk: {
         if (tt != .minus and tt != .tilde and tt != .kw_not) break :blk null;
         const nt = op_info.named_type orelse break :blk null;

@@ -2042,6 +2042,7 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
     c.advance();
     var inferred_type_check: TypeCheck = .{ .none = {} };
     var inferred_named_type: ?[]const u8 = null; // named type inferred from := RHS
+    var inferred_struct_type: ?[]const u8 = null; // struct type inferred from := RHS (#210)
     var self_ref_slot: ?u8 = null;
     var compile_time_const: ?ct.CompileTimeConst = null;
     if (c.match(.colon_eq) or c.match(.eq)) {
@@ -2072,7 +2073,9 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
         // childExprPrimInfo reads depth+1 — where the child expr() wrote its result.
         // Stored separately so inferred_type_check stays .none (avoiding spurious code emission).
         if (inferred_type_check == .none) {
-            inferred_named_type = c.childExprPrimInfo().named_type;
+            const rhs_info = c.childExprPrimInfo();
+            inferred_named_type = rhs_info.named_type;
+            if (inferred_named_type == null) inferred_struct_type = rhs_info.struct_type;
         }
         if (self_ref_slot != null) {
             try c.cs.emit2(@intFromEnum(Op.set_local), self_ref_slot.?, name.line);
@@ -2273,6 +2276,8 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
                 inferred_type_check
             else if (inferred_named_type) |nt|
                 .{ .named = nt }
+            else if (inferred_struct_type) |st|
+                .{ .struct_type = st }
             else
                 inferred_type_check;
             if (c.std_namespace_path != null) {
@@ -2335,6 +2340,16 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
                 c.inferred_named_global_names[c.inferred_named_global_count] = qname;
                 c.inferred_named_global_types[c.inferred_named_global_count] = nt;
                 c.inferred_named_global_count += 1;
+            } else if (inferred_struct_type) |st| {
+                // Same idea for :=-inferred struct-typed globals (#210): needed so a
+                // dunder method is reachable from a top-level `a := Vec3{...}` read.
+                if (c.inferred_struct_global_count >= MaxLocals) {
+                    c.setErr("too many typed globals (limit {d})", .{MaxLocals});
+                    return error.TooManyGlobals;
+                }
+                c.inferred_struct_global_names[c.inferred_struct_global_count] = qname;
+                c.inferred_struct_global_types[c.inferred_struct_global_count] = st;
+                c.inferred_struct_global_count += 1;
             }
             if (c.std_namespace_path != null) {
                 if (c.std_module_global_count >= MaxLocals) {

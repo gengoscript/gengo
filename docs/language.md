@@ -899,6 +899,70 @@ Receivers are values, not implicit references. Reassigning receiver fields
 inside a method does not mutate the caller's variable unless the receiver
 contains shared heap-backed state that the method mutates explicitly.
 
+### Operator Overloading
+
+A struct type (or a named type over a base that doesn't already have the
+operator built in — see below) can overload an operator by declaring a
+method with one of eight reserved names. No new keyword — these are ordinary
+method declarations:
+
+```gengo
+type Vec2 struct { x float, y float }
+
+func (a Vec2) __add__(b Vec2) Vec2 {
+    return Vec2 { x: a.x + b.x, y: a.y + b.y }
+}
+
+func (v Vec2) __neg__() Vec2 {
+    return Vec2 { x: -v.x, y: -v.y }
+}
+
+a := Vec2 { x: 1.0, y: 2.0 }
+b := Vec2 { x: 3.0, y: 4.0 }
+c := a + b     // compiles to a.__add__(b)
+d := -a        // compiles to a.__neg__()
+```
+
+| Operator | Method |
+|---|---|
+| `+` | `__add__(other T) T` |
+| `-` (binary) | `__sub__(other T) T` |
+| `*` | `__mul__(other T) T` |
+| `/` | `__div__(other T) T` |
+| `rem` | `__rem__(other T) T` |
+| `-` (unary) | `__neg__() T` |
+| `==` (and `!=`) | `__eq__(other T) bool` |
+| `< > <= >=` | `__compare__(other T) int` |
+
+`__compare__` backs all four ordering operators at once — return a negative
+number, zero, or a positive number the way `strcmp`-style comparisons do,
+and `<`/`>`/`<=`/`>=` are derived by comparing that result against `0`.
+`!=` is derived from `__eq__` the same way.
+
+The parameter type must be exactly the receiver's own type — there is no
+asymmetric-operand form (`Vec2 + float`, say). Gengo has no method
+overloading anywhere, so allowing one would require exactly the overloading
+the language doesn't have.
+
+A named type may declare a dunder too, but only for an operator its base
+doesn't already implement — `type Meters int` already has working `+`, so
+`func (a Meters) __add__(b Meters) Meters {...}` is a compile error. Some
+bases have partial gaps worth knowing about: `decimal` has no working
+`rem` or ordering (`< > <= >=`) today, so `__rem__`/`__compare__` are open
+on a decimal-based named type even though `__add__`/`__eq__` are not; a
+struct's default `==` is reference identity (two separately-built literals
+with the same fields are not `==` unless a method's receiver is the same
+value), so `__eq__` is always open on a struct — declaring it upgrades `==`
+to real structural comparison.
+
+A type whose `__compare__`/`__eq__` is declared also satisfies the
+`ordered`/`comparable` generic constraints (see Generic Types), so it can be
+passed to a `[T: ordered]`-constrained function. This works both when the
+compiler can see the concrete type directly, and inside the generic
+function's own body operating on the type parameter — the latter is
+resolved at runtime rather than compile time, since the type is erased
+until the call is actually made.
+
 Named returns also let a `defer` modify the function's return value before it exits:
 
 ```gengo
@@ -1642,7 +1706,7 @@ Three built-in constraints are available:
 | Constraint   | Accepted types |
 |:-------------|:---------------|
 | `numeric`    | `int`, `float`, `decimal`, `rune`, and named subtypes of those |
-| `ordered`    | Everything `numeric` accepts, plus `string` and named string subtypes |
+| `ordered`    | Everything `numeric` accepts, plus `string` and named string subtypes, plus any type declaring `__compare__` (see Operator Overloading) |
 | `comparable` | Any type (same as no constraint; useful as documentation) |
 
 Examples:
