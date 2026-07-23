@@ -16,6 +16,12 @@ The engine runs their scripts in a controlled environment, where the host decide
 
 **[Try it in the browser](https://playground.gengoscript.org/)** · **[Read the docs](https://docs.gengoscript.org/)** · **[Browse examples](examples/)** · **[Benchmarks](bench/cross-engine/RESULTS.md)**
 
+## Docs
+
+Primary documentation lives at **[docs.gengoscript.org](https://docs.gengoscript.org/)**.
+
+For repository-local references, see [docs/](docs/), [sdk/typescript/README.md](sdk/typescript/README.md), [dev-docs/index.md](dev-docs/index.md), and [CHANGELOG.md](CHANGELOG.md).
+
 ## At a glance
 
 Gengoscript is for hosts that need user-defined logic without handing users a full ambient scripting environment.
@@ -44,9 +50,9 @@ The root cause was a classic. No, not an off-by-one error: one ground system sup
 
 A bare floating-point value does not know what it measures. Neither does the compiler, unless you make the unit part of the type.
 
-```ada
-type Newton_Seconds is new Long_Float;
-type Pound_Force_Seconds is new Long_Float;
+```gengo
+type Newton_Seconds float;
+type Pound_Force_Seconds float;
 ```
 
 With distinct unit types, the compiler rejects accidental mixing and demands an explicit conversion. A linter can then flag each conversion for review.
@@ -67,8 +73,8 @@ The exception was not uncaught. The software detected it and, as specified, shut
 
 Here is the irony: the software was written in Ada, and Ada did its job. It raised the exception. The failure lay in the unsafe range assumption, the missing protection and the identical software in both redundant units. The system's response to the error turned those faults into a catastrophe.
 
-```ada
-type Horizontal_Bias_16 is range -32_768 .. 32_767;
+```gengo
+type Horizontal_Bias_16 range -32_768 .. 32_767;
 ```
 
 A range type helps only if the checks remain enabled or the absence of range failures is proved before flight.
@@ -91,11 +97,9 @@ The trick works because of how the game handles movement speed. Under the right 
 
 This defect did not cost several hundred million dollars, but it was still behaviour the programmers did not intend.
 
-```ada
-Maximum_Player_Speed : constant := 30.0;
-
-subtype Player_Speed is Long_Float
-  range -Maximum_Player_Speed .. Maximum_Player_Speed;
+```gengo
+const Maximum_Player_Speed := 30.0;
+type Player_Speed float range -Maximum_Player_Speed .. Maximum_Player_Speed;
 ```
 
 Sorted.
@@ -103,15 +107,21 @@ Sorted.
 
 ## Why it exists
 
-Sometimes you want users to define logic without rebuilding or redeploying the host application every time that logic changes. But once users can write logic, they can also consume resources, reach into systems, and create states the host never meant to allow.
+Sometimes users need to define logic without forcing the host application to be rebuilt or redeployed whenever that logic changes. But once users can write logic, they can also consume resources, access systems, and produce states the host was never meant to permit.
 
-That logic might be validation rules, transformation steps, policy decisions, configuration behaviour, or small pieces of domain-specific automation.
+That logic may take the form of validation rules, transformation steps, policy decisions, configuration behaviour, or small pieces of domain-specific automation.
 
-The usual options all carry a cost.
+The usual choices each come with a cost.
 
-Python is familiar, but heavy and hard to isolate well. Lua is small and embeddable, but its type system is loose. JavaScript is everywhere, but brings a large surface area. A custom DSL can fit the problem, but takes time to design and maintain. JSON and YAML are useful for data, but they are not programming languages.
+Python is familiar, but heavy and difficult to isolate properly. Lua is small and embeddable, but loosely typed. JavaScript is ubiquitous, but brings a large surface area. A custom DSL can match the problem closely, but takes time to design and maintain. JSON and YAML work for data, but they are not programming languages.
 
-Gengoscript is built for this space: more expressive than configuration, but designed from the start to run under host control. Imports are explicit, capabilities exist only when enabled, execution can be bounded, and domain rules can live in named types instead of scattered validation code.
+In Gengoscript, everything is explicit. Capabilities exist only when enabled, execution can be bounded, and domain rules can live in named types rather than being scattered across validation code, where a single missed check can cause failure.
+
+* No ambient access to the filesystem, network, processes, or reflection.
+* Execution can be bounded by operation limits.
+* Host functions exist only when the host registers them.
+* Capability modules exist only when the host enables them.
+* Runtime instances are isolated from one another.
 
 
 ## What Gengoscript gives you
@@ -124,9 +134,9 @@ Named scalars, ranges, predicate types, cycles, enums, variants, and subtypes le
 
 ```gengo
 type Port      int range 1..65535
-type Severity  int range 0..5
-type EventCode int predicate func(x) { return x rem 2 == 0 }
+type Severity  int clamp 0..5
 type Hour      int cycle 0..23
+type EventCode int predicate func(x) { return x rem 2 == 0 }
 
 type AlertRule variant {
     Metric  { name string, limit Severity },
@@ -161,6 +171,8 @@ pub func allow(port int, hour int) bool {
 ```
 
 If a caller passes `0` as a port or `27` as an hour, construction fails at the boundary where the bad value enters the script.
+
+For more examples that you can run right in your browser go to **[Playground](https://playground.gengoscript.org/)**.
 
 
 ## Integration example
@@ -211,15 +223,6 @@ If `severity` is outside `0..5`, the script fails while constructing `Severity`.
 That same pattern works for deploy gates, routing rules, policy checks, and data validation. The host calls the function. The script makes the decision.
 
 
-## Runtime boundaries
-
-* No ambient filesystem, network, process, or reflection access.
-* Host functions exist only if the host registers them.
-* Capability modules exist only if the host enables them.
-* Execution can be bounded by operation limits.
-* Runtime instances are isolated from each other.
-
-
 ## Quick start
 
 ```bash
@@ -257,7 +260,7 @@ Run the CLI with no arguments on an interactive terminal to start the REPL.
 For a step-by-step walkthrough, see [docs/tutorial-first-script.md](docs/tutorial-first-script.md). For more build and test commands, see [docs/quickstart.md](docs/quickstart.md) and [CONTRIBUTING.md](CONTRIBUTING.md).
 
 
-## Status at a glance
+## Component status
 
 | Surface | Status |
 | --- | --- |
@@ -269,22 +272,8 @@ For a step-by-step walkthrough, see [docs/tutorial-first-script.md](docs/tutoria
 | TypeScript SDK | Available |
 | In-source `test` blocks | Available |
 | Stress test preset | Available |
-| [Cross-engine benchmarks](bench/cross-engine/RESULTS.md) | Available — informational, not a speed claim |
+| [Cross-engine benchmarks](bench/cross-engine/RESULTS.md) | Informational, not a speed claim |
 | Stability guarantees | Pre-1.0 |
-
-
-## Language and embedding
-
-Gengoscript uses a Go-adjacent syntax and leans on a stricter type system for domain scripting. Beyond ordinary structs and functions, the language includes named scalars, range types, predicate types, cyclic types, enums, variants, interfaces, generic functions and types, typed arrays and maps, pattern-matching `switch`, variadics, multi-return functions, closures, multi-file modules, and in-source `test` blocks.
-
-The TypeScript SDK in `sdk/typescript/` wraps `gengo-engine.wasm` and handles value encoding for JavaScript hosts.
-
-
-## Docs
-
-Primary documentation lives at **[docs.gengoscript.org](https://docs.gengoscript.org/)**.
-
-For repository-local references, see [docs/](docs/), [sdk/typescript/README.md](sdk/typescript/README.md), [dev-docs/index.md](dev-docs/index.md), and [CHANGELOG.md](CHANGELOG.md).
 
 
 ## A note on authorship (Vibe Check)
