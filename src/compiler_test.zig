@@ -60,12 +60,12 @@ fn compileWithSession(rt: *Runtime, src: []const u8, path: []const u8) !void {
     session.capability_modules = &.{};
 
     var compiler = Compiler.init(src, chunk.g_state, heap.g_state, .{
+        .module_prefix = path,
         .module_ctx = &session,
         .resolve_import = module_compile.Session.resolveImportOpaque,
         .has_module_export = module_compile.hasModuleExport,
         .resolve_module_type = module_compile.resolveModuleTypeKind,
     });
-    _ = path;
     try compiler.compile(true);
     try fusion_pass.fuse(chunk.g_state, rt.vm_state.allocator);
 }
@@ -2643,7 +2643,7 @@ test "compiler: enum-typed assignment emits no constructor call" {
         \\}
         \\var explicit Priority = Priority.low
         \\explicit = Priority.medium
-    , "");
+    , "@mod:enum-assign");
 
     const c = rt.chunk_state;
     var ip: usize = 0;

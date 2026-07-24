@@ -903,19 +903,33 @@ pub const Compiler = struct {
         }
     }
 
+    // Type checks retain qualified names so their runtime type identity stays
+    // unambiguous. The compiler's registry, however, contains declarations
+    // from the module currently being compiled under their local names.
+    fn localNamedTypeName(self: *Compiler, name: []const u8) []const u8 {
+        const prefix = self.options.module_prefix;
+        if (prefix.len == 0 or name.len <= prefix.len or !std.mem.startsWith(u8, name, prefix) or name[prefix.len] != '.') return name;
+        return name[prefix.len + 1 ..];
+    }
+
+    fn localNamedTypeInfo(self: *Compiler, name: []const u8) ?NamedTypeInfo {
+        return self.registry.getNamedTypeInfo(self.localNamedTypeName(name));
+    }
+
     fn emitNamedTypeValidationOp(self: *Compiler, op: Op, name: []const u8, line: u32) !void {
-        const info = self.registry.getNamedTypeInfo(name) orelse return;
-        const idx = self.registry.namedTypeRuntimeConstIdx(name) orelse blk: {
+        const local_name = self.localNamedTypeName(name);
+        const info = self.registry.getNamedTypeInfo(local_name) orelse return;
+        const idx = self.registry.namedTypeRuntimeConstIdx(local_name) orelse blk: {
             const obj = info.runtime_obj orelse return;
             const new_idx = try self.cs.addConst(.{ .object = obj });
-            self.registry.setNamedTypeRuntimeConstIdx(name, new_idx);
+            self.registry.setNamedTypeRuntimeConstIdx(local_name, new_idx);
             break :blk new_idx;
         };
         try self.cs.emitConstIdx(op, idx, line);
     }
 
     fn namedTypeHasPredicate(self: *Compiler, name: []const u8) bool {
-        var current: ?[]const u8 = name;
+        var current: ?[]const u8 = self.localNamedTypeName(name);
         while (current) |current_name| {
             const info = self.registry.getNamedTypeInfo(current_name) orelse return false;
             if (info.has_predicate) return true;
@@ -1493,12 +1507,12 @@ pub const Compiler = struct {
     }
 
     pub fn isEnumTypeName(self: *Compiler, name: []const u8) bool {
-        const info = self.registry.getNamedTypeInfo(name) orelse return false;
+        const info = self.localNamedTypeInfo(name) orelse return false;
         return info.base == .enum_t;
     }
 
     fn isErasedNamedType(self: *Compiler, name: []const u8) bool {
-        const info = self.registry.getNamedTypeInfo(name) orelse return false;
+        const info = self.localNamedTypeInfo(name) orelse return false;
         return switch (info.base) {
             .int, .float, .bool, .rune => true,
             // Enum types are erased for prolog/epilog purposes: they are not
