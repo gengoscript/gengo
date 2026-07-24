@@ -1190,6 +1190,8 @@ fn performCall(ctx: VMContext, argc: u8) !void {
             if (argc != 1) return error.ArityMismatch;
             const arg = ctx.vs.stack[ctx.vs.stack_top - 1];
             const out = try vmtyp.constructNamedType(ctx, obj, arg);
+            try ctx.vs.pushTempRoot(out);
+            defer ctx.vs.popTempRoot();
             try validateNamedCollectionElements(ctx, obj, out);
             try checkNamedTypePredicateChain(ctx, obj, out.namedInner() orelse out);
             try pop2push1(ctx, out);
