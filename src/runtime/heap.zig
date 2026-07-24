@@ -46,8 +46,22 @@ var g_wasm_backing: WasmBacking = .{};
 
 pub const State = struct {
     heap: []align(16) u8 = &[_]u8{},
-    compiler_bump: usize = 0,
-    compiler_end: usize = 0,
+    // Permanent region: bump()-allocated data (interned string constants,
+    // closure upvalue arrays, struct/interface/variant field-type metadata,
+    // native singleton objects, etc.) is bump-allocated from the TOP of the
+    // heap downward. permanent_bump is its current low-water mark — it starts
+    // at heap.len and only decreases. This data must live for the life of the
+    // compiled program and is never tracked as a GC object, so it must never
+    // share address space with the managed/collectible region below: the two
+    // sides grow toward each other and an allocation on either side simply
+    // fails (OOM) rather than being allowed to cross the other's current
+    // frontier. This makes it structurally impossible for GC compaction to
+    // ever overwrite permanent data, regardless of how much of it a script
+    // needs — see the previous flat-mode/struct_type.fields incidents this
+    // replaces, where a fixed-size compiler prefix could be exceeded and
+    // spill into the shared managed-overflow arena, silently corrupted by a
+    // later compaction pass that had no idea permanent data lived there.
+    permanent_bump: usize = 0,
     class_bump: [ClassCount]usize = [_]usize{0} ** ClassCount,
     class_end: [ClassCount]usize = [_]usize{0} ** ClassCount,
     overflow_bump: usize = 0,
@@ -104,26 +118,24 @@ pub const State = struct {
             self.obj_next_free[max_objects - 1] = 0xffff;
         }
 
-        // Partition the heap into compiler region, per-class regions, and overflow.
-        const compiler_sz = heap_size / 8;
-        self.compiler_bump = 0;
-        self.compiler_end = compiler_sz;
-        self.overflow_base = compiler_sz;
+        // Permanent (bump()) data now claims space dynamically from the top
+        // of the heap as it's actually used — no fixed prefix reservation.
+        self.permanent_bump = heap_size;
 
-        const align_mask: usize = ManagedAlign - 1;
-        var offset = (compiler_sz + align_mask) & ~align_mask;
+        // Partition the managed region (per-class regions + overflow),
+        // starting at offset 0. compiler_sz_estimate is a heuristic only
+        // (kept so the flat/partitioned boundary matches historical
+        // behavior) — it no longer reserves any actual bytes.
+        const compiler_sz_estimate = heap_size / 8;
+        var offset: usize = 0;
 
         // Only partition if all classes' minimum (ClassSizes[ci]) plus the
-        // compiler region fit in the heap. Otherwise use flat mode where
-        // overflow serves as a shared bump (traditional behavior).
+        // heuristic overflow/permanent headroom fit in the heap. Otherwise
+        // use flat mode where overflow serves as a shared bump (traditional
+        // behavior). Small heaps stay in flat mode.
         var class_min_sum: usize = 0;
         for (0..self.class_count) |ci| class_min_sum += ClassSizes[ci];
-        // Partition only when there is at least as much overflow space as
-        // class minimums. This ensures managed allocations have enough room
-        // for runtime bumps (e.g. template render's type metadata) alongside
-        // ordinary managed allocations. Small heaps stay in flat mode, which
-        // behaves like the traditional single-bump allocator.
-        if (class_min_sum * 2 + compiler_sz <= heap_size) {
+        if (class_min_sum * 2 + compiler_sz_estimate <= heap_size) {
             // Partitioned mode: each class gets at least ClassSizes[ci] bytes.
             for (0..self.class_count) |ci| {
                 const base = offset;
@@ -135,14 +147,12 @@ pub const State = struct {
                 self.class_end[ci] = offset;
             }
         } else {
-            // Flat mode: keep the historical single shared bump so managed
-            // allocations do not lose a reserved compiler slice on small heaps.
-            self.compiler_end = 0;
+            // Flat mode has no per-class reservations — every managed
+            // allocation goes through the shared overflow bump.
             for (0..self.class_count) |ci| {
                 self.class_bump[ci] = 0;
                 self.class_end[ci] = 0;
             }
-            offset = 0;
         }
 
         self.overflow_bump = offset;
@@ -393,9 +403,8 @@ pub const State = struct {
         if (self.obj_pool.len == 0 and self == &g_default_state) {
             _ = g_default_state.init(HeapSize, MaxObjects, self.allocator) catch {};
         }
-        self.compiler_bump = 0;
-        const align_mask: usize = ManagedAlign - 1;
-        var class_base = (self.compiler_end + align_mask) & ~align_mask;
+        self.permanent_bump = self.heap.len;
+        var class_base: usize = 0;
         for (0..self.class_count) |ci| {
             self.class_bump[ci] = class_base;
             class_base = self.class_end[ci];
@@ -434,17 +443,21 @@ pub const State = struct {
     pub fn bump(self: *State, comptime T: type, n: usize) ?[*]T {
         const al: usize = @alignOf(T);
         const mask: usize = al - 1;
-        var pos = (self.compiler_bump + mask) & ~mask;
         const sz = @sizeOf(T) * n;
-        if (pos + sz <= self.compiler_end) {
-            self.compiler_bump = pos + sz;
-            return @as([*]T, @ptrCast(@alignCast(&self.heap[pos])));
-        }
-        // Dedicated compiler region exhausted — fall through to overflow.
-        pos = (self.overflow_bump + mask) & ~mask;
-        if (pos + sz > self.heap.len) return null;
-        self.overflow_bump = pos + sz;
-        return @as([*]T, @ptrCast(@alignCast(&self.heap[pos])));
+        // Bump DOWN from the top of the heap. Round the candidate start down
+        // to alignment — this may waste up to (al - 1) bytes as padding above
+        // the returned block, never fewer bytes than requested.
+        if (sz > self.permanent_bump) return null;
+        const pos = (self.permanent_bump - sz) & ~mask;
+        // Must not cross into the managed/collectible region's current
+        // frontier (overflow_bump is always >= every class region's extent,
+        // so this one check is sufficient — see the permanent_bump field doc).
+        if (pos < self.overflow_bump) return null;
+        self.permanent_bump = pos;
+        // Range-slice (not single-element index) so pos == heap.len is legal
+        // for a zero-size request — permanent_bump starts at heap.len, so the
+        // very first bump() call (even n == 0) can land exactly there.
+        return @as([*]T, @ptrCast(@alignCast(self.heap[pos..].ptr)));
     }
 
     pub fn allocBytesManaged(self: *State, n: usize) ?[]u8 {
@@ -463,7 +476,9 @@ pub const State = struct {
         // regions provide the isolation guarantee for steady-state operation.
         const mask: usize = ManagedAlign - 1;
         const opos = (self.overflow_bump + mask) & ~mask;
-        if (opos + ClassSizes[ci] <= self.heap.len) {
+        // Ceiling is the current permanent-region floor, not heap.len — the
+        // two bump directions must never cross (see permanent_bump's doc).
+        if (opos + ClassSizes[ci] <= self.permanent_bump) {
             self.overflow_bump = opos + ClassSizes[ci];
             return self.heap[opos .. opos + ClassSizes[ci]];
         }
@@ -618,8 +633,8 @@ pub const State = struct {
     }
 
     pub fn usedBytes(self: *State) usize {
-        var total = self.compiler_bump;
-        var prev_end = self.compiler_end;
+        var total = self.heap.len - self.permanent_bump;
+        var prev_end: usize = 0;
         for (0..self.class_count) |ci| {
             const cb = self.class_bump[ci];
             if (cb > prev_end) total += cb - prev_end;
@@ -772,11 +787,11 @@ pub const State = struct {
             }
         }.lt);
 
-        // Phase 5: compute new addresses, packing to managed_start.
+        // Phase 5: compute new addresses, packing to the managed region's
+        // start (address 0 — there's no fixed compiler prefix anymore).
         const heap_base = @intFromPtr(self.heap.ptr);
         const align_mask: usize = ManagedAlign - 1;
-        const managed_start: usize = (self.compiler_end + align_mask) & ~align_mask;
-        var dest: usize = heap_base + managed_start;
+        var dest: usize = heap_base;
         for (relocs[0..count]) |*r| {
             dest = (dest + align_mask) & ~align_mask;
             r.new_addr = dest;
@@ -1021,14 +1036,17 @@ fn compactFindReloc(relocs: []const CompactReloc, addr: usize) ?usize {
     return r.new_addr + (addr - r.old_addr);
 }
 
-// Returns true if the raw address falls within the managed (non-compiler) heap region.
+// Returns true if the raw address falls within the managed/collectible heap
+// region (below the current permanent-region floor) rather than the
+// permanent (bump()) region. With the two-ended arena this should never be
+// true for permanent data — struct_type.fields and similar bump()-allocated
+// metadata now always live at or above permanent_bump — but the check stays
+// as defense in depth for compaction's relocation logic.
 fn isManagedAddr(self: *const State, addr: usize) bool {
     const heap_base = @intFromPtr(self.heap.ptr);
     const heap_end = heap_base + self.heap.len;
     if (addr < heap_base or addr >= heap_end) return false;
-    const align_mask: usize = ManagedAlign - 1;
-    const managed_start = heap_base + ((self.compiler_end + align_mask) & ~align_mask);
-    return addr >= managed_start;
+    return addr < heap_base + self.permanent_bump;
 }
 
 fn compactCountBlocks(self: *const State, obj: *const Object) usize {
