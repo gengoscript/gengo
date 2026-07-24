@@ -2406,6 +2406,55 @@ test "op budget: small budget stops runaway loop, generous budget does not" {
     );
 }
 
+test "time sleep suspends and charges the operation budget before waiting" {
+    var rt = try setup();
+    defer rt.deinit();
+    rt.setPolicy(.{ .max_ops = 2_000_000 });
+    const first = try rt.begin(
+        \\std := import("std")
+        \\std.time.sleep(1)
+        \\completed := true
+    );
+    try std.testing.expect(first == .suspended);
+    try std.testing.expect(rt.vm_state.ops_budget_remaining < 1_000_000);
+    try std.testing.expectError(error.RuntimeSuspended, rt.begin("completed := false"));
+    try std.testing.expect((try rt.continueRun()) == .suspended);
+    rt.vm_state.sleep_deadline_ns = 0;
+    try std.testing.expect((try rt.continueRun()) == .completed);
+}
+
+test "time sleep exceeding the remaining operation budget fails before suspension" {
+    var rt = try setup();
+    defer rt.deinit();
+    rt.setPolicy(.{ .max_ops = 100 });
+    try std.testing.expectError(error.InstructionBudgetExceeded, rt.begin(
+        \\std := import("std")
+        \\std.time.sleep(14_400_000)
+    ));
+}
+
+test "compiler: named value survives allocation in its predicate" {
+    var rt = try setup();
+    defer rt.deinit();
+    const src =
+        \\std := import("std")
+        \\type ClientId string predicate func(s) {
+        \\    i := 0
+        \\    for i < 1000 {
+        \\        b := std.string.builder()
+        \\        b.write(s)
+        \\        _ = b.str()
+        \\        i = i + 1
+        \\    }
+        \\    return s != ""
+        \\}
+        \\type Options struct { id ClientId }
+        \\opts := Options{ id: ClientId("listener") }
+        \\assert(string(opts.id) == "listener")
+    ;
+    _ = try rt.run(src);
+}
+
 var g_trace_hits: u32 = 0;
 fn testTraceFn(userdata: ?*anyopaque, handle: i32, line: i32, col: i32) callconv(.c) void {
     _ = userdata;

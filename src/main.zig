@@ -41,6 +41,17 @@ fn die(code: u32) noreturn {
     std.process.exit(@intCast(code));
 }
 
+fn waitForSleep(runtime: *Runtime, initial: vm.RunOutcome) !void {
+    var outcome = initial;
+    const io_ctx = std.Io.Threaded.global_single_threaded.io();
+    while (outcome == .suspended) {
+        const deadline = runtime.vm_state.sleep_deadline_ns orelse return error.NotSuspended;
+        const timestamp = std.Io.Timestamp.fromNanoseconds(@intCast(deadline)).withClock(.boot);
+        try timestamp.wait(io_ctx);
+        outcome = try runtime.continueRun();
+    }
+}
+
 // Read a file (or stdin when maybe_path is null) into buf, returning bytes read.
 fn readSource(maybe_path: ?[]const u8, buf: []u8) !usize {
     if (maybe_path) |p| return source_io.readFile(p, buf);
@@ -787,7 +798,12 @@ fn runCli(argv: []const []const u8) void {
         die(0);
     }
 
-    runtime.runPathWithProvider(src, script_arg, .filesystem, test_mode) catch |err| {
+    const run_error: ?anyerror = blk: {
+        const outcome = runtime.runPathWithProvider(src, script_arg, .filesystem, test_mode) catch |err| break :blk err;
+        waitForSleep(runtime, outcome) catch |err| break :blk err;
+        break :blk null;
+    };
+    if (run_error) |err| {
         vmperf.printSummary(vms.vmState().gc_runs, vms.vmState().gc_time_ns, vms.vmState().alloc_object_calls, vms.vmState().alloc_managed_slice_calls, vms.vmState().alloc_managed_bytes_calls);
 
         if (err == error.OutOfMemory) {
@@ -869,7 +885,7 @@ fn runCli(argv: []const []const u8) void {
             io.werr("\n");
         }
         die(1);
-    };
+    }
 
     vmperf.printSummary(vms.vmState().gc_runs, vms.vmState().gc_time_ns, vms.vmState().alloc_object_calls, vms.vmState().alloc_managed_slice_calls, vms.vmState().alloc_managed_bytes_calls);
     die(if (runtime.test_failed) 1 else 0);

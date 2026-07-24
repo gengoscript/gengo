@@ -641,7 +641,7 @@ pub fn callNative(ctx: vms.VMContext, nf: NativeFuncObj, argc: u8) !void {
         .json_parse, .json_stringify, .json_valid, .json_indent, .json_parse_value => return json_mod.dispatch(ctx, nf, argc),
         .hex_encode, .hex_decode, .base64_encode, .base64_decode, .base64_url_encode, .base64_url_decode => return encode_mod.dispatch(ctx, nf, argc),
         .template_parse, .template_execute, .template_add_func, .template_render, .template_valid => return template_mod.dispatch(ctx, nf, argc),
-        .time_now, .time_from_unix, .time_from_unix_ms, .time_parse, .time_unix, .time_unix_ms, .time_parts, .time_format, .time_add_ms, .time_add_s, .time_add_m, .time_add_h, .time_sub, .time_before, .time_after, .time_equal, .time_is_zero, .time_since, .time_until, .time_add_date, .time_parse_duration, .time_iso_week => return time_mod.dispatch(ctx, nf, argc),
+        .time_now, .time_from_unix, .time_from_unix_ms, .time_parse, .time_unix, .time_unix_ms, .time_parts, .time_format, .time_add_ms, .time_add_s, .time_add_m, .time_add_h, .time_sub, .time_before, .time_after, .time_equal, .time_is_zero, .time_since, .time_until, .time_add_date, .time_parse_duration, .time_iso_week, .time_sleep => return time_mod.dispatch(ctx, nf, argc),
         .re_match, .re_find, .re_find_all, .re_replace, .re_split, .re_compile, .re_obj_match, .re_obj_find, .re_obj_find_all, .re_obj_replace, .re_obj_split => return regexp_mod.dispatch(ctx, nf, argc),
         .array_filter, .array_map, .array_reduce, .array_slice, .array_zip, .array_flat, .array_find, .array_find_index, .array_all, .array_any, .array_chunk => return array_mod.dispatch(ctx, nf, argc),
         .sort_asc, .sort_desc, .sort_by => return sort_mod.dispatch(ctx, nf, argc),

@@ -68,6 +68,13 @@ pub const RuntimeResult = union(enum) {
     runtime_error: RuntimeError,
 };
 
+pub const ExecutionResult = union(enum) {
+    completed,
+    suspended,
+    compile_error: CompileError,
+    runtime_error: RuntimeError,
+};
+
 pub const Runtime = struct {
     inner: rt_mod.Runtime,
     module_sources: []const SourceEntry = &.{},
@@ -108,6 +115,17 @@ pub const Runtime = struct {
         var re = runtimeError(err, &self.inner);
         if (err == error.OutOfMemory) re.msg = "heap exhausted";
         return .{ .runtime_error = re };
+    }
+
+    fn mapExecutionOutcome(outcome: vm.RunOutcome) ExecutionResult {
+        return switch (outcome) {
+            .completed => .completed,
+            .suspended => .suspended,
+        };
+    }
+
+    fn suspendedRunResult(self: *Runtime) RuntimeResult {
+        return .{ .runtime_error = runtimeError(error.ExecutionSuspended, &self.inner) };
     }
 
     pub fn init(config: Config) !Runtime {
@@ -168,31 +186,62 @@ pub const Runtime = struct {
         // module_sources / module_source_provider from setConfig (bundles,
         // import loaders) must be visible to plain run() too — inner.run
         // would hardcode the filesystem provider.
-        self.inner.runPathWithProvider(src, "", defaultSourceProvider(self), false) catch |err| {
+        const outcome = self.inner.runPathWithProvider(src, "", defaultSourceProvider(self), false) catch |err| {
             return self.classifyRunResult(err);
         };
-        return .ok;
+        return switch (outcome) {
+            .completed => .ok,
+            .suspended => self.suspendedRunResult(),
+        };
+    }
+
+    pub fn begin(self: *Runtime, src: []const u8) ExecutionResult {
+        const outcome = self.inner.begin(src) catch |err| {
+            const result = self.classifyRunResult(err);
+            return switch (result) {
+                .compile_error => |e| .{ .compile_error = e },
+                .runtime_error => |e| .{ .runtime_error = e },
+                .ok => unreachable,
+            };
+        };
+        return mapExecutionOutcome(outcome);
+    }
+
+    pub fn continueRun(self: *Runtime) ExecutionResult {
+        const outcome = self.inner.continueRun() catch |err| {
+            return .{ .runtime_error = runtimeError(err, &self.inner) };
+        };
+        return mapExecutionOutcome(outcome);
     }
 
     pub fn runPath(self: *Runtime, src: []const u8, path: []const u8) RuntimeResult {
-        self.inner.runPathWithProvider(src, path, defaultSourceProvider(self), false) catch |err| {
+        const outcome = self.inner.runPathWithProvider(src, path, defaultSourceProvider(self), false) catch |err| {
             return self.classifyRunResult(err);
         };
-        return .ok;
+        return switch (outcome) {
+            .completed => .ok,
+            .suspended => self.suspendedRunResult(),
+        };
     }
 
     pub fn runPathWithSources(self: *Runtime, src: []const u8, path: []const u8, sources: []const SourceEntry) RuntimeResult {
-        self.inner.runPathWithSources(src, path, sources) catch |err| {
+        const outcome = self.inner.runPathWithSources(src, path, sources) catch |err| {
             return self.classifyRunResult(err);
         };
-        return .ok;
+        return switch (outcome) {
+            .completed => .ok,
+            .suspended => self.suspendedRunResult(),
+        };
     }
 
     pub fn runPathWithSourceProvider(self: *Runtime, src: []const u8, path: []const u8, provider: SourceProvider) RuntimeResult {
-        self.inner.runPathWithProvider(src, path, provider, false) catch |err| {
+        const outcome = self.inner.runPathWithProvider(src, path, provider, false) catch |err| {
             return self.classifyRunResult(err);
         };
-        return .ok;
+        return switch (outcome) {
+            .completed => .ok,
+            .suspended => self.suspendedRunResult(),
+        };
     }
 
     pub fn call(self: *Runtime, name: []const u8, args: []const Value) RuntimeResultWithValue {

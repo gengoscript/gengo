@@ -2320,6 +2320,8 @@ inline fn fetchOp(ctx: VMContext) !Op {
 const exec_call_modifier: std.builtin.CallModifier =
     if (builtin.target.cpu.arch.isWasm()) .auto else .always_inline;
 
+pub const RunOutcome = enum { completed, suspended };
+
 // Ops whose stack effect is governed by frame semantics (calls enter frames,
 // returns unwind them, tail calls rearrange the stack in place) rather than
 // the plain pop/push model the Debug-build effect check can compare against.
@@ -2505,6 +2507,7 @@ fn runInner(ctx: VMContext) !void {
                         .{ @tagName(op), dbg_op_ip, eff.pop, eff.push, dbg_stack, ctx.vs.stack_top },
                     );
                 }
+                if (ctx.vs.sleep_deadline_ns != null) return error.ExecutionSuspended;
                 gas -= 1;
                 if (gas == 0) gas = try dispatchTick(ctx);
                 continue :dispatch (try fetchOp(ctx));
@@ -2513,6 +2516,7 @@ fn runInner(ctx: VMContext) !void {
                 // handlers require a complete memory stack.
                 @call(exec_call_modifier, tosSpill, .{ ctx, &ts });
                 if (try @call(exec_call_modifier, execOne, .{ ctx, op })) return;
+                if (ctx.vs.sleep_deadline_ns != null) return error.ExecutionSuspended;
                 gas -= 1;
                 if (gas == 0) gas = try dispatchTick(ctx);
                 continue :dispatch (try fetchOp(ctx));
@@ -4631,7 +4635,7 @@ fn runPanicUnwind(ctx: VMContext, orig_err: anyerror) anyerror!void {
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-pub fn run(ctx: VMContext) anyerror!void {
+pub fn runUntilSuspend(ctx: VMContext) anyerror!RunOutcome {
     chunk.setActive(ctx.cs);
     globals.setActive(ctx.gs);
     heap.setActive(ctx.hs);
@@ -4641,20 +4645,29 @@ pub fn run(ctx: VMContext) anyerror!void {
             ctx.vs.setRuntimeErr("verifier: {s}", .{ctx.cs.verify_err_buf[0..ctx.cs.verify_err_len]});
             ctx.vs.pending_panic_message = ctx.vs.runtimeErrMsg();
         }
-        return runPanicUnwind(ctx, err);
+        try runPanicUnwind(ctx, err);
+        return .completed;
     };
     // Top-level analog of the frame-entry stack bound: the verifier proved
     // top-level code never exceeds main_max_stack slots above the entry point.
     if (ctx.vs.stack_top + ctx.cs.main_max_stack > ctx.vs.stack.len) {
         ctx.vs.setRuntimeErr("stack overflow: top-level code needs {d} slots", .{ctx.cs.main_max_stack});
-        return runPanicUnwind(ctx, error.StackOverflow);
+        try runPanicUnwind(ctx, error.StackOverflow);
+        return .completed;
     }
     runInner(ctx) catch |err| {
+        if (err == error.ExecutionSuspended) return .suspended;
         // Runtime integrity failures hard-stop with diagnostics — they represent
         // impossible VM states in a program that already passed the verifier.
         if (vm_integrity.isIntegrityError(err)) vm_integrity.fatal(ctx, err);
-        return runPanicUnwind(ctx, err);
+        try runPanicUnwind(ctx, err);
+        return .completed;
     };
+    return .completed;
+}
+
+pub fn run(ctx: VMContext) anyerror!void {
+    if (try runUntilSuspend(ctx) == .suspended) return error.ExecutionSuspended;
 }
 
 pub fn makeString(ctx: VMContext, s: []const u8) !Value {

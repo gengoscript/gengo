@@ -88,6 +88,7 @@ pub const timeExports = [_]StdNamespaceExport{
     .{ .name = "since", .kind = .function, .native_id = .time_since, .arity = 1 },
     .{ .name = "until", .kind = .function, .native_id = .time_until, .arity = 1 },
     .{ .name = "parse_duration", .kind = .function, .native_id = .time_parse_duration, .arity = 1 },
+    .{ .name = "sleep", .kind = .function, .native_id = .time_sleep, .arity = 1 },
     .{ .name = "ms", .kind = .value, .int_value = 1 },
     .{ .name = "second", .kind = .value, .int_value = 1_000 },
     .{ .name = "minute", .kind = .value, .int_value = 60_000 },

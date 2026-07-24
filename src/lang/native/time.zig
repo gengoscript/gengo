@@ -634,6 +634,14 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             ctx.vs.vmPopArgs(argc);
             try ctx.vs.vmPush(.{ .float = ms });
         },
+        .time_sleep => {
+            const ms = try vms.valueAsNumber(ctx.vs.vmTop(0));
+            if (ms < 0 or @trunc(ms) != ms or ms > @as(f64, @floatFromInt(std.math.maxInt(u64)))) return error.RangeError;
+            const duration: u64 = @intFromFloat(ms);
+            try ctx.vs.requestSleep(duration);
+            ctx.vs.vmPopArgs(argc);
+            try ctx.vs.vmPush(.null);
+        },
         .time_iso_week => {
             const ms = try timeGetMs(ctx.vs.vmTop(0));
             const out = try timeIsoWeek(ctx, ms);
