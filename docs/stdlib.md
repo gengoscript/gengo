@@ -821,6 +821,7 @@ Go-style text templates with `{{` / `}}` delimiters.
 | `std.time.parse(str, fmt)` | `std.Time` | Errors: `TypeError`/`RangeError` on bad input |
 | `std.time.since(t)` | `float` | Milliseconds elapsed since `t` (now − t); equivalent to `t.since()` |
 | `std.time.until(t)` | `float` | Milliseconds until `t` (t − now); equivalent to `t.until()` |
+| `std.time.sleep(ms)` | `null` | Suspends execution for an integer number of milliseconds; operation budget is charged one operation per requested nanosecond before suspension |
 
 **Duration constants** (plain `int`, milliseconds):
 `std.time.ms` `std.time.second` `std.time.minute` `std.time.hour` `std.time.day`

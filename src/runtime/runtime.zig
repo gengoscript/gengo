@@ -256,15 +256,32 @@ pub const Runtime = struct {
     }
 
     pub fn run(self: *Runtime, src: []const u8) !void {
-        return self.runPath(src, "");
+        if (try self.runPath(src, "") == .suspended) return error.ExecutionSuspended;
     }
 
-    pub fn runPath(self: *Runtime, src: []const u8, path: []const u8) !void {
+    pub fn runPath(self: *Runtime, src: []const u8, path: []const u8) !vm.RunOutcome {
         return self.runPathWithProvider(src, path, .filesystem, false);
     }
 
-    pub fn runPathWithSources(self: *Runtime, src: []const u8, path: []const u8, sources: []const module_compile.SourceEntry) !void {
+    pub fn runPathWithSources(self: *Runtime, src: []const u8, path: []const u8, sources: []const module_compile.SourceEntry) !vm.RunOutcome {
         return self.runPathWithProvider(src, path, .{ .table = sources }, false);
+    }
+
+    pub fn begin(self: *Runtime, src: []const u8) !vm.RunOutcome {
+        if (self.vm_state.sleep_deadline_ns != null) return error.RuntimeSuspended;
+        return self.runPath(src, "");
+    }
+
+    pub fn continueRun(self: *Runtime) !vm.RunOutcome {
+        const deadline = self.vm_state.sleep_deadline_ns orelse return error.NotSuspended;
+        const io_ctx = std.Io.Threaded.global_single_threaded.io();
+        if (@as(i128, std.Io.Timestamp.now(io_ctx, .boot).nanoseconds) < deadline) return .suspended;
+        self.vm_state.sleep_deadline_ns = null;
+        const ctx: vms.VMContext = .{ .cs = self.chunk_state, .gs = &self.globals_state, .hs = &self.heap_state, .vs = &self.vm_state };
+        return vm.runUntilSuspend(ctx) catch |err| {
+            self.captureRuntimeError();
+            return err;
+        };
     }
 
     fn capabilityModules(self: *Runtime) []const module_compile.CapModuleDesc {
@@ -396,6 +413,7 @@ pub const Runtime = struct {
     // milestone (no test-name metadata is serialized yet), so this doesn't
     // support --test the way runPathWithProvider does.
     pub fn runFromGbc(self: *Runtime, bytes: []const u8) !void {
+        if (self.vm_state.sleep_deadline_ns != null) return error.RuntimeSuspended;
         defer self.assertNoTempRootLeaks("Runtime.runFromGbc");
         self.last_runtime_line = 0;
         self.last_runtime_col = 0;
@@ -411,13 +429,15 @@ pub const Runtime = struct {
         try vmnative.installStdGlobal(install_ctx, &self.globals_state);
         try vmnative.installHostModules(install_ctx, &self.globals_state, self.host_modules);
         try vmnative.installCapabilityModules(install_ctx, &self.globals_state, self.capabilityModules());
-        vm.run(install_ctx) catch |err| {
+        const outcome = vm.runUntilSuspend(install_ctx) catch |err| {
             self.captureRuntimeError();
             return err;
         };
+        if (outcome == .suspended) return error.ExecutionSuspended;
     }
 
-    pub fn runPathWithProvider(self: *Runtime, src: []const u8, path: []const u8, provider: module_compile.SourceProvider, test_mode: bool) !void {
+    pub fn runPathWithProvider(self: *Runtime, src: []const u8, path: []const u8, provider: module_compile.SourceProvider, test_mode: bool) !vm.RunOutcome {
+        if (self.vm_state.sleep_deadline_ns != null) return error.RuntimeSuspended;
         if (src.len > cfg.max_input_bytes) {
             self.vm_state.setRuntimeErr("input exceeds max_input_bytes ({d})", .{cfg.max_input_bytes});
             const emsg = self.vm_state.runtimeErrMsg();
@@ -445,10 +465,12 @@ pub const Runtime = struct {
         try vmnative.installStdGlobal(install_ctx, &self.globals_state);
         try vmnative.installHostModules(install_ctx, &self.globals_state, self.host_modules);
         try vmnative.installCapabilityModules(install_ctx, &self.globals_state, self.capabilityModules());
-        vm.run(.{ .cs = self.chunk_state, .gs = &self.globals_state, .hs = &self.heap_state, .vs = &self.vm_state }) catch |err| {
+        const outcome = vm.runUntilSuspend(.{ .cs = self.chunk_state, .gs = &self.globals_state, .hs = &self.heap_state, .vs = &self.vm_state }) catch |err| {
             self.captureRuntimeError();
             return err;
         };
+
+        if (outcome == .suspended) return .suspended;
 
         if (test_mode and self.test_count > 0) {
             var passed: u8 = 0;
@@ -516,6 +538,7 @@ pub const Runtime = struct {
             }
             if (failed > 0) self.test_failed = true;
         }
+        return .completed;
     }
 
     // gengo --test --profile: appended after a PASS/FAIL line and used
@@ -535,6 +558,7 @@ pub const Runtime = struct {
     // Run src without resetting globals or heap — allows successive REPL lines
     // to share definitions and allocated objects.
     pub fn runIncremental(self: *Runtime, src: []const u8) !void {
+        if (self.vm_state.sleep_deadline_ns != null) return error.RuntimeSuspended;
         if (src.len > cfg.max_input_bytes) {
             self.vm_state.setRuntimeErr("input exceeds max_input_bytes ({d})", .{cfg.max_input_bytes});
             const emsg = self.vm_state.runtimeErrMsg();
@@ -624,6 +648,7 @@ pub const Runtime = struct {
     }
 
     pub fn callGlobal(self: *Runtime, name: []const u8, args: []const Value) !Value {
+        if (self.vm_state.sleep_deadline_ns != null) return error.RuntimeSuspended;
         defer self.assertNoTempRootLeaks("Runtime.callGlobal");
         self.activate();
         self.vm_state.setPolicy(self.policy);

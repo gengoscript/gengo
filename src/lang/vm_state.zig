@@ -109,6 +109,7 @@ pub const State = struct {
     alloc_managed_slice_calls: u64 = 0,
     alloc_managed_bytes_calls: u64 = 0,
     ops_budget_remaining: u64 = std.math.maxInt(u64),
+    sleep_deadline_ns: ?i128 = null,
     defer_stack: []Value = &[_]Value{},
     defer_top: usize = 0,
     panic_line: u32 = 0,
@@ -216,6 +217,7 @@ pub const State = struct {
         self.temp_root_top = 0;
         self.defer_top = 0;
         self.ops_budget_remaining = std.math.maxInt(u64);
+        self.sleep_deadline_ns = null;
         self.panic_line = 0;
         self.panic_col = 0;
         self.panic_path_len = 0;
@@ -245,6 +247,19 @@ pub const State = struct {
         // (budget_before - budget_after) gives an exact per-block op count.
         self.ops_budget_remaining = policy.max_ops orelse
             (if (policy.profile_mode) std.math.maxInt(u64) - 1 else std.math.maxInt(u64));
+    }
+
+    pub fn requestSleep(self: *State, ms: u64) !void {
+        if (self.call_depth_target != std.math.maxInt(usize) or self.is_panicking) return error.SleepNotAllowed;
+        if (ms == 0) return;
+        const cost = std.math.mul(u64, ms, 1_000_000) catch return error.InstructionBudgetExceeded;
+        if (self.ops_budget_remaining != std.math.maxInt(u64)) {
+            if (cost >= self.ops_budget_remaining) return error.InstructionBudgetExceeded;
+            self.ops_budget_remaining -= cost;
+        }
+        const duration_ns = std.math.mul(i128, @as(i128, @intCast(ms)), 1_000_000) catch return error.InstructionBudgetExceeded;
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.sleep_deadline_ns = @as(i128, std.Io.Timestamp.now(io, .boot).nanoseconds) + duration_ns;
     }
 
     fn currentIpIdx(self: *State, cs: *const chunk.State) usize {
