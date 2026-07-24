@@ -207,7 +207,12 @@ test "scaled class blocks are reusable after free" {
     try std.testing.expect(a.ptr == b.ptr);
 }
 
-test "flat mode preserves shared heap capacity for managed allocations" {
+test "flat mode has no fixed compiler reservation when bump() is unused" {
+    // With the two-ended arena, permanent data only claims space it actually
+    // uses — unlike the old fixed heap_size/8 prefix, reserved whether or
+    // not a script ever called bump(). With zero bump() calls, the full
+    // 256 KiB heap is available for managed allocation: four 64 KiB blocks
+    // fit exactly (was three, wasting 32 KiB, under the old fixed prefix).
     var h: heap.State = .{};
     try h.init(256 * 1024, 64, std.testing.allocator);
     defer h.deinit();
@@ -217,20 +222,82 @@ test "flat mode preserves shared heap capacity for managed allocations" {
     try std.testing.expect(heap.allocBytesManaged(64 * 1024) != null);
     try std.testing.expect(heap.allocBytesManaged(64 * 1024) != null);
     try std.testing.expect(heap.allocBytesManaged(64 * 1024) != null);
+    try std.testing.expect(heap.allocBytesManaged(64 * 1024) == null);
 }
 
-test "managed overflow path realigns after compiler spillover" {
+test "flat mode: bump() usage reduces managed capacity by exactly what it uses" {
+    var h: heap.State = .{};
+    try h.init(256 * 1024, 64, std.testing.allocator);
+    defer h.deinit();
+    heap.setActive(&h);
+
+    _ = heap.bump(u8, 64 * 1024) orelse return error.TestFailed;
+
+    try std.testing.expect(heap.allocBytesManaged(64 * 1024) != null);
+    try std.testing.expect(heap.allocBytesManaged(64 * 1024) != null);
+    try std.testing.expect(heap.allocBytesManaged(64 * 1024) != null);
+    try std.testing.expect(heap.allocBytesManaged(64 * 1024) == null);
+}
+
+test "flat mode preserves compiler bump data during managed allocation" {
+    var h: heap.State = .{};
+    try h.init(256 * 1024, 64, std.testing.allocator);
+    defer h.deinit();
+    heap.setActive(&h);
+
+    const compiler_data = (heap.bump(u8, 9) orelse return error.TestFailed)[0..9];
+    @memcpy(compiler_data, "fieldkey!");
+
+    try std.testing.expect(heap.allocBytesManaged(64 * 1024) != null);
+    try std.testing.expectEqualStrings("fieldkey!", compiler_data);
+}
+
+test "managed overflow path stays aligned regardless of permanent-region bump size" {
+    // bump() now grows down from the top, on its own pointer, entirely
+    // separate from overflow_bump — so odd-sized permanent allocations can no
+    // longer misalign the managed overflow bump the way they could when both
+    // shared one counter. This just confirms allocBytesManaged's own
+    // alignment logic holds regardless of how much (or how oddly-sized) the
+    // permanent side has consumed.
     var h: heap.State = .{};
     try h.init(1024 * 1024, 64, std.testing.allocator);
     defer h.deinit();
     heap.setActive(&h);
 
-    _ = heap.bump(u8, h.compiler_end) orelse return error.TestFailed;
     _ = heap.bump(u8, 1) orelse return error.TestFailed;
+    _ = heap.bump(u8, 3) orelse return error.TestFailed;
+    _ = heap.bump(u8, 7) orelse return error.TestFailed;
 
     _ = heap.allocBytesManaged(@sizeOf(MapEntry)) orelse return error.TestFailed;
     const bytes = heap.allocBytesManaged(@sizeOf(MapEntry)) orelse return error.TestFailed;
     try std.testing.expectEqual(@as(usize, 0), @intFromPtr(bytes.ptr) % @alignOf(MapEntry));
+}
+
+test "bump refuses to cross into the managed region's current frontier" {
+    var h: heap.State = .{};
+    try h.init(4096, 8, std.testing.allocator);
+    defer h.deinit();
+    heap.setActive(&h);
+
+    _ = heap.allocBytesManaged(1024) orelse return error.TestFailed;
+    const frontier = h.overflow_bump;
+
+    // Big enough to require landing below the managed side's current
+    // frontier — must fail rather than silently overlapping it.
+    try std.testing.expect(heap.bump(u8, h.heap.len - frontier + 1) == null);
+
+    // A request that comfortably fits above the frontier still succeeds.
+    _ = heap.bump(u8, 8) orelse return error.TestFailed;
+}
+
+test "managed overflow allocation refuses to cross into the permanent region" {
+    var h: heap.State = .{};
+    try h.init(4096, 8, std.testing.allocator);
+    defer h.deinit();
+    heap.setActive(&h);
+
+    _ = heap.bump(u8, 3072) orelse return error.TestFailed; // permanent_bump now at 1024
+    try std.testing.expect(heap.allocBytesManaged(2048) == null);
 }
 
 // ── Fragmentation and defragmentation ──────────────────────────────────────
@@ -421,61 +488,67 @@ test "defrag frees scratch buffer when free block count exceeds stack buffer" {
     heap.defragmentFreeLists();
 }
 
-// ── struct_type.fields compaction regression ──────────────────────────────
+// ── Permanent-region (bump()) compaction safety ───────────────────────────
 //
-// Regression test for: struct_type.fields allocated via heap.bump() overflow
-// (when the compiler region is exhausted) was not tracked by compactManagedHeap().
-// After compaction, new overflow allocations overwrote the old fields address
-// without the struct_type pointer being updated, corrupting field lookups.
+// Regression test for a real bug (found via the gengo-mbus decode corruption,
+// "no field '<garbage>' on type 'DataRecord'"): struct_type.fields — and, it
+// turned out, ANY bump()-allocated permanent data (interned string constants
+// in particular) — used to share address space with the managed/collectible
+// region once a fixed compiler-region budget (heap_size/8) was exceeded.
+// compactManagedHeap() packed live managed objects starting from that fixed
+// boundary with no idea permanent data might have spilled past it, silently
+// overwriting it. The fix replaces the fixed prefix with a two-ended arena:
+// permanent data bumps down from the top of the heap, managed data bumps up
+// from the bottom, and an allocation on either side that would cross the
+// other's current frontier fails outright rather than overlapping. This
+// makes the corruption structurally impossible regardless of how much
+// permanent data a program needs — not just within some fixed budget.
 
-test "compactManagedHeap updates struct_type.fields bumped to managed overflow" {
-    // Use a 1 MiB heap to guarantee partitioned mode (class regions + overflow).
+test "compactManagedHeap never corrupts permanent data even with heavy bump() pressure" {
     var h: heap.State = .{};
     try h.init(1024 * 1024, 64, std.testing.allocator);
     defer h.deinit();
     heap.setActive(&h);
 
-    // Fill the entire compiler region so the next bump() falls through to
-    // managed-heap overflow — the scenario that happens after compiling a large
-    // script and then running installStdGlobal().
-    _ = heap.bump(u8, h.compiler_end) orelse return error.TestFailed;
+    // Consume far more than the old fixed compiler budget (heap_size / 8 =
+    // 128 KiB) via plain byte bumps, standing in for interned string
+    // constants — the actual data type that was corrupted in the M-Bus case.
+    var chunks: [64][]u8 = undefined;
+    for (&chunks, 0..) |*c, i| {
+        const buf = (heap.bump(u8, 4096) orelse return error.TestFailed)[0..4096];
+        @memset(buf, @truncate(i));
+        c.* = buf;
+    }
 
-    // Allocate a StructFieldSpec array via bump() — it lands in overflow.
+    // Also cover the originally-fixed case: a StructFieldSpec array owned by
+    // a live struct_type object.
     const empty_alts = @import("../lang/value.zig").FieldTypeSpec{ .alts = &.{} };
     const field_specs = (heap.bump(StructFieldSpec, 3) orelse return error.TestFailed)[0..3];
     field_specs[0] = .{ .name = "alpha", .typ = empty_alts };
     field_specs[1] = .{ .name = "beta", .typ = empty_alts };
     field_specs[2] = .{ .name = "gamma", .typ = empty_alts };
-    const orig_ptr = field_specs.ptr;
-
-    // Create a live struct_type pool object owning those fields.
     const typ_obj = heap.allocObject() orelse return error.TestFailed;
     typ_obj.* = .{ .struct_type = .{
         .name = "T",
         .qualified_name = "@module_type:T",
         .fields = field_specs,
     } };
-
-    // Mark only typ_obj live, then compact.
     heap.markObject(typ_obj);
+
+    // Ordinary managed churn, then force a compaction.
+    const other = heap.allocObject() orelse return error.TestFailed;
+    const bytes = heap.allocBytesManaged(64) orelse return error.TestFailed;
+    other.* = .{ .dyn_string = bytes };
+    heap.markObject(other);
     heap.sweepObjects();
     heap.compactManagedHeap();
 
-    // The fields were in overflow and must have been moved to the packed region.
-    try std.testing.expect(typ_obj.struct_type.fields.ptr != orig_ptr);
-    try std.testing.expectEqual(@as(usize, 3), typ_obj.struct_type.fields.len);
-
-    // Overwrite the old overflow location with 0xFF to simulate subsequent
-    // managed allocations reusing that space.  Without the fix, the pointer
-    // would still point here and field name reads would return garbage.
-    const old_addr = @intFromPtr(orig_ptr);
-    const field_bytes = @sizeOf(StructFieldSpec) * 3;
-    if (old_addr + field_bytes <= @intFromPtr(h.heap.ptr) + h.heap.len) {
-        const old_mem: [*]u8 = @ptrFromInt(old_addr);
-        @memset(old_mem[0..field_bytes], 0xFF);
+    // All bump()-permanent data must be byte-for-byte intact — compaction
+    // must never have touched it, let alone relocated or corrupted it.
+    for (chunks, 0..) |c, i| {
+        const want: u8 = @truncate(i);
+        for (c) |b| try std.testing.expectEqual(want, b);
     }
-
-    // Field names must still be correct at the new location.
     try std.testing.expectEqualStrings("alpha", typ_obj.struct_type.fields[0].name);
     try std.testing.expectEqualStrings("beta", typ_obj.struct_type.fields[1].name);
     try std.testing.expectEqualStrings("gamma", typ_obj.struct_type.fields[2].name);
