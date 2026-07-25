@@ -144,8 +144,11 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
         .bytes_pack => {
             const arr_val = ctx.vs.vmTop(0);
             if (arr_val != .object) return error.TypeError;
+            const items_len = (try vms.asArraySlice(arr_val.object)).len;
+            const buf = try vmgc.vmAllocManagedBytes(ctx, items_len);
+            // Re-derive after the allocation above, which can compact and
+            // relocate arr_val.object's backing.
             const items = try vms.asArraySlice(arr_val.object);
-            const buf = try vmgc.vmAllocManagedBytes(ctx, items.len);
             for (items, 0..) |item, i| {
                 const n = try argAsI64(item);
                 buf[i] = @truncate(@as(u64, @bitCast(n)) & 0xFF);
@@ -372,9 +375,12 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             try ctx.vs.vmPush(.{ .int = cnt });
         },
         .bytes_replace => {
-            const s = try vms.asStringValue(ctx.vs.vmTop(2));
-            const old_s = try vms.asStringValue(ctx.vs.vmTop(1));
-            const new_s = try vms.asStringValue(ctx.vs.vmTop(0));
+            const s_val = ctx.vs.vmTop(2);
+            const old_val = ctx.vs.vmTop(1);
+            const new_val = ctx.vs.vmTop(0);
+            const s = try vms.asStringValue(s_val);
+            const old_s = try vms.asStringValue(old_val);
+            const new_s = try vms.asStringValue(new_val);
             if (old_s.len == 0) {
                 ctx.vs.vmPopArgs(argc);
                 try ctx.vs.vmPush(try makeBinaryString(ctx, s));
@@ -393,16 +399,21 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             }
             const new_len = s.len - cnt * old_s.len + cnt * new_s.len;
             const buf = try vmgc.vmAllocManagedBytes(ctx, new_len);
+            // Re-derive after the allocation above, which can compact and
+            // relocate s_val/old_val/new_val's backing.
+            const s_now = try vms.asStringValue(s_val);
+            const old_now = try vms.asStringValue(old_val);
+            const new_now = try vms.asStringValue(new_val);
             var src: usize = 0;
             var dst: usize = 0;
-            while (std.mem.indexOf(u8, s[src..], old_s)) |found| {
-                @memcpy(buf[dst .. dst + found], s[src .. src + found]);
+            while (std.mem.indexOf(u8, s_now[src..], old_now)) |found| {
+                @memcpy(buf[dst .. dst + found], s_now[src .. src + found]);
                 dst += found;
-                @memcpy(buf[dst .. dst + new_s.len], new_s);
-                dst += new_s.len;
-                src += found + old_s.len;
+                @memcpy(buf[dst .. dst + new_now.len], new_now);
+                dst += new_now.len;
+                src += found + old_now.len;
             }
-            @memcpy(buf[dst .. dst + (s.len - src)], s[src..]);
+            @memcpy(buf[dst .. dst + (s_now.len - src)], s_now[src..]);
             const obj = try vmgc.allocTempRooted(ctx, .{ .dyn_string = &[_]u8{} });
             defer ctx.vs.popTempRoot();
             obj.* = .{ .dyn_string = buf[0..new_len] };

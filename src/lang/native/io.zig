@@ -825,13 +825,18 @@ fn fmtProcess(ctx: VMContext, buf_opt: ?[]u8, fmt: []const u8, args_start: usize
     return total;
 }
 
-fn doSprintf(ctx: VMContext, fmt_str: []const u8, args_start: usize, argc: u8) !Value {
+fn doSprintf(ctx: VMContext, fmt_val: Value, args_start: usize, argc: u8) !Value {
+    const fmt_str = try vms.asStringValue(fmt_val);
     const total = try fmtProcess(ctx, null, fmt_str, args_start, argc);
     const obj = try vmgc.allocTempRooted(ctx, .{ .dyn_string = &[_]u8{} });
     defer ctx.vs.popTempRoot();
     if (total > 0) {
         const buf = try vmgc.vmAllocManagedBytes(ctx, total);
-        _ = try fmtProcess(ctx, buf, fmt_str, args_start, argc);
+        // Re-derive after the allocation above, which can compact and
+        // relocate fmt_val's backing if it's a dyn_string/string_view —
+        // fmt_str captured before it cannot be trusted here.
+        const fmt_str_now = try vms.asStringValue(fmt_val);
+        _ = try fmtProcess(ctx, buf, fmt_str_now, args_start, argc);
         obj.* = .{ .dyn_string = buf[0..total] };
     }
     return .{ .object = obj };
@@ -870,8 +875,7 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             if (!ctx.vs.policy.allow_io) return error.PermissionDenied;
             const start = ctx.vs.stack_top - argc;
             if (argc < 1) return error.ArityMismatch;
-            const fmt_str = try vms.asStringValue(ctx.vs.stack[start]);
-            const result = try doSprintf(ctx, fmt_str, start, argc);
+            const result = try doSprintf(ctx, ctx.vs.stack[start], start, argc);
             io.write(result.object.*.dyn_string);
             ctx.vs.vmPopArgs(argc);
             try ctx.vs.vmPush(.null);
@@ -887,8 +891,7 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
         .io_sprintf => {
             const start = ctx.vs.stack_top - argc;
             if (argc < 1) return error.ArityMismatch;
-            const fmt_str = try vms.asStringValue(ctx.vs.stack[start]);
-            const out = try doSprintf(ctx, fmt_str, start, argc);
+            const out = try doSprintf(ctx, ctx.vs.stack[start], start, argc);
             ctx.vs.vmPopArgs(argc);
             try ctx.vs.vmPush(out);
         },
@@ -903,8 +906,7 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             if (!ctx.vs.policy.allow_io) return error.PermissionDenied;
             const start = ctx.vs.stack_top - argc;
             if (argc < 1) return error.ArityMismatch;
-            const fmt_str = try vms.asStringValue(ctx.vs.stack[start]);
-            const result = try doSprintf(ctx, fmt_str, start, argc);
+            const result = try doSprintf(ctx, ctx.vs.stack[start], start, argc);
             io.werr(result.object.*.dyn_string);
             ctx.vs.vmPopArgs(argc);
             try ctx.vs.vmPush(.null);

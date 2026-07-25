@@ -1945,7 +1945,8 @@ fn opInvokeMethod(ctx: VMContext) !void {
         .string_builder => |*sb| {
             if (common.streq(mname, "write")) {
                 if (argc != 1) return error.ArityMismatch;
-                const s_bytes = try vms.asStringValue(ctx.vs.stack[recv_idx + 1]);
+                const write_val = ctx.vs.stack[recv_idx + 1];
+                const s_bytes = try vms.asStringValue(write_val);
                 const needed = sb.len + s_bytes.len;
                 if (needed > sb.buf.len) {
                     // Grow: receiver stays on stack so GC keeps the object alive.
@@ -1955,7 +1956,14 @@ fn opInvokeMethod(ctx: VMContext) !void {
                     sb.buf = new_buf; // update before free so paranoia doesn't see the old ref
                     ctx.hs.freeBytesManaged(old_buf);
                 }
-                @memcpy(sb.buf[sb.len..][0..s_bytes.len], s_bytes);
+                // Re-derive after the possible allocation above, which can
+                // compact and relocate write_val's backing if it's a
+                // dyn_string/string_view — s_bytes captured before it
+                // cannot be trusted here. sb itself stays valid regardless
+                // (it points into recv.object, a fixed obj_pool slot that
+                // compaction never moves — only the buffer it owns).
+                const s_bytes_now = try vms.asStringValue(write_val);
+                @memcpy(sb.buf[sb.len..][0..s_bytes_now.len], s_bytes_now);
                 sb.len = needed;
                 if (recv_idx >= ctx.vs.stack_top) return error.StackUnderflow;
                 ctx.vs.stack_top = recv_idx;
@@ -3862,8 +3870,13 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 obj.* = .{ .map = items[0..count] };
                 const bcount = vmmap.mapBucketsForCount(count);
                 const buckets = try vmgc.vmAllocManagedSlice(ctx, i32, bcount);
-                vmmap.mapBuildHashedBuckets(items[0..count], buckets);
-                obj.* = .{ .map_hashed = .{ .entries = items[0..count], .len = count, .buckets = buckets } };
+                // Re-derive via obj.map (not the `items` local captured
+                // before this allocation): obj itself is correctly updated
+                // if compaction relocates its backing, but a plain local
+                // slice pointing at the same memory is not.
+                const entries = obj.map;
+                vmmap.mapBuildHashedBuckets(entries, buckets);
+                obj.* = .{ .map_hashed = .{ .entries = entries, .len = count, .buckets = buckets } };
                 try ctx.vs.vmPush(.{ .object = obj });
             },
             .zero_struct => {
@@ -4388,11 +4401,15 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 const ref = v.asVariant() orelse return error.TypeError;
                 const arm = ref.typ.variant_type.arms[ref.ordinal];
                 if (arm.fields.len > 0 and v == .object) {
-                    const vv = v.object.variant_value;
                     const map_obj = try vmgc.allocTempRooted(ctx, .{ .map = &[_]MapEntry{} });
                     defer ctx.vs.popTempRoot();
                     const items = try vmgc.vmAllocManagedSlice(ctx, MapEntry, arm.fields.len);
-                    for (arm.fields, vv.arm_fields, items) |f, fv, *it| it.* = .{ .key = f.key, .value = fv };
+                    // Re-derive after the allocation above, which can
+                    // compact and relocate v.object's backing — a by-value
+                    // copy of v.object.variant_value taken before it would
+                    // not follow along.
+                    const arm_fields = v.object.variant_value.arm_fields;
+                    for (arm.fields, arm_fields, items) |f, fv, *it| it.* = .{ .key = f.key, .value = fv };
                     map_obj.* = .{ .map = items[0..arm.fields.len] };
                     _ = try ctx.vs.vmPop();
                     try ctx.vs.vmPush(.{ .object = map_obj });
