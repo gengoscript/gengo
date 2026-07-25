@@ -40,8 +40,8 @@ pub fn arraySlice(ctx: VMContext, obj: *Object, has_start: bool, start_v: Value,
 }
 
 pub fn arrayAppend(ctx: VMContext, arr_obj: *Object, elems: []const Value) !Value {
-    const base = try vms.asArraySlice(arr_obj);
-    const new_len = base.len + elems.len;
+    const base_len = (try vms.asArraySlice(arr_obj)).len;
+    const new_len = base_len + elems.len;
 
     // Fast path: reuse backing buffer when spare capacity exists.
     if (arr_obj.* == .array_capacity) {
@@ -63,6 +63,13 @@ pub fn arrayAppend(ctx: VMContext, arr_obj: *Object, elems: []const Value) !Valu
     const backing_obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
     defer ctx.vs.popTempRoot();
     const out = try vmgc.vmAllocManagedSlice(ctx, Value, new_cap);
+    // Re-read arr_obj's backing now, after every allocation above that could
+    // have triggered a GC + compaction: compaction can relocate arr_obj's
+    // own backing storage (arr_obj is reachable, so it gets correctly
+    // updated), but a slice captured before that point would go stale and
+    // silently alias whatever fresh allocation happens to land at its old
+    // address — this is exactly what "@memcpy arguments alias" was catching.
+    const base = try vms.asArraySlice(arr_obj);
     @memcpy(out[0..base.len], base);
     @memcpy(out[base.len .. base.len + elems.len], elems);
     // Zero-fill spare capacity so the GC never traces stale pointers.

@@ -405,14 +405,26 @@ pub fn makeDynStringFromObj(ctx: VMContext, src: *Object) !Value {
     return .{ .object = obj };
 }
 
-pub fn concatDynString(ctx: VMContext, a: []const u8, b: []const u8) !Value {
+pub fn concatDynString(ctx: VMContext, a: Value, b: Value) !Value {
     const obj = try allocTempRooted(ctx, .{ .dyn_string = &[_]u8{} });
     defer ctx.vs.popTempRoot();
-    const total = a.len +% b.len;
-    if (total < a.len) return error.OutOfMemory;
+    const a_len = (try vms.asStringValue(a)).len;
+    const b_len = (try vms.asStringValue(b)).len;
+    const total = a_len +% b_len;
+    if (total < a_len) return error.OutOfMemory;
     const buf = try vmAllocManagedBytes(ctx, total);
-    @memcpy(buf[0..a.len], a);
-    @memcpy(buf[a.len..total], b);
+    // Re-read a/b's current bytes now, after the allocation above: it can
+    // trigger a GC + compaction that relocates a/b's backing storage if
+    // either is a dyn_string/string_view object. a/b (the Values, i.e. the
+    // Object pointers) don't change — Objects never move, only their
+    // internal fields do — so re-deriving from them here is safe and
+    // correctly picks up any relocation, unlike a slice captured earlier
+    // by the caller (which is exactly what let stale bytes get memcpy'd
+    // into a freshly allocated, possibly-overlapping buffer here).
+    const a_bytes = try vms.asStringValue(a);
+    const b_bytes = try vms.asStringValue(b);
+    @memcpy(buf[0..a_bytes.len], a_bytes);
+    @memcpy(buf[a_bytes.len..total], b_bytes);
     obj.* = .{ .dyn_string = buf[0..total] };
     return .{ .object = obj };
 }
