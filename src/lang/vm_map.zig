@@ -148,10 +148,15 @@ pub fn mapSet(ctx: VMContext, container: Value, key: Value, val: Value) !void {
     }
     try ctx.vs.pushTempRoot(container);
     defer ctx.vs.popTempRoot();
-    const new_len = items.len + 1;
+    const old_len = items.len;
+    const new_len = old_len + 1;
     const ext = try vmgc.vmAllocManagedSlice(ctx, MapEntry, new_len);
-    @memcpy(ext[0..items.len], items);
-    ext[items.len] = .{ .key = key, .value = val };
+    // Re-derive after the allocation above, which can compact and
+    // relocate container.object's backing — `items` was captured before
+    // it and cannot be trusted here.
+    const items_now = try vms.asMapSlice(container.object);
+    @memcpy(ext[0..old_len], items_now);
+    ext[old_len] = .{ .key = key, .value = val };
     if (container.object.* == .map_managed) ctx.hs.freeManagedSlice(MapEntry, container.object.map_managed);
     container.object.* = .{ .map_managed = ext[0..new_len] };
     if (new_len > 8) {
@@ -200,19 +205,32 @@ pub fn mapInsertHashed(ctx: VMContext, obj: *Object, key: Value, val: Value) !vo
         try ctx.vs.pushTempRoot(.{ .object = obj });
         defer ctx.vs.popTempRoot();
 
-        const old = obj.map_hashed;
-        const new_len = old.len + 1;
-        const new_cap = if (old.entries.len < 8) 8 else old.entries.len * 2;
+        // Keep only plain numbers (immune to relocation) across the
+        // allocations below — a by-value copy of obj.map_hashed (its
+        // `old` slices) would go stale exactly like any other slice
+        // captured before an allocation that can compact.
+        const old_len = obj.map_hashed.len;
+        const old_entries_cap = obj.map_hashed.entries.len;
+        const new_len = old_len + 1;
+        const new_cap = if (old_entries_cap < 8) 8 else old_entries_cap * 2;
         const out_cap = if (new_cap < new_len) new_len else new_cap;
         const out_entries = try vmgc.vmAllocManagedSlice(ctx, MapEntry, out_cap);
-        if (old.len > 0) @memcpy(out_entries[0..old.len], old.entries[0..old.len]);
+        // Re-derive obj.map_hashed.entries now, after the allocation above.
+        if (old_len > 0) @memcpy(out_entries[0..old_len], obj.map_hashed.entries[0..old_len]);
         const bcount = mapBucketsForCount(out_cap);
         const out_buckets = try vmgc.vmAllocManagedSlice(ctx, i32, bcount);
-        mapBuildHashedBuckets(out_entries[0..old.len], out_buckets);
+        mapBuildHashedBuckets(out_entries[0..old_len], out_buckets);
+        // Snapshot the slices to free fresh, right before freeing them —
+        // not a copy captured before the allocations above, which is
+        // exactly what used to let this free a stale (relocated-away)
+        // address, corrupting the free lists rather than just misreading
+        // data.
+        const old_entries_to_free = obj.map_hashed.entries;
+        const old_buckets_to_free = obj.map_hashed.buckets;
         // Update the object before freeing old slices so paranoia doesn't see stale live refs.
-        obj.* = .{ .map_hashed = .{ .entries = out_entries[0..out_cap], .len = old.len, .buckets = out_buckets } };
-        ctx.hs.freeManagedSlice(MapEntry, old.entries);
-        ctx.hs.freeManagedSlice(i32, old.buckets);
+        obj.* = .{ .map_hashed = .{ .entries = out_entries[0..out_cap], .len = old_len, .buckets = out_buckets } };
+        ctx.hs.freeManagedSlice(MapEntry, old_entries_to_free);
+        ctx.hs.freeManagedSlice(i32, old_buckets_to_free);
     }
 
     var hm = &obj.map_hashed;
