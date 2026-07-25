@@ -1,0 +1,41 @@
+// RFC 868 Time Protocol — about as simple as a network server gets: a
+// client connects, the server sends back the current time as a single
+// 32-bit binary number, and closes the connection. No request to parse,
+// no reply format beyond four bytes.
+//
+// Run: gengo --cap net=listen --net-listen-allow "*:7370" time_server.gengo
+// Test: printf '' | nc 127.0.0.1 7370 | xxd   (or see check_time.gengo)
+//
+// RFC 868's registered port is 37, which requires root on POSIX (any port
+// below 1024 does) — this example binds an unprivileged port instead so it
+// runs without special permission.
+
+std := import("std")
+net := import("cap:net")
+
+// RFC 868 counts seconds from 1900-01-01 00:00:00 UTC; std.time works in
+// the Unix epoch (1970-01-01). The gap between the two is exactly this
+// many seconds — a fixed, well-known constant, not something to compute.
+rfc868_epoch_offset := 2208988800
+
+func serve() {
+    l, err := net.listen("tcp", "0.0.0.0:7370")
+    if err != null {
+        std.io.println("listen failed: ", err)
+        return
+    }
+    std.io.println("time server listening on ", l.local_addr())
+
+    for {
+        conn, aerr := l.accept()
+        if aerr != null {
+            continue
+        }
+        now := std.time.now()
+        rfc868_time := now.unix() + rfc868_epoch_offset
+        conn.write(std.bytes.u32be(rfc868_time))
+        conn.close()
+    }
+}
+
+serve()
