@@ -522,7 +522,10 @@ pub fn nativeReFindAll(ctx: VMContext, pattern_val: Value, s_val: Value) !Value 
     const result = try vmgc.vmAllocManagedSlice(ctx, Value, matches.len);
     obj.* = .{ .array_managed = result[0..0] };
     for (matches, 0..) |m, j| {
-        result[j] = try vmgc.makeDynString(ctx, s[m[0]..m[1]]);
+        // Re-derive s_val's bytes on every iteration: makeDynString's own
+        // allocation can compact and relocate s_val's backing between calls.
+        const s_now = try vms.asStringValue(s_val);
+        result[j] = try vmgc.makeDynString(ctx, s_now[m[0]..m[1]]);
         obj.* = .{ .array_managed = result[0 .. j + 1] };
     }
     return .{ .object = obj };
@@ -554,15 +557,18 @@ pub fn nativeReSplit(ctx: VMContext, pattern_val: Value, s_val: Value) !Value {
     const s = try vms.asStringValue(s_val);
     const alloc = std.heap.page_allocator;
     const alts = try parsePattern(ctx, pattern);
-    var parts = AlignedManaged([]const u8, null).init(alloc);
+    // Store index ranges rather than slices: s_val's backing may relocate
+    // once we start allocating managed memory below, so we re-derive s
+    // fresh from s_val each time we need actual bytes.
+    var parts = AlignedManaged(struct { usize, usize }, null).init(alloc);
     defer parts.deinit();
     var i: usize = 0;
     while (i < s.len) {
         const m = findMatch(alts, s[i..]) orelse {
-            try parts.append(s[i..]);
+            try parts.append(.{ i, s.len });
             break;
         };
-        try parts.append(s[i .. i + m[0]]);
+        try parts.append(.{ i, i + m[0] });
         i += m[1];
     }
     const obj = try vmgc.allocTempRooted(ctx, .{ .array_managed = &[_]Value{} });
@@ -570,7 +576,10 @@ pub fn nativeReSplit(ctx: VMContext, pattern_val: Value, s_val: Value) !Value {
     const result = try vmgc.vmAllocManagedSlice(ctx, Value, parts.items.len);
     obj.* = .{ .array_managed = result[0..0] };
     for (parts.items, 0..) |part, j| {
-        result[j] = try vmgc.makeDynString(ctx, part);
+        // Re-derive s_val's bytes on every iteration: makeDynString's own
+        // allocation can compact and relocate s_val's backing between calls.
+        const s_now = try vms.asStringValue(s_val);
+        result[j] = try vmgc.makeDynString(ctx, s_now[part[0]..part[1]]);
         obj.* = .{ .array_managed = result[0 .. j + 1] };
     }
     return .{ .object = obj };
