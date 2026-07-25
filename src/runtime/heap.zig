@@ -205,6 +205,7 @@ pub const State = struct {
                 .map_hashed => |mh| std_.mem.sliceAsBytes(mh.entries),
                 .struct_instance => |si| std_.mem.sliceAsBytes(si.fields),
                 .variant_value => |vv| std_.mem.sliceAsBytes(vv.arm_fields),
+                .closure => |cl| std_.mem.sliceAsBytes(cl.upvalues),
                 else => null,
             };
             if (region) |r| {
@@ -364,6 +365,12 @@ pub const State = struct {
             .struct_instance => |si| {
                 if (si.fields.len > 0) {
                     out[n] = .{ .old_addr = @intFromPtr(si.fields.ptr), .block_size = self.managedBlockSize(si.fields.len * @sizeOf(MapEntry)), .new_addr = 0 };
+                    n += 1;
+                }
+            },
+            .closure => |cl| {
+                if (cl.upvalues.len > 0) {
+                    out[n] = .{ .old_addr = @intFromPtr(cl.upvalues.ptr), .block_size = self.managedBlockSize(cl.upvalues.len * @sizeOf(*Object)), .new_addr = 0 };
                     n += 1;
                 }
             },
@@ -611,6 +618,7 @@ pub const State = struct {
                 },
                 .map => self.freeManagedSlice(@import("../lang/value.zig").MapEntry, self.obj_pool[i].map),
                 .struct_instance => self.freeManagedSlice(@import("../lang/value.zig").MapEntry, self.obj_pool[i].struct_instance.fields),
+                .closure => self.freeManagedSlice(*Object, self.obj_pool[i].closure.upvalues),
                 .string_builder => self.freeBytesManaged(self.obj_pool[i].string_builder.buf),
                 .bigint => self.freeManagedSlice(@import("std").math.big.Limb, self.obj_pool[i].bigint.limbs),
                 .string_view => {},
@@ -1063,6 +1071,7 @@ fn compactCountBlocks(self: *const State, obj: *const Object) usize {
             break :blk n;
         },
         .struct_instance => |si| if (si.fields.len > 0) 1 else 0,
+        .closure => |cl| if (cl.upvalues.len > 0) 1 else 0,
         .struct_type => |st| if (st.fields.len > 0 and isManagedAddr(self, @intFromPtr(st.fields.ptr))) 1 else 0,
         .variant_value => |vv| blk: {
             var n: usize = 0;
@@ -1113,6 +1122,11 @@ fn compactUpdateObj(obj: *Object, relocs: []const CompactReloc) void {
         .struct_instance => |*si| {
             if (si.fields.len > 0) if (compactFindReloc(relocs, @intFromPtr(si.fields.ptr))) |na| {
                 si.fields = @as([*]MapEntry, @ptrCast(@alignCast(@as(*u8, @ptrFromInt(na)))))[0..si.fields.len];
+            };
+        },
+        .closure => |*cl| {
+            if (cl.upvalues.len > 0) if (compactFindReloc(relocs, @intFromPtr(cl.upvalues.ptr))) |na| {
+                cl.upvalues = @as([*]*Object, @ptrCast(@alignCast(@as(*u8, @ptrFromInt(na)))))[0..cl.upvalues.len];
             };
         },
         .struct_type => |*st| {
