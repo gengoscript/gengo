@@ -124,6 +124,35 @@ Use `runPath` instead of `run` when the script uses relative imports.
 
 Compile errors report the source line, column, kind, and message. Runtime errors report the kind, line, column, message, and stack frames.
 
+## `std.time.sleep` and Suspension
+
+A script calling `std.time.sleep(ms)` suspends execution rather than
+blocking inside the VM. `run`, `runPath`, `runPathWithSources`, and
+`runPathWithSourceProvider` all wait out any suspension transparently —
+they block the calling thread until the sleep's deadline passes and the
+script actually finishes, so most embeddings need no special handling.
+
+A host that wants to keep servicing its own event loop (or several other
+engines) while a script sleeps, instead of blocking, can drive execution
+cooperatively:
+
+```zig
+var rt = try api.Runtime.init(.{ .allow_io = false });
+defer rt.deinit();
+
+var result = rt.begin(src); // .completed, .suspended, .compile_error, .runtime_error
+while (result == .suspended) {
+    const wait_ms = rt.sleepRemainingMs(); // 0 once the deadline has passed
+    myEventLoop.waitUpTo(wait_ms); // do other work here instead of blocking
+    result = rt.continueRun();
+}
+```
+
+`call` (and the C ABI's `engine_call`) do not support suspension: a
+`std.time.sleep()` inside a function invoked that way fails immediately
+with a `SleepNotAllowed` runtime error rather than suspending. Only
+top-level execution (`run`/`runPath`/`begin`) can suspend on sleep.
+
 ## Source Imports
 
 If scripts import source modules, use one of these approaches:
