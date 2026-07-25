@@ -6,10 +6,14 @@ const Value = @import("../value.zig").Value;
 const NativeFnId = @import("native_ids.zig").NativeFnId;
 const NativeFuncObj = @import("../value.zig").NativeFuncObj;
 
-pub fn nativeHexEncode(ctx: VMContext, s: []const u8) !Value {
+pub fn nativeHexEncode(ctx: VMContext, s_val: Value) !Value {
+    const s_len = (try vms.asStringValue(s_val)).len;
     const obj = try vmgc.allocTempRooted(ctx, .{ .dyn_string = &[_]u8{} });
     defer ctx.vs.popTempRoot();
-    const buf = try vmgc.vmAllocManagedBytes(ctx, s.len * 2);
+    const buf = try vmgc.vmAllocManagedBytes(ctx, s_len * 2);
+    // Re-derive after the allocation above, which can compact and
+    // relocate s_val's backing.
+    const s = try vms.asStringValue(s_val);
     for (s, 0..) |b, i| {
         const hi = @as(u8, @intCast((b >> 4) & 0xf));
         const lo = @as(u8, @intCast(b & 0xf));
@@ -29,11 +33,15 @@ pub fn hexNibble(c: u8) !u8 {
     };
 }
 
-pub fn nativeHexDecode(ctx: VMContext, s: []const u8) !Value {
-    if (s.len % 2 != 0) return error.TypeError;
+pub fn nativeHexDecode(ctx: VMContext, s_val: Value) !Value {
+    const s_len = (try vms.asStringValue(s_val)).len;
+    if (s_len % 2 != 0) return error.TypeError;
     const obj = try vmgc.allocTempRooted(ctx, .{ .dyn_string = &[_]u8{} });
     defer ctx.vs.popTempRoot();
-    const buf = try vmgc.vmAllocManagedBytes(ctx, s.len / 2);
+    const buf = try vmgc.vmAllocManagedBytes(ctx, s_len / 2);
+    // Re-derive after the allocation above, which can compact and
+    // relocate s_val's backing.
+    const s = try vms.asStringValue(s_val);
     var i: usize = 0;
     while (i < s.len) : (i += 2) {
         const hi = try hexNibble(s[i]);
@@ -57,12 +65,16 @@ pub fn b64Unpack(c: u8, url_safe: bool) !u6 {
     };
 }
 
-pub fn nativeBase64Encode(ctx: VMContext, s: []const u8, url_safe: bool) !Value {
+pub fn nativeBase64Encode(ctx: VMContext, s_val: Value, url_safe: bool) !Value {
     const alphabet = if (url_safe) "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_" else "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    const out_len = ((s.len + 2) / 3) * 4;
+    const s_len = (try vms.asStringValue(s_val)).len;
+    const out_len = ((s_len + 2) / 3) * 4;
     const obj = try vmgc.allocTempRooted(ctx, .{ .dyn_string = &[_]u8{} });
     defer ctx.vs.popTempRoot();
     const buf = try vmgc.vmAllocManagedBytes(ctx, out_len);
+    // Re-derive after the allocation above, which can compact and
+    // relocate s_val's backing.
+    const s = try vms.asStringValue(s_val);
     var i: usize = 0;
     var o: usize = 0;
     while (i + 3 <= s.len) {
@@ -95,15 +107,19 @@ pub fn nativeBase64Encode(ctx: VMContext, s: []const u8, url_safe: bool) !Value 
     return .{ .object = obj };
 }
 
-pub fn nativeBase64Decode(ctx: VMContext, s: []const u8, url_safe: bool) !Value {
-    if (s.len % 4 != 0) return error.TypeError;
+pub fn nativeBase64Decode(ctx: VMContext, s_val: Value, url_safe: bool) !Value {
+    const s0 = try vms.asStringValue(s_val);
+    if (s0.len % 4 != 0) return error.TypeError;
     var pad: usize = 0;
-    if (s.len >= 2 and s[s.len - 1] == '=') pad += 1;
-    if (s.len >= 2 and s[s.len - 2] == '=') pad += 1;
-    const out_len = (s.len / 4) * 3 - pad;
+    if (s0.len >= 2 and s0[s0.len - 1] == '=') pad += 1;
+    if (s0.len >= 2 and s0[s0.len - 2] == '=') pad += 1;
+    const out_len = (s0.len / 4) * 3 - pad;
     const obj = try vmgc.allocTempRooted(ctx, .{ .dyn_string = &[_]u8{} });
     defer ctx.vs.popTempRoot();
     const buf = try vmgc.vmAllocManagedBytes(ctx, out_len);
+    // Re-derive after the allocation above, which can compact and
+    // relocate s_val's backing.
+    const s = try vms.asStringValue(s_val);
     var i: usize = 0;
     var o: usize = 0;
     const end = s.len - pad;
@@ -137,38 +153,32 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
     if (argc != nf.arity) return error.ArityMismatch;
     switch (@as(NativeFnId, @enumFromInt(nf.id))) {
         .base64_decode => {
-            const s = try vms.asStringValue(ctx.vs.vmTop(0));
-            const out = try nativeBase64Decode(ctx, s, false);
+            const out = try nativeBase64Decode(ctx, ctx.vs.vmTop(0), false);
             ctx.vs.vmPopArgs(argc);
             try ctx.vs.vmPush(out);
         },
         .base64_encode => {
-            const s = try vms.asStringValue(ctx.vs.vmTop(0));
-            const out = try nativeBase64Encode(ctx, s, false);
+            const out = try nativeBase64Encode(ctx, ctx.vs.vmTop(0), false);
             ctx.vs.vmPopArgs(argc);
             try ctx.vs.vmPush(out);
         },
         .base64_url_decode => {
-            const s = try vms.asStringValue(ctx.vs.vmTop(0));
-            const out = try nativeBase64Decode(ctx, s, true);
+            const out = try nativeBase64Decode(ctx, ctx.vs.vmTop(0), true);
             ctx.vs.vmPopArgs(argc);
             try ctx.vs.vmPush(out);
         },
         .base64_url_encode => {
-            const s = try vms.asStringValue(ctx.vs.vmTop(0));
-            const out = try nativeBase64Encode(ctx, s, true);
+            const out = try nativeBase64Encode(ctx, ctx.vs.vmTop(0), true);
             ctx.vs.vmPopArgs(argc);
             try ctx.vs.vmPush(out);
         },
         .hex_decode => {
-            const s = try vms.asStringValue(ctx.vs.vmTop(0));
-            const out = try nativeHexDecode(ctx, s);
+            const out = try nativeHexDecode(ctx, ctx.vs.vmTop(0));
             ctx.vs.vmPopArgs(argc);
             try ctx.vs.vmPush(out);
         },
         .hex_encode => {
-            const s = try vms.asStringValue(ctx.vs.vmTop(0));
-            const out = try nativeHexEncode(ctx, s);
+            const out = try nativeHexEncode(ctx, ctx.vs.vmTop(0));
             ctx.vs.vmPopArgs(argc);
             try ctx.vs.vmPush(out);
         },
