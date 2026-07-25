@@ -18,14 +18,16 @@ fn substring(ctx: VMContext, bytes: []const u8, managed: bool) !Value {
     return vmgc.makeDynString(ctx, bytes);
 }
 
-pub fn nativeStrSplit(ctx: VMContext, s: []const u8, sep: []const u8, managed: bool) !Value {
+pub fn nativeStrSplit(ctx: VMContext, s_val: Value, sep_val: Value, managed: bool) !Value {
+    const s0 = try vms.asStringValue(s_val);
+    const sep = try vms.asStringValue(sep_val);
     var count: usize = undefined;
     if (sep.len == 0) {
-        count = try vmstr.utf8RuneCount(s);
+        count = try vmstr.utf8RuneCount(s0);
     } else {
         count = 1;
         var i: usize = 0;
-        while (std.mem.indexOfPos(u8, s, i, sep)) |pos| {
+        while (std.mem.indexOfPos(u8, s0, i, sep)) |pos| {
             count += 1;
             i = pos + sep.len;
         }
@@ -40,7 +42,11 @@ pub fn nativeStrSplit(ctx: VMContext, s: []const u8, sep: []const u8, managed: b
         if (sep.len == 0) {
             var i: usize = 0;
             var pi: usize = 0;
-            while (i < s.len) {
+            while (i < s0.len) {
+                // Re-derive every iteration: the previous iteration's
+                // substring()/makeDynString() call can allocate and
+                // compact, relocating s_val's backing.
+                const s = try vms.asStringValue(s_val);
                 const w = try vmstr.utf8NextRuneByteLen(s, i);
                 pieces[pi] = try substring(ctx, s[i .. i + w], managed);
                 i += w;
@@ -50,12 +56,15 @@ pub fn nativeStrSplit(ctx: VMContext, s: []const u8, sep: []const u8, managed: b
         } else {
             var i: usize = 0;
             var pi: usize = 0;
-            while (std.mem.indexOfPos(u8, s, i, sep)) |pos| {
+            while (true) {
+                const s = try vms.asStringValue(s_val);
+                const pos = std.mem.indexOfPos(u8, s, i, sep) orelse break;
                 pieces[pi] = try substring(ctx, s[i..pos], managed);
                 pi += 1;
                 arr_obj.* = .{ .array_managed = pieces[0..pi] };
                 i = pos + sep.len;
             }
+            const s = try vms.asStringValue(s_val);
             pieces[pi] = try substring(ctx, s[i..], managed);
         }
         arr_obj.* = .{ .array_managed = pieces[0..count] };
@@ -63,23 +72,28 @@ pub fn nativeStrSplit(ctx: VMContext, s: []const u8, sep: []const u8, managed: b
     return .{ .object = arr_obj };
 }
 
-pub fn nativeStrJoin(ctx: VMContext, arr_obj: *Object, sep: []const u8) !Value {
+pub fn nativeStrJoin(ctx: VMContext, arr_obj: *Object, sep_val: Value) !Value {
     if (!vms.isArrayObject(arr_obj)) return error.TypeError;
-    const items = try vms.asArraySlice(arr_obj);
-    if (items.len == 0) return vmgc.makeDynString(ctx, "");
-    var total: usize = sep.len * (items.len - 1);
-    for (items) |v| total += (try vms.asStringValue(v)).len;
+    const items_len = (try vms.asArraySlice(arr_obj)).len;
+    if (items_len == 0) return vmgc.makeDynString(ctx, "");
+    const sep = try vms.asStringValue(sep_val);
+    var total: usize = sep.len * (items_len - 1);
+    for (try vms.asArraySlice(arr_obj)) |v| total += (try vms.asStringValue(v)).len;
     const obj = try vmgc.allocTempRooted(ctx, .{ .dyn_string = &[_]u8{} });
     defer ctx.vs.popTempRoot();
     const buf = try vmgc.vmAllocManagedBytes(ctx, total);
+    // Re-derive after the allocation above, which can compact and
+    // relocate arr_obj's or sep_val's backing.
+    const items = try vms.asArraySlice(arr_obj);
+    const sep_now = try vms.asStringValue(sep_val);
     var pos: usize = 0;
     for (items, 0..) |v, idx| {
         const piece = try vms.asStringValue(v);
         @memcpy(buf[pos .. pos + piece.len], piece);
         pos += piece.len;
         if (idx + 1 < items.len) {
-            @memcpy(buf[pos .. pos + sep.len], sep);
-            pos += sep.len;
+            @memcpy(buf[pos .. pos + sep_now.len], sep_now);
+            pos += sep_now.len;
         }
     }
     obj.* = .{ .dyn_string = buf[0..total] };
@@ -90,20 +104,24 @@ pub fn nativeStrTrim(ctx: VMContext, s: []const u8) !Value {
     return vmgc.makeDynString(ctx, std.mem.trim(u8, s, " \t\n\r"));
 }
 
-fn nativeStrTransform(ctx: VMContext, s: []const u8, comptime transform: fn (u8) u8) !Value {
+fn nativeStrTransform(ctx: VMContext, s_val: Value, comptime transform: fn (u8) u8) !Value {
+    const s_len = (try vms.asStringValue(s_val)).len;
     const obj = try vmgc.allocTempRooted(ctx, .{ .dyn_string = &[_]u8{} });
     defer ctx.vs.popTempRoot();
-    const buf = try vmgc.vmAllocManagedBytes(ctx, s.len);
+    const buf = try vmgc.vmAllocManagedBytes(ctx, s_len);
+    // Re-derive after the allocation above, which can compact and
+    // relocate s_val's backing.
+    const s = try vms.asStringValue(s_val);
     for (s, 0..) |b, i| buf[i] = transform(b);
-    obj.* = .{ .dyn_string = buf[0..s.len] };
+    obj.* = .{ .dyn_string = buf[0..s_len] };
     return .{ .object = obj };
 }
 
-pub fn nativeStrUpper(ctx: VMContext, s: []const u8) !Value {
-    return nativeStrTransform(ctx, s, std.ascii.toUpper);
+pub fn nativeStrUpper(ctx: VMContext, s_val: Value) !Value {
+    return nativeStrTransform(ctx, s_val, std.ascii.toUpper);
 }
-pub fn nativeStrLower(ctx: VMContext, s: []const u8) !Value {
-    return nativeStrTransform(ctx, s, std.ascii.toLower);
+pub fn nativeStrLower(ctx: VMContext, s_val: Value) !Value {
+    return nativeStrTransform(ctx, s_val, std.ascii.toLower);
 }
 
 pub fn nativeStrContains(s: []const u8, sub: []const u8) Value {
@@ -124,7 +142,10 @@ pub fn nativeStrIndexOf(s: []const u8, sub: []const u8) !Value {
     return .{ .int = @intCast(rune_idx) };
 }
 
-pub fn nativeStrReplace(ctx: VMContext, s: []const u8, old: []const u8, new: []const u8) !Value {
+pub fn nativeStrReplace(ctx: VMContext, s_val: Value, old_val: Value, new_val: Value) !Value {
+    const s = try vms.asStringValue(s_val);
+    const old = try vms.asStringValue(old_val);
+    const new = try vms.asStringValue(new_val);
     if (old.len == 0) return vmgc.makeDynString(ctx, s);
     var count: usize = 0;
     var i: usize = 0;
@@ -137,16 +158,21 @@ pub fn nativeStrReplace(ctx: VMContext, s: []const u8, old: []const u8, new: []c
     const obj = try vmgc.allocTempRooted(ctx, .{ .dyn_string = &[_]u8{} });
     defer ctx.vs.popTempRoot();
     const buf = try vmgc.vmAllocManagedBytes(ctx, total);
+    // Re-derive after the allocation above, which can compact and
+    // relocate s_val/old_val/new_val's backing.
+    const s_now = try vms.asStringValue(s_val);
+    const old_now = try vms.asStringValue(old_val);
+    const new_now = try vms.asStringValue(new_val);
     var src_i: usize = 0;
     var dst_i: usize = 0;
-    while (std.mem.indexOfPos(u8, s, src_i, old)) |pos| {
-        @memcpy(buf[dst_i .. dst_i + (pos - src_i)], s[src_i..pos]);
+    while (std.mem.indexOfPos(u8, s_now, src_i, old_now)) |pos| {
+        @memcpy(buf[dst_i .. dst_i + (pos - src_i)], s_now[src_i..pos]);
         dst_i += pos - src_i;
-        @memcpy(buf[dst_i .. dst_i + new.len], new);
-        dst_i += new.len;
-        src_i = pos + old.len;
+        @memcpy(buf[dst_i .. dst_i + new_now.len], new_now);
+        dst_i += new_now.len;
+        src_i = pos + old_now.len;
     }
-    @memcpy(buf[dst_i .. dst_i + (s.len - src_i)], s[src_i..]);
+    @memcpy(buf[dst_i .. dst_i + (s_now.len - src_i)], s_now[src_i..]);
     obj.* = .{ .dyn_string = buf[0..total] };
     return .{ .object = obj };
 }
@@ -157,15 +183,19 @@ pub fn nativeStrLastIndexOf(s: []const u8, sub: []const u8) !Value {
     return .{ .int = @intCast(rune_idx) };
 }
 
-pub fn nativeStrRepeat(ctx: VMContext, s: []const u8, count_v: Value) !Value {
+pub fn nativeStrRepeat(ctx: VMContext, s_val: Value, count_v: Value) !Value {
     const n = try vms.valueAsInt(count_v);
     if (n < 0) return error.RangeError;
     if (n == 0) return vmgc.makeDynString(ctx, "");
     const count: usize = @intCast(n);
-    const total = s.len * count;
+    const s_len = (try vms.asStringValue(s_val)).len;
+    const total = s_len * count;
     const obj = try vmgc.allocTempRooted(ctx, .{ .dyn_string = &[_]u8{} });
     defer ctx.vs.popTempRoot();
     const buf = try vmgc.vmAllocManagedBytes(ctx, total);
+    // Re-derive after the allocation above, which can compact and
+    // relocate s_val's backing.
+    const s = try vms.asStringValue(s_val);
     var pos: usize = 0;
     for (0..count) |_| {
         @memcpy(buf[pos .. pos + s.len], s);
@@ -175,8 +205,10 @@ pub fn nativeStrRepeat(ctx: VMContext, s: []const u8, count_v: Value) !Value {
     return .{ .object = obj };
 }
 
-pub fn nativeStrSplitOnce(ctx: VMContext, s: []const u8, sep: []const u8, managed: bool) !Value {
-    const pos = std.mem.indexOf(u8, s, sep) orelse {
+pub fn nativeStrSplitOnce(ctx: VMContext, s_val: Value, sep_val: Value, managed: bool) !Value {
+    const s0 = try vms.asStringValue(s_val);
+    const sep0 = try vms.asStringValue(sep_val);
+    const pos = std.mem.indexOf(u8, s0, sep0) orelse {
         const obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
         defer ctx.vs.popTempRoot();
         const items = try vmgc.vmAllocManagedSlice(ctx, Value, 2);
@@ -185,14 +217,19 @@ pub fn nativeStrSplitOnce(ctx: VMContext, s: []const u8, sep: []const u8, manage
         obj.* = .{ .array_managed = items[0..2] };
         return .{ .object = obj };
     };
+    const sep_len = sep0.len;
     const obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
     defer ctx.vs.popTempRoot();
     const items = try vmgc.vmAllocManagedSlice(ctx, Value, 2);
     items[0] = .null;
     items[1] = .null;
     obj.* = .{ .array_managed = items[0..2] };
-    items[0] = try substring(ctx, s[0..pos], managed);
-    items[1] = try substring(ctx, s[pos + sep.len ..], managed);
+    // Re-derive before each substring(): the previous one can allocate and
+    // compact, relocating s_val's backing.
+    const s1 = try vms.asStringValue(s_val);
+    items[0] = try substring(ctx, s1[0..pos], managed);
+    const s2 = try vms.asStringValue(s_val);
+    items[1] = try substring(ctx, s2[pos + sep_len ..], managed);
     return .{ .object = obj };
 }
 
@@ -200,14 +237,19 @@ pub fn nativeStrCount(s: []const u8, sub: []const u8) Value {
     return .{ .int = @intCast(std.mem.count(u8, s, sub)) };
 }
 
-pub fn nativeStrFields(ctx: VMContext, s: []const u8) !Value {
+fn isFieldSep(c: u8) bool {
+    return c == ' ' or c == '\t' or c == '\n' or c == '\r' or c == 0x0b or c == 0x0c;
+}
+
+pub fn nativeStrFields(ctx: VMContext, s_val: Value) !Value {
+    const s0 = try vms.asStringValue(s_val);
     var count: usize = 0;
     var i: usize = 0;
-    while (i < s.len) {
-        while (i < s.len and (s[i] == ' ' or s[i] == '\t' or s[i] == '\n' or s[i] == '\r' or s[i] == 0x0b or s[i] == 0x0c)) i += 1;
-        if (i >= s.len) break;
+    while (i < s0.len) {
+        while (i < s0.len and isFieldSep(s0[i])) i += 1;
+        if (i >= s0.len) break;
         count += 1;
-        while (i < s.len and s[i] != ' ' and s[i] != '\t' and s[i] != '\n' and s[i] != '\r' and s[i] != 0x0b and s[i] != 0x0c) i += 1;
+        while (i < s0.len and !isFieldSep(s0[i])) i += 1;
     }
     const arr_obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
     defer ctx.vs.popTempRoot();
@@ -218,11 +260,15 @@ pub fn nativeStrFields(ctx: VMContext, s: []const u8) !Value {
         arr_obj.* = .{ .array_managed = pieces[0..0] };
         var pi: usize = 0;
         i = 0;
-        while (i < s.len) {
-            while (i < s.len and (s[i] == ' ' or s[i] == '\t' or s[i] == '\n' or s[i] == '\r' or s[i] == 0x0b or s[i] == 0x0c)) i += 1;
+        while (i < s0.len) {
+            // Re-derive every iteration: the previous iteration's
+            // makeDynString() call can allocate and compact, relocating
+            // s_val's backing.
+            const s = try vms.asStringValue(s_val);
+            while (i < s.len and isFieldSep(s[i])) i += 1;
             if (i >= s.len) break;
             const start = i;
-            while (i < s.len and s[i] != ' ' and s[i] != '\t' and s[i] != '\n' and s[i] != '\r' and s[i] != 0x0b and s[i] != 0x0c) i += 1;
+            while (i < s.len and !isFieldSep(s[i])) i += 1;
             const piece = try vmgc.makeDynString(ctx, s[start..i]);
             pieces[pi] = piece;
             pi += 1;
@@ -233,16 +279,22 @@ pub fn nativeStrFields(ctx: VMContext, s: []const u8) !Value {
     return .{ .object = arr_obj };
 }
 
-pub fn nativeStrPadLeft(ctx: VMContext, s: []const u8, n_v: Value, pad: []const u8) !Value {
+pub fn nativeStrPadLeft(ctx: VMContext, s_val: Value, n_v: Value, pad_val: Value) !Value {
     const n = try vms.valueAsInt(n_v);
     if (n < 0) return error.RangeError;
     const width: usize = @intCast(n);
-    if (width <= s.len or pad.len == 0) return vmgc.makeDynString(ctx, s);
-    const pad_needed = width - s.len;
+    const s0 = try vms.asStringValue(s_val);
+    const pad0 = try vms.asStringValue(pad_val);
+    if (width <= s0.len or pad0.len == 0) return vmgc.makeDynString(ctx, s0);
+    const pad_needed = width - s0.len;
     const total = width;
     const obj = try vmgc.allocTempRooted(ctx, .{ .dyn_string = &[_]u8{} });
     defer ctx.vs.popTempRoot();
     const buf = try vmgc.vmAllocManagedBytes(ctx, total);
+    // Re-derive after the allocation above, which can compact and
+    // relocate s_val/pad_val's backing.
+    const s = try vms.asStringValue(s_val);
+    const pad = try vms.asStringValue(pad_val);
     var pos: usize = 0;
     while (pos + pad.len <= pad_needed) {
         @memcpy(buf[pos..][0..pad.len], pad);
@@ -257,15 +309,21 @@ pub fn nativeStrPadLeft(ctx: VMContext, s: []const u8, n_v: Value, pad: []const 
     return .{ .object = obj };
 }
 
-pub fn nativeStrPadRight(ctx: VMContext, s: []const u8, n_v: Value, pad: []const u8) !Value {
+pub fn nativeStrPadRight(ctx: VMContext, s_val: Value, n_v: Value, pad_val: Value) !Value {
     const n = try vms.valueAsInt(n_v);
     if (n < 0) return error.RangeError;
     const width: usize = @intCast(n);
-    if (width <= s.len or pad.len == 0) return vmgc.makeDynString(ctx, s);
+    const s0 = try vms.asStringValue(s_val);
+    const pad0 = try vms.asStringValue(pad_val);
+    if (width <= s0.len or pad0.len == 0) return vmgc.makeDynString(ctx, s0);
     const total = width;
     const obj = try vmgc.allocTempRooted(ctx, .{ .dyn_string = &[_]u8{} });
     defer ctx.vs.popTempRoot();
     const buf = try vmgc.vmAllocManagedBytes(ctx, total);
+    // Re-derive after the allocation above, which can compact and
+    // relocate s_val/pad_val's backing.
+    const s = try vms.asStringValue(s_val);
+    const pad = try vms.asStringValue(pad_val);
     var pos: usize = 0;
     @memcpy(buf[pos..][0..s.len], s);
     pos += s.len;
@@ -324,7 +382,7 @@ pub fn nativeStrTrimSuffix(ctx: VMContext, s: []const u8, suffix: []const u8) !V
     return vmgc.makeDynString(ctx, s);
 }
 
-pub fn nativeStrSplitN(ctx: VMContext, s: []const u8, sep: []const u8, n_v: Value) !Value {
+pub fn nativeStrSplitN(ctx: VMContext, s_val: Value, sep_val: Value, n_v: Value) !Value {
     const n = try vms.valueAsInt(n_v);
     if (n < 0) return error.RangeError;
     const max: usize = @intCast(n);
@@ -333,17 +391,20 @@ pub fn nativeStrSplitN(ctx: VMContext, s: []const u8, sep: []const u8, n_v: Valu
         obj.* = .{ .array = &[_]Value{} };
         return .{ .object = obj };
     }
-    // Count pieces (up to max)
+    const s0 = try vms.asStringValue(s_val);
+    const sep0 = try vms.asStringValue(sep_val);
+    // Count pieces (up to max) — read-only, no allocation, so s0/sep0 are
+    // safe to use throughout this pass.
     var count: usize = 0;
-    if (sep.len == 0) {
-        count = @min(s.len, max);
+    if (sep0.len == 0) {
+        count = @min(s0.len, max);
     } else {
         var pos: usize = 0;
         count = 1;
         while (count < max) {
-            const idx = std.mem.indexOf(u8, s[pos..], sep) orelse break;
+            const idx = std.mem.indexOf(u8, s0[pos..], sep0) orelse break;
             count += 1;
-            pos += idx + sep.len;
+            pos += idx + sep0.len;
         }
     }
     const arr_obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
@@ -352,8 +413,12 @@ pub fn nativeStrSplitN(ctx: VMContext, s: []const u8, sep: []const u8, n_v: Valu
     // Attach as it fills: makeDynString can trigger GC and earlier elements
     // must be traced.
     arr_obj.* = .{ .array_managed = pieces[0..0] };
-    if (sep.len == 0) {
+    if (sep0.len == 0) {
         for (0..count) |i| {
+            // Re-derive every iteration: the previous iteration's
+            // makeDynString() call can allocate and compact, relocating
+            // s_val's backing.
+            const s = try vms.asStringValue(s_val);
             pieces[i] = try vmgc.makeDynString(ctx, s[i .. i + 1]);
             arr_obj.* = .{ .array_managed = pieces[0 .. i + 1] };
         }
@@ -361,12 +426,15 @@ pub fn nativeStrSplitN(ctx: VMContext, s: []const u8, sep: []const u8, n_v: Valu
         var pos: usize = 0;
         var pi: usize = 0;
         while (pi + 1 < count) {
+            const s = try vms.asStringValue(s_val);
+            const sep = try vms.asStringValue(sep_val);
             const idx = std.mem.indexOf(u8, s[pos..], sep).?;
             pieces[pi] = try vmgc.makeDynString(ctx, s[pos .. pos + idx]);
             pos += idx + sep.len;
             pi += 1;
             arr_obj.* = .{ .array_managed = pieces[0..pi] };
         }
+        const s = try vms.asStringValue(s_val);
         pieces[pi] = try vmgc.makeDynString(ctx, s[pos..]);
     }
     arr_obj.* = .{ .array_managed = pieces[0..count] };
@@ -413,8 +481,7 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             try ctx.vs.vmPush(nativeStrEqualFold(s, t));
         },
         .str_fields => {
-            const s = try vms.asStringValue(ctx.vs.vmTop(0));
-            const out = try nativeStrFields(ctx, s);
+            const out = try nativeStrFields(ctx, ctx.vs.vmTop(0));
             ctx.vs.vmPopArgs(argc);
             try ctx.vs.vmPush(out);
         },
@@ -427,9 +494,8 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
         },
         .str_join => {
             const arr_val = ctx.vs.vmTop(1);
-            const sep = try vms.asStringValue(ctx.vs.vmTop(0));
             if (arr_val != .object) return error.TypeError;
-            const out = try nativeStrJoin(ctx, arr_val.object, sep);
+            const out = try nativeStrJoin(ctx, arr_val.object, ctx.vs.vmTop(0));
             ctx.vs.vmPopArgs(argc);
             try ctx.vs.vmPush(out);
         },
@@ -441,54 +507,50 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             try ctx.vs.vmPush(out);
         },
         .str_lower => {
-            const s = try vms.asStringValue(ctx.vs.vmTop(0));
-            const out = try nativeStrLower(ctx, s);
+            const out = try nativeStrLower(ctx, ctx.vs.vmTop(0));
             ctx.vs.vmPopArgs(argc);
             try ctx.vs.vmPush(out);
         },
         .str_pad_left => {
-            const s = try vms.asStringValue(ctx.vs.vmTop(2));
+            const s_val = ctx.vs.vmTop(2);
             const n_v = ctx.vs.vmTop(1);
-            const pad = try vms.asStringValue(ctx.vs.vmTop(0));
-            const out = try nativeStrPadLeft(ctx, s, n_v, pad);
+            const pad_val = ctx.vs.vmTop(0);
+            const out = try nativeStrPadLeft(ctx, s_val, n_v, pad_val);
             ctx.vs.vmPopArgs(argc);
             try ctx.vs.vmPush(out);
         },
         .str_pad_right => {
-            const s = try vms.asStringValue(ctx.vs.vmTop(2));
+            const s_val = ctx.vs.vmTop(2);
             const n_v = ctx.vs.vmTop(1);
-            const pad = try vms.asStringValue(ctx.vs.vmTop(0));
-            const out = try nativeStrPadRight(ctx, s, n_v, pad);
+            const pad_val = ctx.vs.vmTop(0);
+            const out = try nativeStrPadRight(ctx, s_val, n_v, pad_val);
             ctx.vs.vmPopArgs(argc);
             try ctx.vs.vmPush(out);
         },
         .str_repeat => {
-            const s = try vms.asStringValue(ctx.vs.vmTop(1));
-            const out = try nativeStrRepeat(ctx, s, ctx.vs.vmTop(0));
+            const out = try nativeStrRepeat(ctx, ctx.vs.vmTop(1), ctx.vs.vmTop(0));
             ctx.vs.vmPopArgs(argc);
             try ctx.vs.vmPush(out);
         },
         .str_replace => {
-            const s = try vms.asStringValue(ctx.vs.vmTop(2));
-            const old = try vms.asStringValue(ctx.vs.vmTop(1));
-            const new = try vms.asStringValue(ctx.vs.vmTop(0));
-            const out = try nativeStrReplace(ctx, s, old, new);
+            const s_val = ctx.vs.vmTop(2);
+            const old_val = ctx.vs.vmTop(1);
+            const new_val = ctx.vs.vmTop(0);
+            const out = try nativeStrReplace(ctx, s_val, old_val, new_val);
             ctx.vs.vmPopArgs(argc);
             try ctx.vs.vmPush(out);
         },
         .str_split => {
             const src_val = ctx.vs.vmTop(1);
-            const s = try vms.asStringValue(src_val);
-            const sep = try vms.asStringValue(ctx.vs.vmTop(0));
-            const out = try nativeStrSplit(ctx, s, sep, src_val == .object);
+            const sep_val = ctx.vs.vmTop(0);
+            const out = try nativeStrSplit(ctx, src_val, sep_val, src_val == .object);
             ctx.vs.vmPopArgs(argc);
             try ctx.vs.vmPush(out);
         },
         .str_split_once => {
             const src_val = ctx.vs.vmTop(1);
-            const s = try vms.asStringValue(src_val);
-            const sep = try vms.asStringValue(ctx.vs.vmTop(0));
-            const out = try nativeStrSplitOnce(ctx, s, sep, src_val == .object);
+            const sep_val = ctx.vs.vmTop(0);
+            const out = try nativeStrSplitOnce(ctx, src_val, sep_val, src_val == .object);
             ctx.vs.vmPopArgs(argc);
             try ctx.vs.vmPush(out);
         },
@@ -505,8 +567,7 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             try ctx.vs.vmPush(out);
         },
         .str_upper => {
-            const s = try vms.asStringValue(ctx.vs.vmTop(0));
-            const out = try nativeStrUpper(ctx, s);
+            const out = try nativeStrUpper(ctx, ctx.vs.vmTop(0));
             ctx.vs.vmPopArgs(argc);
             try ctx.vs.vmPush(out);
         },
@@ -539,10 +600,10 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             try ctx.vs.vmPush(out);
         },
         .str_split_n => {
-            const s = try vms.asStringValue(ctx.vs.vmTop(2));
-            const sep = try vms.asStringValue(ctx.vs.vmTop(1));
+            const s_val = ctx.vs.vmTop(2);
+            const sep_val = ctx.vs.vmTop(1);
             const n_v = ctx.vs.vmTop(0);
-            const out = try nativeStrSplitN(ctx, s, sep, n_v);
+            const out = try nativeStrSplitN(ctx, s_val, sep_val, n_v);
             ctx.vs.vmPopArgs(argc);
             try ctx.vs.vmPush(out);
         },

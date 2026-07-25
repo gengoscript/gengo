@@ -390,9 +390,22 @@ pub fn allocTempRootedManagedMap(ctx: VMContext, len: usize) !TempRootedManagedM
 pub fn makeDynString(ctx: VMContext, s: []const u8) !Value {
     const obj = try allocTempRooted(ctx, .{ .dyn_string = &[_]u8{} });
     defer ctx.vs.popTempRoot();
-    const buf = try vmAllocManagedBytes(ctx, s.len);
-    @memcpy(buf[0..s.len], s);
-    obj.* = .{ .dyn_string = buf[0..s.len] };
+    if (s.len == 0) return .{ .object = obj };
+    // s is very often a sub-range or transform of a managed object's own
+    // bytes (a trim, a case conversion, a split fragment...), computed by
+    // the caller just before this call. The allocation below can trigger
+    // a GC + compaction that relocates that source out from under s — a
+    // caller re-deriving from the object afterward is safe (see
+    // makeDynStringFromObj for the identity-copy case), but nothing
+    // forces every caller to do that, and several throughout the codebase
+    // don't. Copying s into scratch page_allocator memory first — never
+    // touched by compaction — makes this safe unconditionally, for any
+    // caller, without relying on that discipline.
+    const scratch = try std.heap.page_allocator.dupe(u8, s);
+    defer std.heap.page_allocator.free(scratch);
+    const buf = try vmAllocManagedBytes(ctx, scratch.len);
+    @memcpy(buf[0..scratch.len], scratch);
+    obj.* = .{ .dyn_string = buf[0..scratch.len] };
     return .{ .object = obj };
 }
 
