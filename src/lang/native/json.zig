@@ -72,8 +72,7 @@ fn jsonValueToTyped(ctx: VMContext, jv: std.json.Value) !Value {
             const items_arr = try vmgc.allocTempRootedManagedValueArray(ctx, n);
             defer ctx.vs.popTempRoot();
             for (0..n) |i| {
-                items_arr.values[i] = try jsonValueToTyped(ctx, arr.items[i]);
-                items_arr.publish(i + 1);
+                items_arr.set(i, try jsonValueToTyped(ctx, arr.items[i]));
             }
             return makeJV(ctx, .jarray, .{ .object = items_arr.obj });
         },
@@ -86,16 +85,18 @@ fn jsonValueToTyped(ctx: VMContext, jv: std.json.Value) !Value {
             for (0..n) |i| {
                 const k = try vmgc.makeDynString(ctx, keys[i]);
                 try ctx.vs.pushTempRoot(k);
-                map_obj.entries[i].key = k;
-                map_obj.entries[i].value = try jsonValueToTyped(ctx, vals[i]);
+                const v = try jsonValueToTyped(ctx, vals[i]);
                 ctx.vs.popTempRoot();
-                map_obj.publish(i + 1);
+                map_obj.set(i, .{ .key = k, .value = v });
             }
             if (n > 0) {
                 const bcount = vmmap.mapBucketsForCount(n);
                 const buckets = try vmgc.vmAllocManagedSlice(ctx, i32, bcount);
-                vmmap.mapBuildHashedBuckets(map_obj.entries[0..n], buckets);
-                map_obj.obj.* = .{ .map_hashed = .{ .entries = map_obj.entries[0..n], .len = n, .buckets = buckets } };
+                // Re-derive: the allocation above can compact and relocate
+                // map_obj's own backing.
+                const entries = map_obj.obj.map;
+                vmmap.mapBuildHashedBuckets(entries, buckets);
+                map_obj.obj.* = .{ .map_hashed = .{ .entries = entries, .len = n, .buckets = buckets } };
             }
             return makeJV(ctx, .jobject, .{ .object = map_obj.obj });
         },
@@ -130,8 +131,7 @@ fn jsonValueToGengo(ctx: VMContext, jv: std.json.Value) !Value {
             const arr_obj = try vmgc.allocTempRootedManagedValueArray(ctx, n);
             defer ctx.vs.popTempRoot();
             for (0..n) |i| {
-                arr_obj.values[i] = try jsonValueToGengo(ctx, arr.items[i]);
-                arr_obj.publish(i + 1);
+                arr_obj.set(i, try jsonValueToGengo(ctx, arr.items[i]));
             }
             return .{ .object = arr_obj.obj };
         },
@@ -149,15 +149,17 @@ fn jsonValueToGengo(ctx: VMContext, jv: std.json.Value) !Value {
             for (0..n) |i| {
                 const k = try vmgc.makeDynString(ctx, keys[i]);
                 try ctx.vs.pushTempRoot(k);
-                map_obj.entries[i].key = k;
-                map_obj.entries[i].value = try jsonValueToGengo(ctx, vals[i]);
+                const v = try jsonValueToGengo(ctx, vals[i]);
                 ctx.vs.popTempRoot();
-                map_obj.publish(i + 1);
+                map_obj.set(i, .{ .key = k, .value = v });
             }
             const bcount = vmmap.mapBucketsForCount(n);
             const buckets = try vmgc.vmAllocManagedSlice(ctx, i32, bcount);
-            vmmap.mapBuildHashedBuckets(map_obj.entries[0..n], buckets);
-            map_obj.obj.* = .{ .map_hashed = .{ .entries = map_obj.entries[0..n], .len = n, .buckets = buckets } };
+            // Re-derive: the allocation above can compact and relocate
+            // map_obj's own backing.
+            const entries = map_obj.obj.map;
+            vmmap.mapBuildHashedBuckets(entries, buckets);
+            map_obj.obj.* = .{ .map_hashed = .{ .entries = entries, .len = n, .buckets = buckets } };
             return .{ .object = map_obj.obj };
         },
     };

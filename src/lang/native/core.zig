@@ -64,12 +64,15 @@ pub fn nativeHas(m_obj: *Object, key: Value) !Value {
 
 fn nativeMapExtract(ctx: VMContext, m_obj: *Object, comptime field: std.meta.FieldEnum(MapEntry)) !Value {
     if (!vms.isMapObject(m_obj)) return error.TypeError;
-    const items = try vms.asMapSlice(m_obj);
+    const items_len = (try vms.asMapSlice(m_obj)).len;
     const obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
     defer ctx.vs.popTempRoot();
-    const out = try vmgc.vmAllocManagedSlice(ctx, Value, items.len);
+    const out = try vmgc.vmAllocManagedSlice(ctx, Value, items_len);
+    // Re-derive after the allocation above, which can compact and
+    // relocate m_obj's backing.
+    const items = try vms.asMapSlice(m_obj);
     for (items, 0..) |entry, i| out[i] = @field(entry, @tagName(field));
-    obj.* = .{ .array_managed = out[0..items.len] };
+    obj.* = .{ .array_managed = out[0..items_len] };
     return .{ .object = obj };
 }
 
@@ -92,16 +95,19 @@ pub fn nativeContains(arr_obj: *Object, needle: Value) !Value {
 
 pub fn nativeRemove(ctx: VMContext, arr_obj: *Object, idx_val: Value) !Value {
     if (!vms.isArrayObject(arr_obj)) return error.TypeError;
-    const items = try vms.asArraySlice(arr_obj);
+    const items_len = (try vms.asArraySlice(arr_obj)).len;
     const idx = try vms.vmIndexFromVal(idx_val);
-    if (idx >= items.len) return error.IndexOutOfBounds;
+    if (idx >= items_len) return error.IndexOutOfBounds;
     const obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
     defer ctx.vs.popTempRoot();
-    if (items.len > 1) {
-        const out = try vmgc.vmAllocManagedSlice(ctx, Value, items.len - 1);
+    if (items_len > 1) {
+        const out = try vmgc.vmAllocManagedSlice(ctx, Value, items_len - 1);
+        // Re-derive after the allocation above, which can compact and
+        // relocate arr_obj's backing.
+        const items = try vms.asArraySlice(arr_obj);
         @memcpy(out[0..idx], items[0..idx]);
-        @memcpy(out[idx .. items.len - 1], items[idx + 1 .. items.len]);
-        obj.* = .{ .array_managed = out[0 .. items.len - 1] };
+        @memcpy(out[idx .. items_len - 1], items[idx + 1 .. items_len]);
+        obj.* = .{ .array_managed = out[0 .. items_len - 1] };
     }
     return .{ .object = obj };
 }
@@ -621,25 +627,32 @@ fn cloneObject(ctx: VMContext, src: *Object, visits: []CloneVisit, visit_len: *u
             const out_obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
             defer ctx.vs.popTempRoot();
             try cloneRemember(src, out_obj, visits, visit_len);
-            const items = try vms.asArraySlice(src);
-            const out = try vmgc.vmAllocManagedSlice(ctx, Value, items.len);
+            const items_len = (try vms.asArraySlice(src)).len;
+            const out = try vmgc.vmAllocManagedSlice(ctx, Value, items_len);
             for (out) |*slot| slot.* = .null;
-            out_obj.* = .{ .array_managed = out[0..items.len] };
-            for (items, 0..) |item, i| out[i] = try cloneValue(ctx, item, visits, visit_len);
+            out_obj.* = .{ .array_managed = out[0..items_len] };
+            // Re-derive src's slice fresh each iteration: cloneValue
+            // recurses and can allocate, so a slice captured once before
+            // (or even at the top of) this loop can go stale partway
+            // through it.
+            for (0..items_len) |i| {
+                const item = (try vms.asArraySlice(src))[i];
+                out[i] = try cloneValue(ctx, item, visits, visit_len);
+            }
             return .{ .object = out_obj };
         },
         .map, .map_managed, .map_hashed => {
-            const entries = try vms.asMapSlice(src);
-            const out_map = try vmgc.allocTempRootedManagedMap(ctx, entries.len);
+            const entries_len = (try vms.asMapSlice(src)).len;
+            const out_map = try vmgc.allocTempRootedManagedMap(ctx, entries_len);
             defer ctx.vs.popTempRoot();
             try cloneRemember(src, out_map.obj, visits, visit_len);
-            for (entries, 0..) |entry, i| {
+            for (0..entries_len) |i| {
+                const entry = (try vms.asMapSlice(src))[i];
                 const k = try cloneValue(ctx, entry.key, visits, visit_len);
                 try ctx.vs.pushTempRoot(k);
-                out_map.entries[i].key = k;
-                out_map.entries[i].value = try cloneValue(ctx, entry.value, visits, visit_len);
+                const v = try cloneValue(ctx, entry.value, visits, visit_len);
                 ctx.vs.popTempRoot();
-                out_map.publish(i + 1);
+                out_map.set(i, .{ .key = k, .value = v });
             }
             return .{ .object = out_map.obj };
         },
@@ -764,10 +777,15 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
         .core_error => {
             if (argc != nf.arity) return error.ArityMismatch;
             const msg = try vms.asStringValue(ctx.vs.vmTop(0));
-            const copy = try vmgc.vmAllocManagedBytes(ctx, msg.len);
-            @memcpy(copy[0..msg.len], msg);
+            // internStrCopy (heap.bump(), no GC/compaction involved) rather
+            // than vmAllocManagedBytes + internStr: an interned reference
+            // is held indefinitely, but chunk.internStr only stores a raw
+            // reference — it isn't a GC root — so backing it with ordinary
+            // managed memory left it reclaimable by sweep/compaction
+            // despite still being referenced.
+            const interned = try ctx.cs.internStrCopy(msg);
             ctx.vs.vmPopArgs(argc);
-            try ctx.vs.vmPush(.{ .error_value = try ctx.cs.internStr(copy[0..msg.len]) });
+            try ctx.vs.vmPush(.{ .error_value = interned });
         },
         .core_gc => {
             if (argc != nf.arity) return error.ArityMismatch;

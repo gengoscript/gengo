@@ -73,23 +73,28 @@ fn pushOkPair(ctx: VMContext, resp: Value) !void {
     defer ctx.vs.popTempRoot();
     const arr = try vmgc.allocTempRootedManagedValueArray(ctx, 2);
     defer ctx.vs.popTempRoot();
-    arr.values[0] = resp;
-    arr.values[1] = .null;
-    arr.publish(2);
+    arr.set(0, resp);
+    arr.set(1, .null);
     try ctx.vs.vmPush(.{ .object = arr.obj });
 }
 
 fn pushErrPair(ctx: VMContext, comptime fmt: []const u8, args: anytype) !void {
     var buf: [512]u8 = undefined;
     const msg = std.fmt.bufPrint(&buf, fmt, args) catch buf[0..];
-    const copy = try vmgc.vmAllocManagedBytes(ctx, msg.len);
-    @memcpy(copy[0..msg.len], msg);
+    // internStrCopy (not vmAllocManagedBytes + internStr): an interned
+    // string reference is held indefinitely (this error_value can be kept
+    // by the script long after this call returns), but chunk.internStr
+    // only stores a reference — it never marks what it points to as a GC
+    // root. Backing it with ordinary managed memory left it reclaimable by
+    // sweep/compaction despite still being referenced; heap.bump() (what
+    // internStrCopy uses) is the allocator actually meant for data that
+    // must outlive any single call.
+    const interned = try ctx.cs.internStrCopy(msg);
 
     const arr = try vmgc.allocTempRootedManagedValueArray(ctx, 2);
     defer ctx.vs.popTempRoot();
-    arr.values[0] = .null;
-    arr.values[1] = .{ .error_value = try ctx.cs.internStr(copy[0..msg.len]) };
-    arr.publish(2);
+    arr.set(0, .null);
+    arr.set(1, .{ .error_value = interned });
     try ctx.vs.vmPush(.{ .object = arr.obj });
 }
 

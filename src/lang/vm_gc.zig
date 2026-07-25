@@ -335,36 +335,56 @@ pub fn allocTempRooted(ctx: VMContext, comptime safeInit: Object) !*Object {
     return obj;
 }
 
+// Both TempRootedManaged* helpers publish their full backing slice to the
+// owning (already temp-rooted) object *immediately*, null-filled, rather
+// than incrementally as the caller fills each element in. A freshly
+// allocated managed block that isn't yet reachable from any live object is
+// invisible to compactManagedHeap's relocation bookkeeping — a nested
+// allocation (e.g. inside a map/zip/chunk callback, which runs arbitrary
+// Gengo code) can trigger a compaction that packs other live data right on
+// top of it. Publishing at full length up front means the block is
+// protected from the first write onward. `.set()` then re-derives the
+// current backing slice from the object on every call instead of trusting
+// a slice captured once — compaction keeps the object's own field
+// correctly updated when it relocates the block, but a separately-held
+// copy of that slice would not follow along.
 pub const TempRootedManagedValueArray = struct {
     obj: *Object,
-    values: []Value,
 
-    pub fn publish(self: TempRootedManagedValueArray, len: usize) void {
-        self.obj.* = .{ .array_managed = self.values[0..len] };
+    pub fn set(self: TempRootedManagedValueArray, i: usize, v: Value) void {
+        self.obj.array_managed[i] = v;
+    }
+
+    // Bulk-copy variant of set(): src must already be a *current* slice
+    // (re-derived after any allocation that could have moved its source),
+    // the same requirement as any other read from managed memory.
+    pub fn setAll(self: TempRootedManagedValueArray, src: []const Value) void {
+        @memcpy(self.obj.array_managed[0..src.len], src);
     }
 };
 
 pub fn allocTempRootedManagedValueArray(ctx: VMContext, len: usize) !TempRootedManagedValueArray {
     const obj = try allocTempRooted(ctx, .{ .array_managed = &[_]Value{} });
     const values = try vmAllocManagedSlice(ctx, Value, len);
-    obj.* = .{ .array_managed = values[0..0] };
-    return .{ .obj = obj, .values = values };
+    @memset(values, .null);
+    obj.* = .{ .array_managed = values };
+    return .{ .obj = obj };
 }
 
 pub const TempRootedManagedMap = struct {
     obj: *Object,
-    entries: []MapEntry,
 
-    pub fn publish(self: TempRootedManagedMap, len: usize) void {
-        self.obj.* = .{ .map = self.entries[0..len] };
+    pub fn set(self: TempRootedManagedMap, i: usize, e: MapEntry) void {
+        self.obj.map[i] = e;
     }
 };
 
 pub fn allocTempRootedManagedMap(ctx: VMContext, len: usize) !TempRootedManagedMap {
     const obj = try allocTempRooted(ctx, .{ .map = &[_]MapEntry{} });
     const entries = try vmAllocManagedSlice(ctx, MapEntry, len);
-    obj.* = .{ .map = entries[0..0] };
-    return .{ .obj = obj, .entries = entries };
+    @memset(entries, .{ .key = .null, .value = .null });
+    obj.* = .{ .map = entries };
+    return .{ .obj = obj };
 }
 
 pub fn makeDynString(ctx: VMContext, s: []const u8) !Value {
