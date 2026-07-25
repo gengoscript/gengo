@@ -229,6 +229,12 @@ pub const NativeFnId = enum(u8) {
     bytes_f64le_at = 232,
     cap_env_get = 233,
     cap_env_list = 234,
+
+    cap_net_listen = 235,
+    cap_net_listener_accept = 236,
+    cap_net_listener_close = 237,
+    cap_net_listener_local_addr = 238,
+    cap_net_listener_set_accept_deadline = 239,
 };
 
 pub const MaxNativeArgs = 255;

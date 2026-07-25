@@ -610,6 +610,45 @@ pub fn installCapabilityModules(ctx: vms.VMContext, gs: *globals.State, cap_modu
                         try gs.def(kbuf, n);
                     }
                 }
+
+                if (!gs.has("@cap_type:net.Listener")) {
+                    const listener_qual_name = "@cap_type:net.Listener";
+
+                    const listener_any_alts = ctx.hs.bump(FieldTypeAlt, 1) orelse return error.OutOfMemory;
+                    listener_any_alts[0] = .{ .typ = .any };
+                    const listener_any_spec: FieldTypeSpec = .{ .alts = listener_any_alts[0..1] };
+
+                    const listener_field_specs = (ctx.hs.bump(StructFieldSpec, 1) orelse return error.OutOfMemory)[0..1];
+                    listener_field_specs[0] = .{ .name = "_handle", .typ = listener_any_spec, .is_const = true };
+
+                    const listener_typ_obj = try vmgc.vmAllocObject(ctx);
+                    try ctx.vs.pushTempRoot(.{ .object = listener_typ_obj });
+                    defer ctx.vs.popTempRoot();
+                    listener_typ_obj.* = .{ .struct_type = StructTypeObj{
+                        .name = "Listener",
+                        .qualified_name = listener_qual_name,
+                        .fields = listener_field_specs[0..1],
+                    } };
+                    try gs.def(listener_qual_name, .{ .object = listener_typ_obj });
+
+                    const listener_methods = [_]struct { name: []const u8, id: NativeFnId, arity: u8 }{
+                        .{ .name = "accept", .id = .cap_net_listener_accept, .arity = 1 },
+                        .{ .name = "close", .id = .cap_net_listener_close, .arity = 1 },
+                        .{ .name = "local_addr", .id = .cap_net_listener_local_addr, .arity = 1 },
+                        .{ .name = "set_accept_deadline", .id = .cap_net_listener_set_accept_deadline, .arity = 2 },
+                    };
+                    for (listener_methods) |m| {
+                        const needed = listener_qual_name.len + 1 + m.name.len;
+                        const kbuf = (ctx.hs.bump(u8, needed) orelse return error.OutOfMemory)[0..needed];
+                        @memcpy(kbuf[0..listener_qual_name.len], listener_qual_name);
+                        kbuf[listener_qual_name.len] = '.';
+                        @memcpy(kbuf[listener_qual_name.len + 1 .. needed], m.name);
+                        if (!gs.has(kbuf)) {
+                            const n = try makeNative(ctx, m.id, m.arity);
+                            try gs.def(kbuf, n);
+                        }
+                    }
+                }
             }
         }
     }
@@ -652,7 +691,7 @@ pub fn callNative(ctx: vms.VMContext, nf: NativeFuncObj, argc: u8) !void {
         inline else => |id| {
             if (comptime build_options.cap_net) {
                 switch (id) {
-                    .cap_net_dial, .cap_net_read, .cap_net_write, .cap_net_close, .cap_net_local_addr, .cap_net_remote_addr, .cap_net_set_deadline, .cap_net_set_read_deadline, .cap_net_set_write_deadline => return cap_net_mod.dispatch(ctx, nf, argc),
+                    .cap_net_dial, .cap_net_read, .cap_net_write, .cap_net_close, .cap_net_local_addr, .cap_net_remote_addr, .cap_net_set_deadline, .cap_net_set_read_deadline, .cap_net_set_write_deadline, .cap_net_listen, .cap_net_listener_accept, .cap_net_listener_close, .cap_net_listener_local_addr, .cap_net_listener_set_accept_deadline => return cap_net_mod.dispatch(ctx, nf, argc),
                     else => {},
                 }
             }

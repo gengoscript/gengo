@@ -92,6 +92,34 @@ allow-all policy. In particular, the current native network dial policy allows
 all destinations when it has no rules. The host must provide the restriction;
 the VM cannot infer a safe destination from a URL or address string.
 
+`net`'s `listen` scope (inbound sockets, via `net.listen`/`Listener.accept`)
+is a materially bigger authority than `dial` and is gated deliberately
+differently on two axes:
+
+- **Enablement is scoped, not implicit.** `--cap net` alone (bare, no `=`)
+  has always meant dial-only and continues to on upgrade — it never
+  silently starts granting listen. A host must explicitly opt in with
+  `--cap net=listen` or `--cap net=dial,listen`.
+- **Policy defaults to deny, not allow.** Unlike dial's default-allow, the
+  listen (bind) policy refuses everything until the host adds at least one
+  explicit allow rule via `engine_net_listen_policy_add`. This is a
+  deliberately different default from dial's: a bad dial destination is one
+  outbound request the script chose; an open listening port that mishandles
+  input is remotely reachable, by anyone, indefinitely, regardless of what
+  the script does. The dial and listen policy rule lists are entirely
+  separate — configuring one has no effect on the other.
+
+A host allowing `listen` should also consider that listening sockets are
+long-lived by nature: two independent `Runtime`s sharing one embedding
+process currently share one connection/listener table and one set of policy
+rules for each of dial and listen (the same latent cross-runtime state
+sharing dial already has — see the multi-runtime isolation tracking issue).
+For a single-`Runtime`-per-process embedding (the CLI, and most host
+integrations) this is not a concern; a host running multiple independently
+untrusted scripts with `listen` enabled in one process should treat that
+sharing as a real isolation gap until it's resolved, not assume it's already
+handled.
+
 A restrictive policy should, at minimum:
 
 - start deny-by-default and allow only required schemes, hostnames/IP ranges,

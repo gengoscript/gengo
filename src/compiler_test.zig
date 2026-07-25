@@ -16,6 +16,7 @@ const fusion_pass = @import("lang/fusion_pass.zig");
 const chunk_decoder = @import("lang/chunk_decoder.zig");
 const gbc_writer = @import("lang/gbc_writer.zig");
 const gbc_reader = @import("lang/gbc_reader.zig");
+const net_state = @import("lang/native/net_state.zig");
 
 fn setup() !Runtime {
     var rt: Runtime = .{};
@@ -4392,4 +4393,146 @@ test "gbc: reader rejects a corrupted body checksum" {
     globals.reset();
     heap.reset();
     try std.testing.expectError(error.BodyChecksumMismatch, gbc_reader.read(corrupted, chunk.g_state, heap.g_state, rt3.vm_state.allocator));
+}
+
+test "cap:net listen: bare --cap net (dial only) refuses listen at call time" {
+    // Import must still succeed (bare "net" satisfies the "net" import gate),
+    // but the listen scope wasn't granted, so the call itself must return a
+    // catchable error rather than a crash or a compile-time failure.
+    var rt = try setupApiRuntime(.{
+        .allow_io = false,
+        .capabilities = &.{"net"},
+        .allocator = std.testing.allocator,
+    });
+    defer rt.deinit();
+
+    switch (rt.run(
+        \\net := import("cap:net")
+        \\func testListen() string {
+        \\    l, err := net.listen("tcp", "127.0.0.1:0")
+        \\    if err != null { return "err" }
+        \\    return "ok"
+        \\}
+    )) {
+        .ok => {},
+        else => return error.CompileFailed,
+    }
+    switch (rt.call("testListen", &.{})) {
+        .ok => |v| try std.testing.expectEqualStrings("err", try vms.asStringValue(v)),
+        .runtime_error => return error.UnexpectedRuntimeError,
+    }
+}
+
+test "cap:net listen: default-deny refuses listen with no policy rules" {
+    net_state.clearListenPolicyRules();
+    defer net_state.clearListenPolicyRules();
+
+    var rt = try setupApiRuntime(.{
+        .allow_io = false,
+        .capabilities = &.{"net.listen"},
+        .allocator = std.testing.allocator,
+    });
+    defer rt.deinit();
+
+    switch (rt.run(
+        \\net := import("cap:net")
+        \\func testListen() string {
+        \\    l, err := net.listen("tcp", "127.0.0.1:0")
+        \\    if err != null { return "err" }
+        \\    return "ok"
+        \\}
+    )) {
+        .ok => {},
+        else => return error.CompileFailed,
+    }
+    switch (rt.call("testListen", &.{})) {
+        .ok => |v| try std.testing.expectEqualStrings("err", try vms.asStringValue(v)),
+        .runtime_error => return error.UnexpectedRuntimeError,
+    }
+}
+
+fn netListenClientWorker(port: u16, connected: *std.atomic.Value(bool), echoed: *std.atomic.Value(bool)) void {
+    const sock = std.posix.system.socket(std.posix.AF.INET, std.posix.SOCK.STREAM, 0);
+    if (std.posix.errno(sock) != .SUCCESS) return;
+    const fd: std.posix.socket_t = @intCast(sock);
+    defer _ = std.posix.system.close(fd);
+
+    var addr_storage: std.posix.sockaddr.storage = std.mem.zeroes(std.posix.sockaddr.storage);
+    const sa: *std.posix.sockaddr.in = @ptrCast(&addr_storage);
+    sa.family = std.posix.AF.INET;
+    sa.port = std.mem.nativeToBig(u16, port);
+    sa.addr = @bitCast([4]u8{ 127, 0, 0, 1 });
+
+    // The listener may not have bound yet when this thread starts; busy-retry
+    // rather than assuming ordering between the two threads (connect() on a
+    // refused port returns near-instantly, so this spins for at most a few
+    // milliseconds in practice).
+    var attempts: usize = 0;
+    while (attempts < 20000) : (attempts += 1) {
+        const rc = std.posix.system.connect(fd, @ptrCast(&addr_storage), @sizeOf(std.posix.sockaddr.in));
+        if (std.posix.errno(rc) == .SUCCESS) {
+            connected.store(true, .seq_cst);
+            break;
+        }
+    }
+    if (!connected.load(.seq_cst)) return;
+
+    const wrc = std.posix.system.write(fd, "ping", 4);
+    if (std.posix.errno(wrc) != .SUCCESS) return;
+
+    var buf: [64]u8 = undefined;
+    const n = std.posix.read(fd, &buf) catch return;
+    echoed.store(std.mem.eql(u8, buf[0..n], "pong:ping"), .seq_cst);
+}
+
+test "cap:net listen/accept: real POSIX bind+accept+read+write roundtrip" {
+    net_state.clearListenPolicyRules();
+    _ = net_state.addListenPolicyRule(.allow, "*", 0);
+    defer net_state.clearListenPolicyRules();
+
+    var rt = try setupApiRuntime(.{
+        .allow_io = false,
+        .capabilities = &.{ "net", "net.listen" },
+        .allocator = std.testing.allocator,
+    });
+    defer rt.deinit();
+
+    // Fixed high port rather than discovering an OS-assigned ephemeral one:
+    // the script's listen()+accept() run as one synchronous host call, so
+    // there's no point at which to observe local_addr() before the client
+    // thread needs to know where to connect.
+    const port: u16 = 18453;
+    var connected = std.atomic.Value(bool).init(false);
+    var echoed = std.atomic.Value(bool).init(false);
+    const client = try std.Thread.spawn(.{}, netListenClientWorker, .{ port, &connected, &echoed });
+
+    var src_buf: [512]u8 = undefined;
+    const src = try std.fmt.bufPrint(&src_buf,
+        \\net := import("cap:net")
+        \\func serve() string {{
+        \\    l, err := net.listen("tcp", "127.0.0.1:{d}")
+        \\    if err != null {{ return "listen error" }}
+        \\    l.set_accept_deadline(3000)
+        \\    conn, aerr := l.accept()
+        \\    if aerr != null {{ return "accept error" }}
+        \\    data := conn.read(64)
+        \\    conn.write("pong:" + data)
+        \\    conn.close()
+        \\    l.close()
+        \\    return "ok"
+        \\}}
+    , .{port});
+
+    switch (rt.run(src)) {
+        .ok => {},
+        else => return error.CompileFailed,
+    }
+    switch (rt.call("serve", &.{})) {
+        .ok => |v| try std.testing.expectEqualStrings("ok", try vms.asStringValue(v)),
+        .runtime_error => return error.UnexpectedRuntimeError,
+    }
+
+    client.join();
+    try std.testing.expect(connected.load(.seq_cst));
+    try std.testing.expect(echoed.load(.seq_cst));
 }

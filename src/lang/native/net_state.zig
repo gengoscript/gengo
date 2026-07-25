@@ -3,6 +3,9 @@ const builtin = @import("builtin");
 
 const MaxConns = 16;
 const ReadBufSize = 4096;
+// Kernel-level pending-connection queue depth for listen(); fixed, not
+// script-controlled (§9 of the design note).
+const ListenBacklog = 128;
 
 // ---------------------------------------------------------------------------
 // Net dial policy — stacked allow/deny rules, LIFO evaluation
@@ -50,37 +53,54 @@ pub fn clearPolicy() void {
     g_policy = .{};
 }
 
+// Listen policy — same rule shape and matcher as dial's, but a separate
+// instance (a host restricting outbound destinations shouldn't also have to
+// reuse those same rules for its own listening ports; the authority is
+// different) and default-DENY rather than default-ALLOW (see checkPolicy).
+var g_listen_policy: PolicyState = .{};
+
+pub fn applyListenPolicy(state: PolicyState) void {
+    g_listen_policy = state;
+}
+
+pub fn currentListenPolicy() PolicyState {
+    return g_listen_policy;
+}
+
+pub fn clearListenPolicy() void {
+    g_listen_policy = .{};
+}
+
 // Returns 0 on success, -1 if the rule list is full, -2 for invalid pattern.
-pub fn addPolicyRule(action: PolicyAction, pattern: []const u8, port: u16) i32 {
-    if (g_policy.count >= MaxPolicyRules) return -1;
+fn buildPolicyRule(action: PolicyAction, pattern: []const u8, port: u16) union(enum) { ok: NetPolicyRule, err: i32 } {
     var rule: NetPolicyRule = .{ .action = action, .kind = undefined, .port = port };
 
     if (std.mem.eql(u8, pattern, "*")) {
         rule.kind = .match_all;
     } else if (std.mem.startsWith(u8, pattern, "*.")) {
         const suffix = pattern[1..]; // ".example.com"
-        if (suffix.len > 63) return -2;
+        if (suffix.len > 63) return .{ .err = -2 };
         rule.kind = .wildcard_suffix;
         rule.data_len = @intCast(suffix.len);
         @memcpy(rule.data[0..suffix.len], suffix);
     } else if (std.mem.indexOfScalar(u8, pattern, '/')) |slash| {
         const addr_part = pattern[0..slash];
         const prefix_str = pattern[slash + 1 ..];
-        const prefix_len = std.fmt.parseInt(u8, prefix_str, 10) catch return -2;
+        const prefix_len = std.fmt.parseInt(u8, prefix_str, 10) catch return .{ .err = -2 };
         if (parseIPv4(addr_part)) |ip4| {
-            if (prefix_len > 32) return -2;
+            if (prefix_len > 32) return .{ .err = -2 };
             rule.kind = .ipv4_cidr;
             rule.data[0..4].* = ip4;
             rule.data_len = 4;
             rule.prefix_len = prefix_len;
         } else if (parseIPv6(addr_part)) |ip6| {
-            if (prefix_len > 128) return -2;
+            if (prefix_len > 128) return .{ .err = -2 };
             rule.kind = .ipv6_cidr;
             rule.data[0..16].* = ip6;
             rule.data_len = 16;
             rule.prefix_len = prefix_len;
         } else {
-            return -2;
+            return .{ .err = -2 };
         }
     } else if (parseIPv4(pattern)) |ip4| {
         rule.kind = .ipv4_exact;
@@ -91,32 +111,51 @@ pub fn addPolicyRule(action: PolicyAction, pattern: []const u8, port: u16) i32 {
         rule.data[0..16].* = ip6;
         rule.data_len = 16;
     } else {
-        if (pattern.len > 63) return -2;
+        if (pattern.len > 63) return .{ .err = -2 };
         rule.kind = .hostname_exact;
         rule.data_len = @intCast(pattern.len);
         @memcpy(rule.data[0..pattern.len], pattern);
     }
 
-    g_policy.rules[g_policy.count] = rule;
-    g_policy.count += 1;
+    return .{ .ok = rule };
+}
+
+fn addRuleTo(policy: *PolicyState, action: PolicyAction, pattern: []const u8, port: u16) i32 {
+    if (policy.count >= MaxPolicyRules) return -1;
+    const rule = switch (buildPolicyRule(action, pattern, port)) {
+        .ok => |r| r,
+        .err => |e| return e,
+    };
+    policy.rules[policy.count] = rule;
+    policy.count += 1;
     return 0;
+}
+
+pub fn addPolicyRule(action: PolicyAction, pattern: []const u8, port: u16) i32 {
+    return addRuleTo(&g_policy, action, pattern, port);
 }
 
 pub fn clearPolicyRules() void {
     g_policy.count = 0;
 }
 
-// Returns true if the dial is allowed.
-// No rules → allow (default; same as current behaviour).
-// Rules are evaluated LIFO — most recently added rule wins on first match.
-// If no rule matches, the default is allow.
-pub fn checkDialPolicy(address: []const u8) bool {
-    if (g_policy.count == 0) return true;
+pub fn addListenPolicyRule(action: PolicyAction, pattern: []const u8, port: u16) i32 {
+    return addRuleTo(&g_listen_policy, action, pattern, port);
+}
 
-    const colon = std.mem.lastIndexOfScalar(u8, address, ':') orelse return true;
+pub fn clearListenPolicyRules() void {
+    g_listen_policy.count = 0;
+}
+
+// Rules are evaluated LIFO — most recently added rule wins on first match.
+// If no rule matches (or none are configured), `default_allow` decides.
+fn matchPolicy(policy: *const PolicyState, address: []const u8, default_allow: bool) bool {
+    if (policy.count == 0) return default_allow;
+
+    const colon = std.mem.lastIndexOfScalar(u8, address, ':') orelse return default_allow;
     var host = address[0..colon];
     const port_str = address[colon + 1 ..];
-    const port = std.fmt.parseUnsigned(u16, port_str, 10) catch return true;
+    const port = std.fmt.parseUnsigned(u16, port_str, 10) catch return default_allow;
 
     // Strip IPv6 brackets: "[::1]" → "::1"
     if (host.len >= 2 and host[0] == '[' and host[host.len - 1] == ']') {
@@ -127,10 +166,10 @@ pub fn checkDialPolicy(address: []const u8) bool {
     const host_ip6: ?[16]u8 = if (host_ip4 == null) parseIPv6(host) else null;
 
     // LIFO: walk from last rule down to first
-    var i = g_policy.count;
+    var i = policy.count;
     while (i > 0) {
         i -= 1;
-        const rule = &g_policy.rules[i];
+        const rule = &policy.rules[i];
         if (rule.port != 0 and rule.port != port) continue;
         const matches = switch (rule.kind) {
             .match_all => true,
@@ -144,7 +183,20 @@ pub fn checkDialPolicy(address: []const u8) bool {
         if (matches) return rule.action == .allow;
     }
 
-    return true; // no rule matched → default allow
+    return default_allow;
+}
+
+// Returns true if the dial is allowed. No rules → allow (default; same as
+// current behaviour).
+pub fn checkDialPolicy(address: []const u8) bool {
+    return matchPolicy(&g_policy, address, true);
+}
+
+// Returns true if the bind is allowed. No rules → DENY — listen is a bigger
+// authority than dial (see design note §4), so absence of configuration must
+// not silently permit anything, unlike dial's default-allow.
+pub fn checkListenPolicy(address: []const u8) bool {
+    return matchPolicy(&g_listen_policy, address, false);
 }
 
 fn parseIPv4(s: []const u8) ?[4]u8 {
@@ -200,6 +252,22 @@ var g_next_id: u32 = 1;
 var g_conns: [MaxConns]NetConn = undefined;
 var g_conn_count: usize = 0;
 
+// Listening sockets — independent ceiling from MaxConns (§9 of the design
+// note: a script needing many listening ports is a different shape of
+// program than one needing many connections). Accepted connections still
+// draw from g_conns/MaxConns above, same pool dial uses.
+const MaxListeners = 8;
+
+const NetListener = struct {
+    id: u32,
+    host_handle: i32,
+    socket: if (builtin.os.tag == .wasi) void else std.posix.socket_t,
+};
+
+var g_next_listener_id: u32 = 1;
+var g_listeners: [MaxListeners]NetListener = undefined;
+var g_listener_count: usize = 0;
+
 var g_net_err_buf: [256]u8 = undefined;
 var g_net_err_len: usize = 0;
 
@@ -226,6 +294,15 @@ pub const GengoNetHandlers = extern struct {
     set_deadline: ?*const fn (handle: i32, ms: i64, userdata: ?*anyopaque) callconv(.c) void,
     set_read_deadline: ?*const fn (handle: i32, ms: i64, userdata: ?*anyopaque) callconv(.c) void,
     set_write_deadline: ?*const fn (handle: i32, ms: i64, userdata: ?*anyopaque) callconv(.c) void,
+    // Listener support — optional even when the rest of the struct is set,
+    // since a host may support dialing but not listening (or vice versa).
+    // A null field here just means "listen unsupported by this host."
+    listen: ?*const fn (network: [*]const u8, network_len: usize, address: [*]const u8, address_len: usize, out_listener_handle: *i32, userdata: ?*anyopaque) callconv(.c) i32 = null,
+    // Returns: 1 = got a connection, 0 = would-block/timeout, <0 = error.
+    accept: ?*const fn (listener_handle: i32, out_conn_handle: *i32, userdata: ?*anyopaque) callconv(.c) i32 = null,
+    listener_close: ?*const fn (listener_handle: i32, userdata: ?*anyopaque) callconv(.c) void = null,
+    listener_local_addr: ?*const fn (listener_handle: i32, buf: [*]u8, buf_len: i32, userdata: ?*anyopaque) callconv(.c) void = null,
+    set_accept_deadline: ?*const fn (listener_handle: i32, ms: i64, userdata: ?*anyopaque) callconv(.c) void = null,
 };
 
 pub const HandlerSet = struct {
@@ -262,6 +339,11 @@ pub fn netReset() void {
         }
         g_conn_count = 0;
         g_next_id = 1;
+        for (g_listeners[0..g_listener_count]) |l| {
+            if (h.callbacks.listener_close) |close_fn| close_fn(l.host_handle, h.userdata);
+        }
+        g_listener_count = 0;
+        g_next_listener_id = 1;
         return;
     }
     if (comptime builtin.os.tag == .wasi) return;
@@ -271,6 +353,11 @@ pub fn netReset() void {
     }
     g_conn_count = 0;
     g_next_id = 1;
+    for (g_listeners[0..g_listener_count]) |*l| {
+        io_ctx.vtable.netClose(io_ctx.userdata, (&l.socket)[0..1]);
+    }
+    g_listener_count = 0;
+    g_next_listener_id = 1;
 }
 
 fn ioContext() std.Io {
@@ -469,6 +556,275 @@ pub fn netDial(network: []const u8, address: []const u8) !u32 {
     g_conns[g_conn_count] = .{ .id = id, .host_handle = 0, .socket = fd };
     g_conn_count += 1;
     return id;
+}
+
+pub fn netListen(network: []const u8, address: []const u8) !u32 {
+    g_net_err_len = 0;
+    if (g_net_handlers) |h| {
+        if (g_listener_count >= MaxListeners) {
+            setNetErr("too many listeners (max {d})", .{MaxListeners});
+            return error.NetError;
+        }
+        var out_handle: i32 = undefined;
+        const listen_fn = h.callbacks.listen orelse {
+            setNetErr("listen handler not registered", .{});
+            return error.NetError;
+        };
+        const rc = listen_fn(network.ptr, @intCast(network.len), address.ptr, @intCast(address.len), &out_handle, h.userdata);
+        if (rc < 0) {
+            setNetErr("listen: host handler returned error {d}", .{rc});
+            return error.NetError;
+        }
+        const id = g_next_listener_id;
+        g_next_listener_id += 1;
+        g_listeners[g_listener_count] = .{ .id = id, .host_handle = out_handle, .socket = undefined };
+        g_listener_count += 1;
+        return id;
+    }
+    if (comptime builtin.os.tag == .wasi or builtin.os.tag == .windows) return error.CapabilityNotAvailable;
+    if (g_listener_count >= MaxListeners) {
+        setNetErr("too many listeners (max {d})", .{MaxListeners});
+        return error.NetError;
+    }
+
+    if (!std.mem.eql(u8, network, "tcp") and
+        !std.mem.eql(u8, network, "tcp4") and
+        !std.mem.eql(u8, network, "tcp6"))
+    {
+        setNetErr("listen: unsupported network \"{s}\"", .{network});
+        return error.NetError;
+    }
+
+    const colon = std.mem.lastIndexOfScalar(u8, address, ':') orelse {
+        setNetErr("listen: invalid address \"{s}\" (expected host:port)", .{address});
+        return error.NetError;
+    };
+    var host = address[0..colon];
+    const port_str = address[colon + 1 ..];
+    const port = std.fmt.parseUnsigned(u16, port_str, 10) catch {
+        setNetErr("listen: invalid port \"{s}\" in address \"{s}\"", .{ port_str, address });
+        return error.NetError;
+    };
+    // Strip IPv6 brackets: "[::1]" → "::1"
+    if (host.len >= 2 and host[0] == '[' and host[host.len - 1] == ']') {
+        host = host[1 .. host.len - 1];
+    }
+
+    const want_v6 = std.mem.eql(u8, network, "tcp6");
+    var addr_storage: std.posix.sockaddr.storage = std.mem.zeroes(std.posix.sockaddr.storage);
+    var addr_len: std.posix.socklen_t = undefined;
+    const sock_fam: u32 = blk: {
+        if (host.len == 0) {
+            // Any-interface bind (":8080"): family follows the requested
+            // network kind, since there's no address to infer it from.
+            if (want_v6) {
+                const sa: *std.posix.sockaddr.in6 = @ptrCast(&addr_storage);
+                sa.family = std.posix.AF.INET6;
+                sa.port = std.mem.nativeToBig(u16, port);
+                addr_len = @sizeOf(std.posix.sockaddr.in6);
+                break :blk std.posix.AF.INET6;
+            }
+            const sa: *std.posix.sockaddr.in = @ptrCast(&addr_storage);
+            sa.family = std.posix.AF.INET;
+            sa.port = std.mem.nativeToBig(u16, port);
+            addr_len = @sizeOf(std.posix.sockaddr.in);
+            break :blk std.posix.AF.INET;
+        }
+        if (parseIPv4(host)) |ip4| {
+            if (want_v6) {
+                setNetErr("listen: IPv4 address \"{s}\" not valid for network \"tcp6\"", .{host});
+                return error.NetError;
+            }
+            const sa: *std.posix.sockaddr.in = @ptrCast(&addr_storage);
+            sa.family = std.posix.AF.INET;
+            sa.port = std.mem.nativeToBig(u16, port);
+            sa.addr = @bitCast(ip4);
+            addr_len = @sizeOf(std.posix.sockaddr.in);
+            break :blk std.posix.AF.INET;
+        }
+        if (parseIPv6(host)) |ip6| {
+            if (std.mem.eql(u8, network, "tcp4")) {
+                setNetErr("listen: IPv6 address \"{s}\" not valid for network \"tcp4\"", .{host});
+                return error.NetError;
+            }
+            const sa: *std.posix.sockaddr.in6 = @ptrCast(&addr_storage);
+            sa.family = std.posix.AF.INET6;
+            sa.port = std.mem.nativeToBig(u16, port);
+            sa.addr = ip6;
+            addr_len = @sizeOf(std.posix.sockaddr.in6);
+            break :blk std.posix.AF.INET6;
+        }
+        setNetErr("listen: bind address must be an IP literal or empty (any-interface), not \"{s}\"", .{host});
+        return error.NetError;
+    };
+
+    const sock = std.posix.system.socket(sock_fam, std.posix.SOCK.STREAM, 0);
+    if (std.posix.errno(sock) != .SUCCESS) {
+        setNetErr("listen: socket creation failed", .{});
+        return error.NetError;
+    }
+    const fd: std.posix.socket_t = @intCast(sock);
+    errdefer _ = std.posix.system.close(fd);
+
+    // SO_REUSEADDR: standard for listeners, avoids "address already in use"
+    // on quick restart while a prior connection is still in TIME_WAIT.
+    const reuse: c_int = 1;
+    _ = std.posix.system.setsockopt(fd, std.posix.SOL.SOCKET, std.posix.SO.REUSEADDR, std.mem.asBytes(&reuse).ptr, @sizeOf(c_int));
+
+    const brc = std.posix.system.bind(fd, @ptrCast(&addr_storage), addr_len);
+    if (std.posix.errno(brc) != .SUCCESS) {
+        setNetErr("listen: bind failed on \"{s}\"", .{address});
+        return error.NetError;
+    }
+
+    const lrc = std.posix.system.listen(fd, ListenBacklog);
+    if (std.posix.errno(lrc) != .SUCCESS) {
+        setNetErr("listen: listen() failed", .{});
+        return error.NetError;
+    }
+
+    const id = g_next_listener_id;
+    g_next_listener_id += 1;
+    g_listeners[g_listener_count] = .{ .id = id, .host_handle = 0, .socket = fd };
+    g_listener_count += 1;
+    return id;
+}
+
+fn findListener(id: u32) ?*NetListener {
+    for (g_listeners[0..g_listener_count]) |*l| {
+        if (l.id == id) return l;
+    }
+    return null;
+}
+
+fn removeListener(id: u32) void {
+    for (g_listeners[0..g_listener_count], 0..) |*l, i| {
+        if (l.id == id) {
+            g_listeners[i] = g_listeners[g_listener_count - 1];
+            g_listener_count -= 1;
+            return;
+        }
+    }
+}
+
+// Accept deadline reuses posixSetSockOptTimeval/SO_RCVTIMEO on the
+// *listening* socket (netListenerSetAcceptDeadline below) — the same
+// mechanism dial connections already use, just applied to a different
+// socket, so EAGAIN here maps to DeadlineExceeded exactly like netRead's
+// existing WouldBlock => DeadlineExceeded arm.
+pub fn netListenerAccept(listener_id: u32) !u32 {
+    g_net_err_len = 0;
+    if (g_net_handlers) |h| {
+        const l = findListener(listener_id) orelse {
+            setNetErr("accept: unknown listener handle {d}", .{listener_id});
+            return error.NetError;
+        };
+        var out_conn_handle: i32 = undefined;
+        const accept_fn = h.callbacks.accept orelse {
+            setNetErr("accept handler not registered", .{});
+            return error.NetError;
+        };
+        const rc = accept_fn(l.host_handle, &out_conn_handle, h.userdata);
+        if (rc == 0) return error.DeadlineExceeded;
+        if (rc < 0) {
+            setNetErr("accept: host handler returned error {d}", .{rc});
+            return error.NetError;
+        }
+        if (g_conn_count >= MaxConns) {
+            setNetErr("too many connections (max {d})", .{MaxConns});
+            return error.NetError;
+        }
+        const id = g_next_id;
+        g_next_id += 1;
+        g_conns[g_conn_count] = .{ .id = id, .host_handle = out_conn_handle, .socket = undefined };
+        g_conn_count += 1;
+        return id;
+    }
+    if (comptime builtin.os.tag == .wasi or builtin.os.tag == .windows) return error.CapabilityNotAvailable;
+    const l = findListener(listener_id) orelse {
+        setNetErr("accept: unknown listener handle {d}", .{listener_id});
+        return error.NetError;
+    };
+    if (g_conn_count >= MaxConns) {
+        setNetErr("too many connections (max {d})", .{MaxConns});
+        return error.NetError;
+    }
+
+    while (true) {
+        const rc = std.posix.system.accept(l.socket, null, null);
+        switch (std.posix.errno(rc)) {
+            .SUCCESS => {
+                const fd: std.posix.socket_t = @intCast(rc);
+                const id = g_next_id;
+                g_next_id += 1;
+                g_conns[g_conn_count] = .{ .id = id, .host_handle = 0, .socket = fd };
+                g_conn_count += 1;
+                return id;
+            },
+            .INTR => continue,
+            .AGAIN => return error.DeadlineExceeded,
+            else => |e| {
+                setNetErr("accept: {s}", .{@tagName(e)});
+                return error.NetError;
+            },
+        }
+    }
+}
+
+pub fn netListenerClose(id: u32) !void {
+    if (g_net_handlers) |h| {
+        const l = findListener(id) orelse return error.CapabilityError;
+        if (h.callbacks.listener_close) |close_fn| close_fn(l.host_handle, h.userdata);
+        removeListener(id);
+        return;
+    }
+    if (comptime builtin.os.tag == .wasi or builtin.os.tag == .windows) return error.CapabilityNotAvailable;
+    const l = findListener(id) orelse return error.CapabilityError;
+
+    const io_ctx = ioContext();
+    io_ctx.vtable.netClose(io_ctx.userdata, (&l.socket)[0..1]);
+    removeListener(id);
+}
+
+pub fn netListenerLocalAddr(id: u32) ![]u8 {
+    if (g_net_handlers) |h| {
+        const l = findListener(id) orelse return error.CapabilityError;
+        var buf: [128]u8 = std.mem.zeroes([128]u8);
+        (h.callbacks.listener_local_addr orelse return error.CapabilityError)(l.host_handle, &buf, @intCast(buf.len), h.userdata);
+        const len = std.mem.indexOfScalar(u8, buf[0..], 0) orelse buf.len;
+        return std.heap.page_allocator.dupe(u8, buf[0..len]) catch return error.OutOfMemory;
+    }
+    if (comptime builtin.os.tag == .wasi or builtin.os.tag == .windows) return error.CapabilityNotAvailable;
+    if (comptime builtin.os.tag == .windows) return error.CapabilityError; // TODO: Winsock
+    const l = findListener(id) orelse return error.CapabilityError;
+
+    var addr_storage: std.posix.sockaddr.storage = undefined;
+    var addr_len: std.posix.socklen_t = @sizeOf(std.posix.sockaddr.storage);
+    try posixGetsockname(l.socket, @ptrCast(&addr_storage), &addr_len);
+
+    return switch (addr_storage.family) {
+        std.posix.AF.INET => blk: {
+            const addr: *const std.posix.sockaddr.in = @ptrCast(&addr_storage);
+            break :blk formatIp4Address(std.mem.bigToNative(u16, addr.port), std.mem.asBytes(&addr.addr).*);
+        },
+        std.posix.AF.INET6 => blk: {
+            const addr: *const std.posix.sockaddr.in6 = @ptrCast(&addr_storage);
+            break :blk formatIp6Address(std.mem.bigToNative(u16, addr.port), addr.addr);
+        },
+        else => error.CapabilityError,
+    };
+}
+
+pub fn netListenerSetAcceptDeadline(id: u32, ms: i64) !void {
+    if (g_net_handlers) |h| {
+        const l = findListener(id) orelse return error.CapabilityError;
+        if (h.callbacks.set_accept_deadline) |fn_ptr| fn_ptr(l.host_handle, ms, h.userdata);
+        return;
+    }
+    if (comptime builtin.os.tag == .wasi or builtin.os.tag == .windows) return error.CapabilityNotAvailable;
+    if (comptime builtin.os.tag == .windows) return error.CapabilityError; // TODO: Winsock SO_RCVTIMEO DWORD
+    const l = findListener(id) orelse return error.CapabilityError;
+    try posixSetSockOptTimeval(l.socket, @intCast(std.posix.SO.RCVTIMEO), ms);
 }
 
 fn findConn(id: u32) ?*NetConn {

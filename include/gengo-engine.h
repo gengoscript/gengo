@@ -341,6 +341,41 @@ int32_t engine_net_policy_add(int32_t handle,
  */
 void engine_net_policy_clear(int32_t handle);
 
+/* ── Net listen policy ───────────────────────────────────────────────────── */
+
+/*
+ * Add a listen (bind) policy rule for cap:net.
+ *
+ * Same rule shape, LIFO evaluation, and parameters as engine_net_policy_add,
+ * but gates net.listen(...) rather than net.dial(...), evaluated against the
+ * requested bind address rather than a dial destination. This is a
+ * completely separate rule list from the dial policy above — adding a dial
+ * rule has no effect on what listen allows, and vice versa.
+ *
+ * Unlike dial, absence of any rule means DENY, not ALLOW: a host must
+ * affirmatively add at least one allow rule before net.listen(...) will
+ * succeed on anything, since listening is a materially bigger authority
+ * than dialing out (see docs/security.md).
+ *
+ * Returns  0 on success,
+ *         -1 if the handle is invalid,
+ *         -2 if the per-engine rule list is full (max 32 rules),
+ *         -3 if the pattern is invalid.
+ */
+int32_t engine_net_listen_policy_add(int32_t handle,
+                                      int32_t action,
+                                      const char *pattern, int32_t pattern_len,
+                                      int32_t port);
+
+/*
+ * Remove all listen policy rules for the engine.
+ * After this call net.listen(...) reverts to refusing everything
+ * (default-deny) until new rules are added — this is NOT the same as
+ * engine_net_policy_clear, which restores dial's default-allow.
+ * Has no effect if the handle is invalid.
+ */
+void engine_net_listen_policy_clear(int32_t handle);
+
 /* ── Module bundles ──────────────────────────────────────────────────────── */
 
 /*
@@ -496,7 +531,11 @@ typedef int32_t (*gengo_http_fetch_fn_t)(const gengo_http_request_t *req,
 
 /*
  * Function pointer types for the network handler table.
- * All pointers in the struct must be non-NULL when the struct is passed.
+ * The dial/read/write/close/*_addr/*_deadline pointers must all be non-NULL
+ * when the struct is passed (unchanged from before listener support).
+ * The listen/accept/listener_* pointers are optional: a host that supports
+ * dialing but not listening may leave them NULL, and net.listen(...) will
+ * report CapabilityNotAvailable rather than crash.
  */
 typedef struct {
     int32_t (*dial)(const char *network, size_t network_len,
@@ -510,6 +549,15 @@ typedef struct {
     void    (*set_deadline)(int32_t handle, int64_t ms, void *userdata);
     void    (*set_read_deadline)(int32_t handle, int64_t ms, void *userdata);
     void    (*set_write_deadline)(int32_t handle, int64_t ms, void *userdata);
+    /* Optional — see comment above. */
+    int32_t (*listen)(const char *network, size_t network_len,
+                      const char *address, size_t address_len,
+                      int32_t *out_listener_handle, void *userdata);
+    /* Returns 1 = got a connection, 0 = would-block/timeout, <0 = error. */
+    int32_t (*accept)(int32_t listener_handle, int32_t *out_conn_handle, void *userdata);
+    void    (*listener_close)(int32_t listener_handle, void *userdata);
+    void    (*listener_local_addr)(int32_t listener_handle, char *buf, int32_t buf_len, void *userdata);
+    void    (*set_accept_deadline)(int32_t listener_handle, int64_t ms, void *userdata);
 } gengo_net_handlers_t;
 
 /*

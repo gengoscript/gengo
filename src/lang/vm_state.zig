@@ -27,6 +27,17 @@ const WasmBacking = if (builtin.target.cpu.arch == .wasm32) struct {
 
 var g_wasm_backing: WasmBacking = .{};
 
+// Which net capability scopes this runtime instance was granted, recomputed
+// from Runtime.enabled_capabilities on every activate() call (see
+// runtime.zig). Checked at native-dispatch time by cap_net.zig, mirroring
+// how fs mounts are checked at call time rather than at import time — the
+// cap:net import succeeding only means *some* net scope was granted, not
+// which one.
+pub const NetScopes = struct {
+    dial: bool = false,
+    listen: bool = false,
+};
+
 pub const Policy = struct {
     pub const NativeBackend = enum {
         embedded,
@@ -94,6 +105,7 @@ pub const State = struct {
     // fs_state threadlocal). Set once by Runtime init to its own fs_mounts;
     // the default points at the process-default table the CLI populates.
     fs_es: *fs_state_mod.EngineState = &fs_state_mod.g_default_state,
+    net_scopes: NetScopes = .{},
     temp_roots: [MaxTempRoots]Value = undefined,
     temp_root_top: usize = 0,
     rune_cache_ptr: usize = 0,
