@@ -400,7 +400,7 @@ fn computeAddResult(ctx: VMContext, a: Value, b: Value) !Value {
         const sa = try vms.asStringValue(a);
         const sb = try vms.asStringValue(b);
         vmperf.countStringConcat(sa.len + sb.len);
-        const result = try vmgc.concatDynString(ctx, sa, sb);
+        const result = try vmgc.concatDynString(ctx, a, b);
         const carrier = namedTypeCarrier(ctx, a, b) catch |err| {
             if (err == error.TypeError) setBinaryTypeError(ctx, "+", a, b);
             return err;
