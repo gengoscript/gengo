@@ -217,20 +217,31 @@ pub fn mapInsertHashed(ctx: VMContext, obj: *Object, key: Value, val: Value) !vo
         const out_entries = try vmgc.vmAllocManagedSlice(ctx, MapEntry, out_cap);
         // Re-derive obj.map_hashed.entries now, after the allocation above.
         if (old_len > 0) @memcpy(out_entries[0..old_len], obj.map_hashed.entries[0..old_len]);
-        const bcount = mapBucketsForCount(out_cap);
-        const out_buckets = try vmgc.vmAllocManagedSlice(ctx, i32, bcount);
-        mapBuildHashedBuckets(out_entries[0..old_len], out_buckets);
         // Snapshot the slices to free fresh, right before freeing them —
-        // not a copy captured before the allocations above, which is
+        // not a copy captured before the allocation above, which is
         // exactly what used to let this free a stale (relocated-away)
         // address, corrupting the free lists rather than just misreading
-        // data.
+        // data. Neither is read again (entries already copied into
+        // out_entries; buckets get rebuilt from scratch below).
         const old_entries_to_free = obj.map_hashed.entries;
         const old_buckets_to_free = obj.map_hashed.buckets;
-        // Update the object before freeing old slices so paranoia doesn't see stale live refs.
-        obj.* = .{ .map_hashed = .{ .entries = out_entries[0..out_cap], .len = old_len, .buckets = out_buckets } };
+        // Publish out_entries onto obj now, before freeing the old slices
+        // (so paranoia doesn't see stale live refs) and before allocating
+        // out_buckets below: a freshly allocated managed block that isn't
+        // yet reachable from any live object is invisible to compaction's
+        // relocation bookkeeping, so the out_buckets allocation could
+        // otherwise silently pack live data on top of out_entries while
+        // it's still just a local variable.
+        obj.* = .{ .map_hashed = .{ .entries = out_entries[0..out_cap], .len = old_len, .buckets = &[_]i32{} } };
         ctx.hs.freeManagedSlice(MapEntry, old_entries_to_free);
         ctx.hs.freeManagedSlice(i32, old_buckets_to_free);
+
+        const bcount = mapBucketsForCount(out_cap);
+        const out_buckets = try vmgc.vmAllocManagedSlice(ctx, i32, bcount);
+        // Re-derive again: the allocation above can compact and relocate
+        // obj.map_hashed.entries.
+        mapBuildHashedBuckets(obj.map_hashed.entries[0..old_len], out_buckets);
+        obj.* = .{ .map_hashed = .{ .entries = obj.map_hashed.entries, .len = old_len, .buckets = out_buckets } };
     }
 
     var hm = &obj.map_hashed;

@@ -484,13 +484,16 @@ pub fn installCapabilityModules(ctx: vms.VMContext, gs: *globals.State, cap_modu
         defer ctx.vs.popTempRoot();
         inst_obj.* = .{ .struct_instance = .{ .typ = typ_obj, .fields = inst_fields } };
 
-        // Fill direct function fields.
+        // Fill direct function fields. Write through inst_obj.struct_instance.fields
+        // (re-derived, not the local inst_fields slice): the namespace loop below
+        // makes further vmAllocManagedSlice calls that can compact and relocate
+        // inst_obj's backing away from the address inst_fields still points to.
         fi = 0;
         for (entries) |entry| {
             if (std.mem.indexOfScalar(u8, entry.name, '.') != null) continue;
             const func_obj = try vmgc.vmAllocObject(ctx);
             func_obj.* = .{ .native_function = .{ .id = entry.native_id, .arity = entry.arity } };
-            inst_fields[fi] = .{ .key = .{ .string = try ctx.cs.internStr(entry.name) }, .value = .{ .object = func_obj } };
+            inst_obj.struct_instance.fields[fi] = .{ .key = .{ .string = try ctx.cs.internStr(entry.name) }, .value = .{ .object = func_obj } };
             fi += 1;
         }
 
@@ -545,7 +548,7 @@ pub fn installCapabilityModules(ctx: vms.VMContext, gs: *globals.State, cap_modu
                 {
                     const func_obj = try vmgc.vmAllocObject(ctx);
                     func_obj.* = .{ .native_function = .{ .id = entry.native_id, .arity = entry.arity } };
-                    sub_inst_fields[si] = .{
+                    sub_inst_obj.struct_instance.fields[si] = .{
                         .key = .{ .string = try ctx.cs.internStr(entry.name[ns.len + 1 ..]) },
                         .value = .{ .object = func_obj },
                     };
@@ -553,7 +556,7 @@ pub fn installCapabilityModules(ctx: vms.VMContext, gs: *globals.State, cap_modu
                 }
             }
 
-            inst_fields[fi] = .{ .key = .{ .string = try ctx.cs.internStr(ns) }, .value = .{ .object = sub_inst_obj } };
+            inst_obj.struct_instance.fields[fi] = .{ .key = .{ .string = try ctx.cs.internStr(ns) }, .value = .{ .object = sub_inst_obj } };
             fi += 1;
         }
 
