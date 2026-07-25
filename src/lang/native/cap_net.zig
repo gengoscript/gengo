@@ -64,6 +64,35 @@ fn pushCatchableNetError(ctx: VMContext, err: anyerror) !void {
     try ctx.vs.vmPush(.{ .error_value = try ctx.cs.internStr(msg) });
 }
 
+// listen/accept return [ok, err] pairs (matching the design note's own
+// examples and http.get/post/fetch's existing convention), unlike dial's
+// single "Conn or error" value — different from the rest of this file's
+// functions, but that's what the calling shape `l, err := net.listen(...)`
+// in the language actually needs.
+fn pushOkPair(ctx: VMContext, ok: Value) !void {
+    try ctx.vs.pushTempRoot(ok);
+    defer ctx.vs.popTempRoot();
+    const arr = try vmgc.allocTempRootedManagedValueArray(ctx, 2);
+    defer ctx.vs.popTempRoot();
+    arr.set(0, ok);
+    arr.set(1, .null);
+    try ctx.vs.vmPush(.{ .object = arr.obj });
+}
+
+fn pushErrPairMsg(ctx: VMContext, msg: []const u8) !void {
+    const interned = try ctx.cs.internStr(msg);
+    const arr = try vmgc.allocTempRootedManagedValueArray(ctx, 2);
+    defer ctx.vs.popTempRoot();
+    arr.set(0, .null);
+    arr.set(1, .{ .error_value = interned });
+    try ctx.vs.vmPush(.{ .object = arr.obj });
+}
+
+fn pushErrPairForNetError(ctx: VMContext, err: anyerror) !void {
+    const msg: []const u8 = if (err == error.DeadlineExceeded) "timeout" else net_state.lastNetErr();
+    try pushErrPairMsg(ctx, msg);
+}
+
 fn pushPageString(ctx: VMContext, bytes: []u8) !void {
     defer std.heap.page_allocator.free(bytes);
     const out = try vmgc.makeDynString(ctx, bytes);
@@ -83,6 +112,11 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             const network = vms.asStringValue(arg0) catch return error.TypeError;
             const address = vms.asStringValue(arg1) catch return error.TypeError;
             _ = try ctx.vs.vmPop();
+
+            if (!ctx.vs.net_scopes.dial) {
+                try ctx.vs.vmPush(.{ .error_value = try ctx.cs.internStr("net.dial: dial scope not granted (--cap net=dial)") });
+                return;
+            }
 
             if (!net_state.checkDialPolicy(address)) {
                 try ctx.vs.vmPush(.{ .error_value = try ctx.cs.internStr("net.dial: refused by policy") });
@@ -107,6 +141,98 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             defer ctx.vs.popTempRoot();
             inst_fields[0] = .{ .key = .{ .string = try ctx.cs.internStr("_handle") }, .value = .{ .int = @as(i64, id) } };
             try ctx.vs.vmPush(.{ .object = inst_obj });
+        },
+        .cap_net_listen => {
+            if (argc != 2) return error.ArityMismatch;
+            const arg1 = try ctx.vs.vmPop();
+            const arg0 = try ctx.vs.vmPop();
+            const network = vms.asStringValue(arg0) catch return error.TypeError;
+            const address = vms.asStringValue(arg1) catch return error.TypeError;
+            _ = try ctx.vs.vmPop();
+
+            if (!ctx.vs.net_scopes.listen) {
+                try pushErrPairMsg(ctx, "net.listen: listen scope not granted (--cap net=listen)");
+                return;
+            }
+
+            if (!net_state.checkListenPolicy(address)) {
+                try pushErrPairMsg(ctx, "net.listen: refused by policy");
+                return;
+            }
+
+            const id = net_state.netListen(network, address) catch {
+                try pushErrPairMsg(ctx, net_state.lastNetErr());
+                return;
+            };
+
+            const listener_type_val = ctx.gs.get("@cap_type:net.Listener") orelse return error.CapabilityError;
+            const listener_type_obj = switch (listener_type_val) {
+                .object => |o| o,
+                else => return error.CapabilityError,
+            };
+
+            const inst_fields = try vmgc.vmAllocManagedSlice(ctx, MapEntry, 1);
+            const inst_obj = try vmgc.vmAllocObject(ctx);
+            inst_obj.* = .{ .struct_instance = .{ .typ = listener_type_obj, .fields = inst_fields } };
+            try ctx.vs.pushTempRoot(.{ .object = inst_obj });
+            inst_fields[0] = .{ .key = .{ .string = try ctx.cs.internStr("_handle") }, .value = .{ .int = @as(i64, id) } };
+            const listener_val: Value = .{ .object = inst_obj };
+            try pushOkPair(ctx, listener_val);
+            ctx.vs.popTempRoot();
+        },
+        .cap_net_listener_accept => {
+            if (argc != 1) return error.ArityMismatch;
+            const arg0 = try ctx.vs.vmPop();
+            const id = try extractHandle(arg0);
+            _ = try ctx.vs.vmPop();
+
+            const conn_id = net_state.netListenerAccept(id) catch |err| {
+                try pushErrPairForNetError(ctx, err);
+                return;
+            };
+
+            const conn_type_val = ctx.gs.get("@cap_type:net.Conn") orelse return error.CapabilityError;
+            const conn_type_obj = switch (conn_type_val) {
+                .object => |o| o,
+                else => return error.CapabilityError,
+            };
+
+            const inst_fields = try vmgc.vmAllocManagedSlice(ctx, MapEntry, 1);
+            const inst_obj = try vmgc.vmAllocObject(ctx);
+            inst_obj.* = .{ .struct_instance = .{ .typ = conn_type_obj, .fields = inst_fields } };
+            try ctx.vs.pushTempRoot(.{ .object = inst_obj });
+            inst_fields[0] = .{ .key = .{ .string = try ctx.cs.internStr("_handle") }, .value = .{ .int = @as(i64, conn_id) } };
+            const conn_val: Value = .{ .object = inst_obj };
+            try pushOkPair(ctx, conn_val);
+            ctx.vs.popTempRoot();
+        },
+        .cap_net_listener_close => {
+            if (argc != 1) return error.ArityMismatch;
+            const arg0 = try ctx.vs.vmPop();
+            const id = try extractHandle(arg0);
+            _ = try ctx.vs.vmPop();
+
+            net_state.netListenerClose(id) catch return error.CapabilityError;
+            try ctx.vs.vmPush(.null);
+        },
+        .cap_net_listener_local_addr => {
+            if (argc != 1) return error.ArityMismatch;
+            const arg0 = try ctx.vs.vmPop();
+            const id = try extractHandle(arg0);
+            _ = try ctx.vs.vmPop();
+
+            const addr = net_state.netListenerLocalAddr(id) catch return error.CapabilityError;
+            try pushPageString(ctx, addr);
+        },
+        .cap_net_listener_set_accept_deadline => {
+            if (argc != 2) return error.ArityMismatch;
+            const arg1 = try ctx.vs.vmPop();
+            const arg0 = try ctx.vs.vmPop();
+            const id = try extractHandle(arg0);
+            const ms = try extractI64(arg1);
+            _ = try ctx.vs.vmPop();
+            net_state.netListenerSetAcceptDeadline(id, ms) catch return error.CapabilityError;
+            try ctx.vs.vmPush(.null);
         },
         .cap_net_read => {
             if (argc != 2) return error.ArityMismatch;

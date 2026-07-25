@@ -100,6 +100,7 @@ pub const cap_net_desc: CapModuleDesc = .{
     .name = "net",
     .functions = &.{
         .{ .name = "dial", .arity = 2, .native_id = 163 },
+        .{ .name = "listen", .arity = 2, .native_id = 235 },
     },
 };
 
@@ -210,7 +211,12 @@ pub const Session = struct {
 
     fn isCapabilityEnabled(self: *Session, name: []const u8) bool {
         for (self.enabled_capabilities) |cap| {
-            if (common.streq(cap, name)) {
+            // A scoped grant ("net.listen") also satisfies the bare import
+            // gate for "net" — only the per-function dispatch check cares
+            // which scope was actually granted (see net_state's scope gate).
+            const is_scoped_grant = cap.len > name.len and
+                std.mem.startsWith(u8, cap, name) and cap[name.len] == '.';
+            if (common.streq(cap, name) or is_scoped_grant) {
                 for (self.capability_modules) |cm| {
                     if (common.streq(cm.name, name)) return true;
                 }

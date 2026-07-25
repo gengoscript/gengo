@@ -152,6 +152,7 @@ const Engine = struct {
     host_call_ctx: ?*anyopaque = null,
     net_handlers: ?net_state.HandlerSet = null,
     net_policy: net_state.PolicyState = .{},
+    net_listen_policy: net_state.PolicyState = .{},
     http_handler: ?http_state.HandlerSet = null,
     source_entries: [MaxSources]api.SourceEntry = undefined,
     source_count: u8 = 0,
@@ -197,6 +198,7 @@ const Engine = struct {
         self.host_call_ctx = null;
         self.net_handlers = null;
         self.net_policy = .{};
+        self.net_listen_policy = .{};
         self.http_handler = null;
         self.runtime.inner.fs_mounts.clear();
         self.import_loader_fn = null;
@@ -342,6 +344,7 @@ fn pushEngineState(engine: *Engine) ?*Engine {
     host_abi.setNativeHostCall(engine.host_call_callback, engine.host_call_ctx);
     net_state.applyHandlers(engine.net_handlers);
     net_state.applyPolicy(engine.net_policy);
+    net_state.applyListenPolicy(engine.net_listen_policy);
     http_state.applyHandler(engine.http_handler);
     fs_state.setActive(&engine.runtime.inner.fs_mounts);
     io.setTrace(engine.trace_fn, engine.trace_userdata, engineToHandle(engine));
@@ -357,6 +360,7 @@ fn popEngineState(prev: ?*Engine) void {
         host_abi.setNativeHostCall(p.host_call_callback, p.host_call_ctx);
         net_state.applyHandlers(p.net_handlers);
         net_state.applyPolicy(p.net_policy);
+        net_state.applyListenPolicy(p.net_listen_policy);
         http_state.applyHandler(p.http_handler);
         io.setTrace(p.trace_fn, p.trace_userdata, engineToHandle(p));
         p.runtime.inner.activate();
@@ -367,6 +371,7 @@ fn popEngineState(prev: ?*Engine) void {
         host_abi.setNativeHostCall(null, null);
         net_state.applyHandlers(null);
         net_state.clearPolicy();
+        net_state.clearListenPolicy();
         http_state.applyHandler(null);
         fs_state.setActive(fs_state.defaultState());
         io.clearTrace();
@@ -1263,6 +1268,41 @@ export fn engine_net_policy_clear(handle: i32) void {
     engine.net_policy = .{};
 }
 
+/// Add a listen (bind) policy rule for cap:net. Same rule shape and LIFO
+/// evaluation as engine_net_policy_add, but for net.listen rather than
+/// net.dial, and evaluated against the requested bind address.
+/// Unlike dial: no rules installed means listen always fails (default-deny,
+/// not default-allow) — a host must add at least one allow rule before any
+/// net.listen(...) call in this engine will succeed.
+/// Returns 0 on success, -1 for invalid handle, -2 if the rule list is full,
+/// -3 for an invalid pattern.
+export fn engine_net_listen_policy_add(handle: i32, action: i32, pattern_ptr: PtrInt, pattern_len: i32, port: i32) i32 {
+    const engine = getEngine(handle) orelse return -1;
+    const pattern = wasmSlice(pattern_ptr, pattern_len);
+    const act: net_state.PolicyAction = if (action == 0) .deny else .allow;
+    const p: u16 = if (port <= 0 or port > 65535) 0 else @intCast(port);
+    const rc = blk: {
+        const saved = net_state.currentListenPolicy();
+        net_state.applyListenPolicy(engine.net_listen_policy);
+        const r = net_state.addListenPolicyRule(act, pattern, p);
+        engine.net_listen_policy = net_state.currentListenPolicy();
+        net_state.applyListenPolicy(saved);
+        break :blk r;
+    };
+    return switch (rc) {
+        0 => 0,
+        -1 => -2,
+        else => -3,
+    };
+}
+
+/// Clear all listen policy rules for the engine. After this call net.listen
+/// reverts to refusing everything (default-deny) until new rules are added.
+export fn engine_net_listen_policy_clear(handle: i32) void {
+    const engine = getEngine(handle) orelse return;
+    engine.net_listen_policy = .{};
+}
+
 // Returns:
 //   0  success
 //  -1  invalid handle
@@ -1764,6 +1804,57 @@ test "engine_net_policy_add rule registration" {
     try std.testing.expectEqual(@as(i32, 0), engine_net_policy_add(h, 0, @intCast(@intFromPtr(pat_star.ptr)), @intCast(pat_star.len), 0));
     try std.testing.expectEqual(@as(u8, 1), getEngine(h).?.net_policy.count);
     try std.testing.expectEqual(@as(u8, 0), getEngine(h2).?.net_policy.count);
+}
+
+test "engine_net_listen_policy_add rule registration" {
+    const h = engine_init();
+    try std.testing.expect(h > 0);
+    defer engine_destroy(h);
+
+    // Invalid handle → -1
+    const pat_star = "*";
+    try std.testing.expectEqual(@as(i32, -1), engine_net_listen_policy_add(0, 0, @intCast(@intFromPtr(pat_star.ptr)), @intCast(pat_star.len), 0));
+
+    // Valid patterns
+    try std.testing.expectEqual(@as(i32, 0), engine_net_listen_policy_add(h, 0, @intCast(@intFromPtr(pat_star.ptr)), @intCast(pat_star.len), 0));
+    const pat_cidr = "192.168.1.0/24";
+    try std.testing.expectEqual(@as(i32, 0), engine_net_listen_policy_add(h, 1, @intCast(@intFromPtr(pat_cidr.ptr)), @intCast(pat_cidr.len), 0));
+
+    // Invalid CIDR → -3
+    const pat_bad = "not/a/cidr";
+    try std.testing.expectEqual(@as(i32, -3), engine_net_listen_policy_add(h, 1, @intCast(@intFromPtr(pat_bad.ptr)), @intCast(pat_bad.len), 0));
+
+    // clear resets count
+    engine_net_listen_policy_clear(h);
+    try std.testing.expectEqual(@as(u8, 0), getEngine(h).?.net_listen_policy.count);
+
+    // Per-engine isolation — and isolated from the dial policy list too.
+    const h2 = engine_init();
+    try std.testing.expect(h2 > 0);
+    defer engine_destroy(h2);
+    try std.testing.expectEqual(@as(i32, 0), engine_net_listen_policy_add(h, 0, @intCast(@intFromPtr(pat_star.ptr)), @intCast(pat_star.len), 0));
+    try std.testing.expectEqual(@as(u8, 1), getEngine(h).?.net_listen_policy.count);
+    try std.testing.expectEqual(@as(u8, 0), getEngine(h2).?.net_listen_policy.count);
+    try std.testing.expectEqual(@as(u8, 0), getEngine(h).?.net_policy.count);
+}
+
+test "engine_net_listen_policy checkListenPolicy default-deny semantics" {
+    // Default DENY: no rules — the whole point of §4's design decision.
+    net_state.clearListenPolicy();
+    try std.testing.expect(!net_state.checkListenPolicy("0.0.0.0:8080"));
+
+    // Explicit allow-all
+    net_state.clearListenPolicy();
+    _ = net_state.addListenPolicyRule(.allow, "*", 0);
+    try std.testing.expect(net_state.checkListenPolicy("0.0.0.0:8080"));
+
+    // Allow one port only
+    net_state.clearListenPolicy();
+    _ = net_state.addListenPolicyRule(.allow, "*", 8080);
+    try std.testing.expect(net_state.checkListenPolicy("0.0.0.0:8080"));
+    try std.testing.expect(!net_state.checkListenPolicy("0.0.0.0:9090"));
+
+    net_state.clearListenPolicy();
 }
 
 test "engine_net_policy checkDialPolicy semantics" {

@@ -1,0 +1,5 @@
+std := import("std")
+net := import("cap:net")
+l, err := net.listen("tcp", "127.0.0.1:0")
+std.io.println(l == null)
+std.io.println(err != null)

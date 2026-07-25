@@ -944,6 +944,15 @@ pub const Runtime = struct {
         self.vm_state.assertNoTempRoots(context);
     }
 
+    fn netScopesFromCapabilities(caps: []const []const u8) vms.NetScopes {
+        var scopes: vms.NetScopes = .{};
+        for (caps) |cap| {
+            if (std.mem.eql(u8, cap, "net") or std.mem.eql(u8, cap, "net.dial")) scopes.dial = true;
+            if (std.mem.eql(u8, cap, "net.listen")) scopes.listen = true;
+        }
+        return scopes;
+    }
+
     pub fn activate(self: *Runtime) void {
         chunk.setActive(self.chunk_state);
         globals.setActive(&self.globals_state);
@@ -954,6 +963,7 @@ pub const Runtime = struct {
         // between init and first use; activate() always runs on the pinned
         // address (every run/call entry point calls it).
         self.vm_state.fs_es = &self.fs_mounts;
+        self.vm_state.net_scopes = netScopesFromCapabilities(self.enabled_capabilities);
     }
 
     pub fn lastCompilePath(self: *Runtime) []const u8 {

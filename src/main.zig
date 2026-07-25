@@ -439,8 +439,13 @@ fn runCli(argv: []const []const u8) void {
     var profile_mode: bool = false;
     var disasm_mode: bool = false;
     var emit_gbc_path: ?[]const u8 = null;
-    var cap_names: [8][]const u8 = undefined;
+    var cap_names: [16][]const u8 = undefined;
     var cap_count: usize = 0;
+    // Scratch storage for formatted "name.scope" tokens (e.g. "net.listen"),
+    // since those aren't literal argv substrings but concatenations. Sized to
+    // match cap_names so every slot can hold one formatted token if needed.
+    var cap_scope_buf: [16][40]u8 = undefined;
+    var cap_scope_buf_used: usize = 0;
     var module_paths: [module_compile.MaxModuleRoots][]const u8 = undefined;
     var module_path_count: usize = 0;
     var heap_size: usize = heap_rt.HeapSize;
@@ -461,6 +466,7 @@ fn runCli(argv: []const []const u8) void {
             io.write("  --test             Run test blocks in the script\n");
             io.write("  --profile          With --test, report peak ops/heap/stack/objects per block\n");
             io.write("  --cap <name>       Enable a named capability (repeatable)\n");
+            io.write("  --cap net=dial,listen  Scope the net capability (dial and/or listen)\n");
             io.write("  --modules <path>   Allow imports from an extra directory (repeatable)\n");
             io.write("  --max-ops <n>      Limit instruction count (0 = unlimited)\n");
             io.write("  --heap <size>      Set GC heap size, e.g. 4m, 512k (default 1m)\n");
@@ -511,12 +517,49 @@ fn runCli(argv: []const []const u8) void {
                 io.werr("gengo: --cap requires value\n");
                 die(1);
             }
-            if (cap_count >= cap_names.len) {
-                io.werr("gengo: too many --cap flags\n");
-                die(1);
+            const raw = argv[script_index + 1];
+            // General "name=scope1,scope2" mechanism: split on '=' then ','.
+            // Each capability defines which of its own scopes reproduces its
+            // pre-scope (bare-flag) meaning — for "net", that's "dial" (bare
+            // --cap net has always meant dial-only); any other scope word
+            // becomes an explicit "name.scope" token instead. A capability
+            // with no scope table defined yet (fs/http/env today) just gets
+            // every scope word suffixed, since none of them are wired to
+            // anything: harmless, and ready for whenever such a split lands.
+            if (std.mem.indexOfScalar(u8, raw, '=')) |eq| {
+                const cap_name = raw[0..eq];
+                var it = std.mem.splitScalar(u8, raw[eq + 1 ..], ',');
+                while (it.next()) |scope| {
+                    if (scope.len == 0) continue;
+                    if (cap_count >= cap_names.len) {
+                        io.werr("gengo: too many --cap scopes\n");
+                        die(1);
+                    }
+                    if (std.mem.eql(u8, cap_name, "net") and std.mem.eql(u8, scope, "dial")) {
+                        cap_names[cap_count] = cap_name;
+                    } else {
+                        if (cap_scope_buf_used >= cap_scope_buf.len) {
+                            io.werr("gengo: too many --cap scopes\n");
+                            die(1);
+                        }
+                        const buf = &cap_scope_buf[cap_scope_buf_used];
+                        cap_scope_buf_used += 1;
+                        const token = std.fmt.bufPrint(buf, "{s}.{s}", .{ cap_name, scope }) catch {
+                            io.werr("gengo: --cap scope name too long\n");
+                            die(1);
+                        };
+                        cap_names[cap_count] = token;
+                    }
+                    cap_count += 1;
+                }
+            } else {
+                if (cap_count >= cap_names.len) {
+                    io.werr("gengo: too many --cap flags\n");
+                    die(1);
+                }
+                cap_names[cap_count] = raw;
+                cap_count += 1;
             }
-            cap_names[cap_count] = argv[script_index + 1];
-            cap_count += 1;
             script_index += 2;
             continue;
         }
