@@ -59,10 +59,14 @@ fn buildResponseStruct(ctx: VMContext, status: i32, body: []const u8, hdr_map: s
         }
     }
 
-    inst_fields[0] = .{ .key = .{ .string = try ctx.cs.internStr("status") }, .value = .{ .int = @as(i64, status) } };
-    inst_fields[1] = .{ .key = .{ .string = try ctx.cs.internStr("body") }, .value = body_val };
-    inst_fields[2] = .{ .key = .{ .string = try ctx.cs.internStr("headers") }, .value = .{ .object = hdr_obj } };
-    inst_fields[3] = .{ .key = .{ .string = try ctx.cs.internStr("ok") }, .value = .{ .boolean = ok } };
+    // Re-derive from inst_obj: the body_val/header makeDynString calls above
+    // can compact and relocate inst_obj.struct_instance.fields away from the
+    // inst_fields slice captured before them.
+    const inst_fields_now = inst_obj.struct_instance.fields;
+    inst_fields_now[0] = .{ .key = .{ .string = try ctx.cs.internStr("status") }, .value = .{ .int = @as(i64, status) } };
+    inst_fields_now[1] = .{ .key = .{ .string = try ctx.cs.internStr("body") }, .value = body_val };
+    inst_fields_now[2] = .{ .key = .{ .string = try ctx.cs.internStr("headers") }, .value = .{ .object = hdr_obj } };
+    inst_fields_now[3] = .{ .key = .{ .string = try ctx.cs.internStr("ok") }, .value = .{ .boolean = ok } };
 
     return .{ .object = inst_obj };
 }

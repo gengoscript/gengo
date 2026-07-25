@@ -3922,8 +3922,14 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                     defer ctx.vs.popTempRoot();
 
                     const base = ctx.vs.stack_top - typ_stack_dist;
-                    const shared_vals = try vmgc.vmAllocManagedSlice(ctx, Value, shared_count);
-                    const arm_vals = if (arm_field_count > 0) try vmgc.vmAllocManagedSlice(ctx, Value, arm_field_count) else @as([]Value, &.{});
+                    // Allocate shared_vals and arm_vals as one block: two separate
+                    // vmAllocManagedSlice calls would leave the first's block
+                    // unpublished (not yet attached to obj) while the second
+                    // allocates, letting compaction pack live data on top of it.
+                    const total_field_count = shared_count + arm_field_count;
+                    const combined_vals = if (total_field_count > 0) try vmgc.vmAllocManagedSlice(ctx, Value, total_field_count) else @as([]Value, &.{});
+                    const shared_vals = combined_vals[0..shared_count];
+                    const arm_vals = combined_vals[shared_count..total_field_count];
 
                     if (arm.has_payload and arm_field_count == 0) {
                         // Single-payload arm with shared fields
@@ -4062,7 +4068,18 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                         try ctx.vs.vmPush(.{ .object = obj });
                     } else {
                         const inst_fields = try vmgc.vmAllocManagedSlice(ctx, MapEntry, st.fields.len);
-                        const obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
+                        // Null-fill and publish immediately (struct_instance, not a
+                        // placeholder tag): a freshly allocated managed block that
+                        // isn't yet reachable from any live object is invisible to
+                        // compaction's relocation bookkeeping. coerceStructFieldValue
+                        // below can allocate (e.g. named-type coercion to a string),
+                        // so we write through obj.struct_instance.fields (re-derived
+                        // each time) rather than the local inst_fields slice, which
+                        // would go stale the moment compaction relocates it.
+                        @memset(inst_fields, .{ .key = .null, .value = .null });
+                        const obj = try vmgc.vmAllocObject(ctx);
+                        obj.* = .{ .struct_instance = .{ .typ = typ_peek.object, .fields = inst_fields } };
+                        try ctx.vs.pushTempRoot(.{ .object = obj });
                         defer ctx.vs.popTempRoot();
                         for (0..@as(usize, count)) |ci| {
                             const key = ctx.vs.stack[base + ci * 2];
@@ -4079,7 +4096,7 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                             seen[idx] = true;
                             const checked = try coerceStructFieldValue(ctx, st.fields[idx], val);
                             if (!vmtyp.matchesFieldType(ctx, checked, st.fields[idx]) and !(checked != .object and fieldHasNamedType(st.fields[idx]))) return error.StructFieldTypeMismatch;
-                            inst_fields[idx] = .{ .key = st.fields[idx].key, .value = checked };
+                            obj.struct_instance.fields[idx] = .{ .key = st.fields[idx].key, .value = checked };
                         }
                         for (st.fields, seen[0..st.fields.len]) |f, s| {
                             if (!s) {
@@ -4088,7 +4105,6 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                             }
                         }
                         ctx.vs.stack_top -= typ_stack_dist + 1;
-                        obj.* = .{ .struct_instance = .{ .typ = typ_peek.object, .fields = inst_fields } };
                         try ctx.vs.vmPush(.{ .object = obj });
                     }
                 } else {

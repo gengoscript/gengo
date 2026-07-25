@@ -195,24 +195,19 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
                     name_count += 1;
                     pos = end + 1;
                 }
-                const result = try vmgc.vmAllocManagedSlice(ctx, Value, name_count);
-                const arr_obj = try vmgc.vmAllocObject(ctx);
-                arr_obj.* = .{ .array_managed = result[0..0] };
-                try ctx.vs.pushTempRoot(.{ .object = arr_obj });
+                const arr = try vmgc.allocTempRootedManagedValueArray(ctx, name_count);
                 defer ctx.vs.popTempRoot();
                 var idx: usize = 0;
                 pos = 0;
                 while (pos < list_data.len and idx < name_count) {
                     const end = std.mem.indexOfScalarPos(u8, list_data, pos, 0) orelse break;
                     if (end == pos) break;
-                    result[idx] = try vmgc.makeDynString(ctx, list_data[pos..end]);
-                    arr_obj.* = .{ .array_managed = result[0 .. idx + 1] };
+                    arr.set(idx, try vmgc.makeDynString(ctx, list_data[pos..end]));
                     idx += 1;
                     pos = end + 1;
                 }
-                arr_obj.* = .{ .array_managed = result };
                 ctx.vs.vmPopArgs(argc);
-                try ctx.vs.vmPush(.{ .object = arr_obj });
+                try ctx.vs.vmPush(.{ .object = arr.obj });
                 return;
             }
 
@@ -241,18 +236,13 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
                     return error.CapabilityError;
                 };
             }
-            const result = try vmgc.vmAllocManagedSlice(ctx, Value, names.items.len);
-            const arr_obj = try vmgc.vmAllocObject(ctx);
-            arr_obj.* = .{ .array_managed = result[0..0] };
-            try ctx.vs.pushTempRoot(.{ .object = arr_obj });
+            const arr = try vmgc.allocTempRootedManagedValueArray(ctx, names.items.len);
             defer ctx.vs.popTempRoot();
             for (names.items, 0..) |n, i| {
-                result[i] = try vmgc.makeDynString(ctx, n);
-                arr_obj.* = .{ .array_managed = result[0 .. i + 1] };
+                arr.set(i, try vmgc.makeDynString(ctx, n));
             }
-            arr_obj.* = .{ .array_managed = result };
             ctx.vs.vmPopArgs(argc);
-            try ctx.vs.vmPush(.{ .object = arr_obj });
+            try ctx.vs.vmPush(.{ .object = arr.obj });
         },
         .cap_fs_delete => {
             if (argc != 1) return error.ArityMismatch;
