@@ -27,7 +27,7 @@ func checkTime() {
     unix_time := rfc868_time - rfc868_epoch_offset
     t := std.time.from_unix(unix_time)
     p := t.parts()
-    std.io.printf("server time: %d-%d-%d %d:%d:%d UTC\n", p.year, p.month, p.day, p.hour, p.min, p.sec)
+    std.io.printf("server time: %d-%02d-%02d %02d:%02d:%02d UTC\n", p.year, p.month, p.day, p.hour, p.min, p.sec)
 }
 
 checkTime()
