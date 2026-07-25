@@ -134,6 +134,7 @@ pub const State = struct {
     jv_type_cache: ?*Object = null,
     time_type_cache: ?*Object = null,
     regexp_type_cache: ?*Object = null,
+    template_type_cache: ?*Object = null,
     re_pattern_cache: regexp_mod.PatternCache = .{},
     // Backing for native_function Objects, indexed by NativeFnId discriminant
     // (enum(u8), so 256 slots). Outside the GC-managed heap: never marked,
@@ -204,6 +205,7 @@ pub const State = struct {
         self.jv_type_cache = null;
         self.time_type_cache = null;
         self.regexp_type_cache = null;
+        self.template_type_cache = null;
         self.re_pattern_cache.clear();
     }
 

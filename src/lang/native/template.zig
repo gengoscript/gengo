@@ -341,6 +341,39 @@ fn tplParseTag(ctx: VMContext, tag: []const u8) !struct { op: TplOp, arg: Value 
     return error.InvalidTemplate;
 }
 
+// Every parsed template shares the exact same "Template" struct shape
+// (__ops/__args/__jmp/__src/funcs never vary), so — like regexGetType/
+// argGetType/timeGetType/jsonValueGetType — this is a true permanent
+// singleton, built once and cached. tplBuildObj used to rebuild this (and
+// bump-allocate a fresh field_specs array) on every single call, which
+// leaked 5 StructFieldSpecs' worth of permanent memory per template
+// render — found via a stress-preset regression
+// (276_template_compact_safety.gengo) after fixing heap.zig's two-ended
+// arena to properly enforce the permanent/managed boundary instead of
+// silently letting permanent overflow spill into managed territory: a
+// repeated render() no longer had that silent slack to hide in.
+fn templateGetType(ctx: VMContext) !*Object {
+    if (ctx.vs.template_type_cache) |t| return t;
+    // Use a comptime constant so the alts pointer lives in rodata, not the
+    // managed heap — compactManagedHeap cannot invalidate it.
+    const any_spec: FieldTypeSpec = .{ .alts = @constCast(&[_]FieldTypeAlt{.{ .typ = .any }}) };
+    const field_specs = ctx.hs.bump(StructFieldSpec, 5) orelse return error.OutOfMemory;
+    field_specs[0] = .{ .name = "__ops", .typ = any_spec, .is_const = true };
+    field_specs[1] = .{ .name = "__args", .typ = any_spec, .is_const = true };
+    field_specs[2] = .{ .name = "__jmp", .typ = any_spec, .is_const = true };
+    field_specs[3] = .{ .name = "__src", .typ = any_spec, .is_const = true };
+    field_specs[4] = .{ .name = "funcs", .typ = any_spec, .is_const = false };
+    const buf = ctx.hs.bump(Object, 1) orelse return error.OutOfMemory;
+    const obj: *Object = @ptrCast(buf);
+    obj.* = .{ .struct_type = StructTypeObj{
+        .name = "Template",
+        .qualified_name = TemplateTypeQualifiedName,
+        .fields = field_specs[0..5],
+    } };
+    ctx.vs.template_type_cache = obj;
+    return obj;
+}
+
 fn tplBuildObj(ctx: VMContext, src_val: Value, ops: []Value, args: []Value, jmp: []Value) !*Object {
     // Push any GC objects in args as temp roots before any allocation that could
     // trigger GC. Without this, chain-path arrays from tplSplitPath stored in
@@ -348,25 +381,7 @@ fn tplBuildObj(ctx: VMContext, src_val: Value, ops: []Value, args: []Value, jmp:
     const args_root_base = try ctx.vs.pushObjectTempRoots(args);
     defer ctx.vs.restoreTempRoots(args_root_base);
 
-    // Use a comptime constant so the alts pointer lives in rodata, not the
-    // managed heap — compactManagedHeap cannot invalidate it.
-    const any_spec: FieldTypeSpec = .{ .alts = @constCast(&[_]FieldTypeAlt{.{ .typ = .any }}) };
-
-    const field_specs = ctx.hs.bump(StructFieldSpec, 5) orelse return error.OutOfMemory;
-    field_specs[0] = .{ .name = "__ops", .typ = any_spec, .is_const = true };
-    field_specs[1] = .{ .name = "__args", .typ = any_spec, .is_const = true };
-    field_specs[2] = .{ .name = "__jmp", .typ = any_spec, .is_const = true };
-    field_specs[3] = .{ .name = "__src", .typ = any_spec, .is_const = true };
-    field_specs[4] = .{ .name = "funcs", .typ = any_spec, .is_const = false };
-
-    const typ_obj = try vmgc.vmAllocObject(ctx);
-    try ctx.vs.pushTempRoot(.{ .object = typ_obj });
-    defer ctx.vs.popTempRoot();
-    typ_obj.* = .{ .struct_type = StructTypeObj{
-        .name = "Template",
-        .qualified_name = TemplateTypeQualifiedName,
-        .fields = field_specs[0..5],
-    } };
+    const typ_obj = try templateGetType(ctx);
 
     const inst_fields = try vmgc.vmAllocManagedSlice(ctx, MapEntry, 5);
     const inst_obj = try vmgc.vmAllocObject(ctx);
