@@ -9,9 +9,14 @@ const NativeFuncObj = @import("../value.zig").NativeFuncObj;
 fn makeBinaryString(ctx: VMContext, bytes: []const u8) !Value {
     const obj = try vmgc.allocTempRooted(ctx, .{ .dyn_string = &[_]u8{} });
     defer ctx.vs.popTempRoot();
-    const buf = try vmgc.vmAllocManagedBytes(ctx, bytes.len);
-    @memcpy(buf[0..bytes.len], bytes);
-    obj.* = .{ .dyn_string = buf[0..bytes.len] };
+    if (bytes.len == 0) return .{ .object = obj };
+    // Copy to scratch before allocating: bytes may be a slice into managed
+    // heap memory that vmAllocManagedBytes below can compact and relocate.
+    const scratch = try std.heap.page_allocator.dupe(u8, bytes);
+    defer std.heap.page_allocator.free(scratch);
+    const buf = try vmgc.vmAllocManagedBytes(ctx, scratch.len);
+    @memcpy(buf[0..scratch.len], scratch);
+    obj.* = .{ .dyn_string = buf[0..scratch.len] };
     return .{ .object = obj };
 }
 
@@ -228,12 +233,16 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             try ctx.vs.vmPush(try makeBinaryString(ctx, s[f..t_idx]));
         },
         .bytes_repeat => {
-            const s = try vms.asStringValue(ctx.vs.vmTop(1));
+            const s_val = ctx.vs.vmTop(1);
+            const s0 = try vms.asStringValue(s_val);
             const n = try argAsI64(ctx.vs.vmTop(0));
             if (n < 0) return error.RangeError;
             const count = @as(usize, @intCast(n));
-            const total = s.len * count;
+            const total = s0.len * count;
             const buf = try vmgc.vmAllocManagedBytes(ctx, total);
+            // Re-derive after the allocation above, which can compact and
+            // relocate s_val's backing.
+            const s = try vms.asStringValue(s_val);
             for (0..count) |i| @memcpy(buf[i * s.len .. (i + 1) * s.len], s);
             const obj = try vmgc.allocTempRooted(ctx, .{ .dyn_string = &[_]u8{} });
             defer ctx.vs.popTempRoot();
