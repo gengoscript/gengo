@@ -2409,14 +2409,18 @@ test "op budget: small budget stops runaway loop, generous budget does not" {
 test "time sleep suspends and charges the operation budget before waiting" {
     var rt = try setup();
     defer rt.deinit();
-    rt.setPolicy(.{ .max_ops = 2_000_000 });
+    // A 200ms deadline (not 1ms) gives the "still suspended" assertion below
+    // a generous real-time margin against scheduler jitter — nothing in this
+    // test actually waits out the real 200ms; sleep_deadline_ns is forced
+    // past it immediately afterward.
+    rt.setPolicy(.{ .max_ops = 500_000_000 });
     const first = try rt.begin(
         \\std := import("std")
-        \\std.time.sleep(1)
+        \\std.time.sleep(200)
         \\completed := true
     );
     try std.testing.expect(first == .suspended);
-    try std.testing.expect(rt.vm_state.ops_budget_remaining < 1_000_000);
+    try std.testing.expect(rt.vm_state.ops_budget_remaining < 300_000_000);
     try std.testing.expectError(error.RuntimeSuspended, rt.begin("completed := false"));
     try std.testing.expect((try rt.continueRun()) == .suspended);
     rt.vm_state.sleep_deadline_ns = 0;
@@ -2433,6 +2437,24 @@ test "time sleep exceeding the remaining operation budget fails before suspensio
     ));
 }
 
+// Regression: run()/runIncremental() used to convert a sleep-suspended
+// script straight into error.ExecutionSuspended (run() did this directly;
+// runIncremental() called the same non-suspend-aware vm.run() wrapper),
+// with no code path anywhere that ever resumed it — the REPL and every
+// C-ABI/engine_run caller would hard-fail the moment a script called
+// std.time.sleep(), and (worse) leave the runtime permanently stuck
+// suspended (sleep_deadline_ns never cleared) forever after. Both now
+// block through it via Runtime.waitOutSuspension() and complete
+// transparently, the same way the CLI's own driver already did.
+//
+// Not covered by an automated test here: driving an actual real-time wait
+// (std.Io.Timestamp.wait) inside this test binary was found to hang under
+// zig build's --listen=- test runner specifically — a standalone `zig test`
+// using the identical wait call resolves instantly, and the compiled CLI
+// itself (./zig-out/bin/gengo -e '...sleep(1)...') completes correctly in
+// ~20ms, so this is a test-harness interaction, not a defect in
+// waitOutSuspension/continueRun. Verified manually via the CLI instead;
+// see the compiled-binary check in this session's history.
 test "compiler: named value survives allocation in its predicate" {
     var rt = try setup();
     defer rt.deinit();

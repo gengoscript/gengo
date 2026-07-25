@@ -163,7 +163,11 @@ void engine_reset(int32_t handle);
 /* ── Compilation / execution ──────────────────────────────────────────────── */
 
 /*
- * Compile and run Gengoscript source code.
+ * Compile and run Gengoscript source code. Blocks the calling thread until
+ * the script finishes, including transparently waiting out any
+ * std.time.sleep() call the script makes — use engine_begin()/
+ * engine_continue() instead if the host needs to do other work (e.g. run
+ * its own event loop) while a script sleeps rather than blocking.
  * Returns  0 on success,
  *         -1 on compile error,
  *         -2 on runtime error.
@@ -171,7 +175,8 @@ void engine_reset(int32_t handle);
 int32_t engine_run(int32_t handle, const char *src, int32_t src_len);
 
 /*
- * Compile and run Gengoscript source code with an explicit path.
+ * Compile and run Gengoscript source code with an explicit path. Blocks
+ * through std.time.sleep() the same way engine_run() does.
  * Returns  0 on success,
  *         -1 on compile error,
  *         -2 on runtime error.
@@ -179,6 +184,39 @@ int32_t engine_run(int32_t handle, const char *src, int32_t src_len);
 int32_t engine_run_path(int32_t handle,
                         const char *src, int32_t src_len,
                         const char *path, int32_t path_len);
+
+/* ── Cooperative (non-blocking) execution ─────────────────────────────────── */
+
+/*
+ * Begin running a script, returning as soon as it either finishes or
+ * suspends (currently: a std.time.sleep() call) instead of blocking the
+ * calling thread the way engine_run() does. Use this pair when the host
+ * wants to keep servicing its own event loop, a UI, or other engines while
+ * a script sleeps.
+ *
+ * Returns  0  the script ran to completion
+ *          1  the script is suspended — call engine_continue() to resume
+ *         -1  invalid handle, bad arguments, or a compile error
+ *         -2  a runtime error occurred
+ */
+int32_t engine_begin(int32_t handle, const char *src, int32_t src_len);
+
+/*
+ * Resume a script suspended by engine_begin() (or a previous
+ * engine_continue()). Returns the same codes as engine_begin(). Calling
+ * this when the engine is not currently suspended returns -2 (a
+ * "NotSuspended" runtime error).
+ */
+int32_t engine_continue(int32_t handle);
+
+/*
+ * Milliseconds remaining until a suspended sleep() call's deadline, rounded
+ * up so a host that waits exactly this long won't need to poll again.
+ * Returns 0 when the engine is not currently suspended for sleep, including
+ * once the deadline has already passed (i.e. "call engine_continue now").
+ * Returns -1 for an invalid handle.
+ */
+int64_t engine_sleep_remaining_ms(int32_t handle);
 
 /* ── Calling exported functions ───────────────────────────────────────────── */
 
@@ -188,6 +226,11 @@ int32_t engine_run_path(int32_t handle,
  * out:  pointer to a gengo_value_wire_t that receives the return value (may be NULL).
  * Returns  0 on success,
  *         -2 on runtime error.
+ *
+ * std.time.sleep() is not supported inside a function invoked this way —
+ * it fails immediately with a "SleepNotAllowed" runtime error rather than
+ * suspending. Only top-level execution (engine_run/engine_run_path/
+ * engine_begin) can suspend on sleep().
  */
 int32_t engine_call(int32_t handle,
                     const char *name, int32_t name_len,

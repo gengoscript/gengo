@@ -766,6 +766,122 @@ export fn engine_run_path(handle: i32, src_ptr: PtrInt, src_len: i32, path_ptr: 
     };
 }
 
+fn execResultCode(engine: *Engine, res: api.ExecutionResult) i32 {
+    return switch (res) {
+        .completed => blk: {
+            engine.clearError();
+            break :blk 0;
+        },
+        .suspended => blk: {
+            engine.clearError();
+            break :blk 1;
+        },
+        .compile_error => |e| blk: {
+            engine.setCompileError(e);
+            break :blk -1;
+        },
+        .runtime_error => |e| blk: {
+            engine.setRuntimeError(e);
+            break :blk -2;
+        },
+    };
+}
+
+// Begin running a script, returning as soon as it either finishes or
+// suspends (currently: a std.time.sleep() call) instead of blocking the
+// calling thread the way engine_run() does. A host that wants cooperative
+// (non-blocking) scheduling calls engine_sleep_remaining_ms() to learn how
+// long to wait, then engine_continue() to resume — engine_run()/
+// engine_run_path()/engine_call() remain simpler synchronous alternatives
+// that block through any sleep() internally, for hosts that don't need to
+// do anything else while a script sleeps.
+//
+// Returns  0  the script ran to completion
+//          1  the script is suspended (call engine_continue to resume)
+//         -1  invalid handle, bad arguments, or a compile error
+//         -2  a runtime error occurred
+export fn engine_begin(handle: i32, src_ptr: PtrInt, src_len: i32) i32 {
+    const engine = getEngine(handle) orelse return -1;
+    if (src_len < 0) {
+        engine.setError("engine_begin: src_len must not be negative");
+        return -1;
+    }
+    const src = wasmSlice(src_ptr, src_len);
+    setupHostModules(engine);
+    const prev = pushEngineState(engine);
+    defer popEngineState(prev);
+    return execResultCode(engine, engine.runtime.begin(src));
+}
+
+// Resume a script suspended by engine_begin() (or a previous
+// engine_continue()). Returns the same codes as engine_begin(). Calling
+// this when the engine is not currently suspended returns -2 (a
+// NotSuspended runtime error).
+export fn engine_continue(handle: i32) i32 {
+    const engine = getEngine(handle) orelse return -1;
+    const prev = pushEngineState(engine);
+    defer popEngineState(prev);
+    return execResultCode(engine, engine.runtime.continueRun());
+}
+
+// Milliseconds remaining until a suspended sleep() call's deadline, rounded
+// up so a host that waits exactly this long won't need to poll again.
+// Returns 0 when the engine is not currently suspended for sleep, including
+// once the deadline has already passed (i.e. "call engine_continue now").
+// Returns -1 for an invalid handle.
+export fn engine_sleep_remaining_ms(handle: i32) i64 {
+    const engine = getEngine(handle) orelse return -1;
+    return engine.runtime.sleepRemainingMs();
+}
+
+test "engine_run blocks through std.time.sleep transparently" {
+    const h = engine_init();
+    try std.testing.expect(h > 0);
+    defer engine_destroy(h);
+
+    const src =
+        \\std := import("std")
+        \\std.time.sleep(2)
+        \\func done() bool { return true }
+    ;
+    const rc = engine_run(h, @intCast(@intFromPtr(src.ptr)), @intCast(src.len));
+    try std.testing.expectEqual(@as(i32, 0), rc);
+}
+
+test "engine_begin/engine_continue/engine_sleep_remaining_ms cooperative sleep" {
+    const h = engine_init();
+    try std.testing.expect(h > 0);
+    defer engine_destroy(h);
+
+    const src =
+        \\std := import("std")
+        \\std.time.sleep(2)
+    ;
+    const rc = engine_begin(h, @intCast(@intFromPtr(src.ptr)), @intCast(src.len));
+    try std.testing.expectEqual(@as(i32, 1), rc);
+    try std.testing.expect(engine_sleep_remaining_ms(h) > 0);
+
+    // Busy-poll rather than sleeping the test thread: the deadline is only
+    // 2ms away, and continueRun() itself returns .suspended immediately
+    // (cheaply) until it elapses.
+    var guard: u32 = 0;
+    var cont: i32 = 1;
+    while (cont == 1) {
+        guard += 1;
+        try std.testing.expect(guard < 10_000_000); // fail fast instead of hanging if something regresses
+        cont = engine_continue(h);
+    }
+    try std.testing.expectEqual(@as(i32, 0), cont);
+    try std.testing.expectEqual(@as(i64, 0), engine_sleep_remaining_ms(h));
+}
+
+test "engine_continue with nothing suspended is a runtime error" {
+    const h = engine_init();
+    try std.testing.expect(h > 0);
+    defer engine_destroy(h);
+    try std.testing.expectEqual(@as(i32, -2), engine_continue(h));
+}
+
 export fn engine_call(handle: i32, name_ptr: PtrInt, name_len: i32, args_ptr: PtrInt, argc: i32, out_ptr: PtrInt) i32 {
     const engine = getEngine(handle) orelse return -1;
     const name = wasmSlice(name_ptr, name_len);

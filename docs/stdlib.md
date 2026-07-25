@@ -821,7 +821,7 @@ Go-style text templates with `{{` / `}}` delimiters.
 | `std.time.parse(str, fmt)` | `std.Time` | Errors: `TypeError`/`RangeError` on bad input |
 | `std.time.since(t)` | `float` | Milliseconds elapsed since `t` (now − t); equivalent to `t.since()` |
 | `std.time.until(t)` | `float` | Milliseconds until `t` (t − now); equivalent to `t.until()` |
-| `std.time.sleep(ms)` | `null` | Suspends execution for an integer number of milliseconds; operation budget is charged one operation per requested nanosecond before suspension |
+| `std.time.sleep(ms)` | `null` | Suspends execution for an integer number of milliseconds; operation budget is charged one operation per requested nanosecond before suspension. Only supported at top-level execution (the CLI, or an embedding's `run`/`runPath`/`begin`) — calling it from a function invoked via `engine_call`/`Runtime.call` fails immediately with `SleepNotAllowed` rather than suspending. See `embedding.md`'s "std.time.sleep and Suspension" section for how a host resumes a suspended script. |
 
 **Duration constants** (plain `int`, milliseconds):
 `std.time.ms` `std.time.second` `std.time.minute` `std.time.hour` `std.time.day`

@@ -124,10 +124,6 @@ pub const Runtime = struct {
         };
     }
 
-    fn suspendedRunResult(self: *Runtime) RuntimeResult {
-        return .{ .runtime_error = runtimeError(error.ExecutionSuspended, &self.inner) };
-    }
-
     pub fn init(config: Config) !Runtime {
         var inner: rt_mod.Runtime = undefined;
         try inner.initWithConfig(
@@ -189,10 +185,10 @@ pub const Runtime = struct {
         const outcome = self.inner.runPathWithProvider(src, "", defaultSourceProvider(self), false) catch |err| {
             return self.classifyRunResult(err);
         };
-        return switch (outcome) {
-            .completed => .ok,
-            .suspended => self.suspendedRunResult(),
+        _ = self.inner.waitOutSuspension(outcome) catch |err| {
+            return self.classifyRunResult(err);
         };
+        return .ok;
     }
 
     pub fn begin(self: *Runtime, src: []const u8) ExecutionResult {
@@ -218,30 +214,30 @@ pub const Runtime = struct {
         const outcome = self.inner.runPathWithProvider(src, path, defaultSourceProvider(self), false) catch |err| {
             return self.classifyRunResult(err);
         };
-        return switch (outcome) {
-            .completed => .ok,
-            .suspended => self.suspendedRunResult(),
+        _ = self.inner.waitOutSuspension(outcome) catch |err| {
+            return self.classifyRunResult(err);
         };
+        return .ok;
     }
 
     pub fn runPathWithSources(self: *Runtime, src: []const u8, path: []const u8, sources: []const SourceEntry) RuntimeResult {
         const outcome = self.inner.runPathWithSources(src, path, sources) catch |err| {
             return self.classifyRunResult(err);
         };
-        return switch (outcome) {
-            .completed => .ok,
-            .suspended => self.suspendedRunResult(),
+        _ = self.inner.waitOutSuspension(outcome) catch |err| {
+            return self.classifyRunResult(err);
         };
+        return .ok;
     }
 
     pub fn runPathWithSourceProvider(self: *Runtime, src: []const u8, path: []const u8, provider: SourceProvider) RuntimeResult {
         const outcome = self.inner.runPathWithProvider(src, path, provider, false) catch |err| {
             return self.classifyRunResult(err);
         };
-        return switch (outcome) {
-            .completed => .ok,
-            .suspended => self.suspendedRunResult(),
+        _ = self.inner.waitOutSuspension(outcome) catch |err| {
+            return self.classifyRunResult(err);
         };
+        return .ok;
     }
 
     pub fn call(self: *Runtime, name: []const u8, args: []const Value) RuntimeResultWithValue {
@@ -256,6 +252,15 @@ pub const Runtime = struct {
             return self.classifyRunResult(err);
         };
         return .ok;
+    }
+
+    // Milliseconds remaining until a suspended sleep() call's deadline
+    // (rounded up), or 0 when not currently suspended for sleep. Intended
+    // for a cooperative caller driving begin()/continueRun() itself instead
+    // of the blocking run()/runPath() family — poll this to know how long to
+    // wait (e.g. inside its own event loop) before calling continueRun().
+    pub fn sleepRemainingMs(self: *Runtime) i64 {
+        return self.inner.sleepRemainingMs();
     }
 
     pub fn heapUsedBytes(self: *Runtime) usize {

@@ -256,7 +256,7 @@ pub const Runtime = struct {
     }
 
     pub fn run(self: *Runtime, src: []const u8) !void {
-        if (try self.runPath(src, "") == .suspended) return error.ExecutionSuspended;
+        _ = try self.waitOutSuspension(try self.runPath(src, ""));
     }
 
     pub fn runPath(self: *Runtime, src: []const u8, path: []const u8) !vm.RunOutcome {
@@ -282,6 +282,41 @@ pub const Runtime = struct {
             self.captureRuntimeError();
             return err;
         };
+    }
+
+    // Milliseconds remaining until a suspended sleep() call's deadline,
+    // rounded up so a caller that waits exactly this long won't need to poll
+    // again. Returns 0 when not currently suspended for sleep, including
+    // once the deadline has already passed (i.e. "call continueRun now").
+    pub fn sleepRemainingMs(self: *Runtime) i64 {
+        const deadline = self.vm_state.sleep_deadline_ns orelse return 0;
+        const io_ctx = std.Io.Threaded.global_single_threaded.io();
+        const now = @as(i128, std.Io.Timestamp.now(io_ctx, .boot).nanoseconds);
+        const remaining_ns = deadline - now;
+        if (remaining_ns <= 0) return 0;
+        const ms = @divTrunc(remaining_ns, 1_000_000) + 1;
+        return if (ms > std.math.maxInt(i64)) std.math.maxInt(i64) else @intCast(ms);
+    }
+
+    // Blocks the calling thread until any suspension (a std.time.sleep()
+    // deadline) in `initial` has fully resolved, resuming execution as
+    // needed, and returns once the run is genuinely .completed (or an error
+    // occurs). Safe to call with a non-suspended outcome — returns it as-is.
+    // This is what makes run()/runPath() and friends transparently "just
+    // work" through sleep(), the same way the CLI's own driver loop does;
+    // a caller that wants cooperative (non-blocking) scheduling instead
+    // should use begin()/continueRun()/sleepRemainingMs() directly rather
+    // than this method.
+    pub fn waitOutSuspension(self: *Runtime, initial: vm.RunOutcome) !vm.RunOutcome {
+        var outcome = initial;
+        const io_ctx = std.Io.Threaded.global_single_threaded.io();
+        while (outcome == .suspended) {
+            const deadline = self.vm_state.sleep_deadline_ns orelse return error.NotSuspended;
+            const timestamp = std.Io.Timestamp.fromNanoseconds(@intCast(deadline)).withClock(.boot);
+            try timestamp.wait(io_ctx);
+            outcome = try self.continueRun();
+        }
+        return outcome;
     }
 
     fn capabilityModules(self: *Runtime) []const module_compile.CapModuleDesc {
@@ -633,10 +668,16 @@ pub const Runtime = struct {
         try vmnative.installStdGlobal(install_ctx, &self.globals_state);
         try vmnative.installHostModules(install_ctx, &self.globals_state, self.host_modules);
         try vmnative.installCapabilityModules(install_ctx, &self.globals_state, repl_caps);
-        vm.run(.{ .cs = self.chunk_state, .gs = &self.globals_state, .hs = &self.heap_state, .vs = &self.vm_state }) catch |err| {
+        const outcome = vm.runUntilSuspend(.{ .cs = self.chunk_state, .gs = &self.globals_state, .hs = &self.heap_state, .vs = &self.vm_state }) catch |err| {
             self.captureRuntimeError();
             return err;
         };
+        // Block through any sleep() the same way run()/runPath() do, so the
+        // REPL's own top-of-stack echo below only fires once the line has
+        // truly finished — a REPL line calling sleep() used to fail outright
+        // (runIncremental called vm.run(), which turns .suspended straight
+        // into error.ExecutionSuspended) with no way to ever resume it.
+        _ = try self.waitOutSuspension(outcome);
         if (self.vm_state.stack_top > 0) {
             const v = self.vm_state.stack[self.vm_state.stack_top - 1];
             self.vm_state.stack_top -= 1;
