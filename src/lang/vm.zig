@@ -4162,10 +4162,26 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 const f = try opConst(ctx);
                 if (f != .object or f.object.* != .function) return error.InvalidChunkShape;
                 const proto = f.object.function;
-                const ups = if (ctx.hs.bump(*Object, proto.capture_slots.len)) |u| u else blk: {
-                    vmgc.collectGarbage(ctx);
-                    break :blk (ctx.hs.bump(*Object, proto.capture_slots.len) orelse return error.OutOfMemory);
-                };
+                // The upvalues array must be GC-managed, not heap.bump()'d: a
+                // closure created at runtime (a defer, a callback, any
+                // closure literal evaluated inside a loop) is created afresh
+                // every time this opcode runs, and bump() memory is never
+                // reclaimed — every such closure permanently leaked its
+                // upvalues array for the life of the program (found via a
+                // gengo-mqtt listener OOM: a defer-with-capture inside a
+                // per-message topic validator leaked ~16 bytes/message
+                // forever). Root the closure object immediately (a safe,
+                // empty-upvalues placeholder) so a GC triggered by any
+                // allocation below can't collect it, and attach `ups` to it
+                // right after allocating so compaction can find and relocate
+                // it — nothing may allocate between vmAllocManagedSlice and
+                // this assignment.
+                const clo = try vmgc.vmAllocObject(ctx);
+                clo.* = .{ .closure = ClosureObj{ .func = f.object, .upvalues = &.{} } };
+                try ctx.vs.pushTempRoot(.{ .object = clo });
+                defer ctx.vs.popTempRoot();
+                const ups = try vmgc.vmAllocManagedSlice(ctx, *Object, proto.capture_slots.len);
+                clo.closure.upvalues = ups;
                 const frame = if (ctx.vs.frame_top == 0) vms.Frame{ .ret_ip = 0, .base = 0, .callee = f.object, .defer_base = 0, .has_typed_returns = false, .named_return_count = 0, .func_arity = 0 } else ctx.vs.frames[ctx.vs.frame_top - 1];
                 for (proto.capture_slots, ups) |enc, *u| {
                     const is_upvalue = (enc & 0x80) != 0;
@@ -4189,8 +4205,6 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                         u.* = cell;
                     }
                 }
-                const clo = try vmgc.vmAllocObject(ctx);
-                clo.* = .{ .closure = ClosureObj{ .func = f.object, .upvalues = ups[0..proto.capture_slots.len] } };
                 try ctx.vs.vmPush(.{ .object = clo });
             },
             .invoke_method => try opInvokeMethod(ctx),
