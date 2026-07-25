@@ -1,0 +1,33 @@
+// Client for time_server.gengo: connects, reads the 4-byte RFC 868
+// response, and decodes it back to a calendar time.
+//
+// Run: gengo --cap net=dial check_time.gengo
+
+std := import("std")
+net := import("cap:net")
+
+rfc868_epoch_offset := 2208988800
+
+func checkTime() {
+    conn := net.dial("tcp", "127.0.0.1:7370")
+    if std.core.is_error(conn) {
+        std.io.println("dial failed: ", conn)
+        return
+    }
+
+    data := conn.read(4)
+    conn.close()
+
+    if std.core.bytelen(data) != 4 {
+        std.io.println("expected 4 bytes, got ", std.core.bytelen(data))
+        return
+    }
+
+    rfc868_time := std.bytes.u32be_at(data, 0)
+    unix_time := rfc868_time - rfc868_epoch_offset
+    t := std.time.from_unix(unix_time)
+    p := t.parts()
+    std.io.printf("server time: %d-%d-%d %d:%d:%d UTC\n", p.year, p.month, p.day, p.hour, p.min, p.sec)
+}
+
+checkTime()

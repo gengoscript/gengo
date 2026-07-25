@@ -23,6 +23,7 @@ const vms = @import("lang/vm_state.zig");
 const cfg = @import("runtime_config");
 const heap_rt = @import("runtime/heap.zig");
 const fs_state = @import("lang/native/fs_state.zig");
+const net_state = @import("lang/native/net_state.zig");
 const cap_env = if (build_opts.cap_env) @import("lang/native/cap_env.zig") else struct {};
 const disasm = @import("lang/disasm.zig");
 const bundle = @import("bundle.zig");
@@ -279,6 +280,30 @@ fn parseHeapSize(s: []const u8) usize {
     return n * multiplier;
 }
 
+// Splits a --net-listen-allow value into (pattern, port). Bracketed form
+// ("[::1]:8080" or bare "[::]") is IPv6-safe; otherwise splits on the last
+// ':' only when the tail parses as a port number, so a bare pattern with no
+// port (e.g. "*.example.com" or unbracketed "::1") is never misread as
+// having one. port 0 means "any port", matching net_state's own rule shape.
+fn splitPatternPort(raw: []const u8) struct { pattern: []const u8, port: u16 } {
+    if (raw.len > 0 and raw[0] == '[') {
+        if (std.mem.indexOfScalar(u8, raw, ']')) |rb| {
+            const inner = raw[1..rb];
+            if (rb + 1 < raw.len and raw[rb + 1] == ':') {
+                const port = std.fmt.parseUnsigned(u16, raw[rb + 2 ..], 10) catch 0;
+                return .{ .pattern = inner, .port = port };
+            }
+            return .{ .pattern = inner, .port = 0 };
+        }
+    }
+    if (std.mem.lastIndexOfScalar(u8, raw, ':')) |i| {
+        if (std.fmt.parseUnsigned(u16, raw[i + 1 ..], 10)) |port| {
+            return .{ .pattern = raw[0..i], .port = port };
+        } else |_| {}
+    }
+    return .{ .pattern = raw, .port = 0 };
+}
+
 fn printBundleUsage() void {
     io.write("Usage: gengo bundle --entry <archive-path.gengo> -o <bundle.zip> [options] [folder ...]\n");
     io.write("\n");
@@ -467,6 +492,9 @@ fn runCli(argv: []const []const u8) void {
             io.write("  --profile          With --test, report peak ops/heap/stack/objects per block\n");
             io.write("  --cap <name>       Enable a named capability (repeatable)\n");
             io.write("  --cap net=dial,listen  Scope the net capability (dial and/or listen)\n");
+            io.write("  --net-listen-allow pattern[:port]  Allow net.listen to bind a matching\n");
+            io.write("                     address (repeatable); listen refuses everything\n");
+            io.write("                     with no rules\n");
             io.write("  --modules <path>   Allow imports from an extra directory (repeatable)\n");
             io.write("  --max-ops <n>      Limit instruction count (0 = unlimited)\n");
             io.write("  --heap <size>      Set GC heap size, e.g. 4m, 512k (default 1m)\n");
@@ -597,6 +625,23 @@ fn runCli(argv: []const []const u8) void {
                 io.werr("\n");
                 die(1);
             };
+            script_index += 2;
+            continue;
+        }
+        if (std.mem.eql(u8, a, "--net-listen-allow")) {
+            if (script_index + 1 >= argv.len) {
+                io.werr("gengo: --net-listen-allow requires a value pattern[:port]\n");
+                die(1);
+            }
+            const v = argv[script_index + 1];
+            const split = splitPatternPort(v);
+            const rc = net_state.addListenPolicyRule(.allow, split.pattern, split.port);
+            if (rc != 0) {
+                io.werr("gengo: invalid --net-listen-allow value: ");
+                io.werr(v);
+                io.werr("\n");
+                die(1);
+            }
             script_index += 2;
             continue;
         }
