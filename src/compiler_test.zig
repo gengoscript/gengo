@@ -153,6 +153,86 @@ fn expectNoTempRoots() !void {
     try std.testing.expectEqual(@as(usize, 0), vms.tempRootDepth());
 }
 
+// std.sort.by (and sort_asc/sort_desc) used to clone the input array via
+// cloneArraySlice into a raw, unrooted managed slice, then loop over it
+// while calling arbitrary user comparator code (which allocates). If that
+// allocation pressure forced a heap compaction, the clone — invisible to
+// the compaction walk, since no Object owned it yet — could be silently
+// overwritten while native/sort.zig kept reading/writing through the now-
+// stale slice. Fixed by allocating the working copy as a GC-visible,
+// temp-rooted array up front (see native/sort.zig).
+//
+// This test is a basic correctness check for std.sort.by under GC pressure,
+// not a guaranteed reproduction of the compaction-corruption crash itself:
+// the crash was confirmed directly against the compiled CLI (`--heap 128k`,
+// verified via `git stash` of the fix, reproducing identically under plain,
+// -Dgc_stress, and -Dheap_paranoia builds — see the fix commit), but the
+// same script run in-process through api.Runtime here — with heap size,
+// max_objects, and allocator all matched to the CLI — did not reproduce it.
+// The corruption is apparently sensitive to something about process
+// environment/layout beyond these parameters; if this test class needs a
+// deterministic regression guard, it likely has to shell out to the actual
+// compiled binary rather than run in-process.
+test "std.sort.by does not corrupt array elements under heap pressure (compaction during a comparator call)" {
+    var rt = try setupApiRuntime(.{
+        .allow_io = false,
+        .heap_size_bytes = 128 * 1024,
+        .max_objects = 2048,
+    });
+    defer rt.deinit();
+
+    try std.testing.expect(rt.run(
+        \\std := import("std")
+        \\type Item struct { key int, tag string }
+        \\func check() bool {
+        \\    n := 20
+        \\    arr := []
+        \\    i := 0
+        \\    for i < n {
+        \\        idx := (n - i) * 37 mod 97
+        \\        arr = std.core.append(arr, Item{ key: idx, tag: "tag-" + std.conv.to_string(idx) })
+        \\        i = i + 1
+        \\    }
+        \\    pins := []
+        \\    calls := 0
+        \\    cmp := func(a Item, b Item) int {
+        \\        calls = calls + 1
+        \\        s1 := ""
+        \\        p := 0
+        \\        plen := 40 + (calls mod 7) * 30
+        \\        for p < plen {
+        \\            s1 = s1 + "m"
+        \\            p = p + 1
+        \\        }
+        \\        pins = std.core.append(pins, s1)
+        \\        if a.key < b.key { return -1 }
+        \\        if a.key > b.key { return 1 }
+        \\        return 0
+        \\    }
+        \\    sorted := std.sort.by(arr, cmp)
+        \\    ok := true
+        \\    k := 1
+        \\    for k < std.core.len(sorted) {
+        \\        if sorted[k - 1].key > sorted[k].key { ok = false }
+        \\        k = k + 1
+        \\    }
+        \\    k = 0
+        \\    for k < std.core.len(sorted) {
+        \\        want := "tag-" + std.conv.to_string(sorted[k].key)
+        \\        if sorted[k].tag != want { ok = false }
+        \\        k = k + 1
+        \\    }
+        \\    return ok
+        \\}
+    ) == .ok);
+
+    const result = rt.call("check", &.{});
+    switch (result) {
+        .ok => |v| try std.testing.expect(v == .boolean and v.boolean),
+        else => return error.TestUnexpectedResult,
+    }
+}
+
 test "api runtime leaves no temp roots after GC-heavy success and error churn" {
     var rt = try setupApiRuntime(.{
         .allow_io = false,
