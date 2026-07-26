@@ -3998,6 +3998,26 @@ test "compiler: dunder operators work at runtime inside a type-erased generic fu
     try std.testing.expectEqual(@as(i64, 7), result.int);
 }
 
+// addGenericFunc used to run AFTER compiling the function's own body, so a
+// self-recursive call with explicit type args (countdown[T](...)) inside
+// that same body couldn't find hasGenericFunc(name) yet — compiler_expr.zig
+// treated `countdown[T]` as an indexing expression instead of a generic
+// call, evaluating `T` as a (nonexistent) runtime variable and panicking
+// with NotDefined. Fixed by registering a top-level generic function before
+// compiling its body.
+test "compiler: self-recursive generic function call with explicit type args" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func countdown[T](x T, n int) T {
+        \\    if n <= 0 { return x }
+        \\    return countdown[T](x, n - 1)
+        \\}
+    );
+    const result = try rt.callGlobal("countdown", &.{ .{ .int = 0 }, .{ .int = 5 } });
+    try std.testing.expectEqual(@as(i64, 0), result.int);
+}
+
 test "compiler: := infers struct type for dunder dispatch, same as an explicitly var-typed local" {
     // Struct literals previously left no ExprPrimInfo on their own result at
     // all, and := never inferred struct_type for a local either — both
