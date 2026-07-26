@@ -4393,6 +4393,50 @@ test "gbc: a predicate-bearing named type still enforces its predicate after rou
 // frame.base/frame.ret_ip/frame.has_typed_returns into locals before
 // frame_top is dropped, matching the pattern the multi-named-return spread
 // path already used a few lines above.
+// The named-error-type constructor (vm.zig's .named_error_type case)
+// interned a dyn_string's or string_view's bytes via internStr, which
+// stores a raw reference without copying ("s MUST point at immortal
+// data") — but those bytes live in GC-managed memory, not immortal
+// storage. A later allocation forcing a heap compaction could relocate
+// or reuse that memory while the named_error_value's msg pointer still
+// pointed at it, corrupting the message. Fixed by switching to
+// internStrCopy, which copies to the permanent bump allocator first
+// (same fix already applied to core_error/cap_http.zig, commit 7a87570).
+// A small heap plus post-construction allocation churn is needed to
+// force compaction to actually relocate the message bytes.
+test "compiler: named error value message survives compaction" {
+    var rt = try setupApiRuntime(.{
+        .allow_io = false,
+        .heap_size_bytes = 128 * 1024,
+        .max_objects = 2048,
+    });
+    defer rt.deinit();
+
+    try std.testing.expect(rt.run(
+        \\std := import("std")
+        \\type MyErr error
+        \\func build(n int) error {
+        \\    s := "msg-" + std.conv.to_string(n) + "-tail"
+        \\    return MyErr(s)
+        \\}
+        \\e := build(424242)
+        \\func churn() string {
+        \\    i := 0
+        \\    for i < 3000 {
+        \\        junk := "garbage-" + std.conv.to_string(i) + "-more-padding-here"
+        \\        _ = std.core.bytelen(junk)
+        \\        i = i + 1
+        \\    }
+        \\    return string(e)
+        \\}
+    ) == .ok);
+    const result = rt.call("churn", &.{});
+    switch (result) {
+        .ok => |v| try std.testing.expectEqualStrings("msg-424242-tail", try vms.asStringValue(v)),
+        else => return error.TestUnexpectedResult,
+    }
+}
+
 test "compiler: predicate-bearing named type as a function's declared return type (issue #212)" {
     var rt = try setup();
     defer rt.deinit();
