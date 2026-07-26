@@ -4018,6 +4018,44 @@ test "compiler: self-recursive generic function call with explicit type args" {
     try std.testing.expectEqual(@as(i64, 0), result.int);
 }
 
+// looksLikeGenericTypeParams (compiler.zig) — the lookahead that decides
+// whether `Name[...]` after a type name is a generic-parameter list — only
+// accepted .ident/.comma inside the brackets, so a `:` constraint (e.g.
+// `[T: numeric]`) fell through to `else => return false` and the whole
+// declaration was never even recognized as generic, despite the sibling
+// scanner for generic functions (isNamedFuncDecl) already allowing `:`, and
+// despite docs/language.md explicitly documenting the same constraint
+// syntax for generic types. Fixed by allowing .colon in the type-param
+// scan too, and by wiring checkTypeArgConstraints into
+// instantiateGenericType (compiler_decls.zig) — generic functions already
+// enforced constraints at call time, but generic types never did, even
+// once recognized as generic.
+test "compiler: constrained generic struct type parameter parses and instantiates" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Box[T: numeric] struct { val T }
+        \\func f() int {
+        \\    b := Box[int]{ val: 42 }
+        \\    return b.val
+        \\}
+    );
+    const result = try rt.callGlobal("f", &.{});
+    try std.testing.expectEqual(@as(i64, 42), result.int);
+}
+
+test "compiler: constrained generic struct type parameter rejects a non-conforming type arg" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.ConstraintViolation, compile(&rt,
+        \\type Box[T: numeric] struct { val T }
+        \\func f() string {
+        \\    b := Box[string]{ val: "hi" }
+        \\    return b.val
+        \\}
+    ));
+}
+
 test "compiler: := infers struct type for dunder dispatch, same as an explicitly var-typed local" {
     // Struct literals previously left no ExprPrimInfo on their own result at
     // all, and := never inferred struct_type for a local either — both
