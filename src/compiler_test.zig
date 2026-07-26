@@ -3090,6 +3090,38 @@ test "compiler: std.bytes decode family raises RangeError (not a crash) on a neg
     try std.testing.expectError(error.RangeError, rt.callGlobal("f", &.{}));
 }
 
+// A pattern that can match zero characters (a bare anchor, or a nullable
+// quantifier) was rejected everywhere in regexp.zig: `end == i` was
+// treated as "no match", so match/find/find_all/split could never report
+// a zero-width match. Fixed in findMatch/findAllMatches (regexp.zig);
+// nativeReReplace/nativeReSplit were also rewritten to scan via
+// findAllMatches (absolute positions in the original string) instead of
+// re-running findMatch against a shrinking re-sliced substring, which
+// both avoids an infinite loop on a zero-width match and fixes anchors
+// (`^`) incorrectly re-matching at every iteration's substring start.
+test "compiler: regexp zero-width matches (anchors, nullable quantifiers)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\re := std.regexp
+        \\assert re.match("^", "bbb")
+        \\assert re.match("a*", "bbb")
+        \\parts := re.split("x*", "abc")
+        \\assert std.core.len(parts) == 4
+        \\assert parts[0] == ""
+        \\assert parts[1] == "a"
+        \\assert parts[2] == "b"
+        \\assert parts[3] == "c"
+        \\all := re.find_all("a*", "baab")
+        \\assert std.core.len(all) == 4
+        \\assert all[0] == ""
+        \\assert all[1] == "aa"
+        \\assert all[2] == ""
+        \\assert all[3] == ""
+    );
+}
+
 test "compiler: field = field + const fuses into field_add_const" {
     // The "c.tx_id = c.tx_id + 1" idiom (found independently in gengo-modbus
     // and gengo-mqtt as a transaction/packet-ID counter), issue #207.

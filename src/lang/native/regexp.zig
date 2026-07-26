@@ -421,18 +421,23 @@ fn fullMatch(alts: []Alt, s: []const u8) bool {
     return (matchAny(alts, s, 0) orelse return false) == s.len;
 }
 
+// A pattern that can match zero characters (a bare anchor like `^`, or a
+// nullable quantifier like `a*`/`x?`) is a legitimate match, not something
+// to reject — `end == i` used to be treated as "no match" throughout this
+// file, so `match("^", s)`/`match("a*", s)` always returned false and
+// find/find_all/split could never report a zero-width match anywhere.
+// The `i <= s.len` bound (rather than `<`) additionally lets a zero-width
+// match register at the very end of the string, which matchAlt already
+// handles safely for every node kind (dollar/caret/literal all bounds-check
+// against s.len themselves).
 fn findMatch(alts: []Alt, s: []const u8) ?struct { usize, usize } {
     if (alts.len > 0 and alts[0].len > 0 and alts[0][0].kind == .caret) {
         const end = matchAny(alts, s, 0) orelse return null;
-        if (end > 0) return .{ 0, end };
-        return null;
+        return .{ 0, end };
     }
     var i: usize = 0;
-    while (i < s.len) {
-        if (matchAny(alts, s, i)) |end| {
-            if (end > i) return .{ i, end };
-        }
-        i += 1;
+    while (i <= s.len) : (i += 1) {
+        if (matchAny(alts, s, i)) |end| return .{ i, end };
     }
     return null;
 }
@@ -440,14 +445,13 @@ fn findMatch(alts: []Alt, s: []const u8) ?struct { usize, usize } {
 fn findAllMatches(alts: []Alt, s: []const u8, alloc: std.mem.Allocator) ![]struct { usize, usize } {
     var matches = AlignedManaged(struct { usize, usize }, null).init(alloc);
     var i: usize = 0;
-    while (i < s.len) {
+    while (i <= s.len) {
         if (matchAny(alts, s, i)) |end| {
-            if (end > i) {
-                try matches.append(.{ i, end });
-                i = end;
-            } else {
-                i += 1;
-            }
+            try matches.append(.{ i, end });
+            // A zero-width match must still advance i, or every remaining
+            // call would re-match the same empty string at the same spot
+            // forever.
+            i = if (end > i) end else i + 1;
         } else {
             i += 1;
         }
@@ -537,18 +541,23 @@ pub fn nativeReReplace(ctx: VMContext, pattern_val: Value, s_val: Value, repl_va
     const repl = try vms.asStringValue(repl_val);
     const alloc = std.heap.page_allocator;
     const alts = try parsePattern(ctx, pattern);
+    // Built from findAllMatches (absolute positions in the original s)
+    // rather than re-slicing s[i..] and re-running findMatch on each
+    // shrinking substring: the latter made every iteration's substring
+    // start look like position 0 to an anchor like `^`, which is wrong
+    // for every iteration after the first, and had no way to make
+    // progress past a zero-width match without special-casing it here too.
+    const matches = try findAllMatches(alts, s, alloc);
+    defer alloc.free(matches);
     var result = AlignedManaged(u8, null).init(alloc);
     defer result.deinit();
-    var i: usize = 0;
-    while (i < s.len) {
-        const m = findMatch(alts, s[i..]) orelse {
-            try result.appendSlice(s[i..]);
-            break;
-        };
-        try result.appendSlice(s[i .. i + m[0]]);
+    var last: usize = 0;
+    for (matches) |m| {
+        try result.appendSlice(s[last..m[0]]);
         try result.appendSlice(repl);
-        i += m[1];
+        last = m[1];
     }
+    try result.appendSlice(s[last..]);
     return try vmgc.makeDynString(ctx, result.items);
 }
 
@@ -559,17 +568,25 @@ pub fn nativeReSplit(ctx: VMContext, pattern_val: Value, s_val: Value) !Value {
     const alts = try parsePattern(ctx, pattern);
     // Store index ranges rather than slices: s_val's backing may relocate
     // once we start allocating managed memory below, so we re-derive s
-    // fresh from s_val each time we need actual bytes.
+    // fresh from s_val each time we need actual bytes. Built from
+    // findAllMatches for the same reason as nativeReReplace above.
+    const matches = try findAllMatches(alts, s, alloc);
+    defer alloc.free(matches);
     var parts = AlignedManaged(struct { usize, usize }, null).init(alloc);
     defer parts.deinit();
-    var i: usize = 0;
-    while (i < s.len) {
-        const m = findMatch(alts, s[i..]) orelse {
-            try parts.append(.{ i, s.len });
-            break;
-        };
-        try parts.append(.{ i, i + m[0] });
-        i += m[1];
+    var last: usize = 0;
+    for (matches) |m| {
+        try parts.append(.{ last, m[0] });
+        last = m[1];
+    }
+    // Preserve the existing contract (tests/spec/140_regexp.gengo): when
+    // the final match consumes exactly through the end of the string,
+    // there is no trailing empty part. Only add one when there's real
+    // leftover content, or when there was no match at all (in which case
+    // the "whole string as one part" case still needs this to fire even
+    // when s itself is empty).
+    if (matches.len == 0 or last < s.len) {
+        try parts.append(.{ last, s.len });
     }
     const obj = try vmgc.allocTempRooted(ctx, .{ .array_managed = &[_]Value{} });
     defer ctx.vs.popTempRoot();
