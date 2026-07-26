@@ -4085,21 +4085,28 @@ test "gbc: writer supports a captureless (module-scope) predicate-bearing named 
     std.testing.allocator.free(bytes);
 }
 
-// Note: a named type declared inside a function, with a predicate that
-// captures that function's own locals (predicate_uv_count > 0 in
-// compiler_decls.zig's namedTypeDecl/subtypeDecl), cannot currently be
-// exercised in a test at all — it hits a real, pre-existing, GBC-unrelated
-// compiler bug the moment the enclosing function runs (a bytecode
-// emission-order bug: `make_closure` is emitted before the named type's own
-// `emitConst`, but the `set_named_predicate` opcode expects the opposite
-// stack order — TypeError, unconditionally, on every call). gbc_writer.zig's
-// `cl.upvalues.len > 0` rejection in the .named_type case is still correct
-// defensive code (this write()-time constant is a *pre-existing* heap
-// object shared with running bytecode, per compiler_decls.zig, so a caller
-// that ran code before calling write() could in principle reach it once
-// that separate bug is fixed) — just not something this suite can exercise
-// today. gengo-mqtt's own predicates are all module-scope (captureless), so
-// this doesn't block real-world use; flagged separately, not fixed here.
+// A named type declared inside a function, with a predicate that captures
+// that function's own locals (predicate_uv_count > 0 in compiler_decls.zig's
+// namedTypeDecl/subtypeDecl), used to hit a real, GBC-unrelated compiler bug
+// the moment the enclosing function ran: `make_closure` was emitted before
+// the named type's own `emitConst`, but the `set_named_predicate` opcode
+// expected the opposite stack order — TypeError, unconditionally, on every
+// call. Fixed (issue #211) by deferring the `make_closure` emission to run
+// immediately before `set_named_predicate`, after the named type's own
+// `emitConst`, in both namedTypeDecl and subtypeDecl.
+test "compiler: in-function named type predicate capturing an enclosing local (issue #211)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func make(threshold int, val int) int {
+        \\    type Score int predicate func(x) { return x >= threshold }
+        \\    return int(Score(val))
+        \\}
+    );
+    const ok = try rt.callGlobal("make", &.{ .{ .int = 5 }, .{ .int = 5 } });
+    try std.testing.expectEqual(@as(i64, 5), ok.int);
+    try std.testing.expectError(error.PredicateFailed, rt.callGlobal("make", &.{ .{ .int = 5 }, .{ .int = 1 } }));
+}
 
 test "gbc: struct and named-type constants round-trip through write+read and execute correctly" {
     const src =
