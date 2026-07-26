@@ -3122,6 +3122,24 @@ test "compiler: regexp zero-width matches (anchors, nullable quantifiers)" {
     );
 }
 
+// Zig's std.json.Stringify only supports a fixed set of whitespace widths
+// (1/2/3/4/8 spaces or a tab) — no arbitrary N. A width outside that set
+// (5, 6, or 7 spaces) used to silently fall back to 2-space indentation
+// instead of the requested width. Fixed to fail loudly (TypeError)
+// instead of silently returning output at the wrong width.
+test "compiler: std.json.indent rejects an unsupported indent width instead of silently substituting one" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func four() string { return std.json.indent("{\"a\":1}", "    ") }
+        \\func five() string { return std.json.indent("{\"a\":1}", "     ") }
+    );
+    const four = try rt.callGlobal("four", &.{});
+    try std.testing.expectEqualStrings("{\n    \"a\": 1\n}", try vms.asStringValue(four));
+    try std.testing.expectError(error.TypeError, rt.callGlobal("five", &.{}));
+}
+
 test "compiler: field = field + const fuses into field_add_const" {
     // The "c.tx_id = c.tx_id + 1" idiom (found independently in gengo-modbus
     // and gengo-mqtt as a transaction/packet-ID counter), issue #207.
