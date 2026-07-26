@@ -1,0 +1,4 @@
+true
+defer 2 (registered second, runs middle)
+defer 1 (registered first, runs last)
+after attempt() returned normally

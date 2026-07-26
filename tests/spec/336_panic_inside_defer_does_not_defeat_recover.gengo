@@ -1,0 +1,26 @@
+// Regression test: a panic raised by one deferred call (while a sibling
+// defer is meant to recover the ORIGINAL panic) used to corrupt shared
+// panic-in-progress state, permanently defeating recover() for every
+// later defer, in this frame or any enclosing one.
+std := import("std")
+core := std.core
+
+func inner() {
+    defer std.io.println("inner defer 1 (runs last, after the panicking one)")
+    defer func() {
+        assert false, "panic from inside a defer"
+    }()
+    assert false, "original panic"
+}
+
+func outer() {
+    defer func() {
+        e := core.recover()
+        std.io.println(core.is_error(e))
+    }()
+    inner()
+    std.io.println("unreachable")
+}
+
+outer()
+std.io.println("after outer() returned")

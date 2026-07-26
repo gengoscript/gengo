@@ -1,0 +1,3 @@
+inner defer 1 (runs last, after the panicking one)
+true
+after outer() returned

@@ -4562,6 +4562,16 @@ fn runDeferredCall(ctx: VMContext, deferred: Value) anyerror!void {
 fn runPanicUnwind(ctx: VMContext, orig_err: anyerror) anyerror!void {
     var current_err = orig_err;
     ctx.vs.recovered = false;
+    // A panic raised by a deferred call while already unwinding another
+    // panic (e.g. one defer's body panics while a sibling defer is meant
+    // to recover the original one) re-enters this function: runDeferredCall
+    // drives the deferred closure via a nested run(), whose own panic
+    // handling calls runPanicUnwind again before the outer call has
+    // finished. Save the caller's is_panicking so this invocation's own
+    // cleanup restores it instead of unconditionally clearing it — the
+    // outer unwind is still very much in progress and its own remaining
+    // defers must still see is_panicking == true for recover() to work.
+    const prev_panicking = ctx.vs.is_panicking;
     // If panic_line is already non-zero, a deeper run() has already captured the
     // true fault location (e.g. inside a predicate body). Preserve it rather than
     // overwriting with the outer call site (e.g. the named-type constructor call).
@@ -4613,25 +4623,42 @@ fn runPanicUnwind(ctx: VMContext, orig_err: anyerror) anyerror!void {
     const stop_depth = if (ctx.vs.call_depth_target == std.math.maxInt(usize)) 0 else ctx.vs.call_depth_target;
     while (ctx.vs.frame_top > stop_depth) {
         const frame_defer_base = ctx.vs.frames[ctx.vs.frame_top - 1].defer_base;
+        // "Deferred calls run in LIFO order" is an unconditional guarantee
+        // (docs/language.md) — a recover() partway through this frame's
+        // defers must not skip the ones still pending. Keep draining the
+        // whole frame; frame_recovered tracks whether recovery is still in
+        // effect once the frame's defers are exhausted. A later defer that
+        // panics again (without itself recovering) supersedes an earlier
+        // recovery in the same frame — current_err/frame_recovered reflect
+        // whichever happened last.
+        var frame_recovered = false;
         while (ctx.vs.defer_top > frame_defer_base) {
             ctx.vs.defer_top -= 1;
             runDeferredCall(ctx, ctx.vs.defer_stack[ctx.vs.defer_top]) catch |new_err| {
                 if (!ctx.vs.recovered) {
                     current_err = new_err;
                     ctx.vs.panic_value = .{ .error_value = try ctx.cs.internStr(@errorName(new_err)) };
+                    // Reactivate is_panicking: this defer panicked again
+                    // after an earlier defer in the same frame had already
+                    // recovered (which cleared is_panicking) — any further
+                    // defer still pending in this frame must see an active
+                    // panic to recover it.
+                    frame_recovered = false;
+                    ctx.vs.is_panicking = true;
                 }
             };
-            if (ctx.vs.recovered) break;
+            if (ctx.vs.recovered) {
+                frame_recovered = true;
+                ctx.vs.recovered = false;
+                ctx.vs.is_panicking = false;
+                ctx.vs.panic_line = 0;
+                ctx.vs.panic_col = 0;
+                ctx.vs.panic_path_len = 0;
+                ctx.vs.panic_depth = 0;
+                ctx.vs.runtime_err_len = 0;
+            }
         }
-        if (ctx.vs.recovered) {
-            ctx.vs.recovered = false;
-            ctx.vs.is_panicking = false;
-            ctx.vs.panic_line = 0;
-            ctx.vs.panic_col = 0;
-            ctx.vs.panic_path_len = 0;
-            ctx.vs.panic_depth = 0;
-            ctx.vs.runtime_err_len = 0;
-            ctx.vs.defer_top = frame_defer_base;
+        if (frame_recovered) {
 
             // Determine the recovered function's return arity before unwinding its frame.
             // If the function returns multiple values, callers expect a tuple; pushing a
@@ -4678,6 +4705,14 @@ fn runPanicUnwind(ctx: VMContext, orig_err: anyerror) anyerror!void {
             // bytecode), ret_ip points past halt/end-of-code.  The ret opcode's
             // fast path already handles this via call_depth_target; mirror that here
             // so recover() works when the caller is engine_call, not just the CLI.
+            //
+            // Restore (rather than leave cleared) is_panicking: if this
+            // runPanicUnwind invocation is itself the reentrant one started
+            // by a panic inside a defer (see prev_panicking above), the
+            // OUTER unwind this call is nested within is still active and
+            // its own remaining defers still need is_panicking == true to
+            // recover — this call's own recovery doesn't change that.
+            ctx.vs.is_panicking = prev_panicking;
             if (ctx.vs.frame_top == ctx.vs.call_depth_target) return;
             return run(ctx);
         }
@@ -4686,7 +4721,7 @@ fn runPanicUnwind(ctx: VMContext, orig_err: anyerror) anyerror!void {
         ctx.vs.stack_top = if (frame.base > 0) frame.base - 1 else 0;
         ctx.vs.ip = frame.ret_ip;
     }
-    ctx.vs.is_panicking = false;
+    ctx.vs.is_panicking = prev_panicking;
     return current_err;
 }
 
