@@ -402,6 +402,20 @@ pub fn namedFuncDecl(c: anytype, is_pub: bool) !void {
     }
     errdefer c.type_param_count = saved_param_count;
 
+    // A top-level generic function must be registered in the generic-func
+    // registry BEFORE its body is compiled: hasGenericFunc(name) is what
+    // lets the expression compiler recognize name[T](...) as a generic
+    // call rather than an indexing expression (compiler_expr.zig), and a
+    // self-recursive call inside the body needs that recognition already
+    // in effect — registering afterward (as this used to) left every
+    // recursive call misparsed as indexing, panicking at runtime.
+    if (is_generic and !c.inFunc() and !c.skipping_test_body) {
+        const qname_early = try c.qualifyGlobalName(name.src);
+        var gi: ct.GenericFuncInfo = .{ .name = try c.copyName(name.src), .param_count = tparam_count, .qname = qname_early };
+        for (tparams[0..tparam_count], 0..) |tp, i| gi.params[i] = tp;
+        try c.registry.addGenericFunc(gi);
+    }
+
     // current token is '('; compile as a named function for return-type enforcement
     if (!is_generic) c.pending_func_qname = try c.qualifyGlobalName(name.src);
     _ = try c.compileFuncWithPrefix(&[_][]const u8{}, true, null);
@@ -428,11 +442,7 @@ pub fn namedFuncDecl(c: anytype, is_pub: bool) !void {
                     c.registry.setGlobalFuncReturnCount(qname, fo.function.named_return_count);
                 }
             }
-            if (is_generic) {
-                var gi: ct.GenericFuncInfo = .{ .name = try c.copyName(name.src), .param_count = tparam_count, .qname = qname };
-                for (tparams[0..tparam_count], 0..) |tp, i| gi.params[i] = tp;
-                try c.registry.addGenericFunc(gi);
-            }
+            // (generic registration now happens above, before compiling the body)
         }
         try c.cs.emitOpStringConst(.def_global, qname, kw.line);
         if (is_pub) try c.addExport(name.src, qname);
