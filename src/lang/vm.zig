@@ -1229,8 +1229,17 @@ fn performCall(ctx: VMContext, argc: u8) !void {
                     .string => |ss| break :blk ss,
                     .error_value => |ss| break :blk ss,
                     .object => |ao| switch (ao.*) {
-                        .dyn_string => |s| break :blk try ctx.cs.internStr(s),
-                        .string_view => |sv| break :blk try ctx.cs.internStr(sv.bytes),
+                        // internStr stores a raw reference without copying
+                        // ("s MUST point at immortal data") — a dyn_string's
+                        // or string_view's bytes live in GC-managed memory,
+                        // not immortal storage, so a later collection could
+                        // free/reuse them while this named_error_value still
+                        // points at them. internStrCopy copies to the
+                        // permanent bump allocator first, matching the same
+                        // fix applied to core_error/cap_http.zig's
+                        // pushErrPair (commit 7a87570).
+                        .dyn_string => |s| break :blk try ctx.cs.internStrCopy(s),
+                        .string_view => |sv| break :blk try ctx.cs.internStrCopy(sv.bytes),
                         .named_error_value => |nev| break :blk nev.msg,
                         else => {},
                     },
