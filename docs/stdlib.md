@@ -752,7 +752,7 @@ Errors: `InvalidRegexp` on a malformed pattern.
 - Returns array of all non-overlapping matches
 
 ### `std.regexp.replace(pattern, s, repl)`
-- Replaces first occurrence of `pattern` in `s` with `repl`; returns new string
+- Replaces every non-overlapping occurrence of `pattern` in `s` with `repl`; returns new string
 
 ### `std.regexp.split(pattern, s)`
 - Splits `s` at each match of `pattern`; returns array of strings
