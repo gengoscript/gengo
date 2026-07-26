@@ -763,6 +763,7 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
 
     var predicate_obj: ?*Object = null;
     var predicate_uv_count: u8 = 0;
+    var predicate_closure_cidx: u16 = 0;
     var predicate_msg: ?[]const u8 = null;
 
     if (c.matchClauseWord("predicate")) {
@@ -777,8 +778,11 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
             cl.* = .{ .closure = .{ .func = func_obj, .upvalues = &[_]*Object{} } };
             predicate_obj = cl;
         } else {
-            const cidx: u16 = try c.cs.addConst(.{ .object = func_obj });
-            try c.cs.emitConstIdx(.make_closure, cidx, c.prev.line);
+            // Emission of `make_closure` is deferred to right before
+            // `set_named_predicate` below (after nt's emitConst) — that
+            // opcode expects the closure on top of the named-type object,
+            // not underneath it.
+            predicate_closure_cidx = try c.cs.addConst(.{ .object = func_obj });
         }
         if (c.matchClauseWord("message")) {
             if (c.cur.typ != .string) return c.err("expected string literal after 'message'", .{});
@@ -849,6 +853,7 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
     if (!c.skipping_test_body) c.registry.setNamedTypeRuntimeObject(name, nt);
     try c.cs.emitConst(.{ .object = nt }, kw.line);
     if (predicate_uv_count > 0) {
+        try c.cs.emitConstIdx(.make_closure, predicate_closure_cidx, kw.line);
         try c.cs.emitOp(.set_named_predicate, kw.line);
     }
     if (has_default and predicate_obj != null) {
@@ -1959,6 +1964,7 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
 
     var predicate_obj: ?*Object = null;
     var predicate_uv_count: u8 = 0;
+    var predicate_closure_cidx: u16 = 0;
     var predicate_msg: ?[]const u8 = null;
 
     if (c.matchClauseWord("predicate")) {
@@ -1973,8 +1979,11 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
             cl.* = .{ .closure = .{ .func = func_obj, .upvalues = &[_]*Object{} } };
             predicate_obj = cl;
         } else {
-            const cidx: u16 = try c.cs.addConst(.{ .object = func_obj });
-            try c.cs.emitConstIdx(.make_closure, cidx, c.prev.line);
+            // Emission of `make_closure` is deferred to right before
+            // `set_named_predicate` below (after nt's emitConst) — that
+            // opcode expects the closure on top of the named-type object,
+            // not underneath it.
+            predicate_closure_cidx = try c.cs.addConst(.{ .object = func_obj });
         }
         if (c.matchClauseWord("message")) {
             if (c.cur.typ != .string) return c.err("expected string literal after 'message'", .{});
@@ -2043,6 +2052,7 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
     if (!c.skipping_test_body) c.registry.setNamedTypeRuntimeObject(name, nt);
     try c.cs.emitConst(.{ .object = nt }, kw.line);
     if (predicate_uv_count > 0) {
+        try c.cs.emitConstIdx(.make_closure, predicate_closure_cidx, kw.line);
         try c.cs.emitOp(.set_named_predicate, kw.line);
     }
     if (has_default and predicate_obj != null) {
