@@ -1,0 +1,19 @@
+// Regression test: recover() succeeding partway through a frame's defers
+// must not skip the defers still pending. "Deferred calls run in LIFO
+// order" is an unconditional guarantee (docs/language.md) — recovering
+// early must not cancel siblings still waiting to run.
+std := import("std")
+core := std.core
+
+func attempt() {
+    defer std.io.println("defer 1 (registered first, runs last)")
+    defer std.io.println("defer 2 (registered second, runs middle)")
+    defer func() {
+        e := core.recover()
+        std.io.println(core.is_error(e))
+    }()
+    assert false, "boom"
+}
+
+attempt()
+std.io.println("after attempt() returned normally")

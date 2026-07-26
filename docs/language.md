@@ -1029,7 +1029,7 @@ func attempt(x int) (ok bool) {
 }
 ```
 
-`recover()` only has effect when called directly inside a `defer` function during an active panic. Calling it outside a defer, or after the panic has already been recovered, returns `null`.
+`recover()` only has effect during an active panic that's currently unwinding through a `defer` call — directly inside the deferred function itself, or in any plain function it calls. Calling it with no panic in progress, or after the panic has already been recovered, returns `null`.
 
 ### Trap Results
 
