@@ -4198,15 +4198,12 @@ test "gbc: variant-type constants (shared fields, record arm, single-payload arm
 }
 
 test "gbc: a predicate-bearing named type still enforces its predicate after round-tripping" {
-    // Note: `f` returns `int`, not `Score`, deliberately — a function whose
-    // *declared, checked* return type is itself a predicate-bearing named
-    // type hits a separate, pre-existing, GBC-unrelated VM bug (confirmed
-    // via `git stash` to already reproduce on plain interpreted execution
-    // with zero GBC involvement — see issue #212): enforceFuncReturnTypes's
-    // named_t path re-invokes the predicate as a reentrant VM call while
-    // already mid-`ret`-opcode-handling, which corrupts the frame stack.
-    // Constructing `Score(n)` as a local (not a checked function return)
-    // exercises the predicate without going anywhere near that path.
+    // Note: `f` returns `int`, not `Score` — deliberately independent of
+    // issue #212 (now fixed, see the regression test below), which was a
+    // separate, GBC-unrelated VM bug specific to a *declared, checked*
+    // function return type that is itself a predicate-bearing named type.
+    // Constructing `Score(n)` as a local exercises the predicate without
+    // relying on that other, separately-tested path.
     const src =
         \\type Score int predicate func(x) { return x >= 0 and x <= 100 }
         \\func f(n int) int {
@@ -4243,6 +4240,32 @@ test "gbc: a predicate-bearing named type still enforces its predicate after rou
     const actual_ok = try vm.callGlobal(ctx, "f", &.{.{ .int = 50 }});
     try std.testing.expectEqual(expected_ok.int, actual_ok.int);
     try std.testing.expectError(error.PredicateFailed, vm.callGlobal(ctx, "f", &.{.{ .int = 200 }}));
+}
+
+// Returning a predicate-bearing named type as a function's *declared,
+// checked* return type used to crash with a fatal VM integrity error
+// (ImpossibleOpcodeState, frame corruption) the moment the function
+// returned. Root cause: retSlowPath (vm.zig) held a raw pointer into
+// ctx.vs.frames[fi] across the call to enforceFuncReturnTypes, which — for
+// a predicate-bearing named_t return — makes a reentrant nested VM call to
+// run the predicate function. That nested call reuses (and overwrites) the
+// exact same frames[] slot once frame_top no longer counts it, so the outer
+// retSlowPath's later reads of frame.base/frame.ret_ip picked up the nested
+// call's frame data instead of its own. Fixed (issue #212) by capturing
+// frame.base/frame.ret_ip/frame.has_typed_returns into locals before
+// frame_top is dropped, matching the pattern the multi-named-return spread
+// path already used a few lines above.
+test "compiler: predicate-bearing named type as a function's declared return type (issue #212)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Score int predicate func(x) { return x >= 0 and x <= 100 }
+        \\func make_score(n int) Score { return Score(n) }
+    );
+    const ok = try rt.callGlobal("make_score", &.{.{ .int = 50 }});
+    const inner = ok.namedInner() orelse ok;
+    try std.testing.expectEqual(@as(i64, 50), inner.int);
+    try std.testing.expectError(error.PredicateFailed, rt.callGlobal("make_score", &.{.{ .int = 500 }}));
 }
 
 test "gbc: interface-type constants round-trip and assert_interface still enforces conformance" {
