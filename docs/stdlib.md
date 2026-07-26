@@ -533,6 +533,7 @@ log_args("x", std.Arg.Int(42), std.Arg.Bool(true), std.Arg.Str("hi"))
 - Parses a JSON string and returns the corresponding gengo value
 - JSON null → `null`, booleans → `bool`, strings → `string`, arrays → array, objects → map
 - Integer JSON numbers become `int`; non-integral JSON numbers become `float`
+- A JSON integer outside `int`'s 64-bit signed range silently becomes a `float` (and, for `std.json.stringify`, prints with the corresponding loss of precision) — there is no automatic promotion to `bigint`
 - Errors: `TypeError` on invalid JSON
 
 ### `std.json.parse_value(s)`
