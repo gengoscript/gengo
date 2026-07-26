@@ -1270,6 +1270,16 @@ pub fn instantiateGenericType(c: anytype, tname: []const u8, line: u32) anyerror
     const ginfo = c.registry.getGenericType(tname).?;
     var args: [ct.MaxTypeParams]FieldTypeSpec = undefined;
     const arg_count = try parseInstArgSpecs(c, tname, ginfo.param_count, &args);
+    // Generic functions have enforced type-parameter constraints (e.g.
+    // `[T: numeric]`) since checkTypeArgConstraints existed; generic
+    // struct/variant types parsed and stored the same constraint syntax
+    // (namedTypeDecl) but never checked it here — the parser's lookahead
+    // (looksLikeGenericTypeParams) didn't even recognize a `:` inside
+    // `[...]` as a generic-type declaration at all until this fix, so a
+    // constrained generic type silently failed to parse as generic in the
+    // first place; now that it does, the same enforcement generic
+    // functions already get must apply to instantiation too.
+    try checkTypeArgConstraints(c, ginfo.params[0..ginfo.param_count], args[0..arg_count], tname, line);
     return applyGenericInst(c, tname, args[0..arg_count], line);
 }
 

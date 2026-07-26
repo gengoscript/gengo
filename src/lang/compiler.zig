@@ -1921,6 +1921,13 @@ pub const Compiler = struct {
                 .eof => return false,
                 .ident => {},
                 .comma => {},
+                // `[T: numeric]`-style constraint, matching the analogous
+                // scan for generic functions (compiler_decls.zig's
+                // isNamedFuncDecl) — a bare `.colon` here previously
+                // fell through to `else => return false`, so a
+                // constrained generic type was never even recognized as
+                // generic at all (docs/language.md claimed it worked).
+                .colon => {},
                 else => return false,
             }
             t = lx.next();
