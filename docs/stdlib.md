@@ -552,8 +552,8 @@ log_args("x", std.Arg.Int(42), std.Arg.Bool(true), std.Arg.Str("hi"))
 - Returns `true` if `s` is valid JSON, `false` otherwise
 
 ### `std.json.indent(src, indent_str)`
-- Parses JSON and re-serialises with the given indentation; `indent_str` may be `"\t"` or 1–8 spaces
-- Errors: `TypeError` on invalid JSON
+- Parses JSON and re-serialises with the given indentation; `indent_str` must be `"\t"` or exactly 1, 2, 3, 4, or 8 spaces (the underlying widths Zig's JSON stringifier supports — 5, 6, and 7 spaces are not available)
+- Errors: `TypeError` on invalid JSON, or on an `indent_str` outside the supported set
 
 ### `std.json.Value` / `std.JSONValue`
 - The `JSONValue` variant type; both names refer to the same type object

@@ -274,8 +274,29 @@ pub fn jsonIndentNative(ctx: VMContext) !Value {
     defer parsed.deinit();
     var out: std.Io.Writer.Allocating = .init(std.heap.page_allocator);
     defer out.deinit();
+    // Zig's std.json.Stringify only supports a fixed set of whitespace
+    // widths (1/2/3/4/8 spaces or a tab) — there is no "N spaces" option
+    // for an arbitrary N. A width outside that set (5, 6, 7, or anything
+    // else) used to silently fall back to 2-space indentation instead of
+    // honoring the requested width; fail loudly instead so a caller isn't
+    // silently given output at the wrong width.
     const Ws = @TypeOf(@as(std.json.Stringify.Options, .{}).whitespace);
-    const ws: Ws = if (std.mem.eql(u8, indent_str, "\t")) .indent_tab else if (std.mem.eql(u8, indent_str, " ")) .indent_1 else if (std.mem.eql(u8, indent_str, "   ")) .indent_3 else if (std.mem.eql(u8, indent_str, "        ")) .indent_8 else if (std.mem.eql(u8, indent_str, "    ")) .indent_4 else .indent_2;
+    const ws: Ws = if (std.mem.eql(u8, indent_str, "\t"))
+        .indent_tab
+    else if (std.mem.eql(u8, indent_str, " "))
+        .indent_1
+    else if (std.mem.eql(u8, indent_str, "  "))
+        .indent_2
+    else if (std.mem.eql(u8, indent_str, "   "))
+        .indent_3
+    else if (std.mem.eql(u8, indent_str, "    "))
+        .indent_4
+    else if (std.mem.eql(u8, indent_str, "        "))
+        .indent_8
+    else {
+        ctx.vs.setRuntimeErr("json.indent: unsupported indent_str (must be \"\\t\" or 1, 2, 3, 4, or 8 spaces)", .{});
+        return error.TypeError;
+    };
     var s = std.json.Stringify{ .writer = &out.writer, .options = .{ .whitespace = ws } };
     try s.write(parsed.value);
     return vmgc.makeDynString(ctx, out.written());
