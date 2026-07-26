@@ -1536,12 +1536,20 @@ fn retSlowPath(ctx: VMContext, retval_in: Value) !bool {
         }
     }
     ctx.vs.popTempRoot();
+    // Capture frame.base/ret_ip/has_typed_returns into locals before dropping
+    // frame_top: enforceFuncReturnTypes may run a predicate function as a
+    // reentrant nested VM call, which reuses (and overwrites) this exact
+    // ctx.vs.frames[fi] slot once it's no longer counted by frame_top — so
+    // `frame` must not be dereferenced again after that call.
+    const frame_base = frame.base;
+    const frame_ret_ip = frame.ret_ip;
+    const frame_has_typed_returns = frame.has_typed_returns;
     ctx.vs.frame_top = fi;
-    if (frame.has_typed_returns) {
+    if (frame_has_typed_returns) {
         if (fsig_ret) |fsig| try vmtyp.enforceFuncReturnTypes(ctx, fsig, retval);
     }
-    ctx.vs.stack_top = if (frame.base > 0) frame.base - 1 else 0;
-    ctx.vs.ip = frame.ret_ip;
+    ctx.vs.stack_top = if (frame_base > 0) frame_base - 1 else 0;
+    ctx.vs.ip = frame_ret_ip;
     try ctx.vs.vmPush(retval);
     if (ctx.vs.frame_top == ctx.vs.call_depth_target) return true;
     return false;
