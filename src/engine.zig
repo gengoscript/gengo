@@ -1893,6 +1893,46 @@ test "engine_net_policy checkDialPolicy semantics" {
     net_state.clearPolicy();
 }
 
+// Hostnames are case-insensitive; a rule authored against one case must not
+// be bypassable by dialing/listening with different casing. Found during a
+// 2026-07-26 audit: hostname_exact/wildcard_suffix compared bytes directly.
+test "engine_net_policy hostname matching is case-insensitive" {
+    net_state.clearPolicy();
+    _ = net_state.addPolicyRule(.allow, "*", 0);
+    _ = net_state.addPolicyRule(.deny, "internal.example.com", 0);
+    try std.testing.expect(!net_state.checkDialPolicy("internal.example.com:443"));
+    try std.testing.expect(!net_state.checkDialPolicy("INTERNAL.EXAMPLE.COM:443"));
+    try std.testing.expect(!net_state.checkDialPolicy("Internal.Example.COM:443"));
+
+    net_state.clearPolicy();
+    _ = net_state.addPolicyRule(.allow, "*", 0);
+    _ = net_state.addPolicyRule(.deny, "*.internal.corp", 0);
+    try std.testing.expect(!net_state.checkDialPolicy("x.internal.corp:443"));
+    try std.testing.expect(!net_state.checkDialPolicy("X.INTERNAL.CORP:443"));
+
+    net_state.clearPolicy();
+}
+
+// An empty host ("host:port" written as ":port") is POSIX's "any interface"
+// bind and must be recognized as equivalent to 0.0.0.0/:: by the policy
+// matcher, or a deny rule targeting one spelling can be bypassed by using
+// the other. Found during a 2026-07-26 audit.
+test "engine_net_listen_policy any-interface address spellings are equivalent" {
+    net_state.clearListenPolicy();
+    _ = net_state.addListenPolicyRule(.allow, "*", 0);
+    _ = net_state.addListenPolicyRule(.deny, "0.0.0.0", 8080);
+    try std.testing.expect(!net_state.checkListenPolicy("0.0.0.0:8080"));
+    try std.testing.expect(!net_state.checkListenPolicy(":8080"));
+
+    net_state.clearListenPolicy();
+    _ = net_state.addListenPolicyRule(.allow, "*", 0);
+    _ = net_state.addListenPolicyRule(.deny, "::", 8080);
+    try std.testing.expect(!net_state.checkListenPolicy("[::]:8080"));
+    try std.testing.expect(!net_state.checkListenPolicy(":8080"));
+
+    net_state.clearListenPolicy();
+}
+
 test "engine_load_bundle loads zip and resolves imports" {
     const h = engine_init();
     try std.testing.expect(h > 0);

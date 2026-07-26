@@ -162,8 +162,18 @@ fn matchPolicy(policy: *const PolicyState, address: []const u8, default_allow: b
         host = host[1 .. host.len - 1];
     }
 
-    const host_ip4 = parseIPv4(host);
-    const host_ip6: ?[16]u8 = if (host_ip4 == null) parseIPv6(host) else null;
+    var host_ip4 = parseIPv4(host);
+    var host_ip6: ?[16]u8 = if (host_ip4 == null) parseIPv6(host) else null;
+    // An empty host ("host:port" written as ":port") is POSIX's "any
+    // interface" bind — equivalent to 0.0.0.0 for an AF_INET socket or ::
+    // for AF_INET6 (netListen picks the family from the `network` argument,
+    // which isn't visible here). Match it against a rule targeting either
+    // spelling of "any", so a deny rule authored as "0.0.0.0" or "::" can't
+    // be silently bypassed by binding ":port" instead.
+    if (host.len == 0) {
+        host_ip4 = [4]u8{ 0, 0, 0, 0 };
+        host_ip6 = [_]u8{0} ** 16;
+    }
 
     // LIFO: walk from last rule down to first
     var i = policy.count;
@@ -173,8 +183,8 @@ fn matchPolicy(policy: *const PolicyState, address: []const u8, default_allow: b
         if (rule.port != 0 and rule.port != port) continue;
         const matches = switch (rule.kind) {
             .match_all => true,
-            .hostname_exact => std.mem.eql(u8, host, rule.data[0..rule.data_len]),
-            .wildcard_suffix => std.mem.endsWith(u8, host, rule.data[0..rule.data_len]),
+            .hostname_exact => eqlIgnoreCase(host, rule.data[0..rule.data_len]),
+            .wildcard_suffix => endsWithIgnoreCase(host, rule.data[0..rule.data_len]),
             .ipv4_exact => if (host_ip4) |ip| std.mem.eql(u8, &ip, rule.data[0..4]) else false,
             .ipv4_cidr => if (host_ip4) |ip| ipv4InCidr(ip, rule.data[0..4].*, rule.prefix_len) else false,
             .ipv6_exact => if (host_ip6) |ip| std.mem.eql(u8, &ip, rule.data[0..16]) else false,
@@ -184,6 +194,22 @@ fn matchPolicy(policy: *const PolicyState, address: []const u8, default_allow: b
     }
 
     return default_allow;
+}
+
+// DNS hostnames are case-insensitive; policy rules authored against one
+// case (e.g. "api.example.com") must not be bypassable by dialing/listening
+// with different casing (e.g. "API.Example.COM").
+fn eqlIgnoreCase(a: []const u8, b: []const u8) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |ca, cb| {
+        if (std.ascii.toLower(ca) != std.ascii.toLower(cb)) return false;
+    }
+    return true;
+}
+
+fn endsWithIgnoreCase(haystack: []const u8, suffix: []const u8) bool {
+    if (haystack.len < suffix.len) return false;
+    return eqlIgnoreCase(haystack[haystack.len - suffix.len ..], suffix);
 }
 
 // Returns true if the dial is allowed. No rules → allow (default; same as
