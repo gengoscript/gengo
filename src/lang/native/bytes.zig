@@ -117,6 +117,15 @@ pub const DecodeKind = enum(u8) {
     f64le = 10,
 };
 
+// A negative offset must raise RangeError like every other out-of-bounds
+// case, not panic: @intCast from a negative i64 straight to usize is a Zig
+// safety-check failure (process abort), not a catchable Gengo error.
+fn offsetToUsize(offset_arg: Value) !usize {
+    const idx = try argAsI64(offset_arg);
+    if (idx < 0) return error.RangeError;
+    return @intCast(idx);
+}
+
 pub fn decodeAt(kind: DecodeKind, s: []const u8, offset_arg: Value) !Value {
     switch (kind) {
         .byte_at => {
@@ -124,16 +133,16 @@ pub fn decodeAt(kind: DecodeKind, s: []const u8, offset_arg: Value) !Value {
             if (idx < 0 or idx >= @as(i64, @intCast(s.len))) return error.RangeError;
             return .{ .int = @as(i64, s[@as(usize, @intCast(idx))]) };
         },
-        .u16be => return .{ .int = try readU16be(s, @intCast(try argAsI64(offset_arg))) },
-        .u16le => return .{ .int = try readU16le(s, @intCast(try argAsI64(offset_arg))) },
-        .u32be => return .{ .int = try readU32be(s, @intCast(try argAsI64(offset_arg))) },
-        .u32le => return .{ .int = try readU32le(s, @intCast(try argAsI64(offset_arg))) },
-        .u64be => return .{ .int = try readU64be(s, @intCast(try argAsI64(offset_arg))) },
-        .u64le => return .{ .int = try readU64le(s, @intCast(try argAsI64(offset_arg))) },
-        .f32be => return .{ .float = try readF32be(s, @intCast(try argAsI64(offset_arg))) },
-        .f32le => return .{ .float = try readF32le(s, @intCast(try argAsI64(offset_arg))) },
-        .f64be => return .{ .float = try readF64be(s, @intCast(try argAsI64(offset_arg))) },
-        .f64le => return .{ .float = try readF64le(s, @intCast(try argAsI64(offset_arg))) },
+        .u16be => return .{ .int = try readU16be(s, try offsetToUsize(offset_arg)) },
+        .u16le => return .{ .int = try readU16le(s, try offsetToUsize(offset_arg)) },
+        .u32be => return .{ .int = try readU32be(s, try offsetToUsize(offset_arg)) },
+        .u32le => return .{ .int = try readU32le(s, try offsetToUsize(offset_arg)) },
+        .u64be => return .{ .int = try readU64be(s, try offsetToUsize(offset_arg)) },
+        .u64le => return .{ .int = try readU64le(s, try offsetToUsize(offset_arg)) },
+        .f32be => return .{ .float = try readF32be(s, try offsetToUsize(offset_arg)) },
+        .f32le => return .{ .float = try readF32le(s, try offsetToUsize(offset_arg)) },
+        .f64be => return .{ .float = try readF64be(s, try offsetToUsize(offset_arg)) },
+        .f64le => return .{ .float = try readF64le(s, try offsetToUsize(offset_arg)) },
     }
 }
 

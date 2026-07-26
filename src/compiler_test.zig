@@ -3075,6 +3075,21 @@ test "compiler: std.bytes decode family matches the native-call path byte for by
     );
 }
 
+// A negative offset used to reach @intCast on a negative i64 (a Zig
+// safety-check panic that aborts the process) instead of raising a
+// catchable RangeError like every other out-of-bounds offset — decodeAt's
+// multi-byte variants (everything but byte_at) cast straight to usize
+// without checking the sign first. Fixed with offsetToUsize (bytes.zig).
+test "compiler: std.bytes decode family raises RangeError (not a crash) on a negative offset" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func f() int { return std.bytes.u32be_at(std.bytes.u32be(1234), -1) }
+    );
+    try std.testing.expectError(error.RangeError, rt.callGlobal("f", &.{}));
+}
+
 test "compiler: field = field + const fuses into field_add_const" {
     // The "c.tx_id = c.tx_id + 1" idiom (found independently in gengo-modbus
     // and gengo-mqtt as a transaction/packet-ID counter), issue #207.
