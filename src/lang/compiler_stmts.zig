@@ -1949,32 +1949,40 @@ pub fn switchStmt(c: anytype) anyerror!void {
     if (!saw_default and seen_arm_count > 0 and !is_type_switch) {
         if (c.registry.findVariantForArms(seen_arms[0..seen_arm_count])) |vobj| {
             const all_arms = vobj.variant_type.arms;
-            if (all_arms.len > seen_arm_count) {
-                // Build a comma-separated list of missing arm names.
-                var missing_buf: [512]u8 = undefined;
-                var missing_len: usize = 0;
-                for (all_arms) |a| {
-                    var covered = false;
-                    for (seen_arms[0..seen_arm_count]) |s| {
-                        if (common.streq(a.name, s)) {
-                            covered = true;
-                            break;
-                        }
-                    }
-                    if (!covered) {
-                        if (missing_len > 0 and missing_len + 2 < missing_buf.len) {
-                            missing_buf[missing_len] = ',';
-                            missing_buf[missing_len + 1] = ' ';
-                            missing_len += 2;
-                        }
-                        if (missing_len + 1 + a.name.len < missing_buf.len) {
-                            missing_buf[missing_len] = '.';
-                            missing_len += 1;
-                            @memcpy(missing_buf[missing_len .. missing_len + a.name.len], a.name);
-                            missing_len += a.name.len;
-                        }
+            // Check per-arm coverage directly rather than gating on
+            // `all_arms.len > seen_arm_count`: seen_arm_count counts every
+            // unguarded case occurrence, including duplicates, so a switch
+            // that repeats one arm's name instead of covering a distinct
+            // arm could reach seen_arm_count == all_arms.len while a real
+            // arm goes unhandled — the count-only gate let that compile
+            // silently, falling through the switch at runtime with no
+            // panic. Building the missing list unconditionally and only
+            // erroring when it's non-empty catches that case too.
+            var missing_buf: [512]u8 = undefined;
+            var missing_len: usize = 0;
+            for (all_arms) |a| {
+                var covered = false;
+                for (seen_arms[0..seen_arm_count]) |s| {
+                    if (common.streq(a.name, s)) {
+                        covered = true;
+                        break;
                     }
                 }
+                if (!covered) {
+                    if (missing_len > 0 and missing_len + 2 < missing_buf.len) {
+                        missing_buf[missing_len] = ',';
+                        missing_buf[missing_len + 1] = ' ';
+                        missing_len += 2;
+                    }
+                    if (missing_len + 1 + a.name.len < missing_buf.len) {
+                        missing_buf[missing_len] = '.';
+                        missing_len += 1;
+                        @memcpy(missing_buf[missing_len .. missing_len + a.name.len], a.name);
+                        missing_len += a.name.len;
+                    }
+                }
+            }
+            if (missing_len > 0) {
                 c.setErr("non-exhaustive switch on {s}: missing {s}", .{ vobj.variant_type.name, missing_buf[0..missing_len] });
                 return error.NonExhaustiveSwitch;
             }

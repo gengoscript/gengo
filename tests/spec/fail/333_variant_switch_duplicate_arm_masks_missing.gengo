@@ -1,0 +1,19 @@
+// Regression test: seen_arm_count counted every unguarded case
+// occurrence, including duplicates, so repeating one arm's name instead
+// of covering a distinct arm could reach seen_arm_count == the variant's
+// total arm count while a real arm went unhandled — the count-only
+// exhaustiveness gate let this compile silently.
+type Status variant {
+    pending,
+    approved,
+    rejected,
+}
+
+func label(s Status) string {
+    switch s {
+        case .pending  { return "pending" }
+        case .approved { return "approved" }
+        case .approved { return "approved-again" }
+    }
+    return ""
+}
