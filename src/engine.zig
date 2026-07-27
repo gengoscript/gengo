@@ -714,6 +714,13 @@ export fn engine_init_with_config(config_ptr: PtrInt) i32 {
 
 export fn engine_destroy(handle: i32) void {
     const idx = if (handle > 0 and handle <= MaxEngines) @as(usize, @intCast(handle - 1)) else return;
+    // Guard on the active flag exactly like getEngine() does. Without this,
+    // destroying a handle whose slot was never engine_init'd deinits garbage
+    // (undefined) Engine memory — e.g. package_state.clearRegistry reading a
+    // garbage `count` out of bounds — and destroying the same handle twice
+    // re-frees Runtime's already-freed chunk_state/repl allocations, a
+    // double-free. Both are trivially host-reachable misuses of this ABI.
+    if (!engine_slots[idx].active) return;
     engine_slots[idx].engine.deinitInPlace();
     engine_slots[idx].active = false;
     // If this was the last active engine, clear I/O overrides so the next
@@ -2133,4 +2140,41 @@ test "engine_last_error_path: runtime error in imported library reports library 
     try std.testing.expect(path_len > 0);
     const reported_path = path_buf[0..@intCast(path_len)];
     try std.testing.expectEqualStrings("mylib.gengo", reported_path);
+}
+
+// engine_destroy used to skip the active-flag check every other exported
+// function performs via getEngine(): it deinited engine_slots[idx].engine
+// unconditionally as long as the handle was in-range, with no check that
+// the slot was ever activated. That makes two host-reachable cases both
+// call Runtime.deinit() on state it must not touch:
+//   1. A handle whose slot was never engine_init'd: engine_slots[idx].engine
+//      is `undefined` — deinit reads garbage heap/allocator fields and frees
+//      whatever garbage pointer happens to be sitting there.
+//   2. Destroying the same (previously valid) handle twice: the second call
+//      re-frees Runtime.chunk_state/repl, which deinit() never nulls out
+//      after destroying them — a textbook double-free.
+// Fixed by gating on `.active` exactly like getEngine(), making destroy a
+// safe no-op for both an unused handle and a repeat call on an already-
+// destroyed one.
+test "engine_destroy is a safe no-op on an inactive or already-destroyed handle" {
+    // A slot that was never activated. MaxEngines is never used as a live
+    // handle by any other test in this file running concurrently, so it's a
+    // safe stand-in for "this slot was never engine_init'd".
+    engine_destroy(MaxEngines);
+
+    // A normal, valid handle: the first destroy is real; the second (and
+    // third) must be no-ops rather than re-freeing the runtime's backing
+    // allocations.
+    const h = engine_init();
+    try std.testing.expect(h > 0);
+    engine_destroy(h);
+    engine_destroy(h);
+    engine_destroy(h);
+
+    // The freed slot must still be cleanly reusable afterward.
+    const h2 = engine_init();
+    try std.testing.expect(h2 > 0);
+    defer engine_destroy(h2);
+    const src = "x := 1 + 1\n";
+    try std.testing.expectEqual(0, engine_run(h2, @intCast(@intFromPtr(src.ptr)), @intCast(src.len)));
 }
