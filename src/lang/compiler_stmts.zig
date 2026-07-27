@@ -205,12 +205,12 @@ fn parseLiteralDefault(c: anytype) !value_mod.Value {
     const neg = c.match(.minus);
     if (c.cur.typ == .number) {
         c.advance();
-        const n = common.parseFloat(c.prev.src) orelse return error.BadNumber;
         const is_float = std.mem.indexOfAny(u8, c.prev.src, ".eE") != null;
         if (is_float) {
+            const n = common.parseFloat(c.prev.src) orelse return error.BadNumber;
             return .{ .float = if (neg) -n else n };
         } else {
-            const i: i64 = @intFromFloat(n);
+            const i = std.fmt.parseInt(i64, c.prev.src, 10) catch return error.BadNumber;
             return .{ .int = if (neg) -i else i };
         }
     }
@@ -700,7 +700,7 @@ pub fn deferStmt(c: anytype) !void {
                     if (!c.check(.rparen)) {
                         while (true) {
                             if (total_argc == 255) {
-                                c.setErr("too many elements (max {d})", .{MaxLocals});
+                                c.setErr("too many arguments to deferred call (max 254)", .{});
                                 return error.TooManyElements;
                             }
                             try c.expr();
@@ -726,7 +726,7 @@ pub fn deferStmt(c: anytype) !void {
                 if (!c.check(.rparen)) {
                     while (true) {
                         if (argc == 255) {
-                            c.setErr("too many elements (max {d})", .{MaxLocals});
+                            c.setErr("too many arguments to deferred call (max 254)", .{});
                             return error.TooManyElements;
                         }
                         try c.expr();
@@ -756,7 +756,7 @@ pub fn deferStmt(c: anytype) !void {
     if (!c.check(.rparen)) {
         while (true) {
             if (argc == 255) {
-                c.setErr("too many elements (max {d})", .{MaxLocals});
+                c.setErr("too many arguments to deferred call (max 254)", .{});
                 return error.TooManyElements;
             }
             try c.expr();
@@ -1019,6 +1019,11 @@ pub fn hasInitSemicolon(c: anytype) bool {
 }
 
 pub fn ifStmt(c: anytype) anyerror!void {
+    return ifStmtDepth(c, 0);
+}
+
+fn ifStmtDepth(c: anytype, depth: u32) anyerror!void {
+    if (depth >= 256) return c.err("if/else-if chain too deep (max 256 levels)", .{});
     const local_base: u8 = c.currentScope().local_count;
 
     if (hasInitSemicolon(
@@ -1055,8 +1060,9 @@ pub fn ifStmt(c: anytype) anyerror!void {
 
     if (c.match(.kw_else)) {
         if (c.match(.kw_if)) {
-            try ifStmt(
+            try ifStmtDepth(
                 c,
+                depth + 1,
             );
         } else {
             try c.consume(.lbrace);
