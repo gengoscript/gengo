@@ -312,6 +312,8 @@ pub fn verify(state: *chunk.State, alloc: std.mem.Allocator) !void {
         // u32 halves the stack footprint (16KB vs 32KB on 64-bit) — ips are
         // bounded by MaxCode (1 MiB), well inside u32.
         var func_ips: [4096]u32 = undefined;
+        var func_arities: [4096]u8 = undefined;
+        var func_uv_counts: [4096]u8 = undefined;
         {
             // Find every function body reachable from the const pool — the
             // same shapes vm_defuse pass 3 remaps: plain function consts,
@@ -323,7 +325,10 @@ pub fn verify(state: *chunk.State, alloc: std.mem.Allocator) !void {
                 const fo = funcObjOfConst(cv.object) orelse continue;
                 const f = fo.function;
                 if (f.ip < state.code_len and Bits.has(starts, f.ip)) {
+                    if (func_body_count >= func_ips.len) return error.InvalidBytecode;
                     func_ips[func_body_count] = @intCast(f.ip);
+                    func_arities[func_body_count] = f.arity;
+                    func_uv_counts[func_body_count] = @intCast(f.capture_slots.len);
                     func_body_count += 1;
                 }
             }
@@ -333,7 +338,12 @@ pub fn verify(state: *chunk.State, alloc: std.mem.Allocator) !void {
             // Returns the maximum stack depth (relative to entry) reached on
             // any path — the frame-entry capacity check that makes unchecked
             // stack ops in the body safe.
-            fn run(entry_ip: usize, check_ret: bool, starts_arg: []u8, state_arg: *chunk.State, a: std.mem.Allocator) !i32 {
+            // local_base: number of pre-existing locals at entry (arity for
+            //   functions, 0 for top-level). Valid local slots are
+            //   0 .. local_base + current_bfs_depth - 1.
+            // upvalue_count: number of upvalues the function captures.
+            //   Valid upvalue indices are 0 .. upvalue_count - 1.
+            fn run(entry_ip: usize, check_ret: bool, starts_arg: []u8, state_arg: *chunk.State, a: std.mem.Allocator, local_base: u32, upvalue_count: u32) !i32 {
                 var depth = try a.alloc(?i32, state_arg.code_len);
                 defer a.free(depth);
                 @memset(depth, null);
@@ -360,6 +370,27 @@ pub fn verify(state: *chunk.State, alloc: std.mem.Allocator) !void {
                         verifySetErr(state_arg, "ip={d}: {s}", .{ current_ip, @errorName(err) });
                         return err;
                     };
+
+                    // Validate local-slot and upvalue-index operands.
+                    switch (inst.op) {
+                        .get_local, .set_local, .close_upvalue => {
+                            const slot: u32 = state_arg.code[current_ip + 1];
+                            const limit = local_base + @as(u32, @intCast(current_depth));
+                            if (slot >= limit) {
+                                verifySetErr(state_arg, "ip={d} ({s}): local slot {d} out of range (limit={d})", .{ current_ip, @tagName(inst.op), slot, limit });
+                                return error.InvalidBytecode;
+                            }
+                        },
+                        .get_upvalue, .set_upvalue => {
+                            const slot: u32 = state_arg.code[current_ip + 1];
+                            if (slot >= upvalue_count) {
+                                verifySetErr(state_arg, "ip={d} ({s}): upvalue index {d} out of range (count={d})", .{ current_ip, @tagName(inst.op), slot, upvalue_count });
+                                return error.InvalidBytecode;
+                            }
+                        },
+                        else => {},
+                    }
+
                     const effect = stackEffect(inst.op, &state_arg.code, current_ip);
                     const is_branch = isConditionalBranch(inst.op);
                     const is_uncond = isUnconditionalBranch(inst.op);
@@ -399,9 +430,9 @@ pub fn verify(state: *chunk.State, alloc: std.mem.Allocator) !void {
             }
         };
 
-        state.main_max_stack = @intCast(try BfsRunner.run(0, true, starts, state, alloc));
-        for (func_ips[0..func_body_count]) |fip| {
-            const fmax = try BfsRunner.run(fip, false, starts, state, alloc);
+        state.main_max_stack = @intCast(try BfsRunner.run(0, true, starts, state, alloc, 0, 0));
+        for (func_ips[0..func_body_count], func_arities[0..func_body_count], func_uv_counts[0..func_body_count]) |fip, farity, fuvc| {
+            const fmax = try BfsRunner.run(fip, false, starts, state, alloc, @as(u32, farity), @as(u32, fuvc));
             const fmax16 = std.math.cast(u16, fmax) orelse {
                 verifySetErr(state, "ip={d}: function max stack depth {d} exceeds u16", .{ fip, fmax });
                 return error.StackOverflow;
