@@ -189,7 +189,12 @@ pub fn nativeStrRepeat(ctx: VMContext, s_val: Value, count_v: Value) !Value {
     if (n == 0) return vmgc.makeDynString(ctx, "");
     const count: usize = @intCast(n);
     const s_len = (try vms.asStringValue(s_val)).len;
-    const total = s_len * count;
+    // Overflow-checked multiply: a huge count can wrap total to a small value,
+    // causing vmAllocManagedBytes to succeed while the copy loop later writes
+    // far past the allocated end.
+    const mul = @mulWithOverflow(s_len, count);
+    if (mul[1] != 0 or mul[0] > 64 * 1024 * 1024) return error.RangeError;
+    const total = mul[0];
     const obj = try vmgc.allocTempRooted(ctx, .{ .dyn_string = &[_]u8{} });
     defer ctx.vs.popTempRoot();
     const buf = try vmgc.vmAllocManagedBytes(ctx, total);
