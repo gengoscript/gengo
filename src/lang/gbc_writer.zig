@@ -113,6 +113,7 @@ pub const WriteError = error{
     BadOpcode,
     BadJumpTarget,
     DefusedCodeTooLarge,
+    InvalidBytecode,
 } || std.mem.Allocator.Error;
 
 const ByteWriter = struct {
@@ -228,6 +229,11 @@ fn deriveFuncLength(code: []const u8, ip: u32) WriteError!u32 {
     return @intCast(target - ip);
 }
 
+// Matches the reader's MaxTypeSpecDepth — a nested type spec deeper than
+// this is rejected by the reader with MalformedSection, so the writer must
+// refuse to emit one too (error.InvalidBytecode).
+const MaxTypeSpecDepth: u32 = 64;
+
 // Real FieldTypeSpec/FieldTypeAlt encoder, used for struct fields, named
 // array/map elem/key/val specs, and function/method param/return/variadic
 // types (struct field types drive real per-construction/per-write type +
@@ -243,6 +249,11 @@ fn deriveFuncLength(code: []const u8, ip: u32) WriteError!u32 {
 // elem/key/val specs. Rejects func_t and type_param (generics-only, out of
 // scope) with UnsupportedFieldType rather than silently mis-encoding them.
 fn writeTypeSpec(w: *ByteWriter, spec: value_mod.FieldTypeSpec) WriteError!void {
+    return writeTypeSpecDepth(w, spec, 0);
+}
+
+fn writeTypeSpecDepth(w: *ByteWriter, spec: value_mod.FieldTypeSpec, depth: u32) WriteError!void {
+    if (depth >= MaxTypeSpecDepth) return error.InvalidBytecode;
     try w.u8_(@intCast(spec.alts.len));
     for (spec.alts) |alt| {
         switch (alt.typ) {
@@ -258,14 +269,14 @@ fn writeTypeSpec(w: *ByteWriter, spec: value_mod.FieldTypeSpec) WriteError!void 
             .array => {
                 try w.u8_(FT_ARRAY);
                 try w.bool8(alt.elem_spec != null);
-                if (alt.elem_spec) |es| try writeTypeSpec(w, es);
+                if (alt.elem_spec) |es| try writeTypeSpecDepth(w, es, depth + 1);
             },
             .map => {
                 try w.u8_(FT_MAP);
                 try w.bool8(alt.key_spec != null);
-                if (alt.key_spec) |ks| try writeTypeSpec(w, ks);
+                if (alt.key_spec) |ks| try writeTypeSpecDepth(w, ks, depth + 1);
                 try w.bool8(alt.val_spec != null);
-                if (alt.val_spec) |vs| try writeTypeSpec(w, vs);
+                if (alt.val_spec) |vs| try writeTypeSpecDepth(w, vs, depth + 1);
             },
             .struct_t => {
                 try w.u8_(FT_STRUCT_T);
@@ -458,6 +469,11 @@ fn writeFunctionsSection(w: *ByteWriter, cs: *chunk.State, funcs: []const FuncEn
         if (fe.f.is_variadic) try writeTypeSpec(w, fe.f.variadic_type);
         try w.bool8(fe.f.has_typed_params);
         try w.bool8(fe.f.has_typed_returns);
+        // named_return_count indexes into a [64]Value spread buffer in the
+        // VM; the reader enforces named_return_count > 64 → MalformedSection.
+        // The compiler enforces the same limit via MaxLocals, so this fires
+        // only on corrupt in-memory state — assert rather than silently emit.
+        std.debug.assert(fe.f.named_return_count <= 64);
         try w.u8_(fe.f.named_return_count);
         try w.u16_(@intCast(fe.f.param_types.len));
         for (fe.f.param_types) |pt| try writeTypeSpec(w, pt);

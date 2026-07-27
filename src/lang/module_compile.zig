@@ -644,50 +644,57 @@ pub const Session = struct {
         if (common.streq(import_name, StdModulePath)) return StdModulePath;
         if (import_name.len == 0) return error.ImportNotFound;
         if (!(import_name[0] == '.')) {
-            // A package-style import (no leading '.') used to skip the
-            // isAllowedImportPath sandbox gate entirely — only the '.'-
-            // prefixed relative-import branch below checked it. That let
-            // any import specifier not literally starting with '.' (an
-            // absolute path like "/etc/passwd", or a traversal like
-            // "x/../../../../etc/secret") read an arbitrary file the host
-            // process can access, completely bypassing source_root.
+            // Normalize first so the sandbox check is path-aware (not a raw
+            // string-prefix match that "../" segments can fool).
             //
-            // Gate each candidate only once it's confirmed to actually
-            // resolve to something the source provider has — not upfront —
-            // so a package name that legitimately doesn't exist anywhere
-            // (e.g. an unregistered/unknown package) still falls through to
-            // the ordinary "not found"/"unsupported import" error below
-            // exactly as before, instead of being misreported as
-            // "outside the allowed source directories".
+            // For paths that escape the current directory (absolute paths or
+            // those that normalize to a "../"-prefixed form), the sandbox
+            // check must happen BEFORE any sourceExists probe: probing an
+            // out-of-tree path on the filesystem provider reveals whether the
+            // file is readable, which is a side-channel even when the import
+            // is ultimately rejected.
             //
-            // isAllowedImportPath/pathIsUnderRoot is a plain string-prefix
-            // check, not path-aware — a raw, un-normalized candidate like
-            // "tests/spec/fail/../../../etc/secret" literally starts with
-            // an allowed root as a substring, which would wrongly pass.
-            // Normalize (resolve "." / ".." segments) before checking, same
-            // as the relative-import branch below does via joinAndNormalize.
+            // For ordinary relative package names (no escaping traversal),
+            // probe first so that a non-existent name still falls through to
+            // the "not found"/UnsupportedImportModule error rather than being
+            // misreported as "outside the allowed source directories".
+            //
+            // Return the normalized path (not the raw import_name) so that
+            // two spellings of the same file deduplicate correctly in
+            // findModule's exact-string compare.
+            var pkg_buf: [MaxModulePathBytes]u8 = undefined;
+            const normalized = try joinAndNormalize(&pkg_buf, ".", import_name);
+            const might_escape = (normalized.len > 0 and normalized[0] == '/') or
+                std.mem.startsWith(u8, normalized, "../");
+            if (might_escape and !self.isAllowedImportPath(normalized))
+                return self.rejectImportOutsideRoot(importer_path, import_name);
             if (self.sourceExists(import_name)) {
-                var pkg_buf: [MaxModulePathBytes]u8 = undefined;
-                const normalized = try joinAndNormalize(&pkg_buf, ".", import_name);
                 if (!self.isAllowedImportPath(normalized)) return self.rejectImportOutsideRoot(importer_path, import_name);
-                return copyResolvedPath(self, import_name);
+                return copyResolvedPath(self, normalized);
             }
+
             var pkg_ext_buf: [MaxModulePathBytes]u8 = undefined;
             const with_ext = try appendSuffix(&pkg_ext_buf, import_name, ".gengo");
+            var pkg_ext_norm_buf: [MaxModulePathBytes]u8 = undefined;
+            const normalized_ext = try joinAndNormalize(&pkg_ext_norm_buf, ".", with_ext);
+            if (might_escape and !self.isAllowedImportPath(normalized_ext))
+                return self.rejectImportOutsideRoot(importer_path, import_name);
             if (self.sourceExists(with_ext)) {
-                var pkg_ext_norm_buf: [MaxModulePathBytes]u8 = undefined;
-                const normalized = try joinAndNormalize(&pkg_ext_norm_buf, ".", with_ext);
-                if (!self.isAllowedImportPath(normalized)) return self.rejectImportOutsideRoot(importer_path, import_name);
-                return copyResolvedPath(self, with_ext);
+                if (!self.isAllowedImportPath(normalized_ext)) return self.rejectImportOutsideRoot(importer_path, import_name);
+                return copyResolvedPath(self, normalized_ext);
             }
+
             var pkg_mod_buf: [MaxModulePathBytes]u8 = undefined;
             const with_mod = try appendSuffix(&pkg_mod_buf, import_name, "/mod.gengo");
+            var pkg_mod_norm_buf: [MaxModulePathBytes]u8 = undefined;
+            const normalized_mod = try joinAndNormalize(&pkg_mod_norm_buf, ".", with_mod);
+            if (might_escape and !self.isAllowedImportPath(normalized_mod))
+                return self.rejectImportOutsideRoot(importer_path, import_name);
             if (self.sourceExists(with_mod)) {
-                var pkg_mod_norm_buf: [MaxModulePathBytes]u8 = undefined;
-                const normalized = try joinAndNormalize(&pkg_mod_norm_buf, ".", with_mod);
-                if (!self.isAllowedImportPath(normalized)) return self.rejectImportOutsideRoot(importer_path, import_name);
-                return copyResolvedPath(self, with_mod);
+                if (!self.isAllowedImportPath(normalized_mod)) return self.rejectImportOutsideRoot(importer_path, import_name);
+                return copyResolvedPath(self, normalized_mod);
             }
+
             self.last_error_path = importer_path;
             self.setScanError("unsupported import '{s}'; relative imports must start with '.', or use 'cap:'/'host:' prefix, or register a package", .{import_name});
             return error.UnsupportedImportModule;
@@ -994,15 +1001,13 @@ fn testSession(hs: *heap.State, source_root: []const u8, entries: []const Source
     return session;
 }
 
-// A package-style import (no leading '.') used to skip the
-// isAllowedImportPath sandbox gate entirely — only the '.'-prefixed
-// relative-import branch checked it. An absolute path, or a traversal that
-// doesn't happen to start with a literal '.', could read an arbitrary
-// registered/real source outside source_root. Both must now be rejected —
-// but only once they're confirmed to actually resolve to something (an
-// unregistered package name must still fall through to the ordinary
-// "not found" error, not be misreported as "outside the allowed source
-// directories").
+// Package-style imports (no leading '.') are sandbox-checked before any
+// filesystem probe: the sandbox gate (isAllowedImportPath) is applied to
+// the normalized path BEFORE sourceExists is called, so a traversal or
+// absolute path cannot reveal whether an out-of-sandbox file exists.
+// An unregistered package name whose normalized form is within the allowed
+// root still falls through to the ordinary "not found" error rather than
+// being misreported as "outside the allowed source directories".
 test "resolveImportPath: package-style import respects source_root sandbox" {
     var h: heap.State = .{};
     try h.init(64 * 1024, 256, testing.allocator);
@@ -1021,9 +1026,9 @@ test "resolveImportPath: package-style import respects source_root sandbox" {
     try testing.expectError(error.ImportOutsideRoot, session.resolveImportPath("main.gengo", "/etc/passwd"));
     try testing.expectError(error.ImportOutsideRoot, session.resolveImportPath("main.gengo", "x/../../secret"));
 
-    // An unregistered package name must still fail with the ordinary
-    // "not found" error, not "outside the allowed source directories" —
-    // the gate must only fire once a candidate is confirmed to exist.
+    // An unregistered package name whose normalized form is within the
+    // allowed root must still fail with the ordinary "not found" error,
+    // not "outside the allowed source directories".
     try testing.expectError(error.UnsupportedImportModule, session.resolveImportPath("main.gengo", "nonexistent"));
 }
 
