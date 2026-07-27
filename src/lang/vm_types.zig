@@ -602,7 +602,7 @@ pub fn constructNamedType(ctx: VMContext, typ_obj: *Object, arg: Value) !Value {
                         return error.RangeError;
                     }
                     const t = @trunc(n);
-                    if (t != n or t < 0) return error.TypeError;
+                    if (t != n or t < 0 or t > 0x10FFFF) return error.TypeError;
                     break :blk @intFromFloat(t);
                 },
                 else => return error.TypeError,
@@ -622,8 +622,15 @@ pub fn constructNamedType(ctx: VMContext, typ_obj: *Object, arg: Value) !Value {
         },
         .string => {
             if (!vms.isStringValue(effective_arg)) return error.TypeError;
-            const s = try vms.asStringValue(effective_arg);
-            const ds = try vmgc.makeDynString(ctx, s);
+            // For managed objects (dyn_string, string_view) use makeDynStringFromObj,
+            // which re-derives the source bytes from the Object AFTER the internal
+            // vmAllocManagedBytes call so any compaction cannot leave a stale slice.
+            // Static .string values (immortal bytes, not GC-managed) are safe to pass
+            // directly via makeDynString.
+            const ds = switch (effective_arg) {
+                .object => |src_obj| try vmgc.makeDynStringFromObj(ctx, src_obj),
+                else => try vmgc.makeDynString(ctx, try vms.asStringValue(effective_arg)),
+            };
             try ctx.vs.pushTempRoot(ds);
             defer ctx.vs.popTempRoot();
             return makeNamedValue(ctx, typ_obj, ds);
