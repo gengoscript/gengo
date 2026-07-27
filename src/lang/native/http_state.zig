@@ -1,6 +1,13 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+// Response body size cap for the built-in HTTP client (applies to
+// Content-Length, cumulative chunked-transfer, unbounded/no-length bodies,
+// and post-decompression size alike) — cap:http has no host allowlist, so
+// any server a script can reach could otherwise exhaust host memory with an
+// oversized or endless response.
+const MaxResponseBodyBytes: usize = 64 * 1024 * 1024;
+
 pub const HttpResult = struct {
     status: i32,
     body: []const u8,
@@ -58,6 +65,34 @@ pub const HandlerSet = struct {
 
 var g_http_handler: ?HandlerSet = null;
 
+// Lazily-populated system CA trust store for the built-in HTTPS client,
+// shared across requests (rescanning the OS trust store per-request would be
+// slow). Mirrors the pattern std.http.Client itself uses (Client.zig's
+// ca_bundle/ca_bundle_lock fields + the lazy-rescan-on-first-use in
+// Client.request).
+var g_ca_bundle: std.crypto.Certificate.Bundle = .empty;
+var g_ca_bundle_lock: std.Io.RwLock = .init;
+var g_ca_bundle_loaded: bool = false;
+
+fn ensureCaBundle(io: std.Io) !void {
+    {
+        try g_ca_bundle_lock.lockShared(io);
+        defer g_ca_bundle_lock.unlockShared(io);
+        if (g_ca_bundle_loaded) return;
+    }
+    var bundle: std.crypto.Certificate.Bundle = .empty;
+    errdefer bundle.deinit(std.heap.page_allocator);
+    const now = std.Io.Timestamp.now(io, .real);
+    try bundle.rescan(std.heap.page_allocator, io, now);
+    try g_ca_bundle_lock.lock(io);
+    defer g_ca_bundle_lock.unlock(io);
+    if (!g_ca_bundle_loaded) {
+        std.mem.swap(std.crypto.Certificate.Bundle, &g_ca_bundle, &bundle);
+        g_ca_bundle_loaded = true;
+    }
+    bundle.deinit(std.heap.page_allocator);
+}
+
 pub fn setHttpHandler(callback: GengoHttpFetchFn, userdata: ?*anyopaque) void {
     g_http_handler = .{ .callback = callback, .userdata = userdata };
 }
@@ -87,6 +122,10 @@ pub fn resetHandler() void {
 ///   body: response body string
 ///   headers: map of lower-cased header names to values
 ///   ok: true if status is 200–299
+fn containsCrlf(s: []const u8) bool {
+    return std.mem.indexOfScalar(u8, s, '\r') != null or std.mem.indexOfScalar(u8, s, '\n') != null;
+}
+
 pub fn httpFetch(
     method: []const u8,
     url: []const u8,
@@ -94,6 +133,18 @@ pub fn httpFetch(
     headers: ?std.StringHashMap([]const u8),
     timeout_ms: i64,
 ) !HttpResult {
+    // Reject CR/LF in the method or any header name/value before it ever
+    // reaches a raw request-line/header write (built-in client) or a host
+    // handler — otherwise a script-controlled method/header lets it inject
+    // arbitrary extra headers or smuggle a second request.
+    if (containsCrlf(method)) return error.InvalidRequest;
+    if (headers) |hdrs| {
+        var it = hdrs.iterator();
+        while (it.next()) |entry| {
+            if (containsCrlf(entry.key_ptr.*) or containsCrlf(entry.value_ptr.*)) return error.InvalidRequest;
+        }
+    }
+
     if (g_http_handler) |h| {
         return try httpFetchHost(h, method, url, body, headers, timeout_ms);
     }
@@ -116,6 +167,12 @@ fn httpFetchHost(
     timeout_ms: i64,
 ) !HttpResult {
     const body_ptr: [*]const u8 = if (maybe_body) |b| b.ptr else "";
+    // A request body over c_int's ~2GB range would make @intCast panic;
+    // only reachable via a custom-registered host handler (setHttpHandler),
+    // but a script could still construct such a body.
+    if (maybe_body) |b| {
+        if (b.len > std.math.maxInt(c_int)) return error.RequestTooLarge;
+    }
     const body_len: c_int = if (maybe_body) |b| @intCast(b.len) else 0;
 
     // Null-terminate method and url for the C API
@@ -347,7 +404,11 @@ fn httpFetchBuiltin(
     defer stream.close(io);
 
     // Compute absolute deadline (0 means no timeout)
-    const deadline_ms: i64 = if (timeout_ms > 0) monotonicMs() + timeout_ms else 0;
+    // timeout_ms is a script-supplied argument (cap_http.zig accepts any
+    // .int with no upper bound) — a raw `+` here panics on overflow for a
+    // huge value (e.g. i64::max), same class of bug already fixed in
+    // vm.zig's arithmetic opcodes. Saturate instead of trapping.
+    const deadline_ms: i64 = if (timeout_ms > 0) (std.math.add(i64, monotonicMs(), timeout_ms) catch std.math.maxInt(i64)) else 0;
 
     const tls_min_buf = std.crypto.tls.Client.min_buffer_len;
     var stream_read_buf: [tls_min_buf]u8 = undefined;
@@ -362,6 +423,12 @@ fn httpFetchBuiltin(
 
     var tls_client: ?std.crypto.tls.Client = null;
     if (is_tls) {
+        // `.ca = .no_verification` accepts ANY certificate for ANY host —
+        // it explicitly documents itself as "prevents a trusted connection
+        // from being established" and was silently making every https://
+        // request MITM-able. Use the real OS trust store instead, matching
+        // how std.http.Client itself wires up TLS.
+        try ensureCaBundle(io);
         var entropy: [std.crypto.tls.Client.Options.entropy_len]u8 = undefined;
         io.vtable.random(io.userdata, &entropy);
         const now = std.Io.Timestamp.now(io, .real);
@@ -370,7 +437,12 @@ fn httpFetchBuiltin(
             &fd_writer.interface,
             .{
                 .host = .{ .explicit = host.bytes },
-                .ca = .{ .no_verification = {} },
+                .ca = .{ .bundle = .{
+                    .gpa = std.heap.page_allocator,
+                    .io = io,
+                    .lock = &g_ca_bundle_lock,
+                    .bundle = &g_ca_bundle,
+                } },
                 .write_buffer = &tls_write_buf,
                 .read_buffer = &tls_read_buf,
                 .entropy = &entropy,
@@ -404,9 +476,16 @@ fn httpExchange(
 
     var uri_buf: [4096]u8 = undefined;
     const path = if (uri.path.isEmpty()) "/" else (uri.path.toRaw(&uri_buf) catch "/");
+    // toRaw() percent-decodes the component, so a URL-encoded CR/LF
+    // (%0d%0a) becomes a literal one right here — reject it rather than
+    // write it straight into the request line (request-splitting/header
+    // injection via the URL alone, no headers option needed).
+    if (containsCrlf(path)) return error.InvalidRequest;
     try req_w.print("{s} {s}", .{ method, path });
     if (uri.query) |q| {
-        const q_raw = q.toRaw(&uri_buf) catch "";
+        var q_buf: [4096]u8 = undefined;
+        const q_raw = q.toRaw(&q_buf) catch "";
+        if (containsCrlf(q_raw)) return error.InvalidRequest;
         if (q_raw.len > 0) try req_w.print("?{s}", .{q_raw});
     }
     try req_w.writeAll(" HTTP/1.1\r\n");
@@ -484,6 +563,11 @@ fn httpExchange(
     var body: std.ArrayList(u8) = .empty;
     errdefer body.deinit(std.heap.page_allocator);
 
+    // A malicious/misbehaving server otherwise has no way for a script's
+    // http.fetch to be bounded: an oversized (or attacker-claimed, since
+    // cap:http has no host allowlist) Content-Length or an endless chunked/
+    // unbounded body can exhaust host memory. Cap total body size the same
+    // way regardless of transfer encoding.
     if (transfer_chunked) {
         while (true) {
             const size_line = (try actual_reader.takeDelimiter('\n')) orelse break;
@@ -492,6 +576,7 @@ fn httpExchange(
             if (chunk_size == 0) break;
 
             const offset = body.items.len;
+            if (chunk_size > MaxResponseBodyBytes - offset) return error.ResponseTooLarge;
             try body.resize(std.heap.page_allocator, offset + chunk_size);
             try actual_reader.readSliceAll(body.items[offset..]);
             _ = try actual_reader.takeDelimiter('\n');
@@ -501,12 +586,13 @@ fn httpExchange(
             if (trail.len <= 1) break;
         }
     } else if (content_length) |len| {
+        if (len > MaxResponseBodyBytes) return error.ResponseTooLarge;
         if (len > 0) {
             try body.resize(std.heap.page_allocator, len);
             try actual_reader.readSliceAll(body.items);
         }
     } else {
-        try std.Io.Reader.appendRemaining(actual_reader, std.heap.page_allocator, &body, .unlimited);
+        try std.Io.Reader.appendRemaining(actual_reader, std.heap.page_allocator, &body, .limited(MaxResponseBodyBytes));
     }
 
     // Decompress gzip body
@@ -527,7 +613,9 @@ fn httpExchange(
             },
             else => &body_reader,
         };
-        decompressed_alloc = try transfer_reader.allocRemaining(std.heap.page_allocator, std.Io.Limit.unlimited);
+        // Cap decompressed size too — otherwise a small compressed body
+        // (well under MaxResponseBodyBytes) can still "bomb" to gigabytes.
+        decompressed_alloc = try transfer_reader.allocRemaining(std.heap.page_allocator, .limited(MaxResponseBodyBytes));
 
         resp_headers.put("content-encoding", "identity") catch {};
         body.deinit(std.heap.page_allocator);
@@ -552,4 +640,35 @@ fn httpExchange(
         .ok = ok,
         .body_needs_free = true,
     };
+}
+
+const testing = std.testing;
+
+test "containsCrlf detects CR and LF anywhere in the string" {
+    try testing.expect(!containsCrlf("GET"));
+    try testing.expect(!containsCrlf("X-Custom-Header"));
+    try testing.expect(containsCrlf("GET /x HTTP/1.1\r\nHost: evil"));
+    try testing.expect(containsCrlf("value\r"));
+    try testing.expect(containsCrlf("value\n"));
+}
+
+// httpFetch used to build the raw request line/headers directly from
+// script-controlled method/url/header strings with no validation at all —
+// a CRLF anywhere in them (raw, or percent-decoded out of the URL's path/
+// query) let a script inject arbitrary extra headers or smuggle a second
+// request. The method/header check runs before any dispatch (host handler
+// or built-in client), so this doesn't need a real network connection to
+// verify.
+test "httpFetch rejects CRLF in method or headers before any dispatch" {
+    try testing.expectError(error.InvalidRequest, httpFetch("GET /x HTTP/1.1\r\nX-Injected: evil", "http://example.com/", null, null, 0));
+
+    var headers = std.StringHashMap([]const u8).init(testing.allocator);
+    defer headers.deinit();
+    try headers.put("X-Custom", "evil\r\nX-Injected: yes");
+    try testing.expectError(error.InvalidRequest, httpFetch("GET", "http://example.com/", null, headers, 0));
+
+    var headers2 = std.StringHashMap([]const u8).init(testing.allocator);
+    defer headers2.deinit();
+    try headers2.put("X-Bad\r\nX-Injected", "value");
+    try testing.expectError(error.InvalidRequest, httpFetch("GET", "http://example.com/", null, headers2, 0));
 }
