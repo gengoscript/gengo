@@ -24,7 +24,11 @@ const MaxFrames = @import("runtime_config").max_frames;
 const cfg = @import("runtime_config");
 
 pub const Config = struct {
-    allow_io: bool = true,
+    // Defaults closed: a host that constructs Config{} without thinking about
+    // it gets a locked-down sandbox, not stdio enabled by accident. Every
+    // internal call site already opts in/out explicitly; docs/security.md
+    // has always recommended allow_io = false unless scripts need std.io.
+    allow_io: bool = false,
     native_backend: vm.Policy.NativeBackend = .embedded,
     max_ops: ?u64 = null,
     enable_predicates: bool = true,
