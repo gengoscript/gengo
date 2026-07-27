@@ -9,6 +9,7 @@ const vmarr = @import("../vm_array.zig");
 const vmtyp = @import("../vm_types.zig");
 const vmstr = @import("../vm_string.zig");
 const vmbigint = @import("../vm_bigint.zig");
+const vm = @import("../vm.zig");
 const vmod = @import("../value.zig");
 const Value = vmod.Value;
 const Object = vmod.Object;
@@ -124,6 +125,11 @@ pub fn nativeAppend(ctx: VMContext, start: usize, argc: u8) !Value {
         if (first.object.named_value.typ.named_type.elem_spec) |es| {
             for (ctx.vs.stack[start + 1 .. start + argc]) |v| {
                 if (!vmtyp.matchesTypeSpec(ctx, v, es)) return error.TypeError;
+                // matchesTypeSpec only checks a bare scalar's type tag, not a
+                // named_t element spec's own range/predicate — core.append
+                // on a predicate-bearing named array type could otherwise
+                // silently append a value violating that predicate.
+                try vm.validateErasedNamedValueForSpec(ctx, es, v);
             }
         }
     }

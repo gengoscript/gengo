@@ -5040,3 +5040,77 @@ test "compiler: std.json.stringify serializes bigint as digits, not null; std.co
     const as_float = try rt.callGlobal("convFloatBig", &.{});
     try std.testing.expectEqual(@as(f64, 123.0), as_float.float);
 }
+
+// A predicate-bearing named array/map element type was only checked at
+// initial construction (validateNamedCollectionElements); every mutation
+// path after that (arr[i]=v, m[k]=v, core.append) reused a shallow
+// matchesTypeSpec check that only compares a bare scalar's type tag, not
+// its named_t spec's own range/predicate — so a script could silently
+// write a value into a "validated" collection that violates its own
+// element type's predicate.
+test "compiler: array/map element write re-enforces the named element type's predicate" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\type Score int predicate func(x) { return x >= 0 and x <= 100 }
+        \\type ScoreList []Score
+        \\type ScoreMap [string]Score
+        \\func arrWrite() int { s := ScoreList([10, 20]); s[0] = 500; return 0 }
+        \\func arrAppend() int { s := ScoreList([10, 20]); _ = std.core.append(s, 500); return 0 }
+        \\func mapWrite() int { m := ScoreMap({"a": 10}); m["a"] = 500; return 0 }
+        \\func arrWriteOk() int { s := ScoreList([10, 20]); s[0] = 30; return s[0] }
+    );
+    try std.testing.expectError(error.PredicateFailed, rt.callGlobal("arrWrite", &.{}));
+    try std.testing.expectError(error.PredicateFailed, rt.callGlobal("arrAppend", &.{}));
+    try std.testing.expectError(error.PredicateFailed, rt.callGlobal("mapWrite", &.{}));
+    const ok = try rt.callGlobal("arrWriteOk", &.{});
+    try std.testing.expectEqual(@as(i64, 30), ok.int);
+}
+
+// Every other arithmetic-carrier path (add/sub/mul, unary neg, abs) re-checks
+// a named type's predicate after producing a new value; TypeName.succ/pred
+// (both the bound-function form and the method-call form) didn't, so
+// `Even.succ(4)` could silently return an odd value.
+test "compiler: named type succ/pred re-enforces the predicate" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Even int range 0..10 predicate func(x) { return x rem 2 == 0 }
+        \\type Bounded int range 0..10
+        \\func succFn() int { return Even.succ(4) }
+        \\func predFn() int { return Even.pred(6) }
+        \\func succOk() int { return Bounded.succ(4) }
+    );
+    try std.testing.expectError(error.PredicateFailed, rt.callGlobal("succFn", &.{}));
+    try std.testing.expectError(error.PredicateFailed, rt.callGlobal("predFn", &.{}));
+    const ok = try rt.callGlobal("succOk", &.{});
+    const inner = ok.namedInner() orelse ok;
+    try std.testing.expectEqual(@as(i64, 5), inner.int);
+}
+
+// String `+` concatenation on a named string type built the result via
+// makeNamedValue with no predicate check at all, unlike every numeric
+// carrier path — a length-bounded named string could concatenate into a
+// longer string silently violating its own predicate.
+test "compiler: named string concatenation re-enforces the predicate" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\type Short string predicate func(x) { return std.core.len(x) <= 5 }
+        \\func concatTooLong() string {
+        \\    a := Short("abc")
+        \\    b := Short("cde")
+        \\    return string(a + b)
+        \\}
+        \\func concatOk() string {
+        \\    a := Short("ab")
+        \\    b := Short("cd")
+        \\    return string(a + b)
+        \\}
+    );
+    try std.testing.expectError(error.PredicateFailed, rt.callGlobal("concatTooLong", &.{}));
+    const ok = try rt.callGlobal("concatOk", &.{});
+    try std.testing.expectEqualStrings("abcd", try vms.asStringValue(ok));
+}
