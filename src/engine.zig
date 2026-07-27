@@ -421,29 +421,39 @@ fn wireToValue(wire: ValueWire) !Value {
         @intFromEnum(WireTag.array) => {
             const count = wire.len;
             const elem_wires = @as([*]const ValueWire, @ptrFromInt(@as(usize, @intCast(wire.payload))))[0..count];
-            const arr_obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
+            // Publish the backing slice to the owning object *before* filling
+            // it in (allocTempRootedManagedValueArray does this), then write
+            // through the object on every element via .set(). A slice
+            // captured directly from vmAllocManagedSlice and written to
+            // across the loop would be invisible to compactManagedHeap's
+            // relocation walk until some later point published it — and each
+            // recursive wireToValue(ew) call below can itself allocate (e.g.
+            // a nested array/map/string), which can trigger exactly such a
+            // compaction mid-loop, silently relocating other live data on
+            // top of the still-unpublished block.
+            const out_arr = try vmgc.allocTempRootedManagedValueArray(ctx, count);
             defer ctx.vs.popTempRoot();
-            const items = try vmgc.vmAllocManagedSlice(ctx, Value, count);
             for (elem_wires, 0..) |ew, i| {
-                items[i] = try wireToValue(ew);
+                out_arr.set(i, try wireToValue(ew));
             }
-            arr_obj.* = .{ .array_managed = items[0..count] };
-            return .{ .object = arr_obj };
+            return .{ .object = out_arr.obj };
         },
         @intFromEnum(WireTag.map) => {
             const count = wire.len;
             const pair_wires = @as([*]const ValueWire, @ptrFromInt(@as(usize, @intCast(wire.payload))))[0 .. count * 2];
-            const map_obj = try vmgc.allocTempRooted(ctx, .{ .map = &[_]MapEntry{} });
+            // Same stale-slice-after-compaction hazard as the array case
+            // above: publish via allocTempRootedManagedMap before filling,
+            // write through .set() so each entry re-derives the current
+            // backing slice rather than trusting one captured before the
+            // (allocating, potentially compacting) recursive conversions.
+            const out_map = try vmgc.allocTempRootedManagedMap(ctx, count);
             defer ctx.vs.popTempRoot();
-            const entries = try vmgc.vmAllocManagedSlice(ctx, MapEntry, count);
             for (0..count) |i| {
-                entries[i] = .{
-                    .key = try wireToValue(pair_wires[i * 2]),
-                    .value = try wireToValue(pair_wires[i * 2 + 1]),
-                };
+                const k = try wireToValue(pair_wires[i * 2]);
+                const v = try wireToValue(pair_wires[i * 2 + 1]);
+                out_map.set(i, .{ .key = k, .value = v });
             }
-            map_obj.* = .{ .map_managed = entries[0..count] };
-            return .{ .object = map_obj };
+            return .{ .object = out_map.obj };
         },
         else => .null,
     };
@@ -1495,6 +1505,85 @@ test "engine_call converts wires in the selected engine heap" {
     try std.testing.expectEqual(0, rc);
     try std.testing.expectEqual(@as(u8, @intFromEnum(WireTag.number)), out.tag);
     try std.testing.expectEqual(@as(i64, 1), @as(i64, @bitCast(out.payload)));
+}
+
+// Regression test for a stale-slice-after-compaction bug in this file's
+// wireToValue array/map conversion: the backing slice for a converted array
+// used to be captured directly from vmAllocManagedSlice and written into
+// across the whole element loop, before ever being published into the
+// owning array_managed object. Converting each element can itself allocate
+// (makeDynString for a string element, recursively for nested arrays/maps),
+// which can trigger a heap compaction — and with the backing slice not yet
+// reachable from any live object, compaction was free to relocate other
+// live data on top of it while the loop kept writing through the by-then-
+// stale pointer, corrupting or losing already-converted elements. Fixed by
+// allocating via allocTempRootedManagedValueArray (publishes the slice to
+// the object up front) and writing every element through .set(), which
+// re-derives the current backing pointer on each call rather than trusting
+// one captured before the allocating conversions. The map branch had the
+// same bug and the same fix (allocTempRootedManagedMap).
+//
+// As with the std.sort.by regression in compiler_test.zig, an actual
+// compaction is not guaranteed to fire deterministically in-process; this
+// is primarily a correctness check for large host-supplied wire arrays
+// under a small, tightly configured heap.
+test "engine_call converts a large host-supplied wire array without corrupting elements under heap pressure" {
+    const config: InstanceConfig = .{
+        .heap_size_bytes = 96 * 1024,
+        .max_objects = 2048,
+        .max_stack = 256,
+        .max_frames = 64,
+        .max_defers = 64,
+        .max_ops = -1,
+        .allow_io = false,
+    };
+    const h = engine_init_with_config(@intFromPtr(&config));
+    try std.testing.expect(h > 0);
+    defer engine_destroy(h);
+
+    const src =
+        \\std := import("std")
+        \\pub func check(arr []string) bool {
+        \\    i := 0
+        \\    n := std.core.len(arr)
+        \\    for i < n {
+        \\        want := "elem-" + std.conv.to_string(i)
+        \\        if arr[i] != want { return false }
+        \\        i = i + 1
+        \\    }
+        \\    return true
+        \\}
+    ;
+    try std.testing.expectEqual(0, engine_run(h, @intFromPtr(src.ptr), src.len));
+
+    const N = 600;
+    var bufs: [N][16]u8 = undefined;
+    var elem_wires: [N]ValueWire = undefined;
+    for (0..N) |i| {
+        const s = std.fmt.bufPrint(&bufs[i], "elem-{d}", .{i}) catch unreachable;
+        elem_wires[i] = .{
+            .tag = @intFromEnum(WireTag.string),
+            .flags = 0,
+            .reserved = 0,
+            .payload = @intFromPtr(s.ptr),
+            .len = @intCast(s.len),
+            .reserved2 = 0,
+        };
+    }
+    var arr_wire: ValueWire = .{
+        .tag = @intFromEnum(WireTag.array),
+        .flags = 0,
+        .reserved = 0,
+        .payload = @intFromPtr(&elem_wires),
+        .len = N,
+        .reserved2 = 0,
+    };
+
+    var out: ValueWire = undefined;
+    const rc = engine_call(h, @intFromPtr("check".ptr), 5, @intFromPtr(&arr_wire), 1, @intFromPtr(&out));
+    try std.testing.expectEqual(0, rc);
+    try std.testing.expectEqual(@as(u8, @intFromEnum(WireTag.boolean)), out.tag);
+    try std.testing.expect(out.payload != 0);
 }
 
 test "engine_call drops named decimal scale in ValueWire v2" {
