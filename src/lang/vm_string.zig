@@ -128,13 +128,21 @@ pub fn stringIndex(ctx: VMContext, container: Value, idx_v: Value) !Value {
                 const bytes = obj.dyn_string;
                 const start = try utf8ByteOffsetForRuneIndexCached(ctx, bytes, ridx);
                 const w = try utf8NextRuneByteLen(bytes, start);
-                return makeCharValue(ctx, bytes[start .. start + w], obj);
+                // ASCII fast path: no allocation, pre-captured bytes are still valid.
+                if (w == 1 and bytes[start] < 128) return .{ .string = &ascii_ss[bytes[start]] };
+                // Multi-byte: makeStringView allocates internally and may compact;
+                // re-derive bytes from obj after the allocation.
+                return vmgc.makeStringViewFromStringObj(ctx, obj, start, start + w);
             },
             .string_view => {
                 const sv = obj.string_view;
                 const start = try utf8ByteOffsetForRuneIndexCached(ctx, sv.bytes, ridx);
                 const w = try utf8NextRuneByteLen(sv.bytes, start);
-                return makeCharValue(ctx, sv.bytes[start .. start + w], sv.source);
+                // ASCII fast path: no allocation, pre-captured bytes are still valid.
+                if (w == 1 and sv.bytes[start] < 128) return .{ .string = &ascii_ss[sv.bytes[start]] };
+                // Multi-byte: makeStringView allocates internally and may compact;
+                // re-derive bytes from obj after the allocation.
+                return vmgc.makeStringViewFromStringObj(ctx, obj, start, start + w);
             },
             else => return error.TypeError,
         },
@@ -155,12 +163,16 @@ pub fn stringSlice(ctx: VMContext, container: Value, has_start: bool, start_v: V
             .dyn_string => {
                 const bytes = obj.dyn_string;
                 const r = try stringSliceRange(ctx, bytes, has_start, start_v, has_end, end_v);
-                return vmgc.makeStringView(ctx, bytes[r.start_b..r.end_b], obj);
+                // makeStringView allocates internally and may compact; re-derive bytes
+                // from obj after the allocation.
+                return vmgc.makeStringViewFromStringObj(ctx, obj, r.start_b, r.end_b);
             },
             .string_view => {
                 const sv = obj.string_view;
                 const r = try stringSliceRange(ctx, sv.bytes, has_start, start_v, has_end, end_v);
-                return vmgc.makeStringView(ctx, sv.bytes[r.start_b..r.end_b], sv.source);
+                // makeStringView allocates internally and may compact; re-derive bytes
+                // from obj after the allocation.
+                return vmgc.makeStringViewFromStringObj(ctx, obj, r.start_b, r.end_b);
             },
             else => return error.TypeError,
         },
