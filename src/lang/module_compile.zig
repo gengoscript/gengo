@@ -634,18 +634,60 @@ pub const Session = struct {
         return false;
     }
 
+    fn rejectImportOutsideRoot(self: *Session, importer_path: []const u8, import_name: []const u8) error{ImportOutsideRoot} {
+        self.last_error_path = importer_path;
+        self.setScanError("import '{s}' is outside the allowed source directories", .{import_name});
+        return error.ImportOutsideRoot;
+    }
+
     fn resolveImportPath(self: *Session, importer_path: []const u8, import_name: []const u8) ![]const u8 {
         if (common.streq(import_name, StdModulePath)) return StdModulePath;
         if (import_name.len == 0) return error.ImportNotFound;
         if (!(import_name[0] == '.')) {
-            // Allow package imports: try the source provider before rejecting.
-            if (self.sourceExists(import_name)) return copyResolvedPath(self, import_name);
+            // A package-style import (no leading '.') used to skip the
+            // isAllowedImportPath sandbox gate entirely — only the '.'-
+            // prefixed relative-import branch below checked it. That let
+            // any import specifier not literally starting with '.' (an
+            // absolute path like "/etc/passwd", or a traversal like
+            // "x/../../../../etc/secret") read an arbitrary file the host
+            // process can access, completely bypassing source_root.
+            //
+            // Gate each candidate only once it's confirmed to actually
+            // resolve to something the source provider has — not upfront —
+            // so a package name that legitimately doesn't exist anywhere
+            // (e.g. an unregistered/unknown package) still falls through to
+            // the ordinary "not found"/"unsupported import" error below
+            // exactly as before, instead of being misreported as
+            // "outside the allowed source directories".
+            //
+            // isAllowedImportPath/pathIsUnderRoot is a plain string-prefix
+            // check, not path-aware — a raw, un-normalized candidate like
+            // "tests/spec/fail/../../../etc/secret" literally starts with
+            // an allowed root as a substring, which would wrongly pass.
+            // Normalize (resolve "." / ".." segments) before checking, same
+            // as the relative-import branch below does via joinAndNormalize.
+            if (self.sourceExists(import_name)) {
+                var pkg_buf: [MaxModulePathBytes]u8 = undefined;
+                const normalized = try joinAndNormalize(&pkg_buf, ".", import_name);
+                if (!self.isAllowedImportPath(normalized)) return self.rejectImportOutsideRoot(importer_path, import_name);
+                return copyResolvedPath(self, import_name);
+            }
             var pkg_ext_buf: [MaxModulePathBytes]u8 = undefined;
             const with_ext = try appendSuffix(&pkg_ext_buf, import_name, ".gengo");
-            if (self.sourceExists(with_ext)) return copyResolvedPath(self, with_ext);
+            if (self.sourceExists(with_ext)) {
+                var pkg_ext_norm_buf: [MaxModulePathBytes]u8 = undefined;
+                const normalized = try joinAndNormalize(&pkg_ext_norm_buf, ".", with_ext);
+                if (!self.isAllowedImportPath(normalized)) return self.rejectImportOutsideRoot(importer_path, import_name);
+                return copyResolvedPath(self, with_ext);
+            }
             var pkg_mod_buf: [MaxModulePathBytes]u8 = undefined;
             const with_mod = try appendSuffix(&pkg_mod_buf, import_name, "/mod.gengo");
-            if (self.sourceExists(with_mod)) return copyResolvedPath(self, with_mod);
+            if (self.sourceExists(with_mod)) {
+                var pkg_mod_norm_buf: [MaxModulePathBytes]u8 = undefined;
+                const normalized = try joinAndNormalize(&pkg_mod_norm_buf, ".", with_mod);
+                if (!self.isAllowedImportPath(normalized)) return self.rejectImportOutsideRoot(importer_path, import_name);
+                return copyResolvedPath(self, with_mod);
+            }
             self.last_error_path = importer_path;
             self.setScanError("unsupported import '{s}'; relative imports must start with '.', or use 'cap:'/'host:' prefix, or register a package", .{import_name});
             return error.UnsupportedImportModule;
@@ -880,6 +922,16 @@ fn normalizePathInPlace(buf: *[MaxModulePathBytes]u8, len: usize) ![]const u8 {
     var read_i: usize = 0;
     var write_i: usize = 0;
     var seg_starts: [MaxModulePathBytes]usize = undefined;
+    // Tracks whether each seg_starts[i] entry is a real named segment or a
+    // leading, unresolvable ".." placeholder (pushed when there's no real
+    // segment left to cancel). Without this, a second unresolvable ".."
+    // popped the FIRST placeholder as if it were a real segment instead of
+    // stacking a second placeholder — consecutive leading ".." segments
+    // cancelled in pairs (2 collapse to 0, 3 collapse to 1, ...) instead of
+    // accumulating, so e.g. "../../foo" and "foo" could normalize to the
+    // same path from the same base_dir, silently colliding two distinct
+    // imports on one resolved path/cache entry.
+    var seg_is_dotdot: [MaxModulePathBytes]bool = undefined;
     var seg_count: usize = 0;
 
     if (len > 0 and buf[0] == '/') {
@@ -897,7 +949,7 @@ fn normalizePathInPlace(buf: *[MaxModulePathBytes]u8, len: usize) ![]const u8 {
         const seg = buf[seg_start..read_i];
         if (common.streq(seg, ".")) continue;
         if (common.streq(seg, "..")) {
-            if (seg_count > 0) {
+            if (seg_count > 0 and !seg_is_dotdot[seg_count - 1]) {
                 seg_count -= 1;
                 write_i = seg_starts[seg_count];
             } else if (!absolute) {
@@ -906,6 +958,7 @@ fn normalizePathInPlace(buf: *[MaxModulePathBytes]u8, len: usize) ![]const u8 {
                     write_i += 1;
                 }
                 seg_starts[seg_count] = write_i;
+                seg_is_dotdot[seg_count] = true;
                 seg_count += 1;
                 buf[write_i] = '.';
                 buf[write_i + 1] = '.';
@@ -918,6 +971,7 @@ fn normalizePathInPlace(buf: *[MaxModulePathBytes]u8, len: usize) ![]const u8 {
             write_i += 1;
         }
         seg_starts[seg_count] = write_i;
+        seg_is_dotdot[seg_count] = false;
         seg_count += 1;
         std.mem.copyForwards(u8, buf[write_i .. write_i + seg.len], seg);
         write_i += seg.len;
@@ -928,4 +982,77 @@ fn normalizePathInPlace(buf: *[MaxModulePathBytes]u8, len: usize) ![]const u8 {
         write_i = 1;
     }
     return buf[0..write_i];
+}
+
+const testing = std.testing;
+
+fn testSession(hs: *heap.State, source_root: []const u8, entries: []const SourceEntry) Session {
+    var session: Session = .{};
+    session.hs = hs;
+    session.source_root = source_root;
+    session.provider = .{ .table = entries };
+    return session;
+}
+
+// A package-style import (no leading '.') used to skip the
+// isAllowedImportPath sandbox gate entirely — only the '.'-prefixed
+// relative-import branch checked it. An absolute path, or a traversal that
+// doesn't happen to start with a literal '.', could read an arbitrary
+// registered/real source outside source_root. Both must now be rejected —
+// but only once they're confirmed to actually resolve to something (an
+// unregistered package name must still fall through to the ordinary
+// "not found" error, not be misreported as "outside the allowed source
+// directories").
+test "resolveImportPath: package-style import respects source_root sandbox" {
+    var h: heap.State = .{};
+    try h.init(64 * 1024, 256, testing.allocator);
+    defer h.deinit();
+
+    const entries = [_]SourceEntry{
+        .{ .path = "ok/math.gengo", .source = "" },
+        .{ .path = "/etc/passwd", .source = "" },
+        .{ .path = "x/../../secret.gengo", .source = "" },
+    };
+    var session = testSession(&h, ".", &entries);
+
+    const ok = try session.resolveImportPath("main.gengo", "ok/math");
+    try testing.expectEqualStrings("ok/math.gengo", ok);
+
+    try testing.expectError(error.ImportOutsideRoot, session.resolveImportPath("main.gengo", "/etc/passwd"));
+    try testing.expectError(error.ImportOutsideRoot, session.resolveImportPath("main.gengo", "x/../../secret"));
+
+    // An unregistered package name must still fail with the ordinary
+    // "not found" error, not "outside the allowed source directories" —
+    // the gate must only fire once a candidate is confirmed to exist.
+    try testing.expectError(error.UnsupportedImportModule, session.resolveImportPath("main.gengo", "nonexistent"));
+}
+
+// normalizePathInPlace's ".." bookkeeping used to treat the first
+// unresolvable ".." placeholder the same as a real segment, so a second
+// unresolvable ".." popped it instead of stacking — N leading un-cancelable
+// ".." segments collapsed to N mod 2 instead of accumulating, letting e.g.
+// "../../foo" and "foo" normalize to the same path from the same base.
+test "normalizePathInPlace accumulates consecutive unresolvable .. segments" {
+    var buf: [MaxModulePathBytes]u8 = undefined;
+    {
+        const src = "../../foo";
+        @memcpy(buf[0..src.len], src);
+        const out = try normalizePathInPlace(&buf, src.len);
+        try testing.expectEqualStrings("../../foo", out);
+    }
+    {
+        const src = "../../../bar";
+        @memcpy(buf[0..src.len], src);
+        const out = try normalizePathInPlace(&buf, src.len);
+        try testing.expectEqualStrings("../../../bar", out);
+    }
+    {
+        // A real segment followed by ".." still correctly cancels (this
+        // path was never broken — only consecutive *unresolvable* ".."
+        // segments were).
+        const src = "a/../b";
+        @memcpy(buf[0..src.len], src);
+        const out = try normalizePathInPlace(&buf, src.len);
+        try testing.expectEqualStrings("b", out);
+    }
 }
