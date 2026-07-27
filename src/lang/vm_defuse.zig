@@ -37,6 +37,7 @@ inline fn bwdOff(ip_map: []const u32, old_target: usize, new_end: usize) u32 {
 fn expandedWidth(op: Op, old_width: usize) usize {
     return switch (op) {
         // Fused return variants
+        .ret_const => 4, // constant(3) + ret(1)
         .get_local_ret => 3, // get_local(2) + ret(1)
         .add_ret => 2, // add(1) + ret(1)
         // Fused local-slot mutations
@@ -95,6 +96,12 @@ fn emitExpanded(
 
     switch (op) {
         // ── Fused return variants ────────────────────────────────────────────
+        .ret_const => {
+            dst[0] = opByte(.constant);
+            dst[1] = rb(code, old_ip, 1);
+            dst[2] = rb(code, old_ip, 2);
+            dst[3] = opByte(.ret);
+        },
         .get_local_ret => {
             dst[0] = opByte(.get_local);
             dst[1] = rb(code, old_ip, 1);
@@ -513,25 +520,49 @@ pub fn buildDefusedCode(cs: *chunk.State, alloc: std.mem.Allocator) ![]u8 {
     // Function objects store bytecode entry IPs; after defusing, those positions
     // shift due to expanded instructions and must be remapped through ip_map.
     // Also handles closures and predicates embedded in named_type constants.
+    //
+    // A FuncObj pointer may be shared across multiple const-pool entries (e.g.,
+    // a plain .function entry and a .closure wrapping the same object). Track
+    // which Object pointers have already been remapped so we never apply
+    // ip_map twice to the same FuncObj.
+    var seen_func_ptrs = std.AutoHashMap(usize, void).init(alloc);
+    defer seen_func_ptrs.deinit();
+
     for (cs.consts[0..cs.const_count]) |v| {
         if (v != .object) continue;
         switch (v.object.*) {
             .function => |*f| {
+                const key = @intFromPtr(v.object);
+                const res = try seen_func_ptrs.getOrPut(key);
+                if (res.found_existing) continue;
                 if (f.ip < ip_map.len) f.ip = @intCast(ip_map[f.ip]);
             },
             .closure => |*cl| {
-                if (cl.func.* == .function and cl.func.function.ip < ip_map.len)
-                    cl.func.function.ip = @intCast(ip_map[cl.func.function.ip]);
+                if (cl.func.* == .function) {
+                    const key = @intFromPtr(cl.func);
+                    const res = try seen_func_ptrs.getOrPut(key);
+                    if (res.found_existing) continue;
+                    if (cl.func.function.ip < ip_map.len)
+                        cl.func.function.ip = @intCast(ip_map[cl.func.function.ip]);
+                }
             },
             .named_type => |nt| {
                 if (nt.predicate) |pred| {
                     switch (pred.*) {
                         .function => |*f| {
+                            const key = @intFromPtr(pred);
+                            const res = try seen_func_ptrs.getOrPut(key);
+                            if (res.found_existing) continue;
                             if (f.ip < ip_map.len) f.ip = @intCast(ip_map[f.ip]);
                         },
                         .closure => |*cl| {
-                            if (cl.func.* == .function and cl.func.function.ip < ip_map.len)
-                                cl.func.function.ip = @intCast(ip_map[cl.func.function.ip]);
+                            if (cl.func.* == .function) {
+                                const key = @intFromPtr(cl.func);
+                                const res = try seen_func_ptrs.getOrPut(key);
+                                if (res.found_existing) continue;
+                                if (cl.func.function.ip < ip_map.len)
+                                    cl.func.function.ip = @intCast(ip_map[cl.func.function.ip]);
+                            }
                         },
                         else => {},
                     }

@@ -195,9 +195,33 @@ fn fuseOnce(cs: *chunk.State, alloc: std.mem.Allocator) FuseError!bool {
             ip += inst.width;
         }
         for (cs.consts[0..cs.const_count]) |cv| {
-            if (cv == .object and cv.object.* == .function) {
-                const fip = cv.object.function.ip;
-                if (fip < old_len) targets.set(fip);
+            if (cv != .object) continue;
+            switch (cv.object.*) {
+                .function => {
+                    const fip = cv.object.function.ip;
+                    if (fip < old_len) targets.set(fip);
+                },
+                .closure => |cl| {
+                    if (cl.func.* == .function) {
+                        const fip = cl.func.function.ip;
+                        if (fip < old_len) targets.set(fip);
+                    }
+                },
+                .named_type => |nt| {
+                    if (nt.predicate) |pred| {
+                        switch (pred.*) {
+                            .function => {
+                                if (pred.function.ip < old_len) targets.set(pred.function.ip);
+                            },
+                            .closure => |cl| {
+                                if (cl.func.* == .function and cl.func.function.ip < old_len)
+                                    targets.set(cl.func.function.ip);
+                            },
+                            else => {},
+                        }
+                    }
+                },
+                else => {},
             }
         }
         // Module boundaries are entry points too: fusing across one would
