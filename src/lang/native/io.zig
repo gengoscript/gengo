@@ -390,15 +390,23 @@ fn parseSpec(fmt: []const u8, i: *usize) FmtSpec {
             else => break,
         }
     }
+    // fmt is script-controlled (std.fmt.format/printf/eprintf take no
+    // capability at all — reachable from any script). Unbounded digit runs
+    // in the width/precision fields used to overflow these accumulators
+    // (usize needs ~20 digits, i32 needs ~10) — a raw `*`/`+` traps on
+    // overflow, aborting the whole process. Saturate well below either
+    // type's max; anything this large is already nonsensical and gets
+    // rejected downstream by the allocation-size guard regardless.
+    const max_field: usize = 1_000_000;
     while (i.* < fmt.len and fmt[i.*] >= '0' and fmt[i.*] <= '9') {
-        s.width = s.width * 10 + (fmt[i.*] - '0');
+        if (s.width < max_field) s.width = s.width * 10 + (fmt[i.*] - '0');
         i.* += 1;
     }
     if (i.* < fmt.len and fmt[i.*] == '.') {
         i.* += 1;
         s.prec = 0;
         while (i.* < fmt.len and fmt[i.*] >= '0' and fmt[i.*] <= '9') {
-            s.prec = s.prec * 10 + @as(i32, fmt[i.*] - '0');
+            if (s.prec < max_field) s.prec = s.prec * 10 + @as(i32, fmt[i.*] - '0');
             i.* += 1;
         }
     }
