@@ -1573,7 +1573,9 @@ fn retSlowPath(ctx: VMContext, retval_in: Value) !bool {
                 // Spread: push N values directly — no allocation, no tuple boxing.
                 // Read all values before unwinding so slots aren't clobbered.
                 var spread_vals: [64]Value = undefined;
-                const nrc: usize = fsig.named_return_count;
+                // Belt-and-suspenders: gbc_reader already rejects > 64, but
+                // clamp here so a stale in-memory FuncObj can't OOB the buffer.
+                const nrc: usize = @min(fsig.named_return_count, 64);
                 for (0..nrc) |ri| {
                     if (nrbase + ri >= ctx.vs.stack.len) return error.StackOverflow;
                     spread_vals[ri] = vms.unboxCell(ctx.vs.stack[nrbase + ri]);
@@ -1627,8 +1629,9 @@ fn pushFieldFromObject(ctx: VMContext, obj: *Object, name_idx: usize, ic_base: u
             } else return error.TypeError;
         },
         .struct_instance => |inst| {
+            // Also bounds-check ic_fidx: a crafted GBC can pre-set it to any u8.
             if (ic_fidx != 0xFF and ic_type_idx < heap.MaxObjects and
-                ctx.hs.objectAt(@intCast(ic_type_idx)) == inst.typ)
+                ctx.hs.objectAt(@intCast(ic_type_idx)) == inst.typ and ic_fidx < inst.fields.len)
             {
                 try ctx.vs.vmPush(inst.fields[ic_fidx].value);
             } else {
@@ -1646,8 +1649,9 @@ fn pushFieldFromObject(ctx: VMContext, obj: *Object, name_idx: usize, ic_base: u
             }
         },
         .small_struct_instance => |ssi| {
+            // Also bounds-check ic_fidx: a crafted GBC can pre-set it to any u8.
             if (ic_fidx != 0xFF and ic_type_idx < heap.MaxObjects and
-                ctx.hs.objectAt(@intCast(ic_type_idx)) == ssi.typ)
+                ctx.hs.objectAt(@intCast(ic_type_idx)) == ssi.typ and ic_fidx < vmod.SmallStructMaxFields)
             {
                 try ctx.vs.vmPush(ssi.v[ic_fidx]);
             } else {
@@ -1711,13 +1715,15 @@ fn opGetLocalGetField(ctx: VMContext) !void {
     if (ic_fidx != 0xFF and ic_type_idx < heap.MaxObjects and raw == .object) {
         switch (raw.object.*) {
             .small_struct_instance => |ssi| {
-                if (ctx.hs.objectAt(@intCast(ic_type_idx)) == ssi.typ) {
+                // Also bounds-check ic_fidx: a crafted GBC can pre-set it to any u8.
+                if (ctx.hs.objectAt(@intCast(ic_type_idx)) == ssi.typ and ic_fidx < vmod.SmallStructMaxFields) {
                     try ctx.vs.vmPush(ssi.v[ic_fidx]);
                     return;
                 }
             },
             .struct_instance => |inst| {
-                if (ctx.hs.objectAt(@intCast(ic_type_idx)) == inst.typ) {
+                // Also bounds-check ic_fidx: a crafted GBC can pre-set it to any u8.
+                if (ctx.hs.objectAt(@intCast(ic_type_idx)) == inst.typ and ic_fidx < inst.fields.len) {
                     try ctx.vs.vmPush(inst.fields[ic_fidx].value);
                     return;
                 }
@@ -2092,13 +2098,15 @@ fn opGetField(ctx: VMContext) !void {
     if (ic_fidx != 0xFF and ic_type_idx < heap.MaxObjects and raw == .object) {
         switch (raw.object.*) {
             .small_struct_instance => |ssi| {
-                if (ctx.hs.objectAt(@intCast(ic_type_idx)) == ssi.typ) {
+                // Also bounds-check ic_fidx: a crafted GBC can pre-set it to any u8.
+                if (ctx.hs.objectAt(@intCast(ic_type_idx)) == ssi.typ and ic_fidx < vmod.SmallStructMaxFields) {
                     try ctx.vs.vmPush(ssi.v[ic_fidx]);
                     return;
                 }
             },
             .struct_instance => |inst| {
-                if (ctx.hs.objectAt(@intCast(ic_type_idx)) == inst.typ) {
+                // Also bounds-check ic_fidx: a crafted GBC can pre-set it to any u8.
+                if (ctx.hs.objectAt(@intCast(ic_type_idx)) == inst.typ and ic_fidx < inst.fields.len) {
                     try ctx.vs.vmPush(inst.fields[ic_fidx].value);
                     return;
                 }
@@ -2155,7 +2163,8 @@ fn opSetField(ctx: VMContext) !void {
         .struct_instance => |inst| {
             const tpi = ctx.hs.objectPoolIndex(inst.typ);
             var fi: usize = undefined;
-            if (ic_type_idx == @as(usize, tpi) and ic_fidx != 0xFF) {
+            // Also bounds-check ic_fidx: a crafted GBC can pre-set it to any u8.
+            if (ic_type_idx == @as(usize, tpi) and ic_fidx != 0xFF and ic_fidx < inst.fields.len) {
                 fi = ic_fidx;
             } else {
                 const found = vmtyp.findFieldIndex(inst.typ.struct_type.fields, name) orelse {
@@ -2181,7 +2190,8 @@ fn opSetField(ctx: VMContext) !void {
         .small_struct_instance => |*ssi| {
             const tpi = ctx.hs.objectPoolIndex(ssi.typ);
             var fi: usize = undefined;
-            if (ic_type_idx == @as(usize, tpi) and ic_fidx != 0xFF) {
+            // Also bounds-check ic_fidx: a crafted GBC can pre-set it to any u8.
+            if (ic_type_idx == @as(usize, tpi) and ic_fidx != 0xFF and ic_fidx < ssi.typ.struct_type.fields.len) {
                 fi = ic_fidx;
             } else {
                 const found = vmtyp.findFieldIndex(ssi.typ.struct_type.fields, name) orelse {
@@ -2868,10 +2878,12 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                     if (ic_fidx != 0xFF and ic_type_idx < heap.MaxObjects and raw == .object) {
                         switch (raw.object.*) {
                             .small_struct_instance => |ssi| {
-                                if (ctx.hs.objectAt(@intCast(ic_type_idx)) == ssi.typ) break :blk ssi.v[ic_fidx];
+                                // Also bounds-check ic_fidx: a crafted GBC can pre-set it to any u8.
+                                if (ctx.hs.objectAt(@intCast(ic_type_idx)) == ssi.typ and ic_fidx < vmod.SmallStructMaxFields) break :blk ssi.v[ic_fidx];
                             },
                             .struct_instance => |inst| {
-                                if (ctx.hs.objectAt(@intCast(ic_type_idx)) == inst.typ) break :blk inst.fields[ic_fidx].value;
+                                // Also bounds-check ic_fidx: a crafted GBC can pre-set it to any u8.
+                                if (ctx.hs.objectAt(@intCast(ic_type_idx)) == inst.typ and ic_fidx < inst.fields.len) break :blk inst.fields[ic_fidx].value;
                             },
                             else => {},
                         }
@@ -4018,6 +4030,9 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                     // unpublished (not yet attached to obj) while the second
                     // allocates, letting compaction pack live data on top of it.
                     const total_field_count = shared_count + arm_field_count;
+                    // seen/shared_seen are [255]bool; mirror the struct-type branch guard
+                    // (st.fields.len > 255) so we never OOB them.
+                    if (total_field_count > 255) return error.TooManyStructFields;
                     const combined_vals = if (total_field_count > 0) try vmgc.vmAllocManagedSlice(ctx, Value, total_field_count) else @as([]Value, &.{});
                     const shared_vals = combined_vals[0..shared_count];
                     const arm_vals = combined_vals[shared_count..total_field_count];
@@ -4558,7 +4573,10 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 if (frame_nrc >= 2 and ctx.vs.defer_top == ctx.vs.frames[fi].defer_base) {
                     const nrbase = ctx.vs.frames[fi].base + @as(usize, ctx.vs.frames[fi].func_arity);
                     var vals: [64]Value = undefined;
-                    for (0..frame_nrc) |i| {
+                    // Belt-and-suspenders clamp: gbc_reader rejects > 64 so this
+                    // should never fire in practice, but guards the [64] buffer.
+                    const nrc_clamped: usize = @min(frame_nrc, 64);
+                    for (0..nrc_clamped) |i| {
                         if (nrbase + i >= ctx.vs.stack.len) return error.StackOverflow;
                         vals[i] = vms.unboxCell(ctx.vs.stack[nrbase + i]);
                     }
@@ -4567,7 +4585,7 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                     ctx.vs.frame_top = fi;
                     ctx.vs.stack_top = if (frame_base > 0) frame_base - 1 else 0;
                     ctx.vs.ip = frame_ret_ip;
-                    for (0..frame_nrc) |i| try ctx.vs.vmPush(vals[i]);
+                    for (0..nrc_clamped) |i| try ctx.vs.vmPush(vals[i]);
                     if (ctx.vs.frame_top == ctx.vs.call_depth_target) {
                         const t1 = vmperf.readTsc();
                         if (t1 > t0) vmperf.retCycles(t1 - t0);
@@ -4772,7 +4790,8 @@ fn runPanicUnwind(ctx: VMContext, orig_err: anyerror) anyerror!void {
             } else {
                 // Multi-value return: callers use call_spread and expect N individual values.
                 // Read from named-return slots (still accessible before the frame was used).
-                const n: usize = if (named_ret > 0) named_ret else @min(ret_count, 255);
+                // Belt-and-suspenders: clamp to 64 to match the [64]Value buffer below.
+                const n: usize = @min(if (named_ret > 0) named_ret else @min(ret_count, 255), 64);
                 var spread_vals: [64]Value = undefined;
                 if (named_ret > 0) {
                     for (0..n) |ri| {

@@ -494,6 +494,10 @@ fn readFunctionsSection(r: *ByteReader, hs: *heap.State, alloc: std.mem.Allocato
         const has_typed_params = try r.bool8();
         const has_typed_returns = try r.bool8();
         const named_return_count = try r.u8_();
+        // named_return_count indexes into a [64]Value spread buffer in the VM;
+        // a crafted GBC file can set this to any u8, so cap it here at the
+        // same limit the VM uses.
+        if (named_return_count > 64) return error.MalformedSection;
         const param_type_count = try r.u16_();
         try validateArityShape(arity, is_variadic, has_typed_params, param_type_count);
         const param_types = (hs.bump(value_mod.FieldTypeSpec, param_type_count) orelse return error.OutOfMemory)[0..param_type_count];
@@ -853,4 +857,40 @@ test "gbc: ByteReader.need rejects a length claim exceeding the buffer without o
     try testing.expectError(error.TruncatedBody, r.need(std.math.maxInt(usize)));
     try r.need(2); // "bc" remains — must still succeed
     try testing.expectError(error.TruncatedBody, r.need(3));
+}
+
+// A crafted FUNCTIONS entry with named_return_count > 64 must be rejected
+// before the entry reaches the VM, where three [64]Value spread buffers would
+// OOB if indexed by the raw u8 value.
+test "gbc: readFunctionsSection rejects named_return_count > 64" {
+    var h = try testHeap();
+    defer h.deinit();
+    // Use an arena so the RawFuncEntry slice allocated before the error fires
+    // is freed without triggering testing.allocator's leak detection.
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const bytes = [_]u8{
+        // count = 1 (u32 LE)
+        0x01, 0x00, 0x00, 0x00,
+        // name_constant_idx = 0xFFFFFFFF (u32 LE)
+        0xFF, 0xFF, 0xFF, 0xFF,
+        // ip = 0 (u32 LE)
+        0x00, 0x00, 0x00, 0x00,
+        // length = 0 (u32 LE)
+        0x00, 0x00, 0x00, 0x00,
+        // local_count = 0 (u16 LE)
+        0x00, 0x00,
+        // arity = 0
+        0x00,
+        // is_variadic = false
+        0x00,
+        // has_typed_params = false
+        0x00,
+        // has_typed_returns = false
+        0x00,
+        // named_return_count = 65 — exceeds the VM's [64]Value spread buffer
+        65,
+    };
+    var r = ByteReader{ .bytes = &bytes };
+    try testing.expectError(error.MalformedSection, readFunctionsSection(&r, &h, arena.allocator()));
 }
