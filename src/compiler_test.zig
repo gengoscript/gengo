@@ -5114,3 +5114,27 @@ test "compiler: named string concatenation re-enforces the predicate" {
     const ok = try rt.callGlobal("concatOk", &.{});
     try std.testing.expectEqualStrings("abcd", try vms.asStringValue(ok));
 }
+
+// std.fmt.format/printf/eprintf take no capability at all (reachable from
+// any script). parseSpec's width/precision digit accumulation had no bound,
+// so a format string with enough digits overflowed the accumulator (usize
+// needs ~20 digits, i32 needs ~10) — a raw `*`/`+` traps on overflow,
+// aborting the whole process.
+test "compiler: std.fmt.format raises no crash on an absurdly long width/precision field" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func precOverflow() string { return std.fmt.format("%.9999999999f", 1.0) }
+        \\func widthOverflow() string { return std.fmt.format("%99999999999999999999d", 1) }
+        \\func normal() string { return std.fmt.format("%5d", 42) }
+    );
+    // Whatever exact result these produce isn't the point — the point is
+    // they return cleanly (a success value, or a catchable error like
+    // AllocationTooLarge for the clamped-but-still-huge field width)
+    // instead of aborting the whole process, which a real crash would.
+    _ = rt.callGlobal("precOverflow", &.{}) catch {};
+    _ = rt.callGlobal("widthOverflow", &.{}) catch {};
+    const normal = try rt.callGlobal("normal", &.{});
+    try std.testing.expectEqualStrings("   42", try vms.asStringValue(normal));
+}
