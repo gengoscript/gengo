@@ -468,12 +468,14 @@ fn appendVisitedPair(a: *Object, b: *Object, visits: []DeepEqVisit, visit_len: *
     visit_len.* += 1;
 }
 
-const MaxDeepEqMapScratch = 128;
 fn deepEqualMap(a_entries: []const MapEntry, b_entries: []const MapEntry, visits: []DeepEqVisit, visit_len: *usize) anyerror!bool {
     if (a_entries.len != b_entries.len) return false;
-    if (b_entries.len > MaxDeepEqMapScratch) return error.OutOfMemory;
-    var used_buf: [MaxDeepEqMapScratch]bool = undefined;
-    const used = used_buf[0..b_entries.len];
+    // Heap-allocate the "already matched" bitset so there is no hard cap on
+    // map size.  deep_equal on a map with > 128 entries previously returned
+    // error.OutOfMemory, which surfaced as a runtime panic in scripts.
+    const alloc = std.heap.page_allocator;
+    const used = try alloc.alloc(bool, b_entries.len);
+    defer alloc.free(used);
     @memset(used, false);
     for (a_entries) |ae| {
         var matched = false;

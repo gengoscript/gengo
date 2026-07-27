@@ -402,7 +402,8 @@ pub fn nativeStrSplitN(ctx: VMContext, s_val: Value, sep_val: Value, n_v: Value)
     // safe to use throughout this pass.
     var count: usize = 0;
     if (sep0.len == 0) {
-        count = @min(s0.len, max);
+        const rune_count = try vmstr.utf8RuneCount(s0);
+        count = @min(rune_count, max);
     } else {
         var pos: usize = 0;
         count = 1;
@@ -419,13 +420,25 @@ pub fn nativeStrSplitN(ctx: VMContext, s_val: Value, sep_val: Value, n_v: Value)
     // must be traced.
     arr_obj.* = .{ .array_managed = pieces[0..0] };
     if (sep0.len == 0) {
-        for (0..count) |i| {
-            // Re-derive every iteration: the previous iteration's
-            // makeDynString() call can allocate and compact, relocating
-            // s_val's backing.
+        // Split at UTF-8 codepoint boundaries (not byte boundaries).
+        // Track byte_pos across iterations; re-derive s each time since
+        // makeDynString can compact and relocate s_val's backing.
+        var byte_pos: usize = 0;
+        var pi: usize = 0;
+        while (pi < count) {
             const s = try vms.asStringValue(s_val);
-            pieces[i] = try vmgc.makeDynString(ctx, s[i .. i + 1]);
-            arr_obj.* = .{ .array_managed = pieces[0 .. i + 1] };
+            if (pi + 1 == count) {
+                // Last piece: remainder of the string (either the last
+                // single rune when no limit hit, or the remaining suffix
+                // when the max cap truncated the split).
+                pieces[pi] = try vmgc.makeDynString(ctx, s[byte_pos..]);
+            } else {
+                const w = try vmstr.utf8NextRuneByteLen(s, byte_pos);
+                pieces[pi] = try vmgc.makeDynString(ctx, s[byte_pos .. byte_pos + w]);
+                byte_pos += w;
+            }
+            arr_obj.* = .{ .array_managed = pieces[0 .. pi + 1] };
+            pi += 1;
         }
     } else {
         var pos: usize = 0;

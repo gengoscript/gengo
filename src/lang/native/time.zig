@@ -364,8 +364,12 @@ pub fn daysInMonth(year: i32, month: u8) u8 {
 
 pub fn timeAddDate(ctx: VMContext, ms: f64, y_delta: i32, m_delta: i32, d_delta: i32) !Value {
     const p = timeEpochMsToParts(ms);
-    var new_y = p.year + y_delta;
-    var new_m = @as(i32, p.month) + m_delta;
+    const new_y_raw, const y_ov = @addWithOverflow(p.year, y_delta);
+    if (y_ov != 0) return error.RangeError;
+    var new_y = new_y_raw;
+    const new_m_raw, const m_ov = @addWithOverflow(@as(i32, p.month), m_delta);
+    if (m_ov != 0) return error.RangeError;
+    var new_m = new_m_raw;
     while (new_m > 12) {
         new_m -= 12;
         new_y += 1;
@@ -374,7 +378,9 @@ pub fn timeAddDate(ctx: VMContext, ms: f64, y_delta: i32, m_delta: i32, d_delta:
         new_m += 12;
         new_y -= 1;
     }
-    var new_d = @as(i32, p.day) + d_delta;
+    const new_d_raw, const d_ov = @addWithOverflow(@as(i32, p.day), d_delta);
+    if (d_ov != 0) return error.RangeError;
+    var new_d = new_d_raw;
     // Normalize day underflow with a loop to handle multi-month spans.
     while (new_d < 1) {
         new_m -= 1;
