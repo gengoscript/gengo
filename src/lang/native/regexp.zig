@@ -17,6 +17,11 @@ const MaxPatternLen = 4096;
 // ~4 KB (var ends: [512]usize), so 200 levels ≈ 800 KB — well within the
 // 2 MB default thread stack even with overhead from matchAny's own frame.
 const MaxMatchDepth = 200;
+// Input string length limit: prevents CPU exhaustion from quadratic/exponential
+// backtracking on complex patterns against very long inputs.  The recursion-depth
+// cap (MaxMatchDepth) addresses the stack-overflow vector; this cap addresses the
+// CPU-exhaustion vector.
+const MaxInputLen = 1024 * 1024; // 1 MB
 
 // Compiled pattern cache — avoids re-parsing constant patterns on every predicate check.
 // Keyed by content hash + byte comparison: safe across GC compaction that may relocate
@@ -519,6 +524,7 @@ fn parsePattern(ctx: VMContext, pattern: []const u8) ParseError![]Alt {
 pub fn nativeReMatch(ctx: VMContext, pattern_val: Value, s_val: Value) !Value {
     const pattern = try reGetPattern(pattern_val);
     const s = try vms.asStringValue(s_val);
+    if (s.len > MaxInputLen) return error.RangeError;
     const alts = try parsePattern(ctx, pattern);
     return .{ .boolean = findMatch(alts, s) != null };
 }
@@ -526,6 +532,7 @@ pub fn nativeReMatch(ctx: VMContext, pattern_val: Value, s_val: Value) !Value {
 pub fn nativeReFind(ctx: VMContext, pattern_val: Value, s_val: Value) !Value {
     const pattern = try reGetPattern(pattern_val);
     const s = try vms.asStringValue(s_val);
+    if (s.len > MaxInputLen) return error.RangeError;
     const alts = try parsePattern(ctx, pattern);
     const m = findMatch(alts, s) orelse return .null;
     return try vmgc.makeDynString(ctx, s[m[0]..m[1]]);
@@ -534,6 +541,7 @@ pub fn nativeReFind(ctx: VMContext, pattern_val: Value, s_val: Value) !Value {
 pub fn nativeReFindAll(ctx: VMContext, pattern_val: Value, s_val: Value) !Value {
     const pattern = try reGetPattern(pattern_val);
     const s = try vms.asStringValue(s_val);
+    if (s.len > MaxInputLen) return error.RangeError;
     const alts = try parsePattern(ctx, pattern);
     const alloc = std.heap.page_allocator;
     const matches = try findAllMatches(alts, s, alloc);
@@ -555,6 +563,7 @@ pub fn nativeReFindAll(ctx: VMContext, pattern_val: Value, s_val: Value) !Value 
 pub fn nativeReReplace(ctx: VMContext, pattern_val: Value, s_val: Value, repl_val: Value) !Value {
     const pattern = try reGetPattern(pattern_val);
     const s = try vms.asStringValue(s_val);
+    if (s.len > MaxInputLen) return error.RangeError;
     const repl = try vms.asStringValue(repl_val);
     const alloc = std.heap.page_allocator;
     const alts = try parsePattern(ctx, pattern);
@@ -581,6 +590,7 @@ pub fn nativeReReplace(ctx: VMContext, pattern_val: Value, s_val: Value, repl_va
 pub fn nativeReSplit(ctx: VMContext, pattern_val: Value, s_val: Value) !Value {
     const pattern = try reGetPattern(pattern_val);
     const s = try vms.asStringValue(s_val);
+    if (s.len > MaxInputLen) return error.RangeError;
     const alloc = std.heap.page_allocator;
     const alts = try parsePattern(ctx, pattern);
     // Store index ranges rather than slices: s_val's backing may relocate
