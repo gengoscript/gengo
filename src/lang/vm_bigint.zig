@@ -107,6 +107,32 @@ pub fn toDynString(ctx: VMContext, a: Value) !Value {
     return vmgc.makeDynString(ctx, str_buf[0..n]);
 }
 
+// Format a bigint as decimal digits directly into a writer, using
+// page_allocator scratch space (not the Gengo GC heap) — for callers like
+// std.json.stringify that only have a std.io writer on hand, not a
+// VMContext to allocate a dyn_string through.
+pub fn writeDecimal(a: Value, writer: anytype) !void {
+    const bi = a.object.bigint;
+    const ac = bi.toConst();
+    if (bi.len == 0 or ac.eqlZero()) {
+        try writer.writeAll("0");
+        return;
+    }
+    const str_cap = ac.sizeInBaseUpperBound(10);
+    const str_buf = try std.heap.page_allocator.alloc(u8, str_cap);
+    defer std.heap.page_allocator.free(str_buf);
+
+    const scratch_cap = Bi.calcToStringLimbsBufferLen(bi.len, 10);
+    const limb_scratch: []Limb = if (scratch_cap > 0)
+        try std.heap.page_allocator.alloc(Limb, scratch_cap)
+    else
+        &[_]Limb{};
+    defer if (scratch_cap > 0) std.heap.page_allocator.free(limb_scratch);
+
+    const n = ac.toString(str_buf, 10, .lower, limb_scratch);
+    try writer.writeAll(str_buf[0..n]);
+}
+
 // ── Arithmetic helpers ────────────────────────────────────────────────────────
 
 // Promote an int Value to bigint, keeping `other` alive during the allocation.

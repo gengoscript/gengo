@@ -66,7 +66,11 @@ pub fn nativeRandChoice(arr_obj: *Object) !Value {
 
 pub fn nativeRandPerm(ctx: VMContext, n_v: Value) !Value {
     const n = try vms.valueAsInt(n_v);
-    if (n < 0) return error.RangeError;
+    // Upper-bound before the cast: on wasm32 (32-bit usize) a huge n would make
+    // @intCast itself panic; on any target, an unchecked n would still risk
+    // overflowing @sizeOf(Value) * n downstream. maxManagedAlloc() is the real
+    // ceiling this allocation must fit under regardless.
+    if (n < 0 or n > @as(i64, @intCast(ctx.hs.maxManagedAlloc() / @sizeOf(Value)))) return error.RangeError;
     const usize_n = @as(usize, @intCast(n));
     const obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
     defer ctx.vs.popTempRoot();

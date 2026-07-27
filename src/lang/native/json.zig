@@ -4,6 +4,7 @@ const VMContext = vms.VMContext;
 const vmgc = @import("../vm_gc.zig");
 const vmmap = @import("../vm_map.zig");
 const vmtyp = @import("../vm_types.zig");
+const vmbigint = @import("../vm_bigint.zig");
 const heap = @import("../../runtime/heap.zig");
 const vmod = @import("../value.zig");
 const Value = vmod.Value;
@@ -225,6 +226,11 @@ fn jsonStringifyValueDepth(s: *std.json.Stringify, gv: Value, depth: u32, ancest
                 try s.endObject();
                 anc_count.* -= 1;
             },
+            // JSON has no arbitrary-precision integer type; write the raw
+            // decimal digits as an unquoted numeric literal (same technique
+            // the decimal branch above uses) instead of silently dropping
+            // the value to `null`.
+            .bigint => try vmbigint.writeDecimal(.{ .object = obj }, s.writer),
             else => try s.write(null),
         },
         .error_value => try s.write(null),

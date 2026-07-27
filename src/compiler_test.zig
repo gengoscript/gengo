@@ -4813,3 +4813,230 @@ test "cap:net listen/accept: real POSIX bind+accept+read+write roundtrip" {
     try std.testing.expect(connected.load(.seq_cst));
     try std.testing.expect(echoed.load(.seq_cst));
 }
+
+// math.abs(minInt(i64)) used to panic: @abs on i64 returns a u64 magnitude
+// of 2^63, which doesn't fit back into i64 via @intCast. math.max/min used
+// to round-trip int operands through f64 to pick a result, which rounds a
+// value like i64::max up to the next representable f64 (2^63, one past
+// i64::max) and then panicked converting that back with @intFromFloat.
+test "compiler: std.math abs/max/min raise RangeError (not a crash) at the i64 boundary" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func absMin() int { return std.math.abs(-9223372036854775808) }
+        \\func maxNearBoundary() int { return std.math.max(9223372036854775807, 0) }
+        \\func minNearBoundary() int { return std.math.min(9223372036854775807, 9223372036854775806) }
+        \\func maxNormal() int { return std.math.max(3, 7) }
+        \\func minNormal() int { return std.math.min(3, 7) }
+    );
+    try std.testing.expectError(error.RangeError, rt.callGlobal("absMin", &.{}));
+    const max_v = try rt.callGlobal("maxNearBoundary", &.{});
+    try std.testing.expectEqual(@as(i64, 9223372036854775807), max_v.int);
+    const min_v = try rt.callGlobal("minNearBoundary", &.{});
+    try std.testing.expectEqual(@as(i64, 9223372036854775806), min_v.int);
+    const max_n = try rt.callGlobal("maxNormal", &.{});
+    try std.testing.expectEqual(@as(i64, 7), max_n.int);
+    const min_n = try rt.callGlobal("minNormal", &.{});
+    try std.testing.expectEqual(@as(i64, 3), min_n.int);
+}
+
+// std.conv.to_int used to feed NaN/Infinity/out-of-range floats straight
+// into @intFromFloat, which panics on all three instead of raising a
+// catchable error. Also covers the string path (common.parseFloat), where
+// "1e" (no digits after the exponent marker) used to silently parse as 1.0
+// instead of being rejected as malformed.
+test "compiler: std.conv.to_int raises RangeError/TypeError instead of crashing on NaN/Inf/malformed input" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func viaNan() int { return std.conv.to_int(std.math.nan()) }
+        \\func viaInf() int { return std.conv.to_int(std.math.inf) }
+        \\func viaHuge() int { return std.conv.to_int(1e300) }
+        \\func viaBadStr() int { return std.conv.to_int("1e") }
+        \\func viaOk() int { return std.conv.to_int(42.9) }
+    );
+    try std.testing.expectError(error.RangeError, rt.callGlobal("viaNan", &.{}));
+    try std.testing.expectError(error.RangeError, rt.callGlobal("viaInf", &.{}));
+    try std.testing.expectError(error.RangeError, rt.callGlobal("viaHuge", &.{}));
+    try std.testing.expectError(error.TypeError, rt.callGlobal("viaBadStr", &.{}));
+    const ok = try rt.callGlobal("viaOk", &.{});
+    try std.testing.expectEqual(@as(i64, 42), ok.int);
+}
+
+// std.rand.perm(n) used to panic for a huge n: on wasm32 (32-bit usize),
+// @intCast(n) itself panics; on 64-bit, vmAllocManagedSlice's own
+// @sizeOf(Value) * n size-limit guard overflowed u64 (a raw, non-wrapping
+// multiply) before the size-limit check could ever fire.
+test "compiler: std.rand.perm raises RangeError (not a crash) for an unreasonably large n" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func hugePerm() []int { return std.rand.perm(9223372036854775807) }
+        \\func smallPerm() []int { return std.rand.perm(5) }
+    );
+    try std.testing.expectError(error.RangeError, rt.callGlobal("hugePerm", &.{}));
+    const small = try rt.callGlobal("smallPerm", &.{});
+    try std.testing.expectEqual(@as(usize, 5), (try vms.asArraySlice(small.object)).len);
+}
+
+// tplParse's parse-time ctrl_stack (tracking nested {{if}}/{{range}}/{{with}}
+// blocks) was a fixed [64]TplCtrlEntry with no bounds check, so a template
+// with more than 64 unclosed control tags indexed past the array (a Zig
+// safety panic that aborts the process) instead of raising a catchable
+// error. This is reachable via pure template *source text*, no numeric
+// trickery required.
+test "compiler: std.template.parse raises an error (not a crash) on excessive control-tag nesting" {
+    var rt = try setup();
+    defer rt.deinit();
+    const prefix =
+        \\std := import("std")
+        \\func f() bool {
+        \\    src := "
+    ;
+    const suffix =
+        \\"
+        \\    std.template.parse(src)
+        \\    return true
+        \\}
+        \\
+    ;
+    var buf: [16 * 1024]u8 = undefined;
+    var pos: usize = 0;
+    @memcpy(buf[pos..][0..prefix.len], prefix);
+    pos += prefix.len;
+    for (0..80) |_| {
+        @memcpy(buf[pos..][0..8], "{{if 1}}");
+        pos += 8;
+    }
+    @memcpy(buf[pos..][0..suffix.len], suffix);
+    pos += suffix.len;
+    try runSrc(&rt, buf[0..pos]);
+    try std.testing.expectError(error.InvalidTemplate, rt.callGlobal("f", &.{}));
+}
+
+// mapSet's caller (opSetIndex/opSetField) had already popped key/val off the
+// VM operand stack by the time mapSet ran, so a growth allocation
+// (vmAllocManagedSlice, which can trigger a full mark-sweep collectGarbage)
+// could sweep the value being inserted if it had no other live reference —
+// storing a dangling pointer into the map. Uses a small heap plus heavy
+// garbage churn to force collectGarbage to run mid-insert, mirroring the
+// named-error-value regression test above.
+test "compiler: map insert keeps a freshly built value alive across a growth allocation" {
+    var rt = try setupApiRuntime(.{ .heap_size_bytes = 128 * 1024, .max_objects = 2048 });
+    defer rt.deinit();
+    switch (rt.run(
+        \\std := import("std")
+        \\func churn() string {
+        \\    m := {}
+        \\    for i := 0; i < 200; i += 1 {
+        \\        // Garbage to keep pressuring the heap toward collectGarbage.
+        \\        junk := "junk-" + std.conv.to_string(i) + "-filler-filler-filler"
+        \\        _ = junk
+        \\        key := "k" + std.conv.to_string(i)
+        \\        // The value has no other reference once assigned here —
+        \\        // exactly the case that used to go stale mid-insert.
+        \\        m[key] = "v-" + std.conv.to_string(i) + "-tail-marker"
+        \\    }
+        \\    return m["k199"]
+        \\}
+    )) {
+        .ok => {},
+        else => return error.CompileFailed,
+    }
+    switch (rt.call("churn", &.{})) {
+        .ok => |v| try std.testing.expectEqualStrings("v-199-tail-marker", try vms.asStringValue(v)),
+        .runtime_error => return error.UnexpectedRuntimeError,
+    }
+}
+
+// Plain int+int/int-int/int*int throughout the dispatch loop (the main
+// add/sub/mul opcodes, `+=`/inc-const fast paths, and the various fused
+// local/global/field/const/loop opcodes) used to do raw, unchecked i64
+// arithmetic: near the i64 boundary this panics (a hard Zig safety trap
+// that aborts the whole process) in Debug/ReleaseSafe, or silently wraps to
+// a sign-flipped wrong answer in ReleaseFast. Fixed with checkedIntAdd/Sub/
+// Mul helpers (@addWithOverflow/etc.) raising a catchable RangeError.
+test "compiler: int add/sub/mul raise RangeError (not a crash) on overflow" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func addOverflow() int { return 9223372036854775807 + 1 }
+        \\func subOverflow() int { return -9223372036854775807 - 2 }
+        \\func mulOverflow() int { return 4611686018427387904 * 2 }
+        \\func addOk() int { return 40 + 2 }
+        \\func compoundOverflow() int {
+        \\    x := 9223372036854775807
+        \\    x += 1
+        \\    return x
+        \\}
+        \\func loopOverflow() int {
+        \\    x := 9223372036854775806
+        \\    for i := 0; i < 5; i += 1 {
+        \\        x += 1
+        \\    }
+        \\    return x
+        \\}
+    );
+    try std.testing.expectError(error.RangeError, rt.callGlobal("addOverflow", &.{}));
+    try std.testing.expectError(error.RangeError, rt.callGlobal("subOverflow", &.{}));
+    try std.testing.expectError(error.RangeError, rt.callGlobal("mulOverflow", &.{}));
+    try std.testing.expectError(error.RangeError, rt.callGlobal("compoundOverflow", &.{}));
+    try std.testing.expectError(error.RangeError, rt.callGlobal("loopOverflow", &.{}));
+    const ok = try rt.callGlobal("addOk", &.{});
+    try std.testing.expectEqual(@as(i64, 42), ok.int);
+}
+
+// Unary '-' on i64::MIN doesn't fit back into i64 (magnitude is one past
+// maxInt) — this used to be a raw `-n` that panics. Also covers the
+// decimal-literal-overflow fix in common.parseInt: a bare decimal digit run
+// exceeding i64's range now cleanly fails to compile instead of silently
+// wrapping to a sign-flipped constant.
+test "compiler: unary negation of i64::MIN raises RangeError; oversized decimal literal fails to compile" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func negMin() int { return -9223372036854775808 }
+    );
+    try std.testing.expectError(error.RangeError, rt.callGlobal("negMin", &.{}));
+
+    var rt2 = try setup();
+    defer rt2.deinit();
+    try std.testing.expectError(error.BadNumber, compile(&rt2, "x := 99999999999999999999"));
+}
+
+// minInt(i64) div -1 mathematically overflows (2^63); the old special-case
+// sidestepped @divTrunc's trap but returned the dividend unmodified as if it
+// were the correct quotient — a silently wrong answer instead of an error.
+test "compiler: int_div raises RangeError (not a silently wrong answer) for i64::MIN div -1" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func g(a int, b int) int { return a div b }
+    );
+    try std.testing.expectError(error.RangeError, rt.callGlobal("g", &.{ .{ .int = std.math.minInt(i64) }, .{ .int = -1 } }));
+}
+
+// std.json.stringify used to serialize any bigint as `null` (falling through
+// the object-tag switch's generic else branch), silently discarding the
+// value entirely. std.conv.to_int/to_float rejected bigint with TypeError
+// even though the direct-dispatched `int(...)`/`float(...)` builtins already
+// supported it — an inconsistency between two paths meant to be equivalent.
+test "compiler: std.json.stringify serializes bigint as digits, not null; std.conv accepts bigint" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func stringifyBig() string { return std.json.stringify(bigint("123456789012345678901234567890")) }
+        \\func convIntBig() int { return std.conv.to_int(bigint(123)) }
+        \\func convFloatBig() float { return std.conv.to_float(bigint(123)) }
+    );
+    const json_str = try rt.callGlobal("stringifyBig", &.{});
+    try std.testing.expectEqualStrings("123456789012345678901234567890", try vms.asStringValue(json_str));
+    const as_int = try rt.callGlobal("convIntBig", &.{});
+    try std.testing.expectEqual(@as(i64, 123), as_int.int);
+    const as_float = try rt.callGlobal("convFloatBig", &.{});
+    try std.testing.expectEqual(@as(f64, 123.0), as_float.float);
+}

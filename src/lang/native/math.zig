@@ -13,7 +13,13 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             ctx.vs.vmPopArgs(argc);
             // Preserve int-ness: strict arithmetic rejects int+float mixing,
             // so abs(int) must stay usable in int expressions.
-            try ctx.vs.vmPush(if (v == .int) .{ .int = @intCast(@abs(v.int)) } else .{ .float = @abs(n) });
+            if (v == .int) {
+                // abs(minInt(i64)) doesn't fit back into i64 (magnitude is one past maxInt).
+                if (v.int == std.math.minInt(i64)) return error.RangeError;
+                try ctx.vs.vmPush(.{ .int = @intCast(@abs(v.int)) });
+            } else {
+                try ctx.vs.vmPush(.{ .float = @abs(n) });
+            }
         },
         .math_acos, .math_asin => {
             const n = try vms.valueAsNumber(ctx.vs.vmTop(0));
@@ -117,7 +123,10 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             const a = try vms.valueAsNumber(av);
             ctx.vs.vmPopArgs(argc);
             const all_int = av == .int and bv == .int;
-            try ctx.vs.vmPush(if (all_int) .{ .int = @intFromFloat(@max(a, b)) } else .{ .float = @max(a, b) });
+            // Compare/select on the original i64s directly: round-tripping through f64
+            // rounds values near i64::max up past it (2^63 has no exact i64 representation),
+            // so @intFromFloat on the f64 result could then panic.
+            try ctx.vs.vmPush(if (all_int) .{ .int = @max(av.int, bv.int) } else .{ .float = @max(a, b) });
         },
         .math_min => {
             const bv = ctx.vs.vmTop(0);
@@ -126,7 +135,7 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             const a = try vms.valueAsNumber(av);
             ctx.vs.vmPopArgs(argc);
             const all_int = av == .int and bv == .int;
-            try ctx.vs.vmPush(if (all_int) .{ .int = @intFromFloat(@min(a, b)) } else .{ .float = @min(a, b) });
+            try ctx.vs.vmPush(if (all_int) .{ .int = @min(av.int, bv.int) } else .{ .float = @min(a, b) });
         },
         .math_mod => {
             const y = try vms.valueAsNumber(ctx.vs.vmTop(0));

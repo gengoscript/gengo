@@ -332,6 +332,41 @@ fn bigIntBinOpWithPromotion(ctx: VMContext, a: Value, b: Value, op: enum { add, 
     };
 }
 
+// Plain int+int/int-int/int*int fast paths throughout the dispatch loop used
+// to do raw, unchecked i64 arithmetic: near the i64 boundary this panics
+// (Zig's checked-arithmetic trap aborts the whole process in Debug/
+// ReleaseSafe) or silently wraps to a sign-flipped wrong answer in
+// ReleaseFast — reachable via ordinary script arithmetic like
+// `9223372036854775807 + 1`, not just crafted input. @addWithOverflow/etc.
+// compile to the same hardware add/sub/mul plus a flag check the CPU already
+// computes, so this costs effectively nothing over the raw op it replaces.
+inline fn checkedIntAdd(ctx: VMContext, a: i64, b: i64) !Value {
+    const r = @addWithOverflow(a, b);
+    if (r[1] != 0) {
+        ctx.vs.setRuntimeErr("integer overflow in addition", .{});
+        return error.RangeError;
+    }
+    return .{ .int = r[0] };
+}
+
+inline fn checkedIntSub(ctx: VMContext, a: i64, b: i64) !Value {
+    const r = @subWithOverflow(a, b);
+    if (r[1] != 0) {
+        ctx.vs.setRuntimeErr("integer overflow in subtraction", .{});
+        return error.RangeError;
+    }
+    return .{ .int = r[0] };
+}
+
+inline fn checkedIntMul(ctx: VMContext, a: i64, b: i64) !Value {
+    const r = @mulWithOverflow(a, b);
+    if (r[1] != 0) {
+        ctx.vs.setRuntimeErr("integer overflow in multiplication", .{});
+        return error.RangeError;
+    }
+    return .{ .int = r[0] };
+}
+
 fn structTypeOf(v: Value) ?*Object {
     if (v != .object) return null;
     return switch (v.object.*) {
@@ -379,7 +414,7 @@ noinline fn tryStructDunderUnary(ctx: VMContext, v: Value, dunder: []const u8) !
 }
 
 fn computeAddResult(ctx: VMContext, a: Value, b: Value) !Value {
-    if (a == .int and b == .int) return .{ .int = a.int + b.int };
+    if (a == .int and b == .int) return try checkedIntAdd(ctx, a.int, b.int);
     if (a == .float and b == .float) {
         const r = a.float + b.float;
         if (!std.math.isFinite(r)) {
@@ -1696,7 +1731,7 @@ fn opFieldAddConst(ctx: VMContext) !void {
     try opGetLocalGetField(ctx);
     const k = try ctx.cs.constAt(opShort(ctx));
     const a = try ctx.vs.vmPop();
-    const result: Value = if (a == .int and k == .int) .{ .int = a.int + k.int } else try computeAddResult(ctx, a, k);
+    const result: Value = if (a == .int and k == .int) try checkedIntAdd(ctx, a.int, k.int) else try computeAddResult(ctx, a, k);
     try ctx.vs.vmPush(result);
     try opSetField(ctx);
 }
@@ -2447,7 +2482,7 @@ fn execOneTos(ctx: VMContext, comptime op: Op, ts: *TosState) anyerror!bool {
             // Inline int fast path; the generic path may allocate (string
             // concat roots its operands internally, same as the memory form).
             const retval = if (a == .int and b == .int)
-                Value{ .int = a.int + b.int }
+                try checkedIntAdd(ctx, a.int, b.int)
             else
                 try computeAddResult(ctx, a, b);
             if (try doReturnTos(ctx, retval, ts)) return true;
@@ -2595,7 +2630,7 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 const k = try ctx.cs.constAt(opShort(ctx));
                 if (ic_slot != 0xFFFF) {
                     const v = ctx.gs.getAt(ic_slot);
-                    const result: Value = if (v == .int and k == .int) .{ .int = v.int + k.int } else try computeAddResult(ctx, v, k);
+                    const result: Value = if (v == .int and k == .int) try checkedIntAdd(ctx, v.int, k.int) else try computeAddResult(ctx, v, k);
                     ctx.gs.setAt(ic_slot, result);
                 } else {
                     const name = (try ctx.cs.constAt(name_idx)).string.bytes;
@@ -2606,7 +2641,7 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                     ctx.cs.patchByte(ic_base, @intCast((slot >> 8) & 0xFF));
                     ctx.cs.patchByte(ic_base + 1, @intCast(slot & 0xFF));
                     const v = ctx.gs.getAt(slot);
-                    const result: Value = if (v == .int and k == .int) .{ .int = v.int + k.int } else try computeAddResult(ctx, v, k);
+                    const result: Value = if (v == .int and k == .int) try checkedIntAdd(ctx, v.int, k.int) else try computeAddResult(ctx, v, k);
                     ctx.gs.setAt(slot, result);
                 }
             },
@@ -2776,21 +2811,21 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 const src = opByte(ctx);
                 const a = try readLocalSlot(ctx, dst);
                 const b = try readLocalSlot(ctx, src);
-                const result: Value = if (a == .int and b == .int) .{ .int = a.int + b.int } else try computeAddResult(ctx, a, b);
+                const result: Value = if (a == .int and b == .int) try checkedIntAdd(ctx, a.int, b.int) else try computeAddResult(ctx, a, b);
                 writeFrameLocal(ctx, vmFrameBase(ctx) + dst, result);
             },
             .local_add_const => {
                 const dst = opByte(ctx);
                 const k = try ctx.cs.constAt(opShort(ctx));
                 const a = try readLocalSlot(ctx, dst);
-                const result: Value = if (a == .int and k == .int) .{ .int = a.int + k.int } else try computeAddResult(ctx, a, k);
+                const result: Value = if (a == .int and k == .int) try checkedIntAdd(ctx, a.int, k.int) else try computeAddResult(ctx, a, k);
                 writeFrameLocal(ctx, vmFrameBase(ctx) + dst, result);
             },
             .local_add_const_loop => {
                 const dst = opByte(ctx);
                 const k = try ctx.cs.constAt(opShort(ctx));
                 const a = try readLocalSlot(ctx, dst);
-                const result: Value = if (a == .int and k == .int) .{ .int = a.int + k.int } else try computeAddResult(ctx, a, k);
+                const result: Value = if (a == .int and k == .int) try checkedIntAdd(ctx, a.int, k.int) else try computeAddResult(ctx, a, k);
                 writeFrameLocal(ctx, vmFrameBase(ctx) + dst, result);
                 const off = opInt(ctx);
                 if (off > ctx.vs.ip) return error.InvalidChunkShape;
@@ -2824,7 +2859,7 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 };
                 const a = try readLocalSlot(ctx, dst);
                 const result: Value = if (a == .int and field_val == .int)
-                    .{ .int = a.int + field_val.int }
+                    try checkedIntAdd(ctx, a.int, field_val.int)
                 else
                     try computeAddResult(ctx, a, field_val);
                 writeFrameLocal(ctx, vmFrameBase(ctx) + dst, result);
@@ -2837,7 +2872,7 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 const a = ctx.vs.vmPopU();
                 // Inline int fast path: the outlined generic cost 2.6% of fib.
                 const retval = if (a == .int and b == .int)
-                    Value{ .int = a.int + b.int }
+                    try checkedIntAdd(ctx, a.int, b.int)
                 else
                     try computeAddResult(ctx, a, b);
                 if (try doReturn(ctx, retval)) return true;
@@ -2846,7 +2881,7 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 const b = ctx.vs.vmPopU();
                 const a = ctx.vs.vmPopU();
                 if (a == .int and b == .int) {
-                    try ctx.vs.vmPush(.{ .int = a.int - b.int });
+                    try ctx.vs.vmPush(try checkedIntSub(ctx, a.int, b.int));
                     continue;
                 }
                 if (a == .float and b == .float) {
@@ -2874,7 +2909,7 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 const b = ctx.vs.vmPopU();
                 const a = ctx.vs.vmPopU();
                 if (a == .int and b == .int) {
-                    try ctx.vs.vmPush(.{ .int = a.int * b.int });
+                    try ctx.vs.vmPush(try checkedIntMul(ctx, a.int, b.int));
                     continue;
                 }
                 if (a == .float and b == .float) {
@@ -2969,8 +3004,15 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                         ctx.vs.setRuntimeErr("division by zero", .{});
                         return error.DivisionByZero;
                     }
-                    const result: i64 = if (a.int == std.math.minInt(i64) and b.int == -1) std.math.minInt(i64) else @divTrunc(a.int, b.int);
-                    try ctx.vs.vmPush(.{ .int = result });
+                    // minInt(i64) / -1 mathematically overflows (2^63, one
+                    // past maxInt) — the old code sidestepped @divTrunc's trap
+                    // but returned the unmodified dividend as if it were the
+                    // quotient, a silently wrong answer rather than an error.
+                    if (a.int == std.math.minInt(i64) and b.int == -1) {
+                        ctx.vs.setRuntimeErr("integer overflow in division", .{});
+                        return error.RangeError;
+                    }
+                    try ctx.vs.vmPush(.{ .int = @divTrunc(a.int, b.int) });
                     continue;
                 }
                 if (vmbigint.isBigInt(a) or vmbigint.isBigInt(b)) {
@@ -3315,6 +3357,10 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                     try ctx.vs.vmPush(try vmbigint.negBi(ctx, unboxed));
                     continue;
                 }
+                if (unboxed == .int and unboxed.int == std.math.minInt(i64)) {
+                    ctx.vs.setRuntimeErr("integer overflow in negation", .{});
+                    return error.RangeError;
+                }
                 const negated: Value = switch (unboxed) {
                     .int => |n| .{ .int = -n },
                     .float => |n| .{ .float = -n },
@@ -3350,14 +3396,18 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 const a = ctx.vs.vmPopU();
                 const bn = try vms.valueAsNumber(b);
                 const an = try vms.valueAsNumber(a);
-                try ctx.vs.vmPush(if (a == .int and b == .int) .{ .int = @intFromFloat(@min(an, bn)) } else .{ .float = @min(an, bn) });
+                // Compare/select on the original i64s directly: round-tripping
+                // through f64 rounds values near i64::max up past it (2^63 has
+                // no exact i64 representation), so @intFromFloat on the f64
+                // result could then panic (same class as the .abs fix above).
+                try ctx.vs.vmPush(if (a == .int and b == .int) .{ .int = @min(a.int, b.int) } else .{ .float = @min(an, bn) });
             },
             .max => {
                 const b = ctx.vs.vmPopU();
                 const a = ctx.vs.vmPopU();
                 const bn = try vms.valueAsNumber(b);
                 const an = try vms.valueAsNumber(a);
-                try ctx.vs.vmPush(if (a == .int and b == .int) .{ .int = @intFromFloat(@max(an, bn)) } else .{ .float = @max(an, bn) });
+                try ctx.vs.vmPush(if (a == .int and b == .int) .{ .int = @max(a.int, b.int) } else .{ .float = @max(an, bn) });
             },
             .sign => {
                 const v = try ctx.vs.vmPop();
@@ -3543,7 +3593,7 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 const k = try ctx.cs.constAt(opShort(ctx));
                 const a = try ctx.vs.vmPop();
                 if (a == .int and k == .int) {
-                    try ctx.vs.vmPush(.{ .int = a.int - k.int });
+                    try ctx.vs.vmPush(try checkedIntSub(ctx, a.int, k.int));
                     continue;
                 }
                 try pushSubResult(ctx, a, k);
@@ -3565,7 +3615,7 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 const p = try readLocalSlotAndConst(ctx);
                 const a = try readLocalSlot(ctx, p.slot);
                 if (a == .int and p.k == .int) {
-                    try ctx.vs.vmPush(.{ .int = a.int - p.k.int });
+                    try ctx.vs.vmPush(try checkedIntSub(ctx, a.int, p.k.int));
                     continue;
                 }
                 try pushSubResult(ctx, a, p.k);
@@ -3581,7 +3631,7 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 ctx.vs.ip += 2;
                 const a = try readLocalSlot(ctx, p.slot);
                 if (a == .int and p.k == .int) {
-                    try ctx.vs.vmPush(.{ .int = a.int - p.k.int });
+                    try ctx.vs.vmPush(try checkedIntSub(ctx, a.int, p.k.int));
                 } else {
                     try pushSubResult(ctx, a, p.k);
                 }
@@ -3598,7 +3648,7 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 ctx.vs.ip += 2;
                 const a = try readLocalSlot(ctx, p.slot);
                 if (a == .int and p.k == .int) {
-                    try ctx.vs.vmPush(.{ .int = a.int - p.k.int });
+                    try ctx.vs.vmPush(try checkedIntSub(ctx, a.int, p.k.int));
                 } else {
                     try pushSubResult(ctx, a, p.k);
                 }
@@ -3621,7 +3671,7 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 const a = try readLocalSlot(ctx, p.slot);
                 try ctx.vs.vmPush(callee);
                 if (a == .int and p.k == .int) {
-                    try ctx.vs.vmPush(.{ .int = a.int - p.k.int });
+                    try ctx.vs.vmPush(try checkedIntSub(ctx, a.int, p.k.int));
                 } else {
                     try pushSubResult(ctx, a, p.k);
                 }
@@ -3643,7 +3693,7 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 const a = try readLocalSlot(ctx, p.slot);
                 try ctx.vs.vmPush(callee);
                 if (a == .int and p.k == .int) {
-                    try ctx.vs.vmPush(.{ .int = a.int - p.k.int });
+                    try ctx.vs.vmPush(try checkedIntSub(ctx, a.int, p.k.int));
                 } else {
                     try pushSubResult(ctx, a, p.k);
                 }
@@ -3654,7 +3704,7 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 const p = try readLocalSlotAndConst(ctx);
                 const a = try readLocalSlot(ctx, p.slot);
                 if (a == .int and p.k == .int) {
-                    try ctx.vs.vmPush(.{ .int = a.int + p.k.int });
+                    try ctx.vs.vmPush(try checkedIntAdd(ctx, a.int, p.k.int));
                     continue;
                 }
                 try ctx.vs.vmPush(try computeAddResult(ctx, a, p.k));
@@ -3764,7 +3814,7 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
             .get_global_const_sub => {
                 const p = try readGlobalConstPair(ctx);
                 if (p.g == .int and p.k == .int) {
-                    try ctx.vs.vmPush(.{ .int = p.g.int - p.k.int });
+                    try ctx.vs.vmPush(try checkedIntSub(ctx, p.g.int, p.k.int));
                     continue;
                 }
                 try pushSubResult(ctx, p.g, p.k);
@@ -3772,7 +3822,7 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
             .get_global_const_add => {
                 const p = try readGlobalConstPair(ctx);
                 if (p.g == .int and p.k == .int) {
-                    try ctx.vs.vmPush(.{ .int = p.g.int + p.k.int });
+                    try ctx.vs.vmPush(try checkedIntAdd(ctx, p.g.int, p.k.int));
                     continue;
                 }
                 try ctx.vs.vmPush(try computeAddResult(ctx, p.g, p.k));
