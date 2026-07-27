@@ -54,7 +54,12 @@ const ByteReader = struct {
     pos: usize = 0,
 
     fn need(self: *ByteReader, n: usize) !void {
-        if (self.pos + n > self.bytes.len) return error.TruncatedBody;
+        // self.pos + n as a raw add can itself overflow/wrap on a
+        // file-controlled n (e.g. str_'s u32 length): on 32-bit usize
+        // (wasm32) this wraps well within u32's range, and even on 64-bit
+        // it's one more overflow site to close on principle. Subtract
+        // instead of add so this can never wrap.
+        if (n > self.bytes.len - self.pos) return error.TruncatedBody;
     }
     fn u8_(self: *ByteReader) !u8 {
         try self.need(1);
@@ -193,8 +198,25 @@ fn buildFuncObjFromRaw(hs: *heap.State, cs: *chunk.State, rf: RawFuncEntry) !*va
 // NamedTypeObj, and the caller's wire-bytes buffer is not guaranteed to
 // outlive that object (it isn't, in general — only happens to for the CLI's
 // static g_src_buf).
+// A crafted FT_ARRAY/FT_MAP chain can recurse arbitrarily deep (each level
+// costs as little as 3 bytes: alt_count=1, tag, has_elem/has_key flag) with
+// no other bound on file size — unlike everything else in this reader,
+// unbounded recursion isn't a catchable Zig error, it's a native stack
+// overflow (SIGSEGV/abort). This is the only recursive shape in the whole
+// GBC format (FT_STRUCT_T/FT_VARIANT_T store a name, not inline structure).
+const MaxTypeSpecDepth: u32 = 64;
+
 fn readTypeSpec(r: *ByteReader, hs: *heap.State, alloc: std.mem.Allocator) ReadError!value_mod.FieldTypeSpec {
+    return readTypeSpecDepth(r, hs, alloc, 0);
+}
+
+fn readTypeSpecDepth(r: *ByteReader, hs: *heap.State, alloc: std.mem.Allocator, depth: u32) ReadError!value_mod.FieldTypeSpec {
+    if (depth >= MaxTypeSpecDepth) return error.MalformedSection;
     const alt_count = try r.u8_();
+    // A legitimately-compiled chunk always has at least one alt; nothing
+    // downstream (matchesTypeSpec, fieldTypeSpecStr's unconditional
+    // alts[0], coerceErasedValueForSpec) expects/handles an empty slice.
+    if (alt_count == 0) return error.MalformedSection;
     // hs.bump (GC heap), not alloc — this FieldTypeSpec gets embedded into a
     // long-lived StructFieldSpec/NamedTypeObj, same reasoning as
     // readFunctionsSection's capture_slots above.
@@ -214,14 +236,14 @@ fn readTypeSpec(r: *ByteReader, hs: *heap.State, alloc: std.mem.Allocator) ReadE
             gbc_writer.FT_ERROR_T => .{ .typ = .error_t },
             gbc_writer.FT_ARRAY => blk: {
                 const has_elem = try r.bool8();
-                const elem: ?value_mod.FieldTypeSpec = if (has_elem) try readTypeSpec(r, hs, alloc) else null;
+                const elem: ?value_mod.FieldTypeSpec = if (has_elem) try readTypeSpecDepth(r, hs, alloc, depth + 1) else null;
                 break :blk .{ .typ = .array, .elem_spec = elem };
             },
             gbc_writer.FT_MAP => blk: {
                 const has_key = try r.bool8();
-                const key: ?value_mod.FieldTypeSpec = if (has_key) try readTypeSpec(r, hs, alloc) else null;
+                const key: ?value_mod.FieldTypeSpec = if (has_key) try readTypeSpecDepth(r, hs, alloc, depth + 1) else null;
                 const has_val = try r.bool8();
-                const val: ?value_mod.FieldTypeSpec = if (has_val) try readTypeSpec(r, hs, alloc) else null;
+                const val: ?value_mod.FieldTypeSpec = if (has_val) try readTypeSpecDepth(r, hs, alloc, depth + 1) else null;
                 break :blk .{ .typ = .map, .key_spec = key, .val_spec = val };
             },
             gbc_writer.FT_STRUCT_T => .{ .typ = .struct_t, .struct_name = try copyStr(hs, try r.str_()) },
@@ -239,6 +261,24 @@ fn copyStr(hs: *heap.State, s: []const u8) ![]const u8 {
     const buf = hs.bump(u8, s.len) orelse return error.OutOfMemory;
     @memcpy(buf[0..s.len], s);
     return buf[0..s.len];
+}
+
+// A well-formed writer always emits param_types with exactly `arity` entries
+// (or `arity - 1` for a variadic function, since the variadic slot itself
+// counts toward arity but is described separately by variadic_type). Nothing
+// downstream re-derives this relationship — vm_types.zig's
+// canInlinePrimitiveArgs/enforceFuncArgTypes index param_types[0..fixed]
+// assuming it holds — so a crafted file that decouples the two fields
+// (e.g. arity=5, param_type_count=0) causes an unconditional out-of-bounds
+// panic the moment the function is called, no type mismatch required. Also
+// rejects is_variadic=true with arity==0, which would separately underflow
+// enforceFuncArgTypes's `arity - 1` (a variadic function's own variadic
+// parameter always contributes at least 1 to arity in any real compile).
+fn validateArityShape(arity: u8, is_variadic: bool, has_typed_params: bool, param_type_count: usize) ReadError!void {
+    if (is_variadic and arity == 0) return error.MalformedSection;
+    if (!has_typed_params) return;
+    const expected: usize = if (is_variadic) arity - 1 else arity;
+    if (param_type_count != expected) return error.MalformedSection;
 }
 
 // Shared by STRUCT type entries, a variant's shared_fields, and a record-
@@ -291,6 +331,7 @@ fn readInterfaceMethod(r: *ByteReader, hs: *heap.State, alloc: std.mem.Allocator
     const has_typed_params = try r.bool8();
     const has_typed_returns = try r.bool8();
     const param_type_count = try r.u16_();
+    try validateArityShape(arity, is_variadic, has_typed_params, param_type_count);
     const param_types = (hs.bump(value_mod.FieldTypeSpec, param_type_count) orelse return error.OutOfMemory)[0..param_type_count];
     for (param_types) |*pt| pt.* = try readTypeSpec(r, hs, alloc);
     const return_type_count = try r.u16_();
@@ -454,6 +495,7 @@ fn readFunctionsSection(r: *ByteReader, hs: *heap.State, alloc: std.mem.Allocato
         const has_typed_returns = try r.bool8();
         const named_return_count = try r.u8_();
         const param_type_count = try r.u16_();
+        try validateArityShape(arity, is_variadic, has_typed_params, param_type_count);
         const param_types = (hs.bump(value_mod.FieldTypeSpec, param_type_count) orelse return error.OutOfMemory)[0..param_type_count];
         for (param_types) |*pt| pt.* = try readTypeSpec(r, hs, alloc);
         const return_type_count = try r.u16_();
@@ -530,7 +572,13 @@ pub fn read(bytes: []const u8, cs: *chunk.State, hs: *heap.State, alloc: std.mem
     if (header_end > bytes.len) return error.TruncatedHeader;
     r.pos = header_end;
 
-    if (header_end + body_length > bytes.len) return error.TruncatedBody;
+    // body_length is a raw u64 straight off disk (fully attacker-controlled
+    // for a crafted .gbc file); header_end + body_length as a raw add can
+    // itself overflow/wrap for a huge body_length, which would trap in
+    // Debug/ReleaseSafe but silently bypass the check in ReleaseFast (the
+    // CLI's actual build mode) — subtracting instead can't wrap, since
+    // header_end <= bytes.len is already established above.
+    if (body_length > bytes.len - header_end) return error.TruncatedBody;
     // Proven to fit (body_length <= bytes.len - header_end <= bytes.len, and
     // bytes.len is already a usize) — safe to narrow now that the check above
     // has run. A bare u64 doesn't implicitly narrow to usize (32-bit on
@@ -551,7 +599,11 @@ pub fn read(bytes: []const u8, cs: *chunk.State, hs: *heap.State, alloc: std.mem
         const flags = try br.u32_();
         const offset = try br.u64_();
         const length = try br.u64_();
-        if (offset + length > body.len) return error.SectionOutOfBounds;
+        // Same overflow hazard as the body-length check above: offset/length
+        // are raw file u64s, so `offset + length` can itself wrap for huge
+        // values instead of correctly failing the bounds check.
+        if (offset > body.len) return error.SectionOutOfBounds;
+        if (length > body.len - offset) return error.SectionOutOfBounds;
         // Proven to fit, same reasoning as body_len above.
         sections[i] = .{ .id = id, .flags = flags, .offset = @intCast(offset), .length = @intCast(length) };
     }
@@ -694,4 +746,111 @@ pub fn read(bytes: []const u8, cs: *chunk.State, hs: *heap.State, alloc: std.mem
 
     cs.verified = false;
     cs.verified_code_len = 0;
+}
+
+const testing = std.testing;
+
+fn testHeap() !heap.State {
+    var h: heap.State = .{};
+    try h.init(64 * 1024, 256, testing.allocator);
+    return h;
+}
+
+// alt_count=0 used to build an empty FieldTypeAlt slice — nothing
+// downstream expects that (fieldTypeSpecStr unconditionally indexes
+// alts[0] once a type mismatch needs formatting), so it's rejected outright
+// rather than allowed through to crash later.
+test "gbc: readTypeSpec rejects alt_count == 0" {
+    var h = try testHeap();
+    defer h.deinit();
+    var r = ByteReader{ .bytes = &.{0} };
+    try testing.expectError(error.MalformedSection, readTypeSpec(&r, &h, testing.allocator));
+}
+
+test "gbc: readTypeSpec accepts a simple scalar spec" {
+    var h = try testHeap();
+    defer h.deinit();
+    var r = ByteReader{ .bytes = &.{ 1, gbc_writer.FT_INT } };
+    const spec = try readTypeSpec(&r, &h, testing.allocator);
+    try testing.expectEqual(@as(usize, 1), spec.alts.len);
+    try testing.expectEqual(value_mod.FieldTypeTag.int, spec.alts[0].typ);
+}
+
+// A crafted FT_ARRAY/FT_MAP chain recurses arbitrarily deep with no other
+// bound on file size (each level costs as little as 3 bytes) — unbounded
+// recursion isn't a catchable Zig error, it's a native stack overflow.
+test "gbc: readTypeSpec rejects excessive FT_ARRAY nesting depth" {
+    var h = try testHeap();
+    defer h.deinit();
+    var bytes: [3 * (MaxTypeSpecDepth + 4)]u8 = undefined;
+    var pos: usize = 0;
+    var depth: u32 = 0;
+    while (depth < MaxTypeSpecDepth + 2) : (depth += 1) {
+        bytes[pos] = 1; // alt_count
+        bytes[pos + 1] = gbc_writer.FT_ARRAY;
+        bytes[pos + 2] = 1; // has_elem
+        pos += 3;
+    }
+    // Innermost: a real scalar so a within-bound depth would parse cleanly.
+    bytes[pos] = 1;
+    bytes[pos + 1] = gbc_writer.FT_INT;
+    pos += 2;
+    var r = ByteReader{ .bytes = bytes[0..pos] };
+    try testing.expectError(error.MalformedSection, readTypeSpec(&r, &h, testing.allocator));
+}
+
+test "gbc: readTypeSpec accepts nesting within the depth limit" {
+    var h = try testHeap();
+    defer h.deinit();
+    var bytes: [3 * 10 + 2]u8 = undefined;
+    var pos: usize = 0;
+    var depth: u32 = 0;
+    while (depth < 10) : (depth += 1) {
+        bytes[pos] = 1;
+        bytes[pos + 1] = gbc_writer.FT_ARRAY;
+        bytes[pos + 2] = 1;
+        pos += 3;
+    }
+    bytes[pos] = 1;
+    bytes[pos + 1] = gbc_writer.FT_INT;
+    pos += 2;
+    var r = ByteReader{ .bytes = bytes[0..pos] };
+    const spec = try readTypeSpec(&r, &h, testing.allocator);
+    try testing.expectEqual(value_mod.FieldTypeTag.array, spec.alts[0].typ);
+}
+
+// A crafted FUNCTIONS entry could previously set arity/param_type_count
+// independently (e.g. arity=5, param_type_count=0) — vm_types.zig's
+// canInlinePrimitiveArgs/enforceFuncArgTypes index param_types[0..fixed]
+// assuming they're consistent, so the mismatch caused an unconditional
+// out-of-bounds panic the moment the function was called.
+test "gbc: validateArityShape rejects a param_type_count/arity mismatch" {
+    try testing.expectError(error.MalformedSection, validateArityShape(5, false, true, 0));
+    try testing.expectError(error.MalformedSection, validateArityShape(5, false, true, 4));
+    try testing.expectError(error.MalformedSection, validateArityShape(5, false, true, 6));
+    try testing.expect(std.meta.isError(validateArityShape(5, false, true, 0)));
+}
+
+test "gbc: validateArityShape accepts the exact expected shape" {
+    try validateArityShape(5, false, true, 5);
+    try validateArityShape(3, true, true, 2); // variadic: fixed = arity - 1
+    try validateArityShape(0, false, false, 0); // has_typed_params=false: no shape required
+    try validateArityShape(0, false, false, 999); // ditto — untyped, count is unchecked
+}
+
+// is_variadic with arity==0 would separately underflow enforceFuncArgTypes's
+// `arity - 1` (a real compile never produces this: a variadic function's
+// own variadic parameter always contributes at least 1 to arity).
+test "gbc: validateArityShape rejects is_variadic with arity == 0" {
+    try testing.expectError(error.MalformedSection, validateArityShape(0, true, false, 0));
+    try testing.expectError(error.MalformedSection, validateArityShape(0, true, true, 0));
+}
+
+// A file-controlled length that would make pos+n overflow/wrap (rather than
+// cleanly fail) must instead subtract to compare, so it can never wrap.
+test "gbc: ByteReader.need rejects a length claim exceeding the buffer without overflowing" {
+    var r = ByteReader{ .bytes = "abc", .pos = 1 };
+    try testing.expectError(error.TruncatedBody, r.need(std.math.maxInt(usize)));
+    try r.need(2); // "bc" remains — must still succeed
+    try testing.expectError(error.TruncatedBody, r.need(3));
 }
