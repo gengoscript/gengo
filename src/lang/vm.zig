@@ -443,7 +443,14 @@ fn computeAddResult(ctx: VMContext, a: Value, b: Value) !Value {
         if (carrier) |typ| {
             try ctx.vs.pushTempRoot(result);
             defer ctx.vs.popTempRoot();
-            return try vmtyp.makeNamedValue(ctx, typ, result);
+            const wrapped = try vmtyp.makeNamedValue(ctx, typ, result);
+            // Every other carrier-producing path (wrapValueWithCarrier,
+            // pushDecimalResultWithCarrier, pushUnaryIntResult) re-checks the
+            // predicate after wrapping; this string-concat path didn't, so
+            // e.g. two length-bounded named strings could concatenate into
+            // a longer string that silently violates the predicate.
+            try checkNamedTypePredicateChain(ctx, typ, wrapped.namedInner() orelse result);
+            return wrapped;
         } else {
             return result;
         }
@@ -901,7 +908,7 @@ fn checkFieldNamedTypePredicate(ctx: VMContext, field: @import("value.zig").Stru
     }
 }
 
-fn validateErasedNamedValueForSpec(ctx: VMContext, spec: @import("value.zig").FieldTypeSpec, val: Value) !void {
+pub fn validateErasedNamedValueForSpec(ctx: VMContext, spec: @import("value.zig").FieldTypeSpec, val: Value) !void {
     if (spec.alts.len != 1) return;
     const alt = spec.alts[0];
     switch (alt.typ) {
@@ -1295,6 +1302,11 @@ fn performCall(ctx: VMContext, argc: u8) !void {
             if (argc != 1) return error.ArityMismatch;
             const arg = ctx.vs.stack[ctx.vs.stack_top - 1];
             const out = try vmtyp.applyNamedTypeFn(ctx, nf.typ, nf.kind, arg);
+            // Every other arithmetic-carrier path (wrapValueWithCarrier,
+            // pushDecimalResultWithCarrier, pushUnaryIntResult) re-checks the
+            // predicate after producing a new named value; succ/pred didn't,
+            // so e.g. `Even.succ(4)` could silently return an odd value.
+            try checkNamedTypePredicateChain(ctx, nf.typ, out.namedInner() orelse out);
             try pop2push1(ctx, out);
         },
         .enum_type_fn => |ef| {
@@ -1840,16 +1852,26 @@ fn opSetIndex(ctx: VMContext) !void {
     if (named_c_ref) |ref| {
         if (ref.typ.* == .named_type) {
             const nt = ref.typ.named_type;
+            // matchesTypeSpec alone only checks a bare scalar's type tag
+            // (e.g. "is this an int"), not a named_t element spec's own
+            // range/predicate — that thorough check only ran at initial
+            // construction (validateNamedCollectionElements), so
+            // `arr[i] = v`/`m[k] = v` could silently write a value that
+            // violates the collection's own declared element type's
+            // predicate (e.g. a ScoreList's element predicate `0..100`).
             if (nt.base == .array_t) {
                 if (nt.elem_spec) |es| {
                     if (!vmtyp.matchesTypeSpec(ctx, val, es)) return error.TypeError;
+                    try validateErasedNamedValueForSpec(ctx, es, val);
                 }
             } else if (nt.base == .map_t) {
                 if (nt.key_spec) |ks| {
                     if (!vmtyp.matchesTypeSpec(ctx, idx_v, ks)) return error.TypeError;
+                    try validateErasedNamedValueForSpec(ctx, ks, idx_v);
                 }
                 if (nt.val_spec) |vs| {
                     if (!vmtyp.matchesTypeSpec(ctx, val, vs)) return error.TypeError;
+                    try validateErasedNamedValueForSpec(ctx, vs, val);
                 }
             }
         }
@@ -1990,6 +2012,7 @@ fn opInvokeMethod(ctx: VMContext) !void {
             const kind: @import("value.zig").NamedTypeFnKind = if (common.streq(mname, "succ")) .succ else .pred;
             const arg = ctx.vs.stack[recv_idx + 1];
             const out = try vmtyp.applyNamedTypeFn(ctx, recv.object, kind, arg);
+            try checkNamedTypePredicateChain(ctx, recv.object, out.namedInner() orelse out);
             if (recv_idx >= ctx.vs.stack_top) return error.StackUnderflow;
             ctx.vs.stack_top = recv_idx;
             try ctx.vs.vmPush(out);
@@ -2122,6 +2145,7 @@ fn opSetField(ctx: VMContext) !void {
             if (nt.base == .map_t) {
                 if (nt.val_spec) |vs| {
                     if (!vmtyp.matchesTypeSpec(ctx, val, vs)) return error.TypeError;
+                    try validateErasedNamedValueForSpec(ctx, vs, val);
                 }
             }
         }
