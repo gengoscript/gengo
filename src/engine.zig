@@ -391,6 +391,18 @@ fn wasmSliceMut(ptr: PtrInt, len: i32) []u8 {
 }
 
 fn wireToValue(wire: ValueWire) !Value {
+    return wireToValueDepth(wire, 0);
+}
+
+// Host-supplied ValueWire args to engine_call recurse through this function
+// once per array/map nesting level. Mirrors the identical guard in
+// host_abi.zig's valueFromWire/wireFromValue and this file's own
+// valueToWireDepth: without a bound, a host passing deeply-nested or cyclic
+// wire data (a bug in the host, or host code that blindly forwards untrusted
+// data it received from elsewhere) recurses the native call stack with no
+// backstop — a process crash rather than a catchable error.
+fn wireToValueDepth(wire: ValueWire, depth: u32) !Value {
+    if (depth >= MaxWireDepth) return error.HostValueTooDeep;
     const ctx = vms.VMContext.fromActive();
     return switch (wire.tag) {
         @intFromEnum(WireTag.null) => .null,
@@ -436,7 +448,7 @@ fn wireToValue(wire: ValueWire) !Value {
             const out_arr = try vmgc.allocTempRootedManagedValueArray(ctx, count);
             defer ctx.vs.popTempRoot();
             for (elem_wires, 0..) |ew, i| {
-                out_arr.set(i, try wireToValue(ew));
+                out_arr.set(i, try wireToValueDepth(ew, depth + 1));
             }
             return .{ .object = out_arr.obj };
         },
@@ -451,8 +463,8 @@ fn wireToValue(wire: ValueWire) !Value {
             const out_map = try vmgc.allocTempRootedManagedMap(ctx, count);
             defer ctx.vs.popTempRoot();
             for (0..count) |i| {
-                const k = try wireToValue(pair_wires[i * 2]);
-                const v = try wireToValue(pair_wires[i * 2 + 1]);
+                const k = try wireToValueDepth(pair_wires[i * 2], depth + 1);
+                const v = try wireToValueDepth(pair_wires[i * 2 + 1], depth + 1);
                 out_map.set(i, .{ .key = k, .value = v });
             }
             return .{ .object = out_map.obj };
@@ -472,18 +484,40 @@ fn makeWire(tag: u8, payload: u64, len: u32) ValueWire {
     };
 }
 
-fn fillArrayWires(items: []const Value, wires: []ValueWire) anyerror!void {
-    for (items, 0..) |item, i| wires[i] = try valueToWire(item);
+// Mirrors host_abi.zig's identical guard: a script's own return value (from
+// engine_call) or an exposed global is serialized to wire form for the host
+// via this function, and arrays/maps are mutable in place (`a[0] = a` is
+// ordinary Gengo code), so a script can hand this a self-referential or
+// arbitrarily deep container. Without a bound, that recursion walks the
+// native call stack with no backstop — a process crash, not a catchable
+// script error.
+const MaxWireDepth: u32 = 64;
+
+// A wire `len` field is u32; a >4 GiB Gengo string/array/map would silently
+// truncate or trip @intCast's overflow panic. Fail with a catchable error
+// instead of trusting the cast (see host_abi.zig's identical wireLen).
+fn wireLen(n: usize) !u32 {
+    if (n > std.math.maxInt(u32)) return error.HostValueTooLarge;
+    return @intCast(n);
 }
 
-fn fillMapWires(entries: []const MapEntry, wires: []ValueWire) anyerror!void {
+fn fillArrayWires(items: []const Value, wires: []ValueWire, depth: u32) anyerror!void {
+    for (items, 0..) |item, i| wires[i] = try valueToWireDepth(item, depth);
+}
+
+fn fillMapWires(entries: []const MapEntry, wires: []ValueWire, depth: u32) anyerror!void {
     for (entries, 0..) |entry, i| {
-        wires[i * 2] = try valueToWire(entry.key);
-        wires[i * 2 + 1] = try valueToWire(entry.value);
+        wires[i * 2] = try valueToWireDepth(entry.key, depth);
+        wires[i * 2 + 1] = try valueToWireDepth(entry.value, depth);
     }
 }
 
 fn valueToWire(val: Value) !ValueWire {
+    return valueToWireDepth(val, 0);
+}
+
+fn valueToWireDepth(val: Value, depth: u32) !ValueWire {
+    if (depth >= MaxWireDepth) return error.HostValueTooDeep;
     return switch (val) {
         .null => makeWire(@intFromEnum(WireTag.null), 0, 0),
         .boolean => |b| makeWire(@intFromEnum(WireTag.boolean), @intFromBool(b), 0),
@@ -505,40 +539,40 @@ fn valueToWire(val: Value) !ValueWire {
             .len = 0,
             .reserved2 = 0,
         },
-        .string => |s| makeWire(@intFromEnum(WireTag.string), @intFromPtr(s.bytes.ptr), @intCast(s.bytes.len)),
-        .error_value => |msg| makeWire(@intFromEnum(WireTag.@"error"), @intFromPtr(msg.bytes.ptr), @intCast(msg.bytes.len)),
+        .string => |s| makeWire(@intFromEnum(WireTag.string), @intFromPtr(s.bytes.ptr), try wireLen(s.bytes.len)),
+        .error_value => |msg| makeWire(@intFromEnum(WireTag.@"error"), @intFromPtr(msg.bytes.ptr), try wireLen(msg.bytes.len)),
         .object => |obj| switch (obj.*) {
-            .dyn_string => makeWire(@intFromEnum(WireTag.string), @intFromPtr(obj.dyn_string.ptr), @intCast(obj.dyn_string.len)),
-            .string_view => makeWire(@intFromEnum(WireTag.string), @intFromPtr(obj.string_view.bytes.ptr), @intCast(obj.string_view.bytes.len)),
+            .dyn_string => makeWire(@intFromEnum(WireTag.string), @intFromPtr(obj.dyn_string.ptr), try wireLen(obj.dyn_string.len)),
+            .string_view => makeWire(@intFromEnum(WireTag.string), @intFromPtr(obj.string_view.bytes.ptr), try wireLen(obj.string_view.bytes.len)),
             .array, .array_managed, .array_capacity => {
                 const items = try vms.asArraySlice(obj);
                 const wires = (heap.bump(ValueWire, items.len) orelse return makeWire(@intFromEnum(WireTag.null), 0, 0))[0..items.len];
-                try fillArrayWires(items, wires);
-                return makeWire(@intFromEnum(WireTag.array), @intFromPtr(wires.ptr), @intCast(items.len));
+                try fillArrayWires(items, wires, depth + 1);
+                return makeWire(@intFromEnum(WireTag.array), @intFromPtr(wires.ptr), try wireLen(items.len));
             },
             .map, .map_managed, .map_hashed => {
                 const entries = try vms.asMapSlice(obj);
                 const wires = (heap.bump(ValueWire, entries.len * 2) orelse return makeWire(@intFromEnum(WireTag.null), 0, 0))[0 .. entries.len * 2];
-                try fillMapWires(entries, wires);
-                return makeWire(@intFromEnum(WireTag.map), @intFromPtr(wires.ptr), @intCast(entries.len));
+                try fillMapWires(entries, wires, depth + 1);
+                return makeWire(@intFromEnum(WireTag.map), @intFromPtr(wires.ptr), try wireLen(entries.len));
             },
             .struct_instance => {
                 const entries = obj.struct_instance.fields;
                 const wires = (heap.bump(ValueWire, entries.len * 2) orelse return makeWire(@intFromEnum(WireTag.null), 0, 0))[0 .. entries.len * 2];
-                try fillMapWires(entries, wires);
-                return makeWire(@intFromEnum(WireTag.map), @intFromPtr(wires.ptr), @intCast(entries.len));
+                try fillMapWires(entries, wires, depth + 1);
+                return makeWire(@intFromEnum(WireTag.map), @intFromPtr(wires.ptr), try wireLen(entries.len));
             },
             .small_struct_instance => |ssi| {
                 const n = @as(usize, ssi.count);
                 const wires = (heap.bump(ValueWire, n * 2) orelse return makeWire(@intFromEnum(WireTag.null), 0, 0))[0 .. n * 2];
                 for (0..n) |i| {
-                    wires[i * 2] = try valueToWire(ssi.typ.struct_type.fields[i].key);
-                    wires[i * 2 + 1] = try valueToWire(ssi.v[i]);
+                    wires[i * 2] = try valueToWireDepth(ssi.typ.struct_type.fields[i].key, depth + 1);
+                    wires[i * 2 + 1] = try valueToWireDepth(ssi.v[i], depth + 1);
                 }
                 return makeWire(@intFromEnum(WireTag.map), @intFromPtr(wires.ptr), @intCast(n));
             },
-            .named_value => |nv| return valueToWire(nv.value),
-            .enum_value => |ev| makeWire(@intFromEnum(WireTag.string), @intFromPtr(ev.name.ptr), @intCast(ev.name.len)),
+            .named_value => |nv| return valueToWireDepth(nv.value, depth + 1),
+            .enum_value => |ev| makeWire(@intFromEnum(WireTag.string), @intFromPtr(ev.name.ptr), try wireLen(ev.name.len)),
             .variant_value => |vv| {
                 const vtype = vv.typ.variant_type;
                 const arm_spec = vtype.arms[vv.ordinal];
@@ -546,19 +580,19 @@ fn valueToWire(val: Value) !ValueWire {
                 const arm_field_count = @min(vv.arm_fields.len, arm_spec.fields.len);
                 const total_entries = 2 + shared_count + arm_field_count;
                 const wires = (heap.bump(ValueWire, total_entries * 2) orelse return makeWire(@intFromEnum(WireTag.null), 0, 0))[0 .. total_entries * 2];
-                wires[0] = try valueToWire(.{ .string = staticSS("tag") });
-                wires[1] = try valueToWire(.{ .string = try chunk.internStr(vv.tag) });
-                wires[2] = try valueToWire(.{ .string = staticSS("value") });
-                wires[3] = try valueToWire(vv.payload);
+                wires[0] = try valueToWireDepth(.{ .string = staticSS("tag") }, depth + 1);
+                wires[1] = try valueToWireDepth(.{ .string = try chunk.internStr(vv.tag) }, depth + 1);
+                wires[2] = try valueToWireDepth(.{ .string = staticSS("value") }, depth + 1);
+                wires[3] = try valueToWireDepth(vv.payload, depth + 1);
                 var wi: usize = 2;
                 for (vtype.shared_fields[0..shared_count], vv.shared_values[0..shared_count]) |spec, sv| {
-                    wires[wi * 2] = try valueToWire(.{ .string = try chunk.internStr(spec.name) });
-                    wires[wi * 2 + 1] = try valueToWire(sv);
+                    wires[wi * 2] = try valueToWireDepth(.{ .string = try chunk.internStr(spec.name) }, depth + 1);
+                    wires[wi * 2 + 1] = try valueToWireDepth(sv, depth + 1);
                     wi += 1;
                 }
                 for (arm_spec.fields[0..arm_field_count], vv.arm_fields[0..arm_field_count]) |spec, af| {
-                    wires[wi * 2] = try valueToWire(.{ .string = try chunk.internStr(spec.name) });
-                    wires[wi * 2 + 1] = try valueToWire(af);
+                    wires[wi * 2] = try valueToWireDepth(.{ .string = try chunk.internStr(spec.name) }, depth + 1);
+                    wires[wi * 2 + 1] = try valueToWireDepth(af, depth + 1);
                     wi += 1;
                 }
                 return makeWire(@intFromEnum(WireTag.map), @intFromPtr(wires.ptr), @intCast(total_entries));
@@ -569,10 +603,10 @@ fn valueToWire(val: Value) !ValueWire {
             const ordinal = vmod.inlineVariantOrdinal(iv);
             const tag = vmod.objectAtIdx(iv.typ_idx).variant_type.arms[ordinal].name;
             const wires = (heap.bump(ValueWire, 4) orelse return makeWire(@intFromEnum(WireTag.null), 0, 0))[0..4];
-            wires[0] = try valueToWire(.{ .string = staticSS("tag") });
-            wires[1] = try valueToWire(.{ .string = try chunk.internStr(tag) });
-            wires[2] = try valueToWire(.{ .string = staticSS("value") });
-            wires[3] = try valueToWire(vmod.inlineVariantPayload(iv));
+            wires[0] = try valueToWireDepth(.{ .string = staticSS("tag") }, depth + 1);
+            wires[1] = try valueToWireDepth(.{ .string = try chunk.internStr(tag) }, depth + 1);
+            wires[2] = try valueToWireDepth(.{ .string = staticSS("value") }, depth + 1);
+            wires[3] = try valueToWireDepth(vmod.inlineVariantPayload(iv), depth + 1);
             return makeWire(@intFromEnum(WireTag.map), @intFromPtr(wires.ptr), 2);
         },
     };
@@ -600,7 +634,7 @@ fn valueToWireWithScratch(val: Value, scratch: *Engine) !ValueWire {
                 if (items.len > scratch.wire_elem_buf.len) return error.WireBufferOverflow;
                 const wires = &scratch.wire_elem_buf;
                 scratch.wire_elem_count = @intCast(items.len);
-                try fillArrayWires(items, wires);
+                try fillArrayWires(items, wires, 1);
                 return makeWire(@intFromEnum(WireTag.array), @intFromPtr(wires.ptr), @intCast(items.len));
             },
             .map, .map_managed, .map_hashed => {
@@ -609,7 +643,7 @@ fn valueToWireWithScratch(val: Value, scratch: *Engine) !ValueWire {
                 if (entries.len > max_entries) return error.WireBufferOverflow;
                 const wires = &scratch.wire_elem_buf;
                 scratch.wire_elem_count = @intCast(entries.len * 2);
-                try fillMapWires(entries, wires);
+                try fillMapWires(entries, wires, 1);
                 return makeWire(@intFromEnum(WireTag.map), @intFromPtr(wires.ptr), @intCast(entries.len));
             },
             .struct_instance => {
@@ -618,7 +652,7 @@ fn valueToWireWithScratch(val: Value, scratch: *Engine) !ValueWire {
                 if (entries.len > max_entries) return error.WireBufferOverflow;
                 const wires = &scratch.wire_elem_buf;
                 scratch.wire_elem_count = @intCast(entries.len * 2);
-                try fillMapWires(entries, wires);
+                try fillMapWires(entries, wires, 1);
                 return makeWire(@intFromEnum(WireTag.map), @intFromPtr(wires.ptr), @intCast(entries.len));
             },
             .small_struct_instance => |ssi| {
@@ -628,8 +662,8 @@ fn valueToWireWithScratch(val: Value, scratch: *Engine) !ValueWire {
                 const wires = &scratch.wire_elem_buf;
                 scratch.wire_elem_count = @intCast(n * 2);
                 for (0..n) |i| {
-                    wires[i * 2] = try valueToWire(ssi.typ.struct_type.fields[i].key);
-                    wires[i * 2 + 1] = try valueToWire(ssi.v[i]);
+                    wires[i * 2] = try valueToWireDepth(ssi.typ.struct_type.fields[i].key, 1);
+                    wires[i * 2 + 1] = try valueToWireDepth(ssi.v[i], 1);
                 }
                 return makeWire(@intFromEnum(WireTag.map), @intFromPtr(wires.ptr), @intCast(n));
             },
@@ -1461,6 +1495,69 @@ test "engine_call rejects wire serialization overflow" {
     var out_wire2: ValueWire = undefined;
     const call_fail = engine_call(h2, @intCast(@intFromPtr("fail".ptr)), 4, 0, 0, @intCast(@intFromPtr(&out_wire2)));
     try std.testing.expectEqual(-2, call_fail);
+}
+
+// Regression: a script's own return value is serialized to wire form via
+// valueToWireDepth/valueToWireWithScratch, and struct fields are mutable in
+// place ("recursive struct via ?" is documented, supported Gengo — see
+// tests/spec/256_recursive_struct_types.gengo), so ordinary script code can
+// build a self-referential struct (`n.next = n`) and return it. Before the
+// depth counter was added, that recursed the native call stack with no
+// bound — a process crash, not a catchable engine_call failure.
+test "engine_call rejects a self-referential return value instead of crashing" {
+    const h = engine_init();
+    try std.testing.expect(h > 0);
+    defer engine_destroy(h);
+
+    const src =
+        \\type Node struct {
+        \\    next ?Node,
+        \\}
+        \\pub func build() Node {
+        \\    n := Node{ next: null }
+        \\    n.next = n
+        \\    return n
+        \\}
+    ;
+    try std.testing.expectEqual(0, engine_run(h, @intCast(@intFromPtr(src.ptr)), @intCast(src.len)));
+
+    var out_wire: ValueWire = undefined;
+    const rc = engine_call(h, @intCast(@intFromPtr("build".ptr)), 5, 0, 0, @intCast(@intFromPtr(&out_wire)));
+    try std.testing.expectEqual(-2, rc);
+}
+
+// Regression: the opposite direction — wireToValueDepth converts a host's
+// ValueWire *arguments* into script Values before a function call. Same
+// unbounded-recursion shape, just triggered by a host passing deeply-nested
+// wire data (a host bug, or host code that blindly forwards data it did not
+// itself construct) instead of a script's own value.
+test "engine_call rejects deeply nested host-supplied wire arguments instead of crashing" {
+    const h = engine_init();
+    try std.testing.expect(h > 0);
+    defer engine_destroy(h);
+
+    const src =
+        \\pub func identity(x []int) []int { return x }
+    ;
+    try std.testing.expectEqual(0, engine_run(h, @intCast(@intFromPtr(src.ptr)), @intCast(src.len)));
+
+    const depth = 100;
+    var wires: [depth]ValueWire = undefined;
+    wires[0] = .{ .tag = @intFromEnum(WireTag.array), .flags = 0, .reserved = 0, .payload = 0, .len = 0, .reserved2 = 0 };
+    for (1..depth) |i| {
+        wires[i] = .{
+            .tag = @intFromEnum(WireTag.array),
+            .flags = 0,
+            .reserved = 0,
+            .payload = @intFromPtr(&wires[i - 1]),
+            .len = 1,
+            .reserved2 = 0,
+        };
+    }
+
+    var out_wire: ValueWire = undefined;
+    const rc = engine_call(h, @intCast(@intFromPtr("identity".ptr)), 8, @intCast(@intFromPtr(&wires[depth - 1])), 1, @intCast(@intFromPtr(&out_wire)));
+    try std.testing.expectEqual(-2, rc);
 }
 
 test "engine_call converts wires in the selected engine heap" {
