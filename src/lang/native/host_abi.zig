@@ -37,7 +37,26 @@ pub fn nativeCallRawChecked(id: u16, args: []const host_abi.ValueWire, out: *hos
     try checkCallStatus(host_abi.nativeCallRaw(id, args, out));
 }
 
+// Scripts fully control the shape of values passed to a host module function
+// (callHostModule serializes every argument through this function before the
+// host ever sees it), and arrays/maps are mutable in place (`a[0] = a` is
+// ordinary, reachable Gengo code), so a script can build either a
+// self-referential container or an arbitrarily deep nesting chain with a
+// trivial loop. Without a bound here, that recursion walks the native call
+// stack with no backstop and crashes the whole process (stack overflow),
+// not a catchable script error — the same hazard std.json's stringifier
+// guards against with its own MaxDepth (see json.zig). A plain depth counter
+// is enough: it terminates both unbounded nesting and cycles (a cycle just
+// keeps incrementing depth forever until the cap trips), so no separate
+// ancestor/cycle tracking is needed.
+const MaxWireDepth: u32 = 64;
+
 pub fn wireFromValue(ctx: VMContext, v: Value) !host_abi.ValueWire {
+    return wireFromValueDepth(ctx, v, 0);
+}
+
+fn wireFromValueDepth(ctx: VMContext, v: Value, depth: u32) !host_abi.ValueWire {
+    if (depth >= MaxWireDepth) return error.HostValueTooDeep;
     return switch (v) {
         .null => nullWire(),
         .boolean => |b| makeWire(.boolean, 0, if (b) 1 else 0, 0),
@@ -54,7 +73,7 @@ pub fn wireFromValue(ctx: VMContext, v: Value) !host_abi.ValueWire {
                 const items = try vms.asArraySlice(o);
                 const wires = (ctx.hs.bump(host_abi.ValueWire, items.len) orelse return error.OutOfMemory)[0..items.len];
                 for (items, 0..) |item, i| {
-                    wires[i] = try wireFromValue(ctx, item);
+                    wires[i] = try wireFromValueDepth(ctx, item, depth + 1);
                 }
                 return makeWire(.array, 0, @intCast(@intFromPtr(wires.ptr)), @intCast(items.len));
             },
@@ -62,17 +81,17 @@ pub fn wireFromValue(ctx: VMContext, v: Value) !host_abi.ValueWire {
                 const entries = try vms.asMapSlice(o);
                 const wires = (ctx.hs.bump(host_abi.ValueWire, entries.len * 2) orelse return error.OutOfMemory)[0 .. entries.len * 2];
                 for (entries, 0..) |entry, i| {
-                    wires[i * 2] = try wireFromValue(ctx, entry.key);
-                    wires[i * 2 + 1] = try wireFromValue(ctx, entry.value);
+                    wires[i * 2] = try wireFromValueDepth(ctx, entry.key, depth + 1);
+                    wires[i * 2 + 1] = try wireFromValueDepth(ctx, entry.value, depth + 1);
                 }
                 return makeWire(.map, 0, @intCast(@intFromPtr(wires.ptr)), @intCast(entries.len));
             },
             .variant_value => |vv| {
                 const wires = (ctx.hs.bump(host_abi.ValueWire, 4) orelse return error.OutOfMemory)[0..4];
-                wires[0] = try wireFromValue(ctx, .{ .string = try ctx.cs.internStr("tag") });
-                wires[1] = try wireFromValue(ctx, .{ .string = try ctx.cs.internStr(vv.tag) });
-                wires[2] = try wireFromValue(ctx, .{ .string = try ctx.cs.internStr("value") });
-                wires[3] = try wireFromValue(ctx, vv.payload);
+                wires[0] = try wireFromValueDepth(ctx, .{ .string = try ctx.cs.internStr("tag") }, depth + 1);
+                wires[1] = try wireFromValueDepth(ctx, .{ .string = try ctx.cs.internStr(vv.tag) }, depth + 1);
+                wires[2] = try wireFromValueDepth(ctx, .{ .string = try ctx.cs.internStr("value") }, depth + 1);
+                wires[3] = try wireFromValueDepth(ctx, vv.payload, depth + 1);
                 return makeWire(.map, 0, @intCast(@intFromPtr(wires.ptr)), 2);
             },
             else => return error.UnsupportedHostValueType,
@@ -81,10 +100,10 @@ pub fn wireFromValue(ctx: VMContext, v: Value) !host_abi.ValueWire {
             const ordinal = vmod.inlineVariantOrdinal(iv);
             const tag = vmod.objectAtIdx(iv.typ_idx).variant_type.arms[ordinal].name;
             const wires = (ctx.hs.bump(host_abi.ValueWire, 4) orelse return error.OutOfMemory)[0..4];
-            wires[0] = try wireFromValue(ctx, .{ .string = try ctx.cs.internStr("tag") });
-            wires[1] = try wireFromValue(ctx, .{ .string = try ctx.cs.internStr(tag) });
-            wires[2] = try wireFromValue(ctx, .{ .string = try ctx.cs.internStr("value") });
-            wires[3] = try wireFromValue(ctx, vmod.inlineVariantPayload(iv));
+            wires[0] = try wireFromValueDepth(ctx, .{ .string = try ctx.cs.internStr("tag") }, depth + 1);
+            wires[1] = try wireFromValueDepth(ctx, .{ .string = try ctx.cs.internStr(tag) }, depth + 1);
+            wires[2] = try wireFromValueDepth(ctx, .{ .string = try ctx.cs.internStr("value") }, depth + 1);
+            wires[3] = try wireFromValueDepth(ctx, vmod.inlineVariantPayload(iv), depth + 1);
             return makeWire(.map, 0, @intCast(@intFromPtr(wires.ptr)), 2);
         },
     };
@@ -201,4 +220,36 @@ pub fn ensureHostReady(ctx: VMContext) !void {
     const version = try wireNumberToU64(out);
     if (version != host_abi.ABI_VERSION) return error.HostAbiVersionMismatch;
     ctx.vs.host_checked = true;
+}
+
+// Regression: wireFromValue serializes every argument a script passes to a
+// host module function (see callHostModule in native/main.zig). Arrays are
+// mutable in place, so ordinary script code (`a[0] = a`, or a loop that
+// wraps a value in a new one-element array each iteration) can hand it a
+// self-referential or arbitrarily deep container. Before the depth counter
+// was added, wireFromValue recursed once per nesting level with no bound at
+// all, which for a self-cycle recurses forever and for deep-but-finite
+// nesting still eventually blows the native call stack — a process-level
+// crash, not a catchable script error. This builds nesting deeper than the
+// cap and checks it now fails cleanly instead of recursing without limit.
+test "wireFromValue rejects arbitrarily deep nested arrays" {
+    const Runtime = @import("../../runtime/runtime.zig").Runtime;
+    var rt: Runtime = undefined;
+    rt.initWithPolicy(.{ .allow_io = false }) catch return error.TestFailed;
+    defer rt.deinit();
+
+    const ctx = VMContext.fromActive();
+
+    const depth: usize = 100;
+    var inner: Value = .null;
+    var pushed: usize = 0;
+    for (0..depth) |_| {
+        const arr = try vmgc.allocTempRootedManagedValueArray(ctx, 1);
+        arr.set(0, inner);
+        inner = .{ .object = arr.obj };
+        pushed += 1;
+    }
+    defer for (0..pushed) |_| ctx.vs.popTempRoot();
+
+    try std.testing.expectError(error.HostValueTooDeep, wireFromValue(ctx, inner));
 }
