@@ -160,6 +160,11 @@ pub const Runtime = struct {
     // overflow the WASM shadow stack (api.Runtime.init holds up to three
     // Runtime copies on the stack at once).
     repl: *ReplPersist = undefined,
+    // Guards deinit() against double-free/deinit-of-never-initialized-state.
+    // Defaults to false via the struct's own zero-value (matters for a
+    // Runtime sitting in a default-initialized array slot, e.g. engine.zig's
+    // engine_slots, that was never actually init'd/initWithConfig'd).
+    initialized: bool = false,
 
     pub fn init() Runtime {
         var rt: Runtime = .{};
@@ -179,6 +184,7 @@ pub const Runtime = struct {
         rt.heap_state.reset();
         rt.fs_mounts = fs_state.defaultState().*;
         clearNativeCaches();
+        rt.initialized = true;
         return rt;
     }
 
@@ -227,9 +233,17 @@ pub const Runtime = struct {
         self.fs_mounts = fs_state.defaultState().*;
         fs_state.setActive(&self.fs_mounts);
         clearNativeCaches();
+        self.initialized = true;
     }
 
     pub fn deinit(self: *Runtime) void {
+        // Idempotent: a Runtime that was never init'd (e.g. a default-valued
+        // struct in an inactive engine_slots entry) or already deinit'd must
+        // not free chunk_state/repl again — both are raw page_allocator
+        // pointers with no other liveness check. See engine.zig's
+        // engine_destroy fix for the concrete bug this class of guard closes.
+        if (!self.initialized) return;
+        self.initialized = false;
         self.vm_state.deinit();
         self.heap_state.deinit();
         std.heap.page_allocator.destroy(self.chunk_state);
@@ -1079,3 +1093,24 @@ pub const Runtime = struct {
         return out[0..count];
     }
 };
+
+// Regression: engine.zig's engine_destroy previously deinit'd a Runtime
+// sitting in an inactive engine_slots entry (default-valued, never
+// initWithConfig'd) and could also deinit the same valid handle twice — both
+// freed chunk_state/repl (raw page_allocator pointers) without any liveness
+// check, an out-of-bounds-read-on-garbage-state crash and a double-free
+// respectively. engine.zig now gates on its own `.active` flag, but
+// Runtime.deinit() itself should also refuse to run on state that was never
+// (or no longer) initialized, so any other caller gets the same protection
+// for free.
+test "Runtime.deinit is a no-op on a never-initialized Runtime" {
+    var rt: Runtime = .{};
+    rt.deinit();
+    rt.deinit();
+}
+
+test "Runtime.deinit is idempotent after a real init" {
+    var rt = Runtime.init();
+    rt.deinit();
+    rt.deinit();
+}
