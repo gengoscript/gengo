@@ -159,7 +159,7 @@ different inherited environments; review them independently.
 
 ## Import Sandboxing
 
-When the CLI runs a script, file imports are restricted to the script's own directory. Any `import` that would resolve outside that directory is rejected at compile time with `ImportOutsideRoot`:
+When the CLI runs a script, file imports are restricted to the script's own directory. Any `import` that would resolve outside that directory is rejected at compile time with `ImportOutsideRoot`. The sandbox check runs before any filesystem probe, including for package-style (bare) imports, so a crafted import path cannot sidestep the check through a missing-file shortcut.
 
 ```
 gengo: compile error: ImportOutsideRoot: import '../shared/utils' is outside the allowed source directories
@@ -193,13 +193,13 @@ Each runtime instance has its own heap, globals, stack, and call frames. Errors,
 
 ## Output Control
 
-Set `allow_io = false` unless scripts should be able to write through `std.io`:
+`allow_io` defaults to `false`, which suppresses all `std.io` output. Set it to `true` only when scripts should be able to write through `std.io`:
 
 ```zig
-var rt = api.Runtime.init(.{ .allow_io = false });
+var rt = api.Runtime.init(.{ .allow_io = true });
 ```
 
-This suppresses built-in script output only. It does not prevent host callbacks from performing I/O.
+This controls built-in script output only. It does not prevent host callbacks from performing I/O.
 
 ## Confusable Identifiers
 

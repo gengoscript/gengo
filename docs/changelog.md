@@ -40,6 +40,20 @@
 - Arity mismatch errors now show `expected 1-2 argument(s)` when a function has defaults, and no longer include a stray leading comma in the function signature.
 - Unknown `std.*` namespace fields now suggest the closest matching name in the error message.
 - **Named-type range and predicate validation at call boundaries** — a dynamically-typed value (from `std.json.parse`, a host embedding call, or any other erased/`any` source) arriving at a function parameter or return value declared as a named range or predicate type is now actually validated against that type's constraint. Previously the validation error was silently discarded and the raw, unchecked value was passed through — `Port(99999)` panicked correctly when constructed directly, but a script or host could smuggle `99999` past a `Port int range 1..65535` parameter without it ever panicking.
+- **`allow_io` defaults to `false`** — scripts can no longer write to `std.io` unless the host explicitly enables it. Hosts that relied on the previous default-allow behaviour must set `allow_io = true` in their config.
+- **Wire depth limit** — `ValueWire` serialization in both directions is now bounded to 64 nesting levels. Exceeding the limit returns `HostValueTooDeep` instead of overflowing the host call stack. An oversized `len` field now returns `HostValueTooLarge`.
+- **`else if` chain depth limit** — the compiler now rejects `else if` chains exceeding 256 levels with `NestingTooDeep` instead of risking a host stack overflow.
+- **Integer default parameters parse exactly** — integer default values in function parameters are now parsed as `i64` without an intermediate `f64` round-trip. Integers larger than 2^53 in default params previously lost precision silently.
+- **`string.split_n` empty separator** — with an empty separator, `split_n` now splits at UTF-8 codepoint boundaries, consistent with `string.split(s, "")`. Code relying on byte-level splitting with an empty separator must switch to `std.bytes` operations.
+- **`string.repeat` / `bytes.repeat` size cap** — both functions now return `RangeError` if the result would exceed 64 MB.
+- **`io.printf` / `fmt.format` / `fmt.stringify` size cap** — all three now return `RangeError` if the formatted output exceeds 64 MB.
+- **`regexp` functions: input size cap** — all five regexp functions now return `RangeError` for input strings larger than 1 MB. Patterns with more than 200 levels of group nesting treat the input as non-matching.
+- **`time.format` output cap** — `.format(fmt)` now returns `NoSpaceLeft` when the expanded format string exceeds 512 bytes.
+- **`time.add_date` overflow guard** — `.add_date(years, months, days)` now returns `RangeError` when any component delta causes an i32 overflow.
+- **`std.core.deep_equal` works for large maps** — previously panicked with `OutOfMemory` for maps with more than 128 entries. Now works for any size.
+- **Import sandbox for package-style imports** — the path-traversal check now runs before any filesystem probe for all import kinds, including bare (package-style) imports.
+- **GBC named-return count guard** — `.gbc` files with `named_return_count > 64` now return `error.MalformedSection` from the reader instead of silently writing out of bounds.
+- **Variant type field count enforced** — constructing or loading a variant type with more than 255 combined fields is now a runtime or reader error rather than silent memory corruption.
 
 ---
 

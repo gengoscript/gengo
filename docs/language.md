@@ -689,6 +689,10 @@ truthiness). Named types over `bool` participate through their base, the
 same way named ints participate in arithmetic. For everything else, write
 a comparison or convert explicitly with `std.conv.to_bool`.
 
+`else if` chains are limited to 256 levels. Beyond that the compiler returns
+`NestingTooDeep`. Refactor very deep chains into a `switch` or a helper
+function.
+
 Loops:
 
 ```gengo
@@ -828,7 +832,9 @@ greet("World", "Hi")     // "Hi World"
 ```
 
 Default values must be literals (number, string, bool, or `null`). All
-parameters after the first defaulted one must also have defaults.
+parameters after the first defaulted one must also have defaults. Integer
+defaults are parsed exactly as `i64` values; there is no intermediate `f64`
+conversion, so integer defaults larger than 2^53 are represented precisely.
 
 Variadic parameters use `...` and must appear last:
 

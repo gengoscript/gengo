@@ -59,7 +59,7 @@ implementation-independent bound is currently guaranteed.
 
 ### `std.io.printf(fmt, ...args)`
 - `fmt` is a string with Go-style format verbs.
-- Errors: `ArityMismatch` when placeholder count and args differ; `TypeError` when arg type does not match verb.
+- Errors: `ArityMismatch` when placeholder count and args differ; `TypeError` when arg type does not match verb; `RangeError` when formatted output exceeds 64 MB.
 - To get the formatted string instead of printing it, use `std.fmt.format`.
 
 ### `std.io.eprint(...args)`
@@ -67,7 +67,7 @@ implementation-independent bound is currently guaranteed.
 - Returns `null`.
 
 ### `std.io.eprintf(fmt, ...args)`
-- Like `std.io.printf` but writes to stderr.
+- Like `std.io.printf` but writes to stderr. The same 64 MB output cap applies.
 - Returns `null`.
 
 ### `std.io.eprintln(...args)`
@@ -119,12 +119,13 @@ implementation-independent bound is currently guaranteed.
 
 ### `std.fmt.format(fmt, ...args)`
 - Returns the formatted string. `fmt` uses the same Go-style verbs as `std.io.printf`.
-- Errors: `ArityMismatch` when placeholder count and args differ; `TypeError` when arg type does not match verb.
+- Errors: `ArityMismatch` when placeholder count and args differ; `TypeError` when arg type does not match verb; `RangeError` when formatted output exceeds 64 MB.
 
 ### `std.fmt.stringify(v)`
 - Returns `v` rendered as a string, exactly as `std.io.println` would display it.
 - Works for any value: scalars, arrays, maps, structs, variants, named types.
 - Returns `""` for a `null` argument.
+- Errors: `RangeError` when the rendered string exceeds 64 MB.
 
 ## std.core
 
@@ -331,7 +332,7 @@ log_args("x", std.Arg.Int(42), std.Arg.Bool(true), std.Arg.Str("hi"))
 
 ### `std.string.repeat(s, n)`
 - Returns `s` repeated `n` times
-- `n < 0` raises `RangeError`
+- Errors: `RangeError` if `n < 0` or if the result would exceed 64 MB
 
 ### `std.string.split_once(s, sep)`
 - Returns a 2-element array `[head, tail]` split on the first occurrence of `sep`
@@ -370,8 +371,7 @@ log_args("x", std.Arg.Int(42), std.Arg.Bool(true), std.Arg.Str("hi"))
 
 ### `std.string.split_n(s, sep, n)`
 - Splits `s` by `sep` into at most `n` substrings; final element contains the rest
-- With an empty separator, current behaviour is byte-oriented. Use
-  `std.string.split(s, "")` when splitting valid UTF-8 into runes.
+- With an empty separator, splits at UTF-8 codepoint boundaries (same behaviour as `std.string.split(s, "")`)
 
 ## std.array
 
@@ -632,6 +632,7 @@ the raw byte value. `std.bytes.u8` is the escape hatch: it takes any integer
 
 ### `std.bytes.repeat(s, n)`
 - Returns `s` repeated `n` times as a single binary string
+- Errors: `RangeError` if the result would exceed 64 MB
 
 ### `std.bytes.unpack(s)`
 - Returns an array of integer byte values (0–255) for each byte in `s`
@@ -741,7 +742,9 @@ Backtracking NFA engine. All functions accept either a pattern string or a compi
 
 Supported syntax: `.` `*` `+` `?` `^` `$` `|` `()` `[...]` `[^...]` character ranges, `\d` `\D` `\w` `\W` `\s` `\S` shorthands.
 
-Errors: `InvalidRegexp` on a malformed pattern.
+Errors: `InvalidRegexp` on a malformed pattern; `RangeError` when the input string `s` exceeds 1 MB.
+
+When a pattern's group alternation nesting exceeds 200 levels, the engine treats the input as not matching rather than erroring.
 
 ### `std.regexp.match(pattern, s)`
 - Returns `true` if `pattern` matches anywhere in `s`
@@ -834,7 +837,7 @@ Go-style text templates with `{{` / `}}` delimiters.
 | `.unix()` | `int` | Whole seconds since epoch |
 | `.unix_ms()` | `float` | Milliseconds since epoch |
 | `.parts()` | `map` | Keys: `year month day hour min sec ms weekday` (0=Sunday) |
-| `.format(fmt)` | `string` | |
+| `.format(fmt)` | `string` | Errors: `NoSpaceLeft` when the expanded format string exceeds 512 bytes |
 | `.add_ms(n)` | `std.Time` | |
 | `.add_s(n)` | `std.Time` | |
 | `.add_m(n)` | `std.Time` | |
@@ -846,7 +849,7 @@ Go-style text templates with `{{` / `}}` delimiters.
 | `.is_zero()` | `bool` | |
 | `.since()` | `float` | Milliseconds elapsed since this time (now − self) |
 | `.until()` | `float` | Milliseconds until this time (self − now) |
-| `.add_date(years, months, days)` | `std.Time` | Adds calendar units |
+| `.add_date(years, months, days)` | `std.Time` | Adds calendar units; errors: `RangeError` if the delta causes an i32 overflow in any component |
 | `.iso_week()` | `map` | Keys: `year`, `week` |
 
 ### `std.time.parse_duration(s)`

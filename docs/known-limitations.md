@@ -8,6 +8,8 @@ evidence and proposed resolutions, see the contributor-facing
 
 | Area | Current behaviour | Practical consequence |
 |---|---|---|
+| `else if` chain depth | The compiler limits `else if` chains to 256 levels and returns `NestingTooDeep` beyond that. | Refactor very deep chains into a `switch`, a helper function, or a data-driven lookup. |
+| Variant type field count | Variant types (all arms combined) are limited to 255 fields. Constructing or loading a variant with more fields is a runtime or GBC-reader error. | Decompose large variants or use nested structs. |
 | Inferred generic constraints | Constraints are checked for explicit type arguments but skipped after inferred type arguments. | Write explicit type arguments when a constraint must be enforced. `identity[bool](true)` is rejected for `T: numeric`; the inferred form currently succeeds. |
 | Standalone `decimal` declarations | `var value decimal` is rejected. Named fixed-point types such as `type Money decimal 2` work. | Use a named decimal type; do not describe bare `decimal` as a supported declaration type. |
 | Rune conversion | `rune(...)` is not a callable conversion. | Use a typed `rune` declaration from an integer code point, then `string(r)` where text is required. |
