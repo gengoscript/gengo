@@ -24,6 +24,21 @@ pub const PackageRegistry = struct {
     count: u8 = 0,
 };
 
+// Zip header fields (offsets/sizes) are u32 and attacker-controlled by the
+// bundle's own bytes, independent of the actual data.len; a plain `a + b`
+// bounds check can wrap on a 32-bit usize target (this codebase's primary
+// target is WASI/wasm32) even though it can't wrap on a 64-bit usize. A
+// wrapped sum passes a `> data.len` check it should have failed, and the
+// (unwrapped, still-huge) offset then drives an out-of-bounds slice/pointer
+// dereference. engine_load_bundle/engine_load_bundle_dir are host-only entry
+// points (never reachable from a Gengo script), but a malformed/crafted zip
+// bundle should still fail loudly rather than corrupt memory or trap.
+fn checkedAdd(a: usize, b: usize) LoadError!usize {
+    const sum, const overflow = @addWithOverflow(a, b);
+    if (overflow != 0) return error.InvalidZip;
+    return sum;
+}
+
 pub fn clearRegistry(reg: *PackageRegistry) void {
     for (reg.packages[0..reg.count]) |*pkg| {
         for (pkg.files[0..pkg.file_count]) |*f| {
@@ -91,7 +106,8 @@ pub fn loadFromZip(reg: *PackageRegistry, name: []const u8, data: []const u8) Lo
     const end_rec = findEndRecord(data) orelse return error.InvalidZip;
     const cd_offset: usize = @intCast(end_rec.cd_offset);
     const cd_size: usize = @intCast(end_rec.cd_size);
-    if (cd_offset + cd_size > data.len) return error.InvalidZip;
+    const cd_range_end = try checkedAdd(cd_offset, cd_size);
+    if (cd_range_end > data.len) return error.InvalidZip;
 
     var pkg = &reg.packages[reg.count];
     pkg.name_len = @intCast(name.len);
@@ -106,7 +122,7 @@ pub fn loadFromZip(reg: *PackageRegistry, name: []const u8, data: []const u8) Lo
     }
 
     var cd_pos: usize = cd_offset;
-    const cd_end: usize = cd_offset + cd_size;
+    const cd_end: usize = cd_range_end;
 
     while (cd_pos + @sizeOf(std.zip.CentralDirectoryFileHeader) <= cd_end) {
         const cd_hdr: *align(1) const std.zip.CentralDirectoryFileHeader =
@@ -116,8 +132,9 @@ pub fn loadFromZip(reg: *PackageRegistry, name: []const u8, data: []const u8) Lo
 
         const fn_start = cd_pos + @sizeOf(std.zip.CentralDirectoryFileHeader);
         const fn_len: usize = cd_hdr.filename_len;
-        if (fn_start + fn_len > data.len) return error.InvalidZip;
-        const filename = data[fn_start .. fn_start + fn_len];
+        const fn_end = try checkedAdd(fn_start, fn_len);
+        if (fn_end > data.len) return error.InvalidZip;
+        const filename = data[fn_start..fn_end];
 
         cd_pos += @sizeOf(std.zip.CentralDirectoryFileHeader) +
             @as(usize, cd_hdr.filename_len) +
@@ -138,16 +155,17 @@ pub fn loadFromZip(reg: *PackageRegistry, name: []const u8, data: []const u8) Lo
         if (method != .store and method != .deflate) continue;
 
         const local_off: usize = cd_hdr.local_file_header_offset;
-        if (local_off + @sizeOf(std.zip.LocalFileHeader) > data.len) return error.InvalidZip;
+        const local_hdr_end = try checkedAdd(local_off, @sizeOf(std.zip.LocalFileHeader));
+        if (local_hdr_end > data.len) return error.InvalidZip;
         const lhdr: *align(1) const std.zip.LocalFileHeader = @ptrCast(data[local_off..].ptr);
         if (!std.mem.eql(u8, &lhdr.signature, &std.zip.local_file_header_sig)) return error.InvalidZip;
 
-        const data_start = local_off + @sizeOf(std.zip.LocalFileHeader) +
-            @as(usize, lhdr.filename_len) + @as(usize, lhdr.extra_len);
+        const data_start = try checkedAdd(try checkedAdd(local_hdr_end, lhdr.filename_len), lhdr.extra_len);
         const csize: usize = cd_hdr.compressed_size;
-        if (data_start + csize > data.len) return error.InvalidZip;
+        const data_end = try checkedAdd(data_start, csize);
+        if (data_end > data.len) return error.InvalidZip;
 
-        const compressed = data[data_start .. data_start + csize];
+        const compressed = data[data_start..data_end];
         const usize_unc: usize = cd_hdr.uncompressed_size;
 
         const src_buf = std.heap.page_allocator.alloc(u8, usize_unc) catch return error.OutOfMemory;
@@ -259,4 +277,20 @@ test "resolve finds file in package" {
 
     const with_ext = resolve(&reg, "mylib/core.gengo");
     try std.testing.expect(with_ext != null);
+}
+
+// Regression: loadFromZip's bounds checks on zip header offset/size fields
+// (all attacker-controlled u32s from the bundle's own bytes) used plain `a +
+// b > data.len` additions. That can't overflow a 64-bit usize for two u32
+// values, but this codebase's primary target is WASI/wasm32, where usize is
+// 32-bit — there a wrapped sum can pass a bounds check it should have
+// failed, and the (still-huge) unwrapped offset then drives an
+// out-of-bounds slice/pointer dereference. Can't reproduce the wraparound
+// itself on a 64-bit test host with real u32 zip fields, so this exercises
+// checkedAdd directly with genuinely usize-overflowing input instead.
+test "checkedAdd rejects usize overflow instead of wrapping" {
+    try std.testing.expectError(error.InvalidZip, checkedAdd(std.math.maxInt(usize), 1));
+    try std.testing.expectError(error.InvalidZip, checkedAdd(std.math.maxInt(usize) - 3, 10));
+    try std.testing.expectEqual(@as(usize, 5), try checkedAdd(2, 3));
+    try std.testing.expectEqual(@as(usize, 0), try checkedAdd(0, 0));
 }
