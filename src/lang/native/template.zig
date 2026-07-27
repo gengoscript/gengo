@@ -427,19 +427,19 @@ pub fn tplParse(ctx: VMContext, src_val: Value, src: []const u8) !Value {
     // / tplSplitPath cannot sweep elements already written into args[].
     const ops_root = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
     defer ctx.vs.popTempRoot();
-    const ops = try vmgc.vmAllocManagedSlice(ctx, Value, inst_count);
+    var ops = try vmgc.vmAllocManagedSlice(ctx, Value, inst_count);
     ops_root.* = .{ .array_managed = ops };
     for (ops) |*v| v.* = .null;
 
     const args_root = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
     defer ctx.vs.popTempRoot();
-    const args = try vmgc.vmAllocManagedSlice(ctx, Value, inst_count);
+    var args = try vmgc.vmAllocManagedSlice(ctx, Value, inst_count);
     args_root.* = .{ .array_managed = args };
     for (args) |*v| v.* = .null;
 
     const jmp_root = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
     defer ctx.vs.popTempRoot();
-    const jmp = try vmgc.vmAllocManagedSlice(ctx, Value, inst_count);
+    var jmp = try vmgc.vmAllocManagedSlice(ctx, Value, inst_count);
     jmp_root.* = .{ .array_managed = jmp };
     for (jmp) |*v| v.* = .null;
 
@@ -449,6 +449,12 @@ pub fn tplParse(ctx: VMContext, src_val: Value, src: []const u8) !Value {
     var ctrl_top: usize = 0;
 
     while (pos < src.len) {
+        // Re-derive managed slices at the top of each iteration: tplParseTag
+        // (via tplSplitPath/makeDynString) can compact the managed heap,
+        // making the outer `ops`/`args`/`jmp` variables stale.
+        ops = ops_root.array_managed;
+        args = args_root.array_managed;
+        jmp = jmp_root.array_managed;
         if (std.mem.indexOfPos(u8, src, pos, "{{")) |start| {
             if (start > pos) {
                 ops[idx] = .{ .float = @floatFromInt(@intFromEnum(TplOp.text)) };
@@ -464,6 +470,10 @@ pub fn tplParse(ctx: VMContext, src_val: Value, src: []const u8) !Value {
                 continue;
             }
             const parsed = try tplParseTag(ctx, tag);
+            // Re-derive after tplParseTag which may have compacted via tplSplitPath.
+            ops = ops_root.array_managed;
+            args = args_root.array_managed;
+            jmp = jmp_root.array_managed;
 
             if (parsed.op == .end) {
                 var scope_pop: f64 = 0;
@@ -567,9 +577,6 @@ pub fn tplExec(ctx: VMContext, tmpl: *Object, data: Value) !Value {
     const funcs_v = tplFieldValue(tmpl, "funcs");
 
     if (ops_v != .object) return error.TypeError;
-    const ops = tplAsArraySlice(ops_v.object);
-    const args = tplAsArraySlice(args_v.object);
-    const jmps = tplAsArraySlice(jmp_v.object);
 
     const sb_obj = try vmgc.allocTempRooted(ctx, .{ .string_builder = .{ .buf = &[_]u8{}, .len = 0 } });
     defer ctx.vs.popTempRoot();
@@ -581,7 +588,14 @@ pub fn tplExec(ctx: VMContext, tmpl: *Object, data: Value) !Value {
     var iter_stack: [64]IterState = undefined;
     var iter_top: usize = 0;
 
-    while (ip < ops.len) {
+    while (true) {
+        // Re-derive managed slices at the top of each iteration: allocations in
+        // the loop body (string appends, range, with) can compact the managed
+        // heap, invalidating previously captured []Value slice variables.
+        const ops = tplAsArraySlice(ops_v.object);
+        if (ip >= ops.len) break;
+        const args = tplAsArraySlice(args_v.object);
+        const jmps = tplAsArraySlice(jmp_v.object);
         const op_v = ops[ip];
         if (op_v != .int and op_v != .float) return error.TypeError;
         const op_num: f64 = if (op_v == .int) @floatFromInt(op_v.int) else op_v.float;
@@ -758,11 +772,16 @@ pub fn tplAddFunc(ctx: VMContext, tmpl_obj: *Object, name: []const u8, func_val:
                     }
                 }
             }
-            const new_items = try vmgc.vmAllocManagedSlice(ctx, MapEntry, m.len + 1);
-            @memcpy(new_items[0..m.len], m);
-            new_items[m.len] = .{ .key = .{ .string = try ctx.cs.internStr(name) }, .value = func_val };
-            ctx.hs.freeManagedSlice(MapEntry, m);
-            funcs_obj.* = .{ .map_managed = new_items[0 .. m.len + 1] };
+            const old_len = m.len;
+            const new_items = try vmgc.vmAllocManagedSlice(ctx, MapEntry, old_len + 1);
+            // Re-derive m after the allocation which may have compacted the heap:
+            // funcs_obj is reachable through the template object (a GC root), so
+            // after compaction funcs_obj.map_managed is updated to the new location.
+            const m_now = funcs_obj.map_managed;
+            @memcpy(new_items[0..old_len], m_now[0..old_len]);
+            new_items[old_len] = .{ .key = .{ .string = try ctx.cs.internStr(name) }, .value = func_val };
+            ctx.hs.freeManagedSlice(MapEntry, m_now);
+            funcs_obj.* = .{ .map_managed = new_items[0 .. old_len + 1] };
         },
         else => return error.TypeError,
     }

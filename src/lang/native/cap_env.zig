@@ -84,17 +84,21 @@ fn envListPosix(ctx: VMContext) !void {
         try pushEmptyMap(ctx);
         return;
     }
-    const entries = try vmgc.vmAllocManagedSlice(ctx, MapEntry, count);
+    // Allocate map_obj first so entries can be stored into it before any
+    // further allocation that might trigger compaction.
     const map_obj = try vmgc.allocTempRooted(ctx, .{ .map = &[_]MapEntry{} });
     defer ctx.vs.popTempRoot();
+    const entries = try vmgc.vmAllocManagedSlice(ctx, MapEntry, count);
+    // Root immediately so GC can trace the backing through map_obj.
+    map_obj.* = .{ .map_managed = entries[0..count] };
     for (slice, 0..) |ptr, i| {
         const raw = std.mem.span(ptr);
         const eq = std.mem.indexOfScalar(u8, raw, '=') orelse raw.len;
         const k = try ctx.cs.internStr(raw[0..eq]);
         const v = try ctx.cs.internStr(if (eq < raw.len) raw[eq + 1 ..] else "");
-        entries[i] = .{ .key = .{ .string = k }, .value = .{ .string = v } };
+        // Write through the object to use the current backing after any compaction.
+        map_obj.map_managed[i] = .{ .key = .{ .string = k }, .value = .{ .string = v } };
     }
-    map_obj.* = .{ .map_managed = entries[0..count] };
     try ctx.vs.vmPush(.{ .object = map_obj });
 }
 
@@ -114,17 +118,21 @@ fn envListWasi(ctx: VMContext) !void {
         try pushEmptyMap(ctx);
         return;
     }
-    const entries = try vmgc.vmAllocManagedSlice(ctx, MapEntry, count);
+    // Allocate map_obj first so entries can be stored into it before any
+    // further allocation that might trigger compaction.
     const map_obj = try vmgc.allocTempRooted(ctx, .{ .map = &[_]MapEntry{} });
     defer ctx.vs.popTempRoot();
+    const entries = try vmgc.vmAllocManagedSlice(ctx, MapEntry, count);
+    // Root immediately so GC can trace the backing through map_obj.
+    map_obj.* = .{ .map_managed = entries[0..count] };
     for (ptrs, 0..) |ptr, i| {
         const raw = std.mem.span(ptr);
         const eq = std.mem.indexOfScalar(u8, raw, '=') orelse raw.len;
         const k = try ctx.cs.internStr(raw[0..eq]);
         const v = try ctx.cs.internStr(if (eq < raw.len) raw[eq + 1 ..] else "");
-        entries[i] = .{ .key = .{ .string = k }, .value = .{ .string = v } };
+        // Write through the object to use the current backing after any compaction.
+        map_obj.map_managed[i] = .{ .key = .{ .string = k }, .value = .{ .string = v } };
     }
-    map_obj.* = .{ .map_managed = entries[0..count] };
     try ctx.vs.vmPush(.{ .object = map_obj });
 }
 

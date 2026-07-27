@@ -112,6 +112,7 @@ pub fn timeFormatStr(ctx: VMContext, ms: f64, fmt: []const u8) !Value {
             switch (verb) {
                 'Y' => {
                     if (parts.year < 0) {
+                        if (pos >= buf.len) return error.NoSpaceLeft;
                         buf[pos] = '-';
                         pos += 1;
                         const abs: u32 = @intCast(-@as(i64, parts.year));
@@ -148,31 +149,37 @@ pub fn timeFormatStr(ctx: VMContext, ms: f64, fmt: []const u8) !Value {
                 },
                 'A' => {
                     const s = weekdays[parts.weekday];
+                    if (pos + s.len > buf.len) return error.NoSpaceLeft;
                     @memcpy(buf[pos..][0..s.len], s);
                     pos += s.len;
                 },
                 'a' => {
                     const s = weekdays_short[parts.weekday];
+                    if (pos + s.len > buf.len) return error.NoSpaceLeft;
                     @memcpy(buf[pos..][0..s.len], s);
                     pos += s.len;
                 },
                 'B' => {
                     const s = months[parts.month];
+                    if (pos + s.len > buf.len) return error.NoSpaceLeft;
                     @memcpy(buf[pos..][0..s.len], s);
                     pos += s.len;
                 },
                 'b' => {
                     const s = months_short[parts.month];
+                    if (pos + s.len > buf.len) return error.NoSpaceLeft;
                     @memcpy(buf[pos..][0..s.len], s);
                     pos += s.len;
                 },
                 '%' => {
+                    if (pos >= buf.len) return error.NoSpaceLeft;
                     buf[pos] = '%';
                     pos += 1;
                 },
                 else => return error.TypeError,
             }
         } else {
+            if (pos >= buf.len) return error.NoSpaceLeft;
             buf[pos] = fmt[i];
             pos += 1;
             i += 1;
@@ -521,6 +528,9 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             const y = try vms.valueAsInt(ctx.vs.vmTop(2));
             const m = try vms.valueAsInt(ctx.vs.vmTop(1));
             const d = try vms.valueAsInt(ctx.vs.vmTop(0));
+            if (y < std.math.minInt(i32) or y > std.math.maxInt(i32)) return error.RangeError;
+            if (m < std.math.minInt(i32) or m > std.math.maxInt(i32)) return error.RangeError;
+            if (d < std.math.minInt(i32) or d > std.math.maxInt(i32)) return error.RangeError;
             const out = try timeAddDate(ctx, ms, @intCast(y), @intCast(m), @intCast(d));
             ctx.vs.vmPopArgs(argc);
             try ctx.vs.vmPush(out);
