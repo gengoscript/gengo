@@ -299,19 +299,25 @@ pub fn nativeConvToString(ctx: VMContext, v: Value) !Value {
             var buf: [1024]u8 = undefined;
             var pos: usize = 0;
             const tn = iv_typ.variant_type.name;
+            if (pos + tn.len > buf.len) return error.RangeError;
             @memcpy(buf[pos..][0..tn.len], tn);
             pos += tn.len;
+            if (pos >= buf.len) return error.RangeError;
             buf[pos] = '.';
             pos += 1;
+            if (pos + arm.name.len > buf.len) return error.RangeError;
             @memcpy(buf[pos..][0..arm.name.len], arm.name);
             pos += arm.name.len;
             if (payload != .null) {
                 const inner_v = try nativeConvToString(ctx, payload);
                 const inner_s = try vms.asStringValue(inner_v);
+                if (pos >= buf.len) return error.RangeError;
                 buf[pos] = '(';
                 pos += 1;
+                if (pos + inner_s.len > buf.len) return error.RangeError;
                 @memcpy(buf[pos..][0..inner_s.len], inner_s);
                 pos += inner_s.len;
+                if (pos >= buf.len) return error.RangeError;
                 buf[pos] = ')';
                 pos += 1;
             }
@@ -683,11 +689,11 @@ fn cloneObject(ctx: VMContext, src: *Object, visits: []CloneVisit, visit_len: *u
         .string_view => |sv| return vmgc.makeDynString(ctx, sv.bytes),
         .string_builder => |sb| {
             const out_obj = try vmgc.allocTempRooted(ctx, .{ .string_builder = .{ .buf = &[_]u8{}, .len = 0 } });
-            if (sb.len == 0) {} else {
+            defer ctx.vs.popTempRoot();
+            if (sb.len != 0) {
                 const new_buf = try vmgc.vmAllocManagedBytes(ctx, sb.len);
                 @memcpy(new_buf[0..sb.len], sb.buf[0..sb.len]);
                 out_obj.* = .{ .string_builder = .{ .buf = new_buf, .len = sb.len } };
-                ctx.vs.popTempRoot();
             }
             return .{ .object = out_obj };
         },

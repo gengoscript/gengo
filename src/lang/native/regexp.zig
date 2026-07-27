@@ -13,14 +13,19 @@ const chunk = @import("../chunk.zig");
 
 const RegexpQualifiedName = @import("../module_descriptor.zig").RegexpQualifiedName;
 const MaxPatternLen = 4096;
+// Maximum recursion depth for matchAlt: each star frame stack-allocates
+// ~4 KB (var ends: [512]usize), so 200 levels ≈ 800 KB — well within the
+// 2 MB default thread stack even with overhead from matchAny's own frame.
+const MaxMatchDepth = 200;
 
 // Compiled pattern cache — avoids re-parsing constant patterns on every predicate check.
-// Keyed by (pointer, length): stable for constant-pool strings and bump-heap objects alike.
-// Owned per-runtime (lives in vm_state.State) so a cached pattern pointer never
-// outlives the runtime whose memory it points into.  LRU-evict at MaxCacheEntries.
+// Keyed by content hash + byte comparison: safe across GC compaction that may relocate
+// the original managed string, which would make a pointer-based key produce false hits.
+// Owned per-runtime (lives in vm_state.State).  LRU-evict at MaxCacheEntries.
 const PatternCacheEntry = struct {
-    pattern_ptr: [*]const u8,
+    pattern_hash: u64,
     pattern_len: usize,
+    pattern_bytes: [MaxPatternLen]u8,
     alts: []Alt,
 };
 const MaxCacheEntries = 32;
@@ -319,7 +324,8 @@ fn childNode(node: Node) Node {
     };
 }
 
-fn matchAlt(alt: Alt, s: []const u8, pos: usize) ?usize {
+fn matchAlt(alt: Alt, s: []const u8, pos: usize, depth: u32) ?usize {
+    if (depth >= MaxMatchDepth) return null;
     var p = pos;
     var i: usize = 0;
     while (i < alt.len) {
@@ -344,7 +350,7 @@ fn matchAlt(alt: Alt, s: []const u8, pos: usize) ?usize {
                 var count: usize = 0;
                 var cur = p;
                 while (count < ends.len - 1) {
-                    if (matchAlt(child_alt, s, cur)) |e| {
+                    if (matchAlt(child_alt, s, cur, depth + 1)) |e| {
                         if (e == cur) break;
                         count += 1;
                         cur = e;
@@ -355,7 +361,7 @@ fn matchAlt(alt: Alt, s: []const u8, pos: usize) ?usize {
                 }
                 var idx = count;
                 while (true) {
-                    if (matchAlt(alt[i + 1 ..], s, ends[idx])) |result| return result;
+                    if (matchAlt(alt[i + 1 ..], s, ends[idx], depth + 1)) |result| return result;
                     if (idx == 0) break;
                     idx -= 1;
                 }
@@ -369,7 +375,7 @@ fn matchAlt(alt: Alt, s: []const u8, pos: usize) ?usize {
                 var count: usize = 0;
                 var cur = p;
                 while (count < ends.len) {
-                    if (matchAlt(child_alt, s, cur)) |e| {
+                    if (matchAlt(child_alt, s, cur, depth + 1)) |e| {
                         if (e == cur) break;
                         ends[count] = e;
                         count += 1;
@@ -382,7 +388,7 @@ fn matchAlt(alt: Alt, s: []const u8, pos: usize) ?usize {
                 var idx = count;
                 while (idx > 0) {
                     idx -= 1;
-                    if (matchAlt(alt[i + 1 ..], s, ends[idx])) |result| return result;
+                    if (matchAlt(alt[i + 1 ..], s, ends[idx], depth + 1)) |result| return result;
                 }
                 return null;
             },
@@ -390,16 +396,16 @@ fn matchAlt(alt: Alt, s: []const u8, pos: usize) ?usize {
                 const child = childNode(node);
                 var child_arr = [_]Node{child};
                 const child_alt: Alt = &child_arr;
-                if (matchAlt(child_alt, s, p)) |end| {
-                    if (matchAlt(alt[i + 1 ..], s, end)) |result| return result;
+                if (matchAlt(child_alt, s, p, depth + 1)) |end| {
+                    if (matchAlt(alt[i + 1 ..], s, end, depth + 1)) |result| return result;
                 }
-                return matchAlt(alt[i + 1 ..], s, p);
+                return matchAlt(alt[i + 1 ..], s, p, depth + 1);
             },
             .group => {
                 // Try each alternative; only commit if the continuation also succeeds.
                 for (node.children) |child_alt| {
-                    if (matchAlt(child_alt, s, p)) |m| {
-                        if (matchAlt(alt[i + 1 ..], s, m)) |result| return result;
+                    if (matchAlt(child_alt, s, p, depth + 1)) |m| {
+                        if (matchAlt(alt[i + 1 ..], s, m, depth + 1)) |result| return result;
                     }
                 }
                 return null;
@@ -410,15 +416,15 @@ fn matchAlt(alt: Alt, s: []const u8, pos: usize) ?usize {
     return p;
 }
 
-fn matchAny(alts: []Alt, s: []const u8, pos: usize) ?usize {
+fn matchAny(alts: []Alt, s: []const u8, pos: usize, depth: u32) ?usize {
     for (alts) |alt| {
-        if (matchAlt(alt, s, pos)) |end| return end;
+        if (matchAlt(alt, s, pos, depth)) |end| return end;
     }
     return null;
 }
 
 fn fullMatch(alts: []Alt, s: []const u8) bool {
-    return (matchAny(alts, s, 0) orelse return false) == s.len;
+    return (matchAny(alts, s, 0, 0) orelse return false) == s.len;
 }
 
 // A pattern that can match zero characters (a bare anchor like `^`, or a
@@ -432,12 +438,12 @@ fn fullMatch(alts: []Alt, s: []const u8) bool {
 // against s.len themselves).
 fn findMatch(alts: []Alt, s: []const u8) ?struct { usize, usize } {
     if (alts.len > 0 and alts[0].len > 0 and alts[0][0].kind == .caret) {
-        const end = matchAny(alts, s, 0) orelse return null;
+        const end = matchAny(alts, s, 0, 0) orelse return null;
         return .{ 0, end };
     }
     var i: usize = 0;
     while (i <= s.len) : (i += 1) {
-        if (matchAny(alts, s, i)) |end| return .{ i, end };
+        if (matchAny(alts, s, i, 0)) |end| return .{ i, end };
     }
     return null;
 }
@@ -446,7 +452,7 @@ fn findAllMatches(alts: []Alt, s: []const u8, alloc: std.mem.Allocator) ![]struc
     var matches = AlignedManaged(struct { usize, usize }, null).init(alloc);
     var i: usize = 0;
     while (i <= s.len) {
-        if (matchAny(alts, s, i)) |end| {
+        if (matchAny(alts, s, i, 0)) |end| {
             try matches.append(.{ i, end });
             // A zero-width match must still advance i, or every remaining
             // call would re-match the same empty string at the same spot
@@ -474,27 +480,38 @@ fn freeAlts(alts: []Alt) void {
     alloc.free(alts);
 }
 
-// Return compiled pattern alts, parsing only on first use per (ptr, len) key.
+// Return compiled pattern alts, parsing only on first use per content key.
 // The cache owns the memory; callers must NOT call freeAlts on the returned slice.
 fn parsePattern(ctx: VMContext, pattern: []const u8) ParseError![]Alt {
     if (pattern.len > MaxPatternLen) return error.PatternTooLong;
     const cache = &ctx.vs.re_pattern_cache;
-    // Fast path: check cache by pointer identity (stable for constant-pool and bump-heap strings).
+    // Fast path: check cache by content hash and full byte comparison.
+    // Using pointer identity as the key is wrong: GC compaction can relocate
+    // the managed string backing, causing a later string at the same address
+    // to get a false cache hit and receive the wrong compiled regex.
+    const hash = std.hash.Wyhash.hash(0, pattern);
     for (cache.entries[0..cache.len]) |entry| {
-        if (entry.pattern_ptr == pattern.ptr and entry.pattern_len == pattern.len) {
+        if (entry.pattern_hash == hash and entry.pattern_len == pattern.len and
+            std.mem.eql(u8, entry.pattern_bytes[0..pattern.len], pattern))
+        {
             return entry.alts;
         }
     }
     // Slow path: parse and cache.
     const alts = try parseAlts(std.heap.page_allocator, pattern, 0, pattern.len);
+    var new_entry: PatternCacheEntry = undefined;
+    new_entry.pattern_hash = hash;
+    new_entry.pattern_len = pattern.len;
+    @memcpy(new_entry.pattern_bytes[0..pattern.len], pattern);
+    new_entry.alts = alts;
     if (cache.len < MaxCacheEntries) {
-        cache.entries[cache.len] = .{ .pattern_ptr = pattern.ptr, .pattern_len = pattern.len, .alts = alts };
+        cache.entries[cache.len] = new_entry;
         cache.len += 1;
     } else {
         // Evict oldest entry (index 0) and append new one at the end.
         freeAlts(cache.entries[0].alts);
         for (0..MaxCacheEntries - 1) |i| cache.entries[i] = cache.entries[i + 1];
-        cache.entries[MaxCacheEntries - 1] = .{ .pattern_ptr = pattern.ptr, .pattern_len = pattern.len, .alts = alts };
+        cache.entries[MaxCacheEntries - 1] = new_entry;
     }
     return alts;
 }
