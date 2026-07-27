@@ -830,7 +830,26 @@ fn testNetCapabilityHandlers() void {
         }
     }
 
+    // `state` is stack-local to this function; net_state.g_net_handlers must
+    // not keep pointing at it once we return (see testNetCapabilityHandlersCleanup).
+    net_state.resetHandlers();
+
     out("  net capability handlers: OK\n");
+}
+
+// Regression: testNetCapabilityHandlers() registers global net handlers whose
+// userdata points at a stack-local MockNetState. Once that function returns,
+// the stack frame is dead — if the handler registration is never cleared,
+// net_state.g_net_handlers keeps a dangling userdata pointer live in global
+// state for the rest of the process. Nothing later in this binary happens to
+// dial through cap:net again, so today it's a landmine rather than an active
+// crash, but any later test (or reordering) that dials again would hand that
+// stale pointer straight to a native callback. The http-capability test
+// mirrors this correctly via http_state.resetHandler(); net capability
+// handlers must be reset the same way.
+fn testNetCapabilityHandlersCleanup() void {
+    if (net_state.hasHandlers()) fail("engine FAIL: net handlers leaked past their owning test (dangling userdata in global state)\n");
+    out("  net capability handlers cleanup: OK\n");
 }
 
 const MockHttpState = struct {
@@ -1357,6 +1376,7 @@ export fn _start() void {
     testGcStressWindows();
     testNetCapability();
     testNetCapabilityHandlers();
+    testNetCapabilityHandlersCleanup();
     testInitWithConfig();
     testInitFailure();
     testStructReturn();
