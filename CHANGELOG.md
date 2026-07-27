@@ -2,6 +2,50 @@
 
 This changelog tracks notable language/runtime changes by implementation date.
 
+## 2026-07-27 (v0.5.1-dev)
+
+### Security / Correctness — Multi-wave hardening audit (waves 4 + 5)
+
+A systematic audit of the VM, compiler, GBC reader/writer, and all native stdlib modules found and fixed 39 additional issues. All are in-repo commits ea8500f / ab23a4a / 2d5be04 / 9809208 / 21a1dab and their wave-4/5 predecessors.
+
+**User-visible breaking changes:**
+
+- **`allow_io` defaults to `false`** — `std.io` output is now suppressed unless the host explicitly sets `allow_io = true`. Embeddings that relied on the previous default-allow must update their config.
+- **`string.split_n(s, "", n)` now splits at UTF-8 codepoint boundaries** — previously byte-oriented. Code relying on byte-level splitting with an empty separator must switch to `std.bytes` operations.
+
+**New errors / limits:**
+
+- `HostValueTooDeep` — `ValueWire` values nested deeper than 64 levels; raised by `engine_call` / `engine_get_global` and host module calls instead of overflowing the call stack.
+- `HostValueTooLarge` — a wire value's `len` field exceeds the u32 maximum.
+- `NoSpaceLeft` — `std.Time.format` raises this when the expanded format string exceeds 512 bytes.
+- `NestingTooDeep` — compiler error for `else if` chains exceeding 256 levels.
+- `RangeError` from: `string.repeat`/`bytes.repeat` (result > 64 MB); `io.printf`/`fmt.format`/`fmt.stringify` (output > 64 MB); all `std.regexp` functions (input > 1 MB); `time.add_date` (i32 overflow).
+- `MalformedSection` — GBC reader now rejects `named_return_count > 64`.
+
+**Bug fixes (non-breaking):**
+
+- IC warm-path field indices in crafted `.gbc` files were not range-checked; now guarded against OOB reads.
+- Variant type field count (> 255 combined) now produces an error instead of silent corruption.
+- Integer default parameter values now parsed as exact `i64` (no intermediate `f64`); integers > 2^53 were silently rounded.
+- `std.core.deep_equal` no longer panics for maps with more than 128 entries.
+- Import sandbox path-traversal check now runs before any filesystem probe for all import kinds.
+- GBC writer now asserts `named_return_count <= 64` and `writeTypeSpec` is depth-limited to 64 levels.
+- Defuse pass correctly handles `ret_const` and avoids double-remapping shared `FuncObj` pointers.
+- Fusion pass now marks `.closure` and `.named_type` predicate-const IPs as branch targets.
+- `bytes.unpack`: container object allocated before slice to avoid stale-slice UAF.
+- `string.split_n` with empty sep now uses `utf8RuneCount`/`utf8NextRuneByteLen` for correct UTF-8 iteration.
+- `core.deep_equal` for maps > 128 entries now heap-allocates the `used []bool` array.
+- `template` exec/parse/add_func: re-derive slice pointers after any allocation to prevent stale-slice UAF.
+- `cap_env` list: map object allocated before entries to prevent stale-slice UAF.
+- `regexp`: `MaxMatchDepth = 200` prevents recursion overflow; content-hash cache key prevents false cache hits.
+- `time.format`: buffer bounds checked on every write; `time.add_date` uses `@addWithOverflow`.
+- `core.nativeConvToString` inline-variant path: bounds checks before each write.
+- `io.sprintf`/`fmt.stringify`: 64 MB cap enforced.
+- `arraySlice`: re-derives `items_now` after `vmAllocObject` to prevent stale-slice UAF.
+- `stringSlice`/`stringIndex`: use new `makeStringViewFromStringObj` helper that allocates first, then re-derives bytes, preventing stale-slice UAF.
+- `vm_types.zig` rune-from-float: guards `t < 0 or t > 0x10FFFF`; string-arm: derives a fresh `dyn_string` from the source object after allocation.
+- `resolveImportPath`: sandbox check runs before `sourceExists` for escaping paths.
+
 ## 2026-07-25 (latest) (v0.5.1-dev)
 
 ### Runtime — `cap:net` gains `net.listen`/`Listener` (server-side sockets), gated by a new general capability-scope mechanism

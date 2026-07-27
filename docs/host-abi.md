@@ -166,6 +166,16 @@ by the `call_id` the host itself chose when registering that function (see
 
 The current ABI version is `2`. The VM requires an exact version match when using the host backend.
 
+## Wire Depth Limit
+
+`ValueWire` serialization is bounded by a recursive nesting depth of 64 in
+both directions. A host returning a value nested deeper than 64 levels, or a
+script returning such a value to the host, produces `HostValueTooDeep` rather
+than overflowing the call stack. A wire value whose `len` field (for strings,
+arrays, or maps) exceeds the u32 maximum produces `HostValueTooLarge`. Design
+host module return values to stay well within the depth limit; flatten deeply
+nested structures before returning them.
+
 ## Safety Notes
 
 When implementing the host ABI:

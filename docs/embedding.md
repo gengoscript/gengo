@@ -24,7 +24,7 @@ Important `api.Config` fields:
 
 | Field | Purpose |
 |---|---|---|
-| `allow_io` | Enable or suppress `std.io` output |
+| `allow_io` | Enable or suppress `std.io` output (default: `false`) |
 | `native_backend` | `.embedded` (default) or `.host` (WASM/callback mode) |
 | `max_ops` | Instruction budget; `null` means unlimited |
 | `enable_predicates` | Enable `predicate` clause on named types (default `true`) |

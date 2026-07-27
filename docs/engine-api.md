@@ -48,6 +48,13 @@ after destruction. A returned collection is limited by the engine's current
 wire scratch capacity (256 element records; maps consume two records per
 entry), and serialization failure is reported as a runtime error.
 
+Wire serialization is bounded by a recursive nesting depth of 64 on both
+the input and output sides. A script returning (or receiving) a value nested
+deeper than 64 levels causes the call to fail with `HostValueTooDeep` rather
+than overflowing the host call stack. A wire value whose `len` field exceeds
+the u32 maximum returns `HostValueTooLarge`. Both conditions surface as
+runtime errors through the normal `engine_last_error` path.
+
 `gengo_host_call_fn` arguments are engine-owned and valid only while the
 callback is executing. A callback may provide an output wire backed by host
 memory, but that memory must remain valid until the callback returns; the

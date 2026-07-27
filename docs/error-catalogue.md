@@ -21,6 +21,7 @@ failed; control continues according to the recovered function's return path.
 
 | Error | Meaning | Typical correction |
 |---|---|---|
+| `NestingTooDeep` | An `else if` chain exceeds 256 levels. | Refactor deeply nested conditionals into a `switch`, a helper function, or a data-driven lookup. |
 | `InvalidChar`, `BadEscape`, `UnterminatedString`, `BadNumber` | Source text contains an invalid character, literal escape, unfinished string, or malformed number. | Correct the literal or source encoding. |
 | `UnexpectedToken`, `ExpectedExpression`, `ExpectedTypeName` | The source does not match the expected syntax. | Check the diagnostic line/column and surrounding delimiter or keyword. |
 | `UndefinedVariable`, `NotDefined` | A referenced binding is not visible at that point. | Declare it first, import the correct module, or correct its spelling. |
@@ -38,11 +39,14 @@ failed; control continues according to the recovered function's return path.
 |---|---|---|
 | `TypeError`, `TypeMismatch`, `ArityMismatch` | A dynamic value or call does not satisfy the required type or argument count. | Validate dynamic input; use typed declarations and direct function calls where possible. |
 | `NotAFunction`, `UnknownMethod`, `UnknownField` | Code calls a non-callable value or accesses a missing member. | Check the receiver/value shape before dynamic access. |
-| `IndexOutOfBounds`, `RangeError` | An array/string index, slice, or byte-decoding range is invalid. | Validate bounds and input length. |
+| `IndexOutOfBounds`, `RangeError` | An array/string index, slice, or byte-decoding range is invalid; also raised by stdlib functions when an output would exceed a size cap. | Validate bounds and input length. |
 | `DivisionByZero` | Integer division or remainder has a zero divisor. | Check the divisor before the operation. |
 | `PredicateFailed` | A named predicate type rejects a value. | Validate input before constructing the constrained value. |
 | `AssertionFailed` | `assert` received `false`. | Use it for test/invariant failures; recover only when the caller has a meaningful policy. |
 | `TrapFired` | A `trap` binding received a non-null value. | Handle the returned error/value before binding it to `trap`, or recover in a deferred function. |
+| `NoSpaceLeft` | A formatting or time-format operation ran out of its output buffer. For example, `std.Time.format` raises this when the expanded format string exceeds 512 bytes. | Shorten the format string or switch to a different formatting path. |
+| `HostValueTooDeep` | A `ValueWire` value being serialized to or deserialized from the host boundary exceeds 64 nesting levels. | Flatten deeply nested return values before returning them from a script or from a host callback. |
+| `HostValueTooLarge` | A `ValueWire` value's `len` field (string, array, or map) exceeds the u32 maximum. | Enforce size limits on collections before passing them across the host boundary. |
 | `InstructionBudgetExceeded` | The configured VM operation budget was used. | Set an appropriate limit; simplify or split work. Host callback time needs separate host limits. |
 | `OutOfMemory`, `StackOverflow`, `CallStackOverflow`, `DeferStackOverflow` | A configured heap, VM stack, call-frame, or defer limit was reached. | Increase a deliberate host limit or bound script data/recursion. |
 
