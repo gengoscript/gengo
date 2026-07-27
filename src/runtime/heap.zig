@@ -104,7 +104,12 @@ pub const State = struct {
         }
 
         val_mod.obj_pool_ptr = self.obj_pool.ptr;
-        self.obj_free_head = 0;
+        // max_objects == 0 (a host-settable Config field with no floor
+        // validation) makes obj_pool a zero-length slice; obj_free_head must
+        // then be the empty-list sentinel (0xffff), not index 0 — otherwise
+        // the very first allocObject() indexes obj_pool[0]/obj_next_free[0]
+        // out of bounds instead of cleanly returning null.
+        self.obj_free_head = if (max_objects > 0) 0 else 0xffff;
         self.obj_live_count = 0;
         var c: usize = 0;
         while (c < ClassCount) : (c += 1) self.free_blocks[c] = null;
@@ -196,19 +201,32 @@ pub const State = struct {
         while (i < self.obj_pool.len) : (i += 1) {
             if (!self.obj_live[i]) continue;
             if (i == self.sweep_exclude_idx) continue; // the dead object being swept
-            const region: ?[]const u8 = switch (self.obj_pool[i]) {
-                .dyn_string => |ds| ds,
-                .string_builder => |sb| sb.buf,
-                .array_managed => |am| std_.mem.sliceAsBytes(am),
-                .map => |m| std_.mem.sliceAsBytes(m),
-                .map_managed => |mm| std_.mem.sliceAsBytes(mm),
-                .map_hashed => |mh| std_.mem.sliceAsBytes(mh.entries),
-                .struct_instance => |si| std_.mem.sliceAsBytes(si.fields),
-                .variant_value => |vv| std_.mem.sliceAsBytes(vv.arm_fields),
-                .closure => |cl| std_.mem.sliceAsBytes(cl.upvalues),
-                else => null,
-            };
-            if (region) |r| {
+            // Some variants own two independently-allocated managed blocks
+            // (map_hashed's entries+buckets, variant_value's arm_fields+
+            // shared_values) — both need checking, not just the first, or
+            // an overlap onto the second block would go undetected.
+            var regions: [2]?[]const u8 = .{ null, null };
+            switch (self.obj_pool[i]) {
+                .dyn_string => |ds| regions[0] = ds,
+                .string_builder => |sb| regions[0] = sb.buf,
+                .array_managed => |am| regions[0] = std_.mem.sliceAsBytes(am),
+                .map => |m| regions[0] = std_.mem.sliceAsBytes(m),
+                .map_managed => |mm| regions[0] = std_.mem.sliceAsBytes(mm),
+                .map_hashed => |mh| {
+                    regions[0] = std_.mem.sliceAsBytes(mh.entries);
+                    regions[1] = std_.mem.sliceAsBytes(mh.buckets);
+                },
+                .struct_instance => |si| regions[0] = std_.mem.sliceAsBytes(si.fields),
+                .variant_value => |vv| {
+                    regions[0] = std_.mem.sliceAsBytes(vv.arm_fields);
+                    regions[1] = std_.mem.sliceAsBytes(vv.shared_values);
+                },
+                .closure => |cl| regions[0] = std_.mem.sliceAsBytes(cl.upvalues),
+                .bigint => |bi| regions[0] = std_.mem.sliceAsBytes(bi.limbs),
+                else => {},
+            }
+            for (regions) |maybe_r| {
+                const r = maybe_r orelse continue;
                 if (r.len == 0) continue;
                 const rlo = @intFromPtr(r.ptr);
                 const rhi = rlo + r.len;
@@ -429,7 +447,12 @@ pub const State = struct {
         if (max > 0) {
             self.obj_next_free[max - 1] = 0xffff;
         }
-        self.obj_free_head = 0;
+        // max_objects == 0 (a host-settable Config field with no floor
+        // validation) makes obj_pool a zero-length slice; obj_free_head must
+        // then be the empty-list sentinel (0xffff), not index 0 — otherwise
+        // the very first allocObject() indexes obj_pool[0]/obj_next_free[0]
+        // out of bounds instead of cleanly returning null.
+        self.obj_free_head = if (max > 0) 0 else 0xffff;
         self.obj_live_count = 0;
     }
 
@@ -634,6 +657,13 @@ pub const State = struct {
             self.obj_free_head = @intCast(i);
             self.obj_live_count -= 1;
         }
+        // sweep_exclude_idx is scratch state for the paranoia check above
+        // (letting it skip the object it's mid-sweep on, which still shows
+        // obj_live=true briefly) — it must not outlive this one sweep pass.
+        // Left set, it would permanently blind assertNotLive's overlap
+        // check for whichever pool slot happened to be freed last here,
+        // even after that slot is reused for a brand-new live object.
+        if (paranoiaOn()) self.sweep_exclude_idx = 0xFFFF;
     }
 
     pub fn liveObjectCount(self: *State) usize {
