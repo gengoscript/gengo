@@ -833,9 +833,14 @@ fn fmtProcess(ctx: VMContext, buf_opt: ?[]u8, fmt: []const u8, args_start: usize
     return total;
 }
 
+// Maximum formatted output that sprintf/printf may produce in a single call.
+// Prevents a script from exhausting the GC heap via a huge %v expansion.
+const MaxSprintfOutput = 64 * 1024 * 1024; // 64 MB
+
 fn doSprintf(ctx: VMContext, fmt_val: Value, args_start: usize, argc: u8) !Value {
     const fmt_str = try vms.asStringValue(fmt_val);
     const total = try fmtProcess(ctx, null, fmt_str, args_start, argc);
+    if (total > MaxSprintfOutput) return error.RangeError;
     const obj = try vmgc.allocTempRooted(ctx, .{ .dyn_string = &[_]u8{} });
     defer ctx.vs.popTempRoot();
     if (total > 0) {
@@ -952,6 +957,7 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             if (argc != 1) return error.ArityMismatch;
             const v = ctx.vs.stack[ctx.vs.stack_top - 1];
             const n = try sprintValue(null, v);
+            if (n > MaxSprintfOutput) return error.RangeError;
             const obj = try vmgc.allocTempRooted(ctx, .{ .dyn_string = &[_]u8{} });
             defer ctx.vs.popTempRoot();
             if (n > 0) {
