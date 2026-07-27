@@ -51,6 +51,16 @@ pub fn nativeCallRawChecked(id: u16, args: []const host_abi.ValueWire, out: *hos
 // ancestor/cycle tracking is needed.
 const MaxWireDepth: u32 = 64;
 
+// A host-facing wire `len` field is u32; a >4 GiB Gengo string/array/map
+// would silently truncate (wrong length handed to the host) or, in a
+// safety-checked build, trip @intCast's overflow panic — a process abort
+// reachable from an ordinary script given a large enough configured heap.
+// Fail with a catchable error instead of trusting the cast.
+fn wireLen(n: usize) !u32 {
+    if (n > std.math.maxInt(u32)) return error.HostValueTooLarge;
+    return @intCast(n);
+}
+
 pub fn wireFromValue(ctx: VMContext, v: Value) !host_abi.ValueWire {
     return wireFromValueDepth(ctx, v, 0);
 }
@@ -64,18 +74,18 @@ fn wireFromValueDepth(ctx: VMContext, v: Value, depth: u32) !host_abi.ValueWire 
         .float => |n| makeWire(.number, 0, @bitCast(n), 0),
         .rune => |r| makeWire(.number, host_abi.FLAG_RUNE, @as(u64, r), 0),
         .decimal => |d| makeWire(.number, host_abi.FLAG_DECIMAL, @as(u64, @bitCast(d)), 0),
-        .string => |s| makeWire(.string, 0, @intCast(@intFromPtr(s.bytes.ptr)), @intCast(s.bytes.len)),
-        .error_value => |msg| makeWire(.@"error", 0, @intCast(@intFromPtr(msg.bytes.ptr)), @intCast(msg.bytes.len)),
+        .string => |s| makeWire(.string, 0, @intCast(@intFromPtr(s.bytes.ptr)), try wireLen(s.bytes.len)),
+        .error_value => |msg| makeWire(.@"error", 0, @intCast(@intFromPtr(msg.bytes.ptr)), try wireLen(msg.bytes.len)),
         .object => |o| switch (o.*) {
-            .dyn_string => makeWire(.string, 0, @intCast(@intFromPtr(o.dyn_string.ptr)), @intCast(o.dyn_string.len)),
-            .string_view => makeWire(.string, 0, @intCast(@intFromPtr(o.string_view.bytes.ptr)), @intCast(o.string_view.bytes.len)),
+            .dyn_string => makeWire(.string, 0, @intCast(@intFromPtr(o.dyn_string.ptr)), try wireLen(o.dyn_string.len)),
+            .string_view => makeWire(.string, 0, @intCast(@intFromPtr(o.string_view.bytes.ptr)), try wireLen(o.string_view.bytes.len)),
             .array, .array_managed, .array_view, .array_capacity => {
                 const items = try vms.asArraySlice(o);
                 const wires = (ctx.hs.bump(host_abi.ValueWire, items.len) orelse return error.OutOfMemory)[0..items.len];
                 for (items, 0..) |item, i| {
                     wires[i] = try wireFromValueDepth(ctx, item, depth + 1);
                 }
-                return makeWire(.array, 0, @intCast(@intFromPtr(wires.ptr)), @intCast(items.len));
+                return makeWire(.array, 0, @intCast(@intFromPtr(wires.ptr)), try wireLen(items.len));
             },
             .map, .map_managed, .map_hashed => {
                 const entries = try vms.asMapSlice(o);
@@ -84,7 +94,7 @@ fn wireFromValueDepth(ctx: VMContext, v: Value, depth: u32) !host_abi.ValueWire 
                     wires[i * 2] = try wireFromValueDepth(ctx, entry.key, depth + 1);
                     wires[i * 2 + 1] = try wireFromValueDepth(ctx, entry.value, depth + 1);
                 }
-                return makeWire(.map, 0, @intCast(@intFromPtr(wires.ptr)), @intCast(entries.len));
+                return makeWire(.map, 0, @intCast(@intFromPtr(wires.ptr)), try wireLen(entries.len));
             },
             .variant_value => |vv| {
                 const wires = (ctx.hs.bump(host_abi.ValueWire, 4) orelse return error.OutOfMemory)[0..4];
@@ -110,6 +120,17 @@ fn wireFromValueDepth(ctx: VMContext, v: Value, depth: u32) !host_abi.ValueWire 
 }
 
 pub fn valueFromWire(ctx: VMContext, w: host_abi.ValueWire) !Value {
+    return valueFromWireDepth(ctx, w, 0);
+}
+
+// Mirrors wireFromValueDepth's guard, in the opposite direction: a host that
+// echoes back a script-supplied wire is already bounded by MaxWireDepth on
+// the way out, but a host constructing its own deeply-nested/cyclic reply
+// independently would otherwise recurse this VM-native call with no backstop
+// — the same native-stack-overflow hazard, just triggered by a misbehaving
+// host instead of a malicious script.
+fn valueFromWireDepth(ctx: VMContext, w: host_abi.ValueWire, depth: u32) !Value {
+    if (depth >= MaxWireDepth) return error.HostValueTooDeep;
     const tag: host_abi.WireTag = @enumFromInt(w.tag);
     return switch (tag) {
         .null => .null,
@@ -143,7 +164,7 @@ pub fn valueFromWire(ctx: VMContext, w: host_abi.ValueWire) !Value {
             const items = try vmgc.vmAllocManagedSlice(ctx, Value, count);
             arr_obj.* = .{ .array_managed = items[0..0] }; // publish immediately
             for (elem_wires, 0..) |ew, i| {
-                items[i] = try valueFromWire(ctx, ew);
+                items[i] = try valueFromWireDepth(ctx, ew, depth + 1);
                 arr_obj.* = .{ .array_managed = items[0 .. i + 1] }; // grow visible
             }
             return .{ .object = arr_obj };
@@ -156,10 +177,10 @@ pub fn valueFromWire(ctx: VMContext, w: host_abi.ValueWire) !Value {
             const entries = try vmgc.vmAllocManagedSlice(ctx, MapEntry, count);
             map_obj.* = .{ .map_managed = entries[0..0] }; // publish immediately
             for (0..count) |i| {
-                const k = try valueFromWire(ctx, pair_wires[i * 2]);
+                const k = try valueFromWireDepth(ctx, pair_wires[i * 2], depth + 1);
                 try ctx.vs.pushTempRoot(k);
                 entries[i].key = k;
-                entries[i].value = try valueFromWire(ctx, pair_wires[i * 2 + 1]);
+                entries[i].value = try valueFromWireDepth(ctx, pair_wires[i * 2 + 1], depth + 1);
                 ctx.vs.popTempRoot();
                 map_obj.* = .{ .map_managed = entries[0 .. i + 1] }; // grow visible
             }
@@ -171,6 +192,18 @@ pub fn valueFromWire(ctx: VMContext, w: host_abi.ValueWire) !Value {
 pub fn wireNumberToU64(w: host_abi.ValueWire) !u64 {
     const tag: host_abi.WireTag = @enumFromInt(w.tag);
     if (tag != .number) return error.HostNativeBadReturnType;
+    // wireFromValueDepth's own .int arm bitcasts the i64 straight into
+    // payload (FLAG_INTEGER set), not through an f64 bit pattern — the same
+    // convention a host built against this ABI would naturally follow.
+    // Reading every FLAG_INTEGER reply as if it were f64 bits (the previous
+    // behavior here) reinterprets the raw integer bit pattern as garbage,
+    // which for ensureHostReady's abi_version check meant a host reporting
+    // its version the idiomatic way could spuriously fail the handshake.
+    if ((w.flags & host_abi.FLAG_INTEGER) != 0) {
+        const n: i64 = @bitCast(w.payload);
+        if (n < 0) return error.HostNativeBadReturnValue;
+        return @intCast(n);
+    }
     const n: f64 = @bitCast(w.payload);
     if (n < 0) return error.HostNativeBadReturnValue;
     const tr = @trunc(n);
@@ -252,4 +285,40 @@ test "wireFromValue rejects arbitrarily deep nested arrays" {
     defer for (0..pushed) |_| ctx.vs.popTempRoot();
 
     try std.testing.expectError(error.HostValueTooDeep, wireFromValue(ctx, inner));
+}
+
+// Regression: valueFromWire (the opposite direction — a host's ValueWire
+// reply converted into a script Value, see callHostModule in native/main.zig)
+// had the identical unbounded-recursion shape as wireFromValue above, just
+// triggered by a host constructing deeply-nested reply data instead of a
+// script. Same fix, same test shape: a chain of single-element array wires
+// deeper than MaxWireDepth must fail cleanly instead of blowing the native
+// call stack.
+test "valueFromWire rejects arbitrarily deep nested wire arrays" {
+    const Runtime = @import("../../runtime/runtime.zig").Runtime;
+    var rt: Runtime = undefined;
+    rt.initWithPolicy(.{ .allow_io = false }) catch return error.TestFailed;
+    defer rt.deinit();
+
+    const ctx = VMContext.fromActive();
+
+    const depth = 100;
+    var wires: [depth]host_abi.ValueWire = undefined;
+    wires[0] = nullWire();
+    for (1..depth) |i| {
+        wires[i] = makeWire(.array, 0, @intCast(@intFromPtr(&wires[i - 1])), 1);
+    }
+
+    try std.testing.expectError(error.HostValueTooDeep, valueFromWire(ctx, wires[depth - 1]));
+}
+
+// Regression: wireFromValueDepth's .int arm bitcasts the raw i64 into
+// payload with FLAG_INTEGER set (not an f64 bit pattern) — the natural
+// encoding a host built against this ABI would use for an integer reply.
+// wireNumberToU64 previously always reinterpreted payload as f64 bits
+// regardless of flags, so a host reporting its ABI version this way could
+// spuriously fail ensureHostReady's version check.
+test "wireNumberToU64 honors FLAG_INTEGER encoding" {
+    const w = makeWire(.number, host_abi.FLAG_INTEGER, @bitCast(@as(i64, 42)), 0);
+    try std.testing.expectEqual(@as(u64, 42), try wireNumberToU64(w));
 }
