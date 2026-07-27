@@ -474,3 +474,25 @@ pub fn makeStringView(ctx: VMContext, bytes: []const u8, source: ?*Object) !Valu
     obj.* = .{ .string_view = .{ .bytes = bytes, .source = source } };
     return .{ .object = obj };
 }
+
+/// Like makeStringView but takes a managed Object and byte-range offsets instead
+/// of a pre-sliced []const u8.  The internal vmAllocObject call may trigger
+/// compaction; bytes and source are re-derived from obj AFTER the allocation so
+/// the stored sub-slice always points to live memory.
+/// obj must be a .dyn_string or .string_view Object.
+pub fn makeStringViewFromStringObj(ctx: VMContext, obj: *Object, start_b: usize, end_b: usize) !Value {
+    const view_obj = try vmAllocObject(ctx);
+    // Re-derive bytes and source from the GC-updated obj after potential compaction.
+    const bytes_now: []const u8 = switch (obj.*) {
+        .dyn_string => |s| s,
+        .string_view => |sv| sv.bytes,
+        else => return error.TypeError,
+    };
+    const source_now: ?*Object = switch (obj.*) {
+        .dyn_string => obj,
+        .string_view => |sv| sv.source,
+        else => return error.TypeError,
+    };
+    view_obj.* = .{ .string_view = .{ .bytes = bytes_now[start_b..end_b], .source = source_now } };
+    return .{ .object = view_obj };
+}

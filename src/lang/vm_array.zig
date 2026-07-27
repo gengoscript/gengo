@@ -31,11 +31,14 @@ pub fn arraySlice(ctx: VMContext, obj: *Object, has_start: bool, start_v: Value,
     const end: usize = if (has_end) try vms.vmSliceIndex(end_v, items.len) else items.len;
     if (start > end) return error.IndexOutOfBounds;
     const out = try vmgc.vmAllocObject(ctx);
+    // Re-derive source and items from the stable Object-pool pointer after
+    // potential compaction inside vmAllocObject.
     const source = switch (obj.*) {
         .array_view => obj.array_view.source,
         else => obj,
     };
-    out.* = .{ .array_view = .{ .items = items[start..end], .source = source } };
+    const items_now = try vms.asArraySlice(obj);
+    out.* = .{ .array_view = .{ .items = items_now[start..end], .source = source } };
     return .{ .object = out };
 }
 
