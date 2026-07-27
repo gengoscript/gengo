@@ -44,7 +44,8 @@ pub const Policy = struct {
         host,
     };
 
-    allow_io: bool = true,
+    // Closed by default; see Config.allow_io in runtime/api.zig for rationale.
+    allow_io: bool = false,
     native_backend: NativeBackend = .embedded,
     max_ops: ?u64 = null,
     // gengo --test --profile: forces per-instruction gas accounting on (see

@@ -210,7 +210,9 @@ const Engine = struct {
 
     fn initInPlaceDefault(self: *Engine) !void {
         self.initScalars();
-        try self.runtime.initWithPolicy(.{ .allow_io = true });
+        // Closed by default (see Config.allow_io in runtime/api.zig): the
+        // zero-config engine_init() C-ABI path must not silently grant stdio.
+        try self.runtime.initWithPolicy(.{ .allow_io = false });
         io.setWriteOverrides(engineWrite, engineWerr);
         io.setReadOverride(engineRead);
     }
