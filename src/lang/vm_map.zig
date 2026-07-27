@@ -140,6 +140,16 @@ pub fn mapHas(obj: *Object, key: Value) !bool {
 }
 
 pub fn mapSet(ctx: VMContext, container: Value, key: Value, val: Value) !void {
+    // Callers (opSetIndex/opSetField) have already popped key/val off the VM
+    // stack by the time this runs, so they are invisible to collectGarbage's
+    // root scan. Root them for the whole function: both the map_hashed
+    // delegation below and the growth path further down can allocate
+    // (vmAllocManagedSlice), which can trigger a full mark-sweep before key
+    // or val is ever stored somewhere reachable.
+    try ctx.vs.pushTempRoot(key);
+    defer ctx.vs.popTempRoot();
+    try ctx.vs.pushTempRoot(val);
+    defer ctx.vs.popTempRoot();
     if (container.object.* == .map_hashed) return mapInsertHashed(ctx, container.object, key, val);
     const items = try vms.asMapSlice(container.object);
     if (mapFindLinear(items, key)) |fi| {

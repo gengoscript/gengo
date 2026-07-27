@@ -513,12 +513,15 @@ pub fn tplParse(ctx: VMContext, src_val: Value, src: []const u8) !Value {
                 idx += 1;
             } else {
                 if (parsed.op == .if_begin) {
+                    if (ctrl_top >= ctrl_stack.len) return error.InvalidTemplate;
                     ctrl_stack[ctrl_top] = .{ .kind = .if_block, .if_idx = idx, .else_idx = std.math.maxInt(usize) };
                     ctrl_top += 1;
                 } else if (parsed.op == .range_begin) {
+                    if (ctrl_top >= ctrl_stack.len) return error.InvalidTemplate;
                     ctrl_stack[ctrl_top] = .{ .kind = .range_block, .if_idx = idx, .else_idx = std.math.maxInt(usize) };
                     ctrl_top += 1;
                 } else if (parsed.op == .with_begin) {
+                    if (ctrl_top >= ctrl_stack.len) return error.InvalidTemplate;
                     ctrl_stack[ctrl_top] = .{ .kind = .with_block, .if_idx = idx, .else_idx = std.math.maxInt(usize) };
                     ctrl_top += 1;
                 }

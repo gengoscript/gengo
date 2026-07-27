@@ -73,7 +73,11 @@ pub const Lexer = struct {
                     return self.ident();
                 }
             }
-            self.pos = self.start + 1;
+            // Advance past the whole codepoint (when it decoded validly, just
+            // isn't a valid ident-start char) rather than 1 byte — otherwise
+            // each of its continuation bytes independently fails and reports
+            // its own spurious err_invalid_char token.
+            self.pos = self.start + (if (cp_len > 0) cp_len else 1);
             return self.tok(.err_invalid_char);
         }
         return switch (c) {
@@ -199,9 +203,17 @@ pub const Lexer = struct {
             while (common.isDigit(self.peek()) or self.peek() == '_') _ = self.adv();
         }
         if (self.peek() == 'e' or self.peek() == 'E') {
-            _ = self.adv();
-            if (self.peek() == '+' or self.peek() == '-') _ = self.adv();
-            while (common.isDigit(self.peek())) _ = self.adv();
+            // Only consume the exponent marker (and sign) if at least one
+            // digit follows — otherwise "1e"/"1e+"/"1e-" would lex as a
+            // complete, valid-looking number token instead of leaving "e"/"e+"
+            // for the next token (or erroring).
+            const sign_len: usize = if (self.peekNext() == '+' or self.peekNext() == '-') 2 else 1;
+            const digit_pos = self.pos + sign_len;
+            if (digit_pos < self.src.len and common.isDigit(self.src[digit_pos])) {
+                _ = self.adv();
+                if (self.peek() == '+' or self.peek() == '-') _ = self.adv();
+                while (common.isDigit(self.peek())) _ = self.adv();
+            }
         }
         return self.tok(.number);
     }
@@ -365,7 +377,12 @@ pub const Lexer = struct {
     fn peekCodepointLen(self: *Lexer) usize {
         if (self.atEnd()) return 0;
         const c = self.src[self.pos];
-        return std.unicode.utf8ByteSequenceLength(c) catch 0;
+        const len = std.unicode.utf8ByteSequenceLength(c) catch return 0;
+        // A truncated multi-byte sequence at the very end of the source (fewer
+        // continuation bytes remain than the lead byte promises) must not be
+        // treated as decodable — decodeCodepoint would slice past src.len.
+        if (self.pos + len > self.src.len) return 0;
+        return len;
     }
     fn decodeCodepoint(self: *Lexer, len: usize) u21 {
         return std.unicode.utf8Decode(self.src[self.pos .. self.pos + len]) catch 0;
@@ -503,6 +520,50 @@ test "lexer: number with leading zeros" {
     const tok = lex.next();
     try testing.expectEqual(.number, tok.typ);
     try testing.expectEqualStrings("007", tok.src);
+}
+
+// "1e"/"1e+"/"1e-" (no digits after the exponent marker/sign) used to be
+// accepted as a complete number token (and later silently parsed as 1.0 by
+// common.parseFloat) instead of leaving "e"/"e+"/"e-" for separate tokens.
+test "lexer: number followed by bare/incomplete exponent does not swallow it" {
+    {
+        var lex = Lexer{ .src = "1e" };
+        const num = lex.next();
+        try testing.expectEqual(.number, num.typ);
+        try testing.expectEqualStrings("1", num.src);
+        const id = lex.next();
+        try testing.expectEqual(.ident, id.typ);
+        try testing.expectEqualStrings("e", id.src);
+    }
+    {
+        var lex = Lexer{ .src = "1e+" };
+        const num = lex.next();
+        try testing.expectEqual(.number, num.typ);
+        try testing.expectEqualStrings("1", num.src);
+    }
+    {
+        var lex = Lexer{ .src = "1e-" };
+        const num = lex.next();
+        try testing.expectEqual(.number, num.typ);
+        try testing.expectEqualStrings("1", num.src);
+    }
+}
+
+// A multi-byte UTF-8 lead byte with fewer continuation bytes left than it
+// promises used to make decodeCodepoint slice past src.len (index out of
+// bounds panic) instead of cleanly reporting an invalid character.
+test "lexer: truncated multi-byte UTF-8 sequence at EOF does not crash" {
+    {
+        var lex = Lexer{ .src = &[_]u8{0xF0} };
+        try testing.expectEqual(.err_invalid_char, lex.next().typ);
+    }
+    {
+        var lex = Lexer{ .src = &[_]u8{ 'a', 0xF0 } };
+        const id = lex.next();
+        try testing.expectEqual(.ident, id.typ);
+        try testing.expectEqualStrings("a", id.src);
+        try testing.expectEqual(.err_invalid_char, lex.next().typ);
+    }
 }
 
 test "lexer: string literal" {

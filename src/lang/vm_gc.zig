@@ -254,15 +254,22 @@ fn gcStepThreshold(ctx: VMContext, used: usize) usize {
 
 pub fn vmAllocManagedSlice(ctx: VMContext, comptime T: type, n: usize) ![]T {
     if (gcStress()) collectGarbage(ctx);
-    if (@sizeOf(T) * n > ctx.hs.maxManagedAlloc()) {
-        ctx.vs.setRuntimeErr("allocation of {d} bytes exceeds this heap's largest block ({d} bytes); configure a larger heap", .{ @sizeOf(T) * n, ctx.hs.maxManagedAlloc() });
+    // n can be directly attacker-controlled (e.g. std.rand.perm's count argument),
+    // so @sizeOf(T) * n must not be a raw non-wrapping multiply — it would panic
+    // (integer overflow trap) for large n instead of raising a catchable error.
+    const total_bytes = std.math.mul(usize, @sizeOf(T), n) catch {
+        ctx.vs.setRuntimeErr("allocation of {d} elements ({d} bytes each) overflows; configure a larger heap", .{ n, @sizeOf(T) });
+        return error.AllocationTooLarge;
+    };
+    if (total_bytes > ctx.hs.maxManagedAlloc()) {
+        ctx.vs.setRuntimeErr("allocation of {d} bytes exceeds this heap's largest block ({d} bytes); configure a larger heap", .{ total_bytes, ctx.hs.maxManagedAlloc() });
         return error.AllocationTooLarge;
     }
     if (ctx.hs.usedBytes() >= ctx.vs.next_gc_heap_bytes) {
         collectGarbage(ctx);
         ctx.vs.next_gc_heap_bytes = gcStepThreshold(ctx, ctx.hs.usedBytes());
     }
-    if (ctx.hs.wouldBump(@sizeOf(T) * n) and ctx.hs.usedBytes() * 2 >= ctx.hs.heap.len) {
+    if (ctx.hs.wouldBump(total_bytes) and ctx.hs.usedBytes() * 2 >= ctx.hs.heap.len) {
         collectGarbage(ctx);
         ctx.vs.next_gc_heap_bytes = gcStepThreshold(ctx, ctx.hs.usedBytes());
     }
