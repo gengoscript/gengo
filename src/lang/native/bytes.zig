@@ -174,11 +174,17 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             try ctx.vs.vmPush(.{ .object = obj });
         },
         .bytes_unpack => {
+            const s_len = (try vms.asStringValue(ctx.vs.vmTop(0))).len;
+            // Create the container first so the backing is rooted before any
+            // further allocation that might trigger compaction.
+            const obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
+            defer ctx.vs.popTempRoot();
+            const out_items = try vmgc.vmAllocManagedSlice(ctx, Value, s_len);
+            // Root immediately so GC can trace the backing.
+            obj.* = .{ .array_managed = out_items[0..s_len] };
+            // Re-derive s after allocations which may have compacted the heap.
             const s = try vms.asStringValue(ctx.vs.vmTop(0));
-            const out_items = try vmgc.vmAllocManagedSlice(ctx, Value, s.len);
             for (s, 0..) |b, i| out_items[i] = .{ .int = @as(i64, b) };
-            const obj = try vmgc.vmAllocObject(ctx);
-            obj.* = .{ .array_managed = out_items[0..s.len] };
             ctx.vs.vmPopArgs(argc);
             try ctx.vs.vmPush(.{ .object = obj });
         },
@@ -247,7 +253,12 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             const n = try argAsI64(ctx.vs.vmTop(0));
             if (n < 0) return error.RangeError;
             const count = @as(usize, @intCast(n));
-            const total = s0.len * count;
+            // Overflow-checked multiply: a huge count can wrap total to a small
+            // value, causing vmAllocManagedBytes to succeed while the copy loop
+            // later writes far past the allocated end.
+            const mul = @mulWithOverflow(s0.len, count);
+            if (mul[1] != 0 or mul[0] > 64 * 1024 * 1024) return error.RangeError;
+            const total = mul[0];
             const buf = try vmgc.vmAllocManagedBytes(ctx, total);
             // Re-derive after the allocation above, which can compact and
             // relocate s_val's backing.
