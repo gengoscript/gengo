@@ -208,6 +208,11 @@ pub const LookupResult = struct {
 /// components, and "." / ".." traversal.
 pub fn lookup(es: *EngineState, path: []const u8) LookupError!LookupResult {
     if (path.len == 0 or path[0] == '/') return error.InvalidPath;
+    // A NUL byte lets a component like ".." + 0x00 pass the literal-equality
+    // check below while every OS path call still truncates at the NUL and
+    // sees plain "..": a one-directory sandbox escape (and a debug-build
+    // crash, since std.posix.toPosixPath asserts no interior NUL).
+    if (std.mem.indexOfScalar(u8, path, 0) != null) return error.InvalidPath;
 
     var it = std.mem.splitScalar(u8, path, '/');
     while (it.next()) |comp| {
@@ -276,6 +281,19 @@ test "resolve rejects absolute paths and traversal" {
     try std.testing.expectError(error.InvalidPath, resolve(&state, "", &buf));
     try std.testing.expectError(error.InvalidPath, resolve(&state, "data//x", &buf));
     try std.testing.expectError(error.InvalidPath, resolve(&state, "data/", &buf));
+}
+
+test "resolve rejects a NUL byte smuggled into a path component" {
+    // "..\x00" is not literally equal to ".." so it used to slip past the
+    // traversal check, while std.posix.toPosixPath truncates at the NUL and
+    // the OS sees plain ".." — a one-level sandbox escape (and a debug-build
+    // crash, since toPosixPath asserts no interior NUL).
+    var state: EngineState = .{};
+    try addMountToState(&state, "data", "/var/app/data");
+    var buf: [256]u8 = undefined;
+    try std.testing.expectError(error.InvalidPath, resolve(&state, "data/..\x00", &buf));
+    try std.testing.expectError(error.InvalidPath, resolve(&state, "data/\x00", &buf));
+    try std.testing.expectError(error.InvalidPath, resolve(&state, "da\x00ta/f", &buf));
 }
 
 test "resolve with no mounts always fails" {
