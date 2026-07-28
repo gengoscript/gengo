@@ -27,6 +27,7 @@ const StructTypeObj = @import("../value.zig").StructTypeObj;
 
 const rand_mod = @import("rand.zig");
 const encode_mod = @import("encode.zig");
+const crypto_mod = @import("crypto.zig");
 const time_mod = @import("time.zig");
 const core_mod = @import("core.zig");
 const string_mod = @import("string.zig");
@@ -256,6 +257,14 @@ pub fn buildStdModule(ctx: vms.VMContext) !*Object {
     try ctx.vs.pushTempRoot(.{ .object = bytes_obj });
     defer ctx.vs.popTempRoot();
 
+    var crypto_entries: [module_descriptor.cryptoExports.len]NamespaceEntry = undefined;
+    for (module_descriptor.cryptoExports, 0..) |entry, i| {
+        crypto_entries[i] = .{ .name = entry.name, .value = try makeNative(ctx, entry.native_id.?, entry.arity) };
+    }
+    const crypto_obj = try makeNamespace(ctx, "crypto", "@module_type:std.crypto", &crypto_entries);
+    try ctx.vs.pushTempRoot(.{ .object = crypto_obj });
+    defer ctx.vs.popTempRoot();
+
     var std_entries: [module_descriptor.stdExports.len]NamespaceEntry = undefined;
     for (module_descriptor.stdExports, 0..) |entry, i| {
         std_entries[i] = .{
@@ -277,6 +286,7 @@ pub fn buildStdModule(ctx: vms.VMContext) !*Object {
                 .sort => sort_obj,
                 .array => array_obj,
                 .bytes => bytes_obj,
+                .crypto => crypto_obj,
                 .arg_type => arg_type_obj,
                 .time_type => time_type_obj,
                 .regexp_type => regexp_type_obj,
@@ -687,6 +697,7 @@ pub fn callNative(ctx: vms.VMContext, nf: NativeFuncObj, argc: u8) !void {
         .re_match, .re_find, .re_find_all, .re_replace, .re_split, .re_compile, .re_obj_match, .re_obj_find, .re_obj_find_all, .re_obj_replace, .re_obj_split => return regexp_mod.dispatch(ctx, nf, argc),
         .array_filter, .array_map, .array_reduce, .array_slice, .array_zip, .array_flat, .array_find, .array_find_index, .array_all, .array_any, .array_chunk => return array_mod.dispatch(ctx, nf, argc),
         .sort_asc, .sort_desc, .sort_by => return sort_mod.dispatch(ctx, nf, argc),
+        .crypto_sha256, .crypto_sha512, .crypto_blake3, .crypto_md5, .crypto_sha1, .crypto_hmac_sha256, .crypto_hmac_sha512, .crypto_aes_gcm_seal, .crypto_aes_gcm_open, .crypto_chacha20poly1305_seal, .crypto_chacha20poly1305_open, .crypto_constant_time_equal, .crypto_rand_bytes, .crypto_argon2id, .crypto_bcrypt_hash, .crypto_bcrypt_verify, .crypto_hkdf_sha256, .crypto_xchacha20poly1305_seal, .crypto_xchacha20poly1305_open, .crypto_ed25519_sign, .crypto_ed25519_verify, .crypto_x25519 => return crypto_mod.dispatch(ctx, nf, argc),
         .bytes_u8, .bytes_pack, .bytes_unpack, .bytes_at, .bytes_len, .bytes_slice, .bytes_repeat, .bytes_u16be, .bytes_u32be, .bytes_u64be, .bytes_u16le, .bytes_u32le, .bytes_u64le, .bytes_u16be_at, .bytes_u32be_at, .bytes_u64be_at, .bytes_u16le_at, .bytes_u32le_at, .bytes_u64le_at, .bytes_index_of, .bytes_contains, .bytes_starts_with, .bytes_ends_with, .bytes_count, .bytes_replace, .bytes_f32be, .bytes_f32le, .bytes_f64be, .bytes_f64le, .bytes_f32be_at, .bytes_f32le_at, .bytes_f64be_at, .bytes_f64le_at => return bytes_mod.dispatch(ctx, nf, argc),
         inline else => |id| {
             if (comptime build_options.cap_net) {

@@ -10,6 +10,7 @@ const MapEntry = vmod.MapEntry;
 const builtin = @import("builtin");
 const regexp_mod = @import("native/regexp.zig");
 const fs_state_mod = @import("native/fs_state.zig");
+const native_ids = @import("native/native_ids.zig");
 
 // Preset ceilings — these are the maximum any instance may request.
 pub const MaxStack = cfg.max_stack;
@@ -149,11 +150,11 @@ pub const State = struct {
     regexp_type_cache: ?*Object = null,
     template_type_cache: ?*Object = null,
     re_pattern_cache: regexp_mod.PatternCache = .{},
-    // Backing for native_function Objects, indexed by NativeFnId discriminant
-    // (enum(u8), so 256 slots). Outside the GC-managed heap: never marked,
-    // never swept, never moved by compaction. buildStdModule refreshes the
-    // slots it uses, so no reset is needed.
-    native_fn_backing: [256]Object = undefined,
+    // Backing for native_function Objects, indexed by NativeFnId enum value.
+    // Sized by NativeFnIdArrayLen = max_enum_value+1 (NOT field count — the enum
+    // is sparse). Outside the GC-managed heap: never marked, swept, or compacted.
+    // buildStdModule refreshes the slots it uses; no reset needed.
+    native_fn_backing: [native_ids.NativeFnIdArrayLen]Object = undefined,
     allocator: std.mem.Allocator = std.heap.page_allocator,
 
     pub fn init(self: *State, max_stack: usize, max_frames: usize, max_defers: usize, heap_size: usize, allocator: std.mem.Allocator) !void {
