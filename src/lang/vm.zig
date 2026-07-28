@@ -767,10 +767,18 @@ fn resolveQualifiedReceiverMethod(ctx: VMContext, qualified_name: []const u8, mn
 }
 
 fn resolveStructMethod(ctx: VMContext, inst: vmod.StructInstanceObj, mname: []const u8) !MethodResolution {
-    if (resolveQualifiedReceiverMethod(ctx, inst.typ.struct_type.qualified_name, mname)) |method_func| {
+    const qname = inst.typ.struct_type.qualified_name;
+    if (resolveQualifiedReceiverMethod(ctx, qname, mname)) |method_func| {
         return .{ .func = method_func, .pass_recv = true };
     } else |err| switch (err) {
         error.UnknownMethod => {
+            // For a generic instantiation like "@mod:Stack[int]", also try the base name
+            // "@mod:Stack" so that methods defined with a generic receiver (Stack[T]) are found.
+            if (std.mem.indexOfScalar(u8, qname, '[')) |bracket_pos| {
+                if (resolveQualifiedReceiverMethod(ctx, qname[0..bracket_pos], mname)) |method_func| {
+                    return .{ .func = method_func, .pass_recv = true };
+                } else |_| {}
+            }
             const fi = vmtyp.findFieldIndex(inst.typ.struct_type.fields, mname) orelse {
                 if (isModuleNamespaceStruct(inst.typ)) return error.UnknownStructField;
                 return error.UnknownMethod;
@@ -782,10 +790,17 @@ fn resolveStructMethod(ctx: VMContext, inst: vmod.StructInstanceObj, mname: []co
 }
 
 fn resolveSmallStructMethod(ctx: VMContext, ssi: vmod.SmallStructObj, mname: []const u8) !MethodResolution {
-    if (resolveQualifiedReceiverMethod(ctx, ssi.typ.struct_type.qualified_name, mname)) |method_func| {
+    const qname = ssi.typ.struct_type.qualified_name;
+    if (resolveQualifiedReceiverMethod(ctx, qname, mname)) |method_func| {
         return .{ .func = method_func, .pass_recv = true };
     } else |err| switch (err) {
         error.UnknownMethod => {
+            // Same generic-receiver fallback as resolveStructMethod.
+            if (std.mem.indexOfScalar(u8, qname, '[')) |bracket_pos| {
+                if (resolveQualifiedReceiverMethod(ctx, qname[0..bracket_pos], mname)) |method_func| {
+                    return .{ .func = method_func, .pass_recv = true };
+                } else |_| {}
+            }
             const fi = vmtyp.findFieldIndex(ssi.typ.struct_type.fields, mname) orelse {
                 if (isModuleNamespaceStruct(ssi.typ)) return error.UnknownStructField;
                 return error.UnknownMethod;

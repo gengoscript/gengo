@@ -4121,6 +4121,80 @@ test "compiler: constrained generic struct type parameter rejects a non-conformi
     ));
 }
 
+// Generic receiver methods: func (s Stack[T]) top() T
+// isMethodDecl previously returned false for a bracketed receiver, misidentifying
+// the declaration as an anonymous func and producing a nonsensical error.
+// methodDecl now parses [T, ...] after the receiver type name and pushes type
+// params so the body can use T.  The VM falls back from "@mod:Stack[int]" to
+// "@mod:Stack" when looking up the method, so one definition covers all instantiations.
+test "compiler: method on generic struct with bracketed receiver (Stack[T])" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Stack[T] struct { items []T }
+        \\func (s Stack[T]) top() T { return s.items[0] }
+        \\func f() int {
+        \\    s := Stack[int]{ items: [10, 20, 30] }
+        \\    return s.top()
+        \\}
+    );
+    const result = try rt.callGlobal("f", &.{});
+    try std.testing.expectEqual(@as(i64, 10), result.int);
+}
+
+test "compiler: multiple methods on the same generic struct receiver" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Stack[T] struct { items []T }
+        \\func (s Stack[T]) top() T { return s.items[0] }
+        \\func (s Stack[T]) second() T { return s.items[1] }
+        \\func f() int {
+        \\    s := Stack[int]{ items: [1, 2, 3] }
+        \\    return s.top() + s.second()
+        \\}
+    );
+    const result = try rt.callGlobal("f", &.{});
+    try std.testing.expectEqual(@as(i64, 3), result.int);
+}
+
+test "compiler: generic receiver method works for multiple instantiations of same type" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Box[T] struct { val T }
+        \\func (b Box[T]) get() T { return b.val }
+        \\func f() string {
+        \\    bi := Box[int]{ val: 42 }
+        \\    bs := Box[string]{ val: "hello" }
+        \\    if bi.get() == 42 { return bs.get() }
+        \\    return "fail"
+        \\}
+    );
+    const result = try rt.callGlobal("f", &.{});
+    try std.testing.expectEqualStrings("hello", try vms.asStringValue(result));
+}
+
+// Concrete-alias case: type IntStack Stack[int]; func (s IntStack) top() int
+// Previously failed with UnknownReceiverType because methodDecl never checked
+// hasTypeAlias.  Now it resolves the alias target_qname so the method is
+// registered under "@mod:Stack[int].top", matching what dispatch produces.
+test "compiler: method on type alias of generic instantiation (IntStack = Stack[int])" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Stack[T] struct { items []T }
+        \\type IntStack Stack[int]
+        \\func (s IntStack) top() int { return s.items[0] }
+        \\func f() int {
+        \\    s := IntStack{ items: [7, 8, 9] }
+        \\    return s.top()
+        \\}
+    );
+    const result = try rt.callGlobal("f", &.{});
+    try std.testing.expectEqual(@as(i64, 7), result.int);
+}
+
 test "compiler: := infers struct type for dunder dispatch, same as an explicitly var-typed local" {
     // Struct literals previously left no ExprPrimInfo on their own result at
     // all, and := never inferred struct_type for a local either — both

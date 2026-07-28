@@ -269,6 +269,23 @@ pub fn isMethodDecl(c: anytype) bool {
     const t3 = lx.next();
     if (t3.typ != .ident) return false;
     const t4 = lx.next();
+    // Generic receiver: func (s Stack[T]) method() — scan past [...]
+    if (t4.typ == .lbracket) {
+        var depth: u32 = 1;
+        while (depth > 0) {
+            const t = lx.next();
+            switch (t.typ) {
+                .lbracket => depth += 1,
+                .rbracket => depth -= 1,
+                .eof => return false,
+                else => {},
+            }
+        }
+        if (lx.next().typ != .rparen) return false;
+        const t5 = lx.next();
+        if (t5.typ != .ident) return false;
+        return lx.next().typ == .lparen;
+    }
     if (t4.typ != .rparen) return false;
     const t5 = lx.next();
     if (t5.typ != .ident) return false;
@@ -310,7 +327,35 @@ pub fn methodDecl(c: anytype) !void {
         c.setErr("cannot define method on interface type '{s}'", .{recv_type});
         return error.MethodOnInterface;
     }
-    if (!c.skipping_test_body and !c.registry.hasStructType(recv_type) and !c.registry.hasNamedType(recv_type) and !c.registry.hasVariantType(recv_type)) {
+
+    // Parse optional generic type params on receiver: func (s Stack[T]) method()
+    var recv_tparams: [ct.MaxTypeParams]ct.GenericParam = undefined;
+    var recv_tparam_count: u8 = 0;
+    if (c.cur.typ == .lbracket) {
+        if (!c.registry.hasGenericType(recv_type))
+            return c.err("'{s}' is not a generic type", .{recv_type});
+        c.advance(); // consume '['
+        while (true) {
+            if (c.cur.typ != .ident) return c.err("expected type parameter name, found {s}", .{c.tokenName(c.cur.typ)});
+            recv_tparams[recv_tparam_count] = .{ .name = c.cur.src, .constraint = "" };
+            c.advance();
+            recv_tparam_count += 1;
+            if (recv_tparam_count > ct.MaxTypeParams) return c.err("too many receiver type parameters (max {d})", .{ct.MaxTypeParams});
+            if (!c.match(.comma)) break;
+            if (c.check(.rbracket)) break;
+        }
+        try c.consume(.rbracket);
+    }
+
+    const type_alias = if (!c.skipping_test_body) c.registry.getTypeAlias(recv_type) else null;
+
+    if (!c.skipping_test_body and
+        !c.registry.hasStructType(recv_type) and
+        !c.registry.hasNamedType(recv_type) and
+        !c.registry.hasVariantType(recv_type) and
+        type_alias == null and
+        recv_tparam_count == 0)
+    {
         c.setErr("method receiver '{s}' is not a declared type", .{recv_type});
         return error.UnknownReceiverType;
     }
@@ -319,13 +364,34 @@ pub fn methodDecl(c: anytype) !void {
     const method_name = c.cur.src;
     c.advance();
 
-    const is_struct_recv = c.registry.hasStructType(recv_type);
+    const is_struct_recv = c.registry.hasStructType(recv_type) or
+        (type_alias != null and type_alias.?.kind == .struct_t) or
+        (recv_tparam_count > 0 and blk: {
+            const gi = c.registry.getGenericType(recv_type);
+            break :blk gi != null and gi.?.kind == .struct_t;
+        });
     if (!c.skipping_test_body) try c.checkDunderConflict(recv_type, is_struct_recv, method_name);
+
+    // Push receiver type params into scope so the function body can reference T, U, ...
+    const saved_param_count = c.type_param_count;
+    if (recv_tparam_count > 0) {
+        c.type_param_count = recv_tparam_count;
+        for (recv_tparams[0..recv_tparam_count], 0..) |tp, i| c.type_params[i] = tp;
+    }
+    errdefer c.type_param_count = saved_param_count;
 
     var prefix: [1][]const u8 = .{recv_name};
     _ = try c.compileFuncWithPrefix(prefix[0..], true, null);
 
-    const qrecv_type = try c.qualifyTypeName(recv_type);
+    c.type_param_count = saved_param_count;
+
+    // For a type alias (e.g. `type IntStack Stack[int]`), use the target's qualified name
+    // so dispatch — which sees the concrete struct's qualified_name — finds the method.
+    const qrecv_type: []const u8 = if (type_alias) |ta|
+        ta.target_qname
+    else
+        try c.qualifyTypeName(recv_type);
+
     if (!c.skipping_test_body) {
         if (Compiler.dunderOpFromName(method_name)) |dop| {
             if (c.last_func_obj) |fo| try c.validateDunderSignature(dop, qrecv_type, is_struct_recv, fo);
