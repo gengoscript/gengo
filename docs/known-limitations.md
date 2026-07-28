@@ -30,6 +30,17 @@ The relevant specifications include
 | ABI stability | The current Host ABI is v2, but the project has no stable cross-version compatibility policy. | Pin a matching engine release and require an exact ABI-version match. |
 | Native pointer ownership | Native host buffers follow the lifetime rules in `host-abi.md`; WASM uses linear-memory offsets instead. | Do not share a native pointer rule with a browser/WASM binding. Copy values when retention is required. |
 
+## Tooling
+
+| Area | Current behaviour | Practical consequence |
+|---|---|---|
+| `--emit-gbc` and generic functions | `--emit-gbc` rejects any script that declares a generic function (`func f[T](...)`), even if it is never called. Generic struct and variant types alone round-trip correctly. | Avoid generic function declarations in scripts intended for GBC output; inline the monomorphic forms instead. |
+| `--emit-gbc` and enums | `--emit-gbc` rejects scripts that declare `enum` types. | Do not use enums in scripts intended for GBC output; use `variant` or named-int types instead. |
+| `--emit-gbc` and in-body predicates | `--emit-gbc` rejects a predicate declared inside a function body when that predicate closes over the function's own locals. Module-scope predicates work. | Move the predicate to module or type scope. |
+| `--emit-gbc` source hash | The artifact records a hash of the source it was compiled from, but the CLI does not yet verify it before running the artifact. | Regenerate the `.gbc` whenever its `.gengo` source changes; do not rely on automatic invalidation. |
+| `--emit-gbc` on WASI | `--emit-gbc` is not supported in the WASI build. | Use the native CLI for GBC emission; run the artifact from WASI if needed. |
+| Generic struct methods | Methods cannot be defined on a generic struct or on a type alias of a concrete generic instantiation. `func (s Stack[T]) top() T` and `func (s IntStack) top() int` both produce `UnknownReceiverType`. | Wrap the struct in a module-scope function that takes the struct as an argument. |
+
 ## Security and Operations
 
 | Area | Current behaviour | Practical consequence |

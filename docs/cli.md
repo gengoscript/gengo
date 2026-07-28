@@ -99,11 +99,14 @@ This is early — the current implementation covers a first milestone (see
   and interface-method parameter/return types (needed for interface
   conformance checks to keep working correctly on a loaded function). Not yet
   supported: enums, a predicate declared inside a function body (one that
-  closes over that function's own locals), or a closure with real captures
+  closes over that function's own locals), a closure with real captures
   stored as a constant (a plain top-level function, or a captureless closure
   attached via ordinary bytecode execution rather than embedded as a
-  constant, both work). `--emit-gbc` fails with a clear error naming the
-  limitation rather than producing a broken artifact.
+  constant, both work), or a generic function declaration (generic struct
+  and variant types alone round-trip correctly; the rejection triggers only
+  when the script declares a `func` with type parameters). `--emit-gbc`
+  fails with a clear error naming the limitation rather than producing a
+  broken artifact.
 - The artifact records a hash of the source it was compiled from, but the
   CLI does not yet check it against the current source file before running
   a `.gbc` — nothing currently stops you from running a `.gbc` that no
