@@ -2,7 +2,14 @@
 
 This changelog tracks notable language/runtime changes by implementation date.
 
-## 2026-07-27 (v0.5.1-dev)
+## 2026-07-28 (v0.6.0-pre1)
+
+### Fixes
+
+- **Net/HTTP per-Runtime isolation (#216)** — `NetEngineState` and `HttpEngineState` are now owned by each `Runtime` instance and activated per-call via the same pattern as `fs_state`. Each engine gets independent net policies, listen policies, handlers, connection tables, and HTTP handler — a real isolation gap for processes hosting multiple independently-configured runtimes. Embeddings that set net/HTTP state via the old process-global helpers must now configure them on the engine before first use.
+- **Generic struct methods (#217)** — Methods can now be defined with a generic receiver (`func (s Stack[T]) top() T`) and on type aliases of generic instantiations (`type IntStack Stack[int]; func (s IntStack) top() int`). `isMethodDecl` now scans through `[...]` after the receiver type name; `methodDecl` parses the receiver type params, pushes them into scope for the body, and uses the alias's target qualified name for type-alias receivers. The VM falls back from the instantiated name (`@mod:Stack[int]`) to the base name when resolving generic-receiver methods, so one definition covers all instantiations.
+
+## 2026-07-27 (v0.6.0-pre1)
 
 ### Security / Correctness — Multi-wave hardening audit (waves 4 + 5)
 
@@ -46,7 +53,7 @@ A systematic audit of the VM, compiler, GBC reader/writer, and all native stdlib
 - `vm_types.zig` rune-from-float: guards `t < 0 or t > 0x10FFFF`; string-arm: derives a fresh `dyn_string` from the source object after allocation.
 - `resolveImportPath`: sandbox check runs before `sourceExists` for escaping paths.
 
-## 2026-07-25 (latest) (v0.5.1-dev)
+## 2026-07-25 (latest) (v0.6.0-pre1)
 
 ### Runtime — `cap:net` gains `net.listen`/`Listener` (server-side sockets), gated by a new general capability-scope mechanism
 
@@ -62,7 +69,7 @@ Adds `net.listen(network, address) [Listener, error]` and `Listener.accept()/clo
 - New example: `examples/time-server/` — an RFC 868 Time Protocol server and client, about as minimal a demonstration of `net.listen`/`Listener.accept` as exists (connect, receive 4 bytes, done). Runs directly under the CLI, no host embedding needed.
 - **Known, explicitly deferred, not fixed here**: `net_state.zig`'s connection/listener tables and both policy lists remain process-wide module state, not yet part of the per-instance activation set #190 tracks for `chunk`/`globals`/`heap`/`vm` — a pre-existing latent gap for dial, now also covering listeners. Not a concern for a single-`Runtime`-per-process embedding (the CLI); a host running multiple independently-untrusted scripts with `listen` enabled in one process should treat this as a real isolation gap until #190 lands, not assume it's already handled. See `dev-docs/design/net-listen-design.md` for the full design rationale.
 
-## 2026-07-22 (v0.5.1-dev)
+## 2026-07-22 (v0.6.0-pre1)
 
 ### Runtime — GBC: interface and predicate support; two real bugs found and filed separately (#5, same day)
 
@@ -133,7 +140,7 @@ A struct (or non-conflicting-base named) type can now overload `+ - * / rem` (bi
 
 **Runtime fallback for generic bodies** (`tryStructDunderBinary`/`tryStructDunderUnary` in `vm.zig`): the compile-time desugar can't fire inside a type-erased generic function body (`func f[T](xs []T) { ... xs[0] + xs[1] ... }` — `T` has no static type at compile time, no monomorphization in this language). Without a runtime path, bundling `__compare__`/`__eq__` into the `ordered`/`comparable` generic constraints (`satisfiesConstraint` in `compiler_decls.zig`) would have been a false promise: the constraint check passes at the call site, then the function body panics the first time it actually compares two values — a "fails loudly" violation, not a real gap. Added a genuine runtime dispatch path instead: `add`/`sub`/`mul`/`div`/`rem`/`eq`/`ne`/`lt`/`gt`/`le`/`ge`/`neg` all check, when both operands are the same struct type (pointer equality on the un-monomorphized `struct_type` object), whether that type declares the matching dunder, and if so call it via `vm.callFunction` — the same reentrant-call idiom already used for named-type predicates and `std.array`/`std.sort` callbacks, safe here since both operands are already off the value stack with no allocation happening before the call.
 
-## 2026-07-22 (earlier) (v0.5.1-dev)
+## 2026-07-22 (earlier) (v0.6.0-pre1)
 
 ### Language — `clamp`, a third named-type range mode (#208)
 
@@ -148,7 +155,7 @@ Found and fixed a pre-existing, unrelated doc/behavior mismatch while writing th
 
 Also updated four existing fail-case `.err` files (`252_range_on_string_type`, `253_range_on_bool_type`, `203_subtype_non_numeric_range`, `204_subtype_non_numeric_cycle`) whose expected-error substrings no longer matched after the compiler's error message changed from "range and cycle constraints..." to "range, cycle, and clamp constraints...".
 
-## 2026-07-22 (earlier) (v0.5.1-dev)
+## 2026-07-22 (earlier) (v0.6.0-pre1)
 
 ### Fix — named-return of a boxed named type panicked with `NotAFunction` (#204)
 
@@ -156,7 +163,7 @@ Found while backfilling #204's typed-assignment prolog/epilog matrix: `returnStm
 
 Fixed in `compiler_stmts.zig`'s `returnStmt` by calling `emitVarTypeProlog` before compiling each named-return slot's expression, exactly mirroring the other three call sites. Regression coverage: `tests/spec/332_named_return_boxed_type.gengo` (behavioral) plus native bytecode-shape tests in `compiler_test.zig` covering the erased-vs-boxed distinction across compound-assign, increment/decrement, and named-return (closes the "typed-assignment prolog/epilog matrix" half of #204; the fusion-pass trigger-decision matrix half remains open).
 
-## 2026-07-21 (latest) (v0.5.1-dev)
+## 2026-07-21 (latest) (v0.6.0-pre1)
 
 ### Tooling — `gengo --test --profile` (#58)
 
@@ -168,7 +175,7 @@ Each `test` block already compiles to a synthetic `__test_N` global run through 
 
 All three are gated behind a new `Policy.profile_mode` field, zero cost when off. Verified with `tools/time-bench.sh compare`: no measurable regression on any benchmark.
 
-## 2026-07-21 (later) (v0.5.1-dev)
+## 2026-07-21 (later) (v0.6.0-pre1)
 
 ### Embedding — std natives are no longer host-overridable
 
@@ -176,7 +183,7 @@ A host could intercept 8 built-in natives (`std.core.len`/`append`/`bytelen`, `s
 
 Removed entirely: the `host_caps` handshake, the 8 `CAP_*` bits, and the corresponding `HostCall` wire IDs (`src/runtime/host_abi.zig`). These 8 natives now always run their embedded implementation, unconditionally, regardless of `--backend`/`native_backend`. **`import("host:name")` host modules are unaffected** — they're a different, explicitly host-owned namespace (the host chooses the name and the `call_id`), not a substitution for something that looks like a builtin, and continue to work exactly as before. `ABI_VERSION` unchanged (still `2`) — the ABI has never been official at any level, so there's nothing to version-bump against.
 
-## 2026-07-21 (v0.5.1-dev)
+## 2026-07-21 (v0.6.0-pre1)
 
 ### Performance — Decimal construction no longer recomputes pow(10, scale) (#206)
 
@@ -207,7 +214,7 @@ Kept: the 6 int zero-compare shortcuts (genuinely save a whole instruction) and 
 
 14 slots reclaimed to `reserved_*` in `op.zig`; never released, so nothing depended on the values. `dev-docs/opcodes.md` now shows 152/256 slots assigned (was 166).
 
-## 2026-07-12 (v0.5.1-dev)
+## 2026-07-12 (v0.6.0-pre1)
 
 ### Performance — Small struct inline storage (#157)
 
@@ -232,7 +239,7 @@ Previously, `emitImplicitReturn` built a tuple (2 allocs) that `retSlowPath` imm
 
 No language changes. Existing code is unaffected.
 
-## 2026-07-03 (v0.5.1-dev)
+## 2026-07-03 (v0.6.0-pre1)
 
 ### Feature — Module Bundles (#48)
 
@@ -246,7 +253,7 @@ Scripts can now import modules from named bundles registered on the engine. No s
 
 **Resolution order:** stdlib → host modules → import loader callback → bundles → `engine_add_source` entries.
 
-## 2026-07-03 (v0.5.1-dev)
+## 2026-07-03 (v0.6.0-pre1)
 
 ### Feature — Runtime Introspection
 
