@@ -1,9 +1,12 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const cfg = @import("runtime_config");
 
 pub const MaxPackages: usize = 32;
 pub const MaxFilesPerPackage: usize = 64;
-pub const MaxFileSize: usize = 65536;
+// Don't decompress a file the compiler can't accept; max_input_bytes is the
+// exact ceiling because the compiler rejects anything larger at compile time.
+pub const MaxFileSize: usize = cfg.max_input_bytes;
 
 pub const PackageFile = struct {
     path: [128]u8 = undefined,
