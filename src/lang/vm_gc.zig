@@ -21,6 +21,7 @@ pub fn monoNowNs() u64 {
         if (std.os.wasi.clock_time_get(.MONOTONIC, 1, &ns) != .SUCCESS) return 0;
         return ns;
     }
+    if (comptime builtin.os.tag == .windows) return 0;
     var ts: std.posix.timespec = undefined;
     if (std.posix.system.clock_gettime(.MONOTONIC, &ts) != 0) return 0;
     return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));

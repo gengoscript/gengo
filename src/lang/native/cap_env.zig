@@ -36,6 +36,8 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
 fn envGet(ctx: VMContext, name: []const u8) !Value {
     if (comptime builtin.os.tag == .wasi and !builtin.link_libc) {
         return envGetWasi(ctx, name);
+    } else if (comptime builtin.os.tag == .windows) {
+        return .null;
     } else {
         const environ: std.process.Environ = .{ .block = g_environ_block };
         const val = std.process.Environ.getPosix(environ, name) orelse return .null;
@@ -67,6 +69,8 @@ fn envGetWasi(ctx: VMContext, name: []const u8) !Value {
 fn envList(ctx: VMContext) !void {
     if (comptime builtin.os.tag == .wasi and !builtin.link_libc) {
         try envListWasi(ctx);
+    } else if (comptime builtin.os.tag == .windows) {
+        try pushEmptyMap(ctx);
     } else {
         try envListPosix(ctx);
     }
