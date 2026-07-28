@@ -5194,6 +5194,127 @@ test "compiler: named string concatenation re-enforces the predicate" {
 // so a format string with enough digits overflowed the accumulator (usize
 // needs ~20 digits, i32 needs ~10) — a raw `*`/`+` traps on overflow,
 // aborting the whole process.
+// ── Error-recovery audit tests ────────────────────────────────────────────────
+//
+// These tests document the current single-error limitation: the compiler stops
+// at the first error and returns immediately, even when subsequent declarations
+// contain independent, diagnosable errors.
+//
+// Each test asserts CURRENT behavior (first error only, by kind and line).
+// When error recovery is implemented these tests must be updated to assert that
+// ALL errors in the source are collected.
+
+fn compileAndInspect(rt: *Runtime, src: []const u8) struct { err: anyerror, line: u32, msg: []const u8 } {
+    chunk.setActive(rt.chunk_state);
+    globals.setActive(&rt.globals_state);
+    heap.setActive(&rt.heap_state);
+    chunk.reset();
+    globals.reset();
+    heap.reset();
+    var compiler = Compiler.init(src, chunk.g_state, heap.g_state, .{});
+    const result = compiler.compile(true);
+    const e = result catch |err| {
+        // Mirror the runtime's fallback: err_line is only set by the combined err()
+        // helper; errors that call setErr() alone leave err_line=0, so fall back to
+        // the lexer's prev token line — the same position the CLI displays.
+        const line = if (compiler.err_line != 0) compiler.err_line else compiler.prev.line;
+        return .{
+            .err = err,
+            .line = line,
+            .msg = compiler.err_msg_buf[0..compiler.err_msg_len],
+        };
+    };
+    _ = e;
+    return .{ .err = error.NoError, .line = 0, .msg = "" };
+}
+
+fn compileAndInspectMulti(rt: *Runtime, src: []const u8) struct { first_err: anyerror, first_line: u32, count: u8 } {
+    chunk.setActive(rt.chunk_state);
+    globals.setActive(&rt.globals_state);
+    heap.setActive(&rt.heap_state);
+    chunk.reset();
+    globals.reset();
+    heap.reset();
+    var compiler = Compiler.init(src, chunk.g_state, heap.g_state, .{});
+    _ = compiler.compile(true) catch {};
+    return .{
+        .first_err = if (compiler.collected_error_count > 0) compiler.collected_errors[0].kind else error.NoError,
+        .first_line = if (compiler.collected_error_count > 0) compiler.collected_errors[0].line else 0,
+        .count = compiler.collected_error_count,
+    };
+}
+
+test "compiler error recovery: all assign-to-const errors are collected" {
+    // Three independent assign-to-const errors on lines 2, 4, and 6.
+    // With recovery all three are collected; only the first aborted compilation before.
+    var rt = try setup();
+    defer rt.deinit();
+    const r = compileAndInspectMulti(&rt,
+        \\const a = 1
+        \\a = 2
+        \\const b = 1
+        \\b = 2
+        \\const c = 1
+        \\c = 2
+    );
+    try std.testing.expectEqual(error.AssignToConst, r.first_err);
+    try std.testing.expectEqual(@as(u32, 2), r.first_line);
+    try std.testing.expectEqual(@as(u8, 3), r.count);
+}
+
+test "compiler error recovery: all duplicate-type errors are collected" {
+    // Two pairs of duplicate type declarations.
+    // With recovery both duplicates (lines 2 and 4) are collected.
+    var rt = try setup();
+    defer rt.deinit();
+    const r = compileAndInspectMulti(&rt,
+        \\type Color int
+        \\type Color int
+        \\type Size int
+        \\type Size int
+    );
+    try std.testing.expectEqual(error.DuplicateNamedType, r.first_err);
+    try std.testing.expectEqual(@as(u32, 2), r.first_line);
+    try std.testing.expectEqual(@as(u8, 2), r.count);
+}
+
+test "compiler error recovery: mixed error kinds across declarations are all collected" {
+    // Three independent compile errors of two distinct kinds: two AssignToConst
+    // (lines 2 and 4) and one DuplicateNamedType (line 6).
+    // With recovery all three are collected; previously only the first was seen.
+    var rt = try setup();
+    defer rt.deinit();
+    const r = compileAndInspectMulti(&rt,
+        \\const x = 1
+        \\x = 99
+        \\const y = 1
+        \\y = 99
+        \\type Meter int
+        \\type Meter int
+    );
+    try std.testing.expectEqual(error.AssignToConst, r.first_err);
+    try std.testing.expectEqual(@as(u32, 2), r.first_line);
+    try std.testing.expectEqual(@as(u8, 3), r.count);
+}
+
+test "compiler error recovery: error in one function body does not suppress error in another" {
+    // Two functions each returning the wrong type.
+    // With recovery both TypeError instances (lines 2 and 5) are collected.
+    var rt = try setup();
+    defer rt.deinit();
+    const r = compileAndInspectMulti(&rt,
+        \\func broken_one() int {
+        \\    return "not an int"
+        \\}
+        \\func broken_two() int {
+        \\    return "also not an int"
+        \\}
+    );
+    try std.testing.expectEqual(error.TypeError, r.first_err);
+    try std.testing.expectEqual(@as(u32, 2), r.first_line);
+    try std.testing.expectEqual(@as(u8, 2), r.count);
+}
+
 test "compiler: std.fmt.format raises no crash on an absurdly long width/precision field" {
     var rt = try setup();
     defer rt.deinit();
