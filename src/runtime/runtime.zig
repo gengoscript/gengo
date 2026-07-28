@@ -11,6 +11,7 @@ const vm = @import("../lang/vm.zig");
 const vms = @import("../lang/vm_state.zig");
 const vmnative = @import("../lang/vm_native.zig");
 const net_state = @import("../lang/native/net_state.zig");
+const http_state = @import("../lang/native/http_state.zig");
 const fs_state = @import("../lang/native/fs_state.zig");
 const native_rand = @import("../lang/native/rand.zig");
 const cfg = @import("runtime_config");
@@ -152,6 +153,10 @@ pub const Runtime = struct {
     // it. Seeded from the process default so CLI --mount flags (registered
     // before the Runtime exists) carry over.
     fs_mounts: fs_state.EngineState = .{},
+    // Per-runtime net/http state; activate() points the respective modules at
+    // these fields, giving each Runtime isolated connection tables and handlers.
+    net_es: net_state.NetEngineState = .{},
+    http_es: http_state.HttpEngineState = .{},
     test_count: u16 = 0,
     test_names: [MaxTests][]const u8 = undefined,
     test_failed: bool = false,
@@ -183,6 +188,15 @@ pub const Runtime = struct {
         rt.vm_state.reset();
         rt.heap_state.reset();
         rt.fs_mounts = fs_state.defaultState().*;
+        rt.net_es = net_state.g_default_state;
+        rt.http_es = http_state.g_default_state;
+        // Point g_state at the new runtime's fields before clearNativeCaches so
+        // netReset() doesn't operate on a stale prior runtime's net_es. g_state
+        // will briefly point at a stack local that becomes stale when init()
+        // returns by value, but activate() (called at every run/call entry) fixes
+        // it to the pinned heap/stack address before any further use.
+        net_state.setActive(&rt.net_es);
+        http_state.setActive(&rt.http_es);
         clearNativeCaches();
         rt.initialized = true;
         return rt;
@@ -232,6 +246,13 @@ pub const Runtime = struct {
         self.heap_state.reset();
         self.fs_mounts = fs_state.defaultState().*;
         fs_state.setActive(&self.fs_mounts);
+        // Seed per-runtime net/http state from the process default so CLI flags
+        // (--net-listen-allow, etc.) registered before the Runtime exists carry over,
+        // mirroring how fs_mounts seeds from fs_state.defaultState().
+        self.net_es = net_state.g_default_state;
+        net_state.setActive(&self.net_es);
+        self.http_es = http_state.g_default_state;
+        http_state.setActive(&self.http_es);
         clearNativeCaches();
         self.initialized = true;
     }
@@ -973,6 +994,8 @@ pub const Runtime = struct {
         heap.setActive(&self.heap_state);
         vm.setActive(&self.vm_state);
         fs_state.setActive(&self.fs_mounts);
+        net_state.setActive(&self.net_es);
+        http_state.setActive(&self.http_es);
         // Bound here, not at init: the Runtime struct may be moved by value
         // between init and first use; activate() always runs on the pinned
         // address (every run/call entry point calls it).

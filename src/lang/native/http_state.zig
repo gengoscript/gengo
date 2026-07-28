@@ -63,7 +63,22 @@ pub const HandlerSet = struct {
     userdata: ?*anyopaque,
 };
 
-var g_http_handler: ?HandlerSet = null;
+// Per-runtime HTTP handler state. Each Runtime owns an HttpEngineState; activate()
+// points g_state at it, mirroring the fs_state/net_state pattern (#216).
+pub const HttpEngineState = struct {
+    handler: ?HandlerSet = null,
+};
+
+pub var g_default_state: HttpEngineState = .{};
+threadlocal var g_state: *HttpEngineState = &g_default_state;
+
+pub fn setActive(state: *HttpEngineState) void {
+    g_state = state;
+}
+
+pub fn defaultState() *HttpEngineState {
+    return &g_default_state;
+}
 
 // Lazily-populated system CA trust store for the built-in HTTPS client,
 // shared across requests (rescanning the OS trust store per-request would be
@@ -94,23 +109,15 @@ fn ensureCaBundle(io: std.Io) !void {
 }
 
 pub fn setHttpHandler(callback: GengoHttpFetchFn, userdata: ?*anyopaque) void {
-    g_http_handler = .{ .callback = callback, .userdata = userdata };
-}
-
-pub fn applyHandler(h: ?HandlerSet) void {
-    g_http_handler = h;
-}
-
-pub fn currentHandler() ?HandlerSet {
-    return g_http_handler;
+    g_state.handler = .{ .callback = callback, .userdata = userdata };
 }
 
 pub fn hasHandler() bool {
-    return g_http_handler != null;
+    return g_state.handler != null;
 }
 
 pub fn resetHandler() void {
-    g_http_handler = null;
+    g_state.handler = null;
 }
 
 /// Perform an HTTP fetch. Uses the host handler if registered, otherwise falls
@@ -145,7 +152,7 @@ pub fn httpFetch(
         }
     }
 
-    if (g_http_handler) |h| {
+    if (g_state.handler) |h| {
         return try httpFetchHost(h, method, url, body, headers, timeout_ms);
     }
 
