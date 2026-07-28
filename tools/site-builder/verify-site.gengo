@@ -47,13 +47,13 @@ for name in ["documentation-inventory", "documentation-contradictions", "documen
 
 const build := fs.read("root/build.zig")
 const builder := fs.read("root/tools/site-builder/site-builder.gengo")
-assert(str.contains(build, "const gengo_version = \"0.5.1-dev\""))
-assert(str.contains(builder, "const documentationVersion := \"0.5.1-dev\""))
+assert(str.contains(build, "const gengo_version = \"0.6.0-pre1\""))
+assert(str.contains(builder, "const documentationVersion := \"0.6.0-pre1\""))
 
 for page in fs.list("root/build/site") {
     if str.ends_with(page, ".html") {
         const html := fs.read("root/build/site/" + page)
-        assert(str.contains(html, "<span class=\"doc-version\">0.5.1-dev"))
+        assert(str.contains(html, "<span class=\"doc-version\">0.6.0-pre1"))
         assert(str.contains(html, "<p class=\"doc-status\">Documentation status: main branch / unreleased"))
         assert(str.contains(html, "<meta name=\"robots\" content=\"index,follow,max-image-preview:large\">"))
         assert(str.contains(html, "<link rel=\"icon\" href=\"favicon.svg\""))
