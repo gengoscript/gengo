@@ -88,7 +88,7 @@ pub const HostModuleDesc = struct {
 pub const CapModuleFuncDesc = struct {
     name: []const u8,
     arity: u8,
-    native_id: u8,
+    native_id: u16,
 };
 
 pub const CapModuleDesc = struct {

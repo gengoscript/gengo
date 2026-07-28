@@ -32,7 +32,7 @@ pub const FuncObj = struct {
 };
 pub const MapEntry = struct { key: Value, value: Value };
 pub const MapHashedObj = struct { entries: []MapEntry, len: usize, buckets: []i32 };
-pub const NativeFuncObj = struct { id: u8, arity: u8 };
+pub const NativeFuncObj = struct { id: u16, arity: u8 };
 pub const HostModuleFuncObj = struct { call_id: u16, arity: u8 };
 pub const FieldTypeTag = enum {
     any,

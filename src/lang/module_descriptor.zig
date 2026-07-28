@@ -40,6 +40,7 @@ pub const StdTopLevelMember = enum {
     sort,
     array,
     bytes,
+    crypto,
     arg_type,
     time_type,
     regexp_type,
@@ -74,6 +75,7 @@ pub const stdExports = [_]StdNamespaceExport{
     .{ .name = "sort", .kind = .namespace, .top_level_member = .sort },
     .{ .name = "array", .kind = .namespace, .top_level_member = .array },
     .{ .name = "bytes", .kind = .namespace, .top_level_member = .bytes },
+    .{ .name = "crypto", .kind = .namespace, .top_level_member = .crypto },
     .{ .name = "Arg", .kind = .value, .is_type_object = true, .top_level_member = .arg_type },
     .{ .name = "Time", .kind = .value, .is_type_object = true, .top_level_member = .time_type },
     .{ .name = "Regexp", .kind = .value, .is_type_object = true, .top_level_member = .regexp_type },
@@ -264,6 +266,31 @@ pub const randExports = [_]StdNamespaceExport{
     .{ .name = "norm_float", .kind = .function, .native_id = .rand_norm_float, .arity = 0 },
 };
 
+pub const cryptoExports = [_]StdNamespaceExport{
+    .{ .name = "sha256", .kind = .function, .native_id = .crypto_sha256, .arity = 1 },
+    .{ .name = "sha512", .kind = .function, .native_id = .crypto_sha512, .arity = 1 },
+    .{ .name = "blake3", .kind = .function, .native_id = .crypto_blake3, .arity = 1 },
+    .{ .name = "md5", .kind = .function, .native_id = .crypto_md5, .arity = 1 },
+    .{ .name = "sha1", .kind = .function, .native_id = .crypto_sha1, .arity = 1 },
+    .{ .name = "hmac_sha256", .kind = .function, .native_id = .crypto_hmac_sha256, .arity = 2 },
+    .{ .name = "hmac_sha512", .kind = .function, .native_id = .crypto_hmac_sha512, .arity = 2 },
+    .{ .name = "aes_gcm_seal", .kind = .function, .native_id = .crypto_aes_gcm_seal, .arity = 3 },
+    .{ .name = "aes_gcm_open", .kind = .function, .native_id = .crypto_aes_gcm_open, .arity = 3 },
+    .{ .name = "chacha20poly1305_seal", .kind = .function, .native_id = .crypto_chacha20poly1305_seal, .arity = 3 },
+    .{ .name = "chacha20poly1305_open", .kind = .function, .native_id = .crypto_chacha20poly1305_open, .arity = 3 },
+    .{ .name = "constant_time_equal", .kind = .function, .native_id = .crypto_constant_time_equal, .arity = 2 },
+    .{ .name = "rand_bytes", .kind = .function, .native_id = .crypto_rand_bytes, .arity = 1 },
+    .{ .name = "argon2id", .kind = .function, .native_id = .crypto_argon2id, .arity = 6 },
+    .{ .name = "bcrypt_hash", .kind = .function, .native_id = .crypto_bcrypt_hash, .arity = 2 },
+    .{ .name = "bcrypt_verify", .kind = .function, .native_id = .crypto_bcrypt_verify, .arity = 2 },
+    .{ .name = "hkdf_sha256", .kind = .function, .native_id = .crypto_hkdf_sha256, .arity = 4 },
+    .{ .name = "xchacha20poly1305_seal", .kind = .function, .native_id = .crypto_xchacha20poly1305_seal, .arity = 3 },
+    .{ .name = "xchacha20poly1305_open", .kind = .function, .native_id = .crypto_xchacha20poly1305_open, .arity = 3 },
+    .{ .name = "ed25519_sign", .kind = .function, .native_id = .crypto_ed25519_sign, .arity = 2 },
+    .{ .name = "ed25519_verify", .kind = .function, .native_id = .crypto_ed25519_verify, .arity = 3 },
+    .{ .name = "x25519", .kind = .function, .native_id = .crypto_x25519, .arity = 2 },
+};
+
 pub const templateExports = [_]StdNamespaceExport{
     .{ .name = "parse", .kind = .function, .native_id = .template_parse, .arity = 1 },
     .{ .name = "execute", .kind = .function, .native_id = .template_execute, .arity = 2 },
@@ -390,6 +417,8 @@ fn exportsForStdNamespace(namespace: []const u8) ?[]const StdNamespaceExport {
         &arrayExports
     else if (common.streq(namespace, "rand"))
         &randExports
+    else if (common.streq(namespace, "crypto"))
+        &cryptoExports
     else if (common.streq(namespace, "template"))
         &templateExports
     else if (common.streq(namespace, "core"))

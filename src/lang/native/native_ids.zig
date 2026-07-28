@@ -1,6 +1,6 @@
 const std = @import("std");
 
-pub const NativeFnId = enum(u8) {
+pub const NativeFnId = enum(u16) {
     io_println = 1,
     io_print = 46,
     io_printf = 15,
@@ -235,6 +235,41 @@ pub const NativeFnId = enum(u8) {
     cap_net_listener_close = 237,
     cap_net_listener_local_addr = 238,
     cap_net_listener_set_accept_deadline = 239,
+
+    crypto_sha256 = 240,
+    crypto_sha512 = 241,
+    crypto_blake3 = 242,
+    crypto_hmac_sha256 = 243,
+    crypto_rand_bytes = 244,
+
+    crypto_md5 = 245,
+    crypto_sha1 = 246,
+    crypto_hmac_sha512 = 247,
+    crypto_aes_gcm_seal = 248,
+    crypto_aes_gcm_open = 249,
+    crypto_chacha20poly1305_seal = 250,
+    crypto_chacha20poly1305_open = 251,
+    crypto_constant_time_equal = 252,
+    crypto_argon2id = 253,
+    crypto_bcrypt_hash = 254,
+    crypto_bcrypt_verify = 255,
+
+    crypto_hkdf_sha256 = 256,
+    crypto_xchacha20poly1305_seal = 257,
+    crypto_xchacha20poly1305_open = 258,
+    crypto_ed25519_sign = 259,
+    crypto_ed25519_verify = 260,
+    crypto_x25519 = 261,
+};
+
+// Max enum value + 1: the correct size for a backing array indexed by NativeFnId.
+// The enum is sparse (values jump around) so field count != max value + 1.
+pub const NativeFnIdArrayLen: usize = blk: {
+    var max: comptime_int = 0;
+    for (@typeInfo(NativeFnId).@"enum".fields) |f| {
+        if (f.value > max) max = f.value;
+    }
+    break :blk max + 1;
 };
 
 pub const MaxNativeArgs = 255;

@@ -1,0 +1,89 @@
+std := import("std")
+
+// SHA-256 NIST FIPS 180-4 vectors
+std.io.println(std.crypto.sha256(""))
+std.io.println(std.crypto.sha256("abc"))
+std.io.println(std.crypto.sha256("hello world"))
+
+// SHA-512 length check (128 hex chars = 64 bytes) and empty vector (FIPS 180-4)
+std.io.println(std.crypto.sha512(""))
+std.io.println(std.core.len(std.crypto.sha512("hello world")))
+
+// BLAKE3 empty-input vector
+std.io.println(std.crypto.blake3(""))
+
+// MD5 RFC 1321 test vector
+std.io.println(std.crypto.md5("abc"))
+
+// SHA-1 FIPS 180-4 test vector
+std.io.println(std.crypto.sha1("abc"))
+
+// HMAC-SHA256 RFC 4231 §4.2 vector: key="Jefe", data="what do ya want for nothing?"
+std.io.println(std.crypto.hmac_sha256("Jefe", "what do ya want for nothing?"))
+
+// HMAC-SHA512 length check (128 hex chars = 64 bytes)
+std.io.println(std.core.len(std.crypto.hmac_sha512("key", "data")))
+
+// AES-128-GCM roundtrip (raw-bytes output; use bytes.len for byte count)
+const key16 = std.hex.decode("000102030405060708090a0b0c0d0e0f")
+const nonce12 = std.hex.decode("cafebabefacedbaddecaf888")
+const sealed128 = std.crypto.aes_gcm_seal(key16, nonce12, "hello world")
+std.io.println(std.bytes.len(sealed128))
+std.io.println(std.crypto.aes_gcm_open(key16, nonce12, sealed128))
+
+// AES-256-GCM roundtrip
+const key32 = std.hex.decode("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
+const sealed256 = std.crypto.aes_gcm_seal(key32, nonce12, "hello world")
+std.io.println(std.crypto.aes_gcm_open(key32, nonce12, sealed256))
+
+// ChaCha20-Poly1305 roundtrip
+const ck = std.hex.decode("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
+const cn = std.hex.decode("000000000000000000000000")
+const csealed = std.crypto.chacha20poly1305_seal(ck, cn, "secret message")
+std.io.println(std.crypto.chacha20poly1305_open(ck, cn, csealed))
+
+// constant_time_equal
+std.io.println(std.crypto.constant_time_equal("abc", "abc"))
+std.io.println(std.crypto.constant_time_equal("abc", "abd"))
+std.io.println(std.crypto.constant_time_equal("abc", "ab"))
+
+// rand_bytes: output length is predictable
+std.io.println(std.core.len(std.hex.encode(std.crypto.rand_bytes(8))))
+std.io.println(std.bytes.len(std.crypto.rand_bytes(0)))
+
+// bcrypt roundtrip (cost 4 = minimum for fast tests)
+const bh = std.crypto.bcrypt_hash("password", 4)
+std.io.println(std.core.len(bh))
+std.io.println(std.crypto.bcrypt_verify(bh, "password"))
+std.io.println(std.crypto.bcrypt_verify(bh, "wrong"))
+
+// HKDF-SHA256: RFC 5869 §A.1 test vector (output = 42 bytes)
+const hk_ikm = std.hex.decode("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b")
+const hk_salt = std.hex.decode("000102030405060708090a0b0c")
+const hk_info = std.hex.decode("f0f1f2f3f4f5f6f7f8f9")
+const hk_okm = std.crypto.hkdf_sha256(hk_ikm, hk_salt, hk_info, 42)
+std.io.println(std.hex.encode(hk_okm))
+std.io.println(std.bytes.len(std.crypto.hkdf_sha256("key", "", "info", 32)))
+
+// XChaCha20-Poly1305 roundtrip (24-byte nonce)
+const xk = std.hex.decode("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
+const xn = std.hex.decode("000000000000000000000000000000000000000000000000")
+const xsealed = std.crypto.xchacha20poly1305_seal(xk, xn, "xchacha test")
+std.io.println(std.bytes.len(xsealed))
+std.io.println(std.crypto.xchacha20poly1305_open(xk, xn, xsealed))
+
+// Ed25519 sign/verify: using Zig stdlib's own test vector
+// seed → public key mapping verified by std/crypto/25519/ed25519.zig "key pair creation" test
+const ed_seed = std.hex.decode("8052030376d47112be7f73ed7a019293dd12ad910b654455798b4667d73de166")
+const ed_pub = std.hex.decode("2d6f7455d97b4a3a10d7293909d1a4f2058cb9a370e43fa8154bb280db839083")
+const ed_sig = std.crypto.ed25519_sign(ed_seed, "test")
+// Zig "signature" test: sign("test") → 10a442b4...
+std.io.println(std.hex.encode(ed_sig))
+std.io.println(std.crypto.ed25519_verify(ed_pub, ed_sig, "test"))
+std.io.println(std.crypto.ed25519_verify(ed_pub, ed_sig, "TEST"))
+
+// X25519: RFC 7748 §6.1 function test vector (verified by Zig's "rfc7748 vector1" test)
+// scalarmult(a546e36b..., e6db6867...) → c3da5537...
+const x25519_sec = std.hex.decode("a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4")
+const x25519_pub = std.hex.decode("e6db6867583030db3594c1a424b15f7c726624ec26b3353b10a903a6d0ab1c4c")
+std.io.println(std.hex.encode(std.crypto.x25519(x25519_sec, x25519_pub)))

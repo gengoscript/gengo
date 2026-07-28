@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const io = @import("../runtime/io.zig");
 const Op = @import("op.zig").Op;
 const build_options = @import("build_options");
+const native_ids = @import("native/native_ids.zig");
 
 pub const perf_enabled: bool = build_options.perf;
 
@@ -19,7 +20,7 @@ pub const PerfCounters = struct {
     map_probe_ops: u64 = 0,
     gc_marked_total: u64 = 0,
     gc_swept_total: u64 = 0,
-    hostcall_counts: [256]u64 = [_]u64{0} ** 256,
+    hostcall_counts: [native_ids.NativeFnIdArrayLen]u64 = [_]u64{0} ** native_ids.NativeFnIdArrayLen,
     call_cycles: u64 = 0,
     call_count: u64 = 0,
     ret_cycles: u64 = 0,
@@ -67,7 +68,7 @@ pub inline fn countGCSweep(marked: usize, swept: usize) void {
     g_counters.gc_swept_total += @intCast(swept);
 }
 
-pub inline fn countHostcall(id: u8) void {
+pub inline fn countHostcall(id: u16) void {
     if (!perf_enabled) return;
     g_counters.hostcall_counts[id] += 1;
 }
@@ -189,7 +190,7 @@ pub fn printSummary(gc_runs: u64, gc_time_ns: u64, alloc_objs: u64, alloc_slices
         }
     }
 
-    for (0..256) |hci| {
+    for (0..native_ids.NativeFnIdArrayLen) |hci| {
         const cnt = c.hostcall_counts[hci];
         if (cnt == 0) continue;
         io.werr("PERF:hostcall:");
