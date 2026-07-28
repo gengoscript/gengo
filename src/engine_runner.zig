@@ -766,9 +766,11 @@ fn testNetCapabilityHandlers() void {
         .set_read_deadline = &mockSetReadDeadline,
         .set_write_deadline = &mockSetWriteDeadline,
     };
-    net_state.setNetHandlers(handlers, @ptrCast(&state));
-
     const rt = makeRt(.{ .allow_io = false, .capabilities = &.{"net"} });
+    // Handlers must be registered AFTER makeRt so setNetHandlers writes into
+    // this runtime's net_es (which activate() has already pointed g_state at),
+    // not into g_default_state which becomes unreachable once the runtime is active.
+    net_state.setNetHandlers(handlers, @ptrCast(&state));
 
     const test_src =
         \\net := import("cap:net")
@@ -830,8 +832,8 @@ fn testNetCapabilityHandlers() void {
         }
     }
 
-    // `state` is stack-local to this function; net_state.g_net_handlers must
-    // not keep pointing at it once we return (see testNetCapabilityHandlersCleanup).
+    // `state` is stack-local to this function; the runtime's net_es.handlers must
+    // not keep a pointer to it once we return (see testNetCapabilityHandlersCleanup).
     net_state.resetHandlers();
 
     out("  net capability handlers: OK\n");
@@ -1159,9 +1161,11 @@ fn testRuntimeDisablePredicates() void {
 
 fn testHttpCapability() void {
     var state: MockHttpState = .{};
-    http_state.setHttpHandler(&mockHttpFetch, @ptrCast(&state));
 
     const rt = makeRt(.{ .allow_io = true, .capabilities = &.{"http"} });
+    // Handler must be registered AFTER makeRt so it lands in this runtime's
+    // http_es (which activate() has pointed g_state at), not in g_default_state.
+    http_state.setHttpHandler(&mockHttpFetch, @ptrCast(&state));
 
     const test_src =
         \\std := import("std")
@@ -1303,10 +1307,12 @@ fn runCapHttpConformance() void {
     const cases = [_][]const u8{ "003_http_get", "004_http_post", "005_http_non2xx", "006_http_error" };
 
     var state: MockHttpState = .{};
-    http_state.setHttpHandler(&mockHttpFetch, @ptrCast(&state));
-    defer http_state.resetHandler();
 
     const rt = makeRt(.{ .allow_io = true, .capabilities = &.{"http"} });
+    // Handler must be registered AFTER makeRt so it lands in this runtime's
+    // http_es (which activate() has pointed g_state at), not in g_default_state.
+    http_state.setHttpHandler(&mockHttpFetch, @ptrCast(&state));
+    defer http_state.resetHandler();
 
     var pass: usize = 0;
     var fail_count: usize = 0;

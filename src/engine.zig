@@ -150,10 +150,6 @@ const Engine = struct {
     read_callback: ?ReadCallback = null,
     host_call_callback: ?HostCallCallback = null,
     host_call_ctx: ?*anyopaque = null,
-    net_handlers: ?net_state.HandlerSet = null,
-    net_policy: net_state.PolicyState = .{},
-    net_listen_policy: net_state.PolicyState = .{},
-    http_handler: ?http_state.HandlerSet = null,
     source_entries: [MaxSources]api.SourceEntry = undefined,
     source_count: u8 = 0,
     path_bufs: [MaxSources][256]u8 = undefined,
@@ -196,10 +192,8 @@ const Engine = struct {
         self.read_callback = null;
         self.host_call_callback = null;
         self.host_call_ctx = null;
-        self.net_handlers = null;
-        self.net_policy = .{};
-        self.net_listen_policy = .{};
-        self.http_handler = null;
+        self.runtime.inner.net_es = .{};
+        self.runtime.inner.http_es = .{};
         self.runtime.inner.fs_mounts.clear();
         self.import_loader_fn = null;
         self.import_loader_ctx = null;
@@ -344,11 +338,6 @@ fn pushEngineState(engine: *Engine) ?*Engine {
     write_callback = engine.write_callback;
     read_callback = engine.read_callback;
     host_abi.setNativeHostCall(engine.host_call_callback, engine.host_call_ctx);
-    net_state.applyHandlers(engine.net_handlers);
-    net_state.applyPolicy(engine.net_policy);
-    net_state.applyListenPolicy(engine.net_listen_policy);
-    http_state.applyHandler(engine.http_handler);
-    fs_state.setActive(&engine.runtime.inner.fs_mounts);
     io.setTrace(engine.trace_fn, engine.trace_userdata, engineToHandle(engine));
     return prev;
 }
@@ -360,10 +349,6 @@ fn popEngineState(prev: ?*Engine) void {
         write_callback = p.write_callback;
         read_callback = p.read_callback;
         host_abi.setNativeHostCall(p.host_call_callback, p.host_call_ctx);
-        net_state.applyHandlers(p.net_handlers);
-        net_state.applyPolicy(p.net_policy);
-        net_state.applyListenPolicy(p.net_listen_policy);
-        http_state.applyHandler(p.http_handler);
         io.setTrace(p.trace_fn, p.trace_userdata, engineToHandle(p));
         p.runtime.inner.activate();
     } else {
@@ -371,10 +356,8 @@ fn popEngineState(prev: ?*Engine) void {
         write_callback = null;
         read_callback = null;
         host_abi.setNativeHostCall(null, null);
-        net_state.applyHandlers(null);
-        net_state.clearPolicy();
-        net_state.clearListenPolicy();
-        http_state.applyHandler(null);
+        net_state.setActive(net_state.defaultState());
+        http_state.setActive(http_state.defaultState());
         fs_state.setActive(fs_state.defaultState());
         io.clearTrace();
     }
@@ -1174,7 +1157,7 @@ export fn engine_set_read_fn(handle: i32, callback: ?ReadCallback) void {
 
 export fn engine_set_net_handlers(handle: i32, handlers: ?*const net_state.GengoNetHandlers, userdata: ?*anyopaque) void {
     const engine = getEngine(handle) orelse return;
-    engine.net_handlers = if (handlers) |h|
+    engine.runtime.inner.net_es.handlers = if (handlers) |h|
         .{ .callbacks = h.*, .userdata = userdata }
     else
         null;
@@ -1182,7 +1165,7 @@ export fn engine_set_net_handlers(handle: i32, handlers: ?*const net_state.Gengo
 
 export fn engine_set_http_handler(handle: i32, callback: ?http_state.GengoHttpFetchFn, userdata: ?*anyopaque) void {
     const engine = getEngine(handle) orelse return;
-    engine.http_handler = if (callback) |cb|
+    engine.runtime.inner.http_es.handler = if (callback) |cb|
         .{ .callback = cb, .userdata = userdata }
     else
         null;
@@ -1298,15 +1281,7 @@ export fn engine_net_policy_add(handle: i32, action: i32, pattern_ptr: PtrInt, p
     const pattern = wasmSlice(pattern_ptr, pattern_len);
     const act: net_state.PolicyAction = if (action == 0) .deny else .allow;
     const p: u16 = if (port <= 0 or port > 65535) 0 else @intCast(port);
-    const rc = blk: {
-        // Temporarily apply this engine's policy so addPolicyRule modifies it.
-        const saved = net_state.currentPolicy();
-        net_state.applyPolicy(engine.net_policy);
-        const r = net_state.addPolicyRule(act, pattern, p);
-        engine.net_policy = net_state.currentPolicy();
-        net_state.applyPolicy(saved);
-        break :blk r;
-    };
+    const rc = net_state.addRuleTo(&engine.runtime.inner.net_es.policy, act, pattern, p);
     return switch (rc) {
         0 => 0,
         -1 => -2,
@@ -1318,7 +1293,7 @@ export fn engine_net_policy_add(handle: i32, action: i32, pattern_ptr: PtrInt, p
 /// (allow all) is restored.
 export fn engine_net_policy_clear(handle: i32) void {
     const engine = getEngine(handle) orelse return;
-    engine.net_policy = .{};
+    engine.runtime.inner.net_es.policy = .{};
 }
 
 /// Add a listen (bind) policy rule for cap:net. Same rule shape and LIFO
@@ -1334,14 +1309,7 @@ export fn engine_net_listen_policy_add(handle: i32, action: i32, pattern_ptr: Pt
     const pattern = wasmSlice(pattern_ptr, pattern_len);
     const act: net_state.PolicyAction = if (action == 0) .deny else .allow;
     const p: u16 = if (port <= 0 or port > 65535) 0 else @intCast(port);
-    const rc = blk: {
-        const saved = net_state.currentListenPolicy();
-        net_state.applyListenPolicy(engine.net_listen_policy);
-        const r = net_state.addListenPolicyRule(act, pattern, p);
-        engine.net_listen_policy = net_state.currentListenPolicy();
-        net_state.applyListenPolicy(saved);
-        break :blk r;
-    };
+    const rc = net_state.addRuleTo(&engine.runtime.inner.net_es.listen_policy, act, pattern, p);
     return switch (rc) {
         0 => 0,
         -1 => -2,
@@ -1353,7 +1321,7 @@ export fn engine_net_listen_policy_add(handle: i32, action: i32, pattern_ptr: Pt
 /// reverts to refusing everything (default-deny) until new rules are added.
 export fn engine_net_listen_policy_clear(handle: i32) void {
     const engine = getEngine(handle) orelse return;
-    engine.net_listen_policy = .{};
+    engine.runtime.inner.net_es.listen_policy = .{};
 }
 
 // Returns:
@@ -1990,15 +1958,15 @@ test "engine_net_policy_add rule registration" {
 
     // clear resets count
     engine_net_policy_clear(h);
-    try std.testing.expectEqual(@as(u8, 0), getEngine(h).?.net_policy.count);
+    try std.testing.expectEqual(@as(u8, 0), getEngine(h).?.runtime.inner.net_es.policy.count);
 
     // Per-engine isolation
     const h2 = engine_init();
     try std.testing.expect(h2 > 0);
     defer engine_destroy(h2);
     try std.testing.expectEqual(@as(i32, 0), engine_net_policy_add(h, 0, @intCast(@intFromPtr(pat_star.ptr)), @intCast(pat_star.len), 0));
-    try std.testing.expectEqual(@as(u8, 1), getEngine(h).?.net_policy.count);
-    try std.testing.expectEqual(@as(u8, 0), getEngine(h2).?.net_policy.count);
+    try std.testing.expectEqual(@as(u8, 1), getEngine(h).?.runtime.inner.net_es.policy.count);
+    try std.testing.expectEqual(@as(u8, 0), getEngine(h2).?.runtime.inner.net_es.policy.count);
 }
 
 test "engine_net_listen_policy_add rule registration" {
@@ -2021,16 +1989,16 @@ test "engine_net_listen_policy_add rule registration" {
 
     // clear resets count
     engine_net_listen_policy_clear(h);
-    try std.testing.expectEqual(@as(u8, 0), getEngine(h).?.net_listen_policy.count);
+    try std.testing.expectEqual(@as(u8, 0), getEngine(h).?.runtime.inner.net_es.listen_policy.count);
 
     // Per-engine isolation — and isolated from the dial policy list too.
     const h2 = engine_init();
     try std.testing.expect(h2 > 0);
     defer engine_destroy(h2);
     try std.testing.expectEqual(@as(i32, 0), engine_net_listen_policy_add(h, 0, @intCast(@intFromPtr(pat_star.ptr)), @intCast(pat_star.len), 0));
-    try std.testing.expectEqual(@as(u8, 1), getEngine(h).?.net_listen_policy.count);
-    try std.testing.expectEqual(@as(u8, 0), getEngine(h2).?.net_listen_policy.count);
-    try std.testing.expectEqual(@as(u8, 0), getEngine(h).?.net_policy.count);
+    try std.testing.expectEqual(@as(u8, 1), getEngine(h).?.runtime.inner.net_es.listen_policy.count);
+    try std.testing.expectEqual(@as(u8, 0), getEngine(h2).?.runtime.inner.net_es.listen_policy.count);
+    try std.testing.expectEqual(@as(u8, 0), getEngine(h).?.runtime.inner.net_es.policy.count);
 }
 
 test "engine_net_listen_policy checkListenPolicy default-deny semantics" {

@@ -39,36 +39,110 @@ pub const PolicyState = struct {
     count: u8 = 0,
 };
 
-var g_policy: PolicyState = .{};
-
-pub fn applyPolicy(state: PolicyState) void {
-    g_policy = state;
-}
-
-pub fn currentPolicy() PolicyState {
-    return g_policy;
-}
-
-pub fn clearPolicy() void {
-    g_policy = .{};
-}
-
 // Listen policy — same rule shape and matcher as dial's, but a separate
 // instance (a host restricting outbound destinations shouldn't also have to
 // reuse those same rules for its own listening ports; the authority is
 // different) and default-DENY rather than default-ALLOW (see checkPolicy).
-var g_listen_policy: PolicyState = .{};
 
-pub fn applyListenPolicy(state: PolicyState) void {
-    g_listen_policy = state;
+const NetConn = struct {
+    id: u32,
+    host_handle: i32,
+    socket: if (builtin.os.tag == .wasi) void else std.posix.socket_t,
+    rbuf: [ReadBufSize]u8 = undefined,
+    rbuf_pos: usize = 0,
+    rbuf_end: usize = 0,
+};
+
+// Listening sockets — independent ceiling from MaxConns (§9 of the design
+// note: a script needing many listening ports is a different shape of
+// program than one needing many connections). Accepted connections still
+// draw from conns/MaxConns above, same pool dial uses.
+const MaxListeners = 8;
+
+const NetListener = struct {
+    id: u32,
+    host_handle: i32,
+    socket: if (builtin.os.tag == .wasi) void else std.posix.socket_t,
+};
+
+/// C-compatible struct matching GengoNetHandlers in the C API.
+/// All function pointers are required when set — the entire struct
+/// must be valid or operations fall back to the built-in implementation.
+pub const GengoNetHandlers = extern struct {
+    dial: ?*const fn (network: [*]const u8, network_len: usize, address: [*]const u8, address_len: usize, out_handle: *i32, userdata: ?*anyopaque) callconv(.c) i32,
+    read: ?*const fn (handle: i32, buf: [*]u8, max_bytes: i32, userdata: ?*anyopaque) callconv(.c) i32,
+    write: ?*const fn (handle: i32, data: [*]const u8, len: i32, userdata: ?*anyopaque) callconv(.c) i32,
+    close: ?*const fn (handle: i32, userdata: ?*anyopaque) callconv(.c) void,
+    local_addr: ?*const fn (handle: i32, buf: [*]u8, buf_len: i32, userdata: ?*anyopaque) callconv(.c) void,
+    remote_addr: ?*const fn (handle: i32, buf: [*]u8, buf_len: i32, userdata: ?*anyopaque) callconv(.c) void,
+    set_deadline: ?*const fn (handle: i32, ms: i64, userdata: ?*anyopaque) callconv(.c) void,
+    set_read_deadline: ?*const fn (handle: i32, ms: i64, userdata: ?*anyopaque) callconv(.c) void,
+    set_write_deadline: ?*const fn (handle: i32, ms: i64, userdata: ?*anyopaque) callconv(.c) void,
+    // Listener support — optional even when the rest of the struct is set,
+    // since a host may support dialing but not listening (or vice versa).
+    // A null field here just means "listen unsupported by this host."
+    listen: ?*const fn (network: [*]const u8, network_len: usize, address: [*]const u8, address_len: usize, out_listener_handle: *i32, userdata: ?*anyopaque) callconv(.c) i32 = null,
+    // Returns: 1 = got a connection, 0 = would-block/timeout, <0 = error.
+    accept: ?*const fn (listener_handle: i32, out_conn_handle: *i32, userdata: ?*anyopaque) callconv(.c) i32 = null,
+    listener_close: ?*const fn (listener_handle: i32, userdata: ?*anyopaque) callconv(.c) void = null,
+    listener_local_addr: ?*const fn (listener_handle: i32, buf: [*]u8, buf_len: i32, userdata: ?*anyopaque) callconv(.c) void = null,
+    set_accept_deadline: ?*const fn (listener_handle: i32, ms: i64, userdata: ?*anyopaque) callconv(.c) void = null,
+};
+
+pub const HandlerSet = struct {
+    callbacks: GengoNetHandlers,
+    userdata: ?*anyopaque,
+};
+
+// ---------------------------------------------------------------------------
+// Per-runtime state — everything that was previously process-global.
+// Each Runtime owns a NetEngineState embedded in its struct; Runtime.activate()
+// points g_state at it, mirroring the fs_state / chunk / heap pattern (#216).
+// ---------------------------------------------------------------------------
+
+pub const NetEngineState = struct {
+    policy: PolicyState = .{},
+    listen_policy: PolicyState = .{},
+    handlers: ?HandlerSet = null,
+    conns: [MaxConns]NetConn = undefined,
+    conn_count: usize = 0,
+    next_id: u32 = 1,
+    listeners: [MaxListeners]NetListener = undefined,
+    listener_count: usize = 0,
+    next_listener_id: u32 = 1,
+    net_err_buf: [256]u8 = undefined,
+    net_err_len: usize = 0,
+};
+
+pub var g_default_state: NetEngineState = .{};
+threadlocal var g_state: *NetEngineState = &g_default_state;
+
+pub fn setActive(state: *NetEngineState) void {
+    g_state = state;
 }
 
-pub fn currentListenPolicy() PolicyState {
-    return g_listen_policy;
+pub fn defaultState() *NetEngineState {
+    return &g_default_state;
+}
+
+// ---------------------------------------------------------------------------
+// Policy management
+// ---------------------------------------------------------------------------
+
+// clearPolicy/clearListenPolicy/addPolicyRule/addListenPolicyRule are
+// "default state setup" functions called by the CLI and tests before a
+// Runtime exists. They redirect g_state to &g_default_state so the write
+// target and subsequent checkDialPolicy/checkListenPolicy reads are
+// consistent, and so Runtime.initWithConfig()'s seed-from-g_default_state
+// picks the rules up correctly.
+pub fn clearPolicy() void {
+    g_state = &g_default_state;
+    g_default_state.policy = .{};
 }
 
 pub fn clearListenPolicy() void {
-    g_listen_policy = .{};
+    g_state = &g_default_state;
+    g_default_state.listen_policy = .{};
 }
 
 // Returns 0 on success, -1 if the rule list is full, -2 for invalid pattern.
@@ -120,7 +194,9 @@ fn buildPolicyRule(action: PolicyAction, pattern: []const u8, port: u16) union(e
     return .{ .ok = rule };
 }
 
-fn addRuleTo(policy: *PolicyState, action: PolicyAction, pattern: []const u8, port: u16) i32 {
+// Adds a rule to an arbitrary PolicyState. pub so engine.zig can target a
+// specific engine's policy directly without touching g_state.
+pub fn addRuleTo(policy: *PolicyState, action: PolicyAction, pattern: []const u8, port: u16) i32 {
     if (policy.count >= MaxPolicyRules) return -1;
     const rule = switch (buildPolicyRule(action, pattern, port)) {
         .ok => |r| r,
@@ -132,19 +208,23 @@ fn addRuleTo(policy: *PolicyState, action: PolicyAction, pattern: []const u8, po
 }
 
 pub fn addPolicyRule(action: PolicyAction, pattern: []const u8, port: u16) i32 {
-    return addRuleTo(&g_policy, action, pattern, port);
+    g_state = &g_default_state;
+    return addRuleTo(&g_default_state.policy, action, pattern, port);
 }
 
 pub fn clearPolicyRules() void {
-    g_policy.count = 0;
+    g_state = &g_default_state;
+    g_default_state.policy.count = 0;
 }
 
 pub fn addListenPolicyRule(action: PolicyAction, pattern: []const u8, port: u16) i32 {
-    return addRuleTo(&g_listen_policy, action, pattern, port);
+    g_state = &g_default_state;
+    return addRuleTo(&g_default_state.listen_policy, action, pattern, port);
 }
 
 pub fn clearListenPolicyRules() void {
-    g_listen_policy.count = 0;
+    g_state = &g_default_state;
+    g_default_state.listen_policy.count = 0;
 }
 
 // Rules are evaluated LIFO — most recently added rule wins on first match.
@@ -215,14 +295,14 @@ fn endsWithIgnoreCase(haystack: []const u8, suffix: []const u8) bool {
 // Returns true if the dial is allowed. No rules → allow (default; same as
 // current behaviour).
 pub fn checkDialPolicy(address: []const u8) bool {
-    return matchPolicy(&g_policy, address, true);
+    return matchPolicy(&g_state.policy, address, true);
 }
 
 // Returns true if the bind is allowed. No rules → DENY — listen is a bigger
 // authority than dial (see design note §4), so absence of configuration must
 // not silently permit anything, unlike dial's default-allow.
 pub fn checkListenPolicy(address: []const u8) bool {
-    return matchPolicy(&g_listen_policy, address, false);
+    return matchPolicy(&g_state.listen_policy, address, false);
 }
 
 fn parseIPv4(s: []const u8) ?[4]u8 {
@@ -265,125 +345,66 @@ fn ipv6InCidr(ip: [16]u8, network: [16]u8, prefix_len: u8) bool {
     return true;
 }
 
-const NetConn = struct {
-    id: u32,
-    host_handle: i32,
-    socket: if (builtin.os.tag == .wasi) void else std.posix.socket_t,
-    rbuf: [ReadBufSize]u8 = undefined,
-    rbuf_pos: usize = 0,
-    rbuf_end: usize = 0,
-};
-
-var g_next_id: u32 = 1;
-var g_conns: [MaxConns]NetConn = undefined;
-var g_conn_count: usize = 0;
-
-// Listening sockets — independent ceiling from MaxConns (§9 of the design
-// note: a script needing many listening ports is a different shape of
-// program than one needing many connections). Accepted connections still
-// draw from g_conns/MaxConns above, same pool dial uses.
-const MaxListeners = 8;
-
-const NetListener = struct {
-    id: u32,
-    host_handle: i32,
-    socket: if (builtin.os.tag == .wasi) void else std.posix.socket_t,
-};
-
-var g_next_listener_id: u32 = 1;
-var g_listeners: [MaxListeners]NetListener = undefined;
-var g_listener_count: usize = 0;
-
-var g_net_err_buf: [256]u8 = undefined;
-var g_net_err_len: usize = 0;
-
-fn setNetErr(comptime fmt: []const u8, args: anytype) void {
-    const s = std.fmt.bufPrint(&g_net_err_buf, fmt, args) catch g_net_err_buf[0..g_net_err_buf.len];
-    g_net_err_len = s.len;
-}
-
-pub fn lastNetErr() []const u8 {
-    if (g_net_err_len == 0) return "CapabilityError";
-    return g_net_err_buf[0..g_net_err_len];
-}
-
-/// C-compatible struct matching GengoNetHandlers in the C API.
-/// All function pointers are required when set — the entire struct
-/// must be valid or operations fall back to the built-in implementation.
-pub const GengoNetHandlers = extern struct {
-    dial: ?*const fn (network: [*]const u8, network_len: usize, address: [*]const u8, address_len: usize, out_handle: *i32, userdata: ?*anyopaque) callconv(.c) i32,
-    read: ?*const fn (handle: i32, buf: [*]u8, max_bytes: i32, userdata: ?*anyopaque) callconv(.c) i32,
-    write: ?*const fn (handle: i32, data: [*]const u8, len: i32, userdata: ?*anyopaque) callconv(.c) i32,
-    close: ?*const fn (handle: i32, userdata: ?*anyopaque) callconv(.c) void,
-    local_addr: ?*const fn (handle: i32, buf: [*]u8, buf_len: i32, userdata: ?*anyopaque) callconv(.c) void,
-    remote_addr: ?*const fn (handle: i32, buf: [*]u8, buf_len: i32, userdata: ?*anyopaque) callconv(.c) void,
-    set_deadline: ?*const fn (handle: i32, ms: i64, userdata: ?*anyopaque) callconv(.c) void,
-    set_read_deadline: ?*const fn (handle: i32, ms: i64, userdata: ?*anyopaque) callconv(.c) void,
-    set_write_deadline: ?*const fn (handle: i32, ms: i64, userdata: ?*anyopaque) callconv(.c) void,
-    // Listener support — optional even when the rest of the struct is set,
-    // since a host may support dialing but not listening (or vice versa).
-    // A null field here just means "listen unsupported by this host."
-    listen: ?*const fn (network: [*]const u8, network_len: usize, address: [*]const u8, address_len: usize, out_listener_handle: *i32, userdata: ?*anyopaque) callconv(.c) i32 = null,
-    // Returns: 1 = got a connection, 0 = would-block/timeout, <0 = error.
-    accept: ?*const fn (listener_handle: i32, out_conn_handle: *i32, userdata: ?*anyopaque) callconv(.c) i32 = null,
-    listener_close: ?*const fn (listener_handle: i32, userdata: ?*anyopaque) callconv(.c) void = null,
-    listener_local_addr: ?*const fn (listener_handle: i32, buf: [*]u8, buf_len: i32, userdata: ?*anyopaque) callconv(.c) void = null,
-    set_accept_deadline: ?*const fn (listener_handle: i32, ms: i64, userdata: ?*anyopaque) callconv(.c) void = null,
-};
-
-pub const HandlerSet = struct {
-    callbacks: GengoNetHandlers,
-    userdata: ?*anyopaque,
-};
-
-var g_net_handlers: ?HandlerSet = null;
+// ---------------------------------------------------------------------------
+// Handler management
+// ---------------------------------------------------------------------------
 
 pub fn setNetHandlers(handlers: GengoNetHandlers, userdata: ?*anyopaque) void {
-    g_net_handlers = .{ .callbacks = handlers, .userdata = userdata };
-}
-
-pub fn applyHandlers(h: ?HandlerSet) void {
-    g_net_handlers = h;
-}
-
-pub fn currentHandlers() ?HandlerSet {
-    return g_net_handlers;
+    g_state.handlers = .{ .callbacks = handlers, .userdata = userdata };
 }
 
 pub fn hasHandlers() bool {
-    return g_net_handlers != null;
+    return g_state.handlers != null;
 }
 
 pub fn resetHandlers() void {
-    g_net_handlers = null;
+    g_state.handlers = null;
 }
 
+// ---------------------------------------------------------------------------
+// Error buffer
+// ---------------------------------------------------------------------------
+
+fn setNetErr(comptime fmt: []const u8, args: anytype) void {
+    const s = std.fmt.bufPrint(&g_state.net_err_buf, fmt, args) catch g_state.net_err_buf[0..g_state.net_err_buf.len];
+    g_state.net_err_len = s.len;
+}
+
+pub fn lastNetErr() []const u8 {
+    if (g_state.net_err_len == 0) return "CapabilityError";
+    return g_state.net_err_buf[0..g_state.net_err_len];
+}
+
+// ---------------------------------------------------------------------------
+// Connection and listener tables
+// ---------------------------------------------------------------------------
+
 pub fn netReset() void {
-    if (g_net_handlers) |h| {
-        for (g_conns[0..g_conn_count]) |conn| {
+    if (g_state.handlers) |h| {
+        for (g_state.conns[0..g_state.conn_count]) |conn| {
             if (h.callbacks.close) |close_fn| close_fn(conn.host_handle, h.userdata);
         }
-        g_conn_count = 0;
-        g_next_id = 1;
-        for (g_listeners[0..g_listener_count]) |l| {
+        g_state.conn_count = 0;
+        g_state.next_id = 1;
+        for (g_state.listeners[0..g_state.listener_count]) |l| {
             if (h.callbacks.listener_close) |close_fn| close_fn(l.host_handle, h.userdata);
         }
-        g_listener_count = 0;
-        g_next_listener_id = 1;
+        g_state.listener_count = 0;
+        g_state.next_listener_id = 1;
         return;
     }
     if (comptime builtin.os.tag == .wasi) return;
     const io_ctx = ioContext();
-    for (g_conns[0..g_conn_count]) |*conn| {
+    for (g_state.conns[0..g_state.conn_count]) |*conn| {
         io_ctx.vtable.netClose(io_ctx.userdata, (&conn.socket)[0..1]);
     }
-    g_conn_count = 0;
-    g_next_id = 1;
-    for (g_listeners[0..g_listener_count]) |*l| {
+    g_state.conn_count = 0;
+    g_state.next_id = 1;
+    for (g_state.listeners[0..g_state.listener_count]) |*l| {
         io_ctx.vtable.netClose(io_ctx.userdata, (&l.socket)[0..1]);
     }
-    g_listener_count = 0;
-    g_next_listener_id = 1;
+    g_state.listener_count = 0;
+    g_state.next_listener_id = 1;
 }
 
 fn ioContext() std.Io {
@@ -441,9 +462,9 @@ fn formatIp6Address(port: u16, ip_bytes: [16]u8) ![]u8 {
 }
 
 pub fn netDial(network: []const u8, address: []const u8) !u32 {
-    g_net_err_len = 0;
-    if (g_net_handlers) |h| {
-        if (g_conn_count >= MaxConns) {
+    g_state.net_err_len = 0;
+    if (g_state.handlers) |h| {
+        if (g_state.conn_count >= MaxConns) {
             setNetErr("too many connections (max {d})", .{MaxConns});
             return error.NetError;
         }
@@ -457,14 +478,14 @@ pub fn netDial(network: []const u8, address: []const u8) !u32 {
             setNetErr("dial: host handler returned error {d}", .{rc});
             return error.NetError;
         }
-        const id = g_next_id;
-        g_next_id += 1;
-        g_conns[g_conn_count] = .{ .id = id, .host_handle = out_handle, .socket = undefined };
-        g_conn_count += 1;
+        const id = g_state.next_id;
+        g_state.next_id += 1;
+        g_state.conns[g_state.conn_count] = .{ .id = id, .host_handle = out_handle, .socket = undefined };
+        g_state.conn_count += 1;
         return id;
     }
     if (comptime builtin.os.tag == .wasi or builtin.os.tag == .windows) return error.CapabilityNotAvailable;
-    if (g_conn_count >= MaxConns) {
+    if (g_state.conn_count >= MaxConns) {
         setNetErr("too many connections (max {d})", .{MaxConns});
         return error.NetError;
     }
@@ -577,17 +598,17 @@ pub fn netDial(network: []const u8, address: []const u8) !u32 {
         },
     }
 
-    const id = g_next_id;
-    g_next_id += 1;
-    g_conns[g_conn_count] = .{ .id = id, .host_handle = 0, .socket = fd };
-    g_conn_count += 1;
+    const id = g_state.next_id;
+    g_state.next_id += 1;
+    g_state.conns[g_state.conn_count] = .{ .id = id, .host_handle = 0, .socket = fd };
+    g_state.conn_count += 1;
     return id;
 }
 
 pub fn netListen(network: []const u8, address: []const u8) !u32 {
-    g_net_err_len = 0;
-    if (g_net_handlers) |h| {
-        if (g_listener_count >= MaxListeners) {
+    g_state.net_err_len = 0;
+    if (g_state.handlers) |h| {
+        if (g_state.listener_count >= MaxListeners) {
             setNetErr("too many listeners (max {d})", .{MaxListeners});
             return error.NetError;
         }
@@ -601,14 +622,14 @@ pub fn netListen(network: []const u8, address: []const u8) !u32 {
             setNetErr("listen: host handler returned error {d}", .{rc});
             return error.NetError;
         }
-        const id = g_next_listener_id;
-        g_next_listener_id += 1;
-        g_listeners[g_listener_count] = .{ .id = id, .host_handle = out_handle, .socket = undefined };
-        g_listener_count += 1;
+        const id = g_state.next_listener_id;
+        g_state.next_listener_id += 1;
+        g_state.listeners[g_state.listener_count] = .{ .id = id, .host_handle = out_handle, .socket = undefined };
+        g_state.listener_count += 1;
         return id;
     }
     if (comptime builtin.os.tag == .wasi or builtin.os.tag == .windows) return error.CapabilityNotAvailable;
-    if (g_listener_count >= MaxListeners) {
+    if (g_state.listener_count >= MaxListeners) {
         setNetErr("too many listeners (max {d})", .{MaxListeners});
         return error.NetError;
     }
@@ -709,25 +730,25 @@ pub fn netListen(network: []const u8, address: []const u8) !u32 {
         return error.NetError;
     }
 
-    const id = g_next_listener_id;
-    g_next_listener_id += 1;
-    g_listeners[g_listener_count] = .{ .id = id, .host_handle = 0, .socket = fd };
-    g_listener_count += 1;
+    const id = g_state.next_listener_id;
+    g_state.next_listener_id += 1;
+    g_state.listeners[g_state.listener_count] = .{ .id = id, .host_handle = 0, .socket = fd };
+    g_state.listener_count += 1;
     return id;
 }
 
 fn findListener(id: u32) ?*NetListener {
-    for (g_listeners[0..g_listener_count]) |*l| {
+    for (g_state.listeners[0..g_state.listener_count]) |*l| {
         if (l.id == id) return l;
     }
     return null;
 }
 
 fn removeListener(id: u32) void {
-    for (g_listeners[0..g_listener_count], 0..) |*l, i| {
+    for (g_state.listeners[0..g_state.listener_count], 0..) |*l, i| {
         if (l.id == id) {
-            g_listeners[i] = g_listeners[g_listener_count - 1];
-            g_listener_count -= 1;
+            g_state.listeners[i] = g_state.listeners[g_state.listener_count - 1];
+            g_state.listener_count -= 1;
             return;
         }
     }
@@ -739,8 +760,8 @@ fn removeListener(id: u32) void {
 // socket, so EAGAIN here maps to DeadlineExceeded exactly like netRead's
 // existing WouldBlock => DeadlineExceeded arm.
 pub fn netListenerAccept(listener_id: u32) !u32 {
-    g_net_err_len = 0;
-    if (g_net_handlers) |h| {
+    g_state.net_err_len = 0;
+    if (g_state.handlers) |h| {
         const l = findListener(listener_id) orelse {
             setNetErr("accept: unknown listener handle {d}", .{listener_id});
             return error.NetError;
@@ -756,14 +777,14 @@ pub fn netListenerAccept(listener_id: u32) !u32 {
             setNetErr("accept: host handler returned error {d}", .{rc});
             return error.NetError;
         }
-        if (g_conn_count >= MaxConns) {
+        if (g_state.conn_count >= MaxConns) {
             setNetErr("too many connections (max {d})", .{MaxConns});
             return error.NetError;
         }
-        const id = g_next_id;
-        g_next_id += 1;
-        g_conns[g_conn_count] = .{ .id = id, .host_handle = out_conn_handle, .socket = undefined };
-        g_conn_count += 1;
+        const id = g_state.next_id;
+        g_state.next_id += 1;
+        g_state.conns[g_state.conn_count] = .{ .id = id, .host_handle = out_conn_handle, .socket = undefined };
+        g_state.conn_count += 1;
         return id;
     }
     if (comptime builtin.os.tag == .wasi or builtin.os.tag == .windows) return error.CapabilityNotAvailable;
@@ -771,7 +792,7 @@ pub fn netListenerAccept(listener_id: u32) !u32 {
         setNetErr("accept: unknown listener handle {d}", .{listener_id});
         return error.NetError;
     };
-    if (g_conn_count >= MaxConns) {
+    if (g_state.conn_count >= MaxConns) {
         setNetErr("too many connections (max {d})", .{MaxConns});
         return error.NetError;
     }
@@ -781,10 +802,10 @@ pub fn netListenerAccept(listener_id: u32) !u32 {
         switch (std.posix.errno(rc)) {
             .SUCCESS => {
                 const fd: std.posix.socket_t = @intCast(rc);
-                const id = g_next_id;
-                g_next_id += 1;
-                g_conns[g_conn_count] = .{ .id = id, .host_handle = 0, .socket = fd };
-                g_conn_count += 1;
+                const id = g_state.next_id;
+                g_state.next_id += 1;
+                g_state.conns[g_state.conn_count] = .{ .id = id, .host_handle = 0, .socket = fd };
+                g_state.conn_count += 1;
                 return id;
             },
             .INTR => continue,
@@ -798,7 +819,7 @@ pub fn netListenerAccept(listener_id: u32) !u32 {
 }
 
 pub fn netListenerClose(id: u32) !void {
-    if (g_net_handlers) |h| {
+    if (g_state.handlers) |h| {
         const l = findListener(id) orelse return error.CapabilityError;
         if (h.callbacks.listener_close) |close_fn| close_fn(l.host_handle, h.userdata);
         removeListener(id);
@@ -813,7 +834,7 @@ pub fn netListenerClose(id: u32) !void {
 }
 
 pub fn netListenerLocalAddr(id: u32) ![]u8 {
-    if (g_net_handlers) |h| {
+    if (g_state.handlers) |h| {
         const l = findListener(id) orelse return error.CapabilityError;
         var buf: [128]u8 = std.mem.zeroes([128]u8);
         (h.callbacks.listener_local_addr orelse return error.CapabilityError)(l.host_handle, &buf, @intCast(buf.len), h.userdata);
@@ -842,7 +863,7 @@ pub fn netListenerLocalAddr(id: u32) ![]u8 {
 }
 
 pub fn netListenerSetAcceptDeadline(id: u32, ms: i64) !void {
-    if (g_net_handlers) |h| {
+    if (g_state.handlers) |h| {
         const l = findListener(id) orelse return error.CapabilityError;
         if (h.callbacks.set_accept_deadline) |fn_ptr| fn_ptr(l.host_handle, ms, h.userdata);
         return;
@@ -854,25 +875,25 @@ pub fn netListenerSetAcceptDeadline(id: u32, ms: i64) !void {
 }
 
 fn findConn(id: u32) ?*NetConn {
-    for (g_conns[0..g_conn_count]) |*c| {
+    for (g_state.conns[0..g_state.conn_count]) |*c| {
         if (c.id == id) return c;
     }
     return null;
 }
 
 fn removeConn(id: u32) void {
-    for (g_conns[0..g_conn_count], 0..) |*c, i| {
+    for (g_state.conns[0..g_state.conn_count], 0..) |*c, i| {
         if (c.id == id) {
-            g_conns[i] = g_conns[g_conn_count - 1];
-            g_conn_count -= 1;
+            g_state.conns[i] = g_state.conns[g_state.conn_count - 1];
+            g_state.conn_count -= 1;
             return;
         }
     }
 }
 
 pub fn netRead(id: u32, max_bytes: usize) ![]u8 {
-    g_net_err_len = 0;
-    if (g_net_handlers) |h| {
+    g_state.net_err_len = 0;
+    if (g_state.handlers) |h| {
         const conn = findConn(id) orelse {
             setNetErr("read: unknown connection handle {d}", .{id});
             return error.NetError;
@@ -940,7 +961,7 @@ pub fn netRead(id: u32, max_bytes: usize) ![]u8 {
 // posix.read per 4 KiB consumed. Only available on POSIX (not host/WASM paths).
 pub fn netReadInto(id: u32, dest: []u8) !usize {
     if (comptime builtin.os.tag == .wasi or builtin.os.tag == .windows) return error.CapabilityNotAvailable;
-    g_net_err_len = 0;
+    g_state.net_err_len = 0;
     const conn = findConn(id) orelse {
         setNetErr("read: unknown connection handle {d}", .{id});
         return error.NetError;
@@ -973,8 +994,8 @@ pub fn netReadInto(id: u32, dest: []u8) !usize {
 }
 
 pub fn netWrite(id: u32, data: []const u8) !usize {
-    g_net_err_len = 0;
-    if (g_net_handlers) |h| {
+    g_state.net_err_len = 0;
+    if (g_state.handlers) |h| {
         const conn = findConn(id) orelse {
             setNetErr("write: unknown connection handle {d}", .{id});
             return error.NetError;
@@ -1032,7 +1053,7 @@ pub fn netWrite(id: u32, data: []const u8) !usize {
 }
 
 pub fn netClose(id: u32) !void {
-    if (g_net_handlers) |h| {
+    if (g_state.handlers) |h| {
         const conn = findConn(id) orelse return error.CapabilityError;
         if (h.callbacks.close) |close_fn| close_fn(conn.host_handle, h.userdata);
         removeConn(id);
@@ -1047,7 +1068,7 @@ pub fn netClose(id: u32) !void {
 }
 
 pub fn netLocalAddr(id: u32) ![]u8 {
-    if (g_net_handlers) |h| {
+    if (g_state.handlers) |h| {
         const conn = findConn(id) orelse return error.CapabilityError;
         var buf: [128]u8 = std.mem.zeroes([128]u8);
         (h.callbacks.local_addr orelse return error.CapabilityError)(conn.host_handle, &buf, @intCast(buf.len), h.userdata);
@@ -1076,7 +1097,7 @@ pub fn netLocalAddr(id: u32) ![]u8 {
 }
 
 pub fn netRemoteAddr(id: u32) ![]u8 {
-    if (g_net_handlers) |h| {
+    if (g_state.handlers) |h| {
         const conn = findConn(id) orelse return error.CapabilityError;
         var buf: [128]u8 = std.mem.zeroes([128]u8);
         (h.callbacks.remote_addr orelse return error.CapabilityError)(conn.host_handle, &buf, @intCast(buf.len), h.userdata);
@@ -1105,7 +1126,7 @@ pub fn netRemoteAddr(id: u32) ![]u8 {
 }
 
 pub fn netSetDeadline(id: u32, ms: i64) !void {
-    if (g_net_handlers) |h| {
+    if (g_state.handlers) |h| {
         const conn = findConn(id) orelse return error.CapabilityError;
         if (h.callbacks.set_deadline) |fn_ptr| fn_ptr(conn.host_handle, ms, h.userdata);
         return;
@@ -1118,7 +1139,7 @@ pub fn netSetDeadline(id: u32, ms: i64) !void {
 }
 
 pub fn netSetReadDeadline(id: u32, ms: i64) !void {
-    if (g_net_handlers) |h| {
+    if (g_state.handlers) |h| {
         const conn = findConn(id) orelse return error.CapabilityError;
         if (h.callbacks.set_read_deadline) |fn_ptr| fn_ptr(conn.host_handle, ms, h.userdata);
         return;
@@ -1130,7 +1151,7 @@ pub fn netSetReadDeadline(id: u32, ms: i64) !void {
 }
 
 pub fn netSetWriteDeadline(id: u32, ms: i64) !void {
-    if (g_net_handlers) |h| {
+    if (g_state.handlers) |h| {
         const conn = findConn(id) orelse return error.CapabilityError;
         if (h.callbacks.set_write_deadline) |fn_ptr| fn_ptr(conn.host_handle, ms, h.userdata);
         return;
