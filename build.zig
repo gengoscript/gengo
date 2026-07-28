@@ -42,7 +42,7 @@ pub fn build(b: *std.Build) void {
     const cap_env_opt = b.option(bool, "cap_env", "Include cap:env capability") orelse true;
     const predicates_opt = b.option(bool, "predicates", "Enable runtime predicate checks") orelse true;
     const gengo_host_opt = b.option(bool, "gengo_host", "Include gengo_host import for host module callbacks") orelse true;
-    const gengo_version = "0.6.0-pre1";
+    const gengo_version = "0.6.0-pre2";
     const build_opts = b.addOptions();
     build_opts.addOption(bool, "perf", perf_opt);
     build_opts.addOption(bool, "gc_stress", gc_stress_opt);

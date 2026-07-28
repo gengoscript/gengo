@@ -1,6 +1,6 @@
 {
   "name": "@gengo/engine",
-  "version": "0.6.0-pre1",
+  "version": "0.6.0-pre2",
   "version_comment": "Keep in sync with build.zig gengo_version",
   "description": "Gengoscript embeddable scripting engine — TypeScript SDK for the WASM runtime",
   "keywords": [

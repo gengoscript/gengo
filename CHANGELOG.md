@@ -2,6 +2,24 @@
 
 This changelog tracks notable language/runtime changes by implementation date.
 
+## 2026-07-28 (v0.6.0-pre2)
+
+### stdlib — `std.crypto` gains 6 new primitives
+
+- **`hkdf_sha256(ikm, salt, info, length)`** — HKDF-SHA256 (RFC 5869) key derivation; verified against RFC 5869 §A.1 test vector.
+- **`xchacha20poly1305_seal(key, nonce, plaintext)` / `xchacha20poly1305_open(key, nonce, ciphertext)`** — XChaCha20-Poly1305 AEAD with 24-byte nonce (vs the 12-byte nonce of the existing `chacha20poly1305_*` pair).
+- **`ed25519_sign(seed, message)`** — Ed25519 signature; returns 64 raw bytes.
+- **`ed25519_verify(pubkey, signature, message)`** — verifies an Ed25519 signature; returns bool.
+- **`x25519(secret, pubkey)`** — X25519 Diffie-Hellman (RFC 7748); verified against RFC 7748 §6.1 vector 1.
+
+### Runtime — `NativeFnId` expanded to u16
+
+Native function IDs backing type was `enum(u8)` (max 255 entries). Expanding the stdlib past 256 functions would have caused a silent enum truncation or compile error. The backing type is now `enum(u16)`, the `native_fn_backing` array is sized by `max_value + 1` (not field count) to handle the sparse enum correctly, and `vm_perf` counters updated accordingly.
+
+### Fix — `package_state.MaxFileSize` now tracks `cfg.max_input_bytes`
+
+The zip package decompressor previously rejected files larger than 64 KB regardless of the engine preset. `MaxFileSize` is now derived from `cfg.max_input_bytes` at comptime so it stays in sync with the compiler's own per-preset limit (128 KB for 1m, 512 KB for 16m, 64 MB for unlimited).
+
 ## 2026-07-28 (v0.6.0-pre1)
 
 ### Fixes
