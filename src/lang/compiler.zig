@@ -93,6 +93,15 @@ const ExportEntry = struct {
     global_name: []const u8,
 };
 
+pub const MaxCompileErrors = 16;
+pub const ErrorRecord = struct {
+    kind: anyerror,
+    line: u32,
+    col: u32,
+    msg: [512]u8,
+    msg_len: u16,
+};
+
 pub const Compiler = struct {
     lex: Lexer,
     prev: Token = undefined,
@@ -113,6 +122,10 @@ pub const Compiler = struct {
     err_msg_len: u16 = 0,
     err_col: u32 = 0,
     err_line: u32 = 0,
+
+    // Errors collected during recovery passes (index 0 = first / primary error).
+    collected_errors: [MaxCompileErrors]ErrorRecord = undefined,
+    collected_error_count: u8 = 0,
 
     std_namespace_path: ?[]const u8 = null,
     std_module_global_names: [MaxLocals][]const u8 = undefined,
@@ -219,15 +232,211 @@ pub const Compiler = struct {
         self.err_line = 0;
         self.expr_depth = 0;
         self.compile_time_const_count = 0;
+        self.collected_error_count = 0;
         self.repl_expr_ok = true;
         self.repl_pending_pop = false;
         self.advance();
         while (!self.check(.eof)) {
             try self.failOnLexerError();
             self.repl_expr_ok = true;
-            try self.decl();
+            const cp = self.declCheckpoint();
+            self.decl() catch |e| {
+                if (isFatalError(e)) return e;
+                self.collectError(e);
+                self.rollbackDecl(cp);
+                self.syncToNextDecl();
+            };
         }
         if (emit_halt) try self.cs.emitOp(.halt, self.prev.line);
+        if (self.collected_error_count > 0) {
+            // Restore legacy single-error fields from the first collected error
+            // so that existing callers (runtime.zig's recordCompilerCompileError)
+            // continue to see the primary error without any change.
+            const first = &self.collected_errors[0];
+            self.err_line = first.line;
+            self.err_col = first.col;
+            self.err_msg_len = first.msg_len;
+            @memcpy(self.err_msg_buf[0..first.msg_len], first.msg[0..first.msg_len]);
+            return first.kind;
+        }
+    }
+
+    // ── Error recovery helpers ────────────────────────────────────────────────────
+
+    /// Errors that cannot be recovered from: OOM means the heap is exhausted,
+    /// TooMany* means a fixed-size compile-time table is full.  Recovering from
+    /// these would risk corrupting the tables used by all subsequent decls.
+    fn isFatalError(e: anyerror) bool {
+        return switch (e) {
+            error.OutOfMemory,
+            error.TooManyLocals,
+            error.TooManyGlobals,
+            error.TooManyFields,
+            error.TooManyElements,
+            error.TooManyTypes,
+            error.TooManyNamedTypes,
+            error.TooManyParams,
+            error.TooManyNestedFunctions,
+            error.TooManyNestedLoops,
+            error.TooManyBreaksInLoop,
+            error.TooManySwitchCases,
+            error.TooManyInstantiations,
+            error.TooManyTypeAlternatives,
+            => true,
+            else => false,
+        };
+    }
+
+    const DeclCp = struct {
+        // Chunk (bytecode) state
+        code_len: usize,
+        const_count: usize,
+        str_slice_count: usize,
+        obj_const_count: usize,
+        last_const_code_pos: ?usize,
+        last_const_idx: u16,
+        prev_const_code_pos: ?usize,
+        prev_const_idx: u16,
+        last_const_was_new: bool,
+        prev_const_was_new: bool,
+        std_call_patch_pos: ?usize,
+        module_boundary_count: u8,
+        // Compiler-level tracking tables (top-level only — scope_depth==1)
+        export_count: u8,
+        compile_time_const_count: u16,
+        typed_global_count: u8,
+        inferred_named_global_count: u8,
+        inferred_struct_global_count: u8,
+        std_module_global_count: u8,
+        import_module_global_count: u8,
+        test_count: u16,
+        scope_local_count: u8,
+        block_depth: u8,
+        // Type registry
+        registry: ct.RegistryCp,
+    };
+
+    fn declCheckpoint(self: *const Compiler) DeclCp {
+        return .{
+            .code_len = self.cs.code_len,
+            .const_count = self.cs.const_count,
+            .str_slice_count = self.cs.str_slice_count,
+            .obj_const_count = self.cs.obj_const_count,
+            .last_const_code_pos = self.cs.last_const_code_pos,
+            .last_const_idx = self.cs.last_const_idx,
+            .prev_const_code_pos = self.cs.prev_const_code_pos,
+            .prev_const_idx = self.cs.prev_const_idx,
+            .last_const_was_new = self.cs.last_const_was_new,
+            .prev_const_was_new = self.cs.prev_const_was_new,
+            .std_call_patch_pos = self.cs.std_call_patch_pos,
+            .module_boundary_count = self.cs.module_boundary_count,
+            .export_count = self.export_count,
+            .compile_time_const_count = self.compile_time_const_count,
+            .typed_global_count = self.typed_global_count,
+            .inferred_named_global_count = self.inferred_named_global_count,
+            .inferred_struct_global_count = self.inferred_struct_global_count,
+            .std_module_global_count = self.std_module_global_count,
+            .import_module_global_count = self.import_module_global_count,
+            .test_count = self.test_count,
+            .scope_local_count = self.scopes[self.scope_depth - 1].local_count,
+            .block_depth = self.block_depth,
+            .registry = self.registry.checkpoint(),
+        };
+    }
+
+    fn rollbackDecl(self: *Compiler, cp: DeclCp) void {
+        self.cs.code_len = cp.code_len;
+        self.cs.const_count = cp.const_count;
+        self.cs.str_slice_count = cp.str_slice_count;
+        self.cs.obj_const_count = cp.obj_const_count;
+        self.cs.last_const_code_pos = cp.last_const_code_pos;
+        self.cs.last_const_idx = cp.last_const_idx;
+        self.cs.prev_const_code_pos = cp.prev_const_code_pos;
+        self.cs.prev_const_idx = cp.prev_const_idx;
+        self.cs.last_const_was_new = cp.last_const_was_new;
+        self.cs.prev_const_was_new = cp.prev_const_was_new;
+        self.cs.std_call_patch_pos = cp.std_call_patch_pos;
+        self.cs.module_boundary_count = cp.module_boundary_count;
+        self.export_count = cp.export_count;
+        self.compile_time_const_count = cp.compile_time_const_count;
+        self.typed_global_count = cp.typed_global_count;
+        self.inferred_named_global_count = cp.inferred_named_global_count;
+        self.inferred_struct_global_count = cp.inferred_struct_global_count;
+        self.std_module_global_count = cp.std_module_global_count;
+        self.import_module_global_count = cp.import_module_global_count;
+        self.test_count = cp.test_count;
+        self.scopes[self.scope_depth - 1].local_count = cp.scope_local_count;
+        self.block_depth = cp.block_depth;
+        // After rollback the compiler is back at module scope (scope_depth=1,
+        // not inside a function), no open loops.
+        self.scope_depth = 1;
+        self.loop_depth = 0;
+        self.expr_depth = 0;
+        self.peek_tok = null;
+        self.registry.rollback(cp.registry);
+    }
+
+    /// Advance past tokens until we reach a token that can start a new
+    /// top-level declaration, skipping balanced () [] {} groups so we do not
+    /// stop inside a function body on a keyword like `var` or `func`.
+    fn syncToNextDecl(self: *Compiler) void {
+        var depth: u32 = 0;
+        while (self.cur.typ != .eof) {
+            switch (self.cur.typ) {
+                .lbrace, .lparen, .lbracket => {
+                    depth += 1;
+                    self.advance();
+                },
+                .rbrace, .rparen, .rbracket => {
+                    if (depth == 0) {
+                        self.advance();
+                        return;
+                    }
+                    depth -= 1;
+                    self.advance();
+                    if (depth == 0) return;
+                },
+                .kw_func, .kw_type, .kw_subtype, .kw_var, .kw_const, .kw_pub, .kw_test => {
+                    if (depth == 0) return;
+                    self.advance();
+                },
+                else => self.advance(),
+            }
+        }
+    }
+
+    /// Save the current error (err_msg_buf / err_line / err_col) into the
+    /// collected_errors list.  The primary error fields stay intact so existing
+    /// callers that read them directly continue to see the first error.
+    fn collectError(self: *Compiler, kind: anyerror) void {
+        // Populate the primary error slot from the current error fields (first
+        // error wins for backward-compat callers; later ones are appended only).
+        const line = if (self.err_line != 0) self.err_line else self.prev.line;
+        const col = self.err_col;
+
+        if (self.collected_error_count == 0) {
+            // Mirror into the legacy single-error fields for callers that read
+            // them directly (runtime.zig's recordCompilerCompileError).
+            // err_msg_buf / err_msg_len are already set by setErr(); just make
+            // sure err_line reflects the fallback logic.
+            if (self.err_line == 0) self.err_line = self.prev.line;
+        }
+
+        if (self.collected_error_count >= MaxCompileErrors) return;
+        const idx = self.collected_error_count;
+        self.collected_error_count += 1;
+
+        var rec = &self.collected_errors[idx];
+        rec.kind = kind;
+        rec.line = line;
+        rec.col = col;
+        rec.msg_len = self.err_msg_len;
+        @memcpy(rec.msg[0..self.err_msg_len], self.err_msg_buf[0..self.err_msg_len]);
+
+        // Reset error fields so the next decl starts clean.
+        self.err_msg_len = 0;
+        self.err_line = 0;
+        self.err_col = 0;
     }
 
     // ── Error reporting helpers ──────────────────────────────────────────────────

@@ -241,15 +241,32 @@ const empty_variant_objs = [1]?*Object{null} ** MaxTypes;
 const empty_struct_objs = [1]?*Object{null} ** MaxTypes;
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Snapshot of TypeRegistry count fields; used for checkpoint/rollback during
+/// error recovery.  The hash tables are rebuilt from the trimmed arrays on
+/// rollback rather than saved in full, keeping the snapshot small.
+pub const RegistryCp = struct {
+    type_name_count: usize,
+    named_type_count: usize,
+    global_count: usize,
+    generic_count: usize,
+    generic_func_count: usize,
+    inst_count: usize,
+    type_alias_count: usize,
+};
+
 pub const TypeRegistry = struct {
     // struct/interface/variant: name only, stored in type_names[].
     type_names: [MaxTypes][]const u8 = undefined,
+    // Parallel kind array so rollback can rebuild the hash without scanning buckets.
+    type_name_kinds: [MaxTypes]TypeSymbolKind = undefined,
     type_name_count: usize = 0,
     // named types: rich info stored in named_types[].
     named_types: [MaxNamedTypes]NamedTypeInfo = undefined,
     named_type_count: usize = 0,
     // global funcs + consts unified; is_const distinguishes them.
     global_symbols: [MaxGlobals][]const u8 = undefined,
+    // Parallel is_const array so rollback can rebuild the func hash.
+    global_is_const: [MaxGlobals]bool = undefined,
     global_count: usize = 0,
     // named_return_count for functions that return multiple named values (≥2).
     global_named_return_counts: [MaxGlobals]u8 = [1]u8{0} ** MaxGlobals,
@@ -290,6 +307,49 @@ pub const TypeRegistry = struct {
         @memset(self.func_buckets[0..], .{});
         @memset(self.variant_objs[0..], null);
         @memset(self.struct_objs[0..], null);
+    }
+
+    pub fn checkpoint(self: *const TypeRegistry) RegistryCp {
+        return .{
+            .type_name_count = self.type_name_count,
+            .named_type_count = self.named_type_count,
+            .global_count = self.global_count,
+            .generic_count = self.generic_count,
+            .generic_func_count = self.generic_func_count,
+            .inst_count = self.inst_count,
+            .type_alias_count = self.type_alias_count,
+        };
+    }
+
+    /// Rewind to a prior checkpoint.  The hash tables are cleared and rebuilt
+    /// from the surviving entries so that open-addressing chains stay coherent.
+    pub fn rollback(self: *TypeRegistry, cp: RegistryCp) void {
+        self.type_name_count = cp.type_name_count;
+        self.named_type_count = cp.named_type_count;
+        self.global_count = cp.global_count;
+        self.generic_count = cp.generic_count;
+        self.generic_func_count = cp.generic_func_count;
+        self.inst_count = cp.inst_count;
+        self.type_alias_count = cp.type_alias_count;
+
+        // Rebuild hash tables from the surviving entries only.
+        @memset(self.type_buckets[0..], .{});
+        @memset(self.func_buckets[0..], .{});
+        for (0..self.type_name_count) |i| {
+            self.insertTypeSlot(self.type_names[i], self.type_name_kinds[i], i);
+        }
+        for (0..self.named_type_count) |i| {
+            self.insertTypeSlot(self.named_types[i].name, .named_type, i);
+        }
+        for (0..self.global_count) |i| {
+            const slot = self.funcSlotForInsert(self.global_symbols[i]) orelse continue;
+            if (!self.func_buckets[slot].occupied)
+                self.func_buckets[slot] = .{
+                    .sub_idx = @intCast(i),
+                    .is_const = self.global_is_const[i],
+                    .occupied = true,
+                };
+        }
     }
 
     // ── Hash helpers ──────────────────────────────────────────────────────────
@@ -380,6 +440,7 @@ pub const TypeRegistry = struct {
         if (self.global_count >= MaxGlobals) return error.TooManyGlobals;
         const sub_idx = self.global_count;
         self.global_symbols[sub_idx] = name;
+        self.global_is_const[sub_idx] = true;
         self.global_count += 1;
         const slot = self.funcSlotForInsert(name) orelse return;
         if (!self.func_buckets[slot].occupied)
@@ -391,6 +452,7 @@ pub const TypeRegistry = struct {
         if (self.type_name_count >= MaxTypes) return error.TooManyTypes;
         const sub_idx = self.type_name_count;
         self.type_names[sub_idx] = name;
+        self.type_name_kinds[sub_idx] = .struct_type;
         self.type_name_count += 1;
         self.insertTypeSlot(name, .struct_type, sub_idx);
     }
@@ -414,6 +476,7 @@ pub const TypeRegistry = struct {
         if (self.type_name_count >= MaxTypes) return error.TooManyTypes;
         const sub_idx = self.type_name_count;
         self.type_names[sub_idx] = name;
+        self.type_name_kinds[sub_idx] = .interface_type;
         self.type_name_count += 1;
         self.insertTypeSlot(name, .interface_type, sub_idx);
     }
@@ -531,6 +594,7 @@ pub const TypeRegistry = struct {
         if (self.type_name_count >= MaxTypes) return error.TooManyTypes;
         const sub_idx = self.type_name_count;
         self.type_names[sub_idx] = name;
+        self.type_name_kinds[sub_idx] = .named_error_type;
         self.type_name_count += 1;
         self.insertTypeSlot(name, .named_error_type, sub_idx);
     }
@@ -544,6 +608,7 @@ pub const TypeRegistry = struct {
         if (self.type_name_count >= MaxTypes) return error.TooManyTypes;
         const sub_idx = self.type_name_count;
         self.type_names[sub_idx] = name;
+        self.type_name_kinds[sub_idx] = .variant_type;
         self.type_name_count += 1;
         self.insertTypeSlot(name, .variant_type, sub_idx);
     }
@@ -580,6 +645,7 @@ pub const TypeRegistry = struct {
         if (self.global_count >= MaxGlobals) return error.TooManyGlobals;
         const sub_idx = self.global_count;
         self.global_symbols[sub_idx] = name;
+        self.global_is_const[sub_idx] = false;
         self.global_count += 1;
         const slot = self.funcSlotForInsert(name) orelse return;
         if (!self.func_buckets[slot].occupied)
