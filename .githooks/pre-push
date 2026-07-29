@@ -18,6 +18,44 @@ run() {
 
 echo "=== pre-push checks ==="
 
+# Consume stdin (push ref list) before anything else — it's a one-shot pipe.
+push_entries=()
+while IFS=' ' read -r local_ref local_sha remote_ref remote_sha; do
+    push_entries+=("$local_ref $local_sha $remote_ref $remote_sha")
+done
+
+# Returns 0 if every file in this push touches only documentation.
+# Falls back to "not docs-only" (returns 1) for new branches where the remote
+# sha is all-zeros, since we can't cheaply compute the right base.
+docs_only_push() {
+    local entry local_ref local_sha remote_ref remote_sha base f
+    for entry in "${push_entries[@]}"; do
+        read -r local_ref local_sha remote_ref remote_sha <<<"$entry"
+        if [[ "$remote_sha" == "0000000000000000000000000000000000000000" ]]; then
+            return 1  # new branch — run full suite to be safe
+        fi
+        while IFS= read -r f; do
+            [[ -z "$f" ]] && continue
+            case "$f" in
+                docs/*|*.md|dev-docs/*|LICENSE) ;;
+                *) return 1 ;;
+            esac
+        done < <(git diff --name-only "$remote_sha" "$local_sha" 2>/dev/null)
+    done
+    return 0
+}
+
+if [ ${#push_entries[@]} -gt 0 ] && docs_only_push; then
+    echo "docs-only push — skipping build/test suite (docs.yml handles rendering)"
+    run git diff --check
+    if [ "$fail" -ne 0 ]; then
+        echo "=== pre-push FAILED — push blocked ==="
+        exit 1
+    fi
+    echo "=== all checks passed ==="
+    exit 0
+fi
+
 # Mirror CI's formatting gate first — it fails in seconds, the battery in
 # minutes. (CI-only lanes not mirrored here, by cost: -Dgc_stress=true test,
 # -Dheap_paranoia=true test.)

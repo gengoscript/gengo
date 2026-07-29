@@ -10,7 +10,17 @@ on:
   push:
     branches:
       - '**'
+    paths-ignore:
+      - 'docs/**'
+      - '*.md'
+      - 'dev-docs/**'
+      - 'LICENSE'
   pull_request:
+    paths-ignore:
+      - 'docs/**'
+      - '*.md'
+      - 'dev-docs/**'
+      - 'LICENSE'
 
 jobs:
   test:
