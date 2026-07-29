@@ -169,6 +169,7 @@ const Engine = struct {
     last_error_path_len: u32 = 0,
     string_scratch: [MaxStringScratch]u8 = undefined,
     string_scratch_len: u16 = 0,
+    string_scratch_large: ?[]u8 = null,
     wire_elem_buf: [256]ValueWire = undefined,
     wire_elem_count: u16 = 0,
     import_loader_fn: ?ImportLoaderFn = null,
@@ -187,6 +188,10 @@ const Engine = struct {
         self.last_error_col = 0;
         self.last_error_path_len = 0;
         self.string_scratch_len = 0;
+        if (self.string_scratch_large) |buf| {
+            std.heap.page_allocator.free(buf);
+            self.string_scratch_large = null;
+        }
         self.wire_elem_count = 0;
         self.write_callback = null;
         self.read_callback = null;
@@ -228,6 +233,10 @@ const Engine = struct {
     }
 
     fn deinitInPlace(self: *Engine) void {
+        if (self.string_scratch_large) |buf| {
+            std.heap.page_allocator.free(buf);
+            self.string_scratch_large = null;
+        }
         package_state.clearRegistry(&self.package_registry);
         self.runtime.inner.deinit();
     }
@@ -271,10 +280,22 @@ const Engine = struct {
     }
 
     fn setStringScratch(self: *Engine, data: []const u8) []const u8 {
-        const len = @min(@as(usize, @intCast(data.len)), self.string_scratch.len);
-        @memcpy(self.string_scratch[0..len], data[0..len]);
-        self.string_scratch_len = @intCast(len);
-        return self.string_scratch[0..len];
+        if (self.string_scratch_large) |prev| {
+            std.heap.page_allocator.free(prev);
+            self.string_scratch_large = null;
+        }
+        if (data.len <= self.string_scratch.len) {
+            @memcpy(self.string_scratch[0..data.len], data);
+            self.string_scratch_len = @intCast(data.len);
+            return self.string_scratch[0..data.len];
+        }
+        const buf = std.heap.page_allocator.dupe(u8, data) catch {
+            @memcpy(self.string_scratch[0..], data[0..self.string_scratch.len]);
+            self.string_scratch_len = MaxStringScratch;
+            return self.string_scratch[0..];
+        };
+        self.string_scratch_large = buf;
+        return buf;
     }
 };
 
