@@ -100,6 +100,7 @@ pub const cap_net_desc: CapModuleDesc = .{
     .name = "net",
     .functions = &.{
         .{ .name = "dial", .arity = 2, .native_id = 163 },
+        .{ .name = "dial_tls", .arity = 2, .native_id = 262 },
         .{ .name = "listen", .arity = 2, .native_id = 235 },
     },
 };

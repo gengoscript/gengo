@@ -142,6 +142,43 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             inst_fields[0] = .{ .key = .{ .string = try ctx.cs.internStr("_handle") }, .value = .{ .int = @as(i64, id) } };
             try ctx.vs.vmPush(.{ .object = inst_obj });
         },
+        .cap_net_dial_tls => {
+            if (argc != 2) return error.ArityMismatch;
+            const arg1 = try ctx.vs.vmPop();
+            const arg0 = try ctx.vs.vmPop();
+            const network = vms.asStringValue(arg0) catch return error.TypeError;
+            const address = vms.asStringValue(arg1) catch return error.TypeError;
+            _ = try ctx.vs.vmPop();
+
+            if (!ctx.vs.net_scopes.dial) {
+                try ctx.vs.vmPush(.{ .error_value = try ctx.cs.internStr("net.dial_tls: dial scope not granted (--cap net=dial)") });
+                return;
+            }
+
+            if (!net_state.checkDialPolicy(address)) {
+                try ctx.vs.vmPush(.{ .error_value = try ctx.cs.internStr("net.dial_tls: refused by policy") });
+                return;
+            }
+
+            const id = net_state.netDialTls(network, address) catch {
+                try ctx.vs.vmPush(.{ .error_value = try ctx.cs.internStr(net_state.lastNetErr()) });
+                return;
+            };
+
+            const conn_type_val = ctx.gs.get("@cap_type:net.Conn") orelse return error.CapabilityError;
+            const conn_type_obj = switch (conn_type_val) {
+                .object => |o| o,
+                else => return error.CapabilityError,
+            };
+
+            const inst_fields = try vmgc.vmAllocManagedSlice(ctx, MapEntry, 1);
+            const inst_obj = try vmgc.vmAllocObject(ctx);
+            inst_obj.* = .{ .struct_instance = .{ .typ = conn_type_obj, .fields = inst_fields } };
+            try ctx.vs.pushTempRoot(.{ .object = inst_obj });
+            defer ctx.vs.popTempRoot();
+            inst_fields[0] = .{ .key = .{ .string = try ctx.cs.internStr("_handle") }, .value = .{ .int = @as(i64, id) } };
+            try ctx.vs.vmPush(.{ .object = inst_obj });
+        },
         .cap_net_listen => {
             if (argc != 2) return error.ArityMismatch;
             const arg1 = try ctx.vs.vmPop();

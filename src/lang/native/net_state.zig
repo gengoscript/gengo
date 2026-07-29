@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const tls_common = @import("tls_common.zig");
 
 const MaxConns = 16;
 const ReadBufSize = 4096;
@@ -51,6 +52,8 @@ const NetConn = struct {
     rbuf: [ReadBufSize]u8 = undefined,
     rbuf_pos: usize = 0,
     rbuf_end: usize = 0,
+    // Non-null for TLS connections (heap-allocated; freed in netClose).
+    tls: if (builtin.os.tag == .wasi) void else ?*tls_common.TlsConn = if (builtin.os.tag == .wasi) {} else null,
 };
 
 // Listening sockets — independent ceiling from MaxConns (§9 of the design
@@ -605,6 +608,49 @@ pub fn netDial(network: []const u8, address: []const u8) !u32 {
     return id;
 }
 
+// netDialTls connects over TCP then performs a TLS handshake.
+// Returns a connection ID usable with netRead/netWrite/netClose.
+// Native-only: WASM/Windows return CapabilityNotAvailable.
+// SNI is derived from the host part of address (e.g. "example.com:443" → "example.com").
+pub fn netDialTls(network: []const u8, address: []const u8) !u32 {
+    if (comptime builtin.os.tag == .wasi or builtin.os.tag == .windows) return error.CapabilityNotAvailable;
+    // Host-callback path cannot provide a raw fd for TLS layering.
+    if (g_state.handlers != null) {
+        setNetErr("dial_tls: TLS is not supported with host net callbacks", .{});
+        return error.NetError;
+    }
+
+    // Reuse the full netDial TCP connect path, then wrap with TLS.
+    const id = try netDial(network, address);
+    const conn = findConn(id) orelse return error.CapabilityError;
+
+    // Extract the hostname for SNI (strip IPv6 brackets if present).
+    const colon = std.mem.lastIndexOfScalar(u8, address, ':') orelse {
+        removeConn(id);
+        _ = std.posix.system.close(conn.socket);
+        setNetErr("dial_tls: invalid address \"{s}\"", .{address});
+        return error.NetError;
+    };
+    var sni = address[0..colon];
+    if (sni.len >= 2 and sni[0] == '[' and sni[sni.len - 1] == ']') sni = sni[1 .. sni.len - 1];
+
+    const io = ioContext();
+    const tls = std.heap.page_allocator.create(tls_common.TlsConn) catch {
+        removeConn(id);
+        _ = std.posix.system.close(conn.socket);
+        return error.OutOfMemory;
+    };
+    tls.initAt(conn.socket, sni, io) catch |err| {
+        std.heap.page_allocator.destroy(tls);
+        removeConn(id);
+        _ = std.posix.system.close(conn.socket);
+        setNetErr("dial_tls: TLS handshake failed: {s}", .{@errorName(err)});
+        return error.NetError;
+    };
+    conn.tls = tls;
+    return id;
+}
+
 pub fn netListen(network: []const u8, address: []const u8) !u32 {
     g_state.net_err_len = 0;
     if (g_state.handlers) |h| {
@@ -919,6 +965,21 @@ pub fn netRead(id: u32, max_bytes: usize) ![]u8 {
         return error.NetError;
     };
 
+    // TLS path: stream one TLS record worth of plaintext through the client reader.
+    if (conn.tls) |tls| {
+        const buf = std.heap.page_allocator.alloc(u8, max_bytes) catch return error.OutOfMemory;
+        errdefer std.heap.page_allocator.free(buf);
+        var w = std.Io.Writer.fixed(buf);
+        const n = tls.client.reader.stream(&w, .limited(max_bytes)) catch |err| switch (err) {
+            error.EndOfStream => 0,
+            else => {
+                setNetErr("read: TLS error: {s}", .{@errorName(err)});
+                return error.NetError;
+            },
+        };
+        return std.heap.page_allocator.realloc(buf, n) catch return error.OutOfMemory;
+    }
+
     const buf = std.heap.page_allocator.alloc(u8, max_bytes) catch return error.OutOfMemory;
     errdefer std.heap.page_allocator.free(buf);
 
@@ -966,6 +1027,17 @@ pub fn netReadInto(id: u32, dest: []u8) !usize {
         setNetErr("read: unknown connection handle {d}", .{id});
         return error.NetError;
     };
+    // TLS path: delegate to the client reader (has its own internal buffer).
+    if (conn.tls) |tls| {
+        var w = std.Io.Writer.fixed(dest);
+        return tls.client.reader.stream(&w, .limited(dest.len)) catch |err| switch (err) {
+            error.EndOfStream => 0,
+            else => {
+                setNetErr("read: TLS error: {s}", .{@errorName(err)});
+                return error.NetError;
+            },
+        };
+    }
     if (conn.rbuf_pos >= conn.rbuf_end) {
         // Buffer empty: fill from socket with a large read.
         const n = std.posix.read(conn.socket, &conn.rbuf) catch |err| switch (err) {
@@ -1016,6 +1088,19 @@ pub fn netWrite(id: u32, data: []const u8) !usize {
         return error.NetError;
     };
 
+    // TLS path: encrypt via the TLS client writer.
+    if (conn.tls) |tls| {
+        _ = tls.client.writer.writeVec(&.{data}) catch |err| {
+            setNetErr("write: TLS error: {s}", .{@errorName(err)});
+            return error.NetError;
+        };
+        tls.client.writer.flush() catch |err| {
+            setNetErr("write: TLS flush error: {s}", .{@errorName(err)});
+            return error.NetError;
+        };
+        return data.len;
+    }
+
     // Use system.write directly so EAGAIN from SO_SNDTIMEO surfaces as DeadlineExceeded.
     // Windows falls back to the vtable (set_deadline is already a no-op there).
     if (comptime builtin.os.tag == .windows) {
@@ -1062,6 +1147,10 @@ pub fn netClose(id: u32) !void {
     if (comptime builtin.os.tag == .wasi or builtin.os.tag == .windows) return error.CapabilityNotAvailable;
     const conn = findConn(id) orelse return error.CapabilityError;
 
+    if (conn.tls) |tls| {
+        std.heap.page_allocator.destroy(tls);
+        conn.tls = null;
+    }
     const io_ctx = ioContext();
     io_ctx.vtable.netClose(io_ctx.userdata, (&conn.socket)[0..1]);
     removeConn(id);

@@ -702,7 +702,7 @@ pub fn callNative(ctx: vms.VMContext, nf: NativeFuncObj, argc: u8) !void {
         inline else => |id| {
             if (comptime build_options.cap_net) {
                 switch (id) {
-                    .cap_net_dial, .cap_net_read, .cap_net_write, .cap_net_close, .cap_net_local_addr, .cap_net_remote_addr, .cap_net_set_deadline, .cap_net_set_read_deadline, .cap_net_set_write_deadline, .cap_net_listen, .cap_net_listener_accept, .cap_net_listener_close, .cap_net_listener_local_addr, .cap_net_listener_set_accept_deadline => return cap_net_mod.dispatch(ctx, nf, argc),
+                    .cap_net_dial, .cap_net_dial_tls, .cap_net_read, .cap_net_write, .cap_net_close, .cap_net_local_addr, .cap_net_remote_addr, .cap_net_set_deadline, .cap_net_set_read_deadline, .cap_net_set_write_deadline, .cap_net_listen, .cap_net_listener_accept, .cap_net_listener_close, .cap_net_listener_local_addr, .cap_net_listener_set_accept_deadline => return cap_net_mod.dispatch(ctx, nf, argc),
                     else => {},
                 }
             }

@@ -166,6 +166,7 @@ pub const NativeFnId = enum(u16) {
     time_sleep = 199,
 
     cap_net_dial = 163,
+    cap_net_dial_tls = 262,
     cap_net_read = 164,
     cap_net_write = 165,
     cap_net_close = 166,

@@ -131,8 +131,20 @@ if err != null {
 net := import("cap:net")
 ```
 
-`net.dial(network string, address string) Conn|error` opens a host-mediated
-connection. It returns an error value on refusal or connection failure.
+`net.dial(network string, address string) Conn|error` opens a TCP connection.
+It returns an error value on refusal or connection failure.
+`network` must be one of `"tcp"`, `"tcp4"`, or `"tcp6"`.
+
+`net.dial_tls(network string, address string) Conn|error` opens a TCP connection
+and performs a TLS handshake, verifying the server certificate against the OS
+trust store. The returned `Conn` is transparent — `read`, `write`, and `close`
+work identically to a plain `dial` connection. `network` and `address` follow
+the same rules as `dial`; the server name for SNI is derived from the host part
+of `address`. `dial_tls` requires the `dial` scope, the same as plain `dial`.
+
+`dial_tls` is not available on WASM/WASI (no OS trust store) or when a host net
+callback is registered; in those cases it returns an error.
+
 `network` and `address` are passed to the host implementation; portable
 scripts should not assume a particular address syntax beyond their host's
 documented contract.

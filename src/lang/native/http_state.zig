@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const tls_common = @import("tls_common.zig");
 
 // Response body size cap for the built-in HTTP client (applies to
 // Content-Length, cumulative chunked-transfer, unbounded/no-length bodies,
@@ -80,33 +81,8 @@ pub fn defaultState() *HttpEngineState {
     return &g_default_state;
 }
 
-// Lazily-populated system CA trust store for the built-in HTTPS client,
-// shared across requests (rescanning the OS trust store per-request would be
-// slow). Mirrors the pattern std.http.Client itself uses (Client.zig's
-// ca_bundle/ca_bundle_lock fields + the lazy-rescan-on-first-use in
-// Client.request).
-var g_ca_bundle: std.crypto.Certificate.Bundle = .empty;
-var g_ca_bundle_lock: std.Io.RwLock = .init;
-var g_ca_bundle_loaded: bool = false;
-
-fn ensureCaBundle(io: std.Io) !void {
-    {
-        try g_ca_bundle_lock.lockShared(io);
-        defer g_ca_bundle_lock.unlockShared(io);
-        if (g_ca_bundle_loaded) return;
-    }
-    var bundle: std.crypto.Certificate.Bundle = .empty;
-    errdefer bundle.deinit(std.heap.page_allocator);
-    const now = std.Io.Timestamp.now(io, .real);
-    try bundle.rescan(std.heap.page_allocator, io, now);
-    try g_ca_bundle_lock.lock(io);
-    defer g_ca_bundle_lock.unlock(io);
-    if (!g_ca_bundle_loaded) {
-        std.mem.swap(std.crypto.Certificate.Bundle, &g_ca_bundle, &bundle);
-        g_ca_bundle_loaded = true;
-    }
-    bundle.deinit(std.heap.page_allocator);
-}
+// CA bundle and TLS helpers live in tls_common (shared with cap:net TLS).
+const ensureCaBundle = tls_common.ensureCaBundle;
 
 pub fn setHttpHandler(callback: GengoHttpFetchFn, userdata: ?*anyopaque) void {
     g_state.handler = .{ .callback = callback, .userdata = userdata };
@@ -267,129 +243,9 @@ fn httpFetchHost(
     };
 }
 
-// Returns milliseconds since an arbitrary monotonic epoch.
-fn monotonicMs() i64 {
-    var ts: std.posix.timespec = undefined;
-    _ = std.posix.system.clock_gettime(std.posix.CLOCK.MONOTONIC, &ts);
-    return @as(i64, ts.sec) * 1000 + @divTrunc(ts.nsec, 1_000_000);
-}
-
-// FdReader wraps a raw socket fd with poll()-based deadline enforcement.
-// It bypasses std.Io.Threaded.netReadPosix which panics on EAGAIN (debug) /
-// returns Unexpected (release) when SO_RCVTIMEO fires.
-const FdReader = struct {
-    fd: std.posix.socket_t,
-    deadline_ms: i64, // absolute monotonic deadline; 0 = no timeout
-    timed_out: bool,
-    interface: std.Io.Reader,
-
-    const vtable = std.Io.Reader.VTable{ .stream = streamFn };
-
-    pub fn init(fd: std.posix.socket_t, buf: []u8, deadline_ms: i64) FdReader {
-        return .{
-            .fd = fd,
-            .deadline_ms = deadline_ms,
-            .timed_out = false,
-            .interface = .{ .vtable = &vtable, .buffer = buf, .seek = 0, .end = 0 },
-        };
-    }
-
-    fn streamFn(r: *std.Io.Reader, w: *std.Io.Writer, limit: std.Io.Limit) std.Io.Reader.StreamError!usize {
-        const self: *FdReader = @alignCast(@fieldParentPtr("interface", r));
-        if (self.deadline_ms > 0) {
-            const remaining = self.deadline_ms - monotonicMs();
-            if (remaining <= 0) {
-                self.timed_out = true;
-                return error.ReadFailed;
-            }
-            const poll_ms: i32 = @intCast(@min(remaining, std.math.maxInt(i32)));
-            var pfd = [1]std.posix.pollfd{.{ .fd = self.fd, .events = std.posix.POLL.IN, .revents = 0 }};
-            const rc = std.posix.poll(&pfd, poll_ms) catch return error.ReadFailed;
-            if (rc == 0) {
-                self.timed_out = true;
-                return error.ReadFailed;
-            }
-        }
-        const dest = limit.slice(w.writableSliceGreedy(1) catch return error.WriteFailed);
-        const n = std.posix.read(self.fd, dest) catch |err| {
-            if (err == error.WouldBlock) self.timed_out = true;
-            return error.ReadFailed;
-        };
-        if (n == 0) return error.EndOfStream;
-        w.advance(n);
-        return n;
-    }
-};
-
-// FdWriter wraps a raw socket fd with poll()-based deadline enforcement.
-const FdWriter = struct {
-    fd: std.posix.socket_t,
-    deadline_ms: i64,
-    timed_out: bool,
-    interface: std.Io.Writer,
-
-    const vtable = std.Io.Writer.VTable{ .drain = drainFn };
-
-    pub fn init(fd: std.posix.socket_t, buf: []u8, deadline_ms: i64) FdWriter {
-        return .{
-            .fd = fd,
-            .deadline_ms = deadline_ms,
-            .timed_out = false,
-            .interface = .{ .vtable = &vtable, .buffer = buf, .end = 0 },
-        };
-    }
-
-    fn writeFd(self: *FdWriter, data: []const u8) std.Io.Writer.Error!void {
-        var remaining = data;
-        const max_count: usize = if (builtin.os.tag == .linux) 0x7ffff000 else std.math.maxInt(isize);
-        while (remaining.len > 0) {
-            if (self.deadline_ms > 0) {
-                const rem_time = self.deadline_ms - monotonicMs();
-                if (rem_time <= 0) {
-                    self.timed_out = true;
-                    return error.WriteFailed;
-                }
-                const poll_ms: i32 = @intCast(@min(rem_time, std.math.maxInt(i32)));
-                var pfd = [1]std.posix.pollfd{.{ .fd = self.fd, .events = std.posix.POLL.OUT, .revents = 0 }};
-                const rc = std.posix.poll(&pfd, poll_ms) catch return error.WriteFailed;
-                if (rc == 0) {
-                    self.timed_out = true;
-                    return error.WriteFailed;
-                }
-            }
-            while (true) {
-                const rc = std.posix.system.write(self.fd, remaining.ptr, @min(remaining.len, max_count));
-                switch (std.posix.errno(rc)) {
-                    .SUCCESS => {
-                        remaining = remaining[@intCast(rc)..];
-                        break;
-                    },
-                    .INTR => continue,
-                    .AGAIN => {
-                        self.timed_out = true;
-                        return error.WriteFailed;
-                    },
-                    else => return error.WriteFailed,
-                }
-            }
-        }
-    }
-
-    fn drainFn(w: *std.Io.Writer, data: []const []const u8, splat: usize) std.Io.Writer.Error!usize {
-        const self: *FdWriter = @alignCast(@fieldParentPtr("interface", w));
-        const buffered = w.buffered();
-        var total_in: usize = buffered.len;
-        for (data) |s| total_in += s.len;
-        if (splat > 1 and data.len > 0) total_in += data[data.len - 1].len * (splat - 1);
-        if (buffered.len > 0) try self.writeFd(buffered);
-        for (data, 0..) |s, i| {
-            const count: usize = if (i == data.len - 1) splat else 1;
-            var j: usize = 0;
-            while (j < count) : (j += 1) try self.writeFd(s);
-        }
-        return w.consume(total_in);
-    }
-};
+const monotonicMs = tls_common.monotonicMs;
+const FdReader = tls_common.FdReader;
+const FdWriter = tls_common.FdWriter;
 
 fn httpFetchBuiltin(
     method: []const u8,
@@ -447,8 +303,8 @@ fn httpFetchBuiltin(
                 .ca = .{ .bundle = .{
                     .gpa = std.heap.page_allocator,
                     .io = io,
-                    .lock = &g_ca_bundle_lock,
-                    .bundle = &g_ca_bundle,
+                    .lock = tls_common.caBundleLockRef(),
+                    .bundle = tls_common.caBundleRef(),
                 } },
                 .write_buffer = &tls_write_buf,
                 .read_buffer = &tls_read_buf,
