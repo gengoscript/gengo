@@ -31,6 +31,7 @@ syntax on `std` itself.
 | `std.array`, `std.sort` | Array construction and sorting. |
 | `std.math`, `std.rand` | Numeric operations and non-cryptographic pseudorandom values. |
 | `std.json`, `std.hex`, `std.base64` | Data interchange and text encodings. |
+| `std.crypto` | Hashing, HMAC, AEAD encryption, key derivation, and asymmetric cryptography. |
 | `std.regexp`, `std.template` | Pattern matching and template rendering. |
 | `std.Time`, `std.time` | Time values and time-related helpers. |
 
@@ -609,6 +610,93 @@ switch doc {
 
 ### `std.base64.url_encode(data)` / `std.base64.url_decode(s)`
 - URL-safe base64 variant (uses `-` and `_` instead of `+` and `/`)
+
+## std.crypto
+
+Cryptographic hashing, authentication, encryption, and key derivation.
+All functions that return raw bytes return them as a **string** (Gengo's byte-string type); use `std.hex.encode` / `std.base64.encode` to convert to text.
+Hash and HMAC outputs are returned as lowercase hex strings.
+
+### Hash functions
+
+#### `std.crypto.sha256(data)`
+- SHA-256 of `data`; returns a 64-character lowercase hex string.
+
+#### `std.crypto.sha512(data)`
+- SHA-512 of `data`; returns a 128-character lowercase hex string.
+
+#### `std.crypto.blake3(data)`
+- BLAKE3 of `data`; returns a 64-character lowercase hex string.
+
+#### `std.crypto.md5(data)`
+- MD5 of `data`; returns a 32-character lowercase hex string. Use only for legacy compatibility — MD5 is cryptographically broken.
+
+#### `std.crypto.sha1(data)`
+- SHA-1 of `data`; returns a 40-character lowercase hex string. Use only for legacy compatibility — SHA-1 is cryptographically weak.
+
+### HMAC
+
+#### `std.crypto.hmac_sha256(key, data)`
+- HMAC-SHA256; returns a 64-character lowercase hex string.
+
+#### `std.crypto.hmac_sha512(key, data)`
+- HMAC-SHA512; returns a 128-character lowercase hex string.
+
+### Authenticated encryption (AEAD)
+
+All seal functions return ciphertext + authentication tag as a raw byte string.
+All open functions return the decrypted plaintext string, or raise `CryptoError` if the tag is invalid.
+
+#### `std.crypto.aes_gcm_seal(key, nonce, plaintext)`
+- AES-GCM encryption. `key` must be 16 bytes (AES-128) or 32 bytes (AES-256); `nonce` must be 12 bytes.
+
+#### `std.crypto.aes_gcm_open(key, nonce, ciphertext)`
+- AES-GCM decryption. Errors: `CryptoError` on authentication failure, `TypeError` on wrong key/nonce length.
+
+#### `std.crypto.chacha20poly1305_seal(key, nonce, plaintext)`
+- ChaCha20-Poly1305 encryption. `key` must be 32 bytes; `nonce` must be 12 bytes.
+
+#### `std.crypto.chacha20poly1305_open(key, nonce, ciphertext)`
+- ChaCha20-Poly1305 decryption. Errors: `CryptoError` on authentication failure.
+
+#### `std.crypto.xchacha20poly1305_seal(key, nonce, plaintext)`
+- XChaCha20-Poly1305 encryption. `key` must be 32 bytes; `nonce` must be **24 bytes** (vs 12 for ChaCha20-Poly1305). The longer nonce makes it safe to generate randomly.
+
+#### `std.crypto.xchacha20poly1305_open(key, nonce, ciphertext)`
+- XChaCha20-Poly1305 decryption. Errors: `CryptoError` on authentication failure.
+
+### Key derivation
+
+#### `std.crypto.hkdf_sha256(ikm, salt, info, length)`
+- HKDF-SHA256 (RFC 5869) key derivation. `ikm` is the input key material; `salt` and `info` are optional context strings (pass `""` to omit). `length` is the number of output bytes (integer, max 8160). Returns raw bytes.
+
+#### `std.crypto.argon2id(password, salt, memory_kb, threads, iterations, key_length)`
+- Argon2id password hashing / key derivation. `memory_kb`, `threads`, and `iterations` are integers. Returns raw bytes of length `key_length`. Recommended minimum: `memory_kb=65536`, `threads=4`, `iterations=3`.
+
+#### `std.crypto.bcrypt_hash(password, cost)`
+- bcrypt password hash. `cost` is the work factor (integer, 4–31; typical production value: 12). Returns a 60-character bcrypt hash string.
+
+#### `std.crypto.bcrypt_verify(hash, password)`
+- Verifies `password` against a bcrypt `hash`. Returns `true` or `false`.
+
+### Asymmetric cryptography
+
+#### `std.crypto.ed25519_sign(seed, message)`
+- Ed25519 signature. `seed` must be 32 bytes (the private key seed). Returns a 64-byte raw signature string.
+
+#### `std.crypto.ed25519_verify(pubkey, signature, message)`
+- Verifies an Ed25519 `signature` over `message` with the given 32-byte `pubkey`. Returns `true` or `false`.
+
+#### `std.crypto.x25519(secret, pubkey)`
+- X25519 Diffie-Hellman (RFC 7748). `secret` and `pubkey` must each be 32 bytes. Returns the 32-byte shared secret as a raw byte string.
+
+### Utilities
+
+#### `std.crypto.rand_bytes(n)`
+- Returns `n` cryptographically secure random bytes as a raw byte string.
+
+#### `std.crypto.constant_time_equal(a, b)`
+- Compares two strings in constant time. Returns `true` if they are identical. Use this to compare MACs or other secrets to avoid timing side-channels.
 
 ## std.bytes
 
