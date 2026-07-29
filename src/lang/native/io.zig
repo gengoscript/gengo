@@ -1,4 +1,5 @@
 const std = @import("std");
+const cfg = @import("runtime_config");
 const io = @import("../../runtime/io.zig");
 const vms = @import("../vm_state.zig");
 const VMContext = vms.VMContext;
@@ -933,17 +934,41 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             try ctx.vs.vmPush(.null);
         },
         .io_read => {
+            if (argc != 1) return error.ArityMismatch;
             if (!ctx.vs.policy.allow_io) return error.PermissionDenied;
-            var rbuf: [4096]u8 = undefined;
-            const n = io.readBytesRaw(&rbuf, false);
+            const max_arg = try ctx.vs.vmPop();
+            _ = try ctx.vs.vmPop();
+            const max_bytes: usize = switch (max_arg) {
+                .int => |n| if (n <= 0) {
+                    try ctx.vs.vmPush(.null);
+                    return;
+                } else @min(@as(usize, @intCast(n)), cfg.max_input_bytes),
+                .float => |n| if (n <= 0) {
+                    try ctx.vs.vmPush(.null);
+                    return;
+                } else @min(@as(usize, @intFromFloat(n)), cfg.max_input_bytes),
+                else => return error.TypeError,
+            };
+            const rbuf = try std.heap.page_allocator.alloc(u8, max_bytes);
+            defer std.heap.page_allocator.free(rbuf);
+            const n = io.readBytesRaw(rbuf, false);
+            const result: Value = if (n > 0) try bytesToValue(ctx, rbuf[0..@intCast(n)]) else .null;
+            try ctx.vs.vmPush(result);
+        },
+        .io_read_all => {
+            if (!ctx.vs.policy.allow_io) return error.PermissionDenied;
+            const rbuf = try std.heap.page_allocator.alloc(u8, cfg.max_input_bytes);
+            defer std.heap.page_allocator.free(rbuf);
+            const n = io.readAllBytesRaw(rbuf);
             const result: Value = if (n > 0) try bytesToValue(ctx, rbuf[0..@intCast(n)]) else .null;
             _ = try ctx.vs.vmPop();
             try ctx.vs.vmPush(result);
         },
         .io_readline => {
             if (!ctx.vs.policy.allow_io) return error.PermissionDenied;
-            var rbuf: [4096]u8 = undefined;
-            const n = io.readBytesRaw(&rbuf, true);
+            const rbuf = try std.heap.page_allocator.alloc(u8, cfg.max_input_bytes);
+            defer std.heap.page_allocator.free(rbuf);
+            const n = io.readBytesRaw(rbuf, true);
             const result: Value = if (n > 0) blk: {
                 var cnt: usize = @intCast(n);
                 if (cnt > 0 and rbuf[cnt - 1] == '\n') cnt -= 1;

@@ -192,6 +192,7 @@ pub const NativeFnId = enum(u16) {
     io_eprintln = 194,
     io_read = 195,
     io_readline = 196,
+    io_read_all = 263,
 
     fmt_stringify = 198,
 

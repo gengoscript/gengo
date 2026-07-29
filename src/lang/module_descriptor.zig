@@ -110,7 +110,8 @@ pub const ioExports = [_]StdNamespaceExport{
     .{ .name = "eprint", .kind = .function, .native_id = .io_eprint, .arity = 255 },
     .{ .name = "eprintf", .kind = .function, .native_id = .io_eprintf, .arity = 255 },
     .{ .name = "eprintln", .kind = .function, .native_id = .io_eprintln, .arity = 255 },
-    .{ .name = "read", .kind = .function, .native_id = .io_read, .arity = 0 },
+    .{ .name = "read", .kind = .function, .native_id = .io_read, .arity = 1 },
+    .{ .name = "read_all", .kind = .function, .native_id = .io_read_all, .arity = 0 },
     .{ .name = "readline", .kind = .function, .native_id = .io_readline, .arity = 0 },
 };
 
@@ -500,7 +501,7 @@ test "std regexp descriptor exposes the runtime namespace table" {
 }
 
 test "std io descriptor preserves variadic print functions" {
-    try std.testing.expectEqual(@as(usize, 8), ioExports.len);
+    try std.testing.expectEqual(@as(usize, 9), ioExports.len);
     try std.testing.expectEqual(@as(u8, 255), ioExports[0].arity);
 }
 

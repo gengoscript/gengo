@@ -75,12 +75,16 @@ implementation-independent bound is currently guaranteed.
 - Like `std.io.println` but writes to stderr.
 - Returns `null`.
 
-### `std.io.read()`
-- Reads up to 4096 bytes from stdin in a single call.
+### `std.io.read(max_bytes int)`
+- Reads up to `max_bytes` bytes from stdin in a single call (capped at the runtime `max_input_bytes` limit).
 - Returns the bytes as a string, or `null` on EOF.
 
+### `std.io.read_all()`
+- Reads all of stdin until EOF (capped at the runtime `max_input_bytes` limit).
+- Returns the full content as a string, or `null` if nothing was read.
+
 ### `std.io.readline()`
-- Reads one line from stdin (up to 4096 bytes), stripping the trailing `\n` / `\r\n`.
+- Reads one line from stdin (capped at the runtime `max_input_bytes` limit), stripping the trailing `\n` / `\r\n`.
 - Returns the line as a string, or `null` on EOF.
 
 ### `std.io` format verbs

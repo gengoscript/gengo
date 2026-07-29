@@ -259,6 +259,16 @@ fn readFd0(buf: []u8) isize {
     return if (n == 0) -1 else @intCast(n);
 }
 
+pub fn readAllBytesRaw(buf: []u8) isize {
+    var total: usize = 0;
+    while (total < buf.len) {
+        const n = if (read_override) |f| f(buf[total..], false) else readFd0(buf[total..]);
+        if (n <= 0) break;
+        total += @intCast(n);
+    }
+    return if (total > 0) @intCast(total) else -1;
+}
+
 pub fn readBytesRaw(buf: []u8, is_line: bool) isize {
     if (read_override) |f| return f(buf, is_line);
     if (buf.len == 0) return 0;

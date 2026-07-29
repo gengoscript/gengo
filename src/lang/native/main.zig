@@ -684,7 +684,7 @@ pub fn callNative(ctx: vms.VMContext, nf: NativeFuncObj, argc: u8) !void {
     defer ctx.vs.assertTempRootDepth(temp_root_base, "native dispatch");
     vmperf.countHostcall(nf.id);
     switch (@as(NativeFnId, @enumFromInt(nf.id))) {
-        .io_println, .io_print, .io_printf, .io_sprintf, .io_eprint, .io_eprintf, .io_eprintln, .io_read, .io_readline, .fmt_stringify => return io_mod.dispatch(ctx, nf, argc),
+        .io_println, .io_print, .io_printf, .io_sprintf, .io_eprint, .io_eprintf, .io_eprintln, .io_read, .io_read_all, .io_readline, .fmt_stringify => return io_mod.dispatch(ctx, nf, argc),
         .core_len, .core_append, .core_error, .core_is_error, .core_gc, .core_gc_live_objects, .core_gc_stats, .core_bytelen, .core_gc_stats_ext, .core_delete, .core_has, .core_keys, .core_values, .core_contains, .core_remove, .core_type_of, .core_is_int, .core_is_float, .core_is_string, .core_is_array, .core_is_map, .core_is_struct, .core_is_null, .core_deep_equal, .core_clone, .core_recover => return core_mod.dispatch(ctx, nf, argc),
         .conv_to_int, .conv_to_float, .conv_to_bool, .conv_to_string => return conv_mod.dispatch(ctx, nf, argc),
         .math_abs, .math_sqrt, .math_floor, .math_ceil, .math_round, .math_sin, .math_cos, .math_tan, .math_log, .math_log2, .math_log10, .math_pow, .math_min, .math_max, .math_acos, .math_asin, .math_atan, .math_atan2, .math_cosh, .math_sinh, .math_tanh, .math_exp, .math_exp2, .math_trunc, .math_cbrt, .math_hypot, .math_mod, .math_nan, .math_is_nan, .math_is_inf, .math_clamp, .math_sign => return math_mod.dispatch(ctx, nf, argc),
