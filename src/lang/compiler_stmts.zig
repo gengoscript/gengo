@@ -2081,6 +2081,12 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
                 c.currentScope().locals[sr].import_module_path = path;
             }
             self_ref_slot = sr;
+        } else if (c.cur.typ == .kw_func and !c.inFunc()) {
+            // Top-level `name := func(params) {}` doesn't go through namedFuncDecl,
+            // so pending_func_qname is never set. Set it here so compileFuncWithPrefix
+            // pushes the sig onto in_progress_sigs before the body compiles, enabling
+            // recursive self-calls to resolve arg types and set the 0x80 proven flag.
+            c.pending_func_qname = try c.qualifyGlobalName(name.src);
         }
         try c.expr();
         // Infer named type from constructor call: d := Meters(5) → used for TypeCheck on the local.
