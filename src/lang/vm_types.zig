@@ -127,7 +127,7 @@ pub fn findFieldIndex(fields: []const StructFieldSpec, key: []const u8) ?usize {
     return null;
 }
 
-pub fn matchesTypeAlt(ctx: VMContext, v: Value, alt: FieldTypeAlt) bool {
+pub fn matchesTypeAlt(ctx: VMContext, v: Value, alt: *const FieldTypeAlt) bool {
     return switch (alt.typ) {
         .any => true,
         .null_t => v == .null,
@@ -233,7 +233,7 @@ pub fn matchesFieldType(ctx: VMContext, v: Value, spec: StructFieldSpec) bool {
 }
 
 pub fn matchesTypeSpec(ctx: VMContext, v: Value, spec: FieldTypeSpec) bool {
-    for (spec.alts) |alt| {
+    for (spec.alts) |*alt| {
         if (matchesTypeAlt(ctx, v, alt)) return true;
     }
     return false;
@@ -831,7 +831,7 @@ pub fn enforcePrimitiveFuncArgTypes(ctx: VMContext, f: FuncObj, argc: u8) !void 
         // A non-primitive spec here means GC pool-slot reuse; fall back.
         if (!isPrimitiveTypeSpec(spec)) return enforceFuncArgTypes(ctx, f, argc);
         const arg = vs.stack[base + i];
-        if (!matchesTypeAlt(ctx, arg, spec.alts[0])) return argTypeError(ctx, f, i, spec, arg);
+        if (!matchesTypeAlt(ctx, arg, &spec.alts[0])) return argTypeError(ctx, f, i, spec, arg);
     }
 }
 
