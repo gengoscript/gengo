@@ -4412,7 +4412,10 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
             .jif_pop => {
                 const off = opInt(ctx);
                 const cond = try ctx.vs.vmPop();
-                if (!(try condAsBool(ctx, cond, "condition"))) ctx.vs.ip += off;
+                // Fast path for the common .boolean case; condAsBool handles
+                // named-over-bool and the type error for non-boolean values.
+                const take = if (cond == .boolean) cond.boolean else try condAsBool(ctx, cond, "condition");
+                if (!take) ctx.vs.ip += off;
             },
             .loop => {
                 const off = opInt(ctx);
