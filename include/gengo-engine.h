@@ -531,7 +531,7 @@ typedef int32_t (*gengo_http_fetch_fn_t)(const gengo_http_request_t *req,
 
 /*
  * Function pointer types for the network handler table.
- * The dial/read/write/close/*_addr/*_deadline pointers must all be non-NULL
+ * The dial/read/write/close/_addr/_deadline pointers must all be non-NULL
  * when the struct is passed (unchanged from before listener support).
  * The listen/accept/listener_* pointers are optional: a host that supports
  * dialing but not listening may leave them NULL, and net.listen(...) will
