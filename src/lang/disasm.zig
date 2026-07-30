@@ -385,6 +385,36 @@ pub fn disassemble(cs: *const chunk.State) void {
                 writeConst(cs, val_idx);
                 io.write("\n");
             },
+            // --- inc_global_const_loop: op + name(2) + ic(2) + add_skip(1) + val(2) + cup_slot(1) + off(4) ---
+            .inc_global_const_loop => {
+                const base = i - 1;
+                const name_idx = readU16(cs, i);
+                i += 2;
+                const ic = readU16(cs, i);
+                i += 2;
+                i += 1; // skip add byte
+                const val_idx = readU16(cs, i);
+                i += 2;
+                const cup_slot = cs.codeByteAt(i);
+                i += 1;
+                const off: u32 = readU32(cs, i);
+                i += 4;
+                io.write("inc_global_const_loop ");
+                writeConst(cs, name_idx);
+                if (ic != 0xffff) {
+                    io.write(" ic=");
+                    writeNum(ic);
+                }
+                io.write(" [");
+                writeNum(val_idx);
+                io.write("] ");
+                writeConst(cs, val_idx);
+                io.write(" cup=");
+                writeNum(cup_slot);
+                io.write(" -> ");
+                writeNum(base + 13 - off);
+                io.write("\n");
+            },
 
             // --- hexa-fused: op + name(2) + ic(2) + glcs_skip(1) + slot(1) + sub_skip(1) + idx(2) + argc(1) ---
             .call_global_local_sub_const, .call_global_local_sub_const_tail => {

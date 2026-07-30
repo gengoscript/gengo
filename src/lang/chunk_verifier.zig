@@ -14,7 +14,7 @@ fn isReturnOp(op: Op) bool {
 
 fn isUnconditionalBranch(op: Op) bool {
     return switch (op) {
-        .jump, .loop, .set_global_loop, .close_upvalue_loop, .local_add_const_loop => true,
+        .jump, .loop, .set_global_loop, .close_upvalue_loop, .local_add_const_loop, .inc_global_const_loop => true,
         else => false,
     };
 }
@@ -166,13 +166,13 @@ pub fn stackEffect(op: Op, code: []const u8, ip: usize) struct { pop: u8, push: 
         .ret_const, .get_local_ret => .{ .pop = 0, .push = 0 },
         .add_ret => .{ .pop = 2, .push = 0 },
 
-        .jump, .loop, .set_global_loop, .close_upvalue_loop, .jump_if_false, .jump_if_not_null => .{ .pop = 0, .push = 0 },
+        .jump, .loop, .set_global_loop, .close_upvalue_loop, .jump_if_false, .jump_if_not_null, .inc_global_const_loop => .{ .pop = 0, .push = 0 },
         .get_local_const_eq_jif_pop, .get_local_const_lt_jif_pop, .get_local_const_gt_jif_pop, .get_local_const_lt_jif_pop_jump, .get_global_const_lt_jif_pop => .{ .pop = 0, .push = 0 },
 
         .halt, .op_unreachable => .{ .pop = 0, .push = 0 },
 
         // Reserved slots: rejected by decodeAt before stackEffect runs.
-        .reserved_2e, .reserved_2f, .reserved_30, .reserved_31, .reserved_38, .reserved_39, .reserved_3a, .reserved_3b, .reserved_3c, .reserved_3d, .reserved_3e, .reserved_3f, .reserved_40, .reserved_41, .reserved_83, .reserved_84, .reserved_85, .reserved_86, .reserved_87, .reserved_88, .reserved_89, .reserved_8a, .reserved_8b, .reserved_8c, .reserved_8d, .reserved_8e, .reserved_8f, .reserved_90, .reserved_91, .reserved_92, .reserved_93, .reserved_94, .reserved_95, .reserved_96, .reserved_97, .reserved_98, .reserved_99, .reserved_9a, .reserved_9b, .reserved_9c, .reserved_9d, .reserved_9e, .reserved_9f, .reserved_a0, .reserved_a1, .reserved_a2, .reserved_a3, .reserved_a4, .reserved_a5, .reserved_a6, .reserved_a7, .reserved_a8, .reserved_a9, .reserved_aa, .reserved_ab, .reserved_ac, .reserved_ad, .reserved_ae, .reserved_af, .reserved_b0, .reserved_b1, .reserved_b2, .reserved_b3, .reserved_b4, .reserved_b5, .reserved_b6, .reserved_b7, .reserved_b8, .reserved_b9, .reserved_ba, .reserved_bb, .reserved_bc, .reserved_bd, .reserved_be, .reserved_bf, .reserved_e3, .reserved_e4, .reserved_e5, .reserved_e6, .reserved_e7, .reserved_e8, .reserved_e9, .reserved_ea, .reserved_eb, .reserved_ec, .reserved_ed, .reserved_ee, .reserved_ef, .reserved_f0, .reserved_f1, .reserved_f2, .reserved_f3, .reserved_f4, .reserved_f5, .reserved_f6, .reserved_f7, .reserved_f8, .reserved_f9, .reserved_fa, .reserved_fb, .reserved_fc, .reserved_fd, .reserved_fe, .reserved_ff => unreachable,
+        .reserved_2e, .reserved_2f, .reserved_30, .reserved_31, .reserved_38, .reserved_39, .reserved_3a, .reserved_3b, .reserved_3c, .reserved_3d, .reserved_3e, .reserved_3f, .reserved_40, .reserved_41, .reserved_83, .reserved_84, .reserved_85, .reserved_86, .reserved_87, .reserved_88, .reserved_89, .reserved_8a, .reserved_8b, .reserved_8c, .reserved_8d, .reserved_8e, .reserved_8f, .reserved_90, .reserved_91, .reserved_92, .reserved_93, .reserved_94, .reserved_95, .reserved_96, .reserved_97, .reserved_98, .reserved_99, .reserved_9a, .reserved_9b, .reserved_9c, .reserved_9d, .reserved_9e, .reserved_9f, .reserved_a0, .reserved_a1, .reserved_a2, .reserved_a3, .reserved_a4, .reserved_a5, .reserved_a6, .reserved_a7, .reserved_a8, .reserved_a9, .reserved_aa, .reserved_ab, .reserved_ac, .reserved_ad, .reserved_ae, .reserved_af, .reserved_b0, .reserved_b1, .reserved_b2, .reserved_b3, .reserved_b4, .reserved_b5, .reserved_b6, .reserved_b7, .reserved_b8, .reserved_b9, .reserved_ba, .reserved_bb, .reserved_bc, .reserved_bd, .reserved_be, .reserved_bf, .reserved_e4, .reserved_e5, .reserved_e6, .reserved_e7, .reserved_e8, .reserved_e9, .reserved_ea, .reserved_eb, .reserved_ec, .reserved_ed, .reserved_ee, .reserved_ef, .reserved_f0, .reserved_f1, .reserved_f2, .reserved_f3, .reserved_f4, .reserved_f5, .reserved_f6, .reserved_f7, .reserved_f8, .reserved_f9, .reserved_fa, .reserved_fb, .reserved_fc, .reserved_fd, .reserved_fe, .reserved_ff => unreachable,
     };
 }
 

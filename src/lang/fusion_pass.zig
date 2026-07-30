@@ -94,6 +94,7 @@ fn pairFusion(a: Op, b: Op, same_slot: bool) ?Op {
         .local_add_const => if (b == .loop) .local_add_const_loop else null,
         .set_global => if (b == .loop) .set_global_loop else null,
         .close_upvalue => if (b == .loop) .close_upvalue_loop else null,
+        .inc_global_const => if (b == .close_upvalue_loop) .inc_global_const_loop else null,
         .add => if (b == .ret) .add_ret else null,
         else => null,
     };
@@ -403,6 +404,7 @@ fn fusedWidth(f: Op) usize {
         .call_global_local_sub_const, .call_global_local_sub_const_tail => 13,
         .get_local_get_field, .inc_global_const => 8,
         .get_local_const_eq_jif_pop, .get_local_const_lt_jif_pop, .get_local_const_gt_jif_pop, .set_global_loop => 9,
+        .inc_global_const_loop => 13,
         .get_global_const_lt_jif_pop => 12,
         .get_local_const_lt_jif_pop_jump => 13,
         .local_add_const => 4,
@@ -439,6 +441,7 @@ fn retargetCopied(cs: *const chunk.State, ip: usize, inst: chunk_decoder.Decoded
         .set_global_loop => start + 9,
         .close_upvalue_loop => start + 6,
         .local_add_const_loop => start + 8,
+        .inc_global_const_loop => start + 13,
         else => return,
     };
     const off_pos: usize = switch (opAt(cs, ip)) {
@@ -448,10 +451,11 @@ fn retargetCopied(cs: *const chunk.State, ip: usize, inst: chunk_decoder.Decoded
         .get_local_const_lt_jif_pop_jump => start + 5,
         .close_upvalue_loop => start + 2,
         .local_add_const_loop => start + 4,
+        .inc_global_const_loop => start + 9,
         else => return,
     };
     switch (opAt(cs, ip)) {
-        .loop, .set_global_loop, .close_upvalue_loop, .local_add_const_loop => {
+        .loop, .set_global_loop, .close_upvalue_loop, .local_add_const_loop, .inc_global_const_loop => {
             writeU32Into(out, off_pos, @intCast(new_end_or_base - new_target));
         },
         else => {
@@ -555,6 +559,14 @@ fn emitFused(cs: *const chunk.State, f: Op, a_pos: usize, a_inst: chunk_decoder.
             out[start + 1] = cs.code[a_pos + 1];
             const t = b_inst.jump_target.?;
             writeU32Into(out, start + 2, @intCast((start + 6) - ip_map[t]));
+        },
+        // [igcl][name2][ic2][add_skip][val2][cup_slot][off4]; backward: target = start+13-off
+        // a=inc_global_const (8 bytes), b=close_upvalue_loop (6 bytes)
+        .inc_global_const_loop => {
+            @memcpy(out[start + 1 ..][0..7], cs.code[a_pos + 1 ..][0..7]);
+            out[start + 8] = cs.code[b_pos + 1]; // cup_slot from close_upvalue_loop
+            const t = b_inst.jump_target.?;
+            writeU32Into(out, start + 9, @intCast((start + 13) - ip_map[t]));
         },
         .get_local_ret => out[start + 1] = cs.code[a_pos + 1],
         .add_ret => {},

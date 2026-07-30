@@ -2694,6 +2694,41 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                     ctx.gs.setAt(slot, result);
                 }
             },
+            .inc_global_const_loop => {
+                const name_idx = opShort(ctx);
+                const ic_base = ctx.vs.ip;
+                const ic_slot: u16 = @intCast(opShort(ctx));
+                _ = opByte(ctx); // skip add_skip byte
+                const k = try ctx.cs.constAt(opShort(ctx));
+                if (ic_slot != 0xFFFF) {
+                    const v = ctx.gs.getAt(ic_slot);
+                    const result: Value = if (v == .int and k == .int) try checkedIntAdd(ctx, v.int, k.int) else try computeAddResult(ctx, v, k);
+                    ctx.gs.setAt(ic_slot, result);
+                } else {
+                    const name = (try ctx.cs.constAt(name_idx)).string.bytes;
+                    const slot = ctx.gs.findSlot(name) orelse {
+                        ctx.vs.setRuntimeErr("'{s}' is not defined", .{name});
+                        return error.NotDefined;
+                    };
+                    ctx.cs.patchByte(ic_base, @intCast((slot >> 8) & 0xFF));
+                    ctx.cs.patchByte(ic_base + 1, @intCast(slot & 0xFF));
+                    const v = ctx.gs.getAt(slot);
+                    const result: Value = if (v == .int and k == .int) try checkedIntAdd(ctx, v.int, k.int) else try computeAddResult(ctx, v, k);
+                    ctx.gs.setAt(slot, result);
+                }
+                // close_upvalue part: copy cell back to stack if captured
+                const cup_slot = opByte(ctx);
+                const cup_base = vmFrameBase(ctx);
+                if (cup_base + cup_slot < ctx.vs.stack.len) {
+                    const sv = ctx.vs.stack[cup_base + cup_slot];
+                    if (sv == .object and sv.object.* == .cell) {
+                        ctx.vs.stack[cup_base + cup_slot] = sv.object.cell.value;
+                    }
+                }
+                const off = opInt(ctx);
+                if (off > ctx.vs.ip) return error.InvalidChunkShape;
+                ctx.vs.ip -= off;
+            },
 
             .get_local => {
                 const slot = opByte(ctx);

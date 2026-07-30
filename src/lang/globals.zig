@@ -46,6 +46,14 @@ pub const State = struct {
         return self.compact_values[i];
     }
 
+    // Rebuild the compact array from the primary entries table. Must be called
+    // before any code that reads compact_values (i.e., GC marking).
+    pub fn syncCompact(self: *State) void {
+        for (&self.entries) |*e| {
+            if (e.occupied) self.compact_values[e.compact_idx] = e.value;
+        }
+    }
+
     pub fn get(self: *const State, name: []const u8) ?Value {
         const idx = self.slotFor(name) orelse return null;
         return self.entries[idx].value;
@@ -63,7 +71,6 @@ pub const State = struct {
     pub fn setAt(self: *State, slot: u16, value: Value) void {
         if (slot >= TableSize) return;
         self.entries[slot].value = value;
-        self.compact_values[self.entries[slot].compact_idx] = value;
     }
 
     pub fn has(self: *const State, name: []const u8) bool {
@@ -73,7 +80,6 @@ pub const State = struct {
     pub fn set(self: *State, name: []const u8, value: Value) bool {
         const idx = self.slotFor(name) orelse return false;
         self.entries[idx].value = value;
-        self.compact_values[self.entries[idx].compact_idx] = value;
         return true;
     }
 

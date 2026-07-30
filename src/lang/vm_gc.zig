@@ -167,6 +167,7 @@ pub fn collectGarbage(ctx: VMContext) void {
 
     for (ctx.vs.stack[0..ctx.vs.stack_top]) |v| markValue(ctx, v);
 
+    ctx.gs.syncCompact();
     for (0..ctx.gs.len()) |i| markValue(ctx, ctx.gs.compactValue(i));
 
     if (ctx.vs.std_module) |m| markObjectQueue(ctx, m);

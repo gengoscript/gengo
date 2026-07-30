@@ -369,8 +369,13 @@ pub const Op = enum(u8) {
     // transaction/packet-ID counter idiom, issue #207.
     field_add_const = 0xE2,
 
-    // Reserved slots within the fused block — same rules as above.
-    reserved_e3 = 0xE3,
+    // Fused inc_global_const+close_upvalue_loop: body global-increment then
+    // close upvalue and jump back. Common pattern in C-for loops whose body
+    // is a single global increment (e.g. `n = n + 1`).
+    // Layout: [op][name_hi][name_lo][ic_hi][ic_lo][add_skip][val_hi][val_lo][cup_slot][off_b3..b0]
+    // (13 bytes). off base = start+13; backward: target = start+13-off
+    inc_global_const_loop = 0xE3,
+
     reserved_e4 = 0xE4,
     reserved_e5 = 0xE5,
     reserved_e6 = 0xE6,
