@@ -77,8 +77,15 @@ pub fn assignStmt(c: anytype) !void {
     try c.consume(.eq);
     const tc = c.getLocalTypeCheck(name.src);
     if (tc) |t| try c.emitVarTypeProlog(t, name.line);
+    c.beginExprPrimCapture();
     try c.expr();
-    if (tc) |t| try c.emitVarTypeEpilog(t, name.line);
+    const rhs_info = c.endExprPrimCapture();
+    if (tc) |t| {
+        // Skip prim cast when the RHS is already proven to be the same primitive
+        // type; the compiler's type tracking makes the runtime check redundant.
+        const skip = (t == .prim) and (rhs_info.prim == t.prim);
+        if (!skip) try c.emitVarTypeEpilog(t, name.line);
+    }
     try c.emitSetVar(name);
     c.matchOpt(.semicolon);
 }
