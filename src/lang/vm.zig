@@ -4403,7 +4403,9 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
             },
             .jump_if_false => {
                 const off = opInt(ctx);
-                if (!(try condAsBool(ctx, try ctx.vs.vmPeek(0), "condition"))) ctx.vs.ip += off;
+                const cond = try ctx.vs.vmPeek(0);
+                const take = if (cond == .boolean) cond.boolean else try condAsBool(ctx, cond, "condition");
+                if (!take) ctx.vs.ip += off;
             },
             .jump_if_not_null => {
                 const off = opInt(ctx);
