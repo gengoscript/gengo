@@ -2334,7 +2334,7 @@ fn readGlobalConstPair(ctx: VMContext) !struct { g: Value, k: Value } {
     const ic_base = ctx.vs.ip;
     const ic_slot: u16 = @intCast(opShort(ctx));
     ctx.vs.ip += 1; // skip embedded const opcode byte
-    const k = try ctx.cs.constAt(opShort(ctx));
+    const k = ctx.cs.constAtU(opShort(ctx));
     return .{ .g = try readGlobalIC(ctx, name_idx, ic_base, ic_slot), .k = k };
 }
 
@@ -2676,7 +2676,7 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 const ic_base = ctx.vs.ip;
                 const ic_slot: u16 = @intCast(opShort(ctx));
                 _ = opByte(ctx); // skip add_skip byte
-                const k = try ctx.cs.constAt(opShort(ctx));
+                const k = ctx.cs.constAtU(opShort(ctx));
                 if (ic_slot != 0xFFFF) {
                     const v = ctx.gs.getAt(ic_slot);
                     const result: Value = if (v == .int and k == .int) try checkedIntAdd(ctx, v.int, k.int) else try computeAddResult(ctx, v, k);
@@ -2699,7 +2699,7 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 const ic_base = ctx.vs.ip;
                 const ic_slot: u16 = @intCast(opShort(ctx));
                 _ = opByte(ctx); // skip add_skip byte
-                const k = try ctx.cs.constAt(opShort(ctx));
+                const k = ctx.cs.constAtU(opShort(ctx));
                 if (ic_slot != 0xFFFF) {
                     const v = ctx.gs.getAt(ic_slot);
                     const result: Value = if (v == .int and k == .int) try checkedIntAdd(ctx, v.int, k.int) else try computeAddResult(ctx, v, k);
@@ -2903,17 +2903,22 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
             },
             .local_add_const => {
                 const dst = opByte(ctx);
-                const k = try ctx.cs.constAt(opShort(ctx));
+                const k = ctx.cs.constAtU(opShort(ctx));
                 const a = try readLocalSlot(ctx, dst);
                 const result: Value = if (a == .int and k == .int) try checkedIntAdd(ctx, a.int, k.int) else try computeAddResult(ctx, a, k);
                 writeFrameLocal(ctx, vmFrameBase(ctx) + dst, result);
             },
             .local_add_const_loop => {
                 const dst = opByte(ctx);
-                const k = try ctx.cs.constAt(opShort(ctx));
-                const a = try readLocalSlot(ctx, dst);
+                const k = ctx.cs.constAtU(opShort(ctx));
+                // Slot is never a cell: local_add_const_loop only fuses from
+                // local_add_const+loop (no close_upvalue before loop), so the
+                // loop variable is guaranteed uncaptured.
+                const abs_slot = vmFrameBase(ctx) + dst;
+                if (abs_slot >= ctx.vs.stack.len) return error.StackOverflow;
+                const a = ctx.vs.stack[abs_slot];
                 const result: Value = if (a == .int and k == .int) try checkedIntAdd(ctx, a.int, k.int) else try computeAddResult(ctx, a, k);
-                writeFrameLocal(ctx, vmFrameBase(ctx) + dst, result);
+                ctx.vs.stack[abs_slot] = result;
                 const off = opInt(ctx);
                 if (off > ctx.vs.ip) return error.InvalidChunkShape;
                 ctx.vs.ip -= off;
@@ -3669,7 +3674,7 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
 
             // Fused const+op: reads rhs constant, pops lhs from stack.
             .const_eq => {
-                const k = try ctx.cs.constAt(opShort(ctx));
+                const k = ctx.cs.constAtU(opShort(ctx));
                 const a = try ctx.vs.vmPop();
                 if (a == .int and k == .int) {
                     try ctx.vs.vmPush(.{ .boolean = a.int == k.int });
@@ -3679,7 +3684,7 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 try ctx.vs.vmPush(.{ .boolean = Value.equals(vms.unboxNamed(a), vms.unboxNamed(k)) });
             },
             .const_sub => {
-                const k = try ctx.cs.constAt(opShort(ctx));
+                const k = ctx.cs.constAtU(opShort(ctx));
                 const a = try ctx.vs.vmPop();
                 if (a == .int and k == .int) {
                     try ctx.vs.vmPush(try checkedIntSub(ctx, a.int, k.int));
@@ -3938,18 +3943,18 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 }
             },
             .const_add => {
-                const k = try ctx.cs.constAt(opShort(ctx));
+                const k = ctx.cs.constAtU(opShort(ctx));
                 const a = try ctx.vs.vmPop();
                 try ctx.vs.vmPush(try computeAddResult(ctx, a, k));
             },
             .const_lt => {
-                const k = try ctx.cs.constAt(opShort(ctx));
+                const k = ctx.cs.constAtU(opShort(ctx));
                 const a = try ctx.vs.vmPop();
                 const n = try compareNumericPair(ctx, a, k, "<");
                 try ctx.vs.vmPush(.{ .boolean = n.an < n.bn });
             },
             .const_gt => {
-                const k = try ctx.cs.constAt(opShort(ctx));
+                const k = ctx.cs.constAtU(opShort(ctx));
                 const a = try ctx.vs.vmPop();
                 const n = try compareNumericPair(ctx, a, k, ">");
                 try ctx.vs.vmPush(.{ .boolean = n.an > n.bn });
@@ -4684,7 +4689,7 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
             .ret_const => {
                 vmperf.breakOpChain();
                 if (ctx.vs.frame_top == 0) return error.ImpossibleOpcodeState;
-                const k = try ctx.cs.constAt(opShort(ctx));
+                const k = ctx.cs.constAtU(opShort(ctx));
                 if (try doReturn(ctx, k)) return true;
             },
 
