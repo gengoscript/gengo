@@ -376,7 +376,10 @@ pub const Op = enum(u8) {
     // (13 bytes). off base = start+13; backward: target = start+13-off
     inc_global_const_loop = 0xE3,
 
-    reserved_e4 = 0xE4,
+    // Uncaptured variant: no cup_slot byte; always acts as cup_slot=0xFF.
+    // Layout: [op][name_hi][name_lo][ic_hi][ic_lo][add_skip][val_hi][val_lo][off_b3..b0]
+    // (12 bytes). off base = start+12; backward: target = start+12-off
+    inc_global_const_loop_nc = 0xE4,
     reserved_e5 = 0xE5,
     reserved_e6 = 0xE6,
     reserved_e7 = 0xE7,

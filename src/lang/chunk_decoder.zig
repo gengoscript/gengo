@@ -120,6 +120,18 @@ pub fn decodeAt(state: *const chunk.State, pos: usize) !DecodedInstruction {
             };
         },
 
+        .inc_global_const_loop_nc => blk: {
+            const off = try readU32At(state, pos + 8);
+            const width: usize = 12;
+            if (@as(usize, off) > pos + width) return error.BadJumpTarget;
+            break :blk .{
+                .op = op,
+                .width = width,
+                .const_index = try readU16At(state, pos + 6),
+                .jump_target = pos + width - @as(usize, off),
+            };
+        },
+
         .get_local_const_eq_jif_pop, .get_local_const_lt_jif_pop, .get_local_const_gt_jif_pop => blk: {
             const off = try readU32At(state, pos + 5);
             break :blk .{

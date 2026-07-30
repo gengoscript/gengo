@@ -2717,7 +2717,6 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                     ctx.gs.setAt(slot, result);
                 }
                 // close_upvalue part: copy cell back to stack if captured.
-                // cup_slot=0xFF means the loop var is not captured; skip entirely.
                 const cup_slot = opByte(ctx);
                 if (cup_slot != 0xFF) {
                     const cup_base = vmFrameBase(ctx);
@@ -2727,6 +2726,33 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                             ctx.vs.stack[cup_base + cup_slot] = sv.object.cell.value;
                         }
                     }
+                }
+                const off = opInt(ctx);
+                if (off > ctx.vs.ip) return error.InvalidChunkShape;
+                ctx.vs.ip -= off;
+            },
+            // Uncaptured variant: no cup_slot byte, fused from get_global_const_add+set_global_loop.
+            .inc_global_const_loop_nc => {
+                const name_idx = opShort(ctx);
+                const ic_base = ctx.vs.ip;
+                const ic_slot: u16 = @intCast(opShort(ctx));
+                _ = opByte(ctx); // skip add_skip byte
+                const k = ctx.cs.constAtU(opShort(ctx));
+                if (ic_slot != 0xFFFF) {
+                    const v = ctx.gs.getAt(ic_slot);
+                    const result: Value = if (v == .int and k == .int) try checkedIntAdd(ctx, v.int, k.int) else try computeAddResult(ctx, v, k);
+                    ctx.gs.setAt(ic_slot, result);
+                } else {
+                    const name = (try ctx.cs.constAt(name_idx)).string.bytes;
+                    const slot = ctx.gs.findSlot(name) orelse {
+                        ctx.vs.setRuntimeErr("'{s}' is not defined", .{name});
+                        return error.NotDefined;
+                    };
+                    ctx.cs.patchByte(ic_base, @intCast((slot >> 8) & 0xFF));
+                    ctx.cs.patchByte(ic_base + 1, @intCast(slot & 0xFF));
+                    const v = ctx.gs.getAt(slot);
+                    const result: Value = if (v == .int and k == .int) try checkedIntAdd(ctx, v.int, k.int) else try computeAddResult(ctx, v, k);
+                    ctx.gs.setAt(slot, result);
                 }
                 const off = opInt(ctx);
                 if (off > ctx.vs.ip) return error.InvalidChunkShape;
