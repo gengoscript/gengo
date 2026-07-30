@@ -182,7 +182,8 @@ pub fn cForStmt(c: anytype) anyerror!void {
     );
     c.loop_body_depth -= 1;
     for (c.currentLoop().loop_var_slots[0..c.currentLoop().loop_var_count]) |slot| {
-        try c.cs.emit2(@intFromEnum(Op.close_upvalue), slot, c.prev.line);
+        if (c.currentScope().locals[slot].is_captured)
+            try c.cs.emit2(@intFromEnum(Op.close_upvalue), slot, c.prev.line);
     }
     try c.cs.emitLoop(loop_start, c.prev.line);
 
@@ -970,7 +971,8 @@ pub fn forInStmt(c: anytype) anyerror!void {
     );
     c.loop_body_depth -= 1;
     for (c.currentLoop().loop_var_slots[0..c.currentLoop().loop_var_count]) |slot| {
-        try c.cs.emit2(@intFromEnum(Op.close_upvalue), slot, c.prev.line);
+        if (c.currentScope().locals[slot].is_captured)
+            try c.cs.emit2(@intFromEnum(Op.close_upvalue), slot, c.prev.line);
     }
     try c.cs.emitLoop(loop_start, c.prev.line);
 

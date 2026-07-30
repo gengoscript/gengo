@@ -3675,11 +3675,9 @@ test "fusion: C-style for-loop header (local < constant) fuses to the quint get_
     try std.testing.expectEqual(@as(usize, 1), countOp(c, .get_local_const_lt_jif_pop_jump));
 }
 
-test "fusion: C-style for-loop's per-iteration capture close fuses to close_upvalue_loop" {
-    // Every iteration of a C-for rebinds the loop variable (for capture
-    // correctness), closing it right before the loop's back-edge — this is
-    // what supplies close_upvalue_loop's trigger, independent of whether the
-    // loop body actually captures the variable in a closure.
+test "fusion: C-style for-loop skips close_upvalue when loop var is not captured" {
+    // When no closure in the loop body captures the loop variable, the compiler
+    // omits the close_upvalue entirely — no close_upvalue_loop in the output.
     var rt = try setup();
     defer rt.deinit();
     try compile(&rt,
@@ -3689,6 +3687,25 @@ test "fusion: C-style for-loop's per-iteration capture close fuses to close_upva
         \\        x = x + i
         \\    }
         \\    return x
+        \\}
+    );
+    const c = rt.chunk_state;
+    try std.testing.expectEqual(@as(usize, 0), countOp(c, .close_upvalue_loop));
+}
+
+test "fusion: C-style for-loop emits close_upvalue_loop when loop var is captured" {
+    // When a closure in the loop body captures the loop variable, the compiler
+    // emits close_upvalue at each back-edge, which fuses to close_upvalue_loop.
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\func cfor() int {
+        \\    result := 0
+        \\    for i := 0; i < 5; i++ {
+        \\        f := func() int { return i }
+        \\        result = result + f()
+        \\    }
+        \\    return result
         \\}
     );
     const c = rt.chunk_state;

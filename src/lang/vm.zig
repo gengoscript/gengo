@@ -2716,13 +2716,16 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                     const result: Value = if (v == .int and k == .int) try checkedIntAdd(ctx, v.int, k.int) else try computeAddResult(ctx, v, k);
                     ctx.gs.setAt(slot, result);
                 }
-                // close_upvalue part: copy cell back to stack if captured
+                // close_upvalue part: copy cell back to stack if captured.
+                // cup_slot=0xFF means the loop var is not captured; skip entirely.
                 const cup_slot = opByte(ctx);
-                const cup_base = vmFrameBase(ctx);
-                if (cup_base + cup_slot < ctx.vs.stack.len) {
-                    const sv = ctx.vs.stack[cup_base + cup_slot];
-                    if (sv == .object and sv.object.* == .cell) {
-                        ctx.vs.stack[cup_base + cup_slot] = sv.object.cell.value;
+                if (cup_slot != 0xFF) {
+                    const cup_base = vmFrameBase(ctx);
+                    if (cup_base + cup_slot < ctx.vs.stack.len) {
+                        const sv = ctx.vs.stack[cup_base + cup_slot];
+                        if (sv == .object and sv.object.* == .cell) {
+                            ctx.vs.stack[cup_base + cup_slot] = sv.object.cell.value;
+                        }
                     }
                 }
                 const off = opInt(ctx);

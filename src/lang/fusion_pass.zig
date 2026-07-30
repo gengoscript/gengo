@@ -111,6 +111,11 @@ fn pairFusionFull(cs: *const chunk.State, a_pos: usize, a: Op, b_pos: usize, b: 
         if (b == .set_global and
             cs.code[a_pos + 1] == cs.code[b_pos + 1] and
             cs.code[a_pos + 2] == cs.code[b_pos + 2]) return .inc_global_const;
+        // Loop variant: set_global + loop already fused to set_global_loop.
+        // Fuse the full inc+loop chain when the loop var is not captured.
+        if (b == .set_global_loop and
+            cs.code[a_pos + 1] == cs.code[b_pos + 1] and
+            cs.code[a_pos + 2] == cs.code[b_pos + 2]) return .inc_global_const_loop;
         return null;
     }
     const same_slot = false;
@@ -561,10 +566,12 @@ fn emitFused(cs: *const chunk.State, f: Op, a_pos: usize, a_inst: chunk_decoder.
             writeU32Into(out, start + 2, @intCast((start + 6) - ip_map[t]));
         },
         // [igcl][name2][ic2][add_skip][val2][cup_slot][off4]; backward: target = start+13-off
-        // a=inc_global_const (8 bytes), b=close_upvalue_loop (6 bytes)
+        // Two input shapes share this emitter (bytes 1-7 of both 'a' forms are identical):
+        //   inc_global_const(8) + close_upvalue_loop(6): captured var, cup_slot from b[1].
+        //   get_global_const_add(8) + set_global_loop(9): uncaptured var, cup_slot=0xFF.
         .inc_global_const_loop => {
             @memcpy(out[start + 1 ..][0..7], cs.code[a_pos + 1 ..][0..7]);
-            out[start + 8] = cs.code[b_pos + 1]; // cup_slot from close_upvalue_loop
+            out[start + 8] = if (opAt(cs, b_pos) == .close_upvalue_loop) cs.code[b_pos + 1] else 0xFF;
             const t = b_inst.jump_target.?;
             writeU32Into(out, start + 9, @intCast((start + 13) - ip_map[t]));
         },
