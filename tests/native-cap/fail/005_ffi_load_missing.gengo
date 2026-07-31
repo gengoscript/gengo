@@ -1,0 +1,2 @@
+ffi := import("cap:ffi")
+ffi.load("zig-out/lib/libgengo_ffi_test_no_such.so")

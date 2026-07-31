@@ -241,3 +241,80 @@ its own event loop, the same way the read/write deadline pattern is already
 recommended for connections — nothing about "the script never returns"
 requires new VM state; it's the same `for` loop primitive calling a native
 function that happens to block.
+
+## `cap:ffi`
+
+```gengo
+ffi := import("cap:ffi")
+```
+
+`cap:ffi` lets a script load a native shared library and call exported
+functions. It is only available in the native CLI (`x86_64` and `aarch64`);
+the WASI engine and browser SDK do not provide it. Enable it with `--cap ffi`.
+
+This is the highest-trust capability: a script can call any exported symbol in
+any library it can name, and a wrong declaration can crash the process. See
+`security.md` before enabling it for untrusted scripts.
+
+### `ffi.load(path string) Lib`
+
+Loads the shared library at `path`. The path is resolved by the host's dynamic
+linker; relative paths are resolved against the CLI's working directory. A
+missing or unloadable library is a runtime panic.
+
+### `lib.declare(name string, ret Type, args [Type]) Callable`
+
+Looks up an exported symbol and returns a callable value. `ret` is one of the
+type codes from `ffi.types` (or `ffi.types.void` for no return value); `args`
+is an array of the same type codes. The declaration is trusted: if the script
+lies about the signature, the call may crash or corrupt the process.
+
+### `callable(...)`
+
+Calls the declared function with the marshalled arguments. The call uses the
+platform C calling convention (System V on `x86_64`/`aarch64`). Up to six
+integer/pointer arguments and up to eight floating-point arguments can be
+passed in registers; larger argument lists are rejected at `declare()` time.
+
+### `ffi.types`
+
+`ffi.types` is a namespace containing type codes:
+
+| Type | Gengo import value | C/Zig equivalent |
+|---|---|---|
+| `void` | `ffi.types.void` | no return value |
+| `i8` | `ffi.types.i8` | `int8_t` / `i8` |
+| `u8` | `ffi.types.u8` | `uint8_t` / `u8` |
+| `i16` | `ffi.types.i16` | `int16_t` / `i16` |
+| `u16` | `ffi.types.u16` | `uint16_t` / `u16` |
+| `i32` | `ffi.types.i32` | `int32_t` / `i32` |
+| `u32` | `ffi.types.u32` | `uint32_t` / `u32` |
+| `i64` | `ffi.types.i64` | `int64_t` / `i64` |
+| `u64` | `ffi.types.u64` | `uint64_t` / `u64` |
+| `f32` | `ffi.types.f32` | `float` / `f32` |
+| `f64` | `ffi.types.f64` | `double` / `f64` |
+| `cstring` | `ffi.types.cstring` | null-terminated `const char *` / `[*:0]const u8` |
+| `pointer` | `ffi.types.pointer` | `void *` / `*anyopaque` |
+
+Integer arguments are sign- or zero-extended to the declared width; the called
+function sees the width the script declared. Floating-point arguments are
+passed as `float` or `double` according to the declared type. `cstring` is
+passed as a temporary null-terminated string and returned as a Gengo string;
+`pointer` is passed and returned as a 64-bit integer (`null` maps to `0`).
+
+### Limitations
+
+v1 supports only scalar, float, `cstring`, and pointer arguments and returns.
+There is no support for struct-by-value, variadic functions, or arguments that
+spill onto the stack beyond the register file. `cap:ffi` is intentionally
+implemented with hand-rolled SysV trampolines rather than `libffi` so the CLI
+keeps zero external build dependencies.
+
+```gengo
+ffi := import("cap:ffi")
+std := import("std")
+
+lib := ffi.load("libexample.so")
+add := lib.declare("add", ffi.types.i64, [ffi.types.i64, ffi.types.i64])
+std.io.println(add(2, 3))
+```

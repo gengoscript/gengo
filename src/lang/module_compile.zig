@@ -134,6 +134,18 @@ pub const cap_env_desc: CapModuleDesc = .{
     },
 };
 
+// cap:ffi is a native-CLI-only capability: it dlopens arbitrary shared
+// libraries and calls into them through hand-rolled SysV trampolines
+// (x86_64/aarch64). build_options.cap_ffi is only ever true in the native
+// CLI build (see build.zig native_cli_opts); every other artifact gets the
+// capability compiled out entirely.
+pub const cap_ffi_desc: CapModuleDesc = .{
+    .name = "ffi",
+    .functions = &.{
+        .{ .name = "load", .arity = 1, .native_id = 264 },
+    },
+};
+
 const _cap_storage = blk: {
     var caps: [MaxCapabilities]CapModuleDesc = undefined;
     var i: usize = 0;
@@ -153,9 +165,13 @@ const _cap_storage = blk: {
         caps[i] = cap_env_desc;
         i += 1;
     }
+    if (build_options.cap_ffi) {
+        caps[i] = cap_ffi_desc;
+        i += 1;
+    }
     break :blk caps;
 };
-const _cap_count: usize = @as(usize, @intFromBool(build_options.cap_net)) + @as(usize, @intFromBool(build_options.cap_fs)) + @as(usize, @intFromBool(build_options.cap_http)) + @as(usize, @intFromBool(build_options.cap_env));
+const _cap_count: usize = @as(usize, @intFromBool(build_options.cap_net)) + @as(usize, @intFromBool(build_options.cap_fs)) + @as(usize, @intFromBool(build_options.cap_http)) + @as(usize, @intFromBool(build_options.cap_env)) + @as(usize, @intFromBool(build_options.cap_ffi));
 pub const AllCapabilities = _cap_storage[0.._cap_count];
 
 pub const MaxCapabilities = 16;
@@ -770,6 +786,12 @@ pub fn hasModuleExport(ctx: *anyopaque, path: []const u8, field: []const u8) boo
     const idx = self.findModule(path) orelse {
         // Check capability modules
         const cap_key = if (std.mem.startsWith(u8, path, "cap:")) path[4..] else path;
+        // cap:ffi additionally exports a "types" namespace (ffi.types.i32 etc.)
+        // that is not a function, so it is not listed in cm.functions. It is
+        // installed at runtime by installFfiModule in native/main.zig.
+        if (comptime build_options.cap_ffi) {
+            if (common.streq(cap_key, "ffi") and common.streq(field, "types")) return true;
+        }
         for (self.capability_modules) |cm| {
             if (common.streq(cm.name, cap_key)) {
                 for (cm.functions) |func| {

@@ -1366,6 +1366,13 @@ fn performCall(ctx: VMContext, argc: u8) !void {
                 },
             }
         },
+        .struct_instance => {
+            // cap:ffi callables are struct_instance objects of the special
+            // @cap_type:ffi.Callable type; any other struct_instance is not
+            // callable.
+            if (try vmnative.tryCallFfiCallable(ctx, obj, argc)) return;
+            return error.NotAFunction;
+        },
         else => return error.NotAFunction,
     }
 }

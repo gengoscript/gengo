@@ -49,6 +49,8 @@ failed; control continues according to the recovered function's return path.
 | `HostValueTooLarge` | A `ValueWire` value's `len` field (string, array, or map) exceeds the u32 maximum. | Enforce size limits on collections before passing them across the host boundary. |
 | `InstructionBudgetExceeded` | The configured VM operation budget was used. | Set an appropriate limit; simplify or split work. Host callback time needs separate host limits. |
 | `OutOfMemory`, `StackOverflow`, `CallStackOverflow`, `DeferStackOverflow` | A configured heap, VM stack, call-frame, or defer limit was reached. | Increase a deliberate host limit or bound script data/recursion. |
+| `FfiLoadFailed` | `ffi.load()` could not open the requested shared library. | Check the path and that the library is loadable in the host process. |
+| `FfiSymbolNotFound` | `lib.declare()` could not find the requested symbol in the loaded library. | Check the symbol name and that it is exported with default visibility. |
 
 Capability operations can instead return an ordinary error value, particularly
 for expected I/O, HTTP, and socket failures. Consult `capabilities.md` for

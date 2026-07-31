@@ -73,6 +73,7 @@ System access is opt-in through capability modules:
 | `fs` | `cap:fs` | Filesystem access through named mounts |
 | `net` | `cap:net` | Raw network operations |
 | `env` | `cap:env` | Read-only process environment access |
+| `ffi` | `cap:ffi` | Foreign function interface: load shared libraries and call exported symbols |
 
 Enabling one capability does not enable the others.
 
@@ -157,6 +158,21 @@ designed `host:` function. Do not expose `env.list()` to untrusted scripts
 when the process environment contains secrets. WASI and native hosts can have
 different inherited environments; review them independently.
 
+### Foreign function interface policy
+
+`cap:ffi` is the highest-trust capability. A script that can load a shared
+library and declare a function signature can call any exported symbol in that
+library, and a wrong declaration can crash the process, corrupt memory, or
+call into host code outside the VM's control. Unlike the other capabilities,
+there is no internal sandbox inside the call: the native function executes with
+the full privileges of the CLI process.
+
+Do not enable `cap:ffi` for untrusted scripts. For trusted but still
+sensitive use, prefer a narrowly scoped `host:` callback over a raw FFI binding
+whenever possible, and load only libraries that are part of the host's trusted
+supply chain. Keep the library path and symbol declarations under review,
+exactly as you would review native code linked into the CLI.
+
 ## Import Sandboxing
 
 When the CLI runs a script, file imports are restricted to the script's own directory. Any `import` that would resolve outside that directory is rejected at compile time with `ImportOutsideRoot`. The sandbox check runs before any filesystem probe, including for package-style (bare) imports, so a crafted import path cannot sidestep the check through a missing-file shortcut.
@@ -217,5 +233,6 @@ For production use:
 - set `source_root` (and optionally `module_roots`) in the embedding config to restrict which files scripts can import; and
 - apply explicit deny-by-default network/HTTP policy, timeout, and response-size limits before enabling `cap:http` or `cap:net`;
 - use dedicated read-only or virtual filesystem mounts, with host-side size and symlink policy, before enabling `cap:fs`;
-- avoid `cap:env` for untrusted scripts unless the supplied environment is intentionally safe to disclose; and
+- avoid `cap:env` for untrusted scripts unless the supplied environment is intentionally safe to disclose;
+- never enable `cap:ffi` for untrusted scripts; and
 - use a WebAssembly sandbox or separate OS process as defence in depth for higher-risk deployments.

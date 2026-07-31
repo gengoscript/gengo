@@ -1,0 +1,4 @@
+ffi := import("cap:ffi")
+
+lib := ffi.load("zig-out/lib/libgengo_ffi_test.so")
+lib.declare("ffi_no_such_symbol", ffi.types.i64, [ffi.types.i64, ffi.types.i64])

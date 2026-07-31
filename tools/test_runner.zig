@@ -647,7 +647,7 @@ fn runWasmtimeWithFlags(alloc: std.mem.Allocator, wasmtime: []const u8, wasm_pat
 }
 
 fn runNativeCliWithMount(alloc: std.mem.Allocator, gengo: []const u8, mount_path: []const u8, script: []const u8) struct { []const u8, bool } {
-    const cmd = std.fmt.allocPrint(alloc, "{s} --cap fs --mount tmp={s} {s}", .{ gengo, mount_path, script }) catch return .{ "", true };
+    const cmd = std.fmt.allocPrint(alloc, "{s} --cap fs --cap ffi --mount tmp={s} {s}", .{ gengo, mount_path, script }) catch return .{ "", true };
     defer alloc.free(cmd);
 
     return runShellCommand(alloc, cmd);

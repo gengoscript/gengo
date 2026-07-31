@@ -40,6 +40,7 @@ pub fn build(b: *std.Build) void {
     const cap_http_opt = b.option(bool, "cap_http", "Include cap:http capability") orelse true;
     const cap_fs_opt = b.option(bool, "cap_fs", "Include cap:fs capability") orelse true;
     const cap_env_opt = b.option(bool, "cap_env", "Include cap:env capability") orelse true;
+    const cap_ffi_opt = b.option(bool, "cap_ffi", "Include cap:ffi capability (native CLI only)") orelse false;
     const predicates_opt = b.option(bool, "predicates", "Enable runtime predicate checks") orelse true;
     const gengo_host_opt = b.option(bool, "gengo_host", "Include gengo_host import for host module callbacks") orelse true;
     const gengo_version = "0.6.0-pre2";
@@ -51,10 +52,29 @@ pub fn build(b: *std.Build) void {
     build_opts.addOption(bool, "cap_http", cap_http_opt);
     build_opts.addOption(bool, "cap_fs", cap_fs_opt);
     build_opts.addOption(bool, "cap_env", cap_env_opt);
+    build_opts.addOption(bool, "cap_ffi", cap_ffi_opt);
     build_opts.addOption(bool, "predicates", predicates_opt);
     build_opts.addOption(bool, "gengo_host", gengo_host_opt);
     build_opts.addOption([]const u8, "version", gengo_version);
     const build_opts_mod = build_opts.createModule();
+
+    // Native CLI gets cap:ffi unconditionally (it is a CLI-only capability:
+    // dlopen + hand-rolled SysV trampolines, gated at compile time to x86_64
+    // and aarch64). Every other build — the WASM CLI, engines, runners, and
+    // the native engine .so — uses build_opts_mod above with cap_ffi=false.
+    const native_cli_opts = b.addOptions();
+    native_cli_opts.addOption(bool, "perf", perf_opt);
+    native_cli_opts.addOption(bool, "gc_stress", gc_stress_opt);
+    native_cli_opts.addOption(bool, "heap_paranoia", heap_paranoia_opt);
+    native_cli_opts.addOption(bool, "cap_net", cap_net_opt);
+    native_cli_opts.addOption(bool, "cap_http", cap_http_opt);
+    native_cli_opts.addOption(bool, "cap_fs", cap_fs_opt);
+    native_cli_opts.addOption(bool, "cap_env", cap_env_opt);
+    native_cli_opts.addOption(bool, "cap_ffi", true);
+    native_cli_opts.addOption(bool, "predicates", predicates_opt);
+    native_cli_opts.addOption(bool, "gengo_host", gengo_host_opt);
+    native_cli_opts.addOption([]const u8, "version", gengo_version);
+    const native_cli_opts_mod = native_cli_opts.createModule();
     const runtime_config_mod = b.createModule(.{ .root_source_file = b.path(preset_config_path) });
 
     const wasmtime_opt = b.option([]const u8, "wasmtime", "path to wasmtime binary") orelse "wasmtime";
@@ -113,6 +133,7 @@ pub fn build(b: *std.Build) void {
     fuzz_gc_stress_opts.addOption(bool, "cap_http", cap_http_opt);
     fuzz_gc_stress_opts.addOption(bool, "cap_fs", cap_fs_opt);
     fuzz_gc_stress_opts.addOption(bool, "cap_env", cap_env_opt);
+    fuzz_gc_stress_opts.addOption(bool, "cap_ffi", false);
     fuzz_gc_stress_opts.addOption(bool, "predicates", predicates_opt);
     fuzz_gc_stress_opts.addOption(bool, "gengo_host", gengo_host_opt);
     fuzz_gc_stress_opts.addOption([]const u8, "version", gengo_version);
@@ -217,6 +238,7 @@ pub fn build(b: *std.Build) void {
     minimal_opts.addOption(bool, "cap_http", false);
     minimal_opts.addOption(bool, "cap_fs", false);
     minimal_opts.addOption(bool, "cap_env", false);
+    minimal_opts.addOption(bool, "cap_ffi", false);
     minimal_opts.addOption(bool, "predicates", predicates_opt);
     minimal_opts.addOption(bool, "gengo_host", false);
     minimal_opts.addOption([]const u8, "version", gengo_version);
@@ -413,6 +435,7 @@ pub fn build(b: *std.Build) void {
     perf_opts.addOption(bool, "cap_http", cap_http_opt);
     perf_opts.addOption(bool, "cap_fs", cap_fs_opt);
     perf_opts.addOption(bool, "cap_env", cap_env_opt);
+    perf_opts.addOption(bool, "cap_ffi", false);
     perf_opts.addOption(bool, "predicates", predicates_opt);
     perf_opts.addOption(bool, "gengo_host", gengo_host_opt);
     perf_opts.addOption([]const u8, "version", gengo_version);
@@ -495,8 +518,9 @@ pub fn build(b: *std.Build) void {
         .target = native_target,
         .optimize = .Debug,
     });
-    native_mod.addImport("build_options", build_opts_mod);
+    native_mod.addImport("build_options", native_cli_opts_mod);
     native_mod.addImport("runtime_config", runtime_config_mod);
+    native_mod.link_libc = true;
     const native_exe = b.addExecutable(.{ .name = "gengo", .root_module = native_mod });
     const install_native = b.addInstallArtifact(native_exe, .{});
 
@@ -504,8 +528,18 @@ pub fn build(b: *std.Build) void {
     const cli_step = b.step("cli", "Build native CLI binary (zig-out/bin/gengo)");
     cli_step.dependOn(&install_native.step);
 
+    // Shared library the tests/native-cap cap:ffi cases dlopen through
+    // ffi.load. Written in C and built with the same Zig toolchain used for
+    // the CLI: a plain, libc-free .so loads reliably into Gengo's
+    // statically-linked native CLI, whereas Zig-built shared objects have
+    // TLS/runtime-init interactions with the static musl binary that can
+    // corrupt the library at load time.
+    const build_ffi_test_lib = b.addSystemCommand(&.{ b.graph.zig_exe, "cc", "-shared", "-fPIC", "-target", "x86_64-linux-musl", "-nostdlib", "-Wl,-soname,libgengo_ffi_test.so", "-o" });
+    build_ffi_test_lib.addFileArg(b.path("zig-out/lib/libgengo_ffi_test.so"));
+    build_ffi_test_lib.addFileArg(b.path("tools/ffi_test_lib.c"));
     const run_native_cap = b.addRunArtifact(test_runner_exe);
     run_native_cap.step.dependOn(&install_native.step);
+    run_native_cap.step.dependOn(&build_ffi_test_lib.step);
     run_native_cap.addArg("native-cap");
     run_native_cap.addArg("zig-out/bin/gengo");
     if (test_filter_opt) |f| {
@@ -552,8 +586,9 @@ pub fn build(b: *std.Build) void {
         .target = native_target,
         .optimize = .ReleaseSafe,
     });
-    native_release_mod.addImport("build_options", build_opts_mod);
+    native_release_mod.addImport("build_options", native_cli_opts_mod);
     native_release_mod.addImport("runtime_config", runtime_config_mod);
+    native_release_mod.link_libc = true;
     const native_release_exe = b.addExecutable(.{ .name = "gengo", .root_module = native_release_mod });
     const install_native_release = b.addInstallArtifact(native_release_exe, .{});
 
@@ -565,8 +600,9 @@ pub fn build(b: *std.Build) void {
         .target = native_target,
         .optimize = .ReleaseFast,
     });
-    native_fast_mod.addImport("build_options", build_opts_mod);
+    native_fast_mod.addImport("build_options", native_cli_opts_mod);
     native_fast_mod.addImport("runtime_config", runtime_config_mod);
+    native_fast_mod.link_libc = true;
     const native_fast_exe = b.addExecutable(.{ .name = "gengo-fast", .root_module = native_fast_mod });
     const install_native_fast = b.addInstallArtifact(native_fast_exe, .{});
     const cli_fast_step = b.step("cli-fast", "Build native CLI binary (ReleaseFast, for timing benchmarks)");
@@ -578,8 +614,9 @@ pub fn build(b: *std.Build) void {
         .optimize = .ReleaseSmall,
         .strip = true,
     });
-    native_small_mod.addImport("build_options", build_opts_mod);
+    native_small_mod.addImport("build_options", native_cli_opts_mod);
     native_small_mod.addImport("runtime_config", runtime_config_mod);
+    native_small_mod.link_libc = true;
     const native_small_exe = b.addExecutable(.{ .name = "gengo", .root_module = native_small_mod });
     const install_native_small = b.addInstallArtifact(native_small_exe, .{});
     const cli_small_step = b.step("cli-small", "Build native CLI binary (ReleaseSmall + strip, smallest binary)");

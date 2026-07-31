@@ -1,0 +1,44 @@
+ffi := import("cap:ffi")
+std := import("std")
+
+lib := ffi.load("zig-out/lib/libgengo_ffi_test.so")
+
+add := lib.declare("ffi_add", ffi.types.i64, [ffi.types.i64, ffi.types.i64])
+std.io.println(add(20, 22))
+
+mul := lib.declare("ffi_mul", ffi.types.u32, [ffi.types.u32, ffi.types.u32])
+std.io.println(mul(7, 6))
+
+mix := lib.declare("ffi_mix", ffi.types.f64, [ffi.types.f64, ffi.types.f64, ffi.types.f64, ffi.types.f64])
+std.io.println(mix(1.0, 2.0, 3.0, 4.0))
+
+fdiv := lib.declare("ffi_fdiv", ffi.types.f32, [ffi.types.f32, ffi.types.f32])
+std.io.println(fdiv(10.0, 4.0))
+
+many := lib.declare("ffi_many", ffi.types.i32, [ffi.types.i32, ffi.types.i32, ffi.types.i32, ffi.types.i32, ffi.types.i32, ffi.types.i32])
+std.io.println(many(1, 2, 3, 4, 5, 6))
+
+all := lib.declare("ffi_all", ffi.types.f64, [ffi.types.f64, ffi.types.f64, ffi.types.f64, ffi.types.f64, ffi.types.f64, ffi.types.f64, ffi.types.f64, ffi.types.f64])
+std.io.println(all(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0))
+
+mixed := lib.declare("ffi_mixed", ffi.types.i64, [ffi.types.i32, ffi.types.f64, ffi.types.i32, ffi.types.f64, ffi.types.i32])
+std.io.println(mixed(1, 2.0, 3, 4.0, 5))
+
+muld := lib.declare("ffi_mul_i64_double", ffi.types.i64, [ffi.types.f64, ffi.types.i64])
+std.io.println(muld(2.5, 3))
+
+hi := lib.declare("ffi_hi", ffi.types.cstring, [ffi.types.cstring])
+std.io.println(hi("world"))
+
+nullable := lib.declare("ffi_nullable", ffi.types.i32, [ffi.types.pointer])
+std.io.println(nullable(null))
+
+clen := lib.declare("ffi_cstring_len", ffi.types.i64, [ffi.types.cstring])
+std.io.println(clen("hello"))
+
+echo := lib.declare("ffi_echo_str", ffi.types.i64, [ffi.types.cstring, ffi.types.i64])
+std.io.println(echo("str", 42))
+
+voidfn := lib.declare("ffi_void", ffi.types.void, [ffi.types.i32])
+voidfn(99)
+std.io.println("void-ok")

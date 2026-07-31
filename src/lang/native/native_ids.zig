@@ -262,6 +262,9 @@ pub const NativeFnId = enum(u16) {
     crypto_ed25519_sign = 259,
     crypto_ed25519_verify = 260,
     crypto_x25519 = 261,
+
+    cap_ffi_load = 264,
+    cap_ffi_declare = 265,
 };
 
 // Max enum value + 1: the correct size for a backing array indexed by NativeFnId.

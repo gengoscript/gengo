@@ -47,6 +47,7 @@ const cap_net_mod = if (build_options.cap_net) @import("cap_net.zig") else struc
 const cap_fs_mod = if (build_options.cap_fs) @import("cap_fs.zig") else struct {};
 const cap_http_mod = if (build_options.cap_http) @import("cap_http.zig") else struct {};
 const cap_env_mod = if (build_options.cap_env) @import("cap_env.zig") else struct {};
+const cap_ffi_mod = if (build_options.cap_ffi) @import("cap_ffi.zig") else struct {};
 
 const TemplateTypeQualifiedName = "@std.template.obj";
 
@@ -424,8 +425,115 @@ pub fn installHostModules(ctx: vms.VMContext, gs: *globals.State, host_modules: 
     }
 }
 
+fn installFfiModule(ctx: vms.VMContext, gs: *globals.State) !void {
+    if (gs.has("cap:ffi")) return;
+
+    const any_alts = ctx.hs.bump(FieldTypeAlt, 1) orelse return error.OutOfMemory;
+    any_alts[0] = .{ .typ = .any };
+    const any_spec: FieldTypeSpec = .{ .alts = any_alts[0..1] };
+
+    // ffi.types sub-namespace: type descriptor codes consumed by lib.declare.
+    // Values must stay in sync with cap_ffi.zig's Type* constants.
+    const type_entries = [_]NamespaceEntry{
+        .{ .name = "void", .value = .{ .int = cap_ffi_mod.TypeVoid } },
+        .{ .name = "i8", .value = .{ .int = cap_ffi_mod.TypeI8 } },
+        .{ .name = "u8", .value = .{ .int = cap_ffi_mod.TypeU8 } },
+        .{ .name = "i16", .value = .{ .int = cap_ffi_mod.TypeI16 } },
+        .{ .name = "u16", .value = .{ .int = cap_ffi_mod.TypeU16 } },
+        .{ .name = "i32", .value = .{ .int = cap_ffi_mod.TypeI32 } },
+        .{ .name = "u32", .value = .{ .int = cap_ffi_mod.TypeU32 } },
+        .{ .name = "i64", .value = .{ .int = cap_ffi_mod.TypeI64 } },
+        .{ .name = "u64", .value = .{ .int = cap_ffi_mod.TypeU64 } },
+        .{ .name = "f32", .value = .{ .int = cap_ffi_mod.TypeF32 } },
+        .{ .name = "f64", .value = .{ .int = cap_ffi_mod.TypeF64 } },
+        .{ .name = "cstring", .value = .{ .int = cap_ffi_mod.TypeStr } },
+        .{ .name = "pointer", .value = .{ .int = cap_ffi_mod.TypePtr } },
+    };
+    const types_obj = try makeNamespace(ctx, "types", "@cap_type:ffi.types", &type_entries);
+    try ctx.vs.pushTempRoot(.{ .object = types_obj });
+    defer ctx.vs.popTempRoot();
+
+    const field_specs = (ctx.hs.bump(StructFieldSpec, 2) orelse return error.OutOfMemory)[0..2];
+    field_specs[0] = .{ .name = "load", .typ = any_spec, .is_const = true };
+    field_specs[1] = .{ .name = "types", .typ = any_spec, .is_const = true };
+
+    const typ_obj = try vmgc.vmAllocObject(ctx);
+    try ctx.vs.pushTempRoot(.{ .object = typ_obj });
+    defer ctx.vs.popTempRoot();
+    typ_obj.* = .{ .struct_type = StructTypeObj{
+        .name = "ffi",
+        .qualified_name = "@cap_type:ffi",
+        .fields = field_specs[0..2],
+    } };
+
+    const inst_fields = try vmgc.vmAllocManagedSlice(ctx, MapEntry, 2);
+    const inst_obj = try vmgc.vmAllocObject(ctx);
+    try ctx.vs.pushTempRoot(.{ .object = inst_obj });
+    defer ctx.vs.popTempRoot();
+    inst_obj.* = .{ .struct_instance = .{ .typ = typ_obj, .fields = inst_fields } };
+
+    const load_native = try makeNative(ctx, .cap_ffi_load, 1);
+    inst_obj.struct_instance.fields[0] = .{ .key = .{ .string = try ctx.cs.internStr("load") }, .value = load_native };
+    inst_obj.struct_instance.fields[1] = .{ .key = .{ .string = try ctx.cs.internStr("types") }, .value = .{ .object = types_obj } };
+    try gs.def("cap:ffi", .{ .object = inst_obj });
+
+    // @cap_type:ffi.Lib — the value ffi.load returns. Field layout must match
+    // the struct_instance constructed in cap_ffi.zig's dispatch.
+    if (!gs.has(cap_ffi_mod.LibQualifiedName)) {
+        const lib_field_specs = (ctx.hs.bump(StructFieldSpec, 1) orelse return error.OutOfMemory)[0..1];
+        lib_field_specs[0] = .{ .name = "_handle", .typ = any_spec, .is_const = true };
+
+        const lib_typ_obj = try vmgc.vmAllocObject(ctx);
+        try ctx.vs.pushTempRoot(.{ .object = lib_typ_obj });
+        defer ctx.vs.popTempRoot();
+        lib_typ_obj.* = .{ .struct_type = StructTypeObj{
+            .name = "Lib",
+            .qualified_name = cap_ffi_mod.LibQualifiedName,
+            .fields = lib_field_specs[0..1],
+        } };
+        try gs.def(cap_ffi_mod.LibQualifiedName, .{ .object = lib_typ_obj });
+
+        // Method key "@cap_type:ffi.Lib.declare" — resolved by
+        // resolveQualifiedReceiverMethod when a script calls lib.declare(...).
+        const needed = cap_ffi_mod.LibQualifiedName.len + 1 + "declare".len;
+        const kbuf = (ctx.hs.bump(u8, needed) orelse return error.OutOfMemory)[0..needed];
+        @memcpy(kbuf[0..cap_ffi_mod.LibQualifiedName.len], cap_ffi_mod.LibQualifiedName);
+        kbuf[cap_ffi_mod.LibQualifiedName.len] = '.';
+        @memcpy(kbuf[cap_ffi_mod.LibQualifiedName.len + 1 .. needed], "declare");
+        if (!gs.has(kbuf)) try gs.def(kbuf, try makeNative(ctx, .cap_ffi_declare, 4));
+    }
+
+    // @cap_type:ffi.Callable — the value lib.declare returns. Calling it is
+    // routed to cap_ffi.zig's dispatchCallable from vm.zig's performCall.
+    if (!gs.has(cap_ffi_mod.CallableQualifiedName)) {
+        const call_field_specs = (ctx.hs.bump(StructFieldSpec, 3) orelse return error.OutOfMemory)[0..3];
+        call_field_specs[0] = .{ .name = "_sym", .typ = any_spec, .is_const = true };
+        call_field_specs[1] = .{ .name = "_ret", .typ = any_spec, .is_const = true };
+        call_field_specs[2] = .{ .name = "_args", .typ = any_spec, .is_const = true };
+
+        const call_typ_obj = try vmgc.vmAllocObject(ctx);
+        try ctx.vs.pushTempRoot(.{ .object = call_typ_obj });
+        defer ctx.vs.popTempRoot();
+        call_typ_obj.* = .{ .struct_type = StructTypeObj{
+            .name = "Callable",
+            .qualified_name = cap_ffi_mod.CallableQualifiedName,
+            .fields = call_field_specs[0..3],
+        } };
+        try gs.def(cap_ffi_mod.CallableQualifiedName, .{ .object = call_typ_obj });
+    }
+}
+
 pub fn installCapabilityModules(ctx: vms.VMContext, gs: *globals.State, cap_modules: []const module_compile.CapModuleDesc) !void {
     for (cap_modules) |cm| {
+        // cap:ffi is installed specially: its top-level shape is load + a
+        // types namespace, and it needs additional @cap_type globals for the
+        // Lib and Callable object types before any script runs.
+        if (comptime build_options.cap_ffi) {
+            if (std.mem.eql(u8, cm.name, "ffi")) {
+                try installFfiModule(ctx, gs);
+                continue;
+            }
+        }
         const global_name_buf = (ctx.hs.bump(u8, 4 + cm.name.len) orelse return error.OutOfMemory)[0 .. 4 + cm.name.len];
         @memcpy(global_name_buf[0..4], "cap:");
         @memcpy(global_name_buf[4..][0..cm.name.len], cm.name);
@@ -730,7 +838,24 @@ pub fn callNative(ctx: vms.VMContext, nf: NativeFuncObj, argc: u8) !void {
                     else => {},
                 }
             }
+            if (comptime build_options.cap_ffi) {
+                switch (id) {
+                    .cap_ffi_load, .cap_ffi_declare => return cap_ffi_mod.dispatch(ctx, nf, argc),
+                    else => {},
+                }
+            }
             return error.NativeFunctionNotFound;
         },
     }
+}
+
+/// Checks whether `obj` is a cap:ffi callable and, if so, dispatches the call
+/// to the FFI trampoline. Returns false when obj is any other struct_instance
+/// so performCall can fall through to its usual NotAFunction behavior.
+pub fn tryCallFfiCallable(ctx: vms.VMContext, obj: *Object, argc: u8) !bool {
+    if (comptime !build_options.cap_ffi) return false;
+    if (obj.* != .struct_instance) return false;
+    if (!common.streq(obj.struct_instance.typ.struct_type.qualified_name, cap_ffi_mod.CallableQualifiedName)) return false;
+    try cap_ffi_mod.dispatchCallable(ctx, obj, argc);
+    return true;
 }
