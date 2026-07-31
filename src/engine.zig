@@ -188,10 +188,7 @@ const Engine = struct {
         self.last_error_col = 0;
         self.last_error_path_len = 0;
         self.string_scratch_len = 0;
-        if (self.string_scratch_large) |buf| {
-            std.heap.page_allocator.free(buf);
-            self.string_scratch_large = null;
-        }
+        self.string_scratch_large = null;
         self.wire_elem_count = 0;
         self.write_callback = null;
         self.read_callback = null;
@@ -1679,6 +1676,42 @@ test "engine_call converts a large host-supplied wire array without corrupting e
     try std.testing.expectEqual(0, rc);
     try std.testing.expectEqual(@as(u8, @intFromEnum(WireTag.boolean)), out.tag);
     try std.testing.expect(out.payload != 0);
+}
+
+// Regression test: EngineSlot stores its Engine in undefined memory
+// (engine_slots is initialized with `.engine = undefined`), so a fresh
+// slot's string_scratch_large field is uninitialized — in Debug builds
+// it is poisoned with 0xaa bytes in .data. initScalars used to free it,
+// which dereferenced that garbage and segfaulted the very first
+// engine_init. The free belongs to deinitInPlace (already runs before a
+// slot is ever reused), so initScalars must not touch the field. The
+// lifecycle below exercises a large string result (page-allocated
+// string_scratch_large) followed by destroy and re-init of the same slot.
+test "engine_init and re-init survive a large string result" {
+    const h = engine_init();
+    try std.testing.expect(h > 0);
+
+    const src =
+        \\std := import("std")
+        \\pub func big() string {
+        \\    return std.string.repeat("x", 5000)
+        \\}
+    ;
+    try std.testing.expectEqual(0, engine_run(h, @intFromPtr(src.ptr), src.len));
+
+    var out: ValueWire = undefined;
+    try std.testing.expectEqual(0, engine_call(h, @intFromPtr("big".ptr), 3, 0, 0, @intFromPtr(&out)));
+    try std.testing.expectEqual(@as(u8, @intFromEnum(WireTag.string)), out.tag);
+    try std.testing.expectEqual(@as(u64, 5000), out.len);
+
+    engine_destroy(h);
+
+    // Re-init: reuses the slot whose large buffer was freed on destroy and
+    // must not read uninitialized state. Confirm the engine still runs.
+    const h2 = engine_init();
+    try std.testing.expect(h2 > 0);
+    defer engine_destroy(h2);
+    try std.testing.expectEqual(0, engine_run(h2, @intFromPtr(src.ptr), src.len));
 }
 
 test "engine_call drops named decimal scale in ValueWire v2" {
