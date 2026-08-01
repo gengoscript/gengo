@@ -42,3 +42,8 @@ std.io.println(echo("str", 42))
 voidfn := lib.declare("ffi_void", ffi.types.void, [ffi.types.i32])
 voidfn(99)
 std.io.println("void-ok")
+
+// lib.close() unloads the library; close() on an already-closed lib is a no-op.
+lib.close()
+lib.close()
+std.io.println("close-ok")

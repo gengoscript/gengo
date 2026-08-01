@@ -55,10 +55,15 @@ const MaxFloatArgs = 8;
 /// Float args are always stored as full 64-bit slots. For f32 args the value
 /// lives in the low 32 bits (high 32 zero); both trampolines load the whole
 /// slot into the vector register, which is correct for f32 and f64 alike.
+///
+/// Layout (offsets used directly in asm — must stay in sync):
+///   0:   fn_ptr  (*anyopaque, 8 bytes)
+///   8:   ints    ([6]u64,    48 bytes)
+///   56:  floats  ([8]f64,    64 bytes)
+///   120: result_u (u64,       8 bytes)
+///   128: result_f (f64,       8 bytes)
 const FfiCall = extern struct {
     fn_ptr: ?*const anyopaque,
-    int_count: u8,
-    float_count: u8,
     ints: [MaxIntArgs]u64,
     floats: [MaxFloatArgs]f64,
     result_u: u64,
@@ -70,15 +75,16 @@ comptime {
         .x86_64, .aarch64 => {},
         else => @compileError("cap:ffi requires x86_64 or aarch64"),
     }
+    // Verify the offsets the trampolines hard-code.
+    const S = FfiCall;
+    std.debug.assert(@offsetOf(S, "fn_ptr") == 0);
+    std.debug.assert(@offsetOf(S, "ints") == 8);
+    std.debug.assert(@offsetOf(S, "floats") == 56);
+    std.debug.assert(@offsetOf(S, "result_u") == 120);
+    std.debug.assert(@offsetOf(S, "result_f") == 128);
 }
 
 const TrampolineFn = *const fn (*FfiCall) callconv(.c) void;
-
-pub const FfiError = error{
-    FfiLoadFailed,
-    FfiSymbolNotFound,
-};
-
 
 // The trampolines are hand-written naked functions called through a .c-signature
 // cast, so the frame pointer arrives in the ABI's first-arg register (rdi/x0).
@@ -107,61 +113,61 @@ fn callX86_64() callconv(.naked) void {
     _ = asm volatile (
         \\ pushq %%rdi
         \\ movq (%%rsp), %%r11
-        \\ movq 16(%%r11), %%rdi
-        \\ movq 24(%%r11), %%rsi
-        \\ movq 32(%%r11), %%rdx
-        \\ movq 40(%%r11), %%rcx
-        \\ movq 48(%%r11), %%r8
-        \\ movq 56(%%r11), %%r9
-        \\ movl 64(%%r11), %%eax
-        \\ movl 68(%%r11), %%r10d
+        \\ movq 8(%%r11), %%rdi
+        \\ movq 16(%%r11), %%rsi
+        \\ movq 24(%%r11), %%rdx
+        \\ movq 32(%%r11), %%rcx
+        \\ movq 40(%%r11), %%r8
+        \\ movq 48(%%r11), %%r9
+        \\ movl 56(%%r11), %%eax
+        \\ movl 60(%%r11), %%r10d
         \\ movd %%eax, %%xmm0
         \\ movd %%r10d, %%xmm8
         \\ punpckldq %%xmm8, %%xmm0
-        \\ movl 72(%%r11), %%eax
-        \\ movl 76(%%r11), %%r10d
+        \\ movl 64(%%r11), %%eax
+        \\ movl 68(%%r11), %%r10d
         \\ movd %%eax, %%xmm1
         \\ movd %%r10d, %%xmm8
         \\ punpckldq %%xmm8, %%xmm1
-        \\ movl 80(%%r11), %%eax
-        \\ movl 84(%%r11), %%r10d
+        \\ movl 72(%%r11), %%eax
+        \\ movl 76(%%r11), %%r10d
         \\ movd %%eax, %%xmm2
         \\ movd %%r10d, %%xmm8
         \\ punpckldq %%xmm8, %%xmm2
-        \\ movl 88(%%r11), %%eax
-        \\ movl 92(%%r11), %%r10d
+        \\ movl 80(%%r11), %%eax
+        \\ movl 84(%%r11), %%r10d
         \\ movd %%eax, %%xmm3
         \\ movd %%r10d, %%xmm8
         \\ punpckldq %%xmm8, %%xmm3
-        \\ movl 96(%%r11), %%eax
-        \\ movl 100(%%r11), %%r10d
+        \\ movl 88(%%r11), %%eax
+        \\ movl 92(%%r11), %%r10d
         \\ movd %%eax, %%xmm4
         \\ movd %%r10d, %%xmm8
         \\ punpckldq %%xmm8, %%xmm4
-        \\ movl 104(%%r11), %%eax
-        \\ movl 108(%%r11), %%r10d
+        \\ movl 96(%%r11), %%eax
+        \\ movl 100(%%r11), %%r10d
         \\ movd %%eax, %%xmm5
         \\ movd %%r10d, %%xmm8
         \\ punpckldq %%xmm8, %%xmm5
-        \\ movl 112(%%r11), %%eax
-        \\ movl 116(%%r11), %%r10d
+        \\ movl 104(%%r11), %%eax
+        \\ movl 108(%%r11), %%r10d
         \\ movd %%eax, %%xmm6
         \\ movd %%r10d, %%xmm8
         \\ punpckldq %%xmm8, %%xmm6
-        \\ movl 120(%%r11), %%eax
-        \\ movl 124(%%r11), %%r10d
+        \\ movl 112(%%r11), %%eax
+        \\ movl 116(%%r11), %%r10d
         \\ movd %%eax, %%xmm7
         \\ movd %%r10d, %%xmm8
         \\ punpckldq %%xmm8, %%xmm7
         \\ movq (%%r11), %%rax
         \\ callq *%%rax
         \\ movq (%%rsp), %%rdi
-        \\ movq %%rax, 128(%%rdi)
+        \\ movq %%rax, 120(%%rdi)
         \\ movd %%xmm0, %%eax
-        \\ movl %%eax, 136(%%rdi)
+        \\ movl %%eax, 128(%%rdi)
         \\ pshufd $1, %%xmm0, %%xmm8
         \\ movd %%xmm8, %%eax
-        \\ movl %%eax, 140(%%rdi)
+        \\ movl %%eax, 132(%%rdi)
         \\ addq $8, %%rsp
         \\ retq
     );
@@ -172,23 +178,23 @@ fn callAarch64() callconv(.naked) void {
         \\ stp x19, x30, [sp, #-16]!
         \\ mov x19, x0
         \\ ldr x17, [x19]
-        \\ ldr x0, [x19, #16]
-        \\ ldr x1, [x19, #24]
-        \\ ldr x2, [x19, #32]
-        \\ ldr x3, [x19, #40]
-        \\ ldr x4, [x19, #48]
-        \\ ldr x5, [x19, #56]
-        \\ ldr d0, [x19, #64]
-        \\ ldr d1, [x19, #72]
-        \\ ldr d2, [x19, #80]
-        \\ ldr d3, [x19, #88]
-        \\ ldr d4, [x19, #96]
-        \\ ldr d5, [x19, #104]
-        \\ ldr d6, [x19, #112]
-        \\ ldr d7, [x19, #120]
+        \\ ldr x0, [x19, #8]
+        \\ ldr x1, [x19, #16]
+        \\ ldr x2, [x19, #24]
+        \\ ldr x3, [x19, #32]
+        \\ ldr x4, [x19, #40]
+        \\ ldr x5, [x19, #48]
+        \\ ldr d0, [x19, #56]
+        \\ ldr d1, [x19, #64]
+        \\ ldr d2, [x19, #72]
+        \\ ldr d3, [x19, #80]
+        \\ ldr d4, [x19, #88]
+        \\ ldr d5, [x19, #96]
+        \\ ldr d6, [x19, #104]
+        \\ ldr d7, [x19, #112]
         \\ blr x17
-        \\ str x0, [x19, #128]
-        \\ str d0, [x19, #136]
+        \\ str x0, [x19, #120]
+        \\ str d0, [x19, #128]
         \\ ldp x19, x30, [sp], #16
         \\ ret
     );
@@ -222,6 +228,7 @@ fn extractF64(v: Value) !f64 {
     };
 }
 
+// Allocate a null-terminated copy of s using page_allocator. Caller must free.
 fn toCString(s: []const u8) ![:0]u8 {
     const buf = try std.heap.page_allocator.allocSentinel(u8, s.len, 0);
     @memcpy(buf[0..s.len], s);
@@ -241,20 +248,20 @@ fn fieldValue(si: vmod.StructInstanceObj, name: []const u8) !Value {
     return si.fields[idx].value;
 }
 
-fn extractHandlePtr(v: Value) !*std.DynLib {
+// Extract the *std.DynLib stored as i64 in _handle, or error if closed.
+fn extractHandle(v: Value) !*std.DynLib {
     const obj = switch (v) {
         .object => |o| o,
         else => return error.TypeError,
     };
-    const fields = switch (obj.*) {
-        .struct_instance => |inst| inst.fields,
+    const raw: usize = switch (obj.*) {
+        .struct_instance => |inst| switch (inst.fields[0].value) {
+            .int => |n| @as(u64, @bitCast(n)),
+            else => return error.TypeError,
+        },
         else => return error.TypeError,
     };
-    const raw: usize = switch (fields[0].value) {
-        .int => |n| @as(u64, @bitCast(n)),
-        else => return error.TypeError,
-    };
-    if (raw == 0) return error.TypeError;
+    if (raw == 0) return error.CapabilityError; // library already closed
     return @ptrFromInt(raw);
 }
 
@@ -269,11 +276,14 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             const arg0 = try ctx.vs.vmPeek(0);
             const name = vms.asStringValue(arg0) catch return error.TypeError;
 
-            const name_z = try toCString(name);
-            defer std.heap.page_allocator.free(name_z);
-            const dynlib = std.DynLib.openZ(name_z.ptr) catch return error.FfiLoadFailed;
-            const stored = std.heap.page_allocator.create(std.DynLib) catch return error.OutOfMemory;
-            stored.* = dynlib;
+            // std.DynLib.open accepts []const u8 directly (no sentinel needed).
+            // On musl static builds Zig uses ElfDynLib (its own ELF loader)
+            // rather than musl's stub dlopen, which always returns null.
+            const dynlib = std.heap.page_allocator.create(std.DynLib) catch return error.OutOfMemory;
+            dynlib.* = std.DynLib.open(name) catch {
+                std.heap.page_allocator.destroy(dynlib);
+                return error.FfiLoadFailed;
+            };
 
             const lib_typ = try lookupType(ctx, LibQualifiedName);
             const inst_fields = try vmgc.vmAllocManagedSlice(ctx, MapEntry, 1);
@@ -281,11 +291,31 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             inst_obj.* = .{ .struct_instance = .{ .typ = lib_typ, .fields = inst_fields } };
             try ctx.vs.pushTempRoot(.{ .object = inst_obj });
             defer ctx.vs.popTempRoot();
-            inst_fields[0] = .{ .key = .{ .string = try ctx.cs.internStr("_handle") }, .value = .{ .int = @as(i64, @bitCast(@intFromPtr(stored))) } };
+            inst_fields[0] = .{ .key = .{ .string = try ctx.cs.internStr("_handle") }, .value = .{ .int = @as(i64, @bitCast(@intFromPtr(dynlib))) } };
 
-            // Pop the path argument and the original callable before returning the Lib object.
             for (0..argc + 1) |_| _ = try ctx.vs.vmPop();
             try ctx.vs.vmPush(.{ .object = inst_obj });
+        },
+        .cap_ffi_close => {
+            if (argc != 1) return error.ArityMismatch;
+            const lib_val = try ctx.vs.vmPeek(0);
+            const obj = switch (lib_val) {
+                .object => |o| o,
+                else => return error.TypeError,
+            };
+            if (obj.* != .struct_instance) return error.TypeError;
+            const raw: usize = switch (obj.struct_instance.fields[0].value) {
+                .int => |n| @as(u64, @bitCast(n)),
+                else => return error.TypeError,
+            };
+            if (raw != 0) {
+                const dynlib: *std.DynLib = @ptrFromInt(raw);
+                dynlib.close();
+                std.heap.page_allocator.destroy(dynlib);
+                obj.struct_instance.fields[0].value = .{ .int = 0 };
+            }
+            for (0..argc + 1) |_| _ = try ctx.vs.vmPop();
+            try ctx.vs.vmPush(.null);
         },
         .cap_ffi_declare => {
             if (argc != 4) return error.ArityMismatch;
@@ -297,7 +327,7 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             const name_val = try ctx.vs.vmPeek(2);
             const lib_val = try ctx.vs.vmPeek(3);
 
-            const lib = try extractHandlePtr(lib_val);
+            const dynlib = try extractHandle(lib_val);
             const sym_name = vms.asStringValue(name_val) catch return error.TypeError;
             const ret_code: u8 = switch (ret_val) {
                 .int => |n| if (validCode(n)) @intCast(n) else return error.RangeError,
@@ -325,15 +355,19 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
                     TypeF32, TypeF64 => {
                         float_count += 1;
                     },
-                    else => return error.TypeError, // void
+                    else => return error.TypeError,
                 }
             }
             if (int_count > MaxIntArgs) return error.ArityMismatch;
             if (float_count > MaxFloatArgs) return error.ArityMismatch;
 
-            const sym_name_z = try toCString(sym_name);
-            defer std.heap.page_allocator.free(sym_name_z);
-            const sym = lib.lookup(*const anyopaque, sym_name_z) orelse return error.FfiSymbolNotFound;
+            // Stack-allocated sentinel buffer for the symbol name.
+            var sym_buf: [512:0]u8 = undefined;
+            if (sym_name.len >= sym_buf.len) return error.NameTooLong;
+            @memcpy(sym_buf[0..sym_name.len], sym_name);
+            sym_buf[sym_name.len] = 0;
+
+            const sym = dynlib.lookup(*align(1) const u8, sym_buf[0..sym_name.len :0]) orelse return error.FfiSymbolNotFound;
 
             const callable_typ = try lookupType(ctx, CallableQualifiedName);
             const inst_fields = try vmgc.vmAllocManagedSlice(ctx, MapEntry, 3);
@@ -345,7 +379,6 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             inst_fields[1] = .{ .key = .{ .string = try ctx.cs.internStr("_ret") }, .value = .{ .int = ret_code } };
             inst_fields[2] = .{ .key = .{ .string = try ctx.cs.internStr("_args") }, .value = args_arr_val };
 
-            // Pop the four arguments and the original callable before returning the Callable.
             for (0..argc + 1) |_| _ = try ctx.vs.vmPop();
             try ctx.vs.vmPush(.{ .object = inst_obj });
         },
@@ -397,8 +430,6 @@ pub fn dispatchCallable(ctx: VMContext, obj: *Object, argc: u8) !void {
     @memset(&frame.ints, 0);
     @memset(&frame.floats, 0);
     frame.fn_ptr = @ptrFromInt(sym);
-    frame.int_count = 0;
-    frame.float_count = 0;
     frame.result_u = 0;
     frame.result_f = 0;
 
@@ -458,8 +489,6 @@ pub fn dispatchCallable(ctx: VMContext, obj: *Object, argc: u8) !void {
             else => return error.TypeError, // TypeVoid is not a valid arg type
         }
     }
-    frame.int_count = @intCast(int_count);
-    frame.float_count = @intCast(float_count);
 
     for (0..@as(usize, argc) + 1) |_| _ = try ctx.vs.vmPop();
 

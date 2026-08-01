@@ -493,14 +493,19 @@ fn installFfiModule(ctx: vms.VMContext, gs: *globals.State) !void {
         } };
         try gs.def(cap_ffi_mod.LibQualifiedName, .{ .object = lib_typ_obj });
 
-        // Method key "@cap_type:ffi.Lib.declare" — resolved by
-        // resolveQualifiedReceiverMethod when a script calls lib.declare(...).
-        const needed = cap_ffi_mod.LibQualifiedName.len + 1 + "declare".len;
-        const kbuf = (ctx.hs.bump(u8, needed) orelse return error.OutOfMemory)[0..needed];
-        @memcpy(kbuf[0..cap_ffi_mod.LibQualifiedName.len], cap_ffi_mod.LibQualifiedName);
-        kbuf[cap_ffi_mod.LibQualifiedName.len] = '.';
-        @memcpy(kbuf[cap_ffi_mod.LibQualifiedName.len + 1 .. needed], "declare");
-        if (!gs.has(kbuf)) try gs.def(kbuf, try makeNative(ctx, .cap_ffi_declare, 4));
+        // lib.declare(name, ret, args) and lib.close() methods.
+        const lib_methods = [_]struct { name: []const u8, id: NativeFnId, arity: u8 }{
+            .{ .name = "declare", .id = .cap_ffi_declare, .arity = 4 },
+            .{ .name = "close", .id = .cap_ffi_close, .arity = 1 },
+        };
+        for (lib_methods) |m| {
+            const needed = cap_ffi_mod.LibQualifiedName.len + 1 + m.name.len;
+            const kbuf = (ctx.hs.bump(u8, needed) orelse return error.OutOfMemory)[0..needed];
+            @memcpy(kbuf[0..cap_ffi_mod.LibQualifiedName.len], cap_ffi_mod.LibQualifiedName);
+            kbuf[cap_ffi_mod.LibQualifiedName.len] = '.';
+            @memcpy(kbuf[cap_ffi_mod.LibQualifiedName.len + 1 ..], m.name);
+            if (!gs.has(kbuf)) try gs.def(kbuf, try makeNative(ctx, m.id, m.arity));
+        }
     }
 
     // @cap_type:ffi.Callable — the value lib.declare returns. Calling it is
@@ -840,7 +845,7 @@ pub fn callNative(ctx: vms.VMContext, nf: NativeFuncObj, argc: u8) !void {
             }
             if (comptime build_options.cap_ffi) {
                 switch (id) {
-                    .cap_ffi_load, .cap_ffi_declare => return cap_ffi_mod.dispatch(ctx, nf, argc),
+                    .cap_ffi_load, .cap_ffi_declare, .cap_ffi_close => return cap_ffi_mod.dispatch(ctx, nf, argc),
                     else => {},
                 }
             }

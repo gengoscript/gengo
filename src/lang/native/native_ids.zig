@@ -265,6 +265,7 @@ pub const NativeFnId = enum(u16) {
 
     cap_ffi_load = 264,
     cap_ffi_declare = 265,
+    cap_ffi_close = 266,
 };
 
 // Max enum value + 1: the correct size for a backing array indexed by NativeFnId.

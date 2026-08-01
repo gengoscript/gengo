@@ -269,10 +269,19 @@ type codes from `ffi.types` (or `ffi.types.void` for no return value); `args`
 is an array of the same type codes. The declaration is trusted: if the script
 lies about the signature, the call may crash or corrupt the process.
 
+### `lib.close()`
+
+Unloads the shared library (`dlclose`). Calling `close()` on an already-closed
+library is a no-op. After closing, any `Callable` values obtained from this
+library become dangling: calling them is undefined behaviour and may crash the
+process. This is expected for a highest-trust capability; do not call a
+`Callable` after its library has been closed.
+
 ### `callable(...)`
 
 Calls the declared function with the marshalled arguments. The call uses the
-platform C calling convention (System V on `x86_64`/`aarch64`). Up to six
+platform C calling convention (System V AMD64 on `x86_64`; AAPCS64 on
+`aarch64`). Up to six
 integer/pointer arguments and up to eight floating-point arguments can be
 passed in registers; larger argument lists are rejected at `declare()` time.
 
@@ -307,8 +316,8 @@ passed as a temporary null-terminated string and returned as a Gengo string;
 v1 supports only scalar, float, `cstring`, and pointer arguments and returns.
 There is no support for struct-by-value, variadic functions, or arguments that
 spill onto the stack beyond the register file. `cap:ffi` is intentionally
-implemented with hand-rolled SysV trampolines rather than `libffi` so the CLI
-keeps zero external build dependencies.
+implemented with hand-rolled architecture-specific trampolines rather than
+`libffi` so the CLI keeps zero external build dependencies.
 
 ```gengo
 ffi := import("cap:ffi")
