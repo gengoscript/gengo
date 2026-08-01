@@ -104,20 +104,23 @@ pub const ErrorRecord = struct {
 };
 
 pub const Compiler = struct {
+    // Per-compilation arena: holds registry slices, scope locals/upvalues, and
+    // the large table slices below.  Created in init(), freed in deinit().
+    arena: std.heap.ArenaAllocator,
     lex: Lexer,
     prev: Token = undefined,
     cur: Token = undefined,
     scopes: [MaxScopes]FuncInfo = undefined,
     scope_depth: u8 = 0,
-    loops: [MaxLoopDepth]LoopCtx = undefined,
+    loops: []LoopCtx,
     loop_depth: u8 = 0,
     block_depth: u8 = 1,
     expr_depth: u16 = 0,
-    registry: TypeRegistry = .{},
+    registry: TypeRegistry,
     last_func_obj: ?*@import("value.zig").Object = null,
     peek_tok: ?Token = null,
     options: CompilerOptions = .{},
-    exports: [MaxModuleExports]ExportEntry = undefined,
+    exports: []ExportEntry,
     export_count: u16 = 0,
     err_msg_buf: [512]u8 = undefined,
     err_msg_len: u16 = 0,
@@ -153,11 +156,11 @@ pub const Compiler = struct {
     inferred_struct_global_names: [MaxLocals][]const u8 = undefined,
     inferred_struct_global_types: [MaxLocals][]const u8 = undefined,
     inferred_struct_global_count: u8 = 0,
-    compile_time_const_names: [ct.MaxGlobals][]const u8 = undefined,
-    compile_time_const_values: [ct.MaxGlobals]ct.CompileTimeConst = undefined,
+    compile_time_const_names: [][]const u8,
+    compile_time_const_values: []ct.CompileTimeConst,
     compile_time_const_count: u16 = 0,
 
-    test_names: [MaxTestBlocks][]const u8 = undefined,
+    test_names: [][]const u8,
     test_count: u16 = 0,
 
     repl_expr_ok: bool = true,
@@ -192,8 +195,8 @@ pub const Compiler = struct {
     // Read and consumed by infixExpr(.lparen) immediately after the call.
     pending_call_spread_count: u8 = 0,
     pending_call_qname: ?[]const u8 = null,
-    expr_prim_info: [MaxExprDepth + 2]ExprPrimInfo = [_]ExprPrimInfo{.{}} ** (MaxExprDepth + 2),
-    expr_prim_capture_depths: [MaxExprDepth + 2]u16 = undefined,
+    expr_prim_info: []ExprPrimInfo,
+    expr_prim_capture_depths: []u16,
     expr_prim_capture_count: u16 = 0,
     // Set by multiAssignOrDecl before emitExprListTuple; 0 outside that context.
     multi_assign_lhs_count: u8 = 0,
@@ -215,13 +218,50 @@ pub const Compiler = struct {
     // Callers name the chunk and heap the compiler works against — production
     // passes its runtime's own state; test runners pass the module defaults
     // explicitly (chunk.g_state / heap.g_state). No hidden active-state reads.
-    pub fn init(src: []const u8, cs: *chunk.State, hs: *heap.State, options: CompilerOptions) Compiler {
-        var c = Compiler{ .lex = .{ .src = src }, .options = options };
-        c.scopes[0] = .{};
-        c.scope_depth = 1;
-        c.cs = cs;
-        c.hs = hs;
+    pub fn init(src: []const u8, cs: *chunk.State, hs: *heap.State, options: CompilerOptions) !Compiler {
+        var c: Compiler = .{
+            .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
+            .lex = .{ .src = src },
+            .options = options,
+            .cs = cs,
+            .hs = hs,
+            .scope_depth = 1,
+            // Non-defaulted slice fields: set below after arena is ready.
+            .registry = undefined,
+            .loops = undefined,
+            .exports = undefined,
+            .compile_time_const_names = undefined,
+            .compile_time_const_values = undefined,
+            .test_names = undefined,
+            .expr_prim_info = undefined,
+            .expr_prim_capture_depths = undefined,
+        };
+        errdefer c.arena.deinit();
+        const alloc = c.arena.allocator();
+
+        try c.registry.init(alloc);
+
+        // Pre-allocate locals + upvalues for every possible scope depth.
+        for (&c.scopes) |*scope| {
+            scope.locals = try alloc.alloc(ct.Local, MaxLocals);
+            scope.upvalues = try alloc.alloc(ct.Upvalue, MaxUpvalues);
+        }
+        c.scopes[0].reset();
+
+        c.loops = try alloc.alloc(LoopCtx, MaxLoopDepth);
+        c.exports = try alloc.alloc(ExportEntry, MaxModuleExports);
+        c.compile_time_const_names = try alloc.alloc([]const u8, ct.MaxGlobals);
+        c.compile_time_const_values = try alloc.alloc(ct.CompileTimeConst, ct.MaxGlobals);
+        c.test_names = try alloc.alloc([]const u8, MaxTestBlocks);
+        c.expr_prim_info = try alloc.alloc(ExprPrimInfo, MaxExprDepth + 2);
+        @memset(c.expr_prim_info, .{});
+        c.expr_prim_capture_depths = try alloc.alloc(u16, MaxExprDepth + 2);
+
         return c;
+    }
+
+    pub fn deinit(self: *Compiler) void {
+        self.arena.deinit();
     }
 
     pub fn compile(self: *Compiler, emit_halt: bool) !void {
@@ -1973,7 +2013,7 @@ pub const Compiler = struct {
         const func_ip = self.cs.codeLen();
 
         if (self.scope_depth >= MaxScopes) return error.TooManyNestedFunctions;
-        self.scopes[self.scope_depth] = .{};
+        self.scopes[self.scope_depth].reset();
         self.scope_depth += 1;
         const scope = self.currentScope();
         scope.is_named = false;

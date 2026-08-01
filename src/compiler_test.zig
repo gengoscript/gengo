@@ -39,7 +39,8 @@ fn compile(rt: *Runtime, src: []const u8) !void {
     globals.reset();
     heap.reset();
 
-    var compiler = Compiler.init(src, chunk.g_state, heap.g_state, .{});
+    var compiler = try Compiler.init(src, chunk.g_state, heap.g_state, .{});
+    defer compiler.deinit();
     try compiler.compile(true);
     try fusion_pass.fuse(chunk.g_state, rt.vm_state.allocator);
 }
@@ -52,9 +53,9 @@ fn compileWithSession(rt: *Runtime, src: []const u8, path: []const u8) !void {
     globals.reset();
     heap.reset();
 
-    const session = try std.heap.page_allocator.create(module_compile.Session);
-    defer std.heap.page_allocator.destroy(session);
-    session.* = .{};
+    var session: module_compile.Session = .{};
+    try session.initArena();
+    defer session.deinitArena();
     session.hs = heap.g_state;
     session.provider = .{ .table = &.{} };
     session.host_module_names = &.{};
@@ -62,13 +63,14 @@ fn compileWithSession(rt: *Runtime, src: []const u8, path: []const u8) !void {
     session.enabled_capabilities = &.{};
     session.capability_modules = &.{};
 
-    var compiler = Compiler.init(src, chunk.g_state, heap.g_state, .{
+    var compiler = try Compiler.init(src, chunk.g_state, heap.g_state, .{
         .module_prefix = path,
-        .module_ctx = session,
+        .module_ctx = &session,
         .resolve_import = module_compile.Session.resolveImportOpaque,
         .has_module_export = module_compile.hasModuleExport,
         .resolve_module_type = module_compile.resolveModuleTypeKind,
     });
+    defer compiler.deinit();
     try compiler.compile(true);
     try fusion_pass.fuse(chunk.g_state, rt.vm_state.allocator);
 }
@@ -5230,7 +5232,10 @@ fn compileAndInspect(rt: *Runtime, src: []const u8) struct { err: anyerror, line
     chunk.reset();
     globals.reset();
     heap.reset();
-    var compiler = Compiler.init(src, chunk.g_state, heap.g_state, .{});
+    var compiler = Compiler.init(src, chunk.g_state, heap.g_state, .{}) catch |e| {
+        return .{ .err = e, .line = 0, .msg = "" };
+    };
+    defer compiler.deinit();
     const result = compiler.compile(true);
     const e = result catch |err| {
         // Mirror the runtime's fallback: err_line is only set by the combined err()
@@ -5254,7 +5259,10 @@ fn compileAndInspectMulti(rt: *Runtime, src: []const u8) struct { first_err: any
     chunk.reset();
     globals.reset();
     heap.reset();
-    var compiler = Compiler.init(src, chunk.g_state, heap.g_state, .{});
+    var compiler = Compiler.init(src, chunk.g_state, heap.g_state, .{}) catch {
+        return .{ .first_err = error.OutOfMemory, .first_line = 0, .count = 0 };
+    };
+    defer compiler.deinit();
     _ = compiler.compile(true) catch {};
     return .{
         .first_err = if (compiler.collected_error_count > 0) compiler.collected_errors[0].kind else error.NoError,

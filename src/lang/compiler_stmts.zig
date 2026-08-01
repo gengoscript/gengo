@@ -366,7 +366,7 @@ pub fn compileFuncWithPrefix(c: anytype, prefix: []const []const u8, is_named: b
     const func_ip = c.cs.codeLen();
 
     if (c.scope_depth >= MaxScopes) return error.TooManyNestedFunctions;
-    c.scopes[c.scope_depth] = .{};
+    c.scopes[c.scope_depth].reset();
     c.scope_depth += 1;
     const scope = c.currentScope();
     scope.is_named = is_named;
@@ -856,7 +856,7 @@ fn compileDeferBlock(c: anytype) !void {
     const func_ip = c.cs.codeLen();
 
     if (c.scope_depth >= MaxScopes) return error.TooManyNestedFunctions;
-    c.scopes[c.scope_depth] = .{};
+    c.scopes[c.scope_depth].reset();
     c.scope_depth += 1;
 
     const saved = c.repl_expr_ok;

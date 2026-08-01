@@ -372,8 +372,9 @@ pub const Runtime = struct {
         hm_names: []const []const u8,
         caps: []const module_compile.CapModuleDesc,
         test_mode: bool,
-    ) void {
+    ) !void {
         session.* = .{};
+        try session.initArena();
         session.hs = &self.heap_state;
         session.cs = self.chunk_state;
         session.provider = provider;
@@ -425,8 +426,11 @@ pub const Runtime = struct {
         const caps = self.capabilityModules();
         if (path.len != 0) {
             const session = try std.heap.page_allocator.create(module_compile.Session);
-            defer std.heap.page_allocator.destroy(session);
-            self.initCompileSession(session, provider, hm_names, caps, test_mode);
+            defer {
+                session.deinitArena();
+                std.heap.page_allocator.destroy(session);
+            }
+            try self.initCompileSession(session, provider, hm_names, caps, test_mode);
             session.compileRoot(path, src) catch |err| {
                 self.recordSessionCompileError(session);
                 return err;
@@ -437,15 +441,19 @@ pub const Runtime = struct {
         }
 
         const session = try std.heap.page_allocator.create(module_compile.Session);
-        defer std.heap.page_allocator.destroy(session);
-        self.initCompileSession(session, provider, hm_names, caps, test_mode);
-        var compiler = Compiler.init(src, self.chunk_state, &self.heap_state, .{
+        defer {
+            session.deinitArena();
+            std.heap.page_allocator.destroy(session);
+        }
+        try self.initCompileSession(session, provider, hm_names, caps, test_mode);
+        var compiler = try Compiler.init(src, self.chunk_state, &self.heap_state, .{
             .module_ctx = session,
             .resolve_import = module_compile.Session.resolveImportOpaque,
             .has_module_export = module_compile.hasModuleExport,
             .resolve_module_type = module_compile.resolveModuleTypeKind,
             .test_mode = test_mode,
         });
+        defer compiler.deinit();
         compiler.compile(true) catch |err| {
             self.recordCompilerCompileError(&compiler, "");
             return err;
@@ -655,12 +663,16 @@ pub const Runtime = struct {
 
         const repl_caps: []const module_compile.CapModuleDesc = if (self.enabled_capabilities.len > 0) module_compile.AllCapabilities else &[_]module_compile.CapModuleDesc{};
         const session = try std.heap.page_allocator.create(module_compile.Session);
-        defer std.heap.page_allocator.destroy(session);
+        defer {
+            session.deinitArena();
+            std.heap.page_allocator.destroy(session);
+        }
         session.* = .{};
+        try session.initArena();
         session.host_module_descs = self.host_modules;
         session.enabled_capabilities = self.enabled_capabilities;
         session.capability_modules = repl_caps;
-        var compiler = Compiler.init(src, self.chunk_state, &self.heap_state, .{
+        var compiler = try Compiler.init(src, self.chunk_state, &self.heap_state, .{
             .module_ctx = session,
             .resolve_import = module_compile.Session.resolveImportOpaque,
             .resolve_module_type = module_compile.resolveModuleTypeKind,
@@ -669,6 +681,7 @@ pub const Runtime = struct {
             .check_global_is_const = checkGlobalIsConst,
             .check_global_ctx = self,
         });
+        defer compiler.deinit();
         self.restoreReplCompilerState(&compiler);
         compiler.compile(true) catch |err| {
             // Must be nonzero: api.zig classifies compile vs runtime errors by

@@ -1,3 +1,4 @@
+const std = @import("std");
 const common = @import("common.zig");
 const token = @import("token.zig");
 const value_mod = @import("value.zig");
@@ -132,9 +133,11 @@ pub const Local = struct {
 };
 pub const Upvalue = struct { name: []const u8, index: u8, from_upvalue: bool };
 pub const FuncInfo = struct {
-    locals: [MaxLocals]Local = undefined,
+    // Slices pre-allocated by Compiler.init() from the compiler's arena.
+    // Do NOT assign .{} to a FuncInfo once these are set — use reset() instead.
+    locals: []Local,
+    upvalues: []Upvalue,
     local_count: u8 = 0,
-    upvalues: [MaxUpvalues]Upvalue = undefined,
     upvalue_count: u8 = 0,
     named_return_base: u8 = 0,
     named_return_count: u8 = 0,
@@ -150,6 +153,21 @@ pub const FuncInfo = struct {
     all_returns_proven: bool = true,
     body_ends_with_return: bool = false,
     body_block_depth: u8 = 0,
+
+    /// Reset all count and flag fields without touching the slice pointers.
+    /// Use this in place of `self.scopes[N] = .{}`.
+    pub fn reset(self: *FuncInfo) void {
+        self.local_count = 0;
+        self.upvalue_count = 0;
+        self.named_return_base = 0;
+        self.named_return_count = 0;
+        self.is_named = false;
+        self.has_typed_returns = false;
+        self.return_prim = null;
+        self.all_returns_proven = true;
+        self.body_ends_with_return = false;
+        self.body_block_depth = 0;
+    }
 };
 
 pub const LoopCtx = struct {
@@ -234,12 +252,6 @@ const FuncHashEntry = struct {
     occupied: bool = false,
 };
 
-// Comptime-zero arrays used as default field values so that TypeRegistry = .{}
-// gives properly initialised (all-empty) hash tables without an explicit reset.
-const empty_type_buckets = [1]TypeHashEntry{.{}} ** TypeHashSize;
-const empty_func_buckets = [1]FuncHashEntry{.{}} ** FuncHashSize;
-const empty_variant_objs = [1]?*Object{null} ** MaxTypes;
-const empty_struct_objs = [1]?*Object{null} ** MaxTypes;
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Snapshot of TypeRegistry count fields; used for checkpoint/rollback during
@@ -256,44 +268,81 @@ pub const RegistryCp = struct {
 };
 
 pub const TypeRegistry = struct {
+    // All array fields are slices allocated from the Compiler's arena via init().
+    // TypeRegistry must be initialized via init(), not via struct literal .{}.
+
     // struct/interface/variant: name only, stored in type_names[].
-    type_names: [MaxTypes][]const u8 = undefined,
+    type_names: [][]const u8,
     // Parallel kind array so rollback can rebuild the hash without scanning buckets.
-    type_name_kinds: [MaxTypes]TypeSymbolKind = undefined,
+    type_name_kinds: []TypeSymbolKind,
     type_name_count: usize = 0,
     // named types: rich info stored in named_types[].
-    named_types: [MaxNamedTypes]NamedTypeInfo = undefined,
+    named_types: []NamedTypeInfo,
     named_type_count: usize = 0,
     // global funcs + consts unified; is_const distinguishes them.
-    global_symbols: [MaxGlobals][]const u8 = undefined,
+    global_symbols: [][]const u8,
     // Parallel is_const array so rollback can rebuild the func hash.
-    global_is_const: [MaxGlobals]bool = undefined,
+    global_is_const: []bool,
     global_count: usize = 0,
     // named_return_count for functions that return multiple named values (≥2).
-    global_named_return_counts: [MaxGlobals]u8 = [1]u8{0} ** MaxGlobals,
-    global_func_objs: [MaxGlobals]?*Object = [1]?*Object{null} ** MaxGlobals,
+    global_named_return_counts: []u8,
+    global_func_objs: []?*Object,
 
-    // Hash indexes — initialised to all-empty via comptime defaults above.
-    type_buckets: [TypeHashSize]TypeHashEntry = empty_type_buckets,
-    func_buckets: [FuncHashSize]FuncHashEntry = empty_func_buckets,
+    // Hash indexes — zeroed by init().
+    type_buckets: []TypeHashEntry,
+    func_buckets: []FuncHashEntry,
 
     // For each type_names[] slot: if the entry is a variant_type, the compiled
     // *Object is stored here so switchStmt can check arm exhaustiveness.
-    variant_objs: [MaxTypes]?*Object = empty_variant_objs,
-    struct_objs: [MaxTypes]?*Object = empty_struct_objs,
+    variant_objs: []?*Object,
+    struct_objs: []?*Object,
 
     // Generic type templates (not yet instantiated).
-    generic_types: [MaxGenericTypes]GenericTypeInfo = undefined,
+    generic_types: []GenericTypeInfo,
     generic_count: usize = 0,
     // Generic function templates.
-    generic_funcs: [MaxGenericFuncs]GenericFuncInfo = undefined,
+    generic_funcs: []GenericFuncInfo,
     generic_func_count: usize = 0,
     // Instantiation cache: "Stack[int]" → concrete *Object, reset each compile.
-    inst_cache: [MaxInstantiations]InstCacheEntry = undefined,
+    inst_cache: []InstCacheEntry,
     inst_count: usize = 0,
     // Named aliases of generic instantiations: type IntStack Stack[int]
-    type_aliases: [MaxTypeAliases]TypeAliasInfo = undefined,
+    type_aliases: []TypeAliasInfo,
     type_alias_count: usize = 0,
+
+    /// Allocate all slice fields from the given allocator and zero-initialize
+    /// the hash tables and nullable arrays.  Must be called exactly once before
+    /// any other TypeRegistry method.
+    pub fn init(self: *TypeRegistry, alloc: std.mem.Allocator) !void {
+        self.type_names = try alloc.alloc([]const u8, MaxTypes);
+        self.type_name_kinds = try alloc.alloc(TypeSymbolKind, MaxTypes);
+        self.type_name_count = 0;
+        self.named_types = try alloc.alloc(NamedTypeInfo, MaxNamedTypes);
+        self.named_type_count = 0;
+        self.global_symbols = try alloc.alloc([]const u8, MaxGlobals);
+        self.global_is_const = try alloc.alloc(bool, MaxGlobals);
+        self.global_count = 0;
+        self.global_named_return_counts = try alloc.alloc(u8, MaxGlobals);
+        @memset(self.global_named_return_counts, 0);
+        self.global_func_objs = try alloc.alloc(?*Object, MaxGlobals);
+        @memset(self.global_func_objs, null);
+        self.type_buckets = try alloc.alloc(TypeHashEntry, TypeHashSize);
+        @memset(self.type_buckets, .{});
+        self.func_buckets = try alloc.alloc(FuncHashEntry, FuncHashSize);
+        @memset(self.func_buckets, .{});
+        self.variant_objs = try alloc.alloc(?*Object, MaxTypes);
+        @memset(self.variant_objs, null);
+        self.struct_objs = try alloc.alloc(?*Object, MaxTypes);
+        @memset(self.struct_objs, null);
+        self.generic_types = try alloc.alloc(GenericTypeInfo, MaxGenericTypes);
+        self.generic_count = 0;
+        self.generic_funcs = try alloc.alloc(GenericFuncInfo, MaxGenericFuncs);
+        self.generic_func_count = 0;
+        self.inst_cache = try alloc.alloc(InstCacheEntry, MaxInstantiations);
+        self.inst_count = 0;
+        self.type_aliases = try alloc.alloc(TypeAliasInfo, MaxTypeAliases);
+        self.type_alias_count = 0;
+    }
 
     pub fn reset(self: *TypeRegistry) void {
         self.type_name_count = 0;

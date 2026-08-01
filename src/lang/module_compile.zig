@@ -183,7 +183,10 @@ pub const Session = struct {
     // Runtime.initCompileSession / test harnesses right after construction.
     hs: *heap.State = undefined,
     cs: *chunk.State = undefined,
-    modules: [MaxModules]ModuleRecord = undefined,
+    // modules is a slice allocated from _modules_arena by initArena().
+    // Default is an empty slice; only populated after initArena() is called.
+    modules: []ModuleRecord = &.{},
+    _modules_arena: std.heap.ArenaAllocator = undefined,
     module_count: usize = 0,
     source_buf: [cfg.max_input_bytes]u8 = undefined,
     last_error_path: []const u8 = "",
@@ -207,6 +210,23 @@ pub const Session = struct {
     test_mode: bool = false,
     test_count: u16 = 0,
     test_names: [ct.MaxTestBlocks][]const u8 = undefined,
+
+    /// Allocate the modules slice from the embedded arena and zero-initialize
+    /// each ModuleRecord.  Must be called once after construction.
+    pub fn initArena(self: *Session) !void {
+        self._modules_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        const alloc = self._modules_arena.allocator();
+        self.modules = try alloc.alloc(ModuleRecord, MaxModules);
+        for (self.modules) |*m| m.* = .{};
+    }
+
+    /// Free the modules arena.  Call before destroying the Session.
+    pub fn deinitArena(self: *Session) void {
+        if (self.modules.len > 0) {
+            self._modules_arena.deinit();
+            self.modules = &.{};
+        }
+    }
 
     fn copyCompilerError(self: *Session, compiler: *Compiler) void {
         self.last_error_col = compiler.err_col;
@@ -463,7 +483,7 @@ pub const Session = struct {
             self.last_error_path = self.modules[idx].path();
             return err;
         };
-        var compiler = Compiler.init(src, self.cs, self.hs, .{
+        var compiler = try Compiler.init(src, self.cs, self.hs, .{
             .module_path = self.modules[idx].path(),
             .module_prefix = self.modules[idx].prefix,
             .module_struct_name = self.modules[idx].struct_name,
@@ -477,6 +497,7 @@ pub const Session = struct {
             .check_global_ctx = self,
             .test_mode = if (emit_halt) self.test_mode else false,
         });
+        defer compiler.deinit();
         compiler.cs.addModuleBoundary(self.modules[idx].path());
         compiler.compile(false) catch |err| {
             self.last_error_path = self.modules[idx].path();

@@ -118,7 +118,8 @@ fn fuzzCompiler() void {
                 @memcpy(buf[len..][0..to_copy], frag[0..to_copy]);
                 len += to_copy;
             }
-            var compiler = Compiler.init(buf[0..len], chunk.g_state, heap.g_state, .{});
+            var compiler = Compiler.init(buf[0..len], chunk.g_state, heap.g_state, .{}) catch continue;
+            defer compiler.deinit();
             compiler.compile(true) catch {};
         }
     }
@@ -260,7 +261,8 @@ fn fuzzNamedTypeBoundaries() void {
     for (test_cases) |tc| {
         var src_buf: [256]u8 = undefined;
         const src = std.fmt.bufPrint(&src_buf, "std.core.{s}({s})\n", .{ tc.base, tc.val }) catch continue;
-        var compiler = Compiler.init(src, chunk.g_state, heap.g_state, .{});
+        var compiler = Compiler.init(src, chunk.g_state, heap.g_state, .{}) catch continue;
+        defer compiler.deinit();
         compiler.compile(true) catch {};
         chunk.emitOp(.halt, 1) catch continue;
         vm.run(vm.VMContext.fromActive()) catch {};
@@ -332,7 +334,8 @@ fn fuzzForInNesting() void {
                 pos += 1;
             }
 
-            var compiler = Compiler.init(buf[0..pos], chunk.g_state, heap.g_state, .{});
+            var compiler = Compiler.init(buf[0..pos], chunk.g_state, heap.g_state, .{}) catch continue;
+            defer compiler.deinit();
             compiler.compile(true) catch {
                 continue;
             };
@@ -349,29 +352,35 @@ fn fuzzForInNesting() void {
 
 fn fuzzStackHeapBoundaries() void {
     // Test deep recursion near stack limit
-    resetAll();
-    var compiler = Compiler.init(
-        \\func deep(n int) int {
-        \\    if n <= 0 { return 0 }
-        \\    return deep(n - 1) + 1
-        \\}
-        \\deep(100)
-    , chunk.g_state, heap.g_state, .{});
-    compiler.compile(true) catch {};
-    chunk.emitOp(.halt, 1) catch {};
-    vm.run(vm.VMContext.fromActive()) catch {};
+    blk1: {
+        resetAll();
+        var compiler = Compiler.init(
+            \\func deep(n int) int {
+            \\    if n <= 0 { return 0 }
+            \\    return deep(n - 1) + 1
+            \\}
+            \\deep(100)
+        , chunk.g_state, heap.g_state, .{}) catch break :blk1;
+        defer compiler.deinit();
+        compiler.compile(true) catch {};
+        chunk.emitOp(.halt, 1) catch {};
+        vm.run(vm.VMContext.fromActive()) catch {};
+    }
 
     // Test large array allocation
-    resetAll();
-    var compiler2 = Compiler.init(
-        \\var arr = [1000]int
-        \\for i := 0; i < 1000; i++ {
-        \\    arr[i] = i
-        \\}
-    , chunk.g_state, heap.g_state, .{});
-    compiler2.compile(true) catch {};
-    chunk.emitOp(.halt, 1) catch {};
-    vm.run(vm.VMContext.fromActive()) catch {};
+    blk2: {
+        resetAll();
+        var compiler = Compiler.init(
+            \\var arr = [1000]int
+            \\for i := 0; i < 1000; i++ {
+            \\    arr[i] = i
+            \\}
+        , chunk.g_state, heap.g_state, .{}) catch break :blk2;
+        defer compiler.deinit();
+        compiler.compile(true) catch {};
+        chunk.emitOp(.halt, 1) catch {};
+        vm.run(vm.VMContext.fromActive()) catch {};
+    }
     out("  stack/heap boundary fuzz: OK\n");
 }
 
@@ -424,7 +433,8 @@ fn classifyErr(e: anyerror) OutcomeTag {
 
 fn runNormal(src: []const u8) OutcomeTag {
     resetAll();
-    var c = Compiler.init(src, chunk.g_state, heap.g_state, .{});
+    var c = Compiler.init(src, chunk.g_state, heap.g_state, .{}) catch return .other;
+    defer c.deinit();
     c.compile(true) catch return .other;
     chunk.emitOp(.halt, 1) catch return .other;
     vm.run(vm.VMContext.fromActive()) catch |e| return classifyErr(e);
@@ -433,7 +443,8 @@ fn runNormal(src: []const u8) OutcomeTag {
 
 fn runDefused(src: []const u8) OutcomeTag {
     resetAll();
-    var c = Compiler.init(src, chunk.g_state, heap.g_state, .{});
+    var c = Compiler.init(src, chunk.g_state, heap.g_state, .{}) catch return .other;
+    defer c.deinit();
     c.compile(true) catch return .other;
     chunk.emitOp(.halt, 1) catch return .other;
 
@@ -538,7 +549,13 @@ fn runAssert(src: []const u8, label: []const u8) void {
     var c = Compiler.init(src, chunk.g_state, heap.g_state, .{
         .module_ctx = &_prop_ctx,
         .resolve_import = propStdResolver,
-    });
+    }) catch {
+        out("property FAIL (compile): ");
+        out(label);
+        out("\n");
+        exitProc(1);
+    };
+    defer c.deinit();
     c.compile(true) catch {
         out("property FAIL (compile): ");
         out(label);
@@ -565,7 +582,8 @@ fn runTolerant(src: []const u8) void {
     var c = Compiler.init(src, chunk.g_state, heap.g_state, .{
         .module_ctx = &_prop_ctx,
         .resolve_import = propStdResolver,
-    });
+    }) catch return;
+    defer c.deinit();
     c.compile(true) catch {
         return;
     };
