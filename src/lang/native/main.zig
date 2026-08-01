@@ -453,9 +453,10 @@ fn installFfiModule(ctx: vms.VMContext, gs: *globals.State) !void {
     try ctx.vs.pushTempRoot(.{ .object = types_obj });
     defer ctx.vs.popTempRoot();
 
-    const field_specs = (ctx.hs.bump(StructFieldSpec, 2) orelse return error.OutOfMemory)[0..2];
+    const field_specs = (ctx.hs.bump(StructFieldSpec, 3) orelse return error.OutOfMemory)[0..3];
     field_specs[0] = .{ .name = "load", .typ = any_spec, .is_const = true };
     field_specs[1] = .{ .name = "types", .typ = any_spec, .is_const = true };
+    field_specs[2] = .{ .name = "buf", .typ = any_spec, .is_const = true };
 
     const typ_obj = try vmgc.vmAllocObject(ctx);
     try ctx.vs.pushTempRoot(.{ .object = typ_obj });
@@ -463,18 +464,20 @@ fn installFfiModule(ctx: vms.VMContext, gs: *globals.State) !void {
     typ_obj.* = .{ .struct_type = StructTypeObj{
         .name = "ffi",
         .qualified_name = "@cap_type:ffi",
-        .fields = field_specs[0..2],
+        .fields = field_specs[0..3],
     } };
 
-    const inst_fields = try vmgc.vmAllocManagedSlice(ctx, MapEntry, 2);
+    const inst_fields = try vmgc.vmAllocManagedSlice(ctx, MapEntry, 3);
     const inst_obj = try vmgc.vmAllocObject(ctx);
     try ctx.vs.pushTempRoot(.{ .object = inst_obj });
     defer ctx.vs.popTempRoot();
     inst_obj.* = .{ .struct_instance = .{ .typ = typ_obj, .fields = inst_fields } };
 
     const load_native = try makeNative(ctx, .cap_ffi_load, 1);
+    const buf_native = try makeNative(ctx, .cap_ffi_buf_alloc, 1);
     inst_obj.struct_instance.fields[0] = .{ .key = .{ .string = try ctx.cs.internStr("load") }, .value = load_native };
     inst_obj.struct_instance.fields[1] = .{ .key = .{ .string = try ctx.cs.internStr("types") }, .value = .{ .object = types_obj } };
+    inst_obj.struct_instance.fields[2] = .{ .key = .{ .string = try ctx.cs.internStr("buf") }, .value = buf_native };
     try gs.def("cap:ffi", .{ .object = inst_obj });
 
     // @cap_type:ffi.Lib — the value ffi.load returns. Field layout must match
@@ -525,6 +528,50 @@ fn installFfiModule(ctx: vms.VMContext, gs: *globals.State) !void {
             .fields = call_field_specs[0..3],
         } };
         try gs.def(cap_ffi_mod.CallableQualifiedName, .{ .object = call_typ_obj });
+    }
+
+    // @cap_type:ffi.Buf — raw byte buffer for passing/receiving struct data.
+    if (!gs.has(cap_ffi_mod.BufQualifiedName)) {
+        const buf_field_specs = (ctx.hs.bump(StructFieldSpec, 2) orelse return error.OutOfMemory)[0..2];
+        buf_field_specs[0] = .{ .name = "_ptr", .typ = any_spec, .is_const = true };
+        buf_field_specs[1] = .{ .name = "_len", .typ = any_spec, .is_const = true };
+
+        const buf_typ_obj = try vmgc.vmAllocObject(ctx);
+        try ctx.vs.pushTempRoot(.{ .object = buf_typ_obj });
+        defer ctx.vs.popTempRoot();
+        buf_typ_obj.* = .{ .struct_type = StructTypeObj{
+            .name = "Buf",
+            .qualified_name = cap_ffi_mod.BufQualifiedName,
+            .fields = buf_field_specs[0..2],
+        } };
+        try gs.def(cap_ffi_mod.BufQualifiedName, .{ .object = buf_typ_obj });
+
+        const buf_methods = [_]struct { name: []const u8, id: NativeFnId, arity: u8 }{
+            .{ .name = "free", .id = .cap_ffi_buf_free, .arity = 1 },
+            .{ .name = "len", .id = .cap_ffi_buf_len, .arity = 1 },
+            .{ .name = "read_u8", .id = .cap_ffi_buf_read_u8, .arity = 2 },
+            .{ .name = "read_i32", .id = .cap_ffi_buf_read_i32, .arity = 2 },
+            .{ .name = "read_u32", .id = .cap_ffi_buf_read_u32, .arity = 2 },
+            .{ .name = "read_i64", .id = .cap_ffi_buf_read_i64, .arity = 2 },
+            .{ .name = "read_u64", .id = .cap_ffi_buf_read_u64, .arity = 2 },
+            .{ .name = "read_f32", .id = .cap_ffi_buf_read_f32, .arity = 2 },
+            .{ .name = "read_f64", .id = .cap_ffi_buf_read_f64, .arity = 2 },
+            .{ .name = "write_u8", .id = .cap_ffi_buf_write_u8, .arity = 3 },
+            .{ .name = "write_i32", .id = .cap_ffi_buf_write_i32, .arity = 3 },
+            .{ .name = "write_u32", .id = .cap_ffi_buf_write_u32, .arity = 3 },
+            .{ .name = "write_i64", .id = .cap_ffi_buf_write_i64, .arity = 3 },
+            .{ .name = "write_u64", .id = .cap_ffi_buf_write_u64, .arity = 3 },
+            .{ .name = "write_f32", .id = .cap_ffi_buf_write_f32, .arity = 3 },
+            .{ .name = "write_f64", .id = .cap_ffi_buf_write_f64, .arity = 3 },
+        };
+        for (buf_methods) |m| {
+            const needed = cap_ffi_mod.BufQualifiedName.len + 1 + m.name.len;
+            const kbuf = (ctx.hs.bump(u8, needed) orelse return error.OutOfMemory)[0..needed];
+            @memcpy(kbuf[0..cap_ffi_mod.BufQualifiedName.len], cap_ffi_mod.BufQualifiedName);
+            kbuf[cap_ffi_mod.BufQualifiedName.len] = '.';
+            @memcpy(kbuf[cap_ffi_mod.BufQualifiedName.len + 1 ..], m.name);
+            if (!gs.has(kbuf)) try gs.def(kbuf, try makeNative(ctx, m.id, m.arity));
+        }
     }
 }
 
@@ -845,7 +892,27 @@ pub fn callNative(ctx: vms.VMContext, nf: NativeFuncObj, argc: u8) !void {
             }
             if (comptime build_options.cap_ffi) {
                 switch (id) {
-                    .cap_ffi_load, .cap_ffi_declare, .cap_ffi_close => return cap_ffi_mod.dispatch(ctx, nf, argc),
+                    .cap_ffi_load,
+                    .cap_ffi_declare,
+                    .cap_ffi_close,
+                    .cap_ffi_buf_alloc,
+                    .cap_ffi_buf_free,
+                    .cap_ffi_buf_len,
+                    .cap_ffi_buf_read_u8,
+                    .cap_ffi_buf_read_i32,
+                    .cap_ffi_buf_read_u32,
+                    .cap_ffi_buf_read_i64,
+                    .cap_ffi_buf_read_u64,
+                    .cap_ffi_buf_read_f32,
+                    .cap_ffi_buf_read_f64,
+                    .cap_ffi_buf_write_u8,
+                    .cap_ffi_buf_write_i32,
+                    .cap_ffi_buf_write_u32,
+                    .cap_ffi_buf_write_i64,
+                    .cap_ffi_buf_write_u64,
+                    .cap_ffi_buf_write_f32,
+                    .cap_ffi_buf_write_f64,
+                    => return cap_ffi_mod.dispatch(ctx, nf, argc),
                     else => {},
                 }
             }

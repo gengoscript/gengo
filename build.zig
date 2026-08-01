@@ -250,7 +250,13 @@ pub fn build(b: *std.Build) void {
 
     // ── Engine (native shared library for host embedding) ──────────────────────
 
-    const native_target = b.standardTargetOptions(.{ .default_target = .{ .cpu_arch = .x86_64, .os_tag = .linux } });
+    // Default to x86_64-linux-gnu so the native CLI links glibc dynamically.
+    // This is required for cap:ffi: musl static uses ElfDynLib which maps
+    // segments but never applies relocations, so only trivial self-contained
+    // SOs work. Glibc's dlopen/dlsym fully resolves relocations and loads
+    // transitive dependencies, making cap:ffi usable with real libraries.
+    // Users who need a musl build can pass -Dtarget=x86_64-linux-musl.
+    const native_target = b.standardTargetOptions(.{ .default_target = .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .gnu } });
 
     const engine_native_mod = b.createModule(.{
         .root_source_file = b.path("src/engine.zig"),

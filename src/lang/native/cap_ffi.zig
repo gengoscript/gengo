@@ -26,6 +26,7 @@ const NativeFuncObj = @import("../value.zig").NativeFuncObj;
 
 pub const LibQualifiedName = "@cap_type:ffi.Lib";
 pub const CallableQualifiedName = "@cap_type:ffi.Callable";
+pub const BufQualifiedName = "@cap_type:ffi.Buf";
 
 // Type descriptor codes exposed as ffi.types.* in script. Keep in sync with
 // the installFfiModule type namespace in native/main.zig.
@@ -235,6 +236,30 @@ fn toCString(s: []const u8) ![:0]u8 {
     return buf;
 }
 
+// Look up a symbol by name in a DynLib, handling versioned ELF symbols.
+//
+// std.DynLib.lookup calls ElfDynLib.lookupAddress("", name) which rejects any
+// symbol whose version string is non-empty (e.g. SDL3's SDL_Init@@SDL3_0.0.0).
+// The fix: when the unversioned lookup fails, walk the verdef table and retry
+// with each non-base version name until one matches. This is only needed on
+// musl-static builds where Zig uses ElfDynLib; on glibc builds DlDynLib calls
+// dlsym which resolves versioned symbols itself.
+fn lookupSym(dynlib: *std.DynLib, name: [:0]const u8) ?usize {
+    if (dynlib.lookup(*align(1) const u8, name)) |s| return @intFromPtr(s);
+    if (comptime !(builtin.abi == .musl and builtin.link_mode == .static)) return null;
+    const lib = &dynlib.inner;
+    var vd: ?*std.elf.Verdef = lib.verdef;
+    while (vd) |v| {
+        if ((v.flags & std.elf.VER_FLG_BASE) == 0) {
+            const aux: *std.elf.Verdaux = @ptrFromInt(@intFromPtr(v) + v.aux);
+            const vername = std.mem.sliceTo(lib.strings + aux.name, 0);
+            if (lib.lookupAddress(vername, name)) |addr| return addr;
+        }
+        vd = if (v.next == 0) null else @ptrFromInt(@intFromPtr(v) + v.next);
+    }
+    return null;
+}
+
 fn lookupType(ctx: VMContext, qname: []const u8) !*Object {
     const val = ctx.gs.get(qname) orelse return error.CapabilityError;
     return switch (val) {
@@ -267,6 +292,38 @@ fn extractHandle(v: Value) !*std.DynLib {
 
 fn validCode(n: i64) bool {
     return n >= 0 and n <= TypePtr;
+}
+
+const BufParts = struct { ptr: usize, len: usize };
+
+// Extract the raw pointer and length from a Buf struct_instance.
+fn extractBufParts(v: Value) !BufParts {
+    const obj = switch (v) {
+        .object => |o| o,
+        else => return error.TypeError,
+    };
+    const si = switch (obj.*) {
+        .struct_instance => |i| i,
+        else => return error.TypeError,
+    };
+    if (si.fields.len < 2) return error.TypeError;
+    const ptr = @as(u64, @bitCast(switch (si.fields[0].value) {
+        .int => |n| n,
+        else => return error.TypeError,
+    }));
+    const len = @as(u64, @bitCast(switch (si.fields[1].value) {
+        .int => |n| n,
+        else => return error.TypeError,
+    }));
+    if (ptr == 0) return error.CapabilityError; // freed or invalid
+    return .{ .ptr = @intCast(ptr), .len = @intCast(len) };
+}
+
+fn offsetArg(v: Value) !usize {
+    return switch (v) {
+        .int => |n| if (n < 0) error.RangeError else @intCast(n),
+        else => error.TypeError,
+    };
 }
 
 pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
@@ -367,7 +424,7 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             @memcpy(sym_buf[0..sym_name.len], sym_name);
             sym_buf[sym_name.len] = 0;
 
-            const sym = dynlib.lookup(*align(1) const u8, sym_buf[0..sym_name.len :0]) orelse return error.FfiSymbolNotFound;
+            const sym_addr = lookupSym(dynlib, sym_buf[0..sym_name.len :0]) orelse return error.FfiSymbolNotFound;
 
             const callable_typ = try lookupType(ctx, CallableQualifiedName);
             const inst_fields = try vmgc.vmAllocManagedSlice(ctx, MapEntry, 3);
@@ -375,12 +432,202 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             inst_obj.* = .{ .struct_instance = .{ .typ = callable_typ, .fields = inst_fields } };
             try ctx.vs.pushTempRoot(.{ .object = inst_obj });
             defer ctx.vs.popTempRoot();
-            inst_fields[0] = .{ .key = .{ .string = try ctx.cs.internStr("_sym") }, .value = .{ .int = @as(i64, @bitCast(@intFromPtr(sym))) } };
+            inst_fields[0] = .{ .key = .{ .string = try ctx.cs.internStr("_sym") }, .value = .{ .int = @as(i64, @bitCast(sym_addr)) } };
             inst_fields[1] = .{ .key = .{ .string = try ctx.cs.internStr("_ret") }, .value = .{ .int = ret_code } };
             inst_fields[2] = .{ .key = .{ .string = try ctx.cs.internStr("_args") }, .value = args_arr_val };
 
             for (0..argc + 1) |_| _ = try ctx.vs.vmPop();
             try ctx.vs.vmPush(.{ .object = inst_obj });
+        },
+        .cap_ffi_buf_alloc => {
+            if (argc != 1) return error.ArityMismatch;
+            const n: usize = switch (try ctx.vs.vmPeek(0)) {
+                .int => |i| if (i <= 0 or i > 64 * 1024 * 1024) return error.RangeError else @intCast(i),
+                else => return error.TypeError,
+            };
+            const raw = std.heap.page_allocator.alloc(u8, n) catch return error.OutOfMemory;
+            @memset(raw, 0);
+            const buf_typ = try lookupType(ctx, BufQualifiedName);
+            const inst_fields = try vmgc.vmAllocManagedSlice(ctx, MapEntry, 2);
+            const inst_obj = try vmgc.vmAllocObject(ctx);
+            inst_obj.* = .{ .struct_instance = .{ .typ = buf_typ, .fields = inst_fields } };
+            try ctx.vs.pushTempRoot(.{ .object = inst_obj });
+            defer ctx.vs.popTempRoot();
+            inst_fields[0] = .{ .key = .{ .string = try ctx.cs.internStr("_ptr") }, .value = .{ .int = @bitCast(@intFromPtr(raw.ptr)) } };
+            inst_fields[1] = .{ .key = .{ .string = try ctx.cs.internStr("_len") }, .value = .{ .int = @bitCast(@as(u64, n)) } };
+            for (0..argc + 1) |_| _ = try ctx.vs.vmPop();
+            try ctx.vs.vmPush(.{ .object = inst_obj });
+        },
+        .cap_ffi_buf_free => {
+            if (argc != 1) return error.ArityMismatch;
+            const buf_val = try ctx.vs.vmPeek(0);
+            const obj = switch (buf_val) {
+                .object => |o| o,
+                else => return error.TypeError,
+            };
+            const si = switch (obj.*) {
+                .struct_instance => |i| i,
+                else => return error.TypeError,
+            };
+            if (si.fields.len < 2) return error.TypeError;
+            const ptr = @as(u64, @bitCast(switch (si.fields[0].value) {
+                .int => |n| n,
+                else => return error.TypeError,
+            }));
+            if (ptr != 0) {
+                const blen = @as(u64, @bitCast(switch (si.fields[1].value) {
+                    .int => |n| n,
+                    else => return error.TypeError,
+                }));
+                std.heap.page_allocator.free(@as([*]u8, @ptrFromInt(ptr))[0..blen]);
+                obj.struct_instance.fields[0].value = .{ .int = 0 };
+            }
+            for (0..argc + 1) |_| _ = try ctx.vs.vmPop();
+            try ctx.vs.vmPush(.null);
+        },
+        .cap_ffi_buf_len => {
+            if (argc != 1) return error.ArityMismatch;
+            const parts = try extractBufParts(try ctx.vs.vmPeek(0));
+            for (0..argc + 1) |_| _ = try ctx.vs.vmPop();
+            try ctx.vs.vmPush(.{ .int = @intCast(parts.len) });
+        },
+        .cap_ffi_buf_read_u8 => {
+            if (argc != 2) return error.ArityMismatch;
+            const parts = try extractBufParts(try ctx.vs.vmPeek(1));
+            const off = try offsetArg(try ctx.vs.vmPeek(0));
+            if (off + 1 > parts.len) return error.RangeError;
+            const val = @as([*]const u8, @ptrFromInt(parts.ptr))[off];
+            for (0..argc + 1) |_| _ = try ctx.vs.vmPop();
+            try ctx.vs.vmPush(.{ .int = val });
+        },
+        .cap_ffi_buf_read_i32 => {
+            if (argc != 2) return error.ArityMismatch;
+            const parts = try extractBufParts(try ctx.vs.vmPeek(1));
+            const off = try offsetArg(try ctx.vs.vmPeek(0));
+            if (off + 4 > parts.len) return error.RangeError;
+            const val = std.mem.readInt(i32, @as([*]const u8, @ptrFromInt(parts.ptr))[off..][0..4], .little);
+            for (0..argc + 1) |_| _ = try ctx.vs.vmPop();
+            try ctx.vs.vmPush(.{ .int = val });
+        },
+        .cap_ffi_buf_read_u32 => {
+            if (argc != 2) return error.ArityMismatch;
+            const parts = try extractBufParts(try ctx.vs.vmPeek(1));
+            const off = try offsetArg(try ctx.vs.vmPeek(0));
+            if (off + 4 > parts.len) return error.RangeError;
+            const val = std.mem.readInt(u32, @as([*]const u8, @ptrFromInt(parts.ptr))[off..][0..4], .little);
+            for (0..argc + 1) |_| _ = try ctx.vs.vmPop();
+            try ctx.vs.vmPush(.{ .int = @as(i64, @intCast(val)) });
+        },
+        .cap_ffi_buf_read_i64 => {
+            if (argc != 2) return error.ArityMismatch;
+            const parts = try extractBufParts(try ctx.vs.vmPeek(1));
+            const off = try offsetArg(try ctx.vs.vmPeek(0));
+            if (off + 8 > parts.len) return error.RangeError;
+            const val = std.mem.readInt(i64, @as([*]const u8, @ptrFromInt(parts.ptr))[off..][0..8], .little);
+            for (0..argc + 1) |_| _ = try ctx.vs.vmPop();
+            try ctx.vs.vmPush(.{ .int = val });
+        },
+        .cap_ffi_buf_read_u64 => {
+            if (argc != 2) return error.ArityMismatch;
+            const parts = try extractBufParts(try ctx.vs.vmPeek(1));
+            const off = try offsetArg(try ctx.vs.vmPeek(0));
+            if (off + 8 > parts.len) return error.RangeError;
+            const val = std.mem.readInt(u64, @as([*]const u8, @ptrFromInt(parts.ptr))[off..][0..8], .little);
+            for (0..argc + 1) |_| _ = try ctx.vs.vmPop();
+            try ctx.vs.vmPush(.{ .int = @bitCast(val) });
+        },
+        .cap_ffi_buf_read_f32 => {
+            if (argc != 2) return error.ArityMismatch;
+            const parts = try extractBufParts(try ctx.vs.vmPeek(1));
+            const off = try offsetArg(try ctx.vs.vmPeek(0));
+            if (off + 4 > parts.len) return error.RangeError;
+            const bits = std.mem.readInt(u32, @as([*]const u8, @ptrFromInt(parts.ptr))[off..][0..4], .little);
+            const val: f32 = @bitCast(bits);
+            for (0..argc + 1) |_| _ = try ctx.vs.vmPop();
+            try ctx.vs.vmPush(.{ .float = val });
+        },
+        .cap_ffi_buf_read_f64 => {
+            if (argc != 2) return error.ArityMismatch;
+            const parts = try extractBufParts(try ctx.vs.vmPeek(1));
+            const off = try offsetArg(try ctx.vs.vmPeek(0));
+            if (off + 8 > parts.len) return error.RangeError;
+            const bits = std.mem.readInt(u64, @as([*]const u8, @ptrFromInt(parts.ptr))[off..][0..8], .little);
+            const val: f64 = @bitCast(bits);
+            for (0..argc + 1) |_| _ = try ctx.vs.vmPop();
+            try ctx.vs.vmPush(.{ .float = val });
+        },
+        .cap_ffi_buf_write_u8 => {
+            if (argc != 3) return error.ArityMismatch;
+            const parts = try extractBufParts(try ctx.vs.vmPeek(2));
+            const off = try offsetArg(try ctx.vs.vmPeek(1));
+            const v: u8 = switch (try ctx.vs.vmPeek(0)) {
+                .int => |n| @truncate(@as(u64, @bitCast(n))),
+                else => return error.TypeError,
+            };
+            if (off + 1 > parts.len) return error.RangeError;
+            @as([*]u8, @ptrFromInt(parts.ptr))[off] = v;
+            for (0..argc + 1) |_| _ = try ctx.vs.vmPop();
+            try ctx.vs.vmPush(.null);
+        },
+        .cap_ffi_buf_write_i32 => {
+            if (argc != 3) return error.ArityMismatch;
+            const parts = try extractBufParts(try ctx.vs.vmPeek(2));
+            const off = try offsetArg(try ctx.vs.vmPeek(1));
+            const v: i32 = @truncate(try extractI64(try ctx.vs.vmPeek(0)));
+            if (off + 4 > parts.len) return error.RangeError;
+            std.mem.writeInt(i32, @as([*]u8, @ptrFromInt(parts.ptr))[off..][0..4], v, .little);
+            for (0..argc + 1) |_| _ = try ctx.vs.vmPop();
+            try ctx.vs.vmPush(.null);
+        },
+        .cap_ffi_buf_write_u32 => {
+            if (argc != 3) return error.ArityMismatch;
+            const parts = try extractBufParts(try ctx.vs.vmPeek(2));
+            const off = try offsetArg(try ctx.vs.vmPeek(1));
+            const v: u32 = @truncate(@as(u64, @bitCast(try extractI64(try ctx.vs.vmPeek(0)))));
+            if (off + 4 > parts.len) return error.RangeError;
+            std.mem.writeInt(u32, @as([*]u8, @ptrFromInt(parts.ptr))[off..][0..4], v, .little);
+            for (0..argc + 1) |_| _ = try ctx.vs.vmPop();
+            try ctx.vs.vmPush(.null);
+        },
+        .cap_ffi_buf_write_i64 => {
+            if (argc != 3) return error.ArityMismatch;
+            const parts = try extractBufParts(try ctx.vs.vmPeek(2));
+            const off = try offsetArg(try ctx.vs.vmPeek(1));
+            const v: i64 = try extractI64(try ctx.vs.vmPeek(0));
+            if (off + 8 > parts.len) return error.RangeError;
+            std.mem.writeInt(i64, @as([*]u8, @ptrFromInt(parts.ptr))[off..][0..8], v, .little);
+            for (0..argc + 1) |_| _ = try ctx.vs.vmPop();
+            try ctx.vs.vmPush(.null);
+        },
+        .cap_ffi_buf_write_u64 => {
+            if (argc != 3) return error.ArityMismatch;
+            const parts = try extractBufParts(try ctx.vs.vmPeek(2));
+            const off = try offsetArg(try ctx.vs.vmPeek(1));
+            const v: u64 = @bitCast(try extractI64(try ctx.vs.vmPeek(0)));
+            if (off + 8 > parts.len) return error.RangeError;
+            std.mem.writeInt(u64, @as([*]u8, @ptrFromInt(parts.ptr))[off..][0..8], v, .little);
+            for (0..argc + 1) |_| _ = try ctx.vs.vmPop();
+            try ctx.vs.vmPush(.null);
+        },
+        .cap_ffi_buf_write_f32 => {
+            if (argc != 3) return error.ArityMismatch;
+            const parts = try extractBufParts(try ctx.vs.vmPeek(2));
+            const off = try offsetArg(try ctx.vs.vmPeek(1));
+            const fv: f32 = @floatCast(try extractF64(try ctx.vs.vmPeek(0)));
+            if (off + 4 > parts.len) return error.RangeError;
+            std.mem.writeInt(u32, @as([*]u8, @ptrFromInt(parts.ptr))[off..][0..4], @bitCast(fv), .little);
+            for (0..argc + 1) |_| _ = try ctx.vs.vmPop();
+            try ctx.vs.vmPush(.null);
+        },
+        .cap_ffi_buf_write_f64 => {
+            if (argc != 3) return error.ArityMismatch;
+            const parts = try extractBufParts(try ctx.vs.vmPeek(2));
+            const off = try offsetArg(try ctx.vs.vmPeek(1));
+            const fv: f64 = try extractF64(try ctx.vs.vmPeek(0));
+            if (off + 8 > parts.len) return error.RangeError;
+            std.mem.writeInt(u64, @as([*]u8, @ptrFromInt(parts.ptr))[off..][0..8], @bitCast(fv), .little);
+            for (0..argc + 1) |_| _ = try ctx.vs.vmPop();
+            try ctx.vs.vmPush(.null);
         },
         else => return error.NativeFunctionNotFound,
     }
@@ -482,6 +729,13 @@ pub fn dispatchCallable(ctx: VMContext, obj: *Object, argc: u8) !void {
                 frame.ints[int_count] = switch (v) {
                     .int => |n| @as(u64, @bitCast(n)),
                     .null => 0,
+                    .object => |o| switch (o.*) {
+                        .struct_instance => |sinst| switch (sinst.fields[0].value) {
+                            .int => |n| @as(u64, @bitCast(n)),
+                            else => return error.TypeError,
+                        },
+                        else => return error.TypeError,
+                    },
                     else => return error.TypeError,
                 };
                 int_count += 1;

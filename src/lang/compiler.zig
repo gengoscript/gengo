@@ -31,6 +31,7 @@ const VariantTypeObj = value_mod.VariantTypeObj;
 const Value = value_mod.Value;
 
 const MaxLocals = ct.MaxLocals;
+const MaxModuleExports = ct.MaxModuleExports;
 const MaxScopes = ct.MaxScopes;
 const MaxLoopDepth = ct.MaxLoopDepth;
 const MaxLoopBreaks = ct.MaxLoopBreaks;
@@ -116,8 +117,8 @@ pub const Compiler = struct {
     last_func_obj: ?*@import("value.zig").Object = null,
     peek_tok: ?Token = null,
     options: CompilerOptions = .{},
-    exports: [MaxLocals]ExportEntry = undefined,
-    export_count: u8 = 0,
+    exports: [MaxModuleExports]ExportEntry = undefined,
+    export_count: u16 = 0,
     err_msg_buf: [512]u8 = undefined,
     err_msg_len: u16 = 0,
     err_col: u32 = 0,
@@ -302,7 +303,7 @@ pub const Compiler = struct {
         std_call_patch_pos: ?usize,
         module_boundary_count: u8,
         // Compiler-level tracking tables (top-level only — scope_depth==1)
-        export_count: u8,
+        export_count: u16,
         compile_time_const_count: u16,
         typed_global_count: u8,
         inferred_named_global_count: u8,
@@ -573,7 +574,7 @@ pub const Compiler = struct {
             try self.cs.emitStringConst(e.name, self.prev.line);
             try self.cs.emitGetGlobal(e.global_name, self.prev.line);
         }
-        try self.cs.emit2(@intFromEnum(Op.build_struct_instance), self.export_count, self.prev.line);
+        try self.cs.emit2(@intFromEnum(Op.build_struct_instance), @intCast(self.export_count), self.prev.line);
         try self.cs.emitOpStringConst(.def_global, self.options.module_global_name, self.prev.line);
     }
 
@@ -2182,8 +2183,8 @@ pub const Compiler = struct {
                 return error.DuplicateExport;
             }
         }
-        if (self.export_count >= MaxLocals) {
-            self.setErr("too many fields (max {d})", .{MaxLocals});
+        if (self.export_count >= MaxModuleExports) {
+            self.setErr("too many fields (max {d})", .{MaxModuleExports});
             return error.TooManyFields;
         }
         self.exports[self.export_count] = .{ .name = stable_name, .global_name = global_name };

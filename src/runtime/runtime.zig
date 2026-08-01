@@ -424,21 +424,23 @@ pub const Runtime = struct {
         const hm_names = try self.buildHostModuleNames();
         const caps = self.capabilityModules();
         if (path.len != 0) {
-            var session: module_compile.Session = .{};
-            self.initCompileSession(&session, provider, hm_names, caps, test_mode);
+            const session = try std.heap.page_allocator.create(module_compile.Session);
+            defer std.heap.page_allocator.destroy(session);
+            self.initCompileSession(session, provider, hm_names, caps, test_mode);
             session.compileRoot(path, src) catch |err| {
-                self.recordSessionCompileError(&session);
+                self.recordSessionCompileError(session);
                 return err;
             };
-            if (test_mode) self.copyTestNamesFromSession(&session);
+            if (test_mode) self.copyTestNamesFromSession(session);
             try fusion_pass.fuse(self.chunk_state, self.vm_state.allocator);
             return;
         }
 
-        var session: module_compile.Session = .{};
-        self.initCompileSession(&session, provider, hm_names, caps, test_mode);
+        const session = try std.heap.page_allocator.create(module_compile.Session);
+        defer std.heap.page_allocator.destroy(session);
+        self.initCompileSession(session, provider, hm_names, caps, test_mode);
         var compiler = Compiler.init(src, self.chunk_state, &self.heap_state, .{
-            .module_ctx = &session,
+            .module_ctx = session,
             .resolve_import = module_compile.Session.resolveImportOpaque,
             .has_module_export = module_compile.hasModuleExport,
             .resolve_module_type = module_compile.resolveModuleTypeKind,
@@ -652,12 +654,14 @@ pub const Runtime = struct {
         self.vm_state.resetExec();
 
         const repl_caps: []const module_compile.CapModuleDesc = if (self.enabled_capabilities.len > 0) module_compile.AllCapabilities else &[_]module_compile.CapModuleDesc{};
-        var session: module_compile.Session = .{};
+        const session = try std.heap.page_allocator.create(module_compile.Session);
+        defer std.heap.page_allocator.destroy(session);
+        session.* = .{};
         session.host_module_descs = self.host_modules;
         session.enabled_capabilities = self.enabled_capabilities;
         session.capability_modules = repl_caps;
         var compiler = Compiler.init(src, self.chunk_state, &self.heap_state, .{
-            .module_ctx = &session,
+            .module_ctx = session,
             .resolve_import = module_compile.Session.resolveImportOpaque,
             .resolve_module_type = module_compile.resolveModuleTypeKind,
             .repl_mode = true,

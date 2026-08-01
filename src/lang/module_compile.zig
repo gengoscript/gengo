@@ -43,7 +43,7 @@ const ModuleState = enum {
     failed,
 };
 
-const MaxModuleExports = 64;
+const MaxModuleExports = ct.MaxModuleExports;
 
 const ModuleRecord = struct {
     path_len: usize = 0,
@@ -55,7 +55,7 @@ const ModuleRecord = struct {
     export_names: [MaxModuleExports][]const u8 = undefined,
     export_type_kinds: [MaxModuleExports]ExportTypeKind = undefined,
     export_const_values: [MaxModuleExports]?CompileTimeConst = [_]?CompileTimeConst{null} ** MaxModuleExports,
-    export_count: u8 = 0,
+    export_count: u16 = 0,
 
     // Saved error info when compilation fails (state == .failed)
     failure_msg_buf: [512]u8 = undefined,
@@ -174,7 +174,7 @@ const _cap_storage = blk: {
 const _cap_count: usize = @as(usize, @intFromBool(build_options.cap_net)) + @as(usize, @intFromBool(build_options.cap_fs)) + @as(usize, @intFromBool(build_options.cap_http)) + @as(usize, @intFromBool(build_options.cap_env)) + @as(usize, @intFromBool(build_options.cap_ffi));
 pub const AllCapabilities = _cap_storage[0.._cap_count];
 
-pub const MaxCapabilities = 16;
+pub const MaxCapabilities = 64;
 pub const MaxModuleRoots = 8;
 
 pub const Session = struct {
@@ -786,11 +786,12 @@ pub fn hasModuleExport(ctx: *anyopaque, path: []const u8, field: []const u8) boo
     const idx = self.findModule(path) orelse {
         // Check capability modules
         const cap_key = if (std.mem.startsWith(u8, path, "cap:")) path[4..] else path;
-        // cap:ffi additionally exports a "types" namespace (ffi.types.i32 etc.)
-        // that is not a function, so it is not listed in cm.functions. It is
+        // cap:ffi additionally exports "types" (ffi.types.i32 etc.) and "buf"
+        // (ffi.buf(n)) that are not functions in cm.functions. They are
         // installed at runtime by installFfiModule in native/main.zig.
         if (comptime build_options.cap_ffi) {
-            if (common.streq(cap_key, "ffi") and common.streq(field, "types")) return true;
+            if (common.streq(cap_key, "ffi") and
+                (common.streq(field, "types") or common.streq(field, "buf"))) return true;
         }
         for (self.capability_modules) |cm| {
             if (common.streq(cm.name, cap_key)) {

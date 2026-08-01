@@ -266,6 +266,24 @@ pub const NativeFnId = enum(u16) {
     cap_ffi_load = 264,
     cap_ffi_declare = 265,
     cap_ffi_close = 266,
+
+    cap_ffi_buf_alloc = 267,
+    cap_ffi_buf_free = 268,
+    cap_ffi_buf_len = 269,
+    cap_ffi_buf_read_u8 = 270,
+    cap_ffi_buf_read_i32 = 271,
+    cap_ffi_buf_read_u32 = 272,
+    cap_ffi_buf_read_i64 = 273,
+    cap_ffi_buf_read_u64 = 274,
+    cap_ffi_buf_read_f32 = 275,
+    cap_ffi_buf_read_f64 = 276,
+    cap_ffi_buf_write_u8 = 277,
+    cap_ffi_buf_write_i32 = 278,
+    cap_ffi_buf_write_u32 = 279,
+    cap_ffi_buf_write_i64 = 280,
+    cap_ffi_buf_write_u64 = 281,
+    cap_ffi_buf_write_f32 = 282,
+    cap_ffi_buf_write_f64 = 283,
 };
 
 // Max enum value + 1: the correct size for a backing array indexed by NativeFnId.

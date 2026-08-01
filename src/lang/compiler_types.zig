@@ -16,18 +16,19 @@ pub const ExportTypeKind = enum(u8) {
 };
 
 pub const MaxLocals = 64;
-pub const MaxTestBlocks = 256;
+pub const MaxModuleExports = 256; // per-module export limit, independent of function locals
+pub const MaxTestBlocks = 1024;
 pub const MaxScopes = 8;
-pub const MaxLoopDepth = 16;
-pub const MaxLoopBreaks = 128;
+pub const MaxLoopDepth = 32;
+pub const MaxLoopBreaks = 512;
 pub const MaxLoopVars = 2;
 pub const MaxTypeAlts = 8;
-pub const MaxTypes = 512; // struct + interface + variant combined
-pub const MaxNamedTypes = 256;
-pub const MaxSwitchJumps = 256;
+pub const MaxTypes = 1024; // struct + interface + variant combined
+pub const MaxNamedTypes = 512;
+pub const MaxSwitchJumps = 1024;
 pub const MaxUpvalues = 64;
 pub const MaxGlobals = 1024; // funcs + consts combined
-pub const MaxExprDepth = 256;
+pub const MaxExprDepth = 512;
 pub const MaxTypeParams = 8;
 pub const MaxGenericTypes = 64;
 pub const MaxGenericFuncs = 64;
@@ -215,12 +216,12 @@ pub const NamedTypeInfo = struct {
 //                   is_const flag in the entry.  A single MaxGlobals cap
 //                   replaces the old separate MaxGlobalFuncs/MaxGlobalConsts.
 //
-// TypeHashSize = 2048: load factor < 0.25 at MaxTypes(512)+MaxNamedTypes(256).
-// FuncHashSize = 2048: load factor < 0.50 at MaxGlobals = 1024.
+// TypeHashSize = 4096: load factor < 0.37 at MaxTypes(1024)+MaxNamedTypes(512).
+// FuncHashSize = 4096: load factor < 0.25 at MaxGlobals = 1024.
 
 const TypeSymbolKind = enum(u8) { struct_type, interface_type, named_type, variant_type, named_error_type };
-const TypeHashSize = 2048;
-const FuncHashSize = 2048;
+const TypeHashSize = 4096;
+const FuncHashSize = 4096;
 
 const TypeHashEntry = struct {
     sub_idx: u16 = 0, // → type_names[] for struct/interface/variant; → named_types[] for named_type

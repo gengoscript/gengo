@@ -52,7 +52,9 @@ fn compileWithSession(rt: *Runtime, src: []const u8, path: []const u8) !void {
     globals.reset();
     heap.reset();
 
-    var session: module_compile.Session = .{};
+    const session = try std.heap.page_allocator.create(module_compile.Session);
+    defer std.heap.page_allocator.destroy(session);
+    session.* = .{};
     session.hs = heap.g_state;
     session.provider = .{ .table = &.{} };
     session.host_module_names = &.{};
@@ -62,7 +64,7 @@ fn compileWithSession(rt: *Runtime, src: []const u8, path: []const u8) !void {
 
     var compiler = Compiler.init(src, chunk.g_state, heap.g_state, .{
         .module_prefix = path,
-        .module_ctx = &session,
+        .module_ctx = session,
         .resolve_import = module_compile.Session.resolveImportOpaque,
         .has_module_export = module_compile.hasModuleExport,
         .resolve_module_type = module_compile.resolveModuleTypeKind,
