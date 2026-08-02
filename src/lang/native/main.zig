@@ -453,10 +453,11 @@ fn installFfiModule(ctx: vms.VMContext, gs: *globals.State) !void {
     try ctx.vs.pushTempRoot(.{ .object = types_obj });
     defer ctx.vs.popTempRoot();
 
-    const field_specs = (ctx.hs.bump(StructFieldSpec, 3) orelse return error.OutOfMemory)[0..3];
+    const field_specs = (ctx.hs.bump(StructFieldSpec, 4) orelse return error.OutOfMemory)[0..4];
     field_specs[0] = .{ .name = "load", .typ = any_spec, .is_const = true };
     field_specs[1] = .{ .name = "types", .typ = any_spec, .is_const = true };
     field_specs[2] = .{ .name = "buf", .typ = any_spec, .is_const = true };
+    field_specs[3] = .{ .name = "buf_from_ptr", .typ = any_spec, .is_const = true };
 
     const typ_obj = try vmgc.vmAllocObject(ctx);
     try ctx.vs.pushTempRoot(.{ .object = typ_obj });
@@ -464,10 +465,10 @@ fn installFfiModule(ctx: vms.VMContext, gs: *globals.State) !void {
     typ_obj.* = .{ .struct_type = StructTypeObj{
         .name = "ffi",
         .qualified_name = "@cap_type:ffi",
-        .fields = field_specs[0..3],
+        .fields = field_specs[0..4],
     } };
 
-    const inst_fields = try vmgc.vmAllocManagedSlice(ctx, MapEntry, 3);
+    const inst_fields = try vmgc.vmAllocManagedSlice(ctx, MapEntry, 4);
     const inst_obj = try vmgc.vmAllocObject(ctx);
     try ctx.vs.pushTempRoot(.{ .object = inst_obj });
     defer ctx.vs.popTempRoot();
@@ -475,9 +476,11 @@ fn installFfiModule(ctx: vms.VMContext, gs: *globals.State) !void {
 
     const load_native = try makeNative(ctx, .cap_ffi_load, 1);
     const buf_native = try makeNative(ctx, .cap_ffi_buf_alloc, 1);
+    const buf_from_ptr_native = try makeNative(ctx, .cap_ffi_buf_from_ptr, 2);
     inst_obj.struct_instance.fields[0] = .{ .key = .{ .string = try ctx.cs.internStr("load") }, .value = load_native };
     inst_obj.struct_instance.fields[1] = .{ .key = .{ .string = try ctx.cs.internStr("types") }, .value = .{ .object = types_obj } };
     inst_obj.struct_instance.fields[2] = .{ .key = .{ .string = try ctx.cs.internStr("buf") }, .value = buf_native };
+    inst_obj.struct_instance.fields[3] = .{ .key = .{ .string = try ctx.cs.internStr("buf_from_ptr") }, .value = buf_from_ptr_native };
     try gs.def("cap:ffi", .{ .object = inst_obj });
 
     // @cap_type:ffi.Lib — the value ffi.load returns. Field layout must match

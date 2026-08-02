@@ -272,6 +272,14 @@ pub const State = struct {
     // Allocate a StringSlice in the pool for s without copying s's bytes.
     // s MUST point at immortal data for the current script's lifetime.
     pub fn internStr(self: *State, s: []const u8) !*const StringSlice {
+        // Deduplicate: short strings (≤32 bytes) are scanned for an existing
+        // entry.  This keeps FFI key strings ("_ptr", "_len", "_sym", …) from
+        // accumulating unboundedly across repeated ffi.buf / lib.declare calls.
+        if (s.len <= 32) {
+            for (self.str_slices[0..self.str_slice_count]) |*ss| {
+                if (std.mem.eql(u8, ss.bytes, s)) return ss;
+            }
+        }
         if (self.str_slice_count >= MaxStrSlices) return error.TooManyConstants;
         const idx = self.str_slice_count;
         self.str_slice_count += 1;

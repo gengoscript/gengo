@@ -458,6 +458,30 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
             for (0..argc + 1) |_| _ = try ctx.vs.vmPop();
             try ctx.vs.vmPush(.{ .object = inst_obj });
         },
+        .cap_ffi_buf_from_ptr => {
+            if (argc != 2) return error.ArityMismatch;
+            const ptr_int = switch (try ctx.vs.vmPeek(1)) {
+                .int => |i| i,
+                else => return error.TypeError,
+            };
+            const len_int = switch (try ctx.vs.vmPeek(0)) {
+                .int => |i| if (i < 0 or i > 64 * 1024 * 1024) return error.RangeError else i,
+                else => return error.TypeError,
+            };
+            if (ptr_int == 0) return error.CapabilityError;
+            const buf_typ = try lookupType(ctx, BufQualifiedName);
+            // 3-field instance: _ptr, _len, _own=0 (non-owning — caller must not call .free())
+            const inst_fields = try vmgc.vmAllocManagedSlice(ctx, MapEntry, 3);
+            const inst_obj = try vmgc.vmAllocObject(ctx);
+            inst_obj.* = .{ .struct_instance = .{ .typ = buf_typ, .fields = inst_fields } };
+            try ctx.vs.pushTempRoot(.{ .object = inst_obj });
+            defer ctx.vs.popTempRoot();
+            inst_fields[0] = .{ .key = .{ .string = try ctx.cs.internStr("_ptr") }, .value = .{ .int = ptr_int } };
+            inst_fields[1] = .{ .key = .{ .string = try ctx.cs.internStr("_len") }, .value = .{ .int = len_int } };
+            inst_fields[2] = .{ .key = .{ .string = try ctx.cs.internStr("_own") }, .value = .{ .int = 0 } };
+            for (0..argc + 1) |_| _ = try ctx.vs.vmPop();
+            try ctx.vs.vmPush(.{ .object = inst_obj });
+        },
         .cap_ffi_buf_free => {
             if (argc != 1) return error.ArityMismatch;
             const buf_val = try ctx.vs.vmPeek(0);
@@ -475,11 +499,18 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
                 else => return error.TypeError,
             }));
             if (ptr != 0) {
-                const blen = @as(u64, @bitCast(switch (si.fields[1].value) {
-                    .int => |n| n,
-                    else => return error.TypeError,
-                }));
-                std.heap.page_allocator.free(@as([*]u8, @ptrFromInt(ptr))[0..blen]);
+                // Check _own field (field[2]): 0 = borrowed, skip page_allocator.free.
+                const owned = si.fields.len < 3 or switch (si.fields[2].value) {
+                    .int => |n| n != 0,
+                    else => true,
+                };
+                if (owned) {
+                    const blen = @as(u64, @bitCast(switch (si.fields[1].value) {
+                        .int => |n| n,
+                        else => return error.TypeError,
+                    }));
+                    std.heap.page_allocator.free(@as([*]u8, @ptrFromInt(ptr))[0..blen]);
+                }
                 obj.struct_instance.fields[0].value = .{ .int = 0 };
             }
             for (0..argc + 1) |_| _ = try ctx.vs.vmPop();

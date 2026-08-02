@@ -284,6 +284,8 @@ pub const NativeFnId = enum(u16) {
     cap_ffi_buf_write_u64 = 281,
     cap_ffi_buf_write_f32 = 282,
     cap_ffi_buf_write_f64 = 283,
+    // Wrap an arbitrary pointer+length as a non-owning buf view.
+    cap_ffi_buf_from_ptr = 284,
 };
 
 // Max enum value + 1: the correct size for a backing array indexed by NativeFnId.
