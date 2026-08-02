@@ -29,7 +29,7 @@ fn isConditionalBranch(op: Op) bool {
 // Also used by the VM's Debug-build net-effect assertion (vm.zig runInner):
 // the verifier's stack-bound proof is only as good as this table, so Debug
 // runs check every executed op's actual net effect against it.
-pub fn stackEffect(op: Op, code: []const u8, ip: usize) struct { pop: u8, push: u8 } {
+pub fn stackEffect(op: Op, code: []const u8, ip: usize) struct { pop: u16, push: u16 } {
     return switch (op) {
         .constant, .null_val, .true_val, .false_val, .get_local, .get_upvalue, .get_global, .make_closure, .tuple_get_keep, .get_local_const_eq, .get_local_const_sub, .get_local_const_add, .get_local_const_lt, .get_local_const_gt, .get_global_const_eq, .get_global_const_sub, .get_global_const_add, .get_global_const_lt, .get_local_get_field => .{ .pop = 0, .push = 1 },
 
@@ -123,11 +123,11 @@ pub fn stackEffect(op: Op, code: []const u8, ip: usize) struct { pop: u8, push: 
             break :blk .{ .pop = n, .push = 1 };
         },
         .build_map => blk: {
-            const n = code[ip + 1];
+            const n: u16 = code[ip + 1];
             break :blk .{ .pop = n * 2, .push = 1 };
         },
         .build_struct_instance => blk: {
-            const field_count = code[ip + 1];
+            const field_count: u16 = code[ip + 1];
             break :blk .{ .pop = 1 + field_count * 2, .push = 1 };
         },
         .zero_struct => .{ .pop = 1, .push = 1 },
