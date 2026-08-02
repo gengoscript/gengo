@@ -35,11 +35,13 @@ pub const ModuleBoundary = struct {
 };
 
 pub const State = struct {
-    code: [MaxCode + CodePad]u8 = undefined,
-    lines: [MaxCode]u16 = undefined,
-    cols: [MaxCode]u16 = undefined,
-    consts: [MaxConst]Value = undefined,
-    str_slices: [MaxStrSlices]StringSlice = undefined,
+    // Large arrays are heap-allocated via initArrays() to keep g_default_state
+    // (and the per-Runtime heap create()) tiny in the binary image.
+    code: []u8 = &.{},
+    lines: []u16 = &.{},
+    cols: []u16 = &.{},
+    consts: []Value = &.{},
+    str_slices: []StringSlice = &.{},
     code_len: usize = 0,
     const_count: usize = 0,
     // Indices of constants that hold heap objects (function prototypes, type
@@ -48,7 +50,7 @@ pub const State = struct {
     // ever retract scalar/string constants, so entries here never go stale in
     // practice; the GC still guards with `idx < const_count` so a rollback
     // could at worst re-mark a harmless slot, never miss a live object.
-    obj_const_idxs: [MaxConst]u16 = undefined,
+    obj_const_idxs: []u16 = &.{},
     obj_const_count: usize = 0,
     str_slice_count: usize = 0,
     pending_col: u16 = 0,
@@ -458,6 +460,7 @@ pub const State = struct {
     }
 
     pub fn reset(self: *State) void {
+        if (self.code.len == 0) self.initArrays(std.heap.page_allocator) catch @panic("chunk.State: OOM during lazy init");
         self.code_len = 0;
         self.const_count = 0;
         self.obj_const_count = 0;
@@ -594,6 +597,30 @@ pub const State = struct {
         try chunk_verifier.verify(self, alloc);
         self.verified = true;
         self.verified_code_len = self.code_len;
+    }
+
+    pub fn initArrays(self: *State, allocator: std.mem.Allocator) !void {
+        self.code = try allocator.alloc(u8, MaxCode + CodePad);
+        self.lines = try allocator.alloc(u16, MaxCode);
+        self.cols = try allocator.alloc(u16, MaxCode);
+        self.consts = try allocator.alloc(Value, MaxConst);
+        self.str_slices = try allocator.alloc(StringSlice, MaxStrSlices);
+        self.obj_const_idxs = try allocator.alloc(u16, MaxConst);
+    }
+
+    pub fn deinitArrays(self: *State, allocator: std.mem.Allocator) void {
+        if (self.code.len > 0) allocator.free(self.code);
+        if (self.lines.len > 0) allocator.free(self.lines);
+        if (self.cols.len > 0) allocator.free(self.cols);
+        if (self.consts.len > 0) allocator.free(self.consts);
+        if (self.str_slices.len > 0) allocator.free(self.str_slices);
+        if (self.obj_const_idxs.len > 0) allocator.free(self.obj_const_idxs);
+        self.code = &.{};
+        self.lines = &.{};
+        self.cols = &.{};
+        self.consts = &.{};
+        self.str_slices = &.{};
+        self.obj_const_idxs = &.{};
     }
 };
 

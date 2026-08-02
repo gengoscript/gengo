@@ -115,7 +115,7 @@ pub const State = struct {
     rune_cache_rune_len: usize = 0,
     rune_cache_valid: bool = false,
     rune_cache_overflow: bool = false,
-    rune_cache_offsets: [RuneCacheMax]usize = undefined,
+    rune_cache_offsets: []usize = &.{},
     fmt_scratch: [64]u8 = undefined,
     gc_runs: u64 = 0,
     gc_time_ns: u64 = 0,
@@ -154,7 +154,7 @@ pub const State = struct {
     // Sized by NativeFnIdArrayLen = max_enum_value+1 (NOT field count — the enum
     // is sparse). Outside the GC-managed heap: never marked, swept, or compacted.
     // buildStdModule refreshes the slots it uses; no reset needed.
-    native_fn_backing: [native_ids.NativeFnIdArrayLen]Object = undefined,
+    native_fn_backing: []Object = &.{},
     allocator: std.mem.Allocator = std.heap.page_allocator,
 
     pub fn init(self: *State, max_stack: usize, max_frames: usize, max_defers: usize, heap_size: usize, allocator: std.mem.Allocator) !void {
@@ -170,14 +170,21 @@ pub const State = struct {
             self.defer_stack = try allocator.alloc(Value, max_defers);
             self.panic_frames = try allocator.alloc(PanicFrame, max_frames);
         }
+        self.rune_cache_offsets = try allocator.alloc(usize, RuneCacheMax);
+        self.native_fn_backing = try allocator.alloc(Object, native_ids.NativeFnIdArrayLen);
+        try self.re_pattern_cache.init(allocator);
         self.configured_heap_size = heap_size;
         self.next_gc_heap_bytes = heap_size / 2;
         const saved_allocator = self.allocator;
+        const saved_pattern_cache = self.re_pattern_cache;
         self.* = .{
             .stack = self.stack,
             .frames = self.frames,
             .defer_stack = self.defer_stack,
             .panic_frames = self.panic_frames,
+            .rune_cache_offsets = self.rune_cache_offsets,
+            .native_fn_backing = self.native_fn_backing,
+            .re_pattern_cache = saved_pattern_cache,
             .configured_heap_size = self.configured_heap_size,
             .next_gc_heap_bytes = self.next_gc_heap_bytes,
             .allocator = saved_allocator,
@@ -186,6 +193,9 @@ pub const State = struct {
 
     pub fn deinit(self: *State) void {
         if (comptime builtin.target.cpu.arch == .wasm32) {
+            if (self.rune_cache_offsets.len > 0) self.allocator.free(self.rune_cache_offsets);
+            if (self.native_fn_backing.len > 0) self.allocator.free(self.native_fn_backing);
+            self.re_pattern_cache.deinit(self.allocator);
             self.* = .{};
             return;
         }
@@ -193,6 +203,9 @@ pub const State = struct {
         if (self.frames.len > 0) self.allocator.free(self.frames);
         if (self.defer_stack.len > 0) self.allocator.free(self.defer_stack);
         if (self.panic_frames.len > 0) self.allocator.free(self.panic_frames);
+        if (self.rune_cache_offsets.len > 0) self.allocator.free(self.rune_cache_offsets);
+        if (self.native_fn_backing.len > 0) self.allocator.free(self.native_fn_backing);
+        self.re_pattern_cache.deinit(self.allocator);
         self.* = .{};
     }
 

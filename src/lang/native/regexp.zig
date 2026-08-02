@@ -36,8 +36,19 @@ const PatternCacheEntry = struct {
 const MaxCacheEntries = 32;
 
 pub const PatternCache = struct {
-    entries: [MaxCacheEntries]PatternCacheEntry = undefined,
+    entries: []PatternCacheEntry = &.{},
     len: usize = 0,
+
+    pub fn init(self: *PatternCache, allocator: @import("std").mem.Allocator) !void {
+        self.entries = try allocator.alloc(PatternCacheEntry, MaxCacheEntries);
+        self.len = 0;
+    }
+
+    pub fn deinit(self: *PatternCache, allocator: @import("std").mem.Allocator) void {
+        self.clear();
+        if (self.entries.len > 0) allocator.free(self.entries);
+        self.entries = &.{};
+    }
 
     pub fn clear(self: *PatternCache) void {
         for (self.entries[0..self.len]) |entry| freeAlts(entry.alts);

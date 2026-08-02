@@ -10,11 +10,13 @@ const GEntry = struct {
     occupied: bool = false,
 };
 pub const State = struct {
-    entries: [TableSize]GEntry = undefined,
-    compact_values: [MaxGlobals]Value = undefined,
+    // Heap-allocated via initArrays(); g_default_state is a tiny zero-slice stub.
+    entries: []GEntry = &.{},
+    compact_values: []Value = &.{},
     globals_len: usize = 0,
 
     fn slotFor(self: *const State, name: []const u8) ?usize {
+        if (self.entries.len == 0) return null;
         const mask: usize = TableSize - 1;
         var idx: usize = @intCast(common.hashBytes(name) & mask);
         for (0..TableSize) |_| {
@@ -27,6 +29,7 @@ pub const State = struct {
     }
 
     fn slotForInsert(self: *const State, name: []const u8) ?usize {
+        if (self.entries.len == 0) return null;
         const mask: usize = TableSize - 1;
         var idx: usize = @intCast(common.hashBytes(name) & mask);
         for (0..TableSize) |_| {
@@ -38,8 +41,21 @@ pub const State = struct {
     }
 
     pub fn reset(self: *State) void {
+        if (self.entries.len == 0) self.initArrays(@import("std").heap.page_allocator) catch @panic("globals.State: OOM during lazy init");
         @memset(self.entries[0..TableSize], .{});
         self.globals_len = 0;
+    }
+
+    pub fn initArrays(self: *State, allocator: @import("std").mem.Allocator) !void {
+        self.entries = try allocator.alloc(GEntry, TableSize);
+        self.compact_values = try allocator.alloc(Value, MaxGlobals);
+    }
+
+    pub fn deinitArrays(self: *State, allocator: @import("std").mem.Allocator) void {
+        if (self.entries.len > 0) allocator.free(self.entries);
+        if (self.compact_values.len > 0) allocator.free(self.compact_values);
+        self.entries = &.{};
+        self.compact_values = &.{};
     }
 
     pub fn compactValue(self: *const State, i: usize) Value {
@@ -49,7 +65,7 @@ pub const State = struct {
     // Rebuild the compact array from the primary entries table. Must be called
     // before any code that reads compact_values (i.e., GC marking).
     pub fn syncCompact(self: *State) void {
-        for (&self.entries) |*e| {
+        for (self.entries) |*e| {
             if (e.occupied) self.compact_values[e.compact_idx] = e.value;
         }
     }
@@ -121,6 +137,7 @@ pub const State = struct {
     }
 
     pub fn debugSlotCount(self: *const State) usize {
+        if (self.entries.len == 0) return 0;
         var n: usize = 0;
         for (self.entries[0..TableSize]) |e| {
             if (e.occupied) n += 1;

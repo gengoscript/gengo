@@ -227,6 +227,8 @@ pub const Runtime = struct {
         const cs = try std.heap.page_allocator.create(chunk.State);
         errdefer std.heap.page_allocator.destroy(cs);
         cs.* = .{};
+        try cs.initArrays(std.heap.page_allocator);
+        errdefer cs.deinitArrays(std.heap.page_allocator);
         const rp = try std.heap.page_allocator.create(ReplPersist);
         errdefer std.heap.page_allocator.destroy(rp);
         rp.* = .{};
@@ -236,6 +238,7 @@ pub const Runtime = struct {
         self.policy = policy;
         try self.heap_state.init(heap_size, max_objects, allocator);
         try self.vm_state.init(max_stack, max_frames, max_defers, heap_size, allocator);
+        try self.globals_state.initArrays(std.heap.page_allocator);
         chunk.setActive(self.chunk_state);
         globals.setActive(&self.globals_state);
         self.chunk_state.reset();
@@ -267,6 +270,8 @@ pub const Runtime = struct {
         self.initialized = false;
         self.vm_state.deinit();
         self.heap_state.deinit();
+        self.globals_state.deinitArrays(std.heap.page_allocator);
+        self.chunk_state.deinitArrays(std.heap.page_allocator);
         std.heap.page_allocator.destroy(self.chunk_state);
         std.heap.page_allocator.destroy(self.repl);
     }

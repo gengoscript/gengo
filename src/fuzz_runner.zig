@@ -89,6 +89,7 @@ fn resetAll() void {
 // ── Compiler fuzz: random source strings must never crash ────────────────────
 
 fn fuzzCompiler() void {
+    resetAll(); // ensure global chunk/globals state is lazy-initialized before first use
     const seeds = [_]u64{ 1, 42, 123, 999, 0xDEADBEEF, 0xCAFEBABE, 0x1337, 0x1234567890ABCDEF };
     const token_fragments = [_][]const u8{
         "x",         "y",         "foo",   "bar",      "123",   "456.789", "true",    "false",  "null",

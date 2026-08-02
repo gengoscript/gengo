@@ -2362,21 +2362,21 @@ inline fn readLocalSlotAndConst(ctx: VMContext) !struct { slot: u8, k: Value } {
 // (a corrupt function const) cannot read past the array.
 
 inline fn opByte(ctx: VMContext) u8 {
-    const code: [*]const u8 = &ctx.cs.code;
+    const code: [*]const u8 = ctx.cs.code.ptr;
     const b = code[ctx.vs.ip];
     ctx.vs.ip += 1;
     return b;
 }
 
 inline fn opShort(ctx: VMContext) usize {
-    const code: [*]const u8 = &ctx.cs.code;
+    const code: [*]const u8 = ctx.cs.code.ptr;
     const ip = ctx.vs.ip;
     ctx.vs.ip = ip + 2;
     return (@as(usize, code[ip]) << 8) | code[ip + 1];
 }
 
 inline fn opInt(ctx: VMContext) usize {
-    const code: [*]const u8 = &ctx.cs.code;
+    const code: [*]const u8 = ctx.cs.code.ptr;
     const ip = ctx.vs.ip;
     ctx.vs.ip = ip + 4;
     return (@as(usize, code[ip]) << 24) | (@as(usize, code[ip + 1]) << 16) | (@as(usize, code[ip + 2]) << 8) | code[ip + 3];
@@ -2618,7 +2618,7 @@ fn runInner(ctx: VMContext) !void {
                 const dbg_frame = ctx.vs.frame_top;
                 if (try @call(exec_call_modifier, execOne, .{ ctx, op })) return;
                 if (ctx.vs.frame_top == dbg_frame) {
-                    const eff = chunk_verifier.stackEffect(op, &ctx.cs.code, dbg_op_ip);
+                    const eff = chunk_verifier.stackEffect(op, ctx.cs.code, dbg_op_ip);
                     const want = dbg_stack - @as(usize, eff.pop) + @as(usize, eff.push);
                     if (ctx.vs.stack_top != want) std.debug.panic(
                         "stackEffect table violated by {s} at ip={d}: declared pop={d} push={d}, stack {d} -> {d}",

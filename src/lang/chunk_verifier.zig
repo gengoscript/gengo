@@ -391,7 +391,7 @@ pub fn verify(state: *chunk.State, alloc: std.mem.Allocator) !void {
                         else => {},
                     }
 
-                    const effect = stackEffect(inst.op, &state_arg.code, current_ip);
+                    const effect = stackEffect(inst.op, state_arg.code, current_ip);
                     const is_branch = isConditionalBranch(inst.op);
                     const is_uncond = isUnconditionalBranch(inst.op);
                     const is_ret = isReturnOp(inst.op);
