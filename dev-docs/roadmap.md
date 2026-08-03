@@ -36,7 +36,17 @@ Real coverage would need a native (or WASM component-model) test harness that re
 
 ---
 
-## 4. Exit Criteria
+## 4. Task/Actor Concurrency Primitive
+
+**Status:** design draft at `dev-docs/design/task-actor-design.md`, no implementation started, no GH issue filed.
+
+Erlang-style isolated concurrent actors — a `task` type with its own private state, reachable only through message passing, using cooperative scheduling. No OS threads under any circumstance (must run under WASM). Named after Ada tasks; isolation/communication semantics follow Erlang's model.
+
+v1 non-goals: bounded mailboxes, supervision trees, preemptive scheduling, generic task-type-parameterised handles.
+
+---
+
+## 5. Exit Criteria
 
 1. All core capabilities are `done` and covered by conformance cases.
 2. Conformance suite runs in CI on every PR.
@@ -59,3 +69,11 @@ Real coverage would need a native (or WASM component-model) test harness that re
 | `cap:fs` ~900 ms cold-start from `std.Io.Threaded` (#73) | Fixed: `cb7bb89` |
 | `engine_last_error` unreachable after `engine_init_with_config` failure (#74) | Fixed: `19972f6` |
 | Engine Improvement Plan (July 2026) architecture debt sweep | Redistributed 2026-07-20: durable content → `dev-docs/design/vm-architecture.md` §5.2/§6, standing test practice → `dev-docs/testing.md`, remaining work → issues #5, #204, #205, #206; historical record archived at `dev-docs/archive/improvement-plan-2026-07.md` |
+| Limited operator overloading via dunder methods (#210) | Implemented: `4c7772f` |
+| net/http engine state not per-Runtime (#216) | Fixed: `90acc7e` — per-Runtime `NetEngineState`/`HttpEngineState` |
+| Generic struct methods — bracketed receiver not supported (#217) | Implemented: `c96413d` — `isMethodDecl` lookahead handles `[T]`; type-alias receivers now work too |
+| `cap:ffi` — shared-library calling via `ffi.load`/`ffi.declare` | Implemented: `b65d995`, `ddf56e4`, `ad495d4`, `00f5b30` |
+| `net.dial_tls` — TLS client support for `cap:net` | Implemented: `5a84f99` |
+| `std.crypto` — 22 cryptographic primitives | Implemented: `9c40bed` |
+| Security audit waves 3–5 (2026-07-27): 50+ crash/corruption bugs | Fixed across `63f8966`, `21a1dab`, `9809208`, `2d5be04`, `ab23a4a`, `ea8500f`, `3140c82`, `56e08fb`, `1bdfed1`, `1cd6d67`, `725b317`, `fc730ae`, `5e0a946` |
+| `net_state` conns/listeners in binary .data section (~69 KB) | Heap-allocated: `c157418` — also gates TLS import behind `cap_net`; adds `-Dgbc`/`-Drepl` build options |
