@@ -212,6 +212,7 @@ pub fn build(b: *std.Build) void {
     net_http_opts.addOption(bool, "cap_http", true);
     net_http_opts.addOption(bool, "cap_fs", false);
     net_http_opts.addOption(bool, "cap_env", false);
+    net_http_opts.addOption(bool, "cap_ffi", false);
     net_http_opts.addOption(bool, "predicates", predicates_opt);
     net_http_opts.addOption(bool, "gengo_host", true);
     net_http_opts.addOption(bool, "gbc", false);
@@ -231,6 +232,7 @@ pub fn build(b: *std.Build) void {
     fs_opts.addOption(bool, "cap_http", false);
     fs_opts.addOption(bool, "cap_fs", true);
     fs_opts.addOption(bool, "cap_env", false);
+    fs_opts.addOption(bool, "cap_ffi", false);
     fs_opts.addOption(bool, "predicates", predicates_opt);
     fs_opts.addOption(bool, "gengo_host", true);
     fs_opts.addOption(bool, "gbc", false);
