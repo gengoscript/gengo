@@ -43,6 +43,8 @@ pub fn build(b: *std.Build) void {
     const cap_ffi_opt = b.option(bool, "cap_ffi", "Include cap:ffi capability (native CLI only)") orelse false;
     const predicates_opt = b.option(bool, "predicates", "Enable runtime predicate checks") orelse true;
     const gengo_host_opt = b.option(bool, "gengo_host", "Include gengo_host import for host module callbacks") orelse true;
+    const gbc_opt = b.option(bool, "gbc", "Include GBC bytecode cache read/write (--emit-gbc, running .gbc files)") orelse true;
+    const repl_opt = b.option(bool, "repl", "Include interactive REPL (adds repl_line.zig readline support on Linux)") orelse true;
     const gengo_version = "0.6.0-pre2";
     const build_opts = b.addOptions();
     build_opts.addOption(bool, "perf", perf_opt);
@@ -55,6 +57,8 @@ pub fn build(b: *std.Build) void {
     build_opts.addOption(bool, "cap_ffi", cap_ffi_opt);
     build_opts.addOption(bool, "predicates", predicates_opt);
     build_opts.addOption(bool, "gengo_host", gengo_host_opt);
+    build_opts.addOption(bool, "gbc", gbc_opt);
+    build_opts.addOption(bool, "repl", repl_opt);
     build_opts.addOption([]const u8, "version", gengo_version);
     const build_opts_mod = build_opts.createModule();
 
@@ -73,6 +77,8 @@ pub fn build(b: *std.Build) void {
     native_cli_opts.addOption(bool, "cap_ffi", true);
     native_cli_opts.addOption(bool, "predicates", predicates_opt);
     native_cli_opts.addOption(bool, "gengo_host", gengo_host_opt);
+    native_cli_opts.addOption(bool, "gbc", gbc_opt);
+    native_cli_opts.addOption(bool, "repl", repl_opt);
     native_cli_opts.addOption([]const u8, "version", gengo_version);
     const native_cli_opts_mod = native_cli_opts.createModule();
     const runtime_config_mod = b.createModule(.{ .root_source_file = b.path(preset_config_path) });
@@ -136,6 +142,8 @@ pub fn build(b: *std.Build) void {
     fuzz_gc_stress_opts.addOption(bool, "cap_ffi", false);
     fuzz_gc_stress_opts.addOption(bool, "predicates", predicates_opt);
     fuzz_gc_stress_opts.addOption(bool, "gengo_host", gengo_host_opt);
+    fuzz_gc_stress_opts.addOption(bool, "gbc", gbc_opt);
+    fuzz_gc_stress_opts.addOption(bool, "repl", false);
     fuzz_gc_stress_opts.addOption([]const u8, "version", gengo_version);
     const fuzz_gc_stress_opts_mod = fuzz_gc_stress_opts.createModule();
     const fuzz_gc_stress_exe = addWasmExe(b, "fuzz-runner-gc-stress", "src/fuzz_runner.zig", wasm_target, .Debug, fuzz_gc_stress_opts_mod, runtime_config_mod);
@@ -206,6 +214,8 @@ pub fn build(b: *std.Build) void {
     net_http_opts.addOption(bool, "cap_env", false);
     net_http_opts.addOption(bool, "predicates", predicates_opt);
     net_http_opts.addOption(bool, "gengo_host", true);
+    net_http_opts.addOption(bool, "gbc", false);
+    net_http_opts.addOption(bool, "repl", false);
     net_http_opts.addOption([]const u8, "version", gengo_version);
     const net_http_opts_mod = net_http_opts.createModule();
     const engine_net_http = addWasmExe(b, "gengo-engine", "src/engine.zig", wasm_target, .ReleaseFast, net_http_opts_mod, runtime_config_mod);
@@ -223,6 +233,8 @@ pub fn build(b: *std.Build) void {
     fs_opts.addOption(bool, "cap_env", false);
     fs_opts.addOption(bool, "predicates", predicates_opt);
     fs_opts.addOption(bool, "gengo_host", true);
+    fs_opts.addOption(bool, "gbc", false);
+    fs_opts.addOption(bool, "repl", false);
     fs_opts.addOption([]const u8, "version", gengo_version);
     const fs_opts_mod = fs_opts.createModule();
     const engine_fs = addWasmExe(b, "gengo-engine", "src/engine.zig", wasm_target, .ReleaseFast, fs_opts_mod, runtime_config_mod);
@@ -241,6 +253,8 @@ pub fn build(b: *std.Build) void {
     minimal_opts.addOption(bool, "cap_ffi", false);
     minimal_opts.addOption(bool, "predicates", predicates_opt);
     minimal_opts.addOption(bool, "gengo_host", false);
+    minimal_opts.addOption(bool, "gbc", false);
+    minimal_opts.addOption(bool, "repl", false);
     minimal_opts.addOption([]const u8, "version", gengo_version);
     const minimal_opts_mod = minimal_opts.createModule();
     const engine_minimal = addWasmExe(b, "gengo-engine", "src/engine.zig", wasm_target, .ReleaseFast, minimal_opts_mod, runtime_config_mod);
@@ -444,6 +458,8 @@ pub fn build(b: *std.Build) void {
     perf_opts.addOption(bool, "cap_ffi", false);
     perf_opts.addOption(bool, "predicates", predicates_opt);
     perf_opts.addOption(bool, "gengo_host", gengo_host_opt);
+    perf_opts.addOption(bool, "gbc", gbc_opt);
+    perf_opts.addOption(bool, "repl", false);
     perf_opts.addOption([]const u8, "version", gengo_version);
     const perf_opts_mod = perf_opts.createModule();
     const gengo_perf = addWasmExe(b, "gengo-perf", "src/main.zig", wasm_target, .ReleaseSafe, perf_opts_mod, runtime_config_mod);

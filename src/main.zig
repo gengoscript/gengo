@@ -27,7 +27,10 @@ const net_state = @import("lang/native/net_state.zig");
 const cap_env = if (build_opts.cap_env) @import("lang/native/cap_env.zig") else struct {};
 const disasm = @import("lang/disasm.zig");
 const bundle = @import("bundle.zig");
-const gbc_writer = @import("lang/gbc_writer.zig");
+const gbc_writer = if (build_opts.gbc) @import("lang/gbc_writer.zig") else struct {
+    // Sentinel that never matches real source (which starts with text).
+    pub const MAGIC: [8]u8 = .{0} ** 8;
+};
 
 const MaxArgs = 32;
 const ArgBufSize = 4096;
@@ -115,7 +118,7 @@ fn stdinIsTerminal() bool {
 // Never called on WASI (stdinIsTerminal = false).
 fn readLine(prompt: []const u8, buf: []u8) ?[]const u8 {
     if (comptime builtin.os.tag == .wasi) return null;
-    if (comptime builtin.os.tag == .linux) {
+    if (comptime builtin.os.tag == .linux and build_opts.repl) {
         return @import("repl_line.zig").readLine(prompt, buf);
     }
     if (comptime builtin.os.tag == .windows) {
@@ -722,6 +725,10 @@ fn runCli(argv: []const []const u8) void {
     // REPL: enter interactive mode when no file is given and stdin is a terminal.
     // Runs in a separate function so this frame never holds two Runtimes at once.
     if (eval_source == null and script_path == null and stdinIsTerminal()) {
+        if (comptime !build_opts.repl) {
+            io.werr("gengo: REPL not available in this build (-Drepl=false)\n");
+            die(1);
+        }
         runReplMode(backend, max_ops, if (cap_count > 0) cap_names[0..cap_count] else &.{});
     }
 
@@ -796,6 +803,10 @@ fn runCli(argv: []const []const u8) void {
     }
 
     if (emit_gbc_path) |out_path| {
+        if (comptime !build_opts.gbc) {
+            io.werr("gengo: --emit-gbc is not available in this build (-Dgbc=false)\n");
+            die(1);
+        }
         runtime.compileOnly(src, script_arg, .filesystem) catch |err| {
             const compile_path = if (runtime.lastCompilePath().len != 0) runtime.lastCompilePath() else script_name;
             io.werr("gengo: compile error: ");

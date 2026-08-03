@@ -1,6 +1,14 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const tls_common = @import("tls_common.zig");
+const build_options = @import("build_options");
+// Import real TLS only when cap:net is enabled; otherwise stub so that
+// std.crypto is not pulled into builds compiled with -Dcap_net=false.
+const tls_common = if (builtin.os.tag != .wasi and build_options.cap_net)
+    @import("tls_common.zig")
+else
+    struct {
+        pub const TlsConn = opaque {};
+    };
 
 const MaxConns = 16;
 const ReadBufSize = 4096;
@@ -53,7 +61,7 @@ const NetConn = struct {
     rbuf_pos: usize = 0,
     rbuf_end: usize = 0,
     // Non-null for TLS connections (heap-allocated; freed in netClose).
-    tls: if (builtin.os.tag == .wasi) void else ?*tls_common.TlsConn = if (builtin.os.tag == .wasi) {} else null,
+    tls: if (builtin.os.tag == .wasi or !build_options.cap_net) void else ?*tls_common.TlsConn = if (builtin.os.tag == .wasi or !build_options.cap_net) {} else null,
 };
 
 // Listening sockets — independent ceiling from MaxConns (§9 of the design
@@ -107,14 +115,30 @@ pub const NetEngineState = struct {
     policy: PolicyState = .{},
     listen_policy: PolicyState = .{},
     handlers: ?HandlerSet = null,
-    conns: [MaxConns]NetConn = undefined,
+    conns: []NetConn = &.{},
     conn_count: usize = 0,
     next_id: u32 = 1,
-    listeners: [MaxListeners]NetListener = undefined,
+    listeners: []NetListener = &.{},
     listener_count: usize = 0,
     next_listener_id: u32 = 1,
     net_err_buf: [256]u8 = undefined,
     net_err_len: usize = 0,
+
+    pub fn initArrays(self: *NetEngineState, allocator: std.mem.Allocator) !void {
+        self.conns = try allocator.alloc(NetConn, MaxConns);
+        errdefer {
+            allocator.free(self.conns);
+            self.conns = &.{};
+        }
+        self.listeners = try allocator.alloc(NetListener, MaxListeners);
+    }
+
+    pub fn deinitArrays(self: *NetEngineState, allocator: std.mem.Allocator) void {
+        allocator.free(self.conns);
+        allocator.free(self.listeners);
+        self.conns = &.{};
+        self.listeners = &.{};
+    }
 };
 
 pub var g_default_state: NetEngineState = .{};
@@ -487,7 +511,7 @@ pub fn netDial(network: []const u8, address: []const u8) !u32 {
         g_state.conn_count += 1;
         return id;
     }
-    if (comptime builtin.os.tag == .wasi or builtin.os.tag == .windows) return error.CapabilityNotAvailable;
+    if (comptime builtin.os.tag == .wasi or builtin.os.tag == .windows or !build_options.cap_net) return error.CapabilityNotAvailable;
     if (g_state.conn_count >= MaxConns) {
         setNetErr("too many connections (max {d})", .{MaxConns});
         return error.NetError;
@@ -613,7 +637,7 @@ pub fn netDial(network: []const u8, address: []const u8) !u32 {
 // Native-only: WASM/Windows return CapabilityNotAvailable.
 // SNI is derived from the host part of address (e.g. "example.com:443" → "example.com").
 pub fn netDialTls(network: []const u8, address: []const u8) !u32 {
-    if (comptime builtin.os.tag == .wasi or builtin.os.tag == .windows) return error.CapabilityNotAvailable;
+    if (comptime builtin.os.tag == .wasi or builtin.os.tag == .windows or !build_options.cap_net) return error.CapabilityNotAvailable;
     // Host-callback path cannot provide a raw fd for TLS layering.
     if (g_state.handlers != null) {
         setNetErr("dial_tls: TLS is not supported with host net callbacks", .{});
@@ -674,7 +698,7 @@ pub fn netListen(network: []const u8, address: []const u8) !u32 {
         g_state.listener_count += 1;
         return id;
     }
-    if (comptime builtin.os.tag == .wasi or builtin.os.tag == .windows) return error.CapabilityNotAvailable;
+    if (comptime builtin.os.tag == .wasi or builtin.os.tag == .windows or !build_options.cap_net) return error.CapabilityNotAvailable;
     if (g_state.listener_count >= MaxListeners) {
         setNetErr("too many listeners (max {d})", .{MaxListeners});
         return error.NetError;
@@ -833,7 +857,7 @@ pub fn netListenerAccept(listener_id: u32) !u32 {
         g_state.conn_count += 1;
         return id;
     }
-    if (comptime builtin.os.tag == .wasi or builtin.os.tag == .windows) return error.CapabilityNotAvailable;
+    if (comptime builtin.os.tag == .wasi or builtin.os.tag == .windows or !build_options.cap_net) return error.CapabilityNotAvailable;
     const l = findListener(listener_id) orelse {
         setNetErr("accept: unknown listener handle {d}", .{listener_id});
         return error.NetError;
@@ -871,7 +895,7 @@ pub fn netListenerClose(id: u32) !void {
         removeListener(id);
         return;
     }
-    if (comptime builtin.os.tag == .wasi or builtin.os.tag == .windows) return error.CapabilityNotAvailable;
+    if (comptime builtin.os.tag == .wasi or builtin.os.tag == .windows or !build_options.cap_net) return error.CapabilityNotAvailable;
     const l = findListener(id) orelse return error.CapabilityError;
 
     const io_ctx = ioContext();
@@ -887,7 +911,7 @@ pub fn netListenerLocalAddr(id: u32) ![]u8 {
         const len = std.mem.indexOfScalar(u8, buf[0..], 0) orelse buf.len;
         return std.heap.page_allocator.dupe(u8, buf[0..len]) catch return error.OutOfMemory;
     }
-    if (comptime builtin.os.tag == .wasi or builtin.os.tag == .windows) return error.CapabilityNotAvailable;
+    if (comptime builtin.os.tag == .wasi or builtin.os.tag == .windows or !build_options.cap_net) return error.CapabilityNotAvailable;
     if (comptime builtin.os.tag == .windows) return error.CapabilityError; // TODO: Winsock
     const l = findListener(id) orelse return error.CapabilityError;
 
@@ -914,7 +938,7 @@ pub fn netListenerSetAcceptDeadline(id: u32, ms: i64) !void {
         if (h.callbacks.set_accept_deadline) |fn_ptr| fn_ptr(l.host_handle, ms, h.userdata);
         return;
     }
-    if (comptime builtin.os.tag == .wasi or builtin.os.tag == .windows) return error.CapabilityNotAvailable;
+    if (comptime builtin.os.tag == .wasi or builtin.os.tag == .windows or !build_options.cap_net) return error.CapabilityNotAvailable;
     if (comptime builtin.os.tag == .windows) return error.CapabilityError; // TODO: Winsock SO_RCVTIMEO DWORD
     const l = findListener(id) orelse return error.CapabilityError;
     try posixSetSockOptTimeval(l.socket, @intCast(std.posix.SO.RCVTIMEO), ms);
@@ -959,7 +983,7 @@ pub fn netRead(id: u32, max_bytes: usize) ![]u8 {
         const out = std.heap.page_allocator.realloc(buf, @intCast(n)) catch return error.OutOfMemory;
         return out;
     }
-    if (comptime builtin.os.tag == .wasi or builtin.os.tag == .windows) return error.CapabilityNotAvailable;
+    if (comptime builtin.os.tag == .wasi or builtin.os.tag == .windows or !build_options.cap_net) return error.CapabilityNotAvailable;
     const conn = findConn(id) orelse {
         setNetErr("read: unknown connection handle {d}", .{id});
         return error.NetError;
@@ -1021,7 +1045,7 @@ pub fn netRead(id: u32, max_bytes: usize) ![]u8 {
 // is refilled in one syscall when empty — so many small reads cost only one
 // posix.read per 4 KiB consumed. Only available on POSIX (not host/WASM paths).
 pub fn netReadInto(id: u32, dest: []u8) !usize {
-    if (comptime builtin.os.tag == .wasi or builtin.os.tag == .windows) return error.CapabilityNotAvailable;
+    if (comptime builtin.os.tag == .wasi or builtin.os.tag == .windows or !build_options.cap_net) return error.CapabilityNotAvailable;
     g_state.net_err_len = 0;
     const conn = findConn(id) orelse {
         setNetErr("read: unknown connection handle {d}", .{id});
@@ -1082,7 +1106,7 @@ pub fn netWrite(id: u32, data: []const u8) !usize {
         }
         return @intCast(n);
     }
-    if (comptime builtin.os.tag == .wasi or builtin.os.tag == .windows) return error.CapabilityNotAvailable;
+    if (comptime builtin.os.tag == .wasi or builtin.os.tag == .windows or !build_options.cap_net) return error.CapabilityNotAvailable;
     const conn = findConn(id) orelse {
         setNetErr("write: unknown connection handle {d}", .{id});
         return error.NetError;
@@ -1144,7 +1168,7 @@ pub fn netClose(id: u32) !void {
         removeConn(id);
         return;
     }
-    if (comptime builtin.os.tag == .wasi or builtin.os.tag == .windows) return error.CapabilityNotAvailable;
+    if (comptime builtin.os.tag == .wasi or builtin.os.tag == .windows or !build_options.cap_net) return error.CapabilityNotAvailable;
     const conn = findConn(id) orelse return error.CapabilityError;
 
     if (conn.tls) |tls| {
@@ -1164,7 +1188,7 @@ pub fn netLocalAddr(id: u32) ![]u8 {
         const len = std.mem.indexOfScalar(u8, buf[0..], 0) orelse buf.len;
         return std.heap.page_allocator.dupe(u8, buf[0..len]) catch return error.OutOfMemory;
     }
-    if (comptime builtin.os.tag == .wasi or builtin.os.tag == .windows) return error.CapabilityNotAvailable;
+    if (comptime builtin.os.tag == .wasi or builtin.os.tag == .windows or !build_options.cap_net) return error.CapabilityNotAvailable;
     if (comptime builtin.os.tag == .windows) return error.CapabilityError; // TODO: Winsock
     const conn = findConn(id) orelse return error.CapabilityError;
 
@@ -1193,7 +1217,7 @@ pub fn netRemoteAddr(id: u32) ![]u8 {
         const len = std.mem.indexOfScalar(u8, buf[0..], 0) orelse buf.len;
         return std.heap.page_allocator.dupe(u8, buf[0..len]) catch return error.OutOfMemory;
     }
-    if (comptime builtin.os.tag == .wasi or builtin.os.tag == .windows) return error.CapabilityNotAvailable;
+    if (comptime builtin.os.tag == .wasi or builtin.os.tag == .windows or !build_options.cap_net) return error.CapabilityNotAvailable;
     if (comptime builtin.os.tag == .windows) return error.CapabilityError; // TODO: Winsock
     const conn = findConn(id) orelse return error.CapabilityError;
 
@@ -1220,7 +1244,7 @@ pub fn netSetDeadline(id: u32, ms: i64) !void {
         if (h.callbacks.set_deadline) |fn_ptr| fn_ptr(conn.host_handle, ms, h.userdata);
         return;
     }
-    if (comptime builtin.os.tag == .wasi or builtin.os.tag == .windows) return error.CapabilityNotAvailable;
+    if (comptime builtin.os.tag == .wasi or builtin.os.tag == .windows or !build_options.cap_net) return error.CapabilityNotAvailable;
     if (comptime builtin.os.tag == .windows) return error.CapabilityError; // TODO: Winsock SO_RCVTIMEO DWORD
     const conn = findConn(id) orelse return error.CapabilityError;
     try posixSetSockOptTimeval(conn.socket, @intCast(std.posix.SO.RCVTIMEO), ms);
@@ -1233,7 +1257,7 @@ pub fn netSetReadDeadline(id: u32, ms: i64) !void {
         if (h.callbacks.set_read_deadline) |fn_ptr| fn_ptr(conn.host_handle, ms, h.userdata);
         return;
     }
-    if (comptime builtin.os.tag == .wasi or builtin.os.tag == .windows) return error.CapabilityNotAvailable;
+    if (comptime builtin.os.tag == .wasi or builtin.os.tag == .windows or !build_options.cap_net) return error.CapabilityNotAvailable;
     if (comptime builtin.os.tag == .windows) return error.CapabilityError; // TODO: Winsock SO_RCVTIMEO DWORD
     const conn = findConn(id) orelse return error.CapabilityError;
     try posixSetSockOptTimeval(conn.socket, @intCast(std.posix.SO.RCVTIMEO), ms);
@@ -1245,7 +1269,7 @@ pub fn netSetWriteDeadline(id: u32, ms: i64) !void {
         if (h.callbacks.set_write_deadline) |fn_ptr| fn_ptr(conn.host_handle, ms, h.userdata);
         return;
     }
-    if (comptime builtin.os.tag == .wasi or builtin.os.tag == .windows) return error.CapabilityNotAvailable;
+    if (comptime builtin.os.tag == .wasi or builtin.os.tag == .windows or !build_options.cap_net) return error.CapabilityNotAvailable;
     if (comptime builtin.os.tag == .windows) return error.CapabilityError; // TODO: Winsock SO_SNDTIMEO DWORD
     const conn = findConn(id) orelse return error.CapabilityError;
     try posixSetSockOptTimeval(conn.socket, @intCast(std.posix.SO.SNDTIMEO), ms);

@@ -189,6 +189,7 @@ pub const Runtime = struct {
         rt.heap_state.reset();
         rt.fs_mounts = fs_state.defaultState().*;
         rt.net_es = net_state.g_default_state;
+        rt.net_es.initArrays(std.heap.page_allocator) catch @panic("OOM");
         rt.http_es = http_state.g_default_state;
         // Point g_state at the new runtime's fields before clearNativeCaches so
         // netReset() doesn't operate on a stale prior runtime's net_es. g_state
@@ -253,6 +254,7 @@ pub const Runtime = struct {
         // (--net-listen-allow, etc.) registered before the Runtime exists carry over,
         // mirroring how fs_mounts seeds from fs_state.defaultState().
         self.net_es = net_state.g_default_state;
+        try self.net_es.initArrays(std.heap.page_allocator);
         net_state.setActive(&self.net_es);
         self.http_es = http_state.g_default_state;
         http_state.setActive(&self.http_es);
@@ -274,6 +276,7 @@ pub const Runtime = struct {
         self.chunk_state.deinitArrays(std.heap.page_allocator);
         std.heap.page_allocator.destroy(self.chunk_state);
         std.heap.page_allocator.destroy(self.repl);
+        self.net_es.deinitArrays(std.heap.page_allocator);
     }
 
     pub fn setPolicy(self: *Runtime, policy: vm.Policy) void {
