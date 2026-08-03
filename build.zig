@@ -558,7 +558,9 @@ pub fn build(b: *std.Build) void {
     // statically-linked native CLI, whereas Zig-built shared objects have
     // TLS/runtime-init interactions with the static musl binary that can
     // corrupt the library at load time.
+    const mkdir_lib = b.addSystemCommand(&.{ "mkdir", "-p", b.getInstallPath(.lib, "") });
     const build_ffi_test_lib = b.addSystemCommand(&.{ b.graph.zig_exe, "cc", "-shared", "-fPIC", "-target", "x86_64-linux-musl", "-nostdlib", "-fno-sanitize=all", "-Wl,-soname,libgengo_ffi_test.so", "-o" });
+    build_ffi_test_lib.step.dependOn(&mkdir_lib.step);
     build_ffi_test_lib.addFileArg(b.path("zig-out/lib/libgengo_ffi_test.so"));
     build_ffi_test_lib.addFileArg(b.path("tools/ffi_test_lib.c"));
     const run_native_cap = b.addRunArtifact(test_runner_exe);
