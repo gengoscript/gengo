@@ -293,12 +293,15 @@ fn fuseOnce(cs: *chunk.State, alloc: std.mem.Allocator) FuseError!bool {
     const new_cap = old_len; // fusion only shrinks
     const out = try alloc.alloc(u8, new_cap);
     defer alloc.free(out);
-    const out_lines = try alloc.alloc(u16, new_cap);
-    defer alloc.free(out_lines);
-    const out_cols = try alloc.alloc(u16, new_cap);
-    defer alloc.free(out_cols);
+    // Sparse line table for the fused output. Fusion only merges instructions,
+    // so the number of unique (line, col) transitions can only decrease.
+    const out_line_table = try alloc.alloc(chunk.LineEntry, @max(cs.line_table_count, 1));
+    defer alloc.free(out_line_table);
 
     var new_len: usize = 0;
+    var out_lt_count: usize = 0;
+    var last_lt_line: u16 = 0;
+    var last_lt_col: u16 = 0xffff;
     {
         var ip: usize = 0;
         while (ip < old_len) {
@@ -337,18 +340,35 @@ fn fuseOnce(cs: *chunk.State, alloc: std.mem.Allocator) FuseError!bool {
             }
             // Line/col attribution: the whole (possibly fused) emission
             // carries the source position of its first origin instruction.
-            var i: usize = start;
-            while (i < new_len) : (i += 1) {
-                out_lines[i] = cs.lines[src_pos];
-                out_cols[i] = cs.cols[src_pos];
+            // Record a sparse entry only when (line, col) changes.
+            const src_line = cs.lineAt(src_pos);
+            const src_col = cs.colAt(src_pos);
+            if (src_line != last_lt_line or src_col != last_lt_col) {
+                if (out_lt_count < out_line_table.len) {
+                    out_line_table[out_lt_count] = .{
+                        .ip = @intCast(start),
+                        .line = src_line,
+                        .col = src_col,
+                    };
+                    out_lt_count += 1;
+                    last_lt_line = src_line;
+                    last_lt_col = src_col;
+                }
             }
         }
     }
 
-    // Install: code, lines, cols, function entry ips, module boundaries.
+    // Install: code, line_table, function entry ips, module boundaries.
     @memcpy(cs.code[0..new_len], out[0..new_len]);
-    @memcpy(cs.lines[0..new_len], out_lines[0..new_len]);
-    @memcpy(cs.cols[0..new_len], out_cols[0..new_len]);
+    @memcpy(cs.line_table[0..out_lt_count], out_line_table[0..out_lt_count]);
+    cs.line_table_count = out_lt_count;
+    if (out_lt_count > 0) {
+        cs.last_emitted_line = out_line_table[out_lt_count - 1].line;
+        cs.last_emitted_col = out_line_table[out_lt_count - 1].col;
+    } else {
+        cs.last_emitted_line = 0;
+        cs.last_emitted_col = 0xffff;
+    }
     cs.code_len = new_len;
     for (cs.consts[0..cs.const_count]) |cv| {
         if (cv != .object) continue;

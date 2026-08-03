@@ -16,7 +16,7 @@ const native_ids = @import("native/native_ids.zig");
 pub const MaxStack = cfg.max_stack;
 pub const MaxFrames = cfg.max_frames;
 pub const MaxTempRoots = 128;
-pub const RuneCacheMax = 8192;
+pub const RuneCacheMax = 512;
 
 // On WASM, keep preset-sized backing arrays for the slices.
 const WasmBacking = if (builtin.target.cpu.arch == .wasm32) struct {

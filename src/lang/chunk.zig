@@ -28,6 +28,15 @@ pub const MaxStrSlices = MaxConst * 4;
 pub const MaxModuleBoundaries = 64;
 pub const MaxModuleSourcePath = 256;
 
+// Sparse source-position table: one entry per distinct (line, col) transition.
+// Only records positions where the line or column changes, so a 10 000-line
+// script with ~5 instructions per line uses ~10 000 entries rather than the
+// ~50 000 entries a dense table would require.  Saves ~3.9 MiB vs the old
+// []u16 × MaxCode dense approach.  lineAt/colAt do a binary search (error
+// path only — hot VM execution never calls them).
+pub const MaxLineEntries = 16384; // 16 384 × 8 B = 128 KiB
+pub const LineEntry = struct { ip: u32, line: u16, col: u16 };
+
 pub const ModuleBoundary = struct {
     ip_start: u32 = 0,
     path_len: u8 = 0,
@@ -38,8 +47,11 @@ pub const State = struct {
     // Large arrays are heap-allocated via initArrays() to keep g_default_state
     // (and the per-Runtime heap create()) tiny in the binary image.
     code: []u8 = &.{},
-    lines: []u16 = &.{},
-    cols: []u16 = &.{},
+    line_table: []LineEntry = &.{},
+    line_table_count: usize = 0,
+    // Last (line, col) written to line_table — dedup guard for emitByte.
+    last_emitted_line: u16 = 0,
+    last_emitted_col: u16 = 0xffff, // force first emitByte to always record
     consts: []Value = &.{},
     str_slices: []StringSlice = &.{},
     code_len: usize = 0,
@@ -99,8 +111,19 @@ pub const State = struct {
     pub fn emitByte(self: *State, b: u8, line: u32) !void {
         if (self.code_len >= MaxCode) return error.ChunkFull;
         self.code[self.code_len] = b;
-        self.lines[self.code_len] = @intCast(if (line > 0xffff) 0xffff else line);
-        self.cols[self.code_len] = self.pending_col;
+        const line16: u16 = @intCast(if (line > 0xffff) 0xffff else line);
+        if (line16 != self.last_emitted_line or self.pending_col != self.last_emitted_col) {
+            if (self.line_table_count < self.line_table.len) {
+                self.line_table[self.line_table_count] = .{
+                    .ip = @intCast(self.code_len),
+                    .line = line16,
+                    .col = self.pending_col,
+                };
+                self.line_table_count += 1;
+                self.last_emitted_line = line16;
+                self.last_emitted_col = self.pending_col;
+            }
+        }
         self.code_len += 1;
     }
 
@@ -475,6 +498,9 @@ pub const State = struct {
         self.verified = false;
         self.verified_code_len = 0;
         self.module_boundary_count = 0;
+        self.line_table_count = 0;
+        self.last_emitted_line = 0;
+        self.last_emitted_col = 0xffff;
     }
 
     pub fn codeLen(self: *const State) usize {
@@ -496,6 +522,17 @@ pub const State = struct {
     pub fn truncateTo(self: *State, pos: usize) void {
         self.code_len = pos;
         self.last_const_code_pos = null;
+        // Drop all line_table entries whose ip is >= pos.
+        var n = self.line_table_count;
+        while (n > 0 and self.line_table[n - 1].ip >= pos) n -= 1;
+        self.line_table_count = n;
+        if (n > 0) {
+            self.last_emitted_line = self.line_table[n - 1].line;
+            self.last_emitted_col = self.line_table[n - 1].col;
+        } else {
+            self.last_emitted_line = 0;
+            self.last_emitted_col = 0xffff;
+        }
     }
 
     pub fn deleteCodeRange(self: *State, start: usize, len: usize) void {
@@ -503,9 +540,24 @@ pub const State = struct {
         const tail_start = start + len;
         const new_len = self.code_len - len;
         std.mem.copyForwards(u8, self.code[start..new_len], self.code[tail_start..self.code_len]);
-        std.mem.copyForwards(u16, self.lines[start..new_len], self.lines[tail_start..self.code_len]);
-        std.mem.copyForwards(u16, self.cols[start..new_len], self.cols[tail_start..self.code_len]);
         self.code_len = new_len;
+        // Rebuild the sparse line table: drop entries in the deleted range and
+        // shift down ips for those that were after it.
+        var out: usize = 0;
+        for (self.line_table[0..self.line_table_count]) |e| {
+            if (e.ip >= start and e.ip < tail_start) continue; // deleted
+            const new_ip: u32 = if (e.ip >= tail_start) e.ip - @as(u32, @intCast(len)) else e.ip;
+            self.line_table[out] = .{ .ip = new_ip, .line = e.line, .col = e.col };
+            out += 1;
+        }
+        self.line_table_count = out;
+        if (out > 0) {
+            self.last_emitted_line = self.line_table[out - 1].line;
+            self.last_emitted_col = self.line_table[out - 1].col;
+        } else {
+            self.last_emitted_line = 0;
+            self.last_emitted_col = 0xffff;
+        }
         self.last_const_code_pos = null;
         self.std_call_patch_pos = null;
         self.verified = false;
@@ -548,10 +600,26 @@ pub const State = struct {
         return self.code[i];
     }
     pub fn lineAt(self: *const State, i: usize) u16 {
-        return self.lines[i];
+        const tbl = self.line_table[0..self.line_table_count];
+        if (tbl.len == 0 or tbl[0].ip > i) return 0;
+        var lo: usize = 0;
+        var hi: usize = tbl.len;
+        while (lo + 1 < hi) {
+            const mid = lo + (hi - lo) / 2;
+            if (tbl[mid].ip <= i) lo = mid else hi = mid;
+        }
+        return tbl[lo].line;
     }
     pub fn colAt(self: *const State, i: usize) u16 {
-        return self.cols[i];
+        const tbl = self.line_table[0..self.line_table_count];
+        if (tbl.len == 0 or tbl[0].ip > i) return 0;
+        var lo: usize = 0;
+        var hi: usize = tbl.len;
+        while (lo + 1 < hi) {
+            const mid = lo + (hi - lo) / 2;
+            if (tbl[mid].ip <= i) lo = mid else hi = mid;
+        }
+        return tbl[lo].col;
     }
 
     pub fn addModuleBoundary(self: *State, path: []const u8) void {
@@ -601,8 +669,7 @@ pub const State = struct {
 
     pub fn initArrays(self: *State, allocator: std.mem.Allocator) !void {
         self.code = try allocator.alloc(u8, MaxCode + CodePad);
-        self.lines = try allocator.alloc(u16, MaxCode);
-        self.cols = try allocator.alloc(u16, MaxCode);
+        self.line_table = try allocator.alloc(LineEntry, MaxLineEntries);
         self.consts = try allocator.alloc(Value, MaxConst);
         self.str_slices = try allocator.alloc(StringSlice, MaxStrSlices);
         self.obj_const_idxs = try allocator.alloc(u16, MaxConst);
@@ -610,14 +677,12 @@ pub const State = struct {
 
     pub fn deinitArrays(self: *State, allocator: std.mem.Allocator) void {
         if (self.code.len > 0) allocator.free(self.code);
-        if (self.lines.len > 0) allocator.free(self.lines);
-        if (self.cols.len > 0) allocator.free(self.cols);
+        if (self.line_table.len > 0) allocator.free(self.line_table);
         if (self.consts.len > 0) allocator.free(self.consts);
         if (self.str_slices.len > 0) allocator.free(self.str_slices);
         if (self.obj_const_idxs.len > 0) allocator.free(self.obj_const_idxs);
         self.code = &.{};
-        self.lines = &.{};
-        self.cols = &.{};
+        self.line_table = &.{};
         self.consts = &.{};
         self.str_slices = &.{};
         self.obj_const_idxs = &.{};

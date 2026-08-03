@@ -622,8 +622,9 @@ pub fn read(bytes: []const u8, cs: *chunk.State, hs: *heap.State, alloc: std.mem
     if (code_bytes.len > chunk.MaxCode) return error.CodeTooLarge;
     @memcpy(cs.code[0..code_bytes.len], code_bytes);
     cs.code_len = code_bytes.len;
-    @memset(cs.lines[0..code_bytes.len], 0);
-    @memset(cs.cols[0..code_bytes.len], 0);
+    cs.line_table_count = 0;
+    cs.last_emitted_line = 0;
+    cs.last_emitted_col = 0xffff;
 
     // FUNCTIONS/TYPES: parsed before CONSTANTS since FUNC_REF/TYPE_REF
     // constants index into them.
