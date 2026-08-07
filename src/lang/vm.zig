@@ -2455,10 +2455,15 @@ fn effectCheckExempt(comptime op: Op) bool {
         .get_local_const_sub_call_tail,
         .call_global_local_sub_const,
         .call_global_local_sub_const_tail,
+        .get_global_call,
+        .get_global_call_tail,
+        .call_global_global,
+        .call_global_global_tail,
         .ret,
         .ret_const,
         .get_local_ret,
         .add_ret,
+        .get_local_const_add_ret,
         .halt,
         .op_unreachable,
         // Variable effect: iterator steps push value(s)+true while iterating
@@ -3826,6 +3831,85 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 }
                 if (try tryTailCall(ctx, argc, pv)) continue;
                 try performCallIC(ctx, argc, pv, c_ic_base, c_ic_slot);
+            },
+            .get_global_call => {
+                const name_idx = opShort(ctx);
+                const g_ic_base = ctx.vs.ip;
+                const g_ic_slot: u16 = @intCast(opShort(ctx));
+                const argc_raw = opByte(ctx);
+                const argc = argc_raw & 0x7F;
+                const pv = (argc_raw & 0x80) != 0;
+                const c_ic_base = ctx.vs.ip;
+                const c_ic_slot: u16 = (@as(u16, ctx.cs.codeByteAt(c_ic_base)) << 8) | @as(u16, ctx.cs.codeByteAt(c_ic_base + 1));
+                ctx.vs.ip += 2;
+                const arg = try readGlobalIC(ctx, name_idx, g_ic_base, g_ic_slot);
+                try ctx.vs.vmPush(arg);
+                try performCallIC(ctx, argc, pv, c_ic_base, c_ic_slot);
+            },
+            .get_global_call_tail => {
+                const name_idx = opShort(ctx);
+                const g_ic_base = ctx.vs.ip;
+                const g_ic_slot: u16 = @intCast(opShort(ctx));
+                const argc_raw = opByte(ctx);
+                const argc = argc_raw & 0x7F;
+                const pv = (argc_raw & 0x80) != 0;
+                const c_ic_base = ctx.vs.ip;
+                const c_ic_slot: u16 = (@as(u16, ctx.cs.codeByteAt(c_ic_base)) << 8) | @as(u16, ctx.cs.codeByteAt(c_ic_base + 1));
+                ctx.vs.ip += 2;
+                const arg = try readGlobalIC(ctx, name_idx, g_ic_base, g_ic_slot);
+                try ctx.vs.vmPush(arg);
+                if (try tryTailCall(ctx, argc, pv)) continue;
+                try performCallIC(ctx, argc, pv, c_ic_base, c_ic_slot);
+            },
+            .call_global_global => {
+                const func_name_idx = opShort(ctx);
+                const f_ic_base = ctx.vs.ip;
+                const f_ic_slot: u16 = @intCast(opShort(ctx));
+                const arg_name_idx = opShort(ctx);
+                const a_ic_base = ctx.vs.ip;
+                const a_ic_slot: u16 = @intCast(opShort(ctx));
+                const argc_raw = opByte(ctx);
+                const argc = argc_raw & 0x7F;
+                const pv = (argc_raw & 0x80) != 0;
+                const c_ic_base = ctx.vs.ip;
+                const c_ic_slot: u16 = (@as(u16, ctx.cs.codeByteAt(c_ic_base)) << 8) | @as(u16, ctx.cs.codeByteAt(c_ic_base + 1));
+                ctx.vs.ip += 2;
+                const callee = try readGlobalIC(ctx, func_name_idx, f_ic_base, f_ic_slot);
+                const arg = try readGlobalIC(ctx, arg_name_idx, a_ic_base, a_ic_slot);
+                try ctx.vs.vmPush(callee);
+                try ctx.vs.vmPush(arg);
+                try performCallIC(ctx, argc, pv, c_ic_base, c_ic_slot);
+            },
+            .call_global_global_tail => {
+                const func_name_idx = opShort(ctx);
+                const f_ic_base = ctx.vs.ip;
+                const f_ic_slot: u16 = @intCast(opShort(ctx));
+                const arg_name_idx = opShort(ctx);
+                const a_ic_base = ctx.vs.ip;
+                const a_ic_slot: u16 = @intCast(opShort(ctx));
+                const argc_raw = opByte(ctx);
+                const argc = argc_raw & 0x7F;
+                const pv = (argc_raw & 0x80) != 0;
+                const c_ic_base = ctx.vs.ip;
+                const c_ic_slot: u16 = (@as(u16, ctx.cs.codeByteAt(c_ic_base)) << 8) | @as(u16, ctx.cs.codeByteAt(c_ic_base + 1));
+                ctx.vs.ip += 2;
+                const callee = try readGlobalIC(ctx, func_name_idx, f_ic_base, f_ic_slot);
+                const arg = try readGlobalIC(ctx, arg_name_idx, a_ic_base, a_ic_slot);
+                try ctx.vs.vmPush(callee);
+                try ctx.vs.vmPush(arg);
+                if (try tryTailCall(ctx, argc, pv)) continue;
+                try performCallIC(ctx, argc, pv, c_ic_base, c_ic_slot);
+            },
+            .get_local_const_add_ret => {
+                vmperf.breakOpChain();
+                if (ctx.vs.frame_top == 0) return error.ImpossibleOpcodeState;
+                const p = try readLocalSlotAndConst(ctx);
+                const a = try readLocalSlot(ctx, p.slot);
+                const retval = if (a == .int and p.k == .int)
+                    try checkedIntAdd(ctx, a.int, p.k.int)
+                else
+                    try computeAddResult(ctx, a, p.k);
+                if (try doReturn(ctx, retval)) return true;
             },
             .get_local_const_add => {
                 const p = try readLocalSlotAndConst(ctx);

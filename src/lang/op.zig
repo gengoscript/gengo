@@ -380,11 +380,20 @@ pub const Op = enum(u8) {
     // Layout: [op][name_hi][name_lo][ic_hi][ic_lo][add_skip][val_hi][val_lo][off_b3..b0]
     // (12 bytes). off base = start+12; backward: target = start+12-off
     inc_global_const_loop_nc = 0xE4,
-    reserved_e5 = 0xE5,
-    reserved_e6 = 0xE6,
-    reserved_e7 = 0xE7,
-    reserved_e8 = 0xE8,
-    reserved_e9 = 0xE9,
+
+    // Fused get_local_const_add+ret: load local, add constant, return.
+    // Layout: [op][slot][skip=const_add][idx_hi][idx_lo] (5 bytes)
+    get_local_const_add_ret = 0xE5,
+
+    // Fused get_global+call: load global arg (last), call with argc (>0).
+    // Layout: [op][name_hi][name_lo][ic_hi][ic_lo][argc][c_ic_hi][c_ic_lo] (8 bytes)
+    get_global_call = 0xE6,
+    get_global_call_tail = 0xE7,
+
+    // Fused get_global(func)+get_global_call: load func and last arg globally, call.
+    // Layout: [op][f_hi][f_lo][f_ic_hi][f_ic_lo][a_hi][a_lo][a_ic_hi][a_ic_lo][argc][c_ic_hi][c_ic_lo] (12 bytes)
+    call_global_global = 0xE8,
+    call_global_global_tail = 0xE9,
     reserved_ea = 0xEA,
     reserved_eb = 0xEB,
     reserved_ec = 0xEC,

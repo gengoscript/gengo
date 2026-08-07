@@ -1760,10 +1760,25 @@ fn findFirstCallIc(c: *chunk.State) ?struct { offset: usize, slot: u16 } {
     var ip: usize = 0;
     while (ip < c.code_len) {
         const op: Op = @enumFromInt(c.code[ip]);
-        if (op == .call) {
-            if (ip + 3 >= c.code_len) return null;
-            const slot: u16 = (@as(u16, c.code[ip + 2]) << 8) | c.code[ip + 3];
-            return .{ .offset = ip, .slot = slot };
+        switch (op) {
+            .call => {
+                if (ip + 3 >= c.code_len) return null;
+                const slot: u16 = (@as(u16, c.code[ip + 2]) << 8) | c.code[ip + 3];
+                return .{ .offset = ip, .slot = slot };
+            },
+            // call IC is at bytes 6-7 of get_global_call
+            .get_global_call, .get_global_call_tail => {
+                if (ip + 7 >= c.code_len) return null;
+                const slot: u16 = (@as(u16, c.code[ip + 6]) << 8) | c.code[ip + 7];
+                return .{ .offset = ip, .slot = slot };
+            },
+            // call IC is at bytes 10-11 of call_global_global
+            .call_global_global, .call_global_global_tail => {
+                if (ip + 11 >= c.code_len) return null;
+                const slot: u16 = (@as(u16, c.code[ip + 10]) << 8) | c.code[ip + 11];
+                return .{ .offset = ip, .slot = slot };
+            },
+            else => {},
         }
         const decoded = c.decodeAt(ip) catch return null;
         ip += decoded.width;
@@ -1986,11 +2001,12 @@ test "compiler: get_local_const_sub triple fusion result" {
 test "compiler: get_local_const_add triple fusion fires" {
     var rt = try setup();
     defer rt.deinit();
+    // get_local_const_add + ret fuses further to get_local_const_add_ret
     try compile(&rt, "func f(x int) int { return x + 1 }");
     const c = rt.chunk_state;
     var found = false;
     for (c.code[0..c.code_len]) |op| {
-        if (op == @intFromEnum(Op.get_local_const_add)) {
+        if (op == @intFromEnum(Op.get_local_const_add_ret)) {
             found = true;
             break;
         }

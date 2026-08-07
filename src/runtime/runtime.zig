@@ -170,6 +170,9 @@ pub const Runtime = struct {
     // Runtime sitting in a default-initialized array slot, e.g. engine.zig's
     // engine_slots, that was never actually init'd/initWithConfig'd).
     initialized: bool = false,
+    // When true, skip the fusion pass after compilation. Bytecode runs on core
+    // ops only — correct but slower. Useful for A/B testing fusion value.
+    skip_fusion: bool = false,
 
     pub fn init() Runtime {
         var rt: Runtime = .{};
@@ -441,7 +444,7 @@ pub const Runtime = struct {
                 return err;
             };
             if (test_mode) self.copyTestNamesFromSession(session);
-            try fusion_pass.fuse(self.chunk_state, self.vm_state.allocator);
+            if (!self.skip_fusion) try fusion_pass.fuse(self.chunk_state, self.vm_state.allocator);
             return;
         }
 
@@ -464,7 +467,7 @@ pub const Runtime = struct {
             return err;
         };
         if (test_mode) self.copyTestNamesFromCompiler(&compiler);
-        try fusion_pass.fuse(self.chunk_state, self.vm_state.allocator);
+        if (!self.skip_fusion) try fusion_pass.fuse(self.chunk_state, self.vm_state.allocator);
     }
 
     pub fn compileOnly(self: *Runtime, src: []const u8, path: []const u8, provider: module_compile.SourceProvider) !void {
@@ -508,7 +511,7 @@ pub const Runtime = struct {
         self.reset();
         self.vm_state.setPolicy(self.policy);
         try gbc_reader.read(bytes, self.chunk_state, &self.heap_state, self.vm_state.allocator);
-        try fusion_pass.fuse(self.chunk_state, self.vm_state.allocator);
+        if (!self.skip_fusion) try fusion_pass.fuse(self.chunk_state, self.vm_state.allocator);
 
         const install_ctx: vms.VMContext = .{ .cs = self.chunk_state, .gs = &self.globals_state, .hs = &self.heap_state, .vs = &self.vm_state };
         try vmnative.installStdGlobal(install_ctx, &self.globals_state);
@@ -700,7 +703,7 @@ pub const Runtime = struct {
             self.setLastCompilePath("");
             return err;
         };
-        try fusion_pass.fuse(self.chunk_state, self.vm_state.allocator);
+        if (!self.skip_fusion) try fusion_pass.fuse(self.chunk_state, self.vm_state.allocator);
 
         for (compiler.registry.func_buckets) |e| {
             if (!e.occupied or !e.is_const) continue;

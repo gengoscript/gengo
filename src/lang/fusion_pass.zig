@@ -78,6 +78,8 @@ fn pairFusion(a: Op, b: Op, same_slot: bool) ?Op {
             .const_lt => .get_global_const_lt,
             .get_local_const_sub_call => .call_global_local_sub_const,
             .get_local_const_sub_call_tail => .call_global_local_sub_const_tail,
+            .get_global_call => .call_global_global,
+            .get_global_call_tail => .call_global_global_tail,
             else => null,
         },
         .get_local_const_sub => switch (b) {
@@ -104,7 +106,14 @@ fn pairFusionFull(cs: *const chunk.State, a_pos: usize, a: Op, b_pos: usize, b: 
     if (a == .get_local_const_add) {
         // Two continuations share one source op.
         if (b == .set_local and cs.code[a_pos + 1] == cs.code[b_pos + 1]) return .local_add_const;
+        if (b == .ret) return .get_local_const_add_ret;
         return null;
+    }
+    if (a == .get_global) {
+        // get_global arg + call N (N > 0): the get_global is loading the last arg,
+        // so only safe when argc > 0 (argc = 0 means get_global IS the function).
+        if (b == .call and (cs.code[b_pos + 1] & 0x7F) > 0) return .get_global_call;
+        if (b == .call_tail and (cs.code[b_pos + 1] & 0x7F) > 0) return .get_global_call_tail;
     }
     if (a == .get_global_const_add) {
         // g = g + k: only when both name operands agree.
@@ -441,6 +450,9 @@ fn fusedWidth(f: Op) usize {
         .field_add_const => 15,
         .get_local_ret => 2,
         .add_ret => 1,
+        .get_local_const_add_ret => 5,
+        .get_global_call, .get_global_call_tail => 8,
+        .call_global_global, .call_global_global_tail => 12,
         else => unreachable,
     };
 }
@@ -605,6 +617,22 @@ fn emitFused(cs: *const chunk.State, f: Op, a_pos: usize, a_inst: chunk_decoder.
         },
         .get_local_ret => out[start + 1] = cs.code[a_pos + 1],
         .add_ret => {},
+        // [glcar][slot][skip=const_add][idx_hi][idx_lo] — copy operand bytes from a (get_local_const_add)
+        .get_local_const_add_ret => @memcpy(out[start + 1 ..][0..4], cs.code[a_pos + 1 ..][0..4]),
+        // [ggc][name_hi][name_lo][ic_hi][ic_lo][argc][c_ic_hi=FF][c_ic_lo=FF]
+        // a=get_global(5), b=call/call_tail(4)
+        .get_global_call, .get_global_call_tail => {
+            @memcpy(out[start + 1 ..][0..4], cs.code[a_pos + 1 ..][0..4]); // name + g_ic (cold)
+            out[start + 5] = cs.code[b_pos + 1]; // argc byte
+            out[start + 6] = 0xFF; // c_ic cold
+            out[start + 7] = 0xFF;
+        },
+        // [cgg][f_hi][f_lo][f_ic_hi][f_ic_lo][a_hi][a_lo][a_ic_hi][a_ic_lo][argc][c_ic_hi][c_ic_lo]
+        // a=get_global(5), b=get_global_call/tail(8)
+        .call_global_global, .call_global_global_tail => {
+            @memcpy(out[start + 1 ..][0..4], cs.code[a_pos + 1 ..][0..4]); // func name + f_ic
+            @memcpy(out[start + 5 ..][0..7], cs.code[b_pos + 1 ..][0..7]); // arg name + a_ic + argc + c_ic
+        },
         else => unreachable,
     }
     return w;

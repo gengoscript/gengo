@@ -466,6 +466,7 @@ fn runCli(argv: []const []const u8) void {
     var test_mode: bool = false;
     var profile_mode: bool = false;
     var disasm_mode: bool = false;
+    var no_fusion: bool = false;
     var emit_gbc_path: ?[]const u8 = null;
     var cap_names: [16][]const u8 = undefined;
     var cap_count: usize = 0;
@@ -490,6 +491,7 @@ fn runCli(argv: []const []const u8) void {
             io.write("  --help, -h         Show this help message\n");
             io.write("  --version          Print version and exit\n");
             io.write("  --disasm           Compile and print bytecode disassembly; do not run\n");
+            io.write("  --no-fusion        Skip the fusion pass; run on core ops only (for A/B testing)\n");
             io.write("  --emit-gbc <path>  Compile and write a GBC bytecode cache file; do not run\n");
             io.write("  --test             Run test blocks in the script\n");
             io.write("  --profile          With --test, report peak ops/heap/stack/objects per block\n");
@@ -670,6 +672,11 @@ fn runCli(argv: []const []const u8) void {
             script_index += 1;
             continue;
         }
+        if (std.mem.eql(u8, a, "--no-fusion")) {
+            no_fusion = true;
+            script_index += 1;
+            continue;
+        }
         if (std.mem.eql(u8, a, "--emit-gbc")) {
             if (script_index + 1 >= argv.len) {
                 io.werr("gengo: --emit-gbc requires a path argument\n");
@@ -769,6 +776,7 @@ fn runCli(argv: []const []const u8) void {
         io.werr("gengo: runtime init failed\n");
         die(1);
     };
+    if (no_fusion) runtime.skip_fusion = true;
     if (cap_count > 0) {
         runtime.enabled_capabilities = cap_names[0..cap_count];
     }

@@ -309,13 +309,21 @@ pub fn build(b: *std.Build) void {
     engine_native_release_step.dependOn(&install_engine_native_release.step);
 
     // ── Lexer unit tests (native Zig test runner) ─────────────────────────────
+    // All native test steps use the standalone runner (tools/standalone_runner.zig)
+    // to avoid the --listen=- IPC protocol. The IPC channel on fd 0/1 conflicts
+    // with gengo tests that read stdin or write stdout (e.g. allow_io tests,
+    // chaos_spec_test progress prints). Standalone mode writes only to stderr.
+    const standalone_runner: std.Build.Step.Compile.TestRunner = .{
+        .path = b.path("tools/standalone_runner.zig"),
+        .mode = .simple,
+    };
 
     const lexer_test_mod = b.createModule(.{
         .root_source_file = b.path("src/lang/lexer.zig"),
         .target = b.graph.host,
         .optimize = .Debug,
     });
-    const lexer_test = b.addTest(.{ .root_module = lexer_test_mod });
+    const lexer_test = b.addTest(.{ .root_module = lexer_test_mod, .test_runner = standalone_runner });
     const run_lexer_tests = b.addRunArtifact(lexer_test);
 
     const lexer_test_step = b.step("lexer-test", "Run lexer unit tests");
@@ -326,7 +334,7 @@ pub fn build(b: *std.Build) void {
         .target = b.graph.host,
         .optimize = .Debug,
     });
-    const build_test = b.addTest(.{ .root_module = build_test_mod });
+    const build_test = b.addTest(.{ .root_module = build_test_mod, .test_runner = standalone_runner });
     const run_build_tests = b.addRunArtifact(build_test);
 
     const build_test_step = b.step("build-test", "Run build graph contract tests");
@@ -339,7 +347,7 @@ pub fn build(b: *std.Build) void {
     });
     engine_api_test_mod.addImport("build_options", build_opts_mod);
     engine_api_test_mod.addImport("runtime_config", runtime_config_mod);
-    const engine_api_test = b.addTest(.{ .root_module = engine_api_test_mod });
+    const engine_api_test = b.addTest(.{ .root_module = engine_api_test_mod, .test_runner = standalone_runner });
     const run_engine_api_tests = b.addRunArtifact(engine_api_test);
 
     const engine_api_test_step = b.step("engine-api-test", "Run native engine C API tests");
@@ -355,7 +363,7 @@ pub fn build(b: *std.Build) void {
     });
     heap_test_mod.addImport("build_options", build_opts_mod);
     heap_test_mod.addImport("runtime_config", runtime_config_mod);
-    const heap_test = b.addTest(.{ .root_module = heap_test_mod });
+    const heap_test = b.addTest(.{ .root_module = heap_test_mod, .test_runner = standalone_runner });
     const run_heap_tests = b.addRunArtifact(heap_test);
 
     const heap_test_step = b.step("heap-test", "Run heap and GC invariant tests");
@@ -370,7 +378,7 @@ pub fn build(b: *std.Build) void {
     });
     compiler_test_mod.addImport("build_options", build_opts_mod);
     compiler_test_mod.addImport("runtime_config", runtime_config_mod);
-    const compiler_test = b.addTest(.{ .root_module = compiler_test_mod });
+    const compiler_test = b.addTest(.{ .root_module = compiler_test_mod, .test_runner = standalone_runner });
     const run_compiler_tests = b.addRunArtifact(compiler_test);
 
     const compiler_test_step = b.step("compiler-test", "Run compiler bytecode output tests");
@@ -385,7 +393,7 @@ pub fn build(b: *std.Build) void {
     });
     embedding_frag_test_mod.addImport("build_options", build_opts_mod);
     embedding_frag_test_mod.addImport("runtime_config", runtime_config_mod);
-    const embedding_frag_test = b.addTest(.{ .root_module = embedding_frag_test_mod });
+    const embedding_frag_test = b.addTest(.{ .root_module = embedding_frag_test_mod, .test_runner = standalone_runner });
     const run_embedding_frag_tests = b.addRunArtifact(embedding_frag_test);
 
     const embedding_frag_test_step = b.step("embedding-frag-test", "Run long-lived embedding fragmentation harness tests");
@@ -400,7 +408,7 @@ pub fn build(b: *std.Build) void {
     });
     chaos_spec_test_mod.addImport("build_options", build_opts_mod);
     chaos_spec_test_mod.addImport("runtime_config", runtime_config_mod);
-    const chaos_spec_test = b.addTest(.{ .root_module = chaos_spec_test_mod });
+    const chaos_spec_test = b.addTest(.{ .root_module = chaos_spec_test_mod, .test_runner = standalone_runner });
     const run_chaos_spec_tests = b.addRunArtifact(chaos_spec_test);
 
     const chaos_spec_test_step = b.step("chaos-spec-test", "Run chaos and spec/fail cases in-process");

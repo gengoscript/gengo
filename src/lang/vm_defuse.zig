@@ -60,6 +60,12 @@ fn expandedWidth(op: Op, old_width: usize) usize {
         .local_add_const_loop => 13, // get_local(2)+constant(3)+add(1)+set_local(2)+loop(5)
         // Hexa-fused get_global+get_local_const_sub_call: same 13 bytes, just byte 0 changes
         .call_global_local_sub_const, .call_global_local_sub_const_tail => 13, // get_global(5)+get_local_const_sub_call(8)
+        // Fused get_local_const_add+ret
+        .get_local_const_add_ret => 7, // get_local(2)+constant(3)+add(1)+ret(1)
+        // Fused get_global+call variants
+        .get_global_call, .get_global_call_tail => 9, // get_global(5)+call(4)
+        // Fused get_global+get_global_call variants
+        .call_global_global, .call_global_global_tail => 13, // get_global(5)+get_global_call(8)
         // Fused get_global_const_add+set_global (same global): expands to 8+5=13 bytes
         .inc_global_const => 13, // get_global_const_add(8)+set_global(5)
         // Fused inc_global_const+close_upvalue_loop: expands to 8+2+5=15 bytes
@@ -380,6 +386,55 @@ fn emitExpanded(
             for (1..5) |i| dst[i] = rb(code, old_ip, i);
             dst[5] = opByte(.get_local_const_sub_call_tail);
             for (6..13) |i| dst[i] = rb(code, old_ip, i);
+        },
+
+        // ── get_local_const_add + ret ─────────────────────────────────────────
+        // Layout: [glcar][slot][skip=const_add][idx_hi][idx_lo] (5 bytes)
+        // Expands to: get_local(2) + constant(3) + add(1) + ret(1) = 7 bytes
+        .get_local_const_add_ret => {
+            dst[0] = opByte(.get_local);
+            dst[1] = rb(code, old_ip, 1);
+            dst[2] = opByte(.constant);
+            dst[3] = rb(code, old_ip, 3);
+            dst[4] = rb(code, old_ip, 4);
+            dst[5] = opByte(.add);
+            dst[6] = opByte(.ret);
+        },
+
+        // ── get_global + call ─────────────────────────────────────────────────
+        // Layout: [op][name_hi][name_lo][ic_hi][ic_lo][argc][c_ic_hi][c_ic_lo] (8 bytes)
+        // Expands to: get_global(5) + call(4) = 9 bytes
+        .get_global_call => {
+            dst[0] = opByte(.get_global);
+            for (1..5) |i| dst[i] = rb(code, old_ip, i);
+            dst[5] = opByte(.call);
+            dst[6] = rb(code, old_ip, 5);
+            dst[7] = 0xFF; // call IC cold
+            dst[8] = 0xFF;
+        },
+        .get_global_call_tail => {
+            dst[0] = opByte(.get_global);
+            for (1..5) |i| dst[i] = rb(code, old_ip, i);
+            dst[5] = opByte(.call_tail);
+            dst[6] = rb(code, old_ip, 5);
+            dst[7] = 0xFF;
+            dst[8] = 0xFF;
+        },
+
+        // ── get_global + get_global_call ─────────────────────────────────────
+        // Layout: [op][f_hi][f_lo][f_ic_hi][f_ic_lo][a_hi][a_lo][a_ic_hi][a_ic_lo][argc][c_ic_hi][c_ic_lo] (12 bytes)
+        // Expands to: get_global(5) + get_global_call(8) = 13 bytes
+        .call_global_global => {
+            dst[0] = opByte(.get_global);
+            for (1..5) |i| dst[i] = rb(code, old_ip, i); // func name + f_ic
+            dst[5] = opByte(.get_global_call);
+            for (0..7) |i| dst[6 + i] = rb(code, old_ip, 5 + i); // arg name,a_ic,argc,c_ic
+        },
+        .call_global_global_tail => {
+            dst[0] = opByte(.get_global);
+            for (1..5) |i| dst[i] = rb(code, old_ip, i); // func name + f_ic
+            dst[5] = opByte(.get_global_call_tail);
+            for (0..7) |i| dst[6 + i] = rb(code, old_ip, 5 + i); // arg name,a_ic,argc,c_ic
         },
 
         // ── fused local_add_const + loop ─────────────────────────────────────
