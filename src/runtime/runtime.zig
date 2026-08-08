@@ -9,6 +9,9 @@ const fusion_pass = @import("../lang/fusion_pass.zig");
 const gbc_reader = @import("../lang/gbc_reader.zig");
 const vm = @import("../lang/vm.zig");
 const vms = @import("../lang/vm_state.zig");
+// Aliased (not `task_state`) to avoid colliding with the `task_state` field
+// below — same reasoning as `vms` vs. the `vm_state` field.
+const tasks_mod = @import("../lang/task_state.zig");
 const vmnative = @import("../lang/vm_native.zig");
 const net_state = @import("../lang/native/net_state.zig");
 const http_state = @import("../lang/native/http_state.zig");
@@ -149,6 +152,10 @@ pub const Runtime = struct {
     globals_state: globals.State = .{},
     heap_state: heap.State = .{},
     vm_state: vm.State = .{},
+    // Task/actor scheduler table (dev-docs/design/task-actor-design.md).
+    // vm_state above is task 0's (main's) own execution state; every other
+    // live task gets its own vm_state.State owned by a task_state slot.
+    task_state: tasks_mod.State = .{},
     // Per-runtime cap:fs mount table; activate() points the fs_state module at
     // it. Seeded from the process default so CLI --mount flags (registered
     // before the Runtime exists) carry over.
@@ -190,6 +197,8 @@ pub const Runtime = struct {
         vm.setActive(&rt.vm_state);
         rt.vm_state.reset();
         rt.heap_state.reset();
+        tasks_mod.setActive(&rt.task_state);
+        rt.task_state.reset();
         rt.fs_mounts = fs_state.defaultState().*;
         rt.net_es = net_state.g_default_state;
         rt.net_es.initArrays(std.heap.page_allocator) catch @panic("OOM");
@@ -248,6 +257,8 @@ pub const Runtime = struct {
         vm.setActive(&self.vm_state);
         self.vm_state.reset();
         self.heap_state.reset();
+        tasks_mod.setActive(&self.task_state);
+        self.task_state.reset();
         self.fs_mounts = fs_state.defaultState().*;
         fs_state.setActive(&self.fs_mounts);
         // Seed per-runtime net/http state from the process default so CLI flags
@@ -270,6 +281,7 @@ pub const Runtime = struct {
         // engine_destroy fix for the concrete bug this class of guard closes.
         if (!self.initialized) return;
         self.initialized = false;
+        self.task_state.deinit();
         self.vm_state.deinit();
         self.heap_state.deinit();
         self.globals_state.deinitArrays(std.heap.page_allocator);
@@ -291,6 +303,7 @@ pub const Runtime = struct {
         self.vm_state.reset();
         self.heap_state.reset();
         self.chunk_state.reset();
+        self.task_state.reset();
         self.repl.sym_count = 0;
         self.repl.sym_name_buf_used = 0;
         self.repl.enum_member_buf_used = 0;
@@ -1038,6 +1051,7 @@ pub const Runtime = struct {
         globals.setActive(&self.globals_state);
         heap.setActive(&self.heap_state);
         vm.setActive(&self.vm_state);
+        tasks_mod.setActive(&self.task_state);
         fs_state.setActive(&self.fs_mounts);
         net_state.setActive(&self.net_es);
         http_state.setActive(&self.http_es);
