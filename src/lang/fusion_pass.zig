@@ -379,24 +379,43 @@ fn fuseOnce(cs: *chunk.State, alloc: std.mem.Allocator) FuseError!bool {
         cs.last_emitted_col = 0xffff;
     }
     cs.code_len = new_len;
+    // A FuncObj pointer may be referenced by multiple const-pool entries
+    // (e.g. a named_type entry and its predicate closure, plus a duplicate
+    // named_type entry added by emitNamedTypeValidationOp). Guard against
+    // double-remapping the same FuncObj, which would index ip_map with an
+    // already-remapped value — an uninitialized slot → 0xAAAAAAAA.
+    var seen_func_ptrs = std.AutoHashMap(usize, void).init(alloc);
+    defer seen_func_ptrs.deinit();
     for (cs.consts[0..cs.const_count]) |cv| {
         if (cv != .object) continue;
         switch (cv.object.*) {
             .function => |*f| {
+                const gop = try seen_func_ptrs.getOrPut(@intFromPtr(cv.object));
+                if (gop.found_existing) continue;
                 if (f.ip <= old_len) f.ip = ip_map[f.ip];
             },
             .closure => |*cl| {
-                if (cl.func.* == .function and cl.func.function.ip <= old_len)
-                    cl.func.function.ip = ip_map[cl.func.function.ip];
+                if (cl.func.* == .function) {
+                    const gop = try seen_func_ptrs.getOrPut(@intFromPtr(cl.func));
+                    if (gop.found_existing) continue;
+                    if (cl.func.function.ip <= old_len)
+                        cl.func.function.ip = ip_map[cl.func.function.ip];
+                }
             },
             .named_type => |nt| {
                 if (nt.predicate) |pred| switch (pred.*) {
                     .function => |*f| {
+                        const gop = try seen_func_ptrs.getOrPut(@intFromPtr(pred));
+                        if (gop.found_existing) continue;
                         if (f.ip <= old_len) f.ip = ip_map[f.ip];
                     },
                     .closure => |*cl| {
-                        if (cl.func.* == .function and cl.func.function.ip <= old_len)
-                            cl.func.function.ip = ip_map[cl.func.function.ip];
+                        if (cl.func.* == .function) {
+                            const gop = try seen_func_ptrs.getOrPut(@intFromPtr(cl.func));
+                            if (gop.found_existing) continue;
+                            if (cl.func.function.ip <= old_len)
+                                cl.func.function.ip = ip_map[cl.func.function.ip];
+                        }
                     },
                     else => {},
                 };
