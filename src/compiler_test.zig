@@ -1757,7 +1757,7 @@ fn runSrc(rt: *Runtime, src: []const u8) !void {
 }
 
 fn findFirstCallIc(c: *chunk.State) ?struct { offset: usize, slot: u16 } {
-    var ip: usize = 0;
+    var ip: usize = c.std_script_code_end;
     while (ip < c.code_len) {
         const op: Op = @enumFromInt(c.code[ip]);
         switch (op) {
@@ -3467,8 +3467,11 @@ test "compiler: function returning a named type is not returns_proven" {
 
 fn countOp(c: *chunk.State, op: Op) usize {
     var count: usize = 0;
-    for (c.code[0..c.code_len]) |byte| {
-        if (byte == @intFromEnum(op)) count += 1;
+    var ip: usize = c.std_script_code_end;
+    while (ip < c.code_len) {
+        const inst = chunk_decoder.decodeAt(c, ip) catch break;
+        if (inst.op == op) count += 1;
+        ip += inst.width;
     }
     return count;
 }

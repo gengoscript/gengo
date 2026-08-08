@@ -1683,6 +1683,8 @@ pub fn parseFieldTypeSpec(c: anytype) !FieldTypeSpec {
                     alt = .{ .typ = .error_t };
                 } else if (common.streq(tname, "bigint")) {
                     alt = .{ .typ = .any };
+                } else if (common.streq(tname, "any")) {
+                    alt = .{ .typ = .any };
                 } else if (common.streq(tname, "array")) {
                     return c.err("use '[]T' syntax for array types", .{});
                 } else if (common.streq(tname, "map")) {

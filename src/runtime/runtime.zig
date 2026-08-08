@@ -429,7 +429,27 @@ pub const Runtime = struct {
         }
     }
 
+    fn compileStdScripts(self: *Runtime) !void {
+        const base: u16 = @intCast(self.chunk_state.const_count);
+        const src = @embedFile("../lang/native/std_scripts/array.gengo");
+        var compiler = try Compiler.init(src, self.chunk_state, &self.heap_state, .{
+            .module_path = "@std_script:array",
+            .module_prefix = "@std_script:array",
+            .module_global_name = "@std_script:array",
+            .module_struct_name = "@std_script:array",
+        });
+        defer compiler.deinit();
+        compiler.compile(false) catch |err| {
+            self.recordCompilerCompileError(&compiler, "@std_script:array");
+            return err;
+        };
+        self.chunk_state.std_script_const_base = base;
+        self.chunk_state.std_script_const_count = @intCast(self.chunk_state.const_count - base);
+        self.chunk_state.std_script_code_end = self.chunk_state.code_len;
+    }
+
     fn compileProgram(self: *Runtime, src: []const u8, path: []const u8, provider: module_compile.SourceProvider, test_mode: bool) !void {
+        try self.compileStdScripts();
         const hm_names = try self.buildHostModuleNames();
         const caps = self.capabilityModules();
         if (path.len != 0) {

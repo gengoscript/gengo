@@ -102,6 +102,14 @@ pub const State = struct {
     module_boundaries: [MaxModuleBoundaries]ModuleBoundary = undefined,
     module_boundary_count: u8 = 0,
 
+    // Range of const pool entries for compiled std script functions.
+    // Set by runtime.compileStdScripts(); zero when not compiled (e.g. REPL).
+    std_script_const_base: u16 = 0,
+    std_script_const_count: u16 = 0,
+    // End of std-script bytecode in the code buffer; user code starts here.
+    // Set by runtime.compileStdScripts(); zero when not compiled.
+    std_script_code_end: usize = 0,
+
     // ── State methods (used by the compiler via an explicit *State pointer) ────────
 
     pub fn setCol(self: *State, col: u32) void {
@@ -501,6 +509,9 @@ pub const State = struct {
         self.line_table_count = 0;
         self.last_emitted_line = 0;
         self.last_emitted_col = 0xffff;
+        self.std_script_const_base = 0;
+        self.std_script_const_count = 0;
+        self.std_script_code_end = 0;
     }
 
     pub fn codeLen(self: *const State) usize {

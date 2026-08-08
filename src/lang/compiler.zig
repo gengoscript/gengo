@@ -2354,7 +2354,7 @@ pub const Compiler = struct {
         };
         switch (kind) {
             .namespace => self.std_namespace_path = field,
-            .function, .value => self.std_namespace_path = null,
+            .function, .value, .script_function => self.std_namespace_path = null,
         }
         self.import_module_path = null;
     }

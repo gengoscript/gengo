@@ -21,7 +21,7 @@ pub const NativeMethod = struct {
     arity: u8,
 };
 
-pub const StdExportKind = enum { namespace, function, value };
+pub const StdExportKind = enum { namespace, function, value, script_function };
 
 pub const StdTopLevelMember = enum {
     io,
@@ -255,6 +255,7 @@ pub const arrayExports = [_]StdNamespaceExport{
     .{ .name = "all", .kind = .function, .native_id = .array_all, .arity = 2 },
     .{ .name = "any", .kind = .function, .native_id = .array_any, .arity = 2 },
     .{ .name = "chunk", .kind = .function, .native_id = .array_chunk, .arity = 2 },
+    .{ .name = "count", .kind = .script_function, .arity = 2 },
 };
 
 pub const randExports = [_]StdNamespaceExport{

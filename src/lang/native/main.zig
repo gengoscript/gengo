@@ -135,7 +135,7 @@ pub fn buildStdModule(ctx: vms.VMContext) !*Object {
     var math_entries: [module_descriptor.mathExports.len]NamespaceEntry = undefined;
     for (module_descriptor.mathExports, 0..) |entry, i| {
         math_entries[i] = .{ .name = entry.name, .value = switch (entry.kind) {
-            .namespace => unreachable,
+            .namespace, .script_function => unreachable,
             .function => try makeNative(ctx, entry.native_id.?, entry.arity),
             .value => .{ .float = entry.float_value },
         } };
@@ -171,7 +171,7 @@ pub fn buildStdModule(ctx: vms.VMContext) !*Object {
     var json_entries: [module_descriptor.jsonExports.len]NamespaceEntry = undefined;
     for (module_descriptor.jsonExports, 0..) |entry, i| {
         json_entries[i] = .{ .name = entry.name, .value = switch (entry.kind) {
-            .namespace => unreachable,
+            .namespace, .script_function => unreachable,
             .function => try makeNative(ctx, entry.native_id.?, entry.arity),
             .value => if (entry.is_type_object) .{ .object = jv_type_obj } else .{ .int = entry.int_value },
         } };
@@ -195,7 +195,7 @@ pub fn buildStdModule(ctx: vms.VMContext) !*Object {
     var time_entries: [module_descriptor.timeExports.len + 1]NamespaceEntry = undefined;
     for (module_descriptor.timeExports, 0..) |entry, i| {
         time_entries[i] = .{ .name = entry.name, .value = switch (entry.kind) {
-            .namespace => unreachable,
+            .namespace, .script_function => unreachable,
             .function => try makeNative(ctx, entry.native_id.?, entry.arity),
             .value => .{ .int = entry.int_value },
         } };
@@ -244,7 +244,26 @@ pub fn buildStdModule(ctx: vms.VMContext) !*Object {
 
     var array_entries: [module_descriptor.arrayExports.len]NamespaceEntry = undefined;
     for (module_descriptor.arrayExports, 0..) |entry, i| {
-        array_entries[i] = .{ .name = entry.name, .value = try makeNative(ctx, entry.native_id.?, entry.arity) };
+        array_entries[i] = .{ .name = entry.name, .value = switch (entry.kind) {
+            .function => try makeNative(ctx, entry.native_id.?, entry.arity),
+            .script_function => blk: {
+                const base = ctx.cs.std_script_const_base;
+                const count = ctx.cs.std_script_const_count;
+                if (count == 0) break :blk .null;
+                for (ctx.cs.consts[base .. base + count]) |v| {
+                    if (v != .object) continue;
+                    const obj = v.object;
+                    if (obj.* != .function) continue;
+                    if (std.mem.eql(u8, obj.function.name, entry.name)) {
+                        const clo = try vmgc.vmAllocObject(ctx);
+                        clo.* = .{ .closure = .{ .func = obj, .upvalues = &.{} } };
+                        break :blk .{ .object = clo };
+                    }
+                }
+                break :blk .null;
+            },
+            else => unreachable,
+        } };
     }
     const array_obj = try makeNamespace(ctx, "array", "@module_type:std.array", &array_entries);
     try ctx.vs.pushTempRoot(.{ .object = array_obj });
@@ -329,7 +348,7 @@ pub fn installStdGlobal(ctx: vms.VMContext, gs: *globals.State) !void {
                     @memcpy(gbuf[prefix.len + 1 .. prefix.len + 1 + ns_name.len], ns_name);
                     gbuf[prefix.len + 1 + ns_name.len] = '.';
                     @memcpy(gbuf[prefix.len + 2 + ns_name.len .. needed], fe_key);
-                    if (!gs.has(gbuf)) try gs.def(gbuf, fe.value);
+                    if (fe.value != .null and !gs.has(gbuf)) try gs.def(gbuf, fe.value);
                 }
             } else {
                 const needed = prefix.len + 1 + top_key.len;

@@ -263,8 +263,11 @@ pub const Session = struct {
         return false;
     }
 
+    // Contract: the caller resets the chunk state before invoking (the runtime
+    // does so via Runtime.reset()). compileRoot must not reset it itself — the
+    // chunk may already hold the compiled std-script prelude
+    // (Runtime.compileStdScripts), which a reset here would silently discard.
     pub fn compileRoot(self: *Session, root_path: []const u8, src: []const u8) !void {
-        chunk.reset();
         self.module_count = 0;
         self.last_error_path = "";
         self.last_error_line = 0;

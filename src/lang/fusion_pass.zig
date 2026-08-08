@@ -426,6 +426,7 @@ fn fuseOnce(cs: *chunk.State, alloc: std.mem.Allocator) FuseError!bool {
     for (cs.module_boundaries[0..cs.module_boundary_count]) |*mb| {
         if (mb.ip_start <= old_len) mb.ip_start = ip_map[mb.ip_start];
     }
+    if (cs.std_script_code_end <= old_len) cs.std_script_code_end = ip_map[cs.std_script_code_end];
     cs.verified = false;
     cs.verified_code_len = 0;
     return true;

@@ -1,0 +1,7 @@
+func count(arr []any, pred func(any) bool) int {
+    n := 0
+    for item in arr {
+        if pred(item) { n = n + 1 }
+    }
+    return n
+}
