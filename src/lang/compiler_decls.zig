@@ -926,21 +926,50 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
         .has_default = has_default,
         .default_val = default_val,
     } };
-    if (!c.skipping_test_body) c.registry.setNamedTypeRuntimeObject(name, nt);
-    try c.cs.emitConst(.{ .object = nt }, kw.line);
-    if (!c.skipping_test_body) c.registry.setNamedTypeRuntimeConstIdx(name, c.cs.last_const_idx);
-    if (predicate_uv_count > 0) {
-        try c.cs.emitConstIdx(.make_closure, predicate_closure_cidx, kw.line);
-        try c.cs.emitOp(.set_named_predicate, kw.line);
+    try installNamedTypeObject(c, .{
+        .nt = nt,
+        .name = name,
+        .qname = qname,
+        .line = kw.line,
+        .is_pub = is_pub,
+        .predicate_obj = predicate_obj,
+        .predicate_uv_count = predicate_uv_count,
+        .predicate_closure_cidx = predicate_closure_cidx,
+        .has_default = has_default,
+    });
+}
+
+const NamedTypeInstallArgs = struct {
+    nt: *Object,
+    name: []const u8,
+    qname: []const u8,
+    line: u32,
+    is_pub: bool,
+    predicate_obj: ?*Object,
+    predicate_uv_count: u8,
+    predicate_closure_cidx: u16,
+    has_default: bool,
+};
+
+// Shared tail of namedTypeDecl and subtypeDecl: register the runtime object,
+// emit it as a const (caching its pool index for validation-op reuse), wire a
+// capturing predicate, validate the default, and bind the type name.
+fn installNamedTypeObject(c: anytype, a: NamedTypeInstallArgs) !void {
+    if (!c.skipping_test_body) c.registry.setNamedTypeRuntimeObject(a.name, a.nt);
+    try c.cs.emitConst(.{ .object = a.nt }, a.line);
+    if (!c.skipping_test_body) c.registry.setNamedTypeRuntimeConstIdx(a.name, c.cs.last_const_idx);
+    if (a.predicate_uv_count > 0) {
+        try c.cs.emitConstIdx(.make_closure, a.predicate_closure_cidx, a.line);
+        try c.cs.emitOp(.set_named_predicate, a.line);
     }
-    if (has_default and predicate_obj != null) {
-        try c.cs.emitOp(.validate_type_default, kw.line);
+    if (a.has_default and a.predicate_obj != null) {
+        try c.cs.emitOp(.validate_type_default, a.line);
     }
     if (c.inFunc()) {
-        _ = try c.defineLocal(name, false);
+        _ = try c.defineLocal(a.name, false);
     } else {
-        try c.cs.emitOpStringConst(.def_global, qname, kw.line);
-        if (is_pub) try c.addExport(name, qname);
+        try c.cs.emitOpStringConst(.def_global, a.qname, a.line);
+        if (a.is_pub) try c.addExport(a.name, a.qname);
     }
     c.matchOpt(.semicolon);
 }
@@ -2138,23 +2167,17 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
         .has_default = has_default,
         .default_val = default_val,
     } };
-    if (!c.skipping_test_body) c.registry.setNamedTypeRuntimeObject(name, nt);
-    try c.cs.emitConst(.{ .object = nt }, kw.line);
-    if (!c.skipping_test_body) c.registry.setNamedTypeRuntimeConstIdx(name, c.cs.last_const_idx);
-    if (predicate_uv_count > 0) {
-        try c.cs.emitConstIdx(.make_closure, predicate_closure_cidx, kw.line);
-        try c.cs.emitOp(.set_named_predicate, kw.line);
-    }
-    if (has_default and predicate_obj != null) {
-        try c.cs.emitOp(.validate_type_default, kw.line);
-    }
-    if (c.inFunc()) {
-        _ = try c.defineLocal(name, false);
-    } else {
-        try c.cs.emitOpStringConst(.def_global, qname, kw.line);
-        if (is_pub) try c.addExport(name, qname);
-    }
-    c.matchOpt(.semicolon);
+    try installNamedTypeObject(c, .{
+        .nt = nt,
+        .name = name,
+        .qname = qname,
+        .line = kw.line,
+        .is_pub = is_pub,
+        .predicate_obj = predicate_obj,
+        .predicate_uv_count = predicate_uv_count,
+        .predicate_closure_cidx = predicate_closure_cidx,
+        .has_default = has_default,
+    });
 }
 
 pub fn variantDeclBody(c: anytype, kw: Token, name_tok: Token, is_pub: bool, tparams: []const ct.GenericParam) !void {

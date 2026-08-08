@@ -97,38 +97,33 @@ fn makeNamespace(ctx: vms.VMContext, display_name: []const u8, qualified_name: [
     return inst_obj;
 }
 
+// Build a namespace whose exports are all plain native functions — the
+// common case. Namespaces with value/type-object/script entries (math,
+// json, time, regexp, array) keep bespoke blocks in buildStdModule.
+fn makeAllNativeNamespace(ctx: vms.VMContext, comptime exports: []const module_descriptor.StdNamespaceExport, display_name: []const u8, qualified_name: []const u8) !*Object {
+    var entries: [exports.len]NamespaceEntry = undefined;
+    inline for (exports, 0..) |entry, i| {
+        entries[i] = .{ .name = entry.name, .value = try makeNative(ctx, entry.native_id.?, entry.arity) };
+    }
+    return makeNamespace(ctx, display_name, qualified_name, &entries);
+}
+
 pub fn buildStdModule(ctx: vms.VMContext) !*Object {
     if (ctx.vs.std_module) |m| return m;
 
-    var fmt_entries: [module_descriptor.fmtExports.len]NamespaceEntry = undefined;
-    for (module_descriptor.fmtExports, 0..) |entry, i| {
-        fmt_entries[i] = .{ .name = entry.name, .value = try makeNative(ctx, entry.native_id.?, entry.arity) };
-    }
-    const fmt_obj = try makeNamespace(ctx, "fmt", "@module_type:std.fmt", &fmt_entries);
+    const fmt_obj = try makeAllNativeNamespace(ctx, &module_descriptor.fmtExports, "fmt", "@module_type:std.fmt");
     try ctx.vs.pushTempRoot(.{ .object = fmt_obj });
     defer ctx.vs.popTempRoot();
 
-    var io_entries: [module_descriptor.ioExports.len]NamespaceEntry = undefined;
-    for (module_descriptor.ioExports, 0..) |entry, i| {
-        io_entries[i] = .{ .name = entry.name, .value = try makeNative(ctx, entry.native_id.?, entry.arity) };
-    }
-    const io_obj = try makeNamespace(ctx, "io", "@module_type:std.io", &io_entries);
+    const io_obj = try makeAllNativeNamespace(ctx, &module_descriptor.ioExports, "io", "@module_type:std.io");
     try ctx.vs.pushTempRoot(.{ .object = io_obj });
     defer ctx.vs.popTempRoot();
 
-    var core_entries: [module_descriptor.coreExports.len]NamespaceEntry = undefined;
-    for (module_descriptor.coreExports, 0..) |entry, i| {
-        core_entries[i] = .{ .name = entry.name, .value = try makeNative(ctx, entry.native_id.?, entry.arity) };
-    }
-    const core_obj = try makeNamespace(ctx, "core", "@module_type:std.core", &core_entries);
+    const core_obj = try makeAllNativeNamespace(ctx, &module_descriptor.coreExports, "core", "@module_type:std.core");
     try ctx.vs.pushTempRoot(.{ .object = core_obj });
     defer ctx.vs.popTempRoot();
 
-    var conv_entries: [module_descriptor.convExports.len]NamespaceEntry = undefined;
-    for (module_descriptor.convExports, 0..) |entry, i| {
-        conv_entries[i] = .{ .name = entry.name, .value = try makeNative(ctx, entry.native_id.?, entry.arity) };
-    }
-    const conv_obj = try makeNamespace(ctx, "conv", "@module_type:std.conv", &conv_entries);
+    const conv_obj = try makeAllNativeNamespace(ctx, &module_descriptor.convExports, "conv", "@module_type:std.conv");
     try ctx.vs.pushTempRoot(.{ .object = conv_obj });
     defer ctx.vs.popTempRoot();
 
@@ -144,19 +139,11 @@ pub fn buildStdModule(ctx: vms.VMContext) !*Object {
     try ctx.vs.pushTempRoot(.{ .object = math_obj });
     defer ctx.vs.popTempRoot();
 
-    var rand_entries: [module_descriptor.randExports.len]NamespaceEntry = undefined;
-    for (module_descriptor.randExports, 0..) |entry, i| {
-        rand_entries[i] = .{ .name = entry.name, .value = try makeNative(ctx, entry.native_id.?, entry.arity) };
-    }
-    const rand_obj = try makeNamespace(ctx, "rand", "@module_type:std.rand", &rand_entries);
+    const rand_obj = try makeAllNativeNamespace(ctx, &module_descriptor.randExports, "rand", "@module_type:std.rand");
     try ctx.vs.pushTempRoot(.{ .object = rand_obj });
     defer ctx.vs.popTempRoot();
 
-    var string_entries: [module_descriptor.stringExports.len]NamespaceEntry = undefined;
-    for (module_descriptor.stringExports, 0..) |entry, i| {
-        string_entries[i] = .{ .name = entry.name, .value = try makeNative(ctx, entry.native_id.?, entry.arity) };
-    }
-    const string_obj = try makeNamespace(ctx, "string", "@module_type:std.string", &string_entries);
+    const string_obj = try makeAllNativeNamespace(ctx, &module_descriptor.stringExports, "string", "@module_type:std.string");
     try ctx.vs.pushTempRoot(.{ .object = string_obj });
     defer ctx.vs.popTempRoot();
 
@@ -180,11 +167,7 @@ pub fn buildStdModule(ctx: vms.VMContext) !*Object {
     try ctx.vs.pushTempRoot(.{ .object = json_obj });
     defer ctx.vs.popTempRoot();
 
-    var template_entries: [module_descriptor.templateExports.len]NamespaceEntry = undefined;
-    for (module_descriptor.templateExports, 0..) |entry, i| {
-        template_entries[i] = .{ .name = entry.name, .value = try makeNative(ctx, entry.native_id.?, entry.arity) };
-    }
-    const template_obj = try makeNamespace(ctx, "template", "@module_type:std.template", &template_entries);
+    const template_obj = try makeAllNativeNamespace(ctx, &module_descriptor.templateExports, "template", "@module_type:std.template");
     try ctx.vs.pushTempRoot(.{ .object = template_obj });
     defer ctx.vs.popTempRoot();
 
@@ -205,19 +188,11 @@ pub fn buildStdModule(ctx: vms.VMContext) !*Object {
     try ctx.vs.pushTempRoot(.{ .object = time_obj });
     defer ctx.vs.popTempRoot();
 
-    var hex_entries: [module_descriptor.hexExports.len]NamespaceEntry = undefined;
-    for (module_descriptor.hexExports, 0..) |entry, i| {
-        hex_entries[i] = .{ .name = entry.name, .value = try makeNative(ctx, entry.native_id.?, entry.arity) };
-    }
-    const hex_obj = try makeNamespace(ctx, "hex", "@module_type:std.hex", &hex_entries);
+    const hex_obj = try makeAllNativeNamespace(ctx, &module_descriptor.hexExports, "hex", "@module_type:std.hex");
     try ctx.vs.pushTempRoot(.{ .object = hex_obj });
     defer ctx.vs.popTempRoot();
 
-    var base64_entries: [module_descriptor.base64Exports.len]NamespaceEntry = undefined;
-    for (module_descriptor.base64Exports, 0..) |entry, i| {
-        base64_entries[i] = .{ .name = entry.name, .value = try makeNative(ctx, entry.native_id.?, entry.arity) };
-    }
-    const base64_obj = try makeNamespace(ctx, "base64", "@module_type:std.base64", &base64_entries);
+    const base64_obj = try makeAllNativeNamespace(ctx, &module_descriptor.base64Exports, "base64", "@module_type:std.base64");
     try ctx.vs.pushTempRoot(.{ .object = base64_obj });
     defer ctx.vs.popTempRoot();
 
@@ -234,11 +209,7 @@ pub fn buildStdModule(ctx: vms.VMContext) !*Object {
     try ctx.vs.pushTempRoot(.{ .object = regexp_obj });
     defer ctx.vs.popTempRoot();
 
-    var sort_entries: [module_descriptor.sortExports.len]NamespaceEntry = undefined;
-    for (module_descriptor.sortExports, 0..) |entry, i| {
-        sort_entries[i] = .{ .name = entry.name, .value = try makeNative(ctx, entry.native_id.?, entry.arity) };
-    }
-    const sort_obj = try makeNamespace(ctx, "sort", "@module_type:std.sort", &sort_entries);
+    const sort_obj = try makeAllNativeNamespace(ctx, &module_descriptor.sortExports, "sort", "@module_type:std.sort");
     try ctx.vs.pushTempRoot(.{ .object = sort_obj });
     defer ctx.vs.popTempRoot();
 
@@ -269,19 +240,11 @@ pub fn buildStdModule(ctx: vms.VMContext) !*Object {
     try ctx.vs.pushTempRoot(.{ .object = array_obj });
     defer ctx.vs.popTempRoot();
 
-    var bytes_entries: [module_descriptor.bytesExports.len]NamespaceEntry = undefined;
-    for (module_descriptor.bytesExports, 0..) |entry, i| {
-        bytes_entries[i] = .{ .name = entry.name, .value = try makeNative(ctx, entry.native_id.?, entry.arity) };
-    }
-    const bytes_obj = try makeNamespace(ctx, "bytes", "@module_type:std.bytes", &bytes_entries);
+    const bytes_obj = try makeAllNativeNamespace(ctx, &module_descriptor.bytesExports, "bytes", "@module_type:std.bytes");
     try ctx.vs.pushTempRoot(.{ .object = bytes_obj });
     defer ctx.vs.popTempRoot();
 
-    var crypto_entries: [module_descriptor.cryptoExports.len]NamespaceEntry = undefined;
-    for (module_descriptor.cryptoExports, 0..) |entry, i| {
-        crypto_entries[i] = .{ .name = entry.name, .value = try makeNative(ctx, entry.native_id.?, entry.arity) };
-    }
-    const crypto_obj = try makeNamespace(ctx, "crypto", "@module_type:std.crypto", &crypto_entries);
+    const crypto_obj = try makeAllNativeNamespace(ctx, &module_descriptor.cryptoExports, "crypto", "@module_type:std.crypto");
     try ctx.vs.pushTempRoot(.{ .object = crypto_obj });
     defer ctx.vs.popTempRoot();
 

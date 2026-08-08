@@ -456,27 +456,4 @@ pub fn verify(state: *chunk.State, alloc: std.mem.Allocator) !void {
     }
 }
 
-// The function object (if any) a const-pool object leads to: a plain
-// function, a closure's function, or a named type's predicate function.
-// Kept in sync with vm_defuse.buildDefusedCode pass 3.
-fn funcObjOfConst(obj: anytype) ?@TypeOf(obj) {
-    switch (obj.*) {
-        .function => return obj,
-        .closure => |cl| {
-            if (cl.func.* == .function) return cl.func;
-            return null;
-        },
-        .named_type => |nt| {
-            const pred = nt.predicate orelse return null;
-            switch (pred.*) {
-                .function => return pred,
-                .closure => |cl| {
-                    if (cl.func.* == .function) return cl.func;
-                    return null;
-                },
-                else => return null,
-            }
-        },
-        else => return null,
-    }
-}
+const funcObjOfConst = chunk.funcObjOfConst;

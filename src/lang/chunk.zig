@@ -518,6 +518,27 @@ pub const State = struct {
         return self.code_len;
     }
 
+    // Remap every FuncObj entry IP reachable from the const pool through
+    // ip_map (old ip → new ip; one entry per old code position plus an
+    // end-of-code sentinel). Used by passes that rewrite the code buffer
+    // (fusion_pass install, vm_defuse pass 3).
+    //
+    // A FuncObj pointer may be reachable from multiple const-pool entries
+    // (a plain function const and a closure wrapping it, or two named_type
+    // consts sharing a predicate). Each FuncObj is remapped exactly once —
+    // a second application would index ip_map with an already-remapped ip.
+    pub fn remapConstFuncIps(self: *State, ip_map: []const u32, alloc: std.mem.Allocator) error{OutOfMemory}!void {
+        var seen_func_ptrs = std.AutoHashMap(usize, void).init(alloc);
+        defer seen_func_ptrs.deinit();
+        for (self.consts[0..self.const_count]) |cv| {
+            if (cv != .object) continue;
+            const fo = funcObjOfConst(cv.object) orelse continue;
+            const gop = try seen_func_ptrs.getOrPut(@intFromPtr(fo));
+            if (gop.found_existing) continue;
+            if (fo.function.ip < ip_map.len) fo.function.ip = ip_map[fo.function.ip];
+        }
+    }
+
     pub fn markStdCallPatchPos(self: *State) void {
         self.std_call_patch_pos = self.code_len;
     }
@@ -699,6 +720,32 @@ pub const State = struct {
         self.obj_const_idxs = &.{};
     }
 };
+
+// The function object (if any) a const-pool object leads to: a plain
+// function, a closure's function, or a named type's predicate function
+// (bare or closure-wrapped). Single source of the shape knowledge shared
+// by chunk_verifier (collect/stamp) and remapConstFuncIps.
+pub fn funcObjOfConst(obj: *val_mod.Object) ?*val_mod.Object {
+    switch (obj.*) {
+        .function => return obj,
+        .closure => |cl| {
+            if (cl.func.* == .function) return cl.func;
+            return null;
+        },
+        .named_type => |nt| {
+            const pred = nt.predicate orelse return null;
+            switch (pred.*) {
+                .function => return pred,
+                .closure => |cl| {
+                    if (cl.func.* == .function) return cl.func;
+                    return null;
+                },
+                else => return null,
+            }
+        },
+        else => return null,
+    }
+}
 
 var g_default_state: State = .{};
 // threadlocal: each OS thread tracks its own active runtime, so two Runtimes
