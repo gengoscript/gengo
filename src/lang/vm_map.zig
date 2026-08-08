@@ -49,6 +49,7 @@ pub fn mapHashValue(v: Value) u64 {
             const vmod = @import("value.zig");
             return hashMix64(hashMix64(@intFromPtr(vmod.objectAtIdx(iv.typ_idx)), @as(u64, iv.ordinal)), mapHashValue(vmod.inlineVariantPayload(iv)));
         },
+        .actor_ref => |r| hashMix64(@as(u64, r.index), @as(u64, r.generation)),
     };
 }
 

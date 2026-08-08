@@ -235,6 +235,7 @@ fn jsonStringifyValueDepth(s: *std.json.Stringify, gv: Value, depth: u32, ancest
         },
         .error_value => try s.write(null),
         .inline_variant => unreachable,
+        .actor_ref => try s.write(null),
     }
 }
 

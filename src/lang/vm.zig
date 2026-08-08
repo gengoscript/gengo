@@ -3430,9 +3430,10 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                     1 => v == .object and vms.isArrayObject(v.object),
                     2 => v == .object and vms.isMapObject(v.object),
                     3 => v == .error_value,
+                    4 => v == .actor_ref,
                     else => return error.TypeError,
                 };
-                const expected = if (tag == 1) "array" else if (tag == 2) "map" else "error";
+                const expected = if (tag == 1) "array" else if (tag == 2) "map" else if (tag == 4) "actor" else "error";
                 try typeAssert(ctx, v, ok, expected);
             },
             .assert_interface => {

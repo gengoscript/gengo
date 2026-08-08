@@ -1074,6 +1074,7 @@ pub const Compiler = struct {
             .array => .{ .assert_arr = spec.alts[0].elem_spec },
             .map => .{ .assert_map = spec.alts[0].val_spec },
             .error_t => .{ .assert_err = {} },
+            .actor_ref_t => .{ .assert_actor_ref = {} },
             else => .{ .none = {} },
         };
     }
@@ -1712,6 +1713,7 @@ pub const Compiler = struct {
             .assert_arr => try self.cs.emit2(@intFromEnum(Op.assert_type), 1, line),
             .assert_map => try self.cs.emit2(@intFromEnum(Op.assert_type), 2, line),
             .assert_err => try self.cs.emit2(@intFromEnum(Op.assert_type), 3, line),
+            .assert_actor_ref => try self.cs.emit2(@intFromEnum(Op.assert_type), 4, line),
             .interface_type => |name| {
                 const idx = try self.cs.addStringConst(name);
                 try self.cs.emitConstIdx(.assert_interface, idx, line);

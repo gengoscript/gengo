@@ -248,6 +248,7 @@ pub fn nativeConvToBool(ctx: VMContext, v: Value) !Value {
             // A heap-backed string must convert like a literal one; named values
             // convert through their underlying value.
             .inline_variant => true,
+            .actor_ref => |r| r.index != 0 or r.generation != 0,
             .object => |obj| switch (obj.*) {
                 .dyn_string => |s| s.len != 0,
                 .string_view => |sv| sv.bytes.len != 0,
@@ -323,6 +324,11 @@ pub fn nativeConvToString(ctx: VMContext, v: Value) !Value {
             }
             break :blk vmgc.makeDynString(ctx, buf[0..pos]);
         },
+        .actor_ref => |r| blk: {
+            var buf: [48]u8 = undefined;
+            const s = std.fmt.bufPrint(&buf, "actor<{d}:{d}>", .{ r.index, r.generation }) catch return error.TypeError;
+            break :blk vmgc.makeDynString(ctx, s);
+        },
     };
 }
 
@@ -372,6 +378,7 @@ pub fn nativeTypeNameValue(ctx: VMContext, v: Value) !Value {
             .named_error_value => |nev| .{ .string = try ctx.cs.internStr(nev.typ.named_error_type.name) },
         },
         .inline_variant => |iv| .{ .string = try ctx.cs.internStr(vmod.objectAtIdx(iv.typ_idx).variant_type.name) },
+        .actor_ref => .{ .string = staticSS("actor") },
     };
 }
 
@@ -627,6 +634,7 @@ fn deepEqualValue(a: Value, b: Value, visits: []DeepEqVisit, visit_len: *usize) 
         .null => true,
         .object => unreachable,
         .inline_variant => |x| @as(u64, @bitCast(x)) == @as(u64, @bitCast(b.inline_variant)),
+        .actor_ref => |x| x.index == b.actor_ref.index and x.generation == b.actor_ref.generation,
     };
 }
 

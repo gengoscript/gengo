@@ -329,6 +329,13 @@ fn printValueDepth(v: Value, depth: u32, ancestors: *[PrintMaxDepth]*const vmod.
                 write(")");
             }
         },
+        .actor_ref => |r| {
+            write("actor<");
+            writeUint(r.index);
+            write(":");
+            writeUint(r.generation);
+            write(">");
+        },
         .object => |obj| {
             // Cycle detection: if this object is in the ancestor chain, emit <cycle>.
             for (ancestors[0..anc_count.*]) |a| {

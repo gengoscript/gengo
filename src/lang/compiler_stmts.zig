@@ -2019,6 +2019,7 @@ fn fieldTypeAltLabel(hs: *heap.State, alt: FieldTypeAlt) []const u8 {
         .string => "string",
         .rune_t => "rune",
         .error_t => "error",
+        .actor_ref_t => "actor",
         .null_t => "null",
         .any => "any",
         .func_t => "func",
@@ -2204,6 +2205,8 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
                 inferred_type_check = c.typeCheckFromFieldTypeSpec(type_spec);
             } else if (common.streq(type_name, "error")) {
                 inferred_type_check = .{ .assert_err = {} };
+            } else if (common.streq(type_name, "actor")) {
+                inferred_type_check = .{ .assert_actor_ref = {} };
             } else if (c.registry.hasInterfaceType(type_name)) {
                 inferred_type_check = .{ .interface_type = type_name };
             } else if (c.registry.hasStructTypeLocal(type_name)) {

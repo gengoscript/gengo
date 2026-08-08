@@ -52,6 +52,7 @@ pub const FieldTypeTag = enum {
     variant_t,
     func_t,
     type_param, // unresolved generic type parameter (name in param_name)
+    actor_ref_t, // surface keyword `actor` — a task handle; see task_state.zig
 };
 pub const FieldTypeAlt = struct {
     typ: FieldTypeTag,
@@ -239,7 +240,20 @@ pub const Object = union(ObjTag) {
     named_error_value: struct { typ: *Object, msg: *const StringSlice },
 };
 
-pub const VTag = enum { int, float, decimal, rune, boolean, string, error_value, object, null, inline_variant };
+pub const VTag = enum { int, float, decimal, rune, boolean, string, error_value, object, null, inline_variant, actor_ref };
+
+/// A task handle: an ownerless, opaque {slot, generation} pair into the
+/// process-wide task table (task_state.zig). generation guards against
+/// ABA on slot reuse after a task dies — see dev-docs/design/
+/// task-actor-design.md §7. index==0 && generation==0 is the reserved
+/// null ref (no task ever occupies slot 0); it behaves as permanently
+/// dead for send/monitor purposes.
+pub const ActorRefValue = struct {
+    index: u32,
+    generation: u32,
+};
+
+pub const null_actor_ref: ActorRefValue = .{ .index = 0, .generation = 0 };
 
 /// Indirection wrapper that makes string payloads 8 bytes (pointer-sized) so
 /// the entire Value fits in 16 bytes.  Lives in chunk.g_state.str_slices[].
@@ -288,6 +302,7 @@ pub const Value = union(VTag) {
     object: *Object,
     null,
     inline_variant: InlineVariantValue,
+    actor_ref: ActorRefValue,
 
     comptime {
         std.debug.assert(@sizeOf(Value) == 16);
@@ -428,6 +443,7 @@ pub const Value = union(VTag) {
             .object => |x| x == b.object,
             .null => true,
             .inline_variant => unreachable, // handled above by asVariant()
+            .actor_ref => |x| x.index == b.actor_ref.index and x.generation == b.actor_ref.generation,
         };
     }
 };

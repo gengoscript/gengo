@@ -117,6 +117,7 @@ pub const TypeCheck = union(enum) {
     assert_arr: ?FieldTypeSpec,
     assert_map: ?FieldTypeSpec,
     assert_err: void,
+    assert_actor_ref: void,
     interface_type: []const u8,
     struct_type: []const u8,
     anon_typed: u16,

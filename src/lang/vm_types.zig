@@ -51,6 +51,7 @@ pub fn runtimeTypeName(v: Value) []const u8 {
         .error_value => "error",
         .null => "null",
         .inline_variant => unreachable,
+        .actor_ref => "actor",
         .object => |obj| switch (obj.*) {
             .named_value => obj.named_value.typ.named_type.name,
             .enum_value => obj.enum_value.typ.enum_type.name,
@@ -138,6 +139,7 @@ pub fn matchesTypeAlt(ctx: VMContext, v: Value, alt: *const FieldTypeAlt) bool {
         .boolean => v == .boolean,
         .string => vms.isStringValue(v),
         .error_t => v == .error_value or (v == .object and v.object.* == .named_error_value),
+        .actor_ref_t => v == .actor_ref,
         .array => blk: {
             if (!(v == .object and vms.isArrayObject(v.object))) break :blk false;
             if (alt.elem_spec) |es| {
@@ -250,6 +252,7 @@ fn fieldTypeAltStr(buf: *[128]u8, alt: FieldTypeAlt) []const u8 {
         .boolean => "bool",
         .string => "string",
         .error_t => "error",
+        .actor_ref_t => "actor",
         .array => if (alt.elem_spec) |es| blk: {
             var inner_buf: [128]u8 = undefined;
             const inner = fieldTypeSpecStr(&inner_buf, es);

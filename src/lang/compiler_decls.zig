@@ -53,6 +53,7 @@ pub fn emitZeroValue(c: anytype, tc: TypeCheck, line: u32) !void {
         .assert_arr => try c.cs.emit2(@intFromEnum(Op.build_array), 0, line),
         .assert_map => try c.cs.emit2(@intFromEnum(Op.build_map), 0, line),
         .assert_err => try c.cs.emitOp(.null_val, line),
+        .assert_actor_ref => try c.cs.emitConst(.{ .actor_ref = value_mod.null_actor_ref }, line),
         .named => {
             try emitNamedDefault(c, tc.named, line);
             try c.cs.emitGetGlobal(tc.named, line);
@@ -1001,6 +1002,7 @@ fn typeArgLabel(spec: FieldTypeSpec) []const u8 {
         .boolean => "bool",
         .string => "string",
         .error_t => "error",
+        .actor_ref_t => "actor",
         .array => "[]...",
         .map => "map[...]",
         .func_t => "func",
@@ -1123,6 +1125,7 @@ fn altTypeStr(buf: []u8, alt: value_mod.FieldTypeAlt) []const u8 {
         .decimal_t => "decimal",
         .null_t => "null",
         .error_t => "error",
+        .actor_ref_t => "actor",
         .any => "any",
         .struct_t => alt.struct_name,
         .named_t, .variant_t => alt.named_name,
@@ -1711,6 +1714,8 @@ pub fn parseFieldTypeSpec(c: anytype) !FieldTypeSpec {
                     alt = .{ .typ = .string };
                 } else if (common.streq(tname, "error")) {
                     alt = .{ .typ = .error_t };
+                } else if (common.streq(tname, "actor")) {
+                    alt = .{ .typ = .actor_ref_t };
                 } else if (common.streq(tname, "bigint")) {
                     alt = .{ .typ = .any };
                 } else if (common.streq(tname, "any")) {

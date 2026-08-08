@@ -100,6 +100,7 @@ fn writeConst(cs: *const chunk.State, idx: u16) void {
             io.write(value.objectAtIdx(iv.typ_idx).variant_type.name);
             io.write(">");
         },
+        .actor_ref => io.write("<actor_ref>"),
     }
 }
 

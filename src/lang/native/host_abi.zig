@@ -116,6 +116,10 @@ fn wireFromValueDepth(ctx: VMContext, v: Value, depth: u32) !host_abi.ValueWire 
             wires[3] = try wireFromValueDepth(ctx, vmod.inlineVariantPayload(iv), depth + 1);
             return makeWire(.map, 0, @intCast(@intFromPtr(wires.ptr)), 2);
         },
+        // actor values are task-table-relative and meaningless outside this
+        // process's scheduler — same treatment as any other
+        // no-host-representation value.
+        .actor_ref => return error.UnsupportedHostValueType,
     };
 }
 

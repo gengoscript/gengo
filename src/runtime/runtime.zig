@@ -1083,6 +1083,7 @@ pub const Runtime = struct {
             8 => .{ .assert_map = null },
             9 => .{ .assert_err = {} },
             10 => .{ .prim = .bigint },
+            11 => .{ .assert_actor_ref = {} },
             else => null,
         };
     }
@@ -1102,6 +1103,7 @@ pub const Runtime = struct {
             .assert_arr => 7,
             .assert_map => 8,
             .assert_err => 9,
+            .assert_actor_ref => 11,
             .interface_type, .struct_type, .none, .anon_typed => null,
         };
     }

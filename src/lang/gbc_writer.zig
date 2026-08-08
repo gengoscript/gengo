@@ -89,6 +89,7 @@ pub const FT_NAMED_T: u8 = 0x0C;
 pub const FT_VARIANT_T: u8 = 0x0D;
 // FT_FUNC_T = 0x0E is spec'd but unsupported (rejected, see writeTypeSpec).
 pub const FT_DECIMAL_T: u8 = 0x0F;
+pub const FT_ACTOR_REF_T: u8 = 0x10;
 
 pub const WriteOptions = struct {
     entry_kind: EntryKind = .script,
@@ -266,6 +267,7 @@ fn writeTypeSpecDepth(w: *ByteWriter, spec: value_mod.FieldTypeSpec, depth: u32)
             .boolean => try w.u8_(FT_BOOLEAN),
             .string => try w.u8_(FT_STRING),
             .error_t => try w.u8_(FT_ERROR_T),
+            .actor_ref_t => try w.u8_(FT_ACTOR_REF_T),
             .array => {
                 try w.u8_(FT_ARRAY);
                 try w.bool8(alt.elem_spec != null);

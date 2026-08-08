@@ -234,6 +234,7 @@ fn readTypeSpecDepth(r: *ByteReader, hs: *heap.State, alloc: std.mem.Allocator, 
             gbc_writer.FT_BOOLEAN => .{ .typ = .boolean },
             gbc_writer.FT_STRING => .{ .typ = .string },
             gbc_writer.FT_ERROR_T => .{ .typ = .error_t },
+            gbc_writer.FT_ACTOR_REF_T => .{ .typ = .actor_ref_t },
             gbc_writer.FT_ARRAY => blk: {
                 const has_elem = try r.bool8();
                 const elem: ?value_mod.FieldTypeSpec = if (has_elem) try readTypeSpecDepth(r, hs, alloc, depth + 1) else null;

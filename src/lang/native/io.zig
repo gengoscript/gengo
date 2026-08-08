@@ -121,6 +121,12 @@ fn sprintValueDepth(buf_or_null: ?[]u8, v: Value, depth: u32, ancestors: *[Print
             }
             return len;
         },
+        .actor_ref => |r| {
+            var tmp: [48]u8 = undefined;
+            const s = std.fmt.bufPrint(&tmp, "actor<{d}:{d}>", .{ r.index, r.generation }) catch return error.TypeError;
+            if (buf_or_null) |buf| @memcpy(buf[0..s.len], s);
+            return s.len;
+        },
         .object => |obj| {
             for (ancestors[0..anc_count.*]) |a| {
                 if (a == obj) {
