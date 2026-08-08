@@ -213,6 +213,17 @@ pub const Compiler = struct {
     in_progress_sig_count: u8 = 0,
     pending_func_qname: ?[]const u8 = null,
 
+    // Set while compiling a task's own behavior-function body (§4.1/§8):
+    // gates receive()/self() as contextual builtins. Cleared (saved and
+    // restored) around every nested function literal — funcLit() — since
+    // receive() is legal only lexically inside the task's own body, never
+    // inside a closure handed to a native higher-order function (the
+    // reentrant-run() constraint verified against vm.zig's callValue).
+    in_task_body: bool = false,
+    // Whether the enclosing task declared a message type at all (§8.2 —
+    // mailbox-less tasks omit it). Only meaningful while in_task_body.
+    task_has_mailbox: bool = false,
+
     // ── Lifecycle ────────────────────────────────────────────────────────────────
 
     // Callers name the chunk and heap the compiler works against — production

@@ -517,6 +517,97 @@ pub fn namedFuncDecl(c: anytype, is_pub: bool) !void {
     c.matchOpt(.semicolon);
 }
 
+// `type Name task [MsgType] func(params) { body }` — dev-docs/design/
+// task-actor-design.md §8. Reached from namedTypeDecl's kind dispatch,
+// same shape as struct/interface/variant. `task` and the message-type
+// name are both plain identifiers (contextual, not lexer keywords),
+// matched the same way namedTypeDecl already matches `error`.
+//
+// MsgType is optional (§8.2 — a mailbox-less task, e.g. a one-shot
+// worker or a pure timer, has nowhere to receive() and nothing for
+// other tasks to send() or monitor() against). v0 does not statically
+// type receive()'s result as MsgType (see FINDINGS #2 in
+// dev-docs/design/task-examples/) — MsgType's only effect right now is
+// gating receive()/monitor() legality. It must still name a real
+// declared type: a bare identifier here is overwhelmingly a typo for
+// an intended message type, not a token worth accepting silently, and
+// requiring a real type now keeps the door open for real static typing
+// later without a breaking syntax change.
+pub fn taskDeclBody(c: anytype, kw: Token, name_tok: Token, is_pub: bool) !void {
+    const name = name_tok.src;
+
+    if (!c.skipping_test_body) {
+        if (c.registry.hasTaskType(name)) {
+            c.setErr("duplicate task type name '{s}'", .{name});
+            return error.DuplicateTaskType;
+        }
+        if (!c.inFunc()) {
+            if (c.registry.hasAnyTypeName(name)) {
+                c.setErr("type name '{s}' conflicts with an existing type declaration", .{name});
+                return error.DuplicateTaskType;
+            }
+            if (c.registry.hasGlobalFunc(try c.qualifyTypeName(name))) {
+                c.setErr("name '{s}' already declared as a function", .{name});
+                return error.DuplicateField;
+            }
+        }
+        try c.registry.addTaskType(name);
+    }
+
+    var has_mailbox = false;
+    if (c.cur.typ != .kw_func) {
+        if (c.cur.typ != .ident) return c.err("expected a message type name or 'func', found {s}", .{c.tokenName(c.cur.typ)});
+        const msg_name = c.cur.src;
+        if (!c.skipping_test_body and !c.isKnownTypeName(msg_name)) {
+            return c.err("unknown message type '{s}'", .{msg_name});
+        }
+        c.advance();
+        has_mailbox = true;
+    }
+    try c.consume(.kw_func);
+
+    // receive()/self() are contextual builtins only lexically inside this
+    // body (§4.1) — cleared for any nested function literal by funcLit()
+    // itself, restored here for whatever this task decl is nested inside
+    // (top level, or — if type decls are ever nested in a function body —
+    // that function's own scope, which is not itself a task body).
+    const saved_in_task_body = c.in_task_body;
+    const saved_task_has_mailbox = c.task_has_mailbox;
+    c.in_task_body = true;
+    c.task_has_mailbox = has_mailbox;
+    defer {
+        c.in_task_body = saved_in_task_body;
+        c.task_has_mailbox = saved_task_has_mailbox;
+    }
+
+    // Not routed through pending_func_qname/in_progress_sigs: those exist
+    // so a named function's body can call itself recursively by name.
+    // `Worker(...)` inside Worker's own body means "spawn another Worker",
+    // never "recurse" — there is nothing to seed.
+    _ = try c.compileFuncWithPrefix(&[_][]const u8{}, true, null);
+    const behavior = c.last_func_obj orelse return error.NotAFunction;
+    behavior.function.name = name;
+
+    const qname = try c.qualifyTypeName(name);
+    const tt = c.hs.allocObject() orelse return error.OutOfMemory;
+    tt.* = .{ .task_type = .{
+        .name = try c.copyName(name),
+        .qualified_name = qname,
+        .has_mailbox = has_mailbox,
+        .behavior = behavior,
+    } };
+    if (!c.skipping_test_body) c.registry.setTaskObj(name, tt);
+    try c.cs.emitConst(.{ .object = tt }, kw.line);
+
+    if (c.inFunc()) {
+        _ = try c.defineLocal(name, false);
+    } else {
+        try c.cs.emitOpStringConst(.def_global, qname, kw.line);
+        if (is_pub) try c.addExport(name, qname);
+    }
+    c.matchOpt(.semicolon);
+}
+
 pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
     const kw = c.cur;
     c.advance(); // type
@@ -561,6 +652,11 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
     if (c.cur.typ == .ident and common.streq(c.cur.src, "error")) {
         c.advance(); // consume 'error'
         return namedErrorTypeDecl(c, kw, name_tok, is_pub);
+    }
+    if (c.cur.typ == .ident and common.streq(c.cur.src, "task")) {
+        c.advance(); // consume 'task'
+        if (tparam_count > 0) return c.err("generic task types are not yet supported", .{});
+        return taskDeclBody(c, kw, name_tok, is_pub);
     }
     const name = name_tok.src;
     if (!c.skipping_test_body) {

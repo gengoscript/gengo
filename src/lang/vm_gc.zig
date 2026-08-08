@@ -126,6 +126,7 @@ fn drainMarkQueue(ctx: VMContext) void {
             },
             .named_error_type => {},
             .named_error_value => |nev| markObjectQueue(ctx, nev.typ),
+            .task_type => |tt| markObjectQueue(ctx, tt.behavior),
             // No GC-traced children; backing bytes are freed by the sweep.
             .dyn_string, .function, .native_function, .host_module_function, .struct_type, .interface_type, .string_builder, .bigint => {},
         }

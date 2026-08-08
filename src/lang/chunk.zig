@@ -743,6 +743,16 @@ pub fn funcObjOfConst(obj: *val_mod.Object) ?*val_mod.Object {
                 else => return null,
             }
         },
+        // A task's behavior function is an ordinary FuncObj found through the
+        // task_type const the same way a named_type's predicate is found —
+        // without this case the verifier would never stamp its max_stack and
+        // spawning the task would panic with StackOverflow at frame entry
+        // (the exact bug class fixed by unifying this function; see
+        // dev-docs' fusion-pass notes / project_fusion_double_remap memory).
+        .task_type => |tt| {
+            if (tt.behavior.* == .function) return tt.behavior;
+            return null;
+        },
         else => return null,
     }
 }

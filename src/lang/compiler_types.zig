@@ -238,7 +238,7 @@ pub const NamedTypeInfo = struct {
 // TypeHashSize = 4096: load factor < 0.37 at MaxTypes(1024)+MaxNamedTypes(512).
 // FuncHashSize = 4096: load factor < 0.25 at MaxGlobals = 1024.
 
-const TypeSymbolKind = enum(u8) { struct_type, interface_type, named_type, variant_type, named_error_type };
+const TypeSymbolKind = enum(u8) { struct_type, interface_type, named_type, variant_type, named_error_type, task_type };
 const TypeHashSize = 4096;
 const FuncHashSize = 4096;
 
@@ -297,6 +297,7 @@ pub const TypeRegistry = struct {
     // *Object is stored here so switchStmt can check arm exhaustiveness.
     variant_objs: []?*Object,
     struct_objs: []?*Object,
+    task_objs: []?*Object,
 
     // Generic type templates (not yet instantiated).
     generic_types: []GenericTypeInfo,
@@ -335,6 +336,8 @@ pub const TypeRegistry = struct {
         @memset(self.variant_objs, null);
         self.struct_objs = try alloc.alloc(?*Object, MaxTypes);
         @memset(self.struct_objs, null);
+        self.task_objs = try alloc.alloc(?*Object, MaxTypes);
+        @memset(self.task_objs, null);
         self.generic_types = try alloc.alloc(GenericTypeInfo, MaxGenericTypes);
         self.generic_count = 0;
         self.generic_funcs = try alloc.alloc(GenericFuncInfo, MaxGenericFuncs);
@@ -358,6 +361,7 @@ pub const TypeRegistry = struct {
         @memset(self.func_buckets[0..], .{});
         @memset(self.variant_objs[0..], null);
         @memset(self.struct_objs[0..], null);
+        @memset(self.task_objs[0..], null);
     }
 
     pub fn checkpoint(self: *const TypeRegistry) RegistryCp {
@@ -662,6 +666,28 @@ pub const TypeRegistry = struct {
         self.type_name_kinds[sub_idx] = .variant_type;
         self.type_name_count += 1;
         self.insertTypeSlot(name, .variant_type, sub_idx);
+    }
+
+    pub fn hasTaskType(self: *const TypeRegistry, name: []const u8) bool {
+        const slot = self.typeSlotFor(name) orelse return false;
+        return self.type_buckets[slot].kind == .task_type;
+    }
+
+    pub fn addTaskType(self: *TypeRegistry, name: []const u8) !void {
+        if (self.hasTaskType(name)) return error.DuplicateTaskType;
+        if (self.type_name_count >= MaxTypes) return error.TooManyTypes;
+        const sub_idx = self.type_name_count;
+        self.type_names[sub_idx] = name;
+        self.type_name_kinds[sub_idx] = .task_type;
+        self.type_name_count += 1;
+        self.insertTypeSlot(name, .task_type, sub_idx);
+    }
+
+    pub fn setTaskObj(self: *TypeRegistry, name: []const u8, obj: *Object) void {
+        const slot = self.typeSlotFor(name) orelse return;
+        const e = self.type_buckets[slot];
+        if (e.kind != .task_type) return;
+        self.task_objs[e.sub_idx] = obj;
     }
 
     pub fn hasGlobalFunc(self: *const TypeRegistry, name: []const u8) bool {

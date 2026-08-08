@@ -81,6 +81,14 @@ pub const StructFieldSpec = struct {
     key: Value = .null,
 };
 pub const StructTypeObj = struct { name: []const u8, qualified_name: []const u8, fields: []StructFieldSpec };
+// A task/actor type declaration (dev-docs/design/task-actor-design.md
+// §8): `type Name task [MsgType] func(params) { body }`. `behavior` is
+// the compiled body — an ordinary FuncObj, called via performCall's
+// .task_type arm to spawn rather than run synchronously. `has_mailbox`
+// is false for the §8.2 mailbox-less form (no MsgType given): such a
+// task's body may not call receive(), and other tasks may not monitor
+// it or send to it (send panics the sender — provably no reader).
+pub const TaskTypeObj = struct { name: []const u8, qualified_name: []const u8, has_mailbox: bool, behavior: *Object };
 pub const InterfaceMethodSpec = struct {
     name: []const u8,
     arity: u8,
@@ -204,7 +212,7 @@ pub const ArrayViewObj = struct {
 // Items 0..len are live; items len..capacity are always .null (safe for GC marking).
 pub const ArrayCapObj = struct { backing: *Object, len: usize };
 
-pub const ObjTag = enum { array, array_managed, array_view, array_capacity, map, map_managed, map_hashed, dyn_string, function, closure, cell, native_function, host_module_function, struct_type, interface_type, named_type, named_value, enum_type, enum_value, enum_type_fn, struct_instance, small_struct_instance, iterator, variant_type, variant_value, variant_ctor, named_type_fn, string_builder, string_view, bigint, named_error_type, named_error_value };
+pub const ObjTag = enum { array, array_managed, array_view, array_capacity, map, map_managed, map_hashed, dyn_string, function, closure, cell, native_function, host_module_function, struct_type, interface_type, named_type, named_value, enum_type, enum_value, enum_type_fn, struct_instance, small_struct_instance, iterator, variant_type, variant_value, variant_ctor, named_type_fn, string_builder, string_view, bigint, named_error_type, named_error_value, task_type };
 pub const Object = union(ObjTag) {
     array: []Value,
     array_managed: []Value,
@@ -238,6 +246,7 @@ pub const Object = union(ObjTag) {
     bigint: BigIntObj,
     named_error_type: struct { name: []const u8 },
     named_error_value: struct { typ: *Object, msg: *const StringSlice },
+    task_type: TaskTypeObj,
 };
 
 pub const VTag = enum { int, float, decimal, rune, boolean, string, error_value, object, null, inline_variant, actor_ref };

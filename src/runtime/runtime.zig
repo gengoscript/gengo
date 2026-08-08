@@ -910,6 +910,7 @@ pub const Runtime = struct {
                 .interface_type => .interface_type,
                 .variant_type => .variant_type,
                 .named_error_type => .struct_type, // display as a type in REPL
+                .task_type => .struct_type, // display as a type in REPL
                 .named_type => continue, // handled above
             };
             if (self.repl.sym_count >= MaxReplSyms)

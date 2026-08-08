@@ -411,6 +411,11 @@ fn printValueDepth(v: Value, depth: u32, ancestors: *[PrintMaxDepth]*const vmod.
                     write(st.name);
                     write(">");
                 },
+                .task_type => |tt| {
+                    write("<task ");
+                    write(tt.name);
+                    write(">");
+                },
                 .interface_type => |it| {
                     write("<interface ");
                     write(it.name);

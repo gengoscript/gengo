@@ -376,6 +376,7 @@ pub fn nativeTypeNameValue(ctx: VMContext, v: Value) !Value {
             .cell => .{ .string = staticSS("cell") },
             .named_error_type => |net| .{ .string = try ctx.cs.internStr(net.name) },
             .named_error_value => |nev| .{ .string = try ctx.cs.internStr(nev.typ.named_error_type.name) },
+            .task_type => |tt| .{ .string = try ctx.cs.internStr(tt.name) },
         },
         .inline_variant => |iv| .{ .string = try ctx.cs.internStr(vmod.objectAtIdx(iv.typ_idx).variant_type.name) },
         .actor_ref => .{ .string = staticSS("actor") },
@@ -603,6 +604,7 @@ fn deepEqualObject(a: *Object, b: *Object, visits: []DeepEqVisit, visit_len: *us
             const bnev = b.named_error_value;
             return anev.typ == bnev.typ and common.streq(anev.msg.bytes, bnev.msg.bytes);
         },
+        .task_type => |att| return common.streq(att.qualified_name, b.task_type.qualified_name),
     }
 }
 
@@ -707,7 +709,7 @@ fn cloneObject(ctx: VMContext, src: *Object, visits: []CloneVisit, visit_len: *u
             }
             return .{ .object = out_obj };
         },
-        .function, .closure, .native_function, .host_module_function, .struct_type, .interface_type, .named_type, .enum_type, .iterator, .variant_type, .variant_ctor, .named_type_fn, .enum_type_fn, .cell, .bigint => return .{ .object = src },
+        .function, .closure, .native_function, .host_module_function, .struct_type, .interface_type, .named_type, .enum_type, .iterator, .variant_type, .variant_ctor, .named_type_fn, .enum_type_fn, .cell, .bigint, .task_type => return .{ .object = src },
         .named_value => |nv| {
             const out_obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
             defer ctx.vs.popTempRoot();

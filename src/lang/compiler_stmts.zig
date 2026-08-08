@@ -1014,6 +1014,12 @@ pub fn forStmt(c: anytype) anyerror!void {
 }
 
 pub fn funcLit(c: anytype) anyerror!void {
+    // receive() is legal only lexically inside a task's own behavior
+    // function, never inside a nested closure — see the in_task_body
+    // field comment (compiler.zig) and design doc §4.1.
+    const saved_in_task_body = c.in_task_body;
+    c.in_task_body = false;
+    defer c.in_task_body = saved_in_task_body;
     _ = try compileFuncWithPrefix(c, &[_][]const u8{}, false, null);
 }
 
