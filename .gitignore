@@ -25,5 +25,11 @@ examples/bundle-c/scoring.zip
 
 # Profiling and local analysis artifacts
 perf.data*
+perf_*.data
+coverage/
 sizecheck
 examples/go-embed/go-embed
+
+# Local fuzzing build artifacts
+fuzz_test*.o
+fuzz_test*.ll

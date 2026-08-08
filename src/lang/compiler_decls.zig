@@ -39,14 +39,14 @@ pub fn emitZeroValue(c: anytype, tc: TypeCheck, line: u32) !void {
     switch (tc) {
         .none => try c.cs.emitOp(.null_val, line),
         .prim => |p| switch (p) {
-            .int => try c.cs.emitConst(.{ .int = 0.0 }, line),
+            .int => try c.cs.emitConst(.{ .int = 0 }, line),
             .float => try c.cs.emitConst(.{ .float = 0.0 }, line),
             .decimal => try c.cs.emitConst(.{ .decimal = 0 }, line),
             .bool => try c.cs.emitOp(.false_val, line),
             .string => try c.cs.emitStringConst("", line),
             .rune => try c.cs.emitConst(.{ .rune = 0 }, line),
             .bigint => {
-                try c.cs.emitConst(.{ .int = 0.0 }, line);
+                try c.cs.emitConst(.{ .int = 0 }, line);
                 try c.cs.emitOp(.cast_bigint, line);
             },
         },
@@ -928,6 +928,7 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
     } };
     if (!c.skipping_test_body) c.registry.setNamedTypeRuntimeObject(name, nt);
     try c.cs.emitConst(.{ .object = nt }, kw.line);
+    if (!c.skipping_test_body) c.registry.setNamedTypeRuntimeConstIdx(name, c.cs.last_const_idx);
     if (predicate_uv_count > 0) {
         try c.cs.emitConstIdx(.make_closure, predicate_closure_cidx, kw.line);
         try c.cs.emitOp(.set_named_predicate, kw.line);
@@ -2139,6 +2140,7 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
     } };
     if (!c.skipping_test_body) c.registry.setNamedTypeRuntimeObject(name, nt);
     try c.cs.emitConst(.{ .object = nt }, kw.line);
+    if (!c.skipping_test_body) c.registry.setNamedTypeRuntimeConstIdx(name, c.cs.last_const_idx);
     if (predicate_uv_count > 0) {
         try c.cs.emitConstIdx(.make_closure, predicate_closure_cidx, kw.line);
         try c.cs.emitOp(.set_named_predicate, kw.line);
