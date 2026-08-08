@@ -1059,12 +1059,6 @@ pub const Compiler = struct {
         }
     }
 
-    pub fn namedTypeCheckBasePrim(self: *Compiler, tc: TypeCheck) ?PrimType {
-        if (tc != .named) return null;
-        const info = self.registry.getNamedTypeInfo(tc.named) orelse return null;
-        return namedTypeBaseToPrim(info.base);
-    }
-
     pub fn typeCheckFromFieldTypeSpec(self: *Compiler, spec: value_mod.FieldTypeSpec) TypeCheck {
         _ = self;
         if (spec.alts.len != 1) return .{ .none = {} };
@@ -1188,13 +1182,6 @@ pub const Compiler = struct {
         return false;
     }
 
-    /// Legacy wrapper: emit predicate check for the current expression's named type.
-    pub fn emitPredicateCheckCurrent(self: *Compiler, line: u32) !void {
-        if (self.currentExprPrimInfo().named_type) |name| {
-            try self.emitNamedValidation(.{ .named = name }, line);
-        }
-    }
-
     pub fn childExprPrimInfo(self: *Compiler) ExprPrimInfo {
         return self.expr_prim_info[self.expr_depth + 1];
     }
@@ -1258,25 +1245,6 @@ pub const Compiler = struct {
         self.expr_prim_capture_count -= 1;
         const capture_depth = self.expr_prim_capture_depths[self.expr_prim_capture_count];
         return self.expr_prim_info[capture_depth + 1];
-    }
-
-    pub fn exprPrimInfoForBinding(self: *Compiler, name: []const u8) ExprPrimInfo {
-        const lhs_tc = self.getLocalTypeCheck(name) orelse return .{};
-        const lhs_prim = switch (lhs_tc) {
-            .prim => |p| switch (p) {
-                .int, .float => p,
-                else => return .{},
-            },
-            .named => |n| {
-                const info = self.registry.getNamedTypeInfo(n) orelse return .{};
-                return switch (namedTypeBaseToPrim(info.base) orelse return .{}) {
-                    .int, .float => |p| .{ .prim = p, .named_type = n, .is_constant = false },
-                    else => .{},
-                };
-            },
-            else => return .{},
-        };
-        return .{ .prim = lhs_prim, .is_constant = false };
     }
 
     // Only float comparisons get a typed opcode: generic .eq/.ne/.lt/.gt/.le/.ge

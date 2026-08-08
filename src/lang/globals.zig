@@ -135,15 +135,6 @@ pub const State = struct {
         }
         return "";
     }
-
-    pub fn debugSlotCount(self: *const State) usize {
-        if (self.entries.len == 0) return 0;
-        var n: usize = 0;
-        for (self.entries[0..TableSize]) |e| {
-            if (e.occupied) n += 1;
-        }
-        return n;
-    }
 };
 
 var g_default_state: State = .{};

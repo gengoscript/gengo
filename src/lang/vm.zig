@@ -5044,10 +5044,6 @@ pub fn run(ctx: VMContext) anyerror!void {
     if (try runUntilSuspend(ctx) == .suspended) return error.ExecutionSuspended;
 }
 
-pub fn makeString(ctx: VMContext, s: []const u8) !Value {
-    return vmgc.makeDynString(ctx, s);
-}
-
 fn levenshteinDistance(a: []const u8, b: []const u8) usize {
     const m = a.len;
     const n = b.len;

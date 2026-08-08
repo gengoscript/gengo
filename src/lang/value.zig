@@ -335,10 +335,6 @@ pub const Value = union(VTag) {
         return null;
     }
 
-    pub fn isVariant(self: Value) bool {
-        return self == .inline_variant or (self == .object and self.object.* == .variant_value);
-    }
-
     pub fn asBool(self: Value) error{TypeError}!bool {
         if (self == .boolean) return self.boolean;
         // Named types over bool participate in conditions through their

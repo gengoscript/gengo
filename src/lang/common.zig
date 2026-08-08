@@ -1,7 +1,5 @@
 pub fn streq(a: []const u8, b: []const u8) bool {
-    if (a.len != b.len) return false;
-    for (a, b) |ca, cb| if (ca != cb) return false;
-    return true;
+    return std.mem.eql(u8, a, b);
 }
 
 pub fn hashBytes(s: []const u8) u64 {
