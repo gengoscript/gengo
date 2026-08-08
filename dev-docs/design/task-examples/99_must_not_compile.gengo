@@ -1,0 +1,97 @@
+// 99 — Anti-examples: everything in this file must be a COMPILE error.
+// Each block names the rule it violates. When implementation starts,
+// these become individual tests/spec/fail/ cases.
+//
+// DESIGN SKETCH.
+
+const std = import("std")
+
+// ---------------------------------------------------------------------
+// (a) §3.3 — no implicit capture of outer locals, not even const.
+secret := 42
+const fixed = 7
+
+type T1Msg variant { go }
+type T1 task T1Msg func() {
+    std.io.println(secret)   // ERROR: outer local (mutable binding)
+    std.io.println(fixed)    // ERROR: still an outer *local* — the
+                             // exemption is for top-level declarations;
+                             // `fixed` here is top-level const, so this
+                             // one is actually LEGAL. Kept in this file
+                             // to force the question: the compiler must
+                             // distinguish "top-level const" (legal)
+                             // from "outer const local of an enclosing
+                             // function" (illegal) — see FINDINGS #10.
+}
+
+// ---------------------------------------------------------------------
+// (b) §3.3 — no mutable top-level globals in task bodies.
+counter_g := 0
+
+type T2Msg variant { go }
+type T2 task T2Msg func() {
+    counter_g += 1           // ERROR: 'counter_g' is mutable global
+}
+
+// ...but NOT the import idiom: `x := import(...)` is implicitly const
+// (0.3, §3.3 — was FINDINGS #1), so task use of `lib` below is LEGAL.
+// What becomes an error instead is reassigning an import binding.
+lib := import("std")
+
+type T3Msg variant { go }
+type T3 task T3Msg func() {
+    lib.io.println("hi")     // LEGAL (0.3): import bindings are const
+}
+
+lib = import("std")          // ERROR (0.3): cannot reassign an import
+                             // binding — implicitly const
+
+// ---------------------------------------------------------------------
+// (c) §4.1 — receive() only lexically inside a task body.
+
+func helper() {
+    _ = receive()            // ERROR: receive outside task body
+}
+
+type T4Msg variant { item(n int) }
+type T4 task T4Msg func() {
+    items := []int{1, 2, 3}
+    _ = std.array.map(items, func(x int) int {
+        m := receive()       // ERROR: inside a function literal, even
+        return x             // though that literal is inside a task body
+    })
+}
+
+// ---------------------------------------------------------------------
+// (d) §3.4 — sendability: no function-typed message fields.
+
+type T5Msg variant {
+    run(f func(int) int),    // ERROR at this declaration: func field in
+}                            // a message type (upvalue cells would share)
+
+// ...and no native-resource fields.
+type T6Msg variant {
+    pattern(re std.regexp.Regexp),  // ERROR: native-resource type
+}
+
+// ---------------------------------------------------------------------
+// (e) §6 — monitor() requires a DownInfo arm in the caller's type.
+
+type T7Msg variant { go }            // no DownInfo arm anywhere
+type T7 task T7Msg func(peer ActorRef) {
+    peer.monitor()           // ERROR: T7Msg has no arm of type
+}                            // std.task.DownInfo
+
+// ...and exactly one such arm.
+type T8Msg variant {
+    down_a(i std.task.DownInfo),
+    down_b(i std.task.DownInfo),     // ERROR at this declaration:
+}                                    // ambiguous down arm
+
+// ---------------------------------------------------------------------
+// (f) §5 — send type mismatch is a RUNTIME panic (sender-side), not a
+// compile error (ActorRef is untyped). Listed here for contrast: this
+// belongs in a runtime-fail test, not a compile-fail one.
+//
+//   w := Worker()                // expects WorkerMsg
+//   w.send(ConnMsg.close())     // panics the sender at runtime

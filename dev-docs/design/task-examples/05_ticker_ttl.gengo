@@ -1,0 +1,79 @@
+// 05 — The §5.1 workaround in the flesh: a TTL cache that expires
+// entries on a timer, without receive-timeouts, via a companion ticker.
+// Exercises: self() as a spawn argument, sleep inside a task,
+// periodic + on-demand work in one mailbox.
+//
+// DESIGN SKETCH — none of this compiles today.
+
+const std = import("std")
+
+type CacheMsg variant {
+    put(key string, val string, ttl_ticks int),
+    get(key string, reply ActorRef),
+    tick,
+}
+
+type GetReply variant {
+    found(val string),
+    missing,
+}
+
+// The ticker's entire life: sleep, poke, repeat. Its target arrives as
+// a spawn parameter — which is how the cache hands over self().
+// Mailbox-less task (0.3, §8.2): no message type declared, receive()
+// illegal in its body, sends to its ref panic the sender.
+type Ticker task func(target ActorRef, interval_ms int) {
+    for {
+        std.time.sleep(interval_ms)     // parks this task; others run (§4.2)
+        target.send(CacheMsg.tick())
+    }
+}
+
+type Entry struct {
+    val string,
+    ticks_left int,
+}
+
+type Cache task CacheMsg func() {
+    _ = Ticker(self(), 100)     // task spawning its own clock
+    entries := map[string]Entry{}
+
+    for {
+        msg := receive()
+        switch msg {
+            case .put as p {
+                entries[p.key] = Entry { val: p.val, ticks_left: p.ttl_ticks }
+            }
+            case .get as g {
+                e := entries[g.key]
+                if e == null {
+                    g.reply.send(GetReply.missing())
+                } else {
+                    g.reply.send(GetReply.found(e.val))
+                }
+            }
+            case .tick {
+                for k, e in entries {
+                    e.ticks_left -= 1
+                    if e.ticks_left <= 0 { std.core.delete(entries, k) }
+                    else { entries[k] = e }
+                }
+            }
+        }
+    }
+}
+
+cache := Cache()
+cache.send(CacheMsg.put { key: "a", val: "hello", ttl_ticks: 2 })
+cache.send(CacheMsg.get { key: "a", reply: self() })
+
+r := receive()
+switch r {
+    case .found as f { std.io.println("got:", f.val) }
+    case .missing    { std.io.println("expired") }
+}
+// NOTE: main exits here, discarding cache AND ticker mid-sleep. Fine.
+// But observe what testing the *expiry* would require: main has to
+// out-wait 2 ticks with no receive-timeout of its own... so main would
+// need its own ticker, or sleep itself. Timed testing without §5.1 is
+// clumsy — see FINDINGS #8.

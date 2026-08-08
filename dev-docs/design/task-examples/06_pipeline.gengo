@@ -1,0 +1,60 @@
+// 06 — Three-stage pipeline with shutdown propagation. Refs thread
+// backward through spawn parameters (sink first, source last), and a
+// done-signal flows forward through the stages.
+// Exercises: same task type instantiated twice, shutdown as an
+// ordinary message arm cascading through stages.
+//
+// DESIGN SKETCH — none of this compiles today.
+
+const std = import("std")
+
+type StageMsg variant {
+    item(n int),
+    done,
+}
+
+// One task type, two instances (double + add-one wouldn't share code;
+// this stage just multiplies to keep the sketch small).
+type Multiply task StageMsg func(factor int, next ActorRef) {
+    for {
+        msg := receive()
+        switch msg {
+            case .item as i { next.send(StageMsg.item(i.n * factor)) }
+            case .done      { next.send(StageMsg.done()); return }
+        }
+    }
+}
+
+type Sink task StageMsg func(reply ActorRef) {
+    sum := 0
+    for {
+        msg := receive()
+        switch msg {
+            case .item as i { sum += i.n }
+            case .done      { reply.send(StageMsg.item(sum)); return }
+        }
+    }
+}
+
+// Wire back-to-front: each stage needs its successor at spawn time.
+sink := Sink(self())
+mid  := Multiply(10, sink)
+head := Multiply(2, mid)
+
+for n := 1; n <= 3; n += 1 {
+    head.send(StageMsg.item(n))
+}
+head.send(StageMsg.done())
+
+r := receive()
+switch r {
+    case .item as i { std.io.println("pipeline sum:", i.n) }   // (1+2+3)*2*10 = 120
+    case .done      { }
+}
+
+// Worth noticing: the whole pipeline tears itself down forward — each
+// stage returns after forwarding done, generating Down notifications
+// nobody subscribed to (fine, unmonitored normal death is silent).
+// Determinism (§2/§4.2) means the item/done interleaving through the
+// stages is identical on every run — this program has exactly one
+// possible output history.

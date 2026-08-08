@@ -1,0 +1,69 @@
+// 03 — Crash observation: a worker panics mid-job; a supervisor-ish
+// task sees the Down with a non-null reason and respawns.
+// This is the scenario §6 says monitor exists for.
+//
+// DESIGN SKETCH — none of this compiles today.
+
+const std = import("std")
+
+type JobMsg variant {
+    run(input int),
+}
+
+type SupMsg variant {
+    down(info std.task.DownInfo),
+    stop,
+}
+
+type Worker task JobMsg func() {
+    for {
+        msg := receive()
+        switch msg {
+            case .run as j {
+                // A predicate/trap/assert failure is an ordinary panic:
+                // uncaught, it kills this task only (§9), and each
+                // watcher gets a Down whose reason is the recover() value.
+                std.core.assert(j.input >= 0, "negative input")
+                std.io.println("worker did job", j.input)
+            }
+        }
+    }
+}
+
+type Supervisor task SupMsg func() {
+    worker := Worker()          // spawn from inside a task: fine
+    worker.monitor()
+    worker.send(JobMsg.run(1))
+    worker.send(JobMsg.run(-5)) // this one kills the worker
+
+    for {
+        msg := receive()
+        switch msg {
+            case .down as d {
+                // d.reason is the assert's error value, non-null.
+                std.io.println("worker died:", d.reason, "- respawning")
+                worker = Worker()
+                worker.monitor()
+                // NOTE the stale-ref semantics working as designed here:
+                // any message still addressed to the *old* worker's ref
+                // is now a silent drop (generation mismatch, §7).
+            }
+            case .stop { return }
+        }
+    }
+}
+
+sup := Supervisor()
+sup.monitor()
+// Give the show a curtain: ask the supervisor to stop after it has
+// observed the crash. Ordering guarantee (§5): this .stop is enqueued
+// after the worker's down-notification only if the worker died before
+// this send happens — which is NOT guaranteed, since main runs before
+// the supervisor ever gets scheduled. See FINDINGS #5: reasoning about
+// cooperative interleavings is subtle even in tiny programs.
+sup.send(SupMsg.stop)
+
+fin := receive()
+switch fin {
+    case .down { std.io.println("supervisor ended") }
+}

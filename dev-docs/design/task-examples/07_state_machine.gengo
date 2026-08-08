@@ -1,0 +1,68 @@
+// 07 — A task as a state machine: connection handshake with phases.
+// This is where "state is just the behavior function's locals" (§8.1)
+// earns its keep: phase-local state lives in phase-local scopes, and
+// illegal-in-this-phase messages are handled explicitly because
+// exhaustive switch forces the question.
+//
+// DESIGN SKETCH — none of this compiles today.
+
+const std = import("std")
+
+type ConnMsg variant {
+    hello(client string),
+    auth(token string),
+    data(payload string),
+    close,
+}
+
+type Conn task ConnMsg func() {
+    // ---- Phase 1: wait for hello -------------------------------------
+    client := ""
+    for client == "" {
+        msg := receive()
+        switch msg {
+            case .hello as h { client = h.client }
+            case .auth       { std.io.println("auth before hello: dropped") }
+            case .data       { std.io.println("data before hello: dropped") }
+            case .close      { return }
+        }
+    }
+
+    // ---- Phase 2: wait for auth --------------------------------------
+    authed := false
+    for !authed {
+        msg := receive()
+        switch msg {
+            case .auth as a  { authed = a.token == "sesame" }
+            case .hello      { }   // duplicate hello: ignore
+            case .data       { std.io.println("data before auth: dropped") }
+            case .close      { return }
+        }
+    }
+    std.io.println("session open for", client)
+
+    // ---- Phase 3: serve ----------------------------------------------
+    for {
+        msg := receive()
+        switch msg {
+            case .data as d  { std.io.println("echo:", d.payload) }
+            case .close      { std.io.println("bye", client); return }
+            case .hello      { }
+            case .auth       { }
+        }
+    }
+}
+
+conn := Conn()
+conn.send(ConnMsg.data("too early"))      // phase 1 drops it
+conn.send(ConnMsg.hello("alice"))
+conn.send(ConnMsg.auth("sesame"))
+conn.send(ConnMsg.data("hi"))
+conn.send(ConnMsg.close())
+
+// Observation, not complaint: every phase must handle every arm — four
+// arms x three phases = twelve cases for a three-phase protocol. That is
+// exhaustiveness working as intended (each "can't happen here" is a
+// decision made visibly), but it is also the cost Erlang's selective
+// receive avoids. §5 chose FIFO+exhaustive deliberately; this example
+// is what that choice looks like at protocol scale. See FINDINGS #3.

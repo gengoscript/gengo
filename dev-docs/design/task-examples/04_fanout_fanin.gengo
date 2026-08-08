@@ -1,0 +1,51 @@
+// 04 — Fan-out/fan-in: N workers, distribute work, collect results.
+// Exercises: []ActorRef as ordinary data, results converging on one
+// mailbox, counting completions instead of joining.
+//
+// DESIGN SKETCH — none of this compiles today.
+
+const std = import("std")
+
+type SquareMsg variant {
+    square(n int, reply ActorRef),
+}
+
+type ResultMsg variant {
+    result(n int, sq int),
+}
+
+type Squarer task SquareMsg func() {
+    for {
+        msg := receive()
+        switch msg {
+            case .square as s { s.reply.send(ResultMsg.result { n: s.n, sq: s.n * s.n }) }
+        }
+    }
+}
+
+// ActorRefs are plain values: arrays of them need no ceremony.
+workers := []ActorRef{}
+for i := 0; i < 4; i += 1 {
+    workers = std.core.append(workers, Squarer())
+}
+
+// Round-robin the work out.
+for n := 1; n <= 10; n += 1 {
+    workers[n % 4].send(SquareMsg.square { n: n, reply: self() })
+}
+
+// Fan in: we know how many replies to expect, so count them down.
+// (No receive-timeout in v1 (§5.1) means "collect until quiet" is not
+// writable — you count, or you monitor. Counting is honest here.)
+total := 0
+for got := 0; got < 10; got += 1 {
+    msg := receive()
+    switch msg {
+        case .result as r { total += r.sq }
+    }
+}
+std.io.println("sum of squares 1..10:", total)   // 385
+
+// Workers are all blocked in receive() now; main returns, program ends,
+// workers discarded (§9). No shutdown protocol needed for fire-and-forget
+// helpers — only tasks whose *cleanup matters* need a stop arm.

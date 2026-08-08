@@ -1,0 +1,72 @@
+// 09 — THE FOOTGUN FILE (RESOLVED in design rev 0.3). §5 says the price
+// of strict-FIFO receive is that "wait for a specific reply" requires
+// handling or requeueing unrelated messages yourself. Under 0.2's
+// run-to-block scheduling, the obvious requeue implementation below was
+// a LIVELOCK. 0.3 fixed it by making receive() an unconditional yield
+// point (§4.2): each iteration of the requeue loop now rotates the
+// ready queue, the pricer gets its turn, and the loop terminates.
+// Kept verbatim as the motivating trace — the inline comments describe
+// the 0.2 behavior that forced the change. See FINDINGS #9.
+//
+// DESIGN SKETCH — none of this compiles today.
+
+const std = import("std")
+
+type WMsg variant {
+    job(n int),
+    price_reply(p int),
+}
+
+type PriceMsg variant {
+    quote(reply ActorRef),
+}
+
+type Pricer task PriceMsg func() {
+    for {
+        msg := receive()
+        switch msg {
+            case .quote as q { q.reply.send(WMsg.price_reply(42)) }
+        }
+    }
+}
+
+type Worker task WMsg func(pricer ActorRef) {
+    for {
+        msg := receive()
+        switch msg {
+            case .job as j {
+                pricer.send(PriceMsg.quote { reply: self() })
+                // Wait for *the price reply specifically*, requeueing
+                // anything else... which is broken:
+                waiting := true
+                for waiting {
+                    m2 := receive()
+                    switch m2 {
+                        case .price_reply as p {
+                            std.io.println("job", j.n, "priced at", p.p)
+                            waiting = false
+                        }
+                        case .job {
+                            // "Requeue for later" — THE TRAP:
+                            self().send(m2)
+                            // Under run-to-block (§4.2), send never
+                            // yields and receive() on a NON-EMPTY
+                            // mailbox never blocks. If the mailbox
+                            // holds only requeued jobs (the pricer's
+                            // reply hasn't been scheduled yet), this
+                            // loop spins: dequeue job, requeue job,
+                            // dequeue job... forever. The pricer never
+                            // runs. Nothing preempts. Livelock.
+                        }
+                    }
+                }
+            }
+            case .price_reply { }   // stray reply outside a wait: drop
+        }
+    }
+}
+
+pricer := Pricer()
+w := Worker(pricer)
+w.send(WMsg.job(1))
+w.send(WMsg.job(2))    // the second job is what arms the trap

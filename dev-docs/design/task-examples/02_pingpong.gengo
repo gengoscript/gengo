@@ -1,0 +1,63 @@
+// 02 — Two tasks talking to each other: the ref-bootstrapping problem.
+// A task can only learn another task's ref via (a) spawn parameter or
+// (b) message payload. Mutual knowledge therefore takes two steps:
+// spawn A without B, spawn B with A, then introduce B to A by message.
+//
+// DESIGN SKETCH — none of this compiles today.
+
+const std = import("std")
+
+type PingMsg variant {
+    peer(who ActorRef),   // introduction: "here is your counterpart"
+    pong,
+    stop,
+}
+
+type PongMsg variant {
+    ping(from ActorRef),
+}
+
+type Pinger task PingMsg func(rounds int) {
+    // Step 1 of bootstrap: wait to be introduced.
+    var partner ActorRef       // OPEN: zero value of ActorRef? see FINDINGS #6
+    intro := receive()
+    switch intro {
+        case .peer as p { partner = p.who }
+        case .pong      { }    // exhaustiveness forces these arms even
+        case .stop      { }    // during handshake — see FINDINGS #3
+    }
+
+    for rounds > 0 {
+        partner.send(PongMsg.ping(self()))
+        msg := receive()
+        switch msg {
+            case .pong      { rounds -= 1 }
+            case .peer      { }            // late/duplicate intro: ignore
+            case .stop      { return }
+        }
+    }
+}
+
+type Ponger task PongMsg func() {
+    for {
+        msg := receive()
+        switch msg {
+            case .ping as p { p.from.send(PingMsg.pong()) }
+        }
+    }
+}
+
+ponger := Ponger()
+pinger := Pinger(3)
+pinger.monitor()                 // main (task 0) is exempt from the
+                                 // down-arm rule (0.3, §6): its any-typed
+                                 // mailbox always type-fits the delivery
+pinger.send(PingMsg.peer { who: ponger })
+
+done := receive()
+switch done {
+    case .down { std.io.println("pinger finished 3 rounds") }
+}
+// Ponger is still alive and blocked in receive() here. Main returning
+// ends the program (§9) — the ponger is discarded. This is the
+// deliberate Go-style rule, visible in practice.

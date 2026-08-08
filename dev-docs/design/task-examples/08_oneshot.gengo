@@ -1,0 +1,50 @@
+// 08 — One-shot computation tasks ("run this in the background, send me
+// the answer"): the closest thing to a future/promise this model has.
+// Exercises: a task that never receives, ambient access to top-level
+// funcs and consts (the §3.3 exemption used positively).
+//
+// DESIGN SKETCH — none of this compiles today.
+
+const std = import("std")
+
+// Ambient declarations: tasks may use these freely — they're
+// declarations, not data (§3.3).
+const LIMIT = 30
+
+func fib(n int) int {
+    if n < 2 { return n }
+    return fib(n - 1) + fib(n - 2)
+}
+
+type FibReply variant {
+    fib_of(n int, result int),
+    rejected(n int),
+}
+
+// This task never calls receive() — so it declares no message type at
+// all (mailbox-less task, 0.3 §8.2; was FINDINGS #7, now resolved).
+type FibJob task func(n int, reply ActorRef) {
+    if n > LIMIT {
+        reply.send(FibReply.rejected(n))
+        return
+    }
+    reply.send(FibReply.fib_of { n: n, result: fib(n) })
+}
+
+// Kick off three computations "concurrently". Under cooperative
+// run-to-block (§4.2) these actually run to completion one at a time,
+// in spawn order, when main first blocks — concurrency here is about
+// program *structure*, not parallelism. Worth saying out loud in any
+// user-facing docs, because "spawn three jobs" reads parallel to
+// everyone who has used threads. See FINDINGS #5.
+_ = FibJob(10, self())
+_ = FibJob(20, self())
+_ = FibJob(99, self())
+
+for i := 0; i < 3; i += 1 {
+    msg := receive()
+    switch msg {
+        case .fib_of as f   { std.io.println("fib(", f.n, ") =", f.result) }
+        case .rejected as r { std.io.println("fib(", r.n, ") over limit") }
+    }
+}

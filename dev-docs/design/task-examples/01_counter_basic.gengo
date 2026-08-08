@@ -1,0 +1,56 @@
+// 01 — The doc's counter worker, grown into a complete program.
+// Exercises: spawn-as-call, send, monitor, Down delivery on normal
+// return, main-as-task-0 receiving.
+//
+// DESIGN SKETCH — none of this compiles today.
+
+const std = import("std")   // NOTE: `const`, not `:=` — see FINDINGS #1
+
+type CounterMsg variant {
+    add(n int),
+    reset,
+    report(reply ActorRef),          // reply-to carried in the message
+    stop,
+    down(info std.task.DownInfo),    // required to be able to monitor() peers
+}
+
+// The reply the counter sends back. A *different* variant type than
+// CounterMsg — reply targets have their own declared message types.
+type CounterReply variant {
+    value(n int),
+}
+
+type Counter task CounterMsg func(count int) {
+    for {
+        msg := receive()
+        switch msg {
+            case .add as a      { count += a }
+            case .reset         { count = 0 }
+            case .report as r   { r.reply.send(CounterReply.value(count)) }
+            case .stop          { return }   // normal death -> Down(reason: null)
+            case .down          { }          // unused here; arm exists for the type
+        }
+    }
+}
+
+counter := Counter(10)
+counter.monitor()                    // main is task 0: it can monitor
+counter.send(CounterMsg.add(5))
+counter.send(CounterMsg.add(7))
+counter.send(CounterMsg.report { reply: self() })   // self() valid in main
+counter.send(CounterMsg.stop)
+
+// Main's mailbox is any-typed (§9) — see FINDINGS #2 for how this
+// switch is assumed to work.
+reply := receive()
+switch reply {
+    case .value as n { std.io.println("count:", n) }   // prints 22
+}
+
+fin := receive()
+switch fin {
+    case .down as d {
+        // d.reason is null: the counter returned normally.
+        std.io.println("counter ended, reason:", d.reason)
+    }
+}
