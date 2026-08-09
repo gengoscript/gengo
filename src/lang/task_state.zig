@@ -13,6 +13,7 @@
 // the new occupant (§7 — the ABA guard).
 
 const std = @import("std");
+const builtin = @import("builtin");
 const vm_state = @import("vm_state.zig");
 const value_mod = @import("value.zig");
 const Value = value_mod.Value;
@@ -44,16 +45,10 @@ pub const TaskSlot = struct {
     // (claimSlot) and must free.
     owns_vs: bool = false,
     // Whether this task's declared type has a message type at all
-    // (§8.2 — mailbox-less tasks omit it). Governs whether receive()/
-    // monitor() are legal for this task's own body, and whether other
-    // tasks may monitor it.
+    // (§8.2 — mailbox-less tasks omit it). Governs whether receive() is
+    // legal for this task's own body.
     has_mailbox: bool = false,
     mailbox: std.ArrayListUnmanaged(Value) = .empty,
-    watchers: std.ArrayListUnmanaged(TaskId) = .empty,
-    // Set on death (return or uncaught panic) so watcher delivery and
-    // late monitor() calls can construct the down-notification without
-    // re-deriving it. .null means a normal return.
-    death_reason: Value = .null,
 
     fn clear(self: *TaskSlot, allocator: std.mem.Allocator) void {
         if (self.owns_vs) {
@@ -63,7 +58,6 @@ pub const TaskSlot = struct {
             }
         }
         self.mailbox.deinit(allocator);
-        self.watchers.deinit(allocator);
         self.* = .{ .generation = self.generation };
     }
 };
@@ -108,7 +102,25 @@ pub const State = struct {
     // enqueue it). Slot 0 is never returned. Null if the table is full —
     // resource exhaustion, the caller reports this as a runtime error at
     // the spawn site (same family as TooManyGlobals).
+    //
+    // wasm32: rejected outright. vm_state.State's backing arrays
+    // (stack/frames/defer_stack/panic_frames) point at ONE static struct
+    // on this target (g_wasm_backing — see vm_state.zig), the same
+    // aliasing hazard §3.1 rejected per-task Runtimes over in the first
+    // place, just recurring one layer down: every vm_state.State.init()
+    // call on wasm32 binds to that same singleton, so a second live
+    // vm_state (main already holds the first) would silently alias
+    // main's own stack — found by actually running the WASM conformance
+    // suite, not by review; it corrupted state and produced wrong output
+    // rather than crashing, which is a worse failure mode than what
+    // this guard produces (a clean, immediate runtime error). The
+    // design doc's §3.2 correction already named the real fix (a
+    // build-time-sized per-task backing pool, mirroring the array
+    // g_wasm_backing already is on struct_type's WasmBacking) — this
+    // guard exists so the gap between "known and named" and "actually
+    // built" doesn't mean silent corruption in the meantime.
     pub fn claimSlot(self: *State, has_mailbox: bool) !struct { idx: u32, id: TaskId } {
+        if (comptime builtin.target.cpu.arch == .wasm32) return error.TasksNotYetSupportedOnWasm;
         var idx: u32 = 1;
         while (idx < MaxTasks) : (idx += 1) {
             const slot = &self.slots[idx];
@@ -136,8 +148,8 @@ pub const State = struct {
     // "main is task 0") in slot 1, reusing the caller-owned vm_state
     // (Runtime.vm_state) rather than allocating a fresh one — main's
     // execution state already exists and is not this table's to own or
-    // free. Always has a mailbox: main can always receive()/monitor(),
-    // no declared message type required (§9's any-typed exemption).
+    // free. Always has a mailbox: main can always receive(), no declared
+    // message type required (§9's any-typed exemption).
     // Called once per run, right after reset() has cleared the table.
     pub fn claimMainSlot(self: *State, vs: *vm_state.State) TaskId {
         const idx: u32 = 1;

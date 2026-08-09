@@ -2019,17 +2019,14 @@ fn opInvokeMethod(ctx: VMContext) !void {
         return;
     }
     if (recv == .actor_ref) {
-        // send()/monitor() — native behavior, not a resolved *Object call:
-        // dev-docs/design/task-actor-design.md §5/§6, implemented in
-        // vm_task.zig. Pops receiver + args, pushes .null (neither method
-        // has a meaningful return value in v0).
+        // send() — native behavior, not a resolved *Object call:
+        // dev-docs/design/task-actor-design.md §5, implemented in
+        // vm_task.zig. Pops receiver + arg, pushes .null (no meaningful
+        // return value).
         if (common.streq(mname, "send")) {
             if (argc != 1) return error.ArityMismatch;
             const payload = ctx.vs.stack[recv_idx + 1];
             try vmtask.send(ctx, recv.actor_ref, payload);
-        } else if (common.streq(mname, "monitor")) {
-            if (argc != 0) return error.ArityMismatch;
-            try vmtask.monitor(ctx, recv.actor_ref);
         } else {
             return error.NotAMethodReceiver;
         }

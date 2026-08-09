@@ -13,7 +13,6 @@ const vms = @import("../lang/vm_state.zig");
 // below — same reasoning as `vms` vs. the `vm_state` field.
 const tasks_mod = @import("../lang/task_state.zig");
 const vmnative = @import("../lang/vm_native.zig");
-const vmtask = @import("../lang/vm_task.zig");
 const net_state = @import("../lang/native/net_state.zig");
 const http_state = @import("../lang/native/http_state.zig");
 const fs_state = @import("../lang/native/fs_state.zig");
@@ -592,15 +591,21 @@ pub const Runtime = struct {
         // Task/actor scheduling loop (dev-docs/design/task-actor-design.md
         // §4.2/§9). Main is registered as an ordinary task (slot 1, its
         // vm_state is self.vm_state — reused, not allocated) so
-        // self()/receive()/monitor() work at top level; every other slot
-        // is a spawned task with its own vm_state. Cooperative,
-        // run-until-yield: a task keeps the "current" slot until it
-        // blocks in receive() (task_yielded), finishes or panics
-        // (completed / a propagated error), or genuinely suspends
-        // (sleep/IO — .suspended). "Pick the next task" is always
-        // popReady() — main re-enters the ready queue the same way any
-        // other task does (a send() to its mailbox while it's blocked),
-        // so there is no special-cased "return to main."
+        // self()/receive() work at top level; every other slot is a
+        // spawned task with its own vm_state. Cooperative, run-until-
+        // yield: a task keeps the "current" slot until it blocks in
+        // receive() (task_yielded), finishes or panics (completed / a
+        // propagated error), or genuinely suspends (sleep/IO —
+        // .suspended). "Pick the next task" is always popReady() — main
+        // re-enters the ready queue the same way any other task does (a
+        // send() to its mailbox while it's blocked), so there is no
+        // special-cased "return to main."
+        //
+        // No death notification (monitor()/§6 was cut on audit — see
+        // vm_task.zig's header): a dead task's slot is simply marked
+        // .dead so it can be recycled by a future spawn; nothing needs
+        // to know why it died beyond what already reached the caller
+        // for main's own case (captureRuntimeError, unchanged).
         //
         // v0 scope note: a spawned (non-main) task's own sleep/IO
         // suspends the whole run exactly like main's would — there is no
@@ -622,15 +627,8 @@ pub const Runtime = struct {
                     return err;
                 }
                 // A spawned task's unrecovered panic (or any other
-                // infrastructure error) kills only that task (§9) —
-                // runPanicUnwind already ran inside runUntilSuspend and
-                // set panic_value to whatever std.core.recover() would
-                // see, which is exactly what a Down notification's
-                // reason should carry (§6).
-                const reason = cur_vs.panic_value;
+                // infrastructure error) kills only that task (§9).
                 tasks_mod.g_state.slots[cur_idx].status = .dead;
-                tasks_mod.g_state.slots[cur_idx].death_reason = reason;
-                try vmtask.notifyWatchers(ctx, cur_idx, reason);
                 tasks_mod.g_state.current = tasks_mod.g_state.popReady() orelse break :sched .completed;
                 continue :sched;
             };
@@ -649,8 +647,6 @@ pub const Runtime = struct {
                 .completed => {
                     if (cur_idx == main_idx) break :sched .completed; // §9: main returning ends the program
                     tasks_mod.g_state.slots[cur_idx].status = .dead;
-                    tasks_mod.g_state.slots[cur_idx].death_reason = .null;
-                    try vmtask.notifyWatchers(ctx, cur_idx, .null);
                     tasks_mod.g_state.current = tasks_mod.g_state.popReady() orelse break :sched .completed;
                     continue :sched;
                 },

@@ -572,6 +572,14 @@ be coherent, not because it's hard.
 
 ## 6. Death notification (`monitor`)
 
+**Not implemented in v0** (cut on the post-implementation audit,
+2026-08-09): a genuinely separate feature — watcher lists, a death-
+reason payload, a notification shape — bolted onto the spawn/send/
+receive/self() core rather than required for that core to be useful.
+The design below is the intended target if/when it's built; nothing
+about the shipped v0 (spawn/send/receive/self(), no monitor) forecloses
+it — adding it back is additive.
+
 Minimal, **one-way** monitor only — no bidirectional/lethal `link`, no
 supervision trees. `monitor(actor_ref)` (called as `worker.monitor()`)
 registers the calling task as a watcher of the target (a small native-side
