@@ -37,6 +37,12 @@ pub const TaskSlot = struct {
     generation: u32 = 0,
     status: TaskStatus = .empty,
     vs: ?*vm_state.State = null,
+    // False for the main-program slot, whose vs is Runtime.vm_state — a
+    // struct field, not a heap allocation this table owns. Destroying it
+    // on clear() would be memory corruption, not a leak fix. True for
+    // every spawned task, whose vm_state.State this table alloc'd itself
+    // (claimSlot) and must free.
+    owns_vs: bool = false,
     // Whether this task's declared type has a message type at all
     // (§8.2 — mailbox-less tasks omit it). Governs whether receive()/
     // monitor() are legal for this task's own body, and whether other
@@ -50,9 +56,11 @@ pub const TaskSlot = struct {
     death_reason: Value = .null,
 
     fn clear(self: *TaskSlot, allocator: std.mem.Allocator) void {
-        if (self.vs) |vs| {
-            vs.deinit();
-            allocator.destroy(vs);
+        if (self.owns_vs) {
+            if (self.vs) |vs| {
+                vs.deinit();
+                allocator.destroy(vs);
+            }
         }
         self.mailbox.deinit(allocator);
         self.watchers.deinit(allocator);
@@ -118,9 +126,30 @@ pub const State = struct {
             vs.* = .{};
             try vs.init(vm_state.MaxStack, vm_state.MaxFrames, cfg.max_defers, 0, self.allocator);
             slot.vs = vs;
+            slot.owns_vs = true;
             return .{ .idx = idx, .id = self.idFor(idx) };
         }
         return error.TooManyTasks;
+    }
+
+    // Register the running program's own top-level code as a task (§9 —
+    // "main is task 0") in slot 1, reusing the caller-owned vm_state
+    // (Runtime.vm_state) rather than allocating a fresh one — main's
+    // execution state already exists and is not this table's to own or
+    // free. Always has a mailbox: main can always receive()/monitor(),
+    // no declared message type required (§9's any-typed exemption).
+    // Called once per run, right after reset() has cleared the table.
+    pub fn claimMainSlot(self: *State, vs: *vm_state.State) TaskId {
+        const idx: u32 = 1;
+        const slot = &self.slots[idx];
+        slot.generation +%= 1;
+        if (slot.generation == 0) slot.generation = 1;
+        slot.status = .ready;
+        slot.has_mailbox = true;
+        slot.vs = vs;
+        slot.owns_vs = false;
+        self.current = idx;
+        return self.idFor(idx);
     }
 
     // Resolve an ActorRef to its slot index, without regard to whether the

@@ -13,6 +13,7 @@ const vms = @import("../lang/vm_state.zig");
 // below — same reasoning as `vms` vs. the `vm_state` field.
 const tasks_mod = @import("../lang/task_state.zig");
 const vmnative = @import("../lang/vm_native.zig");
+const vmtask = @import("../lang/vm_task.zig");
 const net_state = @import("../lang/native/net_state.zig");
 const http_state = @import("../lang/native/http_state.zig");
 const fs_state = @import("../lang/native/fs_state.zig");
@@ -587,9 +588,73 @@ pub const Runtime = struct {
         try vmnative.installStdGlobal(install_ctx, &self.globals_state);
         try vmnative.installHostModules(install_ctx, &self.globals_state, self.host_modules);
         try vmnative.installCapabilityModules(install_ctx, &self.globals_state, self.capabilityModules());
-        const outcome = vm.runUntilSuspend(.{ .cs = self.chunk_state, .gs = &self.globals_state, .hs = &self.heap_state, .vs = &self.vm_state }) catch |err| {
-            self.captureRuntimeError();
-            return err;
+
+        // Task/actor scheduling loop (dev-docs/design/task-actor-design.md
+        // §4.2/§9). Main is registered as an ordinary task (slot 1, its
+        // vm_state is self.vm_state — reused, not allocated) so
+        // self()/receive()/monitor() work at top level; every other slot
+        // is a spawned task with its own vm_state. Cooperative,
+        // run-until-yield: a task keeps the "current" slot until it
+        // blocks in receive() (task_yielded), finishes or panics
+        // (completed / a propagated error), or genuinely suspends
+        // (sleep/IO — .suspended). "Pick the next task" is always
+        // popReady() — main re-enters the ready queue the same way any
+        // other task does (a send() to its mailbox while it's blocked),
+        // so there is no special-cased "return to main."
+        //
+        // v0 scope note: a spawned (non-main) task's own sleep/IO
+        // suspends the whole run exactly like main's would — there is no
+        // per-task sleep scheduling yet ("other tasks keep running while
+        // one sleeps" is deferred, see the design doc's §11 open
+        // questions). Only receive()-blocking is handled by running
+        // something else in the meantime.
+        _ = tasks_mod.g_state.claimMainSlot(&self.vm_state);
+        const main_idx = tasks_mod.g_state.current;
+        const outcome: vm.RunOutcome = sched: while (true) {
+            const cur_idx = tasks_mod.g_state.current;
+            const cur_vs = tasks_mod.g_state.slots[cur_idx].vs.?;
+            const ctx: vms.VMContext = .{ .cs = self.chunk_state, .gs = &self.globals_state, .hs = &self.heap_state, .vs = cur_vs };
+            tasks_mod.g_state.slots[cur_idx].status = .running;
+
+            const step_outcome = vm.runUntilSuspend(ctx) catch |err| {
+                if (cur_idx == main_idx) {
+                    self.captureRuntimeError();
+                    return err;
+                }
+                // A spawned task's unrecovered panic (or any other
+                // infrastructure error) kills only that task (§9) —
+                // runPanicUnwind already ran inside runUntilSuspend and
+                // set panic_value to whatever std.core.recover() would
+                // see, which is exactly what a Down notification's
+                // reason should carry (§6).
+                const reason = cur_vs.panic_value;
+                tasks_mod.g_state.slots[cur_idx].status = .dead;
+                tasks_mod.g_state.slots[cur_idx].death_reason = reason;
+                try vmtask.notifyWatchers(ctx, cur_idx, reason);
+                tasks_mod.g_state.current = tasks_mod.g_state.popReady() orelse break :sched .completed;
+                continue :sched;
+            };
+            switch (step_outcome) {
+                .suspended => break :sched .suspended,
+                .task_yielded => {
+                    // Already marked .blocked_receive by .task_receive's
+                    // handler. Nothing ready to run in its place means
+                    // every live task is now blocked with nothing left
+                    // that could ever wake one — a permanent hang no
+                    // future event will resolve. Surface it loudly
+                    // rather than let the process sit forever (§4.2).
+                    tasks_mod.g_state.current = tasks_mod.g_state.popReady() orelse return error.TaskDeadlock;
+                    continue :sched;
+                },
+                .completed => {
+                    if (cur_idx == main_idx) break :sched .completed; // §9: main returning ends the program
+                    tasks_mod.g_state.slots[cur_idx].status = .dead;
+                    tasks_mod.g_state.slots[cur_idx].death_reason = .null;
+                    try vmtask.notifyWatchers(ctx, cur_idx, .null);
+                    tasks_mod.g_state.current = tasks_mod.g_state.popReady() orelse break :sched .completed;
+                    continue :sched;
+                },
+            }
         };
 
         if (outcome == .suspended) return .suspended;

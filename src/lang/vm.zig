@@ -1253,6 +1253,26 @@ fn spawnTask(ctx: VMContext, tt: vmod.TaskTypeObj, argc: u8) !vmod.ActorRefValue
 
     const claimed = try tasks_mod.g_state.claimSlot(tt.has_mailbox);
     const new_vs = tasks_mod.g_state.slots[claimed.idx].vs.?;
+    // Policy (allow_io etc.) and capability wiring (fs_es, net_scopes) are
+    // process-wide configuration, not something a freshly vs.init()'d
+    // vm_state has any way to know — its own defaults are the closed-by-
+    // design ones (Policy.allow_io = false, fs_es = the global default
+    // table). Every task shares the same configuration, so inherit it
+    // from whoever is doing the spawning (transitively correct: a task
+    // spawned by a task spawned by main still traces back to main's own
+    // correctly-configured vm_state).
+    new_vs.policy = ctx.vs.policy;
+    new_vs.fs_es = ctx.vs.fs_es;
+    new_vs.net_scopes = ctx.vs.net_scopes;
+    // Bound this task's own execution to its own frame the same way
+    // callValue bounds a re-entrant call: when the behavior function's
+    // `ret` brings frame_top back down to this depth (0, a fresh
+    // vm_state), the dispatch loop must recognize the task is done and
+    // stop — not fall through to whatever bytecode happens to sit at
+    // ip 0 in the shared chunk (main's own top level). Left at the
+    // vm_state default (maxInt), a completed task would silently start
+    // executing main's code on its own vm_state.
+    new_vs.call_depth_target = new_vs.frame_top;
     const new_ctx: VMContext = .{ .cs = ctx.cs, .gs = ctx.gs, .hs = ctx.hs, .vs = new_vs };
     for (cloned[0..argc]) |v| try new_ctx.vs.vmPush(v);
     try enterFunctionFrame(new_ctx, behavior, tt.behavior, null, argc);
@@ -2501,7 +2521,12 @@ inline fn fetchOp(ctx: VMContext) !Op {
 const exec_call_modifier: std.builtin.CallModifier =
     if (builtin.target.cpu.arch.isWasm()) .auto else .always_inline;
 
-pub const RunOutcome = enum { completed, suspended };
+// .task_yielded is produced only when the running task's own .task_receive
+// found an empty mailbox (dev-docs/design/task-actor-design.md §4.2) — a
+// scheduler-internal signal, handled entirely inside the scheduling loop
+// (runtime.zig's runPathWithProvider) and never meant to reach a caller
+// that only knows the classic completed/suspended pair (e.g. runtime/api.zig).
+pub const RunOutcome = enum { completed, suspended, task_yielded };
 
 // Ops whose stack effect is governed by frame semantics (calls enter frames,
 // returns unwind them, tail calls rearrange the stack in place) rather than
@@ -5122,6 +5147,7 @@ pub fn runUntilSuspend(ctx: VMContext) anyerror!RunOutcome {
     }
     runInner(ctx) catch |err| {
         if (err == error.ExecutionSuspended) return .suspended;
+        if (err == error.TaskYield) return .task_yielded;
         // Runtime integrity failures hard-stop with diagnostics — they represent
         // impossible VM states in a program that already passed the verifier.
         if (vm_integrity.isIntegrityError(err)) vm_integrity.fatal(ctx, err);

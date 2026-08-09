@@ -125,6 +125,10 @@ pub const Runtime = struct {
         return switch (outcome) {
             .completed => .completed,
             .suspended => .suspended,
+            // Scheduler-internal (runtime.zig's task scheduling loop handles
+            // it and never returns it past runPathWithProvider) — see
+            // vm.RunOutcome's doc comment.
+            .task_yielded => unreachable,
         };
     }
 
