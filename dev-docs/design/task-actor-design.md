@@ -549,11 +549,15 @@ Left implicit in 0.1; pinned down because determinism (§2) requires it.
 - **`send` never blocks**, so it has none of `receive()`'s reentrancy
   restriction (§4.1) — callable from anywhere, including native callback
   contexts.
-- **`send` to a mailbox-less task panics the sender (0.3).** §8.2's
-  mailbox-less tasks have provably no reader; queueing to one would be
-  a silent, permanent leak (mailboxes are unbounded), so it fails loudly
-  at the crossing point instead — same philosophy as the type check
-  above.
+- ~~`send` to a mailbox-less task panics the sender.~~ Moot as of v0
+  shipping — §8.2's mailbox-less form was cut before release; every
+  task always has a mailbox now. Kept here (struck through, not
+  deleted) because the underlying concern — sending to a task that
+  provably never reads its mail is a silent, permanent leak, since
+  mailboxes are unbounded — is real and still applies to *any* task
+  that never calls `receive()`, mailbox-less or not; v0 just doesn't
+  catch it at the send site anymore. Revisit alongside §8.2 if the
+  message-type annotation ever comes back.
 
 ### 5.1 Receive timeouts — deferred, but named (new in 0.2)
 
@@ -652,9 +656,10 @@ worker is the most common pattern in every example written. Main's
 mailbox is `any`-typed (§9), so the delivery always type-fits; the
 down-notification arrives as a `std.task.DownInfo`-carrying value main
 switches on like anything else. Consistent with §9's stance that typed
-rigor is confined to declared tasks. (A mailbox-less task (§8.2)
-cannot call `monitor()` at all — it has nowhere to receive the
-notification; compile error, same shape as the missing-arm error.)
+rigor is confined to declared tasks. (If §8.2's mailbox-less form ever
+comes back alongside this: such a task couldn't call `monitor()` at
+all — it has nowhere to receive the notification; compile error, same
+shape as the missing-arm error.)
 
 **Concrete "Down-shaped" proposal (new in 0.2 — resolves the §11 open
 question in principle):** detection by *payload type*, not by arm name.
@@ -732,42 +737,40 @@ compile time, breaking nothing.
 type WorkerMsg variant {
     add(n int),
     reset,
-    down(info std.task.DownInfo),
 }
 
-type Worker task WorkerMsg func(count int) {
+type Worker task func(count int) {
     for {
         msg := receive()
         switch msg {
             case .add as a  { count += a }
             case .reset     { count = 0 }
-            case .down as d { std.io.println("peer died") }
         }
     }
 }
 
 worker := Worker(10)
 worker.send(WorkerMsg.add(5))
-worker.monitor()
 ```
 
 (0.3 — FINDINGS #11: arms are lowercase, matching the convention every
 spec test already uses (`deny`, `ok`, `circle`); earlier drafts
-capitalized them. The §6 payload-type rule means the down arm's *name*
-carries no significance anyway.)
+capitalized them. Shown as it shipped in v0 — no message-type
+annotation on the task decl and no `monitor()`; see the note after
+§8.1 and §6's own status note for why.)
 
 ### 8.1 Rationale, and what was tried and rejected
 
-`type Worker task WorkerMsg func(count int) { ... }` uses two pieces of
-grammar that already exist, combined for a new kind:
+`type Worker task func(count int) { ... }` uses two pieces of grammar
+that already exist, combined for a new kind:
 - `type Name Kind [modifier] { body }` is the existing shape named types
   already use (`type Age int range 0..100`, `type Port int range
   1..65535 default 8080`). `task` is a new sibling to `struct`/
-  `variant`/`interface`/`enum` under that same umbrella; the trailing
-  modifier here names the message type. (`task` should be a *contextual*
-  keyword — valid only in the kind position after `type Name` — following
-  the precedent of the existing contextual clause words like `range`/
-  `predicate`/`default`, so no user identifier breaks.)
+  `variant`/`interface`/`enum` under that same umbrella. (`task` should
+  be a *contextual* keyword — valid only in the kind position after
+  `type Name` — following the precedent of the existing contextual
+  clause words like `range`/`predicate`/`default`, so no user identifier
+  breaks.)
 - `func(params) { body }` is completely ordinary — the same shape used by
   predicate declarations (`type Port int predicate func(x) { ... }`) and
   by any function. No new grammar.
@@ -809,9 +812,9 @@ zero new grammar. Spawn arguments are type-checked like any call's
 (existing machinery), plus §3.4's sendability rule on the parameter
 types, checked once at the declaration.
 
-**`worker.send(...)` / `worker.monitor()`** are ordinary methods on
-`ActorRef`, dispatched the same way builtin string/bytes methods already
-are.
+**`worker.send(...)`** (and `worker.monitor()`, when it exists — cut
+from v0, §6) is an ordinary method on `ActorRef`, dispatched the same
+way builtin string/bytes methods already are.
 
 **`receive()` is a contextual builtin**, valid only lexically inside a
 task's own body (§4.1's tightened rule) — the same kind of contextual
@@ -842,35 +845,43 @@ separate problem via the existing named-type/subtype `default` clause
 machinery — not something task syntax needs to invent its own mechanism
 for.
 
-### 8.2 Mailbox-less tasks (new in 0.3 — FINDINGS #7)
+### 8.2 Message-type annotation and mailbox-less tasks — tried, shipped, then cut
 
-Two of the first eight realistic examples written (`task-examples/05`'s
-ticker, `08`'s one-shot computation) were tasks that never call
-`receive()` — and both needed a dummy `variant { unused }` to satisfy
-the grammar. Worse than ugly: a dummy message type advertises a mailbox
-nobody will ever read, and §5's unbounded mailboxes make sending to one
-a silent, permanent leak.
+0.3 gave `task` an optional trailing message-type name —
+`type Worker task WorkerMsg func(...) {...}` — whose *absence* declared
+a "mailbox-less" task (§8.2 as it stood at 0.3: no `receive()` allowed
+in the body, sends to it panic the sender rather than leak into a
+mailbox nobody drains). Motivation at the time: two of the first eight
+realistic examples written (`task-examples/05`'s ticker, `08`'s
+one-shot computation) never called `receive()` and needed a dummy
+`variant { unused }` just to satisfy the grammar — worse than ugly,
+since a dummy message type still advertises a mailbox nobody reads,
+and §5's unbounded mailboxes make sending to it a silent, permanent
+leak.
 
-So the message type is **optional**: omitting it declares a mailbox-less
-task —
+**Implemented, then removed before shipping v0**, on the post-
+implementation audit: the annotation wasn't earning its cost. v0 never
+type-checks `receive()`'s result against anything (§9's note below,
+FINDINGS #2), so "declare a message type" was pure ceremony plus a
+runtime has-mailbox flag — no actual typing happened either way. And
+the safety case was weaker than it looked: the mailbox-less form only
+catches *one* spelling of "a task that never drains its mailbox" (the
+one where no message type is declared at all). A task *with* a
+declared message type that simply never calls `receive()` in its body
+leaks identically, and nothing in the grammar catches that version —
+so the protection was inconsistent, not a real guarantee, for the
+permanent cost of a second grammar form every task declaration has to
+be read against ("does this one have the type name or not").
 
-```gengo
-type Ticker task func(target ActorRef, interval_ms int) {
-    for {
-        std.time.sleep(interval_ms)
-        target.send(CacheMsg.tick())
-    }
-}
-```
-
-Grammar stays unambiguous: the kind position after `task` is followed by
-either a type name or `func`. Semantics of the omission: `receive()` in
-the body is a compile error (there is no mailbox and no message type for
-it to produce); `monitor()` likewise (§6 — nowhere to deliver); sends
-*to* such a task's ref panic the sender (§5 — provably no reader, fail
-at the crossing point rather than leak). The task can still `send`,
-`self()`, and be monitored *by* others — one-shot workers reporting
-completion via Down alone are a legitimate pattern.
+v0's answer: every task always has a mailbox; `type Name task
+func(params) {...}` is the only form. A task that never calls
+`receive()` (the ticker/one-shot case above) just doesn't drain its
+mailbox — exactly as before, minus the syntax that half-flagged it.
+Revisit the annotation (and what its absence should mean) once
+`receive()` has a real declared result type to check against — at that
+point the same grammar slot would be doing actual work, not just
+gating a bool, and the tradeoff would need re-evaluating fresh rather
+than inherited from this reasoning.
 
 ## 9. The main program, and program lifecycle (new in 0.2)
 

@@ -82,13 +82,10 @@ pub const StructFieldSpec = struct {
 };
 pub const StructTypeObj = struct { name: []const u8, qualified_name: []const u8, fields: []StructFieldSpec };
 // A task/actor type declaration (dev-docs/design/task-actor-design.md
-// §8): `type Name task [MsgType] func(params) { body }`. `behavior` is
-// the compiled body — an ordinary FuncObj, called via performCall's
-// .task_type arm to spawn rather than run synchronously. `has_mailbox`
-// is false for the §8.2 mailbox-less form (no MsgType given): such a
-// task's body may not call receive(), and other tasks may not monitor
-// it or send to it (send panics the sender — provably no reader).
-pub const TaskTypeObj = struct { name: []const u8, qualified_name: []const u8, has_mailbox: bool, behavior: *Object };
+// §8): `type Name task func(params) { body }`. `behavior` is the
+// compiled body — an ordinary FuncObj, called via performCall's
+// .task_type arm to spawn rather than run synchronously.
+pub const TaskTypeObj = struct { name: []const u8, qualified_name: []const u8, behavior: *Object };
 pub const InterfaceMethodSpec = struct {
     name: []const u8,
     arity: u8,

@@ -1098,9 +1098,6 @@ pub fn varExpr(c: anytype, name: Token) !void {
         if (!(c.in_task_body or !c.inFunc())) {
             return c.err("'receive()' is only valid inside a task's own body", .{});
         }
-        if (c.in_task_body and !c.task_has_mailbox) {
-            return c.err("this task has no message type declared and cannot receive()", .{});
-        }
         c.advance(); // consume '('
         try c.consume(.rparen);
         try c.cs.emitOp(.task_receive, name.line);

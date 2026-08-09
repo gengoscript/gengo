@@ -220,9 +220,6 @@ pub const Compiler = struct {
     // inside a closure handed to a native higher-order function (the
     // reentrant-run() constraint verified against vm.zig's callValue).
     in_task_body: bool = false,
-    // Whether the enclosing task declared a message type at all (§8.2 —
-    // mailbox-less tasks omit it). Only meaningful while in_task_body.
-    task_has_mailbox: bool = false,
 
     // ── Lifecycle ────────────────────────────────────────────────────────────────
 

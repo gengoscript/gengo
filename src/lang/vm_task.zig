@@ -127,9 +127,6 @@ pub fn send(ctx: VMContext, target: vmod.ActorRefValue, payload: Value) !void {
     const ts = tasks_mod.g_state;
     const idx = ts.resolveSameGeneration(target) orelse return; // stale ref: nothing to check against, just drop
     if (!ts.isAlive(idx)) return; // dead, slot not yet reused: silent drop (§5)
-    // Mailbox-less target: provably no reader, ever. Fail loudly instead
-    // of queuing into a mailbox nothing will ever drain (§8.2/§5).
-    if (!ts.slots[idx].has_mailbox) return error.NotSendable;
     const clone = try checkSendableAndClone(ctx, payload);
     try ctx.vs.pushTempRoot(clone);
     defer ctx.vs.popTempRoot();

@@ -1,10 +1,12 @@
 // Task/actor concurrency primitive (dev-docs/design/task-actor-design.md):
 // spawn via call syntax, send/receive, and request-reply via self().
 // v0 scope — see task-examples/FINDINGS.md in the design doc: receive()
-// returns `any` (no static message typing yet). monitor()/death
-// notification (§6) is cut from v0 scope entirely (audited out — a
-// separate feature from the spawn/send/receive/self() core, not
-// required for that core to be useful).
+// returns `any` (no static message typing yet), so a task declaration
+// names no message type (`type Name task func(params) { body }`) —
+// every task always has a mailbox. monitor()/death notification (§6)
+// is cut from v0 scope entirely (audited out — a separate feature from
+// the spawn/send/receive/self() core, not required for that core to be
+// useful).
 std := import("std")
 
 type WorkerMsg variant {
@@ -13,7 +15,7 @@ type WorkerMsg variant {
     stop,
 }
 
-type Worker task WorkerMsg func(count int) {
+type Worker task func(count int) {
     for {
         msg := receive()
         switch msg {
@@ -32,11 +34,10 @@ result := receive()
 std.io.println("result:", result)
 w.send(WorkerMsg.stop)
 
-// Mailbox-less task (§8.2): no message type declared, receive() inside
-// its own body would be a compile error. Without monitor(), a
-// mailbox-less task reports back the only way it still can: taking a
-// reply target as an ordinary spawn parameter and send()ing to it
-// directly.
+// A task that never calls receive() still has a mailbox (nothing
+// distinguishes it syntactically) — it just never drains it. Reports
+// back the only way that works without monitor(): taking a reply
+// target as an ordinary spawn parameter and send()ing to it directly.
 type Ticker task func(n int, reply actor) {
     total := 0
     for i := 0; i < n; i += 1 {

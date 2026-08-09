@@ -517,22 +517,22 @@ pub fn namedFuncDecl(c: anytype, is_pub: bool) !void {
     c.matchOpt(.semicolon);
 }
 
-// `type Name task [MsgType] func(params) { body }` — dev-docs/design/
+// `type Name task func(params) { body }` — dev-docs/design/
 // task-actor-design.md §8. Reached from namedTypeDecl's kind dispatch,
-// same shape as struct/interface/variant. `task` and the message-type
-// name are both plain identifiers (contextual, not lexer keywords),
-// matched the same way namedTypeDecl already matches `error`.
+// same shape as struct/interface/variant. `task` is a plain identifier
+// (contextual, not a lexer keyword), matched the same way namedTypeDecl
+// already matches `error`.
 //
-// MsgType is optional (§8.2 — a mailbox-less task, e.g. a one-shot
-// worker or a pure timer, has nowhere to receive() and nothing for
-// other tasks to send() or monitor() against). v0 does not statically
-// type receive()'s result as MsgType (see FINDINGS #2 in
-// dev-docs/design/task-examples/) — MsgType's only effect right now is
-// gating receive()/monitor() legality. It must still name a real
-// declared type: a bare identifier here is overwhelmingly a typo for
-// an intended message type, not a token worth accepting silently, and
-// requiring a real type now keeps the door open for real static typing
-// later without a breaking syntax change.
+// No message-type annotation (§8.2's optional-message-type/mailbox-less
+// split was cut on audit before shipping: v0 never type-checks
+// receive()'s result against anything — see FINDINGS #2 in
+// dev-docs/design/task-examples/ — so the annotation would have been
+// pure ceremony plus a has-mailbox flag, for a footgun it only half
+// closed (a task WITH a declared type that never calls receive() leaks
+// identically to one without). Every task always has a mailbox now.
+// Revisit if/when receive() is ever given a real declared result type
+// — adding the annotation back then is additive, not a breaking
+// change, for programs that don't use it.
 pub fn taskDeclBody(c: anytype, kw: Token, name_tok: Token, is_pub: bool) !void {
     const name = name_tok.src;
 
@@ -554,16 +554,6 @@ pub fn taskDeclBody(c: anytype, kw: Token, name_tok: Token, is_pub: bool) !void 
         try c.registry.addTaskType(name);
     }
 
-    var has_mailbox = false;
-    if (c.cur.typ != .kw_func) {
-        if (c.cur.typ != .ident) return c.err("expected a message type name or 'func', found {s}", .{c.tokenName(c.cur.typ)});
-        const msg_name = c.cur.src;
-        if (!c.skipping_test_body and !c.isKnownTypeName(msg_name)) {
-            return c.err("unknown message type '{s}'", .{msg_name});
-        }
-        c.advance();
-        has_mailbox = true;
-    }
     try c.consume(.kw_func);
 
     // receive()/self() are contextual builtins only lexically inside this
@@ -572,13 +562,8 @@ pub fn taskDeclBody(c: anytype, kw: Token, name_tok: Token, is_pub: bool) !void 
     // (top level, or — if type decls are ever nested in a function body —
     // that function's own scope, which is not itself a task body).
     const saved_in_task_body = c.in_task_body;
-    const saved_task_has_mailbox = c.task_has_mailbox;
     c.in_task_body = true;
-    c.task_has_mailbox = has_mailbox;
-    defer {
-        c.in_task_body = saved_in_task_body;
-        c.task_has_mailbox = saved_task_has_mailbox;
-    }
+    defer c.in_task_body = saved_in_task_body;
 
     // Not routed through pending_func_qname/in_progress_sigs: those exist
     // so a named function's body can call itself recursively by name.
@@ -593,7 +578,6 @@ pub fn taskDeclBody(c: anytype, kw: Token, name_tok: Token, is_pub: bool) !void 
     tt.* = .{ .task_type = .{
         .name = try c.copyName(name),
         .qualified_name = qname,
-        .has_mailbox = has_mailbox,
         .behavior = behavior,
     } };
     if (!c.skipping_test_body) c.registry.setTaskObj(name, tt);

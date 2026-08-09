@@ -44,10 +44,8 @@ pub const TaskSlot = struct {
     // every spawned task, whose vm_state.State this table alloc'd itself
     // (claimSlot) and must free.
     owns_vs: bool = false,
-    // Whether this task's declared type has a message type at all
-    // (§8.2 — mailbox-less tasks omit it). Governs whether receive() is
-    // legal for this task's own body.
-    has_mailbox: bool = false,
+    // Every task has a mailbox (§8.2's mailbox-less split was cut before
+    // shipping — see compiler_decls.zig's taskDeclBody).
     mailbox: std.ArrayListUnmanaged(Value) = .empty,
 
     fn clear(self: *TaskSlot, allocator: std.mem.Allocator) void {
@@ -119,7 +117,7 @@ pub const State = struct {
     // g_wasm_backing already is on struct_type's WasmBacking) — this
     // guard exists so the gap between "known and named" and "actually
     // built" doesn't mean silent corruption in the meantime.
-    pub fn claimSlot(self: *State, has_mailbox: bool) !struct { idx: u32, id: TaskId } {
+    pub fn claimSlot(self: *State) !struct { idx: u32, id: TaskId } {
         if (comptime builtin.target.cpu.arch == .wasm32) return error.TasksNotYetSupportedOnWasm;
         var idx: u32 = 1;
         while (idx < MaxTasks) : (idx += 1) {
@@ -132,7 +130,6 @@ pub const State = struct {
             // TaskId indistinguishable from the null ref.
             if (slot.generation == 0) slot.generation = 1;
             slot.status = .ready;
-            slot.has_mailbox = has_mailbox;
             const vs = try self.allocator.create(vm_state.State);
             errdefer self.allocator.destroy(vs);
             vs.* = .{};
@@ -148,16 +145,14 @@ pub const State = struct {
     // "main is task 0") in slot 1, reusing the caller-owned vm_state
     // (Runtime.vm_state) rather than allocating a fresh one — main's
     // execution state already exists and is not this table's to own or
-    // free. Always has a mailbox: main can always receive(), no declared
-    // message type required (§9's any-typed exemption).
-    // Called once per run, right after reset() has cleared the table.
+    // free. Called once per run, right after reset() has cleared the
+    // table.
     pub fn claimMainSlot(self: *State, vs: *vm_state.State) TaskId {
         const idx: u32 = 1;
         const slot = &self.slots[idx];
         slot.generation +%= 1;
         if (slot.generation == 0) slot.generation = 1;
         slot.status = .ready;
-        slot.has_mailbox = true;
         slot.vs = vs;
         slot.owns_vs = false;
         self.current = idx;

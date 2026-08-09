@@ -1251,7 +1251,7 @@ fn spawnTask(ctx: VMContext, tt: vmod.TaskTypeObj, argc: u8) !vmod.ActorRefValue
         rooted += 1;
     }
 
-    const claimed = try tasks_mod.g_state.claimSlot(tt.has_mailbox);
+    const claimed = try tasks_mod.g_state.claimSlot();
     const new_vs = tasks_mod.g_state.slots[claimed.idx].vs.?;
     // Policy (allow_io etc.) and capability wiring (fs_es, net_scopes) are
     // process-wide configuration, not something a freshly vs.init()'d
