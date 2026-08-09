@@ -29,6 +29,8 @@ const build_options = @import("build_options");
 const vmnative = @import("vm_native.zig");
 const vmperf = @import("vm_perf.zig");
 const io = @import("../runtime/io.zig");
+const tasks_mod = @import("task_state.zig");
+const vmtask = @import("vm_task.zig");
 
 // ── Public re-exports (external callers import from vm.zig unchanged) ─────────
 
@@ -1223,6 +1225,43 @@ noinline fn performCallColdIC(ctx: VMContext, argc: u8, ic_base: usize, ic_slot:
     return performCall(ctx, argc);
 }
 
+// `Worker(args...)` where Worker is task-kind: allocate a task table
+// slot with its own vm_state, deep-copy the arguments into it (§3.4 —
+// same sendability gate as send()), enter its behavior function's frame
+// with call_depth_target left at the fresh vm_state's default (0), and
+// mark it ready. Running it is then just calling runInner on its
+// vm_state — the scheduler's job (task_state.zig / the runtime's
+// scheduling loop), not this function's.
+fn spawnTask(ctx: VMContext, tt: vmod.TaskTypeObj, argc: u8) !vmod.ActorRefValue {
+    if (tt.behavior.* != .function) return error.NotAFunction;
+    const behavior = tt.behavior.function;
+
+    // Clone every arg on the CALLER's vm_state first (shared heap; the
+    // caller's temp-root stack protects the clones while more of them
+    // are still being produced) — claiming a task slot before this could
+    // succeed would leak the slot permanently on a cloning failure, since
+    // there's no "unclaim" path.
+    var cloned: [255]Value = undefined;
+    const args_src = ctx.vs.stack[ctx.vs.stack_top - @as(usize, argc) .. ctx.vs.stack_top];
+    var rooted: usize = 0;
+    errdefer for (0..rooted) |_| ctx.vs.popTempRoot();
+    for (args_src, 0..) |a, i| {
+        cloned[i] = try vmtask.checkSendableAndClone(ctx, a);
+        try ctx.vs.pushTempRoot(cloned[i]);
+        rooted += 1;
+    }
+
+    const claimed = try tasks_mod.g_state.claimSlot(tt.has_mailbox);
+    const new_vs = tasks_mod.g_state.slots[claimed.idx].vs.?;
+    const new_ctx: VMContext = .{ .cs = ctx.cs, .gs = ctx.gs, .hs = ctx.hs, .vs = new_vs };
+    for (cloned[0..argc]) |v| try new_ctx.vs.vmPush(v);
+    try enterFunctionFrame(new_ctx, behavior, tt.behavior, null, argc);
+
+    for (0..rooted) |_| ctx.vs.popTempRoot();
+    try tasks_mod.g_state.enqueueReady(claimed.idx);
+    return claimed.id;
+}
+
 fn performCall(ctx: VMContext, argc: u8) !void {
     if (ctx.vs.stack_top < @as(usize, argc) + 1) return error.StackUnderflow;
     const func_val = ctx.vs.stack[ctx.vs.stack_top - argc - 1];
@@ -1252,6 +1291,11 @@ fn performCall(ctx: VMContext, argc: u8) !void {
             try validateNamedCollectionElements(ctx, obj, out);
             try checkNamedTypePredicateChain(ctx, obj, out.namedInner() orelse out);
             try pop2push1(ctx, out);
+        },
+        .task_type => |tt| {
+            const ref = try spawnTask(ctx, tt, argc);
+            ctx.vs.stack_top -= @as(usize, argc) + 1;
+            try ctx.vs.vmPush(.{ .actor_ref = ref });
         },
         .enum_type => |et| {
             if (et.parent_name == null) return error.NotAFunction;
@@ -1954,6 +1998,25 @@ fn opInvokeMethod(ctx: VMContext) !void {
         try insertReceiverAndCall(ctx, recv_idx, resolved.func, recv, argc);
         return;
     }
+    if (recv == .actor_ref) {
+        // send()/monitor() — native behavior, not a resolved *Object call:
+        // dev-docs/design/task-actor-design.md §5/§6, implemented in
+        // vm_task.zig. Pops receiver + args, pushes .null (neither method
+        // has a meaningful return value in v0).
+        if (common.streq(mname, "send")) {
+            if (argc != 1) return error.ArityMismatch;
+            const payload = ctx.vs.stack[recv_idx + 1];
+            try vmtask.send(ctx, recv.actor_ref, payload);
+        } else if (common.streq(mname, "monitor")) {
+            if (argc != 0) return error.ArityMismatch;
+            try vmtask.monitor(ctx, recv.actor_ref);
+        } else {
+            return error.NotAMethodReceiver;
+        }
+        ctx.vs.stack_top = recv_idx;
+        try ctx.vs.vmPush(.null);
+        return;
+    }
     if (recv != .object) return error.NotAMethodReceiver;
     switch (recv.object.*) {
         .struct_instance => |inst| {
@@ -2622,6 +2685,11 @@ fn runInner(ctx: VMContext) !void {
                 const dbg_stack = ctx.vs.stack_top;
                 const dbg_frame = ctx.vs.frame_top;
                 if (try @call(exec_call_modifier, execOne, .{ ctx, op })) return;
+                // .task_receive's blocked path rewinds ip onto itself and sets
+                // this without pushing a result — check before the stackEffect
+                // assertion below, which would otherwise see a declared push=1
+                // that didn't happen. See task_state.zig / vm_state.task_yield.
+                if (ctx.vs.task_yield) return error.TaskYield;
                 if (ctx.vs.frame_top == dbg_frame) {
                     const eff = chunk_verifier.stackEffect(op, ctx.cs.code, dbg_op_ip);
                     const want = dbg_stack - @as(usize, eff.pop) + @as(usize, eff.push);
@@ -2639,6 +2707,7 @@ fn runInner(ctx: VMContext) !void {
                 // handlers require a complete memory stack.
                 @call(exec_call_modifier, tosSpill, .{ ctx, &ts });
                 if (try @call(exec_call_modifier, execOne, .{ ctx, op })) return;
+                if (ctx.vs.task_yield) return error.TaskYield;
                 if (ctx.vs.sleep_deadline_ns != null) return error.ExecutionSuspended;
                 gas -= 1;
                 if (gas == 0) gas = try dispatchTick(ctx);
@@ -2810,6 +2879,27 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 const off = opInt(ctx);
                 if (off > ctx.vs.ip) return error.InvalidChunkShape;
                 ctx.vs.ip -= off;
+            },
+
+            .task_self => {
+                ctx.vs.vmPushU(.{ .actor_ref = tasks_mod.g_state.currentId() });
+            },
+            .task_receive => {
+                const slot = &tasks_mod.g_state.slots[tasks_mod.g_state.current];
+                // Cleared unconditionally first: a stale `true` from a prior
+                // blocked attempt on this same vm_state must not leak into
+                // this (possibly successful) attempt — see vm_state.zig's
+                // task_yield field comment.
+                ctx.vs.task_yield = false;
+                if (slot.mailbox.items.len > 0) {
+                    ctx.vs.vmPushU(slot.mailbox.orderedRemove(0));
+                } else {
+                    // 1-byte op (no operand) — rewind exactly onto its own
+                    // opcode byte so the retry re-fetches this instruction.
+                    ctx.vs.ip -= 1;
+                    slot.status = .blocked_receive;
+                    ctx.vs.task_yield = true;
+                }
             },
 
             .add => {

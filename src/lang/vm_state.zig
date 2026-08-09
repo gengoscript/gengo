@@ -124,6 +124,15 @@ pub const State = struct {
     alloc_managed_bytes_calls: u64 = 0,
     ops_budget_remaining: u64 = std.math.maxInt(u64),
     sleep_deadline_ns: ?i128 = null,
+    // Set by .task_receive's handler when it finds an empty mailbox and
+    // rewinds ip back onto itself to retry later (dev-docs/design/
+    // task-actor-design.md §4.2 — receive() is an unconditional yield
+    // point). Checked at the same post-instruction safepoint as
+    // sleep_deadline_ns, but propagates a different error: this task's
+    // block is the scheduler's business to resolve internally (try other
+    // ready tasks), never something the host embedding sees, unlike a
+    // real sleep/IO suspension which must reach the host as `.suspended`.
+    task_yield: bool = false,
     defer_stack: []Value = &[_]Value{},
     defer_top: usize = 0,
     panic_line: u32 = 0,
@@ -247,6 +256,7 @@ pub const State = struct {
         self.defer_top = 0;
         self.ops_budget_remaining = std.math.maxInt(u64);
         self.sleep_deadline_ns = null;
+        self.task_yield = false;
         self.panic_line = 0;
         self.panic_col = 0;
         self.panic_path_len = 0;

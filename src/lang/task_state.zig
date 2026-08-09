@@ -82,8 +82,16 @@ pub const State = struct {
         self.* = .{};
     }
 
-    fn idFor(self: *const State, idx: u32) TaskId {
+    pub fn idFor(self: *const State, idx: u32) TaskId {
         return .{ .index = idx, .generation = self.slots[idx].generation };
+    }
+
+    // ActorRef of the task currently executing. Only valid once the
+    // scheduler has claimed a slot for the running program's own
+    // top-level code (task_state.zig's caller does this before the first
+    // instruction ever runs — see Runtime's scheduler entry point).
+    pub fn currentId(self: *const State) TaskId {
+        return self.idFor(self.current);
     }
 
     // Find a free slot (empty, or dead-and-being-recycled) and claim it —

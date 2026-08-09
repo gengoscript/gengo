@@ -1080,6 +1080,33 @@ pub fn unaryExpr(c: anytype, tt: TT) !void {
 }
 
 pub fn varExpr(c: anytype, name: Token) !void {
+    // self() — a contextual builtin, valid anywhere (never blocks, so it
+    // carries none of receive()'s lexical restriction; see design doc §7).
+    if (common.streq(name.src, "self") and c.check(.lparen)) {
+        c.advance(); // consume '('
+        try c.consume(.rparen);
+        try c.cs.emitOp(.task_self, name.line);
+        c.clearCurrentExprPrimInfo();
+        return;
+    }
+    // receive() — a contextual builtin, legal only lexically inside a
+    // task's own body (or top-level/main code) — never inside a nested
+    // function literal, which funcLit() enforces by clearing in_task_body
+    // for its own scope; see design doc §4.1 and compiler.zig's
+    // in_task_body field comment.
+    if (common.streq(name.src, "receive") and c.check(.lparen)) {
+        if (!(c.in_task_body or !c.inFunc())) {
+            return c.err("'receive()' is only valid inside a task's own body", .{});
+        }
+        if (c.in_task_body and !c.task_has_mailbox) {
+            return c.err("this task has no message type declared and cannot receive()", .{});
+        }
+        c.advance(); // consume '('
+        try c.consume(.rparen);
+        try c.cs.emitOp(.task_receive, name.line);
+        c.clearCurrentExprPrimInfo();
+        return;
+    }
     if ((common.streq(name.src, "int") or common.streq(name.src, "float") or
         common.streq(name.src, "bool") or common.streq(name.src, "string") or
         common.streq(name.src, "bigint")) and c.match(.lparen))

@@ -65,8 +65,10 @@ pub const Op = enum(u8) {
     // reserved_2e..reserved_31, reserved_38..reserved_3d: were add_int/sub_int/
     // mul_int/div_int and eq_int/ne_int/lt_int/le_int/gt_int/ge_int, reclaimed
     // 2026-07-21 — measured no benefit over the generic ops (see CHANGELOG.md).
-    reserved_2e = 0x2E,
-    reserved_2f = 0x2F,
+    // task_self/task_receive (0x2E/0x2F): task/actor primitives — see
+    // dev-docs/design/task-actor-design.md §8 and task_state.zig.
+    task_self = 0x2E,
+    task_receive = 0x2F,
     reserved_30 = 0x30,
     reserved_31 = 0x31,
     // zero-compare: pop one int, compare against 0.

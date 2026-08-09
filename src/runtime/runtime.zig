@@ -257,6 +257,7 @@ pub const Runtime = struct {
         vm.setActive(&self.vm_state);
         self.vm_state.reset();
         self.heap_state.reset();
+        self.task_state.allocator = allocator;
         tasks_mod.setActive(&self.task_state);
         self.task_state.reset();
         self.fs_mounts = fs_state.defaultState().*;
