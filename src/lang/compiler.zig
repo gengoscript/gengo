@@ -698,11 +698,48 @@ pub const Compiler = struct {
                 self.clearNamespaceProvenance();
             }
         } else if (self.resolveUpvalue(name.src)) |uv| {
+            // §3.3: no implicit capture, at all. A task declared inside an
+            // enclosing function (rare — most task decls are top-level,
+            // where there is nothing to capture from) could otherwise
+            // close over that function's locals as an ordinary closure
+            // would. in_task_body is only true while compiling the
+            // task's own direct body (funcLit clears it for nested
+            // closures within the task, which legitimately capture the
+            // task's OWN locals via normal closure semantics — this
+            // check must not and does not fire there).
+            if (self.in_task_body) {
+                self.setErr("task body cannot capture '{s}' from an enclosing function; pass it as a spawn parameter instead", .{name.src});
+                self.err_line = name.line;
+                self.err_col = @intCast(name.col);
+                return error.TaskBodyCapturesOuterLocal;
+            }
             try self.cs.emit2(@intFromEnum(Op.get_upvalue), uv, name.line);
             self.pending_call_qname = null;
             self.clearNamespaceProvenance();
         } else {
             const qname = try self.qualifyGlobalName(name.src);
+            // §3.3: inside a task body, only const/func/type/subtype/import
+            // top-level bindings are visible — declarations, not data.
+            // Everything else (a same-module mutable global, `g := 10`)
+            // would be shared mutable state reachable from every task,
+            // exactly what the isolation model exists to rule out.
+            // Import bindings (`std := import(...)`) are implicitly const
+            // (0.3 — the ubiquitous `:=` idiom would otherwise be banned
+            // from every task body that uses std); everything else `:=`-
+            // or `var`-bound at top level is not.
+            if (self.in_task_body and !self.skipping_test_body) {
+                const is_ambient = self.registry.hasGlobalConst(name.src) or
+                    self.registry.hasGlobalFunc(qname) or
+                    self.registry.hasAnyTypeName(name.src) or
+                    self.getImportModuleGlobalPath(qname) != null or
+                    self.getStdModuleGlobalPath(qname) != null;
+                if (!is_ambient) {
+                    self.setErr("global '{s}' is mutable and cannot be referenced inside a task body; pass it as a spawn parameter instead", .{name.src});
+                    self.err_line = name.line;
+                    self.err_col = @intCast(name.col);
+                    return error.MutableGlobalInTaskBody;
+                }
+            }
             if (!self.inFunc() and self.block_depth == 1 and !self.skipping_test_body) {
                 if (self.options.check_global_exists) |checker| {
                     if (!checker(self.options.check_global_ctx.?, qname)) {

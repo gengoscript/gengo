@@ -1,0 +1,52 @@
+// Task/actor concurrency primitive (dev-docs/design/task-actor-design.md):
+// spawn via call syntax, send/receive, request-reply via self(), and
+// monitor()/death notification. v0 scope — see task-examples/FINDINGS.md
+// in the design doc: receive() returns `any` (no static message typing
+// yet), monitor() delivers a plain [who, reason] 2-element array rather
+// than the design's named DownInfo struct.
+std := import("std")
+
+type WorkerMsg variant {
+    add(n int),
+    report(reply actor),
+    stop,
+}
+
+type Worker task WorkerMsg func(count int) {
+    for {
+        msg := receive()
+        switch msg {
+            case .add as a { count += a }
+            case .report as r { r.send(count) }
+            case .stop { return }
+        }
+    }
+}
+
+w := Worker(10)
+w.monitor()
+w.send(WorkerMsg.add(5))
+w.send(WorkerMsg.add(7))
+w.send(WorkerMsg.report(self()))
+result := receive()
+std.io.println("result:", result)
+
+w.send(WorkerMsg.stop)
+down := receive()
+std.io.println("down:", down)
+
+// Mailbox-less task (§8.2): no message type declared, receive() inside
+// its own body would be a compile error; it can still self()/send(),
+// and other tasks may still monitor it (the mailbox requirement is on
+// the watcher, not the target) to learn when it finishes.
+type Ticker task func(n int) {
+    total := 0
+    for i := 0; i < n; i += 1 {
+        total += i
+    }
+    std.io.println("ticker total:", total)
+}
+t := Ticker(5)
+t.monitor()
+tick_down := receive()
+std.io.println("ticker done:", tick_down)
