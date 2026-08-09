@@ -11,6 +11,7 @@ const Value = @import("value.zig").Value;
 const Object = @import("value.zig").Object;
 const MapEntry = @import("value.zig").MapEntry;
 const build_options = @import("build_options");
+const tasks_mod = @import("task_state.zig");
 
 const VMContext = vms.VMContext;
 
@@ -184,6 +185,28 @@ pub fn collectGarbage(ctx: VMContext) void {
     }
 
     for (ctx.vs.defer_stack[0..ctx.vs.defer_top]) |v| markValue(ctx, v);
+
+    // Task/actor roots (dev-docs/design/task-actor-design.md §3.5). GC
+    // only ever runs from the currently-running task's own allocation
+    // calls (single-threaded, cooperative — never "in the background"),
+    // so every OTHER live task is sitting parked (blocked in receive(),
+    // sleeping, or simply not yet given its first turn) with nothing
+    // above marking its stack. A value reachable only from a parked
+    // task's locals must survive collection exactly like the active
+    // task's own stack does. Mailbox contents are roots too — a message
+    // queued between send() and the eventual receive() must not be
+    // swept out from under it. Marks the active task's own slot again
+    // (redundant with the walk above, but idempotent and simpler/safer
+    // than trusting task_state.current to always match ctx.vs).
+    for (tasks_mod.g_state.slots[0..tasks_mod.MaxTasks]) |*slot| {
+        if (slot.status == .empty or slot.status == .dead) continue;
+        if (slot.vs) |tvs| {
+            for (tvs.stack[0..tvs.stack_top]) |v| markValue(ctx, v);
+            for (tvs.temp_roots[0..tvs.temp_root_top]) |v| markValue(ctx, v);
+            for (tvs.defer_stack[0..tvs.defer_top]) |v| markValue(ctx, v);
+        }
+        for (slot.mailbox.items) |v| markValue(ctx, v);
+    }
 
     drainMarkQueue(ctx);
 

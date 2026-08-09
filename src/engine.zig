@@ -610,6 +610,10 @@ fn valueToWireDepth(val: Value, depth: u32) !ValueWire {
             wires[3] = try valueToWireDepth(vmod.inlineVariantPayload(iv), depth + 1);
             return makeWire(@intFromEnum(WireTag.map), @intFromPtr(wires.ptr), 2);
         },
+        // actor values are task-table-relative and meaningless outside
+        // this process's scheduler — same treatment as host_abi.zig's
+        // wireFromValueDepth gives them at the native-FFI boundary.
+        .actor_ref => return error.UnsupportedWireType,
     };
 }
 
