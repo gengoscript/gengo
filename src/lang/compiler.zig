@@ -728,12 +728,7 @@ pub const Compiler = struct {
             // from every task body that uses std); everything else `:=`-
             // or `var`-bound at top level is not.
             if (self.in_task_body and !self.skipping_test_body) {
-                const is_ambient = self.registry.hasGlobalConst(name.src) or
-                    self.registry.hasGlobalFunc(qname) or
-                    self.registry.hasAnyTypeName(name.src) or
-                    self.getImportModuleGlobalPath(qname) != null or
-                    self.getStdModuleGlobalPath(qname) != null;
-                if (!is_ambient) {
+                if (!self.isAmbientGlobal(name.src, qname)) {
                     self.setErr("global '{s}' is mutable and cannot be referenced inside a task body; pass it as a spawn parameter instead", .{name.src});
                     self.err_line = name.line;
                     self.err_col = @intCast(name.col);
@@ -2237,6 +2232,19 @@ pub const Compiler = struct {
         return self.registry.hasNamedType(name) or self.registry.hasStructTypeLocal(name) or
             self.registry.hasInterfaceType(name) or self.registry.hasVariantType(name) or
             self.registry.hasGenericType(name) or self.registry.hasTypeAlias(name);
+    }
+
+    // §3.3: a top-level binding a task body may reference without it
+    // counting as capturing outer mutable state — declarations, not
+    // data (const, func, any declared type kind, or an import binding).
+    // `name` is the bare identifier as written; `qname` its qualified
+    // global name (module-prefixed for func/import lookups).
+    fn isAmbientGlobal(self: *Compiler, name: []const u8, qname: []const u8) bool {
+        return self.registry.hasGlobalConst(name) or
+            self.registry.hasGlobalFunc(qname) or
+            self.registry.hasAnyTypeName(name) or
+            self.getImportModuleGlobalPath(qname) != null or
+            self.getStdModuleGlobalPath(qname) != null;
     }
 
     pub fn addExport(self: *Compiler, name: []const u8, global_name: []const u8) !void {

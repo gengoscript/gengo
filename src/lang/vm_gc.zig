@@ -195,11 +195,22 @@ pub fn collectGarbage(ctx: VMContext) void {
     // task's locals must survive collection exactly like the active
     // task's own stack does. Mailbox contents are roots too — a message
     // queued between send() and the eventual receive() must not be
-    // swept out from under it. Marks the active task's own slot again
-    // (redundant with the walk above, but idempotent and simpler/safer
-    // than trusting task_state.current to always match ctx.vs).
-    for (tasks_mod.g_state.slots[0..tasks_mod.MaxTasks]) |*slot| {
+    // swept out from under it.
+    //
+    // Skips task_state.current: that task's stack/temp_roots/defer_stack
+    // is exactly what the walk above just marked via ctx.vs (the two are
+    // guaranteed to be the same vm_state — the scheduler always
+    // constructs ctx from tasks_mod.g_state.slots[current].vs before
+    // calling into the VM). Marking would still be correct without this
+    // skip (idempotent, guarded by isObjectMarked) but every program
+    // that has never spawned a task still pays for a GC on every run —
+    // for that overwhelmingly common case this loop's only live slot is
+    // main's own, so skipping it makes the task-table walk a genuine
+    // no-op instead of silently doubling the cost of marking main's
+    // stack on every single collection.
+    for (tasks_mod.g_state.slots[0..tasks_mod.MaxTasks], 0..) |*slot, idx| {
         if (slot.status == .empty or slot.status == .dead) continue;
+        if (idx == tasks_mod.g_state.current) continue;
         if (slot.vs) |tvs| {
             for (tvs.stack[0..tvs.stack_top]) |v| markValue(ctx, v);
             for (tvs.temp_roots[0..tvs.temp_root_top]) |v| markValue(ctx, v);
@@ -207,6 +218,11 @@ pub fn collectGarbage(ctx: VMContext) void {
         }
         for (slot.mailbox.items) |v| markValue(ctx, v);
     }
+    // The current task's mailbox is still a root even though its stack
+    // was already covered above — a message can be sitting queued for
+    // it (send() enqueues before the receiver's own next receive() call
+    // dequeues it) regardless of which task is currently running.
+    for (tasks_mod.g_state.slots[tasks_mod.g_state.current].mailbox.items) |v| markValue(ctx, v);
 
     drainMarkQueue(ctx);
 

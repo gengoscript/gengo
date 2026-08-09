@@ -23,53 +23,81 @@ const vmnative = @import("native/core.zig");
 const MaxSendDepth = 64;
 
 // Whether `v` may cross a task boundary (spawn args, message payloads).
-// Rejects closures and cells (shared mutable upvalue state — copying the
-// closure but sharing the cell it captures would leak mutable state
-// across the isolation boundary; deep-copying the cell would silently
-// fork state the sender believes is shared) and iterators (native
-// position + a source pointer into a specific heap value, not
-// meaningfully transferable). Recurses through the same composite
-// shapes cloneValue does; anything else (scalars, strings, bigints,
-// immortal type/metadata objects, enum/variant/struct values) is
-// sendable.
+//
+// Deliberately an ALLOWLIST, not a denylist: the switch is exhaustive
+// (no `else`), so adding a new ObjTag anywhere else in the codebase is
+// a compile error here until someone decides which bucket it belongs
+// in. A denylist's default is "safe unless I remember to list it here"
+// — exactly backwards for a check whose entire job is to keep unsafe
+// values from crossing the isolation boundary, and exactly the kind of
+// silent-drift hazard this session's exhaustive-switch sweeps (ObjTag,
+// FieldTypeTag, VTag) kept catching elsewhere. A forgotten case here
+// fails LOUD (compile error) instead of quiet (new native-resource type
+// shared across tasks by default).
 fn isSendable(v: Value, depth: u32) bool {
     if (depth >= MaxSendDepth) return false; // matches clone's depth posture: bounded, not unbounded
     if (v != .object) return true;
-    switch (v.object.*) {
-        .function, .closure, .cell, .iterator => return false,
-        .array, .array_managed, .array_view, .array_capacity => {
-            const items = vms.asArraySlice(v.object) catch return false;
-            for (items) |item| if (!isSendable(item, depth + 1)) return false;
-            return true;
+    return switch (v.object.*) {
+        // Shared mutable state or a native resource: unsafe to let two
+        // tasks reference. .function/.closure share upvalue cells;
+        // .cell IS an upvalue cell; .iterator holds a native position
+        // plus a source pointer into one specific heap value.
+        .function, .closure, .cell, .iterator => false,
+        .array, .array_managed, .array_view, .array_capacity => blk: {
+            const items = vms.asArraySlice(v.object) catch break :blk false;
+            for (items) |item| if (!isSendable(item, depth + 1)) break :blk false;
+            break :blk true;
         },
-        .map, .map_managed, .map_hashed => {
-            const entries = vms.asMapSlice(v.object) catch return false;
+        .map, .map_managed, .map_hashed => blk: {
+            const entries = vms.asMapSlice(v.object) catch break :blk false;
             for (entries) |e| {
-                if (!isSendable(e.key, depth + 1)) return false;
-                if (!isSendable(e.value, depth + 1)) return false;
+                if (!isSendable(e.key, depth + 1)) break :blk false;
+                if (!isSendable(e.value, depth + 1)) break :blk false;
             }
-            return true;
+            break :blk true;
         },
-        .struct_instance => |inst| {
-            for (inst.fields) |f| if (!isSendable(f.value, depth + 1)) return false;
-            return true;
+        .struct_instance => |inst| blk: {
+            for (inst.fields) |f| if (!isSendable(f.value, depth + 1)) break :blk false;
+            break :blk true;
         },
-        .small_struct_instance => |ssi| {
-            for (0..@as(usize, ssi.count)) |i| if (!isSendable(ssi.v[i], depth + 1)) return false;
-            return true;
+        .small_struct_instance => |ssi| blk: {
+            for (0..@as(usize, ssi.count)) |i| if (!isSendable(ssi.v[i], depth + 1)) break :blk false;
+            break :blk true;
         },
-        .named_value => |nv| return isSendable(nv.value, depth + 1),
-        .variant_value => |vv| {
-            if (!isSendable(vv.payload, depth + 1)) return false;
-            for (vv.shared_values) |sv| if (!isSendable(sv, depth + 1)) return false;
-            for (vv.arm_fields) |af| if (!isSendable(af, depth + 1)) return false;
-            return true;
+        .named_value => |nv| isSendable(nv.value, depth + 1),
+        .variant_value => |vv| blk: {
+            if (!isSendable(vv.payload, depth + 1)) break :blk false;
+            for (vv.shared_values) |sv| if (!isSendable(sv, depth + 1)) break :blk false;
+            for (vv.arm_fields) |af| if (!isSendable(af, depth + 1)) break :blk false;
+            break :blk true;
         },
-        // Immortal type/metadata objects and other opaque-but-harmless
-        // leaves (strings, bigint, enum values, named error values, ...):
-        // nothing further to walk, nothing unsafe to share.
-        else => return true,
-    }
+        // Immortal type/metadata objects (never mutated after
+        // declaration — safe to share a pointer to, same reasoning as
+        // §3.5's SharedOwner class) and immutable-or-clones-independent
+        // leaf data: nothing further to walk, nothing unsafe to share.
+        // string_builder is mutable but cloneObject deep-copies its
+        // buffer, so the sender and receiver end up with independent
+        // copies, same as any other cloned composite.
+        .dyn_string,
+        .string_view,
+        .native_function,
+        .host_module_function,
+        .struct_type,
+        .interface_type,
+        .named_type,
+        .enum_type,
+        .enum_value,
+        .variant_type,
+        .variant_ctor,
+        .named_type_fn,
+        .enum_type_fn,
+        .string_builder,
+        .bigint,
+        .named_error_type,
+        .named_error_value,
+        .task_type,
+        => true,
+    };
 }
 
 // Clone `v` for delivery across a task boundary (message payload or
