@@ -1,0 +1,105 @@
+// Task/actor concurrency primitive (dev-docs/design/task-actor-design.md):
+// a worker-pool / dispatcher pipeline, deliberately heavier than 338's
+// basic round trip. Exercises, in combination, several things 338 alone
+// doesn't touch:
+//   - nested spawning: Dispatcher (itself a spawned, non-main task) spawns
+//     the Worker pool, not main directly.
+//   - self() called from inside a spawned (non-main) task's own body, not
+//     just from main.
+//   - actor refs relayed two hops (main -> Dispatcher -> Worker, each
+//     carrying a reply target one level further from where it started).
+//   - composite sendability beyond scalars/simple variants: an array field
+//     inside a struct (WorkItem.values), and a map value crossing a task
+//     boundary (Summary.results) — both walk isSendable's recursive
+//     array/struct/map cases in vm_task.zig, not just its scalar leaves.
+//   - many concurrent tasks (1 main + 1 dispatcher + 4 workers) with
+//     multiple messages queued per worker mailbox before that worker ever
+//     gets a scheduler turn (round-robin dispatch sends all jobs before
+//     any worker has run at all — see runtime.zig's run-until-block
+//     scheduler note: spawning enqueues ready but never yields, so every
+//     job send happens before the first worker executes a single
+//     instruction).
+// Verified against gc_stress and heap_paranoia builds, not just the plain
+// one — this is the realistic case those lanes exist for: many live
+// tasks, each holding heap values (arrays, structs, a map) across
+// receive() yield points, while the rest of the program keeps allocating.
+std := import("std")
+
+type WorkItem struct { id int, values []int }
+type JobMsg struct { item WorkItem, reply actor }
+type WorkerMsg variant {
+    job(j JobMsg),
+    stop,
+}
+type WorkerResult struct { id int, sum int }
+type DispatcherMsg variant {
+    result(r WorkerResult),
+}
+type Summary struct { total int, results map[int]int }
+
+type Worker task func() {
+    for {
+        msg := receive()
+        switch msg {
+            case .job as jm {
+                sum := 0
+                for v in jm.item.values {
+                    sum += v
+                }
+                jm.reply.send(DispatcherMsg.result(WorkerResult{id: jm.item.id, sum: sum}))
+            }
+            case .stop { return }
+        }
+    }
+}
+
+type Dispatcher task func(n_workers int, n_jobs int, reply actor) {
+    workers := []
+    for i := 0; i < n_workers; i += 1 {
+        workers = std.core.append(workers, Worker())
+    }
+    for i := 1; i <= n_jobs; i += 1 {
+        values := [i, i * 2, i * 3]
+        item := WorkItem{id: i, values: values}
+        w := workers[(i - 1) mod n_workers]
+        w.send(WorkerMsg.job(JobMsg{item: item, reply: self()}))
+    }
+    results := {}
+    total := 0
+    for i := 0; i < n_jobs; i += 1 {
+        msg := receive()
+        switch msg {
+            case .result as r {
+                results[r.id] = r.sum
+                total += r.sum
+            }
+        }
+    }
+    for i := 0; i < n_workers; i += 1 {
+        workers[i].send(WorkerMsg.stop)
+    }
+    reply.send(Summary{total: total, results: results})
+}
+
+n_workers := 4
+n_jobs := 12
+_ = Dispatcher(n_workers, n_jobs, self())
+summary := receive()
+
+expected_total := 0
+for i := 1; i <= n_jobs; i += 1 {
+    expected_total += i + i * 2 + i * 3
+}
+
+std.io.println("total:", summary.total)
+std.io.println("expected:", expected_total)
+std.io.println("match:", summary.total == expected_total)
+
+all_ids_match := true
+for i := 1; i <= n_jobs; i += 1 {
+    expected := i + i * 2 + i * 3
+    if summary.results[i] != expected {
+        all_ids_match = false
+    }
+}
+std.io.println("per-job match:", all_ids_match)

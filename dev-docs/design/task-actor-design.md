@@ -812,6 +812,19 @@ zero new grammar. Spawn arguments are type-checked like any call's
 (existing machinery), plus §3.4's sendability rule on the parameter
 types, checked once at the declaration.
 
+(Post-ship audit, 2026-08-09: a `spawn(Worker(10))` wrapper — required at
+every spawn site, rejecting a bare `Worker(10)` — was implemented and
+then reverted the same day. The wrapper added a compile-time legality
+gate but changed nothing the compiler or runtime actually needed: it
+compiled to byte-identical bytecode either way, since `performCall`
+already dispatches on the callee's declared kind regardless of any
+wrapper around the call. Once that was made explicit, the case for the
+wrapper reduced to "should the *reader* get a marker the compiler
+doesn't need" — a real but genuinely debatable readability tradeoff, and
+on reflection not worth breaking the established dispatch-by-kind
+convention over. Reverted to keep spawn on the same footing as
+struct-literal/variant-arm/cast dispatch.)
+
 **`worker.send(...)`** (and `worker.monitor()`, when it exists — cut
 from v0, §6) is an ordinary method on `ActorRef`, dispatched the same
 way builtin string/bytes methods already are.

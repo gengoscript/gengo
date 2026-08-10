@@ -87,6 +87,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
 // WASM-conformance-specific, not a suite-wide exclusion.
 const wasm_conformance_skip = [_][]const u8{
     "338_task_actor_basic.gengo",
+    "339_task_actor_complex.gengo",
 };
 
 fn wasmConformanceSkip(path: []const u8) bool {
