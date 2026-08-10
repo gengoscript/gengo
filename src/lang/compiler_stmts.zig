@@ -1456,20 +1456,21 @@ pub fn parseNameList(c: anytype, out: *[MaxLocals]Token) !u8 {
 // intermediate steps aren't tracked, so any chaining before the final dot
 // falls back to the runtime-only check unchanged). Catches unknown-field
 // and const-field-write mistakes at compile time instead of only the
-// first time this line actually executes (vm.zig's opSetField). Field
-// type-mismatch is deliberately not checked here — that needs the same
-// coercion rules as the runtime's coerceStructFieldValue, which is more
-// than this exact-name/const-flag check is worth duplicating for now.
-fn checkStaticFieldAssignTarget(c: anytype, root: Token, field_tok: Token) !void {
+// first time this line actually executes (vm.zig's opSetField). Returns
+// the field's declared type when resolution succeeded, so callers doing a
+// plain `=` assignment can also run checkFieldValueCompatibility once the
+// RHS is parsed; null means "couldn't resolve statically, defer entirely
+// to the runtime check" — never "resolved and fine to skip further checks".
+fn checkStaticFieldAssignTarget(c: anytype, root: Token, field_tok: Token) !?FieldTypeSpec {
     const struct_name: []const u8 = blk: {
         if (c.getLocalTypeCheck(root.src)) |tc| {
             if (tc == .struct_type) break :blk tc.struct_type;
-            return;
+            return null;
         }
         if (c.lookupInferredStructGlobal(root.src)) |st| break :blk st;
-        return;
+        return null;
     };
-    const st_obj = c.registry.getStructObj(struct_name) orelse return;
+    const st_obj = c.registry.getStructObj(struct_name) orelse return null;
     for (st_obj.struct_type.fields) |f| {
         if (common.streq(f.name, field_tok.src)) {
             if (f.is_const) {
@@ -1478,7 +1479,7 @@ fn checkStaticFieldAssignTarget(c: anytype, root: Token, field_tok: Token) !void
                 c.err_col = field_tok.col;
                 return error.AssignToConst;
             }
-            return;
+            return f.typ;
         }
     }
     c.setErr("no field '{s}' on type '{s}'", .{ field_tok.src, struct_name });
@@ -1537,14 +1538,20 @@ pub fn propertyAssignStmt(c: anytype) !void {
         return c.err("expected '.' or '[', found {s}", .{c.tokenName(c.cur.typ)});
     }
 
+    var static_field_spec: ?FieldTypeSpec = null;
     if (last_kind == .dot_name and steps_seen == 0) {
-        try checkStaticFieldAssignTarget(c, root, last_tok);
+        static_field_spec = try checkStaticFieldAssignTarget(c, root, last_tok);
     }
 
     const op_tok = c.cur;
 
     if (c.match(.eq)) {
+        c.beginExprPrimCapture();
         try c.expr();
+        const rhs_info = c.endExprPrimCapture();
+        if (static_field_spec) |spec| {
+            try c.checkFieldValueCompatibility(spec, rhs_info, last_name, last_line);
+        }
         switch (last_kind) {
             .dot_name => try c.cs.emitSetField(last_name, last_line),
             .bracket => try c.cs.emitOp(.set_index, c.prev.line),

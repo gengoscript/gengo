@@ -945,9 +945,9 @@ pub fn strLitExpr(c: anytype) !void {
 // required as the defense-in-depth check for GBC-loaded bytecode that
 // never went through this compiler pass) is the only check that runs,
 // exactly as before this change.
-fn validateStructLiteralFieldNames(c: anytype, fields: []const StructFieldSpec, keys: []const Token, type_display_name: []const u8) !void {
+fn validateStructLiteralFieldNames(c: anytype, fields: []const StructFieldSpec, keys: []const Token, vals: []const @TypeOf(c.currentExprPrimInfo()), type_display_name: []const u8) !void {
     var seen: [255]bool = [_]bool{false} ** 255;
-    for (keys) |key_tok| {
+    for (keys, vals) |key_tok, val_info| {
         var idx: ?usize = null;
         for (fields, 0..) |f, i| {
             if (common.streq(f.name, key_tok.src)) {
@@ -968,6 +968,7 @@ fn validateStructLiteralFieldNames(c: anytype, fields: []const StructFieldSpec, 
             return error.DuplicateField;
         }
         seen[fi] = true;
+        try c.checkFieldValueCompatibility(fields[fi].typ, val_info, key_tok.src, key_tok.line);
     }
     for (fields, 0..) |f, i| {
         if (!seen[i]) {
@@ -986,6 +987,7 @@ pub fn structInstanceLit(c: anytype, type_name: Token) !void {
     try c.consume(.lbrace);
     var count: u8 = 0;
     var key_toks: [255]Token = undefined;
+    var val_infos: [255]@TypeOf(c.currentExprPrimInfo()) = undefined;
     if (!c.check(.rbrace)) {
         while (true) {
             if (count == 255) {
@@ -1003,9 +1005,11 @@ pub fn structInstanceLit(c: anytype, type_name: Token) !void {
                 c.advance();
             } else return c.err("expected identifier or string key, found {s}", .{c.tokenName(c.cur.typ)});
             try c.consume(.colon);
+            c.beginExprPrimCapture();
             try expr(
                 c,
             );
+            val_infos[count] = c.endExprPrimCapture();
             count += 1;
             if (!c.match(.comma)) break;
             if (c.check(.rbrace)) break;
@@ -1013,7 +1017,7 @@ pub fn structInstanceLit(c: anytype, type_name: Token) !void {
     }
     try c.consume(.rbrace);
     if (c.registry.getStructObj(type_name.src)) |st_obj| {
-        try validateStructLiteralFieldNames(c, st_obj.struct_type.fields, key_toks[0..count], st_obj.struct_type.name);
+        try validateStructLiteralFieldNames(c, st_obj.struct_type.fields, key_toks[0..count], val_infos[0..count], st_obj.struct_type.name);
     }
     try c.cs.emit2(@intFromEnum(Op.build_struct_instance), count, type_name.line);
     // #210: struct literals previously left no ExprPrimInfo on their own
@@ -1039,6 +1043,7 @@ pub fn structInstanceLitAfterValue(c: anytype, line: u32, resolved_type: ?*value
     try c.consume(.lbrace);
     var count: u8 = 0;
     var key_toks: [255]Token = undefined;
+    var val_infos: [255]@TypeOf(c.currentExprPrimInfo()) = undefined;
     if (!c.check(.rbrace)) {
         while (true) {
             if (count == 255) {
@@ -1056,9 +1061,11 @@ pub fn structInstanceLitAfterValue(c: anytype, line: u32, resolved_type: ?*value
                 c.advance();
             } else return c.err("expected identifier or string key, found {s}", .{c.tokenName(c.cur.typ)});
             try c.consume(.colon);
+            c.beginExprPrimCapture();
             try expr(
                 c,
             );
+            val_infos[count] = c.endExprPrimCapture();
             count += 1;
             if (!c.match(.comma)) break;
             if (c.check(.rbrace)) break;
@@ -1067,7 +1074,7 @@ pub fn structInstanceLitAfterValue(c: anytype, line: u32, resolved_type: ?*value
     try c.consume(.rbrace);
     if (resolved_type) |t| {
         if (t.* == .struct_type) {
-            try validateStructLiteralFieldNames(c, t.struct_type.fields, key_toks[0..count], t.struct_type.name);
+            try validateStructLiteralFieldNames(c, t.struct_type.fields, key_toks[0..count], val_infos[0..count], t.struct_type.name);
         }
     }
     try c.cs.emit2(@intFromEnum(Op.build_struct_instance), count, line);

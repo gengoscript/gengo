@@ -820,6 +820,72 @@ pub const Compiler = struct {
         }
     }
 
+    // Same conservative shape as checkDirectCallArgCompatibility above,
+    // applied to a struct field instead of a call argument — a bare scalar
+    // or named-type value the compiler already knows the exact static type
+    // of, checked against a single-alt field spec. Multi-alt specs and
+    // richer alt kinds (struct/interface/array/map/variant/func) are left
+    // entirely to the runtime's matchesFieldType, same as the call-arg
+    // version leaves them to enforceFuncArgTypes.
+    //
+    // Unlike the call-arg version, the .int/.float prim cases here must
+    // accept a rune value with no error: coerceErasedValueForSpec (vm_types.zig)
+    // does nothing for plain-prim specs (only .named_t/.interface_t specs
+    // get coerced), so matchesTypeAlt runs directly against the
+    // uncoerced value — and matchesTypeAlt's own .int/.float arms are
+    // `v == .int or v == .rune` / `v == .float or v == .rune`. Missing
+    // that exception here would reject struct field values the runtime
+    // accepts outright.
+    pub fn checkFieldValueCompatibility(self: *Compiler, spec: FieldTypeSpec, arg_info: ExprPrimInfo, field_name: []const u8, line: u32) !void {
+        if (spec.alts.len != 1) return;
+        const alt = spec.alts[0];
+        switch (alt.typ) {
+            .int, .float, .decimal_t, .boolean, .string, .rune_t => {
+                const expected_name: []const u8 = switch (alt.typ) {
+                    .int => "int",
+                    .float => "float",
+                    .decimal_t => "decimal",
+                    .boolean => "bool",
+                    .string => "string",
+                    .rune_t => "rune",
+                    else => unreachable,
+                };
+                if (arg_info.named_type) |nt| {
+                    self.setErr("cannot assign {s} to field '{s}' of type {s}; convert explicitly", .{ nt, field_name, expected_name });
+                    self.err_line = line;
+                    return error.StructFieldTypeMismatch;
+                }
+                if (arg_info.prim) |arg_p| {
+                    if ((alt.typ == .int or alt.typ == .float) and arg_p == .rune) return;
+                    const expected_prim: PrimType = switch (alt.typ) {
+                        .int => .int,
+                        .float => .float,
+                        .decimal_t => .decimal,
+                        .boolean => .bool,
+                        .string => .string,
+                        .rune_t => .rune,
+                        else => unreachable,
+                    };
+                    if (arg_p != expected_prim) {
+                        self.setErr("cannot assign {s} to field '{s}' of type {s}; convert explicitly", .{ @tagName(arg_p), field_name, expected_name });
+                        self.err_line = line;
+                        return error.StructFieldTypeMismatch;
+                    }
+                }
+            },
+            .named_t => {
+                if (arg_info.named_type) |nt| {
+                    if (!self.namedTypeAssignableTo(nt, alt.named_name)) {
+                        self.setErr("cannot assign {s} to field '{s}' of type {s}", .{ nt, field_name, alt.named_name });
+                        self.err_line = line;
+                        return error.StructFieldTypeMismatch;
+                    }
+                }
+            },
+            else => {},
+        }
+    }
+
     // Callee signature as seen from a direct call site — from the registry
     // (declared functions) or the in-progress stack (recursive self-calls).
     pub const CallSigView = struct {
