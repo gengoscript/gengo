@@ -136,9 +136,12 @@ pub const State = struct {
     }
 
     pub fn emitOp(self: *State, op: Op, line: u32) !void {
-        // Constant folding for ops that bypass emitBinOpFused (mul, div, int_div, rem, mod).
+        // Constant folding for ops that bypass emitBinOpFused (mul, div, int_div,
+        // rem, mod, and — same reasoning, these are int-only so never hit the
+        // string-concat special case emitBinOpFused also has to handle — the
+        // bitwise/shift ops).
         switch (op) {
-            .mul, .div, .int_div, .rem, .mod => {
+            .mul, .div, .int_div, .rem, .mod, .bit_and, .bit_or, .bit_xor, .shl, .shr => {
                 if (self.last_const_code_pos) |rhs_pos| {
                     if (rhs_pos + 3 == self.code_len) {
                         if (self.prev_const_code_pos) |lhs_pos| {
@@ -771,8 +774,35 @@ pub fn reset() void {
     g_state.reset();
 }
 
+// Comparison ops (both generic and the _float variants — see
+// selectTypedComparisonOp in compiler.zig, which deliberately keeps the
+// generic op instead of switching to the typed one whenever either operand
+// is a compile-time constant, specifically so a fold gets a chance to run
+// here). Takes plain i64/f64 rather than Values so both branches of
+// foldBinOp can share it: for ints, integer `<`/`>`/`==` behave exactly
+// like std.math.order without ever hitting its `unreachable` fallback
+// (that fallback exists only for NaN, which no integer is); for floats,
+// native f64 comparisons already implement IEEE-754 correctly for NaN
+// (every comparison false except `!=`, which is true) — std.math.order
+// would panic on NaN instead (its final `else => unreachable` triggers
+// whenever none of ==, <, > hold), so this deliberately doesn't route
+// through it despite floats being representable as an Order in the
+// non-NaN case.
+fn foldCompareOp(op: Op, comptime T: type, a: T, b: T) ?Value {
+    return switch (op) {
+        .eq, .eq_float => Value{ .boolean = a == b },
+        .ne, .ne_float => Value{ .boolean = a != b },
+        .lt, .lt_float => Value{ .boolean = a < b },
+        .le, .le_float => Value{ .boolean = a <= b },
+        .gt, .gt_float => Value{ .boolean = a > b },
+        .ge, .ge_float => Value{ .boolean = a >= b },
+        else => null,
+    };
+}
+
 fn foldBinOp(op: Op, lhs: Value, rhs: Value) ?Value {
     if (lhs == .int and rhs == .int) {
+        if (foldCompareOp(op, i64, lhs.int, rhs.int)) |v| return v;
         return switch (op) {
             .add => blk: {
                 const r = @addWithOverflow(lhs.int, rhs.int);
@@ -790,15 +820,43 @@ fn foldBinOp(op: Op, lhs: Value, rhs: Value) ?Value {
             .div => if (rhs.int == 0) null else Value{ .float = @as(f64, @floatFromInt(lhs.int)) / @as(f64, @floatFromInt(rhs.int)) },
             .rem => if (rhs.int == 0 or (lhs.int == std.math.minInt(i64) and rhs.int == -1)) null else Value{ .int = @rem(lhs.int, rhs.int) },
             .mod => if (rhs.int == 0 or (lhs.int == std.math.minInt(i64) and rhs.int == -1)) null else Value{ .int = @mod(lhs.int, rhs.int) },
+            .bit_and => Value{ .int = lhs.int & rhs.int },
+            .bit_or => Value{ .int = lhs.int | rhs.int },
+            .bit_xor => Value{ .int = lhs.int ^ rhs.int },
+            // Mirrors vm.zig's getShiftArgs/.shl/.shr exactly: negative shift
+            // amount errors at runtime (RangeError) — don't fold, let that
+            // still happen; shift count clamps to 63 rather than erroring;
+            // shl additionally errors on magnitude overflow past what i64
+            // can hold after the shift.
+            .shl => blk: {
+                if (rhs.int < 0) break :blk null;
+                const shift: u6 = @intCast(@min(rhs.int, 63));
+                if (lhs.int > 0 and lhs.int > (@as(i64, std.math.maxInt(i64)) >> shift)) break :blk null;
+                if (lhs.int < 0 and lhs.int < (@as(i64, std.math.minInt(i64)) >> shift)) break :blk null;
+                break :blk Value{ .int = lhs.int << shift };
+            },
+            .shr => blk: {
+                if (rhs.int < 0) break :blk null;
+                const shift: u6 = @intCast(@min(rhs.int, 63));
+                break :blk Value{ .int = lhs.int >> shift };
+            },
             else => null,
         };
     }
     if (lhs == .float and rhs == .float) {
+        if (foldCompareOp(op, f64, lhs.float, rhs.float)) |v| return v;
+        // Non-finite results must keep erroring at runtime exactly like the
+        // unfolded two-constant-push-then-add path does (computeAddResult's
+        // std.math.isFinite check) — don't fold those away into a silent inf.
         return switch (op) {
-            .add => Value{ .float = lhs.float + rhs.float },
-            .sub => Value{ .float = lhs.float - rhs.float },
-            .mul => Value{ .float = lhs.float * rhs.float },
-            .div => if (rhs.float == 0.0) null else Value{ .float = lhs.float / rhs.float },
+            .add => if (std.math.isFinite(lhs.float + rhs.float)) Value{ .float = lhs.float + rhs.float } else null,
+            .sub => if (std.math.isFinite(lhs.float - rhs.float)) Value{ .float = lhs.float - rhs.float } else null,
+            .mul => if (std.math.isFinite(lhs.float * rhs.float)) Value{ .float = lhs.float * rhs.float } else null,
+            .div => blk: {
+                if (rhs.float == 0.0) break :blk null;
+                const r = lhs.float / rhs.float;
+                break :blk if (std.math.isFinite(r)) Value{ .float = r } else null;
+            },
             .rem => if (rhs.float == 0.0) null else Value{ .float = common.fmod(lhs.float, rhs.float) },
             .mod => if (rhs.float == 0.0) null else Value{ .float = lhs.float - @floor(lhs.float / rhs.float) * rhs.float },
             else => null,
