@@ -1451,6 +1451,42 @@ pub fn parseNameList(c: anytype, out: *[MaxLocals]Token) !u8 {
     return count;
 }
 
+// s.field = v / s.field += v where s is a statically-known local struct
+// type and this is a direct field of s (root.field, not root.a.field —
+// intermediate steps aren't tracked, so any chaining before the final dot
+// falls back to the runtime-only check unchanged). Catches unknown-field
+// and const-field-write mistakes at compile time instead of only the
+// first time this line actually executes (vm.zig's opSetField). Field
+// type-mismatch is deliberately not checked here — that needs the same
+// coercion rules as the runtime's coerceStructFieldValue, which is more
+// than this exact-name/const-flag check is worth duplicating for now.
+fn checkStaticFieldAssignTarget(c: anytype, root: Token, field_tok: Token) !void {
+    const struct_name: []const u8 = blk: {
+        if (c.getLocalTypeCheck(root.src)) |tc| {
+            if (tc == .struct_type) break :blk tc.struct_type;
+            return;
+        }
+        if (c.lookupInferredStructGlobal(root.src)) |st| break :blk st;
+        return;
+    };
+    const st_obj = c.registry.getStructObj(struct_name) orelse return;
+    for (st_obj.struct_type.fields) |f| {
+        if (common.streq(f.name, field_tok.src)) {
+            if (f.is_const) {
+                c.setErr("field '{s}' of '{s}' is const", .{ field_tok.src, struct_name });
+                c.err_line = field_tok.line;
+                c.err_col = field_tok.col;
+                return error.AssignToConst;
+            }
+            return;
+        }
+    }
+    c.setErr("no field '{s}' on type '{s}'", .{ field_tok.src, struct_name });
+    c.err_line = field_tok.line;
+    c.err_col = field_tok.col;
+    return error.UnknownStructField;
+}
+
 pub fn propertyAssignStmt(c: anytype) !void {
     const root = c.cur;
     c.advance();
@@ -1462,6 +1498,8 @@ pub fn propertyAssignStmt(c: anytype) !void {
     var last_kind: LastKind = .bracket;
     var last_name: []const u8 = undefined;
     var last_line: u32 = 0;
+    var last_tok: Token = undefined;
+    var steps_seen: u32 = 0;
 
     while (true) {
         if (c.match(.dot)) {
@@ -1476,9 +1514,11 @@ pub fn propertyAssignStmt(c: anytype) !void {
                 last_kind = .dot_name;
                 last_name = prop.src;
                 last_line = prop.line;
+                last_tok = prop;
                 break;
             }
             try c.cs.emitGetField(prop.src, prop.line);
+            steps_seen += 1;
             continue;
         }
 
@@ -1490,10 +1530,15 @@ pub fn propertyAssignStmt(c: anytype) !void {
                 break;
             }
             try c.cs.emitOp(.get_index, c.prev.line);
+            steps_seen += 1;
             continue;
         }
 
         return c.err("expected '.' or '[', found {s}", .{c.tokenName(c.cur.typ)});
+    }
+
+    if (last_kind == .dot_name and steps_seen == 0) {
+        try checkStaticFieldAssignTarget(c, root, last_tok);
     }
 
     const op_tok = c.cur;
