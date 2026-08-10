@@ -471,7 +471,7 @@ fn computeAddResult(ctx: VMContext, a: Value, b: Value) !Value {
             ctx.vs.setRuntimeErr("non-finite value in arithmetic operation", .{});
             return error.TypeError;
         }
-        return try wrapValueWithCarrier(ctx, a, b, makeNumeric(tag, an + bn), "+");
+        return try wrapValueWithCarrier(ctx, a, b, try makeNumeric(tag, an + bn), "+");
     }
 }
 
@@ -489,11 +489,18 @@ fn pushSubResult(ctx: VMContext, a: Value, b: Value) !void {
     try pushNumericResultWithCarrier(ctx, a, b, an - bn, tag, "-");
 }
 
-fn makeNumeric(tag: VTag, n: f64) Value {
+// floatToIntSafe, not a raw @intFromFloat: n is finite (callers already
+// checked that) but can still be far outside i64's range — e.g. pow's
+// std.math.pow(f64, 2, 100) ~= 1.27e30, tagged .int since both operands
+// were int. @intFromFloat on an out-of-range float is safety-checked UB in
+// Zig (a hard panic/process abort, not a catchable Gengo error) — this was
+// reachable from ordinary script code (`2 ** 100`) with no special
+// privileges, i.e. a real crash/DoS, not just a theoretical edge case.
+fn makeNumeric(tag: VTag, n: f64) !Value {
     return switch (tag) {
-        .int => .{ .int = @intFromFloat(n) },
+        .int => .{ .int = try floatToIntSafe(n) },
         .float => .{ .float = n },
-        else => .{ .int = @intFromFloat(n) },
+        else => .{ .int = try floatToIntSafe(n) },
     };
 }
 
@@ -521,7 +528,7 @@ fn pushNumericResultWithCarrier(ctx: VMContext, a: Value, b: Value, n: f64, tag:
         ctx.vs.setRuntimeErr("non-finite value in arithmetic operation", .{});
         return error.TypeError;
     }
-    try ctx.vs.vmPush(try wrapValueWithCarrier(ctx, a, b, makeNumeric(tag, n), op));
+    try ctx.vs.vmPush(try wrapValueWithCarrier(ctx, a, b, try makeNumeric(tag, n), op));
 }
 
 fn getShiftArgs(ctx: VMContext, op: []const u8) !struct { a: Value, b: Value, an: i64, shift: u6 } {
@@ -3276,8 +3283,8 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                     ctx.vs.setRuntimeErr("division by zero", .{});
                     return error.DivisionByZero;
                 }
-                const an_int: i64 = @intFromFloat(nop.an);
-                const bn_int: i64 = @intFromFloat(nop.bn);
+                const an_int: i64 = try floatToIntSafe(nop.an);
+                const bn_int: i64 = try floatToIntSafe(nop.bn);
                 if (bn_int == 0) {
                     ctx.vs.setRuntimeErr("division by zero", .{});
                     return error.DivisionByZero;
