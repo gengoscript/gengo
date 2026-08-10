@@ -933,10 +933,59 @@ pub fn strLitExpr(c: anytype) !void {
     try c.cs.emitStringConst(c.prev.src, c.prev.line);
 }
 
+// Validate a struct literal's field names against the struct's declared
+// fields at compile time — unknown/duplicate/missing field name errors
+// that would otherwise only surface as a runtime panic the first time
+// this literal's code actually executes (vm.zig's build_struct_instance
+// handler, .struct_type branch). Only called when the struct type is
+// fully resolved locally (registry.getStructObj returned non-null), so
+// this never fires for generic templates, forward-declared types, or
+// anything the single-pass compiler can't yet see the field list of —
+// in those cases the existing runtime check (left untouched, and still
+// required as the defense-in-depth check for GBC-loaded bytecode that
+// never went through this compiler pass) is the only check that runs,
+// exactly as before this change.
+fn validateStructLiteralFieldNames(c: anytype, fields: []const StructFieldSpec, keys: []const Token, type_display_name: []const u8) !void {
+    var seen: [255]bool = [_]bool{false} ** 255;
+    for (keys) |key_tok| {
+        var idx: ?usize = null;
+        for (fields, 0..) |f, i| {
+            if (common.streq(f.name, key_tok.src)) {
+                idx = i;
+                break;
+            }
+        }
+        const fi = idx orelse {
+            c.setErr("no field '{s}' on type '{s}'", .{ key_tok.src, type_display_name });
+            c.err_line = key_tok.line;
+            c.err_col = key_tok.col;
+            return error.UnknownStructField;
+        };
+        if (seen[fi]) {
+            c.setErr("duplicate field '{s}' in struct literal", .{key_tok.src});
+            c.err_line = key_tok.line;
+            c.err_col = key_tok.col;
+            return error.DuplicateField;
+        }
+        seen[fi] = true;
+    }
+    for (fields, 0..) |f, i| {
+        if (!seen[i]) {
+            c.setErr("missing required field '{s}' in struct literal", .{f.name});
+            if (keys.len > 0) {
+                c.err_line = keys[keys.len - 1].line;
+                c.err_col = keys[keys.len - 1].col;
+            }
+            return error.MissingStructField;
+        }
+    }
+}
+
 pub fn structInstanceLit(c: anytype, type_name: Token) !void {
     try c.emitGetVar(type_name);
     try c.consume(.lbrace);
     var count: u8 = 0;
+    var key_toks: [255]Token = undefined;
     if (!c.check(.rbrace)) {
         while (true) {
             if (count == 255) {
@@ -947,7 +996,9 @@ pub fn structInstanceLit(c: anytype, type_name: Token) !void {
                 const key_tok = c.cur;
                 c.advance();
                 try c.cs.emitStringConst(key_tok.src, key_tok.line);
+                key_toks[count] = key_tok;
             } else if (c.check(.string)) {
+                key_toks[count] = c.cur;
                 try c.cs.emitStringConst(c.cur.src, c.cur.line);
                 c.advance();
             } else return c.err("expected identifier or string key, found {s}", .{c.tokenName(c.cur.typ)});
@@ -961,6 +1012,9 @@ pub fn structInstanceLit(c: anytype, type_name: Token) !void {
         }
     }
     try c.consume(.rbrace);
+    if (c.registry.getStructObj(type_name.src)) |st_obj| {
+        try validateStructLiteralFieldNames(c, st_obj.struct_type.fields, key_toks[0..count], st_obj.struct_type.name);
+    }
     try c.cs.emit2(@intFromEnum(Op.build_struct_instance), count, type_name.line);
     // #210: struct literals previously left no ExprPrimInfo on their own
     // result at all — needed so a dunder method declared on the struct is
