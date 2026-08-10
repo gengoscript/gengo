@@ -81,9 +81,12 @@ pub fn assignStmt(c: anytype) !void {
     try c.expr();
     const rhs_info = c.endExprPrimCapture();
     if (tc) |t| {
-        // Skip prim cast when the RHS is already proven to be the same primitive
-        // type; the compiler's type tracking makes the runtime check redundant.
-        const skip = (t == .prim) and (rhs_info.prim == t.prim);
+        // Skip the runtime cast/assert when the RHS is already proven to be
+        // the same primitive or (for plain structs, which have no
+        // subtyping) exact struct type; the compiler's type tracking makes
+        // the runtime check redundant.
+        const skip = ((t == .prim) and (rhs_info.prim == t.prim)) or
+            ((t == .struct_type) and (rhs_info.struct_type != null) and common.streq(rhs_info.struct_type.?, t.struct_type));
         if (!skip) try c.emitVarTypeEpilog(t, name.line);
     }
     try c.emitSetVar(name);
@@ -596,7 +599,13 @@ pub fn compoundStmt(c: anytype) !void {
             try c.cs.emitCall(1, op_tok.line);
         }
     } else if (tc) |t| {
-        try c.emitVarTypeEpilog(t, op_tok.line);
+        // Skip the runtime cast when the RHS is already proven to be the
+        // same primitive type as the (int/float-homogeneous) binary op's
+        // result — except division, which always promotes int/int to
+        // float (vm.zig's `.div` handler), so `x /= y` on an int-typed x
+        // genuinely needs the cast back down.
+        const skip = (t == .prim) and (rhs_info.prim == t.prim) and !(op == .div and t.prim == .int);
+        if (!skip) try c.emitVarTypeEpilog(t, op_tok.line);
     }
     try c.emitSetVar(name);
     c.matchOpt(.semicolon);
@@ -1122,7 +1131,14 @@ pub fn incrStmt(c: anytype) !void {
             try c.emitGetVar(name);
             try c.cs.emitConst(.{ .int = 1.0 }, name.line);
             try c.cs.emitBinOpFused(if (is_inc) .add else .sub, name.line);
-            try c.emitVarTypeEpilog(t, name.line);
+            // Skip the runtime cast for the int case: the compiler emits
+            // both operands of this add/sub itself (var + int-const 1), so
+            // when the var is declared int the result is provably int
+            // (checkedIntAdd/checkedIntSub never change representation on
+            // success). Other prims (e.g. float, whose constant here is
+            // still an int 1) aren't provably type-preserving, so keep the
+            // epilog for those.
+            if (!(t == .prim and t.prim == .int)) try c.emitVarTypeEpilog(t, name.line);
         }
     } else {
         try c.emitGetVar(name);
@@ -2238,28 +2254,36 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
             try c.cs.emitGetGlobal(inferred_type_check.named, name.line);
         }
         if (c.match(.eq)) {
+            c.beginExprPrimCapture();
             try c.expr();
+            const rhs_info = c.endExprPrimCapture();
             if (inferred_type_check == .prim) {
-                switch (inferred_type_check.prim) {
-                    .int => {
-                        // Reject float literal assigned to int at compile time
-                        if (c.cs.code_len >= 3) {
-                            const last_inst_start = c.cs.code_len - 3;
-                            if (c.cs.code[last_inst_start] == @intFromEnum(Op.constant)) {
-                                const idx = (@as(u16, c.cs.code[last_inst_start + 1]) << 8) | c.cs.code[last_inst_start + 2];
-                                if (idx < c.cs.const_count and c.cs.consts[idx] == .float) {
-                                    return c.err("float literal cannot be assigned to int without explicit conversion", .{});
-                                }
+                const target_prim = inferred_type_check.prim;
+                if (target_prim == .int) {
+                    // Reject float literal assigned to int at compile time
+                    if (c.cs.code_len >= 3) {
+                        const last_inst_start = c.cs.code_len - 3;
+                        if (c.cs.code[last_inst_start] == @intFromEnum(Op.constant)) {
+                            const idx = (@as(u16, c.cs.code[last_inst_start + 1]) << 8) | c.cs.code[last_inst_start + 2];
+                            if (idx < c.cs.const_count and c.cs.consts[idx] == .float) {
+                                return c.err("float literal cannot be assigned to int without explicit conversion", .{});
                             }
                         }
-                        try c.cs.emitOp(.cast_int, name.line);
-                    },
-                    .float => try c.cs.emitOp(.cast_float, name.line),
-                    .decimal => try c.cs.emitOp(.cast_decimal, name.line),
-                    .bool => try c.cs.emitOp(.cast_bool, name.line),
-                    .string => try c.cs.emitOp(.cast_string, name.line),
-                    .rune => try c.cs.emitOp(.cast_rune, name.line),
-                    .bigint => try c.cs.emitOp(.cast_bigint, name.line),
+                    }
+                }
+                // Skip the runtime cast when the RHS is already proven to be
+                // this exact primitive type — same rationale as assignStmt's
+                // skip (compiler's type tracking makes the check redundant).
+                if (rhs_info.prim != target_prim) {
+                    switch (target_prim) {
+                        .int => try c.cs.emitOp(.cast_int, name.line),
+                        .float => try c.cs.emitOp(.cast_float, name.line),
+                        .decimal => try c.cs.emitOp(.cast_decimal, name.line),
+                        .bool => try c.cs.emitOp(.cast_bool, name.line),
+                        .string => try c.cs.emitOp(.cast_string, name.line),
+                        .rune => try c.cs.emitOp(.cast_rune, name.line),
+                        .bigint => try c.cs.emitOp(.cast_bigint, name.line),
+                    }
                 }
             } else if (inferred_type_check == .named) {
                 // Enums: no constructor call — no type object was pushed.
@@ -2274,8 +2298,13 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
                 const idx = try c.cs.addStringConst(inferred_type_check.interface_type);
                 try c.cs.emitConstIdx(.assert_interface, idx, name.line);
             } else if (inferred_type_check == .struct_type) {
-                const idx = try c.cs.addStringConst(inferred_type_check.struct_type);
-                try c.cs.emitConstIdx(.assert_struct, idx, name.line);
+                // Skip the runtime assert_struct when the RHS is already
+                // proven to be this exact struct type (plain structs have
+                // no subtyping, so name equality is sufficient).
+                if (rhs_info.struct_type == null or !common.streq(rhs_info.struct_type.?, inferred_type_check.struct_type)) {
+                    const idx = try c.cs.addStringConst(inferred_type_check.struct_type);
+                    try c.cs.emitConstIdx(.assert_struct, idx, name.line);
+                }
             }
         } else if (has_keyword and !is_const and inferred_type_check != .none) {
             if (inferred_type_check == .named) {
