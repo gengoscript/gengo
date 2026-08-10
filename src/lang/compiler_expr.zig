@@ -407,7 +407,7 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
         if (c.check(.lbrace) and looksLikeStructLiteral(
             c,
         )) {
-            try structInstanceLitAfterValue(c, prop.line);
+            try structInstanceLitAfterValue(c, prop.line, null);
         }
         // Propagate named_type through field access (e.g. enum member reads).
         if (receiver_named_type) |nt| {
@@ -1027,9 +1027,18 @@ pub fn structInstanceLit(c: anytype, type_name: Token) !void {
     }
 }
 
-pub fn structInstanceLitAfterValue(c: anytype, line: u32) !void {
+// resolved_type: the literal's already-resolved concrete type object, when
+// the caller has one at hand (generic instantiation, type alias of a
+// generic instantiation) — used for the same compile-time field-name
+// validation structInstanceLit does (see validateStructLiteralFieldNames).
+// null when the caller has no such object (e.g. a struct literal reached
+// through a cross-module field access), in which case this behaves exactly
+// as before: the runtime check in vm.zig's build_struct_instance handler
+// is the only one that runs.
+pub fn structInstanceLitAfterValue(c: anytype, line: u32, resolved_type: ?*value_mod.Object) !void {
     try c.consume(.lbrace);
     var count: u8 = 0;
+    var key_toks: [255]Token = undefined;
     if (!c.check(.rbrace)) {
         while (true) {
             if (count == 255) {
@@ -1040,7 +1049,9 @@ pub fn structInstanceLitAfterValue(c: anytype, line: u32) !void {
                 const key_tok = c.cur;
                 c.advance();
                 try c.cs.emitStringConst(key_tok.src, key_tok.line);
+                key_toks[count] = key_tok;
             } else if (c.check(.string)) {
+                key_toks[count] = c.cur;
                 try c.cs.emitStringConst(c.cur.src, c.cur.line);
                 c.advance();
             } else return c.err("expected identifier or string key, found {s}", .{c.tokenName(c.cur.typ)});
@@ -1054,6 +1065,11 @@ pub fn structInstanceLitAfterValue(c: anytype, line: u32) !void {
         }
     }
     try c.consume(.rbrace);
+    if (resolved_type) |t| {
+        if (t.* == .struct_type) {
+            try validateStructLiteralFieldNames(c, t.struct_type.fields, key_toks[0..count], t.struct_type.name);
+        }
+    }
     try c.cs.emit2(@intFromEnum(Op.build_struct_instance), count, line);
 }
 
@@ -1191,7 +1207,8 @@ pub fn varExpr(c: anytype, name: Token) !void {
         if (c.check(.lbrace) and looksLikeStructLiteral(
             c,
         )) {
-            try structInstanceLitAfterValue(c, name.line);
+            const resolved_obj = if (c.registry.getCachedInstByQname(qname)) |e| e.obj else null;
+            try structInstanceLitAfterValue(c, name.line, resolved_obj);
         }
         return;
     }
@@ -1228,7 +1245,8 @@ pub fn varExpr(c: anytype, name: Token) !void {
                 // Load the canonical type object (e.g. @mod:Stack[int]) not @mod:IntStack,
                 // so build_struct_instance gets the type with the correct field definitions.
                 try c.cs.emitGetGlobal(alias.target_qname, name.line);
-                try structInstanceLitAfterValue(c, name.line);
+                const resolved_obj = if (c.registry.getCachedInstByQname(alias.target_qname)) |e| e.obj else null;
+                try structInstanceLitAfterValue(c, name.line, resolved_obj);
             } else {
                 try structInstanceLit(c, name);
             }
