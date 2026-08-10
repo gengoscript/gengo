@@ -77,6 +77,14 @@ pub const State = struct {
     // string-literal fold to correctly restore const_count.
     last_const_was_new: bool = false,
     prev_const_was_new: bool = false,
+    // Peephole: position of the last true_val/false_val (1-byte, no constant-pool
+    // slot — see emitFoldedResult) instruction, for the `not` fold. Same safety
+    // shape as last_const_code_pos: a stale value is harmless because the fold
+    // site always re-checks `pos + 1 == code_len`, which only holds when nothing
+    // else was emitted since — never trust the raw byte at code_len-1 alone, since
+    // that could coincidentally match a trailing operand byte of an unrelated,
+    // longer instruction.
+    last_bool_lit_pos: ?usize = null,
     // Code-position patch: position before get_global "module:std" (or get_local for a from_std local).
     // Used by the std direct-call peephole to truncate back and emit a single get_global
     // "module:std.{ns}.{func}" instead of std-namespace load + field traversal + call.
@@ -135,6 +143,28 @@ pub const State = struct {
         self.code_len += 1;
     }
 
+    // Emit a folded constant result. A .boolean result specifically gets the
+    // dedicated true_val/false_val opcode (1 byte, no constant-pool slot)
+    // instead of going through emitConst's constant+index encoding (3 bytes,
+    // consumes a pool slot) — matching how a bare `true`/`false` literal
+    // token already compiles (see primaryExpr's .kw_true/.kw_false handling
+    // in compiler_expr.zig), so a folded boolean is exactly as cheap as one
+    // written directly in source, not more expensive. This also means the
+    // unary `not` peephole below (which checks for a literal true_val/
+    // false_val immediately before it, not just a constant-pool boolean)
+    // actually fires on the common case of folding `not <constant-folded
+    // comparison>`, not just the rare case of a genuine boolean constant
+    // pool entry.
+    fn emitFoldedResult(self: *State, result: Value, line: u32) !void {
+        if (result == .boolean) {
+            self.last_const_code_pos = null;
+            self.prev_const_code_pos = null;
+            self.last_bool_lit_pos = self.code_len;
+            return self.emitByte(@intFromEnum(if (result.boolean) Op.true_val else Op.false_val), line);
+        }
+        return self.emitConst(result, line);
+    }
+
     pub fn emitOp(self: *State, op: Op, line: u32) !void {
         // Constant folding for ops that bypass emitBinOpFused (mul, div, int_div,
         // rem, mod, and — same reasoning, these are int-only so never hit the
@@ -153,7 +183,7 @@ pub const State = struct {
                                     self.const_count -= 2;
                                     self.last_const_code_pos = null;
                                     self.prev_const_code_pos = null;
-                                    try self.emitConst(result, line);
+                                    try self.emitFoldedResult(result, line);
                                     return;
                                 }
                             }
@@ -163,7 +193,13 @@ pub const State = struct {
             },
             else => {},
         }
-        // Peephole: neg immediately after constant → negate the constant in place.
+        // Peephole: neg/not/bit_not immediately after constant → apply in place.
+        // Same shape as the binary fold above, just unary: only ever touches a
+        // value that's already sitting alone in the constant pool, so there's
+        // no overflow/precision case to bail out of (unlike neg's int branch,
+        // which does bail on minInt(i64) — negating that overflows i64; bit_not
+        // has no such case since bitwise complement can't overflow, and not's
+        // operand is already a plain bool with no numeric range to exceed).
         if (op == .neg) {
             if (self.last_const_code_pos) |pos| {
                 if (pos + 3 == self.code_len) {
@@ -178,6 +214,50 @@ pub const State = struct {
                     }
                 }
             }
+        }
+        if (op == .bit_not) {
+            if (self.last_const_code_pos) |pos| {
+                if (pos + 3 == self.code_len) {
+                    const v = self.consts[self.last_const_idx];
+                    if (v == .int) {
+                        self.consts[self.last_const_idx] = .{ .int = ~v.int };
+                        return;
+                    }
+                }
+            }
+        }
+        if (op == .not) {
+            // The common case: a literal true/false (or a folded boolean
+            // result, since emitFoldedResult emits the same opcode for
+            // those) sitting immediately before this `not` as a bare
+            // true_val/false_val byte — not a constant-pool entry at all.
+            // last_bool_lit_pos + 1 == code_len proves that 1-byte
+            // instruction is really what's sitting right here (not just a
+            // coincidentally-matching trailing operand byte of some other,
+            // longer instruction) — same reasoning as last_const_code_pos's
+            // `pos + 3 == code_len` check above.
+            if (self.last_bool_lit_pos) |pos| {
+                if (pos + 1 == self.code_len) {
+                    const was_true = self.code[pos] == @intFromEnum(Op.true_val);
+                    self.code_len = pos;
+                    self.last_bool_lit_pos = pos;
+                    return self.emitByte(@intFromEnum(if (was_true) Op.false_val else Op.true_val), line);
+                }
+            }
+            // Belt-and-suspenders: a genuine constant-pool boolean, if one
+            // ever reaches here by some other path.
+            if (self.last_const_code_pos) |pos| {
+                if (pos + 3 == self.code_len) {
+                    const v = self.consts[self.last_const_idx];
+                    if (v == .boolean) {
+                        self.consts[self.last_const_idx] = .{ .boolean = !v.boolean };
+                        return;
+                    }
+                }
+            }
+        }
+        if (op == .true_val or op == .false_val) {
+            self.last_bool_lit_pos = self.code_len;
         }
         return self.emitByte(@intFromEnum(op), line);
     }
@@ -247,7 +327,7 @@ pub const State = struct {
                             self.const_count -= 2;
                             self.last_const_code_pos = null;
                             self.prev_const_code_pos = null;
-                            try self.emitConst(result, line);
+                            try self.emitFoldedResult(result, line);
                             return;
                         }
                         // String literal concatenation: "a" + "b" → "ab" at compile time.
@@ -504,6 +584,7 @@ pub const State = struct {
         self.last_const_idx = 0;
         self.prev_const_code_pos = null;
         self.prev_const_idx = 0;
+        self.last_bool_lit_pos = null;
         self.std_call_patch_pos = null;
         self.verify_err_len = 0;
         self.verified = false;
