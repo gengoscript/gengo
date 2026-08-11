@@ -86,7 +86,8 @@ pub fn assignStmt(c: anytype) !void {
         // subtyping) exact struct type; the compiler's type tracking makes
         // the runtime check redundant.
         const skip = ((t == .prim) and (rhs_info.prim == t.prim)) or
-            ((t == .struct_type) and (rhs_info.struct_type != null) and common.streq(rhs_info.struct_type.?, t.struct_type));
+            ((t == .struct_type) and (rhs_info.struct_type != null) and common.streq(rhs_info.struct_type.?, t.struct_type)) or
+            ((t == .interface_type) and (rhs_info.struct_type != null) and c.structConformsToInterface(rhs_info.struct_type.?, t.interface_type));
         if (!skip) try c.emitVarTypeEpilog(t, name.line);
     }
     try c.emitSetVar(name);
@@ -2357,8 +2358,15 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
             } else if (inferred_type_check == .assert_err) {
                 try c.cs.emit2(@intFromEnum(Op.assert_type), 3, name.line);
             } else if (inferred_type_check == .interface_type) {
-                const idx = try c.cs.addStringConst(inferred_type_check.interface_type);
-                try c.cs.emitConstIdx(.assert_interface, idx, name.line);
+                // Skip the runtime assert_interface when the RHS is already
+                // proven to be a struct type whose methods satisfy the
+                // interface (same rationale as the struct_type/prim skips).
+                const proven = rhs_info.struct_type != null and
+                    c.structConformsToInterface(rhs_info.struct_type.?, inferred_type_check.interface_type);
+                if (!proven) {
+                    const idx = try c.cs.addStringConst(inferred_type_check.interface_type);
+                    try c.cs.emitConstIdx(.assert_interface, idx, name.line);
+                }
             } else if (inferred_type_check == .struct_type) {
                 // Skip the runtime assert_struct when the RHS is already
                 // proven to be this exact struct type (plain structs have

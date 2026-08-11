@@ -298,6 +298,7 @@ pub const TypeRegistry = struct {
     variant_objs: []?*Object,
     struct_objs: []?*Object,
     task_objs: []?*Object,
+    interface_objs: []?*Object,
 
     // Generic type templates (not yet instantiated).
     generic_types: []GenericTypeInfo,
@@ -338,6 +339,8 @@ pub const TypeRegistry = struct {
         @memset(self.struct_objs, null);
         self.task_objs = try alloc.alloc(?*Object, MaxTypes);
         @memset(self.task_objs, null);
+        self.interface_objs = try alloc.alloc(?*Object, MaxTypes);
+        @memset(self.interface_objs, null);
         self.generic_types = try alloc.alloc(GenericTypeInfo, MaxGenericTypes);
         self.generic_count = 0;
         self.generic_funcs = try alloc.alloc(GenericFuncInfo, MaxGenericFuncs);
@@ -362,6 +365,7 @@ pub const TypeRegistry = struct {
         @memset(self.variant_objs[0..], null);
         @memset(self.struct_objs[0..], null);
         @memset(self.task_objs[0..], null);
+        @memset(self.interface_objs[0..], null);
     }
 
     pub fn checkpoint(self: *const TypeRegistry) RegistryCp {
@@ -524,6 +528,20 @@ pub const TypeRegistry = struct {
         const entry = self.type_buckets[slot];
         if (entry.kind != .struct_type) return null;
         return self.struct_objs[entry.sub_idx];
+    }
+
+    pub fn setInterfaceObj(self: *TypeRegistry, name: []const u8, obj: *Object) void {
+        const slot = self.typeSlotFor(name) orelse return;
+        const entry = self.type_buckets[slot];
+        if (entry.kind != .interface_type) return;
+        self.interface_objs[entry.sub_idx] = obj;
+    }
+
+    pub fn getInterfaceObj(self: *const TypeRegistry, name: []const u8) ?*Object {
+        const slot = self.typeSlotFor(name) orelse return null;
+        const entry = self.type_buckets[slot];
+        if (entry.kind != .interface_type) return null;
+        return self.interface_objs[entry.sub_idx];
     }
 
     pub fn addInterfaceType(self: *TypeRegistry, name: []const u8) !void {

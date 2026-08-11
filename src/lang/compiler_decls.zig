@@ -251,6 +251,7 @@ pub fn interfaceDeclBody(c: anytype, kw: Token, name: Token, is_pub: bool) !void
     const qname = try c.qualifyTypeName(name.src);
     const it = c.hs.allocObject() orelse return error.OutOfMemory;
     it.* = .{ .interface_type = InterfaceTypeObj{ .name = try c.copyName(name.src), .qualified_name = qname, .methods = methods[0..mcount] } };
+    if (!c.skipping_test_body) c.registry.setInterfaceObj(name.src, it);
     try c.cs.emitConst(.{ .object = it }, kw.line);
     if (c.inFunc()) {
         _ = try c.defineLocal(name.src, false);

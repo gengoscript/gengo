@@ -6,6 +6,7 @@ const lexer_mod = @import("lexer.zig");
 const op_mod = @import("op.zig");
 const token = @import("token.zig");
 const value_mod = @import("value.zig");
+const vm_types = @import("vm_types.zig");
 const ct = @import("compiler_types.zig");
 const compiler_decls = @import("compiler_decls.zig");
 const compiler_stmts = @import("compiler_stmts.zig");
@@ -884,6 +885,35 @@ pub const Compiler = struct {
             },
             else => {},
         }
+    }
+
+    // True when the compiler can prove, purely from its own compile-time
+    // registries, that struct_qname's method set satisfies iface_name — same
+    // check matchesInterfaceType does at runtime (vm_types.zig), reused
+    // directly rather than duplicated: both sides key methods the same way
+    // ("Struct.method" as a global), so a struct compiled and registered so
+    // far already has every method matchesInterfaceType would find. Returns
+    // false (not just "doesn't conform" but also "can't prove it does") on
+    // any missing piece — a forward-declared method, a method defined after
+    // this call site, cross-module structs — so callers must treat false as
+    // "fall back to the runtime assert_interface check", never as a proof of
+    // non-conformance.
+    pub fn structConformsToInterface(self: *Compiler, struct_qname: []const u8, iface_name: []const u8) bool {
+        const iface_obj = self.registry.getInterfaceObj(iface_name) orelse return false;
+        if (iface_obj.* != .interface_type) return false;
+        const it = iface_obj.interface_type;
+        for (it.methods) |m| {
+            const total = struct_qname.len + 1 + m.name.len;
+            const key_buf = self.hs.bump(u8, total) orelse return false;
+            @memcpy(key_buf[0..struct_qname.len], struct_qname);
+            key_buf[struct_qname.len] = '.';
+            @memcpy(key_buf[struct_qname.len + 1 .. total], m.name);
+            const key = key_buf[0..total];
+            const fo = self.registry.getGlobalFuncObj(key) orelse return false;
+            if (fo.* != .function) return false;
+            if (!vm_types.interfaceMethodMatches(m, fo.function)) return false;
+        }
+        return true;
     }
 
     // Callee signature as seen from a direct call site — from the registry
