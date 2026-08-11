@@ -217,12 +217,14 @@ pub fn disassemble(cs: *const chunk.State) void {
 
             // call: [op][argc][ic_hi][ic_lo]
             .call, .call_tail => {
-                const argc = cs.codeByteAt(i) & 0x7F;
+                const argc_raw = cs.codeByteAt(i);
+                const argc = argc_raw & 0x7F;
                 const ic = (@as(u16, cs.codeByteAt(i + 1)) << 8) | @as(u16, cs.codeByteAt(i + 2));
                 i += 3;
                 io.write(@tagName(op));
                 io.write(" ");
                 writeNum(argc);
+                if (argc_raw & 0x80 != 0) io.write(" PROVEN");
                 if (ic != 0xFFFF) {
                     io.write(" [ic=");
                     writeNum(ic);

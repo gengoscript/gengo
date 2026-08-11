@@ -947,12 +947,19 @@ pub const Compiler = struct {
     // Conservative by construction: unknown prim, named carriers, multi-alt
     // or non-primitive param specs, and decimal (boxed carrier) all refuse.
     pub fn argProvenForParam(self: *Compiler, sig: CallSigView, arg_index: usize, arg_info: ExprPrimInfo) bool {
-        _ = self;
         if (arg_index >= sig.param_types.len) return false;
         const spec = sig.param_types[arg_index];
         if (spec.alts.len != 1) return false;
         const alt = spec.alts[0];
         if (alt.typ == .any) return true;
+        if (alt.typ == .struct_t) {
+            const st = arg_info.struct_type orelse return false;
+            return common.streq(st, alt.struct_name);
+        }
+        if (alt.typ == .interface_t) {
+            const st = arg_info.struct_type orelse return false;
+            return self.structConformsToInterface(st, alt.interface_name);
+        }
         if (arg_info.named_type != null) return false;
         const p = arg_info.prim orelse return false;
         return switch (alt.typ) {
