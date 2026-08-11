@@ -689,6 +689,13 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
                     const v = try parseSignedNumber(
                         c,
                     );
+                    if (!std.math.isFinite(v) or
+                        v < @as(f64, @floatFromInt(std.math.minInt(i64))) or
+                        v >= @as(f64, @floatFromInt(std.math.maxInt(i64))))
+                    {
+                        c.setErr("enum representation value {d} is out of range", .{v});
+                        return error.BadNumber;
+                    }
                     next_int = @intFromFloat(v);
                     has_explicit_ints = true;
                 }

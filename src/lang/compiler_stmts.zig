@@ -1406,6 +1406,16 @@ pub fn parseAssignTargetList(c: anytype, targets: *[MaxLocals]AssignTarget, step
                 }
                 if (c.cur.typ == .number) {
                     const n = common.parseFloat(c.cur.src) orelse return error.BadNumber;
+                    // emitAssignTargetPath later does a raw @intFromFloat on this;
+                    // reject anything outside i64 range here instead of aborting
+                    // the compiler on e.g. `a[1e300], b = x, y`.
+                    if (!std.math.isFinite(n) or
+                        n < @as(f64, @floatFromInt(std.math.minInt(i64))) or
+                        n >= @as(f64, @floatFromInt(std.math.maxInt(i64))))
+                    {
+                        c.setErr("array index literal {d} is out of range", .{n});
+                        return error.BadNumber;
+                    }
                     steps[scount] = .{ .index_number = n };
                     scount += 1;
                     c.advance();

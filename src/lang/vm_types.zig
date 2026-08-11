@@ -74,20 +74,35 @@ inline fn announcePanicMsg(ctx: VMContext) void {
     ctx.vs.pending_panic_message = ctx.vs.runtimeErrMsg();
 }
 
-fn setNamedRangeError(ctx: VMContext, typ_obj: *Object, value: f64) void {
+pub fn setNamedRangeError(ctx: VMContext, typ_obj: *Object, value: f64) void {
     const nt = typ_obj.named_type;
-    if (!std.math.isFinite(value)) {
-        ctx.vs.setRuntimeErr("{s}: {d} is outside {d}..{d}", .{ nt.name, value, nt.min, nt.max });
-    } else switch (nt.base) {
-        .int, .rune => ctx.vs.setRuntimeErr("{s}: {d} is outside {d}..{d}", .{
-            nt.name,
-            @as(i64, @intFromFloat(@trunc(value))),
-            @as(i64, @intFromFloat(@trunc(nt.min))),
-            @as(i64, @intFromFloat(@trunc(nt.max))),
-        }),
-        else => ctx.vs.setRuntimeErr("{s}: {d} is outside {d}..{d}", .{ nt.name, value, nt.min, nt.max }),
+    // value/nt.min/nt.max can be arbitrarily large (a user-declared range
+    // literal, or a value that overflowed one) — must not @intFromFloat them
+    // unchecked here, or the error-reporting path itself becomes the crash.
+    int_fmt: {
+        if (nt.base != .int and nt.base != .rune) break :int_fmt;
+        const iv = vm_mod.floatToIntSafe(value) catch break :int_fmt;
+        const imn = vm_mod.floatToIntSafe(nt.min) catch break :int_fmt;
+        const imx = vm_mod.floatToIntSafe(nt.max) catch break :int_fmt;
+        ctx.vs.setRuntimeErr("{s}: {d} is outside {d}..{d}", .{ nt.name, iv, imn, imx });
+        announcePanicMsg(ctx);
+        return;
     }
+    ctx.vs.setRuntimeErr("{s}: {d} is outside {d}..{d}", .{ nt.name, value, nt.min, nt.max });
     announcePanicMsg(ctx);
+}
+
+// value can be arbitrarily large (unranged named int/decimal, or a
+// user-declared range literal wider than i64) — this covers the cases
+// setNamedRangeError can't, i.e. no meaningful min..max to report.
+fn setNamedConversionError(ctx: VMContext, nt_name: []const u8, base_name: []const u8, value: f64) void {
+    ctx.vs.setRuntimeErr("{s}: {d} cannot be represented as {s}", .{ nt_name, value, base_name });
+    announcePanicMsg(ctx);
+}
+
+fn floatToRuneSafe(n: f64) !u21 {
+    if (!std.math.isFinite(n) or n < 0 or n > 0x10FFFF) return error.RangeError;
+    return @intFromFloat(@trunc(n));
 }
 
 // Resolve and cache the parent enum type pointer for enum subtypes.
@@ -506,16 +521,25 @@ pub fn constructNamedType(ctx: VMContext, typ_obj: *Object, arg: Value) !Value {
             if (nt.has_range and (n < nt.min or n > nt.max)) {
                 if (nt.is_cycle) {
                     const wrapped = try wrapCycleValueWithError(ctx, nt.name, nt.min, nt.max, n, false);
-                    base_v = .{ .int = @intFromFloat(wrapped) };
+                    base_v = .{ .int = vm_mod.floatToIntSafe(wrapped) catch {
+                        setNamedRangeError(ctx, typ_obj, wrapped);
+                        return error.RangeError;
+                    } };
                 } else if (nt.is_clamp) {
                     const clamped = try clampValue(nt.min, nt.max, n);
-                    base_v = .{ .int = @intFromFloat(clamped) };
+                    base_v = .{ .int = vm_mod.floatToIntSafe(clamped) catch {
+                        setNamedRangeError(ctx, typ_obj, clamped);
+                        return error.RangeError;
+                    } };
                 } else {
                     setNamedRangeError(ctx, typ_obj, n);
                     return error.RangeError;
                 }
             } else {
-                base_v = .{ .int = @intFromFloat(n) };
+                base_v = .{ .int = vm_mod.floatToIntSafe(n) catch {
+                    setNamedConversionError(ctx, nt.name, "int", n);
+                    return error.RangeError;
+                } };
             }
         },
         .float => {
@@ -614,7 +638,10 @@ pub fn constructNamedType(ctx: VMContext, typ_obj: *Object, arg: Value) !Value {
             if (nt.has_range and (rf < nt.min or rf > nt.max)) {
                 if (nt.is_clamp) {
                     const clamped = try clampValue(nt.min, nt.max, rf);
-                    base_v = .{ .rune = @intFromFloat(clamped) };
+                    base_v = .{ .rune = floatToRuneSafe(clamped) catch {
+                        setNamedRangeError(ctx, typ_obj, clamped);
+                        return error.RangeError;
+                    } };
                 } else {
                     setNamedRangeError(ctx, typ_obj, rf);
                     return error.RangeError;
@@ -689,7 +716,10 @@ pub fn coerceNamedTypeResult(ctx: VMContext, typ_obj: *Object, arg: Value) !Valu
             const n = try vms.valueAsNumber(arg);
             if (@trunc(n) != n) return error.TypeError;
             const wrapped = try wrapCycleValueWithError(ctx, nt.name, nt.min, nt.max, n, false);
-            return .{ .int = @intFromFloat(wrapped) };
+            return .{ .int = vm_mod.floatToIntSafe(wrapped) catch {
+                setNamedRangeError(ctx, typ_obj, wrapped);
+                return error.RangeError;
+            } };
         },
         .float => {
             const n = try vms.valueAsNumber(arg);
@@ -721,19 +751,29 @@ pub fn applyNamedTypeFn(ctx: VMContext, typ_obj: *Object, kind: @import("value.z
         return error.RangeError;
     }
     if (nt.is_cycle) {
-        return if (nt.base == .float)
-            Value{ .float = try wrapCycleValue(nt.min, nt.max, result, true) }
-        else
-            Value{ .int = @intFromFloat(try wrapCycleValue(nt.min, nt.max, result, false)) };
+        if (nt.base == .float) return Value{ .float = try wrapCycleValue(nt.min, nt.max, result, true) };
+        const wrapped = try wrapCycleValue(nt.min, nt.max, result, false);
+        return Value{ .int = vm_mod.floatToIntSafe(wrapped) catch {
+            setNamedRangeError(ctx, typ_obj, wrapped);
+            return error.RangeError;
+        } };
     } else if (nt.is_clamp) {
         const clamped = try clampValue(nt.min, nt.max, result);
-        return if (nt.base == .float) Value{ .float = clamped } else Value{ .int = @intFromFloat(clamped) };
+        if (nt.base == .float) return Value{ .float = clamped };
+        return Value{ .int = vm_mod.floatToIntSafe(clamped) catch {
+            setNamedRangeError(ctx, typ_obj, clamped);
+            return error.RangeError;
+        } };
     } else {
         if (result < nt.min or result > nt.max) {
             setNamedRangeError(ctx, typ_obj, result);
             return error.RangeError;
         }
-        return if (nt.base == .float) Value{ .float = result } else Value{ .int = @intFromFloat(result) };
+        if (nt.base == .float) return Value{ .float = result };
+        return Value{ .int = vm_mod.floatToIntSafe(result) catch {
+            setNamedRangeError(ctx, typ_obj, result);
+            return error.RangeError;
+        } };
     }
 }
 

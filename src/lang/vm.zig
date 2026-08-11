@@ -694,7 +694,10 @@ fn namedTypeFieldValue(ctx: VMContext, obj: *Object, name: []const u8) !Value {
     if (common.streq(name, "name")) return .{ .string = try ctx.cs.internStr(nt.name) };
     if (common.streq(name, "first")) {
         if (!nt.has_range) return error.TypeError;
-        const raw = if (nt.base == .float) Value{ .float = nt.min } else Value{ .int = @intFromFloat(nt.min) };
+        const raw = if (nt.base == .float) Value{ .float = nt.min } else Value{ .int = floatToIntSafe(nt.min) catch {
+            vmtyp.setNamedRangeError(ctx, obj, nt.min);
+            return error.RangeError;
+        } };
         return if (nt.base == .decimal or nt.base == .string or nt.base == .array_t or nt.base == .map_t)
             try vmtyp.makeNamedValue(ctx, obj, raw)
         else
@@ -702,7 +705,10 @@ fn namedTypeFieldValue(ctx: VMContext, obj: *Object, name: []const u8) !Value {
     }
     if (common.streq(name, "last")) {
         if (!nt.has_range) return error.TypeError;
-        const raw = if (nt.base == .float) Value{ .float = nt.max } else Value{ .int = @intFromFloat(nt.max) };
+        const raw = if (nt.base == .float) Value{ .float = nt.max } else Value{ .int = floatToIntSafe(nt.max) catch {
+            vmtyp.setNamedRangeError(ctx, obj, nt.max);
+            return error.RangeError;
+        } };
         return if (nt.base == .decimal or nt.base == .string or nt.base == .array_t or nt.base == .map_t)
             try vmtyp.makeNamedValue(ctx, obj, raw)
         else
@@ -868,7 +874,7 @@ fn resolveInlineVariantMethod(ctx: VMContext, iv: vmod.InlineVariantValue, mname
     return .{ .func = try resolveQualifiedReceiverMethod(ctx, vmod.objectAtIdx(iv.typ_idx).variant_type.qualified_name, mname), .pass_recv = true };
 }
 
-fn floatToIntSafe(n: f64) !i64 {
+pub fn floatToIntSafe(n: f64) !i64 {
     if (!std.math.isFinite(n) or
         n < @as(f64, @floatFromInt(std.math.minInt(i64))) or
         n >= @as(f64, @floatFromInt(std.math.maxInt(i64)))) return error.RangeError;
@@ -1576,7 +1582,10 @@ fn iterNext1(ctx: VMContext, it: *IterObj) !void {
             }
             const typ_obj = it.source.?;
             const nt = typ_obj.named_type;
-            const raw = if (nt.base == .float) Value{ .float = it.range_current } else Value{ .int = @intFromFloat(it.range_current) };
+            const raw = if (nt.base == .float) Value{ .float = it.range_current } else Value{ .int = floatToIntSafe(it.range_current) catch {
+                vmtyp.setNamedRangeError(ctx, typ_obj, it.range_current);
+                return error.RangeError;
+            } };
             const val = if (nt.base == .decimal or nt.base == .string or nt.base == .array_t or nt.base == .map_t)
                 try vmtyp.makeNamedValue(ctx, typ_obj, raw)
             else

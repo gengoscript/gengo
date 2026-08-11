@@ -270,7 +270,14 @@ pub const State = struct {
     }
 
     pub fn setRuntimeErr(self: *State, comptime fmt: []const u8, args: anytype) void {
-        const s = std.fmt.bufPrint(&self.runtime_err_buf, fmt, args) catch return;
+        // On NoSpaceLeft (e.g. a huge f64 formatted with {d} can need 300+
+        // digits), bufPrint has already written a truncated prefix into
+        // runtime_err_buf before failing — keep it rather than silently
+        // leaving the message empty.
+        const s = std.fmt.bufPrint(&self.runtime_err_buf, fmt, args) catch {
+            self.runtime_err_len = @intCast(self.runtime_err_buf.len);
+            return;
+        };
         self.runtime_err_len = @intCast(s.len);
     }
 
