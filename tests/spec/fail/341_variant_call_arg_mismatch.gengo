@@ -1,0 +1,13 @@
+type Shape variant {
+    Circle(r int)
+}
+
+type Color variant {
+    Red(v int)
+}
+
+func area(s Shape) int {
+    return 0
+}
+
+area(Color.Red(1))

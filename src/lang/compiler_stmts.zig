@@ -386,6 +386,8 @@ pub fn compileFuncWithPrefix(c: anytype, prefix: []const []const u8, is_named: b
             scope.return_struct = ret_alt.struct_name;
         } else if (ret_alt.typ == .interface_t) {
             scope.return_interface = ret_alt.interface_name;
+        } else if (ret_alt.typ == .variant_t and ret_alt.generic_args.len == 0) {
+            scope.return_variant = ret_alt.named_name;
         }
     }
 
@@ -534,7 +536,7 @@ pub fn compileFuncWithPrefix(c: anytype, prefix: []const []const u8, is_named: b
         .named_return_count = named_return_count,
         .defaults = defaults[0..default_count],
         .default_count = default_count,
-        .returns_proven = (scope.return_prim != null or scope.return_struct != null or scope.return_interface != null) and scope.all_returns_proven and scope.body_ends_with_return,
+        .returns_proven = (scope.return_prim != null or scope.return_struct != null or scope.return_interface != null or scope.return_variant != null) and scope.all_returns_proven and scope.body_ends_with_return,
     } };
     c.last_func_obj = func_obj;
     if (predicate_base == null) {
@@ -1621,7 +1623,7 @@ pub fn returnStmt(c: anytype) !void {
     if (c.check(.rbrace) or c.check(.eof) or c.check(.semicolon)) {
         // Bare return: use named return variables if present, otherwise null.
         // Returning null from a typed-single-return function is never provable.
-        if (scope.return_prim != null or scope.return_struct != null or scope.return_interface != null) scope.all_returns_proven = false;
+        if (scope.return_prim != null or scope.return_struct != null or scope.return_interface != null or scope.return_variant != null) scope.all_returns_proven = false;
         try emitImplicitReturn(scope, c.cs, line);
     } else if (scope.named_return_count > 0) {
         // Named-return function with explicit value(s): assign to the named return
@@ -1706,6 +1708,21 @@ pub fn returnStmt(c: anytype) !void {
             // conform" OR "can't prove it does" — never treat it as a
             // compile error, only as "fall back to the runtime check".
             if (rcount != 1 or rinfo.struct_type == null or !c.structConformsToInterface(rinfo.struct_type.?, ri)) {
+                scope.all_returns_proven = false;
+            }
+        } else if (scope.return_variant) |rv| {
+            // Same shape as return_struct: variant identity has no "can't
+            // prove" middle ground, so a known-wrong variant return is a
+            // compile-time error, not just an unproven return.
+            if (rcount != 1) {
+                scope.all_returns_proven = false;
+            } else if (rinfo.variant_type) |vt| {
+                if (!common.streq(vt, rv)) {
+                    c.setErr("cannot return {s} from function returning {s}; convert explicitly", .{ vt, rv });
+                    c.err_line = line;
+                    return error.TypeError;
+                }
+            } else {
                 scope.all_returns_proven = false;
             }
         }
@@ -2178,6 +2195,7 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
     var inferred_type_check: TypeCheck = .{ .none = {} };
     var inferred_named_type: ?[]const u8 = null; // named type inferred from := RHS
     var inferred_struct_type: ?[]const u8 = null; // struct type inferred from := RHS (#210)
+    var inferred_variant_type: ?[]const u8 = null; // variant type inferred from := RHS
     var self_ref_slot: ?u8 = null;
     var compile_time_const: ?ct.CompileTimeConst = null;
     if (c.match(.colon_eq) or c.match(.eq)) {
@@ -2217,6 +2235,7 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
             const rhs_info = c.childExprPrimInfo();
             inferred_named_type = rhs_info.named_type;
             if (inferred_named_type == null) inferred_struct_type = rhs_info.struct_type;
+            if (inferred_named_type == null and inferred_struct_type == null) inferred_variant_type = rhs_info.variant_type;
         }
         if (self_ref_slot != null) {
             try c.cs.emit2(@intFromEnum(Op.set_local), self_ref_slot.?, name.line);
@@ -2449,6 +2468,8 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
                 .{ .named = nt }
             else if (inferred_struct_type) |st|
                 .{ .struct_type = st }
+            else if (inferred_variant_type) |vt|
+                .{ .variant_type = vt }
             else
                 inferred_type_check;
             if (c.std_namespace_path != null) {

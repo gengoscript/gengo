@@ -1,0 +1,13 @@
+type Shape variant {
+    Circle(r int)
+}
+
+type Color variant {
+    Red(v int)
+}
+
+func makeShape() Shape {
+    return Color.Red(1)
+}
+
+_ = makeShape()

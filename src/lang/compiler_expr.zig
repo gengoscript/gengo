@@ -199,6 +199,7 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
         // Save receiver's named_type before clearing (for static method dispatch in 3b).
         const receiver_info = c.currentExprPrimInfo();
         const receiver_named_type = receiver_info.named_type;
+        const receiver_variant_type_ref = receiver_info.type_ref;
         c.clearCurrentExprPrimInfo();
         if (c.cur.typ == .kw_type) {
             c.advance(); // consume 'type'
@@ -398,6 +399,20 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
                 return;
             } else {
                 try c.cs.emitInvokeMethod(prop.src, argc, line);
+                // TypeName.ArmName(...) variant construction: tag the result
+                // with the variant type so downstream call-arg/return proof
+                // (argProvenForParam, varTypeCheckProven) can skip the
+                // matching runtime check the same way struct literals do.
+                if (receiver_variant_type_ref) |vt_name| {
+                    if (c.registry.getVariantObj(vt_name)) |vt_obj| {
+                        for (vt_obj.variant_type.arms) |arm| {
+                            if (common.streq(arm.name, prop.src)) {
+                                c.setCurrentExprPrimInfo(.{ .variant_type = vt_name });
+                                break;
+                            }
+                        }
+                    }
+                }
             }
             return;
         }
@@ -1300,6 +1315,13 @@ pub fn varExpr(c: anytype, name: Token) !void {
     if (c.registry.hasNamedType(name.src)) {
         const qname = try c.qualifyTypeName(name.src);
         c.expr_prim_info[c.expr_depth] = .{ .named_type = qname };
+    } else if (c.registry.hasVariantType(name.src)) {
+        // Same purpose as named_type above, for `TypeName.ArmName(...)`
+        // variant construction — kept in a separate field (type_ref) rather
+        // than reusing named_type/struct_type, since a bare type-name
+        // reference is not a value of that type; see ExprPrimInfo.type_ref.
+        const qname = try c.qualifyTypeName(name.src);
+        c.expr_prim_info[c.expr_depth] = .{ .type_ref = qname };
     }
     try c.emitGetVar(name);
 }

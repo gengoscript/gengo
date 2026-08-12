@@ -160,6 +160,10 @@ pub const FuncInfo = struct {
     return_prim: ?PrimType = null,
     return_struct: ?[]const u8 = null,
     return_interface: ?[]const u8 = null,
+    // variant_t analog: exact-name match only, same as return_struct — no
+    // ExprPrimInfo.generic_args tracking exists for constructed variants,
+    // so generic variant returns are left unproven (stays null).
+    return_variant: ?[]const u8 = null,
     all_returns_proven: bool = true,
     body_ends_with_return: bool = false,
     body_block_depth: u8 = 0,
@@ -176,6 +180,7 @@ pub const FuncInfo = struct {
         self.return_prim = null;
         self.return_struct = null;
         self.return_interface = null;
+        self.return_variant = null;
         self.all_returns_proven = true;
         self.body_ends_with_return = false;
         self.body_block_depth = 0;
@@ -635,6 +640,13 @@ pub const TypeRegistry = struct {
         const e = self.type_buckets[slot];
         if (e.kind != .variant_type) return;
         self.variant_objs[e.sub_idx] = obj;
+    }
+
+    pub fn getVariantObj(self: *const TypeRegistry, name: []const u8) ?*Object {
+        const slot = self.typeSlotFor(name) orelse return null;
+        const e = self.type_buckets[slot];
+        if (e.kind != .variant_type) return null;
+        return self.variant_objs[e.sub_idx];
     }
 
     /// Return the unique variant type whose arm set is a superset of `seen_arms`,

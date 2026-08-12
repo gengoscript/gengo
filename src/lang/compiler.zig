@@ -60,6 +60,21 @@ const ExprPrimInfo = struct {
     prim: ?PrimType = null,
     named_type: ?[]const u8 = null,
     struct_type: ?[]const u8 = null,
+    // This expression's VALUE is an instance of this variant type — set on
+    // the result of a `TypeName.ArmName(...)` construction call, consumed
+    // the same way struct_type is (argProvenForParam, varTypeCheckProven,
+    // return proof). Never set from a bare type-name reference — see
+    // type_ref below for that.
+    variant_type: ?[]const u8 = null,
+    // Transient: this bare identifier itself NAMES a known variant type
+    // (not a value of that type — the type object). Exists only so the
+    // immediately-following `.dot` handler can detect a
+    // `TypeName.ArmName(...)` construction call and tag its result with
+    // variant_type above; every other consumer must ignore this field, and
+    // it must never be read as "this expression's value has this type"
+    // (unlike named_type's dual use, which is safe only because its own
+    // downstream consumers are built to expect a real named-type value).
+    type_ref: ?[]const u8 = null,
     index_result_spec: ?FieldTypeSpec = null,
     is_constant: bool = false,
     is_plain_binding: bool = false,
@@ -833,6 +848,20 @@ pub const Compiler = struct {
                     return error.TypeError;
                 }
             },
+            // Same rationale as struct_t above: variant identity has no
+            // "can't prove" middle ground either, so a known-wrong variant
+            // type is safe to reject at compile time.
+            .variant_t => {
+                if (arg_info.variant_type) |vt| {
+                    if (common.streq(vt, alt.named_name)) return;
+                    if (alt.generic_args.len > 0 and
+                        std.mem.startsWith(u8, vt, alt.named_name) and
+                        vt.len > alt.named_name.len and vt[alt.named_name.len] == '[') return;
+                    self.setErr("cannot pass {s} to parameter of type {s}", .{ vt, alt.named_name });
+                    self.err_line = line;
+                    return error.TypeError;
+                }
+            },
             else => {},
         }
     }
@@ -906,6 +935,17 @@ pub const Compiler = struct {
                         std.mem.startsWith(u8, st, alt.struct_name) and
                         st.len > alt.struct_name.len and st[alt.struct_name.len] == '[') return;
                     self.setErr("cannot assign {s} to field '{s}' of type {s}", .{ st, field_name, alt.struct_name });
+                    self.err_line = line;
+                    return error.StructFieldTypeMismatch;
+                }
+            },
+            .variant_t => {
+                if (arg_info.variant_type) |vt| {
+                    if (common.streq(vt, alt.named_name)) return;
+                    if (alt.generic_args.len > 0 and
+                        std.mem.startsWith(u8, vt, alt.named_name) and
+                        vt.len > alt.named_name.len and vt[alt.named_name.len] == '[') return;
+                    self.setErr("cannot assign {s} to field '{s}' of type {s}", .{ vt, field_name, alt.named_name });
                     self.err_line = line;
                     return error.StructFieldTypeMismatch;
                 }
@@ -986,6 +1026,10 @@ pub const Compiler = struct {
         if (alt.typ == .interface_t) {
             const st = arg_info.struct_type orelse return false;
             return self.structConformsToInterface(st, alt.interface_name);
+        }
+        if (alt.typ == .variant_t) {
+            const vt = arg_info.variant_type orelse return false;
+            return common.streq(vt, alt.named_name);
         }
         if (arg_info.named_type != null) return false;
         const p = arg_info.prim orelse return false;
@@ -1382,6 +1426,7 @@ pub const Compiler = struct {
                         },
                         .assert_arr, .assert_map => |element_spec| .{ .index_result_spec = element_spec },
                         .struct_type => |n| .{ .struct_type = n },
+                        .variant_type => |n| .{ .variant_type = n },
                         .anon_typed => self.exprPrimInfoFromTypeCheck(tc),
                         else => .{},
                     };
@@ -1862,7 +1907,8 @@ pub const Compiler = struct {
     pub fn varTypeCheckProven(self: *Compiler, tc: TypeCheck, rhs_info: ExprPrimInfo) bool {
         return ((tc == .prim) and (rhs_info.prim == tc.prim)) or
             ((tc == .struct_type) and (rhs_info.struct_type != null) and common.streq(rhs_info.struct_type.?, tc.struct_type)) or
-            ((tc == .interface_type) and (rhs_info.struct_type != null) and self.structConformsToInterface(rhs_info.struct_type.?, tc.interface_type));
+            ((tc == .interface_type) and (rhs_info.struct_type != null) and self.structConformsToInterface(rhs_info.struct_type.?, tc.interface_type)) or
+            ((tc == .variant_type) and (rhs_info.variant_type != null) and common.streq(rhs_info.variant_type.?, tc.variant_type));
     }
 
     pub fn emitVarTypeProlog(self: *Compiler, tc: TypeCheck, line: u32) !void {

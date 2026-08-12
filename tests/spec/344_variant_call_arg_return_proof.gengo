@@ -1,0 +1,22 @@
+std := import("std")
+
+type Shape variant {
+    Circle(r int),
+    Rect(w int)
+}
+
+func makeCircle(r int) Shape {
+    return Shape.Circle(r)
+}
+
+func area(s Shape) int {
+    switch s {
+        case .Circle as r { return r * r * 3 }
+        case .Rect as w { return w * w }
+    }
+    return 0
+}
+
+c := Shape.Circle(5)
+std.io.println(area(c))
+std.io.println(area(makeCircle(4)))
