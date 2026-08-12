@@ -1241,6 +1241,7 @@ pub const Compiler = struct {
             .rune_t => .{ .prim = .rune },
             .named_t => .{ .named = spec.alts[0].named_name },
             .struct_t => .{ .struct_type = spec.alts[0].struct_name },
+            .interface_t => .{ .interface_type = spec.alts[0].interface_name },
             .array => .{ .assert_arr = spec.alts[0].elem_spec },
             .map => .{ .assert_map = spec.alts[0].val_spec },
             .error_t => .{ .assert_err = {} },

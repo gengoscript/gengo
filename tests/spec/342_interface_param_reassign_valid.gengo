@@ -1,0 +1,23 @@
+std := import("std")
+
+type Speaker interface {
+    speak() string
+}
+
+type Dog struct { name string }
+type Cat struct { name string }
+
+func (d Dog) speak() string {
+    return d.name
+}
+
+func (c Cat) speak() string {
+    return c.name
+}
+
+func f(p Speaker) string {
+    p = Cat{name: "Whiskers"}
+    return p.speak()
+}
+
+std.io.println(f(Dog{name: "Rex"}))

@@ -1,0 +1,15 @@
+type Speaker interface {
+    speak() string
+}
+
+type Dog struct { name string }
+
+func (d Dog) speak() string {
+    return d.name
+}
+
+func f(p Speaker) {
+    p = 5
+}
+
+f(Dog{name: "Rex"})
