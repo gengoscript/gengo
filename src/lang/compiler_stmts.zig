@@ -376,7 +376,8 @@ pub fn compileFuncWithPrefix(c: anytype, prefix: []const []const u8, is_named: b
     scope.is_named = is_named;
     scope.has_typed_returns = has_typed_returns;
     if (named_return_count == 0 and return_count == 1 and return_types[0].alts.len == 1) {
-        scope.return_prim = switch (return_types[0].alts[0].typ) {
+        const ret_alt = return_types[0].alts[0];
+        scope.return_prim = switch (ret_alt.typ) {
             .int => .int,
             .float => .float,
             .boolean => .bool,
@@ -386,6 +387,11 @@ pub fn compileFuncWithPrefix(c: anytype, prefix: []const []const u8, is_named: b
             // runtime's coercion path — not provable here.
             else => null,
         };
+        if (ret_alt.typ == .struct_t and ret_alt.generic_args.len == 0) {
+            scope.return_struct = ret_alt.struct_name;
+        } else if (ret_alt.typ == .interface_t) {
+            scope.return_interface = ret_alt.interface_name;
+        }
     }
 
     for (0..@as(usize, arity)) |pi| {
@@ -533,7 +539,7 @@ pub fn compileFuncWithPrefix(c: anytype, prefix: []const []const u8, is_named: b
         .named_return_count = named_return_count,
         .defaults = defaults[0..default_count],
         .default_count = default_count,
-        .returns_proven = scope.return_prim != null and scope.all_returns_proven and scope.body_ends_with_return,
+        .returns_proven = (scope.return_prim != null or scope.return_struct != null or scope.return_interface != null) and scope.all_returns_proven and scope.body_ends_with_return,
     } };
     c.last_func_obj = func_obj;
     if (predicate_base == null) {
@@ -1619,8 +1625,8 @@ pub fn returnStmt(c: anytype) !void {
     if (c.block_depth == scope.body_block_depth) scope.body_ends_with_return = true;
     if (c.check(.rbrace) or c.check(.eof) or c.check(.semicolon)) {
         // Bare return: use named return variables if present, otherwise null.
-        // Returning null from a primitive-typed function is never provable.
-        if (scope.return_prim != null) scope.all_returns_proven = false;
+        // Returning null from a typed-single-return function is never provable.
+        if (scope.return_prim != null or scope.return_struct != null or scope.return_interface != null) scope.all_returns_proven = false;
         try emitImplicitReturn(scope, c.cs, line);
     } else if (scope.named_return_count > 0) {
         // Named-return function with explicit value(s): assign to the named return
@@ -1680,6 +1686,27 @@ pub fn returnStmt(c: anytype) !void {
                     return error.TypeError;
                 }
             } else {
+                scope.all_returns_proven = false;
+            }
+        } else if (scope.return_struct) |rs| {
+            // Exact name match only; generic struct returns are never proven
+            // here (return_struct is left null for those at the decl site).
+            if (rcount != 1) {
+                scope.all_returns_proven = false;
+            } else if (rinfo.struct_type) |st| {
+                if (!common.streq(st, rs)) {
+                    c.setErr("cannot return {s} from function returning {s}; convert explicitly", .{ st, rs });
+                    c.err_line = line;
+                    return error.TypeError;
+                }
+            } else {
+                scope.all_returns_proven = false;
+            }
+        } else if (scope.return_interface) |ri| {
+            // structConformsToInterface returning false means "doesn't
+            // conform" OR "can't prove it does" — never treat it as a
+            // compile error, only as "fall back to the runtime check".
+            if (rcount != 1 or rinfo.struct_type == null or !c.structConformsToInterface(rinfo.struct_type.?, ri)) {
                 scope.all_returns_proven = false;
             }
         }

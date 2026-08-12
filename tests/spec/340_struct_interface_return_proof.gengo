@@ -1,0 +1,25 @@
+std := import("std")
+
+type Speaker interface {
+    speak() string
+}
+
+type Dog struct { name string }
+
+func (d Dog) speak() string {
+    return d.name
+}
+
+func makeDog() Dog {
+    return Dog{name: "Rex"}
+}
+
+func makeSpeaker() Speaker {
+    return Dog{name: "Fido"}
+}
+
+d := makeDog()
+std.io.println(d.name)
+
+s := makeSpeaker()
+std.io.println(s.speak())

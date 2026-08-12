@@ -147,10 +147,18 @@ pub const FuncInfo = struct {
     // Return-proof tracking (C4). return_prim is set when the function
     // declares exactly one primitive single-alt return type; each return
     // site either proves its value against it or clears all_returns_proven.
+    // return_struct/return_interface are the struct_t/interface_t analogs
+    // (mutually exclusive with return_prim and each other), same rationale
+    // as argProvenForParam's struct_t/interface_t handling: exact-name
+    // match proves a struct return, structConformsToInterface proves an
+    // interface return; generic struct returns are left unproven (return_struct
+    // stays null) rather than duplicating the runtime's prefix-match logic here.
     // body_ends_with_return guards the compiler-emitted implicit null
     // return: only when the body's last top-level statement is a return is
     // that implicit site unreachable, making the function-level proof sound.
     return_prim: ?PrimType = null,
+    return_struct: ?[]const u8 = null,
+    return_interface: ?[]const u8 = null,
     all_returns_proven: bool = true,
     body_ends_with_return: bool = false,
     body_block_depth: u8 = 0,
@@ -165,6 +173,8 @@ pub const FuncInfo = struct {
         self.is_named = false;
         self.has_typed_returns = false;
         self.return_prim = null;
+        self.return_struct = null;
+        self.return_interface = null;
         self.all_returns_proven = true;
         self.body_ends_with_return = false;
         self.body_block_depth = 0;
