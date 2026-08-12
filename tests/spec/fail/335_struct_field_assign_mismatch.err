@@ -1,0 +1,2 @@
+StructFieldTypeMismatch
+cannot assign Cat to field 'pet' of type Dog

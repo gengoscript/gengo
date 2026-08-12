@@ -1,0 +1,10 @@
+std := import("std")
+
+type Dog struct { name string }
+type Cat struct { name string }
+
+func speak(d Dog) {
+    std.io.println(d.name)
+}
+
+speak(Cat{name: "Whiskers"})

@@ -1,0 +1,6 @@
+type Dog struct { name string }
+type Cat struct { name string }
+type Kennel struct { pet Dog }
+
+c := Cat{name: "Whiskers"}
+_ = Kennel{pet: c}

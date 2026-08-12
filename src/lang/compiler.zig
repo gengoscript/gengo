@@ -817,6 +817,22 @@ pub const Compiler = struct {
                     }
                 }
             },
+            // Exact-name or generic-instantiation-prefix match, same rule
+            // matchesTypeAlt applies at runtime (vm_types.zig). A known
+            // struct_type that fails both is definitely wrong — unlike
+            // interface_t below, struct identity has no "can't prove"
+            // middle ground, so this is safe to reject at compile time.
+            .struct_t => {
+                if (arg_info.struct_type) |st| {
+                    if (common.streq(st, alt.struct_name)) return;
+                    if (alt.generic_args.len > 0 and
+                        std.mem.startsWith(u8, st, alt.struct_name) and
+                        st.len > alt.struct_name.len and st[alt.struct_name.len] == '[') return;
+                    self.setErr("cannot pass {s} to parameter of type {s}", .{ st, alt.struct_name });
+                    self.err_line = line;
+                    return error.TypeError;
+                }
+            },
             else => {},
         }
     }
@@ -881,6 +897,17 @@ pub const Compiler = struct {
                         self.err_line = line;
                         return error.StructFieldTypeMismatch;
                     }
+                }
+            },
+            .struct_t => {
+                if (arg_info.struct_type) |st| {
+                    if (common.streq(st, alt.struct_name)) return;
+                    if (alt.generic_args.len > 0 and
+                        std.mem.startsWith(u8, st, alt.struct_name) and
+                        st.len > alt.struct_name.len and st[alt.struct_name.len] == '[') return;
+                    self.setErr("cannot assign {s} to field '{s}' of type {s}", .{ st, field_name, alt.struct_name });
+                    self.err_line = line;
+                    return error.StructFieldTypeMismatch;
                 }
             },
             else => {},
