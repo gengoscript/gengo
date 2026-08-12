@@ -1,0 +1,10 @@
+type Shape variant {
+    Circle(r int),
+    Rect(w int)
+}
+
+func f(sh Shape) {
+    sh = 99
+}
+
+f(Shape.Circle(1))

@@ -1,0 +1,7 @@
+type Shape variant {
+    Circle(r int),
+    Rect(w int)
+}
+
+var s Shape = Shape.Circle(5)
+s = 42

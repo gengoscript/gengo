@@ -234,7 +234,12 @@ pub const Op = enum(u8) {
     // ever exhausted, the answer is build/link-time-selected fused-op-set
     // profiles (zero per-instruction cost — a compile-time choice, not a
     // runtime branch), not widening or prefixing.
-    reserved_83 = 0x83,
+    // Was reserved_83; claimed for assert_variant (u16: const index of
+    // variant type name — same shape as assert_struct/assert_interface
+    // above). Pops nothing, peeks TOS: verifies TOS is a variant of this
+    // exact type (or, for a generic variant, an instantiation of it),
+    // matching matchesTypeSpec's own .variant_t rule.
+    assert_variant = 0x83,
     reserved_84 = 0x84,
     reserved_85 = 0x85,
     reserved_86 = 0x86,

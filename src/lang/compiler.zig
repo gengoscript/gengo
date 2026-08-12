@@ -1242,6 +1242,7 @@ pub const Compiler = struct {
             .named_t => .{ .named = spec.alts[0].named_name },
             .struct_t => .{ .struct_type = spec.alts[0].struct_name },
             .interface_t => .{ .interface_type = spec.alts[0].interface_name },
+            .variant_t => .{ .variant_type = spec.alts[0].named_name },
             .array => .{ .assert_arr = spec.alts[0].elem_spec },
             .map => .{ .assert_map = spec.alts[0].val_spec },
             .error_t => .{ .assert_err = {} },
@@ -1903,6 +1904,10 @@ pub const Compiler = struct {
             .struct_type => |name| {
                 const idx = try self.cs.addStringConst(name);
                 try self.cs.emitConstIdx(.assert_struct, idx, line);
+            },
+            .variant_type => |name| {
+                const idx = try self.cs.addStringConst(name);
+                try self.cs.emitConstIdx(.assert_variant, idx, line);
             },
             .anon_typed => try self.cs.emitCall(1, line),
         }

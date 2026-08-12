@@ -60,6 +60,7 @@ pub fn emitZeroValue(c: anytype, tc: TypeCheck, line: u32) !void {
             try c.cs.emitCall(1, line);
         },
         .interface_type => try c.cs.emitOp(.null_val, line),
+        .variant_type => try c.cs.emitOp(.null_val, line),
         .struct_type => |qname| {
             try c.cs.emitGetGlobal(qname, line);
             try c.cs.emitOp(.zero_struct, line);

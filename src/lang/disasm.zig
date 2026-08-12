@@ -183,7 +183,7 @@ pub fn disassemble(cs: *const chunk.State) void {
 
         switch (op) {
             // --- 2-byte const index ops ---
-            .constant, .def_global, .make_closure, .ret_const, .const_eq, .const_sub, .const_add, .const_lt, .const_gt, .variant_check, .assert_interface, .assert_struct, .check_named_predicate, .validate_named_range, .get_index_const_str => {
+            .constant, .def_global, .make_closure, .ret_const, .const_eq, .const_sub, .const_add, .const_lt, .const_gt, .variant_check, .assert_interface, .assert_struct, .assert_variant, .check_named_predicate, .validate_named_range, .get_index_const_str => {
                 const idx = readU16(cs, i);
                 i += 2;
                 io.write(@tagName(op));

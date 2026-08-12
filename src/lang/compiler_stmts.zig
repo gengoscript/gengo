@@ -2322,6 +2322,8 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
                 inferred_type_check = .{ .interface_type = type_name };
             } else if (c.registry.hasStructTypeLocal(type_name)) {
                 inferred_type_check = .{ .struct_type = type_name };
+            } else if (c.registry.hasVariantType(type_name)) {
+                inferred_type_check = .{ .variant_type = type_name };
             } else if (type_name.len == 0) {
                 // No type check for nullable type
             } else {
@@ -2401,6 +2403,12 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
                     const idx = try c.cs.addStringConst(inferred_type_check.struct_type);
                     try c.cs.emitConstIdx(.assert_struct, idx, name.line);
                 }
+            } else if (inferred_type_check == .variant_type) {
+                // No compile-time proof source for variant construction
+                // exists yet (unlike struct_type/interface_type), so this
+                // always emits the runtime check.
+                const idx = try c.cs.addStringConst(inferred_type_check.variant_type);
+                try c.cs.emitConstIdx(.assert_variant, idx, name.line);
             }
         } else if (has_keyword and !is_const and inferred_type_check != .none) {
             if (inferred_type_check == .named) {

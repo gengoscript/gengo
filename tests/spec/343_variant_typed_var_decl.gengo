@@ -1,0 +1,19 @@
+std := import("std")
+
+type Shape variant {
+    Circle(r int),
+    Rect(w int)
+}
+
+func area(s Shape) int {
+    switch s {
+        case .Circle as r { return r * r * 3 }
+        case .Rect as w { return w * w }
+    }
+    return 0
+}
+
+var s Shape = Shape.Circle(5)
+std.io.println(area(s))
+s = Shape.Rect(4)
+std.io.println(area(s))

@@ -3580,6 +3580,14 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                     (v.object.* == .small_struct_instance and common.streq(v.object.small_struct_instance.typ.struct_type.qualified_name, name)));
                 try typeAssert(ctx, v, ok, name);
             },
+            .assert_variant => {
+                const idx = opShort(ctx);
+                if (idx >= ctx.cs.constCount()) return error.InvalidChunkShape;
+                const name = (ctx.cs.constAt(idx) catch unreachable).string.bytes;
+                const v = try ctx.vs.vmPeek(0);
+                const ok = if (v.asVariant()) |ref| common.streq(ref.typ.variant_type.qualified_name, name) else false;
+                try typeAssert(ctx, v, ok, name);
+            },
             .type_name => {
                 const v = try ctx.vs.vmPop();
                 try ctx.vs.vmPush(try vmnative.nativeTypeNameValue(ctx, v));
