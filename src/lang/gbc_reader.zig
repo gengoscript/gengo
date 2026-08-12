@@ -157,18 +157,29 @@ fn findSection(sections: []const SectionEntry, id: u32) ?SectionEntry {
     return null;
 }
 
+// Where to re-find a raw_funcs[i]'s FuncObj through cs.consts, deferred
+// until after the whole constants loop finishes (see that loop's comment).
+// Deliberately a const-pool INDEX, not the *Object itself: cs.consts is
+// GC-rooted, so the object stored there — and anything transitively
+// reachable from it — gets correctly relocated by any compaction that runs
+// later in the same loop (allocObject/bump calls for later constants can
+// each trigger one, especially under -Dgc_stress). A raw pointer captured
+// earlier in the loop has no such protection and silently goes stale the
+// moment that happens; direct_const/predicate_const only ever get
+// dereferenced through cs.consts[idx], never cached, so they can't.
+const FuncNamePatchTarget = union(enum) {
+    direct_const: u16, // cs.consts[idx] IS the FuncObj (a plain CONST_FUNC_REF)
+    predicate_const: u16, // cs.consts[idx] is the named_type; the FuncObj is .named_type.predicate.?.closure.func
+};
+
 // Builds the .function-tagged heap object a SEC_FUNCTIONS entry describes —
 // shared by a plain CONST_FUNC_REF constant and a named type's predicate
 // (whose FuncObj is registered into SEC_FUNCTIONS the same way, but is
 // referenced from a NAMED TypeEntry's predicate_func_idx instead of its own
 // CONST_FUNC_REF constant — see read()'s CONST_TYPE_REF/TYPE_KIND_NAMED case).
-fn buildFuncObjFromRaw(hs: *heap.State, cs: *chunk.State, rf: RawFuncEntry) !*value_mod.Object {
-    const name: []const u8 = if (rf.name_constant_idx == 0xFFFFFFFF or rf.name_constant_idx >= cs.const_count)
-        ""
-    else if (cs.consts[rf.name_constant_idx] == .string)
-        cs.consts[rf.name_constant_idx].string.bytes
-    else
-        "";
+// name is left "" here — see the comment at read()'s post-constants-loop
+// name-patching pass for why it can't be resolved yet at this point.
+fn buildFuncObjFromRaw(hs: *heap.State, rf: RawFuncEntry) !*value_mod.Object {
     const obj = hs.allocObject() orelse return error.OutOfMemory;
     obj.* = .{
         .function = FuncObj{
@@ -181,7 +192,7 @@ fn buildFuncObjFromRaw(hs: *heap.State, cs: *chunk.State, rf: RawFuncEntry) !*va
             .has_typed_params = rf.has_typed_params,
             .return_types = rf.return_types,
             .has_typed_returns = rf.has_typed_returns,
-            .name = name,
+            .name = "",
             .named_return_count = rf.named_return_count,
         },
     };
@@ -251,6 +262,15 @@ fn readTypeSpecDepth(r: *ByteReader, hs: *heap.State, alloc: std.mem.Allocator, 
             gbc_writer.FT_INTERFACE_T => .{ .typ = .interface_t, .interface_name = try copyStr(hs, try r.str_()) },
             gbc_writer.FT_NAMED_T => .{ .typ = .named_t, .named_name = try copyStr(hs, try r.str_()) },
             gbc_writer.FT_VARIANT_T => .{ .typ = .variant_t, .named_name = try copyStr(hs, try r.str_()) },
+            gbc_writer.FT_FUNC_T => blk: {
+                const param_count = try r.u16_();
+                const params = (hs.bump(value_mod.FieldTypeSpec, param_count) orelse return error.OutOfMemory)[0..param_count];
+                for (params) |*p| p.* = try readTypeSpecDepth(r, hs, alloc, depth + 1);
+                const return_count = try r.u16_();
+                const returns = (hs.bump(value_mod.FieldTypeSpec, return_count) orelse return error.OutOfMemory)[0..return_count];
+                for (returns) |*rt| rt.* = try readTypeSpecDepth(r, hs, alloc, depth + 1);
+                break :blk .{ .typ = .func_t, .func_params = params, .func_returns = returns };
+            },
             else => return error.BadFieldTypeTag,
         };
     }
@@ -627,6 +647,24 @@ pub fn read(bytes: []const u8, cs: *chunk.State, hs: *heap.State, alloc: std.mem
     cs.last_emitted_line = 0;
     cs.last_emitted_col = 0xffff;
 
+    // SEC_STD_SCRIPT_INFO: optional, vendor-range section — see its writer-side
+    // comment. Absent (older or foreign-produced .gbc) means these stay at
+    // chunk.State's own zero defaults, same as before this section existed;
+    // buildStdModule's script_function lookup (native/main.zig) then just
+    // finds nothing and resolves those std entries to null, exactly the
+    // pre-fix behavior, not a hard load failure.
+    if (findSection(sections, gbc_writer.SEC_STD_SCRIPT_INFO)) |sec| {
+        const std_script_bytes = body[sec.offset..][0..sec.length];
+        var sr = ByteReader{ .bytes = std_script_bytes };
+        cs.std_script_const_base = try sr.u16_();
+        cs.std_script_const_count = try sr.u16_();
+        cs.std_script_code_end = try sr.u32_();
+    } else {
+        cs.std_script_const_base = 0;
+        cs.std_script_const_count = 0;
+        cs.std_script_code_end = 0;
+    }
+
     // FUNCTIONS/TYPES: parsed before CONSTANTS since FUNC_REF/TYPE_REF
     // constants index into them.
     const functions_bytes = body[functions_sec.offset..][0..functions_sec.length];
@@ -639,6 +677,14 @@ pub fn read(bytes: []const u8, cs: *chunk.State, hs: *heap.State, alloc: std.mem
     const raw_types = try readTypesSection(&tr, cs, hs, alloc);
     defer alloc.free(raw_types);
 
+    // Tracks, per raw_funcs[i], how to re-find its FuncObj through cs.consts
+    // (NOT a raw pointer — see the comment after this loop for why holding
+    // one across the rest of this loop is unsafe) so names can be resolved
+    // in a pass after ALL constants exist.
+    const func_patch = try alloc.alloc(?FuncNamePatchTarget, raw_funcs.len);
+    defer alloc.free(func_patch);
+    @memset(func_patch, null);
+
     // CONSTANTS.
     const constants_bytes = body[constants_sec.offset..][0..constants_sec.length];
     var cr = ByteReader{ .bytes = constants_bytes };
@@ -647,6 +693,10 @@ pub fn read(bytes: []const u8, cs: *chunk.State, hs: *heap.State, alloc: std.mem
     var ci: u32 = 0;
     while (ci < const_count) : (ci += 1) {
         const tag = try cr.u8_();
+        // Set inside CONST_FUNC_REF/a named type's predicate below, consumed
+        // right after this constant's addConst() call returns its final,
+        // stable index — see FuncNamePatchTarget's doc comment.
+        var pending_patch: ?struct { fidx: u32, kind: enum { direct, predicate } } = null;
         const v: Value = switch (tag) {
             gbc_writer.CONST_NUMBER => Value{ .float = try cr.f64_() },
             gbc_writer.CONST_INT => Value{ .int = try cr.i64_() },
@@ -667,7 +717,8 @@ pub fn read(bytes: []const u8, cs: *chunk.State, hs: *heap.State, alloc: std.mem
             gbc_writer.CONST_FUNC_REF => blk: {
                 const fidx = try cr.u32_();
                 if (fidx >= raw_funcs.len) return error.FuncRefOutOfRange;
-                const obj = try buildFuncObjFromRaw(hs, cs, raw_funcs[fidx]);
+                const obj = try buildFuncObjFromRaw(hs, raw_funcs[fidx]);
+                pending_patch = .{ .fidx = fidx, .kind = .direct };
                 break :blk Value{ .object = obj };
             },
             gbc_writer.CONST_TYPE_REF => blk: {
@@ -694,7 +745,8 @@ pub fn read(bytes: []const u8, cs: *chunk.State, hs: *heap.State, alloc: std.mem
                         var predicate: ?*value_mod.Object = null;
                         if (rt.predicate_func_idx) |pidx| {
                             if (pidx >= raw_funcs.len) return error.FuncRefOutOfRange;
-                            const fobj = try buildFuncObjFromRaw(hs, cs, raw_funcs[pidx]);
+                            const fobj = try buildFuncObjFromRaw(hs, raw_funcs[pidx]);
+                            pending_patch = .{ .fidx = pidx, .kind = .predicate };
                             const closure_obj = hs.allocObject() orelse return error.OutOfMemory;
                             closure_obj.* = .{ .closure = .{ .func = fobj, .upvalues = &[_]*value_mod.Object{} } };
                             predicate = closure_obj;
@@ -747,7 +799,47 @@ pub fn read(bytes: []const u8, cs: *chunk.State, hs: *heap.State, alloc: std.mem
             },
             else => return error.BadConstantTag,
         };
-        _ = try cs.addConst(v);
+        const stored_idx = try cs.addConst(v);
+        if (pending_patch) |pp| func_patch[pp.fidx] = switch (pp.kind) {
+            .direct => .{ .direct_const = stored_idx },
+            .predicate => .{ .predicate_const = stored_idx },
+        };
+    }
+
+    // Deferred name patching: a FunctionEntry's name_constant_idx can point
+    // anywhere in the constant pool, including at a STRING constant that
+    // gbc_writer appended AFTER the function's own position (needed for any
+    // function whose bare name — e.g. "count" — wasn't already present as an
+    // independent string constant; see writeFunctionsSection's comment).
+    // Resolving names inline inside the loop above (as buildFuncObjFromRaw
+    // used to) can't see those forward references: cs.addConst builds
+    // cs.consts incrementally, so mid-loop cs.const_count/cs.consts only
+    // reflect what's been added so far, not the final pool. Now that every
+    // constant exists, this pass can look any name_constant_idx up
+    // unconditionally, regardless of where it landed — and re-finds each
+    // FuncObj through cs.consts (via func_patch, never a cached pointer;
+    // see FuncNamePatchTarget) so it's the GC-relocated-if-necessary object,
+    // not a possibly-stale one.
+    for (raw_funcs, 0..) |rf, fi| {
+        const target = func_patch[fi] orelse continue;
+        if (rf.name_constant_idx == 0xFFFFFFFF or rf.name_constant_idx >= cs.const_count) continue;
+        const nv = cs.consts[rf.name_constant_idx];
+        if (nv != .string) continue;
+        const fobj: *value_mod.Object = switch (target) {
+            .direct_const => |idx| blk: {
+                const cv = cs.consts[idx];
+                if (cv != .object or cv.object.* != .function) continue;
+                break :blk cv.object;
+            },
+            .predicate_const => |idx| blk: {
+                const cv = cs.consts[idx];
+                if (cv != .object or cv.object.* != .named_type) continue;
+                const pred = cv.object.named_type.predicate orelse continue;
+                if (pred.* != .closure) continue;
+                break :blk pred.closure.func;
+            },
+        };
+        fobj.function.name = nv.string.bytes;
     }
 
     cs.verified = false;

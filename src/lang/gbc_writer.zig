@@ -40,6 +40,21 @@ pub const SEC_NATIVE_IMPORTS: u32 = 0x0004;
 pub const SEC_EXPORTS: u32 = 0x0005;
 pub const SEC_TYPES: u32 = 0x0006;
 pub const SEC_DEPENDENCY_TABLE: u32 = 0x0007;
+// Vendor/implementation-specific, not part of the portable gbc-spec.md
+// section table: records where compileStdScripts' embedded-Gengoscript
+// stdlib helpers (e.g. array.gengo's `count`) live in this chunk's own
+// constant pool and code, so buildStdModule's script_function lookup
+// (native/main.zig) can find them again after a GBC load — that lookup
+// scans cs.consts[std_script_const_base..+std_script_const_count] by
+// name, and those fields are ordinary chunk.State bookkeeping that
+// compileStdScripts sets during compilation, with no other wire
+// representation. Optional (not SECTION_FLAG_REQUIRED): a loader that
+// doesn't understand it just leaves those fields at their zero default,
+// which is the same (broken) behavior this section exists to fix, not a
+// hard failure — found via --emit-gbc on a script using
+// std.array.count, which silently resolved to `.null` and then
+// "is not defined" post-load without this section.
+pub const SEC_STD_SCRIPT_INFO: u32 = 0x8000;
 const SECTION_FLAG_REQUIRED: u32 = 0x0001;
 
 pub const CONST_NUMBER: u8 = 0x01;
@@ -68,11 +83,11 @@ pub const VARIANT_ARM_NONE: u8 = 0x00;
 pub const VARIANT_ARM_SINGLE_PAYLOAD: u8 = 0x01;
 pub const VARIANT_ARM_RECORD: u8 = 0x02;
 
-// FieldTypeTag wire values, matching gbc-spec.md §9.2. Only the shapes a
-// struct field / named-collection elem/key/val spec actually needs are
-// supported this increment (see writeTypeSpec's doc comment) — func_t and
-// type_param are rejected with error.UnsupportedFieldType rather than
-// silently mis-encoded.
+// FieldTypeTag wire values, matching gbc-spec.md §9.2. type_param
+// (generics-only, unresolved by the time a chunk is compiled and fused) is
+// rejected with error.UnsupportedFieldType rather than silently mis-encoded;
+// every other tag, including func_t, is supported (see writeTypeSpec's doc
+// comment).
 pub const FT_ANY: u8 = 0x00;
 pub const FT_NULL_T: u8 = 0x01;
 pub const FT_INT: u8 = 0x02;
@@ -87,7 +102,7 @@ pub const FT_STRUCT_T: u8 = 0x0A;
 pub const FT_INTERFACE_T: u8 = 0x0B;
 pub const FT_NAMED_T: u8 = 0x0C;
 pub const FT_VARIANT_T: u8 = 0x0D;
-// FT_FUNC_T = 0x0E is spec'd but unsupported (rejected, see writeTypeSpec).
+pub const FT_FUNC_T: u8 = 0x0E;
 pub const FT_DECIMAL_T: u8 = 0x0F;
 pub const FT_ACTOR_REF_T: u8 = 0x10;
 
@@ -213,6 +228,11 @@ const FuncEntryInfo = struct {
     ip: u32,
     length: u32,
     f: *const value_mod.FuncObj,
+    // Resolved by write() after the main constants pass, once it's known
+    // whether `name` already exists as an independent STRING constant or
+    // needs one newly appended — see write()'s comment on that pass for
+    // why this can't be computed inline while registerFunc runs.
+    name_const_idx: ?u32 = null,
 };
 
 // Derive a function's defused-bytecode length from the jump-over-body
@@ -247,8 +267,18 @@ const MaxTypeSpecDepth: u32 = 64;
 // every scalar tag plus one level of struct_t/interface_t/named_t/variant_t
 // (by qualified-name string, no further indirection needed — matchesTypeAlt
 // resolves those by name at runtime too) and recurses into array/map
-// elem/key/val specs. Rejects func_t and type_param (generics-only, out of
-// scope) with UnsupportedFieldType rather than silently mis-encoding them.
+// elem/key/val specs, plus func_t's param/return TypeSpec lists (also
+// recursive — a func_t param can itself be a func_t, e.g. a higher-order
+// callback; MaxTypeSpecDepth bounds this the same as array/map nesting).
+// Every embedded-stdlib helper (compileStdScripts, always compiled into
+// every chunk regardless of whether the user's script imports std) takes a
+// func_t predicate/callback param, so leaving func_t unsupported meant GBC
+// emission failed for every program, not just ones using function-typed
+// values directly — found via a plain struct-field-access benchmark that
+// doesn't touch func_t at all, tracing back to array.gengo's `count`.
+// Rejects only type_param (generics-only, unresolved by the time a chunk is
+// compiled and fused) with UnsupportedFieldType rather than silently
+// mis-encoding it.
 fn writeTypeSpec(w: *ByteWriter, spec: value_mod.FieldTypeSpec) WriteError!void {
     return writeTypeSpecDepth(w, spec, 0);
 }
@@ -296,7 +326,18 @@ fn writeTypeSpecDepth(w: *ByteWriter, spec: value_mod.FieldTypeSpec, depth: u32)
                 try w.u8_(FT_VARIANT_T);
                 try w.str_(alt.named_name);
             },
-            .func_t, .type_param => return error.UnsupportedFieldType,
+            .func_t => {
+                try w.u8_(FT_FUNC_T);
+                const params = alt.func_params orelse &.{};
+                if (params.len > std.math.maxInt(u16)) return error.UnsupportedFieldType;
+                try w.u16_(@intCast(params.len));
+                for (params) |p| try writeTypeSpecDepth(w, p, depth + 1);
+                const returns = alt.func_returns orelse &.{};
+                if (returns.len > std.math.maxInt(u16)) return error.UnsupportedFieldType;
+                try w.u16_(@intCast(returns.len));
+                for (returns) |r| try writeTypeSpecDepth(w, r, depth + 1);
+            },
+            .type_param => return error.UnsupportedFieldType,
         }
     }
 }
@@ -457,7 +498,7 @@ fn findStringConstIdx(cs: *chunk.State, name: []const u8) ?u32 {
 fn writeFunctionsSection(w: *ByteWriter, cs: *chunk.State, funcs: []const FuncEntryInfo) !void {
     try w.u32_(@intCast(funcs.len));
     for (funcs) |fe| {
-        const name_idx = findStringConstIdx(cs, fe.name);
+        const name_idx = fe.name_const_idx orelse findStringConstIdx(cs, fe.name);
         try w.u32_(name_idx orelse 0xFFFFFFFF);
         try w.u32_(fe.ip);
         try w.u32_(fe.length);
@@ -515,9 +556,12 @@ pub fn write(cs: *chunk.State, alloc: std.mem.Allocator, opts: WriteOptions) Wri
     var types: std.ArrayListUnmanaged(TypeEntryInfo) = .empty;
     defer types.deinit(alloc);
 
+    // Built WITHOUT its leading count field — the final count (cs.const_count
+    // plus any name strings appended after this loop, see below) isn't known
+    // until the loop below has run. write() assembles the real SEC_CONSTANTS
+    // buffer (count + this body) at the very end.
     var consts_w = ByteWriter{ .alloc = alloc };
     defer consts_w.deinit();
-    try consts_w.u32_(@intCast(cs.const_count));
     for (cs.consts[0..cs.const_count]) |v| {
         switch (v) {
             .int => |n| {
@@ -626,6 +670,34 @@ pub fn write(cs: *chunk.State, alloc: std.mem.Allocator, opts: WriteOptions) Wri
         }
     }
 
+    // Ensure every named function has a matching STRING constant for its
+    // FunctionEntry.name_constant_idx to point at (gbc-spec.md §8.3). A
+    // function's bare name (e.g. "count") is frequently NOT already present
+    // as an independent string constant — the only string naturally emitted
+    // for it at compile time is often a *qualified* global name instead
+    // (e.g. "@std_script:array.count", compileStdScripts' module-prefixed
+    // registration of array.gengo's `count`, a completely different string)
+    // — so relying on findStringConstIdx alone silently wrote 0xFFFFFFFF
+    // (anonymous) for any such function. Found via native/main.zig's
+    // buildStdModule, which looks up a std-script-implemented function by
+    // its bare FuncObj.name after a GBC load: the round-tripped FuncObj
+    // executed correctly but had name="", so the by-name lookup always
+    // failed — not a bytecode or execution bug, purely a metadata gap.
+    var extra_names_w = ByteWriter{ .alloc = alloc };
+    defer extra_names_w.deinit();
+    var extra_name_count: u32 = 0;
+    for (funcs.items) |*fe| {
+        if (fe.name.len == 0) continue;
+        if (findStringConstIdx(cs, fe.name)) |idx| {
+            fe.name_const_idx = idx;
+            continue;
+        }
+        fe.name_const_idx = @as(u32, @intCast(cs.const_count)) + extra_name_count;
+        extra_name_count += 1;
+        try extra_names_w.u8_(CONST_STRING);
+        try extra_names_w.str_(fe.name);
+    }
+
     var funcs_w = ByteWriter{ .alloc = alloc };
     defer funcs_w.deinit();
     try writeFunctionsSection(&funcs_w, cs, funcs.items);
@@ -643,16 +715,33 @@ pub fn write(cs: *chunk.State, alloc: std.mem.Allocator, opts: WriteOptions) Wri
     defer native_imports_w.deinit();
     try native_imports_w.u32_(0);
 
+    if (cs.std_script_code_end > std.math.maxInt(u32)) return error.BadBytecode;
+    var std_script_w = ByteWriter{ .alloc = alloc };
+    defer std_script_w.deinit();
+    try std_script_w.u16_(cs.std_script_const_base);
+    try std_script_w.u16_(cs.std_script_const_count);
+    try std_script_w.u32_(@intCast(cs.std_script_code_end));
+
+    // Final SEC_CONSTANTS buffer: the total count (original consts plus any
+    // function-name strings appended above) had to wait until that pass
+    // finished, so it's assembled here rather than written up front.
+    var consts_final_w = ByteWriter{ .alloc = alloc };
+    defer consts_final_w.deinit();
+    try consts_final_w.u32_(@as(u32, @intCast(cs.const_count)) + extra_name_count);
+    try consts_final_w.rawBytes(consts_w.buf.items);
+    try consts_final_w.rawBytes(extra_names_w.buf.items);
+
     // Section table + body assembly.
-    const Section = struct { id: u32, data: []const u8 };
+    const Section = struct { id: u32, data: []const u8, required: bool = true };
     const sections = [_]Section{
         .{ .id = SEC_BYTECODE, .data = defused_code },
-        .{ .id = SEC_CONSTANTS, .data = consts_w.buf.items },
+        .{ .id = SEC_CONSTANTS, .data = consts_final_w.buf.items },
         .{ .id = SEC_FUNCTIONS, .data = funcs_w.buf.items },
         .{ .id = SEC_NATIVE_IMPORTS, .data = native_imports_w.buf.items },
         .{ .id = SEC_EXPORTS, .data = empty_u32_w.buf.items },
         .{ .id = SEC_TYPES, .data = types_w.buf.items },
         .{ .id = SEC_DEPENDENCY_TABLE, .data = empty_u32_w.buf.items },
+        .{ .id = SEC_STD_SCRIPT_INFO, .data = std_script_w.buf.items, .required = false },
     };
 
     var body = ByteWriter{ .alloc = alloc };
@@ -667,7 +756,7 @@ pub fn write(cs: *chunk.State, alloc: std.mem.Allocator, opts: WriteOptions) Wri
     }
     for (sections, 0..) |s, i| {
         try body.u32_(s.id);
-        try body.u32_(SECTION_FLAG_REQUIRED);
+        try body.u32_(if (s.required) SECTION_FLAG_REQUIRED else 0);
         try body.u64_(offsets[i]);
         try body.u64_(@intCast(s.data.len));
     }

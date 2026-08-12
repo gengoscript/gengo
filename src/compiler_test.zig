@@ -4464,6 +4464,100 @@ test "gbc: struct and named-type constants round-trip through write+read and exe
     try std.testing.expectEqual(expected.int, actual.int);
 }
 
+// func_t (FT_FUNC_T) used to be rejected outright (UnsupportedFieldType),
+// which broke --emit-gbc for every program: compileStdScripts always
+// compiles array.gengo's `count(arr []any, pred func(any) bool) int` into
+// every chunk regardless of whether the user's script imports std, and its
+// `pred` param is func_t. This exercises func_t directly, independent of
+// the std-script path (covered separately below).
+test "gbc: writer supports a func_t (function-typed) parameter" {
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\func apply(f func(int) int, x int) int { return f(x) }
+    );
+    const bytes = try gbc_writer.write(rt.chunk_state, std.testing.allocator, .{ .root_source = "" });
+    std.testing.allocator.free(bytes);
+}
+
+test "gbc: a func_t parameter round-trips through write+read and executes correctly" {
+    const src =
+        \\func apply(f func(int) int, x int) int { return f(x) }
+        \\func double(n int) int { return n * 2 }
+        \\func f() int { return apply(double, 21) }
+    ;
+
+    var rt1 = try setup();
+    defer rt1.deinit();
+    try runSrc(&rt1, src);
+    const expected = try rt1.callGlobal("f", &.{});
+
+    var rt2 = try setup();
+    defer rt2.deinit();
+    try compile(&rt2, src);
+    const bytes = try gbc_writer.write(rt2.chunk_state, std.testing.allocator, .{ .root_source = src });
+    defer std.testing.allocator.free(bytes);
+
+    var rt3 = try setup();
+    defer rt3.deinit();
+    chunk.setActive(rt3.chunk_state);
+    globals.setActive(&rt3.globals_state);
+    heap.setActive(&rt3.heap_state);
+    chunk.reset();
+    globals.reset();
+    heap.reset();
+    try gbc_reader.read(bytes, chunk.g_state, heap.g_state, rt3.vm_state.allocator);
+    try fusion_pass.fuse(chunk.g_state, rt3.vm_state.allocator);
+
+    const ctx: vm.VMContext = .{ .cs = rt3.chunk_state, .gs = &rt3.globals_state, .hs = &rt3.heap_state, .vs = &rt3.vm_state };
+    try vm.run(ctx);
+    const actual = try vm.callGlobal(ctx, "f", &.{});
+
+    try std.testing.expectEqual(expected.int, actual.int);
+}
+
+// Exercises the full Runtime.compileOnly -> gbc_writer.write ->
+// Runtime.runFromGbc path (not the lower-level compile()/gbc_reader.read()
+// helper the other gbc tests use), since compileStdScripts — and the two
+// bugs this covers — only run on that path. std.array.count is
+// implemented in embedded Gengoscript (array.gengo), always compiled into
+// every chunk; before this fix it was unreachable after a GBC round-trip
+// for two independent reasons: (1) func_t on its `pred` param rejected
+// the whole write, and (2) even with that fixed, chunk.State's
+// std_script_const_base/std_script_const_count/std_script_code_end
+// bookkeeping (which buildStdModule's script_function lookup needs to
+// find `count` in the loaded constant pool) was never serialized, and (3)
+// the found FuncObj's own .name came back "" because gbc_writer only
+// wrote a name_constant_idx when the bare name happened to already exist
+// as an independent string constant — "count" never does, since the only
+// string compileStdScripts naturally emits for it is the qualified global
+// name "@std_script:array.count", a different string entirely.
+test "gbc: std.array.count (embedded-stdlib script_function) round-trips through Runtime.compileOnly + runFromGbc and executes correctly" {
+    const src =
+        \\std := import("std")
+        \\func f() int {
+        \\    nums := [1, 2, 3, 4, 5, 6]
+        \\    return std.array.count(nums, func(x any) bool {
+        \\        return int(x) rem 2 == 0
+        \\    })
+        \\}
+    ;
+
+    var rt2 = try setup();
+    defer rt2.deinit();
+    try rt2.compileOnly(src, "", .filesystem);
+    const bytes = try gbc_writer.write(rt2.chunk_state, std.testing.allocator, .{ .root_source = src });
+    defer std.testing.allocator.free(bytes);
+
+    var rt3 = try setup();
+    defer rt3.deinit();
+    try rt3.runFromGbc(bytes);
+
+    const ctx: vm.VMContext = .{ .cs = rt3.chunk_state, .gs = &rt3.globals_state, .hs = &rt3.heap_state, .vs = &rt3.vm_state };
+    const actual = try vm.callGlobal(ctx, "f", &.{});
+    try std.testing.expectEqual(@as(i64, 3), actual.int);
+}
+
 test "gbc: variant-type constants (shared fields, record arm, single-payload arm, no-payload arm) round-trip through write+read and execute correctly" {
     const src =
         \\type Shape variant {

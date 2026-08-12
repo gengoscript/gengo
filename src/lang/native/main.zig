@@ -213,30 +213,59 @@ pub fn buildStdModule(ctx: vms.VMContext) !*Object {
     try ctx.vs.pushTempRoot(.{ .object = sort_obj });
     defer ctx.vs.popTempRoot();
 
+    // array_entries is a plain native array, invisible to the GC — a Value
+    // stored into it (the script_function closure below) is NOT protected
+    // by that alone. It stays unrooted from the moment it's written here
+    // until makeNamespace finishes building array_obj and array_obj itself
+    // gets pushed as a temp root; any allocation in between (later
+    // iterations of this same loop, or makeNamespace's own struct/fields
+    // allocation) can trigger compaction under -Dgc_stress and relocate it
+    // with nothing to update this array's copy. array_entries_root_base
+    // marks where to additionally root such an entry until that point.
+    const array_entries_root_base = ctx.vs.tempRootDepth();
     var array_entries: [module_descriptor.arrayExports.len]NamespaceEntry = undefined;
     for (module_descriptor.arrayExports, 0..) |entry, i| {
-        array_entries[i] = .{ .name = entry.name, .value = switch (entry.kind) {
-            .function => try makeNative(ctx, entry.native_id.?, entry.arity),
-            .script_function => blk: {
-                const base = ctx.cs.std_script_const_base;
-                const count = ctx.cs.std_script_const_count;
-                if (count == 0) break :blk .null;
-                for (ctx.cs.consts[base .. base + count]) |v| {
-                    if (v != .object) continue;
-                    const obj = v.object;
-                    if (obj.* != .function) continue;
-                    if (std.mem.eql(u8, obj.function.name, entry.name)) {
-                        const clo = try vmgc.vmAllocObject(ctx);
-                        clo.* = .{ .closure = .{ .func = obj, .upvalues = &.{} } };
-                        break :blk .{ .object = clo };
+        array_entries[i] = .{
+            .name = entry.name,
+            .value = switch (entry.kind) {
+                .function => try makeNative(ctx, entry.native_id.?, entry.arity),
+                .script_function => blk: {
+                    const base = ctx.cs.std_script_const_base;
+                    const count = ctx.cs.std_script_const_count;
+                    if (count == 0) break :blk .null;
+                    for (ctx.cs.consts[base .. base + count]) |v| {
+                        if (v != .object) continue;
+                        const obj = v.object;
+                        if (obj.* != .function) continue;
+                        if (std.mem.eql(u8, obj.function.name, entry.name)) {
+                            // obj is a snapshot from cs.consts, not itself a root
+                            // vmAllocObject's compaction (possible any time under
+                            // -Dgc_stress) knows to update — push it as a temp
+                            // root and read the possibly-relocated pointer back
+                            // out, rather than trusting the stale local copy.
+                            const root_idx = ctx.vs.tempRootDepth();
+                            try ctx.vs.pushTempRoot(v);
+                            const clo = try vmgc.vmAllocObject(ctx);
+                            clo.* = .{ .closure = .{ .func = ctx.vs.temp_roots[root_idx].object, .upvalues = &.{} } };
+                            // Replace the (now-redundant) `obj` root with one
+                            // keeping `clo` itself alive until array_obj roots
+                            // it — see array_entries_root_base's comment above.
+                            ctx.vs.restoreTempRoots(root_idx);
+                            try ctx.vs.pushTempRoot(.{ .object = clo });
+                            break :blk .{ .object = clo };
+                        }
                     }
-                }
-                break :blk .null;
+                    break :blk .null;
+                },
+                else => unreachable,
             },
-            else => unreachable,
-        } };
+        };
     }
     const array_obj = try makeNamespace(ctx, "array", "@module_type:std.array", &array_entries);
+    // Safe to drop any script_function root(s) from the loop above now:
+    // array_obj (about to be rooted itself) already holds the current,
+    // correct reference to each one.
+    ctx.vs.restoreTempRoots(array_entries_root_base);
     try ctx.vs.pushTempRoot(.{ .object = array_obj });
     defer ctx.vs.popTempRoot();
 
