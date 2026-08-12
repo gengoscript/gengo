@@ -1,0 +1,38 @@
+std := import("std")
+
+type Speaker interface {
+    speak() string
+}
+
+type Dog struct { name string }
+
+func (d Dog) speak() string {
+    return d.name
+}
+
+func makeDog() (d Dog) {
+    d = Dog{name: "Rex"}
+    return
+}
+
+func makeDogExplicit() (d Dog) {
+    return Dog{name: "Fido"}
+}
+
+func makeSpeaker() (s Speaker) {
+    s = Dog{name: "Buddy"}
+    return
+}
+
+func withDefer() (n int) {
+    defer func() {
+        n = n + 1
+    }()
+    n = 10
+    return
+}
+
+std.io.println(makeDog().name)
+std.io.println(makeDogExplicit().name)
+std.io.println(makeSpeaker().speak())
+std.io.println(withDefer())

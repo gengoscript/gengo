@@ -1852,6 +1852,17 @@ pub const Compiler = struct {
         return null;
     }
 
+    // True when rhs_info already proves tc's runtime check redundant: same
+    // primitive, or (for plain structs, which have no subtyping) exact
+    // struct-name match, or a struct provably conforming to the target
+    // interface. Shared by every call site that emits emitVarTypeEpilog
+    // for a scalar/struct/interface-typed slot (assignStmt, named returns).
+    pub fn varTypeCheckProven(self: *Compiler, tc: TypeCheck, rhs_info: ExprPrimInfo) bool {
+        return ((tc == .prim) and (rhs_info.prim == tc.prim)) or
+            ((tc == .struct_type) and (rhs_info.struct_type != null) and common.streq(rhs_info.struct_type.?, tc.struct_type)) or
+            ((tc == .interface_type) and (rhs_info.struct_type != null) and self.structConformsToInterface(rhs_info.struct_type.?, tc.interface_type));
+    }
+
     pub fn emitVarTypeProlog(self: *Compiler, tc: TypeCheck, line: u32) !void {
         if (tc == .named) {
             if (self.isErasedNamedType(tc.named)) return;

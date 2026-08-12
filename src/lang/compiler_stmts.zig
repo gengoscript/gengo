@@ -81,14 +81,9 @@ pub fn assignStmt(c: anytype) !void {
     try c.expr();
     const rhs_info = c.endExprPrimCapture();
     if (tc) |t| {
-        // Skip the runtime cast/assert when the RHS is already proven to be
-        // the same primitive or (for plain structs, which have no
-        // subtyping) exact struct type; the compiler's type tracking makes
-        // the runtime check redundant.
-        const skip = ((t == .prim) and (rhs_info.prim == t.prim)) or
-            ((t == .struct_type) and (rhs_info.struct_type != null) and common.streq(rhs_info.struct_type.?, t.struct_type)) or
-            ((t == .interface_type) and (rhs_info.struct_type != null) and c.structConformsToInterface(rhs_info.struct_type.?, t.interface_type));
-        if (!skip) try c.emitVarTypeEpilog(t, name.line);
+        // Skip the runtime cast/assert when the RHS is already proven to
+        // make it redundant — see Compiler.varTypeCheckProven.
+        if (!c.varTypeCheckProven(t, rhs_info)) try c.emitVarTypeEpilog(t, name.line);
     }
     try c.emitSetVar(name);
     c.matchOpt(.semicolon);
@@ -1634,8 +1629,10 @@ pub fn returnStmt(c: anytype) !void {
         if (scope.named_return_count == 1) {
             const tc = scope.locals[scope.named_return_base].type_check;
             try c.emitVarTypeProlog(tc, line);
+            c.beginExprPrimCapture();
             try c.expr();
-            try c.emitVarTypeEpilog(tc, line);
+            const rhs_info = c.endExprPrimCapture();
+            if (!c.varTypeCheckProven(tc, rhs_info)) try c.emitVarTypeEpilog(tc, line);
             try c.cs.emit2(@intFromEnum(Op.set_local), scope.named_return_base, line);
         } else {
             for (0..scope.named_return_count) |ri| {
@@ -1643,8 +1640,10 @@ pub fn returnStmt(c: anytype) !void {
                 const slot: u8 = scope.named_return_base + @as(u8, @intCast(ri));
                 const tc = scope.locals[slot].type_check;
                 try c.emitVarTypeProlog(tc, line);
+                c.beginExprPrimCapture();
                 try c.expr();
-                try c.emitVarTypeEpilog(tc, line);
+                const rhs_info = c.endExprPrimCapture();
+                if (!c.varTypeCheckProven(tc, rhs_info)) try c.emitVarTypeEpilog(tc, line);
                 try c.cs.emit2(@intFromEnum(Op.set_local), slot, line);
             }
         }

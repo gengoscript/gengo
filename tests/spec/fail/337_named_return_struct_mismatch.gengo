@@ -1,0 +1,8 @@
+type Dog struct { name string }
+type Cat struct { name string }
+
+func makeDog() (d Dog) {
+    return Cat{name: "Whiskers"}
+}
+
+_ = makeDog()
