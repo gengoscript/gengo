@@ -848,6 +848,15 @@ fn isSingleNamedTypeSpec(spec: FieldTypeSpec) bool {
 // allocation overhead, making it safe to type-check inline on the IC warm path.
 // Must stay in sync with the set of tags matchesTypeAlt handles without heap
 // access. decimal_t is included: v == .decimal is a tag-only comparison.
+// Deliberately kept as its own dense switch (tag values 1-7, contiguous) so
+// the compiler can jump-table it — this is the hot path (every typed-param
+// call not already proven at its call site) and must stay exactly as cheap
+// as before isInlinableExtraTypeSpec was added below. Measured: folding the
+// struct_t/interface_t/variant_t tags (11/12/14 — not contiguous with 1-7)
+// into this same switch made the combined tag set sparse enough that the
+// primitive-only case got ~5 extra instructions per call (10M-call
+// call-overhead bench, ReleaseFast) even though those calls never touch a
+// non-primitive param at all.
 fn isPrimitiveTypeSpec(spec: FieldTypeSpec) bool {
     if (spec.alts.len != 1) return false;
     return switch (spec.alts[0].typ) {
@@ -856,12 +865,28 @@ fn isPrimitiveTypeSpec(spec: FieldTypeSpec) bool {
     };
 }
 
+// The struct_t/interface_t/variant_t extension to isPrimitiveTypeSpec above,
+// checked only when that fast check already failed — see its comment for
+// why these stay a separate switch rather than one combined set.
+fn isInlinableExtraTypeSpec(spec: FieldTypeSpec) bool {
+    return switch (spec.alts[0].typ) {
+        .struct_t, .interface_t, .variant_t => true,
+        else => false,
+    };
+}
+
+fn isInlinableTypeSpec(spec: FieldTypeSpec) bool {
+    if (isPrimitiveTypeSpec(spec)) return true;
+    if (spec.alts.len != 1) return false;
+    return isInlinableExtraTypeSpec(spec);
+}
+
 pub fn canInlinePrimitiveArgs(f: FuncObj, argc: u8) bool {
     if (!f.has_typed_params) return false;
     if (f.is_variadic or f.default_count > 0) return false;
     if (f.arity != argc) return false;
     for (f.param_types[0..f.arity]) |spec| {
-        if (!isPrimitiveTypeSpec(spec)) return false;
+        if (!isInlinableTypeSpec(spec)) return false;
     }
     return true;
 }
@@ -871,9 +896,24 @@ pub fn enforcePrimitiveFuncArgTypes(ctx: VMContext, f: FuncObj, argc: u8) !void 
     const base = vs.stack_top - argc;
     for (0..f.arity) |i| {
         const spec = f.param_types[i];
-        // A non-primitive spec here means GC pool-slot reuse; fall back.
-        if (!isPrimitiveTypeSpec(spec)) return enforceFuncArgTypes(ctx, f, argc);
-        const arg = vs.stack[base + i];
+        var arg = vs.stack[base + i];
+        if (isPrimitiveTypeSpec(spec)) {
+            if (!matchesTypeAlt(ctx, arg, &spec.alts[0])) return argTypeError(ctx, f, i, spec, arg);
+            continue;
+        }
+        // A spec shape canInlinePrimitiveArgs wouldn't have accepted here
+        // means GC pool-slot reuse; fall back to full enforcement.
+        if (spec.alts.len != 1 or !isInlinableExtraTypeSpec(spec)) return enforceFuncArgTypes(ctx, f, argc);
+        // interface_t is the one inlinable kind with real coercion behavior
+        // (reifying an erased scalar — host wire, json.parse, any — into
+        // the interface it satisfies); coerceErasedValueForSpec no-ops
+        // immediately for the common case (arg already an object).
+        if (spec.alts[0].typ == .interface_t) {
+            if (try coerceErasedValueForSpec(ctx, spec, arg)) |coerced| {
+                vs.stack[base + i] = coerced;
+                arg = coerced;
+            }
+        }
         if (!matchesTypeAlt(ctx, arg, &spec.alts[0])) return argTypeError(ctx, f, i, spec, arg);
     }
 }
