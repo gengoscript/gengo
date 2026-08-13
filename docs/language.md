@@ -1232,9 +1232,13 @@ std.io.println(EvenPercent(200))   // 100 — clamps to 100, which is even
 // EvenPercent(99)                 // predicate failure — 99 is in range, not clamped, and odd
 ```
 
-Subtypes allow narrower domains inside an existing named type. Any scalar
-named type can be a parent; `range`/`cycle` constraints require a numeric
-parent:
+Subtypes allow narrower domains inside an existing named type or enum. The
+parent must itself be a named scalar type or an enum declared with `type`
+(or another `subtype` of one — subtyping chains); `range`/`cycle`
+constraints additionally require a numeric parent. A struct, interface,
+variant, or generic type cannot be a subtype parent — there is no notion of
+narrowing one of those — and naming one is a compile error rather than
+being silently accepted:
 
 ```gengo
 type Percent int range 0..100

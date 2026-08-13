@@ -2062,7 +2062,17 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
     c.advance(); // parent name
 
     const parent_info = c.registry.getNamedTypeInfo(parent_name) orelse {
-        c.setErr("unknown type '{s}'", .{parent_name});
+        // getNamedTypeInfo only searches the named/enum-type bucket, so a
+        // struct/interface/variant/generic type name (a real, declared
+        // type — just not an eligible subtype parent) would otherwise be
+        // reported the same way as a name that was never declared at all.
+        // Distinguish the two: hasAnyTypeName also covers struct/
+        // interface/variant/generic-type/alias names.
+        if (c.registry.hasAnyTypeName(parent_name)) {
+            c.setErr("'{s}' is not a named scalar or enum type; a subtype's parent must be one", .{parent_name});
+        } else {
+            c.setErr("unknown type '{s}'", .{parent_name});
+        }
         return error.UnexpectedToken;
     };
 
@@ -2070,6 +2080,20 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
     if (parent_info.base == .enum_t) {
         if (c.registry.hasNamedType(name)) {
             c.setErr("duplicate type name '{s}'", .{name});
+            return error.DuplicateNamedType;
+        }
+        // hasNamedType above only rejects a collision with another named
+        // scalar/enum type — a struct/interface/variant/generic-type name
+        // would pass it silently, letting a subtype quietly shadow an
+        // unrelated, already-declared type (found empirically: `subtype
+        // Point Percent range 0..50` after `type Point struct {...}`
+        // compiled with no error, then broke an unrelated later
+        // Point{...} literal with a confusing runtime TypeError far from
+        // the actual mistake). hasAnyTypeName is the same cross-category
+        // check every other type-declaration path already uses (see
+        // namedTypeDecl, variantDeclBody).
+        if (!c.inFunc() and c.registry.hasAnyTypeName(name)) {
+            c.setErr("type name '{s}' conflicts with an existing type declaration", .{name});
             return error.DuplicateNamedType;
         }
         const qname = try c.qualifyTypeName(name);
@@ -2145,6 +2169,12 @@ pub fn subtypeDecl(c: anytype, is_pub: bool) !void {
 
     if (!c.skipping_test_body and c.registry.hasNamedType(name)) {
         c.setErr("duplicate type name '{s}'", .{name});
+        return error.DuplicateNamedType;
+    }
+    // Same cross-category check as the enum-subtype branch above — see its
+    // comment for why hasNamedType alone isn't enough.
+    if (!c.skipping_test_body and !c.inFunc() and c.registry.hasAnyTypeName(name)) {
+        c.setErr("type name '{s}' conflicts with an existing type declaration", .{name});
         return error.DuplicateNamedType;
     }
 

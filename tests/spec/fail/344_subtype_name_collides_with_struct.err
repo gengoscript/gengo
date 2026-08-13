@@ -1,0 +1,2 @@
+DuplicateNamedType
+type name 'Point' conflicts with an existing type declaration

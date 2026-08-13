@@ -3928,6 +3928,59 @@ test "compiler: clamp is rejected on a non-numeric base, same as range/cycle" {
     ));
 }
 
+// subtypeDecl's parent lookup (getNamedTypeInfo) only searches the named-
+// scalar/enum-type bucket. A struct/interface/variant/generic type name is
+// a real, declared type — just not an eligible subtype parent — so it must
+// not be reported the same way as a name that was never declared at all.
+test "compiler: subtyping a struct type reports it as an ineligible parent, not 'unknown type'" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.UnexpectedToken, rt.compileOnly(
+        \\type Point struct { x int, y int }
+        \\subtype P2 Point
+    , "", .filesystem));
+    try std.testing.expect(std.mem.indexOf(u8, rt.last_compile_msg_buf[0..rt.last_compile_msg_len], "not a named scalar or enum type") != null);
+}
+
+test "compiler: subtyping a genuinely undeclared name still reports 'unknown type'" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.UnexpectedToken, rt.compileOnly(
+        \\subtype X Ghost
+    , "", .filesystem));
+    try std.testing.expect(std.mem.indexOf(u8, rt.last_compile_msg_buf[0..rt.last_compile_msg_len], "unknown type") != null);
+}
+
+// subtypeDecl's duplicate-name check used to call hasNamedType alone,
+// which only rejects a collision with another named scalar/enum type — a
+// struct/interface/variant/generic-type name passed it silently. Found by
+// compiling `subtype Point Percent range 0..50` after `type Point struct
+// {...}`: it compiled with no error at all, silently corrupting the
+// earlier struct declaration, and a later, unrelated `Point{...}` literal
+// then panicked with a confusing runtime TypeError far from the actual
+// mistake. Every other type-declaration path (namedTypeDecl,
+// variantDeclBody) already guards this with hasAnyTypeName; subtypeDecl
+// now does too, for both the enum-subtype and scalar-subtype branches.
+test "compiler: subtype name colliding with an existing struct type is a compile error, not silent shadowing" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.DuplicateNamedType, compile(&rt,
+        \\type Percent int range 0..100
+        \\type Point struct { x int, y int }
+        \\subtype Point Percent range 0..50
+    ));
+}
+
+test "compiler: enum-subtype name colliding with an existing struct type is a compile error" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.DuplicateNamedType, compile(&rt,
+        \\type Mode enum { dev, prod }
+        \\type Point struct { x int, y int }
+        \\subtype Point Mode { dev }
+    ));
+}
+
 // ── #210: limited operator overloading via reserved dunder methods ────────
 //
 // See dunderMethodName/dunderOpForBinaryTok/checkDunderConflict/

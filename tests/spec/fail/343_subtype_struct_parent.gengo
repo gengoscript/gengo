@@ -1,0 +1,2 @@
+type Point struct { x int, y int }
+subtype P2 Point
