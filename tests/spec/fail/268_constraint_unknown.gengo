@@ -1,1 +1,1 @@
-func f[T: Hashable](x T) T { return x }
+func f[T Hashable](x T) T { return x }

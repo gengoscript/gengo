@@ -435,7 +435,17 @@ are statements, not expression operators.
 | `or` | left, short-circuiting |
 | `??` | right, short-circuiting |
 
-The symbolic forms `&&` and `||` are not supported; use `and` and `or`.
+The symbolic forms `&&` and `||` are not supported; use `and` and `or`. This
+follows the same keyword-operator convention as `div`/`rem`/`mod` above,
+extended to boolean logic and negation (`not`) for one concrete reason:
+`&`/`|`/`^`/`~` already have separate, real meanings as *bitwise* operators
+on `int`. Making `&&`/`||` mean boolean AND/OR while single `&`/`|` mean
+bitwise AND/OR is the exact C-family trap where a doubled-vs-single symbol
+is the only signal separating "wrong type entirely" from "silently wrong
+answer" — a single dropped character changes behavior instead of failing to
+compile. Word operators for boolean logic remove that adjacent-symbol
+hazard entirely; bitwise operators keep their symbols since there's no
+boolean-vs-bitwise collision to avoid on `&`/`|`/`^`/`~` alone.
 Parenthesize expressions when a reader could reasonably mistake the grouping.
 
 ## Lexical Structure
@@ -940,6 +950,17 @@ d := -a        // compiles to a.__neg__()
 | `==` (and `!=`) | `__eq__(other T) bool` |
 | `< > <= >=` | `__compare__(other T) int` |
 
+These reserved names are the one deliberately non-Go-shaped corner of the
+syntax — Go has no operator overloading to model this on. Gengo doesn't
+gate them behind an `operator` modifier keyword the way Kotlin does: there's
+no separate `impl`/trait-block boundary here (a method is always declared
+right alongside its receiver type, unlike Rust's `impl Trait for Type`
+elsewhere), so there's no coherence problem a keyword would need to guard
+against, and the eight names are distinctive enough that nobody collides
+with them by accident the way a bare `add`/`eq` method name might. Reserved
+double-underscore names, not a keyword, are simply the smaller mechanism
+that already covers the actual risk.
+
 `__compare__` backs all four ordering operators at once — return a negative
 number, zero, or a positive number the way `strcmp`-style comparisons do,
 and `<`/`>`/`<=`/`>=` are derived by comparing that result against `0`.
@@ -963,7 +984,7 @@ to real structural comparison.
 
 A type whose `__compare__`/`__eq__` is declared also satisfies the
 `ordered`/`comparable` generic constraints (see Generic Types), so it can be
-passed to a `[T: ordered]`-constrained function. This works both when the
+passed to a `[T ordered]`-constrained function. This works both when the
 compiler can see the concrete type directly, and inside the generic
 function's own body operating on the type parameter — the latter is
 resolved at runtime rather than compile time, since the type is erased
@@ -1439,6 +1460,34 @@ type Result variant {
 }
 ```
 
+### Constructing Variant Values
+
+A no-payload arm is a bare value; a record arm (`{ ... }`-declared, zero or
+more named fields) is always constructed with a brace literal, the same way
+a struct is:
+
+```gengo
+p := Event.Ping                            // no-payload arm
+e := Event.Metric{ name: "req", value: 1 } // record arm — brace literal only
+```
+
+A single-payload arm — the `ok(value int)` shape above — accepts **either**
+spelling: a positional call, or a brace literal naming the field:
+
+```gengo
+r := Result.ok(42)
+r := Result.ok{ value: 42 }   // equivalent
+```
+
+Both forms compile to the same construction and are fully interchangeable;
+neither is deprecated. Prefer the call form for a quick single value and the
+brace form when the field name adds clarity, or when constructing a generic
+variant, where the brace form is more common in this codebase's own examples
+(see [Generic Types](#generic-types)) — but either works on either kind of
+variant. This does not extend to record arms: `Event.Metric(1)` is not
+accepted (`ArityMismatch`) because a record arm's construction is always
+name-directed, never positional.
+
 Use `switch` to branch on which variant arm you have. Case arms are matched
 with a `.arm_name` prefix and the body in braces. An `as binding` clause
 names the payload inside the case body:
@@ -1597,8 +1646,8 @@ w := Wrapper[int]{ inner: Stack[int]{ items: [1, 2, 3] } }
 std.io.println(std.core.len(w.inner.items))   // 3
 ```
 
-Type parameters may also carry optional constraints using the same `:`
-syntax described below for generic functions.
+Type parameters may also carry optional constraints using the same syntax
+described below for generic functions.
 
 ### Generic Functions
 
@@ -1676,16 +1725,19 @@ func make_box[T](x T, skip bool) Box[T] {
 
 ### Generic Constraints
 
-Type parameters may carry built-in constraints using `:` syntax:
+Type parameters may carry built-in constraints, written as a second
+identifier directly after the type parameter name — space syntax, the same
+convention as every other type annotation in the language (`x int`, a
+struct field, a function parameter):
 
 ```gengo
-func sum[T: numeric](xs []T, zero T, add func(T, T) T) T {
+func sum[T numeric](xs []T, zero T, add func(T, T) T) T {
     total := zero
     for x in xs { total = add(total, x) }
     return total
 }
 
-func max_of[T: ordered](a T, b T) T {
+func max_of[T ordered](a T, b T) T {
     if a > b { return a }
     return b
 }
@@ -1702,7 +1754,7 @@ For example, the inferred call below currently succeeds, whereas
 `identity_numeric[bool](true)` fails with `ConstraintViolation`:
 
 ```gengo
-func identity_numeric[T: numeric](x T) T { return x }
+func identity_numeric[T numeric](x T) T { return x }
 
 ok := identity_numeric(true) // currently accepted; bool is not numeric
 ```
@@ -1721,8 +1773,8 @@ Examples:
 type Score int
 type Label string
 
-func add_two[T: numeric](a T, b T) T { return a + b }
-func pick_larger[T: ordered](a T, b T) T {
+func add_two[T numeric](a T, b T) T { return a + b }
+func pick_larger[T ordered](a T, b T) T {
     if a > b { return a }
     return b
 }

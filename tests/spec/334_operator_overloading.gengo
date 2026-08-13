@@ -35,7 +35,7 @@ func (a Box) __compare__(b Box) int {
 // A generic function operating on the erased type parameter T: the
 // compile-time desugar can't resolve __compare__ here (T is unknown until
 // called), so this exercises the VM-level runtime fallback instead.
-func biggest[T: ordered](xs []T) T {
+func biggest[T ordered](xs []T) T {
     m := xs[0]
     i := 1
     for i < std.core.len(xs) {

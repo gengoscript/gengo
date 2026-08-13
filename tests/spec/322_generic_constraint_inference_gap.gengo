@@ -2,6 +2,6 @@
 // This inferred bool call succeeds even though bool is not numeric.
 std := import("std")
 
-func identity_numeric[T: numeric](x T) T { return x }
+func identity_numeric[T numeric](x T) T { return x }
 
 std.io.println(identity_numeric(true))

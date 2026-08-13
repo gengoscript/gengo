@@ -7,12 +7,12 @@ std := import("std")
 
 type Score int
 
-func add_two[T: numeric](a T, b T) T { return a + b }
-func pick_larger[T: ordered](a T, b T) T {
+func add_two[T numeric](a T, b T) T { return a + b }
+func pick_larger[T ordered](a T, b T) T {
     if a > b { return a }
     return b
 }
-func wrap[T: comparable](x T) T { return x }
+func wrap[T comparable](x T) T { return x }
 
 // numeric: primitives
 std.io.println(add_two[int](3, 4))

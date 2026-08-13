@@ -303,13 +303,13 @@ pub fn isNamedFuncDecl(c: anytype) bool {
     const t2 = lx.next();
     if (t2.typ == .lparen) return true;
     if (t2.typ != .lbracket) return false;
-    // Generic func: func name[T, U]( or func name[T: constraint]( — scan through [...] and confirm '('
+    // Generic func: func name[T, U]( or func name[T constraint]( — scan through [...] and confirm '('
     while (true) {
         const t = lx.next();
         switch (t.typ) {
             .rbracket => break,
             .eof => return false,
-            .ident, .comma, .colon => {},
+            .ident, .comma => {},
             else => return false,
         }
     }
@@ -436,7 +436,7 @@ pub fn namedFuncDecl(c: anytype, is_pub: bool) !void {
         return c.err("'{s}' is a type name and cannot be used as a function name", .{name.src});
     c.advance(); // consume function name
 
-    // Parse optional generic type parameters: func name[T, U](...) or func name[T: numeric, U: ordered](...)
+    // Parse optional generic type parameters: func name[T, U](...) or func name[T numeric, U ordered](...)
     var tparams: [ct.MaxTypeParams]ct.GenericParam = undefined;
     var tparam_count: u8 = 0;
     if (c.cur.typ == .lbracket) {
@@ -446,8 +446,12 @@ pub fn namedFuncDecl(c: anytype, is_pub: bool) !void {
             const pname = c.cur.src;
             c.advance();
             var constraint: []const u8 = "";
-            if (c.match(.colon)) {
-                if (c.cur.typ != .ident) return c.err("expected constraint name after ':'", .{});
+            // A constraint is just a second identifier directly after the
+            // type parameter name — space syntax, matching every other type
+            // annotation in the language (`x int`, not `x: int`). Since a
+            // comma or ']' would otherwise follow the bare parameter name,
+            // seeing an identifier here is unambiguous.
+            if (c.cur.typ == .ident) {
                 constraint = c.cur.src;
                 if (!isKnownConstraint(constraint))
                     return c.err("unknown constraint '{s}': expected 'numeric', 'ordered', or 'comparable'", .{constraint});
@@ -613,8 +617,10 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
             const pname = c.cur.src;
             c.advance();
             var constraint: []const u8 = "";
-            if (c.match(.colon)) {
-                if (c.cur.typ != .ident) return c.err("expected constraint name after ':'", .{});
+            // Space syntax, same as the generic-function scan above — see
+            // that copy's comment for why a bare identifier here is
+            // unambiguous.
+            if (c.cur.typ == .ident) {
                 constraint = c.cur.src;
                 if (!isKnownConstraint(constraint))
                     return c.err("unknown constraint '{s}': expected 'numeric', 'ordered', or 'comparable'", .{constraint});
@@ -1459,14 +1465,14 @@ pub fn instantiateGenericType(c: anytype, tname: []const u8, line: u32) anyerror
     var args: [ct.MaxTypeParams]FieldTypeSpec = undefined;
     const arg_count = try parseInstArgSpecs(c, tname, ginfo.param_count, &args);
     // Generic functions have enforced type-parameter constraints (e.g.
-    // `[T: numeric]`) since checkTypeArgConstraints existed; generic
+    // `[T numeric]`) since checkTypeArgConstraints existed; generic
     // struct/variant types parsed and stored the same constraint syntax
     // (namedTypeDecl) but never checked it here — the parser's lookahead
-    // (looksLikeGenericTypeParams) didn't even recognize a `:` inside
-    // `[...]` as a generic-type declaration at all until this fix, so a
-    // constrained generic type silently failed to parse as generic in the
-    // first place; now that it does, the same enforcement generic
-    // functions already get must apply to instantiation too.
+    // (looksLikeGenericTypeParams) didn't even recognize a constraint
+    // token inside `[...]` as a generic-type declaration at all until a
+    // later fix, so a constrained generic type silently failed to parse as
+    // generic in the first place; now that it does, the same enforcement
+    // generic functions already get must apply to instantiation too.
     try checkTypeArgConstraints(c, ginfo.params[0..ginfo.param_count], args[0..arg_count], tname, line);
     return applyGenericInst(c, tname, args[0..arg_count], line);
 }

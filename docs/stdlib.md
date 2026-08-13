@@ -416,10 +416,10 @@ log_args("x", std.Arg.Int(42), std.Arg.Bool(true), std.Arg.Str("hi"))
 
 ## std.sort
 
-### `std.sort.asc[T: ordered](arr []T)`
+### `std.sort.asc[T ordered](arr []T)`
 - Returns a new array sorted in ascending order (int, float, or string elements); the original is unchanged
 
-### `std.sort.desc[T: ordered](arr []T)`
+### `std.sort.desc[T ordered](arr []T)`
 - Returns a new array sorted in descending order; the original is unchanged
 
 ### `std.sort.by[T](arr []T, cmp func(T, T) ...)`

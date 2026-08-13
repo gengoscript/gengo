@@ -4067,7 +4067,7 @@ test "compiler: __compare__ satisfies the ordered generic constraint" {
     try compile(&rt,
         \\type Box struct { v int }
         \\func (a Box) __compare__(b Box) int { return 0 }
-        \\func biggest[T: ordered](xs []T) T { return xs[0] }
+        \\func biggest[T ordered](xs []T) T { return xs[0] }
         \\func f(boxes []Box) Box { return biggest[Box](boxes) }
     );
 }
@@ -4085,7 +4085,7 @@ test "compiler: dunder operators work at runtime inside a type-erased generic fu
         \\    if a.v > b.v { return 1 }
         \\    return 0
         \\}
-        \\func biggest[T: ordered](xs []T) T {
+        \\func biggest[T ordered](xs []T) T {
         \\    m := xs[0]
         \\    i := 1
         \\    for i < 3 {
@@ -4125,22 +4125,19 @@ test "compiler: self-recursive generic function call with explicit type args" {
 }
 
 // looksLikeGenericTypeParams (compiler.zig) — the lookahead that decides
-// whether `Name[...]` after a type name is a generic-parameter list — only
-// accepted .ident/.comma inside the brackets, so a `:` constraint (e.g.
-// `[T: numeric]`) fell through to `else => return false` and the whole
-// declaration was never even recognized as generic, despite the sibling
-// scanner for generic functions (isNamedFuncDecl) already allowing `:`, and
-// despite docs/language.md explicitly documenting the same constraint
-// syntax for generic types. Fixed by allowing .colon in the type-param
-// scan too, and by wiring checkTypeArgConstraints into
-// instantiateGenericType (compiler_decls.zig) — generic functions already
-// enforced constraints at call time, but generic types never did, even
-// once recognized as generic.
+// whether `Name[...]` after a type name is a generic-parameter list — must
+// accept a constraint's second identifier (e.g. `[T numeric]`) the same way
+// the sibling scanner for generic functions (isNamedFuncDecl) does, or a
+// constrained generic type is never even recognized as generic in the
+// first place. Also exercises checkTypeArgConstraints being wired into
+// instantiateGenericType (compiler_decls.zig) — generic functions enforce
+// constraints at call time; generic types must enforce the same way at
+// instantiation.
 test "compiler: constrained generic struct type parameter parses and instantiates" {
     var rt = try setup();
     defer rt.deinit();
     try runSrc(&rt,
-        \\type Box[T: numeric] struct { val T }
+        \\type Box[T numeric] struct { val T }
         \\func f() int {
         \\    b := Box[int]{ val: 42 }
         \\    return b.val
@@ -4154,7 +4151,7 @@ test "compiler: constrained generic struct type parameter rejects a non-conformi
     var rt = try setup();
     defer rt.deinit();
     try std.testing.expectError(error.ConstraintViolation, compile(&rt,
-        \\type Box[T: numeric] struct { val T }
+        \\type Box[T numeric] struct { val T }
         \\func f() string {
         \\    b := Box[string]{ val: "hi" }
         \\    return b.val
