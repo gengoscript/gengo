@@ -4920,6 +4920,135 @@ test "gbc: reader accepts a .gbc when the expected source still matches" {
     try gbc_reader.read(bytes, chunk.g_state, heap.g_state, rt3.vm_state.allocator, "func f() int { return 1 }");
 }
 
+// End-to-end: a real import("./mathlib.gbc") through the full Session/
+// runtime pipeline — resolveImportPath resolving the specifier,
+// compileModuleFromPath dispatching to linkGbcModule, the splice landing in
+// the importer's own in-progress chunk, the dependency's own top-level code
+// (emitted by compileBegunModule's emitModuleObject call, same as any
+// module) running as part of the combined program and binding its module
+// object global, and the importer reading a field off it and calling the
+// contained function — gbc-spec.md §14 exercised through the CLI-level
+// entrypoint (Runtime.runPathWithSources), not just the lower-level reader
+// API Phase 3's test used directly.
+test "gbc: import(\"./x.gbc\") links a precompiled module end-to-end" {
+    const mathlib_src =
+        \\pub func Add(a int, b int) int {
+        \\    return a + b
+        \\}
+        \\pub const Pi = 3
+    ;
+    var rt_dep = try setup();
+    defer rt_dep.deinit();
+    try rt_dep.compileModuleOnly(mathlib_src, "mathlib", .filesystem);
+    try std.testing.expectEqual(@as(u16, 2), rt_dep.last_export_count);
+    var export_buf: [2]gbc_writer.ExportInfo = undefined;
+    for (export_buf[0..2], 0..) |*e, i| {
+        e.* = .{
+            .name = rt_dep.last_export_names[i],
+            .type_kind = rt_dep.last_export_type_kinds[i],
+            .const_value = rt_dep.last_export_const_values[i],
+        };
+    }
+    const dep_bytes = try gbc_writer.write(rt_dep.chunk_state, std.testing.allocator, .{
+        .entry_kind = .module,
+        .root_source = mathlib_src,
+        .module_id = "mathlib",
+        .module_prefix = "@mod:mathlib",
+        .exports = &export_buf,
+    });
+    defer std.testing.allocator.free(dep_bytes);
+
+    const main_src =
+        \\m := import("./mathlib.gbc")
+        \\func compute() int {
+        \\    return m.Add(m.Pi, 4)
+        \\}
+    ;
+    var rt = try setup();
+    defer rt.deinit();
+    _ = try rt.runPathWithSources(main_src, "main.gengo", &.{.{ .path = "mathlib.gbc", .source = dep_bytes }});
+    const result = try rt.callGlobal("compute", &.{});
+    try std.testing.expectEqual(@as(i64, 7), result.int);
+}
+
+// A corrupted dependency artifact must fail the importer's compile loudly
+// — never silently misload or fall back to treating the import as absent
+// (gbc-spec.md §14.6's trust model: a LINKED_ARTIFACT dependency has no
+// source to recompile from, so a body mismatch is a hard failure, full
+// stop). Reuses the exact same mathlib artifact/importer as the end-to-end
+// test above, just with one flipped byte in the dependency's body.
+test "gbc: import(\"./x.gbc\") fails loudly on a corrupted dependency artifact" {
+    const mathlib_src =
+        \\pub func Add(a int, b int) int {
+        \\    return a + b
+        \\}
+        \\pub const Pi = 3
+    ;
+    var rt_dep = try setup();
+    defer rt_dep.deinit();
+    try rt_dep.compileModuleOnly(mathlib_src, "mathlib", .filesystem);
+    var export_buf: [2]gbc_writer.ExportInfo = undefined;
+    for (export_buf[0..2], 0..) |*e, i| {
+        e.* = .{
+            .name = rt_dep.last_export_names[i],
+            .type_kind = rt_dep.last_export_type_kinds[i],
+            .const_value = rt_dep.last_export_const_values[i],
+        };
+    }
+    const dep_bytes = try gbc_writer.write(rt_dep.chunk_state, std.testing.allocator, .{
+        .entry_kind = .module,
+        .root_source = mathlib_src,
+        .module_id = "mathlib",
+        .module_prefix = "@mod:mathlib",
+        .exports = &export_buf,
+    });
+    defer std.testing.allocator.free(dep_bytes);
+
+    const corrupted = try std.testing.allocator.dupe(u8, dep_bytes);
+    defer std.testing.allocator.free(corrupted);
+    // Flip a byte inside the body (past the 8-byte magic + header).
+    corrupted[8 + gbc_writer.HEADER_SIZE + 4] ^= 0xFF;
+
+    const main_src =
+        \\m := import("./mathlib.gbc")
+        \\func compute() int {
+        \\    return m.Add(m.Pi, 4)
+        \\}
+    ;
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(
+        error.BodyChecksumMismatch,
+        rt.runPathWithSources(main_src, "main.gengo", &.{.{ .path = "mathlib.gbc", .source = corrupted }}),
+    );
+}
+
+// gbc-spec.md §14.1's single-level bound, enforced at write time: a module
+// artifact being produced for others to link against must not itself link
+// a .gbc. Uses a `.table` provider so the dependency's mere presence (not
+// its content) is what's under test — even an empty/inert entry is enough
+// to prove resolution reaches it and gets rejected before ever trying to
+// splice it.
+test "gbc: compileModuleRoot rejects a source that links a .gbc dependency" {
+    var rt = try setup();
+    defer rt.deinit();
+    chunk.setActive(rt.chunk_state);
+    globals.setActive(&rt.globals_state);
+    heap.setActive(&rt.heap_state);
+    chunk.reset();
+    globals.reset();
+    heap.reset();
+
+    var session: module_compile.Session = .{};
+    try session.initArena();
+    defer session.deinitArena();
+    session.hs = heap.g_state;
+    session.cs = chunk.g_state;
+    session.provider = .{ .table = &.{.{ .path = "dep.gbc", .source = "not a real gbc file, never read" }} };
+    const src = "dep := import(\"./dep.gbc\")\npub func f() int { return 1 }\n";
+    try std.testing.expectError(error.ChainedGbcLinkingNotSupported, session.compileModuleRoot("user", src));
+}
+
 // The load-bearing correctness test for gbc-spec.md §14's splice mechanics
 // (readIntoSession): compiles a "destination" chunk with real, non-empty
 // consts/code first (so the spliced dependency lands at a genuinely nonzero

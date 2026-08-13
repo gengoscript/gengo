@@ -14,6 +14,7 @@ const source_io = @import("../runtime/source_io.zig");
 const build_options = @import("build_options");
 const module_descriptor = @import("module_descriptor.zig");
 const CompileTimeConst = ct.CompileTimeConst;
+const gbc_reader = @import("gbc_reader.zig");
 
 pub const MaxModules = 64;
 pub const MaxImportsPerModule = 64;
@@ -51,6 +52,21 @@ const ModuleRecord = struct {
     global_name: []const u8 = "",
     prefix: []const u8 = "",
     struct_name: []const u8 = "",
+    // Set only for a linked GBC module (linkGbcModule) — the artifact's own
+    // SEC_EXPORTS.module_id, which global_name/prefix/struct_name are
+    // derived from (gbc-spec.md §14.3). findModule() matches on EITHER
+    // .path() (the importer's local resolved specifier, e.g. "mathlib.gbc"
+    // — used by beginImportedModule's dedup/cycle-check and by
+    // resolveImportOpaque's own final moduleGlobalName lookup, both of
+    // which only ever have the local specifier on hand) OR this field (the
+    // artifact's own identity — used by the compiler's later has_module_
+    // export/resolve_module_type calls, which reach this record via
+    // import_module_path: derived by stripping "@mod:" off whatever
+    // global_name resolveImportOpaque returned, i.e. always module_id for
+    // a linked module, never the local specifier). Empty (never matches)
+    // for an ordinary source-compiled module, where local path and
+    // "@mod:"-stripped global_name always coincide already.
+    link_module_id: []const u8 = "",
     state: ModuleState = .loading,
     export_names: [MaxModuleExports][]const u8 = undefined,
     export_type_kinds: [MaxModuleExports]ExportTypeKind = undefined,
@@ -208,6 +224,14 @@ pub const Session = struct {
     known_globals: ?[*][]const u8 = null,
     known_global_count: u16 = 0,
     test_mode: bool = false,
+    // Set by compileModuleRoot: a linkable module artifact must itself have
+    // zero LINKED_ARTIFACT dependencies (gbc-spec.md §14.1's single-level
+    // bound, enforced at write time so a loader never needs to recursively
+    // load a .gbc found while loading another .gbc). compileRoot (ordinary
+    // script/entry compiles) leaves this false — an executable script may
+    // freely link .gbc module dependencies; only a module artifact being
+    // produced for others to link against may not itself link one.
+    reject_linked_deps: bool = false,
     test_count: u16 = 0,
     test_names: [ct.MaxTestBlocks][]const u8 = undefined,
 
@@ -301,6 +325,7 @@ pub const Session = struct {
         self.last_error_line = 0;
         self.last_error_col = 0;
         self.last_error_msg_len = 0;
+        self.reject_linked_deps = true;
         const idx = try self.beginModule(path, false);
         errdefer self.module_count = idx;
 
@@ -339,9 +364,107 @@ pub const Session = struct {
     }
 
     fn compileModuleFromPath(self: *Session, path: []const u8) anyerror!void {
+        // gbc-spec.md §14.2: an import resolves to a precompiled artifact
+        // only when the specifier names one explicitly — resolveImportPath
+        // never appends a ".gbc" suffix on its own (only ".gengo"/
+        // "/mod.gengo"), so reaching here with a ".gbc"-suffixed path only
+        // ever happens when the source specifier said so itself.
+        if (std.mem.endsWith(u8, path, ".gbc")) {
+            if (self.reject_linked_deps) {
+                self.last_error_path = path;
+                self.setScanError("a linkable GBC module artifact cannot itself import a .gbc ('{s}') — linking is single-level only (gbc-spec.md §14.1)", .{path});
+                return error.ChainedGbcLinkingNotSupported;
+            }
+            return self.linkGbcModule(path);
+        }
         const idx = (try self.beginImportedModule(path)) orelse return;
         const src = try self.loadImportedModuleSource(idx);
         try self.compileImportedModule(idx, src);
+    }
+
+    // Splices a precompiled GBC module artifact into this session's shared
+    // chunk (gbc_reader.readIntoSession, gbc-spec.md §14) instead of
+    // recompiling it from source — the single-hop linking path. Reuses
+    // beginImportedModule for slot allocation/cycle detection (identical to
+    // an ordinary source import) and loadImportedModuleSource to read the
+    // artifact's raw bytes (it's a plain byte read with no source-specific
+    // handling, so it works unmodified for a binary .gbc payload too).
+    fn linkGbcModule(self: *Session, path: []const u8) anyerror!void {
+        const idx = (try self.beginImportedModule(path)) orelse return;
+        const bytes = self.loadImportedModuleSource(idx) catch |err| {
+            self.saveFailedModule(idx);
+            return err;
+        };
+        const raw_exports = gbc_reader.readIntoSession(bytes, self.cs, self.hs, self._modules_arena.allocator(), null) catch |err| {
+            self.last_error_path = self.modules[idx].path();
+            self.setScanError("failed to link GBC module '{s}': {s}", .{ self.modules[idx].path(), @errorName(err) });
+            self.saveFailedModule(idx);
+            return err;
+        };
+
+        if (raw_exports.exports.len > ct.MaxModuleExports) {
+            self.last_error_path = self.modules[idx].path();
+            self.setScanError("GBC module '{s}' declares too many exports (max {d})", .{ raw_exports.module_id, ct.MaxModuleExports });
+            self.saveFailedModule(idx);
+            return error.TooManyGlobals;
+        }
+
+        // Module identity travels with the artifact itself, not the
+        // importer's local specifier (gbc-spec.md §14.3) — the artifact's
+        // own bytecode already has "@mod:<module_id>."-qualified global
+        // names baked in from its own compile time, so this session's
+        // record of it must expose those, not beginImportedModule's default
+        // "@mod:<local-path>" scheme.
+        //
+        // .path() itself (the local resolved specifier, e.g. "mathlib.gbc")
+        // stays as beginImportedModule set it — two OTHER things still need
+        // it unchanged: beginImportedModule's own dedup on a second import
+        // of the same specifier, and resolveImportOpaque's final
+        // moduleGlobalName(resolved) lookup, where `resolved` is always the
+        // local specifier (fixed before this function is even called).
+        // Both run again in the ordinary course of one compile — every
+        // import is resolved once during compileDependencies' pre-pass and
+        // again when the live compiler reaches the import(...) expression
+        // itself — so findModule must still succeed on the local specifier
+        // the second time too, not just the first.
+        //
+        // But the compiler's LATER has_module_export/resolve_module_type
+        // calls (compiler_expr.zig's importExpr, compiler.zig's
+        // import_module_path) reach this record differently: they strip
+        // "@mod:" off whatever global_name resolveImportOpaque returned and
+        // use THAT — always module_id here, never the local specifier — as
+        // their own findModule key. Recording module_id as a second,
+        // independent lookup key (link_module_id, checked by findModule
+        // alongside .path()) satisfies both call patterns without either
+        // one breaking the other.
+        if (raw_exports.module_id.len > MaxModulePathBytes) {
+            self.last_error_path = self.modules[idx].path();
+            self.setScanError("GBC module_id '{s}' exceeds the {d}-byte path limit", .{ raw_exports.module_id, MaxModulePathBytes });
+            self.saveFailedModule(idx);
+            return error.ImportPathTooLong;
+        }
+        // No copy needed: raw_exports (from readIntoSession, called with
+        // self._modules_arena.allocator() below) is already owned by this
+        // Session's own arena, which outlives self.modules[] identically.
+        self.modules[idx].link_module_id = raw_exports.module_id;
+
+        const global_name = try self.makePrefixedName("@mod:", raw_exports.module_id);
+        self.modules[idx].global_name = global_name;
+        self.modules[idx].prefix = global_name;
+        self.modules[idx].struct_name = try self.makePrefixedName("@module_type:", raw_exports.module_id);
+
+        self.modules[idx].export_count = @intCast(raw_exports.exports.len);
+        for (raw_exports.exports, 0..) |e, i| {
+            self.modules[idx].export_names[i] = e.name;
+            self.modules[idx].export_type_kinds[i] = @enumFromInt(e.type_kind);
+            self.modules[idx].export_const_values[i] = switch (e.const_value) {
+                .none => null,
+                .number => |n| .{ .number = n },
+                .string => |s| .{ .string = s },
+                .boolean => |b| .{ .boolean = b },
+            };
+        }
+        self.modules[idx].state = .compiled;
     }
 
     fn saveFailedModule(self: *Session, idx: usize) void {
@@ -684,6 +807,7 @@ pub const Session = struct {
     fn findModule(self: *Session, path: []const u8) ?usize {
         for (self.modules[0..self.module_count], 0..) |*m, i| {
             if (common.streq(m.path(), path)) return i;
+            if (m.link_module_id.len > 0 and common.streq(m.link_module_id, path)) return i;
         }
         return null;
     }

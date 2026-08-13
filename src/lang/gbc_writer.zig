@@ -27,7 +27,10 @@ pub const MAGIC = [8]u8{ 0x89, 'G', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A };
 
 pub const HEADER_SIZE: u16 = 184;
 pub const HEADER_VERSION: u16 = 1;
-pub const FORMAT_MAJOR: u16 = 1;
+// Bumped 1 -> 2 when SEC_EXPORTS gained module_id/type_kind/const_value
+// (gbc-spec.md §8.5/§12 v0.10 changelog) — a breaking section-format
+// change per §12's own policy, not just an additive one.
+pub const FORMAT_MAJOR: u16 = 2;
 pub const FORMAT_MINOR: u16 = 0;
 
 pub const TargetId = enum(u32) { unspecified = 0, wasm32_wasi = 1, native_x86_64 = 2, native_aarch64 = 3 };

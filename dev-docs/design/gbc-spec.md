@@ -1,10 +1,31 @@
 # Gengoscript Bytecode Cache — File Format Specification
 
 **Status:** Draft\
-**Version:** 0.10\
+**Version:** 0.11\
 **Scope:** GBC artifact only (see §2 for artifact class definitions)
 
 **Revision history**
+- 0.11 — §14 is now implemented in the reference engine, not just spec'd:
+  `--emit-gbc-module` (writer side, `Runtime.compileModuleOnly` /
+  `module_compile.Session.compileModuleRoot`) and `import("./x.gbc")`
+  (reader side, `gbc_reader.readIntoSession` spliced in via a new
+  `module_compile.Session.linkGbcModule`, dispatched from
+  `compileModuleFromPath` whenever a resolved import specifier ends in
+  `.gbc`) both work end-to-end, verified by compiling a module artifact,
+  importing it from a separate script, and running the combined program —
+  both interpreted directly and re-compiled through `--emit-gbc` into one
+  flattened, self-contained artifact. One rough edge found during
+  implementation, not yet closed: a `ModuleRecord`'s dedup key (used by
+  import-cycle detection and by re-resolving an already-loaded import to
+  its bound global) is still the importer's local specifier, while the
+  compiler's later export/type lookups key off the linked artifact's own
+  `module_id` instead (§14.3) — tracked as a second, independent key
+  (`link_module_id`) on the same record rather than unifying them. This
+  works correctly for the common case (one import per specifier) but means
+  importing the exact same `.gbc` via two different local specifiers in
+  one compile re-splices it instead of deduplicating, wasting pool space
+  rather than misbehaving. Not exercised by any shipped test; flagged here
+  so it isn't rediscovered as a surprise.
 - 0.10 — Reverse §16 (Non-Goals)'s former "Linking. GBC files are not
   linkable in v1" bullet and add real cross-artifact linking
   as a new §14: an `ENTRY_MODULE` artifact can now be imported directly by
