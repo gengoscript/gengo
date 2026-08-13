@@ -29,6 +29,7 @@ const value_mod = @import("value.zig");
 const Value = value_mod.Value;
 const FuncObj = value_mod.FuncObj;
 const ct = @import("compiler_types.zig");
+const chunk_decoder = @import("chunk_decoder.zig");
 const gbc_writer = @import("gbc_writer.zig");
 
 pub const ReadError = error{
@@ -188,11 +189,17 @@ const FuncNamePatchTarget = union(enum) {
 // CONST_FUNC_REF constant — see read()'s CONST_TYPE_REF/TYPE_KIND_NAMED case).
 // name is left "" here — see the comment at read()'s post-constants-loop
 // name-patching pass for why it can't be resolved yet at this point.
-fn buildFuncObjFromRaw(hs: *heap.State, rf: RawFuncEntry) !*value_mod.Object {
+// code_base: 0 for a standalone read() (the artifact's own code starts at
+// chunk offset 0); the destination chunk's pre-splice code_len when
+// readIntoSession is appending this artifact's code after existing code
+// (loadSections' splice path) — rf.ip is this artifact's own 0-based
+// offset into ITS bytecode, which becomes invalid once that bytecode is
+// copied in anywhere but position 0.
+fn buildFuncObjFromRaw(hs: *heap.State, rf: RawFuncEntry, code_base: usize) !*value_mod.Object {
     const obj = hs.allocObject() orelse return error.OutOfMemory;
     obj.* = .{
         .function = FuncObj{
-            .ip = rf.ip,
+            .ip = code_base + @as(usize, rf.ip),
             .arity = rf.arity,
             .is_variadic = rf.is_variadic,
             .variadic_type = rf.variadic_type,
@@ -754,7 +761,45 @@ pub fn findSectionBytes(bytes: []const u8, alloc: std.mem.Allocator, section_id:
     return parsed.body[sec.offset..][0..sec.length];
 }
 
-pub fn read(bytes: []const u8, cs: *chunk.State, hs: *heap.State, alloc: std.mem.Allocator, expected_root_source: ?[]const u8) ReadError!void {
+const LoadResult = struct {
+    // Non-null only when `splice` was true (readIntoSession) — a standalone
+    // read() has no need for its own exports (nothing links against a
+    // directly-run artifact), so it doesn't pay to parse SEC_EXPORTS there.
+    exports: ?RawExportsSection,
+};
+
+// Shared by read() (splice=false: install into a freshly-.reset() chunk,
+// overwriting from offset 0 — the original #5 milestone behavior, byte-for-
+// byte) and readIntoSession (splice=true: append onto whatever `cs` already
+// holds, for gbc-spec.md §14 linking). Deliberately ONE implementation of
+// the constants/functions/types loading, not two — that loop is exactly
+// where the FuncNamePatchTarget GC-safety discipline lives (see its doc
+// comment), and a second, parallel copy would be a second place for that
+// discipline to be gotten wrong.
+//
+// What "splice" actually changes, precisely:
+//   - BYTECODE lands at cs.code_len (append) instead of offset 0 (overwrite).
+//   - Every function built from this artifact's SEC_FUNCTIONS gets that same
+//     code-offset added to its FuncObj.ip — its own bytecode's jump/loop
+//     offsets are all relative (no adjustment needed there, verified against
+//     vm.zig's .jump/.loop handling), but ip is an absolute chunk offset.
+//   - CONSTANTS need no base-offset math at all: cs.addConst always appends
+//     at cs.const_count, whatever that already was — so a spliced artifact's
+//     constants simply land after the destination's existing ones, for free.
+//   - What DOES still need patching: this artifact's own bytecode encodes
+//     const-pool operands (e.g. `constant`, `get_global`) as indices that
+//     were valid in ITS OWN 0-based pool at compile time. Once its constants
+//     move to a nonzero base in the destination pool, those operands must
+//     move by the same amount — the post-constants-loop pass at the bottom
+//     does this by decoding only the just-appended code range and patching
+//     each const_index_pos in place (chunk_decoder.zig).
+//   - SEC_STD_SCRIPT_INFO/line-table reset are meaningless for a splice (the
+//     destination chunk already has its own, from its own compile) and are
+//     skipped.
+//   - SEC_EXPORTS is parsed and returned only for a splice — the caller
+//     (module_compile.zig, gbc-spec.md §14.3) builds a ModuleRecord-shaped
+//     symbol table from it; a standalone read() has nothing to link against.
+fn loadSections(bytes: []const u8, cs: *chunk.State, hs: *heap.State, alloc: std.mem.Allocator, expected_root_source: ?[]const u8, splice: bool) ReadError!LoadResult {
     const parsed = try parseHeaderAndSections(bytes, alloc, expected_root_source);
     const sections = parsed.sections;
     defer alloc.free(sections);
@@ -765,32 +810,45 @@ pub fn read(bytes: []const u8, cs: *chunk.State, hs: *heap.State, alloc: std.mem
     const functions_sec = findSection(sections, gbc_writer.SEC_FUNCTIONS) orelse return error.MissingRequiredSection;
     const types_sec = findSection(sections, gbc_writer.SEC_TYPES) orelse return error.MissingRequiredSection;
 
-    // BYTECODE: copy directly into the fresh chunk.
+    // BYTECODE: overwrite from 0 (standalone) or append after whatever the
+    // destination chunk already holds (splice).
     const code_bytes = body[bytecode_sec.offset..][0..bytecode_sec.length];
-    if (code_bytes.len > chunk.MaxCode) return error.CodeTooLarge;
-    @memcpy(cs.code[0..code_bytes.len], code_bytes);
-    cs.code_len = code_bytes.len;
-    cs.line_table_count = 0;
-    cs.last_emitted_line = 0;
-    cs.last_emitted_col = 0xffff;
+    const code_base: usize = if (splice) cs.code_len else 0;
+    if (code_base + code_bytes.len > chunk.MaxCode) return error.CodeTooLarge;
+    @memcpy(cs.code[code_base..][0..code_bytes.len], code_bytes);
+    cs.code_len = code_base + code_bytes.len;
+    if (!splice) {
+        cs.line_table_count = 0;
+        cs.last_emitted_line = 0;
+        cs.last_emitted_col = 0xffff;
 
-    // SEC_STD_SCRIPT_INFO: optional, vendor-range section — see its writer-side
-    // comment. Absent (older or foreign-produced .gbc) means these stay at
-    // chunk.State's own zero defaults, same as before this section existed;
-    // buildStdModule's script_function lookup (native/main.zig) then just
-    // finds nothing and resolves those std entries to null, exactly the
-    // pre-fix behavior, not a hard load failure.
-    if (findSection(sections, gbc_writer.SEC_STD_SCRIPT_INFO)) |sec| {
-        const std_script_bytes = body[sec.offset..][0..sec.length];
-        var sr = ByteReader{ .bytes = std_script_bytes };
-        cs.std_script_const_base = try sr.u16_();
-        cs.std_script_const_count = try sr.u16_();
-        cs.std_script_code_end = try sr.u32_();
-    } else {
-        cs.std_script_const_base = 0;
-        cs.std_script_const_count = 0;
-        cs.std_script_code_end = 0;
+        // SEC_STD_SCRIPT_INFO: optional, vendor-range section — see its
+        // writer-side comment. Absent (older or foreign-produced .gbc) means
+        // these stay at chunk.State's own zero defaults, same as before this
+        // section existed; buildStdModule's script_function lookup
+        // (native/main.zig) then just finds nothing and resolves those std
+        // entries to null, exactly the pre-fix behavior, not a hard load
+        // failure. Splicing a dependency's own std-script metadata into an
+        // importer would be meaningless — the importer compiled its own std
+        // prelude already — so this whole block is standalone-only.
+        if (findSection(sections, gbc_writer.SEC_STD_SCRIPT_INFO)) |sec| {
+            const std_script_bytes = body[sec.offset..][0..sec.length];
+            var sr = ByteReader{ .bytes = std_script_bytes };
+            cs.std_script_const_base = try sr.u16_();
+            cs.std_script_const_count = try sr.u16_();
+            cs.std_script_code_end = try sr.u32_();
+        } else {
+            cs.std_script_const_base = 0;
+            cs.std_script_const_count = 0;
+            cs.std_script_code_end = 0;
+        }
     }
+
+    // Base for remapping this artifact's own bytecode's const-pool operands
+    // after splicing (see the pass at the bottom) — captured now, before any
+    // of this artifact's constants are added, so it's exactly "how many
+    // constants the destination already had."
+    const const_base: u32 = @intCast(cs.const_count);
 
     // FUNCTIONS/TYPES: parsed before CONSTANTS since FUNC_REF/TYPE_REF
     // constants index into them.
@@ -844,7 +902,7 @@ pub fn read(bytes: []const u8, cs: *chunk.State, hs: *heap.State, alloc: std.mem
             gbc_writer.CONST_FUNC_REF => blk: {
                 const fidx = try cr.u32_();
                 if (fidx >= raw_funcs.len) return error.FuncRefOutOfRange;
-                const obj = try buildFuncObjFromRaw(hs, raw_funcs[fidx]);
+                const obj = try buildFuncObjFromRaw(hs, raw_funcs[fidx], code_base);
                 pending_patch = .{ .fidx = fidx, .kind = .direct };
                 break :blk Value{ .object = obj };
             },
@@ -872,7 +930,7 @@ pub fn read(bytes: []const u8, cs: *chunk.State, hs: *heap.State, alloc: std.mem
                         var predicate: ?*value_mod.Object = null;
                         if (rt.predicate_func_idx) |pidx| {
                             if (pidx >= raw_funcs.len) return error.FuncRefOutOfRange;
-                            const fobj = try buildFuncObjFromRaw(hs, raw_funcs[pidx]);
+                            const fobj = try buildFuncObjFromRaw(hs, raw_funcs[pidx], code_base);
                             pending_patch = .{ .fidx = pidx, .kind = .predicate };
                             const closure_obj = hs.allocObject() orelse return error.OutOfMemory;
                             closure_obj.* = .{ .closure = .{ .func = fobj, .upvalues = &[_]*value_mod.Object{} } };
@@ -949,8 +1007,16 @@ pub fn read(bytes: []const u8, cs: *chunk.State, hs: *heap.State, alloc: std.mem
     // not a possibly-stale one.
     for (raw_funcs, 0..) |rf, fi| {
         const target = func_patch[fi] orelse continue;
-        if (rf.name_constant_idx == 0xFFFFFFFF or rf.name_constant_idx >= cs.const_count) continue;
-        const nv = cs.consts[rf.name_constant_idx];
+        if (rf.name_constant_idx == 0xFFFFFFFF or rf.name_constant_idx >= const_count) continue;
+        // rf.name_constant_idx is this artifact's own 0-based constant-pool
+        // index (as originally written) — same base-offset requirement as
+        // every other cross-reference in this artifact's wire data (ip,
+        // FUNC_REF/TYPE_REF indices are all resolved before this point;
+        // this is the one that's resolved AFTER, in this deferred pass, so
+        // it's easy to miss applying const_base to it too — caught by the
+        // splice test intentionally checking the *name*, not just that
+        // *a* function got called).
+        const nv = cs.consts[const_base + rf.name_constant_idx];
         if (nv != .string) continue;
         const fobj: *value_mod.Object = switch (target) {
             .direct_const => |idx| blk: {
@@ -969,8 +1035,56 @@ pub fn read(bytes: []const u8, cs: *chunk.State, hs: *heap.State, alloc: std.mem
         fobj.function.name = nv.string.bytes;
     }
 
+    // Remap this artifact's own just-appended bytecode's const-pool
+    // operands by const_base — see loadSections' doc comment for why this
+    // is the one piece of bytecode that genuinely needs patching (jump/loop
+    // targets are self-relative and need none). Skipped for a standalone
+    // read() (const_base is always 0 there — cs is always freshly .reset()
+    // — so it would be a no-op walk over the whole program on every load).
+    if (splice) {
+        var pos: usize = code_base;
+        while (pos < cs.code_len) {
+            const decoded = chunk_decoder.decodeAt(cs, pos) catch return error.MalformedSection;
+            if (decoded.const_index_pos) |cip| {
+                const old_idx = (@as(u32, cs.code[cip]) << 8) | @as(u32, cs.code[cip + 1]);
+                const new_idx = old_idx + const_base;
+                if (new_idx > 0xFFFF) return error.TooManyConstants;
+                cs.code[cip] = @intCast((new_idx >> 8) & 0xFF);
+                cs.code[cip + 1] = @intCast(new_idx & 0xFF);
+            }
+            if (decoded.width == 0) return error.MalformedSection;
+            pos += decoded.width;
+        }
+    }
+
     cs.verified = false;
     cs.verified_code_len = 0;
+
+    var exports: ?RawExportsSection = null;
+    if (splice) {
+        const exports_sec = findSection(sections, gbc_writer.SEC_EXPORTS) orelse return error.MissingRequiredSection;
+        exports = try readExportsSection(body[exports_sec.offset..][0..exports_sec.length], alloc);
+    }
+    return .{ .exports = exports };
+}
+
+pub fn read(bytes: []const u8, cs: *chunk.State, hs: *heap.State, alloc: std.mem.Allocator, expected_root_source: ?[]const u8) ReadError!void {
+    _ = try loadSections(bytes, cs, hs, alloc, expected_root_source, false);
+}
+
+// Loads a precompiled .gbc MODULE artifact by appending its constants,
+// functions, types, and bytecode onto whatever `cs` already holds (rather
+// than replacing it, as read() does) — gbc-spec.md §14's single-level
+// linking. `cs`/`hs` must be the SAME chunk/heap state the importing
+// compile is already writing into (module_compile.Session's own cs/hs),
+// not a fresh pair — this is a splice into an in-progress compile, not a
+// standalone load. Returns the artifact's own SEC_EXPORTS data (module_id +
+// per-export name/qualified_name/type_kind/const_value) for the caller to
+// build a ModuleRecord-shaped symbol table from (module_compile.zig,
+// §14.3) — no live Compiler for the dependency is ever constructed.
+pub fn readIntoSession(bytes: []const u8, cs: *chunk.State, hs: *heap.State, alloc: std.mem.Allocator, expected_root_source: ?[]const u8) ReadError!RawExportsSection {
+    const result = try loadSections(bytes, cs, hs, alloc, expected_root_source, true);
+    return result.exports.?;
 }
 
 const testing = std.testing;

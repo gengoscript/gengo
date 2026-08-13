@@ -6,6 +6,14 @@ pub const DecodedInstruction = struct {
     op: Op,
     width: usize,
     const_index: ?usize = null,
+    // Byte offset of const_index's operand within the instruction (not just
+    // its value) — needed by anything that patches a const-pool index in
+    // place after decoding (e.g. gbc_reader's splice remap, which shifts
+    // every spliced instruction's const_index by a base offset). The
+    // operand width/position varies per opcode (u16 at pos+1, pos+3, pos+6,
+    // pos+8, ...), so this can't be assumed or recomputed from const_index
+    // alone.
+    const_index_pos: ?usize = null,
     jump_target: ?usize = null,
 };
 
@@ -34,6 +42,7 @@ pub fn decodeAt(state: *const chunk.State, pos: usize) !DecodedInstruction {
             .op = op,
             .width = 3,
             .const_index = try readU16At(state, pos + 1),
+            .const_index_pos = pos + 1,
         },
 
         .jump, .jump_if_false, .jump_if_not_null, .jif_pop => blk: {
@@ -71,36 +80,42 @@ pub fn decodeAt(state: *const chunk.State, pos: usize) !DecodedInstruction {
             .op = op,
             .width = 5,
             .const_index = try readU16At(state, pos + 1),
+            .const_index_pos = pos + 1,
         },
 
         .get_field, .set_field => .{
             .op = op,
             .width = 6,
             .const_index = try readU16At(state, pos + 1),
+            .const_index_pos = pos + 1,
         },
 
         .invoke_method, .defer_invoke_method => .{
             .op = op,
             .width = if (op == .invoke_method) 8 else 4,
             .const_index = try readU16At(state, pos + 1),
+            .const_index_pos = pos + 1,
         },
 
         .get_local_const_eq, .get_local_const_sub, .get_local_const_add, .get_local_const_lt, .get_local_const_gt, .get_local_const_add_ret => .{
             .op = op,
             .width = 5,
             .const_index = try readU16At(state, pos + 3),
+            .const_index_pos = pos + 3,
         },
 
         .get_local_const_sub_call, .get_local_const_sub_call_tail => .{
             .op = op,
             .width = 8,
             .const_index = try readU16At(state, pos + 3),
+            .const_index_pos = pos + 3,
         },
 
         .call_global_local_sub_const, .call_global_local_sub_const_tail => .{
             .op = op,
             .width = 13,
             .const_index = try readU16At(state, pos + 8),
+            .const_index_pos = pos + 8,
         },
 
         // [get_global_call][name_hi][name_lo][ic_hi][ic_lo][argc][c_ic_hi][c_ic_lo] (8 bytes)
@@ -108,6 +123,7 @@ pub fn decodeAt(state: *const chunk.State, pos: usize) !DecodedInstruction {
             .op = op,
             .width = 8,
             .const_index = try readU16At(state, pos + 1),
+            .const_index_pos = pos + 1,
         },
 
         // [call_global_global][f_hi][f_lo][f_ic_hi][f_ic_lo][a_hi][a_lo][a_ic_hi][a_ic_lo][argc][c_ic_hi][c_ic_lo] (12 bytes)
@@ -115,12 +131,14 @@ pub fn decodeAt(state: *const chunk.State, pos: usize) !DecodedInstruction {
             .op = op,
             .width = 12,
             .const_index = try readU16At(state, pos + 1),
+            .const_index_pos = pos + 1,
         },
 
         .inc_global_const => .{
             .op = op,
             .width = 8,
             .const_index = try readU16At(state, pos + 6),
+            .const_index_pos = pos + 6,
         },
         .inc_global_const_loop => blk: {
             const off = try readU32At(state, pos + 9);
@@ -130,6 +148,7 @@ pub fn decodeAt(state: *const chunk.State, pos: usize) !DecodedInstruction {
                 .op = op,
                 .width = width,
                 .const_index = try readU16At(state, pos + 6),
+                .const_index_pos = pos + 6,
                 .jump_target = pos + width - @as(usize, off),
             };
         },
@@ -142,6 +161,7 @@ pub fn decodeAt(state: *const chunk.State, pos: usize) !DecodedInstruction {
                 .op = op,
                 .width = width,
                 .const_index = try readU16At(state, pos + 6),
+                .const_index_pos = pos + 6,
                 .jump_target = pos + width - @as(usize, off),
             };
         },
@@ -152,6 +172,7 @@ pub fn decodeAt(state: *const chunk.State, pos: usize) !DecodedInstruction {
                 .op = op,
                 .width = 9,
                 .const_index = try readU16At(state, pos + 3),
+                .const_index_pos = pos + 3,
                 .jump_target = pos + 9 + @as(usize, off),
             };
         },
@@ -164,6 +185,7 @@ pub fn decodeAt(state: *const chunk.State, pos: usize) !DecodedInstruction {
                 .op = op,
                 .width = 13,
                 .const_index = try readU16At(state, pos + 3),
+                .const_index_pos = pos + 3,
                 .jump_target = pos + 9 + @as(usize, exit_off),
             };
         },
@@ -172,6 +194,7 @@ pub fn decodeAt(state: *const chunk.State, pos: usize) !DecodedInstruction {
             .op = op,
             .width = 8,
             .const_index = try readU16At(state, pos + 6),
+            .const_index_pos = pos + 6,
         },
 
         .get_global_const_lt_jif_pop => blk: {
@@ -180,6 +203,7 @@ pub fn decodeAt(state: *const chunk.State, pos: usize) !DecodedInstruction {
                 .op = op,
                 .width = 12,
                 .const_index = try readU16At(state, pos + 6),
+                .const_index_pos = pos + 6,
                 .jump_target = pos + 12 + @as(usize, off),
             };
         },
@@ -188,6 +212,7 @@ pub fn decodeAt(state: *const chunk.State, pos: usize) !DecodedInstruction {
             .op = op,
             .width = 8,
             .const_index = try readU16At(state, pos + 3),
+            .const_index_pos = pos + 3,
         },
 
         .set_global_loop => blk: {
@@ -198,6 +223,7 @@ pub fn decodeAt(state: *const chunk.State, pos: usize) !DecodedInstruction {
                 .op = op,
                 .width = width,
                 .const_index = try readU16At(state, pos + 1),
+                .const_index_pos = pos + 1,
                 .jump_target = pos + width - @as(usize, off),
             };
         },
@@ -222,6 +248,7 @@ pub fn decodeAt(state: *const chunk.State, pos: usize) !DecodedInstruction {
             .op = op,
             .width = 4,
             .const_index = try readU16At(state, pos + 2),
+            .const_index_pos = pos + 2,
         },
 
         .local_add_const_loop => blk: {
@@ -232,6 +259,7 @@ pub fn decodeAt(state: *const chunk.State, pos: usize) !DecodedInstruction {
                 .op = op,
                 .width = width,
                 .const_index = try readU16At(state, pos + 2),
+                .const_index_pos = pos + 2,
                 .jump_target = pos + width - @as(usize, off),
             };
         },
@@ -240,6 +268,7 @@ pub fn decodeAt(state: *const chunk.State, pos: usize) !DecodedInstruction {
             .op = op,
             .width = 9,
             .const_index = try readU16At(state, pos + 4),
+            .const_index_pos = pos + 4,
         },
 
         // [op][slot][skip][name_hi][name_lo][ic_hi][ic_lo][ic_fidx][k_hi][k_lo][sf_name_hi][sf_name_lo][sf_ic_hi][sf_ic_lo][sf_ic_fidx]
@@ -247,6 +276,7 @@ pub fn decodeAt(state: *const chunk.State, pos: usize) !DecodedInstruction {
             .op = op,
             .width = 15,
             .const_index = try readU16At(state, pos + 3),
+            .const_index_pos = pos + 3,
         },
 
         else => .{

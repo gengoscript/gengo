@@ -4920,6 +4920,119 @@ test "gbc: reader accepts a .gbc when the expected source still matches" {
     try gbc_reader.read(bytes, chunk.g_state, heap.g_state, rt3.vm_state.allocator, "func f() int { return 1 }");
 }
 
+// The load-bearing correctness test for gbc-spec.md §14's splice mechanics
+// (readIntoSession): compiles a "destination" chunk with real, non-empty
+// consts/code first (so the spliced dependency lands at a genuinely nonzero
+// base, not the degenerate const_base==0/code_base==0 case), compiles a
+// separate module artifact with a function that references a real constant
+// (so a broken const-index remap would read the WRONG constant — the
+// destination's own — rather than merely crashing), splices it in, and
+// calls the spliced function directly (vm.callFunction, not callGlobal:
+// the spliced artifact's own top-level def_global never runs here — only
+// its constants/functions/code get spliced in, not executed — so nothing
+// binds "Greet" as an actual global; finding its FuncObj through cs.consts
+// and calling it directly is what actually exercises the ip/const_index
+// remap, which is the thing this test exists to catch).
+test "gbc: readIntoSession splices a dependency's function into an existing chunk with correct ip/const-index remapping" {
+    var rt = try setup();
+    defer rt.deinit();
+
+    // Destination chunk: real pre-existing consts (so const_base > 0) and
+    // code (so code_base > 0), compiled without fusion so the whole buffer
+    // stays in the same core-op form the spliced artifact's own defused
+    // bytecode is in.
+    chunk.setActive(rt.chunk_state);
+    globals.setActive(&rt.globals_state);
+    heap.setActive(&rt.heap_state);
+    chunk.reset();
+    globals.reset();
+    heap.reset();
+    {
+        var dest_compiler = try Compiler.init("func existing() string { return \"WRONG\" }", chunk.g_state, heap.g_state, .{});
+        defer dest_compiler.deinit();
+        try dest_compiler.compile(true);
+    }
+    const const_base_before = rt.chunk_state.const_count;
+    try std.testing.expect(const_base_before > 0);
+    const code_base_before = rt.chunk_state.code_len;
+    try std.testing.expect(code_base_before > 0);
+
+    // Dependency artifact: a function returning a string constant — a
+    // broken const_index remap would, after splicing, read whatever
+    // constant now sits at the UNADJUSTED index instead (here, the
+    // destination's own "WRONG" string happens to be a plausible collision
+    // if remapping were skipped entirely and const_base_before were small).
+    const dep_src = "pub func Greet() string { return \"hi\" }";
+    var rt_dep = try setup();
+    defer rt_dep.deinit();
+    try rt_dep.compileModuleOnly(dep_src, "greetlib", .filesystem);
+    try std.testing.expectEqual(@as(u16, 1), rt_dep.last_export_count);
+    var export_buf: [1]gbc_writer.ExportInfo = undefined;
+    export_buf[0] = .{
+        .name = rt_dep.last_export_names[0],
+        .type_kind = rt_dep.last_export_type_kinds[0],
+        .const_value = rt_dep.last_export_const_values[0],
+    };
+    const dep_bytes = try gbc_writer.write(rt_dep.chunk_state, std.testing.allocator, .{
+        .entry_kind = .module,
+        .root_source = dep_src,
+        .module_id = "greetlib",
+        .module_prefix = "@mod:greetlib",
+        .exports = &export_buf,
+    });
+    defer std.testing.allocator.free(dep_bytes);
+
+    // rt_dep.compileModuleOnly (above) repointed the global active
+    // chunk/heap state at rt_dep's own fields — restore it to rt's before
+    // splicing, or readIntoSession would silently operate on the wrong
+    // chunk (found the hard way: without this, const_base_before's own
+    // "> 0" assertion still passed, but rt.chunk_state.const_count never
+    // grew, because the splice landed in rt_dep.chunk_state instead).
+    chunk.setActive(rt.chunk_state);
+    globals.setActive(&rt.globals_state);
+    heap.setActive(&rt.heap_state);
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const parsed_exports = try gbc_reader.readIntoSession(dep_bytes, rt.chunk_state, &rt.heap_state, arena.allocator(), dep_src);
+    try std.testing.expectEqualStrings("greetlib", parsed_exports.module_id);
+    try std.testing.expectEqual(@as(usize, 1), parsed_exports.exports.len);
+    try std.testing.expectEqualStrings("Greet", parsed_exports.exports[0].name);
+
+    // Constants/code genuinely landed after the destination's own, proving
+    // this exercised the nonzero-base path rather than accidentally testing
+    // the degenerate const_base==0 case.
+    try std.testing.expect(rt.chunk_state.const_count > const_base_before);
+    try std.testing.expect(rt.chunk_state.code_len > code_base_before);
+
+    // Find Greet's FuncObj through the now-spliced consts (never a cached
+    // pointer from before the splice — re-derived fresh here, same
+    // GC-safety discipline the reader itself follows).
+    var greet_val: ?Value = null;
+    for (rt.chunk_state.consts[0..rt.chunk_state.const_count]) |cv| {
+        if (cv != .object or cv.object.* != .function) continue;
+        if (std.mem.eql(u8, cv.object.function.name, "Greet")) {
+            greet_val = cv;
+            break;
+        }
+    }
+    const fn_val = greet_val orelse return error.TestUnexpectedResult;
+
+    const ctx: vm.VMContext = .{ .cs = rt.chunk_state, .gs = &rt.globals_state, .hs = &rt.heap_state, .vs = &rt.vm_state };
+    // Every FuncObj starts with max_stack = maxInt(u16) (value.zig) until
+    // chunk_verifier's BFS stamps a real per-function bound — which only
+    // happens as part of a verify() pass, triggered here by running the
+    // destination's own top-level code once (harmless: it's the "existing"
+    // script above, ending in its own halt; execution never reaches
+    // Greet's spliced code this way, only verify()'s static analysis does).
+    // Calling a never-verified function directly would StackOverflow
+    // against that maxInt sentinel.
+    try vm.run(ctx);
+    const result = try vm.callFunction(ctx, fn_val, &.{});
+    try std.testing.expect(result == .string);
+    try std.testing.expectEqualStrings("hi", result.string.bytes);
+}
+
 test "gbc: writer emits real SEC_EXPORTS data for a linkable module artifact" {
     const src =
         \\pub func Add(a int, b int) int {
