@@ -4321,7 +4321,7 @@ test "gbc: writer + reader round-trip produces identical execution results" {
     chunk.reset();
     globals.reset();
     heap.reset();
-    try gbc_reader.read(bytes, chunk.g_state, heap.g_state, rt3.vm_state.allocator);
+    try gbc_reader.read(bytes, chunk.g_state, heap.g_state, rt3.vm_state.allocator, src);
     try fusion_pass.fuse(chunk.g_state, rt3.vm_state.allocator);
 
     const ctx: vm.VMContext = .{ .cs = rt3.chunk_state, .gs = &rt3.globals_state, .hs = &rt3.heap_state, .vs = &rt3.vm_state };
@@ -4359,7 +4359,7 @@ test "gbc: a whole-valued float constant round-trips as .float, not .int" {
     chunk.reset();
     globals.reset();
     heap.reset();
-    try gbc_reader.read(bytes, chunk.g_state, heap.g_state, rt3.vm_state.allocator);
+    try gbc_reader.read(bytes, chunk.g_state, heap.g_state, rt3.vm_state.allocator, src);
     try fusion_pass.fuse(chunk.g_state, rt3.vm_state.allocator);
 
     const ctx: vm.VMContext = .{ .cs = rt3.chunk_state, .gs = &rt3.globals_state, .hs = &rt3.heap_state, .vs = &rt3.vm_state };
@@ -4454,7 +4454,7 @@ test "gbc: struct and named-type constants round-trip through write+read and exe
     chunk.reset();
     globals.reset();
     heap.reset();
-    try gbc_reader.read(bytes, chunk.g_state, heap.g_state, rt3.vm_state.allocator);
+    try gbc_reader.read(bytes, chunk.g_state, heap.g_state, rt3.vm_state.allocator, src);
     try fusion_pass.fuse(chunk.g_state, rt3.vm_state.allocator);
 
     const ctx: vm.VMContext = .{ .cs = rt3.chunk_state, .gs = &rt3.globals_state, .hs = &rt3.heap_state, .vs = &rt3.vm_state };
@@ -4506,7 +4506,7 @@ test "gbc: a func_t parameter round-trips through write+read and executes correc
     chunk.reset();
     globals.reset();
     heap.reset();
-    try gbc_reader.read(bytes, chunk.g_state, heap.g_state, rt3.vm_state.allocator);
+    try gbc_reader.read(bytes, chunk.g_state, heap.g_state, rt3.vm_state.allocator, src);
     try fusion_pass.fuse(chunk.g_state, rt3.vm_state.allocator);
 
     const ctx: vm.VMContext = .{ .cs = rt3.chunk_state, .gs = &rt3.globals_state, .hs = &rt3.heap_state, .vs = &rt3.vm_state };
@@ -4598,7 +4598,7 @@ test "gbc: variant-type constants (shared fields, record arm, single-payload arm
     chunk.reset();
     globals.reset();
     heap.reset();
-    try gbc_reader.read(bytes, chunk.g_state, heap.g_state, rt3.vm_state.allocator);
+    try gbc_reader.read(bytes, chunk.g_state, heap.g_state, rt3.vm_state.allocator, src);
     try fusion_pass.fuse(chunk.g_state, rt3.vm_state.allocator);
 
     const ctx: vm.VMContext = .{ .cs = rt3.chunk_state, .gs = &rt3.globals_state, .hs = &rt3.heap_state, .vs = &rt3.vm_state };
@@ -4643,7 +4643,7 @@ test "gbc: a predicate-bearing named type still enforces its predicate after rou
     chunk.reset();
     globals.reset();
     heap.reset();
-    try gbc_reader.read(bytes, chunk.g_state, heap.g_state, rt3.vm_state.allocator);
+    try gbc_reader.read(bytes, chunk.g_state, heap.g_state, rt3.vm_state.allocator, src);
     try fusion_pass.fuse(chunk.g_state, rt3.vm_state.allocator);
 
     const ctx: vm.VMContext = .{ .cs = rt3.chunk_state, .gs = &rt3.globals_state, .hs = &rt3.heap_state, .vs = &rt3.vm_state };
@@ -4771,7 +4771,7 @@ test "gbc: interface-type constants round-trip and assert_interface still enforc
     chunk.reset();
     globals.reset();
     heap.reset();
-    try gbc_reader.read(bytes, chunk.g_state, heap.g_state, rt3.vm_state.allocator);
+    try gbc_reader.read(bytes, chunk.g_state, heap.g_state, rt3.vm_state.allocator, src);
     try fusion_pass.fuse(chunk.g_state, rt3.vm_state.allocator);
 
     const ctx: vm.VMContext = .{ .cs = rt3.chunk_state, .gs = &rt3.globals_state, .hs = &rt3.heap_state, .vs = &rt3.vm_state };
@@ -4823,7 +4823,7 @@ test "gbc: a named type's default value and is_anonymous/scale round-trip correc
     chunk.reset();
     globals.reset();
     heap.reset();
-    try gbc_reader.read(bytes, chunk.g_state, heap.g_state, rt3.vm_state.allocator);
+    try gbc_reader.read(bytes, chunk.g_state, heap.g_state, rt3.vm_state.allocator, src);
     try fusion_pass.fuse(chunk.g_state, rt3.vm_state.allocator);
 
     const ctx: vm.VMContext = .{ .cs = rt3.chunk_state, .gs = &rt3.globals_state, .hs = &rt3.heap_state, .vs = &rt3.vm_state };
@@ -4854,7 +4854,7 @@ test "gbc: reader rejects a corrupted magic" {
     chunk.reset();
     globals.reset();
     heap.reset();
-    try std.testing.expectError(error.InvalidMagic, gbc_reader.read(corrupted, chunk.g_state, heap.g_state, rt3.vm_state.allocator));
+    try std.testing.expectError(error.InvalidMagic, gbc_reader.read(corrupted, chunk.g_state, heap.g_state, rt3.vm_state.allocator, "func f() int { return 1 }"));
 }
 
 test "gbc: reader rejects a corrupted body checksum" {
@@ -4877,7 +4877,46 @@ test "gbc: reader rejects a corrupted body checksum" {
     chunk.reset();
     globals.reset();
     heap.reset();
-    try std.testing.expectError(error.BodyChecksumMismatch, gbc_reader.read(corrupted, chunk.g_state, heap.g_state, rt3.vm_state.allocator));
+    try std.testing.expectError(error.BodyChecksumMismatch, gbc_reader.read(corrupted, chunk.g_state, heap.g_state, rt3.vm_state.allocator, "func f() int { return 1 }"));
+}
+
+test "gbc: reader rejects a .gbc whose source has changed since it was compiled" {
+    var rt2 = try setup();
+    defer rt2.deinit();
+    try compile(&rt2, "func f() int { return 1 }");
+    const bytes = try gbc_writer.write(rt2.chunk_state, std.testing.allocator, .{ .root_source = "func f() int { return 1 }" });
+    defer std.testing.allocator.free(bytes);
+
+    var rt3 = try setup();
+    defer rt3.deinit();
+    chunk.setActive(rt3.chunk_state);
+    globals.setActive(&rt3.globals_state);
+    heap.setActive(&rt3.heap_state);
+    chunk.reset();
+    globals.reset();
+    heap.reset();
+    // Source on disk has since changed (even a single-byte edit) — the
+    // artifact's source_graph_hash no longer matches what the caller
+    // expects, and must be rejected rather than silently trusted.
+    try std.testing.expectError(error.SourceGraphStale, gbc_reader.read(bytes, chunk.g_state, heap.g_state, rt3.vm_state.allocator, "func f() int { return 2 }"));
+}
+
+test "gbc: reader accepts a .gbc when the expected source still matches" {
+    var rt2 = try setup();
+    defer rt2.deinit();
+    try compile(&rt2, "func f() int { return 1 }");
+    const bytes = try gbc_writer.write(rt2.chunk_state, std.testing.allocator, .{ .root_source = "func f() int { return 1 }" });
+    defer std.testing.allocator.free(bytes);
+
+    var rt3 = try setup();
+    defer rt3.deinit();
+    chunk.setActive(rt3.chunk_state);
+    globals.setActive(&rt3.globals_state);
+    heap.setActive(&rt3.heap_state);
+    chunk.reset();
+    globals.reset();
+    heap.reset();
+    try gbc_reader.read(bytes, chunk.g_state, heap.g_state, rt3.vm_state.allocator, "func f() int { return 1 }");
 }
 
 test "cap:net listen: bare --cap net (dial only) refuses listen at call time" {

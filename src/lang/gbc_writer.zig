@@ -195,7 +195,7 @@ fn lenPrefixed(alloc: std.mem.Allocator, s: []const u8) ![]u8 {
     return out;
 }
 
-fn sourceGraphHash(alloc: std.mem.Allocator, root_source: []const u8) ![32]u8 {
+pub fn sourceGraphHash(alloc: std.mem.Allocator, root_source: []const u8) ![32]u8 {
     const domain = "GENGO_SOURCE_GRAPH_V1";
     const domain_lp = try lenPrefixed(alloc, domain);
     defer alloc.free(domain_lp);
@@ -206,11 +206,17 @@ fn sourceGraphHash(alloc: std.mem.Allocator, root_source: []const u8) ![32]u8 {
     return sha256(&.{ domain_lp, source_lp });
 }
 
-fn optionsHash(target_id: TargetId, backend_id: BackendId, flags: u32) [32]u8 {
+// Takes raw wire ids (not the TargetId/BackendId enums) so a reader can
+// recompute this straight from untrusted header bytes without first having
+// to validate them as legal enum members (an out-of-range value read off a
+// crafted/foreign file into @enumFromInt on an exhaustive enum is illegal
+// behavior, not a recoverable error) — write()'s one call site below just
+// passes @intFromEnum(...) of its own known-good options.
+pub fn optionsHash(target_id: u32, backend_id: u32, flags: u32) [32]u8 {
     var b: [13]u8 = undefined;
     b[0] = 1; // encoding version
-    std.mem.writeInt(u32, b[1..5], @intFromEnum(target_id), .little);
-    std.mem.writeInt(u32, b[5..9], @intFromEnum(backend_id), .little);
+    std.mem.writeInt(u32, b[1..5], target_id, .little);
+    std.mem.writeInt(u32, b[5..9], backend_id, .little);
     std.mem.writeInt(u32, b[9..13], flags, .little);
     return sha256(&.{&b});
 }
@@ -219,7 +225,7 @@ fn optionsHash(target_id: TargetId, backend_id: BackendId, flags: u32) [32]u8 {
 // fingerprint mechanism exists (spec §6.6 leaves this host-defined for
 // non-WASM targets). Deliberately named and isolated so it's easy to find
 // and replace — this must NOT be relied on for real staleness detection yet.
-fn placeholderVmFingerprint() [32]u8 {
+pub fn placeholderVmFingerprint() [32]u8 {
     return sha256(&.{"GENGO_VM_FINGERPRINT_PLACEHOLDER_V1"});
 }
 
@@ -765,7 +771,7 @@ pub fn write(cs: *chunk.State, alloc: std.mem.Allocator, opts: WriteOptions) Wri
     const body_checksum = std.hash.XxHash64.hash(0, body.buf.items);
     const src_hash = try sourceGraphHash(alloc, opts.root_source);
     const vm_fp = placeholderVmFingerprint();
-    const opt_hash = optionsHash(opts.target_id, opts.backend_id, opts.flags);
+    const opt_hash = optionsHash(@intFromEnum(opts.target_id), @intFromEnum(opts.backend_id), opts.flags);
 
     var out = ByteWriter{ .alloc = alloc };
     errdefer out.deinit();

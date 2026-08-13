@@ -544,7 +544,7 @@ pub const Runtime = struct {
         self.panic_depth = 0;
         self.reset();
         self.vm_state.setPolicy(self.policy);
-        try gbc_reader.read(bytes, self.chunk_state, &self.heap_state, self.vm_state.allocator);
+        try gbc_reader.read(bytes, self.chunk_state, &self.heap_state, self.vm_state.allocator, null);
         if (!self.skip_fusion) try fusion_pass.fuse(self.chunk_state, self.vm_state.allocator);
 
         const install_ctx: vms.VMContext = .{ .cs = self.chunk_state, .gs = &self.globals_state, .hs = &self.heap_state, .vs = &self.vm_state };

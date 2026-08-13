@@ -9,14 +9,18 @@
 // running the loaded chunk's top-level code (make_closure + def_global) is
 // what populates them, exactly like an ordinary script run.
 //
-// This milestone implements only the checks needed for a correct round-trip
-// (magic, header/body bounds, body checksum, section presence) — not the
-// full Phase 3 staleness gauntlet (source_graph_hash/vm_fingerprint/
-// module_provider_hash/options_hash comparison against "current" state) or
-// Phase 4's exhaustive per-field validation. See dev-docs/design/gbc-spec.md
-// §11.1 for the full validation phase list this intentionally does not yet
-// enforce — a deliberate, documented gap for this first slice, not an
-// oversight.
+// This milestone implements the checks needed for a correct round-trip
+// (magic, header/body bounds, body checksum, section presence) plus the
+// Phase 3 staleness gauntlet's four header hash fields (§11.1 checks
+// 22-25): source_graph_hash (only when the caller passes the source it
+// expects this artifact to match — see read()'s expected_root_source
+// param), and self-consistency checks on options_hash/vm_fingerprint/
+// module_provider_hash (recomputed from the artifact's own other header
+// fields and compared, catching a header hash that doesn't match the
+// values it claims to summarize — e.g. bit-corruption the body checksum
+// doesn't cover, since it only hashes the body). Phase 4's exhaustive
+// per-field validation is still not implemented. See dev-docs/design/
+// gbc-spec.md §11.1 for the full validation phase list.
 
 const std = @import("std");
 const chunk = @import("chunk.zig");
@@ -47,6 +51,9 @@ pub const ReadError = error{
     TooManyTypes,
     TooManyConstants,
     CodeTooLarge,
+    SourceGraphStale,
+    OptionsMismatch,
+    VMFingerprintMismatch,
 } || std.mem.Allocator.Error;
 
 const ByteReader = struct {
@@ -557,7 +564,15 @@ fn readFunctionsSection(r: *ByteReader, hs: *heap.State, alloc: std.mem.Allocato
 /// right heap). Does not run fusion_pass.fuse() or verify() — the caller
 /// does that next, exactly as the normal compile pipeline does after
 /// producing core-op bytecode (see runtime.zig's compileProgram).
-pub fn read(bytes: []const u8, cs: *chunk.State, hs: *heap.State, alloc: std.mem.Allocator) ReadError!void {
+// expected_root_source: when non-null, must be the exact source bytes this
+// artifact claims to have been compiled from (gbc_writer.WriteOptions.
+// root_source) — checked against the header's source_graph_hash, giving
+// real staleness detection for a .gbc whose backing .gengo file has since
+// changed. Pass null when no separate source is available to compare
+// against (e.g. running a standalone .gbc with no source on hand), which
+// skips that one check but leaves the other three header-hash
+// self-consistency checks (see module doc) in effect either way.
+pub fn read(bytes: []const u8, cs: *chunk.State, hs: *heap.State, alloc: std.mem.Allocator, expected_root_source: ?[]const u8) ReadError!void {
     var r = ByteReader{ .bytes = bytes };
 
     // Magic.
@@ -575,20 +590,38 @@ pub fn read(bytes: []const u8, cs: *chunk.State, hs: *heap.State, alloc: std.mem
     _ = try r.u16_(); // format_minor — accepted <= loader's; this loader has only one version so far
     _ = try r.u16_(); // language_major
     _ = try r.u16_(); // language_minor
-    _ = try r.u32_(); // flags
-    _ = try r.u32_(); // target_id
-    _ = try r.u32_(); // backend_id
+    const flags = try r.u32_();
+    const target_id = try r.u32_();
+    const backend_id = try r.u32_();
     _ = try r.u16_(); // entry_kind
     const reserved = bytes[r.pos..][0..6];
     if (!std.mem.allEqual(u8, reserved, 0)) return error.NonZeroReserved;
     r.pos += 6;
     _ = try r.i64_(); // compiled_at — diagnostics only, never checked
-    _ = try r.hash32(); // source_graph_hash — Phase 3 staleness check deferred, see module doc
-    _ = try r.hash32(); // vm_fingerprint — deferred
-    _ = try r.hash32(); // module_provider_hash — deferred
-    _ = try r.hash32(); // options_hash — deferred
+    const src_hash = try r.hash32();
+    const vm_fp = try r.hash32();
+    const module_provider_hash = try r.hash32();
+    const opt_hash = try r.hash32();
     const body_length = try r.u64_();
     const body_checksum = try r.u64_();
+
+    // Self-consistency: each of these three is a hash of other header
+    // fields also present in this same header, so recomputing and
+    // comparing catches header corruption the body checksum can't (it only
+    // covers the body) — not "did the build config change" (this loader
+    // has no separate "expected options" input to compare against; that's
+    // a job for a future caller-supplied-options parameter, not this one).
+    const expected_opt_hash = gbc_writer.optionsHash(target_id, backend_id, flags);
+    if (!std.mem.eql(u8, &opt_hash, &expected_opt_hash)) return error.OptionsMismatch;
+    const expected_vm_fp = gbc_writer.placeholderVmFingerprint();
+    if (!std.mem.eql(u8, &vm_fp, &expected_vm_fp)) return error.VMFingerprintMismatch;
+    // module_provider_hash == vm_fingerprint whenever stdlib is compiled-in
+    // (gbc-spec.md §6.6) — the only case this writer ever produces today.
+    if (!std.mem.eql(u8, &module_provider_hash, &expected_vm_fp)) return error.VMFingerprintMismatch;
+    if (expected_root_source) |want_src| {
+        const expected_src_hash = try gbc_writer.sourceGraphHash(alloc, want_src);
+        if (!std.mem.eql(u8, &src_hash, &expected_src_hash)) return error.SourceGraphStale;
+    }
 
     // header_size may be larger than what this reader understands (forward
     // compatibility, §6): skip any trailing header bytes this version
@@ -621,7 +654,7 @@ pub fn read(bytes: []const u8, cs: *chunk.State, hs: *heap.State, alloc: std.mem
     var i: u32 = 0;
     while (i < section_count) : (i += 1) {
         const id = try br.u32_();
-        const flags = try br.u32_();
+        const sec_flags = try br.u32_();
         const offset = try br.u64_();
         const length = try br.u64_();
         // Same overflow hazard as the body-length check above: offset/length
@@ -630,7 +663,7 @@ pub fn read(bytes: []const u8, cs: *chunk.State, hs: *heap.State, alloc: std.mem
         if (offset > body.len) return error.SectionOutOfBounds;
         if (length > body.len - offset) return error.SectionOutOfBounds;
         // Proven to fit, same reasoning as body_len above.
-        sections[i] = .{ .id = id, .flags = flags, .offset = @intCast(offset), .length = @intCast(length) };
+        sections[i] = .{ .id = id, .flags = sec_flags, .offset = @intCast(offset), .length = @intCast(length) };
     }
 
     const bytecode_sec = findSection(sections, gbc_writer.SEC_BYTECODE) orelse return error.MissingRequiredSection;
