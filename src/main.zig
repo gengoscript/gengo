@@ -17,6 +17,7 @@ const Runtime = @import("runtime/runtime.zig").Runtime;
 const io = @import("runtime/io.zig");
 const source_io = @import("runtime/source_io.zig");
 const module_compile = @import("lang/module_compile.zig");
+const ct = @import("lang/compiler_types.zig");
 const vm = @import("lang/vm.zig");
 const vmperf = @import("lang/vm_perf.zig");
 const vms = @import("lang/vm_state.zig");
@@ -468,6 +469,7 @@ fn runCli(argv: []const []const u8) void {
     var disasm_mode: bool = false;
     var no_fusion: bool = false;
     var emit_gbc_path: ?[]const u8 = null;
+    var emit_gbc_module_path: ?[]const u8 = null;
     var cap_names: [16][]const u8 = undefined;
     var cap_count: usize = 0;
     // Scratch storage for formatted "name.scope" tokens (e.g. "net.listen"),
@@ -493,6 +495,9 @@ fn runCli(argv: []const []const u8) void {
             io.write("  --disasm           Compile and print bytecode disassembly; do not run\n");
             io.write("  --no-fusion        Skip the fusion pass; run on core ops only (for A/B testing)\n");
             io.write("  --emit-gbc <path>  Compile and write a GBC bytecode cache file; do not run\n");
+            io.write("  --emit-gbc-module <path>  Compile as a linkable GBC module artifact\n");
+            io.write("                     (gbc-spec.md sec 14); rejects a script that itself\n");
+            io.write("                     imports a .gbc (single-level linking only)\n");
             io.write("  --test             Run test blocks in the script\n");
             io.write("  --profile          With --test, report peak ops/heap/stack/objects per block\n");
             io.write("  --cap <name>       Enable a named capability (repeatable)\n");
@@ -686,6 +691,15 @@ fn runCli(argv: []const []const u8) void {
             script_index += 2;
             continue;
         }
+        if (std.mem.eql(u8, a, "--emit-gbc-module")) {
+            if (script_index + 1 >= argv.len) {
+                io.werr("gengo: --emit-gbc-module requires a path argument\n");
+                die(1);
+            }
+            emit_gbc_module_path = argv[script_index + 1];
+            script_index += 2;
+            continue;
+        }
         if (std.mem.eql(u8, a, "--test")) {
             test_mode = true;
             script_index += 1;
@@ -848,6 +862,88 @@ fn runCli(argv: []const []const u8) void {
         };
         if (comptime builtin.os.tag == .wasi) {
             io.werr("gengo: --emit-gbc is not supported on this target yet\n");
+            die(1);
+        }
+        const gbc_io = std.Io.Threaded.global_single_threaded.io();
+        const gbc_file = std.Io.Dir.cwd().createFile(gbc_io, out_path, .{}) catch {
+            io.werr("gengo: cannot create: ");
+            io.werr(out_path);
+            io.werr("\n");
+            die(1);
+        };
+        defer gbc_file.close(gbc_io);
+        gbc_file.writeStreamingAll(gbc_io, gbc_bytes) catch {
+            io.werr("gengo: cannot write: ");
+            io.werr(out_path);
+            io.werr("\n");
+            die(1);
+        };
+        die(0);
+    }
+
+    if (emit_gbc_module_path) |out_path| {
+        if (comptime !build_opts.gbc) {
+            io.werr("gengo: --emit-gbc-module is not available in this build (-Dgbc=false)\n");
+            die(1);
+        }
+        runtime.compileModuleOnly(src, script_arg, .filesystem) catch |err| {
+            const compile_path = if (runtime.lastCompilePath().len != 0) runtime.lastCompilePath() else script_name;
+            io.werr("gengo: compile error: ");
+            io.werr(@errorName(err));
+            if (runtime.last_compile_msg_len > 0) {
+                io.werr(": ");
+                io.werr(runtime.last_compile_msg_buf[0..runtime.last_compile_msg_len]);
+            }
+            io.werr("\n  --> ");
+            io.werr(compile_path);
+            io.werr(":");
+            io.werrInt(@intCast(runtime.last_compile_line));
+            if (runtime.last_compile_col > 0) {
+                io.werr(":");
+                io.werrInt(@intCast(runtime.last_compile_col));
+            }
+            io.werr("\n");
+            if (std.mem.eql(u8, compile_path, script_name)) {
+                printSourceLine(src, runtime.last_compile_line, runtime.last_compile_col);
+            }
+            die(1);
+        };
+        // module_prefix must equal the "@mod:<path>" scheme
+        // module_compile.zig's Session.beginModule already baked into this
+        // compile's own global names (compileModuleRoot's doc comment) —
+        // gbc_writer.writeQualifiedName needs the exact same string to
+        // produce ExportEntry.qualified_name values that actually resolve.
+        var prefix_buf: [5 + module_compile.MaxModulePathBytes]u8 = undefined;
+        const module_prefix = std.fmt.bufPrint(&prefix_buf, "@mod:{s}", .{script_arg}) catch {
+            io.werr("gengo: script path too long for a module artifact\n");
+            die(1);
+        };
+        var export_buf: [ct.MaxModuleExports]gbc_writer.ExportInfo = undefined;
+        const export_count = runtime.last_export_count;
+        for (export_buf[0..export_count], 0..) |*e, i| {
+            e.* = .{
+                .name = runtime.last_export_names[i],
+                .type_kind = runtime.last_export_type_kinds[i],
+                .const_value = runtime.last_export_const_values[i],
+            };
+        }
+        const gbc_bytes = gbc_writer.write(runtime.chunk_state, std.heap.page_allocator, .{
+            .entry_kind = .module,
+            .root_source = src,
+            .module_id = script_arg,
+            .module_prefix = module_prefix,
+            .exports = export_buf[0..export_count],
+        }) catch |err| {
+            io.werr("gengo: cannot emit GBC module: ");
+            io.werr(@errorName(err));
+            if (err == error.UnsupportedConstant) {
+                io.werr(" (this script uses a feature GBC caching doesn't support yet: enums, a predicate declared inside a function body (rather than at module/type scope), or a closure with real captures stored as a constant — see issue #5)");
+            }
+            io.werr("\n");
+            die(1);
+        };
+        if (comptime builtin.os.tag == .wasi) {
+            io.werr("gengo: --emit-gbc-module is not supported on this target yet\n");
             die(1);
         }
         const gbc_io = std.Io.Threaded.global_single_threaded.io();

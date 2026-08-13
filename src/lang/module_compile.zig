@@ -280,6 +280,34 @@ pub const Session = struct {
         try self.compileBegunModule(idx, src, true);
     }
 
+    // Compiles `src` as a standalone linkable module artifact (GBC v2 §14),
+    // not as a runnable script — used by --emit-gbc-module. Differs from
+    // compileRoot in exactly the two ways a module artifact's own compile
+    // must: beginModule(path, false) assigns it the same "@mod:<path>"/
+    // "@module_type:<path>" global-name/prefix/struct-name scheme an
+    // ordinary *imported* module gets (never the un-prefixed root scheme),
+    // so its own compiled globals are already namespaced and collision-safe
+    // before any importer ever links against it (gbc-spec.md §14.3 — that
+    // identity can't be renamed post-hoc on load); and compileBegunModule's
+    // emit_halt=false means no trailing `halt` opcode gets baked into the
+    // bytecode a future importer will splice at a non-final position
+    // (§14.4). `path` becomes this artifact's SEC_EXPORTS.module_id (§8.5)
+    // — the caller (gbc_writer via WriteOptions.module_id) must pass this
+    // same string back, since it's already what's baked into this compile's
+    // own global names.
+    pub fn compileModuleRoot(self: *Session, path: []const u8, src: []const u8) !void {
+        self.module_count = 0;
+        self.last_error_path = "";
+        self.last_error_line = 0;
+        self.last_error_col = 0;
+        self.last_error_msg_len = 0;
+        const idx = try self.beginModule(path, false);
+        errdefer self.module_count = idx;
+
+        try self.compileDependencies(path, src);
+        try self.compileBegunModule(idx, src, false);
+    }
+
     fn isHostModule(self: *Session, name: []const u8) bool {
         for (self.host_module_names) |hm| {
             if (common.streq(hm, name)) return true;

@@ -167,6 +167,17 @@ pub const Runtime = struct {
     test_count: u16 = 0,
     test_names: [MaxTests][]const u8 = undefined,
     test_failed: bool = false,
+    // Root module's export table from the most recent successful compile —
+    // fed to gbc_writer.write()'s WriteOptions.exports (--emit-gbc/
+    // --emit-gbc-module) so SEC_EXPORTS (gbc-spec.md §8.5) carries real
+    // data instead of an always-empty stub. Populated uniformly for both a
+    // plain script compile (compileRoot) and a module-artifact compile
+    // (compileModuleRoot) by copyExportsFromSession — same underlying
+    // ModuleRecord export bookkeeping either way (module_compile.zig).
+    last_export_count: u16 = 0,
+    last_export_names: [ct.MaxModuleExports][]const u8 = undefined,
+    last_export_type_kinds: [ct.MaxModuleExports]ct.ExportTypeKind = undefined,
+    last_export_const_values: [ct.MaxModuleExports]?ct.CompileTimeConst = undefined,
     // REPL persistence block. Heap-allocated (like chunk_state) because it is
     // ~250 KB of fixed arrays: keeping it inline made Runtime.init-by-value
     // overflow the WASM shadow stack (api.Runtime.init holds up to three
@@ -435,6 +446,15 @@ pub const Runtime = struct {
         }
     }
 
+    fn copyExportsFromSession(self: *Runtime, session: *const module_compile.Session) void {
+        const rec = &session.modules[0];
+        const n = rec.export_count;
+        self.last_export_count = n;
+        @memcpy(self.last_export_names[0..n], rec.export_names[0..n]);
+        @memcpy(self.last_export_type_kinds[0..n], rec.export_type_kinds[0..n]);
+        @memcpy(self.last_export_const_values[0..n], rec.export_const_values[0..n]);
+    }
+
     fn copyTestNamesFromCompiler(self: *Runtime, compiler: *const Compiler) void {
         self.test_count = compiler.test_count;
         var ti: usize = 0;
@@ -478,6 +498,7 @@ pub const Runtime = struct {
                 return err;
             };
             if (test_mode) self.copyTestNamesFromSession(session);
+            self.copyExportsFromSession(session);
             if (!self.skip_fusion) try fusion_pass.fuse(self.chunk_state, self.vm_state.allocator);
             return;
         }
@@ -512,6 +533,39 @@ pub const Runtime = struct {
         self.last_compile_msg_len = 0;
         self.reset();
         try self.compileProgram(src, path, provider, false);
+    }
+
+    // Compiles `src` as a standalone linkable module artifact (gbc-spec.md
+    // §14), for --emit-gbc-module. Unlike compileOnly/compileProgram (which
+    // compile `path` as the program entry point, an un-prefixed root with a
+    // trailing halt), this routes through Session.compileModuleRoot so the
+    // result carries the same "@mod:<path>"-prefixed global naming an
+    // ordinary *imported* module gets and no trailing halt — see
+    // compileModuleRoot's doc comment for why both matter to a future
+    // importer. `path` must be the same string the caller later passes as
+    // gbc_writer.WriteOptions.module_id.
+    pub fn compileModuleOnly(self: *Runtime, src: []const u8, path: []const u8, provider: module_compile.SourceProvider) !void {
+        defer self.assertNoTempRootLeaks("Runtime.compileModuleOnly");
+        self.last_compile_line = 0;
+        self.last_compile_path_len = 0;
+        self.last_compile_col = 0;
+        self.last_compile_msg_len = 0;
+        self.reset();
+        try self.compileStdScripts();
+        const hm_names = try self.buildHostModuleNames();
+        const caps = self.capabilityModules();
+        const session = try std.heap.page_allocator.create(module_compile.Session);
+        defer {
+            session.deinitArena();
+            std.heap.page_allocator.destroy(session);
+        }
+        try self.initCompileSession(session, provider, hm_names, caps, false);
+        session.compileModuleRoot(path, src) catch |err| {
+            self.recordSessionCompileError(session);
+            return err;
+        };
+        self.copyExportsFromSession(session);
+        if (!self.skip_fusion) try fusion_pass.fuse(self.chunk_state, self.vm_state.allocator);
     }
 
     // Compile and install all native globals (std, host modules, capabilities)

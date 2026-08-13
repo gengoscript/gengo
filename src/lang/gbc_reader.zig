@@ -28,6 +28,7 @@ const heap = @import("../runtime/heap.zig");
 const value_mod = @import("value.zig");
 const Value = value_mod.Value;
 const FuncObj = value_mod.FuncObj;
+const ct = @import("compiler_types.zig");
 const gbc_writer = @import("gbc_writer.zig");
 
 pub const ReadError = error{
@@ -50,6 +51,7 @@ pub const ReadError = error{
     TooManyFunctions,
     TooManyTypes,
     TooManyConstants,
+    TooManyExports,
     CodeTooLarge,
     SourceGraphStale,
     OptionsMismatch,
@@ -506,6 +508,63 @@ fn readTypesSection(r: *ByteReader, cs: *chunk.State, hs: *heap.State, alloc: st
     return out;
 }
 
+// Mirrors compiler_types.CompileTimeConst's own three payload shapes plus a
+// NONE case (gbc-spec.md §8.5's OptConstValue) — a raw, not-yet-installed
+// decode of one ExportEntry.const_value.
+pub const OptConstValueRaw = union(enum) {
+    none: void,
+    number: f64,
+    string: []const u8,
+    boolean: bool,
+};
+
+pub const RawExportEntry = struct {
+    name: []const u8,
+    qualified_name: []const u8,
+    type_kind: u8,
+    const_value: OptConstValueRaw,
+};
+
+pub const RawExportsSection = struct {
+    module_id: []const u8,
+    exports: []RawExportEntry,
+};
+
+fn readOptConstValue(r: *ByteReader) ReadError!OptConstValueRaw {
+    const tag = try r.u8_();
+    return switch (tag) {
+        0x00 => .none,
+        0x01 => .{ .number = try r.f64_() },
+        0x02 => .{ .string = try r.str_() },
+        0x03 => .{ .boolean = try r.bool8() },
+        else => error.MalformedSection,
+    };
+}
+
+// Parses SEC_EXPORTS (gbc-spec.md §8.5) into raw, not-yet-installed entries
+// — this milestone's read-side counterpart to gbc_writer.writeExportsSection,
+// verifying the bytes it produces decode correctly. Installing these into a
+// live compile session (building a ModuleRecord-shaped symbol table from
+// them with no live Compiler involved) is a later increment (gbc-spec.md
+// §14.3) — this function only decodes the wire shape.
+pub fn readExportsSection(bytes: []const u8, alloc: std.mem.Allocator) ReadError!RawExportsSection {
+    var r = ByteReader{ .bytes = bytes };
+    const module_id = try r.str_();
+    const count = try r.u32_();
+    if (count > ct.MaxModuleExports) return error.TooManyExports;
+    const out = try alloc.alloc(RawExportEntry, count);
+    var i: u32 = 0;
+    while (i < count) : (i += 1) {
+        const name = try r.str_();
+        const qualified_name = try r.str_();
+        const type_kind = try r.u8_();
+        if (type_kind > @intFromEnum(ct.ExportTypeKind.variant_t)) return error.MalformedSection;
+        const const_value = try readOptConstValue(&r);
+        out[i] = .{ .name = name, .qualified_name = qualified_name, .type_kind = type_kind, .const_value = const_value };
+    }
+    return .{ .module_id = module_id, .exports = out };
+}
+
 fn readFunctionsSection(r: *ByteReader, hs: *heap.State, alloc: std.mem.Allocator) ![]RawFuncEntry {
     const count = try r.u32_();
     if (count > 65536) return error.TooManyFunctions;
@@ -572,7 +631,19 @@ fn readFunctionsSection(r: *ByteReader, hs: *heap.State, alloc: std.mem.Allocato
 // against (e.g. running a standalone .gbc with no source on hand), which
 // skips that one check but leaves the other three header-hash
 // self-consistency checks (see module doc) in effect either way.
-pub fn read(bytes: []const u8, cs: *chunk.State, hs: *heap.State, alloc: std.mem.Allocator, expected_root_source: ?[]const u8) ReadError!void {
+const ParsedHeader = struct {
+    body: []const u8,
+    sections: []SectionEntry,
+};
+
+// Magic + header (including the Phase 3 self-consistency/staleness hash
+// checks, see read()'s own doc comment) + body checksum + section table —
+// everything both read() (which goes on to actually install BYTECODE/
+// CONSTANTS/FUNCTIONS/TYPES into a fresh chunk.State) and findSectionBytes
+// (which just wants one section's raw bytes, e.g. to inspect SEC_EXPORTS on
+// a candidate dependency artifact without committing to a full load) need
+// in common. Caller owns freeing the returned `sections` slice.
+fn parseHeaderAndSections(bytes: []const u8, alloc: std.mem.Allocator, expected_root_source: ?[]const u8) ReadError!ParsedHeader {
     var r = ByteReader{ .bytes = bytes };
 
     // Magic.
@@ -650,7 +721,6 @@ pub fn read(bytes: []const u8, cs: *chunk.State, hs: *heap.State, alloc: std.mem
     const section_count = try br.u32_();
     if (section_count > 64) return error.MalformedSectionTable;
     var sections = try alloc.alloc(SectionEntry, section_count);
-    defer alloc.free(sections);
     var i: u32 = 0;
     while (i < section_count) : (i += 1) {
         const id = try br.u32_();
@@ -665,6 +735,30 @@ pub fn read(bytes: []const u8, cs: *chunk.State, hs: *heap.State, alloc: std.mem
         // Proven to fit, same reasoning as body_len above.
         sections[i] = .{ .id = id, .flags = sec_flags, .offset = @intCast(offset), .length = @intCast(length) };
     }
+    return .{ .body = body, .sections = sections };
+}
+
+// Returns one section's raw bytes without installing anything into a
+// chunk.State — e.g. to inspect a candidate dependency artifact's
+// SEC_EXPORTS (gbc-spec.md §14) before deciding whether to splice it in.
+// Runs the same header/staleness/body-checksum validation read() does
+// (parseHeaderAndSections), so a truncated/corrupted/stale artifact is
+// rejected here exactly as it would be by a full read() — this is a
+// narrower *result*, not a weaker *check*. Returns null if the section is
+// absent (distinct from a present-but-empty section, e.g. `export_count ==
+// 0`).
+pub fn findSectionBytes(bytes: []const u8, alloc: std.mem.Allocator, section_id: u32, expected_root_source: ?[]const u8) ReadError!?[]const u8 {
+    const parsed = try parseHeaderAndSections(bytes, alloc, expected_root_source);
+    defer alloc.free(parsed.sections);
+    const sec = findSection(parsed.sections, section_id) orelse return null;
+    return parsed.body[sec.offset..][0..sec.length];
+}
+
+pub fn read(bytes: []const u8, cs: *chunk.State, hs: *heap.State, alloc: std.mem.Allocator, expected_root_source: ?[]const u8) ReadError!void {
+    const parsed = try parseHeaderAndSections(bytes, alloc, expected_root_source);
+    const sections = parsed.sections;
+    defer alloc.free(sections);
+    const body = parsed.body;
 
     const bytecode_sec = findSection(sections, gbc_writer.SEC_BYTECODE) orelse return error.MissingRequiredSection;
     const constants_sec = findSection(sections, gbc_writer.SEC_CONSTANTS) orelse return error.MissingRequiredSection;

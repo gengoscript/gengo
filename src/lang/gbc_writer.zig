@@ -21,6 +21,7 @@ const chunk = @import("chunk.zig");
 const value_mod = @import("value.zig");
 const vm_defuse = @import("vm_defuse.zig");
 const Op = @import("op.zig").Op;
+const ct = @import("compiler_types.zig");
 
 pub const MAGIC = [8]u8{ 0x89, 'G', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A };
 
@@ -106,6 +107,29 @@ pub const FT_FUNC_T: u8 = 0x0E;
 pub const FT_DECIMAL_T: u8 = 0x0F;
 pub const FT_ACTOR_REF_T: u8 = 0x10;
 
+// Mirrors compiler_types.ExportTypeKind's own tag values 1:1 (gbc-spec.md
+// §8.5) so a loader can rebuild a module's full symbol table from
+// SEC_EXPORTS alone, without ever constructing a live Compiler for it.
+pub const ExportInfo = struct {
+    name: []const u8,
+    type_kind: ct.ExportTypeKind,
+    const_value: ?ct.CompileTimeConst,
+};
+
+// gbc-spec.md §8.7. LINKED_ARTIFACT (3) is the GBC v2 (§14) addition; the
+// other three existed in the spec already but were never populated by this
+// writer (SEC_DEPENDENCY_TABLE was always written as an empty count).
+pub const DependencyKind = enum(u8) { stdlib = 0, file = 1, host_provided = 2, linked_artifact = 3 };
+
+pub const DependencyEntryInfo = struct {
+    written_specifier: []const u8,
+    resolved_id: []const u8,
+    kind: DependencyKind,
+    source_hash: [32]u8 = [_]u8{0} ** 32,
+    artifact_body_hash: [32]u8 = [_]u8{0} ** 32,
+    qualified_prefix: []const u8,
+};
+
 pub const WriteOptions = struct {
     entry_kind: EntryKind = .script,
     target_id: TargetId = .native_x86_64,
@@ -117,6 +141,30 @@ pub const WriteOptions = struct {
     /// compute source_graph_hash (§6.6). Must be the same bytes the
     /// compiler saw, for the hash to mean anything to a future loader.
     root_source: []const u8,
+    /// This artifact's own canonical module identity (gbc-spec.md §14.3),
+    /// carried in SEC_EXPORTS.module_id. Empty for a plain script with no
+    /// intention of being linked. Must be the same path string the compile
+    /// itself used as its module path (module_compile.Session.
+    /// compileModuleRoot's `path` param) — that's what's already baked
+    /// into this chunk's own qualified global names, and what an importer
+    /// must match byte-for-byte against its own resolved_id (§14.3).
+    module_id: []const u8 = "",
+    /// "" for a script-entry root (its own globals are unprefixed); "@mod:"
+    /// ++ module_id for a module-entry root (module_compile.zig's own
+    /// Session.beginModule naming scheme). Supplied by the caller rather
+    /// than derived here so this file doesn't need to hardcode
+    /// module_compile.zig's naming convention as anything more than a
+    /// string it's told to reuse for SEC_EXPORTS.ExportEntry.qualified_name.
+    module_prefix: []const u8 = "",
+    exports: []const ExportInfo = &.{},
+    /// Real dependency-table entries this artifact should declare — e.g. a
+    /// LINKED_ARTIFACT entry an importer records for a dependency it just
+    /// spliced in (gbc-spec.md §14). Populating a plain module's own
+    /// FILE/STDLIB dependency entries (its own transitive .gengo imports)
+    /// is not yet wired up here — module_compile.zig's Session doesn't
+    /// currently track a reusable resolved-import list to source that
+    /// from; nothing in the linking mechanism (§14) depends on it.
+    dependencies: []const DependencyEntryInfo = &.{},
 };
 
 pub const WriteError = error{
@@ -533,6 +581,71 @@ fn writeFunctionsSection(w: *ByteWriter, cs: *chunk.State, funcs: []const FuncEn
     }
 }
 
+const CONST_VALUE_NONE: u8 = 0x00;
+const CONST_VALUE_NUMBER: u8 = 0x01;
+const CONST_VALUE_STRING: u8 = 0x02;
+const CONST_VALUE_BOOLEAN: u8 = 0x03;
+
+fn writeOptConstValue(w: *ByteWriter, v: ?ct.CompileTimeConst) !void {
+    const val = v orelse {
+        try w.u8_(CONST_VALUE_NONE);
+        return;
+    };
+    switch (val) {
+        .number => |n| {
+            try w.u8_(CONST_VALUE_NUMBER);
+            try w.f64_(n);
+        },
+        .string => |s| {
+            try w.u8_(CONST_VALUE_STRING);
+            try w.str_(s);
+        },
+        .boolean => |b| {
+            try w.u8_(CONST_VALUE_BOOLEAN);
+            try w.bool8(b);
+        },
+    }
+}
+
+// qualified_name = module_prefix ++ "." ++ name (or bare name when
+// module_prefix is empty) — the exact concatenation compiler.zig's own
+// qualifyGlobalName uses to build the def_global/get_global string
+// constants already baked into this chunk's bytecode (gbc-spec.md §14.3:
+// this can't be recomputed differently later, it must match on the wire).
+fn writeQualifiedName(w: *ByteWriter, module_prefix: []const u8, name: []const u8) !void {
+    if (module_prefix.len == 0) {
+        try w.str_(name);
+        return;
+    }
+    try w.u32_(@intCast(module_prefix.len + 1 + name.len));
+    try w.buf.appendSlice(w.alloc, module_prefix);
+    try w.buf.appendSlice(w.alloc, ".");
+    try w.buf.appendSlice(w.alloc, name);
+}
+
+fn writeExportsSection(w: *ByteWriter, module_id: []const u8, module_prefix: []const u8, exports: []const ExportInfo) !void {
+    try w.str_(module_id);
+    try w.u32_(@intCast(exports.len));
+    for (exports) |e| {
+        try w.str_(e.name);
+        try writeQualifiedName(w, module_prefix, e.name);
+        try w.u8_(@intFromEnum(e.type_kind));
+        try writeOptConstValue(w, e.const_value);
+    }
+}
+
+fn writeDependencyTable(w: *ByteWriter, deps: []const DependencyEntryInfo) !void {
+    try w.u32_(@intCast(deps.len));
+    for (deps) |d| {
+        try w.str_(d.written_specifier);
+        try w.str_(d.resolved_id);
+        try w.u8_(@intFromEnum(d.kind));
+        try w.hash32(d.source_hash);
+        try w.hash32(d.artifact_body_hash);
+        try w.str_(d.qualified_prefix);
+    }
+}
+
 // Registers a FuncObj into `funcs` (the SEC_FUNCTIONS side-table being
 // built) and returns its index — shared by plain `.function` constants and
 // a predicate closure's underlying FuncObj (which never gets its own
@@ -712,14 +825,19 @@ pub fn write(cs: *chunk.State, alloc: std.mem.Allocator, opts: WriteOptions) Wri
     defer types_w.deinit();
     try writeTypesSection(&types_w, types.items);
 
-    // Empty sections for this milestone.
-    var empty_u32_w = ByteWriter{ .alloc = alloc };
-    defer empty_u32_w.deinit();
-    try empty_u32_w.u32_(0);
-
+    // Empty section for this milestone — no native-import tracking exists
+    // to source real SEC_NATIVE_IMPORTS data from yet.
     var native_imports_w = ByteWriter{ .alloc = alloc };
     defer native_imports_w.deinit();
     try native_imports_w.u32_(0);
+
+    var exports_w = ByteWriter{ .alloc = alloc };
+    defer exports_w.deinit();
+    try writeExportsSection(&exports_w, opts.module_id, opts.module_prefix, opts.exports);
+
+    var deps_w = ByteWriter{ .alloc = alloc };
+    defer deps_w.deinit();
+    try writeDependencyTable(&deps_w, opts.dependencies);
 
     if (cs.std_script_code_end > std.math.maxInt(u32)) return error.BadBytecode;
     var std_script_w = ByteWriter{ .alloc = alloc };
@@ -744,9 +862,9 @@ pub fn write(cs: *chunk.State, alloc: std.mem.Allocator, opts: WriteOptions) Wri
         .{ .id = SEC_CONSTANTS, .data = consts_final_w.buf.items },
         .{ .id = SEC_FUNCTIONS, .data = funcs_w.buf.items },
         .{ .id = SEC_NATIVE_IMPORTS, .data = native_imports_w.buf.items },
-        .{ .id = SEC_EXPORTS, .data = empty_u32_w.buf.items },
+        .{ .id = SEC_EXPORTS, .data = exports_w.buf.items },
         .{ .id = SEC_TYPES, .data = types_w.buf.items },
-        .{ .id = SEC_DEPENDENCY_TABLE, .data = empty_u32_w.buf.items },
+        .{ .id = SEC_DEPENDENCY_TABLE, .data = deps_w.buf.items },
         .{ .id = SEC_STD_SCRIPT_INFO, .data = std_script_w.buf.items, .required = false },
     };
 

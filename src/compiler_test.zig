@@ -16,6 +16,7 @@ const fusion_pass = @import("lang/fusion_pass.zig");
 const chunk_decoder = @import("lang/chunk_decoder.zig");
 const gbc_writer = @import("lang/gbc_writer.zig");
 const gbc_reader = @import("lang/gbc_reader.zig");
+const ct = @import("lang/compiler_types.zig");
 const net_state = @import("lang/native/net_state.zig");
 
 fn setup() !Runtime {
@@ -4917,6 +4918,119 @@ test "gbc: reader accepts a .gbc when the expected source still matches" {
     globals.reset();
     heap.reset();
     try gbc_reader.read(bytes, chunk.g_state, heap.g_state, rt3.vm_state.allocator, "func f() int { return 1 }");
+}
+
+test "gbc: writer emits real SEC_EXPORTS data for a linkable module artifact" {
+    const src =
+        \\pub func Add(a int, b int) int {
+        \\    return a + b
+        \\}
+        \\pub const Pi = 3
+        \\func unexported() int { return 0 }
+    ;
+
+    var rt = try setup();
+    defer rt.deinit();
+    try rt.compileModuleOnly(src, "mathlib", .filesystem);
+    try std.testing.expectEqual(@as(u16, 2), rt.last_export_count);
+
+    var export_buf: [2]gbc_writer.ExportInfo = undefined;
+    for (export_buf[0..2], 0..) |*e, i| {
+        e.* = .{
+            .name = rt.last_export_names[i],
+            .type_kind = rt.last_export_type_kinds[i],
+            .const_value = rt.last_export_const_values[i],
+        };
+    }
+    const bytes = try gbc_writer.write(rt.chunk_state, std.testing.allocator, .{
+        .entry_kind = .module,
+        .root_source = src,
+        .module_id = "mathlib",
+        .module_prefix = "@mod:mathlib",
+        .exports = &export_buf,
+    });
+    defer std.testing.allocator.free(bytes);
+
+    const sec_bytes = (try gbc_reader.findSectionBytes(bytes, std.testing.allocator, gbc_writer.SEC_EXPORTS, src)) orelse
+        return error.TestUnexpectedResult;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const parsed = try gbc_reader.readExportsSection(sec_bytes, arena.allocator());
+    try std.testing.expectEqualStrings("mathlib", parsed.module_id);
+    try std.testing.expectEqual(@as(usize, 2), parsed.exports.len);
+
+    try std.testing.expectEqualStrings("Add", parsed.exports[0].name);
+    try std.testing.expectEqualStrings("@mod:mathlib.Add", parsed.exports[0].qualified_name);
+    try std.testing.expectEqual(@intFromEnum(ct.ExportTypeKind.func_or_var), parsed.exports[0].type_kind);
+    try std.testing.expect(parsed.exports[0].const_value == .none);
+
+    try std.testing.expectEqualStrings("Pi", parsed.exports[1].name);
+    try std.testing.expectEqualStrings("@mod:mathlib.Pi", parsed.exports[1].qualified_name);
+    try std.testing.expectEqual(@intFromEnum(ct.ExportTypeKind.func_or_var), parsed.exports[1].type_kind);
+    switch (parsed.exports[1].const_value) {
+        .number => |n| try std.testing.expectEqual(@as(f64, 3), n),
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "gbc: writer emits real SEC_EXPORTS data for a struct-typed export" {
+    const src =
+        \\pub type Point struct {
+        \\    x int,
+        \\    y int,
+        \\}
+    ;
+
+    var rt = try setup();
+    defer rt.deinit();
+    try rt.compileModuleOnly(src, "geom", .filesystem);
+    try std.testing.expectEqual(@as(u16, 1), rt.last_export_count);
+    try std.testing.expectEqual(ct.ExportTypeKind.struct_t, rt.last_export_type_kinds[0]);
+
+    var export_buf: [1]gbc_writer.ExportInfo = undefined;
+    export_buf[0] = .{
+        .name = rt.last_export_names[0],
+        .type_kind = rt.last_export_type_kinds[0],
+        .const_value = rt.last_export_const_values[0],
+    };
+    const bytes = try gbc_writer.write(rt.chunk_state, std.testing.allocator, .{
+        .entry_kind = .module,
+        .root_source = src,
+        .module_id = "geom",
+        .module_prefix = "@mod:geom",
+        .exports = &export_buf,
+    });
+    defer std.testing.allocator.free(bytes);
+
+    const sec_bytes = (try gbc_reader.findSectionBytes(bytes, std.testing.allocator, gbc_writer.SEC_EXPORTS, src)) orelse
+        return error.TestUnexpectedResult;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const parsed = try gbc_reader.readExportsSection(sec_bytes, arena.allocator());
+    try std.testing.expectEqualStrings("geom", parsed.module_id);
+    try std.testing.expectEqual(@as(usize, 1), parsed.exports.len);
+    try std.testing.expectEqualStrings("Point", parsed.exports[0].name);
+    try std.testing.expectEqualStrings("@mod:geom.Point", parsed.exports[0].qualified_name);
+    try std.testing.expectEqual(@intFromEnum(ct.ExportTypeKind.struct_t), parsed.exports[0].type_kind);
+}
+
+test "gbc: --emit-gbc-module rejects a source that itself imports a .gbc" {
+    // .gbc-as-import-target resolution doesn't exist yet (Phase 4 of the
+    // linking plan) — resolveImportPath only ever probes .gengo/mod.gengo
+    // suffixes today, so this already fails, just via ImportNotFound rather
+    // than a dedicated diagnostic. Once Phase 4 lands .gbc import
+    // resolution, a module artifact importing another .gbc must still be
+    // rejected (gbc-spec.md §14.1's single-level bound) — this test's
+    // expected error will need updating then, not its intent.
+    const src =
+        \\dep := import("./dep.gbc")
+        \\pub func f() int {
+        \\    return 1
+        \\}
+    ;
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.ImportNotFound, rt.compileModuleOnly(src, "user", .filesystem));
 }
 
 test "cap:net listen: bare --cap net (dial only) refuses listen at call time" {
