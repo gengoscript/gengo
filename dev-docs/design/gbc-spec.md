@@ -1,10 +1,31 @@
 # Gengoscript Bytecode Cache — File Format Specification
 
 **Status:** Draft\
-**Version:** 0.9\
+**Version:** 0.10\
 **Scope:** GBC artifact only (see §2 for artifact class definitions)
 
 **Revision history**
+- 0.10 — Reverse §16 (Non-Goals)'s former "Linking. GBC files are not
+  linkable in v1" bullet and add real cross-artifact linking
+  as a new §14: an `ENTRY_MODULE` artifact can now be imported directly by
+  another compile, without recompiling its source, when the import
+  specifier names the `.gbc` artifact explicitly (`import("./mathlib.gbc")`
+  — no implicit same-stem-sibling fallback; see §14 for why). This is a
+  format-breaking change (`format_major` 1 → 2, §12): `SEC_EXPORTS`
+  (§8.5) gains a leading `module_id` field and each `ExportEntry` gains
+  `type_kind`/`const_value`, needed so an importer can reconstruct a full
+  module symbol table from the artifact alone, without ever constructing a
+  live `Compiler` for the dependency. `DEPENDENCY_TABLE` (§8.7) gains
+  `kind = 3 (LINKED_ARTIFACT)`, for which `artifact_body_hash` becomes
+  mandatory and must match exactly (no recompile-if-stale fallback the way
+  `FILE` dependencies get — a corrupted or substituted linked artifact must
+  fail loudly, not silently misload). Scope for this revision is
+  deliberately narrow: linking is single-level only — a linkable module
+  artifact must itself have zero `LINKED_ARTIFACT` dependencies (enforced
+  at write time), so a loader never needs to recursively load a `.gbc`
+  found while loading another `.gbc`. A module artifact's own file imports
+  are still compiled from source into it as today; only the one hop from
+  importer to a precompiled dependency is new.
 - 0.9 — Implement `FUNC_T` (§9.2, `0x0E`): spec'd since early drafts but the reference writer rejected it with `error.UnsupportedFieldType`, which silently made `--emit-gbc` fail for *every* program, not just ones using function-typed values directly — the engine's own embedded-Gengoscript standard-library helpers (compiled into every chunk regardless of what the user's script imports) include one with a function-typed parameter. Two more implementation-only fixes found alongside it, neither a core format change: (1) a `FunctionEntry.name_constant_idx` naming an as-yet-unwritten `CONST_STRING` is a legitimate forward reference (the writer only guaranteed a match already existed among constants written *before* the function; a function's own bare name — e.g. `count` — is frequently not otherwise present as an independent string constant), so name resolution on load must defer until the whole constant pool exists, not resolve inline per-constant; (2) that deferral must key back to names by constant-pool index (GC-rooted, kept correct across compaction) rather than by directly caching the constructed object pointer, which a later allocation in the same load pass can relocate out from under an uncached copy. Also documents a vendor-range (§7.2, `0x8000`–`0xFFFF`) `SEC_STD_SCRIPT_INFO` section (implementation-specific, not part of this spec) that the reference engine writes so its own std-script bootstrapping metadata survives a round-trip; any loader may ignore it.
 - 0.8 — Add an `INTERFACE` `TypeEntry` kind (§8.6, `0x04`, the slot already reserved for it) with a method list reusing `FunctionEntry`'s own param/return/variadic-type shape. Complete `FunctionEntry`'s param/return/variadic `TypeSpec` encoding (§8.3) — always specified, but the writer had deferred it (writing empty placeholders and forcing `has_typed_params`/`has_typed_returns` false on load) until a real consumer needed it; `interfaceMethodMatches` (`vm_types.zig`) compares an interface method's declared param/return types against the *actual* implementing function's types on every conformance check, so a placeholder here would make a real, correctly-typed interface silently fail to match its implementation once loaded from a `.gbc`. Extend the `NAMED` `TypeEntry` (§8.6) with fields it always needed but never had wire slots for: `is_anonymous` (read at runtime for anonymous array/map-typed-local equality), `scale` (decimal fixed-point precision), a predicate reference (resolved through the same `SEC_FUNCTIONS` indirection as a plain function — a captureless predicate, the only kind compiled at module/type scope, needs no upvalue encoding), `predicate_msg`, and `has_default`/`default_val` (always a `float`/`string`/`bool` per the language's own `parseNamedDefault`). All four found via the same "research before implementing" process as prior entries (#5): reading the actual opcode/VM code that consumes each field, not assuming a shape.
 - 0.7 — Add a `VARIANT` `TypeEntry` kind (§8.6, `0x03`) with arm records (name, shape — none/single-payload/record — and a record arm's field list) and a type-level shared-field list, extending `TYPE_REF` (§8.2) to cover variant types. Un-reserve the `INT` constant tag (`0x06`, §8.2): promote it from "reserved for a future format version" to actually used now, fixing a real ambiguity bug where a `.int` and a whole-valued `.float` (e.g. `1.0`) were indistinguishable on the wire (both went through `NUMBER` as `f64`, reconstructed by a "no fractional part → int" heuristic) — `.int` values now write through `INT` as a raw `i64`, `.float` always through `NUMBER`, no heuristic. Both found while extending GBC to support variant-type values in the constant pool (#5): the variant work's first round-trip test happened to be the first one to return a whole-valued float constant, surfacing the pre-existing `NUMBER`/`INT` ambiguity that every earlier struct/named-type/function test had accidentally avoided.
@@ -55,9 +76,10 @@
     - 11.3 [Error Handling](#113-error-handling)
 12. [Version Compatibility Policy](#12-version-compatibility-policy)
 13. [Dependency and Module Graph Hashing](#13-dependency-and-module-graph-hashing)
-14. [Future: GSI Artifact Class](#14-future-gsi-artifact-class)
-15. [Non-Goals for GBC v1](#15-non-goals-for-gbc-v1)
-16. [Rationale Notes](#16-rationale-notes)
+14. [Cross-Artifact Linking (v2)](#14-cross-artifact-linking-v2)
+15. [Future: GSI Artifact Class](#15-future-gsi-artifact-class)
+16. [Non-Goals for GBC v1](#16-non-goals-for-gbc-v1)
+17. [Rationale Notes](#17-rationale-notes)
 
 ---
 
@@ -73,7 +95,7 @@ Loading a valid GBC file into a fresh VM must be equivalent to compiling the ori
 
 ### What a GBC file is not
 
-A GBC file is not a **snapshot** of a running VM. Serialising the live object heap, global variable values, open file handles, allocator state, or GC metadata is explicitly out of scope for this format. That is a separate artifact class (§14).
+A GBC file is not a **snapshot** of a running VM. Serialising the live object heap, global variable values, open file handles, allocator state, or GC metadata is explicitly out of scope for this format. That is a separate artifact class (§15).
 
 ### Script vs module philosophy
 
@@ -467,6 +489,11 @@ Native import entries are referenced by index from bytecode instructions. The GB
 Required for `ENTRY_MODULE` artifacts (with `export_count` ≥ 0); optional for `ENTRY_SCRIPT`. A module with no public declarations must still include this section with `export_count = 0`. Lists the public names this artifact exports.
 
 ```
+module_id    : str          // this artifact's own canonical module identity
+                             // (§14) — an importer's SEC_DEPENDENCY_TABLE
+                             // resolved_id for this artifact, if linked,
+                             // must equal this value, not the local import
+                             // specifier the importer happened to write.
 export_count : u32
 exports      : [export_count]ExportEntry
 ```
@@ -475,10 +502,37 @@ Each `ExportEntry`:
 
 ```
 ExportEntry {
-  exported_name  : str   // the name importers use
-  qualified_name : str   // the internal qualified global name
+  exported_name  : str            // the name importers use
+  qualified_name : str            // the internal qualified global name
+  type_kind      : u8             // 0=FUNC_OR_VAR 1=STRUCT 2=INTERFACE
+                                   // 3=NAMED 4=VARIANT — mirrors the
+                                   // compiler's own export classification;
+                                   // lets a loader rebuild a full module
+                                   // symbol table from this section alone,
+                                   // with no live Compiler involved (§14).
+  const_value    : OptConstValue  // present for every entry; NONE for a
+                                   // non-const export (a func or a mutable
+                                   // top-level var)
 }
 ```
+
+`OptConstValue` (a tagged compile-time constant, mirroring the compiler's
+own `CompileTimeConst`):
+
+```
+OptConstValue {
+  tag     : u8    // 0=NONE 1=NUMBER 2=STRING 3=BOOLEAN
+  // payload present only if tag != NONE:
+  number  : f64   // present only if tag == NUMBER
+  string  : str    // present only if tag == STRING
+  boolean : bool8  // present only if tag == BOOLEAN
+}
+```
+
+`module_id` and the `type_kind`/`const_value` fields on `ExportEntry` were
+added in format v2 (§14) — a v1 reader (`format_major == 1`) never
+constructed a `SEC_EXPORTS` this shape, so this is a `format_major` bump,
+not a backward-compatible addition.
 
 ### 8.6 TYPES
 
@@ -629,14 +683,32 @@ Each `DependencyEntry`:
 
 ```
 DependencyEntry {
-  written_specifier : str      // as it appears in source, e.g. "std" or "./math"
+  written_specifier : str      // as it appears in source, e.g. "std", "./math", or "./mathlib.gbc"
   resolved_id       : str      // canonical module identity; see below
-  kind              : u8       // 0=STDLIB 1=FILE 2=HOST_PROVIDED
-  source_hash       : hash32   // SHA-256 of dependency source; all zeros for STDLIB
+  kind              : u8       // 0=STDLIB 1=FILE 2=HOST_PROVIDED 3=LINKED_ARTIFACT
+  source_hash       : hash32   // SHA-256 of dependency source; all zeros for STDLIB and LINKED_ARTIFACT
   artifact_body_hash     : hash32   // SHA-256 of dependency's GBC artifact; all zeros if unavailable
   qualified_prefix  : str      // prefix used for symbols from this import in the compiled output
 }
 ```
+
+**`kind = LINKED_ARTIFACT`** (`3`, added in format v2, §14) is a precompiled
+`.gbc` dependency spliced directly into this artifact's compiled output at
+compile time — the mechanism §14 defines. Unlike `FILE` (check 21, §11.1:
+recompile-from-source-if-changed), a `LINKED_ARTIFACT` dependency has no
+source to recompile from at load time by definition, so its trust model is
+different: `artifact_body_hash` is **mandatory** (not advisory) and must
+match the dependency's actual GBC body bytes **exactly**. A mismatch — a
+corrupted, substituted, or since-recompiled dependency artifact — must fail
+loudly (`LinkedArtifactMismatch`), never fall back to any other behavior.
+`resolved_id` for a `LINKED_ARTIFACT` entry must equal the dependency
+artifact's own `SEC_EXPORTS.module_id` (§8.5), not a path derived from the
+importer's `written_specifier`.
+
+An artifact that itself contains any `LINKED_ARTIFACT` dependency entry
+must not be produced as a linkable `ENTRY_MODULE` — §14 bounds linking to a
+single level; a writer must reject compiling `--emit-gbc-module` output
+whose source transitively imports a `.gbc`.
 
 **`resolved_id`** is the canonical identity of the dependency as determined by the module resolver at compile time. It must be stable across equivalent resolutions (symlinks, `../` normalisations, etc. must all produce the same `resolved_id` for the same logical module). Suggested URI-style format:
 
@@ -646,6 +718,7 @@ DependencyEntry {
 | File (WASI) | `file:///project/src/math.gengo` |
 | File (browser/virtual FS) | `mem://playground/math.gengo` |
 | Host-provided | `host://app/config` |
+| Linked artifact | the dependency's own `SEC_EXPORTS.module_id` verbatim (§14) |
 
 The exact URI scheme is host-defined. The loader must compare `resolved_id` strings exactly (byte-for-byte) and must not perform path normalisation on load; normalisation is a compile-time responsibility.
 
@@ -865,7 +938,7 @@ Requires reading `SEC_DEPENDENCY_TABLE` and querying external state (filesystem,
 | # | Check | Failure |
 |---|-------|---------|
 | 20 | `SEC_DEPENDENCY_TABLE` is parseable | `MalformedDependencyTable` |
-| 21 | For each FILE dependency: `SHA-256(current_source) == entry.source_hash` | `DependencyStale(resolved_id)` |
+| 21 | For each FILE dependency: `SHA-256(current_source) == entry.source_hash`. For each LINKED_ARTIFACT dependency (§14): `SHA-256(dependency_artifact_body_bytes) == entry.artifact_body_hash` exactly — no recompile fallback | `DependencyStale(resolved_id)` / `LinkedArtifactMismatch(resolved_id)` |
 | 22 | `source_graph_hash` matches the computed source graph hash | `SourceGraphStale` |
 | 23 | `vm_fingerprint` matches the current runtime VM fingerprint | `VMFingerprintMismatch` |
 | 24 | `module_provider_hash` matches the current module provider fingerprint | `ModuleProviderMismatch` |
@@ -965,7 +1038,111 @@ Each module artifact stores `source_graph_hash` covering only its own transitive
 
 ---
 
-## 14. Future: GSI Artifact Class
+## 14. Cross-Artifact Linking (v2)
+
+### 14.1 Scope
+
+An `ENTRY_MODULE` artifact (§6.5) may be imported directly by another
+compile — its exports spliced into the importer's own compiled output —
+without recompiling the module's source. This is **single-level only**: a
+linkable module artifact must itself have zero `LINKED_ARTIFACT`
+dependencies (§8.7). A loader implementing this section therefore never
+needs to recursively load a `.gbc` discovered while loading another `.gbc`
+— every `LINKED_ARTIFACT` a loader encounters is a leaf. A module's own
+file (`FILE`-kind) imports are unaffected by this section: they are still
+compiled from source into the module at the module's own compile time,
+exactly as today; only the one hop from an importer to a precompiled
+dependency is new.
+
+### 14.2 Resolution: explicit only
+
+An import resolves to a precompiled artifact only when the import
+specifier names one directly, e.g. `import("./mathlib.gbc")`. There is no
+implicit fallback where a `.gengo` file with a same-stem `.gbc` sibling on
+disk is silently preferred over recompiling from source. Two reasons:
+
+1. **Auditability.** Whether a given import links a precompiled artifact
+   or compiles source is then a property of the source text itself, not of
+   filesystem state the source text doesn't mention.
+2. **Correctness dependencies.** §14.3 and §14.4 below only hold for an
+   artifact deliberately produced as a linkable module (`emit_halt=false`,
+   a real `module_id`, no transitive `LINKED_ARTIFACT` deps of its own). A
+   transparent same-stem fallback would make those production requirements
+   an implicit per-file convention instead of an explicit, checked step at
+   artifact-production time.
+
+Transparent caching (recompile only if the source's hash has moved past
+what a cached `.gbc` claims) may be layered on top of explicit linking in
+a later revision; it is not part of this one.
+
+### 14.3 Module identity
+
+A dependency's own compiled bytecode has its `@mod:<path>.<name>`-style
+qualified names (compiler internal naming scheme) baked into `def_global`/
+`get_global` string constants at the dependency's *own* compile time —
+before the importer's `written_specifier` for it is even known. String
+constants are pool-deduplicated; rewriting them to match an importer's
+local specifier after the fact would be a far riskier operation than the
+integer-index remap linking already requires (§14.5), and is not needed.
+
+Instead, a linkable module artifact's `SEC_EXPORTS.module_id` (§8.5) is
+its own canonical identity, fixed at the time it was produced. An
+importer's `SEC_DEPENDENCY_TABLE` entry for it (§8.7, `kind =
+LINKED_ARTIFACT`) records that `module_id` as `resolved_id` — never a path
+or name derived from the importer's local `written_specifier`. A loader
+splicing a `LINKED_ARTIFACT` dependency into an importing compile builds
+that dependency's module-record identity (the internal
+path/global-name/prefix/struct-name a compiler needs for cross-module
+symbol resolution) from `module_id`, not from how the importer happened to
+spell the import.
+
+### 14.4 Producing a linkable module artifact
+
+An artifact is eligible to be linked by another compile only if:
+
+1. `entry_kind == ENTRY_MODULE` and `SEC_EXPORTS` is present (§6.5, §8.5).
+2. It was compiled without an implicit top-level `halt` — the same
+   compile path used for an ordinary imported source file today, not the
+   entry-script path that appends one. An artifact compiled with a
+   trailing `halt` would, once spliced into an importer's bytecode at any
+   position other than the very end, terminate the *importer's* program
+   the instant the spliced code ran. This is a writer-side production
+   requirement (how a `--emit-gbc-module`-style artifact is compiled), not
+   something a loader can detect or repair — a conforming writer never
+   emits a `halt` into a `SEC_BYTECODE` intended to back an `ENTRY_MODULE`.
+3. `SEC_DEPENDENCY_TABLE` contains no `LINKED_ARTIFACT` entry (§14.1's
+   single-level bound). A writer must reject producing a linkable module
+   artifact whose source transitively imports a `.gbc`.
+
+### 14.5 Splicing mechanics (informative)
+
+This subsection is non-normative implementation guidance, not a wire
+format requirement — a loader is free to reach the same result by any
+means. The reference approach: append the dependency's constants,
+functions, types, and bytecode onto the end of the importing session's own
+in-progress chunk (constants at the current constant-pool length, code at
+the current code length), then walk only the newly-appended bytecode range
+and, for every instruction with a constant-pool operand, add the constant
+base offset to that operand. Function entry points (`FuncObj.ip`) get the
+code base offset added the same way. Relative jump/loop offsets need no
+adjustment — they encode a delta from the instruction's own position, not
+an absolute address, so splicing at a new base preserves them unchanged.
+No bytecode is rewritten in place; only integer operands that are
+constant-pool or absolute-code-offset references are adjusted.
+
+### 14.6 Trust model
+
+Unlike a `FILE` dependency, which is recompiled from source and only
+flagged stale if the source moved (§11.1 check 21, §14 notwithstanding), a
+`LINKED_ARTIFACT` dependency has no source available to recompile from at
+load time. Its `artifact_body_hash` (§8.7) is therefore mandatory and must
+match the dependency's actual compiled body bytes exactly — a mismatch is
+a hard failure (`LinkedArtifactMismatch`), never a silent fallback to
+recompilation or to treating the dependency as absent.
+
+---
+
+## 15. Future: GSI Artifact Class
 
 A **Gengoscript Snapshot Image** (`.gsi`) would contain all GBC content plus a serialised representation of live VM state at a checkpoint. The GSI format would reuse the GBC header with a different entry kind or a distinct magic sequence, and add sections for:
 
@@ -987,11 +1164,12 @@ Open questions that must be resolved before GSI is designed:
 
 ---
 
-## 15. Non-Goals for GBC v1
+## 16. Non-Goals for GBC v1
 
 - **Heap serialisation.** Live VM state is not part of GBC.
 - **Cross-compilation.** A `TARGET_WASM32_WASI` artifact is not loadable as `TARGET_NATIVE_X86_64`.
-- **Linking.** GBC files are not linkable in v1. Each artifact is self-contained.
+- **Multi-level linking.** §14 adds single-hop linking (an importer splicing in one precompiled leaf module); a linked module transitively linking *another* linked module is out of scope — enforced at write time, not just left undefined.
+- **Transparent/implicit linking.** §14.2: an import only resolves to a precompiled artifact when the specifier names one explicitly. No same-stem-sibling cache fallback.
 - **Streaming loading.** The body checksum must be verified before any section is parsed.
 - **Partial cache hits.** Failing any validation check invalidates the entire artifact.
 - **Automatic cache management.** The format specifies validation, not storage location or eviction policy.
@@ -1000,7 +1178,7 @@ Open questions that must be resolved before GSI is designed:
 
 ---
 
-## 16. Rationale Notes
+## 17. Rationale Notes
 
 **Why SHA-256 for identity hashes and xxHash64 for the body checksum?**
 SHA-256 for `source_graph_hash`, `vm_fingerprint`, `module_provider_hash`, and `options_hash` because these are cache keys that must be collision-resistant — a collision would silently accept a stale artifact. xxHash64 for the body checksum because its purpose is corruption detection, not adversarial resistance, and it is significantly faster to compute over large bodies.
@@ -1034,3 +1212,12 @@ Build modes are policy decisions for the compiler tool, not invariants that the 
 
 **Why not promise that appending a default-valued option preserves the old `options_hash`?**
 It is mathematically impossible: appending any bytes to the hash input changes the output. Attempting to preserve old hashes by conditionally omitting default-valued options produces subtle bugs when the "default" changes. The correct approach is to accept that adding an option changes the hash (triggering recompilation) and use the encoding version byte as an explicit migration mechanism if backward compatibility is needed.
+
+**Why is v2 linking explicit-only, not a transparent same-stem cache (§14.2)?**
+A transparent fallback ("if `math.gbc` exists next to `math.gengo` and isn't stale, use it") makes program behavior depend on filesystem state the source text never mentions — the same class of surprise a reviewer can't catch by reading the import line. It would also make §14.4's production requirements (no baked-in `halt`, a real `module_id`, no transitive linked deps) into implicit per-file conventions instead of something checked once at the point an artifact is deliberately produced as linkable. Explicit-only makes every link a visible, auditable decision in the source; a transparent-cache mode can be layered on top later once single-hop linking itself is proven, without revisiting this trust boundary.
+
+**Why does `module_id` live in `SEC_EXPORTS` rather than being derived from the importer's specifier?**
+The dependency's own compiled bytecode already has its qualified global names baked into string constants at its own compile time, before any importer's specifier for it exists. Renaming those post-hoc on load would mean rewriting deduplicated string-constant bytes throughout the spliced constant pool — a far more invasive and error-prone operation than the integer-index remap linking already needs (§14.5). Carrying the identity forward from the artifact itself sidesteps that entirely: an importer's `written_specifier` is local to the importer and never has to agree with anything baked into the dependency.
+
+**Why is `artifact_body_hash` mandatory for `LINKED_ARTIFACT` but only advisory for other dependency kinds?**
+A `FILE` dependency has a fallback: if the source hash doesn't match, recompile from the (still-available) source. A `LINKED_ARTIFACT` dependency has no source to fall back to at load time by construction — the whole point of linking is to skip having source available. So there is no safe "stale but recoverable" state for it: either the body matches exactly, or the artifact must be rejected outright.
