@@ -195,7 +195,7 @@ references is engine scratch storage; copy it before the next engine operation.
 
 ### Building values with `gengo-wire.h`
 
-`include/gengo-wire.h` has `static inline` builders and readers for every
+`sdk/c/include/gengo-wire.h` has `static inline` builders and readers for every
 `ValueWire` tag, including composite ones: `gengo_wire_array`/`gengo_wire_map`
 build array/map arguments or return values without hand-encoding the pointer
 and length convention from the layout table above, and

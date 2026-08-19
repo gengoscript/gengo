@@ -72,7 +72,7 @@ guest pointer and `len` is the byte length. For arrays, `payload` is a pointer
 to `len` consecutive `ValueWire` elements. For maps, `payload` is a pointer to
 `len * 2` consecutive `ValueWire` elements arranged as key-value pairs.
 
-C hosts should build and read these with `include/gengo-wire.h`'s
+C hosts should build and read these with `sdk/c/include/gengo-wire.h`'s
 `gengo_wire_array`/`gengo_wire_map` and `gengo_wire_array_at`/
 `gengo_wire_map_key_at`/`gengo_wire_map_value_at` rather than encoding the
 pointer/length convention by hand; see `engine-api.md`'s "Building values with

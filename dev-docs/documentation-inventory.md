@@ -9,7 +9,7 @@ guarantee. Source locations were inspected on main branch 0.5.1-dev.
 | Standard library | native descriptors and spec tests | `stdlib.md` | Implemented; entries are not yet uniformly templated. |
 | CLI and REPL | `src/main.zig` | `quickstart.md`, `cli.md` | Implemented. |
 | Zig embedding | `src/runtime/api.zig` | `embedding.md` | Implemented; examples need compile fixtures. |
-| C engine | `include/gengo-engine.h`, `src/engine.zig` | `engine-api.md` | Implemented; lifetime wording is incomplete. |
+| C engine | `sdk/c/include/gengo-engine.h`, `src/engine.zig` | `engine-api.md` | Implemented; lifetime wording is incomplete. |
 | Host ABI | `src/runtime/host_abi.zig` | `host-abi.md` | ABI v2; decimal scale is not encoded. |
 | WASM engine | `src/engine.zig` exports | `engine-api.md` | Implemented; browser/WASI distinctions need expansion. |
 | TypeScript SDK | `sdk/typescript/` tests and source | `typescript-sdk.md` | Supported source exists; public docs added as main-branch material. |

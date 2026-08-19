@@ -13,7 +13,7 @@ release tag. See `changelog.md` for released and pending changes.
 | Surface | Current main-branch status | Compatibility note |
 |---|---|---|
 | CLI (`gengo`) | Unreleased | Native CLI and WASI CLI are built from this checkout. |
-| Native engine library | Unreleased | C API is in `include/gengo-engine.h`; ABI version is 2. |
+| Native engine library | Unreleased | C API is in `sdk/c/include/gengo-engine.h`; ABI version is 2. |
 | WASM engine | Unreleased | `build/debug/gengo-engine.wasm`; browser hosts provide imports. |
 | TypeScript package | Unreleased | `@gengo/engine` version must match `build.zig`. |
 | Zig | 0.16.0 | Required by this checkout and CI. |

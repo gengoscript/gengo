@@ -5,9 +5,9 @@ CFLAGS ?= -O2 -Wall -Wextra -fPIC
 # (Debian/Ubuntu: apt install mosquitto-dev libmosquitto-dev)
 MOSQ_INC ?=
 
-gengo_acl.so: plugin.c $(GENGO_ROOT)/include/gengo-engine.h
+gengo_acl.so: plugin.c $(GENGO_ROOT)/sdk/c/include/gengo-engine.h
 	$(CC) $(CFLAGS) -shared \
-		-I$(GENGO_ROOT)/include $(if $(MOSQ_INC),-I$(MOSQ_INC),) \
+		-I$(GENGO_ROOT)/sdk/c/include $(if $(MOSQ_INC),-I$(MOSQ_INC),) \
 		plugin.c -o $@ \
 		-L$(GENGO_ROOT)/zig-out/lib -lgengo-engine \
 		-Wl,-rpath,$(abspath $(GENGO_ROOT)/zig-out/lib)

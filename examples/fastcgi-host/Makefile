@@ -2,8 +2,8 @@ GENGO_ROOT ?= ../..
 CC ?= cc
 CFLAGS ?= -O2 -Wall -Wextra -Werror
 
-fastcgi_host: main.c $(GENGO_ROOT)/include/gengo-engine.h $(GENGO_ROOT)/include/gengo-wire.h
-	$(CC) $(CFLAGS) -I$(GENGO_ROOT)/include main.c -o $@ \
+fastcgi_host: main.c $(GENGO_ROOT)/sdk/c/include/gengo-engine.h $(GENGO_ROOT)/sdk/c/include/gengo-wire.h
+	$(CC) $(CFLAGS) -I$(GENGO_ROOT)/sdk/c/include main.c -o $@ \
 		-L$(GENGO_ROOT)/zig-out/lib -lgengo-engine \
 		-Wl,-rpath,$(abspath $(GENGO_ROOT)/zig-out/lib)
 
