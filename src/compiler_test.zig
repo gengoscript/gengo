@@ -5307,13 +5307,18 @@ test "gbc: writer emits real SEC_EXPORTS data for a struct-typed export" {
 }
 
 test "gbc: --emit-gbc-module rejects a source that itself imports a .gbc" {
-    // .gbc-as-import-target resolution doesn't exist yet (Phase 4 of the
-    // linking plan) — resolveImportPath only ever probes .gengo/mod.gengo
-    // suffixes today, so this already fails, just via ImportNotFound rather
-    // than a dedicated diagnostic. Once Phase 4 lands .gbc import
-    // resolution, a module artifact importing another .gbc must still be
-    // rejected (gbc-spec.md §14.1's single-level bound) — this test's
-    // expected error will need updating then, not its intent.
+    // .gbc-as-import-target resolution landed in a97f6b2 (compileModuleFromPath
+    // dispatches any .gbc-suffixed specifier to linkGbcModule, gated by
+    // reject_linked_deps for gbc-spec.md §14.1's single-level bound — see
+    // "compileModuleRoot rejects a source that links a .gbc dependency"
+    // above, which exercises that rejection directly with a .table provider
+    // where the fake dependency "exists").
+    //
+    // This test still expects ImportNotFound, not ChainedGbcLinkingNotSupported,
+    // for an unrelated reason: it uses the real .filesystem provider and
+    // "./dep.gbc" has no backing fixture file, so resolveImportPath's
+    // sourceExists probe fails before compileModuleFromPath ever sees the
+    // path and gets a chance to reject the chain.
     const src =
         \\dep := import("./dep.gbc")
         \\pub func f() int {
