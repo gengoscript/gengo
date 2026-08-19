@@ -4682,6 +4682,85 @@ test "gbc: a func_t parameter round-trips through write+read and executes correc
     try std.testing.expectEqual(expected.int, actual.int);
 }
 
+// Generic function GBC support (2026-08-19): writeTypeSpec used to reject
+// any FieldTypeAlt tagged .type_param with error.UnsupportedFieldType — a
+// generic function's own declared parameter type (e.g. the "T" in
+// `func identity[T](x T) T`) is exactly that, and since every function
+// declaration emits a constant regardless of whether it's ever called
+// (known-limitations.md's old wording: "even if it is never called"),
+// --emit-gbc rejected any script merely declaring a generic function.
+// Fixed by erasing type_param to FT_ANY on the wire instead — matching
+// docs/language.md's own stated runtime semantics ("Type parameters are
+// erased at runtime, treated as any"), not inventing new behavior.
+// Constraint enforcement (checkTypeArgConstraints) is unaffected: it runs
+// at each call site's own compile time against the caller's concrete type
+// arguments, never by inspecting a callee's stored param_types.
+test "gbc: writer supports a generic function (type_param erased to any)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\func identity[T](x T) T { return x }
+    );
+    const bytes = try gbc_writer.write(rt.chunk_state, std.testing.allocator, .{ .root_source = "" });
+    std.testing.allocator.free(bytes);
+}
+
+// Covers: a simple single-type-param function, a two-type-param function
+// combined with a func_t (function-typed) argument (map_array — the
+// erased-any path composing with an already-supported FieldTypeAlt kind,
+// not just in isolation), and a constrained generic (T ordered) called
+// both with an explicit type argument and with inference — constraint
+// checking happening correctly proves erasure didn't silently disable it.
+// Goes through Runtime.compileOnly + runFromGbc (like the std.array.count
+// test below), not the bare compile()/manual gbc_reader.read()+vm.run()
+// pattern the struct/variant/enum/func_t tests above use: this source
+// needs `std := import("std")` for std.core.append, and compile()'s
+// Compiler.init(...) has no import resolution at all.
+test "gbc: generic functions round-trip through Runtime.compileOnly + runFromGbc and execute correctly" {
+    const src =
+        \\std := import("std")
+        \\func identity[T](x T) T { return x }
+        \\func map_array[T, U](xs []T, f func(T) U) []U {
+        \\    out := []
+        \\    for x in xs {
+        \\        out = std.core.append(out, f(x))
+        \\    }
+        \\    return out
+        \\}
+        \\func maxOf[T ordered](a T, b T) T {
+        \\    if a > b { return a }
+        \\    return b
+        \\}
+        \\func f() string {
+        \\    doubled := map_array([1, 2, 3], func(x int) int { return x * 2 })
+        \\    sum := 0
+        \\    for d in doubled { sum += d }
+        \\    return string(identity(42)) + ":" + string(identity("hi")) + ":" + string(sum) + ":" + string(maxOf[int](3, 7)) + ":" + string(maxOf(9, 2))
+        \\}
+    ;
+
+    var rt1 = try setup();
+    defer rt1.deinit();
+    try runSrc(&rt1, src);
+    const expected = try rt1.callGlobal("f", &.{});
+
+    var rt2 = try setup();
+    defer rt2.deinit();
+    try rt2.compileOnly(src, "", .filesystem);
+    const bytes = try gbc_writer.write(rt2.chunk_state, std.testing.allocator, .{ .root_source = src });
+    defer std.testing.allocator.free(bytes);
+
+    var rt3 = try setup();
+    defer rt3.deinit();
+    try rt3.runFromGbc(bytes);
+
+    const ctx: vm.VMContext = .{ .cs = rt3.chunk_state, .gs = &rt3.globals_state, .hs = &rt3.heap_state, .vs = &rt3.vm_state };
+    const actual = try vm.callGlobal(ctx, "f", &.{});
+
+    try std.testing.expectEqualStrings(try vms.asStringValue(expected), try vms.asStringValue(actual));
+    try std.testing.expectEqualStrings("42:hi:12:7:9", try vms.asStringValue(actual));
+}
+
 // Exercises the full Runtime.compileOnly -> gbc_writer.write ->
 // Runtime.runFromGbc path (not the lower-level compile()/gbc_reader.read()
 // helper the other gbc tests use), since compileStdScripts — and the two

@@ -4,6 +4,40 @@ This changelog tracks notable language/runtime changes by implementation date.
 
 ## 2026-08-19
 
+### GBC — generic function support via type-parameter erasure (#5)
+
+`writeTypeSpec` used to reject any `FieldTypeAlt` tagged `.type_param`
+with `error.UnsupportedFieldType` — a generic function's own declared
+parameter type (the `T` in `func identity[T](x T) T`) is exactly that,
+and since every function declaration emits a constant regardless of
+whether it's ever called, `--emit-gbc` rejected any script merely
+*declaring* a generic function, whether called or not.
+
+Fixed by erasing `type_param` to `FT_ANY` on the wire instead of
+rejecting it — matching `docs/language.md`'s own stated runtime
+semantics ("Type parameters are erased at runtime, treated as any"),
+not inventing new behavior: a generic function's body already treats a
+`type_param`-typed value as `any` at every use once compiled, so a
+loaded function doing the same is the existing behavior made explicit
+on the wire, not a weaker one. Constraint enforcement
+(`checkTypeArgConstraints`) is unaffected — it runs at each call site's
+own compile time against the *caller's* concrete type arguments, never
+by inspecting a callee's stored `param_types`, whether that callee came
+from source or a loaded `.gbc`. Verified with a constrained generic
+(`func maxOf[T ordered](a T, b T) T`) called both with an explicit type
+argument and with inference, alongside a two-type-param function
+combined with a `func_t` argument (`map_array`) — not just the trivial
+single-param case — producing byte-identical output to running the
+source directly, both before and after this change.
+
+`enums`, `task types`, and now `generic functions` are removed from
+`known-limitations.md`'s Tooling table entirely — the three type/
+signature kinds implemented across today's three GBC entries. Remaining
+unsupported: in-body predicates with real captures and closures with
+real captures — the two genuinely hard cases left, since they need to
+represent capture semantics in the wire format, not just another
+type-descriptor or erasure case.
+
 ### GBC — task/actor type support, plus a real scheduler bug found along the way (#5)
 
 `TYPE_KIND_TASK` (wire value `0x06` — no gap was reserved for it, since

@@ -90,11 +90,11 @@ pub const VARIANT_ARM_NONE: u8 = 0x00;
 pub const VARIANT_ARM_SINGLE_PAYLOAD: u8 = 0x01;
 pub const VARIANT_ARM_RECORD: u8 = 0x02;
 
-// FieldTypeTag wire values, matching gbc-spec.md §9.2. type_param
-// (generics-only, unresolved by the time a chunk is compiled and fused) is
-// rejected with error.UnsupportedFieldType rather than silently mis-encoded;
-// every other tag, including func_t, is supported (see writeTypeSpec's doc
-// comment).
+// FieldTypeTag wire values, matching gbc-spec.md §9.2. Every tag is
+// supported, including func_t and type_param — the latter (generics-only,
+// unresolved by the time a chunk is compiled and fused) erases to FT_ANY
+// rather than being rejected, matching the runtime's own type-erasure
+// semantics (see writeTypeSpec's doc comment).
 pub const FT_ANY: u8 = 0x00;
 pub const FT_NULL_T: u8 = 0x01;
 pub const FT_INT: u8 = 0x02;
@@ -336,9 +336,9 @@ const MaxTypeSpecDepth: u32 = 64;
 // emission failed for every program, not just ones using function-typed
 // values directly — found via a plain struct-field-access benchmark that
 // doesn't touch func_t at all, tracing back to array.gengo's `count`.
-// Rejects only type_param (generics-only, unresolved by the time a chunk is
-// compiled and fused) with UnsupportedFieldType rather than silently
-// mis-encoding it.
+// type_param (generics-only, unresolved by the time a chunk is compiled and
+// fused) erases to FT_ANY rather than being rejected — see its own case
+// below for why that's not a silent mis-encoding.
 fn writeTypeSpec(w: *ByteWriter, spec: value_mod.FieldTypeSpec) WriteError!void {
     return writeTypeSpecDepth(w, spec, 0);
 }
@@ -397,7 +397,21 @@ fn writeTypeSpecDepth(w: *ByteWriter, spec: value_mod.FieldTypeSpec, depth: u32)
                 try w.u16_(@intCast(returns.len));
                 for (returns) |r| try writeTypeSpecDepth(w, r, depth + 1);
             },
-            .type_param => return error.UnsupportedFieldType,
+            // Erase to FT_ANY, matching runtime semantics exactly (docs/
+            // language.md: "Type parameters are erased at runtime (treated
+            // as any)") — a generic function's own body already treats a
+            // type_param-typed value as any at every use, so a loaded
+            // function doing the same is not a new, weaker behavior, it's
+            // the existing one made explicit on the wire. Constraint
+            // enforcement (checkTypeArgConstraints) is unaffected: it runs
+            // at each CALL SITE's own compile time against the caller's
+            // concrete type arguments, never by inspecting a callee's
+            // stored param_types — whether the callee came from source or
+            // a loaded .gbc doesn't change that. name_param (the erased
+            // parameter's name, e.g. "T") is deliberately not preserved:
+            // nothing at runtime reads it back, and the only compile-time
+            // consumer (constraint checking) never touches it either.
+            .type_param => try w.u8_(FT_ANY),
         }
     }
 }

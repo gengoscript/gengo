@@ -1,10 +1,53 @@
 # Gengoscript Bytecode Cache — File Format Specification
 
 **Status:** Draft\
-**Version:** 0.11\
+**Version:** 0.14\
 **Scope:** GBC artifact only (see §2 for artifact class definitions)
 
 **Revision history**
+- 0.14 — `type_param` `FieldTypeAlt` entries (§9.2) now erase to `FT_ANY`
+  on the wire instead of being rejected with `error.UnsupportedFieldType`
+  — matching the runtime's own type-erasure semantics (a generic
+  function's declared parameter is already treated as `any` at every use
+  once compiled; representing that on the wire isn't a new, weaker
+  behavior). Unblocks `--emit-gbc` for any script declaring a generic
+  function, previously rejected outright even when never called (every
+  function declaration emits a constant regardless of calls). Constraint
+  enforcement is unaffected — `checkTypeArgConstraints` runs at each call
+  site's own compile time against the caller's concrete type arguments,
+  never by inspecting a callee's stored `param_types`. The erased
+  parameter's name (e.g. `"T"`) is not preserved: nothing at runtime
+  reads it, and the one compile-time consumer (constraint checking)
+  never touches it either. Found and fixed while extending GBC support
+  past enums/tasks (#5) toward the last few remaining unsupported
+  constant kinds.
+- 0.13 — Add a `TASK` `TypeEntry` kind (§8.6, `0x06` — no gap had been
+  reserved for it, since task/actor shipped after the initial GBC spec
+  pass) registering the task's behavior `FuncObj` through the same
+  `SEC_FUNCTIONS` indirection a `NAMED` type's predicate uses, but never
+  closure-wrapped: task bodies cannot capture outer locals at all
+  (task-actor-design.md §3.3), so there are never any upvalues to carry.
+  Found and fixed a real, separate runtime bug while adding this:
+  `Runtime.runFromGbc` had no task scheduler loop at all — it predates
+  task/actor integration and called the VM once, directly. A task
+  spawned from a GBC-loaded program would enqueue but never run; the
+  spawning script's own `receive()` would block forever, and the whole
+  run would silently return success having executed none of the spawned
+  task's body. This was a gap in the loader's *execution* path, not the
+  wire format — nothing here changed as a result, but it's recorded
+  because it was found and fixed alongside this artifact-class's own
+  work and blocked verifying it end-to-end.
+- 0.12 — Implement the `ENUM` `TypeEntry` kind (§8.6, `0x03`, reserved
+  since the format's early drafts). Also fixed a real gap this section
+  had never accounted for: explicit enum representation values
+  (`type Status enum { pending = 10, active = 20, done = 30 }`) — the
+  spec previously listed only `members`/`parent_name`, so a loader had
+  no choice but to fall back to ordinal position, silently producing the
+  wrong `.int` for any enum whose values diverge from ordinals. Added
+  `has_member_ints`/`member_ints` following the same present-flag
+  convention `NAMED`'s own optional fields already use. Verified by
+  round-tripping exactly that divergent-values case before trusting the
+  field list, not assumed correct because it looked complete.
 - 0.11 — §14 is now implemented in the reference engine, not just spec'd:
   `--emit-gbc-module` (writer side, `Runtime.compileModuleOnly` /
   `module_compile.Session.compileModuleRoot`) and `import("./x.gbc")`
