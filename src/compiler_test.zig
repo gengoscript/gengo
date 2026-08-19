@@ -5452,6 +5452,130 @@ test "cap:net dial: explicit allow rule lets dial reach the real connect attempt
     }
 }
 
+// Task/actor coverage gap audit (2026-08-19): dev-docs/design/task-actor-design.md
+// documents several safety-boundary behaviors (isSendable's closure rejection,
+// §9's "a spawned task's panic kills only that task") that had zero test
+// coverage anywhere — neither tests/spec/338_task_actor_basic.gengo nor
+// 339_task_actor_complex.gengo exercise a failure path, only the happy path.
+// The four tests below were each verified against the actual CLI binary
+// before being written down, not just reasoned about from reading vm_task.zig.
+
+// vm_task.zig's isSendable is a closed allowlist that explicitly rejects
+// .function/.closure (shared upvalue cells would break task isolation).
+// This is a recoverable runtime panic (error.NotSendable via `try`), not a
+// catchable std.core.error value — matches the general panic/recover model,
+// not the is_error() model cap:net's policy refusals use.
+// receive()/self() are legal only lexically inside a task's own body or
+// top-level main (compiler_expr.zig:1191) — never inside an ordinary named
+// func — so these all keep the spawn/send/receive sequence at top level,
+// same as tests/spec/338/339 do, rather than wrapping it in a callable
+// function.
+test "task: sending a closure across a task boundary raises NotSendable, not a crash" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.NotSendable, runSrc(&rt,
+        \\func makeAdder(n int) func(int) int {
+        \\    return func(x int) int { return x + n }
+        \\}
+        \\type Echo task func(reply actor) {
+        \\    msg := receive()
+        \\    reply.send(msg)
+        \\}
+        \\e := Echo(self())
+        \\f := makeAdder(5)
+        \\e.send(f)
+        \\result := receive()
+    ));
+}
+
+// Same check, but at the spawn-argument crossing point (vm.zig:1262's
+// checkSendableAndClone loop over spawn args) rather than send()'s.
+test "task: a closure as a spawn argument raises NotSendable, not a crash" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.NotSendable, runSrc(&rt,
+        \\func makeAdder(n int) func(int) int {
+        \\    return func(x int) int { return x + n }
+        \\}
+        \\type Holder task func(f func(int) int) {
+        \\    _ = f(1)
+        \\}
+        \\_ = Holder(makeAdder(5))
+    ));
+}
+
+// §9: "a spawned task's unrecovered panic ... kills only that task" —
+// runtime.zig's scheduler loop marks the panicking slot .dead and moves on.
+// Proven here by having a doomed task panic before it can reply, alongside
+// a working one that does reply — main's receive() must resolve to the
+// working reply, proving the doomed task's death didn't take anything else
+// down with it (not the scheduler, not the other task, not main). The
+// result is stashed in a global (rather than returned from a wrapper func,
+// which receive() can't be called inside) and read back afterward.
+test "task: a spawned task's panic kills only that task, not the scheduler or other tasks" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\var got = 0
+        \\type Doomed task func(reply actor) {
+        \\    x := 1
+        \\    y := 0
+        \\    _ = x / y
+        \\    reply.send(42)
+        \\}
+        \\type Fine task func(reply actor) {
+        \\    reply.send(7)
+        \\}
+        \\_ = Doomed(self())
+        \\_ = Fine(self())
+        \\got = receive()
+        \\func getGot() int { return got }
+    );
+    const result = try rt.callGlobal("getGot", &.{});
+    try std.testing.expectEqual(@as(i64, 7), result.int);
+}
+
+// The flip side of the above, and the sharpest edge in the whole feature:
+// there is no death notification (monitor() was cut from v0 — see
+// vm_task.zig's header). If a task's ONLY potential replier panics before
+// replying, that task's receive() blocks forever — and since the scheduler
+// declares the run .completed as soon as nothing is left in the ready
+// queue (runtime.zig ~line 686), the *entire program* silently stops
+// running additional top-level code and exits successfully, without error,
+// without hanging, and without ever resuming past the blocked receive().
+// This is a deliberate consequence of the "no death notification" design,
+// not a bug — but it had zero test coverage, so a future change to the
+// scheduler could silently flip this to "hang forever" or "propagate an
+// error" without any test noticing either way.
+//
+// A sharper discovery made while writing this test: top-level function
+// declarations register as globals via ordinary sequential execution too
+// (make_closure + def_global bytecode at the declaration site), not
+// compile-time hoisting independent of control flow — a func declared
+// textually AFTER the permanently-blocked line never becomes callable at
+// all (error.NotDefined), not just unreached. getWasReached is therefore
+// declared BEFORE the blocking receive(), so it's already registered by
+// the time the scheduler gives up and the run "completes".
+test "task: main permanently blocks (silently) if its sole replier panics before replying" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\var reached = false
+        \\func wasReached() bool { return reached }
+        \\type Doomed task func(reply actor) {
+        \\    x := 1
+        \\    y := 0
+        \\    _ = x / y
+        \\    reply.send(42)
+        \\}
+        \\_ = Doomed(self())
+        \\result := receive()
+        \\reached = true
+    );
+    const reached = try rt.callGlobal("wasReached", &.{});
+    try std.testing.expectEqual(false, reached.boolean);
+}
+
 fn netListenClientWorker(port: u16, connected: *std.atomic.Value(bool), echoed: *std.atomic.Value(bool)) void {
     const sock = std.posix.system.socket(std.posix.AF.INET, std.posix.SOCK.STREAM, 0);
     if (std.posix.errno(sock) != .SUCCESS) return;
