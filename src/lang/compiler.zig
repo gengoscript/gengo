@@ -6,7 +6,7 @@ const lexer_mod = @import("lexer.zig");
 const op_mod = @import("op.zig");
 const token = @import("token.zig");
 const value_mod = @import("value.zig");
-const vm_types = @import("vm_types.zig");
+const type_shapes = @import("type_shapes.zig");
 const ct = @import("compiler_types.zig");
 const compiler_decls = @import("compiler_decls.zig");
 const compiler_stmts = @import("compiler_stmts.zig");
@@ -163,7 +163,7 @@ pub const Compiler = struct {
     inferred_named_global_names: [MaxLocals][]const u8 = undefined,
     inferred_named_global_types: [MaxLocals][]const u8 = undefined,
     inferred_named_global_count: u8 = 0,
-    // Same idea, for :=-inferred struct-typed globals (#210: needed so a
+    // Same idea for :=-inferred struct-typed globals: needed so a
     // dunder method declared on the struct is reachable from a top-level
     // `a := Vec3{...}` read, not only from an explicitly `var a Vec3`-typed
     // one). Structs have no prolog/epilog mechanism at all, so there's no
@@ -957,9 +957,11 @@ pub const Compiler = struct {
     // True when the compiler can prove, purely from its own compile-time
     // registries, that struct_qname's method set satisfies iface_name — same
     // check matchesInterfaceType does at runtime (vm_types.zig), reused
-    // directly rather than duplicated: both sides key methods the same way
-    // ("Struct.method" as a global), so a struct compiled and registered so
-    // far already has every method matchesInterfaceType would find. Returns
+    // directly via type_shapes.zig (not vm_types.zig itself — that file pulls
+    // in vm.zig, which the compiler must not depend on) rather than
+    // duplicated: both sides key methods the same way ("Struct.method" as a
+    // global), so a struct compiled and registered so far already has every
+    // method matchesInterfaceType would find. Returns
     // false (not just "doesn't conform" but also "can't prove it does") on
     // any missing piece — a forward-declared method, a method defined after
     // this call site, cross-module structs — so callers must treat false as
@@ -978,7 +980,7 @@ pub const Compiler = struct {
             const key = key_buf[0..total];
             const fo = self.registry.getGlobalFuncObj(key) orelse return false;
             if (fo.* != .function) return false;
-            if (!vm_types.interfaceMethodMatches(m, fo.function)) return false;
+            if (!type_shapes.interfaceMethodMatches(m, fo.function)) return false;
         }
         return true;
     }
@@ -1120,7 +1122,7 @@ pub const Compiler = struct {
         };
     }
 
-    // ── #210: limited operator overloading via reserved dunder methods ────
+    // ── Limited operator overloading via reserved dunder methods ───────────
     //
     // A struct-based (or non-conflicting-base named) type may declare
     // __add__/__sub__/__mul__/__div__/__rem__/__neg__/__eq__/__compare__ as
@@ -1177,7 +1179,7 @@ pub const Compiler = struct {
 
     // True when `base` already has a real, correctly-working implementation
     // of `op` today — declaring the matching dunder is then a compile error
-    // (see issue #210's per-operator conflict table; verified against the
+    // (verified against the
     // actual VM behavior, not assumed from what "should" work). Struct
     // receivers have no NamedTypeBase and never reach this function.
     pub fn baseHasBuiltinOperator(base: NamedTypeBase, op: DunderOp) bool {
