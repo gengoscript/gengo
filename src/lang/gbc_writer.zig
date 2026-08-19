@@ -75,6 +75,11 @@ pub const TYPE_KIND_NAMED: u8 = 0x02;
 pub const TYPE_KIND_ENUM: u8 = 0x03;
 pub const TYPE_KIND_INTERFACE: u8 = 0x04;
 pub const TYPE_KIND_VARIANT: u8 = 0x05;
+// TASK didn't exist when gbc-spec.md §8.6's TYPES kinds were first
+// numbered (task/actor shipped after the initial GBC spec pass) — no gap
+// was reserved for it, so it takes the next free value rather than one
+// left open on purpose.
+pub const TYPE_KIND_TASK: u8 = 0x06;
 
 // Variant arm shapes (wire-only discriminant; derived from the in-memory
 // VariantArmSpec's has_payload/fields combination rather than stored on it
@@ -397,7 +402,7 @@ fn writeTypeSpecDepth(w: *ByteWriter, spec: value_mod.FieldTypeSpec, depth: u32)
     }
 }
 
-const TypeEntryKind = enum { struct_t, named_t, variant_t, interface_t, enum_t };
+const TypeEntryKind = enum { struct_t, named_t, variant_t, interface_t, enum_t, task_t };
 
 const TypeEntryInfo = struct {
     kind: TypeEntryKind,
@@ -412,6 +417,13 @@ const TypeEntryInfo = struct {
     // FuncObj, resolved the same way a FUNC_REF constant is (see write()'s
     // .named_type case) — null if the named type has no predicate.
     predicate_func_idx: ?u32 = null,
+    // task_t only: index into SEC_FUNCTIONS for the task's behavior FuncObj
+    // (always present, unlike predicate_func_idx — every task type has a
+    // body). Never closure-wrapped: task bodies cannot capture outer
+    // locals at all (design doc §3.3, part of the isolation guarantee), so
+    // taskDeclBody's compiled behavior is always a plain FuncObj, same as
+    // any other captureless function constant.
+    task_behavior_func_idx: ?u32 = null,
 };
 
 fn writeInterfaceMethod(w: *ByteWriter, m: value_mod.InterfaceMethodSpec) WriteError!void {
@@ -554,6 +566,12 @@ fn writeTypesSection(w: *ByteWriter, types: []const TypeEntryInfo) WriteError!vo
                 // parent_name already uses (enum subtypes — a separate
                 // feature from named-type subtypes, same wire shape).
                 try w.str_(et.parent_name orelse "");
+            },
+            .task_t => {
+                try w.u8_(TYPE_KIND_TASK);
+                try w.str_(te.name);
+                try w.str_(te.qualified_name);
+                try w.u32_(te.task_behavior_func_idx.?);
             },
         }
     }
@@ -810,6 +828,30 @@ pub fn write(cs: *chunk.State, alloc: std.mem.Allocator, opts: WriteOptions) Wri
                             .name = et.name,
                             .qualified_name = et.qualified_name,
                             .et = et,
+                        });
+                        try consts_w.u8_(CONST_TYPE_REF);
+                        try consts_w.u32_(@intCast(types.items.len - 1));
+                    },
+                    .task_type => |*tt| {
+                        // behavior is always a bare FuncObj, never
+                        // closure-wrapped — task bodies cannot capture
+                        // outer locals (design doc §3.3), so there are
+                        // never any upvalues to reject here, unlike
+                        // named_type's predicate case above. Still an
+                        // explicit switch + fail-loud else, not a direct
+                        // .function access relying on the union tag always
+                        // matching: same defensive shape the predicate
+                        // case above uses for the identical situation.
+                        const bf: *const value_mod.FuncObj = switch (tt.behavior.*) {
+                            .function => |*ff| ff,
+                            else => return error.UnsupportedConstant,
+                        };
+                        const bidx = try registerFunc(&funcs, alloc, defused_code, bf, tt.name);
+                        try types.append(alloc, .{
+                            .kind = .task_t,
+                            .name = tt.name,
+                            .qualified_name = tt.qualified_name,
+                            .task_behavior_func_idx = bidx,
                         });
                         try consts_w.u8_(CONST_TYPE_REF);
                         try consts_w.u32_(@intCast(types.items.len - 1));

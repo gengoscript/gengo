@@ -180,6 +180,7 @@ fn findSection(sections: []const SectionEntry, id: u32) ?SectionEntry {
 const FuncNamePatchTarget = union(enum) {
     direct_const: u16, // cs.consts[idx] IS the FuncObj (a plain CONST_FUNC_REF)
     predicate_const: u16, // cs.consts[idx] is the named_type; the FuncObj is .named_type.predicate.?.closure.func
+    task_behavior_const: u16, // cs.consts[idx] is the task_type; the FuncObj is .task_type.behavior directly (never closure-wrapped — see write()'s .task_type case)
 };
 
 // Builds the .function-tagged heap object a SEC_FUNCTIONS entry describes —
@@ -422,6 +423,10 @@ const RawTypeEntry = struct {
     member_ints: ?[]i64 = null,
     // parent_name is shared with NAMED above — same field, same "" == no
     // parent convention.
+    // TASK — resolved to a real FuncObj in the CONST_TYPE_REF pass below,
+    // same deferred-until-raw_funcs-is-in-scope reasoning as NAMED's
+    // predicate_func_idx.
+    task_behavior_func_idx: u32 = 0,
 };
 
 fn readTypesSection(r: *ByteReader, cs: *chunk.State, hs: *heap.State, alloc: std.mem.Allocator) ReadError![]RawTypeEntry {
@@ -529,6 +534,10 @@ fn readTypesSection(r: *ByteReader, cs: *chunk.State, hs: *heap.State, alloc: st
                 }
                 const parent_name = try copyStr(hs, try r.str_());
                 out[i] = .{ .kind = kind, .name = name, .qualified_name = qualified_name, .members = members, .member_ints = member_ints, .parent_name = parent_name };
+            },
+            gbc_writer.TYPE_KIND_TASK => {
+                const behavior_idx = try r.u32_();
+                out[i] = .{ .kind = kind, .name = name, .qualified_name = qualified_name, .task_behavior_func_idx = behavior_idx };
             },
             else => return error.MalformedSection,
         }
@@ -902,7 +911,7 @@ fn loadSections(bytes: []const u8, cs: *chunk.State, hs: *heap.State, alloc: std
         // Set inside CONST_FUNC_REF/a named type's predicate below, consumed
         // right after this constant's addConst() call returns its final,
         // stable index — see FuncNamePatchTarget's doc comment.
-        var pending_patch: ?struct { fidx: u32, kind: enum { direct, predicate } } = null;
+        var pending_patch: ?struct { fidx: u32, kind: enum { direct, predicate, task_behavior } } = null;
         const v: Value = switch (tag) {
             gbc_writer.CONST_NUMBER => Value{ .float = try cr.f64_() },
             gbc_writer.CONST_INT => Value{ .int = try cr.i64_() },
@@ -1016,6 +1025,24 @@ fn loadSections(bytes: []const u8, cs: *chunk.State, hs: *heap.State, alloc: std
                             },
                         };
                     },
+                    gbc_writer.TYPE_KIND_TASK => {
+                        // behavior: resolve task_behavior_func_idx through
+                        // the same SEC_FUNCTIONS machinery CONST_FUNC_REF
+                        // and a predicate use — but never closure-wrapped
+                        // (unlike the predicate case above), matching
+                        // write()'s .task_type case: task bodies can't
+                        // capture outer locals at all, so there are never
+                        // any upvalues to carry.
+                        const bidx = rt.task_behavior_func_idx;
+                        if (bidx >= raw_funcs.len) return error.FuncRefOutOfRange;
+                        const bfobj = try buildFuncObjFromRaw(hs, raw_funcs[bidx], code_base);
+                        pending_patch = .{ .fidx = bidx, .kind = .task_behavior };
+                        obj.* = .{ .task_type = .{
+                            .name = rt.name,
+                            .qualified_name = rt.qualified_name,
+                            .behavior = bfobj,
+                        } };
+                    },
                     else => return error.MalformedSection,
                 }
                 break :blk Value{ .object = obj };
@@ -1026,6 +1053,7 @@ fn loadSections(bytes: []const u8, cs: *chunk.State, hs: *heap.State, alloc: std
         if (pending_patch) |pp| func_patch[pp.fidx] = switch (pp.kind) {
             .direct => .{ .direct_const = stored_idx },
             .predicate => .{ .predicate_const = stored_idx },
+            .task_behavior => .{ .task_behavior_const = stored_idx },
         };
     }
 
@@ -1068,6 +1096,11 @@ fn loadSections(bytes: []const u8, cs: *chunk.State, hs: *heap.State, alloc: std
                 const pred = cv.object.named_type.predicate orelse continue;
                 if (pred.* != .closure) continue;
                 break :blk pred.closure.func;
+            },
+            .task_behavior_const => |idx| blk: {
+                const cv = cs.consts[idx];
+                if (cv != .object or cv.object.* != .task_type) continue;
+                break :blk cv.object.task_type.behavior;
             },
         };
         fobj.function.name = nv.string.bytes;

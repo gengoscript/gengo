@@ -979,11 +979,17 @@ disturb. Written to be checked against, not to schedule work.
   "justify new opcodes with cycle counts" rule is about fusion, and
   fusing anything task-related is explicitly out of scope until profiles
   exist.)
-- **GBC**: the task-type const needs a serialization form when GBC lands
-  (#5). Nothing about tasks changes wire-stability of existing core ops.
-  Defuse/differential testing keeps working because scheduling is
-  deterministic (§2) — a differential run with tasks compares identical
-  interleavings by construction.
+- **GBC**: implemented 2026-08-19 (#5) — `TYPE_KIND_TASK` (`0x06`)
+  registers the behavior FuncObj through the same mechanism a named
+  type's predicate uses, never closure-wrapped (task bodies can't
+  capture outer locals, §3.3). Also surfaced and fixed a real,
+  independent bug while implementing this: `Runtime.runFromGbc` had no
+  task scheduler loop at all (predated task/actor integration
+  entirely) — a task spawned from a GBC-loaded program would enqueue
+  but never run, silently. Nothing about tasks changes wire-stability
+  of existing core ops. Defuse/differential testing keeps working
+  because scheduling is deterministic (§2) — a differential run with
+  tasks compares identical interleavings by construction.
 - **Task table**: fixed-size (power-of-two per the engine-audit sizing
   constraint), slots = {generation, state, vm_state ptr/slot, mailbox,
   monitor list, message-type tag}. On wasm32 the vm_state backing is a

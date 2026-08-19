@@ -4,6 +4,41 @@ This changelog tracks notable language/runtime changes by implementation date.
 
 ## 2026-08-19
 
+### GBC — task/actor type support, plus a real scheduler bug found along the way (#5)
+
+`TYPE_KIND_TASK` (wire value `0x06` — no gap was reserved for it, since
+task/actor shipped after the initial GBC spec pass) implemented following
+`enum_t`'s pattern from earlier the same day: the task's `behavior`
+FuncObj registers through the same `SEC_FUNCTIONS`/`FuncNamePatchTarget`
+machinery a named type's predicate uses, except never closure-wrapped —
+task bodies can't capture outer locals at all (design doc §3.3), so
+there are never any upvalues to carry, unlike a predicate.
+
+Writing an actual round-trip test for a spawning task (not just a
+data-fidelity check) surfaced a real, separate bug: `Runtime.runFromGbc`
+called `vm.runUntilSuspend` once, directly, with no task scheduler
+loop at all — it predates task/actor integration entirely.
+`runPathWithProvider` (the source-compiling entry point) gained the
+scheduler loop when tasks shipped; `runFromGbc` never did. A task
+spawned from a GBC-loaded program would enqueue but never get a turn:
+the spawning script's own `receive()` would block forever, and since
+nothing drove the scheduler to notice, the whole run silently returned
+success having executed none of the spawned task's body — no crash, no
+error, no output. Confirmed via the actual CLI (`--emit-gbc` then
+running the artifact) before writing the regression test: a minimal
+spawn-and-reply script produced zero output through GBC while working
+correctly compiled normally. Fixed by extracting the scheduler loop
+into `Runtime.driveTaskScheduler`, shared by both entry points instead
+of one silently lacking it — this was a real correctness gap in
+`runFromGbc` independent of the new TYPE_KIND_TASK work, not something
+task_type's own serialization caused.
+
+`enums`/`task types` removed from the `--emit-gbc`/`--emit-gbc-module`
+"unsupported feature" error message and `known-limitations.md`'s
+Tooling table (across both today's entries). Generic functions,
+in-body predicates with real captures, and closures with real captures
+remain unsupported.
+
 ### GBC — enum type support (#5)
 
 `TYPE_KIND_ENUM` (wire value `0x03`) was reserved in `gbc-spec.md` §8.6

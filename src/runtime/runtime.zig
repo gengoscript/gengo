@@ -605,71 +605,58 @@ pub const Runtime = struct {
         try vmnative.installStdGlobal(install_ctx, &self.globals_state);
         try vmnative.installHostModules(install_ctx, &self.globals_state, self.host_modules);
         try vmnative.installCapabilityModules(install_ctx, &self.globals_state, self.capabilityModules());
-        const outcome = vm.runUntilSuspend(install_ctx) catch |err| {
-            self.captureRuntimeError();
-            return err;
-        };
+        // Bug found while adding GBC task-type support (2026-08-19): this
+        // used to call vm.runUntilSuspend(install_ctx) directly, a single
+        // one-shot run with no task scheduler at all — predates task/actor
+        // integration entirely (runPathWithProvider below gained the
+        // scheduler loop when tasks shipped; this entry point never did).
+        // A task spawned from a GBC-loaded program would enqueue, but
+        // nothing ever gave it a turn: main's own receive() would block
+        // forever, and since nothing drove the scheduler to notice, the
+        // whole run just silently returned success having executed none
+        // of the spawned task's body — found by writing a GBC round-trip
+        // test for a spawning task and getting no output at all, not even
+        // a crash. driveTaskScheduler is the same loop
+        // runPathWithProvider uses, extracted so both entry points share
+        // it instead of one silently lacking it.
+        const outcome = try self.driveTaskScheduler();
         if (outcome == .suspended) return error.ExecutionSuspended;
     }
 
-    pub fn runPathWithProvider(self: *Runtime, src: []const u8, path: []const u8, provider: module_compile.SourceProvider, test_mode: bool) !vm.RunOutcome {
-        if (self.vm_state.sleep_deadline_ns != null) return error.RuntimeSuspended;
-        if (src.len > cfg.max_input_bytes) {
-            self.vm_state.setRuntimeErr("input exceeds max_input_bytes ({d})", .{cfg.max_input_bytes});
-            const emsg = self.vm_state.runtimeErrMsg();
-            self.last_runtime_msg_len = @intCast(emsg.len);
-            @memcpy(self.last_runtime_msg_buf[0..emsg.len], emsg);
-            return error.InputTooLong;
-        }
-        defer self.assertNoTempRootLeaks("Runtime.runPathWithProvider");
-        self.last_compile_line = 0;
-        self.last_compile_path_len = 0;
-        self.last_compile_col = 0;
-        self.last_compile_msg_len = 0;
-        self.last_runtime_line = 0;
-        self.last_runtime_col = 0;
-        self.last_runtime_path_len = 0;
-        self.last_runtime_msg_len = 0;
-        self.panic_depth = 0;
-        self.test_count = 0;
-        self.test_failed = false;
-        self.reset();
-        self.vm_state.setPolicy(self.policy);
-        try self.compileProgram(src, path, provider, test_mode);
-
-        const install_ctx: vms.VMContext = .{ .cs = self.chunk_state, .gs = &self.globals_state, .hs = &self.heap_state, .vs = &self.vm_state };
-        try vmnative.installStdGlobal(install_ctx, &self.globals_state);
-        try vmnative.installHostModules(install_ctx, &self.globals_state, self.host_modules);
-        try vmnative.installCapabilityModules(install_ctx, &self.globals_state, self.capabilityModules());
-
-        // Task/actor scheduling loop (dev-docs/design/task-actor-design.md
-        // §4.2/§9). Main is registered as an ordinary task (slot 1, its
-        // vm_state is self.vm_state — reused, not allocated) so
-        // self()/receive() work at top level; every other slot is a
-        // spawned task with its own vm_state. Cooperative, run-until-
-        // yield: a task keeps the "current" slot until it blocks in
-        // receive() (task_yielded), finishes or panics (completed / a
-        // propagated error), or genuinely suspends (sleep/IO —
-        // .suspended). "Pick the next task" is always popReady() — main
-        // re-enters the ready queue the same way any other task does (a
-        // send() to its mailbox while it's blocked), so there is no
-        // special-cased "return to main."
-        //
-        // No death notification (monitor()/§6 was cut on audit — see
-        // vm_task.zig's header): a dead task's slot is simply marked
-        // .dead so it can be recycled by a future spawn; nothing needs
-        // to know why it died beyond what already reached the caller
-        // for main's own case (captureRuntimeError, unchanged).
-        //
-        // v0 scope note: a spawned (non-main) task's own sleep/IO
-        // suspends the whole run exactly like main's would — there is no
-        // per-task sleep scheduling yet ("other tasks keep running while
-        // one sleeps" is deferred, see the design doc's §11 open
-        // questions). Only receive()-blocking is handled by running
-        // something else in the meantime.
+    // Task/actor scheduling loop (dev-docs/design/task-actor-design.md
+    // §4.2/§9). Main is registered as an ordinary task (slot 1, its
+    // vm_state is self.vm_state — reused, not allocated) so
+    // self()/receive() work at top level; every other slot is a
+    // spawned task with its own vm_state. Cooperative, run-until-
+    // yield: a task keeps the "current" slot until it blocks in
+    // receive() (task_yielded), finishes or panics (completed / a
+    // propagated error), or genuinely suspends (sleep/IO —
+    // .suspended). "Pick the next task" is always popReady() — main
+    // re-enters the ready queue the same way any other task does (a
+    // send() to its mailbox while it's blocked), so there is no
+    // special-cased "return to main."
+    //
+    // No death notification (monitor()/§6 was cut on audit — see
+    // vm_task.zig's header): a dead task's slot is simply marked
+    // .dead so it can be recycled by a future spawn; nothing needs
+    // to know why it died beyond what already reached the caller
+    // for main's own case (captureRuntimeError, unchanged).
+    //
+    // v0 scope note: a spawned (non-main) task's own sleep/IO
+    // suspends the whole run exactly like main's would — there is no
+    // per-task sleep scheduling yet ("other tasks keep running while
+    // one sleeps" is deferred, see the design doc's §11 open
+    // questions). Only receive()-blocking is handled by running
+    // something else in the meantime.
+    //
+    // Shared by runPathWithProvider and runFromGbc — both compile/load
+    // their program and install globals/host modules/capabilities first,
+    // then hand off to this to actually run it. Caller must have already
+    // done that setup; this only drives execution.
+    fn driveTaskScheduler(self: *Runtime) !vm.RunOutcome {
         _ = tasks_mod.g_state.claimMainSlot(&self.vm_state);
         const main_idx = tasks_mod.g_state.current;
-        const outcome: vm.RunOutcome = sched: while (true) {
+        return sched: while (true) {
             const cur_idx = tasks_mod.g_state.current;
             const cur_vs = tasks_mod.g_state.slots[cur_idx].vs.?;
             const ctx: vms.VMContext = .{ .cs = self.chunk_state, .gs = &self.globals_state, .hs = &self.heap_state, .vs = cur_vs };
@@ -706,7 +693,39 @@ pub const Runtime = struct {
                 },
             }
         };
+    }
 
+    pub fn runPathWithProvider(self: *Runtime, src: []const u8, path: []const u8, provider: module_compile.SourceProvider, test_mode: bool) !vm.RunOutcome {
+        if (self.vm_state.sleep_deadline_ns != null) return error.RuntimeSuspended;
+        if (src.len > cfg.max_input_bytes) {
+            self.vm_state.setRuntimeErr("input exceeds max_input_bytes ({d})", .{cfg.max_input_bytes});
+            const emsg = self.vm_state.runtimeErrMsg();
+            self.last_runtime_msg_len = @intCast(emsg.len);
+            @memcpy(self.last_runtime_msg_buf[0..emsg.len], emsg);
+            return error.InputTooLong;
+        }
+        defer self.assertNoTempRootLeaks("Runtime.runPathWithProvider");
+        self.last_compile_line = 0;
+        self.last_compile_path_len = 0;
+        self.last_compile_col = 0;
+        self.last_compile_msg_len = 0;
+        self.last_runtime_line = 0;
+        self.last_runtime_col = 0;
+        self.last_runtime_path_len = 0;
+        self.last_runtime_msg_len = 0;
+        self.panic_depth = 0;
+        self.test_count = 0;
+        self.test_failed = false;
+        self.reset();
+        self.vm_state.setPolicy(self.policy);
+        try self.compileProgram(src, path, provider, test_mode);
+
+        const install_ctx: vms.VMContext = .{ .cs = self.chunk_state, .gs = &self.globals_state, .hs = &self.heap_state, .vs = &self.vm_state };
+        try vmnative.installStdGlobal(install_ctx, &self.globals_state);
+        try vmnative.installHostModules(install_ctx, &self.globals_state, self.host_modules);
+        try vmnative.installCapabilityModules(install_ctx, &self.globals_state, self.capabilityModules());
+
+        const outcome = try self.driveTaskScheduler();
         if (outcome == .suspended) return .suspended;
 
         if (test_mode and self.test_count > 0) {

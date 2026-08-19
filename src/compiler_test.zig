@@ -4505,18 +4505,56 @@ test "gbc: enum-type constants (explicit ints, auto-increment, subtype) round-tr
 // Locks down the loud-failure half; the message text itself doesn't have
 // a test (it's not really testable — see known-limitations.md's Tooling
 // table, extended alongside this test).
-test "gbc: writer rejects a task-typed constant" {
-    var rt = try setup();
-    defer rt.deinit();
-    try compile(&rt,
-        \\type Worker task func(n int) {
-        \\    x := receive()
+// Task GBC support (2026-08-19): TYPE_KIND_TASK (0x06, no gap reserved for
+// it — task/actor shipped after the initial GBC spec pass) implemented
+// following enum_t's TYPE_KIND_ENUM pattern, registering the task's
+// behavior FuncObj through the same SEC_FUNCTIONS/FuncNamePatchTarget
+// machinery a predicate uses (never closure-wrapped, unlike a predicate —
+// task bodies can't capture outer locals at all, design doc §3.3).
+//
+// This test must go through Runtime.runFromGbc specifically, not the
+// lower-level manual gbc_reader.read()+vm.run() pattern the other
+// round-trip tests above use — that pattern calls vm.run() directly on a
+// single vm_state with no task scheduler at all, so it would never have
+// caught the real bug this test is actually pinned against: runFromGbc
+// used to call vm.runUntilSuspend() once, directly, with no task
+// scheduling loop whatsoever — predating task/actor integration entirely
+// (runPathWithProvider gained the scheduler loop when tasks shipped;
+// runFromGbc never did). A task spawned from a GBC-loaded program would
+// enqueue but never get a turn: the top-level receive() below would block
+// forever, and since nothing drove the scheduler to notice, the whole run
+// would silently return success having run none of the spawned task's
+// body — found by running exactly this shape through the actual CLI and
+// getting no output at all, not even a crash. Fixed by extracting the
+// scheduler loop into Runtime.driveTaskScheduler and having both
+// runPathWithProvider and runFromGbc call it.
+test "gbc: task-type constants round-trip through Runtime.compileOnly + runFromGbc, including actually running the scheduler" {
+    const src =
+        \\var got = 0
+        \\type Worker task func(start int, reply actor) {
+        \\    count := start
+        \\    msg := receive()
+        \\    count += msg
+        \\    reply.send(count)
         \\}
-        \\func f() {
-        \\    _ = Worker(1)
-        \\}
-    );
-    try std.testing.expectError(error.UnsupportedConstant, gbc_writer.write(rt.chunk_state, std.testing.allocator, .{ .root_source = "" }));
+        \\w := Worker(10, self())
+        \\w.send(5)
+        \\got = receive()
+        \\func getGot() int { return got }
+    ;
+
+    var rt2 = try setup();
+    defer rt2.deinit();
+    try rt2.compileOnly(src, "", .filesystem);
+    const bytes = try gbc_writer.write(rt2.chunk_state, std.testing.allocator, .{ .root_source = src });
+    defer std.testing.allocator.free(bytes);
+
+    var rt3 = try setup();
+    defer rt3.deinit();
+    try rt3.runFromGbc(bytes);
+
+    const result = try rt3.callGlobal("getGot", &.{});
+    try std.testing.expectEqual(@as(i64, 15), result.int);
 }
 
 test "gbc: writer supports a captureless (module-scope) predicate-bearing named type" {
