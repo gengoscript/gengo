@@ -1,10 +1,10 @@
 std := import("std")
 
-// #120: exercises the named-string allocation paths hard. The .add carrier,
+// Exercises the named-string allocation paths heavily. The .add carrier,
 // cast_string, and get_slice windows are fixed, but a residual stomper
 // remains: at ~400 rounds the template-rendered value reads back as garbage
 // (stale-memory signature; manifestation depends on build layout). Promote
-// to the lane with a .out once #120's audit finds it.
+// to the lane with a .out once the audit finds it.
 type Html string
 
 func esc(s string) Html {

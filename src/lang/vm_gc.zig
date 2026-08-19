@@ -178,7 +178,7 @@ pub fn collectGarbage(ctx: VMContext) void {
 
     // Only constants holding heap objects are roots; scalars and strings need
     // no marking. addConst records their indices so this walk skips the bulk
-    // of the pool (#187). The bound check guards against constant-folding
+    // of the pool. The bound check guards against constant-folding
     // rollbacks shrinking const_count below a recorded index.
     for (ctx.cs.obj_const_idxs[0..ctx.cs.obj_const_count]) |ci| {
         if (ci < ctx.cs.const_count) markValue(ctx, ctx.cs.consts[ci]);

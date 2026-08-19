@@ -1,6 +1,6 @@
 // GBC (Gengo Bytecode Cache) reader — dev-docs/design/gbc-spec.md.
 //
-// #5 first milestone: the reader half of the minimal round-trip. Loads the
+// Reader half of the minimal round-trip. Loads the
 // wire format's core-op bytecode + constants into a fresh chunk.State, then
 // hands off to fusion_pass.fuse() — the exact same step the normal compile
 // pipeline (runtime.zig's compileProgram) already runs — so a loaded chunk
@@ -769,7 +769,7 @@ const LoadResult = struct {
 };
 
 // Shared by read() (splice=false: install into a freshly-.reset() chunk,
-// overwriting from offset 0 — the original #5 milestone behavior, byte-for-
+// overwriting from offset 0 — the original behavior, byte-for-
 // byte) and readIntoSession (splice=true: append onto whatever `cs` already
 // holds, for gbc-spec.md §14 linking). Deliberately ONE implementation of
 // the constants/functions/types loading, not two — that loop is exactly

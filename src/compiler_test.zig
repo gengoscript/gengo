@@ -2442,7 +2442,7 @@ test {
     _ = @import("lang/native/fs_state.zig");
 }
 
-// Regression for #101: .string immortality invariant.
+// Regression for the .string immortality invariant.
 // After the fix, const_add string concatenation must NOT produce a .string
 // view into the fmt_scratch buffer; it should always allocate a dyn_string.
 // This test compiles a chain and verifies the result is a GC object.
@@ -2490,7 +2490,7 @@ test "non-ASCII string iteration is zero-alloc and produces correct chars" {
     try std.testing.expectEqualStrings("åä", try vmst.asStringValue(v2));
 }
 
-// ── Dispatch gas: op budget + trace hook (#186) ──────────────────────────────
+// ── Dispatch gas: operation budget and trace hook ────────────────────────────
 
 test "op budget: small budget stops runaway loop, generous budget does not" {
     var rt = try setup();
@@ -2609,7 +2609,7 @@ test "trace hook fires per line when installed, not at all when cleared" {
     try std.testing.expectEqual(hits_after_clear, g_trace_hits);
 }
 
-// ── Multi-runtime isolation (#190) ─────────────────────────────────────────
+// ── Multi-runtime isolation ─────────────────────────────────────────────────
 
 const value_mod = @import("lang/value.zig");
 const fs_state_mod = @import("lang/native/fs_state.zig");
@@ -3163,7 +3163,7 @@ test "compiler: std.json.indent rejects an unsupported indent width instead of s
 
 test "compiler: field = field + const fuses into field_add_const" {
     // The "c.tx_id = c.tx_id + 1" idiom (found independently in gengo-modbus
-    // and gengo-mqtt as a transaction/packet-ID counter), issue #207.
+    // and gengo-mqtt as a transaction/packet-ID counter).
     var rt = try setup();
     defer rt.deinit();
     try compileWithSession(&rt,
@@ -3219,7 +3219,7 @@ test "compiler: field_add_const preserves const-field and named-type checks" {
 }
 
 test "compiler: m[\"literal\"] lowers to get_index_const_str, not constant+get_index" {
-    // Issue #206: a bare string-literal index is known at compile time, so
+    // A bare string-literal index is known at compile time, so
     // it's lowered directly rather than pushing the key onto the stack.
     var rt = try setup();
     defer rt.deinit();
@@ -3276,7 +3276,7 @@ test "compiler: get_index_const_str falls back to generic get_index for non-map 
     );
 }
 
-// ── #204 native-lane backfill: call-flag emission (argc | 0x80) ────────────
+// ── Native-lane call-flag emission (argc | 0x80) ────────────────────────────
 //
 // selectTypedArithmeticOp-adjacent but distinct: this is compiler.zig's
 // argProvenForParam/checkDirectCallArgCompatibility machinery (see
@@ -3284,7 +3284,7 @@ test "compiler: get_index_const_str falls back to generic get_index for non-map 
 // sets the top bit of a direct call's argc byte when every argument is
 // compiler-provably type-correct against the resolved callee signature,
 // letting the VM's warm call path skip runtime arg-type enforcement
-// entirely. Had zero native coverage before this (#204).
+// entirely. These tests cover the native path directly.
 
 fn findCallArgcByte(c: *chunk.State) ?u8 {
     var ip: usize = 0;
@@ -3367,13 +3367,13 @@ test "compiler: call through an indirect/unknown callee does not set the proven 
     try std.testing.expectEqual(@as(u8, 0), argc_byte & 0x80);
 }
 
-// ── #204 native-lane backfill: return-proof stamping (returns_proven) ──────
+// ── Native-lane return-proof stamping (returns_proven) ──────────────────────
 //
 // See dev-docs/design/compiler-architecture.md §4's "Return-type proof"
 // paragraph: a single-primitive-return function whose body provably always
 // returns, with every return matching the declared type, gets its FuncObj
 // stamped returns_proven — letting the VM trust the return value's type
-// instead of re-checking it at runtime. Had zero native coverage (#204).
+// instead of re-checking it at runtime. These tests cover the native path directly.
 
 fn findFuncObjNamed(c: *chunk.State, name: []const u8) ?@import("lang/value.zig").FuncObj {
     var i: usize = 0;
@@ -3455,7 +3455,7 @@ test "compiler: function returning a named type is not returns_proven" {
     try std.testing.expect(!func.returns_proven);
 }
 
-// ── #204 native-lane backfill: typed-assignment prolog/epilog matrix ──────
+// ── Native-lane typed-assignment prolog/epilog matrix ───────────────────────
 //
 // See dev-docs/design/compiler-architecture.md §9's "Erased vs. boxed named
 // types" invariant: named types over a scalar/enum base are erased at
@@ -3464,7 +3464,7 @@ test "compiler: function returning a named type is not returns_proven" {
 // over a non-scalar base (string/array/map) always go through a real
 // get_global+call(1) constructor. This distinction is threaded through
 // compoundStmt, incrStmt, and returnStmt's named-return epilogs. Had zero
-// native coverage before this (#204).
+// native coverage directly.
 
 fn countOp(c: *chunk.State, op: Op) usize {
     var count: usize = 0;
@@ -3584,7 +3584,7 @@ test "compiler: multi named-return with mixed erased and boxed types constructs 
     try std.testing.expect(countOp(c, .validate_named_range) >= 1);
 }
 
-// ── #204 native-lane backfill: fusion pass trigger decisions ──────────────
+// ── Native-lane fusion pass trigger decisions ───────────────────────────────
 //
 // See lang/fusion_pass.zig's module doc and dev-docs/design/vm-architecture.md
 // §6: every fusion is a legality-checked rewrite of adjacent core ops into a
@@ -3592,7 +3592,7 @@ test "compiler: multi named-return with mixed erased and boxed types constructs 
 // fusion_pass.fuse() already, so every test in this file already observes
 // post-fusion bytecode). These tests assert the *specific* trigger shape for
 // each fused op that had zero direct native coverage before this pass, plus
-// one legality-boundary case (same_slot). Had zero native coverage (#204).
+// one legality-boundary case (same_slot).
 
 test "fusion: global read + constant binop fuses to get_global_const_X" {
     var rt = try setup();
@@ -3839,7 +3839,7 @@ test "fusion: get_local_const_add does not fuse into local_add_const across mism
     try std.testing.expect(try hasOp(c, .set_local));
 }
 
-// ── #208: named-type range 'clamp' mode ────────────────────────────────────
+// ── Named-type range 'clamp' mode ───────────────────────────────────────────
 //
 // A third range mode alongside 'range' (hard RangeError) and 'cycle'
 // (modular wrap): saturates an out-of-bounds value to the nearest bound
@@ -3981,7 +3981,7 @@ test "compiler: enum-subtype name colliding with an existing struct type is a co
     ));
 }
 
-// ── #210: limited operator overloading via reserved dunder methods ────────
+// ── Limited operator overloading via reserved dunder methods ─────────────────
 //
 // See dunderMethodName/dunderOpForBinaryTok/checkDunderConflict/
 // validateDunderSignature/lookupDunderCallee in compiler.zig, and
@@ -4323,7 +4323,7 @@ test "compiler: := infers struct type for a top-level global too" {
     try std.testing.expectApproxEqAbs(@as(f64, 4.0), result.float, 1e-9);
 }
 
-// ── #5: GBC (Gengo Bytecode Cache) — first milestone round-trip ───────────
+// ── GBC (Gengo Bytecode Cache) round-trip ──────────────────────────────────
 //
 // gbc_writer.write() serializes the DEFUSED (core-ops-only) form of an
 // already-compiled, already-fused chunk; gbc_reader.read() loads that back
@@ -4335,7 +4335,7 @@ test "compiler: := infers struct type for a top-level global too" {
 //
 // This milestone deliberately does not implement most of the spec's 27
 // validation checks (§11.1) — magic/header/body-checksum bounds only. See
-// dev-docs/design/gbc-spec.md and issue #5 for the full remaining scope.
+// dev-docs/design/gbc-spec.md for the full remaining scope.
 
 test "gbc: writer + reader round-trip produces identical execution results" {
     const src =
@@ -4389,7 +4389,7 @@ test "gbc: a whole-valued float constant round-trips as .float, not .int" {
     // exactly representable as an integer, so the old heuristic silently
     // turned it into .int on load — this only surfaced once a test returned
     // a whole-valued float directly (found while adding variant support,
-    // #5), since every earlier GBC test happened to avoid that exact shape.
+    // since every earlier GBC test happened to avoid that exact shape.
     const src =
         \\func f() float {
         \\    return 1.0
@@ -4459,7 +4459,7 @@ test "gbc: writer supports a captureless (module-scope) predicate-bearing named 
 // the moment the enclosing function ran: `make_closure` was emitted before
 // the named type's own `emitConst`, but the `set_named_predicate` opcode
 // expected the opposite stack order — TypeError, unconditionally, on every
-// call. Fixed (issue #211) by deferring the `make_closure` emission to run
+// call. The fix defers the `make_closure` emission to run
 // immediately before `set_named_predicate`, after the named type's own
 // `emitConst`, in both namedTypeDecl and subtypeDecl.
 test "compiler: in-function named type predicate capturing an enclosing local (issue #211)" {
@@ -4660,8 +4660,7 @@ test "gbc: variant-type constants (shared fields, record arm, single-payload arm
 }
 
 test "gbc: a predicate-bearing named type still enforces its predicate after round-tripping" {
-    // Note: `f` returns `int`, not `Score` — deliberately independent of
-    // issue #212 (now fixed, see the regression test below), which was a
+    // Note: `f` returns `int`, not `Score` — deliberately independent of a
     // separate, GBC-unrelated VM bug specific to a *declared, checked*
     // function return type that is itself a predicate-bearing named type.
     // Constructing `Score(n)` as a local exercises the predicate without
@@ -4713,7 +4712,7 @@ test "gbc: a predicate-bearing named type still enforces its predicate after rou
 // run the predicate function. That nested call reuses (and overwrites) the
 // exact same frames[] slot once frame_top no longer counts it, so the outer
 // retSlowPath's later reads of frame.base/frame.ret_ip picked up the nested
-// call's frame data instead of its own. Fixed (issue #212) by capturing
+// call's frame data instead of its own. The fix captures
 // frame.base/frame.ret_ip/frame.has_typed_returns into locals before
 // frame_top is dropped, matching the pattern the multi-named-return spread
 // path already used a few lines above.
@@ -5386,7 +5385,7 @@ test "cap:net listen: default-deny refuses listen with no policy rules" {
     }
 }
 
-// #221: dial's no-rules default flipped from allow to deny, matching listen
+// Dial's no-rules default is deny, matching listen
 // above. dial scope is granted (bare "net") but zero policy rules are
 // configured, so every dial must be refused — net.dial itself is not a
 // [value, error] pair like listen, so std.core.is_error is used instead.

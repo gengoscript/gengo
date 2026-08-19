@@ -1025,7 +1025,7 @@ export fn engine_add_source(handle: i32, path_ptr: PtrInt, path_len: i32, src_pt
     engine.source_count = sc + 1;
 
     // Use setConfig (not initWithPolicy) to update the source table without
-    // discarding compiled state or leaking prior heap allocations (#13).
+    // discarding compiled state or leaking prior heap allocations.
     engine.runtime.setConfig(.{
         .allow_io = engine.runtime.inner.policy.allow_io,
         .native_backend = engine.runtime.inner.policy.native_backend,
@@ -1312,7 +1312,7 @@ export fn engine_net_policy_add(handle: i32, action: i32, pattern_ptr: PtrInt, p
 }
 
 /// Clear all dial policy rules for the engine. After this call the default
-/// (deny all, #221) is restored.
+/// (deny all) is restored.
 export fn engine_net_policy_clear(handle: i32) void {
     const engine = getEngine(handle) orelse return;
     engine.runtime.inner.net_es.policy = .{};
@@ -1321,7 +1321,7 @@ export fn engine_net_policy_clear(handle: i32) void {
 /// Add a listen (bind) policy rule for cap:net. Same rule shape and LIFO
 /// evaluation as engine_net_policy_add, but for net.listen rather than
 /// net.dial, and evaluated against the requested bind address.
-/// Same default-deny as dial (#221): no rules installed means listen always
+/// Same default-deny as dial: no rules installed means listen always
 /// fails — a host must add at least one allow rule before any
 /// net.listen(...) call in this engine will succeed.
 /// Returns 0 on success, -1 for invalid handle, -2 if the rule list is full,
@@ -1817,7 +1817,7 @@ test "native host modules dispatch through the registered callback" {
 }
 
 test "engine_call: recover() in defer intercepts panic" {
-    // Regression test for issue #140: core.recover() inside a deferred function
+    // Regression test: core.recover() inside a deferred function
     // must intercept panics even when the function is called via engine_call
     // (not via the CLI / top-level bytecode).  Previously the recovery path
     // called run() with ret_ip pointing past end-of-bytecode, producing a
@@ -2079,7 +2079,7 @@ test "engine_net_listen_policy checkListenPolicy default-deny semantics" {
 }
 
 test "engine_net_policy checkDialPolicy semantics" {
-    // Default deny: no rules (#221 — flipped from the original default-allow)
+    // Default deny: no rules.
     net_state.clearPolicy();
     try std.testing.expect(!net_state.checkDialPolicy("192.168.1.1:80"));
 

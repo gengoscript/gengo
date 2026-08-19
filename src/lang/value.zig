@@ -458,7 +458,7 @@ pub const Value = union(VTag) {
 // (compiler_decls.zig), so a fixed table covers every valid scale without
 // falling back to a transcendental std.math.pow(10, scale) call on every
 // decimal construction/comparison/format (measured as ~60% of self time in
-// the decimal-billing benchmark's add path, see #206).
+// the decimal-billing benchmark's add path).
 const decimal_pow10 = [19]f64{
     1e0,  1e1,  1e2,  1e3,  1e4,  1e5,  1e6,  1e7,  1e8,  1e9,
     1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18,

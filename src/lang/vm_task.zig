@@ -9,7 +9,7 @@
 // useful. Revisit once the core has seen real use.
 //
 // v0 scope note: the design's static message-type checking at send()
-// is not implemented yet (see task-examples/FINDINGS.md #2 —
+// is not implemented yet (see task-examples/FINDINGS.md —
 // receive() returns `any` for now, so there is no declared message
 // type to check a send against). Tightening this later is additive,
 // not a breaking change to what's already sendable.

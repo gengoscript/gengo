@@ -65,7 +65,7 @@ pub const HandlerSet = struct {
 };
 
 // Per-runtime HTTP handler state. Each Runtime owns an HttpEngineState; activate()
-// points g_state at it, mirroring the fs_state/net_state pattern (#216).
+// points g_state at it, mirroring the fs_state/net_state pattern.
 pub const HttpEngineState = struct {
     handler: ?HandlerSet = null,
 };

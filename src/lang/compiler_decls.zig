@@ -531,7 +531,7 @@ pub fn namedFuncDecl(c: anytype, is_pub: bool) !void {
 //
 // No message-type annotation (§8.2's optional-message-type/mailbox-less
 // split was cut on audit before shipping: v0 never type-checks
-// receive()'s result against anything — see FINDINGS #2 in
+// receive()'s result against anything — see the task examples' findings in
 // dev-docs/design/task-examples/ — so the annotation would have been
 // pure ceremony plus a has-mailbox flag, for a footgun it only half
 // closed (a task WITH a declared type that never calls receive() leaks
@@ -866,7 +866,7 @@ pub fn namedTypeDecl(c: anytype, is_pub: bool) !void {
         c.matchOpt(.semicolon);
         return;
     } else if (c.registry.getNamedTypeInfo(base_name)) |parent| {
-        // #80: enum aliasing is incoherent — the alias would produce a named_type
+        // Enum aliasing is incoherent: the alias would produce a named_type
         // with base=enum_t but no members, which the runtime refuses to construct.
         if (parent.base == .enum_t) {
             return c.err("cannot alias enum type '{s}'; declare a new enum with 'type {s} enum {{ ... }}'", .{ base_name, name });
@@ -1144,7 +1144,7 @@ fn satisfiesConstraint(constraint: []const u8, spec: FieldTypeSpec, registry: *c
     };
     if (is_ordered) return true;
 
-    // #210: a struct (or non-numeric/non-string named) type also satisfies
+    // A struct (or non-numeric/non-string named) type also satisfies
     // 'ordered' if it declares __compare__ — the same dunder that drives
     // </>/<=/>= at the operator level.
     var buf: [160]u8 = undefined;

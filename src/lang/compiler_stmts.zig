@@ -939,7 +939,7 @@ pub fn forInStmt(c: anytype) anyerror!void {
     // unmatchable name, not just counted: local_count resets leave stale entries in
     // locals[], and a bare count bump re-exposes them — a previous loop's variable
     // name at this index would shadow the current loop's variable in resolveLocal
-    // and make assignLoopVar overwrite the iterator on the stack (#193).
+    // and make assignLoopVar overwrite the iterator on the stack.
     {
         const scope = c.currentScope();
         if (scope.local_count >= MaxLocals) {
@@ -2533,7 +2533,7 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
                 c.inferred_named_global_types[c.inferred_named_global_count] = nt;
                 c.inferred_named_global_count += 1;
             } else if (inferred_struct_type) |st| {
-                // Same idea for :=-inferred struct-typed globals (#210): needed so a
+                // Same idea for :=-inferred struct-typed globals: needed so a
                 // dunder method is reachable from a top-level `a := Vec3{...}` read.
                 if (c.inferred_struct_global_count >= MaxLocals) {
                     c.setErr("too many typed globals (limit {d})", .{MaxLocals});

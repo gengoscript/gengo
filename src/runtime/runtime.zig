@@ -98,13 +98,13 @@ const ReplPersist = struct {
     enum_member_buf: [MaxNamedTypes * 64]u8 = undefined,
     enum_member_buf_used: usize = 0,
 
-    // #73: typed-global persistence — assignment type enforcement across lines.
+    // Typed-global persistence keeps assignment type enforcement across lines.
     typed_global_count: usize = 0,
     typed_globals: [MaxLocals]ReplTypedGlobalEntry = undefined,
     typed_global_name_buf: [MaxLocals * 128]u8 = undefined,
     typed_global_name_buf_used: usize = 0,
 
-    // #74: std/import namespace provenance persistence — unknown-field validation
+    // Namespace provenance persistence keeps unknown-field validation
     ns_count: usize = 0,
     ns_entries: [MaxReplNsEntries]ReplNsEntry = undefined,
     ns_name_buf: [MaxLocals * 128]u8 = undefined,
@@ -582,7 +582,7 @@ pub const Runtime = struct {
     }
 
     // Loads and runs a GBC artifact directly (no source, no compilation) —
-    // the "ship a .gbc to a constrained host" path #5's spec motivates.
+    // the constrained-host artifact path.
     // Mirrors runPathWithProvider's post-compile tail exactly (install
     // natives, vm.run), just with gbc_reader.read()+fusion_pass.fuse() in
     // place of compileProgram(). Test blocks are out of scope for this GBC

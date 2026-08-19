@@ -1,6 +1,6 @@
 std := import("std")
 
-// Leading dash in character class (issue #111)
+// Leading dash in a character class.
 assert(std.regexp.match("[-:]", ":"))
 assert(std.regexp.match("[-a]", "a"))
 assert(std.regexp.match("[-a]", "-"))

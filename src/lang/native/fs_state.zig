@@ -1,16 +1,16 @@
 const std = @import("std");
 
-// Host-mounted filesystem namespace for cap:fs (issue #90).
+// Host-mounted filesystem namespace for cap:fs.
 //
 // Scripts never see real paths. The host registers named mounts
 // ("data" -> "/var/app/data"); script paths must start with a mount
 // name and resolve inside it. Absolute paths and ".." are rejected.
 //
 // A mount can be backed by a real directory (MountKind.real_path) or by a
-// host-provided virtual driver (MountKind.driver) — see issue #183.
+// host-provided virtual driver (MountKind.driver).
 //
 // The mount table follows the same active-pointer pattern as the other
-// runtime states (#190): each Runtime owns an EngineState and Runtime.activate()
+// runtime states: each Runtime owns an EngineState and Runtime.activate()
 // points the module-level active pointer at it. Mount strings are stored as
 // offsets into the state's own str_buf, so an EngineState is plain data and
 // safe to copy by value.

@@ -1,4 +1,4 @@
-// Regression test for #124 — JSON parsing GC window
+// Regression test for the JSON parsing GC window.
 // Verifies that parsing a large JSON array with objects that allocate strings
 // does not lose elements due to GC during construction.
 std := import("std")

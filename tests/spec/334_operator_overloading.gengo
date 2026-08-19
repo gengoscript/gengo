@@ -1,6 +1,6 @@
 std := import("std")
 
-// Limited operator overloading via reserved dunder methods (#210): a
+// Limited operator overloading via reserved dunder methods: a
 // struct-based (or non-conflicting-base named) type may declare
 // __add__/__sub__/__mul__/__div__/__rem__/__neg__/__eq__/__compare__ as
 // ordinary methods. `a + b` desugars to `a.__add__(b)` when the compiler

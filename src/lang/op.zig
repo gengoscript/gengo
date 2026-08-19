@@ -186,7 +186,7 @@ pub const Op = enum(u8) {
     // unlike len above). Lowered at compile time from std.core.bytelen(x);
     // same rationale as len/append — the VM handler calls the exact same
     // nativeByteLen the native-call path uses. Found to be even more
-    // frequent than len in real code (gengo-mqtt/gengo-modbus), issue #207.
+    // frequent than len in real code (gengo-mqtt/gengo-modbus).
     bytelen = 0x80,
     // [op][kind]: pops offset then data (string), decodes a fixed-width
     // value at that offset per `kind` (std.lang.native.bytes.DecodeKind:
@@ -200,7 +200,7 @@ pub const Op = enum(u8) {
     // scheme; this is the same pattern assert_type already uses). Encode
     // direction (u8/u16be/u32be/...) intentionally NOT done here — each
     // allocates a result string, so dispatch is a smaller fraction of the
-    // real work; measure before doing, per issue #207.
+    // real work; measure before doing so.
     bytes_decode = 0x81,
     // u16:name_const_idx — get_index specialized for a compile-time-constant
     // string key (`m["literal"]`, the exact case `m[expr]` cannot cover:
@@ -213,8 +213,7 @@ pub const Op = enum(u8) {
     // the constant pool and calls the same vmmap.mapGet the generic path
     // uses; every other receiver kind (array/struct/named wrapper/...) falls
     // back to pushing the constant and delegating to opGetIndex verbatim, so
-    // there is exactly one place that implements non-map indexing. Issue
-    // #206.
+    // there is exactly one place that implements non-map indexing.
     get_index_const_str = 0x82,
 
     // ── Reserved slots ───────────────────────────────────────────────────────
@@ -373,7 +372,7 @@ pub const Op = enum(u8) {
     // Layout: [op][glgf: slot,skip,name_hi,name_lo,ic_hi,ic_lo,ic_fidx (7)]
     //         [const idx_hi][const idx_lo][sf: name_hi,name_lo,ic_hi,ic_lo,ic_fidx (5)]
     // (15 bytes). Found independently in gengo-modbus/gengo-mqtt as a
-    // transaction/packet-ID counter idiom, issue #207.
+    // transaction/packet-ID counter idiom.
     field_add_const = 0xE2,
 
     // Fused inc_global_const+close_upvalue_loop: body global-increment then

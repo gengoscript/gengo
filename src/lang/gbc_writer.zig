@@ -1,6 +1,6 @@
 // GBC (Gengo Bytecode Cache) writer — dev-docs/design/gbc-spec.md.
 //
-// #5 first milestone: a minimal round-trip for a simple script (no imports,
+// A minimal round-trip for a simple script (no imports,
 // one bytecode section, constants, functions, empty types/exports/dependency
 // tables). Serializes the DEFUSED (core-ops-only) form, per the ratified GBC
 // design in dev-docs/design/vm-architecture.md §6.3 — fused/private opcodes
@@ -736,7 +736,7 @@ pub fn write(cs: *chunk.State, alloc: std.mem.Allocator, opts: WriteOptions) Wri
                         // A predicate closure is always compiled captureless
                         // for a module-scope type declaration (resolveUpvalue
                         // can't find anything to capture at scope_depth <= 1
-                        // — see #5 research) — the compiler still always
+                        // — the compiler still always
                         // wraps it in a .closure object even with zero
                         // upvalues, never a bare .function. Register its
                         // underlying FuncObj the same way a plain function

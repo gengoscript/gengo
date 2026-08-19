@@ -827,7 +827,7 @@ fn runCli(argv: []const []const u8) void {
 
     // A GBC artifact (magic bytes at offset 0) as the script argument runs
     // directly, skipping compilation entirely — the "ship a .gbc to a
-    // constrained host" path (#5). Takes priority over --disasm/--emit-gbc/
+    // constrained host path. Takes priority over --disasm/--emit-gbc/
     // --test, none of which apply to an already-compiled artifact.
     if (src.len >= 8 and std.mem.eql(u8, src[0..8], &gbc_writer.MAGIC)) {
         runtime.runFromGbc(src) catch |err| {

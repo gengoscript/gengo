@@ -58,7 +58,7 @@ pub const State = struct {
     const_count: usize = 0,
     // Indices of constants that hold heap objects (function prototypes, type
     // objects). The GC root-scans only these instead of walking the whole
-    // constant pool every collection (#187). Constant-folding rollbacks only
+    // constant pool every collection. Constant-folding rollbacks only
     // ever retract scalar/string constants, so entries here never go stale in
     // practice; the GC still guards with `idx < const_count` so a rollback
     // could at worst re-mark a harmless slot, never miss a live object.
@@ -844,7 +844,7 @@ pub fn funcObjOfConst(obj: *val_mod.Object) ?*val_mod.Object {
 var g_default_state: State = .{};
 // threadlocal: each OS thread tracks its own active runtime, so two Runtimes
 // driven from different threads never stomp each other's active pointers
-// (#190). Single-threaded targets (WASI) lower this to a plain global.
+// Single-threaded targets (WASI) lower this to a plain global.
 pub threadlocal var g_state: *State = &g_default_state;
 
 pub fn setActive(state: *State) void {

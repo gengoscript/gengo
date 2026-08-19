@@ -1,6 +1,6 @@
 std := import("std")
 
-// #187: the GC root-scans only the constants that hold heap objects (a
+// The GC root-scans only the constants that hold heap objects (a
 // recorded index list) instead of walking the whole pool. This pins the
 // invariant that objects whose only stable reference is the constant pool —
 // anonymous function prototypes and type objects with runtime predicates —

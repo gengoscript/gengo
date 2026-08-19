@@ -3,7 +3,7 @@ std := import("std")
 // Billing-style workload: per-line price * quantity, accumulated into a
 // running total. Exercises decimal .mul (decimalScalarPair path) and
 // decimal .add (full computeAddResult generic dispatch path) back to back,
-// the two decimal arithmetic ops issue #206 asks to measure before deciding
+// the two decimal arithmetic operations to measure before deciding
 // whether dedicated decimal ops clear the specialization bar.
 type Money decimal 2
 

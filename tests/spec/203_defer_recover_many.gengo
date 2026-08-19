@@ -1,4 +1,4 @@
-// Regression test for #129 — runDeferredCall must not silently drop deferred calls
+// Regression test: runDeferredCall must not silently drop deferred calls.
 // Verifies that recover() in a defer block catches a panic, and that multiple
 // defers all run during panic unwind.
 std := import("std")

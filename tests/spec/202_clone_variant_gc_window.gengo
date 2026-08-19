@@ -1,4 +1,4 @@
-// Regression test for #125 — core.clone variant path GC window
+// Regression test for the core.clone variant-path GC window.
 // Verifies that cloning a variant with many shared string fields
 // does not lose elements due to GC during the shared/arm fill loops.
 std := import("std")

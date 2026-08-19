@@ -10,6 +10,6 @@ if f and Flag(true) { std.io.println("and ok") }
 if Flag(false) or f { std.io.println("or ok") }
 std.io.println(std.template.render("{{if .f}}template ok{{end}}", {"f": f}))
 
-// Subtypes of a bool type inherit the behavior (#113).
+// Subtypes of a bool type inherit the behavior.
 subtype Strict Flag
 if Strict(true) { std.io.println("subtype ok") }

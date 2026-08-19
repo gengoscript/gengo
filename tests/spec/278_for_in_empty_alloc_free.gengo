@@ -1,9 +1,9 @@
 std := import("std")
 
-// #192: entering a for-in over an empty iterable must not allocate — iterInit
+// Entering a for-in over an empty iterable must not allocate — iterInit
 // returns a shared immortal empty iterator instead of a fresh object.
 // Measured loops live inside functions: at global scope a for-in nested in
-// another loop miscompiles the next for-in (#193), and slicing (s[0:0]) is
+// another loop miscompiles the next for-in, and slicing (s[0:0]) is
 // excluded from the measured window because each slice expression allocates
 // a view object of its own.
 

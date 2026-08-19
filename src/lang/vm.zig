@@ -378,7 +378,7 @@ fn structTypeOf(v: Value) ?*Object {
     };
 }
 
-// #210: runtime fallback for dunder-overloaded operators, needed when the
+// Runtime fallback for dunder-overloaded operators, needed when the
 // compiler couldn't resolve them at compile time — chiefly inside a
 // type-erased generic function body, where the compile-time desugar in
 // compiler_expr.zig has no concrete static type to dispatch against. Both
@@ -1501,7 +1501,7 @@ fn tryTailCall(ctx: VMContext, argc: u8, args_preverified: bool) !bool {
     return true;
 }
 
-// Shared immortal iterator for length-0 arrays, strings, and maps (#192).
+// Shared immortal iterator for length-0 arrays, strings, and maps.
 // Lives outside the object pool (never swept) and holds no heap pointers.
 // Safe to share because the only code that ever runs against it — the
 // exhausted check at the top of iterNext1/iterNext2 — reads index and length
@@ -1931,7 +1931,7 @@ fn opGetIndex(ctx: VMContext) !void {
     }
 }
 
-// get_index specialized for a compile-time-constant string key (#206): the
+// get_index specialized for a compile-time-constant string key: the
 // key never touches the operand stack. map_hashed (the common receiver, see
 // tests/bench/011_map_lookup_heavy.gengo) is handled directly with the same
 // vmmap.mapGet the generic path uses; every other receiver kind pushes the
@@ -3505,7 +3505,7 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 // Keep the operand on the stack while converting: the result
                 // allocation can GC, and a popped named string's bytes would
                 // be freed — possibly handed back as the destination buffer
-                // (#120 window family; caught as an aliasing memcpy).
+                // Caught as an aliasing memcpy.
                 const raw = try ctx.vs.vmPeek(0);
                 if (vmod.decimalRawAndScale(raw)) |drs| {
                     var buf: [64]u8 = undefined;
@@ -4565,7 +4565,7 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 if (has_start) start_v = try ctx.vs.vmPop();
                 const container = try ctx.vs.vmPop();
                 // The slice result is a fresh allocation; keep the popped
-                // container rooted through it (#120 window family).
+                // container rooted through it.
                 try ctx.vs.pushTempRoot(container);
                 defer ctx.vs.popTempRoot();
 

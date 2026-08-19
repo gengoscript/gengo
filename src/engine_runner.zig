@@ -498,7 +498,7 @@ fn testReplIncremental() void {
     );
     if (r15 != .ok) fail("engine FAIL: repl type annotation in func param\n");
 
-    // Enum subtype member access across REPL lines (#115)
+    // Enum subtype member access across REPL lines.
     const rt5 = initWithAllowIO(false);
     const r16 = rt5.runIncremental("type Days enum { mon, sat, sun }");
     if (r16 != .ok) fail("engine FAIL: repl enum type decl (#115)\n");
@@ -507,7 +507,7 @@ fn testReplIncremental() void {
     const r18 = rt5.runIncremental("_ = Weekend.sat");
     if (r18 != .ok) fail("engine FAIL: repl enum subtype member access (#115)\n");
 
-    // Enum subtype member VALIDATION must persist across REPL lines (#115):
+    // Enum subtype member validation must persist across REPL lines:
     // the parent enum's member list must be available so an out-of-set member
     // is rejected at declaration time, exactly as in file mode.
     const rt6 = initWithAllowIO(false);
@@ -771,7 +771,7 @@ fn testNetCapabilityHandlers() void {
     // this runtime's net_es (which activate() has already pointed g_state at),
     // not into g_default_state which becomes unreachable once the runtime is active.
     net_state.setNetHandlers(handlers, @ptrCast(&state));
-    // Dial policy now defaults to deny with no rules (#221) — this test dials
+    // Dial policy defaults to deny with no rules. This test dials
     // a mock handler, not a real destination, so an explicit allow-all rule
     // is the right fixture setup, not a security concern. Must target
     // rt.inner.net_es.policy directly, not the addPolicyRule/g_default_state

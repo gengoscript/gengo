@@ -1,6 +1,6 @@
 std := import("std")
 
-// #193: a for-in nested inside another loop leaves stale loop-var names in
+// A for-in nested inside another loop leaves stale loop-variable names in
 // the compiler's locals table; the next for-in's hidden iterator slot then
 // re-exposed a stale entry, so resolveLocal bound the loop variable to the
 // iterator's stack slot and assignLoopVar clobbered the iterator (runtime

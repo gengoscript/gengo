@@ -108,7 +108,7 @@ pub const HandlerSet = struct {
 // ---------------------------------------------------------------------------
 // Per-runtime state — everything that was previously process-global.
 // Each Runtime owns a NetEngineState embedded in its struct; Runtime.activate()
-// points g_state at it, mirroring the fs_state / chunk / heap pattern (#216).
+// points g_state at it, mirroring the fs_state / chunk / heap pattern.
 // ---------------------------------------------------------------------------
 
 pub const NetEngineState = struct {
@@ -319,7 +319,7 @@ fn endsWithIgnoreCase(haystack: []const u8, suffix: []const u8) bool {
     return eqlIgnoreCase(haystack[haystack.len - suffix.len ..], suffix);
 }
 
-// Returns true if the dial is allowed. No rules → DENY (#221: flipped from
+// Returns true if the dial is allowed. No rules → DENY (changed from
 // the original default-allow — an unconfigured policy must not silently
 // permit unrestricted outbound access for a capability model built around
 // untrusted scripts). Now symmetric with checkListenPolicy below: a host
@@ -330,7 +330,7 @@ pub fn checkDialPolicy(address: []const u8) bool {
 }
 
 // Returns true if the bind is allowed. No rules → DENY, same reasoning as
-// checkDialPolicy above (they used to differ; see #221).
+// checkDialPolicy above (they used to differ).
 pub fn checkListenPolicy(address: []const u8) bool {
     return matchPolicy(&g_state.listen_policy, address, false);
 }

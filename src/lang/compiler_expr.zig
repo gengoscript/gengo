@@ -145,7 +145,7 @@ pub fn importExpr(c: anytype) !void {
     }
 }
 
-// #210: desugar a binary operator to a direct dunder-method call when the
+// Desugar a binary operator to a direct dunder-method call when the
 // LHS's static type (struct or named) declares one. Must run BEFORE the RHS
 // is parsed: the call convention needs [callee, receiver, arg] on the stack,
 // and the receiver (LHS) is already pushed by this point in the Pratt
@@ -462,7 +462,7 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
         // m["a"+"b"] or m[f()]) can only be a bracket-index read, never a
         // slice — the ':' checks below can't fire. Lower it straight to
         // get_index_const_str instead of going through expr() (which would
-        // emit a separate `constant` push) — issue #206.
+        // emit a separate `constant` push).
         if (c.check(.string) and c.peekToken().typ == .rbracket) {
             c.advance();
             const key_src = c.prev.src;
@@ -1035,7 +1035,7 @@ pub fn structInstanceLit(c: anytype, type_name: Token) !void {
         try validateStructLiteralFieldNames(c, st_obj.struct_type.fields, key_toks[0..count], val_infos[0..count], st_obj.struct_type.name);
     }
     try c.cs.emit2(@intFromEnum(Op.build_struct_instance), count, type_name.line);
-    // #210: struct literals previously left no ExprPrimInfo on their own
+    // Struct literals previously left no ExprPrimInfo on their own
     // result at all — needed so a dunder method declared on the struct is
     // reachable from an expression built directly from a literal (not just
     // one read back out of a variable).
@@ -1098,7 +1098,7 @@ pub fn structInstanceLitAfterValue(c: anytype, line: u32, resolved_type: ?*value
 pub fn unaryExpr(c: anytype, tt: TT) !void {
     try parsePrecedence(c, .unary);
     const op_info = c.childExprPrimInfo();
-    // #210: unary '-' desugars to __neg__() when the operand's static type
+    // Unary '-' desugars to __neg__() when the operand's static type
     // (struct or named) declares one. The operand is already on the stack
     // by this point (parsed above), so callee+swap is inserted after it,
     // same [callee, receiver] convention as the binary dunder path.

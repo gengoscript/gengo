@@ -19,7 +19,7 @@ w1 := tally(1)
 w2 := tally(1, 2)
 w3 := pass(1)
 
-// #189: variadic calls with zero extra args must not allocate — they pass
+// Variadic calls with zero extra arguments must not allocate — they pass
 // the shared immortal empty-args array instead of packing a fresh one.
 s1 := std.core.gc_stats_ext()
 before := s1.alloc_object_calls

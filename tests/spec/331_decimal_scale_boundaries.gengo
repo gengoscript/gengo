@@ -1,7 +1,7 @@
 std := import("std")
 
 // Exercises decimal scale 0 and scale 18 — the two boundary indices of the
-// fixed pow10 lookup table used by decimal construction (#206). A regression
+// fixed pow10 lookup table used by decimal construction. A regression
 // here (e.g. an off-by-one in the table) would silently corrupt every
 // decimal value at these scales.
 

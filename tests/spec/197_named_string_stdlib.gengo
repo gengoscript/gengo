@@ -1,6 +1,6 @@
 std := import("std")
 
-// Named string types flow through stdlib like their base (#110 follow-ups).
+// Named string types flow through the standard library like their base type.
 type Html string
 
 h := Html("<p>") + Html("hi") + Html("</p>")

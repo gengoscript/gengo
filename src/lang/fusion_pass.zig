@@ -1,7 +1,7 @@
 // Bytecode fusion pass: rewrite verified core-op bytecode into the VM's
 // fused/specialized instruction set. This is the forward direction of
 // vm_defuse.zig and the load/compile-time half of the ratified GBC design
-// (see dev-docs/design/vm-architecture.md §6.3 and GitHub issue #5): the
+// (see dev-docs/design/vm-architecture.md §6.3): the
 // wire format carries only core ops; this pass selects the VM-private
 // fused tier.
 //

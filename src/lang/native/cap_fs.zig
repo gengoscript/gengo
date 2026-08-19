@@ -305,7 +305,7 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
 }
 
 // Regression: cap_fs_* functions must accept both .string and .dyn_string
-// path arguments (issue discovered while building the site-generator).
+// path arguments.
 test "cap_fs path extraction accepts string and dyn_string" {
     const Runtime = @import("../../runtime/runtime.zig").Runtime;
     var rt: Runtime = undefined;
