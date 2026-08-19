@@ -1,7 +1,7 @@
 # Cross-engine results
 
 A snapshot from one run, on one machine, on one date. **Re-run it yourself**
-(`bench/cross-engine/run.sh`) before drawing conclusions for your own
+(`examples/cross-engine-bench/run.sh`) before drawing conclusions for your own
 hardware or use case — these numbers will move with the CPU, the engine
 versions, and the OS.
 

@@ -10,7 +10,7 @@
 # the build mode (this uses Gengo's native ReleaseSafe CLI, the same build
 # mode the release pipeline ships).
 #
-# Usage: bench/cross-engine/run.sh
+# Usage: examples/cross-engine-bench/run.sh
 set -uo pipefail
 cd "$(dirname "$0")"
 

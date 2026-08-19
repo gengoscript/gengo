@@ -27,7 +27,7 @@ counts release to release, using Gengo-specific feature scripts in
 ## Running it
 
 ```bash
-bench/cross-engine/run.sh
+examples/cross-engine-bench/run.sh
 ```
 
 `run.sh` (re)builds the native ReleaseSafe CLI itself before timing — it
