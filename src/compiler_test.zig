@@ -4897,6 +4897,73 @@ test "gbc: a predicate-bearing named type still enforces its predicate after rou
     try std.testing.expectError(error.PredicateFailed, vm.callGlobal(ctx, "f", &.{.{ .int = 200 }}));
 }
 
+// Coverage gap audit (2026-08-19): known-limitations.md claimed --emit-gbc
+// rejects "a predicate declared inside a function body when that predicate
+// closes over the function's own locals" — checked empirically via the
+// actual CLI before trusting the doc, and it was wrong: --emit-gbc already
+// succeeds for this case (issue #211's own test above proves it executes
+// correctly natively; this proves it survives a GBC round-trip too). The
+// reason: a module-scope predicate's NamedTypeObj.predicate field is
+// populated once at compile time (a real captureless closure, eagerly
+// written into the TYPES section — see the test above), but an in-function
+// declaration re-executes make_closure fresh every call (proven here by
+// three calls with three different captured thresholds each producing the
+// correct, distinct result) — its NamedTypeObj.predicate field is still
+// null at the moment gbc_writer.write() runs, so the writer has nothing to
+// reject in the first place; the closure is ordinary SEC_BYTECODE
+// (make_closure + friends), already round-tripped like any other
+// instruction. Removed the stale limitation row and the two now-inaccurate
+// causes ("a predicate declared inside a function body", "a closure with
+// real captures stored as a constant") from the CLI's UnsupportedConstant
+// message alongside this test — closures with real captures never reach
+// gbc_writer's constant-writing switch as a literal object at all, since
+// every emitConst(.{.object = <closure>}) site in the compiler is a
+// module/type-scope declaration, which cannot capture anything by
+// construction (resolveUpvalue finds nothing at scope_depth <= 1).
+test "gbc: an in-function predicate with real captures round-trips, re-capturing fresh per call" {
+    const src =
+        \\func make(threshold int, val int) int {
+        \\    type Score int predicate func(x) { return x >= threshold }
+        \\    return int(Score(val))
+        \\}
+    ;
+
+    var rt1 = try setup();
+    defer rt1.deinit();
+    try runSrc(&rt1, src);
+    const e1 = try rt1.callGlobal("make", &.{ .{ .int = 5 }, .{ .int = 5 } });
+    const e2 = try rt1.callGlobal("make", &.{ .{ .int = 1 }, .{ .int = 5 } });
+    const e3 = try rt1.callGlobal("make", &.{ .{ .int = 100 }, .{ .int = 200 } });
+    try std.testing.expectError(error.PredicateFailed, rt1.callGlobal("make", &.{ .{ .int = 5 }, .{ .int = 1 } }));
+
+    var rt2 = try setup();
+    defer rt2.deinit();
+    try compile(&rt2, src);
+    const bytes = try gbc_writer.write(rt2.chunk_state, std.testing.allocator, .{ .root_source = src });
+    defer std.testing.allocator.free(bytes);
+
+    var rt3 = try setup();
+    defer rt3.deinit();
+    chunk.setActive(rt3.chunk_state);
+    globals.setActive(&rt3.globals_state);
+    heap.setActive(&rt3.heap_state);
+    chunk.reset();
+    globals.reset();
+    heap.reset();
+    try gbc_reader.read(bytes, chunk.g_state, heap.g_state, rt3.vm_state.allocator, src);
+    try fusion_pass.fuse(chunk.g_state, rt3.vm_state.allocator);
+
+    const ctx: vm.VMContext = .{ .cs = rt3.chunk_state, .gs = &rt3.globals_state, .hs = &rt3.heap_state, .vs = &rt3.vm_state };
+    try vm.run(ctx);
+    const a1 = try vm.callGlobal(ctx, "make", &.{ .{ .int = 5 }, .{ .int = 5 } });
+    const a2 = try vm.callGlobal(ctx, "make", &.{ .{ .int = 1 }, .{ .int = 5 } });
+    const a3 = try vm.callGlobal(ctx, "make", &.{ .{ .int = 100 }, .{ .int = 200 } });
+    try std.testing.expectEqual(e1.int, a1.int);
+    try std.testing.expectEqual(e2.int, a2.int);
+    try std.testing.expectEqual(e3.int, a3.int);
+    try std.testing.expectError(error.PredicateFailed, vm.callGlobal(ctx, "make", &.{ .{ .int = 5 }, .{ .int = 1 } }));
+}
+
 // Returning a predicate-bearing named type as a function's *declared,
 // checked* return type used to crash with a fatal VM integrity error
 // (ImpossibleOpcodeState, frame corruption) the moment the function

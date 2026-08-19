@@ -34,7 +34,6 @@ The relevant specifications include
 
 | Area | Current behaviour | Practical consequence |
 |---|---|---|
-| `--emit-gbc` and in-body predicates | `--emit-gbc` rejects a predicate declared inside a function body when that predicate closes over the function's own locals. Module-scope predicates work. | Move the predicate to module or type scope. |
 | `--emit-gbc` source hash | The artifact records a hash of the source it was compiled from, but the CLI does not yet verify it before running the artifact. | Regenerate the `.gbc` whenever its `.gengo` source changes; do not rely on automatic invalidation. |
 | `--emit-gbc` on WASI | `--emit-gbc` is not supported in the WASI build. | Use the native CLI for GBC emission; run the artifact from WASI if needed. |
 

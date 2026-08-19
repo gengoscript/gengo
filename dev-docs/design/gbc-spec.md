@@ -1,10 +1,29 @@
 # Gengoscript Bytecode Cache — File Format Specification
 
 **Status:** Draft\
-**Version:** 0.14\
+**Version:** 0.15\
 **Scope:** GBC artifact only (see §2 for artifact class definitions)
 
 **Revision history**
+- 0.15 — No format change. An in-function predicate closing over the
+  function's own locals (`type Score int predicate func(x) { return
+  x >= threshold }` inside a function taking `threshold` as a
+  parameter) was documented as unsupported by `--emit-gbc`; checked
+  directly and it already round-trips correctly — confirmed with three
+  calls using three different captured values, each producing the
+  correct result before and after a write+read round-trip. A
+  module-scope predicate's `NamedTypeObj.predicate` is populated once
+  at compile time (always captureless — `resolveUpvalue` finds nothing
+  to capture at scope_depth <= 1); an in-function one re-executes
+  `make_closure` fresh every call, so `predicate` is still `null` when
+  the writer runs — there's nothing to reject. Same reasoning retires
+  "a closure with real captures stored as a constant" as a listed
+  cause: every `emitConst(.{.object = <closure>})` site in the
+  compiler is module/type-scope, which structurally cannot capture
+  anything. Recorded here, like 0.13, because it was found during this
+  artifact class's own completeness work and resolves a real
+  misconception about GBC's coverage, even though nothing in the
+  format or reference implementation changed.
 - 0.14 — `type_param` `FieldTypeAlt` entries (§9.2) now erase to `FT_ANY`
   on the wire instead of being rejected with `error.UnsupportedFieldType`
   — matching the runtime's own type-erasure semantics (a generic

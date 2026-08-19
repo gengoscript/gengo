@@ -4,6 +4,55 @@ This changelog tracks notable language/runtime changes by implementation date.
 
 ## 2026-08-19
 
+### GBC — in-function predicates with real captures already worked; docs were wrong (#5)
+
+`known-limitations.md` and the `--emit-gbc` error message both claimed
+a predicate declared inside a function body that closes over the
+function's own locals was rejected. Checked directly against the CLI
+before trusting the doc, matching how every other GBC finding this
+session was verified: it already succeeds, and round-trips correctly,
+with no code change needed. Confirmed with three calls using three
+different captured threshold values (`type Score int predicate
+func(x) { return x >= threshold }` inside a function taking
+`threshold` as a parameter) each producing the correct, distinct
+result both before and after a write+read round-trip, plus that the
+predicate still rejects an out-of-range value afterward.
+
+The reason it already worked: a *module-scope* predicate's
+`NamedTypeObj.predicate` field is populated once at compile time (a
+real, always-captureless closure — `resolveUpvalue` finds nothing to
+capture at scope_depth <= 1 — eagerly written into the TYPES section).
+An *in-function* declaration re-executes `make_closure` fresh on every
+call instead, so its `NamedTypeObj.predicate` field is still `null` at
+the moment `gbc_writer.write()` runs — there is nothing for the writer
+to reject. The closure itself is ordinary `SEC_BYTECODE`
+(`make_closure` plus the cell-promotion opcodes around it), already
+round-tripped like any other instruction, no different from a plain
+`if` or loop.
+
+This also settles the other listed cause, "a closure with real
+captures stored as a constant": it was never reachable in the first
+place. Every `emitConst(.{.object = <closure>})` call site in the
+compiler is a module/type-scope declaration, which cannot capture
+anything by construction — the same reasoning above, just noted
+explicitly. `gbc_writer.zig`'s rejection of a closure with non-empty
+upvalues (in the named-type predicate case) is defensive code for a
+shape the compiler never actually produces, not a live gap.
+
+Removed the stale `known-limitations.md` row and both now-inaccurate
+causes from the CLI's `UnsupportedConstant` error message, replacing
+them with a plain pointer to issue #5 rather than a hardcoded list —
+avoids re-creating the same staleness trap found and fixed three times
+this session (generic-struct-methods, this, and the two-copies-of-one-
+message pattern that made the earlier tasks/enums fixes need updating
+in two places each time).
+
+With this, GBC's constant/type coverage spans everything the language
+can put in a constant pool except generic functions' erased type
+parameters (handled) and the two structurally-impossible closure
+shapes above (never real gaps) — every remaining item in this cycle's
+audit turned out to already work.
+
 ### GBC — generic function support via type-parameter erasure (#5)
 
 `writeTypeSpec` used to reject any `FieldTypeAlt` tagged `.type_param`
